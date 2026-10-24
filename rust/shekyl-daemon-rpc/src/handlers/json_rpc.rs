@@ -39,40 +39,32 @@ use axum::Json;
 use std::sync::Arc;
 use tracing::warn;
 
-/// JSON-RPC methods that require unrestricted access.
+/// Whether this listener must refuse this JSON-RPC method.
 ///
 /// The daemon's **second** restricted gate. `/json_rpc` itself is served on
 /// both listeners (it is the wallet's main surface), so unlike the REST route
-/// table the gate here cannot be listener selection — it is per-method, inside
-/// the handler. Same privacy fact, different mechanism, and it needs its own
-/// witness: see [`method_is_gated`].
-const RESTRICTED_METHODS: &[&str] = &[
-    "calc_pow",
-    "generateblocks",
-    "get_connections",
-    "set_bans",
-    "get_bans",
-    "banned",
-    "flush_txpool",
-    "get_coinbase_tx_sum",
-    "get_alternate_chains",
-    "relay_tx",
-    "sync_info",
-    // RT-O24: setting every runtime row is in `node`; until RT-W10 the view
-    // listener refuses it here.
-    "option_set",
-    "flush_cache",
-    "request_archival_shard",
-];
-
-/// Whether this listener must refuse this JSON-RPC method.
+/// table the gate here cannot be listener selection: it is per-method, inside
+/// the handler, read from the one method table's grant column
+/// (`shekyl_rpc_types::methods`, `RPC_WIRE.md` RW-Q7). A name with no row
+/// never reaches this gate: [`unrouted`] answers it first.
 ///
-/// Pure, and the single place the per-method gate is decided — so a test can
+/// Pure, and the single place the per-method gate is decided, so a test can
 /// call the same function [`handle`] calls, with both arms, without building
 /// an `AppState` (which links `core_rpc_ffi_*`). Deleting the `restricted &&`
 /// here fails [`admin_methods_are_refused_only_on_the_restricted_listener`].
 fn method_is_gated(restricted: bool, method: &str) -> bool {
-    restricted && RESTRICTED_METHODS.contains(&method)
+    restricted
+        && shekyl_rpc_types::methods::json_rpc(method)
+            .is_some_and(|row| row.grant == shekyl_rpc_types::methods::Grant::HostOnly)
+}
+
+/// Whether `method` has no row in the method table, on either listener. It
+/// is answered as not found and never dispatched: the table is the policy
+/// (RW-Q7), so a name it does not list is not served, as an unrouted REST
+/// path is not. The gate that every served name is a row keeps every
+/// served method off this arm.
+fn unrouted(method: &str) -> bool {
+    shekyl_rpc_types::methods::json_rpc(method).is_none()
 }
 
 pub async fn handle(
@@ -81,6 +73,17 @@ pub async fn handle(
 ) -> (StatusCode, Json<JsonRpcResponse>) {
     let id = request.id.clone();
     let method = request.method.clone();
+
+    if unrouted(&method) {
+        return (
+            StatusCode::OK,
+            Json(JsonRpcResponse::error(
+                id,
+                -32601,
+                format!("Method not found: {method}"),
+            )),
+        );
+    }
 
     if method_is_gated(state.restricted, &method) {
         return (
@@ -571,11 +574,11 @@ mod tests {
         );
     }
 
-    /// The admin JSON-RPC surface, restated independently of
-    /// `RESTRICTED_METHODS`.
+    /// The admin JSON-RPC surface, restated independently of the method
+    /// table's grant column.
     ///
     /// Same discipline as the REST route table's specification: an oracle that
-    /// iterates `RESTRICTED_METHODS` re-states whatever that list says and so
+    /// iterates the table re-states whatever the table says and so
     /// stays green when a method is dropped from it — which is the edit that
     /// exposes `get_connections` (this node's live peer set) and the ban/mining
     /// controls to unauthenticated callers on the public listener.
@@ -594,6 +597,7 @@ mod tests {
         "flush_cache",
         "request_archival_shard",
         "option_set",
+        "inject_archival_serve_credit",
     ];
 
     /// Every name the daemon serves natively, the method each belongs to,
@@ -749,11 +753,31 @@ mod tests {
         }
     }
 
-    /// The gate names exactly the specified methods: one dropped from
-    /// `RESTRICTED_METHODS` is caught above, one added without review here.
+    /// A name with no row is not served on either listener, as an unrouted
+    /// REST path is not: it is answered as not found before any dispatch,
+    /// so a name the table does not list never reaches the C++ table. A
+    /// deleted method stays unrouted (`get_output_histogram`, SOK-Q3). Red
+    /// edit: let a name with no row through to dispatch.
+    #[test]
+    fn a_name_with_no_row_is_not_served_on_either_listener() {
+        for name in ["no_such_method", "get_output_histogram"] {
+            assert!(shekyl_rpc_types::methods::json_rpc(name).is_none());
+            assert!(unrouted(name), "{name}");
+        }
+        assert!(!unrouted("get_info"));
+        assert!(!unrouted("getblockcount"), "an alias is a row's name");
+    }
+
+    /// The gate names exactly the specified methods: one dropped from the
+    /// table's host-only rows is caught above, one added without review here.
     #[test]
     fn restricted_method_list_matches_the_specification() {
-        let mut gated: Vec<&str> = RESTRICTED_METHODS.to_vec();
+        use shekyl_rpc_types::methods::{Grant, Surface, METHODS};
+        let mut gated: Vec<&str> = METHODS
+            .iter()
+            .filter(|row| row.surface == Surface::JsonRpc && row.grant == Grant::HostOnly)
+            .flat_map(shekyl_rpc_types::methods::Method::names)
+            .collect();
         let mut specified: Vec<&str> = SPECIFIED_ADMIN_METHODS.to_vec();
         gated.sort_unstable();
         specified.sort_unstable();
@@ -777,6 +801,58 @@ mod tests {
         ] {
             assert!(!method_is_gated(true, method), "{method}");
             assert!(!method_is_gated(false, method), "{method}");
+        }
+    }
+
+    /// The JSON-RPC names the C++ table serves until the flip, read from its
+    /// source (`src/rpc/core_rpc_ffi.cpp`, `get_jsonrpc_table`).
+    fn cpp_json_rpc_names() -> Vec<String> {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src/rpc/core_rpc_ffi.cpp");
+        let source = std::fs::read_to_string(&path).expect("the C++ JSON-RPC table");
+        let start = source
+            .find("get_jsonrpc_table()")
+            .expect("the table's function");
+        let body = &source[start..];
+        let body = &body[..body.find("return t;").expect("the table's end")];
+        let mut names = Vec::new();
+        for line in body.lines() {
+            let line = line.trim();
+            let quoted = if let Some(rest) = line.strip_prefix("{\"") {
+                rest
+            } else if let Some(rest) = line.strip_prefix("DJRPC_WE(\"") {
+                rest
+            } else {
+                continue;
+            };
+            if let Some(end) = quoted.find('"') {
+                names.push(quoted[..end].to_owned());
+            }
+        }
+        assert!(names.len() >= 20, "the parse found the table: {names:?}");
+        names
+    }
+
+    /// RW-Q7's gate for JSON-RPC: every name the daemon serves, natively or
+    /// through the C++ table, is a row, and every JSON-RPC row is served.
+    #[test]
+    fn every_served_json_rpc_name_is_a_row_and_every_row_is_served() {
+        use shekyl_rpc_types::methods::{json_rpc, Surface, METHODS};
+        let cpp = cpp_json_rpc_names();
+        let native: Vec<&str> = SPECIFIED_NATIVE_METHODS
+            .iter()
+            .map(|(name, _, _)| *name)
+            .collect();
+        for name in cpp.iter().map(String::as_str).chain(native.iter().copied()) {
+            assert!(json_rpc(name).is_some(), "{name} is served but has no row");
+        }
+        for row in METHODS.iter().filter(|row| row.surface == Surface::JsonRpc) {
+            for name in row.names() {
+                assert!(
+                    native_method_for(name).is_some() || cpp.iter().any(|c| c == name),
+                    "{name} is a row that nothing serves"
+                );
+            }
         }
     }
 }

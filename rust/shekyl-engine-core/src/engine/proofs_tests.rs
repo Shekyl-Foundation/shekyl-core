@@ -361,13 +361,13 @@ mod check_workflows {
                                 prunable_as_hex: String::new(),
                                 prunable_hash: shekyl_rpc_types::HashHex::ZERO,
                                 archival_len: 0,
-                                as_json: String::new(),
+                                as_json: None,
                                 pruned: false,
                                 double_spend_seen: false,
                                 location: if self.pooled.contains(h.as_str()) {
                                     shekyl_rpc_types::TxLocation::Pooled {
                                         relayed: true,
-                                        received_timestamp: 1,
+                                        received_timestamp: Some(1),
                                     }
                                 } else {
                                     shekyl_rpc_types::TxLocation::Mined {

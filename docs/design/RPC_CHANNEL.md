@@ -1334,11 +1334,13 @@ can contain either.
   start switch, logged at every start; when armed, the levers are served to
   the host's administrator only. Never selected by nettype. `/pop_blocks`
   has three users, all served there: the regtest roll-back helper, the
-  Python framework and the CT-2 fixture generator (§6.4). *Today's defect,
-  recorded:* `inject_archival_serve_credit` is absent from
-  `RESTRICTED_METHODS`, so the restricted listener serves it, and its only
-  gate is a `FAKECHAIN` branch (`core_rpc_server.cpp:946`) — the pattern
-  rule 71 forbids.
+  Python framework and the CT-2 fixture generator (§6.4).
+  `inject_archival_serve_credit`'s row in the method table is the host's
+  and armed ([`methods.rs:135`](../../rust/shekyl-rpc-types/src/methods.rs),
+  the review of #1165), so the restricted listener refuses it; until the
+  flip routes the armed handlers, its C++ handler's only other gate is a
+  `FAKECHAIN` branch (`core_rpc_server.cpp:946`), which the flip deletes
+  with the method.
 
 *Why each `status` field is out of view.*
 
@@ -1565,11 +1567,11 @@ two. Every route they replace is a REST path today.
   zeroed or emptied (§6.1, rule 43). A secret's value is never shown, at
   any grant. No row is host-only (RT-O9.3).
 - ***From the tree:* the interim mapping, before RT-W10.** The methods
-  land on today's two listeners, before the channel exists. `option_set`
-  joins `RESTRICTED_METHODS`
-  ([`json_rpc.rs:49`](../../rust/shekyl-daemon-rpc/src/handlers/json_rpc.rs))
-  and the specified list its gate test compares against
-  (`restricted_method_list_matches_the_specification`, `json_rpc.rs:718`),
+  land on today's two listeners, before the channel exists. `option_set`'s
+  row in the method table is the host's
+  ([`methods.rs:124`](../../rust/shekyl-rpc-types/src/methods.rs)), and it
+  is in the specified list the gate test compares against
+  (`restricted_method_list_matches_the_specification`, `json_rpc.rs:751`),
   so the restricted listener refuses it. `option_show` is served on both
   listeners, and its rows are chosen through `Disclosure`
   ([`info.rs:70`](../../rust/shekyl-daemon-rpc/src/info.rs)), which already
@@ -1676,7 +1678,7 @@ two. Every route they replace is a REST path today.
 **RT-O26 — where the handlers live.** Both handlers are native in
 `shekyl-daemon-rpc` and never cross into C++. They take an options handle
 supplied by the composition root, which is `shekyl-daemon` (N1,
-`DRS_X_PR3B_ROUND0.md`): it builds `shekyl-node`'s `Node` and passes the
+`DRS_X_STORE_FLIP.md` DX-Q3's amendments): it builds `shekyl-node`'s `Node` and passes the
 node's handles the same way. The image crate's shard view stays a trait
 object (`AppState::shard_view`,
 [`server.rs:61`](../../rust/shekyl-daemon-rpc/src/server.rs)); it is not
@@ -1720,7 +1722,7 @@ router (`:413-432`) and the path list (`:664-688`); the forwarding handlers
 ([`json.rs:293`](../../rust/shekyl-daemon-rpc/src/handlers/json.rs),
 `:389-394`, through the dispatch at `:75-91`). Callers: the Rust console's
 `print_net_stats`, which reads `/get_limit`
-([`console/mod.rs:1121-1164`](../../rust/shekyl-daemon-rpc/src/console/mod.rs))
+([`console/mod.rs:1126-1169`](../../rust/shekyl-daemon-rpc/src/console/mod.rs))
 with its tests (`console/tests.rs:1130-1170`); the Python framework
 ([`daemon.py:360-455`](../../utils/python-rpc/framework/daemon.py)); the
 C++ client test
@@ -1731,7 +1733,7 @@ and the C++ console
 ([`rpc_command_executor.cpp`](../../src/daemon/rpc_command_executor.cpp)),
 which dies with R8 (`INPUT_GRAMMAR.md` IG-Q25). **`/get_limit` is replaced,
 not ported:** it leaves RK-8 (`DAEMON_RPC_KV_CUTOVER.md` §2), and the
-comments at `regtest_e2e.rs:5866` and `console/mod.rs:1123` that say RK-8
+comments at `regtest_e2e.rs:5866` and `console/mod.rs:1128` that say RK-8
 migrates it are corrected by the implementing PR.
 
 **`/pop_blocks` is an armed test lever (ruled 2026-10-14).**

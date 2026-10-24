@@ -25,6 +25,11 @@ shekyl-ct-balance = { path = "../shekyl-ct-balance" }
 shekyl-units = { path = "../shekyl-units" }
 # `PCanonicalId` domain newtype returned by `id::p_canonical_id_from_hybrid_pubkey`.
 shekyl-types = { path = "../shekyl-types" }
+# `secret_draw::commit_and_discard`: the OS random source for the draw seed,
+# and the wipe of that seed (`DRS_X_STORE_FLIP.md` DX-Q3, Q4). The same pins
+# `shekyl-ffi` uses.
+rand = "0.8"
+zeroize = { workspace = true }
 
 [features]
 # KAT-injection gate for test-only parameterization of consensus operands

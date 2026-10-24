@@ -31,54 +31,89 @@
 //!
 //! # Blocking threads
 //!
-//! The runtime's blocking-thread count equals the hasher budget's permits.
-//! [`Budget::acquire`](shekyl_hash_budget::Budget::acquire) waits on the
-//! calling thread, so every permit waiter sits on a blocking thread. A
-//! holder never waits for another thread: it hashes and drops the permit.
-//! The two counts can stay equal. A later sizing that makes a holder wait
-//! for a blocking thread has to split them, or a full set of waiters
-//! deadlocks.
+//! Every blocking task the ingest service runs is one of three kinds, and
+//! the runtime has a thread for each one that can be outstanding at once:
+//!
+//! - **A form**, which hashes holding a hasher permit: at most the
+//!   budget's permits.
+//! - **A span's one other task**: a permit wait
+//!   ([`Budget::acquire_unless`](shekyl_hash_budget::Budget::acquire_unless)
+//!   waits on its thread), a claim, or a pool step. A span runs one at a
+//!   time, and every span holds a seat, so at most the arrival window.
+//! - **The tip follower's one**: its pool step, or the template build,
+//!   which takes no permit.
+//!
+//! A permit holder waits for a thread to form on, so the count must not be
+//! one that permit waiters alone can fill: it is permits + window + 1. A
+//! local arrival waits for its seat without a thread.
 //!
 //! # The board
 //!
-//! The node holds the job board and seats it with no miner. Nothing is
-//! posted: there is no template and no sync owner yet. Stop withdraws the
-//! board. PR 3b seats the miner on this board. The miner is not started
-//! here.
+//! The tip follower posts the node's one template on the board
+//! (`DRS_X_STORE_FLIP.md` DX-Q3, N2), paying the `mine-address` row's
+//! keys, while chain sync's state reads `Synced`: from open on regtest,
+//! and on every other network once chain sync's cutover publishes. With no
+//! address it posts nothing, and [`Node::posting`] says why. The miner
+//! ([`MiningControl`]) hashes what is posted; it is started on request,
+//! never at open. Stop withdraws the board.
 
 #![deny(unsafe_code)]
 
 mod facts;
 mod genesis;
+mod mining;
+
+pub use mining::{MiningControl, MiningRefused, MiningStatus, PostedJob};
 
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use shekyl_chain_ingest::follower::JobSeat;
-use shekyl_chain_ingest::service::{
-    Arrival, ArrivalTag, Door, Follow, Origin, PoolWiring, Reply, Service, ServiceConfig,
-};
+use shekyl_block_template::MinerKeys;
+use shekyl_chain_ingest::follower::{JobSeat, MinerFeed, NoJob, Posting};
+use shekyl_chain_ingest::service::{ArrivalTag, Follow, PoolWiring, Reply, Service, ServiceConfig};
 use shekyl_chain_ingest::{Chain, ChainRules, Metrics, ProductionSubstrate};
 use shekyl_chain_rules::{AdmissionPolicy, FakechainSchedule, ReleaseAnchors, RuleSet};
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::pool::PoolOpen;
 use shekyl_chain_store::store::{ChainStore, Horizons, SnapshotView};
+use shekyl_chain_sync::SyncState;
 use shekyl_daemon_config::sections::{DaemonConfig, Dev};
 use shekyl_daemon_rpc::handles::Handles;
 use shekyl_daemon_rpc::store_facts::{NodeIdentity, RulesAt, StoreFacts};
 use shekyl_hash_budget::Budget;
 use shekyl_mempool::Pool;
-use shekyl_miner::JobBoard;
+use shekyl_miner::{JobBoard, MiningAddress};
 use shekyl_pow_randomx::CacheStore;
 use shekyl_runtime::{RuntimeBudget, ThreadName};
 use shekyl_transport_layer::Sockets;
 use shekyl_types::{BlockHeight, UnixSeconds};
 
 use crate::facts::{
-    BansBridge, ChainBridge, DoorBridge, MiningBridge, PoolBridge, StopBridge, Surroundings,
+    BansBridge, ChainBridge, DoorBridge, DoorEntry, PoolBridge, StopBridge, Surroundings,
 };
 use crate::genesis::{daemon_network, pinned_genesis};
+use shekyl_ffi::seam_ffi::bans::BanPath;
+
+/// The runtime's blocking threads for `permits` hasher permits and an
+/// arrival window of `window` (module docs, "Blocking threads").
+fn blocking_threads(permits: NonZeroUsize, window: NonZeroUsize) -> NonZeroUsize {
+    permits.saturating_add(window.get()).saturating_add(1)
+}
+
+/// Chain sync's state once the node has opened, published after genesis
+/// has connected (`DRS_X_STORE_FLIP.md` DX-Q3, Q13): `Synced` on regtest,
+/// which has no network to be behind, and `NoView` on every other network
+/// until chain sync's cutover publishes. The network selects this value
+/// and nothing else (rule 71).
+const fn sync_at_open(network: shekyl_daemon_config::Network) -> SyncState {
+    match network {
+        shekyl_daemon_config::Network::Regtest => SyncState::Synced,
+        shekyl_daemon_config::Network::Mainnet
+        | shekyl_daemon_config::Network::Testnet
+        | shekyl_daemon_config::Network::Stagenet => SyncState::NoView,
+    }
+}
 
 /// After the service has joined, how long a leftover blocking task may run
 /// before the runtime detaches it. The connector has already finished; this
@@ -109,6 +144,9 @@ pub enum OpenError {
     /// The pinned genesis did not connect.
     #[error("genesis did not connect: {0}")]
     Genesis(String),
+    /// The ingest service did not answer at open.
+    #[error("the ingest service did not answer: {0}")]
+    Service(String),
 }
 
 /// What [`Node::open`] needs from the composition root, which holds `main`.
@@ -135,13 +173,20 @@ struct Slots {
     /// spans it.
     facts: Arc<Mutex<Option<Arc<StoreFacts>>>>,
     pool: Arc<Mutex<Option<Arc<Mutex<Pool>>>>>,
-    door: Arc<Mutex<Option<Door>>>,
+    door: Arc<Mutex<Option<DoorEntry>>>,
 }
 
 /// The daemon's one node (module docs).
 pub struct Node {
     slots: Arc<Slots>,
-    board: Arc<JobBoard>,
+    /// Chain sync's state, as the follower reads it. The node publishes
+    /// the state at open; chain sync's cutover publishes from then on.
+    sync: tokio::sync::watch::Sender<SyncState>,
+    /// What the board holds, as the follower last left it.
+    posting: tokio::sync::watch::Receiver<Posting>,
+    mining: Arc<MiningControl>,
+    /// The `dev-rpc` row: whether the armed test levers are served.
+    armed: bool,
     sockets: Sockets,
     handles: Handles,
     service: Mutex<Option<Service<ProductionSubstrate>>>,
@@ -178,10 +223,33 @@ impl Node {
         let pool_slot = Arc::new(Mutex::new(Some(Arc::clone(&pool))));
         let sockets = Sockets::new();
         let board = Arc::new(JobBoard::new());
+        let network = args.config.network;
+        // No view until genesis has connected, so the follower never builds
+        // a genesis of its own; the network's state at open is published
+        // after (`sync_at_open`).
+        let (sync, sync_rx) = tokio::sync::watch::channel(SyncState::NoView);
+        let (found, found_inbox) = shekyl_miner::found_blocks();
+        let (posting_tx, posting) =
+            tokio::sync::watch::channel(Posting::Withdrawn(NoJob::Starting));
+        let mine_address = args.config.mine.address.as_ref();
+        let keys = mine_address.map(|address| MinerKeys {
+            spend_public: address.spend,
+            x25519_pk: address.x25519,
+            ml_kem_ek: address.ml_kem.clone(),
+        });
+        let miner_address = mine_address
+            .map(|address| MiningAddress::decode(&address.text, network.address_network()))
+            .transpose()
+            .map_err(|refused| OpenError::Rules(format!("the mine-address row: {refused}")))?;
         let follow = Follow {
             job: Some(JobSeat {
                 board: Arc::clone(&board),
-                miner: None,
+                keys,
+                miner: MinerFeed {
+                    found: found_inbox,
+                    sync: sync_rx.clone(),
+                },
+                posting: posting_tx,
             }),
             pool: Some(PoolWiring {
                 pool,
@@ -189,23 +257,21 @@ impl Node {
                 wall: Arc::new(wall_now),
             }),
         };
+        let service_config = ServiceConfig::default();
         let runtime = shekyl_runtime::runtime(
-            // Blocking threads equal permits. See the module docs: a waiter
-            // blocks its thread inside `acquire`, and a holder does not wait
-            // for a thread.
+            // Permits + window + the follower's one (module docs).
             RuntimeBudget {
                 workers: parallelism,
-                blocking: parallelism,
+                blocking: blocking_threads(parallelism, service_config.room),
             },
             &ThreadName::new("shekyl-node").expect("the name is static"),
         )?;
-        let network = args.config.network;
         let started = runtime.block_on(async {
             let service = Service::start(
                 Arc::clone(&store),
                 rules,
                 substrate,
-                ServiceConfig::default(),
+                service_config,
                 budget.clone(),
                 follow,
             );
@@ -224,12 +290,42 @@ impl Node {
                 return Err(error);
             }
         };
+        let tips = match runtime.block_on(service.watch_tip()) {
+            Ok(tips) => tips,
+            Err(error) => {
+                if let Err(stop) = runtime.block_on(service.stop()) {
+                    tracing::error!(
+                        "the tip watch did not open, and the service stopped on {stop}"
+                    );
+                }
+                runtime.shutdown(RUNTIME_SHUTDOWN);
+                return Err(OpenError::Service(error.to_string()));
+            }
+        };
+        let pool_health = service.pool_health();
+        let rewinder = service.rewinder();
+        let at_open = sync_at_open(network);
+        tracing::info!(
+            "chain sync's state at open: {at_open:?}; the node posts a template only while it reads Synced"
+        );
+        sync.send_replace(at_open);
         let door = service.door();
         let surroundings = Arc::new(Surroundings {
             pool: Arc::clone(&pool_slot),
             data_dir: args.config.data_dir.clone(),
             offline: args.config.offline(),
+            sync: sync_rx,
+            health: pool_health.clone(),
         });
+        let mining = Arc::new(MiningControl::new(
+            Arc::clone(&board),
+            Arc::clone(&caches),
+            budget.clone(),
+            found,
+            miner_address,
+            posting.clone(),
+            pool_health.clone(),
+        ));
         let started_at = facts::unix_now();
         #[cfg(test)]
         let test_budget = budget.clone();
@@ -249,13 +345,13 @@ impl Node {
             budget,
         );
         let facts_slot = Arc::new(Mutex::new(Some(Arc::new(facts))));
-        let door_slot = Arc::new(Mutex::new(Some(door)));
+        let door_slot = Arc::new(Mutex::new(Some(DoorEntry { door, rewinder })));
         let handles = Handles {
             chain: Arc::new(ChainBridge::new(Arc::clone(&facts_slot))),
-            pool: Arc::new(PoolBridge::new(Arc::clone(&pool_slot))),
-            door: Arc::new(DoorBridge::new(Arc::clone(&door_slot))),
-            mining: Arc::new(MiningBridge),
-            bans: Arc::new(BansBridge),
+            pool: Arc::new(PoolBridge::new(Arc::clone(&pool_slot), pool_health.clone())),
+            door: Arc::new(DoorBridge::new(Arc::clone(&door_slot), tips)),
+            mining: Arc::clone(&mining) as _,
+            bans: Arc::new(BansBridge::new(BanPath::over(sockets.clone()))),
             stop: Arc::new(StopBridge::new(Arc::clone(&args.request_stop))),
         };
         let slots = Arc::new(Slots {
@@ -265,7 +361,10 @@ impl Node {
         });
         Ok(Self {
             slots,
-            board,
+            sync,
+            posting,
+            mining,
+            armed: args.config.dev.rpc,
             sockets,
             handles,
             service: Mutex::new(Some(service)),
@@ -288,13 +387,47 @@ impl Node {
         self.sockets.clone()
     }
 
-    /// The job board. Empty until a miner is seated. Stop withdraws it.
+    /// What the board holds, and why not when it holds nothing.
     #[must_use]
-    pub fn board(&self) -> Arc<JobBoard> {
-        Arc::clone(&self.board)
+    pub fn posting(&self) -> tokio::sync::watch::Receiver<Posting> {
+        self.posting.clone()
     }
 
-    /// Stop the ingest service, clear the handles' slots, and shut the runtime down.
+    /// Chain sync's state, which the follower posts a job on only while it
+    /// reads `Synced`. Chain sync's cutover is its publisher.
+    #[must_use]
+    pub const fn sync(&self) -> &tokio::sync::watch::Sender<SyncState> {
+        &self.sync
+    }
+
+    /// The node's one pool, while it runs: what the composition root hands
+    /// the submit engine's shim (`RustPoolShim::new`), so the service and
+    /// the shim share it. `None` after stop.
+    #[must_use]
+    pub fn pool(&self) -> Option<Arc<Mutex<Pool>>> {
+        self.slots
+            .pool
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// The node's miner.
+    #[must_use]
+    pub fn mining(&self) -> Arc<MiningControl> {
+        Arc::clone(&self.mining)
+    }
+
+    /// Whether the node was started with `dev-rpc`: the switch the armed
+    /// test levers are admitted under
+    /// (`shekyl_daemon_rpc::mining_methods::admit_armed`).
+    #[must_use]
+    pub const fn armed_levers(&self) -> bool {
+        self.armed
+    }
+
+    /// Stop the miner and the ingest service, clear the handles' slots, and
+    /// shut the runtime down.
     ///
     /// The follower withdraws the job board on the way out. A second call
     /// does nothing. [`Drop`] calls this.
@@ -309,6 +442,13 @@ impl Node {
     /// either. Mining control stops the miner; it does not stop or drop
     /// the node.
     pub fn stop(&self) {
+        debug_assert!(
+            tokio::runtime::Handle::try_current().is_err(),
+            "Node::stop waits, and must not run inside a tokio runtime"
+        );
+        // The miner first: its workers hash on the board this stop withdraws,
+        // and a handle may keep mining control alive past the node.
+        self.mining.close();
         let Some(runtime) = self
             .runtime
             .lock()
@@ -474,16 +614,12 @@ async fn connect_genesis(
     // A restart already holds genesis (or a longer chain). `AlreadyHeld` is
     // that case. An empty store connects it.
     let (block, hash) = pinned_genesis(network)?;
-    let ticket = service
+    let tagged = service
         .door()
-        .offer(Arrival {
-            tag: ArrivalTag(0),
-            origin: Origin::Local,
-            block: block.serialize(),
-            bodies: Vec::new(),
-        })
+        .offer_local(ArrivalTag(0), block.serialize(), Vec::new())
+        .await
         .map_err(|error| OpenError::Genesis(format!("the door refused genesis: {error:?}")))?;
-    match ticket.reply().await.reply {
+    match tagged.reply {
         Reply::Connected {
             hash: connected, ..
         } if connected == hash => Ok(()),
@@ -493,403 +629,4 @@ async fn connect_genesis(
 }
 
 #[cfg(test)]
-mod tests {
-    use std::ffi::OsString;
-    use std::net::{IpAddr, Ipv4Addr};
-    use std::path::Path;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
-
-    use shekyl_chain_rules::ReleaseAnchors;
-    use shekyl_chain_store::apply_policy::ApplyPolicy;
-    use shekyl_chain_store::store::{ChainStore, Horizons};
-    use shekyl_daemon_config::{load, Network, Platform, TABLE};
-    use shekyl_daemon_rpc::chain_facts::FactsFault;
-    use shekyl_daemon_rpc::handles::Handles;
-    use shekyl_difficulty::Difficulty;
-    use shekyl_miner::Job;
-    use shekyl_options::read_cli;
-    use shekyl_rpc_types::DaemonNetwork;
-    use shekyl_timing_engine::Tick;
-    use shekyl_types::{BlockHash, BlockHeight};
-
-    use super::*;
-
-    fn config_at(dir: &Path) -> DaemonConfig {
-        dev_config(dir, &[])
-    }
-
-    fn open_at(dir: &Path, stop: Arc<dyn Fn() + Send + Sync>) -> Node {
-        std::fs::create_dir_all(dir).expect("dir");
-        let config = config_at(dir);
-        Node::open(OpenArgs {
-            config: &config,
-            version: "test".to_owned(),
-            protocol_version: 1,
-            release_build: false,
-            request_stop: stop,
-        })
-        .expect("node")
-    }
-
-    /// An empty store connects the pinned genesis, and the chain handle
-    /// reads it back. Red edit: connect genesis through anything but the
-    /// door, or answer the handle from a hard-coded hash.
-    #[test]
-    fn an_empty_store_holds_the_pinned_genesis_and_the_chain_handle_answers_it() {
-        let dir = tempfile::tempdir().expect("temp");
-        let node = open_at(dir.path(), Arc::new(|| {}));
-        let want =
-            BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(DaemonNetwork::Fakechain));
-        let identity = node.handles().chain.identity().expect("identity");
-        assert_eq!(identity.genesis_hash, want);
-        let at = node
-            .handles()
-            .chain
-            .block_hash_at(BlockHeight::ZERO)
-            .expect("height 0");
-        assert_eq!(at.hash, Some(want));
-        assert!(
-            node.handles().door.room().expect("door") > 0,
-            "a live door is not the absent handle"
-        );
-        assert!(!node.handles().mining.running().expect("mining"));
-        assert_eq!(node.handles().pool.broadcast_count().expect("pool"), 0);
-        node.stop();
-    }
-
-    /// Stop closes the store, withdraws the board, and a second stop is a
-    /// no-op. A handle held past stop is not ready. Red edit: leave the
-    /// facts slot filled, or skip the second stop.
-    #[test]
-    fn stop_closes_the_store_withdraws_the_board_and_a_second_stop_is_a_no_op() {
-        let dir = tempfile::tempdir().expect("temp");
-        let node = open_at(dir.path(), Arc::new(|| {}));
-        let (block, _) = pinned_genesis(Network::Regtest).expect("genesis");
-        node.board().publish(Job {
-            block,
-            height: BlockHeight::from_raw(1),
-            seed: BlockHash::from_bytes([1; 32]),
-            difficulty: Difficulty::from_raw(1),
-        });
-        assert!(node.board().posted().is_some(), "the job was posted");
-        node.stop();
-        assert!(node.board().posted().is_none(), "stop withdraws the board");
-        node.stop();
-        let rules =
-            ChainRules::new(Chain::Regtest, None, FakechainSchedule::PRODUCTION).expect("rules");
-        let horizons = Horizons::under(&rules.in_force(BlockHeight::ZERO)).expect("horizons");
-        let store = ChainStore::with_release(
-            dir.path().join("chain.db"),
-            ApplyPolicy::Full,
-            horizons,
-            &ReleaseAnchors::EMPTY,
-        )
-        .expect("the store closed, so it opens again");
-        let snap = store.begin_read().expect("read");
-        let tip = snap.tip().expect("tip").recorded.expect("genesis");
-        let want =
-            BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(DaemonNetwork::Fakechain));
-        assert_eq!(tip.hash, want);
-        assert_eq!(
-            node.handles().chain.identity(),
-            Err(FactsFault::NotReady),
-            "the handle does not answer after the store closes"
-        );
-    }
-
-    /// A `pow_hash` waiting on a hasher permit does not hold the facts
-    /// lock: a chain read returns while that wait is in progress.
-    ///
-    /// [`shekyl_hash_budget::Budget::waiting`] is the signal. It rises
-    /// inside `acquire`, which runs inside the read, so the chain read
-    /// starts only once the slot guard would already be held. The permits
-    /// stay held until that read returns, so a guard that spanned the wait
-    /// fails `READ_BOUND`. Both bounds are failure limits: the enter loop
-    /// returns when the wait is visible, and a read that finishes returns
-    /// at once.
-    ///
-    /// Red edit: hold the slot mutex across `read`.
-    #[test]
-    fn a_pow_hash_in_flight_does_not_hold_the_facts_lock() {
-        use std::sync::mpsc;
-        use std::time::{Duration, Instant};
-
-        use shekyl_daemon_rpc::chain_facts::ChainFacts;
-        use shekyl_daemon_rpc::read_facts::{ChainReadFacts, PowSeed};
-        use shekyl_hash_budget::Class;
-
-        /// The hash thread has not reached `acquire`.
-        const ENTER_BOUND: Duration = Duration::from_secs(5);
-        /// The chain read shared the permit wait. The permits are still held.
-        const READ_BOUND: Duration = Duration::from_secs(2);
-
-        let dir = tempfile::tempdir().expect("temp");
-        let node = open_at(dir.path(), Arc::new(|| {}));
-        let budget = node.budget();
-        // Every free permit. `pow_hash` then waits in `acquire` instead of
-        // hashing, which is the wait a chain read must not share.
-        let held: Vec<_> = (0..budget.permits())
-            .map_while(|_| budget.try_acquire(Class::Chain))
-            .collect();
-        assert!(
-            budget.try_acquire(Class::CalcPow).is_none(),
-            "a calc_pow permit was still free"
-        );
-        let hashing = {
-            let chain = Arc::clone(&node.handles().chain);
-            std::thread::spawn(move || {
-                ChainReadFacts::pow_hash(&*chain, &[], PowSeed::Given(BlockHash::NULL))
-            })
-        };
-        let entered = Instant::now();
-        while budget.waiting(Class::CalcPow) == 0 {
-            if hashing.is_finished() {
-                let finished = hashing.join().expect("pow thread");
-                panic!("pow_hash finished without waiting for a permit: {finished:?}");
-            }
-            assert!(
-                entered.elapsed() < ENTER_BOUND,
-                "pow_hash did not wait for a permit"
-            );
-            std::thread::yield_now();
-        }
-        let (done, arrived) = mpsc::channel();
-        let reading = {
-            let chain = Arc::clone(&node.handles().chain);
-            std::thread::spawn(move || {
-                let _read = ChainFacts::chain_tip(&*chain).is_ok();
-                let _sent = done.send(()).is_ok();
-            })
-        };
-        assert!(
-            arrived.recv_timeout(READ_BOUND).is_ok(),
-            "a chain read waited on the pow hash, so the facts lock is held across the permit wait"
-        );
-        drop(held);
-        let hashed = hashing.join().expect("pow thread");
-        assert!(
-            hashed.is_ok(),
-            "the hash finishes once a permit is free: {hashed:?}"
-        );
-        reading.join().expect("the chain read");
-    }
-
-    /// A ban through the node is on the table `process_sockets` reads.
-    /// Red edit: install a second table, or ban on a table the node does
-    /// not hold.
-    #[test]
-    fn a_ban_through_the_node_is_on_the_process_socket_table() {
-        let dir = tempfile::tempdir().expect("temp");
-        let node = open_at(dir.path(), Arc::new(|| {}));
-        assert!(
-            shekyl_ffi::seam_ffi::install_process_sockets(node.sockets()),
-            "the table is installed once, before any reader"
-        );
-        let host = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 5));
-        node.handles().bans.ban_host(host).expect("ban");
-        assert!(
-            shekyl_ffi::seam_ffi::process_sockets().is_banned(host, Tick::new(0)),
-            "the FFI reader sees the node's table"
-        );
-        assert!(node.handles().bans.banned(host).expect("banned"));
-        node.stop();
-    }
-
-    /// The node's stop handle is the latch `main` passed in. The absent
-    /// handle is not ready, never a success. Red edit: call the latch from
-    /// the absent handle, or ignore `request_stop`.
-    #[test]
-    fn the_stop_handle_asks_the_latch_and_the_absent_one_does_not() {
-        let asked = Arc::new(AtomicBool::new(false));
-        let flag = Arc::clone(&asked);
-        let dir = tempfile::tempdir().expect("temp");
-        let node = open_at(
-            dir.path(),
-            Arc::new(move || flag.store(true, Ordering::SeqCst)),
-        );
-        node.handles().stop.request_stop().expect("asks");
-        assert!(asked.load(Ordering::SeqCst));
-        assert_eq!(
-            Handles::absent().stop.request_stop(),
-            Err(FactsFault::NotReady)
-        );
-        node.stop();
-    }
-
-    fn genesis_hash() -> BlockHash {
-        BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(DaemonNetwork::Fakechain))
-    }
-
-    fn put_chain_version(path: &std::path::Path, version: u64) {
-        use shekyl_chain_store::codec::{PropertyCellBytes, SchemaVersion};
-        use shekyl_chain_store::schema::PROPERTIES;
-        use shekyl_store_codec::{Canonical, Raw};
-        let db = redb::Database::open(path).expect("the chain file opens");
-        let txn = db.begin_write().expect("write");
-        {
-            let mut table = txn.open_table(PROPERTIES).expect("properties");
-            let version = SchemaVersion::new(version);
-            table
-                .insert(
-                    "schema_version",
-                    Raw::<PropertyCellBytes>::new(&version.encode()),
-                )
-                .expect("version");
-        }
-        txn.commit().expect("commit");
-    }
-
-    fn put_pool_version(path: &std::path::Path, version: u64) {
-        use shekyl_chain_store::codec::PropertyCellBytes;
-        use shekyl_chain_store::pool::schema::POOL_HEADER;
-        use shekyl_chain_store::pool::{PoolSchemaVersion, POOL_VERSION_KEY};
-        use shekyl_store_codec::{Canonical, Raw};
-        let db = redb::Database::open(path).expect("the pool file opens");
-        let txn = db.begin_write().expect("write");
-        {
-            let mut table = txn.open_table(POOL_HEADER).expect("header");
-            let version = PoolSchemaVersion::new(version);
-            table
-                .insert(
-                    POOL_VERSION_KEY,
-                    Raw::<PropertyCellBytes>::new(&version.encode()),
-                )
-                .expect("version");
-        }
-        txn.commit().expect("commit");
-    }
-
-    /// A chain file at another layout is removed and a fresh store holds
-    /// genesis. A file that is not a store is refused and left in place.
-    /// Red edit: refuse the version mismatch, or wipe a corrupt header.
-    #[test]
-    fn a_foreign_chain_file_is_replaced_and_a_corrupt_one_is_kept() {
-        use shekyl_chain_store::codec::SCHEMA_VERSION;
-        let dir = tempfile::tempdir().expect("temp");
-        let node = open_at(dir.path(), Arc::new(|| {}));
-        node.stop();
-        let chain = dir.path().join("chain.db");
-        put_chain_version(&chain, SCHEMA_VERSION.get() + 1);
-        let node = open_at(dir.path(), Arc::new(|| {}));
-        assert_eq!(
-            node.handles()
-                .chain
-                .block_hash_at(BlockHeight::ZERO)
-                .expect("height 0")
-                .hash,
-            Some(genesis_hash())
-        );
-        node.stop();
-        put_chain_version(&chain, SCHEMA_VERSION.get());
-        let garbage = b"not a chain store";
-        std::fs::write(&chain, garbage).expect("overwrite");
-        let config = config_at(dir.path());
-        let opened = Node::open(OpenArgs {
-            config: &config,
-            version: "test".to_owned(),
-            protocol_version: 1,
-            release_build: false,
-            request_stop: Arc::new(|| {}),
-        });
-        assert!(
-            opened.is_err(),
-            "a corrupt chain file is not a layout mismatch"
-        );
-        assert_eq!(std::fs::read(&chain).expect("still there"), garbage);
-    }
-
-    /// A pool file at another version is recreated and the node starts. A
-    /// pool file that is not a pool file is refused and kept. Red edit:
-    /// refuse the version, or delete the corrupt file.
-    #[test]
-    fn a_foreign_pool_file_is_recreated_and_a_corrupt_one_is_kept() {
-        use shekyl_chain_store::pool::POOL_SCHEMA_VERSION;
-        let dir = tempfile::tempdir().expect("temp");
-        let node = open_at(dir.path(), Arc::new(|| {}));
-        node.stop();
-        let pool = dir.path().join("pool.db");
-        put_pool_version(&pool, POOL_SCHEMA_VERSION.get() + 1);
-        let node = open_at(dir.path(), Arc::new(|| {}));
-        assert_eq!(node.handles().pool.broadcast_count().expect("pool"), 0);
-        node.stop();
-        let garbage = b"not a pool file";
-        std::fs::write(&pool, garbage).expect("overwrite");
-        let config = config_at(dir.path());
-        let opened = Node::open(OpenArgs {
-            config: &config,
-            version: "test".to_owned(),
-            protocol_version: 1,
-            release_build: false,
-            request_stop: Arc::new(|| {}),
-        });
-        assert!(opened.is_err(), "a corrupt pool file is refused");
-        assert_eq!(std::fs::read(&pool).expect("still there"), garbage);
-    }
-
-    fn dev_config(dir: &Path, extra: &[&str]) -> DaemonConfig {
-        let log = dir.join("shekyld.log");
-        let mut args = vec![
-            "--network",
-            "regtest",
-            "--clearnet",
-            "off",
-            "--tor",
-            "off",
-            "--data-dir",
-            dir.to_str().expect("utf8"),
-            "--log-file",
-            log.to_str().expect("utf8"),
-        ];
-        args.extend(extra);
-        let cli = read_cli(&TABLE, args.into_iter().map(OsString::from)).expect("cli");
-        load(
-            cli,
-            &Platform {
-                home: Some(dir.to_path_buf()),
-                program_data: None,
-            },
-        )
-        .expect("config")
-        .config
-    }
-
-    /// One regtest lever is filled from production on the other side and
-    /// the node opens. A cap that is not strictly inside the epoch is
-    /// refused. Red edit: require the two levers to be set together, or
-    /// accept a cap outside the epoch.
-    #[test]
-    fn one_archival_lever_opens_and_a_cap_outside_the_epoch_does_not() {
-        let dir = tempfile::tempdir().expect("temp");
-        let config = dev_config(dir.path(), &["--dev-archival-reorg-depth", "10"]);
-        let node = Node::open(OpenArgs {
-            config: &config,
-            version: "test".to_owned(),
-            protocol_version: 1,
-            release_build: false,
-            request_stop: Arc::new(|| {}),
-        })
-        .expect("one lever, the other side production");
-        node.stop();
-        let refused = dev_config(
-            dir.path(),
-            &[
-                "--dev-settlement-epoch-blocks",
-                "10",
-                "--dev-archival-reorg-depth",
-                "10",
-            ],
-        );
-        let opened = Node::open(OpenArgs {
-            config: &refused,
-            version: "test".to_owned(),
-            protocol_version: 1,
-            release_build: false,
-            request_stop: Arc::new(|| {}),
-        });
-        assert!(
-            opened.is_err(),
-            "a reorg cap that is not inside the epoch is refused"
-        );
-    }
-}
+mod tests;

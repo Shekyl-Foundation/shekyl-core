@@ -726,6 +726,7 @@ spec = [
 stale_through = [
   { through = "20738bf714", note = "PL-D3 touched output.rs and kem.rs. Whether it moved decapsulation cost is not established." },
   { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
+  { through = "5dcd0cfa97", note = "Added check_ml_kem_768_ek to kem.rs, a parse of an encapsulation key for the mining address and the address check. Decapsulation and the scan do not call it; the measured path is unchanged." },
 ]
 
 [[constant]]

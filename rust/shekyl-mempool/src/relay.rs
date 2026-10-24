@@ -55,7 +55,18 @@ pub struct RelayView<'p> {
     pool: &'p Pool,
 }
 
-impl RelayView<'_> {
+impl<'p> RelayView<'p> {
+    /// Every entry, those in their stem phase included: the host
+    /// administrator's own pool listing (`RPC_CHANNEL.md` RT-O9.3), and
+    /// nothing that answers a peer or a foreign caller, which reads
+    /// [`Pool::shown_entries`].
+    pub fn entries(&self) -> impl Iterator<Item = Entry<'p>> + 'p {
+        let pool = self.pool;
+        pool.held()
+            .iter()
+            .map(|(txid, held)| Entry::of(*txid, held))
+    }
+
     /// The record the pool holds for `txid`.
     #[must_use]
     pub fn record(&self, txid: &TxHash) -> Option<PoolRecord> {
@@ -95,6 +106,37 @@ impl RelayView<'_> {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.pool.is_empty()
+    }
+}
+
+/// One pool entry, as an operator's listing reads it: never when this node
+/// received it (S7).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Entry<'p> {
+    /// Its id.
+    pub id: TxHash,
+    /// The transaction.
+    pub tx: &'p Transaction,
+    /// Its weight.
+    pub weight: u64,
+    /// The fee it pays.
+    pub fee: AtomicUnits,
+    /// Whether the node shows it ([`shown`]); `false` is its stem phase.
+    pub shown: bool,
+    /// The key images it spends.
+    pub key_images: Vec<shekyl_types::KeyImage>,
+}
+
+impl<'p> Entry<'p> {
+    fn of(id: TxHash, held: &'p crate::pool::Held) -> Self {
+        Self {
+            id,
+            tx: &held.tx,
+            weight: held.weight,
+            fee: held.fee,
+            shown: shown(&held.record),
+            key_images: crate::pool::key_images_of(&held.tx),
+        }
     }
 }
 
@@ -151,6 +193,15 @@ impl Pool {
                     },
                 )
             })
+    }
+
+    /// The entries the node shows, as [`RelayView::entries`] reads them:
+    /// what any caller's pool listing reads.
+    pub fn shown_entries(&self) -> impl Iterator<Item = Entry<'_>> + '_ {
+        self.held()
+            .iter()
+            .filter(|(_, held)| shown(&held.record))
+            .map(|(txid, held)| Entry::of(*txid, held))
     }
 
     /// What peer pool sync may offer: the transactions the node shows.

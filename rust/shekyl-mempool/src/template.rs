@@ -30,25 +30,46 @@
 //! selected and not evicted — it is valid alone, and a block without the
 //! earlier one may list it.
 //!
+//! [`select`] and [`select_admitting`] borrow the pool. [`select_shown`]
+//! runs the same scan over a [`ShownBody`] snapshot, so a caller can drop
+//! the pool lock before `tx_against`. Both entry points share one ordering
+//! and one judgement.
+//!
 //! The coinbase, the header and the section budget are the template
 //! builder's (`shekyl-block-template`); this selects the listed bodies.
 
 use shekyl_chain_rules::{
     tx_against, BlockArchivalKeys, CenRow, ChainView, Fault, FormAttempt, InvalidBlock, RuleSet,
-    TxSlot,
+    StatelessPass, TxSlot, VerifiedReference,
 };
+use shekyl_chain_store::pool::ReceivedHour;
 use shekyl_types::TxHash;
+use shekyl_units::AtomicUnits;
 use shekyl_wire::Transaction;
 
 use crate::pool::{key_images_of, Pool};
+use crate::rate::{AdmissionRank, FeeRate};
 use crate::relay::shown;
 use crate::view::{KeyImages, PoolView};
+
+/// A body the selection listed, with the weight and fee it was judged at.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ListedTx {
+    /// The transaction's hash.
+    pub id: TxHash,
+    /// The body the block lists.
+    pub tx: Transaction,
+    /// The weight the admission was offered.
+    pub weight: u64,
+    /// The fee the admission was offered.
+    pub fee: AtomicUnits,
+}
 
 /// What [`select`] chose, and what it could not.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Selected {
     /// The listed bodies, in the order the block lists them.
-    pub transactions: Vec<(TxHash, Transaction)>,
+    pub transactions: Vec<ListedTx>,
     /// Their total weight.
     pub weight: u64,
     /// Their total fee.
@@ -62,6 +83,54 @@ pub struct Selected {
     /// the selected ones is refused on, with the row (G7, G9 or G10): not
     /// selected, and not evicted.
     pub conflicted: Vec<(TxHash, CenRow)>,
+    /// Candidates valid against the parent that the producer's admission
+    /// declined ([`select_admitting`]): not listed, not evicted, and the
+    /// next candidate is tried.
+    pub declined: Vec<TxHash>,
+}
+
+/// One shown pool entry, owned so [`select_shown`] runs after the pool
+/// lock is dropped. The rank is the one [`select`] would have computed
+/// from the same weight, fee and receive time.
+#[derive(Clone, Debug)]
+pub struct ShownBody {
+    id: TxHash,
+    tx: Transaction,
+    weight: u64,
+    fee: AtomicUnits,
+    received: ReceivedHour,
+    pass: Option<StatelessPass>,
+}
+
+impl Pool {
+    /// The entries the node shows, owned so a caller can drop the pool
+    /// lock before [`select_shown`] verifies them.
+    #[must_use]
+    pub fn shown_bodies(&self) -> Vec<ShownBody> {
+        self.held()
+            .iter()
+            .filter(|(_, held)| shown(&held.record))
+            .map(|(id, held)| ShownBody {
+                id: *id,
+                tx: held.tx.clone(),
+                weight: held.weight,
+                fee: held.fee,
+                received: held.record.received,
+                pass: held.pass,
+            })
+            .collect()
+    }
+}
+
+/// One candidate of the shared scan, borrowed from the pool or from a
+/// [`ShownBody`] snapshot.
+struct Candidate<'a> {
+    id: TxHash,
+    tx: &'a Transaction,
+    weight: u64,
+    fee: AtomicUnits,
+    rank: AdmissionRank,
+    anchor: Option<VerifiedReference>,
 }
 
 /// Select from `pool` the bodies a block on `parent` lists under
@@ -78,45 +147,127 @@ pub fn select<'id, V: ChainView<'id>>(
     rule_set: &RuleSet,
     budget: u64,
 ) -> Result<Selected, Fault<V::Fault>> {
-    let mut candidates: Vec<(&TxHash, &crate::pool::Held)> = pool
+    select_admitting(pool, parent, rule_set, budget, |_, _| true)
+}
+
+/// [`select`], with the producer's admission asked of each candidate the
+/// parent admits, in this order: `admit(weight, fee)` is the reward-aware
+/// fill (`shekyl_block_template::Fill::admit`, DRS-X PR 3b). A candidate
+/// it declines is not listed, its key images do not enter the block's
+/// spent set, and the next candidate is tried. `budget` still bounds the
+/// listing's weight.
+///
+/// # Errors
+///
+/// As [`select`].
+pub fn select_admitting<'id, V: ChainView<'id>>(
+    pool: &Pool,
+    parent: &V,
+    rule_set: &RuleSet,
+    budget: u64,
+    admit: impl FnMut(u64, u64) -> bool,
+) -> Result<Selected, Fault<V::Fault>> {
+    let candidates = pool
         .held()
         .iter()
         .filter(|(_, held)| shown(&held.record))
+        .map(|(id, held)| Candidate {
+            id: *id,
+            tx: &held.tx,
+            weight: held.weight,
+            fee: held.fee,
+            rank: held.rank(*id),
+            anchor: held.pass.and_then(|pass| pass.proven()),
+        })
         .collect();
+    choose(candidates, parent, rule_set, budget, admit)
+}
+
+/// [`select_admitting`] over a [`Pool::shown_bodies`] snapshot. The pool
+/// lock is not taken here.
+///
+/// # Errors
+///
+/// As [`select`].
+pub fn select_shown<'id, V: ChainView<'id>>(
+    shown_bodies: &[ShownBody],
+    parent: &V,
+    rule_set: &RuleSet,
+    budget: u64,
+    admit: impl FnMut(u64, u64) -> bool,
+) -> Result<Selected, Fault<V::Fault>> {
+    let candidates = shown_bodies
+        .iter()
+        .map(|body| Candidate {
+            id: body.id,
+            tx: &body.tx,
+            weight: body.weight,
+            fee: body.fee,
+            rank: AdmissionRank::new(
+                FeeRate::new(body.fee.to_raw(), body.weight),
+                body.received,
+                body.id,
+            ),
+            anchor: body.pass.and_then(|pass| pass.proven()),
+        })
+        .collect();
+    choose(candidates, parent, rule_set, budget, admit)
+}
+
+/// The one scan both entry points run.
+fn choose<'id, V: ChainView<'id>>(
+    mut candidates: Vec<Candidate<'_>>,
+    parent: &V,
+    rule_set: &RuleSet,
+    budget: u64,
+    mut admit: impl FnMut(u64, u64) -> bool,
+) -> Result<Selected, Fault<V::Fault>> {
     // Richest per weight first, then the earliest held, then the lesser
     // hash — the template half of the order eviction shares (`AdmissionRank`).
-    candidates.sort_by(|(ta, a), (tb, b)| a.rank(**ta).template(b.rank(**tb)));
+    candidates.sort_by(|left, right| left.rank.template(right.rank));
 
     let mut selected = Selected::default();
     let mut spent = KeyImages::default();
     let mut archival = BlockArchivalKeys::default();
-    for (txid, held) in candidates {
-        let weight = held.weight;
+    for candidate in candidates {
+        let weight = candidate.weight;
         if selected.weight.saturating_add(weight) > budget {
             continue;
         }
-        let anchor = held.pass.and_then(|pass| pass.proven());
         let view = PoolView::new(parent, &spent);
         match tx_against(
-            &held.tx,
+            candidate.tx,
             TxSlot::Lone,
             &view,
             rule_set,
-            anchor,
+            candidate.anchor,
             FormAttempt::FIRST,
         ) {
             Ok(Ok(_)) => {
-                if let Err(row) = archival.add(&held.tx) {
-                    selected.conflicted.push((*txid, row));
+                // Added to a copy first: a body the admission declines must
+                // leave the block's archival keys as they were.
+                let mut listed = archival.clone();
+                if let Err(row) = listed.add(candidate.tx) {
+                    selected.conflicted.push((candidate.id, row));
                     continue;
                 }
-                spent.insert(*txid, key_images_of(&held.tx));
+                if !admit(weight, candidate.fee.to_raw()) {
+                    selected.declined.push(candidate.id);
+                    continue;
+                }
+                archival = listed;
+                spent.insert(candidate.id, key_images_of(candidate.tx));
                 selected.weight += weight;
-                selected.fees = selected.fees.saturating_add(held.fee.to_raw());
-                selected.transactions.push((*txid, held.tx.clone()));
+                selected.fees = selected.fees.saturating_add(candidate.fee.to_raw());
+                selected.transactions.push(ListedTx {
+                    id: candidate.id,
+                    tx: candidate.tx.clone(),
+                    weight,
+                    fee: candidate.fee,
+                });
             }
-            Ok(Err(refused)) => selected.refused.push((*txid, refused)),
-            Err(Fault::Stale(_)) => selected.stale.push(*txid),
+            Ok(Err(refused)) => selected.refused.push((candidate.id, refused)),
+            Err(Fault::Stale(_)) => selected.stale.push(candidate.id),
             Err(fault) => return Err(fault),
         }
     }

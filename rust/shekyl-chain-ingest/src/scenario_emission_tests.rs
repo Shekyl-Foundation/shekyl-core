@@ -1021,7 +1021,7 @@ async fn a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slash
                 .expect("a snapshot");
             let shim = Arc::new(RustPoolShim::new(
                 chain,
-                pool,
+                std::sync::Arc::new(std::sync::Mutex::new(pool)),
                 AdmissionPolicy::GENESIS,
                 || UnixSeconds::from_raw(1),
             ));

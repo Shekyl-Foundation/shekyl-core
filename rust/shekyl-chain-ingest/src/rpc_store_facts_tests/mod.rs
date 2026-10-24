@@ -53,6 +53,8 @@ use crate::schedule::ChainRules;
 use crate::source::{IngestEvent, Source};
 use crate::test_support::{cleanup, open_store, open_store_under, tmp};
 
+mod reads;
+
 // ---------------------------------------------------------------------------
 // The inputs the store does not hold
 // ---------------------------------------------------------------------------
@@ -62,6 +64,10 @@ use crate::test_support::{cleanup, open_store, open_store_under, tmp};
 struct TestNode {
     sync: SyncFacts,
     pool: PoolCounts,
+    /// The key images the pool's shown entries spend.
+    pool_spends: Vec<shekyl_types::KeyImage>,
+    /// The bodies the pool shows.
+    pool_bodies: Vec<shekyl_wire::Transaction>,
     now: u64,
 }
 
@@ -79,6 +85,8 @@ impl TestNode {
                 broadcast: 3,
                 unbroadcast: Some(2),
             },
+            pool_spends: Vec::new(),
+            pool_bodies: Vec::new(),
             now: 1_800_000_000,
         }
     }
@@ -96,6 +104,30 @@ impl NodeFacts for TestNode {
             },
             PoolScope::WithUnbroadcast => self.pool,
         })
+    }
+    fn pool_spends(&self, key_images: &[shekyl_types::KeyImage]) -> Result<Vec<bool>, FactsFault> {
+        Ok(key_images
+            .iter()
+            .map(|image| self.pool_spends.contains(image))
+            .collect())
+    }
+    fn pool_bodies(
+        &self,
+        ids: &[shekyl_types::TxHash],
+        _scope: PoolScope,
+    ) -> Result<Vec<Option<shekyl_daemon_rpc::store_facts::PoolBody>>, FactsFault> {
+        Ok(ids
+            .iter()
+            .map(|id| {
+                self.pool_bodies
+                    .iter()
+                    .find(|tx| tx.txid_parts().hash == *id)
+                    .map(|tx| shekyl_daemon_rpc::store_facts::PoolBody {
+                        tx: tx.serialize(),
+                        shown: true,
+                    })
+            })
+            .collect())
     }
     fn peers(&self) -> Result<PeerFacts, FactsFault> {
         // An online node has its peer lists; `Offline` belongs to a node
@@ -866,81 +898,4 @@ async fn the_store_facts_report_what_the_cxx_facts_were_made_of_on_every_capture
          {coinbase_figure_wraps}"
     );
     assert!(differences.is_empty(), "{} differences", differences.len());
-}
-
-/// Under the real difficulty schedule an alt block's work is its own
-/// chain's: the second block of a two-block branch is priced over a window
-/// holding the branch's first, so its cumulative difficulty differs from
-/// the main block's at the same height. The facts report the alt row's
-/// figure and the producer's claimed target, never the main chain's.
-#[tokio::test]
-async fn an_alt_blocks_work_is_its_own_chains_not_the_main_chains_at_its_height() {
-    let rules = ChainRules::Regtest {
-        fixed_difficulty: None,
-        schedule: shekyl_chain_rules::FakechainSchedule::PRODUCTION,
-    };
-    // Past LWMA-1's window: before it fills every block carries the
-    // genesis difficulty, and the two works would coincide.
-    let prefix = shekyl_difficulty::N + 2;
-    let mut x = Scenario::open_under("rpc-store-facts-lwma-x", crate::scenario::FreeHash, rules);
-    let mut y = Scenario::open_under("rpc-store-facts-lwma-y", crate::scenario::FreeHash, rules);
-    x.mine(prefix).await;
-    y.mine(prefix).await;
-    let main = x.mine(3).await;
-    y.idle();
-    y.idle();
-    y.idle();
-    let branch = y.mine(2).await;
-    for mined in &branch {
-        match x.offer(mined).await.expect("offer") {
-            Offered::Held { height } => assert_eq!(height, mined.height),
-            other => panic!("a lighter branch is held: {other:?}"),
-        }
-    }
-    let second = &branch[1];
-    let main_at = main
-        .iter()
-        .find(|m| m.height == second.height)
-        .expect("the main chain holds the height");
-    x.reopen(|path| {
-        let store = Arc::new(open_store_under(
-            path,
-            &rules.in_force(BlockHeight::ZERO),
-            ApplyPolicy::Full,
-        ));
-        let facts = facts_over(Arc::clone(&store), path, rules);
-        let row_cumulative = store
-            .begin_read()
-            .expect("read")
-            .alt_block(&second.hash)
-            .expect("read")
-            .expect("held")
-            .cumulative_difficulty()
-            .to_raw();
-        let main_header = facts
-            .block_header_at(BlockLookup::Hash(main_at.hash.to_bytes()), false)
-            .expect("facts")
-            .header
-            .expect("main block");
-        // The test's subject exists: the two works differ at this height.
-        assert_ne!(
-            row_cumulative,
-            main_header.cumulative_difficulty,
-            "the branch's work differs from the main chain's at height {}",
-            second.height.to_raw()
-        );
-        let header = facts
-            .block_header_at(BlockLookup::Hash(second.hash.to_bytes()), false)
-            .expect("facts")
-            .header
-            .expect("the alt block is held");
-        assert!(header.orphan_status);
-        assert_eq!(header.cumulative_difficulty, row_cumulative);
-        assert_eq!(header.difficulty, second.target.difficulty().to_raw());
-        drop(facts);
-        drop(store);
-    })
-    .await;
-    x.close().await;
-    y.close().await;
 }
