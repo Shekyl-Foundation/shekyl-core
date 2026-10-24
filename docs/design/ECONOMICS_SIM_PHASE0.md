@@ -47,6 +47,7 @@ will decide each setting. §P0.9 turns the findings into the build order.
 
 The narration fixtures are held only by the nightly lane: both tests are
 `#[ignore]`, so a PR that moves them is green until the next nightly run.
+#1158, in flight, moves the nightly lane's ignored-test list into the tree.
 
 ### Every report mode
 
@@ -140,19 +141,30 @@ A2, A6 and §12.5) are records and were not graded.
 | Where | Document says | The pin prints | Moved by |
 | --- | --- | --- | --- |
 | rebase doc finding 1 | long-term median 314–322 KB, then 732–764 KB | 315–324, then 733–765 (PROD growth-gate table) | `0540a6e71`; §5.23 recorded it, finding 1 was not updated |
-| rebase doc finding 1 | flat control carries 20 a block for 60 years | 21.0 in year 1, then 20 (FLAT block-space table) | `0540a6e71` |
-| rebase doc finding 1 | ordinary transaction 12.6–15.3 KB | 14 256–15 288 B implied by the printed `θ` | not walked; 12.6 has no printed source |
-| umbrella §2 row 3 | `ρ`'s rise is "two-thirds burn, one-third σ" | 0.625 / 0.375; the rebase doc's own finding 2 says three-fifths / two-fifths | not walked |
+| rebase doc finding 1 | flat control carries 20 a block for 60 years | 21.0 in year 1, then 20 (FLAT block-space table) | not a move: year 1 was 21.0 at `52b3c73bb` too; the sentence was loose when written |
+| rebase doc finding 1 | ordinary transaction 12.6–15.3 KB | 14 256–15 288 B implied by the printed `θ` | walk owed: no mode prints the weight, and 12.6 has no printed source |
+| umbrella §2 row 3 | `ρ`'s rise is "two-thirds burn, one-third σ" | 0.625 / 0.375; the rebase doc's own finding 2 says three-fifths / two-fifths | walk owed: ESR-9 re-measured the decomposition and this row was not updated with it |
 | escalation doc §12.4.1, A4 row | at most 3.07×, `fee×→1` 0.0→7.7 | 3.0304, 0.0→7.5 (PROD) | `0540a6e71` (the figures were written at ESR-9 against the pre-#1152 fixture) |
 | escalation doc §12.4.1, A5 row | ~6.9 KB opening | 6 784 B (PROD; const-asserted at `rust/shekyl-economics-sim/src/proxy.rs:105`) | rounding in the row |
-| escalation doc §6 / §8 / §12.6 / §12.11.1 (live prose) | 13.6 GB held; ~3 KB opening; A6 slew 1.41 / 2.82 pts and 114×; `q*` 0.098–0.278; §12.6 `margin < 0` at every fetch price | 12.3 GB; 6 784 B; 0.0504 / 0.1008 pts and ≈ 11.9×; `q*` 0.105–0.271; margin +0.003660 at 0.10 $/GB | leaf-era figures never restated after the byte re-key |
-| escalation doc OQ-2, OQ-4 (undated live rows) | 16 struck; ROI 0.6671 / 1.1963 | min viable `h` 1; neither arm prints 0.6671 | not walked |
+| escalation doc §6 / §8 / §12.6 / §12.11.1 (live prose) | 13.6 GB held; ~3 KB opening; A6 slew 1.41 / 2.82 pts and 114×; `q*` 0.098–0.278; §12.6 `margin < 0` at every fetch price | 12.3 GB; 6 784 B; 0.0504 / 0.1008 pts and ≈ 11.9×; `q*` 0.105–0.271; margin +0.003660 at 0.10 $/GB | leaf-era figures, left in the prose when the byte re-key was recorded (`c0e5704b4`) |
+| escalation doc OQ-2, OQ-4 (undated live rows) | 16 struck; ROI 0.6671 / 1.1963 | min viable `h` 1; neither arm prints 0.6671 | walk owed: stale before `52b3c73bb`, and these lines have not moved since |
 | escalation doc A6 prose | the flood ceiling "falls with depth, pinned in a test" | `flood_ceiling_is_finite_and_nearly_depth_flat` (`rust/shekyl-economics-sim/src/swing.rs:281`) pins the opposite | contradicted by its own test |
-| derivation §4.1 | reachable `C` over [0.680, 12.92] | [0.692, 12.917] (`--fee-ladder` line 1) | before ESR-9 (byte-identical since); not walked |
+| derivation §4.1 | reachable `C` over [0.680, 12.92] | [0.692, 12.917] (`--fee-ladder` line 1) | **the instrument, not the chain** (both ends: the high end is also a grid artefact, see the class below). Bisected (`7c668a460` → `52b3c73bb`) to `783053554` (2026-10-09), which made the genesis block pay no staker share. The sampler takes heights on a year grid (`rust/shekyl-economics-sim/src/fee_ladder.rs:272`): height 0, where `σ` is now 0 and `C` = 0.800, then year 1, where `σ` = 0.135 and `C` = 0.692. Block 1 (`σ` = 0.150, `C` = 0.680 at the 0.8 rail) is never sampled. The chain's low end is still 0.680, as the derivation says |
 | derivation §4.6 | tail era 2 097 152 blocks; tail entry years 65 / 73 | 4 194 304 blocks; year ≈ 119 (FL-V7) | the ESF per-block fix (EUP-1, finding A) |
-| derivation FL-V1 and §5 | wallet cap 109 226 666 and 220 000 000 | 88 746 666 (asserted at `rust/shekyl-engine-core/src/engine/fee_policy.rs:407`) | not walked |
+| derivation FL-V1 and §5 | wallet cap 109 226 666 and 220 000 000 | 88 746 666 (asserted at `rust/shekyl-engine-core/src/engine/fee_policy.rs:407`) | walk owed: the derivation's own FL-R28 row already quotes 88 746 666, so the earlier figures are the round's history left in live text |
 | umbrella §2 row A | ESF-22 milestone at 5 788 000 blocks | 2 907 270 (JSON) | the ESF per-block fix |
 | rebase doc Appendix A2 prose | the first sample lists 24 | 23 (JSON; the A2 update says 23 too) | `5eeb3d3eb` |
+
+**Nothing in the tree takes 0.692 as the chain's low end.** The derivation
+quotes 0.680 / 0.68 wherever it reasons from the low end (§1.8, §3, §4.1,
+§4.2, §5, §11), which is right for the chain. Its one sentence about the
+instrument, §4.1's "the JSON's `c_reachable_min` now prints 0.680 directly",
+is what has been false since `783053554`; the sampler fix makes it true
+again. The other 0.692 in the tree, `c ≤ 0.692` (rebase doc §5.15,
+`ARCHIVAL_SERVE_CREDIT_SPEC.md`), is the secret draw's retry-correlation bound,
+a different quantity. The year-1 operating point (`C₀ ≈ 0.70` in
+`ESR10_PREDICTIONS.md` §1, `C` = 0.692 at the end of year 1) is the fee level
+the chain runs at, not its reachable minimum, and no document uses it as one.
 
 **Cannot be produced** (no mode prints it, or its field is gone):
 
@@ -181,6 +193,64 @@ A2, A6 and §12.5) are records and were not graded.
   lists two.
 - umbrella §3.2 row b: "batches the penalty-free part … Done". The ruled item
   was the penalty *zone* (§P0.6).
+
+### Instruments that report an extreme from sampled heights
+
+The `--fee-ladder` low end is one case of a class: an instrument reports a
+reachable minimum or maximum but evaluates the quantity only at sampled
+heights, and misses a height where the economics change. Both sims were
+searched for every extreme taken over sampled heights, ages or years, and
+each was checked against the heights where a quantity steps or bends:
+
+- genesis, height 0, where the staker share is 0;
+- block 1, where it starts at 0.150 (the only true step in `σ`);
+- the share's decay: per block, with whole years multiplied by 0.9 and
+  interpolated between, so kinks at year boundaries and no steps; integer
+  truncation makes it exactly 0 from `1 + 97·BLOCKS_PER_YEAR`;
+- tail onset (a kink in the reward, near year 119 on the neutral trajectory
+  and year 132 on the fold);
+- the growth-gate crossing (year 19 on the baseline), and the tree-depth step
+  in `θ` at year 23.
+
+Per-block folds, year sums and parameter sweeps are not the class and were
+excluded. What misses a boundary:
+
+| Instrument | Mode | Misses | Effect |
+| --- | --- | --- | --- |
+| reachable `C`, low end (`rust/shekyl-economics-sim/src/fee_ladder.rs:272`, ages 0/1/4/12/30) | `--fee-ladder` | block 1 | prints 0.692; the chain's low end is 0.680 |
+| reachable `C`, high end (same) | `--fee-ladder` | the height where `σ` reaches 0 | prints 12.917 (age 30); the structural maximum, 13.000 (`σ` = 0, `M_r` = 1.3, burn at its 0.9 cap), is the derivation's own FL-R28 figure |
+| FL-E2–E4 roll-ups `worst_1block_rise_bp`, `grace_bp_max` (`fee_floor.rs`) | `--fee-floor` | ages past 30 | both rise with every sampled age (rise 160 → 210 bp, grace at G = 3 479 → 634 bp, years 0 → 30), so the printed worst is the grid's edge, not the chain's |
+| FL-E1 / FL-C7 tail amplitude | `--fee-floor`, `--fee-ladder` | the tail era | the amplitude grows as the floor falls; the 87 bp and 833 bp are labelled as grid figures, which holds them to the grid |
+| the onset horizon, `ONSET_HORIZON_YEARS = 60` (`rust/shekyl-economics-sim/src/onset.rs:87`) | `--stage2` | tail onset | its comment says the tail is reached by year 60 (at a stale 12.5 %/yr); the same file puts it near year 132, so A1-T's "never" and its minima to 60 years are pre-tail readings |
+| A5 / TJ `max_per_epoch_skl` (year budget over year-end `n`) | `--stage2` | the in-year crossing of `n` = 4 096 | the printed 226.47 is a lower bound; at baseline year 1 (year-end `n` 22 349) the true maximum is several times larger (derived from the code, not run) |
+| OQ-2 `recommend_min_holding` (year-end `n` at year 1, middle, last) | `--stage2` | the same crossing | recommends 2; at `n` = 4 096 the same rule gives 10 (derived from the code, not run) |
+| staking sim: windowed worst/peak coverage series (one mid-epoch sample, taken before `process_exits`) | `shekyl-staking-sim` | the post-exit state | the code's own comment says the next epoch's re-acquisition hides it |
+| staking sim: shock peaks and troughs | `shekyl-staking-sim` | the shock instant | read after the same epoch's re-seat |
+
+Covered: `--fee-floor`'s per-cell traces (per block; the age-0 trace crosses
+block 1, so its own `c_range` low is 0.680), A4's maximum ROI (sampled at the
+year's cheapest block before the tail), the growth gate's first crossing
+(genesis `ρ` = 1.0 is below `θ`, so height 0 cannot fake a crossing), and the
+secret draw.
+
+**A selection defect found by the same search.** A6, OQ-4 and A2 each take
+the "steepest candidate" with `max_by_key(|c| c.asymptote)`
+(`rust/shekyl-economics-sim/src/swing.rs:157`; `stage2.rs:1545`, `:1773`).
+Three candidates share the 90 % asymptote; Rust returns the last maximum,
+knee 10 000 000, the shallowest. Measured with the selection corrected to the
+smallest knee (an uncommitted probe, reverted):
+
+| Reading | Printed (knee 10 000 000) | Steepest (knee 500 000) | Verdict |
+| --- | --- | --- | --- |
+| A6 worst slew, penalty-free / at the 2× limit | 0.0504 / 0.1008 pts per epoch | **1.0080 / 2.0160** | **flips**: "no measurable adversarial slew" fails the `< 1.0` gate (`rust/shekyl-economics-sim/src/swing.rs:229`) |
+| A6 reorg down-swing | 0.0036 pts | 0.0725 | — |
+| OQ-4 ROI, small bonds / capped | 0.0008 / 0.0048 | 0.0076 / 0.0482 | unchanged (below 1) |
+| A2 distribution, one column | — | about 4 % higher | unchanged |
+
+The escalation ships flat (asymptote at the floor), so the chain itself has no
+slew today. The figures are about the candidate band GF-7 will choose from,
+and the escalation doc's §12.4.1 A6 row, §6.0 and §12.11.1 read the shallow
+candidate.
 
 ---
 
@@ -211,7 +281,7 @@ and the weight newtypes.
 | #1123 `79a1c4dfa` | DRS-X arrival path: `chain-rules` alt/substrate, `shekyl-wire` block | not read | no | not an economics input |
 | #1138 `3ec540d92` | `config/tor_pins.json` | not read | no | not an economics input |
 | #1145 `cc176a881` | CS-1 header path: `chain-rules` header rules, `shekyl-wire` block/sync body | not read | no | not an economics input |
-| #1146 `86fdf4199` | SO-D12 count writer: `chain-rules` archival count; `archival-retention` drawable epoch; the sim's `secret_draw_production.rs` gains a multi-epoch observer (`39804d32b`) | through production's draw count, as before; the observer serves the writer's differential | no (`--secret-draw-production` identical) | aligned |
+| #1146 `86fdf4199` | SO-D12 count writer: `chain-rules` archival count; `archival-retention` drawable epoch; the sim's `secret_draw_production.rs` runs more than one epoch (`39804d32b`), and two sim tests hold that a later epoch starts from a full shortfall | through production's draw count, as before | no (`--secret-draw-production` identical) | aligned |
 | #1152 `11f8fd1f0` | C2-R2 coinbase reserve: `Fill` prices the block with the coinbase; `medians_from` reads the zone from params; `COINBASE_RESERVE` derived; the sim passes the reserve (`0540a6e71`, `e72e5a256`, `a56e12b30`, `5eeb3d3eb`) | yes, through the owner | yes: both narrations and the JSON regenerated; every move since ESR-9 is this merge's (§P0.1) | aligned (one residue, U1 in §P0.4) |
 | #1150 `32cfa46cf` | SO-D12 bundle admission: `chain-rules` admission rule, `archival-retention` bundle | not read: the sim models whether a bundle is admitted as behaviour (§4's ESR-13 row) | no | aligned |
 | #1148 `1045d90f0` | CS-2 sync model: `chain-rules` header facts/path, `shekyl-wire` transaction | not read | no | not an economics input |
@@ -243,12 +313,13 @@ sweep can see it. "EP" marks a field `EconomicParams` already has.
 - `config/economics_params.json` is generated into
   `shekyl-economics params.rs` (`GENERATED_*`) by `rust/shekyl-economics/build.rs`,
   and into C++ by `cmake/generate_economics_params.py`.
-- `config/consensus_constants.json` is read independently by five build
-  scripts: `shekyl-economics` (DAA target, surge, zone, median windows),
+- `config/consensus_constants.json` is read independently by eleven build
+  scripts and the C++ generator. The ones that generate the constants below
+  are `shekyl-economics` (DAA target, surge, zone, median windows),
   `shekyl-wire` (the zone again, into `MIN_BLOCK_WEIGHT`),
   `shekyl-archival-retention` (bond floor, age weight, timing, failure
   window), `shekyl-engine-core` (a second generated bond floor) and
-  `shekyl-types` (shard length, holdings cap), plus the C++ generator.
+  `shekyl-types` (shard length, holdings cap).
 - `EconomicParams` has 13 fields (`rust/shekyl-economics/src/params.rs:207`):
   `release_min`, `release_max`, `tx_volume_baseline`, `burn_base_rate`,
   `burn_cap`, `staker_pool_share`, `emission_curve_asymptote`,
@@ -335,7 +406,7 @@ sweep can see it. "EP" marks a field `EconomicParams` already has.
 
 | Name | Owner | Value | Class | Sim reader | Derivation status |
 | --- | --- | --- | --- | --- | --- |
-| `ARCHIVAL_BOND_FLOOR_ATOMIC` | `archival-retention` build (and a second generated copy in `engine-core`) | 0.75 SKL / shard | P | imports (seven files) | owed to EUP-5 I. **Const-asserted to 750 000 000 in three places**, so a JSON-only change fails the build |
+| `ARCHIVAL_BOND_FLOOR_ATOMIC` | `archival-retention` build (and a second generated copy in `engine-core`) | 0.75 SKL / shard | P | imports (seven files) | owed to EUP-5 I. **Two `const` asserts pin it to 750 000 000** (`archival-retention bond_floor.rs:40`, `engine-core consensus_constants.rs:16`), and a third holds the cover mirror `COVER_RUNG_ATOMIC` equal to it (`engine-core engine/principal_stake.rs:48`), so a JSON-only change fails the build |
 | `ARCHIVAL_REWARD_AGE_WEIGHT_MILLI` | `archival-retention` build | 2 000 | P | imports (`population.rs`) | calibration band [1 500, 2 500] |
 | `SETTLEMENT_EPOCH_BLOCKS` | `rust/shekyl-archival-retention/src/constants.rs:248`, a hand literal | 10 000 | P | imports (six files) | the JSON key `settlement_epoch_blocks` is digested but read by no generator: two sources, never compared |
 | `MAX_CLAIM_AGE_W` | `archival-retention` build | 26 epochs | P | imports | pinned (ARCHIVAL_TIMING_CONSTANTS) |
@@ -374,7 +445,7 @@ production compositions that read it as a bare constant today.
 | short-term median window | chain-rules `medians_over`; `blocks_to_surge_saturation`; C++ |
 | surge factor | `effective_median`, reached by `medians_from` and the FFI; chain-ingest `of_long_term`; C++ |
 | staker share, decay, `BLOCKS_PER_YEAR` | `emission_share_at`, reached by `compute_emission_split` → `price_emission` (validator and template), `correction_factors_at` (every floor and ladder), `project_at_tip`, two FFI entries; engine-core `parameters_snapshot`; C++ |
-| bond floor | `bond_floor_of` and its seven callers (bond post, release, reinstate, bond builder, funding sweep); chain-rules `apply_slash`; engine-core `principal_for_bond_count` through its own copy; three const-asserts; C++ |
+| bond floor | `bond_floor_of` and its seven callers (bond post, release, reinstate, bond builder, funding sweep); chain-rules `apply_slash`; engine-core `principal_for_bond_count` through its own copy; two value asserts and the cover-mirror assert; C++ |
 | limit multiple 2, clamp 1.7 | four copies of 2 and the Priority 2 (above); `long_term_weight` |
 | zone (already a field) | bypassed by `MIN_BLOCK_WEIGHT` → `TX_WEIGHT_LIMIT` (chain-rules `max_tx_weight`, daemon-rpc `gather`, engine-core claim budget), by the C++ macro, by `EMISSION_CLAIM_FEE_FLOOR`, and in the sim by the bare-const readers above |
 | archival timing and doctrine (`SETTLEMENT_EPOCH_BLOCKS`, `MAX_CLAIM_AGE_W`, failure window, challenge count, age weight, `SHARD_LENGTH`) | file-level only: 161, 107, 98, 15, 25 and 77 reader lines; a function-level list is Phase 1 work if the sweep takes them |
@@ -438,7 +509,34 @@ defect; each needs a row or a reason it is not a departure.
 
 ## P0.6 What blocks the long arms: performance
 
-TIMING_PLACEHOLDER
+**Measured at the pin.** Each cell is one fold of one scenario through
+`stage2::a1_year_aggs` with its `sim_years` raised to the horizon, timed by
+an uncommitted probe test (reverted). Umbrella §4.1's 64 / 337 / 500 s were
+taken on the flat control with a knob that was not recorded (the likeliest is
+`ONSET_HORIZON_YEARS`, `rust/shekyl-economics-sim/src/onset.rs:87`), so the
+comparison with them is approximate. A run was stopped at 1 200 s (exit 124, a
+timeout, not a crash). One run per cell.
+
+| Scenario | production, 60 y | production, 135 y | flat control |
+| --- | --- | --- | --- |
+| baseline_steady_state | 11 s | 37 s | 135 y: 41 s (§4.1: 64 s) |
+| boom_bust_cycle | 12 s | 38 s | — |
+| sustained_growth | 14 s | **> 1 200 s** (63 y: 33 s; 66 y: 27 s; 80 y: 63 s) | 60 y: 11 s; **63 y: 273 s** (§4.1: 337 s); **66 y: > 1 200 s** (§4.1: > 500 s); 135 y: > 1 200 s |
+| stuffing_attack | 13 s | 41 s | — |
+| stake_concentration | 24 s | 43 s | — |
+| mass_unstaking | 11 s | 42 s | — |
+| chain_bootstrap | 13 s | 48 s | — |
+| late_chain_tail | 20 s | 72 s | — |
+| high_history_low_activity | 18 s | 41 s | — |
+
+**Reading.** Every scenario but sustained growth reaches 135 years in about a
+minute on either arm, so the 135-year arms are affordable except for growth.
+Growth blows up once its demand outgrows the penalty-free room: from year 61
+on the flat control, and somewhere past year 80 on production, whose blocks
+grow later. That is the shape umbrella §4.1 recorded and attributed to
+`Fill::admit_up_to` offering the penalty zone one body at a time (not profiled
+here). #1152 did not change it. **The closed form is still needed** for any growth arm past
+year 80 on production or year 61 on the flat control.
 
 **The closed form approved on 2026-10-05 was never built.** The ruling
 (`82ad0876e`) approved "`Fill::admit_up_to` batches **the penalty zone**,
@@ -509,8 +607,8 @@ properties and the order are taken from the relay.
 **Phase 0 keeps that order and adds a step in front of it.** Each step is its
 own PR, predictions first, fresh clone last.
 
-0. **Truth commit** (Phase 1's first). No figure moves; documents and
-   declarations only.
+0. **Truth commit** (Phase 1's first). No committed fixture moves: documents,
+   declarations, one instrument fix and the tests that hold quoted figures.
    - Delete §4's "bodies' weight" row; declare U1–U4 or state why each is
      not a departure; restate the maturity row.
    - Bring every live sentence §P0.1 lists as moved or contradicted to the
@@ -521,16 +619,35 @@ own PR, predictions first, fresh clone last.
      already registered (`ca95d9997`).
    - Umbrella §3.2 row b names what was built and leaves the zone closed form
      open.
-   - *Predictions owed:* none. Every fixture byte-identical.
+   - The grid-sampled extremes in this lane's sim (the class above) take
+     the boundary heights: `--fee-ladder`'s reachable `C` samples block 1
+     and the height where `σ` reaches 0 (its range becomes [0.680, 13.000]);
+     the `--fee-floor` roll-ups gain ages past 30 or say "to year 30";
+     the onset horizon's comment states the tail year. No fixture holds
+     those modes. The A5/TJ maximum and OQ-2 move the `--stage2` fixture and
+     go with step 0b. The staking-sim rows go to EUP-3 as findings.
+   - Give the document-quoted figures a hold. The A4 row written at ESR-9
+     was stale four days later, the narration fixtures are held only by the
+     nightly lane, and five figures above reproduce with nothing holding
+     them. A non-ignored test asserts the headline values the design leans
+     on: the growth-gate operands ESR-10's P2 reads (`ρ` and `θ` in year 1,
+     the crossing year), FL-E1's counts, the secret draw's clearing bounds,
+     the gate-7 lock.
+   - *Predictions owed:* none. Every fixture byte-identical; the new tests
+     pass on the pin's output.
+0b. **Instrument corrections that move the fixtures.** The steepest-candidate
+   selection (A6, OQ-4, A2) and the in-year `n` = 4 096 crossing (A5/TJ,
+   OQ-2). The escalation doc's A6 readings follow the corrected run.
+   - *Predictions owed:* the selection's are measured above (A6 to 1.0080 /
+     2.0160 / 0.0725 pts and its verdict flips; OQ-4 to 0.0076 / 0.0482; A2
+     one column about 4 % up); the crossing's: A5/TJ's maximum rises, OQ-2
+     recommends more than 2.
 1. **ESR-15: one fee loop over a pricing function**, judged against §A.2a's
    seven properties (never under-pays, least, bounded over-payment, exact,
    fails closed, terminates by agreement, one lattice on both sides).
    - *Predictions owed:* the fixture lines that move and by how much; that no
      onset year, no crossing year and no A1 verdict moves; the
      `--fee-floor` / `--fee-ladder` outputs, which do not round today.
-     (Measured on 2026-10-17, uncommitted: rounding up to the lattice moved
-     35 PROD and 16 FLAT lines, all in the last printed digit or by a few
-     shards. That is a probe, not a prediction.)
 2. **The parameter sweep** (§B.3a of the brief), with the guard that
    production reads only `EconomicParams::default()` and a gate that holds it.
    - Scope from §P0.3: which non-fields become fields, which bare-constant
@@ -570,7 +687,7 @@ Only what Phase 0 could not settle from code and the design.
    nine FFI sites and the wallet cap. Several parameters are not fields at all
    (`w_ref`, the windows, the surge factor, G, the slack, the fee decimals),
    promoting one moves the params digest and the C4 fixtures, and the bond
-   floor is const-asserted in three places. What should the sweep vary in
+   floor is pinned by two `const` asserts and mirrored by the cover rung. What should the sweep vary in
    production, and what only in the sim?
 3. **What should hold the constants that have two sources?** The zone reaches
    `TX_WEIGHT_LIMIT` through `MIN_BLOCK_WEIGHT` from the JSON, not from the
@@ -587,6 +704,10 @@ Only what Phase 0 could not settle from code and the design.
 7. **Where is the open ruling on the fee lattice's size recorded?** The brief
    calls it open from ESR-15's §A.2a; no document on `dev` holds it, and the
    6 decimals are inherited from the C++ header.
-8. **What should the sim charge for an emission claim?** §4's claim row has
+8. **What does §6.0's no-swing claim require of the GF-7 candidate band?**
+   On its steepest candidate, a flood moves the share 1.008 points an epoch,
+   and A6's verdict flips. The band, the gate (`< 1.0` point an epoch) and
+   §12.11.1's structural closure were all read on the shallowest candidate.
+9. **What should the sim charge for an emission claim?** §4's claim row has
    no planned step, and `EMISSION_CLAIM_FEE_FLOOR` is a literal that does not
    follow a `w_ref` or zone change.
