@@ -1444,7 +1444,19 @@ lines needs none; a file with an edited line needs one naming its path.
 | 9 | `…/cryptonote_protocol_defs.h` | shrinks (1d) | none expected |
 
 Slice 4 deletes the three `shekyl_chain_sync_hint` calls (`net_node.inl:581`,
-`:873`, `:938`) with the C++ handshake; they are not the cutover's.
+`:873`, `:938`) with the C++ handshake; they are not the cutover's. The
+Rust entry they call goes with them:
+
+| # | Item | Where |
+| --- | --- | --- |
+| 1 | `shekyl_chain_sync_hint` | `rust/shekyl-ffi/src/seam_ffi.rs:335-365` |
+| 2 | The `ROUTER` slot it reads, and `store_router` | `rust/shekyl-ffi/src/seam_ffi.rs:312-317` |
+| 3 | Its C declaration | `src/shekyl/shekyl_ffi.h:4210-4220` |
+| 4 | `Router::hint` | `rust/shekyl-chain-sync-runtime/src/router.rs:148-152` |
+| 5 | Its test, `a_hint_has_no_owner_before_the_cutover` | `rust/shekyl-ffi/src/seam_ffi_tests.rs` |
+
+The inbound claim then arrives as the hub's `HandshakeResult` post, as
+the outbound one does.
 
 **Wargame.** A shrink row cannot block a deletion. It only makes an
 addition visible.

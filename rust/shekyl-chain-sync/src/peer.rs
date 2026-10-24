@@ -170,7 +170,10 @@ pub(crate) enum Mode {
     },
 }
 
-/// Headers received and not yet part of `T`.
+/// One chain of headers a session served, above its parent (in `T` or on
+/// main), and the mode that says what is done with them. A reachable
+/// run's proven headers are also in `T`; it keeps them, so its chain runs
+/// unbroken from the parent its view is based on.
 pub(crate) struct Run {
     pub chain: Chain,
     mode: Mode,
