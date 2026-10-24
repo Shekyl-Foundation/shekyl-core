@@ -4046,10 +4046,33 @@ dependencies = [
  "shekyl-difficulty",
  "shekyl-draw-rng",
  "shekyl-levin",
- "shekyl-peer-policy",
  "shekyl-pow-randomx",
  "shekyl-types",
  "shekyl-wire",
+]
+
+[[package]]
+name = "shekyl-chain-sync-runtime"
+version = "3.1.0"
+dependencies = [
+ "shekyl-chain-ingest",
+ "shekyl-chain-rules",
+ "shekyl-chain-store",
+ "shekyl-chain-sync",
+ "shekyl-difficulty",
+ "shekyl-draw-rng",
+ "shekyl-hash-budget",
+ "shekyl-levin",
+ "shekyl-peer-policy",
+ "shekyl-pow-randomx",
+ "shekyl-runtime",
+ "shekyl-seam",
+ "shekyl-timing-engine",
+ "shekyl-transport-layer",
+ "shekyl-types",
+ "shekyl-wire",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -4616,6 +4639,7 @@ dependencies = [
  "shekyl-chain-ingest",
  "shekyl-chain-rules",
  "shekyl-chain-store",
+ "shekyl-chain-sync-runtime",
  "shekyl-clearnet",
  "shekyl-consensus",
  "shekyl-crypto-hash",
@@ -4980,13 +5004,29 @@ dependencies = [
 name = "shekyl-p2p-harness"
 version = "3.1.0"
 dependencies = [
+ "serde_json",
+ "shekyl-capped-stream",
+ "shekyl-chain-ingest",
+ "shekyl-chain-rules",
+ "shekyl-chain-store",
+ "shekyl-chain-sync",
+ "shekyl-chain-sync-runtime",
  "shekyl-clearnet",
+ "shekyl-difficulty",
+ "shekyl-draw-rng",
+ "shekyl-hash-budget",
  "shekyl-levin",
  "shekyl-peer-policy",
+ "shekyl-pow-randomx",
  "shekyl-runtime",
+ "shekyl-seam",
  "shekyl-timing-engine",
  "shekyl-transport-layer",
+ "shekyl-types",
+ "shekyl-wire",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

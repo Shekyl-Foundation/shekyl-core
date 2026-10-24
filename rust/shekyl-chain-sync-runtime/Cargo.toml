@@ -1,0 +1,39 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-chain-sync-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Chain sync's runtime half: the Levin router, the sync owner task, the executor and serving (CS-3)."
+
+[dependencies]
+shekyl-chain-ingest = { path = "../shekyl-chain-ingest", default-features = false, features = ["pipeline"] }
+shekyl-chain-rules = { path = "../shekyl-chain-rules" }
+shekyl-chain-store = { path = "../shekyl-chain-store" }
+shekyl-chain-sync = { path = "../shekyl-chain-sync" }
+shekyl-difficulty = { path = "../shekyl-difficulty" }
+shekyl-draw-rng = { path = "../shekyl-draw-rng" }
+shekyl-hash-budget = { path = "../shekyl-hash-budget" }
+shekyl-levin = { path = "../shekyl-levin" }
+shekyl-peer-policy = { path = "../shekyl-peer-policy" }
+shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
+shekyl-runtime = { path = "../shekyl-runtime" }
+shekyl-seam = { path = "../shekyl-seam" }
+shekyl-timing-engine = { path = "../shekyl-timing-engine" }
+shekyl-transport-layer = { path = "../shekyl-transport-layer" }
+shekyl-types = { path = "../shekyl-types" }
+shekyl-wire = { path = "../shekyl-wire" }
+tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "sync", "macros"] }
+tracing = "0.1"
+
+[dev-dependencies]
+shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
+
+[lints]
+workspace = true

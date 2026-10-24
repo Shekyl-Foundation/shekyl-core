@@ -60,6 +60,7 @@ mod alt;
 mod archival;
 mod chain;
 mod curve;
+mod degraded;
 mod evidence;
 mod pool;
 mod primitives;
@@ -97,14 +98,16 @@ pub use chain::{
     TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment,
 };
 pub use curve::{CurveTreeState, LayerHash, LeafCount, TreeDepth};
+pub use degraded::FollowingDegraded;
 pub use evidence::CoverageGaps;
 pub use pool::{PoolRecord, ReceivedHour};
 #[cfg(test)]
 pub(crate) use property::ProbeCell;
 pub use property::{
     ApplyPolicyCell, ArchivalLastSlashEpochCell, CellScope, ChainState, CoverageGapsCell,
-    EngineLocal, PropertyCell, PropertyCellBytes, PropertyCellSpec, SchemaVersionCell, Scope,
-    SettlementEpochBlocksCell, TotalBurnedCell, UndoLogFloorCell, PROPERTY_CELLS,
+    EngineLocal, FollowingDegradedCell, PropertyCell, PropertyCellBytes, PropertyCellSpec,
+    SchemaVersionCell, Scope, SettlementEpochBlocksCell, TotalBurnedCell, UndoLogFloorCell,
+    PROPERTY_CELLS,
 };
 pub use schema_version::{SchemaVersion, SCHEMA_VERSION};
 pub use settlement_epoch::SettlementEpochBlocks;

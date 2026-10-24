@@ -233,6 +233,69 @@ const _: () = assert!(NOTIFY_RESPONSE_HEADERS == 2012);
 const _: () = assert!(NOTIFY_REQUEST_BODIES == 2013);
 const _: () = assert!(NOTIFY_RESPONSE_BODIES == 2014);
 
+/// The chain-sync commands, as chain sync's router admits them
+/// (`P2P_3_CHAIN_SYNC_BRIEF.md` CS-3 §4.2).
+///
+/// Not [`crate::DefinedCommand`]: that set is what the C++ ingress admits
+/// for its handler, and 2011–2014 are not added to it. The router reads a
+/// bucket's command, admits these here with their caps, and hands the bytes
+/// to the sync owner; every other command goes on to the C++ handler.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SyncCommand {
+    /// `NOTIFY_REQUEST_HEADERS` (2011).
+    RequestHeaders,
+    /// `NOTIFY_RESPONSE_HEADERS` (2012).
+    ResponseHeaders,
+    /// `NOTIFY_REQUEST_BODIES` (2013).
+    RequestBodies,
+    /// `NOTIFY_RESPONSE_BODIES` (2014).
+    ResponseBodies,
+}
+
+impl SyncCommand {
+    /// Every arm.
+    pub const ALL: [Self; 4] = [
+        Self::RequestHeaders,
+        Self::ResponseHeaders,
+        Self::RequestBodies,
+        Self::ResponseBodies,
+    ];
+
+    /// The wire id this arm speaks.
+    #[must_use]
+    pub const fn wire_id(self) -> u32 {
+        match self {
+            Self::RequestHeaders => NOTIFY_REQUEST_HEADERS,
+            Self::ResponseHeaders => NOTIFY_RESPONSE_HEADERS,
+            Self::RequestBodies => NOTIFY_REQUEST_BODIES,
+            Self::ResponseBodies => NOTIFY_RESPONSE_BODIES,
+        }
+    }
+
+    /// A wire command id as a chain-sync command, or `None`.
+    #[must_use]
+    pub const fn from_wire(command: u32) -> Option<Self> {
+        match command {
+            NOTIFY_REQUEST_HEADERS => Some(Self::RequestHeaders),
+            NOTIFY_RESPONSE_HEADERS => Some(Self::ResponseHeaders),
+            NOTIFY_REQUEST_BODIES => Some(Self::RequestBodies),
+            NOTIFY_RESPONSE_BODIES => Some(Self::ResponseBodies),
+            _ => None,
+        }
+    }
+
+    /// The payload cap the router applies before it buffers a message.
+    #[must_use]
+    pub const fn payload_cap(self) -> u64 {
+        match self {
+            Self::RequestHeaders => CAP_REQUEST_HEADERS,
+            Self::ResponseHeaders => CAP_RESPONSE_HEADERS,
+            Self::RequestBodies => CAP_REQUEST_BODIES,
+            Self::ResponseBodies => CAP_RESPONSE_BODIES,
+        }
+    }
+}
+
 fn capped<T: PortableMap>(bytes: &[u8], cap: u64, limits: Limits) -> Result<T, Error> {
     let max = usize::try_from(cap).expect("an encoded cap fits usize");
     if bytes.len() > max {
@@ -673,40 +736,116 @@ pub struct BodyPlan {
 ///
 /// `held` is the body the responder has for that hash, or `None` when it
 /// does not. The size is [`body_budget_bytes`], the measure
-/// [`ResponseBodies::decode`] and [`PortableMap::to_section`] charge.
+/// [`ResponseBodies::decode`] and [`PortableMap::to_section`] charge. A
+/// responder reading bodies from a store plans with [`BodyPlanner`]
+/// instead, so it never reads a body the budget defers.
 pub fn plan_bodies<'a>(
     requested: &[[u8; HASH_SIZE]],
     held: impl Fn(&[u8; HASH_SIZE]) -> Option<&'a BlockBody>,
 ) -> BodyPlan {
-    let mut plan = BodyPlan {
-        send: Vec::new(),
-        deferred: Vec::new(),
-        missed: Vec::new(),
-    };
-    let mut sent_bytes = 0usize;
-    let mut sent_one = false;
+    let mut planner = BodyPlanner::new();
+    for hash in requested {
+        match held(hash) {
+            None => planner.miss(*hash),
+            Some(body) => {
+                planner.charge(*hash, body_budget_bytes(body));
+            }
+        }
+    }
+    planner.finish()
+}
+
+/// [`plan_bodies`], one requested hash at a time, in request order.
+///
+/// Once one held body is deferred, every later held hash is deferred
+/// whatever its size, and [`deferring`](Self::deferring) says so: from
+/// there a responder asks only whether it holds a hash ([`defer`] or
+/// [`miss`]) and reads no body. Before that it charges each held body's
+/// [`body_budget_bytes`], and keeps the body only when [`charge`] sends it.
+///
+/// [`charge`]: Self::charge
+/// [`defer`]: Self::defer
+/// [`miss`]: Self::miss
+#[derive(Debug)]
+pub struct BodyPlanner {
+    plan: BodyPlan,
+    sent_bytes: usize,
+    sent_one: bool,
     // Once a held body does not fit, every later held body is deferred.
     // `charge` alone would send a later small body after a deferred large
     // one, and `check_form` refuses that as `SentAfterDeferred`.
-    let mut deferring = false;
-    for hash in requested {
-        match held(hash) {
-            None => plan.missed.push(*hash),
-            Some(_) if deferring => plan.deferred.push(*hash),
-            Some(body) => match charge(sent_bytes, body_budget_bytes(body), sent_one) {
-                Some(next) => {
-                    plan.send.push(*hash);
-                    sent_bytes = next;
-                    sent_one = true;
-                }
-                None => {
-                    plan.deferred.push(*hash);
-                    deferring = true;
-                }
+    deferring: bool,
+}
+
+impl Default for BodyPlanner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl BodyPlanner {
+    /// A plan with nothing in it yet.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            plan: BodyPlan {
+                send: Vec::new(),
+                deferred: Vec::new(),
+                missed: Vec::new(),
             },
+            sent_bytes: 0,
+            sent_one: false,
+            deferring: false,
         }
     }
-    plan
+
+    /// Whether every later held hash is deferred. A responder need not
+    /// read a body from here on.
+    #[must_use]
+    pub const fn deferring(&self) -> bool {
+        self.deferring
+    }
+
+    /// The next requested hash is not held.
+    pub fn miss(&mut self, hash: [u8; HASH_SIZE]) {
+        self.plan.missed.push(hash);
+    }
+
+    /// The next requested hash is held and is deferred, with every held
+    /// hash after it.
+    pub fn defer(&mut self, hash: [u8; HASH_SIZE]) {
+        self.plan.deferred.push(hash);
+        self.deferring = true;
+    }
+
+    /// The next requested hash is held, and its body charges `bytes`
+    /// ([`body_budget_bytes`]). `true` when it is sent. The first held
+    /// body is sent whatever its size; a later one while the sent bytes
+    /// fit [`BODIES_RESPONSE_BYTES`]. One that does not fit is deferred.
+    pub fn charge(&mut self, hash: [u8; HASH_SIZE], bytes: usize) -> bool {
+        if self.deferring {
+            self.defer(hash);
+            return false;
+        }
+        match charge(self.sent_bytes, bytes, self.sent_one) {
+            Some(next) => {
+                self.plan.send.push(hash);
+                self.sent_bytes = next;
+                self.sent_one = true;
+                true
+            }
+            None => {
+                self.defer(hash);
+                false
+            }
+        }
+    }
+
+    /// The plan.
+    #[must_use]
+    pub fn finish(self) -> BodyPlan {
+        self.plan
+    }
 }
 
 /// The bytes one sent body counts toward [`BODIES_RESPONSE_BYTES`]: the
