@@ -27,6 +27,41 @@ const LEGACY_DIR_NAME: &str = "ephemeral-tor";
 /// [`DIR_PREFIX`] and it is not [`LEGACY_DIR_NAME`].
 pub(crate) const CACHE_DIR_NAME: &str = "tor-directory-cache";
 
+/// Space Tor writes into a running `DataDirectory` beyond the cache it was
+/// given. It rebuilds its microdescriptor store at startup and every 30
+/// minutes, so `cached-microdescs.new` holds at most about one full set
+/// (29 MB measured, `TOR_SUPERVISOR.md` §10); `state`, the keys and the log
+/// are small beside it.
+pub const TOR_WRITE_HEADROOM: u64 = 32 * 1024 * 1024;
+
+/// Bytes a spawn needs free under `parent`, the daemon's data directory
+/// (`TOR_SUPERVISOR.md` §5, "Data directory unusable"). A fresh
+/// `DataDirectory` is seeded from the public directory cache, so it also
+/// needs the cache's size; a kept one (a respawn) already holds it.
+#[must_use]
+pub fn space_needed(parent: &Path, fresh: bool) -> u64 {
+    let cache = if fresh {
+        regular_file_bytes(&parent.join(CACHE_DIR_NAME))
+    } else {
+        0
+    };
+    TOR_WRITE_HEADROOM.saturating_add(cache)
+}
+
+/// The total size of the regular files directly in `dir`; zero when it is
+/// missing or unreadable (a missing cache copies nothing).
+fn regular_file_bytes(dir: &Path) -> u64 {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.metadata().ok())
+        .filter(fs::Metadata::is_file)
+        .map(|metadata| metadata.len())
+        .fold(0, u64::saturating_add)
+}
+
 fn is_sweep_target(name: &str) -> bool {
     name == LEGACY_DIR_NAME || name.starts_with(DIR_PREFIX)
 }
@@ -178,6 +213,22 @@ mod tests {
         let dir = EphemeralDataDir::create_under(parent.path()).unwrap();
         assert!(cache.join("cached-certs").is_file());
         assert_ne!(dir.path(), cache);
+    }
+
+    /// A fresh directory needs the cache's size on top of Tor's own write
+    /// headroom; a kept one needs only the headroom. A missing cache adds
+    /// nothing. Dropping the `fresh` branch fails the first assertion.
+    #[test]
+    fn space_needed_counts_the_cache_only_for_a_fresh_directory() {
+        let parent = tempfile::tempdir().unwrap();
+        assert_eq!(space_needed(parent.path(), true), TOR_WRITE_HEADROOM);
+        let cache = parent.path().join(CACHE_DIR_NAME);
+        fs::create_dir(&cache).unwrap();
+        fs::write(cache.join("cached-certs"), vec![0u8; 1000]).unwrap();
+        fs::write(cache.join("cached-microdesc-consensus"), vec![0u8; 2500]).unwrap();
+        fs::create_dir(cache.join("not-a-file")).unwrap();
+        assert_eq!(space_needed(parent.path(), true), TOR_WRITE_HEADROOM + 3500);
+        assert_eq!(space_needed(parent.path(), false), TOR_WRITE_HEADROOM);
     }
 
     #[cfg(unix)]

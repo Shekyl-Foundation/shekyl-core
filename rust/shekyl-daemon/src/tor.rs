@@ -27,11 +27,11 @@ use shekyl_tor_control_client::control::{
 };
 use shekyl_tor_control_client::supervisor::{
     input_of, render, Action, Cause, Connectors, Core, Input, ManagedRunning,
-    OriginVerdict as FoldedOrigin, Policy, Shown, Step, TorSetting,
+    OriginVerdict as FoldedOrigin, Policy, Shown, Space, Step, TorSetting,
 };
 use shekyl_tor_control_daemon::{
-    DaemonTorConfig, DaemonTorControl, DaemonTorStartError, KeptDataDir, OnionPow, OnionSeed,
-    SpawnError, TorDeath,
+    space_needed, CacheSave, DaemonTorConfig, DaemonTorControl, DaemonTorStartError, KeptDataDir,
+    OnionPow, OnionSeed, SpawnError, TorDeath,
 };
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
@@ -265,7 +265,13 @@ impl Drive {
             }
         }
         if let Some(control) = self.control.take() {
-            let _exit = control.shutdown().await;
+            let teardown = control.shutdown().await;
+            if let CacheSave::Failed(error) = teardown.cache {
+                tracing::warn!(
+                    target: "global",
+                    "Tor's directory cache was not saved ({error}); the next start fetches the network directory again"
+                );
+            }
         }
     }
 
@@ -408,6 +414,9 @@ impl Drive {
         let Some(binary) = self.pinned.clone() else {
             return Input::PinRefused;
         };
+        if let Some(short) = self.space_short() {
+            return short;
+        }
         let spawned = if let Some(directory) = self.kept.take() {
             DaemonTorControl::spawn_into(directory, binary, self.events.clone(), REPLY_BOUND)
                 .await
@@ -447,7 +456,10 @@ impl Drive {
                     self.kept = Some(directory);
                 }
                 match error {
-                    DaemonTorStartError::DataDir(_) => Input::DirectoryUnusable,
+                    DaemonTorStartError::DataDir(_) => Input::DirectoryUnusable {
+                        path: self.data_dir.clone(),
+                        space: None,
+                    },
                     _ => Input::SpawnFailed,
                 }
             }
@@ -539,6 +551,32 @@ impl Drive {
 
     /// Stop the child and keep its directory. The generation moves so the
     /// stop's own death is not a second fault.
+    /// The pre-spawn space check (`TOR_SUPERVISOR.md` §5, "Data directory
+    /// unusable"): a spawn needs Tor's write headroom free, plus the cache's
+    /// size when it takes a fresh directory. A disk that fills after the spawn
+    /// is not this check's: Tor runs on, and a respawn checks again. A probe
+    /// that cannot read the disk lets the spawn go ahead: "I cannot tell" is
+    /// not "full".
+    fn space_short(&self) -> Option<Input> {
+        let needed = space_needed(&self.data_dir, self.kept.is_none());
+        match shekyl_node::free_bytes(&self.data_dir) {
+            Ok(available) if available < needed => Some(Input::DirectoryUnusable {
+                path: self.data_dir.clone(),
+                space: Some(Space { available, needed }),
+            }),
+            Ok(_) => None,
+            Err(error) => {
+                tracing::warn!(
+                    target: "global",
+                    path = %self.data_dir.display(),
+                    %error,
+                    "the free space for Tor's data directory could not be read; starting Tor anyway"
+                );
+                None
+            }
+        }
+    }
+
     async fn reap(&mut self) {
         self.bootstrap = None;
         let Some(control) = self.control.take() else {

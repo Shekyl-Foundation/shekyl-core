@@ -268,7 +268,9 @@ time, never cached).
 
 **TSR-F11 (medium; Tor lane). Today's only death notice is invisible at the
 default log level** (§2). Every state change of §4.3 is an announcement in
-IG-14's sense: it reaches the log and standard error whatever the level.
+IG-14's sense: it reaches the log and standard error whatever the level. A
+state change is said when it happens; the once-per-cap limit (§4.4) applies
+only to repeats of the same cause.
 
 **TSR-F12 (high; daemon-configuration lane, a prerequisite). The daemon cannot
 reap its own children while `tools::spawn` ignores `SIGCHLD`.**
@@ -466,7 +468,14 @@ been in it (§5) and waits.
 
 Backoff applies to respawns and to Install and Local-resource retries; it never
 gives up and reaches its cap with a loud announcement, repeated once per cap
-interval and never more often (ruled).
+interval and never more often (ruled). The once-per-cap limit is on repeats
+of one announcement: a state change (a death, a refused binary, a recovery)
+is a new fact and is said at once (`TSR-F11`); only its repeats wait for the
+cap. The backoff starts again from its base after the outbound facet has
+been usable for one full cap (Rick, 2026-10-24): tied to the cap rather than a
+new constant, so a crash rate that keeps the backoff pinned without the reset
+still keeps it pinned, and an adversary who can crash Tor gains no faster
+re-roll of the respawn cadence.
 
 ### 4.5 The probe
 
@@ -708,7 +717,7 @@ that detail, not variants of `ManagedTorFix`.
 | Tor exited or wedged | exit, EOF, reply bound | Restarting | none unless repeated; then the count and the last exit, and where the previous log is | none | respawn |
 | Tor install defect | the pin gate at spawn | Restarting (held) | the file that failed the pin. The binary is not executed | `RestoreManaged`, plus the fixes the posture table offers | retry at the cap; the message repeats once per cap |
 | No Tor installed | discovery finding nothing | Restarting (held) | none was found. `tor-file` may name a bundle that passes the pin | `RestoreManaged`, plus the fixes the posture table offers | retry at the cap; the message repeats once per cap |
-| Data directory unusable | the pre-spawn check | Restarting (held) | the path is not writable, or out of space | none | retry at the cap |
+| Data directory unusable | the pre-spawn check | Restarting (held) | the path is not writable, or out of space: the path, the free space and what Tor needs (its write headroom, 32 MiB from §10's microdescriptor set, plus the directory cache when the spawn takes a fresh directory) | none | retry at the cap |
 | Open-file limit reached | `TOO_MANY_CONNECTIONS` | Degraded | the limit and the count; raise it, in the platform's terms | none | wait; retry at the cap |
 | Tor version flagged | `DANGEROUS_VERSION` | announcement | upgrade Shekyl when a release re-pins Tor (TB-10), never Tor itself | none | none |
 
@@ -772,6 +781,40 @@ the Windows CI job beside the boot-and-stop smoke test (#1072), and in
 - **Stop while Tor is frozen,** with the fix: `SIGTERM` six seconds into a
   liveness sample's wait stopped the daemon 5.2 s later (the teardown's
   grace), with no fault recovery first.
+
+**Linux run, 2026-10-24** (the same workstation, #1170's build; `pasta` and
+`unshare` namespaces, no root):
+
+- **Outbound blocked while Running (10 min):** no respawn; dials resumed 5 s
+  after the unblock; **nothing announced** while blocked. Tor sent no
+  `NETWORK_LIVENESS DOWN` (connects failed at once and Tor's liveness reads
+  circuit-build timeouts), and §4.2's dial-outcome input is not wired yet.
+- **Tor down at start, restored address file:** the cause announced, no
+  respawn, all six onion entries in gray through the outage.
+- **Disk filled while Running, then a kill:** the respawn into the kept
+  directory came up in 3 s; a respawn needs no new space.
+- **Boot on a full disk:** held, then the retry launched Tor anyway (no space
+  check), which stuck at 40 % until killed. The pre-spawn space check above
+  is the fix.
+- **Crash loop:** backoff 1, 2, 4, 8, 16, 32, 60, 60 s; never gave up;
+  recovered. A death right after a recovery waited a minute to be said; the
+  backoff never reset. Both fixed as §4.4 now says.
+- **Binary replaced on disk:** the running Tor unaffected; after its death
+  nothing unverified spawned and the refusal named its fixes; restoring the
+  file recovered at the next retry.
+- **Slow link:** not run here (no `tc`); it runs on the floor device with
+  the soak.
+
+**Re-run, 2026-10-24** (the fixes' build, 4f90d40b7):
+
+- **Boot on a full disk:** held at once with the path, 16.4 kB free and
+  69.7 MB needed (headroom plus the directory cache); no Tor launched. After
+  the space was freed, the retry at the cap brought Tor up in 3 s.
+- **Crash loop:** four quick deaths took the backoff to 8 s. A repeat of the
+  same cause waited for the cap; each change was said within 15 ms. A death
+  after 70 s of usable outbound respawned after 1.2 s (the backoff started
+  again). A death 5 s after a recovery respawned after 2.2 s (no reset
+  inside a cap).
 
 | Case | Expected | Apparatus |
 | --- | --- | --- |
