@@ -227,6 +227,14 @@ jobs:
 
           run_one "SA-3b: domain-registry" \
             scripts/ci/domain_registry_gate.sh
+          # RT-O22 (RT-W9 step 6): the toolchain, the pinned ML-KEM crate and
+          # every code-generation setting agree with what RT-P4 was measured
+          # on; anything unrecognised fails. Its self-test first, so a broken
+          # reader cannot pass the real check.
+          run_one "RT-P4 standing check: self-test" \
+            python3 scripts/ci/check_rt_p4_standing.py --selftest
+          run_one "RT-P4 standing check" \
+            python3 scripts/ci/check_rt_p4_standing.py
           run_one "Consensus-invariants" \
             scripts/ci/check_consensus_invariants.sh
           # PDM-Q7: the stripe engine and its pruning_seed wire field are
