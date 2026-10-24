@@ -32,7 +32,6 @@
 //!   `Relay` has no Rust relay entry to call, and it is logged.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -103,7 +102,7 @@ pub struct OwnerParts<C: Clock + Clone, R> {
 #[must_use = "stop the owner from outside its pool"]
 pub struct Running {
     pool: Pool,
-    stop: Arc<AtomicBool>,
+    executor: Arc<Executor>,
     stop_tx: watch::Sender<bool>,
     state: watch::Receiver<SyncState>,
     alarm: watch::Receiver<bool>,
@@ -125,7 +124,7 @@ impl Running {
     /// Stop the owner and wait at most `timeout` for its blocking work.
     /// Call it from outside the owner's pool.
     pub fn stop(self, timeout: Duration) {
-        self.stop.store(true, Ordering::Release);
+        self.executor.stop();
         self.stop_tx.send_replace(true);
         self.pool.shutdown(timeout);
     }
@@ -133,8 +132,8 @@ impl Running {
 
 /// Start the owner on its own row, in the caller's tracing span.
 ///
-/// `stop` is shared with the executor, so a permit wait ends with the
-/// owner. The row's blocking-thread cap is derived: the hasher budget's
+/// [`Running::stop`] stops the executor too, so a permit wait ends with
+/// the owner. The row's blocking-thread cap is derived: the hasher budget's
 /// permits, the most proof items that can hash at once. Serving and the
 /// cache derivations queue on the same threads. The workers are one: the
 /// owner is one task.
@@ -142,7 +141,7 @@ impl Running {
 /// # Errors
 ///
 /// The runtime could not be built.
-pub fn spawn<C, R>(parts: OwnerParts<C, R>, stop: Arc<AtomicBool>) -> std::io::Result<Running>
+pub fn spawn<C, R>(parts: OwnerParts<C, R>) -> std::io::Result<Running>
 where
     C: Clock + Clone + Send + Sync + 'static,
     R: RelayRng + Send + 'static,
@@ -160,11 +159,12 @@ where
     let (state_tx, state) = watch::channel(SyncState::NoView);
     let (alarm_tx, alarm) = watch::channel(false);
     let (stop_tx, stop_rx) = watch::channel(false);
+    let executor = Arc::clone(&parts.executor);
     // The owner's log lines carry the span it was started in.
     pool.spawn(run(parts, state_tx, alarm_tx, stop_rx).instrument(tracing::Span::current()));
     Ok(Running {
         pool,
-        stop,
+        executor,
         stop_tx,
         state,
         alarm,

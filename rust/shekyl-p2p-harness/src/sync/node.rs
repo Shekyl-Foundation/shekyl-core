@@ -18,7 +18,6 @@
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::num::NonZeroUsize;
-use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -157,8 +156,7 @@ impl Node {
             .handle()
             .register(OwnerClass::Sync)
             .expect("registered");
-        let stop = Arc::new(AtomicBool::new(false));
-        let executor = Arc::new(Executor::new(budget, substrate, Arc::clone(&stop)));
+        let executor = Arc::new(Executor::new(budget, substrate));
         let parts = OwnerParts {
             store: Arc::clone(&chain.store),
             door: chain.service.door(),
@@ -176,7 +174,7 @@ impl Node {
         // The owner's log lines carry the node's tag.
         let span = tracing::info_span!("node", tag);
         let running = span
-            .in_scope(|| owner::spawn(parts, stop))
+            .in_scope(|| owner::spawn(parts))
             .expect("the owner row");
         Self {
             chain,
