@@ -487,7 +487,9 @@ pub enum ServiceFault<F> {
     #[error("pool: {0:?}")]
     Pool(PoolFault<StoreError>),
     /// The tip attendant ended while the service had not stopped, or it
-    /// panicked. The miner must not keep hashing a job nothing will refresh.
+    /// panicked, or a blocking task of the follower's panicked: the seed
+    /// window's install, the pool's judging, the template producer. The
+    /// miner must not keep hashing a job nothing will refresh.
     #[error("the tip follower ended")]
     FollowerEnded,
     /// An in-cap alternative named a seed below its fork that the window
@@ -550,6 +552,10 @@ pub(crate) struct Shared<S: Substrate> {
     pending: Mutex<Vec<Transaction>>,
     /// Wakes the attendant to judge [`pending`](Self::pending).
     pending_ready: Arc<tokio::sync::Notify>,
+    /// A test makes this many of the next builds lose a listed body
+    /// between the producer's locks.
+    #[cfg(test)]
+    pub(crate) bodies_gone: std::sync::atomic::AtomicUsize,
 }
 
 impl<S: Substrate> Shared<S>
@@ -1183,6 +1189,8 @@ where
             pool_live: Arc::new(AtomicBool::new(true)),
             pending: Mutex::new(Vec::new()),
             pending_ready: Arc::new(tokio::sync::Notify::new()),
+            #[cfg(test)]
+            bodies_gone: std::sync::atomic::AtomicUsize::new(0),
         });
         {
             let shared = Arc::clone(&shared);
@@ -1415,7 +1423,8 @@ mod window;
 
 pub use window::Reservation;
 pub(crate) use window::{
-    divide_pool_faults, install_window, record_store_read, with_pool, PoolDivision,
+    divide_pool_faults, install_window, record_store_read, record_window_stop, with_pool,
+    PoolDivision,
 };
 
 #[cfg(test)]

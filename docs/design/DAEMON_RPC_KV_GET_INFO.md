@@ -341,6 +341,21 @@ GetInfoResponse {
   adds the ones not yet broadcast. That is one key whose meaning depends on who
   asks, which the governing principle forbids; RK-Q10 splits it. The
   difference between the two counts is the host axis, not a part.
+- **A retired pool is a state of the Pool part, and the rest of the
+  reply is the chain's** (DRS-X PR 3c, `CORE_RPC_VERSION` 3.61). The Rust
+  node retires its pool when the pool's file faults and goes on following
+  the chain. `InfoPool` is `Live { tx_pool_size }` or `Retired`; on the
+  wire, `"pool_retired": true` with `tx_pool_size` `null`, and the host
+  part shown with `tx_pool_unbroadcast_count` `null` (RK-D23: no answer).
+  Withheld stays absent, so the host key has three states: a count,
+  `null`, absent. A live reply writes no `pool_retired`. The decoder
+  refuses any mix (`GetInfoShapeError::PoolCountDisagreesWithRetired`).
+  `get_transactions` lists an id the chain does not hold as
+  `unavailable_tx` while the pool is retired; `is_key_image_spent` stays
+  failed closed, since a pool spend it cannot see must not read as
+  unspent. Readers: `tests/stressnet/monitor.py` keeps a retired pool as no count
+  (its table says "retired") and refuses a count that disagrees with
+  `pool_retired`; the GUI's is §5.1's row.
 - **The `target_height` sentinel is not one of the restricted
   stand-ins.** The stand-ins depend on the caller; the sentinel is written
   for every caller, and RK-D15 retires it in this slice. RT-W10 replaces
@@ -736,6 +751,7 @@ The GUI's fields are read at `447908f` (`src-tauri/src/daemon_rpc.rs:97-123`).
 | 8+ (RK-Q6) | `nettype` and the three booleans retired | not read. Its `GetInfoResponse` does not refuse unknown keys and declares none of the four | none |
 | 8+ (RK-Q10) | `tx_pool_size` is broadcast entries only; `tx_pool_unbroadcast_count` added, host-only | required `tx_pool_size: u64`, shown as the pool size (read at the GUI's `d08692e`) | none to keep decoding. Against its own daemon's unrestricted listener the number it shows drops by the entries not yet broadcast, and that reply now carries `tx_pool_unbroadcast_count`, which its decoder ignores; add the two if it means everything the node holds |
 | 8+ (RK-Q8) | a restricted reply omits Status and Peers | required `database_size: u64` and `version: String` | both optional; a remote node that withholds them renders as withheld, not as an empty version and a rounded size |
+| DRS-X PR 3c (3.61) | a retired pool: `pool_retired: true`, `tx_pool_size` `null` | required `tx_pool_size: u64` (`daemon_rpc.rs:104`, `daemon_connection.rs:99`) | `Option<u64>`, `null` rendered as "pool unavailable until the daemon restarts", not `0`. Only the Rust node retires its pool, so the GUI meets `null` from the flip onward |
 
 The other in-tree-external reader, the website consumer, is the RPC-channel
 round's (`RPC_CHANNEL.md` §6.1).
