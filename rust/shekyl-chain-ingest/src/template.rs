@@ -18,10 +18,11 @@
 //!
 //! **The listing.** The pool's candidates are offered in `select`'s order
 //! to the reward-aware [`Fill`] priced at [`COINBASE_RESERVE`], and listed
-//! only if it admits them. The pool lock covers the snapshot and, later,
-//! the eviction; `tx_against` runs between the two. `build` then prices
-//! the coinbase over that listing, once. Candidates the parent refuses are
-//! evicted (CEN-M10).
+//! only if it admits them. The chain snapshot is open first. The pool lock
+//! is taken to copy the shown entries, dropped while `tx_against` runs over
+//! the copy, and taken again for the eviction; a body the pool stopped
+//! showing in between is not listed. `build` then prices the coinbase over
+//! that listing, once. Candidates the parent refuses are evicted (CEN-M10).
 //!
 //! **The secrets.** The coinbase's transaction secret is drawn from the OS
 //! for each template, and the draw commitment is
@@ -113,6 +114,9 @@ pub(crate) struct Producer<'a> {
     /// The producer's clock: the header's timestamp is no earlier, and is
     /// past the chain's median (`template_timestamp`).
     pub(crate) now: Timestamp,
+    /// A test acts on the pool between the producer's two locks.
+    #[cfg(test)]
+    pub(crate) between_locks: Option<&'a (dyn Fn(&Mutex<Pool>) + Sync)>,
 }
 
 /// Build the template for the block after `snap`'s tip (module docs).
@@ -197,7 +201,11 @@ struct Listing {
 /// The chain snapshot is already open. The pool lock is taken to copy the
 /// shown entries and to confirm they were judged at this parent, then
 /// dropped for `tx_against`, then taken again for the eviction. A tip move
-/// between the two locks evicts nothing.
+/// between the two locks evicts nothing. A listed body the pool stopped
+/// showing between them — a make-room eviction, a same-tip reconcile, a
+/// flush — is not listed: a job must not name a body an outside miner's
+/// `submit_block` cannot find. The rest are listed; fewer bodies weigh
+/// less, so none of them lowers the coinbase the fill admitted it under.
 fn list(
     snap: &ReadSnapshot<'_>,
     producer: &Producer<'_>,
@@ -228,18 +236,34 @@ fn list(
         fill.admit(weight, fee)
     })
     .map_err(NoTemplate::Selection)?;
+    #[cfg(test)]
+    if let Some(between) = producer.between_locks {
+        between(pool);
+    }
     let refused: Vec<TxHash> = selected.refused.iter().map(|(txid, _)| *txid).collect();
-    let listed: Vec<TxHash> = selected.transactions.iter().map(|body| body.id).collect();
-    let evicted = {
+    let (kept, evicted) = {
         let mut pool = pool.lock().unwrap_or_else(PoisonError::into_inner);
         if !judged_at_parent(&pool, facts.previous) {
             return Err(NoTemplate::PoolOnAnotherTip);
         }
-        pool.evict(&refused, &listed)
-            .map_err(NoTemplate::PoolFile)?
+        let kept: Vec<_> = {
+            let view = pool.relay_view();
+            selected
+                .transactions
+                .into_iter()
+                .filter(|body| {
+                    view.record(&body.id)
+                        .is_some_and(|record| shekyl_mempool::shown(&record))
+                })
+                .collect()
+        };
+        let listed: Vec<TxHash> = kept.iter().map(|body| body.id).collect();
+        let evicted = pool
+            .evict(&refused, &listed)
+            .map_err(NoTemplate::PoolFile)?;
+        (kept, evicted)
     };
-    let summaries = selected
-        .transactions
+    let summaries = kept
         .iter()
         .map(|body| ListedBody {
             id: body.id,
@@ -247,11 +271,7 @@ fn list(
             fee: body.fee,
         })
         .collect();
-    let bodies = selected
-        .transactions
-        .into_iter()
-        .map(|body| body.tx)
-        .collect();
+    let bodies = kept.into_iter().map(|body| body.tx).collect();
     Ok(Listing {
         bodies,
         summaries,

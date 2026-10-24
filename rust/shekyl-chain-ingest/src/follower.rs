@@ -556,6 +556,8 @@ where
             keys: &keys,
             params: &params,
             now,
+            #[cfg(test)]
+            between_locks: None,
         };
         produce(&snap, &producer, reader.live_pool(), |seed| {
             window.holds(seed)
