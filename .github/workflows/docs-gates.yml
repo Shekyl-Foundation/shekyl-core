@@ -236,6 +236,18 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/check_followups_owners.py --selftest
 
+      - name: Constant-time harness covers the shipped toolchain (CA-1)
+        # docs/formal/checkct's verdicts are per compiler: the same source was
+        # branchless under one LLVM and branched under another (2026-10-24).
+        # results/measured.toml names the channel the latest run covers; a
+        # rust-toolchain.toml bump without a re-measurement is red here.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_checkct_toolchain.py
+
+      - name: Constant-time harness toolchain gate selftest
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_checkct_toolchain.py --selftest
+
       - name: Change-scope classifier selftest
         # scripts/ci/change_scope.py decides which changes skip the builds,
         # the Rust suite and the CodeQL Rust analysis (build.yml,
