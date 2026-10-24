@@ -20,6 +20,7 @@ fn policy() -> Policy {
         base: Duration::from_secs(1),
         cap: Duration::from_secs(8),
         sample_every: Duration::from_secs(1),
+        alive_every: Duration::from_secs(4),
         fresh_directory_after: 3,
     }
 }
@@ -103,6 +104,7 @@ fn bring_up(core: &mut Core) -> Step {
         Input::DirectorySample {
             progress: Some(10),
             socks: Some(socks()),
+            read: None,
         },
         0,
     );
@@ -213,6 +215,7 @@ fn a_sample_keeps_what_the_reply_omits_and_a_late_reply_restarts() {
         Input::DirectorySample {
             progress: Some(10),
             socks: Some(bound),
+            read: None,
         },
         0,
     );
@@ -222,6 +225,7 @@ fn a_sample_keeps_what_the_reply_omits_and_a_late_reply_restarts() {
             Input::DirectorySample {
                 progress: Some(10),
                 socks: None,
+                read: None,
             },
             now,
         );
@@ -234,6 +238,7 @@ fn a_sample_keeps_what_the_reply_omits_and_a_late_reply_restarts() {
         Input::DirectorySample {
             progress: Some(40),
             socks: None,
+            read: None,
         },
         90_000 * 1_000_000_000,
     );
@@ -262,8 +267,8 @@ fn a_sample_keeps_what_the_reply_omits_and_a_late_reply_restarts() {
 fn an_open_file_limit_degrades_without_a_respawn() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
     reach_usable(&mut core);
-    // The route is in and the directory is settled, so the only deadline
-    // left is the facet's own announcement.
+    // The route is in and the directory is settled, so the deadlines left
+    // are the liveness sample and the facet's own announcement.
     core.on(Input::StateFileAppeared, 0);
     let at = duration_ns(policy().cap);
     let step = core.on(Input::TooManyFiles { open: 1024 }, at);
@@ -276,8 +281,25 @@ fn an_open_file_limit_degrades_without_a_respawn() {
         core.status().health,
         "degraded is the link's facet; the relay's verdict still carries"
     );
-    let due = step.deadline.expect("the facet is said again");
-    let step = core.on_deadline(due);
+    // Answer each liveness sample until the announcement comes due.
+    let mut due = step.deadline.expect("the facet is said again");
+    let step = loop {
+        let step = core.on_deadline(due);
+        if step.actions.contains(&Action::Sample) {
+            core.on(
+                Input::DirectorySample {
+                    progress: Some(100),
+                    socks: None,
+                    read: None,
+                },
+                due,
+            );
+        }
+        if announces(&step) > 0 {
+            break step;
+        }
+        due = core.deadline().expect("something is waiting");
+    };
     assert_eq!(due, at + duration_ns(policy().cap));
     assert_eq!(announces(&step), 1);
     assert!(!takes_down(&step));
@@ -308,6 +330,7 @@ fn a_clock_jump_is_one_sample_and_the_reply_restores_the_line() {
         Input::DirectorySample {
             progress: None,
             socks: None,
+            read: None,
         },
         6_000,
     );
@@ -481,6 +504,7 @@ fn a_repeated_death_names_the_last_exit_code() {
         Input::DirectorySample {
             progress: Some(100),
             socks: Some(socks()),
+            read: None,
         },
         due,
     );
@@ -551,7 +575,11 @@ fn a_state_file_defers_writes_and_ends_the_sample() {
         .actions
         .iter()
         .any(|action| matches!(action, Action::SetConfAvoidDiskWrites)));
-    assert!(core.deadline().is_none(), "nothing else is waiting");
+    assert_eq!(
+        core.deadline(),
+        Some(duration_ns(Duration::from_secs(4))),
+        "only the liveness sample is waiting"
+    );
     let again = core.on(Input::StateFileAppeared, 2);
     assert!(again.actions.is_empty());
 }
@@ -577,6 +605,7 @@ fn a_ready_gate_without_a_listener_waits_for_the_sample() {
         Input::DirectorySample {
             progress: Some(100),
             socks: None,
+            read: None,
         },
         0,
     );
@@ -610,6 +639,9 @@ fn a_shutdown_stops_an_installed_route_and_says_nothing() {
     assert_eq!(step.actions, vec![Action::StopChild]);
     assert_eq!(announces(&step), 0);
 }
+
+#[path = "live_tests.rs"]
+mod live;
 
 /// `GS-Q3`: `OwnTx` and Health are the relay's verdict. The same value again
 /// changes nothing; a loss is said under the cap, not at once; a recovery is
