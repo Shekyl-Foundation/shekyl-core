@@ -20,7 +20,38 @@ shekyl-peer-policy = { path = "../shekyl-peer-policy" }
 shekyl-runtime = { path = "../shekyl-runtime" }
 shekyl-timing-engine = { path = "../shekyl-timing-engine" }
 shekyl-transport-layer = { path = "../shekyl-transport-layer" }
-tokio = { version = "1", default-features = false, features = ["rt", "time"] }
+tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "time", "sync", "macros"] }
+
+# The chain-sync loopback harness (CS-Q11, `sync` module): scripted sync
+# peers over real Levin framing on a seam dialer, against the real store,
+# ingest service, hasher budget and RandomX.
+serde_json = { workspace = true }
+shekyl-capped-stream = { path = "../shekyl-capped-stream" }
+shekyl-chain-ingest = { path = "../shekyl-chain-ingest", default-features = false, features = ["pipeline"] }
+shekyl-chain-rules = { path = "../shekyl-chain-rules" }
+shekyl-chain-store = { path = "../shekyl-chain-store" }
+shekyl-chain-sync = { path = "../shekyl-chain-sync" }
+shekyl-chain-sync-runtime = { path = "../shekyl-chain-sync-runtime" }
+shekyl-difficulty = { path = "../shekyl-difficulty" }
+shekyl-draw-rng = { path = "../shekyl-draw-rng" }
+shekyl-hash-budget = { path = "../shekyl-hash-budget" }
+shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
+shekyl-seam = { path = "../shekyl-seam" }
+shekyl-types = { path = "../shekyl-types" }
+shekyl-wire = { path = "../shekyl-wire" }
+tracing = "0.1"
+
+[dev-dependencies]
+# The tests' seeded draw source for the node under test; held to this edge,
+# as the generator is test-only (`check_test_only_features.py`).
+shekyl-draw-rng = { path = "../shekyl-draw-rng", features = ["splitmix"] }
+# The loopback tests' logs: the owner's closes and faults, under RUST_LOG.
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+
+[features]
+# The floor-device job's loopback sync of 50,000 headers
+# (`.github/workflows/cs2-long-run.yml`). `cargo test` does not build it.
+cs2-long-run = []
 
 [lints]
 workspace = true

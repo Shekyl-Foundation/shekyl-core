@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use shekyl_daemon_config::sections::Tor;
+use shekyl_ffi::origin_verdict::OriginVerdict;
 use shekyl_ffi::zone_ffi::DownCause;
 use shekyl_timing_engine::{Clock, MonotonicClock, OwnerClass, OwnerHandle, Tick};
 use shekyl_tor_control_client::binary::{
@@ -25,8 +26,8 @@ use shekyl_tor_control_client::control::{
     BootstrapState, Command, ControlError, EventReceiver, EventSink,
 };
 use shekyl_tor_control_client::supervisor::{
-    input_of, render, Action, Cause, Connectors, Core, Input, ManagedRunning, Policy, Shown, Space,
-    Step, TorSetting,
+    input_of, render, Action, Cause, Connectors, Core, Input, ManagedRunning,
+    OriginVerdict as FoldedOrigin, Policy, Shown, Space, Step, TorSetting,
 };
 use shekyl_tor_control_daemon::{
     space_needed, CacheSave, DaemonTorConfig, DaemonTorControl, DaemonTorStartError, KeptDataDir,
@@ -101,6 +102,18 @@ pub fn begin(
     })
 }
 
+/// The relay's published verdict as the core's input.
+///
+/// The supervisor does not depend on the relay. The variants are the same
+/// three states, mapped one for one.
+fn verdict_input(verdict: OriginVerdict) -> Input {
+    Input::AddressHidingOrigin(match verdict {
+        OriginVerdict::Absent => FoldedOrigin::Absent,
+        OriginVerdict::Connected => FoldedOrigin::Connected,
+        OriginVerdict::Routable => FoldedOrigin::Routable,
+    })
+}
+
 async fn drive(
     binary: Option<PathBuf>,
     clearnet_on: bool,
@@ -129,7 +142,15 @@ async fn drive(
         tor: TorSetting::Managed,
         clearnet_on,
     };
-    let (core, step) = Core::start(Policy::provisional(), connectors, now(&owner));
+    let origin = shekyl_ffi::origin_verdict::watch();
+    let started = now(&owner);
+    let (mut core, mut step) = Core::start(Policy::provisional(), connectors, started);
+    // A receiver marks the current value seen, so a verdict published before
+    // the supervisor started is folded once, here. The pin check stays the
+    // first action: replacing the startup step would never spawn.
+    let folded = core.on(verdict_input(*origin.borrow()), started);
+    step.actions.extend(folded.actions);
+    step.deadline = folded.deadline;
     let (death_tx, death_rx) = mpsc::channel(4);
     Drive {
         core,
@@ -143,6 +164,7 @@ async fn drive(
         virtual_port,
         stop,
         forward,
+        origin,
         control: None,
         kept: None,
         pinned: None,
@@ -169,6 +191,9 @@ struct Drive {
     virtual_port: u16,
     stop: watch::Receiver<bool>,
     forward: watch::Receiver<Option<SocketAddr>>,
+    /// The relay's hop-0 verdict for a local origin (`GS-Q3`). Health and
+    /// `OwnTx` project it.
+    origin: watch::Receiver<OriginVerdict>,
     control: Option<DaemonTorControl>,
     kept: Option<KeptDataDir>,
     pinned: Option<VerifiedTorBinary>,
@@ -198,6 +223,14 @@ impl Drive {
                     // the receiver has not marked the current value seen.
                     if changed.is_ok() && self.forward.borrow().is_some() {
                         self.fold(Input::EndpointReady).await;
+                    }
+                }
+                changed = self.origin.changed() => {
+                    // The sender is process-static, so `Err` does not happen;
+                    // it is not folded so a closed channel cannot spin here.
+                    if changed.is_ok() {
+                        let verdict = *self.origin.borrow_and_update();
+                        self.fold(verdict_input(verdict)).await;
                     }
                 }
                 wake = self.owner.wait_wake_async() => {

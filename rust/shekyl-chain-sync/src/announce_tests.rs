@@ -60,6 +60,7 @@ fn a_header_run_survives_an_announce() {
             PeerClaim {
                 count: ChainCount::from_raw(2),
                 work: CumulativeDifficulty::from_raw(u128::MAX),
+                top: shekyl_types::BlockHash::NULL,
             },
             &view,
             Instant::now(),

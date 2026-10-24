@@ -16,8 +16,8 @@ use std::sync::{Arc, PoisonError};
 
 use kameo::error::SendError;
 use shekyl_chain_rules::{
-    form, Candidate, CenRow, Fault, FormAttempt, HeaderView, InvalidBlock, StatelessPass,
-    StructurallyValid, Substrate, Tip,
+    form, form_judged, Candidate, CenRow, Fault, FormAttempt, HeaderJudged, HeaderView,
+    InvalidBlock, StatelessPass, StructurallyValid, Substrate, Tip,
 };
 use shekyl_chain_store::store::{AltCannot, SnapshotView, StoreCannot, StoreError};
 use shekyl_hash_budget::{Class, Permit};
@@ -26,7 +26,7 @@ use shekyl_types::{BlockHash, BlockHeight};
 use shekyl_wire::{Block, Transaction};
 use tokio::sync::oneshot;
 
-use super::{Accepted, ArrivalTag, CannotFollow, Origin, Reply, ReplySlot, ServiceFault, Shared};
+use super::{Accepted, ArrivalTag, CannotFollow, Proof, Reply, ReplySlot, ServiceFault, Shared};
 use crate::cache_window::AltSpend;
 use crate::connector::{Apply, ObserveTarget, OfferAlt, Offered, Reorganize, RunFault, Switched};
 use crate::plan_form::{form_plan, PlanStop};
@@ -37,11 +37,13 @@ use crate::substrate::Branch;
 struct Parsed {
     slot: ReplySlot,
     tag: ArrivalTag,
-    /// The hasher class its `form` waits in.
-    class: Class,
     block: Block,
     /// The carried bodies, by the hash they claim to list.
     bodies: Vec<Transaction>,
+    /// How this arrival is formed. A judged proof is not hashed here.
+    proof: Proof,
+    /// The witness carried beside the block.
+    witness: Option<shekyl_types::archival::AttestationWitness>,
 }
 
 impl Parsed {
@@ -84,20 +86,6 @@ enum Next {
     Halt,
 }
 
-/// The hasher class an arrival's `form` waits in: a block this node asked
-/// for or made is the chain's; an announcement is unsolicited.
-const fn class_of(origin: Origin) -> Class {
-    match origin {
-        Origin::Peer {
-            solicited: false, ..
-        } => Class::Unsolicited,
-        Origin::Peer {
-            solicited: true, ..
-        }
-        | Origin::Local => Class::Chain,
-    }
-}
-
 /// Parse one accepted arrival. A blob the wire cannot parse is a verdict
 /// against the block (CEN-A6); a carried body that does not parse is a body
 /// the block's list cannot pair (CEN-G2).
@@ -105,9 +93,10 @@ fn parse(accepted: Accepted) -> Result<Parsed, (ReplySlot, ArrivalTag, InvalidBl
     let Accepted {
         slot,
         tag,
-        origin,
         block,
         bodies,
+        proof,
+        witness,
     } = accepted;
     let refused = |rule| InvalidBlock::new(rule, shekyl_chain_rules::Locus::Block);
     let Ok(block) = Block::from_bytes(&block) else {
@@ -120,12 +109,22 @@ fn parse(accepted: Accepted) -> Result<Parsed, (ReplySlot, ArrivalTag, InvalidBl
         };
         parsed.push(tx);
     }
+    // A witness that is not one is CEN-B4's: the block cannot carry it.
+    let witness = if witness.is_empty() {
+        None
+    } else {
+        match shekyl_types::archival::AttestationWitness::new(witness) {
+            Ok(witness) => Some(witness),
+            Err(_) => return Err((slot, tag, refused(shekyl_chain_rules::CenRow::B4))),
+        }
+    };
     Ok(Parsed {
         slot,
         tag,
-        class: class_of(origin),
         block,
         bodies: parsed,
+        proof,
+        witness,
     })
 }
 
@@ -151,7 +150,8 @@ fn assemble(parsed: &Parsed, pool: Option<&Pool>) -> Result<Candidate, Vec<usize
         return Err(missing);
     }
     listed.extend(carried.into_iter().flatten().cloned());
-    Ok(Candidate::new(parsed.block.clone(), listed))
+    Ok(Candidate::new(parsed.block.clone(), listed)
+        .with_attestation_witness(parsed.witness.clone()))
 }
 
 /// Work one accepted span.
@@ -325,6 +325,79 @@ where
     })
 }
 
+/// `form_judged` one bound block on a blocking thread. It does not hash, so
+/// it takes no hasher permit: the proof inside `judged` is the one chain
+/// sync's executor paid for (CS2-Q1).
+fn spawn_form_judged<F>(
+    candidate: Candidate,
+    judged: Box<HeaderJudged>,
+    claims: Claims,
+    abandon: Arc<AtomicBool>,
+) -> tokio::task::JoinHandle<Option<Formed<F>>>
+where
+    F: Send + 'static,
+{
+    tokio::task::spawn_blocking(move || {
+        if abandon.load(Ordering::Acquire) {
+            return None;
+        }
+        let verdict = form_judged(candidate, &judged, &claims.references);
+        if verdict.is_err() {
+            abandon.store(true, Ordering::Release);
+        }
+        Some(Ok(verdict))
+    })
+}
+
+/// What one form returned.
+enum FormedOne<F> {
+    /// The header formed.
+    Ready(Box<StructurallyValid>),
+    /// The header was refused.
+    Refused(InvalidBlock),
+    /// The cache the hash looked up was not pinned.
+    Absent(F),
+    /// The substrate faulted.
+    Fault(F),
+    /// The form was abandoned, or it never started.
+    Stopped,
+}
+
+/// Sort one form's answer. `absent` says which substrate fault is a cache
+/// miss. A form that did not run is [`FormedOne::Stopped`].
+fn formed_one<F>(formed: Option<Formed<F>>, absent: impl Fn(&F) -> bool) -> FormedOne<F> {
+    match formed {
+        Some(Ok(Ok(formed))) => FormedOne::Ready(Box::new(formed)),
+        Some(Ok(Err(verdict))) => FormedOne::Refused(verdict),
+        Some(Err(fault)) if absent(&fault) => FormedOne::Absent(fault),
+        Some(Err(fault)) => FormedOne::Fault(fault),
+        None => FormedOne::Stopped,
+    }
+}
+
+/// Start the arrival's form. A judged proof does not take a permit. A
+/// hashed one takes one permit of its class, and returns `None` when the
+/// service stopped before that permit.
+async fn begin_form<S>(
+    shared: &Arc<Shared<S>>,
+    proof: Proof,
+    candidate: Candidate,
+    claims: Claims,
+    abandon: Arc<AtomicBool>,
+) -> Option<tokio::task::JoinHandle<Option<Formed<S::Fault>>>>
+where
+    S: Substrate + Send + Sync + 'static,
+    S::Fault: core::fmt::Debug + Send + 'static,
+{
+    match proof {
+        Proof::Judged(judged) => Some(spawn_form_judged(candidate, judged, claims, abandon)),
+        Proof::Hash { class } => {
+            let held = acquire(shared, class).await?;
+            Some(spawn_form(shared, held, candidate, claims, abandon))
+        }
+    }
+}
+
 /// Take a permit for `class`, or `None` once the service is stopping.
 /// The budget blocks, so the wait is a blocking task's. The seed is not
 /// pinned here.
@@ -358,8 +431,8 @@ where
         candidates.push(candidate);
     }
     let class = arrivals
-        .front()
-        .map(|parsed| parsed.class)
+        .iter()
+        .find_map(|parsed| parsed.proof.hash_class())
         .unwrap_or(Class::Chain);
     let store = Arc::clone(&shared.store);
     let rules = shared.rules;
@@ -373,7 +446,15 @@ where
     if matches!(stop, Some(ClaimStop::Moved)) {
         return Next::Again(arrivals.into_iter().collect());
     }
-    if !pin_seeds(shared, &distinct_seeds(&claims), class).await {
+    // A bound arrival does not hash, so only the seeds the rest of the run
+    // hashes under are pinned.
+    let hashed: Vec<Claims> = claims
+        .iter()
+        .zip(arrivals.iter())
+        .filter(|(_, parsed)| parsed.proof.hash_class().is_some())
+        .map(|(claim, _)| claim.clone())
+        .collect();
+    if !pin_seeds(shared, &distinct_seeds(&hashed), class).await {
         return Next::Halt;
     }
     let abandon = Arc::new(AtomicBool::new(false));
@@ -382,22 +463,23 @@ where
     for (index, (claim, candidate)) in claims.into_iter().zip(candidates).enumerate() {
         let (sender, receiver) = oneshot::channel();
         receivers.push((claim.height, receiver));
-        let class = arrivals[index].class;
-        jobs.push((candidate, claim, class, sender));
+        let proof = arrivals[index].proof.clone();
+        jobs.push((candidate, claim, proof, sender));
     }
     let launcher = {
         let shared = Arc::clone(shared);
         let abandon = Arc::clone(&abandon);
         tokio::spawn(async move {
             let mut forming = Vec::new();
-            for (candidate, claims, class, sender) in jobs {
+            for (candidate, claims, proof, sender) in jobs {
                 if shared.stopping() || abandon.load(Ordering::Acquire) {
                     break;
                 }
-                let Some(held) = acquire(&shared, class).await else {
+                let Some(form) =
+                    begin_form(&shared, proof, candidate, claims, Arc::clone(&abandon)).await
+                else {
                     break;
                 };
-                let form = spawn_form(&shared, held, candidate, claims, Arc::clone(&abandon));
                 forming.push(tokio::spawn(async move {
                     if let Ok(Some(formed)) = form.await {
                         let _unread = sender.send(formed);
@@ -577,53 +659,66 @@ where
         Err(ClaimStop::Moved) => return Next::Again(vec![arrival]),
     };
     let height = claims.height;
-    let formed = if prepare {
-        // The branch's own seed block (B2): prepared, never pinned, and
-        // the form hashes with the cache the preparation returned. A miss
-        // after that is a fault.
-        match form_on_branch(shared, arrival.class, candidate, claims).await {
-            None => return Next::Halt,
-            Some(Ok(Ok(formed))) => formed,
-            Some(Ok(Err(verdict))) => return refuse(arrival, verdict),
-            Some(Err(fault)) if shared.substrate().cache_absent(&fault) => {
-                shared.fail(ServiceFault::PreparedSeedAbsent { height });
-                return Next::Halt;
-            }
-            Some(Err(fault)) => {
-                shared.fail(ServiceFault::Substrate(fault));
-                return Next::Halt;
-            }
-        }
-    } else {
-        let Some(held) = acquire(shared, arrival.class).await else {
-            return Next::Halt;
-        };
-        let forming = spawn_form(
-            shared,
-            held,
-            candidate,
-            claims,
-            Arc::new(AtomicBool::new(false)),
-        );
-        match forming.await.expect("a form worker does not panic") {
-            Some(Ok(Ok(formed))) => formed,
-            Some(Ok(Err(verdict))) => return refuse(arrival, verdict),
-            Some(Err(fault)) if shared.substrate().cache_absent(&fault) => {
-                // A below-fork seed is one of the pair the claim judged on
-                // its snapshot; the slots lag that pair until the window is
-                // installed for it. Install it, under a chain permit, and
-                // place the arrival again.
-                if let Err(read) = super::install_window(shared).await {
-                    super::record_store_read(shared, read);
+    let proof = arrival.proof.clone();
+    let formed = match proof {
+        Proof::Hash { class } if prepare => {
+            // The branch's own seed block (B2): prepared, never pinned, and
+            // the form hashes with the cache the preparation returned. A miss
+            // after that is a fault.
+            let formed = form_on_branch(shared, class, candidate, claims).await;
+            match formed_one(formed, |fault| shared.substrate().cache_absent(fault)) {
+                FormedOne::Ready(formed) => *formed,
+                FormedOne::Refused(verdict) => return refuse(arrival, verdict),
+                FormedOne::Absent(_) => {
+                    shared.fail(ServiceFault::PreparedSeedAbsent { height });
                     return Next::Halt;
                 }
-                return Next::Again(vec![arrival]);
+                FormedOne::Fault(fault) => {
+                    shared.fail(ServiceFault::Substrate(fault));
+                    return Next::Halt;
+                }
+                FormedOne::Stopped => return Next::Halt,
             }
-            Some(Err(fault)) => {
-                shared.fail(ServiceFault::Substrate(fault));
+        }
+        proof => {
+            let judged = matches!(proof, Proof::Judged(_));
+            let Some(forming) = begin_form(
+                shared,
+                proof,
+                candidate,
+                claims,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await
+            else {
                 return Next::Halt;
+            };
+            match formed_one(
+                forming.await.expect("a form worker does not panic"),
+                |fault| !judged && shared.substrate().cache_absent(fault),
+            ) {
+                FormedOne::Ready(formed) => *formed,
+                FormedOne::Refused(verdict) => return refuse(arrival, verdict),
+                FormedOne::Absent(_) => {
+                    // A below-fork seed is one of the pair the claim judged on
+                    // its snapshot; the slots lag that pair until the window is
+                    // installed for it. Install it, under a chain permit, and
+                    // place the arrival again.
+                    if let Err(read) = super::install_window(shared).await {
+                        super::record_store_read(shared, read);
+                        return Next::Halt;
+                    }
+                    return Next::Again(vec![arrival]);
+                }
+                // A judged form does not hash. A fault there, or a form that
+                // was abandoned, stops this arrival and names no verdict.
+                FormedOne::Fault(_) if judged => return Next::Halt,
+                FormedOne::Fault(fault) => {
+                    shared.fail(ServiceFault::Substrate(fault));
+                    return Next::Halt;
+                }
+                FormedOne::Stopped => return Next::Halt,
             }
-            None => unreachable!("a lone arrival's form is never abandoned"),
         }
     };
     let offered = match shared.connector.ask(OfferAlt(formed)).await {

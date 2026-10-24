@@ -72,8 +72,10 @@ use std::time::Duration;
 
 use shekyl_block_template::MinerKeys;
 use shekyl_chain_ingest::follower::{JobSeat, MinerFeed, NoJob, Posting};
-use shekyl_chain_ingest::service::{ArrivalTag, Follow, PoolWiring, Reply, Service, ServiceConfig};
-use shekyl_chain_ingest::{Chain, ChainRules, Metrics, ProductionSubstrate};
+use shekyl_chain_ingest::service::{
+    ArrivalTag, Follow, PoolWiring, Reply, Service, ServiceConfig, ServiceFault,
+};
+use shekyl_chain_ingest::{Chain, ChainRules, Metrics, ProductionSubstrate, SubstrateFault};
 use shekyl_chain_rules::{AdmissionPolicy, FakechainSchedule, ReleaseAnchors, RuleSet};
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::pool::PoolOpen;
@@ -291,12 +293,17 @@ impl Node {
                 return Err(error);
             }
         };
-        let tips = match runtime.block_on(service.watch_tip()) {
-            Ok(tips) => tips,
+        let subscribed: Result<_, ServiceFault<SubstrateFault>> = runtime.block_on(async {
+            let tips = service.watch_tip().await?;
+            let latch = service.watch_latch().await?;
+            Ok((tips, latch))
+        });
+        let (tips, latch) = match subscribed {
+            Ok(pair) => pair,
             Err(error) => {
                 if let Err(stop) = runtime.block_on(service.stop()) {
                     tracing::error!(
-                        "the tip watch did not open, and the service stopped on {stop}"
+                        "a connector watch did not open, and the service stopped on {stop}"
                     );
                 }
                 runtime.shutdown(RUNTIME_SHUTDOWN);
@@ -316,6 +323,7 @@ impl Node {
             data_dir: args.config.data_dir.clone(),
             offline: args.config.offline(),
             sync: sync_rx,
+            latch,
             health: pool_health.clone(),
         });
         let mining = Arc::new(MiningControl::new(

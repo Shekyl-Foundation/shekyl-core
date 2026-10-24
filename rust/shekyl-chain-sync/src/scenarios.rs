@@ -36,7 +36,7 @@ use crate::model::{CloseCause, Event, Outcome, Proved, Sync};
 use crate::proof::{drive, fixed, headers_of, open_claim, prove_item, serialized};
 use crate::{Command, PeerClaim};
 
-struct NoDraw;
+pub(crate) struct NoDraw;
 
 impl RelayRng for NoDraw {
     fn next_u64(&mut self) -> u64 {
@@ -44,7 +44,7 @@ impl RelayRng for NoDraw {
     }
 }
 
-fn target_one(_: BlockHeight) -> RuleSet {
+pub(crate) fn target_one(_: BlockHeight) -> RuleSet {
     fixed(1, 64)
 }
 
@@ -66,7 +66,7 @@ fn bodies(sent: Vec<BlockBody>, deferred: Vec<[u8; 32]>, missed: Vec<[u8; 32]>) 
     .expect("the response encodes")
 }
 
-fn no_close(out: &[Command<u8>]) {
+pub(crate) fn no_close(out: &[Command<u8>]) {
     assert!(
         out.iter()
             .all(|command| !matches!(command, Command::Close { .. })),
@@ -74,7 +74,7 @@ fn no_close(out: &[Command<u8>]) {
     );
 }
 
-fn request_for(out: &[Command<u8>]) -> Option<(u8, Vec<[u8; 32]>)> {
+pub(crate) fn request_for(out: &[Command<u8>]) -> Option<(u8, Vec<[u8; 32]>)> {
     out.iter().find_map(|command| match command {
         Command::RequestBodies {
             session, request, ..
@@ -166,6 +166,7 @@ fn a_spend_chain_skeleton_is_bound_and_wanted_in_full_from_another_session() {
         PeerClaim {
             count: ChainCount::from_raw(1),
             work: CumulativeDifficulty::from_raw(1),
+            top: BlockHash::NULL,
         },
         &parent,
         Instant::now(),
@@ -346,6 +347,7 @@ fn parted(defer: bool) {
             PeerClaim {
                 count: ChainCount::from_raw(1),
                 work: CumulativeDifficulty::from_raw(1),
+                top: BlockHash::NULL,
             },
             &view,
             Instant::now(),
@@ -456,6 +458,7 @@ fn a_late_body_after_the_selected_chain_changes_is_not_a_fault() {
             PeerClaim {
                 count: ChainCount::from_raw(1),
                 work: CumulativeDifficulty::from_raw(1),
+                top: BlockHash::NULL,
             },
             &view,
             Instant::now(),
@@ -570,6 +573,52 @@ fn an_announced_oversize_body_closes_and_leaves_the_header() {
             "an oversize announce invalidated the header"
         );
         assert!(sync.transit(1).is_none());
+    });
+}
+
+/// The entry could not read the store. The body is dropped, the peer
+/// stays, and a later seat report does not ask for it or offer it.
+#[test]
+fn an_unreadable_store_does_not_ask_for_the_body_again() {
+    with_offer(|sync, view, tag, hash, _raw| {
+        let out = drive(
+            sync,
+            view,
+            Event::Entry {
+                tag,
+                outcome: Outcome::StoreUnreadable,
+            },
+        );
+        no_close(&out);
+        assert!(
+            request_for(&out).is_none(),
+            "an unreadable store asked again: {out:?}"
+        );
+        assert!(
+            !out.iter()
+                .any(|command| matches!(command, Command::Offer { .. })),
+            "an unreadable store offered: {out:?}"
+        );
+        assert!(
+            sync.held
+                .iter()
+                .all(|arrival| arrival.header.hash() != hash),
+            "the body was held for a seat"
+        );
+        assert!(
+            sync.outstanding.is_empty(),
+            "the entry still holds the body"
+        );
+        let out = drive(sync, view, Event::Room { seats: 4 });
+        assert!(
+            request_for(&out).is_none(),
+            "a later seat report asked again: {out:?}"
+        );
+        assert!(
+            !out.iter()
+                .any(|command| matches!(command, Command::Offer { .. })),
+            "a later seat report offered: {out:?}"
+        );
     });
 }
 
@@ -868,7 +917,7 @@ where
     });
 }
 
-fn answer<'id, H>(
+pub(crate) fn answer<'id, H>(
     sync: &mut Sync<u8, fn(BlockHeight) -> RuleSet>,
     view: &H,
     who: u8,
@@ -888,7 +937,7 @@ where
     )
 }
 
-fn offer_tag(out: &[Command<u8>]) -> u64 {
+pub(crate) fn offer_tag(out: &[Command<u8>]) -> u64 {
     out.iter()
         .find_map(|command| match command {
             Command::Offer { arrivals } => Some(arrivals[0].tag),

@@ -197,6 +197,7 @@ fn prove<R: Fn(BlockHeight) -> RuleSet>(sync: &mut Sync<u8, R>, built: Extension
             PeerClaim {
                 count: ChainCount::from_raw(2),
                 work: CumulativeDifficulty::from_raw(u128::MAX),
+                top: BlockHash::NULL,
             },
             &view,
             Instant::now(),
@@ -335,6 +336,7 @@ fn the_locator_reads_logarithmically() {
         PeerClaim {
             count: ChainCount::from_raw(2),
             work: CumulativeDifficulty::from_raw(u128::MAX),
+            top: BlockHash::NULL,
         },
         &view,
         Instant::now(),
@@ -426,6 +428,7 @@ fn a_header_deadline_is_transit_plus_the_response_bound() {
         PeerClaim {
             count: ChainCount::from_raw(2),
             work: CumulativeDifficulty::from_raw(10),
+            top: BlockHash::NULL,
         },
         &view,
         now,
@@ -518,6 +521,7 @@ fn adopt_formed<'id, R, H>(
         PeerClaim {
             count: ChainCount::from_raw(2),
             work: CumulativeDifficulty::from_raw(u128::MAX),
+            top: BlockHash::NULL,
         },
         main,
         Instant::now(),
@@ -861,6 +865,7 @@ fn a_heavier_unverified_branch_takes_the_long_run_slot() {
                 PeerClaim {
                     count: ChainCount::from_raw(2),
                     work: CumulativeDifficulty::from_raw(u128::MAX),
+                    top: BlockHash::NULL,
                 },
                 &view,
                 Instant::now(),
