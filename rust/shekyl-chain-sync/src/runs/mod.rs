@@ -236,7 +236,13 @@ where
             .peers
             .get(&session)
             .and_then(|s| s.run.as_ref())
-            .map(|run| run.chain.checked.last().map_or(run.chain.parent, |c| c.hash) == base);
+            .map(|run| {
+                run.chain
+                    .checked
+                    .last()
+                    .map_or(run.chain.parent, |c| c.hash)
+                    == base
+            });
         if continues == Some(false) {
             self.drop_run(session);
         }
