@@ -695,6 +695,21 @@ the seeds are public addresses. *Records-was (same day, struck): "the
 compiled seed addresses are not written".* Lands with increment 3, with
 the range table.
 
+**Every restart is a fresh look (Rick, 2026-10-24; the gray-lifecycle
+PR).** No trust state is saved: no cooldown, no ban, no white. The file
+carries addresses, never judgements about them. A banned address is
+therefore written like any other, and the ban is not; at the next start
+the address is gray and is tested again. The reason: an address leaves
+gray only on authenticated proof of misbehaviour, and a clearnet ban is
+not that. Until the clearnet handshake authenticates the peer, an
+on-path attacker can provoke a ban against an honest address; a ban that
+lasted past the restart would turn that timed loss into a permanent one,
+by the attacker's hand. On Tor, where misbehaviour is proven, the
+proving test drops the address from the lists, so it is not in the
+file either; nothing changes there. `persistable` already filters by
+range alone, so this names the rule the code has; it is not a change to
+`persistable`.
+
 ---
 
 ## 8. C++ behaviors this slice does not keep

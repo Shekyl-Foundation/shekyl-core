@@ -789,6 +789,15 @@ is the inbound self-connection check.
 
 ---
 
+**The gray lifecycle (Rick, 2026-10-24; its own PR, after #1174).** An
+address leaves gray only on authenticated proof of misbehaviour, never
+for a connection problem. Every restart is a fresh look: no trust state
+(cooldowns, bans, white) is saved (slice 1 brief §7). The PR's items,
+each recorded in this brief as it lands: white expiry follows the
+connection; per-layer judgement as three marks on the close cause;
+retries within a test; a cooldown in place of the drop; the file rule
+above.
+
 **Recovery (Rick, 2026-10-14; amended 2026-10-24).** A connector whose
 wake finds it under its target, nothing in flight, and no drawable white
 or gray candidate is stranded: its lists cannot get it another peer.
