@@ -57,7 +57,7 @@ const A1_RAMP_YEARS: u64 = 2;
 
 /// Closed-shard sample points for the escalation-candidate preview, spanning
 /// the [`KNEE_BAND`] — derived from it, so the preview follows a re-derivation.
-const ESCALATION_PREVIEW_N: [u64; 5] = [
+pub(crate) const ESCALATION_PREVIEW_N: [u64; 5] = [
     0,
     KNEE_BAND[0] / 5,
     KNEE_BAND[0],

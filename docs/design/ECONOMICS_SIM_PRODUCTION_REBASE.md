@@ -2057,8 +2057,14 @@ prediction said would be reported as findings before the regeneration:
   year (`normal_tx_archival_bytes` at that depth).
 - The cross-class storage-to-transit spread "26–263×" computes as **79–788×**
   at the shard payload: the re-fetch cost at each fetch-price band end over
-  the cheapest storage (`proxy_refetch_cost_per_epoch / honest_storage_cost_per_epoch`).
-  The literal was from an earlier payload and was never recomputed.
+  the cheapest storage (`proxy_refetch_cost_per_epoch / honest_storage_cost_per_epoch`),
+  the fetch-price band over the break-even price. The literal is the
+  2026-07-29 run's, at one challenge a pair an epoch;
+  `CHALLENGES_PER_PAIR_PER_EPOCH` has been 3 since `eca856b7c` (2026-08-11)
+  and the re-fetch cost scales with it, exactly as
+  [`ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md`](ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md)
+  §5.7c said it would. The within-class figures scale the same way: retail
+  ~11× → 32.9×, cheap transit ~1.1× → 3.3×, break-even $0.0004 → $0.00013/GB.
 
 The A5 band reads 0.103–0.271 (predicted 0.105–0.271; the `+reward` end
 moved with 0b-2's maximum). Every other interpolated constant prints what

@@ -152,9 +152,6 @@ pub fn family() -> Vec<EscalationCurve> {
     curves
 }
 
-/// The **status-quo** curve: the frozen 25% share, no escalation. The A1
-/// baseline every candidate is measured against (does escalation clear where the
-/// flat share does not?).
 /// The steepest member of [`family`]: the highest asymptote and, among the
 /// candidates that share it, the smallest knee. `max_by_key` on the asymptote
 /// alone returns the last of three equal maxima, the shallowest
@@ -167,6 +164,9 @@ pub fn steepest() -> EscalationCurve {
         .unwrap_or_else(flat_25)
 }
 
+/// The **status-quo** curve: the frozen 25% share, no escalation. The A1
+/// baseline every candidate is measured against (does escalation clear where the
+/// flat share does not?).
 #[must_use]
 pub fn flat_25() -> EscalationCurve {
     EscalationCurve {

@@ -301,11 +301,7 @@ mod tests {
         // adversarial slew RATE is a reported quantity for the freeze decision
         // (see `a6_report`), not a pass/fail gate. What must hold structurally:
         // the share never decreases, and no single shard causes a jump.
-        let curve = family()
-            .iter()
-            .max_by_key(|c| c.asymptote)
-            .copied()
-            .unwrap();
+        let curve = crate::escalation::steepest();
         let surge = block_weight_penalty_free();
         for &n in &[0u64, 1_000, 25_000, 100_000, 250_000] {
             // Monotone: the share never falls as n rises.
@@ -334,5 +330,41 @@ mod tests {
             max_shards_per_window(REORG_DEPTH_BLOCKS, surge, n, RATE)
                 <= max_shards_per_window(EPOCH_BLOCKS, surge, n, RATE)
         );
+    }
+
+    /// A6 gates the band on its worst slew, and `steepest()` picks that member
+    /// by an ordering (top asymptote, smallest knee). This holds the ordering
+    /// to the quantity: over the preview corpora the report samples, the
+    /// member it picks moves the share at least as far as every other member.
+    /// A future candidate whose smallest knee is not the worst slew fails
+    /// here instead of passing the gate on the wrong member.
+    #[test]
+    fn the_steepest_member_has_the_worst_slew_in_the_band() {
+        let surge = block_weight_penalty_free();
+        let worst = |curve: &EscalationCurve| -> u64 {
+            crate::stage2::ESCALATION_PREVIEW_N
+                .iter()
+                .map(|&n| {
+                    delta_share(
+                        curve,
+                        n,
+                        max_shards_per_window(EPOCH_BLOCKS, surge, n, RATE),
+                    )
+                })
+                .max()
+                .unwrap_or(0)
+        };
+        let bar = worst(&crate::escalation::steepest());
+        assert!(bar > 0, "the steepest member must move the share at all");
+        for curve in family() {
+            assert!(
+                worst(&curve) <= bar,
+                "a member ranked flatter slews more: asymptote {} knee {} moves {} against {}",
+                curve.asymptote,
+                curve.knee_shards,
+                worst(&curve),
+                bar
+            );
+        }
     }
 }
