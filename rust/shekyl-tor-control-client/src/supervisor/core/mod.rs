@@ -417,7 +417,13 @@ impl Core {
                 }
                 Phase::Bootstrapping { .. } => {
                     self.note_line(now);
-                    actions.push(Action::Announce);
+                    // The line is progress news. A named cause (outbound
+                    // blocked and kin) is said by its own events, at most
+                    // once per cap; saying it here too doubled it
+                    // (Linux acceptance, 2026-10-24).
+                    if self.cause == Cause::None {
+                        actions.push(Action::Announce);
+                    }
                     self.arm_alive(now);
                 }
                 _ => {}

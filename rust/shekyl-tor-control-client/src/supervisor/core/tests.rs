@@ -716,3 +716,35 @@ fn a_bootstrap_without_a_count_does_not_claim_a_stall() {
     assert!(text.contains("30%"), "{text}");
     assert!(!text.contains("Nothing arrived"), "{text}");
 }
+
+/// A bootstrap with a named cause does not say the progress line: the cause
+/// repeats on its own events at most once per cap. Saying it on the
+/// progress deadline too doubled the outbound-blocked warning (Linux
+/// acceptance, 2026-10-24). Dropping the cause check fails this.
+#[test]
+fn a_blocked_bootstrap_is_said_by_its_cause_not_by_the_progress_line() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    core.on(Input::PinAccepted, 0);
+    core.on(Input::Spawned, 0);
+    let first = core.on(Input::ExternalBlocked, 1);
+    assert_eq!(
+        announces(&first),
+        1,
+        "the cause is said when it first appears"
+    );
+    let window = duration_ns(Duration::from_secs(4));
+    let step = core.on_deadline(window);
+    assert_eq!(
+        announces(&step),
+        0,
+        "the progress deadline says nothing over a cause"
+    );
+    let again = core.on(Input::ExternalBlocked, window + 1);
+    assert_eq!(
+        announces(&again),
+        0,
+        "inside the cap the cause is not said again"
+    );
+    let later = core.on(Input::ExternalBlocked, duration_ns(policy().cap) + 2);
+    assert_eq!(announces(&later), 1, "after the cap it is");
+}
