@@ -287,7 +287,8 @@ and the weight newtypes.
 | #1148 `1045d90f0` | CS-2 sync model: `chain-rules` header facts/path, `shekyl-wire` transaction | not read | no | not an economics input |
 | #1155 `465b77eba` | `config/tor_pins.json` | not read | no | not an economics input |
 
-**#1154 (support draws), in flight.** Open and not an ancestor of the pin. Its
+**#1154 (support draws).** Open at the pin; merged after it as `503a090b9`,
+changing none of the files the sim imports. Its
 new public items (`support_span`, `support_slot`, `select_support_shard`,
 `settle_support`, `SUPPORT_*`, and the rest) have no caller in either sim: the
 only hits in `rust/shekyl-economics-sim` and `rust/shekyl-staking-sim` are
@@ -297,6 +298,12 @@ defined in `archival-retention`'s `secret_draw.rs`, which #1154 does not
 touch, and no file under either sim is in its diff. When it lands, the sim
 needs nothing. This rests on reading the source, not on compiling the sims
 against its head.
+
+**After the pin.** Of the merges since `465b77eba`, three touch these crates:
+#1154 (above), #1167 (`config/tor_pins.json`) and #1165 (DRS-X PR 3b), which
+adds functions to `secret_draw.rs` and `shekyl-wire` that the sim does not
+call, and makes the node's template price the coinbase at the reserve, as the
+sim does (U1, §P0.4).
 
 ---
 
@@ -476,7 +483,7 @@ defect; each needs a row or a reason it is not a departure.
 
 | # | Departure | Where |
 | --- | --- | --- |
-| U1 | The coinbase is priced at the reserve (the grammar's maximum, 1 386 B), where the template prices the coinbase it built (1 364 B at height 5; the gap narrows as the varints widen) | `rust/shekyl-block-template/src/fill.rs:16`; `rust/shekyl-economics-sim/src/block_space.rs:114` |
+| U1 | The coinbase is priced at the reserve (the grammar's maximum, 1 386 B), where the template prices the coinbase it built (1 364 B at height 5; the gap narrows as the varints widen). **Closed after the pin by #1165** (`bc504082c`): the node's template passes `COINBASE_RESERVE` too, so both price the same weight | `rust/shekyl-block-template/src/fill.rs:16`; `rust/shekyl-economics-sim/src/block_space.rs:114` |
 | U2 | The engine, budget and recorder folds pass zero closed shards to `price_emission`; only stage-2 passes the byte-fold count. Inert while the escalation ships flat, and guarded by `the_shipped_split_is_flat_at_every_count` | `rust/shekyl-economics-sim/src/engine.rs:283`; `budget.rs:205`; `record.rs:208` |
 | U3 | The FL-C7 and FL-E1 feedback instruments run with no fill and a fixed median: all elastic demand is carried and the emission advances unpenalised | `rust/shekyl-economics-sim/src/fee_ladder.rs:434` |
 | U4 | The miner-stuffer envelope is one block: its bodies never enter the median or the volume window (the scope is stated only in the rebase doc §5.10) | `rust/shekyl-economics-sim/src/miner_stuffer.rs:334` |
@@ -609,8 +616,9 @@ own PR, predictions first, fresh clone last.
 
 0. **Truth commit** (Phase 1's first). No committed fixture moves: documents,
    declarations, one instrument fix and the tests that hold quoted figures.
-   - Delete §4's "bodies' weight" row; declare U1–U4 or state why each is
-     not a departure; restate the maturity row.
+   - Delete §4's "bodies' weight" row (U1, its successor, closed with
+     #1165); declare U2–U4 or state why each is not a departure; restate the
+     maturity row.
    - Bring every live sentence §P0.1 lists as moved or contradicted to the
      pin's output, or move it under a dated record.
    - `ESR10_PREDICTIONS.md`: §0.2 has landed (say so); boom-bust crosses in
