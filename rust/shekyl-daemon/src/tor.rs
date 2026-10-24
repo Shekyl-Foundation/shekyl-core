@@ -19,15 +19,15 @@ use shekyl_ffi::origin_verdict::OriginVerdict;
 use shekyl_ffi::zone_ffi::DownCause;
 use shekyl_timing_engine::{Clock, MonotonicClock, OwnerClass, OwnerHandle, Tick};
 use shekyl_tor_control_client::binary::{
-    discover_and_verify, discover_and_verify_at, VerifiedTorBinary,
+    discover_and_verify, discover_and_verify_at, TorBinaryError, VerifiedTorBinary,
 };
 use shekyl_tor_control_client::control::{
     parse_bootstrap_progress, parse_event, parse_socks_listeners, BootstrapState, Command,
     ControlError, EventReceiver, EventSink,
 };
 use shekyl_tor_control_client::supervisor::{
-    input_of, render, Action, Connectors, Core, Input, ManagedRunning,
-    OriginVerdict as FoldedOrigin, Policy, Step, TorSetting,
+    held_sentence, input_of, install_sentence, render, Action, Cause, Connectors, Core, Input,
+    ManagedRunning, OriginVerdict as FoldedOrigin, Policy, Step, Syncing, TorSetting,
 };
 use shekyl_tor_control_daemon::{
     DaemonTorConfig, DaemonTorControl, DaemonTorStartError, KeptDataDir, OnionPow, OnionSeed,
@@ -63,6 +63,81 @@ impl Supervisor {
         let _sent = self.stop.send(true);
         let _joined = self.task.await;
     }
+}
+
+/// The pin half of a managed Tor's start, read for the configuration check
+/// (`INPUT_GRAMMAR.md` IG-Q59): the binary is discovered and verified, and
+/// not started.
+///
+/// `None` when the pin is accepted. Otherwise one warning. The cause is the
+/// class the supervisor's pin takes, spoken with [`install_sentence`]; the
+/// parenthetical is the pin error, which for a missed discovery names every
+/// path it searched. The last sentence is [`held_sentence`] for a link that
+/// is not up: nothing syncs over Tor, and clearnet is the connector. Under
+/// TB-2 a pin that fails is announced and the daemon starts all the same.
+#[must_use]
+pub fn pin_warning(binary: Option<&Path>, clearnet_on: bool) -> Option<String> {
+    let verified = match binary {
+        Some(path) => discover_and_verify_at(path),
+        None => discover_and_verify(),
+    };
+    verified
+        .err()
+        .map(|error| pin_warning_line(&error, clearnet_on))
+}
+
+/// What a refused pin means. The supervisor's core takes [`PinClass::input`];
+/// the posture names [`PinClass::cause`]. One match produces both, so the
+/// warning cannot speak a cause the core does not take.
+struct PinClass {
+    input: Input,
+    cause: Cause,
+}
+
+/// The pin's classification. A missing discovery and a platform with no
+/// managed Tor are their own inputs. Every other failure is a binary that
+/// was found and refused, and it was not executed.
+fn classify_pin(error: &TorBinaryError) -> PinClass {
+    match error {
+        TorBinaryError::NotFound { .. } => PinClass {
+            input: Input::BundleMissing,
+            cause: Cause::BundleMissing,
+        },
+        TorBinaryError::Unavailable { .. } => PinClass {
+            input: Input::Unavailable,
+            cause: Cause::Unavailable,
+        },
+        TorBinaryError::NotAFile(_)
+        | TorBinaryError::NotExecutable(_)
+        | TorBinaryError::NotTheExecutable(_)
+        | TorBinaryError::Io { .. }
+        | TorBinaryError::UnexpectedEntry { .. }
+        | TorBinaryError::UnsafeLoaderPath(_)
+        | TorBinaryError::MissingFile { .. }
+        | TorBinaryError::HashMismatch { .. } => PinClass {
+            input: Input::PinRefused,
+            cause: Cause::PinRefused,
+        },
+    }
+}
+
+/// The sync a pin warning speaks. The link is not up, so nothing syncs
+/// over Tor. `clearnet` is the connector.
+fn pin_sync(clearnet_on: bool) -> Syncing {
+    Syncing {
+        tor: false,
+        clearnet: clearnet_on,
+    }
+}
+
+/// The warning text for a pin error. `error`'s display is the detail: a
+/// `NotFound` lists `searched`, and the posture cause does not carry those
+/// paths.
+fn pin_warning_line(error: &TorBinaryError, clearnet_on: bool) -> String {
+    let class = classify_pin(error);
+    let sentence = install_sentence(&class.cause).expect("a pin class is an install cause");
+    let consequence = held_sentence(pin_sync(clearnet_on));
+    format!("warning: managed Tor: {sentence} ({error}) {consequence}")
 }
 
 /// Start the supervisor when Tor is managed. Any other posture returns `None`.
@@ -359,11 +434,7 @@ impl Drive {
                 self.pinned = Some(binary);
                 Input::PinAccepted
             }
-            Err(error) => match error {
-                shekyl_tor_control_daemon::TorBinaryError::NotFound { .. } => Input::BundleMissing,
-                shekyl_tor_control_daemon::TorBinaryError::Unavailable { .. } => Input::Unavailable,
-                _ => Input::PinRefused,
-            },
+            Err(error) => classify_pin(&error).input,
         }
     }
 
@@ -598,5 +669,49 @@ mod tests {
             Some(Input::ProcessEnded { exit_code: None })
         );
         assert_eq!(observed_death(TorDeath::Stopped), None);
+    }
+
+    /// One class for the core and the posture. A missed discovery names the
+    /// paths it searched; the clearnet sentence is the connector's, not a
+    /// hedge. The words are the posture's, so a second sentence table fails
+    /// this.
+    #[test]
+    fn a_refused_pin_is_one_class_and_speaks_the_posture() {
+        let searched = PathBuf::from("/srv/missing/tor");
+        let missing = TorBinaryError::NotFound {
+            searched: vec![searched.clone()],
+        };
+        let class = classify_pin(&missing);
+        assert_eq!(class.input, Input::BundleMissing);
+        assert_eq!(class.cause, Cause::BundleMissing);
+        let line = pin_warning_line(&missing, false);
+        let sentence = install_sentence(&Cause::BundleMissing).expect("an install cause");
+        assert!(line.contains(sentence));
+        assert!(line.contains(searched.to_str().unwrap()));
+        assert!(line.contains(&held_sentence(pin_sync(false))));
+        assert!(!line.contains(&held_sentence(pin_sync(true))));
+
+        let unavailable = TorBinaryError::Unavailable {
+            reason: "no bundle for this target",
+        };
+        let class = classify_pin(&unavailable);
+        assert_eq!(class.input, Input::Unavailable);
+        assert_eq!(class.cause, Cause::Unavailable);
+        let line = pin_warning_line(&unavailable, true);
+        let sentence = install_sentence(&Cause::Unavailable).expect("an install cause");
+        assert!(line.contains(sentence));
+        assert!(line.contains("no bundle for this target"));
+        assert!(line.contains(&held_sentence(pin_sync(true))));
+
+        let refused = TorBinaryError::NotAFile(PathBuf::from("/srv/tor-dir"));
+        let class = classify_pin(&refused);
+        assert_eq!(class.input, Input::PinRefused);
+        assert_eq!(class.cause, Cause::PinRefused);
+        let line = pin_warning_line(&refused, false);
+        let sentence = install_sentence(&Cause::PinRefused).expect("an install cause");
+        assert!(line.contains(sentence));
+        assert!(line.contains("was not started"));
+        assert!(line.contains("/srv/tor-dir"));
+        assert!(line.contains(&held_sentence(pin_sync(false))));
     }
 }

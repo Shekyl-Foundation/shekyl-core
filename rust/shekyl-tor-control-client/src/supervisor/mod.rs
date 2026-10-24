@@ -19,6 +19,6 @@ mod posture;
 pub use core::{Action, Core, Input, ManagedRunning, Policy, Step};
 pub use events::input_of;
 pub use posture::{
-    fixes, own_tx, render, Cause, Connectors, ManagedTorFix, OriginVerdict, OwnTx, Shown, Status,
-    Syncing, TorSetting,
+    fixes, held_sentence, install_sentence, own_tx, render, Cause, Connectors, ManagedTorFix,
+    OriginVerdict, OwnTx, Shown, Status, Syncing, TorSetting,
 };
