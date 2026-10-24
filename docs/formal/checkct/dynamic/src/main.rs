@@ -143,8 +143,16 @@ fn measure<I: Clone, F: FnMut(&I) -> u64>(
     }
     let samples = run.samples;
     let mut rng = Rng::new();
-    let fixed_set: Vec<I> = (0..BATCH).map(|_| gen(&mut rng)).collect();
-    let other_set: Vec<I> = (0..BATCH).map(|_| gen(&mut rng)).collect();
+    // The fixed classes are not kept as tables: each fixed batch regenerates
+    // its values from a fixed seed through the same `gen` path and a fresh
+    // allocation the random class uses, so the two classes differ in their
+    // values only, not in how their memory was built or where it sits.
+    let fixed_seed = rng.next() | 1;
+    let other_seed = rng.next() | 1;
+    let regen = |seed: u64, gen: &mut dyn FnMut(&mut Rng) -> I| -> Vec<I> {
+        let mut r = Rng(seed);
+        (0..BATCH).map(|_| gen(&mut r)).collect()
+    };
     let mut order: Vec<usize> = Vec::with_capacity(2 * samples);
     order.extend(std::iter::repeat_n(0, samples));
     order.extend(std::iter::repeat_n(1, samples));
@@ -157,8 +165,8 @@ fn measure<I: Clone, F: FnMut(&I) -> u64>(
         .map(|&class| match (&mode, class) {
             (Mode::Null, _) => (0..BATCH).map(|_| gen(&mut rng)).collect(),
             (Mode::Constant(v), 0) => vec![v.clone(); BATCH],
-            (_, 0) => fixed_set.clone(),
-            (Mode::FixedPair, _) => other_set.clone(),
+            (_, 0) => regen(fixed_seed, &mut gen),
+            (Mode::FixedPair, _) => regen(other_seed, &mut gen),
             (Mode::Fixed | Mode::Constant(_), _) => (0..BATCH).map(|_| gen(&mut rng)).collect(),
         })
         .collect();
@@ -237,6 +245,7 @@ fn main() {
         run.samples,
         std::env::consts::ARCH
     );
+    let mut seed = Rng::new();
     println!("-- null control (both classes fresh; must show no difference)");
     measure(
         &run,
@@ -305,6 +314,40 @@ fn main() {
     both!(&run, "helio wide_reduce", |r| r.bytes64(), |b| low64(
         &HelioseleneField::wide_reduce(*b)
     ),);
+
+    println!("-- constant-value control (class 0: one value, allocated fresh per batch; class 1: fresh values)");
+    let hc = fehelio(seed.bytes32());
+    let hc2 = fehelio(seed.bytes32());
+    let fc = fe25519(seed.bytes32());
+    let fc2 = fe25519(seed.bytes32());
+    measure(
+        &run,
+        "constant: helio square",
+        Mode::Constant(hc),
+        |r| fehelio(r.bytes32()),
+        |a| low64(&a.square()),
+    );
+    measure(
+        &run,
+        "constant: helio mul",
+        Mode::Constant((hc, hc2)),
+        |r| (fehelio(r.bytes32()), fehelio(r.bytes32())),
+        |(a, b)| low64(&(*a * *b)),
+    );
+    measure(
+        &run,
+        "constant: helio sqrt",
+        Mode::Constant(hc),
+        |r| fehelio(r.bytes32()),
+        |a| low64(&a.sqrt().unwrap_or(HelioseleneField::ZERO)),
+    );
+    measure(
+        &run,
+        "constant: fe25519 mul",
+        Mode::Constant((fc, fc2)),
+        |r| (fe25519(r.bytes32()), fe25519(r.bytes32())),
+        |(a, b)| low64(&(*a * *b)),
+    );
 
     println!("-- crypto-bigint 0.5.5 Residue::pow with a secret exponent (BINSEC found a branch; unreached by our code)");
     both!(

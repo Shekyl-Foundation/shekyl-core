@@ -40,7 +40,7 @@ retired in alpha.5. BINSEC decodes x86_64, 32-bit RISC-V and Thumb, so:
 | Shipped target | Static (BINSEC) | What stands in | Dynamic |
 | --- | --- | --- | --- |
 | x86_64 | **verdict**, both toolchains | — | — |
-| aarch64 | no decoder | `thumbv7em` (conditional execution, like `csel`): ISA proxy only, not the Cortex-A LLVM backend | `dynamic/` on the Pi floor device, row labelled *dynamic* |
+| aarch64 | no decoder | `thumbv7em` (conditional execution, like `csel`): ISA proxy only, not the Cortex-A LLVM backend | *dynamic* row on the Pi floor device 2026-10-24 (`results/2026-10-24/dynamic-aarch64-floor-device.txt`): every field row flat at 20k and 200k, controls detected; bounds, does not clear, while the method check is open |
 | riscv64 (switched off 2026-10-24, #1184) | no decoder | `riscv32imac`: same ISA family, no conditional move; the `pow` select became a branch there under **both** toolchains, so riscv64 was the shipped target most likely to inherit it | no board; **not assessed**; no longer shipped until a user asks and it can be measured |
 
 The 32-bit targets are instruments, not products: `riscv32imac` and

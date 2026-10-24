@@ -89,8 +89,10 @@ calibration and the full verdict tables are
   and growing with the sample; whether it is the harness or operand-dependent
   timing of the vendored crate on that CPU is not yet settled, so no dynamic
   row is a verdict and the crate goes nowhere upstream until it is). The
-  floor-device run (Rick's go 2026-10-24) is recorded under the same
-  caveat.
+  floor-device run (Rick's go 2026-10-24; Cortex-A72, idle, the daemon
+  inactive): every field row flat at 20k and at 200k samples, both positive
+  controls detected; the workstation's `HelioseleneField` difference does
+  not appear on aarch64. Recorded as *dynamic*, under the open method check.
   riscv64 is **not assessed**: no board, and the `pow` select became a
   branch on riscv32 under both toolchains, so it was the shipped target most
   likely to inherit that rewrite. **Ruled 2026-10-24 (Rick): riscv64 is
