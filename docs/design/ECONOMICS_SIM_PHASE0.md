@@ -1,6 +1,6 @@
 # Economics sim, Phase 0 — where the sim stands before the build-out
 
-**Status:** **OPEN — Phase 0 of the economics-sim lane, read-only, 2026-10-23.**
+**Status:** **OPEN — Phase 0 of the economics-sim lane, read-only, 2026-10-23; §P0.9 ruled 2026-10-24, Phase 1 open.**
 Anchors pinned to `dev` `465b77eba`; every figure below was produced or read
 at that commit unless its row names another. Nothing in the sim or in
 production changes in Phase 0. The design owner rules on §P0.9's questions,
@@ -603,16 +603,19 @@ are proposed here.
 
 ---
 
-## P0.9 The plan, re-sequenced, and the questions
+## P0.9 The plan, as ruled (2026-10-24)
 
 **The order in the brief** (`claude/ESR15_ESR10_BRIEF.md`, as relayed):
 ESR-15 with the unified fee loop; the parameter sweep; ESR-10; EUP-4 prep
 (the zone closed form, gate-7 on the byte fold, the 135-year arms); EUP-4.
-The brief itself is not on this machine or in the repository; §A.2a's seven
-properties and the order are taken from the relay.
+The brief is instructions to an agent and stays in the project, not in the
+tree (ruling 1): its binding content is written into the documents that own
+it by step 0, and Phase 1 cites those sections.
 
 **Phase 0 keeps that order and adds a step in front of it.** Each step is its
-own PR, predictions first, fresh clone last.
+own PR, predictions first, fresh clone last. Nine questions were put to the
+design owner on 2026-10-23; the rulings of 2026-10-24 are folded into the
+steps below and listed at the end.
 
 0. **Truth commit** (Phase 1's first). No committed fixture moves: documents,
    declarations, one instrument fix and the tests that hold quoted figures.
@@ -626,14 +629,19 @@ own PR, predictions first, fresh clone last.
    - The ESR-15 row reads "before ESR-10 runs": ESR-10's predictions are
      already registered (`ca95d9997`).
    - Umbrella §3.2 row b names what was built and leaves the zone closed form
-     open.
+     open (ruling 5).
+   - **The brief's binding content goes into the owning documents** (ruling
+     1): the rounding loop's seven properties into ESR-15's row and
+     `FEE_LADDER_DERIVATION.md`; the parameter guard, as ruled in 2, into the
+     sweep's row (registered as its own ESR item at birth, rule 94); ESR-10's
+     build list into its row.
    - The grid-sampled extremes in this lane's sim (the class above) take
      the boundary heights: `--fee-ladder`'s reachable `C` samples block 1
      and the height where `σ` reaches 0 (its range becomes [0.680, 13.000]);
-     the `--fee-floor` roll-ups gain ages past 30 or say "to year 30";
-     the onset horizon's comment states the tail year. No fixture holds
-     those modes. The A5/TJ maximum and OQ-2 move the `--stage2` fixture and
-     go with step 0b. The staking-sim rows go to EUP-3 as findings.
+     the `--fee-floor` roll-ups sample to the saturation plateau; the onset
+     horizon's comment states the tail year. No fixture holds those modes.
+     The A5/TJ maximum and OQ-2 move the `--stage2` fixture and go with step
+     0b. The staking-sim rows go to EUP-3 as findings.
    - Give the document-quoted figures a hold. The A4 row written at ESR-9
      was stale four days later, the narration fixtures are held only by the
      nightly lane, and five figures above reproduce with nothing holding
@@ -645,34 +653,67 @@ own PR, predictions first, fresh clone last.
      pass on the pin's output.
 0b. **Instrument corrections that move the fixtures.** The steepest-candidate
    selection (A6, OQ-4, A2) and the in-year `n` = 4 096 crossing (A5/TJ,
-   OQ-2). The escalation doc's A6 readings follow the corrected run.
+   OQ-2). The escalation doc's A6 readings, §6.0 and §12.11.1 are then re-read
+   on the steepest member (ruling 8).
    - *Predictions owed:* the selection's are measured above (A6 to 1.0080 /
      2.0160 / 0.0725 pts and its verdict flips; OQ-4 to 0.0076 / 0.0482; A2
      one column about 4 % up); the crossing's: A5/TJ's maximum rises, OQ-2
      recommends more than 2.
 1. **ESR-15: one fee loop over a pricing function**, judged against §A.2a's
    seven properties (never under-pays, least, bounded over-payment, exact,
-   fails closed, terminates by agreement, one lattice on both sides).
+   fails closed, terminates by agreement, one lattice on both sides). Its PR
+   records the lattice's size as an open fee-ladder row in
+   `FEE_LADDER_DERIVATION.md`, with its current ground (display precision;
+   one shared rounding for payer and admission), and prints the lattice step
+   as basis points of the ordinary fee, so the ruling reads a measurement
+   (ruling 7: at the fixture's late fees one 1 000-atomic step is about
+   100 bp, twice the 50 bp bar G uses). The six decimals stay until ruled.
    - *Predictions owed:* the fixture lines that move and by how much; that no
      onset year, no crossing year and no A1 verdict moves; the
      `--fee-floor` / `--fee-ladder` outputs, which do not round today.
-2. **The parameter sweep** (§B.3a of the brief), with the guard that
-   production reads only `EconomicParams::default()` and a gate that holds it.
-   - Scope from §P0.3: which non-fields become fields, which bare-constant
-     readers in the sim move to the field, and what happens to the digest and
-     the C4 fixtures.
+2. **The parameter sweep** (§B.3a of the brief), as ruled in 2 and 3:
+   - **Two generated structs from the one JSON file.** `EconomicParams` is
+     chain identity and stays in the digest; every economic constant that is
+     consensus becomes a field, promoted in one PR so the digest and the C4
+     fixtures move once. A separate `RelayPolicy` (G, the admission slack, the
+     fee decimals, the emission-claim hold) stays outside the digest, on
+     FL-R27's own reasoning: relay policy in consensus identity is a
+     fingerprint. The sim varies both.
+   - **One accessor per struct.** The validator's `OnceLock`, the nine FFI
+     `default()` sites and the wallet cap collapse onto it, and a gate holds
+     that one point: production reads only the default.
+   - **The windows are const generics, not runtime buffers.** The chain-rules
+     folds take the window length as a const generic; production instantiates
+     the generated constant, the sim whatever lengths EUP-5's window stress
+     test needs. Production arrays stay fixed-size.
+   - **One source for each constant with two** (ruling 3): a generated
+     constant in the lowest crate (`shekyl-wire` or `shekyl-types`) for the
+     zone, the field populated from it and a test holding them equal;
+     `settlement_epoch_blocks` read from the digested config and the hand
+     literal deleted; `BLOCKS_PER_YEAR` derived from the DAA target with a
+     test that it equals today's. Const-asserts on a generated constant stay
+     const-asserts; asserts that read a field become tests.
+   - The bond floor's `const` asserts become a test on the generated default;
+     the cover rung derives from the field; `engine-core`'s second generated
+     copy goes.
    - *Predictions owed:* every default-valued sweep cell equals the default
      report byte for byte; the sweep's own falsifier per parameter.
 3. **ESR-10**, the multi-class pool (`ESR10_PREDICTIONS.md` §0.1) first, then
    both constant arms. #1152 delivered the one-zone reader (C2-R2 R3), so the
    re-derived arm needs only `w_ref` as a parameter, which step 2 provides.
+   ESR-10 runs before the sweep grades the release rails: `M_r` sits at 0.8
+   while 22 of 50 are carried (ruling 4).
    - *Predictions owed:* the registered set, amended against the post-#1152
      fixture before the run (year-1 operands unchanged; boom-bust year 15).
-4. **EUP-4 prep**, from §P0.6–§P0.8:
-   - the penalty-zone closed form with the parity test above;
+4. **EUP-4 prep**, from §P0.6–§P0.8, in this order (rulings 5 and 6):
+   - **the penalty-zone closed form, its own PR**: `fill.rs` is a production
+     crate the node's template runs since #1165, so the prediction is "no
+     output byte changes" and the parity test (§P0.6) is red first;
    - the 135-year horizon arms;
    - per-block fee revenue (median, variance) for the tail criterion;
-   - the window-edge stuffer and step/surge traces;
+   - in parallel with those three: the window-edge stuffer and step/surge
+     traces (this lane owns the instrument; EUP-5 §4.2 owns the decision on
+     the window's length);
    - gate-7 on the byte fold; A3 and A4 on linear work;
    - miner income with kept fees;
    - the predictability columns;
@@ -681,41 +722,45 @@ own PR, predictions first, fresh clone last.
    - *Predictions owed:* the closed form changes no output byte (it is a
      speed-up); each new instrument states its expected reading before its
      first run.
-5. **EUP-4**, graded against the criteria Rick ratifies.
+5. **EUP-4**, graded against the criteria Rick ratifies. **EUP-5 gains an
+   item** (ruling 4): the component constants (burn base and cap, pool share,
+   staker share and decay, release rails, `tx_volume_baseline`) are inherited
+   values whose April derivation is retired; the sweep of step 2, run on the
+   production fee after ESR-15 and ESR-10 and graded here, re-derives them.
+   Their values do not change until then. The ESF is excluded: it is the
+   ruled design curve.
 
-### Questions for Rick
+### The rulings (design owner, 2026-10-24)
 
-Only what Phase 0 could not settle from code and the design.
+1. **The brief** stays in the project; it is instructions, not design, and a
+   committed copy would drift. Step 0 writes its binding content into the
+   owning documents, which the citation gates can read.
+2. **Sweep reach:** two generated structs from one JSON file (`EconomicParams`
+   in the digest, `RelayPolicy` outside it); one accessor per struct and a
+   gate on it; the windows as const generics. Everything is promoted in one
+   PR. The fee decimals stay a constant until ruling 7's row is ruled.
+3. **Two sources:** one source each, by derivation, in the lowest crate.
+4. **Component constants:** inherited, open derivations; re-derived by the
+   sweep itself, graded at EUP-4; an EUP-5 item names them; the ESF excluded.
+5. **The penalty-zone closed form:** this lane builds it, as the first EUP-4
+   prep step, in its own PR; the document that called it done is corrected in
+   step 0.
+6. **Unowned instruments:** both to this lane in EUP-4 prep; EUP-5 §4.2 owns
+   the window-length decision, this lane the instrument.
+7. **The lattice's size:** open; ESR-15's PR records it as a fee-ladder row
+   with its ground and prints the step in basis points of the fee; six
+   decimals stay until ruled.
+8. **GF-7 band against the slew gate:** keep the gate. It excludes one of
+   nine candidates (90 %, knee 500 000), during its ramp, which is when a
+   flood matters most. Step 0b corrects the selection, and §6.0 and §12.11.1
+   are re-read on the steepest member.
+9. **The claim fee:** the ladder at the claim's real weight, floored by the
+   hold. The hold moves into `RelayPolicy`, derived from the genesis relay
+   floor times the claim's weight, with a test. The sim prices a claim at
+   that maximum.
 
-1. **Where does `claude/ESR15_ESR10_BRIEF.md` live?** It is not on this
-   machine or in the repository, and its §B numbering does not match
-   `ESR10_PREDICTIONS.md`'s §0–§5. Steps 1–3 read it.
-2. **How far should the parameter sweep reach into production?** Production
-   already resolves the default set through one `OnceLock` in the validator,
-   nine FFI sites and the wallet cap. Several parameters are not fields at all
-   (`w_ref`, the windows, the surge factor, G, the slack, the fee decimals),
-   promoting one moves the params digest and the C4 fixtures, and the bond
-   floor is pinned by two `const` asserts and mirrored by the cover rung. What should the sweep vary in
-   production, and what only in the sim?
-3. **What should hold the constants that have two sources?** The zone reaches
-   `TX_WEIGHT_LIMIT` through `MIN_BLOCK_WEIGHT` from the JSON, not from the
-   field. `settlement_epoch_blocks` is digested but the code uses a hand
-   literal. `BLOCKS_PER_YEAR` is its own key, not derived from the DAA target.
-4. **What re-derives the component constants** (ESF, burn base and cap, pool
-   share, staker share and decay, release rails)? They are "Resolved" by an
-   April sweep that finding E retired, and EUP-5's list does not name them.
-5. **Who builds the penalty-zone closed form, and when?** The approved item
-   was restated as done. The 135-year growth arms wait on it.
-6. **Which step owns the instruments no step builds today:** the tail
-   criterion's per-block fee distribution, and the window-edge stuffer that
-   EUP-4 grades but EUP-5 §4.2 owns?
-7. **Where is the open ruling on the fee lattice's size recorded?** The brief
-   calls it open from ESR-15's §A.2a; no document on `dev` holds it, and the
-   6 decimals are inherited from the C++ header.
-8. **What does §6.0's no-swing claim require of the GF-7 candidate band?**
-   On its steepest candidate, a flood moves the share 1.008 points an epoch,
-   and A6's verdict flips. The band, the gate (`< 1.0` point an epoch) and
-   §12.11.1's structural closure were all read on the shallowest candidate.
-9. **What should the sim charge for an emission claim?** §4's claim row has
-   no planned step, and `EMISSION_CLAIM_FEE_FLOOR` is a literal that does not
-   follow a `w_ref` or zone change.
+**Also settled by Phase 0's last measurement:** the fee-floor grid edge
+(§P0.1). Every `--fee-floor` figure since ESR-9 is on the exact arm;
+stationary grace at G = 5 never exceeds 39 bp; the step-grace plateau is the
+saturated state §11.7 recorded at "age 30" on the pre-#951 curve. FL-R23 and
+FL-R24 stand, and nothing reopens in the fee-ladder lane.
