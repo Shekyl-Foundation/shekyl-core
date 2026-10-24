@@ -324,6 +324,10 @@ pub struct GetTransactionsResponse {
     /// pool holds them has no answer, so they are neither entries nor
     /// missed. A caller that needs them asks again after the restart, or
     /// asks another daemon.
+    ///
+    /// Omitted when empty, as `missed_tx` beside it is: this type mirrors
+    /// the inherited `KV_SERIALIZE_OPT` omissions. RW-Q4 rules an empty
+    /// list is `[]`; the RW rename rewrites both members together.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unavailable_tx: Vec<HashHex>,
 }

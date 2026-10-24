@@ -90,11 +90,17 @@ impl core::fmt::Display for NoJob {
 }
 
 impl NoJob {
-    /// Whether the next tip clears this reason.
+    /// Whether this reason clears itself, with no new tip.
     ///
     /// `generateblocks` keeps waiting while the board is withdrawn for one
-    /// of these: the follower posts again when the tip moves, or when the
-    /// first pass finishes.
+    /// of these, so each must be one somebody retries. **A transient
+    /// reason either clears or becomes a refusal; it never stays posted
+    /// while nobody will retry.** `Starting` ends with the follower's
+    /// first pass. After a withdrawal for either `Unbuilt` reason the
+    /// follower builds once more at the same tip; if that build withdraws
+    /// for a transient reason again, the board reads
+    /// [`Unbuilt::Stuck`], which is not transient, and `generateblocks`
+    /// refuses with it. A job posted at the tip restores the one rebuild.
     #[must_use]
     pub const fn transient(&self) -> bool {
         matches!(
@@ -136,6 +142,43 @@ pub enum Unbuilt {
     BodyGone,
     /// The template producer panicked; the service is stopping.
     ProducerPanicked,
+    /// A reason that clears itself did not clear: the build at this tip
+    /// withdrew for it again after the follower built once more. Nobody
+    /// retries before the next tip, so this is a refusal, not a wait.
+    Stuck {
+        /// The reason the second build withdrew for.
+        after: Retried,
+    },
+}
+
+/// A reason that clears itself, as [`Unbuilt::Stuck`] names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Retried {
+    /// [`Unbuilt::PoolOnAnotherTip`].
+    PoolOnAnotherTip,
+    /// [`Unbuilt::BodyGone`].
+    BodyGone,
+}
+
+impl Retried {
+    /// The retried reason a withdrawal names, if it names one.
+    #[must_use]
+    pub const fn of(why: &NoJob) -> Option<Self> {
+        match why {
+            NoJob::Unbuilt(Unbuilt::PoolOnAnotherTip) => Some(Self::PoolOnAnotherTip),
+            NoJob::Unbuilt(Unbuilt::BodyGone) => Some(Self::BodyGone),
+            _ => None,
+        }
+    }
+
+    /// The reason as it was built.
+    #[must_use]
+    pub const fn unbuilt(self) -> Unbuilt {
+        match self {
+            Self::PoolOnAnotherTip => Unbuilt::PoolOnAnotherTip,
+            Self::BodyGone => Unbuilt::BodyGone,
+        }
+    }
 }
 
 impl core::fmt::Display for Unbuilt {
@@ -154,6 +197,13 @@ impl core::fmt::Display for Unbuilt {
             Self::PoolOnAnotherTip => "the pool was judged against another tip",
             Self::BodyGone => "a listed body left the pool while the template was built",
             Self::ProducerPanicked => "the template producer panicked",
+            Self::Stuck { after } => {
+                return write!(
+                    f,
+                    "{} (again, after building once more at this tip; the next tip builds again)",
+                    after.unbuilt()
+                );
+            }
         })
     }
 }
@@ -178,6 +228,7 @@ impl Unbuilt {
             Self::PoolOnAnotherTip => "pool_on_another_tip",
             Self::BodyGone => "body_gone",
             Self::ProducerPanicked => "producer_panicked",
+            Self::Stuck { .. } => "stuck",
         }
     }
 }
@@ -311,6 +362,8 @@ pub(crate) async fn follow<S>(
     let mut stopping = shared.stop_signal();
     // The tip a pass was last run again for: a reason that clears itself
     // is answered by one more pass at that tip, not a wait for the next.
+    // A posted job clears it, so a later reason at the same tip is
+    // answered the same way.
     let mut rerun_at: Option<u64> = None;
     loop {
         if shared.stopping() {
@@ -349,15 +402,27 @@ pub(crate) async fn follow<S>(
                     // judged at another tip, or a listed body gone between
                     // the producer's locks. One more pass reconciles the
                     // pool at this tip (setting its judged tip) and builds
-                    // again; a lone miner has no next tip to wait for.
-                    again = matches!(
-                        &*seat.posting.borrow(),
-                        Posting::Withdrawn(why) if why.transient() && *why != NoJob::Starting
-                    );
+                    // again; a lone miner has no next tip to wait for. If
+                    // that pass withdraws for such a reason too, nobody
+                    // retries before the next tip: the reason becomes a
+                    // refusal (`NoJob::transient`'s invariant).
+                    let now = seat.posting.borrow().clone();
+                    match now {
+                        Posting::Posted(_) => rerun_at = None,
+                        Posting::Withdrawn(why) => {
+                            if let Some(after) = Retried::of(&why) {
+                                if rerun_at == Some(tip.seq) {
+                                    seat.withdraw(NoJob::Unbuilt(Unbuilt::Stuck { after }));
+                                } else {
+                                    again = true;
+                                }
+                            }
+                        }
+                    }
                 }
                 (Some(_), behind) => seat.withdraw(NoJob::NotSynced(behind)),
             }
-            if again && rerun_at != Some(tip.seq) {
+            if again {
                 rerun_at = Some(tip.seq);
                 continue;
             }

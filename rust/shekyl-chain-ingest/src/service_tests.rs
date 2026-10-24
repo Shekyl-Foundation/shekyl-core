@@ -1333,6 +1333,84 @@ async fn a_transient_withdrawal_is_built_again_at_the_same_tip() {
     );
 }
 
+/// A reason that clears itself either clears or becomes a refusal (the
+/// review of #1176, F1). Two builds in a row lose a listed body at one
+/// tip: the follower's one rebuild withdraws for the same reason, and
+/// nobody retries before the next tip, so the board must not stay
+/// withdrawn for a transient reason, which `generateblocks` would wait on
+/// forever on a lone node. It reads `Stuck`, a refusal, which is what
+/// `generateblocks`' wait resolves on. The next pass at the same tip
+/// builds again and posts. Red edit: leave the second withdrawal as it
+/// is.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_transient_reason_that_does_not_clear_becomes_a_refusal() {
+    use crate::follower::{NoJob, Posting, Retried, Unbuilt};
+    let mut y = Scenario::open("service-transient-stuck-y");
+    let blocks = y.mine(1).await;
+    let board = Arc::new(shekyl_miner::JobBoard::new());
+    let (_sync_tx, sync) = tokio::sync::watch::channel(shekyl_chain_sync::SyncState::Synced);
+    let (service, path, mut posting) = service_mining(
+        "service-transient-stuck",
+        Arc::new(Gated::new()),
+        &board,
+        sync,
+    );
+    offer_all(&service.door(), 1, &blocks).await;
+    let first = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        posting.wait_for(|now| {
+            matches!(now, Posting::Posted(_))
+                && board
+                    .posted()
+                    .is_some_and(|(_, job)| job.height.to_raw() == blocks[0].height.to_raw() + 1)
+        }),
+    )
+    .await
+    .ok()
+    .and_then(Result::ok)
+    .map(|now| now.clone());
+    service
+        .shared
+        .bodies_gone
+        .store(2, std::sync::atomic::Ordering::Release);
+    // A pass with no new tip; no tip follows it.
+    service.shared.pending_ready().notify_one();
+    // `generateblocks`' wait: resolved by a posted job or a reason that is
+    // not transient, never by a transient one.
+    let settled = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        posting.wait_for(|now| match now {
+            Posting::Withdrawn(why) => !why.transient(),
+            Posting::Posted(_) => Some(now) != first.as_ref(),
+        }),
+    )
+    .await
+    .ok()
+    .and_then(Result::ok)
+    .map(|now| now.clone());
+    let stuck_at = posting.borrow().clone();
+    // The next pass at the same tip builds again.
+    service.shared.pending_ready().notify_one();
+    let recovered = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        posting.wait_for(|now| matches!(now, Posting::Posted(_))),
+    )
+    .await
+    .is_ok();
+    service.stop().await.expect("stops");
+    y.close().await;
+    cleanup(&path);
+    assert!(first.is_some(), "the job posted at the tip");
+    assert_eq!(
+        settled,
+        Some(Posting::Withdrawn(NoJob::Unbuilt(Unbuilt::Stuck {
+            after: Retried::BodyGone
+        }))),
+        "a transient reason that did not clear is a refusal: the board reads {stuck_at:?}"
+    );
+    assert!(recovered, "the next pass at the same tip posts again");
+}
+
 /// The sync owner going away says nothing about the chain. The job is
 /// withdrawn, as while behind, and the follower keeps following.
 #[tokio::test(flavor = "multi_thread")]

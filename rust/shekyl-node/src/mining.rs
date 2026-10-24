@@ -16,7 +16,7 @@ use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use shekyl_chain_ingest::follower::{NoJob, Posting};
+use shekyl_chain_ingest::follower::{NoJob, Posting, Unbuilt};
 use shekyl_chain_ingest::service::PoolHealth;
 use shekyl_daemon_rpc::chain_facts::FactsFault;
 use shekyl_daemon_rpc::handles::MiningFacts;
@@ -225,6 +225,9 @@ fn no_job_diagnostic(why: &NoJob) -> Diagnostic {
     let diagnostic = Diagnostic::new(code, why.to_string());
     match why {
         NoJob::NotSynced(state) => diagnostic.param("sync", state.name()),
+        NoJob::Unbuilt(kind @ Unbuilt::Stuck { after }) => diagnostic
+            .param("kind", kind.code())
+            .param("after", after.unbuilt().code()),
         NoJob::Unbuilt(kind) => diagnostic.param("kind", kind.code()),
         _ => diagnostic,
     }
@@ -339,5 +342,35 @@ impl MiningFacts for MiningControl {
             pool_retired: self.pool.retired(),
             absent: status.no_job.as_ref().map(no_job_diagnostic),
         })
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::{no_job_diagnostic, NoJob, Unbuilt};
+    use shekyl_chain_ingest::follower::Retried;
+
+    /// A stuck build names itself and the reason that did not clear, so a
+    /// caller refused by `generateblocks` can tell a body lost twice from a
+    /// pool judged at another tip twice.
+    #[test]
+    fn a_stuck_build_names_the_reason_that_did_not_clear() {
+        let why = NoJob::Unbuilt(Unbuilt::Stuck {
+            after: Retried::BodyGone,
+        });
+        let diagnostic = no_job_diagnostic(&why);
+        assert_eq!(
+            diagnostic.params,
+            vec![
+                ("kind".to_owned(), "stuck".to_owned()),
+                ("after".to_owned(), "body_gone".to_owned()),
+            ]
+        );
+        assert!(
+            diagnostic.message.contains("left the pool") && diagnostic.message.contains("again"),
+            "{}",
+            diagnostic.message
+        );
+        assert!(!why.transient(), "a stuck build is a refusal, not a wait");
     }
 }
