@@ -343,13 +343,7 @@ impl RelayZoneHandle {
         }
         if let Some(publisher) = &self.origin {
             let zone = self.driver.zone();
-            crate::origin_verdict::publish_to(
-                publisher,
-                crate::origin_verdict::OriginVerdict {
-                    connected: zone.address_hiding_session(),
-                    routable: zone.originates_address_hiding(),
-                },
-            );
+            crate::origin_verdict::publish_to(publisher, zone.origin_verdict());
         }
     }
 }

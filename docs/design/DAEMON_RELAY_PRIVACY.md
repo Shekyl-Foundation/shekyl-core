@@ -17755,23 +17755,26 @@ touch; the dialer's view of the hidden outbound sessions, which is PR-3's.
 ### 98.12 The class as a published verdict (`GS-Q3`, 2026-10-23)
 
 The hidden class and the origin pin are the fact the posture reads
-(`TOR_SUPERVISOR.md` posture table, `GS-Q3`): whether a transaction this node
-originates leaves on an address-hiding session now.
-`Relay::originates_address_hiding` reads it without routing: a reserved epoch,
-the class non-empty, and when the local origin is pinned, a frozen candidate at
-or past the cursor live in the class (`StemMap::local_origin_routable`). It is
-the outcome of the last local origin's plan and, in every case but the one churn
-case the method's own doc names, of the next. The production zone's publish
-writes it to `shekyl-ffi` `origin_verdict` after every session change, epoch
-rebuild and plan, in two parts: the class part alone
-(`Relay::address_hiding_session`), which is the RPC `health` boolean
-(`TSR-Q4`), and the whole verdict, which is `OwnTx` under the `status` grant.
-The pin part stays off `health` (`RPC_CHANNEL.md` §6.1): it moves when this
-node's own-edge peers disconnect, and a peer holding `health` while being the
-own edge would otherwise watch the boolean flip on its own disconnect. The
-managed-Tor supervisor reads both there. The `HiddenClassWatch` log lines (§98.5) are
-unchanged and are not this read: the watch is silent before the first rebuild
-and reports the class alone, not the pin.
+(`TOR_SUPERVISOR.md` posture table, `GS-Q3`). `Relay::origin_verdict` reads
+`StemMap::local_origin_leaves` without committing a route. That read is the
+decision `StemMap::route_local_origin` commits, so the published value is the
+next plan's outcome.
+
+The verdict is three states. `Absent`: no outbound session hides this node's
+address, or the epoch does not reserve a slot. `Connected`: one does, and a
+local origin does not leave on it. `Routable`: a local origin leaves on one.
+Health is every state but `Absent` (`TSR-Q4`). `Routable` is `OwnTx` under the
+`status` grant. The pin stays off `health` (`RPC_CHANNEL.md` §6.1): it moves
+when this node's own-edge peers disconnect, and a peer holding `health` while
+being the own edge would otherwise watch the boolean flip on its own
+disconnect.
+
+The production zone's publish writes the verdict to `shekyl-ffi`
+`origin_verdict` after every session change, epoch rebuild and plan. The
+managed-Tor supervisor folds it as one `Input::AddressHidingOrigin`. The
+`HiddenClassWatch` log lines (§98.5) are unchanged and are not this read: the
+watch is silent before the first rebuild and reports the class alone, not the
+pin.
 
 ## 99. ProxyMark reproduction — a progress benchmark, REGISTERED 2026-10-09 (PM-1…PM-3)
 

@@ -36,10 +36,12 @@
 //! map, and the paper's [`StemMap::update`] does not read the local pin. The
 //! map never learns what the class is. The relay names the address-hiding
 //! outbound sessions and routes its own transactions through
-//! [`StemMap::route_local_origin`], which releases a departed pin hop and
-//! fills slot 0 before it walks the pin. Everything else is intended to
-//! match the C++. Anything else that differs is a bug in this module, not
-//! an improvement.
+//! [`StemMap::route_local_origin`]. That route releases a departed pin hop,
+//! fills slot 0, and seats the pin's later in-class candidates into open
+//! holes before the walk. A handshake merge does not: its backfill stays the
+//! uniform draw. [`StemMap::local_origin_leaves`] is that route's decision,
+//! read without committing it. Everything else is intended to match the C++.
+//! Anything else that differs is a bug in this module, not an improvement.
 
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
@@ -679,37 +681,17 @@ impl StemMap<ReservedSlot> {
     /// matches [`StemMap::update`], including the nil-slot re-mark.
     pub fn update_with_reserved<R: RelayRng + ?Sized>(
         &mut self,
-        mut reserved: Vec<ConnectionId>,
-        rest: Vec<ConnectionId>,
+        reserved: &[ConnectionId],
+        rest: &[ConnectionId],
         rng: &mut R,
     ) -> StemSetChange {
-        assert_partition(&reserved, &rest);
-        if self.usage.is_empty() {
+        assert_partition(reserved, rest);
+        let Some(mut open) = self.open_reserved_slots(reserved, rest) else {
             return StemSetChange::Unchanged;
-        }
-        reserved.sort_unstable();
-        reserved.dedup();
-        let mut candidates = reserved.clone();
-        candidates.extend(rest);
-        candidates.sort_unstable();
-        candidates.dedup();
-
-        let mut replaced = self.release_departed(&mut candidates);
-        // What remains of the class is live and occupies no slot.
-        reserved.retain(|peer| candidates.binary_search(peer).is_ok());
-        // The reserved cell exists even when nothing has filled it. A uniform
-        // map grows from an empty `out` inside `backfill`; this one does not.
-        if self.out.is_empty() {
-            self.out.push(None);
-            replaced = true;
-        }
-        if !replaced && self.out.len() == self.usage.len() {
-            return StemSetChange::Unchanged;
-        }
-        let existing_outs = self.out.len();
-        self.fill_reserved_slot(&mut reserved, &mut candidates, rng);
-        self.backfill(RESERVED_SLOT_INDEX + 1, &mut candidates, rng);
-        change_after(replaced, existing_outs, self.out.len())
+        };
+        self.fill_reserved_slot(&mut open.class_open, &mut open.unslotted, rng);
+        self.backfill(RESERVED_SLOT_INDEX + 1, &mut open.unslotted, rng);
+        change_after(open.replaced, open.existing_outs, self.out.len())
     }
 
     /// Place a peer in an empty slot 0, taken from `class_unslotted`.
@@ -745,166 +727,6 @@ impl StemMap<ReservedSlot> {
                 0 => None,
                 n => Some(class_unslotted[usize_from_u64(bounded_uniform(rng, (n - 1) as u64))]),
             })
-    }
-
-    /// The local pin's next candidate, from its cursor, that is in `among`
-    /// (sorted). `None` when the local source has no pin or none of its
-    /// remaining candidates is there.
-    fn local_pin_next_among(&self, among: &[ConnectionId]) -> Option<ConnectionId> {
-        let pin = self.inbound.get(&None)?;
-        pin.candidates[pin.cursor..]
-            .iter()
-            .copied()
-            .find(|candidate| among.binary_search(candidate).is_ok())
-    }
-
-    /// The local origin's one route. The merge runs before the pin walk, and
-    /// the relay cannot call them in the other order.
-    ///
-    /// The merge runs when slot 0 needs its fill, or the local pin's current
-    /// hop has left the class. A close does not merge, so a departed hop that
-    /// is not slot 0 still occupies its slot: walking first would return that
-    /// hop, the class check would refuse it, and the cursor would stay.
-    /// Merging first releases the hop and slots the pin's next unslotted
-    /// candidate, and only then does the walk advance. In the stranded state
-    /// — slot 0 empty, every class member already slotted — a hop that is
-    /// still in the class does not merge, so an empty later slot is not
-    /// backfilled as a side effect of originating.
-    ///
-    /// Unpinned: the primary is slot 0's peer when the class contains it,
-    /// otherwise a class member occupying a later slot (uniform when several
-    /// do). Then `stems − 1` alternates, drawn uniformly from the other class
-    /// members live now. Pinned: the walk, and a chosen peer the class does
-    /// not contain is not a route. `None` pins nothing.
-    #[must_use]
-    pub fn route_local_origin<R: RelayRng + ?Sized>(
-        &mut self,
-        reserved: &[ConnectionId],
-        rest: &[ConnectionId],
-        rng: &mut R,
-    ) -> Option<ConnectionId> {
-        assert_partition(reserved, rest);
-        let pinned = self.is_pinned(None);
-        if self.origin_merge_due(reserved, rest, pinned) {
-            let _change = self.update_with_reserved(reserved.to_vec(), rest.to_vec(), rng);
-        }
-        if pinned {
-            let chosen = self.resolve_pin(None)?;
-            reserved.contains(&chosen).then_some(chosen)
-        } else {
-            let candidates = self.local_origin_candidates(reserved, rng);
-            self.pin_over(None, candidates)
-        }
-    }
-
-    /// Whether a local origin is routed now, read without routing.
-    ///
-    /// The relay publishes this as its hop-0 verdict (`DAEMON_RELAY_PRIVACY.md`
-    /// §98.12). Pinned: some frozen candidate at or past the cursor is live in
-    /// `class_live`, the hop the next route fills slot 0 with or walks to.
-    /// Not pinned: the class is non-empty, so the next route pins. Nothing is
-    /// merged, pinned or drawn. An exhausted pin reads `false` until the epoch
-    /// rebuilds the map. A map with no slots routes nothing.
-    ///
-    /// It is the outcome of the last [`Self::route_local_origin`], and of the
-    /// next one in every case but one: a pin whose live alternate occupies no
-    /// slot while another class member holds slot 0 reads routable until that
-    /// route's walk steps past the alternate. The route's own publish after
-    /// the plan corrects the read.
-    ///
-    /// The pinned scan is bounded by the configuration, not the peer set:
-    /// the frozen candidate list is at most `stems` long
-    /// ([`Self::route_local_origin`] pins the primary and `stems - 1`
-    /// alternates), and `class_live` is the outbound address-hiding census,
-    /// the dialer's target wide.
-    #[must_use]
-    pub fn local_origin_routable(&self, class_live: &[ConnectionId]) -> bool {
-        if self.usage.is_empty() {
-            return false;
-        }
-        match self.inbound.get(&None) {
-            Some(pin) => pin.candidates[pin.cursor..]
-                .iter()
-                .any(|candidate| class_live.contains(candidate)),
-            None => !class_live.is_empty(),
-        }
-    }
-
-    /// Slot 0 needs its fill, or this route is about to walk a hop that has
-    /// left the class. Captured `pinned` is the state from before the merge.
-    fn origin_merge_due(
-        &self,
-        class: &[ConnectionId],
-        rest: &[ConnectionId],
-        pinned: bool,
-    ) -> bool {
-        self.slot_zero_needs_fill(class, rest) || (pinned && self.pinned_hop_has_left(class))
-    }
-
-    /// The local pin's current hop is absent from `class`.
-    ///
-    /// No pin, or a cursor past the frozen list, is not this case: there is
-    /// no hop to release. A hop still in the class is not this case either.
-    fn pinned_hop_has_left(&self, class: &[ConnectionId]) -> bool {
-        let Some(pin) = self.inbound.get(&None) else {
-            return false;
-        };
-        match pin.candidates.get(pin.cursor) {
-            Some(hop) => !class.contains(hop),
-            None => false,
-        }
-    }
-
-    /// Slot 0's peer has left the live partition, or the slot is empty and a
-    /// class member is still unslotted.
-    fn slot_zero_needs_fill(&self, class: &[ConnectionId], rest: &[ConnectionId]) -> bool {
-        match self.out.get(RESERVED_SLOT_INDEX).copied().flatten() {
-            Some(peer) => !class.contains(&peer) && !rest.contains(&peer),
-            None => class.iter().any(|peer| self.slot_of(*peer).is_none()),
-        }
-    }
-
-    /// The local source's pin: primary, then `stems − 1` alternates drawn by
-    /// the same partial Fisher-Yates as [`StemMap::new`].
-    ///
-    /// Slot 0's peer is the primary only when the class contains it. A peer
-    /// sitting there from outside the class is not an origin hop; the draw
-    /// falls through to class members in later slots. Empty when no slot
-    /// holds a class member, so [`StemMap::pin_over`] pins nothing.
-    fn local_origin_candidates<R: RelayRng + ?Sized>(
-        &self,
-        class_live: &[ConnectionId],
-        rng: &mut R,
-    ) -> Vec<ConnectionId> {
-        let primary = match self.out.get(RESERVED_SLOT_INDEX).copied().flatten() {
-            Some(peer) if class_live.contains(&peer) => peer,
-            _ => {
-                let slotted: Vec<ConnectionId> = self
-                    .out
-                    .iter()
-                    .skip(RESERVED_SLOT_INDEX + 1)
-                    .flatten()
-                    .copied()
-                    .filter(|peer| class_live.contains(peer))
-                    .collect();
-                match slotted.len() {
-                    0 => return Vec::new(),
-                    1 => slotted[0],
-                    n => slotted[usize_from_u64(bounded_uniform(rng, (n - 1) as u64))],
-                }
-            }
-        };
-        let mut alternates: Vec<ConnectionId> = class_live
-            .iter()
-            .copied()
-            .filter(|peer| *peer != primary)
-            .collect();
-        let take = self.usage.len().saturating_sub(1).min(alternates.len());
-        partial_shuffle(&mut alternates, take, rng);
-        let mut candidates = Vec::with_capacity(1 + take);
-        candidates.push(primary);
-        candidates.extend(alternates);
-        candidates
     }
 }
 
@@ -957,6 +779,8 @@ fn partial_shuffle<R: RelayRng + ?Sized>(items: &mut Vec<ConnectionId>, take: us
 fn usize_from_u64(v: u64) -> usize {
     usize::try_from(v).expect("draw was bounded by a usize-derived range")
 }
+
+mod local_origin;
 
 #[cfg(test)]
 mod reserved_tests;

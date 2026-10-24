@@ -10,7 +10,9 @@ use std::time::Duration;
 
 use shekyl_timing_engine::{Clock, ManualClock, Tick};
 
-use super::super::posture::{render, Cause, Connectors, ManagedTorFix, OwnTx, Shown, TorSetting};
+use super::super::posture::{
+    render, Cause, Connectors, ManagedTorFix, OriginVerdict, OwnTx, Shown, TorSetting,
+};
 use super::{duration_ns, Action, Core, Input, Policy, Step};
 
 fn policy() -> Policy {
@@ -41,20 +43,20 @@ fn socks() -> SocketAddr {
     "127.0.0.1:9150".parse().expect("socks")
 }
 
-/// The relay's whole verdict: a session hides the address and the pin is live.
+/// [`OriginVerdict::Routable`]: a session hides the address and the origin leaves.
 fn carrying() -> Input {
-    Input::AddressHidingOrigin {
-        connected: true,
-        routable: true,
-    }
+    Input::AddressHidingOrigin(OriginVerdict::Routable)
 }
 
-/// The relay's verdict withdrawn: nothing hides the address.
+/// [`OriginVerdict::Absent`]: nothing hides the address.
 fn held() -> Input {
-    Input::AddressHidingOrigin {
-        connected: false,
-        routable: false,
-    }
+    Input::AddressHidingOrigin(OriginVerdict::Absent)
+}
+
+/// [`OriginVerdict::Connected`]: a session hides the address, and the origin
+/// does not leave.
+fn connected() -> Input {
+    Input::AddressHidingOrigin(OriginVerdict::Connected)
 }
 
 fn announces(step: &Step) -> usize {
@@ -723,13 +725,7 @@ fn an_exhausted_pin_holds_the_origin_while_health_stays_true() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
     reach_usable(&mut core);
     let cap = duration_ns(policy().cap);
-    let exhausted = core.on(
-        Input::AddressHidingOrigin {
-            connected: true,
-            routable: false,
-        },
-        cap + 1,
-    );
+    let exhausted = core.on(connected(), cap + 1);
     assert_eq!(announces(&exhausted), 1, "the sentence flipped to holding");
     let status = core.status();
     assert!(status.health, "a session still hides the address");
@@ -744,13 +740,7 @@ fn an_exhausted_pin_holds_the_origin_while_health_stays_true() {
     assert!(!core.status().health);
     assert_eq!(core.status().own_tx, OwnTx::Held);
 
-    let session = core.on(
-        Input::AddressHidingOrigin {
-            connected: true,
-            routable: false,
-        },
-        cap + 3,
-    );
+    let session = core.on(connected(), cap + 3);
     assert!(
         session.actions.is_empty(),
         "a session arriving under an exhausted pin: still held"

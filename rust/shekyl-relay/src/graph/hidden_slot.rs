@@ -28,7 +28,7 @@ use shekyl_draw_rng::RelayRng;
 use shekyl_relay_privacy::stem_map::ConnectionId;
 
 use super::epoch_map::EpochMap;
-use super::{hides_address, Relay, RelayPlan};
+use super::{hides_address, OriginVerdict, Relay, RelayPlan};
 
 /// How many outbound sessions hide this node's address, in the three states
 /// the operator is told about.
@@ -316,45 +316,35 @@ impl Relay {
         self.hidden_class_watch.recorded()
     }
 
-    /// Whether an outbound session hides this node's address now: the class
-    /// part of the verdict, and the `health` grant's boolean (`TSR-Q4`,
-    /// `RPC_CHANNEL.md` §6.1). The pin part stays in `OwnTx`: a peer who
-    /// held `health` and was this node's own edge for the epoch could
-    /// otherwise watch the boolean flip on its own disconnect, which would
-    /// tie the RPC endpoint to this node's transactions. A uniform epoch
-    /// reads `false`.
-    #[must_use]
-    pub fn address_hiding_session(&self) -> bool {
-        self.map.reserves_slot() && self.hidden_session_count() > 0
-    }
-
-    /// The relay's hop-0 verdict for a local origin: whether a transaction
-    /// this node originates leaves on an address-hiding session now.
+    /// The relay's hop-0 verdict for a local origin (`GS-Q3`).
     ///
-    /// The fact `OwnTx` and Health project (`TOR_SUPERVISOR.md` posture
-    /// table, `GS-Q3`): the class is non-empty and the epoch's origin pin is
-    /// not exhausted. Read-only: nothing is merged, pinned or drawn. The
-    /// link being usable is not this fact; a Tor whose link is up and whose
-    /// first address-hiding peer has not handshaken reads `false`. A node
-    /// with no address-hiding connector reads `false`. Exactness against
-    /// the next plan:
-    /// [`shekyl_relay_privacy::stem_map::StemMap::local_origin_routable`].
+    /// One census, read without routing. The stem map's `local_origin_leaves`
+    /// is the decision the next plan commits. A uniform epoch, and a reserved
+    /// epoch whose class is empty, are [`OriginVerdict::Absent`]. The link
+    /// being usable is not this fact.
     #[must_use]
-    pub fn originates_address_hiding(&self) -> bool {
+    pub fn origin_verdict(&self) -> OriginVerdict {
         if !self.map.reserves_slot() {
-            return false;
+            return OriginVerdict::Absent;
         }
-        let (hidden, _rest) = self.partitioned_outbound_ids();
-        self.map.local_origin_routable(&hidden)
+        let (class, rest) = self.partitioned_outbound_ids();
+        if class.is_empty() {
+            return OriginVerdict::Absent;
+        }
+        if self.map.local_origin_leaves(&class, &rest) {
+            OriginVerdict::Routable
+        } else {
+            OriginVerdict::Connected
+        }
     }
 
     /// Plan a local origin's first hop over the hidden stem slot.
     ///
-    /// The map fills slot 0 before it walks the pin, and only when that fill
-    /// would change the slot. `None` is [`RelayPlan::NoOwnEdge`]: the caller
-    /// sends nothing, records nothing, and does not refresh the stem map. A
-    /// refresh cannot manufacture a session that hides this node's address,
-    /// and falling through to fluff would publish the origin on a clear link.
+    /// The map commits the decision [`Relay::origin_verdict`] reads. `None`
+    /// is [`RelayPlan::NoOwnEdge`]: the caller sends nothing, records
+    /// nothing, and does not refresh the stem map. A refresh cannot
+    /// manufacture a session that hides this node's address, and falling
+    /// through to fluff would publish the origin on a clear link.
     pub(super) fn hidden_slot_plan<R: RelayRng + ?Sized>(&mut self, rng: &mut R) -> RelayPlan {
         let (hidden, rest) = self.partitioned_outbound_ids();
         match self.map.route_local_origin(&hidden, &rest, rng) {

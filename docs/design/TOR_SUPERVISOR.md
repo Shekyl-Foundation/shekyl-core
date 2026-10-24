@@ -121,8 +121,8 @@ is not a hold. `OwnTx::Held` is the transaction. The Tor state Restarting
 
 | `OwnTx` | When | The send |
 | --- | --- | --- |
-| `AddressHiding` | The relay's hop-0 verdict: an outbound session hides this node's address now (Health, `TSR-Q4`) and the epoch's origin pin is not exhausted (`GS-Q3`) | Broadcasts over that connector |
-| `Held` | The verdict is false and Tor is `Tor::Managed` or `Tor::Operator`. Health is false, or true with the epoch's pin exhausted while address-hiding sessions are live: the pin stays off `health` (`RPC_CHANNEL.md` §6.1) | Reported held, not sent. Stays off clearnet (`TSR-Q11`) |
+| `AddressHiding` | `OriginVerdict::Routable`: a local origin leaves on a session that hides this node's address (`GS-Q3`). Health is true (`TSR-Q4`) | Broadcasts over that connector |
+| `Held` | The verdict is not `Routable` and Tor is `Tor::Managed` or `Tor::Operator`. Health is false (`Absent`), or true (`Connected`) while the pin is exhausted: the pin stays off `health` (`RPC_CHANNEL.md` §6.1) | Reported held, not sent. Stays off clearnet (`TSR-Q11`) |
 | `ClearnetOnly` | `Tor::Off` and `Clearnet::On` | Broadcasts over clearnet. Health stays false |
 | `Offline` | `Tor::Off` and `Clearnet::Off` | Not sent |
 
@@ -134,11 +134,11 @@ is not a hold. `OwnTx::Held` is the transaction. The Tor state Restarting
 The link being usable is not Health (`GS-Q3`, the GUI sync lane's `GS-F3`):
 after a Tor boot the link is usable before any address-hiding peer has
 handshaken, and the relay holds a local origin until one has. The relay
-publishes its verdict after every session change, epoch rebuild and plan
+publishes `OriginVerdict` after every session change, epoch rebuild and plan
 (`shekyl-ffi` `origin_verdict`, written by the production zone's publish);
-the supervisor folds it as `Input::AddressHidingOrigin` in its two parts,
-projects the class part as Health and the whole as `OwnTx`, and says a change
-of `OwnTx`: a recovery at once, a loss under the announcement cap. The link
+the supervisor folds `Input::AddressHidingOrigin`. Health is
+`hides_address`, every state but `Absent`. `OwnTx` reads `Routable`. A
+recovery is said at once, a loss once under the announcement cap. The link
 stays the phase (§4.3) and `Syncing.tor`.
 
 Clearnet-only is the operator's `ClearnetOnly` act, never a default
@@ -866,18 +866,19 @@ included: p50 3.89 s, max 4.08 s. The cold seed for that run bootstrapped in
   dependence on bootstrap time; `tor = managed | operator | off` is the
   supervisor's input; `tor-socks` is the operator route; `TSR-F8`; DC-F12 is a
   prerequisite (`TSR-F12`).
-- **RPC:** `TSR-Q4` (ruled): one Health boolean, this node can originate over
-  an address-hiding connector now. `TSR-Q12` lists the `status` grant's
-  fields, as typed values (`TSR-Q13`). The RW round names the Status and Health
-  fields. No leg carries Status to the GUI yet: RT-15's socket or pipe is
-  RT-W10's, not authorized; the sidecar reaches Status over the owning
-  connection it is launched with (`GS-Q1`; core increment `GS-C3`).
+- **RPC:** `TSR-Q4` (ruled): one Health boolean, an outbound session hides
+  this node's address now, every `OriginVerdict` but `Absent`. The pin is
+  `OwnTx` under `status`. `TSR-Q12` lists the `status` grant's fields, as
+  typed values (`TSR-Q13`). The RW round names the Status and Health fields.
+  No leg carries Status to the GUI yet: RT-15's socket or pipe is RT-W10's,
+  not authorized; the sidecar reaches Status over the owning connection it
+  is launched with (`GS-Q1`; core increment `GS-C3`).
 - **TB:** §7's macOS rows are TB-11's macOS launch test; the Windows launch
   test is `tor-pin-verify`'s Windows entry (`TSR-F15`).
 - **Relay:** the hop-0 verdict for a local origin (`shekyl-relay`
-  `Relay::originates_address_hiding`, read-only: the address-hiding class and
-  the epoch's origin pin, `DAEMON_RELAY_PRIVACY.md` §98.12) is the
-  supervisor's input for Health and `OwnTx` (`GS-Q3`). The link is not.
+  `Relay::origin_verdict`: `Absent`, `Connected`, or `Routable`,
+  `DAEMON_RELAY_PRIVACY.md` §98.12) is the supervisor's input for Health and
+  `OwnTx` (`GS-Q3`). The link is not.
 - **Wallet and clients:** the send flow reads `OwnTx` from Status before
   broadcasting (§1). `Held` is reported held, not sent. `ClearnetOnly` is
   sent over clearnet and is not reported held, and Health stays false.
@@ -910,8 +911,9 @@ included: p50 3.89 s, max 4.08 s. The cold seed for that run bootstrapped in
    `supervisor` module. `TSR-M2` is recorded (2026-10-22); the driver's base
    stays 1 s and its cap stays 60 s. `TSR-M8` (the monotonic clock across
    suspend) is not recorded yet. Health and `OwnTx` project the relay's
-   hop-0 verdict, folded as `Input::AddressHidingOrigin` (`GS-Q3`, the GUI
-   sync lane's `GS-C1`); the link is the phase and `Syncing.tor`.
+   hop-0 verdict (`OriginVerdict`), folded as `Input::AddressHidingOrigin`
+   (`GS-Q3`, the GUI sync lane's `GS-C1`); the link is the phase and
+   `Syncing.tor`.
 3b. The public directory cache (`TSR-Q8`, §4.7). **Implemented.** At launch
    into a fresh directory the daemon copies `cached-microdesc-consensus`,
    `cached-microdescs`, `cached-microdescs.new` and `cached-certs`, each only

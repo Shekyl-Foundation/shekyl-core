@@ -28,18 +28,54 @@ pub struct Connectors {
     pub clearnet_on: bool,
 }
 
+/// The relay's hop-0 verdict for a local origin, folded into this supervisor.
+///
+/// The relay names the same three states. This crate does not depend on the
+/// relay: the daemon maps one onto the other, variant for variant.
+///
+/// [`Self::Absent`]: no outbound session hides this node's address.
+/// [`Self::Connected`]: one does, and a local origin does not leave on it.
+/// [`Self::Routable`]: a local origin leaves on one.
+///
+/// Health is [`Self::hides_address`]. `OwnTx` reads [`Self::origin_leaves`].
+/// The pin stays off health (`RPC_CHANNEL.md` §6.1): a peer who held `health`
+/// and was this node's own edge could otherwise watch the boolean flip on
+/// its own disconnect.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OriginVerdict {
+    /// No outbound session hides this node's address.
+    #[default]
+    Absent,
+    /// An outbound session hides this node's address, and a local origin
+    /// does not leave on it.
+    Connected,
+    /// A local origin leaves on a session that hides this node's address.
+    Routable,
+}
+
+impl OriginVerdict {
+    /// An outbound session hides this node's address now.
+    #[must_use]
+    pub const fn hides_address(self) -> bool {
+        !matches!(self, Self::Absent)
+    }
+
+    /// A local origin leaves on such a session now.
+    #[must_use]
+    pub const fn origin_leaves(self) -> bool {
+        matches!(self, Self::Routable)
+    }
+}
+
 /// What the node does with its own transactions (`TSR-Q11`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OwnTx {
-    /// The relay's hop-0 verdict says a transaction this node originates
-    /// leaves on an address-hiding session now (`GS-Q3`): the class is
-    /// non-empty (Health) and the epoch's origin pin is not exhausted.
+    /// [`OriginVerdict::Routable`]: a local origin leaves on a session that
+    /// hides this node's address.
     AddressHiding,
-    /// The verdict is false and Tor is managed or an operator's Tor. Health
-    /// is false, or true with the epoch's origin pin exhausted while
-    /// address-hiding sessions are live: the pin stays off Health
-    /// (`RPC_CHANNEL.md` §6.1). The transaction is held on this node, not
-    /// sent.
+    /// The verdict does not route, and Tor is managed or an operator's Tor.
+    /// Health may still be true ([`OriginVerdict::Connected`]). The
+    /// transaction is held on this node, not sent.
     Held,
     /// The operator set Tor off and clearnet on.
     ClearnetOnly,
@@ -131,11 +167,9 @@ pub struct Syncing {
 /// One typed read of the supervisor (`TSR-Q12`). No message text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Status {
-    /// The class part of the relay's hop-0 verdict (`TSR-Q4`, `GS-Q3`): an
-    /// outbound session hides this node's address now. The pin part is
-    /// [`Self::own_tx`]'s alone (`RPC_CHANNEL.md` §6.1), so `health` can be
-    /// true while `own_tx` is `Held`. Not the link: [`Self::shown`] is the
-    /// link.
+    /// [`OriginVerdict::hides_address`]: an outbound session hides this
+    /// node's address now. Not the link: [`Self::shown`] is the link.
+    /// `health` can be true while [`Self::own_tx`] is [`OwnTx::Held`].
     pub health: bool,
     /// The §4.3 projection.
     pub shown: Shown,
@@ -155,11 +189,13 @@ pub struct Status {
     pub progress: u8,
 }
 
-/// `OwnTx` from the relay's whole verdict (class and pin) and the connector
-/// settings.
+/// `OwnTx` from the relay's hop-0 verdict and the connector settings.
+///
+/// [`OriginVerdict::Routable`] is [`OwnTx::AddressHiding`]. Every other
+/// state follows the connector pair.
 #[must_use]
-pub fn own_tx(routable: bool, connectors: Connectors) -> OwnTx {
-    if routable {
+pub fn own_tx(verdict: OriginVerdict, connectors: Connectors) -> OwnTx {
+    if verdict.origin_leaves() {
         return OwnTx::AddressHiding;
     }
     match (connectors.tor, connectors.clearnet_on) {

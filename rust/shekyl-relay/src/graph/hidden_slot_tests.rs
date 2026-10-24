@@ -644,16 +644,16 @@ fn the_origin_verdict_follows_the_class_and_the_pin() {
             &mut rng,
         )
         .unwrap();
-        assert!(!z.originates_address_hiding(), "no session: held");
-        assert!(!z.address_hiding_session(), "no session: not connected");
+        assert_eq!(z.origin_verdict(), OriginVerdict::Absent, "no session");
         z.on_session_established(
             id(11),
             PeerDirection::Outbound,
             ConnectorId::Clearnet,
             &mut rng,
         );
-        assert!(
-            !z.originates_address_hiding(),
+        assert_eq!(
+            z.origin_verdict(),
+            OriginVerdict::Absent,
             "a session whose peer learns the address is not the class"
         );
         for byte in 1..=3 {
@@ -664,38 +664,40 @@ fn the_origin_verdict_follows_the_class_and_the_pin() {
                 &mut rng,
             );
         }
-        assert!(
-            z.originates_address_hiding(),
-            "a class session: routable before any plan"
+        assert_eq!(
+            z.origin_verdict(),
+            OriginVerdict::Routable,
+            "a class session: the origin leaves before any plan"
         );
-        assert!(z.address_hiding_session());
         z.rebuild_stems(&mut rng);
-        assert!(z.originates_address_hiding());
+        assert_eq!(z.origin_verdict(), OriginVerdict::Routable);
         let RelayPlan::OwnEdge(primary) = originate(&mut z, &mut rng) else {
             panic!("three address-hiding sessions and no pin");
         };
-        assert!(z.originates_address_hiding());
+        assert_eq!(z.origin_verdict(), OriginVerdict::Routable);
         z.on_connection_close(&primary);
-        assert!(
-            z.originates_address_hiding(),
+        assert_eq!(
+            z.origin_verdict(),
+            OriginVerdict::Routable,
             "the frozen alternate is live"
         );
         let RelayPlan::OwnEdge(alternate) = originate(&mut z, &mut rng) else {
             panic!("the alternate was live");
         };
         z.on_connection_close(&alternate);
-        assert!(
-            !z.originates_address_hiding(),
-            "the pin is exhausted though a class session is live: held until the epoch"
-        );
-        assert!(
-            z.address_hiding_session(),
-            "the class part stays true: Health does not watch the pin"
+        assert_eq!(
+            z.origin_verdict(),
+            OriginVerdict::Connected,
+            "the pin is exhausted though a class session is live"
         );
         assert_eq!(originate(&mut z, &mut rng), RelayPlan::NoOwnEdge);
-        assert!(!z.originates_address_hiding());
+        assert_eq!(z.origin_verdict(), OriginVerdict::Connected);
         z.rebuild_stems(&mut rng);
-        assert!(z.originates_address_hiding(), "the rebuild drops the pin");
+        assert_eq!(
+            z.origin_verdict(),
+            OriginVerdict::Routable,
+            "the rebuild drops the pin"
+        );
         assert!(matches!(originate(&mut z, &mut rng), RelayPlan::OwnEdge(_)));
     }
 }
@@ -720,8 +722,11 @@ fn the_origin_verdict_is_false_without_an_address_hiding_connector() {
         &mut rng,
     );
     z.rebuild_stems(&mut rng);
-    assert!(!z.originates_address_hiding());
-    assert!(!z.address_hiding_session(), "a uniform epoch has no class");
+    assert_eq!(
+        z.origin_verdict(),
+        OriginVerdict::Absent,
+        "a uniform epoch has no class"
+    );
     assert!(matches!(
         originate(&mut z, &mut rng),
         RelayPlan::Stem(_) | RelayPlan::NoRoute
@@ -769,10 +774,13 @@ fn the_origin_verdict_after_a_plan_is_that_plans_outcome() {
                 3 => z.rebuild_stems(&mut rng),
                 _ => {}
             }
+            let before = z.origin_verdict().origin_leaves();
             let plan = originate(&mut z, &mut rng);
+            let leaves = matches!(plan, RelayPlan::OwnEdge(_));
+            assert_eq!(before, leaves, "seed {seed}: verdict before plan {plan:?}");
             assert_eq!(
-                z.originates_address_hiding(),
-                matches!(plan, RelayPlan::OwnEdge(_)),
+                z.origin_verdict().origin_leaves(),
+                leaves,
                 "seed {seed}: verdict after plan {plan:?}"
             );
         }

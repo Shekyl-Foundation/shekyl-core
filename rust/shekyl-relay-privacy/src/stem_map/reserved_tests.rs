@@ -27,7 +27,7 @@ fn merge(
     rest: &[u8],
     rng: &mut SplitMix64,
 ) -> StemSetChange {
-    m.update_with_reserved(ids(hidden), ids(rest), rng)
+    m.update_with_reserved(&ids(hidden), &ids(rest), rng)
 }
 
 /// The local origin's one route over that same split. The fill and the walk
@@ -469,34 +469,30 @@ fn a_stranded_origin_does_not_backfill_a_dead_clearnet_slot() {
     assert!(found, "a stranded width-3 map did not appear");
 }
 
-/// The read-only verdict is the route's outcome: before any pin it is the
-/// class census; pinned, it is whether a frozen candidate at or past the
-/// cursor is live in the class; an exhausted pin reads `false` while a live
-/// class member that was never a candidate cannot revive it.
+/// The decision is the route's outcome: before any pin the class can be
+/// seated; pinned, it is the hop the walk will take; an exhausted pin reads
+/// `false` while a live class member that was never a candidate cannot
+/// revive it.
 #[test]
-fn local_origin_routable_reads_the_pin_and_the_class() {
+fn local_origin_leaves_reads_the_pin_and_the_class() {
     for seed in 0..64 {
         let mut rng = SplitMix64::new(900 + seed);
         let mut m = StemMap::new_with_reserved_slot(ids(&[1, 2]), ids(&[11]), 2, &mut rng);
         assert!(
-            m.local_origin_routable(&ids(&[1, 2])),
+            leaves(&m, &[1, 2], &[11]),
             "unpinned: the class is non-empty"
         );
         assert!(
-            !m.local_origin_routable(&[]),
+            !leaves(&m, &[], &[11]),
             "unpinned: an empty class routes nothing"
         );
 
         let primary = route(&mut m, &[1, 2], &[11], &mut rng).expect("two class members pin");
-        assert!(
-            m.local_origin_routable(&ids(&[1, 2])),
-            "pinned on a live head"
-        );
+        assert!(leaves(&m, &[1, 2], &[11]), "pinned on a live head");
 
         let alternate = if primary == id(1) { 2 } else { 1 };
-        let live = ids(&[alternate]);
         assert!(
-            m.local_origin_routable(&live),
+            leaves(&m, &[alternate], &[11]),
             "the head left; the frozen alternate is live, so the next route walks to it"
         );
         assert_eq!(
@@ -506,14 +502,11 @@ fn local_origin_routable_reads_the_pin_and_the_class() {
 
         // A third class session arrives after the pin: never a candidate.
         assert!(
-            !m.local_origin_routable(&ids(&[3])),
+            !leaves(&m, &[3], &[11]),
             "both frozen candidates gone: exhausted, though a class session is live"
         );
         assert_eq!(route(&mut m, &[3], &[11], &mut rng), None);
-        assert!(
-            !m.local_origin_routable(&ids(&[3])),
-            "and it stays exhausted"
-        );
+        assert!(!leaves(&m, &[3], &[11]), "and it stays exhausted");
     }
 }
 
@@ -524,9 +517,10 @@ fn draw_below(rng: &mut SplitMix64, len: usize) -> usize {
     usize::try_from(rng.next_u64() % len).expect("below a usize count")
 }
 
-/// After every route the verdict and the route agree, over random churn.
+/// Before and after every route the decision and the route agree, over
+/// random churn. The read is taken before the route commits.
 #[test]
-fn local_origin_routable_agrees_with_every_route_it_follows() {
+fn local_origin_leaves_agrees_with_every_route_it_decides() {
     for seed in 0..256 {
         let mut rng = SplitMix64::new(5_000 + seed);
         let mut m = StemMap::new_with_reserved_slot(Vec::new(), Vec::new(), 3, &mut rng);
@@ -553,11 +547,17 @@ fn local_origin_routable_agrees_with_every_route_it_follows() {
                 }
                 _ => {}
             }
+            let predicted = leaves(&m, &class, &rest);
             let routed = route(&mut m, &class, &rest, &mut rng);
             assert_eq!(
-                m.local_origin_routable(&ids(&class)),
+                predicted,
                 routed.is_some(),
-                "seed {seed}: the verdict after a route is that route's outcome"
+                "seed {seed}: the decision before a route is that route's outcome"
+            );
+            assert_eq!(
+                leaves(&m, &class, &rest),
+                routed.is_some(),
+                "seed {seed}: the decision after a route is that route's outcome"
             );
         }
     }
@@ -565,8 +565,124 @@ fn local_origin_routable_agrees_with_every_route_it_follows() {
 
 /// A map with no slots routes nothing and says so.
 #[test]
-fn a_slotless_map_is_never_routable() {
+fn a_slotless_map_never_leaves() {
     let mut rng = SplitMix64::new(7);
     let m = StemMap::new_with_reserved_slot(ids(&[1]), Vec::new(), 0, &mut rng);
-    assert!(!m.local_origin_routable(&ids(&[1])));
+    assert!(!leaves(&m, &[1], &[]));
+}
+
+/// Width 3. The pinned hop is not in slot 0, and it leaves an open hole.
+/// The origin route seats the in-class alternate into that hole and walks
+/// onto it. The decision says so before the route runs.
+#[test]
+fn a_later_hole_seats_the_in_class_alternate_before_the_walk() {
+    let mut found = false;
+    for seed in 0..256 {
+        let mut rng = SplitMix64::new(seed + 1_200);
+        let mut m = StemMap::new_with_reserved_slot(ids(&[1, 2, 3]), ids(&[11, 12]), 3, &mut rng);
+        let Some((holder, primary, alternate, rest)) = width_three_pin(&m) else {
+            continue;
+        };
+        let hole = m.slot_of(primary).expect("the primary is slotted").get();
+        assert_ne!(hole, 0);
+        assert_eq!(m.pin_over(None, vec![primary, alternate]), Some(primary));
+        let class = [holder.0[0], alternate.0[0]];
+        let predicted = leaves(&m, &class, &rest);
+        let routed = route(&mut m, &class, &rest, &mut rng);
+        assert_eq!(predicted, routed.is_some(), "seed {seed}");
+        assert_eq!(
+            routed,
+            Some(alternate),
+            "seed {seed}: the hole seats the alternate"
+        );
+        assert_eq!(m.slots()[hole], Some(alternate));
+        assert!(
+            leaves(&m, &class, &rest),
+            "seed {seed}: the walk rests on it"
+        );
+        found = true;
+        break;
+    }
+    assert!(
+        found,
+        "a width-3 map with the primary off slot 0 did not appear"
+    );
+}
+
+/// Width 3. A handshake filled the departed hop's hole with someone else,
+/// so the frozen alternate occupies no slot and the map is full. The
+/// decision is false before the route, and the route does not invent a hop.
+#[test]
+fn a_full_map_does_not_call_an_unslotted_alternate_routable() {
+    let mut found = false;
+    for seed in 0..256 {
+        let mut rng = SplitMix64::new(seed + 1_400);
+        let mut m = StemMap::new_with_reserved_slot(ids(&[1, 2, 3]), ids(&[11, 12]), 3, &mut rng);
+        let Some((holder, primary, alternate, rest)) = width_three_pin(&m) else {
+            continue;
+        };
+        assert_eq!(m.pin_over(None, vec![primary, alternate]), Some(primary));
+        // The alternate is out of this merge, so the hole takes the one
+        // unslotted rest peer and the alternate stays unslotted.
+        let _change = merge(&mut m, &[holder.0[0]], &rest, &mut rng);
+        assert!(
+            m.slots().iter().all(Option::is_some),
+            "seed {seed}: the handshake filled the map"
+        );
+        assert!(m.slot_of(alternate).is_none());
+        let class = [holder.0[0], alternate.0[0]];
+        assert!(
+            !leaves(&m, &class, &rest),
+            "seed {seed}: an unslotted alternate on a full map is not a route"
+        );
+        assert_eq!(route(&mut m, &class, &rest, &mut rng), None);
+        assert!(!leaves(&m, &class, &rest));
+        assert!(m.slot_of(alternate).is_none());
+        found = true;
+        break;
+    }
+    assert!(
+        found,
+        "a width-3 map with one unslotted class member did not appear"
+    );
+}
+
+/// The decision, over the same split [`route`] commits.
+fn leaves(m: &StemMap<ReservedSlot>, hidden: &[u8], rest: &[u8]) -> bool {
+    m.local_origin_leaves(&ids(hidden), &ids(rest))
+}
+
+/// Slot 0 holds one class member, another class member sits in a later slot,
+/// the third class member is unslotted, and exactly one rest peer is
+/// unslotted. `None` when this seed's draw is a different shape.
+fn width_three_pin(
+    m: &StemMap<ReservedSlot>,
+) -> Option<(ConnectionId, ConnectionId, ConnectionId, Vec<u8>)> {
+    let holder = m.slots().first().copied().flatten()?;
+    let class = ids(&[1, 2, 3]);
+    if !class.contains(&holder) {
+        return None;
+    }
+    let slotted: Vec<ConnectionId> = class
+        .iter()
+        .copied()
+        .filter(|peer| m.slot_of(*peer).is_some())
+        .collect();
+    let open: Vec<ConnectionId> = class
+        .iter()
+        .copied()
+        .filter(|peer| m.slot_of(*peer).is_none())
+        .collect();
+    if slotted.len() != 2 || open.len() != 1 {
+        return None;
+    }
+    let primary = slotted.into_iter().find(|peer| *peer != holder)?;
+    let unslotted_rest = [11, 12]
+        .into_iter()
+        .filter(|tag| m.slot_of(id(*tag)).is_none())
+        .count();
+    if unslotted_rest != 1 {
+        return None;
+    }
+    Some((holder, primary, open[0], vec![11, 12]))
 }
