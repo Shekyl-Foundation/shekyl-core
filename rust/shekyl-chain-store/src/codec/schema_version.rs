@@ -347,7 +347,14 @@ use super::{Canonical, CodecError};
 ///   file cannot hold; the bump refuses it at open. `support_count.snap`
 ///   and `support_issued.snap` are new and `tables.snap` gains the four
 ///   rows. Rebuild from the block corpus, as at every bump.
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(31);
+/// - `32` — the `following_degraded` latch (`DRS_X_STORE_FLIP.md` DX-Q2
+///   item 8; `P2P_3_CHAIN_SYNC_BRIEF.md` §A item 7). One engine-local
+///   `properties` cell whose value is the evidence (`following_degraded`:
+///   the fork height, the heavier tip, its work). No table changes and no
+///   row moves; `properties.snap` gains the cell and `following_degraded.snap`
+///   is new. A `31` binary does not know the cell, so the bump refuses a
+///   `32` file under it. Rebuild from the block corpus, as at every bump.
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(32);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -404,10 +411,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(31));
-        assert_eq!(SCHEMA_VERSION.encode(), [31, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(32));
+        assert_eq!(SCHEMA_VERSION.encode(), [32, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[31, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[32, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }

@@ -13,11 +13,12 @@ use shekyl_chain_rules::{
     target_claim, Fault, FormAttempt, FormedHeader, HeaderView, OpenHeader, RuleSet,
 };
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
-use shekyl_wire::{Block, BlockBody, PowBlob, TxBody};
+use shekyl_wire::{Block, BlockBody, PowBlob};
 
 use super::{retry_of, Judged, WallClock};
 use crate::model::{
-    BoundArrival, CachePlan, CloseCause, Command, HashClass, Job, Outcome, ProveItem, Proved, Sync,
+    BoundArrival, CachePlan, CloseCause, Command, HashClass, Job, OfferedBody, Outcome, ProveItem,
+    Proved, Sync,
 };
 use crate::peer::Announced;
 
@@ -103,6 +104,12 @@ where
                 // Freeze it until the entry reports a new one.
                 self.seats = Some(0);
                 self.held.push(arrival);
+            }
+            Outcome::StoreUnreadable => {
+                // The seat comes back. Nothing is held, and planning
+                // stays stopped, so this body is not asked for again.
+                self.seats = self.seats.map(|seats| seats.saturating_add(1));
+                self.unreadable = true;
             }
             // The entry already holds this body, so the walk treats it as present.
             Outcome::Noted => {
@@ -257,6 +264,10 @@ where
                 self.close(session, CloseCause::HeaderRefused(refused.rule), out);
                 Ok(())
             }
+            // The announce's seed is not in the window. It is dropped, not
+            // held for a retry: the next announce, or a header request,
+            // brings the block again.
+            Proved::NotHeld => Ok(()),
             Proved::Formed(formed) => {
                 let parent = formed.previous();
                 match self.judge_standalone(main, parent, formed) {
@@ -350,19 +361,20 @@ where
             self.close(session, CloseCause::Bind(refused.rule), out);
             return;
         }
-        if body.txs.iter().any(|tx| matches!(tx, TxBody::Skeleton(_))) {
+        let Some(offered) = OfferedBody::from_full(body) else {
             if let Some(peer) = self.peers.get_mut(&session) {
                 peer.inventory.skeleton.insert(hash);
             }
             return;
-        }
+        };
         let tag = self.next_tag;
         self.next_tag = self.next_tag.saturating_add(1);
         self.held.push(BoundArrival {
             tag,
             session,
             header: judged,
-            body: body.clone(),
+            body: offered,
+            solicited: false,
         });
         self.flush_offers(out);
     }

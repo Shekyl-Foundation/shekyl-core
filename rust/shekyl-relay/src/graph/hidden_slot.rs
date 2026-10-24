@@ -28,7 +28,7 @@ use shekyl_draw_rng::RelayRng;
 use shekyl_relay_privacy::stem_map::ConnectionId;
 
 use super::epoch_map::EpochMap;
-use super::{hides_address, Relay, RelayPlan};
+use super::{hides_address, OriginVerdict, Relay, RelayPlan};
 
 /// How many outbound sessions hide this node's address, in the three states
 /// the operator is told about.
@@ -316,13 +316,35 @@ impl Relay {
         self.hidden_class_watch.recorded()
     }
 
+    /// The relay's hop-0 verdict for a local origin (`GS-Q3`).
+    ///
+    /// One census, read without routing. The stem map's `local_origin_leaves`
+    /// is the decision the next plan commits. A uniform epoch, and a reserved
+    /// epoch whose class is empty, are [`OriginVerdict::Absent`]. The link
+    /// being usable is not this fact.
+    #[must_use]
+    pub fn origin_verdict(&self) -> OriginVerdict {
+        if !self.map.reserves_slot() {
+            return OriginVerdict::Absent;
+        }
+        let (class, rest) = self.partitioned_outbound_ids();
+        if class.is_empty() {
+            return OriginVerdict::Absent;
+        }
+        if self.map.local_origin_leaves(&class, &rest) {
+            OriginVerdict::Routable
+        } else {
+            OriginVerdict::Connected
+        }
+    }
+
     /// Plan a local origin's first hop over the hidden stem slot.
     ///
-    /// The map fills slot 0 before it walks the pin, and only when that fill
-    /// would change the slot. `None` is [`RelayPlan::NoOwnEdge`]: the caller
-    /// sends nothing, records nothing, and does not refresh the stem map. A
-    /// refresh cannot manufacture a session that hides this node's address,
-    /// and falling through to fluff would publish the origin on a clear link.
+    /// The map commits the decision [`Relay::origin_verdict`] reads. `None`
+    /// is [`RelayPlan::NoOwnEdge`]: the caller sends nothing, records
+    /// nothing, and does not refresh the stem map. A refresh cannot
+    /// manufacture a session that hides this node's address, and falling
+    /// through to fluff would publish the origin on a clear link.
     pub(super) fn hidden_slot_plan<R: RelayRng + ?Sized>(&mut self, rng: &mut R) -> RelayPlan {
         let (hidden, rest) = self.partitioned_outbound_ids();
         match self.map.route_local_origin(&hidden, &rest, rng) {
