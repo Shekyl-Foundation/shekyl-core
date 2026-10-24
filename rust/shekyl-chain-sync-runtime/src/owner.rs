@@ -28,7 +28,15 @@
 //!   handler is finished by that handler, so the queue is bounded here as
 //!   well: a session holds at most one waiting request of each kind, and a
 //!   later one replaces it. A requester asks again only after it gave the
-//!   first up, so the later request is the one it reads.
+//!   first up, so the later request is the one it reads. The queue bounds
+//!   what waits. It does not schedule this task.
+//! - **Turns.** Stop comes first. Then a proof, an entry reply, or a
+//!   served response, then the tip and the latch, then one peer message.
+//!   Peer bytes do not sit ahead of work this node has already finished.
+//!   A deadline does not pass peer messages already queued, because one
+//!   of them may be the response it would abandon (`on_headers` closes a
+//!   session whose request the deadline already cleared). When the clock
+//!   fires, those messages are taken and then the deadline runs.
 //! - **Announcements** (2008, `NOTIFY_NEW_COMPACT_BLOCK`) reach the C++
 //!   handler until the cutover routes them here, so [`Event::Announce`]
 //!   does not arrive yet, and the commands only an announcement produces
@@ -325,29 +333,57 @@ async fn run<C, R>(
         tokio::select! {
             biased;
             _ = stop.wait_for(|stop| *stop) => break,
-            routed = routed.recv() => match routed {
-                Some(routed) => owner.routed(routed),
-                None => break,
-            },
             input = input_rx.recv() => {
                 if let Some(input) = input {
                     owner.input(input);
                 }
-            }
+            },
             changed = tips.changed() => {
                 if changed.is_err() {
                     break;
                 }
                 let tip = *tips.borrow_and_update();
                 owner.tip(&tip);
-            }
+            },
             changed = latch.changed() => {
                 if changed.is_err() {
                     break;
                 }
                 let set = latch.borrow_and_update().is_some();
                 owner.latch(set);
-            }
+            },
+            routed_one = routed.recv() => {
+                let Some(routed_one) = routed_one else {
+                    break;
+                };
+                owner.routed(routed_one);
+                // Messages already queued were sent before this wake was
+                // observed. Take them before the deadline, so a response
+                // in hand is applied before its request is cleared.
+                match clock_ready(&wakes) {
+                    Some(false) => {}
+                    Some(true) => {
+                        let pending = routed.len();
+                        let mut closed = false;
+                        for _ in 0..pending {
+                            match routed.try_recv() {
+                                Ok(routed_one) => owner.routed(routed_one),
+                                Err(mpsc::error::TryRecvError::Empty) => break,
+                                Err(mpsc::error::TryRecvError::Disconnected) => {
+                                    closed = true;
+                                    break;
+                                }
+                            }
+                            pump_local(&mut owner, &mut input_rx, &mut tips, &mut latch);
+                        }
+                        if closed {
+                            break;
+                        }
+                        owner.deadlines_due();
+                    }
+                    None => break,
+                }
+            },
             wake = wakes.wait_wake_async() => match wake {
                 Ok(_) => owner.deadlines_due(),
                 Err(err) => {
@@ -358,6 +394,43 @@ async fn run<C, R>(
         }
     }
     let _gone = owner.timer.deregister();
+}
+
+/// Whether the timing engine has delivered a wake. `Some` takes it, so the
+/// select's wait does not also see it. `None` is the engine gone.
+fn clock_ready<C: Clock>(timer: &OwnerHandle<C>) -> Option<bool> {
+    match timer.poll_wake() {
+        Ok(ready) => Some(ready.is_some()),
+        Err(err) => {
+            tracing::error!(?err, "the timing engine is gone: chain sync stops");
+            None
+        }
+    }
+}
+
+/// Proofs, entry replies, the tip and the latch, when any are already
+/// waiting. A deadline is not one of these: it runs after the peer
+/// messages that were queued when the clock fired.
+fn pump_local<C, R>(
+    owner: &mut Owner<C, R>,
+    input_rx: &mut mpsc::UnboundedReceiver<Input>,
+    tips: &mut watch::Receiver<TipChanged>,
+    latch: &mut watch::Receiver<Option<FollowingDegraded>>,
+) where
+    C: Clock + Clone + Send + Sync + 'static,
+    R: RelayRng + Send + 'static,
+{
+    while let Ok(input) = input_rx.try_recv() {
+        owner.input(input);
+    }
+    if tips.has_changed().unwrap_or(false) {
+        let tip = *tips.borrow_and_update();
+        owner.tip(&tip);
+    }
+    if latch.has_changed().unwrap_or(false) {
+        let set = latch.borrow_and_update().is_some();
+        owner.latch(set);
+    }
 }
 
 impl<C, R> Owner<C, R>
@@ -839,6 +912,11 @@ where
                         });
                     });
                 }
+                // The model spent these seats when it offered. A span that
+                // finishes before the sample below can return the door to
+                // the count last reported, and a suppressed sample would
+                // leave the model short of the door.
+                self.seats = None;
             }
             Err(refusal) => {
                 let max = self
