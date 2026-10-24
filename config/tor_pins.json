@@ -20,6 +20,7 @@
   "bundle_url": "https://archive.torproject.org/tor-package-archive/torbrowser/{bundle_version}/tor-expert-bundle-{bundle_target}-{bundle_version}.tar.gz",
   "source_url": "https://dist.torproject.org/tor-{tor_version}.tar.gz",
   "source_signature_url": "https://dist.torproject.org/tor-{tor_version}.tar.gz.sha256sum.asc",
+  "signed_url": "https://github.com/Shekyl-Foundation/shekyl-core/releases/download/tor-macos-{bundle_version}-signed/{bundle_target}-{name}",
   "targets": [
     {
       "os": "linux",
@@ -98,17 +99,41 @@
       "os": "macos",
       "arch": "x86_64",
       "gitian_host": "x86_64-apple-darwin11",
-      "disposition": "unavailable",
-      "reason": "the macOS pin is not adopted until its launch test has run (TB-11)",
-      "pending": "TB-11"
+      "disposition": "pinned",
+      "bundle_version": "15.0.26",
+      "bundle_target": "macos-x86_64",
+      "tor_version": "0.4.9.14",
+      "tarball_sha256": "e1ae4d4a734d28bb590839188511deb3cebc26fcbce9df66d01b2c452060fe95",
+      "executable": "tor",
+      "files": [
+        { "name": "tor", "sha256": "81c00fb8fa85194ad853a9160d8c57029f01aac5e2cdd741b3a057e988a942b9" },
+        { "name": "libevent-2.1.7.dylib", "sha256": "afdbfe863b8dff0d8d23e20073d7f5f1d785fab72df953faa6bc5f2af5933394" }
+      ],
+      "upstream": [
+        { "name": "tor", "sha256": "e249a521aa5b0ff44a39c1dc4b5707ae8cb109d8a26c637b6acbbf6832bf2f14" },
+        { "name": "libevent-2.1.7.dylib", "sha256": "38aea0316e01e1fc52a15941bf523c8bc018ca90655cfa90de568b4a86a82b4b" }
+      ],
+      "licenses": ["docs/tor.txt", "docs/libevent.txt", "docs/openssl.txt"]
     },
     {
       "os": "macos",
       "arch": "aarch64",
       "gitian_host": "aarch64-apple-darwin11",
-      "disposition": "unavailable",
-      "reason": "the macOS pin is not adopted until its launch test has run (TB-11)",
-      "pending": "TB-11"
+      "disposition": "pinned",
+      "bundle_version": "15.0.26",
+      "bundle_target": "macos-aarch64",
+      "tor_version": "0.4.9.14",
+      "tarball_sha256": "a3febb6179152b0b4f56a0f5cc57bf5cc8ecef7db35e7c3e9d5a044c8158c26c",
+      "executable": "tor",
+      "files": [
+        { "name": "tor", "sha256": "23829c8c47c8a13a391d7c0870666d571a65ab71167d0de7b9a560b0a5a76838" },
+        { "name": "libevent-2.1.7.dylib", "sha256": "cc12c96e43d0806e5c1767f6880c96fac3e6d77e7fbc325e47513a4fe1d2eeb2" }
+      ],
+      "upstream": [
+        { "name": "tor", "sha256": "7d5a89b6cec99aab47420040ad86dd5fd5174192e71b6c201b0b10170ba57ebb" },
+        { "name": "libevent-2.1.7.dylib", "sha256": "6dde3faf59255b7cf0cc20d0b3cdf78622266fbf13c534300b8884c76d89b739" }
+      ],
+      "licenses": ["docs/tor.txt", "docs/libevent.txt", "docs/openssl.txt"]
     }
   ]
 }
