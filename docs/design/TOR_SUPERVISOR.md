@@ -805,6 +805,17 @@ the Windows CI job beside the boot-and-stop smoke test (#1072), and in
 - **Slow link:** not run here (no `tc`); it runs on the floor device with
   the soak.
 
+**Re-run, 2026-10-24** (the fixes' build, 4f90d40b7):
+
+- **Boot on a full disk:** held at once with the path, 16.4 kB free and
+  69.7 MB needed (headroom plus the directory cache); no Tor launched. After
+  the space was freed, the retry at the cap brought Tor up in 3 s.
+- **Crash loop:** four quick deaths took the backoff to 8 s. A repeat of the
+  same cause waited for the cap; each change was said within 15 ms. A death
+  after 70 s of usable outbound respawned after 1.2 s (the backoff started
+  again). A death 5 s after a recovery respawned after 2.2 s (no reset
+  inside a cap).
+
 | Case | Expected | Apparatus |
 | --- | --- | --- |
 | kill the Tor child | respawn; the same onion republished; the dialer resumes; no draws while down | a kill by PID (`kill -9`, `taskkill /F`) |
