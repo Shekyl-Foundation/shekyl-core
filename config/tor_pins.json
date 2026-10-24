@@ -12,6 +12,9 @@
     "compiles as unavailable, which is what the binary does today, and is printed by",
     "the gate on every run: an unavailable target is a gap to close (TB-4), and a node",
     "on one announces that it has no managed Tor; it is never refused (TB-2).",
+    "A row may carry \"switched_off\": the record of a ruling that took its target out",
+    "of the release matrix (riscv64 Linux: CA-1). No descriptor builds it; the row stays",
+    "so a source build of that target still compiles, and the gate prints it every run.",
     "A macOS row carries two digest sets (TB-11): files, the Developer ID-signed bytes",
     "that ship and that the binary checks, and upstream, Tor's own as extracted from",
     "the tarball. tor_bundle.py ties them: every byte outside the code signature is Tor's."
@@ -63,7 +66,8 @@
       "arch": "riscv64",
       "gitian_host": "riscv64-linux-gnu",
       "disposition": "unavailable",
-      "reason": "the Tor Project publishes no Expert Bundle for riscv64 Linux"
+      "reason": "the Tor Project publishes no Expert Bundle for riscv64 Linux",
+      "switched_off": "CA-1"
     },
     {
       "os": "freebsd",

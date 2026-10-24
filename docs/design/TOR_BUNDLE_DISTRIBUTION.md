@@ -298,9 +298,14 @@ current" procedure.
    - TB-1: `tor = off` logs the clearnet-only warning on every boot. A node
      with no tor found, which has not declined, warns too (it was an info
      line); TB-2 says what it then does and says.
-   - FreeBSD is an `Unavailable` row with its reason, a ruling (riscv64
+   - FreeBSD is an `Unavailable` row with its reason, a ruling. riscv64
      Linux was one too until it was switched off as a shipped target on
-     2026-10-24; its row stays `Unavailable` for a source build). A row may carry `"pending"`, the work item that will pin
+     2026-10-24: its row stays `Unavailable`, so a source build still
+     compiles, and carries `"switched_off": "CA-1"`, the record of that
+     ruling (`CRYPTO_AUDIT.md` §1). `check_tor_pin_targets.py` holds that
+     no gitian descriptor builds a switched-off row, that every other row
+     is built by one, and prints switched-off rows on every run; `build.rs`
+     and `tor_bundle.py` check the marker's form. A row may carry `"pending"`, the work item that will pin
      it; it compiles as `Unavailable`, so TB-4's two states stand at runtime,
      and `check_tor_pin_targets.py` prints every pending row. None is pending
      now: the macOS rows were, until TB-11 pinned them.

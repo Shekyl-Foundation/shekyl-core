@@ -1025,6 +1025,38 @@ def _(tmp):
     expect(proc, 0, "riscv64-linux-gnu is unavailable pending TB-11")
 
 
+def switched_off_pins(record="CA-1"):
+    pins = base_pins("0" * 64)
+    pins["targets"][1]["switched_off"] = record
+    return pins
+
+
+@tcase("targets: a switched-off row no descriptor builds is reported and passes")
+def _(tmp):
+    proc = targets_tree(tmp, pins=switched_off_pins(), hosts=("x86_64-linux-gnu",))
+    expect(proc, 0, "riscv64-linux-gnu is switched off by CA-1 (source builds only)")
+
+
+@tcase("targets: a switched-off row that a descriptor still builds fails")
+def _(tmp):
+    proc = targets_tree(tmp, pins=switched_off_pins())
+    expect(proc, 1, "whose row in config/tor_pins.json is switched off by CA-1")
+
+
+@tcase("targets: an unmarked row no descriptor builds still fails, naming the marker")
+def _(tmp):
+    proc = targets_tree(tmp, hosts=("x86_64-linux-gnu",))
+    expect(proc, 1, "or mark the row \"switched_off\"")
+
+
+@tcase("targets: switched_off must name a record, not a sentence")
+def _(tmp):
+    for bad in ("off", "ca-1", "CA-", "switched off by Rick", 1):
+        proc = targets_tree(tmp, pins=switched_off_pins(bad), hosts=("x86_64-linux-gnu",))
+        expect(proc, 1, "names the record of the ruling")
+        shutil.rmtree(Path(tmp) / "tree")
+
+
 @tcase("targets: a malformed pin file fails")
 def _(tmp):
     pins = base_pins("0" * 64)

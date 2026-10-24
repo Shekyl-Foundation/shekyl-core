@@ -210,6 +210,21 @@ fn pinned_expr(row: &Value, os: &str, context: &str) -> String {
     )
 }
 
+/// An identifier from a registered family, such as `TB-11` or `CA-1`: the
+/// form of a row's `pending` and `switched_off` fields, which a gate reads
+/// (`scripts/release/tor_bundle.py` `is_work_item` holds the same rule).
+fn is_work_item(value: &Value) -> bool {
+    value
+        .as_str()
+        .and_then(|v| v.rsplit_once('-'))
+        .is_some_and(|(family, number)| {
+            !family.is_empty()
+                && family.bytes().all(|b| b.is_ascii_uppercase())
+                && !number.is_empty()
+                && number.bytes().all(|b| b.is_ascii_digit())
+        })
+}
+
 fn main() {
     let manifest_dir =
         PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("missing CARGO_MANIFEST_DIR"));
@@ -254,6 +269,16 @@ fn main() {
     );
 
     let context = format!("{} [{os}/{arch}]", pins_path.display());
+    // A row may carry `switched_off`: the record of the ruling that took this
+    // target out of the release matrix (riscv64 Linux: CA-1). It still
+    // compiles, which is why the row stays; `check_tor_pin_targets.py` holds
+    // that no gitian descriptor builds it and prints it on every run.
+    if let Some(record) = row.get("switched_off") {
+        assert!(
+            is_work_item(record),
+            "{context}: \"switched_off\" names the record of a ruling such as CA-1, got {record}"
+        );
+    }
     let disposition = match str_field(row, "disposition", &context) {
         "pinned" => {
             assert!(
@@ -271,17 +296,8 @@ fn main() {
             // unavailable target is a gap to close (TB-4). A missing managed
             // Tor is announced, never a startup refusal (TB-2).
             if let Some(pending) = row.get("pending") {
-                let ok = pending
-                    .as_str()
-                    .and_then(|p| p.rsplit_once('-'))
-                    .is_some_and(|(family, number)| {
-                        !family.is_empty()
-                            && family.bytes().all(|b| b.is_ascii_uppercase())
-                            && !number.is_empty()
-                            && number.bytes().all(|b| b.is_ascii_digit())
-                    });
                 assert!(
-                    ok,
+                    is_work_item(pending),
                     "{context}: \"pending\" names a work item such as TB-11, got {pending}"
                 );
             }

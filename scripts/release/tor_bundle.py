@@ -146,7 +146,7 @@ def is_label(value):
 
 def is_work_item(value):
     """An identifier from a registered family, e.g. `TB-11`: what a pending
-    row waits on. A sentence here would be a second `reason`; the point of
+    row waits on, or the record of the ruling a switched-off row cites. A sentence here would be a second `reason`; the point of
     the field is that a gate can read it."""
     if not isinstance(value, str) or "-" not in value:
         return False
@@ -239,6 +239,11 @@ def load_pins(path):
                 f"for {compiled[0]}/{compiled[1]}, not {target[0]}/{target[1]}"
             )
 
+        if "switched_off" in row and not is_work_item(row["switched_off"]):
+            raise Refused(
+                f"{where}: \"switched_off\" names the record of the ruling that took "
+                "this target out of the release matrix, as an identifier such as CA-1"
+            )
         if "pending" in row and (
             row["disposition"] != "unavailable" or not is_work_item(row["pending"])
         ):

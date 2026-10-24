@@ -20,7 +20,12 @@ moves that failure to the pull request.
 
   1. **The pin file's hosts are the gitian descriptors' hosts**, as sets, both
      directions. A descriptor host with no row would fail the release build; a
-     row for a host nothing builds is a pin nobody verifies. A host triple must
+     row for a host nothing builds is a pin nobody verifies. The one exception
+     is declared, not inferred: a row with `"switched_off": "<record>"` is a
+     target taken out of the release matrix by a ruling (riscv64 Linux,
+     CA-1), kept so a source build of it still compiles (`build.rs` refuses a
+     target with no row). Such a row must be built by no descriptor; a
+     descriptor that still builds it contradicts the ruling. A host triple must
      also be the release name of that row's `os` and `arch`: packaging selects
      a row by the triple and `build.rs` selects one by `os`/`arch`, so a swap
      of two triples would ship one bundle and accept another. The pin reader
@@ -48,7 +53,7 @@ moves that failure to the pull request.
   6. **`docs/RELEASE_CHECKLIST.md` names every pinned bundle version** in its
      "Bundled Tor pin current" block, which is a pointer to the pin file and
      has to move with it.
-  7. **Pending rows are printed on every run.** An `unavailable` row with
+  7. **Pending and switched-off rows are printed on every run.** An `unavailable` row with
      `"pending": "<work item>"` names the work that will pin it. Both kinds
      of `unavailable` row compile the same way, so only this gate shows which
      targets are waiting on what. Every `unavailable` row is a gap to close
@@ -175,6 +180,21 @@ def pending_rows(root):
     ]
 
 
+def switched_off_rows(root):
+    """(host, record) for each row taken out of the release matrix by a
+    ruling. Empty when the pin file does not load: `check` reports that."""
+    tor_bundle = load_tor_bundle(root)
+    try:
+        doc = tor_bundle.load_pins(root / "config" / "tor_pins.json")
+    except tor_bundle.Refused:
+        return []
+    return [
+        (row["gitian_host"], row["switched_off"])
+        for row in doc["targets"]
+        if "switched_off" in row
+    ]
+
+
 def check(root):
     problems = []
     tor_bundle = load_tor_bundle(root)
@@ -185,14 +205,24 @@ def check(root):
 
     built = gitian_hosts(root, problems)
     rows = {row["gitian_host"]: row for row in doc["targets"]}
+    switched_off = {host for host, row in rows.items() if "switched_off" in row}
+    shipped = set(rows) - switched_off
     for host in sorted(set(built) - set(rows)):
         problems.append(
             f"{built[host]} builds {host}, which has no row in config/tor_pins.json: "
             "add a pinned row or an unavailable row with its reason"
         )
-    for host in sorted(set(rows) - set(built)):
+    for host in sorted(shipped - set(built)):
         problems.append(
-            f"config/tor_pins.json has a row for {host}, which no gitian descriptor builds"
+            f"config/tor_pins.json has a row for {host}, which no gitian descriptor builds: "
+            "add it to a descriptor, or mark the row \"switched_off\" with the record of the "
+            "ruling that took it out of the release matrix"
+        )
+    for host in sorted(switched_off & set(built)):
+        problems.append(
+            f"{built[host]} builds {host}, whose row in config/tor_pins.json is switched off "
+            f"by {rows[host]['switched_off']}: drop the host from the descriptor or the "
+            "marker from the row"
         )
 
     pinned = [row for row in doc["targets"] if row["disposition"] == "pinned"]
@@ -238,6 +268,8 @@ def main():
     pending = pending_rows(args.root)
     for host, item in pending:
         print(f"tor pin targets: {host} is unavailable pending {item}")
+    for host, record in switched_off_rows(args.root):
+        print(f"tor pin targets: {host} is switched off by {record} (source builds only)")
     if problems:
         for problem in problems:
             print(f"tor pin targets: {problem}", file=sys.stderr)
