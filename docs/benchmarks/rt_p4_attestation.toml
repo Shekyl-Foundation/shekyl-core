@@ -1,0 +1,74 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# RT-P4's attested build: what each registered run that met RT-P4 was built
+# with (RPC_CHANNEL.md §9 RT-P4 and §13 RT-W9, standing check; RT-O22,
+# ruled 2026-10-11; widened 2026-10-22 to every flag source).
+#
+# scripts/ci/check_rt_p4_standing.py compares each entry with what ships
+# today for that entry's target. A difference means RT-P4's result no longer
+# covers the shipped code: the device is re-run under the registered lines,
+# and this entry is set to the new run's settings in the same change that
+# commits the new record.
+#
+# Each value is read at the commit the run's record names, from the files
+# the gate reads now. A run's record states the toolchain, the target, the
+# release profile, `--locked` and `fips203` 0.4.3; the commit fixes the rest.
+# Neither commit had `rust/.cargo/config.toml`, so both runs were built with
+# no rustflags. `+crt-static` reached the MSVC targets on 2026-10-19, after
+# the laptop's run, and the laptop's entry is red until it is re-run with it.
+#
+# What `rustflags` leaves out, and why:
+#   - cmake/BuildRust.cmake gives a cross build `CARGO_TARGET_<T>_RUSTFLAGS`
+#     made of `-C link-arg=` values. They change the link, not the code, and
+#     the gate holds every `-C` in that file to `link-arg=`; anything else
+#     there is unrecognised.
+#   - The gate reads files. A RUSTFLAGS set in a build machine's environment
+#     is outside it (it would also replace the config's flags); the build
+#     sets none for an MSVC target.
+#
+# Re-running a device: build from a pushed commit, so the record can cite it
+# and the clone carries rust/.cargo/config.toml. Commit the new record, and
+# REPLACE that device's entry here with the new run's commit and settings.
+# An old entry kept beside it would stay red, since every entry is compared.
+#
+# Fields:
+#   device            the measured machine, by role
+#   record            the run's record
+#   commit            the commit the run was built from
+#   target            the run's target triple
+#   toolchain         rust/rust-toolchain.toml [toolchain] channel
+#   fips203           the lock file's fips203 version
+#   fips203_checksum  the lock file's fips203 checksum
+#   rustflags         rust/.cargo/config.toml [target.<target>] rustflags
+#   profile_release   rust/Cargo.toml [profile.release], as written
+
+[[run]]
+device = "the floor device (Raspberry Pi 4, Cortex-A72)"
+record = "docs/benchmarks/rt_p4_mlkem_decaps_timing_20261011.md"
+commit = "ba4677446"
+target = "aarch64-unknown-linux-gnu"
+toolchain = "1.94.0"
+fips203 = "0.4.3"
+fips203_checksum = "c8bdb6454f692ca2a2b45cd554c6828c639d7f9c968cf83a678899ec4443a280"
+rustflags = []
+
+[run.profile_release]
+panic = "abort"
+overflow-checks = true
+
+[[run]]
+device = "the maintainer's Windows laptop (Intel Core i9-11950H, Tiger Lake)"
+record = "docs/benchmarks/rt_p4_mlkem_decaps_timing_20261011.md"
+commit = "7b7046579"
+target = "x86_64-pc-windows-msvc"
+toolchain = "1.94.0"
+fips203 = "0.4.3"
+fips203_checksum = "c8bdb6454f692ca2a2b45cd554c6828c639d7f9c968cf83a678899ec4443a280"
+rustflags = []
+
+[run.profile_release]
+panic = "abort"
+overflow-checks = true
