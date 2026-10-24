@@ -210,6 +210,45 @@ where
             self.finish_run(session, response.more, now, out);
             return Ok(());
         }
+        // The first new header hangs off `parent`, or off the last header
+        // skipped above, which `T` or the locator places.
+        let (base, base_height) = {
+            let previous = fresh[0].1.header.previous;
+            if previous == parent {
+                (parent, parent_height)
+            } else {
+                let placed = self.tree.connecting(previous).or_else(|| {
+                    points
+                        .iter()
+                        .find(|(_, hash)| *hash == previous)
+                        .map(|(height, _)| *height)
+                });
+                let Some(height) = placed else {
+                    self.close(session, CloseCause::HeadersForm, out);
+                    return Ok(());
+                };
+                (previous, height)
+            }
+        };
+        // A run is one chain. A response that does not continue the
+        // session's run starts a new run from its own base.
+        let continues = self
+            .peers
+            .get(&session)
+            .and_then(|s| s.run.as_ref())
+            .map(|run| run.chain.checked.last().map_or(run.chain.parent, |c| c.hash) == base);
+        if continues == Some(false) {
+            self.drop_run(session);
+        }
+        // Pending headers are judged above the run's own parent, in `T` or
+        // on main, so a height below the run is read where it lives.
+        let (anchor, anchor_height) = self
+            .peers
+            .get(&session)
+            .and_then(|s| s.run.as_ref())
+            .map_or((base, base_height), |run| {
+                (run.chain.parent, run.chain.parent_height)
+            });
         let cap = self.cap();
         let local_height = self.local.and_then(|local| local.height);
         let depth = fork_depth(local_height, parent_height);
@@ -249,8 +288,8 @@ where
                 .map_or(&[][..], |run| run.chain.checked.as_slice());
             let view = self.view_for(
                 main,
-                parent,
-                parent_height,
+                anchor,
+                anchor_height,
                 Pending::new(earlier, &accepted),
             );
             let connecting = view
@@ -316,7 +355,7 @@ where
             run.adopt_geometry(past_cap);
             run
         } else if let Some(state) = self.peers.get_mut(&session) {
-            state.run = Some(Run::open(parent, parent_height, accepted, past_cap));
+            state.run = Some(Run::open(base, base_height, accepted, past_cap));
             state.run.as_mut().expect("just inserted")
         } else {
             return Ok(());
