@@ -14,8 +14,14 @@
 //! connector that keeps a dial, and lives in `tests/owner.rs`.
 //!
 //! The hub here has no connector installed, so every dial fails at once
-//! as a local close: the failed draw leaves gray, as a real failure does,
-//! and a local close marks nothing in the failed-address memory.
+//! as a local close. Under the gray lifecycle (Rick, 2026-10-24) a failed
+//! test that proves no misbehaviour returns the address to gray with a
+//! cooldown, so it stays seated and is not drawable until the cooldown
+//! ends: a connector whose every address is cooling is stranded, and
+//! recovery re-admits nothing new for it; the clock is what frees the
+//! address, no faster than its cooldown. *Records-was (2026-10-14 to
+//! 2026-10-24): the failed draw left gray, and the stranded wake
+//! re-admitted it.*
 
 use std::net::Ipv4Addr;
 use std::sync::Arc;
@@ -25,7 +31,7 @@ use shekyl_draw_rng::SplitMix64;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_peerlist::{ConnectorId, ListName, NetworkAddress, RefusedSet, Tick};
 use shekyl_seam::{Hub, Route, RoutePublish, SyncPayload};
-use shekyl_timing_engine::ManualClock;
+use shekyl_timing_engine::{Clock, ManualClock};
 use shekyl_transport_layer::Sockets;
 
 const CLEARNET: ConnectorId = ConnectorId::Clearnet;
@@ -37,12 +43,19 @@ fn peer(n: u8) -> NetworkAddress {
     }
 }
 
+/// Past the longest cooldown and its jitter.
+const PAST_COOLDOWN_NANOS: u64 = 2 * shekyl_peerlist::COOLDOWN_CAP_NANOS;
+
 fn dialer() -> Arc<Dialer> {
+    dialer_on(&ManualClock::new(Tick::new(1)))
+}
+
+fn dialer_on(clock: &ManualClock) -> Arc<Dialer> {
     let hub = Hub::new(
         Sockets::new(),
         InboundCeiling::Bounded(8),
         Arc::new(|_post| {}),
-        Arc::new(ManualClock::new(Tick::new(1))),
+        Arc::new(clock.clone()),
     );
     let dialer = Arc::new(Dialer::new(
         hub,
@@ -86,7 +99,7 @@ fn gray(dialer: &Dialer) -> Vec<NetworkAddress> {
         .collect()
 }
 
-/// Dial `address` once: with no connector it fails, and leaves gray.
+/// Dial `address` once: with no connector it fails, and cools in gray.
 fn fail_out(dialer: &Dialer, address: &NetworkAddress, rng: &mut SplitMix64) {
     assert!(
         gray(dialer).contains(address),
@@ -96,37 +109,59 @@ fn fail_out(dialer: &Dialer, address: &NetworkAddress, rng: &mut SplitMix64) {
         dialer.dial(CLEARNET, address, DialAim::Keep, rng).is_none(),
         "no connector: the dial fails at once"
     );
-    assert!(!gray(dialer).contains(address), "{address:?} left gray");
+    assert!(
+        gray(dialer).contains(address),
+        "{address:?} stays gray: a connection problem drops nothing"
+    );
+    assert!(
+        dialer.shared().lists.is_cooling(address),
+        "{address:?} cools after the failed test"
+    );
 }
 
+/// Move the clock past every cooldown, so what cooled is drawable again.
+fn past_cooldowns(clock: &ManualClock) {
+    clock.set(Tick::new(clock.now().get() + PAST_COOLDOWN_NANOS));
+}
+
+/// A configured dead address under recovery is redialled no faster than
+/// its cooldown (the gray lifecycle, test 6e). The failed address cools in
+/// gray; the connector, with nothing drawable, is stranded and re-admits
+/// nothing it does not already hold; wakes inside the cooldown draw
+/// nothing; the first wake past it draws the address again.
 #[test]
-fn a_stranded_connector_re_admits_its_configured_addresses_and_dials() {
-    let dialer = dialer();
+fn a_stranded_connector_redials_a_cooling_configured_address_no_faster_than_its_cooldown() {
+    let clock = ManualClock::new(Tick::new(1));
+    let dialer = dialer_on(&clock);
     let mut rng = SplitMix64::new(1);
     let named = peer(1);
     dialer
         .admit_operator(&named, Tick::new(1), &mut rng)
         .expect("admitted");
     fail_out(&dialer, &named, &mut rng);
-    assert!(gray(&dialer).is_empty(), "the failed draw left gray");
 
-    // Stranded: this wake re-admits and dials nothing.
-    assert!(dialer.choose(CLEARNET, &mut rng).is_none());
-    assert_eq!(
-        gray(&dialer),
-        vec![named.clone()],
-        "re-admitted as configured"
-    );
+    // Stranded, inside the cooldown: every wake re-admits nothing new and
+    // draws nothing.
+    for _ in 0..5 {
+        assert!(dialer.choose(CLEARNET, &mut rng).is_none());
+        assert_eq!(
+            gray(&dialer),
+            vec![named.clone()],
+            "still seated, still cooling"
+        );
+        assert!(dialer.shared().lists.is_cooling(&named));
+    }
 
-    // The next wake draws it.
+    // Past the cooldown the address is drawable, and the wake draws it.
+    past_cooldowns(&clock);
     let (drawn, _aim, _nonce) = dialer
         .choose(CLEARNET, &mut rng)
-        .expect("a stranded connector dials what it re-admitted");
+        .expect("the cooled address is drawn once its cooldown ends");
     assert_eq!(drawn, named);
 }
 
 #[test]
-fn a_healthy_connector_does_not_re_admit_a_dead_add_peer() {
+fn a_healthy_connector_leaves_a_dead_add_peer_cooling() {
     let dialer = dialer();
     let mut rng = SplitMix64::new(2);
     let dead = peer(1);
@@ -135,7 +170,8 @@ fn a_healthy_connector_does_not_re_admit_a_dead_add_peer() {
         .expect("admitted");
     fail_out(&dialer, &dead, &mut rng);
 
-    // A candidate is drawable, so the connector is not stranded.
+    // A candidate is drawable, so the connector is not stranded, and the
+    // dead address is left where its failed test put it: cooling.
     let live = peer(2);
     dialer
         .admit_operator(&live, Tick::new(1), &mut rng)
@@ -143,16 +179,17 @@ fn a_healthy_connector_does_not_re_admit_a_dead_add_peer() {
     let (drawn, _aim, _nonce) = dialer.choose(CLEARNET, &mut rng).expect("a draw");
     assert_eq!(drawn, live);
     assert!(
-        !gray(&dialer).contains(&dead),
-        "a healthy connector leaves a dead --add-peer out"
+        dialer.shared().lists.is_cooling(&dead),
+        "a healthy connector leaves a dead --add-peer cooling, not redrawn"
     );
 }
 
 #[test]
-fn a_declared_closed_network_re_admits_only_its_list() {
-    let dialer = dialer();
+fn a_declared_closed_network_draws_only_its_list_once_its_cooldowns_end() {
+    let clock = ManualClock::new(Tick::new(1));
+    let dialer = dialer_on(&clock);
     let mut rng = SplitMix64::new(3);
-    // Named before the declaration, and failed out of gray.
+    // Named before the declaration, and failed: it cools in gray.
     let outside = peer(9);
     dialer
         .admit_operator(&outside, Tick::new(1), &mut rng)
@@ -164,16 +201,24 @@ fn a_declared_closed_network_re_admits_only_its_list() {
     for address in &population {
         fail_out(&dialer, address, &mut rng);
     }
-    assert!(gray(&dialer).is_empty());
+    // Everything is seated and cooling: the stranded wake has nothing to
+    // re-admit and draws nothing.
+    assert!(dialer.choose(CLEARNET, &mut rng).is_none());
+    assert_eq!(gray(&dialer).len(), 3, "nothing left gray");
 
-    assert!(
-        dialer.choose(CLEARNET, &mut rng).is_none(),
-        "the stranded wake re-admits"
-    );
-    let mut readmitted = gray(&dialer);
-    readmitted.sort();
-    assert_eq!(
-        readmitted, population,
-        "the closed network's list, and not the address named outside it"
-    );
+    // Past the cooldowns, every wake draws from the declared list: the
+    // address named outside it is seated and drawable, and never drawn.
+    // A wake's dial fails at once (no connector), so what it drew is the
+    // address whose failed-test count rose, and it cools again.
+    let failed = |address: &NetworkAddress| dialer.shared().lists.failed_tests(address);
+    for round in 1..=4u32 {
+        past_cooldowns(&clock);
+        assert!(dialer.wake(CLEARNET, &mut rng), "the closed network dials");
+        assert_eq!(failed(&outside), 1, "the outside address is never drawn");
+        assert_eq!(
+            failed(&population[0]) + failed(&population[1]),
+            2 + round,
+            "one member of the list was drawn and failed again"
+        );
+    }
 }

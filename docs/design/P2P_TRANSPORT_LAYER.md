@@ -417,14 +417,18 @@ holds a count, so the destroy post has not run.
   closes both session ends with the cause. The seam inbound drive
   records that cause. `PeerClosed` is the reader's end-of-file and
   nothing else. A silent acceptor is `LevinHandshakeTimeout`. A peer
-  that sends FIN is `PeerClosed`. Forgetting the address is
-  `implicates_address` with the connector: a destination-naming cause
-  counts where the connector's declaration says the destination is
-  authenticated (Rick, 2026-10-13). The naming causes are a rejected
-  Levin handshake and a proxy reply of `0x04`, `0x05`, `0xF0`, `0xF1`,
-  or `0xF2`. So no clearnet cause counts (R2, 2026-10-12), Tor counts
-  those six, and a refused connect counts nowhere. *Records-was: a
-  refused dial and a rejected handshake counted on every connector.*
+  that sends FIN is `PeerClosed`. The cause carries three marks in
+  its spare byte, worth a retry, names the destination, proves
+  misbehaviour (2026-10-24): per kind by default, per reply for a proxy
+  refusal, and the dialer stamps proof on a Levin rejection or a refused
+  list only where the connector's declaration says the destination is
+  authenticated. The lists read only the marks: proof drops the address,
+  anything else cools it. *Records-was: forgetting the address was
+  `implicates_address` with the connector, counting a rejected Levin
+  handshake and a proxy reply of `0x04`, `0x05`, `0xF0`, `0xF1`, or
+  `0xF2` on Tor (Rick, 2026-10-13) and nothing on clearnet (R2,
+  2026-10-12); before that, a refused dial and a rejected handshake
+  counted on every connector.*
 - Rust records the D12 cause through `Sockets::close`. The first
   `CloseResult::Recorded` wins. `AlreadyClosed` leaves that cause
   where the first call put it.

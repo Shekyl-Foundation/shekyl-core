@@ -729,7 +729,7 @@ fn connect_without_a_dialer_is_local() {
         panic!("connect without a dialer admitted a channel");
     };
     assert_eq!(err.kind(), CloseKind::LocalClose);
-    assert!(!err.implicates_address(ConnectorId::Clearnet));
+    assert!(!err.proves_misbehaviour());
 }
 
 #[test]

@@ -5,7 +5,7 @@
 
 [package]
 name = "shekyl-dialer"
-description = "The outbound dialer: which address to dial next and why, the pending attempts, the failed-address memory and the self-connection nonces. Over shekyl-peerlist; the C++ reaches it only through shekyl-ffi (P2P_3_SLICE_3_DIALER_BRIEF.md)."
+description = "The outbound dialer: which address to dial next and why, the pending attempts, the retries within a test and the self-connection nonces. Over shekyl-peerlist; the C++ reaches it only through shekyl-ffi (P2P_3_SLICE_3_DIALER_BRIEF.md)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -58,6 +58,15 @@ impl Attempts {
         }
     }
 
+    /// The attempt waits for its next try (the gray lifecycle, item 3): it
+    /// leaves the pending set, so the wait holds no in-flight slot and
+    /// counts as no `Keep`; the address stays an outstanding draw on the
+    /// lists, so nothing draws it meanwhile. The next try [`Self::begin`]s
+    /// again.
+    pub fn defer(&mut self, address: &NetworkAddress) {
+        self.pending.remove(address);
+    }
+
     /// A kept session closed.
     pub fn session_closed(&mut self, address: &NetworkAddress) {
         self.kept.remove(address);
@@ -79,6 +88,12 @@ impl Attempts {
     #[must_use]
     pub fn in_flight(&self) -> usize {
         self.pending.len()
+    }
+
+    /// The aim of the pending attempt to `address`, if one is pending.
+    #[must_use]
+    pub fn aim_of(&self, address: &NetworkAddress) -> Option<DialAim> {
+        self.pending.get(address).copied()
     }
 
     /// Whether `address` is a pending attempt or a kept session.

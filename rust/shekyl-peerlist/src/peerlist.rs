@@ -25,6 +25,15 @@ use crate::{white_diversity_floor, DISCLOSE_COUNT, WHITE_REFILL_LINE};
 pub trait BanQuery {
     /// Whether `host` is under an active ban at `now`.
     fn is_banned(&mut self, host: IpAddr, now: Tick) -> bool;
+
+    /// Whether this node holds a live kept session to `address` (the gray
+    /// lifecycle, Rick 2026-10-24: expiry skips such an address). The
+    /// dialer answers from the seam's board; a caller with no sessions
+    /// leaves the default, which is none.
+    fn has_live_session(&mut self, address: &NetworkAddress) -> bool {
+        let _ = address;
+        false
+    }
 }
 
 impl BanQuery for BanList {
@@ -348,7 +357,8 @@ impl Peerlist {
         let refused = self.refused;
         let partition = self.partition_mut(connector);
         partition.demote_banned(&mut |ip, at| bans.is_banned(ip, at), now, rng);
-        partition.expire(now, rng);
+        partition.thaw(now);
+        partition.expire(now, &mut |address| bans.has_live_session(address), rng);
         Self::end_disclose_early_if_due(connector, partition, now);
         partition.disclose(white_diversity_floor(), &refused, now, rng)
     }
@@ -411,7 +421,8 @@ impl Peerlist {
     ) -> Option<NetworkAddress> {
         let partition = self.partition_mut(connector);
         partition.demote_banned(&mut |ip, at| bans.is_banned(ip, at), now, rng);
-        partition.expire(now, rng);
+        partition.thaw(now);
+        partition.expire(now, &mut |address| bans.has_live_session(address), rng);
         partition.draw_white(rng)
     }
 
@@ -427,7 +438,8 @@ impl Peerlist {
     ) -> &'a mut Partition {
         let partition = self.partition_mut(connector);
         partition.demote_banned(&mut |ip, at| bans.is_banned(ip, at), now, rng);
-        partition.expire(now, rng);
+        partition.thaw(now);
+        partition.expire(now, &mut |address| bans.has_live_session(address), rng);
         partition
     }
 
@@ -520,18 +532,28 @@ impl Peerlist {
             // (§2.6): whenever white crosses, not only at a disclosure.
             DialOutcome::SessionAccepted(address) => {
                 partition.confirm(address, now, rng, WhiteClock::Move);
+                partition.clear_failed_tests(address);
                 Self::end_disclose_early_if_due(connector, partition, now);
             }
             DialOutcome::Confirmed(address) => {
                 partition.confirm(address, now, rng, WhiteClock::Hold);
+                partition.clear_failed_tests(address);
                 Self::end_disclose_early_if_due(connector, partition, now);
             }
-            // Dropped whatever the cause (Rick, 2026-10-16; #1092). The
-            // cause decides the failed-address memory, not membership, and
-            // on clearnet no cause implicates the address: the drop is what
-            // clears a dead host that only ever times out.
-            DialOutcome::DialFailed(address, _) | DialOutcome::PeerlistRefused(address) => {
-                partition.drop_outstanding(address);
+            // The gray lifecycle (Rick, 2026-10-24): an address leaves gray
+            // only on authenticated proof of misbehaviour, never for a
+            // connection problem. The lists read the cause's marks and
+            // nothing else. A test that proves misbehaviour drops the
+            // outstanding draw; any other failed test returns it to gray
+            // with a cooldown. *Records-was (2026-10-16, #1092): dropped
+            // whatever the cause.*
+            DialOutcome::DialFailed(address, cause)
+            | DialOutcome::PeerlistRefused(address, cause) => {
+                if cause.proves_misbehaviour() {
+                    partition.drop_outstanding(address);
+                } else {
+                    partition.cool(address, now, rng);
+                }
             }
             // The strand refused the payload. White is unchanged. An
             // outstanding draw returns to drawable gray.
@@ -539,6 +561,33 @@ impl Peerlist {
                 partition.settle_outstanding(address);
             }
         }
+    }
+
+    /// A kept session to `address` ended at `now` (the gray lifecycle,
+    /// item 1): its white clock moves to the close time, so the 24 hours
+    /// of expiry count from the end of the connection. An address that is
+    /// not white is left as it is. Returns whether a clock moved.
+    pub fn session_ended(&mut self, address: &NetworkAddress, now: Tick) -> bool {
+        match Self::connector_of(address) {
+            Some(connector) => self.partition_mut(connector).session_ended(address, now),
+            None => false,
+        }
+    }
+
+    /// Whether `address` is gray and cooling after a failed test: seated,
+    /// written to the file as any gray address, not drawable until its
+    /// cooldown ends.
+    #[must_use]
+    pub fn is_cooling(&self, address: &NetworkAddress) -> bool {
+        Self::connector_of(address).is_some_and(|c| self.partition(c).is_cooling(address))
+    }
+
+    /// How many failed tests in a row `address` has had: the rung of its
+    /// cooldown ladder. Zero after a confirmation, or for an address that
+    /// never failed.
+    #[must_use]
+    pub fn failed_tests(&self, address: &NetworkAddress) -> u32 {
+        Self::connector_of(address).map_or(0, |c| self.partition(c).failed_tests(address))
     }
 
     /// White entries of `connector` at `now`, after demotion (D4) and
