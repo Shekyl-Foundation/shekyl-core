@@ -40,7 +40,11 @@ rm -rf "$DATA"; mkdir -p "$DATA"
 # Nothing reads the daemon's stdin without `--console`, so a closed stdin
 # is fine. The grammar's spellings (INPUT_GRAMMAR.md §5): both connectors
 # off is the offline posture.
-"$BIN" --network regtest --clearnet off --tor off --dev-difficulty 1 \
+# --dev-rpc: generateblocks is an armed test lever, served only with this
+# row once dispatch reads the method table's armed column (DRS-X flip).
+# Today's C++ path ignores it; the daemon announces it at start, checked
+# below once RPC is up.
+"$BIN" --network regtest --clearnet off --tor off --dev-difficulty 1 --dev-rpc \
   --rpc-admin-listen "127.0.0.1:$PORT" \
   --data-dir "$DATA" --log-file "$DATA/shekyld.log" --log-level info < /dev/null > "$DATA/daemon.out" 2>&1 &
 DPID=$!
@@ -66,6 +70,14 @@ if [ "${READY:-0}" != 1 ]; then
   kill -9 "$DPID" 2>/dev/null; exit 9
 fi
 echo "daemon ready"
+
+# The armed row, as the daemon announced it at start (IG-8; the text is
+# pinned by shekyl-daemon-config's the_armed_lever_switch_announces_itself).
+# grep reads the file directly: no pipe carries the verdict.
+if ! grep -qF "development lever set: dev-rpc=true" "$DATA/daemon.out"; then
+  echo "the daemon did not announce dev-rpc at start; tail of its log:"; tail -20 "$DATA/daemon.out"
+  kill -9 "$DPID" 2>/dev/null; exit 10
+fi
 
 curl -s -m 60 -X POST "http://127.0.0.1:$PORT/json_rpc" -H 'Content-Type: application/json' \
   -d "{\"jsonrpc\":\"2.0\",\"id\":\"0\",\"method\":\"generateblocks\",\"params\":{\"amount_of_blocks\":$BLOCKS,\"wallet_address\":\"$ADDR\",\"starting_nonce\":0}}" \

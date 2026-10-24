@@ -834,5 +834,29 @@ class RunnerImport(unittest.TestCase):
         self.assertIs(R.A.artifact_refusals, D.artifact_refusals)
 
 
+class ArmedRowAnnouncementTest(unittest.TestCase):
+    """The generating seed is held to announcing --dev-rpc, in this spawn's
+    part of an appended log only."""
+
+    def test_reads_only_what_follows_the_offset(self):
+        with tempfile.TemporaryDirectory() as d:
+            log = os.path.join(d, "seed.log")
+            with open(log, "w", encoding="utf-8") as fh:
+                fh.write("shekyld: " + R.ARMED_ROW_ANNOUNCEMENT + "\n")
+            offset = R._log_size(log)
+            self.assertTrue(R._announced_since(log, 0))
+            self.assertFalse(R._announced_since(log, offset),
+                             "an earlier run's line is not this spawn's")
+            with open(log, "a", encoding="utf-8") as fh:
+                fh.write("shekyld: " + R.ARMED_ROW_ANNOUNCEMENT + "\n")
+            self.assertTrue(R._announced_since(log, offset))
+
+    def test_a_missing_log_has_announced_nothing(self):
+        with tempfile.TemporaryDirectory() as d:
+            log = os.path.join(d, "absent.log")
+            self.assertEqual(R._log_size(log), 0)
+            self.assertFalse(R._announced_since(log, 0))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
