@@ -920,7 +920,10 @@ async fn a_request_flood_beside_cpp_bytes_is_bounded_by_the_serving_queue() {
             .await,
         "the relay did not reach the C++ handler"
     );
-    assert!(node.inject(id, request_headers(vec![*tip.as_bytes()])).await);
+    assert!(
+        node.inject(id, request_headers(vec![*tip.as_bytes()]))
+            .await
+    );
     assert!(
         node.wait(LIMIT, |_| answers
             .lock()
