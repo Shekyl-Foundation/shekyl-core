@@ -122,8 +122,9 @@ use super::{
     Coded, CompleteTreeSet, CoverageGaps, CurveTreeState, DrawableDigest, FirstPayingHeight,
     HeldShard, Holdings, IssuedDigest, IssuedDraw, LayerHash, LeafCount, OutKey, OutTx, PoolRecord,
     ProbeCell, PropertyCell, RMarket, RecordedPow, RuleSetInForce, SchemaVersion,
-    SettlementEpochBlocks, SettlementRow, SigmaWorkMilli, SlashLogEntry, SlashedHolding, TreeDepth,
-    TxIndex, TxOutputIndices, UndoEntry, UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
+    SettlementEpochBlocks, SettlementRow, SigmaWorkMilli, SlashLogEntry, SlashedHolding,
+    SupportCount, SupportIssued, TreeDepth, TxIndex, TxOutputIndices, UndoEntry, UndoLog,
+    PROPERTY_CELLS, SCHEMA_VERSION,
 };
 use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
 use crate::pool::PoolSchemaVersion;
@@ -841,6 +842,36 @@ impl Fixtures for BlockDraws {
         ]
     }
 }
+impl Fixtures for SupportIssued {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            (
+                "unpassed",
+                SupportIssued {
+                    shard: ShardId::from_raw(7),
+                    passed: false,
+                },
+            ),
+            (
+                "passed",
+                SupportIssued {
+                    shard: ShardId::from_raw(64),
+                    passed: true,
+                },
+            ),
+        ]
+    }
+}
+
+impl Fixtures for SupportCount {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            ("none", SupportCount::new(0)),
+            ("capped", SupportCount::new(10)),
+            ("wide", SupportCount::new(0x0102_0304)),
+        ]
+    }
+}
 impl Fixtures for CompleteTreeSet {
     fn fixtures() -> Vec<(&'static str, Self)> {
         let id = |b: u8| PCanonicalId::from_bytes([b; 32]);
@@ -1476,6 +1507,8 @@ snapshotted_codecs! {
     IssuedDraw => codec_snapshot_issued_draw in Chain,
     IssuedDigest => codec_snapshot_issued_digest in Chain,
     BlockDraws => codec_snapshot_block_draws in Chain,
+    SupportCount => codec_snapshot_support_count in Chain,
+    SupportIssued => codec_snapshot_support_issued in Chain,
     DrawableDigest => codec_snapshot_drawable_digest in Chain,
     CompleteTreeSet => codec_snapshot_complete_tree_set in Chain,
     SettlementEpoch => codec_snapshot_settlement_epoch in Chain,

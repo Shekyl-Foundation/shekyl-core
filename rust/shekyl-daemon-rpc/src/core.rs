@@ -73,7 +73,8 @@ pub enum TxSlot {
         prunable_hash: [u8; 32],
         double_spend_seen: bool,
         relayed: bool,
-        received_timestamp: u64,
+        /// `None` where the pool keeps no receive time (the Rust pool, S7).
+        received_timestamp: Option<u64>,
     },
 }
 
@@ -272,7 +273,7 @@ fn slot_of(
             prunable_hash: e.prunable_hash,
             double_spend_seen: e.double_spend_seen != 0,
             relayed: e.relayed != 0,
-            received_timestamp: e.received_timestamp,
+            received_timestamp: Some(e.received_timestamp),
         }),
         _ => None,
     }

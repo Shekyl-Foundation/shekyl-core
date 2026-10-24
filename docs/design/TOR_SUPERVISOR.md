@@ -79,7 +79,7 @@ The relay is deliberately absent from that table; see `TSR-F9`.
 | `TSR-Q9`: the managed Tor looks like every other Tor client (Rick, 2026-10-19) | Every choice the supervisor makes about Tor's behaviour is tested against this, increment 3's included. It bears on `TSR-M6`'s open question, how to keep a crash before Tor's first `state` write from re-picking guards. Of the two answers, `AvoidDiskWrites 0` until that first write is the more ordinary behaviour, because a stock client writes its `state` promptly, and Rick expects it to be chosen. The other, counting respawns before that write, changes nothing Tor does. Increment 3 settles it with evidence, including whether switching `AvoidDiskWrites` on the owning connection after the first write is reliable |
 | `TSR-Q10`: a managed Tor that is absent or fails is announced, never refused (Rick, 2026-10-19) | The daemon starts. A pin failure does not execute the binary (`TSR-F6`). What the node does, which `OwnTx` applies, and which `ManagedTorFix` values the message offers, is the posture table in this section. Health is false meanwhile (`TSR-Q4`). A failed start is a Process cause (§4.4), not this row. TB-2 matches this row |
 | `TSR-Q11`: no automatic fallback (Rick, 2026-10-20) | A fallback that gives up privacy happens only by the operator's own act: whoever can block or break the node's Tor would otherwise choose its transport. The `Clearnet::Off` row of the posture table is that rule. `ClearnetOn` and `ClearnetOnly` are the operator's act, and the node does not apply them |
-| `TSR-Q12`: the operator sees the reason through RPC (Rick, 2026-10-20) | Restricted Status (the node's own CLI and GUI) carries: the posture, which is the `tor` and `clearnet` settings; the Tor state, as §4.3's projection (Restarting, Restarting (held), Bootstrapping, Usable, Degraded); the cause, as a typed §5 value, and that cause's detail, not English text; since when, and the respawn count; whether the node is syncing, and over what; `OwnTx`, from the posture table; and the fixes that apply, as `ManagedTorFix` values from the posture table. Cause advice and those fixes are typed values, never sentences: clock, directory, file-limit and upgrade advice are the cause's detail, not `ManagedTorFix` variants. Unrestricted Health keeps `TSR-Q4`'s one boolean: Tor's state and timing would let an outsider tie the RPC endpoint to the onion's lifetime (§8). One rendering: a single Rust function in a shared crate turns the typed values into words, under rule 81; `shekyl-cli` uses it, the GUI uses it or its exact strings, and the daemon's posture log line renders from it, so the log and both clients say the same thing. The wallet's send flow reads `OwnTx` from Status before broadcasting, as the posture table defines. Health is not that signal. Who builds what: increment 3 exposes all of it as one typed read and renders the posture line from the same values (§12); the RW round ([`RPC_WIRE.md`](RPC_WIRE.md)) names the Status and Health fields. The GUI's daemon, running as the same user, gets Status: `RPC_CHANNEL.md` RT-15 makes a same-user caller on the owner-only socket or pipe the owner, with every grant, and names that default install as its case (confirmed by the RW lane, 2026-10-20). A GUI pointed at a service-mode daemon, another user's or another machine's goes over the channel and sees Status only if its enrolment grants it; the plaintext loopback listener carries only the `view` preset, which has no Status; `shekyl-cli` and `shekyl-gui-wallet` display it, the GUI's item tracked in that repository |
+| `TSR-Q12`: the operator sees the reason through RPC (Rick, 2026-10-20) | The `status` grant (`RPC_CHANNEL.md` §6.1; outside the `view` preset, so the node's own CLI and GUI) carries: the posture, which is the `tor` and `clearnet` settings; the Tor state, as §4.3's projection (Restarting, Restarting (held), Bootstrapping, Usable, Degraded); the cause, as a typed §5 value, and that cause's detail, not English text; since when, and the respawn count; whether the node is syncing, and over what; `OwnTx`, from the posture table; and the fixes that apply, as `ManagedTorFix` values from the posture table. Cause advice and those fixes are typed values, never sentences: clock, directory, file-limit and upgrade advice are the cause's detail, not `ManagedTorFix` variants. The `health` grant keeps `TSR-Q4`'s one boolean: Tor's state and timing would let an outsider tie the RPC endpoint to the onion's lifetime (§8). One rendering: a single Rust function in a shared crate turns the typed values into words, under rule 81; `shekyl-cli` uses it, the GUI uses it or its exact strings, and the daemon's posture log line renders from it, so the log and both clients say the same thing. The wallet's send flow reads `OwnTx` from Status before broadcasting, as the posture table defines. Health is not that signal. Who builds what: increment 3 exposes all of it as one typed read and renders the posture line from the same values (§12); the RW round ([`RPC_WIRE.md`](RPC_WIRE.md)) names the Status and Health fields. The GUI's daemon, running as the same user, is RT-15's owner case, and no leg carries that grant yet: `RPC_CHANNEL.md` RT-15's owner-only socket or pipe is RT-W10's to build and is not authorized (§13), so the sidecar reaches Status over the owning connection the GUI launches it with (`GS-Q1`, Rick 2026-10-22; core increment `GS-C3`, the GUI sync lane), and RT-W10's leg follows for every other same-user client. A GUI pointed at a service-mode daemon, another user's or another machine's goes over the channel and sees Status only if its enrolment grants it; the plaintext loopback listener carries only the `view` preset, which has no Status; `shekyl-cli` and `shekyl-gui-wallet` display it, the GUI's item tracked in that repository |
 | `TSR-Q13`: polling, and typed values on the wire (Rick, 2026-10-20) | Clients read Status on their normal refresh: state changes are rare and already announced in the log. Pushed events wait until the RW round has a subscription mechanism. The wire carries typed causes, their detail, `OwnTx`, and `ManagedTorFix` values, never sentences: sentences would be reworded differently by each client and could not be translated, while typed values keep the meaning fixed and leave the words to the one renderer (`TSR-Q12`) |
 | `TSR-Q6`: the private-network cases | Best effort, not a gate. The private network is chutney or a hand-built `TestingTorNetwork` from the pinned bundle, at the implementer's choice; it runs §7's two cases if it can be made to work, is never a latency source, and its absence blocks nothing |
 
@@ -281,14 +281,14 @@ stop" holds only after the dialer stop; #1066's step 9 is sequential today.
 else the routine leaves beside the directory are named under that prefix, and
 the sweep removes files as well as directories.
 
-**TSR-F15 (medium; TB lane). macOS has no managed Tor yet, and §7 is what
-gives it one.** Both macOS rows are `unavailable` with `"pending": "TB-11"` in
-`config/tor_pins.json`; TB-11 makes a target pinned only with a launch test,
-and the digests are already verified (`TOR_BUNDLE_DISTRIBUTION.md` §4). §7's
-macOS cases are that launch test: the change whose job passes them adopts the
-macOS pin and removes its `pending` marker. TB-11's Windows launch test is
-this lane's Windows entry, the `windows-x86_64` entry of `tor-pin-verify`;
-§7's Windows cases are the supervisor's acceptance tests, not the pin's gate.
+**TSR-F15 (medium; TB lane). macOS has a managed Tor; §7's macOS cases are
+the supervisor's acceptance tests there.** Both macOS rows are pinned at
+15.0.26 (TB-11, Rick 2026-10-23), with the Developer ID-signed `tor` and
+`libevent` as what ships (`TOR_BUNDLE_DISTRIBUTION.md` §4). TB-11's launch
+test on both platforms is `tor-pin-verify`: its Windows entry and its two
+macOS entries, which run the live tests on the exact signed bytes. §7's
+Windows and macOS cases are the supervisor's acceptance tests, not the pin's
+gate.
 Windows run of 2026-10-15 (the Windows development host): the pinned
 `tor.exe` imports 21 libraries, all the operating system's (8 System32
 libraries and 13 UCRT apisets), with no delay-loads; the pin's `imports`
@@ -712,12 +712,11 @@ Every question of this round is ruled (§1).
 
 Linux, Windows, macOS; the Pi 4 is the Linux host for the soak. Each case
 asserts the announced transitions, the recovery, the RPC fields, **and that the
-gray list is unchanged by the outage**. On macOS these cases are TB-11's
-launch test; on Windows TB-11's launch test is `tor-pin-verify`'s Windows
-entry, and these cases are the supervisor's acceptance tests (`TSR-F15`). The
-respawn case runs in the Windows CI job
-beside the boot-and-stop smoke test (#1072), and in a macOS job once one
-exists.
+gray list is unchanged by the outage**. TB-11's launch test is
+`tor-pin-verify`'s Windows and macOS entries; on both platforms these cases
+are the supervisor's acceptance tests (`TSR-F15`). The respawn case runs in
+the Windows CI job beside the boot-and-stop smoke test (#1072), and in
+`tor-pin-verify`'s macOS entries.
 
 | Case | Expected | Apparatus |
 | --- | --- | --- |
@@ -853,11 +852,14 @@ included: p50 3.89 s, max 4.08 s. The cold seed for that run bootstrapped in
   supervisor's input; `tor-socks` is the operator route; `TSR-F8`; DC-F12 is a
   prerequisite (`TSR-F12`).
 - **RPC:** `TSR-Q4` (ruled): one Health boolean, this node can originate over
-  an address-hiding connector now. `TSR-Q12` lists the restricted Status
+  an address-hiding connector now. `TSR-Q12` lists the `status` grant's
   fields, as typed values (`TSR-Q13`). The RW round names the Status and Health
-  fields; the GUI's same-user daemon already grants Status (RT-15).
-- **TB:** §7's macOS rows are TB-11's macOS launch test; the Windows launch
-  test is `tor-pin-verify`'s Windows entry (`TSR-F15`).
+  fields. No leg carries Status to the GUI yet: RT-15's socket or pipe is
+  RT-W10's, not authorized; the sidecar reaches Status over the owning
+  connection it is launched with (`GS-Q1`; core increment `GS-C3`).
+- **TB:** TB-11's launch test is `tor-pin-verify`'s Windows and macOS
+  entries; §7's cases on both platforms are the supervisor's acceptance
+  tests (`TSR-F15`).
 - **Wallet and clients:** the send flow reads `OwnTx` from Status before
   broadcasting (§1). `Held` is reported held, not sent. `ClearnetOnly` is
   sent over clearnet and is not reported held, and Health stays false.

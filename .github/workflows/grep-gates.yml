@@ -280,6 +280,11 @@ jobs:
             python3 scripts/ci/check_drop_verdict_classification.py
           run_one "PoW test-seam containment (CEN-D2)" \
             scripts/ci/check_pow_test_seam.sh
+          # DX-Q3 Q4: the node's template draws its coinbase secret and its
+          # draw commitment from the OS; the scenario's reproducible values
+          # stay in test code.
+          run_one "The template's secrets are the OS's (DX-Q3 Q4)" \
+            scripts/ci/check_template_secrets.sh
           run_one "RandomX symbol-isolation negatives (rule 50)" \
             scripts/ci/test_check_randomx_symbol_isolation.sh
           run_one "LV-1: levin wire-constant parity" \

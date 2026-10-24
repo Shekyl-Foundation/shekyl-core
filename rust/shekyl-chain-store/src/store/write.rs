@@ -488,6 +488,9 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
                     SettlementCheck::PassesExceedCounted { persona, shard } => {
                         settlement(SettlementFault::PassesExceedCounted { persona, shard })
                     }
+                    SettlementCheck::SupportPassesExceedCounted { persona } => {
+                        settlement(SettlementFault::SupportPassesExceedCounted { persona })
+                    }
                     SettlementCheck::BeaconNotRecorded => {
                         settlement(SettlementFault::BeaconNotRecorded)
                     }
@@ -923,9 +926,9 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     }
 
     /// Finish a batch that must not land: poison still halts the writer,
-    /// and the transaction is aborted on drop either way. The producer's
-    /// read ([`ChainStore::inspect`](super::ChainStore::inspect)) uses this
-    /// so a template read is not a commit.
+    /// and the transaction is aborted on drop either way.
+    /// [`ChainStore::inspect`](super::ChainStore::inspect) uses this so a
+    /// read through a batch is not a commit.
     pub(super) fn abandon<R, E: From<StoreError>>(self, outcome: Result<R, E>) -> Result<R, E> {
         if let Some(err) = self.halted() {
             return Err(err);

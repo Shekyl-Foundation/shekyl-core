@@ -124,6 +124,13 @@ network itself is always given on the command line, because it chooses the
 file. A file that anyone but root and the daemon's account can write is
 refused.
 
+A file that holds a SOCKS username or password is read only by root, by
+the daemon's account, and by the daemon's group while that account is the
+group's only member (a service install keeps the file `root:shekyl`
+`0640`). The check reads the accounts the system enumerates, so accounts
+from a directory service that does not list its accounts are not seen by
+it: keep the daemon's group a local group.
+
 <!-- shekyld-example: begin -->
 ```toml
 # shekyld configuration file. Every key is an option's name, spelled
@@ -303,7 +310,7 @@ whether `option_set` changes it while the daemon runs.
 | `rpc-cors-origin` | list of web origin (`none` for empty) | `none` | both | no | Web origins allowed to call the RPC; `none` denies all. `*` is refused. |
 | `rpc-connections-max` | integer ≥ 1 | `25` | both | no | The RPC connection cap. |
 | `console` | switch | — | command line | no | Run the interactive console. |
-<!-- development rows, live on the named networks only and not in --help: dev-clearnet-encrypt (testnet, stagenet, regtest); dev-sync (regtest); dev-relay-cover (testnet, stagenet, regtest); dev-difficulty (regtest); dev-pow-seed-epoch-blocks (regtest); dev-pow-seed-epoch-lag (regtest); dev-settlement-epoch-blocks (regtest); dev-archival-reorg-depth (regtest) -->
+<!-- development rows, live on the named networks only and not in --help: dev-clearnet-encrypt (testnet, stagenet, regtest); dev-sync (regtest); dev-relay-cover (testnet, stagenet, regtest); dev-rpc (testnet, stagenet, regtest); dev-difficulty (regtest); dev-pow-seed-epoch-blocks (regtest); dev-pow-seed-epoch-lag (regtest); dev-settlement-epoch-blocks (regtest); dev-archival-reorg-depth (regtest) -->
 <!-- shekyld-options: end -->
 
 The daemon's RPC takes no login and no TLS: inbound RPC is plaintext, on

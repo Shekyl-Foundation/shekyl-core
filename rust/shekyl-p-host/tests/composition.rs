@@ -352,9 +352,14 @@ fn is_refused(response: &[u8]) -> bool {
 }
 
 /// One request as a daemon at `own_height` sends it: the ruled route plus
-/// the 72-byte request header the countersignature binds.
+/// the 73-byte request header the countersignature binds.
 async fn fetch(addr: SocketAddr, path: &str, own_height: u64) -> Vec<u8> {
-    let header = pass_request_header_bytes(&NONCE, anchor_for(own_height), &ANCHOR_HASH);
+    let header = pass_request_header_bytes(
+        shekyl_archival_retention::PassStream::Economy,
+        &NONCE,
+        anchor_for(own_height),
+        &ANCHOR_HASH,
+    );
     let mut s = TcpStream::connect(addr).await.expect("connect");
     s.write_all(
         format!(
@@ -569,6 +574,7 @@ async fn the_serving_endpoint_outlives_tor_incarnations() {
     let (signature, framed) = envelope_of(&first);
     verify_pass_transcript(
         key.public_key(),
+        shekyl_archival_retention::PassStream::Economy,
         &NONCE,
         anchor_for(10_000),
         &ANCHOR_HASH,
@@ -582,6 +588,7 @@ async fn the_serving_endpoint_outlives_tor_incarnations() {
     assert!(
         verify_pass_transcript(
             key.public_key(),
+            shekyl_archival_retention::PassStream::Economy,
             &NONCE,
             anchor_for(10_000),
             &ANCHOR_HASH,
@@ -632,6 +639,7 @@ async fn the_serving_endpoint_outlives_tor_incarnations() {
     );
     verify_pass_transcript(
         key.public_key(),
+        shekyl_archival_retention::PassStream::Economy,
         &NONCE,
         anchor_for(10_000),
         &ANCHOR_HASH,
@@ -1792,6 +1800,7 @@ async fn the_gate_follows_the_daemon_not_the_principals_scan() {
     let (signature, framed) = envelope_of(&served);
     verify_pass_transcript(
         key.public_key(),
+        shekyl_archival_retention::PassStream::Economy,
         &NONCE,
         anchor_for(CHAIN_TIP),
         &ANCHOR_HASH,

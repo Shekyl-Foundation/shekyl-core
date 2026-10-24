@@ -1,7 +1,8 @@
 # Bundled-Tor integration lane (2d-2 SP-T0; TOR_BUNDLE_DISTRIBUTION.md TB-6 to
 # TB-11). Manual-dispatch because it needs a real, network-reaching `tor` (the
 # unit lane only compile-checks the `#[ignore]`d live tests). For each pinned
-# target, Linux and Windows, against ONE GPG-verified Expert Bundle, it runs:
+# target, Linux, Windows and macOS, against ONE GPG-verified Expert Bundle, it
+# runs:
 #
 #  1. pin-match (SP-T0c) — the `bundled_tor_matches_recorded_pin` KAT is
 #     `#[ignore]`d on the unit lane, so without this a mistranscribed digest in
@@ -30,6 +31,16 @@
 # when every failure in it is a bootstrap timeout and the pin-match test is
 # not among them; any other failure is final on the first attempt. A retry is
 # annotated on the run.
+#
+# macOS (TB-11): what ships is Shekyl's Developer ID-signed copy of Tor's
+# `tor` and `libevent`, a release asset on this repository (`signed_url` in
+# config/tor_pins.json). The fetch step downloads it beside the tarball and
+# checks each file against its pinned shipped digest; stage and verify prove
+# every byte outside the signature is Tor's, from the GPG-verified tarball. The
+# runner has no Developer ID and needs none: it runs the exact signed bytes a
+# user gets, against the pin compiled into the binary, with the hardened
+# runtime and library validation live. Nothing here signs or re-signs. The
+# signing host proves the signature at pin time (RELEASE_CHECKLIST.md).
 #
 # There is no bundle-version input. The version, the URL and every digest come
 # from config/tor_pins.json, so the lane always verifies the pin of record and
@@ -107,6 +118,33 @@ jobs:
               binary::tests::bundled_tor_matches_recorded_pin
             daemon_tests: >-
               ephemeral::tests::ephemeral_onion_publishes_and_rotates_across_boots
+          # macOS: the inheritance and death-watcher tests are Linux-only
+          # (`cfg(target_os = "linux")`); the wallet's three respawn tests are
+          # `cfg(unix)` and run here.
+          - label: macos-aarch64
+            host: aarch64-apple-darwin11
+            runner: macos-latest
+            exe: tor
+            client_floor: 8
+            wallet_floor: 4
+            daemon_floor: 1
+            client_tests: >-
+              binary::tests::bundled_tor_matches_recorded_pin
+            daemon_tests: >-
+              ephemeral::tests::ephemeral_onion_publishes_and_rotates_across_boots
+          # The last x86_64 macOS image GitHub offers (retired with macOS 15
+          # in 2027); the pin's x86_64 row is tested on Intel, not Rosetta.
+          - label: macos-x86_64
+            host: x86_64-apple-darwin11
+            runner: macos-15-intel
+            exe: tor
+            client_floor: 8
+            wallet_floor: 4
+            daemon_floor: 1
+            client_tests: >-
+              binary::tests::bundled_tor_matches_recorded_pin
+            daemon_tests: >-
+              ephemeral::tests::ephemeral_onion_publishes_and_rotates_across_boots
     env:
       HOST: ${{ matrix.target.host }}
       TOR_EXE: ${{ matrix.target.exe }}
@@ -145,6 +183,8 @@ jobs:
           # `fetch` downloads the tarball the pin file names and refuses one
           # whose SHA-256 differs. Its verdict is its own exit status; the
           # URL is read separately for the signature.
+          # For macOS it also downloads the signed files (the release asset),
+          # each refused unless it matches its pinned shipped digest.
           python3 scripts/release/tor_bundle.py fetch --host "$HOST" --sources tor-sources
           url="$(python3 scripts/release/tor_bundle.py tarball-url --host "$HOST")"
           bundle="tor-sources/$(basename "$url")"
@@ -185,7 +225,10 @@ jobs:
           # pluggable_transports/, which the gate refuses.
           python3 scripts/release/tor_bundle.py stage --host "$HOST" --sources tor-sources \
             --dest "$TOR_DIR" --licenses "${TOR_DIR%/tor}/tor-licenses"
-          python3 scripts/release/tor_bundle.py verify --host "$HOST" --dir "$TOR_DIR"
+          # verify re-checks the directory and the cached tarball. A row that
+          # carries upstream also ties each staged file to Tor's bytes.
+          python3 scripts/release/tor_bundle.py verify --host "$HOST" --dir "$TOR_DIR" \
+            --sources tor-sources
 
       - uses: dtolnay/rust-toolchain@1.94.0
 

@@ -46,7 +46,7 @@ use std::sync::Arc;
 /// there; only the argument made them dead. Serving it as intended is the
 /// safer reading of unambiguous intent, and pre-genesis there is no client
 /// relying on the gap.
-const RESTRICTED_BLOCK_COUNT: usize = 1000;
+use crate::methods::RESTRICTED_BLOCK_COUNT;
 
 /// `/get_blocks_by_height.bin` (+ `/getblocks_by_height.bin`) — served
 /// natively (RK-4b).

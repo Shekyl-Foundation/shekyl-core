@@ -44,6 +44,8 @@ pub(crate) struct Gated {
     /// Forms hashing under a held branch cache now, and the most at once.
     branch_forms: AtomicUsize,
     branch_forms_max: AtomicUsize,
+    /// Set: the next clock read panics.
+    clock_panics: std::sync::atomic::AtomicBool,
 }
 
 impl Gated {
@@ -58,6 +60,7 @@ impl Gated {
             prepared: AtomicUsize::new(0),
             branch_forms: AtomicUsize::new(0),
             branch_forms_max: AtomicUsize::new(0),
+            clock_panics: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -111,6 +114,10 @@ impl Substrate for Gated {
     type Held = ();
 
     fn local_clock(&self) -> Result<Timestamp, Self::Fault> {
+        assert!(
+            !self.clock_panics.load(Ordering::Acquire),
+            "the clock failed"
+        );
         Ok(Timestamp::from_raw(CLOCK_START.to_raw() + 1_000_000))
     }
 
@@ -940,34 +947,22 @@ async fn tip_changed_is_published_once_per_commit_and_never_before_it() {
     cleanup(&path);
 }
 
-/// The tip follower posts the miner's job for the block after the tip
-/// while the node is synced, and withdraws it while the node is behind
-/// (DX-Q2 item 5); each new tip posts a new job.
+/// The tip follower posts the node's job for the block after the tip
+/// while chain sync says the node is synced, and withdraws it, saying
+/// why, while it is not (DX-Q2 item 5, DX-Q3 Q13); each new tip posts a
+/// new job.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_follower_posts_while_synced_and_withdraws_while_behind() {
-    use crate::follower::{JobSeat, MinerFeed, TemplateSource};
+    use crate::follower::{NoJob, Posting};
+    use shekyl_chain_sync::SyncState;
     use shekyl_miner::JobBoard;
-    /// A source that posts the block a driver mined at the job's height.
-    struct Mined(Vec<crate::scenario::Mined>);
-    impl TemplateSource for Mined {
-        fn template(
-            &self,
-            facts: &crate::connector::ChainFacts,
-        ) -> Option<(shekyl_wire::Block, Vec<shekyl_wire::Transaction>)> {
-            let at = usize::try_from(facts.connecting.to_raw()).ok()?;
-            let mined = self.0.get(at)?;
-            Some((
-                mined.template.block.clone(),
-                mined.template.transactions.clone(),
-            ))
-        }
-    }
     let mut y = Scenario::open("service-follow-y");
     let blocks = y.mine(3).await;
     let path = tmp("service-follow");
     let board = Arc::new(JobBoard::new());
-    let (synced_tx, synced) = tokio::sync::watch::channel(false);
-    let (sender, found) = shekyl_miner::found_blocks();
+    let (sync_tx, sync) = tokio::sync::watch::channel(SyncState::NoView);
+    let (seat, sender, mut posting) =
+        crate::test_support::job_seat(&board, Some(crate::test_support::harness_keys()), sync);
     let service = Service::start(
         Arc::new(open_store(&path)),
         RULES,
@@ -975,14 +970,7 @@ async fn the_follower_posts_while_synced_and_withdraws_while_behind() {
         ServiceConfig::default(),
         Budget::of_host(),
         super::Follow {
-            job: Some(JobSeat {
-                board: Arc::clone(&board),
-                miner: Some(MinerFeed {
-                    source: Arc::new(Mined(blocks.clone())),
-                    synced,
-                    found,
-                }),
-            }),
+            job: Some(seat),
             pool: None,
         },
     );
@@ -993,9 +981,12 @@ async fn the_follower_posts_while_synced_and_withdraws_while_behind() {
             followed.wait_for(|at| *at >= seq).await.expect("following");
         }
     };
-    until_followed(&mut followed, 0).await;
-    assert!(board.posted().is_none(), "behind: nothing to mine");
-    synced_tx.send_replace(true);
+    posting
+        .wait_for(|now| *now == Posting::Withdrawn(NoJob::NotSynced(SyncState::NoView)))
+        .await
+        .expect("the reason");
+    assert!(board.posted().is_none(), "no view: nothing to mine");
+    sync_tx.send_replace(SyncState::Synced);
     let started = std::time::Instant::now();
     while board.posted().is_none() {
         assert!(
@@ -1015,7 +1006,12 @@ async fn the_follower_posts_while_synced_and_withdraws_while_behind() {
         BlockHeight::from_raw(1),
         "the next tip's job"
     );
-    synced_tx.send_replace(false);
+    let generation = board.posted().expect("posted").0;
+    assert_eq!(*posting.borrow(), Posting::Posted(generation));
+    let behind = SyncState::Following {
+        verified_to: BlockHeight::from_raw(0),
+    };
+    sync_tx.send_replace(behind);
     let started = std::time::Instant::now();
     while board.posted().is_some() {
         assert!(
@@ -1024,6 +1020,10 @@ async fn the_follower_posts_while_synced_and_withdraws_while_behind() {
         );
         tokio::task::yield_now().await;
     }
+    posting
+        .wait_for(|now| *now == Posting::Withdrawn(NoJob::NotSynced(behind)))
+        .await
+        .expect("the reason");
     // The sender is still alive. Stop closes the inbox, so the sink ends
     // without it being dropped.
     service.stop().await.expect("stops");
@@ -1088,59 +1088,155 @@ async fn a_fork_past_the_cap_is_answered_at_the_door_without_a_hash_or_a_pin() {
     cleanup(&path);
 }
 
-/// A source that panics: the follower dies on its first post.
-struct Panics;
-
-impl crate::follower::TemplateSource for Panics {
-    fn template(
-        &self,
-        _facts: &crate::connector::ChainFacts,
-    ) -> Option<(shekyl_wire::Block, Vec<shekyl_wire::Transaction>)> {
-        panic!("the template source failed");
-    }
+/// An external miner reads the posted job, writes eight bytes at its
+/// extra-nonce offset and a nonce at its header-nonce offset, and the
+/// door connects the block it made (DX-Q3, N2). The coinbase's draw
+/// commitment is the OS's, never the fixture value.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_external_miner_writes_at_the_reported_offsets_and_the_door_connects_it() {
+    use crate::follower::Posting;
+    let board = Arc::new(shekyl_miner::JobBoard::new());
+    let (_sync_tx, sync) = tokio::sync::watch::channel(shekyl_chain_sync::SyncState::Synced);
+    let (service, path, mut posting) = service_mining(
+        "service-external-miner",
+        Arc::new(Gated::new()),
+        &board,
+        sync,
+    );
+    posting
+        .wait_for(|now| matches!(now, Posting::Posted(_)))
+        .await
+        .expect("a job");
+    let (_, job) = board.posted().expect("posted");
+    assert_eq!(job.height, BlockHeight::ZERO, "genesis, on an empty store");
+    let conforming = shekyl_wire::tx_extra::CONFORMING_DRAW_COMMITMENT;
+    assert!(
+        !job.block
+            .miner_transaction
+            .prefix
+            .extra
+            .windows(32)
+            .any(|window| window == conforming.as_bytes()),
+        "the draw commitment is the OS's"
+    );
+    let mut blob = job.block.serialize();
+    let extra = job.offsets.extra_nonce();
+    let written = [0xA5, 0x5A, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06];
+    blob[extra..extra + 8].copy_from_slice(&written);
+    let nonce = job.offsets.header_nonce();
+    blob[nonce..nonce + 4].copy_from_slice(&0xDEAD_BEEF_u32.to_le_bytes());
+    let made = shekyl_wire::Block::from_bytes(&blob).expect("the written blob parses");
+    assert_eq!(made.header.nonce, 0xDEAD_BEEF);
+    let reply = service
+        .door()
+        .offer_local(ArrivalTag(7), blob, Vec::new())
+        .await
+        .expect("room")
+        .reply;
+    assert!(
+        matches!(reply, Reply::Connected { hash, .. } if hash == made.hash()),
+        "{reply:?}"
+    );
+    service.stop().await.expect("stops");
+    cleanup(&path);
 }
 
-/// A source with nothing to mine.
-struct Nothing;
-
-impl crate::follower::TemplateSource for Nothing {
-    fn template(
-        &self,
-        _facts: &crate::connector::ChainFacts,
-    ) -> Option<(shekyl_wire::Block, Vec<shekyl_wire::Transaction>)> {
-        None
+/// Every job the producer posts while the tip moves under it describes
+/// one chain state (DX-Q3, Q3; the `get_miner_data` FOLLOWUPS row's
+/// value-shaped test): its block names the tip below its height as the
+/// parent, and its coinbase claims that height. A job may be stale; it is
+/// never torn between two tips.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_job_built_while_blocks_connect_never_pairs_two_tips() {
+    use crate::follower::Posting;
+    let mut y = Scenario::open("service-one-snapshot-y");
+    let blocks = y.mine(24).await;
+    let board = Arc::new(shekyl_miner::JobBoard::new());
+    let (_sync_tx, sync) = tokio::sync::watch::channel(shekyl_chain_sync::SyncState::Synced);
+    let (service, path, posting) =
+        service_mining("service-one-snapshot", Arc::new(Gated::new()), &board, sync);
+    let watcher = {
+        let board = Arc::clone(&board);
+        let mut posting = posting.clone();
+        tokio::spawn(async move {
+            let mut seen = Vec::new();
+            while posting.changed().await.is_ok() {
+                if let Posting::Posted(generation) = *posting.borrow_and_update() {
+                    if let Some((at, job)) = board.posted() {
+                        if at == generation {
+                            seen.push(job);
+                        }
+                    }
+                }
+            }
+            seen
+        })
+    };
+    for block in &blocks {
+        offer_all(&service.door(), 1, std::slice::from_ref(block)).await;
     }
+    let mut followed = service.followed();
+    followed
+        .wait_for(|at| *at >= u64::try_from(blocks.len()).expect("fits"))
+        .await
+        .expect("following");
+    service.stop().await.expect("stops");
+    let seen = watcher.await.expect("the watcher");
+    assert!(
+        seen.len() >= 2,
+        "the subject: jobs while blocks connected ({})",
+        seen.len()
+    );
+    for job in &seen {
+        let parent = job
+            .height
+            .to_raw()
+            .checked_sub(1)
+            .map_or(BlockHash::NULL, |below| {
+                blocks[usize::try_from(below).expect("fits")].hash
+            });
+        assert_eq!(
+            job.block.header.previous, parent,
+            "the job at {:?} names another tip's block",
+            job.height
+        );
+        assert_eq!(
+            job.block.miner_transaction.prefix.inputs,
+            vec![shekyl_wire::Input::Gen(job.height.to_raw())],
+            "the coinbase claims the job's height"
+        );
+    }
+    y.close().await;
+    cleanup(&path);
 }
 
-/// A service over a fresh store whose follower feeds `board` from
-/// `source`, synced as `synced` says.
+/// A service over a fresh store whose follower feeds `board`, paying
+/// the harness wallet, under the sync state `sync` reads.
 fn service_mining(
     name: &str,
+    substrate: Arc<Gated>,
     board: &Arc<shekyl_miner::JobBoard>,
-    source: Arc<dyn crate::follower::TemplateSource>,
-    synced: tokio::sync::watch::Receiver<bool>,
-) -> (Service<Gated>, std::path::PathBuf) {
+    sync: tokio::sync::watch::Receiver<shekyl_chain_sync::SyncState>,
+) -> (
+    Service<Gated>,
+    std::path::PathBuf,
+    tokio::sync::watch::Receiver<crate::follower::Posting>,
+) {
     let path = tmp(name);
-    let (_sender, found) = shekyl_miner::found_blocks();
+    let (seat, _sender, posting) =
+        crate::test_support::job_seat(board, Some(crate::test_support::harness_keys()), sync);
     let service = Service::start(
         Arc::new(open_store(&path)),
         RULES,
-        Arc::new(Gated::new()),
+        substrate,
         ServiceConfig::default(),
         Budget::of_host(),
         super::Follow {
-            job: Some(crate::follower::JobSeat {
-                board: Arc::clone(board),
-                miner: Some(crate::follower::MinerFeed {
-                    source,
-                    synced,
-                    found,
-                }),
-            }),
+            job: Some(seat),
             pool: None,
         },
     );
-    (service, path)
+    (service, path, posting)
 }
 
 /// The tip follower dying is the service's fault: it stops, the door
@@ -1149,8 +1245,12 @@ fn service_mining(
 #[tokio::test(flavor = "multi_thread")]
 async fn the_tip_followers_death_fails_the_service_and_closes_the_door() {
     let board = Arc::new(shekyl_miner::JobBoard::new());
-    let (_synced_tx, synced) = tokio::sync::watch::channel(true);
-    let (service, path) = service_mining("service-follower-dies", &board, Arc::new(Panics), synced);
+    let (_sync_tx, sync) = tokio::sync::watch::channel(shekyl_chain_sync::SyncState::Synced);
+    // The follower reads the clock first when it builds a template.
+    let substrate = Arc::new(Gated::new());
+    substrate.clock_panics.store(true, Ordering::Release);
+    let (service, path, _posting) =
+        service_mining("service-follower-dies", substrate, &board, sync);
     let door = service.door();
     let started = std::time::Instant::now();
     while door.room() != 0 {
@@ -1176,10 +1276,11 @@ async fn a_closed_sync_channel_withdraws_the_job_and_following_goes_on() {
     let mut y = Scenario::open("service-sync-closed-y");
     let blocks = y.mine(2).await;
     let board = Arc::new(shekyl_miner::JobBoard::new());
-    let (synced_tx, synced) = tokio::sync::watch::channel(true);
-    let (service, path) = service_mining("service-sync-closed", &board, Arc::new(Nothing), synced);
+    let (sync_tx, sync) = tokio::sync::watch::channel(shekyl_chain_sync::SyncState::Synced);
+    let (service, path, posting) =
+        service_mining("service-sync-closed", Arc::new(Gated::new()), &board, sync);
     let mut followed = service.followed();
-    drop(synced_tx);
+    drop(sync_tx);
     offer_all(&service.door(), 1, &blocks).await;
     tokio::time::timeout(
         std::time::Duration::from_secs(20),
@@ -1189,6 +1290,12 @@ async fn a_closed_sync_channel_withdraws_the_job_and_following_goes_on() {
     .expect("the follower still follows")
     .expect("following");
     assert!(board.posted().is_none(), "withdrawn: nothing says synced");
+    assert_eq!(
+        *posting.borrow(),
+        crate::follower::Posting::Withdrawn(crate::follower::NoJob::NotSynced(
+            shekyl_chain_sync::SyncState::NoView
+        ))
+    );
     service
         .stop()
         .await
@@ -1227,6 +1334,16 @@ async fn a_block_this_node_mined_waits_for_a_seat_and_then_connects() {
         height: blocks[2].height,
         seed: BlockHash::NULL,
         difficulty: shekyl_difficulty::Difficulty::from_raw(1),
+        offsets: blocks[2]
+            .template
+            .block
+            .blob_offsets()
+            .expect("a built coinbase reserves the extra nonce"),
+        next_seed: None,
+        reward: shekyl_units::AtomicUnits::ZERO,
+        median_weight: 0,
+        already_generated: shekyl_units::AtomicUnits::ZERO,
+        listed: Vec::new(),
     });
     let postings = crate::follower::Postings::default();
     postings
@@ -1308,7 +1425,17 @@ fn coinbase_block() -> shekyl_wire::Block {
                 unlock_time: 0,
                 inputs: vec![Input::Gen(7)],
                 outputs: Vec::new(),
-                extra: Vec::new(),
+                // The shape every built coinbase opens with: its pubkey, the
+                // reserved extra nonce, the draw commitment.
+                extra: shekyl_wire::tx_extra::build_coinbase_extra(
+                    [0x44; 32],
+                    &[0; shekyl_wire::tx_extra::COINBASE_NONCE_BYTES],
+                    shekyl_wire::tx_extra::DrawCommitment::from_bytes([0x55; 32]),
+                    0,
+                    &[],
+                    &[],
+                )
+                .expect("a leafless coinbase extra"),
             },
             ct: Ct::Null(CtBase {
                 enc_amounts: Vec::new(),
@@ -1323,8 +1450,11 @@ fn coinbase_block() -> shekyl_wire::Block {
 fn miner_follow(
     path: &std::path::Path,
     found: shekyl_miner::FoundInbox,
-    synced: tokio::sync::watch::Receiver<bool>,
+    sync: tokio::sync::watch::Receiver<shekyl_chain_sync::SyncState>,
 ) -> Service<Gated> {
+    let (posting, _posted) = tokio::sync::watch::channel(crate::follower::Posting::Withdrawn(
+        crate::follower::NoJob::Starting,
+    ));
     Service::start(
         Arc::new(open_store(path)),
         RULES,
@@ -1334,11 +1464,9 @@ fn miner_follow(
         super::Follow {
             job: Some(crate::follower::JobSeat {
                 board: Arc::new(shekyl_miner::JobBoard::new()),
-                miner: Some(crate::follower::MinerFeed {
-                    source: Arc::new(Nothing),
-                    synced,
-                    found,
-                }),
+                keys: None,
+                miner: crate::follower::MinerFeed { found, sync },
+                posting,
             }),
             pool: None,
         },
@@ -1362,8 +1490,9 @@ fn stop_returns_while_a_found_block_sender_lives() {
                 let path = tmp("service-stop-sender");
                 let (sender, found) = shekyl_miner::found_blocks();
                 sender_tx.send(sender).expect("the test holds the sender");
-                let (_synced_tx, synced) = tokio::sync::watch::channel(false);
-                let service = miner_follow(&path, found, synced);
+                let (_sync_tx, sync) =
+                    tokio::sync::watch::channel(shekyl_chain_sync::SyncState::NoView);
+                let service = miner_follow(&path, found, sync);
                 service.stop().await.expect("stops");
                 cleanup(&path);
             });
@@ -1394,8 +1523,9 @@ fn stop_answers_a_found_block_waiting_inside_the_door() {
             runtime.block_on(async {
                 let path = tmp("service-stop-inflight");
                 let (sender, found) = shekyl_miner::found_blocks();
-                let (_synced_tx, synced) = tokio::sync::watch::channel(false);
-                let service = miner_follow(&path, found, synced);
+                let (_sync_tx, sync) =
+                    tokio::sync::watch::channel(shekyl_chain_sync::SyncState::NoView);
+                let service = miner_follow(&path, found, sync);
                 let mut followed = service.followed();
                 followed.borrow_and_update();
                 tokio::time::timeout(FOLLOWER_START_WITHIN, followed.changed())
@@ -1409,6 +1539,14 @@ fn stop_answers_a_found_block_waiting_inside_the_door() {
                     height: BlockHeight::from_raw(1),
                     seed: BlockHash::from_bytes([1; 32]),
                     difficulty: shekyl_difficulty::Difficulty::from_raw(1),
+                    offsets: block
+                        .blob_offsets()
+                        .expect("a built coinbase reserves the extra nonce"),
+                    next_seed: None,
+                    reward: shekyl_units::AtomicUnits::ZERO,
+                    median_weight: 0,
+                    already_generated: shekyl_units::AtomicUnits::ZERO,
+                    listed: Vec::new(),
                 });
                 assert!(sender.deliver(shekyl_miner::Found {
                     block,
@@ -1436,4 +1574,106 @@ fn stop_answers_a_found_block_waiting_inside_the_door() {
         Ok(false) => panic!("the stop path panicked"),
         Err(_) => panic!("stop deadlocked on a found block waiting in the door"),
     }
+}
+
+/// A door that cannot read the store answers a local arrival once, as
+/// `StoreUnreadable`, and returns: no room is waited out, and an unreadable
+/// store is not no room. The entry runs on its own thread and runtime, so a
+/// spin fails this test at the deadline instead of hanging it. Red edit: the
+/// bound read's failure answers `NoRoom`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_door_that_cannot_read_the_store_answers_a_local_arrival_once() {
+    let mut y = Scenario::open("service-unreadable-y");
+    let blocks = y.mine(1).await;
+    let (service, path) = service(
+        "service-unreadable",
+        Arc::new(Gated::new()),
+        ServiceConfig::default(),
+    );
+    let door = service.door();
+    door.admission
+        .refuse_reads
+        .store(true, std::sync::atomic::Ordering::Release);
+    let block = blocks[0].template.block.serialize();
+    let (sent, answered) = std::sync::mpsc::channel();
+    let entry = door.clone();
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a runtime");
+        let answer = runtime.block_on(entry.offer_local(ArrivalTag(601), block, Vec::new()));
+        drop(sent.send(answer.map(|tagged| tagged.reply)));
+    });
+    let answer = answered.recv_timeout(std::time::Duration::from_secs(10));
+    door.admission
+        .refuse_reads
+        .store(false, std::sync::atomic::Ordering::Release);
+    service.stop().await.expect("stops");
+    y.close().await;
+    cleanup(&path);
+    assert_eq!(
+        answer.expect("answered within the deadline, not spun"),
+        Err(Refusal::StoreUnreadable)
+    );
+}
+
+/// The local-arrival entry (`DRS_X_STORE_FLIP.md` DX-Q3, Q6). A local block that
+/// meets a full window waits for its seat and then connects; after a stop,
+/// the closed door answers `Stopped`.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_local_entry_waits_for_its_seat_and_a_closed_door_answers_stopped() {
+    let mut y = Scenario::open("service-local-entry-y");
+    let blocks = y.mine(4).await;
+    let substrate = Arc::new(Gated::new());
+    let (service, path) = service(
+        "service-local-entry",
+        Arc::clone(&substrate),
+        ServiceConfig {
+            room: NonZeroUsize::new(2).expect("two"),
+        },
+    );
+    let door = service.door();
+    offer_all(&door, 1, &blocks[..1]).await;
+    let local = |tag: u64, mined: &Mined| {
+        let door = door.clone();
+        let block = mined.template.block.serialize();
+        let bodies = mined
+            .template
+            .transactions
+            .iter()
+            .map(shekyl_wire::Transaction::serialize)
+            .collect();
+        tokio::spawn(async move { door.offer_local(ArrivalTag(tag), block, bodies).await })
+    };
+    // Block 1 is held in form: at a window of two it holds the one seat
+    // local arrivals share, so block 2 must wait for it.
+    substrate.hold(blocks[1].hash);
+    let first = local(501, &blocks[1]);
+    substrate.until_held().await;
+    let second = local(502, &blocks[2]);
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    // Read before the gate opens, asserted after it: a failure must not
+    // leave block 1 held in form for the runtime to wait on.
+    let waited = !second.is_finished();
+    substrate.open(blocks[1].hash);
+    assert!(waited, "the second local block waits for its seat");
+    for (task, mined) in [(first, &blocks[1]), (second, &blocks[2])] {
+        let tagged = task.await.expect("joined").expect("not oversize");
+        assert_eq!(
+            tagged.reply,
+            Reply::Connected {
+                height: mined.height,
+                hash: mined.hash
+            }
+        );
+    }
+    service.stop().await.expect("stops");
+    let after = local(503, &blocks[3])
+        .await
+        .expect("joined")
+        .expect("not oversize");
+    assert_eq!(after.reply, Reply::Stopped, "a closed door answers Stopped");
+    y.close().await;
+    cleanup(&path);
 }

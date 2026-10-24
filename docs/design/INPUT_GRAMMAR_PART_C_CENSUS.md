@@ -329,7 +329,7 @@ Rust mirrors live in `T/archival_reads.rs`; the C++ structs are canonical for th
 | key | wire type | notes | source |
 |---|---|---|---|
 | `join_settlement_epoch` | u64 | | `H:1130` |
-| `is_foundation_complete_tree` | bool | | `H:1131` |
+| `is_support_complete_tree` | bool | | `H:1131` |
 | `bad_intervals_flat` | [u64] | **flattened** `[start, end_exclusive, …]` pairs | `H:1126-1132` |
 
 **`shard_row_t`** (`H:1137-1148`):

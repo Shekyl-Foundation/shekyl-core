@@ -12,8 +12,14 @@ blake2 = { version = "0.10", default-features = false }
 # The class byte's mask is one keystream byte of the ChaCha20 the AEAD
 # already uses (RPC_CHANNEL.md section 4.4); the version chacha20poly1305 0.10
 # depends on.
-chacha20 = { version = "0.9", default-features = false }
+# `zeroize` wipes the keystream state when the mask's cipher is dropped
+# (close-out F4, rule 35).
+chacha20 = { version = "0.9", default-features = false, features = ["zeroize"] }
 chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
+# Not used directly: chacha20poly1305 0.10 takes poly1305 0.8 without its
+# optional `zeroize`, so the MAC's r, h and pad would outlive the AEAD call.
+# This edge turns it on (close-out F4).
+poly1305 = { version = "0.8", default-features = false, features = ["zeroize"] }
 zeroize = { workspace = true }
 
 [dev-dependencies]

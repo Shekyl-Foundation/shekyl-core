@@ -572,8 +572,10 @@ fn a_settled_epoch_without_its_complete_tree_set_is_si31() {
 /// Settlement's integrity checks that the validator observes
 /// (`Corrupt::SettlementIntegrity`) are SI-25, each under its own fault:
 /// the index not folding to its digest, the fold counting more passes
-/// than draws it selected, and the settlement beacon not recorded strictly
-/// below the connecting height. The second has no store state behind it —
+/// than draws it selected, the support fold counting more passes for a
+/// tree than support draws it was issued, and the settlement beacon not
+/// recorded strictly below the connecting height. The pass-count arms have
+/// no store state behind them —
 /// it is a defect of the fold — so this mapping is its only witness. The
 /// beacon arm is unreachable on a schedule whose grace covers the response
 /// window, and the mapping is what keeps a re-pin from settling nothing.
@@ -591,6 +593,10 @@ fn a_settlement_integrity_fault_is_si25_under_the_check_it_failed() {
         (
             SettlementCheck::PassesExceedCounted { persona, shard },
             SettlementFault::PassesExceedCounted { persona, shard },
+        ),
+        (
+            SettlementCheck::SupportPassesExceedCounted { persona },
+            SettlementFault::SupportPassesExceedCounted { persona },
         ),
         (
             SettlementCheck::BeaconNotRecorded,

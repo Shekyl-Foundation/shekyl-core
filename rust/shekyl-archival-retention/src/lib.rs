@@ -92,6 +92,7 @@ pub mod serve_eligibility;
 pub mod settlement_select;
 pub mod shard_coverage;
 pub mod shard_view_hash;
+pub mod support_draw;
 pub mod wire;
 
 pub use admission::codes as admission_codes;
@@ -192,8 +193,8 @@ pub use emission_verify::{
 pub use pass_anchor::{
     anchor_depth_covers_response_window, pass_countersignature_message, pass_delivery_digest,
     pass_request_header_bytes, response_window_outrunning_anchor, PassAnchorWindow,
-    PassAnchorWindowError, PassDeliveryHasher, PassRequestHeader, PASS_ANCHOR_DEPTH_BLOCKS,
-    PASS_ANCHOR_HASH_LEN, PASS_ANCHOR_HEIGHT_LEN, PASS_ANCHOR_LAG_BLOCKS,
+    PassAnchorWindowError, PassDeliveryHasher, PassRequestHeader, PassStream,
+    PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_HASH_LEN, PASS_ANCHOR_HEIGHT_LEN, PASS_ANCHOR_LAG_BLOCKS,
     PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT, PASS_ANCHOR_WINDOW_LEN, PASS_COUNTERSIGNATURE_MESSAGE_LEN,
     PASS_DELIVERY_DIGEST_CUSTOMIZATION, PASS_DELIVERY_DIGEST_LEN, PASS_NONCE_LEN,
     PASS_REQUEST_HEADER_LEN,
@@ -228,10 +229,10 @@ pub use reward_arithmetic::{
     WORK_MILLI_SCALE,
 };
 pub use secret_draw::{
-    challenge_nonce, draw_commit, draw_count, draw_horizon, draw_target, select_draw,
-    serve_credit_batch_commitment, DrawTarget, SelectedDraw, CHALLENGE_NONCE_CUSTOMIZATION,
-    CHALLENGE_READS, COUNT_CAP_BASE_MULTIPLE, COUNT_CAP_MULTIPLE, DRAW_ATTEMPTS,
-    DRAW_COMMIT_CUSTOMIZATION, DRAW_CUSTOMIZATION, DRAW_HORIZON_FLOOR,
+    challenge_nonce, commit_and_discard, draw_commit, draw_count, draw_horizon, draw_target,
+    select_draw, serve_credit_batch_commitment, DrawTarget, SelectedDraw,
+    CHALLENGE_NONCE_CUSTOMIZATION, CHALLENGE_READS, COUNT_CAP_BASE_MULTIPLE, COUNT_CAP_MULTIPLE,
+    DRAW_ATTEMPTS, DRAW_COMMIT_CUSTOMIZATION, DRAW_CUSTOMIZATION, DRAW_HORIZON_FLOOR,
     SERVE_CREDIT_BATCH_CUSTOMIZATION,
 };
 pub use segment_freeze::{
@@ -244,6 +245,12 @@ pub use shard_coverage::{
 };
 pub use shard_view_hash::{
     shard_view_hash, ArchivalTx, ShardViewHasher, SHARD_VIEW_HASH_CUSTOMIZATION,
+};
+pub use support_draw::{
+    select_support_shard, settle_support, support_challenge_nonce, support_counted, support_offset,
+    support_slot, support_span, SupportSettlementKey, SupportUnissued,
+    SUPPORT_CHALLENGE_NONCE_CUSTOMIZATION, SUPPORT_DRAWS_PER_EPOCH, SUPPORT_DRAW_CUSTOMIZATION,
+    SUPPORT_SELECT_SHARD,
 };
 pub use wire::{
     encode_path, hybrid_countersignature, split_countersignature, ArchivalServeCreditPruned,

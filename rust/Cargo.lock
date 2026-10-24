@@ -2983,6 +2983,7 @@ dependencies = [
  "cpufeatures 0.2.17",
  "opaque-debug",
  "universal-hash",
+ "zeroize",
 ]
 
 [[package]]
@@ -3869,6 +3870,7 @@ version = "3.1.0"
 dependencies = [
  "curve25519-dalek",
  "hex",
+ "rand 0.8.6",
  "serde_json",
  "sha3",
  "shekyl-archival-retention",
@@ -3881,6 +3883,7 @@ dependencies = [
  "shekyl-types",
  "shekyl-units",
  "thiserror",
+ "zeroize",
 ]
 
 [[package]]
@@ -3945,6 +3948,7 @@ dependencies = [
  "curve25519-dalek",
  "hex",
  "kameo",
+ "rand 0.8.6",
  "redb",
  "serde",
  "serde_json",
@@ -3953,12 +3957,14 @@ dependencies = [
  "shekyl-block-template",
  "shekyl-chain-rules",
  "shekyl-chain-store",
+ "shekyl-chain-sync",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
  "shekyl-curve-generators",
  "shekyl-daemon-rpc",
  "shekyl-difficulty",
  "shekyl-economics",
+ "shekyl-engine-core",
  "shekyl-fcmp",
  "shekyl-harness-spender",
  "shekyl-harness-wallet",
@@ -4248,8 +4254,10 @@ dependencies = [
 name = "shekyl-daemon-config"
 version = "3.1.0"
 dependencies = [
+ "libc",
  "rustix",
  "shekyl-address",
+ "shekyl-crypto-pq",
  "shekyl-logging",
  "shekyl-onion-v3",
  "shekyl-options",
@@ -4752,6 +4760,7 @@ dependencies = [
  "redb",
  "shekyl-chain-rules",
  "shekyl-chain-store",
+ "shekyl-difficulty",
  "shekyl-store-codec",
  "shekyl-types",
  "shekyl-units",
@@ -4763,6 +4772,7 @@ dependencies = [
 name = "shekyl-miner"
 version = "3.1.0"
 dependencies = [
+ "curve25519-dalek",
  "shekyl-address",
  "shekyl-block-template",
  "shekyl-crypto-pq",
@@ -4772,6 +4782,7 @@ dependencies = [
  "shekyl-thread-ledger",
  "shekyl-thread-priority",
  "shekyl-types",
+ "shekyl-units",
  "shekyl-wire",
  "tracing",
 ]
@@ -4805,9 +4816,12 @@ dependencies = [
  "redb",
  "rustix",
  "shekyl-address",
+ "shekyl-block-template",
  "shekyl-chain-ingest",
  "shekyl-chain-rules",
  "shekyl-chain-store",
+ "shekyl-chain-sync",
+ "shekyl-crypto-pq",
  "shekyl-daemon-config",
  "shekyl-daemon-rpc",
  "shekyl-difficulty",
@@ -4824,10 +4838,12 @@ dependencies = [
  "shekyl-timing-engine",
  "shekyl-transport-layer",
  "shekyl-types",
+ "shekyl-units",
  "shekyl-win-sec",
  "shekyl-wire",
  "tempfile",
  "thiserror",
+ "tokio",
  "tracing",
 ]
 
@@ -4838,6 +4854,7 @@ dependencies = [
  "blake2",
  "chacha20",
  "chacha20poly1305",
+ "poly1305",
  "x25519-dalek",
  "zeroize",
 ]
@@ -5142,6 +5159,7 @@ dependencies = [
  "shekyl-rpc-types",
  "shekyl-wire",
  "tokio",
+ "zeroize",
 ]
 
 [[package]]

@@ -112,14 +112,39 @@ fn the_cheapest_leave_first_under_weight_pressure() {
     pool.set_limits(Limits {
         max_weight: 2 * weight(),
     });
-    assert_eq!(pool.evict(&[]).unwrap(), vec![(cheap, Evicted::OverWeight)]);
+    assert_eq!(
+        pool.evict(&[], &[]).unwrap(),
+        vec![(cheap, Evicted::OverWeight)]
+    );
     pool.set_limits(Limits {
         max_weight: weight(),
     });
     assert_eq!(
-        pool.evict(&[]).unwrap(),
+        pool.evict(&[], &[]).unwrap(),
         vec![(middle, Evicted::OverWeight)]
     );
+    assert!(pool.record(&dear).is_some());
+    drop(std::fs::remove_file(&path));
+}
+
+/// A body the template lists is never chosen by the over-weight pass: a
+/// posted job must not name a body the pool no longer holds. The next
+/// cheapest leaves in its place (the review of #1165, M4). Red edit: the
+/// pass ignores `listed`.
+#[test]
+fn a_listed_body_survives_the_over_weight_pass() {
+    let (mut pool, path) = pool("listed-kept", ROOMY);
+    let dear = pool.plant(tx(9), RECORD);
+    let cheap = pool.plant(tx(3), RECORD);
+    let middle = pool.plant(tx(7), RECORD);
+    pool.set_limits(Limits {
+        max_weight: 2 * weight(),
+    });
+    assert_eq!(
+        pool.evict(&[], &[cheap]).unwrap(),
+        vec![(middle, Evicted::OverWeight)]
+    );
+    assert!(pool.record(&cheap).is_some(), "the listed body stays");
     assert!(pool.record(&dear).is_some());
     drop(std::fs::remove_file(&path));
 }
@@ -136,7 +161,7 @@ fn the_templates_refusals_evict_their_entries_and_images() {
     let stranger = tx(3).txid_parts().hash;
     assert!(pool.key_images().contains(&image));
     assert_eq!(
-        pool.evict(&[refused, stranger]).unwrap(),
+        pool.evict(&[refused, stranger], &[]).unwrap(),
         vec![(refused, Evicted::Refused)]
     );
     assert!(
@@ -144,5 +169,72 @@ fn the_templates_refusals_evict_their_entries_and_images() {
         "the image is free again"
     );
     assert!(pool.record(&other).is_some());
+    drop(std::fs::remove_file(&path));
+}
+
+/// `flush_txpool`'s verb: the named entries leave, tagged `Flushed` (not
+/// a CEN-M10 refusal), their key images free again and their rows gone
+/// from the file; an id the pool does not hold, or one named twice, is
+/// flushed once or not at all; the rest stay.
+#[test]
+fn a_flush_removes_the_named_entries_tagged_flushed() {
+    let (mut pool, path) = pool("flush", ROOMY);
+    let flushed_tx = tx(1);
+    let image = crate::pool::key_images_of(&flushed_tx)[0];
+    let flushed = pool.plant(flushed_tx, RECORD);
+    let kept = pool.plant(tx(2), RECORD);
+    let stranger = tx(3).txid_parts().hash;
+    assert_eq!(
+        pool.flush(&[flushed, stranger, flushed]).unwrap(),
+        vec![(flushed, Evicted::Flushed)]
+    );
+    assert!(pool.record(&flushed).is_none());
+    assert!(
+        !pool.key_images().contains(&image),
+        "the image is free again"
+    );
+    assert!(pool.record(&kept).is_some());
+    let file = pool.store().begin_read().expect("the file");
+    assert!(
+        file.record(&flushed).expect("read").is_none(),
+        "the file dropped it"
+    );
+    assert!(file.record(&kept).expect("read").is_some());
+    drop(file);
+    drop(pool);
+    drop(std::fs::remove_file(&path));
+}
+
+/// Who is shown a stem entry: the host's listing (`RelayView::entries`)
+/// lists it, marked not shown; any caller's (`Pool::shown_entries`) does
+/// not list it at all (RT-O9.3).
+#[test]
+fn a_stem_entry_is_listed_to_the_host_only() {
+    let (mut pool, path) = pool("listing", ROOMY);
+    let public = pool.plant(tx(1), RECORD);
+    let stem = pool.plant(
+        tx(2),
+        PoolRecord {
+            received: ReceivedHour::from_raw(1),
+            public: false,
+        },
+    );
+    let anyone: Vec<_> = pool.shown_entries().map(|entry| entry.id).collect();
+    assert_eq!(anyone, vec![public], "a stem entry is no caller's to see");
+    let mut host: Vec<_> = pool
+        .relay_view()
+        .entries()
+        .map(|entry| (entry.id, entry.shown))
+        .collect();
+    host.sort_by_key(|(id, _)| id.to_bytes());
+    let mut expected = vec![(public, true), (stem, false)];
+    expected.sort_by_key(|(id, _)| id.to_bytes());
+    assert_eq!(host, expected);
+    let entry = pool
+        .relay_view()
+        .entries()
+        .find(|entry| entry.id == stem)
+        .expect("held");
+    assert_eq!(entry.key_images, crate::pool::key_images_of(&tx(2)));
     drop(std::fs::remove_file(&path));
 }

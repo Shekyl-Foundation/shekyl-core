@@ -71,7 +71,8 @@ impl ShardFacts for StoreShardFacts {
     }
 }
 
-/// Tip bond holdings: who lists `shard_id`, or a CompleteTree.
+/// Tip bond holdings. Drawn holders list the shard. A complete tree is
+/// a support source, tried only after those (`ARCHIVAL_SUPPORT_DRAW.md` §7).
 pub struct StoreHolderSource {
     store: Arc<ChainStore>,
 }
@@ -89,7 +90,7 @@ impl HolderSource for StoreHolderSource {
         let snap = self.store.begin_read().map_err(|e| store_fault(&e))?;
         let mut holders = Vec::new();
         for (id, record) in snap.bond_records().map_err(|e| store_fault(&e))? {
-            if !holds_shard(&record.holdings, shard_id) {
+            if !holds_drawn(&record.holdings, shard_id) {
                 continue;
             }
             let verifying_key = HybridPublicKey::from_canonical_bytes(&record.hybrid_pubkey)
@@ -102,6 +103,27 @@ impl HolderSource for StoreHolderSource {
                 },
             });
         }
+        Ok(holders)
+    }
+
+    fn support_holders_of(&self, shard_id: ShardId) -> Result<Vec<Holder>, FactsFault> {
+        let snap = self.store.begin_read().map_err(|e| store_fault(&e))?;
+        let mut holders = Vec::new();
+        for (id, record) in snap.bond_records().map_err(|e| store_fault(&e))? {
+            if !matches!(record.holdings, Holdings::CompleteTree) {
+                continue;
+            }
+            let verifying_key = HybridPublicKey::from_canonical_bytes(&record.hybrid_pubkey)
+                .map_err(|_| FactsFault::Inconsistent)?;
+            holders.push(Holder {
+                id,
+                target: FetchTarget {
+                    endpoint: ServingEndpoint::from_record_bytes(record.endpoint),
+                    verifying_key,
+                },
+            });
+        }
+        let _ = shard_id;
         Ok(holders)
     }
 }
@@ -134,9 +156,9 @@ where
     }
 }
 
-fn holds_shard(holdings: &Holdings, shard_id: ShardId) -> bool {
+fn holds_drawn(holdings: &Holdings, shard_id: ShardId) -> bool {
     match holdings {
-        Holdings::CompleteTree => true,
+        Holdings::CompleteTree => false,
         Holdings::ShardSet(held) => held.iter().any(|h| h.shard == shard_id),
     }
 }

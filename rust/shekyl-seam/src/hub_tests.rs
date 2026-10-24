@@ -405,6 +405,43 @@ fn a_banned_clearnet_host_is_admission_refused_until_the_deadline() {
     drop(again);
 }
 
+/// The hub's own `remaining` and `lift` (DX-Q3, Q11): a timed ban reports
+/// its time left at the hub's tick, a permanent one says so, and a lift
+/// admits the host again; a subnet ban covers a host inside it and is
+/// lifted as a subnet. Red edit: answer `remaining` from tick zero.
+#[test]
+fn remaining_and_lift_round_trip_through_the_hub() {
+    let rig = rig();
+    rig.hub.install_loopback(32);
+    let host = IpAddr::V4(doc_ip());
+    let _closed = rig.hub.ban_host(host, Tick::new(41));
+    rig.clock.set(Tick::new(11));
+    assert_eq!(
+        rig.hub.remaining(host),
+        Some(shekyl_transport_layer::BanLeft::Remaining { nanos: 30 })
+    );
+    assert!(rig.hub.lift_host(host));
+    assert!(!rig.hub.lift_host(host), "nothing left to lift");
+    assert_eq!(rig.hub.remaining(host), None);
+    let endpoint = endpoint(doc_ip(), Direction::Outbound);
+    drop(rig.hub.connect(&endpoint).expect("lifted, admitted"));
+
+    let subnet =
+        shekyl_transport_layer::Ipv4Subnet::new(Ipv4Addr::new(203, 0, 113, 0), 24).expect("a /24");
+    let _closed = rig.hub.ban_subnet_permanent(subnet);
+    assert_eq!(
+        rig.hub.remaining(host),
+        Some(shekyl_transport_layer::BanLeft::Permanent),
+        "a host inside the subnet is banned with it"
+    );
+    let Err(refused) = rig.hub.connect(&endpoint) else {
+        panic!("a host inside a banned subnet was admitted");
+    };
+    assert_eq!(refused.kind(), CloseKind::AdmissionRefused);
+    assert!(rig.hub.lift_subnet(subnet));
+    drop(rig.hub.connect(&endpoint).expect("the subnet is lifted"));
+}
+
 #[test]
 fn a_transport_close_does_not_ban_the_host() {
     let host = doc_ip();

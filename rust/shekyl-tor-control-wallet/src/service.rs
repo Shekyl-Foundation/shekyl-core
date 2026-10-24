@@ -1067,7 +1067,9 @@ mod tests {
     #[test]
     fn classify_maps_binary_to_trust_everything_else_transient() {
         assert_eq!(
-            classify(&ServiceFailure::Binary(TorBinaryError::NotFound)),
+            classify(&ServiceFailure::Binary(TorBinaryError::NotFound {
+                searched: Vec::new()
+            })),
             FailureClass::Trust
         );
         assert_eq!(

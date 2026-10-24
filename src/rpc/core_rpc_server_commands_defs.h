@@ -1122,13 +1122,13 @@ namespace cryptonote
     struct bond_row_t
     {
       uint64_t join_settlement_epoch;
-      bool is_foundation_complete_tree;
+      bool is_support_complete_tree;
       /// Flattened (start_epoch, end_exclusive) pairs, as landed.
       std::vector<uint64_t> bad_intervals_flat;
 
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE(join_settlement_epoch)
-        KV_SERIALIZE(is_foundation_complete_tree)
+        KV_SERIALIZE(is_support_complete_tree)
         KV_SERIALIZE(bad_intervals_flat)
       END_KV_SERIALIZE_MAP()
     };

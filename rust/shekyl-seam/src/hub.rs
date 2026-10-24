@@ -22,8 +22,8 @@ use shekyl_capped_stream::{SendHalf, Session};
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_timing_engine::{Clock, MonotonicClock, Tick};
 use shekyl_transport_layer::{
-    CloseCause, CloseKind, CloseResult, ConnectorId, Direction, Ipv4Subnet, Links, ListedBan,
-    OpenSocket, SocketId, Sockets,
+    BanLeft, CloseCause, CloseKind, CloseResult, ConnectorId, Direction, Ipv4Subnet, Links,
+    ListedBan, OpenSocket, SocketId, Sockets,
 };
 
 use crate::connection::{
@@ -871,6 +871,25 @@ impl Hub {
             self.finish(*id, CloseCause::new(CloseKind::LocalClose));
         }
         ids
+    }
+
+    /// Lift a host ban. `false` when there was none. Open sockets stay
+    /// open: a lift admits, it does not reconnect.
+    pub fn lift_host(&self, host: IpAddr) -> bool {
+        self.lock().sockets.lift_host(host)
+    }
+
+    /// Lift an IPv4 subnet ban, the same way as [`Self::lift_host`].
+    pub fn lift_subnet(&self, subnet: Ipv4Subnet) -> bool {
+        self.lock().sockets.lift_subnet(subnet)
+    }
+
+    /// How long `host`'s ban has left at the hub's current tick: `None`
+    /// when it is not banned, permanent, or until a deadline.
+    #[must_use]
+    pub fn remaining(&self, host: IpAddr) -> Option<BanLeft> {
+        let now = self.now();
+        self.lock().sockets.remaining(host, now)
     }
 
     /// Per-connector socket count. Accept does not read this.
