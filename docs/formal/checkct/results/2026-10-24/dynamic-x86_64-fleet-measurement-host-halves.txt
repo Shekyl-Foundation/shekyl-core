@@ -1,0 +1,51 @@
+dynamic (dudect-style) run — the fleet MEASUREMENT HOST, the two halves of a square (CA-2), 200k and 1M samples per class
+binary: docs/formal/checkct/dynamic at the PR-2 tree (operations behind non-inlined wrappers; half: rows), static x86_64, pinned 1.94.0 / LLVM 21.1.8
+rows: crypto-bigint 0.5.5 U256::square_wide and U256::mul_wide alone (shared by both fields); HelioseleneField::wide_reduce = red512 alone on uniform 512-bit input; red512 fed with a square's output; and the square / constant / structured rows for both fields
+run window (UTC): Sat Oct 24 04:54:43 PM UTC 2026 -> Sat Oct 24 04:58:46 PM UTC 2026
+
+===== 200000
+null: helio square                 t=   -0.48  t(crop 1%)=   -0.98  mean ns fixed/random      1445/     1451  no difference seen
+null: helio mul                    t=   -0.55  t(crop 1%)=   -2.73  mean ns fixed/random      1686/     1694  no difference seen
+half: U256::square_wide            t=    1.20  t(crop 1%)=    1.34  mean ns fixed/random       697/      685  no difference seen
+half: U256::square_wide [fixed-pair] t=    1.31  t(crop 1%)=    0.91  mean ns fixed/random       605/      590  no difference seen
+half: U256::mul_wide               t=   -1.73  t(crop 1%)=   -0.05  mean ns fixed/random       804/      811  no difference seen
+half: U256::mul_wide [fixed-pair]  t=    0.67  t(crop 1%)=   -1.71  mean ns fixed/random       838/      830  no difference seen
+half: helio wide_reduce (red512)   t=   -1.49  t(crop 1%)=   -0.30  mean ns fixed/random      2025/     2049  no difference seen
+half: helio wide_reduce (red512) [fixed-pair] t=   -0.32  t(crop 1%)=   -3.03  mean ns fixed/random      2021/     2026  no difference seen
+half: red512 of a square_wide      t=    0.24  t(crop 1%)=    0.87  mean ns fixed/random      2788/     2784  no difference seen
+half: red512 of a square_wide [fixed-pair] t=   -0.35  t(crop 1%)=   -2.06  mean ns fixed/random      2761/     2767  no difference seen
+null: helio square                 t=   -1.37  t(crop 1%)=   -0.65  mean ns fixed/random      1443/     1459  no difference seen
+helio square                       t=    0.04  t(crop 1%)=   -0.59  mean ns fixed/random      1585/     1584  no difference seen
+helio square [fixed-pair]          t=   -0.01  t(crop 1%)=   -1.39  mean ns fixed/random      1463/     1464  no difference seen
+constant: helio square             t=   -2.80  t(crop 1%)=  -43.91  mean ns fixed/random      1258/     1270  CLASS DIFFERENCE
+property: helio square sparse      t=   -1.63  t(crop 1%)=  -17.30  mean ns fixed/random      1320/     1338  CLASS DIFFERENCE
+property: helio square small       t=   -1.86  t(crop 1%)=  -21.67  mean ns fixed/random      2176/     2204  CLASS DIFFERENCE
+property: helio square dense       t=   -2.04  t(crop 1%)=  -34.62  mean ns fixed/random      1454/     1476  CLASS DIFFERENCE
+fe25519 square                     t=   -0.01  t(crop 1%)=   -0.36  mean ns fixed/random      3211/     3211  no difference seen
+fe25519 square [fixed-pair]        t=   -0.20  t(crop 1%)=    2.15  mean ns fixed/random      3183/     3185  no difference seen
+property: fe25519 square sparse    t=   -0.30  t(crop 1%)=    2.10  mean ns fixed/random      2992/     2995  no difference seen
+property: fe25519 square small     t=    1.23  t(crop 1%)=   -1.67  mean ns fixed/random      2973/     2954  no difference seen
+===== 1000000
+null: helio square                 t=   -0.74  t(crop 1%)=   -1.68  mean ns fixed/random      1334/     1337  no difference seen
+null: helio mul                    t=   -0.71  t(crop 1%)=    0.78  mean ns fixed/random      1739/     1744  no difference seen
+half: U256::square_wide            t=    0.63  t(crop 1%)=    1.52  mean ns fixed/random       609/      605  no difference seen
+half: U256::square_wide [fixed-pair] t=   -0.56  t(crop 1%)=    1.82  mean ns fixed/random       590/      593  no difference seen
+half: U256::mul_wide               t=    2.08  t(crop 1%)=    3.31  mean ns fixed/random       914/      905  no difference seen
+half: U256::mul_wide [fixed-pair]  t=   -1.12  t(crop 1%)=    0.41  mean ns fixed/random       971/      988  no difference seen
+half: helio wide_reduce (red512)   t=   -0.99  t(crop 1%)=   -2.78  mean ns fixed/random      2063/     2068  no difference seen
+half: helio wide_reduce (red512) [fixed-pair] t=    1.20  t(crop 1%)=    1.15  mean ns fixed/random      2131/     2124  no difference seen
+half: red512 of a square_wide      t=    0.92  t(crop 1%)=   -0.46  mean ns fixed/random      2763/     2756  no difference seen
+half: red512 of a square_wide [fixed-pair] t=   -0.11  t(crop 1%)=   -0.92  mean ns fixed/random      2758/     2759  no difference seen
+null: helio square                 t=   -0.72  t(crop 1%)=   -1.24  mean ns fixed/random      1308/     1311  no difference seen
+helio square                       t=    0.11  t(crop 1%)=   -0.29  mean ns fixed/random      1494/     1494  no difference seen
+helio square [fixed-pair]          t=    1.33  t(crop 1%)=    0.77  mean ns fixed/random      1447/     1442  no difference seen
+constant: helio square             t=   -1.33  t(crop 1%)=  -71.85  mean ns fixed/random      1279/     1285  CLASS DIFFERENCE
+property: helio square sparse      t=   -3.22  t(crop 1%)=  -45.24  mean ns fixed/random      1265/     1278  CLASS DIFFERENCE
+property: helio square small       t=   -2.80  t(crop 1%)=  -57.26  mean ns fixed/random      1305/     1317  CLASS DIFFERENCE
+property: helio square dense       t=   -2.89  t(crop 1%)=  -45.71  mean ns fixed/random      1279/     1291  CLASS DIFFERENCE
+fe25519 square                     t=   -0.56  t(crop 1%)=   -1.95  mean ns fixed/random      2961/     2964  no difference seen
+fe25519 square [fixed-pair]        t=   -0.37  t(crop 1%)=    0.41  mean ns fixed/random      3010/     3012  no difference seen
+property: fe25519 square sparse    t=    0.19  t(crop 1%)=    1.47  mean ns fixed/random      2957/     2956  no difference seen
+property: fe25519 square small     t=    0.43  t(crop 1%)=    1.16  mean ns fixed/random      2841/     2838  no difference seen
+
+reading: every half is flat, fixed against fresh and fixed-pair, including red512 on a square's output; the plain fixed-set helio square rows are flat in this build too. What crosses, strongly and only for HelioseleneField, is a CONSTANT operand (the same uniformly random value for all 32 operations of a batch: -44 at 200k, -72 at 1M) and the STRUCTURED operands (sparse, small, dense: -17 to -57), all faster than uniformly random ones. Field25519 is flat for the same classes. The one asymmetry between the two fields that matches this is the representation: dalek's FieldElement is in Montgomery form, so from_repr turns a sparse, small, dense or constant input into a dense residue before any multiplication; HelioseleneField holds the canonical value, so the operand's structure reaches the multiplier and the reduction intact. Mechanism still open (activity-dependent clocking is the fit; the cycles-against-wall-time test decides).
