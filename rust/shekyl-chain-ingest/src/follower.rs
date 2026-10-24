@@ -99,7 +99,7 @@ impl NoJob {
     pub const fn transient(&self) -> bool {
         matches!(
             self,
-            Self::Starting | Self::Unbuilt(Unbuilt::PoolOnAnotherTip)
+            Self::Starting | Self::Unbuilt(Unbuilt::PoolOnAnotherTip | Unbuilt::BodyGone)
         )
     }
 }
@@ -128,9 +128,12 @@ pub enum Unbuilt {
     TargetRefused,
     /// A seed block is not on the snapshot it was read from.
     SeedMissing,
-    /// The pool was last judged against another tip; the next tip change
-    /// builds again.
+    /// The pool was last judged against another tip; the follower builds
+    /// again.
     PoolOnAnotherTip,
+    /// A listed body left the pool between the producer's two locks; the
+    /// follower builds again, without it.
+    BodyGone,
     /// The template producer panicked; the service is stopping.
     ProducerPanicked,
 }
@@ -149,6 +152,7 @@ impl core::fmt::Display for Unbuilt {
             Self::TargetRefused => "the chain's own headers refuse its target",
             Self::SeedMissing => "a seed block is not on the snapshot",
             Self::PoolOnAnotherTip => "the pool was judged against another tip",
+            Self::BodyGone => "a listed body left the pool while the template was built",
             Self::ProducerPanicked => "the template producer panicked",
         })
     }
@@ -172,6 +176,7 @@ impl Unbuilt {
             Self::TargetRefused => "target_refused",
             Self::SeedMissing => "seed_missing",
             Self::PoolOnAnotherTip => "pool_on_another_tip",
+            Self::BodyGone => "body_gone",
             Self::ProducerPanicked => "producer_panicked",
         }
     }
@@ -718,6 +723,10 @@ impl Drop for SignalDone {
 
 /// The found-block sink. It ends when the inbox closes or the last sender
 /// drops, and the queue is empty. Each block enters through the door's
+            Self::Template(NoTemplate::BodyGone) => {
+                tracing::debug!("no template: a listed body left the pool between the locks");
+                why(Unbuilt::BodyGone)
+            }
 /// local-arrival entry ([`Door::offer_local`]) on the runtime it was
 /// spawned from. Called from inside that runtime.
 pub(crate) fn spawn_sink(

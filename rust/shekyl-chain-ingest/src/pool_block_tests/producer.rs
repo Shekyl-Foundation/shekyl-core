@@ -733,14 +733,14 @@ async fn a_pass_that_no_longer_holds_is_verified_outside_the_pool_lock() {
     scenario.close().await;
 }
 
-/// A body flushed between the producer's two pool locks is not listed: the
-/// posted job names only bodies the pool still shows, so an outside
-/// miner's `submit_block` never meets `MissingBodies` for one; the rest are
-/// listed (the landing review of #1165, N2). Red edit: list the bodies
+/// A body flushed between the producer's two pool locks posts nothing and
+/// evicts nothing: a posted job never names a body an outside miner's
+/// `submit_block` would meet as missing; the follower builds again (the
+/// landing review of #1165, N2; the brief's c2). Red edit: list the bodies
 /// selected at the first lock without asking the pool again.
 #[tokio::test]
-async fn a_body_flushed_between_the_producers_locks_is_not_listed() {
-    use crate::template::{produce, Producer};
+async fn a_body_flushed_between_the_producers_locks_posts_nothing() {
+    use crate::template::{produce, NoTemplate, Producer};
     let (mut scenario, mined) = matured("producer-flushed").await;
     let first = paying_the_floor(&mut scenario, &mined, 0).await;
     let second = paying_the_floor(&mut scenario, &mined, 1).await;
@@ -796,29 +796,20 @@ async fn a_body_flushed_between_the_producers_locks_is_not_listed() {
                 now,
                 between_locks: Some(&flush_first),
             };
-            produce(&snap, &producer, Some(&pool), |_| true).expect("a template")
+            produce(&snap, &producer, Some(&pool), |_| true).map(|produced| produced.job.height)
         })
         .await;
+    let still_held = pool
+        .lock()
+        .expect("the pool")
+        .listing()
+        .any(|(id, _)| id == second_id);
     drop(pool);
     drop(std::fs::remove_file(&path));
     scenario.close().await;
-    let listed: Vec<_> = produced
-        .transactions
-        .iter()
-        .map(|tx| tx.txid_parts().hash)
-        .collect();
-    assert_eq!(
-        listed,
-        vec![second_id],
-        "only the body the pool still shows"
+    assert!(
+        matches!(produced, Err(NoTemplate::BodyGone)),
+        "nothing posted: {produced:?}"
     );
-    assert_eq!(
-        produced
-            .job
-            .listed
-            .iter()
-            .map(|body| body.id)
-            .collect::<Vec<_>>(),
-        vec![second_id]
-    );
+    assert!(still_held, "nothing evicted");
 }
