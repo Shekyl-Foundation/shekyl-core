@@ -73,7 +73,8 @@ use redb::{Key, ReadableTable, TableDefinition, TableHandle, WriteTransaction};
 
 use crate::apply_policy::{ApplyPolicy, ArchivalFamily};
 use crate::codec::{
-    post_image, Canonical, ChainState, CodecError, PropertyCell, TotalBurnedCell, UndoEntry,
+    post_image, Canonical, ChainState, CodecError, FollowingDegraded, FollowingDegradedCell,
+    PropertyCell, TotalBurnedCell, UndoEntry,
 };
 use crate::schema::{self, BLOCK_INFO, PROPERTIES};
 
@@ -796,6 +797,30 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
         Ok(self
             .get_property::<TotalBurnedCell>()?
             .unwrap_or(AtomicUnits::ZERO))
+    }
+
+    /// Set the `following_degraded` latch if it is clear, and report
+    /// whether this call set it (`DRS_X_STORE_FLIP.md` DX-Q2 item 8).
+    ///
+    /// One way: evidence already recorded stays, so the first heavier chain
+    /// is the one an operator reads. Not journaled, so a pop does not clear
+    /// it; only a resync does. The connector is the one caller, for ingest's
+    /// refusals of a heavier chain and for chain sync's past-cap evidence.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreInvariant::CellCorrupt`] if a recorded latch does not decode
+    /// (the batch is poisoned); [`EngineError::Table`] /
+    /// [`EngineError::Storage`] if the engine refuses.
+    pub fn raise_following_degraded(
+        &self,
+        evidence: &FollowingDegraded,
+    ) -> Result<bool, StoreError> {
+        if self.get_property::<FollowingDegradedCell>()?.is_some() {
+            return Ok(false);
+        }
+        header::put::<FollowingDegradedCell>(self.txn(), evidence)?;
+        Ok(true)
     }
 
     /// Upsert a typed **chain-state** `properties` cell.

@@ -167,6 +167,7 @@ where
         PeerClaim {
             count: ChainCount::from_raw(2),
             work: CumulativeDifficulty::from_raw(work),
+            top: BlockHash::NULL,
         },
         main,
         Instant::now(),
@@ -354,6 +355,99 @@ fn a_run_that_does_not_beat_the_selected_chain_is_not_hashed() {
     });
 }
 
+/// A lighter prefix that says the chain continues is kept only for its
+/// continuation, and is not hashed. It does not hold the header draw: only
+/// a proof in flight does. When the continuation misses its deadline, the
+/// run ends with it.
+#[test]
+fn a_lighter_run_kept_for_its_continuation_does_not_hold_the_draw() {
+    let rules = cap(64);
+    let main = chain_of(21);
+    let fork = chain_of(11);
+    let mut block = candidate_on(&fork, Vec::new()).block;
+    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    main.with_view(|view| {
+        let tip = view.tip().unwrap().unwrap();
+        let mut out = Vec::new();
+        sync.handle(
+            Event::Tip { tip },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .unwrap();
+        open_and_claim(&mut sync, &view, 1, u128::MAX);
+        let parent = fork.with_view(|fork_view| fork_view.tip().unwrap().unwrap().hash);
+        let timestamp = fork.with_view(|fork_view| {
+            match fork_view.header_at(BlockHeight::from_raw(10)).unwrap() {
+                AtHeight::Recorded(record) => record.header.timestamp,
+                AtHeight::AboveTip => panic!("the fork tip"),
+            }
+        });
+        fork.with_view(|fork_view| {
+            formed_on(&fork_view, &rules, &mut block, parent, timestamp + 120)
+        });
+        let out = answer(&mut sync, &view, 1, block.pow_blob(), 1, true);
+        assert!(proves(&out).is_empty(), "a lighter run was hashed: {out:?}");
+        let follow_up = out
+            .iter()
+            .find_map(|command| match command {
+                Command::RequestHeaders { session: 1, id, .. } => Some(*id),
+                _ => None,
+            })
+            .expect("the continuation is asked for");
+        // A heavier source opens while the lighter run waits for its
+        // continuation. The run is not being proven, so it is drawn.
+        let mut opened = Vec::new();
+        sync.handle(
+            Event::SessionOpened {
+                session: 2,
+                transit: Duration::from_secs(1),
+            },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut opened,
+        )
+        .unwrap();
+        sync.claim(
+            2,
+            PeerClaim {
+                count: ChainCount::from_raw(40),
+                work: CumulativeDifficulty::from_raw(u128::MAX),
+                top: BlockHash::NULL,
+            },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut opened,
+        )
+        .unwrap();
+        assert!(
+            opened
+                .iter()
+                .any(|command| matches!(command, Command::RequestHeaders { session: 2, .. })),
+            "the unhashed run held the draw: {opened:?}"
+        );
+        assert_eq!(sync.run_len(1), 1, "the run waits for its continuation");
+        let mut late = Vec::new();
+        sync.handle(
+            Event::Deadline {
+                session: 1,
+                request: follow_up,
+            },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut late,
+        )
+        .unwrap();
+        assert!(closes(&late).is_empty(), "{late:?}");
+        assert_eq!(sync.run_len(1), 0, "the run ends with its continuation");
+    });
+}
+
 /// `H*` stays the heavier of the local tip and the verified branches.
 #[test]
 fn the_selected_chain_is_the_most_verified_work() {
@@ -401,6 +495,7 @@ fn a_claim_never_changes_the_derived_state() {
                 PeerClaim {
                     count: ChainCount::from_raw(count),
                     work: CumulativeDifficulty::from_raw(work.max(u128::from(count))),
+                    top: BlockHash::NULL,
                 },
                 &view,
                 Instant::now(),
@@ -519,7 +614,7 @@ fn payload_refused_is_only_an_impossible_claim() {
             let work = u128::from(count) + extra;
             sync.claim(
                 1,
-                PeerClaim { count: ChainCount::from_raw(count), work: CumulativeDifficulty::from_raw(work) },
+                PeerClaim { count: ChainCount::from_raw(count), work: CumulativeDifficulty::from_raw(work), top: BlockHash::NULL },
                 &view,
                 Instant::now(),
                 &mut NoDraw,
@@ -528,7 +623,7 @@ fn payload_refused_is_only_an_impossible_claim() {
             .expect("a chain is not refused");
             let zero = sync.claim(
                 1,
-                PeerClaim { count: ChainCount::ZERO, work: CumulativeDifficulty::from_raw(work) },
+                PeerClaim { count: ChainCount::ZERO, work: CumulativeDifficulty::from_raw(work), top: BlockHash::NULL },
                 &view,
                 Instant::now(),
                 &mut NoDraw,
@@ -540,6 +635,7 @@ fn payload_refused_is_only_an_impossible_claim() {
                 PeerClaim {
                     count: ChainCount::from_raw(count),
                     work: CumulativeDifficulty::from_raw(u128::from(count) - 1),
+                    top: BlockHash::NULL,
                 },
                 &view,
                 Instant::now(),
@@ -698,3 +794,98 @@ fn no_body_is_requested_off_the_selected_chain() {
 
 #[path = "past_cap_tests.rs"]
 mod past_cap;
+
+/// No header request is drawn while a reachable run is still being proven.
+/// The proof moves `H*`; a locator drawn before it asks for the headers
+/// already waiting on that proof, and the answer cannot extend the run.
+#[test]
+fn no_header_request_is_drawn_while_a_run_is_being_proven() {
+    let rules = cap(64);
+    let main = chain_of(21);
+    let mut block = candidate_on(&main, Vec::new()).block;
+    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    main.with_view(|view| {
+        let tip = view.tip().expect("main answers").expect("a tip");
+        let mut out = Vec::new();
+        sync.handle(
+            Event::Tip { tip },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .expect("main answers");
+        open_and_claim(&mut sync, &view, 1, u128::MAX);
+        let timestamp = match view.header_at(tip.height).expect("main answers") {
+            AtHeight::Recorded(record) => record.header.timestamp + 120,
+            AtHeight::AboveTip => panic!("the tip is on main"),
+        };
+        let branch = sync.branch_of(&view, tip.hash).expect("the tip is known");
+        formed_on(&branch, &rules, &mut block, tip.hash, timestamp);
+        let bytes = ResponseHeaders {
+            blobs: vec![block.pow_blob()],
+            tip_work: u128::MAX,
+            more: false,
+        }
+        .store()
+        .expect("the response encodes");
+        let mut out = Vec::new();
+        sync.handle(
+            Event::Headers { session: 1, bytes },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .expect("main answers");
+        assert_eq!(proves(&out), vec![HashClass::HeaderPow]);
+        assert!(
+            !out.iter()
+                .any(|command| matches!(command, Command::RequestHeaders { .. })),
+            "a request was drawn beside the proof: {out:?}"
+        );
+        // A second source opens while the proof is in flight.
+        let mut opened = Vec::new();
+        sync.handle(
+            Event::SessionOpened {
+                session: 2,
+                transit: Duration::from_secs(1),
+            },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut opened,
+        )
+        .expect("main answers");
+        sync.claim(
+            2,
+            PeerClaim {
+                count: ChainCount::from_raw(40),
+                work: CumulativeDifficulty::from_raw(u128::MAX),
+                top: BlockHash::NULL,
+            },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut opened,
+        )
+        .expect("the claim is a chain");
+        assert!(
+            !opened
+                .iter()
+                .any(|command| matches!(command, Command::RequestHeaders { .. })),
+            "a request was drawn during the proof: {opened:?}"
+        );
+        resolve_proves(&mut sync, &view, &mut out);
+        assert!(closes(&out).is_empty(), "{out:?}");
+        let identity = PowBlob::read(&block.pow_blob())
+            .expect("preimage")
+            .identity();
+        assert_eq!(sync.selected().hash, identity);
+        assert!(
+            out.iter()
+                .any(|command| matches!(command, Command::RequestHeaders { .. })),
+            "the next request is drawn once the proof lands: {out:?}"
+        );
+    });
+}

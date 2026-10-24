@@ -68,6 +68,11 @@ where
         if follow {
             if let Some(state) = self.peers.get_mut(&session) {
                 state.follow_up = None;
+                // A run kept only for its continuation ends with it, as one
+                // whose response says nothing follows does.
+                if state.run.as_ref().is_some_and(Run::unhashed) {
+                    state.run = None;
+                }
             }
         }
         // A header-request deadline ends this session's part of a CS-Q4(c)
@@ -216,10 +221,18 @@ where
                 .is_some_and(Run::past_cap);
         // The latch, or a past-cap run that already ended. A run still
         // in progress keeps its headers; "followed once" starts when it ends.
+        // The evidence check's refetch from the fork is its run continuing,
+        // not a second following of that branch.
         if past_cap && self.alarm {
             return Ok(());
         }
+        let evidence_run = self
+            .peers
+            .get(&session)
+            .and_then(|state| state.run.as_ref())
+            .is_some_and(Run::is_evidence);
         if past_cap
+            && !evidence_run
             && self
                 .peers
                 .get(&session)
@@ -399,6 +412,10 @@ where
             match result {
                 Proved::Refused(refused) => {
                     self.close(session, CloseCause::HeaderRefused(refused.rule), out);
+                    return Ok(());
+                }
+                Proved::NotHeld => {
+                    self.drop_run(session);
                     return Ok(());
                 }
                 Proved::Formed(formed) => {

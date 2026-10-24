@@ -12,7 +12,7 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use super::posture::{fixes, own_tx, Cause, Connectors, Shown, Status, Syncing};
+use super::posture::{fixes, own_tx, Cause, Connectors, OriginVerdict, Shown, Status, Syncing};
 
 /// Shifts past this saturate a doubling backoff for any base of at least one
 /// nanosecond. The cap is what the operator waits.
@@ -172,6 +172,8 @@ pub enum Input {
     StateFileAppeared,
     /// The daemon is stopping.
     Shutdown,
+    /// The relay's hop-0 verdict for a local origin moved (`GS-Q3`).
+    AddressHidingOrigin(OriginVerdict),
 }
 
 /// Actions and the next absolute deadline, in the caller's clock units.
@@ -244,11 +246,31 @@ enum Phase {
     Stopping,
 }
 
+/// When an announcement is said.
+///
+/// A recovery is [`Cadence::Now`]. A phase that repeats its sentence is
+/// [`Cadence::Due`]. A loss of the origin verdict is [`Cadence::Once`]: one
+/// announcement under the cap, including while the phase is quiet.
+#[derive(Clone, Copy)]
+enum Cadence {
+    /// Say now. Arm the next period only while the phase repeats.
+    Now,
+    /// Say when the cap has elapsed. Arm a suppressed repeat only while
+    /// the phase repeats.
+    Due,
+    /// Say once, when the cap has elapsed. A suppressed say is still
+    /// armed, so a quiet phase does not swallow it. A phase that already
+    /// repeats keeps the deadline it has: that deadline is this same cap.
+    Once,
+}
+
 /// The sans-IO supervisor.
 #[derive(Debug)]
 pub struct Core {
     policy: Policy,
     connectors: Connectors,
+    /// The relay's hop-0 verdict, as last folded (`GS-Q3`).
+    origin: OriginVerdict,
     phase: Phase,
     cause: Cause,
     /// The [`Shown`] value [`Self::since`] names. `since` moves when the
@@ -276,6 +298,7 @@ impl Core {
         let mut core = Self {
             policy,
             connectors,
+            origin: OriginVerdict::Absent,
             phase: Phase::Absent {
                 duty: AbsentDuty::Retry,
             },
@@ -330,10 +353,11 @@ impl Core {
             Input::DescriptorFailed => self.descriptor_failed(),
             Input::DangerousVersion => {
                 self.set_cause(Cause::DangerousVersion);
-                self.say(now, false)
+                self.say(now, Cadence::Due)
             }
             Input::StateFileAppeared => self.state_file(),
             Input::Shutdown => self.shutdown(),
+            Input::AddressHidingOrigin(verdict) => self.origin_verdict(verdict, now),
         };
         self.step(now, actions)
     }
@@ -352,7 +376,7 @@ impl Core {
         }
         let mut actions = Vec::new();
         if self.announce_at.is_some_and(|at| now >= at) {
-            actions.extend(self.say(now, false));
+            actions.extend(self.say(now, Cadence::Due));
         }
         if self.pin_at.is_some_and(|at| now >= at) {
             self.pin_at = None;
@@ -376,18 +400,19 @@ impl Core {
     #[must_use]
     pub fn status(&self) -> Status {
         let shown = self.shown();
-        let health = shown == Shown::Usable;
+        // Health is the verdict's class part, not the link: after a boot the
+        // link is usable before any address-hiding peer has handshaken.
         Status {
-            health,
+            health: self.origin.hides_address(),
             shown,
             cause: self.cause.clone(),
             since: self.since,
             respawn_count: self.respawn_count,
             sync: Syncing {
                 clearnet: self.connectors.clearnet_on,
-                tor: health,
+                tor: shown == Shown::Usable,
             },
-            own_tx: own_tx(health, self.connectors),
+            own_tx: own_tx(self.origin, self.connectors),
             fixes: fixes(&self.cause, self.connectors),
             progress: self.progress,
         }
@@ -500,7 +525,7 @@ impl Core {
         let first = *route != Duty::Done;
         *route = Duty::Done;
         if first && self.shown() == Shown::Usable {
-            self.say(now, true)
+            self.say(now, Cadence::Now)
         } else {
             Vec::new()
         }
@@ -566,7 +591,7 @@ impl Core {
             return Vec::new();
         }
         self.set_cause(Cause::TooManyFiles { open });
-        self.say(now, false)
+        self.say(now, Cadence::Due)
     }
 
     fn descriptor_failed(&mut self) -> Vec<Action> {
@@ -631,7 +656,7 @@ impl Core {
         if installed {
             actions.push(Action::TakeDown);
         }
-        actions.extend(self.say(now, false));
+        actions.extend(self.say(now, Cadence::Due));
         actions
     }
 
@@ -648,13 +673,13 @@ impl Core {
         if installed {
             actions.push(Action::TakeDown);
         }
-        actions.extend(self.say(now, false));
+        actions.extend(self.say(now, Cadence::Due));
         actions
     }
 
     fn external(&mut self, now: u64, cause: Cause) -> Vec<Action> {
         self.set_cause(cause);
-        self.say(now, false)
+        self.say(now, Cadence::Due)
     }
 
     fn on_sample_deadline(&mut self, now: u64) -> Vec<Action> {
@@ -713,12 +738,12 @@ impl Core {
         )
     }
 
-    fn say(&mut self, now: u64, recovery: bool) -> Vec<Action> {
+    fn say(&mut self, now: u64, cadence: Cadence) -> Vec<Action> {
         let due = self
             .last_announce
             .is_none_or(|then| now.saturating_sub(then) >= self.cap());
-        if !(recovery || due) {
-            if self.repeats_announcement() {
+        if !matches!(cadence, Cadence::Now) && !due {
+            if matches!(cadence, Cadence::Once) || self.repeats_announcement() {
                 if let Some(last) = self.last_announce {
                     self.announce_at = Some(last.saturating_add(self.cap()));
                 }
@@ -726,12 +751,25 @@ impl Core {
             return Vec::new();
         }
         self.last_announce = Some(now);
-        if self.repeats_announcement() {
-            self.announce_at = Some(now.saturating_add(self.cap()));
-        } else {
-            self.announce_at = None;
-        }
+        self.announce_at = self
+            .repeats_announcement()
+            .then_some(now.saturating_add(self.cap()));
         vec![Action::Announce]
+    }
+
+    /// The relay's verdict moved. The posture sentence follows whether a
+    /// local origin leaves, so only that change is said: a recovery at once,
+    /// a loss once under the cap. The class moving on its own says nothing.
+    /// The same routable state again is not a change. Health still follows
+    /// the stored verdict.
+    fn origin_verdict(&mut self, verdict: OriginVerdict, now: u64) -> Vec<Action> {
+        let was_leaving = self.origin.origin_leaves();
+        let leaves = verdict.origin_leaves();
+        self.origin = verdict;
+        if was_leaving == leaves {
+            return Vec::new();
+        }
+        self.say(now, if leaves { Cadence::Now } else { Cadence::Once })
     }
 
     fn repeats_announcement(&self) -> bool {
