@@ -187,7 +187,8 @@ cannot see, on code the static tool cleared, reproducibly. Records
 `results/2026-10-24/dynamic-x86_64-method-check.txt` (a Tiger Lake
 workstation, the shipped 1.94.0 / LLVM 21.1.8) and
 `dynamic-x86_64-fleet-measurement-host.txt` (an idle fleet VM on different
-silicon; partial, the default suite follows). Null controls flat, both
+silicon) and `dynamic-x86_64-fleet-measurement-host-property.txt` (the
+operand-property sweep). Null controls flat, both
 positive controls far over the threshold, every `Field25519` row flat, the
 `Residue::pow` branch BINSEC found under LLVM 21 invisible to timing, and
 `HelioseleneField` mul, square and sqrt showing a fixed-against-fresh
@@ -210,11 +211,7 @@ security and the `dynamic/` crate is not offered upstream.
 ## Record table 2026-10-24
 
 Rendered by `python3 docs/formal/checkct/summarize.py docs/formal/checkct/results/2026-10-24`;
-regenerate it after any run. The `helio` records from the committed harness
-are being produced as this is written (the two slow x86_64 entrypoints run
-to their 3600 s timeout on each toolchain) and land in the follow-up commit;
-their verdicts above come from the same drivers run from a scratch copy of
-the harness.
+regenerate it after any run.
 
 | record | workspace | toolchain | options | target | secure / insecure / unknown | not secure |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -238,6 +235,12 @@ the harness.
 | `ctlpre.nightly-2026-10-06.txt` | ctlpre | nightly-2026-10-06 | `--timeout 900` | thumbv6m-none-eabi | 0 / 8 / 0 | insecure: div_exact_u64, div_rem_u64, leading_zeros_u512, montgomery_form_p384, pow_amm_u128, rem_wide_u64, sub_mod_u256, trailing_zeros_u512 |
 | `ctlpre.nightly-2026-10-06.txt` | ctlpre | nightly-2026-10-06 | `--timeout 900` | thumbv7em-none-eabihf | 4 / 0 / 4 | unknown: div_rem_u64, montgomery_form_p384, pow_amm_u128, rem_wide_u64 |
 | `ctlpre.nightly-2026-10-06.txt` | ctlpre | nightly-2026-10-06 | `--timeout 900` | x86_64-unknown-linux-gnu | 4 / 0 / 4 | unknown: div_rem_u64, montgomery_form_p384, pow_amm_u128, rem_wide_u64 |
+| `helio.nightly-2025-12-04.txt` | helio | nightly-2025-12-04 | `--timeout 3600` | riscv32imac-unknown-none-elf | 12 / 0 / 0 | — |
+| `helio.nightly-2025-12-04.txt` | helio | nightly-2025-12-04 | `--timeout 3600` | thumbv7em-none-eabihf | 12 / 0 / 0 | — |
+| `helio.nightly-2025-12-04.txt` | helio | nightly-2025-12-04 | `--timeout 3600` | x86_64-unknown-linux-gnu | 10 / 0 / 2 | unknown: helio_pow_secret_exp, helio_sqrt |
+| `helio.nightly-2026-10-06.txt` | helio | nightly-2026-10-06 | `--timeout 3600` | riscv32imac-unknown-none-elf | 12 / 0 / 0 | — |
+| `helio.nightly-2026-10-06.txt` | helio | nightly-2026-10-06 | `--timeout 3600` | thumbv7em-none-eabihf | 12 / 0 / 0 | — |
+| `helio.nightly-2026-10-06.txt` | helio | nightly-2026-10-06 | `--timeout 3600` | x86_64-unknown-linux-gnu | 10 / 0 / 2 | unknown: helio_pow_secret_exp, helio_sqrt |
 | `subject-noslp.nightly-2025-12-04.division.txt` | subject-noslp | nightly-2025-12-04 | `--checks control-flow,memory-access,dividend,divisor --timeout 900` | x86_64-unknown-linux-gnu | 25 / 1 / 0 | insecure: cb055_residue_pow_secret_exp |
 | `subject-noslp.nightly-2025-12-04.txt` | subject-noslp | nightly-2025-12-04 | `--timeout 900` | x86_64-unknown-linux-gnu | 25 / 1 / 0 | insecure: cb055_residue_pow_secret_exp |
 | `subject-noslp.nightly-2026-10-06.division.txt` | subject-noslp | nightly-2026-10-06 | `--checks control-flow,memory-access,dividend,divisor --timeout 900` | x86_64-unknown-linux-gnu | 26 / 0 / 0 | — |
@@ -248,5 +251,9 @@ the harness.
 | `subject.nightly-2026-10-06.txt` | subject | nightly-2026-10-06 | `--timeout 900` | riscv32imac-unknown-none-elf | 25 / 1 / 0 | insecure: cb055_residue_pow_secret_exp |
 | `subject.nightly-2026-10-06.txt` | subject | nightly-2026-10-06 | `--timeout 900` | thumbv7em-none-eabihf | 26 / 0 / 0 | — |
 | `subject.nightly-2026-10-06.txt` | subject | nightly-2026-10-06 | `--timeout 900` | x86_64-unknown-linux-gnu | 25 / 0 / 1 | unknown: dfg_invert |
+| `dynamic-aarch64-floor-device.txt` | dynamic | see file | — | — | — | not a checkct record |
 | `dynamic-x86_64-diagnostics.txt` | dynamic | see file | — | — | — | not a checkct record |
+| `dynamic-x86_64-fleet-measurement-host-property.txt` | dynamic | see file | — | — | — | not a checkct record |
+| `dynamic-x86_64-fleet-measurement-host-slp-ab.txt` | dynamic | see file | — | — | — | not a checkct record |
+| `dynamic-x86_64-fleet-measurement-host.txt` | dynamic | see file | — | — | — | not a checkct record |
 | `dynamic-x86_64-method-check.txt` | dynamic | see file | — | — | — | not a checkct record |

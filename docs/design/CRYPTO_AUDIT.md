@@ -120,13 +120,15 @@ URLs come back into this section in the PR that follows the posts.
    (`deny.toml` `ignore = []`, `yanked = "deny"`; helioselene asks for
    `crypto-bigint = "0.5"`, lock 0.5.5), and helioselene is theirs. The
    static method, targets, toolchains, the one leak, calibration, links to
-   the records. (URL recorded here once posted)
+   the records. Waits for CA-2's mechanism (§2): not yet posted.
 2. RustCrypto/crypto-bigint, a comment on #1365: the 0.5.5 `Residue::pow`
    window branch as a data point for the 0.5.x range; no code, no 0.5.6
-   asked. (URL recorded here once posted)
+   asked. Posted 2026-10-24:
+   <https://github.com/RustCrypto/crypto-bigint/pull/1365#issuecomment-6386574661>
 3. serai-dex/serai, an issue: `next`'s `prime-field` is on 0.7.5, 0.7.6 is
    the fix; is a release of `dalek-ff-group`/`ciphersuite` from `next`
-   planned? A request for a path, not a leak report. (URL recorded here once posted)
+   planned? A request for a path, not a leak report. Posted 2026-10-24:
+   <https://github.com/serai-dex/serai/issues/1271>
 
 An `unaffected = ["< 0.6.0"]` advisory-db PR is not among them: 0.5.5 does
 branch.
@@ -193,6 +195,45 @@ division under the same toolchain. The evidence, all in
 - the floor device (`dynamic-aarch64-floor-device.txt`, Cortex-A72) shows
   nothing on any row, so it is x86_64-specific as far as measured.
 
+**Disassembly (2026-10-24, the dynamic crate's own binary, 1.94.0).** Both
+fields' `square` call the same `crypto_bigint::Uint::square_wide` (106
+instructions) and differ only in the reduction that follows: Veridise's
+`red512`, inlined (~160 instructions of `mul`/`adc`/`add`/`shld`/`sar` with
+`setb`/`cmovb`/`cmovae` selects), against crypto-bigint's
+`montgomery_reduction` (224, the same instruction classes plus `imul`,
+`sbb`, `cmovne`). Neither contains an instruction whose latency depends on
+its operands by the ISA (no division, no variable shift, no bit scan), and
+neither is vectorised: the eight `xmm` instructions in `mul` are 16-byte
+struct moves (`movups`/`movaps`) that survive `-C no-vectorize-slp`. So the
+SLP hypothesis is out for `square`, and the carrier is the reduction step
+or the multiplier's behaviour on these operands. `wide_reduce`, which is
+`red512` on its own with uniform 512-bit input, is flat in every run; the
+split that remains is `square_wide` alone against `red512` fed with a
+square's output, both fixed against fresh (rows `half:` in the crate).
+
+**Operand property (fleet host, `dynamic-x86_64-fleet-measurement-host-property.txt`).**
+Sparse operands (one random byte per limb), small ones (high limbs zero)
+and dense ones (2^254 − 1) each differ from uniformly random ones for
+`HelioseleneField::square`, and at 1M samples two uniformly random fixed
+sets differ from each other strongly (`[fixed-pair]` square +37, mul +38);
+`Field25519::square` is flat for every class. No single operand property
+is the cause; the direction is that lower-activity operands run faster
+(sparse and small are faster, and so is 2^254 − 1, whose square
+2^508 − 2^255 + 1 has almost no bits set). That fits a switching-activity →
+clock mechanism and not an instruction-level one.
+
+**SLP on/off, and how the operation is compiled (fleet host,
+`dynamic-x86_64-fleet-measurement-host-slp-ab.txt`).** `-C no-vectorize-slp`
+changes nothing: the SLP hypothesis is closed. In a build where each
+operation sits behind a non-inlined call, the plain fixed-set rows and
+their `[fixed-pair]` companions go flat while the constant-operand and
+structured-operand rows keep crossing (and `Field25519` stays flat
+everywhere); in the earlier builds, with the operation inlined into the
+timing loop, the plain fixed-set rows crossed too. So what the timer sees
+depends on how consecutive operations overlap in the pipeline, which fits
+activity-dependent timing of the instruction stream, a platform property,
+better than any single-operand or single-instruction cause.
+
 **Mechanism: open.** Two remain once BINSEC's model is exhausted, with
 different owners and fixes: (a) power → frequency (the Hertzbleed class:
 operand Hamming weight or toggle count changes core power, the P-state
@@ -200,10 +241,8 @@ controller turns it into frequency, the wall-clock timer sees time; a
 platform property that would follow the field onto crypto-bigint 0.7
 unchanged; consistent with the aarch64 null, a fixed-governor board); (b)
 instruction-level data-dependent latency in the compiled code (rare for
-integer code on Tiger Lake; BINSEC already showed LLVM SLP-vectorises the
-four-limb loops of this stack, the `movmskps` gap, and the Veridise
-`red512` loops are what SLP picks up while Montgomery's dependent chain is
-not). Discriminators, in order, in the follow-up PR: the disassembly diff of
+integer code on Tiger Lake, and the disassembly above shows no candidate
+instruction and no vectorisation in `square`). Discriminators, in order, in the follow-up PR: the disassembly diff of
 `HelioseleneField::square` against `Field25519::square` from the same
 binary; a `-C no-vectorize-slp` rebuild of the dynamic crate; the run with
 `intel_pstate/no_turbo = 1` and the `performance` governor on the

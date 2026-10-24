@@ -43,7 +43,7 @@ use core::hint::black_box;
 use ff::{Field, PrimeField};
 use std::time::Instant;
 
-use crypto_bigint::{impl_modulus, modular::constant_mod::Residue, U256};
+use crypto_bigint::{impl_modulus, modular::constant_mod::Residue, Encoding, U256};
 use dalek_ff_group::FieldElement as Field25519;
 use helioselene::HelioseleneField;
 
@@ -250,6 +250,11 @@ impl<A: RandomInput, B: RandomInput> RandomInput for (A, B) {
         (A::random(r), B::random(r))
     }
 }
+impl RandomInput for U256 {
+    fn random(r: &mut Rng) -> Self {
+        U256::from_le_slice(&r.bytes32())
+    }
+}
 impl RandomInput for (R, U256) {
     fn random(r: &mut Rng) -> Self {
         (
@@ -266,6 +271,27 @@ struct Run {
     /// `Some(0)` / `Some(1)`: run only that class's batches (for `perf stat`
     /// over one class at a time); the t statistics are then meaningless.
     only: Option<usize>,
+}
+
+/// Non-inlined wrappers for the operations under comparison, so each field's
+/// code is an addressable symbol in the binary and the two can be diffed
+/// (`objdump -d --disassemble=<symbol>`); a call per operation costs the
+/// same for every class.
+#[inline(never)]
+fn op_helio_square(a: &HelioseleneField) -> HelioseleneField {
+    a.square()
+}
+#[inline(never)]
+fn op_fe25519_square(a: &Field25519) -> Field25519 {
+    a.square()
+}
+#[inline(never)]
+fn op_helio_mul(a: &HelioseleneField, b: &HelioseleneField) -> HelioseleneField {
+    *a * *b
+}
+#[inline(never)]
+fn op_fe25519_mul(a: &Field25519, b: &Field25519) -> Field25519 {
+    *a * *b
 }
 
 fn fe25519(b: [u8; 32]) -> Field25519 {
@@ -341,8 +367,12 @@ fn main() {
     let one = |r: &mut Rng| fe25519(r.bytes32());
     both!(&run, "fe25519 add", pair, |(a, b)| { low64(&(*a + *b)) });
     both!(&run, "fe25519 sub", pair, |(a, b)| { low64(&(*a - *b)) });
-    both!(&run, "fe25519 mul", pair, |(a, b)| { low64(&(*a * *b)) });
-    both!(&run, "fe25519 square", one, |a| { low64(&a.square()) });
+    both!(&run, "fe25519 mul", pair, |(a, b)| {
+        low64(&op_fe25519_mul(a, b))
+    });
+    both!(&run, "fe25519 square", one, |a| {
+        low64(&op_fe25519_square(a))
+    });
     both!(&run, "fe25519 invert", one, |a| {
         low64(&a.invert().unwrap_or(Field25519::ZERO))
     });
@@ -364,8 +394,12 @@ fn main() {
     let hone = |r: &mut Rng| fehelio(r.bytes32());
     both!(&run, "helio add", hpair, |(a, b)| { low64(&(*a + *b)) });
     both!(&run, "helio sub", hpair, |(a, b)| { low64(&(*a - *b)) });
-    both!(&run, "helio mul", hpair, |(a, b)| { low64(&(*a * *b)) });
-    both!(&run, "helio square", hone, |a| { low64(&a.square()) });
+    both!(&run, "helio mul", hpair, |(a, b)| {
+        low64(&op_helio_mul(a, b))
+    });
+    both!(&run, "helio square", hone, |a| {
+        low64(&op_helio_square(a))
+    });
     both!(&run, "helio invert", hone, |a| {
         low64(&a.invert().unwrap_or(HelioseleneField::ZERO))
     });
@@ -484,6 +518,39 @@ fn main() {
         },
         |a| low64(&a.square()),
     );
+
+    println!("-- the two halves of a square (crypto-bigint 0.5.5 U256::square_wide is shared by both fields; the reduction is not)");
+    // U256 inputs below 2^254, as the fields hold them.
+    let u = |r: &mut Rng| U256::from_le_slice(&r.bytes32());
+    both!(&run, "half: U256::square_wide", u, |a| a
+        .square_wide()
+        .0
+        .as_limbs()[0]
+        .0);
+    both!(
+        &run,
+        "half: U256::mul_wide",
+        |r| (
+            U256::from_le_slice(&r.bytes32()),
+            U256::from_le_slice(&r.bytes32())
+        ),
+        |(a, b)| a.mul_wide(b).0.as_limbs()[0].0
+    );
+    // HelioseleneField::wide_reduce is the reduction of a 512-bit value (red512) on its own.
+    both!(
+        &run,
+        "half: helio wide_reduce (red512)",
+        |r| r.bytes64(),
+        |b| low64(&HelioseleneField::wide_reduce(*b))
+    );
+    // The reduction fed with what a square produces: square_wide, then wide_reduce of its bytes.
+    both!(&run, "half: red512 of a square_wide", u, |a| {
+        let (lo, hi) = a.square_wide();
+        let mut b = [0u8; 64];
+        b[..32].copy_from_slice(&lo.to_le_bytes());
+        b[32..].copy_from_slice(&hi.to_le_bytes());
+        low64(&HelioseleneField::wide_reduce(b))
+    });
 
     println!("-- crypto-bigint 0.5.5 Residue::pow with a secret exponent (BINSEC found a branch; unreached by our code)");
     both!(
