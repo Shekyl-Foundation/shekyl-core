@@ -1632,6 +1632,7 @@ async fn a_bound_arrival_connects_through_form_judged_without_a_hash() {
     let bound = super::BoundArrival {
         tag: ArrivalTag(99),
         session: SessionId(1),
+        solicited: true,
         judged,
         block: mined.template.block.serialize(),
         bodies: mined

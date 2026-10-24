@@ -26,6 +26,8 @@ mod harness;
 #[cfg(all(test, feature = "cs2-long-run"))]
 mod long_run;
 #[cfg(test)]
+mod offer_tests;
+#[cfg(test)]
 mod proof;
 #[cfg(test)]
 mod scaling_tests;
@@ -40,14 +42,15 @@ mod claim;
 mod locator;
 mod model;
 mod peer;
+mod protocol;
 mod runs;
 mod state;
 mod tree;
 
 pub use claim::{PayloadRefused, PeerClaim};
 pub use model::{
-    BoundArrival, CachePlan, ClaimError, CloseCause, Command, Event, HashClass, Job, Outcome,
-    ProveItem, Proved, Sync, BODY_REQUESTS_IN_FLIGHT, SYNC_RATE_FLOOR,
+    BoundArrival, CachePlan, ClaimError, CloseCause, Command, Event, HashClass, Job, OfferedBody,
+    Outcome, ProveItem, Proved, Sync, BODY_REQUESTS_IN_FLIGHT, SYNC_RATE_FLOOR,
 };
 pub use shekyl_chain_rules::HeaderView;
 pub use state::SyncState;

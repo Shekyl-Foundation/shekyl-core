@@ -89,7 +89,8 @@ where
 }
 
 /// Record a door-side store read that failed, and stop. The door still
-/// answers [`super::Refusal::NoRoom`]: the span was not accepted.
+/// answers [`super::Refusal::StoreUnreadable`]: the span was not accepted,
+/// and the caller does not wait it out.
 pub(crate) fn record_store_read<S>(shared: &Shared<S>, read: ViewRead<StoreError>)
 where
     S: Substrate,
@@ -338,8 +339,14 @@ pub struct Reservation {
 
 impl Reservation {
     /// Accept `span`. It is the arrivals [`Door::reserve`] judged, in that
-    /// order, now carrying their bytes.
-    pub fn commit(mut self, span: Vec<Arrival>) -> Vec<Ticket> {
+    /// order, now carrying their bytes. Each one is hashed here.
+    pub fn commit(self, span: Vec<Arrival>) -> Vec<Ticket> {
+        self.accept(span.into_iter().map(super::Staged::hashed).collect())
+    }
+
+    /// Accept `span`. It is the arrivals [`Door::reserve`] judged, in that
+    /// order. A hashed arrival and a judged one take the same seats.
+    pub(super) fn accept(mut self, span: Vec<super::Staged>) -> Vec<Ticket> {
         assert_eq!(
             span.len(),
             self.seats.len(),
@@ -349,10 +356,10 @@ impl Reservation {
         self.committed = true;
         let mut tickets = Vec::with_capacity(span.len());
         let mut accepted = Vec::with_capacity(span.len());
-        for (arrival, seat) in span.into_iter().zip(seats) {
+        for (staged, seat) in span.into_iter().zip(seats) {
             let (sender, receiver) = oneshot::channel();
             tickets.push(Ticket {
-                tag: arrival.tag,
+                tag: staged.tag,
                 reply: receiver,
             });
             accepted.push(Accepted {
@@ -360,54 +367,15 @@ impl Reservation {
                     sender: Some(sender),
                     seat: Some(seat),
                 },
-                tag: arrival.tag,
-                origin: arrival.origin,
-                block: arrival.block,
-                bodies: arrival.bodies,
-                judged: None,
-                witness: Vec::new(),
+                tag: staged.tag,
+                block: staged.block,
+                bodies: staged.bodies,
+                proof: staged.proof,
+                witness: staged.witness,
             });
         }
         // A service that has ended drops the span here, and each slot
         // answers `Stopped`.
-        let _ended = self.door.spans.send(accepted);
-        tickets
-    }
-
-    /// Accept a bound `span` ([`super::BoundArrival`]): the arrivals
-    /// [`Door::reserve`] judged, in that order.
-    pub fn commit_bound(mut self, span: Vec<super::BoundArrival>) -> Vec<Ticket> {
-        assert_eq!(
-            span.len(),
-            self.seats.len(),
-            "a reservation commits the arrivals it reserved"
-        );
-        let seats = std::mem::take(&mut self.seats);
-        self.committed = true;
-        let mut tickets = Vec::with_capacity(span.len());
-        let mut accepted = Vec::with_capacity(span.len());
-        for (arrival, seat) in span.into_iter().zip(seats) {
-            let (sender, receiver) = oneshot::channel();
-            tickets.push(Ticket {
-                tag: arrival.tag,
-                reply: receiver,
-            });
-            accepted.push(Accepted {
-                slot: ReplySlot {
-                    sender: Some(sender),
-                    seat: Some(seat),
-                },
-                tag: arrival.tag,
-                origin: super::Origin::Peer {
-                    session: arrival.session,
-                    solicited: true,
-                },
-                block: arrival.block,
-                bodies: arrival.bodies,
-                judged: Some(Box::new(arrival.judged)),
-                witness: arrival.attestation_witness,
-            });
-        }
         let _ended = self.door.spans.send(accepted);
         tickets
     }

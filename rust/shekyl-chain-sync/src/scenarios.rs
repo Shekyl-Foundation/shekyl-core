@@ -17,7 +17,7 @@
 use std::io::BufReader;
 use std::num::NonZeroU128;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use shekyl_chain_ingest::{CorpusReader, IngestEvent, Source};
 use shekyl_chain_rules::harness::fixture::{candidate_on, chain_of};
@@ -32,11 +32,11 @@ use shekyl_types::{BlockCount, BlockHash, BlockHeight, ChainCount, Timestamp};
 use shekyl_wire::{BlockBody, PowBlob, SkeletonTx, TxBody};
 
 use crate::harness::UnitWork;
-use crate::model::{CachePlan, CloseCause, Event, Outcome, Proved, Sync};
+use crate::model::{CloseCause, Event, Outcome, Proved, Sync};
 use crate::proof::{drive, fixed, headers_of, open_claim, prove_item, serialized};
 use crate::{Command, PeerClaim};
 
-struct NoDraw;
+pub(crate) struct NoDraw;
 
 impl RelayRng for NoDraw {
     fn next_u64(&mut self) -> u64 {
@@ -44,7 +44,7 @@ impl RelayRng for NoDraw {
     }
 }
 
-fn target_one(_: BlockHeight) -> RuleSet {
+pub(crate) fn target_one(_: BlockHeight) -> RuleSet {
     fixed(1, 64)
 }
 
@@ -66,7 +66,7 @@ fn bodies(sent: Vec<BlockBody>, deferred: Vec<[u8; 32]>, missed: Vec<[u8; 32]>) 
     .expect("the response encodes")
 }
 
-fn no_close(out: &[Command<u8>]) {
+pub(crate) fn no_close(out: &[Command<u8>]) {
     assert!(
         out.iter()
             .all(|command| !matches!(command, Command::Close { .. })),
@@ -74,7 +74,7 @@ fn no_close(out: &[Command<u8>]) {
     );
 }
 
-fn request_for(out: &[Command<u8>]) -> Option<(u8, Vec<[u8; 32]>)> {
+pub(crate) fn request_for(out: &[Command<u8>]) -> Option<(u8, Vec<[u8; 32]>)> {
     out.iter().find_map(|command| match command {
         Command::RequestBodies {
             session, request, ..
@@ -576,6 +576,47 @@ fn an_announced_oversize_body_closes_and_leaves_the_header() {
     });
 }
 
+/// The entry could not read the store. The body is dropped, the peer
+/// stays, and a later seat report does not ask for it or offer it.
+#[test]
+fn an_unreadable_store_does_not_ask_for_the_body_again() {
+    with_offer(|sync, view, tag, hash, _raw| {
+        let out = drive(
+            sync,
+            view,
+            Event::Entry {
+                tag,
+                outcome: Outcome::StoreUnreadable,
+            },
+        );
+        no_close(&out);
+        assert!(
+            request_for(&out).is_none(),
+            "an unreadable store asked again: {out:?}"
+        );
+        assert!(
+            !out.iter()
+                .any(|command| matches!(command, Command::Offer { .. })),
+            "an unreadable store offered: {out:?}"
+        );
+        assert!(!sync.held.contains(hash), "the body was held for a seat");
+        assert!(
+            sync.outstanding.is_empty(),
+            "the entry still holds the body"
+        );
+        let out = drive(sync, view, Event::Room { seats: 4 });
+        assert!(
+            request_for(&out).is_none(),
+            "a later seat report asked again: {out:?}"
+        );
+        assert!(
+            !out.iter()
+                .any(|command| matches!(command, Command::Offer { .. })),
+            "a later seat report offered: {out:?}"
+        );
+    });
+}
+
 #[test]
 fn cancelled_and_stopped_ask_for_the_block_again() {
     with_offer(|sync, view, tag, hash, raw| {
@@ -805,73 +846,6 @@ fn the_slot_holder_is_hashed_on_each_response() {
     });
 }
 
-/// A main seed the cache slots do not hold drops the run, keeps the
-/// session, and does not issue the same proof again on the same event.
-#[test]
-fn a_main_seed_not_held_drops_the_run_and_keeps_the_session() {
-    let main = chain_of(8);
-    let mut block = candidate_on(&main, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, target_one as fn(BlockHeight) -> RuleSet);
-    main.with_view(|view| {
-        let tip = view.tip().expect("main answers").expect("a tip");
-        drive(&mut sync, &view, Event::Tip { tip });
-        open_claim(&mut sync, &view, 1);
-        let timestamp = match view.header_at(tip.height).expect("main answers") {
-            AtHeight::Recorded(record) => record.header.timestamp,
-            AtHeight::AboveTip => panic!("the tip"),
-        };
-        block.header.previous = tip.hash;
-        block.header.timestamp = timestamp + 120;
-        block.header.nonce = 0;
-        let pow = block.pow_blob();
-        let hash = PowBlob::read(&pow).expect("preimage").identity();
-        let mut out = Vec::new();
-        sync.handle(
-            Event::Headers {
-                session: 1,
-                bytes: headers_of(pow),
-            },
-            &view,
-            Instant::now(),
-            &mut NoDraw,
-            &mut out,
-        )
-        .expect("main answers");
-        let job = out
-            .iter()
-            .find_map(|command| match command {
-                Command::Prove {
-                    job,
-                    cache: CachePlan::Main(_),
-                    ..
-                } => Some(*job),
-                _ => None,
-            })
-            .expect("a proof under a main seed");
-        let mut out = Vec::new();
-        sync.handle(
-            Event::Proven {
-                job,
-                results: vec![Proved::NotHeld],
-            },
-            &view,
-            Instant::now(),
-            &mut NoDraw,
-            &mut out,
-        )
-        .expect("main answers");
-        no_close(&out);
-        assert!(
-            !out.iter()
-                .any(|command| matches!(command, Command::Prove { .. })),
-            "the same plan was issued again on the same event: {out:?}"
-        );
-        assert_eq!(sync.run_len(1), 0, "the run was dropped");
-        assert!(!sync.contains_header(hash), "an unproven header joined T");
-        assert!(sync.transit(1).is_some(), "the session is kept");
-    });
-}
-
 fn hash_proves<'id, H, R>(sync: &mut Sync<u8, R>, main: &H, out: &mut Vec<Command<u8>>)
 where
     H: HeaderView<'id>,
@@ -946,7 +920,7 @@ where
     });
 }
 
-fn answer<'id, H>(
+pub(crate) fn answer<'id, H>(
     sync: &mut Sync<u8, fn(BlockHeight) -> RuleSet>,
     view: &H,
     who: u8,
@@ -966,7 +940,7 @@ where
     )
 }
 
-fn offer_tag(out: &[Command<u8>]) -> u64 {
+pub(crate) fn offer_tag(out: &[Command<u8>]) -> u64 {
     out.iter()
         .find_map(|command| match command {
             Command::Offer { arrivals } => Some(arrivals[0].tag),
@@ -1079,124 +1053,5 @@ fn a_node_behind_relays_nothing() {
             })
             .collect();
         assert_eq!(relays, vec![(second, who)], "{out:?}");
-    });
-}
-
-/// A span is offered only once every arrival before it has connected. The
-/// entry works each offer apart, so a span whose parent is still with the
-/// entry would be unlinked and its bodies fetched again.
-#[test]
-fn a_span_is_offered_only_after_the_span_before_it_connects() {
-    with_two_headers(|sync, view, (first_raw, first), (second_raw, second)| {
-        // One seat: the first body alone.
-        let out = drive(sync, view, Event::Room { seats: 1 });
-        let (who, asked) = request_for(&out).expect("the first body is wanted");
-        assert_eq!(asked, vec![*first.as_bytes()]);
-        let out = answer(sync, view, who, first_raw);
-        let tag = offer_tag(&out);
-        // A seat again before the first connects: the second body is
-        // fetched, and held.
-        let out = drive(sync, view, Event::Room { seats: 1 });
-        let (who, asked) = request_for(&out).expect("the second body is wanted");
-        assert_eq!(asked, vec![*second.as_bytes()]);
-        let out = answer(sync, view, who, second_raw);
-        assert!(
-            !out.iter()
-                .any(|command| matches!(command, Command::Offer { .. })),
-            "the second span was offered over the first: {out:?}"
-        );
-        // The first connects; the next room offers the second.
-        drive(
-            sync,
-            view,
-            Event::Entry {
-                tag,
-                outcome: Outcome::Connected {
-                    height: BlockHeight::from_raw(8),
-                },
-            },
-        );
-        let out = drive(sync, view, Event::Room { seats: 1 });
-        let offered = out.iter().find_map(|command| match command {
-            Command::Offer { arrivals } => Some(arrivals[0].header.hash()),
-            _ => None,
-        });
-        assert_eq!(offered, Some(second), "{out:?}");
-    });
-}
-
-/// A session whose claim names `H*`'s tip is a body source (CS-F8): it
-/// never served a header, and it is not asked for one, since its work does
-/// not exceed `H*`'s (CS-Q2 step 1). A claim naming a block this node does
-/// not hold makes no source.
-#[test]
-fn a_claim_naming_the_selected_tip_makes_a_body_source_without_a_header_request() {
-    let main = chain_of(8);
-    let mut block = candidate_on(&main, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, target_one as fn(BlockHeight) -> RuleSet);
-    main.with_view(|view| {
-        let tip = view.tip().expect("main answers").expect("a tip");
-        drive(&mut sync, &view, Event::Tip { tip });
-        open_claim(&mut sync, &view, 1);
-        let timestamp = match view.header_at(tip.height).expect("main answers") {
-            AtHeight::Recorded(record) => record.header.timestamp,
-            AtHeight::AboveTip => panic!("the tip"),
-        };
-        block.header.previous = tip.hash;
-        block.header.timestamp = timestamp + 120;
-        let pow = block.pow_blob();
-        let hash = PowBlob::read(&pow).expect("preimage").identity();
-        drive(
-            &mut sync,
-            &view,
-            Event::Headers {
-                session: 1,
-                bytes: headers_of(pow),
-            },
-        );
-        assert_eq!(sync.selected().hash, hash);
-        // The supplier leaves before serving the body.
-        drive(&mut sync, &view, Event::SessionClosed { session: 1 });
-        drive(&mut sync, &view, Event::Room { seats: 1 });
-        let work = sync.selected().work;
-        let mut asked = None;
-        for (session, top) in [(2u8, BlockHash::from_bytes([9; 32])), (3, hash)] {
-            drive(
-                &mut sync,
-                &view,
-                Event::SessionOpened {
-                    session,
-                    transit: Duration::from_secs(1),
-                },
-            );
-            let mut out = Vec::new();
-            sync.claim(
-                session,
-                PeerClaim {
-                    count: ChainCount::from_raw(tip.height.to_raw() + 2),
-                    work,
-                    top,
-                },
-                &view,
-                Instant::now(),
-                &mut NoDraw,
-                &mut out,
-            )
-            .expect("a chain");
-            assert!(
-                !out.iter()
-                    .any(|command| matches!(command, Command::RequestHeaders { .. })),
-                "an equal-work session was asked for headers: {out:?}"
-            );
-            // The claim itself plans the bodies: an idle node has no
-            // later event to do it.
-            if let Some(request) = request_for(&out) {
-                assert!(asked.is_none(), "{out:?}");
-                asked = Some(request);
-            }
-        }
-        let (who, asked) = asked.expect("the body is wanted on the claim");
-        assert_eq!(who, 3, "the session naming the tip is the source");
-        assert_eq!(asked, vec![*hash.as_bytes()]);
     });
 }

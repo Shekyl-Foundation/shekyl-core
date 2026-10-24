@@ -1737,3 +1737,42 @@ fn a_queued_message_survives_an_epoch_roll() {
         shekyl_relay_zone_free(h);
     }
 }
+
+/// A zone built with a verdict publisher publishes the relay's hop-0 verdict
+/// through it (`GS-Q3`): one address-hiding session is [`OriginVerdict::Routable`],
+/// and its close returns [`OriginVerdict::Absent`]. The production zone is
+/// built the same way with the process cell's publisher; this test's zone
+/// has a channel of its own, so it shares no state with any other test and
+/// reaches into no handle after construction.
+#[test]
+fn a_zone_built_with_a_publisher_publishes_the_origin_verdict() {
+    use crate::origin_verdict::OriginVerdict;
+    // Start elsewhere, so construction's publish is a change the receiver sees.
+    let (publisher, verdict) = tokio::sync::watch::channel(OriginVerdict::Routable);
+    let h = new_zone_publishing(0, 2, 600, 30, 0, TOR_CONFIGURED, Some(Arc::new(publisher)));
+    assert!(!h.is_null());
+    assert_eq!(
+        *verdict.borrow(),
+        OriginVerdict::Absent,
+        "construction publishes: no session hides the address"
+    );
+    unsafe {
+        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false, TOR_LINK);
+    }
+    assert_eq!(
+        *verdict.borrow(),
+        OriginVerdict::Routable,
+        "one address-hiding session: the origin leaves"
+    );
+    unsafe {
+        shekyl_relay_zone_on_close(h, id(1).as_ptr());
+    }
+    assert_eq!(
+        *verdict.borrow(),
+        OriginVerdict::Absent,
+        "its close takes the verdict back"
+    );
+    unsafe {
+        shekyl_relay_zone_free(h);
+    }
+}

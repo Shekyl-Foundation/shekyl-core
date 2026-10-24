@@ -1905,7 +1905,7 @@ dependencies = [
  "hash32",
  "rustc_version",
  "serde",
- "spin 0.9.8",
+ "spin 0.9.9",
  "stable_deref_trait",
 ]
 
@@ -4046,7 +4046,6 @@ dependencies = [
  "shekyl-difficulty",
  "shekyl-draw-rng",
  "shekyl-levin",
- "shekyl-peer-policy",
  "shekyl-pow-randomx",
  "shekyl-types",
  "shekyl-wire",
@@ -5760,18 +5759,18 @@ dependencies = [
 
 [[package]]
 name = "spin"
-version = "0.9.8"
+version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
+checksum = "3763264f6b73151db08c50ff20d7d8a0b8796e021cdea7ceedad07b80155fa0e"
 dependencies = [
  "lock_api",
 ]
 
 [[package]]
 name = "spin"
-version = "0.10.0"
+version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d5fe4ccb98d9c292d56fec89a5e07da7fc4cf0dc11e156b41793132775d3e591"
+checksum = "023a211cb3138dbc438680b32560ad89f699977624c9f8dbb95a47d5b4c07dd3"
 
 [[package]]
 name = "spki"
@@ -5797,7 +5796,7 @@ checksum = "227c4f8561598188d0df96dbe749824576174bba278b5b6bb2eacff1066067d0"
 dependencies = [
  "hashbrown 0.16.1",
  "rustversion",
- "spin 0.10.0",
+ "spin 0.10.1",
 ]
 
 [[package]]
@@ -6035,9 +6034,9 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokio"
-version = "1.51.0"
+version = "1.51.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2bd1c4c0fc4a7ab90fc15ef6daaa3ec3b893f004f915f2392557ed23237820cd"
+checksum = "a13e32eacd0222f9658be2ccbd83b718bfd9bfb0d54b5921913c184cb86124a5"
 dependencies = [
  "bytes",
  "libc",

@@ -21,9 +21,8 @@
 //!   ingress.
 //! - **2008, an announced block** (`NOTIFY_NEW_COMPACT_BLOCK`), is admitted
 //!   here too, within its cap, and goes to the owner whole: announcements
-//!   are chain sync's (CS-Q1), and the owner relays a connected one. 2009,
-//!   a peer asking for an announced block's missing transactions, stays the
-//!   C++ handler's until the cutover.
+//!   are chain sync's (CS-Q1). 2009, a peer asking for an announced block's
+//!   missing transactions, stays the C++ handler's until the cutover.
 //! - **Every other command**, and every other post, goes to the C++ handler
 //!   unchanged. Its bytes are streamed through as they arrive, never
 //!   buffered here, and the C++ ingress judges them as it does today.
@@ -37,6 +36,10 @@
 //! - **A malformed bucket header is the transport's refusal, as today:**
 //!   the session's bytes go to the C++ handler raw from there on, and its
 //!   ingress refuses them.
+//! - **The owner leaving** hands the session back as one byte stream. Bytes
+//!   the split has accepted and not yet handed on go ahead of the next
+//!   chunk, and the split is dropped. Framing does not resume in the middle
+//!   of a bucket.
 //!
 //! [`Post::Established`] and [`Post::Closed`] go to the owner as well as
 //! onward, and [`Post::HandshakeResult`] goes to the owner as a claim and
@@ -65,9 +68,7 @@ pub enum Routed {
         /// Its connector.
         connector: ConnectorId,
     },
-    /// A session's sync payload: the peer's claim. The outbound
-    /// handshake's arrives as a post; an inbound handshake's and a timed
-    /// sync's arrive as a hint ([`Router::hint`]).
+    /// The outbound handshake's sync payload: the peer's claim.
     Claim {
         /// The session.
         id: SocketId,
@@ -143,8 +144,7 @@ impl Router {
     /// A session's sync payload that did not arrive as a post: an inbound
     /// handshake's, or a timed sync's (CS-Q10, until slice 4). The owner
     /// takes it as that session's claim. `false` when no owner is attached
-    /// (the daemon's router before the cutover) or it is gone: the hint is
-    /// dropped, and the C++ handler has its own copy.
+    /// (the daemon's router before the cutover) or it is gone.
     pub fn hint(&self, id: SocketId, sync: SyncPayload) -> bool {
         self.owner
             .as_ref()
@@ -154,7 +154,7 @@ impl Router {
     /// Handle one post (module docs). Never calls into the hub.
     pub fn post(&self, post: Post) {
         let Some(owner) = self.owner.as_ref().filter(|owner| !owner.is_closed()) else {
-            (self.forward)(post);
+            self.forward_retired(post);
             return;
         };
         match post {
@@ -226,17 +226,30 @@ impl Router {
                 if fed.forward.is_empty() {
                     routed.push(Routed::Finished { id });
                 }
-                // An owner gone mid-chunk cannot finish it: the chunk goes
-                // to the C++ handler whole, and the session is not split
-                // again.
-                if routed.into_iter().any(|item| owner.send(item).is_err()) {
-                    self.splits().remove(&id);
-                    (self.forward)(Post::Deliver {
-                        id,
-                        connector,
-                        bytes,
-                    });
-                } else if !fed.forward.is_empty() {
+                // A failed send means the owner is gone and every message
+                // queued in this loop goes with it. The handler gets the
+                // bytes still held, which include this chunk, and the split
+                // ends so a later chunk is not cut against that stream.
+                for item in routed {
+                    if owner.send(item).is_err() {
+                        let raw = {
+                            let mut splits = self.splits();
+                            let raw = splits.get_mut(&id).map(Split::take_raw).unwrap_or_default();
+                            splits.remove(&id);
+                            raw
+                        };
+                        (self.forward)(Post::Deliver {
+                            id,
+                            connector,
+                            bytes: raw,
+                        });
+                        return;
+                    }
+                }
+                if let Some(split) = self.splits().get_mut(&id) {
+                    split.commit();
+                }
+                if !fed.forward.is_empty() {
                     (self.forward)(Post::Deliver {
                         id,
                         connector,
@@ -244,6 +257,46 @@ impl Router {
                     });
                 }
             }
+        }
+    }
+
+    /// The owner is gone. A session mid-bucket sends the bytes the split
+    /// still holds ahead of this chunk, then stops being split.
+    fn forward_retired(&self, post: Post) {
+        match post {
+            Post::Deliver {
+                id,
+                connector,
+                bytes,
+            } => {
+                let mut raw = self
+                    .splits()
+                    .remove(&id)
+                    .map(|mut split| split.take_raw())
+                    .unwrap_or_default();
+                if !raw.is_empty() {
+                    raw.extend_from_slice(&bytes);
+                }
+                let bytes = if raw.is_empty() { bytes } else { raw };
+                (self.forward)(Post::Deliver {
+                    id,
+                    connector,
+                    bytes,
+                });
+            }
+            Post::Closed {
+                id,
+                connector,
+                cause,
+            } => {
+                self.splits().remove(&id);
+                (self.forward)(Post::Closed {
+                    id,
+                    connector,
+                    cause,
+                });
+            }
+            other => (self.forward)(other),
         }
     }
 
@@ -287,29 +340,51 @@ pub struct Fed {
 }
 
 /// One session's position in its byte stream.
+///
+/// `raw` is every byte accepted since the last hand-off, in order. A feed
+/// appends its chunk there and parses. [`Self::commit`] drops what that feed
+/// handed to the handler or the owner. Until then [`Self::take_raw`] is the
+/// stream the handler must see if the owner has gone: the unhanded prefix
+/// and this chunk, once.
 #[derive(Debug)]
 pub struct Split {
+    raw: Vec<u8>,
+    /// `raw[..handed]` was copied into the last [`Fed`].
+    handed: usize,
+    /// The next byte to parse.
+    cursor: usize,
     state: State,
 }
 
 impl Default for Split {
     fn default() -> Self {
         Self {
-            state: State::Header(Vec::with_capacity(HEADER_SIZE)),
+            raw: Vec::new(),
+            handed: 0,
+            cursor: 0,
+            state: State::Header,
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 enum State {
-    /// Collecting a bucket header.
-    Header(Vec<u8>),
-    /// Passing a C++-bound payload through: bytes still to come.
-    Forward(u64),
-    /// Buffering a payload for the owner.
+    /// Collecting a bucket header at `cursor`.
+    Header,
+    /// Passing a C++-bound payload through: `remaining` bytes still to come.
+    Forward {
+        /// Payload bytes still to hand to the handler.
+        remaining: u64,
+    },
+    /// A chain-sync payload. Its header and the bytes so far stay in `raw`
+    /// until the payload completes, so a handler that inherits the stream
+    /// still sees the bucket.
     Sync {
+        /// The command.
         command: Admitted,
-        payload: Vec<u8>,
+        /// Index in `raw` of the first payload byte.
+        payload_at: usize,
+        /// Payload bytes still to come.
         remaining: u64,
     },
     /// A header did not parse: everything from here goes to the C++
@@ -317,92 +392,135 @@ enum State {
     Raw,
 }
 
-/// How much of a chain-sync payload is reserved up front. The rest grows
-/// as it arrives, so a header's claimed length is never an allocation.
-const RESERVE: usize = 64 * 1024;
-
 impl Split {
-    /// Split one delivered chunk.
+    /// Split one delivered chunk. The chunk is kept in [`Self`] until
+    /// [`commit`](Self::commit) or [`take_raw`](Self::take_raw).
     #[must_use]
-    pub fn feed(&mut self, mut bytes: &[u8]) -> Fed {
+    pub fn feed(&mut self, chunk: &[u8]) -> Fed {
+        self.raw.extend_from_slice(chunk);
         let mut fed = Fed::default();
-        while !bytes.is_empty() {
-            match &mut self.state {
+        loop {
+            match self.state {
                 State::Raw => {
-                    fed.forward.extend_from_slice(bytes);
-                    bytes = &[];
+                    fed.forward.extend_from_slice(&self.raw[self.cursor..]);
+                    self.cursor = self.raw.len();
+                    self.handed = self.cursor;
+                    break;
                 }
-                State::Header(head) => {
-                    let take = (HEADER_SIZE - head.len()).min(bytes.len());
-                    head.extend_from_slice(&bytes[..take]);
-                    bytes = &bytes[take..];
-                    if head.len() < HEADER_SIZE {
+                State::Header => {
+                    if self.raw.len() - self.cursor < HEADER_SIZE {
                         break;
                     }
-                    let raw: [u8; HEADER_SIZE] =
-                        head.as_slice().try_into().expect("a whole header");
-                    self.state = match BucketHead::read(&raw) {
-                        Err(_) => {
-                            fed.forward.extend_from_slice(&raw);
-                            State::Raw
-                        }
-                        Ok(bucket) => match admitted(&bucket) {
-                            Some(command) if bucket.payload_len == 0 => {
-                                fed.messages.push((command, Vec::new()));
-                                State::Header(Vec::with_capacity(HEADER_SIZE))
-                            }
-                            Some(command) => State::Sync {
-                                command,
-                                payload: Vec::with_capacity(
-                                    usize::try_from(bucket.payload_len)
-                                        .unwrap_or(RESERVE)
-                                        .min(RESERVE),
-                                ),
-                                remaining: bucket.payload_len,
-                            },
-                            None => {
-                                fed.forward.extend_from_slice(&raw);
-                                if bucket.payload_len == 0 {
-                                    State::Header(Vec::with_capacity(HEADER_SIZE))
-                                } else {
-                                    State::Forward(bucket.payload_len)
+                    let start = self.cursor;
+                    let head: [u8; HEADER_SIZE] = self.raw[start..start + HEADER_SIZE]
+                        .try_into()
+                        .expect("a whole header");
+                    match BucketHead::read(&head) {
+                        Err(_) => self.state = State::Raw,
+                        Ok(bucket) => {
+                            self.cursor = start + HEADER_SIZE;
+                            match admitted(&bucket) {
+                                Some(command) if bucket.payload_len == 0 => {
+                                    fed.messages.push((command, Vec::new()));
+                                    self.handed = self.cursor;
+                                    self.state = State::Header;
+                                }
+                                Some(command) => {
+                                    self.state = State::Sync {
+                                        command,
+                                        payload_at: self.cursor,
+                                        remaining: bucket.payload_len,
+                                    };
+                                }
+                                None => {
+                                    fed.forward.extend_from_slice(&head);
+                                    self.handed = self.cursor;
+                                    self.state = if bucket.payload_len == 0 {
+                                        State::Header
+                                    } else {
+                                        State::Forward {
+                                            remaining: bucket.payload_len,
+                                        }
+                                    };
                                 }
                             }
-                        },
-                    };
+                        }
+                    }
                 }
-                State::Forward(remaining) => {
-                    let take = usize::try_from(*remaining)
+                State::Forward { remaining } => {
+                    let available = self.raw.len() - self.cursor;
+                    if available == 0 {
+                        break;
+                    }
+                    let take = usize::try_from(remaining)
                         .unwrap_or(usize::MAX)
-                        .min(bytes.len());
-                    fed.forward.extend_from_slice(&bytes[..take]);
-                    bytes = &bytes[take..];
-                    *remaining -= u64::try_from(take).unwrap_or(u64::MAX);
-                    if *remaining == 0 {
-                        self.state = State::Header(Vec::with_capacity(HEADER_SIZE));
+                        .min(available);
+                    fed.forward
+                        .extend_from_slice(&self.raw[self.cursor..self.cursor + take]);
+                    self.cursor += take;
+                    self.handed = self.cursor;
+                    let left = remaining - u64::try_from(take).unwrap_or(remaining);
+                    if left == 0 {
+                        self.state = State::Header;
+                    } else {
+                        self.state = State::Forward { remaining: left };
+                        break;
                     }
                 }
                 State::Sync {
                     command,
-                    payload,
+                    payload_at,
                     remaining,
                 } => {
-                    let take = usize::try_from(*remaining)
+                    let available = self.raw.len() - self.cursor;
+                    if available == 0 {
+                        break;
+                    }
+                    let take = usize::try_from(remaining)
                         .unwrap_or(usize::MAX)
-                        .min(bytes.len());
-                    payload.extend_from_slice(&bytes[..take]);
-                    bytes = &bytes[take..];
-                    *remaining -= u64::try_from(take).unwrap_or(u64::MAX);
-                    if *remaining == 0 {
-                        let command = *command;
-                        let payload = std::mem::take(payload);
+                        .min(available);
+                    self.cursor += take;
+                    let left = remaining - u64::try_from(take).unwrap_or(remaining);
+                    if left == 0 {
+                        let payload = self.raw[payload_at..self.cursor].to_vec();
                         fed.messages.push((command, payload));
-                        self.state = State::Header(Vec::with_capacity(HEADER_SIZE));
+                        self.handed = self.cursor;
+                        self.state = State::Header;
+                    } else {
+                        self.state = State::Sync {
+                            command,
+                            payload_at,
+                            remaining: left,
+                        };
+                        break;
                     }
                 }
             }
         }
         fed
+    }
+
+    /// Drop the bytes the last feed handed off. The unhanded tail stays,
+    /// and a sync bucket in progress is that tail.
+    pub fn commit(&mut self) {
+        if self.handed == 0 {
+            return;
+        }
+        self.raw.drain(..self.handed);
+        self.cursor -= self.handed;
+        if let State::Sync { payload_at, .. } = &mut self.state {
+            *payload_at -= self.handed;
+        }
+        self.handed = 0;
+    }
+
+    /// Every byte still held, including the chunk just fed. The caller
+    /// forwards this once and drops the split.
+    pub fn take_raw(&mut self) -> Vec<u8> {
+        self.handed = 0;
+        self.cursor = 0;
+        self.state = State::Header;
+        std::mem::take(&mut self.raw)
     }
 }
 

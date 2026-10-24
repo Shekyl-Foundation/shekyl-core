@@ -38,6 +38,9 @@ use crate::stem_watch::{StemTally, StemTallySnapshot, StemWatch, TxId};
 mod cover;
 mod epoch_map;
 mod hidden_slot;
+mod origin;
+
+pub use origin::OriginVerdict;
 
 use epoch_map::EpochMap;
 

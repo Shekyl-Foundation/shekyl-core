@@ -122,10 +122,14 @@ fn a_claimed_length_is_not_an_allocation() {
     .write();
     let fed = split.feed(&raw);
     assert!(fed.forward.is_empty() && fed.messages.is_empty());
-    match &split.state {
-        super::State::Sync { payload, .. } => assert!(payload.capacity() <= super::RESERVE),
-        other => panic!("{other:?}"),
-    }
+    // The header names a 100_000_000-byte payload. Nothing of it has
+    // arrived, so the split holds the header and does not allocate it.
+    assert!(
+        split.raw.capacity() < 64 * 1024,
+        "capacity {}",
+        split.raw.capacity()
+    );
+    assert!(matches!(split.state, super::State::Sync { .. }));
 }
 
 fn endpoint() -> Endpoint {
@@ -139,7 +143,7 @@ fn socket(raw: u64) -> SocketId {
 #[test]
 fn pass_through_forwards_every_post_unchanged() {
     let (forward, seen) = recorder();
-    let router = Arc::new(Router::pass_through(forward));
+    let router = Router::pass_through(forward);
     let id = socket(7);
     let bytes = sync_bucket(SyncCommand::RequestHeaders, b"p");
     router.post(Post::Established {
@@ -245,6 +249,112 @@ fn a_gone_owner_turns_the_router_back_to_pass_through() {
     });
     let seen = seen.lock().expect("unpoisoned");
     assert!(matches!(&seen[1], Post::Deliver { bytes: b, .. } if *b == bytes));
+}
+
+#[test]
+fn a_partial_header_reaches_cpp_when_the_owner_leaves() {
+    let (forward, seen) = recorder();
+    let (tx, rx) = mpsc::unbounded_channel();
+    let router = Router::attached(forward, tx);
+    let id = socket(4);
+    let connector = endpoint().connector();
+    router.post(Post::Established {
+        id,
+        endpoint: endpoint(),
+    });
+    let bucket = other_bucket(b"cpp-bytes");
+    let cut = 10;
+    router.post(Post::Deliver {
+        id,
+        connector,
+        bytes: bucket[..cut].to_vec(),
+    });
+    drop(rx);
+    router.post(Post::Deliver {
+        id,
+        connector,
+        bytes: bucket[cut..].to_vec(),
+    });
+    let seen = seen.lock().expect("unpoisoned");
+    let delivers: Vec<_> = seen
+        .iter()
+        .filter_map(|post| match post {
+            Post::Deliver { bytes, .. } => Some(bytes.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(delivers, vec![bucket]);
+}
+
+#[test]
+fn a_cpp_payload_already_handed_on_is_not_sent_twice() {
+    let (forward, seen) = recorder();
+    let (tx, rx) = mpsc::unbounded_channel();
+    let router = Router::attached(forward, tx);
+    let id = socket(5);
+    let connector = endpoint().connector();
+    router.post(Post::Established {
+        id,
+        endpoint: endpoint(),
+    });
+    let bucket = other_bucket(b"cpp-bytes");
+    let cut = HEADER_SIZE + 2;
+    assert!(cut < bucket.len());
+    router.post(Post::Deliver {
+        id,
+        connector,
+        bytes: bucket[..cut].to_vec(),
+    });
+    drop(rx);
+    router.post(Post::Deliver {
+        id,
+        connector,
+        bytes: bucket[cut..].to_vec(),
+    });
+    let seen = seen.lock().expect("unpoisoned");
+    let delivers: Vec<_> = seen
+        .iter()
+        .filter_map(|post| match post {
+            Post::Deliver { bytes, .. } => Some(bytes.as_slice()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(delivers, vec![&bucket[..cut], &bucket[cut..]]);
+}
+
+#[test]
+fn a_partial_sync_bucket_is_handed_to_cpp_whole_when_the_owner_leaves() {
+    let (forward, seen) = recorder();
+    let (tx, rx) = mpsc::unbounded_channel();
+    let router = Router::attached(forward, tx);
+    let id = socket(6);
+    let connector = endpoint().connector();
+    router.post(Post::Established {
+        id,
+        endpoint: endpoint(),
+    });
+    let bucket = sync_bucket(SyncCommand::RequestHeaders, b"sync-payload");
+    let cut = HEADER_SIZE + 3;
+    router.post(Post::Deliver {
+        id,
+        connector,
+        bytes: bucket[..cut].to_vec(),
+    });
+    drop(rx);
+    router.post(Post::Deliver {
+        id,
+        connector,
+        bytes: bucket[cut..].to_vec(),
+    });
+    let seen = seen.lock().expect("unpoisoned");
+    let delivers: Vec<_> = seen
+        .iter()
+        .filter_map(|post| match post {
+            Post::Deliver { bytes, .. } => Some(bytes.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(delivers, vec![bucket]);
 }
 
 /// The daemon's router before the cutover is pass-through: every post

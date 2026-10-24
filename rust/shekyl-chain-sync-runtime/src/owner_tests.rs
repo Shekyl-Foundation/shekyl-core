@@ -7,10 +7,11 @@
 //! end is the loopback harness's (`shekyl-p2p-harness`,
 //! `tests/chain_sync_loopback.rs`).
 
-use shekyl_chain_ingest::service::{ArrivalTag, Reply};
+use shekyl_chain_ingest::service::{ArrivalTag, CannotFollow, Reply};
+use shekyl_chain_ingest::PopBeyondReorgCap;
 use shekyl_chain_rules::{CenRow, InvalidBlock, Locus};
 use shekyl_levin::{RequestBodies, RequestHeaders};
-use shekyl_types::{BlockHash, BlockHeight};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 
 use super::{outcome_of, ServeRequest, Serving};
 use shekyl_chain_sync::Outcome;
@@ -59,9 +60,30 @@ fn every_entry_reply_has_an_outcome() {
         ),
         (Reply::Cancelled { by: ArrivalTag(4) }, Outcome::Again),
         (Reply::Stopped, Outcome::Again),
+        (
+            Reply::BeyondCap(PopBeyondReorgCap {
+                depth: BlockCount::ONE,
+                cap: BlockCount::ONE,
+            }),
+            Outcome::BeyondCap,
+        ),
+        (
+            Reply::Switched {
+                demoted: Vec::new(),
+                promoted: Vec::new(),
+            },
+            Outcome::Noted,
+        ),
+        (
+            Reply::CannotFollow(CannotFollow::BelowFloor {
+                tip: BlockHeight::ZERO,
+                floor: BlockHeight::ZERO,
+            }),
+            Outcome::Noted,
+        ),
     ];
     for (reply, expected) in cases {
-        assert_eq!(outcome_of(reply.clone(), true), Some(expected), "{reply:?}");
+        assert_eq!(outcome_of(reply.clone(), true), expected, "{reply:?}");
     }
 }
 
@@ -76,12 +98,9 @@ fn a_connect_carries_its_height_however_the_body_arrived() {
     };
     assert_eq!(
         outcome_of(connected.clone(), false),
-        Some(Outcome::Connected { height })
+        Outcome::Connected { height }
     );
-    assert_eq!(
-        outcome_of(connected, true),
-        Some(Outcome::Connected { height })
-    );
+    assert_eq!(outcome_of(connected, true), Outcome::Connected { height });
 }
 
 /// A session's queue holds at most one waiting request of each kind,

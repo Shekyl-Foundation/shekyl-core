@@ -82,6 +82,8 @@ impl Visit for Fields {
         match field.name() {
             "message" => self.message = format!("{value:?}"),
             "cause" => self.cause = Some(format!("{value:?}")),
+            // The owner logs its `Session` by `Display`, the socket id.
+            "session" => self.session = format!("{value:?}").parse().ok(),
             "tag" => self.tag = Some(format!("{value:?}").trim_matches('"').to_owned()),
             _ => {}
         }

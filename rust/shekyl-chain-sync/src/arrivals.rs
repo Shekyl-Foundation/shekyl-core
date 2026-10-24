@@ -69,6 +69,12 @@ impl<K: Copy + Eq> Offered<K> {
         self.tag_of.contains_key(&hash)
     }
 
+    /// Nothing is with the entry.
+    #[cfg(test)]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.by_tag.is_empty()
+    }
+
     /// The entry answered `tag`: the arrival it names, if it is ours.
     pub(crate) fn answered(&mut self, tag: u64) -> Option<BoundArrival<K>> {
         let arrival = self.by_tag.remove(&tag)?;
