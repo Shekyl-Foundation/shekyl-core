@@ -4,26 +4,36 @@
 // BSD-3-Clause
 
 // dalek-ff-group 0.5.0 FieldElement (helioselene::Field25519), field ops over 2^255-19.
-// Inputs are secret canonical encodings (top two bits cleared, so below the
-// modulus); from_repr's CtOption is resolved with the constant-time
-// `unwrap_or`, and from_repr itself is its own entrypoint, so a leak inside it
-// is not attributed to the operation under test.
+// Operands are secret elements of the full field (64 secret bytes through
+// the field's wide reduction); from_repr takes unrestricted secret bytes and
+// resolves its CtOption with the constant-time `unwrap_or`, and is its own
+// entrypoint, so a leak inside it is not attributed to the operation under
+// test.
 use crate::rng::{PrivateRng, PublicRng};
 use checkct_macros::checkct;
 use core::hint::black_box;
 use ff::{Field, PrimeField};
 use dalek_ff_group::FieldElement as F;
 
+/// An unrestricted secret encoding: any 32 bytes, in or out of the canonical
+/// range. `from_repr` must handle both in constant time, so its row takes
+/// this directly.
 fn secret_bytes() -> [u8; 32] {
     black_box(PublicRng::new().next_u32());
     let mut b = [0u8; 32];
     PrivateRng::new().fill_bytes(&mut b);
-    b[31] &= 0x3f;
     b
 }
 
+/// A secret element of the full field, sampled through the field's own wide
+/// reduction of 64 secret bytes: every element, the near-modulus ones
+/// included, without a secret-dependent rejection branch. (Masking the top
+/// bits of an encoding would exclude [2^254, p).)
 fn secret_fe() -> F {
-    F::from_repr(secret_bytes()).unwrap_or(F::ZERO)
+    black_box(PublicRng::new().next_u32());
+    let mut b = [0u8; 64];
+    PrivateRng::new().fill_bytes(&mut b);
+    F::wide_reduce(b)
 }
 
 
