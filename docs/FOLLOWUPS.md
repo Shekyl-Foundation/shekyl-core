@@ -1166,10 +1166,6 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
   - Owner: [`TOR_BUNDLE_DISTRIBUTION.md`](design/TOR_BUNDLE_DISTRIBUTION.md) `TB-4`, `TB-5`
 
-- **Name the Tor Status and Health fields (the RW round).** Increment 3 exposes one typed read (`TSR-Q12`, including `ManagedTorFix` and `OwnTx`); this round names the restricted Status fields and Health's one boolean (`TSR-Q4`) as typed values (`TSR-Q13`). The pose is [`INPUT_GRAMMAR.md`](design/INPUT_GRAMMAR.md) Part E (IG-Q66…IG-Q72), revised 2026-10-23 and still unruled: Health's boolean is the hop-0 class part, the `tor` object is the managed supervisor only, and a cause is one variant. No leg carries Status to the GUI yet: the sidecar's view listener has no Status, and RT-15's same-user socket or pipe is RT-W10's to build and is not authorized (`RPC_CHANNEL.md` §13); the sidecar reaches Status over the owning connection the GUI launches it with (`GS-Q1`, Rick 2026-10-22; core increment `GS-C3`). Blocker: the ruling of that pose, then the reply fields on the wire. Falsify by `RPC_WIRE.md` naming each field. — [`TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) `TSR-Q12`
-  - Target: pre-genesis
-  - Owner: [`RPC_WIRE.md`](design/RPC_WIRE.md)
-
 - **Show the Tor posture in `shekyl-cli`, and report a held send as held.** `shekyl-cli` renders Status through the one renderer (`TSR-Q13`) and the send flow reads `OwnTx`, reporting `Held` as held and a `ClearnetOnly` send as sent, falsified by §11's two cases once increment 3's typed read and the RW field names exist, with the GUI's display tracked in `shekyl-gui-wallet`. — [`TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) §11
   - Target: pre-genesis
   - Owner: [`TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) §11
