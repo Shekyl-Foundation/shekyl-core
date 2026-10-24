@@ -408,7 +408,7 @@ jobs:
           -p shekyl-tor-control-wallet -p shekyl-tor-control-client -p shekyl-p-serve -p shekyl-p-host
           -p shekyl-operator-alarm -p shekyl-economics -p shekyl-store-codec
           -p shekyl-capped-stream -p shekyl-crypto-pq -p shekyl-miner -p shekyl-hash-budget
-          -p shekyl-node
+          -p shekyl-node -p shekyl-chain-sync -p shekyl-chain-sync-runtime
       - name: build shekyl-fcmp crate
         working-directory: rust
         run: cargo build --locked -p shekyl-fcmp

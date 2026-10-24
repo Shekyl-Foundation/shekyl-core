@@ -12,10 +12,10 @@ use std::time::Instant;
 use shekyl_chain_rules::RuleSet;
 use shekyl_levin::{BodiesFormFault, RequestBodies, ResponseBodies, MAX_OBJECT_REQUEST_COUNT};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
-use shekyl_wire::{Block, TxBody};
+use shekyl_wire::Block;
 
 use crate::model::{
-    body_deadline, BoundArrival, CloseCause, Command, Sync, BODY_REQUESTS_IN_FLIGHT,
+    body_deadline, BoundArrival, CloseCause, Command, OfferedBody, Sync, BODY_REQUESTS_IN_FLIGHT,
 };
 use crate::peer::{BodySpan, Dispute};
 
@@ -81,26 +81,31 @@ where
                 return;
             }
             // Until the discard rule lands, every byte is kept, so a
-            // skeleton is wanted again in full. It is not a fault.
-            if body.txs.iter().any(|tx| matches!(tx, TxBody::Skeleton(_))) {
+            // skeleton is wanted again in full. It is not a fault, and it
+            // is not an offer.
+            let Some(offered) = OfferedBody::from_full(body) else {
                 if let Some(state) = self.peers.get_mut(&session) {
                     state.inventory.skeleton.insert(hash);
                 }
                 continue;
-            }
+            };
             let tag = self.next_tag;
             self.next_tag = self.next_tag.saturating_add(1);
             self.held.push(BoundArrival {
                 tag,
                 session,
                 header: judged,
-                body: body.clone(),
+                body: offered,
+                solicited: true,
             });
         }
         self.flush_offers(out);
     }
 
     pub(crate) fn plan_bodies(&mut self, now: Instant, out: &mut Vec<Command<K>>) {
+        if self.unreadable {
+            return;
+        }
         let Some(seats) = self.seats else {
             return;
         };
@@ -163,6 +168,9 @@ where
     }
 
     pub(in crate::runs) fn flush_offers(&mut self, out: &mut Vec<Command<K>>) {
+        if self.unreadable {
+            return;
+        }
         let Some(seats) = self.seats else {
             return;
         };
@@ -184,14 +192,19 @@ where
             let Some(hash) = self.tree.ancestor_at(self.star.hash, height) else {
                 break;
             };
+            if self.accepted.contains(&hash) {
+                height = height + BlockCount::ONE;
+                continue;
+            }
+            // An arrival still with the entry ends the walk. The entry works
+            // each offer apart, so a span offered over one still connecting
+            // would find its parent unheld and come back unlinked.
             if self
                 .outstanding
                 .iter()
                 .any(|arrival| arrival.header.hash() == hash)
-                || self.accepted.contains(&hash)
             {
-                height = height + BlockCount::ONE;
-                continue;
+                break;
             }
             if !self
                 .held
@@ -247,9 +260,18 @@ where
             }
             // A frontier on another fork is not a source, however tall it
             // is. A frontier that is not in `T` covers only its own hash.
-            let covers = state.frontier.is_some_and(|(_, hash)| {
+            // The tip a session's claim named is a frontier too (CS-F8), as
+            // high as the served one or higher, never lowering it: it is
+            // why a peer that never served headers can serve bodies. A
+            // named tip this node does not hold in `T` covers nothing it
+            // still wants: a block on main is not a body it asks for.
+            let names = |hash: BlockHash| {
                 hash == end || self.tree.ancestor_at(hash, end_height) == Some(end)
-            });
+            };
+            let covers = state.frontier.is_some_and(|(_, hash)| names(hash))
+                || state
+                    .claim
+                    .is_some_and(|claim| self.tree.contains(claim.top) && names(claim.top));
             let blocked = skip_unavailable && state.inventory.unavailable.contains(&end);
             (covers && !blocked).then_some(*key)
         })

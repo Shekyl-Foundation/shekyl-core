@@ -23,7 +23,15 @@
 //! 2. [`Class::HeaderPow`] — chain sync's header proof-of-work;
 //! 3. [`Class::Unsolicited`] — blocks a peer announced unasked;
 //! 4. [`Class::CalcPow`] — the RPC's `calc_pow`;
-//! 5. [`Class::Miner`] — the built-in miner.
+//! 5. [`Class::Evidence`] — chain sync's past-cap evidence check
+//!    (`P2P_3_CHAIN_SYNC_BRIEF.md` CS-Q2 step 3);
+//! 6. [`Class::Miner`] — the built-in miner.
+//!
+//! `Evidence` sits above the miner on purpose. A class below it would never
+//! be granted on a mining node, because miner workers wait whenever fewer
+//! than two permits are free, and a mining node is the one most likely to
+//! be mining on an attacker's chain. Above it, the miner yields at most one
+//! permit while a check runs.
 //!
 //! **The miner never holds a permit a higher class waits for, and it never
 //! takes the last free permit.** One hash at nice 19 can occupy a core for
@@ -58,17 +66,20 @@ pub enum Class {
     Unsolicited,
     /// The RPC's `calc_pow`.
     CalcPow,
+    /// Chain sync's past-cap evidence check (module docs).
+    Evidence,
     /// The built-in miner.
     Miner,
 }
 
 impl Class {
     /// Every class, highest first.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Chain,
         Self::HeaderPow,
         Self::Unsolicited,
         Self::CalcPow,
+        Self::Evidence,
         Self::Miner,
     ];
 
@@ -82,7 +93,7 @@ impl Class {
     /// last permit stays for a higher class (module docs).
     const fn free_needed(self) -> usize {
         match self {
-            Self::Chain | Self::HeaderPow | Self::Unsolicited | Self::CalcPow => 1,
+            Self::Chain | Self::HeaderPow | Self::Unsolicited | Self::CalcPow | Self::Evidence => 1,
             Self::Miner => 2,
         }
     }
@@ -341,7 +352,12 @@ mod tests {
         let mut threads = Vec::new();
         // The miner is absent: a one-permit budget never grants it. Its
         // place in the order is `the_miner_waits_behind_every_higher_class`.
-        for class in [Class::CalcPow, Class::Unsolicited, Class::HeaderPow] {
+        for class in [
+            Class::Evidence,
+            Class::CalcPow,
+            Class::Unsolicited,
+            Class::HeaderPow,
+        ] {
             let (waiter, order) = (budget.clone(), Arc::clone(&order));
             threads.push(std::thread::spawn(move || {
                 let permit = waiter.acquire(class);
@@ -356,7 +372,12 @@ mod tests {
         }
         assert_eq!(
             *order.lock().expect("order"),
-            vec![Class::HeaderPow, Class::Unsolicited, Class::CalcPow]
+            vec![
+                Class::HeaderPow,
+                Class::Unsolicited,
+                Class::CalcPow,
+                Class::Evidence
+            ]
         );
     }
 
@@ -372,6 +393,7 @@ mod tests {
         let mut threads = Vec::new();
         for class in [
             Class::Miner,
+            Class::Evidence,
             Class::CalcPow,
             Class::Unsolicited,
             Class::HeaderPow,
@@ -391,7 +413,12 @@ mod tests {
         }
         assert_eq!(
             *order.lock().expect("order"),
-            vec![Class::HeaderPow, Class::Unsolicited, Class::CalcPow],
+            vec![
+                Class::HeaderPow,
+                Class::Unsolicited,
+                Class::CalcPow,
+                Class::Evidence
+            ],
             "the higher classes, highest first; the miner still waits"
         );
         assert_eq!(budget.waiting(Class::Miner), 1);
@@ -568,6 +595,38 @@ mod tests {
             higher.join().expect("joins");
             lower.join().expect("joins");
         }
+    }
+
+    /// On a mining node an evidence check still runs: with two permits and
+    /// a miner holding one, the check is granted the other, and no second
+    /// miner hash starts while it holds it. A class below the miner would
+    /// wait here for as long as the miner kept mining.
+    #[test]
+    fn an_evidence_check_runs_beside_a_miner_and_the_miner_yields() {
+        let budget = Budget::new(NonZeroUsize::new(2).expect("two"));
+        let miner = budget
+            .try_acquire(Class::Miner)
+            .expect("two free: the miner takes one");
+        let evidence = budget
+            .try_acquire(Class::Evidence)
+            .expect("the evidence check is granted the other permit");
+        assert!(
+            budget.try_acquire(Class::Miner).is_none(),
+            "the miner yields: no second hash while the check holds a permit"
+        );
+        drop(miner);
+        // A miner waiting behind a waiting evidence check is not granted:
+        // the free permit goes to the check.
+        let waiting = {
+            let budget = budget.clone();
+            std::thread::spawn(move || budget.acquire(Class::Evidence))
+        };
+        until(|| budget.waiting(Class::Evidence) == 1 || budget.held(Class::Evidence) == 2);
+        let second = waiting.join().expect("joins");
+        assert_eq!(budget.held(Class::Evidence), 2);
+        assert!(budget.try_acquire(Class::Miner).is_none());
+        drop((evidence, second));
+        assert!(budget.try_acquire(Class::Miner).is_some());
     }
 
     #[test]

@@ -16,6 +16,7 @@ use shekyl_chain_ingest::service::{
     ArrivalTag, Door, PoolHealth, Refusal, Reply, Rewinder, ServiceFault,
 };
 use shekyl_chain_ingest::{ProductionSubstrate, Rewound, TipChanged};
+use shekyl_chain_store::codec::FollowingDegraded;
 use shekyl_chain_sync::SyncState;
 use shekyl_daemon_rpc::chain_facts::{
     BlockAt, BlockHashAt, BlockHeaderAt, BlockLookup, ChainFacts, ChainTip, DaemonIdentity,
@@ -52,6 +53,9 @@ pub(crate) struct Surroundings {
     pub(crate) offline: bool,
     /// Chain sync's state: the watch the follower reads.
     pub(crate) sync: tokio::sync::watch::Receiver<SyncState>,
+    /// The connector's `following_degraded` latch. `None` is clear.
+    /// Chain sync raises it; the connector is the one writer.
+    pub(crate) latch: tokio::sync::watch::Receiver<Option<FollowingDegraded>>,
     /// The service's retirement flag: a pool whose file has faulted is
     /// not read here, as the pool handle does not read it.
     pub(crate) health: PoolHealth,
@@ -72,7 +76,8 @@ impl NodeFacts for Surroundings {
         // Chain sync's state, the one the follower posts on (DX-Q3, Q13),
         // read by the follower's rule: a closed watch says nothing about
         // the chain, so it reads `NoView`, not its last value.
-        // `following_degraded` is the latch the flip writes into the store.
+        // The latch is the store's, published by the connector. A closed
+        // watch keeps its last value: the latch is one-way until a resync.
         let state = if self.sync.has_changed().is_err() {
             SyncState::NoView
         } else {
@@ -86,7 +91,7 @@ impl NodeFacts for Surroundings {
                 SyncState::Behind { .. } | SyncState::Following { .. }
             ),
             offline: self.offline,
-            following_degraded: false,
+            following_degraded: self.latch.borrow().is_some(),
         })
     }
 
@@ -666,11 +671,13 @@ mod tests {
     fn a_closed_sync_watch_reads_as_no_view() {
         let dir = tempfile::tempdir().expect("temp");
         let (sender, sync) = tokio::sync::watch::channel(SyncState::Synced);
+        let (_latch_tx, latch) = tokio::sync::watch::channel(None);
         let surroundings = Surroundings {
             pool: Arc::new(Mutex::new(None)),
             data_dir: dir.path().to_path_buf(),
             offline: false,
             sync,
+            latch,
             health: PoolHealth::unwired(),
         };
         assert!(surroundings.sync().expect("open").synchronized);
@@ -678,5 +685,36 @@ mod tests {
         let closed = surroundings.sync().expect("closed");
         assert!(!closed.synchronized, "a closed watch is not Synced");
         assert!(!closed.busy_syncing);
+        assert!(!closed.following_degraded);
+    }
+
+    /// The facts read the connector's latch. A closed watch keeps the
+    /// last evidence: the latch is one-way until a resync.
+    #[test]
+    fn the_sync_facts_read_the_latch() {
+        let dir = tempfile::tempdir().expect("temp");
+        let (_sync_tx, sync) = tokio::sync::watch::channel(SyncState::Synced);
+        let evidence = FollowingDegraded {
+            fork_at: BlockHeight::from_raw(3),
+            tip: BlockHash::from_bytes([0x11; 32]),
+            work: shekyl_difficulty::CumulativeDifficulty::from_raw(9),
+        };
+        let (latch_tx, latch) = tokio::sync::watch::channel(None);
+        let surroundings = Surroundings {
+            pool: Arc::new(Mutex::new(None)),
+            data_dir: dir.path().to_path_buf(),
+            offline: false,
+            sync,
+            latch,
+            health: PoolHealth::unwired(),
+        };
+        assert!(!surroundings.sync().expect("open").following_degraded);
+        latch_tx.send_replace(Some(evidence));
+        assert!(surroundings.sync().expect("set").following_degraded);
+        drop(latch_tx);
+        assert!(
+            surroundings.sync().expect("closed").following_degraded,
+            "a closed latch watch keeps the evidence"
+        );
     }
 }

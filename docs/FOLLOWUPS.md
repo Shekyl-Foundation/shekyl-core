@@ -253,6 +253,10 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`BLOCK_TX_WIRE_FORMAT_PORT.md`](design/BLOCK_TX_WIRE_FORMAT_PORT.md) §4.1
   - Target: pre-genesis
 
+- **The sync owner's `Command::Relay` waits on RD's relay entry: until it exists the owner logs the command and relays nothing.** An announced block that connects is relayed by the C++ handler today, and the router routes no announcement to the owner until the chain-sync cutover, so nothing is lost before then; the cutover routes 2008 to the owner and calls RD's entry from `Command::Relay`. *Falsifier:* `rg -n 'no Rust relay entry' rust/shekyl-chain-sync/src/owner.rs` still matching when the cutover routes 2008 to the owner.
+  - Owner: [`P2P_3_CHAIN_SYNC_BRIEF.md`](design/P2P_3_CHAIN_SYNC_BRIEF.md) CS-Q10 (CS, with RD's relay entry)
+  - Target: pre-genesis
+
 - **`Blockchain::handle_get_objects` still honours a peer's `prune` flag (`e.pruned = arg.prune`): decide with the skeleton sync wire whether that arm is built on or deleted.** No Shekyl peer sets the flag and every receiver refuses a pruned entry, so the arm is dead inheritance from the stripe engine; but `PDM-Q-F28` grows the same `tx_blob_entry`, so it is the P2P lane's call, made with F28, not a free deletion. *Falsifier:* `git grep -n "arg.prune" src/cryptonote_core/blockchain.cpp` returning nothing, or F28's wire landing on top of it.
   - Owner: [`ARCHIVAL_PRUNED_DAEMON_MODE.md`](design/ARCHIVAL_PRUNED_DAEMON_MODE.md) `PDM-Q-F28`
   - Target: pre-genesis
