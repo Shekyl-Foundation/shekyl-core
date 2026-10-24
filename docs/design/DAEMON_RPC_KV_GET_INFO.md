@@ -353,7 +353,9 @@ GetInfoResponse {
   `get_transactions` lists an id the chain does not hold as
   `unavailable_tx` while the pool is retired; `is_key_image_spent` stays
   failed closed, since a pool spend it cannot see must not read as
-  unspent.
+  unspent. Readers: `tests/stressnet/monitor.py` keeps a retired pool as no count
+  (its table says "retired") and refuses a count that disagrees with
+  `pool_retired`; the GUI's is §5.1's row.
 - **The `target_height` sentinel is not one of the restricted
   stand-ins.** The stand-ins depend on the caller; the sentinel is written
   for every caller, and RK-D15 retires it in this slice. RT-W10 replaces
