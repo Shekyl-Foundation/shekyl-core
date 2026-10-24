@@ -253,7 +253,7 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`BLOCK_TX_WIRE_FORMAT_PORT.md`](design/BLOCK_TX_WIRE_FORMAT_PORT.md) §4.1
   - Target: pre-genesis
 
-- **The sync owner's relay is RD's, sent from the owner until RD's relay entry exists.** `Command::Relay` encodes the connected announcement as 2008, compact, and sends it to every established session but its sender through `hub.send`: the message and the fan-out are the C++ `relay_block`'s, which are RD's. When RD's relay entry lands, the owner's send moves behind it and this row closes. *Falsifier:* `rg -n 'fn relay' rust/shekyl-chain-sync/src/owner.rs` still calling `hub.send` once RD's relay entry exists.
+- **The sync owner's relay is RD's, sent from the owner until RD's relay entry exists.** `Command::Relay` names a block the model relays (a block that connected as the new tip while the node is not `Behind`, however it arrived; `P2P_3_CHAIN_SYNC_BRIEF.md` CS-Q2 step 7), and the owner encodes it as 2008, compact, and sends it to every established session but its supplier through `hub.send`. When RD's relay entry lands, the owner's send moves behind it and this row closes. *Falsifier:* `rg -n 'fn relay' rust/shekyl-chain-sync-runtime/src/owner.rs` still calling `hub.send` once RD's relay entry exists.
   - Owner: [`P2P_3_CHAIN_SYNC_BRIEF.md`](design/P2P_3_CHAIN_SYNC_BRIEF.md) CS-Q10 (CS, with RD's relay entry)
   - Target: pre-genesis
 

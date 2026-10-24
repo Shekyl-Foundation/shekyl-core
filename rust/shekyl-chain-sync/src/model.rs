@@ -243,12 +243,14 @@ pub enum Command<K> {
         /// A session drawn uniformly.
         session: K,
     },
-    /// An announced block connected. It goes to every established
-    /// session but the one it came from.
+    /// A block connected as the new tip, and with it this node is not
+    /// `Behind` (CS-Q2 step 7). It goes to every established session but
+    /// the one that supplied it, whether it came as an announcement or
+    /// was fetched by sync.
     Relay {
         /// The block.
         hash: BlockHash,
-        /// The session that announced it.
+        /// The session that supplied it.
         from: K,
     },
     /// An announce is missing transactions.
@@ -312,22 +314,23 @@ pub struct BoundArrival<K> {
     pub header: HeaderJudged,
     /// The body bound to that header.
     pub body: BlockBody,
-    /// The body came unasked, as an announcement: the entry's reply is an
-    /// unsolicited arrival's, and a connected one is relayed.
+    /// The body came unasked, as an announcement: the entry charges it to
+    /// the unsolicited share, and an oversize one does not invalidate its
+    /// header.
     pub announced: bool,
 }
 
 /// What the entry did with one offered arrival.
 ///
 /// A refusal carries the census row the entry named. The model does not
-/// invent one. `Connected.relay` is an announce; a body this node requested
-/// does not relay.
+/// invent one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Outcome {
-    /// The block connected. `relay` asks the coordinator to relay it.
+    /// The block connected, at `height`. The model relays it when it is
+    /// the new tip and the node, with it, is not `Behind`.
     Connected {
-        /// Whether to relay the block.
-        relay: bool,
+        /// The height the block took.
+        height: BlockHeight,
     },
     /// The body matched its header, and the block was refused.
     Refused {
@@ -372,19 +375,21 @@ impl Outcome {
     /// CS-3's conversion from the entry's reply. A refusal that names no
     /// verdict is `None`: this model does not invent a census row.
     ///
-    /// `block` is the hash a promotion refusal names. CS-3 passes the
-    /// entry's refused hash. Other replies do not read it.
+    /// `height` is where a connected block went. `block` is the hash a
+    /// promotion refusal names. CS-3 passes the entry's refused hash.
+    /// Other replies read neither.
     #[must_use]
     pub fn from_reply(
         reply: SyncReply,
         solicited: bool,
+        height: BlockHeight,
         at: BlockHash,
         block: BlockHash,
         indices: Vec<u64>,
         verdict: Option<InvalidBlock>,
     ) -> Option<Self> {
         match reply.action(solicited) {
-            SyncReplyAction::Advance { relay } => Some(Self::Connected { relay }),
+            SyncReplyAction::Advance => Some(Self::Connected { height }),
             SyncReplyAction::Invalidate(Invalidate::Refused) => {
                 verdict.map(|verdict| Self::Refused { verdict })
             }
@@ -572,6 +577,11 @@ where
         let Some(local) = self.local else {
             return SyncState::NoView;
         };
+        self.state_at(local)
+    }
+
+    /// The state with `local` as the local tip.
+    fn state_at(&self, local: Local) -> SyncState {
         if self.star.work > local.work {
             return SyncState::Behind {
                 have: local.work,
@@ -584,6 +594,32 @@ where
             };
         }
         SyncState::Synced
+    }
+
+    /// Whether a block that connected at `height` is relayed (CS-Q2 step
+    /// 7, amended 2026-10-24). It is when it connected as the new tip, not
+    /// beneath the local tip this model has seen, and when this node, with
+    /// it as the local tip, is not `Behind`. How the block arrived does not
+    /// enter: an announcement and a block fetched by sync are relayed
+    /// alike, and nothing is relayed while the node is behind. The state is
+    /// judged as of the connect, so a synced node that fetches the next
+    /// block, and is behind by that block until it connects, relays it.
+    pub(crate) fn relays(
+        &self,
+        hash: BlockHash,
+        height: BlockHeight,
+        work: CumulativeDifficulty,
+    ) -> bool {
+        let beneath = self
+            .local
+            .and_then(|local| local.height)
+            .is_some_and(|tip| height < tip);
+        let with_it = Local {
+            hash,
+            height: Some(height),
+            work,
+        };
+        !beneath && !matches!(self.state_at(with_it), SyncState::Behind { .. })
     }
 
     /// Whether the store's latch is set. It does not withhold [`SyncState::Synced`].

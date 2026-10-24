@@ -140,6 +140,19 @@ owner of block propagation.
     carry no origin to protect.
   - The alternative splits "blocks arriving from peers" across two
     owners who share the ingest entry and the handling of failures.
+- **What is relayed (amended, Rick, 2026-10-24).** A block is relayed
+  when it connects as the new tip and the node, with it, is not
+  `Behind`, whichever path it arrived by: an announcement or a block
+  fetched by sync. Nothing is relayed while the node is `Behind`, and the
+  supplier is left out of the fan-out (CS-Q2 step 7).
+  - The reason is the alpha.10 testnet fleet's fork rate: 20 stale blocks
+    at 19 of 191 heights, **9.9%**, against about 2.4% expected for two
+    equal miners at 3.7 s propagation. Seven of the forks had gaps of
+    15–58 s: a block that reached a node by the sync path was never
+    relayed, so the other miner learned of it only at timed sync, a
+    median 29 s late (`shekyl-dev`,
+    `docs/plans/ALPHA10_FLEET_TROUBLESHOOTING_REPORT.md`, problems 5 and
+    12).
 - **The transaction routes are RD's,** and so is serving the pool
   complement: they are transaction movement. **The complement request is
   chain sync's:** it is sync's own event (the transition to `Synced`)
@@ -158,7 +171,7 @@ owner of block propagation.
 | `on_connection_close` | CS | Keep the job (a closed session's requests are re-queued). The target recompute is deleted |
 | `kick_idle_peers`, `check_standby_peers`, `on_idle`, `on_callback` | — | Delete. They become per-request deadlines on the timing engine (CS-Q4); no polling |
 | `update_sync_search`, `needs_new_sync_connections`, and their Rust verdicts in `rust/shekyl-ffi/src/sync_ffi.rs` (landed Rust) | — | Delete at the CS cutover (CS-Q7), the landed Rust half included |
-| `handle_notify_new_compact_block`, `relay_block`, `handle_request_compact_missing_tx` | CS | Redesign: announce → entry; relay after the entry's `Connected` |
+| `handle_notify_new_compact_block`, `relay_block`, `handle_request_compact_missing_tx` | CS | Redesign: announce → entry; a block that connects as the new tip while the node is not `Behind` is relayed, however it arrived (amended 2026-10-24) |
 | `handle_notify_new_transactions`, `relay_transactions` | RD | Untouched by CS |
 | `request_txpool_complement` | CS | Redesign: the sync owner sends the request from Rust at its transition to `Synced`; the reply, `NOTIFY_NEW_TRANSACTIONS`, goes through RD's route (CS-Q10) |
 | `handle_notify_get_txpool_complement` | RD | Serving the complement stays RD's |
@@ -445,7 +458,18 @@ ingest deciding forks.**
      the `CenRow` `validate` would name. What the session does with that
      row is CS-2's.
 7. **Verdicts** from the entry's reply (§A):
-   - `Connected`: advance.
+   - `Connected { height }`: advance. **The relay (amended, Rick,
+     2026-10-24; the reason is under CS-Q1).** The block is relayed when
+     it connected as the new tip, not beneath the local tip the model has
+     seen, and the node, with it as the local tip, is not `Behind`.
+     - The path it arrived by does not enter: an announced block and a
+       block fetched by sync are relayed alike.
+     - Nothing is relayed while the node is behind.
+     - The supplier is left out of the fan-out (`Command::Relay` names
+       it).
+     - The state is judged as of the connect. A synced node that fetches
+       the next block is behind by that block until it connects, and it
+       relays it.
    - `Refused`: the body matched its header (step 6), so the refusal is
      about the block the header commits to. Mark that header and its
      subtree in `T` invalid and close the session that served the body.
@@ -1462,11 +1486,10 @@ increments?
     which the C++ inbound handshake and both directions of timed sync
     call beside `process_payload_sync_data` (slice 4 deletes the three
     calls); in the daemon's pass-through router the hint has no owner.
-    The attached router routes 2008 to the owner as `Event::Announce`,
-    and the owner relays a connected announcement as the C++
-    `relay_block` does: compact, to every established session but its
-    sender, through `hub.send`. When RD's relay entry lands, that send
-    moves behind it; the message and the fan-out are already RD's.
+    The attached router routes 2008 to the owner as `Event::Announce`.
+    The owner sends what the model relays (CS-Q2 step 7): compact, to
+    every established session but the supplier, through `hub.send`. When
+    RD's relay entry lands, that send moves behind it.
   - Its deletion table is CS-Q9's (CS-4 §3.5).
 - **Only the sync half,** because the transaction routes in the same
   `BEGIN_INVOKE_MAP2` are RD's under CS-Q1: `handle_notify_new_transactions`,

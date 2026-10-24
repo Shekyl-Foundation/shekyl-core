@@ -29,11 +29,15 @@
 //!   later one replaces it. A requester asks again only after it gave the
 //!   first up, so the later request is the one it reads.
 //! - **Announcements** (2008, `NOTIFY_NEW_COMPACT_BLOCK`) come from the
-//!   attached router and are the model's [`Event::Announce`]. A connected
-//!   one is relayed as the C++ `relay_block` does: compact, to every
-//!   established session but its sender. That send moves behind RD's relay
-//!   entry when it lands. `RequestMissingTxs` is encoded and sent; a peer's
-//!   own 2009 stays the C++ handler's until the cutover.
+//!   attached router and are the model's [`Event::Announce`].
+//!   `RequestMissingTxs` is encoded and sent; a peer's own 2009 stays the
+//!   C++ handler's until the cutover.
+//! - **Relay** is the model's decision ([`Command::Relay`]): a block that
+//!   connected as the new tip while this node, with it, is not `Behind`,
+//!   however it arrived. The owner sends it compact (the block and its
+//!   witness, no transactions) as 2008 to every established session but
+//!   the one that supplied it. That send moves behind RD's relay entry
+//!   when it lands.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
@@ -619,10 +623,9 @@ where
         self.event(Event::Announce { session, body });
     }
 
-    /// Relay a connected announcement the way the C++ `relay_block` does
-    /// (`P2P_3_CHAIN_SYNC_BRIEF.md` CS-Q10, until RD's relay entry lands):
-    /// the block with its witness and no transactions, as 2008, to every
-    /// established session but the one that announced it.
+    /// Relay a block the model relays (module docs): the block with its
+    /// witness and no transactions, as 2008, to every established session
+    /// but `from`, its supplier.
     fn relay(&mut self, hash: shekyl_types::BlockHash, from: u64) {
         let compact = match self.compact_block(hash) {
             Ok(Some(compact)) => compact,
@@ -962,9 +965,14 @@ fn proved_kind(proved: &Proved) -> &'static str {
 }
 
 /// The entry's reply as the model's outcome (`Outcome::from_reply`).
-/// `solicited` is false for a body that came as an announcement.
+/// `solicited` is false for a body that came as an announcement; it decides
+/// only whether an oversize body invalidates its header.
 fn outcome_of(reply: Reply, solicited: bool) -> Option<Outcome> {
     let null = shekyl_types::BlockHash::NULL;
+    let height = match &reply {
+        Reply::Connected { height, .. } => *height,
+        _ => BlockHeight::ZERO,
+    };
     let (sync, at, block, indices, verdict): (_, _, _, _, Option<InvalidBlock>) = match reply {
         Reply::Connected { .. } => (SyncReply::Connected, null, null, Vec::new(), None),
         Reply::Refused(verdict) => (SyncReply::Refused, null, null, Vec::new(), Some(verdict)),
@@ -994,7 +1002,7 @@ fn outcome_of(reply: Reply, solicited: bool) -> Option<Outcome> {
         Reply::Cancelled { .. } => (SyncReply::Cancelled, null, null, Vec::new(), None),
         Reply::Stopped => (SyncReply::Stopped, null, null, Vec::new(), None),
     };
-    Outcome::from_reply(sync, solicited, at, block, indices, verdict)
+    Outcome::from_reply(sync, solicited, height, at, block, indices, verdict)
 }
 
 #[cfg(test)]

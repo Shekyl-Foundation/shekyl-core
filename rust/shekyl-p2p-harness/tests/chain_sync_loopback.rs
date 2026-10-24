@@ -1052,3 +1052,58 @@ async fn a_connected_announcement_is_relayed_to_every_other_session() {
     node.stop().await;
     held.stop().await;
 }
+
+/// A synced node that fetches the next block by sync relays it once it
+/// connects, to every established session but the one that supplied it
+/// (CS-Q2 step 7, amended 2026-10-24). Two peers hold the node's own tip;
+/// a third claims one block more, serves its header and body, and never
+/// receives that block back.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_block_fetched_by_sync_is_relayed_to_all_but_its_supplier() {
+    logs();
+    let (corpus, steps) = spend();
+    let held = source("sync-relay-src", &corpus, &steps).await;
+    let full = claim_of(&held);
+    let (count, _, _) = held.tip().expect("a chain");
+    let mut node = Node::start(
+        "sync-relay",
+        corpus.rules(),
+        &steps[..steps.len() - 1],
+        2,
+        rng(),
+    )
+    .await;
+    let (_, work, top) = node.chain.tip().expect("a chain");
+    let mut level = Vec::new();
+    for _ in 0..2 {
+        let (peer, seen) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
+        node.connect(Box::new(peer), Some(claim(count - 1, work, top)));
+        level.push(seen);
+    }
+    assert!(
+        node.wait(LIMIT, |node| node.state() == SyncState::Synced)
+            .await,
+        "state {:?}",
+        node.state()
+    );
+    let (peer, supplier) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
+    node.connect(Box::new(peer), Some(full));
+    assert!(
+        node.wait(LIMIT, |node| node.count() == count).await,
+        "the next block was not fetched"
+    );
+    assert!(supplier.bodies() >= 1, "the block came by sync");
+    assert!(
+        node.wait(LIMIT, |_| level.iter().all(|seen| seen.announced() == 1))
+            .await,
+        "relayed {:?}",
+        level
+            .iter()
+            .map(|seen| seen.announced())
+            .collect::<Vec<_>>()
+    );
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(supplier.announced(), 0, "not back to the supplier");
+    node.stop().await;
+    held.stop().await;
+}

@@ -65,11 +65,10 @@ pub enum Invalidate {
 /// block, or an oversize body.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SyncReplyAction {
-    /// Advance along the chain. `relay` is an announce that connected.
-    Advance {
-        /// Whether to relay the block.
-        relay: bool,
-    },
+    /// Advance along the chain. Whether the block is relayed is the sync
+    /// model's, from its state and the height the block took, whichever
+    /// path the block came by.
+    Advance,
     /// Close the supplier. The payload says whether the header is invalid.
     Invalidate(Invalidate),
     /// Ask that session for headers from the missing parent.
@@ -95,7 +94,7 @@ impl SyncReply {
     #[must_use]
     pub const fn action(self, solicited: bool) -> SyncReplyAction {
         match self {
-            Self::Connected => SyncReplyAction::Advance { relay: !solicited },
+            Self::Connected => SyncReplyAction::Advance,
             Self::Refused => SyncReplyAction::Invalidate(Invalidate::Refused),
             Self::PromotionRefused => SyncReplyAction::Invalidate(Invalidate::PromotionRefused),
             Self::Oversize => SyncReplyAction::Invalidate(Invalidate::Oversize {
@@ -168,15 +167,9 @@ mod tests {
     }
 
     #[test]
-    fn a_connected_announce_is_relayed_and_a_solicited_one_is_not() {
-        assert_eq!(
-            SyncReply::Connected.action(false),
-            SyncReplyAction::Advance { relay: true }
-        );
-        assert_eq!(
-            SyncReply::Connected.action(true),
-            SyncReplyAction::Advance { relay: false }
-        );
+    fn a_connected_block_advances_however_it_arrived() {
+        assert_eq!(SyncReply::Connected.action(false), SyncReplyAction::Advance);
+        assert_eq!(SyncReply::Connected.action(true), SyncReplyAction::Advance);
     }
 
     #[test]

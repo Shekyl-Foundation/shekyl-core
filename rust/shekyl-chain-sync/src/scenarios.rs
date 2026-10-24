@@ -607,23 +607,31 @@ fn cancelled_and_stopped_ask_for_the_block_again() {
     });
 }
 
+/// A synced node that fetches the next block by sync relays it once it
+/// connects (CS-Q2 step 7, amended 2026-10-24): it is the new tip, and with
+/// it the node is not behind. The supplier is named, so the fan-out skips
+/// it.
 #[test]
-fn a_connected_announce_is_relayed() {
+fn a_synced_node_relays_a_tip_block_it_fetched_by_sync() {
     with_offer(|sync, view, tag, hash, _raw| {
         let out = drive(
             sync,
             view,
             Event::Entry {
                 tag,
-                outcome: Outcome::Connected { relay: true },
+                outcome: Outcome::Connected {
+                    height: BlockHeight::from_raw(8),
+                },
             },
         );
-        assert!(
-            out.iter().any(
-                |command| matches!(command, Command::Relay { hash: relayed, .. } if *relayed == hash)
-            ),
-            "a connected announce was not relayed: {out:?}"
-        );
+        let relays: Vec<(BlockHash, u8)> = out
+            .iter()
+            .filter_map(|command| match command {
+                Command::Relay { hash, from } => Some((*hash, *from)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(relays, vec![(hash, 1)], "{out:?}");
         no_close(&out);
     });
 }
@@ -967,11 +975,18 @@ fn offer_tag(out: &[Command<u8>]) -> u64 {
         .expect("the body was not offered")
 }
 
-/// A span is offered only once every arrival before it has connected. The
-/// entry works each offer apart, so a span whose parent is still with the
-/// entry would be unlinked and its bodies fetched again.
-#[test]
-fn a_span_is_offered_only_after_the_span_before_it_connects() {
+/// Two blocks above the tip, `first` then `second`, whose headers session
+/// 1 served and `T` holds: `H*` is `second`. Each is its raw block and its
+/// hash.
+fn with_two_headers<F>(f: F)
+where
+    F: for<'a, 'id> FnOnce(
+        &mut Sync<u8, fn(BlockHeight) -> RuleSet>,
+        &shekyl_chain_rules::harness::MockView<'a, 'id>,
+        (Vec<u8>, BlockHash),
+        (Vec<u8>, BlockHash),
+    ),
+{
     let main = chain_of(8);
     let mut block = candidate_on(&main, Vec::new()).block;
     let mut sync = Sync::new(Trust::UNANCHORED, target_one as fn(BlockHeight) -> RuleSet);
@@ -1009,18 +1024,82 @@ fn a_span_is_offered_only_after_the_span_before_it_connects() {
             },
         );
         assert!(sync.contains_header(second), "{out:?}");
-        // One seat: the first body alone.
-        let out = drive(&mut sync, &view, Event::Room { seats: 1 });
+        f(&mut sync, &view, (first_raw, first), (second_raw, second));
+    });
+}
+
+/// A node behind its best verified chain relays nothing (CS-Q2 step 7,
+/// amended 2026-10-24). The first of two verified blocks connects, and
+/// with it the node is still behind the second: no relay. The second
+/// connects, the node is no longer behind, and that block is relayed with
+/// its supplier named.
+#[test]
+fn a_node_behind_relays_nothing() {
+    with_two_headers(|sync, view, (first_raw, first), (second_raw, second)| {
+        let out = drive(sync, view, Event::Room { seats: 1 });
         let (who, asked) = request_for(&out).expect("the first body is wanted");
         assert_eq!(asked, vec![*first.as_bytes()]);
-        let out = answer(&mut sync, &view, who, first_raw);
+        let out = answer(sync, view, who, first_raw);
+        let tag = offer_tag(&out);
+        let out = drive(
+            sync,
+            view,
+            Event::Entry {
+                tag,
+                outcome: Outcome::Connected {
+                    height: BlockHeight::from_raw(8),
+                },
+            },
+        );
+        assert!(
+            !out.iter()
+                .any(|command| matches!(command, Command::Relay { .. })),
+            "a node behind relayed: {out:?}"
+        );
+        let out = drive(sync, view, Event::Room { seats: 1 });
+        let (who, asked) = request_for(&out).expect("the second body is wanted");
+        assert_eq!(asked, vec![*second.as_bytes()]);
+        let out = answer(sync, view, who, second_raw);
+        let tag = offer_tag(&out);
+        let out = drive(
+            sync,
+            view,
+            Event::Entry {
+                tag,
+                outcome: Outcome::Connected {
+                    height: BlockHeight::from_raw(9),
+                },
+            },
+        );
+        let relays: Vec<(BlockHash, u8)> = out
+            .iter()
+            .filter_map(|command| match command {
+                Command::Relay { hash, from } => Some((*hash, *from)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(relays, vec![(second, who)], "{out:?}");
+    });
+}
+
+/// A span is offered only once every arrival before it has connected. The
+/// entry works each offer apart, so a span whose parent is still with the
+/// entry would be unlinked and its bodies fetched again.
+#[test]
+fn a_span_is_offered_only_after_the_span_before_it_connects() {
+    with_two_headers(|sync, view, (first_raw, first), (second_raw, second)| {
+        // One seat: the first body alone.
+        let out = drive(sync, view, Event::Room { seats: 1 });
+        let (who, asked) = request_for(&out).expect("the first body is wanted");
+        assert_eq!(asked, vec![*first.as_bytes()]);
+        let out = answer(sync, view, who, first_raw);
         let tag = offer_tag(&out);
         // A seat again before the first connects: the second body is
         // fetched, and held.
-        let out = drive(&mut sync, &view, Event::Room { seats: 1 });
+        let out = drive(sync, view, Event::Room { seats: 1 });
         let (who, asked) = request_for(&out).expect("the second body is wanted");
         assert_eq!(asked, vec![*second.as_bytes()]);
-        let out = answer(&mut sync, &view, who, second_raw);
+        let out = answer(sync, view, who, second_raw);
         assert!(
             !out.iter()
                 .any(|command| matches!(command, Command::Offer { .. })),
@@ -1028,14 +1107,16 @@ fn a_span_is_offered_only_after_the_span_before_it_connects() {
         );
         // The first connects; the next room offers the second.
         drive(
-            &mut sync,
-            &view,
+            sync,
+            view,
             Event::Entry {
                 tag,
-                outcome: Outcome::Connected { relay: false },
+                outcome: Outcome::Connected {
+                    height: BlockHeight::from_raw(8),
+                },
             },
         );
-        let out = drive(&mut sync, &view, Event::Room { seats: 1 });
+        let out = drive(sync, view, Event::Room { seats: 1 });
         let offered = out.iter().find_map(|command| match command {
             Command::Offer { arrivals } => Some(arrivals[0].header.hash()),
             _ => None,

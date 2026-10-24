@@ -25,7 +25,9 @@ fn every_entry_reply_has_an_outcome() {
                 height: BlockHeight::ZERO,
                 hash,
             },
-            Outcome::Connected { relay: false },
+            Outcome::Connected {
+                height: BlockHeight::ZERO,
+            },
         ),
         (Reply::Refused(verdict), Outcome::Refused { verdict }),
         (Reply::Unlinked { at: hash }, Outcome::Unlinked { at: hash }),
@@ -63,20 +65,22 @@ fn every_entry_reply_has_an_outcome() {
     }
 }
 
-/// An announced body's connect is a relay; a requested body's is not.
+/// A connect carries the height the block took, whether the body was
+/// requested or announced: the relay is the model's to decide.
 #[test]
-fn an_announced_connect_is_relayed_and_a_requested_one_is_not() {
+fn a_connect_carries_its_height_however_the_body_arrived() {
+    let height = BlockHeight::from_raw(12);
     let connected = Reply::Connected {
-        height: BlockHeight::ZERO,
+        height,
         hash: BlockHash::from_bytes([3; 32]),
     };
     assert_eq!(
         outcome_of(connected.clone(), false),
-        Some(Outcome::Connected { relay: true })
+        Some(Outcome::Connected { height })
     );
     assert_eq!(
         outcome_of(connected, true),
-        Some(Outcome::Connected { relay: false })
+        Some(Outcome::Connected { height })
     );
 }
 

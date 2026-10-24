@@ -438,24 +438,41 @@ fn a_body_deadline_is_the_body_budget_at_the_rate_floor() {
 }
 
 /// A refusal with no census row is not an outcome. An oversize solicited
-/// body invalidates its header. An oversize announce does not. A solicited
-/// connect does not relay.
+/// body invalidates its header. An oversize announce does not. A connect
+/// carries the height the block took.
 #[test]
 fn a_reply_names_its_own_outcome() {
     let at = BlockHash::from_bytes([1; 32]);
     let verdict = InvalidBlock::new(CenRow::G2, Locus::Block);
     assert_eq!(
-        Outcome::from_reply(SyncReply::Refused, true, at, at, Vec::new(), None),
-        None
-    );
-    assert_eq!(
-        Outcome::from_reply(SyncReply::PromotionRefused, true, at, at, Vec::new(), None),
+        Outcome::from_reply(
+            SyncReply::Refused,
+            true,
+            BlockHeight::ZERO,
+            at,
+            at,
+            Vec::new(),
+            None
+        ),
         None
     );
     assert_eq!(
         Outcome::from_reply(
             SyncReply::PromotionRefused,
             true,
+            BlockHeight::ZERO,
+            at,
+            at,
+            Vec::new(),
+            None
+        ),
+        None
+    );
+    assert_eq!(
+        Outcome::from_reply(
+            SyncReply::PromotionRefused,
+            true,
+            BlockHeight::ZERO,
             at,
             at,
             Vec::new(),
@@ -464,19 +481,53 @@ fn a_reply_names_its_own_outcome() {
         Some(Outcome::PromotionRefused { verdict, block: at })
     );
     assert_eq!(
-        Outcome::from_reply(SyncReply::Refused, true, at, at, Vec::new(), Some(verdict)),
+        Outcome::from_reply(
+            SyncReply::Refused,
+            true,
+            BlockHeight::ZERO,
+            at,
+            at,
+            Vec::new(),
+            Some(verdict)
+        ),
         Some(Outcome::Refused { verdict })
     );
     assert_eq!(
-        Outcome::from_reply(SyncReply::Oversize, true, at, at, Vec::new(), None),
+        Outcome::from_reply(
+            SyncReply::Oversize,
+            true,
+            BlockHeight::ZERO,
+            at,
+            at,
+            Vec::new(),
+            None
+        ),
         Some(Outcome::Oversize { invalidate: true })
     );
     assert_eq!(
-        Outcome::from_reply(SyncReply::Oversize, false, at, at, Vec::new(), None),
+        Outcome::from_reply(
+            SyncReply::Oversize,
+            false,
+            BlockHeight::ZERO,
+            at,
+            at,
+            Vec::new(),
+            None
+        ),
         Some(Outcome::Oversize { invalidate: false })
     );
     assert_eq!(
-        Outcome::from_reply(SyncReply::Connected, true, at, at, Vec::new(), None),
-        Some(Outcome::Connected { relay: false })
+        Outcome::from_reply(
+            SyncReply::Connected,
+            true,
+            BlockHeight::from_raw(9),
+            at,
+            at,
+            Vec::new(),
+            None
+        ),
+        Some(Outcome::Connected {
+            height: BlockHeight::from_raw(9)
+        })
     );
 }

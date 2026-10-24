@@ -43,9 +43,9 @@ where
         let session = arrival.session;
         let hash = arrival.header.hash();
         match outcome {
-            Outcome::Connected { relay } => {
+            Outcome::Connected { height } => {
                 self.accepted.insert(hash);
-                if relay {
+                if self.relays(hash, height, arrival.header.cumulative_difficulty()) {
                     out.push(Command::Relay {
                         hash,
                         from: session,
