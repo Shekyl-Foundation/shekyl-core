@@ -82,17 +82,20 @@ calibration and the full verdict tables are
   64-bit ARM or RISC-V decoder; `thumbv7em` and `riscv32imac` stand in,
   for the ISA only). aarch64 gets a *dynamic* row (dudect-style, the
   harness's `dynamic/` crate on the Pi floor device; method-checked on
-  x86_64 against the static verdicts: the method flags familiarity of the
-  operand stream on the short `HelioseleneField` operations unless the two
-  classes are equally familiar, so every row carries a `[fixed-pair]`
-  companion, and only a row that differs in both is a finding; the
-  `Residue::pow` branch BINSEC found is invisible to timing). **Open:** the
-  floor-device run needs a `USAGE.md` claim and the go for that step; the
-  aarch64 binary is built from the pinned 1.94.0.
+  x86_64 against the static verdicts: **method check OPEN.** `Field25519` is
+  flat on every row and the `Residue::pow` branch is invisible to timing, but
+  `HelioseleneField` mul, square and sqrt show a fixed-against-fresh
+  difference BINSEC's model does not predict, proportional to the operation
+  and growing with the sample; whether it is the harness or operand-dependent
+  timing of the vendored crate on that CPU is not yet settled, so no dynamic
+  row is a verdict and the crate goes nowhere upstream until it is). The
+  floor-device run (Rick's go 2026-10-24) is recorded under the same
+  caveat.
   riscv64 is **not assessed**: no board, and the `pow` select became a
-  branch on riscv32 under both toolchains, so it is the shipped target most
-  likely to inherit that rewrite; whether riscv64 stays in the release
-  matrix without a board to measure on is a separate ruling. Also outside
+  branch on riscv32 under both toolchains, so it was the shipped target most
+  likely to inherit that rewrite. **Ruled 2026-10-24 (Rick): riscv64 is
+  switched off in the Gitian matrix, not deleted (#1184); it returns when a
+  user asks for it and there is a way to measure it.** Also outside
   the tool: micro-architectural channels beyond control flow, addresses
   and division, and any toolchain other than the two run. A toolchain bump
   re-measures: `scripts/ci/check_checkct_toolchain.py` fails when

@@ -32,16 +32,16 @@ whose operands depend on a secret is one too. It explores the real machine
 code, so the verdict includes what LLVM did.
 
 **Targets.** Every shipped target is 64-bit: x86_64 (Linux, Windows,
-FreeBSD, macOS), aarch64 (Linux, macOS; the rule-76 floor device is an
-aarch64 Pi 4) and riscv64 (`contrib/gitian/gitian-linux.yml` `HOSTS` and
-line 109; `.github/workflows/depends.yml` records 32-bit as retired in
-alpha.5). BINSEC decodes x86_64, 32-bit RISC-V and Thumb, so:
+FreeBSD, macOS) and aarch64 (Linux, macOS; the rule-76 floor device is an
+aarch64 Pi 4); riscv64 was in `contrib/gitian/gitian-linux.yml` `HOSTS`
+until 2026-10-24 (#1184); `.github/workflows/depends.yml` records 32-bit as
+retired in alpha.5. BINSEC decodes x86_64, 32-bit RISC-V and Thumb, so:
 
 | Shipped target | Static (BINSEC) | What stands in | Dynamic |
 | --- | --- | --- | --- |
 | x86_64 | **verdict**, both toolchains | — | — |
 | aarch64 | no decoder | `thumbv7em` (conditional execution, like `csel`): ISA proxy only, not the Cortex-A LLVM backend | `dynamic/` on the Pi floor device, row labelled *dynamic* |
-| riscv64 | no decoder | `riscv32imac`: same ISA family, no conditional move; the `pow` select became a branch there under **both** toolchains, so riscv64 is the shipped target most likely to inherit it | no board; **not assessed** |
+| riscv64 (switched off 2026-10-24, #1184) | no decoder | `riscv32imac`: same ISA family, no conditional move; the `pow` select became a branch there under **both** toolchains, so riscv64 was the shipped target most likely to inherit it | no board; **not assessed**; no longer shipped until a user asks and it can be measured |
 
 The 32-bit targets are instruments, not products: `riscv32imac` and
 `thumbv7em` stand in as above, `thumbv6m` is used for calibration only
@@ -178,30 +178,29 @@ A dynamic row is evidence of another kind: it sees this device, this
 binary and this run, and can only fail to observe a difference. It never
 turns a static gap into a pass; it is recorded as *dynamic*.
 
-Method check on x86_64 (`results/2026-10-24/dynamic-x86_64-method-check.txt`
-and `dynamic-x86_64-diagnostics.txt`, a development workstation, the shipped
-1.94.0 / LLVM 21.1.8), where BINSEC had already ruled: null controls flat,
-`Field25519` flat on every operation, both positive controls far over the
-threshold, and the `Residue::pow` branch BINSEC found under LLVM 21 invisible
-to timing. Three lessons are built into the crate:
-
-- generating the random class's inputs right before its batch produced
-  "class differences" on branchless operations (different cache and
-  predictor state entering the timed region), so every input is generated
-  before the timing loop;
-- a value repeated back-to-back inside a timed batch runs measurably faster
-  through the ~30 ns `HelioseleneField` operations, so the fixed class is a
-  set of distinct values;
-- even so, `HelioseleneField` mul, square and sqrt showed a
-  fixed-against-fresh difference, for mul and square one that grows with the
-  sample (cropped `t` −11 → −32 → −66 for 20k → 200k → 1M samples), always
-  with the fixed side faster, while the equal-familiarity `[fixed-pair]`
-  companion stays flat: the CPU runs a familiar operand stream faster. That is a property of the measurement, not
-  operand-dependent timing of the operation, and it is why every row has a
-  `[fixed-pair]` companion. A row that differs in both would be a finding; a
-  row that differs only against fresh inputs is familiarity. The one
-  residual, `square [fixed-pair]` at 1M samples (+8.4 in one run, −3.2 in
-  its sibling), is recorded as unresolved.
+**Method check on x86_64: OPEN.** (`results/2026-10-24/dynamic-x86_64-method-check.txt`
+and `dynamic-x86_64-diagnostics.txt`, a development workstation, Tiger Lake,
+the shipped 1.94.0 / LLVM 21.1.8.) Null controls flat, both positive controls
+far over the threshold, every `Field25519` row flat, the `Residue::pow` branch
+BINSEC found under LLVM 21 invisible to timing. But `HelioseleneField` mul,
+square and sqrt show a fixed-against-fresh difference that BINSEC's model
+(branches, addresses, division) does not predict, on the same toolchain: it
+grows with the sample as a real difference does (mul −7 → −19 → −45, square
+−11 → −32 → −66 for 20k → 200k → 1M), it is proportional (0.9–2.2 % of the
+operation, present on the 220 µs `sqrt` as on the 0.6 µs `square`, which
+rules out a cache miss on the operand load), and it is absent from all nine
+`Field25519` rows under the identical protocol, which rules out a property of
+the measurement as such. The equal-familiarity `[fixed-pair]` companion is
+flat except one `square` run at 1M (+8.4 against −3.2 in its sibling), which
+is the ambiguity, not a footnote: a genuine operand-dependent path whose
+fixed set happens to be timing-typical would look exactly like this. Two
+harness lessons are settled and built in (generate every input before the
+timing loop; never repeat a value inside a timed batch). What is not settled
+is whether the remaining difference is the harness (the two classes' memory
+construction) or operand-dependent timing of the vendored crate on this CPU
+that BINSEC cannot see. The discriminating tests are in the record's next
+revision; until one of them settles it, no dynamic row is a verdict and the
+`dynamic/` crate is not offered upstream.
 
 ## Record table 2026-10-24
 
