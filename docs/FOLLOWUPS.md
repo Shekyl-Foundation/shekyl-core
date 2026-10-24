@@ -1511,8 +1511,8 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
   - Owner: [`Q12_D6A_PEER_DISCOVERY_RUN.md`](design/Q12_D6A_PEER_DISCOVERY_RUN.md) — owns the failed-address window family (it ruled `P2P_ANON_FAILED_ADDR_FORGET_SECONDS = 240` from measured p90 recovery); the public-zone counterpart is the same mechanism and the same instrument
 
-- **The Ed25519 field arithmetic under FCMP++ runs on crypto-bigint 0.5.5, which RUSTSEC-2026-0387 flags for timing variability; `cargo audit` ignores it by ruling.** `helioselene::Field25519` is `dalek_ff_group::FieldElement` (crypto-bigint `Residue` Montgomery arithmetic), and it carries the wallet-side prover's secret witness. The fix is crypto-bigint >= 0.7.6, which no released `dalek-ff-group`/`ciphersuite` uses, so clearing it means forking the serai curve stack and porting it to 0.7 with every pinned FCMP++/curve-tree vector held byte-identical. Blocked on upstream releasing that stack, or on scheduling the fork.
-  - Owner: the `RUSTSEC-2026-0387` block in [`rust/.cargo/audit.toml`](../rust/.cargo/audit.toml) (exposure, consumers, reopen criteria)
+- **The Ed25519 field arithmetic under FCMP++ runs on crypto-bigint 0.5.5, which RUSTSEC-2026-0387 flags for timing variability; `cargo audit` ignores it by ruling (`CA-1`).** `helioselene::Field25519` is `dalek_ff_group::FieldElement` (crypto-bigint `Residue` Montgomery arithmetic), and it carries the wallet-side prover's secret witness. The fix is crypto-bigint >= 0.7.6, which no released `dalek-ff-group`/`ciphersuite` uses, so clearing it means forking the serai curve stack and porting it to 0.7 with every pinned FCMP++/curve-tree vector held byte-identical. Blocked on upstream releasing that stack, or on scheduling the fork.
+  - Owner: `CA-1` — [`CRYPTO_AUDIT.md`](design/CRYPTO_AUDIT.md) §1 (exposure, consumers, reopen criteria; the ignore is in `rust/.cargo/audit.toml`)
   - Target: pre-genesis
 
 ## Post-genesis

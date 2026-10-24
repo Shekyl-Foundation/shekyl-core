@@ -55,7 +55,9 @@
 #
 # --- Vulnerability ignored by ruling (not an unmaintained notice) ---
 #
-# crypto-bigint 0.5.5 -- RUSTSEC-2026-0387 (crypto-failure, 2026-10-23):
+# crypto-bigint 0.5.5 -- RUSTSEC-2026-0387 (crypto-failure, 2026-10-23),
+# crypto audit row CA-1 (docs/design/CRYPTO_AUDIT.md), ignored by Rick's
+# ruling of 2026-10-24:
 # timing variability in operations meant to be constant-time (subtraction,
 # zero counting, division, Montgomery multiplication). Patched only in
 # 0.7.6; the advisory lists no affected functions, so it covers every 0.5.x.
