@@ -1269,6 +1269,70 @@ async fn the_tip_followers_death_fails_the_service_and_closes_the_door() {
     cleanup(&path);
 }
 
+/// A build withdrawn for a reason that clears itself — here a listed body
+/// gone between the producer's locks — is built again at the same tip, so
+/// a lone node with no next tip still posts (the brief's c3). The pass is
+/// woken with no new tip; the job must come back. Red edit: wait for the
+/// next tip after a transient withdrawal.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_transient_withdrawal_is_built_again_at_the_same_tip() {
+    use crate::follower::Posting;
+    let mut y = Scenario::open("service-transient-again-y");
+    let blocks = y.mine(1).await;
+    let board = Arc::new(shekyl_miner::JobBoard::new());
+    let (_sync_tx, sync) = tokio::sync::watch::channel(shekyl_chain_sync::SyncState::Synced);
+    let (service, path, mut posting) = service_mining(
+        "service-transient-again",
+        Arc::new(Gated::new()),
+        &board,
+        sync,
+    );
+    offer_all(&service.door(), 1, &blocks).await;
+    let first = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        posting.wait_for(|now| {
+            matches!(now, Posting::Posted(_))
+                && board
+                    .posted()
+                    .is_some_and(|(_, job)| job.height.to_raw() == blocks[0].height.to_raw() + 1)
+        }),
+    )
+    .await
+    .ok()
+    .and_then(Result::ok)
+    .map(|now| now.clone());
+    service
+        .shared
+        .bodies_gone
+        .store(1, std::sync::atomic::Ordering::Release);
+    // A pass with no new tip.
+    service.shared.pending_ready().notify_one();
+    let again = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        loop {
+            let consumed = service
+                .shared
+                .bodies_gone
+                .load(std::sync::atomic::Ordering::Acquire)
+                == 0;
+            let now = posting.borrow().clone();
+            if consumed && matches!(now, Posting::Posted(_)) && Some(&now) != first.as_ref() {
+                break now;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    let at = posting.borrow().clone();
+    service.stop().await.expect("stops");
+    y.close().await;
+    cleanup(&path);
+    assert!(first.is_some(), "the job posted at the tip");
+    assert!(
+        again.is_ok(),
+        "built again at the same tip: the board reads {at:?}"
+    );
+}
+
 /// The sync owner going away says nothing about the chain. The job is
 /// withdrawn, as while behind, and the follower keeps following.
 #[tokio::test(flavor = "multi_thread")]

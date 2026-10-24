@@ -419,6 +419,10 @@ pub(crate) struct Shared<S: Substrate> {
     pending: Mutex<Vec<Transaction>>,
     /// Wakes the attendant to judge [`pending`](Self::pending).
     pending_ready: Arc<tokio::sync::Notify>,
+    /// A test makes this many of the next builds lose a listed body
+    /// between the producer's locks.
+    #[cfg(test)]
+    pub(crate) bodies_gone: std::sync::atomic::AtomicUsize,
 }
 
 impl<S: Substrate> Shared<S>
@@ -997,6 +1001,8 @@ where
             pool_live: Arc::new(AtomicBool::new(true)),
             pending: Mutex::new(Vec::new()),
             pending_ready: Arc::new(tokio::sync::Notify::new()),
+            #[cfg(test)]
+            bodies_gone: std::sync::atomic::AtomicUsize::new(0),
         });
         {
             let shared = Arc::clone(&shared);

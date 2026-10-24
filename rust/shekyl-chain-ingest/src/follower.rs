@@ -309,6 +309,9 @@ pub(crate) async fn follow<S>(
             .map(|seat| (Arc::clone(&seat.board), seat.posting.clone())),
     );
     let mut stopping = shared.stop_signal();
+    // The tip a pass was last run again for: a reason that clears itself
+    // is answered by one more pass at that tip, not a wait for the next.
+    let mut rerun_at: Option<u64> = None;
     loop {
         if shared.stopping() {
             break;
@@ -337,10 +340,26 @@ pub(crate) async fn follow<S>(
                     SyncState::NoView
                 }
             };
+            let mut again = false;
             match (&seat.keys, state) {
                 (None, _) => seat.withdraw(NoJob::NoAddress),
-                (Some(_), SyncState::Synced) => post(&shared, seat, &postings).await,
+                (Some(_), SyncState::Synced) => {
+                    post(&shared, seat, &postings).await;
+                    // Withdrawn for a reason that clears itself: the pool
+                    // judged at another tip, or a listed body gone between
+                    // the producer's locks. One more pass reconciles the
+                    // pool at this tip (setting its judged tip) and builds
+                    // again; a lone miner has no next tip to wait for.
+                    again = matches!(
+                        &*seat.posting.borrow(),
+                        Posting::Withdrawn(why) if why.transient() && *why != NoJob::Starting
+                    );
+                }
                 (Some(_), behind) => seat.withdraw(NoJob::NotSynced(behind)),
+            }
+            if again && rerun_at != Some(tip.seq) {
+                rerun_at = Some(tip.seq);
+                continue;
             }
         }
         shared.followed(tip.seq);
@@ -584,6 +603,20 @@ where
             return;
         }
     };
+    #[cfg(test)]
+    let produced = if shared
+        .bodies_gone
+        .fetch_update(
+            std::sync::atomic::Ordering::AcqRel,
+            std::sync::atomic::Ordering::Acquire,
+            |left| left.checked_sub(1),
+        )
+        .is_ok()
+    {
+        Err(Unposted::Template(NoTemplate::BodyGone))
+    } else {
+        produced
+    };
     let produced = match produced {
         Ok(produced) => produced,
         Err(unposted) => {
@@ -690,6 +723,10 @@ impl Unposted {
                 tracing::debug!("no template: the pool was judged against another tip");
                 why(Unbuilt::PoolOnAnotherTip)
             }
+            Self::Template(NoTemplate::BodyGone) => {
+                tracing::debug!("no template: a listed body left the pool between the locks");
+                why(Unbuilt::BodyGone)
+            }
             Self::Template(NoTemplate::NoNonceSlot) => {
                 tracing::error!("no template: the coinbase reserves no extra nonce");
                 why(Unbuilt::NoNonceSlot)
@@ -723,10 +760,6 @@ impl Drop for SignalDone {
 
 /// The found-block sink. It ends when the inbox closes or the last sender
 /// drops, and the queue is empty. Each block enters through the door's
-            Self::Template(NoTemplate::BodyGone) => {
-                tracing::debug!("no template: a listed body left the pool between the locks");
-                why(Unbuilt::BodyGone)
-            }
 /// local-arrival entry ([`Door::offer_local`]) on the runtime it was
 /// spawned from. Called from inside that runtime.
 pub(crate) fn spawn_sink(
