@@ -183,9 +183,13 @@ fn a_clearnet_address_is_never_skipped_for_a_past_failure() {
         let failed = DialOutcome::DialFailed(peer(10, 18080), CloseCause::new(kind));
         world.failed.observe(&failed, at(100));
     }
-    world
-        .failed
-        .observe(&DialOutcome::PeerlistRefused(peer(10, 18080)), at(100));
+    world.failed.observe(
+        &DialOutcome::PeerlistRefused(
+            peer(10, 18080),
+            CloseCause::new(CloseKind::LevinHandshakeRejected),
+        ),
+        at(100),
+    );
     assert_eq!(world.check(&peer(10, 18080), &mut NoBans, at(100)), Ok(()));
 }
 
@@ -210,7 +214,12 @@ fn only_session_accepted_leaves_a_kept_session_and_every_outcome_ends_the_attemp
     let outcomes: [(MakeOutcome, usize); 4] = [
         (DialOutcome::SessionAccepted, 1),
         (DialOutcome::Confirmed, 0),
-        (DialOutcome::PeerlistRefused, 0),
+        (
+            (|a| {
+                DialOutcome::PeerlistRefused(a, CloseCause::new(CloseKind::LevinHandshakeRejected))
+            }) as MakeOutcome,
+            0,
+        ),
         (DialOutcome::PayloadRefused, 0),
     ];
     for (make, kept) in outcomes {

@@ -50,7 +50,13 @@ fn no_clearnet_report_writes_the_memory() {
     for cause in every_cause() {
         memory.observe(&DialOutcome::DialFailed(address.clone(), cause), at(SECOND));
     }
-    memory.observe(&DialOutcome::PeerlistRefused(address.clone()), at(SECOND));
+    memory.observe(
+        &DialOutcome::PeerlistRefused(
+            address.clone(),
+            CloseCause::new(CloseKind::LevinHandshakeRejected),
+        ),
+        at(SECOND),
+    );
     memory.observe(&DialOutcome::PayloadRefused(address.clone()), at(SECOND));
     assert!(
         memory.is_empty(),
@@ -83,7 +89,13 @@ fn on_tor_only_a_rejection_and_the_five_replies_write_the_memory() {
 
     // A refused peerlist is the same close as a rejected handshake.
     let mut memory = FailedAddresses::new();
-    memory.observe(&DialOutcome::PeerlistRefused(onion(18080)), at(SECOND));
+    memory.observe(
+        &DialOutcome::PeerlistRefused(
+            onion(18080),
+            CloseCause::new(CloseKind::LevinHandshakeRejected),
+        ),
+        at(SECOND),
+    );
     assert!(memory.is_recently_failed(&onion(18080), at(SECOND)));
 
     // A refused payload is not a failure of the address: the peer answered.

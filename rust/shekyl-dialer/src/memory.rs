@@ -22,7 +22,7 @@
 
 use std::collections::BTreeMap;
 
-use shekyl_peerlist::{CloseCause, CloseKind, DialOutcome, NetworkAddress, Peerlist, Tick};
+use shekyl_peerlist::{CloseCause, DialOutcome, NetworkAddress, Peerlist, Tick};
 
 /// Nanoseconds in a second.
 const SECOND_NANOS: u64 = 1_000_000_000;
@@ -86,11 +86,8 @@ impl FailedAddresses {
     /// proves it reachable.
     pub fn observe(&mut self, outcome: &DialOutcome, now: Tick) {
         match outcome {
-            DialOutcome::DialFailed(address, cause) => self.failed(address, *cause, now),
-            DialOutcome::PeerlistRefused(address) => {
-                let cause = CloseCause::new(CloseKind::LevinHandshakeRejected);
-                self.failed(address, cause, now);
-            }
+            DialOutcome::DialFailed(address, cause)
+            | DialOutcome::PeerlistRefused(address, cause) => self.failed(address, *cause, now),
             DialOutcome::PayloadRefused(_) => {}
             DialOutcome::Confirmed(address) | DialOutcome::SessionAccepted(address) => {
                 self.failures.remove(address);

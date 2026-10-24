@@ -21,6 +21,7 @@
 //! could supply it, and the wake spacing resumes when the connector is ready.
 
 mod address;
+pub(crate) use address::address_of;
 mod handshake;
 mod ready;
 
@@ -449,6 +450,9 @@ impl Dialer {
             let outcome = DialOutcome::PayloadRefused(address.clone());
             Self::record(&mut shared, connector, &outcome, now, rng);
         }
+        // White expiry follows the connection (the gray lifecycle, item 1):
+        // the clock moves to the close, so the 24 hours count from here.
+        shared.lists.session_ended(&address, now);
         shared.attempts(connector).session_closed(&address);
     }
 

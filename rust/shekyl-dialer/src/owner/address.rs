@@ -38,7 +38,7 @@ pub(super) fn endpoint_of(address: &NetworkAddress) -> Option<Endpoint> {
 }
 
 /// The list address of a board row. `None` for [`Endpoint::TorInbound`].
-pub(super) fn address_of(endpoint: &Endpoint) -> Option<NetworkAddress> {
+pub(crate) fn address_of(endpoint: &Endpoint) -> Option<NetworkAddress> {
     match endpoint {
         Endpoint::Clearnet {
             ip: IpAddr::V4(ip),
