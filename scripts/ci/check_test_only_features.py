@@ -187,6 +187,15 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     "reconcile does not know the test exists, and a shipped write commits "
     "exactly what its closure returned",
     (
+        "shekyl-mempool",
+        "pool-commit-fault",
+    ): "Pool::plant holds an entry without the door, and "
+    "Pool::refuse_next_commit forwards to PoolStore's, so shekyl-node's "
+    "test can show a flush whose pool-file write faults retires the pool "
+    "for the service too. Enabled from shekyl-node's dev-dependency edge "
+    "only; a shipped pool admits only through its door and commits what "
+    "its closure returned",
+    (
         "shekyl-chain-rules",
         "harness",
     ): "exposes the negative-fixture harness (MockChain, MockSubstrate) as a "
@@ -299,10 +308,9 @@ PERMANENT: dict[tuple[str, str], str] = {
 # it: `splitmix` is its only feature and is enabled across a crate boundary
 # from its first day (three dev edges). The name is the generator. It is not
 # the `conformance` grader feature those consumers also carry.
-# `shekyl-chain-sync` joined 2026-10-23 (CS-3), when its `runtime` feature
-# was enabled across a crate boundary. The runtime half is now its own
-# crate (`shekyl-chain-sync-runtime`, Rick, 2026-10-23) and the feature is
-# gone; the crate stays governed, with the floor job's `cs2-long-run` row.
+# `shekyl-chain-sync` joined 2026-10-23 (CS-3). It is the pure model; its
+# one feature is the floor job's `cs2-long-run`, and its runtime half is the
+# separate crate `shekyl-chain-sync-runtime` (Rick, 2026-10-23).
 #
 # This set is opt-in — the crates named below, out of a workspace approaching
 # seventy — so exhaustiveness holds *within* governance. The rule for joining: **a crate
@@ -324,6 +332,7 @@ GOVERNED_OWNERS: frozenset[str] = frozenset(
         "shekyl-draw-rng",
         "shekyl-noise",
         "shekyl-chain-sync",
+        "shekyl-mempool",
     }
 )
 

@@ -853,6 +853,134 @@ async fn the_node_serves_requests_its_own_form_checks_accept() {
     node.stop().await;
 }
 
+/// A locator hash this store holds only as an alternative block is
+/// skipped, and the response starts after the next locator hash on the
+/// main chain. The requester accepts a response only when its first
+/// header's parent is a hash it named, and an alternative block's fork
+/// point is seldom in a sparse locator.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_locator_hash_held_only_as_an_alternative_is_skipped() {
+    use shekyl_chain_ingest::service::{Arrival, ArrivalTag, Origin, Reply};
+    use shekyl_chain_sync_runtime::serve::serve_headers;
+    use shekyl_levin::RequestHeaders;
+
+    let (corpus, steps) = spend();
+    let chain = source("serve-alt", &corpus, &steps).await;
+    let (count, _, _) = chain.tip().expect("a chain");
+    let fork_at = count - 3;
+    let main = chain.block(fork_at + 1);
+    let bodies = steps
+        .iter()
+        .find_map(|step| match step {
+            Step::Block { block, bodies } if *block == main.serialize() => Some(bodies.clone()),
+            _ => None,
+        })
+        .expect("the corpus holds the block");
+    // The main block's sibling: the same parent and transactions, another
+    // nonce. It is lighter than the main chain, so it is stored beside it.
+    let mut sibling = main.clone();
+    sibling.header.nonce ^= 0x5A5A_5A5A;
+    let ticket = chain
+        .service
+        .door()
+        .offer(Arrival {
+            tag: ArrivalTag(9001),
+            origin: Origin::Local,
+            block: sibling.serialize(),
+            bodies,
+        })
+        .expect("room");
+    let reply = ticket.reply().await.reply;
+    assert!(matches!(reply, Reply::Held { .. }), "{reply:?}");
+    let named = chain.block(fork_at - 2).hash();
+    let genesis = chain.block(0).hash();
+    let response = serve_headers(
+        &chain.store,
+        &RequestHeaders {
+            block_ids: vec![
+                *sibling.hash().as_bytes(),
+                *named.as_bytes(),
+                *genesis.as_bytes(),
+            ],
+        },
+    )
+    .expect("the store answers");
+    let first = PowBlob::read(response.blobs.first().expect("headers")).expect("a preimage");
+    assert_eq!(
+        first.header.previous, named,
+        "the response starts after a hash the requester named"
+    );
+    assert!(!response.more);
+    chain.stop().await;
+}
+
+/// A chunk that mixes chain-sync requests with bytes for the C++ handler
+/// is finished by that handler, not after serving, so the transport does
+/// not hold the peer back. The owner's queue bounds it instead: a flood of
+/// header requests packed beside a relay is answered a few times, not once
+/// per request, and the session stays open. A last request for our tip
+/// (answered with no headers) marks the end of the flood's serving.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_request_flood_beside_cpp_bytes_is_bounded_by_the_serving_queue() {
+    logs();
+    let (corpus, steps) = spend();
+    let mut node = Node::start("serve-flood", corpus.rules(), &steps, 1, rng()).await;
+    let (_, _, tip) = node.chain.tip().expect("a chain");
+    let answers = Arc::new(Mutex::new(Answers::default()));
+    let id = node.connect(Box::new(Asker(Arc::clone(&answers))), None);
+    const REQUESTS: usize = 64;
+    let mut chunk = Vec::new();
+    for index in 0..REQUESTS {
+        chunk.extend_from_slice(&request_headers(vec![[0; 32]]));
+        if index == REQUESTS / 2 {
+            chunk.extend_from_slice(&notify(
+                NOTIFY_NEW_TRANSACTIONS,
+                b"a relay the stub does not parse",
+            ));
+        }
+    }
+    assert!(node.inject(id, chunk).await);
+    assert!(
+        node.wait(LIMIT, |node| node
+            .stub
+            .lock()
+            .expect("stub")
+            .commands
+            .contains(&(id, NOTIFY_NEW_TRANSACTIONS)))
+            .await,
+        "the relay did not reach the C++ handler"
+    );
+    assert!(
+        node.inject(id, request_headers(vec![*tip.as_bytes()]))
+            .await
+    );
+    assert!(
+        node.wait(LIMIT, |_| answers
+            .lock()
+            .expect("answers")
+            .headers
+            .iter()
+            .any(|response| response.blobs.is_empty()))
+            .await,
+        "the marker request was not answered"
+    );
+    let flood = answers
+        .lock()
+        .expect("answers")
+        .headers
+        .iter()
+        .filter(|response| !response.blobs.is_empty())
+        .count();
+    eprintln!("{REQUESTS} packed header requests were answered {flood} times");
+    assert!(flood >= 1, "the flood was not served at all");
+    assert!(
+        flood < REQUESTS,
+        "every packed request was served: the queue is unbounded"
+    );
+    assert_eq!(node.closed(id), None);
+    node.stop().await;
+}
+
 // --------------------------------------------------------------- CS-4 --
 
 /// An inbound session's claim arrives as a hint (`shekyl_chain_sync_hint`,

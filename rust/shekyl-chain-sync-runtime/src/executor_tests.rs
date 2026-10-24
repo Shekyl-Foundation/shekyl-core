@@ -6,7 +6,6 @@
 //! The executor's cache plans and its budget class, over real RandomX.
 
 use std::num::NonZeroUsize;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use shekyl_chain_ingest::{Metrics, ProductionSubstrate};
@@ -61,11 +60,7 @@ fn rig(budget: Budget) -> Rig {
     let metrics = Arc::new(Metrics::new());
     let substrate = ProductionSubstrate::new(Arc::clone(&caches), Arc::clone(&metrics));
     Rig {
-        executor: Arc::new(Executor::new(
-            budget,
-            substrate,
-            Arc::new(AtomicBool::new(false)),
-        )),
+        executor: Arc::new(Executor::new(budget, substrate)),
         caches,
         metrics,
     }
@@ -100,6 +95,36 @@ async fn a_main_seed_not_held_answers_not_held_and_never_derives() {
     let metrics = rig.metrics.snapshot();
     assert_eq!((metrics.hashes, metrics.cache_derives), (0, 0));
     assert!(!held(&rig.caches, seed(1)));
+}
+
+/// Stopping the executor ends a job parked on a full budget: the stop
+/// wakes the budget, so the wait sees the flag now, not when a permit
+/// frees. The job answers nothing for the item it did not prove.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stop_ends_a_job_waiting_on_a_full_budget() {
+    let budget = Budget::new(NonZeroUsize::MIN);
+    let busy = budget.acquire(Class::HeaderPow);
+    let rig = rig(budget.clone());
+    let job = tokio::spawn(prove(
+        Arc::clone(&rig.executor),
+        HashClass::HeaderPow,
+        CachePlan::Main(seed(1)),
+        vec![item(seed(1))],
+    ));
+    let parked = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while budget.waiting(Class::HeaderPow) == 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await;
+    assert!(parked.is_ok(), "the job never waited for a permit");
+    rig.executor.stop();
+    let answered = tokio::time::timeout(std::time::Duration::from_secs(5), job).await;
+    drop(busy);
+    let results = answered
+        .expect("the stop woke the waiting job")
+        .expect("joined");
+    assert!(results.is_empty(), "{results:?}");
 }
 
 /// A branch seed is derived once and kept for the next job on that seed,

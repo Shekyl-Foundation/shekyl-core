@@ -31,7 +31,9 @@
 //!   the C++ handler are forwarded as one `Deliver`, so the handler calls
 //!   `delivery_finished` once for it. A chunk that carries nothing for the
 //!   handler is finished by the owner, from its own task, never from inside
-//!   this sink.
+//!   this sink, once the requests it carried are answered. A chunk that
+//!   carries both is the handler's to finish, so its requests are bounded
+//!   by the owner's serving queue instead (owner module docs).
 //! - **A malformed bucket header is the transport's refusal, as today:**
 //!   the session's bytes go to the C++ handler raw from there on, and its
 //!   ingress refuses them.

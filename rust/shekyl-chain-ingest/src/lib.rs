@@ -108,6 +108,8 @@ mod body_pairing_tests;
 #[cfg(feature = "pipeline")]
 mod cache_window;
 #[cfg(feature = "pipeline")]
+mod chain_facts;
+#[cfg(feature = "pipeline")]
 pub mod connector;
 pub mod corpus;
 /// E6 slice 8 PR-b (`CHAIN_RULES_SLICE_8.md` §5 row 7, Q3): the driver's
@@ -211,6 +213,9 @@ mod switch_timing_tests;
 mod sync_wire_tests;
 #[cfg(feature = "pipeline")]
 pub mod target;
+/// The node's one block template, built by the tip follower on one snapshot.
+#[cfg(feature = "pipeline")]
+mod template;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod trace;
@@ -221,9 +226,9 @@ mod vectors_tests;
 pub use connector::{
     AltBlocksHeld, Applied, Apply, ChainFacts, ChainTip, Connector, ConnectorArgs, Digest, HashAt,
     Inject, Injected, IssueDraws, OfferAlt, Offered, PlanMismatchReason, PlannedBlock,
-    PlannedDemotion, PlannedPromotion, PopBeyondReorgCap, RaiseAlarm, RefusePromotion, Reorganize,
-    Rewind, Rewound, RunEnd, RunFault, SwitchDone, SwitchPlan, Switched, TableRows, TemplateFacts,
-    TipChanged, WatchLatch, WatchTip,
+    PlannedDemotion, PlannedPromotion, PopBeyondReorgCap, PopBlocks, RaiseAlarm, RefusePromotion,
+    Reorganize, Rewind, Rewound, RunEnd, RunFault, SwitchDone, SwitchPlan, Switched, TableRows,
+    TemplateFacts, TipChanged, WatchLatch, WatchTip,
 };
 pub use corpus::{CorpusFault, CorpusNet, CorpusReader, CorpusWriter, CORPUS_FORMAT_VERSION};
 #[cfg(feature = "fetch")]

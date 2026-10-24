@@ -11,12 +11,16 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
 use shekyl_difficulty::Difficulty;
-use shekyl_types::{BlockHash, BlockHeight};
-use shekyl_wire::Block;
+use shekyl_types::{BlockHash, BlockHeight, TxHash};
+use shekyl_units::AtomicUnits;
+use shekyl_wire::{BlobOffsets, Block};
 
 /// What to mine: a block whose nonce is the search, the height it connects
 /// at, the seed its longhash is computed under (CEN-D3) and the difficulty
-/// its hash must meet (the validator's target, CEN-D4).
+/// its hash must meet (the validator's target, CEN-D4). The rest is what
+/// a miner outside the node reads from the same posting
+/// (`get_block_template`): where to write in the blob, the seed the chain
+/// moves to next, and what the coinbase pays.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Job {
     /// The template. Its nonce is overwritten by the search.
@@ -27,6 +31,32 @@ pub struct Job {
     pub seed: BlockHash,
     /// The difficulty the longhash must satisfy.
     pub difficulty: Difficulty,
+    /// Where the header nonce and the coinbase's reserved extra nonce sit
+    /// in `block`'s blob.
+    pub offsets: BlobOffsets,
+    /// The seed of the next RandomX epoch, once the chain has it and it
+    /// differs from `seed`.
+    pub next_seed: Option<BlockHash>,
+    /// What the coinbase pays the miner: its emission leg and its fee
+    /// income after the burn.
+    pub reward: AtomicUnits,
+    /// The effective median block weight the block was priced against.
+    pub median_weight: u64,
+    /// The gross emission before this block.
+    pub already_generated: AtomicUnits,
+    /// The bodies the block lists, in its order.
+    pub listed: Vec<ListedBody>,
+}
+
+/// One body a job's block lists, as a miner outside the node sees it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ListedBody {
+    /// The transaction's id.
+    pub id: TxHash,
+    /// Its weight.
+    pub weight: u64,
+    /// Its fee.
+    pub fee: AtomicUnits,
 }
 
 /// A board's posting number. Every publish and withdrawal takes the next

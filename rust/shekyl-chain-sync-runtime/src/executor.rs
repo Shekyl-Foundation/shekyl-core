@@ -52,21 +52,30 @@ pub struct Executor {
     /// The one branch cache: built outside the store's slots, replaced when
     /// a job names another seed. The lock serialises branch derivations.
     branch: Mutex<Option<Arc<PreparedCache>>>,
-    stop: Arc<AtomicBool>,
+    /// Set by [`Self::stop`]; a permit wait gives up once it is.
+    stop: AtomicBool,
 }
 
 impl Executor {
     /// An executor over `substrate` (its cache store is the ingest
     /// service's, so a main seed is the window ingest pinned), taking its
-    /// permits from `budget` and giving up a wait once `stop` is set.
+    /// permits from `budget`.
     #[must_use]
-    pub fn new(budget: Budget, substrate: ProductionSubstrate, stop: Arc<AtomicBool>) -> Self {
+    pub fn new(budget: Budget, substrate: ProductionSubstrate) -> Self {
         Self {
             budget,
             substrate,
             branch: Mutex::new(None),
-            stop,
+            stop: AtomicBool::new(false),
         }
+    }
+
+    /// Stop: every permit wait gives up, and no item is proven after it.
+    /// The budget is woken after the flag is set, so a job already parked
+    /// on a full budget sees the flag now, not when a permit frees.
+    pub fn stop(&self) {
+        self.stop.store(true, Ordering::Release);
+        self.budget.wake();
     }
 
     /// The budget's permits: the most items of one job hashed at once, and

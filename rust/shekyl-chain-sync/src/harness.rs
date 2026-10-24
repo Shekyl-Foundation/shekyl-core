@@ -355,6 +355,99 @@ fn a_run_that_does_not_beat_the_selected_chain_is_not_hashed() {
     });
 }
 
+/// A lighter prefix that says the chain continues is kept only for its
+/// continuation, and is not hashed. It does not hold the header draw: only
+/// a proof in flight does. When the continuation misses its deadline, the
+/// run ends with it.
+#[test]
+fn a_lighter_run_kept_for_its_continuation_does_not_hold_the_draw() {
+    let rules = cap(64);
+    let main = chain_of(21);
+    let fork = chain_of(11);
+    let mut block = candidate_on(&fork, Vec::new()).block;
+    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    main.with_view(|view| {
+        let tip = view.tip().unwrap().unwrap();
+        let mut out = Vec::new();
+        sync.handle(
+            Event::Tip { tip },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .unwrap();
+        open_and_claim(&mut sync, &view, 1, u128::MAX);
+        let parent = fork.with_view(|fork_view| fork_view.tip().unwrap().unwrap().hash);
+        let timestamp = fork.with_view(|fork_view| {
+            match fork_view.header_at(BlockHeight::from_raw(10)).unwrap() {
+                AtHeight::Recorded(record) => record.header.timestamp,
+                AtHeight::AboveTip => panic!("the fork tip"),
+            }
+        });
+        fork.with_view(|fork_view| {
+            formed_on(&fork_view, &rules, &mut block, parent, timestamp + 120)
+        });
+        let out = answer(&mut sync, &view, 1, block.pow_blob(), 1, true);
+        assert!(proves(&out).is_empty(), "a lighter run was hashed: {out:?}");
+        let follow_up = out
+            .iter()
+            .find_map(|command| match command {
+                Command::RequestHeaders { session: 1, id, .. } => Some(*id),
+                _ => None,
+            })
+            .expect("the continuation is asked for");
+        // A heavier source opens while the lighter run waits for its
+        // continuation. The run is not being proven, so it is drawn.
+        let mut opened = Vec::new();
+        sync.handle(
+            Event::SessionOpened {
+                session: 2,
+                transit: Duration::from_secs(1),
+            },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut opened,
+        )
+        .unwrap();
+        sync.claim(
+            2,
+            PeerClaim {
+                count: ChainCount::from_raw(40),
+                work: CumulativeDifficulty::from_raw(u128::MAX),
+                top: BlockHash::NULL,
+            },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut opened,
+        )
+        .unwrap();
+        assert!(
+            opened
+                .iter()
+                .any(|command| matches!(command, Command::RequestHeaders { session: 2, .. })),
+            "the unhashed run held the draw: {opened:?}"
+        );
+        assert_eq!(sync.run_len(1), 1, "the run waits for its continuation");
+        let mut late = Vec::new();
+        sync.handle(
+            Event::Deadline {
+                session: 1,
+                request: follow_up,
+            },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut late,
+        )
+        .unwrap();
+        assert!(closes(&late).is_empty(), "{late:?}");
+        assert_eq!(sync.run_len(1), 0, "the run ends with its continuation");
+    });
+}
+
 /// `H*` stays the heavier of the local tip and the verified branches.
 #[test]
 fn the_selected_chain_is_the_most_verified_work() {

@@ -56,7 +56,7 @@ impl Parsed {
 }
 
 /// Bodies a block carried, for the pool's door.
-enum Carried {
+pub(super) enum Carried {
     /// The alternative block whose stored bodies are offered.
     Alt(BlockHash),
     /// Bodies in hand.
@@ -1016,7 +1016,7 @@ where
 /// A tip that moved parks the bodies for the follower. A pool-file fault
 /// retires the pool and leaves block ingest running. A chain fault stops
 /// the service.
-async fn offer_carried<S>(shared: &Arc<Shared<S>>, carried: Carried)
+pub(super) async fn offer_carried<S>(shared: &Arc<Shared<S>>, carried: Carried)
 where
     S: Substrate + Send + Sync + 'static,
     S::Fault: core::fmt::Debug + Send + 'static,

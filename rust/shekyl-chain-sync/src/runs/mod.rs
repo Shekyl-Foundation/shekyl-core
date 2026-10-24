@@ -68,6 +68,11 @@ where
         if follow {
             if let Some(state) = self.peers.get_mut(&session) {
                 state.follow_up = None;
+                // A run kept only for its continuation ends with it, as one
+                // whose response says nothing follows does.
+                if state.run.as_ref().is_some_and(Run::unhashed) {
+                    state.run = None;
+                }
             }
         }
         // A header-request deadline ends this session's part of a CS-Q4(c)

@@ -2,7 +2,7 @@
 
 **Families (registered in `IMPLEMENTATION_INDEX.md` §2, rule 94):** **`DX-Q`** (questions, ruled here) and **`DX-F`** (findings). `X-` is taken by the exit-standoff family; `DX-Q` and `DX-F` are free at `d2ac8b45d`.
 **Ground:** `dev` at `d2ac8b45d` (2026-10-16); #1088 (Rust `main()`) at its PR head. Counts re-measured at the landing pin, `d2ac8b45d`: two line spans corrected in place (DX-F1's cache block, DX-F6's `RelayState`); every other count and pin held.
-**Status:** OPEN — Round 0 RULED, Rick 2026-10-16: DX-Q1…DX-Q9 accepted as recommended, and DX-Q8 amended (§3). DX-Q5's relay seam was grounded the same day (§2, DX-F6). DX-Q10, the fee floor's move at the flip, was ruled with FL PR-C (#1096, 2026-10-16) and is carried here by name. Implementation proceeds in the order of §4.
+**Status:** OPEN — Round 0 RULED, Rick 2026-10-16: DX-Q1…DX-Q9 accepted as recommended, and DX-Q8 amended (§3). DX-Q5's relay seam was grounded the same day (§2, DX-F6). DX-Q10, the fee floor's move at the flip, was ruled with FL PR-C (#1096, 2026-10-16) and is carried here by name. DX-Q3 is amended by PR 3b's Round 0 (N1, N2 and Q1–Q13, ruled by Rick 2026-10-21/22; DX-Q3's amendments below). Implementation proceeds in the order of §4.
 **Parent:** `DAEMON_REDB_STORE.md`. This document replaces the plan's one-line DRS-X and DRS-B rows and amends R2 (2026-10-15) where §1 says.
 
 ---
@@ -81,7 +81,7 @@ The C++ that has no Rust owner yet — the protocol handler and `levin_notify` �
      - the sync owner;
      - the RPC;
      - **the pool**, reconciled per publication (the service's tip follower);
-     - **the miner's template producer**, in the same follower, after the pool. The follower first installs the cache window for the new tip under a chain permit, which pins `seed(tip + 1)` canonical. The producer posts a job only under a seed the window holds, before `JobBoard::publish`, and withdraws the board while the node is behind. A closed sync channel reads as behind. Its template source is a seam: PR 3b's `get_block_template` assembler at the flip.
+     - **the miner's template producer**, in the same follower, after the pool. The follower first installs the cache window for the new tip under a chain permit, which pins `seed(tip + 1)` canonical. The producer posts a job only under a seed the window holds, before `JobBoard::publish`, and withdraws the board while the node is behind. A closed sync channel reads as behind. It builds the node's one template itself, on one snapshot, and `get_block_template` reads the posted job (DX-Q3, N2).
    - **The follower's death is the service's fault** (`FollowerEnded`): the service stops, the door closes and the miner's job is withdrawn, so no miner hashes a stale job.
 6. **One RandomX budget** (PR2-Q3; `shekyl-hash-budget`). `available_parallelism` permits, read at run time (rule 76), granted by class, highest first: forming on the chain or a solicited span; chain sync's header PoW; unsolicited arrivals; `calc_pow`; chain sync's evidence check; the miner. **The miner never holds a permit a higher class waits for, and never takes the last free one:** it takes one per hash, only while another stays free. On a one-permit budget it would never hash, so `Miner::start` refuses that budget (`MinerStartRefused::OnePermit`). Nice 19 stays, but priority is by permit. A grant that leaves a permit free wakes the waiters, and a wake takes the budget lock, so a stop is never lost. A cache is built only for a seed the chain has earned, under a permit: a pin, or a branch seed's preparation (item 1). `calc_pow` and the miner look up only. **The sixth class, `Class::Evidence`** (Rick, 2026-10-19; chain sync Round 0, CS-Q2 step 3), sits between `calc_pow` and the miner for chain sync's proof-of-work check on a branch forking deeper than `D_max` (the `Diverged` alarm's evidence). It sits above the miner because `grantable` refuses any class while a higher one waits, and miner workers wait whenever fewer than two permits are free, so a class below the miner would never run on a mining node. Its check builds the fork seed's cache outside the cache store's two slots: one check at a time, held only while it runs, never canonical and never pinned, so it never evicts the window's pair or an in-cap branch's seed, and B2's bound stands. It is built with its first caller, chain sync's executor (CS-3, `shekyl_chain_sync_runtime::executor`), and needs one free permit.
 7. **Deleted at the flip:** `prepare_handle_incoming_blocks` / `cleanup_handle_incoming_blocks` (Monero's batch preprocessing) and `try_add_next_blocks`' connect loop. The `Form` workers replace them. With them goes the last path that derives a RandomX cache on a miss: `shekyl_pow_randomx_v2_hash` (`pow_randomx_ffi.rs:227`), reached only through `hash_pow_randomx` from `get_block_longhash` (`Blockchain`, the C++ miner, `core_rpc_server`, `rpc_facts_ffi.cpp`), all of which the flip deletes.
@@ -109,24 +109,47 @@ The join rule: no FFI built for a C++ handler that dies a PR later. Every method
 - **Moved to Rust:**
   - **RK-6 (pool)** over the Rust pool.
   - **RK-7 (mining):**
-    - `get_block_template` from `shekyl-block-template` with the pool's selection (PR-b b6);
-    - `submit_block` and `generateblocks` into the router;
-    - `calc_pow` and `get_miner_data`.
+    - `get_block_template` and `get_miner_data`: reads of the node's one posted template (N2);
+    - `submit_block` through the local-arrival entry (Q6); `generateblocks` runs the built-in miner (N2);
+    - `calc_pow`.
   - **Alt chains and alt hashes** over the alt reads.
-  - **`pop_blocks`** as a connector `Rewind` message, an operator action. A live source never emits `Rewind`.
+  - **`pop_blocks`** as a connector `PopBlocks` message, an armed test lever (Q7, Q8): refused at the undo floor before any pop, its bodies returned to the pool. A live source never emits `Rewind`.
   - **`get_coinbase_tx_sum`.**
   - **RK-9:** curve-tree info and checkpoint, archival claim source, shard coverage.
-  - **Mining control:** `start_mining`, `stop_mining` and `mining_status`, over the Rust miner loop (DX-Q4). `set_log_hash_rate` deletes: the hash rate is part of mine status (`INPUT_GRAMMAR.md:640`, §13). The C++ handlers are `core_rpc_server.cpp:222`, `:273`, `:293` and `:347`.
-  - **Bans:** `set_bans`, `get_bans` and `banned` (`core_rpc_server.cpp:944`, `:881`, `:912`), over the transport layer's ban list (`rust/shekyl-transport-layer/src/ban.rs:151`, held in the socket table, `admission.rs:270`). They reach it through a handle the composition root supplies, in RT-O26's shape (`RPC_CHANNEL.md:1324`, §6.4). No FFI. The C++ forwarders through `m_p2p` delete.
-    - **How Rust reaches the list today:** only through `net_node`. The C++ handlers call `m_p2p` (`net_node.inl:213`–`:345`), which calls the `shekyl_ban_*` exports (`rust/shekyl-ffi/src/seam_ban_ffi.rs:75`–`:233`). Those act on the process's one socket table, a static inside `shekyl-ffi` (`process_sockets`, `seam_ffi.rs:200`–`:201`), or on the hub the C++ zone server binds over it (`zone_server.h:105`). Rust `main` holds no handle to either.
-    - **The seam the flip uses:** the composition root owns the process's `Sockets` value (`admission.rs:338`, an `Arc` handle) and hands the bans handle to the RPC from it. The FFI's static becomes a reader of the root's value for as long as the C++ zone server binds through it.
-  - **`stop_daemon`** (`core_rpc_server.cpp:436`) is one more trigger of the one stop path (`TOR_SUPERVISOR.md:51`, §1, ruled 2026-10-14; the stop-trigger row at `:612`). The handler asks Rust `main` to stop; it stops nothing itself.
+  - **Mining control:** `start_mining`, `stop_mining` and `mining_status`, over the Rust miner loop (DX-Q4). `set_log_hash_rate` deletes: the hash rate is part of mine status (`INPUT_GRAMMAR.md:640`, §13). The C++ handlers are `core_rpc_server.cpp:163`, `:214`, `:234` and `:280`.
+  - **Bans:** `set_bans`, `get_bans` and `banned` (`core_rpc_server.cpp:856`, `:793`, `:824`), over the transport layer's ban list (`rust/shekyl-transport-layer/src/ban.rs:151`, held in the socket table, `admission.rs:270`). They reach it through a handle the composition root supplies, in RT-O26's shape (`RPC_CHANNEL.md:1579`, §6.4). No FFI. The C++ forwarders through `m_p2p` delete.
+    - **The one ban path** (Q11): the bans handle bans through `shekyl-ffi`'s `BanPath`, through the hub while one is bound (it closes the sockets a new ban drops) and otherwise on the node's socket table, which the daemon installs as the process table. The hub carries every verb, `lift` and `remaining` included; the `shekyl_ban_*` exports go the same way. Tor inbound has no address to ban.
+  - **`stop_daemon`** (`core_rpc_server.cpp:347`) is one more trigger of the one stop path (`TOR_SUPERVISOR.md:60`, §1, ruled 2026-10-14; the stop-trigger row at `:735`). The handler asks Rust `main` to stop; it stops nothing itself.
 - **`FfiChainFacts` / `FfiInfoFacts`** are replaced by store-backed implementors (RK-D7's planned second implementation). `rpc_facts_ffi.cpp` deletes.
 - **Deleted:** `save_bc` and `flush_cache` (durability is `Immediate`; there is no cache), and `inject_archival_serve_credit` (with DEL-008).
 - **Not this lane:** log, limits and peers (#1088's `option_set` / `option_show`).
 - **The C++ RPC server is gone whole:** every handler, request and response struct, dispatch table and error-code header, plus the facts and submit FFIs (`rpc_facts_ffi.cpp`, `daemon_submit_ffi.cpp`, `core_rpc_ffi.cpp`). The flip PR lists every file this empties, at its pin. At `b6bdadc3c` the falsifier's patterns match 28 files under `src/`, mixed headers such as `src/shekyl/shekyl_ffi.h` among them.
 - **The interim C++ console:** the console commands that read `COMMAND_RPC_*` structs delete with those structs. At #1088's head (`30a27570b`) they are nineteen words over eighteen executor methods (`src/daemon/rpc_command_executor.cpp:167`–`:963`; the words at `src/daemon/command_server.cpp:116`–`:257`): `bans`, `ban`, `unban`, `banned`, `flush_txpool`, `print_coinbase_tx_sum`, `print_pool`, `print_pool_sh`, `mining_status`, `pop_blocks`, `relay_tx`, `save`, `show_hr`, `hide_hr`, `start_mining`, `stop_mining`, `stop_daemon`, `exit` and `flush_cache`. `stop_daemon` and `exit` share one method. They are not ported into the Rust console. Their successors are `shekyl-cli`'s words (`INPUT_GRAMMAR.md` §13, `:617`), built by the R8 slice. Three have none: `pop_blocks` is an armed test lever (IG-Q25, `INPUT_GRAMMAR.md:691`), and `save` and `flush_cache` name LMDB and C++ cache internals.
 - **Falsifier:** after the flip, `rg -n -e 'COMMAND_RPC_' -e 'core_rpc_server' src/` returns nothing.
+
+#### DX-Q3's amendments: PR 3b's Round 0 (ruled by Rick, 2026-10-21; Q13 on 2026-10-22)
+
+PR 3b's questions share one cause, no composition root. Two global rulings answer most of them.
+
+**N1 — the node is built now, not at the flip.** One crate, `shekyl-node`, holds the daemon's one `Node`: the chain store, the connector and ingest service, the pool, the hasher budget, the cache store, the job board, mining control, the `Sockets` value and the stop latch. Rust `main` builds it at start, beside the C++ core; the store opens, and nothing is routed into it from C++ before the flip. `shekyl-daemon-rpc` defines the handle traits it needs, each with an absent default that answers not ready; `Node` implements them, and `daemon-rpc` never depends on `chain-ingest`. The composition root is the crate holding `main` (`shekyl-daemon`); RT-O26's "`shekyl-daemon-image` is the root" is re-pinned to it. PR 3b is handlers over a real `Node`, tested end to end in Rust; the flip is "route and delete".
+
+**N2 — one template per node, read rather than built.** The node mines to one address, the `mine-address` row; `start_mining` takes no address. The tip follower builds one template per tip on one snapshot, always reserving the coinbase's eight extra-nonce bytes, and posts it on the job board. `get_block_template` and `get_miner_data` return the posted job and its blob offsets; they build nothing. `generateblocks(n)` runs the built-in miner until the tip is `n` higher. A remote caller can no longer learn or set which key a node mines to, and no coinbase is built to a key the operator did not configure. The trade, accepted: a solo miner cannot mine to their own address on another operator's node; a pool runs its own daemon. The row is read at start: it becomes changeable while the node runs only when the grammar round marks it a runtime row (IG-12), and until then a change is a restart. `mining_status` reports the row.
+
+| # | Question | Resolution |
+| --- | --- | --- |
+| Q1 | Reads that die at the flip with no owner | PR 3b builds `is_key_image_spent`, `get_blocks_by_height.bin`, `get_o_indexes.bin` and `get_transactions` over the store and the pool at today's names; `get_miner_data` reads the posted job (N2). `get_transactions` is the wallet's block fetch and proofs read (`block_fetch.rs`, `proofs_chain_facts.rs`): its `as_json` is absent, and `decode_as_json` is refused as bad parameters, epee's rendering retiring with RK-W (RW-Q4, IG-Q55; the review of #1165). `rpc_facts_ffi.cpp`'s sync half deletes at chain sync's cutover; `/get_stem_tallies` is RD's and deletes with `levin_notify`. The console's three bridged calls re-point at the flip |
+| Q2 | Which fill ships at the flip | `shekyl_block_template::Fill` (#1152), the reward-aware fill, priced at the built coinbase's weight; candidates come in `select`'s order (the brief of 2026-10-23) |
+| Q3 | One snapshot per template | The follower's one `ReadSnapshot`, in `spawn_blocking`, no cache: the chain facts, the seed and target, the next seed and the pool's selection. `TemplateFacts` moved off `Writer::inspect` |
+| Q4 | The draw commitment | `commit_and_discard` lives in `shekyl-archival-retention` (OS random, nothing kept); the FFI calls it. `tx_key_secret` is OS random per template. The pair-keeping producer stays SO-D12's, at genesis |
+| Q5 | The mining address | Config: the row's decode makes the C++ checks once (the spend key a point, the view key to X25519, the ML-KEM key well-formed) |
+| Q6 | A local arrival from outside the crate | One public async entry on the door (`Door::offer_local`): wait for the local seat, offer, await the reply. The miner's sink, `submit_block`, `generateblocks` and genesis use it |
+| Q7 | `pop_blocks` at the undo floor | Bounded before any pop as a reply, never terminal; the target computed on a read snapshot and the tip it was computed from re-checked inside the write, which under the one writer is the target computed in the write; the popped bodies read before the pop and returned through the pool's door; an armed lever only |
+| Q8 | The armed-lever switch | The `dev-rpc` row, announced at every start; the method table's `armed` column (`generateblocks`, `pop_blocks`, and `inject_archival_serve_credit` per RT-O9.2); refused outside the grant while off. Until the flip routes the handlers, the refusal is the `Armed` token each armed handler takes, which only the switch's check makes; dispatch reads the column once it routes them. Today's C++ path is not gated: it is the path the flip deletes |
+| Q9 | A lone regtest node's own transactions | No opt-in (rule 71). Once the relay marks the entry shown, the next template lists it; the embargo driver is RD's |
+| Q10 | The pool handlers | One pool, the node's. `flush_txpool` removes, tagged `Flushed`. Any caller sees `shown()`; stem entries are the host's. Fields with no Rust state are not on the wire (register rows). `relay_tx` re-offers own entries, host only |
+| Q11 | Bans | The node owns `Sockets`; the handle goes through the hub while bound, which gains `lift` and `remaining`. Tor inbound stays unbannable |
+| Q12 | Where the handles live | N1 |
+| Q13 | The sync watch | The node owns one `watch::Sender<shekyl_chain_sync::SyncState>`, chain sync's own type: `Synced` once genesis connects on regtest, `NoView` elsewhere until chain sync's cutover publishes. The follower posts only on `Synced`, and `mining_status` names the reason while no job is posted. No interim |
 
 ### DX-Q4 — The miner loop is Rust
 
@@ -146,7 +169,7 @@ The join rule: no FFI built for a C++ handler that dies a PR later. Every method
 
 ### DX-Q6 — Where the store opens; genesis; stop
 
-- Rust `main` (`shekyl-daemon`) builds `shekyl-node`'s `Node` after the network marker (#1088 step 4) and before `run(snapshot)` (step 7). The node opens `ChainStore::with_release`, starts the ingest service, and is where the store opens (N1, `DRS_X_PR3B_ROUND0.md`). Nothing is routed from C++. The flip still hands the remnant the shell's handle.
+- Rust `main` (`shekyl-daemon`) builds `shekyl-node`'s `Node` after the network marker (#1088 step 4) and before `run(snapshot)` (step 7). The node opens `ChainStore::with_release`, starts the ingest service, and is where the store opens (N1, DX-Q3's amendments). Nothing is routed from C++. The flip still hands the remnant the shell's handle.
 - **Genesis.** An empty store connects the pinned genesis through the ingest (`form` → `validate` → `connect`, CEN-E5's pin). `reset_and_set_genesis_block` deletes.
 - **Stop.** `Node::stop` is one step of the daemon's `finish`, after the dialer and the RPC and before the managed Tor teardown (`TOR_SUPERVISOR.md` §1): the service stops, the follower withdraws the job board, the connector finishes its current message, and the store closes. `Immediate` durability means there is no flush step.
 - **No migration.** A release wipes, and an LMDB directory is ignored. A chain file whose `schema_version` is not this binary's is removed and a fresh store opened, logged with both versions. A corrupt file, an invariant, or an I/O error still refuses: a wipe is for a version the binary does not speak. A pool file this process cannot read stays refused and kept (`SPL-Q8`, the ruling at the pool-file bullet above).
@@ -158,10 +181,10 @@ The splinter rule: a mechanism is deleted whole, in one PR. The join rule: no FF
 | # | PR | Live? |
 | --- | --- | --- |
 | 1 | **PR-b**: the Rust pool (`DRS_E5_POOL_ALT_PRUNE.md` §5 b1–b7, as amended in its brief) | staged; merged 2026-10-18 (#1102) |
-| 2 | **Router, arrival entry, `TipChanged`, the shared hasher budget**; the scenario driver is the source in tests | staged; under way (#1123) |
+| 2 | **Router, arrival entry, `TipChanged`, the shared hasher budget**; the scenario driver is the source in tests | staged; merged 2026-10-20 (#1123) |
 | 3 | **The read-only RPC handlers and the store-backed facts (DX-Q3), and the miner loop (DX-Q4)**, unrouted | staged; merged 2026-10-19 (#1106) |
-| 3n | **`shekyl-node`**, the daemon's one `Node` (N1): the store, ingest, the pool, the hasher budget, the cache store, the job board and the socket table. Built at start beside the C++ core; genesis through the door; nothing routed | staged |
-| 3b | **The pool's handlers, `get_block_template`, `submit_block`, `generateblocks`, `pop_blocks`, `start_mining` / `stop_mining` (with `mining_status`), the bans and `stop_daemon`** (DX-Q3), unrouted. Briefed after PR-b and PR 2 merge | staged |
+| 3n | **`shekyl-node`**, the daemon's one `Node` (N1): the store, ingest, the pool, the hasher budget, the cache store, the job board and the socket table. Built at start beside the C++ core; genesis through the door; nothing routed | staged; merged (#1147) |
+| 3b | **The node's one template (N2) and the methods that read it; mining control; `submit_block`, `generateblocks` and `pop_blocks`; the pool's handlers; the bans and `stop_daemon`; three Q1 reads** (DX-Q3), unrouted | staged (#1165) |
 | 4 | **The flip** (below) | live |
 
 **The flip PR:**
@@ -180,9 +203,12 @@ The splinter rule: a mechanism is deleted whole, in one PR. The join rule: no FF
   - liblmdb from `shekyld` (DEL-004);
 - deletes every LMDB-bound C++ test, each with a sentence naming the rule it tested and where Rust covers it now;
 - applies the `DAEMON_REDB_STORE.md` §12.1 gate retirements;
+- arms the `dev-rpc` row in the daemon config of every regtest harness that calls `generateblocks` or `pop_blocks` — the engine-core e2e runs, GF-7, the bench scripts and the Python framework — before dispatch reads the `armed` column (the review of #1165, ruling 1);
+- hands the submit engine's shim (`RustPoolShim`) the service's `PoolHealth`, so a pool-file fault met on the submit path retires the pool as one met by the service, the pool handle or the chain handle does (the review of #1165, M5);
+- runs the RPC on a runtime of its own, never the node's: `pop_blocks` returns its bodies through `offer_carried`, which verifies each body's stateless half on the caller's runtime without a hasher permit (`span.rs`), bounded by the operator only because the lever is armed and the host's;
 - restates the two decisions `RPC_WIRE.md` carries that are bound to state the flip ends: RK-D7 (one implementation, `StoreFacts`, once the shims are deleted) and the per-lock-domain rule (over the Rust pool's lock and the store's MVCC snapshot, where today its example is `tx_memory_pool::check_for_key_images`).
 
-PR-b, PR 2 and PR 3 may run in parallel; PR 3n is the node, and PR 3b is briefed after PR-b and PR 2 merge. The flip needs PR-b, PR 2, PR 3, PR 3n, PR 3b and #1088.
+PR-b, PR 2 and PR 3 may run in parallel; PR 3n is the node (#1147), and PR 3b builds on it (#1165). The flip needs PR-b, PR 2, PR 3, PR 3n, PR 3b and #1088.
 
 ### DX-Q9 — CEN-L14's remaining sites
 
@@ -343,6 +369,27 @@ Each observed difference becomes one row.
 
 Its number is read from the tree at the flip's pin, never carried from a plan (`shekyl-rpc-types`' `chain.rs`).
 
+**Rows found by PR 3b** (#1165; staged). The flip starts from these too.
+- `get_block_template` takes no address and no reserve size, `start_mining` no address, and a request carrying either is refused as bad parameters; the extra nonce is always reserved: **Design** (N2, 2026-10-21).
+- `get_block_template` adds `nonce_offset`; `mining_status` adds the job's `height`, `pool_retired` and the no-template diagnostic, and its `address` is the `mine-address` row whether or not the miner runs: **Design** (N2; Q13).
+- `get_miner_data`'s `tx_backlog` is the posted template's listed bodies, not the whole pool: **Design** (N2).
+- `generateblocks` takes `count` alone and runs the built-in miner; no `wallet_address`, `starting_nonce` or `prev_block`: **Design** (N2).
+- `submit_block` takes `{ body }`, not a positional list, and a block that wins a switch is success: **Design** (the brief of 2026-10-23, b3; a block that is the new tip has joined the chain).
+- `pop_blocks` refuses a count whose lowest block is below `max(genesis + 1, undo floor)`, before any pop: **C++ defect** for the missing bound (C++ clamps genesis only), **Design** for the reply shape (Q7).
+- The pool listing's `receive_time`, `last_relayed_time`, `get_txpool_backlog`'s `time_in_pool`, and the stats' `oldest`, `num_10m`, `histo` and `histo_98pc`: **Design** (S7, the review of #1102: a receive time across many nodes' listings points at a transaction's origin; the Rust pool keeps none).
+- `kept_by_block`: **Removed** (CEN-K10, deleted 2026-10-17 on #1102).
+- `double_spend_seen` and the stats' `num_double_spends`: **Design** (CEN-M7: the door refuses a conflicting spend, so no entry is held marked).
+- `last_failed_height`, `last_failed_id_hash` and the stats' `num_failing`: **Design** (CEN-M10: an entry the parent refuses is evicted, not kept with a mark).
+- `max_used_block_id_hash` and `max_used_block_height`: **Design** (an FCMP++ spend's reference block is its pass's, re-judged on every reconcile; there is no ring's highest block to report).
+- `do_not_relay`: **Design** (the stem phase is `relayed: false`; no other relay state).
+- `tx_json`, and `get_transactions`' `as_json`: **Removed** (epee's rendering, retiring in RK-W; RW-Q4, IG-Q55). `decode_as_json: true` is refused as bad parameters. The C++-backed server also drops `as_json` when it rendered none, so today's replies lose the field they always sent empty.
+- `get_transactions`' pool entry has no `received_timestamp`: **Design** (S7, as the pool listing's).
+- `get_transactions` refuses a transaction whose body this node has pruned, naming it: **Design** (the prunable region and `pqc_auths` go together, and the wire cannot be recomposed without them; C++ never discarded a body).
+- `inject_archival_serve_credit` is the host's and an armed lever: **C++ defect** (RT-O9.2 ruled it so; the table restated the defect as policy).
+- `set_bans` takes no numeric `ip`, an absent `seconds` bans until lifted, and `get_bans` and `banned` add `permanent`: **Design** (Q11; the ban file's permanent bans).
+- `relay_tx` answers not ready: **Unbuilt by design**, owner RD (the relay driver).
+- A public-network node is not synced, and builds no template, before chain sync's cutover: **Unbuilt by design**, owner chain sync (Q13).
+
 ### 3.2 Function
 
 - **Every regtest e2e walk** passes on the flip binary.
@@ -364,10 +411,10 @@ Its number is read from the tree at the flip's pin, never carried from a plan (`
 ## 4. Order of work
 
 1. **PR-b**, brief issued 2026-10-16; merged 2026-10-18 (#1102).
-2. **PR 2** — router, entry, `TipChanged`, hasher budget, L14 walk. Under way (#1123), staged: built and tested, nothing routed.
+2. **PR 2** — router, entry, `TipChanged`, hasher budget, L14 walk. Merged (#1123), staged: built and tested, nothing routed.
 3. **PR 3** — the read-only RPC handlers, the store-backed facts and the miner loop. Merged (#1106).
-4. **PR 3n** — `shekyl-node`, the daemon's one `Node` (N1, `DRS_X_PR3B_ROUND0.md`). Staged: Rust `main` builds it at start beside the C++ core, an empty store connects the pinned genesis through the ingest door, and nothing is routed.
-5. **PR 3b** — the pool's handlers, `get_block_template`, `submit_block`, `generateblocks`, `pop_blocks`, `start_mining` and `stop_mining` (with `mining_status`), and the bans and `stop_daemon` (DX-Q3). Staged. Briefed after PR-b and PR 2 merge. Its `get_block_template` assembler is also the tip follower's template source (DX-Q2 item 5): one producer for the RPC and the miner.
+4. **PR 3n** — `shekyl-node`, the daemon's one `Node` (N1, DX-Q3's amendments). Merged (#1147). Staged: Rust `main` builds it at start beside the C++ core, an empty store connects the pinned genesis through the ingest door, and nothing is routed.
+5. **PR 3b** (#1165) — the node's one template under N2: the tip follower builds it on one snapshot and posts it, and `get_block_template` and `get_miner_data` read the posted job; mining control (`start_mining`, `stop_mining`, `mining_status`); `submit_block` and `generateblocks` through the local-arrival entry; `pop_blocks`; the pool's handlers; the bans and `stop_daemon`; `is_key_image_spent` and the two `.bin` reads (DX-Q3 and its amendments). Staged: built over a real `Node` and tested, nothing routed.
 6. **The flip** needs PR-b, PR 2, PR 3, PR 3n, PR 3b and #1088. DEL-008's gate holds at genesis (Rick, 2026-10-18). At genesis the requirements are — SO-D8 Slice C's admission rows `implemented`, CEN-J8–J10 retired, and the secret draw live (`DAEMON_REDB_STORE.md:2697`). Until then testnet archival runs on the Rust path as it stands, carriers included, so passes land on live code. The flip's edit to `try_add_next_blocks` carries its own `UNFREEZE` line in `scripts/ci/dial_path_freeze.tsv` if CS-Q9's shrink-only rows for the protocol handler have landed (CS-Q9, Rick 2026-10-18).
 7. **Chain sync's cutover** follows the flip. It deletes the protocol handler's sync half, the complement request included (CS-Q1, Rick 2026-10-18). **RD** deletes its transaction routes, complement serving, `levin_notify` and the relay entry. Whichever lands second deletes the handler file.
 

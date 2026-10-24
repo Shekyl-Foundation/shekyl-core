@@ -6,30 +6,30 @@
 //! The responder side of 2011–2014, from the store (CS-3 §4.5). Reads only.
 //!
 //! A header request is a sparse locator. The first hash the store holds on
-//! its main chain is the fork point. The null hash, an empty chain's whole
-//! locator, starts the response at genesis. A hash held as an alternative block is
-//! walked down its parents to the main chain, and that block is the fork
-//! point. From the fork point's child upward the response carries
+//! its main chain is the fork point, and a hash held only as an alternative
+//! block is passed over: the requester accepts a response only when its
+//! first header's parent is a hash it named. The null hash, an empty
+//! chain's whole locator, starts the response at genesis. From the fork
+//! point's child upward the response carries
 //! `pow_blob`s until [`HEADERS_RESPONSE_BYTES`] would be passed. `more` says
 //! whether the main chain continues, and `tip_work` is the tip's cumulative
 //! difficulty.
 //!
 //! A body request names hashes. Each one on the main chain is answered with
 //! its block, its listed transactions and its attestation witness, and
-//! [`plan_bodies`] decides what is sent, deferred and missed. Until DRS-SB's
+//! [`BodyPlanner`] decides what is sent, deferred and missed; a body the
+//! budget defers is never read. Until DRS-SB's
 //! discard lands every transaction is held whole and is served
 //! [`TxBody::Full`]. One whose prunable region, or `pqc_auths` region, this
 //! node no longer holds is served as a [`SkeletonTx`].
-
-use std::collections::HashMap;
 
 use shekyl_chain_rules::AtHeight;
 use shekyl_chain_store::store::{
     AtIndex, ChainStore, Prunable, ReadSnapshot, StoreError, TxRecord,
 };
 use shekyl_levin::{
-    plan_bodies, RequestBodies, RequestHeaders, ResponseBodies, ResponseHeaders, HASH_SIZE,
-    HEADERS_RESPONSE_BYTES,
+    body_budget_bytes, BodyPlanner, RequestBodies, RequestHeaders, ResponseBodies, ResponseHeaders,
+    HASH_SIZE, HEADERS_RESPONSE_BYTES,
 };
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 use shekyl_wire::{BlockBody, SkeletonTx, TxBody};
@@ -87,8 +87,10 @@ pub fn serve_headers(
 }
 
 /// The height the response starts at: the child of the first locator hash
-/// this store holds on its main chain, directly or as the base of an
-/// alternative chain. `None` when no locator hash is held.
+/// this store holds on its main chain. A hash held only as an alternative
+/// block is passed over, since the response's first parent must be a
+/// locator hash and an alternative block's fork point seldom is. `None`
+/// when no locator hash is on the main chain.
 fn first_held(
     snap: &ReadSnapshot<'_>,
     locator: &[[u8; HASH_SIZE]],
@@ -103,40 +105,19 @@ fn first_held(
         if let Some(height) = snap.height_of(&hash)? {
             return Ok(Some(height + BlockCount::ONE));
         }
-        if let Some(fork) = fork_of_alt(snap, hash)? {
-            return Ok(Some(fork + BlockCount::ONE));
-        }
-    }
-    Ok(None)
-}
-
-/// Where the alternative chain through `hash` leaves the main chain: the
-/// height of its first ancestor on main. `None` when `hash` is not an
-/// alternative block, or its chain reaches nothing on main. The walk is
-/// bounded by the alternative blocks the store holds.
-fn fork_of_alt(
-    snap: &ReadSnapshot<'_>,
-    hash: BlockHash,
-) -> Result<Option<BlockHeight>, StoreError> {
-    let mut steps = snap.alt_block_count()?;
-    let mut at = hash;
-    while let Some(alt) = snap.alt_block(&at)? {
-        let parent = alt.block().header.previous;
-        if let Some(height) = snap.height_of(&parent)? {
-            return Ok(Some(height));
-        }
-        if steps == 0 {
-            return Ok(None);
-        }
-        steps -= 1;
-        at = parent;
     }
     Ok(None)
 }
 
 /// Answer a body request from `store`: what is sent, deferred by the byte
-/// budget, and marked unavailable is [`plan_bodies`]'s, so a response this
+/// budget, and marked unavailable is [`BodyPlanner`]'s, so a response this
 /// serves passes the requester's `check_form`.
+///
+/// A body is read only while the budget can still send it, and kept only
+/// when it is sent. Past the budget a held block is deferred whatever its
+/// size, so for each later hash only whether the main chain holds it is
+/// read. A main-chain block always has its transaction rows, so that read
+/// classifies a hash as reading its body would.
 ///
 /// # Errors
 ///
@@ -146,21 +127,44 @@ pub fn serve_bodies(
     request: &RequestBodies,
 ) -> Result<ResponseBodies, StoreError> {
     let snap = store.begin_read()?;
-    let mut held: HashMap<[u8; HASH_SIZE], BlockBody> = HashMap::new();
-    for hash in &request.hashes {
-        if held.contains_key(hash) {
+    answer_bodies(
+        &request.hashes,
+        |id| body_of(&snap, id),
+        |id| Ok(snap.height_of(&id)?.is_some()),
+    )
+}
+
+/// The body response for `requested`, apart from the store: `body` reads
+/// a block's body (`None` when it is not held), and `held` says only
+/// whether it is held. `body` is called only while the budget can still
+/// send the block; `held` after that.
+fn answer_bodies<E>(
+    requested: &[[u8; HASH_SIZE]],
+    mut body: impl FnMut(BlockHash) -> Result<Option<BlockBody>, E>,
+    mut held: impl FnMut(BlockHash) -> Result<bool, E>,
+) -> Result<ResponseBodies, E> {
+    let mut planner = BodyPlanner::new();
+    let mut bodies = Vec::new();
+    for hash in requested {
+        let id = BlockHash::from_bytes(*hash);
+        if planner.deferring() {
+            if held(id)? {
+                planner.defer(*hash);
+            } else {
+                planner.miss(*hash);
+            }
             continue;
         }
-        if let Some(body) = body_of(&snap, BlockHash::from_bytes(*hash))? {
-            held.insert(*hash, body);
+        match body(id)? {
+            None => planner.miss(*hash),
+            Some(found) => {
+                if planner.charge(*hash, body_budget_bytes(&found)) {
+                    bodies.push(found);
+                }
+            }
         }
     }
-    let plan = plan_bodies(&request.hashes, |hash| held.get(hash));
-    let bodies = plan
-        .send
-        .iter()
-        .filter_map(|hash| held.get(hash).cloned())
-        .collect();
+    let plan = planner.finish();
     Ok(ResponseBodies {
         bodies,
         deferred: plan.deferred,
@@ -216,3 +220,7 @@ fn skeleton_of(record: &TxRecord) -> SkeletonTx {
         archival_len: record.archival_len,
     }
 }
+
+#[cfg(test)]
+#[path = "serve_tests.rs"]
+mod tests;

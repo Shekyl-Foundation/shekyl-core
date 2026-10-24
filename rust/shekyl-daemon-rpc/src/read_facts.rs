@@ -23,8 +23,8 @@ use shekyl_archival_retention::ShardCoverageIn;
 use shekyl_chain_rules::EmissionEpochFacts;
 use shekyl_types::archival::HoldingsKind;
 use shekyl_types::{
-    BlockHash, BlockHeight, ChainCount, CurveTreeRoot, PCanonicalId, PowHash, SettlementEpoch,
-    ShardId,
+    BlockHash, BlockHeight, ChainCount, CurveTreeRoot, KeyImage, PCanonicalId, PowHash,
+    SettlementEpoch, ShardId, TxHash,
 };
 use shekyl_units::AtomicUnits;
 
@@ -168,9 +168,96 @@ pub struct ShardCoverage {
     pub shards: Vec<ShardCoverageIn>,
 }
 
+/// One block of `get_blocks_by_height.bin`: its bytes and its listed
+/// transactions' whole bytes, in list order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BlockBlobs {
+    /// The block, serialized.
+    pub block: Vec<u8>,
+    /// Each listed transaction, serialized whole.
+    pub txs: Vec<Vec<u8>>,
+}
+
+/// What [`ChainReadFacts::blocks_by_height`] read: the blocks up to the
+/// first height it could not answer, and that height.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BlocksAt {
+    /// The blocks read, in request order.
+    pub blocks: Vec<BlockBlobs>,
+    /// The first height above the tip, or whose listed bodies this node
+    /// no longer holds whole; `None` when every height was read.
+    pub failed: Option<BlockHeight>,
+}
+
+/// What [`ChainReadFacts::transactions`] gathered for `get_transactions`:
+/// one slot per id asked, and the chain height confirmations count from,
+/// both read off one snapshot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TransactionsAt {
+    /// One slot per id, in request order.
+    pub slots: Vec<crate::core::TxSlot>,
+    /// The chain's height: the tip's plus one.
+    pub chain_height: u64,
+    /// The first id whose body this node has pruned — its prunable region
+    /// and `pqc_auths` go together — so the wire cannot recompose it; the
+    /// slots stop before it.
+    pub pruned_here: Option<TxHash>,
+}
+
+/// Where a key image is spent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpentAt {
+    /// Nowhere this node shows.
+    Unspent,
+    /// By a transaction the chain holds.
+    Chain,
+    /// By a transaction the pool shows; never one in its stem phase (S6).
+    Pool,
+}
+
 /// The chain reads behind the store flip's eight native read methods
 /// (module docs). Every method reads one committed snapshot.
 pub trait ChainReadFacts: Send + Sync {
+    /// The blocks at `heights`, each with its listed transactions whole
+    /// (`get_blocks_by_height.bin`).
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] on an empty store; the store's faults;
+    /// [`FactsFault::Inconsistent`] when a listed transaction has no
+    /// record.
+    fn blocks_by_height(&self, heights: &[BlockHeight]) -> Result<BlocksAt, FactsFault>;
+
+    /// Each of `ids` from the chain, or else from the pool as `scope` may
+    /// see it, or missed (`get_transactions`). The pool is read before the
+    /// chain's snapshot is begun, so a transaction mined between the two is
+    /// found in the chain.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] on an empty store; the store's faults.
+    fn transactions(
+        &self,
+        ids: &[TxHash],
+        scope: crate::info_facts::PoolScope,
+    ) -> Result<TransactionsAt, FactsFault>;
+
+    /// The global output indices of the transaction `txid`'s outputs, in
+    /// `vout` order; `None` when the chain does not hold it
+    /// (`get_o_indexes.bin`).
+    ///
+    /// # Errors
+    ///
+    /// The store's faults.
+    fn output_indices(&self, txid: &TxHash) -> Result<Option<Vec<u64>>, FactsFault>;
+
+    /// Where each of `key_images` is spent, in order (`is_key_image_spent`).
+    ///
+    /// # Errors
+    ///
+    /// The store's faults; the pool's.
+    fn key_images_spent(&self, key_images: &[KeyImage]) -> Result<Vec<SpentAt>, FactsFault>;
+
     /// Every alt block's identity, in the alt table's key order.
     ///
     /// # Errors

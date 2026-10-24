@@ -23,7 +23,11 @@
 //!   request at a time per session, in arrival order. A delivered chunk
 //!   that carried only chain-sync messages is finished after the requests
 //!   it carried are answered, so a peer's requests wait in the transport
-//!   and not in this task.
+//!   and not in this task. A chunk that also carried bytes for the C++
+//!   handler is finished by that handler, so the queue is bounded here as
+//!   well: a session holds at most one waiting request of each kind, and a
+//!   later one replaces it. A requester asks again only after it gave the
+//!   first up, so the later request is the one it reads.
 //! - **Announcements** (2008, `NOTIFY_NEW_COMPACT_BLOCK`) come from the
 //!   attached router and are the model's [`Event::Announce`]. A connected
 //!   one is relayed as the C++ `relay_block` does: compact, to every
@@ -32,7 +36,6 @@
 //!   own 2009 stays the C++ handler's until the cutover.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -106,7 +109,7 @@ pub struct OwnerParts<C: Clock + Clone, R> {
 #[must_use = "stop the owner from outside its pool"]
 pub struct Running {
     pool: Pool,
-    stop: Arc<AtomicBool>,
+    executor: Arc<Executor>,
     stop_tx: watch::Sender<bool>,
     state: watch::Receiver<SyncState>,
     alarm: watch::Receiver<bool>,
@@ -128,7 +131,7 @@ impl Running {
     /// Stop the owner and wait at most `timeout` for its blocking work.
     /// Call it from outside the owner's pool.
     pub fn stop(self, timeout: Duration) {
-        self.stop.store(true, Ordering::Release);
+        self.executor.stop();
         self.stop_tx.send_replace(true);
         self.pool.shutdown(timeout);
     }
@@ -136,8 +139,8 @@ impl Running {
 
 /// Start the owner on its own row, in the caller's tracing span.
 ///
-/// `stop` is shared with the executor, so a permit wait ends with the
-/// owner. The row's blocking-thread cap is derived: the hasher budget's
+/// [`Running::stop`] stops the executor too, so a permit wait ends with
+/// the owner. The row's blocking-thread cap is derived: the hasher budget's
 /// permits, the most proof items that can hash at once. Serving and the
 /// cache derivations queue on the same threads. The workers are one: the
 /// owner is one task.
@@ -145,7 +148,7 @@ impl Running {
 /// # Errors
 ///
 /// The runtime could not be built.
-pub fn spawn<C, R>(parts: OwnerParts<C, R>, stop: Arc<AtomicBool>) -> std::io::Result<Running>
+pub fn spawn<C, R>(parts: OwnerParts<C, R>) -> std::io::Result<Running>
 where
     C: Clock + Clone + Send + Sync + 'static,
     R: RelayRng + Send + 'static,
@@ -163,11 +166,12 @@ where
     let state = parts.state.subscribe();
     let (alarm_tx, alarm) = watch::channel(false);
     let (stop_tx, stop_rx) = watch::channel(false);
+    let executor = Arc::clone(&parts.executor);
     // The owner's log lines carry the span it was started in.
     pool.spawn(run(parts, alarm_tx, stop_rx).instrument(tracing::Span::current()));
     Ok(Running {
         pool,
-        stop,
+        executor,
         stop_tx,
         state,
         alarm,
@@ -196,13 +200,37 @@ enum ServeRequest {
     Bodies(RequestBodies),
 }
 
-/// One session's serving queue.
+/// One session's serving queue: the request being served, and at most
+/// one waiting request of each kind.
 #[derive(Default)]
 struct Serving {
     queue: VecDeque<ServeRequest>,
     busy: bool,
     /// Chunks the router handed back, finished when the queue drains.
     finishes: u32,
+}
+
+impl Serving {
+    /// Queue `request`. A waiting request of the same kind is replaced in
+    /// its place, however the peer packed its chunks (module docs).
+    /// `true` when one was replaced.
+    fn push(&mut self, request: ServeRequest) -> bool {
+        let kind = std::mem::discriminant(&request);
+        match self
+            .queue
+            .iter_mut()
+            .find(|waiting| std::mem::discriminant(*waiting) == kind)
+        {
+            Some(waiting) => {
+                *waiting = request;
+                true
+            }
+            None => {
+                self.queue.push_back(request);
+                false
+            }
+        }
+    }
 }
 
 /// What the owner keeps beside the model.
@@ -473,7 +501,12 @@ where
 
     fn queue_serve(&mut self, session: u64, request: ServeRequest) {
         let serving = self.serving.entry(session).or_default();
-        serving.queue.push_back(request);
+        if serving.push(request) {
+            tracing::debug!(
+                session,
+                "a later request replaced a waiting one of its kind"
+            );
+        }
         self.serve_next(session);
     }
 
@@ -898,7 +931,12 @@ where
                     .and_then(|max| usize::try_from(max).ok());
                 for ((tag, _, bytes), announced) in tags.into_iter().zip(announced) {
                     let outcome = match refusal {
-                        Refusal::NoRoom | Refusal::Throttled => Outcome::NoRoom,
+                        // An unreadable store stops the service on the same
+                        // read, so the arrival is held, not asked for again:
+                        // no room report follows, and nothing is re-offered.
+                        Refusal::NoRoom | Refusal::Throttled | Refusal::StoreUnreadable => {
+                            Outcome::NoRoom
+                        }
                         Refusal::Oversize if max.is_some_and(|max| bytes > max) => {
                             Outcome::Oversize {
                                 invalidate: !announced,

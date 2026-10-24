@@ -229,10 +229,12 @@ pub struct Notify {
 
 /// A mining address the configuration decode accepted.
 ///
-/// The text is what the operator wrote, for display. The keys are what the
-/// miner assembles into an account address. The miner does not parse the
-/// text, and this type does not carry the C++ layout: the X25519 prefix is
-/// derived there, from the view key, beside the ML-KEM encapsulation key.
+/// The text is what the operator wrote, for display. The keys are what a
+/// coinbase pays, checked once, here, as the C++ address decode checks
+/// them (`shekyl_crypto_pq::account::coinbase_recipient`): the spend key
+/// is a curve point, the view key maps to X25519, and the ML-KEM-768 key
+/// is well-formed. The template pays these keys; the miner's status shows
+/// the text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MineAddress {
     /// The address the operator wrote.
@@ -241,6 +243,9 @@ pub struct MineAddress {
     pub spend: [u8; 32],
     /// The view public key.
     pub view: [u8; 32],
+    /// The X25519 half of the coinbase's KEM target, derived from the view
+    /// key.
+    pub x25519: [u8; 32],
     /// The ML-KEM encapsulation key.
     pub ml_kem: Vec<u8>,
 }
@@ -266,6 +271,10 @@ pub struct Dev {
     pub clearnet_encrypt: bool,
     /// The relay's development cover carrier.
     pub relay_cover: bool,
+    /// Serve the armed test levers (`generateblocks`, `pop_blocks`) to the
+    /// host's administrator (`RPC_CHANNEL.md` RT-O9.2; `DRS_X_STORE_FLIP.md`
+    /// DX-Q3, Q8).
+    pub rpc: bool,
     /// The RandomX seed epoch length.
     pub pow_seed_epoch_blocks: Option<u64>,
     /// The RandomX seed epoch lag.
@@ -335,16 +344,6 @@ impl DaemonConfig {
     #[must_use]
     pub fn is_client(&self) -> bool {
         !self.session.command.is_empty()
-    }
-}
-
-/// The address network a daemon network's addresses belong to: regtest
-/// runs mainnet's genesis and prefixes.
-fn address_network(network: Network) -> shekyl_address::Network {
-    match network {
-        Network::Mainnet | Network::Regtest => shekyl_address::Network::Mainnet,
-        Network::Testnet => shekyl_address::Network::Testnet,
-        Network::Stagenet => shekyl_address::Network::Stagenet,
     }
 }
 
@@ -570,12 +569,30 @@ fn rpc_section(r: &mut Reader<'_>) -> RpcRead {
 fn mine_section(r: &mut Reader<'_>, network: Network) -> Mine {
     let address = match r.address("mine-address") {
         Read::Present(text) => {
-            match shekyl_address::ShekylAddress::decode_for_network(&text, address_network(network))
-            {
-                Ok(decoded) => Some(MineAddress {
+            let decoded =
+                shekyl_address::ShekylAddress::decode_for_network(&text, network.address_network())
+                    .map_err(|error| error.to_string())
+                    .and_then(|decoded| {
+                        if !decoded.has_pqc_segment() {
+                            return Err(
+                                "the address has no post-quantum segments; mine to the full address"
+                                    .to_owned(),
+                            );
+                        }
+                        shekyl_crypto_pq::account::coinbase_recipient(
+                            &decoded.spend_key,
+                            &decoded.view_key,
+                            &decoded.ml_kem_encap_key,
+                        )
+                        .map(|x25519| (decoded, x25519))
+                        .map_err(|refused| refused.to_string())
+                    });
+            match decoded {
+                Ok((decoded, x25519)) => Some(MineAddress {
                     text,
                     spend: decoded.spend_key,
                     view: decoded.view_key,
+                    x25519,
                     ml_kem: decoded.ml_kem_encap_key,
                 }),
                 Err(error) => {
@@ -616,6 +633,7 @@ fn dev_section(r: &mut Reader<'_>) -> Dev {
         sync,
         clearnet_encrypt: r.switch("dev-clearnet-encrypt"),
         relay_cover: r.switch("dev-relay-cover"),
+        rpc: r.switch("dev-rpc"),
         pow_seed_epoch_blocks: r.dev_integer("dev-pow-seed-epoch-blocks"),
         pow_seed_epoch_lag: r.dev_integer("dev-pow-seed-epoch-lag"),
         settlement_epoch_blocks: r.dev_integer("dev-settlement-epoch-blocks"),
