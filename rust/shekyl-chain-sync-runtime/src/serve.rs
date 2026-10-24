@@ -117,7 +117,7 @@ fn first_held(
 /// when it is sent. Past the budget a held block is deferred whatever its
 /// size, so for each later hash only whether the main chain holds it is
 /// read. A main-chain block always has its transaction rows, so that read
-/// classifies a hash as [`body_of`] would.
+/// classifies a hash as reading its body would.
 ///
 /// # Errors
 ///
