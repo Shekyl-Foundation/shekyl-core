@@ -14,8 +14,8 @@ Values this PR introduces that are not derived. Each is an `Assumption`
 | --- | --- | --- | --- |
 | `HEADERS_RESPONSE_BYTES` | 2 MiB | A header response's preimage budget. About ten thousand headers, past the tip case (~144 KiB) and short of a whole initial-sync run. A preimage shorter than a PoW preimage is refused, so the encoded cap's two-byte length-prefix allowance holds. | CS-Q11: headers per second and peak memory on the floor device, after the cutover |
 | `BODIES_RESPONSE_BYTES` | 8 MiB | How much a body response adds after the first held block, which is sent whatever its size. Charged when the response is stored and when it is decoded. Not derived from the block-weight limit. | CS-Q11: bodies per second and peak memory on the floor device, after the cutover |
-| `SYNC_RATE_FLOOR` | 8 KiB/s | The deadline of a header request and of a body request. A full header response (`HEADERS_RESPONSE_BYTES`, 2 MiB) takes 256 seconds. A body deadline is `BODIES_RESPONSE_BYTES` at this rate, the same construction as the header deadline. The request names hashes; the bytes the peer may send are the body budget, which is known when the request is made. One rate: the two streams are not different measurements. Slow for one Tor stream, and not a clearnet rate, so an honest Tor peer is not declared late. | Assumption until the floor-device job's first run (`.github/workflows/cs2-long-run.yml`, after merge). That run records the figure. CS-Q11 replaces this value from it. Split the constant only if that measurement shows the streams need different floors. |
-| `BODY_REQUESTS_IN_FLIGHT` | 4 | How many body spans may be outstanding at once, before the entry's room is the limit. | CS-Q11: how many spans the floor device can have in flight (the `cs2-long-run` job's loopback sync records it) |
+| `SYNC_RATE_FLOOR` | 8 KiB/s | The deadline of a header request and of a body request. A full header response (`HEADERS_RESPONSE_BYTES`, 2 MiB) takes 256 seconds. A body deadline is `BODIES_RESPONSE_BYTES` at this rate, the same construction as the header deadline. The request names hashes; the bytes the peer may send are the body budget, which is known when the request is made. One rate: the two streams are not different measurements. Slow for one Tor stream, and not a clearnet rate, so an honest Tor peer is not declared late. | CS-Q11: a post-cutover regtest measurement over a real Tor path. Loopback has no network and cannot measure it. Split the constant only if that measurement shows the streams need different floors. |
+| `BODY_REQUESTS_IN_FLIGHT` | 4 | How many body spans may be outstanding at once, before the entry's room is the limit. | CS-Q11: a post-cutover regtest measurement over a real Tor path: how many spans keep a slow honest peer's stream full. Loopback has no network and cannot measure it. |
 
 ## CS-2 rulings (Rick, 2026-10-21)
 
@@ -1586,6 +1586,18 @@ half-cut, and one cutover PR avoids it.
   - both halves keep mining.
   - A second scripted overtake, where the other half becomes heavier,
     exercises the latch on the other side.
+- **The floor job (`.github/workflows/cs2-long-run.yml`, Pi 4), what
+  loopback can measure (Rick, 2026-10-24):**
+  - the owner's cost per header, apart from RandomX, at 5,000 to 50,000
+    headers, for the header sync and the connect; the flat-cost test
+    holds its shape in every build (`owner_cost_per_header_is_flat_across_sizes`);
+  - the hash rate per slot: header proofs through the executor under one
+    slot and under every slot, after the branch cache is built;
+  - the body phase: each captured corpus synced over loopback, bodies
+    and bytes per second, the requests, peak memory.
+- **Regtest over a real Tor path, after the cutover:** `SYNC_RATE_FLOOR`
+  and `BODY_REQUESTS_IN_FLIGHT`. They are a network's figures, and
+  loopback cannot produce them.
 - **Pi 4, after the cutover, each figure labelled `RustPath`:**
   - headers per second and bodies per second, over clearnet and over
     Tor;
