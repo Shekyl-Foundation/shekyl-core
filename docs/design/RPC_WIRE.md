@@ -118,7 +118,7 @@
 
 - **Problem.**
   - PR 3b writes about 15 new request and reply types soon.
-  - RT-P5 has not run, and it derives RT-O6's padding classes from per-method HTTP message sizes (`RPC_CHANNEL.md:1670`).
+  - RT-P5 has not run, and it derives RT-O6's padding classes from per-method HTTP message sizes (`RPC_CHANNEL.md:2042`).
   - RT-W10's grant table is keyed by method name.
 - **Ruling.** The round lands in two halves.
   - **Conventions** (Q2–Q5, Q7), ruled 2026-10-17; PR 3b is built to them.
