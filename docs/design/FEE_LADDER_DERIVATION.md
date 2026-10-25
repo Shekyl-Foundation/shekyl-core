@@ -460,10 +460,10 @@ FL-C6 explicitly. (Bound is hand-derived; the instrument re-derives it.)
 `Mnw=Mlw=Zm`; 22000 top with `Mnw=15,000,000`; 13/53/1100/14000 at
 `Mnw=Mlw=1,500,000`). Genesis conditions are a 1,024 SKL reward at
 `M=Zm` (the design's ESF 22 per block), where the legacy transliteration's
-daemon-rounded `Fh` is 6,900,000 (`genesis_fh_of_the_legacy_transliteration`,
-`shekyl-economics-sim/src/fee_ladder.rs`). The wallet cap is no longer
-derived from `Fh`: it is the structural bound `absolute_fee_rate_cap`,
-109,226,666 (`fee_policy.rs`). When this finding was written, the code
+daemon-rounded `Fh` is 6,900,000 (the transliteration and its KATs were
+deleted in PR C, `7bcea06e9`). The wallet cap is no longer derived from
+`Fh`: it is the structural bound `absolute_fee_rate_cap`, 88 746 666
+(FL-R28; `fee_policy.rs`). When this finding was written, the code
 applied the emission speed factor per minute, so genesis paid ~2,048 SKL
 and `Fh` was 14,000,000 — the figure that sat beside the scaling test's
 "14000" (corrected 2026-10-04). Hypothetical-state and genesis-state
@@ -1272,8 +1272,8 @@ disclosure.
 
 - `b` cap and `M_r` rails confirmed on-grid (0.9 at `(v=500, ratio=0.9)`;
   0.8 at `v=0`; 1.3 by `v=100`).
-- **Tail era:** entry headroom `tail·2^esf` = 1 258 291 200 000 000 atomic;
-  the tail lasts exactly **2 097 152 blocks (~8 years)**, then the supply
+- **Tail era:** entry headroom `tail·2^esf` = 2 516 582 400 000 000 atomic;
+  the tail lasts exactly **4 194 304 blocks (~16 years)**, then the supply
   cap zeroes the *validation* reward permanently — Shekyl's mining era
   ends by construction.
 - **At exhaustion, FL-V1's divergence reaches its terminal form:** the
@@ -3308,3 +3308,48 @@ at `G` = 5 with the A-1/A-2/A-3 amendments; FL-R24
 RULED (ii)-with-reward; §11.6 goes to spec review
 unchanged except that `check_fee`'s Rust predicate takes the `G+1` floors
 as computed, whichever operand resolution is ruled.
+
+## §12 The fee lattice and the rounding loop (ESR-15; OPEN, registered 2026-10-24)
+
+ESR-15 ([`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md)
+§2) replaces the sim's unrounded fixed point with one fee loop over a pricing
+function, the loop the wallet and relay admission share. The loop is judged
+against seven properties, written before it is built (the ESR-15 brief's
+§A.2a, ruled 2026-10-24; the brief's terms, relayed 2026-10-24):
+
+1. **Never under-pays.** The fee it returns clears admission at the rate it
+   was priced at.
+2. **Least.** No lattice value below the returned `f` satisfies
+   `f ≥ rate × weight(f)`. Iterating from a seed at or below the least fixed
+   point converges to it, because `predict_weight` and the pricer are both
+   non-decreasing in the fee. The seed must never exceed the least fixed
+   point, and that is asserted; the with-change variant seeds from the
+   no-change fee, which is at or below its own fixed point. A high seed would
+   silently over-pay.
+3. **Bounded over-payment.** `f − rate × weight(f) < MASK` at the returned
+   `f`, taken at the final weight, including any varint byte the rounding
+   forced.
+4. **Exact.** Integer arithmetic throughout; no float reaches the fee.
+5. **Fails closed.** If `weight × rate` or the rounding leaves `u64`, the
+   loop returns `None` and each caller decides explicitly. A saturated result
+   is a violation too: the landed `converge_weight_fee` saturates to a
+   `u64::MAX` fee, which no payer should see and which is not a refusal.
+6. **Terminates by agreement.** The loop exits when two successive passes
+   return the same fee (`next == fee`), never by hitting its pass limit. The
+   limit of 11 follows from the varint argument and stays as a
+   `debug_assert!` that running out is unreachable. The agreement is the
+   fixed point's with itself; payer and admission are item 7.
+7. **One lattice on both sides.** The payer rounds to the lattice admission
+   checks against, `shekyl_economics::quantized_fee` and
+   `FEE_QUANTIZATION_MASK`, read from one owner.
+
+The lattice's **size** is open. FL-R27 ruled where the constant lives (a
+Rust constant, relay policy, not a config entry), not how fine it is; the six
+decimals are inherited from the C++ `PER_KB_FEE_QUANTIZATION_DECIMALS`.
+ESR-15's PR records the question as a fee-ladder row with its current ground
+(display precision; one shared rounding for payer and admission) and prints
+the lattice step as basis points of the ordinary fee, so the ruling reads a
+measurement: on the committed `--stage2` fixture the ordinary fee falls to
+about 0.0001 SKL by years 30–60, where one 1 000-atomic step is about 100 bp,
+twice the 50 bp bar FL-V12 uses. The six decimals stay until that row is
+ruled.
