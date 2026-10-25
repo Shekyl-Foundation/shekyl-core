@@ -364,6 +364,15 @@ pub fn year_share_atomic(pool_atomic: u128, share_milli: u64) -> u128 {
     pool_atomic * u128::from(share_milli) / u128::from(SCALE)
 }
 
+/// Keep the first closed-shard count at or above `MAX_HOLDINGS_SHARDS`: the
+/// count only grows, so the first is the smallest, and a block that carries
+/// the count past the cap records where it landed, not the cap itself.
+fn note_cap_crossing(first_at_cap: &mut Option<u64>, n_now: u64) {
+    if n_now >= MAX_HOLDINGS_SHARDS as u64 {
+        first_at_cap.get_or_insert(n_now);
+    }
+}
+
 /// Accumulate the per-year A1 inputs over a scenario's blocks (one flat-ledger
 /// pass). Mirrors `budget.rs`'s per-block economics.
 #[must_use]
@@ -423,10 +432,7 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
         };
         let total_fees = priced.filled.fees;
         fold.add_block(priced.filled.included);
-        let n_now = fold.closed_shard_count();
-        if n_now >= MAX_HOLDINGS_SHARDS as u64 {
-            year_n_at_cap.get_or_insert(n_now);
-        }
+        note_cap_crossing(&mut year_n_at_cap, fold.closed_shard_count());
         let paid_reward = priced.paid_reward();
         let staker_emission = priced.paid.split.staker_emission;
         // The whole burn, before its split: the candidate re-splits it. The
@@ -453,7 +459,7 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
                 year,
                 start_height: config.genesis_height_offset + (year - 1) * params.blocks_per_year,
                 n: fold.closed_shard_count(),
-                n_at_cap: year_n_at_cap,
+                n_at_cap: year_n_at_cap.take(),
                 cumulative_outputs: fold.leaves(),
                 cumulative_archival_bytes: fold.archival_bytes(),
                 emission_leg_atomic: year_emission_atomic,
@@ -470,7 +476,6 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
             year_carried = 0;
             year_demand = 0;
             year_expired = 0;
-            year_n_at_cap = None;
             year_emission_atomic = 0;
             year_burn_atomic = 0;
             year_fees_atomic = 0;
@@ -1709,28 +1714,50 @@ struct ShardRewardOperands {
     max_per_epoch_skl: f64,
 }
 
-fn shard_reward_operands(folded: &[FoldedScenario]) -> ShardRewardOperands {
-    let mut rewards: Vec<f64> = Vec::new();
-    let mut max_per_epoch_skl = 0.0_f64;
-    for scenario in folded {
-        for a in scenario.native().iter().filter(|a| a.n_at_cap.is_some()) {
-            // The epoch's pool in atomic units; SKL is the report's unit.
-            let pool_per_epoch_skl =
-                per_epoch_atomic(a1_shipped_budget_atomic(a, &flat_25())) as f64 / COIN;
-            // The median reads the year-end count. The maximum divides by the
-            // smallest count at which the cap bound during the year, which the
-            // year-end count passes over (step 0b-2).
-            rewards.push(pool_per_epoch_skl / a.n as f64);
-            let n_at_cap = a.n_at_cap.unwrap_or(a.n);
-            max_per_epoch_skl = max_per_epoch_skl.max(pool_per_epoch_skl / n_at_cap as f64);
+/// One year in which the holdings cap bound: the epoch's pool and the two
+/// counts it is divided by.
+#[derive(Debug, Clone, Copy)]
+struct CapBoundYear {
+    pool_per_epoch_skl: f64,
+    /// Closed shards at year end: the median's divisor.
+    n_year_end: u64,
+    /// The first count at or above the cap in the year: the maximum's
+    /// divisor, since the year-end count passes over the crossing (step 0b-2).
+    n_at_cap: u64,
+}
+
+impl ShardRewardOperands {
+    fn over(years: impl IntoIterator<Item = CapBoundYear>) -> Self {
+        let mut rewards: Vec<f64> = Vec::new();
+        let mut max_per_epoch_skl = 0.0_f64;
+        for y in years {
+            rewards.push(y.pool_per_epoch_skl / y.n_year_end as f64);
+            max_per_epoch_skl = max_per_epoch_skl.max(y.pool_per_epoch_skl / y.n_at_cap as f64);
+        }
+        rewards.sort_by(|a, b| a.partial_cmp(b).expect("finite rewards"));
+        Self {
+            median_per_epoch_skl: statistical_median(&rewards),
+            max_per_epoch_skl,
         }
     }
-    rewards.sort_by(|a, b| a.partial_cmp(b).expect("finite rewards"));
-    let median_per_epoch_skl = statistical_median(&rewards);
-    ShardRewardOperands {
-        median_per_epoch_skl,
-        max_per_epoch_skl,
-    }
+}
+
+fn shard_reward_operands(folded: &[FoldedScenario]) -> ShardRewardOperands {
+    ShardRewardOperands::over(
+        folded
+            .iter()
+            .flat_map(FoldedScenario::native)
+            .filter_map(|a| {
+                Some(CapBoundYear {
+                    n_at_cap: a.n_at_cap?,
+                    n_year_end: a.n,
+                    // The epoch's pool in atomic units; SKL is the report's unit.
+                    pool_per_epoch_skl: per_epoch_atomic(a1_shipped_budget_atomic(a, &flat_25()))
+                        as f64
+                        / COIN,
+                })
+            }),
+    )
 }
 
 /// Statistical median of a sorted non-empty slice: middle element for odd
@@ -2179,6 +2206,68 @@ mod tests {
                 assert!(row.burden_fiat_slowdown >= row.burden_fiat_historical);
             }
         }
+    }
+
+    /// Below the cap nothing is recorded; the first count at or above it is
+    /// kept, including one a block carried past the cap; later counts do not
+    /// replace it.
+    #[test]
+    fn the_cap_crossing_keeps_the_first_count_at_or_above_the_cap() {
+        let cap = MAX_HOLDINGS_SHARDS as u64;
+        let mut first = None;
+        note_cap_crossing(&mut first, cap - 1);
+        assert_eq!(first, None);
+        note_cap_crossing(&mut first, cap + 3);
+        assert_eq!(first, Some(cap + 3));
+        note_cap_crossing(&mut first, cap + 90);
+        assert_eq!(first, Some(cap + 3));
+    }
+
+    /// The baseline's count crosses the cap inside year 1. Year 1 records the
+    /// crossing, below its year-end count; year 2 starts over, so it records
+    /// a count at least year 1's year-end, not year 1's crossing.
+    #[test]
+    fn each_year_records_its_own_cap_crossing() {
+        let params = SimParams::default();
+        let mut config = all_scenarios(&params).swap_remove(0);
+        config.sim_years = 2;
+        let aggs = a1_year_aggs(&params, &config);
+        let cap = MAX_HOLDINGS_SHARDS as u64;
+        let (y1, y2) = (&aggs[0], &aggs[1]);
+        let c1 = y1.n_at_cap.expect("the baseline reaches the cap in year 1");
+        assert!(
+            cap <= c1 && c1 < y1.n,
+            "year 1: crossing {c1}, year-end {}",
+            y1.n
+        );
+        let c2 = y2.n_at_cap.expect("the cap still binds in year 2");
+        assert!(
+            y1.n <= c2 && c2 <= y2.n,
+            "year 2: {c2} outside {}..={}",
+            y1.n,
+            y2.n
+        );
+    }
+
+    /// The maximum divides each year's pool by its in-year crossing count;
+    /// the median by the year-end count.
+    #[test]
+    fn the_maximum_divides_by_the_crossing_and_the_median_by_the_year_end() {
+        let ops = ShardRewardOperands::over([
+            CapBoundYear {
+                pool_per_epoch_skl: 100.0,
+                n_year_end: 20,
+                n_at_cap: 4,
+            },
+            CapBoundYear {
+                pool_per_epoch_skl: 60.0,
+                n_year_end: 10,
+                n_at_cap: 10,
+            },
+        ]);
+        // Year-end slices 5 and 6; crossing slices 25 and 6.
+        assert_eq!(ops.median_per_epoch_skl, 5.5);
+        assert_eq!(ops.max_per_epoch_skl, 25.0);
     }
 
     #[test]

@@ -584,6 +584,17 @@ pub fn shard_breakeven_fetch_fiat_per_byte(storage_fiat_per_byte_year: f64) -> f
         / (MAX_HOLDINGS_SHARDS as f64 * f64::from(CHALLENGES_PER_PAIR_PER_EPOCH) * SHARD_BYTES)
 }
 
+/// A crossover `q` for the narration: `digits` decimals, or the PoRep limit
+/// when no `q <= 1` closes the margin (`crossover_q` / `q_risk_star` return
+/// `None`). Never a number in that case: `0.000` would read as "closes at any
+/// rate".
+fn q_or_porep_limit(q: Option<f64>, digits: usize) -> String {
+    q.map_or_else(
+        || "none (PoRep limit)".to_string(),
+        |q| format!("{q:.digits$}"),
+    )
+}
+
 /// The `q` at which `T_risk` ALONE (zero bandwidth cost — the flat-rate-residential
 /// world where the §5.3 price leg inverts) covers honest storage: the failure
 /// rate the deadline must force for the deterrent to be carried entirely by the
@@ -722,19 +733,33 @@ pub fn tj_shard_payload_report(
         reward_per_epoch_fiat,
         horizon,
     );
+    // The A5 band's ends at its quoted fetch price: with the reward, and bond-only.
+    let a5_band_end = |reward_fiat: f64| {
+        q_or_porep_limit(
+            crossover_q(
+                RESPONSE_BYTES,
+                FETCH_FIAT_PER_BYTE_BAND[0],
+                STORAGE_FIAT_PER_BYTE_YEAR,
+                bond_loss_fiat,
+                reward_fiat,
+                horizon,
+            ),
+            3,
+        )
+    };
     writeln!(
         out,
         "  -> q_risk* (T_risk alone covers S; storage cheap-side worst case): bond-only {QB},\n\
-         +reward {QF}. Residual vs the A5 band at {FP:.2} $/GB ({QL:.3}-{QH:.3}), ATTRIBUTED (F-2): the\n\
+         +reward {QF}. Residual vs the A5 band at {FP:.2} $/GB ({QL}-{QH}), ATTRIBUTED (F-2): the\n\
          A5 crossover solves T_risk(q) = S - T_bw(opening) and its band ends were quoted at\n\
          specific fetch prices; q_risk* solves T_risk(q) = S exactly. The slash model is\n\
          payload-independent -- inputs aside -- and the zero-payload crossover EQUALS\n\
          q_risk* identically (welded by test).",
-        QB = qr_bond.map_or("none (PoRep limit)".to_string(), |q| format!("{q:.4}")),
-        QF = qr_full.map_or("none (PoRep limit)".to_string(), |q| format!("{q:.4}")),
+        QB = q_or_porep_limit(qr_bond, 4),
+        QF = q_or_porep_limit(qr_full, 4),
         FP = FETCH_FIAT_PER_BYTE_BAND[0] * 1.0e9,
-        QL = crossover_q(RESPONSE_BYTES, FETCH_FIAT_PER_BYTE_BAND[0], STORAGE_FIAT_PER_BYTE_YEAR, bond_loss_fiat, reward_per_epoch_fiat, horizon).unwrap_or(0.0),
-        QH = crossover_q(RESPONSE_BYTES, FETCH_FIAT_PER_BYTE_BAND[0], STORAGE_FIAT_PER_BYTE_YEAR, bond_loss_fiat, 0.0, horizon).unwrap_or(0.0),
+        QL = a5_band_end(reward_per_epoch_fiat),
+        QH = a5_band_end(0.0),
     )?;
     let cloud_s = honest_storage_cost_per_epoch(CLOUD_STORAGE_FIAT_PER_BYTE_YEAR);
     writeln!(
@@ -764,6 +789,17 @@ pub fn tj_shard_payload_report(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An unclosable crossover prints as the PoRep limit, never as a rate:
+    /// `Some(0.0)` (closed with no deadline pressure) and `None` (unclosable)
+    /// are opposite facts (`crossover_q`).
+    #[test]
+    fn an_unclosable_crossover_prints_as_the_porep_limit() {
+        assert_eq!(q_or_porep_limit(None, 3), "none (PoRep limit)");
+        assert_eq!(q_or_porep_limit(Some(0.0), 3), "0.000");
+        assert_eq!(q_or_porep_limit(Some(0.10349), 3), "0.103");
+        assert_eq!(q_or_porep_limit(Some(0.10349), 4), "0.1035");
+    }
 
     /// Re-fetch beats holding at **bulk transit only** — the band no longer
     /// agrees with itself.

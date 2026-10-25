@@ -1081,7 +1081,7 @@ models (each cell links its section).
 | **A3** stranding | ✅ **reported** (§12.7) | Pre-D1 strands **100 %** past the co-holder cliff — the §1 coupling claim confirmed and *understated*. Post-D1 ≈ 0 outside the quantization corner. |
 | **A4** stuffing (W9) | ✅ **CLEARS (§12.11)** | The arm measures the stuffer's *profit*, not theft: netted for the no-exclusivity subsidy the stuffer is **negative-sum** and the play **anti-scales** (§12.11). On the production fee (`--stage2`, the 8-in / 1-out shape searched as the stuffer's best) served-work ROI at the rational equilibrium is **0.05×** on the baseline and at most **3.03×** (sustained growth), with premium ≈ 1.0: pure fee-flow-volume leverage. `fee×→1` spans **0.0→7.5** across scenarios. Under R2 (plateau deletion) the baseline's ROI is **0.0008** (OQ-4). |
 | **A5** proxy (W10) | 🔴 **FAILS** (§12.6) | Re-fetching the 6 784 B opening costs **$0.00083** an epoch at 0.01 $/GB against **$0.00468** to hold 12.3 GB, so at the cheap end of the fetch band the proxy free-rides by **5.6×**; crossover `q* ≈ 0.103–0.271` (`--stage2`). |
-| **A6** swing | ✅ **no cliff** / ⚠️ **slew gated** (§12.10) | Monotone, no discontinuity; the only down-swing is a reorg's, ≤ **0.0725** pts. On the steepest GF-7 candidate (90 % at knee 500 000) a flood at the surge ceiling moves the share **1.0080** pts/epoch penalty-free and **2.0160** at the legal 2× limit while the share is below its knee, and 0 above it (`--stage2`). That member fails the `< 1.0` point-an-epoch gate during its ramp and is excluded from the band; the gate stands (ruled 2026-10-24) and the other eight members pass (the 75 % member at the same knee moves about 0.39). The cliff claim closes structurally (§12.11.1): the slew is a descriptive bound on how fast the chain can be pushed toward a sanctioned state. See the §6.0 amendment. |
+| **A6** swing | ✅ **no cliff** / ⚠️ **slew gated** (§12.10) | Monotone, no discontinuity; the only down-swing is a reorg's, ≤ **0.0725** pts. On the steepest GF-7 candidate (90 % at knee 500 000) a flood at the surge ceiling moves the share **1.0080** pts/epoch penalty-free and **2.0160** at the legal 2× limit while the share is below its knee, and 0 above it (`--stage2`). That member fails the `< 1.0` point-an-epoch gate during its ramp and is excluded from the band; the gate stands (ruled 2026-10-24) and the other eight members pass (the 75 % member at the same knee moves 0.7754, the 50 % member 0.3877). The cliff claim closes structurally (§12.11.1): the slew is a descriptive bound on how fast the chain can be pushed toward a sanctioned state. See the §6.0 amendment. |
 
 **The through-line: one theorem, three independent confirmations.** A4's
 `prem ≈ 1.0`, OQ-1's `|Δ| = 0` at the partition optimum, and A2's `0.02 %`
@@ -2079,9 +2079,11 @@ the escalation *should* follow because it tracks genuine burden growth.
   *also* a price argument and inherits the same blindness to a griefer. Neither
   tier needs a price closer, because neither tier's arrival is harmful.
 - **A6's slew measurement stands as a measurement** (`1.01`/`2.02` pts/epoch on
-  the steepest member of the GF-7 band, nearly flat with depth; that member
-  fails the slew gate and is excluded, the gate standing) and is now a **descriptive bound on how fast the
-  chain can be pushed toward a sanctioned state**, not a residual risk.
+  the steepest member of the GF-7 band while the share ramps below its knee,
+  and zero from the knee's 500 000 shards on, where the share has reached its
+  plateau; that member fails the slew gate and is excluded, the gate standing)
+  and is now a **descriptive bound on how fast the chain can be pushed toward a
+  sanctioned state**, not a residual risk.
 - **Stage 3 opens.** No outstanding hard inputs: (c) closed with no mechanism
   (§12.11), D3 implemented (§12.9.1, PR #371), and this residual discharged.
   Reopen (d) remains parallel to the *shape* freeze per §8, unchanged.
