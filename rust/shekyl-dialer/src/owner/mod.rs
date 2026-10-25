@@ -139,6 +139,7 @@ pub struct Shared {
 
 /// One launched attempt, as the loop holds it until it applies the result.
 struct InFlight {
+    connector: ConnectorId,
     address: NetworkAddress,
     aim: DialAim,
     /// Held for its drop: the nonce is in the set until this record is
@@ -606,9 +607,13 @@ impl Dialer {
         self.bell.ring();
         let cancelled: Vec<InFlight> = {
             let mut shared = self.shared();
-            std::mem::take(&mut shared.in_flight)
+            let cancelled: Vec<InFlight> = std::mem::take(&mut shared.in_flight)
                 .into_values()
-                .collect()
+                .collect();
+            for record in &cancelled {
+                shared.attempts(record.connector).cancel(&record.address);
+            }
+            cancelled
         };
         let count = cancelled.len();
         drop(cancelled);
@@ -858,6 +863,7 @@ impl Dialer {
             shared.in_flight.insert(
                 id,
                 InFlight {
+                    connector,
                     address: address.clone(),
                     aim,
                     _nonce: nonce,

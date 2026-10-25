@@ -63,6 +63,13 @@ impl Attempts {
         self.kept.remove(address);
     }
 
+    /// A pending attempt to `address` was cancelled (the dialer stopped):
+    /// it leaves the pending set with no outcome, and nothing is recorded
+    /// on the lists. A kept session is not touched.
+    pub fn cancel(&mut self, address: &NetworkAddress) {
+        self.pending.remove(address);
+    }
+
     /// The `Keep` count: kept sessions plus pending `Keep` attempts. A
     /// pending `Confirm` does not count.
     #[must_use]
