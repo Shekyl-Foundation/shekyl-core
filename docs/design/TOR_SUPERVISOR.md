@@ -478,7 +478,9 @@ variant rather than keying on the payload. The backoff starts again from its bas
 been usable for one full cap (Rick, 2026-10-24): tied to the cap rather than a
 new constant, so a crash rate that keeps the backoff pinned without the reset
 still keeps it pinned, and an adversary who can crash Tor gains no faster
-re-roll of the respawn cadence.
+re-roll of the respawn cadence. A cap already served is kept when the facet
+leaves usable before the fault, so a block after that cap still restarts the
+backoff. Time spent blocked does not itself serve the cap.
 
 ### 4.5 The probe
 

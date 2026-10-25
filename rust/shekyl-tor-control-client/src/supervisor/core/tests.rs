@@ -745,10 +745,30 @@ fn a_held_repeat_yields_to_its_pin_check_and_ends_with_the_spawn() {
     assert_eq!(announces(&step), 0, "the check speaks for itself");
     core.on(Input::PinAccepted, cap);
     core.on(Input::Spawned, cap);
-    assert_eq!(
-        core.announce_at, None,
-        "no repeat is armed into the bootstrap"
+    assert!(
+        core.announcements.pending().is_none(),
+        "pin dropped the repeat"
     );
+}
+
+/// Three launch failures arm the repeat at the cap and the pin sooner.
+/// Spawning first must not let that repeat be said into the bootstrap.
+#[test]
+fn a_repeat_armed_before_spawn_is_not_said_into_the_bootstrap() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    for _ in 0..3 {
+        core.on(Input::PinAccepted, 0);
+        core.on(Input::SpawnFailed, 0);
+    }
+    let pin_at = core.pin_at.expect("the third fault arms a pin");
+    let cap = duration_ns(policy().cap);
+    assert!(pin_at < cap, "pin and repeat are different ticks");
+    let step = core.on_deadline(pin_at);
+    assert!(step.actions.contains(&Action::CheckPin), "{step:?}");
+    assert_eq!(announces(&step), 0);
+    core.on(Input::PinAccepted, pin_at);
+    core.on(Input::Spawned, pin_at);
+    assert_eq!(announces(&core.on_deadline(cap)), 0);
 }
 
 /// Backoff after faults, then a recovery at `usable_at`, then a death at
@@ -803,6 +823,11 @@ fn the_backoff_starts_again_only_after_a_cap_of_usable_outbound() {
         wait_after_death(up, Some(up + 1), up + cap + 1),
         cap,
         "a cap spent with outbound blocked is not health"
+    );
+    assert_eq!(
+        wait_after_death(up, Some(up + cap), up + cap + cap),
+        base,
+        "a served cap survives a later block"
     );
 }
 
