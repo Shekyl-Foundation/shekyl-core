@@ -2,7 +2,10 @@
 
 **Status: RULED 2026-10-06 — ratified as a whole by Rick; §5 step 1 (Linux)
 and step 2's Windows and macOS halves are implemented; step 2's GUI
-installers (TB-12) and step 3 are not.** He ratified the rows as they stood at
+installers (TB-12) and step 3 are not. Update 2026-10-24: riscv64 Linux
+left the release matrix (CA-1); its pin row stays `Unavailable` with
+`switched_off` so a source build compiles, and it is not a TB-4 gap. The
+open `Unavailable` gap is FreeBSD.** He ratified the rows as they stood at
 `4ad467800`, with two amendments that are folded in below: TB-7's third part
 became the exact-contents rule, and the system-supplied libraries are recorded
 (§5a). What step 1 landed is listed in §5. A managed Tor that is absent or
@@ -137,7 +140,7 @@ said about a row on its own.
 | **TB-1** | **A node has Tor unless its operator explicitly declines it.** The default ephemeral posture is not an optional overlay that is quietly absent: it is present, or it was declined in configuration. Clearnet-only is a **supported, explicit operator choice**, made with `tor = off` and `clearnet = on`, and a node running that way says so at warning level on every boot. It is never a default and never automatic ([`TOR_SUPERVISOR.md`](TOR_SUPERVISOR.md) posture table, `TSR-Q11`). In some countries using Tor carries more risk than clearnet; the node makes the choice easy and states its consequence plainly: the node's transactions go out over clearnet without Tor's address hiding. Who it is for: an operator who wants to take part and is not relying on network-level privacy for the node (an exchange, the Foundation's own infrastructure); a node whose Tor is failing; a place where Tor is watched or blocked. What it costs, stated: that node's address is visible to its peers, as on any clearnet node, and its own transactions get Dandelion++ over clearnet and no onion route. The clearnet link is encrypted only where the Noise layer is on: today that is `dev-clearnet-encrypt`, a test-network switch, off by default, and it becomes every clearnet link at the Noise flip. Until the flip, the consequence the node states for `tor = off` says the link is unencrypted. It is a choice about one node's transport; no wallet guarantee and no consensus rule depends on it. PWD-E7 stands unchanged, including its seam row "tor control unavailable", which applies from the first boot, and its two postures, its lack of a verifier, its lack of a persisted key, and the forbidden direction | **Rick, 2026-10-06**: reading (a) of two put to him — clearnet-only is supported and explicit. On the plaintext cost: "the cost it describes ends at the Noise flip, which will occur shortly now that we have alpha.9 in testnet". **Rick, 2026-10-19**: never a default; the node states the consequence. **Rick, 2026-10-20**: no automatic fallback; only the operator's own act |
 | **TB-2** | **A managed Tor that is absent or fails is announced, never refused.** Every release bundle carries the pinned Tor, so a managed Tor is missing only if someone deleted it, or it fails. The install defects are: not found, a digest mismatch on any pinned file, anything in tor's directory that is not pinned (TB-7), not a file, not executable, or unreadable. The daemon starts. A pin failure does not execute that binary. What the node does, and which `ManagedTorFix` values the message offers, is the posture table ([`TOR_SUPERVISOR.md`](TOR_SUPERVISOR.md), `TSR-Q10`, `TSR-Q11`). A failed start is a Process cause there, not an install defect | Rick, 2026-10-06; this form, 2026-10-19 and 2026-10-20. The behavior is stated once, in the posture table |
 | **TB-3** | **A runtime failure is the supervisor's** ([`TOR_SUPERVISOR.md`](TOR_SUPERVISOR.md)). A verified tor whose bootstrap fails, that dies, or whose start fails after a good pin, is retried with capped backoff and never given up. What the node does meanwhile is the posture table (`TSR-Q11`). TB-2 is the install and the absent bundle; TB-3 is the process and the network | Rick, 2026-10-06; amended by `TSR` at its ratification, 2026-10-15; `TSR-Q11`, 2026-10-20 |
-| **TB-4** | **A target's Tor disposition is a type with no third state.** `Pinned(pin)` or `Unavailable { reason }`; a build target with neither does not compile. Today `CURRENT_PIN: Option<TorPin> = None` cannot tell "not pinned yet" from "ruled unavailable". An `Unavailable` target starts as TB-2 says, and its message names the platform's remedy. `Unavailable` is a gap to close, not a resting state: every OS ships its Tor | Rick, 2026-10-06; "a gap to close", Rick, 2026-10-19 |
+| **TB-4** | **A target's Tor disposition is a type with no third state.** `Pinned(pin)` or `Unavailable { reason }`; a build target with neither does not compile. Today `CURRENT_PIN: Option<TorPin> = None` cannot tell "not pinned yet" from "ruled unavailable". An `Unavailable` target starts as TB-2 says, and its message names the platform's remedy. `Unavailable` is a gap to close for every host the release builds, not a resting state of a shipped OS: every such OS ships its Tor. A host taken out of that matrix stays `Unavailable` and carries `switched_off` with the ruling that took it out (riscv64 Linux, CA-1, 2026-10-24): the row is kept so a source build compiles, it is not a gap, and it is not a third disposition | Rick, 2026-10-06; "a gap to close", Rick, 2026-10-19; release-matrix amendment, Rick, 2026-10-24 |
 | **TB-5** | **FreeBSD is `Unavailable` until it ships its Tor; meanwhile the operator installs tor and attaches it.** `pkg install tor`, then `tor = operator` for outbound and an operator-provisioned onion service for inbound (PWD-E7's second posture, with its durable-address warning). Shekyl ships a user guide for it. Carrying a tor in the FreeBSD artifact closes the gap (TB-4) | **Rick, 2026-10-06**: "users there will have to install their own"; a guide at least, incorporation into our package to be looked at. Rick, 2026-10-19: the `Unavailable` row is a gap to close |
 | **TB-6** | **Every artifact that carries `shekyld` carries the pinned bundle, and the bundle's tarball is checked before it is opened.** The property: the Expert Bundle tarball enters the build as a pinned input, its digest is compared with TB-9's file before anything is extracted from it, and a difference fails the build, whatever does the fetching. It is not a download in the packaging step, so the archives, the zip and the installer carry it as well as the `.deb` and `.rpm`, and the build is offline and reproducible from that point. The mechanism is the implementing change's to choose: a gitian `files:` entry records an input's hash and does not refuse a wrong one, whereas the depends system both fetches and checks (`$(package)_sha256_hash`). Placement: a directory of its own beside the executable in archives (TB-7 is why it cannot share one), under `/opt/shekyl/<bundle_version>-<bundle_target>/` in system packages, never in `/usr/local/bin`, where it would shadow a distribution's tor. Only `tor` and the libraries it loads are shipped — the pluggable transports are 30 MiB Shekyl does not use | Rick, 2026-10-06 |
 | **TB-7** | **The pin covers every file in tor's directory, the directory holds nothing else, and the launcher lets nothing else in.** Three parts. (1) Each pinned file has its own digest through the same canonicalize-then-hash gate: on Linux `tor`, `libevent-2.1.so.7`, `libssl.so.3`, `libcrypto.so.3`; on macOS `tor` and `libevent-2.1.7.dylib`; on Windows `tor.exe`. On macOS the files that ship are Shekyl's Developer ID-signed copies, so a macOS row pins two sets: `files`, the signed bytes the daemon checks, and `upstream`, Tor's as extracted; `tor_bundle.py` ties them (TB-11). (2) The launcher clears the environment and then sets a closed set, each value from a trusted source and none from the parent's environment: `OPENSSL_CONF` on every platform, to the launcher's blank file in the data directory; on Linux the library path, to the verified binary's own directory; on Windows `SystemRoot`, from the OS (`GetSystemWindowsDirectoryW`). Every Expert Bundle's OpenSSL compiles in `OPENSSLDIR` `/var/tmp/dist/openssl/ssl` and tor does not opt out of OpenSSL's configuration loading, so without `OPENSSL_CONF` a file any local account can create there could make OpenSSL load a module into tor (§2 finding 13). (3) **The tor directory contains exactly the pinned files and nothing else**: no other entry, no subdirectory, names compared without regard to case on Windows. It is an allowlist, not a scan for library-looking names, because the loader does not confine itself to names a scan would think of or to the top level — §2 findings 10 to 12. It is also why the bundle needs a directory of its own. Three negative tests, each of which must refuse: a planted file at the top level, a planted `glibc-hwcaps/<level>/libz.so.1`, and a planted `VERSION.DLL` | Rick, 2026-10-06 (part 3 in this form is his amendment at ratification; part 2's Windows variable, 2026-10-15, from the TSR-Q7 Windows run, landed in #1083; part 2 amended 2026-10-16 from "at most one variable" to the closed set, adding `OPENSSL_CONF`) |
@@ -155,7 +158,7 @@ said about a row on its own.
 | `--tor-pin-override <sha256>` | **REJECTED** | It is flexibility provisioned ahead of need, and it turns a structural gate into one a unit-file edit opens. **Reopen** if a Tor security advisory cannot be answered by a Shekyl release in time |
 | A signed pin manifest that moves between releases | **REJECTED** | It is an update channel: one key becomes "run this binary on every node", and a startup fetch is a beacon. A Tor CVE costs a patch release, as a CVE in any shipped dependency does. **Reopen** on the same criterion as above |
 | Depending on a distribution's `tor` | **REJECTED** | A distribution build cannot match the pin; "our tor, their OpenSSL" is the same objection one layer down (finding 5) |
-| Building tor from the signed source inside gitian | not this round | The route to a pinned FreeBSD and riscv64 Linux, which no Expert Bundle covers, and to a stable `linux-aarch64`. A round of its own; the `Unavailable` rows it would close are gaps (TB-4) |
+| Building tor from the signed source inside gitian | not this round | The route to a pinned FreeBSD, which no Expert Bundle covers, and to a stable `linux-aarch64`. A round of its own. The FreeBSD `Unavailable` row is the gap it would close (TB-4). riscv64 Linux left the release matrix on 2026-10-24 (`switched_off`: CA-1) and is not a gap this round closes |
 
 ## 4. The pins TB-10 and TB-11 adopt
 
@@ -298,11 +301,21 @@ current" procedure.
    - TB-1: `tor = off` logs the clearnet-only warning on every boot. A node
      with no tor found, which has not declined, warns too (it was an info
      line); TB-2 says what it then does and says.
-   - FreeBSD and riscv64 Linux are `Unavailable` rows with their reasons,
-     both rulings. A row may carry `"pending"`, the work item that will pin
-     it; it compiles as `Unavailable`, so TB-4's two states stand at runtime,
-     and `check_tor_pin_targets.py` prints every pending row. None is pending
-     now: the macOS rows were, until TB-11 pinned them.
+   - FreeBSD is an `Unavailable` row with its reason, a ruling. riscv64
+     Linux left the release matrix on 2026-10-24: its row stays
+     `Unavailable`, so a source build still compiles, and carries
+     `"switched_off": "CA-1"`, the record of that ruling
+     (`CRYPTO_AUDIT.md` §1). The marker is a closed shape, the same rule
+     in `build.rs` and `tor_bundle.py`: `unavailable`, not `pending`, and
+     a work-item id. A pinned row, or a row that is also pending, is
+     refused. `check_tor_pin_targets.py` holds that no gitian descriptor
+     builds a switched-off row, that every other row is built by one, and
+     prints switched-off rows on every run. A row may carry `"pending"`,
+     the work item that will pin it; it compiles as `Unavailable`, so
+     TB-4's two states stand at runtime, and
+     `check_tor_pin_targets.py` prints every pending row. A pending row
+     is a gap. A switched-off row is not. None is pending now: the macOS
+     rows were, until TB-11 pinned them.
 2. **Windows and macOS:** TB-11, a pin and a launch test for each; and the
    GUI wallet's installers (TB-12), in `shekyl-gui-wallet`. **The Windows
    and macOS halves are LANDED**; the GUI wallet's installers are not. The
@@ -350,10 +363,12 @@ current" procedure.
      starts, the missing binary is not executed, and the node behaves as
      the posture table.
 3. **FreeBSD:** TB-5's `Unavailable` arm and its user guide.
-4. **Close the `Unavailable` gaps** (TB-4, Rick 2026-10-19): every OS ships
-   its Tor. FreeBSD and riscv64 Linux have no Expert Bundle and wait on
-   building tor from the signed source (§3).
-   `check_tor_pin_targets.py` prints every pending row on every run.
+4. **Close the `Unavailable` gaps** (TB-4, Rick 2026-10-19): every host
+   the release builds ships its Tor. FreeBSD has no Expert Bundle and
+   waits on building tor from the signed source (§3). riscv64 Linux left
+   the release matrix on 2026-10-24 (`switched_off`: CA-1) and is not a
+   gap this step closes. `check_tor_pin_targets.py` prints every pending
+   row and every switched-off row on every run.
 
 The Foundation's own hosts are reconfigured one at a time after step 1, to the
 canonical location, watching the network recover from each dropped node.

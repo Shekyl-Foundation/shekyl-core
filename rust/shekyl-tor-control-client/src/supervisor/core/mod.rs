@@ -13,12 +13,14 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use super::posture::{
-    fixes, own_tx, Cause, Connectors, OriginVerdict, ProgressWindow, Shown, Status, Syncing,
+    fixes, own_tx, Cause, Connectors, OriginVerdict, ProgressWindow, Shown, Space, Status, Syncing,
 };
 
-/// Shifts past this saturate a doubling backoff for any base of at least one
-/// nanosecond. The cap is what the operator waits.
-const BACKOFF_SHIFT_LIMIT: u32 = 16;
+mod announce;
+mod backoff;
+
+use announce::{Announcements, Cadence};
+use backoff::Backoff;
 
 /// How long a respawn waits, and how often a failure is said again.
 ///
@@ -124,8 +126,14 @@ pub enum Input {
     BundleMissing,
     /// This platform manages no Tor.
     Unavailable,
-    /// The data directory cannot be used.
-    DirectoryUnusable,
+    /// The data directory cannot be used, or has too little free space for
+    /// the spawn (the pre-spawn check).
+    DirectoryUnusable {
+        /// The daemon's data directory.
+        path: std::path::PathBuf,
+        /// The shortfall, when that was the reason.
+        space: Option<Space>,
+    },
     /// The process is up and the control connection answered.
     Spawned,
     /// The process did not stay up through the launch.
@@ -275,24 +283,6 @@ enum Phase {
     Stopping,
 }
 
-/// When an announcement is said.
-///
-/// A recovery is [`Cadence::Now`]. A phase that repeats its sentence is
-/// [`Cadence::Due`]. A loss of the origin verdict is [`Cadence::Once`]: one
-/// announcement under the cap, including while the phase is quiet.
-#[derive(Clone, Copy)]
-enum Cadence {
-    /// Say now. Arm the next period only while the phase repeats.
-    Now,
-    /// Say when the cap has elapsed. Arm a suppressed repeat only while
-    /// the phase repeats.
-    Due,
-    /// Say once, when the cap has elapsed. A suppressed say is still
-    /// armed, so a quiet phase does not swallow it. A phase that already
-    /// repeats keeps the deadline it has: that deadline is this same cap.
-    Once,
-}
-
 /// The sans-IO supervisor.
 #[derive(Debug)]
 pub struct Core {
@@ -306,10 +296,10 @@ pub struct Core {
     /// projection changes, which is not the same event as a new cause.
     posted: Shown,
     since: u64,
-    last_announce: Option<u64>,
+    announcements: Announcements,
     respawn_count: u32,
     launch_failures: u32,
-    backoff_failures: u32,
+    backoff: Backoff,
     /// The bootstrap percent and the byte mark the progress line measures.
     progress: ProgressWindow,
     /// When the next pin check is due. Only while [`Phase::Absent`] is
@@ -317,8 +307,6 @@ pub struct Core {
     pin_at: Option<u64>,
     /// When the next sample or `state` watch is due.
     sample_at: Option<u64>,
-    /// When the posture is said again.
-    announce_at: Option<u64>,
     /// When the live check is next due: [`Action::Sample`] while Running,
     /// [`Action::SayProgress`] while bootstrapping. Only in those phases.
     alive_at: Option<u64>,
@@ -338,14 +326,13 @@ impl Core {
             cause: Cause::None,
             posted: Shown::Restarting,
             since: now,
-            last_announce: None,
+            announcements: Announcements::new(),
             respawn_count: 0,
             launch_failures: 0,
-            backoff_failures: 0,
+            backoff: Backoff::new(),
             progress: ProgressWindow::start(now),
             pin_at: None,
             sample_at: None,
-            announce_at: None,
             alive_at: None,
         };
         let step = core.step(now, vec![Action::CheckPin]);
@@ -363,7 +350,11 @@ impl Core {
             Input::PinRefused => self.hold(now, Cause::PinRefused, AbsentDuty::Held),
             Input::BundleMissing => self.hold(now, Cause::BundleMissing, AbsentDuty::Held),
             Input::Unavailable => self.hold(now, Cause::Unavailable, AbsentDuty::Fixed),
-            Input::DirectoryUnusable => self.hold(now, Cause::DirectoryUnusable, AbsentDuty::Held),
+            Input::DirectoryUnusable { path, space } => self.hold(
+                now,
+                Cause::DirectoryUnusable { path, space },
+                AbsentDuty::Held,
+            ),
             Input::Spawned => self.spawned(now),
             Input::SpawnFailed => self.launch_failed(now),
             Input::BootstrapComplete => self.bootstrap_complete(now),
@@ -407,7 +398,7 @@ impl Core {
         if self.phase == Phase::Stopping {
             self.pin_at = None;
             self.sample_at = None;
-            self.announce_at = None;
+            self.announcements.disarm();
             self.alive_at = None;
             return self.step(now, Vec::new());
         }
@@ -415,10 +406,17 @@ impl Core {
             return self.step(now, Vec::new());
         }
         let mut actions = Vec::new();
-        if self.announce_at.is_some_and(|at| now >= at) {
-            actions.extend(self.say(now, Cadence::Due));
+        let pin_due = self.pin_at.is_some_and(|at| now >= at);
+        if self.announcements.on_deadline(
+            now,
+            self.say_key(),
+            self.cap(),
+            self.repeats_announcement(),
+            pin_due,
+        ) {
+            actions.push(Action::Announce);
         }
-        if self.pin_at.is_some_and(|at| now >= at) {
+        if pin_due {
             self.pin_at = None;
             if matches!(
                 self.phase,
@@ -487,10 +485,15 @@ impl Core {
     /// The next time [`Self::on_deadline`] has work, in the caller's clock.
     #[must_use]
     fn deadline(&self) -> Option<u64> {
-        [self.pin_at, self.sample_at, self.announce_at, self.alive_at]
-            .into_iter()
-            .flatten()
-            .min()
+        [
+            self.pin_at,
+            self.sample_at,
+            self.announcements.due(),
+            self.alive_at,
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 
     fn pin_accepted(&mut self) -> Vec<Action> {
@@ -698,7 +701,7 @@ impl Core {
         self.phase = Phase::Stopping;
         self.pin_at = None;
         self.sample_at = None;
-        self.announce_at = None;
+        self.announcements.disarm();
         self.alive_at = None;
         let mut actions = Vec::new();
         if installed {
@@ -715,15 +718,19 @@ impl Core {
         };
         self.sample_at = None;
         self.alive_at = None;
+        // Close the usable interval before the wait is chosen, so a cap
+        // already served restarts this fault. A degradation earlier records
+        // the same cap and this fault consumes it.
+        self.settle_shown(now);
         if launch_failed {
             self.launch_failures = self.launch_failures.saturating_add(1);
         } else {
             self.launch_failures = 0;
         }
-        self.backoff_failures = self.backoff_failures.saturating_add(1);
+        let wait = self.backoff.on_fault(self.base(), self.cap());
         self.respawn_count = self.respawn_count.saturating_add(1);
         self.set_cause(cause);
-        self.pin_at = Some(now.saturating_add(self.backoff_delay()));
+        self.pin_at = Some(now.saturating_add(wait));
         let mut actions = Vec::new();
         if installed {
             actions.push(Action::TakeDown);
@@ -812,22 +819,21 @@ impl Core {
     }
 
     fn say(&mut self, now: u64, cadence: Cadence) -> Vec<Action> {
-        let due = self
-            .last_announce
-            .is_none_or(|then| now.saturating_sub(then) >= self.cap());
-        if !matches!(cadence, Cadence::Now) && !due {
-            if matches!(cadence, Cadence::Once) || self.repeats_announcement() {
-                if let Some(last) = self.last_announce {
-                    self.announce_at = Some(last.saturating_add(self.cap()));
-                }
-            }
-            return Vec::new();
+        if self.announcements.say(
+            now,
+            cadence,
+            self.say_key(),
+            self.cap(),
+            self.repeats_announcement(),
+        ) {
+            vec![Action::Announce]
+        } else {
+            Vec::new()
         }
-        self.last_announce = Some(now);
-        self.announce_at = self
-            .repeats_announcement()
-            .then_some(now.saturating_add(self.cap()));
-        vec![Action::Announce]
+    }
+
+    fn say_key(&self) -> announce::SayKey {
+        announce::SayKey::new(self.shown(), &self.cause)
     }
 
     /// The relay's verdict moved. The posture sentence follows whether a
@@ -923,25 +929,28 @@ impl Core {
         )
     }
 
-    fn step(&mut self, now: u64, actions: Vec<Action>) -> Step {
+    /// Move [`Self::posted`] onto the projection. Closing a usable interval
+    /// that lasted a cap records the backoff restart.
+    fn settle_shown(&mut self, now: u64) {
         let shown = self.shown();
+        if self.posted == Shown::Usable
+            && shown != Shown::Usable
+            && now.saturating_sub(self.since) >= self.cap()
+        {
+            self.backoff.note_usable_cap();
+        }
         if shown != self.posted {
             self.since = now;
             self.posted = shown;
         }
+    }
+
+    fn step(&mut self, now: u64, actions: Vec<Action>) -> Step {
+        self.settle_shown(now);
         Step {
             actions,
             deadline: self.deadline(),
         }
-    }
-
-    fn backoff_delay(&self) -> u64 {
-        let exp = self
-            .backoff_failures
-            .saturating_sub(1)
-            .min(BACKOFF_SHIFT_LIMIT);
-        let factor = 1u64.checked_shl(exp).unwrap_or(u64::MAX);
-        self.base().saturating_mul(factor).min(self.cap())
     }
 
     fn base(&self) -> u64 {

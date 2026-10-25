@@ -7,11 +7,15 @@
     "RELEASE_CHECKLIST.md 'Bundled Tor pin current' procedure: a digest recorded here must",
     "come from a tarball whose signature was verified against signing_key_fingerprint.",
     "Every target the release builds has exactly one row, pinned or unavailable",
-    "(scripts/ci/check_tor_pin_targets.py). An unavailable row is a ruling unless it",
-    "carries \"pending\": the identifier of the work that will pin it. A pending row",
-    "compiles as unavailable, which is what the binary does today, and is printed by",
-    "the gate on every run: an unavailable target is a gap to close (TB-4), and a node",
-    "on one announces that it has no managed Tor; it is never refused (TB-2).",
+    "(scripts/ci/check_tor_pin_targets.py). An unavailable row the release builds is a",
+    "gap to close (TB-4). A row may carry \"pending\":",
+    "the identifier of the work that will pin it. A pending row compiles as unavailable,",
+    "which is what the binary does today, and is printed by the gate on every run. A node",
+    "on an unavailable target announces that it has no managed Tor; it is never refused (TB-2).",
+    "\"switched_off\" is a closed shape: an unavailable row that is not pending, whose value",
+    "is the record of the ruling that took the target out of the release matrix (riscv64",
+    "Linux: CA-1). No descriptor builds it; the row stays so a source build still compiles,",
+    "and the gate prints it every run. A pinned row, or a row that is also pending, is refused.",
     "A macOS row carries two digest sets (TB-11): files, the Developer ID-signed bytes",
     "that ship and that the binary checks, and upstream, Tor's own as extracted from",
     "the tarball. tor_bundle.py ties them: every byte outside the code signature is Tor's."
@@ -63,7 +67,8 @@
       "arch": "riscv64",
       "gitian_host": "riscv64-linux-gnu",
       "disposition": "unavailable",
-      "reason": "the Tor Project publishes no Expert Bundle for riscv64 Linux"
+      "reason": "the Tor Project publishes no Expert Bundle for riscv64 Linux",
+      "switched_off": "CA-1"
     },
     {
       "os": "freebsd",

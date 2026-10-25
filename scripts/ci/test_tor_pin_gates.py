@@ -413,7 +413,7 @@ def _(b):
     b.pins["targets"][1]["pending"] = "TB-11"
     b.write()
     expect(b.run("disposition", "--host", "riscv64-linux-gnu"), 0, "unavailable")
-    for bad in ("soon", "tb-11", "TB-", "after the launch test", 11):
+    for bad in ("soon", "tb-11", "TB-", "after the launch test", 11, "\u03a4\u0392-11", "TB-\u0661\u0661"):
         b.pins["targets"][1]["pending"] = bad
         b.write()
         expect(b.stage(), 1, "names the")
@@ -1013,9 +1013,16 @@ def _(tmp):
     assert "Traceback" not in proc.stderr, proc.stderr
 
 
+def row_for(pins, host):
+    """The target row for `host`, by key: a test does not depend on the
+    order of `base_pins()`'s rows."""
+    (row,) = [row for row in pins["targets"] if row["gitian_host"] == host]
+    return row
+
+
 def pending_pins():
     pins = base_pins("0" * 64)
-    pins["targets"][1]["pending"] = "TB-11"
+    row_for(pins, "riscv64-linux-gnu")["pending"] = "TB-11"
     return pins
 
 
@@ -1023,6 +1030,58 @@ def pending_pins():
 def _(tmp):
     proc = targets_tree(tmp, pins=pending_pins())
     expect(proc, 0, "riscv64-linux-gnu is unavailable pending TB-11")
+
+
+def switched_off_pins(record="CA-1"):
+    pins = base_pins("0" * 64)
+    row_for(pins, "riscv64-linux-gnu")["switched_off"] = record
+    return pins
+
+
+@tcase("targets: a switched-off row no descriptor builds is reported and passes")
+def _(tmp):
+    proc = targets_tree(tmp, pins=switched_off_pins(), hosts=("x86_64-linux-gnu",))
+    expect(proc, 0, "riscv64-linux-gnu is switched off by CA-1 (source builds only)")
+
+
+@tcase("targets: a switched-off row that a descriptor still builds fails")
+def _(tmp):
+    proc = targets_tree(tmp, pins=switched_off_pins())
+    expect(proc, 1, "whose row in config/tor_pins.json is switched off by CA-1")
+
+
+@tcase("targets: an unmarked row no descriptor builds still fails, naming the marker")
+def _(tmp):
+    proc = targets_tree(tmp, hosts=("x86_64-linux-gnu",))
+    expect(proc, 1, "or mark the row \"switched_off\"")
+
+
+@tcase("targets: switched_off must name a record, not a sentence")
+def _(tmp):
+    # The last two are non-ASCII: Greek capitals and Arabic-Indic digits,
+    # which str.isalpha/isdigit would accept and build.rs refuses.
+    for bad in ("off", "ca-1", "CA-", "switched off by Rick", 1, "\u0391\u0392-1", "CA-\u0661"):
+        proc = targets_tree(tmp, pins=switched_off_pins(bad), hosts=("x86_64-linux-gnu",))
+        expect(proc, 1, "names the record of the ruling")
+        shutil.rmtree(Path(tmp) / "tree")
+
+
+@tcase("targets: switched_off on a pinned row is refused")
+def _(tmp):
+    pins = base_pins("0" * 64)
+    row_for(pins, HOST)["switched_off"] = "CA-1"
+    expect(targets_tree(tmp, pins=pins), 1, "belongs on an unavailable row that is not pending")
+
+
+@tcase("targets: a row that is pending and switched off is refused")
+def _(tmp):
+    pins = switched_off_pins()
+    row_for(pins, "riscv64-linux-gnu")["pending"] = "TB-11"
+    expect(
+        targets_tree(tmp, pins=pins, hosts=("x86_64-linux-gnu",)),
+        1,
+        "belongs on an unavailable row that is not pending",
+    )
 
 
 @tcase("targets: a malformed pin file fails")

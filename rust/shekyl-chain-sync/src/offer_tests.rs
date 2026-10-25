@@ -158,7 +158,9 @@ fn a_span_is_offered_only_after_the_span_before_it_connects() {
             view,
             Event::Entry {
                 tag,
-                outcome: Outcome::Connected { relay: false },
+                outcome: Outcome::Connected {
+                    height: BlockHeight::from_raw(8),
+                },
             },
         );
         let out = drive(sync, view, Event::Room { seats: 1 });

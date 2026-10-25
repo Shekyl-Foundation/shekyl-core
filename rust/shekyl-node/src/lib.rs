@@ -63,6 +63,7 @@ mod facts;
 mod genesis;
 mod mining;
 
+pub use facts::free_bytes;
 pub use mining::{MiningControl, MiningRefused, MiningStatus, PostedJob};
 
 use std::num::NonZeroUsize;
