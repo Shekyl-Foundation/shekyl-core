@@ -77,6 +77,13 @@ const CAP_PAIR_BAND: [f64; 5] = [5_000.0, 10_000.0, 20_000.0, 40_000.0, 100_000.
 /// builds every [`MissModel`] through [`MissSources::at_coverage`], so a call
 /// site cannot hand the region a nominal `λ` where cap-delivered coverage
 /// belongs.
+/// The W₂ size ladder's measured single-attempt misses the 0.30 bound rests
+/// on (`ARCHIVAL_SHARD_T_DERIVATION.md` §10.6): with PoW on, on the worst day
+/// observed, and that day's 95 % upper bound. Inputs the report quotes.
+pub const W2_RIG_POW_ON_MISS: f64 = 0.041;
+pub const W2_RIG_WORST_DAY_MISS: f64 = 0.20;
+pub const W2_RIG_WORST_DAY_UPPER: f64 = 0.238;
+
 #[derive(Debug, Clone, Copy)]
 pub struct MissSources {
     /// Per-attempt transport failure. **0.30, retained and measured-supported**
@@ -659,8 +666,8 @@ pub fn write_report(out: &mut impl fmt::Write, snap: &FeasibilitySnapshot) -> fm
          DELIVERED lambda={DL:.3} (projection {PP:.0} pairs; k_cap binds past\n\
          {KNEE:.0} pairs, so target and delivered coincide only below that knee);\n\
          p_attempt={P:.3} (RETAINED 2026-10-02, measured-supported: the W2 size\n\
-         ladder's worst observed day missed 0.20, 95% upper bound 0.238, and its\n\
-         PoW-on window 0.041; reopens if a measured window's upper bound exceeds\n\
+         ladder's worst observed day missed {WD:.2}, 95% upper bound {WU:.3}, and its\n\
+         PoW-on window {PW:.3}; reopens if a measured window's upper bound exceeds\n\
          it), attempts={A} (ONE credited, deliberately: bad-day misses were mostly\n\
          circuit failures, correlated within a window, so a retry is not an\n\
          independent draw and is margin, not calibration),\n\
@@ -672,6 +679,9 @@ pub fn write_report(out: &mut impl fmt::Write, snap: &FeasibilitySnapshot) -> fm
         P = model.p_attempt,
         A = model.attempts,
         FI = model.fabrication_intensity,
+        WD = W2_RIG_WORST_DAY_MISS,
+        WU = W2_RIG_WORST_DAY_UPPER,
+        PW = W2_RIG_POW_ON_MISS,
     )?;
     writeln!(
         out,

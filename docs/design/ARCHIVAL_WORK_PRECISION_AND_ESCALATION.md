@@ -347,21 +347,21 @@ argument for it over a participation-derived signal:
 > **⚠️ Amended by §12.10 (A6, Stage 2) — "cannot be moved in a burst" is measured,
 > and it is not quite true. Three layers, separated by what excludes each:**
 > *(The slew figures below are the leaf-era measurement. Byte-keyed (§12.13,
-> 2026-10-01) the same ceiling moves the share **0.05 / 0.10 pts/epoch**; the
+> 2026-10-01) the same ceiling moves the share **1.01 / 2.02 pts/epoch** on the steepest member; the
 > structure of the argument is unchanged.)*
 >
 > 1. **Reversal and oscillation: structurally excluded — unchanged, and this is
 >    the property that actually matters here.** This section's scope is *swings*:
 >    pump-and-dump, whale diving, reflexive feedback — manipulation that profits
 >    from a **reversal**. The lever A6 found can only **accelerate the monotone
->    ratchet**: `+0.05` (penalty-free) to `+0.10` points/epoch at the block-weight
->    ceiling against `−0.004` at the *full* reorg bound, one-directional always. No reversal, no
+>    ratchet**: `+1.01` (penalty-free) to `+2.02` points/epoch at the block-weight
+>    ceiling against `−0.07` at the *full* reorg bound, one-directional always. No reversal, no
 >    oscillation, no whipsaw. **W8 stays armed by operand.**
 > 2. **Acceleration: economically closed — and *conditionally*.** The slew is real
 >    (a W9 flood buys `n` at the block-weight ceiling: ~3 870 shards/epoch
->    early-chain penalty-free — **`+0.05` pts/epoch**, or **`+0.10`** if the flooder
+>    early-chain penalty-free — **`+1.01` pts/epoch**, or **`+2.02`** if the flooder
 >    also compensates the miner-reward penalty to use the legal `2×` limit,
->    ~430 k SKL/epoch in fees; the shallowest 90 % member, which step 0b re-reads on the steepest) and it is closed by **price**, not by structure. The
+>    ~430 k SKL/epoch in fees; the steepest member of the GF-7 band, 90 % at knee 500 000, which fails the slew gate and is excluded, ruling 8) and it is closed by **price**, not by structure. The
 >    measurement splits it into **two tiers with two different closers**:
 >    - **penalty-free tier (`+1.41`)** — ~~closed by the **reopen-(c) per-output
 >      fee-floor**, and **open until (c) lands**~~ **REOPENED AS ITS OWN ITEM
@@ -586,7 +586,7 @@ decision.
     cp5a `49cf160e9`).** The margin is negative at the current grace window (the
     cheap 6.8 KB opening re-fetches for ≪ the cost of holding 12.3 GB; §12.6). The
     named remedy applies: **tighten the gate-4 grace window** to force a re-fetch-
-    failure rate `q ≥ q*` (`q* ≈ 0.105–0.271` — the m-of-n slash crossover),
+    failure rate `q ≥ q*` (`q* ≈ 0.103–0.271` — the m-of-n slash crossover),
     **or** accelerate the **PoRep** reopen (`q → 1`, sealed possession). **Not** a
     D2 redesign. NB: the corrected m-of-n slash (`ARCHIVAL_FAILURE_CONFIRMATION_PIN`,
     a single miss absorbed) *weakens* the deterrent vs a single-strike, so `q*` is
@@ -1080,8 +1080,8 @@ models (each cell links its section).
 | **A2** distribution (W6) | ✅ **clears** (§12.10) | Scarce-holder share `1.0000 → 0.9998` — **0.02 %** dilution, **zero** scarce holders stranded below marginal cost. |
 | **A3** stranding | ✅ **reported** (§12.7) | Pre-D1 strands **100 %** past the co-holder cliff — the §1 coupling claim confirmed and *understated*. Post-D1 ≈ 0 outside the quantization corner. |
 | **A4** stuffing (W9) | ✅ **CLEARS (§12.11)** | The arm measures the stuffer's *profit*, not theft: netted for the no-exclusivity subsidy the stuffer is **negative-sum** and the play **anti-scales** (§12.11). On the production fee (`--stage2`, the 8-in / 1-out shape searched as the stuffer's best) served-work ROI at the rational equilibrium is **0.05×** on the baseline and at most **3.03×** (sustained growth), with premium ≈ 1.0: pure fee-flow-volume leverage. `fee×→1` spans **0.0→7.5** across scenarios. Under R2 (plateau deletion) the baseline's ROI is **0.0008** (OQ-4). |
-| **A5** proxy (W10) | 🔴 **FAILS** (§12.6) | Re-fetching the 6 784 B opening costs **$0.00083** an epoch at 0.01 $/GB against **$0.00468** to hold 12.3 GB, so at the cheap end of the fetch band the proxy free-rides by **5.6×**; crossover `q* ≈ 0.105–0.271` (`--stage2`). |
-| **A6** swing | ✅ **no cliff** / ⚠️ **slew priced** (§12.10) | Monotone, no discontinuity; the only down-swing is a reorg's, ≤ **0.0036** pts. A flood at the surge ceiling moves the share at most **0.0504** pts/epoch penalty-free and **0.1008** pts/epoch at the legal 2× limit (`--stage2`, steepest candidate). Both tiers close structurally (§12.11.1): they are descriptive bounds on how fast the chain can be pushed toward a sanctioned state, not residual risk. See the §6.0 amendment. |
+| **A5** proxy (W10) | 🔴 **FAILS** (§12.6) | Re-fetching the 6 784 B opening costs **$0.00083** an epoch at 0.01 $/GB against **$0.00468** to hold 12.3 GB, so at the cheap end of the fetch band the proxy free-rides by **5.6×**; crossover `q* ≈ 0.103–0.271` (`--stage2`). |
+| **A6** swing | ✅ **no cliff** / ⚠️ **slew gated** (§12.10) | Monotone, no discontinuity; the only down-swing is a reorg's, ≤ **0.0725** pts. On the steepest GF-7 candidate (90 % at knee 500 000) a flood at the surge ceiling moves the share **1.0080** pts/epoch penalty-free and **2.0160** at the legal 2× limit while the share is below its knee, and 0 above it (`--stage2`). That member fails the `< 1.0` point-an-epoch gate during its ramp and is excluded from the band; the gate stands (ruled 2026-10-24) and the other eight members pass (the 75 % member at the same knee moves 0.7754, the 50 % member 0.3877). The cliff claim closes structurally (§12.11.1): the slew is a descriptive bound on how fast the chain can be pushed toward a sanctioned state. See the §6.0 amendment. |
 
 **The through-line: one theorem, three independent confirmations.** A4's
 `prem ≈ 1.0`, OQ-1's `|Δ| = 0` at the partition optimum, and A2's `0.02 %`
@@ -2073,15 +2073,17 @@ the escalation *should* follow because it tracks genuine burden growth.
   than got built.
 - **The §6.0 amendment's "load-bearing twice" framing is fully retired.** W9's
   profit gate went at §12.11; this was the surviving half, and it is now closed
-  on its own terms. Both slew tiers are covered: the penalty-free `0.05`
-  pts/epoch tier (which lost its (c) closer) and the legal-`2×` `0.10` tier —
+  on its own terms. Both slew tiers are covered: the penalty-free `1.01`
+  pts/epoch tier (which lost its (c) closer) and the legal-`2×` `2.02` tier —
   whose "already priced out by the block-reward penalty (about **12×**)" claim was
   *also* a price argument and inherits the same blindness to a griefer. Neither
   tier needs a price closer, because neither tier's arrival is harmful.
-- **A6's slew measurement stands as a measurement** (`0.05`/`0.10` pts/epoch on
-  the shallowest 90 % member, nearly flat with depth; step 0b re-reads it on
-  the steepest) and is now a **descriptive bound on how fast the
-  chain can be pushed toward a sanctioned state**, not a residual risk.
+- **A6's slew measurement stands as a measurement** (`1.01`/`2.02` pts/epoch on
+  the steepest member of the GF-7 band while the share ramps below its knee,
+  and zero from the knee's 500 000 shards on, where the share has reached its
+  plateau; that member fails the slew gate and is excluded, the gate standing)
+  and is now a **descriptive bound on how fast the chain can be pushed toward a
+  sanctioned state**, not a residual risk.
 - **Stage 3 opens.** No outstanding hard inputs: (c) closed with no mechanism
   (§12.11), D3 implemented (§12.9.1, PR #371), and this residual discharged.
   Reopen (d) remains parallel to the *shape* freeze per §8, unchanged.

@@ -1929,6 +1929,155 @@ cycle's gate moves from year 17 to year 15.
 On the flat control the same kilobyte step appears, and baseline years 5
 and 20 change from Displacement to Mixed.
 
+### 5.24 Phase 1 step 0b — the fixture-moving corrections, predicted before the run (2026-10-24)
+
+Phase 0 ([`ECONOMICS_SIM_PHASE0.md`](ECONOMICS_SIM_PHASE0.md) §P0.1, §P0.9)
+found two instrument defects whose correction moves the `--stage2`
+narrations, one stale prose figure, and the class behind it. Step 0 left
+them for this step. The predictions below are written before any code
+changes; the production arm (PROD) is graded, the flat control (FLAT) is the
+counterfactual arm and is reported. The recorder's JSON does not read any of
+these paths and is predicted byte-identical.
+
+**0b-1. The steepest candidate is the one with the smallest knee.** A6,
+OQ-4 and A2 select "the steepest candidate" with `max_by_key(|c| c.asymptote)`;
+three candidates share the 90 % asymptote and Rust returns the last, knee
+10 000 000, the shallowest. The selection becomes `(asymptote, smallest knee)`.
+Measured by a reverted probe on 2026-10-24, so these are the predictions:
+
+- PROD, A6: the rows at `n` = 0 and 100 000 read 1.0049 / 1.0080 points an
+  epoch penalty-free, 2.0100 / 2.0160 at the legal 2× limit, reorg 0.0722 /
+  0.0725; the rows at `n` ≥ 500 000 read 0 (the share has saturated). The
+  worst is 1.0080, and the verdict line reads "see the slew reading below"
+  instead of "no measurable adversarial slew". The curve label names knee
+  500 000.
+- PROD, OQ-4: ROI 0.0076 (small bonds), 0.0482 (capped), 0.0076 (deleted);
+  the `fee x -> 1` column stays 0.0.
+- PROD, A2: the per-epoch pool the table is sized on rises, so its SKL
+  column rises about 3.8 % in every row (2.672847 → 2.774700 in the first);
+  the share columns and the `ok` / `UNDER` verdicts do not move.
+- FLAT: the same three reports change the same way; magnitudes reported.
+- The escalation doc follows the corrected run (ruling 8): §12.4.1's A6 row,
+  §6.0's amendment and §12.11.1 read the steepest member, and A6's row says
+  the (90 %, 500 000) member fails the `< 1.0` point-an-epoch gate during its
+  ramp and is excluded from the GF-7 band; the gate stands.
+
+**0b-2. The in-year crossing of `n` = 4 096.** The A5/TJ maximum per-shard
+reward divides a year's per-epoch budget by the year-end `n`, and OQ-2 samples
+`n` at year ends, so neither sees the smallest `n` at which the holdings cap
+binds. The year aggregate gains the smallest closed-shard count at or above
+`MAX_HOLDINGS_SHARDS` seen in the year, and the maximum divides by it; OQ-2
+adds `n` = 4 096 to its samples.
+
+- PROD: the maximum per-shard reward rises from 226.47 SKL an epoch by the
+  ratio of the crossing year's year-end `n` to 4 096 (22 349 / 4 096 = 5.46 on
+  the baseline): predicted about 1 240, registered as 1 100–1 400. The
+  median does not move. TJ-4 and TJ-7 read the maximum: their figures move,
+  their verdicts are predicted unchanged. A5's `q* +reward` column falls (a
+  larger forfeit deters more); its bond-only column does not move.
+- PROD, OQ-2: three new rows at `n` = 4 096; at 60 000 archivers the mean
+  replication there is about 4 100, `min_viable_h` 5, and the recommendation
+  becomes **10** (safety multiple 2), from 2.
+- FLAT: the same mechanics; magnitudes reported.
+
+**0b-3. A3's prose reads its own table.** The "Read" paragraph states that
+pre-D1 strands 100 % where `mean_r` crosses the co-holder cliff and cites "the
+70 % column above". The model is right and the prose is stale: on this fold
+the largest `mean_r` in the table is 751, below the ≈ 1 000 cliff, so no row
+strands (0.00 % throughout), and the 70 % column is from §12.7's leaf-era run.
+The paragraph interpolates the table's largest `mean_r` and largest pre-D1
+stranded fraction, and prints one computed cliff row (the archiver band's top
+scaled until `mean_r` crosses the cliff at the early corpus) so the Stage-0
+claim is shown, not asserted.
+
+- PROD: the table's cells do not move; the paragraph reads largest `mean_r`
+  751, largest pre-D1 stranded 0.00 %; the cliff row reads pre-D1 zero-work
+  100 % and stranded 100 %, post-D1 0 %.
+- FLAT: the same, with its own `mean_r` (its `n` differs slightly).
+
+**0b-4. No narration prose states a result as a literal.** Every number in a
+`--stage2` prose string either interpolates the computed value or is a named
+constant interpolated from its owner. The scan of the narration sources finds
+these result figures as literals: A3's 100 % and 70 % (0b-3); `proxy.rs`'s
+"the quoted A5 band (0.098–0.278)", which interpolates the run's own
+crossover band; A4's "prem≈1.0", which interpolates the largest premium over
+the realistic-end rows and asserts it is within 0.01 of 1. The restated
+constants (the binding 10 % rate, the 25 % floor, the 60-year horizon, the
+holdings band 4 / 64 / 512, the 9× count cap, the 128-byte leaf, the
+calibration anchors 0.041 / 0.20 / 0.238, the scarce-holder bound `r ≤ 50`,
+the stuffer's 1/100 self share, the ≈ 1 000 cliff, the "~10 KB" per
+transaction, the 26–263× storage-to-transit spread) interpolate their owners.
+
+- PROD and FLAT: the fixture text changes only at A3's paragraph, the A5
+  band (which reads 0.105–0.271), and 0b-1 / 0b-2's tables. Every other line
+  is byte-identical: an interpolated constant that prints differently from
+  the literal it replaces is a finding, reported here before the fixture is
+  regenerated.
+
+#### 5.24.1 What the run said (2026-10-24)
+
+Graded on the production arm against §5.24; the flat control reported.
+The recorder's JSON is byte-identical, as predicted.
+
+**0b-1, the steepest member.** Every figure as predicted, PROD: A6 reads
+1.0049 / 1.0080 points an epoch penalty-free and 2.0100 / 2.0160 at the 2×
+limit at `n` = 0 and 100 000, reorg 0.0722 / 0.0725, 0 from `n` = 500 000;
+worst 1.0080; the verdict reads "see the slew reading below"; the label names
+knee 500 000. OQ-4 reads 0.0076 / 0.0482 / 0.0076. A2's SKL column rises
+3.8 % in every row (2.672847 → 2.774700 first), shares and verdicts
+unchanged. FLAT: A6 identical to PROD (the flood ceiling is a weight, not a
+fee); OQ-4 0.0345 / 0.2155 / 0.0345 (from 0.0035 / 0.0216 / 0.0035, the
+same ×9.9 as PROD's); A2's SKL column rises in every row, as PROD's does.
+
+**0b-2, the in-year crossing.** OQ-2 as predicted: three rows at `n` = 4 096
+(mean replication 136 / 1 367 / 4 101, `min_viable_h` 1 / 2 / 5), and the
+recommendation is **10**. A5's `q* +reward` falls (0.105 → 0.103 at 0.01 $/GB;
+`q_risk*` 0.1066 → 0.1046); bond-only unchanged. TJ-4 and TJ-7 move with the
+maximum; their verdicts do not. **The maximum itself misses the registered
+range:** it rises from 226.47 to **278.23** SKL a shard an epoch (×1.23),
+against 1 100–1 400. The mechanism was right and the base was the wrong row.
+A probe (reverted) over every year with the cap bound shows the new maximum
+is the baseline-class year 1 with the in-year count 4 096, exactly the row the
+prediction named: its `pool / n` at the year-end count is **50.99**, and
+50.99 × 22 349 / 4 096 = 278.23. The 226.47 the prediction multiplied was not
+that row's figure; it was another scenario's `pool / n`, and that scenario's
+first year begins past the cap, so its in-year count is its own and it is no
+longer the maximum. FLAT: 226.46 → 278.11, the same ×1.23.
+
+**0b-3, A3's prose.** As predicted, PROD: no table cell moves; the paragraph
+reads largest `mean_r` 751 and largest pre-D1 stranded 0.00 %; the cliff row
+at 120 000 archivers (`mean_r` 1 503) reads pre-D1 zero-work 100 % and
+stranded 100 %, post-D1 0 %. FLAT: 787; the cliff row at 120 000 (`mean_r`
+1 574) reads the same.
+
+**0b-4, the literals.** Two of the restated figures were wrong, which the
+prediction said would be reported as findings before the regeneration:
+
+- "~10 KB of archival per transaction" is **~12 KB** on the baseline's first
+  year (`normal_tx_archival_bytes` at that depth).
+- The cross-class storage-to-transit spread "26–263×" computes as **79–788×**
+  at the shard payload: the re-fetch cost at each fetch-price band end over
+  the cheapest storage (`proxy_refetch_cost_per_epoch / honest_storage_cost_per_epoch`),
+  the fetch-price band over the break-even price. The literal is the
+  2026-07-29 run's, at one challenge a pair an epoch;
+  `CHALLENGES_PER_PAIR_PER_EPOCH` has been 3 since `eca856b7c` (2026-08-11)
+  and the re-fetch cost scales with it, exactly as
+  [`ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md`](ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md)
+  §5.7c said it would. The within-class figures scale the same way: retail
+  ~11× → 32.9×, cheap transit ~1.1× → 3.3×, break-even $0.0004 → $0.00013/GB.
+
+The A5 band reads 0.103–0.271 (predicted 0.105–0.271; the `+reward` end
+moved with 0b-2's maximum). Every other interpolated constant prints what
+its literal said, so no other line of either narration moved.
+
+**The class.** Every result figure in the `--stage2` narration prose now
+interpolates its computed value, and every restated constant reads its owner:
+the binding rate and the decades (`onset.rs`), the floor share and the horizon,
+`A4_HONEST_HOLDINGS_BAND`, the co-holder cliff (`stranding::cliff_g_milli`),
+`CHALLENGED_LEAF_LEN`, `COUNT_CAP_BASE_MULTIPLE`, `CO_HOLDERS`, `SCARCE_R_MAX`,
+and the W₂ rig's three anchors as named constants in `mn_feasibility.rs`.
+Both narrations were regenerated after the grading above.
+
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
 Under the cycle ruling (§0), staking is being designed now, and the

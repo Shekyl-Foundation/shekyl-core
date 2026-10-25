@@ -496,7 +496,8 @@ You can also cross-compile static binaries on Linux for Windows and macOS with t
   * Requires: `clang`
 * ```make depends target=aarch64-linux-gnu``` for armv8 binaries.
   * Requires: `g++-aarch64-linux-gnu`
-* ```make depends target=riscv64-linux-gnu``` for RISC V 64 bit binaries.
+* ```make depends target=riscv64-linux-gnu``` for RISC V 64 bit binaries
+  (a source build only: riscv64 is not a shipped target, see `docs/RELEASING.md`).
   * Requires: `g++-riscv64-linux-gnu`
 * ```make depends target=x86_64-unknown-freebsd``` for freebsd binaries.
   * Requires: `clang-8`

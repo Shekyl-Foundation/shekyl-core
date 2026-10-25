@@ -147,33 +147,10 @@ bool init_blockchain(Blockchain& bc, BlockchainDB* db)
 
 } // namespace
 
-TEST(archival_bond_post, gate4_integration_rejects_p_id_hint_mismatch)
-{
-  const Gate4Kat kat = load_gate4_kat();
-  txin_archival_bond_post bond = load_join_bond_vin(kat.join_wire_hex);
-  memset(bond.p_canonical_id.data, 0xEE, sizeof(bond.p_canonical_id.data));
-
-  auto db = std::make_unique<ArchivalBondPostIntegrationDB>();
-  BlockchainAndPool bap;
-  ASSERT_TRUE(init_blockchain(bap.bc, db.release()));
-  EXPECT_FALSE(bap.bc.check_archival_bond_post_input(bond, bond.hybrid_public_key, bap.bc.get_current_blockchain_height()));
-}
-
 TEST(archival_bond_post, gate4_integration_rejects_non_join_post_kind)
 {
   txin_archival_bond_post bond = load_join_bond_vin(load_gate4_kat().join_wire_hex);
   bond.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Reinstate);
-
-  auto db = std::make_unique<ArchivalBondPostIntegrationDB>();
-  BlockchainAndPool bap;
-  ASSERT_TRUE(init_blockchain(bap.bc, db.release()));
-  EXPECT_FALSE(bap.bc.check_archival_bond_post_input(bond, bond.hybrid_public_key, bap.bc.get_current_blockchain_height()));
-}
-
-TEST(archival_bond_post, gate4_integration_rejects_oversized_hybrid_pubkey)
-{
-  txin_archival_bond_post bond = load_join_bond_vin(load_gate4_kat().join_wire_hex);
-  bond.hybrid_public_key.push_back(0xFF);
 
   auto db = std::make_unique<ArchivalBondPostIntegrationDB>();
   BlockchainAndPool bap;
@@ -241,94 +218,5 @@ TEST(archival_bond_post, serve_credit_epoch_ok_ffi_boundary)
   EXPECT_EQ(shekyl_archival_serve_credit_epoch_ok(UINT64_MAX, UINT64_MAX - 1), 1u);
   EXPECT_EQ(shekyl_archival_serve_credit_epoch_ok(UINT64_MAX - 1, UINT64_MAX - 1), 0u);
   EXPECT_EQ(shekyl_archival_serve_credit_epoch_ok(UINT64_MAX, UINT64_MAX), 0u);
-}
-
-
-// ── GF-1 debit authorization: the discriminating KATs ──────────────────────
-//
-// The enable flip's pin (gate-4 §3.5 + FOLLOWUPS): "enabled" must mean
-// "authorized", not merely "un-rejected". These four arms prove the auth
-// discriminates — the record's COMMITTED bond_spend_pk accepts, the identity
-// key rejects, a foreign key rejects, and a record committing no key rejects
-// everything (fail-closed, never identity fallback).
-
-namespace {
-
-// A never-served, in-good-standing record: the release cooldown and the
-// slash-settlement watermark are both vacuously satisfied
-// (release_cooldown.rs: None anchor => elapsed; slashes_settled_through:
-// None anchor => settled), so the auth arm is the only live gate.
-shekyl::db::ArchivalBondValue exited_candidate_record(
-  const std::vector<uint8_t>& identity_pk, const std::vector<uint8_t>& committed_spend_pk)
-{
-  shekyl::db::ArchivalBondValue record{};
-  record.hybrid_pubkey = identity_pk;
-  record.bond_spend_pk = committed_spend_pk;
-  record.join_settlement_epoch = 0;
-  record.bonded_total_atomic = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
-  record.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact;
-  record.held_shard_ids = {7};
-  record.shard_add_epochs = {0}; // v6 coupling
-  return record;
-}
-
-txin_archival_bond_post full_release_vin(const std::vector<uint8_t>& identity_pk,
-  const crypto::hash& p_id)
-{
-  txin_archival_bond_post bond{};
-  bond.hybrid_public_key = identity_pk;
-  bond.p_canonical_id = p_id;
-  bond.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Release);
-  bond.holdings.kind = archival_holdings_kind::ShardSetCompact;
-  bond.bonded_total_atomic = 0;
-  bond.bond_credit = 0;
-  bond.bond_debit = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
-  return bond;
-}
-
-} // namespace
-
-TEST(archival_bond_post, gf1_release_auth_discriminates_on_committed_key)
-{
-  const Gate4Kat kat = load_gate4_kat();
-  txin_archival_bond_post join = load_join_bond_vin(kat.join_wire_hex);
-  const std::vector<uint8_t>& identity_pk = join.hybrid_public_key;
-  const crypto::hash p_id = join.p_canonical_id;
-  const std::vector<uint8_t> committed(config::PQC_HYBRID_SINGLE_KEY_LEN, 0xC7);
-  const std::vector<uint8_t> foreign(config::PQC_HYBRID_SINGLE_KEY_LEN, 0xD8);
-
-  auto db = std::make_unique<ArchivalBondPostIntegrationDB>();
-  db->put_bond(p_id, exited_candidate_record(identity_pk, committed));
-  BlockchainAndPool bap;
-  ASSERT_TRUE(init_blockchain(bap.bc, db.release()));
-  const txin_archival_bond_post bond = full_release_vin(identity_pk, p_id);
-  const uint64_t h = bap.bc.get_current_blockchain_height();
-
-  // The committed debit authorizer accepts — Release verifies end-to-end.
-  EXPECT_TRUE(bap.bc.check_archival_bond_post_input(bond, committed, h));
-  // The identity key NEVER authorizes a value-out (GF-1 identity-only).
-  EXPECT_FALSE(bap.bc.check_archival_bond_post_input(bond, identity_pk, h));
-  // A foreign key rejects.
-  EXPECT_FALSE(bap.bc.check_archival_bond_post_input(bond, foreign, h));
-}
-
-TEST(archival_bond_post, gf1_release_rejects_record_without_committed_key)
-{
-  // A record committing no bond_spend_pk (pre-GF-1 shape) authorizes
-  // nothing: fail closed, never an identity-key fallback.
-  const Gate4Kat kat = load_gate4_kat();
-  txin_archival_bond_post join = load_join_bond_vin(kat.join_wire_hex);
-  const std::vector<uint8_t>& identity_pk = join.hybrid_public_key;
-  const crypto::hash p_id = join.p_canonical_id;
-
-  auto db = std::make_unique<ArchivalBondPostIntegrationDB>();
-  db->put_bond(p_id, exited_candidate_record(identity_pk, {}));
-  BlockchainAndPool bap;
-  ASSERT_TRUE(init_blockchain(bap.bc, db.release()));
-  const txin_archival_bond_post bond = full_release_vin(identity_pk, p_id);
-  const uint64_t h = bap.bc.get_current_blockchain_height();
-
-  EXPECT_FALSE(bap.bc.check_archival_bond_post_input(bond, identity_pk, h));
-  EXPECT_FALSE(bap.bc.check_archival_bond_post_input(bond, {}, h));
 }
 

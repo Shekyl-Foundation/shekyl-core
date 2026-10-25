@@ -783,7 +783,7 @@ pub(crate) fn print_envelope(
         "miner U",
         "(placement)",
         "miner E",
-        "self 1/100",
+        format!("self 1/{CO_HOLDERS}"),
         "self all",
         "today",
         "fixed"
