@@ -187,10 +187,10 @@ fn trajectory_from(
 /// can follow if a verdict sits on the margin.
 #[derive(Debug, Clone, Serialize)]
 pub struct A1YearAgg {
-    /// The smallest closed-shard count at or above `MAX_HOLDINGS_SHARDS` seen
-    /// at any block of the year, `None` while the cap has never bound: the
-    /// count a per-shard maximum divides by, where the year-end count passes
-    /// over the crossing inside the year (step 0b-2).
+    /// The first closed-shard count at or above `MAX_HOLDINGS_SHARDS` in the
+    /// year, and so the smallest (the count only grows); `None` while the cap
+    /// has never bound. The count a per-shard maximum divides by, where the
+    /// year-end count passes over the crossing inside the year (step 0b-2).
     pub n_at_cap: Option<u64>,
     pub year: u64,
     /// The chain height of the year's first block: the scenario's genesis
@@ -425,7 +425,7 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
         fold.add_block(priced.filled.included);
         let n_now = fold.closed_shard_count();
         if n_now >= MAX_HOLDINGS_SHARDS as u64 {
-            year_n_at_cap = Some(year_n_at_cap.map_or(n_now, |m| m.min(n_now)));
+            year_n_at_cap.get_or_insert(n_now);
         }
         let paid_reward = priced.paid_reward();
         let staker_emission = priced.paid.split.staker_emission;
@@ -1551,14 +1551,18 @@ fn a3_stranding_report(
         }
     }
     // The Stage-0 claim, shown rather than asserted: the smallest multiple of the
-    // band's top at which the early corpus is replicated past the cliff.
+    // band's top at which the early corpus is replicated past the cliff. The
+    // search ends: `early.n` is positive (the years kept have shards), every
+    // archiver class holds at least one shard, so replication is
+    // non-decreasing in the archiver count and grows without bound. Only
+    // `u64` overflow could end the walk first, and that ends the iterator.
     let g = crate::stranding::cliff_g_milli();
     let early = years[0];
     let top = *A3_ARCHIVER_BAND.iter().max().expect("the band has members");
-    let cliff_archivers = (1..=1_000u64)
-        .map(|k| k * top)
+    let cliff_archivers = (1u64..)
+        .map_while(|k| k.checked_mul(top))
         .find(|&a| crate::stranding::mean_replication(a, early.n) > g)
-        .expect("the band's top scales past the cliff");
+        .expect("replication grows without bound in the archiver count");
     let early_budget = per_epoch_atomic(a1_shipped_budget_atomic(early, &flat_25()));
     let early_claim = ordinary_tx_fee(early.cumulative_outputs, early.admission_rate);
     let cliff_pre = crate::stranding::measure(
