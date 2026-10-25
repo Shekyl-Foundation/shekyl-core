@@ -254,6 +254,19 @@ mod tests {
         );
     }
 
+    /// The armed-lever switch announces itself in exactly this text.
+    /// Harnesses match the line, and
+    /// `scripts/ci/check_armed_lever_launchers.py` holds every copy of it
+    /// to this assertion.
+    #[test]
+    fn the_armed_lever_switch_announces_itself() {
+        let (resolved, _) = setup(&["--network", "regtest", "--tor", "off", "--dev-rpc"], "");
+        assert_eq!(
+            dev_levers(&TABLE, &resolved),
+            vec!["development lever set: dev-rpc=true".to_owned()]
+        );
+    }
+
     #[test]
     fn the_posture_names_the_connectors_and_dial_only() {
         let (_, c) = setup(&[], "");

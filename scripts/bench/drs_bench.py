@@ -40,6 +40,10 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import drs_artifact as A  # noqa: E402
 
+# scripts/armed_lever.py, one directory up from this file.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import armed_lever  # noqa: E402
+
 ROOT = A.ROOT
 
 
@@ -299,11 +303,21 @@ def measure(args):
 
     # Genesis alone is height 1; N generated blocks leave height N+1.
     target_h = args.height + 1
-    proc, _ = spawn("seed", seed_dir, ["--clearnet", "off"])
+    # The generating seed calls generateblocks, an armed test lever: it is
+    # served only with the dev-rpc row once dispatch reads the method
+    # table's armed column (DRS-X flip). Today's C++ path ignores the row.
+    # The daemon announces the row at start. The seed log is appended, so
+    # the check reads only the bytes this spawn wrote.
+    seed_log = os.path.join(work, "seed.log")
+    seed_from = armed_lever.log_size(seed_log)
+    proc, _ = spawn("seed", seed_dir, ["--clearnet", "off", armed_lever.FLAG])
     with running(proc, srpc) as seed:
         if not seed.ready:
             _fail(f"seed RPC on 127.0.0.1:{srpc} never came up "
                   f"(exited={seed.proc.poll()}); see {work}/seed.log and seed.argv")
+        if not armed_lever.announced_since(seed_log, seed_from):
+            _fail(f"the generating seed did not announce {armed_lever.ANNOUNCEMENT!r} "
+                  f"at start; see {work}/seed.log")
         have_h = _rpc(srpc, "get_info")["result"]["height"]
         seed_reused = have_h > 1
         gen_blocks, gen_wall = 0, None
@@ -330,6 +344,7 @@ def measure(args):
     if seed_h <= 1:
         _fail(f"seed holds only height {seed_h}; nothing to sync")
 
+    # This restart serves the chain. It calls no lever, so it stays unarmed.
     proc, _ = spawn("seed", seed_dir, [])
     with running(proc, srpc) as seed:
         if not seed.ready:

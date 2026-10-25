@@ -896,7 +896,7 @@ input, not fixes.
     header from `get_curve_tree_root()` *before* the block is added
     (`:2006`) — the state at chain height N, which every other keying names
     (entry 16). The two operands are equal only when nothing drains at block
-    N. **Observed, not inferred:** `archival_substrate_lmdb.cpp` `cen_b5_header_root_is_the_tip_root_before_add_block_not_after` connects a leaf-creating block on
+    N. **Observed, not inferred** (at `eb5be7767`): `archival_substrate_lmdb.cpp` `cen_b5_header_root_is_the_tip_root_before_add_block_not_after` connects a leaf-creating block on
     real LMDB through the production `add_block`, advances to the drain
     block, and shows the pre-add root equals the record under key N while
     the post-add root does not (leaf count 0 → 1). **Consequence:** on every
@@ -951,7 +951,7 @@ input, not fixes.
     entry's first wording, and the fix commit's message, called it a genesis
     skip — records-was, corrected in the same PR.)*
     **Observed red → green** by the first non-FAKECHAIN Blockchain fixture in
-    the tree, `curve_tree_header_root_check.cpp` (TESTNET, `fixed_difficulty
+    the tree (at `e54e5b983`), `curve_tree_header_root_check.cpp` (TESTNET, `fixed_difficulty
     = 1`, real LMDB, real `add_new_block` through the RandomX light-cache
     verifier): before the edit blocks 1–59 connected and block 60 was rejected
     with `curve_tree_root mismatch`; after it block 60 connects, the leaf
@@ -987,10 +987,13 @@ input, not fixes.
     brings `redb` into the daemon image ahead of the daemon redb store that
     needs it anyway — Rick's ruling (2026-09-05) over a C++-LMDB generator
     oracle that the store rewrite would have deleted. Rule 71's
-    counter-example is retired; R9 keeps the D7/I2/D3 levers. The keying pin in
-    `archival_substrate_lmdb.cpp` is renamed
-    `cen_b5_header_root_is_the_tip_root_before_add_block_not_after` and
-    holds the two reads apart so the keying cannot drift back silently.
+    counter-example is retired; R9 keeps the D7/I2/D3 levers. The keying is
+    pinned in Rust, holding the two reads apart so it cannot drift back
+    silently: `rust/shekyl-chain-rules/src/rules/header_tests.rs`
+    `cen_b5_reads_the_state_at_the_connecting_height_not_the_tips_own` refuses
+    the tip's own root, and `rust/shekyl-chain-ingest/src/rpc_store_reads_tests.rs`
+    `the_tree_after_each_block_is_the_root_the_next_block_was_built_on` reads
+    each block's root as the next header's, past the first drain.
     §5 of the spec is rewritten to the state the header commits to (the
     "after processing all transactions" sentence is retired, records-was);
     register row was DIVERGENT until re-reviewed at the merged sha; both
