@@ -36,6 +36,8 @@ tracing = "0.1"
 
 [dev-dependencies]
 tempfile = "3"
+# The driver's stop-vs-ask race is tested on tokio's paused clock.
+tokio = { version = "1", default-features = false, features = ["macros", "rt", "sync", "time", "test-util"] }
 shekyl-onion-v3 = { path = "../shekyl-onion-v3" }
 
 [lints]
