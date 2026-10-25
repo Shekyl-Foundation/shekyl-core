@@ -55,5 +55,5 @@
 ## Sequencing
 
 - #1147 (PR 3n) lands with the wipe (S0 as amended).
-- The rebuild PR is briefed after PR 3b, before the flip: the flip is the first release whose file an operator keeps, so the rebuild should exist by then even though every pre-genesis release may still choose to wipe.
+- The rebuild PR comes after the flip, before genesis (FLIP-Q2, Rick 2026-10-24). Releases come from `main`, and every pre-genesis release wipes, so the flip is not the first file an operator keeps; the rebuild is on `DAEMON_REDB_STORE.md` §8.1's genesis checklist, not the flip's (`DRS_X_STORE_FLIP.md` §4).
 - "DRS-D10 implemented" on the genesis checklist is this PR.

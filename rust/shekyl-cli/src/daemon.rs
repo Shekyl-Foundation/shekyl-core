@@ -469,7 +469,7 @@ mod tests {
                 total_burned: shekyl_units::AtomicUnits::ZERO,
                 staker_emission_share_effective: 0,
             },
-            pool: InfoPool { tx_pool_size: 0 },
+            pool: InfoPool::Live { tx_pool_size: 0 },
             node: Hidden::Shown(InfoStatus {
                 start_time: 1,
                 free_space: 1,
