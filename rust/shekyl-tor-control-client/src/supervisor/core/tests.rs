@@ -1244,3 +1244,24 @@ fn tor_reaching_its_network_clears_the_network_causes_only() {
     assert_eq!(announces(&step), 0);
     assert_eq!(core.status().cause, Cause::TooManyFiles { open: 1024 });
 }
+
+/// The line reads whether dials failed, never how many (the dialer lane's
+/// #1190 keeps up to five Tor dials in flight): five failures landing at
+/// once leave the posture exactly where one does, and the count reaches no
+/// one, since Status carries only the stretch.
+#[test]
+fn the_line_reads_whether_dials_failed_not_how_many() {
+    let late = duration_ns(policy().quiet_after) + 1;
+    let mut seen = Vec::new();
+    for unopened in [1, 5] {
+        let (mut core, _) = Core::start(policy(), managed(true), 0);
+        reach_usable(&mut core);
+        let step = core.on(dials(0, unopened, 0), late);
+        seen.push((says_progress(&[step]), core.status()));
+    }
+    assert_eq!(
+        seen[0], seen[1],
+        "one failure and five are the same posture"
+    );
+    assert!(seen[0].1.tor_quiet.is_some());
+}
