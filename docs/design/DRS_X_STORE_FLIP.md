@@ -201,9 +201,9 @@ The splinter rule: a mechanism is deleted whole, in one PR. The join rule: no FF
   - the LMDB utilities (FOLLOWUPS, IG-Q26);
   - the C++ fee floor and its FFI (DX-Q10);
   - liblmdb from `shekyld` (DEL-004);
-- deletes every LMDB-bound C++ test, each with a sentence naming the rule it tested and where Rust covers it now;
+- deletes the remaining LMDB-bound C++ tests with their subjects: the tests of a C++ mechanism (the LMDB engine, its codecs and tables, the facts and submit shims, the restricted gate, the txpool timers, the segment-freeze pipeline, the rulings where Rust decides differently). The rule tests Rust already pins are deleted by PR 3d (#1187), each with its sentence. The rule tests Rust does **not** yet pin are listed in #1187; each needs its Rust pin before the flip deletes its C++ holder;
 - applies the `DAEMON_REDB_STORE.md` §12.1 gate retirements;
-- arms the `dev-rpc` row in the daemon config of every regtest harness that calls `generateblocks` or `pop_blocks` — the engine-core e2e runs, GF-7, the bench scripts and the Python framework — before dispatch reads the `armed` column (the review of #1165, ruling 1);
+- reads the method table's `armed` column in dispatch. Every regtest launcher that calls `generateblocks` or `pop_blocks` already arms the `dev-rpc` row and asserts the daemon's announcement of it (PR 3d, #1187: engine-core's `RegtestDaemon`, `drs_bench.py`'s generating seed, `wss_q1b_regtest_open_edge.sh`; the review of #1165, ruling 1);
 - hands the submit engine's shim (`RustPoolShim`) the service's `PoolHealth`, so a pool-file fault met on the submit path retires the pool as one met by the service, the pool handle or the chain handle does (the review of #1165, M5);
 - runs the RPC on a runtime of its own, never the node's: `pop_blocks` returns its bodies through `offer_carried`, which verifies each body's stateless half on the caller's runtime without a hasher permit (`span.rs`), bounded by the operator only because the lever is armed and the host's;
 - restates the two decisions `RPC_WIRE.md` carries that are bound to state the flip ends: RK-D7 (one implementation, `StoreFacts`, once the shims are deleted) and the per-lock-domain rule (over the Rust pool's lock and the store's MVCC snapshot, where today its example is `tx_memory_pool::check_for_key_images`).
