@@ -400,6 +400,12 @@ fn print_transaction(src: &Source, args: &[String]) -> Result<String, String> {
     if !reply.missed_tx.is_empty() {
         return Err(format!("Transaction wasn't found: {hash}"));
     }
+    if !reply.unavailable_tx.is_empty() {
+        return Err(format!(
+            "Transaction {hash} is not in the chain, and the daemon's pool is unavailable \
+             until it restarts: whether the pool holds it is not known"
+        ));
+    }
     let tx = match reply.txs.as_slice() {
         [] => return Err(format!("Transaction wasn't found: {hash}")),
         [tx] => tx,

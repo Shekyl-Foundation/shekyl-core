@@ -351,6 +351,16 @@ async fn fetch_transactions<R: Rpc>(
                     .collect(),
             ));
         }
+        // Not found is an answer; unavailable is none.
+        if !resp.unavailable_tx.is_empty() {
+            return Err(RpcError::TransactionsUnavailable(
+                resp.unavailable_tx
+                    .iter()
+                    .copied()
+                    .map(shekyl_rpc_types::HashHex::to_bytes)
+                    .collect(),
+            ));
+        }
         transactions.extend(parse_tx_batch(batch, &resp.txs, form)?);
     }
 
@@ -390,7 +400,8 @@ pub(crate) fn refuse_unless_ok(status: &RpcStatus, method: &'static str) -> Resu
 ///
 /// Pure (no transport) so the adversarial-daemon checks are unit-testable
 /// without an RPC mock. Every requested tx must be present (the caller turns a
-/// non-empty `missed_tx` into [`RpcError::TransactionsNotFound`] before calling
+/// non-empty `missed_tx` into [`RpcError::TransactionsNotFound`], and a
+/// non-empty `unavailable_tx` into [`RpcError::TransactionsUnavailable`], before calling
 /// here), and the daemon echoes present txs in request order — so the count
 /// must match and each entry's claimed `tx_hash` must equal the requested hash
 /// for its slot. That label check is the cheap failure, not the association:

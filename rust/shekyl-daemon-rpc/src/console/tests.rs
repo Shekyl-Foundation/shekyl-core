@@ -442,6 +442,7 @@ fn a_pruned_transaction_is_reported_pruned() {
         status: RpcStatus::ok(),
         txs: vec![entry],
         missed_tx: vec![],
+        unavailable_tx: Vec::new(),
     });
     let (_, out) = run(&["print_transaction", &hex::encode(txid)], Some(&addr));
     assert!(
@@ -487,6 +488,7 @@ fn an_echoed_label_over_a_substituted_body_is_refused() {
         status: RpcStatus::ok(),
         txs: vec![entry],
         missed_tx: vec![],
+        unavailable_tx: Vec::new(),
     };
     let addr = one_shot_raw(reply);
     let (code, out) = run(&["print_transaction", &hex::encode(requested)], Some(&addr));
@@ -548,6 +550,7 @@ fn a_substituted_pruned_body_is_refused_even_with_a_chosen_digest() {
         status: RpcStatus::ok(),
         txs: vec![entry],
         missed_tx: vec![],
+        unavailable_tx: Vec::new(),
     };
     let addr = one_shot_raw(reply);
     let (code, out) = run(&["print_transaction", &hex::encode(requested)], Some(&addr));
@@ -586,6 +589,7 @@ fn extra_transaction_entries_are_a_malformed_reply() {
         status: RpcStatus::ok(),
         txs: vec![entry(0x33), entry(0x34)],
         missed_tx: vec![],
+        unavailable_tx: Vec::new(),
     };
     let addr = one_shot(typed_reply(&reply));
     let (code, out) = run(&["print_transaction", &hex::encode(txid)], Some(&addr));
@@ -716,6 +720,7 @@ fn an_entry_for_a_different_hash_is_refused() {
         status: shekyl_rpc_types::RpcStatus::ok(),
         txs: vec![mined_entry(served)],
         missed_tx: Vec::new(),
+        unavailable_tx: Vec::new(),
     });
     let (_, out) = run(&["print_transaction", &hex::encode(asked)], Some(&addr));
     assert!(
@@ -733,6 +738,7 @@ fn an_entry_alongside_a_missed_hash_is_not_found() {
         status: shekyl_rpc_types::RpcStatus::ok(),
         txs: vec![mined_entry(asked)],
         missed_tx: vec![HashHex::from_bytes(asked)],
+        unavailable_tx: Vec::new(),
     });
     let (_, out) = run(&["print_transaction", &hex::encode(asked)], Some(&addr));
     assert!(
@@ -1226,7 +1232,7 @@ fn info_reply(height: u64) -> String {
             total_burned: shekyl_units::AtomicUnits::ZERO,
             staker_emission_share_effective: 0,
         },
-        pool: InfoPool { tx_pool_size: 4 },
+        pool: InfoPool::Live { tx_pool_size: 4 },
         node: Hidden::Shown(InfoStatus {
             start_time: 1_700_000_000,
             free_space: 1 << 40,
@@ -1248,7 +1254,7 @@ fn info_reply(height: u64) -> String {
             grey_peerlist_size: 20,
         })),
         host: Hidden::Shown(shekyl_rpc_types::InfoHost {
-            tx_pool_unbroadcast_count: 0,
+            tx_pool_unbroadcast_count: Some(0),
         }),
         restricted: false,
     })

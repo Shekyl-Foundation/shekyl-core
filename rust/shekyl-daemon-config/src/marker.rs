@@ -25,6 +25,16 @@ pub const MARKER_FILE: &str = "shekyld.network";
 /// its genesis, by the transport's one derivation.
 pub type NetworkId = [u8; 16];
 
+/// What a read of the marker found, with nothing written (IG-Q59).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MarkerRead {
+    /// The directory is missing, or holds no marker and no store: a start
+    /// would write the marker.
+    Absent,
+    /// The marker names this network and this id.
+    Matched,
+}
+
 /// What the marker said, or that it was written.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MarkerOutcome {
@@ -41,21 +51,21 @@ pub fn holds_store(data_dir: &Path) -> bool {
     data_dir.join("lmdb").join("data.mdb").is_file() || data_dir.join("p2pstate.bin").is_file()
 }
 
-/// Checks the marker under the lock, writing it when the directory is
-/// fresh. The `Lock` parameter is the proof the lock is held.
+/// Reads the marker and writes nothing: the configuration check's half,
+/// and the decision [`check_or_write`] makes before it writes (IG-Q59).
+/// Outside the lock the answer can change under the reader, so start asks
+/// again under it.
 ///
 /// # Errors
 /// `config.marker.network` for another network's data, `config.marker.network-id`
 /// for this network's name with another id, `config.marker.missing` for a
-/// store with no marker, `config.marker.unreadable` for a marker that cannot
-/// be read or parsed, and `config.data-dir.unusable` when the marker cannot
-/// be written.
-pub fn check_or_write(
-    lock: &Lock,
+/// store with no marker, and `config.marker.unreadable` for a marker that
+/// cannot be read or parsed.
+pub fn read(
+    data_dir: &Path,
     network: Network,
     network_id: NetworkId,
-) -> Result<MarkerOutcome, Diagnostic> {
-    let data_dir = lock.data_dir();
+) -> Result<MarkerRead, Diagnostic> {
     let path = data_dir.join(MARKER_FILE);
     let shown_dir = data_dir.display().to_string();
     match std::fs::read_to_string(&path) {
@@ -79,7 +89,7 @@ pub fn check_or_write(
                     .param("path", shown_dir)
                     .param("network", network.name()));
             }
-            Ok(MarkerOutcome::Matched)
+            Ok(MarkerRead::Matched)
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             if holds_store(data_dir) {
@@ -87,10 +97,36 @@ pub fn check_or_write(
                     .option("data-dir")
                     .param("path", shown_dir));
             }
+            Ok(MarkerRead::Absent)
+        }
+        Err(e) => Err(Diagnostic::new(Code::MarkerUnreadable, Source::Machine)
+            .option("data-dir")
+            .param("path", path.display().to_string())
+            .param("error", e.to_string())),
+    }
+}
+
+/// Checks the marker under the lock, writing it when the directory is
+/// fresh. The `Lock` parameter is the proof the lock is held; the read is
+/// [`read`], so the decision is written once.
+///
+/// # Errors
+/// [`read`]'s refusals, and `config.data-dir.unusable` when the marker
+/// cannot be written.
+pub fn check_or_write(
+    lock: &Lock,
+    network: Network,
+    network_id: NetworkId,
+) -> Result<MarkerOutcome, Diagnostic> {
+    let data_dir = lock.data_dir();
+    match read(data_dir, network, network_id)? {
+        MarkerRead::Matched => Ok(MarkerOutcome::Matched),
+        MarkerRead::Absent => {
+            let path = data_dir.join(MARKER_FILE);
             write(data_dir, &path, network, network_id).map_err(|e| {
                 Diagnostic::new(Code::DataDirUnusable, Source::Machine)
                     .option("data-dir")
-                    .param("path", shown_dir.clone())
+                    .param("path", data_dir.display().to_string())
                     .param(
                         "error",
                         format!("the network marker could not be written: {e}"),
@@ -98,10 +134,6 @@ pub fn check_or_write(
             })?;
             Ok(MarkerOutcome::Written)
         }
-        Err(e) => Err(Diagnostic::new(Code::MarkerUnreadable, Source::Machine)
-            .option("data-dir")
-            .param("path", path.display().to_string())
-            .param("error", e.to_string())),
     }
 }
 
@@ -168,6 +200,52 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let lock = Lock::take(&d.path().join("data")).unwrap();
         (d, lock)
+    }
+
+    #[test]
+    fn a_read_writes_nothing_and_sees_what_a_start_would() {
+        let d = tempfile::tempdir().unwrap();
+        let data = d.path().join("data");
+        // Missing directory: absent, and still missing.
+        assert_eq!(
+            read(&data, Network::Testnet, ID_A).unwrap(),
+            MarkerRead::Absent
+        );
+        assert!(!data.exists());
+        // An empty directory: absent, and no marker appears.
+        std::fs::create_dir(&data).unwrap();
+        assert_eq!(
+            read(&data, Network::Testnet, ID_A).unwrap(),
+            MarkerRead::Absent
+        );
+        assert!(!data.join(MARKER_FILE).exists());
+        // Marked by a start: matched, or the refusals a start returns.
+        let lock = Lock::take(&data).unwrap();
+        check_or_write(&lock, Network::Testnet, ID_A).unwrap();
+        drop(lock);
+        assert_eq!(
+            read(&data, Network::Testnet, ID_A).unwrap(),
+            MarkerRead::Matched
+        );
+        assert_eq!(
+            read(&data, Network::Mainnet, ID_A).unwrap_err().code,
+            Code::MarkerNetwork
+        );
+        assert_eq!(
+            read(&data, Network::Testnet, ID_B).unwrap_err().code,
+            Code::MarkerNetworkId
+        );
+        let before = std::fs::read(data.join(MARKER_FILE)).unwrap();
+        // A store with no marker, read without a lock: the same refusal.
+        let bare = d.path().join("bare");
+        std::fs::create_dir_all(bare.join("lmdb")).unwrap();
+        std::fs::write(bare.join("lmdb").join("data.mdb"), "").unwrap();
+        assert_eq!(
+            read(&bare, Network::Testnet, ID_A).unwrap_err().code,
+            Code::MarkerMissing
+        );
+        assert!(!bare.join(MARKER_FILE).exists());
+        assert_eq!(std::fs::read(data.join(MARKER_FILE)).unwrap(), before);
     }
 
     #[test]

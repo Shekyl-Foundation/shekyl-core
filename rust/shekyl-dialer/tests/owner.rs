@@ -12,15 +12,16 @@
 //! loopback opens the channel, and the read blocks it until the response
 //! arrives.
 
+#[path = "support/log_capture.rs"]
+mod log_capture;
+
+use log_capture::log_text;
 use std::collections::VecDeque;
-use std::io::{self, Write};
 use std::net::Ipv4Addr;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-
-use tracing_subscriber::fmt::MakeWriter;
 
 use shekyl_capped_stream::Session;
 use shekyl_dialer::{DialAim, Dialer};
@@ -719,37 +720,8 @@ fn a_synchronous_close_notification_finishes() {
     assert_eq!(dialer.kept_sessions(ConnectorId::Clearnet), 0);
 }
 
-struct LogBuf(Arc<Mutex<Vec<u8>>>);
-
-impl Write for LogBuf {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.lock().expect("log").extend_from_slice(buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-impl MakeWriter<'_> for LogBuf {
-    type Writer = LogBuf;
-
-    fn make_writer(&self) -> Self::Writer {
-        LogBuf(Arc::clone(&self.0))
-    }
-}
-
 fn warn_text(run: impl FnOnce()) -> String {
-    let buf = Arc::new(Mutex::new(Vec::new()));
-    let subscriber = tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::WARN)
-        .with_ansi(false)
-        .with_writer(LogBuf(Arc::clone(&buf)))
-        .finish();
-    tracing::subscriber::with_default(subscriber, run);
-    let bytes = buf.lock().expect("log").clone();
-    String::from_utf8(bytes).expect("utf-8")
+    log_text(tracing::Level::WARN, run)
 }
 
 fn warn_count(text: &str, needle: &str) -> usize {

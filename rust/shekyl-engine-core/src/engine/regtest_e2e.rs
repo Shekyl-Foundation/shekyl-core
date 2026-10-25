@@ -582,9 +582,11 @@ impl RegtestDaemon {
             .host
             .shown()
             .expect("the harness's listener is the host's, and is told the host-only part")
-            .tx_pool_unbroadcast_count;
+            .tx_pool_unbroadcast_count
+            .expect("the harness's pool is live");
         info.pool
-            .tx_pool_size
+            .tx_pool_size()
+            .expect("the harness's pool is live")
             .checked_add(unbroadcast)
             .expect("two pool counts fit a u64")
     }

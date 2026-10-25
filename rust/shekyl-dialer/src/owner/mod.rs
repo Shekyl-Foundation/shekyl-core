@@ -23,6 +23,7 @@
 mod address;
 mod handshake;
 mod ready;
+mod recovery;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
@@ -116,9 +117,9 @@ pub struct Shared {
     /// seeds, `--add-peer`), in the order given: what a stranded connector
     /// re-admits when no closed network is declared.
     configured: Vec<NetworkAddress>,
-    /// Which connectors are stranded: no kept session, nothing in flight,
-    /// and no drawable candidate at their last wake.
-    stranded: [bool; ConnectorId::COUNT],
+    /// The recovery episode each connector is in, if any. [`recovery`]
+    /// opens it on a stranded wake and closes it when recovery worked.
+    recovery: [Option<recovery::Recovery>; ConnectorId::COUNT],
     /// When the address file was last written or read; `None` until
     /// then, so the first due store is one interval after the open.
     last_store: Option<Tick>,
@@ -195,7 +196,7 @@ impl Dialer {
                 idle: [None; ConnectorId::COUNT],
                 exclusive: None,
                 configured: Vec::new(),
-                stranded: [false; ConnectorId::COUNT],
+                recovery: std::array::from_fn(|_| None),
                 last_store: None,
             })),
             nonces: HandshakeNonceSet::new(),
@@ -735,7 +736,9 @@ impl Dialer {
         let wake = plan_wake(&mut shared, &mut bans, connector, &live, now, rng);
         let (address, aim) = match wake {
             Wake::Recover => {
-                re_admit(&mut shared, &mut bans, connector, now, rng);
+                // `plan_wake` already reported this wake. A report that
+                // closed the episode opens the next one here.
+                recovery::re_admit(&mut shared, &mut bans, connector, now, rng);
                 return None;
             }
             Wake::Idle => return None,
@@ -748,7 +751,7 @@ impl Dialer {
 
 /// What one settled wake decided.
 enum Wake {
-    /// No kept session, nothing in flight, and no drawable candidate.
+    /// Under the target, nothing in flight, and no drawable candidate.
     /// The caller re-admits the configured population and dials nothing.
     Recover,
     /// This wake dials nothing.
@@ -798,7 +801,7 @@ fn plan_wake<R: RelayRng + ?Sized>(
     let target = shared.targets[index];
     let own = shared.own[index].clone();
     let exclusive = shared.exclusive.clone();
-    let (wake, undrawn) = {
+    let (wake, undrawn, kept) = {
         let Shared {
             lists,
             attempts,
@@ -834,11 +837,11 @@ fn plan_wake<R: RelayRng + ?Sized>(
             gray_candidates: seats.gray_candidates,
         };
         let undrawn = idle_if_undrawn(&census);
-        // A connector with a target, no kept session, nothing in flight and
-        // no drawable candidate cannot get itself a peer. Recovery re-admits
-        // after this borrow ends; this wake dials nothing.
-        let stranded = target > 0
-            && kept == 0
+        // Stranded: under the target, nothing in flight, nothing drawable.
+        // The lists cannot yield another peer, so this wake re-admits and
+        // dials nothing. One kept session is not a healthy connector
+        // (dialer brief, "Recovery").
+        let stranded = kept < target
             && in_flight == 0
             && census.white_candidates == 0
             && census.gray_candidates == 0;
@@ -872,16 +875,18 @@ fn plan_wake<R: RelayRng + ?Sized>(
                 }
             }
         };
-        (wake, undrawn)
+        (wake, undrawn, kept)
     };
+    // `kept` is the count before this wake's dial. A session the previous
+    // wake kept is visible here, including when this wake is stranded.
+    let drawn = match &wake {
+        Wake::Drawn { address, .. } => Some(address),
+        Wake::Recover | Wake::Idle => None,
+    };
+    recovery::report_wake(&mut shared.recovery[index], connector, kept, target, drawn);
     let wake = match wake {
-        Wake::Recover => Wake::Recover,
-        Wake::Idle => {
-            note_recovered(shared, connector);
-            Wake::Idle
-        }
+        Wake::Recover | Wake::Idle => wake,
         Wake::Drawn { address, aim } => {
-            note_recovered(shared, connector);
             if shared.attempts[index].begin(&address, aim) {
                 Wake::Drawn { address, aim }
             } else {
@@ -896,44 +901,6 @@ fn plan_wake<R: RelayRng + ?Sized>(
     };
     note_idle(shared, connector, idle);
     wake
-}
-
-/// Re-admit the closed network, or the configured seeds and `--add-peer`,
-/// as operator-named gray. Already seated is quiet. A refusal is said.
-fn re_admit<R: RelayRng + ?Sized>(
-    shared: &mut Shared,
-    bans: &mut BanSnapshot,
-    connector: ConnectorId,
-    now: Tick,
-    rng: &mut R,
-) {
-    let population: Vec<NetworkAddress> = match &shared.exclusive {
-        Some(population) => population.iter().cloned().collect(),
-        None => shared.configured.clone(),
-    };
-    let mut admitted = 0usize;
-    for address in population
-        .iter()
-        .filter(|address| Peerlist::connector_of(address) == Some(connector))
-    {
-        match shared
-            .lists
-            .admit_gray(address, Source::Operator, now, bans, rng)
-        {
-            Ok(true) => admitted += 1,
-            Ok(false) => {}
-            Err(refusal) => tracing::warn!(
-                "{connector:?}: configured address {address:?} was not re-admitted: {refusal:?}"
-            ),
-        }
-    }
-    let index = connector.index();
-    if !shared.stranded[index] {
-        shared.stranded[index] = true;
-        tracing::info!(
-            "{connector:?}: no kept session, nothing in flight and no drawable candidate; re-admitted {admitted} configured address(es) to gray"
-        );
-    }
 }
 
 /// Count an under-target wake that dialed nothing. The first time the
@@ -963,16 +930,5 @@ fn note_idle(shared: &mut Shared, connector: ConnectorId, why: Option<IdleWhy>) 
                 warned: false,
             })
         }
-    }
-}
-
-/// The connector drew, or a dial is in flight, after a stranded wake.
-fn note_recovered(shared: &mut Shared, connector: ConnectorId) {
-    let index = connector.index();
-    if shared.stranded[index] {
-        shared.stranded[index] = false;
-        tracing::info!(
-            "{connector:?}: no longer stranded; a candidate is drawable or a dial is in flight"
-        );
     }
 }
