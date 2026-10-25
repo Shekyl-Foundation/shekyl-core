@@ -50,11 +50,30 @@ pub async fn read_due<F: ShardFacts, H: HolderSource>(
     due: &DueRead,
     budget: NeedBudget,
 ) -> ReadOutcome {
+    match attempt_due(scheduler, due, budget).await {
+        Ok(record) => ReadOutcome::Pass(Box::new(record)),
+        Err(failure) => classify(&failure),
+    }
+}
+
+/// [`read_due`], with the failure itself when the read did not pass: the
+/// pass record, or what the scheduler reported. For a caller that logs why
+/// a read ended (the ingest crate's task does, at debug).
+///
+/// # Errors
+///
+/// The scheduler's [`ReadFailure`]; a receipt of another width than the
+/// record holds is a malformed envelope.
+pub async fn attempt_due<F: ShardFacts, H: HolderSource>(
+    scheduler: &FetchScheduler<F, H>,
+    due: &DueRead,
+    budget: NeedBudget,
+) -> Result<BundleRecord, ReadFailure> {
     let nonce = SuppliedNonce {
         stream: due.key.stream,
         nonce: due.nonce,
     };
-    match scheduler
+    let read = scheduler
         .read_from_nonce(
             &receipt_holder(due),
             due.shard,
@@ -62,22 +81,20 @@ pub async fn read_due<F: ShardFacts, H: HolderSource>(
             Arc::new(DiscardTxs),
             budget,
         )
-        .await
-    {
-        Ok(read) => {
-            let receipt = read.shard.signature().to_canonical_bytes();
-            let Ok(receipt) = receipt.try_into() else {
-                return ReadOutcome::Answered(Answered::Refused);
-            };
-            ReadOutcome::Pass(Box::new(BundleRecord {
-                attempt: due.key.attempt,
-                anchor_height: read.header.anchor_height(),
-                delivery_digest: *read.shard.delivery_digest(),
-                receipt,
-            }))
-        }
-        Err(failure) => classify(&failure),
-    }
+        .await?;
+    let receipt = read.shard.signature().to_canonical_bytes();
+    let receipt = receipt.try_into().map_err(|_| ReadFailure::Exhausted {
+        attempts: vec![shekyl_archival_fetch_sched::Attempt {
+            holder: due.persona,
+            error: FetchError::Malformed(shekyl_archival_fetch_sched::Malformed::Envelope),
+        }],
+    })?;
+    Ok(BundleRecord {
+        attempt: due.key.attempt,
+        anchor_height: read.header.anchor_height(),
+        delivery_digest: *read.shard.delivery_digest(),
+        receipt,
+    })
 }
 
 /// A failed read in the producer's two classes (§5.3).
@@ -104,21 +121,31 @@ pub fn classify(failure: &ReadFailure) -> ReadOutcome {
 }
 
 /// Whether a refusal is an identity-scheme reply read under a receipt-key
-/// target. The ceiling the client holds a reply to is the frame's ceiling
-/// from the requester's rows plus the receipt envelope. A body within its
-/// frame ceiling closed with the identity envelope instead declares more
-/// than that ceiling by at most the difference between the two envelopes,
-/// and the client refuses it from the head (`Oversize`). An excess past
-/// that is no envelope of either scheme: a refusal like any other.
+/// target. The client reads it one of two ways, by the shard's size
+/// (`FN_DSA_HYBRID.md` §9.3):
+///
+/// - The ceiling it holds a reply to is the frame's ceiling from the
+///   requester's rows plus the receipt envelope. A reply that the wider
+///   identity envelope takes past that ceiling declares more by at most
+///   the difference between the two envelopes, and is refused from the
+///   head (`Oversize`).
+/// - A reply under the ceiling is read: the receipt-width envelope is the
+///   tail of the identity signature, the whole frame parses, and exactly
+///   the difference is left ahead of the envelope (`FrameLong`).
+///
+/// Any other excess is no envelope of either scheme: a refusal like any
+/// other.
 fn other_scheme(error: &FetchError) -> bool {
     use shekyl_archival_fetch_sched::{Malformed, IDENTITY_ENVELOPE_LEN, RECEIPT_ENVELOPE_LEN};
     let wider = u64::try_from(IDENTITY_ENVELOPE_LEN.saturating_sub(RECEIPT_ENVELOPE_LEN))
         .expect("an envelope width fits u64");
-    matches!(
-        error,
-        FetchError::Malformed(Malformed::Oversize { declared, max })
-            if declared.checked_sub(*max).is_some_and(|excess| excess <= wider)
-    )
+    match error {
+        FetchError::Malformed(Malformed::Oversize { declared, max }) => declared
+            .checked_sub(*max)
+            .is_some_and(|excess| excess <= wider),
+        FetchError::Malformed(Malformed::FrameLong { left }) => *left == wider,
+        _ => false,
+    }
 }
 
 #[cfg(test)]

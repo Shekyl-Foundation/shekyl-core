@@ -222,9 +222,11 @@ async fn an_identity_endpoint_is_the_serving_sides_scheme() {
 }
 
 /// An excess past what an identity envelope can add is not the serving
-/// side's scheme, and neither is any other malformation. Red edit: drop
-/// the bound on the excess — a hostile oversized reply logs as the
-/// identity scheme.
+/// side's scheme, a frame with other than exactly the envelopes'
+/// difference left over is not, and neither is any other malformation.
+/// Red edits: drop the bound on the excess — a hostile oversized reply
+/// logs as the identity scheme; ignore the leftover count — any long frame
+/// does.
 #[test]
 fn only_an_identity_envelopes_excess_is_the_serving_sides_scheme() {
     use shekyl_archival_fetch_sched::{
@@ -253,10 +255,18 @@ fn only_an_identity_envelopes_excess_is_the_serving_sides_scheme() {
         ended(oversize(1_001 + wider)),
         ReadOutcome::Answered(Answered::Refused)
     );
+    let long = |left: u64| FetchError::Malformed(Malformed::FrameLong { left });
     assert_eq!(
-        ended(FetchError::Malformed(Malformed::FrameLong)),
-        ReadOutcome::Answered(Answered::Refused)
+        ended(long(wider)),
+        ReadOutcome::Answered(Answered::ServingScheme)
     );
+    for left in [1, wider - 1, wider + 1] {
+        assert_eq!(
+            ended(long(left)),
+            ReadOutcome::Answered(Answered::Refused),
+            "{left} bytes left"
+        );
+    }
     assert_eq!(
         ended(FetchError::Miss),
         ReadOutcome::Answered(Answered::Refused)

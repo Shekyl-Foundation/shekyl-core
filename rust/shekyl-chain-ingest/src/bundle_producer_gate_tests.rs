@@ -56,7 +56,7 @@ use shekyl_wire::Ct;
 use tokio::sync::watch;
 
 use crate::archival_driver::{first_spending_height, ENDPOINT, FEE};
-use crate::bundle_producer::{read_through, run, ProducerParts, ProducerProgress, ProducerSeat};
+use crate::bundle_producer::{run, ProducerParts, ProducerProgress, ProducerSeat};
 use crate::connector::{TipChanged, WatchTip};
 use crate::scenario::{FreeHash, Mined, Scenario};
 use crate::scenario_archival::{shard_set, Persona};
@@ -191,6 +191,8 @@ struct Producing {
     progress: watch::Receiver<ProducerProgress>,
     tips: watch::Receiver<TipChanged>,
     task: tokio::task::JoinHandle<()>,
+    /// How each read that did not pass was classified, in order.
+    ended: Arc<std::sync::Mutex<Vec<shekyl_bundle_producer::ReadOutcome>>>,
 }
 
 async fn start(
@@ -204,9 +206,35 @@ async fn start(
         Arc::new(StoreHolderSource::new(Arc::clone(&store))),
         client,
     ));
+    // A read that does not pass is named on the test's output with the
+    // scheduler's failure, so a red run says which read ended how, and its
+    // classification is kept for the test to judge.
+    let ended = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let ended_by_reads = Arc::clone(&ended);
+    let read: crate::bundle_producer::ReadFn = Arc::new(move |due| {
+        let scheduler = Arc::clone(&scheduler);
+        let ended = Arc::clone(&ended_by_reads);
+        Box::pin(async move {
+            let key = due.key;
+            match shekyl_bundle_producer::read::attempt_due(&scheduler, &due, NeedBudget::DEFAULT)
+                .await
+            {
+                Ok(record) => shekyl_bundle_producer::ReadOutcome::Pass(Box::new(record)),
+                Err(failure) => {
+                    eprintln!("gate: read {key:?} failed: {failure:?}");
+                    let outcome = shekyl_bundle_producer::read::classify(&failure);
+                    ended
+                        .lock()
+                        .expect("the outcome list")
+                        .push(outcome.clone());
+                    outcome
+                }
+            }
+        })
+    });
     let seat = ProducerSeat {
         witness: Arc::clone(ring),
-        read: read_through(scheduler, NeedBudget::DEFAULT),
+        read,
     };
     let parts = ProducerParts {
         connector: scenario.connector().clone(),
@@ -223,6 +251,7 @@ async fn start(
         progress,
         tips: watched,
         task,
+        ended,
     }
 }
 
@@ -443,6 +472,17 @@ async fn a_produced_bundle_is_admitted_and_connects_through_the_staged_door() {
         no_pass.expect("a block with draws filed while P signed with an identity key");
     assert!(reference.count() > 0);
     assert_eq!(reference.passes().popcount(), 0, "no read was a receipt");
+    // Every read under the identity key was recognised as the serving
+    // side's scheme, the line the live path logs, not a refusal.
+    let ended = producing.ended.lock().expect("the outcome list").clone();
+    assert!(!ended.is_empty(), "the live path read");
+    assert!(
+        ended.iter().all(|outcome| *outcome
+            == shekyl_bundle_producer::ReadOutcome::Answered(
+                shekyl_bundle_producer::Answered::ServingScheme
+            )),
+        "{ended:?}"
+    );
     while tip_of(&chain) < h.saturating_add(BlockCount::from_raw(W2)) {
         step(&mut scenario, &mut chain, &mut producing, &p_tip, false).await;
     }

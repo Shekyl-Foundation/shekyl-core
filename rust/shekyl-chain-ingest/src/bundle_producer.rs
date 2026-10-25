@@ -96,9 +96,22 @@ where
 {
     Arc::new(move |due: DueRead| {
         let scheduler = Arc::clone(&scheduler);
-        Box::pin(
-            async move { shekyl_bundle_producer::read::read_due(&scheduler, &due, budget).await },
-        )
+        Box::pin(async move {
+            let key = due.key;
+            match shekyl_bundle_producer::read::attempt_due(&scheduler, &due, budget).await {
+                Ok(record) => ReadOutcome::Pass(Box::new(record)),
+                Err(failure) => {
+                    tracing::debug!(
+                        h = key.h.to_raw(),
+                        draw = key.draw,
+                        attempt = key.attempt,
+                        "a challenge read of block {} did not pass: {failure}",
+                        key.h.to_raw()
+                    );
+                    shekyl_bundle_producer::read::classify(&failure)
+                }
+            }
+        })
     })
 }
 
