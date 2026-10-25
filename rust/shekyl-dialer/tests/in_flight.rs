@@ -48,12 +48,15 @@ fn census(attempts: &Attempts, white: usize, gray: usize) -> Census {
     }
 }
 
-/// The interim bound is one dial per connector until the derivation lands;
-/// clearnet's behaviour is unchanged at one (the brief's test 5).
+/// The bounds as derived (2026-10-25): Tor five, the smallest that fills
+/// the target within one stem epoch with half the draws dead; clearnet
+/// stays at one, so its behaviour is unchanged (the brief's test 5). Never
+/// more than the connector's target.
 #[test]
-fn the_interim_bound_is_one_dial_per_connector() {
+fn the_bounds_are_tor_five_and_clearnet_one_and_never_past_the_target() {
     assert_eq!(in_flight_bound(ConnectorId::Clearnet), 1);
-    assert_eq!(in_flight_bound(ConnectorId::Tor), 1);
+    assert_eq!(in_flight_bound(ConnectorId::Tor), 5);
+    assert!(in_flight_bound(ConnectorId::Tor) <= TARGET);
 }
 
 /// **The target is the ceiling at any bound** (the brief's test 2). With

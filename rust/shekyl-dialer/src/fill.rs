@@ -18,20 +18,27 @@ use shekyl_peerlist::ConnectorId;
 ///
 /// Protocol data, the same on every node (rule 71: the network selects
 /// data, never control flow). The bound limits concurrency; the wake pace
-/// (R3) still limits the rate, one dial per wake. Every `Keep` dial is
+/// (R3) still limits the rate, one launch per wake. Every `Keep` dial is
 /// also under the target: the `Keep` count includes pending `Keep`
 /// attempts ([`crate::Attempts::kept_count`]), so `kept < target` is
 /// already kept sessions plus in-flight keeps under the target. A
 /// `Confirm` dial counts toward this bound and not toward the target, so
 /// the descriptors a connector can hold are its target plus this bound.
 ///
-/// **Assumption** (`DAEMON_RELAY_PRIVACY.md` §97, "In-flight dial bound"):
-/// the interim bound, one dial per connector (2026-10-08), until the
-/// per-connector derivation lands.
+/// - **Tor: 5. Derived** (`DAEMON_RELAY_PRIVACY.md` §97, "In-flight dial
+///   bound"; `docs/benchmarks/p2p_tor_inflight_bound_20261025.md`): the
+///   smallest bound whose median fill of the 12-session target, when half
+///   the draws are dead and run to the 120 s dial deadline, is within one
+///   stem epoch (600 s). Five gives 517 s; four gives 603 s. Past six the
+///   fill stops improving (about 490 s): pending dead keeps hold target
+///   slots. To be measured on the floor device.
+/// - **Clearnet: 1.** A clearnet dial ends within 1.4 s, so one at a time
+///   costs a wake or two; the interim (2026-10-08) stands.
 #[must_use]
 pub const fn in_flight_bound(connector: ConnectorId) -> usize {
     match connector {
-        ConnectorId::Clearnet | ConnectorId::Tor => 1,
+        ConnectorId::Clearnet => 1,
+        ConnectorId::Tor => 5,
     }
 }
 

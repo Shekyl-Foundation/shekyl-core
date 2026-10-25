@@ -22,7 +22,8 @@ use shekyl_peerlist::{
 /// A small floor and refill line, so the grid crosses both.
 const FLOOR: usize = 3;
 const REFILL: usize = 5;
-/// The bound the grid is read at: one dial in flight stops the wake.
+/// The bound the grid is read at: one dial in flight stops the wake. The
+/// rules do not read the bound beyond that check.
 const BOUND: usize = 1;
 
 fn grid() -> Vec<Census> {
