@@ -1734,13 +1734,26 @@ the bytes its wider envelope adds (`FN_DSA_HYBRID.md` §9.3: refused from
 the head on a small shard, exactly that many bytes left ahead of the
 envelope on a larger one), files the block
 with no passes, and is logged once per block as "no receipt scheme on the
-serving side yet". A block files when every read has settled. The last
-planned read is at `h + W₂ − M` (`M` = 30); a read still in flight then is
-waited for until `h + W₂ − 1`, the last tip whose next block is inside the
-window, and at that tip every draw not yet read is abandoned and the block
-files with what passed. A block with no draws on either stream files
-nothing (`SCS-P33`). A block of this daemon's that replaces a popped one
-at its height is claimed in the popped one's place.
+serving side yet". A block files when every read has settled. No read
+starts after `h + W₂ − M` (`M` = 30): at that tip every read not yet
+started is abandoned, and a read in flight is waited for (ruled
+2026-10-25). The wait is bounded by one read. A started read holds one of
+the client's slots, and the producer starts no more reads than the client
+has (`READS_AT_ONCE`, nearest deadline first), so it never queues; it is
+then at most `NeedBudget::fetches_per_holder` fetches of the drawn persona,
+each within `Timeouts::fetch_ceiling`: `READ_CEILING`, 2,160 s or
+`READ_CEILING_BLOCKS` = 18 blocks at the 120 s target, which the build
+holds below `M − 1`. So at the target interval the read ends before
+`h + W₂ − 1`, the last tip whose next block is inside the window; that tip
+files whatever is still out, the backstop for a run of fast blocks during
+a read that stalls to its limit. A read that finds no slot has not
+started and is abandoned at the deadline like any other: capacity the
+producer lacks costs abandoned draws, priced with the floor's read
+capacity (`floor_read_capacity_pairs_per_epoch`), never the margin. A
+block with no draws on either stream files nothing (`SCS-P33`). A block of this daemon's that replaces a popped one
+at its height is claimed in the popped one's place, and a read of the
+popped block still out does not settle the new block's draw (the read is
+keyed by the block's hash).
 
 **The draws** come from the connector, which holds the drawable memo:
 `draw_targets` derives them with `select_pairs` and `support_seats`, the

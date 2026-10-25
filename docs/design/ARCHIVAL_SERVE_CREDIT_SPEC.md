@@ -441,18 +441,25 @@ bound `K`.
 - **Ordering.** The client builds no bundle for `h` until every read of
   `h` has completed or been abandoned. A bundle reveals the seed, and
   the seed exposes that block's remaining reads.
-- **Filing.** The client files the bundle by `h + W₂ − M`, with `M = 30`
-  blocks (PROVISIONAL, §13.2), so that inclusion latency and an ordinary
-  reorg leave it inside its window. A bundle with no passes is filed all
-  the same (§7.1).
+- **Filing.** The client starts no read after `h + W₂ − M`, with
+  `M = 30` blocks (PROVISIONAL, §13.2), and files the bundle once every
+  read has completed or been abandoned, so that inclusion latency and an
+  ordinary reorg leave it inside its window. At `h + W₂ − M` every read
+  not yet started is abandoned and a read in flight is waited for
+  (ruled 2026-10-25): the wait is bounded by one read, whose ceiling
+  (its fetches' timeouts, in blocks at the target interval) is held below
+  `M − 1`, so it ends before `h + W₂ − 1`. That tip, the last whose next
+  block is inside the window, files whatever is still out. A bundle with
+  no passes is filed all the same (§7.1).
 - **Built** (`SO-D12` increment 4c, `ARCHIVAL_SETTLEMENT_WRITER.md`
   §16.11): `shekyl-bundle-producer`'s read plan and state machine, with
   `K` as `CHALLENGE_READS`, the spacing as `READ_SPACING` and `M` as
   `FILING_MARGIN`, each PROVISIONAL here. The plan is drawn from the
-  daemon's own randomness when `h` connects. A read planned at
-  `h + W₂ − M` itself cannot also file at that height: at `h + W₂ − M`
-  the producer abandons every read not yet started and waits for one in
-  flight, inside the margin, filing at the latest at `h + W₂ − 1`.
+  daemon's own randomness when `h` connects. The read's ceiling is
+  `read::READ_CEILING_BLOCKS` (18 blocks at the production timeouts, of
+  `M = 30`), checked at build time. A started read holds one of the
+  client's slots and the producer starts no more reads than it has, so
+  a started read never queues; a read that finds no slot has not started.
 
 The request header, `P`'s gate and `P`'s serving route are as
 [`ARCHIVAL_SERVING_ROUTE.md`](ARCHIVAL_SERVING_ROUTE.md) states them.
@@ -1718,7 +1725,7 @@ under rule 21 as a re-alignment.
 | `SCS-P15` | Partial inclusion, refusal, and forced inclusion | **None of the three exists.** A valid bundle's validity depends only on the chain through `h`, its own bytes and the `h_open(E)` snapshot, so no node can refuse it. No rule acts on a bundle's absence. Non-inclusion through all of `W₂` is NonObservation for `h`, never misses (§9.1) |
 | `SCS-P16` | What `SCS-P14` reverses | **`SCS-P11` is reversed:** the pass is carried by the block-level bundle. The serve-credit input, the `serve_credit_only` class and the CEN-J rows are superseded, and the successors of J8–J10 are block rules (CEN-J29 to J37). *Re-ruled 2026-10-12:* superseded is not deleted; landed Rust stays until the cutover decides it (§11.1). `SCV-4` (one record for one fact) and R-B (the producer is the witness) still hold. **Fail-whole is the bundle's** (proposal §7.6.2 (B)): a refused bundle is a producer defect, corrected and filed again; admitting records one at a time stays rejected. **`n ≥ 1` is dropped:** R7 holds by structure. The set commitment becomes the bundle commitment, and `serve_credit_batch_commitment` and the §7.3 vectors are regenerated |
 | `SCS-P17` | Where the bundle sits and what commits to it | **Beside the block, not in the block blob.** The header root covers each bundle in `h` order: its kept bytes and a hash of its prunable bytes. Kept: the seed, `h`, and a pass bitmap of exactly `count(h)` bits, which replaces the list of `j`. Prunable: the witness key and signature, and per record the receipt, delivery digest, anchor and `attempt`. Settlement reads only kept data (§7.2, §7.3) |
-| `SCS-P18` | The admission window against reorgs | **`W₂` stays the only consensus window**; the miss deadline and the beacon do not move. **`W₂ + D_max` is REJECTED.** The challenger files by `h + W₂ − M`, `M = 30` blocks, PROVISIONAL and challenger policy. Reopen: testnet shows honest bundles lost at a meaningful rate |
+| `SCS-P18` | The admission window against reorgs | **`W₂` stays the only consensus window**; the miss deadline and the beacon do not move. **`W₂ + D_max` is REJECTED.** The challenger starts no read after `h + W₂ − M`, `M = 30` blocks, PROVISIONAL and challenger policy; a read in flight then is waited for, bounded by one read's ceiling below `M − 1` (ruled 2026-10-25, §5.3). Reopen: testnet shows honest bundles lost at a meaningful rate |
 | `SCS-P19` | The height the receipt key is read at | **The `h_open(E)` bond snapshot, the one `D` is drawn from.** One snapshot type with two methods, taken as an argument by the draw and by the bundle rule. No setting. The settlement filter of `SCS-P12` keeps its own read at `h` (§9.1) |
 | `SCS-P20` | How much bundle a block may carry | **A budget counted in draws:** the admitted bundles' `count(h)` sum to at most `c · 9·D / SEB`, `D` of the including block's epoch, `c = 2` PROVISIONAL. Templates take the earliest `h` first. `MAX_ATTESTATION_RECORDS = 256` cannot stay fixed. *As ruled; the formula and the charge were amended since:* the budget is `c · (⌊9·D / SEB⌋ + 1)` with `D` the largest among the epochs of the bundles in the section (`SCS-P33`), and a bundle is charged `max(count, 1)` (`SCS-P40`). §7.4 states the rule in force |
 | `SCS-P21` | Weight | **The section is outside the fee median and the penalty curve** and displaces no fee-paying transaction. This dissolves two items of the FOLLOWUPS row *Serve-credit inclusion incentive and archival weight pricing*: unpaid inclusion and the cap raise |
