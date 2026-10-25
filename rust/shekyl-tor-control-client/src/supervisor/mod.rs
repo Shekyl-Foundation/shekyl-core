@@ -25,5 +25,5 @@ pub use core::{Action, Core, Input, ManagedRunning, Policy, Step};
 pub use events::input_of;
 pub use posture::{
     fixes, held_sentence, install_sentence, own_tx, render, BootstrapLine, Cause, Connectors,
-    ManagedTorFix, OriginVerdict, OwnTx, Shown, Status, Syncing, TorSetting,
+    ManagedTorFix, OriginVerdict, OwnTx, Shown, Space, Status, Syncing, TorSetting,
 };

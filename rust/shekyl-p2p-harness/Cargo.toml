@@ -49,8 +49,9 @@ shekyl-draw-rng = { path = "../shekyl-draw-rng", features = ["splitmix"] }
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 
 [features]
-# The floor-device job's loopback sync of 50,000 headers
-# (`.github/workflows/cs2-long-run.yml`). `cargo test` does not build it.
+# The floor-device job's loopback figures: hash rate per slot and the body
+# phase (`.github/workflows/cs2-long-run.yml`). `cargo test` does not
+# build them.
 cs2-long-run = []
 
 [lints]
