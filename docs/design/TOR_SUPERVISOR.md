@@ -863,6 +863,22 @@ the Windows CI job beside the boot-and-stop smoke test (#1072), and in
   again). A death 5 s after a recovery respawned after 2.2 s (no reset
   inside a cap).
 
+**Refuse block under `TSR-Q14`, 2026-10-25** (#1188's build; the default
+route deleted for 10 minutes, so every connect fails at once):
+
+- **What Tor said:** nothing. No `NETWORK_LIVENESS`, no
+  `CIRCUIT_NOT_ESTABLISHED`, no bootstrap problem, and its sampled view
+  stayed `network-liveness=up`, `status/circuit-established=1` throughout.
+- **What the operator saw:** the neutral line only, 4 min 28 s into the
+  block ("No connection through Tor is open, and none has opened in 5 min
+  23 s"). No cause, no respawn.
+- **Dials:** every Tor dial in the block ended at Tor's `0x06` at 105–106 s,
+  never at the dial deadline; the first got `0xF0`, the descriptor fetch
+  failing locally. A dial opened 6 s after the unblock.
+- **Not run:** a blackhole block (silent drop). `pasta` cannot drop
+  silently; it runs on the floor device with `tc`, with the soak. If Tor is
+  silent there too, the runs are a report for the Tor Project.
+
 | Case | Expected | Apparatus |
 | --- | --- | --- |
 | kill the Tor child | respawn; the same onion republished; the dialer resumes; no draws while down | a kill by PID (`kill -9`, `taskkill /F`) |
