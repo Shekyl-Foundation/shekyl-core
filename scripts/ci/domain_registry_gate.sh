@@ -30,7 +30,17 @@
 #   • Every `frozen-inherited` row is documented in
 #     docs/FROZEN_DOMAIN_SEPARATORS.md (the consequence table cannot silently
 #     drop a frozen DST — this is why that doc is in the workflow trigger).
-#   • Mech IDs are well-formed (`1`..`6` or `x`).
+#   • Mech-7 (Noise BLAKE2s labels) cannot grow a new entry point without
+#     bumping its count-pin. The entry points are the four consumers the
+#     registry's mechanism-7 line names: the handshake hash's prologue
+#     (`SymmetricState::new`, aliased `Sym::new` in shekyl-p2p-transport), the
+#     record layer's header key (`hkdf_from_record_key`), and the RPC
+#     channel's mac1 key and busy reply (`Blake2s256::new`, `Blake2sMac<`).
+#   • Every production `const NAME: &[u8] = b"Noise_..."` declaration has an
+#     excluded (mech x) row at its file. A Noise protocol name is mixed into a
+#     handshake hash, and it is a standard pattern name, not a Shekyl domain
+#     string, which is why it is excluded and not registered under mech 7.
+#   • Mech IDs are well-formed (`1`..`7` or `x`).
 #
 # WHAT THIS GATE DOES NOT GUARANTEE:
 #   • Completeness for mechanisms 2 (HKDF), 4 (Blake2b), 5 (keccak), 6 (SHA3-256
@@ -41,12 +51,22 @@
 #     Hkdf/Blake2b/keccak/Sha3_256 domain-like string sites) plus the
 #     distinctness test once a row exists. Do not invent a half-broken inverse
 #     scanner that creates false confidence (rule 15/16 pre-genesis cleanliness).
+#   • For mech 7, a new label fed through an EXISTING entry point (one more
+#     `update(...)` on the mac1 hasher, say) moves no pin. The pin catches a
+#     new site; a new label at an old site is the same review duty as above.
+#   • The protocol-name tripwire sees `const` declarations only. A bare
+#     `b"Noise_..."` literal is a test fixture in this tree (shekyl-noise's
+#     symmetric-state tests, the P2P BLAKE2b negative control); a production
+#     protocol name is a named constant.
 #
 # TRIPWIRE 1 — row-presence + const binding (all rows, every mechanism).
 # TRIPWIRE 2 — entry-point count-pins (mech 1 cSHAKE; mech 3 FROST transcript
 #              free-form labels; mech 3 FROST ciphersuite ID/CONTEXT in
 #              shekyl-fcmp-proofs — the four registered FROST forms are covered
-#              between these pins and row-presence).
+#              between these pins and row-presence; mech 7 Noise BLAKE2s
+#              labels).
+# TRIPWIRE 3 — every production Noise protocol-name constant is an excluded
+#              row at its file.
 #
 # Requires ripgrep (rg). CI installs it in an explicit step before this runs.
 set -uo pipefail
@@ -394,7 +414,61 @@ if [[ "$mech3_cs" != "$MECH3_CIPHERSUITE_EXPECTED" ]]; then
   fail=1
 fi
 
-echo "count-pins: mech1(cSHAKE)=$mech1 mech3(transcript)=$mech3_tx mech3(ciphersuite)=$mech3_cs"
+# --- mech 7: Noise BLAKE2s label entry points ---
+# RT-W9 step 6 (2026-10-23, close-out D3): 32. The four consumers the
+# registry's mechanism-7 line names, counted as mech 1 is (production trees,
+# comments stripped, inline #[cfg(test)] sites included, a `fn` definition
+# line included because it matches):
+#   SymmetricState::new(  9  (rpc-channel handshake 1, shekyl-noise tests 8)
+#   Sym::new(             3  (shekyl-p2p-transport's alias of SymmetricState;
+#                             without the alias the P2P prologue sites are
+#                             invisible)
+#   hkdf_from_record_key( 14 (the definition, the classed framer's 4, the
+#                             direction tests' 9)
+#   Blake2s256::new(      4  (mac1 key 1, mix_hash 1, HMAC inner/outer 2)
+#   Blake2sMac<           2  (the busy reply's keyed hasher: type, constructor)
+# A new site is a new place a label can meet the handshake's BLAKE2s:
+# register the label in $REGISTRY under mech 7 (or x, with the reason) and
+# update the pin.
+MECH7_EXPECTED=32
+mech7=$(count_pattern 'SymmetricState::new\(|\bSym::new\(|hkdf_from_record_key\(|Blake2s256::new\(|Blake2sMac<')
+if [[ "$mech7" != "$MECH7_EXPECTED" ]]; then
+  echo "COUNT DRIFT mech 7 (Noise BLAKE2s label entry points): found $mech7, pinned $MECH7_EXPECTED." >&2
+  echo "  A place where a label meets the handshake's BLAKE2s was added/removed. Register the label in $REGISTRY (mech 7) and update the pin." >&2
+  fail=1
+fi
+
+echo "count-pins: mech1(cSHAKE)=$mech1 mech3(transcript)=$mech3_tx mech3(ciphersuite)=$mech3_cs mech7(noise)=$mech7"
+
+# ── Tripwire 3: Noise protocol-name constants are excluded rows ─────────────
+# Not a prefix grep for Shekyl domains (the header forbids those): `Noise_` is
+# the Noise specification's own protocol-name format, and that is the whole
+# reason these literals are rowed under x. Each production `const` holding one
+# must have an x row naming that literal at that file, so removing the row
+# rejects the literal by name instead of leaving it unseen.
+protocol_names=0
+while IFS= read -r file; do
+  code=$(code_only "$file")
+  while IFS= read -r literal; do
+    [[ -z "$literal" ]] && continue
+    protocol_names=$((protocol_names + 1))
+    if ! awk -F'\t' -v lit="$literal" -v f="$file" \
+        '$1 == "x" && $2 == lit && $3 == f { found = 1 } END { exit !found }' "$REGISTRY"; then
+      echo "UNREGISTERED NOISE PROTOCOL NAME: b\"$literal\" in $file has no excluded (mech x) row in $REGISTRY" >&2
+      echo "  A protocol name is mixed into the handshake hash. Row it under x with the reason, at this file." >&2
+      fail=1
+    fi
+  done < <(rg -U -o -r '$1' \
+      'const\s+[A-Za-z0-9_]+\s*:\s*&(?:'"'"'static\s+)?\[u8\]\s*=\s*b"(Noise_[^"]*)"' <<<"$code")
+done < <(rg -l "${PROD_GLOBS[@]}" -F 'b"Noise_' rust 2>/dev/null | sort)
+if [[ "$protocol_names" -eq 0 ]]; then
+  # Rule 47: the subject must exist. Two protocol-name constants are in the
+  # tree (the RPC channel's and the P2P handshake's); none found means the
+  # scan is broken, not that the tree is clean.
+  echo "PROTOCOL-NAME SCAN FOUND NOTHING: expected the RPC channel's and the P2P handshake's constants" >&2
+  fail=1
+fi
+echo "protocol-names: checked $protocol_names Noise protocol-name constants"
 
 if [[ "$fail" -ne 0 ]]; then
   echo "domain-registry gate: FAIL" >&2
