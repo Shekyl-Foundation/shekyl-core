@@ -181,6 +181,17 @@ impl DirectoryCache {
         holds_a_cache_file(&self.path)
     }
 
+    /// Bytes [`Self::copy_into`] would write.
+    ///
+    /// A name the copy skips — missing, not a regular file, or longer than
+    /// its limit — adds nothing. The copy refuses an over-limit file whole,
+    /// so the count is not the limit. Staging names are not in [`FILES`]: a
+    /// leftover partial already occupies the disk the free-space probe reads.
+    #[must_use]
+    pub fn copy_bytes(&self) -> u64 {
+        copy_byte_len(&self.path)
+    }
+
     /// Copy the four names into `data_dir`. A refused file is skipped.
     /// `Err` is a failure to write `data_dir`.
     pub fn copy_into(&self, data_dir: &Path) -> io::Result<Vec<&'static str>> {
@@ -498,11 +509,22 @@ fn holds_a_cache_file(dir: &Path) -> bool {
     FILES.iter().any(|file| cache_file_fits(dir, file))
 }
 
+/// Length of `file` when the copy would write it, or `None` when the copy
+/// skips the name.
+fn fitting_len(dir: &Path, file: &CacheFile) -> Option<u64> {
+    let opened = open_named(dir, file.name)?;
+    let len = regular_len(&opened)?;
+    (len <= file.limit).then_some(len)
+}
+
 fn cache_file_fits(dir: &Path, file: &CacheFile) -> bool {
-    let Some(opened) = open_named(dir, file.name) else {
-        return false;
-    };
-    regular_len(&opened).is_some_and(|len| len <= file.limit)
+    fitting_len(dir, file).is_some()
+}
+
+fn copy_byte_len(dir: &Path) -> u64 {
+    FILES.iter().fold(0, |sum, file| {
+        sum.saturating_add(fitting_len(dir, file).unwrap_or(0))
+    })
 }
 
 fn is_one_component(name: &str) -> bool {
@@ -787,6 +809,29 @@ mod tests {
         assert_eq!(FILES[2].name, "cached-microdescs.new");
         assert_eq!(FILES[3].name, "cached-certs");
         assert_eq!(FILES[3].limit, CERTS_LIMIT);
+    }
+
+    /// The spawn's space check counts what the copy writes. A partial, a
+    /// stranger, and a file over its limit add nothing.
+    #[test]
+    fn copy_bytes_counts_only_files_the_copy_writes() {
+        let parent = tempfile::tempdir().unwrap();
+        let cache = parent.path().join("cache");
+        fs::create_dir(&cache).unwrap();
+        fs::write(cache.join("cached-certs"), vec![0u8; 1000]).unwrap();
+        fs::write(cache.join("notes"), vec![0u8; 4000]).unwrap();
+        fs::write(cache.join(".cached-certs.partial"), vec![0u8; 5000]).unwrap();
+        let consensus = cache.join("cached-microdesc-consensus");
+        fs::File::create(&consensus)
+            .unwrap()
+            .set_len(CONSENSUS_LIMIT + 1)
+            .unwrap();
+        assert_eq!(DirectoryCache::at(&cache).copy_bytes(), 1000);
+        assert!(!DirectoryCache::at(parent.path().join("missing")).holds_a_file());
+        assert_eq!(
+            DirectoryCache::at(parent.path().join("missing")).copy_bytes(),
+            0
+        );
     }
 
     #[test]

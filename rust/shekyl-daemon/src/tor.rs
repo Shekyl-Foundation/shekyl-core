@@ -34,8 +34,8 @@ use shekyl_tor_control_client::supervisor::{
     ManagedRunning, OriginVerdict as FoldedOrigin, Policy, Space, Step, Syncing, TorSetting,
 };
 use shekyl_tor_control_daemon::{
-    space_needed, CacheSave, DaemonTorConfig, DaemonTorControl, DaemonTorStartError, KeptDataDir,
-    OnionPow, OnionSeed, SpawnError, TorDeath,
+    space_needed, sweep_stale_data_dirs, CacheSave, DaemonTorConfig, DaemonTorControl,
+    DaemonTorStartError, KeptDataDir, OnionPow, OnionSeed, SpawnError, TorDeath,
 };
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
@@ -482,13 +482,19 @@ impl Drive {
         if self.control.is_some() {
             self.reap().await;
         }
+        // Known before the drop. A kept directory wears the leftover name,
+        // so the sweep runs only after that drop.
+        let fresh = fresh_directory || self.kept.is_none();
         if fresh_directory {
             self.kept.take();
         }
         let Some(binary) = self.pinned.clone() else {
             return Input::PinRefused;
         };
-        if let Some(short) = self.space_short() {
+        if fresh {
+            sweep_stale_data_dirs(&self.data_dir);
+        }
+        if let Some(short) = self.space_short(fresh) {
             return short;
         }
         let spawned = if let Some(directory) = self.kept.take() {
@@ -642,16 +648,14 @@ impl Drive {
         }
     }
 
-    /// Stop the child and keep its directory. The generation moves so the
-    /// stop's own death is not a second fault.
     /// The pre-spawn space check (`TOR_SUPERVISOR.md` §5, "Data directory
-    /// unusable"): a spawn needs Tor's write headroom free, plus the cache's
-    /// size when it takes a fresh directory. A disk that fills after the spawn
-    /// is not this check's: Tor runs on, and a respawn checks again. A probe
-    /// that cannot read the disk lets the spawn go ahead: "I cannot tell" is
-    /// not "full".
-    fn space_short(&self) -> Option<Input> {
-        let needed = space_needed(&self.data_dir, self.kept.is_none());
+    /// unusable"). `fresh` is the spawn's own bit: a new directory needs
+    /// Tor's write headroom plus the cache copy, and a kept one needs the
+    /// headroom. A disk that fills after the spawn is not this check's.
+    /// A probe that cannot read the disk lets the spawn go ahead: "I cannot
+    /// tell" is not "full".
+    fn space_short(&self, fresh: bool) -> Option<Input> {
+        let needed = space_needed(&self.data_dir, fresh);
         match shekyl_node::free_bytes(&self.data_dir) {
             Ok(available) if available < needed => Some(Input::DirectoryUnusable {
                 path: self.data_dir.clone(),
@@ -670,6 +674,8 @@ impl Drive {
         }
     }
 
+    /// Stop the child and keep its directory. The generation moves so the
+    /// stop's own death is not a second fault.
     async fn reap(&mut self) {
         self.bootstrap = None;
         let Some(control) = self.control.take() else {

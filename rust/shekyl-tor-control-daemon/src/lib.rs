@@ -52,7 +52,7 @@
 mod data_dir;
 pub mod ephemeral;
 
-pub use data_dir::{space_needed, TOR_WRITE_HEADROOM};
+pub use data_dir::{space_needed, sweep_stale_data_dirs, TOR_WRITE_HEADROOM};
 pub use ephemeral::{
     CacheSave, DaemonTorConfig, DaemonTorControl, DaemonTorPublishError, DaemonTorStartError,
     KeptDataDir, LaunchFailure, OnionSeed, SpawnError, Teardown, TorDeath,

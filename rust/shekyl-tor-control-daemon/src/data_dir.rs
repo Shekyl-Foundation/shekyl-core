@@ -17,6 +17,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use shekyl_tor_control_client::directory_cache::DirectoryCache;
+
 /// Directory-name prefix for this boot's DataDirectory and for leftover
 /// sweeps of previous crashed boots.
 const DIR_PREFIX: &str = "ephemeral-tor-";
@@ -37,29 +39,27 @@ pub const TOR_WRITE_HEADROOM: u64 = 32 * 1024 * 1024;
 /// Bytes a spawn needs free under `parent`, the daemon's data directory
 /// (`TOR_SUPERVISOR.md` §5, "Data directory unusable"). A fresh
 /// `DataDirectory` is seeded from the public directory cache, so it also
-/// needs the cache's size; a kept one (a respawn) already holds it.
+/// needs the bytes [`DirectoryCache::copy_bytes`] would write; a kept one
+/// (a respawn) already holds that copy.
 #[must_use]
 pub fn space_needed(parent: &Path, fresh: bool) -> u64 {
     let cache = if fresh {
-        regular_file_bytes(&parent.join(CACHE_DIR_NAME))
+        DirectoryCache::at(parent.join(CACHE_DIR_NAME)).copy_bytes()
     } else {
         0
     };
     TOR_WRITE_HEADROOM.saturating_add(cache)
 }
 
-/// The total size of the regular files directly in `dir`; zero when it is
-/// missing or unreadable (a missing cache copies nothing).
-fn regular_file_bytes(dir: &Path) -> u64 {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return 0;
-    };
-    entries
-        .filter_map(Result::ok)
-        .filter_map(|entry| entry.metadata().ok())
-        .filter(fs::Metadata::is_file)
-        .map(|metadata| metadata.len())
-        .fold(0, u64::saturating_add)
+/// Remove leftover per-boot directories under `parent`.
+///
+/// The directory cache is not one of them. A directory kept for an in-boot
+/// respawn wears one of these names too, so a caller sweeps only after that
+/// directory has been dropped. A fresh spawn does this before it measures
+/// free space: otherwise a crashed boot's directories hold the disk and
+/// every retry refuses without reaching [`EphemeralDataDir::create_under`].
+pub fn sweep_stale_data_dirs(parent: &Path) {
+    sweep_stale(parent);
 }
 
 fn is_sweep_target(name: &str) -> bool {
@@ -227,8 +227,25 @@ mod tests {
         fs::write(cache.join("cached-certs"), vec![0u8; 1000]).unwrap();
         fs::write(cache.join("cached-microdesc-consensus"), vec![0u8; 2500]).unwrap();
         fs::create_dir(cache.join("not-a-file")).unwrap();
+        fs::write(cache.join(".cached-certs.partial"), vec![0u8; 9000]).unwrap();
+        fs::write(cache.join("notes"), vec![0u8; 800]).unwrap();
         assert_eq!(space_needed(parent.path(), true), TOR_WRITE_HEADROOM + 3500);
         assert_eq!(space_needed(parent.path(), false), TOR_WRITE_HEADROOM);
+    }
+
+    /// A crashed boot's directory is a sweep target. The cache beside it is not.
+    #[test]
+    fn sweep_stale_data_dirs_removes_leftovers_and_keeps_the_cache() {
+        let parent = tempfile::tempdir().unwrap();
+        let stale = parent.path().join(format!("{DIR_PREFIX}deadbeef"));
+        fs::create_dir(&stale).unwrap();
+        fs::write(stale.join("state"), b"guards").unwrap();
+        let cache = parent.path().join(CACHE_DIR_NAME);
+        fs::create_dir(&cache).unwrap();
+        fs::write(cache.join("cached-certs"), b"certs").unwrap();
+        sweep_stale_data_dirs(parent.path());
+        assert!(!stale.exists());
+        assert!(cache.join("cached-certs").is_file());
     }
 
     #[cfg(unix)]
