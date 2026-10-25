@@ -24,6 +24,7 @@ mod address;
 pub(crate) use address::address_of;
 mod handshake;
 mod ready;
+mod recovery;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
@@ -94,23 +95,6 @@ struct IdleWatch {
 /// changes, the connector draws, or it is no longer under its target.
 const IDLE_WARN_WAKES: u32 = 60;
 
-/// One recovery episode of a connector. It begins at the wake that finds
-/// the connector stranded and ends when recovery worked: the kept count
-/// rose, or the connector drew an address that is not one it re-admitted
-/// here. Drawing a re-admitted address is still recovery, so the episode
-/// does not end on it, and a dead configured address that is re-admitted,
-/// drawn and dropped does not cycle the log. A configured address refused
-/// at re-admission is said once per episode.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Recovery {
-    /// The kept count when the episode began.
-    kept_at_entry: usize,
-    /// The configured addresses this episode re-admitted.
-    re_admitted: BTreeSet<NetworkAddress>,
-    /// The configured addresses whose refusal this episode has said.
-    refused: BTreeSet<NetworkAddress>,
-}
-
 /// One test's next attempt, waiting for its tick.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Retry {
@@ -151,11 +135,9 @@ pub struct Shared {
     /// seeds, `--add-peer`), in the order given: what a stranded connector
     /// re-admits when no closed network is declared.
     configured: Vec<NetworkAddress>,
-    /// The recovery episode each connector is in, if any: entered at a
-    /// wake that found it under its target with nothing in flight and no
-    /// drawable candidate, left when recovery worked (Rick's review of
-    /// #1174, 2026-10-24).
-    recovery: [Option<Recovery>; ConnectorId::COUNT],
+    /// The recovery episode each connector is in, if any. [`recovery`]
+    /// opens it on a stranded wake and closes it when recovery worked.
+    recovery: [Option<recovery::Recovery>; ConnectorId::COUNT],
     /// When the address file was last written or read; `None` until
     /// then, so the first due store is one interval after the open.
     last_store: Option<Tick>,
@@ -233,7 +215,7 @@ impl Dialer {
                 idle: [None; ConnectorId::COUNT],
                 exclusive: None,
                 configured: Vec::new(),
-                recovery: [None, None],
+                recovery: std::array::from_fn(|_| None),
                 last_store: None,
             })),
             nonces: HandshakeNonceSet::new(),
@@ -815,7 +797,9 @@ impl Dialer {
         let wake = plan_wake(&mut shared, &mut bans, connector, &live, now, rng);
         let (address, aim) = match wake {
             Wake::Recover => {
-                re_admit(&mut shared, &mut bans, connector, now, rng);
+                // `plan_wake` already reported this wake. A report that
+                // closed the episode opens the next one here.
+                recovery::re_admit(&mut shared, &mut bans, connector, now, rng);
                 return None;
             }
             Wake::Idle => return None,
@@ -930,15 +914,10 @@ fn plan_wake<R: RelayRng + ?Sized>(
             gray_candidates: seats.gray_candidates,
         };
         let undrawn = idle_if_undrawn(&census);
-        // A connector under its target, with nothing in flight and no
-        // drawable candidate, cannot get itself another peer: every address
-        // it holds is a session or was dropped by a failed draw. Recovery
-        // re-admits after this borrow ends; this wake dials nothing. One
-        // kept session does not make the connector healthy (Rick's recovery
-        // ruling of 2026-10-14, as amended 2026-10-24: a healthy connector
-        // is one with something left to draw). Before the amendment the
-        // condition was no kept session, and a connector with one live peer
-        // under a target of twelve stayed there for good.
+        // Stranded: under the target, nothing in flight, nothing drawable.
+        // The lists cannot yield another peer, so this wake re-admits and
+        // dials nothing. One kept session is not a healthy connector
+        // (dialer brief, "Recovery").
         let stranded = kept < target
             && in_flight == 0
             && !waiting
@@ -976,14 +955,16 @@ fn plan_wake<R: RelayRng + ?Sized>(
         };
         (wake, undrawn, kept)
     };
+    // `kept` is the count before this wake's dial. A session the previous
+    // wake kept is visible here, including when this wake is stranded.
+    let drawn = match &wake {
+        Wake::Drawn { address, .. } => Some(address),
+        Wake::Recover | Wake::Idle => None,
+    };
+    recovery::report_wake(&mut shared.recovery[index], connector, kept, target, drawn);
     let wake = match wake {
-        Wake::Recover => Wake::Recover,
-        Wake::Idle => {
-            note_recovered(shared, connector, kept, target, None);
-            Wake::Idle
-        }
+        Wake::Recover | Wake::Idle => wake,
         Wake::Drawn { address, aim } => {
-            note_recovered(shared, connector, kept, target, Some(&address));
             if shared.attempts[index].begin(&address, aim) {
                 Wake::Drawn { address, aim }
             } else {
@@ -1004,58 +985,6 @@ fn plan_wake<R: RelayRng + ?Sized>(
     };
     note_idle(shared, connector, idle);
     wake
-}
-
-/// Re-admit the closed network, or the configured seeds and `--add-peer`,
-/// as operator-named gray. Already seated is quiet. A refusal is said once
-/// per recovery episode. The first call of an episode opens it and says so.
-fn re_admit<R: RelayRng + ?Sized>(
-    shared: &mut Shared,
-    bans: &mut BanSnapshot,
-    connector: ConnectorId,
-    now: Tick,
-    rng: &mut R,
-) {
-    let population: Vec<NetworkAddress> = match &shared.exclusive {
-        Some(population) => population.iter().cloned().collect(),
-        None => shared.configured.clone(),
-    };
-    let index = connector.index();
-    let kept = shared.attempts[index].kept_count();
-    let entering = shared.recovery[index].is_none();
-    let episode = shared.recovery[index].get_or_insert_with(|| Recovery {
-        kept_at_entry: kept,
-        re_admitted: BTreeSet::new(),
-        refused: BTreeSet::new(),
-    });
-    let mut admitted = 0usize;
-    for address in population
-        .iter()
-        .filter(|address| Peerlist::connector_of(address) == Some(connector))
-    {
-        match shared
-            .lists
-            .admit_gray(address, Source::Operator, now, bans, rng)
-        {
-            Ok(true) => {
-                admitted += 1;
-                episode.re_admitted.insert(address.clone());
-            }
-            Ok(false) => {}
-            Err(refusal) => {
-                if episode.refused.insert(address.clone()) {
-                    tracing::warn!(
-                        "{connector:?}: configured address {address:?} was not re-admitted: {refusal:?}"
-                    );
-                }
-            }
-        }
-    }
-    if entering {
-        tracing::info!(
-            "{connector:?}: under its target with nothing in flight and no drawable candidate; re-admitted {admitted} configured address(es) to gray"
-        );
-    }
 }
 
 /// Count an under-target wake that dialed nothing. The first time the
@@ -1085,32 +1014,5 @@ fn note_idle(shared: &mut Shared, connector: ConnectorId, why: Option<IdleWhy>) 
                 warned: false,
             })
         }
-    }
-}
-
-/// End the connector's recovery episode when recovery worked: its kept
-/// count rose, it is no longer under its target, or it drew `drawn`, an
-/// address the episode did not re-admit. A wake that drew a re-admitted
-/// address, or drew nothing, is still recovery (Rick's review of #1174,
-/// 2026-10-24: a dead configured address must not cycle the log).
-fn note_recovered(
-    shared: &mut Shared,
-    connector: ConnectorId,
-    kept: usize,
-    target: usize,
-    drawn: Option<&NetworkAddress>,
-) {
-    let index = connector.index();
-    let Some(episode) = &shared.recovery[index] else {
-        return;
-    };
-    let worked = kept > episode.kept_at_entry
-        || kept >= target
-        || drawn.is_some_and(|address| !episode.re_admitted.contains(address));
-    if worked {
-        shared.recovery[index] = None;
-        tracing::info!(
-            "{connector:?}: no longer stranded; a kept session was added or a candidate it did not re-admit was drawn"
-        );
     }
 }

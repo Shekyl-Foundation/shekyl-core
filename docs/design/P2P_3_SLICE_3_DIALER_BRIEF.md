@@ -827,45 +827,64 @@ into this (below).
 **Recovery (Rick, 2026-10-14; amended 2026-10-24).** A connector whose
 wake finds it under its target, nothing in flight, and no drawable white
 or gray candidate is stranded: its lists cannot get it another peer.
-*Amendment (2026-10-24, the alpha.10 fleet report's problem 11):* the
+That wake re-admits the connector's configured addresses to gray as
+operator-named, under normal admission: the compiled seeds and
+`--add-peer`, or, when a closed network is declared
+(`--add-exclusive-node`), that list alone. It dials nothing itself; the
+next wake draws. Recovery runs only on a wake that is ready to dial: a
+connector whose link is down re-admits nothing. The apply table and the
+address file are unchanged. A connector with a target of zero is never
+stranded. A drawable candidate, white or gray, means the connector is
+healthy, and a dead `--add-peer` stays out while one exists.
+
+*Amendment (2026-10-24, the alpha.10 fleet report's problem 11).* The
 condition was no kept session. A failed draw drops its address, and a
 connector with one live peer under a target of twelve then held that
 one peer for good; the seeds' outbound degree followed restart order.
-The condition is now under target. The healthy-connector rule is
-unchanged: a drawable candidate, white or gray, means not stranded, and
-a dead `--add-peer` stays out while one exists. A dead configured
-address a stranded connector re-admits is drawn, fails its test and
-cools where it sits (the gray lifecycle, 2026-10-24): it is redialled no
-faster than its cooldown, two minutes doubling to an hour, and is not
-re-admitted again, since it never left gray. Re-admission restores only
-an address that left gray, by proven misbehaviour or cap eviction; a
-cooling one is seated and waits. *Records-was (#1174): drawn, dropped
-and re-admitted again, one dial per two wakes (R3: mean 1 s per wake),
-with no backoff on clearnet (R2).* The report's other option, returning an operator-named
-address to gray after a failure window, was not taken: it would make
-list membership depend on who supplied the address, which the apply
-table refuses. *The log (Rick's review of #1174, 2026-10-24):* recovery
-is an episode. It is entered once, with the count re-admitted, and left
-once, when recovery worked: the kept count rose, or the connector drew
-an address it did not re-admit in that episode. Drawing a re-admitted
-address is still recovery, so a dead configured address that is
-re-admitted, drawn and dropped does not cycle the two lines. A
-configured address refused at re-admission (a banned one, for
-instance) is said once per episode, not once per wake. The pacing of
-those redials is the cooldown's (*records-was:* a `docs/FOLLOWUPS.md`
-row, closed 2026-10-24 by the gray lifecycle). That wake re-admits the
-connector's configured addresses to gray as operator-named, under normal
-admission: the compiled seeds and `--add-peer`, or, when a closed
-network is declared (`--add-exclusive-node`), that list alone. It dials
-nothing itself; the next wake draws. Recovery runs only on a wake that
-is ready to dial: a connector whose link is down re-admits nothing. The
-apply table and the address file are unchanged. The dialer logs one line on entering the state, with
-the count re-admitted, and one on leaving it. A connector with a target
-of zero is never stranded. Tests: `shekyl-dialer/tests/recovery.rs` (a
-stranded connector re-admits and dials; a healthy one does not re-admit
-a dead `--add-peer`; a declared closed network re-admits only its list;
-`tests/owner.rs`: a connector with one kept session under its target and
-nothing drawable re-admits and then draws).
+The report's other option, returning an operator-named address to gray
+after a failure window, was not taken: it would make list membership
+depend on who supplied the address, which the apply table refuses. A
+dead configured address a stranded connector re-admits is drawn, fails
+its test and cools where it sits (the gray lifecycle, 2026-10-24): it is
+redialled no faster than its cooldown, two minutes doubling to an hour,
+and is not re-admitted again, since it never left gray. Re-admission
+restores only an address that left gray, by proven misbehaviour or cap
+eviction; a cooling one is seated and waits. *Records-was (#1174):
+drawn, dropped and re-admitted again, one dial per two wakes (R3: mean
+1 s per wake), with no backoff on clearnet (R2); the pacing of those
+redials was the retry PR's, a `docs/FOLLOWUPS.md` row the gray
+lifecycle closed.*
+
+*The log (Rick's review of #1174, 2026-10-24).* Recovery is an episode.
+It is entered once, with the count re-admitted, and left once, when
+recovery worked. Every wake reports the kept count and the address it
+drew, including a wake that makes a test's next attempt. The episode
+ends on the first of these: the kept count has risen since the episode
+opened, the connector is no longer under its target, or this wake drew
+an address the episode does not cover. The episode covers the
+configured addresses it re-admitted and those it found already seated:
+cooling, outstanding or in a session (the gray lifecycle, 2026-10-24;
+shekyl-core-c0's review of #1174, item 3). The leave line names which
+one. Drawing a covered address, or drawing nothing, is still recovery,
+so a dead configured address that cools, thaws, is drawn and fails again
+does not cycle the two lines. *Records-was: the episode covered only the
+addresses it re-admitted, and the dead address was re-admitted, drawn
+and dropped.* A gained session is visible on the following wake,
+because the dial finishes before that wake runs. When that wake is
+stranded again, it closes the episode and opens the next one. A
+configured address refused at re-admission (a banned one, for instance)
+is said once per episode, not once per wake.
+
+Tests: `shekyl-dialer/tests/recovery.rs` — a stranded connector
+redials a cooling configured address no faster than its cooldown; a
+healthy one leaves a dead `--add-peer` cooling; a declared closed
+network draws only its list once its cooldowns end; one kept session
+under the target redials its cooling configured address no faster than
+its cooldown; a dead configured address is one episode while it cools;
+a gained session closes that episode on the following wake. The log
+tests capture through one global subscriber per test binary
+(`tests/support/log_capture.rs`), so no callsite's interest is cached
+as never.
 
 ## Support flags
 

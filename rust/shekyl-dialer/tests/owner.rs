@@ -12,15 +12,16 @@
 //! loopback opens the channel, and the read blocks it until the response
 //! arrives.
 
+#[path = "support/log_capture.rs"]
+mod log_capture;
+
+use log_capture::log_text;
 use std::collections::VecDeque;
-use std::io::{self, Write};
 use std::net::Ipv4Addr;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-
-use tracing_subscriber::fmt::MakeWriter;
 
 use shekyl_capped_stream::Session;
 use shekyl_dialer::{DialAim, Dialer};
@@ -737,42 +738,8 @@ fn a_synchronous_close_notification_finishes() {
     assert_eq!(dialer.kept_sessions(ConnectorId::Clearnet), 0);
 }
 
-struct LogBuf(Arc<Mutex<Vec<u8>>>);
-
-impl Write for LogBuf {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.lock().expect("log").extend_from_slice(buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-impl MakeWriter<'_> for LogBuf {
-    type Writer = LogBuf;
-
-    fn make_writer(&self) -> Self::Writer {
-        LogBuf(Arc::clone(&self.0))
-    }
-}
-
 fn warn_text(run: impl FnOnce()) -> String {
     log_text(tracing::Level::WARN, run)
-}
-
-/// Everything logged at `level` or above while `run` runs.
-fn log_text(level: tracing::Level, run: impl FnOnce()) -> String {
-    let buf = Arc::new(Mutex::new(Vec::new()));
-    let subscriber = tracing_subscriber::fmt()
-        .with_max_level(level)
-        .with_ansi(false)
-        .with_writer(LogBuf(Arc::clone(&buf)))
-        .finish();
-    tracing::subscriber::with_default(subscriber, run);
-    let bytes = buf.lock().expect("log").clone();
-    String::from_utf8(bytes).expect("utf-8")
 }
 
 fn warn_count(text: &str, needle: &str) -> usize {
@@ -940,158 +907,6 @@ fn every_dial_the_dialer_does_not_adopt_is_retired() {
     assert!(
         !dial.retired().contains(&kept),
         "a kept dial's row is live, so it is not retired"
-    );
-}
-
-/// The clearnet gray list, as addresses.
-fn gray_of(dialer: &Dialer) -> Vec<NetworkAddress> {
-    dialer
-        .shared()
-        .lists
-        .snapshot()
-        .into_iter()
-        .filter(|(address, list)| {
-            *list == shekyl_peerlist::ListName::Gray
-                && shekyl_peerlist::Peerlist::connector_of(address) == Some(ConnectorId::Clearnet)
-        })
-        .map(|(address, _)| address)
-        .collect()
-}
-
-/// **Recovery runs under the target, not only at zero kept sessions**
-/// (the alpha.10 fleet report's problem 11; the 2026-10-14 recovery ruling
-/// as amended 2026-10-24), and **a configured dead address under recovery
-/// is redialled no faster than its cooldown** (the gray lifecycle, test
-/// 6e). A connector with one kept session under a target of two, whose
-/// other configured address failed, holds nothing drawable: its one white
-/// address is a session, and the failed address cools in gray. Wakes inside
-/// the cooldown draw nothing; the first wake past it draws that address.
-/// *Records-was (to 2026-10-24): the failed draw left gray, and the
-/// stranded wake re-admitted it before the next wake drew it.*
-#[test]
-fn a_connector_under_target_redials_its_cooling_configured_address_no_faster_than_its_cooldown() {
-    let posts = Arc::new(Mutex::new(VecDeque::new()));
-    let clock = ManualClock::new(Tick::new(1));
-    let hub = hub_with_arming_on(&posts, &clock);
-    // The first dial is kept; the second is another network's handshake,
-    // which the dialer refuses and drops.
-    let dial = Arc::new(GapDial::answering(vec![
-        reply(NETWORK, vec![]),
-        reply([9; 16], vec![]),
-    ]));
-    hub.install_dial(Arc::clone(&dial) as Arc<dyn Dial>);
-    let dialer = dialer_for(&hub);
-    let mut rng = SplitMix64::new(5);
-    dialer.set_target(ConnectorId::Clearnet, 2, &mut rng);
-    for n in [1, 2] {
-        dialer
-            .admit_operator(&peer(n), Tick::new(1), &mut rng)
-            .expect("admitted");
-    }
-
-    let kept = dialer
-        .dial(ConnectorId::Clearnet, &peer(1), DialAim::Keep, &mut rng)
-        .expect("the first dial is kept");
-    assert_eq!(dialer.kept_sessions(ConnectorId::Clearnet), 1);
-    assert_eq!(
-        dialer.dial(ConnectorId::Clearnet, &peer(2), DialAim::Keep, &mut rng),
-        None,
-        "the second dial is refused"
-    );
-    assert_eq!(
-        gray_of(&dialer),
-        vec![peer(2)],
-        "the failed draw stays gray"
-    );
-    assert!(dialer.shared().lists.is_cooling(&peer(2)), "and cools");
-
-    // Under the target with nothing drawable: every wake inside the
-    // cooldown is recovery, re-admits nothing new, and draws nothing.
-    for _ in 0..5 {
-        assert!(dialer.choose(ConnectorId::Clearnet, &mut rng).is_none());
-        assert!(dialer.shared().lists.is_cooling(&peer(2)));
-    }
-
-    // The first wake past the cooldown draws it.
-    clock.set(Tick::new(
-        clock.now().get() + 2 * shekyl_peerlist::COOLDOWN_CAP_NANOS,
-    ));
-    let (drawn, _aim, _nonce) = dialer
-        .choose(ConnectorId::Clearnet, &mut rng)
-        .expect("the cooled address is drawn once its cooldown ends");
-    assert_eq!(drawn, peer(2));
-    assert_eq!(
-        dialer.kept_sessions(ConnectorId::Clearnet),
-        1,
-        "the kept session is untouched"
-    );
-    let _ = kept;
-}
-
-/// **The recovery log does not cycle on a working connector** (Rick's review
-/// of #1174, 2026-10-24). One kept session under a target of two; one dead
-/// configured address, which every wake re-admits, draws, fails and drops;
-/// one configured address under a ban, refused at every re-admission. Over
-/// twenty wakes: recovery is entered once, never left (the kept count did
-/// not rise, and nothing was drawn that the episode did not re-admit), and
-/// the banned address is refused aloud once. Before this fix the entered
-/// and left lines repeated every two wakes and the refusal every wake.
-#[test]
-fn the_recovery_log_is_one_episode_while_a_dead_configured_address_cycles() {
-    const WAKES: usize = 20;
-    let posts = Arc::new(Mutex::new(VecDeque::new()));
-    let hub = hub_with_arming(&posts);
-    // The keep, then another network's handshake for every redial of the
-    // dead address: each is refused, dropped, and re-admitted next wake.
-    let mut answers = vec![reply(NETWORK, vec![])];
-    answers.extend(std::iter::repeat_n(reply([9; 16], vec![]), WAKES));
-    let dial = Arc::new(GapDial::answering(answers));
-    hub.install_dial(Arc::clone(&dial) as Arc<dyn Dial>);
-    let dialer = dialer_for(&hub);
-    let mut rng = SplitMix64::new(11);
-    dialer.set_target(ConnectorId::Clearnet, 2, &mut rng);
-    for n in [1, 2] {
-        dialer
-            .admit_operator(&peer(n), Tick::new(1), &mut rng)
-            .expect("admitted");
-    }
-    // peer(3) is banned for the whole run, so it is configured (named by
-    // the operator) and never admitted: every re-admission refuses it.
-    let until = Tick::new(hub.now().get().saturating_add(3_600_000_000_000));
-    hub.ban_host(std::net::IpAddr::V4(Ipv4Addr::new(11, 12, 0, 3)), until);
-    assert!(matches!(
-        dialer.admit_operator(&peer(3), Tick::new(1), &mut rng),
-        Err(shekyl_peerlist::Refusal::Banned)
-    ));
-    dialer
-        .dial(ConnectorId::Clearnet, &peer(1), DialAim::Keep, &mut rng)
-        .expect("the first dial is kept");
-    assert_eq!(dialer.kept_sessions(ConnectorId::Clearnet), 1);
-
-    let text = log_text(tracing::Level::INFO, || {
-        for _ in 0..WAKES {
-            dialer.wake(ConnectorId::Clearnet, &mut rng);
-        }
-    });
-    assert_eq!(
-        text.matches("no drawable candidate; re-admitted").count(),
-        1,
-        "recovery is entered once:\n{text}"
-    );
-    assert_eq!(
-        text.matches("no longer stranded").count(),
-        0,
-        "recovery is never left: nothing it did not re-admit was drawn:\n{text}"
-    );
-    assert_eq!(
-        text.matches("was not re-admitted").count(),
-        1,
-        "the banned configured address is refused aloud once:\n{text}"
-    );
-    assert_eq!(dialer.kept_sessions(ConnectorId::Clearnet), 1);
-    assert!(
-        !gray_of(&dialer).contains(&peer(3)),
-        "the banned address stays out"
     );
 }
 
