@@ -78,6 +78,7 @@ pub(crate) fn ensure_dialer(hub: &Hub) -> Arc<Dialer> {
         refused_set(),
         Arc::new(|| *TIP.lock().expect("tip")),
     ));
+    dialer.report_tor_link(crate::tor_link::sink());
     *slot = Some(Arc::clone(&dialer));
     dialer
 }

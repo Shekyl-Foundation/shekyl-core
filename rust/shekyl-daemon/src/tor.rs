@@ -20,6 +20,7 @@ use std::time::Duration;
 
 use shekyl_daemon_config::sections::Tor;
 use shekyl_ffi::origin_verdict::OriginVerdict;
+use shekyl_ffi::tor_link::TorLinkTally;
 use shekyl_ffi::zone_ffi::DownCause;
 use shekyl_timing_engine::{Clock, MonotonicClock, OwnerClass, OwnerHandle, Tick};
 use shekyl_tor_control_client::binary::{
@@ -30,8 +31,8 @@ use shekyl_tor_control_client::control::{
     BootstrapState, Command, ControlError, EventReceiver, EventSink,
 };
 use shekyl_tor_control_client::supervisor::{
-    held_sentence, input_of, install_sentence, render, Action, Cause, Connectors, Core, Input,
-    ManagedRunning, OriginVerdict as FoldedOrigin, Policy, Space, Step, Syncing, TorSetting,
+    held_sentence, input_of, install_sentence, render, Action, Cause, Connectors, Core, DialTally,
+    Input, ManagedRunning, OriginVerdict as FoldedOrigin, Policy, Space, Step, Syncing, TorSetting,
 };
 use shekyl_tor_control_daemon::{
     space_needed, sweep_stale_data_dirs, CacheSave, DaemonTorConfig, DaemonTorControl,
@@ -185,6 +186,15 @@ pub fn begin(
 ///
 /// The supervisor does not depend on the relay. The variants are the same
 /// three states, mapped one for one.
+/// The dialer's tally as the core's input (§4.2). Counts only.
+fn tally_input(tally: TorLinkTally) -> Input {
+    Input::DialEvidence(DialTally {
+        opened: tally.opened,
+        link_failures: tally.link_failures,
+        timed_out_destinations: tally.timed_out_destinations,
+    })
+}
+
 fn verdict_input(verdict: OriginVerdict) -> Input {
     Input::AddressHidingOrigin(match verdict {
         OriginVerdict::Absent => FoldedOrigin::Absent,
@@ -222,6 +232,7 @@ async fn drive(
         clearnet_on,
     };
     let origin = shekyl_ffi::origin_verdict::watch();
+    let tor_link = shekyl_ffi::tor_link::watch();
     let started = now(&owner);
     let (mut core, mut step) = Core::start(Policy::provisional(), connectors, started);
     // A receiver marks the current value seen, so a verdict published before
@@ -244,6 +255,7 @@ async fn drive(
         stop,
         forward,
         origin,
+        tor_link,
         control: None,
         kept: None,
         pinned: None,
@@ -273,6 +285,11 @@ struct Drive {
     /// The relay's hop-0 verdict for a local origin (`GS-Q3`). Health and
     /// `OwnTx` project it.
     origin: watch::Receiver<OriginVerdict>,
+    /// What this node's own Tor dials say about the link (§4.2). Only a
+    /// change is folded: the core judges a run since the last opened stream,
+    /// and the tally before this supervisor started says nothing about the
+    /// Tor it is about to spawn.
+    tor_link: watch::Receiver<TorLinkTally>,
     control: Option<DaemonTorControl>,
     kept: Option<KeptDataDir>,
     pinned: Option<VerifiedTorBinary>,
@@ -310,6 +327,13 @@ impl Drive {
                     if changed.is_ok() {
                         let verdict = *self.origin.borrow_and_update();
                         self.fold(verdict_input(verdict)).await;
+                    }
+                }
+                changed = self.tor_link.changed() => {
+                    // Process-static like the verdict's: `Err` does not happen.
+                    if changed.is_ok() {
+                        let tally = *self.tor_link.borrow_and_update();
+                        self.fold(tally_input(tally)).await;
                     }
                 }
                 wake = self.owner.wait_wake_async() => {

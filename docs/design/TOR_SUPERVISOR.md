@@ -392,7 +392,7 @@ here.
 | `BOOTSTRAP PROGRESS=` | `STATUS_CLIENT` | progress: the phase and when it was reached, which §5 shows; never a fault |
 | `BOOTSTRAP` with `WARNING`/`REASON` and `RECOMMENDATION=warn` | `STATUS_CLIENT` | named external cause (outbound blocked and kin). Tor sends `warn` from the tenth problem at a phase, so a few refused connections at startup raise nothing |
 | `ENOUGH_DIR_INFO` / `NOT_ENOUGH_DIR_INFO` | `STATUS_CLIENT` | outbound facet cause |
-| `NETWORK_LIVENESS UP/DOWN` | `NETWORK_LIVENESS` | external cause on or off |
+| `NETWORK_LIVENESS UP/DOWN` | `NETWORK_LIVENESS` | external cause on or off: `UP` clears `ExternalBlocked` and restarts the dial count; no other kind |
 | `CLOCK_SKEW SKEW=` | `STATUS_GENERAL` | named cause with the offset; the source is unauthenticated, so the message says Tor reports it, never "your clock is wrong" |
 | `CLOCK_JUMPED TIME=` | `STATUS_GENERAL` | resume: re-evaluate now (Tor closed its circuits) |
 | `DANGEROUS_VERSION` | `STATUS_GENERAL` | announcement; a release question, not a runtime fault |
@@ -400,7 +400,7 @@ here.
 | `TOO_MANY_CONNECTIONS` | `STATUS_GENERAL` | named local cause (the open-file limit), with the count |
 | `HS_DESC UPLOADED` / `FAILED REASON=` for our address | `HS_DESC` | `UPLOADED`: one upload round arms the probe (§4.5); `FAILED` across a round: Service-class evidence (§4.4) |
 | `NOTICE` / `WARN` / `ERR` | log events | the `tor` log category (§4.10) |
-| every Tor dial's outcome | the connector's dial path → the supervisor | by the SOCKS reply table below |
+| every Tor dial's outcome | the connector's dial path → the dialer's tally (`TorLinkTally`, through `shekyl_ffi::tor_link`) → the supervisor | by the SOCKS reply table below. While Running, three link failures, or timeouts across three distinct destinations, with no opened stream between them (`Policy::link_down_after`, `timeouts_down_after`; provisional until the floor-device soak) are `ExternalBlocked` when no other cause stands; never a process fault. One opened stream clears it. The count restarts when a Tor reaches Running |
 | a stream accepted at our forward listener | the Tor connector's inbound accept (`adopt_tor`, `rust/shekyl-ffi/src/zone_ffi.rs:392`) | display evidence only (posture line, RPC): a peer fetched the descriptor and completed introduction and rendezvous; it neither arms nor defers the probe |
 | a probe nonce arrived | the dialer's nonce set (§4.5) | inbound evidence |
 
@@ -419,6 +419,16 @@ and is it about our link. One table drives both the address memory
 A rule a reviewer can break: a test feeds `0xF7` from one destination many
 times and asserts the link stays up; the same count spread across distinct
 destinations takes it down.
+
+The class is decided once, where the reply is read:
+`CloseCause::link_evidence` (`shekyl-transport-layer`), beside
+`names_the_destination`, which the address memory reads. The dialer counts
+its Tor dials by class, and counts timeouts by destination, because only it
+holds the destinations. The supervisor reads the counts and never an
+address or a reply code. A process fault still comes only from the process
+and the control connection: a link that is down while the control
+connection answers is External, and a control connection that fails while
+the link is down is still a process fault.
 
 The supervisor sends one `SETEVENTS STATUS_GENERAL STATUS_CLIENT HS_DESC
 NETWORK_LIVENESS NOTICE WARN ERR` as its first command, and nothing else sends
@@ -452,7 +462,7 @@ faults in the Tor process, so only those respawn:
 
 | Class | Causes | Remedy |
 | --- | --- | --- |
-| External | outbound blocked, `NETWORK_LIVENESS DOWN`, `DIR_ALL_UNREACHABLE`, clock skew | none but waiting; Tor retries itself; announce with the fix; **never respawn** |
+| External | outbound blocked, `NETWORK_LIVENESS DOWN`, this node's Tor dials (§4.2), `DIR_ALL_UNREACHABLE`, clock skew | none but waiting; Tor retries itself; announce with the fix; **never respawn** |
 | Service | descriptor upload failing past a bound; a probe that does not complete within the §10 `TSR-M2` bound (60 s) while outbound is usable. One `HS_DESC UPLOADED` round can leave that dial unfinished until the next round (`TSR-Q5`, §4.5). The 2026-10-22 miss returned no SOCKS reply by the bound, and the nonce was never sent | republish on the running Tor (`ADD_ONION` again); escalate to Process only if the control command itself fails |
 | Process | child exit; control EOF or desync; reply past bound; outbound dead past a bound with no external cause standing | respawn |
 | Install | pin fails at spawn, or discovery finds nothing (`TSR-F6`) | no spawn, so the binary is not executed; the daemon starts (the posture table); announce; retry at the cap |
@@ -721,7 +731,7 @@ that detail, not variants of `ManagedTorFix`.
 
 | State | Source | Shown as | Rendered from the cause | `ManagedTorFix` | Remedy |
 | --- | --- | --- | --- | --- | --- |
-| Outbound blocked | `BOOTSTRAP` warn `REASON`, `NETWORK_LIVENESS DOWN` | Degraded (outbound) | this machine cannot reach the Tor network; check the firewall or network. Bridges are `Operator`, not a managed-Tor option | none | wait |
+| Outbound blocked | `BOOTSTRAP` warn `REASON`, `NETWORK_LIVENESS DOWN`, this node's Tor dials (§4.2) | Degraded (outbound) | this machine cannot reach the Tor network; check the firewall or network. Bridges are `Operator`, not a managed-Tor option | none | wait |
 | No directory reachable | `DIR_ALL_UNREACHABLE` | Degraded (outbound) | as above | none | wait |
 | Clock skew | `CLOCK_SKEW SKEW=±s` | Degraded (outbound) | the clock is off by the reported seconds; check time sync | none | wait |
 | Waiting on the Tor directory | the last `BOOTSTRAP PROGRESS` phase and when it was reached | Bootstrapping (the phase, and since when) | none; Tor is fetching the network's directory, and a slow mirror can hold it for minutes | none | wait |
@@ -808,7 +818,9 @@ the Windows CI job beside the boot-and-stop smoke test (#1072), and in
 - **Outbound blocked while Running (10 min):** no respawn; dials resumed 5 s
   after the unblock; **nothing announced** while blocked. Tor sent no
   `NETWORK_LIVENESS DOWN` (connects failed at once and Tor's liveness reads
-  circuit-build timeouts), and §4.2's dial-outcome input is not wired yet.
+  circuit-build timeouts), and §4.2's dial-outcome input was not wired.
+  Defect 1 wires it (Rick, 2026-10-24): the dials' evidence is External,
+  never a respawn.
 - **Tor down at start, restored address file:** the cause announced, no
   respawn, all six onion entries in gray through the outage.
 - **Disk filled while Running, then a kill:** the respawn into the kept
