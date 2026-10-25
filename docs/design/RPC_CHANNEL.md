@@ -25,7 +25,7 @@ clatter name their own commit (§4.1).
 RT-O5′ into RT-15; RT-O9 in four parts, `RT-O9.1`…`RT-O9.4`); probes
 `RT-P4…RT-P9`; slices `RT-W8…RT-W15`. RT-O11…RT-O15 are the RT-W8
 pre-flight's. `RT-O16…RT-O22` are the RT-W9 pre-flight's
-([`RPC_CHANNEL_RT_W9_PREFLIGHT.md`](RPC_CHANNEL_RT_W9_PREFLIGHT.md)),
+([`RPC_CHANNEL_RT_W9_PREFLIGHT.md`](../completed/RPC_CHANNEL_RT_W9_PREFLIGHT.md)),
 ruled 2026-10-11. `RT-O16`, `RT-O18`, `RT-O20` and the sequencing half of
 `RT-O21` were re-ruled 2026-10-12 (PR #1034); the re-rulings are what is
 built. `RT-O23…RT-O27` are the runtime option requests' (§6.4), posed
@@ -79,15 +79,20 @@ Tor Expert Bundle rather than writing a Tor client). The daemon owns one
 thing: **its own channel**, authenticated and encrypted end to end, so that
 what lies underneath does not matter.
 
-**The recommended posture (advice, ruled 2026-10-25).** The channel is
-sound in the postures the project recommends, and those are:
+**The recommended posture (advice, ruled 2026-10-25).** §4.3's replay
+residual is absent where no path can read the handshake. Those postures are:
 
-- **Same host:** the same-user socket or pipe (RT-15).
-- **Between machines:** the channel inside a VPN such as WireGuard, or
-  over Tor.
-- **Across the open internet without either:** supported, because the
-  operator's network is the operator's, and strongly discouraged. On such
-  a leg the operator owns the replay residual in §4.3.
+- **Same host:** the same-user socket or pipe (RT-15). There is no network leg.
+- **Between machines:** a tunnel that ends on the daemon's host, such as
+  host-to-host WireGuard, or an onion service whose forward to the daemon
+  stays on that host. The onion is reachability (§7); the channel runs
+  inside it, and the forward is not a second leg a path can read.
+
+Any other leg leaves the handshake readable. That includes the open
+internet, a clear LAN, a Tor exit onto a public listener, and a VPN that
+ends before the daemon. The ruled channel listener accepts that bind
+(RT-14): the operator's network is the operator's. It is strongly
+discouraged, because on that leg the operator owns the residual in §4.3.
 
 This is advice to operators. Nothing in the daemon detects which posture
 it is in, and nothing depends on it.
@@ -844,16 +849,15 @@ drives it):
   spend the budget and delay other clients' handshakes, within the charge
   bound. The bundle goes only to clients that will be enrolled (§5), and
   that is what limits who can write a mac1.
-- **On an unprotected leg, captured message 1s can empty the budget.**
+- **On a leg that can read the handshake, captured message 1s can empty the budget.**
   The replay window is one burst: after `HANDSHAKE_REPLAY_SLOTS` newer
   presentations, the oldest mac1 can be presented once more. A path
-  observer who can capture message 1s, which needs no bundle, can replay
+  observer who can read message 1s, which needs no bundle, can replay
   them in rotation, each new again when it comes round, and keep the
   handshake budget empty. That is a denial of service: it reveals nothing
-  and forges nothing. With a VPN or Tor there is nothing to capture. On
-  the open internet without either it is the operator's posture to fix
-  (§1), and the project does not design against it (ruled 2026-10-25,
-  §12).
+  and forges nothing. The residual is absent in the postures §1 names.
+  On any other leg it is the operator's to fix, and the project does not
+  design against it (ruled 2026-10-25, §12).
 - **A path observer sees "busy".** The reply is 16 bytes where message 2
   is 2,320, so whoever watches the connection learns the node refused a
   handshake for load. It learns nothing about the client.
@@ -2248,7 +2252,7 @@ One item is open. Every other item below is ruled.
 - **RT-O16…RT-O22 — the RT-W9 pre-flight's questions. RULED 2026-10-11;
   RT-O16, RT-O18, RT-O20 and the sequencing of RT-O21 RE-RULED 2026-10-12
   (PR #1034).**
-  ([`RPC_CHANNEL_RT_W9_PREFLIGHT.md`](RPC_CHANNEL_RT_W9_PREFLIGHT.md) §4).
+  ([`RPC_CHANNEL_RT_W9_PREFLIGHT.md`](../completed/RPC_CHANNEL_RT_W9_PREFLIGHT.md) §4).
   The re-rulings are what is built. **RT-O16 — SUPERSEDED, the
   test-support feature:** the pinned vector assertions stay in
   `pinned_messages_mix_steps_and_rekey` (`noise.rs`); the key-schedule
@@ -2274,7 +2278,7 @@ One item is open. Every other item below is ruled.
   check also attests the release build's codegen settings. Two registry
   rows, one reason, for the two protocol-name literals.
 - **RT-O28 and RT-O29 — RT-W9 step 5's questions. RULED 2026-10-20**
-  ([`RPC_CHANNEL_RT_W9_PREFLIGHT.md`](RPC_CHANNEL_RT_W9_PREFLIGHT.md)
+  ([`RPC_CHANNEL_RT_W9_PREFLIGHT.md`](../completed/RPC_CHANNEL_RT_W9_PREFLIGHT.md)
   §4a). **RT-O28:** a submission is padded by the adapter, at the client's
   request, to a fixed count of largest-class records, padding sealed
   before the payload. **RT-O29:** one class table in both directions.
@@ -2363,16 +2367,17 @@ no reader of a deleted flag or field left in the tree.
 - **Leaving record sizes visible**, and **cover traffic** to hide timing.
   The first leaks when a wallet sends; the second is out of scope with a
   named reopen (§4.4, RT-O6).
-- **A time-bound message 1** (a coarse epoch under mac1, a store of every
-  mac1 in the accepted span that never evicts and answers busy when full,
-  and a mac1-keyed clock reply). REJECTED 2026-10-25 (decision authority).
-  It defends only against a path observer replaying captured message 1s
-  to deny service, and an observer can capture them only where the
-  channel crosses the open internet without a VPN or Tor. The project
-  ships a channel that is sound in the postures it recommends (§1) and
-  does not design against an operator's choice to run outside them:
-  building for every such choice adds complexity that weakens the design
-  for everyone. Out of scope, not deferred (§4.3).
+- **A time-bound message 1 — REJECTED 2026-10-25.** A coarse epoch under
+  mac1, a store of every mac1 in the accepted span that never evicts and
+  answers busy when full, and a mac1-keyed clock reply. It defends only
+  against a path observer replaying captured message 1s to deny service
+  on a leg §1 does not recommend (§4.3). The project ships a channel whose
+  residual is absent in the postures §1 names, and does not design against
+  an operator's choice to run outside them: building for every such choice
+  adds complexity that weakens the design for everyone. Out of scope, not
+  deferred. **Reopen (rule 21):** a posture §1 recommends no longer
+  conceals the handshake bytes from a path observer. The decision authority
+  re-rules in this section; no symbol is minted until then.
 - **Classical static authentication with hybrid forward secrecy only.**
   RT-11.
 - **Refusing wildcard binds on the channel listener.** A judgment of the
@@ -2453,7 +2458,7 @@ round, needs only RT-W10 and RT-W11, so the wallet and engine clients
 | Slice | Contents | Depends on | Authorization |
 |---|---|---|---|
 | RT-W8 | RT-P7 model on the canonical order; the three anchors of §4.1 — community XK vectors, vectors pinned from clatter 2.3.0 under seeded randomness, which RT-W9 compares our handshake against (RT-O11), each observed changing under a named edit; the gate asserting clatter is in no non-dev dependency graph; registry rows, including `shekyl/rpc-rendezvous-name-v1` with its known-answer vector pinned before the naming function is written (rule 30); RT-P4; creates `shekyl-rpc-channel` with the constants and naming functions (RT-O13); deletes `shekyl-rt-p2-spike` (§11.2) | ratification (given 2026-10-09) | **Authorized 2026-10-09.** Pre-flight: [`RPC_CHANNEL_RT_W8_PREFLIGHT.md`](RPC_CHANNEL_RT_W8_PREFLIGHT.md) |
-| RT-W9 | `shekyl-noise` holds `SymmetricState` and the typed `SendDirection` and `RecvDirection` (pinned handshake vectors untouched; the interim framer stays in `shekyl-p2p-transport`); the `hybridXK` handshake; `ClassedSealer` and `ClassedOpener` and the stream adapter `shekyl-rpc-stream` (RT-P5); padded records in size classes derived from RT-P5 (RT-O6). `FixedWindow` is the P2P end state and is not built here. Two exclusion rows in the domain registry, one shared reason, for the two Noise protocol-name literals — the RPC channel's and the P2P handshake's — which are mixed into a handshake hash and are standard pattern names, not Shekyl domain strings; the header-protection label `shekyl/noise-record-header-v1` is a separate mechanism-7 row, landed with the constant; the handshake's deadlines from RT-P9 (4 s for message 1, 11 s for the whole handshake, `shekyl_rpc_channel::deadline`). From RT-P6's follow-through (§4.3, ruled 2026-10-20): mac1 on message 1 (`shekyl/rpc-mac1-v1`), the handshake budget (a quarter of one core, 115 handshakes a second), the busy reply (`shekyl/rpc-busy-v1`) and the replay window. The client's retry policy (`shekyl_rpc_channel::retry`): one silent retry after a timeout, and a jittered back-off after busy (§4.3). The replay residual on an unprotected leg is the operator's (§4.3, §12). **Standing check, from RT-W9 on (ruled 2026-10-11):** the RT-P4 harness is re-run under the same registered lines whenever the decapsulation closure of the ML-KEM crate or the Rust toolchain changes, and a gate attests the release build's codegen settings from every flag source (RT-O22; §10, 2026-10-22) | RT-W8 | **authorized 2026-10-11, decision-anchored to PR #1034**; pre-flight [`RPC_CHANNEL_RT_W9_PREFLIGHT.md`](RPC_CHANNEL_RT_W9_PREFLIGHT.md); `RT-O16`…`RT-O22` ruled 2026-10-11, and `RT-O16`, `RT-O18`, `RT-O20` and the sequencing of `RT-O21` re-ruled 2026-10-12; step 1 is built (`SymmetricState`, `Direction`, `into_directions`); step 2 is built in PR #1039: the `hybridXK` handshake in `shekyl-rpc-channel`, ending in `into_directions`, compared with the pinned vectors from `rust/shekyl-rpc-channel/src/pinned_handshake.rs` (RT-O18); step 5a builds `ClassedRecord` in `shekyl-noise` (2026-10-20); step 5b builds `shekyl-rpc-stream` (2026-10-20), to RT-O28 and RT-O29 as ruled in the pre-flight's §4a; mac1, the budget and busy are built in PR #1137 and the deadlines and retry policy in PR #1139 (2026-10-20); the close-out of 2026-10-22 is built in PRs #1156 (the stream), #1159 (the noise crate and handshake), #1163 (these docs) and #1173 (step 6: the two exclusion rows, the mechanism-7 call-site pin and the standing-check gate, which passes with the laptop's shipped build attested by its committed disassembly comparison, RT-P4 staying met, §4.3, §9 RT-P4); the time-bound message 1 is out of scope (ruled 2026-10-25, §12). **LANDED 2026-10-25** |
+| RT-W9 | `shekyl-noise` holds `SymmetricState` and the typed `SendDirection` and `RecvDirection` (pinned handshake vectors untouched; the interim framer stays in `shekyl-p2p-transport`); the `hybridXK` handshake; `ClassedSealer` and `ClassedOpener` and the stream adapter `shekyl-rpc-stream` (RT-P5); padded records in size classes derived from RT-P5 (RT-O6). `FixedWindow` is the P2P end state and is not built here. Two exclusion rows in the domain registry, one shared reason, for the two Noise protocol-name literals — the RPC channel's and the P2P handshake's — which are mixed into a handshake hash and are standard pattern names, not Shekyl domain strings; the header-protection label `shekyl/noise-record-header-v1` is a separate mechanism-7 row, landed with the constant; the handshake's deadlines from RT-P9 (4 s for message 1, 11 s for the whole handshake, `shekyl_rpc_channel::deadline`). From RT-P6's follow-through (§4.3, ruled 2026-10-20): mac1 on message 1 (`shekyl/rpc-mac1-v1`), the handshake budget (a quarter of one core, 115 handshakes a second), the busy reply (`shekyl/rpc-busy-v1`) and the replay window. The client's retry policy (`shekyl_rpc_channel::retry`): one silent retry after a timeout, and a jittered back-off after busy (§4.3). The replay residual on a leg that can read the handshake is the operator's (§4.3, §12). **Standing check, from RT-W9 on (ruled 2026-10-11):** the RT-P4 harness is re-run under the same registered lines whenever the decapsulation closure of the ML-KEM crate or the Rust toolchain changes, and a gate attests the release build's codegen settings from every flag source (RT-O22; §10, 2026-10-22) | RT-W8 | **authorized 2026-10-11, decision-anchored to PR #1034**; pre-flight [`RPC_CHANNEL_RT_W9_PREFLIGHT.md`](../completed/RPC_CHANNEL_RT_W9_PREFLIGHT.md); `RT-O16`…`RT-O22` ruled 2026-10-11, and `RT-O16`, `RT-O18`, `RT-O20` and the sequencing of `RT-O21` re-ruled 2026-10-12; step 1 is built (`SymmetricState`, `Direction`, `into_directions`); step 2 is built in PR #1039: the `hybridXK` handshake in `shekyl-rpc-channel`, ending in `into_directions`, compared with the pinned vectors from `rust/shekyl-rpc-channel/src/pinned_handshake.rs` (RT-O18); step 5a builds `ClassedRecord` in `shekyl-noise` (2026-10-20); step 5b builds `shekyl-rpc-stream` (2026-10-20), to RT-O28 and RT-O29 as ruled in the pre-flight's §4a; mac1, the budget and busy are built in PR #1137 and the deadlines and retry policy in PR #1139 (2026-10-20); the close-out of 2026-10-22 is built in PRs #1156 (the stream), #1159 (the noise crate and handshake), #1163 (these docs) and #1173 (step 6: the two exclusion rows, the mechanism-7 call-site pin and the standing-check gate, which passes with the laptop's shipped build attested by its committed disassembly comparison, RT-P4 staying met, §4.3, §9 RT-P4); the time-bound message 1 is out of scope (ruled 2026-10-25, §12). **LANDED 2026-10-25** |
 | RT-W10 | Daemon: same-user socket/pipe and rendezvous, the daemon watching its own rendezvous and shutting down when it goes, the operator-named socket directory, the instance-name rule (§7.1), channel listener, enrolment and revocation, per-connection grants, the host-only class and the armed test-lever switch (§6.1), the resource policy and its floor-device measurement (§6.3); restricted listener and its C++ flags deleted; plaintext loopback re-scoped to `view`. **The listener logs a connection, counts it against a client and records a last-seen time only from the authenticated client `AuthenticatedSession` yields, never from the fingerprint `DaemonReadyForMessage4` exposes for the enrolment lookup (§4.1, ruled 2026-10-12).** A copied fingerprint is still only a claim. Its pre-flight settles what message 4 carries (§6.2). **The `submit_transaction` route fails closed on the record shape (close-out F2, 2026-10-22):** it refuses any body for which the connection's `InboundShape::ends_in_submission` is false when the body has been read, so a client that did not pad, or armed another connection, is refused rather than answered. **For its pre-flight (close-out, 2026-10-22):** message 3 has no upper length bound (`handshake.rs:716` checks only the minimum); §6.2 rules the message-3 and message-4 payloads fixed-length, so once the grant encoding is fixed the handshake takes the exact lengths as constants, refuses any other length, and the listener knows how many bytes to read; the listener's read bounds; the 4 s and 11 s deadlines in the accept loop; mac1, the budget and busy, wired through | RT-W9, **RT-O9**, RT-P8, **RK-5c** (`get_info` native, §6.1) | not authorized |
 | RT-W11 | `shekyl-rpc-tunnel`, with session pooling; the pool sized with RT-P6's cost of a session as an input, about 2.16 ms of CPU each side on the floor device (§8, ruled 2026-10-20). **Client contracts for a submission (close-out F2, 2026-10-22):** the tunnel holds its own connections (hyper's `client::conn::http1`, not the pooled `Client`) and arms `SubmissionMark` on the connection it sends the submission on, and that connection carries nothing else until the response; the submission body is one complete, buffered body (`Full`), never a streaming one | RT-W9 | not authorized |
 | RT-W12 | Clients on the channel: the engine's daemon client and `shekyl-wallet-rpc` (L1); `shekyl-cli`, once it serves the console on the shared client (RT-W15); `shekyl-gui-wallet`, which dials `HttpRpc::new` directly (open since R0's RT-W7 landing review, `RPC_TRANSPORT_POSTURE.md` §7 RT-O4); `shekyl-mobile-wallet`; **deletes the daemon client's `https://` arm**, `hyper-rustls` and native-roots loading with it (RT-O8); shows the engine pages its requests within §6.3's batch caps (RT-O9). **Client contracts for a submission (close-out F2, 2026-10-22):** each client holds its own connections (hyper's `client::conn::http1`, not the pooled `Client`) and arms `SubmissionMark` on the connection it sends the submission on, and that connection carries nothing else until the response; the submission body is one complete, buffered body (`Full`), never a streaming one | RT-W9 | not authorized |

@@ -332,8 +332,22 @@ whether `option_set` changes it while the daemon runs.
 <!-- shekyld-options: end -->
 
 The daemon's RPC takes no login and no TLS: inbound RPC is plaintext, on
-loopback only. For remote access use an onion service or a reverse proxy.
+loopback only. A machine of yours elsewhere reaches it through a Tor onion
+service you run in front of that loopback RPC (see "Connecting to a daemon").
+Do not publish this RPC through a reverse proxy. The proxy would hand the
+plaintext, with no login, to whoever can reach it.
 Wallet-RPC has login and TLS options for its own listener.
+
+The authenticated channel (`docs/design/RPC_CHANNEL.md` §1) is not what
+`shekyld` serves today. When the channel is served, run it where no path
+can read the connection's opening: on this machine, the local socket;
+between your machines, a tunnel that ends on the daemon's host, such as
+host-to-host WireGuard, or an onion service whose forward to the daemon
+stays on that host. Any other path is your choice and is strongly
+discouraged. An observer who can read an opening can replay it and keep
+the node busy refusing new ones. That denial of service belongs to the
+future channel. It is not a property of today's loopback RPC, and
+`shekyld` does not detect which path you chose.
 
 **Background operation**
 
@@ -343,26 +357,6 @@ Task Scheduler on Windows); the GUI wallet supervises its own bundled
 `shekyld` via the Tauri sidecar. An example systemd unit lives at
 `contrib/packaging/linux/shekyld.service`. Nothing reads the daemon's
 stdin unless `--console` is given, so a unit needs no flag for that.
-
-### Where the node's RPC should travel
-
-`shekyld` serves RPC on loopback only today, and a machine of yours
-elsewhere reaches it through a Tor onion service you run in front of that
-loopback RPC (see "Connecting to a daemon" below). The authenticated RPC
-channel (`docs/design/RPC_CHANNEL.md`) adds a same-user socket and a
-listener for other machines. The advice is the same for all of them:
-
-- **On the same machine,** use the local socket (today, loopback).
-- **Between your machines,** run the RPC inside a VPN such as WireGuard,
-  or over Tor.
-- **Across the open internet without either,** it is supported, because
-  your network is yours to run, but strongly discouraged. On such a path
-  an observer can replay the openings of earlier connections to keep the
-  node busy refusing new ones. That is a denial of service, not a leak,
-  and fixing it is a matter of where you route the traffic.
-
-`shekyld` does not detect which of these you chose, and nothing it does
-depends on it.
 
 ### Interactive console
 

@@ -1,19 +1,20 @@
 # RT-W9 — the channel itself: rule-26 pre-flight
 
-**Status:** Round 0 pre-flight — **questions RULED 2026-10-11** (Rick):
-`RT-O16`…`RT-O22`, §4, every part. **RE-RULED 2026-10-12 (PR #1034):**
-`RT-O16`, `RT-O18`, `RT-O20`, and the sequencing half of `RT-O21`. The
-re-rulings are what is built. An implementation opened against the
-2026-10-11 text of those four is rebuilt to this document. The substrate
-re-check is recorded (§2) and what could and could not be executed is
-stated (§3), so the slice's steps may proceed in the order of §5.
-Slice RT-W9 was authorized 2026-10-11 (Rick, in this lane). The
-authorization is decision-anchored to PR #1034.
+**Status:** CLOSED-as-record — **archived 2026-10-25.** RT-W9 landed
+2026-10-25. This pre-flight owns no open residue. Do not implement from
+it; the contract is the parent. History follows. **Questions RULED
+2026-10-11** (Rick): `RT-O16`…`RT-O22`, §4, every part. **RE-RULED
+2026-10-12 (PR #1034):** `RT-O16`, `RT-O18`, `RT-O20`, and the sequencing
+half of `RT-O21`. The re-rulings are what is built. An implementation
+opened against the 2026-10-11 text of those four is rebuilt to this
+document. The substrate re-check is recorded (§2) and what could and could
+not be executed is stated (§3). Slice RT-W9 was authorized 2026-10-11
+(Rick, in this lane). The authorization is decision-anchored to PR #1034.
 **Ground:** `shekyl-core` `dev` **`258b4d8515`**, the merge of PR #1020.
 Every `file:line` below was read at that commit.
-**Parent:** [`RPC_CHANNEL.md`](RPC_CHANNEL.md) (round R1, ruled 2026-10-09)
+**Parent:** [`RPC_CHANNEL.md`](../design/RPC_CHANNEL.md) (round R1, ruled 2026-10-09)
 §4.1, §4.3, §4.4, §9 and the RT-W9 row of §13; the P2P round's framing
-ruling, [`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md) D14 item 4.
+ruling, [`P2P_TRANSPORT_LAYER.md`](../design/P2P_TRANSPORT_LAYER.md) D14 item 4.
 Family `RT-` (registered); this document minted items **RT-O16…RT-O22**
 inside it, now ruled.
 **Decision authority:** Rick.
@@ -399,7 +400,7 @@ table.
 **RULED: one table in both directions.** The class table stays 512,
 16,384 and 65,535, as RT-O6 ruled.
 
-## 5. Plan
+## 5. Plan — BUILT (the record; do not implement from it)
 
 One pull request per step, each a draft off `dev`, each reviewable alone.
 This document is step 0 and is the only content of the first.
