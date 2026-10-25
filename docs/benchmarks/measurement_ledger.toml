@@ -571,6 +571,7 @@ stale_through = [
   { through = "5671b3721", note = "rustfmt line breaks in the close-out files; no code changed. Not re-measured." },
   { through = "3c8ed9e03", note = "Crate documentation and a test helper only; no code the P2P path runs changed. Not re-measured." },
   { through = "f7c1a94de7", note = "RT-W9 close-out review: the shared direction state is private to its module, and the P2P record path still seals and opens the same AEAD on the same bytes. A non-truncation refusal sets the RecvDirection's poison flag instead of a flag on RecvHalf. A dead sealer returns Poisoned before its argument checks; the P2P sender does not use that sealer. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "2d5a37384", note = "Close-cause classification runs after a dial ends: opened_a_stream says whether a stream opened, and 0x01 joins the onion destination-naming set because a live service's port refuses with that byte after a working rendezvous. This commit's own edit is the comment that separates that observation from RFC 1928's general SOCKS failure; a clearnet dial still does not remember the byte, because implicates_address requires destination authentication. Dial, handshake, and gap I/O and these span constants are unchanged. Not re-measured." },
 ]
 
 [[constant]]
@@ -658,6 +659,7 @@ cleared = [
   { through = "7e9ea0f61", reason = "The Tor link's death watch is re-planned on each publish and a stop has its own cause; the dial, the gap and their I/O are unchanged, so the capture still prices this tree." },
   { through = "b67b94731", reason = "The listener test's frame that is not the handshake is a timed-sync request in place of the deleted support-flags request (1007). No code path in these files changes, so the capture still prices this tree." },
   { through = "7258399ad", reason = "Increment 3's supervisor publishes the managed route when Tor is running and publish takes the boot's onion seed. The dial, the gap and the shutdown wait in these paths do the same I/O, so the 2026-10-14 capture still prices this tree." },
+  { through = "2d5a37384", reason = "The same close-cause classification: opened_a_stream and 0x01 in the onion destination-naming set run after a dial ends, and this commit only says that 0x01 is RFC 1928's general SOCKS failure except on an onion dial. The Tor dial, the gap, the shutdown wait and their I/O are unchanged, so the 2026-10-14 capture still prices this tree." },
 ]
 
 [[constant]]
