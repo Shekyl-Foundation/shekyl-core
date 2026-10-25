@@ -18,9 +18,12 @@ use super::posture::{
 
 mod announce;
 mod backoff;
+mod dials;
 
 use announce::{Announcements, Cadence};
 use backoff::Backoff;
+pub use dials::DialTally;
+use dials::{DialVerdict, Dials};
 
 /// How long a respawn waits, and how often a failure is said again.
 ///
@@ -43,6 +46,14 @@ pub struct Policy {
     /// Consecutive failed launches before the next one takes a fresh
     /// data directory. `TSR-M2` had no launch failure, so this stays 3.
     pub fresh_directory_after: u32,
+    /// Link failures among this node's Tor dials, with no opened stream
+    /// between them, that make the link down: External, never a respawn
+    /// (§4.2). Provisional until the floor-device soak.
+    pub link_down_after: u32,
+    /// Distinct destinations whose Tor dials timed out, with no opened
+    /// stream between them, that make the link down (§4.2: timeouts across
+    /// distinct destinations, never a count of replies). Provisional.
+    pub timeouts_down_after: u32,
 }
 
 impl Policy {
@@ -57,6 +68,11 @@ impl Policy {
             // about a minute: the same order as `TSR-M2`'s 60 s bound.
             alive_every: Duration::from_secs(30),
             fresh_directory_after: 3,
+            // Three in a row with nothing opened between: a few refused
+            // dials at a mirror's hiccup pass, a blocked link does not. Tor
+            // itself warns from the tenth problem at a phase.
+            link_down_after: 3,
+            timeouts_down_after: 3,
         }
     }
 }
@@ -211,6 +227,10 @@ pub enum Input {
     Shutdown,
     /// The relay's hop-0 verdict for a local origin moved (`GS-Q3`).
     AddressHidingOrigin(OriginVerdict),
+    /// The dialer's tally of this node's Tor dials changed (§4.2).
+    DialEvidence(DialTally),
+    /// Tor reports its network reachable again (`NETWORK_LIVENESS UP`).
+    ExternalCleared,
 }
 
 /// Actions and the next absolute deadline, in the caller's clock units.
@@ -302,6 +322,8 @@ pub struct Core {
     backoff: Backoff,
     /// The bootstrap percent and the byte mark the progress line measures.
     progress: ProgressWindow,
+    /// What this node's own Tor dials say about the link (§4.2).
+    dials: Dials,
     /// When the next pin check is due. Only while [`Phase::Absent`] is
     /// [`AbsentDuty::Retry`] or [`AbsentDuty::Held`].
     pin_at: Option<u64>,
@@ -331,6 +353,7 @@ impl Core {
             launch_failures: 0,
             backoff: Backoff::new(),
             progress: ProgressWindow::start(now),
+            dials: Dials::new(),
             pin_at: None,
             sample_at: None,
             alive_at: None,
@@ -388,6 +411,11 @@ impl Core {
             Input::StateFileAppeared => self.state_file(),
             Input::Shutdown => self.shutdown(),
             Input::AddressHidingOrigin(verdict) => self.origin_verdict(verdict, now),
+            Input::DialEvidence(tally) => self.dial_evidence(tally, now),
+            Input::ExternalCleared => {
+                self.dials.rebase();
+                self.external_cleared(now)
+            }
         };
         self.step(now, actions)
     }
@@ -582,6 +610,7 @@ impl Core {
             disk: Disk::Watching,
             link: Link::Open,
         };
+        self.dials.rebase();
         self.set_cause(Cause::None);
         self.arm_sample(now);
         self.arm_alive(now);
@@ -760,6 +789,34 @@ impl Core {
     fn external(&mut self, now: u64, cause: Cause) -> Vec<Action> {
         self.set_cause(cause);
         self.say(now, Cadence::Due)
+    }
+
+    /// The dialer's tally moved. Only a running Tor is judged by its dials:
+    /// before Running the dialer has no route, and after a death its
+    /// failures are the death's, which the process fault already names. A
+    /// down link is External and never a respawn; it takes the place of no
+    /// other cause. An opened stream clears it.
+    fn dial_evidence(&mut self, tally: DialTally, now: u64) -> Vec<Action> {
+        match self.dials.fold(tally, &self.policy) {
+            DialVerdict::Opened => self.external_cleared(now),
+            DialVerdict::Down
+                if matches!(self.phase, Phase::Running { .. }) && self.cause == Cause::None =>
+            {
+                self.external(now, Cause::ExternalBlocked)
+            }
+            DialVerdict::Down | DialVerdict::Quiet => Vec::new(),
+        }
+    }
+
+    /// The link carries again. Only [`Cause::ExternalBlocked`] clears: an
+    /// unreachable directory, a clock report and the open-file limit are
+    /// other kinds, each with its own evidence. The recovery is said at once.
+    fn external_cleared(&mut self, now: u64) -> Vec<Action> {
+        if self.cause != Cause::ExternalBlocked {
+            return Vec::new();
+        }
+        self.set_cause(Cause::None);
+        self.say(now, Cadence::Now)
     }
 
     fn on_sample_deadline(&mut self, now: u64) -> Vec<Action> {

@@ -21,7 +21,7 @@ mod core;
 mod events;
 mod posture;
 
-pub use core::{Action, Core, Input, ManagedRunning, Policy, Step};
+pub use core::{Action, Core, DialTally, Input, ManagedRunning, Policy, Step};
 pub use events::input_of;
 pub use posture::{
     fixes, held_sentence, install_sentence, own_tx, render, BootstrapLine, Cause, Connectors,
