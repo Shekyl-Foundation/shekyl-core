@@ -4207,17 +4207,6 @@ int shekyl_seam_session_established(std::uint64_t id);
 int shekyl_seam_session_connector(std::uint64_t id);
 /// 1 when a hub is bound.
 int shekyl_seam_is_bound(void);
-/// Chain sync's hint intake (CS-Q10): a session's sync payload that the C++
-/// handler decoded, passed beside `process_payload_sync_data` from the
-/// inbound handshake and both directions of timed sync. Slice 4 deletes
-/// the callers. Returns 1 when the sync owner took it, 0 when no seam is
-/// bound or no owner is attached (the router is pass-through until the
-/// chain-sync cutover), -1 when `socket_id` is zero or `top_id` is null.
-/// `top_id` points at 32 bytes. The id is the socket id, not the UUID.
-std::int32_t shekyl_chain_sync_hint(std::uint64_t socket_id, std::uint64_t current_height,
-                                    std::uint64_t cumulative_difficulty,
-                                    std::uint64_t cumulative_difficulty_top64,
-                                    const std::uint8_t* top_id);
 /// What `shekyl_peerlist_admit_received` answers. Each situation has its
 /// own code; the caller closes the session on REFUSE and on nothing else.
 /// REFUSE: the list broke a rule.

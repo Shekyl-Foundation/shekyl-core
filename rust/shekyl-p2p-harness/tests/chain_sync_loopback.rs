@@ -25,8 +25,9 @@ use shekyl_chain_sync::SyncState;
 use shekyl_draw_rng::SplitMix64;
 use shekyl_hash_budget::Budget;
 use shekyl_levin::{
-    notify, RequestBodies, ResponseBodies, ResponseHeaders, SyncCommand, COMMAND_HANDSHAKE,
-    NOTIFY_NEW_COMPACT_BLOCK, NOTIFY_NEW_TRANSACTIONS,
+    invoke, notify, BasicNodeData, CoreSyncData, HandshakeRequest, PortableMap, RequestBodies,
+    ResponseBodies, ResponseHeaders, SyncCommand, COMMAND_HANDSHAKE, NOTIFY_NEW_COMPACT_BLOCK,
+    NOTIFY_NEW_TRANSACTIONS,
 };
 use shekyl_p2p_harness::sync::{
     announcement, fork_headers, frame, request_headers, substrate, Bodies, Chain, Corpus,
@@ -992,11 +993,12 @@ async fn a_request_flood_beside_cpp_bytes_is_bounded_by_the_serving_queue() {
 
 // --------------------------------------------------------------- CS-4 --
 
-/// An inbound session's claim arrives as a hint (`shekyl_chain_sync_hint`,
-/// CS-Q10): before it the session is no source; after it the session
-/// serves the headers and the bodies, with no outbound dial.
+/// An inbound session's claim arrives in its handshake request, which the
+/// router's claim tap copies to the owner (CS-Q10, Rick 2026-10-24):
+/// before it the session is no source; after it the session serves the
+/// headers and the bodies, with no outbound dial.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn an_inbound_session_serves_the_sync_after_its_hint() {
+async fn an_inbound_session_serves_the_sync_after_its_handshake_request() {
     logs();
     let (corpus, steps) = spend();
     let held = source("inbound-src", &corpus, &steps).await;
@@ -1010,14 +1012,37 @@ async fn an_inbound_session_serves_the_sync_after_its_hint() {
         0,
         "an inbound session with no claim is no source"
     );
-    assert!(node.hint(id, claim_of(&held)), "the owner took the hint");
+    let claim = claim_of(&held);
+    let request = HandshakeRequest {
+        node_data: BasicNodeData {
+            network_id: [0; 16],
+        },
+        payload_data: CoreSyncData {
+            current_height: claim.current_height,
+            cumulative_difficulty: claim.cumulative_difficulty,
+            cumulative_difficulty_top64: claim.cumulative_difficulty_top64,
+            top_id: claim.top_id,
+        },
+        nonce: [0; 32],
+    }
+    .store()
+    .expect("the request encodes");
+    assert!(node.inject(id, invoke(COMMAND_HANDSHAKE, &request)).await);
     wait_synced(&node, count).await;
     assert!(seen.headers() >= 1 && seen.bodies() >= 1);
+    assert!(
+        node.stub
+            .lock()
+            .expect("stub")
+            .commands
+            .contains(&(id, COMMAND_HANDSHAKE)),
+        "the C++ handler still receives the handshake"
+    );
     node.stop().await;
     held.stop().await;
 }
 
-/// A connected announcement is relayed as the C++ `relay_block` does: to
+/// A connected announcement is relayed (CS-Q2 step 7): to
 /// every established session but the one that announced it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_connected_announcement_is_relayed_to_every_other_session() {

@@ -7,11 +7,14 @@
 
 use std::sync::{Arc, Mutex};
 
-use shekyl_levin::{notify, BucketHead, Flags, SyncCommand, HEADER_SIZE, NOTIFY_NEW_COMPACT_BLOCK};
+use shekyl_levin::{
+    invoke, notify, response, BucketHead, DefinedCommand, Flags, SyncCommand, COMMAND_HANDSHAKE,
+    COMMAND_TIMED_SYNC, HEADER_SIZE, NOTIFY_NEW_COMPACT_BLOCK,
+};
 use shekyl_seam::{Endpoint, Post, SocketId, SyncPayload};
 use tokio::sync::mpsc;
 
-use super::{Admitted, Fed, Forward, Routed, Router, Split};
+use super::{Admitted, Fed, Forward, Routed, Router, Split, Tapped};
 
 fn recorder() -> (Forward, Arc<Mutex<Vec<Post>>>) {
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -80,7 +83,7 @@ fn a_bad_signature_sends_the_rest_raw() {
         split.feed(&good),
         Fed {
             forward: good,
-            messages: Vec::new()
+            ..Fed::default()
         }
     );
 }
@@ -358,13 +361,12 @@ fn a_partial_sync_bucket_is_handed_to_cpp_whole_when_the_owner_leaves() {
 }
 
 /// The daemon's router before the cutover is pass-through: every post
-/// reaches the C++ handler unchanged, including chain sync's own commands,
-/// and a hint has no owner to reach.
+/// reaches the C++ handler unchanged, including chain sync's own commands
+/// and the messages the claim tap copies, and nothing reaches an owner.
 #[test]
 fn the_daemons_pass_through_router_changes_nothing_live() {
     let (forward, seen) = recorder();
-    let router = Arc::new(Router::pass_through(forward));
-    let sink = router.sink();
+    let sink = Router::pass_through(forward).into_sink();
     let id = socket(11);
     let connector = endpoint().connector();
     let sync = SyncPayload {
@@ -394,39 +396,106 @@ fn the_daemons_pass_through_router_changes_nothing_live() {
     posts.push(Post::Deliver {
         id,
         connector,
+        bytes: invoke(COMMAND_HANDSHAKE, b"a handshake"),
+    });
+    posts.push(Post::Deliver {
+        id,
+        connector,
         bytes: other_bucket(b"relay"),
     });
     for post in posts.clone() {
         sink(post);
     }
-    assert!(!router.hint(id, sync), "no owner takes a hint");
     assert_eq!(*seen.lock().expect("unpoisoned"), posts);
 }
 
-/// An attached router hands a hint to the owner as the session's claim.
+/// An attached router's claim tap (CS-Q10): a handshake request and both
+/// timed-sync directions reach the C++ handler unchanged, and the owner
+/// gets a copy of each payload. A payload split across chunks is one
+/// copy. A fragment and an over-cap payload are not copied. Red edit: tap
+/// nothing.
 #[test]
-fn an_attached_router_hands_a_hint_to_the_owner() {
+fn an_attached_router_taps_the_messages_that_carry_a_claim() {
     let (forward, seen) = recorder();
     let (tx, mut rx) = mpsc::unbounded_channel();
     let router = Router::attached(forward, tx);
     let id = socket(12);
-    let sync = SyncPayload {
-        current_height: 9,
-        cumulative_difficulty: 9,
-        cumulative_difficulty_top64: 0,
-        top_id: [2; 32],
-    };
-    assert!(router.hint(id, sync));
+    let connector = endpoint().connector();
+    router.post(Post::Established {
+        id,
+        endpoint: endpoint(),
+    });
+    let _established = rx.try_recv().expect("established");
+    let handshake = invoke(COMMAND_HANDSHAKE, b"handshake-payload");
+    let request = invoke(COMMAND_TIMED_SYNC, b"request-payload");
+    let reply = response(COMMAND_TIMED_SYNC, b"response-payload");
+    let mut stream = handshake.clone();
+    stream.extend_from_slice(&request);
+    stream.extend_from_slice(&reply);
+    // Split mid-payload, so a copy spans two chunks.
+    let cut = handshake.len() - 4;
+    for chunk in [&stream[..cut], &stream[cut..]] {
+        router.post(Post::Deliver {
+            id,
+            connector,
+            bytes: chunk.to_vec(),
+        });
+    }
+    let taps: Vec<Routed> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
     assert_eq!(
-        rx.try_recv().expect("the claim"),
-        Routed::Claim { id, sync }
+        taps,
+        vec![
+            Routed::Tap {
+                id,
+                kind: Tapped::HandshakeRequest,
+                payload: b"handshake-payload".to_vec()
+            },
+            Routed::Tap {
+                id,
+                kind: Tapped::TimedSyncRequest,
+                payload: b"request-payload".to_vec()
+            },
+            Routed::Tap {
+                id,
+                kind: Tapped::TimedSyncResponse,
+                payload: b"response-payload".to_vec()
+            },
+        ]
     );
+    let forwarded: Vec<u8> = seen
+        .lock()
+        .expect("unpoisoned")
+        .iter()
+        .filter_map(|post| match post {
+            Post::Deliver { bytes, .. } => Some(bytes.clone()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(forwarded, stream, "the C++ handler sees every byte");
+
+    // A fragment, and a handshake past its cap, are not copied.
+    let mut fragment = invoke(COMMAND_HANDSHAKE, b"x");
+    let mut head =
+        BucketHead::read(&fragment[..HEADER_SIZE].try_into().expect("a header")).expect("a header");
+    head.flags = head.flags.union(Flags::BEGIN);
+    fragment[..HEADER_SIZE].copy_from_slice(&head.write());
+    let cap = DefinedCommand::Handshake.payload_cap();
+    let oversize = invoke(
+        COMMAND_HANDSHAKE,
+        &vec![0; usize::try_from(cap + 1).expect("a cap")],
+    );
+    for bytes in [fragment, oversize] {
+        router.post(Post::Deliver {
+            id,
+            connector,
+            bytes,
+        });
+    }
     assert!(
-        seen.lock().expect("unpoisoned").is_empty(),
-        "a hint is not a post"
+        std::iter::from_fn(|| rx.try_recv().ok()).all(|item| !matches!(item, Routed::Tap { .. })),
+        "a fragment or an over-cap payload was copied"
     );
-    drop(rx);
-    assert!(!router.hint(id, sync), "a gone owner takes nothing");
 }
 
 /// An attached router keeps an announced block (2008) for the owner; the

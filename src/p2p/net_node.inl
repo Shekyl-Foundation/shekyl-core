@@ -578,8 +578,6 @@ namespace nodetool
         m_network_zones.at(epee::net_utils::require_session_connector(context.m_connector)).m_net_server.get_config_object().close(context.m_connection_id );
         add_host_fail(context.m_remote_address);
       }
-      shekyl_chain_sync_hint(shekyl::seam_socket_id(context.m_connection_id), rsp.payload_data.current_height,
-        rsp.payload_data.cumulative_difficulty, rsp.payload_data.cumulative_difficulty_top64, reinterpret_cast<const std::uint8_t*>(rsp.payload_data.top_id.data));
       if (!m_payload_handler.process_payload_sync_data(rsp.payload_data, context, false))
       {
         m_network_zones.at(epee::net_utils::require_session_connector(context.m_connector)).m_net_server.get_config_object().close(context.m_connection_id );
@@ -870,8 +868,6 @@ namespace nodetool
   template<class t_payload_net_handler>
   int node_server<t_payload_net_handler>::handle_timed_sync(int command, typename COMMAND_TIMED_SYNC::request& arg, typename COMMAND_TIMED_SYNC::response& rsp, p2p_connection_context& context)
   {
-    shekyl_chain_sync_hint(shekyl::seam_socket_id(context.m_connection_id), arg.payload_data.current_height,
-      arg.payload_data.cumulative_difficulty, arg.payload_data.cumulative_difficulty_top64, reinterpret_cast<const std::uint8_t*>(arg.payload_data.top_id.data));
     if(!m_payload_handler.process_payload_sync_data(arg.payload_data, context, false))
     {
       LOG_WARNING_CC(context, "Failed to process_payload_sync_data(), dropping connection");
@@ -935,8 +931,6 @@ namespace nodetool
       return 1;
     }
 
-    shekyl_chain_sync_hint(shekyl::seam_socket_id(context.m_connection_id), arg.payload_data.current_height,
-      arg.payload_data.cumulative_difficulty, arg.payload_data.cumulative_difficulty_top64, reinterpret_cast<const std::uint8_t*>(arg.payload_data.top_id.data));
     if(!m_payload_handler.process_payload_sync_data(arg.payload_data, context, true))
     {
       LOG_WARNING_CC(context, "COMMAND_HANDSHAKE came, but process_payload_sync_data returned false, dropping connection.");

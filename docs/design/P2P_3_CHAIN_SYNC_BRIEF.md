@@ -2,7 +2,7 @@
 
 **Families (registered in `IMPLEMENTATION_INDEX.md` §2, rule 94):** **`CS-Q`** (questions, ruled here) and **`CS-F`** (findings). Grep surface: `rg -n -e '\bCS-[QF]'`, because the serve-credit findings family `SCS-F` contains `CS-F` as a substring. `CSR-` is a separate family.
 **Ground:** `dev` at `24961a9a8` (2026-10-19), after #1101 (DRS-X Round 0), #1088 (the daemon-config cutover) and #1102 (the Rust pool); DRS-X PR 2 (#1123, open) read at `e3180b665` for the door's `BeyondCap`. The handler is 2,669 + 228 lines; `block_queue` is 651 (`.h` 115 + `.cpp` 536); `cryptonote_protocol_defs.h` is 300.
-**Status:** CS-1 implemented (2026-10-21); CS-2 model and its §5 harness are in `shekyl-chain-sync` (2026-10-22); CS-3 implemented (2026-10-23): the runtime half and CS-Q11's loopback harness. CS-4 (pre-cutover, pure Rust): the inbound hint, the relay, the state handle's publisher and the cutover's deletion table. The cutover follows the DRS-X flip. Round 0 RULED, Rick 2026-10-18: CS-Q1…CS-Q12 as recommended, with four amendments: the complement request is chain sync's (CS-Q1, CS-Q10); `Synced` reads verified headers only (CS-Q2 step 8); the long-run slot is paid for in PoW and goes to the most verified work (CS-Q2 step 3); `following_degraded` gets a Rust producer (§A, coupling 4). Three corrections to CS-Q2 and CS-Q3, confirmed 2026-10-19 (Rick): a body, with its attestation witness, is bound to its header before the offer, so a substituted body or witness never invalidates an honest header (CEN-G2, CEN-B4); `Synced` waits for PDM-Q5's backward fill, with `Following` until then; and the body form is per transaction. The objects response follows PWD-B3's continuation (Rick, 2026-10-20): every requested block is sent, deferred by the budget, or marked unavailable, and only an unmarked shortfall closes the session (CS-Q3.2). Ruled 2026-10-19 (Rick), from DRS-X PR 2's design review: `following_degraded` is set by ingest's three refusals and by the sync owner, all through the connector, its one writer (§A items 7 and coupling 4); header PoW follows the earned-seed rule; and a past-cap branch is checked as evidence under `Class::Evidence` (CS-Q2 step 3). **Amended 2026-10-22 (Rick):** CS-Q2 step 1 refuses a block count of 0, or cumulative work below that count. **CS-1 is implemented (2026-10-21):** `form_header`, `judge_header`, `judge_header_cheap` and `bind_body` in `shekyl-chain-rules`; `PowBlob` and `BlockBody` in `shekyl-wire`; commands 2011–2014 in `shekyl-levin`, not admitted at ingress; the handler files are shrink-frozen (CS-Q9). CS-2, the sync model, is in `shekyl-chain-sync` (2026-10-22): the branch view, runs, the long-run slot, bodies, entry outcomes and close causes. **CS-3 is implemented (2026-10-23),** in `shekyl-chain-sync-runtime`, layered over the pure model in `shekyl-chain-sync` (Rick, 2026-10-23: ingest and the node depend on the model, the runtime on them): the router (the seam's post sink, pass-through in the daemon), the sync owner on its `chain-sync` row, the executor with `Class::Evidence`, serving 2011–2014 from the store, `Door::offer_bound` (formed with `form_judged`), the latch through the connector (`RaiseAlarm`, `WatchLatch`), and CS-Q11's loopback harness in `shekyl-p2p-harness` (`sync`). The daemon builds the router pass-through, so no live session reaches the owner until the cutover (CS-Q10).
+**Status:** CS-1 implemented (2026-10-21); CS-2 model and its §5 harness are in `shekyl-chain-sync` (2026-10-22); CS-3 implemented (2026-10-23): the runtime half and CS-Q11's loopback harness. CS-4 (pre-cutover, pure Rust): the inbound claim tap, the relay, the state handle's publisher and the cutover's deletion table. The cutover follows the DRS-X flip. Round 0 RULED, Rick 2026-10-18: CS-Q1…CS-Q12 as recommended, with four amendments: the complement request is chain sync's (CS-Q1, CS-Q10); `Synced` reads verified headers only (CS-Q2 step 8); the long-run slot is paid for in PoW and goes to the most verified work (CS-Q2 step 3); `following_degraded` gets a Rust producer (§A, coupling 4). Three corrections to CS-Q2 and CS-Q3, confirmed 2026-10-19 (Rick): a body, with its attestation witness, is bound to its header before the offer, so a substituted body or witness never invalidates an honest header (CEN-G2, CEN-B4); `Synced` waits for PDM-Q5's backward fill, with `Following` until then; and the body form is per transaction. The objects response follows PWD-B3's continuation (Rick, 2026-10-20): every requested block is sent, deferred by the budget, or marked unavailable, and only an unmarked shortfall closes the session (CS-Q3.2). Ruled 2026-10-19 (Rick), from DRS-X PR 2's design review: `following_degraded` is set by ingest's three refusals and by the sync owner, all through the connector, its one writer (§A items 7 and coupling 4); header PoW follows the earned-seed rule; and a past-cap branch is checked as evidence under `Class::Evidence` (CS-Q2 step 3). **Amended 2026-10-22 (Rick):** CS-Q2 step 1 refuses a block count of 0, or cumulative work below that count. **CS-1 is implemented (2026-10-21):** `form_header`, `judge_header`, `judge_header_cheap` and `bind_body` in `shekyl-chain-rules`; `PowBlob` and `BlockBody` in `shekyl-wire`; commands 2011–2014 in `shekyl-levin`, not admitted at ingress; the handler files are shrink-frozen (CS-Q9). CS-2, the sync model, is in `shekyl-chain-sync` (2026-10-22): the branch view, runs, the long-run slot, bodies, entry outcomes and close causes. **CS-3 is implemented (2026-10-23),** in `shekyl-chain-sync-runtime`, layered over the pure model in `shekyl-chain-sync` (Rick, 2026-10-23: ingest and the node depend on the model, the runtime on them): the router (the seam's post sink, pass-through in the daemon), the sync owner on its `chain-sync` row, the executor with `Class::Evidence`, serving 2011–2014 from the store, `Door::offer_bound` (formed with `form_judged`), the latch through the connector (`RaiseAlarm`, `WatchLatch`), and CS-Q11's loopback harness in `shekyl-p2p-harness` (`sync`). The daemon builds the router pass-through, so no live session reaches the owner until the cutover (CS-Q10).
 **Parent:** [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4.2, row **CS**. [`DRS_X_STORE_FLIP.md`](DRS_X_STORE_FLIP.md) carries §A below as chain sync's Round 0 requirement.
 
 ## Constants (CS-1)
@@ -165,7 +165,7 @@ owner of block propagation.
 | `handle_request_get_objects`, `handle_response_get_objects` | CS | Redesign (byte budget, per-transaction body form, CS-Q3) |
 | `request_missing_objects`, `should_download_next_span`, `skip_unneeded_hashes`, `request_chain_history`, `calculate_dynamic_span`, `block_queue` | CS | Redesign as the sync owner's scheduler (CS-Q2, Q8) |
 | `try_add_next_blocks` (the add loop), `make_*_connect_supplement` | DRS-X | Deleted here. Arrivals go to the DRS-X entry; formation is `form`'s |
-| `process_payload_sync_data` | CS | Redesign as hint intake. Callers: the dialer's result (landed) and slice 4's inbound handshake and timed sync |
+| `process_payload_sync_data` | CS | Redesign as the session's claim. Sources: the dialer's result (landed) and, until slice 4 posts the inbound handshake's result, the router's claim tap on inbound handshakes and timed sync |
 | `get_payload_sync_data` | — | Delete. The dialer already reads `shekyl_core_publish_tip`; slice 4 reads the same snapshot |
 | `on_connection_synchronized`, `is_synchronized`, `is_busy_syncing`, `m_synchronized` | CS | Redesign as one derived, published sync state (CS-Q2). The edge it fired into the pool complement is replaced as in CS-Q10 |
 | `on_connection_close` | CS | Keep the job (a closed session's requests are re-queued). The target recompute is deleted |
@@ -1201,8 +1201,10 @@ does it meet ingest's backpressure?
   - The router is `shekyl_chain_sync_runtime::router`. It reads bucket headers
     only, admits 2011–2014 and, attached, 2008 with their caps, and
     forwards everything else to the C++ handler unchanged
-    (`P2P_TRANSPORT_LAYER.md`, the seam's post sink). It also takes the
-    hint intake's claims (`Router::hint`).
+    (`P2P_TRANSPORT_LAYER.md`, the seam's post sink). Its claim tap
+    copies the payload of an inbound handshake request and of either
+    direction's timed sync to the owner, which decodes it and takes the
+    session's claim; the bytes still reach the C++ handler unchanged.
   - The owner publishes its derived state into the node's one sync
     sender, `shekyl_node::Node::sync()` (`OwnerParts::state` is that
     sender, cloned; DX-Q3 Q13), which the RPC's facts, the miner's
@@ -1461,20 +1463,17 @@ lines needs none; a file with an edited line needs one naming its path.
 | 8 | `…/block_queue.cpp` | deleted | none |
 | 9 | `…/cryptonote_protocol_defs.h` | shrinks (1d) | none expected |
 
-Slice 4 deletes the three `shekyl_chain_sync_hint` calls (`net_node.inl:581`,
-`:873`, `:938`) with the C++ handshake; they are not the cutover's. The
-Rust entry they call goes with them:
+**The claim tap is slice 4's to delete (Rick, 2026-10-24).** Once the hub
+posts `HandshakeResult` for inbound sessions, as it does for outbound
+ones, the inbound claim arrives as that post, and the tap goes. It is not
+the cutover's, and it touches no C++:
 
 | # | Item | Where |
 | --- | --- | --- |
-| 1 | `shekyl_chain_sync_hint` | `rust/shekyl-ffi/src/seam_ffi.rs:335-365` |
-| 2 | The `ROUTER` slot it reads, and `store_router` | `rust/shekyl-ffi/src/seam_ffi.rs:312-317` |
-| 3 | Its C declaration | `src/shekyl/shekyl_ffi.h:4210-4220` |
-| 4 | `Router::hint` | `rust/shekyl-chain-sync-runtime/src/router.rs:148-152` |
-| 5 | Its test, `a_hint_has_no_owner_before_the_cutover` | `rust/shekyl-ffi/src/seam_ffi_tests.rs` |
-
-The inbound claim then arrives as the hub's `HandshakeResult` post, as
-the outbound one does.
+| 1 | `Routed::Tap`, `Tapped`, `Fed::taps` | `rust/shekyl-chain-sync-runtime/src/router.rs` |
+| 2 | The split's tap copy and `tapped` | `rust/shekyl-chain-sync-runtime/src/router.rs` |
+| 3 | The owner's `tap` | `rust/shekyl-chain-sync-runtime/src/owner.rs` |
+| 4 | Their tests: `an_attached_router_taps_the_messages_that_carry_a_claim`, `an_inbound_session_serves_the_sync_after_its_handshake_request` | `router_tests.rs`, `shekyl-p2p-harness/tests/chain_sync_loopback.rs` |
 
 **Wargame.** A shrink row cannot block a deletion. It only makes an
 addition visible.
@@ -1513,11 +1512,14 @@ increments?
     attached (`Router::attached`) rather than pass-through, and starts
     the owner;
   - delete the **sync half** of the handler and `block_queue`.
-  - What it needs from the owner is built (CS-4). An inbound session's
-    claim arrives through the hint intake, `shekyl_chain_sync_hint`,
-    which the C++ inbound handshake and both directions of timed sync
-    call beside `process_payload_sync_data` (slice 4 deletes the three
-    calls); in the daemon's pass-through router the hint has no owner.
+  - What it needs from the owner is built (CS-4). **An inbound session's
+    claim arrives by a Rust tap, not an FFI entry (Rick, 2026-10-24):**
+    the attached router forwards a copy of every 1001 request and both
+    1002 messages to the owner, which decodes them with `shekyl-levin`
+    and calls `Sync::claim`. The router still parses no payload, and the
+    C++ handler gets every byte unchanged. No C++ is edited, so no
+    `UNFREEZE` line sits in the frozen handler; slice 4 deletes the tap
+    when the hub posts `HandshakeResult` for inbound sessions (CS-Q9).
     The attached router routes 2008 to the owner as `Event::Announce`.
     The owner sends what the model relays (CS-Q2 step 7): compact, to
     every established session but the supplier, through `hub.send`. When
@@ -1553,9 +1555,10 @@ increments?
 
   Increments that wired the C++ handler into Rust only to delete it a
   PR later are joined, as in the PR-3 precedent.
-- **Slice 4.** Until it lands, its C++ inbound paths call the sync
-  owner's hint intake through one FFI entry. That is the same shape the
-  dialer's result already uses, and slice 4 deletes the caller.
+- **Slice 4.** Until it lands, an inbound session's claim reaches the
+  owner through the router's claim tap, in Rust. When slice 4 posts the
+  inbound handshake's result, as the dialer posts the outbound one, the
+  tap is deleted.
 - **RD.** Independent. It reacts to `Synced` and owns transactions.
 
 **Wargame.** Nothing here is remotely triggerable. The risk is a

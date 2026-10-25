@@ -62,8 +62,9 @@ use shekyl_chain_store::store::{ChainStore, SnapshotView};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_draw_rng::RelayRng;
 use shekyl_levin::{
-    notify, BlockCompleteEntry, GetTxpoolComplement, NewCompactBlock, PortableMap, RequestBodies,
-    RequestCompactMissingTx, RequestHeaders, SyncCommand, HASH_SIZE, NOTIFY_GET_TXPOOL_COMPLEMENT,
+    notify, BlockCompleteEntry, CoreSyncData, GetTxpoolComplement, HandshakeRequest,
+    NewCompactBlock, PortableMap, RequestBodies, RequestCompactMissingTx, RequestHeaders,
+    SyncCommand, TimedSyncRequest, TimedSyncResponse, HASH_SIZE, NOTIFY_GET_TXPOOL_COMPLEMENT,
     NOTIFY_NEW_COMPACT_BLOCK, NOTIFY_REQUEST_COMPACT_MISSING_TX,
 };
 use shekyl_peer_policy::{Invalidate, SyncReply, SyncReplyAction};
@@ -77,7 +78,7 @@ use tokio::sync::{mpsc, watch};
 use tracing::Instrument;
 
 use crate::executor::Executor;
-use crate::router::Routed;
+use crate::router::{Routed, Tapped};
 use crate::serve::{serve_bodies, serve_headers};
 use crate::session::Session;
 use shekyl_chain_sync::{
@@ -485,6 +486,37 @@ where
         self.commands(out);
     }
 
+    /// A copy of a handshake request or a timed sync (the router's claim
+    /// tap): its sync payload is the session's claim. A copy that does not
+    /// decode is the C++ handler's to judge, and gives no claim.
+    fn tap(&mut self, session: Session, kind: Tapped, payload: &[u8]) {
+        let core: Result<CoreSyncData, _> = match kind {
+            Tapped::HandshakeRequest => {
+                HandshakeRequest::load(payload).map(|message| message.payload_data)
+            }
+            Tapped::TimedSyncRequest => {
+                TimedSyncRequest::load(payload).map(|message| message.payload_data)
+            }
+            Tapped::TimedSyncResponse => {
+                TimedSyncResponse::load(payload).map(|message| message.payload_data)
+            }
+        };
+        match core {
+            Ok(core) => self.claim(
+                session,
+                SyncPayload {
+                    current_height: core.current_height,
+                    cumulative_difficulty: core.cumulative_difficulty,
+                    cumulative_difficulty_top64: core.cumulative_difficulty_top64,
+                    top_id: core.top_id,
+                },
+            ),
+            Err(err) => {
+                tracing::debug!(%session, ?kind, %err, "a tapped message that does not decode")
+            }
+        }
+    }
+
     fn claim(&mut self, session: Session, sync: SyncPayload) {
         let claim = PeerClaim {
             count: ChainCount::from_raw(sync.current_height),
@@ -529,6 +561,7 @@ where
             }
             Routed::Claim { id, sync } => self.claim(Session::new(id), sync),
             Routed::Announce { id, payload } => self.announce(Session::new(id), &payload),
+            Routed::Tap { id, kind, payload } => self.tap(Session::new(id), kind, &payload),
             Routed::Message {
                 id,
                 command,

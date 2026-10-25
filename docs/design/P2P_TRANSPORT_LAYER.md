@@ -599,10 +599,12 @@ flags, length) and never a payload:
   exactly one `delivery_finished`. A delivery that carried nothing for
   the C++ handler is finished by the owner, from its own task.
 - An owner that is gone turns the router back to pass-through.
-- **The hint intake.** A sync payload the C++ handler decoded (an inbound
-  handshake, a timed sync) reaches the owner through
-  `shekyl_chain_sync_hint` and `Router::hint`; a pass-through router
-  drops it.
+- **The claim tap.** An attached router copies the payload of an inbound
+  handshake request and of either direction's timed sync to the owner,
+  which decodes the peer's sync payload as the session's claim. The
+  bytes reach the C++ handler unchanged, and the router reads only the
+  bucket header. Slice 4 deletes the tap when the hub posts the inbound
+  handshake's result.
 
 The cutover deletes this forwarding together with the C++ sync half.
 

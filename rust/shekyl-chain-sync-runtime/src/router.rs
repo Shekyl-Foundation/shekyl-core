@@ -23,6 +23,13 @@
 //!   here too, within its cap, and goes to the owner whole: announcements
 //!   are chain sync's (CS-Q1). 2009, a peer asking for an announced block's
 //!   missing transactions, stays the C++ handler's until the cutover.
+//! - **The claim tap** (CS-Q10, Rick 2026-10-24): an inbound session's
+//!   handshake request (1001) and either direction's timed sync (1002)
+//!   carry the peer's sync payload, which the C++ handler also reads. Those
+//!   buckets go to the C++ handler unchanged, and the owner gets a copy of
+//!   the payload ([`Routed::Tap`]), within the command's cap. The router
+//!   reads only the bucket header; the owner decodes the copy. Slice 4
+//!   deletes the tap when the hub posts the inbound handshake's result.
 //! - **Every other command**, and every other post, goes to the C++ handler
 //!   unchanged. Its bytes are streamed through as they arrive, never
 //!   buffered here, and the C++ ingress judges them as it does today.
@@ -49,8 +56,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use shekyl_levin::{
-    BucketHead, DefinedCommand, Flags, SyncCommand, FLAGS_DEFINED, HEADER_SIZE,
-    NOTIFY_NEW_COMPACT_BLOCK,
+    BucketHead, DefinedCommand, Flags, SyncCommand, COMMAND_HANDSHAKE, COMMAND_TIMED_SYNC,
+    FLAGS_DEFINED, HEADER_SIZE, NOTIFY_NEW_COMPACT_BLOCK,
 };
 use shekyl_seam::{ConnectorId, Post, SocketId, SyncPayload};
 use tokio::sync::mpsc;
@@ -89,6 +96,16 @@ pub enum Routed {
         /// The session.
         id: SocketId,
         /// The payload.
+        payload: Vec<u8>,
+    },
+    /// A copy of a C++-bound message that carries the peer's sync payload
+    /// (module docs, the claim tap), still encoded.
+    Tap {
+        /// The session.
+        id: SocketId,
+        /// Which message.
+        kind: Tapped,
+        /// The payload, still encoded.
         payload: Vec<u8>,
     },
     /// A delivered chunk carried nothing for the C++ handler. The owner
@@ -133,22 +150,11 @@ impl Router {
         }
     }
 
-    /// This router as the hub's post sink. The caller keeps its own
-    /// `Arc` for [`Self::hint`].
+    /// This router as the hub's post sink.
     #[must_use]
-    pub fn sink(self: &Arc<Self>) -> Arc<dyn Fn(Post) + Send + Sync> {
-        let router = Arc::clone(self);
+    pub fn into_sink(self) -> Arc<dyn Fn(Post) + Send + Sync> {
+        let router = Arc::new(self);
         Arc::new(move |post| router.post(post))
-    }
-
-    /// A session's sync payload that did not arrive as a post: an inbound
-    /// handshake's, or a timed sync's (CS-Q10, until slice 4). The owner
-    /// takes it as that session's claim. `false` when no owner is attached
-    /// (the daemon's router before the cutover) or it is gone.
-    pub fn hint(&self, id: SocketId, sync: SyncPayload) -> bool {
-        self.owner
-            .as_ref()
-            .is_some_and(|owner| owner.send(Routed::Claim { id, sync }).is_ok())
     }
 
     /// Handle one post (module docs). Never calls into the hub.
@@ -223,6 +229,11 @@ impl Router {
                         Admitted::Announce => Routed::Announce { id, payload },
                     })
                     .collect::<Vec<_>>();
+                routed.extend(fed.taps.into_iter().map(|(kind, payload)| Routed::Tap {
+                    id,
+                    kind,
+                    payload,
+                }));
                 if fed.forward.is_empty() {
                     routed.push(Routed::Finished { id });
                 }
@@ -330,6 +341,18 @@ impl Admitted {
     }
 }
 
+/// A C++-bound message the owner reads a copy of for the peer's claim
+/// (module docs, the claim tap).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tapped {
+    /// An inbound session's handshake request (1001).
+    HandshakeRequest,
+    /// A timed sync request (1002).
+    TimedSyncRequest,
+    /// A timed sync response (1002).
+    TimedSyncResponse,
+}
+
 /// What one chunk split into.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Fed {
@@ -337,6 +360,9 @@ pub struct Fed {
     pub forward: Vec<u8>,
     /// Whole messages for the owner, in arrival order.
     pub messages: Vec<(Admitted, Vec<u8>)>,
+    /// Copies of whole tapped payloads, in arrival order. Their bytes are
+    /// in `forward` too.
+    pub taps: Vec<(Tapped, Vec<u8>)>,
 }
 
 /// One session's position in its byte stream.
@@ -354,6 +380,8 @@ pub struct Split {
     /// The next byte to parse.
     cursor: usize,
     state: State,
+    /// The copy of a tapped payload being forwarded, and its kind.
+    tap: Option<(Tapped, Vec<u8>)>,
 }
 
 impl Default for Split {
@@ -363,6 +391,7 @@ impl Default for Split {
             handed: 0,
             cursor: 0,
             state: State::Header,
+            tap: None,
         }
     }
 }
@@ -435,6 +464,12 @@ impl Split {
                                 None => {
                                     fed.forward.extend_from_slice(&head);
                                     self.handed = self.cursor;
+                                    self.tap = tapped(&bucket).map(|kind| {
+                                        let reserve = usize::try_from(bucket.payload_len)
+                                            .unwrap_or(0)
+                                            .min(TAP_RESERVE);
+                                        (kind, Vec::with_capacity(reserve))
+                                    });
                                     self.state = if bucket.payload_len == 0 {
                                         State::Header
                                     } else {
@@ -455,12 +490,18 @@ impl Split {
                     let take = usize::try_from(remaining)
                         .unwrap_or(usize::MAX)
                         .min(available);
-                    fed.forward
-                        .extend_from_slice(&self.raw[self.cursor..self.cursor + take]);
+                    let forwarded = &self.raw[self.cursor..self.cursor + take];
+                    fed.forward.extend_from_slice(forwarded);
+                    if let Some((_, copy)) = self.tap.as_mut() {
+                        copy.extend_from_slice(forwarded);
+                    }
                     self.cursor += take;
                     self.handed = self.cursor;
                     let left = remaining - u64::try_from(take).unwrap_or(remaining);
                     if left == 0 {
+                        if let Some(tap) = self.tap.take() {
+                            fed.taps.push(tap);
+                        }
                         self.state = State::Header;
                     } else {
                         self.state = State::Forward { remaining: left };
@@ -520,6 +561,7 @@ impl Split {
         self.handed = 0;
         self.cursor = 0;
         self.state = State::Header;
+        self.tap = None;
         std::mem::take(&mut self.raw)
     }
 }
@@ -537,6 +579,40 @@ fn admitted(bucket: &BucketHead) -> Option<Admitted> {
         && !bucket.expects_response();
     let defined = flags.difference(FLAGS_DEFINED).bits() == 0;
     (notify && defined && bucket.payload_len <= command.payload_cap()).then_some(command)
+}
+
+/// How much of a tapped payload is reserved up front; the rest grows as it
+/// arrives, so a header's claimed length is never an allocation.
+const TAP_RESERVE: usize = 4 * 1024;
+
+/// The message a C++-bound bucket carries, when the owner reads a copy of
+/// it: a whole (unfragmented) handshake request, or a timed sync request or
+/// response, with no undefined flag and within the command's cap. The
+/// header alone decides; the payload is not read here.
+fn tapped(bucket: &BucketHead) -> Option<Tapped> {
+    let flags = bucket.flags;
+    let whole = !flags.intersects(Flags::BEGIN.union(Flags::END));
+    let defined = flags.difference(FLAGS_DEFINED).bits() == 0;
+    let request = flags.intersects(Flags::REQUEST)
+        && !flags.intersects(Flags::RESPONSE)
+        && bucket.expects_response();
+    let response = flags.intersects(Flags::RESPONSE) && !flags.intersects(Flags::REQUEST);
+    let (kind, cap) = match bucket.command {
+        COMMAND_HANDSHAKE if request => (
+            Tapped::HandshakeRequest,
+            DefinedCommand::Handshake.payload_cap(),
+        ),
+        COMMAND_TIMED_SYNC if request => (
+            Tapped::TimedSyncRequest,
+            DefinedCommand::TimedSync.payload_cap(),
+        ),
+        COMMAND_TIMED_SYNC if response => (
+            Tapped::TimedSyncResponse,
+            DefinedCommand::TimedSync.payload_cap(),
+        ),
+        _ => return None,
+    };
+    (whole && defined && bucket.payload_len <= cap).then_some(kind)
 }
 
 #[cfg(test)]

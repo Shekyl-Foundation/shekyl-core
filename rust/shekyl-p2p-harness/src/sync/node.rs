@@ -75,8 +75,6 @@ pub struct Node {
     pub dial: Arc<PeerDial>,
     /// The node's hand clock.
     pub clock: ManualClock,
-    /// The hub's post sink, attached to the owner.
-    pub router: Arc<Router>,
     /// The published sync state: the handle a node's consumers read.
     pub state: tokio::sync::watch::Sender<SyncState>,
     /// The substrate's measurements: one sink for ingest and the executor.
@@ -138,8 +136,7 @@ impl Node {
             let _gone = forward_tx.lock().expect("stub sender").send(Some(post));
         });
         let (routed_tx, routed_rx) = tokio::sync::mpsc::unbounded_channel();
-        let router = Arc::new(Router::attached(forward, routed_tx));
-        let sink = router.sink();
+        let sink = Router::attached(forward, routed_tx).into_sink();
         let clock = ManualClock::new(Tick::new(1));
         let sockets = Sockets::new();
         let hub = Hub::new(
@@ -189,7 +186,6 @@ impl Node {
             hub,
             dial,
             clock,
-            router,
             state,
             metrics,
             stub,
@@ -212,20 +208,14 @@ impl Node {
     }
 
     /// A scripted peer that dialed this node. Its handshake is the C++
-    /// handler's, so no claim is posted: the claim arrives as a hint
-    /// ([`Self::hint`]), as `shekyl_chain_sync_hint` passes it.
+    /// handler's, so no claim is posted: the claim arrives in the peer's
+    /// handshake request, which the router's claim tap copies to the owner.
     ///
     /// # Panics
     ///
     /// The channel was not admitted.
     pub fn accept(&mut self, peer: Box<dyn SyncPeer>) -> SocketId {
         self.session(peer, None, Direction::Inbound)
-    }
-
-    /// A session's sync payload through the hint intake.
-    #[must_use]
-    pub fn hint(&self, id: SocketId, sync: SyncPayload) -> bool {
-        self.router.hint(id, sync)
     }
 
     fn session(
