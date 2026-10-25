@@ -223,6 +223,19 @@ hashes: start `27ac5724…`, end `3b6e548c…`, samples `fb52e897…`.
   agent was active at the time. The registered run's work was kept on the
   local drive beside its clone.
 
+**Captures**, in `rt_p4_mlkem_decaps_timing_20261023_captures/`, each
+committed byte for byte as it left the machine (it came in one archive
+whose eight file hashes matched the agent's manifest), with `SHA256SUMS`:
+
+- `laptop_registered_attempt1.txt`: the registered attempt's output;
+- `laptop_x86_disasm_excerpts_crt_static.txt`: the new binary's excerpts in
+  the 2026-10-11 file's sections, with the comparison and the counts
+  appended. It has one CRLF line, where the comparison was appended by a
+  different writer, and is committed with it;
+- `example_rustc_line.txt`: the example's full rustc invocation, CRLF as
+  written;
+- `stopped_c6d3df894_output.txt`: the stopped start's three lines.
+
 **Not done.** No re-run, and no analysis of the cause. The laptop's entry
 in [`rt_p4_attestation.toml`](rt_p4_attestation.toml) stays at the
 2026-10-11 run, the only passing laptop build, and the standing check
