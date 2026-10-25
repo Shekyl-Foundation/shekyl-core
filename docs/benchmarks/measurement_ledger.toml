@@ -94,6 +94,10 @@ note = "Comment only: the bump policy gains the gitian descriptors. The channel 
 commit = "2fb779723"
 note = "Comment only: the gitian bump-policy line drops the deleted Android descriptor. The channel does not move."
 
+[[toolchain]]
+commit = "144f81fc1"
+note = "CA-1 (#1178): a comment-only change to rust-toolchain.toml; the bump policy gains the line that a bump re-runs docs/formal/checkct and updates results/measured.toml in the same PR. The channel stays 1.94.0; no figure moves."
+
 # --- consensus: block weight ------------------------------------------
 
 [[path_set]]

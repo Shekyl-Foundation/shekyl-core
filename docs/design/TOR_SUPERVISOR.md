@@ -670,22 +670,30 @@ not changed in this round. Where both need the same arithmetic (backoff, the
 failure classes), that code lives in `shekyl-tor-control-client`, which both
 already name; PWD-E9 forbids sharing an instance, not a library.
 
-One 30 s deadline (provisional, `Policy::alive_every`) does two jobs. While
-Running, a Tor that nothing else is asking gets one `GETINFO`: with the
-driver's 30 s reply bound, a wedged Tor is a process fault within about a
-minute, and a command already waiting on it, such as the `SETCONF
-AvoidDiskWrites=1`, delays that by its own bound. While bootstrapping, the
-deadline says the §5 progress line: the percent, how long it has held, and
-the bytes Tor read in the window (`traffic/read`, asked with every sample). A
-held percent with bytes moving is a slow directory mirror; nothing moving is
-one not answering. Every ask goes over the owning control connection only, so
-it is invisible to the network (`TSR-Q9`).
+One 30 s deadline (provisional, `Policy::alive_every`) does two jobs, and
+they are different actions. While Running it is `Action::Sample`: one
+`GETINFO` on the owning control connection. With the driver's 30 s reply
+bound, a wedged Tor is a process fault within about a minute. A command
+already in flight, such as `SETCONF AvoidDiskWrites=1`, holds the queue for
+its own bound before that sample starts. While bootstrapping it is
+`Action::SayProgress`, logged as news. It is not `Action::Announce`. A named
+cause keeps the cadence of its own events, and an origin-hold stays a
+posture warning. The line names the percent, how long that percent has held,
+and the bytes Tor read since the previous mark. The span is the time from
+that mark to the moment the line is said: the deadline when the driver is
+free, and longer when a control ask held the driver. `traffic/read` rides
+the directory sample (`sample_every`). The actor's bootstrap poll, every
+500 ms, is `Input::BootstrapNoted`: the percent moves, and the sample
+deadline does not. A notice that reset the sample would say "Nothing
+arrived" through a download the sample never counted. Every ask goes over
+the owning control connection only. The Tor connector reads the published
+route and is not on this path (`TSR-Q9`).
 
-A stop that arrives while a control ask (a sample, the `SETCONF`, an onion
-republish) waits on Tor drops the ask and stops at once: a wedged Tor never
-holds the daemon's shutdown for the reply bound, and no fault recovery runs
-first. The teardown's own bound (`SHUTDOWN_GRACE`, 5 s, then the kill) still
-applies; the 2026-10-23 run stopped in 5.2 s with Tor frozen.
+A stop that arrives while a control ask waits drops the ask and folds
+shutdown. The asks are the directory sample, the `SETCONF`, an onion
+republish, and the `SETEVENTS` subscription once the child is up. The fork
+itself is not dropped. `SHUTDOWN_GRACE` (5 s, then the kill) still bounds
+the teardown. The 2026-10-23 run stopped in 5.2 s with Tor frozen.
 
 ### 4.12 C++
 
