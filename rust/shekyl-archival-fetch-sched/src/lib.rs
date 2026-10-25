@@ -45,8 +45,9 @@ pub use read::{
     ReadFailure, SuppliedNonce,
 };
 pub use shekyl_p_fetch::{
-    DiscardTxs, ExpectedShard, FetchError, FetchTarget, NextMove, PFetchClient, PassVerifyingKey,
-    RequestHeader, Timeouts, TxSink, VerifiedShard, VerifiedTx, MAX_INFLIGHT,
+    DiscardTxs, ExpectedShard, FetchError, FetchTarget, Malformed, NextMove, PFetchClient,
+    PassVerifyingKey, RequestHeader, ServingEndpoint, Stall, Timeouts, TxSink, VerifiedShard,
+    VerifiedTx, IDENTITY_ENVELOPE_LEN, MAX_INFLIGHT, RECEIPT_ENVELOPE_LEN,
 };
 pub use shekyl_types::ShardView;
 pub use view::{ViewDesk, ViewRefusal};

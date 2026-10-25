@@ -3921,6 +3921,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-bundle-producer"
+version = "3.1.0"
+dependencies = [
+ "rand 0.8.6",
+ "shekyl-archival-fetch-sched",
+ "shekyl-archival-retention",
+ "shekyl-chain-rules",
+ "shekyl-crypto-pq",
+ "shekyl-p-loopback",
+ "shekyl-p-serve",
+ "shekyl-types",
+ "thiserror",
+ "tokio",
+ "zeroize",
+]
+
+[[package]]
 name = "shekyl-capped-stream"
 version = "3.1.0"
 dependencies = [
