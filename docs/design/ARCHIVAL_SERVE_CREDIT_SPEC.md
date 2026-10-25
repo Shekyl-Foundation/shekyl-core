@@ -356,9 +356,12 @@ serves. What is the challenger's own sits outside it:
 
 The test of the rule: a challenge fetch and an organic fetch for the same
 shard produce byte-identical requests apart from the nonce.
-`shekyl-p-fetch` holds it today at its request builder
-(`a_request_differs_from_another_only_in_its_nonce`); the challenger's
-caller extends it end to end when it exists (§11).
+`shekyl-p-fetch` holds it at its request builder
+(`a_request_differs_from_another_only_in_its_nonce`), and the producer's
+read holds it end to end through the fetch scheduler
+(`a_challenge_read_and_an_organic_read_differ_only_in_the_nonce`,
+`shekyl-bundle-producer`). A support draw's request differs in the stream
+byte too: the header names its stream so `P` signs it (§6.1).
 
 ### 5.2 The header
 
@@ -442,6 +445,11 @@ bound `K`.
   blocks (PROVISIONAL, §13.2), so that inclusion latency and an ordinary
   reorg leave it inside its window. A bundle with no passes is filed all
   the same (§7.1).
+- **Built** (`SO-D12` increment 4c, `ARCHIVAL_SETTLEMENT_WRITER.md`
+  §16.11): `shekyl-bundle-producer`'s read plan and state machine, with
+  `K` as `CHALLENGE_READS`, the spacing as `READ_SPACING` and `M` as
+  `FILING_MARGIN`, each PROVISIONAL here. The plan is drawn from the
+  daemon's own randomness when `h` connects.
 
 The request header, `P`'s gate and `P`'s serving route are as
 [`ARCHIVAL_SERVING_ROUTE.md`](ARCHIVAL_SERVING_ROUTE.md) states them.
@@ -559,9 +567,12 @@ Rules:
   chain without them. Nothing is revealed per draw.
 - **Only the producer can author a bundle**, because the witness signature
   covers every byte of it. Anyone may relay one or include it in a block.
-- **A refused bundle is a producer defect.** The producer corrects and
-  files again. The seed and the witness key stay in the ring (§4.2) until
-  the bundle is included, so it can.
+- **A refused bundle is a producer defect.** The producer files to its
+  own queue first, and the queue's admission is this rule against the
+  tip, so a defective bundle is refused before it travels and is logged
+  with its row. The ring drops the seed and the witness key when it
+  files: the queue holds the bundle from then on, and a reorg judges it
+  there again (§7.5).
 - **A bundle is not a transaction.** It has no inputs, no outputs and no
   fee, takes no part in the fee median or the penalty curve, and displaces
   no fee-paying transaction. Its space is budgeted on its own (§7.4).
@@ -1418,8 +1429,10 @@ is final.
      built here. `P` switches from the identity key to the receipt key
      in the same change as `SO-D12`'s cutover: no verifier accepts an
      FN-DSA receipt before it.
-5. **Bundle transport is DRS-E5's**: the queue, the body store and the
-   fetch at the switch (§7.5). This slice supplies the rule they run.
+5. **The queue and the body store are built** (`SO-D12` increment 4c,
+   `SO-D12p`), in the chain store; the queue runs this slice's rule
+   against the tip. References on the wire, a connecting block pulling its
+   bodies, and the fetch at the switch are the cutover's (4b, §7.5).
 6. **The shapes under this slice are the settlement lane's** (`SO-D12`,
    [`ARCHIVAL_SETTLEMENT_WRITER.md`](ARCHIVAL_SETTLEMENT_WRITER.md) §16):
    the `0x0C` draw commitment, the per-block draw state, the digest of
@@ -1453,7 +1466,8 @@ Carried with the implementation:
   nonce vectors of §5.2 and the digest vectors of §10; the integrity
   fixture of §9.5 (an index, and separately a `D`, perturbed between
   admission and settlement, each halting the writer); the one-machinery
-  test of §5.1, end to end through the challenger's caller; a test-only replay assertion that a
+  test of §5.1, end to end through the challenger's caller (built with
+  the producer); a test-only replay assertion that a
   fixture's carried pairs equal the derived ones; and a fixture that two
   constructions of a block yield distinct seeds, witness keys and `0x0C`
   commitments (§4.2), which fails if either secret is ever derived from
@@ -1899,7 +1913,7 @@ One row at least for each item of §13.5 to §13.8.
 | `SCS-P15` | A node refuses a valid bundle on some local ground | No ground exists: validity is a function of the chain through `h`, the bundle's bytes and the snapshot |
 | `SCS-P15` | Every miner leaves `h`'s bundle out for all of `W₂` | NonObservation for `h`. It takes every block for about 500 blocks: majority-hashrate censorship, outside the threat model |
 | `SCS-P15` | A producer withholds its bundle to stall the chain | Nothing waits on a bundle; no rule acts on absence |
-| `SCS-P16` | A third party slips a bad record into an honest bundle so it is refused whole | The witness signature covers every record; only the producer can author one. A refused bundle is a producer defect, corrected and filed again while the seed is in the ring |
+| `SCS-P16` | A third party slips a bad record into an honest bundle so it is refused whole | The witness signature covers every record; only the producer can author one. A refused bundle is a producer defect, refused by the producer's own queue before it travels |
 | `SCS-P16` | Records admitted one at a time as a free-weight channel | Stays rejected; a bundle is admitted whole inside a draw-counted budget |
 | `SCS-P17` | Alter a kept bitmap after the prunable bytes are gone | The header root covers the kept bytes, and the header is under proof of work |
 | `SCS-P17` | Set a bit with no record, or carry a record with no bit | Refused at structure: the record count equals the number of set bits, and the bitmap is exactly `count(h)` bits |

@@ -574,12 +574,26 @@ trait, the envelope and both ends of the wire are built. Selecting the
 receipt scheme is: the serving host's key type declares the receipt width
 (`shekyl_p_host::PersonaServing::key`, the one place the host's scheme is
 chosen), `serving/start.rs` constructs `ResidentReceiptKey` there, and the
-daemon builds its fetch targets over the receipt key the bond record
-carries (`shekyl-archival-fetch-sched`'s `Holder::target` and the
-`VerifiedShard` its reads return are pinned at the identity key's type
-today). Each of those is a type the compiler follows; the staged-surface
-test and the `expect(dead_code)` on the capability are removed by the same
-change, deliberately.
+daemon builds its drawn holders' fetch targets over the receipt key the
+bond record carries. Each of those is a type the compiler follows; the
+staged-surface test and the `expect(dead_code)` on the capability are
+removed by the same change, deliberately.
+
+**What `SO-D12` increment 4c already moved** (2026-10-25,
+[`ARCHIVAL_SETTLEMENT_WRITER.md`](ARCHIVAL_SETTLEMENT_WRITER.md) §16.11).
+The fetch scheduler's `Holder` and `Read` take the scheme as a type
+parameter, so a caller that names its own persona chooses it: the bundle
+producer's challenge read names the drawn persona under its receipt key
+already, and a read of the live host, which signs with its identity key,
+files a no-pass bundle. The store-backed facts moved to
+`rust/shekyl-chain-ingest/src/shard_facts.rs`; the holder source there is
+the one drawn-holder target the cutover still switches. **4c selects the
+capability in tests only**: its gate test serves a persona with
+`ResidentReceiptKey` through `shekyl-engine-core`'s `test-helpers`
+feature (`__test_helpers::resident_receipt_key`), and the `expect(dead_code)`
+on the capability is waived for that feature's build alone; the
+production lint lane builds without it, where the falsifier still holds.
+The live switch stays the cutover's (4b).
 
 **The sites, read at `dev@b74187b806` (2026-10-13).** What the cutover
 edits, and what it must not have to:
