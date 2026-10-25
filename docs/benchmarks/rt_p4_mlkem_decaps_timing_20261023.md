@@ -4,8 +4,9 @@
 `valid-vs-invalid` (`|t|` = 25.43) and `fixed-vs-invalid` (21.72) are over
 the fail line of 10, and `fixed-vs-bitflip` (5.46) is inconclusive. The
 control was detected and both nulls are clean, so the run is not void. A
-fail is not re-run. By the closing rule below, it goes to the maintainer
-with its output, and the laptop's attestation entry is not changed.
+fail is not re-run. **Ruled 2026-10-25:** the difference is an observed
+platform property, accepted under `RPC_CHANNEL.md` §4.3's bounds, and
+RT-P4 stays met (see "The ruling" at the end).
 Results are added below "Registered before the run", and that section is
 not edited afterwards.
 
@@ -237,10 +238,31 @@ whose eight file hashes matched the agent's manifest), with `SHA256SUMS`:
   written;
 - `stopped_c6d3df894_output.txt`: the stopped start's three lines.
 
-**Not done.** No re-run, and no analysis of the cause. The maintainer
-ruled a set of diagnostics on 2026-10-25, registered in
-[`rt_p4_crt_static_diagnostic_20261025.md`](rt_p4_crt_static_diagnostic_20261025.md);
-none of them changes this verdict. The laptop's entry
+**Not done.** No re-run, and no analysis of the cause. A diagnostic set
+was registered on 2026-10-25
+([`rt_p4_crt_static_diagnostic_20261025.md`](rt_p4_crt_static_diagnostic_20261025.md))
+and withdrawn by the ruling below before any of it ran.
+
+## The ruling (the maintainer, 2026-10-25)
+
+- **The verdict stands as recorded:** a fail under the registered lines.
+- **The difference is an observed platform property.** It is about 16 ns,
+  0.03 % of a decapsulation, between valid and invalid ciphertexts. It is
+  accepted under the bounds `RPC_CHANNEL.md` §4.3 now states: the
+  same-user path decapsulates nothing; only a bundle holder reaches
+  decapsulation (mac1); the budget caps the rate; the key is hybrid.
+- **RT-P4 stays met,** on the decapsulation code identical by disassembly
+  to the passing 2026-10-11 build, and the floor device's run.
+- **The standing check accepts a build whose decapsulation code is
+  disassembly-identical to an attested run,** with the comparison
+  committed. A change to that code needs a timing run. The laptop's entry
+  in [`rt_p4_attestation.toml`](rt_p4_attestation.toml) rests on this
+  record's comparison
+  (`laptop_x86_disasm_excerpts_crt_static.txt`).
+- **At RT-P4's next required run,** the pass line becomes invalid-vs-invalid
+  differing only in the decrypted message, with valid-vs-invalid reported
+  as information.
+- **No further runs** and no key-rotation design. The laptop's entry
 in [`rt_p4_attestation.toml`](rt_p4_attestation.toml) stays at the
 2026-10-11 run, the only passing laptop build, and the standing check
 stays red. What comes next is the maintainer's.

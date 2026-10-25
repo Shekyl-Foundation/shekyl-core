@@ -8,20 +8,33 @@
 # ruled 2026-10-11; widened 2026-10-22 to every flag source).
 #
 # scripts/ci/check_rt_p4_standing.py compares each entry with what ships
-# today for that entry's target. A difference means RT-P4's result no longer
-# covers the shipped code: the device is re-run under the registered lines,
-# and this entry is set to the new run's settings in the same change that
-# commits the new record.
+# today for that entry's target. A difference means the entry no longer
+# covers the shipped code, and the gate fails until the entry is replaced
+# with new evidence, committed in the same change.
 #
-# Each value is read at the commit the run's record names, from the files
-# the gate reads now. A run's record states the toolchain, the target, the
-# release profile, `--locked` and `fips203` 0.4.3; the commit fixes the rest.
-# Neither commit had `rust/.cargo/config.toml`, so both runs were built with
-# no rustflags. `+crt-static` reached the MSVC targets on 2026-10-19, after
-# the laptop's run. The laptop was re-run with it on 2026-10-25 and the run
-# FAILED (rt_p4_mlkem_decaps_timing_20261023.md), so the laptop's entry
-# stays at its passing 2026-10-11 build and the check stays red. A failing
-# run is never written here; what comes next is the maintainer's.
+# An entry rests on one of two kinds of evidence (`basis`, ruled 2026-10-25):
+#   timing       a registered RT-P4 run on the device; `record` names it.
+#   disassembly  a build whose decapsulation code is identical, by
+#                disassembly, to an attested timing run's
+#                (`identical_to_record`, `identical_to_commit`). The
+#                comparison is committed (`comparison`) and pinned by its
+#                SHA-256 (`comparison_sha256`). A build whose decapsulation
+#                code differs needs a timing run.
+#
+# The floor device's entry is its 2026-10-11 timing run (ba4677446, no
+# rustflags).
+#
+# The laptop's entry is a disassembly entry. Its 2026-10-11 timing run
+# (7b7046579) was built before `+crt-static` reached the MSVC targets on
+# 2026-10-19. The shipped build with the flag (caca14a3f) was compared with
+# it: the decapsulation path's code is identical, the only code that
+# changed on the path being the statically linked C runtime's
+# memcpy/memset. A timing run of that build on 2026-10-25 failed the
+# registered lines on its valid-vs-invalid comparisons, by about 16 ns
+# (0.03 % of a decapsulation). The maintainer ruled on 2026-10-25 that the
+# difference is an observed platform property, accepted under the bounds
+# in RPC_CHANNEL.md §4.3, and that RT-P4 stays met
+# (rt_p4_mlkem_decaps_timing_20261023.md).
 #
 # What `rustflags` leaves out, and why:
 #   - cmake/BuildRust.cmake gives a cross build `CARGO_TARGET_<T>_RUSTFLAGS`
@@ -32,24 +45,25 @@
 #     is outside it (it would also replace the config's flags); the build
 #     sets none for an MSVC target.
 #
-# Re-running a device: build from a pushed commit, so the record can cite it
-# and the clone carries rust/.cargo/config.toml. Commit the new record, and
-# REPLACE that device's entry here with the new run's commit and settings.
-# An old entry kept beside it would stay red, since every entry is compared.
-#
 # Fields:
-#   device            the measured machine, by role
-#   record            the run's record
-#   commit            the commit the run was built from
-#   target            the run's target triple
-#   toolchain         rust/rust-toolchain.toml [toolchain] channel
-#   fips203           the lock file's fips203 version
-#   fips203_checksum  the lock file's fips203 checksum
-#   rustflags         rust/.cargo/config.toml [target.<target>] rustflags
-#   profile_release   rust/Cargo.toml [profile.release], as written
+#   device               the measured machine, by role
+#   basis                timing | disassembly
+#   record               the record carrying the evidence
+#   commit               the commit the evidence's binary was built from
+#   target               the target triple
+#   identical_to_record  (disassembly) the timing run's record
+#   identical_to_commit  (disassembly) the timing run's commit
+#   comparison           (disassembly) the committed comparison
+#   comparison_sha256    (disassembly) its SHA-256
+#   toolchain            rust/rust-toolchain.toml [toolchain] channel
+#   fips203              the lock file's fips203 version
+#   fips203_checksum     the lock file's fips203 checksum
+#   rustflags            rust/.cargo/config.toml [target.<target>] rustflags
+#   profile_release      rust/Cargo.toml [profile.release], as written
 
 [[run]]
 device = "the floor device (Raspberry Pi 4, Cortex-A72)"
+basis = "timing"
 record = "docs/benchmarks/rt_p4_mlkem_decaps_timing_20261011.md"
 commit = "ba4677446"
 target = "aarch64-unknown-linux-gnu"
@@ -64,13 +78,18 @@ overflow-checks = true
 
 [[run]]
 device = "the maintainer's Windows laptop (Intel Core i9-11950H, Tiger Lake)"
-record = "docs/benchmarks/rt_p4_mlkem_decaps_timing_20261011.md"
-commit = "7b7046579"
+basis = "disassembly"
+record = "docs/benchmarks/rt_p4_mlkem_decaps_timing_20261023.md"
+commit = "caca14a3f"
 target = "x86_64-pc-windows-msvc"
+identical_to_record = "docs/benchmarks/rt_p4_mlkem_decaps_timing_20261011.md"
+identical_to_commit = "7b7046579"
+comparison = "docs/benchmarks/rt_p4_mlkem_decaps_timing_20261023_captures/laptop_x86_disasm_excerpts_crt_static.txt"
+comparison_sha256 = "35187d42d894826941dea0008997c8c9c7daab05ca53848630bfb12521818041"
 toolchain = "1.94.0"
 fips203 = "0.4.3"
 fips203_checksum = "c8bdb6454f692ca2a2b45cd554c6828c639d7f9c968cf83a678899ec4443a280"
-rustflags = []
+rustflags = ["-C", "target-feature=+crt-static"]
 
 [run.profile_release]
 panic = "abort"

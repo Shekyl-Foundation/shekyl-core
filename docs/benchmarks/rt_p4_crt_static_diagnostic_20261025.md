@@ -1,7 +1,11 @@
 # `RT-P4`: the laptop fail, a registered diagnostic set (2026-10-25)
 
-**State of this record: registered, not yet run.** Results are added below
-"Registered before the run", and that section is not edited afterwards.
+**State of this record: WITHDRAWN before any run** by the maintainer's
+ruling of 2026-10-25, which records the laptop's difference as an observed
+platform property and keeps RT-P4 met
+([`rt_p4_mlkem_decaps_timing_20261023.md`](rt_p4_mlkem_decaps_timing_20261023.md),
+"The ruling"). No harness ran. What happened before the withdrawal is
+disclosed at the end. The registration below is kept as it was.
 
 **What this is not.** These are diagnostics. None of them is an attempt
 at RT-P4, and none of them changes the laptop's FAIL
@@ -113,3 +117,40 @@ the rustc lines are public, under
 `rt_p4_crt_static_diagnostic_20261025_captures/`. The condition files name
 the host and list the machine's processes, so they go to the Foundation's
 private repository (rule 37), with their hashes here.
+
+## Disclosed: what happened before the withdrawal
+
+The agent on the laptop received this registration, and had done the
+following when the withdrawal reached it. No binary was executed, no
+conditions were captured for a run, and no disassembly was made.
+
+- **The processor maximum state** was found to be settable unelevated, by
+  writing its current value on mains, 100 %, back to itself. Nothing
+  changed, and it was never set to 99 %.
+- **Builds A, B and D**, each from a fresh clone, unelevated, built as
+  registered, with its full log kept:
+
+  | Build | rustc invocations with `+crt-static` | Binary | DLL dependencies |
+  |---|---|---|---|
+  | A (`8caddb25f`, `RUSTFLAGS` one space) | 0 of 132 | 241,152 bytes, `4cb893c0…` | `VCRUNTIME140.dll` and the `api-ms-win-crt-*` set |
+  | B (`8caddb25f`, `RUSTFLAGS` unset) | 132 of 132 | 346,112 bytes, `aadb0311…` | `api-ms-win-core-synch`, `KERNEL32`, `ntdll` |
+  | D (`7b7046579`, `RUSTFLAGS` unset) | 0 of 131 | 241,152 bytes, `f51f8515…` | `VCRUNTIME140.dll` and the `api-ms-win-crt-*` set |
+
+  B is not byte-identical to the failing run's binary (`f9492887…`), nor D
+  to the 2026-10-11 binary (`1077f646…`). Different clone paths are the
+  likely reason; that was not checked.
+- **The machine, read at the time:** microcode revision `0x58` (the
+  current and previous update revisions alike), OS build 22631.7652, BIOS
+  1.49.0.
+- **The machine on 2026-10-11, reconstructed from its own history:** BIOS
+  1.48.0 (the firmware log reports 1.48.0 through 2026-09-30 and 1.49.0
+  from 2026-10-13; the vendor's firmware update was installed on
+  2026-10-12 and applied at the restart of 2026-10-13), and OS build
+  22631.7584 (the October cumulative update, 22631.7652, was installed on
+  2026-10-13). The microcode revision on 2026-10-11 is not known: no log
+  the agent could read records it.
+
+So between the passing run of 2026-10-11 and the failing run of
+2026-10-25, the BIOS and the OS cumulative update changed as well as the
+build's `+crt-static`. That is history, not a test, and it is recorded
+because the withdrawn runs would have read it.

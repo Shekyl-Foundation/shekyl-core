@@ -29,9 +29,20 @@ It fails two ways:
   config table or rustflag, a cargo flag, an environment variable, a rustup
   option. It cannot tell whether such a thing changes the generated code,
   so it does not guess. The fix is a reviewed change to this file.
-- **On a recognised setting that differs from a run's attestation**, for
-  that run's target. The message names the device and the command to run.
-  The attestation is updated with the new run's record, never on its own.
+- **On a recognised setting that differs from an entry of the
+  attestation**, for that entry's target. The message names the device and
+  what to do.
+
+An entry rests on one of two kinds of evidence (`basis`, ruled 2026-10-25):
+
+- **`timing`**: a registered RT-P4 run on the device, its record named.
+- **`disassembly`**: a build whose decapsulation code is identical, by
+  disassembly, to an attested timing run's. The comparison is committed,
+  and the entry names it and its SHA-256, so the file cannot change under
+  the entry. A build whose decapsulation code differs needs a timing run.
+
+An entry of either kind that names a missing file, a comparison whose hash
+does not match, or an unknown basis fails the gate.
 
 Exit 0 when nothing differs; 1 naming each failure; 2 when a subject cannot
 be read (rule 47: a gate asserts its own subject).
@@ -39,6 +50,7 @@ be read (rule 47: a gate asserts its own subject).
 
 from __future__ import annotations
 
+import hashlib
 import re
 import sys
 import tomllib
@@ -264,16 +276,64 @@ def drift(run: dict, shipped: dict) -> list[str]:
 
 def rerun_message(run: dict) -> str:
     return (
-        f"  Re-run RT-P4 on {run['device']} under the registered lines in {run['record']}:\n"
+        f"  Build the harness on {run['device']} ({run['target']}) from a fresh clone of the commit\n"
+        f"  that ships:\n"
         f"    cargo build --release --locked -p shekyl-rpc-channel --example rt_p4_decaps_timing\n"
-        f"  on the device itself ({run['target']}), from a fresh clone of the commit that ships,\n"
-        f"  run the harness ({HARNESS}) as that record registers, record the run,\n"
-        f"  and set this entry of {ATTESTATION} to the new run's settings in the same change."
+        f"  Then one of:\n"
+        f"  - if its decapsulation code is identical, by disassembly, to the attested run's, commit\n"
+        f"    the comparison and replace this entry with a `disassembly` entry naming it;\n"
+        f"  - otherwise re-run RT-P4 there ({HARNESS}) under the pass line ruled 2026-10-25\n"
+        f"    (invalid-vs-invalid differing only in the decrypted message; valid-vs-invalid reported\n"
+        f"    as information), record it, and replace this entry with a `timing` entry for it.\n"
+        f"  Either way, the change that replaces the entry commits its evidence."
     )
 
 
-def check(texts: dict[str, str], gitian: dict[str, str]) -> tuple[list[str], list[str]]:
-    """(unrecognised, drift) over the given source texts."""
+def entry_problems(run: dict, present: dict[str, bytes]) -> list[str]:
+    """What is wrong with one attestation entry's evidence, if anything."""
+    name = f"{run.get('device', '?')} ({run.get('target', '?')})"
+    basis = run.get("basis")
+    problems = []
+
+    def need(path_field: str) -> None:
+        path = run.get(path_field)
+        if not path:
+            problems.append(f"{name}: no {path_field}")
+        elif path not in present:
+            problems.append(f"{name}: {path_field} {path!r} does not exist")
+
+    if basis == "timing":
+        need("record")
+    elif basis == "disassembly":
+        for path_field in ("record", "identical_to_record", "comparison"):
+            need(path_field)
+        if not run.get("identical_to_commit"):
+            problems.append(f"{name}: no identical_to_commit")
+        comparison = run.get("comparison")
+        if comparison in present:
+            digest = hashlib.sha256(present[comparison]).hexdigest()
+            if digest != run.get("comparison_sha256"):
+                problems.append(
+                    f"{name}: comparison {comparison!r} has SHA-256 {digest}, "
+                    f"the entry says {run.get('comparison_sha256')!r}"
+                )
+    else:
+        problems.append(f"{name}: unknown basis {basis!r} (expected 'timing' or 'disassembly')")
+    return problems
+
+
+def named_paths(run: dict) -> list[str]:
+    return [run[f] for f in ("record", "identical_to_record", "comparison") if run.get(f)]
+
+
+def check(
+    texts: dict[str, str], gitian: dict[str, str], present: dict[str, bytes]
+) -> tuple[list[str], list[str]]:
+    """(unrecognised, drift) over the given source texts.
+
+    `present` maps each repository path an attestation entry names to its
+    bytes; a path missing from it does not exist.
+    """
     unrecognised: list[str] = []
     channel, problems = read_toolchain(texts[TOOLCHAIN])
     unrecognised += problems
@@ -307,6 +367,11 @@ def check(texts: dict[str, str], gitian: dict[str, str]) -> tuple[list[str], lis
         for field in ("device", "record", "commit", "target"):
             if not run.get(field):
                 raise Unreadable(f"{ATTESTATION}: a run has no {field}")
+        problems = entry_problems(run, present)
+        if problems:
+            drifts.append(
+                "RT-P4 ATTESTATION ENTRY INVALID:\n" + "\n".join(f"  {p}" for p in problems)
+            )
         found = drift(run, shipped_for(run["target"], sources))
         if found:
             drifts.append(
@@ -321,7 +386,7 @@ def check(texts: dict[str, str], gitian: dict[str, str]) -> tuple[list[str], lis
 # ── Running it ──────────────────────────────────────────────────────────────
 
 
-def read_tree(root: Path) -> tuple[dict[str, str], dict[str, str]]:
+def read_tree(root: Path) -> tuple[dict[str, str], dict[str, str], dict[str, bytes]]:
     texts = {}
     for path in (ATTESTATION, TOOLCHAIN, LOCK, MANIFEST, CARGO_CONFIG, BUILD_RUST):
         p = root / path
@@ -330,12 +395,15 @@ def read_tree(root: Path) -> tuple[dict[str, str], dict[str, str]]:
         texts[path] = p.read_text()
     gitian = {str(p.relative_to(root)): p.read_text() for p in sorted(root.glob(GITIAN_GLOB))}
     attestation = tomllib.loads(texts[ATTESTATION])
-    for run in attestation.get("run", []):
-        if not (root / run.get("record", "")).is_file():
-            raise Unreadable(f"{ATTESTATION}: record {run.get('record')!r} does not exist")
+    present = {
+        path: (root / path).read_bytes()
+        for run in attestation.get("run", [])
+        for path in named_paths(run)
+        if (root / path).is_file()
+    }
     if not (root / HARNESS).is_file():
         raise Unreadable(f"the harness {HARNESS} is missing")
-    return texts, gitian
+    return texts, gitian, present
 
 
 def report(unrecognised: list[str], drifts: list[str]) -> int:
@@ -374,6 +442,7 @@ SELFTEST_GITIAN = (
 SELFTEST_ATTESTATION = """
 [[run]]
 device = "floor"
+basis = "timing"
 record = "r.md"
 commit = "abc"
 target = "aarch64-unknown-linux-gnu"
@@ -387,8 +456,13 @@ overflow-checks = true
 
 [[run]]
 device = "laptop"
-record = "r.md"
-commit = "abc"
+basis = "disassembly"
+record = "r2.md"
+commit = "def"
+identical_to_record = "r.md"
+identical_to_commit = "abc"
+comparison = "cmp.txt"
+comparison_sha256 = "40c19a67b22b8a67dd05388dd8026ac860367d904510639672eeef85c47139ea"
 target = "x86_64-pc-windows-msvc"
 toolchain = "1.94.0"
 fips203 = "0.4.3"
@@ -410,13 +484,20 @@ def selftest() -> int:
         BUILD_RUST: SELFTEST_BUILD,
     }
     gitian = {"gitian-win.yml": SELFTEST_GITIAN}
+    files = {"r.md": b"", "r2.md": b"", "cmp.txt": b"the comparison\n"}
 
-    def run(edit_path: str | None, old: str = "", new: str = "", g: dict | None = None):
+    def run(
+        edit_path: str | None,
+        old: str = "",
+        new: str = "",
+        g: dict | None = None,
+        present: dict | None = None,
+    ):
         texts = dict(base)
         if edit_path:
             assert old in texts[edit_path], (edit_path, old)
             texts[edit_path] = texts[edit_path].replace(old, new)
-        return check(texts, g if g is not None else gitian)
+        return check(texts, g if g is not None else gitian, present if present is not None else files)
 
     # (name, edit, expected kind, a phrase the failure must carry)
     cases = [
@@ -436,6 +517,11 @@ def selftest() -> int:
         ("build rust env", (BUILD_RUST, 'CARGO_TARGET_${_upper_triple}_LINKER', 'RUSTFLAGS'), "unrecognised", "environment RUSTFLAGS"),
         ("build rust flag", (BUILD_RUST, '--locked', '--locked --config profile.release.lto=true'), "unrecognised", "flag --config"),
         ("build rust -Z", (BUILD_RUST, '--locked', '--locked -Zbuild-std'), "unrecognised", "unstable flag"),
+        ("unknown basis", (ATTESTATION, 'basis = "timing"', 'basis = "vibes"'), "drift", "unknown basis 'vibes'"),
+        ("timing entry, no basis", (ATTESTATION, 'basis = "timing"\n', ''), "drift", "unknown basis None"),
+        ("comparison hash differs", (ATTESTATION, 'comparison_sha256 = "', 'comparison_sha256 = "0'), "drift", "has SHA-256"),
+        ("comparison not named", (ATTESTATION, 'comparison = "cmp.txt"\n', ''), "drift", "no comparison"),
+        ("no identical_to_commit", (ATTESTATION, 'identical_to_commit = "abc"\n', ''), "drift", "no identical_to_commit"),
     ]
     failures = 0
     unrecognised, drifts = run(None)
@@ -459,6 +545,15 @@ def selftest() -> int:
         ("gitian rustup command", SELFTEST_GITIAN + "  rustup default nightly\n", "unrecognised", "rustup default nightly"),
         ("gitian no install", "  rustup target add x86_64-pc-windows-gnu\n", "unrecognised", "0 rustup-init installs"),
     ]
+    # Evidence files that do not exist.
+    for name, missing, phrase in [
+        ("timing record missing", "r.md", "record 'r.md' does not exist"),
+        ("comparison missing", "cmp.txt", "comparison 'cmp.txt' does not exist"),
+    ]:
+        unrecognised, drifts = run(None, present={k: v for k, v in files.items() if k != missing})
+        if not any(phrase in item for item in drifts):
+            print(f"selftest: '{name}' did not fail carrying {phrase!r}: drift={drifts}", file=sys.stderr)
+            failures += 1
     for name, text, kind, phrase in gitian_cases:
         unrecognised, drifts = run(None, g={"gitian-win.yml": text})
         bucket = unrecognised if kind == "unrecognised" else drifts
@@ -471,11 +566,12 @@ def selftest() -> int:
     run_drifts = [d for d in drifts if d.startswith("RT-P4 ATTESTATION DRIFT")]
     if len(run_drifts) != 2 or not all(
         "cargo build --release --locked -p shekyl-rpc-channel --example rt_p4_decaps_timing" in d
+        and "disassembly" in d
         for d in run_drifts
     ):
         print("selftest: a drift message does not say what to run", file=sys.stderr)
         failures += 1
-    total = 1 + len(cases) + len(gitian_cases) + 1
+    total = 1 + len(cases) + 2 + len(gitian_cases) + 1
     if failures:
         print(f"selftest: {failures} of {total} cases failed", file=sys.stderr)
         return 1
@@ -491,8 +587,8 @@ def main(argv: list[str]) -> int:
         return 2
     root = Path(__file__).resolve().parents[2]
     try:
-        texts, gitian = read_tree(root)
-        unrecognised, drifts = check(texts, gitian)
+        texts, gitian, present = read_tree(root)
+        unrecognised, drifts = check(texts, gitian, present)
     except (Unreadable, tomllib.TOMLDecodeError) as error:
         print(f"RT-P4 standing check: cannot read its subject: {error}", file=sys.stderr)
         return 2
