@@ -383,6 +383,45 @@ fn a_block_of_ours_replaces_a_popped_one_at_its_height() {
 /// another scheme, and the filing says so, for the one log line, with no
 /// passes. Red edit: drop the flag on `Answered::ServingScheme` — the
 /// filing does not say it.
+/// A read of a popped block that ends after another block of ours took
+/// its height names the old block's hash, and does not settle the new
+/// block's draw: it was read with the old block's nonce. Red edit: drop
+/// the hash check in `read_done` — the old read's pass settles the new
+/// draw, and the block files it at the deadline.
+#[test]
+fn a_read_of_a_replaced_block_does_not_settle_the_new_one() {
+    let (ring, mut producer, mut chain) = mined(18, 1, 0);
+    let old = (101..=510)
+        .flat_map(|tip| producer.due(h(tip)))
+        .next()
+        .expect("the first block's read starts");
+    assert_eq!(old.key.hash, hash_of(100, 0x0A));
+    chain.pop(101);
+    chain.pop(100);
+    assert!(producer.observe(h(99), W, chain.look()).lost.is_empty());
+    let replacement = ring.draw(h(100)).expect("draws");
+    chain.blocks.insert(
+        h(100),
+        Recorded {
+            hash: hash_of(100, 0x0B),
+            commitment: replacement,
+        },
+    );
+    assert_eq!(producer.observe(h(100), W, chain.look()).learn.len(), 1);
+    producer.learned(h(100), W, targets(1, 0));
+    let new = (101..=510)
+        .flat_map(|tip| producer.due(h(tip)))
+        .next()
+        .expect("the new block's read starts");
+    assert_eq!(new.key.hash, hash_of(100, 0x0B));
+    producer.read_done(old.key, ReadOutcome::Pass(Box::new(record(0))));
+    assert!(
+        producer.ready(W.filing_deadline(h(100)), W).0.is_empty(),
+        "the new block's own read is still out"
+    );
+    assert_eq!(producer.reading(), 1, "the old read freed its slot");
+}
+
 #[test]
 fn the_identity_scheme_on_the_serving_side_files_no_passes_and_says_so() {
     let (_ring, mut producer, _chain) = mined(5, 3, 0);

@@ -12,13 +12,17 @@
 //! answer that files a record.
 
 use shekyl_archival_retention::{BundleRecord, PassStream};
-use shekyl_types::BlockHeight;
+use shekyl_types::{BlockHash, BlockHeight};
 
 /// Which read this is: the block, the stream, the draw and the attempt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReadKey {
-    /// The block the draw is of.
+    /// The height of the block the draw is of.
     pub h: BlockHeight,
+    /// That block's hash. A reorg can put another block of ours at `h`
+    /// while a read of the first is out; the hash keeps that read from
+    /// settling the second block's draw, whose nonce it was not read with.
+    pub hash: BlockHash,
     /// Economy or support.
     pub stream: PassStream,
     /// The draw `j` within its stream.

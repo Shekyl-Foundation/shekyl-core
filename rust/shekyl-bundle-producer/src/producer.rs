@@ -490,6 +490,7 @@ impl Producer {
                     draw.state = DrawState::Reading { attempt };
                     let key = ReadKey {
                         h,
+                        hash,
                         stream,
                         draw: j,
                         attempt,
@@ -510,8 +511,9 @@ impl Producer {
     }
 
     /// How the read `key` ended. A read the producer no longer waits for —
-    /// the block was filed, lost, or the deadline settled the draw — is
-    /// ignored.
+    /// the block was filed, lost, replaced at its height by another block
+    /// of ours, or the deadline settled the draw — is ignored, and frees
+    /// its slot all the same.
     pub fn read_done(&mut self, key: ReadKey, outcome: ReadOutcome) {
         let Some(at) = self.reads.iter().position(|started| *started == key) else {
             return;
@@ -520,6 +522,9 @@ impl Producer {
         let Some(work) = self.blocks.get_mut(&key.h) else {
             return;
         };
+        if work.hash != key.hash {
+            return;
+        }
         let Stage::Reading { economy, support } = &mut work.stage else {
             return;
         };

@@ -111,6 +111,7 @@ fn due(
 ) -> DueRead {
     let key = ReadKey {
         h: BlockHeight::from_raw(OWN_HEIGHT - 50),
+        hash: BlockHash::from_bytes([0x22; 32]),
         stream,
         draw: 2,
         attempt: 1,
