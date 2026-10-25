@@ -233,14 +233,19 @@ pub(crate) fn unix_now() -> u64 {
         .unwrap_or(0)
 }
 
+/// Free space available to this process under `path`, in bytes: `statvfs`'s
+/// `f_bavail` on Unix, `GetDiskFreeSpaceExW`'s available-to-caller figure on
+/// Windows. An unreadable probe is an error, never a guess. The managed Tor's
+/// pre-spawn check reads it too (`TOR_SUPERVISOR.md` §5).
 #[cfg(unix)]
-fn free_bytes(path: &std::path::Path) -> std::io::Result<u64> {
+pub fn free_bytes(path: &std::path::Path) -> std::io::Result<u64> {
     let stat = rustix::fs::statvfs(path)?;
     Ok(stat.f_bavail.saturating_mul(stat.f_frsize))
 }
 
+/// Windows half of [`free_bytes`].
 #[cfg(windows)]
-fn free_bytes(path: &std::path::Path) -> std::io::Result<u64> {
+pub fn free_bytes(path: &std::path::Path) -> std::io::Result<u64> {
     shekyl_win_sec::free_bytes_available(path)
 }
 

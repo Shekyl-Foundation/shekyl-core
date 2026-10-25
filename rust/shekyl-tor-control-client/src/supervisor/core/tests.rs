@@ -11,7 +11,7 @@ use std::time::Duration;
 use shekyl_timing_engine::{Clock, ManualClock, Tick};
 
 use super::super::posture::{
-    render, Cause, Connectors, ManagedTorFix, OriginVerdict, OwnTx, Shown, TorSetting,
+    render, Cause, Connectors, ManagedTorFix, OriginVerdict, OwnTx, Shown, Status, TorSetting,
 };
 use super::{duration_ns, Action, Core, Input, Policy, Step};
 
@@ -438,10 +438,20 @@ fn an_unavailable_platform_is_fixed_and_announced_once_per_cap() {
 #[test]
 fn a_missing_directory_is_held_without_an_install_fix() {
     let (mut core, _) = Core::start(policy(), managed(false), 0);
-    let step = core.on(Input::DirectoryUnusable, 0);
+    let path = std::path::PathBuf::from("/var/lib/shekyl");
+    let step = core.on(
+        Input::DirectoryUnusable {
+            path: path.clone(),
+            space: None,
+        },
+        0,
+    );
     assert!(!spawns(&step));
     assert_eq!(core.status().shown, Shown::RestartingHeld);
-    assert_eq!(core.status().cause, Cause::DirectoryUnusable);
+    assert_eq!(
+        core.status().cause,
+        Cause::DirectoryUnusable { path, space: None }
+    );
     assert!(core.status().fixes.is_empty());
 }
 
@@ -642,6 +652,209 @@ fn a_shutdown_stops_an_installed_route_and_says_nothing() {
 
 #[path = "live_tests.rs"]
 mod live;
+
+/// A death right after a recovery is a state change and is said at once
+/// (`TSR-F11`). The cap limits repeats of one cause, not every message: in
+/// the Linux run (2026-10-24, case D) "Tor is carrying this node's traffic"
+/// stood for a minute after Tor died. Dropping the `changed` key fails this.
+#[test]
+fn a_death_right_after_a_recovery_is_said_at_once() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    reach_usable(&mut core);
+    let step = core.on(Input::ProcessEnded { exit_code: None }, 1);
+    assert_eq!(announces(&step), 1, "the death is said inside the cap");
+}
+
+/// While held, a repeat of the same cause waits for the cap, and a new cause
+/// is said at once (case E: a refused binary waited two minutes).
+#[test]
+fn a_new_cause_is_said_at_once_and_a_repeat_waits_for_the_cap() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    assert_eq!(announces(&core.on(Input::PinRefused, 0)), 1);
+    let second = duration_ns(Duration::from_secs(1));
+    assert_eq!(
+        announces(&core.on(Input::PinRefused, second)),
+        0,
+        "a repeat waits"
+    );
+    let unusable = Input::DirectoryUnusable {
+        path: std::path::PathBuf::from("/var/lib/shekyl"),
+        space: None,
+    };
+    assert_eq!(
+        announces(&core.on(unusable, 2 * second)),
+        1,
+        "a new cause does not"
+    );
+}
+
+/// The key is the cause's kind, not its detail (Rick, 2026-10-24): the
+/// directory found short of space after it was found unusable is still "fix
+/// the directory", so it waits for the cap; the repeat carries the new
+/// detail. Keying on the payload fails this.
+#[test]
+fn a_new_detail_of_the_same_cause_is_a_repeat() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    let path = std::path::PathBuf::from("/var/lib/shekyl");
+    let unusable = Input::DirectoryUnusable {
+        path: path.clone(),
+        space: None,
+    };
+    assert_eq!(announces(&core.on(unusable, 0)), 1);
+    let short = Input::DirectoryUnusable {
+        path,
+        space: Some(super::Space {
+            available: 0,
+            needed: 35_000_000,
+        }),
+    };
+    let second = duration_ns(Duration::from_secs(1));
+    assert_eq!(
+        announces(&core.on(short, second)),
+        0,
+        "the same kind with new detail waits for the cap"
+    );
+    assert!(
+        matches!(
+            core.status().cause,
+            Cause::DirectoryUnusable { space: Some(_), .. }
+        ),
+        "the status carries the new detail at once"
+    );
+}
+
+/// The held state's repeat belongs to the held state. When the pin check is
+/// due in the same tick, the check speaks, not a repeat of the old cause
+/// (case E); and once Tor has spawned no repeat is left armed to fire into
+/// the bootstrap (case C2's stale line).
+#[test]
+fn a_held_repeat_yields_to_its_pin_check_and_ends_with_the_spawn() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    let unusable = Input::DirectoryUnusable {
+        path: std::path::PathBuf::from("/var/lib/shekyl"),
+        space: None,
+    };
+    assert_eq!(announces(&core.on(unusable, 0)), 1);
+    let cap = duration_ns(policy().cap);
+    let step = core.on_deadline(cap);
+    assert!(
+        step.actions.contains(&Action::CheckPin),
+        "{:?}",
+        step.actions
+    );
+    assert_eq!(announces(&step), 0, "the check speaks for itself");
+    core.on(Input::PinAccepted, cap);
+    core.on(Input::Spawned, cap);
+    assert!(
+        core.announcements.pending().is_none(),
+        "pin dropped the repeat"
+    );
+}
+
+/// Three launch failures arm the repeat at the cap and the pin sooner.
+/// Spawning first must not let that repeat be said into the bootstrap.
+#[test]
+fn a_repeat_armed_before_spawn_is_not_said_into_the_bootstrap() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    for _ in 0..3 {
+        core.on(Input::PinAccepted, 0);
+        core.on(Input::SpawnFailed, 0);
+    }
+    let pin_at = core.pin_at.expect("the third fault arms a pin");
+    let cap = duration_ns(policy().cap);
+    assert!(pin_at < cap, "pin and repeat are different ticks");
+    let step = core.on_deadline(pin_at);
+    assert!(step.actions.contains(&Action::CheckPin), "{step:?}");
+    assert_eq!(announces(&step), 0);
+    core.on(Input::PinAccepted, pin_at);
+    core.on(Input::Spawned, pin_at);
+    assert_eq!(announces(&core.on_deadline(cap)), 0);
+}
+
+/// Backoff after faults, then a recovery at `usable_at`, then a death at
+/// `death_at`: the retry wait the death arms (the pin check, not the next
+/// deadline, which may be an announcement).
+fn wait_after_death(usable_at: u64, degraded_at: Option<u64>, death_at: u64) -> u64 {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    for _ in 0..3 {
+        core.on(Input::PinAccepted, 0);
+        core.on(Input::SpawnFailed, 0);
+    }
+    core.on(Input::PinAccepted, usable_at);
+    core.on(Input::Spawned, usable_at);
+    core.on(
+        Input::DirectorySample {
+            progress: Some(100),
+            socks: Some(socks()),
+            read: None,
+        },
+        usable_at,
+    );
+    core.on(Input::BootstrapComplete, usable_at);
+    core.on(Input::RouteInstalled, usable_at);
+    core.on(Input::OnionPublished, usable_at);
+    assert_eq!(core.status().shown, Shown::Usable);
+    if let Some(at) = degraded_at {
+        core.on(Input::ExternalBlocked, at);
+    }
+    core.on(Input::ProcessEnded { exit_code: None }, death_at);
+    core.pin_at.expect("a retry is armed") - death_at
+}
+
+/// A full cap of usable outbound resets the backoff (§4.4, Rick
+/// 2026-10-24); less than a cap, or a cap spent degraded, does not. Removing
+/// the reset makes the first assertion read the cap.
+#[test]
+fn the_backoff_starts_again_only_after_a_cap_of_usable_outbound() {
+    let base = duration_ns(policy().base);
+    let cap = duration_ns(policy().cap);
+    let up = duration_ns(Duration::from_secs(20));
+    assert_eq!(
+        wait_after_death(up, None, up + cap),
+        base,
+        "a cap of health resets"
+    );
+    assert_eq!(
+        wait_after_death(up, None, up + cap / 2),
+        cap,
+        "half a cap does not"
+    );
+    assert_eq!(
+        wait_after_death(up, Some(up + 1), up + cap + 1),
+        cap,
+        "a cap spent with outbound blocked is not health"
+    );
+    assert_eq!(
+        wait_after_death(up, Some(up + cap), up + cap + cap),
+        base,
+        "a served cap survives a later block"
+    );
+}
+
+/// The §5 row names the path and the shortfall.
+#[test]
+fn a_space_shortfall_names_the_path_and_both_sizes() {
+    let status = Status {
+        cause: Cause::DirectoryUnusable {
+            path: std::path::PathBuf::from("/var/lib/shekyl"),
+            space: Some(super::Space {
+                available: 0,
+                needed: 35_000_000,
+            }),
+        },
+        ..held_status()
+    };
+    let text = render(&status);
+    assert!(text.contains("/var/lib/shekyl"), "{text}");
+    assert!(text.contains("0 bytes free"), "{text}");
+    assert!(text.contains("35.0 MB"), "{text}");
+}
+
+fn held_status() -> Status {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    core.on(Input::PinRefused, 0);
+    core.status()
+}
 
 /// `GS-Q3`: `OwnTx` and Health are the relay's verdict. The same value again
 /// changes nothing; a loss is said under the cap, not at once; a recovery is
