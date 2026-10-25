@@ -168,6 +168,15 @@ impl Session {
             .unwrap_or_else(|| CloseCause::new(CloseKind::LocalClose))
     }
 
+    /// The cause the connector stored when it closed the inbound end, if it
+    /// has: a peer that closed is seen without reading the frames still
+    /// queued. `None` while the inbound end is open, and after a close that
+    /// stored nothing.
+    #[must_use]
+    pub fn stored_cause(&self) -> Option<CloseCause> {
+        *self.cause.lock().expect("inbound cause")
+    }
+
     /// A send handle that does not close the queue when dropped.
     #[must_use]
     pub fn send_half(&self) -> SendHalf {

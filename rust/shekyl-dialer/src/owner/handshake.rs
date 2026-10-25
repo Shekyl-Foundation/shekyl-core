@@ -3,16 +3,24 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! One outbound handshake.
+//! One outbound handshake, in two halves (the dialer in-flight bound,
+//! Rick, 2026-10-25: decisions 1 and 2).
 //!
-//! The owner loop decides the address and the aim. This module opens the
-//! channel, writes the request, reads until the peer's handshake response,
-//! and admits the list the response carries. A `Keep` dial then adopts the
-//! channel. A `Confirm` dial closes it here, with no adopt and no post.
+//! The owner loop decides the address and the aim and launches the
+//! attempt. The **attempt task** ([`attempt_task`]) runs on the dialer's
+//! runtime and does only the I/O and the Levin layer's checks, which need
+//! no random numbers: it opens the channel, writes the request, reads until
+//! the peer's handshake response, decodes it and checks the network id.
+//! It decides nothing else and holds no lock of the dialer's. The **loop**
+//! applies its result ([`Dialer::apply_result`]) by calling the layer that
+//! owns each decision: the peer list admits or refuses the received list,
+//! the aim chooses confirm or keep, the hub adopts a kept channel.
+//!
 //! A channel the dial does not adopt is released, and the dialer that built
-//! it retires the id, on every path ([`Unadopted`]); the outcome carries the
-//! cause the connector stored. The handshake's only clock is the connector's
-//! transport gap, armed before `dial_channel` returns.
+//! it retires the id, on every path ([`Unadopted`]), including a cancelled
+//! task and a result dropped at stop; the outcome carries the cause the
+//! connector stored. The handshake's only clock is the connector's
+//! transport gap, armed before the channel is returned.
 //!
 //! The response carries no nonce. The request's nonce is the inbound
 //! self-connection check, not a value the peer echoes, so the response
@@ -30,7 +38,7 @@ use shekyl_levin::{
 use shekyl_peerlist::{
     CloseCause, CloseKind, ConnectorId, DialOutcome, NetworkAddress, SessionRow,
 };
-use shekyl_seam::{Channel, Hub, SocketId, SyncPayload};
+use shekyl_seam::{Channel, Endpoint, Hub, SocketId, SyncPayload};
 
 use super::address::endpoint_of;
 use super::{session_of, Dialer};
@@ -38,7 +46,7 @@ use crate::bans::BanSnapshot;
 use crate::fill::DialAim;
 use crate::nonce::InFlightNonce;
 
-/// How one attempt ended on the owner's thread.
+/// How one attempt ended, once the loop has applied it.
 pub(super) enum Attempt {
     /// A total outcome. The owner records it. Nothing was adopted, and
     /// nothing is posted.
@@ -58,6 +66,26 @@ pub(super) struct KeptDial {
     pub(super) session: Session,
 }
 
+/// What the attempt task hands the loop.
+pub(super) enum TaskResult {
+    /// A well-formed handshake response on our network, and the channel it
+    /// came on, still unadopted.
+    Response {
+        channel: Unadopted,
+        response: Box<HandshakeResponse>,
+    },
+    /// The channel never reached a well-formed response on our network:
+    /// the connector's cause, or the Levin layer's rejection.
+    Failed(CloseCause),
+}
+
+/// What the task needs, worked out on the loop before launch.
+pub(super) struct Prepared {
+    endpoint: Endpoint,
+    request: Vec<u8>,
+    network_id: [u8; 16],
+}
+
 /// Why no well-formed handshake response was read.
 enum Rejected {
     /// The connector closed the session; its cause is on the session.
@@ -67,65 +95,54 @@ enum Rejected {
 }
 
 impl Dialer {
-    /// Dial and handshake. Every end path is an [`Attempt`].
-    ///
-    /// The shared lock is taken only to admit the received list, after the
-    /// bans have been copied out and the response has been read. The dial
-    /// and the read block this thread and do not hold the lists.
-    pub(super) fn exchange<R: RelayRng + ?Sized>(
+    /// The attempt's inputs: the endpoint, the network id and the request
+    /// frame carrying `nonce`. An address with no endpoint, or no published
+    /// tip or network id yet, is a local failure the loop records at once.
+    pub(super) fn prepare(
         &self,
         connector: ConnectorId,
         address: &NetworkAddress,
-        aim: DialAim,
         nonce: &InFlightNonce,
-        rng: &mut R,
-    ) -> Attempt {
-        let failed =
-            |cause: CloseCause| Attempt::Done(DialOutcome::DialFailed(address.clone(), cause));
-        let Some(endpoint) = endpoint_of(address) else {
-            return failed(CloseCause::new(CloseKind::LocalClose));
-        };
+    ) -> Result<Prepared, CloseCause> {
+        let local = || CloseCause::new(CloseKind::LocalClose);
+        let endpoint = endpoint_of(address).ok_or_else(local)?;
         let (Some(snapshot), Some(network_id)) = ((self.snapshot)(), self.network_id()) else {
             tracing::debug!(
                 "{connector:?} dial {address:?} not made: no published tip or network id yet"
             );
-            return failed(CloseCause::new(CloseKind::LocalClose));
+            return Err(local());
         };
-        let mut channel = match self.hub.dial_channel(&endpoint) {
-            Ok(channel) => Unadopted::new(&self.hub, channel),
-            Err(cause) => return failed(cause),
-        };
-        let connected_at = std::time::Instant::now();
         let request = HandshakeRequest {
             node_data: BasicNodeData { network_id },
             payload_data: sync_data(&snapshot),
             nonce: *nonce.bytes(),
         };
-        let Ok(payload) = request.store() else {
-            return failed(CloseCause::new(CloseKind::LocalClose));
-        };
-        if let Err(kind) = channel
-            .held()
-            .session
-            .try_send(invoke(COMMAND_HANDSHAKE, &payload))
-        {
-            return failed(CloseCause::new(kind));
-        }
-        tracing::debug!(
-            "{connector:?} dial {address:?}: handshake queued {} ns after the channel opened",
-            u64::try_from(connected_at.elapsed().as_nanos()).unwrap_or(u64::MAX)
-        );
+        let payload = request.store().map_err(|_| local())?;
+        Ok(Prepared {
+            endpoint,
+            request: invoke(COMMAND_HANDSHAKE, &payload),
+            network_id,
+        })
+    }
 
-        let response = match read_response(&mut channel.held().session) {
-            Ok(response) => response,
-            Err(Rejected::Closed) => return failed(channel.held().session.close_cause()),
-            Err(Rejected::ByLevin) => {
-                return failed(CloseCause::new(CloseKind::LevinHandshakeRejected));
-            }
+    /// Apply one task result, on the loop, through the layer that owns each
+    /// decision. The shared lock is taken only to admit the received list,
+    /// after the bans have been copied out; no hub call is made under it
+    /// (#1092).
+    pub(super) fn apply_result<R: RelayRng + ?Sized>(
+        &self,
+        connector: ConnectorId,
+        address: &NetworkAddress,
+        aim: DialAim,
+        result: TaskResult,
+        rng: &mut R,
+    ) -> Attempt {
+        let failed =
+            |cause: CloseCause| Attempt::Done(DialOutcome::DialFailed(address.clone(), cause));
+        let (mut channel, response) = match result {
+            TaskResult::Failed(cause) => return failed(cause),
+            TaskResult::Response { channel, response } => (channel, response),
         };
-        if response.node_data.network_id != network_id {
-            return failed(CloseCause::new(CloseKind::LevinHandshakeRejected));
-        }
 
         let id = channel.held().open.id();
         let now = self.hub.now();
@@ -151,6 +168,12 @@ impl Dialer {
 
         if aim == DialAim::Confirm {
             return Attempt::Done(DialOutcome::Confirmed(address.clone()));
+        }
+
+        // A peer that closed while the result waited in the queue: the
+        // session already holds the connector's cause. Nothing is adopted.
+        if let Some(cause) = channel.closed() {
+            return failed(cause);
         }
 
         // From here until the kept row is written, a close that reaches the
@@ -193,20 +216,72 @@ impl Dialer {
     }
 }
 
-/// A dialed channel the dialer holds until it adopts it. Every other end of
-/// the exchange (a refusal, a failed read, a confirm) releases it on drop:
-/// the session's drop closes the queue, the gap's drop ends the connector's
-/// wait, and the admission closes with the dialer's own cause. There is no
-/// row, so no `Closed` post. Then the dialer that built the channel retires
-/// what it holds for the id ([`Hub::reap`]; the loopback joins its writer
-/// thread). Only [`Self::into_adopted`] takes the channel out.
-struct Unadopted<'h> {
-    hub: &'h Hub,
+/// The attempt task: the I/O and the Levin layer's checks, nothing else.
+///
+/// It opens the channel through the hub's dialer, writes the request,
+/// reads until one whole handshake response decodes, and checks the
+/// network id. It takes no lock of the dialer's and draws no random
+/// number. Dropped before it resolves (a cancelled attempt), it releases
+/// whatever it holds: the connect future aborts the connector's dial, and
+/// a held channel is released by [`Unadopted`]'s drop.
+pub(super) async fn attempt_task(
+    hub: Hub,
+    connector: ConnectorId,
+    address: NetworkAddress,
+    prepared: Prepared,
+) -> TaskResult {
+    let Prepared {
+        endpoint,
+        request,
+        network_id,
+    } = prepared;
+    let channel = match hub.dial_channel_async(&endpoint).await {
+        Ok(channel) => Unadopted::new(hub, channel),
+        Err(cause) => return TaskResult::Failed(cause),
+    };
+    let mut channel = channel;
+    let connected_at = std::time::Instant::now();
+    if let Err(kind) = channel.held().session.try_send(request) {
+        return TaskResult::Failed(CloseCause::new(kind));
+    }
+    tracing::debug!(
+        "{connector:?} dial {address:?}: handshake queued {} ns after the channel opened",
+        u64::try_from(connected_at.elapsed().as_nanos()).unwrap_or(u64::MAX)
+    );
+    let response = match read_response(&mut channel.held().session).await {
+        Ok(response) => response,
+        Err(Rejected::Closed) => {
+            return TaskResult::Failed(channel.held().session.close_cause());
+        }
+        Err(Rejected::ByLevin) => {
+            return TaskResult::Failed(CloseCause::new(CloseKind::LevinHandshakeRejected));
+        }
+    };
+    if response.node_data.network_id != network_id {
+        return TaskResult::Failed(CloseCause::new(CloseKind::LevinHandshakeRejected));
+    }
+    TaskResult::Response {
+        channel,
+        response: Box::new(response),
+    }
+}
+
+/// A dialed channel the dialer holds until it adopts it. Every other end
+/// (a refusal, a failed read, a confirm, a cancelled task, a result dropped
+/// at stop) releases it on drop: the session's drop closes the queue, the
+/// gap's drop ends the connector's wait, and the admission closes with the
+/// dialer's own cause. There is no row, so no `Closed` post. Then the
+/// dialer that built the channel retires what it holds for the id
+/// ([`Hub::reap`]; the loopback joins its writer thread). Only
+/// [`Self::into_adopted`] takes the channel out. It owns its hub handle, so
+/// it can cross from the attempt task to the loop.
+pub(super) struct Unadopted {
+    hub: Hub,
     channel: Option<Channel>,
 }
 
-impl<'h> Unadopted<'h> {
-    const fn new(hub: &'h Hub, channel: Channel) -> Self {
+impl Unadopted {
+    const fn new(hub: Hub, channel: Channel) -> Self {
         Self {
             hub,
             channel: Some(channel),
@@ -219,6 +294,11 @@ impl<'h> Unadopted<'h> {
             .expect("a channel is held until it is adopted")
     }
 
+    /// The connector's cause, when it has already closed the session.
+    fn closed(&mut self) -> Option<CloseCause> {
+        self.held().session.stored_cause()
+    }
+
     /// The channel, for `adopt`. Nothing is released.
     fn into_adopted(mut self) -> Channel {
         self.channel
@@ -227,7 +307,7 @@ impl<'h> Unadopted<'h> {
     }
 }
 
-impl Drop for Unadopted<'_> {
+impl Drop for Unadopted {
     fn drop(&mut self) {
         let Some(Channel {
             open, session, gap, ..
@@ -253,10 +333,10 @@ fn sync_data(snapshot: &SyncPayload) -> CoreSyncData {
 }
 
 /// Read frames until one whole `COMMAND_HANDSHAKE` response decodes.
-fn read_response(session: &mut Session) -> Result<HandshakeResponse, Rejected> {
+async fn read_response(session: &mut Session) -> Result<HandshakeResponse, Rejected> {
     let mut reader = BucketReader::new();
     loop {
-        let Some(frame) = session.recv_blocking() else {
+        let Some(frame) = session.recv().await else {
             return Err(Rejected::Closed);
         };
         if reader.feed(&frame).is_err() {

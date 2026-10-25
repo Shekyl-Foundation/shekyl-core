@@ -27,8 +27,8 @@ use shekyl_runtime::{runtime, RuntimeBudget, ThreadName};
 /// The cause a Tor link is taken down with.
 pub use shekyl_seam::DownCause;
 use shekyl_seam::{
-    drive_inbound_async, Channel, CloseCause, CloseKind, ConnectorId, Dial, Direction, Endpoint,
-    Hub, Route, RoutePublish, SocketId,
+    drive_inbound_async, AttemptTask, Channel, CloseCause, CloseKind, ConnectFuture, ConnectorId,
+    Dial, Direction, Endpoint, Hub, Route, RoutePublish, SocketId,
 };
 use shekyl_socks::Proxy;
 use shekyl_timing_engine::{Clock, Handle, MonotonicClock, Tick};
@@ -102,6 +102,59 @@ impl Dial for ZoneDial {
         // Accept reads the hub's ceiling. An outbound dial does not admit
         // against the inbound ceiling, so this copy is not stored.
         let _ = (ceiling, now);
+        // This blocks the calling thread on the runtime. The outbound
+        // dialer never calls it: its attempts await `connect_async` on the
+        // runtime, where blocking here would panic.
+        debug_assert!(
+            tokio::runtime::Handle::try_current().is_err(),
+            "ZoneDial::connect blocks; on the runtime use connect_async"
+        );
+        let started = self.start(endpoint)?;
+        self.host.handle.block_on(started)
+    }
+
+    /// The connect as a future that owns the spawned dial until the
+    /// connector admits the channel: dropped before then, it aborts that
+    /// dial, whose reservation and timer owner release on drop. After
+    /// admission the same dial task drives the session, so it is no longer
+    /// aborted; releasing the channel ends it the ordinary way.
+    fn connect_async(
+        &self,
+        endpoint: &Endpoint,
+        ceiling: InboundCeiling,
+        now: Tick,
+    ) -> ConnectFuture {
+        let _ = (ceiling, now);
+        match self.start(endpoint) {
+            Ok(started) => started,
+            Err(cause) => Box::pin(std::future::ready(Err(cause))),
+        }
+    }
+
+    /// Every attempt is a task on the transport runtime's async workers,
+    /// as every pump is ([`Self::drive`]).
+    fn spawn_attempt(&self, task: AttemptTask) -> bool {
+        drop(self.host.handle.spawn(task));
+        true
+    }
+
+    /// One task per connection on the transport runtime, in both
+    /// directions: a thread held for the life of a connection is outside
+    /// the thread ledger, and on the pool's blocking lane it made every
+    /// connection past the cap deaf.
+    fn drive(&self, hub: &Hub, id: SocketId, session: Session) {
+        let hub = hub.clone();
+        self.host
+            .handle
+            .spawn(async move { drive_inbound_async(&hub, id, session).await });
+    }
+}
+
+impl ZoneDial {
+    /// Start the dial `endpoint` names on the runtime, and return the wait
+    /// for its admission. A refusal before anything is spawned is the
+    /// error.
+    fn start(&self, endpoint: &Endpoint) -> Result<ConnectFuture, CloseCause> {
         match endpoint {
             Endpoint::Clearnet {
                 ip,
@@ -118,20 +171,7 @@ impl Dial for ZoneDial {
         }
     }
 
-    /// One task per connection on the transport runtime, in both
-    /// directions: a thread held for the life of a connection is outside
-    /// the thread ledger, and on the pool's blocking lane it made every
-    /// connection past the cap deaf.
-    fn drive(&self, hub: &Hub, id: SocketId, session: Session) {
-        let hub = hub.clone();
-        self.host
-            .handle
-            .spawn(async move { drive_inbound_async(&hub, id, session).await });
-    }
-}
-
-impl ZoneDial {
-    fn dial_clearnet(&self, ip: IpAddr, port: u16) -> Result<Channel, CloseCause> {
+    fn dial_clearnet(&self, ip: IpAddr, port: u16) -> Result<ConnectFuture, CloseCause> {
         let ready = self
             .host
             .clearnet
@@ -174,24 +214,25 @@ impl ZoneDial {
             admitted: admitted_tx,
         };
         let engine = self.host.engine.clone();
-        self.host.handle.spawn(dial_clearnet(dial, engine));
-        let admitted = self
-            .host
-            .handle
-            .block_on(recv_admitted(admitted_rx, fail_rx))?;
-        Ok(Channel {
-            open: admitted.open,
-            session: admitted.session,
-            endpoint: Endpoint::Clearnet {
-                ip,
-                port,
-                direction: Direction::Outbound,
+        let spawned = self.host.handle.spawn(dial_clearnet(dial, engine));
+        Ok(until_admitted(
+            spawned,
+            admitted_rx,
+            fail_rx,
+            move |admitted: ClearnetAdmitted| Channel {
+                open: admitted.open,
+                session: admitted.session,
+                endpoint: Endpoint::Clearnet {
+                    ip,
+                    port,
+                    direction: Direction::Outbound,
+                },
+                gap: admitted.gap,
             },
-            gap: admitted.gap,
-        })
+        ))
     }
 
-    fn dial_tor(&self, key: &[u8; 32], port: u16) -> Result<Channel, CloseCause> {
+    fn dial_tor(&self, key: &[u8; 32], port: u16) -> Result<ConnectFuture, CloseCause> {
         // The route is read from the link at each dial. A link that fell
         // after the plan read it still costs this one draw (`TSR-F1`).
         let Some(Route::Socks(at)) = self.host.hub.links().get(ConnectorId::Tor).route else {
@@ -215,18 +256,48 @@ impl ZoneDial {
             admitted: admitted_tx,
         };
         let engine = self.host.engine.clone();
-        self.host.handle.spawn(dial_tor(dial, engine));
-        let admitted = self
-            .host
-            .handle
-            .block_on(recv_admitted(admitted_rx, fail_rx))?;
-        Ok(Channel {
-            open: admitted.open,
-            session: admitted.bytes,
-            endpoint: Endpoint::Tor { key: *key, port },
-            gap: Some(admitted.gap),
-        })
+        let spawned = self.host.handle.spawn(dial_tor(dial, engine));
+        let key = *key;
+        Ok(until_admitted(
+            spawned,
+            admitted_rx,
+            fail_rx,
+            move |admitted: TorAdmitted| Channel {
+                open: admitted.open,
+                session: admitted.bytes,
+                endpoint: Endpoint::Tor { key, port },
+                gap: Some(admitted.gap),
+            },
+        ))
     }
+}
+
+/// Aborts the spawned dial when dropped, unless the connect resolved.
+struct AbortUntilAdmitted(Option<tokio::task::JoinHandle<()>>);
+
+impl Drop for AbortUntilAdmitted {
+    fn drop(&mut self) {
+        if let Some(spawned) = self.0.take() {
+            spawned.abort();
+        }
+    }
+}
+
+/// The wait for `spawned`'s admission, as a [`ConnectFuture`]. Dropped
+/// before it resolves, it aborts `spawned`. Once a channel is admitted the
+/// dial task drives it, so it is detached, not aborted.
+fn until_admitted<T: Send + 'static>(
+    spawned: tokio::task::JoinHandle<()>,
+    admitted_rx: mpsc::UnboundedReceiver<T>,
+    fail_rx: oneshot::Receiver<CloseCause>,
+    into_channel: impl FnOnce(T) -> Channel + Send + 'static,
+) -> ConnectFuture {
+    Box::pin(async move {
+        let mut guard = AbortUntilAdmitted(Some(spawned));
+        let admitted = recv_admitted(admitted_rx, fail_rx).await?;
+        guard.0 = None;
+        Ok(into_channel(admitted))
+    })
 }
 
 fn failure_slot() -> (

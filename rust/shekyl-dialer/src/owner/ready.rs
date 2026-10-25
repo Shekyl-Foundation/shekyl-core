@@ -135,6 +135,39 @@ pub(super) fn park<C: Clock>(bell: &Bell, owner: &OwnerHandle<C>, seen: u64) -> 
     })
 }
 
+/// What ended [`wait_wake_or_bell`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Waited {
+    /// The armed wake was delivered.
+    Wake,
+    /// The bell rang after `seen`: a posted result, a link change, or a stop.
+    Bell,
+    /// The engine closed or the owner was deregistered: the loop ends.
+    Ended,
+}
+
+/// Wait for the armed wake or the bell, whichever comes first, both polled
+/// on this thread. A wake that is delivered while the loop is not waiting
+/// stays in the owner's slot until this reads it, so none is lost; a
+/// `WakeWait` dropped when the bell wins re-registers on the next call.
+pub(super) fn wait_wake_or_bell<C: Clock>(
+    bell: &Bell,
+    owner: &OwnerHandle<C>,
+    seen: u64,
+) -> Waited {
+    let mut owner_wait = pin!(owner.wait_wake_async());
+    block_on(|cx| {
+        if let Poll::Ready(waited) = owner_wait.as_mut().poll(cx) {
+            return Poll::Ready(if waited.is_ok() {
+                Waited::Wake
+            } else {
+                Waited::Ended
+            });
+        }
+        bell.poll_past(seen, cx).map(|()| Waited::Bell)
+    })
+}
+
 /// Poll `step` on this thread until it is ready, parking the thread between
 /// polls. A wake unparks it.
 fn block_on<T>(mut step: impl FnMut(&mut Context<'_>) -> Poll<T>) -> T {
