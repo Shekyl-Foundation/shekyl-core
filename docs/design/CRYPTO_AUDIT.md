@@ -299,11 +299,20 @@ not depend on which values repeat tells an observer nothing it lacks
 sets that time differently are operand dependence by another name. On the
 fleet host the `[fixed-pair]` rows did cross (+37 square, +38 mul at 1M,
 `dynamic-x86_64-fleet-measurement-host-property.txt`, binary `e8902ca27`,
-before the wrappers, so every row there ran direct), so the two hosts
-disagree and the fixed-set reading is unresolved between them until the
-code-path table runs on the fleet host. The operand evidence on this host
-is the shape rows, whose values are fresh and distinct for every element
-(sparse −86, small −108), and the constant row. `Field25519` is flat on every null, test, `[fixed-pair]`
+before the wrappers, so every row there ran direct), and the code-path
+table run there on 2026-10-25
+([`dynamic-x86_64-fleet-measurement-host-code-path.txt`](../formal/checkct/results/2026-10-25/dynamic-x86_64-fleet-measurement-host-code-path.txt))
+confirms it on the direct path (mul −35, square +7 at 1M) with every
+wrapped `[fixed-pair]` row flat. So the hosts differ in which contrast
+shows it, not in whether it is there: on the fleet host two fixed operand
+sets time differently when inlined; on the workstation the operand
+evidence is the shape rows, whose values are fresh and distinct for every
+element (sparse −86, small −108), and the constant row. The fleet host
+reproduces the rest of the split too: direct square crosses on the fixed
+set (−20), a constant (−35) and every fresh shape (−26 to −38), mul on the
+fixed set (−7) and a constant (−24), the wrapped path is flat at 1M,
+`Field25519` is flat on every row, and `sqrt` again crosses only where one
+value repeats. `Field25519` is flat on every null, test, `[fixed-pair]`
 and constant row on both paths at 1M; only its operand-shape rows sit near
 the threshold, on both paths and in the cropped t alone (sparse +6 / +9,
 dense −6 / −5, small under; full-sample |t| ≤ 2.5), with mixed signs and

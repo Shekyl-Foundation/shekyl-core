@@ -351,4 +351,5 @@ regenerate it after any run.
 
 | record | workspace | toolchain | options | target | secure / insecure / unknown | not secure |
 | --- | --- | --- | --- | --- | --- | --- |
+| `dynamic-x86_64-fleet-measurement-host-code-path.txt` | dynamic | see file | — | — | — | not a checkct record |
 | `dynamic-x86_64-workstation-code-path.txt` | dynamic | see file | — | — | — | not a checkct record |
