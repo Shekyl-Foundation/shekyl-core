@@ -10,10 +10,10 @@
 //!
 //! The model's reason for each close is read off the owner's log line,
 //! which carries the node's span: tests run side by side in one process,
-//! and the span says which node closed which session.
+//! and the span says which node closed which session. The inbound claim
+//! and the relay fan-out are `chain_sync_claim_relay.rs`.
 
 use std::collections::HashMap;
-use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -22,115 +22,21 @@ use shekyl_chain_rules::{form_header, target_claim, FormAttempt, Substrate};
 use shekyl_chain_store::codec::FollowingDegradedCell;
 use shekyl_chain_store::store::SnapshotView;
 use shekyl_chain_sync::SyncState;
-use shekyl_draw_rng::SplitMix64;
-use shekyl_hash_budget::Budget;
 use shekyl_levin::{
     notify, RequestBodies, ResponseBodies, ResponseHeaders, SyncCommand, COMMAND_HANDSHAKE,
     NOTIFY_NEW_COMPACT_BLOCK, NOTIFY_NEW_TRANSACTIONS,
 };
 use shekyl_p2p_harness::sync::{
-    fork_headers, frame, request_headers, substrate, Bodies, Chain, Corpus, HeaderChainPeer, Node,
-    ServingPeer, Step, SyncPeer,
+    announcement, fork_headers, frame, request_headers, substrate, Bodies, Corpus, HeaderChainPeer,
+    Node, ServingPeer, Silent, Step, SyncPeer,
 };
-use shekyl_seam::SyncPayload;
 use shekyl_transport_layer::CloseKind;
 use shekyl_types::{BlockHash, BlockHeight};
 use shekyl_wire::{Block, PowBlob};
-use tracing::field::{Field, Visit};
-use tracing::span::{Attributes, Id};
-use tracing::{Event, Subscriber};
-use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
-use tracing_subscriber::registry::LookupSpan;
-use tracing_subscriber::util::SubscriberInitExt;
+#[path = "chain_sync/support.rs"]
+mod support;
 
-/// The ceiling on every wait for something to happen. Each wait returns
-/// the moment its condition holds, which here takes seconds to a minute:
-/// mostly real RandomX over a corpus's headers. The ceiling is for a
-/// loaded runner, where fourteen of these share the cores, and it measures
-/// nothing.
-const LIMIT: Duration = Duration::from_secs(900);
-
-// ---------------------------------------------------------------- logs --
-
-/// Every close the owner logged: (node tag, session, cause).
-static CLOSES: Mutex<Vec<(String, u64, String)>> = Mutex::new(Vec::new());
-
-struct Tag(String);
-
-#[derive(Default)]
-struct Fields {
-    tag: Option<String>,
-    message: String,
-    session: Option<u64>,
-    cause: Option<String>,
-}
-
-impl Visit for Fields {
-    fn record_u64(&mut self, field: &Field, value: u64) {
-        if field.name() == "session" {
-            self.session = Some(value);
-        }
-    }
-
-    fn record_str(&mut self, field: &Field, value: &str) {
-        if field.name() == "tag" {
-            self.tag = Some(value.to_owned());
-        }
-    }
-
-    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-        match field.name() {
-            "message" => self.message = format!("{value:?}"),
-            "cause" => self.cause = Some(format!("{value:?}")),
-            // The owner logs its `Session` by `Display`, the socket id.
-            "session" => self.session = format!("{value:?}").parse().ok(),
-            "tag" => self.tag = Some(format!("{value:?}").trim_matches('"').to_owned()),
-            _ => {}
-        }
-    }
-}
-
-struct Closes;
-
-impl<S> Layer<S> for Closes
-where
-    S: Subscriber + for<'a> LookupSpan<'a>,
-{
-    fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
-        let mut fields = Fields::default();
-        attrs.record(&mut fields);
-        if let (Some(tag), Some(span)) = (fields.tag, ctx.span(id)) {
-            span.extensions_mut().insert(Tag(tag));
-        }
-    }
-
-    fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
-        let mut fields = Fields::default();
-        event.record(&mut fields);
-        if !fields.message.contains("closes a session") {
-            return;
-        }
-        let tag = ctx.event_scope(event).and_then(|scope| {
-            scope
-                .from_root()
-                .find_map(|span| span.extensions().get::<Tag>().map(|tag| tag.0.clone()))
-        });
-        if let (Some(tag), Some(session), Some(cause)) = (tag, fields.session, fields.cause) {
-            CLOSES.lock().expect("closes").push((tag, session, cause));
-        }
-    }
-}
-
-fn logs() {
-    let _installed = tracing_subscriber::registry()
-        .with(Closes)
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_test_writer()
-                .with_filter(tracing_subscriber::EnvFilter::from_default_env()),
-        )
-        .try_init();
-}
+use support::{claim, claim_of, logs, rng, source, spend, wait_synced, CLOSES, LIMIT};
 
 /// The model's closes on node `tag`, by session.
 fn model_closes(tag: &str) -> HashMap<u64, String> {
@@ -141,62 +47,6 @@ fn model_closes(tag: &str) -> HashMap<u64, String> {
         .filter(|(node, _, _)| node == tag)
         .map(|(_, session, cause)| (*session, cause.clone()))
         .collect()
-}
-
-// ------------------------------------------------------------- helpers --
-
-/// The node's draw source: seeded, so a run repeats.
-fn rng() -> SplitMix64 {
-    SplitMix64::new(0x5EED)
-}
-
-/// A peer's handshake claim: its block count and cumulative work.
-fn claim(count: u64, work: u128, top: BlockHash) -> SyncPayload {
-    SyncPayload {
-        current_height: count,
-        cumulative_difficulty: u64::try_from(work & u128::from(u64::MAX)).expect("low"),
-        cumulative_difficulty_top64: u64::try_from(work >> 64).expect("high"),
-        top_id: *top.as_bytes(),
-    }
-}
-
-/// The claim a chain's own tip makes.
-fn claim_of(chain: &Chain) -> SyncPayload {
-    let (count, work, top) = chain.tip().expect("a chain");
-    claim(count, work, top)
-}
-
-/// A store holding `steps`, connected from its own node.
-async fn source(tag: &str, corpus: &Corpus, steps: &[Step]) -> Chain {
-    let (substrate, _) = substrate();
-    let chain = Chain::empty(
-        tag,
-        corpus.rules(),
-        Arc::new(substrate),
-        Budget::new(NonZeroUsize::new(4).expect("four")),
-    );
-    chain.apply(steps).await;
-    chain
-}
-
-fn spend() -> (Corpus, Vec<Step>) {
-    let corpus = Corpus::open("spend-1in-2out");
-    let steps = corpus.steps();
-    (corpus, steps)
-}
-
-async fn wait_synced(node: &Node, count: u64) {
-    let synced = node
-        .wait(LIMIT, |node| {
-            node.state() == SyncState::Synced && node.count() == count
-        })
-        .await;
-    assert!(
-        synced,
-        "state {:?}, count {} of {count}",
-        node.state(),
-        node.count()
-    );
 }
 
 // ---------------------------------------------------------- the honest --
@@ -212,6 +62,20 @@ async fn a_fresh_node_syncs_a_corpus_from_two_honest_peers_hashing_headers_only(
     let (count, _, _) = held.tip().expect("a chain");
     let mut node = Node::start("honest", corpus.rules(), &steps[..1], 2, rng()).await;
     let before = node.hashes();
+    // Every state the node's handle publishes, in order. With genesis
+    // alone and no claim yet, the first session is `Synced`; the claim
+    // then makes the node `Behind` until the chain is in.
+    let mut handle = node.state.subscribe();
+    let published = Arc::new(Mutex::new(vec![*handle.borrow_and_update()]));
+    let watcher = {
+        let published = Arc::clone(&published);
+        tokio::spawn(async move {
+            while handle.changed().await.is_ok() {
+                let state = *handle.borrow_and_update();
+                published.lock().expect("states").push(state);
+            }
+        })
+    };
     let mut seen = Vec::new();
     for _ in 0..2 {
         let (peer, asked) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
@@ -223,6 +87,33 @@ async fn a_fresh_node_syncs_a_corpus_from_two_honest_peers_hashing_headers_only(
         node.hashes() - before,
         count - 1,
         "one hash per header and none in the entry"
+    );
+    // The handle went NoView, then Behind, then Synced.
+    watcher.abort();
+    let states = published.lock().expect("states").clone();
+    let kinds: Vec<&str> = states
+        .iter()
+        .map(|state| match state {
+            SyncState::NoView => "NoView",
+            SyncState::Behind { .. } => "Behind",
+            SyncState::Following { .. } => "Following",
+            SyncState::Synced => "Synced",
+        })
+        .collect();
+    let behind = kinds.iter().position(|kind| *kind == "Behind");
+    assert!(
+        kinds.first() == Some(&"NoView")
+            && behind.is_some()
+            && kinds.last() == Some(&"Synced")
+            && kinds.iter().rposition(|kind| *kind == "Synced") > behind,
+        "the handle published {kinds:?}"
+    );
+    // `Behind` names what sync works towards: the corpus's block count.
+    assert!(
+        states.iter().any(
+            |state| matches!(state, SyncState::Behind { target, .. } if target.to_raw() == count)
+        ),
+        "the handle published {states:?}"
     );
     // The chain fits one response: one header request, and no span
     // offered over another and fetched again.
@@ -600,13 +491,15 @@ async fn a_peer_naming_our_tip_and_withholding_every_body_is_the_withholder() {
     held.stop().await;
 }
 
-/// A flood of unsolicited announcements beside a solicited sync goes to
-/// the C++ handler and does not stall the sync: the flooded sync finishes
-/// within a bound of the unflooded one.
+/// A flood of unsolicited announcements beside a solicited sync does not
+/// stall it: the flooded sync finishes within a bound of the unflooded
+/// one, and the flooder is not closed.
 ///
-/// Announcements (2008) are not the router's until the cutover routes them
-/// to the owner, so the flood reaches the C++ handler and never the model.
-/// What this pins is that a forwarded flood does not slow the owner.
+/// Announcements (2008) are the owner's once the router is attached
+/// (CS-4), so the flood reaches the model. It is a separate peer sending
+/// a well-formed announcement of the chain's last block, which the node
+/// cannot place until its parent is in; each costs the owner a decode
+/// and the model's parent check, and at most one is proven per session.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_announce_flood_does_not_stall_a_solicited_sync() {
     logs();
@@ -625,40 +518,34 @@ async fn an_announce_flood_does_not_stall_a_solicited_sync() {
     let mut loud = Node::start("flood", corpus.rules(), &steps[..1], 2, rng()).await;
     let started = Instant::now();
     let (peer, _) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
-    let id = loud.connect(Box::new(peer), Some(claim_of(&held)));
+    loud.connect(Box::new(peer), Some(claim_of(&held)));
+    let flooder = loud.connect(Box::new(Silent), None);
     let hub = loud.hub.clone();
+    let announce = announcement(&held.store, count - 1);
     const ANNOUNCES: usize = 2_000;
     let flood = tokio::task::spawn_blocking(move || {
-        let announce = notify(NOTIFY_NEW_COMPACT_BLOCK, &[0u8; 512]);
         (0..ANNOUNCES)
-            .filter(|_| hub.inject(id, announce.clone()))
+            .filter(|_| hub.inject(flooder, announce.clone()))
             .count()
     });
     wait_synced(&loud, count).await;
     let flooded = started.elapsed();
     let sent = flood.await.expect("the flood ends");
-    let forwarded = loud
-        .stub
-        .lock()
-        .expect("stub")
-        .commands
-        .iter()
-        .filter(|(session, command)| *session == id && *command == NOTIFY_NEW_COMPACT_BLOCK)
-        .count();
     assert_eq!(sent, ANNOUNCES);
+    assert_eq!(
+        loud.closed(flooder),
+        None,
+        "an unplaceable announcement is no fault"
+    );
     assert!(
-        loud.wait(LIMIT, |node| {
-            node.stub
-                .lock()
-                .expect("stub")
-                .commands
-                .iter()
-                .filter(|(session, command)| *session == id && *command == NOTIFY_NEW_COMPACT_BLOCK)
-                .count()
-                == ANNOUNCES
-        })
-        .await,
-        "{forwarded} of {ANNOUNCES} announcements reached the C++ handler"
+        !loud
+            .stub
+            .lock()
+            .expect("stub")
+            .commands
+            .iter()
+            .any(|(session, command)| *session == flooder && *command == NOTIFY_NEW_COMPACT_BLOCK),
+        "an announcement reached the C++ handler"
     );
     assert!(
         flooded <= unflooded * 3 + Duration::from_secs(10),

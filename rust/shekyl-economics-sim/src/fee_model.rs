@@ -16,7 +16,7 @@
 //! correction; the weight it multiplies is the ordinary shape at the chain's
 //! depth, and the fee is the unrounded fixed point of that product
 //! ([`shekyl_tx_weight::converge_weight_fee`]). What this module adds is the
-//! order of the calls and the three places the run still departs from the
+//! order of the calls and the two places the run still departs from the
 //! chain, each named below so that none is silent:
 //!
 //! - the fee is paid **unrounded** — the product above is not rounded to the

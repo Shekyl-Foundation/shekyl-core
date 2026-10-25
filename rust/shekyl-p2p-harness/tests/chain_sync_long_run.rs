@@ -3,15 +3,25 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The floor-device job's loopback sync (CS-Q11; `.github/workflows/
-//! cs2-long-run.yml`): a captured corpus synced whole, then 50,000
-//! headers at fixed target 1, each over real Levin framing into the real
-//! owner, executor and RandomX. `cargo test` does not build it.
+//! The floor-device job's loopback figures (CS-Q11; `.github/workflows/
+//! cs2-long-run.yml`). `cargo test` does not build it.
 //!
-//! It records what CS-Q11 replaces the Assumptions from: headers per
-//! second, bodies per second, peak memory, and the time per request.
-//! Transit on loopback is not a network's; the time per request is the
-//! node's own turnaround, the floor under any network's.
+//! It records what loopback can measure on the floor device, and nothing
+//! a network decides:
+//!
+//! - **Hash rate per slot.** Header proofs through the executor under the
+//!   hasher budget: one slot, then every slot, after the branch cache is
+//!   built, so the figure is RandomX's and not the derivation's. The cache
+//!   build is timed on its own.
+//! - **The body phase.** Each captured corpus synced by a fresh node from
+//!   two honest peers over real Levin framing, through the owner, the
+//!   entry and the store: bodies per second, bytes per second, the
+//!   requests, and peak memory.
+//!
+//! The owner's cost per header is the model's long run
+//! (`shekyl-chain-sync`, `long_run.rs`). The rate floor and the spans in
+//! flight are a network's and are measured after the cutover, on regtest
+//! over a real Tor path (CS-Q11).
 
 #![cfg(feature = "cs2-long-run")]
 // The figures are this job's output.
@@ -21,24 +31,42 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use shekyl_chain_sync::SyncState;
+use shekyl_chain_rules::{target_claim, FormAttempt};
+use shekyl_chain_store::store::SnapshotView;
+use shekyl_chain_sync::{CachePlan, HashClass, ProveItem, Proved, SyncState};
+use shekyl_chain_sync_runtime::executor::{prove, Executor};
 use shekyl_draw_rng::SplitMix64;
 use shekyl_hash_budget::Budget;
-use shekyl_p2p_harness::sync::{
-    fork_headers, substrate, Bodies, Chain, Corpus, HeaderChainPeer, Node, ServingPeer,
-};
+use shekyl_p2p_harness::sync::{substrate, Bodies, Chain, Corpus, Node, ServingPeer, Step};
 use shekyl_seam::SyncPayload;
-use shekyl_types::BlockHash;
+use shekyl_types::{BlockHash, BlockHeight};
 
-const HEADERS: u64 = 50_000;
 const LIMIT: Duration = Duration::from_secs(48 * 60 * 60);
+
+/// Proofs per slot in one timed job.
+const PROOFS_PER_SLOT: usize = 32;
+
+/// The captured corpora, smallest first, and the last height read when
+/// not the tip. A block at 98 in `bond-post` and in `emission-claim`
+/// carries a transaction kind that is retired, which the reader refuses:
+/// `bond-post` is read through 97, as the loopback suite reads it, and
+/// `emission-claim` is left out, since its first 97 blocks add nothing the
+/// others do not.
+const CORPORA: [(&str, Option<u64>); 5] = [
+    ("spend-1in-2out", None),
+    ("bond-post", Some(97)),
+    ("limit-full", None),
+    ("median-full", None),
+    ("spend-depth3", None),
+];
 
 /// The node's draw source: seeded, so a run repeats.
 fn rng() -> SplitMix64 {
     SplitMix64::new(0x5EED)
 }
 
-fn claim(count: u64, work: u128, top: BlockHash) -> SyncPayload {
+fn claim_of(chain: &Chain) -> SyncPayload {
+    let (count, work, top) = chain.tip().expect("a chain");
     SyncPayload {
         current_height: count,
         cumulative_difficulty: u64::try_from(work & u128::from(u64::MAX)).expect("low"),
@@ -56,69 +84,150 @@ fn peak_kib() -> Option<u64> {
         .and_then(|rest| rest.trim().trim_end_matches("kB").trim().parse().ok())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn loopback_sync_of_a_corpus_and_fifty_thousand_headers() {
-    // The owner's log lines, under RUST_LOG.
-    let _installed = tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .with_test_writer()
-        .try_init();
-    let corpus = Corpus::open("spend-1in-2out");
-    let steps = corpus.steps();
+/// A store holding `corpus`, connected from its own node.
+async fn source(corpus: &Corpus, steps: &[Step]) -> Chain {
     let (substrate, _) = substrate();
-    let held = Chain::empty(
-        "long-src",
+    let chain = Chain::empty(
+        &format!("long-{}", corpus.shape),
         corpus.rules(),
         Arc::new(substrate),
         Budget::new(NonZeroUsize::new(4).expect("four")),
     );
-    held.apply(&steps).await;
-    let (count, work, top) = held.tip().expect("a chain");
+    chain.apply(steps).await;
+    chain
+}
 
-    // Bodies: the corpus, whole.
-    let mut node = Node::start("long-bodies", corpus.rules(), &steps[..1], 4, rng()).await;
-    let started = Instant::now();
-    let (peer, seen) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
-    node.connect(Box::new(peer), Some(claim(count, work, top)));
-    assert!(
-        node.wait(LIMIT, |node| node.state() == SyncState::Synced
-            && node.count() == count)
-            .await
-    );
-    let bodies = started.elapsed();
-    eprintln!(
-        "corpus: {} blocks in {bodies:?}: {:.2} bodies/s, {} header and {} body requests",
-        count - 1,
-        f64::from(u32::try_from(count - 1).expect("a corpus")) / bodies.as_secs_f64(),
-        seen.headers(),
-        seen.bodies()
-    );
-    node.stop().await;
-
-    // Headers: 50,000 at target 1 over genesis, never offered as bodies.
-    let mut chain = vec![(held.block(0).hash(), held.block(0).pow_blob())];
-    chain.extend(fork_headers(&held, 0, HEADERS));
-    let tip = chain.last().expect("headers").0;
-    let tip_work = u128::from(HEADERS + 1);
-    let mut node = Node::start("long-headers", corpus.rules(), &steps[..1], 4, rng()).await;
-    let started = Instant::now();
-    let (peer, seen) = HeaderChainPeer::new(chain, tip_work);
-    node.connect(Box::new(peer), Some(claim(HEADERS + 1, tip_work, tip)));
-    let verified = node
-        .wait(LIMIT, |node| {
-            matches!(node.state(), SyncState::Behind { best, .. } if best.to_raw() == tip_work)
-        })
-        .await;
-    let headers = started.elapsed();
-    assert!(verified, "state {:?}", node.state());
-    let requests = seen.headers().max(1);
-    eprintln!(
-        "headers: {HEADERS} in {headers:?}: {:.1} headers/s, {} requests, {:?} per request",
-        f64::from(u32::try_from(HEADERS).expect("fits")) / headers.as_secs_f64(),
-        seen.headers(),
-        headers / u32::try_from(requests).unwrap_or(u32::MAX)
-    );
-    eprintln!("peak resident set: {:?} KiB", peak_kib());
-    node.stop().await;
+/// Hash rate per slot: header proofs under a budget of one slot, then of
+/// every slot this host has, each after the branch cache is built.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn hash_rate_per_slot() {
+    let corpus = Corpus::open("spend-1in-2out");
+    let steps = corpus.steps();
+    let held = source(&corpus, &steps).await;
+    let rules = corpus.rules();
+    let (count, _, _) = held.tip().expect("a chain");
+    // Each proof is one of the corpus's own headers, claimed under its
+    // target, so the work is a header proof's and nothing else.
+    let items: Vec<ProveItem> = {
+        let snap = held.store.begin_read().expect("a read");
+        let view = SnapshotView::new(&snap);
+        (1..count)
+            .map(|height| {
+                let at = BlockHeight::from_raw(height);
+                let rule_set = rules.in_force(at);
+                let target = target_claim(&view, at, &rule_set)
+                    .expect("a read")
+                    .expect("a target");
+                ProveItem {
+                    pow: held.block(height).pow_blob(),
+                    seed: BlockHash::from_bytes([0x5e; 32]),
+                    target,
+                    attempt: FormAttempt::FIRST,
+                    rule_set,
+                }
+            })
+            .collect()
+    };
+    let slots = std::thread::available_parallelism().unwrap_or(NonZeroUsize::MIN);
+    for permits in [NonZeroUsize::MIN, slots] {
+        let (prover, _) = substrate();
+        let executor = Arc::new(Executor::new(Budget::new(permits), prover));
+        let seed = BlockHash::from_bytes([u8::try_from(permits.get() % 251).unwrap_or(1); 32]);
+        let plan = CachePlan::Branch(seed);
+        let job = |n: usize| -> Vec<ProveItem> {
+            items
+                .iter()
+                .cycle()
+                .take(n)
+                .cloned()
+                .map(|item| ProveItem { seed, ..item })
+                .collect()
+        };
+        // A job with no items still prepares the cache and hashes nothing,
+        // so this interval is the derivation. The one-proof warm-up is
+        // outside it: folding that proof in overstates the derivation,
+        // most on the floor device where one hash dominates the build.
+        let started = Instant::now();
+        let derived = prove(Arc::clone(&executor), HashClass::HeaderPow, plan, job(0)).await;
+        let derive = started.elapsed();
+        assert!(derived.is_empty(), "{derived:?}");
+        let warm = prove(Arc::clone(&executor), HashClass::HeaderPow, plan, job(1)).await;
+        assert!(matches!(warm.as_slice(), [Proved::Formed(_)]), "{warm:?}");
+        let n = PROOFS_PER_SLOT * permits.get();
+        let started = Instant::now();
+        let proved = prove(Arc::clone(&executor), HashClass::HeaderPow, plan, job(n)).await;
+        let hashing = started.elapsed();
+        assert_eq!(proved.len(), n, "every proof formed");
+        let rate = f64::from(u32::try_from(n).expect("a count")) / hashing.as_secs_f64();
+        eprintln!(
+            "slots {permits}: {n} proofs in {hashing:?}: {rate:.2} proofs/s, {:.2} per slot \
+             (branch cache built in {derive:?})",
+            rate / f64::from(u32::try_from(permits.get()).expect("a count"))
+        );
+    }
     held.stop().await;
+}
+
+/// The body phase: each captured corpus synced by a fresh node from two
+/// honest peers.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn body_phase_on_the_captured_corpora() {
+    let _installed = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_test_writer()
+        .try_init();
+    for (shape, last) in CORPORA {
+        let corpus = Corpus::open(shape);
+        let steps = last.map_or_else(|| corpus.steps(), |last| corpus.steps_through(last));
+        let held = source(&corpus, &steps).await;
+        let (count, _, _) = held.tip().expect("a chain");
+        let bytes: usize = steps
+            .iter()
+            .skip(1)
+            .map(|step| match step {
+                Step::Block { block, bodies } => {
+                    block.len() + bodies.iter().map(Vec::len).sum::<usize>()
+                }
+                Step::Inject(_) => 0,
+            })
+            .sum();
+        let mut node = Node::start(
+            &format!("long-bodies-{shape}"),
+            corpus.rules(),
+            &steps[..1],
+            4,
+            rng(),
+        )
+        .await;
+        let started = Instant::now();
+        let mut seen = Vec::new();
+        for _ in 0..2 {
+            let (peer, asked) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
+            node.connect(Box::new(peer), Some(claim_of(&held)));
+            seen.push(asked);
+        }
+        assert!(
+            node.wait(LIMIT, |node| node.state() == SyncState::Synced
+                && node.count() == count)
+                .await,
+            "{shape}: state {:?}, count {} of {count}",
+            node.state(),
+            node.count()
+        );
+        let took = started.elapsed();
+        let blocks = f64::from(u32::try_from(count - 1).expect("a corpus"));
+        let kib = f64::from(u32::try_from(bytes / 1024).expect("a corpus"));
+        eprintln!(
+            "{shape}: {} blocks, {kib:.0} KiB, in {took:?}: {:.2} bodies/s, {:.1} KiB/s; \
+             {} header and {} body requests; peak resident set {:?} KiB",
+            count - 1,
+            blocks / took.as_secs_f64(),
+            kib / took.as_secs_f64(),
+            seen.iter().map(|asked| asked.headers()).sum::<usize>(),
+            seen.iter().map(|asked| asked.bodies()).sum::<usize>(),
+            peak_kib()
+        );
+        node.stop().await;
+        held.stop().await;
+    }
 }

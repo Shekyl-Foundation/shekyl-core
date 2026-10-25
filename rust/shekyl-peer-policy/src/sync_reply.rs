@@ -25,7 +25,8 @@ pub enum SyncReply {
     AlreadyHeld,
     /// Stored beside the incumbent.
     Held,
-    /// The chain switched. The new tip arrives on its own.
+    /// The chain switched. Whether this arrival is the new tip is the
+    /// owner's translation into a connect. This action does not say.
     Switched,
     /// The door's hint: deeper than the cap, nothing stored.
     BeyondCap,
@@ -65,11 +66,10 @@ pub enum Invalidate {
 /// block, or an oversize body.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SyncReplyAction {
-    /// Advance along the chain. `relay` is an announce that connected.
-    Advance {
-        /// Whether to relay the block.
-        relay: bool,
-    },
+    /// Advance along the chain. Whether the block is relayed is the sync
+    /// model's, from its state and the height the block took, whichever
+    /// path the block came by.
+    Advance,
     /// Close the supplier. The payload says whether the header is invalid.
     Invalidate(Invalidate),
     /// Ask that session for headers from the missing parent.
@@ -95,7 +95,7 @@ impl SyncReply {
     #[must_use]
     pub const fn action(self, solicited: bool) -> SyncReplyAction {
         match self {
-            Self::Connected => SyncReplyAction::Advance { relay: !solicited },
+            Self::Connected => SyncReplyAction::Advance,
             Self::Refused => SyncReplyAction::Invalidate(Invalidate::Refused),
             Self::PromotionRefused => SyncReplyAction::Invalidate(Invalidate::PromotionRefused),
             Self::Oversize => SyncReplyAction::Invalidate(Invalidate::Oversize {
@@ -109,7 +109,9 @@ impl SyncReply {
             Self::Throttled => SyncReplyAction::DropUnverified,
             // Already held, stored beside the incumbent, switched, or a
             // heavier chain this node cannot follow. The header stays.
-            // The new tip, or the latch, arrives on its own.
+            // A switch that leaves this arrival as the tip is the owner's
+            // translation into a connect, not an action of its own. The
+            // latch arrives separately.
             Self::AlreadyHeld | Self::Held | Self::Switched | Self::CannotFollow => {
                 SyncReplyAction::None
             }
@@ -168,15 +170,9 @@ mod tests {
     }
 
     #[test]
-    fn a_connected_announce_is_relayed_and_a_solicited_one_is_not() {
-        assert_eq!(
-            SyncReply::Connected.action(false),
-            SyncReplyAction::Advance { relay: true }
-        );
-        assert_eq!(
-            SyncReply::Connected.action(true),
-            SyncReplyAction::Advance { relay: false }
-        );
+    fn a_connected_block_advances_however_it_arrived() {
+        assert_eq!(SyncReply::Connected.action(false), SyncReplyAction::Advance);
+        assert_eq!(SyncReply::Connected.action(true), SyncReplyAction::Advance);
     }
 
     #[test]
