@@ -144,14 +144,17 @@ def is_label(value):
     )
 
 
+WORK_ITEM_RE = re.compile(r"[A-Z]+-[0-9]+")
+
+
 def is_work_item(value):
     """An identifier from a registered family, e.g. `TB-11`: what a pending
-    row waits on, or the record of the ruling a switched-off row cites. A sentence here would be a second `reason`; the point of
-    the field is that a gate can read it."""
-    if not isinstance(value, str) or "-" not in value:
-        return False
-    family, _, number = value.rpartition("-")
-    return family.isalpha() and family.isupper() and number.isdigit()
+    row waits on, or the record of the ruling a switched-off row cites. A
+    sentence here would be a second `reason`; the point of the field is that
+    a gate can read it. ASCII only, the same rule as `build.rs`'s
+    `is_work_item`: `str.isalpha`/`isdigit` would also accept non-ASCII
+    letters and digits that the build script refuses."""
+    return isinstance(value, str) and WORK_ITEM_RE.fullmatch(value) is not None
 
 
 def is_plain_name(value):
@@ -242,7 +245,8 @@ def load_pins(path):
         if "switched_off" in row and not is_work_item(row["switched_off"]):
             raise Refused(
                 f"{where}: \"switched_off\" names the record of the ruling that took "
-                "this target out of the release matrix, as an identifier such as CA-1"
+                "this target out of the release matrix, as an identifier such as CA-1, "
+                f"got {row['switched_off']!r}"
             )
         if "pending" in row and (
             row["disposition"] != "unavailable" or not is_work_item(row["pending"])

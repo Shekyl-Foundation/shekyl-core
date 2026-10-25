@@ -211,8 +211,9 @@ fn pinned_expr(row: &Value, os: &str, context: &str) -> String {
 }
 
 /// An identifier from a registered family, such as `TB-11` or `CA-1`: the
-/// form of a row's `pending` and `switched_off` fields, which a gate reads
-/// (`scripts/release/tor_bundle.py` `is_work_item` holds the same rule).
+/// form of a row's `pending` and `switched_off` fields, which a gate reads.
+/// ASCII uppercase, a hyphen, ASCII digits; `scripts/release/tor_bundle.py`
+/// `is_work_item` holds the same rule, as the regex `[A-Z]+-[0-9]+`.
 fn is_work_item(value: &Value) -> bool {
     value
         .as_str()

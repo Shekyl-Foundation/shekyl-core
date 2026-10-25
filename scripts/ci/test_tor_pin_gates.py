@@ -413,7 +413,7 @@ def _(b):
     b.pins["targets"][1]["pending"] = "TB-11"
     b.write()
     expect(b.run("disposition", "--host", "riscv64-linux-gnu"), 0, "unavailable")
-    for bad in ("soon", "tb-11", "TB-", "after the launch test", 11):
+    for bad in ("soon", "tb-11", "TB-", "after the launch test", 11, "\u03a4\u0392-11", "TB-\u0661\u0661"):
         b.pins["targets"][1]["pending"] = bad
         b.write()
         expect(b.stage(), 1, "names the")
@@ -1013,9 +1013,16 @@ def _(tmp):
     assert "Traceback" not in proc.stderr, proc.stderr
 
 
+def row_for(pins, host):
+    """The target row for `host`, by key: a test does not depend on the
+    order of `base_pins()`'s rows."""
+    (row,) = [row for row in pins["targets"] if row["gitian_host"] == host]
+    return row
+
+
 def pending_pins():
     pins = base_pins("0" * 64)
-    pins["targets"][1]["pending"] = "TB-11"
+    row_for(pins, "riscv64-linux-gnu")["pending"] = "TB-11"
     return pins
 
 
@@ -1027,7 +1034,7 @@ def _(tmp):
 
 def switched_off_pins(record="CA-1"):
     pins = base_pins("0" * 64)
-    pins["targets"][1]["switched_off"] = record
+    row_for(pins, "riscv64-linux-gnu")["switched_off"] = record
     return pins
 
 
@@ -1051,7 +1058,9 @@ def _(tmp):
 
 @tcase("targets: switched_off must name a record, not a sentence")
 def _(tmp):
-    for bad in ("off", "ca-1", "CA-", "switched off by Rick", 1):
+    # The last two are non-ASCII: Greek capitals and Arabic-Indic digits,
+    # which str.isalpha/isdigit would accept and build.rs refuses.
+    for bad in ("off", "ca-1", "CA-", "switched off by Rick", 1, "\u0391\u0392-1", "CA-\u0661"):
         proc = targets_tree(tmp, pins=switched_off_pins(bad), hosts=("x86_64-linux-gnu",))
         expect(proc, 1, "names the record of the ruling")
         shutil.rmtree(Path(tmp) / "tree")

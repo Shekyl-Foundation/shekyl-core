@@ -165,43 +165,30 @@ def gitian_hosts(root, problems):
     return hosts
 
 
-def pending_rows(root):
-    """(host, work item) for each row that is unavailable only for now.
-    Empty when the pin file does not load: `check` reports that."""
-    tor_bundle = load_tor_bundle(root)
-    try:
-        doc = tor_bundle.load_pins(root / "config" / "tor_pins.json")
-    except tor_bundle.Refused:
-        return []
-    return [
-        (row["gitian_host"], row["pending"])
-        for row in doc["targets"]
-        if "pending" in row
+def reported_rows(doc):
+    """What every run prints from a loaded pin file: (host, work item) for
+    each row that is unavailable only for now, and (host, record) for each
+    row taken out of the release matrix by a ruling. `doc` is `None` when
+    the pin file did not load; `check` reports that."""
+    if doc is None:
+        return [], []
+    rows = doc["targets"]
+    pending = [(row["gitian_host"], row["pending"]) for row in rows if "pending" in row]
+    switched_off = [
+        (row["gitian_host"], row["switched_off"]) for row in rows if "switched_off" in row
     ]
-
-
-def switched_off_rows(root):
-    """(host, record) for each row taken out of the release matrix by a
-    ruling. Empty when the pin file does not load: `check` reports that."""
-    tor_bundle = load_tor_bundle(root)
-    try:
-        doc = tor_bundle.load_pins(root / "config" / "tor_pins.json")
-    except tor_bundle.Refused:
-        return []
-    return [
-        (row["gitian_host"], row["switched_off"])
-        for row in doc["targets"]
-        if "switched_off" in row
-    ]
+    return pending, switched_off
 
 
 def check(root):
+    """(problems, doc): every difference found, and the pin file as loaded,
+    or `None` when it did not load (which is then the only problem)."""
     problems = []
     tor_bundle = load_tor_bundle(root)
     try:
         doc = tor_bundle.load_pins(root / "config" / "tor_pins.json")
     except tor_bundle.Refused as exc:
-        return [str(exc)]
+        return [str(exc)], None
 
     built = gitian_hosts(root, problems)
     rows = {row["gitian_host"]: row for row in doc["targets"]}
@@ -255,7 +242,7 @@ def check(root):
                 f"docs/RELEASE_CHECKLIST.md does not name the {row['bundle_target']} pin "
                 f"as \"{label}\""
             )
-    return problems
+    return problems, doc
 
 
 def main():
@@ -264,11 +251,11 @@ def main():
         "--root", type=Path, default=Path(__file__).resolve().parents[2]
     )
     args = parser.parse_args()
-    problems = check(args.root)
-    pending = pending_rows(args.root)
+    problems, doc = check(args.root)
+    pending, switched_off = reported_rows(doc)
     for host, item in pending:
         print(f"tor pin targets: {host} is unavailable pending {item}")
-    for host, record in switched_off_rows(args.root):
+    for host, record in switched_off:
         print(f"tor pin targets: {host} is switched off by {record} (source builds only)")
     if problems:
         for problem in problems:
