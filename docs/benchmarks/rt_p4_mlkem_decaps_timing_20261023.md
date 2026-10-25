@@ -213,8 +213,9 @@ hashes: start `27ac5724…`, end `3b6e548c…`, samples `fb52e897…`.
   `+crt-static`; SHA-256 `15e45ec6…`), and its disassembly matched the
   2026-10-11 excerpts the same way. Its output is the three header lines
   and nothing after them: no comparison, null, control or result had been
-  computed. It is not counted as an attempt. That reading is put to the
-  maintainer for a ruling.
+  computed. **Excluded as an attempt by the maintainer's ruling of
+  2026-10-25** (the wrong commit, stopped on instruction, nothing
+  computed); it stays disclosed here.
 - *A scratch folder emptied on the machine.* While the agent waited before
   the stopped start, the contents of its scratch folder were deleted,
   between about 20:13 and 20:17 local time. That took the stopped start's
@@ -236,7 +237,10 @@ whose eight file hashes matched the agent's manifest), with `SHA256SUMS`:
   written;
 - `stopped_c6d3df894_output.txt`: the stopped start's three lines.
 
-**Not done.** No re-run, and no analysis of the cause. The laptop's entry
+**Not done.** No re-run, and no analysis of the cause. The maintainer
+ruled a set of diagnostics on 2026-10-25, registered in
+[`rt_p4_crt_static_diagnostic_20261025.md`](rt_p4_crt_static_diagnostic_20261025.md);
+none of them changes this verdict. The laptop's entry
 in [`rt_p4_attestation.toml`](rt_p4_attestation.toml) stays at the
 2026-10-11 run, the only passing laptop build, and the standing check
 stays red. What comes next is the maintainer's.
