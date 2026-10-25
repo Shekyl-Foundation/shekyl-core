@@ -267,8 +267,10 @@ difference that grows with the sample (square −7 → −35 → −106 for 20k 
 whose equal-familiarity `[fixed-pair]` companion itself crossed at 200k:
 two different fixed operand sets time differently. That is operand
 dependence, outside BINSEC's model, and it is
-[`CA-2`](../../design/CRYPTO_AUDIT.md) §2 (mechanism open: power → frequency,
-or data-dependent latency in the SLP-vectorised limb loops). The floor
+[`CA-2`](../../design/CRYPTO_AUDIT.md) §2 (mechanism narrowed: not the
+P-state controller, not SLP vectorisation; it needs the operation inlined
+into the loop, and behind a call boundary it is flat at 1M samples,
+`results/2026-10-25/dynamic-x86_64-workstation-code-path.txt`). The floor
 device shows nothing on any row.
 
 The `[fixed-pair]` companion stays: the crossing is what made this a

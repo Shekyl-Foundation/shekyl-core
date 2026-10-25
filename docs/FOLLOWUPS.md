@@ -1515,7 +1515,7 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
   - Owner: [`Q12_D6A_PEER_DISCOVERY_RUN.md`](design/Q12_D6A_PEER_DISCOVERY_RUN.md) — owns the failed-address window family (it ruled `P2P_ANON_FAILED_ADDR_FORGET_SECONDS = 240` from measured p90 recovery); the public-zone counterpart is the same mechanism and the same instrument
 
-- **`HelioseleneField` mul, square and sqrt take operand-dependent time on x86_64 (`CA-2`, found 2026-10-24), outside BINSEC's model; the mechanism is open.** Two x86_64 hosts reproduce it, the floor device does not; the discriminators are the disassembly diff against `Field25519::square`, a `-C no-vectorize-slp` rebuild, and the no-turbo / performance-governor run on the workstation (root). The monero-oxide notice waits for the answer, because platform (frequency) and code (SLP-vectorised limb loops) have different owners and fixes.
+- **`HelioseleneField` mul, square and sqrt take operand-dependent time on x86_64 (`CA-2`, found 2026-10-24), outside BINSEC's model; the mechanism is narrowed, not named.** Two x86_64 hosts reproduce it, the floor device does not; P-state frequency and SLP vectorisation are ruled out, and the effect needs the operation inlined among its neighbours in the loop (behind a call boundary it is flat at 1M samples). Next: the halves on the inlined path, then cycles against wall time. The monero-oxide notice has its actionable statement and waits on Rick.
   - Owner: `CA-2` — [`CRYPTO_AUDIT.md`](design/CRYPTO_AUDIT.md) §2
   - Target: pre-genesis
 

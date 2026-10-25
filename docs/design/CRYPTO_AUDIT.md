@@ -224,22 +224,22 @@ clock mechanism and not an instruction-level one.
 
 **SLP on/off, and how the operation is compiled (fleet host,
 `dynamic-x86_64-fleet-measurement-host-slp-ab.txt`).** `-C no-vectorize-slp`
-changes nothing: the SLP hypothesis is closed. In a build where each
-operation sits behind a non-inlined call, the plain fixed-set rows and
-their `[fixed-pair]` companions go flat while the constant-operand and
-structured-operand rows keep crossing (and `Field25519` stays flat
-everywhere); in the earlier builds, with the operation inlined into the
-timing loop, the plain fixed-set rows crossed too. So what the timer sees
-depends on how consecutive operations overlap in the pipeline, which fits
-activity-dependent timing of the instruction stream, a platform property,
-better than any single-operand or single-instruction cause.
+changes nothing: the SLP hypothesis is closed. In that build the plain
+fixed-set rows and their `[fixed-pair]` companions called the operation
+behind a non-inlined wrapper and went flat, while the constant-operand and
+structured-operand rows, which still called it directly and inlined, kept
+crossing; in the earlier builds, every row inlined, the plain fixed-set
+rows crossed too. The two kinds of row ran different code, so this record
+alone cannot say whether the contrast or the code path moved the time; the
+code-path run below says it is the code path.
 
 **The halves (fleet host, `dynamic-x86_64-fleet-measurement-host-halves.txt`).**
 `square_wide` alone, `mul_wide` alone, `red512` alone and `red512` fed with
 a square's output are all flat, fixed against fresh and fixed against
-fixed; so are the plain fixed-set `square` rows in a build where the
-operation sits behind a call. What crosses, strongly and only for
-`HelioseleneField`, is a constant operand (the same uniformly random value
+fixed; so are the plain fixed-set `square` rows, which called the
+operation behind a call. What crosses, strongly and only for
+`HelioseleneField`, in rows that called the operation directly, is a
+constant operand (the same uniformly random value
 for every operation of a batch: −44 at 200k, −72 at 1M) and the structured
 operands (sparse, small, dense: −17 to −57), all faster than uniformly
 random ones; `Field25519` is flat for the same classes. The asymmetry that
@@ -249,11 +249,12 @@ dense or constant input into a dense residue before any arithmetic, while
 `HelioseleneField` holds the canonical value, so the operand's structure
 reaches the multiplier and the reduction intact. The timer then sees
 whatever the platform does with low-activity versus high-activity
-operand streams. That makes CA-2 both: a platform behaviour (activity-
-dependent timing) and a code property that exposes it (canonical
-representation), with a code-side mitigation available in principle
-(Montgomery or blinded representation) besides the platform one (fixed
-frequency).
+operand streams. Every half here sits behind a call (`square_wide` and
+`wide_reduce` are out-of-line calls in this binary), and behind a call
+nothing crosses (below), so the halves are flat for the same reason the
+wrapped square is and do not localise the effect. The representation
+argument stands as a hypothesis: a code-side mitigation (Montgomery or
+blinded representation) besides the platform one (fixed frequency).
 
 **Pinned clock (workstation, `dynamic-x86_64-workstation-pinned-clock.txt`;
 Rick ran the root steps 2026-10-24).** With `intel_pstate/no_turbo = 1` and
@@ -267,10 +268,34 @@ activity-dependent timing below the P-state level on these x86_64 parts
 promise against), absent on the Cortex-A72, and reached only through a
 canonical representation. The MSR driver refuses unprivileged APERF/MPERF
 reads, so cycles against wall time, which would name it further, needs a
-root-run sampler; it is not required to act.
+root-run sampler; it is not required to act. (The constant and
+structured rows of this run called the operation directly, inlined.)
+
+**The code path decides (workstation, 2026-10-25,
+[`results/2026-10-25/dynamic-x86_64-workstation-code-path.txt`](../formal/checkct/results/2026-10-25/dynamic-x86_64-workstation-code-path.txt)).**
+The dynamic crate now runs `mul` and `square` on two code paths, each
+under every contrast, every contrast of a path through one compiled loop:
+behind the non-inlined wrapper, and `(direct)`, the operator called in the
+loop and inlined (`HelioseleneField`'s compiles to the same 167 and 177
+instructions as the earlier control rows). On the same workstation as the
+pinned-clock run, turbo on: with `(direct)`, `HelioseleneField` square
+crosses on the fixed set (−165 cropped at 1M), a constant operand (−139)
+and every operand shape (sparse −86, small −108, dense −134), and mul on
+the fixed set (−61) and a constant (−67); behind the wrapper, every one of
+those rows is flat at 1M (|t| ≤ 4.0). Nulls and `[fixed-pair]` rows are
+flat on both paths. `Field25519` is flat on every null, test, `[fixed-pair]`
+and constant row on both paths at 1M; only its operand-shape rows sit near
+the threshold, on both paths and in the cropped t alone (sparse +6 / +9,
+dense −6 / −5, small under; full-sample |t| ≤ 2.5), with mixed signs and
+no consistent growth from 200k: unsettled at this size, two orders below
+`HelioseleneField`'s, and not a code-path effect. The operand dependence is real and needs the
+operation inlined among its neighbours in the loop: across a call
+boundary it is not observed at 1M samples.
 
 **Mechanism: narrowed.** Two remained once BINSEC's model was exhausted, with
-different owners and fixes; the pinned-clock run has since eliminated (a):
+different owners and fixes; the pinned-clock run has since eliminated (a),
+and the code-path run says (b), if it is (b), lives in how consecutive
+inlined operations overlap, not in one operation's instructions:
 (a) power → frequency (the Hertzbleed class:
 operand Hamming weight or toggle count changes core power, the P-state
 controller turns it into frequency, the wall-clock timer sees time; a
@@ -278,14 +303,13 @@ platform property that would follow the field onto crypto-bigint 0.7
 unchanged; consistent with the aarch64 null, a fixed-governor board); (b)
 instruction-level data-dependent latency in the compiled code (rare for
 integer code on Tiger Lake, and the disassembly above shows no candidate
-instruction and no vectorisation in `square`). Discriminators, in order, in the follow-up PR: the disassembly diff of
-`HelioseleneField::square` against `Field25519::square` from the same
-binary; a `-C no-vectorize-slp` rebuild of the dynamic crate; the run with
-`intel_pstate/no_turbo = 1` and the `performance` governor on the
-workstation (root), and APERF/MPERF against wall time if the msr module
-is available. The fleet host is a VM and cannot carry the frequency
+instruction and no vectorisation in `square`). The fleet host is a VM and cannot carry the frequency
 discriminator; the operand-property sweep (sparse, small, dense operands)
-says which property moves the time but not why.
+says which property moves the time but not why. The next discriminator is
+the halves on the direct path: a build in which `square_wide` and `red512`
+inline into the loop (fat LTO, or inline hints in the vendored crate),
+so the decomposition runs on the code path that shows the effect; then
+cycles against wall time, which needs a root-run sampler.
 
 **Threat frame.** `HelioseleneField` is the Helios/Selene base field, the
 curve-tree layers of the FCMP++ prover where it touches the blinded
@@ -293,15 +317,18 @@ membership path. A ~1–2 % per-operation dependence on an operand property
 leaks that property (a few bits per operation) to a co-resident observer
 of the proving machine, accumulating over the thousands of operations in
 one proof; harm if exploitable is deanonymisation of that spend, the CA-1
-envelope. Not remote.
+envelope. Not remote. The direct path is the one to assume: nothing in
+the prover puts a call boundary around these operators, so the wrapped
+path's flatness is a property of the harness, not a mitigation.
 
 **Disposition.** Open; no waiver is involved (nothing in `cargo audit`
-covers it). Owner: this row. The monero-oxide notice waits for the
-mechanism, or at least for the no-turbo result and the disassembly diff:
-"two fixed operand sets time differently on two x86_64 hosts" is not
-actionable upstream; "the SLP-vectorised limb loops in `red512` show
-operand-dependent time with turbo on / off" is. The RustCrypto and serai
-notices are independent of CA-2.
+covers it). Owner: this row. The monero-oxide notice needed an actionable
+statement, not "two fixed operand sets time differently"; it now has one:
+inlined `HelioseleneField` square and mul show operand-dependent time on
+x86_64 with the clock pinned and with turbo on, the same operations behind
+a call boundary do not, the disassembly shows no data-dependent
+instruction, and SLP vectorisation is not involved. Posting it is Rick's
+call. The RustCrypto and serai notices are independent of CA-2.
 
 **Reopen / close.** Closes when the mechanism is named and either (a) it is
 the platform, recorded with the mitigation the platform offers (fixed
