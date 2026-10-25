@@ -395,6 +395,7 @@ mod check_workflows {
                         status: shekyl_rpc_types::RpcStatus::ok(),
                         txs,
                         missed_tx: missed,
+                        unavailable_tx: Vec::new(),
                     })
                     .expect("wire type serializes")
                 }

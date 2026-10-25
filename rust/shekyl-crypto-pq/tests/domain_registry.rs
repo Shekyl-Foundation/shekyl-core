@@ -70,7 +70,9 @@ const PRODUCTION_PINS: [(&str, usize, usize); 7] = [
     ("7", 4, 0), // RT-W8: the RPC channel's Noise prologue label (rpc-channel-v1); mac1 (2026-10-20): +1 (rpc-mac1-v1, the mac1 key's label); +1 (rpc-busy-v1, the busy reply's label); RT-W9 step 5: +1 (noise-record-header-v1, ClassedRecord's header-protection key)
 ];
 /// Pinned counts for the non-production sections.
-const EXCLUDED_EXPECTED: usize = 8;
+// RT-W9 step 6: +2 (the two Noise protocol names, one reason: the RPC
+// channel's hybridXK and the P2P handshake's NNhfs).
+const EXCLUDED_EXPECTED: usize = 10;
 const TEST_ONLY_EXPECTED: usize = 8;
 // PC-D3: +1 — the retired `-v1` leaf label, kept only so the negative control
 // can assert the `-v2` derivation does not reproduce it.

@@ -1050,11 +1050,12 @@ namespace cryptonote
     RPC_TRACKER(relay_tx);
 
     /* No restricted gate here, deliberately. `relay_tx` is admin-only, and
-       that is decided once — in Rust, at the only transport (`RESTRICTED_METHODS`
-       in `handlers/json_rpc.rs`), which answers 403 before this function is
-       entered. Membership of that list is pinned against an independent
-       specification by `restricted_method_list_matches_the_specification`, so
-       dropping `relay_tx` from it fails a test rather than opening this path.
+       that is decided once — in Rust, at the only transport: the method
+       table's `HostOnly` grant (`shekyl-rpc-types` `methods.rs`, RW-Q7), read
+       by dispatch, which answers 403 before this function is entered. The
+       table's host-only rows are pinned against an independent specification
+       by `restricted_method_list_matches_the_specification`, so dropping
+       `relay_tx` from them fails a test rather than opening this path.
 
        This handler used to compute `m_restricted && ctx` and skip the
        `relay_category::all` arm when it held. That expression could not hold in

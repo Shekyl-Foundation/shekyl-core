@@ -100,6 +100,12 @@ pub(crate) async fn fetch_proof_tx<R: Rpc>(
     if !resp.missed_tx.is_empty() {
         return Err(ProofsError::TxNotFound(hex::encode(txid)));
     }
+    // The daemon could not look in its pool: no answer, not "not found".
+    if !resp.unavailable_tx.is_empty() {
+        return Err(ProofsError::Daemon(RpcError::TransactionsUnavailable(
+            vec![txid],
+        )));
+    }
 
     let txs = &resp.txs;
     // Where it was found comes from the arm, not from two independently
@@ -191,6 +197,15 @@ async fn fetch_proof_txs<R: Rpc>(
                 .map(shekyl_rpc_types::HashHex::to_bytes)
                 .collect();
             return Err(tx_not_found_in_request_order(batch, &missed_hashes));
+        }
+        if !resp.unavailable_tx.is_empty() {
+            return Err(ProofsError::Daemon(RpcError::TransactionsUnavailable(
+                resp.unavailable_tx
+                    .iter()
+                    .copied()
+                    .map(shekyl_rpc_types::HashHex::to_bytes)
+                    .collect(),
+            )));
         }
         // Refuse pooled entries before parsing. `resp.txs` is indexed by
         // request position (RK-4c's export), so `batch[i]` names the tx the
