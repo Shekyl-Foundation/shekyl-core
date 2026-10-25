@@ -20,9 +20,9 @@ use std::net::{IpAddr, Ipv4Addr};
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::address_file::decode;
 use shekyl_peerlist::{
-    BanQuery, CloseCause, CloseKind, ConnectorId, DialOutcome, NetworkAddress, Peerlist,
-    RefusedSet, Source, Tick, COOLDOWN_CAP_NANOS, COOLDOWN_FIRST_NANOS, EXPIRATION_PERIOD_NANOS,
-    GRAY_CAP,
+    BanQuery, CloseCause, CloseKind, ConnectorId, DialOutcome, KeptSessions, NetworkAddress,
+    NoBans, NoSessions, Peerlist, RefusedSet, Source, Tick, COOLDOWN_CAP_NANOS,
+    COOLDOWN_FIRST_NANOS, EXPIRATION_PERIOD_NANOS, GRAY_CAP,
 };
 
 const CLEARNET: ConnectorId = ConnectorId::Clearnet;
@@ -60,28 +60,6 @@ fn at_hours(h: u64) -> Tick {
     at(h * HOUR)
 }
 
-/// No bans, and the given addresses as live kept sessions: what the dialer
-/// answers from the seam's board.
-struct Live(BTreeSet<NetworkAddress>);
-
-impl BanQuery for Live {
-    fn is_banned(&mut self, _host: IpAddr, _now: Tick) -> bool {
-        false
-    }
-
-    fn has_live_session(&mut self, address: &NetworkAddress) -> bool {
-        self.0.contains(address)
-    }
-}
-
-fn nobody() -> Live {
-    Live(BTreeSet::new())
-}
-
-fn live(address: &NetworkAddress) -> Live {
-    Live(BTreeSet::from([address.clone()]))
-}
-
 /// Draw from gray until `address` is the outstanding draw, as the dialer
 /// would when the uniform draw lands on it.
 fn draw_until(list: &mut Peerlist, address: &NetworkAddress, now: Tick, rng: &mut SplitMix64) {
@@ -99,7 +77,7 @@ fn draw_until(list: &mut Peerlist, address: &NetworkAddress, now: Tick, rng: &mu
 /// clock reads `now`.
 fn kept_at(list: &mut Peerlist, address: &NetworkAddress, now: Tick, rng: &mut SplitMix64) {
     assert_eq!(
-        list.admit_gray(address, Source::Operator, now, &mut nobody(), rng),
+        list.admit_gray(address, Source::Operator, now, &mut NoBans, rng),
         Ok(true)
     );
     draw_until(list, address, now, rng);
@@ -115,15 +93,16 @@ fn connection_problem(address: &NetworkAddress) -> DialOutcome {
     )
 }
 
-/// Settle the list at `now` with `query` and say whether `address` is white.
+/// Settle the list at `now`. `kept` is the dialer's kept set: expiry skips
+/// it, and a ban is a separate question. These tests ban nothing.
 fn white_after_settle(
     list: &mut Peerlist,
     address: &NetworkAddress,
     now: Tick,
-    query: &mut dyn BanQuery,
+    kept: &mut dyn KeptSessions,
     rng: &mut SplitMix64,
 ) -> bool {
-    list.white_count(CLEARNET, now, query, rng);
+    list.white_count(CLEARNET, now, &mut NoBans, kept, rng);
     list.is_white(address)
 }
 
@@ -139,7 +118,7 @@ fn a_session_held_for_thirty_hours_stays_white() {
         &mut list,
         &peer,
         at_hours(30),
-        &mut live(&peer),
+        &mut BTreeSet::from([peer.clone()]),
         &mut rng
     ));
     // The same clock with no live session is six hours past expiry.
@@ -147,7 +126,7 @@ fn a_session_held_for_thirty_hours_stays_white() {
         &mut list,
         &peer,
         at_hours(30),
-        &mut nobody(),
+        &mut NoSessions,
         &mut rng
     ));
 }
@@ -164,14 +143,14 @@ fn an_address_expires_twenty_four_hours_after_its_session_closes() {
         &mut list,
         &peer,
         at(30 * HOUR + EXPIRATION_PERIOD_NANOS - 1),
-        &mut nobody(),
+        &mut NoSessions,
         &mut rng
     ));
     assert!(!white_after_settle(
         &mut list,
         &peer,
         at(30 * HOUR + EXPIRATION_PERIOD_NANOS),
-        &mut nobody(),
+        &mut NoSessions,
         &mut rng
     ));
     assert!(list.is_gray(&peer), "expired to gray, not dropped");
@@ -195,7 +174,7 @@ fn a_confirm_dial_still_holds_the_clock() {
         &mut list,
         &peer,
         at(HOUR + EXPIRATION_PERIOD_NANOS),
-        &mut nobody(),
+        &mut NoSessions,
         &mut rng
     ));
     // The clock of an address that is not white does not move.
@@ -210,7 +189,7 @@ fn a_clearnet_address_failing_every_test_cools_on_the_ladder_and_is_never_droppe
     let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
     let peer = v4(4);
     assert_eq!(
-        list.admit_gray(&peer, Source::Operator, at(0), &mut nobody(), &mut rng),
+        list.admit_gray(&peer, Source::Operator, at(0), &mut NoBans, &mut rng),
         Ok(true)
     );
     assert_eq!(COOLDOWN_FIRST_NANOS, 2 * MINUTE);
@@ -226,14 +205,20 @@ fn a_clearnet_address_failing_every_test_cools_on_the_ladder_and_is_never_droppe
         assert_eq!(list.failed_tests(&peer), failures);
         let base = minutes * MINUTE;
         // Not drawable at the rung's base, drawable past its jitter.
-        list.white_count(CLEARNET, at(now + base - 1), &mut nobody(), &mut rng);
+        list.white_count(
+            CLEARNET,
+            at(now + base - 1),
+            &mut NoBans,
+            &mut NoSessions,
+            &mut rng,
+        );
         assert!(
             list.is_cooling(&peer),
             "failure {failures}: still cooling just before {minutes} min"
         );
         assert!(list.draw_gray(CLEARNET, &mut rng).is_none());
         now += base + base / 2 + 1;
-        list.white_count(CLEARNET, at(now), &mut nobody(), &mut rng);
+        list.white_count(CLEARNET, at(now), &mut NoBans, &mut NoSessions, &mut rng);
         assert!(
             !list.is_cooling(&peer),
             "failure {failures}: thawed after {minutes} min and the jitter"
@@ -254,14 +239,20 @@ fn a_restart_retests_every_cooled_address() {
     let fresh = v4(6);
     for peer in [&cooled, &fresh] {
         assert_eq!(
-            list.admit_gray(peer, Source::Operator, at(0), &mut nobody(), &mut rng),
+            list.admit_gray(peer, Source::Operator, at(0), &mut NoBans, &mut rng),
             Ok(true)
         );
     }
     for _ in 0..3 {
         draw_until(&mut list, &cooled, at(0), &mut rng);
         list.apply(&connection_problem(&cooled), at(0), &mut rng);
-        list.white_count(CLEARNET, at(2 * HOUR), &mut nobody(), &mut rng);
+        list.white_count(
+            CLEARNET,
+            at(2 * HOUR),
+            &mut NoBans,
+            &mut NoSessions,
+            &mut rng,
+        );
     }
     draw_until(&mut list, &cooled, at(2 * HOUR), &mut rng);
     list.apply(&connection_problem(&cooled), at(2 * HOUR), &mut rng);
@@ -269,7 +260,7 @@ fn a_restart_retests_every_cooled_address() {
     assert_eq!(list.failed_tests(&cooled), 4);
 
     // The file carries the address and nothing about its cooldown.
-    let bytes = list.to_file_bytes(&mut nobody(), at(2 * HOUR));
+    let bytes = list.to_file_bytes(&mut NoBans, at(2 * HOUR));
     let mut restarted = Peerlist::new(RefusedSet::NON_GLOBAL);
     let admitted = restarted
         .restore_file(&bytes, &mut rng)
@@ -307,7 +298,7 @@ fn fill_cooling(
     let addresses: Vec<NetworkAddress> = (0..count).map(v4_many).collect();
     for address in &addresses {
         assert_eq!(
-            list.admit_gray(address, Source::Operator, now, &mut nobody(), rng),
+            list.admit_gray(address, Source::Operator, now, &mut NoBans, rng),
             Ok(true)
         );
     }
@@ -334,7 +325,7 @@ fn gray_full_of_cooling_seats_stays_at_the_cap_under_more_admissions() {
     for n in 0..100 {
         let fresh = v4_many(GRAY_CAP + n);
         assert_eq!(
-            list.admit_gray(&fresh, Source::Operator, at(0), &mut nobody(), &mut rng),
+            list.admit_gray(&fresh, Source::Operator, at(0), &mut NoBans, &mut rng),
             Ok(true)
         );
         assert!(list.is_gray(&fresh), "the address just admitted stays");
@@ -358,7 +349,7 @@ fn evictions_hit_cooling_and_drawable_seats_in_proportion() {
     let drawable: Vec<NetworkAddress> = (half..GRAY_CAP).map(v4_many).collect();
     for address in &drawable {
         assert_eq!(
-            list.admit_gray(address, Source::Operator, at(0), &mut nobody(), &mut rng),
+            list.admit_gray(address, Source::Operator, at(0), &mut NoBans, &mut rng),
             Ok(true)
         );
     }
@@ -367,7 +358,7 @@ fn evictions_hit_cooling_and_drawable_seats_in_proportion() {
     for n in 0..admitted {
         let fresh = v4_many(GRAY_CAP + n);
         assert_eq!(
-            list.admit_gray(&fresh, Source::Operator, at(0), &mut nobody(), &mut rng),
+            list.admit_gray(&fresh, Source::Operator, at(0), &mut NoBans, &mut rng),
             Ok(true)
         );
     }
@@ -398,7 +389,7 @@ fn a_clearnet_address_under_an_active_ban_is_absent_from_the_file() {
     let free = v4(8);
     for peer in [&banned, &free] {
         assert_eq!(
-            list.admit_gray(peer, Source::Operator, at(0), &mut nobody(), &mut rng),
+            list.admit_gray(peer, Source::Operator, at(0), &mut NoBans, &mut rng),
             Ok(true)
         );
     }
@@ -417,7 +408,7 @@ fn a_clearnet_address_whose_ban_has_expired_is_written() {
     let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
     let peer = v4(9);
     assert_eq!(
-        list.admit_gray(&peer, Source::Operator, at(0), &mut nobody(), &mut rng),
+        list.admit_gray(&peer, Source::Operator, at(0), &mut NoBans, &mut rng),
         Ok(true)
     );
     let mut bans = BannedUntil(
@@ -448,11 +439,11 @@ fn a_tor_address_is_unaffected_by_bans_in_the_file() {
     let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
     let tor = onion(1);
     assert_eq!(
-        list.admit_gray(&tor, Source::Operator, at(0), &mut nobody(), &mut rng),
+        list.admit_gray(&tor, Source::Operator, at(0), &mut NoBans, &mut rng),
         Ok(true)
     );
     assert_eq!(
-        list.admit_gray(&v4(10), Source::Operator, at(0), &mut nobody(), &mut rng),
+        list.admit_gray(&v4(10), Source::Operator, at(0), &mut NoBans, &mut rng),
         Ok(true)
     );
     let written = decode(&list.to_file_bytes(&mut EveryHost, at(0))).expect("reads");
@@ -468,7 +459,7 @@ fn a_targeted_draw_past_the_cooldown_draws_the_address() {
     let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
     let peer = v4(11);
     assert_eq!(
-        list.admit_gray(&peer, Source::Operator, at(0), &mut nobody(), &mut rng),
+        list.admit_gray(&peer, Source::Operator, at(0), &mut NoBans, &mut rng),
         Ok(true)
     );
     draw_until(&mut list, &peer, at(0), &mut rng);

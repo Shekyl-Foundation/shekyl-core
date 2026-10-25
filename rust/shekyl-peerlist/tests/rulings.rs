@@ -12,9 +12,9 @@ use std::net::{IpAddr, Ipv4Addr};
 
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{
-    white_diversity_floor, BanQuery, ConnectionId, DialOutcome, NetworkAddress, NoBans, Peerlist,
-    Refusal, RefusedSet, SessionRow, Source, Tick, DISCLOSE_COUNT, DISCLOSE_WINDOW_NANOS, GRAY_CAP,
-    SESSION_INTAKE_CAP, WHITE_REFILL_LINE,
+    white_diversity_floor, BanQuery, ConnectionId, DialOutcome, NetworkAddress, NoBans, NoSessions,
+    Peerlist, Refusal, RefusedSet, SessionRow, Source, Tick, DISCLOSE_COUNT, DISCLOSE_WINDOW_NANOS,
+    GRAY_CAP, SESSION_INTAKE_CAP, WHITE_REFILL_LINE,
 };
 use shekyl_transport_layer::BanList;
 
@@ -87,12 +87,24 @@ fn below_the_floor_the_sample_is_empty() {
     let floor = u16::try_from(white_diversity_floor()).expect("fits");
     with_white(&mut list, 1, floor - 1, &mut rng);
     assert!(list
-        .disclose(connector, at_hours(1), &mut NoBans, &mut rng)
+        .disclose(
+            connector,
+            at_hours(1),
+            &mut NoBans,
+            &mut NoSessions,
+            &mut rng
+        )
         .is_empty());
     with_white(&mut list, 1000, 1, &mut rng);
     assert_eq!(
-        list.disclose(connector, at_hours(1), &mut NoBans, &mut rng)
-            .len(),
+        list.disclose(
+            connector,
+            at_hours(1),
+            &mut NoBans,
+            &mut NoSessions,
+            &mut rng
+        )
+        .len(),
         DISCLOSE_COUNT,
         "at the floor the sample is DISCLOSE_COUNT addresses"
     );
@@ -104,7 +116,13 @@ fn the_sample_is_cached_for_the_window_and_redrawn_after_it() {
     let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     with_white(&mut list, 1, 100, &mut rng);
-    let first = list.disclose(connector, at_hours(1), &mut NoBans, &mut rng);
+    let first = list.disclose(
+        connector,
+        at_hours(1),
+        &mut NoBans,
+        &mut NoSessions,
+        &mut rng,
+    );
     assert_eq!(first.len(), DISCLOSE_COUNT);
     assert_eq!(
         first.iter().collect::<BTreeSet<_>>().len(),
@@ -113,7 +131,13 @@ fn the_sample_is_cached_for_the_window_and_redrawn_after_it() {
     );
     for h in [2, 10, 23] {
         assert_eq!(
-            list.disclose(connector, at_hours(h), &mut NoBans, &mut rng),
+            list.disclose(
+                connector,
+                at_hours(h),
+                &mut NoBans,
+                &mut NoSessions,
+                &mut rng
+            ),
             first,
             "every requester in the window gets the same sample, unchanged"
         );
@@ -128,6 +152,7 @@ fn the_sample_is_cached_for_the_window_and_redrawn_after_it() {
         connector,
         Tick::new(at_hours(1).get() + DISCLOSE_WINDOW_NANOS),
         &mut NoBans,
+        &mut NoSessions,
         &mut rng,
     );
     assert_eq!(later.len(), DISCLOSE_COUNT);
@@ -155,7 +180,7 @@ fn the_sample_is_uniform_over_white_with_our_own_address_as_one_member() {
         for a in &white {
             list.apply(&DialOutcome::SessionAccepted(a.clone()), now, &mut rng);
         }
-        let sample = list.disclose(connector, now, &mut NoBans, &mut rng);
+        let sample = list.disclose(connector, now, &mut NoBans, &mut NoSessions, &mut rng);
         assert_eq!(sample.len(), DISCLOSE_COUNT);
         if sample.contains(&own) {
             own_seen += 1;
@@ -253,7 +278,13 @@ fn the_sample_carries_no_gray_and_no_clock() {
             Ok(true)
         );
     }
-    let sample = list.disclose(connector, at_hours(1), &mut NoBans, &mut rng);
+    let sample = list.disclose(
+        connector,
+        at_hours(1),
+        &mut NoBans,
+        &mut NoSessions,
+        &mut rng,
+    );
     assert!(
         sample.iter().all(|a| list.is_white(a)),
         "gray is never in the message"
@@ -272,7 +303,7 @@ fn a_banned_white_entry_is_demoted_on_the_next_white_read_and_the_floor_drops() 
     let white = with_white(&mut list, 1, 50, &mut rng);
     let mut bans = BanList::new();
     assert_eq!(
-        list.white_count(connector, at_hours(1), &mut bans, &mut rng),
+        list.white_count(connector, at_hours(1), &mut bans, &mut NoSessions, &mut rng),
         50
     );
     let banned = white[7].clone();
@@ -281,7 +312,7 @@ fn a_banned_white_entry_is_demoted_on_the_next_white_read_and_the_floor_drops() 
     // white is next read.
     assert!(list.is_white(&banned));
     assert_eq!(
-        list.white_count(connector, at_hours(2), &mut bans, &mut rng),
+        list.white_count(connector, at_hours(2), &mut bans, &mut NoSessions, &mut rng),
         49,
         "the floor count drops with it"
     );
@@ -290,7 +321,7 @@ fn a_banned_white_entry_is_demoted_on_the_next_white_read_and_the_floor_drops() 
         "demoted to gray, not removed"
     );
     assert!(
-        list.below_refill_line(connector, at_hours(2), &mut bans, &mut rng)
+        list.below_refill_line(connector, at_hours(2), &mut bans, &mut NoSessions, &mut rng)
             == (49 < WHITE_REFILL_LINE),
         "the refill line counts white as it stands"
     );
@@ -306,7 +337,7 @@ fn a_demoted_entry_is_ordinary_gray_evictable_skipped_at_dial_and_refused_at_adm
     let mut bans = BanList::new();
     assert!(bans.ban_host(ip_of(&banned), at_hours(10), at_hours(1)));
     assert_eq!(
-        list.white_count(connector, at_hours(1), &mut bans, &mut rng),
+        list.white_count(connector, at_hours(1), &mut bans, &mut NoSessions, &mut rng),
         9
     );
     assert!(list.is_gray(&banned));
@@ -339,7 +370,7 @@ fn a_demoted_entry_is_ordinary_gray_evictable_skipped_at_dial_and_refused_at_adm
         let mut bans = BanList::new();
         assert!(bans.ban_host(ip_of(&banned), at_hours(10), at_hours(1)));
         assert_eq!(
-            list.white_count(connector, at_hours(1), &mut bans, &mut rng),
+            list.white_count(connector, at_hours(1), &mut bans, &mut NoSessions, &mut rng),
             9
         );
         // 20 000 evictions, each a uniform draw over about 5 000 entries:
@@ -382,11 +413,11 @@ fn a_ban_does_not_rebuild_the_cached_sample_and_tor_never_demotes() {
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     let white = with_white(&mut list, 1, 60, &mut rng);
     let mut bans = BanList::new();
-    let sample = list.disclose(connector, at_hours(1), &mut bans, &mut rng);
+    let sample = list.disclose(connector, at_hours(1), &mut bans, &mut NoSessions, &mut rng);
     let in_sample = sample[0].clone();
     assert!(bans.ban_host(ip_of(&in_sample), at_hours(10), at_hours(1)));
     assert_eq!(
-        list.disclose(connector, at_hours(2), &mut bans, &mut rng),
+        list.disclose(connector, at_hours(2), &mut bans, &mut NoSessions, &mut rng),
         sample,
         "the cached sample is not rebuilt on a ban"
     );
@@ -418,7 +449,7 @@ fn a_ban_does_not_rebuild_the_cached_sample_and_tor_never_demotes() {
         list.apply(&DialOutcome::Confirmed(onion(n)), at_hours(0), &mut rng);
     }
     assert_eq!(
-        list.white_count(hidden, at_hours(1), &mut BanAll, &mut rng),
+        list.white_count(hidden, at_hours(1), &mut BanAll, &mut NoSessions, &mut rng),
         3,
         "D7: Tor has no bannable address"
     );
@@ -664,7 +695,7 @@ fn a_drawn_sample_is_served_unchanged_when_white_drops_below_the_floor_mid_windo
     let floor = u16::try_from(white_diversity_floor()).expect("fits");
     let white = with_white(&mut list, 1, floor, &mut rng);
     let mut bans = BanList::new();
-    let sample = list.disclose(connector, at_hours(1), &mut bans, &mut rng);
+    let sample = list.disclose(connector, at_hours(1), &mut bans, &mut NoSessions, &mut rng);
     assert_eq!(
         sample.len(),
         DISCLOSE_COUNT,
@@ -674,16 +705,22 @@ fn a_drawn_sample_is_served_unchanged_when_white_drops_below_the_floor_mid_windo
     // the next white read.
     assert!(bans.ban_host(ip_of(&white[0]), at_hours(20), at_hours(2)));
     assert_eq!(
-        list.white_count(connector, at_hours(2), &mut bans, &mut rng),
+        list.white_count(connector, at_hours(2), &mut bans, &mut NoSessions, &mut rng),
         white_diversity_floor() - 1
     );
     assert_eq!(
-        list.disclose(connector, at_hours(3), &mut bans, &mut rng),
+        list.disclose(connector, at_hours(3), &mut bans, &mut NoSessions, &mut rng),
         sample,
         "the reply is unchanged for the rest of the window"
     );
     assert_eq!(
-        list.disclose(connector, at_hours(24), &mut bans, &mut rng),
+        list.disclose(
+            connector,
+            at_hours(24),
+            &mut bans,
+            &mut NoSessions,
+            &mut rng
+        ),
         sample,
         "to the window's last tick"
     );
@@ -702,6 +739,7 @@ fn a_drawn_sample_is_served_unchanged_when_white_drops_below_the_floor_mid_windo
             connector,
             Tick::new(at_hours(1).get() + DISCLOSE_WINDOW_NANOS),
             &mut bans,
+            &mut NoSessions,
             &mut rng
         )
         .is_empty(),
@@ -809,12 +847,24 @@ fn mass_demotion_leaves_gray_at_or_below_its_cap() {
     }
     assert_eq!(list.gray_count(connector), GRAY_CAP);
     assert_eq!(
-        list.white_count(connector, at_hours(1), &mut NoBans, &mut rng),
+        list.white_count(
+            connector,
+            at_hours(1),
+            &mut NoBans,
+            &mut NoSessions,
+            &mut rng
+        ),
         200
     );
     // The expiry sweep demotes all 200 into a full gray list.
     assert_eq!(
-        list.white_count(connector, at_hours(25), &mut NoBans, &mut rng),
+        list.white_count(
+            connector,
+            at_hours(25),
+            &mut NoBans,
+            &mut NoSessions,
+            &mut rng
+        ),
         0
     );
     assert!(
@@ -839,7 +889,7 @@ fn mass_demotion_leaves_gray_at_or_below_its_cap() {
         assert!(bans.ban_host(ip_of(a), at_hours(10), at_hours(1)));
     }
     assert_eq!(
-        list.white_count(connector, at_hours(1), &mut bans, &mut rng),
+        list.white_count(connector, at_hours(1), &mut bans, &mut NoSessions, &mut rng),
         0
     );
     assert_eq!(list.gray_count(connector), GRAY_CAP);

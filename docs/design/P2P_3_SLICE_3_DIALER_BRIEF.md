@@ -806,19 +806,22 @@ judgements, a banned address is left out, and the ban is not saved
 here recorded the unruled option). Where each item
 landed: white expiry follows the connection (slice 1 brief §5, the
 `SessionAccepted` row and the expiry row: the clock moves at the kept
-session's close, and `expire` skips an address with a live kept session,
-which the dialer answers from the seam's board through
-`BanQuery::has_live_session`); per-layer judgement as three marks on
+session's close, and `expire` skips an address in the dialer's `Attempts`
+kept set, the same set `session_closed` removes. *Records-was: the dialer
+answered `BanQuery::has_live_session` from the seam's board*); per-layer
+judgement as three marks on
 the close cause (`P2P_TRANSPORT_LAYER.md`, "The cause travels with the
 close"; the Tor reply table is the Tor connector's,
 `shekyl-tor/src/replies.rs`, and `TOR_SUPERVISOR.md` reads it; the
 transport layer takes the marks as an argument and keeps no SOCKS
 knowledge); retries within a
 test (`shekyl-dialer/src/pace.rs`, `attempts_per_test` and
-`retry_wait_nanos`: Tor three attempts, clearnet one, the address drawn
-throughout and no in-flight slot held while waiting, one `DialOutcome`
-per test, the last attempt's); a cooldown in place of the drop ("The
-fill" above; the `DialOutcome` table; slice 1 brief §5, where cooling
+`retry_wait_nanos`, and `shekyl-dialer/src/attempts.rs`: the open test,
+in flight or waiting, is one record on `Attempts`; Tor three attempts,
+clearnet one, the address drawn throughout and no in-flight slot held
+while waiting, one `DialOutcome` per test, the last attempt's); a
+cooldown in place of the drop ("The fill" above; the `DialOutcome` table;
+slice 1 brief §5, where cooling
 seats are evictable like drawable ones); the file rule (slice 1 brief
 §7). The values are Assumptions in
 `DAEMON_RELAY_PRIVACY.md` §97. The failed-address memory is deleted

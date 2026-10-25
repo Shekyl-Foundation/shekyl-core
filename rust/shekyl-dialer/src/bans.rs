@@ -3,44 +3,34 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! One wake's copy of what the peer lists ask about the outside: the
-//! transport bans, and the addresses this node holds a live session to.
+//! One wake's copy of the transport bans.
 //!
-//! The peer lists take a [`BanQuery`]. The bans and the board live in the
-//! seam hub. The dialer holds both and never asks the hub while its own
-//! lock is held, so it copies them out first. The copy is the wake's view:
-//! ban expiry has already been applied, and the copy does not expire
-//! again; a session that ends after the copy is reported by its close.
+//! The peer lists take a [`BanQuery`]. The bans live in the seam hub.
+//! The dialer holds the hub and never asks it while its own lock is
+//! held, so it copies the bans out first. The copy is the wake's view:
+//! expiry has already been applied, and the copy does not expire again.
+//!
+//! A kept session is not a ban. Expiry skips the dialer's kept set
+//! ([`crate::attempts::Attempts`]), the same set whose close moves the
+//! white clock.
 
 use std::collections::BTreeSet;
 use std::net::IpAddr;
 
-use shekyl_peerlist::{BanQuery, NetworkAddress, Tick};
+use shekyl_peerlist::{BanQuery, Tick};
 use shekyl_seam::{Hub, Ipv4Subnet, ListedBan};
 
-use crate::owner::address_of;
-
-/// Hosts and subnets banned, and the addresses of the live sessions, at
-/// the tick the snapshot was taken.
+/// Hosts and subnets banned at the tick the snapshot was taken.
 pub struct BanSnapshot {
     hosts: BTreeSet<IpAddr>,
     subnets: Vec<Ipv4Subnet>,
-    live: BTreeSet<NetworkAddress>,
 }
 
 impl BanSnapshot {
-    /// The hub's bans and its board's session addresses, copied out. The
-    /// hub lock is not held afterwards.
+    /// The hub's bans, copied out. The hub lock is not held afterwards.
     #[must_use]
     pub fn take(hub: &Hub) -> Self {
-        let mut snapshot = Self::from_listed(hub.listed_bans());
-        snapshot.live = hub
-            .board()
-            .rows()
-            .iter()
-            .filter_map(|row| address_of(&row.endpoint()))
-            .collect();
-        snapshot
+        Self::from_listed(hub.listed_bans())
     }
 
     fn from_listed(listed: Vec<ListedBan>) -> Self {
@@ -54,11 +44,7 @@ impl BanSnapshot {
                 ListedBan::Subnet { subnet, left: _ } => subnets.push(subnet),
             }
         }
-        Self {
-            hosts,
-            subnets,
-            live: BTreeSet::new(),
-        }
+        Self { hosts, subnets }
     }
 
     /// Whether `host` was banned when this snapshot was taken, including
@@ -78,10 +64,6 @@ impl BanSnapshot {
 impl BanQuery for BanSnapshot {
     fn is_banned(&mut self, host: IpAddr, _now: Tick) -> bool {
         self.covers(host)
-    }
-
-    fn has_live_session(&mut self, address: &NetworkAddress) -> bool {
-        self.live.contains(address)
     }
 }
 

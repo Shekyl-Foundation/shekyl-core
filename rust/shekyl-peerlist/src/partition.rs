@@ -5,12 +5,13 @@
 
 //! One connector's lists.
 //!
-//! An address has one seat in [`Partition::seats`]. Drawable gray,
-//! an outstanding draw, and white are three values of that seat, so an
-//! address cannot be on two lists. Outstanding is still gray to every
-//! reader outside this module — [`Partition::is_gray`], the gray count,
-//! the snapshot and the file — and it is the one gray seat eviction
-//! will not take. Only [`crate::Peerlist::apply`] moves it.
+//! An address has one seat in [`Partition::seats`]. Gray and white are
+//! the two values, so an address cannot be on two lists. Gray carries
+//! its phase — drawable, an outstanding draw, or cooling — and the
+//! ladder rung of consecutive failed tests. Every gray phase is gray to
+//! every reader outside this module ([`Partition::is_gray`], the gray
+//! count, the snapshot and the file). Eviction will not take an
+//! outstanding draw. Only [`crate::Peerlist::apply`] moves one.
 //!
 //! Everything here is inside one partition; the connector is the caller's
 //! key ([`crate::Peerlist`] derives it from the address type). No method
@@ -65,27 +66,58 @@ pub enum DiscloseEarlyEnd {
     Floor,
 }
 
+/// Where a gray address is in its test.
+///
+/// Drawable and cooling are evictable. An outstanding draw is not: the
+/// dialer has it, and eviction must not cancel the test.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GrayPhase {
+    /// Arrived, not drawn, not cooling.
+    Drawable,
+    /// Drawn, not yet reported.
+    Outstanding,
+    /// A failed test that proved no misbehaviour. Not drawable until the
+    /// tick, which [`Partition::thaw`] reads.
+    Cooling(Tick),
+}
+
 /// Where one address sits. One seat, so gray and white cannot both hold it.
 ///
-/// `Outstanding` is a gray address the dialer has drawn and not yet
-/// reported. Readers outside this module still call it gray. The clock on
-/// `White` is `last_observed` (brief §4): not a sort key, not a rank.
-/// White is reached only from [`Partition::confirm`], which only
+/// Gray carries its [`GrayPhase`] and the ladder rung: how many failed
+/// tests in a row it has had. The rung survives a thaw and dies when the
+/// seat becomes white or the address leaves. Readers outside this module
+/// still call every gray phase gray. The clock on white is
+/// `last_observed` (brief §4): not a sort key, not a rank. White is
+/// reached only from [`Partition::confirm`], which only
 /// [`crate::Peerlist::apply`] calls (brief §11.1). No `Deserialize`: the
 /// file cannot carry a white entry (§7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Seat {
-    /// Arrived, not drawn, not confirmed. No clock.
-    Gray,
-    /// Drawn, not yet reported. Still gray to every outside reader.
-    Outstanding,
+    /// Unconfirmed. `failures` is the cooldown ladder's rung.
+    Gray { phase: GrayPhase, failures: u32 },
     /// Confirmed by this node's own dial. The value is `last_observed`.
     White(Tick),
-    /// A failed test that proved no misbehaviour returned it to gray with
-    /// a cooldown (the gray lifecycle, Rick 2026-10-24): gray to every
-    /// outside reader, not drawable until the tick it holds, which
-    /// [`Partition::thaw`] reads.
-    Cooling(Tick),
+}
+
+fn drawable(failures: u32) -> Seat {
+    Seat::Gray {
+        phase: GrayPhase::Drawable,
+        failures,
+    }
+}
+
+fn outstanding(failures: u32) -> Seat {
+    Seat::Gray {
+        phase: GrayPhase::Outstanding,
+        failures,
+    }
+}
+
+fn cooling(until: Tick, failures: u32) -> Seat {
+    Seat::Gray {
+        phase: GrayPhase::Cooling(until),
+        failures,
+    }
 }
 
 /// One connector's seats, its cached sample, and its intake ledger.
@@ -93,20 +125,16 @@ enum Seat {
 pub(crate) struct Partition {
     /// Every address this partition holds, each exactly once.
     seats: Index<Seat>,
-    /// Seats that are [`Seat::Gray`]: the drawable population. Moved only
-    /// by [`Self::seat_new`], [`Self::move_seat`] and [`Self::leave`].
+    /// Seats whose phase is [`GrayPhase::Drawable`]. Moved only by
+    /// [`Self::seat_new`], [`Self::move_seat`] and [`Self::leave`].
     drawable_gray: usize,
-    /// Seats that are [`Seat::Outstanding`]. Counted as gray, never drawn
-    /// by eviction or by [`Self::draw_gray`]. Same three writers.
+    /// Seats whose phase is [`GrayPhase::Outstanding`]. Counted as gray,
+    /// never drawn by eviction or by [`Self::draw_gray`]. Same three writers.
     outstanding_draws: usize,
-    /// Seats that are [`Seat::White`]. Same three writers.
+    /// Seats that are white. Same three writers.
     white_seats: usize,
-    /// Seats that are [`Seat::Cooling`]. Same three writers.
+    /// Seats whose phase is [`GrayPhase::Cooling`]. Same three writers.
     cooling: usize,
-    /// Consecutive failed tests per address, for the cooldown ladder. Set
-    /// by [`Self::cool`], cleared by a confirmation and when the address
-    /// leaves. It survives a thaw: the next failure doubles again.
-    failed_tests: BTreeMap<NetworkAddress, u32>,
     /// The cached disclosure sample and when it was drawn (D3).
     sample: Option<Sample>,
     /// This node's own dialable address on this connector, when known: one
@@ -132,21 +160,28 @@ impl Partition {
     }
 
     pub(crate) fn is_gray(&self, address: &NetworkAddress) -> bool {
-        matches!(
-            self.seat_of(address),
-            Some(Seat::Gray | Seat::Outstanding | Seat::Cooling(_))
-        )
+        matches!(self.seat_of(address), Some(Seat::Gray { .. }))
     }
 
     /// Whether `address` is gray and cooling: seated, not drawable until
     /// its cooldown ends.
     pub(crate) fn is_cooling(&self, address: &NetworkAddress) -> bool {
-        matches!(self.seat_of(address), Some(Seat::Cooling(_)))
+        matches!(
+            self.seat_of(address),
+            Some(Seat::Gray {
+                phase: GrayPhase::Cooling(_),
+                ..
+            })
+        )
     }
 
-    /// How many failed tests in a row `address` has had, for the ladder.
+    /// The ladder rung: consecutive failed tests. Zero for an address that
+    /// is white, unseated, or has not failed since it last became white.
     pub(crate) fn failed_tests(&self, address: &NetworkAddress) -> u32 {
-        self.failed_tests.get(address).copied().unwrap_or(0)
+        match self.seat_of(address) {
+            Some(Seat::Gray { failures, .. }) => failures,
+            Some(Seat::White(_)) | None => 0,
+        }
     }
 
     pub(crate) fn is_white(&self, address: &NetworkAddress) -> bool {
@@ -161,7 +196,7 @@ impl Partition {
 
     pub(crate) fn gray_iter(&self) -> impl Iterator<Item = &NetworkAddress> {
         self.seats.iter().filter_map(|(address, seat)| match seat {
-            Seat::Gray | Seat::Outstanding | Seat::Cooling(_) => Some(address),
+            Seat::Gray { .. } => Some(address),
             Seat::White(_) => None,
         })
     }
@@ -169,13 +204,14 @@ impl Partition {
     pub(crate) fn white_iter(&self) -> impl Iterator<Item = &NetworkAddress> {
         self.seats.iter().filter_map(|(address, seat)| match seat {
             Seat::White(_) => Some(address),
-            Seat::Gray | Seat::Outstanding | Seat::Cooling(_) => None,
+            Seat::Gray { .. } => None,
         })
     }
 
     /// Seat `address` on gray when it sits nowhere.
     ///
-    /// Already gray, outstanding, or white: left where it is, and `false`.
+    /// Already seated — drawable, outstanding, cooling, or white: left
+    /// where it is, and `false`.
     /// Over [`GRAY_CAP`], a uniformly random *other* gray seat, drawable or
     /// cooling alike, is dropped, so the address just admitted stays (brief
     /// §2) and an outstanding draw is not a candidate (brief §5). When the
@@ -189,7 +225,7 @@ impl Partition {
         if self.seats.contains(address) {
             return false;
         }
-        self.seat_new(address.clone(), Seat::Gray);
+        self.seat_new(address.clone(), drawable(0));
         self.evict_gray_over_cap(address, rng);
         true
     }
@@ -203,8 +239,16 @@ impl Partition {
         if self.drawable_gray == 0 {
             return None;
         }
-        let chosen = self.pick_accepted(rng, |_, seat| matches!(seat, Seat::Gray));
-        self.move_seat(&chosen, Seat::Outstanding);
+        let chosen = self.pick_accepted(rng, |_, seat| {
+            matches!(
+                seat,
+                Seat::Gray {
+                    phase: GrayPhase::Drawable,
+                    ..
+                }
+            )
+        });
+        self.mark_outstanding(&chosen);
         Some(chosen)
     }
 
@@ -223,9 +267,15 @@ impl Partition {
         let mut hosts: BTreeMap<Host, Vec<&NetworkAddress>> = BTreeMap::new();
         for (address, seat) in self.seats.iter() {
             let of_list = match seat {
-                Seat::Gray => !white,
+                Seat::Gray {
+                    phase: GrayPhase::Drawable,
+                    ..
+                } => !white,
                 Seat::White(_) => white,
-                Seat::Outstanding | Seat::Cooling(_) => false,
+                Seat::Gray {
+                    phase: GrayPhase::Outstanding | GrayPhase::Cooling(_),
+                    ..
+                } => false,
             };
             if of_list && eligible(address) {
                 hosts.entry(address.host()).or_default().push(address);
@@ -268,7 +318,7 @@ impl Partition {
         rng: &mut R,
     ) -> Option<NetworkAddress> {
         let chosen = self.pick_candidate(false, eligible, rng)?;
-        self.move_seat(&chosen, Seat::Outstanding);
+        self.mark_outstanding(&chosen);
         Some(chosen)
     }
 
@@ -311,14 +361,28 @@ impl Partition {
         clock: WhiteClock,
     ) {
         match (self.seat_of(address), clock) {
-            (Some(Seat::Outstanding), _) => {
+            (
+                Some(Seat::Gray {
+                    phase: GrayPhase::Outstanding,
+                    ..
+                }),
+                _,
+            ) => {
+                // White carries no rung. The ladder ends with the gray seat.
                 self.move_seat(address, Seat::White(now));
                 self.evict_white_over_cap(address, rng);
             }
             (Some(Seat::White(_)), WhiteClock::Move) => self.write_clock(address, now),
             // A cooling address was not the draw either: it is not drawable.
             (Some(Seat::White(_)), WhiteClock::Hold)
-            | (Some(Seat::Gray | Seat::Cooling(_)) | None, _) => {}
+            | (
+                Some(Seat::Gray {
+                    phase: GrayPhase::Drawable | GrayPhase::Cooling(_),
+                    ..
+                })
+                | None,
+                _,
+            ) => {}
         }
     }
 
@@ -331,10 +395,11 @@ impl Partition {
         }
     }
 
-    /// White to gray. The clock is not copied. The entry then takes the
-    /// capped gray path (F3, Rick 2026-10-09): over capacity a uniformly
-    /// random other drawable gray seat is dropped, so a mass demotion
-    /// cannot push gray over its cap except by outstanding draws.
+    /// White to gray, on rung zero. The clock is not copied. The entry
+    /// then takes the capped gray path (F3, Rick 2026-10-09): over
+    /// capacity a uniformly random other gray seat, drawable or cooling,
+    /// is dropped. An outstanding draw is not a candidate, so gray may
+    /// sit over the cap by those draws.
     pub(crate) fn demote<R: RelayRng + ?Sized>(
         &mut self,
         address: &NetworkAddress,
@@ -343,7 +408,7 @@ impl Partition {
         if !matches!(self.seat_of(address), Some(Seat::White(_))) {
             return false;
         }
-        self.move_seat(address, Seat::Gray);
+        self.move_seat(address, drawable(0));
         self.evict_gray_over_cap(address, rng);
         true
     }
@@ -352,7 +417,13 @@ impl Partition {
     /// address is not outstanding, so a failed redial leaves it white.
     /// Only a test that proved misbehaviour ends here (the gray lifecycle).
     pub(crate) fn drop_outstanding(&mut self, address: &NetworkAddress) -> bool {
-        if !matches!(self.seat_of(address), Some(Seat::Outstanding)) {
+        if !matches!(
+            self.seat_of(address),
+            Some(Seat::Gray {
+                phase: GrayPhase::Outstanding,
+                ..
+            })
+        ) {
             return false;
         }
         self.leave(address);
@@ -370,35 +441,35 @@ impl Partition {
         now: Tick,
         rng: &mut R,
     ) -> bool {
-        if !matches!(self.seat_of(address), Some(Seat::Outstanding)) {
+        let Some(Seat::Gray {
+            phase: GrayPhase::Outstanding,
+            failures,
+        }) = self.seat_of(address)
+        else {
             return false;
-        }
-        let count = self.failed_tests.entry(address.clone()).or_insert(0);
-        *count = count.saturating_add(1);
-        let until = Tick::new(now.get().saturating_add(cooldown_nanos(*count, rng)));
-        self.move_seat(address, Seat::Cooling(until));
+        };
+        let failures = failures.saturating_add(1);
+        let until = Tick::new(now.get().saturating_add(cooldown_nanos(failures, rng)));
+        self.move_seat(address, cooling(until, failures));
         true
     }
 
-    /// A completed handshake: the address's consecutive failed-test count
-    /// goes. Its seat is not touched here.
-    pub(crate) fn clear_failed_tests(&mut self, address: &NetworkAddress) {
-        self.failed_tests.remove(address);
-    }
-
-    /// Every cooling seat whose tick has passed returns to drawable gray.
-    /// Returns how many.
+    /// Every cooling seat whose tick has passed returns to drawable gray,
+    /// on the same ladder rung. Returns how many.
     pub(crate) fn thaw(&mut self, now: Tick) -> usize {
-        let due: Vec<NetworkAddress> = self
+        let due: Vec<(NetworkAddress, u32)> = self
             .seats
             .iter()
             .filter_map(|(address, seat)| match seat {
-                Seat::Cooling(until) if until.get() <= now.get() => Some(address.clone()),
-                _ => None,
+                Seat::Gray {
+                    phase: GrayPhase::Cooling(until),
+                    failures,
+                } if until.get() <= now.get() => Some((address.clone(), *failures)),
+                Seat::Gray { .. } | Seat::White(_) => None,
             })
             .collect();
-        for address in &due {
-            self.move_seat(address, Seat::Gray);
+        for (address, failures) in &due {
+            self.move_seat(address, drawable(*failures));
         }
         due.len()
     }
@@ -421,8 +492,12 @@ impl Partition {
     /// [`Self::insert_gray`] would: an outstanding draw can be what holds
     /// gray over the cap, and settling it must not drop someone else.
     pub(crate) fn settle_outstanding(&mut self, address: &NetworkAddress) {
-        if matches!(self.seat_of(address), Some(Seat::Outstanding)) {
-            self.move_seat(address, Seat::Gray);
+        if let Some(Seat::Gray {
+            phase: GrayPhase::Outstanding,
+            failures,
+        }) = self.seat_of(address)
+        {
+            self.move_seat(address, drawable(failures));
         }
     }
 
@@ -673,6 +748,12 @@ impl Partition {
         population
     }
 
+    /// Move a gray seat to outstanding, keeping its ladder rung.
+    fn mark_outstanding(&mut self, address: &NetworkAddress) {
+        let failures = self.failed_tests(address);
+        self.move_seat(address, outstanding(failures));
+    }
+
     fn occupied_gray(&self) -> usize {
         self.drawable_gray + self.outstanding_draws + self.cooling
     }
@@ -684,7 +765,7 @@ impl Partition {
     fn white_clocks(&self) -> impl Iterator<Item = (&NetworkAddress, Tick)> {
         self.seats.iter().filter_map(|(address, seat)| match seat {
             Seat::White(observed) => Some((address, *observed)),
-            Seat::Gray | Seat::Outstanding | Seat::Cooling(_) => None,
+            Seat::Gray { .. } => None,
         })
     }
 
@@ -708,7 +789,6 @@ impl Partition {
     fn leave(&mut self, address: &NetworkAddress) -> Option<Seat> {
         let previous = self.seats.remove(address)?;
         self.note_removed(&previous);
-        self.failed_tests.remove(address);
         Some(previous)
     }
 
@@ -724,10 +804,19 @@ impl Partition {
 
     fn tally(&mut self, seat: &Seat) -> &mut usize {
         match seat {
-            Seat::Gray => &mut self.drawable_gray,
-            Seat::Outstanding => &mut self.outstanding_draws,
+            Seat::Gray {
+                phase: GrayPhase::Drawable,
+                ..
+            } => &mut self.drawable_gray,
+            Seat::Gray {
+                phase: GrayPhase::Outstanding,
+                ..
+            } => &mut self.outstanding_draws,
             Seat::White(_) => &mut self.white_seats,
-            Seat::Cooling(_) => &mut self.cooling,
+            Seat::Gray {
+                phase: GrayPhase::Cooling(_),
+                ..
+            } => &mut self.cooling,
         }
     }
 
@@ -740,13 +829,24 @@ impl Partition {
     /// then sit over the cap by the outstanding draws.
     fn evict_gray_over_cap<R: RelayRng + ?Sized>(&mut self, keep: &NetworkAddress, rng: &mut R) {
         while self.occupied_gray() > GRAY_CAP {
-            let keep_is_evictable =
-                matches!(self.seat_of(keep), Some(Seat::Gray | Seat::Cooling(_)));
+            let keep_is_evictable = matches!(
+                self.seat_of(keep),
+                Some(Seat::Gray {
+                    phase: GrayPhase::Drawable | GrayPhase::Cooling(_),
+                    ..
+                })
+            );
             if !another(self.drawable_gray + self.cooling, keep_is_evictable) {
                 break;
             }
             let victim = self.pick_accepted(rng, |address, seat| {
-                matches!(seat, Seat::Gray | Seat::Cooling(_)) && address != keep
+                matches!(
+                    seat,
+                    Seat::Gray {
+                        phase: GrayPhase::Drawable | GrayPhase::Cooling(_),
+                        ..
+                    }
+                ) && address != keep
             });
             self.leave(&victim);
         }

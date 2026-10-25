@@ -182,10 +182,12 @@ pub unsafe extern "C" fn shekyl_rpc_peerlist_sizes(out_white: *mut u64, out_gray
     let mut bans = BanSnapshot::take(dialer.hub());
     let (white, gray) = {
         let mut shared = dialer.shared();
+        let mut kept = shared.kept_addresses(ConnectorId::Clearnet);
         let white = shared.lists.white_count(
             ConnectorId::Clearnet,
             now,
             &mut bans,
+            &mut kept,
             &mut crate::secure_relay_rng::SecureRelayRng,
         );
         let gray = shared.lists.gray_count(ConnectorId::Clearnet);
@@ -409,10 +411,12 @@ pub fn peer_counts() -> Option<PeerCounts> {
     let mut bans = BanSnapshot::take(dialer.hub());
     let (white, gray) = {
         let mut shared = dialer.shared();
+        let mut kept = shared.kept_addresses(ConnectorId::Clearnet);
         let white = shared.lists.white_count(
             ConnectorId::Clearnet,
             now,
             &mut bans,
+            &mut kept,
             &mut crate::secure_relay_rng::SecureRelayRng,
         );
         let gray = shared.lists.gray_count(ConnectorId::Clearnet);

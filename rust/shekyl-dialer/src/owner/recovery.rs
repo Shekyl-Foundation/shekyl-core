@@ -120,7 +120,7 @@ impl Recovery {
 /// this wake drew, or `None` when it drew nothing — a recovery wake and
 /// an idle wake both pass `None`. Every wake calls this, so a stranded
 /// wake after a gained session is the wake that closes the episode.
-pub(super) fn report_wake(
+pub(in crate::owner) fn report_wake(
     episode: &mut Option<Recovery>,
     connector: ConnectorId,
     kept: usize,

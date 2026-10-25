@@ -12,7 +12,8 @@ use std::net::Ipv4Addr;
 
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{
-    ConnectorId, DialOutcome, NetworkAddress, NoBans, Peerlist, RefusedSet, Source, Tick, GRAY_CAP,
+    ConnectorId, DialOutcome, NetworkAddress, NoBans, NoSessions, Peerlist, RefusedSet, Source,
+    Tick, GRAY_CAP,
 };
 
 const C: ConnectorId = ConnectorId::Clearnet;
@@ -198,13 +199,27 @@ fn the_white_draw_takes_white_only_and_counts_hosts() {
         white.push(address);
     }
     assert_eq!(
-        list.white_candidates(C, now(), &mut NoBans, &mut |_| true, &mut rng),
+        list.white_candidates(
+            C,
+            now(),
+            &mut NoBans,
+            &mut NoSessions,
+            &mut |_| true,
+            &mut rng
+        ),
         4
     );
     assert_eq!(list.gray_candidates(C, &mut |_| true), 4);
     for _ in 0..200 {
         let drawn = list
-            .draw_white_where(C, now(), &mut NoBans, &mut |_| true, &mut rng)
+            .draw_white_where(
+                C,
+                now(),
+                &mut NoBans,
+                &mut NoSessions,
+                &mut |_| true,
+                &mut rng,
+            )
             .expect("white");
         assert!(
             white.contains(&drawn),
@@ -215,12 +230,26 @@ fn the_white_draw_takes_white_only_and_counts_hosts() {
     let live = white[0].clone();
     for _ in 0..200 {
         let drawn = list
-            .draw_white_where(C, now(), &mut NoBans, &mut |a| *a != live, &mut rng)
+            .draw_white_where(
+                C,
+                now(),
+                &mut NoBans,
+                &mut NoSessions,
+                &mut |a| *a != live,
+                &mut rng,
+            )
             .expect("three remain");
         assert_ne!(drawn, live);
     }
     assert_eq!(
-        list.draw_white_where(C, now(), &mut NoBans, &mut |_| false, &mut rng),
+        list.draw_white_where(
+            C,
+            now(),
+            &mut NoBans,
+            &mut NoSessions,
+            &mut |_| false,
+            &mut rng
+        ),
         None
     );
 }

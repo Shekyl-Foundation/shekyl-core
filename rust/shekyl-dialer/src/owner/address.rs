@@ -65,12 +65,15 @@ pub(crate) fn address_of(endpoint: &Endpoint) -> Option<NetworkAddress> {
 }
 
 /// Live sessions on one connector, read from the hub's board once per wake.
-pub(super) struct LiveSessions {
+///
+/// Visible through the owner: the wake reads it, and the candidate filter
+/// reads a different fact from the same board (do not redial a live host).
+pub(in crate::owner) struct LiveSessions {
     /// Every session's list address.
-    pub(super) addresses: BTreeSet<NetworkAddress>,
+    pub(in crate::owner) addresses: BTreeSet<NetworkAddress>,
     /// The host of every outbound session: one outbound session per host is
     /// read from this set.
-    pub(super) outbound_hosts: BTreeSet<Host>,
+    pub(in crate::owner) outbound_hosts: BTreeSet<Host>,
 }
 
 /// Live sessions on `connector`.

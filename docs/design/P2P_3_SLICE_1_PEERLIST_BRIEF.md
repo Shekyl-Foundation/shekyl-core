@@ -132,14 +132,16 @@ for `EXPIRATION_PERIOD` (24 hours) returns to gray. Additional contact is a
 confirmed handshake, or a later successful exchange, on a connection this node
 opened to that address and kept (`SessionAccepted`). It moves the clock
 forward. A kept session is contact for as long as it lasts (the gray
-lifecycle, 2026-10-24): expiry skips a white address with a live kept
-session, which the dialer answers from the seam's board through
-`BanQuery::has_live_session`, and the clock moves to the close when the
-session ends (`session_ended`), so a white address expires 24 hours after
-its last kept session closed, never during one. *Records-was: the clock
-moved only at `SessionAccepted`, and a session held past 24 hours expired
-its own address.* A confirm-and-close (`Confirmed`) is not additional contact: the
-session did not stay, and an address already white keeps its clock. Contact
+lifecycle, 2026-10-24): expiry skips a white address the caller names as
+kept, and the dialer passes the `Attempts` set that `session_closed`
+removes when it moves the clock (`session_ended`), so a white address
+expires 24 hours after its last kept session closed, never during one.
+*Records-was: the dialer answered `BanQuery::has_live_session` from the
+seam's board, a different set from the one whose close moves the clock.
+Records-was before that: the clock moved only at `SessionAccepted`, and a
+session held past 24 hours expired its own address.* A confirm-and-close
+(`Confirmed`) is not additional contact: the session did not stay, and an
+address already white keeps its clock. Contact
 that arrived inbound does not. One failed redial does not demote; the clock
 does.
 
@@ -664,7 +666,7 @@ host to throttle; that is recorded there as the residual.
 | `admit_gray(address)` | Insert into gray when the address sits nowhere. An address already gray, outstanding, or white is left where it sits; the call reports whether it newly entered gray, and a seated address is not a new intake charge. This is the incoming path, the gossip path, `--add-peer`, exclusive, priority, and load. Refused while the address is under an active ban (D4) and when the session's 24-hour intake would pass `2 × DISCLOSE_COUNT` distinct addresses (D-S1, `PeerlistRefused`) |
 | ban demotion | A white entry under an active ban moves to gray at the next white read: count, draw, or sample (D4, §5b). The clock is not copied across |
 | `bootstrap_harvested(addresses)` | `admit_gray` for each address in a handshake reply's sample. The dialed peer is not promoted by this call; `apply(Confirmed)` or `apply(SessionAccepted)` is |
-| expiry | `now - last_observed >= EXPIRATION_PERIOD`, for an address with no live kept session (the query's `has_live_session`, 2026-10-24), moves that white address to gray and does not copy the clock across. `session_ended(address, now)` sets a white address's `last_observed` to the close. *Records-was: the age alone decided* |
+| expiry | `now - last_observed >= EXPIRATION_PERIOD`, for an address the caller's kept set does not hold (the dialer's `Attempts` kept sessions, the same set `session_closed` removes, 2026-10-24), moves that white address to gray and does not copy the clock across. `session_ended(address, now)` sets a white address's `last_observed` to the close. *Records-was: the query's `has_live_session`, answered from the seam's board. Records-was before that: the age alone decided* |
 
 `--add-exclusive-node` is a gray admit of the declared population
 (*records-was:* and `--add-priority-node`, deleted 2026-10-11). Today
@@ -717,10 +719,9 @@ the range table.
 PR).** No trust state is saved: no cooldown, no ban, no white. The file
 carries addresses, never judgements. A banned address is left out, and
 the ban is not saved (Rick ruled this, option (ii), 2026-10-24).
-`persistable` takes the dialer's ban snapshot and the clock, the same
-way `expire` takes `has_live_session`, and leaves out every address
-whose host is under an active ban at the moment the file is written; the
-lists still read no transport state of their own. At the next start the
+`persistable` takes the dialer's ban snapshot and the clock, and leaves
+out every address whose host is under an active ban at the moment the
+file is written; the lists still read no transport state of their own. At the next start the
 ban is gone, as before, and so is the address: it comes back only when a
 peer sends it again. On Tor nothing can be banned (D7), so nothing
 changes there. The cost, stated and accepted: on clearnet, until the

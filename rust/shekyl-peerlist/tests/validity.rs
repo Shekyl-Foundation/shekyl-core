@@ -19,8 +19,8 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{
     white_diversity_floor, ConnectionId, ConnectorId, DialOutcome, NetworkAddress, NoBans,
-    Peerlist, RangeV4, RangeV6, Refusal, RefusedSet, SessionRow, Source, Tick, DISCLOSE_COUNT,
-    REFUSED_V4, REFUSED_V6,
+    NoSessions, Peerlist, RangeV4, RangeV6, Refusal, RefusedSet, SessionRow, Source, Tick,
+    DISCLOSE_COUNT, REFUSED_V4, REFUSED_V6,
 };
 
 const PORT: u16 = 18080;
@@ -305,7 +305,13 @@ fn a_refused_address_in_white_is_never_disclosed() {
     for seed in 0..200 {
         let mut rng = SplitMix64::new(seed);
         let mut list = white_list(RefusedSet::NON_GLOBAL, &private, &mut rng);
-        let sample = list.disclose(ConnectorId::Clearnet, now(), &mut NoBans, &mut rng);
+        let sample = list.disclose(
+            ConnectorId::Clearnet,
+            now(),
+            &mut NoBans,
+            &mut NoSessions,
+            &mut rng,
+        );
         assert_eq!(sample.len(), DISCLOSE_COUNT, "seed {seed}: a full sample");
         assert!(
             !sample.contains(&private),
@@ -331,7 +337,13 @@ fn a_refused_own_address_is_never_disclosed() {
         let mut list = white_list(RefusedSet::NON_GLOBAL, &global(9000), &mut rng);
         list.set_own_address(ConnectorId::Clearnet, Some(own.clone()))
             .expect("clearnet address");
-        let sample = list.disclose(ConnectorId::Clearnet, now(), &mut NoBans, &mut rng);
+        let sample = list.disclose(
+            ConnectorId::Clearnet,
+            now(),
+            &mut NoBans,
+            &mut NoSessions,
+            &mut rng,
+        );
         assert!(!sample.contains(&own), "seed {seed}");
     }
 }
@@ -368,8 +380,14 @@ fn allow_local_ip_admits_the_session_offer_and_discloses_it() {
     let disclosed = (0..200).any(|seed| {
         let mut rng = SplitMix64::new(seed);
         let mut list = white_list(RefusedSet::EMPTY, &private, &mut rng);
-        list.disclose(ConnectorId::Clearnet, now(), &mut NoBans, &mut rng)
-            .contains(&private)
+        list.disclose(
+            ConnectorId::Clearnet,
+            now(),
+            &mut NoBans,
+            &mut NoSessions,
+            &mut rng,
+        )
+        .contains(&private)
     });
     assert!(disclosed, "the private address appears in a sample");
 }
