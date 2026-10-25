@@ -20,7 +20,15 @@ moves that failure to the pull request.
 
   1. **The pin file's hosts are the gitian descriptors' hosts**, as sets, both
      directions. A descriptor host with no row would fail the release build; a
-     row for a host nothing builds is a pin nobody verifies. A host triple must
+     row for a host nothing builds is a pin nobody verifies. The one exception
+     is declared, not inferred: a row with `"switched_off": "<record>"` is a
+     target taken out of the release matrix by a ruling (riscv64 Linux,
+     CA-1), kept so a source build of it still compiles (`build.rs` refuses a
+     target with no row). The pin reader refuses every other shape of that
+     field, so presence here means the closed one: `unavailable`, not
+     `pending`, and a work-item id. Such a row must be built by no
+     descriptor; a descriptor that still builds it contradicts the ruling.
+     A host triple must
      also be the release name of that row's `os` and `arch`: packaging selects
      a row by the triple and `build.rs` selects one by `os`/`arch`, so a swap
      of two triples would ship one bundle and accept another. The pin reader
@@ -48,11 +56,13 @@ moves that failure to the pull request.
   6. **`docs/RELEASE_CHECKLIST.md` names every pinned bundle version** in its
      "Bundled Tor pin current" block, which is a pointer to the pin file and
      has to move with it.
-  7. **Pending rows are printed on every run.** An `unavailable` row with
-     `"pending": "<work item>"` names the work that will pin it. Both kinds
-     of `unavailable` row compile the same way, so only this gate shows which
-     targets are waiting on what. Every `unavailable` row is a gap to close
-     (`TOR_BUNDLE_DISTRIBUTION.md` TB-4).
+  7. **Pending and switched-off rows are printed on every run.** An `unavailable`
+     row with `"pending": "<work item>"` names the work that will pin it, and
+     that row is a gap to close (`TOR_BUNDLE_DISTRIBUTION.md` TB-4). A
+     switched-off row is `unavailable` and not pending: it left the release
+     matrix by a ruling, a source build still compiles, and it is not a gap.
+     Both kinds compile as `Unavailable`, so only this gate shows which is
+     which.
 
 Exit status: 0 = all hold; 1 = a difference (each one printed).
 """
@@ -160,39 +170,52 @@ def gitian_hosts(root, problems):
     return hosts
 
 
-def pending_rows(root):
-    """(host, work item) for each row that is unavailable only for now.
-    Empty when the pin file does not load: `check` reports that."""
-    tor_bundle = load_tor_bundle(root)
-    try:
-        doc = tor_bundle.load_pins(root / "config" / "tor_pins.json")
-    except tor_bundle.Refused:
-        return []
-    return [
-        (row["gitian_host"], row["pending"])
-        for row in doc["targets"]
-        if "pending" in row
+def reported_rows(doc):
+    """What every run prints from a loaded pin file: (host, work item) for
+    each row that is unavailable only for now, and (host, record) for each
+    row taken out of the release matrix by a ruling. `doc` is `None` when
+    the pin file did not load; `check` reports that."""
+    if doc is None:
+        return [], []
+    rows = doc["targets"]
+    pending = [(row["gitian_host"], row["pending"]) for row in rows if "pending" in row]
+    switched_off = [
+        (row["gitian_host"], row["switched_off"]) for row in rows if "switched_off" in row
     ]
+    return pending, switched_off
 
 
 def check(root):
+    """(problems, doc): every difference found, and the pin file as loaded,
+    or `None` when it did not load (which is then the only problem)."""
     problems = []
     tor_bundle = load_tor_bundle(root)
     try:
         doc = tor_bundle.load_pins(root / "config" / "tor_pins.json")
     except tor_bundle.Refused as exc:
-        return [str(exc)]
+        return [str(exc)], None
 
     built = gitian_hosts(root, problems)
     rows = {row["gitian_host"]: row for row in doc["targets"]}
+    # `load_pins` refused every other shape, so the key is the closed one.
+    switched_off = {host for host, row in rows.items() if "switched_off" in row}
+    shipped = set(rows) - switched_off
     for host in sorted(set(built) - set(rows)):
         problems.append(
             f"{built[host]} builds {host}, which has no row in config/tor_pins.json: "
             "add a pinned row or an unavailable row with its reason"
         )
-    for host in sorted(set(rows) - set(built)):
+    for host in sorted(shipped - set(built)):
         problems.append(
-            f"config/tor_pins.json has a row for {host}, which no gitian descriptor builds"
+            f"config/tor_pins.json has a row for {host}, which no gitian descriptor builds: "
+            "add it to a descriptor, or mark the row \"switched_off\" with the record of the "
+            "ruling that took it out of the release matrix"
+        )
+    for host in sorted(switched_off & set(built)):
+        problems.append(
+            f"{built[host]} builds {host}, whose row in config/tor_pins.json is switched off "
+            f"by {rows[host]['switched_off']}: drop the host from the descriptor or the "
+            "marker from the row"
         )
 
     pinned = [row for row in doc["targets"] if row["disposition"] == "pinned"]
@@ -225,7 +248,7 @@ def check(root):
                 f"docs/RELEASE_CHECKLIST.md does not name the {row['bundle_target']} pin "
                 f"as \"{label}\""
             )
-    return problems
+    return problems, doc
 
 
 def main():
@@ -234,10 +257,12 @@ def main():
         "--root", type=Path, default=Path(__file__).resolve().parents[2]
     )
     args = parser.parse_args()
-    problems = check(args.root)
-    pending = pending_rows(args.root)
+    problems, doc = check(args.root)
+    pending, switched_off = reported_rows(doc)
     for host, item in pending:
         print(f"tor pin targets: {host} is unavailable pending {item}")
+    for host, record in switched_off:
+        print(f"tor pin targets: {host} is switched off by {record} (source builds only)")
     if problems:
         for problem in problems:
             print(f"tor pin targets: {problem}", file=sys.stderr)
