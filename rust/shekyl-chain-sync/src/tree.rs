@@ -12,6 +12,7 @@
 //! leaves the incumbent.
 
 use std::cell::Cell;
+use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_chain_rules::{AtHeight, HeaderJudged, HeaderRecord, HeaderView};
@@ -45,6 +46,38 @@ pub(crate) struct Placement {
     pub fork: BlockHeight,
 }
 
+/// The headers in `T` with no valid child, ordered heaviest first and, at
+/// equal work, by hash. Selection and the alarm read the heaviest until
+/// one answers, so they cost the tips heavier than their answer and never
+/// the whole set.
+#[derive(Default)]
+struct Tips {
+    work: BTreeMap<BlockHash, CumulativeDifficulty>,
+    heaviest: BTreeSet<(Reverse<CumulativeDifficulty>, BlockHash)>,
+}
+
+impl Tips {
+    fn insert(&mut self, hash: BlockHash, work: CumulativeDifficulty) {
+        if let Some(old) = self.work.insert(hash, work) {
+            self.heaviest.remove(&(Reverse(old), hash));
+        }
+        self.heaviest.insert((Reverse(work), hash));
+    }
+
+    fn remove(&mut self, hash: &BlockHash) {
+        if let Some(work) = self.work.remove(hash) {
+            self.heaviest.remove(&(Reverse(work), *hash));
+        }
+    }
+
+    /// Heaviest first; equal work in hash order.
+    fn heaviest(&self) -> impl Iterator<Item = (BlockHash, CumulativeDifficulty)> + '_ {
+        self.heaviest
+            .iter()
+            .map(|(Reverse(work), hash)| (*hash, *work))
+    }
+}
+
 /// The chain `H*` names: a hash and the work through it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Star {
@@ -63,7 +96,7 @@ impl Star {
 pub(crate) struct HeaderTree {
     nodes: BTreeMap<BlockHash, Node>,
     children: BTreeMap<BlockHash, BTreeSet<BlockHash>>,
-    tips: BTreeSet<BlockHash>,
+    tips: Tips,
     /// A header marked invalid, and every header that descends from one.
     /// The hash is remembered so a later child is excluded too.
     invalid: BTreeSet<BlockHash>,
@@ -99,6 +132,7 @@ impl HeaderTree {
 
     pub(crate) fn insert(&mut self, judged: HeaderJudged) {
         let hash = judged.hash();
+        let work = judged.cumulative_difficulty();
         // A refused header stays refused. Inserting it again must not
         // put it back in the tip set.
         if self.invalid.contains(&hash) {
@@ -144,7 +178,7 @@ impl HeaderTree {
         if parent_in_tree {
             self.tips.remove(&parent);
         }
-        self.tips.insert(hash);
+        self.tips.insert(hash, work);
         if excluded {
             self.mark_invalid(hash);
         }
@@ -162,8 +196,14 @@ impl HeaderTree {
         self.invalid.contains(&hash)
     }
 
-    pub(crate) fn tip_hashes(&self) -> Vec<BlockHash> {
-        self.tips.iter().copied().collect()
+    /// The tips heavier than `floor`, heaviest first.
+    pub(crate) fn tips_heavier_than(
+        &self,
+        floor: CumulativeDifficulty,
+    ) -> impl Iterator<Item = (BlockHash, CumulativeDifficulty)> + '_ {
+        self.tips
+            .heaviest()
+            .take_while(move |(_, work)| *work > floor)
     }
 
     /// Headers at or below `height` whose hash is on `main` have been
@@ -200,7 +240,11 @@ impl HeaderTree {
         for (_, hash) in leaving {
             self.drop_connected(hash);
         }
-        self.rebuild_skips();
+        // Skip pointers into the connected prefix are left as they are. One
+        // that names a header now gone names an ancestor on main, so every
+        // height at or below it is below its branch's base: main answers
+        // those, and `ancestor_at` returns `None` for them on reaching the
+        // missing header, as it would after any rebuild.
         Ok(())
     }
 
@@ -273,24 +317,6 @@ impl HeaderTree {
         }
     }
 
-    fn rebuild_skips(&mut self) {
-        let mut rows = Vec::new();
-        for (hash, node) in &self.nodes {
-            rows.push((*hash, node.parent, node.judged.connecting().to_raw()));
-        }
-        rows.sort_by_key(|(_, _, height)| *height);
-        for (hash, parent, height) in rows {
-            let skip = if self.nodes.contains_key(&parent) {
-                self.ancestor_at(parent, BlockHeight::from_raw(skip_height(height)))
-            } else {
-                None
-            };
-            if let Some(node) = self.nodes.get_mut(&hash) {
-                node.skip = skip;
-            }
-        }
-    }
-
     /// The header and its descendants, by the children index.
     pub(crate) fn mark_invalid(&mut self, hash: BlockHash) {
         let mut stack = vec![hash];
@@ -320,7 +346,13 @@ impl HeaderTree {
                 .any(|kid| self.nodes.contains_key(kid) && !self.invalid.contains(kid))
         });
         if !live {
-            self.tips.insert(parent);
+            if let Some(work) = self
+                .nodes
+                .get(&parent)
+                .map(|node| node.judged.cumulative_difficulty())
+            {
+                self.tips.insert(parent, work);
+            }
         }
     }
 
@@ -391,9 +423,11 @@ impl HeaderTree {
     }
 
     /// `incumbent` stays unless a tip in the tip set is strictly heavier
-    /// and its fork is within `cap`. Each such tip costs one
-    /// [`HeaderView::header_at`]: the fork height is the branch record's
-    /// base, and that one read checks the anchor.
+    /// and its fork is within `cap`; then the heaviest such tip is chosen.
+    /// The tips are read heaviest first and the first within the cap is
+    /// the answer, so only the heavier tips that fail the cap are read
+    /// before it. Each costs one [`HeaderView::header_at`]: the fork height
+    /// is the branch record's base, and that one read checks the anchor.
     pub(crate) fn select<'id, H: HeaderView<'id>>(
         &self,
         main: &H,
@@ -401,25 +435,14 @@ impl HeaderTree {
         local_height: Option<BlockHeight>,
         cap: BlockCount,
     ) -> Result<Star, H::Fault> {
-        let floor = incumbent.work;
-        let mut best = incumbent;
-        for hash in &self.tips {
-            let Some(node) = self.node(*hash) else {
-                continue;
-            };
-            let work = node.judged.cumulative_difficulty();
-            // Heavier than the incumbent this call started with. A tip
-            // that only beats a tip we already chose this call is still
-            // a candidate: one read each, then the heaviest within the
-            // cap wins. Equal work is not a candidate.
-            if work <= floor {
-                continue;
-            }
-            if self.within_cap(main, *hash, local_height, cap)? && work > best.work {
-                best = Star { hash: *hash, work };
+        // Heaviest first, so the first tip within the cap is the answer.
+        // Equal work with the incumbent is not a candidate.
+        for (hash, work) in self.tips_heavier_than(incumbent.work) {
+            if self.within_cap(main, hash, local_height, cap)? {
+                return Ok(Star { hash, work });
             }
         }
-        Ok(best)
+        Ok(incumbent)
     }
 
     /// The fork is the ancestor at the branch's base. Its parent is the

@@ -1898,17 +1898,52 @@ fn stop_answers_a_found_block_waiting_inside_the_door() {
     }
 }
 
-/// Chain sync's typed entry (`Door::offer_bound`, CS-3 §4.6): a block whose
-/// header was proven elsewhere connects through `form_judged`. The
-/// substrate counts no hash for it, and its reply is the ordinary one.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_bound_arrival_connects_through_form_judged_without_a_hash() {
+/// The header `mined` proves against `store`'s tip, the way the sync owner
+/// judges before [`Door::offer_bound`].
+fn judged_header<S: Substrate>(
+    store: &ChainStore,
+    gate: &S,
+    mined: &Mined,
+) -> shekyl_chain_rules::HeaderJudged
+where
+    S::Fault: std::fmt::Debug,
+{
     use shekyl_chain_rules::{
         form_header, judge_header, seed_height, target_claim, AtHeight, FormAttempt, HeaderView,
     };
     use shekyl_chain_store::store::SnapshotView;
     use shekyl_types::BlockCount;
 
+    let snap = store.begin_read().expect("read");
+    let view = SnapshotView::new(&snap);
+    let tip = view.tip().expect("view").expect("a tip");
+    let connecting = tip.height + BlockCount::ONE;
+    assert_eq!(connecting, mined.height, "the bound block extends the tip");
+    let rule_set = RULES.in_force(connecting);
+    let seed = match seed_height(connecting) {
+        None => BlockHash::NULL,
+        Some(height) => match view.header_at(height).expect("view") {
+            AtHeight::Recorded(record) => record.hash,
+            AtHeight::AboveTip => BlockHash::NULL,
+        },
+    };
+    let target = target_claim(&view, connecting, &rule_set)
+        .expect("view")
+        .expect("a target");
+    let pow = shekyl_wire::PowBlob::read(&mined.template.block.pow_blob()).expect("preimage");
+    let formed = form_header(&pow, &rule_set, gate, seed, target, FormAttempt::FIRST)
+        .expect("the substrate answers")
+        .expect("the header forms");
+    judge_header(&formed, &view, &rule_set, &RULES.trust())
+        .expect("the view answers")
+        .expect("the header is judged")
+}
+
+/// Chain sync's typed entry (`Door::offer_bound`, CS-3 §4.6): a block whose
+/// header was proven elsewhere connects through `form_judged`. The
+/// substrate counts no hash for it, and its reply is the ordinary one.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bound_arrival_connects_through_form_judged_without_a_hash() {
     let mut y = Scenario::open("service-bound-y");
     let blocks = y.mine(5).await;
     let gate = Arc::new(Gated::new());
@@ -1917,32 +1952,7 @@ async fn a_bound_arrival_connects_through_form_judged_without_a_hash() {
     let (prefix, last) = blocks.split_at(blocks.len() - 1);
     offer_all(&door, 1, prefix).await;
     let mined = &last[0];
-    let judged = {
-        let store = Arc::clone(&service.shared.store);
-        let snap = store.begin_read().expect("read");
-        let view = SnapshotView::new(&snap);
-        let tip = view.tip().expect("view").expect("a tip");
-        let connecting = tip.height + BlockCount::ONE;
-        assert_eq!(connecting, mined.height, "the bound block extends the tip");
-        let rule_set = RULES.in_force(connecting);
-        let seed = match seed_height(connecting) {
-            None => BlockHash::NULL,
-            Some(height) => match view.header_at(height).expect("view") {
-                AtHeight::Recorded(record) => record.hash,
-                AtHeight::AboveTip => BlockHash::NULL,
-            },
-        };
-        let target = target_claim(&view, connecting, &rule_set)
-            .expect("view")
-            .expect("a target");
-        let pow = shekyl_wire::PowBlob::read(&mined.template.block.pow_blob()).expect("preimage");
-        let formed = form_header(&pow, &rule_set, &*gate, seed, target, FormAttempt::FIRST)
-            .expect("the substrate answers")
-            .expect("the header forms");
-        judge_header(&formed, &view, &rule_set, &RULES.trust())
-            .expect("the view answers")
-            .expect("the header is judged")
-    };
+    let judged = judged_header(&service.shared.store, gate.as_ref(), mined);
     let hashes_before = gate.hashes();
     let bound = super::BoundArrival {
         tag: ArrivalTag(99),
@@ -1990,6 +2000,65 @@ async fn a_bound_arrival_connects_through_form_judged_without_a_hash() {
         hashes_before,
         "a bound arrival is formed without a longhash"
     );
+    service.stop().await.expect("stops");
+    y.close().await;
+    cleanup(&path);
+}
+
+/// A bound announcement spends the session's unsolicited bucket
+/// ([`crate::admission::TOKENS_PER_INTERVAL`]). The next one is
+/// `Throttled` before it is formed. A body this node asked for, offered
+/// the same way, still takes a seat after that bucket is dry: the door
+/// reads `solicited` off the bound arrival.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bound_announcement_spends_the_unsolicited_bucket_and_a_solicited_body_does_not() {
+    use crate::admission::TOKENS_PER_INTERVAL;
+
+    let mut y = Scenario::open("service-bound-bucket-y");
+    let blocks = y.mine(2).await;
+    let gate = Arc::new(Gated::new());
+    let (service, path) = service(
+        "service-bound-bucket",
+        Arc::clone(&gate),
+        ServiceConfig::default(),
+    );
+    let door = service.door();
+    let (prefix, last) = blocks.split_at(blocks.len() - 1);
+    offer_all(&door, 1, prefix).await;
+    let mined = &last[0];
+    let judged = judged_header(&service.shared.store, gate.as_ref(), mined);
+    let bound = |tag: u64, solicited: bool| super::BoundArrival {
+        tag: ArrivalTag(tag),
+        session: SessionId(9),
+        solicited,
+        judged: judged.clone(),
+        block: mined.template.block.serialize(),
+        bodies: mined
+            .template
+            .transactions
+            .iter()
+            .map(shekyl_wire::Transaction::serialize)
+            .collect(),
+        attestation_witness: Vec::new(),
+    };
+    let mut accepted = Vec::new();
+    for token in 0..TOKENS_PER_INTERVAL {
+        let tickets = door
+            .offer_bound(vec![bound(u64::from(token), false)])
+            .expect("a token");
+        accepted.extend(tickets);
+    }
+    assert_eq!(
+        door.offer_bound(vec![bound(u64::from(TOKENS_PER_INTERVAL), false)])
+            .err(),
+        Some(Refusal::Throttled)
+    );
+    let solicited = door
+        .offer_bound(vec![bound(u64::from(TOKENS_PER_INTERVAL) + 1, true)])
+        .expect("a requested body takes no token");
+    for ticket in accepted.into_iter().chain(solicited) {
+        let _reply = ticket.reply().await;
+    }
     service.stop().await.expect("stops");
     y.close().await;
     cleanup(&path);

@@ -424,27 +424,28 @@ impl DaemonTorControl {
     /// telemetry, then the DataDirectory wipe. On a wedged actor, kill and
     /// proceed — the child reap is backstopped by `kill_on_drop` and by the owning
     /// control connection, whose close exits tor.
-    pub async fn shutdown(mut self) -> Option<TorExit> {
+    pub async fn shutdown(mut self) -> Teardown {
         self.teardown().await
     }
 
-    async fn teardown(&mut self) -> Option<TorExit> {
+    async fn teardown(&mut self) -> Teardown {
         let exit = self.stop_actor().await;
         // After the reap, before the directory goes away. A crash (Tor died,
         // or we had to kill it) saves nothing: the previous cache stays.
-        self.save_if_clean(&exit).await;
+        let cache = self.save_if_clean(&exit).await;
         if let Some(dir) = self.data_dir.take() {
             dir.wipe();
         }
-        exit
+        Teardown { exit, cache }
     }
 
-    async fn save_if_clean(&self, exit: &Option<TorExit>) {
+    async fn save_if_clean(&self, exit: &Option<TorExit>) -> CacheSave {
         if self.bootstrapped {
             if let (Some(TorExit::Reaped(_)), Some(dir)) = (exit, self.data_dir.as_ref()) {
-                save_directory_cache(dir.path()).await;
+                return save_directory_cache(dir.path()).await;
             }
         }
+        CacheSave::NotDue
     }
 
     /// The cache files copied into this boot's directory. Empty when the
@@ -478,25 +479,50 @@ async fn observed_exit(exit_watch: &mut watch::Receiver<Option<TorExit>>) -> Opt
     *exit_watch.borrow()
 }
 
+/// What a teardown did: the reap, and what became of the directory cache.
+#[derive(Debug)]
+pub struct Teardown {
+    /// The reap, when one was observed.
+    pub exit: Option<TorExit>,
+    /// The public directory cache's write-back (`TSR-Q8`).
+    pub cache: CacheSave,
+}
+
+/// The directory cache's write-back at a teardown. This crate does not log;
+/// the caller says a failure, because the next boot then starts cold and the
+/// operator should know why.
+#[derive(Debug)]
+pub enum CacheSave {
+    /// Not attempted: the boot never bootstrapped, or Tor did not exit
+    /// cleanly. The previous cache stays, as designed.
+    NotDue,
+    /// Written back.
+    Saved,
+    /// The write-back failed. The previous files stay (each file is written
+    /// to a temporary and renamed over the old one).
+    Failed(std::io::Error),
+}
+
 /// Write the public directory cache back from a boot that reached the
 /// network and was stopped cleanly. The copy runs on the blocking pool.
 /// A failure leaves the previous files.
-async fn save_directory_cache(data_dir: &Path) {
+async fn save_directory_cache(data_dir: &Path) -> CacheSave {
     let data_dir = data_dir.to_path_buf();
     let Some(parent) = data_dir.parent().map(Path::to_path_buf) else {
-        return;
+        return CacheSave::NotDue;
     };
     let cache = parent.join(crate::data_dir::CACHE_DIR_NAME);
-    drop(
-        tokio::task::spawn_blocking(move || {
-            let cache = directory_cache::DirectoryCache::at(cache);
-            if cache.ensure().is_err() {
-                return;
-            }
-            drop(cache.save_from(&data_dir));
-        })
-        .await,
-    );
+    let saved = tokio::task::spawn_blocking(move || {
+        let cache = directory_cache::DirectoryCache::at(cache);
+        cache.ensure()?;
+        cache.save_from(&data_dir)
+    })
+    .await;
+    match saved {
+        Ok(Ok(())) => CacheSave::Saved,
+        Ok(Err(error)) => CacheSave::Failed(error),
+        Err(join) => CacheSave::Failed(std::io::Error::other(join.to_string())),
+    }
 }
 
 #[cfg(test)]
@@ -702,7 +728,7 @@ mod tests {
             .await
             .expect("first boot publish");
         assert_eq!(first_id.as_str().len(), 56);
-        let exit = boot1.shutdown().await;
+        let exit = boot1.shutdown().await.exit;
         assert!(exit.is_some(), "teardown must observe a real reap");
         assert_only_directory_cache(parent.path());
 
@@ -760,7 +786,7 @@ mod tests {
         );
         wait_for_the_network(&mut boot).await;
         assert!(
-            boot.shutdown().await.is_some(),
+            boot.shutdown().await.exit.is_some(),
             "the stop observes a real reap"
         );
         assert_only_directory_cache(parent.path());
@@ -858,7 +884,7 @@ mod tests {
             .expect("start");
         let death = tokio::spawn(stopped.death());
         assert!(
-            stopped.shutdown().await.is_some(),
+            stopped.shutdown().await.exit.is_some(),
             "the stop observes a real reap"
         );
         assert_eq!(

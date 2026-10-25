@@ -21,7 +21,7 @@ use shekyl_levin::ResponseHeaders;
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, PowHash, Timestamp};
 use shekyl_wire::PowBlob;
 
-use crate::branch::{BranchView, Overlay};
+use crate::branch::{BranchView, Pending};
 use crate::model::{header_deadline, CloseCause, Command, HashClass, Job, ProveItem, Proved, Sync};
 use crate::peer::{cache_for, Checked, HeaderRequest, Run};
 
@@ -116,15 +116,16 @@ where
             }
             return Ok(());
         }
+        // Each blob with its identity, hashed once.
         let mut blobs = Vec::new();
         for bytes in &response.blobs {
             let Ok(pow) = PowBlob::read(bytes) else {
                 self.close(session, CloseCause::HeadersForm, out);
                 return Ok(());
             };
-            blobs.push(pow);
+            blobs.push((pow.identity(), pow));
         }
-        let parent = blobs[0].header.previous;
+        let parent = blobs[0].1.header.previous;
         let frontier = self
             .header_request
             .as_ref()
@@ -159,12 +160,12 @@ where
             return Ok(());
         }
         let mut previous = parent;
-        for (index, pow) in blobs.iter().enumerate() {
+        for (index, (hash, pow)) in blobs.iter().enumerate() {
             if index > 0 && pow.header.previous != previous {
                 self.close(session, CloseCause::HeadersForm, out);
                 return Ok(());
             }
-            previous = pow.identity();
+            previous = *hash;
         }
         let parent_height = points
             .iter()
@@ -184,8 +185,7 @@ where
             }
         }
         let mut fresh = Vec::new();
-        for pow in blobs {
-            let hash = pow.identity();
+        for (hash, pow) in blobs {
             if self.tree.contains(hash) {
                 // The session supplied a header already in `T`. Its
                 // frontier is that header, which is what it can serve.
@@ -204,12 +204,57 @@ where
             if points.iter().any(|(_, known)| *known == hash) {
                 continue;
             }
-            fresh.push(pow);
+            fresh.push((hash, pow));
         }
         if fresh.is_empty() {
             self.finish_run(session, response.more, now, out);
             return Ok(());
         }
+        // The first new header hangs off `parent`, or off the last header
+        // skipped above, which `T` or the locator places.
+        let (base, base_height) = {
+            let previous = fresh[0].1.header.previous;
+            if previous == parent {
+                (parent, parent_height)
+            } else {
+                let placed = self.tree.connecting(previous).or_else(|| {
+                    points
+                        .iter()
+                        .find(|(_, hash)| *hash == previous)
+                        .map(|(height, _)| *height)
+                });
+                let Some(height) = placed else {
+                    self.close(session, CloseCause::HeadersForm, out);
+                    return Ok(());
+                };
+                (previous, height)
+            }
+        };
+        // A run is one chain. A response that does not continue the
+        // session's run starts a new run from its own base.
+        let continues = self
+            .peers
+            .get(&session)
+            .and_then(|s| s.run.as_ref())
+            .map(|run| {
+                run.chain
+                    .checked
+                    .last()
+                    .map_or(run.chain.parent, |c| c.hash)
+                    == base
+            });
+        if continues == Some(false) {
+            self.drop_run(session);
+        }
+        // Pending headers are judged above the run's own parent, in `T` or
+        // on main, so a height below the run is read where it lives.
+        let (anchor, anchor_height) = self
+            .peers
+            .get(&session)
+            .and_then(|s| s.run.as_ref())
+            .map_or((base, base_height), |run| {
+                (run.chain.parent, run.chain.parent_height)
+            });
         let cap = self.cap();
         let local_height = self.local.and_then(|local| local.height);
         let depth = fork_depth(local_height, parent_height);
@@ -240,10 +285,19 @@ where
         {
             return Ok(());
         }
-        let mut overlay = self.overlay_of(session);
-        let mut accepted = Vec::new();
-        for pow in fresh {
-            let view = self.view_for(main, parent, parent_height, &overlay);
+        let mut accepted: Vec<Checked> = Vec::new();
+        for (hash, pow) in fresh {
+            let earlier = self
+                .peers
+                .get(&session)
+                .and_then(|s| s.run.as_ref())
+                .map_or(&[][..], |run| run.chain.checked.as_slice());
+            let view = self.view_for(
+                main,
+                anchor,
+                anchor_height,
+                Pending::new(earlier, &accepted),
+            );
             let connecting = view
                 .tip()?
                 .map(|tip| tip.height + BlockCount::ONE)
@@ -284,7 +338,6 @@ where
                     }
                 },
             };
-            let hash = pow.identity();
             let checked = Checked {
                 hash,
                 height: prospect.connecting,
@@ -295,12 +348,6 @@ where
                 header: pow.header.clone(),
                 pow,
             };
-            overlay.push(Overlay {
-                height: checked.height,
-                hash: checked.hash,
-                header: checked.header.clone(),
-                work: checked.work,
-            });
             accepted.push(checked);
         }
         let claim = self
@@ -314,7 +361,7 @@ where
             run.adopt_geometry(past_cap);
             run
         } else if let Some(state) = self.peers.get_mut(&session) {
-            state.run = Some(Run::open(parent, parent_height, accepted, past_cap));
+            state.run = Some(Run::open(base, base_height, accepted, past_cap));
             state.run.as_mut().expect("just inserted")
         } else {
             return Ok(());
@@ -419,6 +466,19 @@ where
                     return Ok(());
                 }
                 Proved::Formed(formed) => {
+                    // A job proves the run's headers in order from its first
+                    // unproven one. A run cut back while the job ran no
+                    // longer holds this header there: the rest of the job is
+                    // not the run's, and the run is planned again.
+                    let in_place = self
+                        .peers
+                        .get(&session)
+                        .and_then(|s| s.run.as_ref())
+                        .and_then(|run| run.chain.checked.get(run.chain.proven))
+                        .is_some_and(|next| next.hash == formed.hash());
+                    if !in_place {
+                        break;
+                    }
                     let judged = self.judge_formed(main, session, formed);
                     match judged {
                         Judged::View(fault) => return Err(fault),
@@ -615,9 +675,8 @@ where
         {
             self.header_request = None;
         }
-        self.outstanding
-            .retain(|arrival| arrival.session != session);
-        self.held.retain(|arrival| arrival.session != session);
+        self.outstanding.drop_session(session);
+        self.held.drop_session(session);
         self.served.retain(|_, who| *who != session);
     }
 
@@ -650,51 +709,12 @@ where
         (self.rules)(at).reorg_cap()
     }
 
-    fn overlay_before(&self, session: K, hash: BlockHash) -> Vec<Overlay> {
-        self.peers
-            .get(&session)
-            .and_then(|s| s.run.as_ref())
-            .map(|run| {
-                run.chain
-                    .checked
-                    .iter()
-                    .take_while(|c| c.hash != hash)
-                    .map(|c| Overlay {
-                        height: c.height,
-                        hash: c.hash,
-                        header: c.header.clone(),
-                        work: c.work,
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    fn overlay_of(&self, session: K) -> Vec<Overlay> {
-        self.peers
-            .get(&session)
-            .and_then(|s| s.run.as_ref())
-            .map(|run| {
-                run.chain
-                    .checked
-                    .iter()
-                    .map(|c| Overlay {
-                        height: c.height,
-                        hash: c.hash,
-                        header: c.header.clone(),
-                        work: c.work,
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
     fn view_for<'a, 'id, H: HeaderView<'id>>(
         &'a self,
         main: &'a H,
         parent: BlockHash,
         parent_height: BlockHeight,
-        overlay: &'a [Overlay],
+        pending: Pending<'a>,
     ) -> BranchView<'a, H> {
         let base = if let Some(placed) = self.tree.placement(parent) {
             BranchView::above(main, &self.tree, parent, placed.height, placed.fork)
@@ -703,7 +723,7 @@ where
         } else {
             BranchView::on_main(main, parent, parent_height)
         };
-        base.with_run(overlay)
+        base.with_run(pending)
     }
 
     fn seed_of<'id, H: HeaderView<'id>>(
@@ -725,27 +745,15 @@ where
         session: K,
         formed: &FormedHeader,
     ) -> Judged<H::Fault> {
+        let Some(run) = self.peers.get(&session).and_then(|s| s.run.as_ref()) else {
+            return Judged::Gone;
+        };
+        // `formed` is `checked[proven]` (`on_proven`), so the headers
+        // before it are this slice.
+        let before = &run.chain.checked[..run.chain.proven.min(run.chain.checked.len())];
         let parent = formed.previous();
-        let overlay = self.overlay_before(session, formed.hash());
-        let parent_height = self
-            .tree
-            .placement(parent)
-            .map(|p| p.height)
-            .or_else(|| {
-                self.peers
-                    .get(&session)
-                    .and_then(|s| s.run.as_ref())
-                    .map(|run| {
-                        run.chain
-                            .checked
-                            .iter()
-                            .find(|c| c.hash == parent)
-                            .map(|c| c.height)
-                            .unwrap_or(run.chain.parent_height)
-                    })
-            })
-            .unwrap_or(BlockHeight::ZERO);
-        let view = self.view_for(main, parent, parent_height, &overlay);
+        let parent_height = before.last().map_or(run.chain.parent_height, |c| c.height);
+        let view = self.view_for(main, parent, parent_height, Pending::new(before, &[]));
         match shekyl_chain_rules::judge_header(formed, &view, &formed.rule_set(), &self.trust) {
             Ok(Ok(judged)) => Judged::Ok(Box::new(judged)),
             Ok(Err(refused)) => Judged::Refused(refused.rule),

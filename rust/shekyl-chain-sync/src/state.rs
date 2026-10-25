@@ -8,7 +8,7 @@
 //! replaces one of these.
 
 use shekyl_difficulty::CumulativeDifficulty;
-use shekyl_types::BlockHeight;
+use shekyl_types::{BlockHeight, ChainCount};
 
 /// What sync publishes. Derived on every change from verified work, the
 /// sessions, and the fill. A claim's value never appears here.
@@ -22,6 +22,8 @@ pub enum SyncState {
         have: CumulativeDifficulty,
         /// Work of the best verified chain.
         best: CumulativeDifficulty,
+        /// The best verified chain's block count: what sync works towards.
+        target: ChainCount,
     },
     /// On the best verified chain, while the backward fill is short of
     /// its checkpoint. `verified_to` is the fill's descending frontier.

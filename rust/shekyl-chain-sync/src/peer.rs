@@ -25,6 +25,7 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use shekyl_chain_rules::{seed_height, FormAttempt, HeaderJudged, RuleSet, Target};
+use shekyl_difficulty::SEEDHASH_EPOCH_LAG;
 use shekyl_types::{BlockHash, BlockHeight};
 use shekyl_wire::{BlockBody, PowBlob};
 
@@ -125,6 +126,18 @@ pub(crate) struct Chain {
     pub attempt: FormAttempt,
 }
 
+impl Chain {
+    /// The index of the header at `height`, in O(1): `checked` is one
+    /// chain, contiguous by height, so a height is its offset from the
+    /// first header. `None` when the run does not hold that height.
+    pub(crate) fn index_at(&self, height: BlockHeight) -> Option<usize> {
+        crate::branch::count_pending_read();
+        let first = self.checked.first()?.height.to_raw();
+        let index = usize::try_from(height.to_raw().checked_sub(first)?).ok()?;
+        (self.checked.get(index)?.height == height).then_some(index)
+    }
+}
+
 /// The run's mode. The variants that hash carry the proof job. The
 /// variants that withhold headers carry those headers.
 pub(crate) enum Mode {
@@ -158,7 +171,10 @@ pub(crate) enum Mode {
     },
 }
 
-/// Headers received and not yet part of `T`.
+/// One chain of headers a session served, above its parent (in `T` or on
+/// main), and the mode that says what is done with them. A reachable
+/// run's proven headers are also in `T`; it keeps them, so its chain runs
+/// unbroken from the parent its view is based on.
 pub(crate) struct Run {
     pub chain: Chain,
     mode: Mode,
@@ -361,17 +377,19 @@ pub(crate) fn cache_for(run: &Run, index: usize) -> Option<CachePlan> {
     if on_main {
         return Some(CachePlan::Main(checked.seed));
     }
+    // A branch seed is earned once (CS-Q2 step 3): when the seed header
+    // and the lag after it are proven, which is every header before the
+    // first one that names the seed. The cache may then be built, and every
+    // later header under that seed is hashed in the same job.
     let seed_at = seed_height(checked.height)?;
-    let seed_index = run
-        .chain
-        .checked
-        .iter()
-        .position(|c| c.height == seed_at || c.hash == checked.seed)?;
-    if seed_index < run.chain.proven && index <= run.chain.proven {
-        Some(CachePlan::Branch(checked.seed))
-    } else {
-        None
-    }
+    let first_named = BlockHeight::from_raw(
+        seed_at
+            .to_raw()
+            .saturating_add(SEEDHASH_EPOCH_LAG)
+            .saturating_add(1),
+    );
+    let first_named = run.chain.index_at(first_named)?;
+    (first_named <= run.chain.proven).then_some(CachePlan::Branch(checked.seed))
 }
 
 /// One open peer.
@@ -384,8 +402,10 @@ pub(crate) struct Peer<K> {
     pub inventory: Inventory,
     /// The header run. Absent when this peer is not extending a fork.
     pub run: Option<Run>,
-    /// This peer's own header follow-up: the run's next locator, or a
-    /// relocate. The coordinator's one frontier request is not stored here.
+    /// This peer's own header follow-up: the run's next locator, a
+    /// relocate, or the headers asked for an announcement whose parent
+    /// this node does not hold. One is in flight. The coordinator's one
+    /// frontier request is not stored here.
     pub follow_up: Option<HeaderRequest<K>>,
     /// The body span this peer is serving.
     pub span: Option<BodySpan>,

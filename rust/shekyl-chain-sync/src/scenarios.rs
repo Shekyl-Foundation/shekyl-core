@@ -599,12 +599,7 @@ fn an_unreadable_store_does_not_ask_for_the_body_again() {
                 .any(|command| matches!(command, Command::Offer { .. })),
             "an unreadable store offered: {out:?}"
         );
-        assert!(
-            sync.held
-                .iter()
-                .all(|arrival| arrival.header.hash() != hash),
-            "the body was held for a seat"
-        );
+        assert!(!sync.held.contains(hash), "the body was held for a seat");
         assert!(
             sync.outstanding.is_empty(),
             "the entry still holds the body"
@@ -650,27 +645,6 @@ fn cancelled_and_stopped_ask_for_the_block_again() {
         let (_, asked) = request_for(&out).expect("stopped is asked again");
         assert_eq!(asked, vec![*hash.as_bytes()]);
         assert!(sync.transit(1).is_some());
-    });
-}
-
-#[test]
-fn a_connected_announce_is_relayed() {
-    with_offer(|sync, view, tag, hash, _raw| {
-        let out = drive(
-            sync,
-            view,
-            Event::Entry {
-                tag,
-                outcome: Outcome::Connected { relay: true },
-            },
-        );
-        assert!(
-            out.iter().any(
-                |command| matches!(command, Command::Relay { hash: relayed } if *relayed == hash)
-            ),
-            "a connected announce was not relayed: {out:?}"
-        );
-        no_close(&out);
     });
 }
 
@@ -873,7 +847,7 @@ where
     }
 }
 
-fn with_offer<F>(f: F)
+pub(crate) fn with_offer<F>(f: F)
 where
     F: for<'a, 'id> FnOnce(
         &mut Sync<u8, fn(BlockHeight) -> RuleSet>,
