@@ -56,7 +56,7 @@ pub mod vanguards;
 
 pub use actor::{
     BootstrapReadiness, Command, CommandResult, ControlError, DeathSignal, DiskWrites,
-    EventReceiver, EventSink, ManagedTor, Signal, SocksPort, SystemDirectoryError,
+    EventReceiver, EventSink, ManagedTor, Signal, SocksPort, SocksTimeout, SystemDirectoryError,
     TorControlClient, TorControlClientConfig, TorExit, TorLaunch, EVENT_QUEUE_EVENTS,
 };
 pub use auth::{parse_authchallenge, read_cookie_file, AuthError, ServerHash, ServerNonce};

@@ -16,6 +16,12 @@ use tokio::sync::watch;
 
 pub use shekyl_dialer::TorLinkTally;
 
+/// The deadline every Tor dial runs under (`TOR_DIAL_WITHIN_NANOS`). The
+/// managed Tor's `SocksTimeout` sits below it, so Tor's own reply ends a dial
+/// it cannot attach before this deadline does (`TOR_SUPERVISOR.md` §4.2).
+pub const TOR_DIAL_WITHIN: std::time::Duration =
+    std::time::Duration::from_nanos(shekyl_transport_layer::spans::TOR_DIAL_WITHIN_NANOS);
+
 static TALLY: LazyLock<watch::Sender<TorLinkTally>> =
     LazyLock::new(|| watch::channel(TorLinkTally::default()).0);
 

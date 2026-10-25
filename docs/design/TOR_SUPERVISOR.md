@@ -602,6 +602,16 @@ set up.
 first, which is its purpose. Discovery and the pin gate run at every spawn
 (`TSR-F6`).
 
+The daemon's launch also passes `SocksTimeout`, 15 s inside the Tor dial
+deadline (`TOR_DIAL_WITHIN_NANOS`, 120 s, so 105 s; typed as
+`SocksTimeout::Below`, set from that constant, never a second number). Tor's
+default equals the deadline, so a dial on a blocked link ended as Tor's
+`0x06` or as the deadline's own timeout by race (§7, case A on 2026-10-25),
+and the two classes count differently (§4.2). Inside it, Tor's reply always
+comes first. Tor applies it locally; nothing on the network changes
+(`TSR-Q9`). The wallet's tor keeps Tor's default. It joins the closed list
+with its test (`the_managed_launch_surface_is_the_typed_options`).
+
 Teardown, as ruled: close the owning control connection (Tor exits on its
 close and, in the specification's words, "does not wait a while for circuits
 to close"), wait within `SHUTDOWN_GRACE`, kill (`TerminateProcess` on

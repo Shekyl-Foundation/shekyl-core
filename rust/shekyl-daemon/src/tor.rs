@@ -28,7 +28,7 @@ use shekyl_tor_control_client::binary::{
 };
 use shekyl_tor_control_client::control::{
     parse_bootstrap_progress, parse_event, parse_socks_listeners, parse_traffic_read,
-    BootstrapState, Command, ControlError, EventReceiver, EventSink,
+    BootstrapState, Command, ControlError, EventReceiver, EventSink, SocksTimeout,
 };
 use shekyl_tor_control_client::supervisor::{
     held_sentence, input_of, install_sentence, render, Action, Cause, Connectors, Core, DialTally,
@@ -43,6 +43,13 @@ use tokio::task::JoinHandle;
 
 /// A control reply this far past due is a process fault. Not a bootstrap limit.
 const REPLY_BOUND: Duration = Duration::from_secs(30);
+
+/// The managed Tor answers a SOCKS request it cannot attach just inside the
+/// Tor dial deadline, so the dial's class is Tor's reply, never a race with
+/// that deadline (`TOR_SUPERVISOR.md` §4.2).
+const SOCKS_TIMEOUT: SocksTimeout = SocksTimeout::Below {
+    dial_deadline: shekyl_ffi::tor_link::TOR_DIAL_WITHIN,
+};
 /// The onion's stream cap.
 const MAX_STREAMS: u16 = 8;
 /// `GETINFO` key for the bootstrap phase. One sample asks this and the listener.
@@ -522,15 +529,22 @@ impl Drive {
             return short;
         }
         let spawned = if let Some(directory) = self.kept.take() {
-            DaemonTorControl::spawn_into(directory, binary, self.events.clone(), REPLY_BOUND)
-                .await
-                .map_err(|failure| (failure.error, Some(failure.directory)))
+            DaemonTorControl::spawn_into(
+                directory,
+                binary,
+                self.events.clone(),
+                REPLY_BOUND,
+                SOCKS_TIMEOUT,
+            )
+            .await
+            .map_err(|failure| (failure.error, Some(failure.directory)))
         } else {
             match DaemonTorControl::spawn_keeping(DaemonTorConfig {
                 tor_binary: binary,
                 data_dir_parent: self.data_dir.clone(),
                 events: self.events.clone(),
                 reply_deadline: REPLY_BOUND,
+                socks_timeout: SOCKS_TIMEOUT,
             })
             .await
             {
@@ -801,6 +815,22 @@ fn input_of_ask(error: &DaemonTorStartError) -> Input {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The managed Tor answers inside the Tor dial deadline: a blocked link
+    /// is Tor's `0x06`, never a race with the deadline (case A, 2026-10-25:
+    /// both were 120 s and the outcomes alternated). Launching with Tor's
+    /// default, or setting it from another deadline, fails this.
+    #[test]
+    fn the_managed_tor_answers_inside_the_dial_deadline() {
+        let timeout: u64 = SOCKS_TIMEOUT
+            .as_arg()
+            .expect("the daemon sets it")
+            .parse()
+            .expect("whole seconds");
+        let deadline = shekyl_ffi::tor_link::TOR_DIAL_WITHIN.as_secs();
+        assert!(timeout < deadline, "{timeout} s inside {deadline} s");
+        assert!(timeout >= deadline / 2, "not far inside it");
+    }
 
     /// A control ask that never answers, the wedged-Tor case, does not hold
     /// a stop: the stop resolves the race and the driver folds `Shutdown`.
