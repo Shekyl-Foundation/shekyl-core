@@ -43,13 +43,22 @@ pub fn connectors(config: &DaemonConfig) -> Vec<ConnectorId> {
 }
 
 /// The descriptors the daemon reserves beyond the p2p's own inbound: the
-/// RPC connection cap and each configured connector's outbound target.
+/// RPC connection cap, and for each configured connector its outbound
+/// target plus its in-flight dial bound. A pending `Keep` counts toward the
+/// target, but a `Confirm` dial does not: at the target a connector can
+/// still hold its bound in `Confirm` dials, each one descriptor.
+/// *Records-was (to 2026-10-25): the target alone, one descriptor short per
+/// connector for a `Confirm` dial at target.*
 #[must_use]
 pub fn reserved_descriptors(config: &DaemonConfig) -> u64 {
     let rpc = u64::from(config.rpc.connections_max.get());
     connectors(config)
         .into_iter()
-        .map(|c| u64::from(shekyl_ffi::dialer_ffi::default_target(c)))
+        .map(|c| {
+            let bound =
+                u64::try_from(shekyl_ffi::dialer_ffi::in_flight_bound(c)).unwrap_or(u64::MAX);
+            u64::from(shekyl_ffi::dialer_ffi::default_target(c)).saturating_add(bound)
+        })
         .fold(rpc, u64::saturating_add)
 }
 
@@ -293,17 +302,19 @@ mod tests {
         shekyl_onion_v3::v3_onion_hostname(&b)
     }
 
-    /// The reservation is the RPC cap plus each configured connector's
-    /// outbound target: the sum the C++ ceiling computed from the dialer's
-    /// targets and the RPC instances' caps, now from the sections.
+    /// The reservation is the RPC cap plus, for each configured connector,
+    /// its outbound target and its in-flight dial bound: the most
+    /// descriptors its dials can hold, `Confirm` dials at target included.
     #[test]
-    fn the_reservation_is_the_rpc_cap_plus_each_connectors_target() {
+    fn the_reservation_is_the_rpc_cap_plus_each_connectors_target_and_bound() {
+        let held = |c: ConnectorId| {
+            u64::from(shekyl_ffi::dialer_ffi::default_target(c))
+                + u64::try_from(shekyl_ffi::dialer_ffi::in_flight_bound(c)).expect("small")
+        };
         let both = config(&["--rpc-connections-max", "25"]);
         assert_eq!(
             reserved_descriptors(&both),
-            25 + u64::from(shekyl_ffi::dialer_ffi::default_target(
-                ConnectorId::Clearnet
-            )) + u64::from(shekyl_ffi::dialer_ffi::default_target(ConnectorId::Tor))
+            25 + held(ConnectorId::Clearnet) + held(ConnectorId::Tor)
         );
         let offline = config(&[
             "--clearnet",

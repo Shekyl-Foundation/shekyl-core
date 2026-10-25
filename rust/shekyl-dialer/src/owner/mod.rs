@@ -47,7 +47,7 @@ use self::ready::{park, Bell};
 use crate::attempts::Attempts;
 use crate::bans::BanSnapshot;
 use crate::candidate::CandidateFilter;
-use crate::fill::{plan, Census, DialAim, DrawList, IN_FLIGHT_BOUND};
+use crate::fill::{in_flight_bound, plan, Census, DialAim, DrawList};
 use crate::memory::FailedAddresses;
 use crate::nonce::{HandshakeNonce, HandshakeNonceSet, InFlightNonce};
 use crate::pace::next_wake_nanos;
@@ -765,11 +765,11 @@ enum Wake {
 
 /// What the census says about an under-target wake that does not draw.
 /// `None` when the connector is not under its target: the watch clears.
-fn idle_if_undrawn(census: &Census) -> Option<IdleWhy> {
+fn idle_if_undrawn(census: &Census, bound: usize) -> Option<IdleWhy> {
     if census.target == 0 || census.kept >= census.target {
         return None;
     }
-    if census.in_flight >= IN_FLIGHT_BOUND {
+    if census.in_flight >= bound {
         return Some(IdleWhy::InFlight);
     }
     if census
@@ -836,7 +836,8 @@ fn plan_wake<R: RelayRng + ?Sized>(
             gray: seats.gray,
             gray_candidates: seats.gray_candidates,
         };
-        let undrawn = idle_if_undrawn(&census);
+        let bound = in_flight_bound(connector);
+        let undrawn = idle_if_undrawn(&census, bound);
         // Stranded: under the target, nothing in flight, nothing drawable.
         // The lists cannot yield another peer, so this wake re-admits and
         // dials nothing. One kept session is not a healthy connector
@@ -848,7 +849,7 @@ fn plan_wake<R: RelayRng + ?Sized>(
         let wake = if stranded {
             Wake::Recover
         } else {
-            match plan(&census, white_diversity_floor(), WHITE_REFILL_LINE) {
+            match plan(&census, white_diversity_floor(), WHITE_REFILL_LINE, bound) {
                 None => {
                     tracing::debug!("{connector:?} wake: no rule applies ({census:?})");
                     Wake::Idle

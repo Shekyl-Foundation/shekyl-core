@@ -39,7 +39,7 @@ pub mod store;
 pub use attempts::Attempts;
 pub use bans::BanSnapshot;
 pub use candidate::{CandidateFilter, Skip};
-pub use fill::{plan, Census, DialAim, DrawList, FillRule, Plan, IN_FLIGHT_BOUND};
+pub use fill::{in_flight_bound, plan, Census, DialAim, DrawList, FillRule, Plan};
 pub use memory::FailedAddresses;
 pub use nonce::{HandshakeNonce, HandshakeNonceSet, InFlightNonce};
 pub use owner::{session_of, Dialer, NotReady, Shared, SnapshotSource};

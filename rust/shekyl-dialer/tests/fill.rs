@@ -12,7 +12,7 @@
 
 use std::net::Ipv4Addr;
 
-use shekyl_dialer::{plan, Census, DialAim, DrawList, FillRule, Plan, IN_FLIGHT_BOUND};
+use shekyl_dialer::{plan, Census, DialAim, DrawList, FillRule, Plan};
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{
     white_diversity_floor, ConnectorId, DialOutcome, NetworkAddress, NoBans, Peerlist, RefusedSet,
@@ -22,6 +22,8 @@ use shekyl_peerlist::{
 /// A small floor and refill line, so the grid crosses both.
 const FLOOR: usize = 3;
 const REFILL: usize = 5;
+/// The bound the grid is read at: one dial in flight stops the wake.
+const BOUND: usize = 1;
 
 fn grid() -> Vec<Census> {
     let mut out = Vec::new();
@@ -91,7 +93,7 @@ fn each_rule_fires_exactly_in_its_condition() {
     let grid = grid();
     let mut seen = [0usize; 4];
     for census in &grid {
-        let got = plan(census, FLOOR, REFILL);
+        let got = plan(census, FLOOR, REFILL, BOUND);
         assert_eq!(got, expected(census), "{census:?}");
         if let Some(plan) = got {
             seen[match plan.rule {
@@ -117,7 +119,7 @@ fn a_node_with_no_kept_session_keeps_its_next_success_whatever_the_list() {
             continue;
         }
         let drawable = census.white_candidates > 0 || census.gray_candidates > 0;
-        match plan(&census, FLOOR, REFILL) {
+        match plan(&census, FLOOR, REFILL, BOUND) {
             Some(plan) => {
                 assert!(drawable);
                 assert_eq!(plan.aim, DialAim::Keep, "{census:?}");
@@ -134,7 +136,7 @@ fn a_node_with_no_kept_session_keeps_its_next_success_whatever_the_list() {
 #[test]
 fn a_keep_under_target_draws_only_a_list_at_or_above_the_floor() {
     for census in grid() {
-        let Some(plan) = plan(&census, FLOOR, REFILL) else {
+        let Some(plan) = plan(&census, FLOOR, REFILL, BOUND) else {
             continue;
         };
         if plan.rule != FillRule::UnderTarget {
@@ -151,7 +153,7 @@ fn a_keep_under_target_draws_only_a_list_at_or_above_the_floor() {
 #[test]
 fn a_confirm_never_takes_a_slot_and_never_runs_at_or_above_the_refill_line() {
     for census in grid() {
-        let Some(plan) = plan(&census, FLOOR, REFILL) else {
+        let Some(plan) = plan(&census, FLOOR, REFILL, BOUND) else {
             continue;
         };
         if plan.aim != DialAim::Confirm {
@@ -171,7 +173,7 @@ fn at_or_over_the_target_no_dial_is_a_keep() {
         if census.kept == 0 || census.kept < census.target {
             continue;
         }
-        if let Some(plan) = plan(&census, FLOOR, REFILL) {
+        if let Some(plan) = plan(&census, FLOOR, REFILL, BOUND) {
             assert_eq!(plan.aim, DialAim::Confirm, "{census:?}");
         }
     }
@@ -180,7 +182,7 @@ fn at_or_over_the_target_no_dial_is_a_keep() {
 #[test]
 fn a_white_list_with_no_candidate_is_never_drawn() {
     for census in grid() {
-        if let Some(plan) = plan(&census, FLOOR, REFILL) {
+        if let Some(plan) = plan(&census, FLOOR, REFILL, BOUND) {
             match plan.list {
                 DrawList::White => assert!(census.white_candidates > 0, "{census:?}"),
                 DrawList::Gray => assert!(census.gray_candidates > 0, "{census:?}"),
@@ -199,7 +201,7 @@ fn a_white_list_with_no_candidate_is_never_drawn() {
         gray_candidates: 2,
     };
     assert_eq!(
-        plan(&census, FLOOR, REFILL).map(|p| p.list),
+        plan(&census, FLOOR, REFILL, BOUND).map(|p| p.list),
         Some(DrawList::Gray)
     );
 }
@@ -207,11 +209,11 @@ fn a_white_list_with_no_candidate_is_never_drawn() {
 #[test]
 fn a_dial_in_flight_or_a_target_of_zero_dials_nothing() {
     for mut census in grid() {
-        census.in_flight = IN_FLIGHT_BOUND;
-        assert_eq!(plan(&census, FLOOR, REFILL), None, "{census:?}");
+        census.in_flight = BOUND;
+        assert_eq!(plan(&census, FLOOR, REFILL, BOUND), None, "{census:?}");
         census.in_flight = 0;
         census.target = 0;
-        assert_eq!(plan(&census, FLOOR, REFILL), None, "{census:?}");
+        assert_eq!(plan(&census, FLOOR, REFILL, BOUND), None, "{census:?}");
     }
 }
 
@@ -280,7 +282,7 @@ impl Node {
     fn wake(&mut self) -> Option<Plan> {
         self.now += 1;
         let census = self.census();
-        let plan = plan(&census, white_diversity_floor(), WHITE_REFILL_LINE)?;
+        let plan = plan(&census, white_diversity_floor(), WHITE_REFILL_LINE, 1)?;
         let address = match plan.list {
             DrawList::Gray => self
                 .list
