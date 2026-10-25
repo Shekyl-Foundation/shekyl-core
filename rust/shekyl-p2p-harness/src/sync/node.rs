@@ -75,6 +75,8 @@ pub struct Node {
     pub dial: Arc<PeerDial>,
     /// The node's hand clock.
     pub clock: ManualClock,
+    /// The published sync state: the handle a node's consumers read.
+    pub state: tokio::sync::watch::Sender<SyncState>,
     /// The substrate's measurements: one sink for ingest and the executor.
     pub metrics: Arc<Metrics>,
     /// What the stub handler recorded.
@@ -151,6 +153,8 @@ impl Node {
             std::thread::spawn(move || run_stub(&hub, &stub_rx, &stub))
         };
 
+        // The published state, as the node's handle holds it.
+        let state = tokio::sync::watch::Sender::new(SyncState::NoView);
         let engine = EngineService::start(clock.clone());
         let timer = engine
             .handle()
@@ -170,6 +174,7 @@ impl Node {
             rng,
             pool_hashes: Arc::new(Vec::new),
             routed: routed_rx,
+            state: state.clone(),
         };
         // The owner's log lines carry the node's tag.
         let span = tracing::info_span!("node", tag);
@@ -181,6 +186,7 @@ impl Node {
             hub,
             dial,
             clock,
+            state,
             metrics,
             stub,
             engine,
@@ -198,15 +204,37 @@ impl Node {
     ///
     /// The channel was not admitted.
     pub fn connect(&mut self, peer: Box<dyn SyncPeer>, claim: Option<SyncPayload>) -> SocketId {
+        self.session(peer, claim, Direction::Outbound)
+    }
+
+    /// A scripted peer that dialed this node. Its handshake is the C++
+    /// handler's, so no claim is posted: the claim arrives in the peer's
+    /// handshake request, which the router's claim tap copies to the owner.
+    ///
+    /// # Panics
+    ///
+    /// The channel was not admitted.
+    pub fn accept(&mut self, peer: Box<dyn SyncPeer>) -> SocketId {
+        self.session(peer, None, Direction::Inbound)
+    }
+
+    fn session(
+        &mut self,
+        peer: Box<dyn SyncPeer>,
+        claim: Option<SyncPayload>,
+        direction: Direction,
+    ) -> SocketId {
         let ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, self.next_ip));
         self.next_ip += 1;
         self.dial.expect(ip, peer);
         let endpoint = Endpoint::Clearnet {
             ip,
             port: 18080,
-            direction: Direction::Outbound,
+            direction,
         };
         let attached = self.hub.connect(&endpoint).expect("admitted");
+        // The Levin handshake is the stub's to finish; it has.
+        self.hub.session_established(attached.id);
         if let Some(sync) = claim {
             self.hub
                 .post_handshake_result(attached.id, endpoint.connector(), sync);

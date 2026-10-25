@@ -35,9 +35,9 @@ use shekyl_economics::params::{SCALE, TX_VOLUME_WINDOW};
 use shekyl_economics::{
     advance_already_generated, base_block_reward, block_reward_with_penalty, calc_burn_pct,
     calc_release_multiplier, corrected_fee_ladder, correction_factors_at, effective_emission,
-    paid_block_reward, projected_already_generated, relay_fee_floor, tail_subsidy_per_block,
-    CirculatingSupply, EconomicParams, FeeCorrection, FeeLadder, TxVolume, BLOCKS_PER_YEAR,
-    RELAY_ADMISSION_SLACK_BP, RELAY_FLOOR_REFERENCE_TX_WEIGHT,
+    emission_share_at, paid_block_reward, projected_already_generated, relay_fee_floor,
+    tail_subsidy_per_block, CirculatingSupply, EconomicParams, FeeCorrection, FeeLadder, TxVolume,
+    BLOCKS_PER_YEAR, RELAY_ADMISSION_SLACK_BP, RELAY_FLOOR_REFERENCE_TX_WEIGHT,
 };
 use shekyl_units::AtomicUnits;
 
@@ -269,7 +269,15 @@ pub(crate) struct AgeState {
 }
 
 pub(crate) fn age_state(age_years: u64, params: &EconomicParams) -> AgeState {
-    let height = age_years * BLOCKS_PER_YEAR;
+    state_at_height(age_years * BLOCKS_PER_YEAR, params)
+}
+
+/// The projected trajectory's state at one height. [`age_state`] is this at
+/// a whole year. The reachable extremes also read it at block 1, where the
+/// staker share starts, and at the first height where the share has decayed
+/// to zero: `C` is lowest at the one and highest at the other, and a sample
+/// on whole years sees neither (`ECONOMICS_SIM_PHASE0.md` §P0.1).
+pub(crate) fn state_at_height(height: u64, params: &EconomicParams) -> AgeState {
     let ag = projected_already_generated(height, params).expect("projected ag");
     let base_reward = base_block_reward(ag, params).expect("base reward");
     AgeState {
@@ -277,6 +285,33 @@ pub(crate) fn age_state(age_years: u64, params: &EconomicParams) -> AgeState {
         ag,
         base_reward,
     }
+}
+
+/// The height at which production's staker share is lowest, where `C` is at
+/// its structural maximum.
+///
+/// The share turns on at block 1 and takes its year values at
+/// `1 + k·BLOCKS_PER_YEAR`, `k` whole years of decay; between two of those
+/// it interpolates down to the later one, so the lowest share is at one of
+/// them. Each year multiplies the share by `annual_decay / SCALE` and
+/// truncates, which strictly lowers a positive share whenever the decay is
+/// below `SCALE`. The walk therefore stops at the first year that does not
+/// lower the share: the first zero on the shipped schedule (year 97), and
+/// year 0 on a schedule with no decay. It ends within `initial_share + 1`
+/// steps for any decay, with no bound to choose.
+fn lowest_share_height() -> u64 {
+    let year_height = |years: u64| 1 + years * BLOCKS_PER_YEAR;
+    let mut years = 0;
+    let mut share = emission_share_at(year_height(0));
+    while share > 0 {
+        let next = emission_share_at(year_height(years + 1));
+        if next >= share {
+            break;
+        }
+        years += 1;
+        share = next;
+    }
+    year_height(years)
 }
 
 // ---------------------------------------------------------------------------
@@ -662,8 +697,16 @@ pub fn report() -> FeeLadderReport {
             }
         }
     }
-    // The tenth grid excludes genesis. The projected trajectory includes it.
-    for &(_, st) in &states {
+    // The tenth grid excludes genesis. The projected trajectory includes it,
+    // and the two heights the year grid misses: block 1, where the staker
+    // share is at its start and `C` at its low end, and the height where the
+    // share is lowest (zero on the shipped schedule) and `C` at its
+    // structural maximum.
+    let boundaries = [
+        state_at_height(1, &params),
+        state_at_height(lowest_share_height(), &params),
+    ];
+    for st in states.iter().map(|(_, st)| *st).chain(boundaries) {
         for &v in &SURFACE_VOLUMES {
             let c = correction_factor(v, st.ag, st.height, &params).c_scaled;
             c_min = c_min.min(c);
@@ -945,5 +988,15 @@ mod tests {
             settlement(CONVERGED_AMPLITUDE_BP + 1, 2, (10_000, 10_051), unit),
             Settlement::Oscillating
         );
+    }
+
+    /// The lowest-share height is where the shipped share first reaches zero:
+    /// zero there, positive one year of decay earlier.
+    #[test]
+    fn the_lowest_share_height_is_the_first_whole_year_of_zero_share() {
+        let h = lowest_share_height();
+        assert_eq!(emission_share_at(h), 0);
+        assert!(h > BLOCKS_PER_YEAR, "the shipped share decays for years");
+        assert!(emission_share_at(h - BLOCKS_PER_YEAR) > 0);
     }
 }

@@ -84,8 +84,11 @@
 # cryptographic domain separation for our purposes: RandomX Argon salt
 # (RANDOMX_ARGON_SALT, RandomX upstream), Tor SAFECOOKIE HMAC keys, the .onion
 # checksum prefix, file/wire magics (b"SWSP", b"SHEKYLWT/WS", b"SSP1"
-# superscalar-program wire magic, portable_storage header). Rowed at the
-# bottom with mech=x so the exclusion is auditable. (The C++ epee macros
+# superscalar-program wire magic, portable_storage header), and the two Noise
+# protocol names (the RPC channel's and the P2P handshake's: mixed into a
+# handshake hash, but standard pattern names, not Shekyl domain strings).
+# Rowed at the bottom with mech=x so the exclusion is auditable; the gate's
+# third tripwire rejects a Noise protocol-name constant with no x row. (The C++ epee macros
 # PORTABLE_STORAGE_SIGNATUREA/B in contrib/epee are the same 8-byte signature
 # as the first 8 bytes of `shekyl-portable-storage::HEADER`; the registry is
 # a Rust-workspace census, so only the Rust defining site is rowed.)
@@ -283,3 +286,5 @@ x	SHEKYLWT	rust/shekyl-crypto-pq/src/wallet_envelope.rs	(envelope magic)	exclude
 x	SHEKYLWS	rust/shekyl-crypto-pq/src/wallet_envelope.rs	(envelope magic)	excluded		file magic
 x	SSP1	rust/shekyl-pow-randomx/src/superscalar.rs	SUPERSCALAR_PROGRAM_WIRE_MAGIC	excluded		RandomX superscalar-program wire-format tag (ASCII SSP1 = SuperScalar Program v1); format identity, not a hash domain
 x	\x01\x11\x01\x01\x01\x01\x02\x01\x01	rust/shekyl-portable-storage/src/lib.rs	HEADER	excluded		portable_storage 9-byte header+version magic (`shekyl-portable-storage::HEADER`, LV-2a); not a hash domain. Homegrown copies in rpc-client/engine-core deleted with those parsers.
+x	Noise_hybridXK_25519+MLKEM768_ChaChaPoly_BLAKE2s	rust/shekyl-rpc-channel/src/handshake.rs	PROTOCOL_NAME	excluded		Noise protocol name: mixed into a handshake hash, and a standard pattern name, not a Shekyl domain string (RPC_CHANNEL.md section 13, RT-W9; one reason for both protocol names, RT-O22); the RPC channel's handshake
+x	Noise_NNhfs_25519+MLKEM768_ChaChaPoly_BLAKE2s	rust/shekyl-p2p-transport/src/noise.rs	PROTOCOL_NAME	excluded		Noise protocol name: mixed into a handshake hash, and a standard pattern name, not a Shekyl domain string (RPC_CHANNEL.md section 13, RT-W9; one reason for both protocol names, RT-O22); the P2P handshake

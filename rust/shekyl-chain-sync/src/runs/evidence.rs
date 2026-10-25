@@ -35,27 +35,23 @@ where
         let Some(height) = local.height else {
             return;
         };
-        for hash in self.tree.tip_hashes() {
-            let Some(placed) = self.tree.placement(hash) else {
-                continue;
-            };
-            let depth = fork_depth(Some(height), placed.fork);
-            let work = self
-                .tree
-                .record(hash)
-                .map(|r| r.cumulative_difficulty)
-                .unwrap_or(CumulativeDifficulty::ZERO);
-            if work > local.work && depth > cap {
-                out.push(Command::RaiseAlarm {
-                    fork_at: placed.fork,
-                    tip: hash,
-                    work,
-                });
-                self.alarm_sent = true;
-                self.tree.mark_invalid(hash);
-                return;
-            }
-        }
+        // Only a tip heavier than the local chain can raise it, heaviest
+        // first: the evidence names the heaviest chain past the cap.
+        let past_cap = self
+            .tree
+            .tips_heavier_than(local.work)
+            .find_map(|(hash, work)| {
+                self.tree
+                    .placement(hash)
+                    .filter(|placed| fork_depth(Some(height), placed.fork) > cap)
+                    .map(|placed| (hash, work, placed.fork))
+            });
+        let Some((tip, work, fork_at)) = past_cap else {
+            return;
+        };
+        out.push(Command::RaiseAlarm { fork_at, tip, work });
+        self.alarm_sent = true;
+        self.tree.mark_invalid(tip);
     }
 
     pub(super) fn evidence_alarm(&mut self, session: K, out: &mut Vec<Command<K>>) {
@@ -252,7 +248,7 @@ where
             .filter_map(|c| seed_height(c.height))
             .collect();
         for seed in seeds {
-            if let Some(idx) = run.chain.checked.iter().position(|c| c.height == seed) {
+            if let Some(idx) = run.chain.index_at(seed) {
                 from = from.min(idx);
             }
         }
@@ -292,11 +288,9 @@ where
                 .and_then(|s| s.run.as_ref())
                 .and_then(|run| {
                     run.chain
-                        .checked
-                        .iter()
-                        .enumerate()
-                        .find(|(index, c)| c.height == height && *index < run.chain.proven)
-                        .map(|(_, c)| c.work)
+                        .index_at(height)
+                        .filter(|index| *index < run.chain.proven)
+                        .map(|index| run.chain.checked[index].work)
                 })
         });
         let take = holder_work.is_none_or(|held| work > held);

@@ -67,9 +67,9 @@ pub(crate) struct PricedBlock<'a> {
     pub(crate) fee_point: FeePoint<'a>,
     pub(crate) tx: OrdinaryTx,
     pub(crate) filled: Filled,
-    /// The block as production prices it, at the bodies' weight: the fill
-    /// lists no coinbase, so its bytes are not in the weight the penalty
-    /// reads (§4 of the design document). The ledger advances by
+    /// The block as production prices it, at the weight the fill reports:
+    /// the bodies and the coinbase reserve, which the node's template passes
+    /// too (`shekyl_block_template::Fill`). The ledger advances by
     /// [`Self::paid_reward`]; the fill's own copy of that figure is checked
     /// against it in [`ChainCursor::price`] and is not what a fold accumulates.
     pub(crate) paid: PaidEmission,

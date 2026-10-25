@@ -91,7 +91,7 @@ where
             };
             let tag = self.next_tag;
             self.next_tag = self.next_tag.saturating_add(1);
-            self.held.push(BoundArrival {
+            self.held.insert(BoundArrival {
                 tag,
                 session,
                 header: judged,
@@ -199,18 +199,10 @@ where
             // An arrival still with the entry ends the walk. The entry works
             // each offer apart, so a span offered over one still connecting
             // would find its parent unheld and come back unlinked.
-            if self
-                .outstanding
-                .iter()
-                .any(|arrival| arrival.header.hash() == hash)
-            {
+            if self.outstanding.contains(hash) {
                 break;
             }
-            if !self
-                .held
-                .iter()
-                .any(|arrival| arrival.header.hash() == hash)
-            {
+            if !self.held.contains(hash) {
                 break;
             }
             wanted.push(hash);
@@ -221,14 +213,9 @@ where
         }
         let mut arrivals = Vec::with_capacity(wanted.len());
         for hash in wanted {
-            let Some(pos) = self
-                .held
-                .iter()
-                .position(|arrival| arrival.header.hash() == hash)
-            else {
+            let Some(arrival) = self.held.take(hash) else {
                 break;
             };
-            let arrival = self.held.remove(pos);
             self.served.insert(arrival.header.hash(), arrival.session);
             arrivals.push(arrival);
         }
@@ -237,7 +224,9 @@ where
         }
         let spent = u32::try_from(arrivals.len()).unwrap_or(seats);
         self.seats = Some(seats.saturating_sub(spent));
-        self.outstanding.extend(arrivals.iter().cloned());
+        for arrival in &arrivals {
+            self.outstanding.insert(arrival.clone());
+        }
         out.push(Command::Offer { arrivals });
     }
 
@@ -281,14 +270,8 @@ where
     fn body_accounted(&self, hash: BlockHash) -> bool {
         self.accepted.contains(&hash)
             || self.span_has(hash)
-            || self
-                .held
-                .iter()
-                .any(|arrival| arrival.header.hash() == hash)
-            || self
-                .outstanding
-                .iter()
-                .any(|arrival| arrival.header.hash() == hash)
+            || self.held.contains(hash)
+            || self.outstanding.contains(hash)
     }
 
     fn span_has(&self, hash: BlockHash) -> bool {

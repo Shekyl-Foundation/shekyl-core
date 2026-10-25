@@ -52,9 +52,10 @@
 mod data_dir;
 pub mod ephemeral;
 
+pub use data_dir::{space_needed, sweep_stale_data_dirs, TOR_WRITE_HEADROOM};
 pub use ephemeral::{
-    DaemonTorConfig, DaemonTorControl, DaemonTorPublishError, DaemonTorStartError, KeptDataDir,
-    LaunchFailure, OnionSeed, SpawnError, TorDeath,
+    CacheSave, DaemonTorConfig, DaemonTorControl, DaemonTorPublishError, DaemonTorStartError,
+    KeptDataDir, LaunchFailure, OnionSeed, SpawnError, Teardown, TorDeath,
 };
 pub use shekyl_tor_control_client::control::OnionPow;
 // Re-exported so the daemon's start seam (`shekyl-daemon`'s `tor.rs`) names
