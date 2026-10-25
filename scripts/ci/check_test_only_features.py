@@ -423,9 +423,11 @@ MET_TRIGGER_UNGOVERNED_AT_REGISTRATION: dict[str, tuple[str, frozenset[Hit]]] = 
     ),
     "shekyl-p-serve": (
         "FINDING: test-signer enabled on NORMAL edges by shekyl-sp-t3-spike (direct) and shekyl-p-host (forwarded via its own test-signer). "
-        "The shekyl-archival-fetch-sched dev edge (2026-10-08) is the scheduler's loopback test signing a real serve behind the SOCKS shim — the same shape as shekyl-p-fetch's.",
+        "The shekyl-archival-fetch-sched dev edge (2026-10-08) is the scheduler's loopback test signing a real serve behind the SOCKS shim — the same shape as shekyl-p-fetch's. "
+        "The shekyl-bundle-producer dev edge (2026-10-25, SO-D12 increment 4c) is the producer's challenge read against a receipt-signing serve behind the same shim — the same shape again.",
         frozenset({
             ("test-signer", "shekyl-archival-fetch-sched", "dev"),
+            ("test-signer", "shekyl-bundle-producer", "dev"),
             ("test-signer", "shekyl-p-fetch", "dev"),
             ("test-signer", "shekyl-p-host", "normal"),
             ("test-signer", "shekyl-sp-t3-spike", "normal"),
