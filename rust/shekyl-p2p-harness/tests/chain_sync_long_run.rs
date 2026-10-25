@@ -143,9 +143,15 @@ async fn hash_rate_per_slot() {
                 .map(|item| ProveItem { seed, ..item })
                 .collect()
         };
+        // A job with no items still prepares the cache and hashes nothing,
+        // so this interval is the derivation. The one-proof warm-up is
+        // outside it: folding that proof in overstates the derivation,
+        // most on the floor device where one hash dominates the build.
         let started = Instant::now();
-        let warm = prove(Arc::clone(&executor), HashClass::HeaderPow, plan, job(1)).await;
+        let derived = prove(Arc::clone(&executor), HashClass::HeaderPow, plan, job(0)).await;
         let derive = started.elapsed();
+        assert!(derived.is_empty(), "{derived:?}");
+        let warm = prove(Arc::clone(&executor), HashClass::HeaderPow, plan, job(1)).await;
         assert!(matches!(warm.as_slice(), [Proved::Formed(_)]), "{warm:?}");
         let n = PROOFS_PER_SLOT * permits.get();
         let started = Instant::now();

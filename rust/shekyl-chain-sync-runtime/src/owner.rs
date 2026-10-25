@@ -118,7 +118,9 @@ pub struct OwnerParts<C: Clock + Clone, R> {
     /// Where the derived sync state is published (CS-Q2 step 8): the
     /// node's one sync sender (`shekyl_node::Node::sync()`, cloned), which
     /// the RPC's facts, the miner's follower and the relay gate read. The
-    /// owner is its publisher and holds no other.
+    /// owner is its publisher and holds no other. The node keeps its
+    /// sender, so the watch does not close when this task ends; the task
+    /// publishes [`SyncState::NoView`] on every exit.
     pub state: watch::Sender<SyncState>,
 }
 
@@ -193,6 +195,22 @@ where
         state,
         alarm,
     })
+}
+
+/// Publishes [`SyncState::NoView`] when the owner task ends.
+///
+/// The node keeps its own sender, so the watch does not close and the
+/// facts' and the follower's closed-watch reading never fires. Without
+/// this publish they would keep the last state, including `Synced`,
+/// after the owner is gone.
+struct EndsAsNoView {
+    state: watch::Sender<SyncState>,
+}
+
+impl Drop for EndsAsNoView {
+    fn drop(&mut self) {
+        self.state.send_replace(SyncState::NoView);
+    }
 }
 
 /// What the owner's own spawned work reports back.
@@ -336,6 +354,10 @@ async fn run<C, R>(
         seats: None,
         state_tx,
         alarm_tx,
+    };
+    // Dropped with the task: stop, a closed watch, and a panic alike.
+    let _exit = EndsAsNoView {
+        state: owner.state_tx.clone(),
     };
     // The fill does not exist yet: the frontier is genesis (§4.7).
     owner.event(Event::Fill {

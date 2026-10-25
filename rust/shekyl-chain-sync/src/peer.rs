@@ -402,8 +402,10 @@ pub(crate) struct Peer<K> {
     pub inventory: Inventory,
     /// The header run. Absent when this peer is not extending a fork.
     pub run: Option<Run>,
-    /// This peer's own header follow-up: the run's next locator, or a
-    /// relocate. The coordinator's one frontier request is not stored here.
+    /// This peer's own header follow-up: the run's next locator, a
+    /// relocate, or the headers asked for an announcement whose parent
+    /// this node does not hold. One is in flight. The coordinator's one
+    /// frontier request is not stored here.
     pub follow_up: Option<HeaderRequest<K>>,
     /// The body span this peer is serving.
     pub span: Option<BodySpan>,

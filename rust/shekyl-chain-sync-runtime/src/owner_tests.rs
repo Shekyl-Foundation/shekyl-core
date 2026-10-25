@@ -14,7 +14,7 @@ use shekyl_levin::{RequestBodies, RequestHeaders};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 
 use super::{outcome_of, ServeRequest, Serving};
-use shekyl_chain_sync::Outcome;
+use shekyl_chain_sync::{Outcome, SyncState};
 
 #[test]
 fn every_entry_reply_has_an_outcome() {
@@ -198,5 +198,23 @@ fn a_session_holds_one_waiting_request_of_each_kind() {
     }
     assert!(
         matches!(&serving.queue[1], ServeRequest::Bodies(request) if request.hashes == vec![[9; 32]])
+    );
+}
+
+/// The node keeps its sender, so the owner's exit cannot close the watch.
+/// The task publishes `NoView` instead, which is what facts and the
+/// follower would have read from a closed watch.
+#[test]
+fn an_owner_exit_publishes_no_view_while_the_node_keeps_its_sender() {
+    let (node, seen) = tokio::sync::watch::channel(SyncState::Synced);
+    let owner = node.clone();
+    let live = super::EndsAsNoView { state: owner };
+    assert_eq!(*node.borrow(), SyncState::Synced);
+    drop(live);
+    assert_eq!(*node.borrow(), SyncState::NoView);
+    assert_eq!(*seen.borrow(), SyncState::NoView);
+    assert!(
+        seen.has_changed().is_ok(),
+        "the node's sender was dropped with the owner"
     );
 }

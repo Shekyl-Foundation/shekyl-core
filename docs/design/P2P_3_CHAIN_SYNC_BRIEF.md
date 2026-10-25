@@ -475,6 +475,10 @@ ingest deciding forks.**
      2026-10-24; the reason is under CS-Q1).** The block is relayed when
      it connected as the new tip, not beneath the local tip the model has
      seen, and the node, with it as the local tip, is not `Behind`.
+     Beneath is a lower height that also has less work than that tip. A
+     shorter chain whose work meets or exceeds it is a replacement: the entry
+     reply can arrive before the tip watch, and the height alone would
+     then refuse the relay.
      - The path it arrived by does not enter. An announced block and a
        block fetched by sync are the same connect. A switch is that
        connect when the owner finds this arrival is the new tip
@@ -502,7 +506,11 @@ ingest deciding forks.**
      `Noted` otherwise (Rick, 2026-10-24: the rule is path-independent).
      Only that tip block is relayed; a peer that lacks the promoted
      ancestors learns of them through the announcement, whose `Unlinked`
-     starts its sync.
+     starts its sync. An announcement whose parent is not in `T` and is
+     not the local tip cannot be judged, so it does not wait for that
+     reply. That session is asked for headers from this node's locator,
+     once, until the follow-up is answered. A claim that already beats
+     `H*` stays on the one extending request.
    - `BeyondCap`: the door's hint (DRS-X PR 2, #1123). Nothing was
      stored or hashed, so it **never raises the alarm**. Sync treats it
      as a hint: it requests headers, and a verified run can raise the
@@ -1215,7 +1223,11 @@ does it meet ingest's backpressure?
     sender, cloned; DX-Q3 Q13), which the RPC's facts, the miner's
     follower and the relay gate read (CS-Q2 step 8). `Behind` carries
     the target, the best verified chain's block count, and the facts
-    answer `target_height` from it.
+    answer `target_height` from it. The node keeps its sender, so the
+    watch does not close when the owner task ends. The task publishes
+    `NoView` on every exit, including cancellation: otherwise facts and
+    the follower would keep the last state, and their closed-watch
+    reading of `NoView` would not fire.
 
 **Wargame.**
 - **Termination.** Every wait is a deadline or an event.

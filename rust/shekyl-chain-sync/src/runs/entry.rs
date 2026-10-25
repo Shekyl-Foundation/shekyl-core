@@ -134,6 +134,7 @@ where
         main: &H,
         session: K,
         body: &BlockBody,
+        now: Instant,
         out: &mut Vec<Command<K>>,
     ) -> Result<(), H::Fault> {
         if !self.peers.contains_key(&session) {
@@ -155,8 +156,11 @@ where
             return Ok(());
         };
         let parent = pow.header.previous;
+        // The parent is not in `T` and is not the local tip, so this
+        // announcement cannot be judged. A header request from our locator
+        // is how its ancestors arrive; dropping it waits for timed sync.
         if !self.tree.contains(parent) && self.local.is_none_or(|local| local.hash != parent) {
-            return Ok(());
+            return self.seek_announced_ancestors(main, session, now, out);
         }
         let parent_height = self
             .tree

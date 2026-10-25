@@ -13,6 +13,7 @@
 
 use shekyl_chain_rules::harness::fixture::{candidate_on, chain_of};
 use shekyl_chain_rules::{AtHeight, HeaderView, RuleSet, Trust};
+use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_levin::PortableMap;
 use shekyl_types::{BlockHash, BlockHeight};
 use shekyl_wire::PowBlob;
@@ -21,6 +22,45 @@ use crate::model::{Event, Outcome, Sync};
 use crate::proof::{drive, open_claim, serialized};
 use crate::scenarios::{answer, no_close, offer_tag, request_for, target_one, with_offer};
 use crate::Command;
+
+/// A shorter chain whose work meets or exceeds the tip already seen is a
+/// replacement, not an ancestor. The reply can be applied before the tip
+/// observation, and the height alone would then refuse the relay.
+#[test]
+fn a_shorter_heavier_replacement_is_not_beneath_the_tip_already_seen() {
+    let rules = crate::proof::fixed(1, 64);
+    let mut sync: Sync<u8, _> = Sync::new(Trust::UNANCHORED, move |_| rules);
+    sync.local = Some(crate::model::Local {
+        hash: BlockHash::from_bytes([1; 32]),
+        height: Some(BlockHeight::from_raw(20)),
+        work: CumulativeDifficulty::from_raw(100),
+    });
+    let arrival = BlockHash::from_bytes([2; 32]);
+    assert!(
+        sync.relays(
+            arrival,
+            BlockHeight::from_raw(8),
+            CumulativeDifficulty::from_raw(101),
+        ),
+        "a shorter heavier tip was treated as an ancestor"
+    );
+    assert!(
+        sync.relays(
+            arrival,
+            BlockHeight::from_raw(8),
+            CumulativeDifficulty::from_raw(100),
+        ),
+        "equal work below the tip was treated as an ancestor"
+    );
+    assert!(
+        !sync.relays(
+            arrival,
+            BlockHeight::from_raw(8),
+            CumulativeDifficulty::from_raw(99),
+        ),
+        "a lighter block below the tip was relayed"
+    );
+}
 
 /// A synced node that fetches the next block by sync relays it once it
 /// connects: it is the new tip, and with it the node is not behind. The

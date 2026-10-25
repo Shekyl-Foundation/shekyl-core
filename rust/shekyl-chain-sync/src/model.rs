@@ -65,6 +65,15 @@ pub(crate) struct Local {
     pub(crate) work: CumulativeDifficulty,
 }
 
+/// Where a header request is remembered.
+#[derive(Clone, Copy)]
+enum HeaderSlot {
+    /// The one request that extends `H*`.
+    Extending,
+    /// This session's follow-up. It does not take the extending slot.
+    FollowUp,
+}
+
 /// The coordinator. It holds one peer machine per open session and the
 /// chain those peers are building. The long-run slot and the evidence
 /// check are modes of a peer, not fields beside the map.
@@ -220,24 +229,31 @@ where
         SyncState::Synced
     }
 
-    /// Whether a block that connected at `height` is relayed (CS-Q2 step
-    /// 7, amended 2026-10-24). It is when it connected as the new tip, not
-    /// beneath the local tip this model has seen, and when this node, with
-    /// it as the local tip, is not `Behind`. How the block arrived does not
-    /// enter: an announcement and a block fetched by sync are relayed
-    /// alike, and nothing is relayed while the node is behind. The state is
-    /// judged as of the connect, so a synced node that fetches the next
-    /// block, and is behind by that block until it connects, relays it.
+    /// Whether a block that connected at `height` with `work` is relayed
+    /// (CS-Q2 step 7, amended 2026-10-24). It is when it connected as the
+    /// new tip, not beneath the local tip this model has seen, and when
+    /// this node, with it as the local tip, is not `Behind`. How the block
+    /// arrived does not enter: an announcement and a block fetched by sync
+    /// are relayed alike, and nothing is relayed while the node is behind.
+    /// The state is judged as of the connect, so a synced node that fetches
+    /// the next block, and is behind by that block until it connects,
+    /// relays it.
+    ///
+    /// Beneath is a lower height that also has less work than the tip
+    /// already seen: an ancestor, or a lighter fork. Work that meets or
+    /// exceeds that tip is a replacement, including a shorter chain. The
+    /// reply can be applied before the tip observation, and the height
+    /// alone would then refuse the relay.
     pub(crate) fn relays(
         &self,
         hash: BlockHash,
         height: BlockHeight,
         work: CumulativeDifficulty,
     ) -> bool {
-        let beneath = self
-            .local
-            .and_then(|local| local.height)
-            .is_some_and(|tip| height < tip);
+        let beneath = self.local.is_some_and(|local| {
+            let shorter = local.height.is_some_and(|tip| height < tip);
+            shorter && work < local.work
+        });
         let with_it = Local {
             hash,
             height: Some(height),
@@ -455,7 +471,9 @@ where
             Event::Proven { job, results } => self.on_proven(main, job, &results, out)?,
             Event::Entry { tag, outcome } => self.on_entry(main, tag, outcome, now, out)?,
             Event::Room { seats } => self.on_room(seats, out),
-            Event::Announce { session, body } => self.on_announce(main, session, &body, out)?,
+            Event::Announce { session, body } => {
+                self.on_announce(main, session, &body, now, out)?
+            }
         }
         let after = self.state();
         if after != before {
@@ -580,6 +598,49 @@ where
         let Some(session) = draw_one(rng, &sources) else {
             return Ok(());
         };
+        self.emit_header_request(main, session, now, HeaderSlot::Extending, out)
+    }
+
+    /// An announcement whose parent is neither in `T` nor the local tip
+    /// cannot be judged, so it never becomes an offer and ingest never
+    /// answers `Unlinked`. Ask that session for headers from this node's
+    /// locator, once, until the follow-up is answered.
+    ///
+    /// A claim that already beats `H*` is left to [`Self::plan`]. That
+    /// claim owns the one extending request; this follow-up must not take
+    /// its place or sit beside it. The claim that still names the local
+    /// tip would otherwise wait for timed sync, and a relayed tip whose
+    /// ancestors this node lacks would wait with it (CS-Q2 step 7).
+    pub(crate) fn seek_announced_ancestors<'id, H: HeaderView<'id>>(
+        &mut self,
+        main: &H,
+        session: K,
+        now: Instant,
+        out: &mut Vec<Command<K>>,
+    ) -> Result<(), H::Fault> {
+        let Some(peer) = self.peers.get(&session) else {
+            return Ok(());
+        };
+        if peer.follow_up.is_some() || peer.claim.is_some_and(|claim| claim.work > self.star.work) {
+            return Ok(());
+        }
+        if self.local.is_none() {
+            return Ok(());
+        }
+        self.emit_header_request(main, session, now, HeaderSlot::FollowUp, out)
+    }
+
+    /// One header request from this node's locator. `Extending` is the
+    /// single request that moves `H*`. `FollowUp` is that session's own
+    /// and leaves the extending slot free.
+    fn emit_header_request<'id, H: HeaderView<'id>>(
+        &mut self,
+        main: &H,
+        session: K,
+        now: Instant,
+        slot: HeaderSlot,
+        out: &mut Vec<Command<K>>,
+    ) -> Result<(), H::Fault> {
         let points = self.locator_points(main)?;
         let block_ids = locator(self.star_count(), |height| {
             Ok::<_, H::Fault>(
@@ -595,12 +656,28 @@ where
             .map(|peer| peer.transit)
             .unwrap_or_default();
         let id = self.next_id;
-        self.next_id = self.next_id.saturating_add(1);
-        self.header_request = Some(HeaderRequest {
+        let request = HeaderRequest {
             session,
             id,
             points,
-        });
+        };
+        let remembered = match slot {
+            HeaderSlot::Extending => {
+                self.header_request = Some(request);
+                true
+            }
+            HeaderSlot::FollowUp => match self.peers.get_mut(&session) {
+                Some(peer) => {
+                    peer.follow_up = Some(request);
+                    true
+                }
+                None => false,
+            },
+        };
+        if !remembered {
+            return Ok(());
+        }
+        self.next_id = self.next_id.saturating_add(1);
         out.push(Command::RequestHeaders {
             session,
             id,
