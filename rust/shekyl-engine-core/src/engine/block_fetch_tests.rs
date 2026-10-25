@@ -84,6 +84,7 @@ async fn a_refusal_carrying_a_body_is_refused_not_parsed() {
             },
         }],
         missed_tx: Vec::new(),
+        unavailable_tx: Vec::new(),
     };
     let rpc = CannedDaemon(std::sync::Arc::new(
         serde_json::to_vec(&reply).expect("wire type serializes"),

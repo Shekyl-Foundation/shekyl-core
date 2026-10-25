@@ -104,6 +104,12 @@ pub(crate) fn judge(
     Membership::Sole
 }
 
+/// The login name of `uid`, when the password database has it.
+#[must_use]
+pub(crate) fn login_name(uid: u32) -> Option<AccountName> {
+    sys::account(uid).ok().map(|account| account.name)
+}
+
 /// The one cursor `getpwent` walks, held for the whole walk.
 static WALK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

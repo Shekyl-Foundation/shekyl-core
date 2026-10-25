@@ -489,6 +489,33 @@ pub fn arm_settlement_epoch_override(
     blocks: Option<u64>,
     reorg_cap: Option<u64>,
 ) -> Result<u64, SettlementEpochOverrideError> {
+    let (target, reorg_cap) = check_settlement_epoch_override(blocks, reorg_cap)?;
+    let latched = EFFECTIVE.get_or_init(|| EffectiveSchedule {
+        blocks: target,
+        reorg_cap,
+        ignored_override: false,
+    });
+    if latched.blocks != target || latched.reorg_cap != reorg_cap {
+        return Err(SettlementEpochOverrideError::ArmedTooLate {
+            latched: latched.blocks,
+        });
+    }
+    Ok(latched.blocks)
+}
+
+/// The effective `(epoch length, reorg cap)` the typed values name, or
+/// the refusal, with nothing latched: the daemon's configuration check
+/// calls this (`INPUT_GRAMMAR.md` IG-Q59), and
+/// [`arm_settlement_epoch_override`] calls it before it latches, so the
+/// ranges are written once. `None` is the genesis pin.
+///
+/// # Errors
+/// [`SettlementEpochOverrideError::InvalidReorgCap`] and
+/// [`SettlementEpochOverrideError::Invalid`]; never `ArmedTooLate`.
+pub fn check_settlement_epoch_override(
+    blocks: Option<u64>,
+    reorg_cap: Option<u64>,
+) -> Result<(u64, u64), SettlementEpochOverrideError> {
     let reorg_cap = match reorg_cap {
         Some(v) if (1..=ARCHIVAL_REORG_DEPTH_BLOCKS).contains(&v) => v,
         Some(v) => {
@@ -508,17 +535,7 @@ pub fn arm_settlement_epoch_override(
         }
         None => SETTLEMENT_EPOCH_BLOCKS,
     };
-    let latched = EFFECTIVE.get_or_init(|| EffectiveSchedule {
-        blocks: target,
-        reorg_cap,
-        ignored_override: false,
-    });
-    if latched.blocks != target || latched.reorg_cap != reorg_cap {
-        return Err(SettlementEpochOverrideError::ArmedTooLate {
-            latched: latched.blocks,
-        });
-    }
-    Ok(latched.blocks)
+    Ok((target, reorg_cap))
 }
 
 #[must_use]

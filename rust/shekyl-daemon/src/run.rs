@@ -8,9 +8,13 @@
 //!
 //! Rust owns the process from the entry: it reads its arguments, chooses
 //! the network, reads and checks the file, resolves and builds the sections,
-//! answers `--help` and `--version`, takes the lock, checks the marker,
-//! starts logging, makes the announcements, installs the one signal owner,
-//! fills the snapshot and calls the remnant's `run` on a thread of its own.
+//! answers `--help` and `--version`, asks the configuration check
+//! ([`crate::verify`]; `--config-verify` stops there, `INPUT_GRAMMAR.md`
+//! IG-Q58…IG-Q62) and on a real start performs the effects that check
+//! withheld, takes the lock, checks the marker, starts logging, makes the
+//! announcements, installs the one signal
+//! owner, fills the snapshot and calls the remnant's `run` on a thread of
+//! its own.
 //! Stop is one path: the dialer and the zone host, then the RPC, then the
 //! node (the connector finishes its message and the store closes), then the
 //! remnant's `stop` (only when `run` has not finished) together with the
@@ -26,10 +30,9 @@ use std::sync::Arc;
 
 use tokio::sync::oneshot::{self, Receiver};
 
-use shekyl_daemon_config::announce;
-use shekyl_daemon_config::sections::{log_location_writable, Clearnet, DaemonConfig, Tor};
-use shekyl_daemon_config::{marker, resolve, Lock, Platform, TABLE};
-use shekyl_options::{read_cli, Code, Diagnostic, Source, Value};
+use shekyl_daemon_config::sections::{log_location_writable, DaemonConfig, Tor};
+use shekyl_daemon_config::{announce, marker, Lock, Platform, TABLE};
+use shekyl_options::read_cli;
 use shekyl_runtime::{RuntimeBudget, ThreadName};
 
 use shekyl_daemon_config::exit::refuse;
@@ -38,7 +41,7 @@ use shekyl_ffi::daemon_snapshot_ffi::SnapshotData;
 
 use crate::entry::ShekylDaemonEntry;
 use crate::options::DaemonOptions;
-use crate::{help, network, signals, tor};
+use crate::{help, network, signals, tor, verify};
 use shekyl_daemon_rpc::options::OptionsHandle;
 
 pub use shekyl_daemon_config::exit::{EXIT_FAILED, EXIT_REFUSED};
@@ -46,7 +49,7 @@ pub use shekyl_daemon_config::exit::{EXIT_FAILED, EXIT_REFUSED};
 /// One line for the operator. Help and version use standard output; a
 /// refusal or a failure uses standard error. A closed stream does not
 /// change the exit status.
-fn tell(out: &mut impl Write, line: &str) {
+pub(crate) fn tell(out: &mut impl Write, line: &str) {
     drop(writeln!(out, "{line}"));
 }
 
@@ -105,22 +108,42 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
     let read_path = file_read.as_deref();
     let network = config.network;
 
-    // Client mode: no lock, no marker, no log file, no announcement.
+    // Client mode: no lock, no marker, no log file, no announcement. The
+    // configuration check stops here too: a client is not a start.
     if config.is_client() {
+        if config.session.verify {
+            return verify::accept(&resolved, read_path, &config_path, &config, &[]);
+        }
         return call_run(entry, &config);
     }
 
-    // The lock, the marker, the log location.
+    // The walk (IG-Q59): every refusal a start makes before it creates
+    // anything, with nothing created. The check prints its verdict and
+    // exits; a start goes on to the effects the walk withheld.
+    let walked = match verify::walk(&config, &resolved, host) {
+        Ok(walked) => walked,
+        Err(verify::Stopped::Refused(ds)) => return refuse(&ds),
+        Err(verify::Stopped::Failed(line)) => {
+            tell(&mut std::io::stderr(), &format!("shekyld: {line}"));
+            return EXIT_FAILED;
+        }
+    };
+    if config.session.verify {
+        return verify::accept(
+            &resolved,
+            read_path,
+            &config_path,
+            &config,
+            &walked.warnings,
+        );
+    }
+    let network_id = walked.network_id;
+
+    // The lock, the marker (read again under the lock, written when
+    // absent), the log location.
     let lock = match Lock::take(&config.data_dir) {
         Ok(l) => l,
         Err(d) => return refuse(&[d]),
-    };
-    let Some(network_id) = (host.network_id_of)(network.cryptonote_code()) else {
-        tell(
-            &mut std::io::stderr(),
-            &format!("shekyld: no network id for {}", network.name()),
-        );
-        return EXIT_FAILED;
     };
     if let Err(d) = marker::check_or_write(&lock, network, network_id) {
         return refuse(&[d]);
@@ -145,14 +168,15 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
             return EXIT_FAILED;
         }
     };
-    let mut lines = vec![announce::effective_configuration(
+    let lines = announce::announcements(
         &TABLE,
         &resolved,
         read_path,
         &config_path,
-    )];
-    lines.extend(announce::dev_levers(&TABLE, &resolved));
-    lines.push(announce::posture(&config));
+        &config,
+        &walked.warnings,
+    )
+    .into_lines();
     announce_all(&config.logging.file, &lines);
 
     // The node, after the marker and before the remnant's run (DX-Q6).
@@ -197,13 +221,21 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
         dev.pow_seed_epoch_blocks,
         dev.pow_seed_epoch_lag,
     ) {
-        return refuse(&[owner_refusal(&resolved, refusal.row(), refusal.rule())]);
+        return refuse(&[verify::owner_refusal(
+            &resolved,
+            refusal.row(),
+            refusal.rule(),
+        )]);
     }
     if let Err(refusal) = shekyl_ffi::archival_ffi::arm_settlement_schedule(
         dev.settlement_epoch_blocks,
         dev.archival_reorg_depth,
     ) {
-        return refuse(&[owner_refusal(&resolved, refusal.row(), refusal.rule())]);
+        return refuse(&[verify::owner_refusal(
+            &resolved,
+            refusal.row(),
+            refusal.rule(),
+        )]);
     }
 
     // The one signal owner, the RPC section for the remnant's one start,
@@ -297,7 +329,7 @@ fn supervise(
     // it exists; its children run on the signal owner's runtime (§2.10).
     shekyl_ffi::notify_ffi::install(&config.notify, pool.handle().clone());
     // The managed Tor starts with the core. Step 8 does not wait for it.
-    let clearnet_on = !matches!(config.clearnet, Clearnet::Off);
+    let clearnet_on = config.clearnet_on();
     let supervisor = tor::begin(
         &config.tor,
         clearnet_on,
@@ -488,24 +520,6 @@ fn finish_remnant(
         tracing::error!(target: "daemon", "the run thread ended by a panic");
     }
     status
-}
-
-/// A value its owner refuses at its own start (§6). A row's refusal is
-/// pinned to that row, at the source the value came from. A latch that
-/// already happened names no row: the machine holds the fact, and either
-/// lever would be the wrong one to blame.
-fn owner_refusal(resolved: &resolve::Resolved, row: Option<&str>, rule: &str) -> Diagnostic {
-    let Some(row) = row else {
-        return Diagnostic::new(Code::ValueRange, Source::Machine).param("rule", rule);
-    };
-    let value = resolved
-        .get(row)
-        .map_or_else(|| "unset".to_owned(), Value::render);
-    let source = resolved.source(row).cloned().unwrap_or(Source::Default);
-    Diagnostic::new(Code::ValueRange, source)
-        .option(row)
-        .param("value", value)
-        .param("rule", rule)
 }
 
 fn note_stop(by: &'static str) {
