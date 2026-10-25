@@ -88,7 +88,8 @@ mod rows from a 512-bit remainder, the `Residue` rows from an unrestricted
 from unrestricted bytes, invalid encodings included. Records made before
 this carry the earlier sampler; the static ones were regenerated with the
 new one on both toolchains (2026-10-24 19:48Z-21:25Z, every verdict as
-before, and BINSEC's division checks added on helioselene: clean), and the device rows were re-run with the corrected binary
+before, and BINSEC's division checks added on helioselene: clean), and
+the device rows were re-run with the corrected binary
 (`dynamic-*-rerun.txt`) with the same outcome: the x86_64 host crosses on
 `HelioseleneField`, the floor device is flat on every row.
 Upstream's calibration driver is pinned by revision in `setup.sh`
@@ -200,6 +201,51 @@ cargo build --release --target x86_64-unknown-linux-gnu \
 # copy target/<triple>/release/ct-dynamic to the device and run it;
 # paste its table into results/<date>/dynamic-<device>.txt
 ```
+
+`ct-dynamic [samples-per-class] [row-filter] [only-fixed|only-random]`:
+20 000 samples per class by default (3 at least, the floor the cropped t
+needs), every row whose name contains the filter (an empty filter matches
+every row), and both classes unless one is named (one class alone is for
+running a profiler over it; it reports batch counts, not t).
+
+How the crate is built, so its rows can be read:
+
+- **The code path is part of the row.** A field row is a field, an
+  operation and a contrast (null, fixed set, `[fixed-pair]`, constant,
+  operand shape), and every contrast of an operation runs the same
+  function: one compiled copy of the timed loop per operation, so two rows
+  of one operation differ in their operands only. `mul` and `square` run
+  on two paths, each across every contrast: behind non-inlined wrappers
+  (`op_helio_mul`, `op_fe25519_square`, ...: the symbols to disassemble),
+  and `(direct)`, the field's operator called in the loop and inlined
+  where its crate allows (`HelioseleneField`'s are, dalek-ff-group's are
+  out-of-line calls either way).
+- **Operand domains are types**, as in the static drivers: field operands
+  from the field's wide reduction of 64 bytes (the whole field), the
+  `from_repr` rows from unrestricted bytes (invalid encodings included),
+  the `Residue` rows from an unrestricted `U256`, the `half:` rows from
+  canonical `HelioseleneField` values (`Canonical<F>`: what the square's
+  two halves see, [0, p)), and the operand-shape rows from values below
+  2^CAPACITY (sparse, small, dense = 2^254 − 1).
+- **The row list is checked.** `cargo test` in the crate (also a step of
+  the Rust CI job) holds the list's invariants: unique names, a
+  `[fixed-pair]` companion for every test row, the same rows on both
+  fields, null and positive controls present; and every row name a record
+  under `results/` cites must still be a row, or one of the listed retired
+  rows, so a rename cannot strand a record.
+
+**Record provenance.** The 2026-10-24 dynamic records come from earlier
+binaries, each named in the record's header. Before the wrappers (the
+`PR-2 tree` headers) every row called the operation directly. From them
+on, the fixed-set and `[fixed-pair]` rows of `square` and `mul` called the
+wrapper while the null, constant and operand-shape rows still called it
+directly, inlined for `HelioseleneField`: those rows are this crate's
+`(direct)` rows, under their unsuffixed names. And every 2026-10-24
+record's `from_repr`, `Residue` and `half:` rows drew operands below
+2^254, so `from_repr` saw valid encodings only (the `-rerun` headers say
+"from_repr rows on unrestricted bytes"; the code at `40ac33a8c` still
+drew masked ones). `results/2026-10-25/`
+re-takes those rows with both paths under every contrast.
 
 A dynamic row is evidence of another kind: it sees this device, this
 binary and this run, and can only fail to observe a difference. It never
