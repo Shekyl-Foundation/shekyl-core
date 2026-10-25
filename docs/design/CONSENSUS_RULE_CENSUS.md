@@ -896,7 +896,7 @@ input, not fixes.
     header from `get_curve_tree_root()` *before* the block is added
     (`:2006`) — the state at chain height N, which every other keying names
     (entry 16). The two operands are equal only when nothing drains at block
-    N. **Observed, not inferred:** `archival_substrate_lmdb.cpp` at `eb5be7767` `cen_b5_header_root_is_the_tip_root_before_add_block_not_after` connects a leaf-creating block on
+    N. **Observed, not inferred** (at `eb5be7767`): `archival_substrate_lmdb.cpp` `cen_b5_header_root_is_the_tip_root_before_add_block_not_after` connects a leaf-creating block on
     real LMDB through the production `add_block`, advances to the drain
     block, and shows the pre-add root equals the record under key N while
     the post-add root does not (leaf count 0 → 1). **Consequence:** on every
@@ -951,7 +951,7 @@ input, not fixes.
     entry's first wording, and the fix commit's message, called it a genesis
     skip — records-was, corrected in the same PR.)*
     **Observed red → green** by the first non-FAKECHAIN Blockchain fixture in
-    the tree, `curve_tree_header_root_check.cpp` at `e54e5b983` (TESTNET, `fixed_difficulty
+    the tree (at `e54e5b983`), `curve_tree_header_root_check.cpp` (TESTNET, `fixed_difficulty
     = 1`, real LMDB, real `add_new_block` through the RandomX light-cache
     verifier): before the edit blocks 1–59 connected and block 60 was rejected
     with `curve_tree_root mismatch`; after it block 60 connects, the leaf

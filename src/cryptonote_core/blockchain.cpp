@@ -5211,9 +5211,8 @@ leave:
   // rejected block, never a connected-then-popped one. (Comparing after
   // add_block read the post-drain root and rejected every block that matures
   // leaves -- the first one at height CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW,
-  // where the genesis coinbase matures, on every real nettype. Rust pins the
-  // rule past the first drain: shekyl-chain-ingest rpc_store_reads_tests.rs
-  // the_tree_after_each_block_is_the_root_the_next_block_was_built_on.)
+  // where the genesis coinbase matures, on every real nettype; Rust pins it in
+  // rpc_store_reads_tests.rs the_tree_after_each_block_is_the_root_the_next_block_was_built_on.)
   //
   // Runs on every nettype, FAKECHAIN included (rule 71). The test generator
   // computes real roots through the Rust curve-tree client
