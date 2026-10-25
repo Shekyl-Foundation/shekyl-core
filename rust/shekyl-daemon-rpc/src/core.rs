@@ -55,6 +55,9 @@ unsafe impl Sync for CoreRpc {}
 pub enum TxSlot {
     /// Neither the chain nor the pool had it.
     Missed,
+    /// Not in the chain, and the pool is retired: whether the pool holds it
+    /// has no answer. Only the Rust store backend retires its pool.
+    PoolUnavailable,
     /// Found in a block.
     Chain {
         pruned: Vec<u8>,

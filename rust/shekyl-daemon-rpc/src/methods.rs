@@ -687,11 +687,16 @@ where
 {
     let mut txs = Vec::new();
     let mut missed = Vec::new();
+    let mut unavailable = Vec::new();
 
     for (id, slot) in ids.iter().zip(slots.iter()) {
         let (pruned, prunable, prunable_hash, location, pruned_flag) = match slot {
             TxSlot::Missed => {
                 missed.push(HashHex::from_bytes(*id));
+                continue;
+            }
+            TxSlot::PoolUnavailable => {
+                unavailable.push(HashHex::from_bytes(*id));
                 continue;
             }
             TxSlot::Chain {
@@ -807,6 +812,7 @@ where
         status: RpcStatus::ok(),
         txs,
         missed_tx: missed,
+        unavailable_tx: unavailable,
     })
 }
 
@@ -1917,14 +1923,15 @@ pub(crate) mod tests {
         assert_eq!(e.archival_len, 0);
     }
 
-    /// Chain, pool and miss land in their own places: the first two become
-    /// entries carrying their location, the third only a `missed_tx` id.
+    /// Chain, pool, miss and an unavailable pool lookup land in their own
+    /// places: the first two become entries carrying their location, the
+    /// third only a `missed_tx` id, the fourth only an `unavailable_tx` id.
     #[test]
     fn chain_pool_and_missed_slots_are_projected_to_their_own_places() {
         let tx = stored_spend();
         let out = project_transactions(
             &req(true, false, false),
-            &[[0x01; 32], [0x02; 32], [0x03; 32]],
+            &[[0x01; 32], [0x02; 32], [0x03; 32], [0x04; 32]],
             &[
                 chain_slot(&tx),
                 TxSlot::Pool {
@@ -1936,6 +1943,7 @@ pub(crate) mod tests {
                     received_timestamp: Some(1_700_000_001),
                 },
                 TxSlot::Missed,
+                TxSlot::PoolUnavailable,
             ],
             9,
             echo_render(),
@@ -1943,7 +1951,12 @@ pub(crate) mod tests {
         .expect("projection succeeds");
 
         assert_eq!(out.txs.len(), 2, "the miss must not become an entry");
-        assert_eq!(out.missed_tx.len(), 1);
+        assert_eq!(out.missed_tx, vec![HashHex::from_bytes([0x03; 32])]);
+        assert_eq!(
+            out.unavailable_tx,
+            vec![HashHex::from_bytes([0x04; 32])],
+            "an unavailable lookup is neither an entry nor a miss"
+        );
         assert!(matches!(out.txs[0].location, TxLocation::Mined { .. }));
         assert!(matches!(out.txs[1].location, TxLocation::Pooled { .. }));
         assert!(
@@ -2078,10 +2091,10 @@ pub(crate) mod tests {
         );
 
         let mut ours: serde_json::Value = serde_json::to_value(&out).unwrap();
-        // Head of the `get_version` chain (`_v37` = 3.60). A bump that
+        // Head of the `get_version` chain (`_v38` = 3.61). A bump that
         // forgets this include fails on `version` below.
         let mut oracle: serde_json::Value = serde_json::from_str(include_str!(
-            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v37.json"
+            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v38.json"
         ))
         .unwrap();
         for moving in ["consensus_constants_digest", "genesis_hash"] {

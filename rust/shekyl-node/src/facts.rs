@@ -28,7 +28,7 @@ use shekyl_daemon_rpc::handles::{
 };
 use shekyl_daemon_rpc::info_facts::{
     InfoChainFacts, InfoFacts, InfoPeersFacts, InfoStatusFacts, PeerFacts, PoolCounts, PoolScope,
-    SessionCounts,
+    PoolState, SessionCounts,
 };
 use shekyl_daemon_rpc::mining_facts::{LocalOutcome, Pending, PopOutcome};
 use shekyl_daemon_rpc::read_facts::{
@@ -45,6 +45,34 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// Open the pool slot the way a chain read may answer it.
+///
+/// No pool in the slot is [`FactsFault::NotReady`]: the node is not up.
+/// A retired pool is [`PoolState::Retired`]: the node follows the chain
+/// and this pool has no answer. A read that cannot carry that answer uses
+/// [`require_live`].
+fn open_pool(
+    slot: &Mutex<Option<Arc<Mutex<Pool>>>>,
+    health: &PoolHealth,
+) -> Result<PoolState<Arc<Mutex<Pool>>>, FactsFault> {
+    if health.retired() {
+        return Ok(PoolState::Retired);
+    }
+    lock(slot)
+        .clone()
+        .map(PoolState::Live)
+        .ok_or(FactsFault::NotReady)
+}
+
+/// The live pool. A retired pool is not ready: the read cannot answer
+/// without one, and must not treat "no answer" as an empty pool.
+fn require_live(state: PoolState<Arc<Mutex<Pool>>>) -> Result<Arc<Mutex<Pool>>, FactsFault> {
+    match state {
+        PoolState::Live(pool) => Ok(pool),
+        PoolState::Retired => Err(FactsFault::NotReady),
+    }
+}
+
 /// What the chain store does not hold. It does not own the facts slot, so
 /// dropping the facts drops this and not the other way round.
 pub(crate) struct Surroundings {
@@ -59,16 +87,6 @@ pub(crate) struct Surroundings {
     /// The service's retirement flag: a pool whose file has faulted is
     /// not read here, as the pool handle does not read it.
     pub(crate) health: PoolHealth,
-}
-
-impl Surroundings {
-    /// The pool, while the node holds one and its file has not faulted.
-    fn pool(&self) -> Result<Arc<Mutex<Pool>>, FactsFault> {
-        if self.health.retired() {
-            return Err(FactsFault::NotReady);
-        }
-        lock(&self.pool).clone().ok_or(FactsFault::NotReady)
-    }
 }
 
 impl NodeFacts for Surroundings {
@@ -98,7 +116,7 @@ impl NodeFacts for Surroundings {
     /// Only entries the pool shows: a stem-phase spend is not this node's
     /// to disclose (S6), so it answers unspent here.
     fn pool_spends(&self, key_images: &[shekyl_types::KeyImage]) -> Result<Vec<bool>, FactsFault> {
-        let pool = self.pool()?;
+        let pool = require_live(open_pool(&self.pool, &self.health)?)?;
         let pool = lock(&pool);
         let shown: std::collections::BTreeSet<[u8; 32]> = pool
             .shown_entries()
@@ -117,8 +135,10 @@ impl NodeFacts for Surroundings {
         &self,
         ids: &[TxHash],
         scope: PoolScope,
-    ) -> Result<Vec<Option<shekyl_daemon_rpc::store_facts::PoolBody>>, FactsFault> {
-        let pool = self.pool()?;
+    ) -> Result<PoolState<Vec<Option<shekyl_daemon_rpc::store_facts::PoolBody>>>, FactsFault> {
+        let PoolState::Live(pool) = open_pool(&self.pool, &self.health)? else {
+            return Ok(PoolState::Retired);
+        };
         let pool = lock(&pool);
         let held: std::collections::BTreeMap<TxHash, shekyl_daemon_rpc::store_facts::PoolBody> =
             match scope {
@@ -132,11 +152,15 @@ impl NodeFacts for Surroundings {
                     .map(|entry| (entry.id, body_of(&entry)))
                     .collect(),
             };
-        Ok(ids.iter().map(|id| held.get(id).cloned()).collect())
+        Ok(PoolState::Live(
+            ids.iter().map(|id| held.get(id).cloned()).collect(),
+        ))
     }
 
-    fn pool_counts(&self, scope: PoolScope) -> Result<PoolCounts, FactsFault> {
-        let pool = self.pool()?;
+    fn pool_counts(&self, scope: PoolScope) -> Result<PoolState<PoolCounts>, FactsFault> {
+        let PoolState::Live(pool) = open_pool(&self.pool, &self.health)? else {
+            return Ok(PoolState::Retired);
+        };
         let pool = lock(&pool);
         let broadcast = u64::try_from(pool.listing().count()).unwrap_or(u64::MAX);
         let unbroadcast = match scope {
@@ -146,10 +170,10 @@ impl NodeFacts for Surroundings {
                 Some(held.saturating_sub(broadcast))
             }
         };
-        Ok(PoolCounts {
+        Ok(PoolState::Live(PoolCounts {
             broadcast,
             unbroadcast,
-        })
+        }))
     }
 
     /// The bound hub's sockets and the dialer's lists. An offline node
@@ -286,7 +310,7 @@ impl InfoFacts for ChainBridge {
         self.with(InfoFacts::chain)
     }
 
-    fn pool_counts(&self, scope: PoolScope) -> Result<PoolCounts, FactsFault> {
+    fn pool_counts(&self, scope: PoolScope) -> Result<PoolState<PoolCounts>, FactsFault> {
         self.with(|facts| facts.pool_counts(scope))
     }
 
@@ -378,12 +402,10 @@ impl PoolBridge {
 }
 
 impl PoolBridge {
-    /// The pool, while the node holds one and its file has not faulted.
+    /// The live pool. Absent and retired are both not ready: these methods
+    /// have no reply that can say the pool has no answer.
     fn pool(&self) -> Result<Arc<Mutex<Pool>>, FactsFault> {
-        if self.health.retired() {
-            return Err(FactsFault::NotReady);
-        }
-        lock(&self.pool).clone().ok_or(FactsFault::NotReady)
+        require_live(open_pool(&self.pool, &self.health)?)
     }
 }
 
