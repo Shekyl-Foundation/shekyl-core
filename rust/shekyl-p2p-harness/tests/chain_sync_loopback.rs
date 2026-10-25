@@ -10,10 +10,10 @@
 //!
 //! The model's reason for each close is read off the owner's log line,
 //! which carries the node's span: tests run side by side in one process,
-//! and the span says which node closed which session.
+//! and the span says which node closed which session. The inbound claim
+//! and the relay fan-out are `chain_sync_claim_relay.rs`.
 
 use std::collections::HashMap;
-use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -22,116 +22,21 @@ use shekyl_chain_rules::{form_header, target_claim, FormAttempt, Substrate};
 use shekyl_chain_store::codec::FollowingDegradedCell;
 use shekyl_chain_store::store::SnapshotView;
 use shekyl_chain_sync::SyncState;
-use shekyl_draw_rng::SplitMix64;
-use shekyl_hash_budget::Budget;
 use shekyl_levin::{
-    invoke, notify, BasicNodeData, CoreSyncData, HandshakeRequest, PortableMap, RequestBodies,
-    ResponseBodies, ResponseHeaders, SyncCommand, COMMAND_HANDSHAKE, NOTIFY_NEW_COMPACT_BLOCK,
-    NOTIFY_NEW_TRANSACTIONS,
+    notify, RequestBodies, ResponseBodies, ResponseHeaders, SyncCommand, COMMAND_HANDSHAKE,
+    NOTIFY_NEW_COMPACT_BLOCK, NOTIFY_NEW_TRANSACTIONS,
 };
 use shekyl_p2p_harness::sync::{
-    announcement, fork_headers, frame, request_headers, substrate, Bodies, Chain, Corpus,
-    HeaderChainPeer, Node, ServingPeer, Silent, Step, SyncPeer,
+    announcement, fork_headers, frame, request_headers, substrate, Bodies, Corpus, HeaderChainPeer,
+    Node, ServingPeer, Silent, Step, SyncPeer,
 };
-use shekyl_seam::SyncPayload;
 use shekyl_transport_layer::CloseKind;
 use shekyl_types::{BlockHash, BlockHeight};
 use shekyl_wire::{Block, PowBlob};
-use tracing::field::{Field, Visit};
-use tracing::span::{Attributes, Id};
-use tracing::{Event, Subscriber};
-use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
-use tracing_subscriber::registry::LookupSpan;
-use tracing_subscriber::util::SubscriberInitExt;
+#[path = "chain_sync/support.rs"]
+mod support;
 
-/// The ceiling on every wait for something to happen. Each wait returns
-/// the moment its condition holds, which here takes seconds to a minute:
-/// mostly real RandomX over a corpus's headers. The ceiling is for a
-/// loaded runner, where fourteen of these share the cores, and it measures
-/// nothing.
-const LIMIT: Duration = Duration::from_secs(900);
-
-// ---------------------------------------------------------------- logs --
-
-/// Every close the owner logged: (node tag, session, cause).
-static CLOSES: Mutex<Vec<(String, u64, String)>> = Mutex::new(Vec::new());
-
-struct Tag(String);
-
-#[derive(Default)]
-struct Fields {
-    tag: Option<String>,
-    message: String,
-    session: Option<u64>,
-    cause: Option<String>,
-}
-
-impl Visit for Fields {
-    fn record_u64(&mut self, field: &Field, value: u64) {
-        if field.name() == "session" {
-            self.session = Some(value);
-        }
-    }
-
-    fn record_str(&mut self, field: &Field, value: &str) {
-        if field.name() == "tag" {
-            self.tag = Some(value.to_owned());
-        }
-    }
-
-    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-        match field.name() {
-            "message" => self.message = format!("{value:?}"),
-            "cause" => self.cause = Some(format!("{value:?}")),
-            // The owner logs its `Session` by `Display`, the socket id.
-            "session" => self.session = format!("{value:?}").parse().ok(),
-            "tag" => self.tag = Some(format!("{value:?}").trim_matches('"').to_owned()),
-            _ => {}
-        }
-    }
-}
-
-struct Closes;
-
-impl<S> Layer<S> for Closes
-where
-    S: Subscriber + for<'a> LookupSpan<'a>,
-{
-    fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
-        let mut fields = Fields::default();
-        attrs.record(&mut fields);
-        if let (Some(tag), Some(span)) = (fields.tag, ctx.span(id)) {
-            span.extensions_mut().insert(Tag(tag));
-        }
-    }
-
-    fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
-        let mut fields = Fields::default();
-        event.record(&mut fields);
-        if !fields.message.contains("closes a session") {
-            return;
-        }
-        let tag = ctx.event_scope(event).and_then(|scope| {
-            scope
-                .from_root()
-                .find_map(|span| span.extensions().get::<Tag>().map(|tag| tag.0.clone()))
-        });
-        if let (Some(tag), Some(session), Some(cause)) = (tag, fields.session, fields.cause) {
-            CLOSES.lock().expect("closes").push((tag, session, cause));
-        }
-    }
-}
-
-fn logs() {
-    let _installed = tracing_subscriber::registry()
-        .with(Closes)
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_test_writer()
-                .with_filter(tracing_subscriber::EnvFilter::from_default_env()),
-        )
-        .try_init();
-}
+use support::{claim, claim_of, logs, rng, source, spend, wait_synced, CLOSES, LIMIT};
 
 /// The model's closes on node `tag`, by session.
 fn model_closes(tag: &str) -> HashMap<u64, String> {
@@ -142,62 +47,6 @@ fn model_closes(tag: &str) -> HashMap<u64, String> {
         .filter(|(node, _, _)| node == tag)
         .map(|(_, session, cause)| (*session, cause.clone()))
         .collect()
-}
-
-// ------------------------------------------------------------- helpers --
-
-/// The node's draw source: seeded, so a run repeats.
-fn rng() -> SplitMix64 {
-    SplitMix64::new(0x5EED)
-}
-
-/// A peer's handshake claim: its block count and cumulative work.
-fn claim(count: u64, work: u128, top: BlockHash) -> SyncPayload {
-    SyncPayload {
-        current_height: count,
-        cumulative_difficulty: u64::try_from(work & u128::from(u64::MAX)).expect("low"),
-        cumulative_difficulty_top64: u64::try_from(work >> 64).expect("high"),
-        top_id: *top.as_bytes(),
-    }
-}
-
-/// The claim a chain's own tip makes.
-fn claim_of(chain: &Chain) -> SyncPayload {
-    let (count, work, top) = chain.tip().expect("a chain");
-    claim(count, work, top)
-}
-
-/// A store holding `steps`, connected from its own node.
-async fn source(tag: &str, corpus: &Corpus, steps: &[Step]) -> Chain {
-    let (substrate, _) = substrate();
-    let chain = Chain::empty(
-        tag,
-        corpus.rules(),
-        Arc::new(substrate),
-        Budget::new(NonZeroUsize::new(4).expect("four")),
-    );
-    chain.apply(steps).await;
-    chain
-}
-
-fn spend() -> (Corpus, Vec<Step>) {
-    let corpus = Corpus::open("spend-1in-2out");
-    let steps = corpus.steps();
-    (corpus, steps)
-}
-
-async fn wait_synced(node: &Node, count: u64) {
-    let synced = node
-        .wait(LIMIT, |node| {
-            node.state() == SyncState::Synced && node.count() == count
-        })
-        .await;
-    assert!(
-        synced,
-        "state {:?}, count {} of {count}",
-        node.state(),
-        node.count()
-    );
 }
 
 // ---------------------------------------------------------- the honest --
@@ -989,155 +838,4 @@ async fn a_request_flood_beside_cpp_bytes_is_bounded_by_the_serving_queue() {
     );
     assert_eq!(node.closed(id), None);
     node.stop().await;
-}
-
-// --------------------------------------------------------------- CS-4 --
-
-/// An inbound session's claim arrives in its handshake request, which the
-/// router's claim tap copies to the owner (CS-Q10, Rick 2026-10-24):
-/// before it the session is no source; after it the session serves the
-/// headers and the bodies, with no outbound dial.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn an_inbound_session_serves_the_sync_after_its_handshake_request() {
-    logs();
-    let (corpus, steps) = spend();
-    let held = source("inbound-src", &corpus, &steps).await;
-    let (count, _, _) = held.tip().expect("a chain");
-    let mut node = Node::start("inbound", corpus.rules(), &steps[..1], 2, rng()).await;
-    let (peer, seen) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
-    let id = node.accept(Box::new(peer));
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    assert_eq!(
-        seen.headers(),
-        0,
-        "an inbound session with no claim is no source"
-    );
-    let claim = claim_of(&held);
-    let request = HandshakeRequest {
-        node_data: BasicNodeData {
-            network_id: [0; 16],
-        },
-        payload_data: CoreSyncData {
-            current_height: claim.current_height,
-            cumulative_difficulty: claim.cumulative_difficulty,
-            cumulative_difficulty_top64: claim.cumulative_difficulty_top64,
-            top_id: claim.top_id,
-        },
-        nonce: [0; 32],
-    }
-    .store()
-    .expect("the request encodes");
-    assert!(node.inject(id, invoke(COMMAND_HANDSHAKE, &request)).await);
-    wait_synced(&node, count).await;
-    assert!(seen.headers() >= 1 && seen.bodies() >= 1);
-    assert!(
-        node.stub
-            .lock()
-            .expect("stub")
-            .commands
-            .contains(&(id, COMMAND_HANDSHAKE)),
-        "the C++ handler still receives the handshake"
-    );
-    node.stop().await;
-    held.stop().await;
-}
-
-/// A connected announcement is relayed (CS-Q2 step 7): to
-/// every established session but the one that announced it.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_connected_announcement_is_relayed_to_every_other_session() {
-    logs();
-    let (corpus, steps) = spend();
-    let held = source("relay-src", &corpus, &steps).await;
-    let (count, _, _) = held.tip().expect("a chain");
-    // The node holds every block but the last.
-    let mut node = Node::start("relay", corpus.rules(), &steps[..steps.len() - 1], 2, rng()).await;
-    let (_, work, top) = node.chain.tip().expect("a chain");
-    let mut seen = Vec::new();
-    let mut ids = Vec::new();
-    for _ in 0..3 {
-        let (peer, asked) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
-        seen.push(asked);
-        ids.push(node.connect(Box::new(peer), Some(claim(count - 1, work, top))));
-    }
-    assert!(
-        node.wait(LIMIT, |node| node.state() == SyncState::Synced)
-            .await,
-        "state {:?}",
-        node.state()
-    );
-    assert!(
-        node.inject(ids[0], announcement(&held.store, count - 1))
-            .await
-    );
-    assert!(
-        node.wait(LIMIT, |node| node.count() == count).await,
-        "the announcement did not connect"
-    );
-    assert!(
-        node.wait(LIMIT, |_| seen[1].announced() == 1
-            && seen[2].announced() == 1)
-            .await,
-        "relayed {:?}",
-        seen.iter().map(|seen| seen.announced()).collect::<Vec<_>>()
-    );
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    assert_eq!(seen[0].announced(), 0, "not back to the announcer");
-    node.stop().await;
-    held.stop().await;
-}
-
-/// A synced node that fetches the next block by sync relays it once it
-/// connects, to every established session but the one that supplied it
-/// (CS-Q2 step 7, amended 2026-10-24). Two peers hold the node's own tip;
-/// a third claims one block more, serves its header and body, and never
-/// receives that block back.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_block_fetched_by_sync_is_relayed_to_all_but_its_supplier() {
-    logs();
-    let (corpus, steps) = spend();
-    let held = source("sync-relay-src", &corpus, &steps).await;
-    let full = claim_of(&held);
-    let (count, _, _) = held.tip().expect("a chain");
-    let mut node = Node::start(
-        "sync-relay",
-        corpus.rules(),
-        &steps[..steps.len() - 1],
-        2,
-        rng(),
-    )
-    .await;
-    let (_, work, top) = node.chain.tip().expect("a chain");
-    let mut level = Vec::new();
-    for _ in 0..2 {
-        let (peer, seen) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
-        node.connect(Box::new(peer), Some(claim(count - 1, work, top)));
-        level.push(seen);
-    }
-    assert!(
-        node.wait(LIMIT, |node| node.state() == SyncState::Synced)
-            .await,
-        "state {:?}",
-        node.state()
-    );
-    let (peer, supplier) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
-    node.connect(Box::new(peer), Some(full));
-    assert!(
-        node.wait(LIMIT, |node| node.count() == count).await,
-        "the next block was not fetched"
-    );
-    assert!(supplier.bodies() >= 1, "the block came by sync");
-    assert!(
-        node.wait(LIMIT, |_| level.iter().all(|seen| seen.announced() == 1))
-            .await,
-        "relayed {:?}",
-        level
-            .iter()
-            .map(|seen| seen.announced())
-            .collect::<Vec<_>>()
-    );
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    assert_eq!(supplier.announced(), 0, "not back to the supplier");
-    node.stop().await;
-    held.stop().await;
 }

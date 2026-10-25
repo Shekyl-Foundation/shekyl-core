@@ -82,8 +82,7 @@ fn every_entry_reply_has_an_outcome() {
                     (BlockHeight::from_raw(8), hash),
                 ],
             },
-            Outcome::Switched {
-                tip: hash,
+            Outcome::Connected {
                 height: BlockHeight::from_raw(8),
             },
         ),
@@ -96,7 +95,11 @@ fn every_entry_reply_has_an_outcome() {
         ),
     ];
     for (reply, expected) in cases {
-        assert_eq!(outcome_of(reply.clone(), true), expected, "{reply:?}");
+        assert_eq!(
+            outcome_of(reply.clone(), true, Some(hash)),
+            expected,
+            "{reply:?}"
+        );
     }
 }
 
@@ -110,10 +113,61 @@ fn a_connect_carries_its_height_however_the_body_arrived() {
         hash: BlockHash::from_bytes([3; 32]),
     };
     assert_eq!(
-        outcome_of(connected.clone(), false),
+        outcome_of(
+            connected.clone(),
+            false,
+            Some(BlockHash::from_bytes([3; 32]))
+        ),
         Outcome::Connected { height }
     );
-    assert_eq!(outcome_of(connected, true), Outcome::Connected { height });
+    assert_eq!(
+        outcome_of(connected, true, None),
+        Outcome::Connected { height }
+    );
+}
+
+/// A switch is a connect only when this arrival is the new tip. The model
+/// then relays it by the connect's rule. Any other tip, an empty promotion,
+/// or an offer the owner no longer holds, is noted.
+#[test]
+fn a_switch_is_a_connect_only_when_the_arrival_is_the_new_tip() {
+    let arrival = BlockHash::from_bytes([7; 32]);
+    let height = BlockHeight::from_raw(8);
+    let switched = |tip: BlockHash| Reply::Switched {
+        demoted: vec![(BlockHeight::from_raw(7), BlockHash::from_bytes([8; 32]))],
+        promoted: vec![
+            (BlockHeight::from_raw(7), BlockHash::from_bytes([9; 32])),
+            (height, tip),
+        ],
+    };
+    assert_eq!(
+        outcome_of(switched(arrival), true, Some(arrival)),
+        Outcome::Connected { height }
+    );
+    assert_eq!(
+        outcome_of(switched(arrival), false, Some(arrival)),
+        Outcome::Connected { height }
+    );
+    assert_eq!(
+        outcome_of(
+            switched(BlockHash::from_bytes([9; 32])),
+            true,
+            Some(arrival)
+        ),
+        Outcome::Noted
+    );
+    assert_eq!(outcome_of(switched(arrival), true, None), Outcome::Noted);
+    assert_eq!(
+        outcome_of(
+            Reply::Switched {
+                demoted: Vec::new(),
+                promoted: Vec::new(),
+            },
+            true,
+            Some(arrival),
+        ),
+        Outcome::Noted
+    );
 }
 
 /// A session's queue holds at most one waiting request of each kind,

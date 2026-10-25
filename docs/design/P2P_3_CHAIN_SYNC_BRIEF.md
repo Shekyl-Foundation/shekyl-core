@@ -475,9 +475,11 @@ ingest deciding forks.**
      2026-10-24; the reason is under CS-Q1).** The block is relayed when
      it connected as the new tip, not beneath the local tip the model has
      seen, and the node, with it as the local tip, is not `Behind`.
-     - The path it arrived by does not enter: an announced block, a
-       block fetched by sync, and an arrival that moved main to its
-       branch (`Switched`) are relayed alike.
+     - The path it arrived by does not enter. An announced block and a
+       block fetched by sync are the same connect. A switch is that
+       connect when the owner finds this arrival is the new tip
+       (`promoted` ends on the arrival's hash); otherwise the owner
+       reports `Noted` and nothing of this arrival is relayed.
      - Nothing is relayed while the node is behind.
      - The supplier is left out of the fan-out (`Command::Relay` names
        it).
@@ -494,12 +496,13 @@ ingest deciding forks.**
      within its byte budget and offers it again when the entry reports
      room. It is never a fault of the peer. It arises only from the race
      between asking for room and offering.
-   - `Held`, `SwitchDue` and the switch outcomes: ingest's. Sync reads
-     the new `L`. **A switch that leaves the arrival as main's new tip
-     is relayed under the connect's rule (Rick, 2026-10-24):** the rule
-     is path-independent. Only the tip block is relayed; a peer that
-     lacks the promoted ancestors learns of them through the
-     announcement, whose `Unlinked` starts its sync.
+   - `Held` and the switch outcomes are ingest's. Sync reads the new
+     `L`. The owner translates `Reply::Switched` before the model sees
+     it: `Connected { height }` when the arrival is main's new tip, and
+     `Noted` otherwise (Rick, 2026-10-24: the rule is path-independent).
+     Only that tip block is relayed; a peer that lacks the promoted
+     ancestors learns of them through the announcement, whose `Unlinked`
+     starts its sync.
    - `BeyondCap`: the door's hint (DRS-X PR 2, #1123). Nothing was
      stored or hashed, so it **never raises the alarm**. Sync treats it
      as a hint: it requests headers, and a verified run can raise the
@@ -1204,7 +1207,9 @@ does it meet ingest's backpressure?
     (`P2P_TRANSPORT_LAYER.md`, the seam's post sink). Its claim tap
     copies the payload of an inbound handshake request and of either
     direction's timed sync to the owner, which decodes it and takes the
-    session's claim; the bytes still reach the C++ handler unchanged.
+    session's claim; the bytes still reach the C++ handler unchanged. A
+    copy and a kept message that share a chunk leave it in arrival order,
+    including a copy whose payload is empty.
   - The owner publishes its derived state into the node's one sync
     sender, `shekyl_node::Node::sync()` (`OwnerParts::state` is that
     sender, cloned; DX-Q3 Q13), which the RPC's facts, the miner's

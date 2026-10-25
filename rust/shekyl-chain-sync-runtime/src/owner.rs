@@ -43,10 +43,10 @@
 //!   C++ handler's until the cutover.
 //! - **Relay** is the model's decision ([`Command::Relay`]): a block that
 //!   connected as the new tip while this node, with it, is not `Behind`,
-//!   however it arrived. The owner sends it compact (the block and its
-//!   witness, no transactions) as 2008 to every established session but
-//!   the one that supplied it. That send moves behind RD's relay entry
-//!   when it lands.
+//!   however it arrived. [`crate::relay`] builds that compact announcement
+//!   (the block and its witness, no transactions) and sends it as 2008 to
+//!   every established session but the one that supplied it. That send
+//!   moves behind RD's relay entry when it lands.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
@@ -62,22 +62,22 @@ use shekyl_chain_store::store::{ChainStore, SnapshotView};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_draw_rng::RelayRng;
 use shekyl_levin::{
-    notify, BlockCompleteEntry, CoreSyncData, GetTxpoolComplement, HandshakeRequest,
-    NewCompactBlock, PortableMap, RequestBodies, RequestCompactMissingTx, RequestHeaders,
-    SyncCommand, TimedSyncRequest, TimedSyncResponse, HASH_SIZE, NOTIFY_GET_TXPOOL_COMPLEMENT,
-    NOTIFY_NEW_COMPACT_BLOCK, NOTIFY_REQUEST_COMPACT_MISSING_TX,
+    notify, CoreSyncData, GetTxpoolComplement, HandshakeRequest, NewCompactBlock, PortableMap,
+    RequestBodies, RequestCompactMissingTx, RequestHeaders, SyncCommand, TimedSyncRequest,
+    TimedSyncResponse, HASH_SIZE, NOTIFY_GET_TXPOOL_COMPLEMENT, NOTIFY_REQUEST_COMPACT_MISSING_TX,
 };
 use shekyl_peer_policy::{Invalidate, SyncReply, SyncReplyAction};
 use shekyl_runtime::{Pool, RuntimeBudget, ThreadName};
 use shekyl_seam::{Hub, SyncPayload};
 use shekyl_timing_engine::{Clock, OwnerHandle, Tick};
 use shekyl_transport_layer::{declaration, Assessment};
-use shekyl_types::{BlockHeight, ChainCount};
+use shekyl_types::{BlockHash, BlockHeight, ChainCount};
 use shekyl_wire::{BlockBody, TxBody};
 use tokio::sync::{mpsc, watch};
 use tracing::Instrument;
 
 use crate::executor::Executor;
+use crate::relay;
 use crate::router::{Routed, Tapped};
 use crate::serve::{serve_bodies, serve_headers};
 use crate::session::Session;
@@ -215,8 +215,13 @@ enum Input {
 struct Offered {
     /// The session that served the body.
     session: Session,
-    /// A body this node requested. An announcement is not, so a connect relays.
+    /// A body this node requested. An announcement is not. An oversize
+    /// solicited body invalidates its header; an oversize announcement
+    /// does not. Relay does not read this: the model decides that.
     solicited: bool,
+    /// The block the offer names. A switch is a connect when this is the
+    /// chain's new tip, and [`Outcome::Noted`] otherwise.
+    hash: BlockHash,
 }
 
 /// A request a session sent this node.
@@ -687,10 +692,13 @@ where
                     ?reply,
                     "an entry reply"
                 );
-                let solicited = offered.is_none_or(|offered| offered.solicited);
+                // An offer the owner no longer holds was solicited: a switch
+                // then cannot be the arrival, so it is noted.
+                let solicited = offered.as_ref().is_none_or(|offered| offered.solicited);
+                let arrival = offered.map(|offered| offered.hash);
                 self.event(Event::Entry {
                     tag,
-                    outcome: outcome_of(reply, solicited),
+                    outcome: outcome_of(reply, solicited, arrival),
                 });
                 self.room();
             }
@@ -740,63 +748,23 @@ where
     /// Relay a block the model relays (module docs): the block with its
     /// witness and no transactions, as 2008, to every established session
     /// but `from`, its supplier.
-    fn relay(&mut self, hash: shekyl_types::BlockHash, from: Session) {
-        let compact = match self.compact_block(hash) {
-            Ok(Some(compact)) => compact,
+    fn relay(&mut self, hash: BlockHash, from: Session) {
+        let bytes = match relay::announcement(&self.store, &hash) {
+            Ok(Some(bytes)) => bytes,
             Ok(None) => {
                 tracing::debug!(?hash, "a relayed block is no longer on the main chain");
                 return;
             }
-            Err(err) => {
+            Err(relay::Fault::Store(err)) => {
                 tracing::error!(%err, "the store could not be read: the relay is dropped");
                 return;
             }
-        };
-        let bytes = match compact.store() {
-            Ok(payload) => notify(NOTIFY_NEW_COMPACT_BLOCK, &payload),
-            Err(err) => {
+            Err(relay::Fault::Encode(err)) => {
                 tracing::error!(%err, "a relayed block did not encode");
                 return;
             }
         };
-        for row in self.hub.board().rows() {
-            if row.established() && row.id() != from.socket() {
-                // A refused send is the transport's close, not sync's.
-                let _sent = self.hub.send(row.id(), bytes.clone());
-            }
-        }
-    }
-
-    /// The main chain's block `hash` as a compact block: no transactions.
-    fn compact_block(
-        &self,
-        hash: shekyl_types::BlockHash,
-    ) -> Result<Option<NewCompactBlock>, shekyl_chain_store::store::StoreError> {
-        let snap = self.store.begin_read()?;
-        let Some(height) = snap.height_of(&hash)? else {
-            return Ok(None);
-        };
-        let shekyl_chain_rules::AtHeight::Recorded(body) = snap.block(height)? else {
-            return Ok(None);
-        };
-        let attestation_witness = match snap.attestation_witness_at(height)? {
-            shekyl_chain_rules::AtHeight::Recorded(Some(witness)) => witness,
-            _ => Vec::new(),
-        };
-        let count = snap
-            .tip()?
-            .recorded
-            .map_or(0, |tip| tip.height.to_raw().saturating_add(1));
-        Ok(Some(NewCompactBlock {
-            b: BlockCompleteEntry {
-                pruned: false,
-                block: body.block.serialize(),
-                block_weight: 0,
-                txs: Vec::new(),
-                attestation_witness,
-            },
-            current_blockchain_height: count,
-        }))
+        relay::fan_out(&self.hub, from.socket(), &bytes);
     }
 
     fn tip(&mut self, changed: &TipChanged) {
@@ -1006,7 +974,8 @@ where
                     body,
                     solicited,
                 } = arrival;
-                pending.push((tag, session, solicited));
+                let hash = header.hash();
+                pending.push((tag, session, solicited, hash));
                 EntryArrival {
                     tag: ArrivalTag(tag),
                     session: SessionId(session.socket().get()),
@@ -1020,19 +989,22 @@ where
             .collect();
         // The door's own measure, so an arrival it would admit is never
         // called oversize here.
-        let tags: Vec<(u64, Session, bool, usize)> = span
+        let tags: Vec<(u64, Session, bool, BlockHash, usize)> = span
             .iter()
             .zip(pending)
-            .map(|(arrival, (tag, session, solicited))| (tag, session, solicited, arrival.bytes()))
+            .map(|(arrival, (tag, session, solicited, hash))| {
+                (tag, session, solicited, hash, arrival.bytes())
+            })
             .collect();
         match self.door.offer_bound(span) {
             Ok(tickets) => {
-                for (tag, session, solicited, _) in &tags {
+                for (tag, session, solicited, hash, _) in &tags {
                     self.offered.insert(
                         *tag,
                         Offered {
                             session: *session,
                             solicited: *solicited,
+                            hash: *hash,
                         },
                     );
                 }
@@ -1057,7 +1029,7 @@ where
                     .door
                     .max_arrival_bytes()
                     .and_then(|max| usize::try_from(max).ok());
-                for (tag, _, solicited, bytes) in tags {
+                for (tag, _, solicited, _, bytes) in tags {
                     let outcome = match refusal {
                         // No room and a dry bucket wait for a seat. An
                         // unreadable store does not: the service stops on
@@ -1095,10 +1067,11 @@ fn proved_kind(proved: &Proved) -> &'static str {
 ///
 /// [`SyncReply::action`] is the authority for what the reply means.
 /// `solicited` is a body this node requested. A bound body is; an
-/// announcement, when that path is attached, is not. The reply carries its
-/// own verdict and its own hash: a refusal that reached this function named
-/// them.
-fn outcome_of(reply: Reply, solicited: bool) -> Outcome {
+/// announcement is not. `arrival` is the block the offer named, and it is
+/// absent when that offer is already gone. A switch is a connect when
+/// `arrival` is the promoted tip, and [`Outcome::Noted`] otherwise: the
+/// model has one relay path, and the reply carries no second one.
+fn outcome_of(reply: Reply, solicited: bool, arrival: Option<BlockHash>) -> Outcome {
     let action = sync_reply(&reply).action(solicited);
     match (action, reply) {
         (SyncReplyAction::Advance, Reply::Connected { height, .. }) => {
@@ -1129,11 +1102,16 @@ fn outcome_of(reply: Reply, solicited: bool) -> Outcome {
             SyncReplyAction::None,
             Reply::AlreadyHeld | Reply::Held { .. } | Reply::CannotFollow(_),
         ) => Outcome::Noted,
-        // The promoted blocks ascend, so the last is main's new tip.
-        (SyncReplyAction::None, Reply::Switched { promoted, .. }) => match promoted.last() {
-            Some(&(height, tip)) => Outcome::Switched { tip, height },
-            None => Outcome::Noted,
-        },
+        // The promoted blocks ascend, so the last is main's new tip. It is
+        // a connect only when that tip is the arrival this offer named.
+        (SyncReplyAction::None, Reply::Switched { promoted, .. }) => {
+            match (promoted.last(), arrival) {
+                (Some(&(height, tip)), Some(arrival)) if tip == arrival => {
+                    Outcome::Connected { height }
+                }
+                _ => Outcome::Noted,
+            }
+        }
         (action, reply) => {
             tracing::error!(?action, ?reply, "an entry reply and its action disagree");
             Outcome::Noted

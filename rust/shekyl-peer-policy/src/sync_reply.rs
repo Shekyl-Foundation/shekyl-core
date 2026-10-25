@@ -25,7 +25,8 @@ pub enum SyncReply {
     AlreadyHeld,
     /// Stored beside the incumbent.
     Held,
-    /// The chain switched. The new tip arrives on its own.
+    /// The chain switched. Whether this arrival is the new tip is the
+    /// owner's translation into a connect. This action does not say.
     Switched,
     /// The door's hint: deeper than the cap, nothing stored.
     BeyondCap,
@@ -108,7 +109,9 @@ impl SyncReply {
             Self::Throttled => SyncReplyAction::DropUnverified,
             // Already held, stored beside the incumbent, switched, or a
             // heavier chain this node cannot follow. The header stays.
-            // The new tip, or the latch, arrives on its own.
+            // A switch that leaves this arrival as the tip is the owner's
+            // translation into a connect, not an action of its own. The
+            // latch arrives separately.
             Self::AlreadyHeld | Self::Held | Self::Switched | Self::CannotFollow => {
                 SyncReplyAction::None
             }

@@ -32,6 +32,8 @@ mod offer_tests;
 #[cfg(test)]
 mod proof;
 #[cfg(test)]
+mod relay_tests;
+#[cfg(test)]
 mod scaling_tests;
 #[cfg(test)]
 mod scenarios;

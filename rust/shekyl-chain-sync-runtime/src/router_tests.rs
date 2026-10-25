@@ -14,7 +14,7 @@ use shekyl_levin::{
 use shekyl_seam::{Endpoint, Post, SocketId, SyncPayload};
 use tokio::sync::mpsc;
 
-use super::{Admitted, Fed, Forward, Routed, Router, Split, Tapped};
+use super::{Admitted, Fed, Forward, Routed, Router, Split, Taken, Tapped};
 
 fn recorder() -> (Forward, Arc<Mutex<Vec<Post>>>) {
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -51,14 +51,14 @@ fn a_split_routes_sync_whole_and_streams_the_rest() {
         let second = split.feed(&stream[cut..]);
         let mut forward = first.forward.clone();
         forward.extend_from_slice(&second.forward);
-        let mut messages = first.messages.clone();
-        messages.extend(second.messages.clone());
+        let mut taken = first.taken.clone();
+        taken.extend(second.taken.clone());
         let mut expected = a.clone();
         expected.extend_from_slice(&b);
         assert_eq!(forward, expected, "cut at {cut}");
         assert_eq!(
-            messages,
-            vec![(
+            taken,
+            vec![Taken::Message(
                 Admitted::Sync(SyncCommand::RequestHeaders),
                 b"sync-payload".to_vec()
             )],
@@ -66,7 +66,7 @@ fn a_split_routes_sync_whole_and_streams_the_rest() {
         );
     }
     let whole = split.feed(&stream);
-    assert_eq!(whole.messages.len(), 1);
+    assert_eq!(whole.taken.len(), 1);
 }
 
 #[test]
@@ -76,7 +76,7 @@ fn a_bad_signature_sends_the_rest_raw() {
     bad[0] ^= 0xff;
     let fed = split.feed(&bad);
     assert_eq!(fed.forward, bad);
-    assert!(fed.messages.is_empty());
+    assert!(fed.taken.is_empty());
     // And everything after it, even a well-formed sync bucket.
     let good = sync_bucket(SyncCommand::RequestHeaders, b"y");
     assert_eq!(
@@ -107,7 +107,7 @@ fn a_sync_bucket_the_router_does_not_admit_goes_to_cpp() {
         let mut split = Split::default();
         let fed = split.feed(&raw);
         assert_eq!(fed.forward, raw.to_vec(), "{name}");
-        assert!(fed.messages.is_empty(), "{name}");
+        assert!(fed.taken.is_empty(), "{name}");
     }
     assert_eq!(HEADER_SIZE, 29);
 }
@@ -124,7 +124,7 @@ fn a_claimed_length_is_not_an_allocation() {
     )
     .write();
     let fed = split.feed(&raw);
-    assert!(fed.forward.is_empty() && fed.messages.is_empty());
+    assert!(fed.forward.is_empty() && fed.taken.is_empty());
     // The header names a 100_000_000-byte payload. Nothing of it has
     // arrived, so the split holds the header and does not allocate it.
     assert!(
@@ -132,7 +132,13 @@ fn a_claimed_length_is_not_an_allocation() {
         "capacity {}",
         split.raw.capacity()
     );
-    assert!(matches!(split.state, super::State::Sync { .. }));
+    assert!(matches!(
+        split.state,
+        super::State::Payload {
+            intake: super::Intake::Keep(_),
+            ..
+        }
+    ));
 }
 
 fn endpoint() -> Endpoint {
@@ -528,5 +534,92 @@ fn an_attached_router_hands_an_announcement_to_the_owner() {
     let forwarded = seen.lock().expect("unpoisoned");
     assert!(
         matches!(forwarded.last(), Some(Post::Deliver { bytes, .. }) if *bytes == other_bucket(b"tx"))
+    );
+}
+
+/// A claim and a kept message in one chunk reach the owner in byte order.
+/// The claim is not saved for after the messages.
+#[test]
+fn a_claim_that_precedes_a_kept_message_reaches_the_owner_first() {
+    let (forward, seen) = recorder();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let router = Router::attached(forward, tx);
+    let id = socket(30);
+    let connector = endpoint().connector();
+    router.post(Post::Established {
+        id,
+        endpoint: endpoint(),
+    });
+    let _established = rx.try_recv().expect("established");
+    let handshake = invoke(COMMAND_HANDSHAKE, b"claim");
+    let headers = sync_bucket(SyncCommand::ResponseHeaders, b"headers");
+    let mut chunk = handshake.clone();
+    chunk.extend_from_slice(&headers);
+    router.post(Post::Deliver {
+        id,
+        connector,
+        bytes: chunk,
+    });
+    let got: Vec<Routed> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+    assert_eq!(
+        got,
+        vec![
+            Routed::Tap {
+                id,
+                kind: Tapped::HandshakeRequest,
+                payload: b"claim".to_vec(),
+            },
+            Routed::Message {
+                id,
+                command: SyncCommand::ResponseHeaders,
+                payload: b"headers".to_vec(),
+            },
+        ]
+    );
+    let forwarded: Vec<u8> = seen
+        .lock()
+        .expect("unpoisoned")
+        .iter()
+        .filter_map(|post| match post {
+            Post::Deliver { bytes, .. } => Some(bytes.clone()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(
+        forwarded, handshake,
+        "the kept response stays off the handler"
+    );
+}
+
+/// A tapped bucket with an empty payload is still a claim. It is not
+/// held until some later forward completes.
+#[test]
+fn an_empty_claim_payload_is_still_handed_to_the_owner() {
+    let (forward, _) = recorder();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let router = Router::attached(forward, tx);
+    let id = socket(31);
+    router.post(Post::Established {
+        id,
+        endpoint: endpoint(),
+    });
+    let _established = rx.try_recv().expect("established");
+    router.post(Post::Deliver {
+        id,
+        connector: endpoint().connector(),
+        bytes: invoke(COMMAND_HANDSHAKE, b""),
+    });
+    assert_eq!(
+        rx.try_recv().expect("the empty claim"),
+        Routed::Tap {
+            id,
+            kind: Tapped::HandshakeRequest,
+            payload: Vec::new(),
+        }
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "the empty claim was paired with another"
     );
 }
