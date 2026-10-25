@@ -71,11 +71,12 @@ if [ "${READY:-0}" != 1 ]; then
 fi
 echo "daemon ready"
 
-# The armed row, as the daemon announced it at start (IG-8; the text is
-# pinned by shekyl-daemon-config's the_armed_lever_switch_announces_itself).
-# grep reads the file directly: no pipe carries the verdict.
-if ! grep -qF "development lever set: dev-rpc=true" "$DATA/daemon.out"; then
-  echo "the daemon did not announce dev-rpc at start; tail of its log:"; tail -20 "$DATA/daemon.out"
+# This spawn calls generateblocks. The row is armed above, and the
+# announcement is this process's log. armed_lever.py owns the line; the
+# producer test is the_armed_lever_switch_announces_itself. The check's
+# exit status is the verdict: nothing is piped.
+if ! python3 "$WT/scripts/armed_lever.py" --check-log "$DATA/daemon.out"; then
+  echo "tail of the daemon log:"; tail -20 "$DATA/daemon.out"
   kill -9 "$DPID" 2>/dev/null; exit 10
 fi
 

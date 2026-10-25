@@ -104,6 +104,8 @@ fn install_wallet_tracing() {
 /// The line a daemon started with `--dev-rpc` writes at start (IG-8),
 /// pinned by `shekyl-daemon-config`'s
 /// `the_armed_lever_switch_announces_itself`.
+/// `scripts/ci/check_armed_lever_launchers.py` holds this text equal to
+/// `scripts/armed_lever.py` and to that test.
 const ARMED_ROW_ANNOUNCEMENT: &str = "development lever set: dev-rpc=true";
 
 /// A live `shekyld --network regtest` daemon spawned for one test, with an ephemeral

@@ -254,10 +254,10 @@ mod tests {
         );
     }
 
-    /// The armed-lever switch announces itself in exactly this text. The
-    /// regtest harnesses that arm it (engine-core's `regtest_e2e.rs`,
-    /// `scripts/bench`, `utils/python-rpc`) assert this line in the
-    /// daemon's log, so a change here is a change there.
+    /// The armed-lever switch announces itself in exactly this text.
+    /// Harnesses match the line, and
+    /// `scripts/ci/check_armed_lever_launchers.py` holds every copy of it
+    /// to this assertion.
     #[test]
     fn the_armed_lever_switch_announces_itself() {
         let (resolved, _) = setup(&["--network", "regtest", "--tor", "off", "--dev-rpc"], "");
