@@ -268,8 +268,9 @@ whose equal-familiarity `[fixed-pair]` companion itself crossed at 200k:
 two different fixed operand sets time differently. That is operand
 dependence, outside BINSEC's model, and it is
 [`CA-2`](../../design/CRYPTO_AUDIT.md) §2 (mechanism narrowed: not the
-P-state controller, not SLP vectorisation; it needs the operation inlined
-into the loop, and behind a call boundary it is flat at 1M samples,
+P-state controller, not SLP vectorisation; for square and mul it needs
+the operation inlined into the loop, and behind a call boundary they are
+flat at 1M samples,
 `results/2026-10-25/dynamic-x86_64-workstation-code-path.txt`). The floor
 device shows nothing on any row.
 
@@ -339,3 +340,12 @@ regenerate it after any run.
 | `dynamic-x86_64-fleet-measurement-host.txt` | dynamic | see file | — | — | — | not a checkct record |
 | `dynamic-x86_64-method-check.txt` | dynamic | see file | — | — | — | not a checkct record |
 | `dynamic-x86_64-workstation-pinned-clock.txt` | dynamic | see file | — | — | — | not a checkct record |
+
+## Record table 2026-10-25
+
+Rendered by `python3 docs/formal/checkct/summarize.py docs/formal/checkct/results/2026-10-25`;
+regenerate it after any run.
+
+| record | workspace | toolchain | options | target | secure / insecure / unknown | not secure |
+| --- | --- | --- | --- | --- | --- | --- |
+| `dynamic-x86_64-workstation-code-path.txt` | dynamic | see file | — | — | — | not a checkct record |

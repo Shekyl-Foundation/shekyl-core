@@ -242,8 +242,10 @@ const CONSTANT_ROW_OPS: [FieldOp; 5] = [
     FieldOp::Sqrt,
 ];
 
-/// The operations of the operand-property rows, each run on every shape.
-const PROPERTY_ROW_OPS: [FieldOp; 2] = [FieldOp::Square, FieldOp::SquareDirect];
+/// The operations of the operand-property rows, each run on every shape:
+/// both paths of `square`, and `sqrt`, whose out-of-line body is itself a
+/// loop of inlined field operations.
+const PROPERTY_ROW_OPS: [FieldOp; 3] = [FieldOp::Square, FieldOp::SquareDirect, FieldOp::Sqrt];
 
 /// The positive controls' parameters: a loop that branches on the operand
 /// in every iteration, and a loop whose length is the operand. Both must

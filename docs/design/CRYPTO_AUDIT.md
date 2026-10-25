@@ -191,7 +191,9 @@ division under the same toolchain. The evidence, all in
 - at 200k samples the equal-familiarity `[fixed-pair]` row for square
   crossed on the fleet host (−14): two different fixed operand sets time
   differently, which is the signature of operand dependence rather than of
-  any harness asymmetry;
+  any harness asymmetry (on the workstation's direct path, 2026-10-25, the
+  `[fixed-pair]` rows stay flat at 1M and the operand evidence is the fresh
+  shape rows instead; see the code-path run below);
 - the floor device (`dynamic-aarch64-floor-device.txt`, Cortex-A72) shows
   nothing on any row, so it is x86_64-specific as far as measured.
 
@@ -269,7 +271,8 @@ promise against), absent on the Cortex-A72, and reached only through a
 canonical representation. The MSR driver refuses unprivileged APERF/MPERF
 reads, so cycles against wall time, which would name it further, needs a
 root-run sampler; it is not required to act. (The constant and
-structured rows of this run called the operation directly, inlined.)
+structured square and mul rows of this run called the operation directly,
+inlined; sqrt is an out-of-line call in every binary.)
 
 **The code path decides (workstation, 2026-10-25,
 [`results/2026-10-25/dynamic-x86_64-workstation-code-path.txt`](../formal/checkct/results/2026-10-25/dynamic-x86_64-workstation-code-path.txt)).**
@@ -283,14 +286,23 @@ crosses on the fixed set (−165 cropped at 1M), a constant operand (−139)
 and every operand shape (sparse −86, small −108, dense −134), and mul on
 the fixed set (−61) and a constant (−67); behind the wrapper, every one of
 those rows is flat at 1M (|t| ≤ 4.0). Nulls and `[fixed-pair]` rows are
-flat on both paths. `Field25519` is flat on every null, test, `[fixed-pair]`
+flat on both paths. By the harness's own rule the direct fixed-set crossing
+alone would read as familiarity, since its `[fixed-pair]` companion stays
+flat; the operand evidence is the shape rows, whose values are fresh and
+distinct for every element (sparse −86, small −108), and the constant row. `Field25519` is flat on every null, test, `[fixed-pair]`
 and constant row on both paths at 1M; only its operand-shape rows sit near
 the threshold, on both paths and in the cropped t alone (sparse +6 / +9,
 dense −6 / −5, small under; full-sample |t| ≤ 2.5), with mixed signs and
 no consistent growth from 200k: unsettled at this size, two orders below
-`HelioseleneField`'s, and not a code-path effect. The operand dependence is real and needs the
-operation inlined among its neighbours in the loop: across a call
-boundary it is not observed at 1M samples.
+`HelioseleneField`'s, and not a code-path effect. So for square and mul
+the operand dependence is real and needs the operation inlined among its
+neighbours in the loop: behind a call boundary it is not observed at 1M
+samples. `sqrt`, an out-of-line call in every binary whose body is a loop
+of inlined squares and multiplies, crosses behind its call only on the
+rows whose operands repeat (fixed set −49 and constant −46 at 1M, dense
+−21 at 200k) and is flat on its `[fixed-pair]` row and on the fresh
+sparse and small shapes: the familiarity pattern, not shown operand
+dependence. `Field25519` sqrt is flat on every row.
 
 **Mechanism: narrowed.** Two remained once BINSEC's model was exhausted, with
 different owners and fixes; the pinned-clock run has since eliminated (a),
@@ -317,16 +329,17 @@ membership path. A ~1–2 % per-operation dependence on an operand property
 leaks that property (a few bits per operation) to a co-resident observer
 of the proving machine, accumulating over the thousands of operations in
 one proof; harm if exploitable is deanonymisation of that spend, the CA-1
-envelope. Not remote. The direct path is the one to assume: nothing in
-the prover puts a call boundary around these operators, so the wrapped
-path's flatness is a property of the harness, not a mitigation.
+envelope. Not remote. Nothing in the prover puts a call boundary around
+these operators, so the direct path is the closer analogue and the wrapped
+path's flatness is no mitigation; the prover's neighbouring code is its
+own, and is not what this harness measures.
 
 **Disposition.** Open; no waiver is involved (nothing in `cargo audit`
 covers it). Owner: this row. The monero-oxide notice needed an actionable
 statement, not "two fixed operand sets time differently"; it now has one:
 inlined `HelioseleneField` square and mul show operand-dependent time on
-x86_64 with the clock pinned and with turbo on, the same operations behind
-a call boundary do not, the disassembly shows no data-dependent
+x86_64 with the clock pinned and with turbo on (fresh structured operands
+included), the same two operations behind a call boundary do not, the disassembly shows no data-dependent
 instruction, and SLP vectorisation is not involved. Posting it is Rick's
 call. The RustCrypto and serai notices are independent of CA-2.
 

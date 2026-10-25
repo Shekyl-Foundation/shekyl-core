@@ -112,3 +112,30 @@ property: fe25519 square (direct) dense t=   -1.38  t(crop 1%)=   -5.21  mean ns
 end (UTC): Sun Oct 25 04:48:16 PM UTC 2026  load: 1.91 2.85 3.78
 
 reading: HelioseleneField square and mul cross hard with the operation inlined into the loop ((direct): fixed set, constant and every operand shape, growing from 200k to 1M, e.g. square fixed set -65 -> -165, dense -80 -> -134 cropped) and are flat behind the call at 1M on every contrast; nulls and [fixed-pair] rows flat on both paths. The earlier records' "fixed-set flat, constant/structured cross" compared the wrapped fixed-set rows with directly called control rows: the code path, not the contrast, separated them. Field25519: flat on every null, test, [fixed-pair] and constant row on both paths at 1M; its operand-shape rows sit near the threshold in the cropped t only, with mixed signs and no consistent growth (unsettled, two orders below HelioseleneField's, both paths). half: rows (all behind calls), from_repr on unrestricted bytes and Residue::pow flat; both positive controls far over the threshold.
+
+## sqrt (an out-of-line call in every binary; its body is a loop of inlined field operations)
+run window (UTC): Sun Oct 25 04:53:20 PM UTC 2026  load: 0.76 1.90 3.12
+===== 200000 sqrt (an out-of-line call in this binary, its body a loop of inlined field operations)
+helio sqrt                         t=  -24.12  t(crop 1%)=  -48.44  mean ns fixed/random    182374/   183420  CLASS DIFFERENCE
+helio sqrt [fixed-pair]            t=   -0.55  t(crop 1%)=   -0.89  mean ns fixed/random    258865/   259225  no difference seen
+constant: helio sqrt               t=   -5.04  t(crop 1%)=  -81.41  mean ns fixed/random    327081/   332513  CLASS DIFFERENCE
+fe25519 sqrt                       t=    1.12  t(crop 1%)=    1.01  mean ns fixed/random    423869/   423475  no difference seen
+fe25519 sqrt [fixed-pair]          t=   -0.84  t(crop 1%)=   -1.97  mean ns fixed/random    343452/   343509  no difference seen
+constant: fe25519 sqrt             t=    2.28  t(crop 1%)=    1.12  mean ns fixed/random    348333/   348175  no difference seen
+===== 1000000 helio sqrt
+helio sqrt                         t=  -17.21  t(crop 1%)=  -49.33  mean ns fixed/random    182193/   183154  CLASS DIFFERENCE
+helio sqrt [fixed-pair]            t=    0.64  t(crop 1%)=    0.91  mean ns fixed/random    182581/   182537  no difference seen
+constant: helio sqrt               t=  -11.48  t(crop 1%)=  -45.91  mean ns fixed/random    194426/   196056  CLASS DIFFERENCE
+end (UTC): Sun Oct 25 05:26:09 PM UTC 2026  load: 7.53 4.52 4.22
+
+run window (UTC): Sun Oct 25 05:26:56 PM UTC 2026  load: 9.14 5.33 4.50
+===== 200000 sqrt operand shapes (binary: the commit after 2fc4d5e64, sqrt added to the shape rows)
+property: helio sqrt sparse        t=    1.63  t(crop 1%)=    2.80  mean ns fixed/random    394670/   390018  no difference seen
+property: helio sqrt small         t=    0.25  t(crop 1%)=   -1.86  mean ns fixed/random    245384/   245309  no difference seen
+property: helio sqrt dense         t=  -13.08  t(crop 1%)=  -21.17  mean ns fixed/random    205884/   207796  CLASS DIFFERENCE
+property: fe25519 sqrt sparse      t=    1.88  t(crop 1%)=    2.08  mean ns fixed/random    391880/   391346  no difference seen
+property: fe25519 sqrt small       t=    0.36  t(crop 1%)=    0.56  mean ns fixed/random    404117/   403867  no difference seen
+property: fe25519 sqrt dense       t=    0.41  t(crop 1%)=    0.96  mean ns fixed/random    390486/   390345  no difference seen
+end (UTC): Sun Oct 25 05:41:17 PM UTC 2026  load: 4.95 7.90 8.08
+
+reading (sqrt): HelioseleneField sqrt crosses behind its call on the rows whose operands repeat (fixed set -49 and constant -46 cropped at 1M, dense -21 at 200k: dense is one value) and is flat on its [fixed-pair] row and on the fresh shape rows (sparse, small); Field25519 sqrt flat on every row. By the harness's rule that is the familiarity pattern, not shown operand dependence; it does not grow from 200k to 1M either (load varied between blocks: the 1M window ended at load 7.5). Contrast square (direct), whose FRESH shape rows cross (-86, -108 at 1M).
