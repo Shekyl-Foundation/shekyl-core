@@ -533,6 +533,12 @@ impl RulesAt for RulesOf {
 /// node on one runs no producer yet; nor does a node with Tor off. Either
 /// way the templates still draw from the ring, which keeps its bound, and
 /// the node says once why it files nothing.
+///
+/// Only the endpoint of the operator's SOCKS row is used. The fetch client
+/// presents credentials derived from each read's nonce (`SF-D3`: a fresh
+/// circuit per read through `IsolateSOCKSAuth`), so a configured
+/// `tor-socks-username`/`password` pair is not sent, and a proxy that
+/// authenticates refuses every read.
 fn producer_seat(
     config: &DaemonConfig,
     store: &Arc<ChainStore>,

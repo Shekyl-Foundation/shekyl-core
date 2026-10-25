@@ -1336,9 +1336,9 @@ files to.
 
 ### 16.5 Not in this step
 
-The producer and challenger (§16.3). The weight rule for the prunable
-part of a carrier (the fee-and-weight round's). `BA-T31` and `BA-T32`.
-The settlement-timing question `ESR-12`.
+The producer and challenger, built as increment 4c (§16.11). The weight
+rule for the prunable part of a carrier (the fee-and-weight round's).
+`BA-T31` and `BA-T32`. The settlement-timing question `ESR-12`.
 
 ### 16.6 Rulings (maintainer, relayed 2026-10-10)
 
@@ -1729,12 +1729,18 @@ loop every read takes, with the holder named under the bond record's
 **receipt key**: the scheduler's `Holder` and `Read` take the scheme as a
 type parameter, and the header carries the stream so a support draw's
 receipt verifies on the support stream. A verified read is the pass. An
-identity-scheme reply — the live serving host until 4b — is classified by
-the excess its envelope adds over the receipt ceiling, files the block
+identity-scheme reply — the live serving host until 4b — is recognised by
+the bytes its wider envelope adds (`FN_DSA_HYBRID.md` §9.3: refused from
+the head on a small shard, exactly that many bytes left ahead of the
+envelope on a larger one), files the block
 with no passes, and is logged once per block as "no receipt scheme on the
-serving side yet". A block files when every read has settled, or at
-`h + W₂ − M` (`M` = 30) at the latest; a block with no draws on either
-stream files nothing (`SCS-P33`).
+serving side yet". A block files when every read has settled. The last
+planned read is at `h + W₂ − M` (`M` = 30); a read still in flight then is
+waited for until `h + W₂ − 1`, the last tip whose next block is inside the
+window, and at that tip every draw not yet read is abandoned and the block
+files with what passed. A block with no draws on either stream files
+nothing (`SCS-P33`). A block of this daemon's that replaces a popped one
+at its height is claimed in the popped one's place.
 
 **The draws** come from the connector, which holds the drawable memo:
 `draw_targets` derives them with `select_pairs` and `support_seats`, the
