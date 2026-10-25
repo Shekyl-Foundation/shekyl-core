@@ -47,6 +47,7 @@ use crate::attempts::Attempts;
 use crate::bans::BanSnapshot;
 use crate::candidate::CandidateFilter;
 use crate::fill::{plan, Census, DialAim, DrawList, IN_FLIGHT_BOUND};
+use crate::link_tally::{LinkFold, TallySink, TorLinkTally};
 use crate::memory::FailedAddresses;
 use crate::nonce::{HandshakeNonce, HandshakeNonceSet, InFlightNonce};
 use crate::pace::next_wake_nanos;
@@ -122,6 +123,9 @@ pub struct Shared {
     /// When the address file was last written or read; `None` until
     /// then, so the first due store is one interval after the open.
     last_store: Option<Tick>,
+    /// What the Tor dials say about the Tor link (`TOR_SUPERVISOR.md`
+    /// §4.2), for the managed-Tor supervisor.
+    tor_link: LinkFold,
 }
 
 impl Shared {
@@ -197,6 +201,7 @@ impl Dialer {
                 configured: Vec::new(),
                 stranded: [false; ConnectorId::COUNT],
                 last_store: None,
+                tor_link: LinkFold::new(),
             })),
             nonces: HandshakeNonceSet::new(),
             stop: Arc::new(AtomicBool::new(false)),
@@ -232,6 +237,19 @@ impl Dialer {
     pub fn set_network_id(&self, network_id: [u8; 16]) {
         *self.network_id.lock().expect("network id") = Some(network_id);
         self.bell.ring();
+    }
+
+    /// Send what the Tor dials say about the Tor link to `sink`: the tally
+    /// now, then each change. The sink runs under the dialer's lock and must
+    /// not block.
+    pub fn report_tor_link(&self, sink: TallySink) {
+        self.shared().tor_link.set_sink(sink);
+    }
+
+    /// The Tor link tally now.
+    #[must_use]
+    pub fn tor_link_tally(&self) -> TorLinkTally {
+        self.shared().tor_link.tally()
     }
 
     /// The core published a tip: a loop parked for want of one looks again.
@@ -503,6 +521,7 @@ impl Dialer {
         shared.attempts(connector).finish(outcome);
         shared.lists.apply(outcome, now, rng);
         shared.memory.observe(outcome, now);
+        shared.tor_link.observe(connector, outcome);
     }
 
     /// Record `outcome` after the hub's clock has been read.

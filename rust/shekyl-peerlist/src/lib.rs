@@ -70,7 +70,9 @@ pub use shekyl_net_address::{Host, NetworkAddress};
 /// that vocabulary; this re-export does not.
 pub use shekyl_relay_privacy::ConnectionId;
 pub use shekyl_timing_engine::Tick;
-pub use shekyl_transport_layer::{connector_for, CloseCause, CloseKind, ConnectorId, Direction};
+pub use shekyl_transport_layer::{
+    connector_for, CloseCause, CloseKind, ConnectorId, Direction, LinkEvidence,
+};
 pub use validity::{RangeV4, RangeV6, RefusedSet, REFUSED_V4, REFUSED_V6};
 
 /// The disclosure count (D3): how many white addresses one disclosure

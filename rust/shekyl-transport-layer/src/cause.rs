@@ -244,8 +244,82 @@ impl CloseCause {
             _ => false,
         }
     }
+
+    /// What this cause says about this node's link to the overlay, for a
+    /// dial through this node's own SOCKS proxy (`TOR_SUPERVISOR.md` §4.2,
+    /// the SOCKS reply table). Each reply answers two questions: whether it
+    /// is about the destination ([`Self::names_the_destination`]) and
+    /// whether it is about the link (this). The managed Tor supervisor
+    /// reads this class; it never reads reply codes.
+    ///
+    /// A kind that needs the proxied stream to have opened (a transport or
+    /// Levin exchange that failed, a peer close, a refused record or
+    /// session) is [`LinkEvidence::Opened`]: the link carried bytes to a
+    /// peer. [`CloseKind::ProxyUnavailable`] and [`CloseKind::DialFailed`]
+    /// are this node's own SOCKS port failing. [`CloseKind::TransportTimeout`]
+    /// on a proxied dial is the proxy never answering within the dial's
+    /// deadline, which is a rate, not a verdict. This node's own close, an
+    /// inbound refusal and an admission refusal say nothing.
+    #[must_use]
+    pub const fn link_evidence(self) -> LinkEvidence {
+        match self.kind {
+            CloseKind::ProxyRefused => proxy_reply_link_evidence(self.reply_code),
+            CloseKind::ProxyUnavailable | CloseKind::DialFailed => LinkEvidence::LinkFailed,
+            CloseKind::TransportTimeout => LinkEvidence::TimedOut,
+            CloseKind::PrefixMismatch
+            | CloseKind::TransportHandshakeFailed
+            | CloseKind::LevinHandshakeTimeout
+            | CloseKind::LevinHandshakeRejected
+            | CloseKind::PeerClosed
+            | CloseKind::RecordRejected
+            | CloseKind::SessionRefused
+            | CloseKind::IoError
+            | CloseKind::SendQueueFull => LinkEvidence::Opened,
+            CloseKind::AdmissionRefused | CloseKind::LocalClose | CloseKind::InboundNotAccepted => {
+                LinkEvidence::Silent
+            }
+        }
+    }
 }
 
+/// What a proxied dial's close says about this node's link to the overlay
+/// (`TOR_SUPERVISOR.md` §4.2). [`CloseCause::link_evidence`] is the one
+/// classifier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LinkEvidence {
+    /// The proxied stream opened: the link reached a peer.
+    Opened,
+    /// This node's link failed: SOCKS general failure (`0x01`), a ruleset
+    /// (`0x02`), network unreachable (`0x03`), TTL expired (`0x06`), or the
+    /// SOCKS port itself refusing or closing without a reply.
+    LinkFailed,
+    /// No answer in time: Tor's rendezvous and introduction timeouts
+    /// (`0xF3`, `0xF7`) or the dial's own deadline. Alone it is neither the
+    /// link nor the destination; link-down is such timeouts across distinct
+    /// destinations with no opened stream between them.
+    TimedOut,
+    /// The reply names the destination (`0x04`, `0x05`, `0xF0`, `0xF1`,
+    /// `0xF2`). The address memory's evidence, never the link's.
+    Destination,
+    /// The reply is about the request this node sent (`0x07`, `0x08`,
+    /// `0xF4`, `0xF5`, `0xF6`): a defect, never peer or link evidence.
+    OurRequest,
+    /// Nothing about the link: this node's own close, an unknown reply.
+    Silent,
+}
+
+/// RFC 1928 §6. General SOCKS server failure.
+const SOCKS_GENERAL_FAILURE: u16 = 0x01;
+/// RFC 1928 §6. The connection is not allowed by a ruleset.
+const SOCKS_NOT_ALLOWED: u16 = 0x02;
+/// RFC 1928 §6. The network is unreachable.
+const SOCKS_NETWORK_UNREACHABLE: u16 = 0x03;
+/// RFC 1928 §6. TTL expired.
+const SOCKS_TTL_EXPIRED: u16 = 0x06;
+/// Tor extended error. The rendezvous failed (timed out).
+const TOR_RENDEZVOUS_FAILED: u16 = 0xF3;
+/// Tor extended error. The introduction timed out.
+const TOR_INTRODUCTION_TIMED_OUT: u16 = 0xF7;
 /// RFC 1928 §6. The destination host was not reached.
 const SOCKS_HOST_UNREACHABLE: u16 = 0x04;
 /// RFC 1928 §6. The destination refused the connection.
@@ -280,6 +354,20 @@ const fn proxy_reply_names_the_destination(reply: u16) -> bool {
             | TOR_DESCRIPTOR_UNUSABLE
             | TOR_INTRODUCTION_FAILED
     )
+}
+
+/// The link class of an overlay SOCKS reply (`TOR_SUPERVISOR.md` §4.2).
+const fn proxy_reply_link_evidence(reply: u16) -> LinkEvidence {
+    match reply {
+        SOCKS_GENERAL_FAILURE
+        | SOCKS_NOT_ALLOWED
+        | SOCKS_NETWORK_UNREACHABLE
+        | SOCKS_TTL_EXPIRED => LinkEvidence::LinkFailed,
+        TOR_RENDEZVOUS_FAILED | TOR_INTRODUCTION_TIMED_OUT => LinkEvidence::TimedOut,
+        _ if proxy_reply_names_the_destination(reply) => LinkEvidence::Destination,
+        _ if socks_reply_is_our_request(reply) => LinkEvidence::OurRequest,
+        _ => LinkEvidence::Silent,
+    }
 }
 
 /// Replies that mean the request this node sent, not the onion.
@@ -353,7 +441,7 @@ _Static_assert(offsetof(shekyl_close_cause, reply_code) == {CLOSE_CAUSE_REPLY_OF
 
 #[cfg(test)]
 mod tests {
-    use super::{c_header, CloseCause, CloseKind, Phase};
+    use super::{c_header, CloseCause, CloseKind, LinkEvidence, Phase};
     use crate::declaration::{declaration, Assessment, DestinationAuth};
     use crate::ConnectorId;
 
@@ -498,6 +586,42 @@ mod tests {
             );
         }
         assert!(!CloseCause::proxy_refused(0x0100).implicates_address(ConnectorId::Tor));
+    }
+
+    /// §4.2's SOCKS reply table, written out here from the spec and not
+    /// from `proxy_reply_link_evidence`: every byte reply and every kind
+    /// lands in its row, and only the four link replies and an unavailable
+    /// proxy are link failures.
+    #[test]
+    fn every_reply_and_kind_lands_in_its_link_row() {
+        for reply in 0u16..=0x00FF {
+            let expected = match reply {
+                0x01 | 0x02 | 0x03 | 0x06 => LinkEvidence::LinkFailed,
+                0xF3 | 0xF7 => LinkEvidence::TimedOut,
+                0x04 | 0x05 | 0xF0 | 0xF1 | 0xF2 => LinkEvidence::Destination,
+                0x07 | 0x08 | 0xF4 | 0xF5 | 0xF6 => LinkEvidence::OurRequest,
+                _ => LinkEvidence::Silent,
+            };
+            assert_eq!(
+                CloseCause::proxy_refused(reply).link_evidence(),
+                expected,
+                "reply {reply:#x}"
+            );
+        }
+        for kind in CloseKind::ALL {
+            if *kind == CloseKind::ProxyRefused {
+                continue;
+            }
+            let expected = match kind {
+                CloseKind::ProxyUnavailable | CloseKind::DialFailed => LinkEvidence::LinkFailed,
+                CloseKind::TransportTimeout => LinkEvidence::TimedOut,
+                CloseKind::AdmissionRefused
+                | CloseKind::LocalClose
+                | CloseKind::InboundNotAccepted => LinkEvidence::Silent,
+                _ => LinkEvidence::Opened,
+            };
+            assert_eq!(CloseCause::new(*kind).link_evidence(), expected, "{kind:?}");
+        }
     }
 
     #[test]
