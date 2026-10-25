@@ -248,8 +248,12 @@ Or trigger manually from the Actions tab without retagging.
 - **RISC-V 64-bit** is switched off in the Gitian descriptor (Rick,
   2026-10-24): the constant-time record (`docs/design/CRYPTO_AUDIT.md` §1)
   cannot cover a target with no BINSEC decoder and no board, so it is not
-  shipped until a user asks for it and there is a way to measure it. The
-  `riscv64` arch mapping in CMake stays, so a source build is still
-  possible. 32-bit platforms are
+  shipped until a user asks for it and there is a way to measure it.
+  Restoration is two edits: put `riscv64-linux-gnu` back on `HOSTS` in
+  `contrib/gitian/gitian-linux.yml`, and drop `"switched_off"` from its
+  row in `config/tor_pins.json`. The apt toolchain, the CMake arch
+  mapping, the descriptor's back-compat branch, and the host-to-rust-triple
+  map stay, so the host's triple is already recorded. A source build is
+  still possible while it is off. 32-bit platforms are
   permanently out of scope on security grounds — see `docs/CHANGELOG.md`
   entry "Retired 32-bit build targets".

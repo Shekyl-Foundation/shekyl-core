@@ -92,10 +92,10 @@ jobs:
       fail-fast: false
       matrix:
         # The legs are contrib/depends/ci-toolchains.json, chosen by the
-        # `legs` job. Switched off (Rick, 2026-10-24): RISC-V 64-bit
-        # (riscv64-linux-gnu, g++-riscv64-linux-gnu, riscv64gc-unknown-linux-gnu),
-        # which no constant-time measurement can cover (CRYPTO_AUDIT.md §1);
-        # back when a user asks and there is a way to measure it. 32-bit targets (armv7, i686) were permanently
+        # `legs` job. riscv64 Linux is not a leg. It left the release matrix
+        # on 2026-10-24 (CA-1; docs/design/CRYPTO_AUDIT.md §1). The switch is
+        # contrib/gitian/gitian-linux.yml `HOSTS`; a depends leg returns as a
+        # row of that JSON when the host does. 32-bit targets (armv7, i686) were permanently
         # retired in v3.1.0-alpha.5 (Chore #3); see docs/CHANGELOG.md
         # "Retired 32-bit build targets" for the PQC constant-time security
         # argument that makes this retirement load-bearing rather than
