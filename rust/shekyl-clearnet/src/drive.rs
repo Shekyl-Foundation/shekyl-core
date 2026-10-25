@@ -27,7 +27,8 @@ use shekyl_peer_policy::InboundCeiling;
 use shekyl_socks::{connect as socks_connect, Destination, Proxy, ProxyWarn, SocksError};
 use shekyl_timing_engine::{Clock, Handle, OwnerClass, OwnerHandle, Tick};
 use shekyl_transport_layer::{
-    check_dial, CloseCause, CloseKind, CloseResult, ConnectorId, OpenError, OpenSocket, Sockets,
+    check_dial, CloseCause, CloseKind, CloseResult, ConnectorId, Marks, OpenError, OpenSocket,
+    Sockets,
 };
 use tokio::io::AsyncWriteExt;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
@@ -311,7 +312,10 @@ where
                 Ok(()) => {}
                 Err(SocksError::Refused { reply }) => {
                     drop(stream.shutdown().await);
-                    return Err(CloseCause::proxy_refused(u16::from(reply)));
+                    // An operator's clearnet proxy: its reply names nothing (R2,
+                    // nothing authenticates the destination) and clearnet makes
+                    // one attempt per test, so no mark applies.
+                    return Err(CloseCause::proxy_refused(u16::from(reply), Marks::NONE));
                 }
                 Err(error @ (SocksError::AuthRejected { .. } | SocksError::AuthFailed { .. })) => {
                     drop(stream.shutdown().await);

@@ -184,11 +184,13 @@ supervisor makes case (ii) routine, so it is closed first. **Proposed fix,
 without touching the list rule:** the preconditions are part of the plan. No
 draw happens unless the connector's link is usable and the tip and network id
 are known; while the link is down the owner loop waits on the link's change,
-not on a timer. A local failure that races the link's fall costs one draw per
-incident. The drop stays: a non-implicating `DialFailed` is not returned to gray
-(closed by the P2P lane, Rick, 2026-10-16, #1092; the dialer brief, "The
-fill"). Implication decides the failed-address memory, not list membership,
-and on clearnet nothing implicates, so the drop is what clears dead hosts.
+not on a timer. A local failure that races the link's fall cools one address
+for one rung per incident: a `DialFailed` whose cause proves no misbehaviour
+cools its address on gray, and only proof drops it (the gray lifecycle, Rick,
+2026-10-24; the dialer brief, "The fill"). *Records-was (Rick, 2026-10-16,
+#1092): the drop stayed, costing one draw per incident; implication decided the
+failed-address memory, not list membership, and on clearnet nothing implicated,
+so the drop was what cleared dead hosts.*
 
 **TSR-F2 (high; Tor lane). Subscribing to events makes the sink a memory
 channel an outsider can fill.** `EventSink` wraps an unbounded `mpsc`. Once
@@ -403,13 +405,15 @@ here.
 | a probe nonce arrived | the dialer's nonce set (§4.5) | inbound evidence |
 
 Each SOCKS reply answers two questions, not one: is it about the destination,
-and is it about our link. One table drives both the address memory
-(`implicates_address`) and the supervisor:
+and is it about our link. One table drives both the marks on the cause
+(`proxy_reply_marks` in `shekyl-tor/src/replies.rs`, this connector's; the
+lists read the marks; *records-was* the address memory, `implicates_address`
+in the transport layer) and the supervisor:
 
 | Reply | About | Goes to |
 | --- | --- | --- |
 | `0x00` | — | link evidence (good) |
-| `0x05`, `0xF0`, `0xF1`, `0xF2`, and `0x04` | the destination | the address memory, as today. **Residual** (`LV3_CONNECTION_OBJECT.md:1829`; `IMPLEMENTATION_INDEX.md:798`): an attacker on the directories responsible for a target's key can force reply `0x04`, and with `ExtendedErrors` on it forces `0xF0` (descriptor not found) instead; either buys only Tor's short backoff. It stays a residual under the dialer's failure memory (240 s, doubling to an hour, `rust/shekyl-dialer/src/memory.rs:34-38`): that attacker already makes the onion unreachable for everyone, and our memory only reflects it |
+| `0x05`, `0xF0`, `0xF1`, `0xF2`, and `0x04` | the destination | the lists, as a failed test (the gray lifecycle, 2026-10-24): `0x04`, `0xF0` and `0xF2` are worth a retry within the test, `0x05` and `0xF1` are final, and none proves misbehaviour, so the address cools (2 min, doubling to 1 h) and is never dropped for them. **Residual** (`LV3_CONNECTION_OBJECT.md:1829`; `IMPLEMENTATION_INDEX.md:798`): an attacker on the directories responsible for a target's key can force reply `0x04`, and with `ExtendedErrors` on it forces `0xF0` (descriptor not found) instead; either fails one test and buys one rung of the cooldown: that attacker already makes the onion unreachable for everyone, and our cooldown only reflects it. *Records-was: the address memory, 240 s doubling to an hour, `shekyl-dialer/src/memory.rs`* |
 | `0x01`, `0x02`, `0x03`, `0x06`; our SOCKS port refusing or closing without a reply (`ProxyUnavailable`, `rust/shekyl-transport-layer/src/cause.rs:228-231`) | our link | the supervisor |
 | `0xF3`, `0xF7` | neither, alone | the supervisor, as a rate: link-down is timeouts across **distinct** destinations with no success between them, never a count of replies |
 | `0x07`, `0x08`, `0xF4`, `0xF5`, `0xF6` | this node (we never send what draws these) | the defect log; never peer or link evidence |

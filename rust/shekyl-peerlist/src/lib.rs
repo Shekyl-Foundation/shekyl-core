@@ -70,7 +70,9 @@ pub use shekyl_net_address::{Host, NetworkAddress};
 /// that vocabulary; this re-export does not.
 pub use shekyl_relay_privacy::ConnectionId;
 pub use shekyl_timing_engine::Tick;
-pub use shekyl_transport_layer::{connector_for, CloseCause, CloseKind, ConnectorId, Direction};
+pub use shekyl_transport_layer::{
+    connector_for, CloseCause, CloseKind, ConnectorId, Direction, Marks,
+};
 pub use validity::{RangeV4, RangeV6, RefusedSet, REFUSED_V4, REFUSED_V6};
 
 /// The disclosure count (D3): how many white addresses one disclosure
@@ -122,6 +124,42 @@ pub const WHITE_CAP: usize = 1000;
 
 /// Nanoseconds in one hour.
 const HOUR_NANOS: u64 = 60 * 60 * 1_000_000_000;
+
+/// The cooldown after the first failed test of a gray address: two
+/// minutes (the gray lifecycle, Rick 2026-10-24). Each consecutive failed
+/// test doubles it, to [`COOLDOWN_CAP_NANOS`]; each is jittered by
+/// [`cooldown_nanos`].
+///
+/// **Assumption** (`DAEMON_RELAY_PRIVACY.md` §97): a starting value,
+/// re-derived from testnet runs.
+pub const COOLDOWN_FIRST_NANOS: u64 = 2 * 60 * 1_000_000_000;
+
+/// The longest cooldown, one hour. What the cap means: a dead address
+/// costs each node at most about 24 dials a day.
+///
+/// **Assumption** (§97), as [`COOLDOWN_FIRST_NANOS`].
+pub const COOLDOWN_CAP_NANOS: u64 = HOUR_NANOS;
+
+/// The doublings that reach the cap from the first cooldown: the
+/// consecutive count saturates here, so a counter that kept growing could
+/// not wrap and hand the short cooldown back to an address that has failed
+/// thousands of times.
+const COOLDOWN_DOUBLINGS: u32 = 5;
+
+/// The cooldown after `consecutive` failed tests in a row (at least one):
+/// [`COOLDOWN_FIRST_NANOS`] doubled per failure after the first, capped
+/// at [`COOLDOWN_CAP_NANOS`], then stretched by a uniform draw over
+/// `[0, 50%]` of itself, so the nodes that failed the same address at the
+/// same moment do not retest it in step.
+///
+/// **Assumption** (§97): the jitter width is a starting value.
+pub fn cooldown_nanos<R: shekyl_draw_rng::RelayRng + ?Sized>(consecutive: u32, rng: &mut R) -> u64 {
+    let doublings = consecutive.saturating_sub(1).min(COOLDOWN_DOUBLINGS);
+    let base = COOLDOWN_FIRST_NANOS
+        .saturating_mul(1u64 << doublings)
+        .min(COOLDOWN_CAP_NANOS);
+    base.saturating_add(shekyl_draw_rng::bounded_uniform(rng, base / 2))
+}
 
 /// The white expiry: a white address with no contact this node initiated
 /// for this long returns to gray (brief §2, `EXPIRATION_PERIOD`). In

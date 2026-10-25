@@ -108,7 +108,7 @@ fn a_restart_puts_every_address_on_gray() {
     );
     assert!(list.is_white(&white));
 
-    let file = list.to_file_bytes();
+    let file = list.to_file_bytes(&mut NoBans, Tick::new(0));
     let mut restarted = Peerlist::new(RefusedSet::NON_GLOBAL);
     assert_eq!(restarted.restore_file(&file, &mut rng), Ok(mixed().len()));
     for address in mixed() {
@@ -116,7 +116,7 @@ fn a_restart_puts_every_address_on_gray() {
         assert!(!restarted.is_white(&address), "{address:?} is not white");
     }
     assert_eq!(
-        sorted(restarted.persistable()),
+        sorted(restarted.persistable(&mut NoBans, Tick::new(0))),
         sorted(mixed()),
         "the same set comes back"
     );
@@ -151,7 +151,7 @@ fn a_file_of_another_version_is_dropped_whole() {
             Err(AddressFileError::Version { found: other })
         );
         assert_eq!(
-            list.persistable(),
+            list.persistable(&mut NoBans, Tick::new(0)),
             vec![v4(9)],
             "version {other}: nothing of the file was admitted"
         );
@@ -235,14 +235,17 @@ fn the_file_carries_no_refused_address_without_the_flag() {
                 .expect("operator");
         }
     }
-    assert_eq!(decode(&strict.to_file_bytes()), Ok(vec![v4(1)]));
-    let written = decode(&open.to_file_bytes()).expect("file");
+    assert_eq!(
+        decode(&strict.to_file_bytes(&mut NoBans, Tick::new(0))),
+        Ok(vec![v4(1)])
+    );
+    let written = decode(&open.to_file_bytes(&mut NoBans, Tick::new(0))).expect("file");
     assert!(written.contains(&private), "written under the flag");
 
     // The flagged file does not seed a node started without the flag.
     let mut restarted = Peerlist::new(RefusedSet::NON_GLOBAL);
     assert_eq!(
-        restarted.restore_file(&open.to_file_bytes(), &mut rng),
+        restarted.restore_file(&open.to_file_bytes(&mut NoBans, Tick::new(0)), &mut rng),
         Ok(1)
     );
     assert!(!restarted.is_gray(&private));

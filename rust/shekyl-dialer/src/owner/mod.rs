@@ -21,6 +21,7 @@
 //! could supply it, and the wake spacing resumes when the connector is ready.
 
 mod address;
+pub(crate) use address::address_of;
 mod handshake;
 mod ready;
 mod recovery;
@@ -48,9 +49,8 @@ use crate::attempts::Attempts;
 use crate::bans::BanSnapshot;
 use crate::candidate::CandidateFilter;
 use crate::fill::{plan, Census, DialAim, DrawList, IN_FLIGHT_BOUND};
-use crate::memory::FailedAddresses;
 use crate::nonce::{HandshakeNonce, HandshakeNonceSet, InFlightNonce};
-use crate::pace::next_wake_nanos;
+use crate::pace::{attempts_per_test, next_wake_nanos, retry_wait_nanos};
 use crate::store::{AddressStore, LoadError, STORE_INTERVAL_NANOS};
 
 /// This node's sync payload, read at each handshake. `None` when the core
@@ -63,6 +63,8 @@ pub type SnapshotSource = Arc<dyn Fn() -> Option<SyncPayload> + Send + Sync>;
 enum IdleWhy {
     /// A dial is already in flight, so the fill draws nothing.
     InFlight,
+    /// A test is waiting for its next attempt, and nothing else is drawable.
+    RetryWaiting,
     /// The lists have nothing the fill can draw.
     NoCandidate,
     /// Gray or white holds addresses, and every one is filtered out.
@@ -73,6 +75,7 @@ impl IdleWhy {
     fn reason(self) -> &'static str {
         match self {
             Self::InFlight => "a dial is in flight",
+            Self::RetryWaiting => "a retry is waiting",
             Self::NoCandidate => "no candidate",
             Self::Filtered => "a filter holds every address",
         }
@@ -92,13 +95,28 @@ struct IdleWatch {
 /// changes, the connector draws, or it is no longer under its target.
 const IDLE_WARN_WAKES: u32 = 60;
 
+/// One test's next attempt, waiting for its tick.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Retry {
+    address: NetworkAddress,
+    aim: DialAim,
+    /// The attempt this will be, 2 or 3.
+    attempt: u8,
+    due: Tick,
+}
+
 /// The state the owner loops and the FFI calls share.
 pub struct Shared {
     /// The peer lists. [`Peerlist::apply`] stays the only writer of gray
     /// and white; this struct is where the dialer keeps them.
     pub lists: Peerlist,
-    /// The failed-address memory.
-    pub memory: FailedAddresses,
+    /// Tests waiting for their next attempt, per connector (the gray
+    /// lifecycle, item 3). The address stays an outstanding draw on the
+    /// lists meanwhile, and the wait holds no in-flight slot.
+    retries: [Vec<Retry>; ConnectorId::COUNT],
+    /// Which attempt of its test each in-flight or waiting address is on.
+    /// Absent is the first attempt.
+    attempt_of: BTreeMap<NetworkAddress, u8>,
     attempts: Vec<Attempts>,
     targets: Vec<usize>,
     own: Vec<Vec<NetworkAddress>>,
@@ -187,7 +205,8 @@ impl Dialer {
             hub,
             shared: Arc::new(Mutex::new(Shared {
                 lists: Peerlist::new(refused),
-                memory: FailedAddresses::new(),
+                retries: [Vec::new(), Vec::new()],
+                attempt_of: BTreeMap::new(),
                 attempts: (0..ConnectorId::COUNT).map(|_| Attempts::new()).collect(),
                 targets,
                 own: vec![Vec::new(); ConnectorId::COUNT],
@@ -431,6 +450,9 @@ impl Dialer {
             let outcome = DialOutcome::PayloadRefused(address.clone());
             Self::record(&mut shared, connector, &outcome, now, rng);
         }
+        // White expiry follows the connection (the gray lifecycle, item 1):
+        // the clock moves to the close, so the 24 hours count from here.
+        shared.lists.session_ended(&address, now);
         shared.attempts(connector).session_closed(&address);
     }
 
@@ -466,16 +488,18 @@ impl Dialer {
         Ok(shared.lists.restore(addresses, rng))
     }
 
-    /// Write the address file now: every list address, by range only.
-    /// `Ok(false)` when no file was named.
+    /// Write the address file now: every list address, by range only,
+    /// less those under an active ban at this moment (the hub's bans, the
+    /// snapshot the draws read). `Ok(false)` when no file was named.
     pub fn store_addresses(&self) -> io::Result<bool> {
         let store = self.store.lock().expect("address store");
         let Some(store) = store.as_ref() else {
             return Ok(false);
         };
-        let addresses = self.shared().lists.persistable();
-        store.write(&addresses)?;
+        let mut bans = BanSnapshot::take(&self.hub);
         let now = self.hub.now();
+        let addresses = self.shared().lists.persistable(&mut bans, now);
+        store.write(&addresses)?;
         self.shared().last_store = Some(now);
         Ok(true)
     }
@@ -502,12 +526,17 @@ impl Dialer {
         rng: &mut R,
     ) {
         shared.attempts(connector).finish(outcome);
+        shared.attempt_of.remove(outcome.address());
         shared.lists.apply(outcome, now, rng);
-        shared.memory.observe(outcome, now);
     }
 
-    /// Record `outcome` after the hub's clock has been read.
-    fn settle<R: RelayRng + ?Sized>(
+    /// A finished attempt's outcome, or its deferral: a `DialFailed` whose
+    /// cause is worth a retry, with attempts left in this test, is not
+    /// recorded. The attempt leaves the pending set and waits its
+    /// [`retry_wait_nanos`]; the address stays an outstanding draw. The
+    /// wake at or after the due tick makes the next attempt. Anything else
+    /// is the test's one outcome and is recorded.
+    fn settle_or_retry<R: RelayRng + ?Sized>(
         &self,
         connector: ConnectorId,
         outcome: &DialOutcome,
@@ -515,7 +544,39 @@ impl Dialer {
     ) {
         let now = self.hub.now();
         let mut shared = self.shared();
-        Self::record(&mut shared, connector, outcome, now, rng);
+        let address = outcome.address();
+        let attempt = shared.attempt_of.get(address).copied().unwrap_or(1);
+        let retry = match outcome {
+            DialOutcome::DialFailed(_, cause)
+                if cause.retry_worthy() && attempt < attempts_per_test(connector) =>
+            {
+                Some(cause)
+            }
+            _ => None,
+        };
+        let Some(cause) = retry else {
+            Self::record(&mut shared, connector, outcome, now, rng);
+            return;
+        };
+        let next = attempt.saturating_add(1);
+        let wait = retry_wait_nanos(next, rng);
+        let aim = shared
+            .attempts(connector)
+            .aim_of(address)
+            .unwrap_or(DialAim::Keep);
+        shared.attempts(connector).defer(address);
+        shared.attempt_of.insert(address.clone(), next);
+        shared.retries[connector.index()].push(Retry {
+            address: address.clone(),
+            aim,
+            attempt: next,
+            due: Tick::new(now.get().saturating_add(wait)),
+        });
+        tracing::debug!(
+            "{connector:?} dial {address:?} attempt {attempt} ended {:?}; attempt {next} in {} ms",
+            cause.kind(),
+            wait / 1_000_000
+        );
     }
 
     /// Record `SessionAccepted` and the kept row in one lock section, mark
@@ -638,7 +699,7 @@ impl Dialer {
         match self.exchange(connector, &address, aim, &nonce, rng) {
             Attempt::Done(outcome) => {
                 tracing::debug!("{connector:?} dial {address:?} ended: {outcome:?}");
-                self.settle(connector, &outcome, rng);
+                self.settle_or_retry(connector, &outcome, rng);
             }
             Attempt::Kept(kept) => {
                 self.accept_and_notify(connector, &address, kept, rng);
@@ -682,9 +743,11 @@ impl Dialer {
         {
             let mut shared = self.shared();
             if shared.lists.is_gray(address) {
-                let drawn = shared
-                    .lists
-                    .draw_gray_where(connector, &mut |a| a == address, rng)?;
+                let now = self.hub.now();
+                let drawn =
+                    shared
+                        .lists
+                        .draw_gray_where(connector, now, &mut |a| a == address, rng)?;
                 debug_assert_eq!(&drawn, address);
             } else if !shared.lists.is_white(address) {
                 return None;
@@ -696,7 +759,7 @@ impl Dialer {
         let nonce = self.nonces.mint(connector, rng);
         match self.exchange(connector, address, aim, &nonce, rng) {
             Attempt::Done(outcome) => {
-                self.settle(connector, &outcome, rng);
+                self.settle_or_retry(connector, &outcome, rng);
                 None
             }
             Attempt::Kept(kept) => {
@@ -799,14 +862,41 @@ fn plan_wake<R: RelayRng + ?Sized>(
 ) -> Wake {
     let index = connector.index();
     let target = shared.targets[index];
+    // A test whose next attempt is due makes it now, ahead of any draw: the
+    // address is still the outstanding draw, so nothing draws it twice.
+    if shared.attempts[index].in_flight() < IN_FLIGHT_BOUND {
+        let due = shared.retries[index]
+            .iter()
+            .position(|retry| retry.due.get() <= now.get());
+        if let Some(at) = due {
+            let retry = shared.retries[index].remove(at);
+            if shared.attempts[index].begin(&retry.address, retry.aim) {
+                // Every wake reports to the recovery episode, this one too:
+                // it drew the address of a test the episode may cover.
+                let kept = shared.attempts[index].kept_count();
+                recovery::report_wake(
+                    &mut shared.recovery[index],
+                    connector,
+                    kept,
+                    target,
+                    Some(&retry.address),
+                );
+                note_idle(shared, connector, None);
+                return Wake::Drawn {
+                    address: retry.address,
+                    aim: retry.aim,
+                };
+            }
+            // The address is already pending or kept: the test is over.
+            shared.attempt_of.remove(&retry.address);
+        }
+    }
+    let waiting = !shared.retries[index].is_empty();
     let own = shared.own[index].clone();
     let exclusive = shared.exclusive.clone();
     let (wake, undrawn, kept) = {
         let Shared {
-            lists,
-            attempts,
-            memory,
-            ..
+            lists, attempts, ..
         } = &mut *shared;
         let kept = attempts[index].kept_count();
         let in_flight = attempts[index].in_flight();
@@ -816,7 +906,6 @@ fn plan_wake<R: RelayRng + ?Sized>(
             sessions: &live.addresses,
             outbound_hosts: &live.outbound_hosts,
             attempts: &attempts[index],
-            failed: memory,
             bans: &mut *bans,
             now,
         };
@@ -843,6 +932,7 @@ fn plan_wake<R: RelayRng + ?Sized>(
         // (dialer brief, "Recovery").
         let stranded = kept < target
             && in_flight == 0
+            && !waiting
             && census.white_candidates == 0
             && census.gray_candidates == 0;
         let wake = if stranded {
@@ -897,7 +987,13 @@ fn plan_wake<R: RelayRng + ?Sized>(
     };
     let idle = match wake {
         Wake::Drawn { .. } => None,
-        Wake::Recover | Wake::Idle => undrawn,
+        Wake::Recover | Wake::Idle => undrawn.map(|why| {
+            if waiting && why == IdleWhy::NoCandidate {
+                IdleWhy::RetryWaiting
+            } else {
+                why
+            }
+        }),
     };
     note_idle(shared, connector, idle);
     wake

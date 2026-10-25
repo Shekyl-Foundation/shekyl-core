@@ -29,8 +29,8 @@ use crate::outcome::WhiteClock;
 use crate::sample::sample_prefix;
 use crate::validity::RefusedSet;
 use crate::{
-    DISCLOSE_COUNT, DISCLOSE_WINDOW_NANOS, EXPIRATION_PERIOD_NANOS, GRAY_CAP, INTAKE_SPAN_NANOS,
-    P2P_DISCLOSE_EARLY_SPAN_NANOS, SESSION_INTAKE_CAP, WHITE_CAP,
+    cooldown_nanos, DISCLOSE_COUNT, DISCLOSE_WINDOW_NANOS, EXPIRATION_PERIOD_NANOS, GRAY_CAP,
+    INTAKE_SPAN_NANOS, P2P_DISCLOSE_EARLY_SPAN_NANOS, SESSION_INTAKE_CAP, WHITE_CAP,
 };
 
 /// The connector's cached disclosure sample (D3): drawn once, kept for the
@@ -81,6 +81,11 @@ enum Seat {
     Outstanding,
     /// Confirmed by this node's own dial. The value is `last_observed`.
     White(Tick),
+    /// A failed test that proved no misbehaviour returned it to gray with
+    /// a cooldown (the gray lifecycle, Rick 2026-10-24): gray to every
+    /// outside reader, not drawable until the tick it holds, which
+    /// [`Partition::thaw`] reads.
+    Cooling(Tick),
 }
 
 /// One connector's seats, its cached sample, and its intake ledger.
@@ -96,6 +101,12 @@ pub(crate) struct Partition {
     outstanding_draws: usize,
     /// Seats that are [`Seat::White`]. Same three writers.
     white_seats: usize,
+    /// Seats that are [`Seat::Cooling`]. Same three writers.
+    cooling: usize,
+    /// Consecutive failed tests per address, for the cooldown ladder. Set
+    /// by [`Self::cool`], cleared by a confirmation and when the address
+    /// leaves. It survives a thaw: the next failure doubles again.
+    failed_tests: BTreeMap<NetworkAddress, u32>,
     /// The cached disclosure sample and when it was drawn (D3).
     sample: Option<Sample>,
     /// This node's own dialable address on this connector, when known: one
@@ -121,7 +132,21 @@ impl Partition {
     }
 
     pub(crate) fn is_gray(&self, address: &NetworkAddress) -> bool {
-        matches!(self.seat_of(address), Some(Seat::Gray | Seat::Outstanding))
+        matches!(
+            self.seat_of(address),
+            Some(Seat::Gray | Seat::Outstanding | Seat::Cooling(_))
+        )
+    }
+
+    /// Whether `address` is gray and cooling: seated, not drawable until
+    /// its cooldown ends.
+    pub(crate) fn is_cooling(&self, address: &NetworkAddress) -> bool {
+        matches!(self.seat_of(address), Some(Seat::Cooling(_)))
+    }
+
+    /// How many failed tests in a row `address` has had, for the ladder.
+    pub(crate) fn failed_tests(&self, address: &NetworkAddress) -> u32 {
+        self.failed_tests.get(address).copied().unwrap_or(0)
     }
 
     pub(crate) fn is_white(&self, address: &NetworkAddress) -> bool {
@@ -136,7 +161,7 @@ impl Partition {
 
     pub(crate) fn gray_iter(&self) -> impl Iterator<Item = &NetworkAddress> {
         self.seats.iter().filter_map(|(address, seat)| match seat {
-            Seat::Gray | Seat::Outstanding => Some(address),
+            Seat::Gray | Seat::Outstanding | Seat::Cooling(_) => Some(address),
             Seat::White(_) => None,
         })
     }
@@ -144,18 +169,18 @@ impl Partition {
     pub(crate) fn white_iter(&self) -> impl Iterator<Item = &NetworkAddress> {
         self.seats.iter().filter_map(|(address, seat)| match seat {
             Seat::White(_) => Some(address),
-            Seat::Gray | Seat::Outstanding => None,
+            Seat::Gray | Seat::Outstanding | Seat::Cooling(_) => None,
         })
     }
 
     /// Seat `address` on gray when it sits nowhere.
     ///
     /// Already gray, outstanding, or white: left where it is, and `false`.
-    /// Over [`GRAY_CAP`], a uniformly random *other drawable* gray seat is
-    /// dropped, so the address just admitted stays (brief §2) and an
-    /// outstanding draw is not a candidate (brief §5). When the only
-    /// drawable seat is the one just admitted, gray sits over the cap by
-    /// the outstanding draws rather than cancelling one.
+    /// Over [`GRAY_CAP`], a uniformly random *other* gray seat, drawable or
+    /// cooling alike, is dropped, so the address just admitted stays (brief
+    /// §2) and an outstanding draw is not a candidate (brief §5). When the
+    /// only evictable seat is the one just admitted, gray sits over the cap
+    /// by the outstanding draws rather than cancelling one.
     pub(crate) fn insert_gray<R: RelayRng + ?Sized>(
         &mut self,
         address: &NetworkAddress,
@@ -200,7 +225,7 @@ impl Partition {
             let of_list = match seat {
                 Seat::Gray => !white,
                 Seat::White(_) => white,
-                Seat::Outstanding => false,
+                Seat::Outstanding | Seat::Cooling(_) => false,
             };
             if of_list && eligible(address) {
                 hosts.entry(address.host()).or_default().push(address);
@@ -291,7 +316,9 @@ impl Partition {
                 self.evict_white_over_cap(address, rng);
             }
             (Some(Seat::White(_)), WhiteClock::Move) => self.write_clock(address, now),
-            (Some(Seat::White(_)), WhiteClock::Hold) | (Some(Seat::Gray) | None, _) => {}
+            // A cooling address was not the draw either: it is not drawable.
+            (Some(Seat::White(_)), WhiteClock::Hold)
+            | (Some(Seat::Gray | Seat::Cooling(_)) | None, _) => {}
         }
     }
 
@@ -323,11 +350,68 @@ impl Partition {
 
     /// Drop an outstanding draw: the address leaves the partition. A white
     /// address is not outstanding, so a failed redial leaves it white.
+    /// Only a test that proved misbehaviour ends here (the gray lifecycle).
     pub(crate) fn drop_outstanding(&mut self, address: &NetworkAddress) -> bool {
         if !matches!(self.seat_of(address), Some(Seat::Outstanding)) {
             return false;
         }
         self.leave(address);
+        true
+    }
+
+    /// A failed test that proved no misbehaviour: the outstanding draw
+    /// returns to gray and cools until `now` plus [`cooldown_nanos`] of its
+    /// consecutive count, which this increments. Not drawable until
+    /// [`Self::thaw`] passes that tick. A white address is not outstanding
+    /// and is left as it is; so is anything else.
+    pub(crate) fn cool<R: RelayRng + ?Sized>(
+        &mut self,
+        address: &NetworkAddress,
+        now: Tick,
+        rng: &mut R,
+    ) -> bool {
+        if !matches!(self.seat_of(address), Some(Seat::Outstanding)) {
+            return false;
+        }
+        let count = self.failed_tests.entry(address.clone()).or_insert(0);
+        *count = count.saturating_add(1);
+        let until = Tick::new(now.get().saturating_add(cooldown_nanos(*count, rng)));
+        self.move_seat(address, Seat::Cooling(until));
+        true
+    }
+
+    /// A completed handshake: the address's consecutive failed-test count
+    /// goes. Its seat is not touched here.
+    pub(crate) fn clear_failed_tests(&mut self, address: &NetworkAddress) {
+        self.failed_tests.remove(address);
+    }
+
+    /// Every cooling seat whose tick has passed returns to drawable gray.
+    /// Returns how many.
+    pub(crate) fn thaw(&mut self, now: Tick) -> usize {
+        let due: Vec<NetworkAddress> = self
+            .seats
+            .iter()
+            .filter_map(|(address, seat)| match seat {
+                Seat::Cooling(until) if until.get() <= now.get() => Some(address.clone()),
+                _ => None,
+            })
+            .collect();
+        for address in &due {
+            self.move_seat(address, Seat::Gray);
+        }
+        due.len()
+    }
+
+    /// A kept session to `address` ended at `now`: its white clock moves to
+    /// the close time, so expiry counts from the end of the connection, not
+    /// from its start (the gray lifecycle, item 1). Nothing else is
+    /// touched; an address that is not white is left as it is.
+    pub(crate) fn session_ended(&mut self, address: &NetworkAddress, now: Tick) -> bool {
+        if !matches!(self.seat_of(address), Some(Seat::White(_))) {
+            return false;
+        }
+        self.write_clock(address, now);
         true
     }
 
@@ -343,12 +427,20 @@ impl Partition {
     }
 
     /// Demote every white entry that has gone `EXPIRATION_PERIOD` without
-    /// contact. Returns how many moved.
-    pub(crate) fn expire<R: RelayRng + ?Sized>(&mut self, now: Tick, rng: &mut R) -> usize {
+    /// contact and has no live kept session (`is_live`): a connection that
+    /// is up is contact, and its clock moves when it ends
+    /// ([`Self::session_ended`]). Returns how many moved.
+    pub(crate) fn expire<R: RelayRng + ?Sized>(
+        &mut self,
+        now: Tick,
+        is_live: &mut dyn FnMut(&NetworkAddress) -> bool,
+        rng: &mut R,
+    ) -> usize {
         let expired: Vec<NetworkAddress> = self
             .white_clocks()
-            .filter(|(_, observed)| {
+            .filter(|(address, observed)| {
                 now.get().saturating_sub(observed.get()) >= EXPIRATION_PERIOD_NANOS
+                    && !is_live(address)
             })
             .map(|(address, _)| address.clone())
             .collect();
@@ -582,7 +674,7 @@ impl Partition {
     }
 
     fn occupied_gray(&self) -> usize {
-        self.drawable_gray + self.outstanding_draws
+        self.drawable_gray + self.outstanding_draws + self.cooling
     }
 
     fn seat_of(&self, address: &NetworkAddress) -> Option<Seat> {
@@ -592,7 +684,7 @@ impl Partition {
     fn white_clocks(&self) -> impl Iterator<Item = (&NetworkAddress, Tick)> {
         self.seats.iter().filter_map(|(address, seat)| match seat {
             Seat::White(observed) => Some((address, *observed)),
-            Seat::Gray | Seat::Outstanding => None,
+            Seat::Gray | Seat::Outstanding | Seat::Cooling(_) => None,
         })
     }
 
@@ -616,6 +708,7 @@ impl Partition {
     fn leave(&mut self, address: &NetworkAddress) -> Option<Seat> {
         let previous = self.seats.remove(address)?;
         self.note_removed(&previous);
+        self.failed_tests.remove(address);
         Some(previous)
     }
 
@@ -634,20 +727,26 @@ impl Partition {
             Seat::Gray => &mut self.drawable_gray,
             Seat::Outstanding => &mut self.outstanding_draws,
             Seat::White(_) => &mut self.white_seats,
+            Seat::Cooling(_) => &mut self.cooling,
         }
     }
 
-    /// Drop drawable gray until the gray population is within [`GRAY_CAP`],
-    /// never `keep` and never an outstanding draw. Stops when the only
-    /// drawable seat left is `keep`: gray may then sit over the cap.
+    /// Drop gray seats until the gray population is within [`GRAY_CAP`]: a
+    /// uniform pick over the drawable and the cooling seats alike, never
+    /// `keep` and never an outstanding draw. A cooldown is a delay, not
+    /// protection (Rick, 2026-10-24): dead addresses fed within D-S1 would
+    /// otherwise accumulate immune to eviction and push the honest ones
+    /// out. Stops when the only evictable seat left is `keep`: gray may
+    /// then sit over the cap by the outstanding draws.
     fn evict_gray_over_cap<R: RelayRng + ?Sized>(&mut self, keep: &NetworkAddress, rng: &mut R) {
         while self.occupied_gray() > GRAY_CAP {
-            let keep_is_drawable = matches!(self.seat_of(keep), Some(Seat::Gray));
-            if !another(self.drawable_gray, keep_is_drawable) {
+            let keep_is_evictable =
+                matches!(self.seat_of(keep), Some(Seat::Gray | Seat::Cooling(_)));
+            if !another(self.drawable_gray + self.cooling, keep_is_evictable) {
                 break;
             }
             let victim = self.pick_accepted(rng, |address, seat| {
-                matches!(seat, Seat::Gray) && address != keep
+                matches!(seat, Seat::Gray | Seat::Cooling(_)) && address != keep
             });
             self.leave(&victim);
         }

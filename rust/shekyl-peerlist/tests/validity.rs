@@ -389,7 +389,10 @@ fn the_file_holds_no_refused_address_and_restore_refuses_one() {
             .admit_gray(&address, Source::Operator, now(), &mut NoBans, &mut rng)
             .expect("operator");
     }
-    assert_eq!(strict.persistable(), vec![global(1)]);
+    assert_eq!(
+        strict.persistable(&mut NoBans, Tick::new(0)),
+        vec![global(1)]
+    );
 
     // Under the flag it is written.
     let mut open = Peerlist::new(RefusedSet::EMPTY);
@@ -397,7 +400,7 @@ fn the_file_holds_no_refused_address_and_restore_refuses_one() {
         open.admit_gray(&address, Source::Operator, now(), &mut NoBans, &mut rng)
             .expect("operator");
     }
-    let mut file = open.persistable();
+    let mut file = open.persistable(&mut NoBans, Tick::new(0));
     file.sort_by_key(|a| format!("{a:?}"));
     assert_eq!(file.len(), 2);
     assert!(file.contains(&private));

@@ -4365,6 +4365,7 @@ dependencies = [
  "shekyl-relay-privacy",
  "shekyl-seam",
  "shekyl-timing-engine",
+ "shekyl-tor",
  "shekyl-transport-layer",
  "tempfile",
  "tokio",
