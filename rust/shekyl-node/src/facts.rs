@@ -45,6 +45,34 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// Open the pool slot the way a chain read may answer it.
+///
+/// No pool in the slot is [`FactsFault::NotReady`]: the node is not up.
+/// A retired pool is [`PoolState::Retired`]: the node follows the chain
+/// and this pool has no answer. A read that cannot carry that answer uses
+/// [`require_live`].
+fn open_pool(
+    slot: &Mutex<Option<Arc<Mutex<Pool>>>>,
+    health: &PoolHealth,
+) -> Result<PoolState<Arc<Mutex<Pool>>>, FactsFault> {
+    if health.retired() {
+        return Ok(PoolState::Retired);
+    }
+    lock(slot)
+        .clone()
+        .map(PoolState::Live)
+        .ok_or(FactsFault::NotReady)
+}
+
+/// The live pool. A retired pool is not ready: the read cannot answer
+/// without one, and must not treat "no answer" as an empty pool.
+fn require_live(state: PoolState<Arc<Mutex<Pool>>>) -> Result<Arc<Mutex<Pool>>, FactsFault> {
+    match state {
+        PoolState::Live(pool) => Ok(pool),
+        PoolState::Retired => Err(FactsFault::NotReady),
+    }
+}
+
 /// What the chain store does not hold. It does not own the facts slot, so
 /// dropping the facts drops this and not the other way round.
 pub(crate) struct Surroundings {
@@ -59,26 +87,6 @@ pub(crate) struct Surroundings {
     /// The service's retirement flag: a pool whose file has faulted is
     /// not read here, as the pool handle does not read it.
     pub(crate) health: PoolHealth,
-}
-
-impl Surroundings {
-    /// The pool, while the node holds one and its file has not faulted.
-    ///
-    /// A retired pool is `NotReady` here, so every read that goes through
-    /// this fails closed. The reads whose reply can say "the pool has no
-    /// answer" ([`NodeFacts::pool_counts`], [`NodeFacts::pool_bodies`]) ask
-    /// [`Self::retired`] first and answer [`PoolState::Retired`].
-    fn pool(&self) -> Result<Arc<Mutex<Pool>>, FactsFault> {
-        if self.retired() {
-            return Err(FactsFault::NotReady);
-        }
-        lock(&self.pool).clone().ok_or(FactsFault::NotReady)
-    }
-
-    /// Whether the node has retired its pool. Final until restart.
-    fn retired(&self) -> bool {
-        self.health.retired()
-    }
 }
 
 impl NodeFacts for Surroundings {
@@ -108,7 +116,7 @@ impl NodeFacts for Surroundings {
     /// Only entries the pool shows: a stem-phase spend is not this node's
     /// to disclose (S6), so it answers unspent here.
     fn pool_spends(&self, key_images: &[shekyl_types::KeyImage]) -> Result<Vec<bool>, FactsFault> {
-        let pool = self.pool()?;
+        let pool = require_live(open_pool(&self.pool, &self.health)?)?;
         let pool = lock(&pool);
         let shown: std::collections::BTreeSet<[u8; 32]> = pool
             .shown_entries()
@@ -128,10 +136,9 @@ impl NodeFacts for Surroundings {
         ids: &[TxHash],
         scope: PoolScope,
     ) -> Result<PoolState<Vec<Option<shekyl_daemon_rpc::store_facts::PoolBody>>>, FactsFault> {
-        if self.retired() {
+        let PoolState::Live(pool) = open_pool(&self.pool, &self.health)? else {
             return Ok(PoolState::Retired);
-        }
-        let pool = self.pool()?;
+        };
         let pool = lock(&pool);
         let held: std::collections::BTreeMap<TxHash, shekyl_daemon_rpc::store_facts::PoolBody> =
             match scope {
@@ -151,10 +158,9 @@ impl NodeFacts for Surroundings {
     }
 
     fn pool_counts(&self, scope: PoolScope) -> Result<PoolState<PoolCounts>, FactsFault> {
-        if self.retired() {
+        let PoolState::Live(pool) = open_pool(&self.pool, &self.health)? else {
             return Ok(PoolState::Retired);
-        }
-        let pool = self.pool()?;
+        };
         let pool = lock(&pool);
         let broadcast = u64::try_from(pool.listing().count()).unwrap_or(u64::MAX);
         let unbroadcast = match scope {
@@ -391,12 +397,10 @@ impl PoolBridge {
 }
 
 impl PoolBridge {
-    /// The pool, while the node holds one and its file has not faulted.
+    /// The live pool. Absent and retired are both not ready: these methods
+    /// have no reply that can say the pool has no answer.
     fn pool(&self) -> Result<Arc<Mutex<Pool>>, FactsFault> {
-        if self.health.retired() {
-            return Err(FactsFault::NotReady);
-        }
-        lock(&self.pool).clone().ok_or(FactsFault::NotReady)
+        require_live(open_pool(&self.pool, &self.health)?)
     }
 }
 
