@@ -242,10 +242,19 @@ def load_pins(path):
                 f"for {compiled[0]}/{compiled[1]}, not {target[0]}/{target[1]}"
             )
 
-        if "switched_off" in row and not is_work_item(row["switched_off"]):
+        # Closed shape, the same rule as build.rs `check_switched_off`:
+        # unavailable, not pending, a work-item id. Any other shape is
+        # refused here, so a later reader can treat the key's presence as
+        # the whole fact.
+        if "switched_off" in row and (
+            row["disposition"] != "unavailable"
+            or "pending" in row
+            or not is_work_item(row["switched_off"])
+        ):
             raise Refused(
-                f"{where}: \"switched_off\" names the record of the ruling that took "
-                "this target out of the release matrix, as an identifier such as CA-1, "
+                f"{where}: \"switched_off\" belongs on an unavailable row that is not "
+                "pending, and names the record of the ruling that took this target out "
+                "of the release matrix, as an identifier such as CA-1, "
                 f"got {row['switched_off']!r}"
             )
         if "pending" in row and (

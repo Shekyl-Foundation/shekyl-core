@@ -226,6 +226,25 @@ fn is_work_item(value: &Value) -> bool {
         })
 }
 
+/// `switched_off` is a closed shape, or it is absent.
+///
+/// Absent: the row is in the release matrix. Present: the row is
+/// `unavailable`, it carries no `pending`, and the value is a work-item id
+/// naming the ruling that took the target out (riscv64 Linux: `CA-1`).
+/// `scripts/release/tor_bundle.py` `load_pins` holds the same rule, so a
+/// row the gate accepted compiles here. The gate, not this script, holds
+/// that no descriptor builds a marked row.
+fn check_switched_off(row: &Value, disposition: &str, context: &str) {
+    let Some(record) = row.get("switched_off") else {
+        return;
+    };
+    assert!(
+        disposition == "unavailable" && row.get("pending").is_none() && is_work_item(record),
+        "{context}: \"switched_off\" belongs on an unavailable row that is not pending, \
+         and names the record of a ruling such as CA-1, got {record}"
+    );
+}
+
 fn main() {
     let manifest_dir =
         PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("missing CARGO_MANIFEST_DIR"));
@@ -270,17 +289,9 @@ fn main() {
     );
 
     let context = format!("{} [{os}/{arch}]", pins_path.display());
-    // A row may carry `switched_off`: the record of the ruling that took this
-    // target out of the release matrix (riscv64 Linux: CA-1). It still
-    // compiles, which is why the row stays; `check_tor_pin_targets.py` holds
-    // that no gitian descriptor builds it and prints it on every run.
-    if let Some(record) = row.get("switched_off") {
-        assert!(
-            is_work_item(record),
-            "{context}: \"switched_off\" names the record of a ruling such as CA-1, got {record}"
-        );
-    }
-    let disposition = match str_field(row, "disposition", &context) {
+    let disposition_name = str_field(row, "disposition", &context);
+    check_switched_off(row, disposition_name, &context);
+    let disposition = match disposition_name {
         "pinned" => {
             assert!(
                 row.get("pending").is_none(),
@@ -293,9 +304,11 @@ fn main() {
             assert!(!reason.trim().is_empty(), "{context}: an empty reason");
             // A row may carry `pending`: the work item that will pin it.
             // It compiles as `Unavailable`, which is what this binary does.
-            // `check_tor_pin_targets.py` prints each pending row. An
-            // unavailable target is a gap to close (TB-4). A missing managed
-            // Tor is announced, never a startup refusal (TB-2).
+            // `check_tor_pin_targets.py` prints each pending row. A pending
+            // row is a gap to close (TB-4). A switched-off row is not: it
+            // left the release matrix, and `check_switched_off` already
+            // refused it carrying `pending` too. A missing managed Tor is
+            // announced, never a startup refusal (TB-2).
             if let Some(pending) = row.get("pending") {
                 assert!(
                     is_work_item(pending),

@@ -24,8 +24,11 @@ moves that failure to the pull request.
      is declared, not inferred: a row with `"switched_off": "<record>"` is a
      target taken out of the release matrix by a ruling (riscv64 Linux,
      CA-1), kept so a source build of it still compiles (`build.rs` refuses a
-     target with no row). Such a row must be built by no descriptor; a
-     descriptor that still builds it contradicts the ruling. A host triple must
+     target with no row). The pin reader refuses every other shape of that
+     field, so presence here means the closed one: `unavailable`, not
+     `pending`, and a work-item id. Such a row must be built by no
+     descriptor; a descriptor that still builds it contradicts the ruling.
+     A host triple must
      also be the release name of that row's `os` and `arch`: packaging selects
      a row by the triple and `build.rs` selects one by `os`/`arch`, so a swap
      of two triples would ship one bundle and accept another. The pin reader
@@ -53,11 +56,13 @@ moves that failure to the pull request.
   6. **`docs/RELEASE_CHECKLIST.md` names every pinned bundle version** in its
      "Bundled Tor pin current" block, which is a pointer to the pin file and
      has to move with it.
-  7. **Pending and switched-off rows are printed on every run.** An `unavailable` row with
-     `"pending": "<work item>"` names the work that will pin it. Both kinds
-     of `unavailable` row compile the same way, so only this gate shows which
-     targets are waiting on what. Every `unavailable` row is a gap to close
-     (`TOR_BUNDLE_DISTRIBUTION.md` TB-4).
+  7. **Pending and switched-off rows are printed on every run.** An `unavailable`
+     row with `"pending": "<work item>"` names the work that will pin it, and
+     that row is a gap to close (`TOR_BUNDLE_DISTRIBUTION.md` TB-4). A
+     switched-off row is `unavailable` and not pending: it left the release
+     matrix by a ruling, a source build still compiles, and it is not a gap.
+     Both kinds compile as `Unavailable`, so only this gate shows which is
+     which.
 
 Exit status: 0 = all hold; 1 = a difference (each one printed).
 """
@@ -192,6 +197,7 @@ def check(root):
 
     built = gitian_hosts(root, problems)
     rows = {row["gitian_host"]: row for row in doc["targets"]}
+    # `load_pins` refused every other shape, so the key is the closed one.
     switched_off = {host for host, row in rows.items() if "switched_off" in row}
     shipped = set(rows) - switched_off
     for host in sorted(set(built) - set(rows)):

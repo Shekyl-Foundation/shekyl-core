@@ -1066,6 +1066,24 @@ def _(tmp):
         shutil.rmtree(Path(tmp) / "tree")
 
 
+@tcase("targets: switched_off on a pinned row is refused")
+def _(tmp):
+    pins = base_pins("0" * 64)
+    row_for(pins, HOST)["switched_off"] = "CA-1"
+    expect(targets_tree(tmp, pins=pins), 1, "belongs on an unavailable row that is not pending")
+
+
+@tcase("targets: a row that is pending and switched off is refused")
+def _(tmp):
+    pins = switched_off_pins()
+    row_for(pins, "riscv64-linux-gnu")["pending"] = "TB-11"
+    expect(
+        targets_tree(tmp, pins=pins, hosts=("x86_64-linux-gnu",)),
+        1,
+        "belongs on an unavailable row that is not pending",
+    )
+
+
 @tcase("targets: a malformed pin file fails")
 def _(tmp):
     pins = base_pins("0" * 64)
