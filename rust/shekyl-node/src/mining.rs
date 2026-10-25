@@ -227,7 +227,7 @@ fn no_job_diagnostic(why: &NoJob) -> Diagnostic {
         NoJob::NotSynced(state) => diagnostic.param("sync", state.name()),
         NoJob::Unbuilt(kind @ Unbuilt::Stuck { after }) => diagnostic
             .param("kind", kind.code())
-            .param("after", after.unbuilt().code()),
+            .param("after", after.code()),
         NoJob::Unbuilt(kind) => diagnostic.param("kind", kind.code()),
         _ => diagnostic,
     }
@@ -303,19 +303,21 @@ impl MiningFacts for MiningControl {
         Ok(Self::stop(self))
     }
 
-    /// Resolves when the job is withdrawn for a reason the next tip does
-    /// not clear: `generateblocks` waits on the tip only while a miner can
-    /// still make it move.
+    /// The refusal [`MiningFacts::withdrawn`] waits for, read now.
+    /// `Ok(None)` while a job is posted or the withdrawal is one the next
+    /// pass replaces.
+    fn refusal(&self) -> Result<Option<Diagnostic>, FactsFault> {
+        Ok(self.posting.borrow().refusal().map(no_job_diagnostic))
+    }
+
+    /// Resolves when [`MiningFacts::refusal`] is `Some`: `generateblocks`
+    /// waits on the tip only while a miner can still make it move. A closed
+    /// watch is a stop, as a withdrawal nobody will replace.
     fn withdrawn(&self) -> Pending<'_, Diagnostic> {
         let mut posting = self.posting.clone();
         Box::pin(async move {
-            let lost = |now: &Posting| match now {
-                Posting::Posted(_) => None,
-                Posting::Withdrawn(why) if why.transient() => None,
-                Posting::Withdrawn(why) => Some(why.clone()),
-            };
-            let why = match posting.wait_for(|now| lost(now).is_some()).await {
-                Ok(now) => lost(&now).unwrap_or(NoJob::Stopped),
+            let why = match posting.wait_for(|now| now.refusal().is_some()).await {
+                Ok(now) => now.refusal().cloned().unwrap_or(NoJob::Stopped),
                 Err(_) => NoJob::Stopped,
             };
             Ok(no_job_diagnostic(&why))
@@ -348,15 +350,16 @@ impl MiningFacts for MiningControl {
 #[cfg(test)]
 mod diagnostic_tests {
     use super::{no_job_diagnostic, NoJob, Unbuilt};
-    use shekyl_chain_ingest::follower::Retried;
+    use shekyl_chain_ingest::follower::{Posting, Rebuild};
 
     /// A stuck build names itself and the reason that did not clear, so a
     /// caller refused by `generateblocks` can tell a body lost twice from a
-    /// pool judged at another tip twice.
+    /// pool judged at another tip twice. The stuck posting is a refusal;
+    /// the same reason still on its one rebuild is a wait.
     #[test]
     fn a_stuck_build_names_the_reason_that_did_not_clear() {
         let why = NoJob::Unbuilt(Unbuilt::Stuck {
-            after: Retried::BodyGone,
+            after: Rebuild::BodyGone,
         });
         let diagnostic = no_job_diagnostic(&why);
         assert_eq!(
@@ -372,5 +375,9 @@ mod diagnostic_tests {
             diagnostic.message
         );
         assert!(!why.transient(), "a stuck build is a refusal, not a wait");
+        assert!(Posting::Withdrawn(why).refusal().is_some());
+        let retry = NoJob::Unbuilt(Unbuilt::Retry(Rebuild::BodyGone));
+        assert!(retry.transient());
+        assert!(Posting::Withdrawn(retry).refusal().is_none());
     }
 }

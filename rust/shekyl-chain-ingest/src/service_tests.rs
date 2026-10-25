@@ -1276,146 +1276,319 @@ async fn the_tip_followers_death_fails_the_service_and_closes_the_door() {
     cleanup(&path);
 }
 
-/// A build withdrawn for a reason that clears itself — here a listed body
-/// gone between the producer's locks — is built again at the same tip, so
-/// a lone node with no next tip still posts (the brief's c3). The pass is
-/// woken with no new tip; the job must come back. Red edit: wait for the
-/// next tip after a transient withdrawal.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_transient_withdrawal_is_built_again_at_the_same_tip() {
-    use crate::follower::Posting;
-    let mut y = Scenario::open("service-transient-again-y");
-    let blocks = y.mine(1).await;
-    let board = Arc::new(shekyl_miner::JobBoard::new());
-    let (_sync_tx, sync) = tokio::sync::watch::channel(shekyl_chain_sync::SyncState::Synced);
-    let (service, path, mut posting) = service_mining(
-        "service-transient-again",
-        Arc::new(Gated::new()),
-        &board,
-        sync,
-    );
-    offer_all(&service.door(), 1, &blocks).await;
-    let first = tokio::time::timeout(
-        std::time::Duration::from_secs(20),
-        posting.wait_for(|now| {
-            matches!(now, Posting::Posted(_))
-                && board
-                    .posted()
-                    .is_some_and(|(_, job)| job.height.to_raw() == blocks[0].height.to_raw() + 1)
-        }),
-    )
-    .await
-    .ok()
-    .and_then(Result::ok)
-    .map(|now| now.clone());
-    service
-        .shared
-        .bodies_gone
-        .store(1, std::sync::atomic::Ordering::Release);
-    // A pass with no new tip.
-    service.shared.pending_ready().notify_one();
-    let again = tokio::time::timeout(std::time::Duration::from_secs(20), async {
-        loop {
-            let consumed = service
-                .shared
-                .bodies_gone
-                .load(std::sync::atomic::Ordering::Acquire)
-                == 0;
-            let now = posting.borrow().clone();
-            if consumed && matches!(now, Posting::Posted(_)) && Some(&now) != first.as_ref() {
-                break now;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
-    })
-    .await;
-    let at = posting.borrow().clone();
-    service.stop().await.expect("stops");
-    y.close().await;
-    cleanup(&path);
-    assert!(first.is_some(), "the job posted at the tip");
-    assert!(
-        again.is_ok(),
-        "built again at the same tip: the board reads {at:?}"
-    );
+/// How long the follower may take to post once a matured chain is in the
+/// store. Offering that chain is the slow part; a later wake is
+/// [`WAKE_POSTED`].
+const CHAIN_POSTED: std::time::Duration = std::time::Duration::from_secs(180);
+
+/// How long one wake may take once the chain is up.
+const WAKE_POSTED: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// A service with a real pool and a job seat. The sync sender and the
+/// found-block sender stay alive for the service's life: dropping either
+/// ends the watch the follower posts on.
+struct SeatedPool {
+    service: Service<Gated>,
+    board: Arc<shekyl_miner::JobBoard>,
+    posting: tokio::sync::watch::Receiver<crate::follower::Posting>,
+    pool: Arc<Mutex<shekyl_mempool::Pool>>,
+    store_path: std::path::PathBuf,
+    pool_path: std::path::PathBuf,
+    _sync: tokio::sync::watch::Sender<shekyl_chain_sync::SyncState>,
+    _found: shekyl_miner::FoundBlocks,
 }
 
-/// A reason that clears itself either clears or becomes a refusal (the
-/// review of #1176, F1). Two builds in a row lose a listed body at one
-/// tip: the follower's one rebuild withdraws for the same reason, and
-/// nobody retries before the next tip, so the board must not stay
-/// withdrawn for a transient reason, which `generateblocks` would wait on
-/// forever on a lone node. It reads `Stuck`, a refusal, which is what
-/// `generateblocks`' wait resolves on. The next pass at the same tip
-/// builds again and posts. Red edit: leave the second withdrawal as it
-/// is.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_transient_reason_that_does_not_clear_becomes_a_refusal() {
-    use crate::follower::{NoJob, Posting, Retried, Unbuilt};
-    let mut y = Scenario::open("service-transient-stuck-y");
-    let blocks = y.mine(1).await;
-    let board = Arc::new(shekyl_miner::JobBoard::new());
-    let (_sync_tx, sync) = tokio::sync::watch::channel(shekyl_chain_sync::SyncState::Synced);
-    let (service, path, mut posting) = service_mining(
-        "service-transient-stuck",
-        Arc::new(Gated::new()),
-        &board,
-        sync,
-    );
-    offer_all(&service.door(), 1, &blocks).await;
-    let first = tokio::time::timeout(
-        std::time::Duration::from_secs(20),
-        posting.wait_for(|now| {
-            matches!(now, Posting::Posted(_))
-                && board
-                    .posted()
-                    .is_some_and(|(_, job)| job.height.to_raw() == blocks[0].height.to_raw() + 1)
-        }),
-    )
-    .await
-    .ok()
-    .and_then(Result::ok)
-    .map(|now| now.clone());
-    service
-        .shared
-        .bodies_gone
-        .store(2, std::sync::atomic::Ordering::Release);
-    // A pass with no new tip; no tip follows it.
-    service.shared.pending_ready().notify_one();
-    // `generateblocks`' wait: resolved by a posted job or a reason that is
-    // not transient, never by a transient one.
-    let settled = tokio::time::timeout(
-        std::time::Duration::from_secs(20),
+impl SeatedPool {
+    fn start(name: &str) -> Self {
+        use shekyl_chain_rules::AdmissionPolicy;
+        use shekyl_chain_store::store::SnapshotView;
+        use shekyl_mempool::Pool;
+        use shekyl_types::{BlockHeight, UnixSeconds};
+
+        let store_path = tmp(name);
+        let pool_path = tmp(&format!("{name}-pool"));
+        let store = Arc::new(open_store(&store_path));
+        let pool = {
+            let snap = store.begin_read().expect("a snapshot");
+            let view = SnapshotView::new(&snap);
+            let rule_set = RULES.in_force(BlockHeight::ZERO);
+            let (pool, _, _) = Pool::open(
+                &pool_path,
+                UnixSeconds::from_raw(1),
+                &view,
+                &rule_set,
+                &AdmissionPolicy::GENESIS,
+            )
+            .expect("the pool opens");
+            Arc::new(Mutex::new(pool))
+        };
+        let board = Arc::new(shekyl_miner::JobBoard::new());
+        let (sync_tx, sync) = tokio::sync::watch::channel(shekyl_chain_sync::SyncState::Synced);
+        let (seat, found, posting) =
+            crate::test_support::job_seat(&board, Some(crate::test_support::harness_keys()), sync);
+        let service = Service::start(
+            store,
+            RULES,
+            Arc::new(Gated::new()),
+            ServiceConfig::default(),
+            Budget::of_host(),
+            super::Follow {
+                job: Some(seat),
+                pool: Some(super::PoolWiring {
+                    pool: Arc::clone(&pool),
+                    policy: AdmissionPolicy::GENESIS,
+                    wall: Arc::new(|| UnixSeconds::from_raw(10)),
+                }),
+            },
+        );
+        Self {
+            service,
+            board,
+            posting,
+            pool,
+            store_path,
+            pool_path,
+            _sync: sync_tx,
+            _found: found,
+        }
+    }
+
+    /// Admit `tx` and mark it shown. The follower is not woken: the test
+    /// wakes it once the hook it wants is in place.
+    fn show(&self, tx: &shekyl_wire::Transaction) {
+        use shekyl_chain_rules::AdmissionPolicy;
+        use shekyl_chain_store::store::{ChainStore, SnapshotView};
+        use shekyl_mempool::Admission;
+        use shekyl_types::UnixSeconds;
+
+        let txid = tx.txid_parts().hash;
+        let store: &ChainStore = &self.service.shared.store;
+        let snap = store.begin_read().expect("a snapshot");
+        let view = SnapshotView::new(&snap);
+        let connecting = shekyl_chain_rules::Tip::connecting_height(
+            shekyl_chain_rules::HeaderView::tip(&view)
+                .expect("a tip")
+                .as_ref(),
+        );
+        let mut pool = self.pool.lock().expect("the pool");
+        let admitted = pool
+            .admit(
+                tx.clone(),
+                UnixSeconds::from_raw(10),
+                &view,
+                &RULES.in_force(connecting),
+                &AdmissionPolicy::GENESIS,
+            )
+            .expect("judged");
+        assert!(
+            matches!(admitted, Admission::Admitted { .. }),
+            "{admitted:?}"
+        );
+        assert!(pool.fluffed(&txid).expect("the pool file"), "shown");
+    }
+
+    fn set_hook(&self, hook: Arc<crate::template::HeldBetweenLocks>) {
+        *self.service.shared.between_locks.lock().expect("the hook") = Some(hook);
+    }
+
+    fn wake(&self) {
+        self.service.shared.pending_ready().notify_one();
+    }
+
+    async fn stop(self) {
+        self.service.stop().await.expect("stops");
+        drop(self.pool);
+        cleanup(&self.store_path);
+        cleanup(&self.pool_path);
+    }
+}
+
+/// Flush `ids` one per call, in order, and count every call. A later call
+/// finds nothing left to flush. The count is how many builds ran the hook.
+fn flush_series(
+    ids: Vec<shekyl_types::TxHash>,
+) -> (Arc<crate::template::HeldBetweenLocks>, Arc<AtomicUsize>) {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&calls);
+    let remaining = AtomicUsize::new(ids.len());
+    let hook = Arc::new(move |pool: &Mutex<shekyl_mempool::Pool>| {
+        counted.fetch_add(1, Ordering::AcqRel);
+        let Ok(before) = remaining.fetch_update(Ordering::AcqRel, Ordering::Acquire, |left| {
+            left.checked_sub(1)
+        }) else {
+            return;
+        };
+        let index = ids.len() - before;
+        let flushed = pool.lock().expect("the pool").flush(&[ids[index]]);
+        assert_eq!(
+            flushed.expect("the pool file").len(),
+            1,
+            "flushed between the locks"
+        );
+    });
+    (hook, calls)
+}
+
+/// The next posting that is a job `holds` accepts, within `limit`.
+async fn posted_job(
+    posting: &mut tokio::sync::watch::Receiver<crate::follower::Posting>,
+    board: &shekyl_miner::JobBoard,
+    limit: std::time::Duration,
+    holds: impl Fn(shekyl_miner::Generation, &shekyl_miner::Job) -> bool,
+) -> crate::follower::Posting {
+    use crate::follower::Posting;
+    tokio::time::timeout(
+        limit,
         posting.wait_for(|now| match now {
-            Posting::Withdrawn(why) => !why.transient(),
-            Posting::Posted(_) => Some(now) != first.as_ref(),
+            Posting::Posted(generation) => board
+                .posted()
+                .is_some_and(|(at, job)| at == *generation && holds(*generation, &job)),
+            Posting::Withdrawn(_) => false,
+        }),
+    )
+    .await
+    .expect("a job posted in time")
+    .expect("the posting watch")
+    .clone()
+}
+
+fn lists(job: &shekyl_miner::Job, id: shekyl_types::TxHash) -> bool {
+    job.listed.iter().any(|body| body.id == id)
+}
+
+/// A listed body flushed between the producer's two locks is left out of
+/// the job the follower builds next, at the same tip (the brief's c3).
+/// The pool is the node's: the test admits and shows the body, then
+/// flushes it on the producer's own hook. Red edit: post the job that
+/// still names the body.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_body_flushed_between_the_locks_is_left_out_of_the_rebuilt_job() {
+    use crate::follower::Posting;
+    use crate::pool_door_tests::{matured, paying_the_floor};
+
+    let (mut scenario, prefix) = matured("service-body-left-out").await;
+    let tx = paying_the_floor(&mut scenario, &prefix, 0).await;
+    let txid = tx.txid_parts().hash;
+    let next = prefix.last().expect("the chain").height.to_raw() + 1;
+    let mut seated = SeatedPool::start("service-body-left-out");
+    offer_all(&seated.service.door(), 1, &prefix).await;
+    posted_job(
+        &mut seated.posting,
+        &seated.board,
+        CHAIN_POSTED,
+        |_at, job| job.height.to_raw() == next && !lists(job, txid),
+    )
+    .await;
+    seated.show(&tx);
+    seated.wake();
+    let Posting::Posted(with_body) = posted_job(
+        &mut seated.posting,
+        &seated.board,
+        WAKE_POSTED,
+        |_at, job| lists(job, txid),
+    )
+    .await
+    else {
+        unreachable!("posted_job waits for a posting");
+    };
+    let (hook, calls) = flush_series(vec![txid]);
+    seated.set_hook(hook);
+    seated.wake();
+    posted_job(
+        &mut seated.posting,
+        &seated.board,
+        WAKE_POSTED,
+        |at, job| at != with_body && !lists(job, txid),
+    )
+    .await;
+    let builds = calls.load(Ordering::Acquire);
+    seated.stop().await;
+    scenario.close().await;
+    assert_eq!(builds, 2, "the withdrawal was built again");
+}
+
+/// Two builds in a row lose a listed body at one tip: the one rebuild
+/// withdraws for the same reason, and the board rests on `Stuck`, which
+/// `generateblocks` refuses. The next wake, whose first build loses a
+/// body again, gets its own rebuild and posts. Red edit: leave the budget
+/// spent, so that wake rests on `Stuck` at once.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_second_withdrawal_is_a_refusal_and_the_next_wake_rebuilds() {
+    use crate::follower::{NoJob, Posting, Rebuild, Unbuilt};
+    use crate::pool_door_tests::{matured, paying_the_floor};
+
+    let (mut scenario, prefix) = matured("service-stuck-rebuild").await;
+    let first = paying_the_floor(&mut scenario, &prefix, 0).await;
+    let second = paying_the_floor(&mut scenario, &prefix, 1).await;
+    let third = paying_the_floor(&mut scenario, &prefix, 2).await;
+    let (first_id, second_id, third_id) = (
+        first.txid_parts().hash,
+        second.txid_parts().hash,
+        third.txid_parts().hash,
+    );
+    let next = prefix.last().expect("the chain").height.to_raw() + 1;
+    let mut seated = SeatedPool::start("service-stuck-rebuild");
+    offer_all(&seated.service.door(), 1, &prefix).await;
+    posted_job(
+        &mut seated.posting,
+        &seated.board,
+        CHAIN_POSTED,
+        |_at, job| job.height.to_raw() == next,
+    )
+    .await;
+    seated.show(&first);
+    seated.show(&second);
+    seated.wake();
+    posted_job(
+        &mut seated.posting,
+        &seated.board,
+        WAKE_POSTED,
+        |_at, job| lists(job, first_id) && lists(job, second_id),
+    )
+    .await;
+    let (hook, first_calls) = flush_series(vec![first_id, second_id]);
+    seated.set_hook(hook);
+    seated.wake();
+    let settled = tokio::time::timeout(
+        WAKE_POSTED,
+        seated.posting.wait_for(|now| {
+            matches!(
+                now,
+                Posting::Withdrawn(NoJob::Unbuilt(Unbuilt::Stuck {
+                    after: Rebuild::BodyGone
+                }))
+            )
         }),
     )
     .await
     .ok()
     .and_then(Result::ok)
     .map(|now| now.clone());
-    let stuck_at = posting.borrow().clone();
-    // The next pass at the same tip builds again.
-    service.shared.pending_ready().notify_one();
-    let recovered = tokio::time::timeout(
-        std::time::Duration::from_secs(20),
-        posting.wait_for(|now| matches!(now, Posting::Posted(_))),
+    let stuck_builds = first_calls.load(Ordering::Acquire);
+    seated.show(&third);
+    let (hook, next_calls) = flush_series(vec![third_id]);
+    seated.set_hook(hook);
+    seated.wake();
+    posted_job(
+        &mut seated.posting,
+        &seated.board,
+        WAKE_POSTED,
+        |_at, job| !lists(job, first_id) && !lists(job, second_id) && !lists(job, third_id),
     )
-    .await
-    .is_ok();
-    service.stop().await.expect("stops");
-    y.close().await;
-    cleanup(&path);
-    assert!(first.is_some(), "the job posted at the tip");
+    .await;
+    let next_builds = next_calls.load(Ordering::Acquire);
+    let at = seated.posting.borrow().clone();
+    seated.stop().await;
+    scenario.close().await;
     assert_eq!(
         settled,
         Some(Posting::Withdrawn(NoJob::Unbuilt(Unbuilt::Stuck {
-            after: Retried::BodyGone
+            after: Rebuild::BodyGone
         }))),
-        "a transient reason that did not clear is a refusal: the board reads {stuck_at:?}"
+        "a second withdrawal is a refusal: the board reads {at:?}"
     );
-    assert!(recovered, "the next pass at the same tip posts again");
+    assert_eq!(stuck_builds, 2, "the refusal took the one rebuild");
+    assert_eq!(next_builds, 2, "the next wake built again");
 }
 
 /// The sync owner going away says nothing about the chain. The job is

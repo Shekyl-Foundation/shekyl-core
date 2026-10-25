@@ -126,6 +126,12 @@ pub(crate) struct Producer<'a> {
 #[cfg(test)]
 pub(crate) type BetweenLocks<'a> = dyn Fn(&Mutex<Pool>) + Sync + 'a;
 
+/// The same hook, held by the service across wakes. `Send` so a build can
+/// take it onto a blocking thread; the producer borrows it as
+/// [`BetweenLocks`].
+#[cfg(test)]
+pub(crate) type HeldBetweenLocks = dyn Fn(&Mutex<Pool>) + Send + Sync;
+
 /// Build the template for the block after `snap`'s tip (module docs).
 ///
 /// `holds` says whether the seed caches hold a seed. `pool` is the pool.

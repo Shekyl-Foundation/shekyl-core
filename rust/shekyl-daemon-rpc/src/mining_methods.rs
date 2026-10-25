@@ -429,19 +429,17 @@ impl Drop for StartedMiner {
 /// call is dropped mid-wait. The blocks are the node's own template's,
 /// paying its `mine-address` (N2).
 ///
-/// It is refused at once while the job is withdrawn for a reason the next
-/// tip does not clear (not synced, no address, the pool retired), and the
-/// wait ends when it is withdrawn for such a reason: no miner can move the
-/// tip without a job. A reason that clears itself — the node starting, or
-/// between two tips — is waited out, before the wait as during it
-/// ([`MiningFacts::withdrawn`]).
+/// It is refused at once while [`MiningFacts::refusal`] is `Some` (not
+/// synced, no address, the pool retired, a build that stayed withdrawn),
+/// and the wait ends when it becomes so: no miner can move the tip without
+/// a job. A posted job, and a withdrawal the next pass replaces, is waited
+/// out, before the wait as during it ([`MiningFacts::withdrawn`]).
 ///
 /// # Errors
 ///
 /// `BadParams` for a count of zero; `NotReady` with the node's reason when
-/// the job is withdrawn for a reason the next tip does not clear, before or
-/// during the wait; the miner's refusal; `NotReady` when the node stops
-/// first.
+/// [`MiningFacts::refusal`] is `Some`, before or during the wait; the
+/// miner's refusal; `NotReady` when the node stops first.
 pub async fn generateblocks(
     mining: &MiningHandle,
     door: &dyn DoorFacts,
@@ -455,18 +453,10 @@ pub async fn generateblocks(
             Diagnostic::new(codes::COUNT_ZERO, "count must be at least one"),
         ));
     }
-    // One poll of the withdrawal: resolved now is a reason the next tip
-    // does not clear, refused before a miner starts; pending is a job
-    // posted, or a reason that clears itself, waited out below.
-    tokio::select! {
-        biased;
-        lost = mining.withdrawn() => {
-            return Err(match lost {
-                Ok(why) => RpcError::new(ErrorClass::NotReady, why),
-                Err(fault) => RpcError::from(fault),
-            });
-        }
-        () = std::future::ready(()) => {}
+    // A refusal already posted is no reason to start a miner. A posted
+    // job, and a withdrawal the next pass replaces, are waited out below.
+    if let Some(why) = mining.refusal().map_err(RpcError::from)? {
+        return Err(RpcError::new(ErrorClass::NotReady, why));
     }
     let start = chain.chain_tip()?.chain_height;
     let wanted = BlockCount::from_raw(request.count);
@@ -584,6 +574,14 @@ mod tests {
         assert_eq!(
             handles
                 .mining
+                .refusal()
+                .map_err(RpcError::from)
+                .map_err(class),
+            Err(ErrorClass::NotReady)
+        );
+        assert_eq!(
+            handles
+                .mining
                 .withdrawn()
                 .await
                 .map_err(RpcError::from)
@@ -639,6 +637,9 @@ mod tests {
         }
         fn status(&self) -> Result<crate::mining_facts::MiningState, FactsFault> {
             unreachable!("generateblocks reads no status")
+        }
+        fn refusal(&self) -> Result<Option<Diagnostic>, FactsFault> {
+            Ok(None)
         }
         fn withdrawn(&self) -> crate::mining_facts::Pending<'_, Diagnostic> {
             Box::pin(std::future::pending())

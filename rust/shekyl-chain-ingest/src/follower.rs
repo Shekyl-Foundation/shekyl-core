@@ -90,23 +90,16 @@ impl core::fmt::Display for NoJob {
 }
 
 impl NoJob {
-    /// Whether this reason clears itself, with no new tip.
+    /// Whether `generateblocks` waits this withdrawal out.
     ///
-    /// `generateblocks` keeps waiting while the board is withdrawn for one
-    /// of these, so each must be one somebody retries. **A transient
-    /// reason either clears or becomes a refusal; it never stays posted
-    /// while nobody will retry.** `Starting` ends with the follower's
-    /// first pass. After a withdrawal for either `Unbuilt` reason the
-    /// follower builds once more at the same tip; if that build withdraws
-    /// for a transient reason again, the board reads
-    /// [`Unbuilt::Stuck`], which is not transient, and `generateblocks`
-    /// refuses with it. A job posted at the tip restores the one rebuild.
+    /// True only for a reason a later pass replaces. [`Self::Starting`]
+    /// ends on the follower's first pass. [`Unbuilt::Retry`] is one more
+    /// build at this tip; a second one in that same build rests as
+    /// [`Unbuilt::Stuck`], and this returns false. The next wake builds
+    /// once more. Anything else is a refusal, and the wait ends.
     #[must_use]
     pub const fn transient(&self) -> bool {
-        matches!(
-            self,
-            Self::Starting | Self::Unbuilt(Unbuilt::PoolOnAnotherTip | Unbuilt::BodyGone)
-        )
+        matches!(self, Self::Starting | Self::Unbuilt(Unbuilt::Retry(_)))
     }
 }
 
@@ -134,50 +127,54 @@ pub enum Unbuilt {
     TargetRefused,
     /// A seed block is not on the snapshot it was read from.
     SeedMissing,
-    /// The pool was last judged against another tip; the follower builds
-    /// again.
-    PoolOnAnotherTip,
-    /// A listed body left the pool between the producer's two locks; the
-    /// follower builds again, without it.
-    BodyGone,
+    /// The follower builds once more at this tip. See [`Rebuild`].
+    Retry(Rebuild),
     /// The template producer panicked; the service is stopping.
     ProducerPanicked,
-    /// A reason that clears itself did not clear: the build at this tip
-    /// withdrew for it again after the follower built once more. Nobody
-    /// retries before the next tip, so this is a refusal, not a wait.
+    /// The extra build at this tip withdrew for [`Rebuild`] again. A
+    /// refusal: nothing retries until the next wake, which gets its own
+    /// build. The board does not rest on [`Self::Retry`].
     Stuck {
-        /// The reason the second build withdrew for.
-        after: Retried,
+        /// The reason the extra build withdrew for.
+        after: Rebuild,
     },
 }
 
-/// A reason that clears itself, as [`Unbuilt::Stuck`] names it.
+/// Why the follower builds once more at this tip.
+///
+/// The producer reports the fact ([`crate::template::NoTemplate`]). This
+/// is the follower's classification of the two facts one more build
+/// settles: the pool's judgement is brought to this tip, or the body that
+/// left is left out. [`NoJob::transient`] is [`Unbuilt::Retry`] of one of
+/// these, so a new fact joins the wait and the rebuild together.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Retried {
-    /// [`Unbuilt::PoolOnAnotherTip`].
+pub enum Rebuild {
+    /// The pool was last judged against another tip.
     PoolOnAnotherTip,
-    /// [`Unbuilt::BodyGone`].
+    /// A listed body left the pool between the producer's two locks.
     BodyGone,
 }
 
-impl Retried {
-    /// The retried reason a withdrawal names, if it names one.
+impl Rebuild {
+    /// The RPC `after` parameter under `mine.unbuilt`, and the `kind`
+    /// while the reason is still a [`Unbuilt::Retry`].
+    ///
+    /// These spellings are the contract. A rename is a wire change.
     #[must_use]
-    pub const fn of(why: &NoJob) -> Option<Self> {
-        match why {
-            NoJob::Unbuilt(Unbuilt::PoolOnAnotherTip) => Some(Self::PoolOnAnotherTip),
-            NoJob::Unbuilt(Unbuilt::BodyGone) => Some(Self::BodyGone),
-            _ => None,
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::PoolOnAnotherTip => "pool_on_another_tip",
+            Self::BodyGone => "body_gone",
         }
     }
+}
 
-    /// The reason as it was built.
-    #[must_use]
-    pub const fn unbuilt(self) -> Unbuilt {
-        match self {
-            Self::PoolOnAnotherTip => Unbuilt::PoolOnAnotherTip,
-            Self::BodyGone => Unbuilt::BodyGone,
-        }
+impl core::fmt::Display for Rebuild {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::PoolOnAnotherTip => "the pool was judged against another tip",
+            Self::BodyGone => "a listed body left the pool while the template was built",
+        })
     }
 }
 
@@ -194,14 +191,12 @@ impl core::fmt::Display for Unbuilt {
             Self::LastHeight => "the tip is the last height there is",
             Self::TargetRefused => "the chain's own headers refuse its target",
             Self::SeedMissing => "a seed block is not on the snapshot",
-            Self::PoolOnAnotherTip => "the pool was judged against another tip",
-            Self::BodyGone => "a listed body left the pool while the template was built",
+            Self::Retry(reason) => return reason.fmt(f),
             Self::ProducerPanicked => "the template producer panicked",
             Self::Stuck { after } => {
                 return write!(
                     f,
-                    "{} (again, after building once more at this tip; the next tip builds again)",
-                    after.unbuilt()
+                    "{after} (again, after one more build at this tip; the next wake builds once more)"
                 );
             }
         })
@@ -225,8 +220,7 @@ impl Unbuilt {
             Self::LastHeight => "last_height",
             Self::TargetRefused => "target_refused",
             Self::SeedMissing => "seed_missing",
-            Self::PoolOnAnotherTip => "pool_on_another_tip",
-            Self::BodyGone => "body_gone",
+            Self::Retry(reason) => reason.code(),
             Self::ProducerPanicked => "producer_panicked",
             Self::Stuck { .. } => "stuck",
         }
@@ -240,6 +234,23 @@ pub enum Posting {
     Posted(Generation),
     /// No job, and why.
     Withdrawn(NoJob),
+}
+
+impl Posting {
+    /// The withdrawal, when it is already a refusal.
+    ///
+    /// `None` is a posted job or a [`NoJob::transient`] reason:
+    /// `generateblocks` waits. `Some` is a refusal, and the wait ends.
+    /// [`Unbuilt::Stuck`] is a refusal the next wake builds again; the
+    /// wait does not stay open for that wake.
+    #[must_use]
+    pub fn refusal(&self) -> Option<&NoJob> {
+        match self {
+            Self::Posted(_) => None,
+            Self::Withdrawn(why) if why.transient() => None,
+            Self::Withdrawn(why) => Some(why),
+        }
+    }
 }
 
 /// The miner's inbox and chain sync's state.
@@ -360,11 +371,11 @@ pub(crate) async fn follow<S>(
             .map(|seat| (Arc::clone(&seat.board), seat.posting.clone())),
     );
     let mut stopping = shared.stop_signal();
-    // The tip a pass was last run again for: a reason that clears itself
-    // is answered by one more pass at that tip, not a wait for the next.
-    // A posted job clears it, so a later reason at the same tip is
-    // answered the same way.
-    let mut rerun_at: Option<u64> = None;
+    // The tip sequence whose extra build is running. Set only to enter
+    // that build, and cleared when the wake ends, so the next wake gets
+    // one build of its own. A tip that moves during the extra build is a
+    // new sequence and gets its own.
+    let mut extra_for: Option<u64> = None;
     loop {
         if shared.stopping() {
             break;
@@ -398,34 +409,27 @@ pub(crate) async fn follow<S>(
                 (None, _) => seat.withdraw(NoJob::NoAddress),
                 (Some(_), SyncState::Synced) => {
                     post(&shared, seat, &postings).await;
-                    // Withdrawn for a reason that clears itself: the pool
-                    // judged at another tip, or a listed body gone between
-                    // the producer's locks. One more pass reconciles the
-                    // pool at this tip (setting its judged tip) and builds
-                    // again; a lone miner has no next tip to wait for. If
-                    // that pass withdraws for such a reason too, nobody
-                    // retries before the next tip: the reason becomes a
-                    // refusal (`NoJob::transient`'s invariant).
+                    // [`Unbuilt::Retry`]: one more build at this tip. The
+                    // pass reconciles the pool on the way in, and a body
+                    // that left is left out. A second retry in this same
+                    // build rests as [`Unbuilt::Stuck`]. The next wake
+                    // builds once more (`NoJob::transient`).
                     let now = seat.posting.borrow().clone();
-                    match now {
-                        Posting::Posted(_) => rerun_at = None,
-                        Posting::Withdrawn(why) => {
-                            if let Some(after) = Retried::of(&why) {
-                                if rerun_at == Some(tip.seq) {
-                                    seat.withdraw(NoJob::Unbuilt(Unbuilt::Stuck { after }));
-                                } else {
-                                    again = true;
-                                }
-                            }
+                    if let Posting::Withdrawn(NoJob::Unbuilt(Unbuilt::Retry(after))) = now {
+                        if extra_for == Some(tip.seq) {
+                            seat.withdraw(NoJob::Unbuilt(Unbuilt::Stuck { after }));
+                        } else {
+                            again = true;
                         }
                     }
                 }
                 (Some(_), behind) => seat.withdraw(NoJob::NotSynced(behind)),
             }
             if again {
-                rerun_at = Some(tip.seq);
+                extra_for = Some(tip.seq);
                 continue;
             }
+            extra_for = None;
         }
         shared.followed(tip.seq);
         let sync_changed = async {
@@ -649,16 +653,37 @@ where
         return;
     };
     let reader = Arc::clone(shared);
+    // Cloned before the build, so a test can replace the hook between wakes.
+    #[cfg(test)]
+    let between_locks = shared
+        .between_locks
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
     let produced = tokio::task::spawn_blocking(move || {
         let snap = reader.store().begin_read().map_err(Unposted::Store)?;
         let params = EconomicParams::default();
+        // The hook is `Send`; the producer calls it on this thread. A
+        // concrete closure is what coerces to the producer's trait object.
+        #[cfg(test)]
+        let pass_hook = between_locks.is_some();
+        #[cfg(test)]
+        let invoke_between = |pool: &Mutex<shekyl_mempool::Pool>| {
+            if let Some(hook) = between_locks.as_deref() {
+                hook(pool);
+            }
+        };
         let producer = Producer {
             rules: reader.rules(),
             keys: &keys,
             params: &params,
             now,
             #[cfg(test)]
-            between_locks: None,
+            between_locks: if pass_hook {
+                Some(&invoke_between)
+            } else {
+                None
+            },
         };
         produce(&snap, &producer, reader.live_pool(), |seed| {
             window.holds(seed)
@@ -679,20 +704,6 @@ where
             shared.fail(ServiceFault::FollowerEnded);
             return;
         }
-    };
-    #[cfg(test)]
-    let produced = if shared
-        .bodies_gone
-        .fetch_update(
-            std::sync::atomic::Ordering::AcqRel,
-            std::sync::atomic::Ordering::Acquire,
-            |left| left.checked_sub(1),
-        )
-        .is_ok()
-    {
-        Err(Unposted::Template(NoTemplate::BodyGone))
-    } else {
-        produced
     };
     let produced = match produced {
         Ok(produced) => produced,
@@ -798,11 +809,11 @@ impl Unposted {
             }
             Self::Template(NoTemplate::PoolOnAnotherTip) => {
                 tracing::debug!("no template: the pool was judged against another tip");
-                why(Unbuilt::PoolOnAnotherTip)
+                why(Unbuilt::Retry(Rebuild::PoolOnAnotherTip))
             }
             Self::Template(NoTemplate::BodyGone) => {
                 tracing::debug!("no template: a listed body left the pool between the locks");
-                why(Unbuilt::BodyGone)
+                why(Unbuilt::Retry(Rebuild::BodyGone))
             }
             Self::Template(NoTemplate::NoNonceSlot) => {
                 tracing::error!("no template: the coinbase reserves no extra nonce");
