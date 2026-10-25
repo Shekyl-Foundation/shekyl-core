@@ -444,8 +444,7 @@ fn the_rust_only_tables_are_catalogued_last_and_named() {
     let support_unissued = schema::ordinal_of("archival_support_unissued").expect("catalogued");
     let support_block = schema::ordinal_of("archival_support_block").expect("catalogued");
     let support_issued = schema::ordinal_of("archival_support_issued").expect("catalogued");
-    let support_settlement =
-        schema::ordinal_of("archival_support_settlement").expect("catalogued");
+    let support_settlement = schema::ordinal_of("archival_support_settlement").expect("catalogued");
     let bundle_queue = schema::ordinal_of("archival_bundle_queue").expect("catalogued");
     let last = schema::ordinal_of("archival_bundle_body").expect("catalogued");
     // The journal stores ordinals as `u32`. A catalogue that does not fit

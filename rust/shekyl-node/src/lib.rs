@@ -243,6 +243,10 @@ impl Node {
             .map(|address| MiningAddress::decode(&address.text, network.address_network()))
             .transpose()
             .map_err(|refused| OpenError::Rules(format!("the mine-address row: {refused}")))?;
+        // Every template draws its `0x0C` commitment from this ring, and the
+        // bundle producer files from it (`SO-D12` increment 4c).
+        let witness = Arc::new(shekyl_bundle_producer::WitnessRing::new());
+        let producer = producer_seat(args.config, &store, &witness, keys.is_some());
         let follow = Follow {
             job: Some(JobSeat {
                 board: Arc::clone(&board),
@@ -252,12 +256,14 @@ impl Node {
                     sync: sync_rx.clone(),
                 },
                 posting: posting_tx,
+                witness: Arc::clone(&witness),
             }),
             pool: Some(PoolWiring {
                 pool,
                 policy: AdmissionPolicy::GENESIS,
                 wall: Arc::new(wall_now),
             }),
+            producer,
         };
         let service_config = ServiceConfig::default();
         let runtime = shekyl_runtime::runtime(
@@ -514,6 +520,46 @@ impl RulesAt for RulesOf {
     fn in_force(&self, height: BlockHeight) -> RuleSet {
         self.0.in_force(height)
     }
+}
+
+/// The bundle producer, for a node that mines and reads through a Tor
+/// SOCKS endpoint (`SO-D12` increment 4c).
+///
+/// Only a mining daemon is a witness. The producer reads each drawn pair's
+/// shard through the daemon's fetch scheduler over the store's facts, and
+/// the scheduler dials through an operator's Tor (`tor-socks`). A managed
+/// Tor publishes its SOCKS route to the network after the node opens, so a
+/// node on one runs no producer yet; nor does a node with Tor off. Either
+/// way the templates still draw from the ring, which keeps its bound, and
+/// the node says once why it files nothing.
+fn producer_seat(
+    config: &DaemonConfig,
+    store: &Arc<ChainStore>,
+    witness: &Arc<shekyl_bundle_producer::WitnessRing>,
+    mining: bool,
+) -> Option<shekyl_chain_ingest::bundle_producer::ProducerSeat> {
+    use shekyl_archival_fetch_sched::{FetchScheduler, NeedBudget, PFetchClient};
+    use shekyl_chain_ingest::shard_facts::{StoreHolderSource, StoreShardFacts};
+    use shekyl_daemon_config::sections::Tor;
+    if !mining {
+        return None;
+    }
+    let Tor::Operator { socks, .. } = &config.tor else {
+        tracing::info!(
+            "the bundle producer is off: it reads through an operator's Tor SOCKS \
+             endpoint (tor-socks), and this node has none"
+        );
+        return None;
+    };
+    let scheduler = Arc::new(FetchScheduler::new(
+        Arc::new(StoreShardFacts::new(Arc::clone(store))),
+        Arc::new(StoreHolderSource::new(Arc::clone(store))),
+        PFetchClient::new(socks.endpoint),
+    ));
+    Some(shekyl_chain_ingest::bundle_producer::ProducerSeat {
+        witness: Arc::clone(witness),
+        read: shekyl_chain_ingest::bundle_producer::read_through(scheduler, NeedBudget::DEFAULT),
+    })
 }
 
 fn wall_now() -> UnixSeconds {

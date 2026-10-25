@@ -191,6 +191,7 @@ async fn a_spend_connected_between_the_reads_is_spent_in_the_chain() {
         Follow {
             job: None,
             pool: None,
+            ..Default::default()
         },
     );
     let door = service.door();

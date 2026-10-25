@@ -3970,8 +3970,10 @@ dependencies = [
  "serde",
  "serde_json",
  "shekyl-address",
+ "shekyl-archival-fetch-sched",
  "shekyl-archival-retention",
  "shekyl-block-template",
+ "shekyl-bundle-producer",
  "shekyl-chain-rules",
  "shekyl-chain-store",
  "shekyl-chain-sync",
@@ -3988,6 +3990,9 @@ dependencies = [
  "shekyl-hash-budget",
  "shekyl-mempool",
  "shekyl-miner",
+ "shekyl-p-host",
+ "shekyl-p-loopback",
+ "shekyl-p-serve",
  "shekyl-pow-randomx",
  "shekyl-rpc-client",
  "shekyl-rpc-transport",
@@ -4311,15 +4316,11 @@ name = "shekyl-daemon-image"
 version = "3.1.0"
 dependencies = [
  "shekyl-archival-fetch-sched",
- "shekyl-chain-rules",
- "shekyl-chain-store",
- "shekyl-crypto-pq",
+ "shekyl-chain-ingest",
  "shekyl-daemon",
  "shekyl-daemon-rpc",
  "shekyl-ffi",
- "shekyl-p-fetch",
  "shekyl-types",
- "shekyl-wire",
 ]
 
 [[package]]
@@ -4857,7 +4858,9 @@ dependencies = [
  "redb",
  "rustix",
  "shekyl-address",
+ "shekyl-archival-fetch-sched",
  "shekyl-block-template",
+ "shekyl-bundle-producer",
  "shekyl-chain-ingest",
  "shekyl-chain-rules",
  "shekyl-chain-store",

@@ -65,6 +65,7 @@ impl Pooled {
                     policy: AdmissionPolicy::GENESIS,
                     wall: Arc::new(|| UnixSeconds::from_raw(10)),
                 }),
+                ..Default::default()
             },
         );
         Self {

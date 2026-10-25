@@ -25,9 +25,13 @@
 //! then prices the coinbase over that listing, once. Candidates the parent refuses are evicted (CEN-M10).
 //!
 //! **The secrets.** The coinbase's transaction secret is drawn from the OS
-//! for each template, and the draw commitment is
-//! [`commit_and_discard`]'s: neither is kept, and neither is derived from
-//! anything another template shares.
+//! for each template and not kept. The draw commitment is the witness
+//! ring's ([`WitnessRing::draw`], `SO-D12` increment 4c): a fresh witness
+//! key and seed from the OS, kept in the ring under the commitment until
+//! the block it went into is filed or is never going to be. Neither is
+//! derived from anything another template shares. The witness is the
+//! daemon that served the template, whether its built-in miner found the
+//! block or an external one on `get_block_template` did.
 //!
 //! **The extra nonce.** Every coinbase reserves its eight bytes, zeroed;
 //! the job carries their offset and the header nonce's.
@@ -35,10 +39,11 @@
 use std::sync::{Mutex, PoisonError};
 
 use rand::RngCore;
-use shekyl_archival_retention::{commit_and_discard, empty_attestation_root};
+use shekyl_archival_retention::empty_attestation_root;
 use shekyl_block_template::{
     build, EmissionOperands, Fill, MinerKeys, Template, TemplateContext, TemplateError,
 };
+use shekyl_bundle_producer::WitnessRing;
 use shekyl_chain_rules::{Fault, RuleSet};
 use shekyl_chain_store::store::{ReadSnapshot, SnapshotView, StoreError};
 use shekyl_economics::EconomicParams;
@@ -85,7 +90,8 @@ pub(crate) enum NoTemplate {
     Selection(Fault<StoreError>),
     /// The pool file faulted while evicting what the parent refused.
     PoolFile(StoreError),
-    /// The OS random source failed, for the coinbase secret or the draw.
+    /// The OS random source failed, for the coinbase secret or the witness
+    /// ring's draw.
     Random(String),
     /// The block could not be priced or assembled.
     Build(TemplateError),
@@ -117,6 +123,8 @@ pub(crate) struct Producer<'a> {
     /// The producer's clock: the header's timestamp is no earlier, and is
     /// past the chain's median (`template_timestamp`).
     pub(crate) now: Timestamp,
+    /// The ring each template draws its witness key and seed from.
+    pub(crate) witness: &'a WitnessRing,
     /// A test acts on the pool between the producer's two locks.
     #[cfg(test)]
     pub(crate) between_locks: Option<&'a BetweenLocks<'a>>,
@@ -156,7 +164,7 @@ pub(crate) fn produce(
     }
     let next_seed = next_seed(snap, height).map_err(NoTemplate::Claim)?;
     let rule_set = producer.rules.in_force(height);
-    let secrets = Secrets::draw()?;
+    let secrets = Secrets::draw(producer.witness, height)?;
     let Listing {
         bodies: listed,
         summaries,
@@ -301,19 +309,25 @@ fn judged_at_parent(pool: &Pool, parent: BlockHash) -> bool {
 }
 
 /// One template's secrets: the coinbase's transaction secret and its draw
-/// commitment. The build takes a wiped copy of the secret.
+/// commitment. The build takes a wiped copy of the secret; the witness
+/// key and seed behind the commitment stay in the ring.
 struct Secrets {
     tx_key: Zeroizing<[u8; 32]>,
     draw: shekyl_types::archival::DrawCommitment,
 }
 
 impl Secrets {
-    fn draw() -> Result<Self, NoTemplate> {
+    fn draw(
+        witness: &WitnessRing,
+        connecting: shekyl_types::BlockHeight,
+    ) -> Result<Self, NoTemplate> {
         let mut tx_key = Zeroizing::new([0u8; 32]);
         rand::rngs::OsRng
             .try_fill_bytes(tx_key.as_mut())
             .map_err(|e| NoTemplate::Random(e.to_string()))?;
-        let draw = commit_and_discard().map_err(|e| NoTemplate::Random(e.to_string()))?;
+        let draw = witness
+            .draw(connecting)
+            .map_err(|e| NoTemplate::Random(e.to_string()))?;
         Ok(Self { tx_key, draw })
     }
 

@@ -781,6 +781,7 @@ pub(crate) fn job_seat(
             keys,
             miner: crate::follower::MinerFeed { found, sync },
             posting,
+            witness: std::sync::Arc::new(shekyl_bundle_producer::WitnessRing::new()),
         },
         sender,
         posted,

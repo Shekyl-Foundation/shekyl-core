@@ -430,7 +430,7 @@ impl Message<Reorganize> for Connector {
             .writer
             .with_store(|store| switch(store, rules, trust, memo, msg))?;
         if matches!(switched, Switched::Done(_)) {
-            self.publish_tip();
+            self.tip_moved();
         }
         Ok(switched)
     }

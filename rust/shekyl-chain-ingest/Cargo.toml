@@ -25,8 +25,21 @@ license.workspace = true
 # pipeline (kameo/tokio and the service's pool, miner and hasher-budget
 # edges), the fetcher and the CLI are optional. Default enables all three
 # so `cargo test -p shekyl-chain-ingest` is the full crate.
+#
+# `producer` is the bundle producer's read path (SO-D12 increment 4c): the
+# fetch scheduler, its store-backed shard facts, and the task that reads,
+# assembles and files. It is the one feature that brings the shard-fetch
+# client into this crate's graph, so `shekyl-ffi` (the wallet-side image,
+# `pipeline` only) never has it (SF-D4). The witness ring the template
+# draws from is in `pipeline`: it holds secrets and fetches nothing.
 [features]
-default = ["pipeline", "fetch", "replay-cli"]
+default = ["pipeline", "fetch", "replay-cli", "producer"]
+producer = [
+    "pipeline",
+    "shekyl-bundle-producer/fetch",
+    "dep:shekyl-archival-fetch-sched",
+    "dep:shekyl-crypto-pq",
+]
 pipeline = [
     "dep:kameo",
     "dep:tokio",
@@ -39,6 +52,7 @@ pipeline = [
     "dep:shekyl-chain-sync",
     "dep:rand",
     "dep:zeroize",
+    "dep:shekyl-bundle-producer",
 ]
 fetch = ["dep:shekyl-rpc-client", "dep:shekyl-rpc-types"]
 replay-cli = [
@@ -136,10 +150,17 @@ tracing = { version = "0.1", optional = true }
 shekyl-rpc-client = { path = "../shekyl-rpc-client", optional = true }
 shekyl-rpc-types = { path = "../shekyl-rpc-types", optional = true }
 
+# pipeline: the witness ring the template draws its `0x0C` commitment
+# from (SO-D12 increment 4c), without the crate's `fetch` feature.
+# producer: the same crate's challenge read, and the daemon's fetch
+# scheduler it reads through.
+shekyl-bundle-producer = { path = "../shekyl-bundle-producer", optional = true }
+shekyl-archival-fetch-sched = { path = "../shekyl-archival-fetch-sched", optional = true }
+
 # replay-cli: argument parsing as shekyl-cli does it; HTTP transport for
 # `fetch`; SETTLEMENT_EPOCH_BLOCKS — a consensus constant, not a flag.
-# pipeline also takes `shekyl-archival-retention`: the template's draw
-# commitment (`commit_and_discard`, Q4) and the empty attestation root.
+# pipeline also takes `shekyl-archival-retention`: the empty attestation
+# root and the bundle's bytes.
 clap = { version = "4", features = ["derive"], optional = true }
 shekyl-rpc-transport = { path = "../shekyl-rpc-transport", optional = true }
 shekyl-archival-retention = { path = "../shekyl-archival-retention", optional = true }
@@ -219,7 +240,16 @@ hex = "0.4"
 # #1165, ruling 7): the wallet's own client and transport, against a local
 # HTTP stand-in that serves `get_block`, `get_transactions` and
 # `get_o_indexes.bin` from `StoreFacts`.
-shekyl-engine-core = { path = "../shekyl-engine-core" }
+# `test-helpers`: the staged receipt capability over a harness persona's
+# keys (`__test_helpers::resident_receipt_key`), for the bundle producer's
+# gate test (SO-D12 increment 4c). TEST_ONLY; this dev edge enables it.
+shekyl-engine-core = { path = "../shekyl-engine-core", features = ["test-helpers"] }
+# The gate test's persona serves its shard on the production serve loop
+# behind the loopback SOCKS shim, its height on a tip cache the test
+# stamps. Dev-only: SF-D4 keeps the serve edge off every shipped graph.
+shekyl-p-loopback = { path = "../shekyl-p-loopback" }
+shekyl-p-host = { path = "../shekyl-p-host", features = ["test-signer"] }
+shekyl-p-serve = { path = "../shekyl-p-serve", features = ["test-signer"] }
 shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
 tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "macros", "sync", "net", "io-util", "time"] }
 
