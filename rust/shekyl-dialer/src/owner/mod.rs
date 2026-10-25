@@ -743,9 +743,11 @@ impl Dialer {
         {
             let mut shared = self.shared();
             if shared.lists.is_gray(address) {
-                let drawn = shared
-                    .lists
-                    .draw_gray_where(connector, &mut |a| a == address, rng)?;
+                let now = self.hub.now();
+                let drawn =
+                    shared
+                        .lists
+                        .draw_gray_where(connector, now, &mut |a| a == address, rng)?;
                 debug_assert_eq!(&drawn, address);
             } else if !shared.lists.is_white(address) {
                 return None;
@@ -869,6 +871,16 @@ fn plan_wake<R: RelayRng + ?Sized>(
         if let Some(at) = due {
             let retry = shared.retries[index].remove(at);
             if shared.attempts[index].begin(&retry.address, retry.aim) {
+                // Every wake reports to the recovery episode, this one too:
+                // it drew the address of a test the episode may cover.
+                let kept = shared.attempts[index].kept_count();
+                recovery::report_wake(
+                    &mut shared.recovery[index],
+                    connector,
+                    kept,
+                    target,
+                    Some(&retry.address),
+                );
                 note_idle(shared, connector, None);
                 return Wake::Drawn {
                     address: retry.address,

@@ -458,3 +458,31 @@ fn a_tor_address_is_unaffected_by_bans_in_the_file() {
     let written = decode(&list.to_file_bytes(&mut EveryHost, at(0))).expect("reads");
     assert_eq!(written, vec![tor]);
 }
+
+/// A cooldown that has ended frees the seat for a targeted draw too, with
+/// no settle in between: a direct dial past the cooldown draws the address
+/// (the dialer's `dial` draws through `draw_gray_where`).
+#[test]
+fn a_targeted_draw_past_the_cooldown_draws_the_address() {
+    let mut rng = SplitMix64::new(11);
+    let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
+    let peer = v4(11);
+    assert_eq!(
+        list.admit_gray(&peer, Source::Operator, at(0), &mut nobody(), &mut rng),
+        Ok(true)
+    );
+    draw_until(&mut list, &peer, at(0), &mut rng);
+    list.apply(&connection_problem(&peer), at(0), &mut rng);
+    assert!(list.is_cooling(&peer));
+    let target = peer.clone();
+    assert_eq!(
+        list.draw_gray_where(CLEARNET, at(MINUTE), &mut |a| *a == target, &mut rng),
+        None,
+        "inside the cooldown"
+    );
+    assert_eq!(
+        list.draw_gray_where(CLEARNET, at(2 * HOUR), &mut |a| *a == target, &mut rng),
+        Some(peer),
+        "past it, with no settle between"
+    );
+}

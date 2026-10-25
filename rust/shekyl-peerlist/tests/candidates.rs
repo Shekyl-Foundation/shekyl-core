@@ -43,7 +43,7 @@ fn draw_and_return(
     eligible: &mut dyn FnMut(&NetworkAddress) -> bool,
     rng: &mut SplitMix64,
 ) -> Option<NetworkAddress> {
-    let drawn = list.draw_gray_where(C, eligible, rng)?;
+    let drawn = list.draw_gray_where(C, Tick::new(0), eligible, rng)?;
     list.apply(&DialOutcome::PayloadRefused(drawn.clone()), now(), rng);
     Some(drawn)
 }
@@ -153,7 +153,10 @@ fn only_an_eligible_address_is_drawn_and_none_eligible_draws_nothing() {
     );
     assert_eq!(list.gray_candidates(C, &mut |a| allowed.contains(a)), 2);
 
-    assert_eq!(list.draw_gray_where(C, &mut |_| false, &mut rng), None);
+    assert_eq!(
+        list.draw_gray_where(C, Tick::new(0), &mut |_| false, &mut rng),
+        None
+    );
     assert_eq!(
         list.gray_candidates(C, &mut |_| true),
         10,
@@ -167,7 +170,7 @@ fn a_drawn_address_is_outstanding_and_is_not_drawn_again() {
     let hosts: Vec<NetworkAddress> = (0..6).map(|n| host(n, 18080)).collect();
     let mut list = gray_list(&hosts, &mut rng);
     let mut drawn = Vec::new();
-    while let Some(address) = list.draw_gray_where(C, &mut |_| true, &mut rng) {
+    while let Some(address) = list.draw_gray_where(C, Tick::new(0), &mut |_| true, &mut rng) {
         assert!(!drawn.contains(&address), "{address:?} drawn twice");
         drawn.push(address);
     }
@@ -189,7 +192,7 @@ fn the_white_draw_takes_white_only_and_counts_hosts() {
     let mut white = Vec::new();
     for _ in 0..4 {
         let address = list
-            .draw_gray_where(C, &mut |_| true, &mut rng)
+            .draw_gray_where(C, Tick::new(0), &mut |_| true, &mut rng)
             .expect("gray");
         list.apply(&DialOutcome::Confirmed(address.clone()), now(), &mut rng);
         white.push(address);

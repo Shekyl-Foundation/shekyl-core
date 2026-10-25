@@ -467,15 +467,20 @@ impl Peerlist {
     /// address `eligible` admits, then uniform over that host's eligible
     /// ports: a host that advertises many ports is drawn no more often.
     /// `eligible` is the dialer's candidate filter. `None` when nothing
-    /// is eligible.
+    /// is eligible. A cooling seat whose cooldown has ended at `now` is
+    /// drawable again first (the gray lifecycle).
     pub fn draw_gray_where<R: RelayRng + ?Sized>(
         &mut self,
         connector: ConnectorId,
+        now: Tick,
         eligible: &mut dyn FnMut(&NetworkAddress) -> bool,
         rng: &mut R,
     ) -> Option<NetworkAddress> {
-        self.partition_mut(connector)
-            .draw_gray_candidate(eligible, rng)
+        // A cooldown that has ended frees its seat here too, not only at
+        // the next settle: a direct dial past the cooldown draws it.
+        let partition = self.partition_mut(connector);
+        partition.thaw(now);
+        partition.draw_gray_candidate(eligible, rng)
     }
 
     /// One white dial candidate of `connector`, after demotion (D4) and
