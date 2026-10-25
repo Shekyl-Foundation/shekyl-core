@@ -146,6 +146,33 @@ What crosses the FFI after the cutover, and nothing else:
    `rpc-admin-listen = none` has no daemon to reach and is refused at parse
    with a typed code naming the option. Steps 3 onward are for a daemon
    start only. Client mode dies with the C++ console (R8, DC-N2).
+   **The walk, and the configuration check** (`INPUT_GRAMMAR.md` IG-Q58…
+   IG-Q62). Before step 3 creates anything, Rust walks every refusal steps
+   3 to 6 make, with nothing created, locked or latched: whether the
+   account could create the data directory and open the lock file
+   (`Lock::creatable`), whether the host has a network id, the marker read
+   and not written (`marker::read`), whether the account could create the
+   log directory and open the log file (`log_location_creatable`), the
+   owner values judged and not latched (`check_seed_epoch`,
+   `check_settlement_schedule`), and the managed Tor's pin read and not
+   started (`tor::pin_warning`, a warning under TB-2, in the posture's
+   install sentence and its held sentence for a link that is not up; a
+   missed discovery names the paths it searched).
+   Each effect below calls its question first, so a decision is written once. With
+   `--config-verify` the process stops here: a refusal is start's own,
+   through IG-11 with exit 2 (1 for a host with no network id); on
+   acceptance standard output carries the account checked and the
+   effective-configuration line, standard error the development levers,
+   the posture, the walk's warnings and, run as uid 0, a warning that
+   root's account was certified. Exit 0 certifies the calling account in
+   the calling environment, so tooling runs the check as the account that
+   will start, on the host; it takes no lock, so it runs while the daemon
+   is up. A port in use, Tor's bootstrap, disk space and mandatory-access
+   policy are outside its verdict. The test `config_verify_accepts_and_
+   creates_nothing_even_while_the_lock_is_held` (`verify.rs`) holds the
+   claim. On Windows the creatability questions see existence, kind and
+   the read-only attribute; a DACL that denies the account is found by
+   step 3's own create.
 3. Rust takes the data-directory lock, `shekyld.lock` (DC-N1, DC-Q15),
    through `flock` or `LockFileEx`, and holds it for the life of the
    process; the file is never deleted. There is no lock today:

@@ -224,17 +224,45 @@ pub struct InfoEconomics {
 }
 
 /// The pool, as far as this reply goes.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InfoPool {
-    /// Pool entries this node has **broadcast**. One quantity, for every
-    /// caller.
-    ///
-    /// An entry this node holds and has not yet broadcast is not counted
-    /// here, whoever asks: it is in [`InfoHost`]. That includes a
-    /// transaction on its stem, which has been relayed to one peer and not
-    /// broadcast. Until 3.50 this member was the broadcast set for a
-    /// restricted caller and every entry for any other (RK-Q10).
-    pub tx_pool_size: u64,
+///
+/// On the wire: `tx_pool_size` always, a number when the pool answers and
+/// `null` when it is retired, beside `"pool_retired": true`. A live reply
+/// carries no `pool_retired`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InfoPool {
+    /// The pool answers.
+    Live {
+        /// Pool entries this node has **broadcast**. One quantity, for
+        /// every caller.
+        ///
+        /// An entry this node holds and has not yet broadcast is not
+        /// counted here, whoever asks: it is in [`InfoHost`]. That includes
+        /// a transaction on its stem, which has been relayed to one peer
+        /// and not broadcast. Until 3.50 this member was the broadcast set
+        /// for a restricted caller and every entry for any other (RK-Q10).
+        tx_pool_size: u64,
+    },
+    /// The node retired its pool when the pool's file faulted, and holds
+    /// none until it restarts. No pool count is an answer, so none is
+    /// given (RK-D23); the chain's members of the reply are unaffected.
+    Retired,
+}
+
+impl InfoPool {
+    /// The broadcast count, when the pool answers.
+    #[must_use]
+    pub const fn tx_pool_size(&self) -> Option<u64> {
+        match self {
+            Self::Live { tx_pool_size } => Some(*tx_pool_size),
+            Self::Retired => None,
+        }
+    }
+
+    /// Whether the node has retired its pool.
+    #[must_use]
+    pub const fn is_retired(&self) -> bool {
+        matches!(self, Self::Retired)
+    }
 }
 
 /// What only the host's own administrator is told (`RPC_CHANNEL.md` §6.1,
@@ -245,7 +273,11 @@ pub struct InfoHost {
     /// transactions and the ones it is carrying on a stem. Whether such an
     /// entry exists says where a transaction originated, which is what the
     /// relay's stem phase hides, so it is told to nobody else.
-    pub tx_pool_unbroadcast_count: u64,
+    ///
+    /// `None` exactly when the pool is [`InfoPool::Retired`]: the part is
+    /// shown, and the count has no answer (`null` on the wire). The decoder
+    /// refuses a count that disagrees with the pool's state.
+    pub tx_pool_unbroadcast_count: Option<u64>,
 }
 
 /// What describes this node and not the network: its build, its uptime, its
@@ -358,6 +390,12 @@ pub enum GetInfoShapeError {
     /// The Status part's connection counts disagree with `offline`: absent
     /// for an offline daemon, both present for a running one.
     ConnectionsDisagreeWithOffline { offline: bool },
+    /// A pool count disagrees with `pool_retired`: `null` exactly when the
+    /// pool is retired, a number exactly when it is not.
+    PoolCountDisagreesWithRetired {
+        key: &'static str,
+        pool_retired: bool,
+    },
 }
 
 impl core::fmt::Display for GetInfoShapeError {
@@ -393,6 +431,11 @@ impl core::fmt::Display for GetInfoShapeError {
                 f,
                 "the connection counts disagree with `offline: {offline}`: an offline daemon \
                  carries none, and a running one carries both"
+            ),
+            Self::PoolCountDisagreesWithRetired { key, pool_retired } => write!(
+                f,
+                "`{key}` disagrees with `pool_retired: {pool_retired}`: a retired pool's counts \
+                 are null, and a live pool's are numbers"
             ),
         }
     }
@@ -446,8 +489,11 @@ struct GetInfoWire {
     total_burned: AtomicUnitsString,
     staker_emission_share_effective: u64,
 
-    // Pool.
-    tx_pool_size: u64,
+    // Pool. `pool_retired` is written only when true, so a live reply is
+    // the shape it was before the pool could be retired.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pool_retired: bool,
+    tx_pool_size: Nullable<u64>,
 
     // Status.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -483,11 +529,20 @@ struct GetInfoWire {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     grey_peerlist_size: Option<u64>,
 
-    // Host.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    tx_pool_unbroadcast_count: Option<u64>,
+    // Host. Absent is withheld; `null` is shown with no answer, when the
+    // pool is retired.
+    #[serde(
+        default,
+        deserialize_with = "crate::nullable::present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    tx_pool_unbroadcast_count: Option<Nullable<u64>>,
 
     restricted: bool,
+}
+
+const fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// `p2p` on the wire.
@@ -548,6 +603,7 @@ impl TryFrom<GetInfoWire> for GetInfoResponse {
             burn_pct,
             total_burned,
             staker_emission_share_effective,
+            pool_retired,
             tx_pool_size,
             start_time,
             free_space,
@@ -693,13 +749,32 @@ impl TryFrom<GetInfoWire> for GetInfoResponse {
                 return Err(GetInfoShapeError::P2pDisagreesWithOffline { offline });
             }
         }
+        let pool = match (pool_retired, tx_pool_size.into_option()) {
+            (false, Some(tx_pool_size)) => InfoPool::Live { tx_pool_size },
+            (true, None) => InfoPool::Retired,
+            _ => {
+                return Err(GetInfoShapeError::PoolCountDisagreesWithRetired {
+                    key: "tx_pool_size",
+                    pool_retired,
+                })
+            }
+        };
         let host = hidden_part!(
             "host",
             [tx_pool_unbroadcast_count],
             InfoHost {
-                tx_pool_unbroadcast_count,
+                tx_pool_unbroadcast_count: tx_pool_unbroadcast_count.into_option(),
             }
         );
+        if host
+            .shown()
+            .is_some_and(|h| h.tx_pool_unbroadcast_count.is_none() != pool_retired)
+        {
+            return Err(GetInfoShapeError::PoolCountDisagreesWithRetired {
+                key: "tx_pool_unbroadcast_count",
+                pool_retired,
+            });
+        }
 
         Ok(Self {
             status,
@@ -729,7 +804,7 @@ impl TryFrom<GetInfoWire> for GetInfoResponse {
                 total_burned: total_burned.to_atomic_units(),
                 staker_emission_share_effective,
             },
-            pool: InfoPool { tx_pool_size },
+            pool,
             node,
             peers,
             host,
@@ -781,7 +856,8 @@ impl From<GetInfoResponse> for GetInfoWire {
             burn_pct: economics.burn_pct,
             total_burned: economics.total_burned.into(),
             staker_emission_share_effective: economics.staker_emission_share_effective,
-            tx_pool_size: pool.tx_pool_size,
+            pool_retired: pool.is_retired(),
+            tx_pool_size: Nullable::from(pool.tx_pool_size()),
             start_time: node.as_ref().map(|n| n.start_time),
             free_space: node.as_ref().map(|n| n.free_space),
             database_size: node.as_ref().map(|n| n.database_size),
@@ -803,7 +879,9 @@ impl From<GetInfoResponse> for GetInfoWire {
             p2p,
             white_peerlist_size: peers.as_ref().map(|p| p.white_peerlist_size),
             grey_peerlist_size: peers.as_ref().map(|p| p.grey_peerlist_size),
-            tx_pool_unbroadcast_count: host.shown().map(|h| h.tx_pool_unbroadcast_count),
+            tx_pool_unbroadcast_count: host
+                .shown()
+                .map(|h| Nullable::from(h.tx_pool_unbroadcast_count)),
             restricted,
         }
     }

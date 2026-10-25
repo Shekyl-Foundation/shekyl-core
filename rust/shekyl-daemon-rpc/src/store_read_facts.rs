@@ -51,6 +51,7 @@ use shekyl_wire::{Ct, Transaction};
 
 use super::{connecting, count_at, derivation_fault, store_fault, tip_of, StoreFacts};
 use crate::chain_facts::FactsFault;
+use crate::info_facts::{PoolScope, PoolState};
 use crate::read_facts::{
     AltChainFacts, BlockBlobs, BlocksAt, ChainReadFacts, ClaimSource, ClaimantBond, CoinbaseRange,
     CoinbaseSum, CurveTreeFacts, PowAt, PowSeed, ShardCoverage, SpentAt, TransactionsAt,
@@ -315,18 +316,21 @@ fn pool_slot(body: &crate::store_facts::PoolBody) -> Result<crate::core::TxSlot,
 }
 
 impl ChainReadFacts for StoreFacts {
-    fn transactions(
-        &self,
-        ids: &[TxHash],
-        scope: crate::info_facts::PoolScope,
-    ) -> Result<TransactionsAt, FactsFault> {
+    fn transactions(&self, ids: &[TxHash], scope: PoolScope) -> Result<TransactionsAt, FactsFault> {
         // The pool before the snapshot, as `key_images_spent` reads: a
         // transaction mined between the two is found in the chain.
+        // A retired pool answers no lookup: an id the chain does not hold
+        // is then marked unavailable, and the chain's ids are answered.
         let pooled = self.node.pool_bodies(ids, scope)?;
+        // One answer per id, or the facts layer broke its contract: a short
+        // list would leave the tail of the request unanswered.
+        if matches!(&pooled, PoolState::Live(bodies) if bodies.len() != ids.len()) {
+            return Err(FactsFault::Inconsistent);
+        }
         let snap = self.snapshot()?;
         let (tip, _) = tip_of(&snap)?;
         let mut slots = Vec::with_capacity(ids.len());
-        for (id, pooled) in ids.iter().zip(&pooled) {
+        for (at, id) in ids.iter().enumerate() {
             let slot = match chain_slot(&snap, id)? {
                 Some(Some(slot)) => slot,
                 Some(None) => {
@@ -336,9 +340,14 @@ impl ChainReadFacts for StoreFacts {
                         pruned_here: Some(*id),
                     })
                 }
-                None => match pooled {
-                    Some(body) => pool_slot(body)?,
-                    None => crate::core::TxSlot::Missed,
+                None => match &pooled {
+                    PoolState::Live(bodies) => {
+                        match bodies.get(at).ok_or(FactsFault::Inconsistent)? {
+                            Some(body) => pool_slot(body)?,
+                            None => crate::core::TxSlot::Missed,
+                        }
+                    }
+                    PoolState::Retired => crate::core::TxSlot::PoolUnavailable,
                 },
             };
             slots.push(slot);

@@ -51,7 +51,7 @@ use shekyl_rpc_types::{
 };
 
 use crate::chain_facts::FactsFault;
-use crate::info_facts::{InfoFacts, PeerFacts, PoolScope};
+use crate::info_facts::{InfoFacts, PeerFacts, PoolScope, PoolState};
 use crate::methods::{RpcFault, StoreFault};
 
 /// What a caller is shown: which parts its grants select, and whether it is
@@ -190,20 +190,40 @@ pub fn get_info(
     // The pool. Every caller is told how many entries this node has
     // broadcast. How many it holds and has not yet broadcast is host-only,
     // so it is counted only on the host axis; both are then one pool state.
+    //
+    // A retired pool (its file faulted; the node holds none until restart)
+    // answers no count, so the reply says so and carries the chain's
+    // members as ever: the chain is still followed, and a reply refused
+    // whole for the pool's sake would black it out with it.
     let pool = facts.pool_counts(if disclosure.host {
         PoolScope::WithUnbroadcast
     } else {
         PoolScope::Broadcast
     })?;
-    let host = match (disclosure.host, pool.unbroadcast) {
-        (true, Some(tx_pool_unbroadcast_count)) => Hidden::Shown(InfoHost {
-            tx_pool_unbroadcast_count,
+    let (pool, unbroadcast) = match pool {
+        PoolState::Live(counts) => (
+            InfoPool::Live {
+                tx_pool_size: counts.broadcast,
+            },
+            counts.unbroadcast,
+        ),
+        PoolState::Retired => (InfoPool::Retired, None),
+    };
+    let host = match (disclosure.host, &pool, unbroadcast) {
+        (true, InfoPool::Live { .. }, Some(count)) => Hidden::Shown(InfoHost {
+            tx_pool_unbroadcast_count: Some(count),
+        }),
+        // Shown, with no answer: the pool is retired.
+        (true, InfoPool::Retired, _) => Hidden::Shown(InfoHost {
+            tx_pool_unbroadcast_count: None,
         }),
         // Asked for on the host axis and not answered: the facts layer did
         // not make the count it was asked to. Not zero, and not withheld.
-        (true, None) => return Err(RpcFault::Facts(FactsFault::Inconsistent)),
+        (true, InfoPool::Live { .. }, None) => {
+            return Err(RpcFault::Facts(FactsFault::Inconsistent))
+        }
         // Not host: withheld, whatever the facts layer returned.
-        (false, _) => Hidden::Withheld,
+        (false, _, _) => Hidden::Withheld,
     };
     // A part the caller is not shown is withheld: absent from the reply,
     // and none of its reads made (RK-D24, RK-Q8). No member is written with
@@ -316,9 +336,7 @@ pub fn get_info(
             total_burned: tip.total_burned,
             staker_emission_share_effective: tip.staker_emission_share,
         },
-        pool: InfoPool {
-            tx_pool_size: pool.broadcast,
-        },
+        pool,
         node,
         peers,
         host,

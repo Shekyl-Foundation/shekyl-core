@@ -52,7 +52,7 @@ use crate::chain_facts::{
 };
 use crate::info_facts::{
     store_file_size, InfoChainFacts, InfoFacts, InfoStatusFacts, PeerFacts, PoolCounts, PoolScope,
-    SessionCounts,
+    PoolState, SessionCounts,
 };
 
 /// The node's state that the chain store does not hold, read per call.
@@ -63,19 +63,25 @@ use crate::info_facts::{
 pub trait NodeFacts: Send + Sync {
     /// The sync owner's view (DRS-X PR 2's `TipChanged` consumer).
     fn sync(&self) -> Result<SyncFacts, FactsFault>;
-    /// The pool's population (PR-b's Rust pool).
-    fn pool_counts(&self, scope: PoolScope) -> Result<PoolCounts, FactsFault>;
+    /// The pool's population (PR-b's Rust pool), or
+    /// [`PoolState::Retired`].
+    fn pool_counts(&self, scope: PoolScope) -> Result<PoolState<PoolCounts>, FactsFault>;
     /// Whether a transaction the pool shows spends each of `key_images`,
     /// in order. A stem-phase spend answers `false` (S6).
+    ///
+    /// A retired pool faults here ([`FactsFault::NotReady`]), never
+    /// answers: a spend the pool may hold is unknowable, and "unspent" is
+    /// what a double spend's first step would be told.
     fn pool_spends(&self, key_images: &[KeyImage]) -> Result<Vec<bool>, FactsFault>;
     /// The body of each of `ids` the pool holds and `scope` may see, in
     /// order: any caller sees what the pool shows, the host its stem
-    /// entries too (S6).
+    /// entries too (S6). [`PoolState::Retired`] when the node has retired
+    /// its pool.
     fn pool_bodies(
         &self,
         ids: &[TxHash],
         scope: PoolScope,
-    ) -> Result<Vec<Option<PoolBody>>, FactsFault>;
+    ) -> Result<PoolState<Vec<Option<PoolBody>>>, FactsFault>;
     /// The Peers part: transport and peerlist detail (the p2p layer).
     fn peers(&self) -> Result<PeerFacts, FactsFault>;
     /// One snapshot of the seam board's handshaken sessions.
@@ -598,7 +604,7 @@ impl InfoFacts for StoreFacts {
         })
     }
 
-    fn pool_counts(&self, scope: PoolScope) -> Result<PoolCounts, FactsFault> {
+    fn pool_counts(&self, scope: PoolScope) -> Result<PoolState<PoolCounts>, FactsFault> {
         self.node.pool_counts(scope)
     }
 

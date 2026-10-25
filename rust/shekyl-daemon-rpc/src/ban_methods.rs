@@ -74,6 +74,13 @@ const fn seconds_of(left: BanLeftFacts) -> (u64, bool) {
 /// clock, before any is applied, so a malformed entry or a deadline the
 /// clock cannot hold changes nothing.
 ///
+/// The check and the bans are two reads of the clock, not one. A deadline
+/// that fits at the check and no longer fits when its ban is applied (the
+/// clock has moved to within its length of the end) is refused there, and
+/// the entries before it stay applied. Only a ban length within seconds of
+/// the clock's range can meet that edge; the reply then names the entry,
+/// and `get_bans` shows what was applied.
+///
 /// # Errors
 ///
 /// `BadParams` for a host that is not one, or a deadline the clock cannot

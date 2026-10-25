@@ -340,17 +340,19 @@ impl std::fmt::Display for SeedEpochRefusal {
 
 impl std::error::Error for SeedEpochRefusal {}
 
-/// Records the seed-epoch schedule from the daemon's section: the Rust
-/// `main()` calls this at step 6, before any export reads it. `None` is
-/// the mainnet value. The daemon refuses to start on `Err`, naming the row
-/// the arm carries.
+/// The schedule the daemon's seed-epoch rows name, or the row's refusal.
+/// Pure: the configuration check calls this and latches nothing
+/// (`INPUT_GRAMMAR.md` IG-Q59); [`record_seed_epoch`] calls it and then
+/// latches, so the rule is written once. `None` is the mainnet value.
 ///
 /// # Errors
 /// [`SeedEpochRefusal::Blocks`] when the length is not a power of two in
 /// `2..=SEEDHASH_EPOCH_BLOCKS`, [`SeedEpochRefusal::Lag`] when the lag is
-/// not a power of two at most `SEEDHASH_EPOCH_LAG`, and
-/// [`SeedEpochRefusal::Latched`] when a read already pinned a different pair.
-pub fn record_seed_epoch(blocks: Option<u64>, lag: Option<u64>) -> Result<(), SeedEpochRefusal> {
+/// not a power of two at most `SEEDHASH_EPOCH_LAG`.
+pub fn check_seed_epoch(
+    blocks: Option<u64>,
+    lag: Option<u64>,
+) -> Result<(u64, u64), SeedEpochRefusal> {
     let blocks = match blocks {
         Some(b) if (2..=SEEDHASH_EPOCH_BLOCKS).contains(&b) && b.is_power_of_two() => b,
         Some(_) => {
@@ -369,6 +371,19 @@ pub fn record_seed_epoch(blocks: Option<u64>, lag: Option<u64>) -> Result<(), Se
         }
         None => SEEDHASH_EPOCH_LAG,
     };
+    Ok((blocks, lag))
+}
+
+/// Records the seed-epoch schedule from the daemon's section: the Rust
+/// `main()` calls this at step 6, before any export reads it. The value
+/// is [`check_seed_epoch`]'s. The daemon refuses to start on `Err`, naming
+/// the row the arm carries.
+///
+/// # Errors
+/// [`check_seed_epoch`]'s refusals, and [`SeedEpochRefusal::Latched`] when
+/// a read already pinned a different pair.
+pub fn record_seed_epoch(blocks: Option<u64>, lag: Option<u64>) -> Result<(), SeedEpochRefusal> {
+    let (blocks, lag) = check_seed_epoch(blocks, lag)?;
     if let Some(latched) = PARAMS.get() {
         if *latched != (blocks, lag) {
             return Err(SeedEpochRefusal::Latched(
@@ -471,6 +486,33 @@ mod tests {
             None,
             "a latch is the machine's fact, not a row's"
         );
+    }
+
+    /// The configuration check's half refuses what the record refuses and
+    /// never sees the latch: after a read pinned the schedule, a different
+    /// valid pair is still `Ok` from the check and `Latched` from the record.
+    #[test]
+    fn the_check_judges_the_value_and_never_the_latch() {
+        assert!(matches!(
+            check_seed_epoch(Some(3), None),
+            Err(SeedEpochRefusal::Blocks(_))
+        ));
+        assert!(matches!(
+            check_seed_epoch(None, Some(3)),
+            Err(SeedEpochRefusal::Lag(_))
+        ));
+        assert_eq!(
+            check_seed_epoch(None, None),
+            Ok((SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG))
+        );
+        // Pin the schedule through a read, as the first verify would.
+        let pinned = seed_epoch_params();
+        let other = if pinned.0 == 2 { 4 } else { 2 };
+        assert_eq!(check_seed_epoch(Some(other), Some(1)), Ok((other, 1)));
+        assert!(matches!(
+            record_seed_epoch(Some(other), Some(1)),
+            Err(SeedEpochRefusal::Latched(_))
+        ));
     }
     use shekyl_pow_randomx::PreparedCache;
 
