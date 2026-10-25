@@ -106,6 +106,29 @@ impl Timeouts {
         body_stall: Duration::from_secs(30),
         body_total: Duration::from_secs(600),
     };
+
+    /// The longest one [`PFetchClient::fetch`] can take once it holds its
+    /// in-flight slot: the sum of the bounds on its timed phases, in the
+    /// order `fetch` runs them.
+    ///
+    /// - the dial, SOCKS handshake through the CONNECT reply: `dial`;
+    /// - writing the request: `head`;
+    /// - reading the response head: `head`;
+    /// - the body: `body_total`, around the whole 200 stream (frame,
+    ///   envelope, close probe) and around a bare answer's close probe
+    ///   alike. `body_stall` bounds a gap inside it and adds nothing.
+    ///
+    /// Not counted: the wait for the slot (`MAX_INFLIGHT`), which is the
+    /// caller's to bound; the countersignature check after the body, CPU
+    /// work on bytes already in memory; and anything the caller does
+    /// between fetches.
+    #[must_use]
+    pub const fn fetch_ceiling(&self) -> Duration {
+        self.dial
+            .saturating_add(self.head)
+            .saturating_add(self.head)
+            .saturating_add(self.body_total)
+    }
 }
 
 impl Default for Timeouts {

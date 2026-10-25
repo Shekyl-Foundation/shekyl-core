@@ -80,9 +80,69 @@ impl NeedBudget {
     };
 }
 
+impl NeedBudget {
+    /// The most fetches one holder can take within a need: the first, one
+    /// per stall redial, and one fresh anchor after a first 400. The
+    /// attempt loop spends them through [`HolderRetries`], and its test
+    /// holds this count against every sequence of outcomes.
+    #[must_use]
+    pub const fn fetches_per_holder(self) -> u32 {
+        self.stall_redials.saturating_add(2)
+    }
+}
+
 impl Default for NeedBudget {
     fn default() -> Self {
         Self::DEFAULT
+    }
+}
+
+/// What one holder may still be asked within a need: the attempt loop's
+/// counters, apart from the loop so the bound they keep
+/// ([`NeedBudget::fetches_per_holder`]) is tested on every sequence of
+/// outcomes.
+pub(crate) struct HolderRetries {
+    stall_redials: u32,
+    stalls: u32,
+    rejected_before: bool,
+}
+
+/// What the attempt loop does after a fetch that did not serve.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Retry {
+    /// Redial with the same header.
+    SameHeader,
+    /// Redial with a fresh anchor, same nonce and stream.
+    FreshAnchor,
+    /// This holder is spent.
+    Stop,
+}
+
+impl HolderRetries {
+    pub(crate) const fn new(budget: NeedBudget) -> Self {
+        Self {
+            stall_redials: budget.stall_redials,
+            stalls: 0,
+            rejected_before: false,
+        }
+    }
+
+    /// The next move after a fetch ended in `error`.
+    pub(crate) fn after(&mut self, error: &FetchError) -> Retry {
+        match error.next_move(self.rejected_before) {
+            // The stall count is this holder's across the need, including
+            // stalls from before a 400 minted a fresh header. Resetting it
+            // there would let one `P` double what it may cost.
+            NextMove::RetrySameHeader if self.stalls < self.stall_redials => {
+                self.stalls += 1;
+                Retry::SameHeader
+            }
+            NextMove::RetryFreshAnchor => {
+                self.rejected_before = true;
+                Retry::FreshAnchor
+            }
+            NextMove::RetrySameHeader | NextMove::NotHeld | NextMove::FailedRead => Retry::Stop,
+        }
     }
 }
 
@@ -384,8 +444,7 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
         nonce: Option<SuppliedNonce>,
     ) -> Result<HolderOutcome<K>, ReadFailure> {
         let mut header = self.fresh_header(nonce)?;
-        let mut stalls = 0u32;
-        let mut rejected_before = false;
+        let mut retries = HolderRetries::new(budget);
         let mut errors = Vec::new();
         loop {
             let error = match self
@@ -396,18 +455,14 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
                 Ok(shard) => return Ok(HolderOutcome::Served(shard, header)),
                 Err(error) => error,
             };
-            let next = error.next_move(rejected_before);
+            let next = retries.after(&error);
             errors.push(Attempt {
                 holder: holder.id,
                 error,
             });
             match next {
-                // The stall count is this holder's across the need, including
-                // stalls from before a 400 minted a fresh header. Resetting
-                // it there would let one `P` double what it may cost.
-                NextMove::RetrySameHeader if stalls < budget.stall_redials => stalls += 1,
-                NextMove::RetryFreshAnchor => {
-                    rejected_before = true;
+                Retry::SameHeader => {}
+                Retry::FreshAnchor => {
                     // Fresh anchor, same nonce and stream: a 400 minted no
                     // record, and a challenge's nonce is bound to
                     // `(stream, h, j, attempt)`.
@@ -416,9 +471,7 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
                         nonce: *header.nonce(),
                     }))?;
                 }
-                NextMove::RetrySameHeader | NextMove::NotHeld | NextMove::FailedRead => {
-                    return Ok(HolderOutcome::Spent(errors));
-                }
+                Retry::Stop => return Ok(HolderOutcome::Spent(errors)),
             }
         }
     }

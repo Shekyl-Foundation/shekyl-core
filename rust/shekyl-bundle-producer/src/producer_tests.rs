@@ -10,6 +10,7 @@
 //! Every test names the edit that turns it red.
 
 use std::collections::BTreeMap;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use rand::rngs::StdRng;
@@ -72,8 +73,18 @@ impl Chain {
     }
 }
 
+/// A producer whose slots no test here fills: the cap is its own test's
+/// subject ([`producer_with_slots`]).
 fn producer(ring: &Arc<WitnessRing>, seed: u64) -> Producer {
-    Producer::new(Arc::clone(ring), Box::new(StdRng::seed_from_u64(seed)))
+    producer_with_slots(ring, seed, NonZeroUsize::MAX)
+}
+
+fn producer_with_slots(ring: &Arc<WitnessRing>, seed: u64, slots: NonZeroUsize) -> Producer {
+    Producer::new(
+        Arc::clone(ring),
+        Box::new(StdRng::seed_from_u64(seed)),
+        slots,
+    )
 }
 
 fn target(draw: u32) -> DrawTarget {
@@ -107,8 +118,18 @@ fn record(attempt: u8) -> BundleRecord {
 /// Mine block 100 from the ring, connect it beside another miner's 101,
 /// and learn its draws.
 fn mined(seed: u64, economy: u32, support: u32) -> (Arc<WitnessRing>, Producer, Chain) {
+    mined_with_slots(seed, economy, support, NonZeroUsize::MAX)
+}
+
+/// [`mined`], on a client with `slots` slots.
+fn mined_with_slots(
+    seed: u64,
+    economy: u32,
+    support: u32,
+    slots: NonZeroUsize,
+) -> (Arc<WitnessRing>, Producer, Chain) {
     let ring = Arc::new(WitnessRing::new());
-    let mut producer = producer(&ring, seed);
+    let mut producer = producer_with_slots(&ring, seed, slots);
     let mut chain = Chain::default();
     // Two templates for 100; the second is the one mined.
     ring.draw(h(100)).expect("draws");
@@ -279,6 +300,60 @@ fn the_deadline_waits_for_a_read_in_flight_and_abandons_the_rest() {
     assert_eq!(filings[0].passes, 0);
     producer.read_done(out[0].key, ReadOutcome::Pass(Box::new(record(0))));
     assert!(producer.in_flight().is_empty(), "a late read is ignored");
+}
+
+/// The producer starts no more reads than the client has slots; a read
+/// that ends frees its slot and a waiting read starts at the next wake; a
+/// read still waiting at the filing deadline is abandoned, not waited for;
+/// and a read whose block filed keeps its slot until it ends. Red edits:
+/// ignore the cap — every due read starts; free a slot only for a block
+/// still held — the filed block's read keeps it forever.
+#[test]
+fn reads_start_only_while_the_client_has_a_slot() {
+    let two = NonZeroUsize::new(2).expect("two");
+    let (_ring, mut producer, _chain) = mined_with_slots(16, 5, 0, two);
+    let mut started = Vec::new();
+    for tip in 101..570 {
+        started.extend(producer.due(h(tip)));
+        assert!(producer.reading() <= 2, "at tip {tip}");
+    }
+    assert_eq!(started.len(), 2, "two slots: two of five due reads start");
+    let first = started.remove(0);
+    producer.read_done(
+        first.key,
+        ReadOutcome::Pass(Box::new(record(first.key.attempt))),
+    );
+    let more = producer.due(h(569));
+    assert_eq!(more.len(), 1, "the freed slot starts a waiting read");
+    started.extend(more);
+    assert_eq!(producer.reading(), 2);
+    // At the deadline the two reads still waiting are abandoned and the two
+    // started are waited for.
+    assert!(producer.ready(W.filing_deadline(h(100)), W).0.is_empty());
+    for read in started {
+        producer.read_done(
+            read.key,
+            ReadOutcome::Pass(Box::new(record(read.key.attempt))),
+        );
+    }
+    let (filings, _) = producer.ready(W.filing_deadline(h(100)), W);
+    assert_eq!(filings.len(), 1);
+    assert_eq!((filings[0].draws, filings[0].passes), (5, 3));
+    assert_eq!(producer.reading(), 0);
+
+    // A block that files at its last chance leaves its read holding a slot.
+    let (_ring, mut producer, _chain) = mined_with_slots(17, 1, 0, two);
+    let out: Vec<_> = (101..=570).flat_map(|tip| producer.due(h(tip))).collect();
+    assert_eq!(out.len(), 1);
+    let (filings, _) = producer.ready(W.last_chance(h(100)), W);
+    assert_eq!(filings.len(), 1);
+    assert_eq!(
+        producer.reading(),
+        1,
+        "the slot is held until the read ends"
+    );
+    producer.read_done(out[0].key, ReadOutcome::Stall);
+    assert_eq!(producer.reading(), 0);
 }
 
 /// A reorg pops a block of ours and connects another block of ours at the

@@ -44,7 +44,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use shekyl_archival_fetch_sched::{FetchScheduler, NeedBudget, ShardFacts, ShardStanding};
+use shekyl_archival_fetch_sched::{FetchScheduler, ReadFailure, ShardFacts, ShardStanding};
 use shekyl_bundle_producer::WitnessRing;
 use shekyl_chain_rules::{Claimable, EpochFloor, FakechainSchedule, Settling};
 use shekyl_p_host::DaemonTipCache;
@@ -185,14 +185,25 @@ async fn serve(
     }
 }
 
+/// A read that did not pass.
+#[derive(Debug)]
+#[expect(dead_code, reason = "read through `Debug`, in the assertion messages")]
+struct Ended {
+    key: shekyl_bundle_producer::ReadKey,
+    failure: ReadFailure,
+    outcome: shekyl_bundle_producer::ReadOutcome,
+}
+
 /// The producer's task over the scenario, and what the test waits on.
 struct Producing {
     stop: watch::Sender<bool>,
     progress: watch::Receiver<ProducerProgress>,
     tips: watch::Receiver<TipChanged>,
     task: tokio::task::JoinHandle<()>,
-    /// How each read that did not pass was classified, in order.
-    ended: Arc<std::sync::Mutex<Vec<shekyl_bundle_producer::ReadOutcome>>>,
+    /// Each read that did not pass, in order: which, why, and how it was
+    /// classified. The assertions print it, so a red run says which read
+    /// ended how.
+    ended: Arc<std::sync::Mutex<Vec<Ended>>>,
 }
 
 async fn start(
@@ -206,9 +217,6 @@ async fn start(
         Arc::new(StoreHolderSource::new(Arc::clone(&store))),
         client,
     ));
-    // A read that does not pass is named on the test's output with the
-    // scheduler's failure, so a red run says which read ended how, and its
-    // classification is kept for the test to judge.
     let ended = Arc::new(std::sync::Mutex::new(Vec::new()));
     let ended_by_reads = Arc::clone(&ended);
     let read: crate::bundle_producer::ReadFn = Arc::new(move |due| {
@@ -216,17 +224,15 @@ async fn start(
         let ended = Arc::clone(&ended_by_reads);
         Box::pin(async move {
             let key = due.key;
-            match shekyl_bundle_producer::read::attempt_due(&scheduler, &due, NeedBudget::DEFAULT)
-                .await
-            {
+            match shekyl_bundle_producer::read::attempt_due(&scheduler, &due).await {
                 Ok(record) => shekyl_bundle_producer::ReadOutcome::Pass(Box::new(record)),
                 Err(failure) => {
-                    eprintln!("gate: read {key:?} failed: {failure:?}");
                     let outcome = shekyl_bundle_producer::read::classify(&failure);
-                    ended
-                        .lock()
-                        .expect("the outcome list")
-                        .push(outcome.clone());
+                    ended.lock().expect("the outcome list").push(Ended {
+                        key,
+                        failure,
+                        outcome: outcome.clone(),
+                    });
                     outcome
                 }
             }
@@ -407,7 +413,11 @@ async fn a_produced_bundle_is_admitted_and_connects_through_the_staged_door() {
             for draw in &bundle.draws {
                 assert_eq!(draw.pair.persona, persona.id(), "the drawn pair is P's");
                 assert_eq!(draw.pair.shard, shard);
-                assert!(draw.passed, "P served the read: the draw passed");
+                assert!(
+                    draw.passed,
+                    "P served the read: the draw passed; reads that did not pass: {:#?}",
+                    producing.ended.lock().expect("the outcome list")
+                );
             }
             admitted_heights.insert(bundle.kept.h);
         }
@@ -476,18 +486,21 @@ async fn a_produced_bundle_is_admitted_and_connects_through_the_staged_door() {
     // as the serving side's scheme, the line the live path logs, and none
     // as a refusal. A stall (a loopback hiccup under load) reads again and
     // is not the subject.
-    let ended = producing.ended.lock().expect("the outcome list").clone();
-    let serving = shekyl_bundle_producer::ReadOutcome::Answered(
-        shekyl_bundle_producer::Answered::ServingScheme,
-    );
-    assert!(ended.contains(&serving), "the live path read: {ended:?}");
-    assert!(
-        ended
-            .iter()
-            .all(|outcome| *outcome == serving
-                || *outcome == shekyl_bundle_producer::ReadOutcome::Stall),
-        "{ended:?}"
-    );
+    {
+        let ended = producing.ended.lock().expect("the outcome list");
+        let serving = shekyl_bundle_producer::ReadOutcome::Answered(
+            shekyl_bundle_producer::Answered::ServingScheme,
+        );
+        assert!(
+            ended.iter().any(|read| read.outcome == serving),
+            "the live path read: {ended:#?}"
+        );
+        assert!(
+            ended.iter().all(|read| read.outcome == serving
+                || read.outcome == shekyl_bundle_producer::ReadOutcome::Stall),
+            "{ended:#?}"
+        );
+    }
     while tip_of(&chain) < h.saturating_add(BlockCount::from_raw(W2)) {
         step(&mut scenario, &mut chain, &mut producing, &p_tip, false).await;
     }

@@ -24,10 +24,24 @@
 //!
 //! A read may be planned at `h + W₂ − M` itself (§5.3: reads inside
 //! `(h, h + W₂ − M]`). At that height every read not yet started is
-//! abandoned, and a read already in flight is waited for: its draw settles
-//! within the read's timeouts, a few blocks at most, and `M` is the margin
-//! that absorbs it. The last tip that can still include the bundle,
-//! `h + W₂ − 1`, files whatever is still in flight.
+//! abandoned, and a read already in flight is waited for (ruled
+//! 2026-10-25). The wait is bounded by one read: a started read holds a
+//! client slot, so it never queues, and ends within its fetches' timeouts
+//! (`read::READ_CEILING_BLOCKS` blocks at the target interval, checked at
+//! build time against `M`). The last tip that can still include the
+//! bundle, `h + W₂ − 1`, files whatever is still in flight: a backstop for
+//! a run of fast blocks during a read that stalls to its limit.
+//!
+//! # Reads at once
+//!
+//! The producer starts no more reads than the client has slots
+//! ([`Producer::new`]'s `reads_at_once`), and counts a read until it ends
+//! even when its block was filed or dropped meanwhile, since the slot is
+//! held until then. A read whose height has come but finds no slot has not
+//! started: it waits for the next wake, nearest deadline first, and is
+//! abandoned at its block's filing deadline like any read not started.
+//! Capacity the producer lacks therefore costs abandoned draws, never the
+//! margin.
 //!
 //! # A block of ours replaces a popped one at its height
 //!
@@ -45,6 +59,7 @@
 //! it.
 
 use std::collections::BTreeMap;
+use std::num::NonZeroUsize;
 
 use rand::RngCore;
 use shekyl_archival_retention::{
@@ -274,6 +289,11 @@ pub struct Producer {
     ring: std::sync::Arc<WitnessRing>,
     blocks: BTreeMap<BlockHeight, BlockWork>,
     rng: Box<dyn RngCore + Send>,
+    /// The reads started and not yet ended, whatever became of their
+    /// block: each holds one of the client's slots until it ends.
+    reads: Vec<ReadKey>,
+    /// The most reads started at once: the client's slots.
+    reads_at_once: NonZeroUsize,
 }
 
 impl core::fmt::Debug for Producer {
@@ -286,14 +306,28 @@ impl core::fmt::Debug for Producer {
 
 impl Producer {
     /// A producer over `ring`, planning reads from `rng` — the daemon's
-    /// own randomness, never the seed.
+    /// own randomness, never the seed — and starting at most
+    /// `reads_at_once` reads at a time, the slots of the client they run
+    /// on (module docs).
     #[must_use]
-    pub fn new(ring: std::sync::Arc<WitnessRing>, rng: Box<dyn RngCore + Send>) -> Self {
+    pub fn new(
+        ring: std::sync::Arc<WitnessRing>,
+        rng: Box<dyn RngCore + Send>,
+        reads_at_once: NonZeroUsize,
+    ) -> Self {
         Self {
             ring,
             blocks: BTreeMap::new(),
             rng,
+            reads: Vec::new(),
+            reads_at_once,
         }
+    }
+
+    /// How many reads are started and not yet ended.
+    #[must_use]
+    pub fn reading(&self) -> usize {
+        self.reads.len()
     }
 
     /// The ring this producer files from.
@@ -411,8 +445,13 @@ impl Producer {
     }
 
     /// The reads whose height has come at `tip`, each marked as being
-    /// read. A paused block reads nothing.
+    /// read, while fewer than the client's slots are started: lowest
+    /// block first, so the nearest deadline goes first. A read left for
+    /// want of a slot has not started; it is due again at the next wake,
+    /// and at its block's filing deadline it is abandoned like any read
+    /// not yet started. A paused block reads nothing.
     pub fn due(&mut self, tip: BlockHeight) -> Vec<DueRead> {
+        let room = self.reads_at_once.get().saturating_sub(self.reads.len());
         let mut due = Vec::new();
         for (&h, work) in &mut self.blocks {
             if work.popped_at.is_some() {
@@ -438,7 +477,7 @@ impl Producer {
                         draw.state = DrawState::Done;
                         continue;
                     };
-                    if at > tip {
+                    if at > tip || due.len() == room {
                         continue;
                     }
                     let j = draw.target.draw;
@@ -449,13 +488,15 @@ impl Producer {
                         }
                     };
                     draw.state = DrawState::Reading { attempt };
+                    let key = ReadKey {
+                        h,
+                        stream,
+                        draw: j,
+                        attempt,
+                    };
+                    self.reads.push(key);
                     due.push(DueRead {
-                        key: ReadKey {
-                            h,
-                            stream,
-                            draw: j,
-                            attempt,
-                        },
+                        key,
                         persona: draw.target.persona,
                         endpoint: draw.target.endpoint,
                         receipt_key: draw.target.receipt_key.clone(),
@@ -472,6 +513,10 @@ impl Producer {
     /// the block was filed, lost, or the deadline settled the draw — is
     /// ignored.
     pub fn read_done(&mut self, key: ReadKey, outcome: ReadOutcome) {
+        let Some(at) = self.reads.iter().position(|started| *started == key) else {
+            return;
+        };
+        self.reads.swap_remove(at);
         let Some(work) = self.blocks.get_mut(&key.h) else {
             return;
         };

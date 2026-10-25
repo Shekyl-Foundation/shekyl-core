@@ -158,8 +158,7 @@ async fn a_receipt_endpoint_answers_a_pass_the_verifier_opens() {
     let scheduler = FetchScheduler::new(Arc::new(Facts), Arc::new(Holders(identity_key())), client);
     for stream in [PassStream::Economy, PassStream::Support] {
         let read = due(key.clone(), stream);
-        let ReadOutcome::Pass(record) = read_due(&scheduler, &read, NeedBudget::DEFAULT).await
-        else {
+        let ReadOutcome::Pass(record) = read_due(&scheduler, &read).await else {
             panic!("a receipt endpoint answers a pass on {stream:?}");
         };
         assert_eq!(record.attempt, 1);
@@ -212,12 +211,7 @@ async fn an_identity_endpoint_is_the_serving_sides_scheme() {
     let receipt_key = TestReceiptKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT))
         .public_key()
         .clone();
-    let outcome = read_due(
-        &scheduler,
-        &due(receipt_key, PassStream::Economy),
-        NeedBudget::DEFAULT,
-    )
-    .await;
+    let outcome = read_due(&scheduler, &due(receipt_key, PassStream::Economy)).await;
     assert_eq!(outcome, ReadOutcome::Answered(Answered::ServingScheme));
 }
 
@@ -358,7 +352,7 @@ async fn a_challenge_read_and_an_organic_read_differ_only_in_the_nonce() {
     let scheduler = FetchScheduler::new(Arc::new(Facts), Arc::new(Holders(identity_key())), client);
 
     let challenge = due(key, PassStream::Economy);
-    let ReadOutcome::Pass(_) = read_due(&scheduler, &challenge, NeedBudget::DEFAULT).await else {
+    let ReadOutcome::Pass(_) = read_due(&scheduler, &challenge).await else {
         panic!("the challenge read passes");
     };
     // The organic read meets the receipt endpoint under an identity key
@@ -392,4 +386,51 @@ async fn a_challenge_read_and_an_organic_read_differ_only_in_the_nonce() {
         differing.iter().all(|i| span.contains(i)),
         "a byte outside the nonce differs: {differing:?} against {span:?}"
     );
+}
+
+/// The read ceiling is the fetch ceiling times the fetches one holder can
+/// take, in blocks rounded up at the target interval, and a read started
+/// at the filing deadline ends before `h + W₂ − 1`, the last tip that
+/// files without it, over the genesis window and the gate's. Red edits:
+/// count one fetch per read — the ceiling is not the product; widen
+/// `body_total` past the margin — the build fails at the assertion beside
+/// the constant.
+#[test]
+fn a_started_read_ends_inside_the_filing_margin() {
+    use crate::{Window, FILING_MARGIN};
+    use shekyl_types::BlockCount;
+
+    let per_fetch = CHALLENGE_TIMEOUTS.fetch_ceiling();
+    assert_eq!(
+        per_fetch,
+        CHALLENGE_TIMEOUTS.dial
+            + CHALLENGE_TIMEOUTS.head
+            + CHALLENGE_TIMEOUTS.head
+            + CHALLENGE_TIMEOUTS.body_total
+    );
+    assert_eq!(
+        READ_CEILING,
+        per_fetch * CHALLENGE_BUDGET.fetches_per_holder()
+    );
+    let seconds = READ_CEILING.as_secs();
+    assert_eq!(
+        READ_CEILING_BLOCKS.to_raw(),
+        seconds.div_ceil(shekyl_difficulty::T_SECONDS)
+    );
+    assert!(READ_CEILING_BLOCKS.to_raw() * shekyl_difficulty::T_SECONDS >= seconds);
+    for response in [500, 60] {
+        let window = Window {
+            response: BlockCount::from_raw(response),
+            reorg_cap: BlockCount::from_raw(720),
+        };
+        let h = BlockHeight::from_raw(1_000);
+        let ended = window
+            .filing_deadline(h)
+            .saturating_add(READ_CEILING_BLOCKS);
+        assert!(
+            ended < window.last_chance(h),
+            "W₂ {response}: a read started at the deadline ends at {ended}"
+        );
+    }
+    assert!(READ_CEILING_BLOCKS < FILING_MARGIN);
 }

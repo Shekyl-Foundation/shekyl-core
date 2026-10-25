@@ -16,8 +16,9 @@
 //!    lost ones;
 //! 2. asks the connector for each newly claimed block's draws
 //!    ([`LearnDraws`]), which it derives where `D` is;
-//! 3. starts every read whose height has come, each through the one fetch
-//!    path ([`ProducerSeat::read`]), and feeds each outcome back;
+//! 3. starts every read whose height has come, while the client has a
+//!    free slot, each through the one fetch path ([`ProducerSeat::read`]),
+//!    and feeds each outcome back;
 //! 4. offers every block that is ready to the queue ([`OfferBundle`]).
 //!
 //! Only a mining daemon is a witness, so only a node with a job seat runs
@@ -37,7 +38,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use shekyl_archival_fetch_sched::{FetchScheduler, HolderSource, NeedBudget, ShardFacts};
+use shekyl_archival_fetch_sched::{FetchScheduler, HolderSource, ShardFacts};
 use shekyl_bundle_producer::{
     DueRead, Filing, Lost, Producer, ReadKey, ReadOutcome, Recorded, Window, WitnessRing,
 };
@@ -86,10 +87,12 @@ pub struct ProducerSeat {
     pub read: ReadFn,
 }
 
-/// The read through `scheduler`, with `budget` per read: the scheduler's
-/// nonce read over a receipt-key holder (`shekyl_bundle_producer::read`).
+/// The read through `scheduler`: the scheduler's nonce read over a
+/// receipt-key holder, under the challenge budget
+/// (`shekyl_bundle_producer::read`). The scheduler's client is built with
+/// `read::CHALLENGE_TIMEOUTS`, which the read's ceiling is derived from.
 #[must_use]
-pub fn read_through<F, H>(scheduler: Arc<FetchScheduler<F, H>>, budget: NeedBudget) -> ReadFn
+pub fn read_through<F, H>(scheduler: Arc<FetchScheduler<F, H>>) -> ReadFn
 where
     F: ShardFacts + Send + Sync + 'static,
     H: HolderSource + Send + Sync + 'static,
@@ -98,7 +101,7 @@ where
         let scheduler = Arc::clone(&scheduler);
         Box::pin(async move {
             let key = due.key;
-            match shekyl_bundle_producer::read::attempt_due(&scheduler, &due, budget).await {
+            match shekyl_bundle_producer::read::attempt_due(&scheduler, &due).await {
                 Ok(record) => ReadOutcome::Pass(Box::new(record)),
                 Err(failure) => {
                     tracing::debug!(
@@ -149,7 +152,11 @@ pub async fn run(
 ) {
     use rand::SeedableRng;
     let rng = rand::rngs::StdRng::from_entropy();
-    let mut producer = Producer::new(Arc::clone(&seat.witness), Box::new(rng));
+    let mut producer = Producer::new(
+        Arc::clone(&seat.witness),
+        Box::new(rng),
+        shekyl_bundle_producer::read::READS_AT_ONCE,
+    );
     let (done_tx, mut done_rx) = mpsc::unbounded_channel::<(ReadKey, ReadOutcome)>();
     let mut scheme_logged = SchemeLine::default();
     tracing::info!("the bundle producer is running: the witness ring starts empty");

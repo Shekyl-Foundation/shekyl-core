@@ -545,7 +545,7 @@ fn producer_seat(
     witness: &Arc<shekyl_bundle_producer::WitnessRing>,
     mining: bool,
 ) -> Option<shekyl_chain_ingest::bundle_producer::ProducerSeat> {
-    use shekyl_archival_fetch_sched::{FetchScheduler, NeedBudget, PFetchClient};
+    use shekyl_archival_fetch_sched::{FetchScheduler, PFetchClient};
     use shekyl_chain_ingest::shard_facts::{StoreHolderSource, StoreShardFacts};
     use shekyl_daemon_config::sections::Tor;
     if !mining {
@@ -561,11 +561,14 @@ fn producer_seat(
     let scheduler = Arc::new(FetchScheduler::new(
         Arc::new(StoreShardFacts::new(Arc::clone(store))),
         Arc::new(StoreHolderSource::new(Arc::clone(store))),
-        PFetchClient::new(socks.endpoint),
+        PFetchClient::with_timeouts(
+            socks.endpoint,
+            shekyl_bundle_producer::read::CHALLENGE_TIMEOUTS,
+        ),
     ));
     Some(shekyl_chain_ingest::bundle_producer::ProducerSeat {
         witness: Arc::clone(witness),
-        read: shekyl_chain_ingest::bundle_producer::read_through(scheduler, NeedBudget::DEFAULT),
+        read: shekyl_chain_ingest::bundle_producer::read_through(scheduler),
     })
 }
 

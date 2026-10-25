@@ -276,6 +276,7 @@ async fn the_producer_claims_what_its_ring_drew() {
     let mut producer = Producer::new(
         Arc::clone(&ring),
         Box::new(<rand::rngs::StdRng as rand::SeedableRng>::seed_from_u64(1)),
+        shekyl_bundle_producer::read::READS_AT_ONCE,
     );
     let window = Window {
         response: w2(),

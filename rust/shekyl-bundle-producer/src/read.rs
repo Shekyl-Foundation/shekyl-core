@@ -12,18 +12,77 @@
 //! draw named, and the key the receipt verifies under. The holder is named
 //! under the **receipt key** from the bond record, as the verifier's step 8
 //! opens it, so a verified read is a receipt and nothing else is.
+//!
+//! # How long a read can take
+//!
+//! A read the producer has started holds one of the client's
+//! [`MAX_INFLIGHT`] slots, and the producer starts no more reads than
+//! that ([`READS_AT_ONCE`]), so a started read never waits for one. From
+//! there it is at most [`NeedBudget::fetches_per_holder`] fetches of the
+//! drawn persona, each at most [`Timeouts::fetch_ceiling`]:
+//! [`READ_CEILING`], 2,160 s at the production bounds, or
+//! [`READ_CEILING_BLOCKS`] (18) blocks at the target interval. A read
+//! planned at the filing deadline `h + W₂ − M` therefore ends before
+//! `h + W₂ − 1`, the last tip that still files it, whenever blocks arrive
+//! at the target interval; the build fails if a bound changes so that it
+//! would not. A run of fast blocks during a read that stalls every fetch
+//! to its limit is the case `h + W₂ − 1` files without it.
 
+use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::time::Duration;
 
 use shekyl_archival_fetch_sched::{
     DiscardTxs, FetchError, FetchScheduler, FetchTarget, Holder, HolderSource, NeedBudget,
-    ReadFailure, ServingEndpoint, ShardFacts, SuppliedNonce,
+    ReadFailure, ServingEndpoint, ShardFacts, SuppliedNonce, Timeouts, MAX_INFLIGHT,
 };
 use shekyl_archival_retention::BundleRecord;
 use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey;
+use shekyl_types::BlockCount;
 
 use crate::outcome::{Answered, ReadOutcome};
 use crate::producer::DueRead;
+use crate::FILING_MARGIN;
+
+/// The budget every challenge read runs under. A nonce read dials only
+/// the drawn persona, so the holder count does not enter; the stall
+/// redials and the one fresh anchor after a 400 do.
+pub const CHALLENGE_BUDGET: NeedBudget = NeedBudget::DEFAULT;
+
+/// The bounds of the client challenge reads run on, which the node builds
+/// with them.
+pub const CHALLENGE_TIMEOUTS: Timeouts = Timeouts::DEFAULT;
+
+/// How many reads the producer has started at once: the client's slots.
+/// The node's producer client is the only fetch client in the process, so
+/// a started read finds a free slot.
+pub const READS_AT_ONCE: NonZeroUsize =
+    NonZeroUsize::new(MAX_INFLIGHT).expect("the client has at least one slot");
+
+/// The longest one challenge read can take once started (module docs).
+pub const READ_CEILING: Duration = CHALLENGE_TIMEOUTS
+    .fetch_ceiling()
+    .saturating_mul(CHALLENGE_BUDGET.fetches_per_holder());
+
+/// [`READ_CEILING`] in blocks at the target interval
+/// (`daa_target_seconds`), rounded up.
+pub const READ_CEILING_BLOCKS: BlockCount = {
+    let whole = READ_CEILING.as_secs();
+    let seconds = if READ_CEILING.subsec_nanos() == 0 {
+        whole
+    } else {
+        whole + 1
+    };
+    BlockCount::from_raw(seconds.div_ceil(shekyl_difficulty::T_SECONDS))
+};
+
+// A read started at `h + W₂ − M` ends before `h + W₂ − 1` at the target
+// interval: `M − READ_CEILING_BLOCKS − 1` blocks of the margin are left
+// for inclusion latency and an ordinary reorg.
+const _: () = assert!(
+    READ_CEILING_BLOCKS.to_raw() + 1 < FILING_MARGIN.to_raw(),
+    "a challenge read's ceiling no longer fits inside the filing margin"
+);
 
 /// The holder a due read dials: the drawn persona, at its record's
 /// endpoint, under its receipt key.
@@ -48,9 +107,8 @@ pub fn receipt_holder(due: &DueRead) -> Holder<FnDsaHybridPublicKey> {
 pub async fn read_due<F: ShardFacts, H: HolderSource>(
     scheduler: &FetchScheduler<F, H>,
     due: &DueRead,
-    budget: NeedBudget,
 ) -> ReadOutcome {
-    match attempt_due(scheduler, due, budget).await {
+    match attempt_due(scheduler, due).await {
         Ok(record) => ReadOutcome::Pass(Box::new(record)),
         Err(failure) => classify(&failure),
     }
@@ -67,7 +125,6 @@ pub async fn read_due<F: ShardFacts, H: HolderSource>(
 pub async fn attempt_due<F: ShardFacts, H: HolderSource>(
     scheduler: &FetchScheduler<F, H>,
     due: &DueRead,
-    budget: NeedBudget,
 ) -> Result<BundleRecord, ReadFailure> {
     let nonce = SuppliedNonce {
         stream: due.key.stream,
@@ -79,7 +136,7 @@ pub async fn attempt_due<F: ShardFacts, H: HolderSource>(
             due.shard,
             nonce,
             Arc::new(DiscardTxs),
-            budget,
+            CHALLENGE_BUDGET,
         )
         .await?;
     let receipt = read.shard.signature().to_canonical_bytes();

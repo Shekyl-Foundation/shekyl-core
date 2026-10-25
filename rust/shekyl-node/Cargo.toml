@@ -18,8 +18,8 @@ shekyl-address = { path = "../shekyl-address" }
 shekyl-chain-ingest = { path = "../shekyl-chain-ingest" }
 # The witness ring the node's templates draw from, and the bundle
 # producer that files from it (SO-D12 increment 4c). The fetch read is
-# chain-ingest's `producer` feature, on by default there.
-shekyl-bundle-producer = { path = "../shekyl-bundle-producer" }
+# `fetch`, which chain-ingest's `producer` feature also turns on.
+shekyl-bundle-producer = { path = "../shekyl-bundle-producer", features = ["fetch"] }
 # The fetch scheduler the producer reads through, dialling the operator's
 # Tor SOCKS endpoint. Daemon-only, as the node is.
 shekyl-archival-fetch-sched = { path = "../shekyl-archival-fetch-sched" }
