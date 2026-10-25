@@ -454,11 +454,11 @@ the FFI.
 B1/B2/B3 are C++ substrate KATs (`archival_substrate_lmdb.cpp` family)
 that drive the accrual/close/revert DB API directly — which is why none
 of them could see the F-B1a connect-*ordering* bug. The production-path
-complement
-(`budget_epoch_boundary_includes_final_block_through_real_block_path`,
-same file) drives accrual amounts through the real
-`add_block`/`pop_block` and asserts the close of epoch E includes E's
-final block's row, plus pop/re-connect byte-identity of the frozen row.
+complement is Rust's: `rust/shekyl-chain-store/src/store/archival_write_tests.rs`
+`a_close_freezes_the_budget_and_the_slash_pass_an_epoch_later_gathers`
+connects through the store's write path and asserts the close of epoch E
+freezes the accrual through E's final block, that a pop restores the
+accruing row, and that a re-connect reproduces the frozen close.
 
 B1's **full-connect-path counterpart** landed 2026-07-09:
 `archival_budget_conservation` (named `…_boundary` until 2026-10-08, when
