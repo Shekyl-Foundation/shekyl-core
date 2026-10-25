@@ -94,15 +94,20 @@ impl NodeFacts for Surroundings {
         // Chain sync's state, the one the follower posts on (DX-Q3, Q13),
         // read by the follower's rule: a closed watch says nothing about
         // the chain, so it reads `NoView`, not its last value.
-        // The latch is the store's, published by the connector. A closed
-        // watch keeps its last value: the latch is one-way until a resync.
+        // The target is the best verified chain's count, which chain sync
+        // publishes with `Behind`. The latch is the store's, published by
+        // the connector. A closed watch keeps its last value: the latch is
+        // one-way until a resync.
         let state = if self.sync.has_changed().is_err() {
             SyncState::NoView
         } else {
             *self.sync.borrow()
         };
         Ok(SyncFacts {
-            target: None,
+            target: match state {
+                SyncState::Behind { target, .. } => Some(target),
+                _ => None,
+            },
             synchronized: state == SyncState::Synced,
             busy_syncing: matches!(
                 state,
@@ -228,14 +233,19 @@ pub(crate) fn unix_now() -> u64 {
         .unwrap_or(0)
 }
 
+/// Free space available to this process under `path`, in bytes: `statvfs`'s
+/// `f_bavail` on Unix, `GetDiskFreeSpaceExW`'s available-to-caller figure on
+/// Windows. An unreadable probe is an error, never a guess. The managed Tor's
+/// pre-spawn check reads it too (`TOR_SUPERVISOR.md` §5).
 #[cfg(unix)]
-fn free_bytes(path: &std::path::Path) -> std::io::Result<u64> {
+pub fn free_bytes(path: &std::path::Path) -> std::io::Result<u64> {
     let stat = rustix::fs::statvfs(path)?;
     Ok(stat.f_bavail.saturating_mul(stat.f_frsize))
 }
 
+/// Windows half of [`free_bytes`].
 #[cfg(windows)]
-fn free_bytes(path: &std::path::Path) -> std::io::Result<u64> {
+pub fn free_bytes(path: &std::path::Path) -> std::io::Result<u64> {
     shekyl_win_sec::free_bytes_available(path)
 }
 
@@ -737,6 +747,44 @@ mod tests {
         assert!(
             surroundings.sync().expect("closed").following_degraded,
             "a closed latch watch keeps the evidence"
+        );
+    }
+
+    /// The node's facts read what chain sync publishes into the node's one
+    /// sync sender: `Behind` with its target, then `Synced` with none
+    /// (CS-Q2 step 8). Red edit: answer `target: None` always.
+    #[test]
+    fn the_sync_facts_read_the_published_state_and_its_target() {
+        let dir = tempfile::tempdir().expect("temp");
+        let (sender, sync) = tokio::sync::watch::channel(SyncState::NoView);
+        let (_latch_tx, latch) = tokio::sync::watch::channel(None);
+        let surroundings = Surroundings {
+            pool: Arc::new(Mutex::new(None)),
+            data_dir: dir.path().to_path_buf(),
+            offline: false,
+            sync,
+            latch,
+            health: PoolHealth::unwired(),
+        };
+        let none = surroundings.sync().expect("open");
+        assert_eq!(
+            (none.target, none.synchronized, none.busy_syncing),
+            (None, false, false)
+        );
+        let target = shekyl_types::ChainCount::from_raw(120);
+        sender.send_replace(SyncState::Behind {
+            have: shekyl_difficulty::CumulativeDifficulty::from_raw(80),
+            best: shekyl_difficulty::CumulativeDifficulty::from_raw(120),
+            target,
+        });
+        let behind = surroundings.sync().expect("open");
+        assert_eq!(behind.target, Some(target));
+        assert!(behind.busy_syncing && !behind.synchronized);
+        sender.send_replace(SyncState::Synced);
+        let synced = surroundings.sync().expect("open");
+        assert_eq!(
+            (synced.target, synced.synchronized, synced.busy_syncing),
+            (None, true, false)
         );
     }
 }

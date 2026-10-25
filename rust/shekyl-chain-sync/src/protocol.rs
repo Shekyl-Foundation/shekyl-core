@@ -205,10 +205,14 @@ pub enum Command<K> {
         /// A session drawn uniformly.
         session: K,
     },
-    /// An announced block connected.
+    /// A block connected as the new tip, and with it this node is not
+    /// `Behind` (CS-Q2 step 7). It goes to every established session but
+    /// the one that supplied it, however it arrived.
     Relay {
         /// The block.
         hash: BlockHash,
+        /// The session that supplied it.
+        from: K,
     },
     /// An announce is missing transactions.
     RequestMissingTxs {
@@ -312,14 +316,14 @@ pub struct BoundArrival<K> {
 /// What the entry did with one offered arrival.
 ///
 /// A refusal carries the census row the entry named. The model does not
-/// invent one. `Connected.relay` is an announce; a body this node requested
-/// does not relay.
+/// invent one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Outcome {
-    /// The block connected. `relay` asks the coordinator to relay it.
+    /// The block connected, at `height`. The model relays it when it is
+    /// the new tip and the node, with it, is not `Behind`.
     Connected {
-        /// Whether to relay the block.
-        relay: bool,
+        /// The height the block took.
+        height: BlockHeight,
     },
     /// The body matched its header, and the block was refused.
     Refused {
@@ -359,7 +363,9 @@ pub enum Outcome {
     StoreUnreadable,
     /// An announce hit the unsolicited share.
     Throttled,
-    /// Already held, stored beside the incumbent, switched, or unfollowable.
+    /// Already held, stored beside the incumbent, or unfollowable. A
+    /// switch whose new tip is some other block is this too: the owner
+    /// translates that reply before the model sees it.
     Noted,
 }
 

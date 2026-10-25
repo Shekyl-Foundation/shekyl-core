@@ -37,12 +37,16 @@
 //!   of them may be the response it would abandon (`on_headers` closes a
 //!   session whose request the deadline already cleared). When the clock
 //!   fires, those messages are taken and then the deadline runs.
-//! - **Announcements** (2008, `NOTIFY_NEW_COMPACT_BLOCK`) reach the C++
-//!   handler until the cutover routes them here, so [`Event::Announce`]
-//!   does not arrive yet, and the commands only an announcement produces
-//!   ([`Command::Relay`], [`Command::RequestMissingTxs`]) are reached by
-//!   the model's own tests. `RequestMissingTxs` is encoded and sent;
-//!   `Relay` has no Rust relay entry to call, and it is logged.
+//! - **Announcements** (2008, `NOTIFY_NEW_COMPACT_BLOCK`) come from the
+//!   attached router and are the model's [`Event::Announce`].
+//!   `RequestMissingTxs` is encoded and sent; a peer's own 2009 stays the
+//!   C++ handler's until the cutover.
+//! - **Relay** is the model's decision ([`Command::Relay`]): a block that
+//!   connected as the new tip while this node, with it, is not `Behind`,
+//!   however it arrived. The owner builds that compact announcement (the
+//!   block and its witness, no transactions) and sends it as 2008 to every
+//!   established session but the one that supplied it. That send moves
+//!   behind RD's relay entry when it lands.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
@@ -58,21 +62,23 @@ use shekyl_chain_store::store::{ChainStore, SnapshotView};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_draw_rng::RelayRng;
 use shekyl_levin::{
-    notify, GetTxpoolComplement, PortableMap, RequestBodies, RequestCompactMissingTx,
-    RequestHeaders, SyncCommand, HASH_SIZE, NOTIFY_GET_TXPOOL_COMPLEMENT,
-    NOTIFY_REQUEST_COMPACT_MISSING_TX,
+    notify, CoreSyncData, GetTxpoolComplement, HandshakeRequest, NewCompactBlock, PortableMap,
+    RequestBodies, RequestCompactMissingTx, RequestHeaders, SyncCommand, TimedSyncRequest,
+    TimedSyncResponse, HASH_SIZE, NOTIFY_GET_TXPOOL_COMPLEMENT, NOTIFY_REQUEST_COMPACT_MISSING_TX,
 };
 use shekyl_peer_policy::{Invalidate, SyncReply, SyncReplyAction};
 use shekyl_runtime::{Pool, RuntimeBudget, ThreadName};
 use shekyl_seam::{Hub, SyncPayload};
 use shekyl_timing_engine::{Clock, OwnerHandle, Tick};
 use shekyl_transport_layer::{declaration, Assessment};
-use shekyl_types::{BlockHeight, ChainCount};
+use shekyl_types::{BlockHash, BlockHeight, ChainCount};
+use shekyl_wire::{BlockBody, TxBody};
 use tokio::sync::{mpsc, watch};
 use tracing::Instrument;
 
 use crate::executor::Executor;
-use crate::router::Routed;
+use crate::relay;
+use crate::router::{Routed, Tapped};
 use crate::serve::{serve_bodies, serve_headers};
 use crate::session::Session;
 use shekyl_chain_sync::{
@@ -109,6 +115,13 @@ pub struct OwnerParts<C: Clock + Clone, R> {
     pub pool_hashes: Arc<dyn Fn() -> Vec<[u8; HASH_SIZE]> + Send + Sync>,
     /// The router's output.
     pub routed: mpsc::UnboundedReceiver<Routed>,
+    /// Where the derived sync state is published (CS-Q2 step 8): the
+    /// node's one sync sender (`shekyl_node::Node::sync()`, cloned), which
+    /// the RPC's facts, the miner's follower and the relay gate read. The
+    /// owner is its publisher and holds no other. The node keeps its
+    /// sender, so the watch does not close when this task ends; the task
+    /// publishes [`SyncState::NoView`] on every exit.
+    pub state: watch::Sender<SyncState>,
 }
 
 /// The running owner.
@@ -169,12 +182,12 @@ where
         },
         &name,
     )?;
-    let (state_tx, state) = watch::channel(SyncState::NoView);
+    let state = parts.state.subscribe();
     let (alarm_tx, alarm) = watch::channel(false);
     let (stop_tx, stop_rx) = watch::channel(false);
     let executor = Arc::clone(&parts.executor);
     // The owner's log lines carry the span it was started in.
-    pool.spawn(run(parts, state_tx, alarm_tx, stop_rx).instrument(tracing::Span::current()));
+    pool.spawn(run(parts, alarm_tx, stop_rx).instrument(tracing::Span::current()));
     Ok(Running {
         pool,
         executor,
@@ -182,6 +195,22 @@ where
         state,
         alarm,
     })
+}
+
+/// Publishes [`SyncState::NoView`] when the owner task ends.
+///
+/// The node keeps its own sender, so the watch does not close and the
+/// facts' and the follower's closed-watch reading never fires. Without
+/// this publish they would keep the last state, including `Synced`,
+/// after the owner is gone.
+struct EndsAsNoView {
+    state: watch::Sender<SyncState>,
+}
+
+impl Drop for EndsAsNoView {
+    fn drop(&mut self) {
+        self.state.send_replace(SyncState::NoView);
+    }
 }
 
 /// What the owner's own spawned work reports back.
@@ -204,8 +233,13 @@ enum Input {
 struct Offered {
     /// The session that served the body.
     session: Session,
-    /// A body this node requested. An announcement is not, so a connect relays.
+    /// A body this node requested. An announcement is not. An oversize
+    /// solicited body invalidates its header; an oversize announcement
+    /// does not. Relay does not read this: the model decides that.
     solicited: bool,
+    /// The block the offer names. A switch is a connect when this is the
+    /// chain's new tip, and [`Outcome::Noted`] otherwise.
+    hash: BlockHash,
 }
 
 /// A request a session sent this node.
@@ -274,7 +308,6 @@ struct Owner<C: Clock + Clone, R> {
 
 async fn run<C, R>(
     parts: OwnerParts<C, R>,
-    state_tx: watch::Sender<SyncState>,
     alarm_tx: watch::Sender<bool>,
     mut stop: watch::Receiver<bool>,
 ) where
@@ -294,6 +327,7 @@ async fn run<C, R>(
         rng,
         pool_hashes,
         mut routed,
+        state: state_tx,
     } = parts;
     let (inputs, mut input_rx) = mpsc::unbounded_channel();
     let schedule: Box<dyn Fn(BlockHeight) -> shekyl_chain_rules::RuleSet + Send> =
@@ -320,6 +354,10 @@ async fn run<C, R>(
         seats: None,
         state_tx,
         alarm_tx,
+    };
+    // Dropped with the task: stop, a closed watch, and a panic alike.
+    let _exit = EndsAsNoView {
+        state: owner.state_tx.clone(),
     };
     // The fill does not exist yet: the frontier is genesis (§4.7).
     owner.event(Event::Fill {
@@ -475,6 +513,37 @@ where
         self.commands(out);
     }
 
+    /// A copy of a handshake request or a timed sync (the router's claim
+    /// tap): its sync payload is the session's claim. A copy that does not
+    /// decode is the C++ handler's to judge, and gives no claim.
+    fn tap(&mut self, session: Session, kind: Tapped, payload: &[u8]) {
+        let core: Result<CoreSyncData, _> = match kind {
+            Tapped::HandshakeRequest => {
+                HandshakeRequest::load(payload).map(|message| message.payload_data)
+            }
+            Tapped::TimedSyncRequest => {
+                TimedSyncRequest::load(payload).map(|message| message.payload_data)
+            }
+            Tapped::TimedSyncResponse => {
+                TimedSyncResponse::load(payload).map(|message| message.payload_data)
+            }
+        };
+        match core {
+            Ok(core) => self.claim(
+                session,
+                SyncPayload {
+                    current_height: core.current_height,
+                    cumulative_difficulty: core.cumulative_difficulty,
+                    cumulative_difficulty_top64: core.cumulative_difficulty_top64,
+                    top_id: core.top_id,
+                },
+            ),
+            Err(err) => {
+                tracing::debug!(%session, ?kind, %err, "a tapped message that does not decode")
+            }
+        }
+    }
+
     fn claim(&mut self, session: Session, sync: SyncPayload) {
         let claim = PeerClaim {
             count: ChainCount::from_raw(sync.current_height),
@@ -518,6 +587,8 @@ where
                 self.event(Event::SessionOpened { session, transit });
             }
             Routed::Claim { id, sync } => self.claim(Session::new(id), sync),
+            Routed::Announce { id, payload } => self.announce(Session::new(id), &payload),
+            Routed::Tap { id, kind, payload } => self.tap(Session::new(id), kind, &payload),
             Routed::Message {
                 id,
                 command,
@@ -643,10 +714,13 @@ where
                     ?reply,
                     "an entry reply"
                 );
-                let solicited = offered.is_none_or(|offered| offered.solicited);
+                // An offer the owner no longer holds was solicited: a switch
+                // then cannot be the arrival, so it is noted.
+                let solicited = offered.as_ref().is_none_or(|offered| offered.solicited);
+                let arrival = offered.map(|offered| offered.hash);
                 self.event(Event::Entry {
                     tag,
-                    outcome: outcome_of(reply, solicited),
+                    outcome: outcome_of(reply, solicited, arrival),
                 });
                 self.room();
             }
@@ -661,6 +735,58 @@ where
                 self.serve_next(session);
             }
         }
+    }
+
+    /// An announced block (2008): the block, the transactions it
+    /// carried, and its witness. A payload that does not decode, or a
+    /// pruned entry, is the sender's form failure.
+    fn announce(&mut self, session: Session, payload: &[u8]) {
+        let announced = match NewCompactBlock::load(payload) {
+            Ok(announced) if !announced.b.pruned => announced,
+            Ok(_) => {
+                tracing::debug!(%session, "a pruned announcement");
+                self.close(session);
+                return;
+            }
+            Err(err) => {
+                tracing::debug!(%session, %err, "an announcement that does not decode");
+                self.close(session);
+                return;
+            }
+        };
+        let body = BlockBody {
+            block: announced.b.block,
+            txs: announced
+                .b
+                .txs
+                .into_iter()
+                .map(|tx| TxBody::Full(tx.blob))
+                .collect(),
+            attestation_witness: announced.b.attestation_witness,
+        };
+        self.event(Event::Announce { session, body });
+    }
+
+    /// Relay a block the model relays (module docs): the block with its
+    /// witness and no transactions, as 2008, to every established session
+    /// but `from`, its supplier.
+    fn relay(&mut self, hash: BlockHash, from: Session) {
+        let bytes = match relay::announcement(&self.store, &hash) {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => {
+                tracing::debug!(?hash, "a relayed block is no longer on the main chain");
+                return;
+            }
+            Err(relay::Fault::Store(err)) => {
+                tracing::error!(%err, "the store could not be read: the relay is dropped");
+                return;
+            }
+            Err(relay::Fault::Encode(err)) => {
+                tracing::error!(%err, "a relayed block did not encode");
+                return;
+            }
+        };
+        relay::fan_out(&self.hub, from.socket(), &bytes);
     }
 
     fn tip(&mut self, changed: &TipChanged) {
@@ -823,9 +949,7 @@ where
                         Err(err) => tracing::error!(%err, "a complement request did not encode"),
                     }
                 }
-                Command::Relay { hash } => {
-                    tracing::warn!(?hash, "no Rust relay entry: an announce relay is C++'s");
-                }
+                Command::Relay { hash, from } => self.relay(hash, from),
                 Command::RequestMissingTxs {
                     session,
                     block,
@@ -872,7 +996,8 @@ where
                     body,
                     solicited,
                 } = arrival;
-                pending.push((tag, session, solicited));
+                let hash = header.hash();
+                pending.push((tag, session, solicited, hash));
                 EntryArrival {
                     tag: ArrivalTag(tag),
                     session: SessionId(session.socket().get()),
@@ -886,19 +1011,22 @@ where
             .collect();
         // The door's own measure, so an arrival it would admit is never
         // called oversize here.
-        let tags: Vec<(u64, Session, bool, usize)> = span
+        let tags: Vec<(u64, Session, bool, BlockHash, usize)> = span
             .iter()
             .zip(pending)
-            .map(|(arrival, (tag, session, solicited))| (tag, session, solicited, arrival.bytes()))
+            .map(|(arrival, (tag, session, solicited, hash))| {
+                (tag, session, solicited, hash, arrival.bytes())
+            })
             .collect();
         match self.door.offer_bound(span) {
             Ok(tickets) => {
-                for (tag, session, solicited, _) in &tags {
+                for (tag, session, solicited, hash, _) in &tags {
                     self.offered.insert(
                         *tag,
                         Offered {
                             session: *session,
                             solicited: *solicited,
+                            hash: *hash,
                         },
                     );
                 }
@@ -923,7 +1051,7 @@ where
                     .door
                     .max_arrival_bytes()
                     .and_then(|max| usize::try_from(max).ok());
-                for (tag, _, _, bytes) in tags {
+                for (tag, _, solicited, _, bytes) in tags {
                     let outcome = match refusal {
                         // No room and a dry bucket wait for a seat. An
                         // unreadable store does not: the service stops on
@@ -932,7 +1060,11 @@ where
                         Refusal::NoRoom | Refusal::Throttled => Outcome::NoRoom,
                         Refusal::StoreUnreadable => Outcome::StoreUnreadable,
                         Refusal::Oversize if max.is_some_and(|max| bytes > max) => {
-                            Outcome::Oversize { invalidate: true }
+                            // A requested body invalidates its header; an
+                            // announced one does not.
+                            Outcome::Oversize {
+                                invalidate: solicited,
+                            }
                         }
                         Refusal::Oversize => Outcome::Again,
                     };
@@ -957,14 +1089,15 @@ fn proved_kind(proved: &Proved) -> &'static str {
 ///
 /// [`SyncReply::action`] is the authority for what the reply means.
 /// `solicited` is a body this node requested. A bound body is; an
-/// announcement, when that path is attached, is not. The reply carries its
-/// own verdict and its own hash: a refusal that reached this function named
-/// them.
-fn outcome_of(reply: Reply, solicited: bool) -> Outcome {
+/// announcement is not. `arrival` is the block the offer named, and it is
+/// absent when that offer is already gone. A switch is a connect when
+/// `arrival` is the promoted tip, and [`Outcome::Noted`] otherwise: the
+/// model has one relay path, and the reply carries no second one.
+fn outcome_of(reply: Reply, solicited: bool, arrival: Option<BlockHash>) -> Outcome {
     let action = sync_reply(&reply).action(solicited);
     match (action, reply) {
-        (SyncReplyAction::Advance { relay }, Reply::Connected { .. }) => {
-            Outcome::Connected { relay }
+        (SyncReplyAction::Advance, Reply::Connected { height, .. }) => {
+            Outcome::Connected { height }
         }
         (SyncReplyAction::Invalidate(Invalidate::Refused), Reply::Refused(verdict)) => {
             Outcome::Refused { verdict }
@@ -989,11 +1122,18 @@ fn outcome_of(reply: Reply, solicited: bool) -> Outcome {
         (SyncReplyAction::Again, Reply::Cancelled { .. } | Reply::Stopped) => Outcome::Again,
         (
             SyncReplyAction::None,
-            Reply::AlreadyHeld
-            | Reply::Held { .. }
-            | Reply::Switched { .. }
-            | Reply::CannotFollow(_),
+            Reply::AlreadyHeld | Reply::Held { .. } | Reply::CannotFollow(_),
         ) => Outcome::Noted,
+        // The promoted blocks ascend, so the last is main's new tip. It is
+        // a connect only when that tip is the arrival this offer named.
+        (SyncReplyAction::None, Reply::Switched { promoted, .. }) => {
+            match (promoted.last(), arrival) {
+                (Some(&(height, tip)), Some(arrival)) if tip == arrival => {
+                    Outcome::Connected { height }
+                }
+                _ => Outcome::Noted,
+            }
+        }
         (action, reply) => {
             tracing::error!(?action, ?reply, "an entry reply and its action disagree");
             Outcome::Noted

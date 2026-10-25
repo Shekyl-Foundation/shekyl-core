@@ -362,11 +362,20 @@ pub struct FeeFloorReport {
 pub fn report() -> FeeFloorReport {
     let params = EconomicParams::default();
     let zone = FULL_REWARD_ZONE;
-    let ages: [u64; 5] = [0, 1, 4, 12, 30];
-    let states: Vec<AgeState> = ages.iter().map(|&a| age_state(a, &params)).collect();
+    // The §1.8 age grid prices FL-E1's feedback cells. The slew traces run
+    // on to the saturation plateau: from about year 80 the burn sits at its
+    // cap and `C` at its structural maximum, so the roll-ups' worst case is
+    // the chain's and not the grid's edge (`ECONOMICS_SIM_PHASE0.md` §P0.1).
+    let feedback_ages: [u64; 5] = [0, 1, 4, 12, 30];
+    let slew_ages: [u64; 7] = [0, 1, 4, 12, 30, 60, 80];
+    let states: Vec<AgeState> = feedback_ages
+        .iter()
+        .map(|&a| age_state(a, &params))
+        .collect();
+    let slew_states: Vec<AgeState> = slew_ages.iter().map(|&a| age_state(a, &params)).collect();
 
     let mut slew = Vec::new();
-    for &st in &states {
+    for &st in &slew_states {
         for &(label, m0, m1, step) in SLEW_SCENARIOS {
             slew.push(slew_scenario(label, m0, m1, step, st, &params));
         }
@@ -543,5 +552,26 @@ mod tests {
         assert_eq!(whole_transactions(49.5), 50);
         assert_eq!(whole_transactions(-3.0), 0);
         assert_eq!(whole_transactions(0.0), 0);
+    }
+
+    /// FL-E1 on the exact window, held by no test until Phase 0
+    /// (`ECONOMICS_SIM_PHASE0.md` §P0.1): 600 cells on the §1.8 age grid,
+    /// four of them not converged under the 50 bp bar, all at age 12 with
+    /// `eps` = 3, `D` = 400 and the displaced start, worst tail amplitude
+    /// 87 bp. The fee-floor report is this crate's instrument, not a fold.
+    #[test]
+    fn fl_e1_has_four_unconverged_cells_at_age_twelve_and_a_worst_of_87_bp() {
+        let report = report();
+        assert_eq!(report.feedback.len(), 600);
+        let unconverged: Vec<_> = report.feedback.iter().filter(|f| !f.converged).collect();
+        assert_eq!(unconverged.len(), 4);
+        for cell in &unconverged {
+            assert_eq!(cell.age_years, 12);
+            assert_eq!(cell.elasticity_milli, 3_000);
+            assert_eq!(cell.demand_scale, 400);
+            assert_eq!(cell.tail_amplitude_bp, 87);
+        }
+        let worst = report.feedback.iter().map(|f| f.tail_amplitude_bp).max();
+        assert_eq!(worst, Some(87));
     }
 }

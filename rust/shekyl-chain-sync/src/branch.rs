@@ -9,19 +9,69 @@
 //! judged against that parent and not against the main tip.
 
 use shekyl_chain_rules::{AtHeight, HeaderRecord, HeaderView, Tip};
-use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockHash, BlockHeight};
-use shekyl_wire::BlockHeader;
 
+use crate::peer::Checked;
 use crate::tree::HeaderTree;
 
-/// One cheap-checked or proven header that is not in `T` yet. The branch
-/// view serves it by height, above the fork.
-pub(crate) struct Overlay {
-    pub height: BlockHeight,
-    pub hash: BlockHash,
-    pub header: BlockHeader,
-    pub work: CumulativeDifficulty,
+// Reads of pending headers on this thread: the cost test's count of the
+// work the run buffer does per header (`scaling_tests`).
+#[cfg(test)]
+thread_local! {
+    pub(crate) static PENDING_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn count_pending_read() {
+    PENDING_READS.with(|reads| reads.set(reads.get().saturating_add(1)));
+}
+
+#[cfg(not(test))]
+pub(crate) const fn count_pending_read() {}
+
+/// Cheap-checked or proven headers that are not in `T` yet, served by
+/// height above the view's base: a run's headers, then the headers of a
+/// response checked so far. Borrowed, never copied, and contiguous by
+/// height, so a height is found by its offset from the first.
+#[derive(Clone, Copy)]
+pub(crate) struct Pending<'a> {
+    earlier: &'a [Checked],
+    later: &'a [Checked],
+}
+
+impl<'a> Pending<'a> {
+    /// No pending headers.
+    pub(crate) const NONE: Pending<'static> = Pending {
+        earlier: &[],
+        later: &[],
+    };
+
+    /// `earlier`, then `later`, the second continuing the first.
+    pub(crate) const fn new(earlier: &'a [Checked], later: &'a [Checked]) -> Self {
+        Self { earlier, later }
+    }
+
+    fn first(&self) -> Option<&'a Checked> {
+        self.earlier.first().or_else(|| self.later.first())
+    }
+
+    fn last(&self) -> Option<&'a Checked> {
+        self.later.last().or_else(|| self.earlier.last())
+    }
+
+    /// The pending header at `height`, in O(1). A header found by offset
+    /// whose height is not `height` means the two slices do not continue
+    /// each other, and it is not served.
+    fn at(&self, height: BlockHeight) -> Option<&'a Checked> {
+        count_pending_read();
+        let offset = height.to_raw().checked_sub(self.first()?.height.to_raw())?;
+        let offset = usize::try_from(offset).ok()?;
+        let found = match offset.checked_sub(self.earlier.len()) {
+            None => self.earlier.get(offset),
+            Some(later) => self.later.get(later),
+        }?;
+        (found.height == height).then_some(found)
+    }
 }
 
 pub(crate) struct BranchView<'a, H> {
@@ -35,7 +85,7 @@ pub(crate) struct BranchView<'a, H> {
     /// Heights at and below this are on `main`.
     fork: BlockHeight,
     empty: bool,
-    run: &'a [Overlay],
+    run: Pending<'a>,
 }
 
 impl<'a, H> BranchView<'a, H> {
@@ -48,7 +98,7 @@ impl<'a, H> BranchView<'a, H> {
             tip_height,
             fork: tip_height,
             empty: false,
-            run: &[],
+            run: Pending::NONE,
         }
     }
 
@@ -61,7 +111,7 @@ impl<'a, H> BranchView<'a, H> {
             tip_height: BlockHeight::ZERO,
             fork: BlockHeight::ZERO,
             empty: true,
-            run: &[],
+            run: Pending::NONE,
         }
     }
 
@@ -80,14 +130,14 @@ impl<'a, H> BranchView<'a, H> {
             tip_height,
             fork,
             empty: false,
-            run: &[],
+            run: Pending::NONE,
         }
     }
 
-    /// The run's headers sit above `anchor`. `tip()` reports the overlay
-    /// tip. Lookups below that tip and above the fork still walk `T`
-    /// from `anchor`.
-    pub(crate) fn with_run(mut self, run: &'a [Overlay]) -> Self {
+    /// The pending headers sit above `anchor`. `tip()` reports the last
+    /// of them. Lookups below them and above the fork still walk `T` from
+    /// `anchor`.
+    pub(crate) fn with_run(mut self, run: Pending<'a>) -> Self {
         if let Some(last) = run.last() {
             self.tip_hash = last.hash;
             self.tip_height = last.height;
@@ -117,11 +167,11 @@ impl<'id, H: HeaderView<'id>> HeaderView<'id> for BranchView<'_, H> {
         if height.to_raw() > self.tip_height.to_raw() {
             return Ok(AtHeight::AboveTip);
         }
-        if let Some(over) = self.run.iter().find(|over| over.height == height) {
+        if let Some(pending) = self.run.at(height) {
             return Ok(AtHeight::Recorded(HeaderRecord {
-                hash: over.hash,
-                header: over.header.clone(),
-                cumulative_difficulty: over.work,
+                hash: pending.hash,
+                header: pending.header.clone(),
+                cumulative_difficulty: pending.work,
             }));
         }
         let Some(tree) = self.tree else {
