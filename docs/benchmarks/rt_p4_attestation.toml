@@ -18,7 +18,10 @@
 # release profile, `--locked` and `fips203` 0.4.3; the commit fixes the rest.
 # Neither commit had `rust/.cargo/config.toml`, so both runs were built with
 # no rustflags. `+crt-static` reached the MSVC targets on 2026-10-19, after
-# the laptop's run, and the laptop's entry is red until it is re-run with it.
+# the laptop's run. The laptop was re-run with it on 2026-10-25 and the run
+# FAILED (rt_p4_mlkem_decaps_timing_20261023.md), so the laptop's entry
+# stays at its passing 2026-10-11 build and the check stays red. A failing
+# run is never written here; what comes next is the maintainer's.
 #
 # What `rustflags` leaves out, and why:
 #   - cmake/BuildRust.cmake gives a cross build `CARGO_TARGET_<T>_RUSTFLAGS`
