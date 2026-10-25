@@ -857,9 +857,8 @@ regtest C++ leg (item 8); tag `0x03`.
   rules_at -> RuleSetId` cannot name a Fakechain set either. RD-Q7's owed
   wiring therefore has a store-side leg the review commit created while
   closing a real hole; **RD-Q10** poses the repair (the in-force `RuleSet` by
-  value). The two consumers slice 2 Q10 named (`drs_bench.py`,
-  `curve_tree_header_root_check.cpp`) are blocked on this as much as on the
-  flag. Falsifier as in RD-Q10.
+  value). The consumer slice 2 Q10 named that remains, `drs_bench.py`, is
+  blocked on this as much as on the flag. Falsifier as in RD-Q10.
 - **RD-F12 (ruling) — the mining JIT is the one permanent C++↔Rust boundary,
   with a standing obligation.** The RandomX parity corpus and
   `randomx-v2-differential.yml` become a **permanent gate** (full vector set on
