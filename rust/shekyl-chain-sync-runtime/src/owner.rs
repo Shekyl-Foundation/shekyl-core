@@ -43,10 +43,10 @@
 //!   C++ handler's until the cutover.
 //! - **Relay** is the model's decision ([`Command::Relay`]): a block that
 //!   connected as the new tip while this node, with it, is not `Behind`,
-//!   however it arrived. [`crate::relay`] builds that compact announcement
-//!   (the block and its witness, no transactions) and sends it as 2008 to
-//!   every established session but the one that supplied it. That send
-//!   moves behind RD's relay entry when it lands.
+//!   however it arrived. The owner builds that compact announcement (the
+//!   block and its witness, no transactions) and sends it as 2008 to every
+//!   established session but the one that supplied it. That send moves
+//!   behind RD's relay entry when it lands.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
