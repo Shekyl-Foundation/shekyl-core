@@ -390,7 +390,7 @@ Rust mirrors live in `T/archival_reads.rs`; the C++ structs are canonical for th
 | value | meaning |
 |---|---|
 | `both` | served on the restricted (view) and admin listeners |
-| `admin` (JSON-RPC) | in `RESTRICTED_METHODS` (`D/handlers/json_rpc.rs:49-66`); the restricted listener answers HTTP 403 with `-32601 "Method not allowed in restricted mode"` |
+| `admin` (JSON-RPC) | a `HostOnly` row of the method table (`T/methods.rs`, RW-Q7), whose grant column dispatch reads; the restricted listener answers HTTP 403 with `-32601 "Method not allowed in restricted mode"` |
 | `admin` (REST) | `Visibility::AdminOnly` in `D/server.rs:209-326`; the path is not registered, so the restricted listener answers 404 |
 
 ### Rust-native JSON-RPC methods
@@ -677,50 +677,51 @@ A refusal is error -26 with `data` set to `[Refusal]` (`D/options.rs:440-457`).
 | aliases | `/getinfo` (REST only) |
 | params | ignored |
 
-The serializer is the flat `GetInfoWire` (`T/info.rs:408-491`). It goes through `try_from`/`into`, so the Rust part names (`health`, `chain`, …) are not keys.
+The serializer is the flat `GetInfoWire` (`T/info.rs:453-542`). It goes through `try_from`/`into`, so the Rust part names (`health`, `chain`, …) are not keys.
 
 | key | wire type | notes | source |
 |---|---|---|---|
-| `status` | string | | `T/info.rs:411` |
-| `height` | u64 | Health | `T/info.rs:414` |
-| `top_block_hash` | hash64 | Health | `T/info.rs:415` |
-| `target_height` | nullable<u64> | Health | `T/info.rs:416` |
-| `synchronized` | bool | Health | `T/info.rs:417` |
-| `busy_syncing` | bool | Health | `T/info.rs:418` |
-| `offline` | bool | Health | `T/info.rs:419` |
-| `following_degraded` | bool | Health | `T/info.rs:420` |
-| `has_peers` | bool? | omitted iff `offline` | `T/info.rs:421-422` |
-| `protocol_version` | u64 | Identity | `T/info.rs:425` |
-| `wide_difficulty` | hex128 | Chain. **No low-64 / top64 siblings here** | `T/info.rs:428` |
-| `wide_cumulative_difficulty` | hex128 | Chain | `T/info.rs:429` |
-| `target` | u64 | seconds | `T/info.rs:430` |
-| `tx_count` | u64 | | `T/info.rs:431` |
-| `block_weight_limit` | u64 | written even at 0 | `T/info.rs:434` |
-| `block_weight_median` | u64 | | `T/info.rs:435` |
-| `adjusted_time` | u64 | | `T/info.rs:436` |
-| `already_generated_coins` | **atomic-dec** | Economics | `T/info.rs:443` |
-| `release_multiplier` | u64 | | `T/info.rs:444` |
-| `burn_pct` | u64 | | `T/info.rs:445` |
-| `total_burned` | **atomic-dec** | | `T/info.rs:446` |
-| `staker_emission_share_effective` | u64 | | `T/info.rs:447` |
-| `tx_pool_size` | u64 | Pool | `T/info.rs:450` |
-| `start_time` | u64? | Status part; admin only | `T/info.rs:453-454` |
-| `free_space` | u64? | Status | `T/info.rs:455-456` |
-| `database_size` | u64? | Status | `T/info.rs:457-458` |
-| `version` | string? | Status; a build string, unlike `get_version.version` (u32) | `T/info.rs:459-460` |
-| `outgoing_connections_count` | u64? | Status; omitted if offline | `T/info.rs:461-462` |
-| `incoming_connections_count` | u64? | Status | `T/info.rs:463-464` |
-| `alt_blocks_count` | u64? | Status | `T/info.rs:465-466` |
-| `rpc_connections_count` | u64? | Status | `T/info.rs:467-468` |
-| `public_incoming_socket_count` | u64? | Peers part; admin only | `T/info.rs:471-472` |
-| `public_outgoing_socket_count` | u64? | Peers | `T/info.rs:473-474` |
-| `tor_incoming_socket_count` | u64? | Peers | `T/info.rs:475-476` |
-| `tor_outgoing_socket_count` | u64? | Peers | `T/info.rs:477-478` |
-| `p2p` | string enum? | `running` / `offline`; Peers | `T/info.rs:479-480,494-499` |
-| `white_peerlist_size` | u64? | Peers | `T/info.rs:481-482` |
-| `grey_peerlist_size` | u64? | Peers | `T/info.rs:483-484` |
-| `tx_pool_unbroadcast_count` | u64? | Host part; admin only | `T/info.rs:487-488` |
-| `restricted` | bool | the listener's posture | `T/info.rs:490` |
+| `status` | string | | `T/info.rs:454` |
+| `height` | u64 | Health | `T/info.rs:457` |
+| `top_block_hash` | hash64 | Health | `T/info.rs:458` |
+| `target_height` | nullable<u64> | Health | `T/info.rs:459` |
+| `synchronized` | bool | Health | `T/info.rs:460` |
+| `busy_syncing` | bool | Health | `T/info.rs:461` |
+| `offline` | bool | Health | `T/info.rs:462` |
+| `following_degraded` | bool | Health | `T/info.rs:463` |
+| `has_peers` | bool? | omitted iff `offline` | `T/info.rs:464-465` |
+| `protocol_version` | u64 | Identity | `T/info.rs:468` |
+| `wide_difficulty` | hex128 | Chain. **No low-64 / top64 siblings here** | `T/info.rs:471` |
+| `wide_cumulative_difficulty` | hex128 | Chain | `T/info.rs:472` |
+| `target` | u64 | seconds | `T/info.rs:473` |
+| `tx_count` | u64 | | `T/info.rs:474` |
+| `block_weight_limit` | u64 | written even at 0 | `T/info.rs:477` |
+| `block_weight_median` | u64 | | `T/info.rs:478` |
+| `adjusted_time` | u64 | | `T/info.rs:479` |
+| `already_generated_coins` | **atomic-dec** | Economics | `T/info.rs:486` |
+| `release_multiplier` | u64 | | `T/info.rs:487` |
+| `burn_pct` | u64 | | `T/info.rs:488` |
+| `total_burned` | **atomic-dec** | | `T/info.rs:489` |
+| `staker_emission_share_effective` | u64 | | `T/info.rs:490` |
+| `pool_retired` | bool? | Pool; written only when `true`: the node retired its pool (its file faulted) | `T/info.rs:494-495` |
+| `tx_pool_size` | nullable<u64> | Pool; `null` exactly when `pool_retired` | `T/info.rs:496` |
+| `start_time` | u64? | Status part; admin only | `T/info.rs:499-500` |
+| `free_space` | u64? | Status | `T/info.rs:501-502` |
+| `database_size` | u64? | Status | `T/info.rs:503-504` |
+| `version` | string? | Status; a build string, unlike `get_version.version` (u32) | `T/info.rs:505-506` |
+| `outgoing_connections_count` | u64? | Status; omitted if offline | `T/info.rs:507-508` |
+| `incoming_connections_count` | u64? | Status | `T/info.rs:509-510` |
+| `alt_blocks_count` | u64? | Status | `T/info.rs:511-512` |
+| `rpc_connections_count` | u64? | Status | `T/info.rs:513-514` |
+| `public_incoming_socket_count` | u64? | Peers part; admin only | `T/info.rs:517-518` |
+| `public_outgoing_socket_count` | u64? | Peers | `T/info.rs:519-520` |
+| `tor_incoming_socket_count` | u64? | Peers | `T/info.rs:521-522` |
+| `tor_outgoing_socket_count` | u64? | Peers | `T/info.rs:523-524` |
+| `p2p` | string enum? | `running` / `offline`; Peers | `T/info.rs:525-526,549-554` |
+| `white_peerlist_size` | u64? | Peers | `T/info.rs:527-528` |
+| `grey_peerlist_size` | u64? | Peers | `T/info.rs:529-530` |
+| `tx_pool_unbroadcast_count` | nullable<u64>? | Host part; admin only; `null` exactly when `pool_retired` | `T/info.rs:534-539` |
+| `restricted` | bool | the listener's posture | `T/info.rs:541` |
 
 ### C++-table JSON-RPC methods
 
@@ -852,7 +853,7 @@ Dispatch: `get_jsonrpc_table`, `F:248-280`. Handlers are in `S`. Results pass th
 |---|---|
 | transport | JSON-RPC |
 | owner | C++ |
-| visibility | **both**: it is not in `RESTRICTED_METHODS`; the handler gates it on nettype (regtest / FAKECHAIN) |
+| visibility | **admin**: a `HostOnly` row, and an armed lever, in the method table (`T/methods.rs:135`); the handler also gates it on nettype (regtest / FAKECHAIN) |
 | aliases | none |
 | handler | `S:739` |
 
@@ -1178,6 +1179,7 @@ The DJSON rows (C++ REST) are in `F:170-181`. **For the DJSON rows, a bodyless r
 | `status` | string | | `T/transactions.rs:311` |
 | `txs` | [TxEntry] (§1.7)? | | `T/transactions.rs:312-313` |
 | `missed_tx` | [hash64]? | | `T/transactions.rs:314-316` |
+| `unavailable_tx` | [hash64]? | not in the chain, asked while the pool is retired | `T/transactions.rs:322-328` |
 
 #### 2.37 `/get_alt_blocks_hashes`
 
@@ -1602,7 +1604,7 @@ The reply has **no `status`**.
 
 ### 3.8 Surface notes
 
-- `inject_archival_serve_credit` is served on the restricted listener. It is gated only by nettype in the handler, not by `RESTRICTED_METHODS`.
+- `inject_archival_serve_credit` is host-only and an armed lever in the method table (`T/methods.rs:135`), and its handler gates it on nettype as well.
 - `get_block_template`, `get_miner_data`, `submit_block` and `get_txpool_backlog` are also served on both listeners.
 - C++ JSON-RPC aliases: `getblocktemplate` and `submitblock`. Rust aliases: `getblockcount`, `on_getblockhash`, `getblockheaderbyheight`, `getblock`, `getlastblockheader`, `getblockheaderbyhash`, `getblockheadersrange`. REST aliases: `/getheight`, `/gettransactions`, `/getinfo`, `/getblocks_by_height.bin`.
 

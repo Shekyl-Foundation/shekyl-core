@@ -519,6 +519,7 @@ pub fn get_transactions(
         status: RpcStatus(status.to_owned()),
         txs: Vec::new(),
         missed_tx: Vec::new(),
+        unavailable_tx: Vec::new(),
     };
     if request.decode_as_json {
         return Err(RpcError::new(

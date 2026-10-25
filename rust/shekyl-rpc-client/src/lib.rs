@@ -44,6 +44,11 @@ pub enum RpcError {
     /// Requested transactions weren't found.
     #[error("transactions not found")]
     TransactionsNotFound(Vec<[u8; 32]>),
+    /// Requested transactions are not in the daemon's chain, and its pool
+    /// cannot be read until it restarts (`unavailable_tx`): whether they
+    /// exist has no answer from this daemon. Not "not found".
+    #[error("transactions unavailable: not in the daemon's chain, and its pool is retired")]
+    TransactionsUnavailable(Vec<[u8; 32]>),
     /// The transaction was pruned.
     ///
     /// Pruned transactions are not supported at this time.
@@ -121,7 +126,9 @@ impl RpcError {
     #[must_use]
     pub const fn fault(&self) -> DaemonFault {
         match self {
-            Self::ConnectionError(_) => DaemonFault::Unreachable,
+            // A lookup the daemon could not make is one it did not answer:
+            // retry once it has restarted, or ask another daemon.
+            Self::ConnectionError(_) | Self::TransactionsUnavailable(_) => DaemonFault::Unreachable,
             Self::IdentityMismatch(mismatch) => DaemonFault::Identity(*mismatch),
             Self::InvalidNode(_)
             | Self::TransactionsNotFound(_)
@@ -742,6 +749,10 @@ mod tests {
             (
                 RpcError::TransactionsNotFound(vec![[0; 32]]),
                 DaemonFault::Protocol,
+            ),
+            (
+                RpcError::TransactionsUnavailable(vec![[0; 32]]),
+                DaemonFault::Unreachable,
             ),
             (RpcError::PrunedTransaction, DaemonFault::Protocol),
             (RpcError::InvalidTransaction([0; 32]), DaemonFault::Protocol),
