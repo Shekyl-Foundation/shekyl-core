@@ -972,7 +972,36 @@ included: p50 3.89 s, max 4.08 s. The cold seed for that run bootstrapped in
   `Offline` is not sent. Health is not this signal. Falsify by a managed Tor
   that is down, reported held, and by `Tor::Off` with `Clearnet::On`, sent
   with Health false. `shekyl-cli` and the GUI show Status through the one
-  renderer (`TSR-Q12`). The wallet's own Tor can adopt the sans-IO core.
+  renderer (`TSR-Q12`). The wallet's own Tor can adopt the sans-IO core,
+  under the constraints below.
+
+### 11.1 The wallet's Tor on the shared core (Rick, 2026-10-24)
+
+The wallet lane moves `shekyl-tor-control-wallet` onto this core in the week
+of 2026-10-26. Today that supervisor reports only `Connecting { progress }`
+and still kills a bootstrap at 300 s. The core will serve several Tor
+instances, the daemon's, the principal's and each persona's, so it is the
+place where identity domains could leak into each other. These constraints
+are fixed before the work starts:
+
+- **One instance per identity domain, and no state shared between
+  instances.** Each instance has its own Tor process, data directory,
+  guards, onion seed and SOCKS isolation username. The core is shared as
+  code, never as an instance ([`P2P_2_ENDPOINT_ROUND.md`](P2P_2_ENDPOINT_ROUND.md)
+  `PWD-E9`).
+- **No directory cache is shared across domains.** The cache's content is
+  public, but sharing it links the domains in two ways. Both Tors would ask
+  their directory guards for diffs from the same consensus, so the
+  "offline since" signal would match. The file times on disk would also tie
+  their activity together. Each domain keeps one cache of its own.
+- **Status and logs never join domains.** A posture line or a Status read
+  that names a persona's onion beside the principal's, or reports both Tors
+  in one record, links them for anyone who reads the log or the RPC. Each
+  domain reports on its own. A persona's onion never appears in the
+  daemon's or the principal's log stream.
+- **Backoff and respawn timing stay per instance.** An observer could tie
+  two domains together by timing if one domain's Tor dying triggered
+  another's respawn, or if they shared a backoff schedule.
 
 ## 12. Increments (rule 26)
 
