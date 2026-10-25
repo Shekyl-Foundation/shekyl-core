@@ -119,6 +119,8 @@ async fn the_producer_prices_its_listing_at_the_built_coinbase_and_the_block_con
                 keys: &keys,
                 params: &params,
                 now,
+                #[cfg(test)]
+                between_locks: None,
             };
             let produced = produce(&snap, &producer, Some(&pool), |_| true).expect("a template");
             let (_, _, target) = crate::router::claim_next(&snap, rules).expect("the claim");
@@ -239,6 +241,8 @@ async fn a_template_on_an_older_tip_than_the_pools_posts_and_evicts_nothing() {
             keys: &keys,
             params: &params,
             now,
+            #[cfg(test)]
+            between_locks: None,
         };
         produce(&snap, &producer, Some(&pool), |_| true).map(|produced| produced.evicted)
     };
@@ -727,4 +731,85 @@ async fn a_pass_that_no_longer_holds_is_verified_outside_the_pool_lock() {
     drop(pool);
     drop(std::fs::remove_file(&path));
     scenario.close().await;
+}
+
+/// A body flushed between the producer's two pool locks posts nothing and
+/// evicts nothing: a posted job never names a body an outside miner's
+/// `submit_block` would meet as missing; the follower builds again (the
+/// landing review of #1165, N2; the brief's c2). Red edit: list the bodies
+/// selected at the first lock without asking the pool again.
+#[tokio::test]
+async fn a_body_flushed_between_the_producers_locks_posts_nothing() {
+    use crate::template::{produce, NoTemplate, Producer};
+    let (mut scenario, mined) = matured("producer-flushed").await;
+    let first = paying_the_floor(&mut scenario, &mined, 0).await;
+    let second = paying_the_floor(&mut scenario, &mined, 1).await;
+    let first_id = first.txid_parts().hash;
+    let second_id = second.txid_parts().hash;
+    let path = tmp("producer-flushed-pool");
+    let mut pool = open_pool(&mut scenario, &path).await;
+    scenario
+        .read_chain(|view, rule_set| {
+            for tx in [first.clone(), second.clone()] {
+                let txid = tx.txid_parts().hash;
+                assert_eq!(
+                    pool.admit(
+                        tx,
+                        UnixSeconds::from_raw(1),
+                        view,
+                        rule_set,
+                        &AdmissionPolicy::GENESIS,
+                    )
+                    .expect("no fault"),
+                    Admission::Admitted {
+                        evicted: Vec::new()
+                    }
+                );
+                assert!(pool.fluffed(&txid).expect("publish"));
+            }
+        })
+        .await;
+    let keys = crate::test_support::harness_keys();
+    let params = shekyl_economics::EconomicParams::default();
+    let pool = std::sync::Mutex::new(pool);
+    let flush_first = |pool: &std::sync::Mutex<shekyl_mempool::Pool>| {
+        let flushed = pool.lock().expect("the pool").flush(&[first_id]);
+        assert_eq!(
+            flushed.expect("the file").len(),
+            1,
+            "flushed between the locks"
+        );
+    };
+    let produced = scenario
+        .with_store(|store, rules| {
+            let snap = store.begin_read().expect("a snapshot");
+            let facts = crate::connector::chain_facts_on(&snap).expect("the facts");
+            let now = facts
+                .median_timestamp
+                .map_or(crate::scenario::CLOCK_START, |median| {
+                    shekyl_types::Timestamp::from_raw(median.to_raw() + 1)
+                });
+            let producer = Producer {
+                rules,
+                keys: &keys,
+                params: &params,
+                now,
+                between_locks: Some(&flush_first),
+            };
+            produce(&snap, &producer, Some(&pool), |_| true).map(|produced| produced.job.height)
+        })
+        .await;
+    let still_held = pool
+        .lock()
+        .expect("the pool")
+        .listing()
+        .any(|(id, _)| id == second_id);
+    drop(pool);
+    drop(std::fs::remove_file(&path));
+    scenario.close().await;
+    assert!(
+        matches!(produced, Err(NoTemplate::BodyGone)),
+        "nothing posted: {produced:?}"
+    );
+    assert!(still_held, "nothing evicted");
 }

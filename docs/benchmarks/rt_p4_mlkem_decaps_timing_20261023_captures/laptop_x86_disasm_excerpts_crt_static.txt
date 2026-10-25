@@ -1,0 +1,197 @@
+Excerpts of `dumpbin /disasm` (Microsoft COFF/PE Dumper 14.44.35229.0) of the laptop's +crt-static build,
+rt_p4_decaps_timing.exe from caca14a3f, x86_64-pc-windows-msvc,
+sha256 f9492887b16f8e4e18fe900bebb37b57d90d7978f72216dd10e7a329d5b4057e.
+Full listing: 4,282,563 bytes, 68,810 lines, sha256 42b321943e0706df97f73593ea320bbabf15aab7d6ef37a261477daf75936650.
+Same sections as laptop_x86_disasm_excerpts.txt of 2026-10-11; each address that file names is printed here as the new listing has it at that address.
+
+===== ml_kem_decaps_internal: the ciphertext comparison loop and the derivation of the choice
+  00000001400099CD: B3 01              mov         bl,1
+  00000001400099CF: 31 C0              xor         eax,eax
+  00000001400099E0: 4C 8D 70 01        lea         r14,[rax+1]
+  00000001400099E4: 0F B6 0C 07        movzx       ecx,byte ptr [rdi+rax]
+  00000001400099E8: 3A 8C 04 D8 00 00  cmp         cl,byte ptr [rsp+rax+0D8h]
+  00000001400099EF: 0F 94 C1           sete        cl
+  00000001400099F2: E8 69 FD FF FF     call        _ZN6subtle9black_box17h7200f6c7b40d2ebfE
+  00000001400099F7: 20 C3              and         bl,al
+  00000001400099F9: 4C 89 F0           mov         rax,r14
+  00000001400099FC: 49 81 FE 40 04 00  cmp         r14,440h
+  0000000140009A03: 75 DB              jne         00000001400099E0
+  0000000140009A05: 89 D9              mov         ecx,ebx
+  0000000140009A07: E8 54 FD FF FF     call        _ZN6subtle9black_box17h7200f6c7b40d2ebfE
+  0000000140009A0C: F6 D0              not         al
+  0000000140009A0E: 24 01              and         al,1
+  0000000140009A10: 89 C1              mov         ecx,eax
+  0000000140009A12: E8 49 FD FF FF     call        _ZN6subtle9black_box17h7200f6c7b40d2ebfE
+  0000000140009A17: 48 8D 8C 24 90 00  lea         rcx,[rsp+90h]
+  0000000140009A1F: 48 8D 54 24 50     lea         rdx,[rsp+50h]
+  0000000140009A24: 41 89 C0           mov         r8d,eax
+  0000000140009A27: E8 44 FD FF FF     call        0000000140009770
+
+===== ml_kem_decaps_internal: its seven conditional jumps
+  0000000140009805: 0F 86 53 02 00 00  jbe         0000000140009A5E
+  0000000140009812: 0F 86 59 02 00 00  jbe         0000000140009A71
+  000000014000981F: 0F 86 62 02 00 00  jbe         0000000140009A87
+  000000014000982C: 0F 86 6B 02 00 00  jbe         0000000140009A9D
+  0000000140009871: 75 14              jne         0000000140009887
+  00000001400099BE: 74 0D              je          00000001400099CD
+  0000000140009A03: 75 DB              jne         00000001400099E0
+
+===== the conditional select (entry 0000000140009770; no symbol of its own in the listing), in full
+  0000000140009770: 48 83 EC 28        sub         rsp,28h
+  0000000140009774: 41 F6 D8           neg         r8b
+  0000000140009777: 70 52              jo          00000001400097CB
+  0000000140009779: F3 0F 6F 02        movdqu      xmm0,xmmword ptr [rdx]
+  000000014000977D: 41 0F B6 C0        movzx       eax,r8b
+  0000000140009781: 66 0F 6E C8        movd        xmm1,eax
+  0000000140009785: 66 0F 60 C9        punpcklbw   xmm1,xmm1
+  0000000140009789: F2 0F 70 C9 00     pshuflw     xmm1,xmm1,0
+  000000014000978E: 66 0F 70 C9 44     pshufd      xmm1,xmm1,44h
+  0000000140009793: F3 0F 6F 11        movdqu      xmm2,xmmword ptr [rcx]
+  0000000140009797: F3 0F 6F 59 10     movdqu      xmm3,xmmword ptr [rcx+10h]
+  000000014000979C: 66 0F 6F E1        movdqa      xmm4,xmm1
+  00000001400097A0: 66 0F DF E2        pandn       xmm4,xmm2
+  00000001400097A4: 66 0F DB C1        pand        xmm0,xmm1
+  00000001400097A8: 66 0F EB C4        por         xmm0,xmm4
+  00000001400097AC: F3 0F 7F 01        movdqu      xmmword ptr [rcx],xmm0
+  00000001400097B0: F3 0F 6F 42 10     movdqu      xmm0,xmmword ptr [rdx+10h]
+  00000001400097B5: 66 0F DB C1        pand        xmm0,xmm1
+  00000001400097B9: 66 0F DF CB        pandn       xmm1,xmm3
+  00000001400097BD: 66 0F EB C8        por         xmm1,xmm0
+  00000001400097C1: F3 0F 7F 49 10     movdqu      xmmword ptr [rcx+10h],xmm1
+  00000001400097C6: 48 83 C4 28        add         rsp,28h
+  00000001400097CA: C3                 ret
+
+===== ntt: the division and what feeds it
+  000000014000A35E: 48 C7 44 24 30 80  mov         qword ptr [rsp+30h],80h
+  000000014000A367: 48 C7 44 24 38 40  mov         qword ptr [rsp+38h],40h
+  000000014000A370: 48 C7 44 24 40 20  mov         qword ptr [rsp+40h],20h
+  000000014000A379: 48 C7 44 24 48 10  mov         qword ptr [rsp+48h],10h
+  000000014000A382: 48 C7 44 24 50 08  mov         qword ptr [rsp+50h],8
+  000000014000A38B: 48 C7 44 24 58 04  mov         qword ptr [rsp+58h],4
+  000000014000A394: 48 C7 44 24 60 02  mov         qword ptr [rsp+60h],2
+  000000014000A39D: 41 B8 01 00 00 00  mov         r8d,1
+  000000014000A3A3: 45 31 C9           xor         r9d,r9d
+  000000014000A3A6: EB 15              jmp         000000014000A3BD
+  000000014000A3B0: 49 FF C1           inc         r9
+  000000014000A3B3: 49 83 F9 07        cmp         r9,7
+  000000014000A3B7: 0F 84 3B 01 00 00  je          000000014000A4F8
+  000000014000A3BD: 4E 8B 5C CC 30     mov         r11,qword ptr [rsp+r9*8+30h]
+  000000014000A3C2: 4D 85 DB           test        r11,r11
+  000000014000A3C5: 0F 88 AB 01 00 00  js          000000014000A576
+  000000014000A3CB: 0F 84 3B 01 00 00  je          000000014000A50C
+  000000014000A3D1: 4B 8D 3C 1B        lea         rdi,[r11+r11]
+  000000014000A3D5: 48 81 FF 00 01 00  cmp         rdi,100h
+  000000014000A3DC: 77 12              ja          000000014000A3F0
+  000000014000A3DE: B8 00 01 00 00     mov         eax,100h
+  000000014000A3E3: 31 D2              xor         edx,edx
+  000000014000A3E5: F7 F7              div         eax,edi
+  000000014000A3E7: EB 0E              jmp         000000014000A3F7
+
+===== ntt_inv: the division and what feeds it
+  000000014000A5B8: 48 C7 44 24 40 02  mov         qword ptr [rsp+40h],2
+  000000014000A5C1: 48 C7 44 24 48 04  mov         qword ptr [rsp+48h],4
+  000000014000A5CA: 48 C7 44 24 50 08  mov         qword ptr [rsp+50h],8
+  000000014000A5D3: 48 C7 44 24 58 10  mov         qword ptr [rsp+58h],10h
+  000000014000A5DC: 48 C7 44 24 60 20  mov         qword ptr [rsp+60h],20h
+  000000014000A5E5: 48 C7 44 24 68 40  mov         qword ptr [rsp+68h],40h
+  000000014000A5EE: 48 C7 44 24 70 80  mov         qword ptr [rsp+70h],80h
+  000000014000A5F7: 41 B8 7F 00 00 00  mov         r8d,7Fh
+  000000014000A5FD: 45 31 C9           xor         r9d,r9d
+  000000014000A607: EB 14              jmp         000000014000A61D
+  000000014000A610: 49 FF C1           inc         r9
+  000000014000A613: 49 83 F9 07        cmp         r9,7
+  000000014000A617: 0F 84 37 01 00 00  je          000000014000A754
+  000000014000A61D: 4E 8B 5C CC 40     mov         r11,qword ptr [rsp+r9*8+40h]
+  000000014000A622: 4D 85 DB           test        r11,r11
+  000000014000A625: 0F 88 3E 02 00 00  js          000000014000A869
+  000000014000A62B: 0F 84 C6 01 00 00  je          000000014000A7F7
+  000000014000A631: 4B 8D 3C 1B        lea         rdi,[r11+r11]
+  000000014000A635: 48 81 FF 00 01 00  cmp         rdi,100h
+  000000014000A63C: 77 12              ja          000000014000A650
+  000000014000A63E: B8 00 01 00 00     mov         eax,100h
+  000000014000A643: 31 D2              xor         edx,edx
+  000000014000A645: F7 F7              div         eax,edi
+  000000014000A647: EB 0E              jmp         000000014000A657
+
+===== byte_decode (the standalone symbol): the range-check loop and its two exits
+  0000000140009B92: 0F 42 C2           cmovb       eax,edx
+  0000000140009B95: B9 06 00 00 00     mov         ecx,6
+  0000000140009BA0: 48 81 F9 06 02 00  cmp         rcx,206h
+  0000000140009BA7: 74 41              je          0000000140009BEA
+  0000000140009BA9: 0F B7 54 0C 22     movzx       edx,word ptr [rsp+rcx+22h]
+  0000000140009BAE: 39 D0              cmp         eax,edx
+  0000000140009BB0: 76 1F              jbe         0000000140009BD1
+  0000000140009BB2: 0F B7 54 0C 24     movzx       edx,word ptr [rsp+rcx+24h]
+  0000000140009BB7: 39 D0              cmp         eax,edx
+  0000000140009BB9: 76 16              jbe         0000000140009BD1
+  0000000140009BBB: 0F B7 54 0C 26     movzx       edx,word ptr [rsp+rcx+26h]
+  0000000140009BC0: 39 D0              cmp         eax,edx
+  0000000140009BC2: 76 0D              jbe         0000000140009BD1
+  0000000140009BC4: 0F B7 54 0C 28     movzx       edx,word ptr [rsp+rcx+28h]
+  0000000140009BC9: 48 83 C1 08        add         rcx,8
+  0000000140009BCD: 39 D0              cmp         eax,edx
+  0000000140009BCF: 77 CF              ja          0000000140009BA0
+  0000000140009BD1: 48 8D 05 90 37 03  lea         rax,[anon.5193282c3382bdadb9e08df19d2e2bfa.18.llvm.5348757339791231716]
+  0000000140009BDC: 48 C7 46 10 1C 00  mov         qword ptr [rsi+10h],1Ch
+  0000000140009BE4: 66 B8 01 00        mov         ax,1
+  0000000140009BE8: EB 16              jmp         0000000140009C00
+  0000000140009BEA: 48 8D 4E 02        lea         rcx,[rsi+2]
+  0000000140009BF3: 41 B8 00 02 00 00  mov         r8d,200h
+  0000000140009BF9: E8 42 F7 02 00     call        memcpy
+  0000000140009BFE: 31 C0              xor         eax,eax
+
+===== the range checks as inlined into decrypt and re-encrypt: the bound is an immediate
+k_pke_decrypt, d = 12 (bound q = 3329 = 0D01h), at 14000C74F and again at 14000CC64:
+  000000014000C746: 74 60              je          000000014000C7A8
+  000000014000C74F: 77 1F              ja          000000014000C770
+  000000014000C758: 77 16              ja          000000014000C770
+  000000014000C761: 77 0D              ja          000000014000C770
+  000000014000C76E: 72 D0              jb          000000014000C740
+k_pke_encrypt (the body decapsulation calls), d = 12, at 14000D026, 14000D242 and 14000E269 (same shape),
+and d = 1 (bound 2):
+  000000014000E5AD: 74 41              je          000000014000E5F0
+  000000014000E5B8: 0F 87 92 EA FF FF  ja          000000014000D050
+  000000014000E5C7: 0F 87 83 EA FF FF  ja          000000014000D050
+  000000014000E5D6: 0F 87 74 EA FF FF  ja          000000014000D050
+  000000014000E5E9: 72 BC              jb          000000014000E5A7
+No comparison against 400h (d = 10) or 10h (d = 4) appears on the ciphertext decodes.
+
+===== counts, by the agent's script (conditional jump = j.. except jmp; cmov/set; div/idiv)
+
+===== counts and the comparison, by compare_disasm.py
+quoted full instruction lines: 67 identical at the same address, 2 different, 0 missing
+  DIFF 0000000140009BD1: old 48 8D 05 60 57 02 lea rax,[...] | new 48 8D 05 90 37 03 lea rax,[anon.5193282c3382bdadb9e08df19d2e2bfa.18.llvm.5348757339791231716]
+  DIFF 0000000140009BF9: old E8 A7 28 02 00 call memcpy | new E8 42 F7 02 00 call memcpy
+abbreviated claims (address, jump, target, preceding instruction): 65 hold, 0 do not
+   insns  condj  cmov/set  div  function  (entry)   [as the listing attributes them]
+    1688     84         8    0  fips2035k_pke13k_pke_encrypt  (000000014000CEC0)
+    1355     50         6    0  fips2035k_pke13k_pke_encrypt  (0000000140006DD0)
+    1043     30         6    0  fips2035k_pke13k_pke_key_gen  (000000014000EE70)
+     724     43         4    0  fips2035k_pke13k_pke_decrypt  (000000014000C0E0)
+     477      9        46    0  fips2038sampling10sample_ntt  (0000000140005AB0)
+     379      3         0    0  keccak5p1600  (00000001400102A0)
+     223      4         0    0  fips2037helpers11mul_mat_vec  (000000014000AC00)
+     221      4         0    0  fips2037helpers13mul_mat_t_vec  (0000000140004830)
+     196     14         2    0  fips2038sampling15sample_poly_cbd  (0000000140009ED0)
+     188      7         0    0  fips2037helpers1g  (000000014000B010)
+     177      3         0    0  fips2037helpers10dot_t_prod  (00000001400044D0)
+     162     17         1    1  fips2033ntt7ntt_inv  (000000014000A590)
+     149      0         0    0  fips2037helpers3prf  (000000014000BA50)
+     147      0         0    0  fips2037helpers3prf  (0000000140004C30)
+     146      7         1    0  fips2036ml_kem22ml_kem_decaps_internal  (00000001400097E0)
+     146      2         0    0  fips2037helpers1h  (000000014000B3E0)
+     139      0         0    0  fips2037helpers1j  (000000014000B720)
+     133      0         0    0  fips2037helpers3xof  (000000014000BDC0)
+     131     14         1    1  fips2033ntt3ntt  (000000014000A340)
+     129      4         0    0  fips2036traits6Encaps16encaps_from_seed  (0000000140005830)
+     121     15         1    0  fips2038byte_fns11byte_decode  (0000000140009AC0)
+     110      7         0    0  fips2038sampling10sample_ntt  (0000000140009D10)
+      85      5         2    0  fips2033ntt13multiply_ntts  (000000014000A1F0)
+      58      0         0    0  _$LT$fips203..ml_kem_768..KG$u20$as$u20$fips203..traits..KeyGen$GT$16keygen_from_seed  (0000000140009660)
+      33      0         0    0  _$LT$fips203..SharedSecretKey$u20$as$u20$zeroize..Zeroize$GT$7zeroize  (00000001400095A0)
+      30      1         0    0  subtle9black_box  (0000000140009760)
+      26      0         0    0  _$LT$sha3..state..Sha3State$u20$as$u20$core..ops..drop..Drop$GT$4drop  (00000001400101B0)
+      21      1         0    0  fips20310ml_kem_76898_$LT$impl$u20$fips203..traits..SerDes$u20$for$u20$fips203..types..CipherText$LT$1088_usize$GT$$GT$10into_bytes  (0000000140009CC0)
+      15      1         0    0  _$LT$fips203..traits..DummyRng$u20$as$u20$rand_core..RngCore$GT$14try_fill_bytes  (0000000140009620)
+      13      0         0    0  fips20310ml_kem_76897_$LT$impl$u20$fips203..traits..Decaps$u20$for$u20$fips203..types..DecapsKey$LT$2400_usize$GT$$GT$10try_decaps  (0000000140009C80)
+    8465    325        78    2  total, 30 functions

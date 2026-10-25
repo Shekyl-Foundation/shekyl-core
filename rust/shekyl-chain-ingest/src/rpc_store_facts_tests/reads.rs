@@ -116,7 +116,10 @@ impl NodeFacts for ConnectingNode {
     fn sync(&self) -> Result<SyncFacts, FactsFault> {
         self.inner.sync()
     }
-    fn pool_counts(&self, scope: PoolScope) -> Result<PoolCounts, FactsFault> {
+    fn pool_counts(
+        &self,
+        scope: PoolScope,
+    ) -> Result<shekyl_daemon_rpc::info_facts::PoolState<PoolCounts>, FactsFault> {
         self.inner.pool_counts(scope)
     }
     fn pool_spends(&self, key_images: &[shekyl_types::KeyImage]) -> Result<Vec<bool>, FactsFault> {
@@ -131,7 +134,12 @@ impl NodeFacts for ConnectingNode {
         &self,
         ids: &[shekyl_types::TxHash],
         scope: PoolScope,
-    ) -> Result<Vec<Option<shekyl_daemon_rpc::store_facts::PoolBody>>, FactsFault> {
+    ) -> Result<
+        shekyl_daemon_rpc::info_facts::PoolState<
+            Vec<Option<shekyl_daemon_rpc::store_facts::PoolBody>>,
+        >,
+        FactsFault,
+    > {
         self.inner.pool_bodies(ids, scope)
     }
     fn peers(&self) -> Result<PeerFacts, FactsFault> {

@@ -12,7 +12,9 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use super::posture::{fixes, own_tx, Cause, Connectors, OriginVerdict, Shown, Status, Syncing};
+use super::posture::{
+    fixes, own_tx, Cause, Connectors, OriginVerdict, ProgressWindow, Shown, Status, Syncing,
+};
 
 /// Shifts past this saturate a doubling backoff for any base of at least one
 /// nanosecond. The cap is what the operator waits.
@@ -30,6 +32,12 @@ pub struct Policy {
     pub cap: Duration,
     /// How often a bootstrap is sampled while Tor is answering.
     pub sample_every: Duration,
+    /// How often a live Tor is checked. While Running the check is
+    /// [`Action::Sample`]: one `GETINFO`, so a Tor that sends nothing still
+    /// meets the driver's reply bound. While bootstrapping the check is
+    /// [`Action::SayProgress`]: the percent, how long it has held, and the
+    /// bytes read since the previous line.
+    pub alive_every: Duration,
     /// Consecutive failed launches before the next one takes a fresh
     /// data directory. `TSR-M2` had no launch failure, so this stays 3.
     pub fresh_directory_after: u32,
@@ -43,6 +51,9 @@ impl Policy {
             base: Duration::from_secs(1),
             cap: Duration::from_secs(60),
             sample_every: Duration::from_secs(5),
+            // With the driver's 30 s reply bound, a wedge is a fault within
+            // about a minute: the same order as `TSR-M2`'s 60 s bound.
+            alive_every: Duration::from_secs(30),
             fresh_directory_after: 3,
         }
     }
@@ -58,7 +69,9 @@ pub enum Action {
         /// Take a new data directory.
         fresh_directory: bool,
     },
-    /// One `GETINFO` of bootstrap progress and the SOCKS listeners.
+    /// One `GETINFO` of bootstrap progress, the SOCKS listeners, and
+    /// `traffic/read`. While Running this is the liveness question: a Tor
+    /// that sends nothing still has a reply to be late with.
     /// A reply inside the driver's bound is [`Input::DirectorySample`].
     /// A reply past it is [`Input::ReplyLate`].
     Sample,
@@ -77,7 +90,11 @@ pub enum Action {
     /// `ADD_ONION` with the boot's seed.
     RepublishOnion,
     /// Say the posture. At most once per cap interval, except a recovery.
+    /// The driver logs a healthy posture at info and any other at warn.
     Announce,
+    /// Say the bootstrap progress line. News, logged at info. Not
+    /// [`Self::Announce`]: a named cause and an origin-hold keep that path.
+    SayProgress,
     /// The daemon is stopping. Tear the child down and wipe.
     StopChild,
 }
@@ -115,7 +132,11 @@ pub enum Input {
     SpawnFailed,
     /// Bootstrap reached the ready gate.
     BootstrapComplete,
-    /// A bootstrap sample answered inside the reply bound.
+    /// A directory sample answered inside the reply bound.
+    ///
+    /// This is the `GETINFO` reply, not the actor's bootstrap poll. The poll
+    /// is [`Self::BootstrapNoted`]: it carries no byte count and does not
+    /// move the sample deadline.
     ///
     /// `socks` is `Some` when this reply named a listener. `None` leaves
     /// a listener the core already recorded.
@@ -124,6 +145,14 @@ pub enum Input {
         progress: Option<u8>,
         /// The SOCKS listener, when the reply named one.
         socks: Option<SocketAddr>,
+        /// `traffic/read`, the bytes Tor has read since it started, when the
+        /// reply carried a count. `None` is unknown, never zero.
+        read: Option<u64>,
+    },
+    /// The actor's bootstrap poll moved the percent. Not a sample.
+    BootstrapNoted {
+        /// `PROGRESS=`.
+        progress: u8,
     },
     /// A control reply missed the bound.
     ReplyLate,
@@ -281,7 +310,8 @@ pub struct Core {
     respawn_count: u32,
     launch_failures: u32,
     backoff_failures: u32,
-    progress: u8,
+    /// The bootstrap percent and the byte mark the progress line measures.
+    progress: ProgressWindow,
     /// When the next pin check is due. Only while [`Phase::Absent`] is
     /// [`AbsentDuty::Retry`] or [`AbsentDuty::Held`].
     pin_at: Option<u64>,
@@ -289,6 +319,9 @@ pub struct Core {
     sample_at: Option<u64>,
     /// When the posture is said again.
     announce_at: Option<u64>,
+    /// When the live check is next due: [`Action::Sample`] while Running,
+    /// [`Action::SayProgress`] while bootstrapping. Only in those phases.
+    alive_at: Option<u64>,
 }
 
 impl Core {
@@ -309,10 +342,11 @@ impl Core {
             respawn_count: 0,
             launch_failures: 0,
             backoff_failures: 0,
-            progress: 0,
+            progress: ProgressWindow::start(now),
             pin_at: None,
             sample_at: None,
             announce_at: None,
+            alive_at: None,
         };
         let step = core.step(now, vec![Action::CheckPin]);
         (core, step)
@@ -333,7 +367,12 @@ impl Core {
             Input::Spawned => self.spawned(now),
             Input::SpawnFailed => self.launch_failed(now),
             Input::BootstrapComplete => self.bootstrap_complete(now),
-            Input::DirectorySample { progress, socks } => self.note_sample(now, progress, socks),
+            Input::DirectorySample {
+                progress,
+                socks,
+                read,
+            } => self.note_sample(now, progress, socks, read),
+            Input::BootstrapNoted { progress } => self.note_bootstrap(now, progress),
             Input::ReplyLate => self.process_fault(now, Cause::ReplyLate, false),
             Input::ProcessEnded { exit_code } => {
                 self.process_fault(now, Cause::Died { exit_code }, false)
@@ -369,6 +408,7 @@ impl Core {
             self.pin_at = None;
             self.sample_at = None;
             self.announce_at = None;
+            self.alive_at = None;
             return self.step(now, Vec::new());
         }
         if self.deadline().is_none_or(|due| now < due) {
@@ -393,6 +433,28 @@ impl Core {
             self.sample_at = None;
             actions.extend(self.on_sample_deadline(now));
         }
+        if self.alive_at.is_some_and(|at| now >= at) {
+            self.alive_at = None;
+            match self.phase {
+                Phase::Running { .. } => {
+                    actions.push(Action::Sample);
+                    self.arm_alive(now);
+                }
+                Phase::Bootstrapping { .. } => {
+                    self.progress.speak(now);
+                    // A named cause is said by its own events, at most once
+                    // per cap. The progress line is a different action, so
+                    // it cannot say the cause again.
+                    if self.cause == Cause::None {
+                        actions.push(Action::SayProgress);
+                    }
+                    self.arm_alive(now);
+                }
+                // Cleared above. A phase that is no longer live does not
+                // re-arm: fault, hold, and shutdown already dropped it.
+                _ => {}
+            }
+        }
         self.step(now, actions)
     }
 
@@ -414,14 +476,18 @@ impl Core {
             },
             own_tx: own_tx(self.origin, self.connectors),
             fixes: fixes(&self.cause, self.connectors),
-            progress: self.progress,
+            progress: self.progress.percent(),
+            bootstrap: match self.phase {
+                Phase::Bootstrapping { .. } => self.progress.line(),
+                _ => None,
+            },
         }
     }
 
     /// The next time [`Self::on_deadline`] has work, in the caller's clock.
     #[must_use]
     fn deadline(&self) -> Option<u64> {
-        [self.pin_at, self.sample_at, self.announce_at]
+        [self.pin_at, self.sample_at, self.announce_at, self.alive_at]
             .into_iter()
             .flatten()
             .min()
@@ -442,9 +508,10 @@ impl Core {
             ready: false,
         };
         self.launch_failures = 0;
-        self.progress = 0;
+        self.progress = ProgressWindow::start(now);
         self.set_cause(Cause::None);
         self.arm_sample(now);
+        self.arm_alive(now);
         vec![Action::Sample]
     }
 
@@ -470,10 +537,12 @@ impl Core {
         now: u64,
         progress: Option<u8>,
         socks: Option<SocketAddr>,
+        read: Option<u64>,
     ) -> Vec<Action> {
         if let Some(progress) = progress {
-            self.progress = progress;
+            self.progress.note_percent(progress, now);
         }
+        self.progress.note_read(read, now);
         if let Phase::Running { link, .. } = &mut self.phase {
             *link = Link::Open;
             return Vec::new();
@@ -512,6 +581,7 @@ impl Core {
         };
         self.set_cause(Cause::None);
         self.arm_sample(now);
+        self.arm_alive(now);
         vec![
             Action::Publish(ManagedRunning { socks }),
             Action::RepublishOnion,
@@ -629,6 +699,7 @@ impl Core {
         self.pin_at = None;
         self.sample_at = None;
         self.announce_at = None;
+        self.alive_at = None;
         let mut actions = Vec::new();
         if installed {
             actions.push(Action::StopRoute);
@@ -643,6 +714,7 @@ impl Core {
             duty: AbsentDuty::Retry,
         };
         self.sample_at = None;
+        self.alive_at = None;
         if launch_failed {
             self.launch_failures = self.launch_failures.saturating_add(1);
         } else {
@@ -664,6 +736,7 @@ impl Core {
         let installed = self.route_done();
         self.phase = Phase::Absent { duty };
         self.sample_at = None;
+        self.alive_at = None;
         self.pin_at = match duty {
             AbsentDuty::Fixed => None,
             AbsentDuty::Held | AbsentDuty::Retry => Some(now.saturating_add(self.cap())),
@@ -779,6 +852,21 @@ impl Core {
 
     fn arm_sample(&mut self, now: u64) {
         self.sample_at = Some(now.saturating_add(self.sample_ns()));
+    }
+
+    /// A bootstrap poll moved the percent. The sample deadline stays where
+    /// the directory sample armed it: a notice is not a sample, and moving
+    /// the deadline would starve `traffic/read`.
+    fn note_bootstrap(&mut self, now: u64, progress: u8) -> Vec<Action> {
+        if !matches!(self.phase, Phase::Bootstrapping { .. }) {
+            return Vec::new();
+        }
+        self.progress.note_percent(progress, now);
+        Vec::new()
+    }
+
+    fn arm_alive(&mut self, now: u64) {
+        self.alive_at = Some(now.saturating_add(duration_ns(self.policy.alive_every)));
     }
 
     fn ensure_sample(&mut self, now: u64) {

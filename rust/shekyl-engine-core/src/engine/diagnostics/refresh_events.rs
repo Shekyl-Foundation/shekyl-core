@@ -155,6 +155,11 @@ pub enum ProtocolErrorKind {
     /// its own so a stream that ever shows one reads "wrong daemon", not
     /// "bad envelope".
     IdentityMismatch,
+
+    /// The daemon could not say whether it holds transactions a block
+    /// lists: they are not in its chain and its pool is retired until it
+    /// restarts. Retry, or another daemon; not an inconsistent envelope.
+    TransactionsUnavailable,
 }
 
 /// Bounded enumeration of the [`RefreshDiagnostic`] classes that

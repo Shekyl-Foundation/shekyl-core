@@ -202,7 +202,13 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// 3.60: a claim-source bond row names `is_support_complete_tree`. A 3.59
 /// daemon still sends `is_foundation_complete_tree`, which this version
 /// refuses. `get_version` gains nothing.
-pub const CORE_RPC_VERSION_MINOR: u32 = 60;
+/// 3.61: a node whose pool is retired answers the chain's reads.
+/// `get_info` carries `pool_retired: true` with `tx_pool_size` (and the
+/// host's `tx_pool_unbroadcast_count`) `null`; `get_transactions` lists an
+/// id the chain does not hold under `unavailable_tx`. A 3.60 reader decodes
+/// `tx_pool_size` as a number and knows neither key. `get_version` gains
+/// nothing.
+pub const CORE_RPC_VERSION_MINOR: u32 = 61;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -622,11 +628,12 @@ mod tests {
         // (DAEMON_CONFIG_CUTOVER §2.7). Both branches had written 57, so the
         // later merge took the next minor, as 3.44 did. 3.59 drops
         // `support_flags` from the connection rows (PWD-T7). 3.60 renames
-        // the claim-source bond field to `is_support_complete_tree`.
-        assert_eq!(CORE_RPC_VERSION, 196_668);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 60);
+        // the claim-source bond field to `is_support_complete_tree`. 3.61
+        // answers the chain's reads over a retired pool.
+        assert_eq!(CORE_RPC_VERSION, 196_669);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 61);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 60);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 61);
     }
 
     #[test]

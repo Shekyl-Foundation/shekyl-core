@@ -319,6 +319,17 @@ pub struct GetTransactionsResponse {
     /// Hashes the daemon could find neither on the chain nor in the pool.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub missed_tx: Vec<HashHex>,
+    /// Hashes not on the chain, asked while the node's pool is retired (its
+    /// file faulted; the node holds no pool until it restarts). Whether the
+    /// pool holds them has no answer, so they are neither entries nor
+    /// missed. A caller that needs them asks again after the restart, or
+    /// asks another daemon.
+    ///
+    /// Omitted when empty, as `missed_tx` beside it is: this type mirrors
+    /// the inherited `KV_SERIALIZE_OPT` omissions. RW-Q4 rules an empty
+    /// list is `[]`; the RW rename rewrites both members together.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unavailable_tx: Vec<HashHex>,
 }
 
 /// What the daemon knows about a key image.
@@ -574,6 +585,7 @@ mod tests {
             status: crate::chain::RpcStatus::ok(),
             txs: Vec::new(),
             missed_tx: Vec::new(),
+            unavailable_tx: Vec::new(),
         };
         let v: serde_json::Value = serde_json::to_value(&res).expect("serialize");
         let keys: Vec<&String> = v.as_object().expect("object").keys().collect();
