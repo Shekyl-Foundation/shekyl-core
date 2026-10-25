@@ -344,6 +344,26 @@ Task Scheduler on Windows); the GUI wallet supervises its own bundled
 `contrib/packaging/linux/shekyld.service`. Nothing reads the daemon's
 stdin unless `--console` is given, so a unit needs no flag for that.
 
+### Where the node's RPC should travel
+
+`shekyld` serves RPC on loopback only today, and a machine of yours
+elsewhere reaches it through a Tor onion service you run in front of that
+loopback RPC (see "Connecting to a daemon" below). The authenticated RPC
+channel (`docs/design/RPC_CHANNEL.md`) adds a same-user socket and a
+listener for other machines. The advice is the same for all of them:
+
+- **On the same machine,** use the local socket (today, loopback).
+- **Between your machines,** run the RPC inside a VPN such as WireGuard,
+  or over Tor.
+- **Across the open internet without either,** it is supported, because
+  your network is yours to run, but strongly discouraged. On such a path
+  an observer can replay the openings of earlier connections to keep the
+  node busy refusing new ones. That is a denial of service, not a leak,
+  and fixing it is a matter of where you route the traffic.
+
+`shekyld` does not detect which of these you chose, and nothing it does
+depends on it.
+
 ### Interactive console
 
 When `shekyld` is running in the foreground, you get an interactive console.
