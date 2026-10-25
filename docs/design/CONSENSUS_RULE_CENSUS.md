@@ -951,7 +951,7 @@ input, not fixes.
     entry's first wording, and the fix commit's message, called it a genesis
     skip — records-was, corrected in the same PR.)*
     **Observed red → green** by the first non-FAKECHAIN Blockchain fixture in
-    the tree, `curve_tree_header_root_check.cpp` (TESTNET, `fixed_difficulty
+    the tree, `curve_tree_header_root_check.cpp` at `e54e5b983` (TESTNET, `fixed_difficulty
     = 1`, real LMDB, real `add_new_block` through the RandomX light-cache
     verifier): before the edit blocks 1–59 connected and block 60 was rejected
     with `curve_tree_root mismatch`; after it block 60 connects, the leaf
