@@ -309,6 +309,10 @@ pub struct Status {
     /// The bootstrap's progress line. Only while bootstrapping, once the
     /// first window has passed.
     pub bootstrap: Option<BootstrapLine>,
+    /// How long no Tor connection has been open and none has opened, while
+    /// Tor runs, names no cause, and this node's Tor dials keep failing
+    /// (§4.2). A neutral fact for the posture line, never a cause.
+    pub tor_quiet: Option<std::time::Duration>,
 }
 
 /// `OwnTx` from the relay's hop-0 verdict and the connector settings.
@@ -474,7 +478,12 @@ fn cause_sentence(status: &Status) -> Option<String> {
         Cause::None if status.shown == Shown::Bootstrapping => {
             Some(bootstrap_sentence(status.progress, status.bootstrap))
         }
-        Cause::None => None,
+        Cause::None => status.tor_quiet.map(|quiet| {
+            format!(
+                "No connection through Tor is open, and none has opened in {}.",
+                spoken_duration(quiet)
+            )
+        }),
         Cause::BundleMissing | Cause::PinRefused | Cause::Unavailable => {
             install_sentence(&status.cause).map(str::to_owned)
         }

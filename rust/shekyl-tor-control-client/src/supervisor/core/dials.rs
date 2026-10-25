@@ -3,15 +3,17 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! What this node's own Tor dials say about the link (`TOR_SUPERVISOR.md`
-//! §4.2, "every Tor dial's outcome").
+//! What this node's own Tor dials show (`TOR_SUPERVISOR.md` §4.2, "every Tor
+//! dial's outcome"). Display only: never a cause, never a respawn
+//! (`TSR-Q14`, Tor does Tor).
 //!
-//! The dialer classes each dial by the SOCKS reply table and counts; this
-//! module reads its tally. A run of link failures, or timeouts across
-//! distinct destinations, with no opened stream between them, is the link
-//! down: an External cause, never a respawn. A process fault comes only
-//! from the process and the control connection. One opened stream ends the
-//! run.
+//! When Tor says nothing about its network and yet no Tor connection is
+//! open and none opens, the posture line says exactly that, a neutral fact
+//! with no fix: not "this machine cannot reach the Tor network", which Tor
+//! alone may say, and which a planted onion could otherwise make the node
+//! say.
+
+use std::time::Duration;
 
 use super::Policy;
 
@@ -21,60 +23,57 @@ use super::Policy;
 pub struct DialTally {
     /// Tor dials whose stream opened. Only grows.
     pub opened: u64,
-    /// Link failures since the last opened stream: SOCKS replies `0x01`,
-    /// `0x02`, `0x03`, `0x06`, or this node's SOCKS port refusing.
-    pub link_failures: u32,
-    /// Distinct destinations that timed out since the last opened stream.
-    pub timed_out_destinations: u32,
-}
-
-/// What a new tally means.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum DialVerdict {
-    /// A stream opened since the last tally: the link carries.
-    Opened,
-    /// The run since the last opened stream reached a threshold.
-    Down,
-    /// Neither.
-    Quiet,
+    /// Tor dials that ended without a stream since the last one opened.
+    pub unopened: u32,
+    /// Tor sessions this node holds now.
+    pub held: u32,
 }
 
 /// The supervisor's reading of the tally.
 #[derive(Debug)]
 pub(super) struct Dials {
     last: DialTally,
-    /// Counts already in the tally when the current reading began, at
-    /// Running and when Tor says its network is back: a failure from
-    /// before is not evidence about the link now.
-    floor: (u32, u32),
+    /// When a Tor stream last opened, or when this Tor reached Running.
+    opened_at: u64,
+    /// The quiet stretch at the last evaluation, when the line stands.
+    line: Option<Duration>,
 }
 
 impl Dials {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(now: u64) -> Self {
         Self {
             last: DialTally::default(),
-            floor: (0, 0),
+            opened_at: now,
+            line: None,
         }
     }
 
-    /// Fold `tally` and judge the run since the last opened stream.
-    pub(super) fn fold(&mut self, tally: DialTally, policy: &Policy) -> DialVerdict {
-        let previous = std::mem::replace(&mut self.last, tally);
-        if tally.opened > previous.opened {
-            self.floor = (0, 0);
-            return DialVerdict::Opened;
+    /// Fold a tally. An opened stream starts the stretch again.
+    pub(super) fn fold(&mut self, tally: DialTally, now: u64) {
+        if tally.opened > self.last.opened {
+            self.opened_at = now;
         }
-        let links = tally.link_failures.saturating_sub(self.floor.0);
-        let timeouts = tally.timed_out_destinations.saturating_sub(self.floor.1);
-        if links >= policy.link_down_after || timeouts >= policy.timeouts_down_after {
-            DialVerdict::Down
-        } else {
-            DialVerdict::Quiet
-        }
+        self.last = tally;
     }
 
-    /// Start a new reading: what the tally holds now is history.
-    pub(super) fn rebase(&mut self) {
-        self.floor = (self.last.link_failures, self.last.timed_out_destinations);
+    /// A Tor reached Running: its stretch starts now.
+    pub(super) fn restart(&mut self, now: u64) {
+        self.opened_at = now;
+        self.line = None;
+    }
+
+    /// Re-read the stretch at `now`. `true` when the line has just begun to
+    /// stand, which is the one time it is said.
+    pub(super) fn evaluate(&mut self, now: u64, policy: &Policy) -> bool {
+        let quiet = Duration::from_nanos(now.saturating_sub(self.opened_at));
+        let stands = self.last.held == 0 && self.last.unopened > 0 && quiet >= policy.quiet_after;
+        let began = stands && self.line.is_none();
+        self.line = stands.then_some(quiet);
+        began
+    }
+
+    /// How long no Tor connection has been open or opened, while that holds.
+    pub(super) fn line(&self) -> Option<Duration> {
+        self.line
     }
 }

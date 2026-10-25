@@ -27,8 +27,9 @@ use shekyl_tor_control_client::binary::{
     discover_and_verify, discover_and_verify_at, TorBinaryError, VerifiedTorBinary,
 };
 use shekyl_tor_control_client::control::{
-    parse_bootstrap_progress, parse_event, parse_socks_listeners, parse_traffic_read,
-    BootstrapState, Command, ControlError, EventReceiver, EventSink, SocksTimeout,
+    parse_bootstrap_progress, parse_circuit_established, parse_event, parse_network_liveness,
+    parse_socks_listeners, parse_traffic_read, BootstrapState, Command, ControlError,
+    EventReceiver, EventSink, SocksTimeout,
 };
 use shekyl_tor_control_client::supervisor::{
     held_sentence, input_of, install_sentence, render, Action, Cause, Connectors, Core, DialTally,
@@ -57,6 +58,9 @@ const BOOTSTRAP_PHASE: &str = "status/bootstrap-phase";
 /// `GETINFO` key for the bytes Tor has read: with the bootstrap phase, it
 /// tells a slow directory mirror from one that is not answering (§5).
 const TRAFFIC_READ: &str = "traffic/read";
+/// Tor's own view of its network (`TSR-Q14`), read with every sample.
+const NETWORK_LIVENESS: &str = "network-liveness";
+const CIRCUIT_ESTABLISHED: &str = "status/circuit-established";
 /// `GETINFO` key for the SOCKS listeners.
 const SOCKS_LISTENERS: &str = "net/listeners/socks";
 
@@ -193,12 +197,13 @@ pub fn begin(
 ///
 /// The supervisor does not depend on the relay. The variants are the same
 /// three states, mapped one for one.
-/// The dialer's tally as the core's input (§4.2). Counts only.
+/// The dialer's tally as the core's input (§4.2). Counts only, and display
+/// only (`TSR-Q14`).
 fn tally_input(tally: TorLinkTally) -> Input {
     Input::DialEvidence(DialTally {
         opened: tally.opened,
-        link_failures: tally.link_failures,
-        timed_out_destinations: tally.timed_out_destinations,
+        unopened: tally.unopened,
+        held: tally.held,
     })
 }
 
@@ -263,6 +268,7 @@ async fn drive(
         forward,
         origin,
         tor_link,
+        tor_view: (None, None),
         control: None,
         kept: None,
         pinned: None,
@@ -292,11 +298,12 @@ struct Drive {
     /// The relay's hop-0 verdict for a local origin (`GS-Q3`). Health and
     /// `OwnTx` project it.
     origin: watch::Receiver<OriginVerdict>,
-    /// What this node's own Tor dials say about the link (§4.2). Only a
-    /// change is folded: the core judges a run since the last opened stream,
-    /// and the tally before this supervisor started says nothing about the
-    /// Tor it is about to spawn.
+    /// What this node's own Tor dials show (§4.2), for the posture line
+    /// only (`TSR-Q14`). Only a change is folded: the tally before this
+    /// supervisor started says nothing about the Tor it is about to spawn.
     tor_link: watch::Receiver<TorLinkTally>,
+    /// Tor's view of its network at the last sample, to say it on a change.
+    tor_view: (Option<bool>, Option<bool>),
     control: Option<DaemonTorControl>,
     kept: Option<KeptDataDir>,
     pinned: Option<VerifiedTorBinary>,
@@ -353,6 +360,9 @@ impl Drive {
                     if let Some(reply) = event {
                         if let Some(parsed) = parse_event(&reply) {
                             if let Some(input) = input_of(&parsed) {
+                                // A Tor statement the supervisor acts on, said
+                                // as it arrives: what a run records.
+                                tracing::info!(target: "tor", "Tor says {input:?}");
                                 self.fold(input).await;
                             }
                         }
@@ -612,6 +622,8 @@ impl Drive {
                 BOOTSTRAP_PHASE.to_owned(),
                 SOCKS_LISTENERS.to_owned(),
                 TRAFFIC_READ.to_owned(),
+                NETWORK_LIVENESS.to_owned(),
+                CIRCUIT_ESTABLISHED.to_owned(),
             ]))
             .await;
         let reply = match reply {
@@ -622,10 +634,25 @@ impl Drive {
         if let Some(socks) = socks {
             control.set_socks(socks);
         }
+        let network = parse_network_liveness(&reply);
+        let circuits = parse_circuit_established(&reply);
+        // Tor's view is what the next blocked-link run records (`TSR-Q14`):
+        // said when it changes, not with every sample.
+        if (network, circuits) != self.tor_view {
+            tracing::info!(
+                target: "tor",
+                network_liveness = ?network,
+                circuit_established = ?circuits,
+                "Tor's view of its network"
+            );
+            self.tor_view = (network, circuits);
+        }
         Input::DirectorySample {
             progress: parse_bootstrap_progress(&reply),
             socks,
             read: parse_traffic_read(&reply),
+            network,
+            circuits,
         }
     }
 

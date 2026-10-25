@@ -23,7 +23,7 @@ mod dials;
 use announce::{Announcements, Cadence};
 use backoff::Backoff;
 pub use dials::DialTally;
-use dials::{DialVerdict, Dials};
+use dials::Dials;
 
 /// How long a respawn waits, and how often a failure is said again.
 ///
@@ -46,14 +46,11 @@ pub struct Policy {
     /// Consecutive failed launches before the next one takes a fresh
     /// data directory. `TSR-M2` had no launch failure, so this stays 3.
     pub fresh_directory_after: u32,
-    /// Link failures among this node's Tor dials, with no opened stream
-    /// between them, that make the link down: External, never a respawn
-    /// (§4.2). Provisional until the floor-device soak.
-    pub link_down_after: u32,
-    /// Distinct destinations whose Tor dials timed out, with no opened
-    /// stream between them, that make the link down (§4.2: timeouts across
-    /// distinct destinations, never a count of replies). Provisional.
-    pub timeouts_down_after: u32,
+    /// How long no Tor connection is open and none opens, with Tor saying
+    /// nothing about its network, before the posture line says so (§4.2):
+    /// a neutral fact, never a cause. Provisional until the floor-device
+    /// soak.
+    pub quiet_after: Duration,
 }
 
 impl Policy {
@@ -68,11 +65,9 @@ impl Policy {
             // about a minute: the same order as `TSR-M2`'s 60 s bound.
             alive_every: Duration::from_secs(30),
             fresh_directory_after: 3,
-            // Three in a row with nothing opened between: a few refused
-            // dials at a mirror's hiccup pass, a blocked link does not. Tor
-            // itself warns from the tenth problem at a phase.
-            link_down_after: 3,
-            timeouts_down_after: 3,
+            // About three Tor dials in a row, each ended at Tor's
+            // `SocksTimeout` (105 s) with nothing opened.
+            quiet_after: Duration::from_secs(300),
         }
     }
 }
@@ -172,6 +167,12 @@ pub enum Input {
         /// `traffic/read`, the bytes Tor has read since it started, when the
         /// reply carried a count. `None` is unknown, never zero.
         read: Option<u64>,
+        /// `network-liveness`: Tor's view of whether its network is up.
+        /// `None` is unknown, never down.
+        network: Option<bool>,
+        /// `status/circuit-established`: whether Tor holds a built circuit.
+        /// `None` is unknown, never down.
+        circuits: Option<bool>,
     },
     /// The actor's bootstrap poll moved the percent. Not a sample.
     BootstrapNoted {
@@ -227,9 +228,11 @@ pub enum Input {
     Shutdown,
     /// The relay's hop-0 verdict for a local origin moved (`GS-Q3`).
     AddressHidingOrigin(OriginVerdict),
-    /// The dialer's tally of this node's Tor dials changed (§4.2).
+    /// The dialer's tally of this node's Tor dials changed (§4.2). Display
+    /// only, never a cause (`TSR-Q14`).
     DialEvidence(DialTally),
-    /// Tor reports its network reachable again (`NETWORK_LIVENESS UP`).
+    /// Tor says it reaches its network: `NETWORK_LIVENESS UP` or
+    /// `CIRCUIT_ESTABLISHED`.
     ExternalCleared,
 }
 
@@ -322,7 +325,7 @@ pub struct Core {
     backoff: Backoff,
     /// The bootstrap percent and the byte mark the progress line measures.
     progress: ProgressWindow,
-    /// What this node's own Tor dials say about the link (§4.2).
+    /// What this node's own Tor dials show (§4.2). Display only.
     dials: Dials,
     /// When the next pin check is due. Only while [`Phase::Absent`] is
     /// [`AbsentDuty::Retry`] or [`AbsentDuty::Held`].
@@ -353,7 +356,7 @@ impl Core {
             launch_failures: 0,
             backoff: Backoff::new(),
             progress: ProgressWindow::start(now),
-            dials: Dials::new(),
+            dials: Dials::new(now),
             pin_at: None,
             sample_at: None,
             alive_at: None,
@@ -385,7 +388,13 @@ impl Core {
                 progress,
                 socks,
                 read,
-            } => self.note_sample(now, progress, socks, read),
+                network,
+                circuits,
+            } => {
+                let mut actions = self.note_sample(now, progress, socks, read);
+                actions.extend(self.tor_view(now, network, circuits));
+                actions
+            }
             Input::BootstrapNoted { progress } => self.note_bootstrap(now, progress),
             Input::ReplyLate => self.process_fault(now, Cause::ReplyLate, false),
             Input::ProcessEnded { exit_code } => {
@@ -412,10 +421,7 @@ impl Core {
             Input::Shutdown => self.shutdown(),
             Input::AddressHidingOrigin(verdict) => self.origin_verdict(verdict, now),
             Input::DialEvidence(tally) => self.dial_evidence(tally, now),
-            Input::ExternalCleared => {
-                self.dials.rebase();
-                self.external_cleared(now)
-            }
+            Input::ExternalCleared => self.external_cleared(now),
         };
         self.step(now, actions)
     }
@@ -464,6 +470,7 @@ impl Core {
             match self.phase {
                 Phase::Running { .. } => {
                     actions.push(Action::Sample);
+                    actions.extend(self.quiet_line(now));
                     self.arm_alive(now);
                 }
                 Phase::Bootstrapping { .. } => {
@@ -505,6 +512,10 @@ impl Core {
             progress: self.progress.percent(),
             bootstrap: match self.phase {
                 Phase::Bootstrapping { .. } => self.progress.line(),
+                _ => None,
+            },
+            tor_quiet: match (&self.phase, &self.cause) {
+                (Phase::Running { .. }, Cause::None) => self.dials.line(),
                 _ => None,
             },
         }
@@ -602,6 +613,28 @@ impl Core {
         }
     }
 
+    /// Tor's own current view of its network, read with every sample
+    /// (`TSR-Q14`): it governs, even when Tor sends no event. Only while
+    /// Running: during a bootstrap no circuit is built yet, and that is not
+    /// a statement about the network. Down or no circuit names the blocked
+    /// link when nothing else is named; up with a circuit clears it.
+    /// Unknown says nothing.
+    fn tor_view(&mut self, now: u64, network: Option<bool>, circuits: Option<bool>) -> Vec<Action> {
+        if !matches!(self.phase, Phase::Running { .. }) {
+            return Vec::new();
+        }
+        if network == Some(false) || circuits == Some(false) {
+            if self.cause == Cause::None {
+                return self.external(now, Cause::ExternalBlocked);
+            }
+            return Vec::new();
+        }
+        if network == Some(true) && circuits == Some(true) {
+            return self.external_cleared(now);
+        }
+        Vec::new()
+    }
+
     fn enter_running(&mut self, now: u64, socks: SocketAddr) -> Vec<Action> {
         self.phase = Phase::Running {
             socks,
@@ -610,7 +643,7 @@ impl Core {
             disk: Disk::Watching,
             link: Link::Open,
         };
-        self.dials.rebase();
+        self.dials.restart(now);
         self.set_cause(Cause::None);
         self.arm_sample(now);
         self.arm_alive(now);
@@ -791,28 +824,38 @@ impl Core {
         self.say(now, Cadence::Due)
     }
 
-    /// The dialer's tally moved. Only a running Tor is judged by its dials:
-    /// before Running the dialer has no route, and after a death its
-    /// failures are the death's, which the process fault already names. A
-    /// down link is External and never a respawn; it takes the place of no
-    /// other cause. An opened stream clears it.
+    /// The dialer's tally moved. Display only (`TSR-Q14`): which reply a
+    /// failed onion dial gets is the destination's to choose as much as the
+    /// link's, so this never sets a cause. While a running Tor has no
+    /// session and none opens, the posture line says so once.
     fn dial_evidence(&mut self, tally: DialTally, now: u64) -> Vec<Action> {
-        match self.dials.fold(tally, &self.policy) {
-            DialVerdict::Opened => self.external_cleared(now),
-            DialVerdict::Down
-                if matches!(self.phase, Phase::Running { .. }) && self.cause == Cause::None =>
-            {
-                self.external(now, Cause::ExternalBlocked)
-            }
-            DialVerdict::Down | DialVerdict::Quiet => Vec::new(),
+        self.dials.fold(tally, now);
+        self.quiet_line(now)
+    }
+
+    /// Re-read the quiet stretch; the line is said once, when it begins
+    /// to stand, and only while no cause is named.
+    fn quiet_line(&mut self, now: u64) -> Vec<Action> {
+        if !matches!(self.phase, Phase::Running { .. }) {
+            return Vec::new();
+        }
+        if self.dials.evaluate(now, &self.policy) && self.cause == Cause::None {
+            vec![Action::SayProgress]
+        } else {
+            Vec::new()
         }
     }
 
-    /// The link carries again. Only [`Cause::ExternalBlocked`] clears: an
-    /// unreachable directory, a clock report and the open-file limit are
-    /// other kinds, each with its own evidence. The recovery is said at once.
+    /// Tor says it reaches its network. Its judgment governs the causes
+    /// about reaching the network (`TSR-Q14`): a blocked link and an
+    /// unreachable directory clear. A clock report and the open-file limit
+    /// are other kinds, each with its own evidence. The recovery is said at
+    /// once.
     fn external_cleared(&mut self, now: u64) -> Vec<Action> {
-        if self.cause != Cause::ExternalBlocked {
+        if !matches!(
+            self.cause,
+            Cause::ExternalBlocked | Cause::DirectoryUnreachable
+        ) {
             return Vec::new();
         }
         self.set_cause(Cause::None);

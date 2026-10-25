@@ -63,6 +63,12 @@ impl Attempts {
         self.kept.remove(address);
     }
 
+    /// Sessions held now, without the dials still pending.
+    #[must_use]
+    pub fn held(&self) -> usize {
+        self.kept.len()
+    }
+
     /// The `Keep` count: kept sessions plus pending `Keep` attempts. A
     /// pending `Confirm` does not count.
     #[must_use]

@@ -124,8 +124,8 @@ pub struct Shared {
     /// When the address file was last written or read; `None` until
     /// then, so the first due store is one interval after the open.
     last_store: Option<Tick>,
-    /// What the Tor dials say about the Tor link (`TOR_SUPERVISOR.md`
-    /// §4.2), for the managed-Tor supervisor.
+    /// What the Tor dials show, for the managed-Tor supervisor's posture
+    /// line (`TOR_SUPERVISOR.md` §4.2). Display only (`TSR-Q14`).
     tor_link: LinkFold,
 }
 
@@ -240,8 +240,8 @@ impl Dialer {
         self.bell.ring();
     }
 
-    /// Send what the Tor dials say about the Tor link to `sink`: the tally
-    /// now, then each change. The sink runs under the dialer's lock and must
+    /// Send what the Tor dials show to `sink`: the tally now, then each
+    /// change. The sink runs under the dialer's lock and must
     /// not block.
     pub fn report_tor_link(&self, sink: TallySink) {
         self.shared().tor_link.set_sink(sink);
@@ -450,6 +450,8 @@ impl Dialer {
             Self::record(&mut shared, connector, &outcome, now, rng);
         }
         shared.attempts(connector).session_closed(&address);
+        let held = shared.view(connector).held();
+        shared.tor_link.held(connector, held);
     }
 
     /// Stop every owner loop at its next wake, and write the address file
@@ -522,7 +524,8 @@ impl Dialer {
         shared.attempts(connector).finish(outcome);
         shared.lists.apply(outcome, now, rng);
         shared.memory.observe(outcome, now);
-        shared.tor_link.observe(connector, outcome);
+        let held = shared.view(connector).held();
+        shared.tor_link.observe(connector, outcome, held);
     }
 
     /// Record `outcome` after the hub's clock has been read.

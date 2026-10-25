@@ -3,8 +3,9 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! What this node's own Tor dials say about the Tor link, one cell for the
-//! process (`TOR_SUPERVISOR.md` §4.2, "every Tor dial's outcome").
+//! What this node's own Tor dials show, one cell for the process
+//! (`TOR_SUPERVISOR.md` §4.2, "every Tor dial's outcome"). Display only,
+//! never a verdict on the link (`TSR-Q14`).
 //!
 //! The one dialer writes it through [`sink`]; the managed-Tor supervisor in
 //! `shekyl-daemon` reads it. The cell holds the default tally until the
@@ -59,8 +60,8 @@ mod tests {
         receiver.borrow_and_update();
         let tally = TorLinkTally {
             opened: 0,
-            link_failures: 3,
-            timed_out_destinations: 0,
+            unopened: 3,
+            held: 0,
         };
         let sink = sink();
         sink(tally);

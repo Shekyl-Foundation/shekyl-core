@@ -3,34 +3,30 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! What this node's own Tor dials say about its link to the Tor network
-//! (`TOR_SUPERVISOR.md` §4.2, "every Tor dial's outcome").
+//! What this node's own Tor dials show, for the managed-Tor supervisor's
+//! posture line (`TOR_SUPERVISOR.md` §4.2, "every Tor dial's outcome").
 //!
-//! The class of each outcome is [`CloseCause::link_evidence`]'s; this module
-//! only counts. The managed-Tor supervisor reads the tally and decides: it
-//! never sees an address or a reply code. Counting distinct destinations
-//! happens here, because the rate rule is about destinations and only the
-//! dialer holds them: link-down is timeouts across **distinct** destinations
-//! with no opened stream between them, never a count of replies.
+//! Display only, never a verdict on the link (`TSR-Q14`: Tor does Tor).
+//! Which reply a failed onion dial gets is the destination's to choose as
+//! much as the link's: a live service that refuses its port answers `0x01`,
+//! one that blackholes it answers `0x06`, as a blocked link does. So the
+//! tally says only what is plainly so: whether streams open, and whether
+//! the node holds a Tor session now. The supervisor never sees an address
+//! or a reply code.
 
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use shekyl_peerlist::{ConnectorId, DialOutcome, LinkEvidence, NetworkAddress};
+use shekyl_peerlist::{CloseKind, ConnectorId, DialOutcome};
 
-/// Distinct destinations remembered since the last opened stream. Past
-/// this the count holds: any threshold the supervisor uses is far below it.
-const TIMED_OUT_DESTINATIONS_HELD: usize = 64;
-
-/// The Tor link's evidence from this node's dials.
+/// What this node's Tor dials show.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TorLinkTally {
     /// Tor dials whose stream opened, since the dialer started. Only grows.
     pub opened: u64,
-    /// Link failures since the last opened stream.
-    pub link_failures: u32,
-    /// Distinct destinations that timed out since the last opened stream.
-    pub timed_out_destinations: u32,
+    /// Tor dials that ended without a stream since the last one opened.
+    pub unopened: u32,
+    /// Tor sessions this node holds now.
+    pub held: u32,
 }
 
 /// Where the tally goes. Called under the dialer's lock: it must not block.
@@ -39,7 +35,6 @@ pub type TallySink = Arc<dyn Fn(TorLinkTally) + Send + Sync>;
 /// The running fold over Tor dial outcomes.
 pub(crate) struct LinkFold {
     tally: TorLinkTally,
-    timed_out: BTreeSet<NetworkAddress>,
     sink: Option<TallySink>,
 }
 
@@ -47,7 +42,6 @@ impl LinkFold {
     pub(crate) fn new() -> Self {
         Self {
             tally: TorLinkTally::default(),
-            timed_out: BTreeSet::new(),
             sink: None,
         }
     }
@@ -62,47 +56,51 @@ impl LinkFold {
         self.tally
     }
 
-    /// Fold one dial outcome when it is a Tor dial; any other connector's
-    /// says nothing about the Tor link. Anything that reached a peer is an
-    /// opened stream; a failed dial is its cause's class.
-    pub(crate) fn observe(&mut self, connector: ConnectorId, outcome: &DialOutcome) {
+    /// Fold one dial outcome when it is a Tor dial. Anything that reached a
+    /// peer opened a stream; a dial this node closed itself is not a dial
+    /// that failed.
+    pub(crate) fn observe(&mut self, connector: ConnectorId, outcome: &DialOutcome, held: usize) {
         if connector != ConnectorId::Tor {
             return;
         }
-        let before = self.tally;
+        let mut next = self.tally;
         match outcome {
-            DialOutcome::DialFailed(address, cause) => match cause.link_evidence() {
-                LinkEvidence::Opened => self.opened(),
-                LinkEvidence::LinkFailed => {
-                    self.tally.link_failures = self.tally.link_failures.saturating_add(1);
+            DialOutcome::DialFailed(_, cause) if !cause.opened_a_stream() => {
+                if cause.kind() != CloseKind::LocalClose {
+                    next.unopened = next.unopened.saturating_add(1);
                 }
-                LinkEvidence::TimedOut => self.timed_out(address),
-                LinkEvidence::Destination | LinkEvidence::OurRequest | LinkEvidence::Silent => {}
-            },
-            DialOutcome::PeerlistRefused(_)
+            }
+            DialOutcome::DialFailed(..)
+            | DialOutcome::PeerlistRefused(_)
             | DialOutcome::PayloadRefused(_)
             | DialOutcome::Confirmed(_)
-            | DialOutcome::SessionAccepted(_) => self.opened(),
-        }
-        if self.tally != before {
-            if let Some(sink) = &self.sink {
-                sink(self.tally);
+            | DialOutcome::SessionAccepted(_) => {
+                next.opened = next.opened.saturating_add(1);
+                next.unopened = 0;
             }
         }
+        next.held = u32::try_from(held).unwrap_or(u32::MAX);
+        self.publish(next);
     }
 
-    fn opened(&mut self) {
-        self.tally.opened = self.tally.opened.saturating_add(1);
-        self.tally.link_failures = 0;
-        self.tally.timed_out_destinations = 0;
-        self.timed_out.clear();
-    }
-
-    fn timed_out(&mut self, address: &NetworkAddress) {
-        if self.timed_out.len() < TIMED_OUT_DESTINATIONS_HELD {
-            self.timed_out.insert(address.clone());
+    /// A Tor session ended: the count of those held moves.
+    pub(crate) fn held(&mut self, connector: ConnectorId, held: usize) {
+        if connector != ConnectorId::Tor {
+            return;
         }
-        self.tally.timed_out_destinations = u32::try_from(self.timed_out.len()).unwrap_or(u32::MAX);
+        let mut next = self.tally;
+        next.held = u32::try_from(held).unwrap_or(u32::MAX);
+        self.publish(next);
+    }
+
+    fn publish(&mut self, next: TorLinkTally) {
+        if next == self.tally {
+            return;
+        }
+        self.tally = next;
+        if let Some(sink) = &self.sink {
+            sink(next);
+        }
     }
 }
 
@@ -110,7 +108,7 @@ impl LinkFold {
 mod tests {
     use std::sync::Mutex;
 
-    use shekyl_peerlist::{CloseCause, CloseKind};
+    use shekyl_peerlist::{CloseCause, NetworkAddress};
 
     use super::*;
 
@@ -123,85 +121,61 @@ mod tests {
         DialOutcome::DialFailed(onion(n), cause)
     }
 
-    /// The rule a reviewer can break (§4.2): `0xF7` from one destination
-    /// many times leaves one timed-out destination; the same count spread
-    /// across distinct destinations counts each. Counting replies instead
-    /// of destinations fails the first half.
+    /// Every reply Tor gives a failed dial is one unopened dial, whatever
+    /// its byte: `0x01`, `0x06`, the extended codes and the dial deadline
+    /// alike. A stream that opened, even one the peer then refused, resets
+    /// the count.
     #[test]
-    fn timeouts_count_distinct_destinations_not_replies() {
-        let timeout = CloseCause::proxy_refused(0xF7);
-        let mut one = LinkFold::new();
-        for _ in 0..10 {
-            one.observe(ConnectorId::Tor, &failed(0, timeout));
-        }
-        assert_eq!(one.tally().timed_out_destinations, 1);
-        let mut spread = LinkFold::new();
-        for n in 0..10 {
-            spread.observe(ConnectorId::Tor, &failed(n, timeout));
-        }
-        assert_eq!(spread.tally().timed_out_destinations, 10);
-        spread.observe(
-            ConnectorId::Tor,
-            &failed(3, CloseCause::new(CloseKind::TransportTimeout)),
-        );
-        assert_eq!(
-            spread.tally().timed_out_destinations,
-            10,
-            "the same destination"
-        );
-    }
-
-    /// An opened stream ends the run: failures before it are not counted
-    /// after it, and `opened` grows so a reader sees the success even if it
-    /// missed the zeroed counts.
-    #[test]
-    fn an_opened_stream_ends_the_run_of_failures() {
+    fn any_dial_without_a_stream_is_unopened_and_an_opened_one_resets() {
         let mut fold = LinkFold::new();
+        for reply in [0x01, 0x06, 0xF0, 0xF2, 0xF3, 0xF7] {
+            fold.observe(
+                ConnectorId::Tor,
+                &failed(0, CloseCause::proxy_refused(reply)),
+                0,
+            );
+        }
         fold.observe(
             ConnectorId::Tor,
-            &failed(0, CloseCause::proxy_refused(0x01)),
+            &failed(1, CloseCause::new(CloseKind::TransportTimeout)),
+            0,
         );
         fold.observe(
             ConnectorId::Tor,
-            &failed(1, CloseCause::new(CloseKind::ProxyUnavailable)),
-        );
-        fold.observe(
-            ConnectorId::Tor,
-            &failed(2, CloseCause::proxy_refused(0xF3)),
+            &failed(2, CloseCause::new(CloseKind::ProxyUnavailable)),
+            0,
         );
         assert_eq!(
             fold.tally(),
             TorLinkTally {
                 opened: 0,
-                link_failures: 2,
-                timed_out_destinations: 1,
-            }
-        );
-        fold.observe(ConnectorId::Tor, &DialOutcome::SessionAccepted(onion(4)));
-        assert_eq!(
-            fold.tally(),
-            TorLinkTally {
-                opened: 1,
-                link_failures: 0,
-                timed_out_destinations: 0,
+                unopened: 8,
+                held: 0,
             }
         );
         fold.observe(
             ConnectorId::Tor,
-            &failed(5, CloseCause::new(CloseKind::PeerClosed)),
+            &failed(3, CloseCause::new(CloseKind::LevinHandshakeRejected)),
+            0,
         );
         assert_eq!(
             fold.tally().opened,
-            2,
-            "a peer close needed an opened stream"
+            1,
+            "a rejected handshake reached a peer"
         );
+        assert_eq!(fold.tally().unopened, 0);
     }
 
-    /// Only Tor dials count: a clearnet failure, even one whose class would
-    /// be a link failure on Tor, leaves the Tor tally alone.
+    /// This node's own close is not a failed dial, and another connector's
+    /// dials say nothing about Tor.
     #[test]
-    fn another_connectors_dials_say_nothing_about_tor() {
+    fn own_closes_and_other_connectors_leave_the_tally_alone() {
         let mut fold = LinkFold::new();
+        fold.observe(
+            ConnectorId::Tor,
+            &failed(0, CloseCause::new(CloseKind::LocalClose)),
+            0,
+        );
         let clearnet = NetworkAddress::Ipv4 {
             ip: std::net::Ipv4Addr::new(203, 0, 113, 7),
             port: 11021,
@@ -209,46 +183,33 @@ mod tests {
         fold.observe(
             ConnectorId::Clearnet,
             &DialOutcome::DialFailed(clearnet.clone(), CloseCause::new(CloseKind::DialFailed)),
+            3,
         );
         fold.observe(
             ConnectorId::Clearnet,
             &DialOutcome::SessionAccepted(clearnet),
+            3,
         );
+        fold.held(ConnectorId::Clearnet, 3);
         assert_eq!(fold.tally(), TorLinkTally::default());
-        fold.observe(
-            ConnectorId::Tor,
-            &failed(0, CloseCause::proxy_refused(0x01)),
-        );
-        assert_eq!(fold.tally().link_failures, 1);
     }
 
-    /// Destination replies and this node's own requests are never link
-    /// evidence, and the sink hears only changes.
+    /// The count of held sessions follows accepts and closes, and the sink
+    /// hears only changes.
     #[test]
-    fn destination_and_request_replies_leave_the_tally_alone() {
+    fn held_sessions_follow_accepts_and_closes_and_only_changes_are_sent() {
         let heard = Arc::new(Mutex::new(Vec::new()));
         let sink_heard = Arc::clone(&heard);
         let mut fold = LinkFold::new();
         fold.set_sink(Arc::new(move |tally| {
             sink_heard.lock().expect("heard").push(tally);
         }));
-        for reply in [0x04, 0x05, 0xF0, 0xF1, 0xF2, 0x07, 0x08, 0xF4, 0xF5, 0xF6] {
-            fold.observe(
-                ConnectorId::Tor,
-                &failed(0, CloseCause::proxy_refused(reply)),
-            );
-        }
-        fold.observe(
-            ConnectorId::Tor,
-            &failed(0, CloseCause::new(CloseKind::LocalClose)),
-        );
-        assert_eq!(fold.tally(), TorLinkTally::default());
-        fold.observe(
-            ConnectorId::Tor,
-            &failed(0, CloseCause::proxy_refused(0x06)),
-        );
+        fold.observe(ConnectorId::Tor, &DialOutcome::SessionAccepted(onion(0)), 1);
+        fold.held(ConnectorId::Tor, 1);
+        fold.held(ConnectorId::Tor, 0);
         let heard = heard.lock().expect("heard");
-        assert_eq!(heard.len(), 2, "the initial tally and the one change");
-        assert_eq!(heard[1].link_failures, 1);
+        assert_eq!(heard.len(), 3, "the initial tally, the accept, the close");
+        assert_eq!(heard[1].held, 1);
+        assert_eq!(heard[2].held, 0);
     }
 }

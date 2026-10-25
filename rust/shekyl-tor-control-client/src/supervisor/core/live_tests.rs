@@ -43,6 +43,8 @@ fn a_running_tor_is_sampled_and_a_late_reply_restarts_it() {
             progress: Some(100),
             socks: None,
             read: None,
+            network: None,
+            circuits: None,
         },
         alive,
     );
@@ -100,6 +102,8 @@ fn a_bootstrap_says_its_progress_and_whether_bytes_are_moving() {
         progress: Some(progress),
         socks: Some(socks()),
         read: Some(read),
+        network: None,
+        circuits: None,
     };
     core.on(sample(55, 1_000), 0);
     core.on(sample(55, 3_201_000), duration_ns(Duration::from_secs(3)));
@@ -140,6 +144,8 @@ fn a_bootstrap_without_a_count_does_not_claim_a_stall() {
             progress: Some(30),
             socks: None,
             read: None,
+            network: None,
+            circuits: None,
         },
         1,
     );
@@ -198,6 +204,8 @@ fn the_progress_line_measures_the_span_it_names() {
             progress: Some(20),
             socks: None,
             read: Some(100),
+            network: None,
+            circuits: None,
         },
         count_at,
     );
@@ -206,6 +214,8 @@ fn the_progress_line_measures_the_span_it_names() {
             progress: Some(20),
             socks: None,
             read: Some(5_000_100),
+            network: None,
+            circuits: None,
         },
         duration_ns(Duration::from_secs(5)),
     );
@@ -237,6 +247,8 @@ fn a_bootstrap_notice_leaves_the_traffic_sample_where_it_was_armed() {
             progress: Some(40),
             socks: None,
             read: Some(1_000),
+            network: None,
+            circuits: None,
         },
         0,
     );
@@ -259,6 +271,8 @@ fn a_bootstrap_notice_leaves_the_traffic_sample_where_it_was_armed() {
             progress: Some(40),
             socks: None,
             read: Some(9_000),
+            network: None,
+            circuits: None,
         },
         sample_due,
     );

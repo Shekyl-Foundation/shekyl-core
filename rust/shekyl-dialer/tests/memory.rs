@@ -59,8 +59,11 @@ fn no_clearnet_report_writes_the_memory() {
     assert!(!memory.is_recently_failed(&address, at(SECOND)));
 }
 
+/// A live onion service that refuses its port answers `0x01`, so `0x01`
+/// names the destination; `0x06` does not, because a blocked link answers it
+/// too (shekyl-dev `data/tsr-acceptance/2026-10-25-socks-reply-sources`).
 #[test]
-fn on_tor_only_a_rejection_and_the_five_replies_write_the_memory() {
+fn on_tor_only_a_rejection_and_the_six_replies_write_the_memory() {
     let mut writers = Vec::new();
     for cause in every_cause() {
         let mut memory = FailedAddresses::new();
@@ -73,6 +76,7 @@ fn on_tor_only_a_rejection_and_the_five_replies_write_the_memory() {
         writers,
         vec![
             (CloseKind::LevinHandshakeRejected, 0),
+            (CloseKind::ProxyRefused, 0x01),
             (CloseKind::ProxyRefused, 0x04),
             (CloseKind::ProxyRefused, 0x05),
             (CloseKind::ProxyRefused, 0xF0),

@@ -145,9 +145,9 @@ pub mod relay_zone_ffi;
 // supervisor and the RPC Health boolean.
 pub mod origin_verdict;
 
-// What this node's own Tor dials say about the Tor link, one cell for the
-// process (`TOR_SUPERVISOR.md` §4.2): written by the dialer, read by the
-// managed-Tor supervisor.
+// What this node's own Tor dials show, one cell for the process
+// (`TOR_SUPERVISOR.md` §4.2): written by the dialer, read by the managed-Tor
+// supervisor for its posture line. Display only (`TSR-Q14`).
 pub mod tor_link;
 
 // Levin ingress policy and white-noise emit FFI (IMPLEMENTATION_INDEX LV
