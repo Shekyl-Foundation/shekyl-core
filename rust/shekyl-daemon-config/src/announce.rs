@@ -102,6 +102,49 @@ pub fn posture(config: &DaemonConfig) -> String {
     format!("posture: {}", parts.join("; "))
 }
 
+/// The lines a start announces and the configuration check repeats
+/// (IG-14, IG-Q61).
+///
+/// The effective configuration leads. The development levers, the posture
+/// and the walk's warnings follow, in that order. No line carries the
+/// `shekyld:` prefix: standard error, the log and the check each add it.
+pub struct Announcements {
+    /// The effective-configuration line.
+    pub effective: String,
+    /// Development levers, the posture, then the walk's warnings.
+    pub rest: Vec<String>,
+}
+
+impl Announcements {
+    /// Every line, the effective configuration first.
+    #[must_use]
+    pub fn into_lines(self) -> Vec<String> {
+        let mut lines = Vec::with_capacity(1 + self.rest.len());
+        lines.push(self.effective);
+        lines.extend(self.rest);
+        lines
+    }
+}
+
+/// [`Announcements`] for one resolution and the warnings the walk carried.
+#[must_use]
+pub fn announcements(
+    table: &Table,
+    resolved: &Resolved,
+    config_file: Option<&Path>,
+    default_path: &Path,
+    config: &DaemonConfig,
+    warnings: &[String],
+) -> Announcements {
+    let mut rest = dev_levers(table, resolved);
+    rest.push(posture(config));
+    rest.extend(warnings.iter().cloned());
+    Announcements {
+        effective: effective_configuration(table, resolved, config_file, default_path),
+        rest,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,5 +264,37 @@ mod tests {
         assert_eq!(posture(&c), "posture: clearnet-only: Tor is off; clearnet dial-only: no listener; clearnet address not advertised");
         let _ = RunMode::User;
         let _ = Network::Mainnet;
+    }
+
+    /// Start and the check share this order: the effective configuration,
+    /// then the levers, the posture and the walk's warnings.
+    #[test]
+    fn the_announcements_lead_with_the_effective_configuration() {
+        let (resolved, config) = setup(&["--network", "regtest", "--dev-difficulty", "7"], "");
+        let warnings = vec!["warning: managed Tor: example".to_owned()];
+        let announced = announcements(
+            &TABLE,
+            &resolved,
+            None,
+            Path::new("/etc/shekyl/shekyld-regtest.toml"),
+            &config,
+            &warnings,
+        );
+        assert!(announced.effective.starts_with("effective configuration: "));
+        let posture_at = announced
+            .rest
+            .iter()
+            .position(|line| line.starts_with("posture:"))
+            .expect("the posture is one of the lines");
+        assert!(announced.rest[..posture_at]
+            .iter()
+            .any(|line| line.starts_with("development lever set: ")));
+        assert_eq!(
+            announced.rest.last().map(String::as_str),
+            Some("warning: managed Tor: example")
+        );
+        let lines = announced.into_lines();
+        assert!(lines[0].starts_with("effective configuration: "));
+        assert!(lines.len() > 1);
     }
 }
