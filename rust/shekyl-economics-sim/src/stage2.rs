@@ -2270,6 +2270,32 @@ mod tests {
         assert_eq!(ops.max_per_epoch_skl, 25.0);
     }
 
+    /// OQ-2's corpora: the cap itself, where the year-end samples pass over
+    /// the crossing, then the trajectory's first, middle and last year.
+    #[test]
+    fn the_oq2_corpus_starts_at_the_cap_then_samples_the_trajectory() {
+        let row = |year, closed_shards| BurdenYearRow {
+            year,
+            cumulative_outputs: 0,
+            cumulative_archival_bytes: 0,
+            closed_shards,
+            burden_fiat_stall: 0.0,
+            burden_fiat_slowdown: 0.0,
+            burden_fiat_historical: 0.0,
+        };
+        let traj = |years: Vec<BurdenYearRow>| BurdenTrajectory {
+            scenario: String::new(),
+            description: String::new(),
+            sim_years: years.len() as u64,
+            final_closed_shards: years.last().map_or(0, |y| y.closed_shards),
+            years,
+        };
+        let cap = MAX_HOLDINGS_SHARDS as u64;
+        let five = traj((1..=5).map(|y| row(y, 10_000 * y)).collect());
+        assert_eq!(oq2_corpus_samples(&five), [cap, 10_000, 30_000, 50_000]);
+        assert_eq!(oq2_corpus_samples(&traj(Vec::new())), [cap, 0, 0, 0]);
+    }
+
     #[test]
     fn a4_served_work_roi_responds_to_steepness_and_concentration() {
         // The served-work ROI must move correctly with its levers: (a) a steeper
