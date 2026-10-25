@@ -464,20 +464,27 @@ accruing row, and that a re-connect reproduces the frozen close.
 
 B1's **full-connect-path counterpart** is pinned in Rust, in
 labeled-row form: each destination checked against its own expected
-value, not just their sum.
-- `rust/shekyl-chain-rules/src/rules/reward_tests.rs` pins, through
-  `validate`:
-  - the genesis exclusion
-    (`at_genesis_the_configured_emission_stands_unbounded_and_unsplit`);
-  - the accrual equal to the staker emission with a zero burn
-    (`f17_and_g11_split_the_listed_fees_with_the_one_owner`);
-  - the coinbase equal to the two miner legs
-    (`f18_the_coinbase_pays_exactly_the_two_miner_legs_or_is_refused_at_the_miner_slot`);
+value, not just their sum. The pins do not all enter through
+`validate`. Each one is named with the function it calls
+(`rust/shekyl-chain-rules/src/rules/reward_tests.rs`):
+- `price`, through `judge` / `judge_paying`:
   - the legs summing to the paid reward
     (`f16_splits_the_paid_reward_at_the_epoch`);
   - the ledger advance equal to that reward
-    (`the_verdict_carries_the_paid_emission`,
-    `g12_advances_the_parent_accumulator_by_the_paid_reward`).
+    (`g12_advances_the_parent_accumulator_by_the_paid_reward`);
+  - the genesis configured amount, unbounded and unsplit
+    (`at_genesis_the_configured_emission_stands_unbounded_and_unsplit`,
+    the `judge_paying` arm).
+- `judge_emission`, through `judge_candidate`:
+  - the coinbase equal to the two miner legs
+    (`f18_the_coinbase_pays_exactly_the_two_miner_legs_or_is_refused_at_the_miner_slot`);
+  - the accrual equal to the staker legs, fees included
+    (`f17_and_g11_split_the_listed_fees_with_the_one_owner`);
+  - the genesis fixture admitted, with F18 vacuous (the same genesis
+    test's `judge_candidate` arm).
+- `validate`, through `validated_on`: only
+  `the_verdict_carries_the_paid_emission`, a coinbase-only block, the
+  full emission and the accumulator.
 - The store side:
   - a pop lifts the burn row
     (`rust/shekyl-chain-store/src/store/connect_tests.rs`
@@ -485,11 +492,20 @@ value, not just their sum.
   - a pop restores the accruing row
     (`rust/shekyl-chain-store/src/store/archival_write_tests.rs`
     `a_join_and_its_credit_land_as_the_deltas_rows_and_a_pop_lifts_them`);
-  - a switch away and back reproduces every table, the accruing row
-    included (`rust/shekyl-chain-ingest/src/switch_differential_tests.rs`
-    `the_self_differential_holds_at_the_cap_depth_with_a_spend`; its
-    mutation control `a_corrupted_undo_row_makes_the_differential_fail`
-    shows the accruing row is compared).
+  - a switch away and back reproduces every table except `alt_blocks`
+    and `alt_block_bodies`, which are asserted exactly (the switched
+    store holds the demoted blocks it kept; the direct store holds
+    none). That round trip is
+    `rust/shekyl-chain-ingest/src/switch_differential_tests.rs`
+    `the_self_differential_holds_at_a_shallow_depth_with_a_spend`.
+    The cap-depth test
+    (`the_self_differential_holds_at_the_cap_depth_with_a_spend`) does
+    not switch back: A is retired and its extension is `Unlinked`.
+    The mutation control
+    `a_corrupted_undo_row_makes_the_differential_fail` is the shallow
+    one-way switch with the accruing pre-image off by one, and
+    `differing_tables` names `archival_budget_accruing`. That is the
+    comparison the round trip uses.
 
 No single Rust assertion states the sum; the validator tests together
 do. The labeled form remains the guard against the
