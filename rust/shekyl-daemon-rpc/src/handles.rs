@@ -27,7 +27,8 @@ use crate::chain_facts::{
     FactsFault, FeeEstimate,
 };
 use crate::info_facts::{
-    InfoChainFacts, InfoFacts, InfoStatusFacts, PeerFacts, PoolCounts, PoolScope, SessionCounts,
+    InfoChainFacts, InfoFacts, InfoStatusFacts, PeerFacts, PoolCounts, PoolScope, PoolState,
+    SessionCounts,
 };
 use crate::mining_facts::{LocalOutcome, MiningState, Pending, PopOutcome, PostedTemplate};
 use crate::read_facts::{
@@ -190,9 +191,20 @@ pub trait MiningFacts: Send + Sync {
     /// [`FactsFault::NotReady`] when no mining control was supplied.
     fn status(&self) -> Result<MiningState, FactsFault>;
 
-    /// Resolves, with why, once the job is withdrawn for a reason the next
-    /// tip does not clear (not synced, no address, the pool retired, a
-    /// fault, a stop): after it no miner can move the tip.
+    /// The refusal [`Self::withdrawn`] waits for, if it is already the
+    /// answer. `Ok(None)` while a job is posted or the withdrawal is one
+    /// the next pass replaces (the node is starting, or one more build at
+    /// this tip is due).
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when no mining control was supplied.
+    fn refusal(&self) -> Result<Option<Diagnostic>, FactsFault>;
+
+    /// Resolves, with why, once [`Self::refusal`] is `Some`: the job is
+    /// withdrawn for a reason the next pass does not replace (not synced,
+    /// no address, the pool retired, a build that stayed withdrawn, a
+    /// fault, a stop). After it, no miner can move the tip.
     ///
     /// # Errors
     ///
@@ -374,7 +386,7 @@ impl InfoFacts for ChainReadAbsent {
         Err(FactsFault::NotReady)
     }
 
-    fn pool_counts(&self, _scope: PoolScope) -> Result<PoolCounts, FactsFault> {
+    fn pool_counts(&self, _scope: PoolScope) -> Result<PoolState<PoolCounts>, FactsFault> {
         Err(FactsFault::NotReady)
     }
 
@@ -505,6 +517,10 @@ impl MiningFacts for MiningAbsent {
     }
 
     fn status(&self) -> Result<MiningState, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn refusal(&self) -> Result<Option<Diagnostic>, FactsFault> {
         Err(FactsFault::NotReady)
     }
 

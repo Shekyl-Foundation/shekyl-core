@@ -21,6 +21,7 @@ pub mod options;
 pub mod run;
 pub mod signals;
 pub mod tor;
+pub mod verify;
 
 pub use entry::{RunFn, ShekylDaemonEntry, StopFn};
 pub use run::{Host, EXIT_FAILED, EXIT_REFUSED};

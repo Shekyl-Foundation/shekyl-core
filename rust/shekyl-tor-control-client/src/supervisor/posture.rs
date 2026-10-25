@@ -336,6 +336,34 @@ fn install_cause(cause: &Cause) -> bool {
     )
 }
 
+/// The words for an install cause: a missing bundle, a refused pin, or no
+/// managed Tor on this platform.
+///
+/// [`render`] and the daemon's pin warning both speak these. `None` for
+/// every other cause, whose sentence reads the rest of a [`Status`]. The
+/// paths a missed discovery searched are not a cause field; the pin error
+/// carries them, and the warning prints that error beside this sentence.
+#[must_use]
+pub fn install_sentence(cause: &Cause) -> Option<&'static str> {
+    match cause {
+        Cause::BundleMissing => Some("No Tor was found beside the daemon."),
+        Cause::PinRefused => {
+            Some("The Tor that was found failed its check, so it was not started.")
+        }
+        Cause::Unavailable => Some("This release has no Tor for this platform yet."),
+        Cause::None
+        | Cause::FailedStart
+        | Cause::Died { .. }
+        | Cause::DirectoryUnusable
+        | Cause::ExternalBlocked
+        | Cause::DirectoryUnreachable
+        | Cause::ClockSkew { .. }
+        | Cause::TooManyFiles { .. }
+        | Cause::ReplyLate
+        | Cause::DangerousVersion => None,
+    }
+}
+
 /// The one renderer (`TSR-Q13`). Behaviour, then the cause, then the fixes
 /// in the posture table's order.
 #[must_use]
@@ -407,7 +435,12 @@ fn spoken_bytes(bytes: u64) -> String {
 /// yet, or the epoch's pin exhausted) is holding, not waiting. What the node
 /// syncs over is read from `sync`, never assumed from the hold; the typed
 /// reason for the hold is `GS-C2`'s (IG-Q72).
-fn held_sentence(sync: Syncing) -> String {
+///
+/// [`render`] speaks this for a held status. The daemon's pin warning
+/// speaks it too, with `tor` false: the link is not up, and `clearnet` is
+/// the connector.
+#[must_use]
+pub fn held_sentence(sync: Syncing) -> String {
     let syncing = match (sync.tor, sync.clearnet) {
         (true, true) => "It is syncing over Tor and clearnet.",
         (true, false) => "It is syncing over Tor.",
@@ -427,11 +460,9 @@ fn cause_sentence(status: &Status) -> Option<String> {
             Some(bootstrap_sentence(status.progress, status.bootstrap))
         }
         Cause::None => None,
-        Cause::BundleMissing => Some("No Tor was found beside the daemon.".to_owned()),
-        Cause::PinRefused => {
-            Some("The Tor that was found failed its check, so it was not started.".to_owned())
+        Cause::BundleMissing | Cause::PinRefused | Cause::Unavailable => {
+            install_sentence(&status.cause).map(str::to_owned)
         }
-        Cause::Unavailable => Some("This release has no Tor for this platform yet.".to_owned()),
         Cause::FailedStart => Some("Tor did not start.".to_owned()),
         Cause::Died { exit_code } => Some(died_sentence(status.respawn_count, *exit_code)),
         Cause::DirectoryUnusable => Some("Tor's data directory could not be used.".to_owned()),

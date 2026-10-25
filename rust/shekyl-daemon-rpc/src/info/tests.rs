@@ -18,7 +18,8 @@ use shekyl_units::AtomicUnits;
 
 use super::*;
 use crate::info_facts::{
-    InfoChainFacts, InfoPeersFacts, InfoStatusFacts, PeerFacts, PoolCounts, SessionCounts,
+    InfoChainFacts, InfoPeersFacts, InfoStatusFacts, PeerFacts, PoolCounts, PoolState,
+    SessionCounts,
 };
 
 /// The emitter's `tagged_hash`: byte i = (i*7 + tag) & 0xff.
@@ -41,6 +42,8 @@ pub(crate) struct FakeInfoFacts {
     /// When set, the double answers a host-axis read without the second
     /// count: a facts layer that did not do what it was asked.
     pub(crate) pool_drops_unbroadcast: bool,
+    /// When set, the pool is retired: the node's pool file faulted.
+    pub(crate) pool_retired: bool,
     pub(crate) store_size: u64,
     pub(crate) status: InfoStatusFacts,
     pub(crate) peers: PeerFacts,
@@ -89,6 +92,7 @@ pub(crate) fn synced_facts() -> FakeInfoFacts {
         pool_broadcast: 9,
         pool_unbroadcast: 3,
         pool_drops_unbroadcast: false,
+        pool_retired: false,
         store_size: 7 * 1024 * 1024 * 1024 + 1,
         status: InfoStatusFacts {
             start_time: 1_699_990_000,
@@ -128,17 +132,20 @@ impl InfoFacts for FakeInfoFacts {
         self.chain_fault.map_or_else(|| Ok(self.chain.clone()), Err)
     }
 
-    fn pool_counts(&self, scope: PoolScope) -> Result<PoolCounts, FactsFault> {
+    fn pool_counts(&self, scope: PoolScope) -> Result<PoolState<PoolCounts>, FactsFault> {
         self.pool_scopes.lock().expect("scopes").push(scope);
         if let Some(fault) = self.pool_fault {
             return Err(fault);
         }
-        Ok(PoolCounts {
+        if self.pool_retired {
+            return Ok(PoolState::Retired);
+        }
+        Ok(PoolState::Live(PoolCounts {
             broadcast: self.pool_broadcast,
             // Counted only when asked for, as the real read does.
             unbroadcast: (scope == PoolScope::WithUnbroadcast && !self.pool_drops_unbroadcast)
                 .then_some(self.pool_unbroadcast),
-        })
+        }))
     }
 
     fn store_size(&self) -> Result<u64, FactsFault> {
@@ -686,8 +693,8 @@ fn tx_pool_size_is_the_broadcast_count_for_every_caller() {
     let facts = synced_facts();
     for disclosure in [Disclosure::VIEW, Disclosure::FULL] {
         assert_eq!(
-            get_info(&facts, disclosure, 0).unwrap().pool.tx_pool_size,
-            9,
+            get_info(&facts, disclosure, 0).unwrap().pool.tx_pool_size(),
+            Some(9),
             "{disclosure:?}"
         );
     }
@@ -699,8 +706,8 @@ fn tx_pool_size_is_the_broadcast_count_for_every_caller() {
         get_info(&facts, Disclosure::FULL, 0)
             .unwrap()
             .pool
-            .tx_pool_size,
-        9
+            .tx_pool_size(),
+        Some(9)
     );
 }
 
@@ -718,7 +725,7 @@ fn the_unbroadcast_count_is_told_to_the_host_and_not_counted_for_anyone_else() {
     assert_eq!(
         full.host,
         Hidden::Shown(InfoHost {
-            tx_pool_unbroadcast_count: 3
+            tx_pool_unbroadcast_count: Some(3)
         })
     );
 
@@ -761,6 +768,62 @@ fn a_host_read_that_returns_no_unbroadcast_count_is_a_fault() {
         get_info(&facts, Disclosure::FULL, 0),
         Err(RpcFault::Facts(FactsFault::Inconsistent))
     );
+}
+
+/// **A retired pool does not black out the reply.** The node retires its
+/// pool when the pool's file faults and goes on following the chain, so
+/// `get_info` answers: `pool_retired`, the pool's counts `null` (RK-D23:
+/// no answer), and the chain's members as a live pool's reply carries
+/// them. The host's part is shown with its count `null`; any other caller
+/// is withheld the part as ever.
+#[test]
+fn a_retired_pool_answers_null_counts_and_the_chain() {
+    let live = get_info(&synced_facts(), Disclosure::FULL, 0).expect("live");
+    let mut facts = synced_facts();
+    facts.pool_retired = true;
+    let full = get_info(&facts, Disclosure::FULL, 0).expect("a retired pool is answered");
+    assert_eq!(full.pool, InfoPool::Retired);
+    assert_eq!(
+        full.host,
+        Hidden::Shown(InfoHost {
+            tx_pool_unbroadcast_count: None
+        })
+    );
+    assert_eq!(
+        (&full.health, &full.chain, &full.economics, &full.node),
+        (&live.health, &live.chain, &live.economics, &live.node),
+        "the chain's members are what a live pool's reply carries"
+    );
+    let wire = serde_json::to_value(&full).expect("the reply serializes");
+    assert_eq!(wire["pool_retired"], true);
+    assert!(wire["tx_pool_size"].is_null(), "{wire}");
+    assert!(wire["tx_pool_unbroadcast_count"].is_null(), "{wire}");
+    assert_eq!(
+        serde_json::from_value::<GetInfoResponse>(wire).expect("it decodes"),
+        full,
+        "and round-trips"
+    );
+
+    let mut facts = synced_facts();
+    facts.pool_retired = true;
+    let view = get_info(&facts, Disclosure::VIEW, 0).expect("a view caller is answered");
+    assert_eq!(view.pool, InfoPool::Retired);
+    assert_eq!(view.host, Hidden::Withheld);
+    let wire = serde_json::to_value(&view).expect("the reply serializes");
+    assert!(
+        !wire
+            .as_object()
+            .expect("an object")
+            .contains_key("tx_pool_unbroadcast_count"),
+        "withheld stays absent, not null"
+    );
+
+    // A live reply carries no `pool_retired`: its shape is unchanged.
+    let wire = serde_json::to_value(&live).expect("the reply serializes");
+    assert!(!wire
+        .as_object()
+        .expect("an object")
+        .contains_key("pool_retired"));
 }
 
 #[path = "peer_facts_tests.rs"]
