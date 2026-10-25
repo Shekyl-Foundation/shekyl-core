@@ -202,12 +202,11 @@ impl WitnessRing {
     /// The block at `h` carries `commitment`. If a candidate drew it, this
     /// daemon mined `h`: the candidate becomes `h`'s in-flight entry, and
     /// the other candidates for `h` go (exactly one template's block is
-    /// the block at `h`). Whether it was ours.
+    /// the block at `h`). An entry already in flight for `h` is a block a
+    /// reorg popped, and it is replaced: only one block at `h` is on the
+    /// chain. Whether it was ours.
     pub(crate) fn claim(&self, h: BlockHeight, commitment: &DrawCommitment) -> bool {
         let mut state = self.lock();
-        if state.in_flight.contains_key(&h) {
-            return false;
-        }
         let Some(at) = state
             .candidates
             .iter()

@@ -227,26 +227,81 @@ fn a_block_with_no_passes_files_a_no_pass_bundle() {
     assert_eq!(filings[0].body.record_count(), 0);
 }
 
-/// The deadline `h + W₂ − M` files a block whose reads have not all
-/// settled, abandoning the rest; before it nothing files. A read that
-/// ends after the filing is ignored. Red edit: wait for every read — the
-/// block never files.
+/// At the deadline `h + W₂ − M` reads not yet started are abandoned, a read
+/// in flight is waited for, and the block files when it ends; the last tip
+/// that can still include it files whatever is in flight. Nothing files
+/// before the deadline while reads are out. Red edit: file at the deadline
+/// regardless — the read started at the deadline is abandoned unread.
 #[test]
-fn the_deadline_files_what_has_not_settled() {
+fn the_deadline_waits_for_a_read_in_flight_and_abandons_the_rest() {
     let (_ring, mut producer, _chain) = mined(4, 2, 0);
-    let mut held = Vec::new();
-    for tip in 101..=569 {
-        held.extend(producer.due(h(tip)));
-    }
-    assert_eq!(held.len(), 2, "both first reads are out");
     let deadline = W.filing_deadline(h(100));
     assert_eq!(deadline, h(570));
-    assert!(producer.ready(h(569), W).0.is_empty());
+    // Hold draw 0's first read; every other read stalls.
+    let mut held = None;
+    for tip in 101..=569 {
+        for due in producer.due(h(tip)) {
+            if due.key.draw == 0 && held.is_none() {
+                held = Some(due);
+            } else {
+                producer.read_done(due.key, ReadOutcome::Stall);
+            }
+        }
+    }
+    let held = held.expect("draw 0 was read");
+    assert!(
+        producer.ready(h(569), W).0.is_empty(),
+        "before the deadline"
+    );
+    assert!(
+        producer.ready(deadline, W).0.is_empty(),
+        "a read in flight is waited for"
+    );
+    producer.read_done(
+        held.key,
+        ReadOutcome::Pass(Box::new(record(held.key.attempt))),
+    );
     let (filings, _) = producer.ready(deadline, W);
     assert_eq!(filings.len(), 1);
-    assert_eq!(filings[0].passes, 0);
-    producer.read_done(held[0].key, ReadOutcome::Pass(Box::new(record(0))));
+    assert_eq!(filings[0].passes, 1, "the waited read's pass is filed");
     assert!(producer.in_flight().is_empty());
+
+    // A read that never ends files at the last tip that can include it.
+    let (_ring, mut producer, _chain) = mined(14, 1, 0);
+    let out: Vec<_> = (101..=570).flat_map(|tip| producer.due(h(tip))).collect();
+    assert_eq!(out.len(), 1);
+    assert!(producer
+        .ready(W.last_chance(h(100)) - BlockCount::ONE, W)
+        .0
+        .is_empty());
+    let (filings, _) = producer.ready(W.last_chance(h(100)), W);
+    assert_eq!(filings.len(), 1);
+    assert_eq!(filings[0].passes, 0);
+    producer.read_done(out[0].key, ReadOutcome::Pass(Box::new(record(0))));
+    assert!(producer.in_flight().is_empty(), "a late read is ignored");
+}
+
+/// A reorg pops a block of ours and connects another block of ours at the
+/// same height: the new block is claimed and learned, the old entry goes.
+/// Red edit: skip a height already held — the new block is never learned.
+#[test]
+fn a_block_of_ours_replaces_a_popped_one_at_its_height() {
+    let (ring, mut producer, mut chain) = mined(15, 1, 0);
+    chain.pop(101);
+    chain.pop(100);
+    assert!(producer.observe(h(99), W, chain.look()).lost.is_empty());
+    let replacement = ring.draw(h(100)).expect("draws");
+    chain.blocks.insert(
+        h(100),
+        Recorded {
+            hash: hash_of(100, 0x0B),
+            commitment: replacement,
+        },
+    );
+    let observed = producer.observe(h(100), W, chain.look());
+    assert_eq!(observed.learn.len(), 1, "the new block is learned");
+    assert_eq!(observed.learn[0].hash, hash_of(100, 0x0B));
+    assert_eq!(ring.in_flight(), vec![h(100)]);
 }
 
 /// The live serving host signs with the identity key: every read meets

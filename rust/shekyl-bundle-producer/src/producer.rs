@@ -16,8 +16,24 @@
 //! - [`Producer::due`] — the reads whose height has come.
 //! - [`Producer::read_done`] — how a read ended.
 //! - [`Producer::ready`] — the bundles to file: every read of the block
-//!   completed or was abandoned, or the block reached `h + W₂ − M`. Each is
+//!   completed or was abandoned, or the block reached `h + W₂ − M` with no
+//!   read in flight, or the last tip that can still include it. Each is
 //!   signed inside the ring, and the entry's secrets are wiped.
+//!
+//! # The deadline and a read in flight
+//!
+//! A read may be planned at `h + W₂ − M` itself (§5.3: reads inside
+//! `(h, h + W₂ − M]`). At that height every read not yet started is
+//! abandoned, and a read already in flight is waited for: its draw settles
+//! within the read's timeouts, a few blocks at most, and `M` is the margin
+//! that absorbs it. The last tip that can still include the bundle,
+//! `h + W₂ − 1`, files whatever is still in flight.
+//!
+//! # A block of ours replaces a popped one at its height
+//!
+//! A reorg can pop a block of ours and connect another block of ours at the
+//! same height. The new block is claimed, and the popped one's entry and
+//! secrets go: only one block at a height is on the chain.
 //!
 //! # A popped block pauses
 //!
@@ -62,6 +78,14 @@ impl Window {
     pub fn filing_deadline(self, h: BlockHeight) -> BlockHeight {
         h.saturating_add(self.response)
             .saturating_sub_count(FILING_MARGIN)
+    }
+
+    /// `h + W₂ − 1`: the last tip after which a bundle for `h` can still be
+    /// included. A block that reaches it files whatever is in flight.
+    #[must_use]
+    pub fn last_chance(self, h: BlockHeight) -> BlockHeight {
+        h.saturating_add(self.response)
+            .saturating_sub_count(BlockCount::ONE)
     }
 
     /// Whether a bundle for `h` can still be included in the block after
@@ -302,19 +326,18 @@ impl Producer {
 
         let mut h = tip.saturating_sub_count(CANDIDATE_DEPTH);
         loop {
-            if !self.blocks.contains_key(&h) {
-                if let Some(recorded) = look(h) {
-                    if self.ring.claim(h, &recorded.commitment) {
-                        self.blocks.insert(
-                            h,
-                            BlockWork {
-                                hash: recorded.hash,
-                                popped_at: None,
-                                stage: Stage::Learning,
-                                serving_scheme_absent: false,
-                            },
-                        );
-                    }
+            if let Some(recorded) = look(h) {
+                let held = self.blocks.get(&h).map(|work| work.hash);
+                if held != Some(recorded.hash) && self.ring.claim(h, &recorded.commitment) {
+                    self.blocks.insert(
+                        h,
+                        BlockWork {
+                            hash: recorded.hash,
+                            popped_at: None,
+                            stage: Stage::Learning,
+                            serving_scheme_absent: false,
+                        },
+                    );
                 }
             }
             if h >= tip {
@@ -485,29 +508,37 @@ impl Producer {
 
     /// The bundles to file at `tip`, signed inside the ring.
     ///
-    /// A block files once every draw has settled, or at its deadline
-    /// `h + W₂ − M`, when every draw not yet settled is abandoned. A paused
-    /// block does not file. A block whose signing fails is dropped with
-    /// its secrets and reported in the `Err` list: there is nothing to
-    /// retry it with.
+    /// A block files once every draw has settled; at its deadline
+    /// `h + W₂ − M` every read not yet started is abandoned and the block
+    /// files once no read is in flight; at `h + W₂ − 1` it files whatever
+    /// is in flight (module docs). A paused block does not file. A block
+    /// whose signing fails is dropped with its secrets and reported in the
+    /// `Err` list: there is nothing to retry it with.
     pub fn ready(
         &mut self,
         tip: BlockHeight,
         window: Window,
     ) -> (Vec<Filing>, Vec<(BlockHeight, CryptoError)>) {
         let mut ready = Vec::new();
-        for (&h, work) in &self.blocks {
+        for (&h, work) in &mut self.blocks {
             if work.popped_at.is_some() {
                 continue;
             }
-            let Stage::Reading { economy, support } = &work.stage else {
+            let Stage::Reading { economy, support } = &mut work.stage else {
                 continue;
             };
+            if tip >= window.filing_deadline(h) {
+                for draw in economy.iter_mut().chain(support.iter_mut()) {
+                    if matches!(draw.state, DrawState::Pending { .. }) {
+                        draw.state = DrawState::Done;
+                    }
+                }
+            }
             let settled = economy
                 .iter()
                 .chain(support.iter())
                 .all(|d| d.state.settled());
-            if settled || tip >= window.filing_deadline(h) {
+            if settled || tip >= window.last_chance(h) {
                 ready.push(h);
             }
         }
