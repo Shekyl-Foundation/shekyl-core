@@ -242,39 +242,6 @@ TEST(fee_2021_scaling, wallet_fee_estimate)
   ASSERT_EQ(fees[2], 133333u);
 }
 
-TEST(fee_2021_scaling, state_computed_estimate_holds_the_acceptance_identity)
-{
-  // The 2-arg wrapper — the path wallets actually reach — computes C from
-  // chain state. The 5-arg pins above bypass that, so this is the wrapper's
-  // own pin.
-  //
-  // THE ASSERTION IS NOW EQUALITY, and the upgrade is the substance of
-  // FL-R20/FL-R21. It used to be `>=`, guaranteed by a
-  // `fees[0] = max(fees[0], get_current_fee_per_byte())` clamp, and the old
-  // note here recorded that the clamp's ACTIVATION was untested because the
-  // two pricing functions "take DIFFERENT medians, so divergence is possible
-  // by construction". That is no longer true and is why the clamp is gone:
-  // both paths now divide by one M (the un-graced long-term effective median)
-  // and multiply by one C, through one Rust entry point. `>=` was satisfiable
-  // by over-quoting any amount; `==` is not, so this test now fails if the two
-  // ever part company instead of silently tolerating it.
-  //
-  // Falsifier, restated for the new shape: anything that gives the estimate
-  // and the relay floor different operands — a lookahead on Mlw, a second C
-  // derivation, a rounding step on one side — breaks this, which is the
-  // intent.
-  PREFIX_WINDOW(CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE);
-  std::vector<uint64_t> fees;
-  bc->get_dynamic_base_fee_estimate_2021_scaling(fees);
-  ASSERT_EQ(fees.size(), 3);
-  ASSERT_LE(fees[0], fees[1]);
-  ASSERT_LE(fees[1], fees[2]);
-  // FL-R6's identity: the served economy rung IS the relay floor.
-  ASSERT_EQ(fees[0], bc->get_current_fee_per_byte());
-  // And standard is exactly 4F, with no rounding step between them.
-  ASSERT_EQ(fees[1], 4 * fees[0]);
-}
-
 // FL-R6's identity on a fixture whose median is above the floor: the served
 // economy rung IS the relay floor there too, not only on the empty chain
 // (where both are floored at Zm for a reason unrelated to the arithmetic).

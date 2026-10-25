@@ -363,6 +363,15 @@ jobs:
             python3 scripts/ci/check_spawn_children_inherit_stdio_only.py --selftest
           run_one "Spawn children inherit stdio only" \
             python3 scripts/ci/check_spawn_children_inherit_stdio_only.py
+          # DRS-X: a regtest spawn that calls generateblocks or pop_blocks
+          # arms dev-rpc and checks this spawn's announcement. The sentence
+          # has three owners and they agree. `--selftest` first (rule 47).
+          run_one "Armed lever: log check" \
+            python3 scripts/test_armed_lever.py
+          run_one "Armed lever: launcher gate selftest" \
+            python3 scripts/ci/check_armed_lever_launchers.py --selftest
+          run_one "Armed lever: every regtest lever spawn arms the row" \
+            python3 scripts/ci/check_armed_lever_launchers.py
 
           # ESR-14 (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.20): the economics
           # sim's fold files form chain quantities in production's integers

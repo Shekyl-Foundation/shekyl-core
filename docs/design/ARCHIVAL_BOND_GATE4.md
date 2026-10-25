@@ -547,11 +547,14 @@ SA-2b retired the on-vin `signature_preimage`, §3.4.1). The v5 record (`Archiva
 datadir-reset posture) commits the key once at JoinMarket connect
 (`put_archival_bond_record`, no-default parameter so no caller can silently
 commit an empty authorizer). The reject→auth swap landed in one change, pinned
-by the discriminating KATs
-(`archival_bond_post.gf1_release_auth_discriminates_on_committed_key` + siblings):
-the committed key accepts — Release verifies end-to-end — while the identity
-key, a foreign key, and a record committing no key (pre-GF-1 shape) all reject
-fail-closed, never an identity fallback.
+by the discriminating tests in Rust (`rust/shekyl-daemon-rpc/tests/submit_verifier.rs`
+`consensus_valid_release_passes_the_production_battery`,
+`the_identity_key_does_not_authorize_a_debit` and
+`a_record_committing_no_key_authorizes_nothing`; `rust/shekyl-archival-retention/src/debit_auth.rs`
+`a_foreign_key_does_not_authorize_a_debit`): the committed key accepts — Release
+verifies end-to-end — while the identity key, a foreign key, and a record
+committing no key (pre-GF-1 shape) all reject fail-closed, never an identity
+fallback.
 
 **Coverage boundary (named, #302 review):** the selector's soundness rests on
 two load-bearing preconditions **upstream and out of its scope** — the

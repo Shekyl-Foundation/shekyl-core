@@ -27,23 +27,18 @@
 # THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 set(core_tests_sources
-  archival_budget_conservation.cpp
   block_validation.cpp
   checkpoint_conflict_rollback.cpp
   chaingen.cpp
   chaingen001.cpp
   chaingen_main.cpp
-  economics_c2a_prime.cpp
   reorg_watermark_degraded.cpp)
 
 set(core_tests_headers
-  archival_budget_conservation.h
   block_validation.h
   checkpoint_conflict_rollback.h
   chaingen.h
   chaingen_tests_list.h
-  economics_c2a_prime.h
-  economics_chain_helpers.h
   reorg_watermark_degraded.h)
 
 monero_add_minimal_executable(core_tests

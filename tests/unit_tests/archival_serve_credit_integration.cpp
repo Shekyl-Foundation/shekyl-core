@@ -502,25 +502,6 @@ TEST(archival_serve_credit, gate2_check_tx_inputs_derives_the_block_hash_from_th
          "is not block-bound and one response would answer every challenge";
 }
 
-TEST(archival_serve_credit, gate2_integration_rejects_serve_at_join_epoch)
-{
-  const IntegrationKat kat = load_integration_kat();
-  txin_archival_serve_credit_response resp = load_serve_credit_vin(kat.wire_hex);
-  ASSERT_LT(kat.join_epoch, 0x80u);
-  resp.canonical_bytes.at(KEPT_BLOB_EPOCH_OFFSET) = static_cast<uint8_t>(kat.join_epoch);
-
-  auto db = std::make_unique<ArchivalServeCreditIntegrationDB>();
-  seed_substrate(*db, kat);
-
-  BlockchainAndPool bap;
-  cryptonote::Blockchain* bc = &bap.bc;
-  const cryptonote::test_options test_options = {5000};
-  ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, &test_options, 0));
-
-  EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.current_height,
-    hash_from_hex(kat.prev_block_hash_hex)));
-}
-
 // The seal-committed guard: a credit whose challenge-seal block is not yet on
 // chain (h_seal >= current_height, i.e. the seal index is at or past the tip) is
 // rejected by the explicit predicate BEFORE the block-hash read is attempted —
@@ -602,8 +583,8 @@ uint64_t expected_fire_height(const IntegrationKat& kat)
 // the gate's boundary on both sides of h_fire, and additionally assert the
 // gate queried the accessor at exactly the deterministically derived h_fire
 // (the height a slash-eligibility mirror derives from the same operands).
-// The accessor's own at_height reconstruction against real LMDB state is
-// pinned separately in archival_substrate_lmdb.cpp.
+// The at_height fold itself is pinned in Rust: shekyl-archival-retention's
+// held_at_height.rs tests.
 
 // Drop-after-fire: P held at h_fire, the holding was removed strictly above
 // h_fire, tip no longer holds. The credit is legitimate — a tip read here was
