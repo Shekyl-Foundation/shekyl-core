@@ -8,6 +8,10 @@
 //! [`Drive`] is the manager's hands. The [`Core`] decides. This driver
 //! performs each [`Action`] and reports what happened, including a publish
 //! the endpoint was not ready for. It keeps no second schedule.
+//!
+//! The Tor connector is not this driver. It reads the route a publish
+//! installs and dials. Questions to Tor stay on the owning control
+//! connection (`TSR-Q9`).
 
 use std::collections::VecDeque;
 use std::net::SocketAddr;
@@ -22,8 +26,8 @@ use shekyl_tor_control_client::binary::{
     discover_and_verify, discover_and_verify_at, TorBinaryError, VerifiedTorBinary,
 };
 use shekyl_tor_control_client::control::{
-    parse_bootstrap_progress, parse_event, parse_socks_listeners, BootstrapState, Command,
-    ControlError, EventReceiver, EventSink,
+    parse_bootstrap_progress, parse_event, parse_socks_listeners, parse_traffic_read,
+    BootstrapState, Command, ControlError, EventReceiver, EventSink,
 };
 use shekyl_tor_control_client::supervisor::{
     held_sentence, input_of, install_sentence, render, Action, Cause, Connectors, Core, Input,
@@ -42,6 +46,9 @@ const REPLY_BOUND: Duration = Duration::from_secs(30);
 const MAX_STREAMS: u16 = 8;
 /// `GETINFO` key for the bootstrap phase. One sample asks this and the listener.
 const BOOTSTRAP_PHASE: &str = "status/bootstrap-phase";
+/// `GETINFO` key for the bytes Tor has read: with the bootstrap phase, it
+/// tells a slow directory mirror from one that is not answering (§5).
+const TRAFFIC_READ: &str = "traffic/read";
 /// `GETINFO` key for the SOCKS listeners.
 const SOCKS_LISTENERS: &str = "net/listeners/socks";
 
@@ -391,23 +398,48 @@ impl Drive {
                 }
                 None
             }
+            // The progress line is news. The core only asks for it when no
+            // cause is set, so this arm does not re-read the posture.
+            Action::SayProgress => {
+                let text = render(&self.core.status());
+                tracing::info!(target: "global", "{text}");
+                None
+            }
             Action::CheckPin => Some(self.pin()),
             Action::Spawn { fresh_directory } => Some(self.spawn(fresh_directory).await),
-            Action::Sample => Some(self.sample().await),
+            Action::Sample => {
+                let mut stop = self.stop.clone();
+                Some(
+                    race_stop(&mut stop, self.sample())
+                        .await
+                        .unwrap_or_else(|shutdown| shutdown),
+                )
+            }
             Action::WatchState => self.watch_state(),
             Action::SetConfAvoidDiskWrites => {
-                if let Some(control) = self.control.as_ref() {
-                    if let Err(error) = control.defer_disk_writes().await {
+                let mut stop = self.stop.clone();
+                let control = self.control.as_ref()?;
+                match race_stop(&mut stop, control.defer_disk_writes()).await {
+                    Err(shutdown) => Some(shutdown),
+                    Ok(Ok(())) => None,
+                    Ok(Err(error)) => {
                         tracing::warn!(
                             target: "global",
                             "leaving Tor writing its state ({error})"
                         );
+                        None
                     }
                 }
-                None
             }
             Action::Publish(route) => Some(self.publish_route(route)),
-            Action::RepublishOnion => Some(self.republish().await),
+            Action::RepublishOnion => {
+                let mut stop = self.stop.clone();
+                Some(
+                    race_stop(&mut stop, self.republish())
+                        .await
+                        .unwrap_or_else(|shutdown| shutdown),
+                )
+            }
             Action::TakeDown => {
                 self.withdraw_route(DownCause::ProcessExited);
                 self.reap().await;
@@ -478,11 +510,30 @@ impl Drive {
                     let _sent = tx.send((gen, death.await)).await;
                 });
                 self.bootstrap = Some(up.watch_bootstrap());
-                if let Err(error) = up.ask(Command::supervisor_events()).await {
-                    tracing::warn!(target: "global", "Tor events were not subscribed ({error})");
-                }
+                // The child is up. The subscription is a control ask, so a
+                // stop drops it. The fork itself has already returned; the
+                // control is stored so shutdown still owns the child.
                 self.control = Some(up);
-                Input::Spawned
+                let mut stop = self.stop.clone();
+                // Stored on the line above. The subscription borrows that
+                // child; a missing one is a broken launch, not a quiet skip.
+                let control = self
+                    .control
+                    .as_ref()
+                    .expect("the child is stored before its event subscription");
+                let subscribed =
+                    race_stop(&mut stop, control.ask(Command::supervisor_events())).await;
+                match subscribed {
+                    Err(shutdown) => shutdown,
+                    Ok(Err(error)) => {
+                        tracing::warn!(
+                            target: "global",
+                            "Tor events were not subscribed ({error})"
+                        );
+                        Input::Spawned
+                    }
+                    Ok(Ok(_)) => Input::Spawned,
+                }
             }
             Err((error, directory)) => {
                 if let Some(directory) = directory {
@@ -504,6 +555,7 @@ impl Drive {
             .ask(Command::GetInfo(vec![
                 BOOTSTRAP_PHASE.to_owned(),
                 SOCKS_LISTENERS.to_owned(),
+                TRAFFIC_READ.to_owned(),
             ]))
             .await;
         let reply = match reply {
@@ -517,6 +569,7 @@ impl Drive {
         Input::DirectorySample {
             progress: parse_bootstrap_progress(&reply),
             socks,
+            read: parse_traffic_read(&reply),
         }
     }
 
@@ -598,10 +651,7 @@ impl Drive {
                 Some(Input::BootstrapComplete)
             }
             BootstrapState::Failed => Some(Input::ControlEnded),
-            BootstrapState::Connecting { progress } => Some(Input::DirectorySample {
-                progress: Some(progress),
-                socks: None,
-            }),
+            BootstrapState::Connecting { progress } => Some(Input::BootstrapNoted { progress }),
         }
     }
 
@@ -645,6 +695,34 @@ fn ends_incarnation(input: &Input) -> bool {
     )
 }
 
+/// Resolves once the daemon is stopping: the flag is set, or its sender is
+/// gone. A stop already signalled resolves at once.
+async fn stopped(stop: &mut watch::Receiver<bool>) {
+    loop {
+        if *stop.borrow_and_update() {
+            return;
+        }
+        if stop.changed().await.is_err() {
+            return;
+        }
+    }
+}
+
+/// Race a control ask against shutdown. A stop already signalled, or one
+/// that arrives while the ask waits, wins: the ask is dropped and the
+/// caller folds [`Input::Shutdown`]. The fork inside spawn is not an ask
+/// and does not come through here.
+async fn race_stop<T>(
+    stop: &mut watch::Receiver<bool>,
+    ask: impl std::future::Future<Output = T>,
+) -> Result<T, Input> {
+    tokio::select! {
+        biased;
+        () = stopped(stop) => Err(Input::Shutdown),
+        value = ask => Ok(value),
+    }
+}
+
 fn input_of_ask(error: &DaemonTorStartError) -> Input {
     match error {
         DaemonTorStartError::Control(ControlError::Timeout) => Input::ReplyLate,
@@ -655,6 +733,43 @@ fn input_of_ask(error: &DaemonTorStartError) -> Input {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A control ask that never answers, the wedged-Tor case, does not hold
+    /// a stop: the stop resolves the race and the driver folds `Shutdown`.
+    /// Dropping the `stopped` arm from [`race_stop`] makes this time out.
+    /// The production asks call that function.
+    #[tokio::test(start_paused = true)]
+    async fn a_stop_interrupts_an_ask_a_wedged_tor_never_answers() {
+        let (tx, rx) = watch::channel(false);
+        let mut stop = rx.clone();
+        let raced =
+            tokio::spawn(
+                async move { race_stop(&mut stop, std::future::pending::<Input>()).await },
+            );
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        tx.send(true).expect("the driver still holds the receiver");
+        let outcome = tokio::time::timeout(Duration::from_secs(1), raced)
+            .await
+            .expect("the stop ended the ask within a second, not the 30 s bound")
+            .expect("the race task ran");
+        assert_eq!(outcome, Err(Input::Shutdown));
+    }
+
+    /// An ask that answers is unaffected, and a stop signalled before the
+    /// ask began still wins (the daemon is already stopping).
+    #[tokio::test]
+    async fn an_answer_passes_through_and_an_earlier_stop_wins() {
+        let (_tx, rx) = watch::channel(false);
+        let mut stop = rx.clone();
+        let answered = race_stop(&mut stop, async { Input::ReplyLate }).await;
+        assert_eq!(answered, Ok(Input::ReplyLate));
+
+        let (tx, rx) = watch::channel(false);
+        tx.send(true).expect("receiver alive");
+        let mut stop = rx.clone();
+        let raced = race_stop(&mut stop, std::future::pending::<Input>()).await;
+        assert_eq!(raced, Err(Input::Shutdown));
+    }
 
     /// An exit reaches the phase with its code. A stop does not. Swapping
     /// the arms fails this.

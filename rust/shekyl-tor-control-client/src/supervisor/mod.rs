@@ -10,6 +10,11 @@
 //! its own: the driver performs each action and reports what happened,
 //! including when a publish could not be performed.
 //!
+//! The Tor connector is not a caller. It reads the route the driver
+//! publishes from [`ManagedRunning`] and dials. Liveness, the progress
+//! line, and the bootstrap poll stay on this side of that seam: a control
+//! question is not a network path (`TSR-Q9`).
+//!
 //! [`ManagedRunning`] is built only on the transition into `Running`.
 
 mod core;
@@ -19,6 +24,6 @@ mod posture;
 pub use core::{Action, Core, Input, ManagedRunning, Policy, Step};
 pub use events::input_of;
 pub use posture::{
-    fixes, held_sentence, install_sentence, own_tx, render, Cause, Connectors, ManagedTorFix,
-    OriginVerdict, OwnTx, Shown, Status, Syncing, TorSetting,
+    fixes, held_sentence, install_sentence, own_tx, render, BootstrapLine, Cause, Connectors,
+    ManagedTorFix, OriginVerdict, OwnTx, Shown, Status, Syncing, TorSetting,
 };
