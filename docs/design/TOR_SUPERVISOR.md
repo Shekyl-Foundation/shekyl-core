@@ -456,7 +456,7 @@ faults in the Tor process, so only those respawn:
 | Service | descriptor upload failing past a bound; a probe that does not complete within the §10 `TSR-M2` bound (60 s) while outbound is usable. One `HS_DESC UPLOADED` round can leave that dial unfinished until the next round (`TSR-Q5`, §4.5). The 2026-10-22 miss returned no SOCKS reply by the bound, and the nonce was never sent | republish on the running Tor (`ADD_ONION` again); escalate to Process only if the control command itself fails |
 | Process | child exit; control EOF or desync; reply past bound; outbound dead past a bound with no external cause standing | respawn |
 | Install | pin fails at spawn, or discovery finds nothing (`TSR-F6`) | no spawn, so the binary is not executed; the daemon starts (the posture table); announce; retry at the cap |
-| Local resource | data directory unwritable or out of space (checked before each spawn); `TOO_MANY_CONNECTIONS` | no spawn (or, for the open-file limit, no respawn); announce; retry at the cap |
+| Local resource | data directory unwritable or out of space (a fresh spawn sweeps leftover per-boot directories, then checks; a directory kept for an in-boot respawn is not swept); `TOO_MANY_CONNECTIONS` | no spawn (or, for the open-file limit, no respawn); announce; retry at the cap |
 
 A stalled bootstrap is not a cause in any class (Rick, 2026-10-19). In the
 pre-flight's 300 cold runs every stall ended on its own, with no problem event
@@ -478,7 +478,9 @@ variant rather than keying on the payload. The backoff starts again from its bas
 been usable for one full cap (Rick, 2026-10-24): tied to the cap rather than a
 new constant, so a crash rate that keeps the backoff pinned without the reset
 still keeps it pinned, and an adversary who can crash Tor gains no faster
-re-roll of the respawn cadence.
+re-roll of the respawn cadence. A cap already served is kept when the facet
+leaves usable before the fault, so a block after that cap still restarts the
+backoff. Time spent blocked does not itself serve the cap.
 
 ### 4.5 The probe
 
@@ -728,9 +730,16 @@ that detail, not variants of `ManagedTorFix`.
 | Tor exited or wedged | exit, EOF, reply bound | Restarting | none unless repeated; then the count and the last exit, and where the previous log is | none | respawn |
 | Tor install defect | the pin gate at spawn | Restarting (held) | the file that failed the pin. The binary is not executed | `RestoreManaged`, plus the fixes the posture table offers | retry at the cap; the message repeats once per cap |
 | No Tor installed | discovery finding nothing | Restarting (held) | none was found. `tor-file` may name a bundle that passes the pin | `RestoreManaged`, plus the fixes the posture table offers | retry at the cap; the message repeats once per cap |
-| Data directory unusable | the pre-spawn check | Restarting (held) | the path is not writable, or out of space: the path, the free space and what Tor needs (its write headroom, 32 MiB from §10's microdescriptor set, plus the directory cache when the spawn takes a fresh directory) | none | retry at the cap |
+| Data directory unusable | the pre-spawn check | Restarting (held) | the path is not writable, or out of space: the path, the free space and what Tor needs (its write headroom, 32 MiB from §10's microdescriptor set, plus the bytes the directory-cache copy would write when the spawn takes a fresh directory) | none | retry at the cap |
 | Open-file limit reached | `TOO_MANY_CONNECTIONS` | Degraded | the limit and the count; raise it, in the platform's terms | none | wait; retry at the cap |
 | Tor version flagged | `DANGEROUS_VERSION` | announcement | upgrade Shekyl when a release re-pins Tor (TB-10), never Tor itself | none | none |
+
+A fresh spawn sweeps leftover per-boot directories before that space check.
+A directory kept for an in-boot respawn wears the leftover name, so the sweep
+runs only after that directory has been dropped. The cache figure is the bytes
+the copy would write: the four public names, each a regular file within its
+limit. A staging partial is already on the disk the probe reads. A file over
+its limit is refused whole, so it adds nothing.
 
 Rule 81 applies to every message: the words name what the operator sees and
 can do, not Tor's vocabulary. While the managed Tor is not running, the
