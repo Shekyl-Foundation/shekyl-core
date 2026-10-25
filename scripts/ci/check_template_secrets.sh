@@ -25,10 +25,23 @@
 #      expects them (rule 47: a moved subject fails loudly, never passes
 #      on zero hits);
 #   4. shekyl-ffi, which builds the C++ template's coinbase extra, names
-#      the conforming value only in its coinbase-extra module — the
-#      test-support writer `shekyl_test_coinbase_extra` and that module's
-#      tests — its production writer commits through commit_and_discard,
-#      and no C++ under src/ calls the test writer.
+#      the conforming value only in its coinbase-extra module, and there
+#      only in the module's `use` list, the test-support writer
+#      `shekyl_test_coinbase_extra` (its doc and its body) and the module's
+#      `#[cfg(test)]` tests through that module's closing brace. A
+#      production helper after the tests is not exempt. The production
+#      writer commits through commit_and_discard, and no C++ under src/
+#      calls the test writer. Two fixtures prove the brace before the real
+#      file is judged: a helper before the test module and one after it
+#      are reported, and a use inside the module is not.
+#
+# The test writer is an unconditional export, so it is in the archive the
+# C++ tests link, which is the archive the non-daemon binaries link too
+# (`cfg(test)` never reaches a C++ test's link: cmake builds the archive
+# with `cargo build -p shekyl-ffi`). Keeping it out of shipped binaries is
+# FOLLOWUPS F-7's structural gate (docs/design/F7_TEST_ONLY_FFI_EXPORTS.md);
+# until then this gate holds the value to the one function, and src/ to
+# no caller.
 
 set -euo pipefail
 
@@ -117,10 +130,123 @@ for needle in 'CONFORMING_DRAW_COMMITMENT' 'counter\.to_le_bytes\(\)'; do
 done
 
 # -- 4. shekyl-ffi: the conforming value only in the test-support writer ----
+# Lines that name the value outside the use list, the test writer and the
+# test module. The module's exemption ends at its first column-0 `}`:
+# rustfmt indents every brace inside the module, so that line is the
+# module's close. A column-0 brace earlier fails closed (the real constant
+# in the tests would be reported). `NO_TEST_WRITER`, `NO_TEST_MODULE`,
+# `NO_TEST_END` and `NOT_IN_TEST_WRITER` mean the subject moved.
+commitment_outside() {
+  awk '
+    { line[NR] = $0 }
+    END {
+      for (i = 1; i <= NR; i++)
+        if (line[i] ~ /^pub unsafe extern "C" fn shekyl_test_coinbase_extra\(/) fs = i
+      if (!fs) { print "NO_TEST_WRITER"; exit }
+      ds = fs
+      while (ds > 1 && (line[ds - 1] ~ /^\/\/\// || line[ds - 1] ~ /^#\[/)) ds--
+      for (i = fs; i <= NR; i++) if (line[i] ~ /^}/) { fe = i; break }
+      for (i = 2; i <= NR; i++)
+        if (line[i] ~ /^mod tests \{/ && line[i - 1] ~ /^#\[cfg\(test\)\]/) { ts = i - 1; break }
+      if (!ts) { print "NO_TEST_MODULE"; exit }
+      te = 0
+      for (i = ts + 1; i <= NR; i++) if (line[i] ~ /^}/) { te = i; break }
+      if (!te) { print "NO_TEST_END"; exit }
+      inside = 0; in_use = 0
+      for (i = 1; i <= NR; i++) {
+        if (line[i] ~ /^use /) in_use = 1
+        u = in_use
+        if (in_use && line[i] ~ /;[[:space:]]*$/) in_use = 0
+        if (line[i] !~ /CONFORMING_DRAW_COMMITMENT/) continue
+        if (i >= fs && i <= fe) inside++
+        if (u || (i >= ds && i <= fe) || (i >= ts && i <= te)) continue
+        print i ": " line[i]
+      }
+      if (!inside) print "NOT_IN_TEST_WRITER"
+    }' "$1"
+}
+
+# The bound, proved on fixtures before the real file is judged. Each
+# fixture has the test writer and a `fn uses` inside the test module; one
+# names the value from a production helper before that module and one
+# after it. The files are made here, not in a command substitution: a
+# substitution is a subshell and would drop them from the cleanup list.
+write_bound_fixture() {
+  local file="$1" where="$2"
+  if [[ "$where" == before ]]; then
+    cat >"$file" <<'EOF'
+pub unsafe extern "C" fn shekyl_test_coinbase_extra() {
+    let _ = CONFORMING_DRAW_COMMITMENT;
+}
+
+fn production_helper() { let _ = CONFORMING_DRAW_COMMITMENT; }
+
+#[cfg(test)]
+mod tests {
+    fn uses() { let _ = CONFORMING_DRAW_COMMITMENT; }
+}
+EOF
+  else
+    cat >"$file" <<'EOF'
+pub unsafe extern "C" fn shekyl_test_coinbase_extra() {
+    let _ = CONFORMING_DRAW_COMMITMENT;
+}
+
+#[cfg(test)]
+mod tests {
+    fn uses() { let _ = CONFORMING_DRAW_COMMITMENT; }
+}
+
+fn production_helper() { let _ = CONFORMING_DRAW_COMMITMENT; }
+EOF
+  fi
+}
+
+# A decoy must be reported, and nothing the bound keeps (the in-module
+# use, or a missing subject) may be.
+expect_decoy() {
+  local label="$1" out="$2"
+  if [[ "$out" != *production_helper* ]]; then
+    echo "FAIL: ${label} did not report the production helper:" >&2
+    echo "$out" >&2
+    FAIL=1
+  fi
+  if [[ "$out" == *'fn uses'* || "$out" == *NO_TEST_* || "$out" == *NOT_IN_TEST_WRITER* ]]; then
+    echo "FAIL: ${label} reported a line the test-module bound must keep:" >&2
+    echo "$out" >&2
+    FAIL=1
+  fi
+}
+
+BEFORE_FIXTURE="$(mktemp)"
+AFTER_FIXTURE="$(mktemp)"
+cleanup_fixtures() {
+  rm -f "$BEFORE_FIXTURE" "$AFTER_FIXTURE"
+}
+trap cleanup_fixtures EXIT
+write_bound_fixture "$BEFORE_FIXTURE" before
+write_bound_fixture "$AFTER_FIXTURE" after
+
+expect_decoy "a helper before the test module" "$(commitment_outside "$BEFORE_FIXTURE")"
+expect_decoy "a helper after the test module" "$(commitment_outside "$AFTER_FIXTURE")"
+
 ffi_hits="$(scan -l 'CONFORMING_DRAW_COMMITMENT' "${TEST_GLOBS[@]}" "$FFI_DIR")"
 if [[ -n "$ffi_hits" && "$ffi_hits" != "$FFI_EXTRA" ]]; then
   echo "FAIL: shekyl-ffi names CONFORMING_DRAW_COMMITMENT outside ${FFI_EXTRA}:" >&2
   echo "$ffi_hits" >&2
+  FAIL=1
+fi
+# Within the module: the use list, the test writer, the tests through the
+# module's closing brace. Anything else, the production writer included,
+# is red. The function and the test module must be found (rule 47), and
+# the value must still be in the function, or the subject moved.
+outside="$(commitment_outside "$FFI_EXTRA")"
+if [[ -n "$outside" ]]; then
+  echo "FAIL: ${FFI_EXTRA} names CONFORMING_DRAW_COMMITMENT outside the test writer and its tests:" >&2
+  echo "$outside" >&2
+  if [[ "$outside" == *NO_TEST_* || "$outside" == *NOT_IN_TEST_WRITER* ]]; then
+    echo "  The test writer or its tests moved; update this gate." >&2
+  fi
   FAIL=1
 fi
 for needle in 'fn shekyl_test_coinbase_extra' 'commit_and_discard\(\)\.ok\(\)'; do

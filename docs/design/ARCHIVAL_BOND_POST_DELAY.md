@@ -390,7 +390,7 @@ constant and its golden vector.
    observer.**
    - **Own-origin broadcast over Tor is designed and default-on.** The
      default P2P posture runs clearnet and Tor together
-     (`INPUT_GRAMMAR.md:363`, IG-Q3). A node's own transactions ride a
+     (`INPUT_GRAMMAR.md:364`, IG-Q3). A node's own transactions ride a
      stem slot drawn from its hidden-address (Tor) outbound sessions when
      it has any (`TOR_COVER_POSTURE.md:53-66`; shipped in PR-1, #1018). The
      first stem peer receives the transaction over Tor, so the

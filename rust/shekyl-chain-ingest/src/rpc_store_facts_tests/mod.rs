@@ -30,7 +30,7 @@ use shekyl_chain_store::store::{ChainStore, SnapshotView};
 use shekyl_daemon_rpc::chain_facts::{BlockLookup, ChainFacts, FactsFault};
 use shekyl_daemon_rpc::info::{get_info, Disclosure};
 use shekyl_daemon_rpc::info_facts::{
-    InfoPeersFacts, PeerFacts, PoolCounts, PoolScope, SessionCounts,
+    InfoPeersFacts, PeerFacts, PoolCounts, PoolScope, PoolState, SessionCounts,
 };
 use shekyl_daemon_rpc::methods::{
     get_block, get_block_count, get_block_hash, get_block_header_by_hash,
@@ -96,14 +96,14 @@ impl NodeFacts for TestNode {
     fn sync(&self) -> Result<SyncFacts, FactsFault> {
         Ok(self.sync)
     }
-    fn pool_counts(&self, scope: PoolScope) -> Result<PoolCounts, FactsFault> {
-        Ok(match scope {
+    fn pool_counts(&self, scope: PoolScope) -> Result<PoolState<PoolCounts>, FactsFault> {
+        Ok(PoolState::Live(match scope {
             PoolScope::Broadcast => PoolCounts {
                 broadcast: self.pool.broadcast,
                 unbroadcast: None,
             },
             PoolScope::WithUnbroadcast => self.pool,
-        })
+        }))
     }
     fn pool_spends(&self, key_images: &[shekyl_types::KeyImage]) -> Result<Vec<bool>, FactsFault> {
         Ok(key_images
@@ -115,19 +115,20 @@ impl NodeFacts for TestNode {
         &self,
         ids: &[shekyl_types::TxHash],
         _scope: PoolScope,
-    ) -> Result<Vec<Option<shekyl_daemon_rpc::store_facts::PoolBody>>, FactsFault> {
-        Ok(ids
-            .iter()
-            .map(|id| {
-                self.pool_bodies
-                    .iter()
-                    .find(|tx| tx.txid_parts().hash == *id)
-                    .map(|tx| shekyl_daemon_rpc::store_facts::PoolBody {
-                        tx: tx.serialize(),
-                        shown: true,
-                    })
-            })
-            .collect())
+    ) -> Result<PoolState<Vec<Option<shekyl_daemon_rpc::store_facts::PoolBody>>>, FactsFault> {
+        Ok(PoolState::Live(
+            ids.iter()
+                .map(|id| {
+                    self.pool_bodies
+                        .iter()
+                        .find(|tx| tx.txid_parts().hash == *id)
+                        .map(|tx| shekyl_daemon_rpc::store_facts::PoolBody {
+                            tx: tx.serialize(),
+                            shown: true,
+                        })
+                })
+                .collect(),
+        ))
     }
     fn peers(&self) -> Result<PeerFacts, FactsFault> {
         // An online node has its peer lists; `Offline` belongs to a node
@@ -532,7 +533,8 @@ async fn get_info_reads_the_chain_from_the_store_and_the_rest_from_the_node() {
             "the limit is twice the effective median (CEN-G6b)"
         );
         assert_eq!(
-            info.pool.tx_pool_size, 3,
+            info.pool.tx_pool_size(),
+            Some(3),
             "the pool's broadcast count is the node's"
         );
         match &info.node {

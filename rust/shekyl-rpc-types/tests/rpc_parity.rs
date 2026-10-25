@@ -554,6 +554,7 @@ fn get_transactions_chain_and_pool_matches_the_oracle() {
         status: RpcStatus::ok(),
         txs: vec![mined, pooled],
         missed_tx: Vec::new(),
+        unavailable_tx: Vec::new(),
     };
     assert_parity(
         include_str!("vectors/rpc/get_transactions_chain_and_pool_v3.json"),
@@ -585,6 +586,7 @@ fn get_transactions_split_form_matches_the_oracle() {
             },
         }],
         missed_tx: Vec::new(),
+        unavailable_tx: Vec::new(),
     };
     assert_parity(
         include_str!("vectors/rpc/get_transactions_split_form_v3.json"),
@@ -615,6 +617,7 @@ fn get_transactions_decoded_matches_the_oracle() {
             },
         }],
         missed_tx: Vec::new(),
+        unavailable_tx: Vec::new(),
     };
     assert_parity(
         include_str!("vectors/rpc/get_transactions_decoded_v3.json"),
@@ -628,6 +631,7 @@ fn get_transactions_missed_matches_the_oracle() {
         status: RpcStatus::ok(),
         txs: Vec::new(),
         missed_tx: vec![tagged_hash(51), tagged_hash(52)],
+        unavailable_tx: Vec::new(),
     };
     assert_parity(
         include_str!("vectors/rpc/get_transactions_missed_v2.json"),
@@ -641,6 +645,7 @@ fn get_transactions_refusal_matches_the_oracle() {
         status: RpcStatus("Too many transactions requested in restricted mode".to_owned()),
         txs: Vec::new(),
         missed_tx: Vec::new(),
+        unavailable_tx: Vec::new(),
     };
     assert_parity(
         include_str!("vectors/rpc/get_transactions_refusal_v2.json"),
@@ -802,7 +807,7 @@ fn request_sequences_are_omitted_when_empty_and_present_when_not() {
 fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // One row per bump, oldest first. Each is (the vector before the bump,
     // the vector after it).
-    let links: [(&str, &str); 36] = [
+    let links: [(&str, &str); 37] = [
         (
             include_str!("vectors/rpc/get_version_synced_v1.json"),
             include_str!("vectors/rpc/get_version_synced_v2.json"),
@@ -947,6 +952,10 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
             include_str!("vectors/rpc/get_version_synced_v36.json"),
             include_str!("vectors/rpc/get_version_synced_v37.json"),
         ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v37.json"),
+            include_str!("vectors/rpc/get_version_synced_v38.json"),
+        ),
     ];
 
     let version_of = |raw: &str| -> u64 {
@@ -965,7 +974,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // The trailing comment names the minor the *newer* vector carries.
     // `v1` is 3.24, so link `i`'s newer minor is `25 + i`. The comment sits
     // on its element, so it cannot attach to the neighbor.
-    const ADDED_AT_LINK: [&[&str]; 36] = [
+    const ADDED_AT_LINK: [&[&str]; 37] = [
         &[],                                                        // 3.25
         &[],                                                        // 3.26
         &[],                                                        // 3.27
@@ -1002,6 +1011,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.58 (option_set / option_show, the JSON-RPC error `data` member and the four runtime endpoints' deletion, DAEMON_CONFIG_CUTOVER §2.7; get_version gains nothing)
         &[], // 3.59 (the connection rows drop support_flags with the P2P word, PWD-T7; get_version gains nothing)
         &[], // 3.60 (the claim-source bond field is is_support_complete_tree; get_version gains nothing)
+        &[], // 3.61 (a retired pool: get_info's pool_retired and null counts, get_transactions' unavailable_tx; get_version gains nothing)
     ];
     assert_eq!(
         ADDED_AT_LINK.len(),
@@ -1013,7 +1023,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // `ADDED_AT_LINK`, held to the same standard: a member leaves only where
     // its link names it. Indexed like `ADDED_AT_LINK`; every link but the
     // 3.44 one retires nothing.
-    const REMOVED_AT_LINK: [&[&str]; 36] = [
+    const REMOVED_AT_LINK: [&[&str]; 37] = [
         &[],             // 3.25
         &[],             // 3.26
         &[],             // 3.27
@@ -1050,6 +1060,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.58 (the retired endpoints are not get_version's; it retires nothing)
         &[], // 3.59 (support_flags leaves the connection rows; get_version retires nothing)
         &[], // 3.60 (the renamed bond field is not get_version's; it retires nothing)
+        &[], // 3.61 (the retired pool's keys are not get_version's; it retires nothing)
     ];
     assert_eq!(
         REMOVED_AT_LINK.len(),
@@ -2381,7 +2392,7 @@ mod get_info {
                 staker_emission_share_effective: 91_549,
             },
             // Twelve entries held: nine broadcast, three not yet.
-            pool: InfoPool { tx_pool_size: 9 },
+            pool: InfoPool::Live { tx_pool_size: 9 },
             node: Hidden::Shown(InfoStatus {
                 start_time: 1_699_990_000,
                 free_space: 123_456_789_012,
@@ -2403,7 +2414,7 @@ mod get_info {
                 grey_peerlist_size: 2500,
             })),
             host: Hidden::Shown(InfoHost {
-                tx_pool_unbroadcast_count: 3,
+                tx_pool_unbroadcast_count: Some(3),
             }),
             restricted: false,
         }
@@ -2665,7 +2676,7 @@ mod get_info {
         assert_eq!(
             shown.host,
             Hidden::Shown(InfoHost {
-                tx_pool_unbroadcast_count: 3
+                tx_pool_unbroadcast_count: Some(3)
             })
         );
 
@@ -2673,7 +2684,7 @@ mod get_info {
         assert_eq!(
             decode(&doc).expect("zero decodes").host,
             Hidden::Shown(InfoHost {
-                tx_pool_unbroadcast_count: 0
+                tx_pool_unbroadcast_count: Some(0)
             }),
             "zero entries not yet broadcast is an answer"
         );
@@ -2684,6 +2695,73 @@ mod get_info {
         let withheld = decode(&doc).expect("a reply without the host part decodes");
         assert_eq!(withheld.host, Hidden::Withheld);
         assert_eq!(serde_json::to_value(&withheld).unwrap(), doc);
+    }
+
+    /// **A retired pool is `pool_retired: true` with its counts `null`**,
+    /// and the decoder refuses any mix: a number beside `pool_retired`, a
+    /// `null` without it, or a host count that disagrees with the pool. The
+    /// host part's `null` is shown-with-no-answer, distinct from the absent
+    /// key that withholds the part.
+    #[test]
+    fn a_retired_pool_is_null_counts_and_the_decoder_refuses_a_mix() {
+        let live = parsed(include_str!("vectors/rpc/get_info_synced_v8.json"));
+        assert!(
+            live.get("pool_retired").is_none(),
+            "a live reply carries no `pool_retired`"
+        );
+
+        let mut retired = live.clone();
+        retired["pool_retired"] = true.into();
+        retired["tx_pool_size"] = serde_json::Value::Null;
+        retired["tx_pool_unbroadcast_count"] = serde_json::Value::Null;
+        let reply = decode(&retired).expect("a retired pool's reply decodes");
+        assert_eq!(reply.pool, InfoPool::Retired);
+        assert_eq!(
+            reply.host,
+            Hidden::Shown(InfoHost {
+                tx_pool_unbroadcast_count: None
+            })
+        );
+        assert_eq!(serde_json::to_value(&reply).unwrap(), retired);
+
+        let mut withheld = retired.clone();
+        withheld
+            .as_object_mut()
+            .unwrap()
+            .remove("tx_pool_unbroadcast_count");
+        assert_eq!(
+            decode(&withheld)
+                .expect("a retired reply without the host part")
+                .host,
+            Hidden::Withheld
+        );
+
+        let mixes: [(&str, serde_json::Value, serde_json::Value); 3] = [
+            ("tx_pool_size", true.into(), 4.into()),
+            ("tx_pool_size", false.into(), serde_json::Value::Null),
+            ("tx_pool_unbroadcast_count", true.into(), 3.into()),
+        ];
+        for (key, flag, value) in mixes {
+            let mut doc = retired.clone();
+            doc["pool_retired"] = flag.clone();
+            doc[key] = value.clone();
+            if key == "tx_pool_unbroadcast_count" {
+                doc["tx_pool_size"] = serde_json::Value::Null;
+            }
+            let refusal = decode(&doc).expect_err("a mix must not decode");
+            assert!(
+                refusal.contains(key) && refusal.contains("pool_retired"),
+                "{key}={value} beside pool_retired={flag}: got {refusal:?}"
+            );
+        }
+        // A live pool with a null host count is a mix too.
+        let mut doc = live.clone();
+        doc["tx_pool_unbroadcast_count"] = serde_json::Value::Null;
+        let refusal = decode(&doc).expect_err("a live pool's host count is a number");
+        assert!(
+            refusal.contains("tx_pool_unbroadcast_count"),
+            "got {refusal:?}"
+        );
     }
 
     /// The crate's refusal of unknown keys holds for this reply too, though

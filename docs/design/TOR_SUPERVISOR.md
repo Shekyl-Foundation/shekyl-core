@@ -153,7 +153,7 @@ says which and why.
 
 | Fact | Anchor |
 | --- | --- |
-| The supervisor starts with the daemon and step 8 does not wait for Tor. A process fault respawns into the kept data directory; the onion seed is held for the boot. There is no bootstrap deadline | `rust/shekyl-daemon/src/run.rs:338`; `rust/shekyl-daemon/src/tor.rs:68`; `rust/shekyl-tor-control-client/src/supervisor/core/mod.rs:87` |
+| The supervisor starts with the daemon and step 8 does not wait for Tor. A process fault respawns into the kept data directory; the onion seed is held for the boot. There is no bootstrap deadline | `rust/shekyl-daemon/src/run.rs:333`; `rust/shekyl-daemon/src/tor.rs:68`; `rust/shekyl-tor-control-client/src/supervisor/core/mod.rs:87` |
 | A managed Tor's death takes that incarnation's route down and the supervisor respawns. A shutdown takes an installed route down and does not announce. An operator's Tor is not watched here | `rust/shekyl-ffi/src/zone_ffi.rs` `publish_tor_down`; `rust/shekyl-daemon/src/tor.rs` |
 | The supervisor sends one `SETEVENTS` and reads the parsed events. Bootstrap readiness is still the actor's `GETINFO` poll | `rust/shekyl-tor-control-client/src/control/events.rs:59`; `rust/shekyl-daemon/src/tor.rs` |
 | The event sink holds `EVENT_QUEUE_EVENTS` (256); an event past it is dropped and counted, and the read loop never waits (`TSR-F2`) | `rust/shekyl-tor-control-client/src/control/actor.rs:273` |
@@ -386,7 +386,7 @@ here.
 | Input | Source | Effect |
 | --- | --- | --- |
 | child exited | a wait on Tor's process: the reap on Unix, the process handle on Windows (`TSR-F16`) | process fault |
-| control connection EOF, desync, or a reply past the reply bound | the control actor | process fault (a wedged Tor is a dead Tor) |
+| control connection EOF, desync, or a reply past the reply bound | the control actor; while Running, a liveness sample every 30 s (provisional, `Policy::alive_every`) gives the bound a question to time out on, since a wedged Tor sends no event and closes nothing | process fault (a wedged Tor is a dead Tor) |
 | `BOOTSTRAP PROGRESS=` | `STATUS_CLIENT` | progress: the phase and when it was reached, which §5 shows; never a fault |
 | `BOOTSTRAP` with `WARNING`/`REASON` and `RECOMMENDATION=warn` | `STATUS_CLIENT` | named external cause (outbound blocked and kin). Tor sends `warn` from the tenth problem at a phase, so a few refused connections at startup raise nothing |
 | `ENOUGH_DIR_INFO` / `NOT_ENOUGH_DIR_INFO` | `STATUS_CLIENT` | outbound facet cause |
@@ -658,6 +658,31 @@ not changed in this round. Where both need the same arithmetic (backoff, the
 failure classes), that code lives in `shekyl-tor-control-client`, which both
 already name; PWD-E9 forbids sharing an instance, not a library.
 
+One 30 s deadline (provisional, `Policy::alive_every`) does two jobs, and
+they are different actions. While Running it is `Action::Sample`: one
+`GETINFO` on the owning control connection. With the driver's 30 s reply
+bound, a wedged Tor is a process fault within about a minute. A command
+already in flight, such as `SETCONF AvoidDiskWrites=1`, holds the queue for
+its own bound before that sample starts. While bootstrapping it is
+`Action::SayProgress`, logged as news. It is not `Action::Announce`. A named
+cause keeps the cadence of its own events, and an origin-hold stays a
+posture warning. The line names the percent, how long that percent has held,
+and the bytes Tor read since the previous mark. The span is the time from
+that mark to the moment the line is said: the deadline when the driver is
+free, and longer when a control ask held the driver. `traffic/read` rides
+the directory sample (`sample_every`). The actor's bootstrap poll, every
+500 ms, is `Input::BootstrapNoted`: the percent moves, and the sample
+deadline does not. A notice that reset the sample would say "Nothing
+arrived" through a download the sample never counted. Every ask goes over
+the owning control connection only. The Tor connector reads the published
+route and is not on this path (`TSR-Q9`).
+
+A stop that arrives while a control ask waits drops the ask and folds
+shutdown. The asks are the directory sample, the `SETCONF`, an onion
+republish, and the `SETEVENTS` subscription once the child is up. The fork
+itself is not dropped. `SHUTDOWN_GRACE` (5 s, then the kill) still bounds
+the teardown. The 2026-10-23 run stopped in 5.2 s with Tor frozen.
+
 ### 4.12 C++
 
 Nothing is added to C++. The probe reuses the existing self-detection call. The
@@ -731,6 +756,30 @@ gray list is unchanged by the outage**. TB-11's launch test is
 are the supervisor's acceptance tests (`TSR-F15`). The respawn case runs in
 the Windows CI job beside the boot-and-stop smoke test (#1072), and in
 `tor-pin-verify`'s macOS entries.
+
+**Linux run, 2026-10-23** (the development workstation, `shekyld` from `dev`
+`34397ac08` with the pinned bundle beside it, testnet, a managed Tor):
+
+- **Cold start:** Tor bootstrapped in 314 s, past the old 300 s deadline, and
+  the route and onion were published within a second of 100 %.
+- **Kill the Tor child:** route withdrawn at once, Tor respawned with its
+  directory kept, the route back and the same onion republished 5 s after
+  the kill.
+- **Wedged Tor:** undetected for five minutes. In steady Running nothing asked
+  Tor anything, so the reply bound never armed. The liveness sample (§4.11)
+  is the fix; with it, the route was withdrawn 70 s after `SIGSTOP` (the pending
+  `SETCONF` held the queue for its own bound), and Tor respawned with the
+  same onion 3 s later.
+- **Daemon stop:** one stop path, Tor torn down 0.33 s after `SIGTERM`, no
+  orphan, the per-boot directory swept, the directory cache saved.
+- **Seeded start:** the next boot had Tor up 4.1 s after start, with a new
+  per-boot onion.
+- **Seen, not a case:** during the five-minute cold bootstrap the daemon's
+  log said only that the dialer waits; nothing named Tor's progress. The
+  progress line (§4.11) fixes it.
+- **Stop while Tor is frozen,** with the fix: `SIGTERM` six seconds into a
+  liveness sample's wait stopped the daemon 5.2 s later (the teardown's
+  grace), with no fault recovery first.
 
 | Case | Expected | Apparatus |
 | --- | --- | --- |
@@ -902,7 +951,7 @@ included: p50 3.89 s, max 4.08 s. The cold seed for that run bootstrapped in
    second death signal. **Implemented** (#1091).
 3. The supervisor core (sans-IO) and its timing-engine driver; the pin gate per
    spawn; the respawn routine per the `TSR-Q1`/`TSR-Q2` rulings. **Implemented.**
-   Step 8 does not wait for Tor (`rust/shekyl-daemon/src/run.rs:338`), and the
+   Step 8 does not wait for Tor (`rust/shekyl-daemon/src/run.rs:333`), and the
    300 s bootstrap deadline is gone. A managed route exists only as
    `ManagedRunning`, built on the transition into `Running`
    (`rust/shekyl-tor-control-client/src/supervisor/core/mod.rs:87`). The public
@@ -929,7 +978,11 @@ included: p50 3.89 s, max 4.08 s. The cold seed for that run bootstrapped in
 6. Acceptance of the supervisor. The C++ deletions this increment used to
    sequence after acceptance are already cut (§9; Rick, 2026-10-17): the four
    `shekyl_daemon_tor_*` exports, their `shekyl_ffi.h` declarations,
-   `daemon_tor_ffi.rs` and the blocking facade. Acceptance remains open.
+   `daemon_tor_ffi.rs` and the blocking facade. **Linux, 2026-10-23 (§7):**
+   cold start, kill, wedge (after the liveness-sample fix), stop and seeded
+   start pass. Open: outbound blocked, disk full, crash loop, binary
+   replaced, slow link, clock skew, suspend, Tor down at start, and the
+   floor-device soak.
 
 ## 13. Review denominator
 

@@ -525,3 +525,56 @@ fn stopping_the_miner_from_a_task_leaves_the_node_running() {
     );
     node.stop();
 }
+
+/// After `pop_blocks`, `generateblocks(1)` on a lone node completes: the
+/// pop's reconcile leaves the pool judged at the new tip, so the next
+/// template posts and the miner can move the tip (the landing review of
+/// #1165, N3).
+#[test]
+fn generateblocks_after_pop_blocks_completes_on_a_lone_node() {
+    use shekyl_daemon_rpc::mining_methods::{admit_armed, codes, generateblocks, pop_blocks};
+    let generate = shekyl_rpc_types::methods::json_rpc("generateblocks").expect("a row");
+    let pop = shekyl_rpc_types::methods::rest_path("/pop_blocks").expect("a row");
+    let dir = tempfile::tempdir().expect("temp");
+    let node = open_posted(dir.path(), &["--dev-rpc"]);
+    let handles = node.handles();
+    let run = |count| {
+        a_runtime().block_on(async {
+            tokio::time::timeout(
+                Duration::from_secs(120),
+                generateblocks(
+                    &handles.mining,
+                    &*handles.door,
+                    &*handles.chain,
+                    admit_armed(generate, true).expect("armed"),
+                    shekyl_rpc_types::mining::GenerateBlocksRequest { count },
+                ),
+            )
+            .await
+        })
+    };
+    let first = run(2);
+    if let Ok(Err(refused)) = &first {
+        if refused.diagnostic.code == codes::ONE_PERMIT {
+            node.stop();
+            return;
+        }
+    }
+    let popped = a_runtime().block_on(pop_blocks(
+        &*handles.door,
+        admit_armed(pop, true).expect("armed"),
+        shekyl_rpc_types::mining::PopBlocksRequest { nblocks: 1 },
+    ));
+    let second = run(1);
+    let height = handles
+        .chain
+        .chain_tip()
+        .map(|tip| tip.chain_height.to_raw());
+    node.stop();
+    first.expect("the first call answered").expect("two blocks");
+    assert_eq!(popped.expect("one popped").height, 2);
+    second
+        .expect("generateblocks after a pop answered within its deadline")
+        .expect("one block");
+    assert_eq!(height.expect("tip"), 3);
+}

@@ -164,6 +164,110 @@ pub struct Syncing {
     pub tor: bool,
 }
 
+/// How a bootstrap is going, as of the last progress line (`TOR_SUPERVISOR.md`
+/// §5, "Waiting on the Tor directory"): how long the percent has held, and
+/// how much Tor read in the window. Bytes moving with the percent held is a
+/// slow directory mirror; nothing moving is one that is not answering.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BootstrapLine {
+    /// How long the percent has been unchanged.
+    pub held_for: std::time::Duration,
+    /// Bytes Tor read across [`Self::window`]. `None` when no sample in that
+    /// span reported a count: unknown, never zero.
+    pub received: Option<u64>,
+    /// The span [`Self::received`] covers, from the byte mark to the moment
+    /// this line was said. Not the policy interval: a control ask that held
+    /// the driver makes the span longer than the deadline.
+    pub window: std::time::Duration,
+}
+
+/// The progress line's evidence. The percent, when it last moved, and the
+/// byte mark the next line measures from.
+///
+/// The supervisor owns one of these per incarnation. The Tor connector never
+/// sees it: the line is said from the control connection's samples
+/// (`TSR-Q9`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProgressWindow {
+    percent: u8,
+    /// When `percent` last changed, in the caller's clock.
+    progress_at: u64,
+    /// When the current byte window opened.
+    opened_at: u64,
+    /// Latest `traffic/read` this incarnation.
+    latest: Option<u64>,
+    /// `traffic/read` at `opened_at`.
+    baseline: Option<u64>,
+    line: Option<BootstrapLine>,
+}
+
+impl ProgressWindow {
+    /// A new incarnation. The percent is 0 and no byte count has been seen.
+    #[must_use]
+    pub const fn start(now: u64) -> Self {
+        Self {
+            percent: 0,
+            progress_at: now,
+            opened_at: now,
+            latest: None,
+            baseline: None,
+            line: None,
+        }
+    }
+
+    /// The last percent a sample or a bootstrap notice reported.
+    #[must_use]
+    pub const fn percent(self) -> u8 {
+        self.percent
+    }
+
+    /// The last line [`Self::speak`] produced.
+    #[must_use]
+    pub const fn line(self) -> Option<BootstrapLine> {
+        self.line
+    }
+
+    /// The percent moved, or was confirmed. A confirmation does not reset
+    /// how long the percent has held.
+    pub fn note_percent(&mut self, percent: u8, now: u64) {
+        if percent != self.percent {
+            self.progress_at = now;
+        }
+        self.percent = percent;
+    }
+
+    /// A directory sample reported `traffic/read`. `None` leaves the marks
+    /// where they are: a missing count is not a zero, and it is not a new
+    /// window. The first count opens the window at `now`.
+    pub fn note_read(&mut self, read: Option<u64>, now: u64) {
+        let Some(bytes) = read else {
+            return;
+        };
+        self.latest = Some(bytes);
+        if self.baseline.is_none() {
+            self.baseline = Some(bytes);
+            self.opened_at = now;
+        }
+    }
+
+    /// Say the line as of `now`. `received` and `window` are the same span:
+    /// from the open mark to `now`. The next line measures from here.
+    /// A count that moved backwards saturates to nothing rather than wrapping.
+    pub fn speak(&mut self, now: u64) {
+        let received = match (self.latest, self.baseline) {
+            (Some(read), Some(then)) => Some(read.saturating_sub(then)),
+            _ => None,
+        };
+        self.line = Some(BootstrapLine {
+            held_for: std::time::Duration::from_nanos(now.saturating_sub(self.progress_at)),
+            received,
+            window: std::time::Duration::from_nanos(now.saturating_sub(self.opened_at)),
+        });
+        self.baseline = self.latest;
+        self.opened_at = now;
+    }
+}
+
 /// One typed read of the supervisor (`TSR-Q12`). No message text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Status {
@@ -187,6 +291,9 @@ pub struct Status {
     pub fixes: Vec<ManagedTorFix>,
     /// The last bootstrap percent. Telemetry for the posture line.
     pub progress: u8,
+    /// The bootstrap's progress line. Only while bootstrapping, once the
+    /// first window has passed.
+    pub bootstrap: Option<BootstrapLine>,
 }
 
 /// `OwnTx` from the relay's hop-0 verdict and the connector settings.
@@ -229,6 +336,34 @@ fn install_cause(cause: &Cause) -> bool {
     )
 }
 
+/// The words for an install cause: a missing bundle, a refused pin, or no
+/// managed Tor on this platform.
+///
+/// [`render`] and the daemon's pin warning both speak these. `None` for
+/// every other cause, whose sentence reads the rest of a [`Status`]. The
+/// paths a missed discovery searched are not a cause field; the pin error
+/// carries them, and the warning prints that error beside this sentence.
+#[must_use]
+pub fn install_sentence(cause: &Cause) -> Option<&'static str> {
+    match cause {
+        Cause::BundleMissing => Some("No Tor was found beside the daemon."),
+        Cause::PinRefused => {
+            Some("The Tor that was found failed its check, so it was not started.")
+        }
+        Cause::Unavailable => Some("This release has no Tor for this platform yet."),
+        Cause::None
+        | Cause::FailedStart
+        | Cause::Died { .. }
+        | Cause::DirectoryUnusable
+        | Cause::ExternalBlocked
+        | Cause::DirectoryUnreachable
+        | Cause::ClockSkew { .. }
+        | Cause::TooManyFiles { .. }
+        | Cause::ReplyLate
+        | Cause::DangerousVersion => None,
+    }
+}
+
 /// The one renderer (`TSR-Q13`). Behaviour, then the cause, then the fixes
 /// in the posture table's order.
 #[must_use]
@@ -253,12 +388,59 @@ pub fn render(status: &Status) -> String {
     text
 }
 
+fn bootstrap_sentence(progress: u8, line: Option<BootstrapLine>) -> String {
+    let Some(line) = line else {
+        return format!("Tor is fetching the network directory ({progress}%).");
+    };
+    let mut text = format!(
+        "Tor is fetching the network directory ({progress}%, unchanged for {}).",
+        spoken_duration(line.held_for)
+    );
+    let window = spoken_duration(line.window);
+    match line.received {
+        Some(0) => text.push_str(&format!(" Nothing arrived in the last {window}.")),
+        Some(bytes) => text.push_str(&format!(
+            " {} arrived in the last {window}; a slow directory mirror can hold this for minutes.",
+            spoken_bytes(bytes)
+        )),
+        None => {}
+    }
+    text
+}
+
+fn spoken_duration(duration: std::time::Duration) -> String {
+    let seconds = duration.as_secs();
+    if seconds < 60 {
+        format!("{seconds} s")
+    } else {
+        format!("{} min {} s", seconds / 60, seconds % 60)
+    }
+}
+
+fn spoken_bytes(bytes: u64) -> String {
+    // CLIPPY: a display figure; a byte count below 2^52 is exact in f64.
+    #[allow(clippy::cast_precision_loss)]
+    let value = bytes as f64;
+    if bytes < 1_000 {
+        format!("{bytes} bytes")
+    } else if bytes < 1_000_000 {
+        format!("{:.1} kB", value / 1e3)
+    } else {
+        format!("{:.1} MB", value / 1e6)
+    }
+}
+
 /// The `Held` sentence. The node is "waiting for Tor" only while the link
 /// is not usable; a held origin beside a usable link (no address-hiding peer
 /// yet, or the epoch's pin exhausted) is holding, not waiting. What the node
 /// syncs over is read from `sync`, never assumed from the hold; the typed
 /// reason for the hold is `GS-C2`'s (IG-Q72).
-fn held_sentence(sync: Syncing) -> String {
+///
+/// [`render`] speaks this for a held status. The daemon's pin warning
+/// speaks it too, with `tor` false: the link is not up, and `clearnet` is
+/// the connector.
+#[must_use]
+pub fn held_sentence(sync: Syncing) -> String {
     let syncing = match (sync.tor, sync.clearnet) {
         (true, true) => "It is syncing over Tor and clearnet.",
         (true, false) => "It is syncing over Tor.",
@@ -274,16 +456,13 @@ fn held_sentence(sync: Syncing) -> String {
 
 fn cause_sentence(status: &Status) -> Option<String> {
     let sentence = match &status.cause {
-        Cause::None if status.shown == Shown::Bootstrapping => Some(format!(
-            "Tor is fetching the network directory ({progress}%).",
-            progress = status.progress
-        )),
-        Cause::None => None,
-        Cause::BundleMissing => Some("No Tor was found beside the daemon.".to_owned()),
-        Cause::PinRefused => {
-            Some("The Tor that was found failed its check, so it was not started.".to_owned())
+        Cause::None if status.shown == Shown::Bootstrapping => {
+            Some(bootstrap_sentence(status.progress, status.bootstrap))
         }
-        Cause::Unavailable => Some("This release has no Tor for this platform yet.".to_owned()),
+        Cause::None => None,
+        Cause::BundleMissing | Cause::PinRefused | Cause::Unavailable => {
+            install_sentence(&status.cause).map(str::to_owned)
+        }
         Cause::FailedStart => Some("Tor did not start.".to_owned()),
         Cause::Died { exit_code } => Some(died_sentence(status.respawn_count, *exit_code)),
         Cause::DirectoryUnusable => Some("Tor's data directory could not be used.".to_owned()),

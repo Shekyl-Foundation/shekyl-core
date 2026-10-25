@@ -1,0 +1,75 @@
+dynamic (dudect-style) run — the fleet MEASUREMENT HOST: x86_64, 8 vCPUs (QEMU virtual CPU; a VM on a different physical machine from the workstation), idle (load 0.1), no shekyl service running
+binary: docs/formal/checkct/dynamic as pushed at 049a55265 (static-pie, +crt-static on the --target build), pinned 1.94.0 / LLVM 21.1.8
+rows: null (both classes fresh); constant (one value, allocated fresh per batch, against fresh); fixed set regenerated per batch against fresh, with the [fixed-pair] companion (two different fixed sets)
+status: PARTIAL — the 1M block was still running when this record was cut; the default suite follows in the next PR
+run window (UTC): Sat Oct 24 03:26:37 PM UTC 2026 -> (in progress)
+
+ 11:26:37 up 4 days, 22:05,  1 user,  load average: 0.10, 0.27, 0.30
+===== 20000
+null: fe25519 mul                  t=   -1.06  t(crop 1%)=   -0.58  mean ns fixed/random      4591/     4706  no difference seen
+null: helio square                 t=    0.29  t(crop 1%)=   -0.27  mean ns fixed/random      1807/     1804  no difference seen
+null: helio mul                    t=    0.25  t(crop 1%)=    0.28  mean ns fixed/random      1890/     1887  no difference seen
+constant: helio square             t=   -1.62  t(crop 1%)=   -6.73  mean ns fixed/random      2673/     2695  CLASS DIFFERENCE
+constant: helio mul                t=   -0.42  t(crop 1%)=   -2.25  mean ns fixed/random      3193/     3200  no difference seen
+constant: helio sqrt               t=   -6.17  t(crop 1%)=  -12.72  mean ns fixed/random    408001/   411958  CLASS DIFFERENCE
+constant: fe25519 mul              t=   -0.28  t(crop 1%)=   -1.82  mean ns fixed/random      3388/     3396  no difference seen
+null: helio square                 t=   -0.71  t(crop 1%)=    3.56  mean ns fixed/random      2678/     2753  no difference seen
+helio square                       t=   -2.24  t(crop 1%)=   -7.27  mean ns fixed/random      2701/     2733  CLASS DIFFERENCE
+helio square [fixed-pair]          t=    0.54  t(crop 1%)=    2.58  mean ns fixed/random      1851/     1846  no difference seen
+constant: helio square             t=   -0.56  t(crop 1%)=  -13.68  mean ns fixed/random      1787/     1792  CLASS DIFFERENCE
+null: helio mul                    t=   -0.19  t(crop 1%)=    0.86  mean ns fixed/random      3501/     3505  no difference seen
+helio mul                          t=   -1.13  t(crop 1%)=   -3.02  mean ns fixed/random      2370/     2385  no difference seen
+helio mul [fixed-pair]             t=    0.84  t(crop 1%)=   -2.81  mean ns fixed/random      2423/     2333  no difference seen
+constant: helio mul                t=   -3.62  t(crop 1%)=   -9.64  mean ns fixed/random      1928/     1967  CLASS DIFFERENCE
+helio sqrt                         t=   -1.34  t(crop 1%)=   -1.94  mean ns fixed/random    460911/   462775  no difference seen
+helio sqrt [fixed-pair]            t=    1.65  t(crop 1%)=    1.16  mean ns fixed/random    417283/   415539  no difference seen
+constant: helio sqrt               t=   -3.93  t(crop 1%)=   -6.07  mean ns fixed/random    411138/   414800  CLASS DIFFERENCE
+null: fe25519 mul                  t=    0.99  t(crop 1%)=    0.31  mean ns fixed/random      5348/     5251  no difference seen
+fe25519 mul                        t=   -0.05  t(crop 1%)=   -0.33  mean ns fixed/random      3946/     3947  no difference seen
+fe25519 mul [fixed-pair]           t=    1.07  t(crop 1%)=    0.16  mean ns fixed/random      3711/     3697  no difference seen
+constant: fe25519 mul              t=    0.87  t(crop 1%)=   -0.71  mean ns fixed/random      3767/     3673  no difference seen
+fe25519 square                     t=    1.12  t(crop 1%)=    0.37  mean ns fixed/random      5218/     5102  no difference seen
+fe25519 square [fixed-pair]        t=    1.18  t(crop 1%)=    1.50  mean ns fixed/random      4282/     4166  no difference seen
+===== 200000
+null: fe25519 mul                  t=   -0.21  t(crop 1%)=   -0.29  mean ns fixed/random      3273/     3276  no difference seen
+null: helio square                 t=   -0.82  t(crop 1%)=    0.57  mean ns fixed/random      1279/     1288  no difference seen
+null: helio mul                    t=    1.12  t(crop 1%)=    0.42  mean ns fixed/random      1599/     1585  no difference seen
+constant: helio square             t=   -0.84  t(crop 1%)=  -33.65  mean ns fixed/random      1529/     1542  CLASS DIFFERENCE
+constant: helio mul                t=   -4.85  t(crop 1%)=  -29.31  mean ns fixed/random      1898/     1978  CLASS DIFFERENCE
+constant: helio sqrt               t=  -10.80  t(crop 1%)=  -14.45  mean ns fixed/random    421266/   424994  CLASS DIFFERENCE
+constant: fe25519 mul              t=   -1.02  t(crop 1%)=   -3.24  mean ns fixed/random      3276/     3293  no difference seen
+null: helio square                 t=    1.35  t(crop 1%)=   -0.00  mean ns fixed/random      1484/     1467  no difference seen
+helio square                       t=   -3.06  t(crop 1%)=  -35.38  mean ns fixed/random      1504/     1532  CLASS DIFFERENCE
+helio square [fixed-pair]          t=    0.35  t(crop 1%)=  -14.03  mean ns fixed/random      1310/     1307  CLASS DIFFERENCE
+constant: helio square             t=   -2.17  t(crop 1%)=  -27.00  mean ns fixed/random      1249/     1268  CLASS DIFFERENCE
+null: helio mul                    t=    0.96  t(crop 1%)=    0.66  mean ns fixed/random      1668/     1659  no difference seen
+helio mul                          t=   -1.64  t(crop 1%)=  -17.00  mean ns fixed/random      1669/     1684  CLASS DIFFERENCE
+helio mul [fixed-pair]             t=   -1.06  t(crop 1%)=   -1.64  mean ns fixed/random      1693/     1703  no difference seen
+constant: helio mul                t=   -2.51  t(crop 1%)=  -11.72  mean ns fixed/random      1640/     1670  CLASS DIFFERENCE
+helio sqrt                         t=   -3.71  t(crop 1%)=   -5.06  mean ns fixed/random    413965/   415064  CLASS DIFFERENCE
+helio sqrt [fixed-pair]            t=   -2.33  t(crop 1%)=   -2.82  mean ns fixed/random    410266/   410960  no difference seen
+constant: helio sqrt               t=  -12.80  t(crop 1%)=  -20.90  mean ns fixed/random    413903/   417919  CLASS DIFFERENCE
+null: fe25519 mul                  t=   -0.34  t(crop 1%)=    0.19  mean ns fixed/random      3429/     3436  no difference seen
+fe25519 mul                        t=    0.16  t(crop 1%)=    0.03  mean ns fixed/random      5224/     5220  no difference seen
+fe25519 mul [fixed-pair]           t=   -0.43  t(crop 1%)=    2.27  mean ns fixed/random      3307/     3314  no difference seen
+constant: fe25519 mul              t=    0.19  t(crop 1%)=    0.01  mean ns fixed/random      3206/     3203  no difference seen
+fe25519 square                     t=   -0.07  t(crop 1%)=    1.78  mean ns fixed/random      2943/     2944  no difference seen
+fe25519 square [fixed-pair]        t=    0.23  t(crop 1%)=    3.15  mean ns fixed/random      2890/     2887  no difference seen
+===== 1000000
+null: fe25519 mul                  t=    0.98  t(crop 1%)=    0.02  mean ns fixed/random      3922/     3914  no difference seen
+null: helio square                 t=    0.13  t(crop 1%)=   -0.63  mean ns fixed/random      1295/     1295  no difference seen
+null: helio mul                    t=    0.97  t(crop 1%)=    0.27  mean ns fixed/random      1946/     1940  no difference seen
+constant: helio square             t=   -2.17  t(crop 1%)=  -22.97  mean ns fixed/random      1574/     1584  CLASS DIFFERENCE
+constant: helio mul                t=   -2.45  t(crop 1%)=  -46.02  mean ns fixed/random      1646/     1658  CLASS DIFFERENCE
+constant: helio sqrt               t=  -27.84  t(crop 1%)=  -45.71  mean ns fixed/random    415633/   419363  CLASS DIFFERENCE
+constant: fe25519 mul              t=   -1.37  t(crop 1%)=   -0.00  mean ns fixed/random      4754/     4790  no difference seen
+null: helio square                 t=   -0.23  t(crop 1%)=   -0.57  mean ns fixed/random      1318/     1319  no difference seen
+helio square                       t=   -4.01  t(crop 1%)= -106.26  mean ns fixed/random      1292/     1313  CLASS DIFFERENCE
+helio square [fixed-pair]          t=    0.22  t(crop 1%)=   -0.89  mean ns fixed/random      1513/     1512  no difference seen
+constant: helio square             t=   -2.39  t(crop 1%)=  -17.52  mean ns fixed/random      1618/     1633  CLASS DIFFERENCE
+null: helio mul                    t=    0.19  t(crop 1%)=    0.12  mean ns fixed/random      1688/     1687  no difference seen
+helio mul                          t=   -4.36  t(crop 1%)=  -25.72  mean ns fixed/random      2141/     2169  CLASS DIFFERENCE
+helio mul [fixed-pair]             t=    0.64  t(crop 1%)=   -0.12  mean ns fixed/random      1657/     1653  no difference seen
+constant: helio mul                t=   -3.67  t(crop 1%)=  -26.68  mean ns fixed/random      1813/     1834  CLASS DIFFERENCE
+
+reading: on a second x86_64 host the HelioseleneField fixed-against-fresh difference reproduces and grows with the sample (square -7 -> -35 -> -106, mul -3 -> -17 -> -26, sqrt -2 -> -5); the constant-value class shows it too; nulls flat; every Field25519 row flat under the identical protocol; and at 200k the helio square [fixed-pair] row crossed (-14): two different fixed operand sets time differently. Operand-dependent timing, not the harness. CA-2.
