@@ -54,7 +54,8 @@ impl RowFilter {
 
 /// Which classes' batches are timed. One class alone is for running a
 /// profiler (`perf stat`, a cycle-counter sampler) over that class; the t
-/// statistic needs both, so a one-class run reports batch counts only.
+/// statistic needs both, so a one-class run reports batch counts and the
+/// wall-clock window of its timed loop, to join the profiler's samples on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClassSelection {
     Both,

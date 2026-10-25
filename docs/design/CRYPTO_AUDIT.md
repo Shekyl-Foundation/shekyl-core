@@ -255,8 +255,15 @@ operand streams. Every half here sits behind a call (`square_wide` and
 `wide_reduce` are out-of-line calls in this binary), and behind a call
 nothing crosses (below), so the halves are flat for the same reason the
 wrapped square is and do not localise the effect. The representation
-argument stands as a hypothesis: a code-side mitigation (Montgomery or
-blinded representation) besides the platform one (fixed frequency).
+argument is partial. It explains the shape rows, but a constant uniformly
+random operand is dense in both representations and still crosses for
+`HelioseleneField` (−139 on the direct path) while `Field25519` stays
+flat, so `red512`'s instruction sequence, or how it overlaps with
+`square_wide` across inlined iterations, is needed even for dense
+operands. A `Field25519` row whose Montgomery residues are sparse (operand
+= sparse · R⁻¹ mod p) splits the two: if it crosses, the multiplier path
+carries the effect; if not, `red512` does. A Montgomery or blinded
+representation stays a candidate code-side mitigation.
 
 **Pinned clock (workstation, `dynamic-x86_64-workstation-pinned-clock.txt`;
 Rick ran the root steps 2026-10-24).** With `intel_pstate/no_turbo = 1` and
@@ -264,11 +271,9 @@ the `performance` governor, the core held at base (2.59 GHz) throughout:
 the `HelioseleneField` constant and structured rows cross as before or
 harder (dense square −113, constant sqrt −266 at 1M), every half, every
 null and every `Field25519` row is flat. **The P-state controller is not
-the mechanism**: the Hertzbleed class is eliminated. What remains is
-activity-dependent timing below the P-state level on these x86_64 parts
-(adaptive clocking, or an operand-dependent latency the ISA does not
-promise against), absent on the Cortex-A72, and reached only through a
-canonical representation. The MSR driver refuses unprivileged APERF/MPERF
+the mechanism**: the Hertzbleed class is eliminated. What this run left
+open, activity-dependent timing below the P-state level, the code-path run
+below closes as well. The MSR driver refuses unprivileged APERF/MPERF
 reads, so cycles against wall time, which would name it further, needs a
 root-run sampler; it is not required to act. (The constant and
 structured square and mul rows of this run called the operation directly,
@@ -286,10 +291,19 @@ crosses on the fixed set (−165 cropped at 1M), a constant operand (−139)
 and every operand shape (sparse −86, small −108, dense −134), and mul on
 the fixed set (−61) and a constant (−67); behind the wrapper, every one of
 those rows is flat at 1M (|t| ≤ 4.0). Nulls and `[fixed-pair]` rows are
-flat on both paths. By the harness's own rule the direct fixed-set crossing
-alone would read as familiarity, since its `[fixed-pair]` companion stays
-flat; the operand evidence is the shape rows, whose values are fresh and
-distinct for every element (sparse −86, small −108), and the constant row. `Field25519` is flat on every null, test, `[fixed-pair]`
+flat on both paths. The harness reads a fixed-set crossing with a flat
+`[fixed-pair]` companion as familiarity, and that reading is benign only
+while the companion is flat: a repeat-against-fresh difference that does
+not depend on which values repeat tells an observer nothing it lacks
+(operands do repeat across a proof, and that is known), while two fixed
+sets that time differently are operand dependence by another name. On the
+fleet host the `[fixed-pair]` rows did cross (+37 square, +38 mul at 1M,
+`dynamic-x86_64-fleet-measurement-host-property.txt`, binary `e8902ca27`,
+before the wrappers, so every row there ran direct), so the two hosts
+disagree and the fixed-set reading is unresolved between them until the
+code-path table runs on the fleet host. The operand evidence on this host
+is the shape rows, whose values are fresh and distinct for every element
+(sparse −86, small −108), and the constant row. `Field25519` is flat on every null, test, `[fixed-pair]`
 and constant row on both paths at 1M; only its operand-shape rows sit near
 the threshold, on both paths and in the cropped t alone (sparse +6 / +9,
 dense −6 / −5, small under; full-sample |t| ≤ 2.5), with mixed signs and
@@ -297,31 +311,52 @@ no consistent growth from 200k: unsettled at this size, two orders below
 `HelioseleneField`'s, and not a code-path effect. So for square and mul
 the operand dependence is real and needs the operation inlined among its
 neighbours in the loop: behind a call boundary it is not observed at 1M
-samples. `sqrt`, an out-of-line call in every binary whose body is a loop
+samples. The call boundary changes little else: at 1M the wrapped
+square's batch takes 614 ns against the direct path's 580 ns, the same
+arithmetic with a call, a return and a few spills added, so the activity
+the loop sustains over time is nearly unchanged. A mechanism keyed to
+activity over time (the P-state controller, or adaptive clocking below
+it) would survive that dilution as a somewhat smaller crossing; this one
+vanishes, so it is keyed to the instruction stream itself: an
+operand-dependent behaviour of the core on back-to-back dependent
+multiply and carry chains that a call boundary breaks. `sqrt`, an out-of-line call in every binary whose body is a loop
 of inlined squares and multiplies, crosses behind its call only on the
 rows whose operands repeat (fixed set −49 and constant −46 at 1M, dense
 −21 at 200k) and is flat on its `[fixed-pair]` row and on the fresh
 sparse and small shapes: the familiarity pattern, not shown operand
 dependence. `Field25519` sqrt is flat on every row.
 
-**Mechanism: narrowed.** Two remained once BINSEC's model was exhausted, with
-different owners and fixes; the pinned-clock run has since eliminated (a),
-and the code-path run says (b), if it is (b), lives in how consecutive
-inlined operations overlap, not in one operation's instructions:
-(a) power → frequency (the Hertzbleed class:
-operand Hamming weight or toggle count changes core power, the P-state
-controller turns it into frequency, the wall-clock timer sees time; a
-platform property that would follow the field onto crypto-bigint 0.7
-unchanged; consistent with the aarch64 null, a fixed-governor board); (b)
-instruction-level data-dependent latency in the compiled code (rare for
-integer code on Tiger Lake, and the disassembly above shows no candidate
-instruction and no vectorisation in `square`). The fleet host is a VM and cannot carry the frequency
-discriminator; the operand-property sweep (sparse, small, dense operands)
-says which property moves the time but not why. The next discriminator is
-the halves on the direct path: a build in which `square_wide` and `red512`
-inline into the loop (fat LTO, or inline hints in the vendored crate),
-so the decomposition runs on the code path that shows the effect; then
-cycles against wall time, which needs a root-run sampler.
+**Mechanism: narrowed to the core.** BINSEC's model left two candidates.
+(a) Power → frequency (the Hertzbleed class) is eliminated by the
+pinned-clock run, and with it, by the call-boundary argument above, any
+mechanism keyed to activity over time. (b) Data-dependent behaviour of
+the compiled instruction stream remains. The disassembly shows no
+instruction whose latency the ISA ties to its operands and no
+vectorisation, so what is left of (b) is a microarchitectural
+data-dependent optimisation on dependent multiply and carry chains: the
+class Intel does not promise against unless DOITM (Data Operand
+Independent Timing Mode, bit 0 of `IA32_UARCH_MISC_CTL`, MSR `0x1b01`) is
+set. The workstation enumerates it (`IA32_ARCH_CAPABILITIES` = `0xa007c6b`,
+bit 12 set) and Linux leaves it off (`0x1b01` read 0 on all 16 CPUs).
+With DOITM set on every CPU (Rick's root session, 2026-10-25) the direct
+path crosses as hard as with it off (square fixed set −154, constant −97,
+shapes −99 / −175 / −173, mul −87 / −61 cropped at 1M) and the wrapped path
+stays flat: **not a DOITM-governed optimisation**. turbostat on the
+measured core, one class at a time (the crate's one-class mode, joined on
+the timing windows it prints): the direct constant and small classes run
+at the same busy frequency as fresh operands (4741 and 4742 against
+4736 MHz, t ≤ 0.6 across windows) and at higher IPC (3.058 and 3.047
+against 3.014: +1.5 % and +1.1 %, t 3.9 and 3.4), the size of their timing
+difference; the instruction stream is the same for every class, so higher
+IPC is fewer cycles. The wrapped control shows neither (IPC t −1.0, MHz
+t −1.5). **Equal clock, fewer cycles: the effect is in the core.** CA-2 is
+an operand-dependent cycle count of this Tiger Lake core on inlined
+`HelioseleneField` square and mul streams, outside what DOITM controls;
+the fleet host is a VM on other silicon that reproduces the timing but
+whose MSRs and counters are not reachable. Which part of the inlined
+stream carries it is the next PR's question: the halves on the inlined
+path (fat LTO, or inline hints in the vendored crate) and the
+`Field25519` row with sparse Montgomery residues.
 
 **Threat frame.** `HelioseleneField` is the Helios/Selene base field, the
 curve-tree layers of the FCMP++ prover where it touches the blinded
@@ -339,12 +374,16 @@ covers it). Owner: this row. The monero-oxide notice needed an actionable
 statement, not "two fixed operand sets time differently"; it now has one:
 inlined `HelioseleneField` square and mul show operand-dependent time on
 x86_64 with the clock pinned and with turbo on (fresh structured operands
-included), the same two operations behind a call boundary do not, the disassembly shows no data-dependent
-instruction, and SLP vectorisation is not involved. Posting it is Rick's
-call. The RustCrypto and serai notices are independent of CA-2.
+included); the same two operations behind a call boundary do not; DOITM
+does not remove it; turbostat shows equal frequency and fewer cycles for
+the faster classes; the disassembly shows no data-dependent instruction,
+and SLP vectorisation is not involved. Rick's ruling (2026-10-25): post it
+after the root session, whatever its outcome. The RustCrypto and serai notices are independent of CA-2.
 
-**Reopen / close.** Closes when the mechanism is named and either (a) it is
-the platform, recorded with the mitigation the platform offers (fixed
-frequency on the proving machine) and a note in the wallet's threat model,
-or (b) it is the code, fixed in the vendored crate or upstream and
-re-measured flat with this harness on both x86_64 hosts.
+**Reopen / close.** The platform offers no mitigation here: the clock is
+not the carrier and DOITM does not govern it. So this closes on the code
+side: a representation or code shape of `HelioseleneField` (Montgomery or
+blinded operands, as `Field25519`'s flat rows suggest) fixed in the
+vendored crate or upstream and re-measured flat with this harness on the
+direct path on both x86_64 hosts, with a note in the wallet's threat model
+for the release that predates it.

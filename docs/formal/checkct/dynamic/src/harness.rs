@@ -14,7 +14,7 @@
 //! reads.
 
 use core::hint::black_box;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 use crate::classes::{Class, Contrast, Schedule, BATCH};
 use crate::cli::{ClassSelection, Config};
@@ -84,6 +84,7 @@ impl Bench for Harness {
         let mut fixed = Vec::with_capacity(samples);
         let mut random = Vec::with_capacity(samples);
         let mut sink = 0u64;
+        let window_start = SystemTime::now();
         for (class, batch) in &schedule.batches {
             if !config.classes.times(*class) {
                 continue;
@@ -99,15 +100,44 @@ impl Bench for Harness {
             }
         }
         black_box(sink);
-        report(name, config.classes, &fixed, &random);
+        let window = TimingWindow {
+            start: window_start,
+            end: SystemTime::now(),
+        };
+        report(name, config.classes, &fixed, &random, window);
     }
 }
 
-fn report(name: &str, classes: ClassSelection, fixed: &[f64], random: &[f64]) {
-    if let ClassSelection::Only(_) = classes {
+/// When a row's timed batches ran, on the wall clock: the span a profiler
+/// sampling the same core (turbostat's `Time_Of_Day_Seconds`) is joined on.
+/// Both ends lie outside the timed loop; the input generation before it is
+/// excluded.
+struct TimingWindow {
+    start: SystemTime,
+    end: SystemTime,
+}
+
+impl TimingWindow {
+    fn unix_seconds(at: SystemTime) -> f64 {
+        at.duration_since(SystemTime::UNIX_EPOCH)
+            .map_or(f64::NAN, |d| d.as_secs_f64())
+    }
+}
+
+fn report(
+    name: &str,
+    classes: ClassSelection,
+    fixed: &[f64],
+    random: &[f64],
+    window: TimingWindow,
+) {
+    if let ClassSelection::Only(class) = classes {
         println!(
-            "{name:<NAME_WIDTH$} only one class run; batches {}",
-            fixed.len() + random.len()
+            "{name:<NAME_WIDTH$} only one class run ({}); batches {}; timed {:.3}..{:.3} unix s",
+            class.label(),
+            fixed.len() + random.len(),
+            TimingWindow::unix_seconds(window.start),
+            TimingWindow::unix_seconds(window.end),
         );
         return;
     }

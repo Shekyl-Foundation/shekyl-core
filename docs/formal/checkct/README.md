@@ -206,7 +206,9 @@ cargo build --release --target x86_64-unknown-linux-gnu \
 20 000 samples per class by default (3 at least, the floor the cropped t
 needs), every row whose name contains the filter (an empty filter matches
 every row), and both classes unless one is named (one class alone is for
-running a profiler over it; it reports batch counts, not t).
+running a profiler over it; it reports batch counts and the wall-clock
+window of its timed loop, which a profiler's timestamps are joined on, not
+t).
 
 How the crate is built, so its rows can be read:
 
@@ -267,10 +269,11 @@ difference that grows with the sample (square −7 → −35 → −106 for 20k 
 whose equal-familiarity `[fixed-pair]` companion itself crossed at 200k:
 two different fixed operand sets time differently. That is operand
 dependence, outside BINSEC's model, and it is
-[`CA-2`](../../design/CRYPTO_AUDIT.md) §2 (mechanism narrowed: not the
-P-state controller, not SLP vectorisation; for square and mul it needs
-the operation inlined into the loop, and behind a call boundary they are
-flat at 1M samples,
+[`CA-2`](../../design/CRYPTO_AUDIT.md) §2 (mechanism narrowed to the core:
+equal clock, fewer cycles; not the P-state controller, SLP vectorisation
+or anything DOITM governs; for square and mul it needs the operation
+inlined into the loop, and behind a call boundary they are flat at 1M
+samples,
 `results/2026-10-25/dynamic-x86_64-workstation-code-path.txt`). The floor
 device shows nothing on any row.
 

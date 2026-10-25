@@ -1,6 +1,6 @@
 dynamic (dudect-style) run — the development workstation, x86_64 (11th Gen Intel Core i9-11950H, Tiger Lake): the code path under every contrast (CA-2)
 binary: docs/formal/checkct/dynamic at 828324a0e, static x86_64 (+crt-static), pinned 1.94.0 / LLVM 21.1.8
-rows: mul and square on two code paths, each under every contrast: behind the non-inlined wrappers op_* (unsuffixed names), and (direct), the operator called in the timed loop (HelioseleneField's inlines: 167 / 177 instructions, the same as the earlier binaries' control rows; dalek-ff-group's FieldElement operators are out-of-line calls either way); every contrast of a path runs one compiled loop. Operand domains as typed in the crate: field elements by wide reduction, from_repr on unrestricted bytes, Residue on an unrestricted U256, half: rows on canonical HelioseleneField values [0, p)
+rows: mul and square on two code paths, each under every contrast: behind the non-inlined wrappers op_* (unsuffixed names), and (direct), the operator called in the timed loop (HelioseleneField's inlines: 167 / 177 instructions, the same as the earlier binaries' control rows; dalek-ff-group's FieldElement operators are out-of-line calls either way); every contrast of a path runs one compiled loop. Sampler: the typed one, after the Copilot fix, for every table in this record (not the earlier masked sampler, which kept operands below 2^254): field elements by wide reduction over the full range to p, from_repr on unrestricted bytes, Residue on an unrestricted U256, half: rows on canonical HelioseleneField values [0, p)
 conditions: turbo on, powersave governor (the box's defaults); another lane's daemon used about two cores throughout, and builds ran during the first minutes of the first block; each block below prints its own window and load average
 
 run window (UTC): Sun Oct 25 04:06:51 PM UTC 2026
@@ -139,3 +139,69 @@ property: fe25519 sqrt dense       t=    0.41  t(crop 1%)=    0.96  mean ns fixe
 end (UTC): Sun Oct 25 05:41:17 PM UTC 2026  load: 4.95 7.90 8.08
 
 reading (sqrt): HelioseleneField sqrt crosses behind its call on the rows whose operands repeat (fixed set -49 and constant -46 cropped at 1M, dense -21 at 200k: dense is one value) and is flat on its [fixed-pair] row and on the fresh shape rows (sparse, small); Field25519 sqrt flat on every row. By the harness's rule that is the familiarity pattern, not shown operand dependence; it does not grow from 200k to 1M either (load varied between blocks: the 1M window ended at load 7.5). Contrast square (direct), whose FRESH shape rows cross (-86, -108 at 1M).
+
+## DOITM on (Rick's root session: IA32_ARCH_CAPABILITIES 0x10a = 0xa007c6b, bit 12 set, DOITM enumerated; IA32_UARCH_MISC_CTL 0x1b01 read 0 on all 16 CPUs, then wrmsr -a 0x1b01 0x1 before this run, restored to 0 after)
+DOITM: IA32_UARCH_MISC_CTL (0x1b01) = 0x1 on all CPUs (Rick, wrmsr -a, just before this run; IA32_ARCH_CAPABILITIES 0xa007c6b, bit 12 set)
+run window (UTC): Sun Oct 25 09:58:09 PM UTC 2026  no_turbo=0 governor=powersave load: 10.09 9.80 8.68; pinned to CPU 3
+===== 200000
+null: helio square                 t=    1.76  t(crop 1%)=    0.18  mean ns fixed/random       801/      797  no difference seen
+null: helio square (direct)        t=    0.12  t(crop 1%)=    2.26  mean ns fixed/random       605/      605  no difference seen
+helio square                       t=    0.58  t(crop 1%)=    1.44  mean ns fixed/random       626/      625  no difference seen
+helio square [fixed-pair]          t=   -0.58  t(crop 1%)=   -0.29  mean ns fixed/random       668/      669  no difference seen
+helio square (direct)              t=   -5.94  t(crop 1%)=  -66.27  mean ns fixed/random       617/      629  CLASS DIFFERENCE
+helio square (direct) [fixed-pair] t=    0.20  t(crop 1%)=   -0.31  mean ns fixed/random       734/      733  no difference seen
+constant: helio square             t=   -0.15  t(crop 1%)=    1.23  mean ns fixed/random       669/      669  no difference seen
+constant: helio square (direct)    t=   -7.00  t(crop 1%)=  -73.25  mean ns fixed/random       619/      634  CLASS DIFFERENCE
+property: helio square sparse      t=    0.27  t(crop 1%)=   -1.50  mean ns fixed/random       659/      658  no difference seen
+property: helio square small       t=    0.66  t(crop 1%)=   -0.26  mean ns fixed/random       636/      635  no difference seen
+property: helio square dense       t=   -0.02  t(crop 1%)=    2.71  mean ns fixed/random       681/      681  no difference seen
+property: helio square (direct) sparse t=   -3.76  t(crop 1%)=  -36.37  mean ns fixed/random       593/      601  CLASS DIFFERENCE
+property: helio square (direct) small t=   -4.51  t(crop 1%)=  -72.28  mean ns fixed/random       589/      598  CLASS DIFFERENCE
+property: helio square (direct) dense t=   -6.37  t(crop 1%)=  -94.74  mean ns fixed/random       603/      616  CLASS DIFFERENCE
+null: helio mul                    t=    0.13  t(crop 1%)=    0.17  mean ns fixed/random       817/      817  no difference seen
+null: helio mul (direct)           t=   -0.24  t(crop 1%)=    0.43  mean ns fixed/random       774/      775  no difference seen
+helio mul                          t=    0.54  t(crop 1%)=    1.30  mean ns fixed/random       840/      838  no difference seen
+helio mul [fixed-pair]             t=    0.72  t(crop 1%)=   -1.54  mean ns fixed/random       905/      903  no difference seen
+helio mul (direct)                 t=   -4.94  t(crop 1%)=  -24.36  mean ns fixed/random       834/      848  CLASS DIFFERENCE
+helio mul (direct) [fixed-pair]    t=   -0.76  t(crop 1%)=    3.48  mean ns fixed/random       778/      780  no difference seen
+constant: helio mul                t=    1.06  t(crop 1%)=    1.15  mean ns fixed/random       807/      805  no difference seen
+constant: helio mul (direct)       t=   -4.58  t(crop 1%)=  -18.40  mean ns fixed/random       836/      850  CLASS DIFFERENCE
+===== 1000000
+null: helio square                 t=   -0.70  t(crop 1%)=    0.64  mean ns fixed/random       643/      644  no difference seen
+null: helio square (direct)        t=    0.91  t(crop 1%)=   -0.14  mean ns fixed/random       657/      656  no difference seen
+helio square                       t=   -0.62  t(crop 1%)=   -1.51  mean ns fixed/random       663/      663  no difference seen
+helio square [fixed-pair]          t=    0.88  t(crop 1%)=   -0.75  mean ns fixed/random       675/      674  no difference seen
+helio square (direct)              t=  -16.10  t(crop 1%)= -154.02  mean ns fixed/random       589/      600  CLASS DIFFERENCE
+helio square (direct) [fixed-pair] t=   -0.07  t(crop 1%)=    5.14  mean ns fixed/random       684/      684  CLASS DIFFERENCE
+constant: helio square             t=    0.07  t(crop 1%)=    0.36  mean ns fixed/random       747/      747  no difference seen
+constant: helio square (direct)    t=  -14.31  t(crop 1%)=  -97.14  mean ns fixed/random       676/      687  CLASS DIFFERENCE
+property: helio square sparse      t=    0.57  t(crop 1%)=    1.07  mean ns fixed/random       690/      690  no difference seen
+property: helio square small       t=   -3.28  t(crop 1%)=   -3.72  mean ns fixed/random       683/      686  no difference seen
+property: helio square dense       t=    0.33  t(crop 1%)=    1.03  mean ns fixed/random       675/      675  no difference seen
+property: helio square (direct) sparse t=  -14.64  t(crop 1%)=  -98.95  mean ns fixed/random       597/      604  CLASS DIFFERENCE
+property: helio square (direct) small t=   -0.85  t(crop 1%)= -175.01  mean ns fixed/random      1100/     1125  CLASS DIFFERENCE
+property: helio square (direct) dense t=  -25.05  t(crop 1%)= -173.10  mean ns fixed/random       636/      652  CLASS DIFFERENCE
+null: helio mul                    t=    0.32  t(crop 1%)=    0.81  mean ns fixed/random       843/      843  no difference seen
+null: helio mul (direct)           t=    1.40  t(crop 1%)=   -0.42  mean ns fixed/random       802/      801  no difference seen
+helio mul                          t=   -0.61  t(crop 1%)=   -0.48  mean ns fixed/random       823/      823  no difference seen
+helio mul [fixed-pair]             t=    0.21  t(crop 1%)=   -0.92  mean ns fixed/random       840/      840  no difference seen
+helio mul (direct)                 t=  -15.75  t(crop 1%)=  -86.93  mean ns fixed/random       795/      806  CLASS DIFFERENCE
+helio mul (direct) [fixed-pair]    t=    0.06  t(crop 1%)=   -0.69  mean ns fixed/random      1070/     1070  no difference seen
+constant: helio mul                t=    2.19  t(crop 1%)=    2.30  mean ns fixed/random       902/      900  no difference seen
+constant: helio mul (direct)       t=  -13.20  t(crop 1%)=  -61.20  mean ns fixed/random       821/      832  CLASS DIFFERENCE
+end (UTC): Sun Oct 25 10:00:25 PM UTC 2026  load: 5.88 8.00 8.15
+
+reading (DOITM): with DOITM set the direct path crosses as hard as with it off (square fixed set -154, constant -97, shapes -99 / -175 / -173, mul -87 / -61 cropped at 1M) and the wrapped path stays flat: not a DOITM-governed optimisation. One direct [fixed-pair] square row at +5.1 cropped (full t -0.07). Load about 10 (another lane) during this block.
+
+## turbostat on the measured core, one class at a time (DOITM back to 0; turbo on)
+method: ct-dynamic's one-class mode, pinned to CPU 3 (taskset), each invocation printing the wall-clock window of its timed loop; `turbostat --quiet --cpu 3 --show Time_Of_Day_Seconds,Busy%,Avg_MHz,Bzy_MHz,IPC --interval 0.1` (Rick, root) ran alongside; samples whose 0.1 s interval lies wholly inside a window are averaged per window, then across windows. Six rounds, classes alternating; the wrapped-constant invocations' filter also matched the direct row, so those have twelve windows. Raw turbostat log and windows are kept in the private ops archive.
+class (all 1M batches)                             windows  IPC (mean ± s.e.)   busy MHz    window
+constant: helio square (direct), fixed (constant)    12     3.058 ± 0.009       4741 ± 11   0.583 s
+property: helio square (direct) dense, fixed          6     3.045 ± 0.017       4727 ± 10   0.580 s
+property: helio square (direct) small, fixed          6     3.047 ± 0.007       4742 ± 7    0.584 s
+constant: helio square (direct), random (fresh)      12     3.014 ± 0.007       4736 ± 5    0.592 s
+constant: helio square (wrapped), fixed               6     2.980 ± 0.018       4715 ± 21   0.624 s
+constant: helio square (wrapped), random              6     3.000 ± 0.006       4746 ± 1    0.616 s
+Welch t across windows, structured class against fresh: direct constant IPC 3.86, MHz 0.40, window -2.36; direct small IPC 3.41, MHz 0.60, window -3.36; direct dense IPC 1.70, MHz -0.86, window -2.90; wrapped constant IPC -1.04, MHz -1.51, window 1.45.
+
+reading (turbostat): on the direct path the structured classes run at the same busy frequency as fresh operands (within 0.1 %) and at higher IPC (+1.5 % constant, +1.1 % small), the size of their timing difference; the instruction stream is the same for every class (branchless code), so higher IPC is fewer cycles. The wrapped control shows no significant IPC or frequency difference. Equal clock, fewer cycles: the effect is in the core, not the clock.
