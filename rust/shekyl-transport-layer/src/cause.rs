@@ -211,15 +211,19 @@ impl CloseCause {
     ///
     /// [`CloseKind::LevinHandshakeRejected`] is the Levin layer judging
     /// the peer that answered. [`CloseKind::ProxyRefused`] counts for the
-    /// replies that name the destination: RFC 1928 general failure
-    /// (`0x01`), host unreachable (`0x04`) and connection refused
-    /// (`0x05`), and the Tor SOCKS extended codes for a descriptor that is
-    /// missing (`0xF0`) or unusable (`0xF1`) and an introduction that
-    /// failed (`0xF2`). A live onion service whose target port refuses
-    /// answers `0x01` within a second, every time, and a blocked link never
-    /// did (shekyl-dev `data/tsr-acceptance/2026-10-25-socks-reply-sources`,
-    /// and both case A runs of 2026-10-25): it needs a working rendezvous to
-    /// arrive. Introduction and rendezvous timeouts (`0xF7`, `0xF3`), a
+    /// replies that name the destination on an onion dial. RFC 1928 §6
+    /// `0x01` is a general SOCKS server failure: the proxy's report, not
+    /// the destination's. On an onion dial Tor sends that byte when a live
+    /// service's target port refuses, within a second, and only after a
+    /// working rendezvous. A blocked link never produced it (shekyl-dev
+    /// `data/tsr-acceptance/2026-10-25-socks-reply-sources`, and both case A
+    /// runs of 2026-10-25). [`implicates_address`] still requires the
+    /// connector to authenticate the destination, so a clearnet dial
+    /// remembers none of these replies. Host unreachable (`0x04`) and
+    /// connection refused (`0x05`) name the destination in the RFC itself.
+    /// Tor's extended codes do for a descriptor that is missing (`0xF0`) or
+    /// unusable (`0xF1`) and an introduction that failed (`0xF2`).
+    /// Introduction and rendezvous timeouts (`0xF7`, `0xF3`), a
     /// ruleset, network unreachable, and TTL expired do not: a blocked link
     /// answers `0x06` too, and remembering it would drop every peer.
     /// A command or address type this node sent (`0x07`, `0x08`), an onion
@@ -275,8 +279,11 @@ impl CloseCause {
     }
 }
 
-/// RFC 1928 §6. General SOCKS server failure. On an onion dial, a live
-/// service whose target port refuses answers this, within a second.
+/// RFC 1928 §6: general SOCKS server failure. That is the proxy's report,
+/// not a statement about the destination. On an onion dial Tor uses this
+/// byte for a live service whose target port refuses, within a second and
+/// only after a working rendezvous. A clearnet dial does not remember it:
+/// [`CloseCause::implicates_address`] requires destination authentication.
 const SOCKS_GENERAL_FAILURE: u16 = 0x01;
 /// RFC 1928 §6. The destination host was not reached.
 const SOCKS_HOST_UNREACHABLE: u16 = 0x04;
@@ -301,9 +308,12 @@ const TOR_ONION_ADDRESS_REJECTED: u16 = 0xF6;
 
 /// Onion SOCKS replies that name the destination.
 ///
-/// RFC 1928 §6 general failure, host unreachable and connection refused.
-/// Tor's extended codes for a missing or unusable descriptor, and a failed
-/// introduction.
+/// `0x01` is here for an onion dial only. RFC 1928 calls it a general
+/// SOCKS server failure, and Tor sends it when a live service's port
+/// refuses. Host unreachable and connection refused name the destination
+/// in the RFC. Tor's extended codes cover a missing or unusable descriptor
+/// and a failed introduction. A clearnet connector never consults this
+/// list ([`CloseCause::implicates_address`]).
 const fn proxy_reply_names_the_destination(reply: u16) -> bool {
     matches!(
         reply,

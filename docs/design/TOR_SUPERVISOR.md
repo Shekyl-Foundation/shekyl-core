@@ -395,7 +395,7 @@ here.
 | `ENOUGH_DIR_INFO` / `NOT_ENOUGH_DIR_INFO` | `STATUS_CLIENT` | outbound facet cause |
 | `NETWORK_LIVENESS UP/DOWN` | `NETWORK_LIVENESS` | external cause on or off: `UP` clears `ExternalBlocked` and `DirectoryUnreachable`, the causes about reaching the network (`TSR-Q14`); no other kind |
 | `CIRCUIT_NOT_ESTABLISHED REASON=` / `CIRCUIT_ESTABLISHED` | `STATUS_CLIENT` | `NOT_ESTABLISHED`: `REASON=DIR_ALL_UNREACHABLE` is the directory cause, `CLOCK_JUMPED` is the general event's, any other reason or none is the blocked link. `ESTABLISHED` clears as `NETWORK_LIVENESS UP` does |
-| `network-liveness`, `status/circuit-established` | the liveness sample's `GETINFO`, every 30 s while Running | Tor's current view, read even when Tor sends no event (`TSR-Q14`): down, or no circuit, names the blocked link when nothing else is named; up with a circuit clears it. Unknown says nothing; during a bootstrap neither key is read |
+| `network-liveness`, `status/circuit-established` | `Input::NetworkView`, from the liveness sample's `GETINFO` while Running. The driver omits both keys unless the phase is Running; the core also ignores a view folded before Running | Tor's current view, read even when Tor sends no event (`TSR-Q14`): `Reported::No` on either key names the blocked link when nothing else is named; both `Reported::Yes` clears it. `Reported::Unknown` says nothing |
 | `CLOCK_SKEW SKEW=` | `STATUS_GENERAL` | named cause with the offset; the source is unauthenticated, so the message says Tor reports it, never "your clock is wrong" |
 | `CLOCK_JUMPED TIME=` | `STATUS_GENERAL` | resume: re-evaluate now (Tor closed its circuits) |
 | `DANGEROUS_VERSION` | `STATUS_GENERAL` | announcement; a release question, not a runtime fault |
@@ -403,7 +403,7 @@ here.
 | `TOO_MANY_CONNECTIONS` | `STATUS_GENERAL` | named local cause (the open-file limit), with the count |
 | `HS_DESC UPLOADED` / `FAILED REASON=` for our address | `HS_DESC` | `UPLOADED`: one upload round arms the probe (§4.5); `FAILED` across a round: Service-class evidence (§4.4) |
 | `NOTICE` / `WARN` / `ERR` | log events | the `tor` log category (§4.10) |
-| every Tor dial's outcome | the connector's dial path → the dialer's tally (`TorLinkTally`, through `shekyl_ffi::tor_link`) → the supervisor | display only, never a cause (`TSR-Q14`). While Tor is Running and names nothing, no Tor session is held, and dials keep ending without a stream for `Policy::quiet_after` (5 min, provisional until the floor-device soak), the posture line says "No connection through Tor is open, and none has opened in N.", once, with no fix. The stretch starts again at an opened stream and when a Tor reaches Running |
+| every Tor dial's outcome | the connector's dial path → the dialer's tally (`TorLinkTally`, through `shekyl_ffi::tor_link`) → the supervisor | display only, never a cause (`TSR-Q14`). While Tor is Running and names nothing, no Tor session is held, and dials keep ending without a stream for `Policy::quiet_after` (5 min, provisional until the floor-device soak), the posture line says "No connection through Tor is open, and none has opened in N.", once, with no fix. The stretch starts again at an opened stream and when a Tor reaches Running. The tally already in the cell when the supervisor starts watching is `Input::DialBaseline`: it is not an open, so it does not postpone the line. A respawn does not re-seed; `opened` is monotonic for the process, and the stretch clock restarts when the new Tor reaches Running |
 | a stream accepted at our forward listener | the Tor connector's inbound accept (`adopt_tor`, `rust/shekyl-ffi/src/zone_ffi.rs:392`) | display evidence only (posture line, RPC): a peer fetched the descriptor and completed introduction and rendezvous; it neither arms nor defers the probe |
 | a probe nonce arrived | the dialer's nonce set (§4.5) | inbound evidence |
 
@@ -744,7 +744,7 @@ that detail, not variants of `ManagedTorFix`.
 
 | State | Source | Shown as | Rendered from the cause | `ManagedTorFix` | Remedy |
 | --- | --- | --- | --- | --- | --- |
-| Outbound blocked | `BOOTSTRAP` warn `REASON`, `NETWORK_LIVENESS DOWN`, `CIRCUIT_NOT_ESTABLISHED`, `network-liveness=down` or `status/circuit-established=0` in the sample (§4.2) | Degraded (outbound) | this machine cannot reach the Tor network; check the firewall or network. Bridges are `Operator`, not a managed-Tor option | none | wait |
+| Outbound blocked | `BOOTSTRAP` warn `REASON`, `NETWORK_LIVENESS DOWN`, `CIRCUIT_NOT_ESTABLISHED`, or `Input::NetworkView` reporting `network-liveness=down` or `status/circuit-established=0` while Running (§4.2) | Degraded (outbound) | this machine cannot reach the Tor network; check the firewall or network. Bridges are `Operator`, not a managed-Tor option | none | wait |
 | No directory reachable | `DIR_ALL_UNREACHABLE` | Degraded (outbound) | as above | none | wait |
 | Clock skew | `CLOCK_SKEW SKEW=±s` | Degraded (outbound) | the clock is off by the reported seconds; check time sync | none | wait |
 | Waiting on the Tor directory | the last `BOOTSTRAP PROGRESS` phase and when it was reached | Bootstrapping (the phase, and since when) | none; Tor is fetching the network's directory, and a slow mirror can hold it for minutes | none | wait |

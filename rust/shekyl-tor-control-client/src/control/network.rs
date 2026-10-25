@@ -3,34 +3,69 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Tor's own view of its network, read with every supervisor sample
-//! (`TOR_SUPERVISOR.md` §1 `TSR-Q14`, §4.2): `GETINFO network-liveness` and
-//! `GETINFO status/circuit-established`. Tor decides whether it can build
-//! circuits; the supervisor reads what it concludes, even when Tor sends
-//! no event.
+//! Tor's own view of its network (`TOR_SUPERVISOR.md` §1 `TSR-Q14`, §4.2):
+//! `GETINFO network-liveness` and `GETINFO status/circuit-established`.
+//! The driver asks while the managed Tor is Running. A missing or
+//! unrecognized value is unknown, never a negative.
 
 use super::framing::ControlReply;
 
-/// `network-liveness`: `Some(true)` for `up`, `Some(false)` for `down`.
-/// `None` when the reply carries no such line or a value this module does
-/// not know: unknown, never down.
-#[must_use]
-pub fn parse_network_liveness(reply: &ControlReply) -> Option<bool> {
-    match value(reply, "network-liveness=")? {
-        "up" => Some(true),
-        "down" => Some(false),
-        _ => None,
+/// One `GETINFO` fact. Unknown is a missing or unrecognized value, and it
+/// is not a negative: the supervisor does not invent a statement Tor did
+/// not make.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Reported {
+    /// The reply had no such key, or a value this parser does not know.
+    #[default]
+    Unknown,
+    /// The key's affirmative value (`up`, `1`).
+    Yes,
+    /// The key's negative value (`down`, `0`).
+    No,
+}
+
+/// Tor's sampled view of its network. Each field is one key.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NetworkView {
+    /// `network-liveness`.
+    pub liveness: Reported,
+    /// `status/circuit-established`.
+    pub circuits: Reported,
+}
+
+impl NetworkView {
+    /// Either key answered in the negative. Unknown is not a negative, so
+    /// one unknown key does not name a blocked link by itself.
+    #[must_use]
+    pub const fn reports_blocked(self) -> bool {
+        matches!(self.liveness, Reported::No) || matches!(self.circuits, Reported::No)
+    }
+
+    /// Both keys answered in the affirmative: Tor says it reaches its network.
+    #[must_use]
+    pub const fn reports_reachable(self) -> bool {
+        matches!(
+            (self.liveness, self.circuits),
+            (Reported::Yes, Reported::Yes)
+        )
     }
 }
 
-/// `status/circuit-established`: `Some(true)` for `1`, `Some(false)` for
-/// `0`. `None` when absent or malformed: unknown, never down.
+/// Both keys from one sample reply. A key that is absent or unrecognized
+/// is [`Reported::Unknown`].
 #[must_use]
-pub fn parse_circuit_established(reply: &ControlReply) -> Option<bool> {
-    match value(reply, "status/circuit-established=")? {
-        "1" => Some(true),
-        "0" => Some(false),
-        _ => None,
+pub fn parse_network_view(reply: &ControlReply) -> NetworkView {
+    NetworkView {
+        liveness: reported(value(reply, "network-liveness="), "up", "down"),
+        circuits: reported(value(reply, "status/circuit-established="), "1", "0"),
+    }
+}
+
+fn reported(got: Option<&str>, yes: &str, no: &str) -> Reported {
+    match got {
+        Some(text) if text == yes => Reported::Yes,
+        Some(text) if text == no => Reported::No,
+        _ => Reported::Unknown,
     }
 }
 
@@ -64,21 +99,35 @@ mod tests {
              250-network-liveness=down\r\n\
              250-status/circuit-established=1\r\n",
         );
-        assert_eq!(parse_network_liveness(&reply), Some(false));
-        assert_eq!(parse_circuit_established(&reply), Some(true));
+        assert_eq!(
+            parse_network_view(&reply),
+            NetworkView {
+                liveness: Reported::No,
+                circuits: Reported::Yes,
+            }
+        );
         let reply = reply_from("250-network-liveness=up\r\n250-status/circuit-established=0\r\n");
-        assert_eq!(parse_network_liveness(&reply), Some(true));
-        assert_eq!(parse_circuit_established(&reply), Some(false));
+        assert_eq!(
+            parse_network_view(&reply),
+            NetworkView {
+                liveness: Reported::Yes,
+                circuits: Reported::No,
+            }
+        );
     }
 
     #[test]
     fn a_missing_or_unknown_value_is_unknown_not_down() {
         let none = reply_from("250-traffic/read=1\r\n");
-        assert_eq!(parse_network_liveness(&none), None);
-        assert_eq!(parse_circuit_established(&none), None);
+        assert_eq!(parse_network_view(&none), NetworkView::default());
         let odd =
             reply_from("250-network-liveness=maybe\r\n250-status/circuit-established=yes\r\n");
-        assert_eq!(parse_network_liveness(&odd), None);
-        assert_eq!(parse_circuit_established(&odd), None);
+        assert_eq!(
+            parse_network_view(&odd),
+            NetworkView {
+                liveness: Reported::Unknown,
+                circuits: Reported::Unknown,
+            }
+        );
     }
 }

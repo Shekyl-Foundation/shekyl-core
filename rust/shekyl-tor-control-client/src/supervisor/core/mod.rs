@@ -19,7 +19,10 @@ use super::posture::{
 mod announce;
 mod backoff;
 mod dials;
+mod network_view;
+mod running;
 
+use crate::control::NetworkView;
 use announce::{Announcements, Cadence};
 use backoff::Backoff;
 pub use dials::DialTally;
@@ -65,8 +68,10 @@ impl Policy {
             // about a minute: the same order as `TSR-M2`'s 60 s bound.
             alive_every: Duration::from_secs(30),
             fresh_directory_after: 3,
-            // About three Tor dials in a row, each ended at Tor's
-            // `SocksTimeout` (105 s) with nothing opened.
+            // Wall time since the last opened stream, or since this Tor
+            // reached Running, with at least one unopened dial and nothing
+            // held. Five minutes, provisional until the floor-device soak.
+            // Not a count of dials.
             quiet_after: Duration::from_secs(300),
         }
     }
@@ -83,9 +88,12 @@ pub enum Action {
         fresh_directory: bool,
     },
     /// One `GETINFO` of bootstrap progress, the SOCKS listeners, and
-    /// `traffic/read`. While Running this is the liveness question: a Tor
+    /// `traffic/read`. While Running the same reply also carries Tor's
+    /// network view ([`Input::NetworkView`]); during a bootstrap those keys
+    /// are not asked. While Running this is the liveness question: a Tor
     /// that sends nothing still has a reply to be late with.
-    /// A reply inside the driver's bound is [`Input::DirectorySample`].
+    /// A reply inside the driver's bound is [`Input::DirectorySample`],
+    /// then [`Input::NetworkView`] while Running.
     /// A reply past it is [`Input::ReplyLate`].
     Sample,
     /// Look for the first `state` file.
@@ -167,12 +175,6 @@ pub enum Input {
         /// `traffic/read`, the bytes Tor has read since it started, when the
         /// reply carried a count. `None` is unknown, never zero.
         read: Option<u64>,
-        /// `network-liveness`: Tor's view of whether its network is up.
-        /// `None` is unknown, never down.
-        network: Option<bool>,
-        /// `status/circuit-established`: whether Tor holds a built circuit.
-        /// `None` is unknown, never down.
-        circuits: Option<bool>,
     },
     /// The actor's bootstrap poll moved the percent. Not a sample.
     BootstrapNoted {
@@ -228,9 +230,14 @@ pub enum Input {
     Shutdown,
     /// The relay's hop-0 verdict for a local origin moved (`GS-Q3`).
     AddressHidingOrigin(OriginVerdict),
+    /// The tally already in the cell when this supervisor started watching.
+    /// It is the baseline, not an open: the stretch clock does not move.
+    DialBaseline(DialTally),
     /// The dialer's tally of this node's Tor dials changed (§4.2). Display
     /// only, never a cause (`TSR-Q14`).
     DialEvidence(DialTally),
+    /// Tor's sampled view of its network. Ignored unless Running.
+    NetworkView(NetworkView),
     /// Tor says it reaches its network: `NETWORK_LIVENESS UP` or
     /// `CIRCUIT_ESTABLISHED`.
     ExternalCleared,
@@ -388,13 +395,7 @@ impl Core {
                 progress,
                 socks,
                 read,
-                network,
-                circuits,
-            } => {
-                let mut actions = self.note_sample(now, progress, socks, read);
-                actions.extend(self.tor_view(now, network, circuits));
-                actions
-            }
+            } => self.note_sample(now, progress, socks, read),
             Input::BootstrapNoted { progress } => self.note_bootstrap(now, progress),
             Input::ReplyLate => self.process_fault(now, Cause::ReplyLate, false),
             Input::ProcessEnded { exit_code } => {
@@ -420,7 +421,9 @@ impl Core {
             Input::StateFileAppeared => self.state_file(),
             Input::Shutdown => self.shutdown(),
             Input::AddressHidingOrigin(verdict) => self.origin_verdict(verdict, now),
+            Input::DialBaseline(tally) => self.dial_baseline(tally),
             Input::DialEvidence(tally) => self.dial_evidence(tally, now),
+            Input::NetworkView(view) => self.network_view(now, view),
             Input::ExternalCleared => self.external_cleared(now),
         };
         self.step(now, actions)
@@ -613,46 +616,6 @@ impl Core {
         }
     }
 
-    /// Tor's own current view of its network, read with every sample
-    /// (`TSR-Q14`): it governs, even when Tor sends no event. Only while
-    /// Running: during a bootstrap no circuit is built yet, and that is not
-    /// a statement about the network. Down or no circuit names the blocked
-    /// link when nothing else is named; up with a circuit clears it.
-    /// Unknown says nothing.
-    fn tor_view(&mut self, now: u64, network: Option<bool>, circuits: Option<bool>) -> Vec<Action> {
-        if !matches!(self.phase, Phase::Running { .. }) {
-            return Vec::new();
-        }
-        if network == Some(false) || circuits == Some(false) {
-            if self.cause == Cause::None {
-                return self.external(now, Cause::ExternalBlocked);
-            }
-            return Vec::new();
-        }
-        if network == Some(true) && circuits == Some(true) {
-            return self.external_cleared(now);
-        }
-        Vec::new()
-    }
-
-    fn enter_running(&mut self, now: u64, socks: SocketAddr) -> Vec<Action> {
-        self.phase = Phase::Running {
-            socks,
-            route: Duty::Owed,
-            onion: Duty::Owed,
-            disk: Disk::Watching,
-            link: Link::Open,
-        };
-        self.dials.restart(now);
-        self.set_cause(Cause::None);
-        self.arm_sample(now);
-        self.arm_alive(now);
-        vec![
-            Action::Publish(ManagedRunning { socks }),
-            Action::RepublishOnion,
-        ]
-    }
-
     fn route_installed(&mut self, now: u64) -> Vec<Action> {
         let Phase::Running { route, .. } = &mut self.phase else {
             return Vec::new();
@@ -817,49 +780,6 @@ impl Core {
         }
         actions.extend(self.say(now, Cadence::Due));
         actions
-    }
-
-    fn external(&mut self, now: u64, cause: Cause) -> Vec<Action> {
-        self.set_cause(cause);
-        self.say(now, Cadence::Due)
-    }
-
-    /// The dialer's tally moved. Display only (`TSR-Q14`): which reply a
-    /// failed onion dial gets is the destination's to choose as much as the
-    /// link's, so this never sets a cause. While a running Tor has no
-    /// session and none opens, the posture line says so once.
-    fn dial_evidence(&mut self, tally: DialTally, now: u64) -> Vec<Action> {
-        self.dials.fold(tally, now);
-        self.quiet_line(now)
-    }
-
-    /// Re-read the quiet stretch; the line is said once, when it begins
-    /// to stand, and only while no cause is named.
-    fn quiet_line(&mut self, now: u64) -> Vec<Action> {
-        if !matches!(self.phase, Phase::Running { .. }) {
-            return Vec::new();
-        }
-        if self.dials.evaluate(now, &self.policy) && self.cause == Cause::None {
-            vec![Action::SayProgress]
-        } else {
-            Vec::new()
-        }
-    }
-
-    /// Tor says it reaches its network. Its judgment governs the causes
-    /// about reaching the network (`TSR-Q14`): a blocked link and an
-    /// unreachable directory clear. A clock report and the open-file limit
-    /// are other kinds, each with its own evidence. The recovery is said at
-    /// once.
-    fn external_cleared(&mut self, now: u64) -> Vec<Action> {
-        if !matches!(
-            self.cause,
-            Cause::ExternalBlocked | Cause::DirectoryUnreachable
-        ) {
-            return Vec::new();
-        }
-        self.set_cause(Cause::None);
-        self.say(now, Cadence::Now)
     }
 
     fn on_sample_deadline(&mut self, now: u64) -> Vec<Action> {

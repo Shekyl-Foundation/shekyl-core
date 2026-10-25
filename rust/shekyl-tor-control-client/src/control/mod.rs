@@ -72,7 +72,7 @@ pub use framing::{
     BULK_REPLY_BYTES, ORDINARY_REPLY_BYTES,
 };
 pub use listeners::parse_socks_listeners;
-pub use network::{parse_circuit_established, parse_network_liveness};
+pub use network::{parse_network_view, NetworkView, Reported};
 pub use onion::{
     evaluate_add_onion_reply, parse_service_id, AddOnion, AddOnionReplyError, OnionFlags, OnionKey,
     OnionPort, OnionPow, ServiceId, ONION_KEY_BYTES, SERVICE_ID_CHARS,

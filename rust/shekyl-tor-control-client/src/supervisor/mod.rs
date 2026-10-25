@@ -21,6 +21,7 @@ mod core;
 mod events;
 mod posture;
 
+pub use crate::control::{NetworkView, Reported};
 pub use core::{Action, Core, DialTally, Input, ManagedRunning, Policy, Step};
 pub use events::input_of;
 pub use posture::{

@@ -13,7 +13,7 @@ use shekyl_timing_engine::{Clock, ManualClock, Tick};
 use super::super::posture::{
     render, Cause, Connectors, ManagedTorFix, OriginVerdict, OwnTx, Shown, Status, TorSetting,
 };
-use super::{duration_ns, Action, Core, DialTally, Input, Policy, Step};
+use super::{duration_ns, Action, Core, Input, Policy, Step};
 
 fn policy() -> Policy {
     Policy {
@@ -106,8 +106,6 @@ fn bring_up(core: &mut Core) -> Step {
             progress: Some(10),
             socks: Some(socks()),
             read: None,
-            network: None,
-            circuits: None,
         },
         0,
     );
@@ -219,8 +217,6 @@ fn a_sample_keeps_what_the_reply_omits_and_a_late_reply_restarts() {
             progress: Some(10),
             socks: Some(bound),
             read: None,
-            network: None,
-            circuits: None,
         },
         0,
     );
@@ -231,8 +227,6 @@ fn a_sample_keeps_what_the_reply_omits_and_a_late_reply_restarts() {
                 progress: Some(10),
                 socks: None,
                 read: None,
-                network: None,
-                circuits: None,
             },
             now,
         );
@@ -246,8 +240,6 @@ fn a_sample_keeps_what_the_reply_omits_and_a_late_reply_restarts() {
             progress: Some(40),
             socks: None,
             read: None,
-            network: None,
-            circuits: None,
         },
         90_000 * 1_000_000_000,
     );
@@ -300,8 +292,6 @@ fn an_open_file_limit_degrades_without_a_respawn() {
                     progress: Some(100),
                     socks: None,
                     read: None,
-                    network: None,
-                    circuits: None,
                 },
                 due,
             );
@@ -342,8 +332,6 @@ fn a_clock_jump_is_one_sample_and_the_reply_restores_the_line() {
             progress: None,
             socks: None,
             read: None,
-            network: None,
-            circuits: None,
         },
         6_000,
     );
@@ -528,8 +516,6 @@ fn a_repeated_death_names_the_last_exit_code() {
             progress: Some(100),
             socks: Some(socks()),
             read: None,
-            network: None,
-            circuits: None,
         },
         due,
     );
@@ -631,8 +617,6 @@ fn a_ready_gate_without_a_listener_waits_for_the_sample() {
             progress: Some(100),
             socks: None,
             read: None,
-            network: None,
-            circuits: None,
         },
         0,
     );
@@ -804,8 +788,6 @@ fn wait_after_death(usable_at: u64, degraded_at: Option<u64>, death_at: u64) -> 
             progress: Some(100),
             socks: Some(socks()),
             read: None,
-            network: None,
-            circuits: None,
         },
         usable_at,
     );
@@ -1013,255 +995,4 @@ fn an_exhausted_pin_holds_the_origin_while_health_stays_true() {
     assert_eq!(core.status().own_tx, OwnTx::Held);
 }
 
-/// A tally of `unopened` failed Tor dials since the `opened`-th opened one,
-/// with `held` sessions.
-fn dials(opened: u64, unopened: u32, held: u32) -> Input {
-    Input::DialEvidence(DialTally {
-        opened,
-        unopened,
-        held,
-    })
-}
-
-/// A sample while Running that carries Tor's own view.
-fn tor_says(network: Option<bool>, circuits: Option<bool>) -> Input {
-    Input::DirectorySample {
-        progress: Some(100),
-        socks: None,
-        read: None,
-        network,
-        circuits,
-    }
-}
-
-/// Run every deadline up to and including `until`, answering each liveness
-/// sample as a healthy Tor would, so nothing but the evidence under test can
-/// move the core. Returns every step taken.
-fn run_until(core: &mut Core, until: u64) -> Vec<Step> {
-    let mut steps = Vec::new();
-    while let Some(due) = core.deadline().filter(|due| *due <= until) {
-        let step = core.on_deadline(due);
-        if step.actions.contains(&Action::Sample) {
-            steps.push(core.on(tor_says(None, None), due));
-        }
-        steps.push(step);
-    }
-    steps
-}
-
-fn faults(steps: &[Step]) -> bool {
-    steps.iter().any(|step| {
-        spawns(step)
-            || takes_down(step)
-            || step
-                .actions
-                .iter()
-                .any(|action| matches!(action, Action::CheckPin))
-    })
-}
-
-fn says_progress(steps: &[Step]) -> usize {
-    steps
-        .iter()
-        .flat_map(|step| &step.actions)
-        .filter(|action| matches!(action, Action::SayProgress))
-        .count()
-}
-
-/// `TSR-Q14` (Rick, 2026-10-25): this node's own dial replies are never a
-/// link verdict. Ten minutes of failed Tor dials, with no session held and
-/// Tor saying nothing about its network, is a neutral line said once, and
-/// no cause, no announcement, no respawn. A planted onion answers `0x01` at
-/// will and a blackholing one `0x06` (shekyl-dev
-/// `data/tsr-acceptance/2026-10-25-socks-reply-sources`), so a cause from
-/// dials would let anyone make the node tell its operator it cannot reach
-/// Tor. Routing the tally to a cause fails the first half; dropping it
-/// fails the line. Every deadline runs; all 150 samples are answered.
-#[test]
-fn ten_minutes_of_failed_dials_are_a_neutral_line_never_a_cause() {
-    let (mut core, _) = Core::start(policy(), managed(true), 0);
-    reach_usable(&mut core);
-    let mut steps = Vec::new();
-    let mut unopened = 0;
-    let mut at = 0;
-    while at < duration_ns(Duration::from_secs(600)) {
-        at += duration_ns(Duration::from_secs(5));
-        steps.extend(run_until(&mut core, at));
-        unopened += 1;
-        steps.push(core.on(dials(0, unopened, 0), at));
-    }
-    let samples = steps
-        .iter()
-        .filter(|step| step.actions.contains(&Action::Sample))
-        .count();
-    // One liveness sample per `alive_every` while Running: 600 s / 4 s.
-    assert_eq!(samples, 150, "the liveness samples ran");
-    assert!(!faults(&steps), "no respawn, no takedown, no pin check");
-    assert_eq!(
-        steps.iter().map(announces).sum::<usize>(),
-        0,
-        "nothing announced"
-    );
-    assert_eq!(says_progress(&steps), 1, "the line is said once");
-    let status = core.status();
-    assert_eq!(status.cause, Cause::None);
-    assert_eq!(status.shown, Shown::Usable);
-    assert_eq!(status.respawn_count, 0);
-    assert!(status.tor_quiet.is_some());
-    let text = render(&status);
-    assert!(text.contains("No connection through Tor is open"), "{text}");
-    assert!(!text.contains("cannot reach"), "{text}");
-}
-
-/// A held Tor session means Tor carries this node's traffic: no line, however
-/// many dials to dead or refusing onions fail (the testnet case: two live
-/// seeds held, four dead ones redialed). An opened dial starts the stretch
-/// again.
-#[test]
-fn a_held_session_or_an_opened_dial_keeps_the_line_away() {
-    let (mut core, _) = Core::start(policy(), managed(true), 0);
-    reach_usable(&mut core);
-    let late = duration_ns(Duration::from_secs(60));
-    core.on(dials(0, 40, 1), late);
-    run_until(&mut core, late);
-    assert_eq!(core.status().tor_quiet, None, "a session is held");
-    core.on(dials(0, 41, 0), late + 1);
-    assert!(core.status().tor_quiet.is_some(), "none held, none opened");
-    core.on(dials(1, 0, 0), late + 2);
-    let step = core.on(dials(1, 1, 0), late + 3);
-    assert_eq!(says_progress(&[step]), 0);
-    assert_eq!(core.status().tor_quiet, None, "the stretch began again");
-}
-
-/// The stretch starts when a Tor reaches Running: failures from before do
-/// not make the line stand for the new Tor at once.
-#[test]
-fn the_quiet_stretch_starts_when_a_tor_reaches_running() {
-    let (mut core, _) = Core::start(policy(), managed(true), 0);
-    core.on(dials(0, 9, 0), duration_ns(Duration::from_secs(100)));
-    let at = duration_ns(Duration::from_secs(100));
-    core.on(Input::PinAccepted, at);
-    core.on(Input::Spawned, at);
-    core.on(
-        Input::DirectorySample {
-            progress: Some(100),
-            socks: Some(socks()),
-            read: None,
-            network: None,
-            circuits: None,
-        },
-        at,
-    );
-    core.on(Input::BootstrapComplete, at);
-    core.on(Input::RouteInstalled, at);
-    core.on(dials(0, 10, 0), at + 1);
-    assert_eq!(core.status().tor_quiet, None);
-    core.on(dials(0, 11, 0), at + duration_ns(policy().quiet_after));
-    assert!(core.status().tor_quiet.is_some());
-}
-
-/// Tor's own view, read with every sample (`TSR-Q14`), governs even when Tor
-/// sends no event: down or no circuit names the blocked link at once; up
-/// with a circuit clears it at once. Unknown says nothing. During a
-/// bootstrap no circuit is built yet, and that is not a statement.
-#[test]
-fn tors_sampled_view_names_and_clears_a_blocked_link_only_while_running() {
-    let (mut core, _) = Core::start(policy(), managed(true), 0);
-    core.on(Input::PinAccepted, 0);
-    core.on(Input::Spawned, 0);
-    let step = core.on(
-        Input::DirectorySample {
-            progress: Some(40),
-            socks: None,
-            read: None,
-            network: Some(true),
-            circuits: Some(false),
-        },
-        1,
-    );
-    assert_eq!(announces(&step), 0);
-    assert_eq!(
-        core.status().cause,
-        Cause::None,
-        "bootstrapping: no circuit yet"
-    );
-
-    let (mut core, _) = Core::start(policy(), managed(true), 0);
-    reach_usable(&mut core);
-    assert_eq!(announces(&core.on(tor_says(None, None), 1)), 0);
-    let step = core.on(tor_says(Some(false), None), 2);
-    assert_eq!(announces(&step), 1, "said at once");
-    assert_eq!(core.status().cause, Cause::ExternalBlocked);
-    assert_eq!(core.status().shown, Shown::Degraded);
-    assert_eq!(announces(&core.on(tor_says(Some(true), None), 3)), 0);
-    assert_eq!(core.status().cause, Cause::ExternalBlocked, "a circuit too");
-    let step = core.on(tor_says(Some(true), Some(true)), 4);
-    assert_eq!(announces(&step), 1, "the recovery is said at once");
-    assert_eq!(core.status().cause, Cause::None);
-    core.on(tor_says(Some(true), Some(false)), 5);
-    assert_eq!(core.status().cause, Cause::ExternalBlocked, "no circuit");
-}
-
-/// "Process only when the control connection also fails" (Rick): a blocked
-/// link does not stop a control failure from being a process fault.
-#[test]
-fn a_blocked_link_still_respawns_when_the_control_connection_fails() {
-    let (mut core, _) = Core::start(policy(), managed(true), 0);
-    reach_usable(&mut core);
-    core.on(Input::ExternalBlocked, 1);
-    core.on(Input::ControlEnded, 2);
-    assert!(matches!(core.status().cause, Cause::Died { .. }));
-    assert_eq!(core.status().shown, Shown::Restarting);
-    let due = core.deadline().expect("the respawn wait");
-    let step = core.on_deadline(due);
-    assert!(
-        step.actions.contains(&Action::CheckPin),
-        "{:?}",
-        step.actions
-    );
-}
-
-/// Tor saying it reaches its network clears what is about reaching the
-/// network, which nothing did while Tor ran: a blocked link and an
-/// unreachable directory. The open-file limit and a clock report are not
-/// the network and keep their own evidence.
-#[test]
-fn tor_reaching_its_network_clears_the_network_causes_only() {
-    for named in [Input::ExternalBlocked, Input::DirectoryUnreachable] {
-        let (mut core, _) = Core::start(policy(), managed(true), 0);
-        reach_usable(&mut core);
-        core.on(named, 1);
-        assert_eq!(core.status().shown, Shown::Degraded);
-        let step = core.on(Input::ExternalCleared, 2);
-        assert_eq!(announces(&step), 1, "the recovery is said at once");
-        assert_eq!(core.status().cause, Cause::None);
-        assert_eq!(core.status().shown, Shown::Usable);
-    }
-    let (mut core, _) = Core::start(policy(), managed(true), 0);
-    reach_usable(&mut core);
-    core.on(Input::TooManyFiles { open: 1024 }, 3);
-    let step = core.on(Input::ExternalCleared, 4);
-    assert_eq!(announces(&step), 0);
-    assert_eq!(core.status().cause, Cause::TooManyFiles { open: 1024 });
-}
-
-/// The line reads whether dials failed, never how many (the dialer lane's
-/// #1190 keeps up to five Tor dials in flight): five failures landing at
-/// once leave the posture exactly where one does, and the count reaches no
-/// one, since Status carries only the stretch.
-#[test]
-fn the_line_reads_whether_dials_failed_not_how_many() {
-    let late = duration_ns(policy().quiet_after) + 1;
-    let mut seen = Vec::new();
-    for unopened in [1, 5] {
-        let (mut core, _) = Core::start(policy(), managed(true), 0);
-        reach_usable(&mut core);
-        let step = core.on(dials(0, unopened, 0), late);
-        seen.push((says_progress(&[step]), core.status()));
-    }
-    assert_eq!(
-        seen[0], seen[1],
-        "one failure and five are the same posture"
-    );
-    assert!(seen[0].1.tor_quiet.is_some());
-}
+mod quiet;

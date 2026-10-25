@@ -15,7 +15,8 @@
 
 use std::time::Duration;
 
-use super::Policy;
+use super::super::posture::Cause;
+use super::{Action, Core, Phase, Policy};
 
 /// The dialer's tally of this node's Tor dials. The supervisor never sees
 /// an address or a reply code.
@@ -48,6 +49,13 @@ impl Dials {
         }
     }
 
+    /// Mark the tally already in the cell when this supervisor started
+    /// watching. Those dials are not an open on this Tor: the stretch clock
+    /// stays where it is.
+    pub(super) fn seed(&mut self, tally: DialTally) {
+        self.last = tally;
+    }
+
     /// Fold a tally. An opened stream starts the stretch again.
     pub(super) fn fold(&mut self, tally: DialTally, now: u64) {
         if tally.opened > self.last.opened {
@@ -75,5 +83,36 @@ impl Dials {
     /// How long no Tor connection has been open or opened, while that holds.
     pub(super) fn line(&self) -> Option<Duration> {
         self.line
+    }
+}
+
+impl Core {
+    /// The tally already watched when this supervisor started. It sets what
+    /// has been seen and does not move the stretch.
+    pub(super) fn dial_baseline(&mut self, tally: DialTally) -> Vec<Action> {
+        self.dials.seed(tally);
+        Vec::new()
+    }
+
+    /// The dialer's tally moved. Display only (`TSR-Q14`): which reply a
+    /// failed onion dial gets is the destination's to choose as much as the
+    /// link's, so this never sets a cause. While a running Tor has no
+    /// session and none opens, the posture line says so once.
+    pub(super) fn dial_evidence(&mut self, tally: DialTally, now: u64) -> Vec<Action> {
+        self.dials.fold(tally, now);
+        self.quiet_line(now)
+    }
+
+    /// Re-read the quiet stretch. The line is said once, when it begins to
+    /// stand, and only while no cause is named.
+    pub(super) fn quiet_line(&mut self, now: u64) -> Vec<Action> {
+        if !matches!(self.phase, Phase::Running { .. }) {
+            return Vec::new();
+        }
+        if self.dials.evaluate(now, &self.policy) && self.cause == Cause::None {
+            vec![Action::SayProgress]
+        } else {
+            Vec::new()
+        }
     }
 }
