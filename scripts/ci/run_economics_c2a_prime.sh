@@ -11,21 +11,18 @@
 #   preflight    — oracle-constant guards (no harness required; passes today)
 #   layer1       — Layer 1 per-quantity dual-leg KAT (legs A + B)
 #   layer2       — Layer 2 multi-block accumulation + cap invariant + A vs B
-#   layer3       — Layer 3 pop-replay reorg coupling
-#   conservation — archival budget supply-conservation KAT (C-1 fast-follow,
-#                  REWARD_EMISSION_E3_GATING_ROUND.md §9.9): labeled-row
-#                  identity through the real connect path + pop/reconnect
-#   all          — preflight + layers 1–3 + conservation (local convenience)
+#   all          — preflight + layers 1–2 (local convenience)
+#
+# This gate runs no core_tests. The pop-replay reorg coupling and the
+# archival budget conservation identity are pinned in Rust
+# (shekyl-chain-rules reward_tests.rs and miner_tests.rs; shekyl-chain-ingest
+# switch_differential_tests.rs).
 #
 # Harness naming contract (implementer MUST match — CI selects by these filters):
 #
 #   unit_tests (gtest):
 #     EconomicsC2aPrime.Layer1*
 #     EconomicsC2aPrime.Layer2*
-#
-#   core_tests (--filter glob):
-#     economics_c2a_prime_layer3*
-#     archival_budget_conservation*
 #
 #   Rust (cargo test filter on test fn name):
 #     c2a_prime_layer1*
@@ -38,7 +35,6 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-$REPO_ROOT/build}"
 UNIT_TESTS="$BUILD_DIR/tests/unit_tests/unit_tests"
-CORE_TESTS="$BUILD_DIR/tests/core_tests/core_tests"
 ECONOMICS_JSON="$REPO_ROOT/config/economics_params.json"
 
 # Monero-era tail subsidy (3×10¹¹) — twelve digits after the leading 3.
@@ -56,9 +52,6 @@ require_repo_root() {
 require_build_tree() {
   if [[ ! -x "$UNIT_TESTS" ]]; then
     die "unit_tests binary missing at $UNIT_TESTS — configure with BUILD_TESTS=ON"
-  fi
-  if [[ ! -x "$CORE_TESTS" ]]; then
-    die "core_tests binary missing at $CORE_TESTS — configure with BUILD_TESTS=ON"
   fi
 }
 
@@ -118,7 +111,6 @@ verify_build_artifact_layout() {
   local missing=0
   local required=(
     "$BUILD_DIR/tests/unit_tests/unit_tests"
-    "$BUILD_DIR/tests/core_tests/core_tests"
   )
   for path in "${required[@]}"; do
     if [[ ! -e "$path" ]]; then
@@ -134,13 +126,12 @@ verify_build_artifact_layout() {
   fi
   require_binary_runs "$UNIT_TESTS" \
     --gtest_list_tests --gtest_filter='ShekylGateRunnabilityProbe.NoSuchTest'
-  require_binary_runs "$CORE_TESTS" --list_tests
-  echo "OK: build artifact layout + both test binaries execute; tests/data from checkout"
+  echo "OK: build artifact layout + the test binary executes; tests/data from checkout"
 }
 
 # Execute a test binary with a flag that lists and exits, purely to prove the
 # dynamic loader can resolve it. The probe is deliberately a NO-OP workload: a
-# non-matching gtest filter and core_tests' own --list_tests, so this costs
+# non-matching gtest filter, so this costs
 # milliseconds and cannot itself fail for test-content reasons.
 #
 # stderr is captured and echoed on failure. The loader's message names the
@@ -196,26 +187,6 @@ ${out}"
   printf '%s\n' "$out" | grep -c '^  ' || true
 }
 
-count_core_tests() {
-  local filter="$1"
-  # core_tests --filter uses glob; strip trailing * for fixed-string prefix match.
-  local prefix="${filter%\*}"
-  local out rc=0
-  # Symmetric with count_gtest_cases: capture stderr and the exit status rather
-  # than discarding both. The `2>/dev/null | grep -cF` form this replaces could
-  # not distinguish "ran and matched nothing" from "never ran", so layers 3 and
-  # conservation reported a missing harness whenever the binary failed to load.
-  # See require_binary_runs above for why that was not hypothetical.
-  out="$("$CORE_TESTS" --list_tests 2>&1)" || rc=$?
-  if (( rc != 0 )); then
-    die "core_tests could not be listed (exit ${rc}) for filter '${filter}'. \
-This is NOT a missing harness -- the binary exists but did not run. \
-Its output was:
-${out}"
-  fi
-  printf '%s\n' "$out" | grep -cF "$prefix" || true
-}
-
 require_gtest_harness() {
   local layer="$1" filter="$2"
   local count
@@ -239,12 +210,6 @@ run_gtest_layer() {
   local filter="$1"
   echo "==> gtest ${filter}"
   "$UNIT_TESTS" --gtest_filter="$filter"
-}
-
-run_core_tests_layer() {
-  local filter="$1"
-  echo "==> core_tests --filter=${filter}"
-  "$CORE_TESTS" --generate_and_play_test_data --filter="$filter"
 }
 
 rust_test_exists() {
@@ -344,36 +309,8 @@ cmd_layer2() {
   run_rust_layer2
 }
 
-# The ONE fail-closed core_tests gate: refuses to pass green when the filter
-# matches zero registered tests (the convention-theater class). Every
-# core_tests lane goes through here — a gate fix applied to a per-lane copy
-# leaves the other lanes theater.
-run_core_tests_gate() {
-  local filter="$1" label="$2" hint="$3"
-  require_repo_root
-  verify_build_artifact_layout
-  require_build_tree
-  local count
-  count="$(count_core_tests "$filter")"
-  if [[ "$count" -eq 0 ]]; then
-    die "no ${label} core_tests (filter '${filter}'). ${hint}"
-  fi
-  echo "${label}: found ${count} core_tests case(s) matching ${filter}"
-  run_core_tests_layer "$filter"
-}
-
-cmd_layer3() {
-  run_core_tests_gate 'economics_c2a_prime_layer3*' 'C2a′ Layer 3' \
-    'Land pop-replay harness per STAGE_1_PR_7 §5.8.'
-}
-
-cmd_conservation() {
-  run_core_tests_gate 'archival_budget_conservation*' 'archival budget conservation' \
-    'Land the C-1 conservation KAT per REWARD_EMISSION_E3_GATING_ROUND.md §9.9.'
-}
-
 usage() {
-  echo "Usage: $(basename "$0") {preflight|layer1|layer2|layer3|conservation|all}" >&2
+  echo "Usage: $(basename "$0") {preflight|layer1|layer2|all}" >&2
   exit 2
 }
 
@@ -383,14 +320,10 @@ main() {
     preflight) cmd_preflight ;;
     layer1) cmd_layer1 ;;
     layer2) cmd_layer2 ;;
-    layer3) cmd_layer3 ;;
-    conservation) cmd_conservation ;;
     all)
       cmd_preflight
       cmd_layer1
       cmd_layer2
-      cmd_layer3
-      cmd_conservation
       ;;
     *) usage ;;
   esac

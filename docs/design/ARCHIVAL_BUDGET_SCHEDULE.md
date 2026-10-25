@@ -265,10 +265,12 @@ Standing assertions that hold it today:
 `tests/unit_tests/economics_c2a_prime.cpp`
 (`Layer1PerQuantityCallPathComposesSplitAndCoinbase`: split conservation
 `Q_miner_base + Q_staker_emission = Q_full` with the fee legs
-independently pinned to zero) and `tests/core_tests/economics_c2a_prime.cpp`
-(connect-path `already_generated` delta equals the *full* subsidy, with
-the defense-in-depth `Q_full > miner_coinbase` proving the carve-out is
-real through the production path). **Coverage gap → C-1 build KAT:**
+independently pinned to zero) and, in Rust,
+`rust/shekyl-chain-rules/src/rules/reward_tests.rs`
+`the_verdict_carries_the_paid_emission` (the connect's `coins_generated`
+advances by the *full* subsidy through `validate`) with
+`rust/shekyl-chain-rules/src/rules/miner_tests.rs`
+`the_staker_share_starts_at_block_one` (the staker carve-out is real). **Coverage gap → C-1 build KAT:**
 both run fee-free blocks, so the fee-side half (`staker_pool_amount`
 excluded from a *fee-bearing* block's coinbase through
 `validate_miner_transaction`) is pinned only at the helper level. The
@@ -460,31 +462,43 @@ connects through the store's write path and asserts the close of epoch E
 freezes the accrual through E's final block, that a pop restores the
 accruing row, and that a re-connect reproduces the frozen close.
 
-B1's **full-connect-path counterpart** landed 2026-07-09:
-`archival_budget_conservation` (named `…_boundary` until 2026-10-08, when
-its mid-chain block-version crossing left with the hard-fork mechanism)
-(`tests/core_tests/archival_budget_conservation.{h,cpp}`, chaingen
-harness; CI: the `conservation` subcommand of
-`run_economics_c2a_prime.sh`). It drives `handle_block_to_main_chain`
-across a v1→v2 fork table (fork height 8, epoch-unaligned) and asserts
-the §2.2 identity per block in **labeled-row** form — each of
-{accrual row, burn row} checked against its own expected value, not
-just their sum — plus the genesis exclusion, coinbase =
-`miner_emission`, ledger advance = independently-recomputed modulated
-subsidy, and pop/reconnect row restoration across the boundary. With
-the burn leg deleted the expectations are unconditional (whole inflow
-in the accrual row, zero in the burn row for the fee-free fixture);
-the labeled form remains the guard against the destination-error class
-(F-B1b: inflow routed into the burn row keeps the sum identity green).
-The fork table still crosses v1→v2 because `major_version` is a live
-operand of the split/fee-burn and the pop/reconnect leg replays the
-boundary through the rewound fork machinery. Fee-leg gap (disclosed):
-the fixture is fee-free, so the KAT exercises only the emission half
-of `staker_inflow` (`staker_emission + staker_pool_amount`)
-end-to-end — the same chaingen FCMP++ fee-transaction gap that defers
-B5's connect-path block form (below) defers the fee-pool half here; it
-rides the E4/E5 regtest-e2e residue, with the unit-level B5 KATs and
-the F-B1c-c1 operand pin as the interim guards.
+B1's **full-connect-path counterpart** is pinned in Rust, in
+labeled-row form: each destination checked against its own expected
+value, not just their sum.
+- `rust/shekyl-chain-rules/src/rules/reward_tests.rs` pins, through
+  `validate`:
+  - the genesis exclusion
+    (`at_genesis_the_configured_emission_stands_unbounded_and_unsplit`);
+  - the accrual equal to the staker emission with a zero burn
+    (`f17_and_g11_split_the_listed_fees_with_the_one_owner`);
+  - the coinbase equal to the two miner legs
+    (`f18_the_coinbase_pays_exactly_the_two_miner_legs_or_is_refused_at_the_miner_slot`);
+  - the legs summing to the paid reward
+    (`f16_splits_the_paid_reward_at_the_epoch`);
+  - the ledger advance equal to that reward
+    (`the_verdict_carries_the_paid_emission`,
+    `g12_advances_the_parent_accumulator_by_the_paid_reward`).
+- The store side:
+  - a pop lifts the burn row
+    (`rust/shekyl-chain-store/src/store/connect_tests.rs`
+    `pop_by_replay_returns_the_store_to_the_state_before_the_block`);
+  - a pop restores the accruing row
+    (`rust/shekyl-chain-store/src/store/archival_write_tests.rs`
+    `a_join_and_its_credit_land_as_the_deltas_rows_and_a_pop_lifts_them`);
+  - a switch away and back reproduces every table, the accruing row
+    included (`rust/shekyl-chain-ingest/src/switch_differential_tests.rs`
+    `the_self_differential_holds_at_the_cap_depth_with_a_spend`; its
+    mutation control `a_corrupted_undo_row_makes_the_differential_fail`
+    shows the accruing row is compared).
+
+No single Rust assertion states the sum; the validator tests together
+do. The labeled form remains the guard against the
+destination-error class (F-B1b: inflow routed into the burn row keeps
+the sum identity green). Fee-leg gap (disclosed): the validator
+fixtures carry no generated coins, so their staker pool is zero, and
+the fee-pool half of `staker_inflow`
+(`staker_emission + staker_pool_amount`) is the gap the B5 note below
+records.
 B4 spans the Rust wire/verify KATs (landed classes) plus the builder-side
 omission test when the claim-builder lands. B5 landed as unit-level KATs
 (`economics_b5_fee_coinbase.cpp`) driving `validate_miner_transaction`
