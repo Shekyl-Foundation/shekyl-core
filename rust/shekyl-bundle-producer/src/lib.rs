@@ -24,7 +24,8 @@
 //!    feature `fetch` for the read itself).
 //! 4. **Assemble and sign** the bundle: the revealed seed, both bitmaps,
 //!    one record per pass, the witness signature over the commitment.
-//! 5. **File** it by `h + W₂ − M`, passes or none. Filing is an offer to
+//! 5. **File** it once every read has settled, passes or none: by
+//!    `h + W₂ − M`, or up to `h + W₂ − 1` for a read still in flight then. Filing is an offer to
 //!    the queue through the chain store's single writer; the queue's
 //!    admission is the bundle rule against the tip.
 //!
@@ -73,8 +74,10 @@ use shekyl_types::BlockCount;
 /// per read comes from the nonce-derived SOCKS credentials (`SF-D3`).
 pub const READ_SPACING: BlockCount = BlockCount::from_raw(30);
 
-/// `M`: a block's bundle is filed by `h + W₂ − M`, so inclusion latency
-/// and an ordinary reorg leave it inside its window. PROVISIONAL (§13.2).
+/// `M`: no read starts after `h + W₂ − M`, and a block with no read in
+/// flight files by then, so inclusion latency and an ordinary reorg leave
+/// it inside its window; a read in flight is waited for inside the margin
+/// (`producer` module docs). PROVISIONAL (§13.2).
 pub const FILING_MARGIN: BlockCount = BlockCount::from_raw(30);
 
 /// How far below the tip a template's candidate is kept. A template for

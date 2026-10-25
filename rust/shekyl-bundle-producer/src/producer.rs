@@ -73,7 +73,8 @@ pub struct Window {
 }
 
 impl Window {
-    /// `h + W₂ − M`: the height by which `h`'s bundle is filed.
+    /// `h + W₂ − M`: the last height a read of `h` starts at; a block with
+    /// no read in flight files by it.
     #[must_use]
     pub fn filing_deadline(self, h: BlockHeight) -> BlockHeight {
         h.saturating_add(self.response)

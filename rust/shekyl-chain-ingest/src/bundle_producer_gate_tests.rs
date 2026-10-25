@@ -472,15 +472,20 @@ async fn a_produced_bundle_is_admitted_and_connects_through_the_staged_door() {
         no_pass.expect("a block with draws filed while P signed with an identity key");
     assert!(reference.count() > 0);
     assert_eq!(reference.passes().popcount(), 0, "no read was a receipt");
-    // Every read under the identity key was recognised as the serving
-    // side's scheme, the line the live path logs, not a refusal.
+    // Every read under the identity key that was answered was recognised
+    // as the serving side's scheme, the line the live path logs, and none
+    // as a refusal. A stall (a loopback hiccup under load) reads again and
+    // is not the subject.
     let ended = producing.ended.lock().expect("the outcome list").clone();
-    assert!(!ended.is_empty(), "the live path read");
+    let serving = shekyl_bundle_producer::ReadOutcome::Answered(
+        shekyl_bundle_producer::Answered::ServingScheme,
+    );
+    assert!(ended.contains(&serving), "the live path read: {ended:?}");
     assert!(
-        ended.iter().all(|outcome| *outcome
-            == shekyl_bundle_producer::ReadOutcome::Answered(
-                shekyl_bundle_producer::Answered::ServingScheme
-            )),
+        ended
+            .iter()
+            .all(|outcome| *outcome == serving
+                || *outcome == shekyl_bundle_producer::ReadOutcome::Stall),
         "{ended:?}"
     );
     while tip_of(&chain) < h.saturating_add(BlockCount::from_raw(W2)) {
