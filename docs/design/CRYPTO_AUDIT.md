@@ -111,16 +111,16 @@ calibration and the full verdict tables are
 drivers and dynamic crate were written with an LLM coding agent, which
 upstream's Contributing.md rule 1 bars from contributions, so what goes
 upstream is the result and a link to this tree, with authorship stated in
-every post, and nothing from `dynamic/` until its method check is closed.
-Posted after #1178 merges (the links must resolve on `dev`), monero-oxide
-first; the drafts are in shekyl-dev's crypto-audit directory, and the three
-URLs come back into this section in the PR that follows the posts.
+every post. The links are pinned to commits; the drafts are in
+shekyl-dev's crypto-audit directory.
 
 1. monero-oxide/monero-oxide, an issue: they are red on the same advisory
    (`deny.toml` `ignore = []`, `yanked = "deny"`; helioselene asks for
    `crypto-bigint = "0.5"`, lock 0.5.5), and helioselene is theirs. The
    static method, targets, toolchains, the one leak, calibration, links to
-   the records. Waits for CA-2's mechanism (§2): not yet posted.
+   the records; and, as a separate finding, CA-2 (§2) with its records.
+   Posted 2026-10-25:
+   <https://github.com/monero-oxide/monero-oxide/issues/210>
 2. RustCrypto/crypto-bigint, a comment on #1365: the 0.5.5 `Residue::pow`
    window branch as a data point for the 0.5.x range; no code, no 0.5.6
    asked. Posted 2026-10-24:
@@ -379,15 +379,13 @@ path's flatness is no mitigation; the prover's neighbouring code is its
 own, and is not what this harness measures.
 
 **Disposition.** Open; no waiver is involved (nothing in `cargo audit`
-covers it). Owner: this row. The monero-oxide notice needed an actionable
-statement, not "two fixed operand sets time differently"; it now has one:
-inlined `HelioseleneField` square and mul show operand-dependent time on
-x86_64 with the clock pinned and with turbo on (fresh structured operands
-included); the same two operations behind a call boundary do not; DOITM
-does not remove it; turbostat shows equal frequency and fewer cycles for
-the faster classes; the disassembly shows no data-dependent instruction,
-and SLP vectorisation is not involved. Rick's ruling (2026-10-25): post it
-after the root session, whatever its outcome. The RustCrypto and serai notices are independent of CA-2.
+covers it). Owner: this row. Reported upstream with the records (§1,
+monero-oxide/monero-oxide#210, 2026-10-25): inlined `HelioseleneField`
+square and mul show operand-dependent time on two x86_64 hosts; the same
+two operations behind a call boundary do not; DOITM does not remove it;
+turbostat shows equal frequency and fewer cycles for the faster classes;
+the disassembly shows no data-dependent instruction, and SLP vectorisation
+is not involved. The RustCrypto and serai notices are independent of CA-2.
 
 **Reopen / close.** The platform offers no mitigation here: the clock is
 not the carrier and DOITM does not govern it. So this closes on the code
