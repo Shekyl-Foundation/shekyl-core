@@ -495,7 +495,9 @@ fn a_reply_is_the_arrival_it_was_tagged_with() {
             &view,
             Event::Entry {
                 tag: first_tag,
-                outcome: Outcome::Connected { relay: false },
+                outcome: Outcome::Connected {
+                    height: BlockHeight::from_raw(8),
+                },
             },
         );
         if !out

@@ -14,7 +14,7 @@ use shekyl_levin::{RequestBodies, RequestHeaders};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 
 use super::{outcome_of, ServeRequest, Serving};
-use shekyl_chain_sync::Outcome;
+use shekyl_chain_sync::{Outcome, SyncState};
 
 #[test]
 fn every_entry_reply_has_an_outcome() {
@@ -26,7 +26,9 @@ fn every_entry_reply_has_an_outcome() {
                 height: BlockHeight::ZERO,
                 hash,
             },
-            Outcome::Connected { relay: false },
+            Outcome::Connected {
+                height: BlockHeight::ZERO,
+            },
         ),
         (Reply::Refused(verdict), Outcome::Refused { verdict }),
         (Reply::Unlinked { at: hash }, Outcome::Unlinked { at: hash }),
@@ -73,6 +75,18 @@ fn every_entry_reply_has_an_outcome() {
             Outcome::Noted,
         ),
         (
+            Reply::Switched {
+                demoted: vec![(BlockHeight::from_raw(7), BlockHash::from_bytes([8; 32]))],
+                promoted: vec![
+                    (BlockHeight::from_raw(7), BlockHash::from_bytes([9; 32])),
+                    (BlockHeight::from_raw(8), hash),
+                ],
+            },
+            Outcome::Connected {
+                height: BlockHeight::from_raw(8),
+            },
+        ),
+        (
             Reply::CannotFollow(CannotFollow::BelowFloor {
                 tip: BlockHeight::ZERO,
                 floor: BlockHeight::ZERO,
@@ -81,18 +95,78 @@ fn every_entry_reply_has_an_outcome() {
         ),
     ];
     for (reply, expected) in cases {
-        assert_eq!(outcome_of(reply.clone(), true), expected, "{reply:?}");
+        assert_eq!(
+            outcome_of(reply.clone(), true, Some(hash)),
+            expected,
+            "{reply:?}"
+        );
     }
+}
+
+/// A connect carries the height the block took, whether the body was
+/// requested or announced: the relay is the model's to decide.
+#[test]
+fn a_connect_carries_its_height_however_the_body_arrived() {
+    let height = BlockHeight::from_raw(12);
+    let connected = Reply::Connected {
+        height,
+        hash: BlockHash::from_bytes([3; 32]),
+    };
     assert_eq!(
         outcome_of(
-            Reply::Connected {
-                height: BlockHeight::ZERO,
-                hash,
-            },
+            connected.clone(),
             false,
+            Some(BlockHash::from_bytes([3; 32]))
         ),
-        Outcome::Connected { relay: true },
-        "an unsolicited connect is relayed"
+        Outcome::Connected { height }
+    );
+    assert_eq!(
+        outcome_of(connected, true, None),
+        Outcome::Connected { height }
+    );
+}
+
+/// A switch is a connect only when this arrival is the new tip. The model
+/// then relays it by the connect's rule. Any other tip, an empty promotion,
+/// or an offer the owner no longer holds, is noted.
+#[test]
+fn a_switch_is_a_connect_only_when_the_arrival_is_the_new_tip() {
+    let arrival = BlockHash::from_bytes([7; 32]);
+    let height = BlockHeight::from_raw(8);
+    let switched = |tip: BlockHash| Reply::Switched {
+        demoted: vec![(BlockHeight::from_raw(7), BlockHash::from_bytes([8; 32]))],
+        promoted: vec![
+            (BlockHeight::from_raw(7), BlockHash::from_bytes([9; 32])),
+            (height, tip),
+        ],
+    };
+    assert_eq!(
+        outcome_of(switched(arrival), true, Some(arrival)),
+        Outcome::Connected { height }
+    );
+    assert_eq!(
+        outcome_of(switched(arrival), false, Some(arrival)),
+        Outcome::Connected { height }
+    );
+    assert_eq!(
+        outcome_of(
+            switched(BlockHash::from_bytes([9; 32])),
+            true,
+            Some(arrival)
+        ),
+        Outcome::Noted
+    );
+    assert_eq!(outcome_of(switched(arrival), true, None), Outcome::Noted);
+    assert_eq!(
+        outcome_of(
+            Reply::Switched {
+                demoted: Vec::new(),
+                promoted: Vec::new(),
+            },
+            true,
+            Some(arrival),
+        ),
+        Outcome::Noted
     );
 }
 
@@ -124,5 +198,23 @@ fn a_session_holds_one_waiting_request_of_each_kind() {
     }
     assert!(
         matches!(&serving.queue[1], ServeRequest::Bodies(request) if request.hashes == vec![[9; 32]])
+    );
+}
+
+/// The node keeps its sender, so the owner's exit cannot close the watch.
+/// The task publishes `NoView` instead, which is what facts and the
+/// follower would have read from a closed watch.
+#[test]
+fn an_owner_exit_publishes_no_view_while_the_node_keeps_its_sender() {
+    let (node, seen) = tokio::sync::watch::channel(SyncState::Synced);
+    let owner = node.clone();
+    let live = super::EndsAsNoView { state: owner };
+    assert_eq!(*node.borrow(), SyncState::Synced);
+    drop(live);
+    assert_eq!(*node.borrow(), SyncState::NoView);
+    assert_eq!(*seen.borrow(), SyncState::NoView);
+    assert!(
+        seen.has_changed().is_ok(),
+        "the node's sender was dropped with the owner"
     );
 }
