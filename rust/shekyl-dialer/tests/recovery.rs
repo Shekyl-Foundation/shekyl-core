@@ -16,12 +16,13 @@
 //! kept session install an answering dial. The handshake it is given
 //! decides whether that dial is kept.
 
+#[path = "support/log_capture.rs"]
+mod log_capture;
+
+use log_capture::log_text;
 use std::collections::VecDeque;
-use std::io::{self, Write};
 use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex};
-
-use tracing_subscriber::fmt::MakeWriter;
 
 use shekyl_capped_stream::Session;
 use shekyl_dialer::{DialAim, Dialer};
@@ -165,40 +166,6 @@ fn reply(network_id: [u8; 16]) -> Vec<u8> {
         local_peerlist_new: Vec::<PeerlistEntry>::new(),
     };
     response(COMMAND_HANDSHAKE, &body.store().expect("encode"))
-}
-
-struct LogBuf(Arc<Mutex<Vec<u8>>>);
-
-impl Write for LogBuf {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.lock().expect("log").extend_from_slice(buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-impl MakeWriter<'_> for LogBuf {
-    type Writer = LogBuf;
-
-    fn make_writer(&self) -> Self::Writer {
-        LogBuf(Arc::clone(&self.0))
-    }
-}
-
-/// Everything logged at `level` or above while `run` runs.
-fn log_text(level: tracing::Level, run: impl FnOnce()) -> String {
-    let buf = Arc::new(Mutex::new(Vec::new()));
-    let subscriber = tracing_subscriber::fmt()
-        .with_max_level(level)
-        .with_ansi(false)
-        .with_writer(LogBuf(Arc::clone(&buf)))
-        .finish();
-    tracing::subscriber::with_default(subscriber, run);
-    let bytes = buf.lock().expect("log").clone();
-    String::from_utf8(bytes).expect("utf-8")
 }
 
 /// The clearnet gray list, as addresses.
