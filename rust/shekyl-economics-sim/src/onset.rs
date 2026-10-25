@@ -80,10 +80,11 @@ use crate::stage2::{
 /// Atomic units per SKL ([`crate::burden::COIN`]).
 const COIN: f64 = crate::burden::COIN as f64;
 
-/// The horizon every scenario is run to for the onset table. Long enough that
-/// the emission curve (12.5 %/yr of the remainder at ESF 22 on 2-minute
-/// blocks) has reached the tail floor, so the fee era is observed, not
-/// extrapolated.
+/// The horizon every scenario is run to for the onset table. On the design's
+/// curve (ESF 22 per block) the fold reaches the tail near year 132, so the
+/// whole table is in the emission era: an onset of "never" means not by year
+/// 60, and a minimum over the table is pre-tail. The arms past this horizon
+/// are EUP-4 prep (`ECONOMICS_SIM_PHASE0.md` §P0.6).
 pub const ONSET_HORIZON_YEARS: u64 = 60;
 
 /// The decades reported in the per-scenario series.
