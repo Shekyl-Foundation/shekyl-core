@@ -28,7 +28,7 @@ use shekyl_tor_control_client::binary::VerifiedTorBinary;
 use shekyl_tor_control_client::control::{
     ask_timed, evaluate_add_onion_reply, AddOnion, AddOnionReplyError, AskError, BootstrapState,
     Command, ControlError, DiskWrites, EventSink, OnionFlags, OnionPort, OnionPow, ServiceId,
-    TorControlClient, TorExit,
+    SocksTimeout, TorControlClient, TorExit,
 };
 use shekyl_tor_control_client::directory_cache;
 use shekyl_tor_control_client::onion_identity::OnionIdentity;
@@ -66,6 +66,9 @@ pub struct DaemonTorConfig {
     /// Bound on a control round-trip. A miss is a process fault, not a
     /// bootstrap give-up.
     pub reply_deadline: Duration,
+    /// Tor's `SocksTimeout`: below the daemon's Tor dial deadline, so Tor's
+    /// own reply ends a dial it cannot attach (`TOR_SUPERVISOR.md` §4.2).
+    pub socks_timeout: SocksTimeout,
 }
 
 /// Why [`DaemonTorControl::start`] failed. Terminal for the boot: the caller
@@ -637,6 +640,7 @@ mod tests {
             data_dir_parent,
             events: EventSink::unsubscribed(),
             reply_deadline: Duration::from_secs(30),
+            socks_timeout: SocksTimeout::TorDefault,
         }
     }
 

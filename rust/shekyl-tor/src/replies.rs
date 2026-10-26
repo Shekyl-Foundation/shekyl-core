@@ -52,16 +52,19 @@ const TOR_INTRODUCTION_TIMEOUT: u16 = 0xF7;
 /// 2026-10-24). [`refused`] builds the cause.
 ///
 /// Worth a retry: a missing descriptor (`0xF0`), a failed introduction
-/// (`0xF2`), the two timeouts (`0xF3`, `0xF7`), general failure (`0x01`),
-/// network unreachable (`0x03`), host unreachable (`0x04`) and TTL expired
-/// (`0x06`): each can be the network or the directory on this try. Final:
-/// connection refused (`0x05`) and an unusable descriptor (`0xF1`), which
-/// the destination answered; the client-authorization errors (`0xF4`,
+/// (`0xF2`), the two timeouts (`0xF3`, `0xF7`), network unreachable
+/// (`0x03`), host unreachable (`0x04`) and TTL expired (`0x06`): each can
+/// be the network or the directory on this try. Final: general failure
+/// (`0x01`), connection refused (`0x05`) and an unusable descriptor
+/// (`0xF1`). RFC 1928 calls `0x01` a general SOCKS server failure. On an
+/// onion dial Tor sends it when a live service's port refuses, within a
+/// second and only after a working rendezvous; a blocked link did not
+/// produce it (2026-10-25). The client-authorization errors (`0xF4`,
 /// `0xF5`), the rejected onion address (`0xF6`), and a command or address
-/// type this node sent (`0x07`, `0x08`), which are this node's request.
-/// Names the destination: host unreachable, connection refused, the
-/// missing or unusable descriptor, the failed introduction. Nothing here
-/// proves misbehaviour: a SOCKS reply is the proxy's word.
+/// type this node sent (`0x07`, `0x08`) are this node's request. Names
+/// the destination: general failure, host unreachable, connection
+/// refused, the missing or unusable descriptor, the failed introduction.
+/// Nothing here proves misbehaviour: a SOCKS reply is the proxy's word.
 pub const fn proxy_reply_marks(reply: u16) -> u8 {
     let retry = matches!(
         reply,
@@ -69,14 +72,14 @@ pub const fn proxy_reply_marks(reply: u16) -> u8 {
             | TOR_INTRODUCTION_FAILED
             | TOR_RENDEZVOUS_TIMEOUT
             | TOR_INTRODUCTION_TIMEOUT
-            | SOCKS_GENERAL_FAILURE
             | SOCKS_NETWORK_UNREACHABLE
             | SOCKS_HOST_UNREACHABLE
             | SOCKS_TTL_EXPIRED
     );
     let names = matches!(
         reply,
-        SOCKS_HOST_UNREACHABLE
+        SOCKS_GENERAL_FAILURE
+            | SOCKS_HOST_UNREACHABLE
             | SOCKS_CONNECTION_REFUSED
             | TOR_DESCRIPTOR_MISSING
             | TOR_DESCRIPTOR_UNUSABLE
@@ -110,14 +113,15 @@ pub const fn refused(reply: u16) -> CloseCause {
 mod tests {
     use super::*;
 
-    /// This connector's reply table (Rick, 2026-10-24): the retry set, the
-    /// final set, and the five destination-naming replies. No reply proves
-    /// misbehaviour: a SOCKS reply is the proxy's word.
+    /// This connector's reply table (Rick, 2026-10-24; `0x01` final on
+    /// 2026-10-25): the retry set, the final set, and the destination-naming
+    /// replies. No reply proves misbehaviour: a SOCKS reply is the proxy's
+    /// word.
     #[test]
     fn the_onion_reply_table_marks_retries_finals_and_destination_naming() {
-        let retry = [0xF0, 0xF2, 0xF3, 0xF7, 0x01, 0x03, 0x04, 0x06];
-        let final_ = [0x05, 0xF1, 0xF4, 0xF5, 0xF6, 0x07, 0x08];
-        let naming = [0x04, 0x05, 0xF0, 0xF1, 0xF2];
+        let retry = [0xF0, 0xF2, 0xF3, 0xF7, 0x03, 0x04, 0x06];
+        let final_ = [0x01, 0x05, 0xF1, 0xF4, 0xF5, 0xF6, 0x07, 0x08];
+        let naming = [0x01, 0x04, 0x05, 0xF0, 0xF1, 0xF2];
         for reply in 0u16..=0x0100 {
             let cause = refused(reply);
             assert_eq!(cause.reply_code(), reply);

@@ -145,6 +145,11 @@ pub mod relay_zone_ffi;
 // supervisor and the RPC Health boolean.
 pub mod origin_verdict;
 
+// What this node's own Tor dials show, one cell for the process
+// (`TOR_SUPERVISOR.md` §4.2): written by the dialer, read by the managed-Tor
+// supervisor for its posture line. Display only (`TSR-Q14`).
+pub mod tor_link;
+
 // Levin ingress policy and white-noise emit FFI (IMPLEMENTATION_INDEX LV
 // row). `handle_recv` admits each bucket through these exports, and the C++
 // noise/fragment builders are marshaling shims over them.
@@ -174,6 +179,9 @@ pub mod peerlist_ffi;
 pub mod rpc_peerlist_ffi;
 
 // Operator link rates and the byte-stamp clock the stall check reads.
+/// The daemon's argument vector: the process entry's, and the narrow
+/// argv the snapshot export decodes (`DAEMON_CONFIG_CUTOVER.md` §2.2).
+pub mod argument_vector;
 /// The daemon's default data directory for the C++ blockchain utilities
 /// (`DAEMON_CONFIG_CUTOVER.md` §2.6): one layout, the Rust one.
 pub mod data_dir_ffi;

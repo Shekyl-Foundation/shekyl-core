@@ -3,7 +3,7 @@ cargo-checkct: shekyl-checkct:85271e5   options: --checks control-flow,memory-ac
 toolchain: nightly-2026-10-06
 profile.release: panic = "abort" overflow-checks = true 
 targets + rustflags: target = ["x86_64-unknown-linux-gnu"] rustflags = ["-C", "linker=rust-lld", "-C", "linker-flavor=ld.lld", "-C", "relocation-model=static", "-C", "no-vectorize-slp"] 
-run window (UTC): Sat Oct 24 01:59:54 PM UTC 2026 -> Sat Oct 24 01:59:59 PM UTC 2026
+run window (UTC): Sat Oct 24 08:05:29 PM UTC 2026 -> Sat Oct 24 08:05:32 PM UTC 2026
 
 Summary:
   driver  target                    entrypoint                                    status
@@ -34,4 +34,4 @@ Summary:
   dfg050  x86_64-unknown-linux-gnu  dfg050::driver::dfg_to_repr                   secure
   dfg050  x86_64-unknown-linux-gnu  dfg050::driver::dfg_wide_reduce               secure
 SECURE
-Sat Oct 24 01:59:59 PM UTC 2026
+Sat Oct 24 08:05:32 PM UTC 2026

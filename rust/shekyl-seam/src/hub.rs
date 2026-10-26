@@ -456,6 +456,12 @@ impl Hub {
         self.lock().board.clone()
     }
 
+    /// Run `f` on the published board while the table lock is held. The mutex is not re-entrant.
+    pub fn with_board<R>(&self, f: impl FnOnce(&Board) -> R) -> R {
+        let inner = self.lock();
+        f(&inner.board)
+    }
+
     /// How many boards have been published. A byte does not increment this.
     #[must_use]
     pub fn publish_count(&self) -> u64 {

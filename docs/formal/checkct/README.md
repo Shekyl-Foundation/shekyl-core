@@ -86,7 +86,12 @@ secret bytes (the full field, no secret-dependent rejection), the `U256`
 mod rows from a 512-bit remainder, the `Residue` rows from an unrestricted
 `U256` (the Montgomery conversion reduces it), and the `from_repr` rows
 from unrestricted bytes, invalid encodings included. Records made before
-this carry the earlier sampler; the regenerated ones replace them.
+this carry the earlier sampler; the static ones were regenerated with the
+new one on both toolchains (2026-10-24 19:48Z-21:25Z, every verdict as
+before, and BINSEC's division checks added on helioselene: clean), and
+the device rows were re-run with the corrected binary
+(`dynamic-*-rerun.txt`) with the same outcome: the x86_64 host crosses on
+`HelioseleneField`, the floor device is flat on every row.
 Upstream's calibration driver is pinned by revision in `setup.sh`
 (`CRYPTO_BIGINT_DRIVER_REV`), so a fresh setup runs the entrypoints the
 records name.
@@ -197,6 +202,53 @@ cargo build --release --target x86_64-unknown-linux-gnu \
 # paste its table into results/<date>/dynamic-<device>.txt
 ```
 
+`ct-dynamic [samples-per-class] [row-filter] [only-fixed|only-random]`:
+20 000 samples per class by default (3 at least, the floor the cropped t
+needs), every row whose name contains the filter (an empty filter matches
+every row), and both classes unless one is named (one class alone is for
+running a profiler over it; it reports batch counts and the wall-clock
+window of its timed loop, which a profiler's timestamps are joined on, not
+t).
+
+How the crate is built, so its rows can be read:
+
+- **The code path is part of the row.** A field row is a field, an
+  operation and a contrast (null, fixed set, `[fixed-pair]`, constant,
+  operand shape), and every contrast of an operation runs the same
+  function: one compiled copy of the timed loop per operation, so two rows
+  of one operation differ in their operands only. `mul` and `square` run
+  on two paths, each across every contrast: behind non-inlined wrappers
+  (`op_helio_mul`, `op_fe25519_square`, ...: the symbols to disassemble),
+  and `(direct)`, the field's operator called in the loop and inlined
+  where its crate allows (`HelioseleneField`'s are, dalek-ff-group's are
+  out-of-line calls either way).
+- **Operand domains are types**, as in the static drivers: field operands
+  from the field's wide reduction of 64 bytes (the whole field), the
+  `from_repr` rows from unrestricted bytes (invalid encodings included),
+  the `Residue` rows from an unrestricted `U256`, the `half:` rows from
+  canonical `HelioseleneField` values (`Canonical<F>`: what the square's
+  two halves see, [0, p)), and the operand-shape rows from values below
+  2^CAPACITY (sparse, small, dense = 2^254 − 1).
+- **The row list is checked.** `cargo test` in the crate (also a step of
+  the Rust CI job) holds the list's invariants: unique names, a
+  `[fixed-pair]` companion for every test row, the same rows on both
+  fields, null and positive controls present; and every row name a record
+  under `results/` cites must still be a row, or one of the listed retired
+  rows, so a rename cannot strand a record.
+
+**Record provenance.** The 2026-10-24 dynamic records come from earlier
+binaries, each named in the record's header. Before the wrappers (the
+`PR-2 tree` headers) every row called the operation directly. From them
+on, the fixed-set and `[fixed-pair]` rows of `square` and `mul` called the
+wrapper while the null, constant and operand-shape rows still called it
+directly, inlined for `HelioseleneField`: those rows are this crate's
+`(direct)` rows, under their unsuffixed names. And every 2026-10-24
+record's `from_repr`, `Residue` and `half:` rows drew operands below
+2^254, so `from_repr` saw valid encodings only (the `-rerun` headers say
+"from_repr rows on unrestricted bytes"; the code at `40ac33a8c` still
+drew masked ones). `results/2026-10-25/`
+re-takes those rows with both paths under every contrast.
+
 A dynamic row is evidence of another kind: it sees this device, this
 binary and this run, and can only fail to observe a difference. It never
 turns a static gap into a pass; it is recorded as *dynamic*.
@@ -207,7 +259,8 @@ cannot see, on code the static tool cleared, reproducibly. Records
 `results/2026-10-24/dynamic-x86_64-method-check.txt` (a Tiger Lake
 workstation, the shipped 1.94.0 / LLVM 21.1.8) and
 `dynamic-x86_64-fleet-measurement-host.txt` (an idle fleet VM on different
-silicon; partial, the default suite follows). Null controls flat, both
+silicon) and `dynamic-x86_64-fleet-measurement-host-property.txt` (the
+operand-property sweep). Null controls flat, both
 positive controls far over the threshold, every `Field25519` row flat, the
 `Residue::pow` branch BINSEC found under LLVM 21 invisible to timing, and
 `HelioseleneField` mul, square and sqrt showing a fixed-against-fresh
@@ -216,8 +269,12 @@ difference that grows with the sample (square −7 → −35 → −106 for 20k 
 whose equal-familiarity `[fixed-pair]` companion itself crossed at 200k:
 two different fixed operand sets time differently. That is operand
 dependence, outside BINSEC's model, and it is
-[`CA-2`](../../design/CRYPTO_AUDIT.md) §2 (mechanism open: power → frequency,
-or data-dependent latency in the SLP-vectorised limb loops). The floor
+[`CA-2`](../../design/CRYPTO_AUDIT.md) §2 (mechanism narrowed to the core:
+equal clock, fewer cycles; not the P-state controller, SLP vectorisation
+or anything DOITM governs; for square and mul it needs the operation
+inlined into the loop, and behind a call boundary they are flat at 1M
+samples,
+`results/2026-10-25/dynamic-x86_64-workstation-code-path.txt`). The floor
 device shows nothing on any row.
 
 The `[fixed-pair]` companion stays: the crossing is what made this a
@@ -230,11 +287,7 @@ security and the `dynamic/` crate is not offered upstream.
 ## Record table 2026-10-24
 
 Rendered by `python3 docs/formal/checkct/summarize.py docs/formal/checkct/results/2026-10-24`;
-regenerate it after any run. The `helio` records from the committed harness
-are being produced as this is written (the two slow x86_64 entrypoints run
-to their 3600 s timeout on each toolchain) and land in the follow-up commit;
-their verdicts above come from the same drivers run from a scratch copy of
-the harness.
+regenerate it after any run.
 
 | record | workspace | toolchain | options | target | secure / insecure / unknown | not secure |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -258,6 +311,18 @@ the harness.
 | `ctlpre.nightly-2026-10-06.txt` | ctlpre | nightly-2026-10-06 | `--timeout 900` | thumbv6m-none-eabi | 0 / 8 / 0 | insecure: div_exact_u64, div_rem_u64, leading_zeros_u512, montgomery_form_p384, pow_amm_u128, rem_wide_u64, sub_mod_u256, trailing_zeros_u512 |
 | `ctlpre.nightly-2026-10-06.txt` | ctlpre | nightly-2026-10-06 | `--timeout 900` | thumbv7em-none-eabihf | 4 / 0 / 4 | unknown: div_rem_u64, montgomery_form_p384, pow_amm_u128, rem_wide_u64 |
 | `ctlpre.nightly-2026-10-06.txt` | ctlpre | nightly-2026-10-06 | `--timeout 900` | x86_64-unknown-linux-gnu | 4 / 0 / 4 | unknown: div_rem_u64, montgomery_form_p384, pow_amm_u128, rem_wide_u64 |
+| `helio.nightly-2025-12-04.division.txt` | helio | nightly-2025-12-04 | `--checks control-flow,memory-access,dividend,divisor --timeout 900` | riscv32imac-unknown-none-elf | 12 / 0 / 0 | — |
+| `helio.nightly-2025-12-04.division.txt` | helio | nightly-2025-12-04 | `--checks control-flow,memory-access,dividend,divisor --timeout 900` | thumbv7em-none-eabihf | 12 / 0 / 0 | — |
+| `helio.nightly-2025-12-04.division.txt` | helio | nightly-2025-12-04 | `--checks control-flow,memory-access,dividend,divisor --timeout 900` | x86_64-unknown-linux-gnu | 10 / 0 / 2 | unknown: helio_pow_secret_exp, helio_sqrt |
+| `helio.nightly-2025-12-04.txt` | helio | nightly-2025-12-04 | `--timeout 900` | riscv32imac-unknown-none-elf | 12 / 0 / 0 | — |
+| `helio.nightly-2025-12-04.txt` | helio | nightly-2025-12-04 | `--timeout 900` | thumbv7em-none-eabihf | 12 / 0 / 0 | — |
+| `helio.nightly-2025-12-04.txt` | helio | nightly-2025-12-04 | `--timeout 900` | x86_64-unknown-linux-gnu | 10 / 0 / 2 | unknown: helio_pow_secret_exp, helio_sqrt |
+| `helio.nightly-2026-10-06.division.txt` | helio | nightly-2026-10-06 | `--checks control-flow,memory-access,dividend,divisor --timeout 900` | riscv32imac-unknown-none-elf | 12 / 0 / 0 | — |
+| `helio.nightly-2026-10-06.division.txt` | helio | nightly-2026-10-06 | `--checks control-flow,memory-access,dividend,divisor --timeout 900` | thumbv7em-none-eabihf | 12 / 0 / 0 | — |
+| `helio.nightly-2026-10-06.division.txt` | helio | nightly-2026-10-06 | `--checks control-flow,memory-access,dividend,divisor --timeout 900` | x86_64-unknown-linux-gnu | 10 / 0 / 2 | unknown: helio_pow_secret_exp, helio_sqrt |
+| `helio.nightly-2026-10-06.txt` | helio | nightly-2026-10-06 | `--timeout 900` | riscv32imac-unknown-none-elf | 12 / 0 / 0 | — |
+| `helio.nightly-2026-10-06.txt` | helio | nightly-2026-10-06 | `--timeout 900` | thumbv7em-none-eabihf | 12 / 0 / 0 | — |
+| `helio.nightly-2026-10-06.txt` | helio | nightly-2026-10-06 | `--timeout 900` | x86_64-unknown-linux-gnu | 10 / 0 / 2 | unknown: helio_pow_secret_exp, helio_sqrt |
 | `subject-noslp.nightly-2025-12-04.division.txt` | subject-noslp | nightly-2025-12-04 | `--checks control-flow,memory-access,dividend,divisor --timeout 900` | x86_64-unknown-linux-gnu | 25 / 1 / 0 | insecure: cb055_residue_pow_secret_exp |
 | `subject-noslp.nightly-2025-12-04.txt` | subject-noslp | nightly-2025-12-04 | `--timeout 900` | x86_64-unknown-linux-gnu | 25 / 1 / 0 | insecure: cb055_residue_pow_secret_exp |
 | `subject-noslp.nightly-2026-10-06.division.txt` | subject-noslp | nightly-2026-10-06 | `--checks control-flow,memory-access,dividend,divisor --timeout 900` | x86_64-unknown-linux-gnu | 26 / 0 / 0 | — |
@@ -268,5 +333,23 @@ the harness.
 | `subject.nightly-2026-10-06.txt` | subject | nightly-2026-10-06 | `--timeout 900` | riscv32imac-unknown-none-elf | 25 / 1 / 0 | insecure: cb055_residue_pow_secret_exp |
 | `subject.nightly-2026-10-06.txt` | subject | nightly-2026-10-06 | `--timeout 900` | thumbv7em-none-eabihf | 26 / 0 / 0 | — |
 | `subject.nightly-2026-10-06.txt` | subject | nightly-2026-10-06 | `--timeout 900` | x86_64-unknown-linux-gnu | 25 / 0 / 1 | unknown: dfg_invert |
+| `dynamic-aarch64-floor-device-rerun.txt` | dynamic | see file | — | — | — | not a checkct record |
+| `dynamic-aarch64-floor-device.txt` | dynamic | see file | — | — | — | not a checkct record |
 | `dynamic-x86_64-diagnostics.txt` | dynamic | see file | — | — | — | not a checkct record |
+| `dynamic-x86_64-fleet-measurement-host-halves.txt` | dynamic | see file | — | — | — | not a checkct record |
+| `dynamic-x86_64-fleet-measurement-host-property.txt` | dynamic | see file | — | — | — | not a checkct record |
+| `dynamic-x86_64-fleet-measurement-host-rerun.txt` | dynamic | see file | — | — | — | not a checkct record |
+| `dynamic-x86_64-fleet-measurement-host-slp-ab.txt` | dynamic | see file | — | — | — | not a checkct record |
+| `dynamic-x86_64-fleet-measurement-host.txt` | dynamic | see file | — | — | — | not a checkct record |
 | `dynamic-x86_64-method-check.txt` | dynamic | see file | — | — | — | not a checkct record |
+| `dynamic-x86_64-workstation-pinned-clock.txt` | dynamic | see file | — | — | — | not a checkct record |
+
+## Record table 2026-10-25
+
+Rendered by `python3 docs/formal/checkct/summarize.py docs/formal/checkct/results/2026-10-25`;
+regenerate it after any run.
+
+| record | workspace | toolchain | options | target | secure / insecure / unknown | not secure |
+| --- | --- | --- | --- | --- | --- | --- |
+| `dynamic-x86_64-fleet-measurement-host-code-path.txt` | dynamic | see file | — | — | — | not a checkct record |
+| `dynamic-x86_64-workstation-code-path.txt` | dynamic | see file | — | — | — | not a checkct record |
