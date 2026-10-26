@@ -15,6 +15,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use shekyl_chain_store::store::RawRows;
 use shekyl_harness_spender::Spender;
 use shekyl_pow_randomx::CacheStore;
 use shekyl_types::BlockHeight;
@@ -105,7 +106,7 @@ where
     // rule, `shekyl-chain-store` `store/alt.rs`). So x ends holding exactly
     // what y holds, and neither holds an alternative block. A table one
     // store never created and the other emptied hold the same rows.
-    let none = Vec::new();
+    let none = RawRows::new();
     let differ: std::collections::BTreeSet<&str> = rows_x
         .keys()
         .chain(rows_y.keys())
@@ -113,17 +114,16 @@ where
         .copied()
         .collect();
     assert!(differ.is_empty(), "A → B differs from B in {differ:?}");
-    let alt =
-        |rows: &std::collections::BTreeMap<&'static str, shekyl_chain_store::store::RawRows>| {
-            use shekyl_chain_store::codec::{AltBlock, Canonical};
-            rows.get("alt_blocks")
-                .map(|r| {
-                    r.iter()
-                        .map(|(_, v)| AltBlock::decode(v).expect("decodes").block().hash())
-                        .collect::<std::collections::BTreeSet<_>>()
-                })
-                .unwrap_or_default()
-        };
+    let alt = |rows: &std::collections::BTreeMap<&'static str, RawRows>| {
+        use shekyl_chain_store::codec::{AltBlock, Canonical};
+        rows.get("alt_blocks")
+            .map(|r| {
+                r.iter()
+                    .map(|(_, v)| AltBlock::decode(v).expect("decodes").block().hash())
+                    .collect::<std::collections::BTreeSet<_>>()
+            })
+            .unwrap_or_default()
+    };
     assert_eq!(a.len(), plan.demoted.len(), "the switch demoted A");
     assert!(alt(&rows_x).is_empty(), "A is retired whole at B's tip");
     assert!(alt(&rows_y).is_empty());
