@@ -1402,7 +1402,9 @@ can contain either.
   unless the network is regtest. With the switch armed on testnet or
   stagenet, `generateblocks` and `/pop_blocks` are served and the inject
   lever is refused ("Serve-credit injection failed", the daemon log naming
-  the network). Under RT-O36 that is a restriction, the network narrowing
+  the network). The regtest e2e test
+  `the_armed_switch_on_testnet_serves_two_levers_and_the_setter_refuses_inject`
+  holds this on testnet; stagenet takes the same branch. Under RT-O36 that is a restriction, the network narrowing
   what the switch enables, never the network enabling anything, so it is
   neither a defect nor a leftover gate to delete. It goes with the C++
   method at the DRS-X flip.
