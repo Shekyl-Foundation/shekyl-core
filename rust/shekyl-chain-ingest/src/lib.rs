@@ -107,6 +107,14 @@ mod artifact_tests;
 /// pins today's gap; flips when G2 lands (commit 6).
 #[cfg(all(test, feature = "pipeline"))]
 mod body_pairing_tests;
+/// The bundle producer's task: the producer's state machine driven by the
+/// connector's tip and the fetch path (`SO-D12` increment 4c).
+#[cfg(feature = "producer")]
+pub mod bundle_producer;
+#[cfg(all(test, feature = "producer"))]
+mod bundle_producer_gate_tests;
+#[cfg(all(test, feature = "producer"))]
+mod bundle_producer_tests;
 /// Where an arrival goes, and the claims it is formed under.
 /// The two RandomX seeds an arrival may hash under.
 #[cfg(feature = "pipeline")]
@@ -210,6 +218,10 @@ pub mod sequencer;
 /// The live arrival path: one door, the router, the connector.
 #[cfg(feature = "pipeline")]
 pub mod service;
+/// The fetch scheduler's store-backed facts (`SV-D9`), read by the shard
+/// view and the bundle producer.
+#[cfg(feature = "producer")]
+pub mod shard_facts;
 pub mod snapshot_json;
 pub mod source;
 pub mod substrate;

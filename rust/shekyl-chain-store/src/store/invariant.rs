@@ -526,6 +526,33 @@ pub enum StoreInvariant {
         /// The height whose row was being written.
         height: shekyl_types::BlockHeight,
     },
+    /// **SI-41** — every stored bundle body has a holder, and every queue
+    /// entry's body is stored (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5). In
+    /// `SO-D12` increment 4c the bundle queue is the only holder kind; an
+    /// alternative block and a main-chain block not past `D_max` are 4b's.
+    /// The open reconciles the two tables and reports what it dropped;
+    /// after it, a read of the queue that finds them apart is this halt.
+    /// Not chain state, so it poisons the batch and leaves the writer
+    /// live. Never a verdict on a block.
+    BundleBodyHolder(BodyHolderFault),
+}
+
+/// What an SI-41 check observed (payload of
+/// [`StoreInvariant::BundleBodyHolder`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BodyHolderFault {
+    /// A queue entry names a body the body store does not hold.
+    EntryWithoutBody {
+        /// The entry's block.
+        h: shekyl_types::BlockHeight,
+    },
+    /// A stored body no queue entry names.
+    BodyWithoutHolder,
+    /// A queue entry's reference is for another block than its key.
+    EntryNotItsHeight {
+        /// The key the entry is stored under.
+        h: shekyl_types::BlockHeight,
+    },
 }
 
 /// What an SI-36 check observed (payload of [`StoreInvariant::AdmissionWrite`]).
@@ -766,6 +793,7 @@ impl StoreInvariant {
             Self::DrawCommitmentUnreadable { .. } => 38,
             Self::VisibleDrawCountPastWidth { .. } => 39,
             Self::SupportBlockNotSingular { .. } => 40,
+            Self::BundleBodyHolder(_) => 41,
         }
     }
 }
@@ -1076,6 +1104,18 @@ impl core::fmt::Display for StoreInvariant {
                 "archival_support_block already holds height {height}; a block records its \
                  support count once"
             ),
+            Self::BundleBodyHolder(BodyHolderFault::EntryWithoutBody { h }) => write!(
+                f,
+                "the bundle queue's entry for height {h} names a body the body store does not \
+                 hold; an entry and its body are written and removed together"
+            ),
+            Self::BundleBodyHolder(BodyHolderFault::BodyWithoutHolder) => f.write_str(
+                "the body store holds a bundle body no holder names; every body has a holder",
+            ),
+            Self::BundleBodyHolder(BodyHolderFault::EntryNotItsHeight { h }) => write!(
+                f,
+                "the bundle queue's entry under height {h} is a reference for another block"
+            ),
             Self::DrawableMemoMiss { epoch } => write!(
                 f,
                 "the admission view has no drawable set for epoch {epoch} under the opening \
@@ -1144,6 +1184,7 @@ impl core::error::Error for StoreInvariant {
             | Self::DrawCommitmentUnreadable { .. }
             | Self::VisibleDrawCountPastWidth { .. }
             | Self::SupportBlockNotSingular { .. }
+            | Self::BundleBodyHolder(_)
             | Self::UndoLogIncoherent { .. } => None,
         }
     }

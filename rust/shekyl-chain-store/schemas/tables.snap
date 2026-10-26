@@ -1,7 +1,7 @@
 # shekyl-chain-store canonical codec snapshot (rule 42). Do not edit by hand:
 #   UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store codec::snapshot_tests
 # and bump SCHEMA_VERSION in src/codec/schema_version.rs in the same PR.
-tables = 50
+tables = 52
 [tables]
 alt_block_bodies = #43 map<shekyl::LmdbHashKey, shekyl::Coded<alt_bodies>>
 alt_blocks = #13 map<shekyl::LmdbHashKey, shekyl::Coded<alt_block>>
@@ -10,6 +10,8 @@ archival_block_draws = #40 map<u64, shekyl::Coded<block_draws>>
 archival_bond = #21 map<[u8;32], shekyl::Coded<bond_record>>
 archival_budget = #26 map<u64, shekyl::Coded<atomic_units>>
 archival_budget_accruing = #27 map<u64, shekyl::Coded<atomic_units>>
+archival_bundle_body = #51 map<[u8;32], shekyl::Coded<queued_body>>
+archival_bundle_queue = #50 map<u64, shekyl::Coded<queued_bundle>>
 archival_complete_trees = #45 map<u64, shekyl::Coded<complete_tree_set>>
 archival_drawable_digest = #41 map<u64, shekyl::Coded<drawable_digest>>
 archival_issued_digest = #39 map<u64, shekyl::Coded<issued_digest>>

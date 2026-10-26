@@ -124,13 +124,14 @@ mod slash;
 pub use admission::{admission_plan, AdmissionPlan, AdmissionPlanFault, EpochIssues};
 pub(crate) use arm::BondArm;
 pub use bundle::{
-    check_section, check_section_until_switch, judge_bundles, open_body, open_reference,
-    verify_bundle, AdmissionFault, Admitted, BundleInvalid, BundleRefused, BundleUnanswered,
-    BundleView, DerivedDraw, SectionCharge, SectionCheckFailed, SectionRefused, SectionStanding,
-    SupportSeat,
+    check_section, check_section_until_switch, draw_targets, judge_bundles, open_body,
+    open_reference, verify_bundle, AdmissionFault, Admitted, BundleInvalid, BundleRefused,
+    BundleUnanswered, BundleView, DerivedDraw, DrawTargets, EconomyTarget, SectionCharge,
+    SectionCheckFailed, SectionRefused, SectionStanding, SupportSeat, SupportTarget,
 };
 pub(crate) use close::{accrue, gather_epoch_snapshot, gather_universe, EpochSnapshot, ServedAt};
 pub use close::{closed_and_final, shard_close, shard_close_height, ClosedUniverse};
+pub use count::remember_window_epochs;
 pub(crate) use count::CountMemo;
 pub(crate) use count::L17;
 pub use delta::{

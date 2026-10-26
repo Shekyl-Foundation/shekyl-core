@@ -137,6 +137,21 @@ where
     }
 }
 
+/// The host signer over a tip cache the caller stamps: a test whose chain
+/// moves (the bundle producer's gate test) stamps it as each block lands,
+/// as production stamps it from the wallet's daemon.
+#[cfg(any(test, feature = "test-signer"))]
+#[must_use]
+pub fn signer_over_tip<const W: usize>(
+    tip: Arc<DaemonTipCache>,
+    key: Arc<dyn PassKey<W>>,
+) -> Arc<dyn PassSigner<W>>
+where
+    PassEnvelope: EnvelopeWidth<W>,
+{
+    Arc::new(HostSigner::new(tip, key))
+}
+
 /// The host signer over a tip stamped once, at `top_block_height`.
 ///
 /// Production stamps [`DaemonTipCache`] from the wallet's daemon and binds

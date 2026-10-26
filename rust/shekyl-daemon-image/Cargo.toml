@@ -26,12 +26,11 @@ shekyl-daemon-rpc = { path = "../shekyl-daemon-rpc" }
 # The daemon's entry: shekyl_daemon_main, exported from this image.
 shekyl-daemon = { path = "../shekyl-daemon" }
 shekyl-archival-fetch-sched = { path = "../shekyl-archival-fetch-sched" }
-shekyl-chain-store = { path = "../shekyl-chain-store" }
-shekyl-chain-rules = { path = "../shekyl-chain-rules" }
-shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
-shekyl-p-fetch = { path = "../shekyl-p-fetch" }
+# The scheduler's store-backed facts (`shard_facts`), shared with the
+# bundle producer's reads. Default features: the node's graph, `producer`
+# included.
+shekyl-chain-ingest = { path = "../shekyl-chain-ingest" }
 shekyl-types = { path = "../shekyl-types" }
-shekyl-wire = { path = "../shekyl-wire" }
 
 [lints]
 workspace = true

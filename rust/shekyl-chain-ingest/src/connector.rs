@@ -78,12 +78,17 @@ use shekyl_units::AtomicUnits;
 use crate::schedule::ChainRules;
 use crate::source::ServeCredit;
 
+#[path = "connector_bundles.rs"]
+mod bundles;
 #[path = "connector_reads.rs"]
 mod reads;
 #[path = "run_fault.rs"]
 mod run_fault;
 #[path = "switch.rs"]
 mod switch;
+#[cfg(test)]
+pub(crate) use bundles::ApplyAdmitting;
+pub use bundles::{BundleOffered, LearnDraws, Learned, OfferBundle};
 pub(crate) use run_fault::fault_reply;
 pub use run_fault::{PlanMismatchReason, RunEnd, RunFault};
 #[cfg(test)]
@@ -529,14 +534,18 @@ impl Actor for Connector {
             .store
             .begin_read()?
             .get_property::<FollowingDegradedCell>()?;
-        Ok(Self {
+        let mut connector = Self {
             tip: tokio::sync::watch::Sender::new(TipChanged { seq: 0, tip }),
             degraded: tokio::sync::watch::Sender::new(degraded),
             writer: Writer::live(args.store),
             rules: args.rules,
             trust: args.rules.trust(),
             memo: DrawableMemo::new(),
-        })
+        };
+        // The bundle queue and the body store are reconciled at open
+        // (SI-41): what has no holder is dropped and logged.
+        connector.reconcile_queue()?;
+        Ok(connector)
     }
 
     /// No restart (RD-Q11): a panic stops the actor and it stays stopped.
@@ -552,6 +561,17 @@ impl Actor for Connector {
 }
 
 impl Connector {
+    /// The tip moved in a committed write: keep the bundle queue to it,
+    /// then publish it. A queue upkeep that faults is logged here and has
+    /// already latched the writer if it was terminal; the next write meets
+    /// the halt, and the tip the committed write left is published.
+    pub(crate) fn tip_moved(&mut self) {
+        if let Err(fault) = self.upkeep_queue() {
+            tracing::error!("the bundle queue's upkeep faulted: {fault}");
+        }
+        self.publish_tip();
+    }
+
     /// Publish the tip after a committed write (module docs: `TipChanged`).
     /// A read that fails here leaves the last publication standing: the
     /// next write meets the same store.
@@ -705,7 +725,7 @@ impl Message<Apply> for Connector {
             Ok(applied)
         })?;
         if !applied.connected.is_empty() {
-            self.publish_tip();
+            self.tip_moved();
         }
         Ok(applied)
     }
@@ -816,7 +836,7 @@ impl Connector {
             batch.retire_alt_blocks_on(&gone)?;
             Ok(())
         })?;
-        self.publish_tip();
+        self.tip_moved();
         Ok(Rewound::Popped {
             popped: popped.to_raw(),
             tip: to,

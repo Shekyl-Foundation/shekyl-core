@@ -167,9 +167,11 @@ pub fn draw_commit(witness_pk: &[u8], seed: &[u8; 32]) -> [u8; 32] {
 /// coinbase that issues no draw (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4.2).
 ///
 /// The seed is wiped when this returns; the secret key wipes itself on
-/// drop. The producer that keeps the pair for `W₂` blocks replaces this at
-/// genesis (SO-D12); until then every template, the Rust producer's and the
-/// FFI's, commits through here (`DRS_X_STORE_FLIP.md` DX-Q3, Q4).
+/// drop. The Rust node's template draws from the bundle producer's
+/// witness ring instead, which keeps the pair until the block's bundle is
+/// filed (`SO-D12` increment 4c). The C++ template, through the FFI, still
+/// commits through here: its blocks issue draws no one can reveal, and it
+/// goes with the C++ daemon (`DRS_X_STORE_FLIP.md` DX-Q3, Q4).
 ///
 /// # Errors
 ///

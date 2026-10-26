@@ -290,10 +290,17 @@ jobs:
           run_one "PoW test-seam containment (CEN-D2)" \
             scripts/ci/check_pow_test_seam.sh
           # DX-Q3 Q4: the node's template draws its coinbase secret and its
-          # draw commitment from the OS; the scenario's reproducible values
-          # stay in test code.
+          # draw commitment from the OS (the commitment through the witness
+          # ring); the scenario's reproducible values stay in test code.
           run_one "The template's secrets are the OS's (DX-Q3 Q4)" \
             scripts/ci/check_template_secrets.sh
+          # SO-D12 increment 4c: the witness ring's seeds and keys, and the
+          # challenge nonces, reach no log and no derived Debug. The
+          # selftest first, so a scan that reads nothing cannot pass.
+          run_one "The bundle producer's secrets reach no log (selftest)" \
+            python3 scripts/ci/check_bundle_producer_secrets.py --selftest
+          run_one "The bundle producer's secrets reach no log" \
+            python3 scripts/ci/check_bundle_producer_secrets.py
           run_one "RandomX symbol-isolation negatives (rule 50)" \
             scripts/ci/test_check_randomx_symbol_isolation.sh
           run_one "LV-1: levin wire-constant parity" \
