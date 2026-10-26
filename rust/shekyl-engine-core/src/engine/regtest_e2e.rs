@@ -389,12 +389,11 @@ impl RegtestDaemon {
             // daemon rejected instead of a bare `Malformed`.
             "--log-level",
             "info",
-            // The armed test levers (`generateblocks`, `pop_blocks`) are
-            // served only with this row set once dispatch reads the method
-            // table's `armed` column (DRS-X flip). Today's C++ path does
-            // not read it, so setting it now changes nothing and removes
-            // the flip's red. The daemon announces it at start, and
-            // `await_ready` holds it to that.
+            // The armed test levers (`generateblocks`, `pop_blocks`,
+            // `inject_archival_serve_credit`) are served only with this
+            // switch set (`RPC_CHANNEL.md` §6.1): the RPC layer refuses
+            // them otherwise, on every network. The daemon announces it at
+            // start, and `await_ready` holds it to that.
             "--dev-rpc",
         ]);
         match peering {
@@ -783,14 +782,14 @@ impl RegtestDaemon {
             .expect("daemon was not spawned with a restricted listener")
     }
 
-    /// Mine `n` blocks to `address` (FAKECHAIN-gated daemon RPC).
+    /// Mine `n` blocks to `address` (an armed test lever: `--dev-rpc`).
     pub(super) async fn generate_blocks(&self, n: u64, address: &str) -> GenerateBlocksResp {
         try_generate_blocks(&self.rpc, n, address)
             .await
             .expect("generateblocks")
     }
 
-    /// Roll the chain back `n` blocks (FAKECHAIN-gated `/pop_blocks`, a direct
+    /// Roll the chain back `n` blocks (`/pop_blocks`, an armed test lever, a direct
     /// route — not `json_rpc`). Exercises the daemon's `pop_block`
     /// deferred-insertion tree rollback (popping `H` removes the leaves of
     /// outputs created at `H − maturity`).
@@ -984,7 +983,7 @@ async fn maybe_capture_live_oracle(
     eprintln!("captured live-oracle spend KAT -> {}", path.display());
 }
 
-/// Mine `n` blocks to `address` over `rpc` (FAKECHAIN-gated `generateblocks`),
+/// Mine `n` blocks to `address` over `rpc` (`generateblocks`, an armed test lever),
 /// returning the RPC error instead of panicking. Free-standing so a caller
 /// that cannot borrow a [`RegtestDaemon`] into a `'static` task — the GF-7
 /// sealing-run background miner, which owns an independent client and must

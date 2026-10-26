@@ -67,11 +67,12 @@ takes one word, so no second network can be named. Companion rows:
 exists (`src/rpc/core_rpc_server.h:139`,
 `src/rpc/core_rpc_server.cpp:2234–2305`). It loops
 `getblocktemplate` → `find_nonce_for_given_block` (RandomX longhash) →
-`submitblock` for the requested count. The handler refuses with
-`CORE_RPC_ERROR_CODE_REGTEST_REQUIRED` outside `FAKECHAIN`
-(`src/rpc/core_rpc_server.cpp:2242–2246`), and the view listener does
-not serve it (`RPC_CHANNEL.md` §6.1), so the integration harness must
-connect to the admin listener.
+`submitblock` for the requested count. It is an armed test lever
+(`RPC_CHANNEL.md` §6.1): served on the admin listener only, and only
+when the daemon starts with `--dev-rpc`, which it announces in its log.
+Without the switch the RPC layer refuses it on every network, so the
+integration harness starts the daemon with `--dev-rpc` and connects to
+the admin listener.
 
 **Proof-of-life tests.** The Python functional tests that
 historically demonstrated `--regtest` + `generateblocks` invocation

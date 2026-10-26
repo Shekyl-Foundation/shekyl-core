@@ -1808,11 +1808,13 @@ the Python framework (`daemon.py:217-221`) and the CT-2 fixture generator
 ([`gen_ct2_fixture.py:159`](../../rust/shekyl-curve-tree/tests/fixtures/gen_ct2_fixture.py)).
 *Reason:* rewinding a node's chain is no capability for an enrolled remote
 key; paired with an eclipse, it lets someone rewind a node and then feed
-it a chain. *Today,* the route is admin-only on every network, with no
-network gate
-([`server.rs:352-356`](../../rust/shekyl-daemon-rpc/src/server.rs)); the
-helper's comment calling it FAKECHAIN-gated is wrong. The
-daemon-configuration cutover records the same as DC-F14 (PR #1066). **Reopen (rule 21):**
+it a chain. RT-W10 step 1 built it: the row's policy is `Armed`
+(`shekyl-rpc-types` `methods.rs`), and the request's authority admits it
+only through `admit_armed`, on the admin listener with the start switch
+set
+([`authority.rs`](../../rust/shekyl-daemon-rpc/src/authority.rs)); the
+router test `pop_blocks_needs_the_armed_switch` holds it. The
+daemon-configuration cutover recorded the gap as DC-F14 (PR #1066). **Reopen (rule 21):**
 a demonstrated operator recovery need returns it as a ruled capability.
 
 ---

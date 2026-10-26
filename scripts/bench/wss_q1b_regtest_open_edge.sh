@@ -41,9 +41,8 @@ rm -rf "$DATA"; mkdir -p "$DATA"
 # is fine. The grammar's spellings (INPUT_GRAMMAR.md §5): both connectors
 # off is the offline posture.
 # --dev-rpc: generateblocks is an armed test lever, served only with this
-# row once dispatch reads the method table's armed column (DRS-X flip).
-# Today's C++ path ignores it; the daemon announces it at start, checked
-# below once RPC is up.
+# switch set (RPC_CHANNEL.md section 6.1). The daemon announces it at
+# start, checked below once RPC is up.
 "$BIN" --network regtest --clearnet off --tor off --dev-difficulty 1 --dev-rpc \
   --rpc-admin-listen "127.0.0.1:$PORT" \
   --data-dir "$DATA" --log-file "$DATA/shekyld.log" --log-level info < /dev/null > "$DATA/daemon.out" 2>&1 &
