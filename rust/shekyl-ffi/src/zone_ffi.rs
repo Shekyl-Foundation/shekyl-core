@@ -272,8 +272,17 @@ impl ZoneDial {
     }
 }
 
-/// Aborts the spawned dial when dropped, unless the connect resolved.
+/// Aborts the spawned dial when dropped, unless [`Self::detach`]ed because
+/// the connect resolved.
 struct AbortUntilAdmitted(Option<tokio::task::JoinHandle<()>>);
+
+impl AbortUntilAdmitted {
+    /// The channel was admitted. The dial task drives it from here, so
+    /// dropping this guard must not abort that task.
+    fn detach(&mut self) {
+        self.0 = None;
+    }
+}
 
 impl Drop for AbortUntilAdmitted {
     fn drop(&mut self) {
@@ -283,19 +292,20 @@ impl Drop for AbortUntilAdmitted {
     }
 }
 
-/// The wait for `spawned`'s admission, as a [`ConnectFuture`]. Dropped
-/// before it resolves, it aborts `spawned`. Once a channel is admitted the
-/// dial task drives it, so it is detached, not aborted.
+/// The wait for `spawned`'s admission, as a [`ConnectFuture`]. The abort
+/// guard is captured before the future yields, so a drop aborts `spawned`
+/// even when the future was never polled. Once a channel is admitted the
+/// dial task drives it, so the guard is detached and the task is not aborted.
 fn until_admitted<T: Send + 'static>(
     spawned: tokio::task::JoinHandle<()>,
     admitted_rx: mpsc::UnboundedReceiver<T>,
     fail_rx: oneshot::Receiver<CloseCause>,
     into_channel: impl FnOnce(T) -> Channel + Send + 'static,
 ) -> ConnectFuture {
+    let mut guard = AbortUntilAdmitted(Some(spawned));
     Box::pin(async move {
-        let mut guard = AbortUntilAdmitted(Some(spawned));
         let admitted = recv_admitted(admitted_rx, fail_rx).await?;
-        guard.0 = None;
+        guard.detach();
         Ok(into_channel(admitted))
     })
 }
