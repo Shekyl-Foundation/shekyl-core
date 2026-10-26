@@ -29,7 +29,7 @@ use shekyl_transport_layer::{
 use crate::connection::{
     AdvertisedEndpoint, ChainLength, Connection, HeightMessage, RedialRefusal,
 };
-use crate::dial::{Channel, Dial};
+use crate::dial::{AttemptTask, Channel, ConnectFuture, Dial};
 use crate::endpoint::Endpoint;
 use crate::loopback::Loopback;
 use crate::post::{Post, SyncPayload};
@@ -255,6 +255,31 @@ impl Hub {
         let ceiling = self.lock().ceiling;
         let now = self.now();
         dial.connect(endpoint, ceiling, now)
+    }
+
+    /// [`Self::dial_channel`] without blocking the caller: the outbound
+    /// dialer's attempt task awaits it. The ceiling and the clock are read
+    /// here, before the future is returned, so the connect holds no table
+    /// lock. With no dialer installed it is a ready `LocalClose`.
+    pub fn dial_channel_async(&self, endpoint: &Endpoint) -> ConnectFuture {
+        let Some(dial) = self.current_dial() else {
+            return Box::pin(std::future::ready(Err(CloseCause::new(
+                CloseKind::LocalClose,
+            ))));
+        };
+        let ceiling = self.lock().ceiling;
+        let now = self.now();
+        dial.connect_async(endpoint, ceiling, now)
+    }
+
+    /// Run one outbound dial attempt where the installed dialer runs them
+    /// ([`Dial::spawn_attempt`]). `false` with no dialer installed, or when
+    /// the dialer could not start it; the task was dropped either way.
+    pub fn spawn_attempt(&self, task: AttemptTask) -> bool {
+        match self.current_dial() {
+            Some(dial) => dial.spawn_attempt(task),
+            None => false,
+        }
     }
 
     /// [`Self::dial_channel`], then [`Self::adopt`]: a channel and its

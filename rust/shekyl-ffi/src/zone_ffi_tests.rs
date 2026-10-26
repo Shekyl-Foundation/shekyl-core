@@ -199,6 +199,130 @@ fn a_second_start_of_a_connectors_loop_starts_nothing() {
     }
 }
 
+/// Every p2p thread is on the thread ledger (decision B, Rick 2026-10-25;
+/// the in-flight bound, revision 4, item 4). Each connector's owner loop is
+/// a dedicated row named for it, and shutdown joins it: a row leaves the
+/// ledger only after its thread is joined. The lateness report is a task
+/// on the transport runtime, so no thread or row of its own exists.
+#[test]
+fn the_owner_loops_are_ledger_rows_joined_at_shutdown_and_lateness_is_no_thread() {
+    let _bind = crate::seam_ffi::seam_bind_lock().lock();
+    let rows = |name: &str| {
+        shekyl_thread_ledger::ledger()
+            .into_iter()
+            .filter(|row| {
+                row.name.as_str() == name
+                    && row.kind == shekyl_thread_ledger::RowKind::DedicatedThread
+            })
+            .count()
+    };
+    let mut executor = 0u8;
+    let ceiling = ShekylInboundCeiling {
+        kind: SHEKYL_INBOUND_CEILING_UNLIMITED,
+        ceiling: 0,
+        soft_limit: 0,
+        held: 0,
+    };
+    let bound = unsafe {
+        shekyl_seam_bind(
+            std::ptr::addr_of_mut!(executor).cast::<c_void>(),
+            Some(discard),
+        )
+    };
+    assert_eq!(bound, 0);
+    assert_eq!(unsafe { shekyl_seam_set_ceiling(&raw const ceiling) }, 0);
+    let host = ensure([9u8; 16]).expect("zone host");
+    assert!(crate::dialer_ffi::start_connector(
+        ConnectorId::Clearnet,
+        &host.engine
+    ));
+    assert!(crate::dialer_ffi::start_connector(
+        ConnectorId::Tor,
+        &host.engine
+    ));
+    drop(host);
+    assert_eq!(rows("p2p-dial-clearnet"), 1);
+    assert_eq!(rows("p2p-dial-tor"), 1);
+    assert_eq!(rows("p2p-lateness"), 0, "the report is a task, not a row");
+    #[cfg(target_os = "linux")]
+    {
+        let threads = std::fs::read_dir("/proc/self/task")
+            .expect("this process's threads")
+            .filter_map(|task| std::fs::read_to_string(task.ok()?.path().join("comm")).ok())
+            .filter(|comm| comm.trim_end() == "p2p-lateness")
+            .count();
+        assert_eq!(threads, 0, "no thread named p2p-lateness");
+    }
+
+    shutdown();
+    assert_eq!(rows("p2p-dial-clearnet"), 0, "joined at shutdown");
+    assert_eq!(rows("p2p-dial-tor"), 0, "joined at shutdown");
+    unsafe {
+        shekyl_seam_bind(std::ptr::null_mut(), None);
+    }
+}
+
+/// The Tor window follows the route (revision 4 of the in-flight bound,
+/// Rick 2026-10-26; the Tor lane's review). The managed Tor's route gives
+/// the dialer the earliest that Tor's launch timeout can expire; an
+/// operator's Tor
+/// sets its own `SocksTimeout`, so its route leaves the dialer none.
+#[test]
+fn the_tor_window_is_the_managed_tors_and_an_operators_tor_has_none() {
+    let _bind = crate::seam_ffi::seam_bind_lock().lock();
+    let mut executor = 0u8;
+    let ceiling = ShekylInboundCeiling {
+        kind: SHEKYL_INBOUND_CEILING_UNLIMITED,
+        ceiling: 0,
+        soft_limit: 0,
+        held: 0,
+    };
+    let bound = unsafe {
+        shekyl_seam_bind(
+            std::ptr::addr_of_mut!(executor).cast::<c_void>(),
+            Some(discard),
+        )
+    };
+    assert_eq!(bound, 0);
+    assert_eq!(unsafe { shekyl_seam_set_ceiling(&raw const ceiling) }, 0);
+    let network_id = [9u8; 16];
+    let _host = ensure(network_id).expect("zone host");
+    let dialer = crate::dialer_ffi::dialer().expect("the bound dialer");
+    assert_eq!(dialer.tor_window(), None, "no route yet");
+
+    let managed = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9150);
+    assert!(publish_managed_socks(managed).is_some());
+    assert_eq!(
+        dialer.tor_window(),
+        crate::tor_link::TOR_SOCKS_TIMEOUT.earliest_expiry(),
+        "the managed Tor's window"
+    );
+    assert_eq!(
+        dialer.tor_window(),
+        Some(Duration::from_secs(104)),
+        "105 s, less Tor's whole-second clock"
+    );
+
+    dial_through_tor(
+        shekyl_socks::Proxy::unauthenticated(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            9050,
+        )),
+        network_id,
+    )
+    .expect("the operator's proxy");
+    assert_eq!(
+        dialer.tor_window(),
+        None,
+        "an operator's Tor has no known window"
+    );
+
+    shutdown();
+    unsafe {
+        shekyl_seam_bind(std::ptr::null_mut(), None);
+    }
+}
+
 /// A Tor-only start admits the compiled onion seeds and not the clearnet
 /// ones. Admission used to run only inside the clearnet branch, so a node
 /// with clearnet off never received the onion list.

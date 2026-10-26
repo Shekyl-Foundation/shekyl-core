@@ -369,13 +369,23 @@ a pending attempt. Lowering the cap at runtime, today
 defined at `:2240`), moves to the dialer and closes `Keep` rows only.
 A `Confirm` row is never what the cap closes.
 
-**Interim in-flight bound: one dial per connector (2026-10-08).** The
-fill is one dial per wake, so the interim needs no measurement. It is
-measured and raised on the Rust path after the cutover, into the
-register (`DAEMON_RELAY_PRIVACY.md` §97). Wargame: at boot, hidden
-sessions open one at a time. The node's own transactions are held
+**The in-flight bound: Tor 5, clearnet 1 (the dialer in-flight bound,
+revision 2, Rick 2026-10-25).** `in_flight_bound(connector)` is protocol
+data, the same on every node. It limits how many dials are outstanding,
+not the rate: one launch per wake, at R3's spacing. Tor's five is
+derived (`DAEMON_RELAY_PRIVACY.md` §97;
+`docs/benchmarks/p2p_tor_inflight_bound_20261025.md`) with half the
+draws dead, on the lifecycle the dialer runs, where a Tor attempt that
+fails at or after the managed Tor's `SocksTimeout` is final within its
+test (Rick, 2026-10-26): five is the smallest bound that fills the
+12-session target within one stem epoch. Clearnet stays at one. A pending `Keep` counts
+toward the target, so no bound lets keeps pass it; a `Confirm` counts
+toward the bound and not the target, which is why the descriptor
+reservation adds the bound to the target. Wargame: at boot, hidden
+sessions open up to five at a time. The node's own transactions are held
 (`NoOwnEdge`) only until the first hidden session, so originating does
-not wait for all 12.
+not wait for all 12. *Records-was (2026-10-08 to 2026-10-25): the interim
+bound, one dial per connector, unmeasured.*
 
 *Records-was: `connections_maker` (`net_node.inl:2134-2157`) branches
 on `P2P_DEFAULT_WHITELIST_CONNECTIONS_PERCENT` (70,
@@ -809,7 +819,7 @@ landed: white expiry follows the connection (slice 1 brief §5, the
 session's close, and `expire` skips an address in the dialer's `Attempts`
 kept set, the same set `session_closed` removes. *Records-was: the dialer
 answered `BanQuery::has_live_session` from the seam's board*); per-layer
-judgement as three marks on
+judgement as four marks on
 the close cause (`P2P_TRANSPORT_LAYER.md`, "The cause travels with the
 close"; the Tor reply table is the Tor connector's,
 `shekyl-tor/src/replies.rs`, and `TOR_SUPERVISOR.md` reads it; the
@@ -819,7 +829,22 @@ test (`shekyl-dialer/src/pace.rs`, `attempts_per_test` and
 `retry_wait_nanos`, and `shekyl-dialer/src/attempts.rs`: the open test,
 in flight or waiting, is one record on `Attempts`; Tor three attempts,
 clearnet one, the address drawn throughout and no in-flight slot held
-while waiting, one `DialOutcome` per test, the last attempt's); a
+while waiting, one `DialOutcome` per test, the last attempt's; a Tor
+attempt that times out at or after the managed Tor's `SocksTimeout`
+can expire, 104 s into the attempt's own run (105 s,
+`shekyl_ffi::tor_link::TOR_SOCKS_TIMEOUT`, the one constant the launch
+also reads, less Tor's whole-second clock), is final within its test and
+the address cools: Tor retried inside its own window, introduction
+points and descriptor fetches (Rick, 2026-10-26; the Tor 0.4.9.14 lines
+are in `TOR_SUPERVISOR.md`'s reply table). The close cause's window-timeout
+mark says which failures are timeouts: Tor's `0x06` and the dial
+deadline's `TransportTimeout`. An earlier one keeps its retries, as
+`0xF0`, `0xF2`, `0x03`, `0x04` and the gap timeout do; `0x01` is final
+by its own row. On a silently blocked link every attempt ends at
+`0x06` at the window, so the candidates it reaches cool and climb rungs;
+that residual and its bound are in `TOR_SUPERVISOR.md`'s reply table.
+Every failed Tor attempt counts in the posture line's
+tally when it ends, deferred or not); a
 cooldown in place of the drop ("The fill" above; the `DialOutcome` table;
 slice 1 brief §5, where cooling
 seats are evictable like drawable ones); the file rule (slice 1 brief
@@ -965,16 +990,32 @@ it to the lists on the Rust side. The operator onion does cross:
 Rick, 2026-10-13). *Records-was (2026-10-13, step 2):
 `shekyl_peerlist_set_own_address` existed with no caller.*
 
-**The dial blocks its owner's thread — ACCEPTED for PR-3 (Rick,
-2026-10-13).** The timing engine owns the wake (R3): the owner loop
-arms its next deadline and blocks on `wait_wake`. Once woken, the
-thread blocks on the TCP dial and on the handshake read until the
-connector's gap deadline ends them; the dial itself is not an engine
-event. With the in-flight bound at one dial per connector that thread
-is the bound, so nothing waits behind it. Reopen criterion: if the
-post-cutover in-flight bound is raised above one, the dial moves into
-the connector as an event-driven step, and the owner loop stops
-holding a thread across it.
+**Each dial attempt is a task; the owner loop never waits on a dial
+(the dialer in-flight bound, revision 2, Rick 2026-10-25, decisions 1
+and 2).** The loop plans, launches and applies results. The attempt
+task runs on the transport runtime's async workers (zone bind; the
+harness polls it on a thread of its own) and does only the I/O and the
+Levin layer's checks: open the channel, send the handshake, read and
+decode the response, check the network id. It posts its result to a
+completion queue and rings the bell. The loop waits on its wake or the
+bell together; a bell applies the posted results through the layer
+that owns each decision (the lists admit the received list, the aim
+confirms or keeps, the hub adopts, then settle), on the loop's CSPRNG,
+and waits again on the same wake. An attempt stays pending, and its
+nonce in flight, until the loop applies its result. `stop` sets the
+flag, rings, cancels every attempt in flight (a connect is aborted, a
+channel released), drops every posted result, waits for any application
+already under way, joins both owner loops, and then writes the address
+file, all before the zone's runtime stops and before the Tor teardown
+(`TOR_SUPERVISOR.md`, `TSR-F13`). Each owner loop is a dedicated thread
+on the thread ledger (`p2p-dial-clearnet`, `p2p-dial-tor`); the engine
+lateness report is an interval task on the transport runtime, not a
+thread (decision B, Rick 2026-10-25). Tests:
+`shekyl-dialer/tests/attempts.rs`, and the ledger rows in
+`shekyl-ffi/src/zone_ffi_tests.rs`. *Records-was (ACCEPTED for PR-3,
+Rick 2026-10-13, with a reopen criterion this met): the owner loop
+blocked on the TCP dial and the handshake read, so the in-flight bound
+was the thread, and a stopping daemon could wait out a dial.*
 
 ## Measured after the cutover, on the Rust path
 
@@ -1175,14 +1216,13 @@ refused dial and a rejected handshake wrote it on clearnet too.*
 managed Tor process was not sized for, and a way to stall every other
 dial behind one SOCKS exchange. Many simultaneous clearnet dials pin
 the dialer's tasks and the peers' handshake slots the same way. Each
-connector has its own in-flight bound, owned by this slice. The
-interim is one dial per connector (the fill section). It is measured
-and raised on the Rust path after the cutover, not before it: a bound
-measured with the C++ dial path in front is a `CppPath` reading
-(`DAEMON_RELAY_PRIVACY.md` §97) and nothing is derived from it.
-*Records-was: both numbers are measured before the implementation PR
-names them.* The fill's one-dial-per-wake is the schedule, not that
-bound.
+connector has its own in-flight bound, owned by this slice: Tor 5,
+derived on the Rust path; clearnet 1 (the fill section). A bound
+measured with the C++ dial path in front would be a `CppPath` reading
+(`DAEMON_RELAY_PRIVACY.md` §97), and nothing was derived from one.
+*Records-was: the interim was one dial per connector; before that, both
+numbers were to be measured before the implementation PR named them.*
+The fill's one-dial-per-wake is the schedule, not that bound.
 
 **Full-pool capture.** The chance an attacker holds every hidden
 session is `p_h^h`. `p_h` is the onion-candidate spy share, as §95

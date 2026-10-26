@@ -8,12 +8,21 @@
 //! adopts a kept session or closes a confirm dial in Rust (dialer brief,
 //! "The fill", "The dial", "`DialOutcome`").
 //!
-//! The loop runs on a thread of its own. Its wake is a timing-engine owner
-//! (Rick, 2026-10-13): each gap is armed on the engine and the thread
-//! waits for the wake; the daemon has one scheduler and the dialer brings
-//! no second one. `Hub::dial_channel` blocks that thread while the
-//! connector opens the channel, and the handshake reads the channel's
-//! frames on it. No p2p io worker is held.
+//! The loop runs on a thread of its own. Its wake is a timing-engine owner:
+//! each gap is armed on the engine and the thread waits for that wake or
+//! for the bell. The daemon has one scheduler and the dialer brings no
+//! second one. A dial does not run on this thread. Each wake launches at
+//! most one attempt ([`flight`]); the attempt task does the I/O and posts
+//! its result, and the loop applies it. The pace is the wake spacing, and
+//! a slow dial skips no wake. No p2p io worker is held.
+//!
+//! [`Dialer::wake`] and [`Dialer::dial`] are the caller's own attempt.
+//! They run it on the calling thread and apply the result before they
+//! return. They do not post into the loop's queue.
+//!
+//! A connection problem does not end the test. The attempt waits and tries
+//! again ([`crate::pace`]); the wait holds no in-flight slot, and this loop
+//! does not run it.
 //!
 //! A wake draws only when the connector can dial: its link is usable and the
 //! tip and the network id are known (`TSR-F1`; the `ready` module). While one
@@ -23,6 +32,7 @@
 //! inbound accept counts there and is not a dial.
 
 mod address;
+mod flight;
 mod handshake;
 mod ready;
 mod recovery;
@@ -33,7 +43,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 use shekyl_draw_rng::RelayRng;
 use shekyl_peerlist::{
@@ -45,13 +55,15 @@ use shekyl_seam::{Hub, SocketId, Subscription, SyncPayload};
 use shekyl_timing_engine::{Clock, OwnerHandle};
 
 use self::address::live_sessions;
-use self::handshake::{Attempt, KeptDial};
+pub use self::flight::{Applied, Launch};
+use self::flight::{Completions, InFlight};
+use self::handshake::KeptDial;
 pub use self::ready::NotReady;
-use self::ready::{park, Bell};
+use self::ready::{park, wait_wake_or_bell, Bell, Waited};
 use self::wake::{plan_wake, Wake};
 use crate::attempts::Attempts;
 use crate::bans::BanSnapshot;
-use crate::fill::DialAim;
+use crate::fill::{in_flight_bound, DialAim};
 use crate::link_tally::{LinkFold, TallySink, TorLinkTally};
 use crate::nonce::{HandshakeNonce, HandshakeNonceSet, InFlightNonce};
 use crate::pace::{attempts_per_test, next_wake_nanos, retry_wait_nanos};
@@ -93,6 +105,28 @@ pub struct Shared {
     /// When the address file was last written or read; `None` until
     /// then, so the first due store is one interval after the open.
     last_store: Option<Tick>,
+    /// Every enlisted attempt whose result has not been applied, by
+    /// attempt id. The stop flag and the insert share one lock section
+    /// ([`flight`]): once the flag is set, nothing more is inserted, and
+    /// an application that has not yet removed its row leaves it for the
+    /// drain. The row holds the attempt's nonce until the result is
+    /// applied or the attempt is cancelled, and the attempt stays pending
+    /// in [`Attempts`] until one of those.
+    in_flight: BTreeMap<u64, InFlight>,
+    /// Applications that have removed their row and not yet finished.
+    /// [`Dialer::stop`] waits for zero, after it has refused every new
+    /// application, before it writes the address file. The wait releases
+    /// this lock; the hub is never called under it.
+    applying: usize,
+    /// The next attempt id.
+    next_attempt: u64,
+    /// Each connector's in-flight bound ([`in_flight_bound`]): protocol
+    /// data, the same on every node.
+    bounds: [usize; ConnectorId::COUNT],
+    /// The managed Tor's `SocksTimeout`, in nanoseconds, once the daemon
+    /// sets it ([`Dialer::set_tor_window`]). A Tor attempt that times out
+    /// at or after it is final within its test.
+    tor_window: Option<u64>,
     /// What the Tor dials show, for the managed-Tor supervisor's posture
     /// line (`TOR_SUPERVISOR.md` §4.2). Display only (`TSR-Q14`).
     tor_link: LinkFold,
@@ -159,6 +193,11 @@ pub struct Dialer {
     /// The hub's links ring [`Self::bell`] while this is held. Dropped with
     /// the dialer, so a dialer rebuilt on the same hub leaves no watcher.
     _links_watch: Subscription,
+    /// The results the attempt tasks posted; each also rings the bell.
+    completions: Arc<Completions>,
+    /// Wakes [`Self::stop`] when the last application that started before
+    /// the stop flag was seen has finished.
+    apply_idle: Condvar,
 }
 
 /// The peerlist's name for a seam session: the socket id, little-endian,
@@ -200,6 +239,14 @@ impl Dialer {
                 configured: Vec::new(),
                 recovery: std::array::from_fn(|_| None),
                 last_store: None,
+                in_flight: BTreeMap::new(),
+                applying: 0,
+                next_attempt: 0,
+                bounds: [
+                    in_flight_bound(ConnectorId::Clearnet),
+                    in_flight_bound(ConnectorId::Tor),
+                ],
+                tor_window: None,
                 tor_link: LinkFold::new(),
                 inbound_tor: 0,
             })),
@@ -211,6 +258,8 @@ impl Dialer {
             owners: Mutex::new([false; ConnectorId::COUNT]),
             bell,
             _links_watch: links_watch,
+            completions: Arc::new(Completions::default()),
+            apply_idle: Condvar::new(),
         }
     }
 
@@ -237,6 +286,30 @@ impl Dialer {
     pub fn set_network_id(&self, network_id: [u8; 16]) {
         *self.network_id.lock().expect("network id") = Some(network_id);
         self.bell.ring();
+    }
+
+    /// The earliest the managed Tor's `SocksTimeout` can expire on an onion
+    /// connect and answer `0x06` (`SocksTimeout::earliest_expiry`: Tor's
+    /// window, less its whole-second clock). Tor has already retried
+    /// introduction points and descriptor fetches by then, so a Tor attempt
+    /// that times out at or after it, measured over the attempt's own run,
+    /// is final within its test: the address cools (Rick, 2026-10-26). A
+    /// timeout before it keeps its retries. `None`, the default,
+    /// leaves every timeout worth its retries: an operator's Tor sets its
+    /// own `SocksTimeout`, which this node does not know, and with no Tor
+    /// there is nothing to read. Set where the managed Tor's route is
+    /// published.
+    pub fn set_tor_window(&self, window: Option<std::time::Duration>) {
+        let nanos = window.map(|window| u64::try_from(window.as_nanos()).unwrap_or(u64::MAX));
+        self.shared().tor_window = nanos;
+    }
+
+    /// The Tor window [`Self::set_tor_window`] set.
+    #[must_use]
+    pub fn tor_window(&self) -> Option<std::time::Duration> {
+        self.shared()
+            .tor_window
+            .map(std::time::Duration::from_nanos)
     }
 
     /// Send what the Tor dials show to `sink`: the tally now, then each
@@ -297,6 +370,14 @@ impl Dialer {
     #[must_use]
     pub fn in_flight(&self, connector: ConnectorId) -> usize {
         self.shared().view(connector).in_flight()
+    }
+
+    /// Run `connector` at `bound` dials in flight. A test seam: the bound is
+    /// protocol data ([`in_flight_bound`]), and no production crate turns
+    /// on the feature that compiles this.
+    #[cfg(feature = "test-seams")]
+    pub fn set_in_flight_bound(&self, connector: ConnectorId, bound: usize) {
+        self.shared().bounds[connector.index()] = bound;
     }
 
     /// Kept sessions on `connector`, pending `Keep` attempts included.
@@ -461,15 +542,59 @@ impl Dialer {
         Self::publish_tor_held(&mut shared);
     }
 
-    /// Stop every owner loop at its next wake, and write the address file
-    /// once more. A loop blocked in the engine's wait returns when its
-    /// owner is deregistered or the engine closes, which zone shutdown
-    /// does.
+    /// Stop every owner loop at its next bell, cancel every attempt in
+    /// flight, and write the address file once more.
+    ///
+    /// The flag is set before the drain. [`flight`] reads that flag in the
+    /// same lock section as the insert, so an attempt begun and not yet
+    /// inserted is cancelled there with no outcome, and an attempt already
+    /// inserted is in the drain. Either way the outstanding gray draw stays
+    /// seated and is written. Cancel senders are dropped after the dialer
+    /// lock, so a task ends at its next poll and releases what it holds: a
+    /// connect is aborted, a channel is released. The queue is then closed
+    /// and every posted result is dropped. A task that posts after the
+    /// close is handed the result back and drops it, which releases the
+    /// channel. An application that had already taken its row finishes
+    /// first: this waits for it, and that wait does not hold the dialer
+    /// lock across the hub calls, so a session it keeps is in the lists
+    /// when the file is written and nothing is adopted afterwards. The
+    /// file is written last. All of this is before the zone's runtime
+    /// stops and before the managed Tor is torn down
+    /// (`TOR_SUPERVISOR.md`, `TSR-F13`: the dialer stops first).
+    ///
+    /// A caller that started the owner loops on threads of its own uses
+    /// [`Self::stop_joining`], which joins them before the file is written.
     pub fn stop(&self) {
+        self.stop_joining(|| {});
+    }
+
+    /// [`Self::stop`], with `join_loops` run after every attempt is
+    /// cancelled and every application has finished, and before the
+    /// address file is written. The caller that started the owner loops
+    /// joins them there: each exits at the bell, and none applies a result
+    /// once the flag is set, so the file is written with no loop running.
+    /// It must not be called from an owner loop's own thread.
+    pub fn stop_joining(&self, join_loops: impl FnOnce()) {
         self.stop.store(true, Ordering::Release);
         self.bell.ring();
+        let count = self.abandon_flight();
+        if count > 0 {
+            tracing::debug!("the dialer cancelled {count} attempt(s) in flight at stop");
+        }
+        self.wait_for_applications();
+        join_loops();
         if let Err(err) = self.store_addresses() {
             tracing::warn!("the address file was not written at stop: {err}");
+        }
+    }
+
+    /// Block until every application that removed its row before seeing
+    /// the stop flag has finished. The condvar wait releases the dialer
+    /// lock. Nothing increments the count once the flag is set.
+    fn wait_for_applications(&self) {
+        let mut shared = self.shared();
+        while shared.applying > 0 {
+            shared = self.apply_idle.wait(shared).expect("dialer state");
         }
     }
 
@@ -496,13 +621,19 @@ impl Dialer {
     /// Write the address file now: every list address, by range only,
     /// less those under an active ban at this moment (the hub's bans, the
     /// snapshot the draws read). `Ok(false)` when no file was named.
+    ///
+    /// The ban snapshot and the clock are read before the store lock, so no
+    /// hub call is made under it. Two stores that overlap may therefore
+    /// write in either order: the later write can carry the earlier
+    /// snapshot. Each is a whole file of the lists at its own moment, and
+    /// the next store, at most one interval later, replaces it.
     pub fn store_addresses(&self) -> io::Result<bool> {
+        let mut bans = BanSnapshot::take(&self.hub);
+        let now = self.hub.now();
         let store = self.store.lock().expect("address store");
         let Some(store) = store.as_ref() else {
             return Ok(false);
         };
-        let mut bans = BanSnapshot::take(&self.hub);
-        let now = self.hub.now();
         let addresses = self.shared().lists.persistable(&mut bans, now);
         store.write(&addresses)?;
         self.shared().last_store = Some(now);
@@ -540,20 +671,29 @@ impl Dialer {
     /// cause is worth a retry, with attempts left in this test, is not
     /// recorded: the open test waits its [`retry_wait_nanos`] and the
     /// address stays an outstanding draw. The wake at or after the due
-    /// tick makes the next attempt. Anything else, including a test that
-    /// is not in flight, is the test's one outcome and is recorded. The
-    /// inbound count is taken under the table lock, across the dialer's.
+    /// tick makes the next attempt. A Tor timeout whose attempt ran
+    /// `ran_nanos` (timed inside its task) at or past the Tor window is
+    /// not worth one
+    /// ([`Self::set_tor_window`]). Anything else, including a test that is
+    /// not in flight, is the test's one outcome and is recorded. A
+    /// deferred Tor failure still counts in the tally: the stream did not
+    /// open. The inbound count is taken under the table lock, across the
+    /// dialer's.
     fn settle_or_retry<R: RelayRng + ?Sized>(
         &self,
         connector: ConnectorId,
         outcome: &DialOutcome,
+        ran_nanos: u64,
         rng: &mut R,
     ) {
         let now = self.hub.now();
         self.with_inbound(|shared| {
             let address = outcome.address();
             if let DialOutcome::DialFailed(_, cause) = outcome {
-                if cause.retry_worthy() {
+                let outlasted_tor = connector == ConnectorId::Tor
+                    && cause.window_timeout()
+                    && shared.tor_window.is_some_and(|window| ran_nanos >= window);
+                if cause.retry_worthy() && !outlasted_tor {
                     let cause = *cause;
                     let mut wait = 0u64;
                     let next = shared.attempts(connector).defer_retry(
@@ -566,12 +706,14 @@ impl Dialer {
                     );
                     if let Some(next) = next {
                         tracing::debug!(
-                            "{connector:?} dial {address:?} attempt {} ended {:?}; attempt {next} in {} ms",
+                            "{connector:?} dial {address:?} attempt {} ended {:?} after {} ms; attempt {next} in {} ms",
                             next - 1,
                             cause.kind(),
+                            ran_nanos / 1_000_000,
                             wait / 1_000_000
                         );
-                        Self::publish_tor_held(shared);
+                        let held = Self::tor_held(shared);
+                        shared.tor_link.observe(connector, outcome, held);
                         return;
                     }
                 }
@@ -632,7 +774,11 @@ impl Dialer {
     ///
     /// `owner` is this loop's registration on the timing engine. Each
     /// wake is armed at the engine's clock plus the gap of
-    /// [`next_wake_nanos`], drawn per dial from `rng`, the daemon's CSPRNG.
+    /// [`next_wake_nanos`], drawn per wake from `rng`, the daemon's CSPRNG.
+    /// The loop never waits on a dial: it waits on its wake or the bell
+    /// together. A bell applies the results attempt tasks posted and waits
+    /// again on the same armed wake; only a wake launches, one attempt per
+    /// wake, so the pace (R3) is unchanged and a slow dial skips no wake.
     pub fn run<C: Clock, R: RelayRng + ?Sized>(
         &self,
         connector: ConnectorId,
@@ -648,6 +794,7 @@ impl Dialer {
             if self.stop.load(Ordering::Acquire) {
                 break;
             }
+            self.apply_completions(connector, rng);
             match self.readiness(connector) {
                 Err(missing) => {
                     if parked != Some(missing) {
@@ -675,8 +822,23 @@ impl Dialer {
             if owner.arm(deadline).is_err() {
                 break;
             }
-            if owner.wait_wake().is_err() {
-                break;
+            // Wait for the armed wake. A bell meanwhile is a posted result
+            // or a stop: apply, and wait again on the same wake.
+            let mut seen = seen;
+            loop {
+                match wait_wake_or_bell(&self.bell, owner, seen) {
+                    Waited::Wake => break,
+                    Waited::Ended => return,
+                    Waited::Bell => {
+                        // The bell, then the stop, as above: a stop's ring
+                        // counted in `seen` is a stop this check sees.
+                        seen = self.bell.rung();
+                        if self.stop.load(Ordering::Acquire) {
+                            return;
+                        }
+                        self.apply_completions(connector, rng);
+                    }
+                }
             }
             if self.stop.load(Ordering::Acquire) {
                 break;
@@ -684,92 +846,8 @@ impl Dialer {
             if let Err(err) = self.store_if_due(self.hub.now()) {
                 tracing::warn!("the address file was not written: {err}");
             }
-            self.wake(connector, rng);
-        }
-    }
-
-    /// One wake's work: the plan, and the dial it chose. Returns whether a
-    /// dial was made. The owner loop calls this when its timer fires; a test
-    /// calls it directly to run wakes without the clock.
-    pub fn wake<R: RelayRng + ?Sized>(&self, connector: ConnectorId, rng: &mut R) -> bool {
-        let Some((address, aim, nonce)) = self.choose(connector, rng) else {
-            return false;
-        };
-        tracing::debug!("{connector:?} dial {address:?} aim {aim:?}");
-        match self.exchange(connector, &address, aim, &nonce, rng) {
-            Attempt::Done(outcome) => {
-                tracing::debug!("{connector:?} dial {address:?} ended: {outcome:?}");
-                self.settle_or_retry(connector, &outcome, rng);
-            }
-            Attempt::Kept(kept) => {
-                self.accept_and_notify(connector, &address, kept, rng);
-            }
-        }
-        // The nonce leaves the set here: the attempt ended, by any path.
-        drop(nonce);
-        true
-    }
-
-    /// One dial of `address` with `aim`, outside the wake loop: the draw
-    /// of that address, the pending attempt, the nonce and the handshake.
-    /// Returns the kept session's id. A confirm dial, a refusal and a
-    /// failure return [`None`]: each is recorded before this returns, and
-    /// a confirm dial posts nothing. The owner loop draws through
-    /// [`Self::choose`]; a test dials one named address here.
-    ///
-    /// Readiness comes first, as in [`Self::choose`]. A connector that
-    /// cannot dial returns [`None`] before any draw: a draw it cannot dial
-    /// ends as `DialFailed(LocalClose)`, and that cause carries no proof,
-    /// so the outstanding gray address cools.
-    ///
-    /// A gray address is drawn here, so the outcome resolves an
-    /// outstanding draw as the lists require. A white address is a
-    /// re-contact and is not drawn. An address on neither list is not
-    /// dialed.
-    pub fn dial<R: RelayRng + ?Sized>(
-        &self,
-        connector: ConnectorId,
-        address: &NetworkAddress,
-        aim: DialAim,
-        rng: &mut R,
-    ) -> Option<SocketId> {
-        if let Err(missing) = self.readiness(connector) {
-            tracing::debug!(
-                "{connector:?} dial {address:?} not made: {}",
-                missing.describe()
-            );
-            return None;
-        }
-        {
-            let mut shared = self.shared();
-            if shared.lists.is_gray(address) {
-                let now = self.hub.now();
-                let drawn =
-                    shared
-                        .lists
-                        .draw_gray_where(connector, now, &mut |a| a == address, rng)?;
-                debug_assert_eq!(&drawn, address);
-            } else if !shared.lists.is_white(address) {
-                return None;
-            }
-            if !shared.begin_or_release(connector, address, aim) {
-                tracing::debug!(
-                    "{connector:?} dial {address:?} not made: an attempt is already open"
-                );
-                return None;
-            }
-        }
-        let nonce = self.nonces.mint(connector, rng);
-        match self.exchange(connector, address, aim, &nonce, rng) {
-            Attempt::Done(outcome) => {
-                self.settle_or_retry(connector, &outcome, rng);
-                None
-            }
-            Attempt::Kept(kept) => {
-                let id = kept.id;
-                self.accept_and_notify(connector, address, kept, rng)
-                    .then_some(id)
-            }
+            self.apply_completions(connector, rng);
+            self.launch(connector, rng);
         }
     }
 

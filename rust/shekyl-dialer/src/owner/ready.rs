@@ -7,7 +7,7 @@
 //!
 //! A dial needs the connector's link to be usable, the core's tip and the
 //! network id. A draw made without them ends as `DialFailed(LocalClose)`, and
-//! the list rule drops a drawn gray address on that outcome, so the plan checks
+//! that cause carries no proof, so the outstanding gray cools. The plan checks
 //! all three before it draws anything. While one is missing, the owner loop
 //! waits on the [`Bell`], which every change that could supply it rings: a
 //! link published, the tip published, the network id set, and the stop.
@@ -71,7 +71,8 @@ pub(super) struct Bell {
 
 struct Rung {
     count: u64,
-    /// Who is waiting for the next ring. Each is woken once, at that ring.
+    /// Who is waiting for the next ring. Each is woken once, at that ring,
+    /// or removed when its wait ends another way.
     waiting: Vec<Waker>,
 }
 
@@ -116,28 +117,99 @@ impl Bell {
         }
         Poll::Pending
     }
+
+    /// Drop `waker` if this wait registered it and the bell has not rung.
+    /// A ring has already taken its waiters, so this finds nothing then.
+    /// Another thread's waiter does not [`Waker::will_wake`] this one and
+    /// stays.
+    fn unregister(&self, waker: &Waker) {
+        let mut state = self.state.lock().expect("bell");
+        state.waiting.retain(|waiting| !waiting.will_wake(waker));
+    }
 }
 
 /// Wait, with no timer armed, until `bell` rings after `seen` (`true`) or
 /// `owner`'s wait ends because the engine closed or the owner was
 /// deregistered (`false`: the loop ends). Both are polled on this thread, so
-/// whichever comes first ends the wait, and neither can be missed.
+/// whichever comes first ends the wait, and neither can be missed. The bell
+/// registration is removed when this returns, including when the owner's
+/// life ends: a waker left behind would stay until the next ring.
 pub(super) fn park<C: Clock>(bell: &Bell, owner: &OwnerHandle<C>, seen: u64) -> bool {
     let mut owner_wait = pin!(owner.wait_wake_async());
-    block_on(|cx| {
-        if let Poll::Ready(waited) = owner_wait.as_mut().poll(cx) {
-            // Nothing is armed while the loop is parked, so only the end of
-            // the owner's life ends its wait. A wake that does arrive is
-            // treated as a ring: the loop looks again.
-            return Poll::Ready(waited.is_ok());
-        }
-        bell.poll_past(seen, cx).map(|()| true)
-    })
+    block_on_and_then(
+        |cx| {
+            if let Poll::Ready(waited) = owner_wait.as_mut().poll(cx) {
+                // Nothing is armed while the loop is parked, so only the end of
+                // the owner's life ends its wait. A wake that does arrive is
+                // treated as a ring: the loop looks again.
+                return Poll::Ready(waited.is_ok());
+            }
+            bell.poll_past(seen, cx).map(|()| true)
+        },
+        |waker| bell.unregister(waker),
+    )
+}
+
+/// What ended [`wait_wake_or_bell`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Waited {
+    /// The armed wake was delivered.
+    Wake,
+    /// The bell rang after `seen`: a posted result, a link change, or a stop.
+    Bell,
+    /// The engine closed or the owner was deregistered: the loop ends.
+    Ended,
+}
+
+/// Wait for the armed wake or the bell, whichever comes first, both polled
+/// on this thread. A wake that is delivered while the loop is not waiting
+/// stays in the owner's slot until this reads it, so none is lost; a
+/// `WakeWait` dropped when the bell wins re-registers on the next call.
+/// The bell registration is removed when this returns, including when the
+/// wake wins: each wait builds a fresh waker, and one left behind is not
+/// the next wait's waker, so it would stay until some later ring.
+pub(super) fn wait_wake_or_bell<C: Clock>(
+    bell: &Bell,
+    owner: &OwnerHandle<C>,
+    seen: u64,
+) -> Waited {
+    let mut owner_wait = pin!(owner.wait_wake_async());
+    block_on_and_then(
+        |cx| {
+            if let Poll::Ready(waited) = owner_wait.as_mut().poll(cx) {
+                return Poll::Ready(if waited.is_ok() {
+                    Waited::Wake
+                } else {
+                    Waited::Ended
+                });
+            }
+            bell.poll_past(seen, cx).map(|()| Waited::Bell)
+        },
+        |waker| bell.unregister(waker),
+    )
+}
+
+/// Poll `future` on this thread until it is ready, parking between polls.
+/// A waker unparks the thread. The caller's own dial runs here, so it never
+/// joins the loop's result queue.
+pub(super) fn block_on_future<F: Future>(future: F) -> F::Output {
+    let mut future = pin!(future);
+    block_on(|cx| future.as_mut().poll(cx))
 }
 
 /// Poll `step` on this thread until it is ready, parking the thread between
 /// polls. A wake unparks it.
-fn block_on<T>(mut step: impl FnMut(&mut Context<'_>) -> Poll<T>) -> T {
+fn block_on<T>(step: impl FnMut(&mut Context<'_>) -> Poll<T>) -> T {
+    block_on_and_then(step, |_| {})
+}
+
+/// [`block_on`], then `done` with the waker this wait registered. `done`
+/// runs after the result is ready and before this returns, so a bell
+/// registration does not outlive the wait.
+fn block_on_and_then<T>(
+    mut step: impl FnMut(&mut Context<'_>) -> Poll<T>,
+    done: impl FnOnce(&Waker),
+) -> T {
     struct Unpark(std::thread::Thread);
     impl Wake for Unpark {
         fn wake(self: Arc<Self>) {
@@ -149,10 +221,12 @@ fn block_on<T>(mut step: impl FnMut(&mut Context<'_>) -> Poll<T>) -> T {
     }
     let waker = Waker::from(Arc::new(Unpark(std::thread::current())));
     let mut cx = Context::from_waker(&waker);
-    loop {
+    let value = loop {
         if let Poll::Ready(value) = step(&mut cx) {
-            return value;
+            break value;
         }
         std::thread::park();
-    }
+    };
+    done(&waker);
+    value
 }
