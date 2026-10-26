@@ -618,6 +618,48 @@ impl SocksPort {
     }
 }
 
+/// How long the managed tor holds a SOCKS request it cannot attach before it
+/// answers (`SocksTimeout`). A typed knob like [`SocksPort`]: the launch renders
+/// it and nothing else can.
+///
+/// The daemon sets it below its own Tor dial deadline (`TOR_SUPERVISOR.md`
+/// §4.2). Tor's default equals that deadline, so on a blocked link whether
+/// Tor's reply (`0x06`, a link failure) or the dial's own deadline (a
+/// timeout) ended a dial was a race; below it, Tor's reply always comes
+/// first. Tor applies it locally: nothing on the network changes (`TSR-Q9`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SocksTimeout {
+    /// Tor's own default, two minutes. The wallet's tor, harnesses and tests.
+    TorDefault,
+    /// [`Self::MARGIN`] below the caller's dial deadline.
+    Below {
+        /// The deadline the caller's dials through this tor run under.
+        dial_deadline: std::time::Duration,
+    },
+}
+
+impl SocksTimeout {
+    /// How far below the dial deadline Tor answers. A stream Tor attaches
+    /// just before its timeout can still be detached and retried once
+    /// (Tor's stream schedule starts at 10 s, then 15 s) inside it.
+    pub const MARGIN: std::time::Duration = std::time::Duration::from_secs(15);
+
+    /// The `--SocksTimeout` value in whole seconds, or `None` for Tor's
+    /// default. Never more than half the deadline away from it.
+    #[must_use]
+    pub fn as_arg(self) -> Option<String> {
+        match self {
+            Self::TorDefault => None,
+            Self::Below { dial_deadline } => {
+                let timeout = dial_deadline
+                    .saturating_sub(Self::MARGIN)
+                    .max(dial_deadline / 2);
+                Some(timeout.as_secs().max(1).to_string())
+            }
+        }
+    }
+}
+
 /// A managed `tor` to spawn (DQ-T0.1). The actor launches it with the caller's
 /// `DataDirectory` and `SocksPort`, and hands it one end of a connected socket pair as
 /// its owning, already-authenticated control connection (`TSR-Q7`). Tor opens no
@@ -647,6 +689,9 @@ pub struct ManagedTor {
     /// port can race the previous incarnation's dying socket on restart. Harnesses
     /// pick [`SocksPort::Fixed`].
     pub socks_port: SocksPort,
+    /// This instance's `SocksTimeout`: [`SocksTimeout::Below`] the daemon's Tor
+    /// dial deadline; Tor's default elsewhere.
+    pub socks_timeout: SocksTimeout,
     /// Spawn `tor` with `--DisableNetwork 1` — an offline instance (opens its control port
     /// and SOCKS port, but never touches the network, so it never bootstraps). The
     /// child-lifecycle test sets this to isolate spawn+shutdown from a real bootstrap;
@@ -2096,6 +2141,7 @@ mod live_tests {
                 tor_binary: crate::binary::VerifiedTorBinary::unchecked_for_test(tor_binary()),
                 data_dir: dir.path().to_path_buf(),
                 socks_port: super::SocksPort::Fixed(free_port()),
+                socks_timeout: super::SocksTimeout::TorDefault,
                 // The whole point: a service that can reach the network.
                 disable_network: false,
                 disk_writes: DiskWrites::Deferred,
@@ -2248,6 +2294,7 @@ mod live_tests {
                 tor_binary: crate::binary::VerifiedTorBinary::unchecked_for_test(tor_binary()),
                 data_dir: data_dir.clone(),
                 socks_port: super::SocksPort::Fixed(free_port()),
+                socks_timeout: super::SocksTimeout::TorDefault,
                 disable_network: true,
                 disk_writes: DiskWrites::Deferred,
                 exit_observer: Some(exit_tx),
@@ -2324,6 +2371,7 @@ mod live_tests {
                 tor_binary: crate::binary::VerifiedTorBinary::unchecked_for_test(tor_binary()),
                 data_dir: data_dir.clone(),
                 socks_port: super::SocksPort::Fixed(free_port()),
+                socks_timeout: super::SocksTimeout::TorDefault,
                 disable_network: true,
                 disk_writes: DiskWrites::Deferred,
                 exit_observer: Some(exit_tx),
@@ -2401,6 +2449,7 @@ mod live_tests {
                 tor_binary: crate::binary::VerifiedTorBinary::unchecked_for_test(tor_binary()),
                 data_dir: dir.path().to_path_buf(),
                 socks_port: super::SocksPort::Fixed(free_port()),
+                socks_timeout: super::SocksTimeout::TorDefault,
                 disable_network: false,
                 disk_writes: DiskWrites::Deferred,
                 exit_observer: Some(exit_tx),
@@ -2527,6 +2576,7 @@ mod live_tests {
                 tor_binary: crate::binary::VerifiedTorBinary::unchecked_for_test(tor_binary()),
                 data_dir: dir.path().to_path_buf(),
                 socks_port: super::SocksPort::Fixed(free_port()),
+                socks_timeout: super::SocksTimeout::TorDefault,
                 disable_network: true,
                 disk_writes: DiskWrites::Deferred,
                 exit_observer: Some(exit_tx),
@@ -2643,6 +2693,7 @@ mod live_tests {
                 tor_binary: crate::binary::VerifiedTorBinary::unchecked_for_test(tor_binary()),
                 data_dir: dir.path().to_path_buf(),
                 socks_port: super::SocksPort::Fixed(free_port()),
+                socks_timeout: super::SocksTimeout::TorDefault,
                 disable_network: true,
                 disk_writes: DiskWrites::Deferred,
                 exit_observer: Some(exit_tx),

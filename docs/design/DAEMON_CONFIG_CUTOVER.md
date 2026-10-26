@@ -98,7 +98,7 @@ What crosses the FFI after the cutover, and nothing else:
 
 ### 2.2 The start sequence (DC-Q13)
 
-1. `main()` calls `shekyl_daemon_main()`; Rust owns the process from here.
+1. `main()` calls `shekyl_daemon_main(entry, argc, argv)`; Rust owns the process from here.
    **A panic is never silent.** The workspace builds with `panic = "abort"`
    in both profiles (`rust/Cargo.toml`, lines 671 to 676), so a panic cannot
    be caught and turned into an exit status, and an unwind across the C++
@@ -127,12 +127,34 @@ What crosses the FFI after the cutover, and nothing else:
    Everything else `service` selects is built here and switched on by
    RT-W14: the root by run mode, the machine-wide root's checks (§2.4), and
    the elevation branch's deletion.
-2. Rust reads its arguments with `std::env::args_os` (IG-Q2), resolves
+2. Rust takes the `argc`/`argv` from step 1 (IG-Q2), resolves
    the run mode (`service`), `--network` and `--config-file`, checks the file's permissions (§2.4),
    reads and validates it whole, applies the command line over it per key,
    resolves every path (§2.5), reads the ban file, and constructs the typed
    sections. `--help` and `--version` are answered here. A refusal renders
    through IG-11 and exits with status 2; nothing below runs.
+   **The argument vector (2026-10-26).** The value is `ArgumentVector`
+   (`rust/shekyl-ffi/src/argument_vector.rs`). On Unix the pointers are
+   that vector. The daemon image is a staticlib, and `std::env::args_os`
+   is filled only when Rust's `lang_start` ran: glibc does that through an
+   `.init_array` constructor, and FreeBSD, musl and the other non-glibc
+   Unix targets do not. Reading `args_os` there ignored `--network`,
+   `--data-dir`, `--help` and an unknown name, and the daemon started on
+   the mainnet defaults. The count is the length. A null `argv`,
+   `argc < 1`, or a null slot exits 1 and does not start: a hole is not a
+   shorter command line. Windows reads `GetCommandLineW` and does not read
+   the pointers; a C `main` argv there is the active code page. The
+   snapshot export decodes the caller's narrow argv instead (Unix bytes,
+   Windows active code page): that list is the importer's and the test
+   binary's, not the process command line. `from_os_strings` is the
+   constructor the Rust process entry will call.
+   **Rust process entry — OPEN.** Grammar §0 (2026-10-13) moves `shekyld`'s
+   `main` to Rust. DC-Q13 (b) kept CMake's executable and one call in, so
+   `lang_start` still does not run: the stack-overflow guard is not
+   installed, and `args_os` does not agree with the process argv on every
+   target. RT-16's SCM dispatcher also needs that process entry. The
+   carrier is the FOLLOWUPS row. Falsify by a rustc-emitted `shekyld` whose
+   entry calls `lang_start`, with DC-Q13 amended.
    **Client mode.** When positional command words are given, `shekyld` is a
    client of a daemon that is already running, as the remnant's client branch
    in `src/daemon/main.cpp` is

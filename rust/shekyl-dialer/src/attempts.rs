@@ -144,6 +144,12 @@ impl Attempts {
         self.kept.remove(address);
     }
 
+    /// Sessions held now, without the dials still in a test.
+    #[must_use]
+    pub fn held(&self) -> usize {
+        self.kept.len()
+    }
+
     /// The addresses expiry skips, and whose close moves the white clock.
     #[must_use]
     pub fn kept_addresses(&self) -> &BTreeSet<NetworkAddress> {

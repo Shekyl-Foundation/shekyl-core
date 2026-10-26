@@ -330,14 +330,17 @@ fn snapshot_for(args: &[OsString], platform: &Platform) -> Result<Box<Leased>, i
 /// first) through the real parse: the table, the file, the sections and
 /// the platform roots, as a start does, but no lock, no marker and no
 /// logging. Writes the snapshot's address to `out` and returns 0; a
-/// refusal is printed to standard error and returns 2; a null argument
-/// returns 1. The snapshot and what it points at live until
+/// refusal is printed to standard error and returns 2; a vector that
+/// cannot be read returns 1. The snapshot and what it points at live until
 /// [`shekyl_daemon_snapshot_free`].
 ///
 /// # Safety
 ///
-/// `argv` points at `argc` NUL-terminated strings and `out` at a writable
-/// pointer slot.
+/// `out` is a writable pointer slot. `argc` and `argv` meet
+/// [`ArgumentVector::from_narrow_argv`](crate::argument_vector::ArgumentVector::from_narrow_argv)'s
+/// contract: `argc` non-null NUL-terminated strings, program first. A null
+/// slot, a null `argv`, `argc < 1`, or a byte the platform encoding cannot
+/// represent returns 1.
 #[allow(unsafe_code)]
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_daemon_snapshot_parse(
@@ -345,32 +348,16 @@ pub unsafe extern "C" fn shekyl_daemon_snapshot_parse(
     argv: *const *const c_char,
     out: *mut *mut ShekylDaemonSnapshot,
 ) -> i32 {
-    if argv.is_null() || out.is_null() || argc < 1 {
+    if out.is_null() {
         return EXIT_FAILED;
     }
-    let Ok(count) = usize::try_from(argc) else {
+    // SAFETY: the caller's contract on `argc` and `argv`.
+    let Some(arguments) =
+        (unsafe { crate::argument_vector::ArgumentVector::from_narrow_argv(argc, argv) })
+    else {
         return EXIT_FAILED;
     };
-    // SAFETY: the caller's contract above: `argv` addresses `argc` pointers.
-    let Some(argv) = (unsafe { crate::legacy_util::slice_from_typed_ptr(argv, count) }) else {
-        return EXIT_FAILED;
-    };
-    let args: Vec<std::ffi::OsString> = argv
-        .iter()
-        .map(|&p| {
-            if p.is_null() {
-                std::ffi::OsString::new()
-            } else {
-                // SAFETY: each pointer is NUL-terminated by the contract.
-                std::ffi::OsString::from(
-                    unsafe { std::ffi::CStr::from_ptr(p) }
-                        .to_string_lossy()
-                        .into_owned(),
-                )
-            }
-        })
-        .collect();
-    match snapshot_for(&args, &crate::platform::current()) {
+    match snapshot_for(arguments.as_slice(), &crate::platform::current()) {
         Ok(leased) => {
             // SAFETY: `out` is writable by the contract.
             unsafe { *out = Box::into_raw(leased).cast::<ShekylDaemonSnapshot>() };

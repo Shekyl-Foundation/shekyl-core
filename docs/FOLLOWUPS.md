@@ -11,6 +11,9 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 ## Pre-genesis
 
+- **`shekyld`'s process entry is still C++ `main` (DC-Q13 (b)); Grammar §0's Rust entry is unbuilt.** The command line is an `ArgumentVector`: on Unix the `argc`/`argv` `main` passes, on Windows `GetCommandLineW`, because a staticlib's `std::env::args_os` is empty where Rust's `lang_start` did not run. The rustc-emitted entry is what runs that startup (it collects `args_os` into `from_os_strings`, installs `SIGPIPE` and the stack-overflow guard) and what RT-16's SCM dispatcher needs. Blocked on a ruling that amends DC-Q13 (b) so rustc links `shekyld` and the C++ remnant is the callee — falsify by the binary's entry calling `lang_start`, with that ruling amended.
+  - Owner: [`DAEMON_CONFIG_CUTOVER.md`](design/DAEMON_CONFIG_CUTOVER.md) §2.2
+  - Target: pre-genesis
 - **Two archival tables in the Rust store have no retirement horizon yet: `archival_serve_credit` and `archival_block_draws`.** The per-epoch retirement (`ARCHIVAL_SETTLEMENT_WRITER.md` §17) retires each table at its last reader's horizon and gives none to a table whose reader has none. `archival_serve_credit`'s A3/A4 ask for the latest epoch a pair ever served (CEN-J16's cooldown), so retiring a row changes the verdict; `archival_block_draws` is per height and its readers (admission's draw-index bound, the next block's count) are not built.
   - Owner: the settlement-writer lane — `SO-D12j` for the served anchor and admission for the draw state, both in the merged increment's design text ([`ARCHIVAL_SETTLEMENT_WRITER.md`](design/ARCHIVAL_SETTLEMENT_WRITER.md) §16.3, §17.5)
   - Target: pre-genesis
@@ -1523,7 +1526,7 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
   - Owner: [`Q12_D6A_PEER_DISCOVERY_RUN.md`](design/Q12_D6A_PEER_DISCOVERY_RUN.md) — owns the failed-address window family (it ruled `P2P_ANON_FAILED_ADDR_FORGET_SECONDS = 240` from measured p90 recovery); the public-zone counterpart is the same mechanism and the same instrument
 
-- **`HelioseleneField` mul, square and sqrt take operand-dependent time on x86_64 (`CA-2`, found 2026-10-24), outside BINSEC's model; the mechanism is open.** Two x86_64 hosts reproduce it, the floor device does not; the discriminators are the disassembly diff against `Field25519::square`, a `-C no-vectorize-slp` rebuild, and the no-turbo / performance-governor run on the workstation (root). The monero-oxide notice waits for the answer, because platform (frequency) and code (SLP-vectorised limb loops) have different owners and fixes.
+- **`HelioseleneField` mul, square and sqrt take operand-dependent time on x86_64 (`CA-2`, found 2026-10-24), outside BINSEC's model; the mechanism is narrowed, not named.** Two x86_64 hosts reproduce it, the floor device does not; it is an operand-dependent cycle count of the core (turbostat: equal clock, fewer cycles), not P-state, not SLP, not governed by DOITM, and for square and mul it needs the operation inlined among its neighbours (flat behind a call boundary at 1M; sqrt's crossing fits familiarity). The platform offers no mitigation, so the fix is code-side. Reported upstream (monero-oxide/monero-oxide#210). Next PR: the inlined halves and the sparse-Montgomery Field25519 row.
   - Owner: `CA-2` — [`CRYPTO_AUDIT.md`](design/CRYPTO_AUDIT.md) §2
   - Target: pre-genesis
 
