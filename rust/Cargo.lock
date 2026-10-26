@@ -4376,6 +4376,7 @@ name = "shekyl-dialer"
 version = "3.1.0"
 dependencies = [
  "shekyl-capped-stream",
+ "shekyl-dialer",
  "shekyl-draw-rng",
  "shekyl-levin",
  "shekyl-onion-v3",

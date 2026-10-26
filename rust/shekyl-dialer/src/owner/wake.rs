@@ -19,7 +19,7 @@ use super::recovery;
 use super::Shared;
 use crate::bans::BanSnapshot;
 use crate::candidate::CandidateFilter;
-use crate::fill::{plan, Census, DialAim, DrawList, IN_FLIGHT_BOUND};
+use crate::fill::{plan, Census, DialAim, DrawList};
 
 /// Why a connector under its target dialed nothing on one wake.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -78,11 +78,13 @@ pub(super) enum Wake {
 /// A waiting test is the reason only when nothing else is drawable. A
 /// wake that has candidates and also has a test waiting keeps
 /// [`IdleWhy::NoCandidate`]: the fill declined a candidate.
-fn idle_if_undrawn(census: &Census, retry_waiting: bool) -> Option<IdleWhy> {
+fn idle_if_undrawn(census: &Census, retry_waiting: bool, bound: usize) -> Option<IdleWhy> {
     if census.target == 0 || census.kept >= census.target {
         return None;
     }
-    if census.in_flight >= IN_FLIGHT_BOUND {
+    // `bound` is the connector's in-flight bound, the same number `plan`
+    // reads. A test seam that raises it raises this check with it.
+    if census.in_flight >= bound {
         return Some(IdleWhy::InFlight);
     }
     if census
@@ -115,11 +117,14 @@ pub(super) fn plan_wake<R: RelayRng + ?Sized>(
 ) -> Wake {
     let index = connector.index();
     let target = shared.targets[index];
+    // Protocol data installed on the dialer. A test seam can raise it, and
+    // the retry below and the draw further down both read this number.
+    let bound = shared.bounds[index];
     // A test whose next attempt is due makes it now, ahead of any draw: the
     // address is still the outstanding draw, so nothing draws it twice.
     // The test moves from waiting to in flight inside `take_due`, so this
     // path cannot drop the test and leave the seat outstanding.
-    if shared.attempts[index].in_flight() < IN_FLIGHT_BOUND {
+    if shared.attempts[index].in_flight() < bound {
         if let Some((address, aim)) = shared.attempts[index].take_due(now) {
             // Every wake reports to the recovery episode, this one too:
             // it drew the address of a test the episode may cover.
@@ -169,7 +174,7 @@ pub(super) fn plan_wake<R: RelayRng + ?Sized>(
             gray: seats.gray,
             gray_candidates: seats.gray_candidates,
         };
-        let undrawn = idle_if_undrawn(&census, waiting);
+        let undrawn = idle_if_undrawn(&census, waiting, bound);
         // Stranded: under the target, nothing in flight, nothing drawable.
         // The lists cannot yield another peer, so this wake re-admits and
         // dials nothing. One kept session is not a healthy connector
@@ -182,7 +187,7 @@ pub(super) fn plan_wake<R: RelayRng + ?Sized>(
         let wake = if stranded {
             Wake::Recover
         } else {
-            match plan(&census, white_diversity_floor(), WHITE_REFILL_LINE) {
+            match plan(&census, white_diversity_floor(), WHITE_REFILL_LINE, bound) {
                 None => {
                     tracing::debug!("{connector:?} wake: no rule applies ({census:?})");
                     Wake::Idle

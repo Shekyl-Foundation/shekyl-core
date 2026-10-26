@@ -9,6 +9,12 @@
 //! dialer is the strand harness: an in-memory channel, not a socket.
 //! The hub does not dial and does not build a [`shekyl_capped_stream::StreamEnds`].
 
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll, Wake, Waker};
+use std::thread::Thread;
+
 use shekyl_capped_stream::Session;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_timing_engine::Tick;
@@ -31,6 +37,16 @@ pub struct Channel {
     pub gap: Option<oneshot::Sender<()>>,
 }
 
+/// A channel still being opened: [`Dial::connect_async`]'s future.
+/// Dropping it before it resolves cancels the connect, and the dialer that
+/// started the connect releases whatever it reserved.
+pub type ConnectFuture = Pin<Box<dyn Future<Output = Result<Channel, CloseCause>> + Send>>;
+
+/// One dial attempt, as the outbound dialer hands it to [`Dial::spawn_attempt`].
+/// It resolves when the attempt has posted its result, or at once when it
+/// is cancelled. It holds no lock of the caller's.
+pub type AttemptTask = Pin<Box<dyn Future<Output = ()> + Send>>;
+
 /// Opens a channel. The hub adopts the result and posts `established`.
 pub trait Dial: Send + Sync {
     /// Admit and build the channel. `ceiling` and `now` are the hub's,
@@ -41,6 +57,40 @@ pub trait Dial: Send + Sync {
         ceiling: InboundCeiling,
         now: Tick,
     ) -> Result<Channel, CloseCause>;
+
+    /// [`Self::connect`] without blocking the caller: the outbound dialer's
+    /// attempt task awaits this, on whatever [`Self::spawn_attempt`] runs it
+    /// on. The default runs [`Self::connect`] at once and is ready: right
+    /// for a dialer whose connect does not wait, the loopback and the test
+    /// dialers. A dialer whose connect waits on the network overrides this,
+    /// and its future cancels the connect when dropped.
+    fn connect_async(
+        &self,
+        endpoint: &Endpoint,
+        ceiling: InboundCeiling,
+        now: Tick,
+    ) -> ConnectFuture {
+        let result = self.connect(endpoint, ceiling, now);
+        Box::pin(std::future::ready(result))
+    }
+
+    /// Run one outbound dial attempt to its end. The dialer chooses where
+    /// attempts run, as it chooses where pumps run ([`Self::drive`]).
+    ///
+    /// The default runs `task` on a thread of its own that polls it to the
+    /// end: the harness path, for the loopback and the test dialers, whose
+    /// threads no ledger counts. Zone bind overrides it and runs every
+    /// attempt as a task on the transport runtime's async workers, never
+    /// on its blocking pool and never on an unledgered thread: past the
+    /// pool's cap, connections went deaf (`drive`'s history). Returns
+    /// `false` when the attempt could not be started; it was dropped,
+    /// which is its cancellation.
+    fn spawn_attempt(&self, task: AttemptTask) -> bool {
+        std::thread::Builder::new()
+            .name("seam-attempt".to_owned())
+            .spawn(move || block_on(task))
+            .is_ok()
+    }
 
     /// Push one frame into the channel the way the socket reader would.
     /// The harness does this. A connector dialer returns false: its read
@@ -67,4 +117,26 @@ pub trait Dial: Send + Sync {
     /// on the transport runtime; the harness runs a thread it joins from
     /// [`Self::retired`].
     fn drive(&self, hub: &Hub, id: SocketId, session: Session);
+}
+
+/// Unpark the polling thread when the task can make progress.
+struct Unpark(Thread);
+
+impl Wake for Unpark {
+    fn wake(self: Arc<Self>) {
+        self.0.unpark();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.0.unpark();
+    }
+}
+
+/// Poll `task` on this thread until it resolves, parking between polls.
+fn block_on(mut task: AttemptTask) {
+    let waker = Waker::from(Arc::new(Unpark(std::thread::current())));
+    let mut cx = Context::from_waker(&waker);
+    while task.as_mut().poll(&mut cx) == Poll::Pending {
+        std::thread::park();
+    }
 }

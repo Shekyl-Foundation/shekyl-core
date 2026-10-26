@@ -73,7 +73,7 @@ use shekyl_types::archival::AttestationWitness;
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_wire::{Block, Transaction};
 
-use super::{fault_reply, Connector, PlanMismatchReason, RunFault};
+use super::{fault_reply, halt_on_corrupt, Connector, PlanMismatchReason, RunFault};
 use crate::schedule::ChainRules;
 use shekyl_chain_rules::{AtHeight, HeaderView};
 
@@ -912,9 +912,7 @@ fn recorded_work(
 /// the writer through a batch that arms it, as `validate`'s does through
 /// the connect batch; [`fault_reply`] maps the rest.
 fn snapshot_fault(store: &ChainStore, height: BlockHeight, fault: Fault<StoreError>) -> RunFault {
-    fault_reply(height, fault, |observed| {
-        halt_writer(store, |batch| batch.refuse_corrupt(observed))
-    })
+    fault_reply(height, fault, |observed| halt_on_corrupt(store, observed))
 }
 
 /// Arm a halt and return it. `arm` notes the invariant on a batch whose

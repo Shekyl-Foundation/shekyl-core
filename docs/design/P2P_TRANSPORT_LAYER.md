@@ -417,9 +417,13 @@ holds a count, so the destroy post has not run.
   closes both session ends with the cause. The seam inbound drive
   records that cause. `PeerClosed` is the reader's end-of-file and
   nothing else. A silent acceptor is `LevinHandshakeTimeout`. A peer
-  that sends FIN is `PeerClosed`. The cause carries three marks in
+  that sends FIN is `PeerClosed`. The cause carries four marks in
   its spare byte, worth a retry, names the destination, proves
-  misbehaviour (2026-10-24): per kind by default, handed in by the
+  misbehaviour (2026-10-24), and a timeout of the dial's own window
+  (2026-10-26: the dial deadline's `TransportTimeout` and Tor's
+  `0x06`; the dialer reads it against the attempt's run time, and a Tor
+  timeout at or after `SocksTimeout` is final within its test): per
+  kind by default, handed in by the
   connector for a proxy refusal (the Tor connector's reply table,
   `shekyl-tor/src/replies.rs`; this crate keeps no SOCKS knowledge), and
   the dialer stamps proof on a Levin rejection or a refused
@@ -834,7 +838,7 @@ a connector deadline.
 Send-queue caps, read at `abstract_tcp_server2.h:72-73`: 1,000 messages
 and `100 * 1024 * 1024` bytes.
 
-Outbound dialing is serial: one dial in flight per connector (the Rust dialer, PR-3; *records-was:* `connections_maker` at `net_node.inl:2009`, deleted 2026-10-13). It reaches
+Outbound dialing is concurrent up to a per-connector bound, Tor 5 and clearnet 1, each attempt a task on the transport runtime (the dialer in-flight bound, revision 2, 2026-10-25; *records-was:* one dial in flight per connector, the Rust dialer from PR-3; before that `connections_maker` at `net_node.inl:2009`, deleted 2026-10-13). It reaches
 `try_to_connect_and_handshake_with_new_peer` (`net_node.inl:1544`) at
 the call sites `:1917` and `:1970`. A transport handshake adds a round
 trip to every dial. A stalled peer holds that loop for the whole
@@ -1003,7 +1007,7 @@ and the mechanism does not. "Refuse" means it does not survive.
 | FIN versus RST, linger | epee close / shutdown | **One behaviour for every failure before the channel exists:** close after zero bytes written, FIN, no linger and no RST variant. Step 7 asserts those failures are indistinguishable from the far side. |
 | `add_ref` / `release`, `request_callback`, `send_done` | `i_service_endpoint` | The adapter's contract (D4). Not a copy of epee's refcount. |
 | Executor for invoke timers and idle handlers | `levin_protocol_handler_async.h:229` takes `get_io_context()` for the invoke timer. The pool is 10 threads (`net_node.inl:1150`) | **D6, ruled.** A socketless `io_context` is the interim until the timing engine lands. Its pool is a measured budget, not 10. |
-| Serial outbound dialing | *Records-was* `connections_maker` at `net_node.inl:2009`, call at `:1917`; the Rust dialer's `IN_FLIGHT_BOUND` of one per connector since PR-3 (2026-10-13) | **Stayed serial through the cutover.** The transport layer exposes an asynchronous dial and does not choose the schedule. When and how many to dial is discovery policy, P2P-3 slice 3. The extra round trip is measured in step 7. |
+| Serial outbound dialing | *Records-was* `connections_maker` at `net_node.inl:2009`, call at `:1917`; the Rust dialer's one dial per connector from PR-3 (2026-10-13) to 2026-10-25 | **Stayed serial through the cutover, then concurrent up to a per-connector bound (Tor 5, clearnet 1; the dialer in-flight bound, revision 2).** The transport layer exposes an asynchronous dial (`Dial::connect_async`) and does not choose the schedule. When and how many to dial is discovery policy, P2P-3 slice 3. The extra round trip is measured in step 7. |
 | SSL | `m_state.ssl` on the connection | **Refuse.** |
 
 ## Rate limit is four jobs (RULED 2026-09-28)

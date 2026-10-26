@@ -126,8 +126,8 @@ pub(crate) use arm::BondArm;
 pub use bundle::{
     check_section, check_section_until_switch, draw_targets, judge_bundles, open_body,
     open_reference, verify_bundle, AdmissionFault, Admitted, BundleInvalid, BundleRefused,
-    BundleUnanswered, BundleView, DerivedDraw, DrawTargets, EconomyTarget, SectionCharge,
-    SectionCheckFailed, SectionRefused, SectionStanding, SupportSeat, SupportTarget,
+    BundleUnanswered, BundleView, DerivedDraw, DrawOrigin, DrawTargets, Drawn, SectionCharge,
+    SectionCheckFailed, SectionRefused, SectionStanding, SupportSeat,
 };
 pub(crate) use close::{accrue, gather_epoch_snapshot, gather_universe, EpochSnapshot, ServedAt};
 pub use close::{closed_and_final, shard_close, shard_close_height, ClosedUniverse};

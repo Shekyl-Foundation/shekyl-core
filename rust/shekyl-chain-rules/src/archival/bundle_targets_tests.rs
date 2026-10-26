@@ -42,7 +42,12 @@ fn the_producers_economy_pairs_are_the_verifiers_draws() {
     let produced = targets(&world).expect("the fixture answers every read");
     assert_eq!(produced.h, world.h);
     assert_eq!(produced.hash, fixture_block_hash(world.h));
-    assert!(produced.support.is_empty());
+    let economy: Vec<_> = produced
+        .draws
+        .iter()
+        .filter(|drawn| matches!(drawn.origin, DrawOrigin::Economy { .. }))
+        .collect();
+    assert_eq!(economy.len(), produced.draws.len(), "no support draws");
 
     let (reference, body) = world.bundle(&[]);
     let admitted = verify_bundle(
@@ -53,20 +58,24 @@ fn the_producers_economy_pairs_are_the_verifiers_draws() {
         &RuleSet::GENESIS,
     )
     .expect("the all-miss bundle admits");
-    assert_eq!(produced.economy.len(), admitted.draws.len());
-    for (target, derived) in produced.economy.iter().zip(&admitted.draws) {
-        assert_eq!(target.index, derived.index, "draw {}", target.draw);
-        assert_eq!(target.pair, derived.pair, "draw {}", target.draw);
+    assert_eq!(economy.len(), admitted.draws.len());
+    for (target, derived) in economy.iter().zip(&admitted.draws) {
+        let DrawOrigin::Economy { index } = target.origin else {
+            unreachable!("the filter kept economy draws");
+        };
+        assert_eq!(index, derived.index, "draw {}", target.draw);
+        assert_eq!(target.persona, derived.pair.persona, "draw {}", target.draw);
+        assert_eq!(target.shard, derived.pair.shard, "draw {}", target.draw);
         assert_eq!(
             Some(&target.receipt_key),
-            world.drawable_epoch().receipt_key(target.index),
+            world.drawable_epoch().receipt_key(index),
             "draw {}",
             target.draw
         );
     }
     assert_eq!(
         (0..6).collect::<Vec<u32>>(),
-        produced.economy.iter().map(|t| t.draw).collect::<Vec<_>>()
+        economy.iter().map(|t| t.draw).collect::<Vec<_>>()
     );
 }
 
@@ -83,12 +92,17 @@ fn the_producers_support_seats_are_the_verifiers_observations() {
         .support_roster
         .insert(world.h, vec![seat(&world, 1), seat(&world, 2)]);
     let produced = targets(&world).expect("the fixture answers every read");
-    assert_eq!(produced.support.len(), 2);
+    let support: Vec<_> = produced
+        .draws
+        .iter()
+        .filter(|drawn| matches!(drawn.origin, DrawOrigin::Support))
+        .collect();
+    assert_eq!(support.len(), 2);
 
     // The producer reads seat 1 and passes it; the record is signed over
     // the target's shard, under the target's nonce.
     let hash = fixture_block_hash(world.h);
-    let pass = &produced.support[1];
+    let pass = support[1];
     let nonce = support_challenge_nonce(&world.seed, hash.as_bytes(), pass.draw, 0);
     let record = world.persona_record(2, pass.shard.to_raw(), PassStream::Support, &nonce);
     let (reference, body) = world.assemble_support(
@@ -104,15 +118,15 @@ fn the_producers_support_seats_are_the_verifiers_observations() {
         &RuleSet::GENESIS,
     )
     .expect("the support pass the producer collected admits");
-    assert_eq!(admitted.support.len(), produced.support.len());
-    for (target, observed) in produced.support.iter().zip(&admitted.support) {
+    assert_eq!(admitted.support.len(), support.len());
+    for (target, observed) in support.iter().zip(&admitted.support) {
         assert_eq!(target.draw, observed.draw);
         assert_eq!(target.persona, observed.persona);
         assert_eq!(target.shard, observed.shard);
     }
     assert!(admitted.support[1].passed && !admitted.support[0].passed);
     assert_eq!(
-        produced.support[0].receipt_key.to_receipt_sign_pk(),
+        support[0].receipt_key.to_receipt_sign_pk(),
         world.personas[1].receipt_public_key
     );
 }
@@ -125,8 +139,7 @@ fn a_block_with_no_draws_has_no_targets() {
     let mut world = BundleWorld::new(0);
     world.view.drawable_epochs.clear();
     let produced = targets(&world).expect("nothing to derive");
-    assert!(produced.economy.is_empty());
-    assert!(produced.support.is_empty());
+    assert!(produced.draws.is_empty());
 }
 
 /// The view's holes are the producer's unanswered, never a verdict: no

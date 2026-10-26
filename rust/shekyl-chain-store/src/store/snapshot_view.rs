@@ -402,6 +402,59 @@ impl<'id> ChainView<'id> for SnapshotView<'_> {
     }
 }
 
+/// The snapshot's bundle rows.
+///
+/// The view traits are implemented for every brand, and these reads do not
+/// use the brand, so each forward names one (`'static`). An invariant comes
+/// back as a plain [`StoreError`]: a snapshot arms nothing, and the caller
+/// latches the writer.
+impl super::bundle_view::BundleRows for SnapshotView<'_> {
+    fn arm_row(&self, row: StoreInvariant) -> StoreError {
+        row.into()
+    }
+
+    fn recorded_block_at(
+        &self,
+        height: BlockHeight,
+    ) -> Result<AtHeight<shekyl_wire::Block>, StoreError> {
+        let tip = self.tip_row()?;
+        let body = chain_reads::block_body(self.snapshot.txn(), tip.as_ref(), height.to_raw())
+            .map_err(ReadFault::into_plain)?;
+        Ok(match body {
+            AtHeight::AboveTip => AtHeight::AboveTip,
+            AtHeight::Recorded((_, block)) => AtHeight::Recorded(block),
+        })
+    }
+
+    fn block_draws_row(
+        &self,
+        height: BlockHeight,
+        floor: BlockDrawsFloor,
+    ) -> Result<Option<BlockDraws>, StoreError> {
+        <Self as ChainView<'static>>::block_draws(self, height, floor)
+    }
+
+    fn issued_draws_row(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
+    ) -> Result<Vec<IndexedDraw>, StoreError> {
+        <Self as ChainView<'static>>::issued_draws(self, epoch, floor)
+    }
+
+    fn support_count_row(
+        &self,
+        height: BlockHeight,
+        floor: BlockDrawsFloor,
+    ) -> Result<Option<SupportCount>, StoreError> {
+        <Self as ChainView<'static>>::support_block_count(self, height, floor)
+    }
+
+    fn header_row(&self, height: BlockHeight) -> Result<AtHeight<HeaderRecord>, StoreError> {
+        <Self as HeaderView<'static>>::header_at(self, height)
+    }
+}
+
 #[cfg(test)]
 #[path = "snapshot_view_tests.rs"]
 mod snapshot_view_tests;

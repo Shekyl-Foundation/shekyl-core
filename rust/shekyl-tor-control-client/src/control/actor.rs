@@ -644,19 +644,44 @@ impl SocksTimeout {
     /// (Tor's stream schedule starts at 10 s, then 15 s) inside it.
     pub const MARGIN: std::time::Duration = std::time::Duration::from_secs(15);
 
-    /// The `--SocksTimeout` value in whole seconds, or `None` for Tor's
-    /// default. Never more than half the deadline away from it.
+    /// How long Tor holds a SOCKS request it cannot attach, in whole
+    /// seconds, or `None` for Tor's default. Never more than half the
+    /// deadline away from it. The one computation of the window: the launch
+    /// renders it ([`Self::as_arg`]) and the dialer reads its
+    /// [`Self::earliest_expiry`].
     #[must_use]
-    pub fn as_arg(self) -> Option<String> {
+    pub fn window(self) -> Option<std::time::Duration> {
         match self {
             Self::TorDefault => None,
             Self::Below { dial_deadline } => {
                 let timeout = dial_deadline
                     .saturating_sub(Self::MARGIN)
                     .max(dial_deadline / 2);
-                Some(timeout.as_secs().max(1).to_string())
+                Some(std::time::Duration::from_secs(timeout.as_secs().max(1)))
             }
         }
+    }
+
+    /// The earliest an attempt can see Tor give up at [`Self::window`]: one
+    /// second inside it. Tor counts a stream's age in whole seconds,
+    /// `time(NULL)` against a `time_t` creation stamp (Tor 0.4.9.14
+    /// `src/core/or/connection_edge.c:1194`, `:1210`), so its
+    /// `>= SocksTimeout` check (`:1222`) can fire after as little as
+    /// `SocksTimeout - 1` real seconds; on the floor device a `0x06` from a
+    /// 105 s timeout arrived at 104.97 s (2026-10-26). An attempt that ran
+    /// this long and timed out may have used Tor's whole window, and the
+    /// dialer treats it so.
+    #[must_use]
+    pub fn earliest_expiry(self) -> Option<std::time::Duration> {
+        self.window()
+            .map(|window| window.saturating_sub(std::time::Duration::from_secs(1)))
+    }
+
+    /// The `--SocksTimeout` value in whole seconds, or `None` for Tor's
+    /// default: [`Self::window`], rendered.
+    #[must_use]
+    pub fn as_arg(self) -> Option<String> {
+        self.window().map(|window| window.as_secs().to_string())
     }
 }
 

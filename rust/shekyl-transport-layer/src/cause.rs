@@ -113,7 +113,7 @@ macro_rules! close_kinds {
 close_kinds! {
     (1, PrefixMismatch, BeforeChannel, Marks::NONE, "SHEKYL_CLOSE_PREFIX_MISMATCH"),
     (2, TransportHandshakeFailed, BeforeChannel, Marks::NONE, "SHEKYL_CLOSE_TRANSPORT_HANDSHAKE_FAILED"),
-    (3, TransportTimeout, BeforeChannel, Marks::RETRY, "SHEKYL_CLOSE_TRANSPORT_TIMEOUT"),
+    (3, TransportTimeout, BeforeChannel, Marks::RETRY | Marks::WINDOW_TIMEOUT, "SHEKYL_CLOSE_TRANSPORT_TIMEOUT"),
     (4, AdmissionRefused, BeforeChannel, Marks::NONE, "SHEKYL_CLOSE_ADMISSION_REFUSED"),
     (5, DialFailed, BeforeChannel, Marks::RETRY, "SHEKYL_CLOSE_DIAL_FAILED"),
     (6, ProxyRefused, BeforeChannel, Marks::NONE, "SHEKYL_CLOSE_PROXY_REFUSED"),
@@ -147,8 +147,16 @@ impl Marks {
     /// Authenticated proof that the peer misbehaved. Only a layer whose
     /// connector authenticates the destination may set it.
     pub const PROVES_MISBEHAVIOUR: u8 = 4;
+    /// A timeout of the dial's own window: our dial deadline, or the
+    /// connector's word that its own window ran out. It does not decide a
+    /// retry by itself, since the same timeout can come early (a lost
+    /// circuit): the dialer reads it against the attempt's run time, and a
+    /// failure at or after the connector's window is final within its test
+    /// (the dialer in-flight bound, revision 4, Rick 2026-10-26).
+    pub const WINDOW_TIMEOUT: u8 = 8;
     /// Every bit a cause may carry.
-    pub const ALL: u8 = Self::RETRY | Self::NAMES_DESTINATION | Self::PROVES_MISBEHAVIOUR;
+    pub const ALL: u8 =
+        Self::RETRY | Self::NAMES_DESTINATION | Self::PROVES_MISBEHAVIOUR | Self::WINDOW_TIMEOUT;
 }
 
 /// One close cause. `reply_code` is the overlay reply for
@@ -208,7 +216,7 @@ impl CloseCause {
     pub const fn proxy_refused(reply_code: u16, marks: u8) -> Self {
         Self {
             kind: CloseKind::ProxyRefused,
-            marks: marks & (Marks::RETRY | Marks::NAMES_DESTINATION),
+            marks: marks & (Marks::RETRY | Marks::NAMES_DESTINATION | Marks::WINDOW_TIMEOUT),
             reply_code,
         }
     }
@@ -251,6 +259,14 @@ impl CloseCause {
     #[must_use]
     pub const fn proves_misbehaviour(self) -> bool {
         self.marks & Marks::PROVES_MISBEHAVIOUR != 0
+    }
+
+    /// Whether this cause is a timeout of the dial's own window
+    /// ([`Marks::WINDOW_TIMEOUT`]). The dialer reads it against the
+    /// attempt's run time.
+    #[must_use]
+    pub const fn window_timeout(self) -> bool {
+        self.marks & Marks::WINDOW_TIMEOUT != 0
     }
 
     #[must_use]
@@ -351,10 +367,12 @@ _Static_assert(offsetof(shekyl_close_cause, reply_code) == {CLOSE_CAUSE_REPLY_OF
 #define SHEKYL_CLOSE_MARK_RETRY {retry}
 #define SHEKYL_CLOSE_MARK_NAMES_DESTINATION {names}
 #define SHEKYL_CLOSE_MARK_PROVES_MISBEHAVIOUR {proves}
+#define SHEKYL_CLOSE_MARK_WINDOW_TIMEOUT {window}
 ",
         retry = Marks::RETRY,
         names = Marks::NAMES_DESTINATION,
         proves = Marks::PROVES_MISBEHAVIOUR,
+        window = Marks::WINDOW_TIMEOUT,
     )
     .expect("header write");
     for kind in CloseKind::ALL {
@@ -464,7 +482,31 @@ mod tests {
                 marks & Marks::NAMES_DESTINATION != 0,
                 "marks {marks:#x}"
             );
+            assert_eq!(
+                cause.window_timeout(),
+                marks & Marks::WINDOW_TIMEOUT != 0,
+                "marks {marks:#x}"
+            );
         }
+    }
+
+    /// Of the transport layer's own causes, only its dial deadline is a
+    /// window timeout: the dialer reads it against the attempt's run time
+    /// (revision 4, Rick 2026-10-26). It stays worth a retry by itself.
+    #[test]
+    fn only_the_transport_timeout_is_a_window_timeout() {
+        for kind in CloseKind::ALL {
+            if *kind == CloseKind::ProxyRefused {
+                continue;
+            }
+            let cause = CloseCause::new(*kind);
+            assert_eq!(
+                cause.window_timeout(),
+                *kind == CloseKind::TransportTimeout,
+                "{kind:?}"
+            );
+        }
+        assert!(CloseCause::new(CloseKind::TransportTimeout).retry_worthy());
     }
 
     /// The transport layer's own table: connection problems are worth a

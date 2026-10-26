@@ -29,6 +29,7 @@ use crate::schema::{ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_ISSUED_DIGEST, ARCHIVAL_ISSUE
 use super::archival_reads;
 use super::bundle_view::StoreBundleView;
 use super::error::{AdmissionWriteFault, SettlementFault, StoreError, StoreInvariant};
+use super::view::BatchView;
 use super::write::WriteBatch;
 
 impl<'id> WriteBatch<'_, 'id> {
@@ -49,7 +50,7 @@ impl<'id> WriteBatch<'_, 'id> {
     /// `u32`. The view's own faults pass through.
     pub(super) fn write_admissions(
         &self,
-        view: &StoreBundleView<'_, '_, 'id>,
+        view: &StoreBundleView<'_, BatchView<'_, 'id>>,
         admitted: &[Admitted],
     ) -> Result<(), StoreError> {
         if admitted.is_empty() {
@@ -83,7 +84,7 @@ impl<'id> WriteBatch<'_, 'id> {
 
     fn journal_plan(
         &self,
-        view: &StoreBundleView<'_, '_, 'id>,
+        view: &StoreBundleView<'_, BatchView<'_, 'id>>,
         plan: &AdmissionPlan,
     ) -> Result<(), StoreError> {
         let connecting = view.including();

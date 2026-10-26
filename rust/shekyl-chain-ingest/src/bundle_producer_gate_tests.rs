@@ -25,7 +25,7 @@
 //!    the epoch's settlement credits P as served.
 //! 4. Along the way: a restart mid-window reconciles the queue and the
 //!    entry survives it; a reorg pops the admitting tip and the entry is
-//!    judged again and re-queued at the new tip; an entry left untaken
+//!    judged again and kept under the new tip; an entry left untaken
 //!    leaves when its window closes.
 //! 5. The live path: P serving with an identity key. The producer files a
 //!    bundle with no passes, and the queue admits it.
@@ -411,7 +411,7 @@ async fn a_produced_bundle_is_admitted_and_connects_through_the_staged_door() {
                 producing.settle().await;
                 let after = queued(&scenario);
                 let again = after.iter().find(|e| e.h == h).expect("re-judged and kept");
-                assert_eq!(again.queued.tip_height, to, "re-queued at the new tip");
+                assert_eq!(again.queued.tip_height, to, "kept under the new tip");
             }
         }
         let admitted = step(&mut scenario, &mut chain, &mut producing, &p_tip, true).await;

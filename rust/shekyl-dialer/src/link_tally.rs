@@ -23,7 +23,10 @@ use shekyl_peerlist::{CloseKind, ConnectorId, DialOutcome};
 pub struct TorLinkTally {
     /// Tor dials whose stream opened, since the dialer started. Only grows.
     pub opened: u64,
-    /// Tor dials that ended without a stream since the last one opened.
+    /// Tor dial attempts that ended without a stream since the last one
+    /// opened. Each attempt counts when it ends, including a failed one
+    /// whose test goes on to a retry (revision 4 of the in-flight bound,
+    /// Rick 2026-10-26).
     pub unopened: u32,
     /// Tor sessions this node holds now: outbound sessions the dialer
     /// kept, plus inbound sessions on the board.
@@ -57,7 +60,8 @@ impl LinkFold {
         self.tally
     }
 
-    /// Fold one dial outcome when it is a Tor dial. Anything that reached a
+    /// Fold one dial attempt's outcome when it is a Tor dial: the test's
+    /// outcome, or a failed attempt deferred for a retry. Anything that reached a
     /// peer opened a stream; a dial this node closed itself is not a dial
     /// that failed. A payload refusal is not a dial: it names a kept
     /// session the payload owner declined, and that stream was counted

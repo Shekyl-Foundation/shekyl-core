@@ -20,12 +20,12 @@ use std::time::Duration;
 use rand::SeedableRng;
 use shekyl_archival_retention::{
     assemble_bundle, draw_commit, sign_bundle_commitment, BundleBody, BundleKept, BundleRef,
-    PassBitmap, BUNDLE_WITNESS_KEY_LEN,
+    PassBitmap, PassStream, BUNDLE_WITNESS_KEY_LEN,
 };
 use shekyl_bundle_producer::read::READS_AT_ONCE;
 use shekyl_bundle_producer::{
-    DrawTarget, DueRead, Producer, ReadOutcome, Recorded, Targets, Window, WitnessRing,
-    READ_START_SPREAD,
+    DrawTarget, DueRead, Producer, ReadOutcome, Recorded, Targets, TipPublication, Window,
+    WitnessRing, READ_START_SPREAD,
 };
 use shekyl_chain_rules::CenRow;
 use shekyl_crypto_pq::fn_dsa_hybrid::{FnDsaHybridSecretKey, HybridEd25519FnDsa};
@@ -253,10 +253,7 @@ async fn the_connector_learns_a_blocks_draws_only_for_that_block() {
     let Learned::Targets(targets) = learned else {
         panic!("expected targets, got {learned:?}");
     };
-    assert!(
-        targets.economy.is_empty() && targets.support.is_empty(),
-        "no draws issued"
-    );
+    assert!(targets.draws.is_empty(), "no draws issued");
     let elsewhere = scenario
         .connector()
         .ask(LearnDraws {
@@ -292,7 +289,7 @@ async fn the_producer_claims_what_its_ring_drew() {
     };
     let store = scenario.store();
     let snap = store.begin_read().expect("snapshot");
-    let observed = producer.observe(ours.height, window, |h| {
+    let observed = producer.observe(ours.height, TipPublication::from_seq(1), window, |h| {
         crate::bundle_producer::recorded_at(&snap, h)
     });
     assert_eq!(observed.learn.len(), 1);
@@ -335,7 +332,9 @@ fn one_started_read() -> (Producer, DueRead) {
         hash: BlockHash::from_bytes([0xA0; 32]),
         commitment,
     };
-    let observed = producer.observe(ours, window, |at| (at == ours).then_some(recorded));
+    let observed = producer.observe(ours, TipPublication::from_seq(1), window, |at| {
+        (at == ours).then_some(recorded)
+    });
     assert_eq!(observed.learn.len(), 1);
     let (receipt_key, _) =
         HybridEd25519FnDsa::keypair_from_seeds(&[7; 32], &[8; 32]).expect("keygen");
@@ -343,14 +342,14 @@ fn one_started_read() -> (Producer, DueRead) {
         ours,
         window,
         Targets {
-            economy: vec![DrawTarget {
+            draws: vec![DrawTarget {
+                stream: PassStream::Economy,
                 draw: 0,
                 persona: PCanonicalId::from_bytes([7; 32]),
                 shard: ShardId::from_raw(0),
                 receipt_key,
                 endpoint: [9; 32],
             }],
-            support: Vec::new(),
         },
     );
     let due = (101..=600)

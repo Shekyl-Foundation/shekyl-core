@@ -157,6 +157,279 @@ pub struct WriteBatch<'store, 'id> {
     _brand: PhantomData<fn(&'id ()) -> &'id ()>,
 }
 
+/// The validator read a chain and found the store's record inconsistent.
+/// The row named here is what [`WriteBatch::refuse_corrupt`] arms, so
+/// `complete` halts the writer at the noted height exactly as a belt
+/// would have. This function does not arm: a snapshot has no batch.
+///
+/// A [`Corrupt`] is a store-invariant violation observed by the rules
+/// crate instead of by a store write site — CEN-D4's window walk over
+/// `BatchView` sees `block_info` rows whose cumulative work does not
+/// increase (SI-10), or an overflow the store's own fold would have
+/// caught had the store computed the value (SI-8). The store computes
+/// none of it (C2-R8 Q4), so the observation arrives here and the store
+/// supplies the consequence. The mapping is by arm:
+///
+/// | `Corrupt` | `StoreInvariant` |
+/// | --- | --- |
+/// | `CumulativeDifficultyNotMonotone { at }` | `WorkNotIncreasing { height: at }` (SI-10) |
+/// | `CumulativeDifficultyOverflow` | `FoldOverflow { cell: "block_info.cumulative_difficulty" }` (SI-8) |
+/// | `BondRecordInvariant { which, .. }` | `CellCorrupt { key: "archival_bond", .. }` with `which` as the reason (SI-7) |
+/// | `BondHybridKeyMalformed { .. }` | `CellCorrupt { key: "archival_bond", .. }` the hybrid key is not canonical (SI-7) |
+/// | `AccrualOverflow { .. }` | `FoldOverflow { cell: "archival_budget_accruing" }` (SI-8) |
+/// | `SettlementIntegrity { epoch, check }` | `SettlementNotSound { epoch, .. }` with `check` as the fault (SI-25), except the drawable set's two checks below |
+/// | `SettlementIntegrity { epoch, check: DrawableDigestMissing }` | `DrawableDigestNotSingular { epoch, observed: Missing }` (SI-29) |
+/// | `SettlementIntegrity { epoch, check: DrawableDrift }` | `DrawableSetNotSound { epoch, observed: Drift }` (SI-30) |
+/// | `DrawableEpoch { epoch, why }` | `DrawableSetNotSound { epoch, observed: NotBuilt(why) }` (SI-30) |
+/// | `DrawCount { height, why }` | `BlockDrawsNotSingular { height, observed: Count(why) }` (SI-33) |
+/// | `RelayFloorUnpriceable { at }` | `CellCorrupt { key: "block_info", fault: OutsideDomain { at } }` (SI-7) |
+///
+/// (The arms between are documented inline on the match.)
+///
+/// A zero next-block target is **not** in this table and never was a
+/// store matter: LWMA-1 has no output floor and a conforming slow chain
+/// derives zero, so it is CEN-D6's refusal of the block — a verdict the
+/// validator returns, which the store never sees (RD-F17, 2026-09-20).
+///
+/// **This is the one place the store names a validator fault type**, and
+/// it names only `Corrupt`: never `InvalidBlock` (the conversion ban),
+/// never `Stale` (unproven is not a store fault), never `Fault::View`
+/// (that is the store's own error coming back). The match does not arm
+/// a batch. [`WriteBatch::refuse_corrupt`] does, and notes the connecting
+/// height; a snapshot reader returns this row and the caller latches
+/// the writer. One match, so the two cannot name different rows.
+pub fn invariant_of(corrupt: Corrupt) -> StoreInvariant {
+    match corrupt {
+        Corrupt::CumulativeDifficultyNotMonotone { at } => StoreInvariant::WorkNotIncreasing {
+            height: at.to_raw(),
+        },
+        Corrupt::CumulativeDifficultyOverflow => StoreInvariant::FoldOverflow {
+            cell: "block_info.cumulative_difficulty",
+        },
+        Corrupt::TxCountNotMonotone { at } => StoreInvariant::FoldNotMonotone {
+            cell: "block_info.cumulative_tx_count",
+            height: at.to_raw(),
+        },
+        // The close's age operand could not be placed: the archival
+        // fold `shard_close_height` searched does not cross a closed
+        // shard's end at one height (DRS-E4 commit 4, on `SHT-Q2`'s
+        // partition). The fold is non-decreasing on a conforming store,
+        // so this is SI-13 read from the rule side, on the archival
+        // cell — the same row the prune's descent arms when it finds
+        // the fold going backwards.
+        Corrupt::ShardCloseUnplaced { shard: _, at } => StoreInvariant::FoldNotMonotone {
+            cell: "block_info.cumulative_archival_len",
+            height: at.to_raw(),
+        },
+        // CEN-F17 read the `total_burned` register above the parent's
+        // `coins_generated` (E6 slice 7 wave B). Burn destroys issued
+        // coins, so the fold is bounded by the accumulator on every
+        // conforming store (FL-R16c: a violation, never a zero supply);
+        // a register holding more is a cell whose value the store's
+        // own invariants rule out — SI-7's shape, on the register, with
+        // the reason spelled. The store did not compute the pair; the
+        // validator observed it and this is the halt.
+        Corrupt::BurnExceedsEmission { .. } => StoreInvariant::CellCorrupt {
+            key: "total_burned",
+            fault: CellFault::Undecodable(CodecError::Invalid {
+                codec: "total_burned",
+                reason: "the burned fold exceeds the parent's coins_generated (FL-R16c)",
+            }),
+        },
+        // The relay-floor reader found a `block_info` median the floor's
+        // arithmetic cannot take — a weight no block can carry, so the
+        // row is bytes no conforming store writes. That is SI-7, the
+        // same class as a cell that decoded and is impossible.
+        // `CodecError`'s reason is `'static` and cannot name the height,
+        // and the batch's noted connecting height is the block being
+        // connected, not this row when the window read an earlier one.
+        // `OutsideDomain` keeps the row's height on the halt. The
+        // operands stay on the validator's `Corrupt`; the operator
+        // opens this `block_info` row.
+        Corrupt::RelayFloorUnpriceable { at, operands: _ } => StoreInvariant::CellCorrupt {
+            key: "block_info",
+            fault: CellFault::OutsideDomain {
+                at: at.to_raw(),
+                codec: "long_term_effective_median",
+                reason: "the median leaves the relay floor's arithmetic domain",
+            },
+        },
+        // A rule read below the connecting height and the view answered
+        // `AboveTip`: the same SI-7 row the store arms when it finds a
+        // dense-range row missing — observed from the rule side this
+        // time (E6 slice 6, 2026-09-24). The height is not on the row;
+        // `CellCorrupt` names the cell the read was of, and the
+        // connecting height the batch noted is the context. The record
+        // selects the cell: a root hole reported as `block_info` would
+        // halt the writer against the wrong table.
+        Corrupt::HoleBelowTip { at: _, record } => StoreInvariant::CellCorrupt {
+            key: match record {
+                // The header record is a projection of the same row
+                // (DRS-E5 `E5-13`): a hole under `header_at` is a
+                // hole in `block_info`.
+                PerHeightRecord::Block | PerHeightRecord::Header => "block_info",
+                PerHeightRecord::CurveTreeRoot => "curve_tree_roots",
+                PerHeightRecord::LeafCount => "curve_tree_leaf_counts",
+                PerHeightRecord::Outputs => "blocks",
+            },
+            fault: CellFault::Absent,
+        },
+        // The drain found a recorded point that does not decompress.
+        // `O` and `C` are the `output_amounts` row; `CM` is the pruned
+        // transaction's `0x07` field. The cell is the point's.
+        Corrupt::LeafNotConstructible { output: _, input } => {
+            let (key, codec, reason) = match input {
+                LeafInput::OutputKey => (
+                    "output_amounts",
+                    "output_key",
+                    "the output key does not decompress",
+                ),
+                LeafInput::Commitment => (
+                    "output_amounts",
+                    "commitment",
+                    "the amount commitment does not decompress",
+                ),
+                LeafInput::LeafCommitment => (
+                    "txs_pruned",
+                    "pqc_leaf_commitment",
+                    "the leaf commitment does not decompress",
+                ),
+            };
+            StoreInvariant::CellCorrupt {
+                key,
+                fault: CellFault::Undecodable(CodecError::Invalid { codec, reason }),
+            }
+        }
+        // A frontier the store's own read assembled. `NotOnCurve` is a
+        // layer-table hash that decoded and is not a point of its curve.
+        // `Shape` is the summary's leaf count disagreeing with the layer
+        // count that count implies — the chunks were read; the count's
+        // implication was not. An empty grow is not this arm.
+        Corrupt::TreeUnservable { fault } => match fault {
+            FrontierFault::NotOnCurve { .. } => StoreInvariant::CellCorrupt {
+                key: "curve_tree_layers",
+                fault: CellFault::Undecodable(CodecError::Invalid {
+                    codec: "layer_hash",
+                    reason: "a last chunk's hash is not a point of its layer's curve",
+                }),
+            },
+            FrontierFault::Shape { .. } => StoreInvariant::CellCorrupt {
+                key: "curve_tree_meta",
+                fault: CellFault::Undecodable(CodecError::Invalid {
+                    codec: "curve_tree_state",
+                    reason: "the frontier's layer count disagrees with the leaf count",
+                }),
+            },
+        },
+        // The archival transition (DRS-E4 commit 4) read a bond record
+        // the retention folds refuse as a record — a `bonded_total` off
+        // its floor, two open intervals, a shard the record does not
+        // hold. The record decoded; its values are ones no conforming
+        // writer produces, so it is SI-7 on `archival_bond` with the
+        // invariant named. The persona is not on the row: the noted
+        // connecting height is the context, as for every arm here.
+        Corrupt::BondRecordInvariant { persona: _, which } => StoreInvariant::CellCorrupt {
+            key: "archival_bond",
+            fault: CellFault::Undecodable(CodecError::Invalid {
+                codec: "bond_record",
+                reason: match which {
+                    RecordInvariant::FloorBroken => {
+                        "bonded_total is below the floor its holdings imply"
+                    }
+                    RecordInvariant::MultipleOpenIntervals => "more than one bad interval is open",
+                    RecordInvariant::IntervalOrdering => "the bad intervals are not in order",
+                    RecordInvariant::CounterRange => {
+                        "an interval bound is outside the epoch counter's range"
+                    }
+                    RecordInvariant::IntervalLogFull => {
+                        "the bad-interval log is at its cap and a fold must append"
+                    }
+                    RecordInvariant::ShardNotHeld => {
+                        "a slash names a shard the record does not hold"
+                    }
+                    RecordInvariant::BondedUnderflow => {
+                        "bonded_total is below one bond floor at a slash"
+                    }
+                },
+            }),
+        },
+        // CEN-B4 read a bond record whose hybrid key is not the
+        // canonical grammar. The record is bytes; the key type lives
+        // above `shekyl-types`, so the cell can hold a key admission
+        // would not have written. That is SI-7 on `archival_bond`, the
+        // same cell as a fold invariant, and a different reason: the
+        // key does not decode.
+        Corrupt::BondHybridKeyMalformed { persona: _ } => StoreInvariant::CellCorrupt {
+            key: "archival_bond",
+            fault: CellFault::Undecodable(CodecError::Invalid {
+                codec: "bond_record",
+                reason: "the hybrid public key is not canonical",
+            }),
+        },
+        // The open epoch's accruing budget plus this block's inflow does
+        // not fit (CEN-L8's overflow clause). The validator computes the
+        // post-image (`ARW-Q1`), so the SI-8 fold on
+        // `archival_budget_accruing` is observed from the rule side.
+        Corrupt::AccrualOverflow { epoch: _ } => StoreInvariant::FoldOverflow {
+            cell: "archival_budget_accruing",
+        },
+        // Settlement's checks that have an operand
+        // (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.5, checks 1 and 3) and
+        // the beacon guard. The validator derives the rows (`ARW-Q1`),
+        // so it is the one that observes the index not folding to its
+        // digest, its own fold overcounting, or a beacon block that is
+        // not strictly below the connecting height. The block is not
+        // invalid; this node cannot settle the epoch.
+        //
+        // The drawable set's check (§9.5 check 2) has its own two rows:
+        // the digest the open wrote (SI-29) and the set it is of (SI-30).
+        Corrupt::SettlementIntegrity { epoch, check } => {
+            let settlement = |observed| StoreInvariant::SettlementNotSound { epoch, observed };
+            match check {
+                SettlementCheck::IssuedIndexDigest => settlement(SettlementFault::IndexDrift),
+                SettlementCheck::PassesExceedCounted { persona, shard } => {
+                    settlement(SettlementFault::PassesExceedCounted { persona, shard })
+                }
+                SettlementCheck::SupportPassesExceedCounted { persona } => {
+                    settlement(SettlementFault::SupportPassesExceedCounted { persona })
+                }
+                SettlementCheck::BeaconNotRecorded => {
+                    settlement(SettlementFault::BeaconNotRecorded)
+                }
+                SettlementCheck::DrawableDigestMissing => {
+                    StoreInvariant::DrawableDigestNotSingular {
+                        epoch,
+                        observed: DigestFault::Missing,
+                    }
+                }
+                SettlementCheck::DrawableDrift => StoreInvariant::DrawableSetNotSound {
+                    epoch,
+                    observed: DrawableFault::Drift,
+                },
+            }
+        }
+        // The drawable set could not be built from the records and the
+        // journals, at an open or at the settlement's rebuild. The
+        // validator names why; the store carries that fault and supplies
+        // the halt.
+        Corrupt::DrawableEpoch { epoch, why } => StoreInvariant::DrawableSetNotSound {
+            epoch,
+            observed: DrawableFault::NotBuilt(why),
+        },
+        Corrupt::DrawCount { height, why } => StoreInvariant::BlockDrawsNotSingular {
+            height,
+            observed: DrawRowFault::Count(why),
+        },
+        // A claim's re-gather found `Σwork(E)` and no frozen
+        // complete-tree set: the slash pass's write set is not whole
+        // (SI-31). The block is not invalid; this node cannot judge it.
+        Corrupt::CompleteTreesAbsent { epoch } => StoreInvariant::CompleteTreesNotFrozen {
+            epoch,
+            observed: FrozenFault::Absent,
+        },
+    }
+}
+
 impl<'store, 'id> WriteBatch<'store, 'id> {
     pub(super) fn new(
         txn: WriteTransaction,
@@ -244,48 +517,6 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
         }
     }
 
-    /// The validator read this batch's view and found the store's record
-    /// inconsistent: arm the fatal latch for what it saw, so `complete` halts
-    /// the writer at the noted height exactly as a belt would have.
-    ///
-    /// A [`Corrupt`] is a store-invariant violation observed by the rules
-    /// crate instead of by a store write site — CEN-D4's window walk over
-    /// `BatchView` sees `block_info` rows whose cumulative work does not
-    /// increase (SI-10), or an overflow the store's own fold would have
-    /// caught had the store computed the value (SI-8). The store computes
-    /// none of it (C2-R8 Q4), so the observation arrives here and the store
-    /// supplies the consequence. The mapping is by arm:
-    ///
-    /// | `Corrupt` | `StoreInvariant` |
-    /// | --- | --- |
-    /// | `CumulativeDifficultyNotMonotone { at }` | `WorkNotIncreasing { height: at }` (SI-10) |
-    /// | `CumulativeDifficultyOverflow` | `FoldOverflow { cell: "block_info.cumulative_difficulty" }` (SI-8) |
-    /// | `BondRecordInvariant { which, .. }` | `CellCorrupt { key: "archival_bond", .. }` with `which` as the reason (SI-7) |
-    /// | `BondHybridKeyMalformed { .. }` | `CellCorrupt { key: "archival_bond", .. }` the hybrid key is not canonical (SI-7) |
-    /// | `AccrualOverflow { .. }` | `FoldOverflow { cell: "archival_budget_accruing" }` (SI-8) |
-    /// | `SettlementIntegrity { epoch, check }` | `SettlementNotSound { epoch, .. }` with `check` as the fault (SI-25), except the drawable set's two checks below |
-    /// | `SettlementIntegrity { epoch, check: DrawableDigestMissing }` | `DrawableDigestNotSingular { epoch, observed: Missing }` (SI-29) |
-    /// | `SettlementIntegrity { epoch, check: DrawableDrift }` | `DrawableSetNotSound { epoch, observed: Drift }` (SI-30) |
-    /// | `DrawableEpoch { epoch, why }` | `DrawableSetNotSound { epoch, observed: NotBuilt(why) }` (SI-30) |
-    /// | `DrawCount { height, why }` | `BlockDrawsNotSingular { height, observed: Count(why) }` (SI-33) |
-    /// | `RelayFloorUnpriceable { at }` | `CellCorrupt { key: "block_info", fault: OutsideDomain { at } }` (SI-7) |
-    ///
-    /// (The arms between are documented inline on the match.)
-    ///
-    /// A zero next-block target is **not** in this table and never was a
-    /// store matter: LWMA-1 has no output floor and a conforming slow chain
-    /// derives zero, so it is CEN-D6's refusal of the block — a verdict the
-    /// validator returns, which the store never sees (RD-F17, 2026-09-20).
-    ///
-    /// Returns the `InvariantViolated` the caller propagates — the batch is
-    /// poisoned either way, and `complete` refuses to commit it. **This is
-    /// the one place the store names a validator fault type**, and it names
-    /// only `Corrupt`: never `InvalidBlock` (the conversion ban), never
-    /// `Stale` (unproven is not a store fault), never `Fault::View` (that is
-    /// the store's own error coming back). The ingest pipeline is its caller
-    /// (DRS-E2 RD-Q4; minted with that caller, as ruled 2026-09-19 — the API
-    /// #785's commit 9 shed rather than guess at from the store side).
-    ///
     /// Refusing a `Corrupt` **is chain work**: the validator read this
     /// store's chain to find it. So the connecting height is noted here if
     /// nothing in the batch noted it yet (normally `chain_view` already did,
@@ -296,238 +527,7 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
         if self.journal.height_hint().is_none() {
             self.note_chain_work();
         }
-        let row = match corrupt {
-            Corrupt::CumulativeDifficultyNotMonotone { at } => StoreInvariant::WorkNotIncreasing {
-                height: at.to_raw(),
-            },
-            Corrupt::CumulativeDifficultyOverflow => StoreInvariant::FoldOverflow {
-                cell: "block_info.cumulative_difficulty",
-            },
-            Corrupt::TxCountNotMonotone { at } => StoreInvariant::FoldNotMonotone {
-                cell: "block_info.cumulative_tx_count",
-                height: at.to_raw(),
-            },
-            // The close's age operand could not be placed: the archival
-            // fold `shard_close_height` searched does not cross a closed
-            // shard's end at one height (DRS-E4 commit 4, on `SHT-Q2`'s
-            // partition). The fold is non-decreasing on a conforming store,
-            // so this is SI-13 read from the rule side, on the archival
-            // cell — the same row the prune's descent arms when it finds
-            // the fold going backwards.
-            Corrupt::ShardCloseUnplaced { shard: _, at } => StoreInvariant::FoldNotMonotone {
-                cell: "block_info.cumulative_archival_len",
-                height: at.to_raw(),
-            },
-            // CEN-F17 read the `total_burned` register above the parent's
-            // `coins_generated` (E6 slice 7 wave B). Burn destroys issued
-            // coins, so the fold is bounded by the accumulator on every
-            // conforming store (FL-R16c: a violation, never a zero supply);
-            // a register holding more is a cell whose value the store's
-            // own invariants rule out — SI-7's shape, on the register, with
-            // the reason spelled. The store did not compute the pair; the
-            // validator observed it and this is the halt.
-            Corrupt::BurnExceedsEmission { .. } => StoreInvariant::CellCorrupt {
-                key: "total_burned",
-                fault: CellFault::Undecodable(CodecError::Invalid {
-                    codec: "total_burned",
-                    reason: "the burned fold exceeds the parent's coins_generated (FL-R16c)",
-                }),
-            },
-            // The relay-floor reader found a `block_info` median the floor's
-            // arithmetic cannot take — a weight no block can carry, so the
-            // row is bytes no conforming store writes. That is SI-7, the
-            // same class as a cell that decoded and is impossible.
-            // `CodecError`'s reason is `'static` and cannot name the height,
-            // and the batch's noted connecting height is the block being
-            // connected, not this row when the window read an earlier one.
-            // `OutsideDomain` keeps the row's height on the halt. The
-            // operands stay on the validator's `Corrupt`; the operator
-            // opens this `block_info` row.
-            Corrupt::RelayFloorUnpriceable { at, operands: _ } => StoreInvariant::CellCorrupt {
-                key: "block_info",
-                fault: CellFault::OutsideDomain {
-                    at: at.to_raw(),
-                    codec: "long_term_effective_median",
-                    reason: "the median leaves the relay floor's arithmetic domain",
-                },
-            },
-            // A rule read below the connecting height and the view answered
-            // `AboveTip`: the same SI-7 row the store arms when it finds a
-            // dense-range row missing — observed from the rule side this
-            // time (E6 slice 6, 2026-09-24). The height is not on the row;
-            // `CellCorrupt` names the cell the read was of, and the
-            // connecting height the batch noted is the context. The record
-            // selects the cell: a root hole reported as `block_info` would
-            // halt the writer against the wrong table.
-            Corrupt::HoleBelowTip { at: _, record } => StoreInvariant::CellCorrupt {
-                key: match record {
-                    // The header record is a projection of the same row
-                    // (DRS-E5 `E5-13`): a hole under `header_at` is a
-                    // hole in `block_info`.
-                    PerHeightRecord::Block | PerHeightRecord::Header => "block_info",
-                    PerHeightRecord::CurveTreeRoot => "curve_tree_roots",
-                    PerHeightRecord::LeafCount => "curve_tree_leaf_counts",
-                    PerHeightRecord::Outputs => "blocks",
-                },
-                fault: CellFault::Absent,
-            },
-            // The drain found a recorded point that does not decompress.
-            // `O` and `C` are the `output_amounts` row; `CM` is the pruned
-            // transaction's `0x07` field. The cell is the point's.
-            Corrupt::LeafNotConstructible { output: _, input } => {
-                let (key, codec, reason) = match input {
-                    LeafInput::OutputKey => (
-                        "output_amounts",
-                        "output_key",
-                        "the output key does not decompress",
-                    ),
-                    LeafInput::Commitment => (
-                        "output_amounts",
-                        "commitment",
-                        "the amount commitment does not decompress",
-                    ),
-                    LeafInput::LeafCommitment => (
-                        "txs_pruned",
-                        "pqc_leaf_commitment",
-                        "the leaf commitment does not decompress",
-                    ),
-                };
-                StoreInvariant::CellCorrupt {
-                    key,
-                    fault: CellFault::Undecodable(CodecError::Invalid { codec, reason }),
-                }
-            }
-            // A frontier the store's own read assembled. `NotOnCurve` is a
-            // layer-table hash that decoded and is not a point of its curve.
-            // `Shape` is the summary's leaf count disagreeing with the layer
-            // count that count implies — the chunks were read; the count's
-            // implication was not. An empty grow is not this arm.
-            Corrupt::TreeUnservable { fault } => match fault {
-                FrontierFault::NotOnCurve { .. } => StoreInvariant::CellCorrupt {
-                    key: "curve_tree_layers",
-                    fault: CellFault::Undecodable(CodecError::Invalid {
-                        codec: "layer_hash",
-                        reason: "a last chunk's hash is not a point of its layer's curve",
-                    }),
-                },
-                FrontierFault::Shape { .. } => StoreInvariant::CellCorrupt {
-                    key: "curve_tree_meta",
-                    fault: CellFault::Undecodable(CodecError::Invalid {
-                        codec: "curve_tree_state",
-                        reason: "the frontier's layer count disagrees with the leaf count",
-                    }),
-                },
-            },
-            // The archival transition (DRS-E4 commit 4) read a bond record
-            // the retention folds refuse as a record — a `bonded_total` off
-            // its floor, two open intervals, a shard the record does not
-            // hold. The record decoded; its values are ones no conforming
-            // writer produces, so it is SI-7 on `archival_bond` with the
-            // invariant named. The persona is not on the row: the noted
-            // connecting height is the context, as for every arm here.
-            Corrupt::BondRecordInvariant { persona: _, which } => StoreInvariant::CellCorrupt {
-                key: "archival_bond",
-                fault: CellFault::Undecodable(CodecError::Invalid {
-                    codec: "bond_record",
-                    reason: match which {
-                        RecordInvariant::FloorBroken => {
-                            "bonded_total is below the floor its holdings imply"
-                        }
-                        RecordInvariant::MultipleOpenIntervals => {
-                            "more than one bad interval is open"
-                        }
-                        RecordInvariant::IntervalOrdering => "the bad intervals are not in order",
-                        RecordInvariant::CounterRange => {
-                            "an interval bound is outside the epoch counter's range"
-                        }
-                        RecordInvariant::IntervalLogFull => {
-                            "the bad-interval log is at its cap and a fold must append"
-                        }
-                        RecordInvariant::ShardNotHeld => {
-                            "a slash names a shard the record does not hold"
-                        }
-                        RecordInvariant::BondedUnderflow => {
-                            "bonded_total is below one bond floor at a slash"
-                        }
-                    },
-                }),
-            },
-            // CEN-B4 read a bond record whose hybrid key is not the
-            // canonical grammar. The record is bytes; the key type lives
-            // above `shekyl-types`, so the cell can hold a key admission
-            // would not have written. That is SI-7 on `archival_bond`, the
-            // same cell as a fold invariant, and a different reason: the
-            // key does not decode.
-            Corrupt::BondHybridKeyMalformed { persona: _ } => StoreInvariant::CellCorrupt {
-                key: "archival_bond",
-                fault: CellFault::Undecodable(CodecError::Invalid {
-                    codec: "bond_record",
-                    reason: "the hybrid public key is not canonical",
-                }),
-            },
-            // The open epoch's accruing budget plus this block's inflow does
-            // not fit (CEN-L8's overflow clause). The validator computes the
-            // post-image (`ARW-Q1`), so the SI-8 fold on
-            // `archival_budget_accruing` is observed from the rule side.
-            Corrupt::AccrualOverflow { epoch: _ } => StoreInvariant::FoldOverflow {
-                cell: "archival_budget_accruing",
-            },
-            // Settlement's checks that have an operand
-            // (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.5, checks 1 and 3) and
-            // the beacon guard. The validator derives the rows (`ARW-Q1`),
-            // so it is the one that observes the index not folding to its
-            // digest, its own fold overcounting, or a beacon block that is
-            // not strictly below the connecting height. The block is not
-            // invalid; this node cannot settle the epoch.
-            //
-            // The drawable set's check (§9.5 check 2) has its own two rows:
-            // the digest the open wrote (SI-29) and the set it is of (SI-30).
-            Corrupt::SettlementIntegrity { epoch, check } => {
-                let settlement = |observed| StoreInvariant::SettlementNotSound { epoch, observed };
-                match check {
-                    SettlementCheck::IssuedIndexDigest => settlement(SettlementFault::IndexDrift),
-                    SettlementCheck::PassesExceedCounted { persona, shard } => {
-                        settlement(SettlementFault::PassesExceedCounted { persona, shard })
-                    }
-                    SettlementCheck::SupportPassesExceedCounted { persona } => {
-                        settlement(SettlementFault::SupportPassesExceedCounted { persona })
-                    }
-                    SettlementCheck::BeaconNotRecorded => {
-                        settlement(SettlementFault::BeaconNotRecorded)
-                    }
-                    SettlementCheck::DrawableDigestMissing => {
-                        StoreInvariant::DrawableDigestNotSingular {
-                            epoch,
-                            observed: DigestFault::Missing,
-                        }
-                    }
-                    SettlementCheck::DrawableDrift => StoreInvariant::DrawableSetNotSound {
-                        epoch,
-                        observed: DrawableFault::Drift,
-                    },
-                }
-            }
-            // The drawable set could not be built from the records and the
-            // journals, at an open or at the settlement's rebuild. The
-            // validator names why; the store carries that fault and supplies
-            // the halt.
-            Corrupt::DrawableEpoch { epoch, why } => StoreInvariant::DrawableSetNotSound {
-                epoch,
-                observed: DrawableFault::NotBuilt(why),
-            },
-            Corrupt::DrawCount { height, why } => StoreInvariant::BlockDrawsNotSingular {
-                height,
-                observed: DrawRowFault::Count(why),
-            },
-            // A claim's re-gather found `Σwork(E)` and no frozen
-            // complete-tree set: the slash pass's write set is not whole
-            // (SI-31). The block is not invalid; this node cannot judge it.
-            Corrupt::CompleteTreesAbsent { epoch } => StoreInvariant::CompleteTreesNotFrozen {
-                epoch,
-                observed: FrozenFault::Absent,
-            },
-        };
-        self.poison.arm(row)
+        self.poison.arm(invariant_of(corrupt))
     }
 
     /// Project this batch as the [`ChainView`](shekyl_chain_rules::ChainView)

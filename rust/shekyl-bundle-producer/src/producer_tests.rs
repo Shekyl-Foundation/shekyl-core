@@ -26,6 +26,9 @@ const W: Window = Window {
     reorg_cap: BlockCount::from_raw(720),
 };
 
+/// The tests that are not about publications share one.
+const SAME: TipPublication = TipPublication::from_seq(0);
+
 const fn h(n: u64) -> BlockHeight {
     BlockHeight::from_raw(n)
 }
@@ -89,10 +92,11 @@ fn producer_with_slots(ring: &Arc<WitnessRing>, seed: u64, slots: NonZeroUsize) 
     )
 }
 
-fn target(draw: u32) -> DrawTarget {
+fn target(stream: PassStream, draw: u32) -> DrawTarget {
     let n = u8::try_from(draw + 1).expect("small");
     let (key, _) = HybridEd25519FnDsa::keypair_from_seeds(&[n; 32], &[n ^ 0x55; 32]).expect("key");
     DrawTarget {
+        stream,
         draw,
         persona: PCanonicalId::from_bytes([n; 32]),
         shard: ShardId::from_raw(u64::from(draw) * 7),
@@ -102,10 +106,10 @@ fn target(draw: u32) -> DrawTarget {
 }
 
 fn targets(economy: u32, support: u32) -> Targets {
-    Targets {
-        economy: (0..economy).map(target).collect(),
-        support: (0..support).map(target).collect(),
-    }
+    let mut draws = Vec::with_capacity(usize::try_from(economy + support).expect("small"));
+    draws.extend((0..economy).map(|draw| target(PassStream::Economy, draw)));
+    draws.extend((0..support).map(|draw| target(PassStream::Support, draw)));
+    Targets { draws }
 }
 
 fn record(attempt: u8) -> BundleRecord {
@@ -138,7 +142,7 @@ fn mined_with_slots(
     let commitment = ring.draw(h(100)).expect("draws");
     chain.ours(100, commitment);
     chain.theirs(101);
-    let observed = producer.observe(h(101), W, chain.look());
+    let observed = producer.observe(h(101), SAME, W, chain.look());
     assert_eq!(observed.learn.len(), 1);
     assert_eq!(observed.learn[0].h, h(100));
     assert_eq!(ring.candidates(), 0, "the rival template for 100 went");
@@ -366,7 +370,10 @@ fn a_block_of_ours_replaces_a_popped_one_at_its_height() {
     let (ring, mut producer, mut chain) = mined(15, 1, 0);
     chain.pop(101);
     chain.pop(100);
-    assert!(producer.observe(h(99), W, chain.look()).lost.is_empty());
+    assert!(producer
+        .observe(h(99), SAME, W, chain.look())
+        .lost
+        .is_empty());
     let replacement = ring.draw(h(100)).expect("draws");
     chain.blocks.insert(
         h(100),
@@ -375,7 +382,7 @@ fn a_block_of_ours_replaces_a_popped_one_at_its_height() {
             commitment: replacement,
         },
     );
-    let observed = producer.observe(h(100), W, chain.look());
+    let observed = producer.observe(h(100), SAME, W, chain.look());
     assert_eq!(observed.learn.len(), 1, "the new block is learned");
     assert_eq!(observed.learn[0].hash, hash_of(100, 0x0B));
     assert_eq!(ring.in_flight(), vec![h(100)]);
@@ -400,7 +407,10 @@ fn a_read_of_a_replaced_block_does_not_settle_the_new_one() {
     assert_eq!(old.key.hash, hash_of(100, 0x0A));
     chain.pop(101);
     chain.pop(100);
-    assert!(producer.observe(h(99), W, chain.look()).lost.is_empty());
+    assert!(producer
+        .observe(h(99), SAME, W, chain.look())
+        .lost
+        .is_empty());
     let replacement = ring.draw(h(100)).expect("draws");
     chain.blocks.insert(
         h(100),
@@ -409,7 +419,10 @@ fn a_read_of_a_replaced_block_does_not_settle_the_new_one() {
             commitment: replacement,
         },
     );
-    assert_eq!(producer.observe(h(100), W, chain.look()).learn.len(), 1);
+    assert_eq!(
+        producer.observe(h(100), SAME, W, chain.look()).learn.len(),
+        1
+    );
     producer.learned(h(100), W, targets(1, 0));
     let new = (101..=510)
         .flat_map(|tip| producer.due(h(tip)))
@@ -465,7 +478,7 @@ fn a_popped_block_pauses_and_resumes_on_reconnect() {
     let ours = chain.blocks[&h(100)];
     chain.pop(101);
     chain.pop(100);
-    let observed = producer.observe(h(99), W, chain.look());
+    let observed = producer.observe(h(99), SAME, W, chain.look());
     assert!(observed.lost.is_empty());
     for tip in 101..=569 {
         assert!(producer.due(h(tip)).is_empty(), "paused at {tip}");
@@ -477,7 +490,7 @@ fn a_popped_block_pauses_and_resumes_on_reconnect() {
 
     chain.blocks.insert(h(100), ours);
     chain.theirs(101);
-    let observed = producer.observe(h(101), W, chain.look());
+    let observed = producer.observe(h(101), SAME, W, chain.look());
     assert!(observed.lost.is_empty());
     assert!(observed.learn.is_empty(), "its draws are already known");
     let resumed: Vec<_> = (101..=569).flat_map(|tip| producer.due(h(tip))).collect();
@@ -494,10 +507,10 @@ fn a_block_popped_past_the_cap_is_lost() {
     chain.pop(101);
     chain.pop(100);
     chain.theirs(100);
-    let observed = producer.observe(h(100), W, chain.look());
+    let observed = producer.observe(h(100), SAME, W, chain.look());
     assert!(observed.lost.is_empty(), "another block at 100: paused");
     let at_cap = h(100) + W.reorg_cap;
-    let observed = producer.observe(at_cap - BlockCount::ONE, W, |_| None);
+    let observed = producer.observe(at_cap - BlockCount::ONE, SAME, W, |_| None);
     // The window closes first at this cap: `W₂` < the cap.
     assert_eq!(observed.lost, vec![Lost::WindowClosed { h: h(100) }]);
     assert!(ring.in_flight().is_empty());
@@ -510,8 +523,11 @@ fn a_block_popped_past_the_cap_is_lost() {
     let (ring, mut producer, mut chain) = mined(8, 1, 0);
     chain.pop(101);
     chain.pop(100);
-    assert!(producer.observe(h(99), short, chain.look()).lost.is_empty());
-    let observed = producer.observe(h(109), short, chain.look());
+    assert!(producer
+        .observe(h(99), SAME, short, chain.look())
+        .lost
+        .is_empty());
+    let observed = producer.observe(h(109), SAME, short, chain.look());
     assert_eq!(observed.lost, vec![Lost::PoppedPastCap { h: h(100) }]);
     assert!(ring.in_flight().is_empty());
 }
@@ -535,7 +551,7 @@ fn another_miners_block_is_not_ours() {
     let mut chain = Chain::default();
     ring.draw(h(101)).expect("draws");
     chain.theirs(101);
-    let observed = producer.observe(h(101), W, chain.look());
+    let observed = producer.observe(h(101), SAME, W, chain.look());
     assert!(observed.learn.is_empty());
     assert!(producer.in_flight().is_empty());
 }
@@ -573,7 +589,7 @@ fn a_learn_shows_no_seed() {
     let mut chain = Chain::default();
     let commitment = ring.draw(h(100)).expect("draws");
     chain.ours(100, commitment);
-    let observed = producer.observe(h(100), W, chain.look());
+    let observed = producer.observe(h(100), SAME, W, chain.look());
     let learn = &observed.learn[0];
     let hex: String = learn.seed.iter().map(|b| format!("{b:02x}")).collect();
     let shown = format!("{learn:?} {producer:?}");

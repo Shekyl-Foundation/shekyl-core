@@ -44,28 +44,32 @@ use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 use crate::{CANDIDATE_DEPTH, MAX_CANDIDATES};
 
-/// One template's secrets: the seed, the witness secret key, and the
-/// public key the commitment was made over.
-struct WitnessSecrets {
+/// The seed and the witness secret key. Both wipe on drop: the seed is a
+/// [`Zeroizing`] cell, and [`FnDsaHybridSecretKey`] wipes its own halves.
+/// The public key is not here, so this derive is honest about what is secret.
+/// Held by `ring_entries_wipe_themselves`.
+#[derive(ZeroizeOnDrop)]
+struct WitnessSecret {
     seed: Zeroizing<[u8; 32]>,
-    secret: FnDsaHybridSecretKey,
+    key: FnDsaHybridSecretKey,
+}
+
+/// One template's material: [`WitnessSecret`], and the public key the
+/// commitment was made over. The public key is not secret and is not wiped.
+struct WitnessMaterial {
+    secret: WitnessSecret,
     public: Box<[u8; BUNDLE_WITNESS_KEY_LEN]>,
 }
 
-// A marker: the seed is a `Zeroizing` cell and the secret key's halves are
-// heap secrets, so each wipes itself where it lies when it drops. The
-// public key is not secret. Held by `ring_entries_wipe_themselves`.
-impl ZeroizeOnDrop for WitnessSecrets {}
-
-impl core::fmt::Debug for WitnessSecrets {
+impl core::fmt::Debug for WitnessMaterial {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("WitnessSecrets([REDACTED])")
+        f.write_str("WitnessMaterial([REDACTED])")
     }
 }
 
-impl WitnessSecrets {
+impl WitnessMaterial {
     fn drawn() -> Result<Self, DrawFailed> {
-        let (public, secret) = HybridEd25519FnDsa::generate_keypair()
+        let (public, key) = HybridEd25519FnDsa::generate_keypair()
             .map_err(|e| DrawFailed::KeyGeneration(e.to_string()))?;
         let public: Box<[u8; BUNDLE_WITNESS_KEY_LEN]> = public
             .to_canonical_bytes()
@@ -77,28 +81,27 @@ impl WitnessSecrets {
             .try_fill_bytes(seed.as_mut())
             .map_err(|e| DrawFailed::Entropy(e.to_string()))?;
         Ok(Self {
-            seed,
-            secret,
+            secret: WitnessSecret { seed, key },
             public,
         })
     }
 
     fn commitment(&self) -> DrawCommitment {
-        DrawCommitment::from_bytes(draw_commit(self.public.as_slice(), &self.seed))
+        DrawCommitment::from_bytes(draw_commit(self.public.as_slice(), &self.secret.seed))
     }
 }
 
 struct Candidate {
     commitment: DrawCommitment,
     drawn_for: BlockHeight,
-    secrets: WitnessSecrets,
+    secrets: WitnessMaterial,
 }
 
 #[derive(Default)]
 struct RingState {
     /// Oldest first.
     candidates: VecDeque<Candidate>,
-    in_flight: BTreeMap<BlockHeight, WitnessSecrets>,
+    in_flight: BTreeMap<BlockHeight, WitnessMaterial>,
 }
 
 /// Why a template could not draw. Nothing is committed: the template
@@ -173,7 +176,7 @@ impl WitnessRing {
     /// [`DrawFailed`] when the OS random source or key generation fails.
     /// There is no fallback commitment.
     pub fn draw(&self, connecting: BlockHeight) -> Result<DrawCommitment, DrawFailed> {
-        let secrets = WitnessSecrets::drawn()?;
+        let secrets = WitnessMaterial::drawn()?;
         let commitment = secrets.commitment();
         let mut state = self.lock();
         while state.candidates.len() >= self.bound {
@@ -228,7 +231,7 @@ impl WitnessRing {
         self.lock()
             .in_flight
             .get(&h)
-            .map(|secrets| Zeroizing::new(*secrets.seed))
+            .map(|material| Zeroizing::new(*material.secret.seed))
     }
 
     /// Assemble `h`'s bundle over `passes` and `support` with these
@@ -242,18 +245,18 @@ impl WitnessRing {
         support: shekyl_archival_retention::PassBitmap,
         records: &[BundleRecord],
     ) -> Option<Result<(BundleRef, BundleBody), CryptoError>> {
-        let secrets = self.lock().in_flight.remove(&h)?;
+        let material = self.lock().in_flight.remove(&h)?;
         let kept = BundleKept {
             h,
-            seed: *secrets.seed,
+            seed: *material.secret.seed,
             passes,
             support,
         };
         Some(assemble_bundle(
             &kept,
             records,
-            &secrets.public,
-            |commitment| sign_bundle_commitment(&secrets.secret, commitment),
+            &material.public,
+            |commitment| sign_bundle_commitment(&material.secret.key, commitment),
         ))
     }
 

@@ -127,6 +127,18 @@ fn a_push_before_the_dialer_exists_is_refused_not_held() {
     );
 }
 
+/// A dialer is built with no Tor window: until a managed Tor's route is
+/// published, no Tor's `SocksTimeout` is known, and every Tor timeout
+/// keeps its retries.
+#[test]
+fn a_built_dialer_reads_no_tor_window() {
+    let _bind = seam_bind_lock().lock();
+    unbind();
+    bind();
+    assert_eq!(dialer().expect("bound").tor_window(), None);
+    unbind();
+}
+
 /// The address file's entries and the operator's peers enter gray, never
 /// white: a named address has not been dialled, and white is disclosed.
 #[test]

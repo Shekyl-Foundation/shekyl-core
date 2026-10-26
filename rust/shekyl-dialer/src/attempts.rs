@@ -144,6 +144,14 @@ impl Attempts {
         self.kept.remove(address);
     }
 
+    /// An open test of `address` was cancelled (the dialer stopped): it
+    /// leaves the open tests with no outcome, whether it was in flight or
+    /// waiting, and nothing is recorded on the lists. A kept session is
+    /// not touched.
+    pub fn cancel(&mut self, address: &NetworkAddress) {
+        self.tests.remove(address);
+    }
+
     /// Sessions held now, without the dials still in a test.
     #[must_use]
     pub fn held(&self) -> usize {
@@ -156,8 +164,13 @@ impl Attempts {
         &self.kept
     }
 
-    /// The `Keep` count: kept sessions plus in-flight `Keep` attempts. A
-    /// waiting test and a pending `Confirm` do not count.
+    /// The `Keep` count: kept sessions plus every open `Keep` test, in
+    /// flight or waiting for its next attempt. A `Keep` test holds its
+    /// target slot from its draw to its outcome, waits included, so a retry
+    /// that comes due can never keep past the target. A pending `Confirm`
+    /// does not count. *Records-was (2026-10-24 to 2026-10-26): a waiting
+    /// test did not count, and a due `Keep` retry could keep one session
+    /// past the target.*
     #[must_use]
     pub fn kept_count(&self) -> usize {
         self.kept.len()
@@ -168,6 +181,9 @@ impl Attempts {
                     matches!(
                         test,
                         Test::InFlight {
+                            aim: DialAim::Keep,
+                            ..
+                        } | Test::Waiting {
                             aim: DialAim::Keep,
                             ..
                         }
@@ -277,7 +293,11 @@ mod tests {
         assert!(attempts.has_waiting());
         assert!(!attempts.holds(&first));
         assert_eq!(attempts.in_flight(), 1);
-        assert_eq!(attempts.kept_count(), 0);
+        assert_eq!(
+            attempts.kept_count(),
+            1,
+            "the waiting keep holds no slot but still holds its target place"
+        );
         assert!(attempts.take_due(at(19)).is_none());
 
         let resumed = attempts.defer_retry(&second, 3, |_| at(10));
@@ -304,5 +324,29 @@ mod tests {
         assert!(attempts.kept_addresses().contains(&first));
         assert!(!attempts.has_waiting());
         assert!(attempts.is_kept(&first));
+    }
+
+    #[test]
+    fn a_cancel_drops_the_open_test_and_leaves_a_kept_session() {
+        let mut attempts = Attempts::new();
+        let kept = peer(1);
+        let flying = peer(2);
+        let waiting = peer(3);
+        assert!(attempts.begin(&kept, DialAim::Keep));
+        attempts.finish(&DialOutcome::SessionAccepted(kept.clone()));
+        assert!(attempts.begin(&flying, DialAim::Keep));
+        assert!(attempts.begin(&waiting, DialAim::Confirm));
+        assert_eq!(attempts.defer_retry(&waiting, 3, |_| at(10)), Some(2));
+
+        attempts.cancel(&flying);
+        attempts.cancel(&waiting);
+        // A kept session is not an open test. Cancelling its address
+        // removes nothing.
+        attempts.cancel(&kept);
+
+        assert_eq!(attempts.in_flight(), 0);
+        assert!(!attempts.has_waiting());
+        assert!(attempts.kept_addresses().contains(&kept));
+        assert_eq!(attempts.kept_count(), 1);
     }
 }

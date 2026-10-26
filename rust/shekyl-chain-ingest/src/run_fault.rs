@@ -12,7 +12,7 @@
 use crate::schedule::ChainRules;
 use crate::source::ServeCredit;
 use shekyl_chain_rules::{Corrupt, Fault, ReferenceMismatch, Retry, Stale, Target, TxSlot};
-use shekyl_chain_store::store::{StoreError, StoreInvariant};
+use shekyl_chain_store::store::{ChainStore, StoreError, StoreInvariant};
 use shekyl_types::{BlockHash, BlockHeight, SettlementEpoch};
 
 /// Why the writer is over: store-terminal faults only. `Copy` data, so it
@@ -232,7 +232,8 @@ pub enum RunFault {
 ///
 /// `arm_corrupt` is the one difference between the two sites: on the connect
 /// batch the refusal is `batch.refuse_corrupt` inside the live write; over a
-/// snapshot the refusal is a write whose only job is to arm the halt.
+/// snapshot the refusal is [`halt_on_corrupt`], a write whose only job is
+/// to arm the halt.
 pub(crate) fn fault_reply(
     height: BlockHeight,
     fault: Fault<StoreError>,
@@ -274,5 +275,81 @@ pub(crate) fn fault_reply(
             retry,
         },
         Fault::Stale(Stale::RuleSet { .. }) => RunFault::StaleRuleSet { height },
+    }
+}
+
+/// Arm the shared writer halt for a chain a snapshot found corrupt, and
+/// return that halt.
+///
+/// The write commits nothing. [`WriteBatch::refuse_corrupt`](shekyl_chain_store::store::WriteBatch::refuse_corrupt)
+/// notes the connecting height and arms the invariant; the closure fails;
+/// [`ChainStore::write`] prefers the invariant, aborts the batch, and
+/// latches [`ChainStore::connect_state`]. A learn or a queue classification
+/// that finds nothing wrong calls nothing here.
+pub(crate) fn halt_on_corrupt(store: &ChainStore, corrupt: Corrupt) -> RunFault {
+    let halted: Result<(), RunFault> =
+        store.write(|batch| Err(RunFault::Store(batch.refuse_corrupt(corrupt))));
+    halted.expect_err("an armed invariant halts the writer")
+}
+
+#[cfg(test)]
+mod tests {
+    use shekyl_chain_rules::Corrupt;
+    use shekyl_chain_store::store::{ConnectState, StoreCannot, StoreError, StoreInvariant};
+    use shekyl_types::archival::SettlementEpochBlocks;
+    use shekyl_types::BlockHeight;
+
+    use super::*;
+
+    /// A corrupt snapshot arms the halt the wallets read, and the batch
+    /// that armed it committed nothing. Red edit: return the invariant
+    /// without `refuse_corrupt` — `connect_state` stays live.
+    #[test]
+    fn a_corrupt_snapshot_arms_the_shared_halt_and_commits_nothing() {
+        let path = std::env::temp_dir().join(format!(
+            "shekyl-halt-on-corrupt-{}-{}.redb",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        let store = ChainStore::create(
+            &path,
+            SettlementEpochBlocks::new(10_000).expect("a non-zero epoch"),
+        )
+        .expect("create");
+        assert!(store.connect_state().is_live());
+
+        let fault = halt_on_corrupt(&store, Corrupt::CumulativeDifficultyOverflow);
+        let row = StoreInvariant::FoldOverflow {
+            cell: "block_info.cumulative_difficulty",
+        };
+        assert!(
+            matches!(fault, RunFault::Store(StoreError::InvariantViolated(got)) if got == row),
+            "{fault:?}"
+        );
+        assert_eq!(
+            store.connect_state(),
+            ConnectState::Halted {
+                at_height: BlockHeight::ZERO,
+                row,
+            }
+        );
+
+        let refused = store.write(|_batch| Ok::<(), StoreError>(()));
+        assert!(
+            matches!(
+                refused,
+                Err(StoreError::Cannot(StoreCannot::WriterHalted { .. }))
+            ),
+            "{refused:?}"
+        );
+        let tip = store.begin_read().expect("read").tip().expect("tip");
+        assert!(tip.recorded.is_none(), "the arm committed no block");
+        assert_eq!(tip.connect, store.connect_state());
+
+        drop(store);
+        std::fs::remove_file(&path).expect("remove the store");
     }
 }
