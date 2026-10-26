@@ -102,11 +102,9 @@ pub async fn handle(
 
     let core = state.core.clone();
     let method_clone = method.clone();
-    // The FFI's flag is still the listener posture: restricted is not host.
-    let restricted = !authority.host();
+    let host = authority.host();
     let result =
-        tokio::task::spawn_blocking(move || core.json_rpc(&method_clone, &params_str, restricted))
-            .await;
+        tokio::task::spawn_blocking(move || core.json_rpc(&method_clone, &params_str, host)).await;
 
     match result {
         Ok(Some(raw)) => match serde_json::from_str::<FfiJsonRpcResult>(&raw) {

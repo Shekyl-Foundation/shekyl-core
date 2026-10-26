@@ -454,6 +454,18 @@ pub async fn serve_presets(
             config.cors_origins.len()
         );
     }
+    // The armed test levers' switch, logged at every start whichever way it
+    // is set (`RPC_CHANNEL.md` §6.1): only `dev-rpc` enables them, and the
+    // operator reads which it is.
+    if config.armed {
+        tracing::warn!(
+            "RPC armed test levers: ON (dev-rpc): generateblocks, \
+             inject_archival_serve_credit and /pop_blocks are served to the \
+             host's administrator"
+        );
+    } else {
+        info!("RPC armed test levers: off (dev-rpc not set)");
+    }
     if config.conn_limits != ConnLimits::default() {
         info!(
             "RPC connection cap: {} (0 = unlimited)",

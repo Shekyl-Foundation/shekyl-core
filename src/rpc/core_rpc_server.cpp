@@ -97,24 +97,25 @@ namespace cryptonote
   {}
   //-----------------------------------------------------------------------------------
   // The origins the bridge hands every bridged handler (core_rpc_ffi.cpp).
-  // Two, so the posture is an identity and not a flag beside one context:
-  // a handler cannot be handed the admin origin with the view posture or
-  // the reverse. Addresses default-constructed: an origin asserts "an RPC
+  // Two, so whether the caller is the host's administrator is an identity
+  // and not a flag beside one context (RPC_CHANNEL.md §6.1: host-only data;
+  // RT-O32: the origin carries the host flag only, and the grants stay in
+  // Rust). Addresses default-constructed: an origin asserts "an RPC
   // client asked", never "this particular peer asked", and a context shared
   // by every caller must not carry an address anything could score against
   // (tests/unit_tests/rpc_restricted_gate.cpp).
   namespace
   {
-    const core_rpc_server::connection_context admin_origin{};
-    const core_rpc_server::connection_context view_origin{};
+    const core_rpc_server::connection_context host_origin{};
+    const core_rpc_server::connection_context other_origin{};
   }
-  const core_rpc_server::connection_context* rpc_origin(bool restricted)
+  const core_rpc_server::connection_context* rpc_origin(bool host)
   {
-    return restricted ? &view_origin : &admin_origin;
+    return host ? &host_origin : &other_origin;
   }
-  bool rpc_origin_is_restricted(const epee::net_utils::connection_context_base* ctx)
+  bool rpc_origin_is_host(const epee::net_utils::connection_context_base* ctx)
   {
-    return ctx == &view_origin;
+    return ctx == &host_origin;
   }
   core_rpc_server::~core_rpc_server()
   {
@@ -296,8 +297,7 @@ namespace cryptonote
   {
     RPC_TRACKER(get_transaction_pool);
 
-    const bool restricted = caller_is_restricted(ctx);
-    const bool allow_sensitive = !restricted;
+    const bool allow_sensitive = caller_is_host(ctx);
 
     size_t n_txes = m_core.get_pool_transactions_count(allow_sensitive);
     if (n_txes > 0)
@@ -316,8 +316,7 @@ namespace cryptonote
   {
     RPC_TRACKER(get_transaction_pool_hashes);
 
-    const bool restricted = caller_is_restricted(ctx);
-    const bool allow_sensitive = !restricted;
+    const bool allow_sensitive = caller_is_host(ctx);
 
     size_t n_txes = m_core.get_pool_transactions_count(allow_sensitive);
     if (n_txes > 0)
@@ -337,8 +336,7 @@ namespace cryptonote
   {
     RPC_TRACKER(get_transaction_pool_stats);
 
-    const bool restricted = caller_is_restricted(ctx);
-    m_core.get_pool_transaction_stats(res.pool_stats, !restricted);
+    m_core.get_pool_transaction_stats(res.pool_stats, caller_is_host(ctx));
 
     res.status = CORE_RPC_STATUS_OK;
     return true;
@@ -663,12 +661,10 @@ namespace cryptonote
     
     res.status = CORE_RPC_STATUS_OK;
 
-    if(m_core.get_nettype() != FAKECHAIN)
-    {
-      error_resp.code = CORE_RPC_ERROR_CODE_REGTEST_REQUIRED;
-      error_resp.message = "Regtest required when generating blocks";      
-      return false;
-    }
+    // An armed test lever (RPC_CHANNEL.md §6.1, RT-O9.2): the daemon's
+    // armed-lever switch, checked in Rust before this handler is entered, is
+    // its only gate. The network type never enables it (rule 71); `dev-rpc`
+    // is refused on mainnet (IG-Q49, RT-O36).
 
     // RESERVED / NOT SUPPORTED -- refuse rather than silently generate on the
     // tip, so a caller who asked for a specific parent is told, not guessed at.
@@ -742,12 +738,10 @@ namespace cryptonote
 
     CHECK_CORE_READY();
 
-    if(m_core.get_nettype() != FAKECHAIN)
-    {
-      error_resp.code = CORE_RPC_ERROR_CODE_REGTEST_REQUIRED;
-      error_resp.message = "Regtest required when injecting archival serve credit";
-      return false;
-    }
+    // An armed test lever (RPC_CHANNEL.md §6.1, RT-O9.2): the daemon's
+    // armed-lever switch, checked in Rust before this handler is entered, is
+    // its only gate. The network type never enables it (rule 71); `dev-rpc`
+    // is refused on mainnet (IG-Q49, RT-O36).
 
     crypto::hash p_canonical_id;
     if (!epee::string_tools::hex_to_pod(req.p_canonical_id, p_canonical_id))
@@ -1049,21 +1043,20 @@ namespace cryptonote
   {
     RPC_TRACKER(relay_tx);
 
-    /* No restricted gate here, deliberately. `relay_tx` is admin-only, and
-       that is decided once — in Rust, at the only transport: the method
-       table's `HostOnly` grant (`shekyl-rpc-types` `methods.rs`, RW-Q7), read
-       by dispatch, which answers 403 before this function is entered. The
-       table's host-only rows are pinned against an independent specification
-       by `restricted_method_list_matches_the_specification`, so dropping
-       `relay_tx` from them fails a test rather than opening this path.
+    /* No grant check here, deliberately. `relay_tx` is in the `node` grant,
+       and that is decided once — in Rust, at the only transport: the method
+       table's policy column (`shekyl-rpc-types` `methods.rs`, RW-Q7), read by
+       the request's authority before this function is entered. Every row's
+       policy is pinned against RPC_CHANNEL.md §6.1 by a test written from the
+       section, so moving `relay_tx` out of `node` fails a test rather than
+       opening this path.
 
-       This handler used to compute `m_restricted && ctx` and skip the
+       This handler once computed `m_restricted && ctx` and skipped the
        `relay_category::all` arm when it held. That expression could not hold in
-       any reachable state: the restricted listener never gets here, and the
-       admin origin is not restricted. It was not defence in depth, it
-       was residue — and residue on a security-shaped expression costs more than
-       it looks, because two reviewers and this author each read it as a live
-       path and priced an exploit from it. RK-D6: the restricted posture is
+       any reachable state. It was not defence in depth, it was residue — and
+       residue on a security-shaped expression costs more than it looks,
+       because two reviewers and this author each read it as a live path and
+       priced an exploit from it. RK-D6: who may call a method is
        single-sourced in Rust. */
 
     bool failed = false;

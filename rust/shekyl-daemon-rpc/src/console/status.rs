@@ -48,7 +48,7 @@ enum MiningReadout {
 fn fetch_mining_status(src: &Source) -> Result<MiningReadout, String> {
     let raw = match src {
         Source::Live(core) => core
-            .json_endpoint("/mining_status", "{}", false)
+            .json_endpoint("/mining_status", "{}", true)
             .ok_or_else(|| "no reply from /mining_status".to_owned())?,
         Source::Remote {
             address, timeout, ..

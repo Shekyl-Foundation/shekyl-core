@@ -56,6 +56,8 @@ struct Pending {
     section: Rpc,
     options: OptionsHandle,
     handles: Handles,
+    /// The node's `dev-rpc` switch (`RPC_CHANNEL.md` §6.1).
+    armed: bool,
     constructed: oneshot::Sender<Result<(), String>>,
 }
 
@@ -114,6 +116,7 @@ pub fn configure(
     options: OptionsHandle,
     handles: Handles,
     offline: bool,
+    armed: bool,
 ) -> oneshot::Receiver<Result<(), String>> {
     let (constructed, rx) = oneshot::channel();
     store_offline(offline);
@@ -122,6 +125,7 @@ pub fn configure(
         section,
         options,
         handles,
+        armed,
         constructed,
     });
     rx
@@ -142,6 +146,7 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_start(rpc_server_ptr: *mut c_void) ->
         section,
         options,
         handles,
+        armed,
         constructed,
     }) = slot(&PENDING).take()
     else {
@@ -149,7 +154,7 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_start(rpc_server_ptr: *mut c_void) ->
         return -1;
     };
     // SAFETY: the caller's contract above.
-    match unsafe { start(&section, options, handles, rpc_server_ptr) } {
+    match unsafe { start(&section, options, handles, armed, rpc_server_ptr) } {
         Ok(running) => {
             *slot(&RUNNING) = Some(running);
             // The receiver is gone only if the entry already gave up.
@@ -174,6 +179,7 @@ unsafe fn start(
     section: &Rpc,
     options: OptionsHandle,
     handles: Handles,
+    armed: bool,
     rpc_server_ptr: *mut c_void,
 ) -> Result<Running, String> {
     if rpc_server_ptr.is_null() {
@@ -205,6 +211,7 @@ unsafe fn start(
         conn_limits,
         options,
         handles,
+        armed,
         ..Default::default()
     };
     // Level-triggered: a stop that lands before any acceptor has polled is
@@ -283,7 +290,13 @@ mod tests {
             cors_origins: Vec::new(),
             connections_max: NonZeroU32::MIN,
         };
-        let _started = configure(section, Arc::new(OptionsAbsent), Handles::absent(), true);
+        let _started = configure(
+            section,
+            Arc::new(OptionsAbsent),
+            Handles::absent(),
+            true,
+            false,
+        );
         assert_eq!(CoreRpc::p2p_state(), Ok(P2pRead::Offline));
         assert_eq!(CoreRpc::peerlist_sizes(), Ok(P2pRead::Offline));
         store_offline(false);

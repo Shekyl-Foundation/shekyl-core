@@ -47,9 +47,8 @@ async fn dispatch_json_raw(
     body: String,
 ) -> Option<String> {
     let core = state.core.clone();
-    // The FFI's flag is still the listener posture: restricted is not host.
-    let restricted = !authority.host();
-    tokio::task::spawn_blocking(move || core.json_endpoint(uri, &body, restricted))
+    let host = authority.host();
+    tokio::task::spawn_blocking(move || core.json_endpoint(uri, &body, host))
         .await
         .ok()
         .flatten()
