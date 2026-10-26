@@ -11,14 +11,22 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::Ipv4Addr;
 
-use shekyl_dialer::{
-    in_flight_bound, plan, Attempts, CandidateFilter, Census, DialAim, DrawList, FailedAddresses,
-};
+use shekyl_dialer::{in_flight_bound, plan, Attempts, CandidateFilter, Census, DialAim, DrawList};
 use shekyl_draw_rng::{RelayRng, SplitMix64};
 use shekyl_peerlist::{
-    white_diversity_floor, ConnectorId, DialOutcome, Host, NetworkAddress, NoBans, Peerlist,
-    RefusedSet, Source, Tick, WHITE_REFILL_LINE,
+    white_diversity_floor, ConnectorId, DialOutcome, Host, KeptSessions, NetworkAddress, NoBans,
+    Peerlist, RefusedSet, Source, Tick, WHITE_REFILL_LINE,
 };
+
+/// The kept sessions expiry must see, copied out so a filter can borrow
+/// the attempts at the same time.
+struct KeptNow<'a>(&'a BTreeSet<NetworkAddress>);
+
+impl KeptSessions for KeptNow<'_> {
+    fn is_kept(&mut self, address: &NetworkAddress) -> bool {
+        self.0.contains(address)
+    }
+}
 
 const CLEARNET: ConnectorId = ConnectorId::Clearnet;
 const TARGET: usize = 12;
@@ -127,7 +135,6 @@ fn concurrent_dials_never_share_an_address_or_a_clearnet_host() {
             }
         }
         let mut attempts = Attempts::new();
-        let failed = FailedAddresses::new();
         let empty_sessions = BTreeSet::new();
         let empty_hosts: BTreeSet<Host> = BTreeSet::new();
         let mut drawn: Vec<NetworkAddress> = Vec::new();
@@ -138,12 +145,11 @@ fn concurrent_dials_never_share_an_address_or_a_clearnet_host() {
                 sessions: &empty_sessions,
                 outbound_hosts: &empty_hosts,
                 attempts: &attempts,
-                failed: &failed,
                 bans: &mut bans,
                 now: at(1),
             };
             let pick = list
-                .draw_gray_where(CLEARNET, &mut |a| filter.admits(a), &mut rng)
+                .draw_gray_where(CLEARNET, at(1), &mut |a| filter.admits(a), &mut rng)
                 .expect("a candidate remains");
             assert!(
                 !drawn.contains(&pick),
@@ -179,7 +185,6 @@ fn fill_share(bound: usize, attacker_share: f64, seed: u64) -> f64 {
         }
     }
     let mut attempts = Attempts::new();
-    let failed = FailedAddresses::new();
     let empty_sessions = BTreeSet::new();
     let empty_hosts: BTreeSet<Host> = BTreeSet::new();
     // Completion second -> the dials that end then.
@@ -200,7 +205,14 @@ fn fill_share(bound: usize, attacker_share: f64, seed: u64) -> f64 {
         if kept.len() >= TARGET {
             break;
         }
-        let white = list.white_count(CLEARNET, at(now), &mut NoBans, &mut rng);
+        let live = attempts.kept_addresses().clone();
+        let white = list.white_count(
+            CLEARNET,
+            at(now),
+            &mut NoBans,
+            &mut KeptNow(&live),
+            &mut rng,
+        );
         let live_white = kept.iter().filter(|a| list.is_white(a)).count();
         let gray = list.gray_count(CLEARNET);
         let mut bans = NoBans;
@@ -209,7 +221,6 @@ fn fill_share(bound: usize, attacker_share: f64, seed: u64) -> f64 {
             sessions: &empty_sessions,
             outbound_hosts: &empty_hosts,
             attempts: &attempts,
-            failed: &failed,
             bans: &mut bans,
             now: at(now),
         };
@@ -227,11 +238,14 @@ fn fill_share(bound: usize, attacker_share: f64, seed: u64) -> f64 {
             continue;
         };
         let pick = match chosen.list {
-            DrawList::Gray => list.draw_gray_where(CLEARNET, &mut |a| filter.admits(a), &mut rng),
+            DrawList::Gray => {
+                list.draw_gray_where(CLEARNET, at(now), &mut |a| filter.admits(a), &mut rng)
+            }
             DrawList::White => list.draw_white_where(
                 CLEARNET,
                 at(now),
                 &mut NoBans,
+                &mut KeptNow(&live),
                 &mut |a| filter.admits(a) && !kept.contains(a),
                 &mut rng,
             ),

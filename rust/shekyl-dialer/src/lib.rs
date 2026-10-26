@@ -8,7 +8,7 @@
 //! One owner per connector decides, at each wake, which list to draw from
 //! and what the dial is for. This crate is that decision, the state it
 //! reads, and the handshake that holds one channel for the span of the
-//! dial: the fill rule, the wake spacing, the failed-address memory and
+//! dial: the fill rule, the wake spacing, the retries within a test and
 //! the self-connection nonces. The peer lists are `shekyl-peerlist`'s,
 //! and [`shekyl_peerlist::Peerlist::apply`] stays the only writer of gray
 //! and white. The seam drives the channel once the handshake has adopted it.
@@ -29,7 +29,6 @@ pub mod attempts;
 mod bans;
 pub mod candidate;
 pub mod fill;
-pub mod memory;
 pub mod nonce;
 pub mod owner;
 pub mod pace;
@@ -40,9 +39,10 @@ pub use attempts::Attempts;
 pub use bans::BanSnapshot;
 pub use candidate::{CandidateFilter, Skip};
 pub use fill::{in_flight_bound, plan, Census, DialAim, DrawList, FillRule, Plan};
-pub use memory::FailedAddresses;
 pub use nonce::{HandshakeNonce, HandshakeNonceSet, InFlightNonce};
 pub use owner::{session_of, Applied, Dialer, Launch, NotReady, Shared, SnapshotSource};
-pub use pace::{next_wake_nanos, WAKE_BASE_NANOS, WAKE_JITTER_NANOS};
+pub use pace::{
+    attempts_per_test, next_wake_nanos, retry_wait_nanos, WAKE_BASE_NANOS, WAKE_JITTER_NANOS,
+};
 pub use seeds::{seeds, SeedNetwork};
 pub use store::{AddressStore, LoadError, STORE_INTERVAL_NANOS};

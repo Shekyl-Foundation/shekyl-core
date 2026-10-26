@@ -1,19 +1,20 @@
 # RT-W9 — the channel itself: rule-26 pre-flight
 
-**Status:** Round 0 pre-flight — **questions RULED 2026-10-11** (Rick):
-`RT-O16`…`RT-O22`, §4, every part. **RE-RULED 2026-10-12 (PR #1034):**
-`RT-O16`, `RT-O18`, `RT-O20`, and the sequencing half of `RT-O21`. The
-re-rulings are what is built. An implementation opened against the
-2026-10-11 text of those four is rebuilt to this document. The substrate
-re-check is recorded (§2) and what could and could not be executed is
-stated (§3), so the slice's steps may proceed in the order of §5.
-Slice RT-W9 was authorized 2026-10-11 (Rick, in this lane). The
-authorization is decision-anchored to PR #1034.
+**Status:** CLOSED-as-record — **archived 2026-10-25.** RT-W9 landed
+2026-10-25. This pre-flight owns no open residue. Do not implement from
+it; the contract is the parent. History follows. **Questions RULED
+2026-10-11** (Rick): `RT-O16`…`RT-O22`, §4, every part. **RE-RULED
+2026-10-12 (PR #1034):** `RT-O16`, `RT-O18`, `RT-O20`, and the sequencing
+half of `RT-O21`. The re-rulings are what is built. An implementation
+opened against the 2026-10-11 text of those four is rebuilt to this
+document. The substrate re-check is recorded (§2) and what could and could
+not be executed is stated (§3). Slice RT-W9 was authorized 2026-10-11
+(Rick, in this lane). The authorization is decision-anchored to PR #1034.
 **Ground:** `shekyl-core` `dev` **`258b4d8515`**, the merge of PR #1020.
 Every `file:line` below was read at that commit.
-**Parent:** [`RPC_CHANNEL.md`](RPC_CHANNEL.md) (round R1, ruled 2026-10-09)
+**Parent:** [`RPC_CHANNEL.md`](../design/RPC_CHANNEL.md) (round R1, ruled 2026-10-09)
 §4.1, §4.3, §4.4, §9 and the RT-W9 row of §13; the P2P round's framing
-ruling, [`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md) D14 item 4.
+ruling, [`P2P_TRANSPORT_LAYER.md`](../design/P2P_TRANSPORT_LAYER.md) D14 item 4.
 Family `RT-` (registered); this document minted items **RT-O16…RT-O22**
 inside it, now ruled.
 **Decision authority:** Rick.
@@ -399,7 +400,7 @@ table.
 **RULED: one table in both directions.** The class table stays 512,
 16,384 and 65,535, as RT-O6 ruled.
 
-## 5. Plan
+## 5. Plan — BUILT (the record; do not implement from it)
 
 One pull request per step, each a draft off `dev`, each reviewable alone.
 This document is step 0 and is the only content of the first.
@@ -415,7 +416,7 @@ This document is step 0 and is the only content of the first.
 | 4b | RT-P9 and the handshake's deadlines; the client's retry policy | step 4a | Registered and run 2026-10-20: 4 s for message 1, 11 s for the whole handshake. One silent retry after a timeout, and a back-off after busy. Built in PR #1139 |
 | 5 | `ClassedRecord` and `shekyl-rpc-stream` | RT-O20; steps 3 and 4 | The wire format is §4.4 of the parent, already specified. The adapter is written once, against `ClassedRecord`, and observed failing with splitting removed. Record boundaries are observed here, under step 3's flush policy. The header-label registry row lands with the constant. `FixedWindow` is not built. The interim framer is not copied into `shekyl-noise`. **Split 2026-10-20:** **5a** is `ClassedRecord` in `shekyl-noise`, with the registry row, a known answer and a test for each check, seen failing without it. **5b** is `shekyl-rpc-stream`, the submission's fixed size, and the record boundaries, built to RT-O28 and RT-O29 as ruled 2026-10-20 (§4a). Built 2026-10-20: the named edit (splitting removed) fails the block-batch test, and hyper flushes once per message, as RT-P5 registered |
 | 6 | Two registry exclusion rows; the standing-check gate | RT-O22 | One row for each protocol-name literal, one reason, excluded-count pin 8 → 10. The registry gate gains a call-site pin for mechanism 7. The standing check reads every flag source and fails on one it does not recognise; its attestation file is seeded as attested, and RT-P4 is re-run on the Windows laptop with the shipped flags (ruled 2026-10-22, `RPC_CHANNEL.md` §10). Each gate is shown failing under a named edit. Built 2026-10-23: the rows and the pin in `scripts/ci/domain_registry_gate.sh` (32 mechanism-7 sites, and every Noise protocol-name constant an excluded row); the standing check in `scripts/ci/check_rt_p4_standing.py` over `docs/benchmarks/rt_p4_attestation.toml`, the laptop's re-run with the shipped flags failed its lines on 2026-10-25 (`docs/benchmarks/rt_p4_mlkem_decaps_timing_20261023.md`) and was ruled an observed platform property the same day, so the laptop's entry rests on the committed disassembly comparison and the check passes. The 2026-10-25 review closes the check: drift compares the recognised snapshot only, the attestation pins the decapsulation closure of fips203 rather than that crate alone, and aarch64-pc-windows-msvc is an explicit unmeasured rustflags target |
-| 7 | The close-out | steps 1 to 5 | Ruled 2026-10-22, one pull request per line: the stream adapter's fixes; the noise crate's and the handshake's, with the busy back-off's jitter; these docs; step 6; then the time-bound message 1, designed and ruled before it is built (`RPC_CHANNEL.md` §10) |
+| 7 | The close-out | steps 1 to 5 | Ruled 2026-10-22, one pull request per line: the stream adapter's fixes; the noise crate's and the handshake's, with the busy back-off's jitter; these docs; step 6. Built in PRs #1156, #1159, #1163 and #1173. The time-bound message 1 is out of scope (ruled 2026-10-25, `RPC_CHANNEL.md` §12) |
 
 **Named edits, fixed now so they are not improvised later.**
 

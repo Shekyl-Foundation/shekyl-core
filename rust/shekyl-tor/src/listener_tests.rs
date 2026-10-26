@@ -135,7 +135,7 @@ fn an_ip_address_is_not_dialed() {
         port: 18080,
     });
     let cause = wait_kind(&seen, CloseKind::LocalClose);
-    assert!(!cause.implicates_address(ConnectorId::Tor));
+    assert!(!cause.proves_misbehaviour());
     listener.shutdown();
     drop(engine);
 }
@@ -691,7 +691,7 @@ fn a_name_that_is_not_onion_v3_is_not_dialed() {
         port: 18081,
     });
     let cause = wait_kind(&seen, CloseKind::LocalClose);
-    assert!(!cause.implicates_address(ConnectorId::Tor));
+    assert!(!cause.proves_misbehaviour());
     listener.shutdown();
     drop(engine);
 }
@@ -711,7 +711,7 @@ fn a_closed_socks_port_is_the_proxy_and_does_not_implicate_the_onion() {
         port: 18081,
     });
     let cause = wait_kind(&seen, CloseKind::ProxyUnavailable);
-    assert!(!cause.implicates_address(ConnectorId::Tor));
+    assert!(!cause.proves_misbehaviour());
     listener.shutdown();
     drop(engine);
 }
@@ -754,7 +754,7 @@ fn a_socks_exchange_closed_without_a_reply_is_the_proxy() {
     .expect("listen");
     listener.dial(onion());
     let cause = wait_kind(&recorded.seen, CloseKind::ProxyUnavailable);
-    assert!(!cause.implicates_address(ConnectorId::Tor));
+    assert!(!cause.proves_misbehaviour());
     listener.shutdown();
     drop(engine);
 }

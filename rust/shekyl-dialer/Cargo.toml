@@ -5,7 +5,7 @@
 
 [package]
 name = "shekyl-dialer"
-description = "The outbound dialer: which address to dial next and why, the pending attempts, the failed-address memory and the self-connection nonces. Over shekyl-peerlist; the C++ reaches it only through shekyl-ffi (P2P_3_SLICE_3_DIALER_BRIEF.md)."
+description = "The outbound dialer: which address to dial next and why, the pending attempts, the retries within a test and the self-connection nonces. Over shekyl-peerlist; the C++ reaches it only through shekyl-ffi (P2P_3_SLICE_3_DIALER_BRIEF.md)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -49,6 +49,8 @@ shekyl-draw-rng = { path = "../shekyl-draw-rng", features = ["splitmix"] }
 # The owner's test rig: a hub over the loopback dialer, with a manual clock.
 shekyl-peer-policy = { path = "../shekyl-peer-policy" }
 shekyl-transport-layer = { path = "../shekyl-transport-layer" }
+# The Tor connector's reply table, for the retry test's refusals.
+shekyl-tor = { path = "../shekyl-tor" }
 # A directory of its own for each address-file test.
 tempfile = "3"
 # The idle-wake warning is asserted from the log line.

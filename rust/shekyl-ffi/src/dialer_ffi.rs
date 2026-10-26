@@ -459,9 +459,10 @@ pub unsafe extern "C" fn shekyl_peerlist_disclose(
     let now = hub.now();
     let mut bans = BanSnapshot::take(hub);
     let sample = with_shared(|mut shared| {
+        let mut kept = shared.kept_addresses(connector);
         shared
             .lists
-            .disclose(connector, now, &mut bans, &mut SecureRelayRng)
+            .disclose(connector, now, &mut bans, &mut kept, &mut SecureRelayRng)
     })
     .unwrap_or_default();
     let mut written = 0;

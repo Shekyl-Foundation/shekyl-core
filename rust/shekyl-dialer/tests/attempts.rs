@@ -385,6 +385,10 @@ fn assert_draw_stays_seated(
         dialer.shared().lists.is_gray(address),
         "a cancelled draw stays seated"
     );
+    // A failed test would cool the seat and step the ladder. A cancel
+    // records no outcome, so the draw stays outstanding.
+    assert!(!dialer.shared().lists.is_cooling(address));
+    assert_eq!(dialer.shared().lists.failed_tests(address), 0);
     assert!(!dialer.shared().lists.is_white(address));
     assert_eq!(dialer.shared().lists.gray_count(CLEARNET), 1);
     assert!(dial.opened().is_empty(), "no socket was opened");

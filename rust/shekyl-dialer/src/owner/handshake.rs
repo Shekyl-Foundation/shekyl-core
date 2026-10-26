@@ -163,7 +163,13 @@ impl Dialer {
             rng,
         );
         if admitted.is_err() {
-            return Attempt::Done(DialOutcome::PeerlistRefused(address.clone()));
+            // A list the lists refuse (D3, D-S1, the foreign-connector rule,
+            // R4) is the peer's doing: the same stamp as a rejection.
+            return Attempt::Done(DialOutcome::PeerlistRefused(
+                address.clone(),
+                CloseCause::new(CloseKind::LevinHandshakeRejected)
+                    .proving_misbehaviour_on(connector),
+            ));
         }
 
         if aim == DialAim::Confirm {
@@ -253,12 +259,20 @@ pub(super) async fn attempt_task(
         Err(Rejected::Closed) => {
             return TaskResult::Failed(channel.held().session.close_cause());
         }
+        // The Levin layer's stamp: a rejection proves misbehaviour where
+        // the connector authenticates the destination (Tor), and names it
+        // without proof where it does not (clearnet).
         Err(Rejected::ByLevin) => {
-            return TaskResult::Failed(CloseCause::new(CloseKind::LevinHandshakeRejected));
+            return TaskResult::Failed(
+                CloseCause::new(CloseKind::LevinHandshakeRejected)
+                    .proving_misbehaviour_on(connector),
+            );
         }
     };
     if response.node_data.network_id != network_id {
-        return TaskResult::Failed(CloseCause::new(CloseKind::LevinHandshakeRejected));
+        return TaskResult::Failed(
+            CloseCause::new(CloseKind::LevinHandshakeRejected).proving_misbehaviour_on(connector),
+        );
     }
     TaskResult::Response {
         channel,

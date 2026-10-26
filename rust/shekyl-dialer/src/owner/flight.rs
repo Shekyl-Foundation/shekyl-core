@@ -299,11 +299,15 @@ impl Dialer {
     /// here.
     ///
     /// Readiness comes first, as in [`Self::choose`]. A connector that
-    /// cannot dial returns [`None`] before any draw.
+    /// cannot dial returns [`None`] before any draw: a draw it cannot dial
+    /// ends as `DialFailed(LocalClose)`, and that cause carries no proof,
+    /// so the outstanding gray address cools.
     ///
     /// A gray address is drawn here, so the outcome resolves an outstanding
     /// draw as the lists require. A white address is a re-contact and is
-    /// not drawn. An address on neither list is not dialed.
+    /// not drawn. An address on neither list is not dialed. The clock is
+    /// read before the dialer lock: the draw thaws a cooldown that has
+    /// ended, and the hub is never called under that lock.
     pub fn dial<R: RelayRng + ?Sized>(
         &self,
         connector: ConnectorId,
@@ -318,11 +322,13 @@ impl Dialer {
             );
             return None;
         }
+        let now = self.hub.now();
         {
             let mut shared = self.shared();
             if shared.lists.is_gray(address) {
                 let drawn = shared.lists.draw_gray_where(
                     connector,
+                    now,
                     &mut |candidate| candidate == address,
                     rng,
                 )?;
@@ -330,7 +336,10 @@ impl Dialer {
             } else if !shared.lists.is_white(address) {
                 return None;
             }
-            if !shared.attempts(connector).begin(address, aim) {
+            if !shared.begin_or_release(connector, address, aim) {
+                tracing::debug!(
+                    "{connector:?} dial {address:?} not made: an attempt is already open"
+                );
                 return None;
             }
         }
@@ -595,7 +604,7 @@ impl Dialer {
         let kept = match self.apply_result(connector, &address, record.aim, result, rng) {
             Attempt::Done(outcome) => {
                 tracing::debug!("{connector:?} dial {address:?} ended: {outcome:?}");
-                self.settle(connector, &outcome, rng);
+                self.settle_or_retry(connector, &outcome, rng);
                 None
             }
             Attempt::Kept(kept) => {

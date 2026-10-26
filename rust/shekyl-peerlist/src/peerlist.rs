@@ -27,6 +27,22 @@ pub trait BanQuery {
     fn is_banned(&mut self, host: IpAddr, now: Tick) -> bool;
 }
 
+/// The kept sessions white expiry skips (the gray lifecycle, Rick
+/// 2026-10-24). The dialer answers with the set whose close moves the
+/// clock ([`Peerlist::session_ended`]). A caller with no sessions passes
+/// [`NoSessions`]. This is not a ban: a ban demotes, a kept session is
+/// contact.
+pub trait KeptSessions {
+    /// Whether this node holds a kept session to `address`.
+    fn is_kept(&mut self, address: &NetworkAddress) -> bool;
+}
+
+impl KeptSessions for std::collections::BTreeSet<NetworkAddress> {
+    fn is_kept(&mut self, address: &NetworkAddress) -> bool {
+        self.contains(address)
+    }
+}
+
 impl BanQuery for BanList {
     fn is_banned(&mut self, host: IpAddr, now: Tick) -> bool {
         BanList::is_banned(self, host, now)
@@ -99,6 +115,16 @@ impl BanQuery for NoBans {
     }
 }
 
+/// No kept session. Expiry reads the clock alone.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoSessions;
+
+impl KeptSessions for NoSessions {
+    fn is_kept(&mut self, _address: &NetworkAddress) -> bool {
+        false
+    }
+}
+
 /// Every address the lists hold and which list it is on. For the RPC
 /// `peers` grant: no clock, no order, no outstanding-draw state.
 pub type Snapshot = Vec<(NetworkAddress, ListName)>;
@@ -153,8 +179,9 @@ impl Peerlist {
     /// ban is refused (D4), before any intake charge. A session that has
     /// offered [`crate::SESSION_INTAKE_CAP`] other distinct addresses
     /// within the intake span is refused (D-S1); the caller applies that
-    /// to the session. An address that already sits — gray, outstanding,
-    /// or white — is left where it is and is not a new intake charge.
+    /// to the session. An address that already sits — gray, including a
+    /// cooling seat, outstanding, or white — is left where it is and is
+    /// not a new intake charge.
     /// An address in the refused set is [`Refusal::NotGlobal`] unless the
     /// operator named it (brief §2): the check is here and not at the
     /// draws, which would strike operator-named addresses.
@@ -343,12 +370,14 @@ impl Peerlist {
         connector: ConnectorId,
         now: Tick,
         bans: &mut dyn BanQuery,
+        kept: &mut dyn KeptSessions,
         rng: &mut R,
     ) -> Vec<NetworkAddress> {
         let refused = self.refused;
         let partition = self.partition_mut(connector);
         partition.demote_banned(&mut |ip, at| bans.is_banned(ip, at), now, rng);
-        partition.expire(now, rng);
+        partition.thaw(now);
+        partition.expire(now, &mut |address| kept.is_kept(address), rng);
         Self::end_disclose_early_if_due(connector, partition, now);
         partition.disclose(white_diversity_floor(), &refused, now, rng)
     }
@@ -407,11 +436,13 @@ impl Peerlist {
         connector: ConnectorId,
         now: Tick,
         bans: &mut dyn BanQuery,
+        kept: &mut dyn KeptSessions,
         rng: &mut R,
     ) -> Option<NetworkAddress> {
         let partition = self.partition_mut(connector);
         partition.demote_banned(&mut |ip, at| bans.is_banned(ip, at), now, rng);
-        partition.expire(now, rng);
+        partition.thaw(now);
+        partition.expire(now, &mut |address| kept.is_kept(address), rng);
         partition.draw_white(rng)
     }
 
@@ -423,11 +454,13 @@ impl Peerlist {
         connector: ConnectorId,
         now: Tick,
         bans: &mut dyn BanQuery,
+        kept: &mut dyn KeptSessions,
         rng: &mut R,
     ) -> &'a mut Partition {
         let partition = self.partition_mut(connector);
         partition.demote_banned(&mut |ip, at| bans.is_banned(ip, at), now, rng);
-        partition.expire(now, rng);
+        partition.thaw(now);
+        partition.expire(now, &mut |address| kept.is_kept(address), rng);
         partition
     }
 
@@ -441,10 +474,11 @@ impl Peerlist {
         connector: ConnectorId,
         now: Tick,
         bans: &mut dyn BanQuery,
+        kept: &mut dyn KeptSessions,
         rng: &mut R,
     ) -> Settled<'a> {
         Settled {
-            partition: self.prepare(connector, now, bans, rng),
+            partition: self.prepare(connector, now, bans, kept, rng),
         }
     }
 
@@ -455,15 +489,20 @@ impl Peerlist {
     /// address `eligible` admits, then uniform over that host's eligible
     /// ports: a host that advertises many ports is drawn no more often.
     /// `eligible` is the dialer's candidate filter. `None` when nothing
-    /// is eligible.
+    /// is eligible. A cooling seat whose cooldown has ended at `now` is
+    /// drawable again first (the gray lifecycle).
     pub fn draw_gray_where<R: RelayRng + ?Sized>(
         &mut self,
         connector: ConnectorId,
+        now: Tick,
         eligible: &mut dyn FnMut(&NetworkAddress) -> bool,
         rng: &mut R,
     ) -> Option<NetworkAddress> {
-        self.partition_mut(connector)
-            .draw_gray_candidate(eligible, rng)
+        // A cooldown that has ended frees its seat here too, not only at
+        // the next settle: a direct dial past the cooldown draws it.
+        let partition = self.partition_mut(connector);
+        partition.thaw(now);
+        partition.draw_gray_candidate(eligible, rng)
     }
 
     /// One white dial candidate of `connector`, after demotion (D4) and
@@ -474,10 +513,11 @@ impl Peerlist {
         connector: ConnectorId,
         now: Tick,
         bans: &mut dyn BanQuery,
+        kept: &mut dyn KeptSessions,
         eligible: &mut dyn FnMut(&NetworkAddress) -> bool,
         rng: &mut R,
     ) -> Option<NetworkAddress> {
-        self.prepare(connector, now, bans, rng)
+        self.prepare(connector, now, bans, kept, rng)
             .draw_white_candidate(eligible, rng)
     }
 
@@ -498,10 +538,11 @@ impl Peerlist {
         connector: ConnectorId,
         now: Tick,
         bans: &mut dyn BanQuery,
+        kept: &mut dyn KeptSessions,
         eligible: &mut dyn FnMut(&NetworkAddress) -> bool,
         rng: &mut R,
     ) -> usize {
-        self.prepare(connector, now, bans, rng)
+        self.prepare(connector, now, bans, kept, rng)
             .candidate_hosts(true, eligible)
     }
 
@@ -526,12 +567,20 @@ impl Peerlist {
                 partition.confirm(address, now, rng, WhiteClock::Hold);
                 Self::end_disclose_early_if_due(connector, partition, now);
             }
-            // Dropped whatever the cause (Rick, 2026-10-16; #1092). The
-            // cause decides the failed-address memory, not membership, and
-            // on clearnet no cause implicates the address: the drop is what
-            // clears a dead host that only ever times out.
-            DialOutcome::DialFailed(address, _) | DialOutcome::PeerlistRefused(address) => {
-                partition.drop_outstanding(address);
+            // The gray lifecycle (Rick, 2026-10-24): an address leaves gray
+            // only on authenticated proof of misbehaviour, never for a
+            // connection problem. The lists read the cause's marks and
+            // nothing else. A test that proves misbehaviour drops the
+            // outstanding draw; any other failed test returns it to gray
+            // with a cooldown. *Records-was (2026-10-16, #1092): dropped
+            // whatever the cause.*
+            DialOutcome::DialFailed(address, cause)
+            | DialOutcome::PeerlistRefused(address, cause) => {
+                if cause.proves_misbehaviour() {
+                    partition.drop_outstanding(address);
+                } else {
+                    partition.cool(address, now, rng);
+                }
             }
             // The strand refused the payload. White is unchanged. An
             // outstanding draw returns to drawable gray.
@@ -539,6 +588,44 @@ impl Peerlist {
                 partition.settle_outstanding(address);
             }
         }
+    }
+
+    /// The dialer drew `address` and did not start the test. An outstanding
+    /// seat returns to drawable gray on the same ladder rung. White and
+    /// cooling are left as they are. This is not an outcome: the ladder
+    /// does not move.
+    pub fn release_draw(&mut self, address: &NetworkAddress) {
+        let Some(connector) = Self::connector_of(address) else {
+            return;
+        };
+        self.partition_mut(connector).settle_outstanding(address);
+    }
+
+    /// A kept session to `address` ended at `now` (the gray lifecycle,
+    /// item 1): its white clock moves to the close time, so the 24 hours
+    /// of expiry count from the end of the connection. An address that is
+    /// not white is left as it is. Returns whether a clock moved.
+    pub fn session_ended(&mut self, address: &NetworkAddress, now: Tick) -> bool {
+        match Self::connector_of(address) {
+            Some(connector) => self.partition_mut(connector).session_ended(address, now),
+            None => false,
+        }
+    }
+
+    /// Whether `address` is gray and cooling after a failed test: seated,
+    /// written to the file as any gray address, not drawable until its
+    /// cooldown ends.
+    #[must_use]
+    pub fn is_cooling(&self, address: &NetworkAddress) -> bool {
+        Self::connector_of(address).is_some_and(|c| self.partition(c).is_cooling(address))
+    }
+
+    /// How many failed tests in a row `address` has had: the rung of its
+    /// cooldown ladder. Zero after a confirmation, or for an address that
+    /// never failed.
+    #[must_use]
+    pub fn failed_tests(&self, address: &NetworkAddress) -> u32 {
+        Self::connector_of(address).map_or(0, |c| self.partition(c).failed_tests(address))
     }
 
     /// White entries of `connector` at `now`, after demotion (D4) and
@@ -549,9 +636,10 @@ impl Peerlist {
         connector: ConnectorId,
         now: Tick,
         bans: &mut dyn BanQuery,
+        kept: &mut dyn KeptSessions,
         rng: &mut R,
     ) -> usize {
-        self.prepare(connector, now, bans, rng).white_len()
+        self.prepare(connector, now, bans, kept, rng).white_len()
     }
 
     /// Gray entries of `connector`, outstanding draws included. Drawing
@@ -581,9 +669,10 @@ impl Peerlist {
         connector: ConnectorId,
         now: Tick,
         bans: &mut dyn BanQuery,
+        kept: &mut dyn KeptSessions,
         rng: &mut R,
     ) -> bool {
-        self.white_count(connector, now, bans, rng) < WHITE_REFILL_LINE
+        self.white_count(connector, now, bans, kept, rng) < WHITE_REFILL_LINE
     }
 
     /// The earliest white expiry of `connector`: the one deadline the
@@ -595,14 +684,18 @@ impl Peerlist {
 
     /// Every address, unordered, for the file (brief §7): gray and white
     /// together, no clock, no list. An address in the refused set is not
-    /// written. The rule is by range only: no address is left out for who
-    /// supplied it.
+    /// written, and neither is one whose host is under an active ban at
+    /// `now` (Rick, 2026-10-24: the file carries addresses, never
+    /// judgements; a banned address is left out, and the ban is not
+    /// saved). The ban list is the caller's, asked through `bans` as the
+    /// draws ask it. No address is left out for who supplied it.
     #[must_use]
-    pub fn persistable(&self) -> Vec<NetworkAddress> {
+    pub fn persistable(&self, bans: &mut dyn BanQuery, now: Tick) -> Vec<NetworkAddress> {
         self.partitions
             .iter()
             .flat_map(Partition::persistable)
             .filter(|address| self.refused.refuses(address).is_none())
+            .filter(|address| !address.ip().is_some_and(|ip| bans.is_banned(ip, now)))
             .cloned()
             .collect()
     }
@@ -625,11 +718,11 @@ impl Peerlist {
             .count()
     }
 
-    /// The address file's bytes (brief §7): [`Self::persistable`] in the
-    /// current [`crate::address_file`] format.
+    /// The address file's bytes (brief §7): [`Self::persistable`] at `now`
+    /// under `bans`, in the current [`crate::address_file`] format.
     #[must_use]
-    pub fn to_file_bytes(&self) -> Vec<u8> {
-        address_file::encode(&self.persistable())
+    pub fn to_file_bytes(&self, bans: &mut dyn BanQuery, now: Tick) -> Vec<u8> {
+        address_file::encode(&self.persistable(bans, now))
     }
 
     /// Reload from the address file's bytes. A file this build cannot

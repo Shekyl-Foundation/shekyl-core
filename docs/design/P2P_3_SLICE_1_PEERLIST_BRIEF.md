@@ -58,15 +58,12 @@ dial path. The dialer is the only writer of a white promotion, and it
 writes through this slice's type contract. *Records-was: the dial and the
 socket stay in C++ until later slices, and they report an outcome.* They
 do not insert, replace, or erase list entries except through that contract.
-Gray admission refuses an address the failed-address memory holds —
-an onion address only, since clearnet writes no memory (dialer brief
-R2, Rick 2026-10-12: a TCP RST and a forged `LevinHandshakeRejected`
-are a path attacker's to produce) — and
-a banned one (`handle_remote_peerlist`, `net_node.inl:2472`; D4, §5b:
-refused at admit during the ban, and a white entry under a ban is
-demoted to gray when white is next read). Until
-slice 3 lands, this slice takes that predicate from the C++ cache.
-Slice 3 replaces where the predicate comes from. The dialer emits
+Gray admission refuses a banned address (`handle_remote_peerlist`,
+`net_node.inl:2472`; D4, §5b: refused at admit during the ban, and a
+white entry under a ban is demoted to gray when white is next read).
+*Records-was (through 2026-10-24): also an address the failed-address
+memory held, an onion address only after R2. The memory is deleted by
+the gray lifecycle (§5, §7), and `admit_gray` never read it.* The dialer emits
 `DialOutcome`. This slice's `apply` is the only list writer.
 
 ---
@@ -134,8 +131,17 @@ The other direction is demotion. A white address with no additional contact
 for `EXPIRATION_PERIOD` (24 hours) returns to gray. Additional contact is a
 confirmed handshake, or a later successful exchange, on a connection this node
 opened to that address and kept (`SessionAccepted`). It moves the clock
-forward. A confirm-and-close (`Confirmed`) is not additional contact: the
-session did not stay, and an address already white keeps its clock. Contact
+forward. A kept session is contact for as long as it lasts (the gray
+lifecycle, 2026-10-24): expiry skips a white address the caller names as
+kept, and the dialer passes the `Attempts` set that `session_closed`
+removes when it moves the clock (`session_ended`), so a white address
+expires 24 hours after its last kept session closed, never during one.
+*Records-was: the dialer answered `BanQuery::has_live_session` from the
+seam's board, a different set from the one whose close moves the clock.
+Records-was before that: the clock moved only at `SessionAccepted`, and a
+session held past 24 hours expired its own address.* A confirm-and-close
+(`Confirmed`) is not additional contact: the session did not stay, and an
+address already white keeps its clock. Contact
 that arrived inbound does not. One failed redial does not demote; the clock
 does.
 
@@ -426,15 +432,29 @@ The peerlist offers uniform draws and no ordered walk:
 
 | Variant | List effect |
 | --- | --- |
-| `SessionAccepted` | Outstanding gray draw: move to white and set `last_observed`. The session stays. Already white, on a session this node opened: move the clock. Anything else: white unchanged |
+| `SessionAccepted` | Outstanding gray draw: move to white and set `last_observed`. The session stays. Already white, on a session this node opened: move the clock. Anything else: white unchanged. The clock moves again when the kept session closes (`session_ended`, 2026-10-24), and expiry skips the address while the session is live |
 | `Confirmed` | Outstanding gray draw: the same white write. No session remains. Anything else: white unchanged |
 | *`HarvestDone` — DELETED (2026-10-11; no crate symbol)* | Absorbed into `Confirmed` (dialer brief arm 2): a confirm-and-close dial learns the peer's sample as a harvest did and writes white. The variant, its `address()` arm, its `apply` arm and its test are gone. *Records-was, same day: the variant remained and wrote no white, deferred to PR-3 as "more than one line"; before that: one of the six Foundation hosts, the same white write, from any seat* |
-| `DialFailed`, `PeerlistRefused` | Outstanding gray draw is dropped. A white address stays white |
+| `DialFailed`, `PeerlistRefused` | Outstanding gray draw: the cause's marks decide (2026-10-24). One that proves misbehaviour drops the address. Any other keeps it gray and cools it: 2 min, doubling per consecutive failed test, capped at 1 h, each with U(0, 50%) jitter; a cooling address is not drawable, and `Confirmed` or `SessionAccepted` clears the count. A white address stays white. *Records-was: dropped whatever the cause (Rick, 2026-10-16; #1092)* |
 | `PayloadRefused` | No promotion, no demotion. An outstanding draw returns to drawable gray |
 
 *Records-was: `handshake_confirmed` was the only writer, and `draw_failed`
 dropped an outstanding gray draw. A refused payload shared that failure
 path. The spellings are not in Rust.*
+
+**Cooling seats are evictable (Rick, 2026-10-24).** Over `GRAY_CAP`,
+eviction picks uniformly over every gray seat that is not an outstanding
+draw and not the seat just admitted: drawable and cooling alike. A
+cooldown is a delay, not protection. Gray is bounded by `GRAY_CAP` plus
+the outstanding draws. *Wargame:* a peer feeding dead addresses within
+D-S1's per-session cap, were cooling seats immune, would fill gray with
+seats that fail, cool, thaw and fail again, each immune for most of an
+hour, until eviction fell only on the drawable honest ones and pushed
+them out; with cooling seats evictable the feed buys nothing a feed of
+live-looking dead addresses did not already buy, and the cap holds.
+Tests: `shekyl-peerlist/tests/lifecycle.rs` (gray full of cooling seats
+takes a hundred more admissions and stays at the cap; with half the
+seats cooling and half drawable, evictions hit both in proportion).
 
 C++ disclosure walks white newest-first and then shuffles
 (`net_peerlist.h:302`, `:312`). Both callers pass the anonymize flag
@@ -646,7 +666,7 @@ host to throttle; that is recorded there as the residual.
 | `admit_gray(address)` | Insert into gray when the address sits nowhere. An address already gray, outstanding, or white is left where it sits; the call reports whether it newly entered gray, and a seated address is not a new intake charge. This is the incoming path, the gossip path, `--add-peer`, exclusive, priority, and load. Refused while the address is under an active ban (D4) and when the session's 24-hour intake would pass `2 × DISCLOSE_COUNT` distinct addresses (D-S1, `PeerlistRefused`) |
 | ban demotion | A white entry under an active ban moves to gray at the next white read: count, draw, or sample (D4, §5b). The clock is not copied across |
 | `bootstrap_harvested(addresses)` | `admit_gray` for each address in a handshake reply's sample. The dialed peer is not promoted by this call; `apply(Confirmed)` or `apply(SessionAccepted)` is |
-| expiry | `now - last_observed >= EXPIRATION_PERIOD` moves that white address to gray and does not copy the clock across |
+| expiry | `now - last_observed >= EXPIRATION_PERIOD`, for an address the caller's kept set does not hold (the dialer's `Attempts` kept sessions, the same set `session_closed` removes, 2026-10-24), moves that white address to gray and does not copy the clock across. `session_ended(address, now)` sets a white address's `last_observed` to the close. *Records-was: the query's `has_live_session`, answered from the seam's board. Records-was before that: the age alone decided* |
 
 `--add-exclusive-node` is a gray admit of the declared population
 (*records-was:* and `--add-priority-node`, deleted 2026-10-11). Today
@@ -694,6 +714,25 @@ list or a provenance tag in the crate, the special case §3 deleted, and
 the seeds are public addresses. *Records-was (same day, struck): "the
 compiled seed addresses are not written".* Lands with increment 3, with
 the range table.
+
+**Every restart is a fresh look (Rick, 2026-10-24; the gray-lifecycle
+PR).** No trust state is saved: no cooldown, no ban, no white. The file
+carries addresses, never judgements. A banned address is left out, and
+the ban is not saved (Rick ruled this, option (ii), 2026-10-24).
+`persistable` takes the dialer's ban snapshot and the clock, and leaves
+out every address whose host is under an active ban at the moment the
+file is written; the lists still read no transport state of their own. At the next start the
+ban is gone, as before, and so is the address: it comes back only when a
+peer sends it again. On Tor nothing can be banned (D7), so nothing
+changes there. The cost, stated and accepted: on clearnet, until the
+handshake authenticates the peer, an on-path party who provokes a ban
+costs the honest address its place across a restart, and it can be
+relearned from any peer's sample. *Records-was (5e3f8f238, the same
+day, by mistake): the unruled option (i), "a banned address is written
+like any other"; the ruling was (ii).* Tests:
+`shekyl-peerlist/tests/lifecycle.rs` (a clearnet address under an active
+ban is absent from the file; one whose ban has expired is written; a Tor
+address is unaffected).
 
 ---
 
@@ -871,9 +910,11 @@ Worked against the paths this brief already knows:
 | `--add-peer`, an exclusive list | No. Gray until drawn. *Records-was: priority, deleted 2026-10-11* |
 | Incoming peer, advertisement, received peerlist | No. Gray only |
 | Reload | No. Gray, unordered |
-| White, no contact for `EXPIRATION_PERIOD` | Demote to gray |
+| White, no contact for `EXPIRATION_PERIOD`, no live kept session (2026-10-24) | Demote to gray |
 | Undrawn ordinary address, `SessionAccepted` | No |
 | Outstanding gray draw, `PayloadRefused` | No. Stays gray |
+| Outstanding gray draw, `DialFailed` or `PeerlistRefused` proving no misbehaviour (2026-10-24) | No. Stays gray, cooling; not drawable until the cooldown ends. *Records-was: dropped* |
+| Outstanding gray draw, a cause that proves misbehaviour (2026-10-24) | No. Dropped |
 
 Where a later lane will try:
 
