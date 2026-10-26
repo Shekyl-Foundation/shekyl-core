@@ -8,23 +8,24 @@ One launch per wake, wakes spaced 0.5 s + U(0, 1 s) (R3). A live draw's dial
 time is drawn from the measured cold-contact sessions (2026-10-14 rerun, 189
 sessions) and is kept. A dead draw is an onion that never answers: each of
 its attempts runs to the 120 s deadline and fails (Tor's reply 0x06, or our
-dial deadline). Time to fill = the first time kept sessions reach the
+dial deadline). The managed Tor answers 0x06 at its SocksTimeout, 105 s, so
+the fill times are an upper bound. Time to fill = the first time kept sessions reach the
 12-session target. Median and p90 over seeded runs.
 
 Three lifecycles (`--lifecycle`):
 
 - `pre-merge`: one attempt per test; a test ends with its attempt. The
   dialer before the gray lifecycle merged into #1190.
-- `head`: the #1190 head. A full-window failure is worth a retry, so a dead
-  test makes three attempts, with waits of 5 s + U(0, 5 s) and
-  20 s + U(0, 10 s) between them. An attempt holds an in-flight slot; a wait
+- `head`: #1190 at `5544eba40`, before the ruling. A full-window failure is
+  worth a retry, so a dead test makes three attempts, with waits of
+  5 s + U(0, 5 s) and 20 s + U(0, 10 s) between them. An attempt holds an in-flight slot; a wait
   does not. A `Keep` test holds its target place from draw to outcome,
   waits included (`Attempts::kept_count`). A due retry runs ahead of any new
   draw when a slot is free.
-- `full-window-final`: the head, with a full-window timeout final within the
-  test (proposed 2026-10-26, pending Rick's ruling): a dead test is one
-  attempt again. Fast failures, which this model does not draw, keep their
-  retries.
+- `full-window-final`: the lifecycle the dialer runs (Rick, 2026-10-26). A
+  Tor attempt that fails at or after the managed Tor's `SocksTimeout` is
+  final within its test: a dead test is one attempt. Fast failures, which
+  this model does not draw, keep their retries.
 
 Every draw is a `Keep`: gray holds at least the diversity floor, so rule (b)
 keeps. Run with `python3 -I`; `--grid` prints the TSV the record keeps.
@@ -88,7 +89,7 @@ def quantiles(bound, dead, lifecycle, runs):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--lifecycle", choices=sorted(ATTEMPTS), default="head")
+    parser.add_argument("--lifecycle", choices=sorted(ATTEMPTS), default="full-window-final")
     parser.add_argument("--runs", type=int, default=2000)
     parser.add_argument("--grid", action="store_true")
     args = parser.parse_args()

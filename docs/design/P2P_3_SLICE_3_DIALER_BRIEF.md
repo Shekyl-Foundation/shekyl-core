@@ -375,10 +375,10 @@ data, the same on every node. It limits how many dials are outstanding,
 not the rate: one launch per wake, at R3's spacing. Tor's five is
 derived (`DAEMON_RELAY_PRIVACY.md` §97;
 `docs/benchmarks/p2p_tor_inflight_bound_20261025.md`) with half the
-draws dead: if a full-window timeout is final within a test (pending a
-ruling), five is the smallest bound that fills the 12-session target
-within one stem epoch; with every full-window failure retried twice, as
-the dialer does today, no bound does, and five reaches the plateau. Clearnet stays at one. A pending `Keep` counts
+draws dead, on the lifecycle the dialer runs, where a Tor attempt that
+fails at or after the managed Tor's `SocksTimeout` is final within its
+test (Rick, 2026-10-26): five is the smallest bound that fills the
+12-session target within one stem epoch. Clearnet stays at one. A pending `Keep` counts
 toward the target, so no bound lets keeps pass it; a `Confirm` counts
 toward the bound and not the target, which is why the descriptor
 reservation adds the bound to the target. Wargame: at boot, hidden
@@ -839,7 +839,10 @@ are in `TOR_SUPERVISOR.md`'s reply table). The close cause's window-timeout
 mark says which failures are timeouts: Tor's `0x06` and the dial
 deadline's `TransportTimeout`. An earlier one keeps its retries, as
 `0xF0`, `0xF2`, `0x03`, `0x04` and the gap timeout do; `0x01` is final
-by its own row. Every failed Tor attempt counts in the posture line's
+by its own row. On a silently blocked link every attempt ends at
+`0x06` at the window, so the candidates it reaches cool and climb rungs;
+that residual and its bound are in `TOR_SUPERVISOR.md`'s reply table.
+Every failed Tor attempt counts in the posture line's
 tally when it ends, deferred or not); a
 cooldown in place of the drop ("The fill" above; the `DialOutcome` table;
 slice 1 brief §5, where cooling

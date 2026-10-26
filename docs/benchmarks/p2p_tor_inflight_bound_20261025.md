@@ -1,14 +1,13 @@
 # The Tor connector's in-flight dial bound, derived 2026-10-25
 
-**Status: DERIVED, not yet measured; the horizon claim depends on a pending
-ruling.** `in_flight_bound(Tor)` = 5 (`rust/shekyl-dialer/src/fill.rs`).
-Five is the bound under every lifecycle modelled below. It meets the
-600 s horizon only if a full-window timeout is final within a test
-(proposed 2026-10-26, pending Rick's ruling); under the head as it stands no
-bound meets it, and five reaches the plateau. The floor-device
-measurements (below) move it to Measured or reopen it. Register:
+**Status: DERIVED; the floor-device short series on the final head moves it
+to Measured.** `in_flight_bound(Tor)` = 5 (`rust/shekyl-dialer/src/fill.rs`),
+derived on the lifecycle the dialer runs: a Tor attempt that fails at or
+after the managed Tor's `SocksTimeout` is final within its test (Rick,
+2026-10-26). Five is the smallest bound that fills the Tor target within
+one stem epoch with half the draws dead. Register:
 `DAEMON_RELAY_PRIVACY.md` §97, row "In-flight dial bound". Brief: the
-dialer in-flight bound, revision 2 (Rick, 2026-10-25), item 6.
+dialer in-flight bound, revision 4 (Rick, 2026-10-26), items 10 to 12.
 
 ## What the bound is, and what it is not
 
@@ -27,8 +26,10 @@ dead one waiting out its deadline, holds a target slot until it ends.
 
 The smallest bound whose **median** time to fill the Tor connector's target
 (`MIN_PROVISIONED_OUT_PEERS` = 12) from empty is within **one stem epoch,
-600 s**, when **half the draws are dead** and run to the 120 s dial deadline.
-Never more than the target.
+600 s**, when **half the draws are dead**. Never more than the target. A
+dead attempt is modelled at the 120 s dial deadline; the managed Tor
+answers `0x06` at its `SocksTimeout`, 105 s, so the fill times are an upper
+bound.
 
 - **The time, 600 s.** The relay redraws its stem graph from the node's
   outbound edges every epoch (`min_epoch_secs` 600, `DAEMON_RELAY_PRIVACY.md`;
@@ -68,25 +69,29 @@ when kept sessions reach 12. Three lifecycles, 2,000 seeded runs per cell
 
 - **pre-merge**: one attempt per test. The dialer before the gray lifecycle
   merged into #1190, and the binaries of floor run 1.
-- **head**: the #1190 head. A full-window failure (0x06, or the dial
-  deadline) is worth a retry, so a dead test makes three attempts, with
-  waits of 5 s + U(0, 5 s) and 20 s + U(0, 10 s) between. An attempt holds
-  an in-flight slot and a wait does not; a `Keep` test holds its target
-  place from draw to outcome, waits included.
-- **proposed**: the head with a full-window timeout final within the test
-  (2026-10-26, pending Rick's ruling). The Tor 0.4.9.14 source behind it:
-  0x06 comes only from the stream-end reason `TIMEOUT`
-  (`src/core/or/reasons.c:128`), set when the client's `SocksTimeout`
-  window runs out on an onion stream (`src/core/or/connection_edge.c:1222`,
-  `:1253`) or when the service's own connect to its target times out, which
-  Tor never retries on an onion stream (`src/core/or/relay.c:891`); within
-  that window Tor already retries introduction points and descriptor
-  fetches (`src/feature/hs/hs_client.c:1246`, `:1756`).
+- **head**: #1190 at `5544eba40`, before the ruling. A full-window failure
+  (0x06, or the dial deadline) is worth a retry, so a dead test makes three
+  attempts, with waits of 5 s + U(0, 5 s) and 20 s + U(0, 10 s) between. An
+  attempt holds an in-flight slot and a wait does not; a `Keep` test holds
+  its target place from draw to outcome, waits included.
+- **full-window-final**: the lifecycle the dialer runs (Rick,
+  2026-10-26). A Tor attempt that fails at or after the managed Tor's
+  `SocksTimeout` is final within its test, so a dead test is one attempt;
+  fast failures, which this model does not draw, keep their retries.
+  Tor retried inside its own window. In Tor 0.4.9.14, `0x06` comes only
+  from the stream-end reason `TIMEOUT` (`src/core/or/reasons.c:128`), set
+  when the client's `SocksTimeout` runs out on an onion stream
+  (`src/core/or/connection_edge.c:1222`, `:1250`) or when the service's
+  own connect to its target times out, which Tor does not retry on an
+  onion stream (`src/core/or/relay.c:892`); inside that window Tor moves
+  to another introduction point (`src/feature/hs/hs_client.c:1246`) and
+  refetches the descriptor from another directory (`:1717`, `:1739`,
+  `:1758`).
 
 Median (p90) seconds to fill 12 Tor sessions from empty, half the draws
 dead:
 
-| Bound | Pre-merge: one attempt per test | Head: a full-window failure retried twice; a wait holds its target place | Proposed: a full-window timeout final within the test |
+| Bound | Pre-merge: one attempt per test | `5544eba40`: a full-window failure retried twice; a wait holds its target place | Full-window final (ruled; the dialer runs it) |
 | --- | --- | --- | --- |
 | 1 | 1640 (2485) | 4451 (7033) | 1645 (2477) |
 | 2 | 907 (1398) | 2538 (4017) | 904 (1367) |
@@ -97,58 +102,50 @@ dead:
 | 8 | 494 (796) | 1584 (2404) | 495 (842) |
 | 12 | 493 (760) | 1586 (2412) | 494 (840) |
 
-**Under the head, no bound meets the horizon.** The fill flattens at about
-1,585 s from bound six: each dead test holds a target place for about
-385 s across its three attempts, so with the target counted full no
-further dial starts however many slots are free. Five is the smallest bound
-within about 1% of that plateau (1,602 s).
+**Five.** On the ruled lifecycle four sits on the horizon (597 s) and
+five clears it (523 s). Past six the fill stops improving, at about
+495 s: a dead pending `Keep` holds its target place for its window, so
+with the target counted full no further dial starts however many slots
+are free. A bound above six would buy almost nothing and widen the burst
+the node shows its Tor.
 
-**Under the proposed rule, five meets it.** Four sits on the horizon
-(597 s); five clears it (523 s). The pre-merge lifecycle gives the same
-answer (604 s and 517 s). Past six the fill stops improving there too, at
-about 495 s, for the same reason: a dead pending `Keep` holds a target place
-for its 120 s.
-
-**Five either way.** The bound is five under all three; whether the
-one-epoch horizon holds is the ruling's, not the bound's. A bound above six
-would buy almost nothing and widen the burst the node shows its Tor.
+The other two columns are the evidence around it. One attempt per test
+gives the same answer (604 s and 517 s). Three attempts per dead test, a
+waiting `Keep` holding its target place, meets no horizon: the fill
+flattens at about 1,585 s, because each dead test holds a target place
+for about 385 s across its attempts. That is why the ruling makes a
+full-window failure final.
 
 ## Fingerprinting (TSR-Q9)
 
-Tor 0.4.9.14's own limit on concurrent client circuit construction is
-`MaxClientCircuitsPending`, 32 by default (`doc/man/tor.1.txt`; `config.c`).
-It counts only general and descriptor-fetch circuits
-(`CIRCUIT_PURPOSE_COUNTS_TOWARDS_MAXPENDING`, `src/core/or/circuitlist.h`);
-an onion connect's introduction and rendezvous circuits do not count, so the
-limit barely constrains concurrent onion dials. Five concurrent onion
-connects keep at most five descriptor fetches pending, under a sixth of the
-allowance a stock client is built to use, and are the shape of a client with
-a few onion services open at once. The bound is not set from that limit; it
-is checked against it.
+A stock Tor client's cap on circuits under construction is
+`MaxClientCircuitsPending`, 32 by default (Tor 0.4.9.14
+`doc/man/tor.1.txt:1333`, `src/app/config/config.c:569`). It counts only
+general and descriptor-fetch circuits
+(`CIRCUIT_PURPOSE_COUNTS_TOWARDS_MAXPENDING`,
+`src/core/or/circuitlist.h:167`); an onion connect's introduction and
+rendezvous circuits do not count, so the cap barely constrains concurrent
+onion connects. Five concurrent connects to distinct onions hold at most
+five descriptor fetches pending, under a sixth of that cap, and are the
+shape of a client with a few onion services open at once. The bound is
+not set from that cap; it is checked against it.
 
 ## Dead-onion stalling: what holding every slot costs
 
-To hold all five Tor slots continuously an attacker needs every draw dead.
-Each slot runs at most 30 dials an hour when every dial runs to 120 s.
+On the ruled lifecycle a planted dead onion holds one slot and one target
+place for 105 s, until Tor's `0x06`, and its test ends. The address then
+cools in place: 2 min, doubling per failed test to 1 h, with U(0, 50%)
+jitter. To hold all five slots for an hour an attacker needs
+5 × 3,600 / 105 ≈ 171 draws an hour, every one of them a plant. At the
+1 h cap a planted onion is drawable at most once an hour, so that is at
+least 171 planted onions at the cap, planted once: 8 attacker sessions at
+the intake cap (24 addresses per session per 24 h). Every draw must also
+land on a plant, so the plants must be nearly all of the drawable pool:
+every honest onion in gray is drawn at the same rate.
 
-- **On `dev` today**, a failed draw leaves gray: each dead onion is used
-  once. Holding five slots for an hour consumes 5 × 30 = 150 dead onions an
-  hour, 3,600 a day. At 24 admitted addresses per session per day that is
-  150 attacker sessions, against 30 at bound one. The cost grows with the
-  bound, and so does what it buys: the attacker must also outnumber the
-  honest drawable pool by enough that every draw lands on a plant.
-- **Once the gray lifecycle lands (#1189)**, a failed draw cools in place
-  (2 min doubling to 1 h) instead of leaving gray. A dead onion at the cap is
-  drawable once an hour and holds a slot for at most 120 s of it, so holding
-  five slots continuously needs 5 × 3,600 / 120 = 150 planted onions at the
-  cap, planted once: about 7 sessions within one intake span. Against that,
-  every honest onion in gray is drawn at the same rate, so the planted share
-  of the drawable pool, not the bound, decides how much of the time the
-  slots are held.
-
-Either way the bound does not make the node easier to stall: at bound one a
-single dead draw stalled the whole connector for 120 s; at five it holds a
-fifth of it.
+The bound does not make the node easier to stall. At bound one, 34
+plants held the whole connector for an hour; at five, the same plants
+hold a fifth of it.
 
 ## Floor run 1, 2026-10-25/26 (`a3b5ff4ad`, before the gray lifecycle merged)
 
@@ -171,7 +168,8 @@ Seconds from the Tor link becoming usable to the 12th kept Tor session:
 | cold, half dead (gray 128) | 1396 (5) | 731 (5) |
 | refill after a Tor respawn | 679 (3) | 141 (3) |
 
-At half dead the model gave 1643 s and 522 s. With 64 onions in gray, bound
+At half dead the model's pre-merge column, which these binaries ran, gives
+1640 s and 517 s. With 64 onions in gray, bound
 5 spent most launches on `Confirm` dials (one sample: 15 keeps, 45
 confirms): each slot's draw leaves gray, gray falls under the diversity
 floor within a few draws, and the fill rule confirms instead of keeping.
@@ -179,15 +177,20 @@ That is the fill rule, out of scope, and it is why bound 5 is not faster
 with no dead draws here. With 128 in gray the fill stayed mostly keeps and
 bound 5 halved the median.
 
-## To be measured (floor device, claimed in the usage ledger first)
+## Two regimes (recorded, not changed)
 
-- Time to fill the Tor target from empty at bound 1 and at bound 5: on a cold
-  boot; after a Tor respawn; with gray seeded with a stated share of dead
-  onions.
-- Whether the floor device as client keeps the dial-time distribution this
-  model drew from.
+- **On a large network the bound sets the fill time.** That is the model
+  above and floor run 1 at 128 in gray, where bound 5 halved the median.
+- **On a small network the white diversity floor sets it.** With 64
+  onions in gray, bound 5 filled in 258 s against 190 s at bound 1: the
+  extra slots drew gray down, white stayed under its floor of 48, and the
+  fill rule confirmed rather than kept (one sample: 15 keeps, 45
+  confirms). That is the floor building white diversity first, as
+  designed. Today's testnet (14 nodes against 48) is this regime.
 
-Below the diversity floor, which is today's testnet (14 nodes against 48),
-rule (b) never keeps, so the slots past the first become `Confirm` dials
-until white reaches the floor. That is the fill rule, out of scope here; the
-testnet measurement will show it, and it is reported, not changed.
+## The short series on the final head (floor device, claimed in the usage ledger first)
+
+Cold, half dead, and refill after a Tor respawn, at bound 1 and at bound
+5, on #1190's final head: the gray lifecycle and the full-window-final
+rule both in. Recorded below and in §97 with the date; the row then moves
+to Measured.
