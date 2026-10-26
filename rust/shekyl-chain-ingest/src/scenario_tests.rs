@@ -173,7 +173,7 @@ async fn a_rewind_pops_to_the_target_and_mining_resumes_on_the_new_tip() {
 /// hash admits is one the real hash admits at difficulty one. `#[ignore]`d
 /// for the live lane — the cache derivation is seconds, not milliseconds.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "real RandomX; seconds. Run in the live lane: cargo test -p shekyl-chain-ingest scenario -- --ignored"]
+#[ignore = "real RandomX; seconds; run by nightly.yml's chain-ingest-ignored job"]
 async fn a_chain_mines_under_the_production_substrate() {
     use std::sync::Arc;
 

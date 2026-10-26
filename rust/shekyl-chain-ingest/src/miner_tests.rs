@@ -280,11 +280,12 @@ async fn the_miner_mines_through_the_connector_and_leaves_a_superseded_job() {
 /// Five blocks in a row, each mined by the loop from the template over the
 /// last and connected — the live lane's end to end.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "real RandomX, five searches; minutes in a debug build. Live lane: cargo test -p shekyl-chain-ingest --features pipeline -- --ignored miner"]
+#[ignore = "real RandomX, five searches; minutes in a debug build; run by nightly.yml's chain-ingest-ignored job"]
 async fn the_miner_extends_the_chain_block_after_block() {
     let _lane = MINER_LANE.lock().await;
     let caches = Arc::new(CacheStore::new());
     let pow = ProductionSubstrate::new(Arc::clone(&caches), Arc::new(Metrics::new()));
+    let substrate = pow.clone();
     let mut s = Scenario::open_under("miner-five", pow, RULES);
     let board = Arc::new(JobBoard::new());
     let (sink, found) = found_blocks();
@@ -295,7 +296,7 @@ async fn the_miner_extends_the_chain_block_after_block() {
             threads: NonZeroUsize::new(2).expect("two"),
         },
         Arc::clone(&board),
-        caches,
+        Arc::clone(&caches),
         shekyl_hash_budget::Budget::of_host(),
         sink,
     )
@@ -304,6 +305,9 @@ async fn the_miner_extends_the_chain_block_after_block() {
     for expected in 1..6u64 {
         let mut next = s.next_template(Vec::new()).await.expect("a template");
         assert_eq!(next.height.to_raw(), expected);
+        // The workers leave a job whose seed the cache does not hold
+        // (`pin_job_seed`), so each post pins first, as the pipeline does.
+        pin_job_seed(&substrate, &caches, &next);
         board.publish(job_for(&next));
         let block = found.recv_timeout(FIND_WITHIN).expect("a block is found");
         next.template.block = block.block;
@@ -391,7 +395,7 @@ fn a_form_takes_the_permit_the_miner_left_free() {
 /// release — a debug build's rate says nothing about the daemon's:
 /// `cargo test --release -p shekyl-chain-ingest --features pipeline -- --ignored --nocapture the_miners_rate`.
 #[test]
-#[ignore = "a measurement, in release: see the doc comment"]
+#[ignore = "a measurement in release (see the doc comment); run by nightly.yml's chain-ingest-ignored job"]
 fn the_miners_rate_per_worker() {
     let _lane = MINER_LANE.blocking_lock();
     let caches = Arc::new(CacheStore::new());

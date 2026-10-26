@@ -274,6 +274,100 @@ async fn the_claim_source_lists_the_window_and_gathers_what_the_gate_admits() {
     s.close().await;
 }
 
+/// The claim window is cause-blind: a persona that holds a bond is listed
+/// the same window as one that holds none. On a levered chain with one
+/// bonded persona, the claim source for that persona and for a stranger
+/// list the same epochs with the same budget, `Σwork`, gather flag and
+/// bonds; only the bond record and the claimant's index differ. The twin
+/// of the no-bond test above; supersedes the C++ `archival_claim_source_rpc`
+/// case `window_is_unconditional_and_cause_blind`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_claim_window_is_the_same_for_a_persona_with_a_bond() {
+    use crate::archival_driver::{first_spending_height, ENDPOINT, FEE};
+    use crate::scenario::FreeHash;
+    use crate::scenario_archival::{complete_tree, Persona};
+    use crate::scenario_shard::levered_rules;
+    use shekyl_types::ChainCount;
+    let rules = levered_rules();
+    let mut s = Scenario::open_under("rpc-reads-claim-source-bond", FreeHash, rules);
+    let connecting = first_spending_height();
+    let mut mined = s
+        .mine(ChainCount::from_next_height(connecting).to_raw())
+        .await;
+    let spender = Spender::over(&mined);
+    let persona = Persona::at(1);
+    let join = persona.join(complete_tree(), ENDPOINT);
+    let joined = s
+        .mine_listing(vec![spender.spend_coinbase_posting(
+            s.wallet(),
+            BlockHeight::ZERO,
+            connecting,
+            FEE,
+            Some(&join),
+        )])
+        .await
+        .unwrap_or_else(|outcome| panic!("the join connects: {outcome}"));
+    mined.push(joined);
+    mined.extend(s.mine(40).await);
+    let bonded = hex::encode(persona.id().to_bytes());
+    s.reopen(|path| {
+        let store = Arc::new(open_store_under(
+            path,
+            &rules.in_force(BlockHeight::ZERO),
+            shekyl_chain_store::apply_policy::ApplyPolicy::Full,
+        ));
+        let facts = facts_over(Arc::clone(&store), path, rules);
+        let ask = |p_id: &str| {
+            get_archival_emission_claim_source(
+                &facts,
+                &GetArchivalEmissionClaimSourceRequest {
+                    p_id: p_id.to_owned(),
+                },
+            )
+            .expect("a claim source")
+        };
+        let with_bond = ask(&bonded);
+        let without = ask(&"11".repeat(32));
+        assert!(with_bond.has_bond_record, "the joined persona holds a bond");
+        assert!(!without.has_bond_record, "the stranger holds none");
+        assert!(!with_bond.epochs.is_empty(), "the window lists epochs");
+        let window = |source: &shekyl_rpc_types::GetArchivalEmissionClaimSourceResponse| {
+            source
+                .epochs
+                .iter()
+                .map(|e| {
+                    (
+                        e.settlement_epoch,
+                        e.budget_atomic,
+                        e.sigma_work_milli,
+                        e.has_budget_row,
+                        e.close_block_height,
+                        e.bonds.clone(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            window(&with_bond),
+            window(&without),
+            "the window does not branch on the bond"
+        );
+        assert_eq!(with_bond.chain_height, without.chain_height);
+        assert_eq!(
+            with_bond.current_settled_epoch,
+            without.current_settled_epoch
+        );
+        assert!(without
+            .epochs
+            .iter()
+            .all(|e| e.claimant_bond_idx == u64::MAX));
+        drop(facts);
+        drop(store);
+    })
+    .await;
+    s.close().await;
+}
+
 /// The coverage list over a chain that has closed no shard, on the block
 /// after the first slash pass. Nothing a join can hold. The profit hint
 /// reads the watermark the pass wrote, which the schedule's arithmetic

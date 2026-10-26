@@ -89,6 +89,10 @@ pub(crate) mod archival_driver;
 /// CEN-J11, and a Release signed by the wrong key is CEN-J13.
 #[cfg(all(test, feature = "pipeline"))]
 mod archival_hint_tests;
+/// DRS-X PR 3e (e2): every block that changes archival state, popped and
+/// connected again, the store compared at each step.
+#[cfg(all(test, feature = "pipeline"))]
+mod archival_pop_roundtrip_tests;
 /// E6 slice 8 PR-a (`CHAIN_RULES_SLICE_8.md` §5 rows 3 and 5): one levered
 /// slash chain, J5 through the Release, a phase at a time.
 #[cfg(all(test, feature = "pipeline"))]
@@ -115,6 +119,10 @@ mod bundle_producer_tests;
 /// The two RandomX seeds an arrival may hash under.
 #[cfg(feature = "pipeline")]
 mod cache_window;
+/// The scenario driver that round-trips a connect, and the prune a pop is
+/// held to. The pop tests and the levered slash chain connect through it.
+#[cfg(all(test, feature = "pipeline"))]
+pub(crate) mod chain_drive;
 #[cfg(feature = "pipeline")]
 mod chain_facts;
 #[cfg(feature = "pipeline")]
@@ -130,6 +138,10 @@ pub mod fetch;
 /// The tip follower: the seed window, then the pool, then the miner's job.
 #[cfg(feature = "pipeline")]
 pub mod follower;
+/// `SO-D12h`: the frozen-membership chain through the claim window. The
+/// emission test and the pop test each connect the claim.
+#[cfg(all(test, feature = "pipeline"))]
+mod frozen_membership;
 #[cfg(feature = "pipeline")]
 pub mod grader;
 #[cfg(all(test, feature = "pipeline"))]

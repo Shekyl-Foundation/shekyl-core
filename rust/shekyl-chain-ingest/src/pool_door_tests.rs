@@ -28,6 +28,7 @@ use shekyl_mempool::{judge, Admission, Duplicate, Judged, KeyImages, Pool};
 use shekyl_types::{BlockHeight, UnixSeconds};
 use shekyl_wire::Transaction;
 
+use crate::chain_drive::RELAY_FEE_REPRICE_STEPS;
 use crate::scenario::{FreeHash, Mined, Scenario, StepOutcome};
 use crate::test_support::{h, tmp, Family, FIRST_SPEND_HEIGHT};
 
@@ -127,25 +128,11 @@ pub(crate) async fn paying_the_floor_at(
     coinbase: u64,
     connecting: BlockHeight,
 ) -> Transaction {
-    let floor = scenario
-        .read_chain(|view, _| {
-            let connecting = shekyl_chain_rules::Tip::connecting_height(
-                shekyl_chain_rules::HeaderView::tip(view)
-                    .expect("tip")
-                    .as_ref(),
-            );
-            match shekyl_chain_rules::relay_floor_window(view, connecting).expect("floors") {
-                shekyl_chain_rules::AtHeight::Recorded(floors) => {
-                    floors.into_iter().min().expect("a window")
-                }
-                shekyl_chain_rules::AtHeight::AboveTip => unreachable!("the connecting height"),
-            }
-        })
-        .await;
+    let floor = scenario.connecting_relay_floor().await;
     let spender = Spender::over(mined);
     let wallet = scenario.wallet();
     let mut fee = Family::Main.fee();
-    for _ in 0..8 {
+    for _ in 0..RELAY_FEE_REPRICE_STEPS {
         let tx = spender.spend_coinbase(wallet, h(coinbase), connecting, fee);
         let weight = u64::try_from(tx.weight()).expect("a weight fits");
         let needed = shekyl_economics::quantized_fee(weight, floor).expect("priceable");

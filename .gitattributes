@@ -11,3 +11,7 @@ rust/shekyl-rpc-types/tests/vectors/rpc/** -text
 # textual diffs too, so a reviewer sees "binary files differ" rather than a
 # mangled rendering that invites an edit. `-text` is already applied above.
 rust/shekyl-rpc-types/tests/vectors/rpc/*.bin -diff
+# Frozen numeric oracle (`the_long_term_weight_follows_the_generators_trajectory`).
+# A trailing CR fails the last field's parse, and that panic is the failure.
+# Checkout must not rewrite the line endings.
+rust/shekyl-chain-rules/tests/vectors/block_weight_trajectory/trajectory.txt -text

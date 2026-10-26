@@ -507,3 +507,139 @@ fn the_verdict_carries_the_paid_emission() {
 // over the median, connects, and its accumulator matches the daemon's
 // `coins_generated`, so the penalty curve is held there). F14's predicate
 // over the weight is `f14_*` above.
+
+// ---------------------------------------------------------------------------
+// F17 / F18 on a chain that has burned, closed shards and pays a staker pool
+// ---------------------------------------------------------------------------
+
+/// F17 / F18 where the burn is in force: a chain that has burned and
+/// closed shards, a fee-bearing block heavy enough to be in the penalty
+/// zone, and a staker pool the fee split pays. The coinbase paying exactly
+/// the two miner legs is admitted, and it is what `shekyl-economics`
+/// prices over the operands the fixture states; one unit over is refused
+/// on F18 at the miner slot, and so is a coinbase that also claims the
+/// staker pool. The operands are the ones `shekyl-block-template` prices
+/// its coinbase from (`EmissionOperands`'s `total_burned` and
+/// `closed_shards`), and its test at the same edge is
+/// `the_template_with_a_staker_pool_pays_what_the_validator_quotes`.
+/// Supersedes the C++ `economics_b5_fee_coinbase`
+/// `fee_bearing_exact_coinbase_accepts` and
+/// `coinbase_claiming_staker_pool_rejects`. Red edits: let `owed` include
+/// the staker pool (`shekyl-economics` `price_emission`), or let F18 admit
+/// a coinbase above `owed`.
+#[test]
+fn f17_f18_with_a_staker_pool_the_exact_coinbase_is_admitted_and_one_over_refused() {
+    use crate::harness::burned_staker_chain;
+    use crate::harness::fixture::{paying_fee, spend};
+    // The rules harness's fixture clock. The template's copy of this chain
+    // starts under its own `NOW`; the columns are the constructor's.
+    let crate::harness::StakerPoolChain {
+        chain,
+        accumulator,
+        burned,
+        closed_shards,
+    } = burned_staker_chain(economics().emission_curve_asymptote, 1_000);
+    let connecting = chain.tip().expect("tip").height.to_raw() + 1;
+    let coinbase_weight = u64::try_from(
+        candidate_on(&chain, Vec::new())
+            .block
+            .miner_transaction
+            .weight(),
+    )
+    .expect("fits");
+    let body = |k: u64| paying_fee(spend(point_at(600 + k), 16), 2_000_000);
+    let per_body = u64::try_from(body(0).weight()).expect("fits");
+    let count = (ZONE - coinbase_weight) / per_body + 1;
+    let priced = candidate_on(&chain, (0..count).map(body).collect());
+    let weight = u64::try_from(
+        priced.block.miner_transaction.weight()
+            + priced
+                .transactions
+                .iter()
+                .map(Transaction::weight)
+                .sum::<usize>(),
+    )
+    .expect("fits");
+    let total_fees = 2_000_000 * count;
+
+    // The subject, before anything is asserted on it (rule 47).
+    let emission = emission_on(&chain, connecting);
+    let Subsidy::Derived { burn, .. } = emission.subsidy() else {
+        unreachable!("above genesis")
+    };
+    assert!(weight > ZONE, "the block is in the penalty zone: {weight}");
+    assert!(
+        chain
+            .with_view(|view| view.total_burned())
+            .expect("infallible")
+            > AtomicUnits::ZERO
+    );
+    assert_eq!(
+        burn.closed_shards,
+        shekyl_economics::ClosedShardCount::new(closed_shards)
+    );
+
+    // The economics crate over the operands the fixture states.
+    let expected = shekyl_economics::price_emission(&shekyl_economics::EmissionInputs {
+        height: connecting,
+        median_weight: ZONE,
+        block_weight: weight,
+        already_generated: accumulator,
+        tx_volume: emission.tx_volume(),
+        total_fees,
+        supply: shekyl_economics::CirculatingSupply::derive(
+            AtomicUnits::from_raw(accumulator),
+            AtomicUnits::from_raw(burned),
+        )
+        .expect("the burn is under the emission"),
+        closed_shards: shekyl_economics::ClosedShardCount::new(closed_shards),
+        params: economics(),
+    })
+    .expect("the operands price");
+    assert!(
+        expected.fee_burn.staker_pool_amount > 0,
+        "a staker pool is paid"
+    );
+    assert!(
+        expected.fee_burn.actually_destroyed > 0,
+        "part of the fees burn"
+    );
+    assert!(
+        expected.fee_burn.miner_fee_income < total_fees,
+        "the miner does not take the fees whole"
+    );
+
+    let owed = priced.block.miner_transaction.prefix.outputs[0].amount;
+    assert_eq!(
+        owed,
+        expected.split.miner_emission + expected.fee_burn.miner_fee_income,
+        "owed is the two miner legs, the staker pool excluded"
+    );
+    let paid = judge_candidate(&chain, &priced).expect("the exact coinbase is admitted");
+    assert_eq!(paid, expected, "the validator's figures are the owner's");
+    assert_eq!(owed, expected.owed.to_raw());
+    assert!(
+        paid.paid.to_raw()
+            < effective_emission(accumulator, emission.tx_volume(), economics()).expect("priced"),
+        "the penalty is in force"
+    );
+    for (label, amount) in [
+        ("one unit over", owed + 1),
+        (
+            "the staker pool claimed",
+            owed + expected.fee_burn.staker_pool_amount,
+        ),
+    ] {
+        let mut wrong = priced.clone();
+        wrong.block.miner_transaction.prefix.outputs[0].amount = amount;
+        let verdict = judge_candidate(&chain, &wrong);
+        assert!(verdict.is_err(), "{label}: admitted");
+        assert_refused(
+            verdict,
+            CenRow::F18,
+            Locus::Tx {
+                slot: TxSlot::Miner,
+            },
+        );
+    }
+}

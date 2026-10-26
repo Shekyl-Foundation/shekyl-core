@@ -11,7 +11,8 @@
 //! reach inside what a test mines. One persona
 //! joins two shards, serves one of them, and is slashed on the shard it
 //! never served. Nothing admits a draw yet, so each epoch's draws are
-//! issued through the connector's regtest door ([`IssueDraws`],
+//! issued through the connector's regtest door
+//! ([`IssueDraws`](crate::connector::IssueDraws),
 //! `ARCHIVAL_SETTLEMENT_WRITER.md` `SO-D10f`): three per shard, passed on
 //! the served shard and not on the other. The phases then run on that record, in order, without
 //! re-mining the chain:
@@ -37,39 +38,29 @@
 //! (`cargo test -p shekyl-chain-ingest --features pipeline -- --ignored
 //! the_levered_slash_chain`).
 
-use shekyl_archival_retention::settlement_select::issued_draw_term;
 use shekyl_archival_retention::{
     good_through, serve_credit_epoch_ok, verify_reinstate_bond_post, HoldingsKind,
     ARCHIVAL_BOND_FLOOR_ATOMIC, RELEASE_COOLDOWN_EPOCHS,
 };
 use shekyl_chain_rules::{CenRow, Locus, RecordWriteKind, SettlementSchedule, TxSlot};
-use shekyl_types::archival::{
-    BadInterval, BondRecord, HeldShard, Holdings, IndexedDraw, IssuedDigest, IssuedDraw,
-    SettlementOutcome,
-};
+use shekyl_types::archival::{BadInterval, BondRecord, HeldShard, Holdings, SettlementOutcome};
 use shekyl_types::{BlockCount, BlockHeight, ChainCount, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
 use crate::archival_driver::{
     at_post, first_spending_height, record_of, refused_at, ENDPOINT, FEE,
 };
-use crate::connector::{Inject, Injected, IssueDraws};
+use crate::chain_drive::{failure_window_epochs, Driven, IssuedPair};
+use crate::connector::{Inject, Injected};
 use crate::scenario::{FreeHash, Mined, Scenario};
 use crate::scenario_archival::{shard_set, Persona};
 use crate::scenario_shard::{
     close_shards, first_admissible_compact_join, first_pricing_epoch, levered_rules,
-    levered_schedule, mine_to, Filled,
+    levered_schedule, Filled, FILL_FROM_COINBASE,
 };
 use crate::schedule::ChainRules;
 use crate::source::ServeCredit;
 use shekyl_harness_spender::Spender;
-
-/// `FAILURE_WINDOW_M`: the misses a slash waits for, counted from the epoch
-/// after the join.
-const FAILURE_WINDOW: u64 = 11;
-
-/// The first coinbase the fill spends. Coinbases below it ride the posts.
-const FILL_FROM_COINBASE: u64 = 10;
 
 /// The join this chain is about: two shards, one of them never served.
 struct Joined {
@@ -95,30 +86,32 @@ struct Reinstated {
 struct LeveredChain {
     rules: ChainRules,
     schedule: SettlementSchedule,
-    scenario: Scenario<FreeHash>,
-    chain: Vec<Mined>,
+    drive: Driven,
     /// The two shards the fill closed, ascending.
     filled: Filled,
 }
 
 impl LeveredChain {
-    /// The height of the next block. Mined from genesis, the chain's length
-    /// is that height.
+    /// The height of the next block.
     fn height(&self) -> BlockHeight {
-        BlockHeight::from_raw(
-            u64::try_from(self.chain.len()).expect("a test chain's length is a height"),
-        )
+        self.drive.height()
     }
 
     /// Mine to the first spend, then fill shards 0 and 1 and let them close.
-    async fn open() -> Self {
+    /// The fill stays straight: round-tripping, when the caller asks for it,
+    /// starts after this returns.
+    async fn open(name: &str) -> Self {
         let rules = levered_rules();
         let schedule = levered_schedule();
-        let mut scenario = Scenario::open_under("slice-8-reinstate", FreeHash, rules);
-        let mut chain = scenario
+        let mut scenario = Scenario::open_under(name, FreeHash, rules);
+        let chain = scenario
             .mine(ChainCount::from_next_height(first_spending_height()).to_raw())
             .await;
-        let filled = close_shards(&mut scenario, &mut chain, FILL_FROM_COINBASE, 2).await;
+        let mut drive = Driven::begin(scenario, chain);
+        let filled = {
+            let (scenario, chain) = drive.parts_mut();
+            close_shards(scenario, chain, FILL_FROM_COINBASE, 2).await
+        };
         assert_eq!(
             filled
                 .closed
@@ -130,8 +123,7 @@ impl LeveredChain {
         Self {
             rules,
             schedule,
-            scenario,
-            chain,
+            drive,
             filled,
         }
     }
@@ -150,7 +142,7 @@ impl LeveredChain {
             .max()
             .expect("two shards closed");
         let early = admissible - BlockCount::ONE;
-        mine_to(&mut self.scenario, &mut self.chain, early).await;
+        self.drive.advance_to(early).await;
         assert_eq!(self.height(), early);
         let riding = |chain: &[Mined], scenario: &Scenario<FreeHash>, height: BlockHeight| {
             Spender::over(chain).spend_coinbase_posting(
@@ -161,13 +153,13 @@ impl LeveredChain {
                 Some(&persona.join(shard_set(vec![unserved, served]), ENDPOINT)),
             )
         };
-        let one_early = riding(&self.chain, &self.scenario, early);
+        let one_early = riding(&self.drive.chain, &self.drive.scenario, early);
         refused_at(
-            self.scenario.mine_listing(vec![one_early]).await,
+            self.drive.connect(vec![one_early]).await,
             CenRow::J15,
             at_post(0),
         );
-        mine_to(&mut self.scenario, &mut self.chain, admissible).await;
+        self.drive.advance_to(admissible).await;
         // The price the join reads: the slash pass that first finds the
         // later shard final gathers an `r_market` row for both, and that
         // epoch is the watermark at the join's parent.
@@ -180,7 +172,7 @@ impl LeveredChain {
             .expect("two shards closed");
         let pass = self.schedule.slash_deadline_height(priced_epoch);
         assert_eq!(admissible.to_raw(), pass + 1, "the join follows that pass");
-        let pricing = &self.chain[usize::try_from(pass).expect("small")];
+        let pricing = &self.drive.chain[usize::try_from(pass).expect("small")];
         let gather = pricing
             .archival
             .gathers()
@@ -195,10 +187,10 @@ impl LeveredChain {
         }
         let join_height = self.height();
         let join_epoch = self.schedule.epoch_at_height(join_height.to_raw());
-        let joining = riding(&self.chain, &self.scenario, join_height);
+        let joining = riding(&self.drive.chain, &self.drive.scenario, join_height);
         let block = self
-            .scenario
-            .mine_listing(vec![joining])
+            .drive
+            .connect(vec![joining])
             .await
             .unwrap_or_else(|outcome| panic!("the join connects at {join_height}: {outcome}"));
         assert!(
@@ -206,7 +198,6 @@ impl LeveredChain {
             "J15 judged the join"
         );
         assert_eq!(block.archival.records()[0].kind(), RecordWriteKind::Insert);
-        self.chain.push(block);
         Joined {
             persona,
             served,
@@ -227,8 +218,8 @@ impl LeveredChain {
             "the retention crate refuses a credit at E_join"
         );
         refused_at(
-            self.scenario
-                .mine_listing(vec![join
+            self.drive
+                .connect(vec![join
                     .persona
                     .serve_credit(join.served, join.join_epoch)])
                 .await,
@@ -236,14 +227,13 @@ impl LeveredChain {
             at_credit,
         );
         let first_serving = self
-            .scenario
-            .mine_listing(vec![join
+            .drive
+            .connect(vec![join
                 .persona
                 .serve_credit(join.served, join.join_epoch + 1)])
             .await
             .expect("the credit for E_join + 1 connects (J4, J5, J6 over the record)");
         assert_eq!(first_serving.archival.serve_credits().len(), 1);
-        self.chain.push(first_serving);
     }
 
     /// Eleven epochs of three draws on each shard, every one passed on the
@@ -252,11 +242,30 @@ impl LeveredChain {
     /// one and ten injected — which the Release's served anchor reads; the
     /// slash reads the draws.
     async fn slash_the_unserved_shard(&mut self, join: &Joined) -> Slashed {
-        for epoch in (join.join_epoch + 1)..=(join.join_epoch + FAILURE_WINDOW) {
-            self.issue_three_draws_each(join, epoch).await;
+        let window = failure_window_epochs();
+        for epoch in (join.join_epoch + 1)..=(join.join_epoch + window) {
+            let epoch_id = SettlementEpoch::from_raw(epoch);
+            self.drive
+                .issue_draws(
+                    epoch_id,
+                    &[
+                        IssuedPair {
+                            persona: join.persona.id(),
+                            shard: ShardId::from_raw(join.served),
+                            passed: true,
+                        },
+                        IssuedPair {
+                            persona: join.persona.id(),
+                            shard: ShardId::from_raw(join.unserved),
+                            passed: false,
+                        },
+                    ],
+                )
+                .await;
         }
-        for epoch in (join.join_epoch + 2)..=(join.join_epoch + FAILURE_WINDOW) {
+        for epoch in (join.join_epoch + 2)..=(join.join_epoch + window) {
             let Injected { .. } = self
+                .drive
                 .scenario
                 .connector()
                 .ask(Inject(ServeCredit {
@@ -267,15 +276,16 @@ impl LeveredChain {
                 .await
                 .expect("the injector writes");
         }
-        let slash_epoch = join.join_epoch + FAILURE_WINDOW;
+        // The credits are a write beside a block. The next pop compares
+        // against the store they left.
+        self.drive.wrote_beside_a_block().await;
+        let slash_epoch = join.join_epoch + window;
         let deadline = self.schedule.slash_deadline_height(slash_epoch);
-        mine_to(
-            &mut self.scenario,
-            &mut self.chain,
-            BlockHeight::from_raw(deadline + 1),
-        )
-        .await;
+        self.drive
+            .advance_to(BlockHeight::from_raw(deadline + 1))
+            .await;
         let slashed_at: Vec<u64> = self
+            .drive
             .chain
             .iter()
             .filter(|b| !b.archival.slashes().is_empty())
@@ -289,6 +299,7 @@ impl LeveredChain {
         // The rows the deadline block settled, ahead of the slash it
         // decided on them: the unserved shard Missed, the served one Served.
         let settled: Vec<(u64, SettlementOutcome)> = self
+            .drive
             .chain
             .last()
             .expect("mined")
@@ -307,13 +318,13 @@ impl LeveredChain {
         ];
         expected.sort_unstable_by_key(|(shard, _)| *shard);
         assert_eq!(settled, expected, "one row per pair, in shard order");
-        let slash = &self.chain.last().expect("mined").archival.slashes()[0];
+        let slash = &self.drive.chain.last().expect("mined").archival.slashes()[0];
         assert_eq!(slash.entry.persona, join.persona.id());
         assert_eq!(slash.entry.shard.to_raw(), join.unserved);
         assert_eq!(slash.entry.epoch.to_raw(), slash_epoch);
         assert_eq!(slash.burned.to_raw(), ARCHIVAL_BOND_FLOOR_ATOMIC);
 
-        let record = record_of(&self.scenario, &join.persona).await;
+        let record = record_of(&self.drive.scenario, &join.persona).await;
         assert_eq!(record.bonded_total.to_raw(), ARCHIVAL_BOND_FLOOR_ATOMIC);
         let Holdings::ShardSet(held) = &record.holdings else {
             panic!("compact");
@@ -335,48 +346,6 @@ impl LeveredChain {
         }
     }
 
-    /// Issue `epoch`'s draws for the persona's two pairs: three each, at
-    /// the epoch's first heights, passed on the served shard only.
-    async fn issue_three_draws_each(&mut self, join: &Joined, epoch: u64) {
-        let persona = join.persona.id();
-        let epoch_id = SettlementEpoch::from_raw(epoch);
-        let open = self.schedule.open_height(epoch);
-        let mut digest = IssuedDigest::ZERO;
-        let mut draws = Vec::new();
-        for (shard, passed) in [(join.served, true), (join.unserved, false)] {
-            let shard = ShardId::from_raw(shard);
-            for k in 0..3u64 {
-                let issuing_height = BlockHeight::from_raw(open + k);
-                digest.fold(&issued_draw_term(
-                    &persona,
-                    shard,
-                    epoch_id,
-                    issuing_height,
-                    0,
-                ));
-                draws.push(IndexedDraw {
-                    persona,
-                    shard,
-                    issuing_height,
-                    draw: 0,
-                    state: IssuedDraw {
-                        revealed_at: BlockHeight::from_raw(open + k + 1),
-                        passed,
-                    },
-                });
-            }
-        }
-        self.scenario
-            .connector()
-            .ask(IssueDraws {
-                epoch: epoch_id,
-                draws,
-                digest,
-            })
-            .await
-            .expect("the door issues the draws");
-    }
-
     /// Inside the open interval both credits refuse on J6: the kept shard
     /// and the shard the slash removed. J6 reads the interval.
     async fn assert_j6_refuses_inside_the_open_interval(
@@ -395,8 +364,8 @@ impl LeveredChain {
         );
         for shard in [join.served, join.unserved] {
             refused_at(
-                self.scenario
-                    .mine_listing(vec![join.persona.serve_credit(shard, inside)])
+                self.drive
+                    .connect(vec![join.persona.serve_credit(shard, inside)])
                     .await,
                 CenRow::J6,
                 at_credit,
@@ -423,9 +392,9 @@ impl LeveredChain {
         let reinstate_height = self.height();
         let reinstate_epoch = self.schedule.epoch_at_height(reinstate_height.to_raw());
         let riding = {
-            let spender = Spender::over(&self.chain);
+            let spender = Spender::over(&self.drive.chain);
             spender.spend_coinbase_posting(
-                self.scenario.wallet(),
+                self.drive.scenario.wallet(),
                 BlockHeight::from_raw(1),
                 reinstate_height,
                 FEE,
@@ -433,8 +402,8 @@ impl LeveredChain {
             )
         };
         let reinstated = self
-            .scenario
-            .mine_listing(vec![riding])
+            .drive
+            .connect(vec![riding])
             .await
             .expect("the reinstate connects");
         let write = &reinstated.archival.records()[0];
@@ -471,8 +440,7 @@ impl LeveredChain {
             "a Reinstate does not touch the receipt key"
         );
         let written = write.record().clone();
-        self.chain.push(reinstated);
-        let stored = record_of(&self.scenario, &join.persona).await;
+        let stored = record_of(&self.drive.scenario, &join.persona).await;
         assert_eq!(stored, written, "the store holds the post-image");
         Reinstated {
             stored,
@@ -495,15 +463,14 @@ impl LeveredChain {
             &reinstated.stored.bad_intervals
         ));
         let past_interval = self
-            .scenario
-            .mine_listing(vec![
+            .drive
+            .connect(vec![
                 join.persona.serve_credit(join.served, after_close),
                 join.persona.serve_credit(join.unserved, after_close),
             ])
             .await
             .expect("PIN (J8, slice C): a credit for a shard no longer held connects today");
         assert_eq!(past_interval.archival.serve_credits().len(), 2);
-        self.chain.push(past_interval);
     }
 
     /// J18's two belts, then J16's cooldown refusal. Every post rides
@@ -518,10 +485,10 @@ impl LeveredChain {
         let height = self.height();
         let after_close = reinstated.reinstate_epoch + 1;
         let (no_open_interval, holdings_changed, early_release) = {
-            let spender = Spender::over(&self.chain);
+            let spender = Spender::over(&self.drive.chain);
             let riding = |bond| {
                 spender.spend_coinbase_posting(
-                    self.scenario.wallet(),
+                    self.drive.scenario.wallet(),
                     BlockHeight::from_raw(2),
                     height,
                     FEE,
@@ -554,17 +521,17 @@ impl LeveredChain {
             (no_open_interval, holdings_changed, early_release)
         };
         refused_at(
-            self.scenario.mine_listing(vec![no_open_interval]).await,
+            self.drive.connect(vec![no_open_interval]).await,
             CenRow::J18,
             at_post(0),
         );
         refused_at(
-            self.scenario.mine_listing(vec![holdings_changed]).await,
+            self.drive.connect(vec![holdings_changed]).await,
             CenRow::J18,
             at_post(0),
         );
         refused_at(
-            self.scenario.mine_listing(vec![early_release]).await,
+            self.drive.connect(vec![early_release]).await,
             CenRow::J16,
             at_post(0),
         );
@@ -589,8 +556,8 @@ impl LeveredChain {
         );
         while self.height().to_raw() < boundary {
             let block = self
-                .scenario
-                .mine_listing(Vec::new())
+                .drive
+                .connect(Vec::new())
                 .await
                 .expect("empty blocks land");
             assert!(
@@ -598,7 +565,6 @@ impl LeveredChain {
                 "a persona serving past its closed interval is not slashed again (height {})",
                 block.height
             );
-            self.chain.push(block);
         }
         // Each release is built over the chain it rides and before the mine
         // that follows it (the spender borrows the wallet, `mine_listing` the
@@ -606,21 +572,21 @@ impl LeveredChain {
         let full_release = join
             .persona
             .release(reinstated.stored.bonded_total.to_raw());
-        let at_deadline = Spender::over(&self.chain).spend_coinbase_posting(
-            self.scenario.wallet(),
+        let at_deadline = Spender::over(&self.drive.chain).spend_coinbase_posting(
+            self.drive.scenario.wallet(),
             BlockHeight::from_raw(2),
             BlockHeight::from_raw(boundary),
             FEE,
             Some(&full_release),
         );
         refused_at(
-            self.scenario.mine_listing(vec![at_deadline]).await,
+            self.drive.connect(vec![at_deadline]).await,
             CenRow::J16,
             at_post(0),
         );
         let settling = self
-            .scenario
-            .mine_listing(Vec::new())
+            .drive
+            .connect(Vec::new())
             .await
             .expect("the deadline block lands");
         assert_eq!(settling.height, BlockHeight::from_raw(boundary));
@@ -628,17 +594,16 @@ impl LeveredChain {
             settling.archival.slashes().is_empty(),
             "nothing to slash at the anchor's deadline"
         );
-        self.chain.push(settling);
-        let past_boundary = Spender::over(&self.chain).spend_coinbase_posting(
-            self.scenario.wallet(),
+        let past_boundary = Spender::over(&self.drive.chain).spend_coinbase_posting(
+            self.drive.scenario.wallet(),
             BlockHeight::from_raw(2),
             BlockHeight::from_raw(boundary + 1),
             FEE,
             Some(&full_release),
         );
         let released = self
-            .scenario
-            .mine_listing(vec![past_boundary])
+            .drive
+            .connect(vec![past_boundary])
             .await
             .unwrap_or_else(|outcome| {
                 panic!(
@@ -661,19 +626,38 @@ impl LeveredChain {
             "a release empties the holdings"
         );
         assert_eq!(
-            record_of(&self.scenario, &join.persona).await,
+            record_of(&self.drive.scenario, &join.persona).await,
             write.record().clone(),
             "the store holds the post-image"
         );
     }
 }
 
-/// The levered chain, one phase at a time. A refusal names the phase in the
-/// stack: the chain is not re-mined as separate tests.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "fills two shards with real proofs; minutes. Run in the live lane: cargo test -p shekyl-chain-ingest --features pipeline -- --ignored the_levered_slash_chain"]
-async fn the_levered_slash_chain_judges_each_row_on_one_record() {
-    let mut chain = LeveredChain::open().await;
+/// How the levered chain's connects are judged.
+pub(crate) enum ConnectMode {
+    /// Connect each block once.
+    Straight,
+    /// Pop and reconnect each block after the fill.
+    RoundTrip,
+}
+
+/// What a round-tripped run counted. Both are zero for [`ConnectMode::Straight`].
+pub(crate) struct LeveredRun {
+    pub trips: u64,
+    pub boundaries: u64,
+}
+
+/// The levered chain, one phase at a time (module docs). `mode` selects
+/// whether each connect after the fill is popped and connected again.
+pub(crate) async fn run_levered_slash_chain(mode: ConnectMode) -> LeveredRun {
+    let name = match mode {
+        ConnectMode::Straight => "slice-8-reinstate",
+        ConnectMode::RoundTrip => "archival-pop-reinstate",
+    };
+    let mut chain = LeveredChain::open(name).await;
+    if matches!(mode, ConnectMode::RoundTrip) {
+        chain.drive.round_trip_from_here().await;
+    }
     let join = chain.join_two_shards().await;
     chain.assert_j5_refuses_the_join_epoch(&join).await;
     let slashed = chain.slash_the_unserved_shard(&join).await;
@@ -692,5 +676,18 @@ async fn the_levered_slash_chain_judges_each_row_on_one_record() {
     chain
         .assert_j16_accepts_over_the_served_anchor(&join, &reinstated)
         .await;
-    chain.scenario.close().await;
+    let run = LeveredRun {
+        trips: chain.drive.trips(),
+        boundaries: chain.drive.boundaries(),
+    };
+    chain.drive.close().await;
+    run
+}
+
+/// The levered chain, one phase at a time. A refusal names the phase in the
+/// stack: the chain is not re-mined as separate tests.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "fills two shards with real proofs; minutes; run by nightly.yml's chain-ingest-ignored job"]
+async fn the_levered_slash_chain_judges_each_row_on_one_record() {
+    run_levered_slash_chain(ConnectMode::Straight).await;
 }

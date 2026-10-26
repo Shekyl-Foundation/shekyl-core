@@ -627,6 +627,11 @@ census_rows! {
         L7 implemented(crate::archival::L7),
         L8 by_construction(crate::archival::accrue, "l8_an_accrual_that_overflows_is_a_corrupt_view"),
         L9 by_construction(crate::archival::apply_slash, "l9_slashing_a_shard_the_record_does_not_hold_is_a_corrupt_view"),
+        // L10: retired by PDM-Q12 (the freeze retires; the commitment
+        // exists at ingest), so no Rust rule is ever written for it. The
+        // live C++ freeze still enforces it, which keeps the row in bucket 1
+        // and here; the flip deletes that C++ and moves the row to bucket 3
+        // with this entry (DAEMON_REDB_STORE.md, the S-ARCH row; SAR-5).
         L10 pending,
         // L11/L12: growth has no rule type (E3 Round 1, `drain.rs`'s module
         // docs). The rows still bind, because B5 judges the next header's

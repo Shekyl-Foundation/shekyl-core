@@ -91,6 +91,32 @@ where
         .await
     }
 
+    /// The minimum relay floor at the height the next block connects at:
+    /// the floor window's least member (`CEN-M3`).
+    ///
+    /// # Panics
+    ///
+    /// If the window cannot be read or is empty: the chain this driver
+    /// just held has no floor, which is not a scenario outcome.
+    pub async fn connecting_relay_floor(&mut self) -> u64 {
+        self.read_chain(|view, _| {
+            let connecting = shekyl_chain_rules::Tip::connecting_height(
+                shekyl_chain_rules::HeaderView::tip(view)
+                    .expect("the tip of the scenario's store")
+                    .as_ref(),
+            );
+            match shekyl_chain_rules::relay_floor_window(view, connecting).expect("floors") {
+                shekyl_chain_rules::AtHeight::Recorded(floors) => {
+                    floors.into_iter().min().expect("a window")
+                }
+                shekyl_chain_rules::AtHeight::AboveTip => {
+                    unreachable!("the connecting height is recorded")
+                }
+            }
+        })
+        .await
+    }
+
     /// Lend `f` the store itself and the rules it runs under — for a reader
     /// that begins its own snapshots (the submit engine's shim over the
     /// pool). The connector is stopped so the store can be opened here, and
