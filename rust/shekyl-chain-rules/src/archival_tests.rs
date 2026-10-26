@@ -601,3 +601,176 @@ fn shard_close_height_refuses_a_fold_that_is_not_monotone_at_the_cut() {
         );
     });
 }
+
+// ---- exemption 3: CEN-L7's claim arm and the close, behind the rows -----
+
+/// The transition for `bodies` connecting at `connecting` on an honest
+/// empty chain under `rules`, accruing `inflow`. Every epoch below the
+/// open one has had its slash pass (the watermark), so the pass settles
+/// nothing here: an empty chain's passes are not the subject.
+fn run_at(
+    rules: &RuleSet,
+    connecting: u64,
+    inflow: AtomicUnits,
+    bodies: Vec<Transaction>,
+) -> Verdict<ArchivalDelta> {
+    let open = rules.settlement_schedule().epoch_at_height(connecting);
+    let chain = match open.checked_sub(1) {
+        Some(below) => chain_of(connecting).settled_through(SettlementEpoch::from_raw(below)),
+        None => chain_of(connecting),
+    };
+    let candidate = candidate_on(&chain, bodies);
+    chain.with_view(|view| {
+        let mut coverage = RuleCoverage::EMPTY;
+        let mut count_memo = super::count::CountMemo {
+            open_hash: candidate.block.hash(),
+            memo: None,
+        };
+        transition(
+            &view,
+            BlockHeight::from_raw(connecting),
+            rules,
+            &candidate,
+            inflow,
+            &mut count_memo,
+            &mut coverage,
+        )
+        .expect("an honest-empty view neither faults nor is corrupt")
+    })
+}
+
+/// Ten-block epochs: a short mock chain has settled some, and the epoch is
+/// too short to have a challenge-response window (`SEB / W2_EPOCH_DIVISOR`
+/// is zero), so the count phase draws nothing and rebuilds no drawable set
+/// this harness could not answer.
+fn ten_block_epochs() -> RuleSet {
+    use crate::rule_set::{FakechainSchedule, SettlementEpochBlocks};
+    RuleSet::fakechain(
+        None,
+        FakechainSchedule::new(
+            SettlementEpochBlocks::new(10).expect("non-zero"),
+            BlockCount::from_raw(5),
+        )
+        .expect("a valid pair"),
+    )
+}
+
+/// The claimant the harness's emission vin with tag `0x23` claims as.
+const CLAIM_TAG: u8 = 0x23;
+
+/// Exemption 3: a claim reaching the fold that CEN-J23 and CEN-J25 refuse
+/// first, which no production path produces. The fold's claim arm is the
+/// belt beneath them, and each way it cannot apply a claim refuses the
+/// block under L7 at the claim's input: never a soft skip that connects a
+/// block whose emission paid without marking the epoch. The record comes
+/// from a join in the same block (the fold reads the block's own joins),
+/// because this harness plants no bond state.
+///
+/// - unknown persona: no record, no join (CEN-J25's `BondMissing` above it);
+/// - not settled: the open epoch (CEN-J23 above it);
+/// - already claimed: the same `(P, E)` twice (CEN-G9 within a block,
+///   CEN-J25's `EpochAlreadyClaimed` across blocks, above it);
+/// - expired: below the claim window (CEN-J25's window above it).
+///
+/// The control claim connects, naming the epoch once and setting the first
+/// paying height at the connecting height.
+///
+/// Supersedes `archival_substrate_lmdb`'s
+/// `emission_claim_connect_breaches_hard_error` (at `eb5be7767`).
+///
+/// Red edit: let `claim` skip a dedup hit (`Ok(false) => {}` in
+/// `archival/inputs.rs`) — the twice-claimed block connects.
+#[test]
+fn l7_refuses_a_claim_its_fold_cannot_apply_on_each_arm() {
+    use crate::harness::fixture::{claimant, emission_vin};
+    let rules = ten_block_epochs();
+    let p = persona(claimant(CLAIM_TAG));
+    let claim = |epochs: &[u64]| body_with(vec![emission_vin(CLAIM_TAG, epochs)]);
+    let joined = || body_with(vec![join(p, &[7])]);
+    // Epoch 3 is open at 35; epochs 0 to 2 are settled and in the window.
+    let open_epoch_height = 3 * 10 + 5;
+
+    let control = run_at(
+        &rules,
+        open_epoch_height,
+        INFLOW,
+        vec![joined(), claim(&[1])],
+    )
+    .expect("a claim the fold can apply connects");
+    let written = control
+        .records()
+        .iter()
+        .find(|w| w.persona() == &p)
+        .expect("the claim's record write");
+    assert_eq!(
+        written.record().claimed_settlement_epochs,
+        vec![SettlementEpoch::from_raw(1)]
+    );
+    assert_eq!(
+        written.record().first_paying_emission_height,
+        shekyl_types::archival::FirstPayingHeight::new(BlockHeight::from_raw(open_epoch_height))
+    );
+
+    assert_refused(
+        run_at(&rules, open_epoch_height, INFLOW, vec![claim(&[1])]),
+        CenRow::L7,
+        at(0, 0),
+    );
+    assert_refused(
+        run_at(
+            &rules,
+            open_epoch_height,
+            INFLOW,
+            vec![joined(), claim(&[3])],
+        ),
+        CenRow::L7,
+        at(1, 0),
+    );
+    assert_refused(
+        run_at(
+            &rules,
+            open_epoch_height,
+            INFLOW,
+            vec![joined(), claim(&[1]), claim(&[1])],
+        ),
+        CenRow::L7,
+        at(2, 0),
+    );
+    // Epoch 29 is open at 295: the window's floor is 29 − W = 3.
+    let past_the_window = (3 + shekyl_archival_retention::MAX_CLAIM_AGE_W) * 10 + 5;
+    assert_refused(
+        run_at(&rules, past_the_window, INFLOW, vec![joined(), claim(&[1])]),
+        CenRow::L7,
+        at(1, 0),
+    );
+}
+
+/// Exemption 3: an epoch that accrued nothing closes at a zero budget — a
+/// present row, distinct from an epoch that never closed (`None` on every
+/// budget read). The driven chain cannot host it: the staker emission
+/// accrues on every block past genesis. The transition is handed a zero
+/// inflow at the block whose count completes epoch 0; beside it, the same
+/// close with an inflow freezes that inflow. The store writes the close's
+/// budget as it is handed it (`archival_write.rs`, the close arm), with no
+/// branch on zero, and its pop and re-close are the round trips in
+/// `shekyl-chain-ingest`'s `archival_pop_roundtrip_tests`.
+///
+/// Supersedes the zero-budget row of `archival_substrate_lmdb`'s
+/// `budget_close_row_revert_and_reclose_symmetry` (at `eb5be7767`).
+///
+/// Red edit: have `Transition::close` return `None` for a zero accrual —
+/// the zero close is then absent.
+#[test]
+fn a_close_with_nothing_accrued_freezes_a_zero_budget() {
+    let rules = ten_block_epochs();
+    let closing_height = 9;
+    for (inflow, frozen) in [(AtomicUnits::ZERO, 0), (INFLOW, INFLOW.to_raw())] {
+        let delta =
+            run_at(&rules, closing_height, inflow, Vec::new()).expect("an empty block connects");
+        let close = delta
+            .close()
+            .expect("the block whose count completes epoch 0 closes it");
+        assert_eq!(close.epoch(), SettlementEpoch::ZERO);
+        assert_eq!(close.budget().to_raw(), frozen, "inflow {inflow:?}");
+    }
+}

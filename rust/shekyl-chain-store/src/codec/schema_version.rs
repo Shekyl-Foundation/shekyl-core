@@ -354,7 +354,16 @@ use super::{Canonical, CodecError};
 ///   row moves; `properties.snap` gains the cell and `following_degraded.snap`
 ///   is new. A `31` binary does not know the cell, so the bump refuses a
 ///   `32` file under it. Rebuild from the block corpus, as at every bump.
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(32);
+/// - `33` — the bundle queue and the body store
+///   (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5, `SO-D12` increment 4c).
+///   `archival_bundle_queue` (`h → queued_bundle`) and
+///   `archival_bundle_body` (`prunable_hash → queued_body`) are born
+///   Rust-only, appended at ordinals 50 and 51. A `32` file lacks both, and
+///   a `32` binary would open a `33` file without reconciling a queue it
+///   does not know, so the bump refuses either at open. `queued_bundle.snap`
+///   and `queued_body.snap` are new and `tables.snap` gains the two rows.
+///   Rebuild from the block corpus, as at every bump.
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(33);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -411,10 +420,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(32));
-        assert_eq!(SCHEMA_VERSION.encode(), [32, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(33));
+        assert_eq!(SCHEMA_VERSION.encode(), [33, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[32, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[33, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }

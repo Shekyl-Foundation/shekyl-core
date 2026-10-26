@@ -57,6 +57,10 @@ fn miner() -> MinerKeys {
 /// both have room to hold.
 const NOW: Timestamp = Timestamp::from_raw(1_700_000_050);
 
+/// Block 0 of the staker-pool chain. Four blocks at `T_SECONDS` from here
+/// still end under [`NOW`], so C1 and C2 have room on that chain too.
+const STAKER_POOL_CHAIN_START: u64 = 1_699_000_000;
+
 /// A chain of `len` recorded blocks, work recorded at the genesis
 /// difficulty, timestamps ascending 120 s apart and ending below [`NOW`].
 fn chain_of(len: u64) -> MockChain {
@@ -1196,4 +1200,117 @@ fn a_miner_key_the_kem_refuses_yields_no_template() {
     let chain = chain_of(1);
     let err = build(&context(&chain, &params, &miner, &[])).expect_err("refused");
     assert!(matches!(err, TemplateError::Output(_)), "{err}");
+}
+
+/// The template where the burn is in force pays what the validator
+/// quotes. On a chain that has burned and closed shards, with fee-bearing
+/// bodies putting the block in the penalty zone, the driver composes
+/// `EmissionOperands` from the chain through the rules crate's readers
+/// (the median, the volume window, the closed shards), and the template's
+/// coinbase is `quote_emission`'s `owed` for the block it built: the miner's
+/// two legs, the staker pool excluded. The fill prices the same reward.
+/// `shekyl-chain-rules`' `f17_f18_with_a_staker_pool_the_exact_coinbase_is_
+/// admitted_and_one_over_refused` holds the validator's F18 equality on the
+/// same record, which a filler body cannot reach through `validate` here
+/// (CEN-I13). The closed shards are carried and asserted, and move nothing
+/// today: the escalation is flat until its freeze ceremony
+/// (`economics_params.json` `_comment_escalation`), so the burn operand that
+/// bites is the burned total. Supersedes, with that test, the C++
+/// `economics_b5_fee_coinbase` `fee_bearing_exact_coinbase_accepts`. Red
+/// edit: price the template's supply on the gross emission, the burn not
+/// netted off.
+#[test]
+fn the_template_with_a_staker_pool_pays_what_the_validator_quotes() {
+    let params = EconomicParams::default();
+    let miner = miner();
+    let shekyl_chain_rules::harness::StakerPoolChain {
+        chain,
+        accumulator,
+        burned,
+        closed_shards: closed,
+    } = shekyl_chain_rules::harness::burned_staker_chain(
+        params.emission_curve_asymptote,
+        STAKER_POOL_CHAIN_START,
+    );
+    let (connecting, _, _) = tip_facts(&chain);
+    let (median, tx_volume, closed_shards) = chain.with_view(|view| {
+        let median = shekyl_chain_rules::effective_median_at(&view, connecting).expect("reads");
+        let volume = shekyl_chain_rules::tx_volume_window(&view, connecting).expect("reads");
+        let closed = shekyl_chain_rules::closed_shards_before(&view, connecting).expect("reads");
+        (median.effective_median.to_raw(), volume, closed)
+    });
+    assert_eq!(
+        closed_shards,
+        ClosedShardCount::new(closed),
+        "the subject: shards closed"
+    );
+    let operands = EmissionOperands {
+        already_generated_coins: AtomicUnits::from_raw(accumulator),
+        total_burned: AtomicUnits::from_raw(burned),
+        median_weight: median,
+        tx_volume,
+        closed_shards,
+    };
+    let empty = build(&TemplateContext {
+        emission: operands,
+        ..context(&chain, &params, &miner, &[])
+    })
+    .expect("builds");
+    let coinbase = u64::try_from(empty.block.miner_transaction.weight()).expect("fits");
+    let listed: Vec<Transaction> = bodies_landing_within(1_500, median - coinbase + 2_000)
+        .into_iter()
+        .map(|tx| shekyl_chain_rules::harness::fixture::paying_fee(tx, 2_000_000))
+        .collect();
+    let template = build(&TemplateContext {
+        emission: operands,
+        ..context(&chain, &params, &miner, &listed)
+    })
+    .expect("builds at the edge");
+    assert!(
+        template.block_weight > median,
+        "the subject: the penalty zone"
+    );
+
+    let candidate = Candidate::new(template.block.clone(), template.transactions.clone());
+    let quoted = chain
+        .with_view(|view| shekyl_chain_rules::quote_emission(&view, connecting, &candidate))
+        .expect("the view answers")
+        .unwrap_or_else(|refused| panic!("the validator refuses the block's pricing: {refused}"));
+    assert!(
+        quoted.fee_burn.staker_pool_amount > 0,
+        "the subject: a staker pool is paid"
+    );
+    assert_eq!(
+        template.block.miner_transaction.prefix.outputs[0].amount,
+        quoted.owed.to_raw(),
+        "CEN-F18: the coinbase is the validator's owed"
+    );
+    assert_eq!(template.block_reward, quoted.paid);
+    assert_eq!(template.fees_burned, quoted.burned());
+    assert_eq!(
+        template.miner_fee_income.to_raw(),
+        quoted.fee_burn.miner_fee_income
+    );
+
+    let bodies: u64 = template
+        .transactions
+        .iter()
+        .map(|tx| u64::try_from(tx.weight()).expect("fits"))
+        .sum();
+    let built = u64::try_from(template.block.miner_transaction.weight()).expect("fits");
+    let fill = crate::fill::Fill::listed(
+        median,
+        built,
+        accumulator,
+        tx_volume,
+        &params,
+        bodies,
+        template.total_fees.to_raw(),
+    )
+    .expect("the fill prices the template's block");
+    assert_eq!(
+        template.block_reward.to_raw(),
+        fill.reward(),
+        "the fill's reward"
+    );
 }

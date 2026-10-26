@@ -37,6 +37,12 @@ shekyl-units = { path = "../shekyl-units" }
 shekyl-difficulty = { path = "../shekyl-difficulty" }
 # The block and transaction shapes the store persists as judged.
 shekyl-wire = { path = "../shekyl-wire" }
+# The bundle queue's values (`codec::bundle`): a reference and a body are
+# the retention crate's encodings, carried whole, and the queue's
+# admission window is its schedule. Already a normal dependency of
+# shekyl-chain-rules (rule 17). The slash bench and the admission tests
+# read its constants too.
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 
 [features]
 # The pool file can refuse its next commit after the caller's closure has
@@ -87,12 +93,6 @@ shekyl-address = { path = "../shekyl-address" }
 # dependency of shekyl-chain-rules (rule 17); test-only here — the store
 # derives nothing consensus-visible.
 shekyl-economics = { path = "../shekyl-economics" }
-# The slash geometry the B9 bench (`store::slash_scan_bench_tests`) builds
-# its chain against — the resolution window, the failure window's `M`, the
-# bond floor it asserts left each slashed record. Already a normal
-# dependency of shekyl-chain-rules (rule 17); test-only here, for the same
-# reason as `shekyl-economics`.
-shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 # The leaf-chunk width the leaf-read tests derive their tree shape from
 # (how many leaves fit the first chunk, so where the frontier's depth
 # moves): read from the crate that owns it, not restated. Already a normal

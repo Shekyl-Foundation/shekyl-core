@@ -6747,3 +6747,60 @@ is what the request carries, so a receipt from one stream is not a receipt
 for the other.
 
 ---
+
+## 2026-10-25 — At the filing deadline a read in flight is waited for, bounded by one read (`SCS-P18`)
+
+**Decision (Rick, 2026-10-25; built in `SO-D12` increment 4c,
+`ARCHIVAL_SETTLEMENT_WRITER.md` §16.11).** The specification planned
+reads in `(h, h + W₂ − M]` and filed the bundle by `h + W₂ − M`, which a
+read started at `h + W₂ − M` cannot both meet. At `h + W₂ − M` every read
+not yet started is abandoned and a read in flight is waited for. The wait
+is a bounded rule: one read's worst case, its fetches' timeouts and stall
+retries in blocks at the target interval, is a derived constant
+(`READ_CEILING_BLOCKS`, 19 at the production bounds, with the read's
+random start delay below one block interval) held below `M − 1` at
+build time, so a timeout change cannot quietly eat the margin.
+`h + W₂ − 1` stays as the backstop.
+
+**Why.** A read in flight ends by its own timeouts, not by the window, so
+the margin it spends is one read's, not whatever is left. A persona that
+stalls on purpose delays the bundle by at most that one read and takes a
+miss, since a stall-class last attempt abandons its draw.
+
+**Built with it.** The bound needs a started read never to queue for a
+client slot, so the producer starts no more reads than its client has
+slots; a read that finds none has not started, and is abandoned at the
+deadline like any other.
+
+**Rejected alternative.** Abandoning the read in flight at the deadline:
+it loses a pass the margin can afford.
+
+---
+
+## 2026-10-25 — The bundle queue and the body store land with the producer, in the chain store (`SO-D12p`)
+
+**Decision (Rick, 2026-10-25; built as `SO-D12` increment 4c,
+`ARCHIVAL_SETTLEMENT_WRITER.md` §16.11).** The bundle queue and the body
+store are built with the producer, in the chain store, and the producer
+files to the real queue. Admission to the queue is the bundle rule run
+against the tip through the store's single writer.
+
+**Why.** Built the way it is used after the cutover: the producer's only
+consumer is the queue, and a bundle the queue admits is the gate 4b waits
+on. The queue and the bodies are in the chain store because every body
+must have a holder, and the holders the specification names are this
+file's; a discarded pool file would orphan the bodies it held.
+
+**Rejected alternatives.**
+
+- A `BundleSink` trait with a test sink and a memory outbox, the queue
+  deferred to 4b, was rejected: the outbox was a stand-in nothing could
+  consume before 4b, deleted in 4b (the `regtest_issue_draws` pattern),
+  and the test sink proved a path the product does not have.
+
+**Withdrawn.** The reservation that the queue becomes the admission
+rule's first live caller before the flip: the queue is pool-like state fed
+only by this daemon's own bundles until 4b, and rule 23's falsifier guards
+the connect path, which the queue is not.
+
+---

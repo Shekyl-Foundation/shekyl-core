@@ -740,7 +740,7 @@ async fn every_captured_chain_replays_and_matches_the_daemons_digest() {
 /// (~0.6 s a block in light mode; the depth-3 chain alone is minutes), so
 /// it runs in the live lane, not on every `cargo test`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "real RandomX over every captured chain; minutes. Run in the live lane: cargo test -p shekyl-chain-ingest --features pipeline -- --ignored replays_every_captured_chain_under_the_production_substrate"]
+#[ignore = "real RandomX over every captured chain; minutes; run by nightly.yml's chain-ingest-ignored job"]
 async fn replays_every_captured_chain_under_the_production_substrate() {
     let metrics = Arc::new(Metrics::new());
     let substrate = Arc::new(ProductionSubstrate::new(

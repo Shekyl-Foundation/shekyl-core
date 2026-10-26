@@ -39,7 +39,7 @@ const SAMPLES: usize = 7;
 /// The timer includes the seed's cSHAKE and the entry slice the batch
 /// borrows. Reassembly from the wire stays outside it.
 #[test]
-#[ignore = "a measurement: run --release with --ignored --nocapture"]
+#[ignore = "a measurement; run by nightly.yml's chain-ingest-ignored job"]
 fn h19_batch_cost_at_the_captured_densities() {
     for (dir, manifest) in captured_chains() {
         let corpus = std::fs::read(dir.join("corpus.e2")).expect("read corpus");

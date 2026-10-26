@@ -367,6 +367,13 @@ members = [
     # crate (`check_p_fetch_dep_cut.py`).
     "shekyl-archival-fetch-sched",
 
+    # The serve-credit bundle producer (SO-D12 increment 4c): the witness
+    # ring the template producer draws from, the read plan, and the bundle
+    # a mined block files to the queue. Its fetch read is behind the
+    # `fetch` feature, which only the node's graph enables; the wallet-side
+    # image links the ring alone.
+    "shekyl-bundle-producer",
+
     # rend-spec-v3 onion hostname from an Ed25519 public key. Encoding
     # only — no Tor instance. Wallet serving (`OnionIdentity`) and daemon
     # fetch (`ServingEndpoint`) both read it so the address a persona

@@ -58,6 +58,7 @@
 
 mod alt;
 mod archival;
+mod bundle;
 mod chain;
 mod curve;
 mod degraded;
@@ -92,6 +93,7 @@ pub use archival::{
     RMarket, SettlementRow, SigmaWorkMilli, SlashLogEntry, SlashedHolding, SupportCount,
     SupportIssued, MAX_BOND_KEY_BYTES,
 };
+pub use bundle::{QueuedBody, QueuedBundle};
 pub(crate) use chain::stored_timelock;
 pub use chain::{
     BlockBody, BlockInfo, OutKey, OutTx, RecordedPow, RuleSetInForce, TxIndex, TxOutputIndices,

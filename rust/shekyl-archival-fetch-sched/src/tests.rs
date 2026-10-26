@@ -92,3 +92,58 @@ fn span_arithmetic_is_inclusive_and_saturating() {
     assert_eq!(wide.block_count().to_raw(), 50);
     assert_eq!(wide.time_range_seconds(), 120);
 }
+
+/// One holder never takes more fetches than
+/// `NeedBudget::fetches_per_holder` says, and some sequence of outcomes
+/// takes exactly that many: every sequence of stall, 400, 404 and 503 is
+/// run through the attempt loop's counters, for several budgets. The
+/// bundle producer's read ceiling multiplies the fetch ceiling by this
+/// count, so an undercount is a deadline that does not hold. Red edits:
+/// reset the stall count on a fresh anchor — a sequence takes more; drop
+/// the `+ 2` to `+ 1` — the longest sequence exceeds the count.
+#[test]
+fn a_holder_takes_at_most_its_budgets_fetches() {
+    use shekyl_p_fetch::{FetchError, Stall};
+
+    use crate::read::{HolderRetries, Retry};
+    use crate::NeedBudget;
+
+    let outcomes = || {
+        [
+            FetchError::Stall(Stall::HeadTimeout),
+            FetchError::Rejected,
+            FetchError::Miss,
+            FetchError::Unavailable,
+        ]
+    };
+    for stall_redials in 0..=3 {
+        let budget = NeedBudget {
+            holders: std::num::NonZeroUsize::MIN,
+            stall_redials,
+        };
+        let ceiling = budget.fetches_per_holder();
+        // Sequences one longer than the ceiling: a loop that allowed one
+        // more fetch would take it on one of them.
+        let length = ceiling + 1;
+        let mut longest = 0;
+        for index in 0..4u32.pow(length) {
+            let mut retries = HolderRetries::new(budget);
+            let mut fetches = 0;
+            let mut digits = index;
+            loop {
+                fetches += 1;
+                let error = &outcomes()[(digits % 4) as usize];
+                digits /= 4;
+                if retries.after(error) == Retry::Stop || fetches > ceiling {
+                    break;
+                }
+            }
+            assert!(
+                fetches <= ceiling,
+                "redials {stall_redials}: sequence {index} took {fetches} fetches"
+            );
+            longest = longest.max(fetches);
+        }
+        assert_eq!(longest, ceiling, "redials {stall_redials}");
+    }
+}

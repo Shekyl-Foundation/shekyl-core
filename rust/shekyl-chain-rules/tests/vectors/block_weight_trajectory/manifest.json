@@ -1,0 +1,23 @@
+{
+  "subject": "CEN-G6 / CEN-G6b: the long-term weight trajectory under the maximal-block, pseudorandom and minimal schedules",
+  "file": "trajectory.txt",
+  "generator": "tests/block_weight/block_weight.py",
+  "invocation": "python3 tests/block_weight/block_weight.py > rust/shekyl-chain-rules/tests/vectors/block_weight_trajectory/trajectory.txt (from the repository root)",
+  "regenerate_check": "python3 tests/block_weight/block_weight.py | cmp - rust/shekyl-chain-rules/tests/vectors/block_weight_trajectory/trajectory.txt",
+  "generator_reads": {
+    "config/consensus_constants.json block_weight_short_term_surge_factor": 4
+  },
+  "generated_at_dev_sha": "70f41b37a",
+  "generated_with": "Python 3.13.5",
+  "trajectory_sha256": "9b965bd385ca14958c5985ee1c953497e6448e3bab424bed44b30800d9337c08",
+  "format": "one line per block, 'H <block>, BW <weight>, EMBW <effective median>, LTBW <long-term weight>'; three runs, each restarting at H 0 with both windows full of the zone",
+  "schedule": [
+    {"run": 0, "blocks": 10000, "weight": "2 * EMBW, the largest block the limit admits"},
+    {"run": 1, "blocks": 45000, "weight": "the generator's LCG plus a sine, from 90 bytes up"},
+    {"run": 2, "blocks": 5000, "weight": "90 bytes"}
+  ],
+  "windows": "the generator's: short 100 blocks (the shipped short window), long 5000 blocks (the C++ test's TEST_LONG_TERM window, not the shipped 100000; the rule takes its window from its caller)",
+  "embw_column": "the generator clamps the short-term median below at the zone; the rule clamps it at the long-term effective median (CEN-G6b), as the C++ does, so the rule's effective median is max(EMBW, LTEM). compare.py never compared this column for that reason",
+  "consumer": "rust/shekyl-chain-rules/src/rules/block_weight_tests.rs the_long_term_weight_follows_the_generators_trajectory",
+  "supersedes": "tests/block_weight compare.py (the C++ block_weight binary against this generator)"
+}

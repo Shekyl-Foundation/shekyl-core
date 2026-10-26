@@ -13,6 +13,8 @@ on:
           - proptest-exhaustive
           - store-ignored
           - economics-sim-ignored
+          - chain-ingest-ignored
+          - producer-gate
         default: all
       ref:
         description: "Run over this one ref (a branch or a commit) in place of main and dev. For proving a lane on a branch."
@@ -157,6 +159,52 @@ jobs:
           BRANCH: ${{ matrix.branch }}
         run: bash scripts/ci/ignored_set_chain_store.sh
 
+  producer-gate:
+    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'producer-gate' }}
+    # The bundle producer's gate (`SO-D12` increment 4c,
+    # `ARCHIVAL_SETTLEMENT_WRITER.md` §16.11): a bundle the producer made is
+    # admitted by 4a's verifier on a driven chain and connects through the
+    # staged door. The cutover (4b) does not land until it holds, so a lane
+    # runs it every night. It is `#[ignore]`d because it fills a shard with
+    # real proofs and mines three long epochs; the script runs exactly it,
+    # in release, after asserting it is in the ignored listing.
+    #
+    # Same matrix as above; the script is read from the checked-out ref.
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.branch }}
+          submodules: recursive
+          # The steps below run the checked-out ref's code. It gets no
+          # credential to find in .git/config.
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: ./.github/actions/install-rust
+
+      - name: Cache cargo registry + build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: nightly-producer-gate-${{ matrix.branch }}-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: nightly-producer-gate-${{ matrix.branch }}-
+
+      - name: Run the bundle producer's gate
+        # The subject and its assertion are scripts/ci/producer_gate.sh, in
+        # the tree under test.
+        env:
+          BRANCH: ${{ matrix.branch }}
+        run: bash scripts/ci/producer_gate.sh
+
   economics-sim-ignored:
     if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'economics-sim-ignored' }}
     # The economics sim's `#[ignore]`d set: the two `--stage2` narrations
@@ -211,11 +259,66 @@ jobs:
           BRANCH: ${{ matrix.branch }}
         run: bash scripts/ci/ignored_set_economics_sim.sh
 
+  chain-ingest-ignored:
+    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'chain-ingest-ignored' }}
+    # The chain-ingest crate's `#[ignore]`d set: the scenarios that fill
+    # shards with real proofs (the emission claims, the levered slash chain,
+    # the join, the pool-shim posts), the miner over real RandomX, the
+    # captured-chain replay under the production substrate, and the
+    # measurements (the switch at the genesis cap, the miner's rate, the H19
+    # batch cost). This job is the lane that invokes them. Before it none
+    # did: their ignore strings named a "live lane" no workflow ran, and its
+    # first run (DRS-X PR 3e) found five red on dev: the switch-timing tests
+    # asserted an alt table the death rule (0999f8726) had since emptied, and
+    # the five-block miner test never pinned the seed the miner requires
+    # (e1c39b882). Budget: 44 minutes on a loaded 16-core workstation; 240
+    # for a 4-vCPU runner.
+    # The figures a shared runner prints decide nothing (rule 76); what the
+    # lane asserts is that every ignored test still passes.
+    #
+    # Same matrix as above. The set is read from the checked-out ref's
+    # scripts/ci/ignored_set_chain_ingest.sh, so each leg is judged by its
+    # own tree; `workflow_dispatch` with `ref` proves one branch's set.
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.branch }}
+          submodules: recursive
+          # The steps below run the checked-out ref's code. It gets no
+          # credential to find in .git/config.
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: ./.github/actions/install-rust
+
+      - name: Cache cargo registry + build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: nightly-chain-ingest-ignored-${{ matrix.branch }}-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: nightly-chain-ingest-ignored-${{ matrix.branch }}-
+
+      - name: Run the chain-ingest ignored set
+        # The set and its assertions are scripts/ci/ignored_set_chain_ingest.sh,
+        # in the tree under test: each branch judges itself.
+        env:
+          BRANCH: ${{ matrix.branch }}
+        run: bash scripts/ci/ignored_set_chain_ingest.sh
+
   report-red:
     # A nightly tier without a route to a human "joins a silence"
     # (`run_live_daemon_gates.sh` header, PR #660): these lanes exist
     # because unrun ignored tests rotted unreported, and a red nobody reads
-    # is the same silence one hop later. For each red leg of the two
+    # is the same silence one hop later. For each red leg of the three
     # ignored-test lanes this opens a tracking issue, or comments on the
     # open one so repeats thread.
     #
@@ -225,7 +328,7 @@ jobs:
     #
     # Scheduled runs report. A dispatched run reports only when asked
     # (`report`): the person who dispatched it is reading it.
-    needs: [store-ignored, economics-sim-ignored]
+    needs: [store-ignored, economics-sim-ignored, chain-ingest-ignored, producer-gate]
     if: ${{ failure() && (github.event_name == 'schedule' || inputs.report) }}
     runs-on: ubuntu-latest
     permissions:
@@ -236,11 +339,25 @@ jobs:
         with:
           script: |
             const lanes = {
+              'chain-ingest-ignored': {
+                title: 'nightly chain-ingest ignored set RED',
+                lines: [
+                  'The `chain-ingest-ignored` job (shekyl-chain-ingest `--ignored`: the real-proof scenarios, the miner, the captured-chain replay and the measurements) failed.',
+                  'If the job stopped before running anything, the crate\'s ignored set and the lane\'s list disagree (the error names each test): a new `#[ignore]` is added to `scripts/ci/ignored_set_chain_ingest.sh` or stops being ignored; a listed test that was renamed, deleted or un-ignored is corrected there.',
+                ],
+              },
               'store-ignored': {
                 title: 'nightly chain-store ignored set RED',
                 lines: [
                   'The `store-ignored` job (shekyl-chain-store `--ignored`: the real-spend shard-boundary deletion test and the two benches) failed.',
                   'Either an ignored test no longer builds a chain its constants admit, or the boundary test\'s deletions disagree with the calendar.',
+                ],
+              },
+              'producer-gate': {
+                title: 'nightly bundle producer gate RED',
+                lines: [
+                  'The `producer-gate` job failed. It runs `bundle_producer_gate_tests::a_produced_bundle_is_admitted_and_connects_through_the_staged_door` in `shekyl-chain-ingest` (SO-D12 increment 4c): a produced bundle admitted by the queue and connected through the staged door on a driven chain.',
+                  'If the job stopped before running anything, the test was renamed or un-ignored: point `scripts/ci/producer_gate.sh` at it.',
                 ],
               },
               'economics-sim-ignored': {

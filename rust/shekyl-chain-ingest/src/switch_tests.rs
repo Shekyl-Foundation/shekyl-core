@@ -456,6 +456,7 @@ async fn a_pop_below_the_undo_floor_is_a_local_fail_stop_not_a_verdict() {
     let before = x.digest().await.expect("d");
     let plan = offer_branch(&x, &b).await;
     assert_eq!(plan.demoted.len(), 7, "inside the cap");
+    let held_before = x.alt_blocks_held().await.expect("alt held before");
     match x.reorganize(&plan).await.expect("switch") {
         Switched::BelowFloor { tip, floor } => {
             assert!(tip < floor, "the pop that met the floor");
@@ -467,6 +468,20 @@ async fn a_pop_below_the_undo_floor_is_a_local_fail_stop_not_a_verdict() {
         other => panic!("the floor did not refuse locally: {other:?}"),
     }
     assert_eq!(x.digest().await.expect("d"), before, "nothing moved");
+    // The heavier chain this node could not follow stays stored: the
+    // refusal is local and moves nothing, the alt table included.
+    // Supersedes the alt-store half of the C++ core test
+    // `gen_reorg_watermark_refused_switch` (`expected_alt_count`).
+    assert_eq!(
+        x.alt_blocks_held().await.expect("alt held after"),
+        held_before,
+        "the refused branch's blocks stay in the alt store"
+    );
+    assert!(
+        held_before >= u64::try_from(b.len()).expect("fits"),
+        "the offered branch is held as alternatives: {held_before} < {}",
+        b.len()
+    );
     assert_eq!(x.mine(1).await.len(), 1, "a local refusal is not a halt");
     x.close().await;
     y.close().await;

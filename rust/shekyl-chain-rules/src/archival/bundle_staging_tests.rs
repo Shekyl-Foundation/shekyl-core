@@ -135,8 +135,10 @@ fn the_bundle_rows_are_pending_until_the_cutover() {
 /// module's banner, the census rows' status and the specification's §2
 /// moving with it. Does not cover a caller outside this crate: the store
 /// and the ingest driver are other crates, and `SO-D12`'s cutover is where
-/// they change. The cutover deletes this test in the change that wires
-/// the rule.
+/// they change. The bundle queue (increment 4c) is such a caller, live in
+/// the ingest connector; it judges against the tip and is not the connect
+/// path, so it does not move this test. The cutover deletes this test in
+/// the change that wires the rule.
 #[test]
 fn nothing_on_the_connect_path_calls_the_bundle_verifier() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -148,6 +150,7 @@ fn nothing_on_the_connect_path_calls_the_bundle_verifier() {
         "open_reference",
         "BundleView",
         "judge_bundles",
+        "draw_targets",
     ];
 
     // Rule 47: the connect path's files, by name, each with the identifier

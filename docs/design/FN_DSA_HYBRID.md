@@ -529,7 +529,7 @@ reading of it:
 | receipt | identity endpoint's, small shard | `Malformed::Oversize`, from the head | `tests/scheme_separation.rs` |
 | identity | receipt endpoint's, small shard | `Malformed::EnvelopeShort`, from the head | same |
 | identity | a valid receipt response, shard large enough to pass the head | `Malformed::FrameShort` | `client_scheme_tests.rs` |
-| receipt | a valid identity response, same | `Malformed::FrameLong` | same |
+| receipt | a valid identity response, same | `Malformed::FrameLong`, with exactly the two envelopes' difference left | same |
 | either | an envelope of the right width holding the other scheme's signature | `Malformed::Envelope` | same |
 
 The engine's two capabilities are put through the same four combinations
@@ -564,7 +564,7 @@ its expectations as they were; what changed in them is type plumbing.
 `shekyl-sp-t3-spike`. `shekyl-daemon-image` needed no edit for the
 generalization: its target is the live scheme's, `FetchTarget<HybridPublicKey>`
 over `record.hybrid_pubkey`
-(`rust/shekyl-daemon-image/src/shard_view.rs:95-103`). It is edited by the
+(`rust/shekyl-chain-ingest/src/shard_facts.rs:95-103`). It is edited by the
 cutover, which builds that target over `record.receipt_sign_pk` (§9.4).
 
 ### 9.4 What the cutover does (requirements, ruled 2026-10-12)
@@ -574,12 +574,26 @@ trait, the envelope and both ends of the wire are built. Selecting the
 receipt scheme is: the serving host's key type declares the receipt width
 (`shekyl_p_host::PersonaServing::key`, the one place the host's scheme is
 chosen), `serving/start.rs` constructs `ResidentReceiptKey` there, and the
-daemon builds its fetch targets over the receipt key the bond record
-carries (`shekyl-archival-fetch-sched`'s `Holder::target` and the
-`VerifiedShard` its reads return are pinned at the identity key's type
-today). Each of those is a type the compiler follows; the staged-surface
-test and the `expect(dead_code)` on the capability are removed by the same
-change, deliberately.
+daemon builds its drawn holders' fetch targets over the receipt key the
+bond record carries. Each of those is a type the compiler follows; the
+staged-surface test and the `expect(dead_code)` on the capability are
+removed by the same change, deliberately.
+
+**What `SO-D12` increment 4c already moved** (2026-10-25,
+[`ARCHIVAL_SETTLEMENT_WRITER.md`](ARCHIVAL_SETTLEMENT_WRITER.md) §16.11).
+The fetch scheduler's `Holder` and `Read` take the scheme as a type
+parameter, so a caller that names its own persona chooses it: the bundle
+producer's challenge read names the drawn persona under its receipt key
+already, and a read of the live host, which signs with its identity key,
+files a no-pass bundle. The store-backed facts moved to
+`rust/shekyl-chain-ingest/src/shard_facts.rs`; the holder source there is
+the one drawn-holder target the cutover still switches. **4c selects the
+capability in tests only**: its gate test serves a persona with
+`ResidentReceiptKey` through `shekyl-engine-core`'s `test-helpers`
+feature (`__test_helpers::resident_receipt_key`), and the `expect(dead_code)`
+on the capability is waived for that feature's build alone; the
+production lint lane builds without it, where the falsifier still holds.
+The live switch stays the cutover's (4b).
 
 **The sites, read at `dev@b74187b806` (2026-10-13).** What the cutover
 edits, and what it must not have to:
@@ -588,7 +602,7 @@ edits, and what it must not have to:
 | --- | --- | --- |
 | `rust/shekyl-p-host/src/host.rs:59` (`PersonaServing::key`), `:81`, `:429` | The host's key field is `Arc<dyn PassKey<IDENTITY_ENVELOPE_LEN>>`, its `Debug` prints that type, and the bind hard-codes `PassSigner<IDENTITY_ENVELOPE_LEN>` for the `HostSigner` it wraps the key in | Declares the receipt width at all three; the one place the host's scheme is chosen |
 | `rust/shekyl-engine-core/src/engine/stake_engine/serving/start.rs:257` | `key: ResidentPassKey::new(&stake, active.p_slot)` | Constructs `ResidentReceiptKey` there |
-| `rust/shekyl-daemon-image/src/shard_view.rs:95-103` | The production `FetchTarget`: `HybridPublicKey::from_canonical_bytes(&record.hybrid_pubkey)` into `Holder::target` | Builds the target over `record.receipt_sign_pk` (`FnDsaHybridPublicKey::from_receipt_sign_pk`) |
+| `rust/shekyl-chain-ingest/src/shard_facts.rs:95-103` | The production `FetchTarget`: `HybridPublicKey::from_canonical_bytes(&record.hybrid_pubkey)` into `Holder::target` | Builds the target over `record.receipt_sign_pk` (`FnDsaHybridPublicKey::from_receipt_sign_pk`) |
 | `rust/shekyl-archival-fetch-sched/src/facts.rs:55`; `read.rs:91`, `:460` | `Holder::target` is `FetchTarget<HybridPublicKey>`; `Read::shard` and `HolderOutcome::Served` carry `VerifiedShard<HybridPublicKey>` | The key type follows the target's; the compiler names each |
 | `rust/shekyl-sp-t3-spike/src/harness.rs:354` | The rig's `target()` returns `FetchTarget<HybridPublicKey>` | Follows the same change, or the rig stops measuring the live route |
 | `rust/shekyl-p-loopback/src/lib.rs:153` | `fetch_target<K: PassVerifyingKey>` is already generic; every caller is a test (`shekyl-p-fetch`'s `tests/scheme_separation.rs` passes it both schemes) | No edit; its tests choose a key |

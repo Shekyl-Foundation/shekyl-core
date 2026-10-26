@@ -121,10 +121,10 @@ use super::{
     post_image, AltBlock, AltBlockFacts, AltBodies, BlockDraws, BlockInfo, BondRecord, Canonical,
     Coded, CompleteTreeSet, CoverageGaps, CurveTreeState, DrawableDigest, FirstPayingHeight,
     FollowingDegraded, HeldShard, Holdings, IssuedDigest, IssuedDraw, LayerHash, LeafCount, OutKey,
-    OutTx, PoolRecord, ProbeCell, PropertyCell, RMarket, RecordedPow, RuleSetInForce,
-    SchemaVersion, SettlementEpochBlocks, SettlementRow, SigmaWorkMilli, SlashLogEntry,
-    SlashedHolding, SupportCount, SupportIssued, TreeDepth, TxIndex, TxOutputIndices, UndoEntry,
-    UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
+    OutTx, PoolRecord, ProbeCell, PropertyCell, QueuedBody, QueuedBundle, RMarket, RecordedPow,
+    RuleSetInForce, SchemaVersion, SettlementEpochBlocks, SettlementRow, SigmaWorkMilli,
+    SlashLogEntry, SlashedHolding, SupportCount, SupportIssued, TreeDepth, TxIndex,
+    TxOutputIndices, UndoEntry, UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
 };
 use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
 use crate::pool::PoolSchemaVersion;
@@ -827,6 +827,68 @@ impl Fixtures for IssuedDigest {
         ]
     }
 }
+impl Fixtures for QueuedBundle {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        use shekyl_archival_retention::{BundleKept, BundleRef, PassBitmap};
+        // Inline literals (rule 42): a kept part of nine economy draws with
+        // two passes and two support draws with one, and a prunable hash
+        // whose every byte is distinct.
+        let kept = |count: u32, passes: &[u32], support: PassBitmap| BundleKept {
+            h: BlockHeight::from_raw(0x0102_0304),
+            seed: core::array::from_fn(|i| u8::try_from(0x40 + i).expect("fits")),
+            passes: PassBitmap::from_passes(count, passes.iter().copied()).expect("in range"),
+            support,
+        };
+        let prunable: [u8; 32] = core::array::from_fn(|i| u8::try_from(0x80 + i).expect("fits"));
+        let at = |kept: BundleKept| QueuedBundle {
+            reference: BundleRef::new(kept, prunable),
+            tip_height: BlockHeight::from_raw(0x1112_1314),
+            tip_hash: shekyl_types::BlockHash::from_bytes(core::array::from_fn(|i| {
+                u8::try_from(0xC0 + i).expect("fits")
+            })),
+        };
+        vec![
+            (
+                "economy_and_support",
+                at(kept(
+                    9,
+                    &[0, 8],
+                    PassBitmap::from_passes(2, [1]).expect("in range"),
+                )),
+            ),
+            ("no_draws", at(kept(0, &[], PassBitmap::none()))),
+        ]
+    }
+}
+
+impl Fixtures for QueuedBody {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        use shekyl_archival_retention::{
+            BundleBody, BundleRecord, BUNDLE_SIGNATURE_LEN, BUNDLE_WITNESS_KEY_LEN,
+        };
+        // Inline literals (rule 42): the codec carries the bytes and does
+        // not parse the key or the signatures, so fills stand for them.
+        let key = [0x5Au8; BUNDLE_WITNESS_KEY_LEN];
+        let signature = [0xA5u8; BUNDLE_SIGNATURE_LEN];
+        let record = BundleRecord {
+            attempt: 2,
+            anchor_height: BlockHeight::from_raw(0x2122_2324),
+            delivery_digest: core::array::from_fn(|i| u8::try_from(i).expect("fits")),
+            receipt: [0x3Cu8; BUNDLE_SIGNATURE_LEN],
+        };
+        vec![
+            (
+                "no_records",
+                QueuedBody(BundleBody::new(&key, &signature, &[])),
+            ),
+            (
+                "one_record",
+                QueuedBody(BundleBody::new(&key, &signature, &[record])),
+            ),
+        ]
+    }
+}
+
 impl Fixtures for RecordedPow {
     fn fixtures() -> Vec<(&'static str, Self)> {
         vec![(
@@ -1543,6 +1605,8 @@ snapshotted_codecs! {
     AltBlock => codec_snapshot_alt_block in Chain,
     AltBodies => codec_snapshot_alt_bodies in Chain,
     RecordedPow => codec_snapshot_recorded_pow in Chain,
+    QueuedBundle => codec_snapshot_queued_bundle in Chain,
+    QueuedBody => codec_snapshot_queued_body in Chain,
     PoolRecord => codec_snapshot_pool_record in Pool,
     PoolSchemaVersion => codec_snapshot_pool_schema_version in Pool,
 }
