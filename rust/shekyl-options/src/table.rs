@@ -34,18 +34,11 @@ impl Surface {
     }
 }
 
-/// The grant under which `option show` discloses a row (IG-9, RT-O24).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Grant {
-    /// What a client needs to decide whether it can use the node now.
-    Health,
-    /// This node's own settings that say nothing lasting about it.
-    Status,
-    /// The peer, closed-peer and ban rows.
-    Peers,
-    /// Everything else; the default.
-    Config,
-}
+/// The grant under which `option show` discloses a row (IG-9, RT-O24): the
+/// daemon RPC's own grants (`shekyl-rpc-grants`), one vocabulary for the RPC
+/// and the option table. Rows name `Health`, `Status`, `Peers` or `Config`;
+/// `Config` is the default.
+pub use shekyl_rpc_grants::Grant;
 
 /// Whether a name is live, and how it is shown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

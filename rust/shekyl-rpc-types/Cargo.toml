@@ -24,6 +24,8 @@ shekyl-portable-storage = { path = "../shekyl-portable-storage" }
 # (RK-Q2). Foundational and `no_std`; it brings serde and zeroize, both
 # already in this crate's graph through every consumer.
 shekyl-units = { path = "../shekyl-units" }
+# The grants the method table's policy column names (RPC_CHANNEL.md §6.1).
+shekyl-rpc-grants = { path = "../shekyl-rpc-grants" }
 
 [build-dependencies]
 # VC-1 (CLIENT_VERSION_CONSTANTS_VALIDATION.md §3.4): `build.rs` canonicalises

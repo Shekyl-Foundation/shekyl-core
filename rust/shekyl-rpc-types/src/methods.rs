@@ -6,32 +6,54 @@
 //! The one method table (`RPC_WIRE.md` RW-Q7).
 //!
 //! Every method the daemon serves is one row: its name and the aliases it
-//! answers to, the surface it is served on, who may call it, and whether it
-//! is an armed lever. Dispatch's grant check reads the table; nothing else
+//! answers to, the surface it is served on, who may call it, and what one
+//! request may cost. Dispatch's grant check reads the table; nothing else
 //! lists a method's policy (RK-D6). A gate in `shekyl-daemon-rpc` checks
 //! that every served method is a row and every row is served.
 //!
-//! Two of RW-Q7's columns are not here yet, and say why:
+//! **Who may call it** is [`Policy`] (`RPC_CHANNEL.md` §6.1, RT-O32): every
+//! row is in exactly one grant, or in exactly one of the two classes that are
+//! not grants (host-only data and the armed test levers). A row without a
+//! policy does not compile, and a test checks every row against §6.1.
 //!
-//! - **Request and reply types.** A type is not a value; until the flip,
-//!   the dispatch match is where a name meets its types.
-//! - **The resource bound.** `RPC_CHANNEL.md` §6.3's per-request bounds are
-//!   RT-W10's, and are not built.
+//! **What it may cost** is [`Cost`] (§6.3). Two rows are marked unbounded
+//! until RT-W10 step 2 sets their bounds, and a bounded caller is refused
+//! them.
+//!
+//! One of RW-Q7's columns is not here yet, and says why: **request and reply
+//! types.** A type is not a value; until the flip, the dispatch match is
+//! where a name meets its types.
 //!
 //! The names are today's (`RPC_WIRE.md` RW-Q8: the rename lands after the
 //! flip, at `CORE_RPC_VERSION` 4.0, as one edit of this table).
 
-/// Who may call a method: RW-Q7's grant column.
-///
-/// Before RT-W10's grants exist, a daemon has two listeners: the view
-/// listener (restricted) and the host's own (unrestricted). `Any` is served
-/// on both; `HostOnly` only on the host's (`RPC_CHANNEL.md` RT-O9.2).
+pub use shekyl_rpc_grants::{Grant, GrantSet, Preset};
+
+/// Who may call a method (`RPC_CHANNEL.md` §6.1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Grant {
-    /// Any connection, the view listener included.
-    Any,
-    /// The host administrator only.
+pub enum Policy {
+    /// A connection holding this grant.
+    Grant(Grant),
+    /// Host-only data (RT-O9.3): the host's administrator only, whatever a
+    /// key's ceiling.
     HostOnly,
+    /// An armed test lever (RT-O9.2): the host's administrator only, and only
+    /// while the daemon runs with its armed-lever switch on.
+    Armed,
+    /// The JSON-RPC endpoint itself: it serves any connection, and each
+    /// method on it carries its own policy.
+    Endpoint,
+}
+
+/// What one request may cost (`RPC_CHANNEL.md` §6.3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cost {
+    /// Bounded by its handler, or cheap.
+    Bounded,
+    /// No bound is set yet: a bounded caller (every caller but the host's
+    /// administrator) is refused it as over its resource bound. RT-W10
+    /// step 2 sets the bound.
+    Unbounded,
 }
 
 /// Where a method is served.
@@ -53,11 +75,9 @@ pub struct Method {
     /// Where it is served.
     pub surface: Surface,
     /// Who may call it.
-    pub grant: Grant,
-    /// An armed lever (RW-Q7; `DRS_X_STORE_FLIP.md` DX-Q3, Q8): refused,
-    /// whatever the caller's grant, unless the daemon was started with the
-    /// armed-lever switch on.
-    pub armed: bool,
+    pub policy: Policy,
+    /// What one request may cost.
+    pub cost: Cost,
 }
 
 impl Method {
@@ -71,108 +91,131 @@ impl Method {
     pub fn names(&self) -> impl Iterator<Item = &'static str> {
         core::iter::once(self.name).chain(self.aliases.iter().copied())
     }
+
+    /// Whether this row is an armed test lever.
+    #[must_use]
+    pub const fn armed(&self) -> bool {
+        matches!(self.policy, Policy::Armed)
+    }
 }
 
-const fn json(name: &'static str, aliases: &'static [&'static str], grant: Grant) -> Method {
+const fn json(name: &'static str, aliases: &'static [&'static str], policy: Policy) -> Method {
     Method {
         name,
         aliases,
         surface: Surface::JsonRpc,
-        grant,
-        armed: false,
+        policy,
+        cost: Cost::Bounded,
     }
 }
 
-const fn rest(name: &'static str, aliases: &'static [&'static str], grant: Grant) -> Method {
+const fn rest(name: &'static str, aliases: &'static [&'static str], policy: Policy) -> Method {
     Method {
         name,
         aliases,
         surface: Surface::Rest,
-        grant,
-        armed: false,
+        policy,
+        cost: Cost::Bounded,
     }
 }
 
-const fn armed(method: Method) -> Method {
+const fn unbounded(method: Method) -> Method {
     Method {
-        armed: true,
+        cost: Cost::Unbounded,
         ..method
     }
 }
 
-use Grant::{Any, HostOnly};
+use Grant::{Bans, Chain, Health, MiningControl, MiningWork, Node, Peers, Pool, Status, Submit};
+use Policy::{Armed, Endpoint, HostOnly};
+
+const fn g(grant: Grant) -> Policy {
+    Policy::Grant(grant)
+}
 
 /// The table.
 pub const METHODS: &[Method] = &[
     // JSON-RPC, served natively in Rust.
-    json("get_version", &[], Any),
-    json("get_block_count", &["getblockcount"], Any),
-    json("on_get_block_hash", &["on_getblockhash"], Any),
+    json("get_version", &[], g(Health)),
+    json("get_block_count", &["getblockcount"], g(Chain)),
+    json("on_get_block_hash", &["on_getblockhash"], g(Chain)),
     json(
         "get_block_header_by_height",
         &["getblockheaderbyheight"],
-        Any,
+        g(Chain),
     ),
-    json("get_block", &["getblock"], Any),
-    json("sync_info", &[], HostOnly),
-    json("get_connections", &[], HostOnly),
-    json("get_last_block_header", &["getlastblockheader"], Any),
-    json("get_block_header_by_hash", &["getblockheaderbyhash"], Any),
-    json("get_block_headers_range", &["getblockheadersrange"], Any),
-    json("get_fee_estimate", &[], Any),
-    json("request_archival_shard", &[], HostOnly),
-    json("option_set", &[], HostOnly),
-    json("option_show", &[], Any),
-    json("get_info", &[], Any),
+    json("get_block", &["getblock"], g(Chain)),
+    json("sync_info", &[], g(Peers)),
+    json("get_connections", &[], g(Peers)),
+    json("get_last_block_header", &["getlastblockheader"], g(Chain)),
+    json(
+        "get_block_header_by_hash",
+        &["getblockheaderbyhash"],
+        g(Chain),
+    ),
+    json(
+        "get_block_headers_range",
+        &["getblockheadersrange"],
+        g(Chain),
+    ),
+    json("get_fee_estimate", &[], g(Chain)),
+    json("request_archival_shard", &[], g(Node)),
+    json("option_set", &[], g(Node)),
+    // Rows are each shown under the grant they name (RT-O24).
+    json("option_show", &[], g(Health)),
+    // Fields are each present under their grant (§6.1).
+    json("get_info", &[], g(Health)),
     // JSON-RPC, served by the C++ table until the flip.
-    json("submit_block", &["submitblock"], Any),
-    json("calc_pow", &[], HostOnly),
-    json("get_block_template", &["getblocktemplate"], Any),
-    json("get_miner_data", &[], Any),
-    armed(json("generateblocks", &[], HostOnly)),
-    // RT-O9.2 (`RPC_CHANNEL.md`, ruled 2026-10-09): a regtest lever, the
-    // host's and armed. It deletes at the flip (DX-Q3).
-    armed(json("inject_archival_serve_credit", &[], HostOnly)),
-    json("set_bans", &[], HostOnly),
-    json("get_bans", &[], HostOnly),
-    json("banned", &[], HostOnly),
-    json("flush_txpool", &[], HostOnly),
-    json("get_coinbase_tx_sum", &[], HostOnly),
-    json("get_alternate_chains", &[], HostOnly),
-    json("relay_tx", &[], HostOnly),
-    json("get_txpool_backlog", &[], Any),
-    json("flush_cache", &[], HostOnly),
-    json("get_curve_tree_info", &[], Any),
-    json("get_curve_tree_checkpoint", &[], Any),
-    json("get_archival_emission_claim_source", &[], Any),
-    json("get_archival_shard_coverage", &[], Any),
+    json("submit_block", &["submitblock"], g(MiningWork)),
+    // A computation service (RT-O9.4); its bound is RT-W10 step 2's.
+    unbounded(json("calc_pow", &[], g(MiningWork))),
+    json("get_block_template", &["getblocktemplate"], g(MiningWork)),
+    json("get_miner_data", &[], g(MiningWork)),
+    json("generateblocks", &[], Armed),
+    // RT-O9.2 (`RPC_CHANNEL.md`, ruled 2026-10-09): a regtest lever. It
+    // deletes at the flip (DX-Q3).
+    json("inject_archival_serve_credit", &[], Armed),
+    json("set_bans", &[], g(Bans)),
+    json("get_bans", &[], g(Bans)),
+    json("banned", &[], g(Bans)),
+    json("flush_txpool", &[], g(Node)),
+    // A public chain fact (RT-O9.4); its span bound is RT-W10 step 2's.
+    unbounded(json("get_coinbase_tx_sum", &[], g(Chain))),
+    json("get_alternate_chains", &[], g(Status)),
+    json("relay_tx", &[], g(Node)),
+    json("get_txpool_backlog", &[], g(Pool)),
+    json("flush_cache", &[], g(Node)),
+    json("get_curve_tree_info", &[], g(Chain)),
+    json("get_curve_tree_checkpoint", &[], g(Chain)),
+    json("get_archival_emission_claim_source", &[], g(Chain)),
+    json("get_archival_shard_coverage", &[], g(Chain)),
     // REST.
-    rest("/json_rpc", &[], Any),
-    rest("/get_height", &["/getheight"], Any),
-    rest("/get_transactions", &["/gettransactions"], Any),
-    rest("/get_alt_blocks_hashes", &[], Any),
-    rest("/is_key_image_spent", &[], Any),
-    rest("/submit_transaction", &[], Any),
-    rest("/get_transaction_pool", &[], Any),
-    rest("/get_transaction_pool_hashes", &[], Any),
-    rest("/get_transaction_pool_stats", &[], Any),
-    rest("/get_info", &["/getinfo"], Any),
+    rest("/json_rpc", &[], Endpoint),
+    rest("/get_height", &["/getheight"], g(Chain)),
+    rest("/get_transactions", &["/gettransactions"], g(Chain)),
+    rest("/get_alt_blocks_hashes", &[], g(Status)),
+    rest("/is_key_image_spent", &[], g(Chain)),
+    rest("/submit_transaction", &[], g(Submit)),
+    rest("/get_transaction_pool", &[], g(Pool)),
+    rest("/get_transaction_pool_hashes", &[], g(Pool)),
+    rest("/get_transaction_pool_stats", &[], g(Pool)),
+    rest("/get_info", &["/getinfo"], g(Health)),
     rest(
         "/get_blocks_by_height.bin",
         &["/getblocks_by_height.bin"],
-        Any,
+        g(Chain),
     ),
-    rest("/get_o_indexes.bin", &[], Any),
+    rest("/get_o_indexes.bin", &[], g(Chain)),
     rest("/get_stem_tallies", &[], HostOnly),
-    rest("/start_mining", &[], HostOnly),
-    rest("/stop_mining", &[], HostOnly),
-    rest("/mining_status", &[], HostOnly),
-    rest("/save_bc", &[], HostOnly),
-    rest("/get_peer_list", &[], HostOnly),
-    rest("/set_log_hash_rate", &[], HostOnly),
-    rest("/stop_daemon", &[], HostOnly),
-    rest("/get_net_stats", &[], HostOnly),
-    armed(rest("/pop_blocks", &[], HostOnly)),
+    rest("/start_mining", &[], g(MiningControl)),
+    rest("/stop_mining", &[], g(MiningControl)),
+    rest("/mining_status", &[], g(MiningControl)),
+    rest("/save_bc", &[], g(Node)),
+    rest("/get_peer_list", &[], g(Peers)),
+    rest("/set_log_hash_rate", &[], g(MiningControl)),
+    rest("/stop_daemon", &[], g(Node)),
+    rest("/get_net_stats", &[], g(Status)),
+    rest("/pop_blocks", &[], Armed),
 ];
 
 /// The row for a JSON-RPC method `name`, by its name or an alias.
@@ -211,13 +254,12 @@ mod tests {
     }
 
     /// The armed levers are `generateblocks`, `pop_blocks` and
-    /// `inject_archival_serve_credit`, and each is the host's: an armed lever
-    /// is never served to a view connection, switch or no switch.
+    /// `inject_archival_serve_credit` (§6.1, RT-O9.2), and nothing else is.
     #[test]
-    fn the_armed_levers_are_the_hosts() {
+    fn the_armed_levers_are_the_three() {
         let armed: Vec<&str> = METHODS
             .iter()
-            .filter(|row| row.armed)
+            .filter(|row| row.armed())
             .map(|row| row.name)
             .collect();
         assert_eq!(
@@ -228,10 +270,138 @@ mod tests {
                 "/pop_blocks"
             ]
         );
-        assert!(METHODS
+    }
+
+    /// Every row's policy, written from `RPC_CHANNEL.md` §6.1's table, not
+    /// from the table above: a row moved to another grant fails here, and a
+    /// row added without being placed here fails the exactly-once check.
+    #[test]
+    fn every_row_is_in_exactly_the_policy_section_6_1_gives_it() {
+        let section: &[(&[&str], Policy)] = &[
+            (
+                &[
+                    "get_block_count",
+                    "on_get_block_hash",
+                    "get_block_header_by_height",
+                    "get_block",
+                    "get_last_block_header",
+                    "get_block_header_by_hash",
+                    "get_block_headers_range",
+                    "get_fee_estimate",
+                    "get_coinbase_tx_sum",
+                    "get_curve_tree_info",
+                    "get_curve_tree_checkpoint",
+                    "get_archival_emission_claim_source",
+                    "get_archival_shard_coverage",
+                    "/get_height",
+                    "/get_transactions",
+                    "/is_key_image_spent",
+                    "/get_blocks_by_height.bin",
+                    "/get_o_indexes.bin",
+                ],
+                Policy::Grant(Grant::Chain),
+            ),
+            (
+                &[
+                    "get_txpool_backlog",
+                    "/get_transaction_pool",
+                    "/get_transaction_pool_hashes",
+                    "/get_transaction_pool_stats",
+                ],
+                Policy::Grant(Grant::Pool),
+            ),
+            (
+                &["get_version", "get_info", "/get_info", "option_show"],
+                Policy::Grant(Grant::Health),
+            ),
+            (
+                &[
+                    "get_alternate_chains",
+                    "/get_alt_blocks_hashes",
+                    "/get_net_stats",
+                ],
+                Policy::Grant(Grant::Status),
+            ),
+            (
+                &["sync_info", "get_connections", "/get_peer_list"],
+                Policy::Grant(Grant::Peers),
+            ),
+            (&["/submit_transaction"], Policy::Grant(Grant::Submit)),
+            (
+                &[
+                    "get_block_template",
+                    "get_miner_data",
+                    "submit_block",
+                    "calc_pow",
+                ],
+                Policy::Grant(Grant::MiningWork),
+            ),
+            (
+                &[
+                    "/start_mining",
+                    "/stop_mining",
+                    "/mining_status",
+                    "/set_log_hash_rate",
+                ],
+                Policy::Grant(Grant::MiningControl),
+            ),
+            (
+                &["set_bans", "get_bans", "banned"],
+                Policy::Grant(Grant::Bans),
+            ),
+            (
+                &[
+                    "/stop_daemon",
+                    "/save_bc",
+                    "flush_txpool",
+                    "flush_cache",
+                    "relay_tx",
+                    "request_archival_shard",
+                    "option_set",
+                ],
+                Policy::Grant(Grant::Node),
+            ),
+            (&["/get_stem_tallies"], Policy::HostOnly),
+            (
+                &[
+                    "generateblocks",
+                    "inject_archival_serve_credit",
+                    "/pop_blocks",
+                ],
+                Policy::Armed,
+            ),
+            (&["/json_rpc"], Policy::Endpoint),
+        ];
+        let mut placed = std::collections::BTreeMap::new();
+        for (names, policy) in section {
+            for name in *names {
+                assert!(
+                    placed.insert(*name, *policy).is_none(),
+                    "{name} is placed twice"
+                );
+            }
+        }
+        for row in METHODS {
+            assert_eq!(
+                placed.remove(row.name),
+                Some(row.policy),
+                "{} is not where §6.1 puts it",
+                row.name
+            );
+        }
+        assert!(placed.is_empty(), "placed but not in the table: {placed:?}");
+    }
+
+    /// The two rows whose bound is RT-W10 step 2's are the only unbounded
+    /// ones (§6.3): a bounded caller is refused them until then.
+    #[test]
+    fn only_calc_pow_and_the_coinbase_sum_are_unbounded() {
+        let unbounded: Vec<&str> = METHODS
             .iter()
-            .filter(|row| row.armed)
-            .all(|row| row.grant == Grant::HostOnly));
+            .filter(|row| row.cost == Cost::Unbounded)
+            .map(|row| row.name)
+            .collect();
+        assert_eq!(unbounded, ["calc_pow", "get_coinbase_tx_sum"]);
     }
 
     #[test]

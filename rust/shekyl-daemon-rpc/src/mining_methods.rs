@@ -108,7 +108,7 @@ pub struct Armed(());
 ///
 /// [`ErrorClass::OutsideTheGrant`], whatever the caller's grant.
 pub fn admit_armed(row: &Method, switch_on: bool) -> Result<Armed, RpcError> {
-    if row.armed && !switch_on {
+    if row.armed() && !switch_on {
         return Err(RpcError::new(
             ErrorClass::OutsideTheGrant,
             Diagnostic::new(

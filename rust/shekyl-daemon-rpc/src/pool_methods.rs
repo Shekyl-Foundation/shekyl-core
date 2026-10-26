@@ -14,8 +14,8 @@
 
 use std::collections::BTreeMap;
 
+use crate::authority::Authority;
 use shekyl_rpc_types::errors::RpcError;
-use shekyl_rpc_types::methods::Grant;
 use shekyl_rpc_types::mining::StatusOnlyResponse;
 use shekyl_rpc_types::pool::{
     FlushTxpoolRequest, GetTransactionPoolHashesResponse, GetTransactionPoolResponse,
@@ -28,12 +28,14 @@ use shekyl_types::TxHash;
 use crate::handles::{PoolEntryFacts, PoolFacts};
 use crate::info_facts::PoolScope;
 
-/// The pool a caller under `grant` may see.
+/// The pool a caller with `authority` may see: entries not yet broadcast
+/// are host-only data (`RPC_CHANNEL.md` §6.1, RT-O9.3).
 #[must_use]
-pub const fn scope_for(grant: Grant) -> PoolScope {
-    match grant {
-        Grant::HostOnly => PoolScope::WithUnbroadcast,
-        Grant::Any => PoolScope::Broadcast,
+pub const fn scope_for(authority: Authority) -> PoolScope {
+    if authority.host() {
+        PoolScope::WithUnbroadcast
+    } else {
+        PoolScope::Broadcast
     }
 }
 
@@ -261,17 +263,23 @@ mod tests {
     /// host's administrator is (RT-O9.3).
     #[test]
     fn a_stem_entry_reaches_the_host_and_no_one_else() {
-        assert_eq!(scope_for(Grant::Any), PoolScope::Broadcast);
-        assert_eq!(scope_for(Grant::HostOnly), PoolScope::WithUnbroadcast);
+        assert_eq!(scope_for(Authority::VIEW_LISTENER), PoolScope::Broadcast);
+        assert_eq!(
+            scope_for(Authority::admin_listener(false)),
+            PoolScope::WithUnbroadcast
+        );
         let pool = pool();
-        let anyone = get_transaction_pool(&pool, scope_for(Grant::Any)).expect("listing");
+        let anyone =
+            get_transaction_pool(&pool, scope_for(Authority::VIEW_LISTENER)).expect("listing");
         assert_eq!(anyone.transactions.len(), 1);
         assert!(anyone.transactions[0].relayed);
-        let host = get_transaction_pool(&pool, scope_for(Grant::HostOnly)).expect("listing");
+        let host = get_transaction_pool(&pool, scope_for(Authority::admin_listener(false)))
+            .expect("listing");
         assert_eq!(host.transactions.len(), 2);
         assert_eq!(host.spent_key_images.len(), 1, "one image, two spenders");
         assert_eq!(host.spent_key_images[0].txs_hashes.len(), 2);
-        let hashes = get_transaction_pool_hashes(&pool, scope_for(Grant::Any)).expect("hashes");
+        let hashes = get_transaction_pool_hashes(&pool, scope_for(Authority::VIEW_LISTENER))
+            .expect("hashes");
         assert_eq!(hashes.tx_hashes, vec![HashHex::from_bytes([1; 32])]);
     }
 

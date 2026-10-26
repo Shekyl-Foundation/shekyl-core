@@ -31,20 +31,24 @@
 //! Each handler is a thin async wrapper that offloads the blocking C++ FFI call
 //! to a Tokio blocking thread.
 
+use crate::authority::Authority;
 use crate::server::AppState;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
+use axum::Extension;
 use std::sync::Arc;
 
 /// Offload one blocking C++ JSON dispatch; `None` on FFI failure.
 async fn dispatch_json_raw(
     state: &Arc<AppState>,
+    authority: Authority,
     uri: &'static str,
     body: String,
 ) -> Option<String> {
     let core = state.core.clone();
-    let restricted = state.restricted;
+    // The FFI's flag is still the listener posture: restricted is not host.
+    let restricted = !authority.host();
     tokio::task::spawn_blocking(move || core.json_endpoint(uri, &body, restricted))
         .await
         .ok()
@@ -73,8 +77,13 @@ fn json_error(reason: &str) -> (StatusCode, [(&'static str, &'static str); 1], S
     )
 }
 
-async fn dispatch_json(state: Arc<AppState>, uri: &'static str, body: String) -> impl IntoResponse {
-    match dispatch_json_raw(&state, uri, body).await {
+async fn dispatch_json(
+    state: Arc<AppState>,
+    authority: Authority,
+    uri: &'static str,
+    body: String,
+) -> impl IntoResponse {
+    match dispatch_json_raw(&state, authority, uri, body).await {
         Some(json) => json_ok(json),
         None => json_dispatch_error(),
     }
@@ -84,14 +93,13 @@ macro_rules! json_handler {
     ($fn_name:ident, $uri:expr) => {
         pub async fn $fn_name(
             State(state): State<Arc<AppState>>,
+            Extension(authority): Extension<Authority>,
             body: String,
         ) -> impl IntoResponse {
-            dispatch_json(state, $uri, body).await
+            dispatch_json(state, authority, $uri, body).await
         }
     };
 }
-
-// Unrestricted endpoints
 
 /// `/get_height` (alias `/getheight`) — served natively (RK-1,
 /// `docs/completed/DAEMON_RPC_KV_CUTOVER.md`): the body is ignored, as the C++
@@ -135,11 +143,13 @@ enum TxFault {
 /// (RK-4c). The gather is one FFI call answering per request slot; the
 /// `(split, prune, decode_as_json)` matrix and both refusals are Rust's.
 ///
-/// `state.restricted` decides two things the C++ could not, because the bridge
-/// passed a null `ctx` until #570: the request cap, and whether the pool read
-/// may disclose a transaction the node has not broadcast.
+/// The connection's [`Authority`] decides two things the C++ could not,
+/// because the bridge passed a null `ctx` until #570: the request cap (a
+/// bounded caller's), and whether the pool read may disclose a transaction
+/// the node has not broadcast (the host's alone).
 pub async fn get_transactions(
     State(state): State<Arc<AppState>>,
+    Extension(authority): Extension<Authority>,
     body: String,
 ) -> impl IntoResponse {
     let request: shekyl_rpc_types::GetTransactionsRequest = if body.trim().is_empty() {
@@ -153,8 +163,10 @@ pub async fn get_transactions(
             }
         }
     };
-    let restricted = state.restricted;
-    if restricted && request.txs_hashes.len() > crate::methods::RESTRICTED_TRANSACTIONS_COUNT {
+    // A bounded caller's cap (§6.3); RT-W10 step 2 sets the bound per row.
+    if authority.bounded()
+        && request.txs_hashes.len() > crate::methods::RESTRICTED_TRANSACTIONS_COUNT
+    {
         return json_ok(status_only(
             "Too many transactions requested in restricted mode",
         ));
@@ -168,10 +180,10 @@ pub async fn get_transactions(
     };
     let core = state.core.clone();
     let result = tokio::task::spawn_blocking(move || {
-        // `!restricted` is the pool's sensitivity flag: false withholds a
-        // transaction that is not `relay_category::broadcasted` (§2.2).
+        // The host flag is the pool's sensitivity flag: entries not yet
+        // broadcast are host-only data (§6.1, RT-O9.3).
         let (slots, chain_height) = core
-            .transactions(&ids, !restricted)
+            .transactions(&ids, authority.host())
             .map_err(TxFault::Facts)?;
         // A rendering the daemon cannot produce fails the request rather than
         // answering OK with an empty `as_json`, which is what the C++ did and
@@ -216,6 +228,7 @@ pub async fn get_transactions(
 /// `GET|POST /is_key_image_spent` — served natively (RK-4c).
 pub async fn is_key_image_spent(
     State(state): State<Arc<AppState>>,
+    Extension(authority): Extension<Authority>,
     body: String,
 ) -> impl IntoResponse {
     let request: shekyl_rpc_types::IsKeyImageSpentRequest = if body.trim().is_empty() {
@@ -229,7 +242,7 @@ pub async fn is_key_image_spent(
             }
         }
     };
-    if state.restricted
+    if authority.bounded()
         && request.key_images.len() > crate::methods::RESTRICTED_SPENT_KEY_IMAGES_COUNT
     {
         return json_ok(status_only(
@@ -299,9 +312,13 @@ json_handler!(get_transaction_pool_stats, "/get_transaction_pool_stats");
 /// The listener's posture becomes a [`crate::info::Disclosure`], and the
 /// method reads only the parts that disclosure shows (RK-D24). This server's
 /// own connection count is the transport's to supply; it is a Status field.
-pub async fn get_info(State(state): State<Arc<AppState>>, _body: String) -> impl IntoResponse {
+pub async fn get_info(
+    State(state): State<Arc<AppState>>,
+    Extension(authority): Extension<Authority>,
+    _body: String,
+) -> impl IntoResponse {
     let core = state.core.clone();
-    let disclosure = crate::info::Disclosure::from_listener(state.restricted);
+    let disclosure = authority.disclosure();
     let rpc_connections = state.conn_tracker.active_total();
     let result = tokio::task::spawn_blocking(move || {
         let facts = crate::info_facts::FfiInfoFacts::new(core);
@@ -389,9 +406,13 @@ mod tests {
 /// (IG-11), in the REST envelope with the diagnostic's text; only a request
 /// both rows accept is dispatched. The network check on the address stays
 /// the miner's, as at startup.
-pub async fn start_mining(State(state): State<Arc<AppState>>, body: String) -> impl IntoResponse {
+pub async fn start_mining(
+    State(state): State<Arc<AppState>>,
+    Extension(authority): Extension<Authority>,
+    body: String,
+) -> impl IntoResponse {
     match validate_start_mining(&body) {
-        Ok(()) => dispatch_json(state, "/start_mining", body)
+        Ok(()) => dispatch_json(state, authority, "/start_mining", body)
             .await
             .into_response(),
         Err(reason) => json_refused(&reason).into_response(),
@@ -565,36 +586,30 @@ fn render<T: serde::Serialize>(
 
 /// `/get_stem_tallies` — per-successor relay outcome counts (§55).
 ///
-/// **Admin-only (unrestricted listener), and the reason belongs here rather
-/// than in the route table.** In daemon RPC terms: `restricted` is the
-/// *public* limited listener; this route is selected only when
-/// `!restricted` via `server::served_paths`. This endpoint *is* the
+/// **Host-only data (`RPC_CHANNEL.md` §6.1, RT-O9.3), and the reason
+/// belongs here rather than in the method table.** This endpoint *is* the
 /// anonymity graph: which peers this node stems to, and how each has
 /// behaved. Sharma Appendix B spends 50–100 probes per node to reconstruct
-/// exactly that, so serving it on the public listener hands over — for free
-/// and with better fidelity — what an attacker otherwise pays for. **It is
-/// not "just counters": the peer set is the sensitive part, and the counts
-/// merely make it legible.** If anyone later proposes moving this onto the
-/// restricted (public) set, that is the argument to answer first.
+/// exactly that, so serving it to anyone but the host's administrator hands
+/// over — for free and with better fidelity — what an attacker otherwise
+/// pays for. **It is not "just counters": the peer set is the sensitive
+/// part, and the counts merely make it legible.** If anyone later proposes
+/// moving it into a grant, that is the argument to answer first.
 ///
 /// Raw counts, matching the relay layer's own refusal to pre-compute a rate:
 /// the consumer of this endpoint is a human tuning `n_min`, `cut` and
 /// `cooldown`, and a rate would pick the accumulator's memory policy for
 /// them.
 ///
-/// # The gate lives in the route table (§69, §70)
+/// # The gate is the method table's policy
 ///
-/// This route's `Visibility::AdminOnly` row in `server::ROUTES` is the privacy
-/// fact; `server::served_routes` applies `restricted`; `server::assemble`
-/// registers exactly that, and [`crate::server::build_router`] is
-/// `assemble` plus layers. The gate is asserted **on the assembled router**:
-/// a dummy-handler build of the real table answers 200 for this path when
-/// unrestricted and 404 when restricted, and the specification the assertions
-/// run against is written out independently of the route table, so a path
-/// *moved* between listeners fails rather than silently changing the oracle.
-/// A daemon fixture is not owed: the property is route-table selection, and
-/// naming this handler from a test would pull `core_rpc_ffi_*` into the lib
-/// test binary.
+/// The row's policy is `HostOnly`, and the request layer
+/// (`crate::authority::stamp`) refuses this path to every connection that is
+/// not the host's administrator before the handler runs. The gate is asserted
+/// on the assembled router, against a specification written out
+/// independently of the table, so a row moved into a grant fails rather than
+/// silently changing the oracle. A daemon fixture is not owed: naming this
+/// handler from a test would pull `core_rpc_ffi_*` into the lib test binary.
 pub async fn get_stem_tallies(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let core = state.core.clone();
     match tokio::task::spawn_blocking(move || core.stem_tallies())
