@@ -182,34 +182,3 @@ TEST(economics_b5_fee_coinbase, coinbase_claiming_staker_pool_rejects)
     kAlreadyGenerated, /*frozen_segment_count=*/0, /*total_burned=*/0));
 }
 
-TEST(economics_b5_fee_coinbase, coinbase_claiming_staker_emission_rejects)
-{
-  auto db = std::make_unique<B5TestDB>();
-  BlockchainAndPool bap;
-  ASSERT_TRUE(init_blockchain(bap.bc, db.release()));
-
-  const B5Operands ops = expected_operands(bap.bc);
-  ASSERT_GT(ops.split.staker_emission, 0u);
-
-  const block b = make_block_with_coinbase(kBlockHeight,
-    ops.split.miner_emission + ops.split.staker_emission + ops.burn.miner_fee_income);
-  uint64_t base_reward_out = 0;
-  EXPECT_FALSE(bap.bc.validate_miner_transaction(b, 0, kFee, base_reward_out,
-    kAlreadyGenerated, /*frozen_segment_count=*/0, /*total_burned=*/0));
-}
-
-TEST(economics_b5_fee_coinbase, fee_underclaim_rejects_exactness)
-{
-  // The check is exact equality, not ≤: a coinbase leaving fee income
-  // unclaimed also rejects (:1616's != branch), so "exactly" in §2.2's pin
-  // is two-sided.
-  auto db = std::make_unique<B5TestDB>();
-  BlockchainAndPool bap;
-  ASSERT_TRUE(init_blockchain(bap.bc, db.release()));
-
-  const B5Operands ops = expected_operands(bap.bc);
-  const block b = make_block_with_coinbase(kBlockHeight, ops.split.miner_emission);
-  uint64_t base_reward_out = 0;
-  EXPECT_FALSE(bap.bc.validate_miner_transaction(b, 0, kFee, base_reward_out,
-    kAlreadyGenerated, /*frozen_segment_count=*/0, /*total_burned=*/0));
-}

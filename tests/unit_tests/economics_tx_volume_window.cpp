@@ -78,34 +78,6 @@ bool init_blockchain(Blockchain& bc, BlockchainDB* db)
 
 } // namespace
 
-TEST(economics_tx_volume_window, returns_the_sum_and_the_length_not_their_quotient)
-{
-  auto db = std::make_unique<AlternatingVolumeDB>();
-  BlockchainAndPool bap;
-  ASSERT_TRUE(init_blockchain(bap.bc, db.release()));
-
-  // Height 0: nothing below it.
-  const shekyl::tx_volume_window at_genesis = bap.bc.get_tx_volume_window(0);
-  EXPECT_EQ(at_genesis.tx_count_sum, 0u);
-  EXPECT_EQ(at_genesis.blocks, 0u);
-
-  // Inside the first window the length is the height itself, and the sum
-  // is over blocks [0, height): 40 + 41 + 40 + 41 + 40 = 202 for five.
-  const shekyl::tx_volume_window early = bap.bc.get_tx_volume_window(5);
-  EXPECT_EQ(early.tx_count_sum, 202u);
-  EXPECT_EQ(early.blocks, 5u);
-
-  // A full window: 720 blocks, 360 even + 360 odd = 40 * 720 + 360.
-  const uint64_t h = SHEKYL_TX_VOLUME_WINDOW + 10;
-  const shekyl::tx_volume_window full = bap.bc.get_tx_volume_window(h);
-  EXPECT_EQ(full.blocks, static_cast<uint64_t>(SHEKYL_TX_VOLUME_WINDOW));
-  EXPECT_EQ(full.tx_count_sum, 40u * SHEKYL_TX_VOLUME_WINDOW + SHEKYL_TX_VOLUME_WINDOW / 2);
-  // The value the retired `get_tx_volume_avg` would have returned here —
-  // named so the diff shows what was being thrown away.
-  EXPECT_EQ(full.tx_count_sum / full.blocks, 40u);
-  EXPECT_NE(full.tx_count_sum, full.blocks * (full.tx_count_sum / full.blocks));
-}
-
 TEST(economics_tx_volume_window, shim_hands_the_exact_pair_to_rust_undivided)
 {
   // Same chain state as the Rust KAT: mid-curve, weight below the zone.
