@@ -75,7 +75,7 @@ impl LinkFold {
             }
             DialOutcome::PayloadRefused(_) => {}
             DialOutcome::DialFailed(..)
-            | DialOutcome::PeerlistRefused(_)
+            | DialOutcome::PeerlistRefused(..)
             | DialOutcome::Confirmed(_)
             | DialOutcome::SessionAccepted(_) => {
                 next.opened = next.opened.saturating_add(1);
@@ -134,7 +134,7 @@ mod tests {
         for reply in [0x01, 0x06, 0xF0, 0xF2, 0xF3, 0xF7] {
             fold.observe(
                 ConnectorId::Tor,
-                &failed(0, CloseCause::proxy_refused(reply)),
+                &failed(0, CloseCause::proxy_refused(reply, 0)),
                 0,
             );
         }
@@ -178,7 +178,7 @@ mod tests {
         fold.observe(ConnectorId::Tor, &DialOutcome::SessionAccepted(onion(0)), 1);
         fold.observe(
             ConnectorId::Tor,
-            &failed(1, CloseCause::proxy_refused(0x06)),
+            &failed(1, CloseCause::proxy_refused(0x06, 0)),
             1,
         );
         let opened = fold.tally();

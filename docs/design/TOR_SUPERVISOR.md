@@ -185,11 +185,13 @@ supervisor makes case (ii) routine, so it is closed first. **Proposed fix,
 without touching the list rule:** the preconditions are part of the plan. No
 draw happens unless the connector's link is usable and the tip and network id
 are known; while the link is down the owner loop waits on the link's change,
-not on a timer. A local failure that races the link's fall costs one draw per
-incident. The drop stays: a non-implicating `DialFailed` is not returned to gray
-(closed by the P2P lane, Rick, 2026-10-16, #1092; the dialer brief, "The
-fill"). Implication decides the failed-address memory, not list membership,
-and on clearnet nothing implicates, so the drop is what clears dead hosts.
+not on a timer. A local failure that races the link's fall cools one address
+for one rung per incident: a `DialFailed` whose cause proves no misbehaviour
+cools its address on gray, and only proof drops it (the gray lifecycle, Rick,
+2026-10-24; the dialer brief, "The fill"). *Records-was (Rick, 2026-10-16,
+#1092): the drop stayed, costing one draw per incident; implication decided the
+failed-address memory, not list membership, and on clearnet nothing implicated,
+so the drop was what cleared dead hosts.*
 
 **TSR-F2 (high; Tor lane). Subscribing to events makes the sink a memory
 channel an outsider can fill.** `EventSink` wraps an unbounded `mpsc`. Once
@@ -415,19 +417,24 @@ an onion with no descriptor answers `0xF0`, or `0x06` when the fetch runs
 long; a dead service with a published descriptor answers `0xF2`; and real
 peers that are down answer `0x06`. A blocked link answers `0x06` too (§7,
 case A on 2026-10-25). So no reply is a verdict on the link, which only
-Tor can judge (`TSR-Q14`). The table drives the address memory
-(`implicates_address`) and nothing else:
+Tor can judge (`TSR-Q14`). The marks live in `proxy_reply_marks`
+(`shekyl-tor/src/replies.rs`); the lists read the marks, and a failed test
+cools. *Records-was: the address memory, `implicates_address`.*
 
 | Reply | About | Goes to |
 | --- | --- | --- |
 | `0x00` | — | a stream opened: the posture line's display only |
-| `0x01`, `0x04`, `0x05`, `0xF0`, `0xF1`, `0xF2` | the destination | the address memory. `0x01` arrives only through a working rendezvous: a blocked link never produced it. **Residual** (`LV3_CONNECTION_OBJECT.md:1829`; `IMPLEMENTATION_INDEX.md:798`): an attacker on the directories responsible for a target's key can force reply `0x04`, and with `ExtendedErrors` on it forces `0xF0` (descriptor not found) instead; either buys only Tor's short backoff. It stays a residual under the dialer's failure memory (240 s, doubling to an hour, `rust/shekyl-dialer/src/memory.rs:34-38`): that attacker already makes the onion unreachable for everyone, and our memory only reflects it |
-| `0x02`, `0x03`, `0x06`, `0xF3`, `0xF7`; our SOCKS port refusing or closing without a reply (`ProxyUnavailable`) | neither, alone | display only. `0x06` stays out of the memory: a blocked link answers it for every peer, and remembering it would empty the candidate set for an hour |
+| `0x01`, `0x04`, `0x05`, `0xF0`, `0xF1`, `0xF2` | the destination | the lists, as a failed test (the gray lifecycle, 2026-10-24). `0x01` arrives only through a working rendezvous, so it is final: a blocked link never produced it. `0x04`, `0xF0` and `0xF2` are worth a retry within the test. `0x05` and `0xF1` are final. None proves misbehaviour, so the address cools (2 min, doubling to 1 h) and is never dropped for them. **Residual** (`LV3_CONNECTION_OBJECT.md:1829`; `IMPLEMENTATION_INDEX.md:798`): an attacker on the directories responsible for a target's key can force reply `0x04`, and with `ExtendedErrors` on it forces `0xF0` (descriptor not found) instead; either fails one test and buys one rung of the cooldown. That attacker already makes the onion unreachable for everyone, and our cooldown only reflects it. *Records-was: the address memory, 240 s doubling to an hour, `shekyl-dialer/src/memory.rs`* |
+| `0x02`, `0x03`, `0x06`; our SOCKS port refusing or closing without a reply (`ProxyUnavailable`) | neither, alone | display only. `0x06` is worth a retry within the test, and it stays out of the destination set: a blocked link answers it for every peer, and treating it as the destination would cool the candidate set |
+| `0xF3`, `0xF7` | neither, alone | display only, and worth a retry within the test. They are not a rate and not a link verdict |
 | `0x07`, `0x08`, `0xF4`, `0xF5`, `0xF6` | this node (we never send what draws these) | the defect log; never peer or link evidence |
 
 What a Tor dial's close tells the supervisor is one fact,
-`CloseCause::opened_a_stream` (`shekyl-transport-layer`): whether the dial
-reached a peer. The dialer counts opened and unopened dials and the
+`CloseCause::opened_a_stream` (`shekyl-transport-layer`): whether the dial's
+channel existed before the close. The D12 phase says so. A kind that applies
+once the channel exists, and not before it, reached a peer. A proxy reply is
+before the channel. This node's own close applies in every phase and is not
+an opened stream. The dialer counts opened and unopened dials and the
 sessions it holds, outbound ones it kept and inbound rows on the board.
 A payload refusal is a kept session the payload owner declined, not
 another opened dial. An inbound accept is a held session and not a dial,

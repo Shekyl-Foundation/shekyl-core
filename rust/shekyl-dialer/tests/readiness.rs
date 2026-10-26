@@ -155,10 +155,12 @@ fn a_stopped_link_is_not_described_as_an_exit() {
 }
 
 /// The control: the same wakes over a usable link dial, and each failed
-/// dial costs its address. This is what a down link did before the plan
-/// read it.
+/// dial cools its address, so it is not drawn again until its cooldown
+/// ends. This is what a down link did before the plan read it, when a
+/// failed draw still left gray. *Records-was (to 2026-10-24): "three
+/// draws, three addresses gone".*
 #[test]
-fn the_same_wakes_over_a_usable_link_draw_and_lose_their_addresses() {
+fn the_same_wakes_over_a_usable_link_draw_and_cool_their_addresses() {
     let dialer = dialer(&ManualClock::new(Tick::new(1)), tip());
     dialer.set_network_id([7; 16]);
     assert!(
@@ -172,7 +174,13 @@ fn the_same_wakes_over_a_usable_link_draw_and_lose_their_addresses() {
         "the test route was not already usable"
     );
     assert_eq!(wakes(&dialer, 3), 3);
-    assert_eq!(gray(&dialer).len(), 1, "three draws, three addresses gone");
+    let gray = gray(&dialer);
+    assert_eq!(gray.len(), 4, "three draws, nothing gone");
+    let cooling = gray
+        .iter()
+        .filter(|address| dialer.shared().lists.is_cooling(address))
+        .count();
+    assert_eq!(cooling, 3, "three draws, three addresses cooling");
 }
 
 #[test]
@@ -293,9 +301,14 @@ fn the_owner_loop_waits_on_the_link_and_resumes_when_it_returns() {
         .handle()
         .register(OwnerClass::Interim)
         .expect("nudge");
+    // A dial that fails cools its address rather than dropping it (the gray
+    // lifecycle), so the sign of a dial is a cooling address.
     wait_until("the loop did not dial after the link returned", || {
-        gray(&dialer).len() < before.len()
+        gray(&dialer)
+            .iter()
+            .any(|address| dialer.shared().lists.is_cooling(address))
     });
+    assert_eq!(gray(&dialer).len(), before.len(), "nothing left gray");
     assert!(fires() >= 1);
 
     // Closing the engine ends the loop wherever it waits.

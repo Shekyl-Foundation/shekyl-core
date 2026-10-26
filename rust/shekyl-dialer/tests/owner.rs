@@ -38,7 +38,7 @@ use shekyl_peerlist::{
 use shekyl_seam::{
     Channel, Dial, Endpoint, Hub, Loopback, Post, Route, RoutePublish, SocketId, SyncPayload,
 };
-use shekyl_timing_engine::ManualClock;
+use shekyl_timing_engine::{Clock, ManualClock};
 use shekyl_transport_layer::Sockets;
 use tokio::sync::oneshot;
 
@@ -54,6 +54,11 @@ struct Rig {
 /// A hub whose adapter arms the handler on `established`, as the daemon's
 /// does, from another thread: the post is made under the hub's lock.
 fn hub_with_arming(posts: &Arc<Mutex<VecDeque<Post>>>) -> Hub {
+    hub_with_arming_on(posts, &ManualClock::new(Tick::new(1)))
+}
+
+/// [`hub_with_arming`] on a clock the test holds, so it can move time.
+fn hub_with_arming_on(posts: &Arc<Mutex<VecDeque<Post>>>, clock: &ManualClock) -> Hub {
     let queue = Arc::clone(posts);
     let armer: Arc<Mutex<Option<Hub>>> = Arc::new(Mutex::new(None));
     let armer_in_post = Arc::clone(&armer);
@@ -72,7 +77,7 @@ fn hub_with_arming(posts: &Arc<Mutex<VecDeque<Post>>>) -> Hub {
             }
             queue.lock().expect("posts").push_back(post);
         }),
-        Arc::new(ManualClock::new(Tick::new(1))),
+        Arc::new(clock.clone()),
     );
     *armer.lock().expect("armer") = Some(hub.clone());
     hub
@@ -347,15 +352,12 @@ fn another_network_is_a_rejected_handshake_with_no_row_and_no_post() {
         "nothing was posted"
     );
     let shared = rig.dialer.shared();
-    assert!(
-        !shared.lists.is_gray(&peer(1)),
-        "DialFailed drops the outstanding draw"
-    );
+    // A clearnet rejection proves nothing (no authenticated destination), so
+    // the draw returns to gray and cools (the gray lifecycle). *Records-was
+    // (to 2026-10-24): DialFailed dropped the outstanding draw.*
+    assert!(shared.lists.is_gray(&peer(1)), "the draw stays gray");
+    assert!(shared.lists.is_cooling(&peer(1)), "and cools");
     assert!(!shared.lists.is_white(&peer(1)));
-    assert!(
-        !shared.memory.is_recently_failed(&peer(1), Tick::new(1)),
-        "a clearnet rejection writes no memory (R2)"
-    );
 }
 
 #[test]
@@ -382,7 +384,9 @@ fn a_refused_peerlist_is_peerlist_refused_with_no_row() {
         !shared.lists.is_gray(&peer(2)),
         "R4: none of the list entered gray"
     );
-    assert!(!shared.lists.is_gray(&peer(1)), "the draw was dropped");
+    // On clearnet a refused list proves nothing, so the draw cools in gray.
+    // *Records-was (to 2026-10-24): the draw was dropped.*
+    assert!(shared.lists.is_cooling(&peer(1)), "the draw cools");
 }
 
 #[test]
@@ -430,10 +434,9 @@ fn a_dial_that_cannot_open_is_dial_failed_with_the_cause() {
         .dial(ConnectorId::Clearnet, &peer(1), DialAim::Keep, &mut rng)
         .is_none());
     assert!(hub.board().is_empty());
-    assert!(
-        !dialer.shared().lists.is_gray(&peer(1)),
-        "the draw was dropped"
-    );
+    // A local close is a connection problem: the draw cools in gray.
+    // *Records-was (to 2026-10-24): the draw was dropped.*
+    assert!(dialer.shared().lists.is_cooling(&peer(1)), "the draw cools");
 }
 
 /// **A close between `adopt` and the kept row is remembered** (Copilot on
@@ -499,6 +502,9 @@ struct GapDial {
     driven: Mutex<Vec<SocketId>>,
     retired: Mutex<Vec<SocketId>>,
     answers: Mutex<VecDeque<Vec<u8>>>,
+    /// Causes the next connects fail with, in order, before any channel
+    /// opens: the connector refusing the dial, as a SOCKS reply would.
+    refusals: Mutex<VecDeque<CloseCause>>,
 }
 
 impl GapDial {
@@ -509,7 +515,16 @@ impl GapDial {
             driven: Mutex::new(Vec::new()),
             retired: Mutex::new(Vec::new()),
             answers: Mutex::new(VecDeque::new()),
+            refusals: Mutex::new(VecDeque::new()),
         }
+    }
+
+    /// Fail the next connects with `refusals`, in order, then answer each
+    /// later channel from `answers`.
+    fn refusing_then_answering(refusals: Vec<CloseCause>, answers: Vec<Vec<u8>>) -> Self {
+        let dial = Self::answering(answers);
+        *dial.refusals.lock().expect("refusals") = refusals.into();
+        dial
     }
 
     fn answering(answers: Vec<Vec<u8>>) -> Self {
@@ -530,6 +545,9 @@ impl Dial for GapDial {
         ceiling: InboundCeiling,
         now: Tick,
     ) -> Result<Channel, CloseCause> {
+        if let Some(cause) = self.refusals.lock().expect("refusals").pop_front() {
+            return Err(cause);
+        }
         let mut channel = self.inner.connect(endpoint, ceiling, now)?;
         if let Some(answer) = self.answers.lock().expect("answers").pop_front() {
             assert!(self.inner.inject(channel.open.id(), answer));
@@ -1004,4 +1022,198 @@ fn an_inbound_tor_session_is_held_and_is_not_an_opened_dial() {
         TorLinkTally::default(),
         "the close leaves the dial counts alone"
     );
+}
+
+/// **A Tor peer sending a list over D3 is dropped** (the gray lifecycle,
+/// test 6c). The onion is the peer's key, so a refused list on Tor is
+/// authenticated misbehaviour: the Levin layer stamps the refusal as proof,
+/// and the lists drop the address instead of cooling it. The same list on
+/// clearnet proves nothing and only cools.
+#[test]
+fn a_tor_peer_sending_a_list_over_d3_is_dropped() {
+    let onion = |n: u8| NetworkAddress::Tor {
+        host: shekyl_onion_v3::v3_onion_hostname(&[n; 32]),
+        port: 18080,
+    };
+    let peer_onion = onion(1);
+    // Thirteen entries: one over DISCLOSE_COUNT.
+    let over_d3: Vec<NetworkAddress> = (10u8..23).map(onion).collect();
+    assert_eq!(over_d3.len(), shekyl_peerlist::DISCLOSE_COUNT + 1);
+
+    let posts = Arc::new(Mutex::new(VecDeque::new()));
+    let hub = hub_with_arming(&posts);
+    let dial = Arc::new(GapDial::answering(vec![reply(NETWORK, over_d3.clone())]));
+    hub.install_dial(Arc::clone(&dial) as Arc<dyn Dial>);
+    let dialer = dialer_for(&hub);
+    let mut rng = SplitMix64::new(13);
+    // The Tor link is usable too, so the dialer dials onions.
+    assert!(matches!(
+        hub.links().publish_usable(
+            ConnectorId::Tor,
+            Route::Socks(std::net::SocketAddr::from(([127, 0, 0, 1], 9050))),
+            Tick::new(1),
+        ),
+        RoutePublish::Installed { .. }
+    ));
+    dialer
+        .admit_operator(&peer_onion, Tick::new(1), &mut rng)
+        .expect("admitted");
+    assert!(dialer.shared().lists.is_gray(&peer_onion));
+
+    assert_eq!(
+        dialer.dial(ConnectorId::Tor, &peer_onion, DialAim::Keep, &mut rng),
+        None,
+        "the list is refused"
+    );
+    let shared = dialer.shared();
+    assert!(
+        !shared.lists.is_gray(&peer_onion) && !shared.lists.is_white(&peer_onion),
+        "proven misbehaviour on Tor: the address is dropped"
+    );
+    for entry in &over_d3 {
+        assert!(
+            !shared.lists.is_gray(entry),
+            "nothing of the list entered gray"
+        );
+    }
+    drop(shared);
+
+    // A list within the frame bound that the lists refuse: a clearnet entry
+    // on a Tor session is the foreign-connector rule. It reaches the lists,
+    // and the refusal is stamped as proof the same way.
+    let posts = Arc::new(Mutex::new(VecDeque::new()));
+    let hub = hub_with_arming(&posts);
+    let foreign: Vec<NetworkAddress> = vec![onion(30), peer(31)];
+    let dial = Arc::new(GapDial::answering(vec![reply(NETWORK, foreign)]));
+    hub.install_dial(Arc::clone(&dial) as Arc<dyn Dial>);
+    let dialer = dialer_for(&hub);
+    assert!(matches!(
+        hub.links().publish_usable(
+            ConnectorId::Tor,
+            Route::Socks(std::net::SocketAddr::from(([127, 0, 0, 1], 9050))),
+            Tick::new(1),
+        ),
+        RoutePublish::Installed { .. }
+    ));
+    // The same onion as above: `[1; 32]` is a valid key, and this hub is
+    // fresh. (An arbitrary 32 bytes is not a point; `endpoint_of` would
+    // refuse it before the dial, a local close that proves nothing.)
+    let peer_onion = onion(1);
+    dialer
+        .admit_operator(&peer_onion, Tick::new(1), &mut rng)
+        .expect("admitted");
+    assert_eq!(
+        dialer.dial(ConnectorId::Tor, &peer_onion, DialAim::Keep, &mut rng),
+        None
+    );
+    {
+        let shared = dialer.shared();
+        assert!(
+            !shared.lists.is_gray(&peer_onion) && !shared.lists.is_white(&peer_onion),
+            "a list the lists refuse, on Tor, drops the address"
+        );
+    }
+
+    // The control: the same list from a clearnet peer proves nothing, and
+    // the draw cools instead.
+    let posts = Arc::new(Mutex::new(VecDeque::new()));
+    let hub = hub_with_arming(&posts);
+    let over_d3_v4: Vec<NetworkAddress> = (10u8..23).map(peer).collect();
+    let dial = Arc::new(GapDial::answering(vec![reply(NETWORK, over_d3_v4)]));
+    hub.install_dial(Arc::clone(&dial) as Arc<dyn Dial>);
+    let dialer = dialer_for(&hub);
+    dialer
+        .admit_operator(&peer(1), Tick::new(1), &mut rng)
+        .expect("admitted");
+    assert_eq!(
+        dialer.dial(ConnectorId::Clearnet, &peer(1), DialAim::Keep, &mut rng),
+        None
+    );
+    assert!(
+        dialer.shared().lists.is_cooling(&peer(1)),
+        "clearnet: cooled, not dropped"
+    );
+}
+
+/// **A Tor address failing with 0xF0 twice, then succeeding, ends white
+/// after three attempts in one test** (the gray lifecycle, test 6a'). The
+/// first two connects are refused with the missing-descriptor reply, which
+/// the Tor connector's table marks worth a retry; each waits its turn
+/// without holding the in-flight slot, the address stays the outstanding
+/// draw meanwhile, nothing is recorded for the failed attempts (no
+/// cooldown, no failed-test count), and the third attempt keeps the
+/// session: one `SessionAccepted`, the address white. A fourth refusal would
+/// have been the test's outcome instead.
+#[test]
+fn a_tor_address_failing_twice_with_a_missing_descriptor_then_succeeding_ends_white() {
+    let posts = Arc::new(Mutex::new(VecDeque::new()));
+    let clock = ManualClock::new(Tick::new(1));
+    let hub = hub_with_arming_on(&posts, &clock);
+    let dial = Arc::new(GapDial::refusing_then_answering(
+        vec![shekyl_tor::refused(0xF0), shekyl_tor::refused(0xF0)],
+        vec![reply(NETWORK, vec![])],
+    ));
+    hub.install_dial(Arc::clone(&dial) as Arc<dyn Dial>);
+    let dialer = dialer_for(&hub);
+    assert!(matches!(
+        hub.links().publish_usable(
+            ConnectorId::Tor,
+            Route::Socks(std::net::SocketAddr::from(([127, 0, 0, 1], 9050))),
+            Tick::new(1),
+        ),
+        RoutePublish::Installed { .. }
+    ));
+    let mut rng = SplitMix64::new(21);
+    let onion = NetworkAddress::Tor {
+        host: shekyl_onion_v3::v3_onion_hostname(&[1; 32]),
+        port: 18080,
+    };
+    dialer
+        .admit_operator(&onion, Tick::new(1), &mut rng)
+        .expect("admitted");
+
+    // Attempt 1: refused, worth a retry. Nothing is recorded, the address
+    // is still the outstanding draw, and no slot is held while it waits.
+    assert!(dialer.wake(ConnectorId::Tor, &mut rng), "attempt 1 dialed");
+    {
+        let shared = dialer.shared();
+        assert!(shared.lists.is_gray(&onion) && !shared.lists.is_cooling(&onion));
+        assert_eq!(shared.lists.failed_tests(&onion), 0);
+    }
+    assert_eq!(
+        dialer.in_flight(ConnectorId::Tor),
+        0,
+        "the wait holds no slot"
+    );
+    // A wake before the due tick draws nothing: the address is outstanding
+    // and nothing else is gray.
+    assert!(
+        !dialer.wake(ConnectorId::Tor, &mut rng),
+        "too early for attempt 2"
+    );
+
+    // Attempt 2, past the first wait (5 s + up to 5 s): refused again.
+    clock.set(Tick::new(clock.now().get() + 10 * 1_000_000_000 + 1));
+    assert!(dialer.wake(ConnectorId::Tor, &mut rng), "attempt 2 dialed");
+    assert_eq!(dialer.shared().lists.failed_tests(&onion), 0);
+    assert_eq!(dialer.kept_sessions(ConnectorId::Tor), 0);
+
+    // Attempt 3, past the second wait (20 s + up to 10 s): kept.
+    clock.set(Tick::new(clock.now().get() + 30 * 1_000_000_000 + 1));
+    assert!(dialer.wake(ConnectorId::Tor, &mut rng), "attempt 3 dialed");
+    assert_eq!(dialer.kept_sessions(ConnectorId::Tor), 1);
+    let shared = dialer.shared();
+    assert!(
+        shared.lists.is_white(&onion),
+        "one test, three attempts, white"
+    );
+    assert_eq!(shared.lists.failed_tests(&onion), 0);
+    drop(shared);
+    let accepted = posts
+        .lock()
+        .expect("posts")
+        .iter()
+        .filter(|post| matches!(post, Post::HandshakeResult { .. }))
+        .count();
+    assert_eq!(accepted, 1, "one handshake result, for the kept attempt");
 }
