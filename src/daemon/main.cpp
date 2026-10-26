@@ -30,8 +30,10 @@
 // The daemon's `main`, and the C++ remnant's entry pair
 // (DAEMON_CONFIG_CUTOVER.md §2.2, DC-Q13). Rust owns the process:
 // `main` hands `shekyl_daemon_main` an entry holding the version strings and
-// two functions, `run` and `stop`, and returns its status. Rust reads the
-// arguments, the configuration file, takes the lock, checks the marker,
+// two functions, `run` and `stop`, plus this process's `argc` and `argv`,
+// and returns its status. On Unix those pointers are the argument vector.
+// On Windows Rust reads `GetCommandLineW` and does not read the pointers.
+// Rust then reads the configuration file, takes the lock, checks the marker,
 // starts logging, makes the announcements and owns every signal; `run`
 // receives the snapshot of the values whose reader is still C++ and parses
 // nothing.
@@ -180,15 +182,13 @@ void remnant_stop() noexcept
 
 } // namespace
 
-int main(int argc, char const * argv[])
+int main(int argc, char const * const argv[])
 {
-  (void)argc;
-  (void)argv;
   ShekylDaemonEntry entry;
   entry.release_name = SHEKYL_RELEASE_NAME;
   entry.version_full = SHEKYL_VERSION_FULL;
   entry.protocol_version = SHEKYL_PROTOCOL_VERSION;
   entry.run = &remnant_run;
   entry.stop = &remnant_stop;
-  return shekyl_daemon_main(&entry);
+  return shekyl_daemon_main(&entry, argc, argv);
 }

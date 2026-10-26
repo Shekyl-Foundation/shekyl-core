@@ -59,7 +59,7 @@ use crate::vanguard_rotation::{VanguardManager, VanguardsAbort};
 use shekyl_tor_control_client::binary::{self, VerifiedTorBinary};
 use shekyl_tor_control_client::control::{
     parse_socks_listeners, BootstrapReadiness, BootstrapState, Command, DiskWrites, ManagedTor,
-    SocksPort, TorControlClient, TorControlClientConfig, TorLaunch,
+    SocksPort, SocksTimeout, TorControlClient, TorControlClientConfig, TorLaunch,
 };
 
 // Config/error types live next to their owners; re-exported here so a
@@ -596,6 +596,7 @@ async fn supervise(
                 tor_binary: verified,
                 data_dir: config.data_dir.clone(),
                 socks_port: SocksPort::Auto,
+                socks_timeout: SocksTimeout::TorDefault,
                 disable_network: config.disable_network,
                 disk_writes: DiskWrites::Deferred,
                 exit_observer: Some(exit_tx),

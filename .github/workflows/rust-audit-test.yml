@@ -246,9 +246,12 @@ jobs:
           #     would have silently restored a 1.94-built target/).
           #   - No ~/.cargo/bin caching (cargo-audit reinstalled from
           #     source every run, ~2m30s).
+          # The constant-time dynamic harness is a third workspace, under
+          # docs/formal/checkct/dynamic, with its own target/ likewise.
           workspaces: |
             rust -> target
             rust/shekyl-fcmp/fuzz -> target
+            docs/formal/checkct/dynamic -> target
       - name: install cargo-audit
         # `cargo install --locked` is idempotent: on Swatinem cache
         # hits the binary is already present in ~/.cargo/bin and this
@@ -423,6 +426,22 @@ jobs:
         # No CARGO_TARGET_DIR: this workspace must not share rust/target.
         # Its own target/ is the second cache workspace above.
         run: cargo check --locked --manifest-path rust/shekyl-fcmp/fuzz/Cargo.toml
+      - name: "constant-time dynamic harness: fmt, clippy, tests"
+        # docs/formal/checkct/dynamic is its own workspace (its own lockfile
+        # pins the audited crypto-bigint) on the shipped toolchain (its
+        # rust-toolchain.toml; check_checkct_toolchain.py keeps it equal to
+        # rust/'s), so the workspace gates above do not see it. Its tests
+        # hold the row table's invariants and check that every row name a
+        # committed record under docs/formal/checkct/results cites is still
+        # a row or a listed retired one, so a rename cannot strand a record.
+        # change_scope.py reads this step's working-directory: a change to
+        # the crate or to those records is not docs-only. Own target/, no
+        # CARGO_TARGET_DIR (cached as a workspace above).
+        working-directory: docs/formal/checkct/dynamic
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked
       - name: cargo test (all workspace crates)
         working-directory: rust
         # `shekyl-randomx-differential` excluded from the workspace-wide

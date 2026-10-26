@@ -1,10 +1,9 @@
-dynamic (dudect-style) run — the fleet MEASUREMENT HOST: x86_64, 8 vCPUs (QEMU virtual CPU; a VM on a different physical machine from the workstation), idle (load 0.1), no shekyl service running
+dynamic (dudect-style) run — the fleet MEASUREMENT HOST: x86_64, 8 vCPUs (QEMU virtual CPU; a VM on a different physical machine from the workstation), idle (load ~0.1-1.3), no shekyl service running
 binary: docs/formal/checkct/dynamic as pushed at 049a55265 (static-pie, +crt-static on the --target build), pinned 1.94.0 / LLVM 21.1.8
 rows: null (both classes fresh); constant (one value, allocated fresh per batch, against fresh); fixed set regenerated per batch against fresh, with the [fixed-pair] companion (two different fixed sets)
-status: PARTIAL — the 1M block was still running when this record was cut; the default suite follows in the next PR
-run window (UTC): Sat Oct 24 03:26:37 PM UTC 2026 -> (in progress)
+run window (UTC): Sat Oct 24 03:26:37 PM UTC 2026 -> Sat Oct 24 04:48:13 PM UTC 2026
 
- 11:26:37 up 4 days, 22:05,  1 user,  load average: 0.10, 0.27, 0.30
+## discriminating rows, 20k / 200k / 1M samples per class
 ===== 20000
 null: fe25519 mul                  t=   -1.06  t(crop 1%)=   -0.58  mean ns fixed/random      4591/     4706  no difference seen
 null: helio square                 t=    0.29  t(crop 1%)=   -0.27  mean ns fixed/random      1807/     1804  no difference seen
@@ -71,5 +70,70 @@ null: helio mul                    t=    0.19  t(crop 1%)=    0.12  mean ns fixe
 helio mul                          t=   -4.36  t(crop 1%)=  -25.72  mean ns fixed/random      2141/     2169  CLASS DIFFERENCE
 helio mul [fixed-pair]             t=    0.64  t(crop 1%)=   -0.12  mean ns fixed/random      1657/     1653  no difference seen
 constant: helio mul                t=   -3.67  t(crop 1%)=  -26.68  mean ns fixed/random      1813/     1834  CLASS DIFFERENCE
+helio sqrt                         t=   -7.33  t(crop 1%)=  -10.77  mean ns fixed/random    417110/   418070  CLASS DIFFERENCE
+helio sqrt [fixed-pair]            t=    0.00  t(crop 1%)=   -0.26  mean ns fixed/random    411527/   411527  no difference seen
+constant: helio sqrt               t=  -30.41  t(crop 1%)=  -43.38  mean ns fixed/random    413416/   417030  CLASS DIFFERENCE
+null: fe25519 mul                  t=   -0.39  t(crop 1%)=    1.39  mean ns fixed/random      3195/     3198  no difference seen
+fe25519 mul                        t=   -0.71  t(crop 1%)=   -0.43  mean ns fixed/random      3130/     3136  no difference seen
+fe25519 mul [fixed-pair]           t=    0.26  t(crop 1%)=    1.89  mean ns fixed/random      3216/     3214  no difference seen
+constant: fe25519 mul              t=    0.74  t(crop 1%)=    3.03  mean ns fixed/random      3282/     3276  no difference seen
+fe25519 square                     t=    1.56  t(crop 1%)=    0.07  mean ns fixed/random      2932/     2920  no difference seen
+fe25519 square [fixed-pair]        t=    0.10  t(crop 1%)=    0.20  mean ns fixed/random      2943/     2942  no difference seen
 
-reading: on a second x86_64 host the HelioseleneField fixed-against-fresh difference reproduces and grows with the sample (square -7 -> -35 -> -106, mul -3 -> -17 -> -26, sqrt -2 -> -5); the constant-value class shows it too; nulls flat; every Field25519 row flat under the identical protocol; and at 200k the helio square [fixed-pair] row crossed (-14): two different fixed operand sets time differently. Operand-dependent timing, not the harness. CA-2.
+## default suite, 20k samples per class
+ct-dynamic: 20000 samples/class x 32 ops; dudect threshold |t| > 4.5; target x86_64
+-- null control (both classes fresh; must show no difference)
+null: fe25519 mul                  t=    1.12  t(crop 1%)=    1.03  mean ns fixed/random      3671/     3656  no difference seen
+null: helio square                 t=   -0.92  t(crop 1%)=    0.49  mean ns fixed/random      1444/     1520  no difference seen
+null: helio mul                    t=   -0.71  t(crop 1%)=   -0.73  mean ns fixed/random      1855/     1863  no difference seen
+-- helioselene::Field25519 (dalek_ff_group::FieldElement)
+fe25519 add                        t=   -1.12  t(crop 1%)=   -2.48  mean ns fixed/random      2003/     2018  no difference seen
+fe25519 add [fixed-pair]           t=   -1.09  t(crop 1%)=    0.27  mean ns fixed/random      1992/     2085  no difference seen
+fe25519 sub                        t=   -0.53  t(crop 1%)=   -2.02  mean ns fixed/random      1930/     1940  no difference seen
+fe25519 sub [fixed-pair]           t=   -0.92  t(crop 1%)=   -2.96  mean ns fixed/random      1960/     1977  no difference seen
+fe25519 mul                        t=    0.54  t(crop 1%)=    1.52  mean ns fixed/random      3161/     3148  no difference seen
+fe25519 mul [fixed-pair]           t=   -0.43  t(crop 1%)=   -1.17  mean ns fixed/random      3262/     3272  no difference seen
+fe25519 square                     t=    0.92  t(crop 1%)=   -0.04  mean ns fixed/random      3043/     2943  no difference seen
+fe25519 square [fixed-pair]        t=   -0.50  t(crop 1%)=   -2.76  mean ns fixed/random      2962/     2974  no difference seen
+fe25519 invert                     t=    0.73  t(crop 1%)=    1.06  mean ns fixed/random    840822/   839483  no difference seen
+fe25519 invert [fixed-pair]        t=    0.81  t(crop 1%)=    1.04  mean ns fixed/random    857685/   856489  no difference seen
+fe25519 sqrt                       t=    1.77  t(crop 1%)=    1.27  mean ns fixed/random    853257/   850266  no difference seen
+fe25519 sqrt [fixed-pair]          t=    1.02  t(crop 1%)=    1.48  mean ns fixed/random    848234/   846208  no difference seen
+fe25519 pow (secret exponent)      t=   -0.33  t(crop 1%)=   -0.39  mean ns fixed/random    830908/   831595  no difference seen
+fe25519 pow (secret exponent) [fixed-pair] t=    1.18  t(crop 1%)=    0.26  mean ns fixed/random    801968/   800689  no difference seen
+fe25519 from_repr                  t=   -0.39  t(crop 1%)=   -0.95  mean ns fixed/random      5384/     5397  no difference seen
+fe25519 from_repr [fixed-pair]     t=    0.87  t(crop 1%)=    0.65  mean ns fixed/random      7486/     7454  no difference seen
+fe25519 wide_reduce                t=    0.13  t(crop 1%)=    0.02  mean ns fixed/random    153499/   153448  no difference seen
+fe25519 wide_reduce [fixed-pair]   t=   -0.36  t(crop 1%)=    0.31  mean ns fixed/random    153418/   153562  no difference seen
+-- helioselene::HelioseleneField
+helio add                          t=    0.43  t(crop 1%)=    0.49  mean ns fixed/random       597/      593  no difference seen
+helio add [fixed-pair]             t=    0.42  t(crop 1%)=    1.12  mean ns fixed/random       567/      563  no difference seen
+helio sub                          t=   -1.38  t(crop 1%)=    0.41  mean ns fixed/random       602/      624  no difference seen
+helio sub [fixed-pair]             t=    1.11  t(crop 1%)=   -0.60  mean ns fixed/random       649/      636  no difference seen
+helio mul                          t=   -1.25  t(crop 1%)=   -2.99  mean ns fixed/random      1983/     2093  no difference seen
+helio mul [fixed-pair]             t=   -0.97  t(crop 1%)=    0.22  mean ns fixed/random      3178/     3263  no difference seen
+helio square                       t=   -2.29  t(crop 1%)=  -11.85  mean ns fixed/random      1665/     1684  CLASS DIFFERENCE
+helio square [fixed-pair]          t=    2.02  t(crop 1%)=   11.97  mean ns fixed/random      1659/     1645  CLASS DIFFERENCE
+helio invert                       t=    0.13  t(crop 1%)=   -0.58  mean ns fixed/random    365168/   365058  no difference seen
+helio invert [fixed-pair]          t=    2.58  t(crop 1%)=    1.28  mean ns fixed/random    347895/   346169  no difference seen
+helio sqrt                         t=   -4.23  t(crop 1%)=   -5.86  mean ns fixed/random    401651/   404752  CLASS DIFFERENCE
+helio sqrt [fixed-pair]            t=   -0.65  t(crop 1%)=   -0.55  mean ns fixed/random    397558/   398033  no difference seen
+helio pow (secret exponent)        t=    0.35  t(crop 1%)=   -1.00  mean ns fixed/random    604080/   603644  no difference seen
+helio pow (secret exponent) [fixed-pair] t=   -0.14  t(crop 1%)=   -0.03  mean ns fixed/random    654898/   655135  no difference seen
+helio from_repr                    t=   -1.90  t(crop 1%)=   -0.99  mean ns fixed/random       687/      699  no difference seen
+helio from_repr [fixed-pair]       t=    1.05  t(crop 1%)=    0.16  mean ns fixed/random       693/      686  no difference seen
+helio wide_reduce                  t=   -0.99  t(crop 1%)=    0.98  mean ns fixed/random      2174/     2259  no difference seen
+helio wide_reduce [fixed-pair]     t=   -0.44  t(crop 1%)=   -1.84  mean ns fixed/random      2024/     2031  no difference seen
+-- constant-value control (class 0: one value, allocated fresh per batch; class 1: fresh values)
+constant: helio square             t=   -2.72  t(crop 1%)=  -23.08  mean ns fixed/random      1255/     1277  CLASS DIFFERENCE
+constant: helio mul                t=    1.19  t(crop 1%)=   -4.70  mean ns fixed/random      1751/     1647  CLASS DIFFERENCE
+constant: helio sqrt               t=   -4.89  t(crop 1%)=   -8.98  mean ns fixed/random    415210/   419305  CLASS DIFFERENCE
+constant: fe25519 mul              t=   -1.73  t(crop 1%)=   -1.76  mean ns fixed/random      3631/     3667  no difference seen
+-- crypto-bigint 0.5.5 Residue::pow with a secret exponent (BINSEC found a branch; unreached by our code)
+residue pow (secret exponent)      t=    1.43  t(crop 1%)=    1.69  mean ns fixed/random    646876/   645500  no difference seen
+residue pow (secret exponent) [fixed-pair] t=   -0.44  t(crop 1%)=   -0.07  mean ns fixed/random    643870/   644285  no difference seen
+-- positive controls (must show a class difference)
+control: branch on a byte          t=  -13.06  t(crop 1%)=  -18.18  mean ns fixed/random      5006/     5336  CLASS DIFFERENCE
+control: data-dependent loop       t= -159.55  t(crop 1%)= -577.30  mean ns fixed/random       119/    13599  CLASS DIFFERENCE
+
+reading: on a second x86_64 host the HelioseleneField fixed-against-fresh difference reproduces and grows with the sample (square -7 -> -35 -> -106, mul -3 -> -17 -> -26, sqrt -2 -> -5); the constant-value class shows it too; nulls flat; every Field25519 row flat under the identical protocol; and the [fixed-pair] rows cross (square -14 at 200k, +12 at 20k in the default suite): two different fixed operand sets time differently. Operand-dependent timing, not the harness. CA-2.

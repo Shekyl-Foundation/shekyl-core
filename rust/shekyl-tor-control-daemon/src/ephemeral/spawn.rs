@@ -21,8 +21,8 @@ use tokio::sync::{oneshot, watch};
 
 use shekyl_tor_control_client::binary::VerifiedTorBinary;
 use shekyl_tor_control_client::control::{
-    BootstrapReadiness, Command, DiskWrites, EventSink, ManagedTor, SocksPort, TorControlClient,
-    TorControlClientConfig, TorLaunch,
+    BootstrapReadiness, Command, DiskWrites, EventSink, ManagedTor, SocksPort, SocksTimeout,
+    TorControlClient, TorControlClientConfig, TorLaunch,
 };
 use shekyl_tor_control_client::directory_cache;
 
@@ -86,6 +86,7 @@ impl DaemonTorControl {
         tor_binary: VerifiedTorBinary,
         events: EventSink,
         reply_deadline: Duration,
+        socks_timeout: SocksTimeout,
     ) -> Result<Self, LaunchFailure> {
         let parent = directory
             .path()
@@ -99,6 +100,7 @@ impl DaemonTorControl {
                 data_dir_parent: parent,
                 events,
                 reply_deadline,
+                socks_timeout,
             },
             false,
         )
@@ -158,6 +160,7 @@ impl DaemonTorControl {
                 tor_binary,
                 data_dir: directory.path().to_path_buf(),
                 socks_port: SocksPort::Auto,
+                socks_timeout: config.socks_timeout,
                 disable_network: false,
                 disk_writes: DiskWrites::Prompt,
                 exit_observer: Some(exit_tx),

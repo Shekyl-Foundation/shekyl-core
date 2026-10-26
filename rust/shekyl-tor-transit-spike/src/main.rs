@@ -64,7 +64,7 @@ use shekyl_tor_control_client::control::{
     BootstrapReadiness, BootstrapState, Command, DiskWrites, EventSink, TorControlClient,
 };
 use shekyl_tor_control_client::control::{
-    ManagedTor, SocksPort, TorControlClientConfig, TorLaunch,
+    ManagedTor, SocksPort, SocksTimeout, TorControlClientConfig, TorLaunch,
 };
 use shekyl_tor_control_client::onion_identity::OnionIdentity;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -209,6 +209,7 @@ async fn bring_up(
             tor_binary: verified,
             data_dir,
             socks_port: SocksPort::Fixed(socks_port),
+            socks_timeout: SocksTimeout::TorDefault,
             disable_network: false,
             disk_writes: DiskWrites::Deferred,
             exit_observer: None,

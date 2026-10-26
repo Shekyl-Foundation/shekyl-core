@@ -15,9 +15,12 @@
 //!
 //! Lock order: this crate never calls into the hub while it holds its own
 //! lock. A ban snapshot and a board read are taken first, and the lists
-//! lock is taken after they return. The hub's close poster runs the other
-//! way — it takes this lock — so the two are never held in the opposite
-//! order.
+//! lock is taken after they return. The inbound Tor count is the one read
+//! that holds the table lock across the dialer's lock, the order the hub's
+//! posters already take, so a dial outcome cannot publish a count from
+//! before its row. [`Dialer::session_closed`] does not take the table lock:
+//! the adopt poster calls it while holding that lock, and the mutex is not
+//! re-entrant.
 //!
 //! Placement (Rick, 2026-10-13): a crate of its own over `shekyl-seam` and
 //! `shekyl-peerlist`, which do not depend on each other. The C++ reaches
@@ -29,6 +32,7 @@ pub mod attempts;
 mod bans;
 pub mod candidate;
 pub mod fill;
+pub mod link_tally;
 pub mod nonce;
 pub mod owner;
 pub mod pace;
@@ -39,6 +43,7 @@ pub use attempts::Attempts;
 pub use bans::BanSnapshot;
 pub use candidate::{CandidateFilter, Skip};
 pub use fill::{in_flight_bound, plan, Census, DialAim, DrawList, FillRule, Plan};
+pub use link_tally::{TallySink, TorLinkTally};
 pub use nonce::{HandshakeNonce, HandshakeNonceSet, InFlightNonce};
 pub use owner::{session_of, Applied, Dialer, Launch, NotReady, Shared, SnapshotSource};
 pub use pace::{

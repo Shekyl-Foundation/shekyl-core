@@ -20,18 +20,21 @@ use std::time::Duration;
 
 use shekyl_daemon_config::sections::Tor;
 use shekyl_ffi::origin_verdict::OriginVerdict;
+use shekyl_ffi::tor_link::TorLinkTally;
 use shekyl_ffi::zone_ffi::DownCause;
 use shekyl_timing_engine::{Clock, MonotonicClock, OwnerClass, OwnerHandle, Tick};
 use shekyl_tor_control_client::binary::{
     discover_and_verify, discover_and_verify_at, TorBinaryError, VerifiedTorBinary,
 };
 use shekyl_tor_control_client::control::{
-    parse_bootstrap_progress, parse_event, parse_socks_listeners, parse_traffic_read,
-    BootstrapState, Command, ControlError, EventReceiver, EventSink,
+    parse_bootstrap_progress, parse_event, parse_network_view, parse_socks_listeners,
+    parse_traffic_read, BootstrapState, Command, ControlError, EventReceiver, EventSink,
+    SocksTimeout,
 };
 use shekyl_tor_control_client::supervisor::{
-    held_sentence, input_of, install_sentence, render, Action, Cause, Connectors, Core, Input,
-    ManagedRunning, OriginVerdict as FoldedOrigin, Policy, Space, Step, Syncing, TorSetting,
+    held_sentence, input_of, install_sentence, render, Action, Cause, Connectors, Core, DialTally,
+    Input, ManagedRunning, NetworkView, OriginVerdict as FoldedOrigin, Policy, Space, Step,
+    Syncing, TorSetting,
 };
 use shekyl_tor_control_daemon::{
     space_needed, sweep_stale_data_dirs, CacheSave, DaemonTorConfig, DaemonTorControl,
@@ -42,6 +45,13 @@ use tokio::task::JoinHandle;
 
 /// A control reply this far past due is a process fault. Not a bootstrap limit.
 const REPLY_BOUND: Duration = Duration::from_secs(30);
+
+/// The managed Tor answers a SOCKS request it cannot attach just inside the
+/// Tor dial deadline, so the dial's class is Tor's reply, never a race with
+/// that deadline (`TOR_SUPERVISOR.md` §4.2).
+const SOCKS_TIMEOUT: SocksTimeout = SocksTimeout::Below {
+    dial_deadline: shekyl_ffi::tor_link::TOR_DIAL_WITHIN,
+};
 /// The onion's stream cap.
 const MAX_STREAMS: u16 = 8;
 /// `GETINFO` key for the bootstrap phase. One sample asks this and the listener.
@@ -49,8 +59,25 @@ const BOOTSTRAP_PHASE: &str = "status/bootstrap-phase";
 /// `GETINFO` key for the bytes Tor has read: with the bootstrap phase, it
 /// tells a slow directory mirror from one that is not answering (§5).
 const TRAFFIC_READ: &str = "traffic/read";
+/// Tor's own view of its network (`TSR-Q14`). Asked only while Running.
+const NETWORK_LIVENESS: &str = "network-liveness";
+/// Whether Tor holds a built circuit. Asked with [`NETWORK_LIVENESS`].
+const CIRCUIT_ESTABLISHED: &str = "status/circuit-established";
 /// `GETINFO` key for the SOCKS listeners.
 const SOCKS_LISTENERS: &str = "net/listeners/socks";
+
+/// Keys one sample asks. The network keys are Running only (§4.2).
+fn sample_keys(reads_network: bool) -> Vec<String> {
+    let mut keys = vec![
+        BOOTSTRAP_PHASE.to_owned(),
+        SOCKS_LISTENERS.to_owned(),
+        TRAFFIC_READ.to_owned(),
+    ];
+    if reads_network {
+        keys.extend([NETWORK_LIVENESS.to_owned(), CIRCUIT_ESTABLISHED.to_owned()]);
+    }
+    keys
+}
 
 /// The running supervisor. Dropping it does not stop Tor; [`Self::shutdown`] does.
 pub struct Supervisor {
@@ -181,6 +208,20 @@ pub fn begin(
     })
 }
 
+fn dial_tally(tally: TorLinkTally) -> DialTally {
+    DialTally {
+        opened: tally.opened,
+        unopened: tally.unopened,
+        held: tally.held,
+    }
+}
+
+/// The dialer's tally as the core's input (§4.2). Counts only, and display
+/// only (`TSR-Q14`).
+fn tally_input(tally: TorLinkTally) -> Input {
+    Input::DialEvidence(dial_tally(tally))
+}
+
 /// The relay's published verdict as the core's input.
 ///
 /// The supervisor does not depend on the relay. The variants are the same
@@ -222,6 +263,7 @@ async fn drive(
         clearnet_on,
     };
     let origin = shekyl_ffi::origin_verdict::watch();
+    let mut tor_link = shekyl_ffi::tor_link::watch();
     let started = now(&owner);
     let (mut core, mut step) = Core::start(Policy::provisional(), connectors, started);
     // A receiver marks the current value seen, so a verdict published before
@@ -230,6 +272,14 @@ async fn drive(
     let folded = core.on(verdict_input(*origin.borrow()), started);
     step.actions.extend(folded.actions);
     step.deadline = folded.deadline;
+    // The current tally is already seen. Seed it as the baseline: history
+    // is not an open, and folding it as evidence would move the stretch
+    // clock. `borrow_and_update` also marks a value published since
+    // subscribe, so the loop does not fold that one again.
+    let seen = *tor_link.borrow_and_update();
+    let baseline = core.on(Input::DialBaseline(dial_tally(seen)), started);
+    step.actions.extend(baseline.actions);
+    step.deadline = baseline.deadline;
     let (death_tx, death_rx) = mpsc::channel(4);
     Drive {
         core,
@@ -244,6 +294,8 @@ async fn drive(
         stop,
         forward,
         origin,
+        tor_link,
+        network_view: NetworkView::default(),
         control: None,
         kept: None,
         pinned: None,
@@ -273,6 +325,12 @@ struct Drive {
     /// The relay's hop-0 verdict for a local origin (`GS-Q3`). Health and
     /// `OwnTx` project it.
     origin: watch::Receiver<OriginVerdict>,
+    /// What this node's own Tor dials show (§4.2), for the posture line
+    /// only (`TSR-Q14`). The value in the cell at start is the baseline.
+    /// The loop folds a later change as evidence.
+    tor_link: watch::Receiver<TorLinkTally>,
+    /// Tor's sampled view at the last Running sample, logged when it changes.
+    network_view: NetworkView,
     control: Option<DaemonTorControl>,
     kept: Option<KeptDataDir>,
     pinned: Option<VerifiedTorBinary>,
@@ -312,6 +370,13 @@ impl Drive {
                         self.fold(verdict_input(verdict)).await;
                     }
                 }
+                changed = self.tor_link.changed() => {
+                    // Process-static like the verdict's: `Err` does not happen.
+                    if changed.is_ok() {
+                        let tally = *self.tor_link.borrow_and_update();
+                        self.fold(tally_input(tally)).await;
+                    }
+                }
                 wake = self.owner.wait_wake_async() => {
                     if wake.is_err() {
                         break;
@@ -322,6 +387,9 @@ impl Drive {
                     if let Some(reply) = event {
                         if let Some(parsed) = parse_event(&reply) {
                             if let Some(input) = input_of(&parsed) {
+                                // A Tor statement the supervisor acts on, said
+                                // as it arrives: what a run records.
+                                tracing::info!(target: "tor", "Tor says {input:?}");
                                 self.fold(input).await;
                             }
                         }
@@ -354,17 +422,21 @@ impl Drive {
         }
     }
 
-    /// Perform every action the last fold produced. `true` means the daemon
-    /// is stopping and the child is shut down by the caller.
+    /// Perform every action the last fold produced. Inputs from one action
+    /// are folded in order and their actions run in that order, ahead of
+    /// anything already queued. `true` means the daemon is stopping.
     async fn perform(&mut self) -> bool {
         let mut queue: VecDeque<Action> = self.step.actions.drain(..).collect();
         let mut halt = false;
         while let Some(action) = queue.pop_front() {
-            if let Some(input) = self.act(action, &mut halt).await {
+            let inputs = self.act(action, &mut halt).await;
+            let mut produced = Vec::new();
+            for input in inputs {
                 self.fold(input).await;
-                for action in self.step.actions.drain(..).rev() {
-                    queue.push_front(action);
-                }
+                produced.append(&mut self.step.actions);
+            }
+            for action in produced.into_iter().rev() {
+                queue.push_front(action);
             }
             if halt {
                 break;
@@ -392,7 +464,7 @@ impl Drive {
         }
     }
 
-    async fn act(&mut self, action: Action, halt: &mut bool) -> Option<Input> {
+    async fn act(&mut self, action: Action, halt: &mut bool) -> Vec<Input> {
         match action {
             Action::Announce => {
                 let status = self.core.status();
@@ -402,62 +474,61 @@ impl Drive {
                 } else {
                     tracing::warn!(target: "global", "{text}");
                 }
-                None
+                Vec::new()
             }
             // The progress line is news. The core only asks for it when no
             // cause is set, so this arm does not re-read the posture.
             Action::SayProgress => {
                 let text = render(&self.core.status());
                 tracing::info!(target: "global", "{text}");
-                None
+                Vec::new()
             }
-            Action::CheckPin => Some(self.pin()),
-            Action::Spawn { fresh_directory } => Some(self.spawn(fresh_directory).await),
+            Action::CheckPin => vec![self.pin()],
+            Action::Spawn { fresh_directory } => vec![self.spawn(fresh_directory).await],
             Action::Sample => {
                 let mut stop = self.stop.clone();
-                Some(
-                    race_stop(&mut stop, self.sample())
-                        .await
-                        .unwrap_or_else(|shutdown| shutdown),
-                )
+                match race_stop(&mut stop, self.sample()).await {
+                    Ok(inputs) => inputs,
+                    Err(shutdown) => vec![shutdown],
+                }
             }
-            Action::WatchState => self.watch_state(),
+            Action::WatchState => self.watch_state().into_iter().collect(),
             Action::SetConfAvoidDiskWrites => {
                 let mut stop = self.stop.clone();
-                let control = self.control.as_ref()?;
+                let Some(control) = self.control.as_ref() else {
+                    return Vec::new();
+                };
                 match race_stop(&mut stop, control.defer_disk_writes()).await {
-                    Err(shutdown) => Some(shutdown),
-                    Ok(Ok(())) => None,
+                    Err(shutdown) => vec![shutdown],
+                    Ok(Ok(())) => Vec::new(),
                     Ok(Err(error)) => {
                         tracing::warn!(
                             target: "global",
                             "leaving Tor writing its state ({error})"
                         );
-                        None
+                        Vec::new()
                     }
                 }
             }
-            Action::Publish(route) => Some(self.publish_route(route)),
+            Action::Publish(route) => vec![self.publish_route(route)],
             Action::RepublishOnion => {
                 let mut stop = self.stop.clone();
-                Some(
-                    race_stop(&mut stop, self.republish())
-                        .await
-                        .unwrap_or_else(|shutdown| shutdown),
-                )
+                vec![race_stop(&mut stop, self.republish())
+                    .await
+                    .unwrap_or_else(|shutdown| shutdown)]
             }
             Action::TakeDown => {
                 self.withdraw_route(DownCause::ProcessExited);
                 self.reap().await;
-                None
+                Vec::new()
             }
             Action::StopRoute => {
                 self.withdraw_route(DownCause::ProcessStopped);
-                None
+                Vec::new()
             }
             Action::StopChild => {
                 *halt = true;
-                None
+                Vec::new()
             }
         }
     }
@@ -498,15 +569,22 @@ impl Drive {
             return short;
         }
         let spawned = if let Some(directory) = self.kept.take() {
-            DaemonTorControl::spawn_into(directory, binary, self.events.clone(), REPLY_BOUND)
-                .await
-                .map_err(|failure| (failure.error, Some(failure.directory)))
+            DaemonTorControl::spawn_into(
+                directory,
+                binary,
+                self.events.clone(),
+                REPLY_BOUND,
+                SOCKS_TIMEOUT,
+            )
+            .await
+            .map_err(|failure| (failure.error, Some(failure.directory)))
         } else {
             match DaemonTorControl::spawn_keeping(DaemonTorConfig {
                 tor_binary: binary,
                 data_dir_parent: self.data_dir.clone(),
                 events: self.events.clone(),
                 reply_deadline: REPLY_BOUND,
+                socks_timeout: SOCKS_TIMEOUT,
             })
             .await
             {
@@ -565,30 +643,45 @@ impl Drive {
         }
     }
 
-    async fn sample(&mut self) -> Input {
+    async fn sample(&mut self) -> Vec<Input> {
+        // Read before borrowing the control: the keys and the view that is
+        // folded are the same decision.
+        let reads_network = self.core.reads_network();
         let Some(control) = self.control.as_mut() else {
-            return Input::ControlEnded;
+            return vec![Input::ControlEnded];
         };
-        let reply = control
-            .ask(Command::GetInfo(vec![
-                BOOTSTRAP_PHASE.to_owned(),
-                SOCKS_LISTENERS.to_owned(),
-                TRAFFIC_READ.to_owned(),
-            ]))
-            .await;
-        let reply = match reply {
+        let reply = match control
+            .ask(Command::GetInfo(sample_keys(reads_network)))
+            .await
+        {
             Ok(reply) => reply,
-            Err(error) => return input_of_ask(&error),
+            Err(error) => return vec![input_of_ask(&error)],
         };
         let socks = parse_socks_listeners(&reply);
         if let Some(socks) = socks {
             control.set_socks(socks);
         }
-        Input::DirectorySample {
+        let mut inputs = vec![Input::DirectorySample {
             progress: parse_bootstrap_progress(&reply),
             socks,
             read: parse_traffic_read(&reply),
+        }];
+        if reads_network {
+            let view = parse_network_view(&reply);
+            // Tor's view is what the next blocked-link run records (`TSR-Q14`):
+            // said when it changes, not with every sample.
+            if view != self.network_view {
+                tracing::info!(
+                    target: "tor",
+                    network_liveness = ?view.liveness,
+                    circuit_established = ?view.circuits,
+                    "Tor's view of its network"
+                );
+                self.network_view = view;
+            }
+            inputs.push(Input::NetworkView(view));
         }
+        inputs
     }
 
     fn watch_state(&self) -> Option<Input> {
@@ -777,6 +870,35 @@ fn input_of_ask(error: &DaemonTorStartError) -> Input {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A bootstrap sample does not ask Tor about its network. A Running
+    /// sample does (§4.2): "no circuit" during bootstrap is not a statement.
+    #[test]
+    fn a_bootstrap_sample_does_not_ask_tor_about_its_network() {
+        let bootstrap = sample_keys(false);
+        assert!(!bootstrap.iter().any(|key| key == NETWORK_LIVENESS));
+        assert!(!bootstrap.iter().any(|key| key == CIRCUIT_ESTABLISHED));
+        let running = sample_keys(true);
+        assert!(running.iter().any(|key| key == NETWORK_LIVENESS));
+        assert!(running.iter().any(|key| key == CIRCUIT_ESTABLISHED));
+        assert!(running.starts_with(&bootstrap));
+    }
+
+    /// The managed Tor answers inside the Tor dial deadline: a blocked link
+    /// is Tor's `0x06`, never a race with the deadline (case A, 2026-10-25:
+    /// both were 120 s and the outcomes alternated). Launching with Tor's
+    /// default, or setting it from another deadline, fails this.
+    #[test]
+    fn the_managed_tor_answers_inside_the_dial_deadline() {
+        let timeout: u64 = SOCKS_TIMEOUT
+            .as_arg()
+            .expect("the daemon sets it")
+            .parse()
+            .expect("whole seconds");
+        let deadline = shekyl_ffi::tor_link::TOR_DIAL_WITHIN.as_secs();
+        assert!(timeout < deadline, "{timeout} s inside {deadline} s");
+        assert!(timeout >= deadline / 2, "not far inside it");
+    }
 
     /// A control ask that never answers, the wedged-Tor case, does not hold
     /// a stop: the stop resolves the race and the driver folds `Shutdown`.

@@ -24,12 +24,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use shekyl_capped_stream::Session;
-use shekyl_dialer::{DialAim, Dialer};
+use shekyl_dialer::{DialAim, Dialer, TorLinkTally};
 use shekyl_draw_rng::SplitMix64;
 use shekyl_levin::{
     response, BasicNodeData, CoreSyncData, HandshakeResponse, PeerlistEntry, PortableMap,
     COMMAND_HANDSHAKE,
 };
+use shekyl_onion_v3::v3_onion_hostname;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_peerlist::{
     CloseCause, CloseKind, ConnectorId, Direction, NetworkAddress, RefusedSet, Tick,
@@ -169,11 +170,20 @@ fn dial_with(
     aim: DialAim,
     frames: Vec<Vec<u8>>,
 ) -> Option<SocketId> {
+    dial_on(rig, ConnectorId::Clearnet, address, aim, frames)
+}
+
+fn dial_on(
+    rig: &Rig,
+    connector: ConnectorId,
+    address: &NetworkAddress,
+    aim: DialAim,
+    frames: Vec<Vec<u8>>,
+) -> Option<SocketId> {
     let dialer = Arc::clone(&rig.dialer);
     let target = address.clone();
-    let owner = thread::spawn(move || {
-        dialer.dial(ConnectorId::Clearnet, &target, aim, &mut SplitMix64::new(1))
-    });
+    let owner =
+        thread::spawn(move || dialer.dial(connector, &target, aim, &mut SplitMix64::new(1)));
     inject_when_open(&rig.hub, frames);
     owner.join().expect("owner thread")
 }
@@ -907,6 +917,110 @@ fn every_dial_the_dialer_does_not_adopt_is_retired() {
     assert!(
         !dial.retired().contains(&kept),
         "a kept dial's row is live, so it is not retired"
+    );
+}
+
+fn onion() -> NetworkAddress {
+    NetworkAddress::Tor {
+        host: v3_onion_hostname(&[0x11; 32]),
+        port: 12021,
+    }
+}
+
+/// The payload owner declines a delivery on a session whose dial already
+/// counted as opened. The close must not count as another open. The fold
+/// test holds the unopened count across that outcome; this one holds the
+/// close path.
+#[test]
+fn a_refused_payload_on_a_kept_tor_session_is_not_another_open() {
+    let rig = rig();
+    assert!(
+        matches!(
+            rig.dialer
+                .hub()
+                .links()
+                .publish_usable(ConnectorId::Tor, Route::Direct, Tick::new(1),),
+            RoutePublish::Installed { .. }
+        ),
+        "the Tor route was not installed"
+    );
+    let peer = onion();
+    let mut rng = SplitMix64::new(9);
+    rig.dialer
+        .admit_operator(&peer, Tick::new(1), &mut rng)
+        .expect("admitted");
+    let id = dial_on(
+        &rig,
+        ConnectorId::Tor,
+        &peer,
+        DialAim::Keep,
+        vec![reply(NETWORK, vec![])],
+    )
+    .expect("adopted");
+    assert_eq!(
+        rig.dialer.tor_link_tally(),
+        TorLinkTally {
+            opened: 1,
+            unopened: 0,
+            held: 1,
+        }
+    );
+
+    rig.dialer
+        .session_closed(id, CloseCause::new(CloseKind::SessionRefused), &mut rng);
+    assert_eq!(
+        rig.dialer.tor_link_tally(),
+        TorLinkTally {
+            opened: 1,
+            unopened: 0,
+            held: 0,
+        },
+        "the close is not a new stream"
+    );
+    assert!(
+        rig.dialer.shared().lists.is_white(&peer),
+        "PayloadRefused does not demote white"
+    );
+}
+
+/// An inbound Tor session has no list address and is not a dial. While it
+/// is on the board the quiet line's held count includes it; accepting it
+/// does not move the opened count. The close drops the row before the
+/// dialer is told, and the held count follows.
+#[test]
+fn an_inbound_tor_session_is_held_and_is_not_an_opened_dial() {
+    let rig = rig();
+    let attached = rig.hub.connect(&Endpoint::TorInbound).expect("accepted");
+    assert_eq!(
+        rig.hub.board().count(ConnectorId::Tor, Direction::Inbound),
+        1
+    );
+    rig.dialer.note_inbound_tor();
+    assert_eq!(
+        rig.dialer.tor_link_tally(),
+        TorLinkTally {
+            opened: 0,
+            unopened: 0,
+            held: 1,
+        }
+    );
+
+    let cause = CloseCause::new(CloseKind::PeerClosed);
+    rig.hub.finish(attached.id, cause);
+    assert_eq!(
+        rig.hub.board().count(ConnectorId::Tor, Direction::Inbound),
+        0,
+        "the board drops a closed row before the dialer is told"
+    );
+    // The seam's close poster, which does not hold the table lock.
+    // `session_closed` alone does not read the board: the adopt poster
+    // calls it while holding that lock.
+    rig.dialer
+        .session_closed_from_seam(attached.id, cause, &mut SplitMix64::new(1));
+    assert_eq!(
+        rig.dialer.tor_link_tally(),
+        TorLinkTally::default(),
+        "the close leaves the dial counts alone"
     );
 }
 
