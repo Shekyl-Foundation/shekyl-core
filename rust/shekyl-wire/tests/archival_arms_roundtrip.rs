@@ -496,10 +496,11 @@ fn the_joinmarket_fields_after_another_kind_are_refused() {
         .position(|w| w[..32] == [0x77; 32] && w[32] == BOND_POST_KIND_JOINMARKET)
         .expect("the kind byte follows the canonical id")
         + 32;
-    for kind in [
-        shekyl_archival_retention::BondPostKind::Reinstate as u8,
-        shekyl_archival_retention::BondPostKind::Release as u8,
-    ] {
+    // Reinstate and Release have no wire constant. Their retention
+    // discriminants are the bytes, and `Other` writes that byte with no
+    // coupled fields. A second serialization would change more than the
+    // kind byte, which is what this pin holds fixed.
+    for kind in [RetentionKind::Reinstate as u8, RetentionKind::Release as u8] {
         let mut other = bytes.clone();
         other[at] = kind;
         let mut cursor = &other[..];
