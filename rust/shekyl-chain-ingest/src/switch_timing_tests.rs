@@ -106,7 +106,7 @@ where
     // what y holds, and neither holds an alternative block. A table one
     // store never created and the other emptied hold the same rows.
     let none = Vec::new();
-    let differ: Vec<&str> = rows_x
+    let differ: std::collections::BTreeSet<&str> = rows_x
         .keys()
         .chain(rows_y.keys())
         .filter(|t| rows_x.get(*t).unwrap_or(&none) != rows_y.get(*t).unwrap_or(&none))

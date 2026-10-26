@@ -435,7 +435,7 @@ fn above_the_zone_the_economy_rung_is_the_floor_at_the_chains_median() {
 }
 
 /// The floor at the connecting height of `weighted_chain(12, 40, 2·zone)`
-/// with 600 burned, as the owner priced it when this pin was written.
+/// with 600 burned: the owner's price for this chain, pinned as a value.
 const FLOOR_ABOVE_THE_ZONE_AT_12: u64 = 5_802;
 /// The floor at height 7 of the same chain, whose stored median is the
 /// same `2·zone`.

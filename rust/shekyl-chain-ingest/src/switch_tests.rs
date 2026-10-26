@@ -468,9 +468,8 @@ async fn a_pop_below_the_undo_floor_is_a_local_fail_stop_not_a_verdict() {
         other => panic!("the floor did not refuse locally: {other:?}"),
     }
     assert_eq!(x.digest().await.expect("d"), before, "nothing moved");
-    // The heavier chain this node could not follow stays stored: its
-    // blocks are the evidence the degraded latch records, and a node that
-    // evicted them on the refusal could not name the chain it refused.
+    // The heavier chain this node could not follow stays stored: the
+    // refusal is local and moves nothing, the alt table included.
     // Supersedes the alt-store half of the C++ core test
     // `gen_reorg_watermark_refused_switch` (`expected_alt_count`).
     assert_eq!(
