@@ -1003,10 +1003,15 @@ confirms or keeps, the hub adopts, then settle), on the loop's CSPRNG,
 and waits again on the same wake. An attempt stays pending, and its
 nonce in flight, until the loop applies its result. `stop` sets the
 flag, rings, cancels every attempt in flight (a connect is aborted, a
-channel released), drops every posted result, and then writes the
-address file, all before the zone's runtime stops and before the Tor
-teardown (`TOR_SUPERVISOR.md`, `TSR-F13`). Tests:
-`shekyl-dialer/tests/attempts.rs`. *Records-was (ACCEPTED for PR-3,
+channel released), drops every posted result, waits for any application
+already under way, joins both owner loops, and then writes the address
+file, all before the zone's runtime stops and before the Tor teardown
+(`TOR_SUPERVISOR.md`, `TSR-F13`). Each owner loop is a dedicated thread
+on the thread ledger (`p2p-dial-clearnet`, `p2p-dial-tor`); the engine
+lateness report is an interval task on the transport runtime, not a
+thread (decision B, Rick 2026-10-25). Tests:
+`shekyl-dialer/tests/attempts.rs`, and the ledger rows in
+`shekyl-ffi/src/zone_ffi_tests.rs`. *Records-was (ACCEPTED for PR-3,
 Rick 2026-10-13, with a reopen criterion this met): the owner loop
 blocked on the TCP dial and the handshake read, so the in-flight bound
 was the thread, and a stopping daemon could wait out a dial.*

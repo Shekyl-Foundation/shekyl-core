@@ -37,6 +37,7 @@ pub use shekyl_peerlist::{ConnectorId, NetworkAddress};
 use shekyl_relay_privacy::params::{MIN_PROVISIONED_OUT_PEERS, P2P_DEFAULT_OUT_PEERS};
 use shekyl_rpc_types::DaemonNetwork;
 use shekyl_seam::{connector_from_index, CloseCause, Hub, SocketId, SyncPayload};
+use shekyl_thread_ledger::{DedicatedThread, ThreadName};
 use shekyl_timing_engine::{EngineError, Handle, MonotonicClock, OwnerClass};
 
 use crate::legacy_util::slice_from_typed_ptr;
@@ -47,6 +48,11 @@ use shekyl_seam::TOR_HOST_MAX;
 
 /// The process's dialer, from the zone host's start to its shutdown.
 static DIALER: Mutex<Option<Arc<Dialer>>> = Mutex::new(None);
+
+/// Each connector's owner loop, a thread on the thread ledger (decision B,
+/// Rick 2026-10-25), joined at [`stop`] before the address file is written.
+static LOOPS: Mutex<[Option<DedicatedThread>; ConnectorId::COUNT]> =
+    Mutex::new([const { None }; ConnectorId::COUNT]);
 
 /// The core's latest published tip. `None` until the first publish.
 static TIP: Mutex<Option<SyncPayload>> = Mutex::new(None);
@@ -180,9 +186,16 @@ pub(crate) fn start_connector(connector: ConnectorId, engine: &Handle<MonotonicC
         );
     }
     admit_compiled_seeds(&dialer, connector);
-    let name = format!("p2p-dial-{connector:?}").to_lowercase();
+    let name = match ThreadName::new(&format!("p2p-dial-{connector:?}").to_lowercase()) {
+        Ok(name) => name,
+        Err(err) => {
+            tracing::error!("the dialer's thread for {connector:?} has no name: {err:?}");
+            dialer.release_owner(connector);
+            return false;
+        }
+    };
     let running = Arc::clone(&dialer);
-    let spawned = std::thread::Builder::new().name(name).spawn(move || {
+    let spawned = shekyl_thread_ledger::spawn_dedicated(&name, move || {
         running.run(connector, &owner, &mut SecureRelayRng);
         if let Err(err) = owner.deregister() {
             // The engine closes at shutdown and drops every owner. That is
@@ -194,12 +207,17 @@ pub(crate) fn start_connector(connector: ConnectorId, engine: &Handle<MonotonicC
             }
         }
     });
-    if let Err(err) = spawned {
-        tracing::error!("the dialer's thread for {connector:?} could not start: {err}");
-        dialer.release_owner(connector);
-        return false;
+    match spawned {
+        Ok(thread) => {
+            LOOPS.lock().expect("dialer loops")[connector.index()] = Some(thread);
+            true
+        }
+        Err(err) => {
+            tracing::error!("the dialer's thread for {connector:?} could not start: {err}");
+            dialer.release_owner(connector);
+            false
+        }
     }
-    true
 }
 
 /// Admit the compiled seeds that belong to `connector`.
@@ -235,11 +253,29 @@ pub fn note_own_onion(service_id: &str, virtual_port: u16) {
     }
 }
 
-/// Stop every owner loop. Called at zone shutdown.
+/// Stop the dialer: cancel every attempt, join both owner loops, then
+/// write the address file (the dialer in-flight bound, revision 4, item
+/// 3). Called at zone shutdown and when the seam unbinds. The dialer and
+/// the loops are taken out of their statics first, and neither lock is
+/// held while a loop is joined.
 pub(crate) fn stop() {
-    if let Some(dialer) = DIALER.lock().expect("dialer").take() {
-        dialer.stop();
-    }
+    let taken = DIALER.lock().expect("dialer").take();
+    let Some(dialer) = taken else {
+        return;
+    };
+    let loops = std::mem::replace(
+        &mut *LOOPS.lock().expect("dialer loops"),
+        [const { None }; ConnectorId::COUNT],
+    );
+    dialer.stop_joining(move || {
+        for (connector, running) in ConnectorId::ALL.iter().zip(loops) {
+            if let Some(mut running) = running {
+                if running.join().is_err() {
+                    tracing::warn!("{connector:?}: the dialer's owner loop panicked");
+                }
+            }
+        }
+    });
 }
 
 /// A session closed. A kept session leaves the dialer's count. A

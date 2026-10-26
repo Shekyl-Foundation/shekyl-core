@@ -380,6 +380,64 @@ fn stop_cancels_every_attempt_in_flight_and_the_loop_exits_at_the_bell() {
     service.close();
 }
 
+/// **Stop joins the loops between the cancel and the file** (revision 4,
+/// item 3: flag, bell, cancel, join both loops, write the file). A Tor
+/// loop runs with one attempt stalled in flight. The join `stop_joining`
+/// runs finds nothing in flight and no file yet, and joins the loop; the
+/// file is written after it, with the cancelled draw still seated.
+#[test]
+fn stop_joins_the_loops_after_the_cancel_and_before_the_file() {
+    let clock = ManualClock::new(Tick::new(1));
+    let service = EngineService::start(clock.clone());
+    let sockets = Sockets::new();
+    let dial = Arc::new(StallDial::new(sockets.clone(), true));
+    let (_hub, dialer) = dialer_on(&clock, &sockets, Arc::clone(&dial) as Arc<dyn Dial>);
+    let dir = tempfile::tempdir().expect("a directory");
+    let path = dir.path().join("p2pstate.bin");
+    let mut rng = SplitMix64::new(21);
+    assert_eq!(
+        dialer
+            .open_address_file(path.clone(), &mut rng)
+            .expect("a first start"),
+        0
+    );
+    let onion = onions(1).remove(0);
+    dialer
+        .admit_operator(&onion, Tick::new(1), &mut rng)
+        .expect("admitted");
+    assert!(matches!(dialer.launch(TOR, &mut rng), Launch::Running(_)));
+    wait_until("the attempt reached its stall", || {
+        dial.stalled_alive.load(Ordering::Acquire) == 1
+    });
+
+    let owner = service
+        .handle()
+        .register(OwnerClass::Discovery)
+        .expect("register");
+    let running = Arc::clone(&dialer);
+    let loop_thread = thread::spawn(move || {
+        running.run(TOR, &owner, &mut SplitMix64::new(22));
+    });
+    thread::sleep(Duration::from_millis(50));
+
+    let mut joined = false;
+    dialer.stop_joining(|| {
+        assert_eq!(dialer.in_flight(TOR), 0, "the cancel came first");
+        assert!(!path.exists(), "the file is written after the join");
+        loop_thread.join().expect("the loop thread");
+        joined = true;
+    });
+    assert!(joined);
+    assert_eq!(
+        shekyl_dialer::AddressStore::new(path)
+            .load()
+            .expect("written"),
+        vec![onion],
+        "the cancelled draw is written, still seated"
+    );
+    service.close();
+}
+
 /// One admitted gray address on a dialer that can dial, then stopped
 /// before anything is launched. The held dial would answer; an attempt
 /// that opened a socket shows up in `opened`.

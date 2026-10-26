@@ -416,7 +416,7 @@ fn ensure(network_id: [u8; 16]) -> Result<Arc<Host>, ZoneStart> {
         );
     }
     let engine = crate::seam_ffi::process_engine();
-    spawn_lateness_report(engine.clone());
+    spawn_lateness_report(&handle, engine.clone());
     let (clearnet_tx, clearnet_rx) = mpsc::unbounded_channel();
     let (tor_tx, tor_rx) = mpsc::unbounded_channel();
     let on_cause: Arc<dyn Fn(CloseCause) + Send + Sync> = Arc::new(|cause| match cause.kind() {
@@ -517,39 +517,51 @@ fn adopt_tor(hub: &Hub, admitted: TorAdmitted) {
 }
 
 /// Every 60 s, the engine's lateness totals for each class that has fired,
-/// at debug (Rick, 2026-10-14: the transport diagnosis). The thread ends
-/// when the engine closes.
-fn spawn_lateness_report(engine: Handle<MonotonicClock>) {
+/// at debug (Rick, 2026-10-14: the transport diagnosis). An interval task on
+/// the transport runtime, not a thread of its own (decision B, Rick
+/// 2026-10-25: every p2p thread is on the thread ledger). The engine's
+/// answer is a blocking receive, so each report runs on the blocking pool.
+/// The task ends when the engine closes or the runtime stops.
+fn spawn_lateness_report(runtime: &tokio::runtime::Handle, engine: Handle<MonotonicClock>) {
     const EVERY: Duration = Duration::from_secs(60);
-    let spawned = std::thread::Builder::new()
-        .name("p2p-lateness".to_owned())
-        .spawn(move || loop {
-            std::thread::sleep(EVERY);
-            for class in shekyl_timing_engine::OwnerClass::ALL {
-                let Ok(totals) = engine.lateness(class) else {
-                    return;
-                };
-                if totals.fires == 0 && totals.home_reports == 0 {
-                    continue;
-                }
-                tracing::debug!(
-                    class = ?class,
-                    fires = totals.fires,
-                    max_wake_delay_ns = totals.max_wake_delay,
-                    wakes_late_1ms = totals.wakes_at_least(1_000_000),
-                    wakes_late_100ms = totals.wakes_at_least(100_000_000),
-                    home_reports = totals.home_reports,
-                    max_home_delay_ns = totals.max_home_delay,
-                    homes_late_1ms = totals.homes_at_least(1_000_000),
-                    homes_late_100ms = totals.homes_at_least(100_000_000),
-                    replaced_wakes = totals.replaced_wakes,
-                    "engine lateness"
-                );
+    drop(runtime.spawn(async move {
+        let mut every = tokio::time::interval_at(tokio::time::Instant::now() + EVERY, EVERY);
+        every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            every.tick().await;
+            let engine = engine.clone();
+            match tokio::task::spawn_blocking(move || report_lateness(&engine)).await {
+                Ok(true) => {}
+                Ok(false) | Err(_) => return,
             }
-        });
-    if spawned.is_err() {
-        tracing::warn!("the engine lateness report could not start");
+        }
+    }));
+}
+
+/// One lateness report. `false` when the engine has closed.
+fn report_lateness(engine: &Handle<MonotonicClock>) -> bool {
+    for class in shekyl_timing_engine::OwnerClass::ALL {
+        let Ok(totals) = engine.lateness(class) else {
+            return false;
+        };
+        if totals.fires == 0 && totals.home_reports == 0 {
+            continue;
+        }
+        tracing::debug!(
+            class = ?class,
+            fires = totals.fires,
+            max_wake_delay_ns = totals.max_wake_delay,
+            wakes_late_1ms = totals.wakes_at_least(1_000_000),
+            wakes_late_100ms = totals.wakes_at_least(100_000_000),
+            home_reports = totals.home_reports,
+            max_home_delay_ns = totals.max_home_delay,
+            homes_late_1ms = totals.homes_at_least(1_000_000),
+            homes_late_100ms = totals.homes_at_least(100_000_000),
+            replaced_wakes = totals.replaced_wakes,
+            "engine lateness"
+        );
     }
+    true
 }
 
 /// Bind clearnet. `encrypt` nonzero selects [`ClearnetOption::On`]; zero

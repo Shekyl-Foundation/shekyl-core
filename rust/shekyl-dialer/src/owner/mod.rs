@@ -560,7 +560,20 @@ impl Dialer {
     /// file is written last. All of this is before the zone's runtime
     /// stops and before the managed Tor is torn down
     /// (`TOR_SUPERVISOR.md`, `TSR-F13`: the dialer stops first).
+    ///
+    /// A caller that started the owner loops on threads of its own uses
+    /// [`Self::stop_joining`], which joins them before the file is written.
     pub fn stop(&self) {
+        self.stop_joining(|| {});
+    }
+
+    /// [`Self::stop`], with `join_loops` run after every attempt is
+    /// cancelled and every application has finished, and before the
+    /// address file is written. The caller that started the owner loops
+    /// joins them there: each exits at the bell, and none applies a result
+    /// once the flag is set, so the file is written with no loop running.
+    /// It must not be called from an owner loop's own thread.
+    pub fn stop_joining(&self, join_loops: impl FnOnce()) {
         self.stop.store(true, Ordering::Release);
         self.bell.ring();
         let count = self.abandon_flight();
@@ -568,6 +581,7 @@ impl Dialer {
             tracing::debug!("the dialer cancelled {count} attempt(s) in flight at stop");
         }
         self.wait_for_applications();
+        join_loops();
         if let Err(err) = self.store_addresses() {
             tracing::warn!("the address file was not written at stop: {err}");
         }

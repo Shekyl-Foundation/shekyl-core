@@ -199,6 +199,69 @@ fn a_second_start_of_a_connectors_loop_starts_nothing() {
     }
 }
 
+/// Every p2p thread is on the thread ledger (decision B, Rick 2026-10-25;
+/// the in-flight bound, revision 4, item 4). Each connector's owner loop is
+/// a dedicated row named for it, and shutdown joins it: a row leaves the
+/// ledger only after its thread is joined. The lateness report is a task
+/// on the transport runtime, so no thread or row of its own exists.
+#[test]
+fn the_owner_loops_are_ledger_rows_joined_at_shutdown_and_lateness_is_no_thread() {
+    let _bind = crate::seam_ffi::seam_bind_lock().lock();
+    let rows = |name: &str| {
+        shekyl_thread_ledger::ledger()
+            .into_iter()
+            .filter(|row| {
+                row.name.as_str() == name
+                    && row.kind == shekyl_thread_ledger::RowKind::DedicatedThread
+            })
+            .count()
+    };
+    let mut executor = 0u8;
+    let ceiling = ShekylInboundCeiling {
+        kind: SHEKYL_INBOUND_CEILING_UNLIMITED,
+        ceiling: 0,
+        soft_limit: 0,
+        held: 0,
+    };
+    let bound = unsafe {
+        shekyl_seam_bind(
+            std::ptr::addr_of_mut!(executor).cast::<c_void>(),
+            Some(discard),
+        )
+    };
+    assert_eq!(bound, 0);
+    assert_eq!(unsafe { shekyl_seam_set_ceiling(&raw const ceiling) }, 0);
+    let host = ensure([9u8; 16]).expect("zone host");
+    assert!(crate::dialer_ffi::start_connector(
+        ConnectorId::Clearnet,
+        &host.engine
+    ));
+    assert!(crate::dialer_ffi::start_connector(
+        ConnectorId::Tor,
+        &host.engine
+    ));
+    drop(host);
+    assert_eq!(rows("p2p-dial-clearnet"), 1);
+    assert_eq!(rows("p2p-dial-tor"), 1);
+    assert_eq!(rows("p2p-lateness"), 0, "the report is a task, not a row");
+    #[cfg(target_os = "linux")]
+    {
+        let threads = std::fs::read_dir("/proc/self/task")
+            .expect("this process's threads")
+            .filter_map(|task| std::fs::read_to_string(task.ok()?.path().join("comm")).ok())
+            .filter(|comm| comm.trim_end() == "p2p-lateness")
+            .count();
+        assert_eq!(threads, 0, "no thread named p2p-lateness");
+    }
+
+    shutdown();
+    assert_eq!(rows("p2p-dial-clearnet"), 0, "joined at shutdown");
+    assert_eq!(rows("p2p-dial-tor"), 0, "joined at shutdown");
+    unsafe {
+        shekyl_seam_bind(std::ptr::null_mut(), None);
+    }
+}
+
 /// The Tor window follows the route (revision 4 of the in-flight bound,
 /// Rick 2026-10-26; the Tor lane's review). The managed Tor's route gives
 /// the dialer the window that Tor was launched with; an operator's Tor
