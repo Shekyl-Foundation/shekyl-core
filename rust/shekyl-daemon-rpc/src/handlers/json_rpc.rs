@@ -41,11 +41,12 @@ use axum::Json;
 use std::sync::Arc;
 use tracing::warn;
 
-/// Whether `method` has no row in the method table, on either listener. It
-/// is answered as not found and never dispatched: the table is the policy
-/// (RW-Q7), so a name it does not list is not served, as an unrouted REST
-/// path is not. The gate that every served name is a row keeps every
-/// served method off this arm.
+/// Whether `method` has no row in the method table. [`handle`] matches
+/// [`shekyl_rpc_types::methods::json_rpc`] once and answers that absence
+/// as method-not-found; this names the same absence for the test that
+/// pins a deleted method. A row the connection may not call is a grant
+/// refusal, which is [`handle`]'s other arm.
+#[cfg(test)]
 fn unrouted(method: &str) -> bool {
     shekyl_rpc_types::methods::json_rpc(method).is_none()
 }
@@ -58,7 +59,12 @@ pub async fn handle(
     let id = request.id.clone();
     let method = request.method.clone();
 
-    if unrouted(&method) {
+    // One lookup, two outcomes. No row: the name is not a method. A row:
+    // admit it. `/json_rpc` itself serves any connection; each method
+    // carries its own policy (§6.1, RT-O32). A refusal is the JSON-RPC
+    // error object with its class and diagnostic (RW-Q3), never
+    // "method not found".
+    let Some(row) = shekyl_rpc_types::methods::json_rpc(&method) else {
         return (
             StatusCode::OK,
             Json(JsonRpcResponse::error(
@@ -67,16 +73,9 @@ pub async fn handle(
                 format!("Method not found: {method}"),
             )),
         );
-    }
-
-    // The daemon's second gate: `/json_rpc` itself serves any connection,
-    // and each method is admitted against its own row (§6.1, RT-O32). A
-    // refusal is the JSON-RPC error object with its class and diagnostic
-    // (RW-Q3), never "method not found".
-    if let Some(row) = shekyl_rpc_types::methods::json_rpc(&method) {
-        if let Err(error) = authority.admit(row) {
-            return (StatusCode::OK, Json(refusal(id, &error)));
-        }
+    };
+    if let Err(error) = authority.admit(row) {
+        return (StatusCode::OK, Json(refusal(id, &error)));
     }
 
     // Natively-served methods (RK-1, `docs/completed/DAEMON_RPC_KV_CUTOVER.md`)

@@ -211,7 +211,8 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// 3.62: a refusal by grant is the JSON-RPC error object on every surface
 /// (`RPC_WIRE.md` RW-Q3): class `OutsideTheGrant` (-32002) with its typed
 /// diagnostic, where a gated JSON-RPC method was HTTP 403 with -32601 and a
-/// gated REST path was a 404. The view listener refuses
+/// gated REST path was a 404. A path or a name that is not a method stays
+/// not found. The view listener refuses
 /// `/get_alt_blocks_hashes` (`status`), and `calc_pow` and
 /// `get_coinbase_tx_sum` are refused to a bounded caller as
 /// `OverResourceBound` (-32003) until their bounds are set (RT-W10).
