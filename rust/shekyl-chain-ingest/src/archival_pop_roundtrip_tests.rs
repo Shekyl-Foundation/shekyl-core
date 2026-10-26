@@ -902,3 +902,363 @@ async fn a_slash_and_reinstate_chain_pops_and_reconnects_at_every_block_from_the
     );
     chain.scenario.close().await;
 }
+
+/// Passed draws for `persona` on shard 0 in `epoch`, three of them, through
+/// the regtest door: the epoch settles Served for the pair.
+async fn serve_on_shard_zero(
+    scenario: &Scenario<FreeHash>,
+    epoch: SettlementEpoch,
+    persona: PersonaId,
+) {
+    let shard = ShardId::from_raw(0);
+    let open = levered_schedule().open_height(epoch.to_raw());
+    let mut digest = IssuedDigest::ZERO;
+    let draws = (0..3u64)
+        .map(|k| {
+            let issuing_height = BlockHeight::from_raw(open + k);
+            digest.fold(&issued_draw_term(&persona, shard, epoch, issuing_height, 0));
+            IndexedDraw {
+                persona,
+                shard,
+                issuing_height,
+                draw: 0,
+                state: IssuedDraw {
+                    revealed_at: BlockHeight::from_raw(open + k + 1),
+                    passed: true,
+                },
+            }
+        })
+        .collect();
+    scenario
+        .connector()
+        .ask(IssueDraws {
+            epoch,
+            draws,
+            digest,
+        })
+        .await
+        .expect("the door issues the draws");
+}
+
+/// The prune-straddle (`REWARD_EMISSION_E3_GATING_ROUND.md` §6.4 #3) on a
+/// driven chain. The claimed set is pruned on insert
+/// (`claimed_epochs_check_and_set` keeps the epochs at or above the claim
+/// window's floor), so a later claim drops an epoch the persona was already
+/// paid for. Popping that claim must bring the epoch back, or a branch that
+/// lowers the floor again would pay it twice.
+///
+/// One compact persona on shard 0, Served in `E_old` and in
+/// `E_new = E_old + W − 1`:
+///
+/// 1. `E_old` is claimed the block after its pass and paid.
+/// 2. `E_new` is claimed at the first block of epoch `t = E_old + W + 1`,
+///    the first block where `Σwork(E_new)` is a row. The window's floor
+///    there is `t − W = E_old + 1`, so the insert prunes `E_old`.
+/// 3. The chain pops two blocks, the claim and the pass before it. The
+///    epoch is a function of height, so only a pop past the epoch's first
+///    block lowers the floor: the next block is in epoch `t − 1`, whose
+///    floor is `E_old`, and `E_old` is claimable again by the window.
+/// 4. A fresh claim of `E_old` there is refused at CEN-J25, the verify's
+///    `EpochAlreadyClaimed`: the pop restored the record's pre-image (the
+///    undo journal's `archival_bond` row), `E_old` and the first paying
+///    height with it.
+///
+/// Supersedes `archival_substrate_lmdb`'s
+/// `emission_claim_prune_straddle_no_double_mint` (at `eb5be7767`).
+///
+/// Red edit: skip the undo journal's `archival_bond` entries in
+/// `shekyl-chain-store`'s `undo::replay` — the pop leaves the post-image,
+/// `E_old` is not in the set, and the fresh claim connects: a second mint.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "fills a shard with real proofs; minutes; run by nightly.yml's chain-ingest-ignored job"]
+async fn a_popped_claim_restores_the_epoch_its_prune_dropped_and_a_second_claim_is_refused() {
+    use shekyl_chain_rules::{CenRow, Locus, TxSlot};
+
+    let rules = levered_rules();
+    let schedule = levered_schedule();
+    let w = MAX_CLAIM_AGE_W;
+    let mut scenario = Scenario::open_under("archival-pop-straddle", FreeHash, rules);
+    let mut mined = scenario.mine(first_spending_height().to_raw()).await;
+    let filled = close_shards(&mut scenario, &mut mined, FILL_FROM_COINBASE, 1).await;
+    let [closed] = filled.closed.as_slice() else {
+        panic!("one shard closed");
+    };
+    let join_height = inside_one_epoch(first_admissible_compact_join(&rules, *closed), 2);
+    crate::scenario_shard::mine_to(&mut scenario, &mut mined, join_height).await;
+    let mut spender = Spender::over(&mined);
+    let mut seen = mined.len();
+
+    // The join rides coinbase 0, paying the persona the claims' backing and
+    // the first claim's fee; coinbases 1 and 2 pay the other two fees, each
+    // in its own block (the spender draws output keys from the height).
+    let persona = Persona::at(1);
+    let recipient = Recipient::persona(persona.keys());
+    let owner = Owner::persona(persona.keys());
+    let mut fee_keys = Vec::new();
+    let funding = spender.spend_coinbase_to(
+        scenario.wallet(),
+        BlockHeight::ZERO,
+        join_height,
+        FEE,
+        Some(&persona.join(shard_set(vec![0]), ENDPOINT)),
+        &recipient,
+    );
+    let backing_key = funding.prefix.outputs[0].key;
+    spender.own(backing_key);
+    fee_keys.push(funding.prefix.outputs[1].key);
+    spender.own(fee_keys[0]);
+    let block = scenario
+        .mine_listing(vec![funding])
+        .await
+        .unwrap_or_else(|o| panic!("the join connects: {o}"));
+    mined.push(block);
+    for coinbase in 1..=2u64 {
+        catch_up(&mut spender, &mined, &mut seen);
+        let height = BlockHeight::from_raw(u64::try_from(mined.len()).expect("a height"));
+        let paying = spender.spend_coinbase_to(
+            scenario.wallet(),
+            BlockHeight::from_raw(coinbase),
+            height,
+            FEE,
+            None,
+            &recipient,
+        );
+        let fee_key = paying.prefix.outputs[1].key;
+        spender.own(fee_key);
+        fee_keys.push(fee_key);
+        let block = scenario
+            .mine_listing(vec![paying])
+            .await
+            .unwrap_or_else(|o| panic!("fee funding {coinbase} connects: {o}"));
+        mined.push(block);
+    }
+    let join_epoch = schedule.epoch_at(join_height);
+    let e_old = SettlementEpoch::from_raw(join_epoch.to_raw() + 1);
+    let e_new = SettlementEpoch::from_raw(e_old.to_raw() + w - 1);
+    let t = e_old.to_raw() + w + 1;
+    serve_on_shard_zero(&scenario, e_old, persona.id()).await;
+    serve_on_shard_zero(&scenario, e_new, persona.id()).await;
+
+    // A claim of `epoch` connecting at `connecting`, paying with fee output
+    // `fee_index`, priced at the relay floor there. The reward is the
+    // epoch's close over its one bond, one shard and one Served pair.
+    async fn claim_of(
+        scenario: &mut Scenario<FreeHash>,
+        spender: &Spender,
+        mined: &[Mined],
+        (persona, owner, backing_key, fee_key): (&Persona, &Owner<'_>, [u8; 32], [u8; 32]),
+        (join_epoch, close_height): (SettlementEpoch, BlockHeight),
+        (epoch, connecting, tx_key): (SettlementEpoch, BlockHeight, [u8; 32]),
+    ) -> Transaction {
+        let schedule = levered_schedule();
+        let count_at_close = (epoch.to_raw() + 1) * EPOCH_BLOCKS;
+        let budget = mined[usize::try_from(count_at_close - 1).expect("small")]
+            .archival
+            .close()
+            .expect("the block that completes the epoch closes it")
+            .budget();
+        let bonds = [EpochCloseBond {
+            join_settlement_epoch: join_epoch.to_raw(),
+            is_support_complete_tree: false,
+            bad_intervals: &[],
+        }];
+        let shards = [EpochCloseShard {
+            shard_id: 0,
+            close: ShardClose::ClosedAt(close_height),
+        }];
+        let pairs = [CreditPair {
+            bond_idx: 0,
+            shard_idx: 0,
+        }];
+        let inputs = EpochCloseInputs::under_schedule(
+            schedule,
+            epoch.to_raw(),
+            count_at_close,
+            &bonds,
+            &shards,
+            &pairs,
+        );
+        let result = epoch_close_compute(&inputs).expect("the pair indexes its bond and shard");
+        let share = claimant_reward_share(&EmissionEpochSource {
+            inputs: inputs.clone(),
+            persisted_sigma_work_milli: result.sigma_work_milli,
+            claimant_bond_idx: Some(0),
+            budget: budget.to_raw(),
+        })
+        .expect("the claimant indexes its bond");
+        assert!(
+            share.is_member && share.reward > 0,
+            "a share is owed for {epoch:?}"
+        );
+        let scarcity = shard_contribution_micro(&inputs, &result.r_market_by_shard, 0);
+        let terms = ClaimTerms {
+            holdings: shard_set(vec![0]),
+            settlement_epochs: vec![epoch.to_raw()],
+            work_claim: vec![WorkEpochClaim {
+                epoch: epoch.to_raw(),
+                shard_entries: vec![ShardWorkEntry {
+                    shard_id: 0,
+                    serve_credit_bit: true,
+                    scarcity_micro: u32::try_from(scarcity).expect("a per-entry term fits"),
+                }],
+            }],
+            reward_amount_plain: vec![share.reward],
+        };
+        let relay_floor = scenario
+            .read_chain(|view, _| {
+                let next = shekyl_chain_rules::Tip::connecting_height(
+                    shekyl_chain_rules::HeaderView::tip(view)
+                        .expect("tip")
+                        .as_ref(),
+                );
+                match shekyl_chain_rules::relay_floor_window(view, next).expect("floors") {
+                    shekyl_chain_rules::AtHeight::Recorded(floors) => {
+                        floors.into_iter().min().expect("a window")
+                    }
+                    shekyl_chain_rules::AtHeight::AboveTip => unreachable!("the connecting height"),
+                }
+            })
+            .await;
+        let mut fee = FEE;
+        for _ in 0..8 {
+            let backing = spender.owned_input(owner, backing_key, connecting);
+            let fee_input = spender.owned_input(owner, fee_key, connecting);
+            let claim = assemble_emission_claim(
+                persona.keys(),
+                &Zeroizing::new(tx_key),
+                vec![fee_input.input],
+                backing.input,
+                terms.clone(),
+                fee,
+                &backing.tree,
+            );
+            let tx = Transaction::from_bytes(&claim.bytes).expect("the claim parses");
+            let weight = u64::try_from(tx.weight()).expect("a weight fits");
+            let needed = shekyl_economics::quantized_fee(weight, relay_floor).expect("priceable");
+            if needed <= fee {
+                return tx;
+            }
+            fee = needed;
+        }
+        panic!("the claim's floor price did not settle")
+    }
+    let keys = |fee_index: usize| (&persona, &owner, backing_key, fee_keys[fee_index]);
+    let at_close = (join_epoch, closed.close_height);
+
+    // 1. `E_old`, the block after its pass.
+    let first_connecting =
+        BlockHeight::from_raw(schedule.slash_deadline_height(e_old.to_raw()) + 1);
+    crate::scenario_shard::mine_to(&mut scenario, &mut mined, first_connecting).await;
+    catch_up(&mut spender, &mined, &mut seen);
+    let first = claim_of(
+        &mut scenario,
+        &spender,
+        &mined,
+        keys(0),
+        at_close,
+        (e_old, first_connecting, [0x71; 32]),
+    )
+    .await;
+    let block = scenario
+        .mine_listing(vec![first])
+        .await
+        .unwrap_or_else(|o| panic!("the claim of E_old connects: {o}"));
+    mined.push(block);
+    let paid = record_of(&scenario, &persona).await;
+    assert_eq!(paid.claimed_settlement_epochs, vec![e_old]);
+    assert_eq!(
+        paid.first_paying_emission_height,
+        FirstPayingHeight::new(first_connecting)
+    );
+
+    // 2. `E_new` at the first block of `t`: the insert prunes `E_old`.
+    let second_connecting = BlockHeight::from_raw(schedule.open_height(t));
+    assert_eq!(
+        schedule.slash_deadline_height(e_new.to_raw()) + 1,
+        second_connecting.to_raw(),
+        "the first block where Σwork(E_new) is a row"
+    );
+    assert_eq!(claim_window_floor(t), e_old.to_raw() + 1);
+    crate::scenario_shard::mine_to(&mut scenario, &mut mined, second_connecting).await;
+    catch_up(&mut spender, &mined, &mut seen);
+    let second = claim_of(
+        &mut scenario,
+        &spender,
+        &mined,
+        keys(1),
+        at_close,
+        (e_new, second_connecting, [0x72; 32]),
+    )
+    .await;
+    let block = scenario
+        .mine_listing(vec![second])
+        .await
+        .unwrap_or_else(|o| panic!("the claim of E_new connects: {o}"));
+    assert_eq!(block.height, second_connecting);
+    mined.push(block);
+    assert_eq!(
+        record_of(&scenario, &persona)
+            .await
+            .claimed_settlement_epochs,
+        vec![e_new],
+        "the insert pruned E_old below the floor"
+    );
+
+    // 3. Pop the claim and the pass before it: the next block is in
+    // `t − 1`, whose floor is `E_old`.
+    let below = BlockHeight::from_raw(second_connecting.to_raw() - 2);
+    let rewound = scenario.rewind_to(below).await.expect("the rewind answers");
+    assert_eq!(rewound.popped(), 2, "{rewound:?}");
+    mined.truncate(usize::try_from(below.to_raw() + 1).expect("small"));
+    let rebuilt = below + BlockCount::ONE;
+    assert_eq!(schedule.epoch_at(rebuilt).to_raw(), t - 1);
+    assert_eq!(
+        claim_window_floor(t - 1),
+        e_old.to_raw(),
+        "E_old is inside the window again"
+    );
+
+    // 4. A fresh claim of `E_old` is refused, at the transaction. The
+    // spender is rebuilt over the surviving chain, watching the persona's
+    // outputs from before the blocks that paid them.
+    let split = usize::try_from(join_height.to_raw()).expect("small");
+    let mut spender = Spender::over(&mined[..split]);
+    spender.own(backing_key);
+    for key in &fee_keys {
+        spender.own(*key);
+    }
+    for block in &mined[split..] {
+        spender.push(block);
+    }
+    let again = claim_of(
+        &mut scenario,
+        &spender,
+        &mined,
+        keys(2),
+        at_close,
+        (e_old, rebuilt, [0x73; 32]),
+    )
+    .await;
+    match scenario.mine_listing(vec![again]).await {
+        Err(crate::scenario::StepOutcome::Refused(refused)) => {
+            assert_eq!(refused.rule, CenRow::J25, "refused by: {refused}");
+            assert_eq!(
+                refused.locus,
+                Locus::Tx {
+                    slot: TxSlot::Listed(0)
+                }
+            );
+        }
+        Ok(block) => panic!(
+            "double mint: E_old, paid at {first_connecting}, was claimed again at {}",
+            block.height
+        ),
+        Err(other) => panic!("expected J25's refusal, got {other}"),
+    }
+    let restored = record_of(&scenario, &persona).await;
+    assert_eq!(
+        restored, paid,
+        "the pop restored the record the first claim wrote, E_old and its first paying height"
+    );
+    scenario.close().await;
+}

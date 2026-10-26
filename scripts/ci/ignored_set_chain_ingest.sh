@@ -41,6 +41,7 @@ list=$(cargo test --locked --release -p shekyl-chain-ingest --features pipeline 
 for subject in \
   'archival_pop_roundtrip_tests::a_claim_chain_pops_and_reconnects_at_every_block_from_the_joins_on' \
   'archival_pop_roundtrip_tests::a_slash_and_reinstate_chain_pops_and_reconnects_at_every_block_from_the_join_on' \
+  'archival_pop_roundtrip_tests::a_popped_claim_restores_the_epoch_its_prune_dropped_and_a_second_claim_is_refused' \
   'archival_slash_tests::the_levered_slash_chain_judges_each_row_on_one_record' \
   'miner_tests::the_miner_extends_the_chain_block_after_block' \
   'miner_tests::the_miners_rate_per_worker' \
