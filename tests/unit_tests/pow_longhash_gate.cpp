@@ -6,13 +6,14 @@
 // CEN-D2 fix coverage (docs/design/CONSENSUS_STORE_RECONCILIATION.md §5.4.1):
 // a longhash the verifier could not compute must reject at EVERY difficulty.
 // The 0xff sentinel is a belt, not the gate — at difficulty 1 every hash
-// passes check_hash, so the verifier's returned bool is the gate. These tests
-// pin the verdict contracts at the seams take-able in a unit test:
-//   - get_block_longhash (bool overload): false + belt on hash failure;
-//   - get_altblock_longhash: same contract, now routed through the one
-//     hash_pow_randomx dispatch point;
+// passes check_hash, so the verifier's returned bool is the gate. The verdict
+// itself is pinned in Rust: shekyl-chain-rules pow_tests.rs
+// cen_d2_a_verifier_that_cannot_compute_is_a_fault_not_a_verdict and
+// cen_d2_the_longhash_is_computed_in_form_over_the_pow_blob_under_the_seed.
+// What stays here is the C++ machinery the store flip deletes:
 //   - block_longhash_worker: an uncomputed hash never enters the precompute
-//     table (a table hit is trusted by the consumer without re-checking).
+//     table (a table hit is trusted by the consumer without re-checking);
+//   - get_block_longhash's seed selection.
 //
 // The three consumers that act on these verdicts are covered too: the
 // precompute worker here, and the two validation sites by the core-test
@@ -126,61 +127,7 @@ bool init_blockchain(Blockchain& bc, BlockchainDB* db)
   return bc.init(db, cryptonote::FAKECHAIN, &test_options, 1);
 }
 
-bool is_belt_sentinel(const crypto::hash& h)
-{
-  for (size_t i = 0; i < sizeof(h.data); ++i)
-    if (static_cast<unsigned char>(h.data[i]) != 0xff)
-      return false;
-  return true;
-}
-
 } // namespace
-
-TEST(pow_longhash_gate, bool_overload_reports_failure_and_seeds_belt)
-{
-  HashOverrideGuard guard(failing_pow_hash);
-
-  block blk{};
-  blk.major_version = 1;
-  crypto::hash res = crypto::null_hash;
-  EXPECT_FALSE(get_block_longhash(nullptr, blk, res, 1, nullptr))
-    << "verifier failure must surface through the bool";
-  EXPECT_TRUE(is_belt_sentinel(res))
-    << "the 0xff belt must still be written for bool-ignoring callers";
-}
-
-TEST(pow_longhash_gate, altblock_longhash_reports_failure_and_seeds_belt)
-{
-  HashOverrideGuard guard(failing_pow_hash);
-
-  block blk{};
-  blk.major_version = 1;
-  crypto::hash seed{};
-  memset(seed.data, 0xAB, sizeof(seed.data));
-  crypto::hash res = crypto::null_hash;
-  EXPECT_FALSE(get_altblock_longhash(blk, res, seed))
-    << "alt-path verifier failure must surface through the bool";
-  EXPECT_TRUE(is_belt_sentinel(res));
-}
-
-TEST(pow_longhash_gate, seam_engages_and_success_path_passes_through)
-{
-  HashOverrideGuard guard(const_pow_hash);
-
-  block blk{};
-  blk.major_version = 1;
-  crypto::hash res = crypto::null_hash;
-  ASSERT_TRUE(get_block_longhash(nullptr, blk, res, 1, nullptr));
-  for (size_t i = 0; i < sizeof(res.data); ++i)
-    ASSERT_EQ(0x42, static_cast<unsigned char>(res.data[i]));
-
-  crypto::hash seed{};
-  crypto::hash res2 = crypto::null_hash;
-  ASSERT_TRUE(get_altblock_longhash(blk, res2, seed));
-  for (size_t i = 0; i < sizeof(res2.data); ++i)
-    ASSERT_EQ(0x42, static_cast<unsigned char>(res2.data[i]))
-      << "alt-path hash byte " << i << " not written through";
-}
 
 // The one consumer site reachable in a unit test: the precompute worker. Its
 // map is trusted by handle_block_to_main_chain without re-checking, so an

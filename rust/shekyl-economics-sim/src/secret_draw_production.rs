@@ -892,11 +892,12 @@ pub fn render_summary(out: &mut impl std::fmt::Write, report: &Report) -> std::f
         out,
         "columns: M = margin in blocks; lat = inclusion latency, uniform on the range; R = reorg \
          depth; p_re = p_reorg; drn/pr, iss/pr = draws per pair made, issued; cap sum = blocks \
-         where the cap bound (D*H + SEB*u > 9*D*H, production's draw_target), summed over the \
+         where the cap bound (D*H + SEB*u > {CAPM}*D*H, production's draw_target), summed over the \
          cell's {SEEDS} seeds: divide by {SEEDS} for blocks per epoch; obs = 1 - short; epochs = epochs to m misses for a pair \
          that never serves; adm/never/late/lost = where the blocks' bundles went; att/dr, max, \
          last = select_draw attempts per draw, the most, and draws that reached attempt \
-         {DRAW_ATTEMPTS}"
+         {DRAW_ATTEMPTS}",
+        CAPM = shekyl_archival_retention::COUNT_CAP_BASE_MULTIPLE,
     )?;
     writeln!(
         out,

@@ -40,7 +40,11 @@ rm -rf "$DATA"; mkdir -p "$DATA"
 # Nothing reads the daemon's stdin without `--console`, so a closed stdin
 # is fine. The grammar's spellings (INPUT_GRAMMAR.md §5): both connectors
 # off is the offline posture.
-"$BIN" --network regtest --clearnet off --tor off --dev-difficulty 1 \
+# --dev-rpc: generateblocks is an armed test lever, served only with this
+# row once dispatch reads the method table's armed column (DRS-X flip).
+# Today's C++ path ignores it; the daemon announces it at start, checked
+# below once RPC is up.
+"$BIN" --network regtest --clearnet off --tor off --dev-difficulty 1 --dev-rpc \
   --rpc-admin-listen "127.0.0.1:$PORT" \
   --data-dir "$DATA" --log-file "$DATA/shekyld.log" --log-level info < /dev/null > "$DATA/daemon.out" 2>&1 &
 DPID=$!
@@ -66,6 +70,15 @@ if [ "${READY:-0}" != 1 ]; then
   kill -9 "$DPID" 2>/dev/null; exit 9
 fi
 echo "daemon ready"
+
+# This spawn calls generateblocks. The row is armed above, and the
+# announcement is this process's log. armed_lever.py owns the line; the
+# producer test is the_armed_lever_switch_announces_itself. The check's
+# exit status is the verdict: nothing is piped.
+if ! python3 "$WT/scripts/armed_lever.py" --check-log "$DATA/daemon.out"; then
+  echo "tail of the daemon log:"; tail -20 "$DATA/daemon.out"
+  kill -9 "$DPID" 2>/dev/null; exit 10
+fi
 
 curl -s -m 60 -X POST "http://127.0.0.1:$PORT/json_rpc" -H 'Content-Type: application/json' \
   -d "{\"jsonrpc\":\"2.0\",\"id\":\"0\",\"method\":\"generateblocks\",\"params\":{\"amount_of_blocks\":$BLOCKS,\"wallet_address\":\"$ADDR\",\"starting_nonce\":0}}" \

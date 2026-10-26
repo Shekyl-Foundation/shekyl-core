@@ -10,7 +10,7 @@ is ruled and the slice authorized (rule 26).
 read at that commit.
 **Parent:** [`RPC_CHANNEL.md`](RPC_CHANNEL.md) (round R1, ruled 2026-10-09)
 §5, §6, §7, §7.1, §11.2 and the RT-W10 row of §13; the RT-W9 pre-flight
-([`RPC_CHANNEL_RT_W9_PREFLIGHT.md`](RPC_CHANNEL_RT_W9_PREFLIGHT.md)) and
+([`RPC_CHANNEL_RT_W9_PREFLIGHT.md`](../completed/RPC_CHANNEL_RT_W9_PREFLIGHT.md)) and
 the close-out's items for this one (§13, RT-W10 row).
 **Family:** `RT-` (registered). This document mints items **RT-O30…RT-O35**
 inside it, and **RT-O36**, posed here.
