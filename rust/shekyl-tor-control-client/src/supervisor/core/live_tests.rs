@@ -112,9 +112,15 @@ fn a_bootstrap_says_its_progress_and_whether_bytes_are_moving() {
     let line = core.status().bootstrap.expect("a line while bootstrapping");
     assert_eq!(line.received, Some(3_200_000));
     assert_eq!(line.window, Duration::from_secs(4));
+    assert_eq!(core.status().pace, Some(BootstrapPace::SlowButNormal));
     let text = render(&core.status());
     assert!(text.contains("55%"), "{text}");
+    assert!(text.contains("unchanged for 4 s"), "{text}");
     assert!(text.contains("3.2 MB arrived in the last 4 s"), "{text}");
+    assert!(
+        text.contains("a slow directory mirror can hold this for minutes."),
+        "{text}"
+    );
 
     // Nothing moved in the next window: the line says so. The window opens
     // on the newest sample at least a window old, the one at 3 s, and runs

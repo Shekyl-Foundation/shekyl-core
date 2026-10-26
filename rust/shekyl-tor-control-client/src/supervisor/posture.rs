@@ -183,6 +183,10 @@ pub struct Syncing {
 /// §5, "Waiting on the Tor directory"): how long the percent has held, and
 /// how much Tor read in the window. Bytes moving with the percent held is a
 /// slow directory mirror; nothing moving is one that is not answering.
+///
+/// [`Self::pace`] classifies the line over the policy window
+/// (`Policy::alive_every`). The measured [`Self::window`] can run longer
+/// when a control ask held the driver.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BootstrapLine {
     /// How long the percent has been unchanged.
@@ -196,6 +200,20 @@ pub struct BootstrapLine {
     /// every sample, so a client that polls Status reads it current to
     /// within one sample.
     pub window: std::time::Duration,
+    /// The policy window this line is read over (`Policy::alive_every`).
+    span: std::time::Duration,
+}
+
+impl BootstrapLine {
+    /// The pace of this line over its policy window. The percent moving
+    /// inside that window is [`BootstrapPace::Advancing`]. A full window of
+    /// nothing is [`BootstrapPace::Stalled`]. Bytes arriving while the
+    /// percent holds is [`BootstrapPace::SlowButNormal`]. `None` when no
+    /// count was reported, or the quiet stretch is shorter than the window.
+    #[must_use]
+    pub fn pace(self) -> Option<BootstrapPace> {
+        BootstrapReading::classify(Some(self)).pace()
+    }
 }
 
 /// How a bootstrap is going, in one word a client can show (Rick,
@@ -213,6 +231,13 @@ pub enum BootstrapPace {
     Stalled,
 }
 
+/// One `traffic/read` sample: when it was taken, and the cumulative count.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ReadMark {
+    at: u64,
+    bytes: u64,
+}
+
 /// The progress line's evidence: the percent, when it last moved, and the
 /// recent `traffic/read` samples the sliding window reads.
 ///
@@ -225,15 +250,14 @@ pub struct ProgressWindow {
     /// When `percent` last changed, in the caller's clock.
     progress_at: u64,
     /// The window the line reads over (`Policy::alive_every`).
-    span: u64,
-    /// `(when, traffic/read)` for the samples that carried a count, oldest
-    /// first: those inside the window and the newest one before it.
-    marks: std::collections::VecDeque<(u64, u64)>,
+    span: std::time::Duration,
+    /// Samples that carried a count, oldest first. After [`Self::retain`],
+    /// the front is the mark the window opens on.
+    marks: std::collections::VecDeque<ReadMark>,
     /// Whether the line has begun: from the first progress deadline on, so
     /// the first line covers a whole window.
     begun: bool,
     line: Option<BootstrapLine>,
-    pace: Option<BootstrapPace>,
 }
 
 impl ProgressWindow {
@@ -244,11 +268,10 @@ impl ProgressWindow {
         Self {
             percent: 0,
             progress_at: now,
-            span: u64::try_from(window.as_nanos()).unwrap_or(u64::MAX),
+            span: window,
             marks: std::collections::VecDeque::new(),
             begun: false,
             line: None,
-            pace: None,
         }
     }
 
@@ -263,13 +286,6 @@ impl ProgressWindow {
     #[must_use]
     pub const fn line(&self) -> Option<BootstrapLine> {
         self.line
-    }
-
-    /// The pace as of the last refresh. `None` before the first progress
-    /// deadline, and while the evidence cannot tell.
-    #[must_use]
-    pub const fn pace(&self) -> Option<BootstrapPace> {
-        self.pace
     }
 
     /// The percent moved, or was confirmed. A confirmation does not reset
@@ -287,14 +303,10 @@ impl ProgressWindow {
     /// marks again rather than reading as a wrap.
     pub fn note_read(&mut self, read: Option<u64>, now: u64) {
         if let Some(bytes) = read {
-            if self.marks.back().is_some_and(|&(_, last)| bytes < last) {
+            if self.marks.back().is_some_and(|mark| bytes < mark.bytes) {
                 self.marks.clear();
             }
-            self.marks.push_back((now, bytes));
-            let open = now.saturating_sub(self.span);
-            while self.marks.len() > 1 && self.marks[1].0 <= open {
-                self.marks.pop_front();
-            }
+            self.marks.push_back(ReadMark { at: now, bytes });
         }
         self.refresh(now);
     }
@@ -306,43 +318,57 @@ impl ProgressWindow {
         self.refresh(now);
     }
 
-    /// Re-read the window as of `now`. The window opens on the newest
-    /// sample at least one window old (the oldest, until there is one) and
-    /// runs to `now`, the moment the line is read: the bytes from that
-    /// sample to the latest one, the clock to now. At a sample, now is the
+    /// Re-read the window as of `now`. [`Self::retain`] leaves the opening
+    /// mark at the front: the newest sample at least one window old, or the
+    /// oldest when every sample is later. The bytes run from that mark to
+    /// the latest one, and the clock runs to `now`. At a sample, now is the
     /// sample.
     fn refresh(&mut self, now: u64) {
+        self.retain(now.saturating_sub(self.span_ns()));
         if !self.begun {
             return;
         }
         let held = now.saturating_sub(self.progress_at);
-        let open = now.saturating_sub(self.span);
-        let opening = self
-            .marks
-            .iter()
-            .rev()
-            .find(|&&(at, _)| at <= open)
-            .or_else(|| self.marks.front());
-        let (received, window) = match (opening, self.marks.back()) {
-            (Some(&(opened, then)), Some(&(_, read))) => {
-                (Some(read.saturating_sub(then)), now.saturating_sub(opened))
-            }
-            _ => (None, 0),
+        let (received, measured) = match self.marks.front().copied().zip(self.marks.back().copied())
+        {
+            Some((opening, latest)) => (
+                Some(latest.bytes.saturating_sub(opening.bytes)),
+                now.saturating_sub(opening.at),
+            ),
+            None => (None, 0),
         };
         self.line = Some(BootstrapLine {
             held_for: std::time::Duration::from_nanos(held),
             received,
-            window: std::time::Duration::from_nanos(window),
+            window: std::time::Duration::from_nanos(measured),
+            span: self.span,
         });
-        self.pace = if held < self.span {
-            Some(BootstrapPace::Advancing)
-        } else {
-            match received {
-                Some(0) if window >= self.span => Some(BootstrapPace::Stalled),
-                Some(bytes) if bytes > 0 => Some(BootstrapPace::SlowButNormal),
-                _ => None,
-            }
-        };
+    }
+
+    /// Index of the mark the window opens on. The newest at or before
+    /// `open`, or the oldest when every mark is later. `None` when no
+    /// sample has carried a count.
+    fn opening(&self, open: u64) -> Option<usize> {
+        if self.marks.is_empty() {
+            return None;
+        }
+        Some(
+            self.marks
+                .iter()
+                .rposition(|mark| mark.at <= open)
+                .unwrap_or(0),
+        )
+    }
+
+    /// Drop marks older than [`Self::opening`], so the front is that mark.
+    fn retain(&mut self, open: u64) {
+        if let Some(index) = self.opening(open) {
+            self.marks.drain(..index);
+        }
+    }
+
+    fn span_ns(&self) -> u64 {
+        u64::try_from(self.span.as_nanos()).unwrap_or(u64::MAX)
     }
 }
 
@@ -449,61 +475,145 @@ pub fn install_sentence(cause: &Cause) -> Option<&'static str> {
     }
 }
 
-/// The one renderer (`TSR-Q13`). Behaviour, then the cause, then the fixes
-/// in the posture table's order.
+/// The line, classified once. [`BootstrapLine::pace`] and the bootstrap
+/// sentence both read this, so the word and the prose cannot disagree.
+enum BootstrapReading {
+    /// No line yet: the percent, and nothing about bytes.
+    Fetching,
+    /// The percent moved inside the span. Bytes are said only when some arrived.
+    Advancing {
+        arrived: Option<u64>,
+        window: std::time::Duration,
+    },
+    /// The percent held, and this many bytes arrived.
+    SlowButNormal {
+        arrived: u64,
+        held_for: std::time::Duration,
+        window: std::time::Duration,
+    },
+    /// A full span in which nothing arrived.
+    Stalled {
+        held_for: std::time::Duration,
+        window: std::time::Duration,
+    },
+    /// The percent held, and the bytes cannot be called.
+    Held { held_for: std::time::Duration },
+}
+
+impl BootstrapReading {
+    fn classify(line: Option<BootstrapLine>) -> Self {
+        let Some(line) = line else {
+            return Self::Fetching;
+        };
+        if line.held_for < line.span {
+            return Self::Advancing {
+                arrived: line.received.filter(|bytes| *bytes > 0),
+                window: line.window,
+            };
+        }
+        match line.received {
+            Some(0) if line.window >= line.span => Self::Stalled {
+                held_for: line.held_for,
+                window: line.window,
+            },
+            Some(arrived) if arrived > 0 => Self::SlowButNormal {
+                arrived,
+                held_for: line.held_for,
+                window: line.window,
+            },
+            _ => Self::Held {
+                held_for: line.held_for,
+            },
+        }
+    }
+
+    fn pace(self) -> Option<BootstrapPace> {
+        match self {
+            Self::Fetching | Self::Held { .. } => None,
+            Self::Advancing { .. } => Some(BootstrapPace::Advancing),
+            Self::SlowButNormal { .. } => Some(BootstrapPace::SlowButNormal),
+            Self::Stalled { .. } => Some(BootstrapPace::Stalled),
+        }
+    }
+
+    fn sentence(self, progress: u8) -> String {
+        let fetching = format!("Tor is fetching the network directory ({progress}%)");
+        match self {
+            Self::Fetching | Self::Advancing { arrived: None, .. } => format!("{fetching}."),
+            Self::Advancing {
+                arrived: Some(bytes),
+                window,
+            } => format!(
+                "{fetching}. {} arrived in the last {}.",
+                spoken_bytes(bytes),
+                spoken_duration(window)
+            ),
+            Self::SlowButNormal {
+                arrived,
+                held_for,
+                window,
+            } => format!(
+                "{fetching}, unchanged for {}. {} arrived in the last {}; a slow directory mirror can hold this for minutes.",
+                spoken_duration(held_for),
+                spoken_bytes(arrived),
+                spoken_duration(window)
+            ),
+            Self::Stalled { held_for, window } => format!(
+                "{fetching}, unchanged for {}. Nothing arrived in the last {}.",
+                spoken_duration(held_for),
+                spoken_duration(window)
+            ),
+            Self::Held { held_for } => {
+                format!("{fetching}, unchanged for {}.", spoken_duration(held_for))
+            }
+        }
+    }
+}
+
+/// The one renderer (`TSR-Q13`). Behaviour, then a named cause, then the
+/// bootstrap line, then the fixes, in the posture table's order.
+///
+/// The bootstrap line is its own clause. A named cause shows the phase as
+/// degraded, and the line is what still marks the bootstrap, so the stall
+/// follows the cause and its fix.
 #[must_use]
 pub fn render(status: &Status) -> String {
-    let mut text = String::new();
-    match status.own_tx {
-        OwnTx::AddressHiding => text.push_str("Tor is carrying this node's traffic."),
-        OwnTx::Held => text.push_str(&held_sentence(status.sync)),
-        OwnTx::ClearnetOnly => text.push_str(
-            "This node is syncing and sending over the open network. Until the encrypted link is in place, that network is unencrypted.",
-        ),
-        OwnTx::Offline => text.push_str("This node is offline."),
+    let mut text = behaviour(status);
+    if let Some(cause) = named_cause(status) {
+        append(&mut text, &cause);
+    } else if let Some(quiet) = quiet_sentence(status) {
+        append(&mut text, &quiet);
     }
-    if let Some(cause) = cause_sentence(status) {
-        text.push(' ');
-        text.push_str(&cause);
+    if speaks_bootstrap(status) {
+        append(
+            &mut text,
+            &BootstrapReading::classify(status.bootstrap).sentence(status.progress),
+        );
     }
     if !status.fixes.is_empty() {
-        text.push(' ');
-        text.push_str(&fixes_sentence(&status.fixes));
+        append(&mut text, &fixes_sentence(&status.fixes));
     }
     text
 }
 
-fn bootstrap_sentence(
-    progress: u8,
-    line: Option<BootstrapLine>,
-    pace: Option<BootstrapPace>,
-) -> String {
-    let Some(line) = line else {
-        return format!("Tor is fetching the network directory ({progress}%).");
-    };
-    let window = spoken_duration(line.window);
-    match (pace, line.received) {
-        (Some(BootstrapPace::Advancing), Some(bytes)) if bytes > 0 => format!(
-            "Tor is fetching the network directory ({progress}%). {} arrived in the last {window}.",
-            spoken_bytes(bytes)
-        ),
-        (Some(BootstrapPace::Advancing), _) => {
-            format!("Tor is fetching the network directory ({progress}%).")
-        }
-        (Some(BootstrapPace::SlowButNormal), Some(bytes)) => format!(
-            "Tor is fetching the network directory ({progress}%, unchanged for {}). {} arrived in the last {window}; a slow directory mirror can hold this for minutes.",
-            spoken_duration(line.held_for),
-            spoken_bytes(bytes)
-        ),
-        (Some(BootstrapPace::Stalled), _) => format!(
-            "Tor is fetching the network directory ({progress}%, unchanged for {}). Nothing arrived in the last {window}.",
-            spoken_duration(line.held_for)
-        ),
-        _ => format!(
-            "Tor is fetching the network directory ({progress}%, unchanged for {}).",
-            spoken_duration(line.held_for)
-        ),
+/// The bootstrap sentence is said while the phase shows bootstrapping, and
+/// while a progress line is present.
+fn speaks_bootstrap(status: &Status) -> bool {
+    status.bootstrap.is_some() || status.shown == Shown::Bootstrapping
+}
+
+fn behaviour(status: &Status) -> String {
+    match status.own_tx {
+        OwnTx::AddressHiding => "Tor is carrying this node's traffic.".to_owned(),
+        OwnTx::Held => held_sentence(status.sync),
+        OwnTx::ClearnetOnly => "This node is syncing and sending over the open network. Until the encrypted link is in place, that network is unencrypted.".to_owned(),
+        OwnTx::Offline => "This node is offline.".to_owned(),
     }
+}
+
+fn append(text: &mut String, sentence: &str) {
+    text.push(' ');
+    text.push_str(sentence);
 }
 
 fn spoken_duration(duration: std::time::Duration) -> String {
@@ -552,19 +662,25 @@ pub fn held_sentence(sync: Syncing) -> String {
     }
 }
 
-fn cause_sentence(status: &Status) -> Option<String> {
-    let sentence = match &status.cause {
-        Cause::None if status.shown == Shown::Bootstrapping => Some(bootstrap_sentence(
-            status.progress,
-            status.bootstrap,
-            status.pace,
-        )),
-        Cause::None => status.tor_quiet.map(|quiet| {
-            format!(
-                "No connection through Tor is open, and none has opened in {}.",
-                spoken_duration(quiet)
-            )
-        }),
+/// The quiet fact, said only when the bootstrap line is not. A running Tor
+/// that still shows as bootstrapping keeps the fetching sentence.
+fn quiet_sentence(status: &Status) -> Option<String> {
+    if speaks_bootstrap(status) {
+        return None;
+    }
+    status.tor_quiet.map(|quiet| {
+        format!(
+            "No connection through Tor is open, and none has opened in {}.",
+            spoken_duration(quiet)
+        )
+    })
+}
+
+/// The named cause. [`Cause::None`] is the absence of one: the bootstrap
+/// line and the quiet fact are [`render`]'s other clauses.
+fn named_cause(status: &Status) -> Option<String> {
+    match &status.cause {
+        Cause::None => None,
         Cause::BundleMissing | Cause::PinRefused | Cause::Unavailable => {
             install_sentence(&status.cause).map(str::to_owned)
         }
@@ -593,18 +709,6 @@ fn cause_sentence(status: &Status) -> Option<String> {
         Cause::DangerousVersion => {
             Some("Upgrade Shekyl when a release updates the bundled Tor.".to_owned())
         }
-    };
-    // The pace stands beside a cause, never instead of it: a bootstrap that
-    // has stalled while Tor reports the network blocked says the cause, its
-    // fix, and the stall. The line exists only while bootstrapping; a named
-    // external cause shows the phase as Degraded, so the phase is read from
-    // the line, not from `shown`.
-    match (sentence, &status.cause, status.bootstrap) {
-        (Some(cause), named, Some(line)) if *named != Cause::None => Some(format!(
-            "{cause} {}",
-            bootstrap_sentence(status.progress, Some(line), status.pace)
-        )),
-        (sentence, ..) => sentence,
     }
 }
 
