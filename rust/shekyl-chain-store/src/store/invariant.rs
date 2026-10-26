@@ -553,6 +553,13 @@ pub enum BodyHolderFault {
         /// The key the entry is stored under.
         h: shekyl_types::BlockHeight,
     },
+    /// A rewrite named a height the queue does not hold. The single writer
+    /// classified the row and then did not find it: the caller's picture of
+    /// the queue and the table disagree.
+    EntryAbsent {
+        /// The height the rewrite named.
+        h: shekyl_types::BlockHeight,
+    },
 }
 
 /// What an SI-36 check observed (payload of [`StoreInvariant::AdmissionWrite`]).
@@ -1115,6 +1122,10 @@ impl core::fmt::Display for StoreInvariant {
             Self::BundleBodyHolder(BodyHolderFault::EntryNotItsHeight { h }) => write!(
                 f,
                 "the bundle queue's entry under height {h} is a reference for another block"
+            ),
+            Self::BundleBodyHolder(BodyHolderFault::EntryAbsent { h }) => write!(
+                f,
+                "the bundle queue has no entry at height {h}; a rewrite names a row the table does not hold"
             ),
             Self::DrawableMemoMiss { epoch } => write!(
                 f,

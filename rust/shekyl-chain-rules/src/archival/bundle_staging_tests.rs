@@ -113,11 +113,14 @@ fn the_bundle_rows_are_pending_until_the_cutover() {
 /// - `harness.rs` and `harness/`: the fixture that implements
 ///   `BundleView` for these tests — `cfg(test)` or the `harness` feature,
 ///   never on the production surface.
-/// - `archival/bundle.rs`, `archival/bundle_records.rs` and
-///   `archival/bundle_section.rs`: the module under test. The section
-///   file is exempt only while it still holds the section checker, and
-///   the record file only while it still holds the shared pass check;
-///   the test asserts both, so deleting a file or emptying it is red.
+/// - `archival/bundle.rs`, `archival/bundle_targets.rs`,
+///   `archival/bundle_admission.rs`, `archival/bundle_records.rs` and
+///   `archival/bundle_section.rs`: the module under test. The targets
+///   file is exempt only while it still holds `draw_targets`, the
+///   admission file only while it still holds `judge_bundles`, the section
+///   file only while it still holds the section checker, and the record
+///   file only while it still holds the shared pass check; the test
+///   asserts each, so deleting a file or emptying it is red.
 /// - `census.rs`: the registry's comment on the nine `pending` rows names
 ///   the functions as the rows' refusals. It is held to a narrower check
 ///   instead: no `implemented`, `enforced_at` or `by_construction` entry
@@ -196,6 +199,18 @@ fn nothing_on_the_connect_path_calls_the_bundle_verifier() {
         records_text.contains("fn judge_passes"),
         "archival/bundle_records.rs no longer holds the shared pass check"
     );
+    let targets = src.join("archival").join("bundle_targets.rs");
+    let targets_text = std::fs::read_to_string(&targets).expect("archival/bundle_targets.rs");
+    assert!(
+        targets_text.contains("pub fn draw_targets"),
+        "archival/bundle_targets.rs no longer holds the draw derivation"
+    );
+    let admission = src.join("archival").join("bundle_admission.rs");
+    let admission_text = std::fs::read_to_string(&admission).expect("archival/bundle_admission.rs");
+    assert!(
+        admission_text.contains("pub fn judge_bundles"),
+        "archival/bundle_admission.rs no longer holds the section admission"
+    );
 
     let exporting = [src.join("archival").join("mod.rs"), src.join("lib.rs")];
     for file in &files {
@@ -241,6 +256,8 @@ fn connect_path_sources(src: &Path) -> Vec<PathBuf> {
         src.join("harness.rs"),
         src.join("census.rs"),
         src.join("archival").join("bundle.rs"),
+        src.join("archival").join("bundle_targets.rs"),
+        src.join("archival").join("bundle_admission.rs"),
         src.join("archival").join("bundle_records.rs"),
         src.join("archival").join("bundle_section.rs"),
     ];

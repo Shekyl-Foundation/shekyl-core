@@ -32,7 +32,7 @@ messages that carry a block's seed, `connector_bundles.rs`.
 # Rule 47
 
 The gate asserts its subject before it judges: every scanned file exists,
-the ring still holds `struct WitnessSecrets`, and the scan finds format
+the ring still holds `struct WitnessSecret`, and the scan finds format
 macros to read (a gate over zero invocations is not a gate). `--selftest`
 proves each limb reports its planted case and passes a clean file.
 """
@@ -59,6 +59,7 @@ FORBIDDEN = (
     "secret",
     "secrets",
     "FnDsaHybridSecretKey",
+    "WitnessSecret",
     "WitnessSecrets",
     "Zeroizing",
 )
@@ -289,8 +290,11 @@ def main() -> int:
             print(f"FAIL: {path} not found; the producer moved, update this gate", file=sys.stderr)
             return 1
     ring = (CRATE / "ring.rs").read_text(encoding="utf-8")
-    if "struct WitnessSecrets" not in ring:
-        print("FAIL: ring.rs no longer holds `struct WitnessSecrets`; update this gate", file=sys.stderr)
+    if "struct WitnessSecret" not in ring:
+        print(
+            "FAIL: ring.rs no longer holds `struct WitnessSecret`; update this gate",
+            file=sys.stderr,
+        )
         return 1
     findings, total = judge(files)
     if total == 0:

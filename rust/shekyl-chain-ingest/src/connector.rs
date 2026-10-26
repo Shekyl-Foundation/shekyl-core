@@ -63,8 +63,8 @@ use kameo::actor::{Actor, ActorRef, WeakActorRef};
 use kameo::error::{ActorStopReason, PanicError};
 use kameo::message::{Context, Message};
 use shekyl_chain_rules::{
-    validate_with_memo, ArchivalDelta, AtHeight, CenRow, DrawableMemo, Fault, HeaderRecord,
-    HeaderView, InvalidBlock, PaidEmission, StructurallyValid, Verdict, ViewRead, Weights,
+    ArchivalDelta, AtHeight, DrawableMemo, Fault, HeaderRecord, HeaderView, InvalidBlock,
+    PaidEmission, StructurallyValid, Verdict, ViewRead, Weights,
 };
 use shekyl_chain_store::archival_snapshot::ArchivalSnapshot;
 use shekyl_chain_store::codec::{FollowingDegraded, FollowingDegradedCell};
@@ -80,6 +80,8 @@ use crate::source::ServeCredit;
 
 #[path = "connector_bundles.rs"]
 mod bundles;
+#[path = "connector_connect.rs"]
+mod connect_step;
 #[path = "connector_reads.rs"]
 mod reads;
 #[path = "run_fault.rs"]
@@ -89,7 +91,7 @@ mod switch;
 #[cfg(test)]
 pub(crate) use bundles::ApplyAdmitting;
 pub use bundles::{BundleOffered, LearnDraws, Learned, OfferBundle};
-pub(crate) use run_fault::fault_reply;
+pub(crate) use run_fault::{fault_reply, halt_on_corrupt};
 pub use run_fault::{PlanMismatchReason, RunEnd, RunFault};
 #[cfg(test)]
 pub use switch::AnchorForTests;
@@ -561,17 +563,6 @@ impl Actor for Connector {
 }
 
 impl Connector {
-    /// The tip moved in a committed write: keep the bundle queue to it,
-    /// then publish it. A queue upkeep that faults is logged here and has
-    /// already latched the writer if it was terminal; the next write meets
-    /// the halt, and the tip the committed write left is published.
-    pub(crate) fn tip_moved(&mut self) {
-        if let Err(fault) = self.upkeep_queue() {
-            tracing::error!("the bundle queue's upkeep faulted: {fault}");
-        }
-        self.publish_tip();
-    }
-
     /// Publish the tip after a committed write (module docs: `TipChanged`).
     /// A read that fails here leaves the last publication standing: the
     /// next write meets the same store.
@@ -663,64 +654,25 @@ impl Message<Apply> for Connector {
         let trust = self.trust;
         let memo = &mut self.memo;
         let applied = self.writer.write(|batch| {
-            let view = batch.chain_view();
             let mut applied = Applied::default();
             for (claimed, formed) in msg.0 {
-                // The height is the store's to say, not the source's: the
-                // rule set in force and the row the block is recorded
-                // under are both keyed by the height the
-                // chain connects at, which is `tip + 1` on this view (the
-                // tip advances as the batch connects). The tuple's height
-                // is the source's bookkeeping; where the two disagree the
-                // source is wrong about the chain, and that is a driver
-                // defect surfaced before anything is judged under the
-                // wrong schedule (#852 review).
-                // The parent's hash is CEN-A2's operand inside `validate`,
-                // not a second copy of this height check. A source that
-                // names the connecting height and a different parent is a
-                // wrong block: a verdict, and the writer stays up. The
-                // live service only applies a block whose parent was the
-                // tip, so it places that A2 again rather than cancelling
-                // the span.
-                let (height, _) = connecting(view.tip()?)?;
-                if claimed != height {
-                    return Err(RunFault::HeightClaim {
-                        claimed,
-                        connecting: height,
-                    });
-                }
-                let formed = match formed {
-                    Ok(formed) => formed,
-                    Err(refused) => {
-                        applied.refused = Some((height, refused));
-                        break;
-                    }
+                let Some(judged) = connect_step::judge_connecting(
+                    &mut applied,
+                    batch,
+                    rules,
+                    &trust,
+                    memo,
+                    claimed,
+                    formed,
+                )?
+                else {
+                    break;
                 };
-                let in_force = rules.in_force(height);
-                match validate_with_memo(formed, &view, &in_force, &trust, Some(memo)) {
-                    Ok(Ok(valid)) => {
-                        let hash = valid.block().hash();
-                        let root_after = valid.block().root_after();
-                        let weights = *valid.block().weights();
-                        let emission = *valid.block().emission();
-                        let archival = valid.block().archival().clone();
-                        applied
-                            .exercised
-                            .extend(valid.coverage().iter().map(CenRow::as_str));
-                        batch.connect(valid, in_force)?;
-                        retire_below_the_anchor(batch, &trust, height)?;
-                        applied.connected.push((height, hash));
-                        applied.roots.push((height, root_after));
-                        applied.weights.push((height, weights));
-                        applied.emission.push((height, emission));
-                        applied.archival.push((height, archival));
-                    }
-                    Ok(Err(refused)) => {
-                        applied.refused = Some((height, refused));
-                        break;
-                    }
-                    Err(fault) => return Err(validate_fault(batch, height, fault)),
-                }
+                let height = judged.height;
+                applied.exercised.extend(judged.exercised());
+                batch.connect(judged.valid, judged.rule_set)?;
+                retire_below_the_anchor(batch, &trust, height)?;
+                connect_step::record_connected(&mut applied, height, judged.facts);
             }
             Ok(applied)
         })?;

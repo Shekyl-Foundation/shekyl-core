@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! [`StoreBundleView`]: [`BundleView`] over a [`BatchView`] and the count
+//! [`StoreBundleView`]: [`BundleView`] over a chain view and the count
 //! phase's [`DrawableMemo`] (`SO-D12` increment 4a).
 //!
 //! `D` is rules-side state. The store does not compute it, so the view is
@@ -22,13 +22,98 @@ use std::collections::BTreeMap;
 
 use shekyl_chain_rules::{
     AtHeight, BlockDrawsFloor, BundleView, ChainView, DrawableEpoch, DrawableMemo, EpochFloor,
-    HeaderView, SettlementSchedule, Settling,
+    HeaderRecord, HeaderView, SettlementSchedule, Settling,
 };
-use shekyl_types::archival::{DrawCommitment, IndexedDraw, SupportCount, COUNTED_DRAWS};
+use shekyl_types::archival::{
+    BlockDraws, DrawCommitment, IndexedDraw, SupportCount, COUNTED_DRAWS,
+};
 use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 
 use super::error::{StoreError, StoreInvariant};
 use super::view::BatchView;
+
+/// What the bundle view asks of the chain it reads, and what an invariant does.
+///
+/// A [`BatchView`] arms the row: the batch is poisoned and will not commit.
+/// A [`SnapshotView`](super::SnapshotView) returns the same row as a plain
+/// [`StoreError`] and arms nothing. The reads are that view's own, so a
+/// second copy of a table walk cannot drift from it.
+pub trait BundleRows {
+    /// An invariant this view observed. A batch poisons; a snapshot returns it.
+    fn arm_row(&self, row: StoreInvariant) -> StoreError;
+
+    /// The block recorded at `height`, coinbase included. Above the tip is
+    /// [`AtHeight::AboveTip`].
+    fn recorded_block_at(
+        &self,
+        height: BlockHeight,
+    ) -> Result<AtHeight<shekyl_wire::Block>, StoreError>;
+
+    /// [`ChainView::block_draws`], under this view's arming.
+    fn block_draws_row(
+        &self,
+        height: BlockHeight,
+        floor: BlockDrawsFloor,
+    ) -> Result<Option<BlockDraws>, StoreError>;
+
+    /// [`ChainView::issued_draws`], under this view's arming.
+    fn issued_draws_row(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
+    ) -> Result<Vec<IndexedDraw>, StoreError>;
+
+    /// [`ChainView::support_block_count`], under this view's arming.
+    fn support_count_row(
+        &self,
+        height: BlockHeight,
+        floor: BlockDrawsFloor,
+    ) -> Result<Option<SupportCount>, StoreError>;
+
+    /// [`HeaderView::header_at`], under this view's arming.
+    fn header_row(&self, height: BlockHeight) -> Result<AtHeight<HeaderRecord>, StoreError>;
+}
+
+impl<'id> BundleRows for BatchView<'_, 'id> {
+    fn arm_row(&self, row: StoreInvariant) -> StoreError {
+        BatchView::arm_row(self, row)
+    }
+
+    fn recorded_block_at(
+        &self,
+        height: BlockHeight,
+    ) -> Result<AtHeight<shekyl_wire::Block>, StoreError> {
+        BatchView::recorded_block_at(self, height)
+    }
+
+    fn block_draws_row(
+        &self,
+        height: BlockHeight,
+        floor: BlockDrawsFloor,
+    ) -> Result<Option<BlockDraws>, StoreError> {
+        ChainView::block_draws(self, height, floor)
+    }
+
+    fn issued_draws_row(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
+    ) -> Result<Vec<IndexedDraw>, StoreError> {
+        ChainView::issued_draws(self, epoch, floor)
+    }
+
+    fn support_count_row(
+        &self,
+        height: BlockHeight,
+        floor: BlockDrawsFloor,
+    ) -> Result<Option<SupportCount>, StoreError> {
+        ChainView::support_block_count(self, height, floor)
+    }
+
+    fn header_row(&self, height: BlockHeight) -> Result<AtHeight<HeaderRecord>, StoreError> {
+        HeaderView::header_at(self, height)
+    }
+}
 
 /// Reveal heights of the issued draws of one epoch, by pair.
 ///
@@ -105,8 +190,9 @@ impl IssuedVisibility {
 /// Drawable sets this view has already resolved, by epoch.
 ///
 /// The opening block is parsed and its hash checked once. A later read of
-/// the epoch returns that set. A miss is SI-35 and is not filed: arming the
-/// row poisons the batch, so the view does not answer it again.
+/// the epoch returns that set. A miss is SI-35 and is not filed: the view's
+/// [`BundleRows::arm_row`] is that row, and a poisoned batch does not
+/// answer it again.
 struct OpenedEpochs<'a> {
     by_epoch: BTreeMap<SettlementEpoch, &'a DrawableEpoch>,
 }
@@ -127,9 +213,13 @@ impl<'a> OpenedEpochs<'a> {
     }
 }
 
-/// The admission view: one batch and the memo the count phase filled.
-pub struct StoreBundleView<'a, 'b, 'id> {
-    view: &'a BatchView<'b, 'id>,
+/// The admission view: one chain view and the memo the count phase filled.
+///
+/// `V` is a [`BatchView`] when a connect journals what this view admits,
+/// and a snapshot when a read must not commit. The journal names the
+/// batch, so a snapshot cannot be written.
+pub struct StoreBundleView<'a, V> {
+    view: &'a V,
     memo: &'a DrawableMemo,
     /// The block being admitted. Floors and the window are read from it.
     h_incl: BlockHeight,
@@ -142,11 +232,11 @@ pub struct StoreBundleView<'a, 'b, 'id> {
     opened: RefCell<OpenedEpochs<'a>>,
 }
 
-impl<'a, 'b, 'id> StoreBundleView<'a, 'b, 'id> {
+impl<'a, V: BundleRows> StoreBundleView<'a, V> {
     /// A view of `view` at `h_incl`, reading `D` from `memo`.
     #[must_use]
     pub fn new(
-        view: &'a BatchView<'b, 'id>,
+        view: &'a V,
         memo: &'a DrawableMemo,
         h_incl: BlockHeight,
         schedule: SettlementSchedule,
@@ -166,12 +256,9 @@ impl<'a, 'b, 'id> StoreBundleView<'a, 'b, 'id> {
             .arm_row(StoreInvariant::DrawableMemoMiss { epoch })
     }
 
-    fn draws_row(
-        &self,
-        h: BlockHeight,
-    ) -> Result<Option<shekyl_types::archival::BlockDraws>, StoreError> {
+    fn draws_row(&self, h: BlockHeight) -> Result<Option<BlockDraws>, StoreError> {
         let floor = BlockDrawsFloor::in_force(self.h_incl, self.schedule);
-        ChainView::block_draws(self.view, h, floor)
+        self.view.block_draws_row(h, floor)
     }
 
     /// Read `epoch`'s issued-draw index into [`IssuedVisibility`], once.
@@ -180,7 +267,7 @@ impl<'a, 'b, 'id> StoreBundleView<'a, 'b, 'id> {
             return Ok(());
         }
         let floor = EpochFloor::<Settling>::under(self.h_incl, self.schedule);
-        let rows = ChainView::issued_draws(self.view, epoch, floor)?;
+        let rows = self.view.issued_draws_row(epoch, floor)?;
         self.visibility.borrow_mut().file(epoch, rows);
         Ok(())
     }
@@ -228,7 +315,7 @@ impl<'a, 'b, 'id> StoreBundleView<'a, 'b, 'id> {
     }
 }
 
-impl BundleView for StoreBundleView<'_, '_, '_> {
+impl<V: BundleRows> BundleView for StoreBundleView<'_, V> {
     type Fault = StoreError;
 
     fn draw_count(&self, h: BlockHeight) -> Result<Option<u32>, StoreError> {
@@ -236,7 +323,7 @@ impl BundleView for StoreBundleView<'_, '_, '_> {
     }
 
     fn draw_commitment(&self, h: BlockHeight) -> Result<Option<DrawCommitment>, StoreError> {
-        match self.view.recorded_block_at(h)? {
+        match BundleRows::recorded_block_at(self.view, h)? {
             AtHeight::AboveTip => Ok(None),
             AtHeight::Recorded(block) => {
                 singular_draw_commitment(&block).map(Some).ok_or_else(|| {
@@ -248,7 +335,7 @@ impl BundleView for StoreBundleView<'_, '_, '_> {
     }
 
     fn block_hash(&self, height: BlockHeight) -> Result<Option<BlockHash>, StoreError> {
-        Ok(match HeaderView::header_at(self.view, height)? {
+        Ok(match self.view.header_row(height)? {
             AtHeight::Recorded(header) => Some(header.hash),
             AtHeight::AboveTip => None,
         })
@@ -283,7 +370,7 @@ impl BundleView for StoreBundleView<'_, '_, '_> {
             return Ok(Some(drawable));
         }
         let open = BlockHeight::from_raw(self.schedule.open_height(epoch.to_raw()));
-        let hash = match HeaderView::header_at(self.view, open)? {
+        let hash = match self.view.header_row(open)? {
             AtHeight::Recorded(header) => header.hash,
             AtHeight::AboveTip => return Err(self.miss(epoch)),
         };
@@ -296,7 +383,10 @@ impl BundleView for StoreBundleView<'_, '_, '_> {
 
     fn support_count(&self, h: BlockHeight) -> Result<Option<u32>, StoreError> {
         let floor = BlockDrawsFloor::in_force(self.h_incl, self.schedule);
-        Ok(ChainView::support_block_count(self.view, h, floor)?.map(SupportCount::get))
+        Ok(self
+            .view
+            .support_count_row(h, floor)?
+            .map(SupportCount::get))
     }
 
     fn support_roster(
