@@ -54,15 +54,16 @@ pub struct Policy {
     pub fresh_directory_after: u32,
     /// How long no Tor connection is open and none opens, with Tor saying
     /// nothing about its network, before the posture line says so (§4.2):
-    /// a neutral fact, never a cause. Provisional until the floor-device
-    /// soak.
+    /// a neutral fact, never a cause. The daemon passes the dialer's quiet
+    /// stretch (`shekyl_dialer::QUIET_AFTER_NANOS`), the one number for the
+    /// posture line and the dialer's cooldown rule.
     pub quiet_after: Duration,
 }
 
 impl Policy {
-    /// The waits the driver uses.
+    /// The waits the driver uses, with the caller's quiet stretch.
     #[must_use]
-    pub const fn provisional() -> Self {
+    pub const fn provisional(quiet_after: Duration) -> Self {
         Self {
             base: Duration::from_secs(1),
             cap: Duration::from_secs(60),
@@ -73,9 +74,8 @@ impl Policy {
             fresh_directory_after: 3,
             // Wall time since the last opened stream, or since this Tor
             // reached Running, with at least one unopened dial and nothing
-            // held. Five minutes, provisional until the floor-device soak.
-            // Not a count of dials.
-            quiet_after: Duration::from_secs(300),
+            // held. Not a count of dials.
+            quiet_after,
         }
     }
 }

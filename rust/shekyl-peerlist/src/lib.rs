@@ -163,6 +163,23 @@ pub fn cooldown_nanos<R: shekyl_draw_rng::RelayRng + ?Sized>(consecutive: u32, r
     base.saturating_add(shekyl_draw_rng::bounded_uniform(rng, base / 2))
 }
 
+/// Which cooldown a failed test takes. The dialer chooses: it is the
+/// dialer's judgement of its own evidence about addresses, not a verdict
+/// on the link (Rick, 2026-10-26; `P2P_3_SLICE_3_DIALER_BRIEF.md`, the gray
+/// lifecycle).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ladder {
+    /// The consecutive count steps and the cooldown is its rung
+    /// ([`cooldown_nanos`]).
+    Climb,
+    /// The cooldown is the first rung, and the count does not climb: it is
+    /// at least one, and a count already past one stays where it was. The
+    /// dialer picks this while its connector holds no session and none has
+    /// opened for the quiet stretch, when every failure says as much about
+    /// this node's reach as about the address.
+    FirstStep,
+}
+
 /// The white expiry: a white address with no contact this node initiated
 /// for this long returns to gray (brief §2, `EXPIRATION_PERIOD`). In
 /// nanoseconds, the unit of [`Tick`].

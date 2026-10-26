@@ -30,8 +30,8 @@ use crate::outcome::WhiteClock;
 use crate::sample::sample_prefix;
 use crate::validity::RefusedSet;
 use crate::{
-    cooldown_nanos, DISCLOSE_COUNT, DISCLOSE_WINDOW_NANOS, EXPIRATION_PERIOD_NANOS, GRAY_CAP,
-    INTAKE_SPAN_NANOS, P2P_DISCLOSE_EARLY_SPAN_NANOS, SESSION_INTAKE_CAP, WHITE_CAP,
+    cooldown_nanos, Ladder, DISCLOSE_COUNT, DISCLOSE_WINDOW_NANOS, EXPIRATION_PERIOD_NANOS,
+    GRAY_CAP, INTAKE_SPAN_NANOS, P2P_DISCLOSE_EARLY_SPAN_NANOS, SESSION_INTAKE_CAP, WHITE_CAP,
 };
 
 /// The connector's cached disclosure sample (D3): drawn once, kept for the
@@ -431,14 +431,17 @@ impl Partition {
     }
 
     /// A failed test that proved no misbehaviour: the outstanding draw
-    /// returns to gray and cools until `now` plus [`cooldown_nanos`] of its
-    /// consecutive count, which this increments. Not drawable until
+    /// returns to gray and cools until `now` plus [`cooldown_nanos`]. On
+    /// [`Ladder::Climb`] the consecutive count steps and the cooldown is its
+    /// rung; on [`Ladder::FirstStep`] the cooldown is the first rung and the
+    /// count does not climb (it is at least one). Not drawable until
     /// [`Self::thaw`] passes that tick. A white address is not outstanding
     /// and is left as it is; so is anything else.
     pub(crate) fn cool<R: RelayRng + ?Sized>(
         &mut self,
         address: &NetworkAddress,
         now: Tick,
+        ladder: Ladder,
         rng: &mut R,
     ) -> bool {
         let Some(Seat::Gray {
@@ -448,8 +451,14 @@ impl Partition {
         else {
             return false;
         };
-        let failures = failures.saturating_add(1);
-        let until = Tick::new(now.get().saturating_add(cooldown_nanos(failures, rng)));
+        let (failures, rung) = match ladder {
+            Ladder::Climb => {
+                let failures = failures.saturating_add(1);
+                (failures, failures)
+            }
+            Ladder::FirstStep => (failures.max(1), 1),
+        };
+        let until = Tick::new(now.get().saturating_add(cooldown_nanos(rung, rng)));
         self.move_seat(address, cooling(until, failures));
         true
     }

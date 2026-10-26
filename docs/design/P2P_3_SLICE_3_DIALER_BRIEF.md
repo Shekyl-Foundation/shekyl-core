@@ -841,8 +841,8 @@ mark says which failures are timeouts: Tor's `0x06` and the dial
 deadline's `TransportTimeout`. An earlier one keeps its retries, as
 `0xF0`, `0xF2`, `0x03`, `0x04` and the gap timeout do; `0x01` is final
 by its own row. On a silently blocked link every attempt ends at
-`0x06` at the window, so the candidates it reaches cool and climb rungs;
-that residual and its bound are in `TOR_SUPERVISOR.md`'s reply table.
+`0x06` at the window, so the candidates it reaches cool; the quiet
+stretch (below) keeps them at the first step.
 Every failed Tor attempt counts in the posture line's
 tally when it ends, deferred or not); a
 cooldown in place of the drop ("The fill" above; the `DialOutcome` table;
@@ -851,6 +851,39 @@ seats are evictable like drawable ones); the file rule (slice 1 brief
 §7). The values are Assumptions in
 `DAEMON_RELAY_PRIVACY.md` §97. The failed-address memory is deleted
 into this (below).
+
+**The quiet stretch (Rick, 2026-10-26).** While a connector holds no
+session and none has opened there for the quiet stretch, a failed test
+cools at the first step and does not climb (`Ladder::FirstStep` in
+`shekyl-peerlist`: the first rung's cooldown, and the consecutive count
+held at least one). The condition is the dialer's own evidence, read
+when a test cools (`shekyl-dialer/src/owner/quiet.rs`): no session held
+on the connector, outbound or inbound, and no dial on it reached a peer
+for `QUIET_AFTER_NANOS`, five minutes, the same constant the managed-Tor
+posture line reads (`TOR_SUPERVISOR.md` §4.2; the daemon builds the
+supervisor's `Policy` from it), never a second number. Outside the
+condition the ladder steps as before. Both connectors, one mechanism. It
+is the dialer's judgement of its own evidence about addresses, not a
+verdict on the link, and nothing is announced (`TSR-Q14`). Why: on a
+silently blocked link every failure says as much about this node's reach
+as about the address, and before this a long block walked every
+candidate it reached up the ladder toward the hour, so the fill after
+the unblock waited on those rungs (`TOR_SUPERVISOR.md`'s `0x06` row, the
+refuse block of 2026-10-25). Tests: `shekyl-dialer/tests/attempts.rs`,
+a block with no sessions keeps every cooled address at the first step,
+on both connectors; with one session held failures climb, and so does a
+failure inside the stretch; after the block a cooled address is drawable
+within one first-step cooldown.
+
+*Wargame.* An attacker's dead addresses cannot produce the condition
+while the node holds any session: one honest session, outbound or
+inbound, and failures climb as before, so planting dead addresses buys
+no faster redraw of them. A node that is fully isolated cycles its
+candidates faster, every first step, which helps it find an honest
+address when the block ends; the cost is a dial per address per first
+step on a link that carries nothing. White is never cooled, so a block
+shorter than the white expiry (24 h) already refills from white; the
+rule matters for gray, and for a block long enough to expire white.
 
 **Recovery (Rick, 2026-10-14; amended 2026-10-24).** A connector whose
 wake finds it under its target, nothing in flight, and no drawable white

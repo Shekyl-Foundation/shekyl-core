@@ -310,15 +310,17 @@ fn a_declared_closed_network_draws_only_its_list_once_its_cooldowns_end() {
     // Past the cooldowns, every wake draws from the declared list: the
     // address named outside it is seated and drawable, and never drawn.
     // A wake's dial fails at once (no connector), so what it drew is the
-    // address whose failed-test count rose, and it cools again.
-    let failed = |address: &NetworkAddress| dialer.shared().lists.failed_tests(address);
-    for round in 1..=4u32 {
+    // one address cooling again. The connector holds nothing and opens
+    // nothing, so past the quiet stretch a failure does not climb the
+    // ladder (Rick, 2026-10-26): the count cannot tell the draws apart.
+    let cooling = |address: &NetworkAddress| dialer.shared().lists.is_cooling(address);
+    for _ in 1..=4u32 {
         past_cooldowns(&clock);
         assert!(dialer.wake(CLEARNET, &mut rng), "the closed network dials");
-        assert_eq!(failed(&outside), 1, "the outside address is never drawn");
+        assert!(!cooling(&outside), "the outside address is never drawn");
         assert_eq!(
-            failed(&population[0]) + failed(&population[1]),
-            2 + round,
+            population.iter().filter(|address| cooling(address)).count(),
+            1,
             "one member of the list was drawn and failed again"
         );
     }

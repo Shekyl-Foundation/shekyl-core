@@ -57,7 +57,9 @@ impl Dialer {
     pub(super) fn with_inbound<R>(&self, body: impl FnOnce(&mut Shared) -> R) -> R {
         self.hub.with_board(|board| {
             let mut shared = self.shared();
-            shared.inbound_tor = board.count(ConnectorId::Tor, Direction::Inbound);
+            for connector in ConnectorId::ALL {
+                shared.inbound[connector.index()] = board.count(*connector, Direction::Inbound);
+            }
             body(&mut shared)
         })
     }
@@ -68,7 +70,7 @@ impl Dialer {
         shared
             .view(ConnectorId::Tor)
             .held()
-            .saturating_add(shared.inbound_tor)
+            .saturating_add(shared.inbound[ConnectorId::Tor.index()])
     }
 
     /// Publish the held count the supervisor reads.

@@ -17,7 +17,7 @@ use crate::address_file::{self, AddressFileError};
 use crate::outcome::{DialOutcome, ListName, Refusal, SessionRow, Source, WhiteClock};
 use crate::partition::{DiscloseEarly, DiscloseEarlyEnd, Partition};
 use crate::validity::RefusedSet;
-use crate::{white_diversity_floor, DISCLOSE_COUNT, WHITE_REFILL_LINE};
+use crate::{white_diversity_floor, Ladder, DISCLOSE_COUNT, WHITE_REFILL_LINE};
 
 /// The ban list as the peer list reads it (D4): a question, never a write.
 /// The transport layer's [`BanList`] answers it; [`NoBans`] answers "no"
@@ -546,10 +546,23 @@ impl Peerlist {
             .candidate_hosts(true, eligible)
     }
 
+    /// [`Self::apply_on`] with [`Ladder::Climb`]: a failed test steps the
+    /// cooldown ladder.
+    pub fn apply<R: RelayRng + ?Sized>(&mut self, outcome: &DialOutcome, now: Tick, rng: &mut R) {
+        self.apply_on(outcome, now, Ladder::Climb, rng);
+    }
+
     /// The only writer of white and the only drop of an outstanding gray
     /// draw (brief §5). The match is total: the seat, and, for a
-    /// confirmation, whether the session stayed.
-    pub fn apply<R: RelayRng + ?Sized>(&mut self, outcome: &DialOutcome, now: Tick, rng: &mut R) {
+    /// confirmation, whether the session stayed. `ladder` is the cooldown a
+    /// failed test takes; the dialer chooses it.
+    pub fn apply_on<R: RelayRng + ?Sized>(
+        &mut self,
+        outcome: &DialOutcome,
+        now: Tick,
+        ladder: Ladder,
+        rng: &mut R,
+    ) {
         let Some(connector) = Self::connector_of(outcome.address()) else {
             return;
         };
@@ -579,7 +592,7 @@ impl Peerlist {
                 if cause.proves_misbehaviour() {
                     partition.drop_outstanding(address);
                 } else {
-                    partition.cool(address, now, rng);
+                    partition.cool(address, now, ladder, rng);
                 }
             }
             // The strand refused the payload. White is unchanged. An

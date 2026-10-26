@@ -47,7 +47,8 @@ pub use link_tally::{TallySink, TorLinkTally};
 pub use nonce::{HandshakeNonce, HandshakeNonceSet, InFlightNonce};
 pub use owner::{session_of, Applied, Dialer, Launch, NotReady, Shared, SnapshotSource};
 pub use pace::{
-    attempts_per_test, next_wake_nanos, retry_wait_nanos, WAKE_BASE_NANOS, WAKE_JITTER_NANOS,
+    attempts_per_test, next_wake_nanos, retry_wait_nanos, QUIET_AFTER_NANOS, WAKE_BASE_NANOS,
+    WAKE_JITTER_NANOS,
 };
 pub use seeds::{seeds, SeedNetwork};
 pub use store::{AddressStore, LoadError, STORE_INTERVAL_NANOS};

@@ -34,6 +34,7 @@
 mod address;
 mod flight;
 mod handshake;
+mod quiet;
 mod ready;
 mod recovery;
 mod tor_tally;
@@ -130,10 +131,14 @@ pub struct Shared {
     /// What the Tor dials show, for the managed-Tor supervisor's posture
     /// line (`TOR_SUPERVISOR.md` §4.2). Display only (`TSR-Q14`).
     tor_link: LinkFold,
-    /// Inbound Tor rows last read off the board. [`Dialer::session_closed`]
-    /// does not read the board: the adopt poster calls it while holding
-    /// the table lock. The seam's close poster refreshes this first.
-    inbound_tor: usize,
+    /// Each connector's inbound rows last read off the board.
+    /// [`Dialer::session_closed`] does not read the board: the adopt poster
+    /// calls it while holding the table lock. The seam's close poster
+    /// refreshes this first.
+    inbound: [usize; ConnectorId::COUNT],
+    /// When an attempt on each connector last opened a stream, or when the
+    /// dialer was built: the start of its quiet stretch ([`quiet`]).
+    last_opened: [Tick; ConnectorId::COUNT],
 }
 
 impl Shared {
@@ -225,6 +230,7 @@ impl Dialer {
         let bell = Arc::new(Bell::new());
         let ringing = Arc::clone(&bell);
         let links_watch = hub.links().subscribe(Arc::new(move |_| ringing.ring()));
+        let started = hub.now();
         Self {
             hub,
             shared: Arc::new(Mutex::new(Shared {
@@ -248,7 +254,8 @@ impl Dialer {
                 ],
                 tor_window: None,
                 tor_link: LinkFold::new(),
-                inbound_tor: 0,
+                inbound: [0; ConnectorId::COUNT],
+                last_opened: [started; ConnectorId::COUNT],
             })),
             nonces: HandshakeNonceSet::new(),
             stop: Arc::new(AtomicBool::new(false)),
@@ -661,8 +668,10 @@ impl Dialer {
         now: Tick,
         rng: &mut R,
     ) {
+        Self::note_opened(shared, connector, outcome, now);
+        let ladder = Self::ladder(shared, connector, now);
         shared.attempts(connector).finish(outcome);
-        shared.lists.apply(outcome, now, rng);
+        shared.lists.apply_on(outcome, now, ladder, rng);
         let held = Self::tor_held(shared);
         shared.tor_link.observe(connector, outcome, held);
     }
@@ -712,6 +721,7 @@ impl Dialer {
                             ran_nanos / 1_000_000,
                             wait / 1_000_000
                         );
+                        Self::note_opened(shared, connector, outcome, now);
                         let held = Self::tor_held(shared);
                         shared.tor_link.observe(connector, outcome, held);
                         return;
