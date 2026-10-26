@@ -168,10 +168,11 @@ impl Table {
     }
 
     /// The table's own defects: a malformed name (IG-1), a name defined
-    /// twice (IG-5), a switch that is on by default (IG-4), a runtime row
-    /// that is a secret or has no default value (IG-12), a development
-    /// lever that names no network or names mainnet (IG-8). Empty means the
-    /// table is well formed.
+    /// twice (IG-5), a grant that does not disclose an option row (RT-O24),
+    /// a switch that is on by default (IG-4), a runtime row that is a
+    /// secret or has no default value (IG-12), a development lever that
+    /// names no network or names mainnet (IG-8). Empty means the table is
+    /// well formed.
     #[must_use]
     pub fn defects(&self) -> Vec<String> {
         let mut out = Vec::new();
@@ -187,6 +188,14 @@ impl Table {
             }
             if self.rows[..i].iter().any(|r| r.name == name) {
                 out.push(format!("`{name}` is defined twice"));
+            }
+            // Every row, including one that is not live: a reserved name
+            // still says which grant would disclose it.
+            if !row.grant.discloses_option_row() {
+                out.push(format!(
+                    "`{name}` names the {} grant, which does not disclose an option row",
+                    row.grant.name()
+                ));
             }
             if !row.is_live() {
                 continue;
@@ -322,6 +331,31 @@ mod tests {
     #[test]
     fn the_test_table_is_well_formed() {
         assert_eq!(TABLE.defects(), Vec::<String>::new());
+    }
+
+    /// A row's grant is one of the four that disclose an option, and a
+    /// reserved row is not exempt: the name still says what would show it.
+    #[test]
+    fn a_row_that_names_chain_is_a_defect_even_when_reserved() {
+        const ROWS: &[Row] = &[Row {
+            name: "held",
+            kind: Kind::Switch,
+            default: Default::Unset,
+            surface: Surface::File,
+            runtime: false,
+            grant: Grant::Chain,
+            visibility: Visibility::Reserved { reason: "held" },
+            help: "",
+        }];
+        let defects = Table {
+            binary: "test",
+            rows: ROWS,
+        }
+        .defects();
+        assert_eq!(
+            defects,
+            vec!["`held` names the chain grant, which does not disclose an option row".to_owned()]
+        );
     }
 
     #[test]
