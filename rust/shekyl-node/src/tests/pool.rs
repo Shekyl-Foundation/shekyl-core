@@ -28,7 +28,6 @@ use super::*;
 #[test]
 fn a_flush_over_a_faulted_pool_file_retires_the_pool() {
     use shekyl_chain_store::pool::{PoolRecord, ReceivedHour};
-    use shekyl_daemon_rpc::authority::Authority;
     use shekyl_daemon_rpc::info::{get_info, Disclosure};
     use shekyl_daemon_rpc::info_facts::PoolScope;
     use shekyl_daemon_rpc::pool_methods::{flush_txpool, get_transaction_pool};
@@ -85,7 +84,7 @@ fn a_flush_over_a_faulted_pool_file_retires_the_pool() {
             prune: false,
             split: false,
         },
-        Authority::admin_listener(false),
+        true,
     );
     node.stop();
     assert_eq!(
