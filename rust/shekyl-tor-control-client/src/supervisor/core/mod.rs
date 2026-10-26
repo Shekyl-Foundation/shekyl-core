@@ -13,7 +13,8 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use super::posture::{
-    fixes, own_tx, Cause, Connectors, OriginVerdict, ProgressWindow, Shown, Space, Status, Syncing,
+    fixes, own_tx, BootstrapLine, Cause, Connectors, OriginVerdict, ProgressWindow, Shown, Space,
+    Status, Syncing,
 };
 
 mod announce;
@@ -40,11 +41,13 @@ pub struct Policy {
     pub cap: Duration,
     /// How often a bootstrap is sampled while Tor is answering.
     pub sample_every: Duration,
-    /// How often a live Tor is checked. While Running the check is
-    /// [`Action::Sample`]: one `GETINFO`, so a Tor that sends nothing still
-    /// meets the driver's reply bound. While bootstrapping the check is
-    /// [`Action::SayProgress`]: the percent, how long it has held, and the
-    /// bytes read since the previous line.
+    /// How often a live Tor is checked, and the width of the bootstrap
+    /// window. While Running the check is [`Action::Sample`]: one `GETINFO`,
+    /// so a Tor that sends nothing still meets the driver's reply bound.
+    /// While bootstrapping the check is [`Action::SayProgress`]: the log says
+    /// the line once per this interval. The line itself stays current at
+    /// every directory sample. Its byte window opens on the newest sample at
+    /// least this old, and runs to the moment it is read.
     pub alive_every: Duration,
     /// Consecutive failed launches before the next one takes a fresh
     /// data directory. `TSR-M2` had no launch failure, so this stays 3.
@@ -362,7 +365,7 @@ impl Core {
             respawn_count: 0,
             launch_failures: 0,
             backoff: Backoff::new(),
-            progress: ProgressWindow::start(now),
+            progress: ProgressWindow::start(now, policy.alive_every),
             dials: Dials::new(now),
             pin_at: None,
             sample_at: None,
@@ -500,6 +503,10 @@ impl Core {
         let shown = self.shown();
         // Health is the verdict's class part, not the link: after a boot the
         // link is usable before any address-hiding peer has handshaken.
+        let bootstrap = match self.phase {
+            Phase::Bootstrapping { .. } => self.progress.line(),
+            _ => None,
+        };
         Status {
             health: self.origin.hides_address(),
             shown,
@@ -513,10 +520,8 @@ impl Core {
             own_tx: own_tx(self.origin, self.connectors),
             fixes: fixes(&self.cause, self.connectors),
             progress: self.progress.percent(),
-            bootstrap: match self.phase {
-                Phase::Bootstrapping { .. } => self.progress.line(),
-                _ => None,
-            },
+            bootstrap,
+            pace: bootstrap.and_then(BootstrapLine::pace),
             tor_quiet: match (&self.phase, &self.cause) {
                 (Phase::Running { .. }, Cause::None) => self.dials.line(),
                 _ => None,
@@ -553,7 +558,7 @@ impl Core {
             ready: false,
         };
         self.launch_failures = 0;
-        self.progress = ProgressWindow::start(now);
+        self.progress = ProgressWindow::start(now, self.policy.alive_every);
         self.set_cause(Cause::None);
         self.arm_sample(now);
         self.arm_alive(now);

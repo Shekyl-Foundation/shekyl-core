@@ -715,10 +715,24 @@ its own bound before that sample starts. While bootstrapping it is
 `Action::SayProgress`, logged as news. It is not `Action::Announce`. A named
 cause keeps the cadence of its own events, and an origin-hold stays a
 posture warning. The line names the percent, how long that percent has held,
-and the bytes Tor read since the previous mark. The span is the time from
-that mark to the moment the line is said: the deadline when the driver is
-free, and longer when a control ask held the driver. `traffic/read` rides
-the directory sample (`sample_every`). The actor's bootstrap poll, every
+and the bytes Tor read over a window that slides with every sample: it opens
+on the newest sample at least `alive_every` old (the oldest, until there is
+one) and runs to the moment the line is read, so its span is longer when a
+control ask held the driver. The line begins at the first progress deadline
+and from then on is current at every directory sample (`sample_every`,
+5 s), so a client polling Status reads it to within one sample, while the
+log says it once per deadline. `traffic/read` rides the directory sample.
+A count that moves backwards starts the window again.
+
+Beside the line, Status carries the bootstrap's pace (Rick, 2026-10-24), a
+typed word for a client to show: `Advancing` when the percent moved within
+the window, `SlowButNormal` when it held and bytes arrived (a slow directory
+mirror, normal), `Stalled` when a full window of samples brought nothing.
+No word when the evidence cannot tell: no count, or less than a full window
+of nothing. The pace is a description, never a cause. It stands beside the
+cause, never instead of it, and the renderer composes both: a bootstrap
+that stalls while Tor reports outbound blocked says the cause, its fix, and
+the stall, so a client reading only the pace cannot hide the fix. The actor's bootstrap poll, every
 500 ms, is `Input::BootstrapNoted`: the percent moves, and the sample
 deadline does not. A notice that reset the sample would say "Nothing
 arrived" through a download the sample never counted. Every ask goes over
@@ -758,7 +772,7 @@ that detail, not variants of `ManagedTorFix`.
 | Outbound blocked | `BOOTSTRAP` warn `REASON`, `NETWORK_LIVENESS DOWN`, `CIRCUIT_NOT_ESTABLISHED`, or `Input::NetworkView` reporting `network-liveness=down` or `status/circuit-established=0` while Running (§4.2) | Degraded (outbound) | this machine cannot reach the Tor network; check the firewall or network. Bridges are `Operator`, not a managed-Tor option | none | wait |
 | No directory reachable | `DIR_ALL_UNREACHABLE` | Degraded (outbound) | as above | none | wait |
 | Clock skew | `CLOCK_SKEW SKEW=±s` | Degraded (outbound) | the clock is off by the reported seconds; check time sync | none | wait |
-| Waiting on the Tor directory | the last `BOOTSTRAP PROGRESS` phase and when it was reached | Bootstrapping (the phase, and since when) | none; Tor is fetching the network's directory, and a slow mirror can hold it for minutes | none | wait |
+| Waiting on the Tor directory | the last `BOOTSTRAP PROGRESS` phase and when it was reached | Bootstrapping (the phase, and since when); the pace beside it (§4.11) | none; Tor is fetching the network's directory, and a slow mirror can hold it for minutes. With the pace: advancing, slow but normal, or stalled, with the bytes over the window | none | wait |
 | Resumed from suspend | `CLOCK_JUMPED` | Bootstrapping, briefly | none | none | re-evaluate now |
 | Onion unreachable | the probe, `HS_DESC FAILED` | Degraded (inbound) | none; recovering | none | republish |
 | Tor exited or wedged | exit, EOF, reply bound | Restarting | none unless repeated; then the count and the last exit, and where the previous log is | none | respawn |
