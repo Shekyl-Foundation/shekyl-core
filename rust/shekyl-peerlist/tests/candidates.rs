@@ -12,7 +12,8 @@ use std::net::Ipv4Addr;
 
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{
-    ConnectorId, DialOutcome, NetworkAddress, NoBans, Peerlist, RefusedSet, Source, Tick, GRAY_CAP,
+    ConnectorId, DialOutcome, NetworkAddress, NoBans, NoSessions, Peerlist, RefusedSet, Source,
+    Tick, GRAY_CAP,
 };
 
 const C: ConnectorId = ConnectorId::Clearnet;
@@ -43,7 +44,7 @@ fn draw_and_return(
     eligible: &mut dyn FnMut(&NetworkAddress) -> bool,
     rng: &mut SplitMix64,
 ) -> Option<NetworkAddress> {
-    let drawn = list.draw_gray_where(C, eligible, rng)?;
+    let drawn = list.draw_gray_where(C, Tick::new(0), eligible, rng)?;
     list.apply(&DialOutcome::PayloadRefused(drawn.clone()), now(), rng);
     Some(drawn)
 }
@@ -153,7 +154,10 @@ fn only_an_eligible_address_is_drawn_and_none_eligible_draws_nothing() {
     );
     assert_eq!(list.gray_candidates(C, &mut |a| allowed.contains(a)), 2);
 
-    assert_eq!(list.draw_gray_where(C, &mut |_| false, &mut rng), None);
+    assert_eq!(
+        list.draw_gray_where(C, Tick::new(0), &mut |_| false, &mut rng),
+        None
+    );
     assert_eq!(
         list.gray_candidates(C, &mut |_| true),
         10,
@@ -167,7 +171,7 @@ fn a_drawn_address_is_outstanding_and_is_not_drawn_again() {
     let hosts: Vec<NetworkAddress> = (0..6).map(|n| host(n, 18080)).collect();
     let mut list = gray_list(&hosts, &mut rng);
     let mut drawn = Vec::new();
-    while let Some(address) = list.draw_gray_where(C, &mut |_| true, &mut rng) {
+    while let Some(address) = list.draw_gray_where(C, Tick::new(0), &mut |_| true, &mut rng) {
         assert!(!drawn.contains(&address), "{address:?} drawn twice");
         drawn.push(address);
     }
@@ -189,19 +193,33 @@ fn the_white_draw_takes_white_only_and_counts_hosts() {
     let mut white = Vec::new();
     for _ in 0..4 {
         let address = list
-            .draw_gray_where(C, &mut |_| true, &mut rng)
+            .draw_gray_where(C, Tick::new(0), &mut |_| true, &mut rng)
             .expect("gray");
         list.apply(&DialOutcome::Confirmed(address.clone()), now(), &mut rng);
         white.push(address);
     }
     assert_eq!(
-        list.white_candidates(C, now(), &mut NoBans, &mut |_| true, &mut rng),
+        list.white_candidates(
+            C,
+            now(),
+            &mut NoBans,
+            &mut NoSessions,
+            &mut |_| true,
+            &mut rng
+        ),
         4
     );
     assert_eq!(list.gray_candidates(C, &mut |_| true), 4);
     for _ in 0..200 {
         let drawn = list
-            .draw_white_where(C, now(), &mut NoBans, &mut |_| true, &mut rng)
+            .draw_white_where(
+                C,
+                now(),
+                &mut NoBans,
+                &mut NoSessions,
+                &mut |_| true,
+                &mut rng,
+            )
             .expect("white");
         assert!(
             white.contains(&drawn),
@@ -212,12 +230,26 @@ fn the_white_draw_takes_white_only_and_counts_hosts() {
     let live = white[0].clone();
     for _ in 0..200 {
         let drawn = list
-            .draw_white_where(C, now(), &mut NoBans, &mut |a| *a != live, &mut rng)
+            .draw_white_where(
+                C,
+                now(),
+                &mut NoBans,
+                &mut NoSessions,
+                &mut |a| *a != live,
+                &mut rng,
+            )
             .expect("three remain");
         assert_ne!(drawn, live);
     }
     assert_eq!(
-        list.draw_white_where(C, now(), &mut NoBans, &mut |_| false, &mut rng),
+        list.draw_white_where(
+            C,
+            now(),
+            &mut NoBans,
+            &mut NoSessions,
+            &mut |_| false,
+            &mut rng
+        ),
         None
     );
 }
