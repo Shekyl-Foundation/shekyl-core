@@ -829,13 +829,14 @@ pub fn publish_managed_running(
 }
 
 /// Publish the managed Tor's SOCKS address as the Tor link's route, and
-/// give the dialer that Tor's window ([`crate::tor_link::TOR_SOCKS_TIMEOUT`],
-/// the value it was launched with). Only the managed Tor has a window this
-/// node knows; an operator's Tor sets its own (`install_tor_proxy`).
+/// give the dialer that Tor's window: the earliest its
+/// [`crate::tor_link::TOR_SOCKS_TIMEOUT`], the value it was launched with,
+/// can expire. Only the managed Tor has a window this node knows; an
+/// operator's Tor sets its own (`install_tor_proxy`).
 pub(crate) fn publish_managed_socks(socks: SocketAddr) -> Option<u64> {
     let host = HOST.lock().expect("zone host").clone()?;
     if let Some(dialer) = crate::dialer_ffi::dialer() {
-        dialer.set_tor_window(crate::tor_link::TOR_SOCKS_TIMEOUT.window());
+        dialer.set_tor_window(crate::tor_link::TOR_SOCKS_TIMEOUT.earliest_expiry());
     }
     *host.tor_proxy.lock().expect("tor proxy") = Some(Proxy::unauthenticated(socks));
     let published =

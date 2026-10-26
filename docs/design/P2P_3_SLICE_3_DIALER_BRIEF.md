@@ -830,9 +830,10 @@ test (`shekyl-dialer/src/pace.rs`, `attempts_per_test` and
 in flight or waiting, is one record on `Attempts`; Tor three attempts,
 clearnet one, the address drawn throughout and no in-flight slot held
 while waiting, one `DialOutcome` per test, the last attempt's; a Tor
-attempt that times out at or after the managed Tor's `SocksTimeout`,
-105 s from the attempt's own start (`shekyl_ffi::tor_link::TOR_SOCKS_TIMEOUT`,
-the one constant the launch also reads), is final within its test and
+attempt that times out at or after the managed Tor's `SocksTimeout`
+can expire, 104 s into the attempt's own run (105 s,
+`shekyl_ffi::tor_link::TOR_SOCKS_TIMEOUT`, the one constant the launch
+also reads, less Tor's whole-second clock), is final within its test and
 the address cools: Tor retried inside its own window, introduction
 points and descriptor fetches (Rick, 2026-10-26; the Tor 0.4.9.14 lines
 are in `TOR_SUPERVISOR.md`'s reply table). The close cause's window-timeout

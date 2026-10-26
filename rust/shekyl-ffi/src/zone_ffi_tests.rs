@@ -264,7 +264,8 @@ fn the_owner_loops_are_ledger_rows_joined_at_shutdown_and_lateness_is_no_thread(
 
 /// The Tor window follows the route (revision 4 of the in-flight bound,
 /// Rick 2026-10-26; the Tor lane's review). The managed Tor's route gives
-/// the dialer the window that Tor was launched with; an operator's Tor
+/// the dialer the earliest that Tor's launch timeout can expire; an
+/// operator's Tor
 /// sets its own `SocksTimeout`, so its route leaves the dialer none.
 #[test]
 fn the_tor_window_is_the_managed_tors_and_an_operators_tor_has_none() {
@@ -293,10 +294,14 @@ fn the_tor_window_is_the_managed_tors_and_an_operators_tor_has_none() {
     assert!(publish_managed_socks(managed).is_some());
     assert_eq!(
         dialer.tor_window(),
-        crate::tor_link::TOR_SOCKS_TIMEOUT.window(),
+        crate::tor_link::TOR_SOCKS_TIMEOUT.earliest_expiry(),
         "the managed Tor's window"
     );
-    assert_eq!(dialer.tor_window(), Some(Duration::from_secs(105)));
+    assert_eq!(
+        dialer.tor_window(),
+        Some(Duration::from_secs(104)),
+        "105 s, less Tor's whole-second clock"
+    );
 
     dial_through_tor(
         shekyl_socks::Proxy::unauthenticated(SocketAddr::new(

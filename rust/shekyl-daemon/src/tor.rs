@@ -904,6 +904,11 @@ mod tests {
             "one window"
         );
         assert_eq!(timeout, 105, "120 s less the 15 s margin");
+        assert_eq!(
+            shekyl_ffi::tor_link::TOR_SOCKS_TIMEOUT.earliest_expiry(),
+            Some(Duration::from_secs(104)),
+            "Tor counts a stream's age in whole seconds"
+        );
     }
 
     /// A control ask that never answers, the wedged-Tor case, does not hold

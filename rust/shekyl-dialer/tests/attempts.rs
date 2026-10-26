@@ -758,9 +758,10 @@ fn a_due_keep_retry_does_not_take_the_connector_past_its_target() {
     );
 }
 
-/// The managed Tor's window in these tests: the daemon's `SocksTimeout`,
-/// 105 s (`shekyl_ffi::tor_link::TOR_SOCKS_TIMEOUT`).
-const TOR_WINDOW: Duration = Duration::from_secs(105);
+/// The window the dialer reads in these tests: the earliest the daemon's
+/// 105 s `SocksTimeout` can expire, since Tor counts a stream's age in
+/// whole seconds (`shekyl_ffi::tor_link::TOR_SOCKS_TIMEOUT.earliest_expiry()`).
+const TOR_WINDOW: Duration = Duration::from_secs(104);
 
 /// One Tor attempt at one gray onion, refused with `cause` after `took`,
 /// on a dialer that knows the Tor window. Returns the dialer, the dial and
@@ -844,10 +845,18 @@ impl TorAttempt {
 /// **A `0x06` at Tor's window cools after one attempt** (revision 4, test
 /// 12). Tor has already retried introduction points and descriptor
 /// fetches inside the window; a second attempt would spend another
-/// window on a destination Tor could not reach.
+/// window on a destination Tor could not reach. At the window's earliest
+/// expiry, and at 104.97 s, where the floor device saw a 105 s timeout's
+/// `0x06` arrive (2026-10-26).
 #[test]
 fn a_ttl_expiry_at_the_tor_window_cools_after_one_attempt() {
     one_tor_attempt(41, shekyl_tor::refused(0x06), TOR_WINDOW).assert_final();
+    one_tor_attempt(
+        48,
+        shekyl_tor::refused(0x06),
+        Duration::from_millis(104_970),
+    )
+    .assert_final();
 }
 
 /// **An early `0x06` retries** (test 13): inside the window it is the
@@ -890,16 +899,16 @@ fn the_tally_counts_a_failed_attempt_deferred_for_a_retry() {
 }
 
 /// **An attempt's place against the window is its own** (Copilot's review
-/// of `cbdb91d03`). An `0x06` at 104 s, inside the window, is posted and
+/// of `cbdb91d03`). An `0x06` at 103 s, inside the window, is posted and
 /// then waits 5 s in the completion queue before the loop applies it. The
-/// attempt ran 104 s, timed inside its task, so its test retries; measured
-/// to the application it would read 109 s and cool.
+/// attempt ran 103 s, timed inside its task, so its test retries; measured
+/// to the application it would read 108 s and cool.
 #[test]
 fn a_timeout_inside_the_window_retries_however_late_it_is_applied() {
     let clock = ManualClock::new(Tick::new(1_000_000_000));
     let sockets = Sockets::new();
     let dial = Arc::new(HeldDial::answering(sockets.clone(), Vec::new()));
-    dial.refuse_after(&clock, shekyl_tor::refused(0x06), Duration::from_secs(104));
+    dial.refuse_after(&clock, shekyl_tor::refused(0x06), Duration::from_secs(103));
     let (_hub, dialer) = dialer_on(&clock, &sockets, Arc::clone(&dial) as Arc<dyn Dial>);
     dialer.set_tor_window(Some(TOR_WINDOW));
     let mut rng = SplitMix64::new(47);

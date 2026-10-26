@@ -150,7 +150,7 @@ impl Marks {
     /// A timeout of the dial's own window: our dial deadline, or the
     /// connector's word that its own window ran out. It does not decide a
     /// retry by itself, since the same timeout can come early (a lost
-    /// circuit): the dialer reads it against the attempt's start, and a
+    /// circuit): the dialer reads it against the attempt's run time, and a
     /// failure at or after the connector's window is final within its test
     /// (the dialer in-flight bound, revision 4, Rick 2026-10-26).
     pub const WINDOW_TIMEOUT: u8 = 8;
@@ -263,7 +263,7 @@ impl CloseCause {
 
     /// Whether this cause is a timeout of the dial's own window
     /// ([`Marks::WINDOW_TIMEOUT`]). The dialer reads it against the
-    /// attempt's start time.
+    /// attempt's run time.
     #[must_use]
     pub const fn window_timeout(self) -> bool {
         self.marks & Marks::WINDOW_TIMEOUT != 0
@@ -491,7 +491,7 @@ mod tests {
     }
 
     /// Of the transport layer's own causes, only its dial deadline is a
-    /// window timeout: the dialer reads it against the attempt's start
+    /// window timeout: the dialer reads it against the attempt's run time
     /// (revision 4, Rick 2026-10-26). It stays worth a retry by itself.
     #[test]
     fn only_the_transport_timeout_is_a_window_timeout() {

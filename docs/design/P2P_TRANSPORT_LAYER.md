@@ -421,7 +421,7 @@ holds a count, so the destroy post has not run.
   its spare byte, worth a retry, names the destination, proves
   misbehaviour (2026-10-24), and a timeout of the dial's own window
   (2026-10-26: the dial deadline's `TransportTimeout` and Tor's
-  `0x06`; the dialer reads it against the attempt's start, and a Tor
+  `0x06`; the dialer reads it against the attempt's run time, and a Tor
   timeout at or after `SocksTimeout` is final within its test): per
   kind by default, handed in by the
   connector for a proxy refusal (the Tor connector's reply table,

@@ -27,8 +27,8 @@ pub const TOR_DIAL_WITHIN: std::time::Duration =
 /// attach just inside [`TOR_DIAL_WITHIN`], so a blocked link is Tor's reply,
 /// never a race with that deadline (`TOR_SUPERVISOR.md` §4.2). The one
 /// constant: the daemon launches its managed Tor with it, and when that
-/// Tor's route is published the dialer reads its [`SocksTimeout::window`]
-/// as the window a Tor attempt can use, so an attempt that fails at or
+/// Tor's route is published the dialer reads its
+/// [`SocksTimeout::earliest_expiry`], so an attempt that times out at or
 /// after it is final within its test (the dialer in-flight bound, revision
 /// 4, Rick 2026-10-26). An operator's Tor has its own, which this node does
 /// not know, and gives the dialer no window.

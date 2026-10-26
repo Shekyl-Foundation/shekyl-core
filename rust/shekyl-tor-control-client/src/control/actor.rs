@@ -647,8 +647,8 @@ impl SocksTimeout {
     /// How long Tor holds a SOCKS request it cannot attach, in whole
     /// seconds, or `None` for Tor's default. Never more than half the
     /// deadline away from it. The one computation of the window: the launch
-    /// renders it ([`Self::as_arg`]) and the dialer reads it, so a failure
-    /// at or after it is known to have used Tor's whole window.
+    /// renders it ([`Self::as_arg`]) and the dialer reads its
+    /// [`Self::earliest_expiry`].
     #[must_use]
     pub fn window(self) -> Option<std::time::Duration> {
         match self {
@@ -660,6 +660,21 @@ impl SocksTimeout {
                 Some(std::time::Duration::from_secs(timeout.as_secs().max(1)))
             }
         }
+    }
+
+    /// The earliest an attempt can see Tor give up at [`Self::window`]: one
+    /// second inside it. Tor counts a stream's age in whole seconds,
+    /// `time(NULL)` against a `time_t` creation stamp (Tor 0.4.9.14
+    /// `src/core/or/connection_edge.c:1194`, `:1210`), so its
+    /// `>= SocksTimeout` check (`:1222`) can fire after as little as
+    /// `SocksTimeout - 1` real seconds; on the floor device a `0x06` from a
+    /// 105 s timeout arrived at 104.97 s (2026-10-26). An attempt that ran
+    /// this long and timed out may have used Tor's whole window, and the
+    /// dialer treats it so.
+    #[must_use]
+    pub fn earliest_expiry(self) -> Option<std::time::Duration> {
+        self.window()
+            .map(|window| window.saturating_sub(std::time::Duration::from_secs(1)))
     }
 
     /// The `--SocksTimeout` value in whole seconds, or `None` for Tor's

@@ -288,12 +288,13 @@ impl Dialer {
         self.bell.ring();
     }
 
-    /// The window the managed Tor gives one onion connect before it answers
-    /// `0x06` (its `SocksTimeout`). Tor has already retried introduction
-    /// points and descriptor fetches inside it, so a Tor attempt that
-    /// times out at or after it, measured from the attempt's own start, is
-    /// final within its test: the address cools (Rick, 2026-10-26). A
-    /// timeout inside the window keeps its retries. `None`, the default,
+    /// The earliest the managed Tor's `SocksTimeout` can expire on an onion
+    /// connect and answer `0x06` (`SocksTimeout::earliest_expiry`: Tor's
+    /// window, less its whole-second clock). Tor has already retried
+    /// introduction points and descriptor fetches by then, so a Tor attempt
+    /// that times out at or after it, measured over the attempt's own run,
+    /// is final within its test: the address cools (Rick, 2026-10-26). A
+    /// timeout before it keeps its retries. `None`, the default,
     /// leaves every timeout worth its retries: an operator's Tor sets its
     /// own `SocksTimeout`, which this node does not know, and with no Tor
     /// there is nothing to read. Set where the managed Tor's route is

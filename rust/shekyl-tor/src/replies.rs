@@ -78,7 +78,8 @@ const TOR_INTRODUCTION_TIMEOUT: u16 = 0xF7;
 /// (`src/feature/hs/hs_client.c:1246`) and fetches the descriptor from
 /// another directory (`:1717`, `:1739`, `:1758`). An earlier `0x06` is a
 /// lost circuit or the service's connect, and keeps its retries; the
-/// dialer tells which from the attempt's start.
+/// dialer tells which from the attempt's own run, against the earliest the
+/// managed Tor's `SocksTimeout` can expire.
 pub const fn proxy_reply_marks(reply: u16) -> u8 {
     let retry = matches!(
         reply,
