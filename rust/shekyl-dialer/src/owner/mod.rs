@@ -40,7 +40,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 use shekyl_draw_rng::RelayRng;
 use shekyl_peerlist::{
@@ -103,11 +103,17 @@ pub struct Shared {
     last_store: Option<Tick>,
     /// Every enlisted attempt whose result has not been applied, by
     /// attempt id. The stop flag and the insert share one lock section
-    /// ([`flight`]): once the flag is set, nothing more is inserted. The
-    /// row holds the attempt's nonce until the result is applied or the
-    /// attempt is cancelled, and the attempt stays pending in [`Attempts`]
-    /// until one of those.
+    /// ([`flight`]): once the flag is set, nothing more is inserted, and
+    /// an application that has not yet removed its row leaves it for the
+    /// drain. The row holds the attempt's nonce until the result is
+    /// applied or the attempt is cancelled, and the attempt stays pending
+    /// in [`Attempts`] until one of those.
     in_flight: BTreeMap<u64, InFlight>,
+    /// Applications that have removed their row and not yet finished.
+    /// [`Dialer::stop`] waits for zero, after it has refused every new
+    /// application, before it writes the address file. The wait releases
+    /// this lock; the hub is never called under it.
+    applying: usize,
     /// The next attempt id.
     next_attempt: u64,
     /// Each connector's in-flight bound ([`in_flight_bound`]): protocol
@@ -174,6 +180,9 @@ pub struct Dialer {
     _links_watch: Subscription,
     /// The results the attempt tasks posted; each also rings the bell.
     completions: Arc<Completions>,
+    /// Wakes [`Self::stop`] when the last application that started before
+    /// the stop flag was seen has finished.
+    apply_idle: Condvar,
 }
 
 /// The peerlist's name for a seam session: the socket id, little-endian,
@@ -216,6 +225,7 @@ impl Dialer {
                 recovery: std::array::from_fn(|_| None),
                 last_store: None,
                 in_flight: BTreeMap::new(),
+                applying: 0,
                 next_attempt: 0,
                 bounds: [
                     in_flight_bound(ConnectorId::Clearnet),
@@ -231,6 +241,7 @@ impl Dialer {
             bell,
             _links_watch: links_watch,
             completions: Arc::new(Completions::default()),
+            apply_idle: Condvar::new(),
         }
     }
 
@@ -478,12 +489,16 @@ impl Dialer {
     /// inserted is in the drain. Either way the outstanding gray draw stays
     /// seated and is written. Cancel senders are dropped after the dialer
     /// lock, so a task ends at its next poll and releases what it holds: a
-    /// connect is aborted, a channel is released. Posted results are then
-    /// dropped. The file is written last. All of this is before the zone's
-    /// runtime stops and before the managed Tor is torn down
-    /// (`TOR_SUPERVISOR.md`, `TSR-F13`: the dialer stops first). A task
-    /// that posts after the queue is cleared has nothing to apply it: its
-    /// result drops with the dialer, which releases the channel.
+    /// connect is aborted, a channel is released. The queue is then closed
+    /// and every posted result is dropped. A task that posts after the
+    /// close is handed the result back and drops it, which releases the
+    /// channel. An application that had already taken its row finishes
+    /// first: this waits for it, and that wait does not hold the dialer
+    /// lock across the hub calls, so a session it keeps is in the lists
+    /// when the file is written and nothing is adopted afterwards. The
+    /// file is written last. All of this is before the zone's runtime
+    /// stops and before the managed Tor is torn down
+    /// (`TOR_SUPERVISOR.md`, `TSR-F13`: the dialer stops first).
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Release);
         self.bell.ring();
@@ -491,8 +506,19 @@ impl Dialer {
         if count > 0 {
             tracing::debug!("the dialer cancelled {count} attempt(s) in flight at stop");
         }
+        self.wait_for_applications();
         if let Err(err) = self.store_addresses() {
             tracing::warn!("the address file was not written at stop: {err}");
+        }
+    }
+
+    /// Block until every application that removed its row before seeing
+    /// the stop flag has finished. The condvar wait releases the dialer
+    /// lock. Nothing increments the count once the flag is set.
+    fn wait_for_applications(&self) {
+        let mut shared = self.shared();
+        while shared.applying > 0 {
+            shared = self.apply_idle.wait(shared).expect("dialer state");
         }
     }
 

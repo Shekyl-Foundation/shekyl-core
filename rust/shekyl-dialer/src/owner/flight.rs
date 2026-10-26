@@ -25,8 +25,11 @@
 //! disarms the guard first, so a posted result stays until the loop takes it.
 //!
 //! [`Dialer::abandon_flight`] is stop's half of the same table: it drains
-//! every row, drops the cancel senders after the dialer lock, then drops
-//! every posted result.
+//! every row, drops the cancel senders after the dialer lock, then closes
+//! the queue and drops what was already posted. A post after that close is
+//! rejected, and the task drops the result. An application that has already
+//! taken its row is counted. Stop waits for that count, and it does not
+//! hold the dialer lock across the hub calls that finish the application.
 
 use std::collections::VecDeque;
 use std::future::Future;
@@ -86,43 +89,73 @@ pub(super) struct InFlight {
 ///
 /// Its lock is its own. A task takes nothing else, and no hub call is made
 /// under it. The loop is the only consumer: [`Self::take`] removes one
-/// connector's results, in the order posted.
+/// connector's results, in the order posted. [`Self::close`] is permanent:
+/// stop closes the queue, and a dialer does not start again.
 #[derive(Default)]
 pub(super) struct Completions {
-    queue: Mutex<VecDeque<(u64, ConnectorId, TaskResult)>>,
+    queue: Mutex<Inbox>,
     posted: Condvar,
 }
 
+#[derive(Default)]
+struct Inbox {
+    /// Set by [`Completions::close`]. A post after that is rejected.
+    closed: bool,
+    items: VecDeque<(u64, ConnectorId, TaskResult)>,
+}
+
 impl Completions {
-    fn post(&self, id: u64, connector: ConnectorId, result: TaskResult) {
-        self.queue
-            .lock()
-            .expect("completions")
-            .push_back((id, connector, result));
-        self.posted.notify_all();
+    /// Queue `result`. `false` when the queue is closed: the result is
+    /// dropped after this lock, which releases its channel, and the caller
+    /// still holds the row.
+    fn post(&self, id: u64, connector: ConnectorId, result: TaskResult) -> bool {
+        let rejected = {
+            let mut inbox = self.queue.lock().expect("completions");
+            if inbox.closed {
+                Some(result)
+            } else {
+                inbox.items.push_back((id, connector, result));
+                None
+            }
+        };
+        match rejected {
+            Some(result) => {
+                drop(result);
+                false
+            }
+            None => {
+                self.posted.notify_all();
+                true
+            }
+        }
     }
 
     /// Take every result posted for `connector`, in the order posted.
     /// Other connectors' results stay, in their relative order.
     fn take(&self, connector: ConnectorId) -> Vec<(u64, TaskResult)> {
-        let mut queue = self.queue.lock().expect("completions");
+        let mut inbox = self.queue.lock().expect("completions");
         let mut taken = Vec::new();
-        let mut kept = VecDeque::with_capacity(queue.len());
-        for (id, of, result) in queue.drain(..) {
+        let mut kept = VecDeque::with_capacity(inbox.items.len());
+        for (id, of, result) in inbox.items.drain(..) {
             if of == connector {
                 taken.push((id, result));
             } else {
                 kept.push_back((id, of, result));
             }
         }
-        *queue = kept;
+        inbox.items = kept;
         taken
     }
 
-    /// Drop every posted result. Each channel is released as it drops.
-    /// A waiter is woken: stop has happened, and the result will not arrive.
-    pub(super) fn clear(&self) {
-        let dropped: Vec<_> = self.queue.lock().expect("completions").drain(..).collect();
+    /// Refuse every later post and drop every posted result. Each channel
+    /// is released as it drops, outside this lock. A waiter is woken: stop
+    /// has happened, and the result will not arrive.
+    pub(super) fn close(&self) {
+        let dropped: Vec<_> = {
+            let mut inbox = self.queue.lock().expect("completions");
+            inbox.closed = true;
+            inbox.items.drain(..).collect()
+        };
         drop(dropped);
         self.posted.notify_all();
     }
@@ -133,23 +166,28 @@ impl Completions {
         self.queue
             .lock()
             .expect("completions")
+            .items
             .iter()
             .any(|(posted, _, _)| *posted == id)
     }
 
-    /// Wait until attempt `id` is posted or `stop` is set.
+    /// Wait until attempt `id` is posted, the queue is closed, or `stop`
+    /// is set.
     ///
     /// The predicate is checked under this queue's lock, so a post or a
-    /// stop that arrives first is seen and the wait is not timed. This does
-    /// not take the result.
+    /// close that arrives first is seen and the wait is not timed. This
+    /// does not take the result.
     #[cfg(feature = "test-seams")]
     fn wait_until_posted(&self, id: u64, stop: &std::sync::atomic::AtomicBool) {
-        let mut queue = self.queue.lock().expect("completions");
+        let mut inbox = self.queue.lock().expect("completions");
         loop {
-            if stop.load(Ordering::Acquire) || queue.iter().any(|(posted, _, _)| *posted == id) {
+            if stop.load(Ordering::Acquire)
+                || inbox.closed
+                || inbox.items.iter().any(|(posted, _, _)| *posted == id)
+            {
                 return;
             }
-            queue = self.posted.wait(queue).expect("completions");
+            inbox = self.posted.wait(inbox).expect("completions");
         }
     }
 }
@@ -210,7 +248,8 @@ enum Drove {
 
 /// An attempt that ended before its task ran.
 enum BeforeIo {
-    /// `DialFailed` was recorded. A gray draw was dropped.
+    /// `DialFailed` was recorded. The outstanding gray cools: this cause
+    /// carries no proof.
     Recorded,
     /// Stop won. The gray draw stays seated.
     Stopped,
@@ -384,7 +423,7 @@ impl Dialer {
         };
         let count = cancelled.len();
         drop(cancelled);
-        self.completions.clear();
+        self.completions.close();
         count
     }
 
@@ -529,10 +568,14 @@ impl Dialer {
             let mut guard = guard;
             let posted =
                 drive_attempt(cancel, attempt_task(hub, connector, address, prepared)).await;
+            // Disarm only once the queue has accepted the result. A rejected
+            // post was dropped inside `post`, after its lock, and the guard
+            // still releases the row when stop has not already drained it.
             if let Some(result) = posted {
-                guard.disarm();
-                completions.post(id, connector, result);
-                bell.ring();
+                if completions.post(id, connector, result) {
+                    guard.disarm();
+                    bell.ring();
+                }
             }
         };
         self.hub.spawn_attempt(Box::pin(task))
@@ -563,8 +606,10 @@ impl Dialer {
     }
 
     /// The task never started, and its guard has already cancelled the
-    /// pending address. Record that as a local failure so the gray draw is
-    /// dropped, unless stop has won: then the draw stays seated.
+    /// open test. Record the local failure so the outstanding gray cools:
+    /// the cause carries no proof, and the open test is already gone, so
+    /// there is nothing left to defer. Unless stop has won: then the draw
+    /// stays seated and nothing is recorded.
     fn record_unstarted<R: RelayRng + ?Sized>(
         &self,
         connector: ConnectorId,
@@ -587,8 +632,29 @@ impl Dialer {
         self.shared().in_flight.contains_key(&id)
     }
 
-    /// Apply one taken result. `None` when its attempt is no longer held
-    /// (cancelled at stop): the result is dropped, releasing its channel.
+    /// Take `id`'s row for application, or leave it when stop has won.
+    ///
+    /// The stop flag and the remove share this lock section, the same one
+    /// as the insert. Stop set the flag before it drains, so this either
+    /// leaves the row for that drain or counts an application stop must
+    /// wait for. The count's permit is built after the lock drops: the hub
+    /// work that follows is not done under it.
+    fn begin_apply(&self, id: u64) -> Option<(InFlight, ApplyPermit<'_>)> {
+        let record = {
+            let mut shared = self.shared();
+            if self.stop.load(Ordering::Acquire) {
+                return None;
+            }
+            let record = shared.in_flight.remove(&id)?;
+            shared.applying += 1;
+            record
+        };
+        Some((record, ApplyPermit { dialer: self }))
+    }
+
+    /// Apply one taken result. `None` when stop has won or the attempt is
+    /// no longer held: the result is dropped, releasing its channel, and a
+    /// row stop has not yet drained is left for it.
     fn apply_taken<R: RelayRng + ?Sized>(
         &self,
         connector: ConnectorId,
@@ -596,7 +662,7 @@ impl Dialer {
         result: TaskResult,
         rng: &mut R,
     ) -> Option<Applied> {
-        let Some(record) = self.shared().in_flight.remove(&id) else {
+        let Some((record, permit)) = self.begin_apply(id) else {
             drop(result);
             return None;
         };
@@ -613,8 +679,46 @@ impl Dialer {
                     .then_some(socket)
             }
         };
-        // The nonce leaves the set here, after the result is applied.
+        // The nonce leaves the set here, after the result is applied and
+        // before stop is told this application is finished.
         drop(record);
+        drop(permit);
         Some(Applied { id, address, kept })
+    }
+}
+
+/// One application [`Dialer::stop`] is waiting on. The decrement takes the
+/// dialer lock and wakes stop when it was the last. Drop covers the panic
+/// path, so a count cannot outlive the application that incremented it.
+struct ApplyPermit<'a> {
+    dialer: &'a Dialer,
+}
+
+impl Drop for ApplyPermit<'_> {
+    fn drop(&mut self) {
+        let mut shared = self.dialer.shared();
+        shared.applying -= 1;
+        if shared.applying == 0 {
+            self.dialer.apply_idle.notify_all();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Completions;
+    use crate::owner::handshake::TaskResult;
+    use shekyl_peerlist::{CloseCause, CloseKind, ConnectorId};
+
+    #[test]
+    fn a_post_after_the_queue_closes_is_rejected() {
+        let completions = Completions::default();
+        let first = TaskResult::Failed(CloseCause::new(CloseKind::LocalClose));
+        assert!(completions.post(1, ConnectorId::Clearnet, first));
+        completions.close();
+        let late = TaskResult::Failed(CloseCause::new(CloseKind::LocalClose));
+        assert!(!completions.post(2, ConnectorId::Tor, late));
+        assert!(completions.take(ConnectorId::Clearnet).is_empty());
+        assert!(completions.take(ConnectorId::Tor).is_empty());
     }
 }
