@@ -1,11 +1,11 @@
 # RT-W10 — the daemon side of the channel: rule-26 pre-flight
 
-**Status:** Round 0 pre-flight — **POSED 2026-10-25, awaiting the
-maintainer's ruling and RT-W10's authorization.** It records the substrate
-re-check (§2), what was and was not executed (§3), and the questions the
-slice cannot proceed without (§4), each with a recommendation. RT-W10 is
-not authorized, and no implementation commit lands before this document
-is ruled and the slice authorized (rule 26).
+**Status:** Round 0 pre-flight — **questions RULED 2026-10-25** (Rick):
+`RT-O30`…`RT-O36`, §4, every part, six as recommended with additions and
+RT-O36 resolved without an exception. **RT-W10 authorized 2026-10-25**, to
+proceed in the five steps of §5, in order, one pull request each. The
+substrate re-check is recorded (§2) and what could and could not be
+executed is stated (§3).
 **Ground:** `shekyl-core` `dev` **`66619c4b9`**. Every `file:line` below was
 read at that commit.
 **Parent:** [`RPC_CHANNEL.md`](RPC_CHANNEL.md) (round R1, ruled 2026-10-09)
@@ -13,7 +13,7 @@ read at that commit.
 ([`RPC_CHANNEL_RT_W9_PREFLIGHT.md`](../completed/RPC_CHANNEL_RT_W9_PREFLIGHT.md)) and
 the close-out's items for this one (§13, RT-W10 row).
 **Family:** `RT-` (registered). This document mints items **RT-O30…RT-O35**
-inside it, and **RT-O36**, posed here.
+inside it, and **RT-O36**, ruled 2026-10-25.
 **Decision authority:** Rick.
 
 ---
@@ -87,7 +87,11 @@ tree; every claim cited.
 
 ---
 
-## 4. The questions — POSED 2026-10-25
+## 4. The questions — RULED 2026-10-25 (Rick)
+
+Each is kept as it was asked, with the recommendation it carried, and the
+ruling under it. Where the ruling adds to the recommendation, the ruling
+is what is built.
 
 ### RT-O30 — What does message 4 carry?
 
@@ -107,6 +111,8 @@ handshake withholds the request until the first transport record opens.
 **Recommended: (a).** Nothing computed from an unauthenticated request
 leaves the daemon, and the handshake's types already enforce that.
 
+**RULED: (a), as recommended.** Message 4 carries the client's ceiling.
+
 ### RT-O31 — The message-3 and message-4 payload encoding
 
 §6.2 rules both payloads fixed-length, one length for every grant. The
@@ -123,6 +129,10 @@ each one size on the wire, and the listener knows how many bytes to read.
 An unknown version, a set bit past the twelfth or a nonzero reserved byte
 is refused like any malformed message.
 
+**RULED: as recommended.** An unknown version or any bit outside the known
+grants is refused, never ignored. The daemon's ceiling never carries
+unknown bits.
+
 ### RT-O32 — How a connection's grant reaches a handler
 
 Today a grant is a router (F-2).
@@ -135,6 +145,10 @@ request extension: the connection's effective grant, its host flag
 extension. The plaintext listeners stamp their preset's grant. The C++
 origin carries the host flag only, which is what the pool reads use it
 for.
+
+**RULED: as recommended.** The route-to-grant mapping is one table in
+code, checked exactly once by a test, so a new route without a grant fails
+the build instead of being served.
 
 ### RT-O33 — When plaintext loopback loses `submit` and `mining-work`
 
@@ -160,6 +174,12 @@ The question covers every consumer F-6 names, not the GUI alone: the
 wallet clients reach the admin listener by default, so a re-scope in
 RT-W10 cuts them too.
 
+**RULED: (a).** Plaintext loopback keeps its method set until RT-W12; the
+console moves to the socket in RT-W10. The cost is recorded: until RT-W12
+moves the clients, the plaintext admin listener on loopback is reachable
+by any local user, not only the daemon's owner, so RT-W12 follows RT-W11
+directly (`RPC_CHANNEL.md` §13). The GUI lane is told.
+
 ### RT-O34 — Where the daemon's static key and the enrolments live
 
 No key file and no enrolment store exist (F-14). §5: the enrolled set is
@@ -178,6 +198,12 @@ file to edit behind the daemon's back.
   One record per fingerprint: its ceiling, and when and by whom it was
   enrolled.
 
+**RULED: as recommended, plus three specifics.** The key's on-disk format
+is versioned and pinned by a known-answer test. On Windows the key file
+gets an owner-only ACL with the no-read-up label set at `CreateFileW`, not
+inherited (RT-P8's finding). The daemon refuses to start if the key file
+is readable by anyone else.
+
 ### RT-O35 — The console key and the other service-mode pieces
 
 §5's console key, the enrolment at install and the console-key reset
@@ -188,6 +214,9 @@ socket or pipe.
 **Recommended:** they land in RT-W14, beside the dispatcher that makes
 service mode reachable. RT-W10 builds run-as-me only, and its owner enrols
 the first key over the socket.
+
+**RULED: as recommended.** In run-as-me mode the owner's socket carries
+enrolment.
 
 ### RT-O36 — The armed switch and nettype: two rulings
 
@@ -208,6 +237,15 @@ is the operator's protection against arming them there by mistake. The
 change to §6.1 is one paragraph; either way, it is relayed to the grammar
 round, which owns the option table.
 
+**RULED: no exception is needed; the two rulings are compatible.** The
+explicit, logged `dev-rpc` start switch is the only thing that enables the
+armed levers, and the network type never does, which satisfies rule 71.
+The switch is refused on mainnet with a clear error: the network type
+restricting the switch, not selecting behaviour, which satisfies IG-Q49.
+`RPC_CHANNEL.md` §6.1 says so. Step 1 routes `generateblocks`,
+`inject_archival_serve_credit` and `/pop_blocks` through `admit_armed`,
+adds the log line at every start, and deletes the C++ `FAKECHAIN` gate.
+
 ---
 
 ## 5. Plan
@@ -218,7 +256,7 @@ This document is step 0 and is the only content of the first.
 | # | Step | Depends on | Notes |
 |---|---|---|---|
 | 0 | This pre-flight | — | Docs only |
-| 1 | Grants as types, on today's listeners | RT-O32 | The method table gains §6.1's grant column. A connection's grant reaches handlers by request extension; `restricted` goes from Rust and from the FFI. A refusal is `OutsideTheGrant` (-32002). The armed switch is routed (`admit_armed` on every armed lever, `/pop_blocks` included) and logged at every start; its network rule follows RT-O36. Plaintext loopback keeps its method set (RT-O33) |
+| 1 | Grants as types, on today's listeners | RT-O32, RT-O36 | The method table gains §6.1's grant column, one route-to-grant table checked exactly once by a test. A connection's grant reaches handlers by request extension; `restricted` goes from Rust and from the FFI. A refusal is `OutsideTheGrant` (-32002). `generateblocks`, `inject_archival_serve_credit` and `/pop_blocks` go through `admit_armed`, the switch is logged at every start, and the C++ `FAKECHAIN` gate is deleted. Plaintext loopback keeps its method set (RT-O33) |
 | 2 | The resource policy | step 1 | §6.3's bounds per grant, not per listener, refused as `OverResourceBound`; `fill_pow_hash` refused, never blanked; cost bounds for `calc_pow` and `get_coinbase_tx_sum`; server timeouts. The floor-device measurement is registered before it runs |
 | 3 | The same-user socket or pipe | step 1 | The rendezvous (§7.1), the instance-name rule, the operator-named socket directory, the daemon watching its rendezvous and stopping when it goes. Built on the wallet RPC's owner-only socket and `shekyl-win-sec`'s pipe (F-15). Owner connections stamp the owner's grant |
 | 4 | The key, the channel listener and enrolment | steps 1–3; RT-O30, RT-O31, RT-O34 | The key file; `rpc-listen` (the reserved row); the handshake driven with the 4 s and 11 s deadlines, mac1, the budget and busy; the fixed payloads; `RecordStream` into the router; per-client admission by fingerprint; the enrolment store, `rpc-enrol` and `rpc-revoke` (RT-O9.1's bounds), revocation closing live sessions; the `submit_transaction` route refusing a body whose `InboundShape` is not a submission (close-out F2) |
