@@ -890,11 +890,14 @@ mod tests {
         assert!(running.starts_with(&bootstrap));
     }
 
-    /// The posture line's quiet stretch is the dialer's, five minutes: one
-    /// number for the line and the cooldown rule (Rick, 2026-10-26).
+    /// The posture line's `quiet_after` is the dialer's quiet stretch: one
+    /// number for the line and the cooldown rule (Rick, 2026-10-26). The
+    /// value itself is the dialer's §97 Assumption, provisional until the
+    /// floor-device soak, so this pins the equality and not the value. The
+    /// two clocks differ: the line's stretch also restarts when a Tor
+    /// reaches Running.
     #[test]
     fn the_posture_lines_quiet_stretch_is_the_dialers() {
-        assert_eq!(policy().quiet_after, Duration::from_secs(300));
         assert_eq!(
             u64::try_from(policy().quiet_after.as_nanos()).expect("small"),
             shekyl_ffi::dialer_ffi::QUIET_AFTER_NANOS

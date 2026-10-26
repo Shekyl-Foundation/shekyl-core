@@ -869,16 +869,29 @@ fn an_early_ttl_expiry_keeps_its_retries() {
     one_tor_attempt(42, shekyl_tor::refused(0x06), Duration::from_secs(30)).assert_retries();
 }
 
-/// **`0xF0` retries, even past the window** (test 14). A descriptor not
-/// found is not a timeout: the window does not read it.
+/// **An early `0xF0` retries** (test 14): a descriptor not found on this
+/// try, inside the window.
 #[test]
-fn a_descriptor_not_found_keeps_its_retries_past_the_window() {
-    one_tor_attempt(
-        43,
-        shekyl_tor::refused(0xF0),
-        TOR_WINDOW + Duration::from_secs(5),
-    )
-    .assert_retries();
+fn an_early_descriptor_not_found_keeps_its_retries() {
+    one_tor_attempt(43, shekyl_tor::refused(0xF0), Duration::from_secs(5)).assert_retries();
+}
+
+/// **An `0xF0` at the window is final** (the short floor series,
+/// 2026-10-26: nine `0xF0` at 104 to 110 s were retried). With
+/// `ExtendedErrors` on, Tor answers an expired onion stream with the code
+/// it recorded on it, `0xF0` after a descriptor fetch came back not found
+/// and Tor retried at another directory: Tor's own timeout, after its own
+/// retries. The other onion codes Tor records on a stream likewise.
+#[test]
+fn an_onion_code_at_the_window_is_final() {
+    for (seed, reply) in [(58, 0xF0), (59, 0xF2), (60, 0xF3), (61, 0xF7)] {
+        one_tor_attempt(
+            seed,
+            shekyl_tor::refused(reply),
+            Duration::from_millis(104_740),
+        )
+        .assert_final();
+    }
 }
 
 /// **Our own timeout at or past the window is final** (test 15): the dial

@@ -837,10 +837,13 @@ also reads, less Tor's whole-second clock), is final within its test and
 the address cools: Tor retried inside its own window, introduction
 points and descriptor fetches (Rick, 2026-10-26; the Tor 0.4.9.14 lines
 are in `TOR_SUPERVISOR.md`'s reply table). The close cause's window-timeout
-mark says which failures are timeouts: Tor's `0x06` and the dial
-deadline's `TransportTimeout`. An earlier one keeps its retries, as
-`0xF0`, `0xF2`, `0x03`, `0x04` and the gap timeout do; `0x01` is final
-by its own row. On a silently blocked link every attempt ends at
+mark says which failures can be the window running out: the dial
+deadline's `TransportTimeout`, and every Tor reply worth a retry, since
+with `ExtendedErrors` on Tor answers its own timeout with the onion code
+it last recorded on the stream (`0xF0` after a descriptor not found; the
+short floor series saw `0xF0` at 104 to 110 s, 2026-10-26). Earlier, each
+keeps its retries, as the gap timeout does; `0x01` is final by its own
+row. On a silently blocked link every attempt ends at
 `0x06` at the window, so the candidates it reaches cool; the quiet
 stretch (below) keeps them at the first step.
 Every failed Tor attempt counts in the posture line's
