@@ -178,8 +178,8 @@ pub use archival::{
 pub use archival::{
     check_section, check_section_until_switch, draw_targets, judge_bundles, open_body,
     open_reference, verify_bundle, AdmissionFault, Admitted, BundleInvalid, BundleRefused,
-    BundleUnanswered, BundleView, DerivedDraw, DrawTargets, EconomyTarget, SectionCharge,
-    SectionCheckFailed, SectionRefused, SectionStanding, SupportSeat, SupportTarget,
+    BundleUnanswered, BundleView, DerivedDraw, DrawOrigin, DrawTargets, Drawn, SectionCharge,
+    SectionCheckFailed, SectionRefused, SectionStanding, SupportSeat,
 };
 pub use block::{
     Candidate, ProvenPow, ReferenceClaim, ReferenceClaims, StructurallyValid, TxIdentity,

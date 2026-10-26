@@ -1779,9 +1779,10 @@ the store's bundle view at `h_incl = tip + 1`, the memo warmed first
 (`remember_window_epochs`), in the write that queues it. `AlreadyRevealed`
 says another bundle for `h` won; any other refusal of this daemon's own
 bundle is logged with its row as a producer defect. After every write that
-moves the tip, an entry whose window closed leaves, and an entry whose
-admitting tip left the chain is judged again and re-queued or dropped; an
-entry above the tip waits for its block. At open the store reconciles the
+moves the tip, the queue is classified on a snapshot. An entry whose
+window closed leaves. An entry whose admitting tip left the chain is
+judged again and kept, its tip rewritten, or dropped. An entry above the
+tip waits for its block. A queue that does not change is not written. At open the store reconciles the
 two tables and the connector logs what went (SI-41).
 
 **Where it lives.** The ring, the plan, the state machine and assembly are
@@ -1803,7 +1804,7 @@ serving its shard's real bytes with the staged `ResidentReceiptKey`, the
 queue admitting each bundle, and the next block connecting it through
 `connect_admitting`; every draw is the persona's pair and passed, the index
 carries the passed bits, the epoch settles the pair as served; a restart
-mid-window keeps the entry, a reorg re-queues it at the new tip, and with
+mid-window keeps the entry, a reorg keeps it under the new tip, and with
 the persona on an identity key a no-pass bundle is admitted and later
 leaves with its window. Fast: the queue's admission, the J33 refusal, the
 window, the reorg re-judge, the restart, the connector's derivation and the

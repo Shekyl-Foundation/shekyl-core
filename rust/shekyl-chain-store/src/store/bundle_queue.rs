@@ -26,8 +26,9 @@
 //! tip, by the ingest connector through this store's single writer
 //! (`judge_bundles` over a `StoreBundleView` of the same batch), and only
 //! an admitted bundle reaches [`WriteBatch::queue_bundle`]. After a reorg
-//! the connector judges every entry again and removes the ones the rule
-//! now refuses; when an entry's window closes it removes that one too.
+//! the connector rewrites the tip on an entry it still admits
+//! ([`WriteBatch::retip_bundle`]) and removes the ones the rule now
+//! refuses; when an entry's window closes it removes that one too.
 //!
 //! # SI-41: every body has a holder
 //!
@@ -179,7 +180,11 @@ impl WriteBatch<'_, '_> {
     /// reference's `h` (the first valid one wins);
     /// [`QueueCannot::BodyNotReferenced`] when the body does not hash to
     /// the reference's prunable hash; [`QueueCannot::Full`] at `capacity`;
-    /// SI-41 when the tables already disagree; engine faults.
+    /// SI-41 when the two tables' lengths already disagree; engine faults.
+    ///
+    /// Held is a point read of `h`. Capacity is the queue table's length.
+    /// Neither decodes a body. The full SI-41 walk — each entry's body,
+    /// and a body no entry names — stays on [`Self::queued_bundles`].
     pub fn queue_bundle(
         &self,
         reference: &BundleRef,
@@ -192,11 +197,16 @@ impl WriteBatch<'_, '_> {
         if body.prunable_hash() != *reference.prunable_hash() {
             return Err(QueueCannot::BodyNotReferenced { h }.into());
         }
-        let entries = self.queued_bundles()?;
-        if entries.iter().any(|entry| entry.h == h) {
+        self.holder_lengths_agree()?;
+        if self
+            .queue_table()?
+            .get(queue_key(h))
+            .map_err(EngineError::Storage)?
+            .is_some()
+        {
             return Err(QueueCannot::Held { h }.into());
         }
-        let held = u64::try_from(entries.len()).unwrap_or(u64::MAX);
+        let held = self.queue_table()?.len().map_err(EngineError::Storage)?;
         if held >= capacity {
             return Err(QueueCannot::Full { capacity }.into());
         }
@@ -215,6 +225,72 @@ impl WriteBatch<'_, '_> {
         self.body_table()?
             .insert(*reference.prunable_hash(), stored.as_encoded())
             .map_err(EngineError::Storage)?;
+        Ok(())
+    }
+
+    /// Rewrite the tip the entry for `h` was judged against. The body stays.
+    ///
+    /// The caller classified `h` on a snapshot of this store and is the only
+    /// writer, so the row is here. An absent row is SI-41
+    /// ([`BodyHolderFault::EntryAbsent`]): the table and that classification
+    /// disagree. The body's bytes are not read.
+    ///
+    /// # Errors
+    ///
+    /// SI-41 when `h` is not queued or the two tables' lengths disagree;
+    /// SI-7 when the queue row does not decode; engine faults.
+    pub fn retip_bundle(
+        &self,
+        h: BlockHeight,
+        tip_height: BlockHeight,
+        tip_hash: BlockHash,
+    ) -> Result<(), StoreError> {
+        self.holder_lengths_agree()?;
+        let mut queue = self.queue_table()?;
+        let key = queue_key(h);
+        // The guard borrows the table. Decode into an owned row, then drop
+        // the guard, before an error path borrows `self` to arm.
+        let loaded = {
+            let row = queue.get(key).map_err(EngineError::Storage)?;
+            row.map(|row| row.value().decode())
+        };
+        let queued = match loaded {
+            None => {
+                drop(queue);
+                return Err(self.arm_if_invariant(
+                    StoreInvariant::BundleBodyHolder(BodyHolderFault::EntryAbsent { h }).into(),
+                ));
+            }
+            Some(Err(cause)) => {
+                drop(queue);
+                return Err(self.arm_read_fault(undecodable(QUEUE_CELL, cause)));
+            }
+            Some(Ok(queued)) => queued,
+        };
+        let row = QueuedBundle {
+            reference: queued.reference,
+            tip_height,
+            tip_hash,
+        }
+        .encoded();
+        check_row::<Coded<QueuedBundle>>(QUEUE_CELL, &row.as_encoded())?;
+        queue
+            .insert(key, row.as_encoded())
+            .map_err(EngineError::Storage)?;
+        Ok(())
+    }
+
+    /// The two tables hold the same number of rows (SI-41), without
+    /// decoding either. A length mismatch is a body with no holder or a
+    /// holder with no body; [`queued_bundles`] names which.
+    fn holder_lengths_agree(&self) -> Result<(), StoreError> {
+        let queued = self.queue_table()?.len().map_err(EngineError::Storage)?;
+        let stored = self.body_table()?.len().map_err(EngineError::Storage)?;
+        if queued != stored {
+            return Err(self.arm_if_invariant(
+                StoreInvariant::BundleBodyHolder(BodyHolderFault::BodyWithoutHolder).into(),
+            ));
+        }
         Ok(())
     }
 

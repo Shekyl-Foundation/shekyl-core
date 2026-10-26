@@ -129,7 +129,7 @@ fn forget_drops_an_entry() {
 #[test]
 fn ring_entries_wipe_themselves() {
     fn wipes_itself_on_drop<T: ZeroizeOnDrop>() {}
-    wipes_itself_on_drop::<WitnessSecrets>();
+    wipes_itself_on_drop::<WitnessSecret>();
     wipes_itself_on_drop::<FnDsaHybridSecretKey>();
     wipes_itself_on_drop::<Zeroizing<[u8; 32]>>();
 }
@@ -149,6 +149,6 @@ fn the_ring_shows_no_secret() {
     assert!(!shown.contains(&hex));
     assert!(!shown.contains(&format!("{:?}", &seed[..4])));
 
-    let secrets = WitnessSecrets::drawn().expect("draws");
-    assert_eq!(format!("{secrets:?}"), "WitnessSecrets([REDACTED])");
+    let material = WitnessMaterial::drawn().expect("draws");
+    assert_eq!(format!("{material:?}"), "WitnessMaterial([REDACTED])");
 }

@@ -16,12 +16,15 @@
 //!   queues it. It is shaped like offering an alternative block: the
 //!   offer is judged, and the verdict is the reply.
 //! - [`LearnDraws`] — the producer mined `h` and asks for its draws, which
-//!   the verifier's own selection derives (`draw_targets`) on this
-//!   writer's view, with the endpoint each persona's bond record carries.
-//! - **Upkeep**, after every write that moves the tip: an entry whose
-//!   window closed leaves; an entry whose admitting tip is no longer on
-//!   the chain is judged again by the same rule, and leaves if refused.
-//!   An entry above the tip waits for its block to reconnect.
+//!   the verifier's own selection derives (`draw_targets`) on a committed
+//!   snapshot, with the endpoint each persona's bond record carries. The
+//!   derivation writes nothing, so it does not open a batch.
+//! - **Upkeep**, after every write that moves the tip, classified on one
+//!   snapshot. An entry whose window closed leaves. An entry whose
+//!   admitting tip is no longer on the chain is judged again: kept by
+//!   rewriting that tip ([`WriteBatch::retip_bundle`]), or removed if
+//!   refused. An entry above the tip waits. A queue that does not change
+//!   is not written.
 //! - **Reconcile**, at start: the store drops a body no entry names and an
 //!   entry whose body is gone (SI-41), and this actor logs what went.
 //!
@@ -29,14 +32,15 @@
 //! 4b, so nothing the queue admits is ever connected from it here.
 
 use kameo::message::{Context, Message};
-use shekyl_archival_retention::{bundle_root, BundleBody, BundleRef};
+use shekyl_archival_retention::{bundle_root, BundleBody, BundleRef, PassStream};
 use shekyl_bundle_producer::{DrawTarget, Targets};
 use shekyl_chain_rules::{
-    draw_targets, judge_bundles, remember_window_epochs, AdmissionFault, BundleInvalid,
-    BundleRefused, CenRow, ChainView, DrawableMemo, HeaderView, ViewRead,
+    draw_targets, judge_bundles, remember_window_epochs, AdmissionFault, AtHeight, BundleInvalid,
+    BundleRefused, CenRow, ChainView, DrawableMemo, HeaderView, RuleSet, ViewRead,
 };
 use shekyl_chain_store::store::{
-    QueueCannot, StoreBundleView, StoreCannot, StoreError, WriteBatch,
+    invariant_of, QueueCannot, ReadSnapshot, SnapshotView, StoreBundleView, StoreCannot,
+    StoreError, WriteBatch,
 };
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 use zeroize::Zeroizing;
@@ -153,23 +157,56 @@ impl Message<LearnDraws> for Connector {
     ) -> Self::Reply {
         let rules = self.rules;
         let memo = &mut self.memo;
-        // A write that writes nothing: the store's bundle view is the
-        // batch's, so the derivation reads through one. It commits empty.
-        self.writer
-            .write(|batch| learn(batch, rules, memo, msg.h, msg.hash, &msg.seed))
+        // A snapshot: the derivation writes nothing, and a fault latches
+        // the writer without opening a batch.
+        self.writer.with_store(|store| {
+            let snapshot = store.begin_read().map_err(RunFault::Store)?;
+            learn(&snapshot, rules, memo, msg.h, msg.hash, &msg.seed)
+        })
     }
 }
 
 impl Connector {
-    /// The queue's upkeep after a write that moved the tip (module docs).
-    /// An empty queue reads one snapshot and writes nothing.
-    pub(crate) fn upkeep_queue(&mut self) -> Result<(), RunFault> {
-        if self.writer.read()?.queued_bundles()?.is_empty() {
-            return Ok(());
+    /// The tip moved in a committed write: keep the bundle queue to it,
+    /// then publish it. A queue upkeep that faults is logged here and has
+    /// already latched the writer if it was terminal; the next write meets
+    /// the halt, and the tip the committed write left is published.
+    pub(crate) fn tip_moved(&mut self) {
+        if let Err(fault) = self.upkeep_queue() {
+            tracing::error!("the bundle queue's upkeep faulted: {fault}");
         }
+        self.publish_tip();
+    }
+
+    /// The queue's upkeep after a write that moved the tip (module docs).
+    /// The classification reads one snapshot. A queue that does not change
+    /// writes nothing.
+    pub(crate) fn upkeep_queue(&mut self) -> Result<(), RunFault> {
         let rules = self.rules;
         let memo = &mut self.memo;
-        self.writer.write(|batch| upkeep(batch, rules, memo))
+        let plan = self.writer.with_store(|store| {
+            let snapshot = store.begin_read().map_err(RunFault::Store)?;
+            classify(&snapshot, rules, memo)
+        })?;
+        if plan.is_quiet() {
+            return Ok(());
+        }
+        self.writer.write(|batch| commit_upkeep(batch, &plan))?;
+        for departure in &plan.departures {
+            match &departure.why {
+                Departed::WindowClosed => tracing::info!(
+                    h = departure.h.to_raw(),
+                    "bundle queue: the window for height {} closed",
+                    departure.h.to_raw()
+                ),
+                Departed::Refused(why) => tracing::info!(
+                    h = departure.h.to_raw(),
+                    "bundle queue: the entry for height {} left after a reorg: {why}",
+                    departure.h.to_raw()
+                ),
+            }
+        }
+        Ok(())
     }
 
     /// The open's reconcile of the queue and the body store (SI-41).
@@ -232,57 +269,131 @@ impl core::fmt::Display for Refusal {
     }
 }
 
-/// Judge one bundle against the tip, on this batch: `None` admitted, or
-/// the refusal. A view fault is the writer's.
-fn judge(
+/// A snapshot read's fault. A `Corrupt` is the same row a batch would arm,
+/// returned plain: there is no batch to poison, and the caller latches.
+fn snapshot_view_fault(fault: ViewRead<StoreError>) -> RunFault {
+    match fault {
+        ViewRead::View(error) => RunFault::Store(error),
+        ViewRead::Corrupt(corrupt) => {
+            RunFault::Store(StoreError::InvariantViolated(invariant_of(corrupt)))
+        }
+    }
+}
+
+/// The pass stream, in the words an unanswered read logs.
+fn stream_word(stream: PassStream) -> &'static str {
+    match stream {
+        PassStream::Economy => "economy",
+        PassStream::Support => "support",
+    }
+}
+
+/// Why the rule refused, as [`Refusal`], or the view fault as the writer's.
+fn refusal_of(fault: AdmissionFault<StoreError>) -> Result<Refusal, RunFault> {
+    let row = fault.row();
+    match fault {
+        AdmissionFault::View(error)
+        | AdmissionFault::Bundle {
+            refused: BundleRefused::View(error),
+            ..
+        } => Err(RunFault::Store(error)),
+        AdmissionFault::Bundle {
+            refused: BundleRefused::Invalid(BundleInvalid::AlreadyRevealed),
+            ..
+        } => Ok(Refusal::AlreadyRevealed),
+        AdmissionFault::Bundle { refused, .. } => Ok(Refusal::Rule {
+            row,
+            why: refused.to_string(),
+        }),
+        AdmissionFault::Section(refused) => Ok(Refusal::Rule {
+            row,
+            why: refused.to_string(),
+        }),
+        AdmissionFault::Awaiting => Ok(Refusal::Rule {
+            row,
+            why: "a drawable epoch the section names is not on this chain".into(),
+        }),
+    }
+}
+
+/// `judge_bundles` for one reference, as a refusal. The caller has filled
+/// the memo and built the view. `None` admitted. A view fault is the writer's.
+fn judge_section(
+    judged: Result<Vec<shekyl_chain_rules::Admitted>, AdmissionFault<StoreError>>,
+) -> Result<Option<Refusal>, RunFault> {
+    match judged {
+        Ok(_) => Ok(None),
+        Err(fault) => refusal_of(fault).map(Some),
+    }
+}
+
+/// The root of a section of one reference.
+///
+/// The root counts its references in four bytes. One reference is a count
+/// that fits, so this section has a root.
+fn root_of_one(reference: &BundleRef) -> [u8; 32] {
+    let refs = std::slice::from_ref(reference);
+    match bundle_root(refs) {
+        Ok(root) => root,
+        Err(_) => unreachable!("one reference is a section count that fits"),
+    }
+}
+
+/// Judge one reference on a view the caller already filled.
+///
+/// `V` is named by its path. Importing [`BundleRows`](shekyl_chain_store::store::BundleRows)
+/// would put its row reads beside [`HeaderView`] on a concrete view, and
+/// `header_at` would no longer resolve.
+fn judge_prepared<V>(
+    bundle_view: &StoreBundleView<'_, V>,
+    h_incl: BlockHeight,
+    rule_set: &RuleSet,
+    reference: &BundleRef,
+    body: &BundleBody,
+) -> Result<Option<Refusal>, RunFault>
+where
+    V: shekyl_chain_store::store::BundleRows,
+{
+    let refs = std::slice::from_ref(reference);
+    let root = root_of_one(reference);
+    judge_section(judge_bundles(
+        refs,
+        std::slice::from_ref(body),
+        &root,
+        h_incl,
+        bundle_view,
+        rule_set,
+    ))
+}
+
+/// Judge one bundle against the tip, on this batch. A `Corrupt` poisons it.
+fn judge_batch(
     batch: &WriteBatch<'_, '_>,
     memo: &mut DrawableMemo,
     h_incl: BlockHeight,
-    rule_set: &shekyl_chain_rules::RuleSet,
+    rule_set: &RuleSet,
     reference: &BundleRef,
     body: &BundleBody,
 ) -> Result<Option<Refusal>, RunFault> {
     let view = batch.chain_view();
     remember_window_epochs(&view, h_incl, rule_set, memo).map_err(|f| view_fault(batch, f))?;
     let bundle_view = StoreBundleView::new(&view, memo, h_incl, rule_set.settlement_schedule());
-    let refs = std::slice::from_ref(reference);
-    let Ok(root) = bundle_root(refs) else {
-        unreachable!("one reference is a section count that fits");
-    };
-    let Err(fault) = judge_bundles(
-        refs,
-        std::slice::from_ref(body),
-        &root,
-        h_incl,
-        &bundle_view,
-        rule_set,
-    ) else {
-        return Ok(None);
-    };
-    let row = fault.row();
-    Ok(Some(match fault {
-        AdmissionFault::View(error)
-        | AdmissionFault::Bundle {
-            refused: BundleRefused::View(error),
-            ..
-        } => return Err(RunFault::Store(error)),
-        AdmissionFault::Bundle {
-            refused: BundleRefused::Invalid(BundleInvalid::AlreadyRevealed),
-            ..
-        } => Refusal::AlreadyRevealed,
-        AdmissionFault::Bundle { refused, .. } => Refusal::Rule {
-            row,
-            why: refused.to_string(),
-        },
-        AdmissionFault::Section(refused) => Refusal::Rule {
-            row,
-            why: refused.to_string(),
-        },
-        AdmissionFault::Awaiting => Refusal::Rule {
-            row,
-            why: "a drawable epoch the section names is not on this chain".into(),
-        },
-    }))
+    judge_prepared(&bundle_view, h_incl, rule_set, reference, body)
+}
+
+/// Judge one bundle against the tip, on a snapshot. A `Corrupt` latches
+/// and does not open a batch.
+fn judge_snapshot(
+    view: &SnapshotView<'_>,
+    memo: &mut DrawableMemo,
+    h_incl: BlockHeight,
+    rule_set: &RuleSet,
+    reference: &BundleRef,
+    body: &BundleBody,
+) -> Result<Option<Refusal>, RunFault> {
+    remember_window_epochs(view, h_incl, rule_set, memo).map_err(snapshot_view_fault)?;
+    let bundle_view = StoreBundleView::new(view, memo, h_incl, rule_set.settlement_schedule());
+    judge_prepared(&bundle_view, h_incl, rule_set, reference, body)
 }
 
 fn offer(
@@ -300,7 +411,7 @@ fn offer(
             why: "the chain is empty".into(),
         });
     };
-    match judge(batch, memo, h_incl, &rule_set, reference, body)? {
+    match judge_batch(batch, memo, h_incl, &rule_set, reference, body)? {
         None => {}
         Some(Refusal::AlreadyRevealed) => return Ok(BundleOffered::AlreadyRevealed { h }),
         Some(Refusal::Rule { row, why }) => return Ok(BundleOffered::Refused { h, row, why }),
@@ -324,22 +435,27 @@ fn offer(
 }
 
 fn learn(
-    batch: &WriteBatch<'_, '_>,
+    snapshot: &ReadSnapshot<'_>,
     rules: ChainRules,
     memo: &mut DrawableMemo,
     h: BlockHeight,
     hash: BlockHash,
     seed: &[u8; 32],
 ) -> Result<Learned, RunFault> {
-    let Some((_, _, h_incl, rule_set)) = including(batch, rules)? else {
+    let view = SnapshotView::new(snapshot);
+    let Some(tip) = view.tip()? else {
         return Ok(Learned::NotOnChain);
     };
-    let view = batch.chain_view();
+    let h_incl = tip
+        .height
+        .checked_add(BlockCount::ONE)
+        .ok_or(RunFault::NoNextHeight { tip: tip.height })?;
+    let rule_set = rules.in_force(h_incl);
     match view.header_at(h)? {
-        shekyl_chain_rules::AtHeight::Recorded(header) if header.hash == hash => {}
+        AtHeight::Recorded(header) if header.hash == hash => {}
         _ => return Ok(Learned::NotOnChain),
     }
-    remember_window_epochs(&view, h_incl, &rule_set, memo).map_err(|f| view_fault(batch, f))?;
+    remember_window_epochs(&view, h_incl, &rule_set, memo).map_err(snapshot_view_fault)?;
     let bundle_view = StoreBundleView::new(&view, memo, h_incl, rule_set.settlement_schedule());
     let derived = match draw_targets(&bundle_view, h, seed, &rule_set) {
         Ok(derived) => derived,
@@ -347,53 +463,93 @@ fn learn(
         Err(other) => return Ok(Learned::Unanswered(other.to_string())),
     };
     let mut targets = Targets::default();
-    for target in derived.economy {
-        let Some(record) = view.bond_record(&target.pair.persona)? else {
+    for drawn in derived.draws {
+        let Some(record) = view.bond_record(&drawn.persona)? else {
             return Ok(Learned::Unanswered(format!(
-                "economy draw {} names a persona with no bond record",
-                target.draw
+                "{} draw {} names a persona with no bond record",
+                stream_word(drawn.stream()),
+                drawn.draw
             )));
         };
-        targets.economy.push(DrawTarget {
-            draw: target.draw,
-            persona: target.pair.persona,
-            shard: target.pair.shard,
-            receipt_key: target.receipt_key,
-            endpoint: record.endpoint,
-        });
-    }
-    for target in derived.support {
-        let Some(record) = view.bond_record(&target.persona)? else {
-            return Ok(Learned::Unanswered(format!(
-                "support draw {} names a persona with no bond record",
-                target.draw
-            )));
-        };
-        targets.support.push(DrawTarget {
-            draw: target.draw,
-            persona: target.persona,
-            shard: target.shard,
-            receipt_key: target.receipt_key,
+        targets.draws.push(DrawTarget {
+            stream: drawn.stream(),
+            draw: drawn.draw,
+            persona: drawn.persona,
+            shard: drawn.shard,
+            receipt_key: drawn.receipt_key,
             endpoint: record.endpoint,
         });
     }
     Ok(Learned::Targets(targets))
 }
 
-fn upkeep(
-    batch: &WriteBatch<'_, '_>,
+/// One entry the next write removes, and why. Logged only after that write
+/// commits.
+struct Departure {
+    h: BlockHeight,
+    why: Departed,
+}
+
+enum Departed {
+    WindowClosed,
+    Refused(String),
+}
+
+/// One entry whose admitting tip left the chain and which the rule still
+/// admits, rewritten onto the tip the classification read.
+struct Retip {
+    h: BlockHeight,
+    tip_height: BlockHeight,
+    tip_hash: BlockHash,
+}
+
+/// What upkeep will write. Quiet means the queue does not change.
+struct Upkeep {
+    departures: Vec<Departure>,
+    retips: Vec<Retip>,
+}
+
+impl Upkeep {
+    fn quiet() -> Self {
+        Self {
+            departures: Vec::new(),
+            retips: Vec::new(),
+        }
+    }
+
+    fn is_quiet(&self) -> bool {
+        self.departures.is_empty() && self.retips.is_empty()
+    }
+}
+
+/// Classify the queue on one snapshot. A view fault is the writer's and
+/// writes nothing. An entry at or above the tip waits. A closed window
+/// leaves without being judged. An admitting tip still on the chain is
+/// kept as it stands.
+fn classify(
+    snapshot: &ReadSnapshot<'_>,
     rules: ChainRules,
     memo: &mut DrawableMemo,
-) -> Result<(), RunFault> {
-    let Some((tip_height, tip_hash, h_incl, rule_set)) = including(batch, rules)? else {
-        return Ok(());
+) -> Result<Upkeep, RunFault> {
+    let entries = snapshot.queued_bundles().map_err(RunFault::Store)?;
+    if entries.is_empty() {
+        return Ok(Upkeep::quiet());
+    }
+    let view = SnapshotView::new(snapshot);
+    let Some(tip) = view.tip()? else {
+        return Ok(Upkeep::quiet());
     };
+    let h_incl = tip
+        .height
+        .checked_add(BlockCount::ONE)
+        .ok_or(RunFault::NoNextHeight { tip: tip.height })?;
+    let rule_set = rules.in_force(h_incl);
     let window = rule_set
         .settlement_schedule()
         .challenge_response_blocks()
         .map_or(BlockCount::ZERO, |w| BlockCount::from_raw(w.get()));
-    let capacity = window.to_raw();
-    for entry in batch.queued_bundles()? {
+    let mut plan = Upkeep::quiet();
+    for entry in entries {
         let h = entry.h;
         if h >= h_incl {
             // Popped and not reconnected: the window cannot have closed,
@@ -401,50 +557,48 @@ fn upkeep(
             continue;
         }
         if h_incl > h.saturating_add(window) {
-            batch.unqueue_bundle(h)?;
-            tracing::info!(
-                h = h.to_raw(),
-                "bundle queue: the window for height {} closed",
-                h.to_raw()
-            );
+            plan.departures.push(Departure {
+                h,
+                why: Departed::WindowClosed,
+            });
             continue;
         }
-        let admitted_on_chain = match batch.chain_view().header_at(entry.queued.tip_height)? {
-            shekyl_chain_rules::AtHeight::Recorded(header) => header.hash == entry.queued.tip_hash,
-            shekyl_chain_rules::AtHeight::AboveTip => false,
+        let admitted_on_chain = match view.header_at(entry.queued.tip_height)? {
+            AtHeight::Recorded(header) => header.hash == entry.queued.tip_hash,
+            AtHeight::AboveTip => false,
         };
         if admitted_on_chain {
             continue;
         }
-        let refused = judge(
-            batch,
+        match judge_snapshot(
+            &view,
             memo,
             h_incl,
             &rule_set,
             &entry.queued.reference,
             &entry.body,
-        )?;
-        batch.unqueue_bundle(h)?;
-        match refused {
-            None => {
-                batch
-                    .queue_bundle(
-                        &entry.queued.reference,
-                        &entry.body,
-                        tip_height,
-                        tip_hash,
-                        capacity,
-                    )
-                    .map_err(RunFault::Store)?;
-            }
-            Some(refused) => {
-                tracing::info!(
-                    h = h.to_raw(),
-                    "bundle queue: the entry for height {} left after a reorg: {refused}",
-                    h.to_raw()
-                );
-            }
+        )? {
+            None => plan.retips.push(Retip {
+                h,
+                tip_height: tip.height,
+                tip_hash: tip.hash,
+            }),
+            Some(refused) => plan.departures.push(Departure {
+                h,
+                why: Departed::Refused(refused.to_string()),
+            }),
         }
+    }
+    Ok(plan)
+}
+
+/// Apply a classification. The caller logs departures after this commits.
+fn commit_upkeep(batch: &WriteBatch<'_, '_>, plan: &Upkeep) -> Result<(), RunFault> {
+    for departure in &plan.departures {
+        batch.unqueue_bundle(departure.h)?;
+    }
+    for retip in &plan.retips {
+        batch.retip_bundle(retip.h, retip.tip_height, retip.tip_hash)?;
     }
     Ok(())
 }
@@ -480,43 +634,28 @@ impl Message<ApplyAdmitting> for Connector {
         msg: ApplyAdmitting,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        use shekyl_chain_rules::validate_with_memo;
         let rules = self.rules;
         let trust = self.trust;
         let memo = &mut self.memo;
         let out = self.writer.write(|batch| {
-            let view = batch.chain_view();
-            let (height, _) = super::connecting(view.tip()?)?;
-            if height != msg.height {
-                return Err(RunFault::HeightClaim {
-                    claimed: msg.height,
-                    connecting: height,
-                });
-            }
             let mut applied = super::Applied::default();
-            let formed = match msg.formed {
-                Ok(formed) => formed,
-                Err(refused) => {
-                    applied.refused = Some((height, refused));
-                    return Ok(AppliedAdmitting {
-                        applied,
-                        admitted: Ok(Vec::new()),
-                    });
-                }
+            let Some(judged) = super::connect_step::judge_connecting(
+                &mut applied,
+                batch,
+                rules,
+                &trust,
+                memo,
+                msg.height,
+                msg.formed,
+            )?
+            else {
+                return Ok(AppliedAdmitting {
+                    applied,
+                    admitted: Ok(Vec::new()),
+                });
             };
-            let in_force = rules.in_force(height);
-            let valid = match validate_with_memo(formed, &view, &in_force, &trust, Some(&mut *memo))
-            {
-                Ok(Ok(valid)) => valid,
-                Ok(Err(refused)) => {
-                    applied.refused = Some((height, refused));
-                    return Ok(AppliedAdmitting {
-                        applied,
-                        admitted: Ok(Vec::new()),
-                    });
-                }
-                Err(fault) => return Err(super::validate_fault(batch, height, fault)),
-            };
+            let height = judged.height;
+            let in_force = judged.rule_set;
             let window = in_force
                 .settlement_schedule()
                 .challenge_response_blocks()
@@ -526,6 +665,7 @@ impl Message<ApplyAdmitting> for Connector {
                 .into_iter()
                 .filter(|entry| entry.h < height && height <= entry.h.saturating_add(window))
                 .collect();
+            let view = batch.chain_view();
             remember_window_epochs(&view, height, &in_force, &mut *memo)
                 .map_err(|f| view_fault(batch, f))?;
             let refs: Vec<BundleRef> = entries.iter().map(|e| e.queued.reference.clone()).collect();
@@ -533,36 +673,26 @@ impl Message<ApplyAdmitting> for Connector {
             let Ok(root) = bundle_root(&refs) else {
                 unreachable!("a test section's count fits");
             };
-            let judged = {
+            let admitted = {
                 let bundle_view =
                     StoreBundleView::new(&view, &*memo, height, in_force.settlement_schedule());
-                judge_bundles(&refs, &bodies, &root, height, &bundle_view, &in_force)
-            };
-            let admitted = match judged {
-                Ok(admitted) => admitted,
-                Err(fault) => {
-                    return Ok(AppliedAdmitting {
-                        applied,
-                        admitted: Err(format!("{fault:?}")),
-                    })
+                match judge_bundles(&refs, &bodies, &root, height, &bundle_view, &in_force) {
+                    Ok(admitted) => admitted,
+                    Err(fault) => {
+                        return Ok(AppliedAdmitting {
+                            applied,
+                            admitted: Err(format!("{fault:?}")),
+                        })
+                    }
                 }
             };
-            let hash = valid.block().hash();
-            applied.roots.push((height, valid.block().root_after()));
-            applied.weights.push((height, *valid.block().weights()));
-            applied.emission.push((height, *valid.block().emission()));
-            applied
-                .archival
-                .push((height, valid.block().archival().clone()));
-            applied
-                .exercised
-                .extend(valid.coverage().iter().map(CenRow::as_str));
-            batch.connect_admitting(valid, in_force, Some((&*memo, &admitted)))?;
+            applied.exercised.extend(judged.exercised());
+            batch.connect_admitting(judged.valid, in_force, Some((&*memo, &admitted)))?;
             super::retire_below_the_anchor(batch, &trust, height)?;
             for entry in &entries {
                 batch.unqueue_bundle(entry.h)?;
             }
-            applied.connected.push((height, hash));
+            super::connect_step::record_connected(&mut applied, height, judged.facts);
             Ok(AppliedAdmitting {
                 applied,
                 admitted: Ok(admitted),

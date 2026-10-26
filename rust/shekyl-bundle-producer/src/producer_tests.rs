@@ -89,10 +89,11 @@ fn producer_with_slots(ring: &Arc<WitnessRing>, seed: u64, slots: NonZeroUsize) 
     )
 }
 
-fn target(draw: u32) -> DrawTarget {
+fn target(stream: PassStream, draw: u32) -> DrawTarget {
     let n = u8::try_from(draw + 1).expect("small");
     let (key, _) = HybridEd25519FnDsa::keypair_from_seeds(&[n; 32], &[n ^ 0x55; 32]).expect("key");
     DrawTarget {
+        stream,
         draw,
         persona: PCanonicalId::from_bytes([n; 32]),
         shard: ShardId::from_raw(u64::from(draw) * 7),
@@ -102,10 +103,10 @@ fn target(draw: u32) -> DrawTarget {
 }
 
 fn targets(economy: u32, support: u32) -> Targets {
-    Targets {
-        economy: (0..economy).map(target).collect(),
-        support: (0..support).map(target).collect(),
-    }
+    let mut draws = Vec::with_capacity(usize::try_from(economy + support).expect("small"));
+    draws.extend((0..economy).map(|draw| target(PassStream::Economy, draw)));
+    draws.extend((0..support).map(|draw| target(PassStream::Support, draw)));
+    Targets { draws }
 }
 
 fn record(attempt: u8) -> BundleRecord {

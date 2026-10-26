@@ -128,7 +128,7 @@ pub use alt_view::{AltChain, AltView};
 pub use archival_reads::{PassCount, ServedShard};
 pub use at_index::AtIndex;
 pub use bundle_queue::{QueueEntry, QueueReconciled};
-pub use bundle_view::StoreBundleView;
+pub use bundle_view::{BundleRows, StoreBundleView};
 pub use connect::Connected;
 pub use error::{
     AccrualFault, AltCannot, BodyHolderFault, CellFault, DigestFault, DrawRowFault, DrawableFault,
@@ -149,7 +149,7 @@ pub use snapshot_view::SnapshotView;
 pub use tx_reads::{PqcAuths, Prunable, SegmentBytes, TxLocation, TxRecord};
 pub use undo::{RawRows, Restorable};
 pub use view::BatchView;
-pub use write::WriteBatch;
+pub use write::{invariant_of, WriteBatch};
 
 use std::path::Path;
 

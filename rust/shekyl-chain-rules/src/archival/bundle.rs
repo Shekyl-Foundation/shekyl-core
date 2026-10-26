@@ -79,7 +79,8 @@
 //!   denominator and no rule type is bound to it. The cutover flips them.
 //! - **The falsifier of "staged":** `nothing_on_the_connect_path_calls_the_bundle_verifier`
 //!   reads every non-test source of this crate but the fixture, the
-//!   registry, `archival/bundle.rs`, `archival/bundle_records.rs` and
+//!   registry, `archival/bundle.rs`, `archival/bundle_targets.rs`,
+//!   `archival/bundle_admission.rs`, `archival/bundle_records.rs` and
 //!   `archival/bundle_section.rs`, and fails when any other names this
 //!   module's functions, apart from the one `pub use` in `archival/mod.rs`
 //!   and `lib.rs` that exports them. The queue's caller is in another
@@ -843,212 +844,17 @@ fn select_pairs<V: BundleView>(
     Ok(pairs)
 }
 
-/// One economy draw of `h`, as its producer reads it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EconomyTarget {
-    /// The draw index `j`.
-    pub draw: u32,
-    /// The pair's position in `D`.
-    pub index: u64,
-    /// The pair: whom to read, and which shard.
-    pub pair: DrawablePair,
-    /// The receipt key the record's receipt verifies under: the drawable
-    /// epoch's key for the pair's persona, as step 8 opens it.
-    pub receipt_key: FnDsaHybridPublicKey,
-}
+/// The draws a producer reads. Re-exported here so the verifier's module
+/// stays the name callers use.
+#[path = "bundle_targets.rs"]
+mod bundle_targets;
 
-/// One support draw of `h`, as its producer reads it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SupportTarget {
-    /// The draw index `j` in the support bitmap.
-    pub draw: u32,
-    /// The complete tree the roster seats at `j`.
-    pub persona: PCanonicalId,
-    /// The shard the draw names.
-    pub shard: shekyl_types::ShardId,
-    /// The seat's receipt key.
-    pub receipt_key: FnDsaHybridPublicKey,
-}
+/// Section-then-body admission. Re-exported here for the same reason.
+#[path = "bundle_admission.rs"]
+mod bundle_admission;
 
-/// Everything the producer of `h` reads, and the count each bitmap is
-/// stated at.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DrawTargets {
-    /// The block.
-    pub h: BlockHeight,
-    /// `block_hash(h)`: the selection's and the nonce's input.
-    pub hash: BlockHash,
-    /// One per economy draw `j < count(h)`, in order. Its length is the
-    /// economy bitmap's count.
-    pub economy: Vec<EconomyTarget>,
-    /// One per support draw `h` issued, in order. Its length is the
-    /// support bitmap's count.
-    pub support: Vec<SupportTarget>,
-}
-
-/// The draws of `h` under `seed`, derived exactly as [`verify_bundle`]
-/// derives them: step 6's selection over `D(epoch(h))` at the issued
-/// counts visible at `h`, and the support stream's seats and shards.
-///
-/// The producer of `h` calls this once `h` is on its chain, with the
-/// seed it drew. Nothing here judges a bundle: the window, the reveal and
-/// the commitment are the queue's admission, which runs [`verify_bundle`]
-/// on what the producer files.
-///
-/// A key that does not decode is the draw unanswered, as step 8 treats
-/// it: the producer cannot read under it, and the verifier would not open
-/// a record under it either.
-///
-/// # Errors
-///
-/// [`BundleRefused::Unanswered`] when the view has no count, no hash, no
-/// drawable epoch, no roster or no archive width for a stream that issued
-/// draws; [`BundleRefused::View`] for the view's own fault. Never
-/// [`BundleRefused::Invalid`]: there is no bundle to refuse.
-pub fn draw_targets<V: BundleView>(
-    view: &V,
-    h: BlockHeight,
-    seed: &[u8; 32],
-    rule_set: &RuleSet,
-) -> Result<DrawTargets, BundleRefused<V::Fault>> {
-    let Some(count) = view.draw_count(h)? else {
-        return Err(BundleRefused::Unanswered(BundleUnanswered::DrawCount {
-            height: h,
-        }));
-    };
-    let Some(issued) = view.support_count(h)? else {
-        return Err(BundleRefused::Unanswered(BundleUnanswered::DrawCount {
-            height: h,
-        }));
-    };
-    let Some(hash) = view.block_hash(h)? else {
-        return Err(BundleRefused::Unanswered(BundleUnanswered::BlockHash {
-            height: h,
-        }));
-    };
-    let economy = if count == 0 {
-        Vec::new()
-    } else {
-        let epoch = rule_set.settlement_schedule().epoch_at(h);
-        let Some(drawable) = drawable_for(view, epoch)? else {
-            return Err(BundleRefused::Unanswered(BundleUnanswered::DrawableEpoch {
-                epoch,
-            }));
-        };
-        let pairs = select_pairs(view, drawable, h, seed, hash.as_bytes(), count)?;
-        let mut targets = Vec::with_capacity(pairs.len());
-        for (draw, (index, pair)) in (0..count).zip(pairs) {
-            let Some(receipt_key) = drawable.receipt_key(index) else {
-                return Err(BundleRefused::Unanswered(BundleUnanswered::Draw { draw }));
-            };
-            targets.push(EconomyTarget {
-                draw,
-                index,
-                pair,
-                receipt_key: receipt_key.clone(),
-            });
-        }
-        targets
-    };
-    let mut support = Vec::new();
-    for seat in records::support_seats(view, h, seed, hash.as_bytes(), issued)? {
-        let Ok(receipt_key) = FnDsaHybridPublicKey::from_receipt_sign_pk(&seat.receipt_key) else {
-            return Err(BundleRefused::Unanswered(BundleUnanswered::Draw {
-                draw: seat.draw,
-            }));
-        };
-        support.push(SupportTarget {
-            draw: seat.draw,
-            persona: seat.persona,
-            shard: seat.shard,
-            receipt_key,
-        });
-    }
-    Ok(DrawTargets {
-        h,
-        hash,
-        economy,
-        support,
-    })
-}
-
-/// Why [`judge_bundles`] stopped. A section refusal is J29–J31; a bundle
-/// refusal is the verifier's, at the reference it stopped on.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum AdmissionFault<F> {
-    /// The section check refused the block before any bundle was opened.
-    Section(SectionRefused),
-    /// Some epoch's `D` is not on this view. A connected chain's view does
-    /// not answer that way: a memo miss is [`Self::View`].
-    Awaiting,
-    /// [`BundleView`] faulted. A memo miss on the store view is this.
-    View(F),
-    /// Bundle `at` in section order was refused.
-    Bundle {
-        /// The reference's position.
-        at: usize,
-        /// The verifier's refusal.
-        refused: BundleRefused<F>,
-    },
-}
-
-impl<F> AdmissionFault<F> {
-    /// The census row, when the fault is a verdict. A view fault and a
-    /// body the reference does not name have none.
-    #[must_use]
-    pub fn row(&self) -> Option<CenRow> {
-        match self {
-            Self::Section(refused) => Some(refused.row()),
-            Self::Bundle {
-                refused: BundleRefused::Invalid(invalid),
-                ..
-            } => Some(invalid.row()),
-            Self::Awaiting | Self::View(_) | Self::Bundle { .. } => None,
-        }
-    }
-}
-
-/// Section first, then each body in section order, stopping at the first
-/// refusal (`SO-D12` increment 4a).
-///
-/// The block wire does not carry a section yet (4b), so the staged entry
-/// takes the references and bodies the section will hold. Tests call this.
-/// `form` and `validate` do not.
-///
-/// # Errors
-///
-/// The first section or bundle refusal, or the view's fault.
-pub fn judge_bundles<V: BundleView>(
-    refs: &[BundleRef],
-    bodies: &[BundleBody],
-    header_root: &[u8; 32],
-    h_incl: BlockHeight,
-    view: &V,
-    rule_set: &RuleSet,
-) -> Result<Vec<Admitted>, AdmissionFault<V::Fault>> {
-    match check_section(refs, header_root, h_incl, view, rule_set) {
-        Ok(SectionStanding::Admitted(_)) => {}
-        Ok(SectionStanding::Awaiting(_)) => return Err(AdmissionFault::Awaiting),
-        Err(SectionCheckFailed::Refused(refused)) => {
-            return Err(AdmissionFault::Section(refused));
-        }
-        Err(SectionCheckFailed::View(fault)) => return Err(AdmissionFault::View(fault)),
-    }
-    if bodies.len() != refs.len() {
-        return Err(AdmissionFault::Bundle {
-            at: bodies.len().min(refs.len()),
-            refused: BundleRefused::BodyNotReferenced,
-        });
-    }
-    let mut admitted = Vec::with_capacity(refs.len());
-    for (at, (reference, body)) in refs.iter().zip(bodies.iter()).enumerate() {
-        match verify_bundle(reference, body, h_incl, view, rule_set) {
-            Ok(one) => admitted.push(one),
-            Err(refused) => return Err(AdmissionFault::Bundle { at, refused }),
-        }
-    }
-    Ok(admitted)
-}
+pub use bundle_admission::{judge_bundles, AdmissionFault};
+pub use bundle_targets::{draw_targets, DrawOrigin, DrawTargets, Drawn};
 
 #[cfg(test)]
 #[path = "bundle_tests.rs"]

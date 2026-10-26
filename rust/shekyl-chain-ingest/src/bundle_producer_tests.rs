@@ -20,7 +20,7 @@ use std::time::Duration;
 use rand::SeedableRng;
 use shekyl_archival_retention::{
     assemble_bundle, draw_commit, sign_bundle_commitment, BundleBody, BundleKept, BundleRef,
-    PassBitmap, BUNDLE_WITNESS_KEY_LEN,
+    PassBitmap, PassStream, BUNDLE_WITNESS_KEY_LEN,
 };
 use shekyl_bundle_producer::read::READS_AT_ONCE;
 use shekyl_bundle_producer::{
@@ -253,10 +253,7 @@ async fn the_connector_learns_a_blocks_draws_only_for_that_block() {
     let Learned::Targets(targets) = learned else {
         panic!("expected targets, got {learned:?}");
     };
-    assert!(
-        targets.economy.is_empty() && targets.support.is_empty(),
-        "no draws issued"
-    );
+    assert!(targets.draws.is_empty(), "no draws issued");
     let elsewhere = scenario
         .connector()
         .ask(LearnDraws {
@@ -343,14 +340,14 @@ fn one_started_read() -> (Producer, DueRead) {
         ours,
         window,
         Targets {
-            economy: vec![DrawTarget {
+            draws: vec![DrawTarget {
+                stream: PassStream::Economy,
                 draw: 0,
                 persona: PCanonicalId::from_bytes([7; 32]),
                 shard: ShardId::from_raw(0),
                 receipt_key,
                 endpoint: [9; 32],
             }],
-            support: Vec::new(),
         },
     );
     let due = (101..=600)

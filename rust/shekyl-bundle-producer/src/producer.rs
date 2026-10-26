@@ -10,7 +10,8 @@
 //! - [`Producer::observe`] — the chain's tip moved. The producer claims
 //!   the blocks this daemon mined, pauses the ones a reorg popped, resumes
 //!   the ones that came back, and gives up on the ones past the reorg cap
-//!   or past their window. It returns the blocks whose draws it must learn.
+//!   or past their window. It returns the blocks whose draws it must learn,
+//!   each once for this tip.
 //! - [`Producer::learned`] — a block's draws, as the connector derived
 //!   them. The producer plans each draw's reads.
 //! - [`Producer::due`] — the reads whose height has come.
@@ -167,11 +168,14 @@ pub struct Observed {
     pub lost: Vec<Lost>,
 }
 
-/// One draw to read: whom, which shard, and under which key its receipt
-/// verifies.
+/// One draw to read: which stream, whom, which shard, and under which key
+/// its receipt verifies. Economy and support select differently; the read
+/// is this one shape on both.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DrawTarget {
-    /// The draw `j` within its stream.
+    /// The pass stream.
+    pub stream: PassStream,
+    /// The draw `j` within [`Self::stream`].
     pub draw: u32,
     /// The persona that holds the shard.
     pub persona: PCanonicalId,
@@ -184,14 +188,12 @@ pub struct DrawTarget {
     pub endpoint: [u8; 32],
 }
 
-/// A block's draws, in order on each stream. The lengths are the counts
-/// the bundle's two bitmaps state.
+/// A block's draws: economy, then support. Each stream's `draw` restarts
+/// at zero, and that stream's length is its bitmap's count.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Targets {
-    /// Economy draws `j < count(h)`.
-    pub economy: Vec<DrawTarget>,
-    /// Support draws `j < support_count(h)`.
-    pub support: Vec<DrawTarget>,
+    /// Economy draws, then support draws.
+    pub draws: Vec<DrawTarget>,
 }
 
 /// A read whose height has come.
@@ -274,17 +276,18 @@ struct Draw {
 enum Stage {
     /// Claimed; the connector has not answered with its draws yet.
     Learning,
-    /// Draws known and planned: economy then support.
-    Reading {
-        economy: Vec<Draw>,
-        support: Vec<Draw>,
-    },
+    /// Draws known and planned: economy, then support.
+    Reading { draws: Vec<Draw> },
 }
 
 struct BlockWork {
     hash: BlockHash,
     /// The tip at the pop, while the block is off the chain.
     popped_at: Option<BlockHeight>,
+    /// The tip this block was last asked about, while it is still
+    /// [`Stage::Learning`]. The same tip does not ask again; the next one
+    /// does, which is how an unanswered block is retried.
+    asked_at: Option<BlockHeight>,
     stage: Stage,
     serving_scheme_absent: bool,
 }
@@ -381,6 +384,7 @@ impl Producer {
                         BlockWork {
                             hash: recorded.hash,
                             popped_at: None,
+                            asked_at: None,
                             stage: Stage::Learning,
                             serving_scheme_absent: false,
                         },
@@ -401,7 +405,12 @@ impl Producer {
             }
             let on_chain = look(h).is_some_and(|recorded| recorded.hash == work.hash);
             if on_chain {
-                work.popped_at = None;
+                let returned = work.popped_at.take().is_some();
+                if returned && matches!(work.stage, Stage::Learning) {
+                    // The answer, if one came, was for a chain that did not
+                    // hold this block.
+                    work.asked_at = None;
+                }
                 continue;
             }
             let popped_at = *work.popped_at.get_or_insert(tip);
@@ -415,15 +424,20 @@ impl Producer {
             observed.lost.push(lost);
         }
 
-        for (&h, work) in &self.blocks {
-            if matches!(work.stage, Stage::Learning) && work.popped_at.is_none() {
-                if let Some(seed) = self.ring.seed(h) {
-                    observed.learn.push(Learn {
-                        h,
-                        hash: work.hash,
-                        seed,
-                    });
-                }
+        for (&h, work) in &mut self.blocks {
+            if !matches!(work.stage, Stage::Learning) || work.popped_at.is_some() {
+                continue;
+            }
+            if work.asked_at == Some(tip) {
+                continue;
+            }
+            if let Some(seed) = self.ring.seed(h) {
+                work.asked_at = Some(tip);
+                observed.learn.push(Learn {
+                    h,
+                    hash: work.hash,
+                    seed,
+                });
             }
         }
         observed
@@ -440,20 +454,22 @@ impl Producer {
         if !matches!(work.stage, Stage::Learning) {
             return;
         }
-        if targets.economy.is_empty() && targets.support.is_empty() {
+        if targets.draws.is_empty() {
             self.blocks.remove(&h);
             self.ring.forget(h);
             return;
         }
         let rng = &mut self.rng;
-        let mut plan = |target: DrawTarget| Draw {
-            plan: ReadPlan::draw(rng, h, window.response),
-            target,
-            state: DrawState::Pending { attempt: 0 },
-        };
-        let economy = targets.economy.into_iter().map(&mut plan).collect();
-        let support = targets.support.into_iter().map(&mut plan).collect();
-        work.stage = Stage::Reading { economy, support };
+        let draws = targets
+            .draws
+            .into_iter()
+            .map(|target| Draw {
+                plan: ReadPlan::draw(rng, h, window.response),
+                target,
+                state: DrawState::Pending { attempt: 0 },
+            })
+            .collect();
+        work.stage = Stage::Reading { draws };
     }
 
     /// The reads whose height has come at `tip`, each marked as being
@@ -475,56 +491,51 @@ impl Producer {
             if work.popped_at.is_some() {
                 continue;
             }
-            let Stage::Reading { economy, support } = &mut work.stage else {
+            let Stage::Reading { draws } = &mut work.stage else {
                 continue;
             };
             let Some(seed) = self.ring.seed(h) else {
                 continue;
             };
             let hash = work.hash;
-            let streams = [
-                (PassStream::Economy, economy),
-                (PassStream::Support, support),
-            ];
-            for (stream, draws) in streams {
-                for draw in draws.iter_mut() {
-                    let DrawState::Pending { attempt } = draw.state else {
-                        continue;
-                    };
-                    let Some(at) = draw.plan.at(attempt) else {
-                        draw.state = DrawState::Done;
-                        continue;
-                    };
-                    if at > tip || due.len() == room {
-                        continue;
-                    }
-                    let j = draw.target.draw;
-                    let nonce = match stream {
-                        PassStream::Economy => challenge_nonce(&seed, hash.as_bytes(), j, attempt),
-                        PassStream::Support => {
-                            support_challenge_nonce(&seed, hash.as_bytes(), j, attempt)
-                        }
-                    };
-                    draw.state = DrawState::Reading { attempt };
-                    let key = ReadKey {
-                        h,
-                        hash,
-                        stream,
-                        draw: j,
-                        attempt,
-                    };
-                    self.reads.push(key);
-                    let start_after = Duration::from_millis(self.rng.gen_range(0..spread_ms));
-                    due.push(DueRead {
-                        key,
-                        persona: draw.target.persona,
-                        endpoint: draw.target.endpoint,
-                        receipt_key: draw.target.receipt_key.clone(),
-                        shard: draw.target.shard,
-                        nonce,
-                        start_after,
-                    });
+            for draw in draws.iter_mut() {
+                let DrawState::Pending { attempt } = draw.state else {
+                    continue;
+                };
+                let Some(at) = draw.plan.at(attempt) else {
+                    draw.state = DrawState::Done;
+                    continue;
+                };
+                if at > tip || due.len() == room {
+                    continue;
                 }
+                let stream = draw.target.stream;
+                let j = draw.target.draw;
+                let nonce = match stream {
+                    PassStream::Economy => challenge_nonce(&seed, hash.as_bytes(), j, attempt),
+                    PassStream::Support => {
+                        support_challenge_nonce(&seed, hash.as_bytes(), j, attempt)
+                    }
+                };
+                draw.state = DrawState::Reading { attempt };
+                let key = ReadKey {
+                    h,
+                    hash,
+                    stream,
+                    draw: j,
+                    attempt,
+                };
+                self.reads.push(key);
+                let start_after = Duration::from_millis(self.rng.gen_range(0..spread_ms));
+                due.push(DueRead {
+                    key,
+                    persona: draw.target.persona,
+                    endpoint: draw.target.endpoint,
+                    receipt_key: draw.target.receipt_key.clone(),
+                    shard: draw.target.shard,
+                    nonce,
+                    start_after,
+                });
             }
         }
         due
@@ -545,14 +556,13 @@ impl Producer {
         if work.hash != key.hash {
             return;
         }
-        let Stage::Reading { economy, support } = &mut work.stage else {
+        let Stage::Reading { draws } = &mut work.stage else {
             return;
         };
-        let draws = match key.stream {
-            PassStream::Economy => economy,
-            PassStream::Support => support,
-        };
-        let Some(draw) = draws.iter_mut().find(|d| d.target.draw == key.draw) else {
+        let Some(draw) = draws
+            .iter_mut()
+            .find(|draw| draw.target.stream == key.stream && draw.target.draw == key.draw)
+        else {
             return;
         };
         if !matches!(draw.state, DrawState::Reading { attempt } if attempt == key.attempt) {
@@ -595,20 +605,17 @@ impl Producer {
             if work.popped_at.is_some() {
                 continue;
             }
-            let Stage::Reading { economy, support } = &mut work.stage else {
+            let Stage::Reading { draws } = &mut work.stage else {
                 continue;
             };
             if tip >= window.filing_deadline(h) {
-                for draw in economy.iter_mut().chain(support.iter_mut()) {
+                for draw in draws.iter_mut() {
                     if matches!(draw.state, DrawState::Pending { .. }) {
                         draw.state = DrawState::Done;
                     }
                 }
             }
-            let settled = economy
-                .iter()
-                .chain(support.iter())
-                .all(|d| d.state.settled());
+            let settled = draws.iter().all(|draw| draw.state.settled());
             if settled || tip >= window.last_chance(h) {
                 ready.push(h);
             }
@@ -619,11 +626,11 @@ impl Producer {
             let Some(work) = self.blocks.remove(&h) else {
                 continue;
             };
-            let Stage::Reading { economy, support } = work.stage else {
+            let Stage::Reading { draws } = work.stage else {
                 continue;
             };
-            let (passes, mut records) = bitmap_and_records(&economy);
-            let (support_passes, support_records) = bitmap_and_records(&support);
+            let (passes, mut records) = bitmap_and_records(&draws, PassStream::Economy);
+            let (support_passes, support_records) = bitmap_and_records(&draws, PassStream::Support);
             records.extend(support_records);
             let passed = records.len();
             match self.ring.file(h, passes, support_passes, &records) {
@@ -631,7 +638,7 @@ impl Producer {
                     h,
                     reference,
                     body,
-                    draws: economy.len() + support.len(),
+                    draws: draws.len(),
                     passes: passed,
                     serving_scheme_absent: work.serving_scheme_absent,
                 }),
@@ -651,7 +658,7 @@ impl Producer {
             .map(|(&h, work)| {
                 let draws = match &work.stage {
                     Stage::Learning => 0,
-                    Stage::Reading { economy, support } => economy.len() + support.len(),
+                    Stage::Reading { draws } => draws.len(),
                 };
                 (h, draws)
             })
@@ -659,12 +666,17 @@ impl Producer {
     }
 }
 
-/// One stream's bitmap and its records, in draw order.
-fn bitmap_and_records(draws: &[Draw]) -> (PassBitmap, Vec<BundleRecord>) {
-    let count = u32::try_from(draws.len()).expect("a stream's draws fit the u32 count");
+/// One stream's bitmap and its records, in that stream's draw order.
+/// `draws` is economy then support; this keeps the stream it is asked for.
+fn bitmap_and_records(draws: &[Draw], stream: PassStream) -> (PassBitmap, Vec<BundleRecord>) {
+    let of_stream: Vec<_> = draws
+        .iter()
+        .filter(|draw| draw.target.stream == stream)
+        .collect();
+    let count = u32::try_from(of_stream.len()).expect("a stream's draws fit the u32 count");
     let mut passed = Vec::new();
     let mut records = Vec::new();
-    for draw in draws {
+    for draw in of_stream {
         if let DrawState::Passed(record) = &draw.state {
             passed.push(draw.target.draw);
             records.push(**record);
