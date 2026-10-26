@@ -455,8 +455,10 @@ bound `K`.
   §16.11): `shekyl-bundle-producer`'s read plan and state machine, with
   `K` as `CHALLENGE_READS`, the spacing as `READ_SPACING` and `M` as
   `FILING_MARGIN`, each PROVISIONAL here. The plan is drawn from the
-  daemon's own randomness when `h` connects. The read's ceiling is
-  `read::READ_CEILING_BLOCKS` (18 blocks at the production timeouts, of
+  daemon's own randomness when `h` connects, and each read waits a start
+  delay drawn from it uniformly below one block interval
+  (`READ_START_SPREAD`). The read's ceiling, that delay included, is
+  `read::READ_CEILING_BLOCKS` (19 blocks at the production timeouts, of
   `M = 30`), checked at build time. A started read holds one of the
   client's slots and the producer starts no more reads than it has, so
   a started read never queues; a read that finds no slot has not started.

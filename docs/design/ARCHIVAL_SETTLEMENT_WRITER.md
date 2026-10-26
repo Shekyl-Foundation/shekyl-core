@@ -1739,11 +1739,15 @@ starts after `h + W₂ − M` (`M` = 30): at that tip every read not yet
 started is abandoned, and a read in flight is waited for (ruled
 2026-10-25). The wait is bounded by one read. A started read holds one of
 the client's slots, and the producer starts no more reads than the client
-has (`READS_AT_ONCE`, nearest deadline first), so it never queues; it is
+has (`READS_AT_ONCE`, nearest deadline first), so it never queues. It
+first waits a start delay drawn uniformly below one block interval from
+the daemon's RNG (`READ_START_SPREAD`; §5.3, reads at random times), and is
 then at most `NeedBudget::fetches_per_holder` fetches of the drawn persona,
-each within `Timeouts::fetch_ceiling`: `READ_CEILING`, 2,160 s or
-`READ_CEILING_BLOCKS` = 18 blocks at the 120 s target, which the build
-holds below `M − 1`. So at the target interval the read ends before
+each within `Timeouts::fetch_ceiling`: `READ_CEILING`, 2,280 s or
+`READ_CEILING_BLOCKS` = 19 blocks at the 120 s target, which the build
+holds below `M − 1`. A read whose task panics or is cancelled reports a
+stall, logged at error, so its slot is freed and the draw is read again at
+its next attempt. So at the target interval the read ends before
 `h + W₂ − 1`, the last tip whose next block is inside the window; that tip
 files whatever is still out, the backstop for a run of fast blocks during
 a read that stalls to its limit. A read that finds no slot has not

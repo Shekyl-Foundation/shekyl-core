@@ -6757,7 +6757,8 @@ read started at `h + W₂ − M` cannot both meet. At `h + W₂ − M` every rea
 not yet started is abandoned and a read in flight is waited for. The wait
 is a bounded rule: one read's worst case, its fetches' timeouts and stall
 retries in blocks at the target interval, is a derived constant
-(`READ_CEILING_BLOCKS`, 18 at the production bounds) held below `M − 1` at
+(`READ_CEILING_BLOCKS`, 19 at the production bounds, with the read's
+random start delay below one block interval) held below `M − 1` at
 build time, so a timeout change cannot quietly eat the margin.
 `h + W₂ − 1` stays as the backstop.
 
