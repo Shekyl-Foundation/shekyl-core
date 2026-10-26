@@ -416,7 +416,7 @@ where
 /// verification cap ("one cap per daemon, not per listener"), re-made here
 /// once already. An empty set serves nothing; both empty is a daemon with no
 /// RPC, which returns once the stop arrives.
-pub async fn serve_presets(
+pub async fn serve_listeners(
     core: Arc<CoreRpc>,
     config: ServerConfig,
     admin: Vec<BoundListener>,
@@ -476,11 +476,11 @@ pub async fn serve_presets(
     serve_bound(
         vec![
             (
-                Preset::Admin,
+                Listener::Admin,
                 router_at(Authority::admin_listener(config.armed)),
                 admin,
             ),
-            (Preset::View, router_at(Authority::VIEW_LISTENER), view),
+            (Listener::View, router_at(Authority::VIEW_LISTENER), view),
         ],
         conn_tracker,
         shutdown,
@@ -488,14 +488,17 @@ pub async fn serve_presets(
     .await
 }
 
-/// The preset a listener set serves, named in its startup line.
+/// Which listener a bound socket is. An enrolment preset
+/// (`shekyl_rpc_grants::Preset`) is a different thing: the view listener
+/// also serves submit and mining work until RT-W12, which the enrolment
+/// preset `View` does not.
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum Preset {
+pub(crate) enum Listener {
     Admin,
     View,
 }
 
-impl Preset {
+impl Listener {
     fn name(self) -> &'static str {
         match self {
             Self::Admin => "admin",
@@ -504,7 +507,7 @@ impl Preset {
     }
 }
 
-/// The lifecycle half of [`serve_presets`], independent of the core so it
+/// The lifecycle half of [`serve_listeners`], independent of the core so it
 /// can be tested as one: one `axum::serve` per bound socket, every accepted
 /// connection admitted through the shared tracker, and every acceptor
 /// stopped by the same level-triggered signal — including one that has not
@@ -515,16 +518,16 @@ impl Preset {
 /// returned once every acceptor has finished
 /// ([`first_error_stops_the_rest`]).
 pub(crate) async fn serve_bound(
-    sets: Vec<(Preset, Router, Vec<BoundListener>)>,
+    sets: Vec<(Listener, Router, Vec<BoundListener>)>,
     conn_tracker: Arc<ConnTracker>,
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (fail_tx, fail_rx) = watch::channel(false);
     let mut serves = tokio::task::JoinSet::new();
-    for (preset, app, bound) in sets.into_iter().flat_map(|(preset, app, listeners)| {
+    for (role, app, bound) in sets.into_iter().flat_map(|(role, app, listeners)| {
         listeners
             .into_iter()
-            .map(move |bound| (preset, app.clone(), bound))
+            .map(move |bound| (role, app.clone(), bound))
     }) {
         // The operator's startup line, in the category the daemon shows at
         // default verbosity (`global=info`, where the C++ `MGINFO` this
@@ -532,9 +535,9 @@ pub(crate) async fn serve_bound(
         // there, and a bound socket must not need --log-level 1 to be seen.
         info!(
             target: "global",
-            "shekyl-daemon-rpc listening on {} ({} preset)",
+            "shekyl-daemon-rpc listening on {} ({} listener)",
             bound.local_addr(),
-            preset.name()
+            role.name()
         );
         let (_, listener) = bound.into_parts();
         // Every accepted connection is admitted through (and accounted in)
@@ -815,8 +818,8 @@ mod tests {
         }
         assert_eq!(
             probe(admin, "/get_output_distribution.bin").await,
-            Probe::Refused(OUTSIDE_THE_GRANT),
-            "control: a path with no row is refused, never served"
+            Probe::NotFound,
+            "control: a path with no row is not a method, so the router answers 404"
         );
     }
 
@@ -894,7 +897,7 @@ mod tests {
 
 #[cfg(test)]
 mod lifecycle_tests {
-    use super::{first_error_stops_the_rest, serve_bound, Preset};
+    use super::{first_error_stops_the_rest, serve_bound, Listener};
     use crate::bind::bind_listener;
     use crate::conn_limit::{ConnLimits, ConnTracker};
     use std::time::Duration;
@@ -939,7 +942,7 @@ mod lifecycle_tests {
     /// view socket, through one `serve_bound` over both sets (the shape the
     /// one RPC start builds from its section, §2.3).
     #[tokio::test]
-    async fn each_preset_serves_its_own_router_on_its_own_sockets() {
+    async fn each_listener_serves_its_own_router_on_its_own_sockets() {
         let admin_listener = bind_listener("127.0.0.1:0".parse().unwrap()).await.unwrap();
         let view_listener = bind_listener("127.0.0.1:0".parse().unwrap()).await.unwrap();
         let admin_addr = admin_listener.local_addr();
@@ -950,8 +953,8 @@ mod lifecycle_tests {
         let (tx, rx) = tokio::sync::watch::channel(false);
         let serving = tokio::spawn(serve_bound(
             vec![
-                (Preset::Admin, admin, vec![admin_listener]),
-                (Preset::View, router(), vec![view_listener]),
+                (Listener::Admin, admin, vec![admin_listener]),
+                (Listener::View, router(), vec![view_listener]),
             ],
             ConnTracker::new(ConnLimits::default()),
             rx,
@@ -985,7 +988,7 @@ mod lifecycle_tests {
         tokio::time::timeout(
             Duration::from_secs(5),
             serve_bound(
-                vec![(Preset::Admin, router(), listeners)],
+                vec![(Listener::Admin, router(), listeners)],
                 ConnTracker::new(ConnLimits::default()),
                 rx,
             ),
@@ -1033,7 +1036,7 @@ mod lifecycle_tests {
             let listeners = two_loopback_listeners().await;
             let (tx, rx) = tokio::sync::watch::channel(false);
             let serving = tokio::spawn(serve_bound(
-                vec![(Preset::Admin, router(), listeners)],
+                vec![(Listener::Admin, router(), listeners)],
                 ConnTracker::new(ConnLimits::default()),
                 rx,
             ));

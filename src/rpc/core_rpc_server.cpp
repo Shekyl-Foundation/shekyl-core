@@ -738,10 +738,12 @@ namespace cryptonote
 
     CHECK_CORE_READY();
 
-    // An armed test lever (RPC_CHANNEL.md §6.1, RT-O9.2): the daemon's
-    // armed-lever switch, checked in Rust before this handler is entered, is
-    // its only gate. The network type never enables it (rule 71); `dev-rpc`
-    // is refused on mainnet (IG-Q49, RT-O36).
+    // An armed test lever (RPC_CHANNEL.md §6.1, RT-O9.2). Rust admits the
+    // call against the armed-lever switch before this handler is entered.
+    // The setter keeps a narrower restriction (RT-O36):
+    // Blockchain::regtest_inject_archival_serve_credit refuses unless the
+    // network is regtest. The network narrows what the switch enables; it
+    // never enables the lever. `dev-rpc` is refused on mainnet (IG-Q49).
 
     crypto::hash p_canonical_id;
     if (!epee::string_tools::hex_to_pod(req.p_canonical_id, p_canonical_id))
