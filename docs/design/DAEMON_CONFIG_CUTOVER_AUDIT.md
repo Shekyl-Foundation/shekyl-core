@@ -170,8 +170,10 @@ of its own, for the same reason as the negative one.
   declared `shekyl_` function is a Rust export holds. The entry, the entry
   types and the snapshot are `rust/shekyl-daemon/src/entry.rs`, a gate
   surface; `shekyl_daemon_snapshot_field_count` is the export the C++
-  asserts, and the two `no_mangle` items carry the crate's only
-  `allow(unsafe_code)`, each scoped to itself.
+  asserts. `shekyl_daemon_main`, `command_line` and
+  `shekyl_daemon_request_stop` carry the crate's only `allow(unsafe_code)`,
+  each scoped to itself. `command_line` reads the `argc`/`argv` `main`
+  passes (`DAEMON_CONFIG_CUTOVER.md` §2.2).
 - **The daemon at each intermediate commit.** From commit (b) Rust owns
   `argv` and parses it with the grammar. Until commit (e) deletes the last
   C++ reader, C++ still reads options through `boost::program_options`, so

@@ -11,6 +11,9 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 ## Pre-genesis
 
+- **`shekyld`'s process entry is still C++ `main` (DC-Q13 (b)); Grammar §0's Rust entry is unbuilt.** The command line is the `argc`/`argv` `main` passes, because a staticlib's `std::env::args_os` is empty where Rust's `lang_start` did not run. The rustc-emitted entry is what runs that startup (the argument vector, `SIGPIPE`, the stack-overflow guard) and what RT-16's SCM dispatcher needs. Blocked on a ruling that amends DC-Q13 (b) so rustc links `shekyld` and the C++ remnant is the callee — falsify by the binary's entry calling `lang_start`, with that ruling amended.
+  - Owner: [`DAEMON_CONFIG_CUTOVER.md`](design/DAEMON_CONFIG_CUTOVER.md) §2.2
+  - Target: pre-genesis
 - **Two archival tables in the Rust store have no retirement horizon yet: `archival_serve_credit` and `archival_block_draws`.** The per-epoch retirement (`ARCHIVAL_SETTLEMENT_WRITER.md` §17) retires each table at its last reader's horizon and gives none to a table whose reader has none. `archival_serve_credit`'s A3/A4 ask for the latest epoch a pair ever served (CEN-J16's cooldown), so retiring a row changes the verdict; `archival_block_draws` is per height and its readers (admission's draw-index bound, the next block's count) are not built.
   - Owner: the settlement-writer lane — `SO-D12j` for the served anchor and admission for the draw state, both in the merged increment's design text ([`ARCHIVAL_SETTLEMENT_WRITER.md`](design/ARCHIVAL_SETTLEMENT_WRITER.md) §16.3, §17.5)
   - Target: pre-genesis

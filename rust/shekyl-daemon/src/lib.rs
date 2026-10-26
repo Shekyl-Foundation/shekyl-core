@@ -27,13 +27,14 @@ pub use entry::{RunFn, ShekylDaemonEntry, StopFn};
 pub use run::{Host, EXIT_FAILED, EXIT_REFUSED};
 
 /// The entry with the real platform: the account's roots from the
-/// operating system, the network id's one derivation, and the arguments
-/// as the operating system gave them (IG-Q2).
+/// operating system, the network id's one derivation, and `args`, the
+/// process argument vector `main` passed (IG-Q2). A staticlib does not
+/// read `std::env::args_os`: that vector is empty unless Rust's
+/// `lang_start` ran.
 #[must_use]
-pub fn main(entry: &ShekylDaemonEntry) -> i32 {
+pub fn main(entry: &ShekylDaemonEntry, args: &[std::ffi::OsString]) -> i32 {
     shekyl_ffi::panic_hook::install();
-    let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
-    run::main(entry, &args, &host())
+    run::main(entry, args, &host())
 }
 
 /// This machine's platform facts and the network id derivation.
