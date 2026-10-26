@@ -106,8 +106,8 @@ use shekyl_tor_control_client::control::onion::{
 };
 use shekyl_tor_control_client::control::{
     ask_timed, parse_socks_listeners, wait_until_ready, AskError, BootstrapReadiness, Command,
-    DiskWrites, EventReceiver, EventSink, ManagedTor, Signal, SocksPort, TorControlClient,
-    TorControlClientConfig, TorLaunch, WaitReadyError,
+    DiskWrites, EventReceiver, EventSink, ManagedTor, Signal, SocksPort, SocksTimeout,
+    TorControlClient, TorControlClientConfig, TorLaunch, WaitReadyError,
 };
 use shekyl_types::PSlot;
 use zeroize::Zeroizing;
@@ -258,6 +258,7 @@ impl ManagedInstance {
                 tor_binary: verified,
                 data_dir,
                 socks_port: SocksPort::Auto,
+                socks_timeout: SocksTimeout::TorDefault,
                 disable_network: false,
                 disk_writes: DiskWrites::Deferred,
                 exit_observer: None,

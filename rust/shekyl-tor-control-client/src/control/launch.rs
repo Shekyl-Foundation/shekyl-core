@@ -226,6 +226,11 @@ pub(crate) fn managed_tor_command(
         .kill_on_drop(true)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
+    // Below the caller's dial deadline, so Tor's own reply ends a dial it
+    // cannot attach (`TOR_SUPERVISOR.md` §4.2). Absent: Tor's default.
+    if let Some(timeout) = managed.socks_timeout.as_arg() {
+        cmd.arg("--SocksTimeout").arg(timeout);
+    }
     // Every file tor would otherwise find by itself is named, and named as
     // ours: one zero-length file in the data directory. With no `--torrc-file`
     // tor loads its default torrc, and with no `--defaults-torrc` its default
@@ -1075,8 +1080,19 @@ mod tests {
     use crate::binary::VerifiedTorBinary;
 
     fn launch_arguments(disable_network: bool) -> Vec<String> {
+        launch_arguments_with(
+            disable_network,
+            super::super::actor::SocksTimeout::TorDefault,
+        )
+    }
+
+    fn launch_arguments_with(
+        disable_network: bool,
+        socks_timeout: super::super::actor::SocksTimeout,
+    ) -> Vec<String> {
         let dir = tempfile::tempdir().expect("fixture directory");
-        let managed = managed_fixture(dir.path(), disable_network);
+        let mut managed = managed_fixture(dir.path(), disable_network);
+        managed.socks_timeout = socks_timeout;
         let environment = LaunchEnvironment::resolve(&managed).expect("launch environment");
         let pair = ControlPair::new().expect("control pair");
         managed_tor_command(&managed, pair.tor_end(), &environment)
@@ -1096,6 +1112,7 @@ mod tests {
             tor_binary: VerifiedTorBinary::unchecked_for_test(dir.join("tor")),
             data_dir: dir.join("data"),
             socks_port: super::super::actor::SocksPort::Auto,
+            socks_timeout: super::super::actor::SocksTimeout::TorDefault,
             disable_network,
             disk_writes: DiskWrites::Deferred,
             exit_observer: None,
@@ -1105,7 +1122,10 @@ mod tests {
 
     /// The `--Name` of each name/value pair on the launch.
     fn launch_option_names(disable_network: bool) -> Vec<String> {
-        let args = launch_arguments(disable_network);
+        option_names(&launch_arguments(disable_network))
+    }
+
+    fn option_names(args: &[String]) -> Vec<String> {
         assert!(
             args.len().is_multiple_of(2),
             "an argument is not part of a --Name value pair: {args:?}"
@@ -1141,6 +1161,51 @@ mod tests {
         let mut offline = base.to_vec();
         offline.push("--DisableNetwork");
         assert_eq!(launch_option_names(true), offline);
+        let below = super::super::actor::SocksTimeout::Below {
+            dial_deadline: std::time::Duration::from_secs(120),
+        };
+        let args = launch_arguments_with(false, below);
+        assert_eq!(
+            option_names(&args),
+            [
+                "--DataDirectory",
+                "--__OwningControllerFD",
+                "--AvoidDiskWrites",
+                "--SocksPort",
+                "--Log",
+                "--SocksTimeout",
+                "--torrc-file",
+                "--defaults-torrc",
+                "--GeoIPFile",
+                "--GeoIPv6File",
+            ]
+        );
+        let at = args
+            .iter()
+            .position(|arg| arg == "--SocksTimeout")
+            .expect("on the launch");
+        assert_eq!(
+            args[at + 1],
+            "105",
+            "fifteen seconds inside the 120 s deadline"
+        );
+    }
+
+    /// `SocksTimeout` renders below the dial deadline by the margin, never
+    /// below half of it, and Tor's default renders nothing.
+    #[test]
+    fn the_socks_timeout_sits_inside_the_dial_deadline() {
+        use super::super::actor::SocksTimeout;
+        let below = |secs| {
+            SocksTimeout::Below {
+                dial_deadline: std::time::Duration::from_secs(secs),
+            }
+            .as_arg()
+        };
+        assert_eq!(SocksTimeout::TorDefault.as_arg(), None);
+        assert_eq!(below(120).as_deref(), Some("105"));
+        assert_eq!(below(20).as_deref(), Some("10"), "half, not five");
+        assert_eq!(below(1).as_deref(), Some("1"), "never zero");
     }
 
     /// Each file tor would otherwise find from its compiled-in defaults is
@@ -1423,6 +1488,7 @@ mod tests {
             tor_binary: VerifiedTorBinary::unchecked_for_test(dir.join(SHIM_FILE_NAME)),
             data_dir: dir.join("data"),
             socks_port: super::super::actor::SocksPort::Auto,
+            socks_timeout: super::super::actor::SocksTimeout::TorDefault,
             disable_network: true,
             disk_writes: DiskWrites::Deferred,
             exit_observer: None,
@@ -1718,6 +1784,7 @@ fn main() {
             tor_binary: VerifiedTorBinary::unchecked_for_test(crate::test_support::tor_binary()),
             data_dir: dir.path().join("data"),
             socks_port: super::super::actor::SocksPort::Auto,
+            socks_timeout: super::super::actor::SocksTimeout::TorDefault,
             disable_network: true,
             disk_writes: DiskWrites::Deferred,
             exit_observer: None,
