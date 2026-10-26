@@ -25,7 +25,8 @@ pub struct TorLinkTally {
     pub opened: u64,
     /// Tor dials that ended without a stream since the last one opened.
     pub unopened: u32,
-    /// Tor sessions this node holds now.
+    /// Tor sessions this node holds now: outbound sessions the dialer
+    /// kept, plus inbound sessions on the board.
     pub held: u32,
 }
 
@@ -58,7 +59,9 @@ impl LinkFold {
 
     /// Fold one dial outcome when it is a Tor dial. Anything that reached a
     /// peer opened a stream; a dial this node closed itself is not a dial
-    /// that failed.
+    /// that failed. A payload refusal is not a dial: it names a kept
+    /// session the payload owner declined, and that stream was counted
+    /// when the dial was accepted.
     pub(crate) fn observe(&mut self, connector: ConnectorId, outcome: &DialOutcome, held: usize) {
         if connector != ConnectorId::Tor {
             return;
@@ -70,9 +73,9 @@ impl LinkFold {
                     next.unopened = next.unopened.saturating_add(1);
                 }
             }
+            DialOutcome::PayloadRefused(_) => {}
             DialOutcome::DialFailed(..)
             | DialOutcome::PeerlistRefused(_)
-            | DialOutcome::PayloadRefused(_)
             | DialOutcome::Confirmed(_)
             | DialOutcome::SessionAccepted(_) => {
                 next.opened = next.opened.saturating_add(1);
@@ -164,6 +167,27 @@ mod tests {
             "a rejected handshake reached a peer"
         );
         assert_eq!(fold.tally().unopened, 0);
+    }
+
+    /// A payload refusal is the close of a session already counted. It
+    /// moves the held count and leaves the dial counts where the open
+    /// and the failures since it put them.
+    #[test]
+    fn a_payload_refusal_is_a_close_and_not_another_open() {
+        let mut fold = LinkFold::new();
+        fold.observe(ConnectorId::Tor, &DialOutcome::SessionAccepted(onion(0)), 1);
+        fold.observe(
+            ConnectorId::Tor,
+            &failed(1, CloseCause::proxy_refused(0x06)),
+            1,
+        );
+        let opened = fold.tally();
+        assert_eq!(opened.opened, 1);
+        assert_eq!(opened.unopened, 1);
+        fold.observe(ConnectorId::Tor, &DialOutcome::PayloadRefused(onion(0)), 0);
+        assert_eq!(fold.tally().opened, 1, "the close is not a new stream");
+        assert_eq!(fold.tally().unopened, 1, "failed dials since the open stay");
+        assert_eq!(fold.tally().held, 0);
     }
 
     /// This node's own close is not a failed dial, and another connector's

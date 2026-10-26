@@ -242,10 +242,19 @@ pub(crate) fn stop() {
 }
 
 /// A session closed. A kept session leaves the dialer's count. A
-/// `SessionRefused` cause is the lists' `PayloadRefused`.
+/// `SessionRefused` cause is the lists' `PayloadRefused`. The row is
+/// already off the board, and this poster does not hold the table lock,
+/// so an inbound Tor session leaves the held count here.
 pub(crate) fn on_closed(id: SocketId, cause: CloseCause) {
     if let Some(dialer) = dialer() {
-        dialer.session_closed(id, cause, &mut SecureRelayRng);
+        dialer.session_closed_from_seam(id, cause, &mut SecureRelayRng);
+    }
+}
+
+/// An inbound Tor session was accepted. The board already carries the row.
+pub(crate) fn note_inbound_tor() {
+    if let Some(dialer) = dialer() {
+        dialer.note_inbound_tor();
     }
 }
 

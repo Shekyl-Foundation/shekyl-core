@@ -19,11 +19,14 @@
 //! tip and the network id are known (`TSR-F1`; the `ready` module). While one
 //! is missing the loop does not arm its timer. It waits on the change that
 //! could supply it, and the wake spacing resumes when the connector is ready.
+//! The `tor_tally` module publishes how many Tor sessions are held. An
+//! inbound accept counts there and is not a dial.
 
 mod address;
 mod handshake;
 mod ready;
 mod recovery;
+mod tor_tally;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
@@ -127,6 +130,10 @@ pub struct Shared {
     /// What the Tor dials show, for the managed-Tor supervisor's posture
     /// line (`TOR_SUPERVISOR.md` §4.2). Display only (`TSR-Q14`).
     tor_link: LinkFold,
+    /// Inbound Tor rows last read off the board. [`Dialer::session_closed`]
+    /// does not read the board: the adopt poster calls it while holding
+    /// the table lock. The seam's close poster refreshes this first.
+    inbound_tor: usize,
 }
 
 impl Shared {
@@ -203,6 +210,7 @@ impl Dialer {
                 recovery: std::array::from_fn(|_| None),
                 last_store: None,
                 tor_link: LinkFold::new(),
+                inbound_tor: 0,
             })),
             nonces: HandshakeNonceSet::new(),
             stop: Arc::new(AtomicBool::new(false)),
@@ -424,9 +432,16 @@ impl Dialer {
     /// A kept session leaves the kept count. `CloseKind::SessionRefused`
     /// is the lists' `PayloadRefused`: the payload owner declined a
     /// delivery. The address stays as `SessionAccepted` left it, which is
-    /// white. Any other cause only drops the kept row. An id this dialer
-    /// is not keeping is a no-op: a dial still in the handshake has no row
-    /// here yet, and a confirm dial never has one.
+    /// white. That close is not a dial. The stream was counted when the
+    /// session was accepted, and folding the refusal as one would clear
+    /// the failed dials since that open. Any other cause only drops the
+    /// kept row. An id this dialer is not keeping has no row here: a dial
+    /// still in the handshake, a confirm dial, or an inbound Tor session,
+    /// which has no list address. The board is not read. The adopt poster
+    /// calls this while it holds the table lock, so the held count uses
+    /// the inbound rows last read by [`Self::note_inbound_tor`]. The seam's
+    /// close poster reads the board first
+    /// ([`Self::session_closed_from_seam`]).
     pub fn session_closed<R: RelayRng + ?Sized>(
         &self,
         id: SocketId,
@@ -437,21 +452,17 @@ impl Dialer {
         let mut shared = self.shared();
         if let Some(adopting) = shared.adopting.get_mut(&id.get()) {
             *adopting = Some(cause);
-            return;
+        } else if let Some(address) = shared.kept.remove(&id.get()) {
+            if let Some(connector) = Peerlist::connector_of(&address) {
+                if cause.kind() == CloseKind::SessionRefused {
+                    let outcome = DialOutcome::PayloadRefused(address.clone());
+                    shared.lists.apply(&outcome, now, rng);
+                    shared.memory.observe(&outcome, now);
+                }
+                shared.attempts(connector).session_closed(&address);
+            }
         }
-        let Some(address) = shared.kept.remove(&id.get()) else {
-            return;
-        };
-        let Some(connector) = Peerlist::connector_of(&address) else {
-            return;
-        };
-        if cause.kind() == CloseKind::SessionRefused {
-            let outcome = DialOutcome::PayloadRefused(address.clone());
-            Self::record(&mut shared, connector, &outcome, now, rng);
-        }
-        shared.attempts(connector).session_closed(&address);
-        let held = shared.view(connector).held();
-        shared.tor_link.held(connector, held);
+        Self::publish_tor_held(&mut shared);
     }
 
     /// Stop every owner loop at its next wake, and write the address file
@@ -524,11 +535,13 @@ impl Dialer {
         shared.attempts(connector).finish(outcome);
         shared.lists.apply(outcome, now, rng);
         shared.memory.observe(outcome, now);
-        let held = shared.view(connector).held();
+        let held = Self::tor_held(shared);
         shared.tor_link.observe(connector, outcome, held);
     }
 
-    /// Record `outcome` after the hub's clock has been read.
+    /// Record `outcome` after the hub's clock has been read. The table
+    /// lock is held across the dialer's lock, so the inbound count is the
+    /// board's at the moment the outcome is folded.
     fn settle<R: RelayRng + ?Sized>(
         &self,
         connector: ConnectorId,
@@ -536,8 +549,9 @@ impl Dialer {
         rng: &mut R,
     ) {
         let now = self.hub.now();
-        let mut shared = self.shared();
-        Self::record(&mut shared, connector, outcome, now, rng);
+        self.with_inbound(|shared| {
+            Self::record(shared, connector, outcome, now, rng);
+        });
     }
 
     /// Record `SessionAccepted` and the kept row in one lock section, mark
@@ -560,19 +574,18 @@ impl Dialer {
         rng: &mut R,
     ) -> bool {
         let now = self.hub.now();
-        let closed = {
-            let mut shared = self.shared();
+        let closed = self.with_inbound(|shared| {
             let closed = shared.adopting.remove(&kept.id.get()).flatten();
             let outcome = match closed {
                 Some(cause) => DialOutcome::DialFailed(address.clone(), cause),
                 None => DialOutcome::SessionAccepted(address.clone()),
             };
-            Self::record(&mut shared, connector, &outcome, now, rng);
+            Self::record(shared, connector, &outcome, now, rng);
             if closed.is_none() {
                 shared.kept.insert(kept.id.get(), address.clone());
             }
             closed
-        };
+        });
         if let Some(cause) = closed {
             tracing::debug!(
                 "{connector:?} dial {address:?} closed before it was kept ({:?})",

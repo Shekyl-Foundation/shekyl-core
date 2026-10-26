@@ -26,7 +26,8 @@ pub struct DialTally {
     pub opened: u64,
     /// Tor dials that ended without a stream since the last one opened.
     pub unopened: u32,
-    /// Tor sessions this node holds now.
+    /// Tor sessions this node holds now: outbound sessions the dialer kept,
+    /// plus inbound sessions on the board.
     pub held: u32,
 }
 

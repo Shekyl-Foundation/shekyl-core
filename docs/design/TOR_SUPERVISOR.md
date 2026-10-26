@@ -404,7 +404,7 @@ here.
 | `HS_DESC UPLOADED` / `FAILED REASON=` for our address | `HS_DESC` | `UPLOADED`: one upload round arms the probe (§4.5); `FAILED` across a round: Service-class evidence (§4.4) |
 | `NOTICE` / `WARN` / `ERR` | log events | the `tor` log category (§4.10) |
 | every Tor dial's outcome | the connector's dial path → the dialer's tally (`TorLinkTally`, through `shekyl_ffi::tor_link`) → the supervisor | display only, never a cause (`TSR-Q14`). While Tor is Running and names nothing, no Tor session is held, and dials keep ending without a stream for `Policy::quiet_after` (5 min, provisional until the floor-device soak), the posture line says "No connection through Tor is open, and none has opened in N.", once, with no fix. The stretch starts again at an opened stream and when a Tor reaches Running. The tally already in the cell when the supervisor starts watching is `Input::DialBaseline`: it is not an open, so it does not postpone the line. A respawn does not re-seed; `opened` is monotonic for the process, and the stretch clock restarts when the new Tor reaches Running |
-| a stream accepted at our forward listener | the Tor connector's inbound accept (`adopt_tor`, `rust/shekyl-ffi/src/zone_ffi.rs:392`) | display evidence only (posture line, RPC): a peer fetched the descriptor and completed introduction and rendezvous; it neither arms nor defers the probe |
+| a stream accepted at our forward listener | the Tor connector's inbound accept (`adopt_tor`, `rust/shekyl-ffi/src/zone_ffi.rs:413`) | display evidence only (posture line, RPC): a peer fetched the descriptor and completed introduction and rendezvous. The row counts as a Tor session held, so the quiet line does not stand while it is open. It is not a dial: `opened` and `unopened` stay, and the stretch does not start again. It neither arms nor defers the probe |
 | a probe nonce arrived | the dialer's nonce set (§4.5) | inbound evidence |
 
 A SOCKS reply to an onion dial says less than it seems to. Measured on a
@@ -428,10 +428,14 @@ Tor can judge (`TSR-Q14`). The table drives the address memory
 What a Tor dial's close tells the supervisor is one fact,
 `CloseCause::opened_a_stream` (`shekyl-transport-layer`): whether the dial
 reached a peer. The dialer counts opened and unopened dials and the
-sessions it holds; the supervisor reads those counts for the posture line
-and never an address or a reply code. A held session means Tor carries
-traffic, so dials to dead or refusing onions say nothing while one is
-held: the testnet case, two live seeds held and four dead ones redialed.
+sessions it holds, outbound ones it kept and inbound rows on the board.
+A payload refusal is a kept session the payload owner declined, not
+another opened dial. An inbound accept is a held session and not a dial,
+so it does not restart the stretch. The supervisor reads those counts for
+the posture line and never an address or a reply code. A held session
+means Tor carries traffic, so dials to dead or refusing onions say nothing
+while one is held: the testnet case, two live seeds held and four dead
+ones redialed.
 A process fault comes only from the process and the control connection.
 
 The supervisor sends one `SETEVENTS STATUS_GENERAL STATUS_CLIENT HS_DESC
