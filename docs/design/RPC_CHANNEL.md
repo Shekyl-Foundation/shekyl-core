@@ -1527,10 +1527,11 @@ The handshake takes the exact lengths as constants. A sender who has
 broken X25519 learns nothing from message 4: it is sealed to the client's
 ML-KEM key.
 
-The `restricted: bool` that today threads through `AppState`, the router,
-and the method handlers becomes the connection's grant; the two gate tests
-(`server.rs:796`, `json_rpc.rs`
-`admin_methods_are_refused_only_on_the_restricted_listener`) re-key to it.
+A connection's authority — its grant set, whether it is the host's
+administrator, and the armed switch — is stamped on every request and read
+by every gate (`shekyl-daemon-rpc` `authority.rs`, RT-W10 step 1). The method
+table's policy column says which grant, or which non-grant class, each row
+needs (`shekyl-rpc-types` `methods.rs`), and C++ is told only the host flag.
 
 ### 6.3 Resource policy (RULED, RT-O9.4 — independent of §6.1)
 
