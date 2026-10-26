@@ -1,7 +1,7 @@
 # The Tor connector's in-flight dial bound, derived 2026-10-25
 
-**Status: DERIVED; the floor-device short series on the final head moves it
-to Measured.** `in_flight_bound(Tor)` = 5 (`rust/shekyl-dialer/src/fill.rs`),
+**Status: DERIVED and MEASURED (the floor device, 2026-10-26).**
+`in_flight_bound(Tor)` = 5 (`rust/shekyl-dialer/src/fill.rs`),
 derived on the lifecycle the dialer runs: a Tor attempt that fails at or
 after the managed Tor's `SocksTimeout` is final within its test (Rick,
 2026-10-26). Five is the smallest bound that fills the Tor target within
@@ -188,9 +188,37 @@ bound 5 halved the median.
   confirms). That is the floor building white diversity first, as
   designed. Today's testnet (14 nodes against 48) is this regime.
 
-## The short series on the final head (floor device, claimed in the usage ledger first)
+## The short series on the final head, 2026-10-26 (`d22ac70aa`, #1190's merged head)
 
-Cold, half dead, and refill after a Tor respawn, at bound 1 and at bound
-5, on #1190's final head: the gray lifecycle and the full-window-final
-rule both in. Recorded below and in §97 with the date; the row then moves
-to Measured.
+Client the floor device, rig as floor run 1 (shekyl-dev data
+`inflight-bound/2026-10-26-final-head`); the probe before it: live onions
+57 of 64 reachable, dead onions 60 of 64 answering `0x06`. The gray
+lifecycle and the full-window-final rule are in. Seconds from the Tor link
+becoming usable to the 12th kept Tor session:
+
+| Case | Bound 1 median (samples) | Bound 5 median (samples) |
+| --- | --- | --- |
+| cold, half dead (gray 128) | 1064 (5) | **508 (5)** |
+| refill after a Tor respawn (gray 64) | 928 (3) | 126 (3) |
+
+**Five meets the horizon on the floor device:** at half dead its median,
+508 s, is inside one stem epoch, against the model's upper bound of 523 s
+(dead attempts modelled at 120 s; the managed Tor answers at 105 s). Bound 1
+took about twice as long. Every sample filled; samples:
+bound 1, 424 to 2981 s; bound 5, 342 to 563 s.
+
+What the series also showed, both fixed after it on #1203:
+
+- **A full-window failure can arrive as `0xF0`, not `0x06`.** 9 of the
+  series' 79 retried attempts were `0xF0` at 104 s or later. With
+  `ExtendedErrors` on, Tor answers an expired onion stream with the code it
+  last recorded on it (Tor 0.4.9.14 `src/core/or/connection_edge.c:3894`):
+  `0xF0` after a descriptor fetch came back not found and Tor retried at
+  another directory (`src/feature/hs/hs_client.c:1725`). The dialer read
+  only `0x06` and its own deadline against the window, so those tests
+  retried. Each such retry held a dead onion's target place longer, so the
+  medians above are slightly long.
+- **The window's one-second edge** (`0x06` at 104.97 s) was found by the
+  series' first start and fixed before this run (`7559d9f81`).
+
+The series predates #1203's quiet-stretch rule.
