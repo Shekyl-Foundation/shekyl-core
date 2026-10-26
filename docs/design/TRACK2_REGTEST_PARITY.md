@@ -42,7 +42,7 @@ regtest spend path) and the depth-3+ verify validation deferred by #162.
 | Capability | Where | Status |
 |---|---|---|
 | FAKECHAIN net mode, ephemeral `/fake` datadir | `cryptonote_config.h:328-335,372`, `cryptonote_core.cpp:472-539` | exists |
-| `generateblocks` + `pop_blocks` (armed test levers, served with `--dev-rpc`; `RPC_CHANNEL.md` §6.1) | `core_rpc_server.cpp` `on_generateblocks`, `rust/shekyl-daemon-rpc/src/mining_methods.rs` `admit_armed` | exists |
+| `generateblocks` + `pop_blocks` (armed test levers, served with `--dev-rpc`; `RPC_CHANNEL.md` §6.1) | `core_rpc_server.cpp` `on_generateblocks`, `rust/shekyl-rpc-types/src/methods.rs` `admit_armed` | exists |
 | `--fixed-difficulty` (instant mining) | `cryptonote_core.cpp:94`, `blockchain.cpp:1008` | exists |
 | Live header carries **real** root; per-height root table written on add-block | `blockchain.cpp:1959-1961`, `blockchain_db.cpp:453-458` | exists |
 | Daemon `shekyl_fcmp_verify` == Rust `verify` via FFI; pool + block-accept | `blockchain.cpp:3998/4126`, `tx_pool.cpp:239` | exists |

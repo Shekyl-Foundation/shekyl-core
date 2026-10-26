@@ -12,10 +12,11 @@
 //! [`Authority`], stamped on every request as a request extension
 //! ([`stamp`]), and every gate reads it:
 //!
-//! - a REST path is admitted by [`stamp`] itself, against its row in the
-//!   method table, before the handler runs;
+//! - a REST path that has a row is admitted by [`stamp`] itself, against
+//!   that row, before the handler runs; a path with no row is not a method,
+//!   and the router answers 404;
 //! - a JSON-RPC method is admitted by the `/json_rpc` handler against its
-//!   own row ([`Authority::admit`]);
+//!   own row ([`Authority::admit`]); a name with no row is method-not-found;
 //! - a handler that shapes its reply by grant reads [`Authority::disclosure`].
 //!
 //! A refusal is the JSON-RPC error object on every surface (`RPC_WIRE.md`
@@ -31,10 +32,11 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use shekyl_rpc_types::errors::{Diagnostic, ErrorClass, RpcError};
-use shekyl_rpc_types::methods::{rest_path, Cost, Grant, GrantSet, Method, Policy, Preset};
+use shekyl_rpc_types::methods::{
+    admit_armed, caller_bounded, rest_path, Cost, Grant, GrantSet, Method, Policy, Preset,
+};
 
 use crate::info::Disclosure;
-use crate::mining_methods::admit_armed;
 use crate::types::JsonRpcResponse;
 
 /// The diagnostic codes a refusal carries.
@@ -101,7 +103,7 @@ impl Authority {
     /// connection except the host's administrator, whatever its grant.
     #[must_use]
     pub const fn bounded(self) -> bool {
-        !self.host
+        caller_bounded(self.host)
     }
 
     /// What this connection is shown on a reply filled by grant.
@@ -121,6 +123,19 @@ impl Authority {
     /// - [`ErrorClass::OverResourceBound`] when the row has no bound yet and
     ///   the caller is bounded.
     pub fn admit(self, row: &Method) -> Result<(), RpcError> {
+        let host_only = || {
+            RpcError::new(
+                ErrorClass::OutsideTheGrant,
+                Diagnostic::new(
+                    codes::HOST_ONLY,
+                    format!(
+                        "{} is served only on the node's own computer, to its administrator",
+                        row.name
+                    ),
+                )
+                .param("method", row.name),
+            )
+        };
         match row.policy {
             Policy::Endpoint => {}
             Policy::Grant(grant) => {
@@ -140,23 +155,16 @@ impl Authority {
                     ));
                 }
             }
-            Policy::HostOnly | Policy::Armed => {
+            Policy::HostOnly => {
                 if !self.host {
-                    return Err(RpcError::new(
-                        ErrorClass::OutsideTheGrant,
-                        Diagnostic::new(
-                            codes::HOST_ONLY,
-                            format!(
-                                "{} is served only on the node's own computer, to its administrator",
-                                row.name
-                            ),
-                        )
-                        .param("method", row.name),
-                    ));
+                    return Err(host_only());
                 }
-                if row.policy == Policy::Armed {
-                    admit_armed(row, self.armed)?;
+            }
+            Policy::Armed => {
+                if !self.host {
+                    return Err(host_only());
                 }
+                admit_armed(row, self.armed)?;
             }
         }
         if row.cost == Cost::Unbounded && self.bounded() {
@@ -184,24 +192,33 @@ pub fn refusal(id: serde_json::Value, error: &RpcError) -> JsonRpcResponse {
     )
 }
 
-/// The layer that stamps `authority` on every request and admits a REST
-/// path against its row. A path with no row is refused, so a missing row
-/// never widens what a connection is served; the gate that every route is a
-/// row keeps every served path off that arm.
+/// The message of a grant refusal, when `raw` is that envelope.
+///
+/// The stamp answers a gated path with the JSON-RPC error object on HTTP
+/// 200 (RW-Q3). A remote console recognizes that envelope by its class.
+/// Any other body, including another error class, is not a grant refusal.
+#[must_use]
+pub fn grant_refusal_message(raw: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let error = value.get("error")?;
+    if error.get("code")?.as_i64()? != ErrorClass::OutsideTheGrant.code() {
+        return None;
+    }
+    error.get("message")?.as_str().map(str::to_owned)
+}
+
+/// The layer that stamps `authority` on a request whose path is a method,
+/// and admits that row before the handler runs.
+///
+/// A path with no row is not a method. The layer does not admit it and does
+/// not stamp an authority on it, so a handler that asks for the extension
+/// fails closed, and an unrouted path is the router's 404. The gate that
+/// every route is a row keeps a served path off that arm.
 pub async fn stamp(authority: Authority, mut request: Request, next: Next) -> Response {
-    let path = request.uri().path();
-    let admitted = match rest_path(path) {
-        Some(row) => authority.admit(row),
-        None => Err(RpcError::new(
-            ErrorClass::OutsideTheGrant,
-            Diagnostic::new(
-                codes::OUTSIDE_THE_GRANT,
-                format!("{path} is not a method of this daemon"),
-            )
-            .param("method", path),
-        )),
+    let Some(row) = rest_path(request.uri().path()) else {
+        return next.run(request).await;
     };
-    if let Err(error) = admitted {
+    if let Err(error) = authority.admit(row) {
         return (
             StatusCode::OK,
             Json(refusal(serde_json::Value::Null, &error)),
@@ -261,7 +278,7 @@ mod tests {
             assert_eq!(refused.class, ErrorClass::OutsideTheGrant, "{name}");
             assert_eq!(
                 refused.diagnostic.code,
-                crate::mining_methods::codes::UNARMED,
+                shekyl_rpc_types::methods::UNARMED,
                 "{name}"
             );
             assert!(armed.admit(row(name)).is_ok(), "{name}");
@@ -350,5 +367,14 @@ mod tests {
         assert_eq!(body["error"]["code"], -32_002);
         assert_eq!(body["error"]["data"]["code"], codes::OUTSIDE_THE_GRANT);
         assert_eq!(body["error"]["data"]["params"][1][1], "node");
+        assert_eq!(
+            grant_refusal_message(&body.to_string()).as_deref(),
+            Some(error.diagnostic.message.as_str())
+        );
+        assert_eq!(grant_refusal_message(r#"{"status":"OK"}"#), None);
+        assert_eq!(
+            grant_refusal_message(r#"{"error":{"code":-32603,"message":"boom"}}"#),
+            None
+        );
     }
 }

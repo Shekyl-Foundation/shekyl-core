@@ -56,6 +56,16 @@ pub enum Cost {
     Unbounded,
 }
 
+/// A bounded caller is every caller but the host's administrator (§6.3).
+///
+/// Host and bounded are one fact: the host is unbounded, and a connection
+/// whose ceiling is every grant is still bounded. Gates read this, not a
+/// second spelling of `!host`.
+#[must_use]
+pub const fn caller_bounded(host: bool) -> bool {
+    !host
+}
+
 /// Where a method is served.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Surface {
@@ -99,6 +109,44 @@ impl Method {
     }
 }
 
+/// Proof that an armed lever's row was checked against the node's
+/// armed-lever switch. Only [`admit_armed`] mints one, so an armed handler
+/// cannot run unchecked.
+#[derive(Debug)]
+pub struct Armed(());
+
+/// The diagnostic an armed lever carries when the switch is off.
+pub const UNARMED: &str = "rpc.unarmed";
+
+/// Admit a call of `row` under the armed-lever switch.
+///
+/// A row that is not armed always passes. An armed row passes only when
+/// the node was started with the switch on. The HTTP gate and the
+/// in-process console both mint the token here; the handlers that still
+/// run in process consume it.
+///
+/// # Errors
+///
+/// [`crate::errors::ErrorClass::OutsideTheGrant`] when `row` is armed and
+/// `switch_on` is false, whatever the caller's other grants.
+pub fn admit_armed(row: &Method, switch_on: bool) -> Result<Armed, crate::errors::RpcError> {
+    use crate::errors::{Diagnostic, ErrorClass, RpcError};
+    if row.armed() && !switch_on {
+        return Err(RpcError::new(
+            ErrorClass::OutsideTheGrant,
+            Diagnostic::new(
+                UNARMED,
+                format!(
+                    "{} is an armed test lever; start the node with dev-rpc to serve it",
+                    row.name
+                ),
+            )
+            .param("method", row.name),
+        ));
+    }
+    Ok(Armed(()))
+}
+
 const fn json(name: &'static str, aliases: &'static [&'static str], policy: Policy) -> Method {
     Method {
         name,
@@ -127,7 +175,6 @@ const fn unbounded(method: Method) -> Method {
 }
 
 use Grant::{Bans, Chain, Health, MiningControl, MiningWork, Node, Peers, Pool, Status, Submit};
-use Policy::{Armed, Endpoint, HostOnly};
 
 const fn g(grant: Grant) -> Policy {
     Policy::Grant(grant)
@@ -171,10 +218,10 @@ pub const METHODS: &[Method] = &[
     unbounded(json("calc_pow", &[], g(MiningWork))),
     json("get_block_template", &["getblocktemplate"], g(MiningWork)),
     json("get_miner_data", &[], g(MiningWork)),
-    json("generateblocks", &[], Armed),
+    json("generateblocks", &[], Policy::Armed),
     // RT-O9.2 (`RPC_CHANNEL.md`, ruled 2026-10-09): a regtest lever. It
     // deletes at the flip (DX-Q3).
-    json("inject_archival_serve_credit", &[], Armed),
+    json("inject_archival_serve_credit", &[], Policy::Armed),
     json("set_bans", &[], g(Bans)),
     json("get_bans", &[], g(Bans)),
     json("banned", &[], g(Bans)),
@@ -190,7 +237,7 @@ pub const METHODS: &[Method] = &[
     json("get_archival_emission_claim_source", &[], g(Chain)),
     json("get_archival_shard_coverage", &[], g(Chain)),
     // REST.
-    rest("/json_rpc", &[], Endpoint),
+    rest("/json_rpc", &[], Policy::Endpoint),
     rest("/get_height", &["/getheight"], g(Chain)),
     rest("/get_transactions", &["/gettransactions"], g(Chain)),
     rest("/get_alt_blocks_hashes", &[], g(Status)),
@@ -206,7 +253,7 @@ pub const METHODS: &[Method] = &[
         g(Chain),
     ),
     rest("/get_o_indexes.bin", &[], g(Chain)),
-    rest("/get_stem_tallies", &[], HostOnly),
+    rest("/get_stem_tallies", &[], Policy::HostOnly),
     rest("/start_mining", &[], g(MiningControl)),
     rest("/stop_mining", &[], g(MiningControl)),
     rest("/mining_status", &[], g(MiningControl)),
@@ -215,7 +262,7 @@ pub const METHODS: &[Method] = &[
     rest("/set_log_hash_rate", &[], g(MiningControl)),
     rest("/stop_daemon", &[], g(Node)),
     rest("/get_net_stats", &[], g(Status)),
-    rest("/pop_blocks", &[], Armed),
+    rest("/pop_blocks", &[], Policy::Armed),
 ];
 
 /// The row for a JSON-RPC method `name`, by its name or an alias.
@@ -413,5 +460,28 @@ mod tests {
         assert_eq!(rest_path("/getinfo").map(|row| row.name), Some("/get_info"));
         assert!(json_rpc("/get_info").is_none());
         assert!(rest_path("get_info").is_none());
+    }
+
+    /// An armed lever is outside the grant while the switch is off, whoever
+    /// asks. A row that is not armed always passes: the token is a check,
+    /// not a second grant.
+    #[test]
+    fn an_armed_lever_is_outside_the_grant_until_the_switch_is_on() {
+        use crate::errors::ErrorClass;
+        let generate = json_rpc("generateblocks").expect("a row");
+        let refused = admit_armed(generate, false).expect_err("unarmed");
+        assert_eq!(refused.class, ErrorClass::OutsideTheGrant);
+        assert_eq!(refused.diagnostic.code, UNARMED);
+        assert!(admit_armed(generate, true).is_ok());
+        let pop = rest_path("/pop_blocks").expect("a row");
+        assert!(admit_armed(pop, false).is_err());
+        let template = json_rpc("get_block_template").expect("a row");
+        assert!(admit_armed(template, false).is_ok());
+    }
+
+    #[test]
+    fn the_host_is_the_one_unbounded_caller() {
+        assert!(!caller_bounded(true));
+        assert!(caller_bounded(false));
     }
 }

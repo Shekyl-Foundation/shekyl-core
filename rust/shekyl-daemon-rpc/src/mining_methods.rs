@@ -19,7 +19,7 @@
 use std::num::NonZeroUsize;
 
 use shekyl_rpc_types::errors::{Diagnostic, ErrorClass, RpcError};
-use shekyl_rpc_types::methods::Method;
+use shekyl_rpc_types::methods::Armed;
 use shekyl_rpc_types::mining::{
     GenerateBlocksRequest, GenerateBlocksResponse, GetBlockTemplateResponse, GetMinerDataResponse,
     MinerThreads, MiningStatusResponse, PopBlocksRequest, PopBlocksResponse, StartMiningRequest,
@@ -85,44 +85,12 @@ pub mod codes {
     pub const COUNT_ZERO: &str = "block.count_zero";
     /// `generateblocks` was asked for more blocks than this chain can grow by.
     pub const COUNT_OVERFLOW: &str = "block.count_overflow";
-    /// An armed lever, and the node was not started armed.
-    pub const UNARMED: &str = "rpc.unarmed";
     /// A pop would remove genesis or a block the undo journal retired.
     pub const POP_BELOW_FLOOR: &str = "chain.pop_below_floor";
 }
 
 /// The RandomX algorithm name `mining_status` reports.
 const POW_ALGORITHM: &str = "RandomX";
-
-/// Proof that an armed lever's row was checked against the node's
-/// armed-lever switch (RW-Q7's `armed` column; DX-Q3, Q8). Only
-/// [`admit_armed`] makes one, so an armed handler cannot run unchecked.
-#[derive(Debug)]
-pub struct Armed(());
-
-/// Admit a call of `row` under the armed-lever switch: a row that is not
-/// armed always passes; an armed row passes only when the node was
-/// started with the switch on.
-///
-/// # Errors
-///
-/// [`ErrorClass::OutsideTheGrant`], whatever the caller's grant.
-pub fn admit_armed(row: &Method, switch_on: bool) -> Result<Armed, RpcError> {
-    if row.armed() && !switch_on {
-        return Err(RpcError::new(
-            ErrorClass::OutsideTheGrant,
-            Diagnostic::new(
-                codes::UNARMED,
-                format!(
-                    "{} is an armed test lever; start the node with dev-rpc to serve it",
-                    row.name
-                ),
-            )
-            .param("method", row.name),
-        ));
-    }
-    Ok(Armed(()))
-}
 
 impl From<FactsFault> for RpcError {
     fn from(fault: FactsFault) -> Self {
@@ -590,21 +558,6 @@ mod tests {
         );
     }
 
-    /// An armed lever is refused outside the grant while the switch is off,
-    /// whoever asks; a row that is not armed always passes.
-    #[test]
-    fn an_armed_lever_is_outside_the_grant_until_the_switch_is_on() {
-        let generate = shekyl_rpc_types::methods::json_rpc("generateblocks").expect("a row");
-        let refused = admit_armed(generate, false).expect_err("unarmed");
-        assert_eq!(refused.class, ErrorClass::OutsideTheGrant);
-        assert_eq!(refused.diagnostic.code, codes::UNARMED);
-        assert!(admit_armed(generate, true).is_ok());
-        let pop = shekyl_rpc_types::methods::rest_path("/pop_blocks").expect("a row");
-        assert!(admit_armed(pop, false).is_err());
-        let template = shekyl_rpc_types::methods::json_rpc("get_block_template").expect("a row");
-        assert!(admit_armed(template, false).is_ok());
-    }
-
     /// A node between states: its job is withdrawn as starting, a reason
     /// the next tip clears, so `withdrawn` never resolves; the tip the
     /// call waits for is already reached.
@@ -724,7 +677,7 @@ mod tests {
             &mining,
             &Reached,
             &Genesis,
-            admit_armed(row, true).expect("armed"),
+            shekyl_rpc_types::methods::admit_armed(row, true).expect("armed"),
             GenerateBlocksRequest { count: 1 },
         )
         .await
