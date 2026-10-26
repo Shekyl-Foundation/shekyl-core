@@ -749,10 +749,10 @@ async fn a_claim_chain_pops_and_reconnects_at_every_block_from_the_joins_on() {
     // block, so a driven chain closes no epoch at zero.
     assert_eq!(chain.closes[0], 0, "no close at a zero budget");
     assert!(chain.closes[1] > 0, "closes were round-tripped");
-    eprintln!(
-        "claim chain: {} blocks round-tripped ({} pruning boundaries), {} closes with a zero budget, {} with one",
-        chain.trips, chain.boundaries, chain.closes[0], chain.closes[1]
-    );
+    // The boundary exception is exercised, not only written: a schedule
+    // change that moved every prune past the chain would leave it unread.
+    assert!(chain.trips > 0, "blocks were round-tripped");
+    assert!(chain.boundaries > 0, "a pruning boundary was round-tripped");
     chain.scenario.close().await;
 }
 
@@ -896,10 +896,8 @@ async fn a_slash_and_reinstate_chain_pops_and_reconnects_at_every_block_from_the
         0
     );
 
-    eprintln!(
-        "slash-and-reinstate chain: {} blocks round-tripped ({} pruning boundaries)",
-        chain.trips, chain.boundaries
-    );
+    assert!(chain.trips > 0, "blocks were round-tripped");
+    assert!(chain.boundaries > 0, "a pruning boundary was round-tripped");
     chain.scenario.close().await;
 }
 
