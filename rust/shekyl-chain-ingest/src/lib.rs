@@ -111,6 +111,10 @@ mod body_pairing_tests;
 /// The two RandomX seeds an arrival may hash under.
 #[cfg(feature = "pipeline")]
 mod cache_window;
+/// The scenario driver that round-trips a connect, and the prune a pop is
+/// held to. The pop tests and the levered slash chain connect through it.
+#[cfg(all(test, feature = "pipeline"))]
+pub(crate) mod chain_drive;
 #[cfg(feature = "pipeline")]
 mod chain_facts;
 #[cfg(feature = "pipeline")]
@@ -126,6 +130,10 @@ pub mod fetch;
 /// The tip follower: the seed window, then the pool, then the miner's job.
 #[cfg(feature = "pipeline")]
 pub mod follower;
+/// `SO-D12h`: the frozen-membership chain through the claim window. The
+/// emission test and the pop test each connect the claim.
+#[cfg(all(test, feature = "pipeline"))]
+mod frozen_membership;
 #[cfg(feature = "pipeline")]
 pub mod grader;
 #[cfg(all(test, feature = "pipeline"))]

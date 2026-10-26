@@ -19,7 +19,9 @@ use shekyl_mempool::Pool;
 use shekyl_rpc_types::{RejectCause, SubmitVerdict};
 use shekyl_types::UnixSeconds;
 
+use crate::chain_drive::RELAY_FEE_REPRICE_STEPS;
 use crate::pool_door_tests::{matured, paying_the_floor, AT};
+use crate::scenario_shard::FILL_FROM_COINBASE;
 use crate::schedule::ChainRules;
 use crate::test_support::{h, tmp};
 
@@ -244,7 +246,7 @@ async fn closed_shards_lane(
     let rules = levered_rules();
     let mut scenario = Scenario::open_under(name, FreeHash, rules);
     let mut mined = scenario.mine(first_spending_height().to_raw()).await;
-    let filled = close_shards(&mut scenario, &mut mined, 10, 2).await;
+    let filled = close_shards(&mut scenario, &mut mined, FILL_FROM_COINBASE, 2).await;
     let shards: Vec<u64> = filled.closed.iter().map(|c| c.shard.to_raw()).collect();
     let connecting = inside_one_epoch(
         filled
@@ -256,15 +258,7 @@ async fn closed_shards_lane(
         2,
     );
     mine_to(&mut scenario, &mut mined, connecting).await;
-    let floor = scenario
-        .read_chain(|view, _| {
-            let next = Tip::connecting_height(view.tip().expect("tip").as_ref());
-            match shekyl_chain_rules::relay_floor_window(view, next).expect("floors") {
-                shekyl_chain_rules::AtHeight::Recorded(f) => f.into_iter().min().expect("a window"),
-                shekyl_chain_rules::AtHeight::AboveTip => unreachable!("the connecting height"),
-            }
-        })
-        .await;
+    let floor = scenario.connecting_relay_floor().await;
     (scenario, mined, shards, connecting, floor)
 }
 
@@ -278,7 +272,7 @@ fn priced_post(
     post: &shekyl_harness_spender::PostedBond<'_>,
 ) -> shekyl_wire::Transaction {
     let mut fee = crate::archival_driver::FEE;
-    for _ in 0..8 {
+    for _ in 0..RELAY_FEE_REPRICE_STEPS {
         let tx = spender.spend_coinbase_posting(
             wallet,
             shekyl_types::BlockHeight::from_raw(coinbase),
