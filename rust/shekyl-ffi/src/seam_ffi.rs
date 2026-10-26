@@ -636,7 +636,9 @@ pub extern "C" fn shekyl_seam_record_cause(id: u64, kind: u8, reply: u16) {
         return;
     };
     let cause = if kind == CloseKind::ProxyRefused {
-        CloseCause::proxy_refused(reply)
+        // The C++ has no reply table: a reply recorded here is final and
+        // names nothing. The connectors build their own causes in Rust.
+        CloseCause::proxy_refused(reply, shekyl_transport_layer::Marks::NONE)
     } else {
         CloseCause::new(kind)
     };
