@@ -91,7 +91,7 @@ mod switch;
 #[cfg(test)]
 pub(crate) use bundles::ApplyAdmitting;
 pub use bundles::{BundleOffered, LearnDraws, Learned, OfferBundle};
-pub(crate) use run_fault::fault_reply;
+pub(crate) use run_fault::{fault_reply, halt_on_corrupt};
 pub use run_fault::{PlanMismatchReason, RunEnd, RunFault};
 #[cfg(test)]
 pub use switch::AnchorForTests;

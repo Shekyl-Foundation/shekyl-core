@@ -43,7 +43,8 @@ use std::sync::Arc;
 
 use shekyl_archival_fetch_sched::{FetchScheduler, HolderSource, ShardFacts};
 use shekyl_bundle_producer::{
-    DueRead, Filing, Lost, Producer, ReadKey, ReadOutcome, Recorded, Window, WitnessRing,
+    DueRead, Filing, Lost, Producer, ReadKey, ReadOutcome, Recorded, TipPublication, Window,
+    WitnessRing,
 };
 use shekyl_chain_store::store::ReadSnapshot;
 use shekyl_types::{BlockCount, BlockHeight};
@@ -198,6 +199,7 @@ pub async fn run(
             &mut producer,
             &seat,
             tip,
+            TipPublication::from_seq(published.seq),
             window,
             &done_tx,
             &mut scheme_logged,
@@ -253,13 +255,14 @@ async fn step(
     producer: &mut Producer,
     seat: &ProducerSeat,
     tip: BlockHeight,
+    published: TipPublication,
     window: Window,
     done: &mpsc::UnboundedSender<(ReadKey, ReadOutcome)>,
     scheme_logged: &mut SchemeLine,
     progress: &watch::Sender<ProducerProgress>,
 ) {
     let observed = match parts.store.begin_read() {
-        Ok(snap) => producer.observe(tip, window, |h| recorded_at(&snap, h)),
+        Ok(snap) => producer.observe(tip, published, window, |h| recorded_at(&snap, h)),
         Err(error) => {
             tracing::warn!("the bundle producer could not read the chain: {error}");
             return;

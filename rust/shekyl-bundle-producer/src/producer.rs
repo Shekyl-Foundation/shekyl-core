@@ -11,7 +11,8 @@
 //!   the blocks this daemon mined, pauses the ones a reorg popped, resumes
 //!   the ones that came back, and gives up on the ones past the reorg cap
 //!   or past their window. It returns the blocks whose draws it must learn,
-//!   each once for this tip.
+//!   each once for this publication of the tip. The next publication asks
+//!   again, including a pop and a connect back that share a height.
 //! - [`Producer::learned`] — a block's draws, as the connector derived
 //!   them. The producer plans each draw's reads.
 //! - [`Producer::due`] — the reads whose height has come.
@@ -111,6 +112,23 @@ impl Window {
     #[must_use]
     pub fn open(self, h: BlockHeight, tip: BlockHeight) -> bool {
         tip < h.saturating_add(self.response)
+    }
+}
+
+/// One publication of the tip.
+///
+/// The connector numbers each publication (`TipChanged.seq`). A pop and
+/// the connect back can share a height and do not share a publication, so
+/// the ask is this, not the height: the same publication does not ask
+/// again, and the next one does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TipPublication(u64);
+
+impl TipPublication {
+    /// The publication numbered `seq`, as the connector counts them.
+    #[must_use]
+    pub const fn from_seq(seq: u64) -> Self {
+        Self(seq)
     }
 }
 
@@ -284,10 +302,10 @@ struct BlockWork {
     hash: BlockHash,
     /// The tip at the pop, while the block is off the chain.
     popped_at: Option<BlockHeight>,
-    /// The tip this block was last asked about, while it is still
-    /// [`Stage::Learning`]. The same tip does not ask again; the next one
-    /// does, which is how an unanswered block is retried.
-    asked_at: Option<BlockHeight>,
+    /// The publication this block was last asked on, while it is still
+    /// [`Stage::Learning`]. The same publication does not ask again; the
+    /// next one does, which is how an unanswered block is retried.
+    asked_on: Option<TipPublication>,
     stage: Stage,
     serving_scheme_absent: bool,
 }
@@ -357,17 +375,18 @@ impl Producer {
         self.blocks.keys().copied().collect()
     }
 
-    /// The chain's tip is `tip`. `look(h)` reads the recorded block at `h`,
-    /// `None` above the tip.
+    /// The chain's tip is `tip`, as publication `published`. `look(h)`
+    /// reads the recorded block at `h`, `None` above the tip.
     ///
     /// Every height from [`CANDIDATE_DEPTH`] below the tip up to it is
     /// matched against the ring, so a block of ours a short reorg brought
     /// back is claimed as well as a new one. Every block in flight is
     /// checked against the chain: popped, back, past the cap, or past its
-    /// window.
+    /// window. A block still learning is asked once on `published`.
     pub fn observe(
         &mut self,
         tip: BlockHeight,
+        published: TipPublication,
         window: Window,
         mut look: impl FnMut(BlockHeight) -> Option<Recorded>,
     ) -> Observed {
@@ -384,7 +403,7 @@ impl Producer {
                         BlockWork {
                             hash: recorded.hash,
                             popped_at: None,
-                            asked_at: None,
+                            asked_on: None,
                             stage: Stage::Learning,
                             serving_scheme_absent: false,
                         },
@@ -409,7 +428,7 @@ impl Producer {
                 if returned && matches!(work.stage, Stage::Learning) {
                     // The answer, if one came, was for a chain that did not
                     // hold this block.
-                    work.asked_at = None;
+                    work.asked_on = None;
                 }
                 continue;
             }
@@ -428,11 +447,11 @@ impl Producer {
             if !matches!(work.stage, Stage::Learning) || work.popped_at.is_some() {
                 continue;
             }
-            if work.asked_at == Some(tip) {
+            if work.asked_on == Some(published) {
                 continue;
             }
             if let Some(seed) = self.ring.seed(h) {
-                work.asked_at = Some(tip);
+                work.asked_on = Some(published);
                 observed.learn.push(Learn {
                     h,
                     hash: work.hash,
@@ -690,3 +709,7 @@ fn bitmap_and_records(draws: &[Draw], stream: PassStream) -> (PassBitmap, Vec<Bu
 #[cfg(test)]
 #[path = "producer_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "producer_ask_tests.rs"]
+mod ask_tests;

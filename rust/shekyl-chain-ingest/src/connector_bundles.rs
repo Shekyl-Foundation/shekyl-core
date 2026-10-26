@@ -17,8 +17,9 @@
 //!   offer is judged, and the verdict is the reply.
 //! - [`LearnDraws`] — the producer mined `h` and asks for its draws, which
 //!   the verifier's own selection derives (`draw_targets`) on a committed
-//!   snapshot, with the endpoint each persona's bond record carries. The
-//!   derivation writes nothing, so it does not open a batch.
+//!   snapshot, with the endpoint each persona's bond record carries. A
+//!   quiet derivation writes nothing. A corrupt read arms the shared halt
+//!   through a batch that commits nothing.
 //! - **Upkeep**, after every write that moves the tip, classified on one
 //!   snapshot. An entry whose window closed leaves. An entry whose
 //!   admitting tip is no longer on the chain is judged again: kept by
@@ -39,8 +40,8 @@ use shekyl_chain_rules::{
     BundleRefused, CenRow, ChainView, DrawableMemo, HeaderView, RuleSet, ViewRead,
 };
 use shekyl_chain_store::store::{
-    invariant_of, QueueCannot, ReadSnapshot, SnapshotView, StoreBundleView, StoreCannot,
-    StoreError, WriteBatch,
+    ChainStore, QueueCannot, ReadSnapshot, SnapshotView, StoreBundleView, StoreCannot, StoreError,
+    WriteBatch,
 };
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 use zeroize::Zeroizing;
@@ -157,11 +158,11 @@ impl Message<LearnDraws> for Connector {
     ) -> Self::Reply {
         let rules = self.rules;
         let memo = &mut self.memo;
-        // A snapshot: the derivation writes nothing, and a fault latches
-        // the writer without opening a batch.
+        // A snapshot. A quiet derivation opens no batch. A corrupt read
+        // arms the shared halt through a batch that commits nothing.
         self.writer.with_store(|store| {
             let snapshot = store.begin_read().map_err(RunFault::Store)?;
-            learn(&snapshot, rules, memo, msg.h, msg.hash, &msg.seed)
+            learn(store, &snapshot, rules, memo, msg.h, msg.hash, &msg.seed)
         })
     }
 }
@@ -186,7 +187,7 @@ impl Connector {
         let memo = &mut self.memo;
         let plan = self.writer.with_store(|store| {
             let snapshot = store.begin_read().map_err(RunFault::Store)?;
-            classify(&snapshot, rules, memo)
+            classify(store, &snapshot, rules, memo)
         })?;
         if plan.is_quiet() {
             return Ok(());
@@ -269,14 +270,14 @@ impl core::fmt::Display for Refusal {
     }
 }
 
-/// A snapshot read's fault. A `Corrupt` is the same row a batch would arm,
-/// returned plain: there is no batch to poison, and the caller latches.
-fn snapshot_view_fault(fault: ViewRead<StoreError>) -> RunFault {
+/// A snapshot read's fault. A `Corrupt` arms the shared halt through
+/// [`halt_on_corrupt`](super::halt_on_corrupt): the batch commits nothing.
+/// A view fault is the store's error, and the caller latches. A quiet
+/// read never reaches this.
+fn snapshot_view_fault(store: &ChainStore, fault: ViewRead<StoreError>) -> RunFault {
     match fault {
         ViewRead::View(error) => RunFault::Store(error),
-        ViewRead::Corrupt(corrupt) => {
-            RunFault::Store(StoreError::InvariantViolated(invariant_of(corrupt)))
-        }
+        ViewRead::Corrupt(corrupt) => super::halt_on_corrupt(store, corrupt),
     }
 }
 
@@ -384,6 +385,7 @@ fn judge_batch(
 /// Judge one bundle against the tip, on a snapshot. A `Corrupt` latches
 /// and does not open a batch.
 fn judge_snapshot(
+    store: &ChainStore,
     view: &SnapshotView<'_>,
     memo: &mut DrawableMemo,
     h_incl: BlockHeight,
@@ -391,7 +393,8 @@ fn judge_snapshot(
     reference: &BundleRef,
     body: &BundleBody,
 ) -> Result<Option<Refusal>, RunFault> {
-    remember_window_epochs(view, h_incl, rule_set, memo).map_err(snapshot_view_fault)?;
+    remember_window_epochs(view, h_incl, rule_set, memo)
+        .map_err(|fault| snapshot_view_fault(store, fault))?;
     let bundle_view = StoreBundleView::new(view, memo, h_incl, rule_set.settlement_schedule());
     judge_prepared(&bundle_view, h_incl, rule_set, reference, body)
 }
@@ -435,6 +438,7 @@ fn offer(
 }
 
 fn learn(
+    store: &ChainStore,
     snapshot: &ReadSnapshot<'_>,
     rules: ChainRules,
     memo: &mut DrawableMemo,
@@ -455,7 +459,8 @@ fn learn(
         AtHeight::Recorded(header) if header.hash == hash => {}
         _ => return Ok(Learned::NotOnChain),
     }
-    remember_window_epochs(&view, h_incl, &rule_set, memo).map_err(snapshot_view_fault)?;
+    remember_window_epochs(&view, h_incl, &rule_set, memo)
+        .map_err(|fault| snapshot_view_fault(store, fault))?;
     let bundle_view = StoreBundleView::new(&view, memo, h_incl, rule_set.settlement_schedule());
     let derived = match draw_targets(&bundle_view, h, seed, &rule_set) {
         Ok(derived) => derived,
@@ -527,6 +532,7 @@ impl Upkeep {
 /// leaves without being judged. An admitting tip still on the chain is
 /// kept as it stands.
 fn classify(
+    store: &ChainStore,
     snapshot: &ReadSnapshot<'_>,
     rules: ChainRules,
     memo: &mut DrawableMemo,
@@ -571,6 +577,7 @@ fn classify(
             continue;
         }
         match judge_snapshot(
+            store,
             &view,
             memo,
             h_incl,

@@ -24,8 +24,8 @@ use shekyl_archival_retention::{
 };
 use shekyl_bundle_producer::read::READS_AT_ONCE;
 use shekyl_bundle_producer::{
-    DrawTarget, DueRead, Producer, ReadOutcome, Recorded, Targets, Window, WitnessRing,
-    READ_START_SPREAD,
+    DrawTarget, DueRead, Producer, ReadOutcome, Recorded, Targets, TipPublication, Window,
+    WitnessRing, READ_START_SPREAD,
 };
 use shekyl_chain_rules::CenRow;
 use shekyl_crypto_pq::fn_dsa_hybrid::{FnDsaHybridSecretKey, HybridEd25519FnDsa};
@@ -289,7 +289,7 @@ async fn the_producer_claims_what_its_ring_drew() {
     };
     let store = scenario.store();
     let snap = store.begin_read().expect("snapshot");
-    let observed = producer.observe(ours.height, window, |h| {
+    let observed = producer.observe(ours.height, TipPublication::from_seq(1), window, |h| {
         crate::bundle_producer::recorded_at(&snap, h)
     });
     assert_eq!(observed.learn.len(), 1);
@@ -332,7 +332,9 @@ fn one_started_read() -> (Producer, DueRead) {
         hash: BlockHash::from_bytes([0xA0; 32]),
         commitment,
     };
-    let observed = producer.observe(ours, window, |at| (at == ours).then_some(recorded));
+    let observed = producer.observe(ours, TipPublication::from_seq(1), window, |at| {
+        (at == ours).then_some(recorded)
+    });
     assert_eq!(observed.learn.len(), 1);
     let (receipt_key, _) =
         HybridEd25519FnDsa::keypair_from_seeds(&[7; 32], &[8; 32]).expect("keygen");
