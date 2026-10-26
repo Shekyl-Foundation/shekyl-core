@@ -1,8 +1,12 @@
 # The Tor connector's in-flight dial bound, derived 2026-10-25
 
-**Status: DERIVED, not yet measured.** `in_flight_bound(Tor)` = 5
-(`rust/shekyl-dialer/src/fill.rs`). The floor-device measurements (below,
-"To be measured") move it to Measured or reopen it. Register:
+**Status: DERIVED, not yet measured; the horizon claim depends on a pending
+ruling.** `in_flight_bound(Tor)` = 5 (`rust/shekyl-dialer/src/fill.rs`).
+Five is the bound under every lifecycle modelled below. It meets the
+600 s horizon only if a full-window timeout is final within a test
+(proposed 2026-10-26, pending Rick's ruling); under the head as it stands no
+bound meets it, and five reaches the plateau. The floor-device
+measurements (below) move it to Measured or reopen it. Register:
 `DAEMON_RELAY_PRIVACY.md` §97, row "In-flight dial bound". Brief: the
 dialer in-flight bound, revision 2 (Rick, 2026-10-25), item 6.
 
@@ -53,36 +57,61 @@ Never more than the target.
 
 ## The model
 
-`p2p_tor_inflight_bound_20261025_model.py` (run it with `python3 -I`). One
-launch per wake at R3's spacing; a launch needs a free slot and kept plus
-pending keeps under the target; a live draw ends at its sampled dial time
-and is kept, a dead one ends at 120 s and is not. Every draw is a `Keep`:
-gray holds at least the diversity floor, so rule (b) keeps. Time to fill is
-when kept sessions reach 12. `p2p_tor_inflight_bound_20261025_grid.tsv`
-holds 2,000 seeded runs per cell.
+`p2p_tor_inflight_bound_20261025_model.py` (run it with `python3 -I`,
+`--lifecycle` and `--grid`). One launch per wake at R3's spacing; a launch
+needs a free in-flight slot and the target not yet counted full; a live
+draw ends at its sampled dial time and is kept; every attempt of a dead
+draw runs to the 120 s deadline and fails. Every draw is a `Keep`: gray
+holds at least the diversity floor, so rule (b) keeps. Time to fill is
+when kept sessions reach 12. Three lifecycles, 2,000 seeded runs per cell
+(`p2p_tor_inflight_bound_20261025_grid.tsv`, every dead fraction):
 
-Median (p90) seconds to fill 12 Tor sessions from empty:
+- **pre-merge**: one attempt per test. The dialer before the gray lifecycle
+  merged into #1190, and the binaries of floor run 1.
+- **head**: the #1190 head. A full-window failure (0x06, or the dial
+  deadline) is worth a retry, so a dead test makes three attempts, with
+  waits of 5 s + U(0, 5 s) and 20 s + U(0, 10 s) between. An attempt holds
+  an in-flight slot and a wait does not; a `Keep` test holds its target
+  place from draw to outcome, waits included.
+- **proposed**: the head with a full-window timeout final within the test
+  (2026-10-26, pending Rick's ruling). The Tor 0.4.9.14 source behind it:
+  0x06 comes only from the stream-end reason `TIMEOUT`
+  (`src/core/or/reasons.c:128`), set when the client's `SocksTimeout`
+  window runs out on an onion stream (`src/core/or/connection_edge.c:1222`,
+  `:1253`) or when the service's own connect to its target times out, which
+  Tor never retries on an onion stream (`src/core/or/relay.c:891`); within
+  that window Tor already retries introduction points and descriptor
+  fetches (`src/feature/hs/hs_client.c:1246`, `:1756`).
 
-| Bound | f = 0.00 | f = 0.25 | f = 0.50 | f = 0.75 | f = 0.90 |
-| --- | --- | --- | --- | --- | --- |
-| 1 | 238 (396) | 709 (1137) | 1643 (2493) | 4419 (6456) | 13015 (18393) |
-| 2 | 140 (226) | 393 (636) | 920 (1383) | 2403 (3545) | 6918 (9941) |
-| 3 | 118 (163) | 299 (499) | 664 (1049) | 1825 (2708) | 5116 (7682) |
-| 4 | 114 (139) | 263 (430) | 595 (961) | 1531 (2355) | 4281 (6559) |
-| 5 | 112 (129) | 254 (397) | 522 (861) | 1364 (2164) | 3853 (6055) |
-| 6 | 112 (125) | 252 (388) | 499 (855) | 1326 (2061) | 3515 (5799) |
-| 8 | 112 (122) | 251 (382) | 491 (779) | 1216 (1935) | 3390 (5535) |
-| 12 | 112 (122) | 251 (380) | 493 (842) | 1209 (1954) | 3269 (5375) |
+Median (p90) seconds to fill 12 Tor sessions from empty, half the draws
+dead:
 
-**Five.** At half the draws dead, four sits on the horizon: 595 s in this
-grid and 603 s in a separate 4,000-run set, inside the sampling noise of
-600 s. Five clears it with margin: 522 s here, 517 s in the 4,000-run set.
+| Bound | Pre-merge: one attempt per test | Head: a full-window failure retried twice; a wait holds its target place | Proposed: a full-window timeout final within the test |
+| --- | --- | --- | --- |
+| 1 | 1640 (2485) | 4451 (7033) | 1645 (2477) |
+| 2 | 907 (1398) | 2538 (4017) | 904 (1367) |
+| 3 | 674 (1082) | 1940 (3160) | 713 (1099) |
+| 4 | 604 (939) | 1708 (2767) | 597 (954) |
+| 5 | 517 (869) | 1602 (2700) | 523 (865) |
+| 6 | 501 (851) | 1582 (2504) | 498 (850) |
+| 8 | 494 (796) | 1584 (2404) | 495 (842) |
+| 12 | 493 (760) | 1586 (2412) | 494 (840) |
 
-**Past six the fill stops improving**, at about 490 s with half the draws
-dead. The cause is the target, not the bound: a dead `Keep` holds a target
-slot for its full 120 s, so with kept plus pending keeps at 12 no further
-dial starts however many slots are free. A bound above six would buy almost
-nothing and widen the burst the node shows its Tor.
+**Under the head, no bound meets the horizon.** The fill flattens at about
+1,585 s from bound six: each dead test holds a target place for about
+385 s across its three attempts, so with the target counted full no
+further dial starts however many slots are free. Five is the smallest bound
+within about 1% of that plateau (1,602 s).
+
+**Under the proposed rule, five meets it.** Four sits on the horizon
+(597 s); five clears it (523 s). The pre-merge lifecycle gives the same
+answer (604 s and 517 s). Past six the fill stops improving there too, at
+about 495 s, for the same reason: a dead pending `Keep` holds a target place
+for its 120 s.
+
+**Five either way.** The bound is five under all three; whether the
+one-epoch horizon holds is the ruling's, not the bound's. A bound above six
+would buy almost nothing and widen the burst the node shows its Tor.
 
 ## Fingerprinting (TSR-Q9)
 

@@ -374,9 +374,11 @@ revision 2, Rick 2026-10-25).** `in_flight_bound(connector)` is protocol
 data, the same on every node. It limits how many dials are outstanding,
 not the rate: one launch per wake, at R3's spacing. Tor's five is
 derived (`DAEMON_RELAY_PRIVACY.md` §97;
-`docs/benchmarks/p2p_tor_inflight_bound_20261025.md`): the smallest
-bound that fills the 12-session target within one stem epoch when half
-the draws are dead. Clearnet stays at one. A pending `Keep` counts
+`docs/benchmarks/p2p_tor_inflight_bound_20261025.md`) with half the
+draws dead: if a full-window timeout is final within a test (pending a
+ruling), five is the smallest bound that fills the 12-session target
+within one stem epoch; with every full-window failure retried twice, as
+the dialer does today, no bound does, and five reaches the plateau. Clearnet stays at one. A pending `Keep` counts
 toward the target, so no bound lets keeps pass it; a `Confirm` counts
 toward the bound and not the target, which is why the descriptor
 reservation adds the bound to the target. Wargame: at boot, hidden

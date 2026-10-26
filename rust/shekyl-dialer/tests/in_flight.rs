@@ -56,8 +56,8 @@ fn census(attempts: &Attempts, white: usize, gray: usize) -> Census {
     }
 }
 
-/// The bounds as derived (2026-10-25): Tor five, the smallest that fills
-/// the target within one stem epoch with half the draws dead; clearnet
+/// The bounds as derived (2026-10-25, restated 2026-10-26): Tor five, the
+/// bound every modelled lifecycle selects with half the draws dead; clearnet
 /// stays at one, so its behaviour is unchanged (the brief's test 5). Never
 /// more than the connector's target.
 #[test]
