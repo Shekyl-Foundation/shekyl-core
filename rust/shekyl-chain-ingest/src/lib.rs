@@ -89,6 +89,10 @@ pub(crate) mod archival_driver;
 /// CEN-J11, and a Release signed by the wrong key is CEN-J13.
 #[cfg(all(test, feature = "pipeline"))]
 mod archival_hint_tests;
+/// DRS-X PR 3e (e2): every block that changes archival state, popped and
+/// connected again, the store compared at each step.
+#[cfg(all(test, feature = "pipeline"))]
+mod archival_pop_roundtrip_tests;
 /// E6 slice 8 PR-a (`CHAIN_RULES_SLICE_8.md` §5 rows 3 and 5): one levered
 /// slash chain, J5 through the Release, a phase at a time.
 #[cfg(all(test, feature = "pipeline"))]
