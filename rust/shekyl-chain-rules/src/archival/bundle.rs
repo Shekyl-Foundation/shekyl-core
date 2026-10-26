@@ -31,15 +31,24 @@
 //!
 //! All three are pure. None names a store type, and none writes.
 //!
-//! # Disposition: STAGED — nothing on the connect path calls this
+//! # Disposition: STAGED on the connect path; live in the bundle queue
 //!
 //! Rule `23-disposition-visibility`: staged work is code with a named consumer in a live plan.
 //!
-//! - **What is here:** the verifier, [`judge_bundles`], the view trait, the
-//!   fixture, and the unbound rule types `rules::bundle_admission::J29`
-//!   through `J37`. Increment 4a also implements the view on the store
-//!   (`shekyl-chain-store`'s `StoreBundleView`, the batch view plus the
-//!   drawable memo). The census rows stay `pending`.
+//! - **What is here:** the verifier, [`judge_bundles`], [`draw_targets`],
+//!   the view trait, the fixture, and the unbound rule types
+//!   `rules::bundle_admission::J29` through `J37`. Increment 4a also
+//!   implements the view on the store (`shekyl-chain-store`'s
+//!   `StoreBundleView`, the batch view plus the drawable memo). The
+//!   census rows stay `pending`.
+//! - **What is live (increment 4c):** the bundle queue. Its admission is
+//!   [`judge_bundles`] against the tip, through the ingest connector's
+//!   single writer, and it re-judges every entry after a reorg. The
+//!   producer of a block derives the draws it reads with
+//!   [`draw_targets`], the same selection [`verify_bundle`] runs. The
+//!   queue is pool-like state fed only by this daemon's own bundles until
+//!   references travel (4b); it is not the connect path, and no block
+//!   carries what it holds.
 //! - **What is not:** `form` and `validate` do not call them. The rule
 //!   types are not bound. A block that carries a bundle section is not
 //!   judged by this module today.
@@ -62,8 +71,9 @@
 //!   [`verify_bundle`] over the switch's batch view, on which E5 implements
 //!   [`BundleView`]. A body that cannot be fetched before the switch is no
 //!   switch and no verdict, which is [`BundleRefused::BodyNotReferenced`]'s
-//!   side of the same line. The body store and the bundle queue are not
-//!   built; the queue will run these functions against the tip.
+//!   side of the same line. The body store and the bundle queue are
+//!   built (4c, in `shekyl-chain-store`); a connecting block pulling its
+//!   bodies from them by reference is 4b's.
 //! - **The census rows** these refusals name, CEN-J29 through CEN-J37, are
 //!   registered `pending` for the same reason: a `pending` row is in the
 //!   denominator and no rule type is bound to it. The cutover flips them.
@@ -72,7 +82,9 @@
 //!   registry, `archival/bundle.rs`, `archival/bundle_records.rs` and
 //!   `archival/bundle_section.rs`, and fails when any other names this
 //!   module's functions, apart from the one `pub use` in `archival/mod.rs`
-//!   and `lib.rs` that exports them.
+//!   and `lib.rs` that exports them. The queue's caller is in another
+//!   crate (the ingest connector), so it does not move this test: the
+//!   test guards this crate's connect path, which the queue is not.
 //!   The section file stays exempt only while it holds `check_section`.
 //!   It requires `validate.rs`,
 //!   `block.rs`, `alt.rs`, `header_ladder.rs`, `drain.rs`, `archival/mod.rs`
@@ -764,11 +776,7 @@ fn support_width<V: BundleView>(
 }
 
 /// Step 6: draw `j`'s pair for every `j < count`, by the production
-/// selection over the drawable epoch's length.
-///
-/// `select_draw` asks whether an index is visibly short and returns that
-/// read's fault as its own error, so a fault is not a selection. Answers
-/// are remembered for the bundle: an index asked twice is read once.
+/// selection over the drawable epoch's length, with the bitmap's bit.
 fn derive_draws<V: BundleView>(
     view: &V,
     drawable: &DrawableEpoch,
@@ -776,12 +784,41 @@ fn derive_draws<V: BundleView>(
     hash_at_h: &[u8; 32],
     count: u32,
 ) -> Result<Vec<DerivedDraw>, BundleRefused<V::Fault>> {
+    Ok(
+        select_pairs(view, drawable, kept.h, &kept.seed, hash_at_h, count)?
+            .into_iter()
+            .zip(0..count)
+            .map(|((index, pair), draw)| DerivedDraw {
+                index,
+                pair,
+                passed: kept.passes.get(draw),
+            })
+            .collect(),
+    )
+}
+
+/// The selection of step 6, for every `j < count`: each draw's index in
+/// `D` and the pair there. The verifier and the producer of `h`
+/// ([`draw_targets`]) both call it, so the pair a producer reads is the
+/// pair the verifier derives.
+///
+/// `select_draw` asks whether an index is visibly short and returns that
+/// read's fault as its own error, so a fault is not a selection. Answers
+/// are remembered for the call: an index asked twice is read once.
+fn select_pairs<V: BundleView>(
+    view: &V,
+    drawable: &DrawableEpoch,
+    h: BlockHeight,
+    seed: &[u8; 32],
+    hash_at_h: &[u8; 32],
+    count: u32,
+) -> Result<Vec<(u64, DrawablePair)>, BundleRefused<V::Fault>> {
     let mut asked: BTreeMap<u64, bool> = BTreeMap::new();
     let mut short = |index: u64| -> Result<bool, V::Fault> {
         match asked.entry(index) {
             Entry::Occupied(known) => Ok(*known.get()),
             Entry::Vacant(slot) => {
-                let answer = view.visibly_short(kept.h, index)?;
+                let answer = view.visibly_short(h, index)?;
                 slot.insert(answer);
                 Ok(answer)
             }
@@ -790,9 +827,9 @@ fn derive_draws<V: BundleView>(
 
     // A `u32` into a `usize` is lossless on every target the workspace
     // builds for.
-    let mut draws = Vec::with_capacity(count as usize);
+    let mut pairs = Vec::with_capacity(count as usize);
     for draw in 0..count {
-        let selected = select_draw(&kept.seed, hash_at_h, draw, drawable.len(), &mut short)
+        let selected = select_draw(seed, hash_at_h, draw, drawable.len(), &mut short)
             .map_err(BundleRefused::View)?;
         let unanswered = BundleRefused::Unanswered(BundleUnanswered::Draw { draw });
         let Some(selected) = selected else {
@@ -801,13 +838,138 @@ fn derive_draws<V: BundleView>(
         let Some(pair) = drawable.pair(selected.index) else {
             return Err(unanswered);
         };
-        draws.push(DerivedDraw {
-            index: selected.index,
-            pair,
-            passed: kept.passes.get(draw),
+        pairs.push((selected.index, pair));
+    }
+    Ok(pairs)
+}
+
+/// One economy draw of `h`, as its producer reads it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EconomyTarget {
+    /// The draw index `j`.
+    pub draw: u32,
+    /// The pair's position in `D`.
+    pub index: u64,
+    /// The pair: whom to read, and which shard.
+    pub pair: DrawablePair,
+    /// The receipt key the record's receipt verifies under: the drawable
+    /// epoch's key for the pair's persona, as step 8 opens it.
+    pub receipt_key: FnDsaHybridPublicKey,
+}
+
+/// One support draw of `h`, as its producer reads it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SupportTarget {
+    /// The draw index `j` in the support bitmap.
+    pub draw: u32,
+    /// The complete tree the roster seats at `j`.
+    pub persona: PCanonicalId,
+    /// The shard the draw names.
+    pub shard: shekyl_types::ShardId,
+    /// The seat's receipt key.
+    pub receipt_key: FnDsaHybridPublicKey,
+}
+
+/// Everything the producer of `h` reads, and the count each bitmap is
+/// stated at.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DrawTargets {
+    /// The block.
+    pub h: BlockHeight,
+    /// `block_hash(h)`: the selection's and the nonce's input.
+    pub hash: BlockHash,
+    /// One per economy draw `j < count(h)`, in order. Its length is the
+    /// economy bitmap's count.
+    pub economy: Vec<EconomyTarget>,
+    /// One per support draw `h` issued, in order. Its length is the
+    /// support bitmap's count.
+    pub support: Vec<SupportTarget>,
+}
+
+/// The draws of `h` under `seed`, derived exactly as [`verify_bundle`]
+/// derives them: step 6's selection over `D(epoch(h))` at the issued
+/// counts visible at `h`, and the support stream's seats and shards.
+///
+/// The producer of `h` calls this once `h` is on its chain, with the
+/// seed it drew. Nothing here judges a bundle: the window, the reveal and
+/// the commitment are the queue's admission, which runs [`verify_bundle`]
+/// on what the producer files.
+///
+/// A key that does not decode is the draw unanswered, as step 8 treats
+/// it: the producer cannot read under it, and the verifier would not open
+/// a record under it either.
+///
+/// # Errors
+///
+/// [`BundleRefused::Unanswered`] when the view has no count, no hash, no
+/// drawable epoch, no roster or no archive width for a stream that issued
+/// draws; [`BundleRefused::View`] for the view's own fault. Never
+/// [`BundleRefused::Invalid`]: there is no bundle to refuse.
+pub fn draw_targets<V: BundleView>(
+    view: &V,
+    h: BlockHeight,
+    seed: &[u8; 32],
+    rule_set: &RuleSet,
+) -> Result<DrawTargets, BundleRefused<V::Fault>> {
+    let Some(count) = view.draw_count(h)? else {
+        return Err(BundleRefused::Unanswered(BundleUnanswered::DrawCount {
+            height: h,
+        }));
+    };
+    let Some(issued) = view.support_count(h)? else {
+        return Err(BundleRefused::Unanswered(BundleUnanswered::DrawCount {
+            height: h,
+        }));
+    };
+    let Some(hash) = view.block_hash(h)? else {
+        return Err(BundleRefused::Unanswered(BundleUnanswered::BlockHash {
+            height: h,
+        }));
+    };
+    let economy = if count == 0 {
+        Vec::new()
+    } else {
+        let epoch = rule_set.settlement_schedule().epoch_at(h);
+        let Some(drawable) = drawable_for(view, epoch)? else {
+            return Err(BundleRefused::Unanswered(BundleUnanswered::DrawableEpoch {
+                epoch,
+            }));
+        };
+        let pairs = select_pairs(view, drawable, h, seed, hash.as_bytes(), count)?;
+        let mut targets = Vec::with_capacity(pairs.len());
+        for (draw, (index, pair)) in (0..count).zip(pairs) {
+            let Some(receipt_key) = drawable.receipt_key(index) else {
+                return Err(BundleRefused::Unanswered(BundleUnanswered::Draw { draw }));
+            };
+            targets.push(EconomyTarget {
+                draw,
+                index,
+                pair,
+                receipt_key: receipt_key.clone(),
+            });
+        }
+        targets
+    };
+    let mut support = Vec::new();
+    for seat in records::support_seats(view, h, seed, hash.as_bytes(), issued)? {
+        let Ok(receipt_key) = FnDsaHybridPublicKey::from_receipt_sign_pk(&seat.receipt_key) else {
+            return Err(BundleRefused::Unanswered(BundleUnanswered::Draw {
+                draw: seat.draw,
+            }));
+        };
+        support.push(SupportTarget {
+            draw: seat.draw,
+            persona: seat.persona,
+            shard: seat.shard,
+            receipt_key,
         });
     }
-    Ok(draws)
+    Ok(DrawTargets {
+        h,
+        hash,
+        economy,
+        support,
+    })
 }
 
 /// Why [`judge_bundles`] stopped. A section refusal is J29–J31; a bundle
@@ -903,3 +1065,7 @@ mod bundle_staging_tests;
 #[cfg(test)]
 #[path = "bundle_admission_tests.rs"]
 mod bundle_admission_tests;
+
+#[cfg(test)]
+#[path = "bundle_targets_tests.rs"]
+mod bundle_targets_tests;

@@ -164,20 +164,22 @@ pub mod relay_floor;
 pub use alt::{alt_against, anchor_band, AltChainView, AltValid, AnchorBand, Fork, InvertedFork};
 pub use anchors::{Anchor, ReleaseAnchors};
 pub use archival::{
-    admission_plan, closed_and_final, drawable_epoch_walked_back, shard_close, shard_close_height,
-    Accrual, AdmissionPlan, AdmissionPlanFault, ArchivalDelta, ClosedUniverse, DrawableDigestWrite,
-    DrawableMemo, EpochClose, EpochGather, EpochIssues, RecordWrite, RecordWriteKind,
-    ReleasePreImage, ServeCreditKey, Settlement, Slash, SupportSettlement, WALK_BACK_EPOCHS,
+    admission_plan, closed_and_final, drawable_epoch_walked_back, remember_window_epochs,
+    shard_close, shard_close_height, Accrual, AdmissionPlan, AdmissionPlanFault, ArchivalDelta,
+    ClosedUniverse, DrawableDigestWrite, DrawableMemo, EpochClose, EpochGather, EpochIssues,
+    RecordWrite, RecordWriteKind, ReleasePreImage, ServeCreditKey, Settlement, Slash,
+    SupportSettlement, WALK_BACK_EPOCHS,
 };
-// The serve-credit bundle rule (`archival/bundle.rs`): STAGED. The
-// verifier and its view trait are exported for the lanes that wire them
-// (`SO-D12`'s cutover, DRS-E5's queue); `form` and `validate` do not call
-// them.
+// The serve-credit bundle rule (`archival/bundle.rs`): STAGED on the
+// connect path. The verifier and its view trait are exported for the
+// lanes that wire them (`SO-D12`'s cutover); the bundle queue runs the
+// verifier against the tip, and a block's producer derives its draws with
+// the verifier's own selection. `form` and `validate` do not call them.
 pub use archival::{
-    check_section, check_section_until_switch, judge_bundles, open_body, open_reference,
-    verify_bundle, AdmissionFault, Admitted, BundleInvalid, BundleRefused, BundleUnanswered,
-    BundleView, DerivedDraw, SectionCharge, SectionCheckFailed, SectionRefused, SectionStanding,
-    SupportSeat,
+    check_section, check_section_until_switch, draw_targets, judge_bundles, open_body,
+    open_reference, verify_bundle, AdmissionFault, Admitted, BundleInvalid, BundleRefused,
+    BundleUnanswered, BundleView, DerivedDraw, DrawTargets, EconomyTarget, SectionCharge,
+    SectionCheckFailed, SectionRefused, SectionStanding, SupportSeat, SupportTarget,
 };
 pub use block::{
     Candidate, ProvenPow, ReferenceClaim, ReferenceClaims, StructurallyValid, TxIdentity,

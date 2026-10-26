@@ -35,14 +35,14 @@
 
 use crate::apply_policy::ArchivalFamily;
 use shekyl_chain_rules::{AnchorConflict, RuleSet};
-use shekyl_types::{BlockHash, PCanonicalId, TxHash};
+use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, TxHash};
 
 use crate::codec::{SchemaVersion, SettlementEpochBlocks};
 
 pub use super::invariant::{
-    AccrualFault, AdmissionWriteFault, CellFault, DigestFault, DrawRowFault, DrawableFault,
-    EdgeFault, FrozenFault, LeafCountFault, LeafDensity, SettlementFault, SlashFault,
-    StoreInvariant, UndoFault,
+    AccrualFault, AdmissionWriteFault, BodyHolderFault, CellFault, DigestFault, DrawRowFault,
+    DrawableFault, EdgeFault, FrozenFault, LeafCountFault, LeafDensity, SettlementFault,
+    SlashFault, StoreInvariant, UndoFault,
 };
 
 /// Why a store operation failed, by class.
@@ -458,6 +458,33 @@ pub enum StoreCannot {
     /// An alt-chain store refusal (DRS-E1 S-ALT, `DRS_E1_SALT.md` §3.2) —
     /// the store's decisions on `alt_blocks`, none of them a fault in it.
     Alt(AltCannot),
+    /// A bundle-queue refusal (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5) — the
+    /// queue's decisions about what it was asked to hold.
+    Queue(QueueCannot),
+}
+
+/// The bundle queue's typed refusals — decisions, not faults.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QueueCannot {
+    /// The queue already holds a bundle for `h`. One per `h`; the first
+    /// valid one wins (§7.5).
+    Held {
+        /// The block the offered bundle is for.
+        h: BlockHeight,
+    },
+    /// The body does not hash to the reference's prunable hash. A body is
+    /// held under the hash its reference names, and accepted on equality.
+    BodyNotReferenced {
+        /// The block the offered bundle is for.
+        h: BlockHeight,
+    },
+    /// The queue holds its bound of entries. The window keeps no more
+    /// heights than that open, so a full queue is a closed window the
+    /// caller did not remove first.
+    Full {
+        /// The bound, `W₂`.
+        capacity: u64,
+    },
 }
 
 /// The alt-chain store's typed refusals — decisions, not faults
@@ -641,6 +668,7 @@ impl core::fmt::Display for StoreCannot {
             },
             Self::Pool(cannot) => write!(f, "pool store: {cannot}"),
             Self::Alt(cannot) => write!(f, "alt-chain store: {cannot}"),
+            Self::Queue(cannot) => write!(f, "bundle queue: {cannot}"),
             Self::PoolFileForeign => f.write_str(
                 "pool file is not one this store wrote and not one it may recreate (no redb \
                  database, no pool header, or a header that does not decode): refused, not \
@@ -690,6 +718,27 @@ impl core::error::Error for AltCannot {}
 impl From<AltCannot> for StoreError {
     fn from(cannot: AltCannot) -> Self {
         Self::Cannot(StoreCannot::Alt(cannot))
+    }
+}
+
+impl core::fmt::Display for QueueCannot {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Held { h } => write!(f, "a bundle for height {h} is already queued"),
+            Self::BodyNotReferenced { h } => write!(
+                f,
+                "the body offered for height {h} is not the one its reference names"
+            ),
+            Self::Full { capacity } => write!(f, "the queue holds its bound of {capacity}"),
+        }
+    }
+}
+
+impl core::error::Error for QueueCannot {}
+
+impl From<QueueCannot> for StoreError {
+    fn from(cannot: QueueCannot) -> Self {
+        Self::Cannot(StoreCannot::Queue(cannot))
     }
 }
 

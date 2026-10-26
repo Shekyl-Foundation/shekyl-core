@@ -316,6 +316,47 @@ impl super::Transition {
     }
 }
 
+/// File into `memo` the drawable set of every epoch a bundle admitted at
+/// `h_incl` can name: the epochs of `[h_incl − W₂, h_incl)`, at most two.
+///
+/// The count fills the memo as it connects each block, so a warm memo
+/// already holds these, and a hit costs one header read. A cold one —
+/// the connector after a restart, before any block has connected — is
+/// filled the way the count fills it: rebuilt from the view, and kept
+/// only when it matches the digest the open recorded. The bundle queue
+/// calls this before it judges against the tip, because the store's
+/// bundle view does not rebuild a miss (SI-35).
+///
+/// A schedule with no response window has no epoch to file.
+///
+/// # Errors
+///
+/// [`ViewRead::View`] for the view's own fault; [`ViewRead::Corrupt`]
+/// when the set cannot be rebuilt or drifted from its digest, as the
+/// count raises it.
+pub fn remember_window_epochs<'id, V: ChainView<'id>>(
+    view: &V,
+    h_incl: BlockHeight,
+    rule_set: &crate::rule_set::RuleSet,
+    memo: &mut DrawableMemo,
+) -> Result<(), ViewRead<V::Fault>> {
+    let schedule = rule_set.settlement_schedule();
+    let Some(window) = schedule.challenge_response_blocks() else {
+        return Ok(());
+    };
+    let Some(last) = h_incl.checked_sub_count(BlockCount::ONE) else {
+        return Ok(());
+    };
+    let first = h_incl.saturating_sub_count(BlockCount::from_raw(window.get()));
+    let transition = super::Transition::new(h_incl, schedule, rule_set.reorg_cap());
+    let mut epochs = [schedule.epoch_at(first), schedule.epoch_at(last)].to_vec();
+    epochs.dedup();
+    for epoch in epochs {
+        transition.remember_epoch(view, epoch, memo)?;
+    }
+    Ok(())
+}
+
 fn require_row<'id, V: ChainView<'id>>(
     view: &V,
     height: BlockHeight,

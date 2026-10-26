@@ -119,6 +119,7 @@ async fn the_producer_prices_its_listing_at_the_built_coinbase_and_the_block_con
                 keys: &keys,
                 params: &params,
                 now,
+                witness: &shekyl_bundle_producer::WitnessRing::new(),
                 #[cfg(test)]
                 between_locks: None,
             };
@@ -241,6 +242,7 @@ async fn a_template_on_an_older_tip_than_the_pools_posts_and_evicts_nothing() {
             keys: &keys,
             params: &params,
             now,
+            witness: &shekyl_bundle_producer::WitnessRing::new(),
             #[cfg(test)]
             between_locks: None,
         };
@@ -327,6 +329,7 @@ async fn pop_blocks_refuses_genesis_and_returns_two_blocks_bodies_to_the_pool() 
                 policy: AdmissionPolicy::GENESIS,
                 wall: Arc::new(|| UnixSeconds::from_raw(1)),
             }),
+            ..Default::default()
         },
     );
     let rewinder = service.rewinder();
@@ -794,6 +797,7 @@ async fn a_body_flushed_between_the_producers_locks_posts_nothing() {
                 keys: &keys,
                 params: &params,
                 now,
+                witness: &shekyl_bundle_producer::WitnessRing::new(),
                 between_locks: Some(&flush_first),
             };
             produce(&snap, &producer, Some(&pool), |_| true).map(|produced| produced.job.height)

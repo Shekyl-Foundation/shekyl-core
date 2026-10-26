@@ -41,14 +41,12 @@ use core::convert::Infallible;
 use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_archival_retention::{
-    challenge_nonce, draw_commit, pass_countersignature_message, select_draw, BundleBody,
-    BundleKept, BundleRecord, BundleRef, DrawableEpoch, DrawablePair, PassBitmap,
-    BUNDLE_SIGNATURE_LEN, BUNDLE_WITNESS_KEY_LEN,
+    assemble_bundle, challenge_nonce, draw_commit, pass_countersignature_message, select_draw,
+    sign_bundle_commitment, BundleBody, BundleKept, BundleRecord, BundleRef, DrawableEpoch,
+    DrawablePair, PassBitmap, BUNDLE_SIGNATURE_LEN, BUNDLE_WITNESS_KEY_LEN,
 };
 use shekyl_crypto_pq::fn_dsa_hybrid::{FnDsaHybridSecretKey, HybridEd25519FnDsa};
-use shekyl_crypto_pq::signature::{
-    SignatureScheme as _, SCHEME_DOMAIN_RECEIPT, SCHEME_DOMAIN_WITNESS_BUNDLE,
-};
+use shekyl_crypto_pq::signature::{SignatureScheme as _, SCHEME_DOMAIN_RECEIPT};
 use shekyl_types::archival::ReceiptSignPk;
 use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 
@@ -553,7 +551,12 @@ impl BundleWorld {
     }
 
     /// [`Self::assemble`] with a support bitmap. Economy records come
-    /// first; support records follow, one per set support bit.
+    /// first; support records follow, one per set support bit. Assembled
+    /// by the production assembler, signed with the world's witness key.
+    ///
+    /// # Panics
+    ///
+    /// If signing fails.
     #[must_use]
     pub fn assemble_support(
         &self,
@@ -567,19 +570,9 @@ impl BundleWorld {
             passes,
             support,
         };
-        let records_bytes: Vec<u8> = records.iter().flat_map(BundleRecord::encode).collect();
-        let commitment = kept.commitment(&records_bytes);
-        let signature: [u8; BUNDLE_SIGNATURE_LEN] = HybridEd25519FnDsa
-            .sign(
-                &self.witness_secret_key,
-                SCHEME_DOMAIN_WITNESS_BUNDLE,
-                &commitment,
-            )
-            .expect("fixture witness signing")
-            .to_canonical_bytes()
-            .try_into()
-            .expect("the canonical signature length");
-        let body = BundleBody::new(&self.witness_public_key, &signature, records);
-        (BundleRef::of(&kept, &body), body)
+        assemble_bundle(&kept, records, &self.witness_public_key, |commitment| {
+            sign_bundle_commitment(&self.witness_secret_key, commitment)
+        })
+        .expect("fixture witness signing")
     }
 }

@@ -168,10 +168,10 @@ use shekyl_units::AtomicUnits;
 use crate::codec::{
     AltBlock, AltBodies, AttestationWitnessBytes, Blob, BlockBody, BlockDraws, BlockInfo,
     BondRecord, Coded, CompleteTreeSet, CurveTreeState, DrawableDigest, IssuedDigest, IssuedDraw,
-    LayerHash, LeafCount, OutKey, OutTx, Present, PropertyCellBytes, RMarket, RecordedPow,
-    RuleSetInForce, SettlementRow, SigmaWorkMilli, SlashLogEntry, SupportCount, SupportIssued,
-    TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment, UndoLog,
-    Unshaped,
+    LayerHash, LeafCount, OutKey, OutTx, Present, PropertyCellBytes, QueuedBody, QueuedBundle,
+    RMarket, RecordedPow, RuleSetInForce, SettlementRow, SigmaWorkMilli, SlashLogEntry,
+    SupportCount, SupportIssued, TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment,
+    TxPrunedSegment, UndoLog, Unshaped,
 };
 use crate::ids::{IssuedDrawTuple, ReleaseJournalTuple, SupportIssuedTuple};
 use crate::lmdb_order::LmdbHashKey;
@@ -510,6 +510,22 @@ pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[
         "what one complete tree settled for one epoch (ARCHIVAL_SUPPORT_DRAW.md §3): the same \
          three-byte settlement row the economy writes per pair. Keyed by the tree and the \
          epoch, not by a shard. The C++ draws no support stream, so LMDB never holds it",
+    ),
+    (
+        "archival_bundle_queue",
+        "the pool's own structure for serve-credit bundles (ARCHIVAL_SERVE_CREDIT_SPEC.md §7.5, \
+         SO-D12 increment 4c): one admitted bundle reference per block height inside the \
+         response window, with the tip it was judged against. The C++ has no bundle and no \
+         queue: its challenge path is the public urn deleted with its consensus role \
+         (DEL-008), so LMDB never holds it. Not chain state: Excluded from every digest, as \
+         alt_blocks is",
+    ),
+    (
+        "archival_bundle_body",
+        "a bundle's prunable bytes keyed by the hash its reference names (§7.5): a block will \
+         carry references, never bodies, and pull a body from here by that hash. Every body \
+         has a holder (SI-41). Absent from LMDB for the reason archival_bundle_queue is. Not \
+         chain state: Excluded from every digest",
     ),
 ];
 
@@ -923,9 +939,29 @@ tables! {
     /// `archival_support_settlement` — **Rust-only** ([`RUST_ONLY_TABLES`]);
     /// `(persona, epoch)` → the [`SettlementRow`] of that tree in that
     /// epoch. One row per tree, not per shard. Written by the slash pass
-    /// (`ARCHIVAL_SUPPORT_DRAW.md` §3). Appended last (ordinal 49).
+    /// (`ARCHIVAL_SUPPORT_DRAW.md` §3). Ordinal 49.
     pub const ARCHIVAL_SUPPORT_SETTLEMENT: TableDefinition<([u8; 32], u64), Coded<SettlementRow>> =
         TableDefinition::new("archival_support_settlement");
+
+    /// `archival_bundle_queue` — **Rust-only** ([`RUST_ONLY_TABLES`]);
+    /// height `h` → the [`QueuedBundle`]: the reference of the one bundle
+    /// for `h` the queue admitted, and the tip it judged it against
+    /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5, `SO-D12` increment 4c). One
+    /// entry per `h`, the first valid one; at most `W₂` entries, since an
+    /// entry leaves when its window closes. Not chain state: written
+    /// outside any pop recording, as `alt_blocks` is. Its body is in
+    /// [`ARCHIVAL_BUNDLE_BODY`] (SI-41). Appended last but one (ordinal 50).
+    pub const ARCHIVAL_BUNDLE_QUEUE: TableDefinition<u64, Coded<QueuedBundle>> =
+        TableDefinition::new("archival_bundle_queue");
+
+    /// `archival_bundle_body` — **Rust-only** ([`RUST_ONLY_TABLES`]);
+    /// prunable hash → the [`QueuedBody`]: a bundle's prunable bytes, keyed
+    /// by the hash its reference names (§7.5). Every body has a holder
+    /// (SI-41): in 4c the queue; an alternative block and a main-chain
+    /// block not past `D_max` are 4b's holders. Not chain state, as the
+    /// queue is not. Appended last (ordinal 51).
+    pub const ARCHIVAL_BUNDLE_BODY: TableDefinition<[u8; 32], Coded<QueuedBody>> =
+        TableDefinition::new("archival_bundle_body");
 }
 
 #[cfg(test)]
@@ -1015,6 +1051,10 @@ mod tests {
             ("archival_support_block", 47),
             ("archival_support_issued", 48),
             ("archival_support_settlement", 49),
+            // Layout 33 (`SO-D12` increment 4c): the bundle queue and the
+            // body store.
+            ("archival_bundle_queue", 50),
+            ("archival_bundle_body", 51),
         ];
         for &(name, index) in pinned {
             assert_eq!(

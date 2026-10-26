@@ -9,8 +9,10 @@
 #
 # The tip follower builds the node's one block template
 # (rust/shekyl-chain-ingest/src/template.rs). Its coinbase transaction
-# secret is OS-random per template and its draw commitment is
-# `commit_and_discard`'s. The scenario driver, a test instrument, builds
+# secret is OS-random per template and its draw commitment is the witness
+# ring's (`WitnessRing::draw`: a witness key and seed from the OS, kept
+# for the bundle producer, SO-D12 increment 4c). The scenario driver, a
+# test instrument, builds
 # with a counter-derived secret and a commitment stamped over
 # CONFORMING_DRAW_COMMITMENT, so its blocks are reproducible. Either value
 # in a production block is a key anyone can guess.
@@ -19,8 +21,8 @@
 #   1. the production code of the crates that build, carry and serve the
 #      template names neither CONFORMING_DRAW_COMMITMENT nor the scenario's
 #      builder;
-#   2. the producer draws from the OS and commits through
-#      commit_and_discard;
+#   2. the producer draws from the OS and commits through the witness
+#      ring;
 #   3. the scenario's builder still uses both test values where this gate
 #      expects them (rule 47: a moved subject fails loudly, never passes
 #      on zero hits);
@@ -107,12 +109,12 @@ if [[ -n "$hits" ]]; then
   echo "FAIL: a test-only template value is named in production code:" >&2
   echo "$hits" >&2
   echo "  The node's template draws its coinbase secret from the OS and its" >&2
-  echo "  draw commitment from commit_and_discard (template.rs)." >&2
+  echo "  draw commitment from the witness ring (template.rs)." >&2
   FAIL=1
 fi
 
 # -- 2. The producer draws from the OS --------------------------------------
-for needle in 'OsRng' 'commit_and_discard\(\)'; do
+for needle in 'OsRng' 'WitnessRing' '\.draw\(connecting\)'; do
   found="$(scan -c "$needle" "$PRODUCER")"
   if [[ -z "$found" ]]; then
     echo "FAIL: ${PRODUCER} no longer names ${needle} — the template's secrets must be the OS's" >&2

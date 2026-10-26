@@ -97,6 +97,7 @@ mod alt_view;
 mod archival_reads;
 mod archival_write;
 mod at_index;
+mod bundle_queue;
 mod bundle_view;
 mod chain_reads;
 mod connect;
@@ -126,12 +127,13 @@ pub use alt_reads::AltEntry;
 pub use alt_view::{AltChain, AltView};
 pub use archival_reads::{PassCount, ServedShard};
 pub use at_index::AtIndex;
+pub use bundle_queue::{QueueEntry, QueueReconciled};
 pub use bundle_view::StoreBundleView;
 pub use connect::Connected;
 pub use error::{
-    AccrualFault, AltCannot, CellFault, DigestFault, DrawRowFault, DrawableFault, EdgeFault,
-    EngineError, ErrorClass, FrozenFault, LeafCountFault, LeafDensity, PoolCannot, SettlementFault,
-    SlashFault, StoreCannot, StoreError, StoreInvariant, UndoFault,
+    AccrualFault, AltCannot, BodyHolderFault, CellFault, DigestFault, DrawRowFault, DrawableFault,
+    EdgeFault, EngineError, ErrorClass, FrozenFault, LeafCountFault, LeafDensity, PoolCannot,
+    QueueCannot, SettlementFault, SlashFault, StoreCannot, StoreError, StoreInvariant, UndoFault,
 };
 pub use halt::ConnectState;
 pub use keyed::{
@@ -810,6 +812,11 @@ mod slash_scan_bench_tests;
 #[cfg(test)]
 #[path = "alt_tests.rs"]
 mod alt_tests;
+
+/// `SO-D12` increment 4c: the bundle queue and the body store (SI-41).
+#[cfg(test)]
+#[path = "bundle_queue_tests.rs"]
+mod bundle_queue_tests;
 
 /// DRS-E5 slice 9 a3: `AltChain::build` (CEN-K2), the stitched `AltView`
 /// against `BatchView`'s reads below the fork, K1a by construction.

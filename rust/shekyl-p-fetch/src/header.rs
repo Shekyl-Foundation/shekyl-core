@@ -81,8 +81,31 @@ impl RequestHeader {
         anchor_height: BlockHeight,
         anchor_hash: [u8; PASS_ANCHOR_HASH_LEN],
     ) -> Self {
-        Self(PassRequestHeader::from_parts(
+        Self::on_stream(
             shekyl_archival_retention::PassStream::Economy,
+            nonce,
+            anchor_height,
+            anchor_hash,
+        )
+    }
+
+    /// A header over a caller-chosen nonce on `stream`.
+    ///
+    /// Every read but one is an economy read. The support stream's
+    /// challenge (`ARCHIVAL_SUPPORT_DRAW.md` §5) names its stream in the
+    /// header, because `P` signs the bytes it sees and a support receipt
+    /// verifies under the support stream only. The byte is data on the
+    /// header, as the nonce is: the request builder and every move after
+    /// it are the same for either stream.
+    #[must_use]
+    pub const fn on_stream(
+        stream: shekyl_archival_retention::PassStream,
+        nonce: [u8; PASS_NONCE_LEN],
+        anchor_height: BlockHeight,
+        anchor_hash: [u8; PASS_ANCHOR_HASH_LEN],
+    ) -> Self {
+        Self(PassRequestHeader::from_parts(
+            stream,
             nonce,
             anchor_height,
             anchor_hash,
