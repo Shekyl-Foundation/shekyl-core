@@ -98,6 +98,9 @@ struct HeldDial {
     sockets: Sockets,
     answers: Mutex<VecDeque<Vec<u8>>>,
     held: Mutex<HashMap<SocketId, Held>>,
+    /// Causes the next connects fail with, in order, before any answer: the
+    /// connector refusing the dial.
+    refusals: Mutex<VecDeque<CloseCause>>,
 }
 
 impl HeldDial {
@@ -106,6 +109,7 @@ impl HeldDial {
             sockets,
             answers: Mutex::new(answers.into()),
             held: Mutex::new(HashMap::new()),
+            refusals: Mutex::new(VecDeque::new()),
         }
     }
 
@@ -147,6 +151,9 @@ impl Dial for HeldDial {
         ceiling: InboundCeiling,
         now: Tick,
     ) -> Result<Channel, CloseCause> {
+        if let Some(cause) = self.refusals.lock().expect("refusals").pop_front() {
+            return Err(cause);
+        }
         let open = admit(&self.sockets, endpoint, now, ceiling)?;
         let ends = StreamEnds::open(SEND_CAP);
         if let Some(answer) = self.answers.lock().expect("answers").pop_front() {
@@ -614,4 +621,62 @@ fn stalled_dials_hold_the_bound_in_flight_and_the_wake_rate_is_unchanged() {
     let steps = usize::try_from(STEPS).expect("small");
     assert_eq!(wakes_one, steps, "one wake per interval at bound one");
     assert_eq!(wakes_four, steps, "one wake per interval at bound four");
+}
+
+/// **A due `Keep` retry does not take the connector past its target**
+/// (#1190's item 4 under the gray lifecycle's retries). Tor, target two,
+/// bound two, gray at the floor so the planner keeps. The first `Keep` is
+/// refused with `0xF0`, which is worth a retry: its test waits. Two more
+/// wakes fill the target. When the wait ends, the retry must not keep a
+/// third session: a `Keep` test holds its target slot from its draw to its
+/// outcome, waits included, as a pending `Keep` does.
+#[test]
+fn a_due_keep_retry_does_not_take_the_connector_past_its_target() {
+    const TARGET: usize = 2;
+    let clock = ManualClock::new(Tick::new(1));
+    let sockets = Sockets::new();
+    let gray = onions(shekyl_peerlist::white_diversity_floor() + 4);
+    let dial = Arc::new(HeldDial::answering(
+        sockets.clone(),
+        std::iter::repeat_n(reply(NETWORK), gray.len()).collect(),
+    ));
+    dial.refusals
+        .lock()
+        .expect("refusals")
+        .push_back(shekyl_tor::refused(0xF0));
+    let (_hub, dialer) = dialer_on(&clock, &sockets, Arc::clone(&dial) as Arc<dyn Dial>);
+    let mut rng = SplitMix64::new(31);
+    dialer.set_in_flight_bound(TOR, 2);
+    dialer.set_target(TOR, TARGET, &mut rng);
+    for onion in &gray {
+        dialer
+            .admit_operator(onion, Tick::new(1), &mut rng)
+            .expect("admitted");
+    }
+
+    // The first keep is refused, worth a retry: its test waits.
+    assert!(dialer.wake(TOR, &mut rng), "the first draw");
+    assert_eq!(dialer.in_flight(TOR), 0, "the wait holds no in-flight slot");
+    // The planner fills the target around the waiting test.
+    for _ in 0..4 {
+        dialer.wake(TOR, &mut rng);
+    }
+    assert!(dialer.kept_sessions(TOR) <= TARGET);
+
+    // The retry's wait ends; every wake after it stays within the target.
+    clock.set(Tick::new(clock.now().get() + 60 * 1_000_000_000));
+    for _ in 0..4 {
+        dialer.wake(TOR, &mut rng);
+    }
+    let kept_sessions = dialer
+        .hub()
+        .board()
+        .rows()
+        .iter()
+        .filter(|row| matches!(row.endpoint(), Endpoint::Tor { .. }))
+        .count();
+    assert!(
+        kept_sessions <= TARGET,
+        "kept {kept_sessions} Tor sessions against a target of {TARGET}"
+    );
 }

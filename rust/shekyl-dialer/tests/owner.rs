@@ -1082,7 +1082,12 @@ fn a_tor_address_failing_twice_with_a_missing_descriptor_then_succeeding_ends_wh
     clock.set(Tick::new(clock.now().get() + 10 * 1_000_000_000 + 1));
     assert!(dialer.wake(ConnectorId::Tor, &mut rng), "attempt 2 dialed");
     assert_eq!(dialer.shared().lists.failed_tests(&onion), 0);
-    assert_eq!(dialer.kept_sessions(ConnectorId::Tor), 0);
+    assert!(hub.board().rows().is_empty(), "nothing is kept yet");
+    assert_eq!(
+        dialer.kept_sessions(ConnectorId::Tor),
+        1,
+        "the waiting keep test holds its target place"
+    );
 
     // Attempt 3, past the second wait (20 s + up to 10 s): kept.
     clock.set(Tick::new(clock.now().get() + 30 * 1_000_000_000 + 1));
