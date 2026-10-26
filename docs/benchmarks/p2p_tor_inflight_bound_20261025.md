@@ -121,6 +121,35 @@ Either way the bound does not make the node easier to stall: at bound one a
 single dead draw stalled the whole connector for 120 s; at five it holds a
 fifth of it.
 
+## Floor run 1, 2026-10-25/26 (`a3b5ff4ad`, before the gray lifecycle merged)
+
+A check of the async attempt mechanics and of this model, **not of the final
+head**: the binaries predate #1189's merge into #1190, so a failed draw
+leaves gray and Tor makes one attempt per test. Client: the floor device
+(Pi 4), a native build, the pinned bundle (tor 0.4.9.14), stagenet, Tor
+only, cold per sample. Responders: the measurement host, one light Levin
+responder behind 64 onion services and 64 onion services whose target
+blackholes (Tor answers 0x06 at its timeout). A probe before the series:
+live onions 55 of 64 reachable, dead onions 55 of 64 answering 0x06; the
+rest had not published. Rig, scripts and logs are in shekyl-dev's data
+(`inflight-bound/2026-10-25-floor`).
+
+Seconds from the Tor link becoming usable to the 12th kept Tor session:
+
+| Case | Bound 1 median (samples) | Bound 5 median (samples) |
+| --- | --- | --- |
+| cold, no dead (gray 64) | 190 (5) | 258 (5) |
+| cold, half dead (gray 128) | 1396 (5) | 731 (5) |
+| refill after a Tor respawn | 679 (3) | 141 (3) |
+
+At half dead the model gave 1643 s and 522 s. With 64 onions in gray, bound
+5 spent most launches on `Confirm` dials (one sample: 15 keeps, 45
+confirms): each slot's draw leaves gray, gray falls under the diversity
+floor within a few draws, and the fill rule confirms instead of keeping.
+That is the fill rule, out of scope, and it is why bound 5 is not faster
+with no dead draws here. With 128 in gray the fill stayed mostly keeps and
+bound 5 halved the median.
+
 ## To be measured (floor device, claimed in the usage ledger first)
 
 - Time to fill the Tor target from empty at bound 1 and at bound 5: on a cold
