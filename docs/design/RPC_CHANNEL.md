@@ -1512,7 +1512,12 @@ asked for, and nothing computed from the still-unauthenticated request
 leaves the daemon. A call
 outside the grant is refused with its own error, the grant class of the
 wire's code registry ([`RPC_WIRE.md`](RPC_WIRE.md) RW-Q3), never "method not
-found". The default
+found". That is a call of a method the table lists. A path or a name that
+is not a method is not found (REST 404, JSON-RPC method-not-found) and is
+not a grant refusal. The clamp is the grants both sides hold, and a grant
+is stored only when one side names it: `status` holds `health`, so a
+`health` request under a `status` ceiling stays `health`, and clamping
+`status` to itself stays `status` (`GrantSet::intersection`). The default
 request is the `view` preset (§6.1). Nothing is served until the client's first
 transport record decrypts (§4.1).
 
@@ -1816,12 +1821,17 @@ the Python framework (`daemon.py:217-221`) and the CT-2 fixture generator
 ([`gen_ct2_fixture.py:159`](../../rust/shekyl-curve-tree/tests/fixtures/gen_ct2_fixture.py)).
 *Reason:* rewinding a node's chain is no capability for an enrolled remote
 key; paired with an eclipse, it lets someone rewind a node and then feed
-it a chain. RT-W10 step 1 built it: the row's policy is `Armed`
-(`shekyl-rpc-types` `methods.rs`), and the request's authority admits it
-only through `admit_armed`, on the admin listener with the start switch
-set
+it a chain. RT-W10 step 1 built it: the row's policy is `Armed`, and
+`admit_armed` lives beside that policy (`shekyl-rpc-types` `methods.rs`).
+The HTTP request's authority admits it there, on the admin listener with
+the start switch set
 ([`authority.rs`](../../rust/shekyl-daemon-rpc/src/authority.rs)); the
-router test `pop_blocks_needs_the_armed_switch` holds it. The
+router test `pop_blocks_needs_the_armed_switch` holds that gate. The
+in-process `pop_blocks` console command admits through the same function
+before the C++ handler runs
+([`console/pop_blocks.rs`](../../rust/shekyl-daemon-rpc/src/console/pop_blocks.rs)):
+the live arm reads the switch `configure` stored, and the remote arm posts
+`/pop_blocks` so that daemon's stamp admits it. The
 daemon-configuration cutover recorded the gap as DC-F14 (PR #1066). **Reopen (rule 21):**
 a demonstrated operator recovery need returns it as a ruled capability.
 
