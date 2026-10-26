@@ -19,7 +19,6 @@ use std::collections::BTreeSet;
 use shekyl_peerlist::{BanQuery, Host, NetworkAddress, Tick};
 
 use crate::attempts::Attempts;
-use crate::memory::FailedAddresses;
 
 /// Why an address is not a dial candidate at this wake.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,9 +35,6 @@ pub enum Skip {
     Pending,
     /// The host is under an active ban.
     Banned,
-    /// A recent dial failure suppresses it. On clearnet nothing writes
-    /// that memory (R2), so this never skips a clearnet address.
-    RecentlyFailed,
 }
 
 /// What the filter reads, for one connector at one wake.
@@ -52,8 +48,6 @@ pub struct CandidateFilter<'a> {
     pub outbound_hosts: &'a BTreeSet<Host>,
     /// The dialer's pending attempts and kept sessions.
     pub attempts: &'a Attempts,
-    /// The failed-address memory.
-    pub failed: &'a FailedAddresses,
     /// The transport layer's bans.
     pub bans: &'a mut dyn BanQuery,
     /// The wake's time.
@@ -81,9 +75,6 @@ impl CandidateFilter<'_> {
             .is_some_and(|ip| self.bans.is_banned(ip, self.now))
         {
             return Err(Skip::Banned);
-        }
-        if self.failed.is_recently_failed(address, self.now) {
-            return Err(Skip::RecentlyFailed);
         }
         Ok(())
     }

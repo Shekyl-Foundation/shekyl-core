@@ -26,8 +26,7 @@ use shekyl_peer_policy::InboundCeiling;
 use shekyl_socks::{connect as socks_connect, Destination, Proxy, ProxyWarn, SocksError};
 use shekyl_timing_engine::{Clock, Handle, OwnerClass, Tick};
 use shekyl_transport_layer::{
-    check_dial, socks_reply_is_our_request, CloseCause, CloseKind, CloseResult, ConnectorId,
-    OpenError, OpenSocket, Sockets,
+    check_dial, CloseCause, CloseKind, CloseResult, ConnectorId, OpenError, OpenSocket, Sockets,
 };
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
@@ -270,13 +269,13 @@ where
             Ok(()) => Ok((stream, proxy_connect_ns, span_ns(dialed.elapsed()))),
             Err(SocksError::Refused { reply }) => {
                 drop(stream.shutdown().await);
-                if socks_reply_is_our_request(u16::from(reply)) {
+                if crate::replies::socks_reply_is_our_request(u16::from(reply)) {
                     tracing::error!(
                         reply,
                         "tor socks reply is this node's request, not the onion"
                     );
                 }
-                Err(CloseCause::proxy_refused(u16::from(reply)))
+                Err(crate::replies::refused(u16::from(reply)))
             }
             Err(SocksError::Io(_)) => {
                 drop(stream.shutdown().await);

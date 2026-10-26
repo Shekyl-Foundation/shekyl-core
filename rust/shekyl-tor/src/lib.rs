@@ -35,8 +35,10 @@ use tokio::sync::{mpsc, oneshot};
 
 mod drive;
 mod publish;
+mod replies;
 
 pub use publish::{publish_forward, publish_with_control, InboundPosture, PublishFault};
+pub use replies::{proxy_reply_marks, refused, socks_reply_is_our_request};
 
 pub use drive::{accept_inbound, accept_one, dial_one, Accept, Admitted, Dial, Inbound};
 
