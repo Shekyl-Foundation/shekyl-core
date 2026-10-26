@@ -8,7 +8,7 @@
 //! estimated"). Ignored lane: run with `--release -- --ignored
 //! --nocapture`; each run prints one line per phase with its basis. Each
 //! run also holds the switched store to the store that connected the
-//! winning branch directly, every table but the alt table.
+//! winning branch directly, every table, the alt table included.
 
 #![cfg(test)]
 
@@ -99,13 +99,20 @@ where
         x.table_rows().await.expect("rows"),
         y.table_rows().await.expect("rows"),
     );
+    // Every table, the alt table included. The switch demotes A into the
+    // alt table, and connecting B's last block retires A there whole: A's
+    // lowest block sits at B's tip − cap, below any switch's reach (the death
+    // rule, `shekyl-chain-store` `store/alt.rs`). So x ends holding exactly
+    // what y holds, and neither holds an alternative block. A table one
+    // store never created and the other emptied hold the same rows.
+    let none = Vec::new();
     let differ: Vec<&str> = rows_x
         .keys()
-        .filter(|t| **t != "alt_blocks" && rows_x.get(*t) != rows_y.get(*t))
+        .chain(rows_y.keys())
+        .filter(|t| rows_x.get(*t).unwrap_or(&none) != rows_y.get(*t).unwrap_or(&none))
         .copied()
         .collect();
     assert!(differ.is_empty(), "A → B differs from B in {differ:?}");
-    // The alt table, exactly: x kept every block it demoted, y holds none.
     let alt =
         |rows: &std::collections::BTreeMap<&'static str, shekyl_chain_store::store::RawRows>| {
             use shekyl_chain_store::codec::{AltBlock, Canonical};
@@ -117,7 +124,8 @@ where
                 })
                 .unwrap_or_default()
         };
-    assert_eq!(alt(&rows_x), a.iter().map(|m| m.hash).collect());
+    assert_eq!(a.len(), plan.demoted.len(), "the switch demoted A");
+    assert!(alt(&rows_x).is_empty(), "A is retired whole at B's tip");
     assert!(alt(&rows_y).is_empty());
 
     let basis = format!(
@@ -153,13 +161,13 @@ where
 }
 
 #[tokio::test]
-#[ignore = "measurement: the switch at the genesis cap; run --release -- --ignored --nocapture"]
+#[ignore = "measurement: the switch at the genesis cap; run by nightly.yml's chain-ingest-ignored job"]
 async fn production_cap_switch_timing_free_hash_coinbase_only() {
     timed("free-coinbase", || FreeHash, false).await;
 }
 
 #[tokio::test]
-#[ignore = "measurement: the switch at the genesis cap; run --release -- --ignored --nocapture"]
+#[ignore = "measurement: the switch at the genesis cap; run by nightly.yml's chain-ingest-ignored job"]
 async fn production_cap_switch_timing_free_hash_with_spends() {
     // Since the switch forms through the recorded PoW it makes no RandomX
     // call, so this run measures the switch the floor device runs, without
@@ -168,13 +176,13 @@ async fn production_cap_switch_timing_free_hash_with_spends() {
 }
 
 #[tokio::test]
-#[ignore = "measurement: the switch at the genesis cap; run --release -- --ignored --nocapture"]
+#[ignore = "measurement: the switch at the genesis cap; run by nightly.yml's chain-ingest-ignored job"]
 async fn production_cap_switch_timing_randomx_coinbase_only() {
     timed("randomx-coinbase", randomx, false).await;
 }
 
 #[tokio::test]
-#[ignore = "measurement: the switch at the genesis cap; run --release -- --ignored --nocapture"]
+#[ignore = "measurement: the switch at the genesis cap; run by nightly.yml's chain-ingest-ignored job"]
 async fn production_cap_switch_timing_randomx_with_spends() {
     timed("randomx-spends", randomx, true).await;
 }
