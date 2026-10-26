@@ -56,10 +56,11 @@ fn census(attempts: &Attempts, white: usize, gray: usize) -> Census {
     }
 }
 
-/// The bounds as derived (2026-10-25, restated 2026-10-26): Tor five, the
-/// bound every modelled lifecycle selects with half the draws dead; clearnet
-/// stays at one, so its behaviour is unchanged (the brief's test 5). Never
-/// more than the connector's target.
+/// The bounds as derived (2026-10-25; on the full-window-final lifecycle,
+/// Rick 2026-10-26): Tor five, the smallest bound that fills the Tor
+/// target within one stem epoch with half the draws dead; clearnet stays at
+/// one, so its behaviour is unchanged (the brief's test 5). Never more than
+/// the connector's target.
 #[test]
 fn the_bounds_are_tor_five_and_clearnet_one_and_never_past_the_target() {
     assert_eq!(in_flight_bound(ConnectorId::Clearnet), 1);

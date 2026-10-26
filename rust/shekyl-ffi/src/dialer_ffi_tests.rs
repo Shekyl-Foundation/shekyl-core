@@ -127,16 +127,15 @@ fn a_push_before_the_dialer_exists_is_refused_not_held() {
     );
 }
 
-/// The built dialer reads the window the managed Tor is launched with: a
-/// Tor attempt that fails at or after it is final within its test.
+/// A dialer is built with no Tor window: until a managed Tor's route is
+/// published, no Tor's `SocksTimeout` is known, and every Tor timeout
+/// keeps its retries.
 #[test]
-fn the_dialer_reads_the_managed_tors_window() {
+fn a_built_dialer_reads_no_tor_window() {
     let _bind = seam_bind_lock().lock();
     unbind();
     bind();
-    let window = dialer().expect("bound").tor_window();
-    assert_eq!(window, crate::tor_link::TOR_SOCKS_TIMEOUT.window());
-    assert!(window.is_some(), "the daemon sets a window");
+    assert_eq!(dialer().expect("bound").tor_window(), None);
     unbind();
 }
 

@@ -294,8 +294,10 @@ impl Dialer {
     /// times out at or after it, measured from the attempt's own start, is
     /// final within its test: the address cools (Rick, 2026-10-26). A
     /// timeout inside the window keeps its retries. `None`, the default,
-    /// leaves every timeout worth its retries: no Tor of ours has a window
-    /// to read.
+    /// leaves every timeout worth its retries: an operator's Tor sets its
+    /// own `SocksTimeout`, which this node does not know, and with no Tor
+    /// there is nothing to read. Set where the managed Tor's route is
+    /// published.
     pub fn set_tor_window(&self, window: Option<std::time::Duration>) {
         let nanos = window.map(|window| u64::try_from(window.as_nanos()).unwrap_or(u64::MAX));
         self.shared().tor_window = nanos;

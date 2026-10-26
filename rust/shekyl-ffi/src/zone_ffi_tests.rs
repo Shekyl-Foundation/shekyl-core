@@ -199,6 +199,62 @@ fn a_second_start_of_a_connectors_loop_starts_nothing() {
     }
 }
 
+/// The Tor window follows the route (revision 4 of the in-flight bound,
+/// Rick 2026-10-26; the Tor lane's review). The managed Tor's route gives
+/// the dialer the window that Tor was launched with; an operator's Tor
+/// sets its own `SocksTimeout`, so its route leaves the dialer none.
+#[test]
+fn the_tor_window_is_the_managed_tors_and_an_operators_tor_has_none() {
+    let _bind = crate::seam_ffi::seam_bind_lock().lock();
+    let mut executor = 0u8;
+    let ceiling = ShekylInboundCeiling {
+        kind: SHEKYL_INBOUND_CEILING_UNLIMITED,
+        ceiling: 0,
+        soft_limit: 0,
+        held: 0,
+    };
+    let bound = unsafe {
+        shekyl_seam_bind(
+            std::ptr::addr_of_mut!(executor).cast::<c_void>(),
+            Some(discard),
+        )
+    };
+    assert_eq!(bound, 0);
+    assert_eq!(unsafe { shekyl_seam_set_ceiling(&raw const ceiling) }, 0);
+    let network_id = [9u8; 16];
+    let _host = ensure(network_id).expect("zone host");
+    let dialer = crate::dialer_ffi::dialer().expect("the bound dialer");
+    assert_eq!(dialer.tor_window(), None, "no route yet");
+
+    let managed = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9150);
+    assert!(publish_managed_socks(managed).is_some());
+    assert_eq!(
+        dialer.tor_window(),
+        crate::tor_link::TOR_SOCKS_TIMEOUT.window(),
+        "the managed Tor's window"
+    );
+    assert_eq!(dialer.tor_window(), Some(Duration::from_secs(105)));
+
+    dial_through_tor(
+        shekyl_socks::Proxy::unauthenticated(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            9050,
+        )),
+        network_id,
+    )
+    .expect("the operator's proxy");
+    assert_eq!(
+        dialer.tor_window(),
+        None,
+        "an operator's Tor has no known window"
+    );
+
+    shutdown();
+    unsafe {
+        shekyl_seam_bind(std::ptr::null_mut(), None);
+    }
+}
+
 /// A Tor-only start admits the compiled onion seeds and not the clearnet
 /// ones. Admission used to run only inside the clearnet branch, so a node
 /// with clearnet off never received the onion list.

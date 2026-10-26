@@ -27,14 +27,12 @@ use shekyl_peerlist::ConnectorId;
 ///
 /// - **Tor: 5. Derived** (`DAEMON_RELAY_PRIVACY.md` §97, "In-flight dial
 ///   bound"; `docs/benchmarks/p2p_tor_inflight_bound_20261025.md`), with
-///   half the draws dead and run to the 120 s dial deadline. If a
-///   full-window timeout is final within a test (pending a ruling), five is
-///   the smallest bound whose median fill of the 12-session target is
-///   within one stem epoch (523 s; four, 597 s). With every full-window
-///   failure retried twice, as the dialer does today, no bound meets that
-///   and five reaches the plateau (1,602 s; six and up, about 1,585 s): a
-///   dead test holds its target place across its attempts. To be measured
-///   on the floor device.
+///   half the draws dead, on the lifecycle the dialer runs: a Tor attempt
+///   that fails at or after the managed Tor's `SocksTimeout` is final
+///   within its test (Rick, 2026-10-26). Five is the smallest bound whose
+///   median fill of the 12-session target is within one stem epoch
+///   (523 s; four, 597 s); past six the fill stops improving, since a dead
+///   pending `Keep` holds its target place for its window.
 /// - **Clearnet: 1.** A clearnet dial ends within 1.4 s, so one at a time
 ///   costs a wake or two; the interim (2026-10-08) stands.
 #[must_use]

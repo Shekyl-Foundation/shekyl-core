@@ -80,7 +80,6 @@ pub(crate) fn ensure_dialer(hub: &Hub) -> Arc<Dialer> {
         Arc::new(|| *TIP.lock().expect("tip")),
     ));
     dialer.report_tor_link(crate::tor_link::sink());
-    dialer.set_tor_window(crate::tor_link::TOR_SOCKS_TIMEOUT.window());
     *slot = Some(Arc::clone(&dialer));
     dialer
 }

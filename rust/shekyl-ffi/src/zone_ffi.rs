@@ -714,8 +714,13 @@ pub fn dial_through_tor(socks: Proxy, network_id: [u8; 16]) -> Result<(), ZoneSt
 }
 
 /// Record the Tor proxy and its pair, and publish its address as the Tor
-/// link's route ([`publish_tor_route`]).
+/// link's route ([`publish_tor_route`]). An operator's Tor sets its own
+/// `SocksTimeout`, which this node does not know, so the dialer reads no
+/// window: every Tor timeout keeps its retries.
 fn install_tor_proxy(host: &Host, socks: Proxy) {
+    if let Some(dialer) = crate::dialer_ffi::dialer() {
+        dialer.set_tor_window(None);
+    }
     let (at, authenticates) = (socks.at(), socks.authenticates());
     *host.tor_proxy.lock().expect("tor proxy") = Some(socks);
     publish_tor_route(host, at, authenticates);
@@ -808,8 +813,18 @@ pub fn start_managed_tor(network_id: [u8; 16]) -> Result<SocketAddr, ZoneStart> 
 pub fn publish_managed_running(
     route: &shekyl_tor_control_client::supervisor::ManagedRunning,
 ) -> Option<u64> {
+    publish_managed_socks(route.socks())
+}
+
+/// Publish the managed Tor's SOCKS address as the Tor link's route, and
+/// give the dialer that Tor's window ([`crate::tor_link::TOR_SOCKS_TIMEOUT`],
+/// the value it was launched with). Only the managed Tor has a window this
+/// node knows; an operator's Tor sets its own (`install_tor_proxy`).
+pub(crate) fn publish_managed_socks(socks: SocketAddr) -> Option<u64> {
     let host = HOST.lock().expect("zone host").clone()?;
-    let socks = route.socks();
+    if let Some(dialer) = crate::dialer_ffi::dialer() {
+        dialer.set_tor_window(crate::tor_link::TOR_SOCKS_TIMEOUT.window());
+    }
     *host.tor_proxy.lock().expect("tor proxy") = Some(Proxy::unauthenticated(socks));
     let published =
         host.hub
