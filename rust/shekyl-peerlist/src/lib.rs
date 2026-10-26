@@ -137,7 +137,9 @@ const HOUR_NANOS: u64 = 60 * 60 * 1_000_000_000;
 pub const COOLDOWN_FIRST_NANOS: u64 = 2 * 60 * 1_000_000_000;
 
 /// The longest cooldown, one hour. What the cap means: a dead address
-/// costs each node at most about 24 dials a day.
+/// costs each node at most about 24 failed tests a day once it reaches the
+/// cap (a Tor test is up to three attempts). In the dialer's quiet stretch
+/// it stays at the first step ([`Ladder::FirstStep`]).
 ///
 /// **Assumption** (§97), as [`COOLDOWN_FIRST_NANOS`].
 pub const COOLDOWN_CAP_NANOS: u64 = HOUR_NANOS;

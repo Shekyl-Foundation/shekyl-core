@@ -951,6 +951,7 @@ fn a_timeout_inside_the_window_retries_however_late_it_is_applied() {
 /// is answered and its session kept.
 struct QuietRig {
     clock: ManualClock,
+    hub: Hub,
     dial: Arc<HeldDial>,
     dialer: Arc<Dialer>,
     connector: ConnectorId,
@@ -974,7 +975,7 @@ impl QuietRig {
             Vec::new()
         };
         let dial = Arc::new(HeldDial::answering(sockets.clone(), answers));
-        let (_hub, dialer) = dialer_on(&clock, &sockets, Arc::clone(&dial) as Arc<dyn Dial>);
+        let (hub, dialer) = dialer_on(&clock, &sockets, Arc::clone(&dial) as Arc<dyn Dial>);
         dialer.set_tor_window(Some(TOR_WINDOW));
         let mut rng = SplitMix64::new(seed);
         let (mut addresses, cause, took) = match connector {
@@ -1001,6 +1002,7 @@ impl QuietRig {
         }
         Self {
             clock,
+            hub,
             dial,
             dialer,
             connector,
@@ -1125,5 +1127,87 @@ fn after_the_block_a_cooled_address_is_drawable_within_one_first_step_cooldown()
             1,
             "{connector:?}: only the one just drawn cools"
         );
+    }
+}
+
+/// **An inbound session alone keeps the ladder climbing** (Copilot's review
+/// of #1203). The held count is the connector's, outbound or inbound: an
+/// accepted session on the board, with nothing kept outbound, is a session
+/// held, so failures climb as today. Both connectors.
+#[test]
+fn an_inbound_session_alone_keeps_the_ladder_climbing() {
+    for (connector, seed) in [(TOR, 62), (CLEARNET, 63)] {
+        let mut rig = QuietRig::new(connector, seed, false);
+        let inbound = match connector {
+            ConnectorId::Tor => Endpoint::TorInbound,
+            ConnectorId::Clearnet => Endpoint::Clearnet {
+                ip: Ipv4Addr::new(11, 17, 9, 9).into(),
+                port: 40_000,
+                direction: shekyl_peerlist::Direction::Inbound,
+            },
+        };
+        let _attached = rig.hub.connect(&inbound).expect("accepted");
+        assert_eq!(
+            rig.hub
+                .board()
+                .count(connector, shekyl_peerlist::Direction::Inbound),
+            1
+        );
+        assert_eq!(rig.dialer.kept_sessions(connector), 0, "nothing outbound");
+        rig.advance(QUIET_AFTER);
+        for _ in 0..4 {
+            rig.fail_each_once();
+            rig.advance(PAST_EVERY_COOLDOWN);
+        }
+        assert_eq!(
+            rig.failed_tests(),
+            vec![4; 5],
+            "{connector:?}: an inbound session climbs"
+        );
+    }
+}
+
+/// **A stream that opens restarts the stretch, kept or not** (Copilot's
+/// review of #1203). Deep in a quiet stretch, one dial reaches its peer and
+/// is rejected at the handshake: a stream opened, nothing is kept. For the
+/// next quiet stretch failures climb; once it has passed with nothing
+/// opened, they stop climbing again. Both connectors.
+#[test]
+fn a_stream_that_opens_restarts_the_stretch_kept_or_not() {
+    for (connector, seed) in [(TOR, 64), (CLEARNET, 65)] {
+        let mut rig = QuietRig::new(connector, seed, false);
+        rig.advance(QUIET_AFTER + PAST_EVERY_COOLDOWN);
+        // One draw reaches its peer and is rejected: opened, not kept.
+        rig.dial.refuse_after(
+            &rig.clock,
+            CloseCause::new(CloseKind::LevinHandshakeRejected),
+            Duration::ZERO,
+        );
+        assert!(rig.dialer.wake(rig.connector, &mut rig.rng), "a draw");
+        assert_eq!(rig.dialer.kept_sessions(connector), 0, "nothing kept");
+        let opened: Vec<NetworkAddress> = rig
+            .failing
+            .iter()
+            .filter(|address| rig.dialer.shared().lists.failed_tests(address) == 1)
+            .cloned()
+            .collect();
+        assert_eq!(opened.len(), 1, "{connector:?}: one draw was rejected");
+        // Three minutes on, inside the new stretch: every address fails and
+        // the ladder climbs, so the rejected one steps to two.
+        rig.advance(Duration::from_secs(181));
+        rig.fail_each_once();
+        for address in &rig.failing {
+            let expected = if opened.contains(address) { 2 } else { 1 };
+            assert_eq!(
+                rig.dialer.shared().lists.failed_tests(address),
+                expected,
+                "{connector:?}: inside the restarted stretch the ladder climbs"
+            );
+        }
+        // Past the stretch with nothing opened: no further climb.
+        rig.advance(PAST_EVERY_COOLDOWN);
+        let before = rig.failed_tests();
+        rig.fail_each_once();
+        assert_eq!(rig.failed_tests(), before, "{connector:?}: quiet again");
     }
 }

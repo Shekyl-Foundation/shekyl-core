@@ -140,12 +140,22 @@ place for about 105 s, until Tor's `0x06` (from 104 s to a few seconds
 past), and its test ends. The address then
 cools in place: 2 min, doubling per failed test to 1 h, with U(0, 50%)
 jitter. To hold all five slots for an hour an attacker needs
-5 × 3,600 / 105 ≈ 171 draws an hour, every one of them a plant. At the
-1 h cap a planted onion is drawable at most once an hour, so that is about
-170 planted onions at the cap, planted once: 8 attacker sessions at
-the intake cap (24 addresses per session per 24 h). Every draw must also
-land on a plant, so the plants must be nearly all of the drawable pool:
-every honest onion in gray is drawn at the same rate.
+5 × 3,600 / 105 ≈ 171 draws an hour, every one of them a plant. Every draw
+must land on a plant, so the plants must be nearly all of the drawable
+pool: every honest onion in gray is drawn at the same rate. That share is
+the binding cost in both regimes below; the count of plants is not.
+
+- **While the node holds any session** the ladder climbs. At the 1 h cap a
+  planted onion is drawable at most once an hour, so the hour takes about
+  170 planted onions at the cap, planted once: 8 attacker sessions at the
+  intake cap (24 addresses per session per 24 h).
+- **In a quiet stretch** (no session held, none opened for five minutes;
+  #1203) a failed test cools at the first step, 2 to 3 min, so a plant is
+  drawable again about every 4 to 5 min, its attempt included: about 13
+  draws an hour each, so about 13 plants hold the hour. The node is then
+  already holding nothing, which is the eclipse the plants were for, and
+  every honest onion in gray cycles at the same first step, so an honest
+  draw is found as fast as the share allows.
 
 The bound does not make the node easier to stall. At bound one, 34
 plants held the whole connector for an hour; at five, the same plants
