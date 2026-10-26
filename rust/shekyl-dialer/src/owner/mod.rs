@@ -670,8 +670,9 @@ impl Dialer {
     /// cause is worth a retry, with attempts left in this test, is not
     /// recorded: the open test waits its [`retry_wait_nanos`] and the
     /// address stays an outstanding draw. The wake at or after the due
-    /// tick makes the next attempt. A Tor timeout that ends at or after
-    /// the Tor window, counted from `started`, is not worth one
+    /// tick makes the next attempt. A Tor timeout whose attempt ran
+    /// `ran_nanos` (timed inside its task) at or past the Tor window is
+    /// not worth one
     /// ([`Self::set_tor_window`]). Anything else, including a test that is
     /// not in flight, is the test's one outcome and is recorded. A
     /// deferred Tor failure still counts in the tally: the stream did not
@@ -681,17 +682,16 @@ impl Dialer {
         &self,
         connector: ConnectorId,
         outcome: &DialOutcome,
-        started: Tick,
+        ran_nanos: u64,
         rng: &mut R,
     ) {
         let now = self.hub.now();
         self.with_inbound(|shared| {
             let address = outcome.address();
             if let DialOutcome::DialFailed(_, cause) = outcome {
-                let ran = now.get().saturating_sub(started.get());
                 let outlasted_tor = connector == ConnectorId::Tor
                     && cause.window_timeout()
-                    && shared.tor_window.is_some_and(|window| ran >= window);
+                    && shared.tor_window.is_some_and(|window| ran_nanos >= window);
                 if cause.retry_worthy() && !outlasted_tor {
                     let cause = *cause;
                     let mut wait = 0u64;
@@ -708,7 +708,7 @@ impl Dialer {
                             "{connector:?} dial {address:?} attempt {} ended {:?} after {} ms; attempt {next} in {} ms",
                             next - 1,
                             cause.kind(),
-                            ran / 1_000_000,
+                            ran_nanos / 1_000_000,
                             wait / 1_000_000
                         );
                         let held = Self::tor_held(shared);
@@ -829,10 +829,12 @@ impl Dialer {
                     Waited::Wake => break,
                     Waited::Ended => return,
                     Waited::Bell => {
+                        // The bell, then the stop, as above: a stop's ring
+                        // counted in `seen` is a stop this check sees.
+                        seen = self.bell.rung();
                         if self.stop.load(Ordering::Acquire) {
                             return;
                         }
-                        seen = self.bell.rung();
                         self.apply_completions(connector, rng);
                     }
                 }

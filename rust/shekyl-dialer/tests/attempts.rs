@@ -888,3 +888,34 @@ fn the_tally_counts_a_failed_attempt_deferred_for_a_retry() {
     assert_eq!(attempt.dialer.tor_link_tally().unopened, 1);
     attempt.assert_retries();
 }
+
+/// **An attempt's place against the window is its own** (Copilot's review
+/// of `cbdb91d03`). An `0x06` at 104 s, inside the window, is posted and
+/// then waits 5 s in the completion queue before the loop applies it. The
+/// attempt ran 104 s, timed inside its task, so its test retries; measured
+/// to the application it would read 109 s and cool.
+#[test]
+fn a_timeout_inside_the_window_retries_however_late_it_is_applied() {
+    let clock = ManualClock::new(Tick::new(1_000_000_000));
+    let sockets = Sockets::new();
+    let dial = Arc::new(HeldDial::answering(sockets.clone(), Vec::new()));
+    dial.refuse_after(&clock, shekyl_tor::refused(0x06), Duration::from_secs(104));
+    let (_hub, dialer) = dialer_on(&clock, &sockets, Arc::clone(&dial) as Arc<dyn Dial>);
+    dialer.set_tor_window(Some(TOR_WINDOW));
+    let mut rng = SplitMix64::new(47);
+    let onion = onions(1).remove(0);
+    dialer
+        .admit_operator(&onion, Tick::new(1), &mut rng)
+        .expect("admitted");
+    let Launch::Running(id) = dialer.launch(TOR, &mut rng) else {
+        panic!("a draw");
+    };
+    dialer.wait_posted(id);
+    clock.set(Tick::new(clock.now().get() + 5 * 1_000_000_000));
+    dialer.apply_completions(TOR, &mut rng);
+    assert!(
+        !dialer.shared().lists.is_cooling(&onion),
+        "the queue's wait is not the attempt's"
+    );
+    assert_eq!(dialer.shared().lists.failed_tests(&onion), 0);
+}

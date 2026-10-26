@@ -37,8 +37,8 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Condvar, Mutex};
 
 use shekyl_draw_rng::RelayRng;
-use shekyl_peerlist::{CloseCause, CloseKind, ConnectorId, DialOutcome, NetworkAddress, Tick};
-use shekyl_seam::SocketId;
+use shekyl_peerlist::{CloseCause, CloseKind, ConnectorId, DialOutcome, NetworkAddress};
+use shekyl_seam::{Hub, SocketId};
 
 use super::handshake::{attempt_task, Attempt, Prepared, TaskResult};
 use super::ready::block_on_future;
@@ -78,15 +78,29 @@ pub(super) struct InFlight {
     connector: ConnectorId,
     address: NetworkAddress,
     aim: DialAim,
-    /// When the attempt was enlisted, just before its task starts. A
-    /// timeout's place against the Tor window is read from it
-    /// ([`Dialer::set_tor_window`]).
-    started: Tick,
     /// Held for its drop: the nonce is in the set until this record is
     /// dropped, after the result is applied or the attempt is cancelled.
     _nonce: InFlightNonce,
     /// Held for its drop: dropping it completes the attempt's cancel.
     _cancel: tokio::sync::oneshot::Sender<()>,
+}
+
+/// An attempt task's result, and how long the attempt ran.
+pub(super) struct Finished {
+    result: TaskResult,
+    /// Nanoseconds from the task's first poll to its result, on the hub's
+    /// clock. Neither the spawn's scheduling nor the wait in the completion
+    /// queue counts, so a timeout's place against the Tor window
+    /// ([`Dialer::set_tor_window`]) is the attempt's own.
+    ran_nanos: u64,
+}
+
+/// `attempt`, timed inside its task ([`Finished::ran_nanos`]).
+async fn timed(hub: Hub, attempt: impl Future<Output = TaskResult>) -> Finished {
+    let started = hub.now();
+    let result = attempt.await;
+    let ran_nanos = hub.now().get().saturating_sub(started.get());
+    Finished { result, ran_nanos }
 }
 
 /// The results attempt tasks have posted and the loops have not taken.
@@ -105,14 +119,14 @@ pub(super) struct Completions {
 struct Inbox {
     /// Set by [`Completions::close`]. A post after that is rejected.
     closed: bool,
-    items: VecDeque<(u64, ConnectorId, TaskResult)>,
+    items: VecDeque<(u64, ConnectorId, Finished)>,
 }
 
 impl Completions {
     /// Queue `result`. `false` when the queue is closed: the result is
     /// dropped after this lock, which releases its channel, and the caller
     /// still holds the row.
-    fn post(&self, id: u64, connector: ConnectorId, result: TaskResult) -> bool {
+    fn post(&self, id: u64, connector: ConnectorId, result: Finished) -> bool {
         let rejected = {
             let mut inbox = self.queue.lock().expect("completions");
             if inbox.closed {
@@ -136,7 +150,7 @@ impl Completions {
 
     /// Take every result posted for `connector`, in the order posted.
     /// Other connectors' results stay, in their relative order.
-    fn take(&self, connector: ConnectorId) -> Vec<(u64, TaskResult)> {
+    fn take(&self, connector: ConnectorId) -> Vec<(u64, Finished)> {
         let mut inbox = self.queue.lock().expect("completions");
         let mut taken = Vec::new();
         let mut kept = VecDeque::with_capacity(inbox.items.len());
@@ -282,8 +296,8 @@ impl BeforeIo {
 /// without being posted. Dropping it releases the channel.
 async fn drive_attempt(
     mut cancel: tokio::sync::oneshot::Receiver<()>,
-    attempt: impl Future<Output = TaskResult> + Send,
-) -> Option<TaskResult> {
+    attempt: impl Future<Output = Finished> + Send,
+) -> Option<Finished> {
     tokio::pin!(attempt);
     tokio::select! {
         biased;
@@ -495,10 +509,8 @@ impl Dialer {
             mut guard,
         } = enlisted;
         let hub = self.hub.clone();
-        let outcome = block_on_future(drive_attempt(
-            cancel,
-            attempt_task(hub, connector, address, prepared),
-        ));
+        let attempt = attempt_task(hub.clone(), connector, address, prepared);
+        let outcome = block_on_future(drive_attempt(cancel, timed(hub, attempt)));
         match outcome {
             None => Drove::Stopped,
             Some(result) => {
@@ -524,7 +536,6 @@ impl Dialer {
         nonce: InFlightNonce,
     ) -> Option<Enlisted> {
         let (sender, cancel) = tokio::sync::oneshot::channel();
-        let started = self.hub.now();
         let shared = Arc::clone(&self.shared);
         let id = {
             let mut state = shared.lock().expect("dialer state");
@@ -542,7 +553,6 @@ impl Dialer {
                     connector,
                     address,
                     aim,
-                    started,
                     _nonce: nonce,
                     _cancel: sender,
                 },
@@ -572,8 +582,8 @@ impl Dialer {
         let bell = Arc::clone(&self.bell);
         let task = async move {
             let mut guard = guard;
-            let posted =
-                drive_attempt(cancel, attempt_task(hub, connector, address, prepared)).await;
+            let attempt = attempt_task(hub.clone(), connector, address, prepared);
+            let posted = drive_attempt(cancel, timed(hub, attempt)).await;
             // Disarm only once the queue has accepted the result. A rejected
             // post was dropped inside `post`, after its lock, and the guard
             // still releases the row when stop has not already drained it.
@@ -665,9 +675,10 @@ impl Dialer {
         &self,
         connector: ConnectorId,
         id: u64,
-        result: TaskResult,
+        finished: Finished,
         rng: &mut R,
     ) -> Option<Applied> {
+        let Finished { result, ran_nanos } = finished;
         let Some((record, permit)) = self.begin_apply(id) else {
             drop(result);
             return None;
@@ -676,7 +687,7 @@ impl Dialer {
         let kept = match self.apply_result(connector, &address, record.aim, result, rng) {
             Attempt::Done(outcome) => {
                 tracing::debug!("{connector:?} dial {address:?} ended: {outcome:?}");
-                self.settle_or_retry(connector, &outcome, record.started, rng);
+                self.settle_or_retry(connector, &outcome, ran_nanos, rng);
                 None
             }
             Attempt::Kept(kept) => {
@@ -712,18 +723,23 @@ impl Drop for ApplyPermit<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::Completions;
+    use super::{Completions, Finished};
     use crate::owner::handshake::TaskResult;
     use shekyl_peerlist::{CloseCause, CloseKind, ConnectorId};
+
+    fn failed() -> Finished {
+        Finished {
+            result: TaskResult::Failed(CloseCause::new(CloseKind::LocalClose)),
+            ran_nanos: 0,
+        }
+    }
 
     #[test]
     fn a_post_after_the_queue_closes_is_rejected() {
         let completions = Completions::default();
-        let first = TaskResult::Failed(CloseCause::new(CloseKind::LocalClose));
-        assert!(completions.post(1, ConnectorId::Clearnet, first));
+        assert!(completions.post(1, ConnectorId::Clearnet, failed()));
         completions.close();
-        let late = TaskResult::Failed(CloseCause::new(CloseKind::LocalClose));
-        assert!(!completions.post(2, ConnectorId::Tor, late));
+        assert!(!completions.post(2, ConnectorId::Tor, failed()));
         assert!(completions.take(ConnectorId::Clearnet).is_empty());
         assert!(completions.take(ConnectorId::Tor).is_empty());
     }
