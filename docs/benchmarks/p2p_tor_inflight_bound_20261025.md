@@ -207,7 +207,7 @@ becoming usable to the 12th kept Tor session:
 took about twice as long. Every sample filled; samples:
 bound 1, 424 to 2981 s; bound 5, 342 to 563 s.
 
-What the series also showed, both fixed after it on #1203:
+What the series also showed:
 
 - **A full-window failure can arrive as `0xF0`, not `0x06`.** 9 of the
   series' 79 retried attempts were `0xF0` at 104 s or later. With
@@ -217,7 +217,8 @@ What the series also showed, both fixed after it on #1203:
   another directory (`src/feature/hs/hs_client.c:1725`). The dialer read
   only `0x06` and its own deadline against the window, so those tests
   retried. Each such retry held a dead onion's target place longer, so the
-  medians above are slightly long.
+  medians above are slightly long. Fixed on #1203 (`e102eb8c2`): every
+  Tor reply worth a retry is read against the window.
 - **The window's one-second edge** (`0x06` at 104.97 s) was found by the
   series' first start and fixed before this run (`7559d9f81`).
 
