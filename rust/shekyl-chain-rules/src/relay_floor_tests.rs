@@ -360,3 +360,113 @@ fn the_ladder_is_the_owners_over_the_floors_operands_and_its_economy_rung_is_the
         Ok(AtHeight::AboveTip)
     );
 }
+
+/// [`chain`] with every block recording `weight` in both weight columns,
+/// so the long-term median the connecting height derives is `weight`.
+fn weighted_chain(len: u64, txs: u64, weight: u64) -> MockChain {
+    let weights = crate::view::RecordedWeights {
+        weight: shekyl_types::BlockWeight::from_raw(weight),
+        long_term_weight: LongTermWeight::from_raw(weight),
+    };
+    let mut chain = MockChain::default();
+    for height in (0..len).map(h) {
+        chain = chain.push_weighing(
+            block(height, 1_000_000_000, txs),
+            root_after(height),
+            weights,
+        );
+    }
+    chain
+}
+
+/// FL-R6 above the zone, on chain state: where the long-term median is
+/// above the penalty-free zone, the served economy rung is still the relay
+/// floor, and the floor is the owner's at that median — at the connecting
+/// height, whose median is derived from the recorded weights, and at a
+/// recorded height, whose median is its stored row. At the zone the
+/// identity holds because both are floored there, for a reason unrelated
+/// to it, so each height asserts its median is above the zone before
+/// anything else (rule 47). Supersedes the C++ `scaling_2021`
+/// `the_served_economy_rung_is_the_relay_floor_above_the_zone`. Red edit:
+/// clamp the median `fee_operands_at` reads to the zone.
+#[test]
+fn above_the_zone_the_economy_rung_is_the_floor_at_the_chains_median() {
+    let above = 2 * FULL_REWARD_ZONE;
+    let chain = weighted_chain(12, 40, above)
+        .with_median_at(h(7), LongTermWeight::from_raw(above))
+        .with_total_burned(AtomicUnits::from_raw(600));
+    let mut floors = Vec::new();
+    for height in [h(12), h(7)] {
+        let operands = match chain.with_view(|view| fee_operands_at(&view, height)) {
+            Ok(AtHeight::Recorded(operands)) => operands,
+            other => panic!("operands at {height:?}: {other:?}"),
+        };
+        assert_eq!(
+            operands.long_term_effective_median, above,
+            "the subject: the median at {height:?} is above the zone"
+        );
+        let floor = match chain.with_view(|view| relay_floor_at(&view, height)) {
+            Ok(AtHeight::Recorded(floor)) => floor,
+            other => panic!("floor at {height:?}: {other:?}"),
+        };
+        assert_eq!(
+            floor,
+            owner_at(&chain, height, above),
+            "the floor at {height:?} is the owner's at the chain's median"
+        );
+        let ladder = match chain.with_view(|view| fee_ladder_at(&view, height)) {
+            Ok(AtHeight::Recorded(ladder)) => ladder,
+            other => panic!("ladder at {height:?}: {other:?}"),
+        };
+        assert_eq!(ladder.economy, floor, "FL-R6 at {height:?}");
+        assert_eq!(
+            ladder.standard,
+            shekyl_economics::STANDARD_RUNG_OVER_ECONOMY * floor,
+            "the standard rung at {height:?}"
+        );
+        floors.push(floor);
+    }
+    // The values, so a change to the composition is seen here and not only
+    // as a disagreement between two readers of it.
+    assert_eq!(
+        floors,
+        [FLOOR_ABOVE_THE_ZONE_AT_12, FLOOR_ABOVE_THE_ZONE_AT_7]
+    );
+}
+
+/// The floor at the connecting height of `weighted_chain(12, 40, 2·zone)`
+/// with 600 burned, as the owner priced it when this pin was written.
+const FLOOR_ABOVE_THE_ZONE_AT_12: u64 = 5_802;
+/// The floor at height 7 of the same chain, whose stored median is the
+/// same `2·zone`.
+const FLOOR_ABOVE_THE_ZONE_AT_7: u64 = 5_802;
+
+/// The served ladder at `C = 2`: every rung doubles exactly, at a 10 SKL
+/// reward over the zone — `[666, 2664, 133 333]` against the neutral
+/// `[333, 1332, 66 666]` (`shekyl-economics` `ladder.rs`). Supersedes the
+/// C++ `scaling_2021` `wallet_fee_estimate`'s `C = 2` case; its two neutral
+/// cases are the economics crate's heritage vectors. Red edit: drop `C`
+/// from the priority rung.
+#[test]
+fn the_ladder_at_a_correction_of_two_doubles_every_rung() {
+    use shekyl_economics::{corrected_fee_ladder, FeeCorrection, RELAY_FLOOR_REFERENCE_TX_WEIGHT};
+    let params = economics();
+    let reward = 10 * 1_000_000_000;
+    let ladder = |c: FeeCorrection| {
+        corrected_fee_ladder(
+            reward,
+            params.full_reward_zone,
+            RELAY_FLOOR_REFERENCE_TX_WEIGHT,
+            c,
+            params,
+        )
+        .as_slots()
+    };
+    assert_eq!(ladder(FeeCorrection::UNITY), [333, 1332, 66_666]);
+    assert_eq!(
+        ladder(FeeCorrection::from_scaled(
+            2 * shekyl_economics::params::SCALE
+        )),
+        [666, 2664, 133_333]
+    );
+}
