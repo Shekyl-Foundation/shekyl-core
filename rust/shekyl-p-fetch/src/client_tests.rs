@@ -1294,7 +1294,7 @@ async fn a_body_that_is_not_the_frame_grammar_is_malformed_where_it_is_read() {
         &keys,
     )
     .await;
-    assert_eq!(malformed(out), Malformed::FrameLong);
+    assert_eq!(malformed(out), Malformed::FrameLong { left: 3 });
 }
 
 // -------------------------------------------------------------- SF-D7: the cap

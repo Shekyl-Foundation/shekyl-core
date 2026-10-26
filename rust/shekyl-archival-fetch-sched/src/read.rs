@@ -30,10 +30,13 @@
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-use shekyl_archival_retention::{challenge_nonce, CHALLENGE_READS, PASS_ANCHOR_DEPTH_BLOCKS};
+use shekyl_archival_retention::{
+    challenge_nonce, support_challenge_nonce, PassStream, CHALLENGE_READS, PASS_ANCHOR_DEPTH_BLOCKS,
+};
 use shekyl_crypto_pq::signature::HybridPublicKey;
 use shekyl_p_fetch::{
-    ExpectedShard, FetchError, NextMove, PFetchClient, RequestHeader, TxSink, VerifiedShard,
+    ExpectedShard, FetchError, NextMove, PFetchClient, PassVerifyingKey, RequestHeader, TxSink,
+    VerifiedShard,
 };
 use shekyl_types::{ArchivalLength, BlockHeight, PCanonicalId, ShardId};
 
@@ -77,18 +80,82 @@ impl NeedBudget {
     };
 }
 
+impl NeedBudget {
+    /// The most fetches one holder can take within a need: the first, one
+    /// per stall redial, and one fresh anchor after a first 400. The
+    /// attempt loop spends them through [`HolderRetries`], and its test
+    /// holds this count against every sequence of outcomes.
+    #[must_use]
+    pub const fn fetches_per_holder(self) -> u32 {
+        self.stall_redials.saturating_add(2)
+    }
+}
+
 impl Default for NeedBudget {
     fn default() -> Self {
         Self::DEFAULT
     }
 }
 
+/// What one holder may still be asked within a need: the attempt loop's
+/// counters, apart from the loop so the bound they keep
+/// ([`NeedBudget::fetches_per_holder`]) is tested on every sequence of
+/// outcomes.
+pub(crate) struct HolderRetries {
+    stall_redials: u32,
+    stalls: u32,
+    rejected_before: bool,
+}
+
+/// What the attempt loop does after a fetch that did not serve.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Retry {
+    /// Redial with the same header.
+    SameHeader,
+    /// Redial with a fresh anchor, same nonce and stream.
+    FreshAnchor,
+    /// This holder is spent.
+    Stop,
+}
+
+impl HolderRetries {
+    pub(crate) const fn new(budget: NeedBudget) -> Self {
+        Self {
+            stall_redials: budget.stall_redials,
+            stalls: 0,
+            rejected_before: false,
+        }
+    }
+
+    /// The next move after a fetch ended in `error`.
+    pub(crate) fn after(&mut self, error: &FetchError) -> Retry {
+        match error.next_move(self.rejected_before) {
+            // The stall count is this holder's across the need, including
+            // stalls from before a 400 minted a fresh header. Resetting it
+            // there would let one `P` double what it may cost.
+            NextMove::RetrySameHeader if self.stalls < self.stall_redials => {
+                self.stalls += 1;
+                Retry::SameHeader
+            }
+            NextMove::RetryFreshAnchor => {
+                self.rejected_before = true;
+                Retry::FreshAnchor
+            }
+            NextMove::RetrySameHeader | NextMove::NotHeld | NextMove::FailedRead => Retry::Stop,
+        }
+    }
+}
+
 /// A completed read: the body went through the caller's sink one
 /// transaction at a time, and this is what the requester keeps.
+///
+/// `K` is the scheme of the holder that was dialled. A drawn read is the
+/// live scheme's. A nonce read is whatever scheme its caller named the
+/// holder under, so a read over a receipt-key target carries the receipt.
 #[derive(Clone, Debug)]
-pub struct Read {
+pub struct Read<K: PassVerifyingKey = HybridPublicKey> {
     /// The verified shard: view hash, delivery digest, `P`'s signature.
-    pub shard: VerifiedShard<HybridPublicKey>,
+    pub shard: VerifiedShard<K>,
     /// Who served it.
     pub holder: PCanonicalId,
     /// The header `P` signed over — the pass record's anchor and nonce.
@@ -154,10 +221,6 @@ pub struct FetchScheduler<F, H> {
     client: PFetchClient,
 }
 
-/// A nonce names one persona. [`FetchScheduler::read_from_nonce`] dials
-/// that holder and no other, whatever holder count the caller passed.
-const CHALLENGE_HOLDERS: NonZeroUsize = NonZeroUsize::MIN;
-
 impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
     /// A scheduler over the daemon's facts, dialling through `client`.
     pub fn new(facts: Arc<F>, holders: Arc<H>, client: PFetchClient) -> Self {
@@ -221,28 +284,42 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
     /// already minted one. A 400 retry derives a fresh anchor and keeps
     /// it (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §5.2).
     ///
-    /// A nonce is bound to one persona, so this dials only `assigned`.
-    /// `budget.holders` is not an input: a second holder would see a nonce
-    /// the draw did not name for them. Stall redials stay the caller's,
-    /// on that one holder.
+    /// A nonce is bound to one persona, so this dials only `assigned` and
+    /// asks the holder source nothing. `budget.holders` is not an input: a
+    /// second holder would see a nonce the draw did not name for them.
+    /// Stall redials stay the caller's, on that one holder.
+    ///
+    /// The holder's scheme is the caller's. The dial, the header, the
+    /// stall and 400 moves and the outcome type are the ones every other
+    /// read takes (§5.1): this is [`Self::attempt`], the per-holder loop
+    /// [`Self::read`] runs, entered with one holder.
     ///
     /// # Errors
     ///
-    /// As [`Self::read_from`].
-    pub async fn read_from_nonce(
+    /// As [`Self::read_from`], except [`ReadFailure::NoHolders`]: the
+    /// holder source is not read, so there is no urn to find empty.
+    pub async fn read_from_nonce<K: PassVerifyingKey>(
         &self,
-        assigned: &Holder,
+        assigned: &Holder<K>,
         shard_id: ShardId,
-        nonce: [u8; 32],
+        nonce: SuppliedNonce,
         sink: Arc<dyn TxSink>,
         budget: NeedBudget,
-    ) -> Result<Read, ReadFailure> {
-        let one_holder = NeedBudget {
-            holders: CHALLENGE_HOLDERS,
-            stall_redials: budget.stall_redials,
-        };
-        self.drive(shard_id, sink, one_holder, Some(assigned), Some(nonce))
-            .await
+    ) -> Result<Read<K>, ReadFailure> {
+        let closed = self.closed(shard_id)?;
+        match self
+            .attempt(assigned, &closed.expected, sink, budget, Some(nonce))
+            .await?
+        {
+            HolderOutcome::Served(shard, header) => Ok(Read {
+                shard,
+                holder: assigned.id,
+                header,
+                close: closed.close,
+                span: closed.span,
+            }),
+            HolderOutcome::Spent(attempts) => Err(ReadFailure::Exhausted { attempts }),
+        }
     }
 
     /// The one need. `assigned` is dialled first and removed from the urn
@@ -256,7 +333,7 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
         sink: Arc<dyn TxSink>,
         budget: NeedBudget,
         assigned: Option<&Holder>,
-        nonce: Option<[u8; 32]>,
+        nonce: Option<SuppliedNonce>,
     ) -> Result<Read, ReadFailure> {
         let closed = self.closed(shard_id)?;
         let drawn = self.holders.holders_of(shard_id)?;
@@ -328,9 +405,9 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
 
     /// A header over the requester's current anchor: the hash at
     /// `tip − PASS_ANCHOR_DEPTH_BLOCKS`. `nonce` is the caller's when
-    /// supplied (a challenge, a 400 retry); otherwise a fresh OS-random
-    /// one.
-    fn fresh_header(&self, nonce: Option<[u8; 32]>) -> Result<RequestHeader, ReadFailure> {
+    /// supplied (a challenge, a 400 retry), with the stream it was derived
+    /// for; otherwise a fresh OS-random one on the economy stream.
+    fn fresh_header(&self, nonce: Option<SuppliedNonce>) -> Result<RequestHeader, ReadFailure> {
         let tip = self.facts.tip_height()?;
         let anchor = tip
             .checked_sub_count(PASS_ANCHOR_DEPTH_BLOCKS)
@@ -340,7 +417,12 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
             .block_hash_at(anchor)?
             .ok_or(FactsFault::Inconsistent)?;
         match nonce {
-            Some(nonce) => Ok(RequestHeader::with_nonce(nonce, anchor, hash.to_bytes())),
+            Some(SuppliedNonce { stream, nonce }) => Ok(RequestHeader::on_stream(
+                stream,
+                nonce,
+                anchor,
+                hash.to_bytes(),
+            )),
             None => {
                 RequestHeader::fresh(anchor, hash.to_bytes()).map_err(|_| DrawFault::Entropy.into())
             }
@@ -353,17 +435,16 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
     /// order. `Err` is a fault of the requester's own (facts, entropy)
     /// that ends the need — a different type from a spent holder, so `?`
     /// cannot turn one into the other.
-    async fn attempt(
+    async fn attempt<K: PassVerifyingKey>(
         &self,
-        holder: &Holder,
+        holder: &Holder<K>,
         expected: &ExpectedShard,
         sink: Arc<dyn TxSink>,
         budget: NeedBudget,
-        nonce: Option<[u8; 32]>,
-    ) -> Result<HolderOutcome, ReadFailure> {
+        nonce: Option<SuppliedNonce>,
+    ) -> Result<HolderOutcome<K>, ReadFailure> {
         let mut header = self.fresh_header(nonce)?;
-        let mut stalls = 0u32;
-        let mut rejected_before = false;
+        let mut retries = HolderRetries::new(budget);
         let mut errors = Vec::new();
         loop {
             let error = match self
@@ -374,35 +455,49 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
                 Ok(shard) => return Ok(HolderOutcome::Served(shard, header)),
                 Err(error) => error,
             };
-            let next = error.next_move(rejected_before);
+            let next = retries.after(&error);
             errors.push(Attempt {
                 holder: holder.id,
                 error,
             });
             match next {
-                // The stall count is this holder's across the need, including
-                // stalls from before a 400 minted a fresh header. Resetting
-                // it there would let one `P` double what it may cost.
-                NextMove::RetrySameHeader if stalls < budget.stall_redials => stalls += 1,
-                NextMove::RetryFreshAnchor => {
-                    rejected_before = true;
-                    // Fresh anchor, same nonce: a 400 minted no record, and
-                    // a challenge's nonce is bound to `(h, j, attempt)`.
-                    header = self.fresh_header(Some(*header.nonce()))?;
+                Retry::SameHeader => {}
+                Retry::FreshAnchor => {
+                    // Fresh anchor, same nonce and stream: a 400 minted no
+                    // record, and a challenge's nonce is bound to
+                    // `(stream, h, j, attempt)`.
+                    header = self.fresh_header(Some(SuppliedNonce {
+                        stream: header.stream(),
+                        nonce: *header.nonce(),
+                    }))?;
                 }
-                NextMove::RetrySameHeader | NextMove::NotHeld | NextMove::FailedRead => {
-                    return Ok(HolderOutcome::Spent(errors));
-                }
+                Retry::Stop => return Ok(HolderOutcome::Spent(errors)),
             }
         }
     }
 }
 
-/// One draw's read: the seed, the issuing block's hash, `j`, and this
-/// read's `attempt`. The nonce is derived; nothing else on the request
-/// is the challenger's.
+/// A nonce the caller minted, and the stream it names on the header.
+///
+/// Organic reads never build one: [`FetchScheduler::read`] mints a fresh
+/// economy nonce per header. A challenge derives its nonce for one stream,
+/// and the header carries that stream so `P` signs it
+/// (`ARCHIVAL_SUPPORT_DRAW.md` §5).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SuppliedNonce {
+    /// The stream the nonce was derived for.
+    pub stream: PassStream,
+    /// The nonce.
+    pub nonce: [u8; 32],
+}
+
+/// One draw's read: the stream, the seed, the issuing block's hash, `j`,
+/// and this read's `attempt`. The nonce is derived; nothing else on the
+/// request is the challenger's.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ChallengeDraw {
+    /// Which of the block's two draw streams `j` indexes.
+    pub stream: PassStream,
     /// The block's unrevealed draw seed.
     pub seed: [u8; 32],
     /// `block_hash(h)` of the issuing block.
@@ -415,10 +510,23 @@ pub struct ChallengeDraw {
 
 impl ChallengeDraw {
     /// The nonce this read presents. Bound to `(seed, block_hash, j,
-    /// attempt)` so one receipt cannot serve two draws.
+    /// attempt)` so one receipt cannot serve two draws, and derived under
+    /// the stream's own label so an economy draw's receipt cannot serve a
+    /// support draw of the same `j`.
     #[must_use]
-    pub fn nonce(&self) -> [u8; 32] {
-        challenge_nonce(&self.seed, &self.block_hash, self.draw, self.attempt)
+    pub fn nonce(&self) -> SuppliedNonce {
+        let nonce = match self.stream {
+            PassStream::Economy => {
+                challenge_nonce(&self.seed, &self.block_hash, self.draw, self.attempt)
+            }
+            PassStream::Support => {
+                support_challenge_nonce(&self.seed, &self.block_hash, self.draw, self.attempt)
+            }
+        };
+        SuppliedNonce {
+            stream: self.stream,
+            nonce,
+        }
     }
 }
 
@@ -447,14 +555,14 @@ pub enum ChallengeReadError {
 ///
 /// [`ChallengeReadError::AttemptBound`] when `attempt ≥ K`; otherwise a
 /// [`ReadFailure`].
-pub async fn challenge_read<F: ShardFacts, H: HolderSource>(
+pub async fn challenge_read<F: ShardFacts, H: HolderSource, K: PassVerifyingKey>(
     scheduler: &FetchScheduler<F, H>,
-    assigned: &Holder,
+    assigned: &Holder<K>,
     shard_id: ShardId,
     draw: ChallengeDraw,
     sink: Arc<dyn TxSink>,
     budget: NeedBudget,
-) -> Result<Read, ChallengeReadError> {
+) -> Result<Read<K>, ChallengeReadError> {
     if draw.attempt >= CHALLENGE_READS {
         return Err(ChallengeReadError::AttemptBound {
             attempt: draw.attempt,
@@ -477,9 +585,9 @@ fn support_turn(had_drawn: bool, tried: usize) -> bool {
 
 /// What one holder's dials came to. Not a [`ReadFailure`]: a spent holder
 /// moves the need on, and a requester fault ends it.
-enum HolderOutcome {
+enum HolderOutcome<K: PassVerifyingKey> {
     /// The body verified. The header is the one `P` signed over.
-    Served(VerifiedShard<HybridPublicKey>, RequestHeader),
+    Served(VerifiedShard<K>, RequestHeader),
     /// This holder is done with. The attempts are in dial order.
     Spent(Vec<Attempt>),
 }

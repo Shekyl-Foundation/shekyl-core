@@ -1234,10 +1234,12 @@ The work is split by what is checked, not by who owns the tables
   defines the view trait the verifier reads through and the type of the
   `h_open(E)` snapshot.
 - **This lane** owns the state and the wiring.
-- **The E5 lane** owns the bundle queue and the body store. The view
+- **This lane** also builds the bundle queue and the body store, in the
+  chain store, with the producer (increment 4c, `SO-D12p`). The view
   trait has one implementation, on the store's `BatchView` — the switch's
   batch view is that view — built once, with this lane's cutover
-  (item 4; `DRS_E5_POOL_ALT_PRUNE.md` §2.3).
+  (item 4; `DRS_E5_POOL_ALT_PRUNE.md` §2.3). References on the wire and a
+  connecting block pulling its bodies stay with 4b.
 
 This lane's increments, each its own change:
 
@@ -1271,8 +1273,10 @@ This lane's increments, each its own change:
    (`SO-D12o`, SI-34). Layout 30.
 4. **The cutover**, after the Slice C verifier lands. Split, as ruled
    2026-10-21 (Q1): 4a is staged and has no consensus effect; 4c is the
-   producer, between 4a and 4b; 4b is the rule-07 switch after the DRS-X
-   flip.
+   producer, between 4a and 4b, **built 2026-10-25** (§16.11); 4b is the
+   rule-07 switch after the DRS-X flip, and does not land until a bundle
+   the producer made is admitted by 4a's verifier on a driven chain
+   (round 0, F2). 4c's gate test is that showing.
    - implement the view trait on this lane's store. The view is the
      batch view plus the drawable memo: `D` is rules-side state, and the
      store computes none of it. A miss is SI-35; the view does not
@@ -1311,9 +1315,9 @@ receipts and the wiring that calls it arrive together.
 `SO-D12h`'s fix, the complete-tree membership fact frozen at the slash
 pass, is its own change in this lane (§16.6).
 
-The producer side is not in this list: keeping the seed and the witness
-key, scheduling the reads and filing the bundle. It needs only increment
-1's types.
+The producer side — keeping the seed and the witness key, scheduling the
+reads and filing the bundle — is increment 4c (§16.11), with the queue it
+files to.
 
 ### 16.4 Posed, with the recommendation made
 
@@ -1332,9 +1336,9 @@ key, scheduling the reads and filing the bundle. It needs only increment
 
 ### 16.5 Not in this step
 
-The producer and challenger (§16.3). The weight rule for the prunable
-part of a carrier (the fee-and-weight round's). `BA-T31` and `BA-T32`.
-The settlement-timing question `ESR-12`.
+The producer and challenger, built as increment 4c (§16.11). The weight
+rule for the prunable part of a carrier (the fee-and-weight round's).
+`BA-T31` and `BA-T32`. The settlement-timing question `ESR-12`.
 
 ### 16.6 Rulings (maintainer, relayed 2026-10-10)
 
@@ -1353,6 +1357,7 @@ The settlement-timing question `ESR-12`.
 | `SO-D12l` | **`BlockDraws` gains `issued_short: u32`** (2026-10-16), the shortfall reduction a block's admissions cause. Lands with increment 3. *(Relayed as CW-2.)* |
 | `SO-D12m` | **The `D` digest covers the pairs and each persona's receipt key** (2026-10-17): `cSHAKE256_32("shekyl/archival-drawable-epoch-v1", E_le8 ‖ n_pairs_le8 ‖ (p_canonical_id ‖ shard_le8)* ‖ n_personas_le8 ‖ (p_canonical_id ‖ receipt_sign_pk)*)`, pairs in canonical order, personas ascending (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.5 check 2) |
 | `SO-D12n` | **`DrawableSet`'s tip read is replaced** by the builder of increment 2 (2026-10-17): no second drawable-set type remains, and the pair emitter stays inside the builder |
+| `SO-D12p` | **The bundle queue and the body store land in 4c, in the chain store** (Rick, 2026-10-25). No sink trait with stand-in implementations: the producer writes to the real queue. A memory outbox nothing could consume before 4b, and a test sink proving a path the product does not have, were refused. The queue is pool-like state fed only by this daemon's own bundles until 4b; rule 23's falsifier guards the connect path, which the queue is not |
 | `SO-D12o` | **The draw rows retire in increment 3** (Q-D, option 1, Rick, 2026-10-21). At the boundary of `B` the store deletes `archival_block_draws` strictly below `(B − 1)·SEB + 1 − W₂`, or below `(B − 1)·SEB` when the schedule has no window. `BlockDrawsFloor` computes that height beside the Release journal's floor; the store compares and does not source it, and a read below it is SI-34. `CHALLENGE_RESPONSE_BLOCKS` is at least 1 and below `SETTLEMENT_EPOCH_BLOCKS` wherever a window exists, so the floor sits below the undo floor. Admission, increment 4, reads `h_incl − W₂ ≤ h < h_incl` and is not clipped at `h_open` |
 
 What `SO-D12i` touches on the live chain, checked before it was ruled, is §16.7.
@@ -1688,6 +1693,130 @@ named `assign_epoch`.
 **Not in this increment:** the `D` cache and the count writer (increment
 3); the `0x0C` read and admission (increment 4); `SO-D12h` (its own
 change); the producer; any C++ beyond the comment.
+
+### 16.11 Increment 4c as built — the producer
+
+The claim this increment proves: **the daemon that served a block's
+template keeps the seed and witness key the template drew, learns the
+block's draws when it connects, reads each drawn pair's shard through the
+one fetch path with the challenge nonce, and files a signed bundle the
+queue admits by the bundle rule; a later block connects it through 4a's
+door.** Nothing here is consensus; 4c lands before the flip.
+
+**The witness ring** (`shekyl-bundle-producer`, `ring.rs`). Every template
+the node builds draws a fresh scheme-3 witness key and seed from the OS
+(§4.2: nothing derived) and the ring keeps them under the `0x0C`
+commitment, in memory only (Q10). `template.rs` draws through it; the
+witness is whichever daemon served the template, its built-in miner or an
+external one on `get_block_template`. A block whose `0x0C` is a
+candidate's is claimed in flight, and the other candidates for its height
+go. Candidates go at `CANDIDATE_DEPTH` (16) below the tip and at
+`MAX_CANDIDATES` (192); an in-flight entry goes when its bundle is filed,
+when its block is popped and not reconnected within the reorg cap, or when
+its window closes. Filing signs inside the ring and drops the entry, so
+the key never leaves it; the seed leaves twice, in a wiping cell, to the
+connector for the derivation and in the bundle. Memory: at most
+`(MAX_CANDIDATES + W₂) · RING_ENTRY_BYTES`, about 2.9 MiB at the genesis
+window. A restart loses the in-flight blocks; the task logs one line per
+block at stop.
+
+**The plan and the reads.** Each draw gets up to `K` attempt heights in
+`(h, h + W₂ − M]`, at least `READ_SPACING` (30) apart, from the daemon's
+own RNG and never from the seed. A stall-class end reads again at the next
+height with the next `attempt`; a completed exchange ends the draw. The
+read is the fetch scheduler's nonce read (`read_from_nonce`), the same
+loop every read takes, with the holder named under the bond record's
+**receipt key**: the scheduler's `Holder` and `Read` take the scheme as a
+type parameter, and the header carries the stream so a support draw's
+receipt verifies on the support stream. A verified read is the pass. An
+identity-scheme reply — the live serving host until 4b — is recognised by
+the bytes its wider envelope adds (`FN_DSA_HYBRID.md` §9.3: refused from
+the head on a small shard, exactly that many bytes left ahead of the
+envelope on a larger one), files the block
+with no passes, and is logged once per block as "no receipt scheme on the
+serving side yet". A block files when every read has settled. No read
+starts after `h + W₂ − M` (`M` = 30): at that tip every read not yet
+started is abandoned, and a read in flight is waited for (ruled
+2026-10-25). The wait is bounded by one read. A started read holds one of
+the client's slots, and the producer starts no more reads than the client
+has (`READS_AT_ONCE`, nearest deadline first), so it never queues. It
+first waits a start delay drawn uniformly below one block interval from
+the daemon's RNG (`READ_START_SPREAD`; §5.3, reads at random times), and is
+then at most `NeedBudget::fetches_per_holder` fetches of the drawn persona,
+each within `Timeouts::fetch_ceiling`: `READ_CEILING`, 2,280 s or
+`READ_CEILING_BLOCKS` = 19 blocks at the 120 s target, which the build
+holds below `M − 1`. A read whose task panics or is cancelled reports a
+stall, logged at error, so its slot is freed and the draw is read again at
+its next attempt. So at the target interval the read ends before
+`h + W₂ − 1`, the last tip whose next block is inside the window; that tip
+files whatever is still out, the backstop for a run of fast blocks during
+a read that stalls to its limit. A read that finds no slot has not
+started and is abandoned at the deadline like any other: capacity the
+producer lacks costs abandoned draws, priced with the floor's read
+capacity (`floor_read_capacity_pairs_per_epoch`), never the margin. A
+block with no draws on either stream files nothing (`SCS-P33`). A block of this daemon's that replaces a popped one
+at its height is claimed in the popped one's place, and a read of the
+popped block still out does not settle the new block's draw (the read is
+keyed by the block's hash).
+
+**The draws** come from the connector, which holds the drawable memo:
+`draw_targets` derives them with `select_pairs` and `support_seats`, the
+functions `verify_bundle` runs, so the pair the producer reads is the pair
+the verifier derives. **Support draws** are derived and read the same way;
+on the store view the support schedule is not on the connect path yet, so
+every block's support count is zero and the store's roster is not asked.
+
+**Assembly** is the retention crate's `assemble_bundle`, with the witness
+signature through a signing closure; the rules fixture assembles through
+it too.
+
+**The queue and the body store** (`shekyl-chain-store`, layout 33,
+`SO-D12p`): `archival_bundle_queue` (ordinal 50, `h →` the reference and
+the tip it was judged against) and `archival_bundle_body` (ordinal 51,
+prunable hash `→` the body), Rust-only and not chain state. The
+connector's `OfferBundle` is the queue's admission: `judge_bundles` over
+the store's bundle view at `h_incl = tip + 1`, the memo warmed first
+(`remember_window_epochs`), in the write that queues it. `AlreadyRevealed`
+says another bundle for `h` won; any other refusal of this daemon's own
+bundle is logged with its row as a producer defect. After every write that
+moves the tip, an entry whose window closed leaves, and an entry whose
+admitting tip left the chain is judged again and re-queued or dropped; an
+entry above the tip waits for its block. At open the store reconciles the
+two tables and the connector logs what went (SI-41).
+
+**Where it lives.** The ring, the plan, the state machine and assembly are
+`shekyl-bundle-producer`; its fetch read is behind the crate's `fetch`
+feature. The ingest crate depends on it under `pipeline` for the ring and
+turns on `fetch` with its own `producer` feature (default), which also
+brings the fetch scheduler and its store-backed facts (`shard_facts`,
+moved from `shekyl-daemon-image`). `shekyl-ffi`, the wallet-side image,
+links the ingest crate with `pipeline` only, so the fetch client stays out
+of its graph (SF-D4). The task (`bundle_producer.rs`) wakes on the
+connector's tip and on each read's end. The node runs it when it mines and
+has an operator's Tor SOCKS endpoint; a managed Tor publishes its route to
+the network after the node opens, so a node on one runs no producer yet.
+
+**Tests.** The gate (`bundle_producer_gate_tests`, live lane): a compact
+bond on a closed shard, the ring drawing every template, the producer's own
+task reading through the scheduler over the store's facts to the persona
+serving its shard's real bytes with the staged `ResidentReceiptKey`, the
+queue admitting each bundle, and the next block connecting it through
+`connect_admitting`; every draw is the persona's pair and passed, the index
+carries the passed bits, the epoch settles the pair as served; a restart
+mid-window keeps the entry, a reorg re-queues it at the new tip, and with
+the persona on an identity key a no-pass bundle is admitted and later
+leaves with its window. Fast: the queue's admission, the J33 refusal, the
+window, the reorg re-judge, the restart, the connector's derivation and the
+claim (ingest); the queue's tables and SI-41 (store); the ring, the plan
+and the state machine (producer); the challenge read on both streams, the
+identity endpoint's class and the §5.1 test through the producer's read;
+`draw_targets` against `Admitted` (rules); the secrets gate
+(`check_bundle_producer_secrets.py`).
+
+**Not in this increment:** references on the wire, bodies pulled at
+connect, body fetch from peers, broadcast (4b); the live receipt-key
+selection on the serving host (4b); census flips and deletions (4b); a
+managed Tor's route to the producer; any C++.
 
 ## 17. `SO-D12h` — a settled epoch's market membership, and the per-epoch retirement — RULED 2026-10-17, BUILT
 

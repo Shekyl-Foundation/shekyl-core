@@ -218,6 +218,60 @@ pub(super) fn bind_economy<F>(
     Ok(())
 }
 
+/// One support draw of `h`: the seat the roster puts at `j` and the
+/// shard the draw names.
+pub(super) struct SeatDraw {
+    pub(super) draw: u32,
+    pub(super) persona: shekyl_types::PCanonicalId,
+    pub(super) shard: shekyl_types::ShardId,
+    pub(super) receipt_key: ReceiptSignPk,
+}
+
+/// Every support draw of `h` when it issued `issued`: seat `j` of the
+/// roster, and `select_support_shard` over the archive width. The
+/// verifier ([`bind_support`]) and the producer
+/// ([`super::draw_targets`]) both derive the support stream here.
+///
+/// Zero issued reads nothing. A roster whose length is not `issued` is
+/// [`BundleInvalid::Count`]: the stated count and the seats disagree.
+pub(super) fn support_seats<V: BundleView>(
+    view: &V,
+    h: shekyl_types::BlockHeight,
+    seed: &[u8; 32],
+    hash_at_h: &[u8; 32],
+    issued: u32,
+) -> Result<Vec<SeatDraw>, BundleRefused<V::Fault>> {
+    if issued == 0 {
+        return Ok(Vec::new());
+    }
+    let Some(roster) = view.support_roster(h)? else {
+        return Err(BundleRefused::Unanswered(BundleUnanswered::Draw {
+            draw: 0,
+        }));
+    };
+    if roster.len() != usize::try_from(issued).unwrap_or(usize::MAX) {
+        return Err(invalid(BundleInvalid::Count));
+    }
+    let Some(width) = view.archive_width(h)? else {
+        return Err(BundleRefused::Unanswered(BundleUnanswered::Draw {
+            draw: 0,
+        }));
+    };
+    let mut seats = Vec::with_capacity(roster.len());
+    for (draw, seat) in (0..issued).zip(roster) {
+        let Some(shard) = select_support_shard(seed, hash_at_h, &seat.persona, draw, width) else {
+            return Err(BundleRefused::Unanswered(BundleUnanswered::Draw { draw }));
+        };
+        seats.push(SeatDraw {
+            draw,
+            persona: seat.persona,
+            shard: shekyl_types::ShardId::from_raw(shard),
+            receipt_key: seat.receipt_key,
+        });
+    }
+    Ok(seats)
+}
+
 /// The support observations, and the set-bit records appended to `passes`.
 ///
 /// An empty bitmap is an empty list and reads nothing more: the width
@@ -232,49 +286,26 @@ pub(super) fn bind_support<V: BundleView>(
     economy_records: usize,
     passes: &mut Vec<BoundPass>,
 ) -> Result<Vec<SupportObservation>, BundleRefused<V::Fault>> {
-    let issued = kept.support.count();
-    if issued == 0 {
-        return Ok(Vec::new());
-    }
-    let Some(roster) = view.support_roster(kept.h)? else {
-        return Err(BundleRefused::Unanswered(BundleUnanswered::Draw {
-            draw: 0,
-        }));
-    };
-    if roster.len() != usize::try_from(issued).unwrap_or(usize::MAX) {
-        return Err(invalid(BundleInvalid::Count));
-    }
-    let Some(width) = view.archive_width(kept.h)? else {
-        return Err(BundleRefused::Unanswered(BundleUnanswered::Draw {
-            draw: 0,
-        }));
-    };
+    let seats = support_seats(view, kept.h, &kept.seed, hash_at_h, kept.support.count())?;
     let mut records = body.records().skip(economy_records);
-    let mut observations = Vec::with_capacity(roster.len());
-    for draw in 0..issued {
-        // A `u32` into a `usize` is lossless on every target the workspace
-        // builds for, and `draw` is below `roster.len()`.
-        let seat = &roster[draw as usize];
-        let Some(shard) = select_support_shard(&kept.seed, hash_at_h, &seat.persona, draw, width)
-        else {
-            return Err(BundleRefused::Unanswered(BundleUnanswered::Draw { draw }));
-        };
-        let passed = kept.support.get(draw);
+    let mut observations = Vec::with_capacity(seats.len());
+    for seat in seats {
+        let passed = kept.support.get(seat.draw);
         if passed {
             let Some(record) = records.next() else {
                 return Err(invalid(BundleInvalid::RecordCount));
             };
             passes.push(BoundPass::support(
-                draw,
+                seat.draw,
                 record,
-                shard,
-                seat.receipt_key.clone(),
+                seat.shard.to_raw(),
+                seat.receipt_key,
             ));
         }
         observations.push(SupportObservation {
             persona: seat.persona,
-            shard: shekyl_types::ShardId::from_raw(shard),
-            draw,
+            shard: seat.shard,
+            draw: seat.draw,
             passed,
         });
     }

@@ -991,6 +991,10 @@ pub struct Follow {
     pub job: Option<JobSeat>,
     /// The pool.
     pub pool: Option<PoolWiring>,
+    /// The bundle producer, when the node mines and has a fetch path
+    /// (`SO-D12` increment 4c). It files from the job seat's ring.
+    #[cfg(feature = "producer")]
+    pub producer: Option<crate::bundle_producer::ProducerSeat>,
 }
 
 /// The pool, as a consumer of the connector (`DRS_X_STORE_FLIP.md` DX-Q5;
@@ -1215,6 +1219,22 @@ where
         let attendant_shared = Arc::clone(&shared);
         let attendant_door = door.clone();
         let job = follow.job;
+        #[cfg(feature = "producer")]
+        let producing = follow.producer.map(|seat| {
+            let parts = crate::bundle_producer::ProducerParts {
+                connector: shared.connector.clone(),
+                store: Arc::clone(&shared.store),
+                rules: shared.rules,
+            };
+            let stop = shared.stop_signal();
+            tokio::spawn(async move {
+                let Ok(tips) = parts.connector.ask(WatchTip).await else {
+                    return;
+                };
+                let (progress, _) = tokio::sync::watch::channel(Default::default());
+                crate::bundle_producer::run(parts, tips, stop, seat, progress).await;
+            })
+        });
         let task = tokio::spawn(async move {
             let attendant = tokio::spawn(async move {
                 let Ok(tips) = attendant_shared.connector.ask(WatchTip).await else {
@@ -1261,6 +1281,12 @@ where
                 drop(span);
             }
             while spans.join_next().await.is_some() {}
+            #[cfg(feature = "producer")]
+            if let Some(producing) = producing {
+                if let Err(join) = producing.await {
+                    tracing::error!("the bundle producer ended on a panic: {join}");
+                }
+            }
             if !attendant_ended {
                 let result = attendant.await;
                 if result.is_err()

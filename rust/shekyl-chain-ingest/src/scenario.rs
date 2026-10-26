@@ -45,6 +45,7 @@
 //! to `connect` through `Composed`) went with the last of them.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use kameo::actor::ActorRef;
 use shekyl_block_template::{
@@ -121,6 +122,17 @@ pub struct Scenario<P> {
     /// The headers the next target claim reads, extended as each block
     /// connects — the pipeline's ledger, filled the same way (`target`).
     targets: TargetLedger,
+    /// The store the connector writes, for a reader the test builds over
+    /// it (the bundle producer's fetch facts). Released with the
+    /// connector, so a reopen finds the file free.
+    store: Option<Arc<ChainStore>>,
+    /// When set, each template draws its `0x0C` commitment from this ring,
+    /// as the node's template does: the block can then be opened by the
+    /// bundle producer (`SO-D12` increment 4c).
+    witness: Option<Arc<shekyl_bundle_producer::WitnessRing>>,
+    /// A commitment the next template carries instead, once: a test that
+    /// holds the witness key and seed itself.
+    next_commitment: Option<shekyl_types::archival::DrawCommitment>,
 }
 
 /// The rules every scenario runs under: regtest at fixed difficulty one,
@@ -170,8 +182,9 @@ where
         store: impl Fn(&std::path::Path) -> ChainStore + Send + Sync + 'static,
     ) -> Self {
         let path = tmp(name);
+        let opened: Arc<ChainStore> = store(&path).into();
         let (connector, task) = spawn_connector(ConnectorArgs {
-            store: store(&path).into(),
+            store: Arc::clone(&opened),
             rules,
         });
         Self {
@@ -193,7 +206,30 @@ where
             rules,
             next_tx_secret: 1,
             targets: TargetLedger::new(),
+            store: Some(opened),
+            witness: None,
+            next_commitment: None,
         }
+    }
+
+    /// The next template carries `commitment` as its `0x0C`, once.
+    pub fn commit_next(&mut self, commitment: shekyl_types::archival::DrawCommitment) {
+        self.next_commitment = Some(commitment);
+    }
+
+    /// Draw every later template's commitment from `witness`.
+    pub fn draw_from(&mut self, witness: Arc<shekyl_bundle_producer::WitnessRing>) {
+        self.witness = Some(witness);
+    }
+
+    /// The store the connector writes.
+    ///
+    /// # Panics
+    ///
+    /// Between a stop and a start of the connector, which only
+    /// [`reopen`](Self::reopen) makes, and it starts it again.
+    pub fn store(&self) -> Arc<ChainStore> {
+        Arc::clone(self.store.as_ref().expect("the connector's store is open"))
     }
 
     /// The connector, for a test that wants to ask it something directly.
@@ -260,6 +296,51 @@ where
     /// Form `next`'s block and apply it: the connector's own door, the way
     /// [`mine_listing`](Self::mine_listing) applies what it built.
     pub async fn connect_template(&mut self, next: NextBlock) -> Result<Mined, StepOutcome> {
+        let (height, formed, kept) = self.form_next(next)?;
+        let applied = self
+            .connector
+            .ask(Apply(vec![(height, Ok(formed))]))
+            .await
+            .map_err(handler_error)
+            .map_err(StepOutcome::Connector)?;
+        self.mined(height, applied, kept)
+    }
+
+    /// Mine the next block listing `listed`, admitting every queued bundle
+    /// inside its window through the store's staged door
+    /// (`connector_bundles::ApplyAdmitting`): what 4b's connect does with a
+    /// block's references, for the bundle producer's gate test. The
+    /// verifier's verdicts come back with the block.
+    ///
+    /// # Panics
+    ///
+    /// If the queue's bundles do not admit: the gate's failure.
+    pub async fn mine_admitting(
+        &mut self,
+        listed: Vec<Transaction>,
+    ) -> Result<(Mined, Vec<shekyl_chain_rules::Admitted>), StepOutcome> {
+        let next = self.next_template(listed).await?;
+        let (height, formed, kept) = self.form_next(next)?;
+        let out = self
+            .connector
+            .ask(crate::connector::ApplyAdmitting {
+                height,
+                formed: Ok(formed),
+            })
+            .await
+            .map_err(handler_error)
+            .map_err(StepOutcome::Connector)?;
+        let admitted = out
+            .admitted
+            .unwrap_or_else(|why| panic!("the queue's bundles admit at {height}: {why}"));
+        Ok((self.mined(height, out.applied, kept)?, admitted))
+    }
+
+    /// Form `next`'s block. What the caller applies it through is its own.
+    fn form_next(
+        &mut self,
+        next: NextBlock,
+    ) -> Result<(BlockHeight, shekyl_chain_rules::StructurallyValid, Formed), StepOutcome> {
         let NextBlock {
             height,
             template,
@@ -291,13 +372,29 @@ where
         )
         .expect("the driver's substrate does not fault");
         let formed = formed.map_err(StepOutcome::Refused)?;
+        Ok((
+            height,
+            formed,
+            Formed {
+                template,
+                seed,
+                target,
+            },
+        ))
+    }
 
-        let applied = self
-            .connector
-            .ask(Apply(vec![(height, Ok(formed))]))
-            .await
-            .map_err(handler_error)
-            .map_err(StepOutcome::Connector)?;
+    /// What one applied block came to, and its header in the ledger.
+    fn mined(
+        &mut self,
+        height: BlockHeight,
+        applied: crate::connector::Applied,
+        kept: Formed,
+    ) -> Result<Mined, StepOutcome> {
+        let Formed {
+            template,
+            seed,
+            target,
+        } = kept;
         if let Some((_, refused)) = applied.refused {
             return Err(StepOutcome::Refused(refused));
         }
@@ -595,16 +692,19 @@ where
         if let Some(task) = self.task.take() {
             drop(task.await.expect("the connector task joins"));
         }
+        self.store = None;
     }
 
     /// A fresh connector over the store at [`Self`]'s path, under the same rules.
     fn start_connector(&mut self) {
+        let opened: Arc<ChainStore> = (self.opener)(&self.path).into();
         let (connector, task) = spawn_connector(ConnectorArgs {
-            store: (self.opener)(&self.path).into(),
+            store: Arc::clone(&opened),
             rules: self.rules,
         });
         self.task = Some(task);
         self.connector = connector;
+        self.store = Some(opened);
     }
 
     /// Stop the connector, release the store, remove the file.
@@ -682,6 +782,13 @@ where
     ) -> Result<Template, TemplateError> {
         let counter = self.next_tx_secret;
         self.next_tx_secret += 1;
+        let drawn = self.next_commitment.take().or_else(|| {
+            self.witness.as_ref().map(|witness| {
+                witness
+                    .draw(facts.connecting)
+                    .expect("the OS draws a witness key and seed")
+            })
+        });
         build_template(
             self.rules,
             &self.params,
@@ -690,17 +797,27 @@ where
             facts,
             now,
             listed,
+            drawn,
         )
     }
 }
 
+/// What a formed block keeps for its [`Mined`] after it is applied.
+struct Formed {
+    template: Template,
+    seed: BlockHash,
+    target: Target,
+}
+
 /// The scenario's template for `facts`, listing `listed`, at clock `now`:
 /// the production builder over the harness miner, with the coinbase secret
-/// and the draw commitment taken from `counter`, so two templates never
-/// share either. Nothing opens the commitment: the driver holds no witness
-/// key or seed, so its blocks issue no draw (`SO-D12` increment 3 is the
-/// driver that reveals one). The scenario's own blocks and the tip
-/// follower's test template source both build through it.
+/// taken from `counter` so two templates never share it. The draw
+/// commitment is `drawn` when the scenario draws from a witness ring
+/// ([`Scenario::draw_from`]): the block is then one the bundle producer can
+/// open. Otherwise it is taken from `counter` too, and nothing opens it:
+/// the driver holds no witness key or seed for it, so the block's draws are
+/// never revealed.
+#[allow(clippy::too_many_arguments)] // the template's operands, and the commitment it may take
 pub(crate) fn build_template(
     rules: ChainRules,
     params: &EconomicParams,
@@ -709,6 +826,7 @@ pub(crate) fn build_template(
     facts: &ChainFacts,
     now: Timestamp,
     listed: &[Transaction],
+    drawn: Option<shekyl_types::archival::DrawCommitment>,
 ) -> Result<Template, TemplateError> {
     // Written straight into the zeroizing cell: no bare copy of the
     // scalar's bytes exists on this stack after the context drops.
@@ -716,6 +834,9 @@ pub(crate) fn build_template(
     tx_key_secret[..8].copy_from_slice(&counter.to_le_bytes());
     let mut commitment = *shekyl_wire::tx_extra::CONFORMING_DRAW_COMMITMENT.as_bytes();
     commitment[..8].copy_from_slice(&counter.to_le_bytes());
+    if let Some(drawn) = drawn {
+        commitment = *drawn.as_bytes();
+    }
     let rule_set: RuleSet = rules.in_force(facts.connecting);
     build(&TemplateContext {
         height: facts.connecting,
