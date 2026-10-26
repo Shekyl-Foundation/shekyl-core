@@ -295,3 +295,57 @@ fn a_body_without_a_holder_is_si_41() {
     drop(store);
     cleanup(&path);
 }
+
+/// A retip of a height the queue does not hold is SI-41, and catching it
+/// does not save the batch. The chain writer stays live: the queue is not
+/// chain work. Red edit: drop the poison arm — the closure's `Ok` commits
+/// and the held entry's tip changes. Red edit: note a connecting height
+/// before the arm — the writer halts.
+#[test]
+fn a_swallowed_retip_of_an_absent_entry_poisons_and_leaves_the_writer_live() {
+    let path = tmp("queue-retip-absent");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    queue(&store, 40).expect("queued");
+    let (_height, hash) = tip();
+    let rewritten = BlockHash::from_bytes([0x11; 32]);
+    let missing = BlockHeight::from_raw(41);
+    let at = BlockHeight::from_raw(40);
+    let result = store.write(|batch| -> Result<(), StoreError> {
+        let refused = batch.retip_bundle(missing, at, rewritten);
+        assert!(
+            matches!(
+                refused,
+                Err(StoreError::InvariantViolated(StoreInvariant::BundleBodyHolder(
+                    BodyHolderFault::EntryAbsent { h },
+                ))) if h == missing
+            ),
+            "{refused:?}"
+        );
+        batch.retip_bundle(at, at, rewritten)?;
+        Ok(())
+    });
+    assert!(
+        matches!(
+            result,
+            Err(StoreError::InvariantViolated(StoreInvariant::BundleBodyHolder(
+                BodyHolderFault::EntryAbsent { h },
+            ))) if h == missing
+        ),
+        "a swallowed absence still refuses the commit: {result:?}"
+    );
+    let held = entries(&store);
+    assert_eq!(held.len(), 1);
+    assert_eq!(
+        held[0].queued.tip_hash, hash,
+        "the retip after the catch did not land"
+    );
+    assert!(
+        store.connect_state().is_live(),
+        "a queue fault does not halt the chain writer"
+    );
+    store
+        .write(|_| Ok::<(), StoreError>(()))
+        .expect("a later write proceeds");
+    drop(store);
+    cleanup(&path);
+}
