@@ -109,7 +109,7 @@ The 10%/yr binding rate is EXOGENOUS: SKL bonded for decades in a settled
 chain at ~15 tx/block is where that assumption is strongest and least
 grounded; the band is kept, the choice of binding member is the owner's.
   -> VERDICT @10%: D2 case (best clears, flat does not): none; cleared by NO
-candidate in the band: late_chain_tail, high_history_low_activity. Byte-keyed, n counts ~10 KB of archival per
+candidate in the band: late_chain_tail, high_history_low_activity. Byte-keyed, n counts ~12 KB of archival per
 transaction, not one 128-B leaf per output, so the §6.2 coupled bond per unit
 of traffic is ~40x the leaf-era figure — a scenario the leaf-era sweep cleared
 can fail here on the bond term alone, with no change to the escalation.
@@ -251,7 +251,7 @@ never created" (ARCHIVAL_BUDGET_SCHEDULE §4). A class claims iff its reward
 covers one claim tx (0.295176..0.226980 SKL early..late @ the production relay
 floor, via the production predictor at each year's tree depth). PRE-D1 vs
 POST-D1 scoring = the §1 Stage-0 coupling claim, measured: pre-D1 zeroes bulk
-holders past the co-holder cliff (r_market > g_milli ≈ 1000), and a
+holders past the co-holder cliff (r_market > g_milli = 1000), and a
 structural-zero cohort's slice never mints.
 archivers    mean_r        n  pre strand pre zero%  post strand post zero% post noclm%
 2000             25    22349       0.00%      0.0%        0.00%      0.0%       0.0%  early
@@ -263,10 +263,12 @@ archivers    mean_r        n  pre strand pre zero%  post strand post zero% post 
 2000              2   229864       0.00%      0.0%        0.00%      0.0%       0.0%  late
 20000            24   229864       0.00%      0.0%        0.00%      0.0%       0.0%  late
 60000            73   229864       0.00%      0.0%        0.00%      0.0%       0.0%  late
-  -> Read: the §1 Stage-0 claim is CONFIRMED, and stronger than stated — where
-mean_r crosses the co-holder cliff (~1000) pre-D1 strands 100% of budget,
-not 'partly': EVERY class floors to zero, so the whole epoch's entitlement is
-supply-never-created. Replication = archivers x holdings / n, so this is an
+  -> Read: on this corpus no row reaches the co-holder cliff (g_milli = 1000): the
+largest mean_r in the table is 751, the largest pre-D1 stranded fraction 0.00%.
+The §1 Stage-0 claim, shown rather than asserted at 120000 archivers (mean_r 1503, past
+the cliff) on the early corpus: pre-D1 zero-work 100% and stranded 100% —
+EVERY class floors to zero, so the whole epoch's entitlement is supply-never-created;
+post-D1 zero-work 0%. Replication = archivers x holdings / n, so this is an
 EARLY-CHAIN regime (few shards, many holders) the corpus grows out of — and one a
 large archiver population re-enters at any n. D2-without-D1 would have escalated
 a pool that evaporates ENTIRELY in exactly the bootstrap window that most needs
@@ -274,7 +276,8 @@ archivers paid.
 RESIDUAL = a QUANTIZATION FLOOR, not a remaining defect: D1 does not abolish
 structural zeros, it SCALES the cliff with holdings to r > ~1000 x shards_held
 (the micro sum must reach one milli). Unreachable for a bulk holder (4096 shards
-⇒ r > 4M); a 16-shard hobbyist still zeroes at r > ~16k — the 70% column above.
+⇒ r > 4M); a 16-shard hobbyist still zeroes at r > ~16k — the post noclm%
+column's largest value in this table is 0.0%.
 Sub-milli work is UNREPRESENTABLE under the frozen WORK_MILLI_SCALE, so the
 honest name is a MINIMUM VIABLE HOLDING THRESHOLD, not a bug: eliminating it
 would mean changing a frozen constant. The archiver's levers are holdings size
@@ -316,6 +319,9 @@ r > ~1000 x shards_held cliff. Purpose: make guaranteed-zero bonds
 UNREPRESENTABLE rather than merely unprofitable (they lock capital into a
 position the frozen scale cannot pay). Safety multiple = 2x.
 archivers          n    mean_r   min_viable_h split-loss@4096
+2000            4096       136              1           1441
+20000           4096      1367              2            946
+60000           4096      4101              5            176
 2000           22349        25              1              0
 20000          22349       250              1              0
 60000          22349       751              1           1355
@@ -325,7 +331,7 @@ archivers          n    mean_r   min_viable_h split-loss@4096
 2000          229864         2              1              0
 20000         229864        24              1           2727
 60000         229864        73              1           2859
-  -> RECOMMENDED provisional min_holding = 2 shards (2x the worst swept
+  -> RECOMMENDED provisional min_holding = 10 shards (2x the worst swept
 boundary). Composes with the wire cap: true (must sit strictly below
 MAX_HOLDINGS_SHARDS = 4096). Genesis-provisional NUMBER under a frozen SHAPE
 (bond_duration posture): re-pin at testnet against MEASURED replication, with a
@@ -342,9 +348,9 @@ OQ-4 (D3 round §12.8) — A4 gate under PLATEAU DELETION (scenario baseline_ste
 steepest candidate, Δn=10000, H=10y). Prediction: the capped column vanishes and
 the realistic-end numbers become the only numbers.
 honest regime                       ROI     fee x -> 1
-kept, small bonds (h=4)          0.0008            0.0
-kept, capped (h=512)             0.0048            0.0
-DELETED (h irrelevant)           0.0008            0.0
+kept, small bonds (h=4)          0.0076            0.0
+kept, capped (h=512)             0.0482            0.0
+DELETED (h irrelevant)           0.0076            0.0
   -> Read: deletion reproduces the small-bond row exactly — under R2 there is no
 cap to dodge, so the honest-holdings axis stops mattering and A4 has ONE number
 per regime instead of a naive/rational spread. fee_mult_to_close is unchanged
@@ -361,18 +367,18 @@ which is the whole mechanism. Regime = PLATEAU DELETED (D3/R2), the sole live
 regime: no curve, so credited work IS work and there is no naive/rational axis.
 Margin = reward - (bond opp cost @ 10% + storage), SKL/epoch, at baseline_steady_st n=229864.
  shards        r  work_mil    share PRE   share POST    reward SKL      cost SKL    margin
-     16        2      8000      0.01302      0.01298      2.672847      0.045845        ok
-     16        6      2666      0.02594      0.02596      0.890726      0.045845        ok
-     16       50       320      0.00104      0.00104      0.106914      0.045845        ok
-     16     3000         5      0.00000      0.00001      0.001671      0.045845     UNDER
-    256        2    128000      0.07441      0.07420     42.765548      0.733516        ok
-    256        6     42666      0.14822      0.14839     14.254960      0.733516        ok
-    256       50      5120      0.00595      0.00594      1.710622      0.733516        ok
-    256     3000        85      0.00000      0.00005      0.028399      0.733516     UNDER
-   4096        2   2048000      0.23810      0.23743    684.248769     11.736256        ok
-   4096        6    682663      0.47429      0.47486    228.081698     11.736256        ok
-   4096       50     81920      0.01905      0.01899     27.369951     11.736256        ok
-   4096     3000      1363      0.00000      0.00016      0.455386     11.736256     UNDER
+     16        2      8000      0.01302      0.01298      2.774700      0.045845        ok
+     16        6      2666      0.02594      0.02596      0.924669      0.045845        ok
+     16       50       320      0.00104      0.00104      0.110988      0.045845        ok
+     16     3000         5      0.00000      0.00001      0.001734      0.045845     UNDER
+    256        2    128000      0.07441      0.07420     44.395205      0.733516        ok
+    256        6     42666      0.14822      0.14839     14.798171      0.733516        ok
+    256       50      5120      0.00595      0.00594      1.775808      0.733516        ok
+    256     3000        85      0.00000      0.00005      0.029481      0.733516     UNDER
+   4096        2   2048000      0.23810      0.23743    710.323287     11.736256        ok
+   4096        6    682663      0.47429      0.47486    236.773157     11.736256        ok
+   4096       50     81920      0.01905      0.01899     28.412931     11.736256        ok
+   4096     3000      1363      0.00000      0.00016      0.472740     11.736256     UNDER
   -> Scarce-holder (r<=50) aggregate share: PRE-D1 1.0000 -> POST-D1 0.9998
 (dilution 0.02% of their former share — the W6 quantum, DESCRIPTIVE).
 Cells under water post-D1: 3 of 12 (0 of them scarce-holders).
@@ -385,25 +391,25 @@ archival bytes at the block-weight ceiling is the fastest n can physically move.
 Ceiling: 300000 B/block floor x4 surge = 1200000 B, reached after
 ~102 blocks of sustained flood (1.0% of an epoch); epoch = 10000 blocks;
 reorg reach = 720 blocks. Curve = steepest candidate (asymptote 90%,
-knee 10000000) — a cliff would surface there first.
+knee 500000) — a cliff would surface there first.
         n     Δn/epoch   Δshare/epoch   Δshare %pts/ep %pts/ep w/penalty reorg Δshare%pt
-        0         3865            502          0.0502%           0.1005%         0.0036%
-   100000         3877            504          0.0504%           0.1008%         0.0036%
-   500000         3877            504          0.0504%           0.1008%         0.0036%
-  2250000         3808            495          0.0495%           0.0992%         0.0035%
+        0         3865          10049          1.0049%           2.0100%         0.0722%
+   100000         3877          10080          1.0080%           2.0160%         0.0725%
+   500000         3877              0          0.0000%           0.0000%         0.0000%
+  2250000         3808              0          0.0000%           0.0000%         0.0000%
  10000000         3808              0          0.0000%           0.0000%         0.0000%
   -> Read: 'Δshare %pts/ep' is the MAXIMUM the staker share can move in one
 settlement epoch when an adversary floods at the surge ceiling for the whole
-epoch — the worst case for §6.0's no-swing claim. Worst observed: 0.0504 points.
+epoch — the worst case for §6.0's no-swing claim. Worst observed: 1.0080 points.
 The reorg column bounds the only DOWN-swing that exists (monotonicity holds in
 the canonical chain; a reorg can re-open at most 720 blocks' worth).
-VERDICT: no measurable adversarial slew.
+VERDICT: see the slew reading below.
   -> §6.0/§6.1 SEPARATED, because they are different claims:
 (a) CLIFF (structural, §6.1's actual requirement) — NOT present. The share is
 monotone and a single shard never moves it discontinuously; the family's
 `no_cliff_bounded_slope` test pins that, and the reorg column shows the only
-down-swing reaches 0.0036 points. W8 stands armed BY OPERAND.
-(b) ADVERSARIAL SLEW RATE (economic) — 0.0504 pts/epoch penalty-free, 0.1008
+down-swing reaches 0.0725 points. W8 stands armed BY OPERAND.
+(b) ADVERSARIAL SLEW RATE (economic) — 1.0080 pts/epoch penalty-free, 2.0160
 pts/epoch if the flooder also compensates the miner penalty (the legal 2x
 limit). MEASURED against blockchain.cpp's ArticMine algorithm, not derived —
 the ceiling a flood can force at maximum effort. A rate, not a cliff,
@@ -479,7 +485,7 @@ PASS iff margin > 0. L14 rides the CORRECTED m-of-n slash (m=11/n=13: a single
 missed re-fetch is ABSORBED — deterrent is WEAKER than single-strike).
 honest storage/epoch = $0.00468 (hold 12.3 GB @ 1e-11 $/B/yr).
 fetch $/GB             refetch/epoch     margin@q=0  q* bond-only   q* +reward
-0.01                        0.000834      -0.003842         0.271        0.105
+0.01                        0.000834      -0.003842         0.271        0.103
 0.10                        0.008336       0.003660         0.000        0.000
   -> W10 gate: FAILS at the current grace window (margin@q=0 < 0 — re-fetch is ~KB
 vs 12.3 GB held, so honest holding is the DEARER strategy: the proxy free-rides).
@@ -505,20 +511,20 @@ leg inverts — the deterrent is carried by T_risk alone:
 q            T_risk bond-only     T_risk +reward
 0.001                0.000000           0.000000
 0.010                0.000000           0.000000
-0.050                0.000000           0.000001
-0.100                0.000000           0.002359
-0.278                0.004978          89.463853
+0.050                0.000000           0.000002
+0.100                0.000000           0.002898
+0.278                0.004978         109.908270
   -> q_risk* (T_risk alone covers S; storage cheap-side worst case): bond-only 0.2762,
-+reward 0.1066. Residual vs the quoted A5 band (0.098-0.278), ATTRIBUTED (F-2): the
++reward 0.1046. Residual vs the A5 band at 0.01 $/GB (0.103-0.271), ATTRIBUTED (F-2): the
 A5 crossover solves T_risk(q) = S - T_bw(opening) and its band ends were quoted at
 specific fetch prices; q_risk* solves T_risk(q) = S exactly. The slash model is
 payload-independent -- inputs aside -- and the zero-payload crossover EQUALS
 q_risk* identically (welded by test).
   -> WITHIN-CLASS restatement (F-1 -- one actor, one infrastructure class; the
-cross-class 26-263x pairs the cheapest storage against the dearest bandwidth):
+cross-class 79-788x pairs the cheapest storage against the dearest bandwidth):
 cloud-class: S = $0.1122/epoch (@2.4e-10 $/B/yr) vs T = $0.369-$3.686
 -> ratio 3.3x-32.9x -- MARGINAL at cheap transit (3.3x); this is the
-cell the SS 5.3 price-contingency reopen watches, not the 26x one.
+cell the SS 5.3 price-contingency reopen watches, not the 79x one.
 consumer/flat-rate: S = $0.0047/epoch, T_marginal ~= 0 -> INVERTED; T_risk
 decides (q_risk* above). Headline, honestly: bandwidth closes it decisively
 for a metered-egress fetcher, marginally for a cheap-transit cloud actor,
@@ -533,7 +539,7 @@ per-shard pool because there a larger forfeit is a STRONGER deterrent, so
 max is conservative. For TJ-4/TJ-7 it runs the OTHER WAY -- a larger reward
 makes the slash/Reinstate cycle and the dilution MORE profitable -- so max is
 the ALARM-RAISING end. Tables below run the MEDIAN (0.9774 SKL/shard/epoch);
-the max (226.4711) is reported as the bound beneath each.
+the max (278.2275) is reported as the bound beneath each.
   TJ-4 CORRECTION (reward path, verified): a ZERO-service P earns NOTHING
 (shard_work_micro returns 0 without serve credit; reward pays on credited
 work), so the m-1 unslashable epochs are free of SLASH, not free MONEY.
@@ -579,7 +585,7 @@ NOTE: 0.2308 is the DETERMINISTIC no-slash fraction, which bounds an
 adversary that can PLACE its passing epochs. Under SS 8.2's unchooseable
 draw the cartel cannot place them, so absorption still occurs above it
 — deferred, not prevented.
-     bound at the MAX operand (226.4711 SKL/shard/epoch): break-even f = 0.0004.
+     bound at the MAX operand (278.2275 SKL/shard/epoch): break-even f = 0.0003.
 Both ends of the family are reported so the verdict is a RANGE, not a
 point chosen by which operand happened to be at hand.
   -> WHY it breaks even so low: the burned bond is worth 0.77 EPOCHS of the
@@ -593,11 +599,11 @@ hashrate share — so each row reads 'the cycle pays only above this
 fraction of network hashrate'. 'none' = the cycle never pays anywhere
 absorption is measurable within the horizon.
 cooldown     ~weeks   break-even f (med)   break-even f (max)
-0               0.0               0.0756               0.0004
-1               2.0               0.0824               0.0004
-2               4.0               0.0901               0.0005
-4               7.9               0.1086               0.0007
-8              15.8               0.1538               0.0032
+0               0.0               0.0756               0.0003
+1               2.0               0.0824               0.0003
+2               4.0               0.0901               0.0004
+4               7.9               0.1086               0.0005
+8              15.8               0.1538               0.0026
 16             31.7               0.2321               0.1989
 32             63.3               0.3136               0.3046
 64            126.6               0.3835               0.3806
@@ -648,15 +654,15 @@ N               h   gain SKL/epoch     break-even rate/yr
 20              5          0.61899                 114.2%
 100             5          0.76793                  27.2%
 100            50          0.63241                  22.4%
-  TJ-7 at MAX pool g = 226.4711 SKL/epoch (sole credited holder; pool is
+  TJ-7 at MAX pool g = 278.2275 SKL/epoch (sole credited holder; pool is
 CONSERVED — N sybils vs h honest take N/(N+h)*g, NOT N*g):
 N               h   gain SKL/epoch     break-even rate/yr
-2               1         37.74519              132259.1%
-5               1         75.49038               66129.6%
-5               5         75.49038               66129.6%
-20              5        143.43172               26451.8%
-100             5        177.94160                6298.1%
-100            50        146.54014                5186.6%
+2               1         46.37126              162484.9%
+5               1         92.74251               81242.4%
+5               5         92.74251               81242.4%
+20              5        176.21077               32497.0%
+100             5        218.60735                7737.4%
+100            50        180.02958                6372.0%
   -> the attack pays iff the cartel's real cost of locked capital is BELOW
 the listed rate. Marginal gain saturating at h/(1+h)*g while cost grows
 linearly gives a finite optimal N — priceable, not unbounded. NOTE

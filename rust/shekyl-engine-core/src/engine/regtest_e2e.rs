@@ -101,6 +101,13 @@ fn install_wallet_tracing() {
     );
 }
 
+/// The line a daemon started with `--dev-rpc` writes at start (IG-8),
+/// pinned by `shekyl-daemon-config`'s
+/// `the_armed_lever_switch_announces_itself`.
+/// `scripts/ci/check_armed_lever_launchers.py` holds this text equal to
+/// `scripts/armed_lever.py` and to that test.
+const ARMED_ROW_ANNOUNCEMENT: &str = "development lever set: dev-rpc=true";
+
 /// A live `shekyld --network regtest` daemon spawned for one test, with an ephemeral
 /// data dir and RPC port. Killed and cleaned on drop.
 /// Last 40 lines of the daemon's captured log, inlined into panics:
@@ -382,6 +389,13 @@ impl RegtestDaemon {
             // daemon rejected instead of a bare `Malformed`.
             "--log-level",
             "info",
+            // The armed test levers (`generateblocks`, `pop_blocks`) are
+            // served only with this row set once dispatch reads the method
+            // table's `armed` column (DRS-X flip). Today's C++ path does
+            // not read it, so setting it now changes nothing and removes
+            // the flip's red. The daemon announces it at start, and
+            // `await_ready` holds it to that.
+            "--dev-rpc",
         ]);
         match peering {
             Peering::Offline => {
@@ -500,6 +514,14 @@ impl RegtestDaemon {
                         "get_info's P2P state must be the daemon's configuration; got {state:?}"
                     );
                     assert_eq!(info.health.p2p.is_offline(), self.offline);
+                    // The armed row is set and the daemon said so at start
+                    // (IG-8's announcement, written before RPC binds).
+                    let log = std::fs::read_to_string(&log_path).unwrap_or_default();
+                    assert!(
+                        log.contains(ARMED_ROW_ANNOUNCEMENT),
+                        "the daemon did not announce `{ARMED_ROW_ANNOUNCEMENT}` at start; log tail:\n{}",
+                        log_tail(&log_path)
+                    );
                     return;
                 }
                 Err(e) => last_err = format!("{e:?}"),
