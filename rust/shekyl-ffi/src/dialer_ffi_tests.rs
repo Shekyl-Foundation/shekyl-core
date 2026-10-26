@@ -127,6 +127,19 @@ fn a_push_before_the_dialer_exists_is_refused_not_held() {
     );
 }
 
+/// The built dialer reads the window the managed Tor is launched with: a
+/// Tor attempt that fails at or after it is final within its test.
+#[test]
+fn the_dialer_reads_the_managed_tors_window() {
+    let _bind = seam_bind_lock().lock();
+    unbind();
+    bind();
+    let window = dialer().expect("bound").tor_window();
+    assert_eq!(window, crate::tor_link::TOR_SOCKS_TIMEOUT.window());
+    assert!(window.is_some(), "the daemon sets a window");
+    unbind();
+}
+
 /// The address file's entries and the operator's peers enter gray, never
 /// white: a named address has not been dialled, and white is disclosed.
 #[test]

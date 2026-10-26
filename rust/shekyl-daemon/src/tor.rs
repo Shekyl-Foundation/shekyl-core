@@ -49,9 +49,7 @@ const REPLY_BOUND: Duration = Duration::from_secs(30);
 /// The managed Tor answers a SOCKS request it cannot attach just inside the
 /// Tor dial deadline, so the dial's class is Tor's reply, never a race with
 /// that deadline (`TOR_SUPERVISOR.md` §4.2).
-const SOCKS_TIMEOUT: SocksTimeout = SocksTimeout::Below {
-    dial_deadline: shekyl_ffi::tor_link::TOR_DIAL_WITHIN,
-};
+const SOCKS_TIMEOUT: SocksTimeout = shekyl_ffi::tor_link::TOR_SOCKS_TIMEOUT;
 /// The onion's stream cap.
 const MAX_STREAMS: u16 = 8;
 /// `GETINFO` key for the bootstrap phase. One sample asks this and the listener.
@@ -898,6 +896,14 @@ mod tests {
         let deadline = shekyl_ffi::tor_link::TOR_DIAL_WITHIN.as_secs();
         assert!(timeout < deadline, "{timeout} s inside {deadline} s");
         assert!(timeout >= deadline / 2, "not far inside it");
+        // The dialer reads the same window the Tor is launched with: an
+        // attempt failing at or after it is final within its test.
+        assert_eq!(
+            shekyl_ffi::tor_link::TOR_SOCKS_TIMEOUT.window(),
+            Some(Duration::from_secs(timeout)),
+            "one window"
+        );
+        assert_eq!(timeout, 105, "120 s less the 15 s margin");
     }
 
     /// A control ask that never answers, the wedged-Tor case, does not hold

@@ -644,19 +644,29 @@ impl SocksTimeout {
     /// (Tor's stream schedule starts at 10 s, then 15 s) inside it.
     pub const MARGIN: std::time::Duration = std::time::Duration::from_secs(15);
 
-    /// The `--SocksTimeout` value in whole seconds, or `None` for Tor's
-    /// default. Never more than half the deadline away from it.
+    /// How long Tor holds a SOCKS request it cannot attach, in whole
+    /// seconds, or `None` for Tor's default. Never more than half the
+    /// deadline away from it. The one computation of the window: the launch
+    /// renders it ([`Self::as_arg`]) and the dialer reads it, so a failure
+    /// at or after it is known to have used Tor's whole window.
     #[must_use]
-    pub fn as_arg(self) -> Option<String> {
+    pub fn window(self) -> Option<std::time::Duration> {
         match self {
             Self::TorDefault => None,
             Self::Below { dial_deadline } => {
                 let timeout = dial_deadline
                     .saturating_sub(Self::MARGIN)
                     .max(dial_deadline / 2);
-                Some(timeout.as_secs().max(1).to_string())
+                Some(std::time::Duration::from_secs(timeout.as_secs().max(1)))
             }
         }
+    }
+
+    /// The `--SocksTimeout` value in whole seconds, or `None` for Tor's
+    /// default: [`Self::window`], rendered.
+    #[must_use]
+    pub fn as_arg(self) -> Option<String> {
+        self.window().map(|window| window.as_secs().to_string())
     }
 }
 

@@ -417,9 +417,13 @@ holds a count, so the destroy post has not run.
   closes both session ends with the cause. The seam inbound drive
   records that cause. `PeerClosed` is the reader's end-of-file and
   nothing else. A silent acceptor is `LevinHandshakeTimeout`. A peer
-  that sends FIN is `PeerClosed`. The cause carries three marks in
+  that sends FIN is `PeerClosed`. The cause carries four marks in
   its spare byte, worth a retry, names the destination, proves
-  misbehaviour (2026-10-24): per kind by default, handed in by the
+  misbehaviour (2026-10-24), and a timeout of the dial's own window
+  (2026-10-26: the dial deadline's `TransportTimeout` and Tor's
+  `0x06`; the dialer reads it against the attempt's start, and a Tor
+  timeout at or after `SocksTimeout` is final within its test): per
+  kind by default, handed in by the
   connector for a proxy refusal (the Tor connector's reply table,
   `shekyl-tor/src/replies.rs`; this crate keeps no SOCKS knowledge), and
   the dialer stamps proof on a Levin rejection or a refused

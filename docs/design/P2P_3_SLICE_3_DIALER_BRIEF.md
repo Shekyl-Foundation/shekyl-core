@@ -819,7 +819,7 @@ landed: white expiry follows the connection (slice 1 brief §5, the
 session's close, and `expire` skips an address in the dialer's `Attempts`
 kept set, the same set `session_closed` removes. *Records-was: the dialer
 answered `BanQuery::has_live_session` from the seam's board*); per-layer
-judgement as three marks on
+judgement as four marks on
 the close cause (`P2P_TRANSPORT_LAYER.md`, "The cause travels with the
 close"; the Tor reply table is the Tor connector's,
 `shekyl-tor/src/replies.rs`, and `TOR_SUPERVISOR.md` reads it; the
@@ -829,7 +829,18 @@ test (`shekyl-dialer/src/pace.rs`, `attempts_per_test` and
 `retry_wait_nanos`, and `shekyl-dialer/src/attempts.rs`: the open test,
 in flight or waiting, is one record on `Attempts`; Tor three attempts,
 clearnet one, the address drawn throughout and no in-flight slot held
-while waiting, one `DialOutcome` per test, the last attempt's); a
+while waiting, one `DialOutcome` per test, the last attempt's; a Tor
+attempt that times out at or after the managed Tor's `SocksTimeout`,
+105 s from the attempt's own start (`shekyl_ffi::tor_link::TOR_SOCKS_TIMEOUT`,
+the one constant the launch also reads), is final within its test and
+the address cools: Tor retried inside its own window, introduction
+points and descriptor fetches (Rick, 2026-10-26; the Tor 0.4.9.14 lines
+are in `TOR_SUPERVISOR.md`'s reply table). The close cause's window-timeout
+mark says which failures are timeouts: Tor's `0x06` and the dial
+deadline's `TransportTimeout`. An earlier one keeps its retries, as
+`0xF0`, `0xF2`, `0x03`, `0x04` and the gap timeout do; `0x01` is final
+by its own row. Every failed Tor attempt counts in the posture line's
+tally when it ends, deferred or not); a
 cooldown in place of the drop ("The fill" above; the `DialOutcome` table;
 slice 1 brief §5, where cooling
 seats are evictable like drawable ones); the file rule (slice 1 brief

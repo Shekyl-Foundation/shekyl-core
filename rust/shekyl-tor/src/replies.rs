@@ -65,6 +65,20 @@ const TOR_INTRODUCTION_TIMEOUT: u16 = 0xF7;
 /// the destination: general failure, host unreachable, connection
 /// refused, the missing or unusable descriptor, the failed introduction.
 /// Nothing here proves misbehaviour: a SOCKS reply is the proxy's word.
+///
+/// TTL expired also carries [`Marks::WINDOW_TIMEOUT`]: at or after the
+/// managed Tor's `SocksTimeout` it is final within its test, because **Tor
+/// retried inside its own window** (Rick, 2026-10-26). In Tor 0.4.9.14 the
+/// reply comes only from the stream-end reason `TIMEOUT`
+/// (`src/core/or/reasons.c:128`): the client's `SocksTimeout` ran out on an
+/// onion stream (`src/core/or/connection_edge.c:1222`, `:1250`), or the
+/// service's own connect to its target timed out, which Tor never retries
+/// on an onion stream (`src/core/or/relay.c:892`). Inside that window Tor
+/// already moves to another introduction point
+/// (`src/feature/hs/hs_client.c:1246`) and fetches the descriptor from
+/// another directory (`:1717`, `:1739`, `:1758`). An earlier `0x06` is a
+/// lost circuit or the service's connect, and keeps its retries; the
+/// dialer tells which from the attempt's start.
 pub const fn proxy_reply_marks(reply: u16) -> u8 {
     let retry = matches!(
         reply,
@@ -85,7 +99,10 @@ pub const fn proxy_reply_marks(reply: u16) -> u8 {
             | TOR_DESCRIPTOR_UNUSABLE
             | TOR_INTRODUCTION_FAILED
     );
-    (if retry { Marks::RETRY } else { 0 }) | (if names { Marks::NAMES_DESTINATION } else { 0 })
+    let window = matches!(reply, SOCKS_TTL_EXPIRED);
+    (if retry { Marks::RETRY } else { 0 })
+        | (if names { Marks::NAMES_DESTINATION } else { 0 })
+        | (if window { Marks::WINDOW_TIMEOUT } else { 0 })
 }
 
 /// Replies that mean the request this node sent, not the onion.
@@ -114,9 +131,10 @@ mod tests {
     use super::*;
 
     /// This connector's reply table (Rick, 2026-10-24; `0x01` final on
-    /// 2026-10-25): the retry set, the final set, and the destination-naming
-    /// replies. No reply proves misbehaviour: a SOCKS reply is the proxy's
-    /// word.
+    /// 2026-10-25; `0x06` a window timeout on 2026-10-26): the retry set,
+    /// the final set, the destination-naming replies, and the one reply
+    /// the dialer reads against Tor's window. No reply proves misbehaviour:
+    /// a SOCKS reply is the proxy's word.
     #[test]
     fn the_onion_reply_table_marks_retries_finals_and_destination_naming() {
         let retry = [0xF0, 0xF2, 0xF3, 0xF7, 0x03, 0x04, 0x06];
@@ -138,6 +156,7 @@ mod tests {
                 naming.contains(&reply),
                 "reply {reply:#x}"
             );
+            assert_eq!(cause.window_timeout(), reply == 0x06, "reply {reply:#x}");
             assert!(!cause.proves_misbehaviour(), "reply {reply:#x}");
             assert_eq!(
                 socks_reply_is_our_request(reply),

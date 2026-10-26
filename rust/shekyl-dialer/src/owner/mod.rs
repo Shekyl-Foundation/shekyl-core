@@ -123,6 +123,10 @@ pub struct Shared {
     /// Each connector's in-flight bound ([`in_flight_bound`]): protocol
     /// data, the same on every node.
     bounds: [usize; ConnectorId::COUNT],
+    /// The managed Tor's `SocksTimeout`, in nanoseconds, once the daemon
+    /// sets it ([`Dialer::set_tor_window`]). A Tor attempt that times out
+    /// at or after it is final within its test.
+    tor_window: Option<u64>,
     /// What the Tor dials show, for the managed-Tor supervisor's posture
     /// line (`TOR_SUPERVISOR.md` §4.2). Display only (`TSR-Q14`).
     tor_link: LinkFold,
@@ -242,6 +246,7 @@ impl Dialer {
                     in_flight_bound(ConnectorId::Clearnet),
                     in_flight_bound(ConnectorId::Tor),
                 ],
+                tor_window: None,
                 tor_link: LinkFold::new(),
                 inbound_tor: 0,
             })),
@@ -281,6 +286,27 @@ impl Dialer {
     pub fn set_network_id(&self, network_id: [u8; 16]) {
         *self.network_id.lock().expect("network id") = Some(network_id);
         self.bell.ring();
+    }
+
+    /// The window the managed Tor gives one onion connect before it answers
+    /// `0x06` (its `SocksTimeout`). Tor has already retried introduction
+    /// points and descriptor fetches inside it, so a Tor attempt that
+    /// times out at or after it, measured from the attempt's own start, is
+    /// final within its test: the address cools (Rick, 2026-10-26). A
+    /// timeout inside the window keeps its retries. `None`, the default,
+    /// leaves every timeout worth its retries: no Tor of ours has a window
+    /// to read.
+    pub fn set_tor_window(&self, window: Option<std::time::Duration>) {
+        let nanos = window.map(|window| u64::try_from(window.as_nanos()).unwrap_or(u64::MAX));
+        self.shared().tor_window = nanos;
+    }
+
+    /// The Tor window [`Self::set_tor_window`] set.
+    #[must_use]
+    pub fn tor_window(&self) -> Option<std::time::Duration> {
+        self.shared()
+            .tor_window
+            .map(std::time::Duration::from_nanos)
     }
 
     /// Send what the Tor dials show to `sink`: the tally now, then each
@@ -628,20 +654,29 @@ impl Dialer {
     /// cause is worth a retry, with attempts left in this test, is not
     /// recorded: the open test waits its [`retry_wait_nanos`] and the
     /// address stays an outstanding draw. The wake at or after the due
-    /// tick makes the next attempt. Anything else, including a test that
-    /// is not in flight, is the test's one outcome and is recorded. The
-    /// inbound count is taken under the table lock, across the dialer's.
+    /// tick makes the next attempt. A Tor timeout that ends at or after
+    /// the Tor window, counted from `started`, is not worth one
+    /// ([`Self::set_tor_window`]). Anything else, including a test that is
+    /// not in flight, is the test's one outcome and is recorded. A
+    /// deferred Tor failure still counts in the tally: the stream did not
+    /// open. The inbound count is taken under the table lock, across the
+    /// dialer's.
     fn settle_or_retry<R: RelayRng + ?Sized>(
         &self,
         connector: ConnectorId,
         outcome: &DialOutcome,
+        started: Tick,
         rng: &mut R,
     ) {
         let now = self.hub.now();
         self.with_inbound(|shared| {
             let address = outcome.address();
             if let DialOutcome::DialFailed(_, cause) = outcome {
-                if cause.retry_worthy() {
+                let ran = now.get().saturating_sub(started.get());
+                let outlasted_tor = connector == ConnectorId::Tor
+                    && cause.window_timeout()
+                    && shared.tor_window.is_some_and(|window| ran >= window);
+                if cause.retry_worthy() && !outlasted_tor {
                     let cause = *cause;
                     let mut wait = 0u64;
                     let next = shared.attempts(connector).defer_retry(
@@ -654,12 +689,14 @@ impl Dialer {
                     );
                     if let Some(next) = next {
                         tracing::debug!(
-                            "{connector:?} dial {address:?} attempt {} ended {:?}; attempt {next} in {} ms",
+                            "{connector:?} dial {address:?} attempt {} ended {:?} after {} ms; attempt {next} in {} ms",
                             next - 1,
                             cause.kind(),
+                            ran / 1_000_000,
                             wait / 1_000_000
                         );
-                        Self::publish_tor_held(shared);
+                        let held = Self::tor_held(shared);
+                        shared.tor_link.observe(connector, outcome, held);
                         return;
                     }
                 }

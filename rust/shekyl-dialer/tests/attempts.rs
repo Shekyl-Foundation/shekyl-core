@@ -7,7 +7,8 @@
 //! Rick 2026-10-25): the brief's tests 1 and 6 to 9, and a stop that wins
 //! before the insert. Each attempt is a task; the loop launches it and
 //! applies its result, and never waits on a dial. A waited dial runs on
-//! the caller.
+//! the caller. Revision 4's tests 12 to 16: a Tor timeout at or after the
+//! managed Tor's window is final within its test (Rick, 2026-10-26).
 
 #[path = "support/log_capture.rs"]
 mod log_capture;
@@ -99,8 +100,12 @@ struct HeldDial {
     answers: Mutex<VecDeque<Vec<u8>>>,
     held: Mutex<HashMap<SocketId, Held>>,
     /// Causes the next connects fail with, in order, before any answer: the
-    /// connector refusing the dial.
-    refusals: Mutex<VecDeque<CloseCause>>,
+    /// connector refusing the dial, after the nanoseconds it took.
+    refusals: Mutex<VecDeque<(CloseCause, u64)>>,
+    /// The clock a refusal moves by the time it took.
+    clock: Mutex<Option<ManualClock>>,
+    /// Every connect, refused or not.
+    connects: AtomicUsize,
 }
 
 impl HeldDial {
@@ -110,7 +115,19 @@ impl HeldDial {
             answers: Mutex::new(answers.into()),
             held: Mutex::new(HashMap::new()),
             refusals: Mutex::new(VecDeque::new()),
+            clock: Mutex::new(None),
+            connects: AtomicUsize::new(0),
         }
+    }
+
+    /// The next connect fails with `cause` after `took` on `clock`.
+    fn refuse_after(&self, clock: &ManualClock, cause: CloseCause, took: Duration) {
+        *self.clock.lock().expect("clock") = Some(clock.clone());
+        let took = u64::try_from(took.as_nanos()).expect("a short wait");
+        self.refusals
+            .lock()
+            .expect("refusals")
+            .push_back((cause, took));
     }
 
     /// The peer closes `id`'s session: the connector stores its cause.
@@ -151,7 +168,12 @@ impl Dial for HeldDial {
         ceiling: InboundCeiling,
         now: Tick,
     ) -> Result<Channel, CloseCause> {
-        if let Some(cause) = self.refusals.lock().expect("refusals").pop_front() {
+        self.connects.fetch_add(1, Ordering::AcqRel);
+        let refusal = self.refusals.lock().expect("refusals").pop_front();
+        if let Some((cause, took)) = refusal {
+            if let Some(clock) = self.clock.lock().expect("clock").as_ref() {
+                clock.set(Tick::new(clock.now().get() + took));
+            }
             return Err(cause);
         }
         let open = admit(&self.sockets, endpoint, now, ceiling)?;
@@ -640,10 +662,7 @@ fn a_due_keep_retry_does_not_take_the_connector_past_its_target() {
         sockets.clone(),
         std::iter::repeat_n(reply(NETWORK), gray.len()).collect(),
     ));
-    dial.refusals
-        .lock()
-        .expect("refusals")
-        .push_back(shekyl_tor::refused(0xF0));
+    dial.refuse_after(&clock, shekyl_tor::refused(0xF0), Duration::ZERO);
     let (_hub, dialer) = dialer_on(&clock, &sockets, Arc::clone(&dial) as Arc<dyn Dial>);
     let mut rng = SplitMix64::new(31);
     dialer.set_in_flight_bound(TOR, 2);
@@ -679,4 +698,135 @@ fn a_due_keep_retry_does_not_take_the_connector_past_its_target() {
         kept_sessions <= TARGET,
         "kept {kept_sessions} Tor sessions against a target of {TARGET}"
     );
+}
+
+/// The managed Tor's window in these tests: the daemon's `SocksTimeout`,
+/// 105 s (`shekyl_ffi::tor_link::TOR_SOCKS_TIMEOUT`).
+const TOR_WINDOW: Duration = Duration::from_secs(105);
+
+/// One Tor attempt at one gray onion, refused with `cause` after `took`,
+/// on a dialer that knows the Tor window. Returns the dialer, the dial and
+/// the onion, after the attempt's result is applied.
+fn one_tor_attempt(seed: u64, cause: CloseCause, took: Duration) -> TorAttempt {
+    let clock = ManualClock::new(Tick::new(1_000_000_000));
+    let sockets = Sockets::new();
+    let dial = Arc::new(HeldDial::answering(sockets.clone(), Vec::new()));
+    dial.refuse_after(&clock, cause, took);
+    let (_hub, dialer) = dialer_on(&clock, &sockets, Arc::clone(&dial) as Arc<dyn Dial>);
+    dialer.set_tor_window(Some(TOR_WINDOW));
+    let mut rng = SplitMix64::new(seed);
+    let onion = onions(1).remove(0);
+    dialer
+        .admit_operator(&onion, Tick::new(1), &mut rng)
+        .expect("admitted");
+    dialer.wake(TOR, &mut rng);
+    assert_eq!(dial.connects.load(Ordering::Acquire), 1, "one attempt");
+    TorAttempt {
+        clock,
+        dial,
+        dialer,
+        onion,
+        rng,
+    }
+}
+
+struct TorAttempt {
+    clock: ManualClock,
+    dial: Arc<HeldDial>,
+    dialer: Arc<Dialer>,
+    onion: NetworkAddress,
+    rng: SplitMix64,
+}
+
+impl TorAttempt {
+    /// The test ended on its first attempt: the onion cools, its ladder
+    /// stepped once, and no wake after any retry wait dials it again.
+    fn assert_final(mut self) {
+        assert!(
+            self.dialer.shared().lists.is_cooling(&self.onion),
+            "the onion cools"
+        );
+        assert_eq!(self.dialer.shared().lists.failed_tests(&self.onion), 1);
+        self.wake_after_every_wait();
+        assert_eq!(
+            self.dial.connects.load(Ordering::Acquire),
+            1,
+            "no further attempt in its test"
+        );
+    }
+
+    /// The test waits for its next attempt: the onion is not cooling, its
+    /// ladder has not stepped, and the wake after the wait dials it again.
+    fn assert_retries(mut self) {
+        assert!(
+            !self.dialer.shared().lists.is_cooling(&self.onion),
+            "a deferred attempt records no outcome"
+        );
+        assert_eq!(self.dialer.shared().lists.failed_tests(&self.onion), 0);
+        self.wake_after_every_wait();
+        assert_eq!(
+            self.dial.connects.load(Ordering::Acquire),
+            2,
+            "the second attempt of the test"
+        );
+    }
+
+    /// Move the clock past the second attempt's longest wait (10 s) and
+    /// wake once. The second attempt, if the test has one, is refused at
+    /// once.
+    fn wake_after_every_wait(&mut self) {
+        self.clock
+            .set(Tick::new(self.clock.now().get() + 11 * 1_000_000_000));
+        self.dial
+            .refuse_after(&self.clock, shekyl_tor::refused(0xF0), Duration::ZERO);
+        self.dialer.wake(TOR, &mut self.rng);
+    }
+}
+
+/// **A `0x06` at Tor's window cools after one attempt** (revision 4, test
+/// 12). Tor has already retried introduction points and descriptor
+/// fetches inside the window; a second attempt would spend another
+/// window on a destination Tor could not reach.
+#[test]
+fn a_ttl_expiry_at_the_tor_window_cools_after_one_attempt() {
+    one_tor_attempt(41, shekyl_tor::refused(0x06), TOR_WINDOW).assert_final();
+}
+
+/// **An early `0x06` retries** (test 13): inside the window it is the
+/// service's own connect timing out, or a circuit that failed fast, and
+/// the test keeps its attempts.
+#[test]
+fn an_early_ttl_expiry_keeps_its_retries() {
+    one_tor_attempt(42, shekyl_tor::refused(0x06), Duration::from_secs(30)).assert_retries();
+}
+
+/// **`0xF0` retries, even past the window** (test 14). A descriptor not
+/// found is not a timeout: the window does not read it.
+#[test]
+fn a_descriptor_not_found_keeps_its_retries_past_the_window() {
+    one_tor_attempt(
+        43,
+        shekyl_tor::refused(0xF0),
+        TOR_WINDOW + Duration::from_secs(5),
+    )
+    .assert_retries();
+}
+
+/// **Our own timeout at or past the window is final** (test 15): the dial
+/// deadline (120 s) is past the window, so a dial that ran to it ran a
+/// whole window. A gap timeout inside the window keeps its retries.
+#[test]
+fn a_transport_timeout_past_the_window_is_final_and_one_inside_retries() {
+    let timeout = CloseCause::new(CloseKind::TransportTimeout);
+    one_tor_attempt(44, timeout, Duration::from_secs(120)).assert_final();
+    one_tor_attempt(45, timeout, Duration::from_secs(20)).assert_retries();
+}
+
+/// **The tally counts a failed attempt deferred for a retry** (test 16).
+/// The attempt ended without a stream whether or not its test goes on.
+#[test]
+fn the_tally_counts_a_failed_attempt_deferred_for_a_retry() {
+    let attempt = one_tor_attempt(46, shekyl_tor::refused(0xF0), Duration::ZERO);
+    assert_eq!(attempt.dialer.tor_link_tally().unopened, 1);
+    attempt.assert_retries();
 }

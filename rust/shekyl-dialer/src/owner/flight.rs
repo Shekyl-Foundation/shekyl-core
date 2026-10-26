@@ -37,7 +37,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Condvar, Mutex};
 
 use shekyl_draw_rng::RelayRng;
-use shekyl_peerlist::{CloseCause, CloseKind, ConnectorId, DialOutcome, NetworkAddress};
+use shekyl_peerlist::{CloseCause, CloseKind, ConnectorId, DialOutcome, NetworkAddress, Tick};
 use shekyl_seam::SocketId;
 
 use super::handshake::{attempt_task, Attempt, Prepared, TaskResult};
@@ -78,6 +78,10 @@ pub(super) struct InFlight {
     connector: ConnectorId,
     address: NetworkAddress,
     aim: DialAim,
+    /// When the attempt was enlisted, just before its task starts. A
+    /// timeout's place against the Tor window is read from it
+    /// ([`Dialer::set_tor_window`]).
+    started: Tick,
     /// Held for its drop: the nonce is in the set until this record is
     /// dropped, after the result is applied or the attempt is cancelled.
     _nonce: InFlightNonce,
@@ -520,6 +524,7 @@ impl Dialer {
         nonce: InFlightNonce,
     ) -> Option<Enlisted> {
         let (sender, cancel) = tokio::sync::oneshot::channel();
+        let started = self.hub.now();
         let shared = Arc::clone(&self.shared);
         let id = {
             let mut state = shared.lock().expect("dialer state");
@@ -537,6 +542,7 @@ impl Dialer {
                     connector,
                     address,
                     aim,
+                    started,
                     _nonce: nonce,
                     _cancel: sender,
                 },
@@ -670,7 +676,7 @@ impl Dialer {
         let kept = match self.apply_result(connector, &address, record.aim, result, rng) {
             Attempt::Done(outcome) => {
                 tracing::debug!("{connector:?} dial {address:?} ended: {outcome:?}");
-                self.settle_or_retry(connector, &outcome, rng);
+                self.settle_or_retry(connector, &outcome, record.started, rng);
                 None
             }
             Attempt::Kept(kept) => {
