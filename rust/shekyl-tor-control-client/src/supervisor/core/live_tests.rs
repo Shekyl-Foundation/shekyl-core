@@ -10,6 +10,7 @@
 
 use std::time::Duration;
 
+use super::super::super::posture::BootstrapPace;
 use super::{
     announces, carrying, duration_ns, held, managed, policy, reach_usable, render, socks,
     takes_down, Action, Core, Input, Shown,
@@ -115,12 +116,16 @@ fn a_bootstrap_says_its_progress_and_whether_bytes_are_moving() {
     assert!(text.contains("55%"), "{text}");
     assert!(text.contains("3.2 MB arrived in the last 4 s"), "{text}");
 
-    // Nothing moved in the next window: the line says so.
+    // Nothing moved in the next window: the line says so. The window opens
+    // on the newest sample at least a window old, the one at 3 s, and runs
+    // to the deadline at 8 s: five measured seconds, not a mark moved to
+    // the deadline as if a sample had been taken there.
     let step = core.on_deadline(2 * window);
     assert_eq!(says_progress(&step), 1);
     assert_eq!(announces(&step), 0);
+    assert_eq!(core.status().pace, Some(BootstrapPace::Stalled));
     let text = render(&core.status());
-    assert!(text.contains("Nothing arrived in the last 4 s"), "{text}");
+    assert!(text.contains("Nothing arrived in the last 5 s"), "{text}");
     assert!(text.contains("unchanged for 8 s"), "{text}");
 
     // Running ends the line: the deadline is a liveness sample again.

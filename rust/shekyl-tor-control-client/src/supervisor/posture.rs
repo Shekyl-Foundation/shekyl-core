@@ -187,59 +187,89 @@ pub struct Syncing {
 pub struct BootstrapLine {
     /// How long the percent has been unchanged.
     pub held_for: std::time::Duration,
-    /// Bytes Tor read across [`Self::window`]. `None` when no sample in that
-    /// span reported a count: unknown, never zero.
+    /// Bytes Tor read across [`Self::window`]. `None` when no sample reported
+    /// a count: unknown, never zero.
     pub received: Option<u64>,
-    /// The span [`Self::received`] covers, from the byte mark to the moment
-    /// this line was said. Not the policy interval: a control ask that held
-    /// the driver makes the span longer than the deadline.
+    /// The span [`Self::received`] covers: from the sample the window opens
+    /// on to the moment the line was read. Not the policy interval: a
+    /// control ask that held the driver makes it longer. It slides with
+    /// every sample, so a client that polls Status reads it current to
+    /// within one sample.
     pub window: std::time::Duration,
 }
 
-/// The progress line's evidence. The percent, when it last moved, and the
-/// byte mark the next line measures from.
+/// How a bootstrap is going, in one word a client can show (Rick,
+/// 2026-10-24). A description, never a cause: it stands beside
+/// [`Status::cause`], so "stalled" while Tor reports outbound blocked shows
+/// both the stall and the fix. [`render`] composes them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BootstrapPace {
+    /// The percent moved within the window.
+    Advancing,
+    /// The percent held through the window and bytes arrived: a slow
+    /// directory mirror can hold a bootstrap for minutes. Normal.
+    SlowButNormal,
+    /// A full window of samples in which nothing arrived.
+    Stalled,
+}
+
+/// The progress line's evidence: the percent, when it last moved, and the
+/// recent `traffic/read` samples the sliding window reads.
 ///
 /// The supervisor owns one of these per incarnation. The Tor connector never
 /// sees it: the line is said from the control connection's samples
 /// (`TSR-Q9`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProgressWindow {
     percent: u8,
     /// When `percent` last changed, in the caller's clock.
     progress_at: u64,
-    /// When the current byte window opened.
-    opened_at: u64,
-    /// Latest `traffic/read` this incarnation.
-    latest: Option<u64>,
-    /// `traffic/read` at `opened_at`.
-    baseline: Option<u64>,
+    /// The window the line reads over (`Policy::alive_every`).
+    span: u64,
+    /// `(when, traffic/read)` for the samples that carried a count, oldest
+    /// first: those inside the window and the newest one before it.
+    marks: std::collections::VecDeque<(u64, u64)>,
+    /// Whether the line has begun: from the first progress deadline on, so
+    /// the first line covers a whole window.
+    begun: bool,
     line: Option<BootstrapLine>,
+    pace: Option<BootstrapPace>,
 }
 
 impl ProgressWindow {
-    /// A new incarnation. The percent is 0 and no byte count has been seen.
+    /// A new incarnation reading over `window`. The percent is 0 and no byte
+    /// count has been seen.
     #[must_use]
-    pub const fn start(now: u64) -> Self {
+    pub fn start(now: u64, window: std::time::Duration) -> Self {
         Self {
             percent: 0,
             progress_at: now,
-            opened_at: now,
-            latest: None,
-            baseline: None,
+            span: u64::try_from(window.as_nanos()).unwrap_or(u64::MAX),
+            marks: std::collections::VecDeque::new(),
+            begun: false,
             line: None,
+            pace: None,
         }
     }
 
     /// The last percent a sample or a bootstrap notice reported.
     #[must_use]
-    pub const fn percent(self) -> u8 {
+    pub const fn percent(&self) -> u8 {
         self.percent
     }
 
-    /// The last line [`Self::speak`] produced.
+    /// The line as of the last refresh. `None` before the first progress
+    /// deadline.
     #[must_use]
-    pub const fn line(self) -> Option<BootstrapLine> {
+    pub const fn line(&self) -> Option<BootstrapLine> {
         self.line
+    }
+
+    /// The pace as of the last refresh. `None` before the first progress
+    /// deadline, and while the evidence cannot tell.
+    #[must_use]
+    pub const fn pace(&self) -> Option<BootstrapPace> {
+        self.pace
     }
 
     /// The percent moved, or was confirmed. A confirmation does not reset
@@ -249,37 +279,70 @@ impl ProgressWindow {
             self.progress_at = now;
         }
         self.percent = percent;
+        self.refresh(now);
     }
 
-    /// A directory sample reported `traffic/read`. `None` leaves the marks
-    /// where they are: a missing count is not a zero, and it is not a new
-    /// window. The first count opens the window at `now`.
+    /// A directory sample reported `traffic/read`. `None` adds no mark: a
+    /// missing count is not a zero. A count that moved backwards starts the
+    /// marks again rather than reading as a wrap.
     pub fn note_read(&mut self, read: Option<u64>, now: u64) {
-        let Some(bytes) = read else {
-            return;
-        };
-        self.latest = Some(bytes);
-        if self.baseline.is_none() {
-            self.baseline = Some(bytes);
-            self.opened_at = now;
+        if let Some(bytes) = read {
+            if self.marks.back().is_some_and(|&(_, last)| bytes < last) {
+                self.marks.clear();
+            }
+            self.marks.push_back((now, bytes));
+            let open = now.saturating_sub(self.span);
+            while self.marks.len() > 1 && self.marks[1].0 <= open {
+                self.marks.pop_front();
+            }
         }
+        self.refresh(now);
     }
 
-    /// Say the line as of `now`. `received` and `window` are the same span:
-    /// from the open mark to `now`. The next line measures from here.
-    /// A count that moved backwards saturates to nothing rather than wrapping.
+    /// The progress deadline: the line begins here and is said. From now on
+    /// every sample keeps it current.
     pub fn speak(&mut self, now: u64) {
-        let received = match (self.latest, self.baseline) {
-            (Some(read), Some(then)) => Some(read.saturating_sub(then)),
-            _ => None,
+        self.begun = true;
+        self.refresh(now);
+    }
+
+    /// Re-read the window as of `now`. The window opens on the newest
+    /// sample at least one window old (the oldest, until there is one) and
+    /// runs to `now`, the moment the line is read: the bytes from that
+    /// sample to the latest one, the clock to now. At a sample, now is the
+    /// sample.
+    fn refresh(&mut self, now: u64) {
+        if !self.begun {
+            return;
+        }
+        let held = now.saturating_sub(self.progress_at);
+        let open = now.saturating_sub(self.span);
+        let opening = self
+            .marks
+            .iter()
+            .rev()
+            .find(|&&(at, _)| at <= open)
+            .or_else(|| self.marks.front());
+        let (received, window) = match (opening, self.marks.back()) {
+            (Some(&(opened, then)), Some(&(_, read))) => {
+                (Some(read.saturating_sub(then)), now.saturating_sub(opened))
+            }
+            _ => (None, 0),
         };
         self.line = Some(BootstrapLine {
-            held_for: std::time::Duration::from_nanos(now.saturating_sub(self.progress_at)),
+            held_for: std::time::Duration::from_nanos(held),
             received,
-            window: std::time::Duration::from_nanos(now.saturating_sub(self.opened_at)),
+            window: std::time::Duration::from_nanos(window),
         });
-        self.baseline = self.latest;
-        self.opened_at = now;
+        self.pace = if held < self.span {
+            Some(BootstrapPace::Advancing)
+        } else {
+            match received {
+                Some(0) if window >= self.span => Some(BootstrapPace::Stalled),
+                Some(bytes) if bytes > 0 => Some(BootstrapPace::SlowButNormal),
+                _ => None,
+            }
+        };
     }
 }
 
@@ -309,6 +372,9 @@ pub struct Status {
     /// The bootstrap's progress line. Only while bootstrapping, once the
     /// first window has passed.
     pub bootstrap: Option<BootstrapLine>,
+    /// How the bootstrap is going, beside [`Self::cause`], never instead of
+    /// it. Only while bootstrapping, once the first window has passed.
+    pub pace: Option<BootstrapPace>,
     /// How long no Tor connection has been open and none has opened, while
     /// Tor runs, names no cause, and this node's Tor dials keep failing
     /// (§4.2). A neutral fact for the posture line, never a cause.
@@ -407,24 +473,37 @@ pub fn render(status: &Status) -> String {
     text
 }
 
-fn bootstrap_sentence(progress: u8, line: Option<BootstrapLine>) -> String {
+fn bootstrap_sentence(
+    progress: u8,
+    line: Option<BootstrapLine>,
+    pace: Option<BootstrapPace>,
+) -> String {
     let Some(line) = line else {
         return format!("Tor is fetching the network directory ({progress}%).");
     };
-    let mut text = format!(
-        "Tor is fetching the network directory ({progress}%, unchanged for {}).",
-        spoken_duration(line.held_for)
-    );
     let window = spoken_duration(line.window);
-    match line.received {
-        Some(0) => text.push_str(&format!(" Nothing arrived in the last {window}.")),
-        Some(bytes) => text.push_str(&format!(
-            " {} arrived in the last {window}; a slow directory mirror can hold this for minutes.",
+    match (pace, line.received) {
+        (Some(BootstrapPace::Advancing), Some(bytes)) if bytes > 0 => format!(
+            "Tor is fetching the network directory ({progress}%). {} arrived in the last {window}.",
             spoken_bytes(bytes)
-        )),
-        None => {}
+        ),
+        (Some(BootstrapPace::Advancing), _) => {
+            format!("Tor is fetching the network directory ({progress}%).")
+        }
+        (Some(BootstrapPace::SlowButNormal), Some(bytes)) => format!(
+            "Tor is fetching the network directory ({progress}%, unchanged for {}). {} arrived in the last {window}; a slow directory mirror can hold this for minutes.",
+            spoken_duration(line.held_for),
+            spoken_bytes(bytes)
+        ),
+        (Some(BootstrapPace::Stalled), _) => format!(
+            "Tor is fetching the network directory ({progress}%, unchanged for {}). Nothing arrived in the last {window}.",
+            spoken_duration(line.held_for)
+        ),
+        _ => format!(
+            "Tor is fetching the network directory ({progress}%, unchanged for {}).",
+            spoken_duration(line.held_for)
+        ),
     }
-    text
 }
 
 fn spoken_duration(duration: std::time::Duration) -> String {
@@ -475,9 +554,11 @@ pub fn held_sentence(sync: Syncing) -> String {
 
 fn cause_sentence(status: &Status) -> Option<String> {
     let sentence = match &status.cause {
-        Cause::None if status.shown == Shown::Bootstrapping => {
-            Some(bootstrap_sentence(status.progress, status.bootstrap))
-        }
+        Cause::None if status.shown == Shown::Bootstrapping => Some(bootstrap_sentence(
+            status.progress,
+            status.bootstrap,
+            status.pace,
+        )),
         Cause::None => status.tor_quiet.map(|quiet| {
             format!(
                 "No connection through Tor is open, and none has opened in {}.",
@@ -513,7 +594,18 @@ fn cause_sentence(status: &Status) -> Option<String> {
             Some("Upgrade Shekyl when a release updates the bundled Tor.".to_owned())
         }
     };
-    sentence
+    // The pace stands beside a cause, never instead of it: a bootstrap that
+    // has stalled while Tor reports the network blocked says the cause, its
+    // fix, and the stall. The line exists only while bootstrapping; a named
+    // external cause shows the phase as Degraded, so the phase is read from
+    // the line, not from `shown`.
+    match (sentence, &status.cause, status.bootstrap) {
+        (Some(cause), named, Some(line)) if *named != Cause::None => Some(format!(
+            "{cause} {}",
+            bootstrap_sentence(status.progress, Some(line), status.pace)
+        )),
+        (sentence, ..) => sentence,
+    }
 }
 
 fn died_sentence(count: u32, exit_code: Option<i32>) -> String {

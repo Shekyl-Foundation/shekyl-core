@@ -362,7 +362,7 @@ impl Core {
             respawn_count: 0,
             launch_failures: 0,
             backoff: Backoff::new(),
-            progress: ProgressWindow::start(now),
+            progress: ProgressWindow::start(now, policy.alive_every),
             dials: Dials::new(now),
             pin_at: None,
             sample_at: None,
@@ -517,6 +517,10 @@ impl Core {
                 Phase::Bootstrapping { .. } => self.progress.line(),
                 _ => None,
             },
+            pace: match self.phase {
+                Phase::Bootstrapping { .. } => self.progress.pace(),
+                _ => None,
+            },
             tor_quiet: match (&self.phase, &self.cause) {
                 (Phase::Running { .. }, Cause::None) => self.dials.line(),
                 _ => None,
@@ -553,7 +557,7 @@ impl Core {
             ready: false,
         };
         self.launch_failures = 0;
-        self.progress = ProgressWindow::start(now);
+        self.progress = ProgressWindow::start(now, self.policy.alive_every);
         self.set_cause(Cause::None);
         self.arm_sample(now);
         self.arm_alive(now);
