@@ -3,7 +3,7 @@ cargo-checkct: shekyl-checkct:85271e5   options: --timeout 900
 toolchain: nightly-2025-12-04
 profile.release: panic = "abort" overflow-checks = true 
 targets + rustflags: target = ["x86_64-unknown-linux-gnu"] rustflags = ["-C", "linker=rust-lld", "-C", "linker-flavor=ld.lld", "-C", "relocation-model=static", "-C", "no-vectorize-slp"] 
-run window (UTC): Sat Oct 24 02:32:37 PM UTC 2026 -> Sat Oct 24 02:32:40 PM UTC 2026
+run window (UTC): Sat Oct 24 08:53:11 PM UTC 2026 -> Sat Oct 24 08:54:10 PM UTC 2026
 
 Summary:
   driver  target                    entrypoint                                    status
@@ -16,7 +16,7 @@ Summary:
   cb055   x86_64-unknown-linux-gnu  cb055::driver::cb055_residue_neg              secure
   cb055   x86_64-unknown-linux-gnu  cb055::driver::cb055_residue_new              secure
   cb055   x86_64-unknown-linux-gnu  cb055::driver::cb055_residue_pow_secret_exp   insecure
-      0x205338 has control flow leak (0.762s)
+      0x205378 has control flow leak (47.174s)
   cb055   x86_64-unknown-linux-gnu  cb055::driver::cb055_residue_retrieve         secure
   cb055   x86_64-unknown-linux-gnu  cb055::driver::cb055_residue_square           secure
   cb055   x86_64-unknown-linux-gnu  cb055::driver::cb055_residue_sub              secure
@@ -35,7 +35,6 @@ Summary:
   dfg050  x86_64-unknown-linux-gnu  dfg050::driver::dfg_to_repr                   secure
   dfg050  x86_64-unknown-linux-gnu  dfg050::driver::dfg_wide_reduce               secure
 INSECURE
-Error: Insecure code!
-Sat Oct 24 02:32:40 PM UTC 2026
-  [checkct:result] Instruction 0x205338 has control flow leak (0.762s)
-      0x205338 has control flow leak (0.762s)
+Sat Oct 24 08:54:10 PM UTC 2026
+  [checkct:result] Instruction 0x205378 has control flow leak (47.174s)
+      0x205378 has control flow leak (47.174s)
