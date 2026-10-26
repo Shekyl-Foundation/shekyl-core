@@ -27,9 +27,12 @@ dead one waiting out its deadline, holds a target slot until it ends.
 The smallest bound whose **median** time to fill the Tor connector's target
 (`MIN_PROVISIONED_OUT_PEERS` = 12) from empty is within **one stem epoch,
 600 s**, when **half the draws are dead**. Never more than the target. A
-dead attempt is modelled at the 120 s dial deadline; the managed Tor
-answers `0x06` at its `SocksTimeout`, 105 s, so the fill times are an upper
-bound.
+dead attempt is modelled at the 120 s dial deadline. The managed Tor
+answers at its 105 s `SocksTimeout`, which fires on a once-a-second check,
+so a full-window reply arrives from 104 s to a few seconds past 105 s
+(104 to 113 s on a healthy link, shekyl-dev data
+`tsr-acceptance/2026-10-25-socks-reply-sources`), always inside 120 s:
+the fill times are an upper bound.
 
 - **The time, 600 s.** The relay redraws its stem graph from the node's
   outbound edges every epoch (`min_epoch_secs` 600, `DAEMON_RELAY_PRIVACY.md`;
@@ -133,12 +136,13 @@ not set from that cap; it is checked against it.
 ## Dead-onion stalling: what holding every slot costs
 
 On the ruled lifecycle a planted dead onion holds one slot and one target
-place for 105 s, until Tor's `0x06`, and its test ends. The address then
+place for about 105 s, until Tor's `0x06` (from 104 s to a few seconds
+past), and its test ends. The address then
 cools in place: 2 min, doubling per failed test to 1 h, with U(0, 50%)
 jitter. To hold all five slots for an hour an attacker needs
 5 × 3,600 / 105 ≈ 171 draws an hour, every one of them a plant. At the
-1 h cap a planted onion is drawable at most once an hour, so that is at
-least 171 planted onions at the cap, planted once: 8 attacker sessions at
+1 h cap a planted onion is drawable at most once an hour, so that is about
+170 planted onions at the cap, planted once: 8 attacker sessions at
 the intake cap (24 addresses per session per 24 h). Every draw must also
 land on a plant, so the plants must be nearly all of the drawable pool:
 every honest onion in gray is drawn at the same rate.
@@ -203,7 +207,8 @@ becoming usable to the 12th kept Tor session:
 
 **Five meets the horizon on the floor device:** at half dead its median,
 508 s, is inside one stem epoch, against the model's upper bound of 523 s
-(dead attempts modelled at 120 s; the managed Tor answers at 105 s). Bound 1
+(dead attempts modelled at 120 s; the managed Tor answers from 104 s,
+a few seconds past 105 s at most). Bound 1
 took about twice as long. Every sample filled; samples:
 bound 1, 424 to 2981 s; bound 5, 342 to 563 s.
 
