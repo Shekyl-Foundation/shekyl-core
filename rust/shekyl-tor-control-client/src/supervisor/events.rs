@@ -19,6 +19,10 @@ use super::core::Input;
 /// | --- | --- |
 /// | `BOOTSTRAP` with `WARNING` or `REASON`, and `RECOMMENDATION=warn` | [`Input::ExternalBlocked`] |
 /// | `NETWORK_LIVENESS DOWN` | [`Input::ExternalBlocked`] |
+/// | `NETWORK_LIVENESS UP` | [`Input::ExternalCleared`] |
+/// | `CIRCUIT_NOT_ESTABLISHED REASON=DIR_ALL_UNREACHABLE` | [`Input::DirectoryUnreachable`] |
+/// | `CIRCUIT_NOT_ESTABLISHED` with any other reason, or none | [`Input::ExternalBlocked`] |
+/// | `CIRCUIT_ESTABLISHED` | [`Input::ExternalCleared`] |
 /// | `DIR_ALL_UNREACHABLE` | [`Input::DirectoryUnreachable`] |
 /// | `CLOCK_SKEW` | [`Input::ClockSkew`] |
 /// | `CLOCK_JUMPED` | [`Input::ClockJumped`] |
@@ -29,10 +33,15 @@ use super::core::Input;
 ///
 /// A bootstrap problem Tor has not yet marked `warn` is not outbound-blocked.
 /// Tor sends `warn` from the tenth problem at a phase (§4.2).
+/// `CIRCUIT_NOT_ESTABLISHED REASON=CLOCK_JUMPED` is nothing here: the
+/// `STATUS_GENERAL CLOCK_JUMPED` that comes with it is the input. These are
+/// Tor's own statements about its network, and only they name it
+/// (`TSR-Q14`).
 #[must_use]
 pub fn input_of(event: &TorEvent) -> Option<Input> {
     match event {
         TorEvent::NetworkLiveness(Liveness::Down) => Some(Input::ExternalBlocked),
+        TorEvent::NetworkLiveness(Liveness::Up) => Some(Input::ExternalCleared),
         TorEvent::General { status, .. } => match status {
             GeneralStatus::DirAllUnreachable => Some(Input::DirectoryUnreachable),
             GeneralStatus::ClockSkew { skew, .. } => skew.as_ref().map(|skew| Input::ClockSkew {
@@ -53,6 +62,12 @@ pub fn input_of(event: &TorEvent) -> Option<Input> {
                 problem: Some(problem),
                 ..
             }) if outbound_blocked(problem) => Some(Input::ExternalBlocked),
+            ClientStatus::CircuitNotEstablished { reason } => match reason.as_deref() {
+                Some("CLOCK_JUMPED") => None,
+                Some("DIR_ALL_UNREACHABLE") => Some(Input::DirectoryUnreachable),
+                _ => Some(Input::ExternalBlocked),
+            },
+            ClientStatus::CircuitEstablished => Some(Input::ExternalCleared),
             _ => None,
         },
         TorEvent::HsDesc(event) => match event.action {
@@ -60,7 +75,9 @@ pub fn input_of(event: &TorEvent) -> Option<Input> {
             HsDescAction::Uploaded => Some(Input::DescriptorUploaded),
             _ => None,
         },
-        TorEvent::Log(_) | TorEvent::Unsubscribed | TorEvent::NetworkLiveness(_) => None,
+        TorEvent::Log(_) | TorEvent::Unsubscribed | TorEvent::NetworkLiveness(Liveness::Other) => {
+            None
+        }
     }
 }
 
@@ -75,9 +92,55 @@ fn outbound_blocked(problem: &crate::control::BootstrapProblem) -> bool {
 mod tests {
     use super::input_of;
     use crate::control::{
-        Bootstrap, BootstrapProblem, ClientStatus, Recommendation, Severity, TorEvent,
+        Bootstrap, BootstrapProblem, ClientStatus, Liveness, Recommendation, Severity, TorEvent,
     };
     use crate::supervisor::Input;
+
+    /// Tor saying whether it has a circuit names or clears the network
+    /// cause; a clock jump is the general event's.
+    #[test]
+    fn tors_circuit_statements_name_and_clear_the_network_cause() {
+        let not = |reason: Option<&str>| TorEvent::Client {
+            severity: Severity::Warn,
+            status: ClientStatus::CircuitNotEstablished {
+                reason: reason.map(str::to_owned),
+            },
+        };
+        assert!(matches!(
+            input_of(&not(Some("EXTERNAL_ADDRESS"))),
+            Some(Input::ExternalBlocked)
+        ));
+        assert!(matches!(input_of(&not(None)), Some(Input::ExternalBlocked)));
+        assert!(matches!(
+            input_of(&not(Some("DIR_ALL_UNREACHABLE"))),
+            Some(Input::DirectoryUnreachable)
+        ));
+        assert!(input_of(&not(Some("CLOCK_JUMPED"))).is_none());
+        let established = TorEvent::Client {
+            severity: Severity::Notice,
+            status: ClientStatus::CircuitEstablished,
+        };
+        assert!(matches!(
+            input_of(&established),
+            Some(Input::ExternalCleared)
+        ));
+    }
+
+    /// `NETWORK_LIVENESS` turns the external cause on and off (§4.2). `UP`
+    /// was dropped, so a Running Tor kept "cannot reach the Tor network"
+    /// after the network came back. An unknown word is nothing.
+    #[test]
+    fn network_liveness_turns_the_external_cause_on_and_off() {
+        assert!(matches!(
+            input_of(&TorEvent::NetworkLiveness(Liveness::Down)),
+            Some(Input::ExternalBlocked)
+        ));
+        assert!(matches!(
+            input_of(&TorEvent::NetworkLiveness(Liveness::Up)),
+            Some(Input::ExternalCleared)
+        ));
+        assert!(input_of(&TorEvent::NetworkLiveness(Liveness::Other)).is_none());
+    }
 
     /// §4.2: a bootstrap problem Tor has marked `warn`, with `WARNING` or
     /// `REASON`, is outbound blocked. A problem it still says to ignore is

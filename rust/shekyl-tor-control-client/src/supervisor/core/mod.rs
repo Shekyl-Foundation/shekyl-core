@@ -18,9 +18,15 @@ use super::posture::{
 
 mod announce;
 mod backoff;
+mod dials;
+mod network_view;
+mod running;
 
+use crate::control::NetworkView;
 use announce::{Announcements, Cadence};
 use backoff::Backoff;
+pub use dials::DialTally;
+use dials::Dials;
 
 /// How long a respawn waits, and how often a failure is said again.
 ///
@@ -43,6 +49,11 @@ pub struct Policy {
     /// Consecutive failed launches before the next one takes a fresh
     /// data directory. `TSR-M2` had no launch failure, so this stays 3.
     pub fresh_directory_after: u32,
+    /// How long no Tor connection is open and none opens, with Tor saying
+    /// nothing about its network, before the posture line says so (§4.2):
+    /// a neutral fact, never a cause. Provisional until the floor-device
+    /// soak.
+    pub quiet_after: Duration,
 }
 
 impl Policy {
@@ -57,6 +68,11 @@ impl Policy {
             // about a minute: the same order as `TSR-M2`'s 60 s bound.
             alive_every: Duration::from_secs(30),
             fresh_directory_after: 3,
+            // Wall time since the last opened stream, or since this Tor
+            // reached Running, with at least one unopened dial and nothing
+            // held. Five minutes, provisional until the floor-device soak.
+            // Not a count of dials.
+            quiet_after: Duration::from_secs(300),
         }
     }
 }
@@ -72,9 +88,12 @@ pub enum Action {
         fresh_directory: bool,
     },
     /// One `GETINFO` of bootstrap progress, the SOCKS listeners, and
-    /// `traffic/read`. While Running this is the liveness question: a Tor
+    /// `traffic/read`. While Running the same reply also carries Tor's
+    /// network view ([`Input::NetworkView`]); during a bootstrap those keys
+    /// are not asked. While Running this is the liveness question: a Tor
     /// that sends nothing still has a reply to be late with.
-    /// A reply inside the driver's bound is [`Input::DirectorySample`].
+    /// A reply inside the driver's bound is [`Input::DirectorySample`],
+    /// then [`Input::NetworkView`] while Running.
     /// A reply past it is [`Input::ReplyLate`].
     Sample,
     /// Look for the first `state` file.
@@ -211,6 +230,17 @@ pub enum Input {
     Shutdown,
     /// The relay's hop-0 verdict for a local origin moved (`GS-Q3`).
     AddressHidingOrigin(OriginVerdict),
+    /// The tally already in the cell when this supervisor started watching.
+    /// It is the baseline, not an open: the stretch clock does not move.
+    DialBaseline(DialTally),
+    /// The dialer's tally of this node's Tor dials changed (§4.2). Display
+    /// only, never a cause (`TSR-Q14`).
+    DialEvidence(DialTally),
+    /// Tor's sampled view of its network. Ignored unless Running.
+    NetworkView(NetworkView),
+    /// Tor says it reaches its network: `NETWORK_LIVENESS UP` or
+    /// `CIRCUIT_ESTABLISHED`.
+    ExternalCleared,
 }
 
 /// Actions and the next absolute deadline, in the caller's clock units.
@@ -302,6 +332,8 @@ pub struct Core {
     backoff: Backoff,
     /// The bootstrap percent and the byte mark the progress line measures.
     progress: ProgressWindow,
+    /// What this node's own Tor dials show (§4.2). Display only.
+    dials: Dials,
     /// When the next pin check is due. Only while [`Phase::Absent`] is
     /// [`AbsentDuty::Retry`] or [`AbsentDuty::Held`].
     pin_at: Option<u64>,
@@ -331,6 +363,7 @@ impl Core {
             launch_failures: 0,
             backoff: Backoff::new(),
             progress: ProgressWindow::start(now),
+            dials: Dials::new(now),
             pin_at: None,
             sample_at: None,
             alive_at: None,
@@ -388,6 +421,10 @@ impl Core {
             Input::StateFileAppeared => self.state_file(),
             Input::Shutdown => self.shutdown(),
             Input::AddressHidingOrigin(verdict) => self.origin_verdict(verdict, now),
+            Input::DialBaseline(tally) => self.dial_baseline(tally),
+            Input::DialEvidence(tally) => self.dial_evidence(tally, now),
+            Input::NetworkView(view) => self.network_view(now, view),
+            Input::ExternalCleared => self.external_cleared(now),
         };
         self.step(now, actions)
     }
@@ -436,6 +473,7 @@ impl Core {
             match self.phase {
                 Phase::Running { .. } => {
                     actions.push(Action::Sample);
+                    actions.extend(self.quiet_line(now));
                     self.arm_alive(now);
                 }
                 Phase::Bootstrapping { .. } => {
@@ -477,6 +515,10 @@ impl Core {
             progress: self.progress.percent(),
             bootstrap: match self.phase {
                 Phase::Bootstrapping { .. } => self.progress.line(),
+                _ => None,
+            },
+            tor_quiet: match (&self.phase, &self.cause) {
+                (Phase::Running { .. }, Cause::None) => self.dials.line(),
                 _ => None,
             },
         }
@@ -572,23 +614,6 @@ impl Core {
             self.arm_sample(now);
             Vec::new()
         }
-    }
-
-    fn enter_running(&mut self, now: u64, socks: SocketAddr) -> Vec<Action> {
-        self.phase = Phase::Running {
-            socks,
-            route: Duty::Owed,
-            onion: Duty::Owed,
-            disk: Disk::Watching,
-            link: Link::Open,
-        };
-        self.set_cause(Cause::None);
-        self.arm_sample(now);
-        self.arm_alive(now);
-        vec![
-            Action::Publish(ManagedRunning { socks }),
-            Action::RepublishOnion,
-        ]
     }
 
     fn route_installed(&mut self, now: u64) -> Vec<Action> {
@@ -755,11 +780,6 @@ impl Core {
         }
         actions.extend(self.say(now, Cadence::Due));
         actions
-    }
-
-    fn external(&mut self, now: u64, cause: Cause) -> Vec<Action> {
-        self.set_cause(cause);
-        self.say(now, Cadence::Due)
     }
 
     fn on_sample_deadline(&mut self, now: u64) -> Vec<Action> {

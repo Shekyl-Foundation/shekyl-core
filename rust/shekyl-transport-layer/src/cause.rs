@@ -284,6 +284,20 @@ impl CloseCause {
     pub const fn names_the_destination(self) -> bool {
         self.marks & Marks::NAMES_DESTINATION != 0
     }
+
+    /// Whether the dial's channel existed before this close.
+    ///
+    /// The D12 phase says so: a kind that applies once the channel exists,
+    /// and not before it, reached a peer. A proxy reply is before the
+    /// channel, so it never did. [`CloseKind::LocalClose`] applies in
+    /// every phase, and a dial this node closed itself is not a stream
+    /// that opened. This is display for the managed-Tor supervisor, never
+    /// a verdict on the link (`TOR_SUPERVISOR.md` §1 `TSR-Q14`, §4.2).
+    #[must_use]
+    pub const fn opened_a_stream(self) -> bool {
+        let kind = self.kind;
+        kind.applies_in(Phase::Gap) && !kind.applies_in(Phase::BeforeChannel)
+    }
 }
 
 const HEADER_PREAMBLE: &str = "\
@@ -529,5 +543,28 @@ mod tests {
     #[should_panic(expected = "ProxyRefused carries the overlay reply code")]
     fn a_proxy_refusal_without_a_reply_code_is_not_a_cause() {
         let _cause = CloseCause::new(CloseKind::ProxyRefused);
+    }
+
+    /// A stream opened only for a kind whose phase is the gap or after
+    /// the channel. A proxy reply and this node's own close did not.
+    #[test]
+    fn a_stream_opened_only_once_the_channel_existed() {
+        let opened = [
+            CloseKind::LevinHandshakeTimeout,
+            CloseKind::LevinHandshakeRejected,
+            CloseKind::PeerClosed,
+            CloseKind::RecordRejected,
+            CloseKind::SessionRefused,
+            CloseKind::IoError,
+            CloseKind::SendQueueFull,
+        ];
+        for kind in CloseKind::ALL {
+            let cause = if *kind == CloseKind::ProxyRefused {
+                CloseCause::proxy_refused(0x06, Marks::RETRY)
+            } else {
+                CloseCause::new(*kind)
+            };
+            assert_eq!(cause.opened_a_stream(), opened.contains(kind), "{kind:?}");
+        }
     }
 }

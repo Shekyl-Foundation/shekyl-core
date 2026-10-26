@@ -22,6 +22,7 @@ fn policy() -> Policy {
         sample_every: Duration::from_secs(1),
         alive_every: Duration::from_secs(4),
         fresh_directory_after: 3,
+        quiet_after: Duration::from_secs(20),
     }
 }
 
@@ -993,3 +994,5 @@ fn an_exhausted_pin_holds_the_origin_while_health_stays_true() {
     assert!(core.status().health);
     assert_eq!(core.status().own_tx, OwnTx::Held);
 }
+
+mod quiet;
