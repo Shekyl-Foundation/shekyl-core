@@ -630,6 +630,9 @@ pub use views::{
 
 pub mod fixture;
 mod price;
+mod staker_pool;
+
+pub use staker_pool::{burned_staker_chain, StakerPoolChain};
 
 #[cfg(test)]
 #[path = "harness_probe_tests.rs"]

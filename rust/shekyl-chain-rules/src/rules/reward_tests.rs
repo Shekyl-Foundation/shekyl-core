@@ -512,35 +512,6 @@ fn the_verdict_carries_the_paid_emission() {
 // F17 / F18 on a chain that has burned, closed shards and pays a staker pool
 // ---------------------------------------------------------------------------
 
-/// A chain of four blocks whose record the burn reads: an accumulator a
-/// third of the way up the curve, forty listed transactions a block, three
-/// archival shards closed through the parent, and a tenth of the emission
-/// burned.
-fn burned_chain() -> MockChain {
-    use crate::harness::fixture::{recorded_with_work, root};
-    use shekyl_difficulty::{CumulativeDifficulty, GENESIS_DIFFICULTY};
-    use shekyl_types::{ArchivalLength, SHARD_LENGTH};
-    let ag = economics().emission_curve_asymptote / 3;
-    (0..4u64)
-        .fold(MockChain::default(), |chain, h| {
-            chain.push(
-                crate::view::RecordedBlock {
-                    coins_generated: AtomicUnits::from_raw(ag / 4 * (h + 1)),
-                    cumulative_tx_count: 40 * (h + 1),
-                    cumulative_archival_len: ArchivalLength::from_raw(
-                        3 * SHARD_LENGTH.to_raw() * (h + 1) / 4,
-                    ),
-                    ..recorded_with_work(
-                        1_000 + h * 120,
-                        CumulativeDifficulty::from_raw(u128::from(h + 1) * GENESIS_DIFFICULTY),
-                    )
-                },
-                root(u8::try_from(h).expect("fits") + 1),
-            )
-        })
-        .with_total_burned(AtomicUnits::from_raw(ag / 4 * 4 / 10))
-}
-
 /// F17 / F18 where the burn is in force: a chain that has burned and
 /// closed shards, a fee-bearing block heavy enough to be in the penalty
 /// zone, and a staker pool the fee split pays. The coinbase paying exactly
@@ -558,8 +529,16 @@ fn burned_chain() -> MockChain {
 /// a coinbase above `owed`.
 #[test]
 fn f17_f18_with_a_staker_pool_the_exact_coinbase_is_admitted_and_one_over_refused() {
+    use crate::harness::burned_staker_chain;
     use crate::harness::fixture::{paying_fee, spend};
-    let chain = burned_chain();
+    // The rules harness's fixture clock. The template's copy of this chain
+    // starts under its own `NOW`; the columns are the constructor's.
+    let crate::harness::StakerPoolChain {
+        chain,
+        accumulator,
+        burned,
+        closed_shards,
+    } = burned_staker_chain(economics().emission_curve_asymptote, 1_000);
     let connecting = chain.tip().expect("tip").height.to_raw() + 1;
     let coinbase_weight = u64::try_from(
         candidate_on(&chain, Vec::new())
@@ -597,24 +576,23 @@ fn f17_f18_with_a_staker_pool_the_exact_coinbase_is_admitted_and_one_over_refuse
     );
     assert_eq!(
         burn.closed_shards,
-        shekyl_economics::ClosedShardCount::new(3)
+        shekyl_economics::ClosedShardCount::new(closed_shards)
     );
 
     // The economics crate over the operands the fixture states.
-    let ag = economics().emission_curve_asymptote / 3 / 4 * 4;
     let expected = shekyl_economics::price_emission(&shekyl_economics::EmissionInputs {
         height: connecting,
         median_weight: ZONE,
         block_weight: weight,
-        already_generated: ag,
+        already_generated: accumulator,
         tx_volume: emission.tx_volume(),
         total_fees,
         supply: shekyl_economics::CirculatingSupply::derive(
-            AtomicUnits::from_raw(ag),
-            AtomicUnits::from_raw(ag / 10),
+            AtomicUnits::from_raw(accumulator),
+            AtomicUnits::from_raw(burned),
         )
         .expect("the burn is under the emission"),
-        closed_shards: shekyl_economics::ClosedShardCount::new(3),
+        closed_shards: shekyl_economics::ClosedShardCount::new(closed_shards),
         params: economics(),
     })
     .expect("the operands price");
@@ -642,7 +620,7 @@ fn f17_f18_with_a_staker_pool_the_exact_coinbase_is_admitted_and_one_over_refuse
     assert_eq!(owed, expected.owed.to_raw());
     assert!(
         paid.paid.to_raw()
-            < effective_emission(ag, emission.tx_volume(), economics()).expect("priced"),
+            < effective_emission(accumulator, emission.tx_volume(), economics()).expect("priced"),
         "the penalty is in force"
     );
     for (label, amount) in [

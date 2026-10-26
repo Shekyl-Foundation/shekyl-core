@@ -57,6 +57,10 @@ fn miner() -> MinerKeys {
 /// both have room to hold.
 const NOW: Timestamp = Timestamp::from_raw(1_700_000_050);
 
+/// Block 0 of the staker-pool chain. Four blocks at `T_SECONDS` from here
+/// still end under [`NOW`], so C1 and C2 have room on that chain too.
+const STAKER_POOL_CHAIN_START: u64 = 1_699_000_000;
+
 /// A chain of `len` recorded blocks, work recorded at the genesis
 /// difficulty, timestamps ascending 120 s apart and ending below [`NOW`].
 fn chain_of(len: u64) -> MockChain {
@@ -1198,34 +1202,6 @@ fn a_miner_key_the_kem_refuses_yields_no_template() {
     assert!(matches!(err, TemplateError::Output(_)), "{err}");
 }
 
-/// The chain record of `shekyl-chain-rules`' F17/F18 staker-pool test: four
-/// blocks, an accumulator a third of the way up the curve, forty listed
-/// transactions a block, three archival shards closed through the parent,
-/// and a tenth of the emission burned.
-fn burned_chain() -> (MockChain, u64) {
-    use shekyl_types::{ArchivalLength, SHARD_LENGTH};
-    let ag = EconomicParams::default().emission_curve_asymptote / 3 / 4 * 4;
-    let chain = (0..4u64)
-        .fold(MockChain::default(), |chain, h| {
-            chain.push(
-                shekyl_chain_rules::RecordedBlock {
-                    coins_generated: AtomicUnits::from_raw(ag / 4 * (h + 1)),
-                    cumulative_tx_count: 40 * (h + 1),
-                    cumulative_archival_len: ArchivalLength::from_raw(
-                        3 * SHARD_LENGTH.to_raw() * (h + 1) / 4,
-                    ),
-                    ..recorded_with_work(
-                        1_699_000_000 + h * 120,
-                        CumulativeDifficulty::from_raw(u128::from(h + 1) * GENESIS_DIFFICULTY),
-                    )
-                },
-                root(u8::try_from(h).expect("fits") + 1),
-            )
-        })
-        .with_total_burned(AtomicUnits::from_raw(ag / 10));
-    (chain, ag)
-}
-
 /// The template where the burn is in force pays what the validator
 /// quotes. On a chain that has burned and closed shards, with fee-bearing
 /// bodies putting the block in the penalty zone, the driver composes
@@ -1247,7 +1223,15 @@ fn burned_chain() -> (MockChain, u64) {
 fn the_template_with_a_staker_pool_pays_what_the_validator_quotes() {
     let params = EconomicParams::default();
     let miner = miner();
-    let (chain, ag) = burned_chain();
+    let shekyl_chain_rules::harness::StakerPoolChain {
+        chain,
+        accumulator,
+        burned,
+        closed_shards: closed,
+    } = shekyl_chain_rules::harness::burned_staker_chain(
+        params.emission_curve_asymptote,
+        STAKER_POOL_CHAIN_START,
+    );
     let (connecting, _, _) = tip_facts(&chain);
     let (median, tx_volume, closed_shards) = chain.with_view(|view| {
         let median = shekyl_chain_rules::effective_median_at(&view, connecting).expect("reads");
@@ -1257,12 +1241,12 @@ fn the_template_with_a_staker_pool_pays_what_the_validator_quotes() {
     });
     assert_eq!(
         closed_shards,
-        ClosedShardCount::new(3),
+        ClosedShardCount::new(closed),
         "the subject: shards closed"
     );
     let operands = EmissionOperands {
-        already_generated_coins: AtomicUnits::from_raw(ag),
-        total_burned: AtomicUnits::from_raw(ag / 10),
+        already_generated_coins: AtomicUnits::from_raw(accumulator),
+        total_burned: AtomicUnits::from_raw(burned),
         median_weight: median,
         tx_volume,
         closed_shards,
@@ -1317,7 +1301,7 @@ fn the_template_with_a_staker_pool_pays_what_the_validator_quotes() {
     let fill = crate::fill::Fill::listed(
         median,
         built,
-        ag,
+        accumulator,
         tx_volume,
         &params,
         bodies,
