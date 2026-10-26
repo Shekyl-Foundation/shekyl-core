@@ -199,3 +199,7 @@ harness = false
 [target.'cfg(windows)'.dependencies]
 # The known-folder roots for the daemon configuration (IG-13).
 shekyl-win-sec = { path = "../shekyl-win-sec" }
+# The snapshot export's narrow argv is the active code page. `windows-sys`
+# 0.61 is already in the lock through shekyl-win-sec; this names the one
+# module `argument_vector` calls (`MultiByteToWideChar`, `CP_ACP`).
+windows-sys = { version = "0.61", features = ["Win32_Globalization"] }

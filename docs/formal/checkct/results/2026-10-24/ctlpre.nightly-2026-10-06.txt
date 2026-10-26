@@ -3,41 +3,41 @@ cargo-checkct: shekyl-checkct:85271e5   options: --timeout 900
 toolchain: nightly-2026-10-06
 profile.release: panic = "immediate-abort" overflow-checks = true 
 targets + rustflags: target = ["x86_64-unknown-linux-gnu", "thumbv6m-none-eabi", "riscv32imac-unknown-none-elf", "thumbv7em-none-eabihf"] rustflags = ["-C", "linker=rust-lld", "-C", "linker-flavor=ld.lld", "-C", "relocation-model=static"] 
-run window (UTC): Sat Oct 24 02:00:33 PM UTC 2026 -> Sat Oct 24 02:16:35 PM UTC 2026
+run window (UTC): Sat Oct 24 07:48:14 PM UTC 2026 -> Sat Oct 24 08:03:41 PM UTC 2026
 
 Summary:
   driver  target                        entrypoint                            status
   ctlpre  riscv32imac-unknown-none-elf  ctlpre::driver::div_exact_u64         insecure
-      0x016c6c has control flow leak (0.191s)
+      0x016c6c has control flow leak (0.104s)
   ctlpre  riscv32imac-unknown-none-elf  ctlpre::driver::div_rem_u64           insecure
-      0x016534 has control flow leak (0.275s)
+      0x016534 has control flow leak (0.088s)
   ctlpre  riscv32imac-unknown-none-elf  ctlpre::driver::leading_zeros_u512    insecure
-      0x01234c has control flow leak (0.180s)
+      0x01234c has control flow leak (0.098s)
   ctlpre  riscv32imac-unknown-none-elf  ctlpre::driver::montgomery_form_p384  insecure
-      0x013694 has control flow leak (0.251s)
+      0x013694 has control flow leak (0.092s)
   ctlpre  riscv32imac-unknown-none-elf  ctlpre::driver::pow_amm_u128          insecure
-      0x0145e8 has control flow leak (0.256s)
+      0x0145e8 has control flow leak (0.085s)
   ctlpre  riscv32imac-unknown-none-elf  ctlpre::driver::rem_wide_u64          insecure
-      0x015e68 has control flow leak (0.254s)
+      0x015e68 has control flow leak (0.086s)
   ctlpre  riscv32imac-unknown-none-elf  ctlpre::driver::sub_mod_u256          secure
   ctlpre  riscv32imac-unknown-none-elf  ctlpre::driver::trailing_zeros_u512   insecure
-      0x012c9a has control flow leak (0.188s)
+      0x012c9a has control flow leak (0.088s)
   ctlpre  thumbv6m-none-eabi            ctlpre::driver::div_exact_u64         insecure
-      0x02546c has control flow leak (1.014s)
+      0x02546c has control flow leak (0.319s)
   ctlpre  thumbv6m-none-eabi            ctlpre::driver::div_rem_u64           insecure
-      0x023abc has control flow leak (0.554s)
+      0x023abc has control flow leak (0.252s)
   ctlpre  thumbv6m-none-eabi            ctlpre::driver::leading_zeros_u512    insecure
-      0x020cf2 has control flow leak (0.666s)
+      0x020cf2 has control flow leak (0.263s)
   ctlpre  thumbv6m-none-eabi            ctlpre::driver::montgomery_form_p384  insecure
-      0x0211e4 has control flow leak (1.930s)
+      0x0211e4 has control flow leak (0.906s)
   ctlpre  thumbv6m-none-eabi            ctlpre::driver::pow_amm_u128          insecure
-      0x021bde has control flow leak (0.593s)
+      0x021bde has control flow leak (0.198s)
   ctlpre  thumbv6m-none-eabi            ctlpre::driver::rem_wide_u64          insecure
-      0x0234cc has control flow leak (0.318s)
+      0x0234cc has control flow leak (0.313s)
   ctlpre  thumbv6m-none-eabi            ctlpre::driver::sub_mod_u256          insecure
-      0x024590 has control flow leak (1.117s)
+      0x024590 has control flow leak (0.457s)
   ctlpre  thumbv6m-none-eabi            ctlpre::driver::trailing_zeros_u512   insecure
-      0x020d44 has control flow leak (0.839s)
+      0x020d44 has control flow leak (0.294s)
   ctlpre  thumbv7em-none-eabihf         ctlpre::driver::div_exact_u64         secure
   ctlpre  thumbv7em-none-eabihf         ctlpre::driver::div_rem_u64           unknown
   ctlpre  thumbv7em-none-eabihf         ctlpre::driver::leading_zeros_u512    secure
@@ -55,44 +55,42 @@ Summary:
   ctlpre  x86_64-unknown-linux-gnu      ctlpre::driver::sub_mod_u256          secure
   ctlpre  x86_64-unknown-linux-gnu      ctlpre::driver::trailing_zeros_u512   secure
 INSECURE
-Error: Insecure code!
-./run.sh: line 42: r: command not found
-Sat Oct 24 02:16:35 PM UTC 2026
-  [checkct:result] Instruction 0x0234cc has control flow leak (0.318s)
-  [checkct:result] Instruction 0x016c6c has control flow leak (0.191s)
-  [checkct:result] Instruction 0x012c9a has control flow leak (0.188s)
-  [checkct:result] Instruction 0x0145e8 has control flow leak (0.256s)
-  [checkct:result] Instruction 0x01234c has control flow leak (0.180s)
-  [checkct:result] Instruction 0x016534 has control flow leak (0.275s)
-  [checkct:result] Instruction 0x023abc has control flow leak (0.554s)
-  [checkct:result] Instruction 0x015e68 has control flow leak (0.254s)
-  [checkct:result] Instruction 0x021bde has control flow leak (0.593s)
-  [checkct:result] Instruction 0x013694 has control flow leak (0.251s)
-  [checkct:result] Instruction 0x020cf2 has control flow leak (0.666s)
-  [checkct:result] Instruction 0x020d44 has control flow leak (0.839s)
-  [checkct:result] Instruction 0x02546c has control flow leak (1.014s)
-  [checkct:result] Instruction 0x024590 has control flow leak (1.117s)
-  [checkct:result] Instruction 0x0211e4 has control flow leak (1.930s)
-  [checkct:result] Program status is : unknown (900.194)
-  [checkct:result] Program status is : unknown (900.125)
-  [checkct:result] Program status is : unknown (900.172)
-  [checkct:result] Program status is : unknown (900.132)
-  [checkct:result] Program status is : unknown (900.204)
-  [checkct:result] Program status is : unknown (900.292)
-  [checkct:result] Program status is : unknown (900.321)
-  [checkct:result] Program status is : unknown (900.180)
-      0x016c6c has control flow leak (0.191s)
-      0x016534 has control flow leak (0.275s)
-      0x01234c has control flow leak (0.180s)
-      0x013694 has control flow leak (0.251s)
-      0x0145e8 has control flow leak (0.256s)
-      0x015e68 has control flow leak (0.254s)
-      0x012c9a has control flow leak (0.188s)
-      0x02546c has control flow leak (1.014s)
-      0x023abc has control flow leak (0.554s)
-      0x020cf2 has control flow leak (0.666s)
-      0x0211e4 has control flow leak (1.930s)
-      0x021bde has control flow leak (0.593s)
-      0x0234cc has control flow leak (0.318s)
-      0x024590 has control flow leak (1.117s)
-      0x020d44 has control flow leak (0.839s)
+Sat Oct 24 08:03:41 PM UTC 2026
+  [checkct:result] Instruction 0x0145e8 has control flow leak (0.085s)
+  [checkct:result] Instruction 0x012c9a has control flow leak (0.088s)
+  [checkct:result] Instruction 0x015e68 has control flow leak (0.086s)
+  [checkct:result] Instruction 0x021bde has control flow leak (0.198s)
+  [checkct:result] Instruction 0x016534 has control flow leak (0.088s)
+  [checkct:result] Instruction 0x016c6c has control flow leak (0.104s)
+  [checkct:result] Instruction 0x013694 has control flow leak (0.092s)
+  [checkct:result] Instruction 0x01234c has control flow leak (0.098s)
+  [checkct:result] Instruction 0x023abc has control flow leak (0.252s)
+  [checkct:result] Instruction 0x020cf2 has control flow leak (0.263s)
+  [checkct:result] Instruction 0x020d44 has control flow leak (0.294s)
+  [checkct:result] Instruction 0x0234cc has control flow leak (0.313s)
+  [checkct:result] Instruction 0x02546c has control flow leak (0.319s)
+  [checkct:result] Instruction 0x024590 has control flow leak (0.457s)
+  [checkct:result] Instruction 0x0211e4 has control flow leak (0.906s)
+  [checkct:result] Program status is : unknown (900.051)
+  [checkct:result] Program status is : unknown (900.070)
+  [checkct:result] Program status is : unknown (900.074)
+  [checkct:result] Program status is : unknown (900.070)
+  [checkct:result] Program status is : unknown (900.066)
+  [checkct:result] Program status is : unknown (900.074)
+  [checkct:result] Program status is : unknown (900.067)
+  [checkct:result] Program status is : unknown (901.271)
+      0x016c6c has control flow leak (0.104s)
+      0x016534 has control flow leak (0.088s)
+      0x01234c has control flow leak (0.098s)
+      0x013694 has control flow leak (0.092s)
+      0x0145e8 has control flow leak (0.085s)
+      0x015e68 has control flow leak (0.086s)
+      0x012c9a has control flow leak (0.088s)
+      0x02546c has control flow leak (0.319s)
+      0x023abc has control flow leak (0.252s)
+      0x020cf2 has control flow leak (0.263s)
+      0x0211e4 has control flow leak (0.906s)
+      0x021bde has control flow leak (0.198s)
+      0x0234cc has control flow leak (0.313s)
+      0x024590 has control flow leak (0.457s)
+      0x020d44 has control flow leak (0.294s)

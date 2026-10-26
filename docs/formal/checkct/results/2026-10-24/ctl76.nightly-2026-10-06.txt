@@ -3,37 +3,36 @@ cargo-checkct: shekyl-checkct:85271e5   options: --timeout 900
 toolchain: nightly-2026-10-06
 profile.release: panic = "immediate-abort" overflow-checks = true 
 targets + rustflags: target = ["x86_64-unknown-linux-gnu", "thumbv6m-none-eabi", "riscv32imac-unknown-none-elf"] rustflags = ["-C", "linker=rust-lld", "-C", "linker-flavor=ld.lld", "-C", "relocation-model=static"] 
-run window (UTC): Sat Oct 24 01:57:59 PM UTC 2026 -> Sat Oct 24 01:58:32 PM UTC 2026
+run window (UTC): Sat Oct 24 08:04:06 PM UTC 2026 -> Sat Oct 24 08:04:30 PM UTC 2026
 
 Summary:
   driver  target                        entrypoint                              status
   ctl     riscv32imac-unknown-none-elf  ctl::driver::ctl_positive_leaky_branch  insecure
-      0x011cde has control flow leak (0.064s)
+      0x011cde has control flow leak (0.043s)
   ctl     riscv32imac-unknown-none-elf  ctl::driver::ctl_positive_leaky_lookup  insecure
-      0x0113d6 has memory access leak (0.091s)
+      0x0113d6 has memory access leak (0.043s)
   ctl     riscv32imac-unknown-none-elf  ctl::driver::ctl_sub_mod_u256           secure
   ctl     thumbv6m-none-eabi            ctl::driver::ctl_positive_leaky_branch  insecure
-      0x020730 has control flow leak (0.066s)
+      0x020730 has control flow leak (0.049s)
   ctl     thumbv6m-none-eabi            ctl::driver::ctl_positive_leaky_lookup  insecure
-      0x02031c has memory access leak (0.080s)
+      0x02031c has memory access leak (0.050s)
   ctl     thumbv6m-none-eabi            ctl::driver::ctl_sub_mod_u256           secure
   ctl     x86_64-unknown-linux-gnu      ctl::driver::ctl_positive_leaky_branch  insecure
-      0x2019a4 has control flow leak (0.102s)
+      0x2019a4 has control flow leak (0.047s)
   ctl     x86_64-unknown-linux-gnu      ctl::driver::ctl_positive_leaky_lookup  insecure
-      0x201574 has memory access leak (0.076s)
+      0x201574 has memory access leak (0.059s)
   ctl     x86_64-unknown-linux-gnu      ctl::driver::ctl_sub_mod_u256           secure
 INSECURE
-Error: Insecure code!
-Sat Oct 24 01:58:32 PM UTC 2026
-  [checkct:result] Instruction 0x011cde has control flow leak (0.064s)
-  [checkct:result] Instruction 0x020730 has control flow leak (0.066s)
-  [checkct:result] Instruction 0x02031c has memory access leak (0.080s)
-  [checkct:result] Instruction 0x201574 has memory access leak (0.076s)
-  [checkct:result] Instruction 0x0113d6 has memory access leak (0.091s)
-  [checkct:result] Instruction 0x2019a4 has control flow leak (0.102s)
-      0x011cde has control flow leak (0.064s)
-      0x0113d6 has memory access leak (0.091s)
-      0x020730 has control flow leak (0.066s)
-      0x02031c has memory access leak (0.080s)
-      0x2019a4 has control flow leak (0.102s)
-      0x201574 has memory access leak (0.076s)
+Sat Oct 24 08:04:30 PM UTC 2026
+  [checkct:result] Instruction 0x011cde has control flow leak (0.043s)
+  [checkct:result] Instruction 0x0113d6 has memory access leak (0.043s)
+  [checkct:result] Instruction 0x2019a4 has control flow leak (0.047s)
+  [checkct:result] Instruction 0x020730 has control flow leak (0.049s)
+  [checkct:result] Instruction 0x02031c has memory access leak (0.050s)
+  [checkct:result] Instruction 0x201574 has memory access leak (0.059s)
+      0x011cde has control flow leak (0.043s)
+      0x0113d6 has memory access leak (0.043s)
+      0x020730 has control flow leak (0.049s)
+      0x02031c has memory access leak (0.050s)
+      0x2019a4 has control flow leak (0.047s)
+      0x201574 has memory access leak (0.059s)

@@ -422,10 +422,16 @@ fn adopt_tor(hub: &Hub, admitted: TorAdmitted) {
         },
         None => Endpoint::TorInbound,
     };
+    let inbound = matches!(endpoint, Endpoint::TorInbound);
     let Ok(attached) = hub.adopt(admitted.open, admitted.bytes, endpoint, Some(admitted.gap))
     else {
         return;
     };
+    // The row is on the board. An inbound accept is a held Tor session
+    // and not a dial (`TOR_SUPERVISOR.md` §4.2).
+    if inbound {
+        crate::dialer_ffi::note_inbound_tor();
+    }
     hub.drive(id, attached.session);
 }
 

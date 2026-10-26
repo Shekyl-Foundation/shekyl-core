@@ -6,7 +6,8 @@
 //! The start sequence (`DAEMON_CONFIG_CUTOVER.md` §2.2) and the one stop
 //! path (step 9).
 //!
-//! Rust owns the process from the entry: it reads its arguments, chooses
+//! Rust owns the process from the entry: it takes the arguments `main`
+//! passed, chooses
 //! the network, reads and checks the file, resolves and builds the sections,
 //! answers `--help` and `--version`, asks the configuration check
 //! ([`crate::verify`]; `--config-verify` stops there, `INPUT_GRAMMAR.md`
