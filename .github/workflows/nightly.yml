@@ -13,6 +13,7 @@ on:
           - proptest-exhaustive
           - store-ignored
           - economics-sim-ignored
+          - chain-ingest-ignored
         default: all
       ref:
         description: "Run over this one ref (a branch or a commit) in place of main and dev. For proving a lane on a branch."
@@ -211,11 +212,66 @@ jobs:
           BRANCH: ${{ matrix.branch }}
         run: bash scripts/ci/ignored_set_economics_sim.sh
 
+  chain-ingest-ignored:
+    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'chain-ingest-ignored' }}
+    # The chain-ingest crate's `#[ignore]`d set: the scenarios that fill
+    # shards with real proofs (the emission claims, the levered slash chain,
+    # the join, the pool-shim posts), the miner over real RandomX, the
+    # captured-chain replay under the production substrate, and the
+    # measurements (the switch at the genesis cap, the miner's rate, the H19
+    # batch cost). This job is the lane that invokes them. Before it none
+    # did: their ignore strings named a "live lane" no workflow ran, and its
+    # first run (DRS-X PR 3e) found five red on dev: the switch-timing tests
+    # asserted an alt table the death rule (0999f8726) had since emptied, and
+    # the five-block miner test never pinned the seed the miner requires
+    # (e1c39b882). Budget: 44 minutes on a loaded 16-core workstation; 240
+    # for a 4-vCPU runner.
+    # The figures a shared runner prints decide nothing (rule 76); what the
+    # lane asserts is that every ignored test still passes.
+    #
+    # Same matrix as above. The set is read from the checked-out ref's
+    # scripts/ci/ignored_set_chain_ingest.sh, so each leg is judged by its
+    # own tree; `workflow_dispatch` with `ref` proves one branch's set.
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.branch }}
+          submodules: recursive
+          # The steps below run the checked-out ref's code. It gets no
+          # credential to find in .git/config.
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: ./.github/actions/install-rust
+
+      - name: Cache cargo registry + build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: nightly-chain-ingest-ignored-${{ matrix.branch }}-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: nightly-chain-ingest-ignored-${{ matrix.branch }}-
+
+      - name: Run the chain-ingest ignored set
+        # The set and its assertions are scripts/ci/ignored_set_chain_ingest.sh,
+        # in the tree under test: each branch judges itself.
+        env:
+          BRANCH: ${{ matrix.branch }}
+        run: bash scripts/ci/ignored_set_chain_ingest.sh
+
   report-red:
     # A nightly tier without a route to a human "joins a silence"
     # (`run_live_daemon_gates.sh` header, PR #660): these lanes exist
     # because unrun ignored tests rotted unreported, and a red nobody reads
-    # is the same silence one hop later. For each red leg of the two
+    # is the same silence one hop later. For each red leg of the three
     # ignored-test lanes this opens a tracking issue, or comments on the
     # open one so repeats thread.
     #
@@ -225,7 +281,7 @@ jobs:
     #
     # Scheduled runs report. A dispatched run reports only when asked
     # (`report`): the person who dispatched it is reading it.
-    needs: [store-ignored, economics-sim-ignored]
+    needs: [store-ignored, economics-sim-ignored, chain-ingest-ignored]
     if: ${{ failure() && (github.event_name == 'schedule' || inputs.report) }}
     runs-on: ubuntu-latest
     permissions:
@@ -236,6 +292,13 @@ jobs:
         with:
           script: |
             const lanes = {
+              'chain-ingest-ignored': {
+                title: 'nightly chain-ingest ignored set RED',
+                lines: [
+                  'The `chain-ingest-ignored` job (shekyl-chain-ingest `--ignored`: the real-proof scenarios, the miner, the captured-chain replay and the measurements) failed.',
+                  'If the job stopped before running anything, the crate\'s ignored set changed: decide in `scripts/ci/ignored_set_chain_ingest.sh` whether the new test is this lane\'s.',
+                ],
+              },
               'store-ignored': {
                 title: 'nightly chain-store ignored set RED',
                 lines: [

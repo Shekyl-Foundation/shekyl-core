@@ -671,7 +671,7 @@ impl LeveredChain {
 /// The levered chain, one phase at a time. A refusal names the phase in the
 /// stack: the chain is not re-mined as separate tests.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "fills two shards with real proofs; minutes. Run in the live lane: cargo test -p shekyl-chain-ingest --features pipeline -- --ignored the_levered_slash_chain"]
+#[ignore = "fills two shards with real proofs; minutes; run by nightly.yml's chain-ingest-ignored job"]
 async fn the_levered_slash_chain_judges_each_row_on_one_record() {
     let mut chain = LeveredChain::open().await;
     let join = chain.join_two_shards().await;

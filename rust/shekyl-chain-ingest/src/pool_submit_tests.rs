@@ -301,7 +301,7 @@ fn priced_post(
 /// chain's floor, are accepted through the shim — the BP3 record-absent
 /// fact the shim reads off the store, the validator's door at commit.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "fills two shards with real proofs; minutes. Run in the live lane: cargo test -p shekyl-chain-ingest --features pipeline -- --ignored join_posts_are_accepted_through"]
+#[ignore = "fills two shards with real proofs; minutes; run by nightly.yml's chain-ingest-ignored job"]
 async fn join_posts_are_accepted_through_the_rust_pool_shim() {
     use crate::archival_driver::ENDPOINT;
     use crate::scenario_archival::{complete_tree, shard_set, Persona};
@@ -373,7 +373,7 @@ async fn join_posts_are_accepted_through_the_rust_pool_shim() {
 /// conflicted on G10 (neither refused nor evicted), selects the other
 /// persona's post beside it, and the block it lists connects.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "fills two shards with real proofs; minutes. Run in the live lane: cargo test -p shekyl-chain-ingest --features pipeline -- --ignored two_posts_by_one_persona"]
+#[ignore = "fills two shards with real proofs; minutes; run by nightly.yml's chain-ingest-ignored job"]
 async fn two_posts_by_one_persona_are_held_and_the_template_selects_one() {
     use crate::archival_driver::ENDPOINT;
     use crate::scenario_archival::{complete_tree, shard_set, Persona};

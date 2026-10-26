@@ -142,7 +142,7 @@ fn catch_up(spender: &mut Spender, chain: &[Mined], seen: &mut usize) {
 }
 
 #[tokio::test]
-#[ignore = "minutes of proofs; the live lane"]
+#[ignore = "minutes of proofs; run by nightly.yml's chain-ingest-ignored job"]
 async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
     let rules = levered_rules();
     let mut scenario = Scenario::open_under("scenario-emission-claim", FreeHash, rules);
@@ -694,7 +694,7 @@ async fn issue_on_shard_zero(
 /// re-gather's market, `R_market(0, served)` reads 3 and `Σwork` grows; the
 /// claim is refused at CEN-J25.
 #[tokio::test]
-#[ignore = "minutes of proofs; the live lane"]
+#[ignore = "minutes of proofs; run by nightly.yml's chain-ingest-ignored job"]
 async fn a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slashed() {
     let rules = levered_rules();
     let mut scenario = Scenario::open_under("scenario-emission-frozen-membership", FreeHash, rules);
