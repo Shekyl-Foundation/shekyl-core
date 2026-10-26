@@ -1393,12 +1393,19 @@ can contain either.
   IG-Q49 both stand as written (RT-O36, ruled 2026-10-25). `/pop_blocks`
   has three users, all served there: the regtest roll-back helper, the
   Python framework and the CT-2 fixture generator (§6.4).
-  `inject_archival_serve_credit`'s row in the method table is the host's
-  and armed ([`methods.rs:135`](../../rust/shekyl-rpc-types/src/methods.rs),
-  the review of #1165), so the restricted listener refuses it; until the
-  flip routes the armed handlers, its C++ handler's only other gate is a
-  `FAKECHAIN` branch (`core_rpc_server.cpp:946`), which the flip deletes
-  with the method.
+  `inject_archival_serve_credit`'s row in the method table is armed
+  (`shekyl-rpc-types` `methods.rs`), so the RPC admits it through
+  `admit_armed` like the other two (RT-W10 step 1). **Its setter keeps one
+  narrower restriction, on purpose:**
+  `Blockchain::regtest_inject_archival_serve_credit`
+  ([`blockchain.cpp`](../../src/cryptonote_core/blockchain.cpp)) refuses
+  unless the network is regtest. With the switch armed on testnet or
+  stagenet, `generateblocks` and `/pop_blocks` are served and the inject
+  lever is refused ("Serve-credit injection failed", the daemon log naming
+  the network). Under RT-O36 that is a restriction, the network narrowing
+  what the switch enables, never the network enabling anything, so it is
+  neither a defect nor a leftover gate to delete. It goes with the C++
+  method at the DRS-X flip.
 
 *Why each `status` field is out of view.*
 
