@@ -90,6 +90,12 @@ fn rules() -> ChainRules {
     }
 }
 
+/// The spread each read's start delay is drawn below here. The node's is
+/// one block interval (`READ_START_SPREAD`), two minutes of wall clock per
+/// read on a chain this test mines in seconds; the delay's own test is
+/// `bundle_producer_tests::a_read_waits_its_start_delay`, on paused time.
+const START_SPREAD: std::time::Duration = std::time::Duration::from_millis(50);
+
 fn timeouts() -> Timeouts {
     Timeouts {
         dial: Duration::from_secs(2),
@@ -241,6 +247,7 @@ async fn start(
     let seat = ProducerSeat {
         witness: Arc::clone(ring),
         read,
+        start_spread: START_SPREAD,
     };
     let parts = ProducerParts {
         connector: scenario.connector().clone(),

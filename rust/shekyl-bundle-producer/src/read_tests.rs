@@ -129,6 +129,7 @@ fn due(
         receipt_key,
         shard: SHARD,
         nonce,
+        start_after: Duration::ZERO,
     }
 }
 
@@ -389,11 +390,13 @@ async fn a_challenge_read_and_an_organic_read_differ_only_in_the_nonce() {
     );
 }
 
-/// The read ceiling is the fetch ceiling times the fetches one holder can
-/// take, in blocks rounded up at the target interval, and a read started
+/// The read ceiling is the start spread plus the fetch ceiling times the
+/// fetches one holder can take, in blocks rounded up at the target
+/// interval, and a read started
 /// at the filing deadline ends before `h + W₂ − 1`, the last tip that
 /// files without it, over the genesis window and the gate's. Red edits:
-/// count one fetch per read — the ceiling is not the product; widen
+/// count one fetch per read, or leave the start delay out — the ceiling is
+/// not the sum; widen
 /// `body_total` past the margin — the build fails at the assertion beside
 /// the constant.
 #[test]
@@ -411,7 +414,7 @@ fn a_started_read_ends_inside_the_filing_margin() {
     );
     assert_eq!(
         READ_CEILING,
-        per_fetch * CHALLENGE_BUDGET.fetches_per_holder()
+        crate::READ_START_SPREAD + per_fetch * CHALLENGE_BUDGET.fetches_per_holder()
     );
     let seconds = READ_CEILING.as_secs();
     assert_eq!(

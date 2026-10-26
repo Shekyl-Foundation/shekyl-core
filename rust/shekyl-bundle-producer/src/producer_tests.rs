@@ -19,6 +19,7 @@ use shekyl_archival_retention::{draw_commit, BUNDLE_SIGNATURE_LEN};
 use shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa;
 
 use super::*;
+use crate::READ_START_SPREAD;
 
 const W: Window = Window {
     response: BlockCount::from_raw(500),
@@ -84,6 +85,7 @@ fn producer_with_slots(ring: &Arc<WitnessRing>, seed: u64, slots: NonZeroUsize) 
         Arc::clone(ring),
         Box::new(StdRng::seed_from_u64(seed)),
         slots,
+        READ_START_SPREAD,
     )
 }
 
@@ -420,6 +422,27 @@ fn a_read_of_a_replaced_block_does_not_settle_the_new_one() {
         "the new block's own read is still out"
     );
     assert_eq!(producer.reading(), 1, "the old read freed its slot");
+}
+
+/// Every started read carries a start delay drawn uniformly below one
+/// block interval from the daemon's RNG: none reaches the spread, and they
+/// cover it (§5.3: reads at random times). Red edit: start every read at
+/// once — every delay is zero.
+#[test]
+fn a_started_read_waits_a_random_delay_below_one_block() {
+    let (_ring, mut producer, _chain) = mined(19, 32, 0);
+    let delays: Vec<_> = (101..=510)
+        .flat_map(|tip| producer.due(h(tip)))
+        .map(|due| due.start_after)
+        .collect();
+    assert_eq!(delays.len(), 32);
+    assert!(delays.iter().all(|delay| *delay < READ_START_SPREAD));
+    let quarter = READ_START_SPREAD / 4;
+    assert!(delays.iter().any(|delay| *delay < quarter), "{delays:?}");
+    assert!(
+        delays.iter().any(|delay| *delay > quarter * 3),
+        "{delays:?}"
+    );
 }
 
 #[test]

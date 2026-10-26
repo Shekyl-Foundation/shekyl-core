@@ -17,11 +17,12 @@
 //!
 //! A read the producer has started holds one of the client's
 //! [`MAX_INFLIGHT`] slots, and the producer starts no more reads than
-//! that ([`READS_AT_ONCE`]), so a started read never waits for one. From
-//! there it is at most [`NeedBudget::fetches_per_holder`] fetches of the
-//! drawn persona, each at most [`Timeouts::fetch_ceiling`]:
-//! [`READ_CEILING`], 2,160 s at the production bounds, or
-//! [`READ_CEILING_BLOCKS`] (18) blocks at the target interval. A read
+//! that ([`READS_AT_ONCE`]), so a started read never waits for one. It
+//! first waits its start delay, below [`READ_START_SPREAD`] (one block
+//! interval), and is then at most [`NeedBudget::fetches_per_holder`]
+//! fetches of the drawn persona, each at most [`Timeouts::fetch_ceiling`]:
+//! [`READ_CEILING`], 2,280 s at the production bounds, or
+//! [`READ_CEILING_BLOCKS`] (19) blocks at the target interval. A read
 //! planned at the filing deadline `h + W₂ − M` therefore ends before
 //! `h + W₂ − 1`, the last tip that still files it, whenever blocks arrive
 //! at the target interval; the build fails if a bound changes so that it
@@ -42,7 +43,7 @@ use shekyl_types::BlockCount;
 
 use crate::outcome::{Answered, ReadOutcome};
 use crate::producer::DueRead;
-use crate::FILING_MARGIN;
+use crate::{FILING_MARGIN, READ_START_SPREAD};
 
 /// The budget every challenge read runs under. A nonce read dials only
 /// the drawn persona, so the holder count does not enter; the stall
@@ -59,10 +60,13 @@ pub const CHALLENGE_TIMEOUTS: Timeouts = Timeouts::DEFAULT;
 pub const READS_AT_ONCE: NonZeroUsize =
     NonZeroUsize::new(MAX_INFLIGHT).expect("the client has at least one slot");
 
-/// The longest one challenge read can take once started (module docs).
-pub const READ_CEILING: Duration = CHALLENGE_TIMEOUTS
-    .fetch_ceiling()
-    .saturating_mul(CHALLENGE_BUDGET.fetches_per_holder());
+/// The longest one challenge read can take once started, its start delay
+/// included (module docs).
+pub const READ_CEILING: Duration = READ_START_SPREAD.saturating_add(
+    CHALLENGE_TIMEOUTS
+        .fetch_ceiling()
+        .saturating_mul(CHALLENGE_BUDGET.fetches_per_holder()),
+);
 
 /// [`READ_CEILING`] in blocks at the target interval
 /// (`daa_target_seconds`), rounded up.

@@ -569,6 +569,7 @@ fn producer_seat(
     Some(shekyl_chain_ingest::bundle_producer::ProducerSeat {
         witness: Arc::clone(witness),
         read: shekyl_chain_ingest::bundle_producer::read_through(scheduler),
+        start_spread: shekyl_bundle_producer::READ_START_SPREAD,
     })
 }
 

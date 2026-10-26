@@ -21,7 +21,7 @@ default = []
 # `shekyl-ffi` (the wallet-side image) links, and the fetch client must not
 # enter that graph (SF-D4; `shekyl-archival-fetch-sched` is daemon-only).
 # `shekyl-chain-ingest`'s `producer` feature turns this on for the node.
-fetch = ["dep:shekyl-archival-fetch-sched", "dep:shekyl-difficulty"]
+fetch = ["dep:shekyl-archival-fetch-sched"]
 
 [dependencies]
 # The bundle's bytes and its assembler, the nonces, `draw_commit`, `K`.
@@ -35,9 +35,9 @@ shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-types = { path = "../shekyl-types" }
 # The one fetch path, with the challenge nonce (feature `fetch`).
 shekyl-archival-fetch-sched = { path = "../shekyl-archival-fetch-sched", optional = true }
-# The target block interval, which turns a read's time ceiling into blocks
-# against the filing margin (feature `fetch`).
-shekyl-difficulty = { path = "../shekyl-difficulty", optional = true }
+# The target block interval: the spread a read's start is drawn from, and
+# what turns a read's time ceiling into blocks against the filing margin.
+shekyl-difficulty = { path = "../shekyl-difficulty" }
 # The seed, drawn from the OS; the read plan's daemon-local RNG.
 rand = "0.8"
 zeroize = { workspace = true }

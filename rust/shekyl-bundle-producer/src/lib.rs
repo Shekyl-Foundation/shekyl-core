@@ -67,6 +67,8 @@ pub use producer::{
 };
 pub use ring::{DrawFailed, WitnessRing};
 
+use std::time::Duration;
+
 use shekyl_types::BlockCount;
 
 /// Consecutive reads of one draw are at least this many blocks apart.
@@ -79,6 +81,12 @@ pub const READ_SPACING: BlockCount = BlockCount::from_raw(30);
 /// it inside its window; a read in flight is waited for inside the margin
 /// (`producer` module docs). PROVISIONAL (§13.2).
 pub const FILING_MARGIN: BlockCount = BlockCount::from_raw(30);
+
+/// The spread a read's start is drawn from: once its height has come, a
+/// read waits a delay drawn uniformly below one target block interval from
+/// the daemon's RNG before it dials (§5.3: reads at random times), so the
+/// moment a read leaves is not the moment a block arrived.
+pub const READ_START_SPREAD: Duration = Duration::from_secs(shekyl_difficulty::T_SECONDS);
 
 /// How far below the tip a template's candidate is kept. A template for
 /// height `c` can only be the block at `c`. One that another miner's block

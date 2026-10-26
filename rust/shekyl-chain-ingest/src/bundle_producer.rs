@@ -15,11 +15,14 @@
 //!    the ones this daemon mined, pause the popped ones and give up on the
 //!    lost ones;
 //! 2. asks the connector for each newly claimed block's draws
-//!    ([`LearnDraws`]), which it derives where `D` is;
+//!    ([`LearnDraws`](crate::connector::LearnDraws)), which it derives
+//!    where `D` is;
 //! 3. starts every read whose height has come, while the client has a
-//!    free slot, each through the one fetch path ([`ProducerSeat::read`]),
-//!    and feeds each outcome back;
-//! 4. offers every block that is ready to the queue ([`OfferBundle`]).
+//!    free slot, each through the one fetch path
+//!    ([`ProducerSeat::read`](crate::bundle_producer::ProducerSeat::read)),
+//!    after its start delay, and feeds each outcome back;
+//! 4. offers every block that is ready to the queue
+//!    ([`OfferBundle`](crate::connector::OfferBundle)).
 //!
 //! Only a mining daemon is a witness, so only a node with a job seat runs
 //! this, and only a node with a fetch path to read through.
@@ -85,6 +88,10 @@ pub struct ProducerSeat {
     pub witness: Arc<WitnessRing>,
     /// The challenge read.
     pub read: ReadFn,
+    /// The spread each read's start delay is drawn below:
+    /// `shekyl_bundle_producer::READ_START_SPREAD` in the node, the value
+    /// the read ceiling is derived with.
+    pub start_spread: std::time::Duration,
 }
 
 /// The read through `scheduler`: the scheduler's nonce read over a
@@ -156,6 +163,7 @@ pub async fn run(
         Arc::clone(&seat.witness),
         Box::new(rng),
         shekyl_bundle_producer::read::READS_AT_ONCE,
+        seat.start_spread,
     );
     let (done_tx, mut done_rx) = mpsc::unbounded_channel::<(ReadKey, ReadOutcome)>();
     let mut scheme_logged = SchemeLine::default();
@@ -299,13 +307,7 @@ async fn step(
     }
     for due in producer.due(tip) {
         progress.send_modify(|now| now.reading += 1);
-        let read = Arc::clone(&seat.read);
-        let done = done.clone();
-        tokio::spawn(async move {
-            let key = due.key;
-            let outcome = read(due).await;
-            drop(done.send((key, outcome)));
-        });
+        spawn_read(Arc::clone(&seat.read), due, done.clone());
     }
     let (filings, failed) = producer.ready(tip, window);
     for (h, error) in failed {
@@ -318,6 +320,43 @@ async fn step(
     for filing in filings {
         offer(parts, filing, scheme_logged).await;
     }
+}
+
+/// Start one read: wait its start delay, run it in a task of its own, and
+/// report how it ended on `done`. Every read reports exactly once: a read
+/// whose task panics or is cancelled reports a stall, logged at error, so
+/// the producer frees its slot and reads the draw again at its next
+/// attempt. A read that never reported would hold its slot for the life of
+/// the process. What the task failed with is not logged: a read's panic
+/// message is not a surface this crate controls (the secrets gate).
+pub(crate) fn spawn_read(
+    read: ReadFn,
+    due: DueRead,
+    done: mpsc::UnboundedSender<(ReadKey, ReadOutcome)>,
+) {
+    tokio::spawn(async move {
+        let key = due.key;
+        tokio::time::sleep(due.start_after).await;
+        let outcome = match tokio::spawn(read(due)).await {
+            Ok(outcome) => outcome,
+            Err(failed) => {
+                let how = if failed.is_panic() {
+                    "panicked"
+                } else {
+                    "was cancelled"
+                };
+                tracing::error!(
+                    h = key.h.to_raw(),
+                    draw = key.draw,
+                    attempt = key.attempt,
+                    "a challenge read of block {} {how}; counted as a stall",
+                    key.h.to_raw()
+                );
+                ReadOutcome::Stall
+            }
+        };
+        drop(done.send((key, outcome)));
+    });
 }
 
 async fn offer(parts: &ProducerParts, filing: Filing, scheme_logged: &mut SchemeLine) {

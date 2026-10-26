@@ -39,6 +39,8 @@ producer = [
     "shekyl-bundle-producer/fetch",
     "dep:shekyl-archival-fetch-sched",
     "dep:shekyl-crypto-pq",
+    # A read's start delay (`bundle_producer::spawn_read`).
+    "tokio/time",
 ]
 pipeline = [
     "dep:kameo",
@@ -251,7 +253,7 @@ shekyl-p-loopback = { path = "../shekyl-p-loopback" }
 shekyl-p-host = { path = "../shekyl-p-host", features = ["test-signer"] }
 shekyl-p-serve = { path = "../shekyl-p-serve", features = ["test-signer"] }
 shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
-tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "macros", "sync", "net", "io-util", "time"] }
+tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "macros", "sync", "net", "io-util", "time", "test-util"] }
 
 [lints]
 workspace = true

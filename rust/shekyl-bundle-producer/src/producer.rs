@@ -60,8 +60,9 @@
 
 use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
+use std::time::Duration;
 
-use rand::RngCore;
+use rand::{Rng, RngCore};
 use shekyl_archival_retention::{
     challenge_nonce, support_challenge_nonce, BundleBody, BundleRecord, BundleRef, PassBitmap,
     PassStream,
@@ -210,6 +211,10 @@ pub struct DueRead {
     /// `attempt`, under the stream's label. Indistinguishable from random
     /// until the bundle reveals the seed.
     pub nonce: [u8; 32],
+    /// How long the read waits before it dials: drawn uniformly below the
+    /// producer's start spread from the daemon's RNG when the read started
+    /// ([`READ_START_SPREAD`](crate::READ_START_SPREAD) in the node).
+    pub start_after: Duration,
 }
 
 /// The nonce is not shown: the read's SOCKS credentials derive from it,
@@ -294,6 +299,8 @@ pub struct Producer {
     reads: Vec<ReadKey>,
     /// The most reads started at once: the client's slots.
     reads_at_once: NonZeroUsize,
+    /// The spread each read's start delay is drawn below.
+    start_spread: Duration,
 }
 
 impl core::fmt::Debug for Producer {
@@ -305,15 +312,19 @@ impl core::fmt::Debug for Producer {
 }
 
 impl Producer {
-    /// A producer over `ring`, planning reads from `rng` — the daemon's
-    /// own randomness, never the seed — and starting at most
-    /// `reads_at_once` reads at a time, the slots of the client they run
-    /// on (module docs).
+    /// A producer over `ring`, planning reads and their start delays from
+    /// `rng` — the daemon's own randomness, never the seed — starting at
+    /// most `reads_at_once` reads at a time, the slots of the client they
+    /// run on, each after a delay drawn uniformly below `start_spread`
+    /// (module docs). The node passes
+    /// [`READ_START_SPREAD`](crate::READ_START_SPREAD), the spread the read
+    /// ceiling is derived with; a test on wall-clock time passes less.
     #[must_use]
     pub fn new(
         ring: std::sync::Arc<WitnessRing>,
         rng: Box<dyn RngCore + Send>,
         reads_at_once: NonZeroUsize,
+        start_spread: Duration,
     ) -> Self {
         Self {
             ring,
@@ -321,6 +332,7 @@ impl Producer {
             rng,
             reads: Vec::new(),
             reads_at_once,
+            start_spread,
         }
     }
 
@@ -449,9 +461,15 @@ impl Producer {
     /// block first, so the nearest deadline goes first. A read left for
     /// want of a slot has not started; it is due again at the next wake,
     /// and at its block's filing deadline it is abandoned like any read
-    /// not yet started. A paused block reads nothing.
+    /// not yet started. Each read carries a start delay drawn uniformly
+    /// below the start spread (§5.3: reads at random times); the delay is
+    /// part of the started read, inside its ceiling. A paused block reads
+    /// nothing.
     pub fn due(&mut self, tip: BlockHeight) -> Vec<DueRead> {
         let room = self.reads_at_once.get().saturating_sub(self.reads.len());
+        let spread_ms = u64::try_from(self.start_spread.as_millis())
+            .unwrap_or(u64::MAX)
+            .max(1);
         let mut due = Vec::new();
         for (&h, work) in &mut self.blocks {
             if work.popped_at.is_some() {
@@ -496,6 +514,7 @@ impl Producer {
                         attempt,
                     };
                     self.reads.push(key);
+                    let start_after = Duration::from_millis(self.rng.gen_range(0..spread_ms));
                     due.push(DueRead {
                         key,
                         persona: draw.target.persona,
@@ -503,6 +522,7 @@ impl Producer {
                         receipt_key: draw.target.receipt_key.clone(),
                         shard: draw.target.shard,
                         nonce,
+                        start_after,
                     });
                 }
             }

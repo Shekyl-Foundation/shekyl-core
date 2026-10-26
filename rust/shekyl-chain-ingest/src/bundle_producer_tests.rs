@@ -14,19 +14,26 @@
 //!
 //! Every test names the edit that turns it red.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
+use rand::SeedableRng;
 use shekyl_archival_retention::{
     assemble_bundle, draw_commit, sign_bundle_commitment, BundleBody, BundleKept, BundleRef,
     PassBitmap, BUNDLE_WITNESS_KEY_LEN,
 };
-use shekyl_bundle_producer::{Producer, Window, WitnessRing};
+use shekyl_bundle_producer::read::READS_AT_ONCE;
+use shekyl_bundle_producer::{
+    DrawTarget, DueRead, Producer, ReadOutcome, Recorded, Targets, Window, WitnessRing,
+    READ_START_SPREAD,
+};
 use shekyl_chain_rules::CenRow;
 use shekyl_crypto_pq::fn_dsa_hybrid::{FnDsaHybridSecretKey, HybridEd25519FnDsa};
 use shekyl_types::archival::DrawCommitment;
-use shekyl_types::{BlockCount, BlockHeight};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight, PCanonicalId, ShardId};
+use tokio::sync::mpsc;
 
-use crate::bundle_producer::SchemeLine;
+use crate::bundle_producer::{spawn_read, ReadFn, SchemeLine};
 use crate::connector::{BundleOffered, LearnDraws, Learned, OfferBundle};
 use crate::scenario::{FreeHash, Mined, Scenario, RULES};
 
@@ -277,6 +284,7 @@ async fn the_producer_claims_what_its_ring_drew() {
         Arc::clone(&ring),
         Box::new(<rand::rngs::StdRng as rand::SeedableRng>::seed_from_u64(1)),
         shekyl_bundle_producer::read::READS_AT_ONCE,
+        READ_START_SPREAD,
     );
     let window = Window {
         response: w2(),
@@ -305,4 +313,99 @@ fn the_serving_scheme_line_is_once_per_block() {
     assert!(line.due(h, true));
     assert!(!line.due(h, true), "once per block");
     assert!(line.due(BlockHeight::from_raw(8), true));
+}
+
+/// A producer with one block of ours claimed, its one draw learned, and
+/// that draw's first read started: one slot taken.
+fn one_started_read() -> (Producer, DueRead) {
+    let ring = Arc::new(WitnessRing::new());
+    let ours = BlockHeight::from_raw(100);
+    let commitment = ring.draw(ours).expect("the ring draws");
+    let mut producer = Producer::new(
+        Arc::clone(&ring),
+        Box::new(rand::rngs::StdRng::seed_from_u64(3)),
+        READS_AT_ONCE,
+        READ_START_SPREAD,
+    );
+    let window = Window {
+        response: w2(),
+        reorg_cap: RULES.in_force(BlockHeight::ZERO).reorg_cap(),
+    };
+    let recorded = Recorded {
+        hash: BlockHash::from_bytes([0xA0; 32]),
+        commitment,
+    };
+    let observed = producer.observe(ours, window, |at| (at == ours).then_some(recorded));
+    assert_eq!(observed.learn.len(), 1);
+    let (receipt_key, _) =
+        HybridEd25519FnDsa::keypair_from_seeds(&[7; 32], &[8; 32]).expect("keygen");
+    producer.learned(
+        ours,
+        window,
+        Targets {
+            economy: vec![DrawTarget {
+                draw: 0,
+                persona: PCanonicalId::from_bytes([7; 32]),
+                shard: ShardId::from_raw(0),
+                receipt_key,
+                endpoint: [9; 32],
+            }],
+            support: Vec::new(),
+        },
+    );
+    let due = (101..=600)
+        .flat_map(|tip| producer.due(BlockHeight::from_raw(tip)))
+        .next()
+        .expect("the draw's read starts");
+    assert_eq!(producer.reading(), 1);
+    (producer, due)
+}
+
+fn a_read_that_fails() -> ReadOutcome {
+    panic!("the read task fails")
+}
+
+/// A read whose task panics reports a stall, and the producer frees its
+/// slot when the driver feeds that back. Red edit: run the read in the
+/// reporting task itself — the panic takes the report with it, and the
+/// slot is held for the life of the process.
+#[tokio::test(start_paused = true)]
+async fn a_read_that_panics_reports_a_stall_and_frees_its_slot() {
+    let (mut producer, due) = one_started_read();
+    let fails: ReadFn = Arc::new(|_| Box::pin(async { a_read_that_fails() }));
+    let (done, mut ended) = mpsc::unbounded_channel();
+    spawn_read(fails, due, done);
+    let (key, outcome) = tokio::time::timeout(READ_START_SPREAD * 2, ended.recv())
+        .await
+        .expect("the read reports within its start spread")
+        .expect("the read reports before its sender goes");
+    assert_eq!(outcome, ReadOutcome::Stall);
+    producer.read_done(key, outcome);
+    assert_eq!(producer.reading(), 0, "its slot is freed");
+}
+
+/// A read waits its start delay before it runs (§5.3: reads at random
+/// times). Red edit: drop the wait — the read runs at once.
+#[tokio::test(start_paused = true)]
+async fn a_read_waits_its_start_delay() {
+    let (_producer, mut due) = one_started_read();
+    due.start_after = Duration::from_secs(90);
+    let ran_at = Arc::new(Mutex::new(None));
+    let recorder = Arc::clone(&ran_at);
+    let read: ReadFn = Arc::new(move |_| {
+        let recorder = Arc::clone(&recorder);
+        Box::pin(async move {
+            *recorder.lock().expect("the clock cell") = Some(tokio::time::Instant::now());
+            ReadOutcome::Stall
+        })
+    });
+    let started = tokio::time::Instant::now();
+    let (done, mut ended) = mpsc::unbounded_channel();
+    spawn_read(read, due, done);
+    ended.recv().await.expect("the read reports");
+    let ran = ran_at
+        .lock()
+        .expect("the clock cell")
+        .expect("the read ran");
+    assert!(ran - started >= Duration::from_secs(90));
 }
