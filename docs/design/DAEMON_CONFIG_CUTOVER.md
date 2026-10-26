@@ -133,15 +133,21 @@ What crosses the FFI after the cutover, and nothing else:
    resolves every path (§2.5), reads the ban file, and constructs the typed
    sections. `--help` and `--version` are answered here. A refusal renders
    through IG-11 and exits with status 2; nothing below runs.
-   **The argument vector (2026-10-26).** On Unix those pointers are the
-   argument vector. The daemon image is a staticlib, and
-   `std::env::args_os` is filled only when Rust's `lang_start` ran: glibc
-   does that through an `.init_array` constructor, and FreeBSD, musl and
-   the other non-glibc Unix targets do not. Reading `args_os` there ignored
-   `--network`, `--data-dir`, `--help` and an unknown name, and the daemon
-   started on the mainnet defaults. A null or empty vector exits 1 and
-   does not start. Windows keeps `GetCommandLineW` (`args_os`): a C `main`
-   argv is the ANSI code page, and that call does not need `lang_start`.
+   **The argument vector (2026-10-26).** The value is `ArgumentVector`
+   (`rust/shekyl-ffi/src/argument_vector.rs`). On Unix the pointers are
+   that vector. The daemon image is a staticlib, and `std::env::args_os`
+   is filled only when Rust's `lang_start` ran: glibc does that through an
+   `.init_array` constructor, and FreeBSD, musl and the other non-glibc
+   Unix targets do not. Reading `args_os` there ignored `--network`,
+   `--data-dir`, `--help` and an unknown name, and the daemon started on
+   the mainnet defaults. The count is the length. A null `argv`,
+   `argc < 1`, or a null slot exits 1 and does not start: a hole is not a
+   shorter command line. Windows reads `GetCommandLineW` and does not read
+   the pointers; a C `main` argv there is the active code page. The
+   snapshot export decodes the caller's narrow argv instead (Unix bytes,
+   Windows active code page): that list is the importer's and the test
+   binary's, not the process command line. `from_os_strings` is the
+   constructor the Rust process entry will call.
    **Rust process entry — OPEN.** Grammar §0 (2026-10-13) moves `shekyld`'s
    `main` to Rust. DC-Q13 (b) kept CMake's executable and one call in, so
    `lang_start` still does not run: the stack-overflow guard is not

@@ -4481,8 +4481,8 @@ int shekyl_network_id(std::uint8_t nettype, std::uint8_t* out);
 /// `rust/shekyl-daemon/src/entry.rs`, carried by the daemon image). C++
 /// `main()` fills a `ShekylDaemonEntry` and calls `shekyl_daemon_main` with
 /// its own `argc` and `argv`; Rust owns the process from there and calls
-/// `run` with the snapshot of the
-/// values whose reader is still C++. The snapshot's structures, its field
+/// `run` with the snapshot of the values whose reader is still C++. The
+/// snapshot's structures, its field
 /// count and `shekyl_daemon_snapshot_parse` / `_free` are defined in
 /// `rust/shekyl-ffi/src/daemon_snapshot_ffi.rs` and carried by every Rust
 /// image, so a binary that only constructs core from a snapshot (the
@@ -4559,16 +4559,20 @@ uint32_t shekyl_daemon_snapshot_field_count();
 void shekyl_daemon_request_stop(void);
 /// Runs the daemon and returns its exit status: 2 a configuration refusal,
 /// 1 a runtime failure, `run`'s status otherwise; a panic aborts.
-/// `argc` and `argv` are `main`'s. On Unix those pointers are the argument
-/// vector: this image is a staticlib, and `std::env::args_os` is empty
-/// unless Rust's process entry ran. A null or empty vector returns 1 and
-/// does not start.
+/// On Unix, `argc` and `argv` are the argument vector: this image is a
+/// staticlib, and `std::env::args_os` is empty unless Rust's process entry
+/// ran. Each of the `argc` pointers is a non-null string. A null `argv`,
+/// `argc < 1`, or a null slot returns 1 and does not start. On Windows the
+/// argument vector is `GetCommandLineW`; `argc` and `argv` are not read,
+/// because a C `main` argv is the active code page.
 int32_t shekyl_daemon_main(const ShekylDaemonEntry* entry, int argc, const char* const* argv);
 /// A snapshot for a C++ test binary or the importer, from an argument list
 /// (the program first) through the one real parse: no lock, no marker, no
 /// logging. In the ordinary library, not the daemon image. 0 and
-/// `*out` set; 2 with the refusal on standard error; 1 for a null argument.
-/// Released with `shekyl_daemon_snapshot_free`.
+/// `*out` set; 2 with the refusal on standard error; 1 when the vector
+/// cannot be read (a null argument, `argc < 1`, a null slot, or a byte the
+/// platform encoding cannot represent). Released with
+/// `shekyl_daemon_snapshot_free`.
 int32_t shekyl_daemon_snapshot_parse(int argc, const char* const* argv, ShekylDaemonSnapshot** out);
 void shekyl_daemon_snapshot_free(ShekylDaemonSnapshot* snapshot);
 

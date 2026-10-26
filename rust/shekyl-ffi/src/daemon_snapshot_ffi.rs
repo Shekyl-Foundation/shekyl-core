@@ -326,74 +326,21 @@ fn snapshot_for(args: &[OsString], platform: &Platform) -> Result<Box<Leased>, i
     }))
 }
 
-/// The process argument vector, program first, from `main`'s `argc` and `argv`.
-///
-/// One conversion for the daemon entry and for [`shekyl_daemon_snapshot_parse`].
-/// Unix keeps each argument's bytes, so a non-UTF-8 argument reaches the
-/// parser's encoding refusal (IG-Q2). Windows decodes the narrow C strings
-/// lossily; the daemon entry does not use this function there, because
-/// `GetCommandLineW` is that platform's argument vector.
-///
-/// A null pointer ends the vector. `None` means the vector cannot be read:
-/// `argc < 1`, a null `argv`, a pointer the slice bound refuses, or no
-/// argument before the first null.
-///
-/// # Safety
-///
-/// When `argc >= 1` and `argv` is non-null, `argv` addresses `argc`
-/// pointers and each non-null one is NUL-terminated. Those pointers only
-/// have to live for the call.
-#[allow(unsafe_code)]
-pub unsafe fn os_strings_from_argv(
-    argc: c_int,
-    argv: *const *const c_char,
-) -> Option<Vec<OsString>> {
-    if argc < 1 || argv.is_null() {
-        return None;
-    }
-    let count = usize::try_from(argc).ok()?;
-    // SAFETY: the caller's contract: `argv` addresses `argc` pointers.
-    let argv = unsafe { crate::legacy_util::slice_from_typed_ptr(argv, count) }?;
-    let mut out = Vec::with_capacity(argv.len());
-    for &ptr in argv {
-        if ptr.is_null() {
-            break;
-        }
-        // SAFETY: the caller's contract: non-null and NUL-terminated.
-        let cstr = unsafe { std::ffi::CStr::from_ptr(ptr) };
-        out.push(os_string_from_argument(cstr));
-    }
-    if out.is_empty() {
-        None
-    } else {
-        Some(out)
-    }
-}
-
-fn os_string_from_argument(argument: &std::ffi::CStr) -> OsString {
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStringExt;
-        OsString::from_vec(argument.to_bytes().to_vec())
-    }
-    #[cfg(not(unix))]
-    {
-        OsString::from(argument.to_string_lossy().into_owned())
-    }
-}
-
 /// A snapshot for a C++ test binary, from `argc` arguments (the program
 /// first) through the real parse: the table, the file, the sections and
 /// the platform roots, as a start does, but no lock, no marker and no
 /// logging. Writes the snapshot's address to `out` and returns 0; a
-/// refusal is printed to standard error and returns 2; a null argument
-/// returns 1. The snapshot and what it points at live until
+/// refusal is printed to standard error and returns 2; a vector that
+/// cannot be read returns 1. The snapshot and what it points at live until
 /// [`shekyl_daemon_snapshot_free`].
 ///
 /// # Safety
 ///
-/// `argv` points at `argc` NUL-terminated strings and `out` at a writable
-/// pointer slot.
+/// `out` is a writable pointer slot. `argc` and `argv` meet
+/// [`ArgumentVector::from_narrow_argv`](crate::argument_vector::ArgumentVector::from_narrow_argv)'s
+/// contract: `argc` non-null NUL-terminated strings, program first. A null
+/// slot, a null `argv`, `argc < 1`, or a byte the platform encoding cannot
+/// represent returns 1.
 #[allow(unsafe_code)]
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_daemon_snapshot_parse(
@@ -405,10 +352,12 @@ pub unsafe extern "C" fn shekyl_daemon_snapshot_parse(
         return EXIT_FAILED;
     }
     // SAFETY: the caller's contract on `argc` and `argv`.
-    let Some(args) = (unsafe { os_strings_from_argv(argc, argv) }) else {
+    let Some(arguments) =
+        (unsafe { crate::argument_vector::ArgumentVector::from_narrow_argv(argc, argv) })
+    else {
         return EXIT_FAILED;
     };
-    match snapshot_for(&args, &crate::platform::current()) {
+    match snapshot_for(arguments.as_slice(), &crate::platform::current()) {
         Ok(leased) => {
             // SAFETY: `out` is writable by the contract.
             unsafe { *out = Box::into_raw(leased).cast::<ShekylDaemonSnapshot>() };
@@ -489,27 +438,5 @@ mod tests {
         assert!(data.mine_header().is_none());
         assert_eq!(data.data_dir(), d.path().display().to_string());
         assert_eq!(data.network, 3);
-    }
-
-    #[test]
-    fn a_null_or_empty_argv_is_refused() {
-        assert!(unsafe { os_strings_from_argv(0, std::ptr::null()) }.is_none());
-        assert!(unsafe { os_strings_from_argv(-1, std::ptr::null()) }.is_none());
-        assert!(unsafe { os_strings_from_argv(1, std::ptr::null()) }.is_none());
-    }
-
-    /// A non-UTF-8 byte survives, so the parser can refuse it (IG-Q2). A
-    /// null slot ends the vector. Lossy decoding would turn `0xff` into
-    /// U+FFFD and this comparison would fail.
-    #[cfg(unix)]
-    #[test]
-    fn argv_keeps_a_non_utf8_byte_and_stops_at_a_null_slot() {
-        use std::os::unix::ffi::OsStringExt;
-        let program = CString::new("shekyld").unwrap();
-        let bad = CString::new(vec![b'-', b'-', 0xff]).unwrap();
-        let ptrs = [program.as_ptr(), bad.as_ptr(), std::ptr::null()];
-        let got = unsafe { os_strings_from_argv(3, ptrs.as_ptr()) }.unwrap();
-        assert_eq!(got.len(), 2);
-        assert_eq!(got[1].clone().into_vec(), vec![b'-', b'-', 0xff]);
     }
 }

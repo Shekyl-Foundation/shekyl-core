@@ -167,13 +167,16 @@ of its own, for the same reason as the negative one.
   the version strings and two function pointers, `run` and `stop`, so no
   Rust crate links against the daemon's objects, every Rust test drives
   the entry with a fake pair, and the signature gate's rule that every
-  declared `shekyl_` function is a Rust export holds. The entry, the entry
-  types and the snapshot are `rust/shekyl-daemon/src/entry.rs`, a gate
-  surface; `shekyl_daemon_snapshot_field_count` is the export the C++
-  asserts. `shekyl_daemon_main`, `command_line` and
-  `shekyl_daemon_request_stop` carry the crate's only `allow(unsafe_code)`,
-  each scoped to itself. `command_line` reads the `argc`/`argv` `main`
-  passes (`DAEMON_CONFIG_CUTOVER.md` §2.2).
+  declared `shekyl_` function is a Rust export holds. The entry and the
+  entry types are `rust/shekyl-daemon/src/entry.rs`, a gate surface. The
+  snapshot is `rust/shekyl-ffi/src/daemon_snapshot_ffi.rs`;
+  `shekyl_daemon_snapshot_field_count` is the export the C++ asserts. The
+  argument vector is `rust/shekyl-ffi/src/argument_vector.rs`:
+  `from_process_entry` for the daemon (Unix pointers, Windows
+  `GetCommandLineW`) and `from_narrow_argv` for the snapshot export.
+  `shekyl_daemon_main` and `shekyl_daemon_request_stop` in `entry.rs`, and
+  `unsafe_c_str` in `run.rs`, carry `shekyl-daemon`'s `allow(unsafe_code)`,
+  each scoped to itself.
 - **The daemon at each intermediate commit.** From commit (b) Rust owns
   `argv` and parses it with the grammar. Until commit (e) deletes the last
   C++ reader, C++ still reads options through `boost::program_options`, so

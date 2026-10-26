@@ -7,15 +7,17 @@
 //! (`DAEMON_CONFIG_CUTOVER.md` §2.1, §2.9).
 //!
 //! Nothing crosses in either direction but what is here. C++ `main()`
-//! hands [`shekyl_daemon_main`] a [`ShekylDaemonEntry`] and the process
-//! `argc`/`argv`: its version strings and two function pointers, `run`
-//! and `stop`. Rust fills a
-//! [`ShekylDaemonSnapshot`], the read-only structure holding exactly the
+//! hands [`shekyl_daemon_main`] a [`ShekylDaemonEntry`] — its version
+//! strings and two function pointers, `run` and `stop` — and the process
+//! `argc`/`argv`. Rust resolves that vector through
+//! [`ArgumentVector`](shekyl_ffi::argument_vector::ArgumentVector) and fills
+//! a [`ShekylDaemonSnapshot`], the read-only structure holding exactly the
 //! values whose reader is still C++, and calls `run` with it. The C++
 //! defines no symbol Rust imports, so every Rust test can drive the entry
 //! with a fake pair. This file is the daemon's entry ABI and a
-//! signature-gate surface; the `#[allow(unsafe_code)]` below are its only
-//! exceptions to the crate's rule, each on the one item the lint names.
+//! signature-gate surface; the `#[allow(unsafe_code)]` below are this
+//! file's exceptions to the crate's rule, each on the one item the lint
+//! names. `run::unsafe_c_str` is the crate's other one.
 //!
 //! **The snapshot** ([`ShekylDaemonSnapshot`], its field count and the
 //! test binaries' parse export) is `shekyl-ffi`'s `daemon_snapshot_ffi`, in
@@ -27,8 +29,9 @@
 //! so every trigger reaches the one owner in [`crate::signals`] and the
 //! stop runs in §2.2 step 9's order. The remnant never stops itself.
 
-use std::ffi::{c_char, c_int, OsString};
+use std::ffi::{c_char, c_int};
 
+use shekyl_ffi::argument_vector::ArgumentVector;
 use shekyl_ffi::daemon_snapshot_ffi::ShekylDaemonSnapshot;
 
 /// The remnant's `run`: constructs core, the protocol handler, the node
@@ -60,18 +63,15 @@ pub struct ShekylDaemonEntry {
 /// with its `argc` and `argv`, and Rust owns the process from here.
 /// Returns the exit status.
 ///
-/// On Unix the pointers are the argument vector. This image is a
-/// staticlib, so `std::env::args_os` is empty unless Rust's `lang_start`
-/// ran (glibc fills it from `.init_array`; FreeBSD, musl and the other
-/// non-glibc Unix targets do not). Windows uses `GetCommandLineW`, which
-/// does not need `lang_start`; a C `main` argv there is the ANSI code page.
+/// The argument vector is [`ArgumentVector::from_process_entry`]. A vector
+/// that cannot be read returns 1 and does not start.
 ///
 /// # Safety
 ///
-/// `entry` must be null or point to a `ShekylDaemonEntry` that outlives
-/// the call and whose strings are NUL-terminated and static. On Unix,
-/// `argc` and `argv` are `main`'s: `argv` addresses `argc` pointers, each
-/// non-null one NUL-terminated, or the call returns 1 and does not start.
+/// `entry` is null or points at a [`ShekylDaemonEntry`] that outlives the
+/// call, with NUL-terminated static strings. `argc` and `argv` meet
+/// [`ArgumentVector::from_process_entry`]'s contract. On Windows those
+/// pointers are not read.
 #[allow(unsafe_code)]
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_daemon_main(
@@ -84,37 +84,11 @@ pub unsafe extern "C" fn shekyl_daemon_main(
     }
     // SAFETY: the caller's contract above.
     let entry = unsafe { &*entry };
-    // SAFETY: same contract, for `argc` and `argv` on Unix. On Windows the
-    // pointers are unread; `command_line` takes the wide command line.
-    let Some(args) = (unsafe { command_line(argc, argv) }) else {
+    // SAFETY: [`ArgumentVector::from_process_entry`]'s contract.
+    let Some(arguments) = (unsafe { ArgumentVector::from_process_entry(argc, argv) }) else {
         return crate::run::EXIT_FAILED;
     };
-    crate::main(entry, &args)
-}
-
-/// `main`'s argument vector, or `None` when it cannot be read.
-///
-/// # Safety
-///
-/// On Unix, the [`os_strings_from_argv`](shekyl_ffi::daemon_snapshot_ffi::os_strings_from_argv)
-/// contract. On Windows the pointers are not read.
-#[allow(unsafe_code)]
-unsafe fn command_line(argc: c_int, argv: *const *const c_char) -> Option<Vec<OsString>> {
-    #[cfg(windows)]
-    {
-        let _ = (argc, argv);
-        let args: Vec<OsString> = std::env::args_os().collect();
-        if args.is_empty() {
-            None
-        } else {
-            Some(args)
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        // SAFETY: the caller's contract.
-        unsafe { shekyl_ffi::daemon_snapshot_ffi::os_strings_from_argv(argc, argv) }
-    }
+    crate::main(entry, arguments.as_slice())
 }
 
 /// Asks for a stop, from the remnant: the console's `exit` and the RPC's
@@ -164,5 +138,31 @@ mod tests {
         let bogus_argv = [program.as_ptr(), bogus.as_ptr()];
         let refused = unsafe { shekyl_daemon_main(&raw const entry, 2, bogus_argv.as_ptr()) };
         assert_eq!(refused, crate::run::EXIT_REFUSED);
+    }
+
+    /// The hole sits between `--network` and its value. A prefix would be
+    /// a missing-value refusal (status 2) and would not start. A hole is
+    /// status 1. An empty count is the same failure.
+    #[cfg(unix)]
+    #[test]
+    #[allow(unsafe_code)]
+    fn a_null_slot_does_not_start() {
+        let release = CString::new("test").unwrap();
+        let version = CString::new("0").unwrap();
+        let entry = entry(&release, &version);
+        let program = CString::new("shekyld").unwrap();
+        let network = CString::new("--network").unwrap();
+        let name = CString::new("testnet").unwrap();
+        let hole = [
+            program.as_ptr(),
+            network.as_ptr(),
+            std::ptr::null(),
+            name.as_ptr(),
+        ];
+        let status = unsafe { shekyl_daemon_main(&raw const entry, 4, hole.as_ptr()) };
+        assert_eq!(status, crate::run::EXIT_FAILED);
+
+        let empty = unsafe { shekyl_daemon_main(&raw const entry, 0, std::ptr::null()) };
+        assert_eq!(empty, crate::run::EXIT_FAILED);
     }
 }
