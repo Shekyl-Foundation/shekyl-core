@@ -456,3 +456,58 @@ fn bond_post_other_must_not_use_a_join_market_tag_live_or_retired() {
         assert_eq!(round_trip(&other(tag)), other(tag));
     }
 }
+
+/// CEN-J12's kind-presence half: a bond post's JoinMarket fields
+/// (`bond_spend_pk`, the receipt key and the endpoint) are read only after
+/// the JoinMarket kind byte, so the same bytes after any other kind are
+/// refused. The control is the join itself, which parses whole; the only
+/// change is the kind byte, so the refusal is the kind's, not the bytes'.
+/// Supersedes the C++ `archival_bond_post` case
+/// `gate4_integration_rejects_non_join_post_kind`, whose kind-0 join
+/// carried a key under a Reinstate kind.
+#[test]
+fn the_joinmarket_fields_after_another_kind_are_refused() {
+    let join = Input::BondPost(Box::new(BondPost {
+        hybrid_public_key: vec![0xAB; PQC_HYBRID_SINGLE_KEY_LEN],
+        p_canonical_id: PCanonicalId::from_bytes([0x77; 32]),
+        kind: BondPostKind::JoinMarket {
+            bond_spend_pk: vec![0xCD; PQC_HYBRID_SINGLE_KEY_LEN],
+            receipt_sign_pk: shekyl_types::archival::ReceiptSignPk::from_bytes(
+                [0x5c; shekyl_types::archival::RECEIPT_SIGN_PK_LEN],
+            ),
+            endpoint: [0xEE; 32],
+        },
+        holdings: Holdings::CompleteTree,
+        bonded_total_atomic: 750_000_000,
+        bond_credit: 750_000_000,
+        bond_debit: 0,
+    }));
+    assert_eq!(
+        round_trip(&join),
+        join,
+        "the control: the join parses whole"
+    );
+
+    let mut bytes = Vec::new();
+    join.write(&mut bytes).expect("write the join");
+    // The kind byte sits right after the 32-byte canonical id.
+    let at = bytes
+        .windows(33)
+        .position(|w| w[..32] == [0x77; 32] && w[32] == BOND_POST_KIND_JOINMARKET)
+        .expect("the kind byte follows the canonical id")
+        + 32;
+    for kind in [
+        shekyl_archival_retention::BondPostKind::Reinstate as u8,
+        shekyl_archival_retention::BondPostKind::Release as u8,
+    ] {
+        let mut other = bytes.clone();
+        other[at] = kind;
+        let mut cursor = &other[..];
+        let read = Input::read(&mut cursor);
+        assert!(
+            read.is_err() || !cursor.is_empty(),
+            "kind {kind} carrying the JoinMarket fields read whole (as a JoinMarket: {})",
+            matches!(&read, Ok(Input::BondPost(p)) if matches!(p.kind, BondPostKind::JoinMarket { .. }))
+        );
+    }
+}
