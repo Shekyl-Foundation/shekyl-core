@@ -88,9 +88,16 @@ async fn a_fresh_node_syncs_a_corpus_from_two_honest_peers_hashing_headers_only(
         count - 1,
         "one hash per header and none in the entry"
     );
-    // The handle went NoView, then Behind, then Synced.
+    // The handle went NoView, then Behind, then Synced. The recorder
+    // takes each `changed` on its own task. Aborting it drops a
+    // notification it has not read, so the value on the watch is the
+    // end of the history whether or not that task stored it.
     watcher.abort();
-    let states = published.lock().expect("states").clone();
+    let mut states = published.lock().expect("states").clone();
+    let current = *node.state.borrow();
+    if states.last() != Some(&current) {
+        states.push(current);
+    }
     let kinds: Vec<&str> = states
         .iter()
         .map(|state| match state {

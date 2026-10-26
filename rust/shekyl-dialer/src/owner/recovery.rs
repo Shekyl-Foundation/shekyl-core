@@ -120,7 +120,7 @@ impl Recovery {
 /// this wake drew, or `None` when it drew nothing — a recovery wake and
 /// an idle wake both pass `None`. Every wake calls this, so a stranded
 /// wake after a gained session is the wake that closes the episode.
-pub(super) fn report_wake(
+pub(in crate::owner) fn report_wake(
     episode: &mut Option<Recovery>,
     connector: ConnectorId,
     kept: usize,
@@ -139,7 +139,8 @@ pub(super) fn report_wake(
 }
 
 /// Re-admit the closed network, or the configured seeds and `--add-peer`,
-/// as operator-named gray. Already seated is quiet. A refusal is said once
+/// as operator-named gray. Already seated is quiet, and covered by the
+/// episode. A refusal is said once
 /// per episode. The first call of an episode opens it and says so.
 ///
 /// Called after [`report_wake`] on a stranded wake. A wake that just
@@ -173,7 +174,11 @@ pub(super) fn re_admit<R: RelayRng + ?Sized>(
                 admitted += 1;
                 episode.note_re_admitted(address);
             }
-            Ok(false) => {}
+            // Already seated: cooling, outstanding or in a session (the gray
+            // lifecycle). The episode covers it, so drawing it once it is
+            // drawable again is still recovery, not "a candidate it did not
+            // re-admit" (shekyl-core-c0's review of #1174, item 3).
+            Ok(false) => episode.note_re_admitted(address),
             Err(refusal) => {
                 if episode.note_refused(address) {
                     tracing::warn!(
