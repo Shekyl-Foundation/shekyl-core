@@ -22,7 +22,9 @@ use std::ffi::c_void;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 
-use windows_sys::Win32::Foundation::{LocalFree, GENERIC_ALL, GENERIC_READ, GENERIC_WRITE};
+use windows_sys::Win32::Foundation::{
+    LocalFree, ERROR_INVALID_ACL, GENERIC_ALL, GENERIC_READ, GENERIC_WRITE,
+};
 use windows_sys::Win32::Security::Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT};
 use windows_sys::Win32::Security::{
     AclSizeInformation, GetAce, GetAclInformation, ACCESS_ALLOWED_ACE, ACE_HEADER, ACL,
@@ -208,10 +210,16 @@ fn grantees(path: &Path, mask: u32, include_owner: bool) -> Result<Vec<Grantee>,
     }
     for index in 0..info.AceCount {
         let mut ace: *mut c_void = std::ptr::null_mut();
-        // SAFETY: `index` is below the ACE count the ACL reported; `ace`
-        // points into the ACL on success.
+        // SAFETY: `index` is below the ACE count the ACL reported. `GetAce`
+        // writes `ace` on success; the null check below refuses a success
+        // that did not, so every later read is of a live ACE.
         if unsafe { GetAce(dacl, index, &raw mut ace) } == 0 {
             return Err(DaclError(crate::sid::last_error()));
+        }
+        // `GetAce` writes `ace` when it returns success. A pointer analysis
+        // does not model that write, and a null ACE is not readable.
+        if ace.is_null() {
+            return Err(DaclError(ERROR_INVALID_ACL));
         }
         // SAFETY: every ACE begins with an `ACE_HEADER`.
         let header = unsafe { ace.cast::<ACE_HEADER>().read_unaligned() };
