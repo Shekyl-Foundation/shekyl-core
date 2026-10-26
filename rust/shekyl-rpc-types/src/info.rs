@@ -357,7 +357,9 @@ pub struct GetInfoResponse {
     /// administrator.
     pub host: Hidden<InfoHost>,
     /// Whether the caller was answered as a restricted one. Transitional:
-    /// the RPC channel's handshake returns the grant instead (RT-W10).
+    /// on the RPC channel, the client knows its effective grant from the
+    /// handshake (the request clamped to the ceiling message 4 returns,
+    /// RT-O30), and this field retires (RT-W10).
     pub restricted: bool,
 }
 
