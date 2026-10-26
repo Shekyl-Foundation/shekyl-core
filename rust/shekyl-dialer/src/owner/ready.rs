@@ -168,6 +168,14 @@ pub(super) fn wait_wake_or_bell<C: Clock>(
     })
 }
 
+/// Poll `future` on this thread until it is ready, parking between polls.
+/// A waker unparks the thread. The caller's own dial runs here, so it never
+/// joins the loop's result queue.
+pub(super) fn block_on_future<F: Future>(future: F) -> F::Output {
+    let mut future = pin!(future);
+    block_on(|cx| future.as_mut().poll(cx))
+}
+
 /// Poll `step` on this thread until it is ready, parking the thread between
 /// polls. A wake unparks it.
 fn block_on<T>(mut step: impl FnMut(&mut Context<'_>) -> Poll<T>) -> T {

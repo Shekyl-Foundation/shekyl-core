@@ -8,12 +8,17 @@
 //! adopts a kept session or closes a confirm dial in Rust (dialer brief,
 //! "The fill", "The dial", "`DialOutcome`").
 //!
-//! The loop runs on a thread of its own. Its wake is a timing-engine owner
-//! (Rick, 2026-10-13): each gap is armed on the engine and the thread
-//! waits for the wake; the daemon has one scheduler and the dialer brings
-//! no second one. `Hub::dial_channel` blocks that thread while the
-//! connector opens the channel, and the handshake reads the channel's
-//! frames on it. No p2p io worker is held.
+//! The loop runs on a thread of its own. Its wake is a timing-engine owner:
+//! each gap is armed on the engine and the thread waits for that wake or
+//! for the bell. The daemon has one scheduler and the dialer brings no
+//! second one. A dial does not run on this thread. Each wake launches at
+//! most one attempt ([`flight`]); the attempt task does the I/O and posts
+//! its result, and the loop applies it. The pace is the wake spacing, and
+//! a slow dial skips no wake. No p2p io worker is held.
+//!
+//! [`Dialer::wake`] and [`Dialer::dial`] are the caller's own attempt.
+//! They run it on the calling thread and apply the result before they
+//! return. They do not post into the loop's queue.
 //!
 //! A wake draws only when the connector can dial: its link is usable and the
 //! tip and the network id are known (`TSR-F1`; the `ready` module). While one
@@ -21,18 +26,16 @@
 //! could supply it, and the wake spacing resumes when the connector is ready.
 
 mod address;
+mod flight;
 mod handshake;
 mod ready;
 mod recovery;
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::future::Future;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
-use std::task::{Context, Poll};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use shekyl_draw_rng::RelayRng;
 use shekyl_peerlist::{
@@ -44,7 +47,9 @@ use shekyl_seam::{Hub, SocketId, Subscription, SyncPayload};
 use shekyl_timing_engine::{Clock, OwnerHandle};
 
 use self::address::{live_sessions, LiveSessions};
-use self::handshake::{attempt_task, Attempt, KeptDial, TaskResult};
+pub use self::flight::{Applied, Launch};
+use self::flight::{Completions, InFlight};
+use self::handshake::KeptDial;
 pub use self::ready::NotReady;
 use self::ready::{park, wait_wake_or_bell, Bell, Waited};
 use crate::attempts::Attempts;
@@ -126,148 +131,18 @@ pub struct Shared {
     /// When the address file was last written or read; `None` until
     /// then, so the first due store is one interval after the open.
     last_store: Option<Tick>,
-    /// Every launched attempt whose result the loop has not yet applied,
-    /// by attempt id. Its nonce stays in flight until the result is
-    /// applied, and the attempt stays pending in [`Attempts`] until then.
+    /// Every enlisted attempt whose result has not been applied, by
+    /// attempt id. The stop flag and the insert share one lock section
+    /// ([`flight`]): once the flag is set, nothing more is inserted. The
+    /// row holds the attempt's nonce until the result is applied or the
+    /// attempt is cancelled, and the attempt stays pending in [`Attempts`]
+    /// until one of those.
     in_flight: BTreeMap<u64, InFlight>,
     /// The next attempt id.
     next_attempt: u64,
     /// Each connector's in-flight bound ([`in_flight_bound`]): protocol
     /// data, the same on every node.
     bounds: [usize; ConnectorId::COUNT],
-}
-
-/// One launched attempt, as the loop holds it until it applies the result.
-struct InFlight {
-    connector: ConnectorId,
-    address: NetworkAddress,
-    aim: DialAim,
-    /// Held for its drop: the nonce is in the set until this record is
-    /// dropped, after the result is applied or at stop.
-    _nonce: InFlightNonce,
-    /// Held for its drop: dropping it cancels the task, if it has not ended.
-    _cancel: tokio::sync::oneshot::Sender<()>,
-}
-
-/// The results attempt tasks have posted and the loops have not taken.
-/// Its lock is its own: a task takes nothing else, and no hub call is
-/// made under it.
-#[derive(Default)]
-struct Completions {
-    queue: Mutex<VecDeque<(u64, ConnectorId, TaskResult)>>,
-    posted: Condvar,
-}
-
-impl Completions {
-    fn post(&self, id: u64, connector: ConnectorId, result: TaskResult) {
-        self.queue
-            .lock()
-            .expect("completions")
-            .push_back((id, connector, result));
-        self.posted.notify_all();
-    }
-
-    /// Take every result posted for `connector`, in the order posted.
-    fn take(&self, connector: ConnectorId) -> Vec<(u64, TaskResult)> {
-        let mut queue = self.queue.lock().expect("completions");
-        let mut taken = Vec::new();
-        let mut kept = VecDeque::with_capacity(queue.len());
-        for (id, of, result) in queue.drain(..) {
-            if of == connector {
-                taken.push((id, result));
-            } else {
-                kept.push_back((id, of, result));
-            }
-        }
-        *queue = kept;
-        taken
-    }
-
-    /// Take attempt `id`'s result, if it is posted.
-    fn take_one(&self, id: u64) -> Option<(ConnectorId, TaskResult)> {
-        let mut queue = self.queue.lock().expect("completions");
-        let at = queue.iter().position(|(posted, _, _)| *posted == id)?;
-        queue
-            .remove(at)
-            .map(|(_, connector, result)| (connector, result))
-    }
-
-    /// Wait until attempt `id`'s result is posted, `stop` is set, or
-    /// `gone` says the attempt is no longer held (something else applied
-    /// or cancelled it). `gone` is asked without this queue's lock held.
-    fn wait_for(&self, id: u64, stop: &AtomicBool, gone: impl Fn() -> bool) {
-        loop {
-            {
-                let queue = self.queue.lock().expect("completions");
-                if queue.iter().any(|(posted, _, _)| *posted == id) {
-                    return;
-                }
-                let (_queue, _timed_out) = self
-                    .posted
-                    .wait_timeout(queue, std::time::Duration::from_millis(20))
-                    .expect("completions");
-            }
-            if stop.load(Ordering::Acquire) || gone() || self.holds(id) {
-                return;
-            }
-        }
-    }
-
-    /// Whether attempt `id`'s result is posted and not yet taken.
-    fn holds(&self, id: u64) -> bool {
-        self.queue
-            .lock()
-            .expect("completions")
-            .iter()
-            .any(|(posted, _, _)| *posted == id)
-    }
-
-    /// Drop every posted result. Each channel is released as it drops.
-    fn clear(&self) {
-        let dropped: Vec<_> = self.queue.lock().expect("completions").drain(..).collect();
-        drop(dropped);
-    }
-}
-
-/// An attempt task that ends at once when its cancel sender is dropped.
-/// Ending drops the attempt's future, which releases what it holds.
-struct Cancellable {
-    cancel: tokio::sync::oneshot::Receiver<()>,
-    attempt: Pin<Box<dyn Future<Output = ()> + Send>>,
-}
-
-impl Future for Cancellable {
-    type Output = ();
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        if Pin::new(&mut self.cancel).poll(cx).is_ready() {
-            return Poll::Ready(());
-        }
-        self.attempt.as_mut().poll(cx)
-    }
-}
-
-/// What one launch did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Launch {
-    /// Nothing was drawn, or the connector cannot dial.
-    Nothing,
-    /// An attempt task is running; its result is applied by id.
-    Running(u64),
-    /// The attempt ended before any I/O (no endpoint, no tip, no network
-    /// id, or the task could not start) and was recorded at once.
-    Recorded,
-}
-
-/// One applied result.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Applied {
-    /// The attempt.
-    pub id: u64,
-    /// The address dialed.
-    pub address: NetworkAddress,
-    /// The kept session, for a `Keep` that was kept.
-    pub kept: Option<SocketId>,
 }
 
 impl Shared {
@@ -436,6 +311,14 @@ impl Dialer {
         self.shared().view(connector).in_flight()
     }
 
+    /// Run `connector` at `bound` dials in flight. A test seam: the bound is
+    /// protocol data ([`in_flight_bound`]), and no production crate turns
+    /// on the feature that compiles this.
+    #[cfg(feature = "test-seams")]
+    pub fn set_in_flight_bound(&self, connector: ConnectorId, bound: usize) {
+        self.shared().bounds[connector.index()] = bound;
+    }
+
     /// Kept sessions on `connector`, pending `Keep` attempts included.
     #[must_use]
     pub fn kept_sessions(&self, connector: ConnectorId) -> usize {
@@ -591,34 +474,22 @@ impl Dialer {
     /// Stop every owner loop at its next bell, cancel every attempt in
     /// flight, and write the address file once more.
     ///
-    /// The order: the flag, then the bell, so a loop waiting on its wake
-    /// or parked on its link ends now; then every in-flight attempt is
-    /// cancelled (its task ends at its next poll and releases what it
-    /// holds: a connect is aborted, a channel is released) and every
-    /// posted result is dropped, releasing its channel; then the file is
-    /// written. All of this is before the zone's runtime stops and before
-    /// the managed Tor is torn down (`TOR_SUPERVISOR.md`, `TSR-F13`: the
-    /// dialer stops first). The outstanding gray draws of cancelled
-    /// attempts stay seated and are written. A task that posts after this
-    /// has nothing to apply it: its result drops with the dialer, which
-    /// releases the channel.
+    /// The flag is set before the drain. [`flight`] reads that flag in the
+    /// same lock section as the insert, so an attempt begun and not yet
+    /// inserted is cancelled there with no outcome, and an attempt already
+    /// inserted is in the drain. Either way the outstanding gray draw stays
+    /// seated and is written. Cancel senders are dropped after the dialer
+    /// lock, so a task ends at its next poll and releases what it holds: a
+    /// connect is aborted, a channel is released. Posted results are then
+    /// dropped. The file is written last. All of this is before the zone's
+    /// runtime stops and before the managed Tor is torn down
+    /// (`TOR_SUPERVISOR.md`, `TSR-F13`: the dialer stops first). A task
+    /// that posts after the queue is cleared has nothing to apply it: its
+    /// result drops with the dialer, which releases the channel.
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Release);
         self.bell.ring();
-        let cancelled: Vec<InFlight> = {
-            let mut shared = self.shared();
-            let cancelled: Vec<InFlight> = std::mem::take(&mut shared.in_flight)
-                .into_values()
-                .collect();
-            for record in &cancelled {
-                shared.attempts(record.connector).cancel(&record.address);
-            }
-            cancelled
-        };
-        let count = cancelled.len();
-        drop(cancelled);
-        self.completions.clear();
-        self.completions.posted.notify_all();
+        let count = self.abandon_flight();
         if count > 0 {
             tracing::debug!("the dialer cancelled {count} attempt(s) in flight at stop");
         }
@@ -824,236 +695,6 @@ impl Dialer {
             }
             self.apply_completions(connector, rng);
             self.launch(connector, rng);
-        }
-    }
-
-    /// One wake's launch: the plan, the draw, and the attempt task it
-    /// starts. The loop calls this when its wake fires; it does not wait
-    /// for the dial.
-    pub fn launch<R: RelayRng + ?Sized>(&self, connector: ConnectorId, rng: &mut R) -> Launch {
-        let Some((address, aim, nonce)) = self.choose(connector, rng) else {
-            return Launch::Nothing;
-        };
-        tracing::debug!("{connector:?} dial {address:?} aim {aim:?}");
-        self.start_attempt(connector, address, aim, nonce, rng)
-    }
-
-    /// Start the attempt task for a begun attempt. A local failure before
-    /// any I/O is recorded here, and so is a task that could not start.
-    fn start_attempt<R: RelayRng + ?Sized>(
-        &self,
-        connector: ConnectorId,
-        address: NetworkAddress,
-        aim: DialAim,
-        nonce: InFlightNonce,
-        rng: &mut R,
-    ) -> Launch {
-        let prepared = match self.prepare(connector, &address, &nonce) {
-            Ok(prepared) => prepared,
-            Err(cause) => {
-                self.settle(connector, &DialOutcome::DialFailed(address, cause), rng);
-                return Launch::Recorded;
-            }
-        };
-        let (cancel, cancelled) = tokio::sync::oneshot::channel();
-        let id = {
-            let mut shared = self.shared();
-            let id = shared.next_attempt;
-            shared.next_attempt = id.wrapping_add(1);
-            shared.in_flight.insert(
-                id,
-                InFlight {
-                    connector,
-                    address: address.clone(),
-                    aim,
-                    _nonce: nonce,
-                    _cancel: cancel,
-                },
-            );
-            id
-        };
-        let hub = self.hub.clone();
-        let completions = Arc::clone(&self.completions);
-        let bell = Arc::clone(&self.bell);
-        let attempt = async move {
-            let result = attempt_task(hub, connector, address, prepared).await;
-            completions.post(id, connector, result);
-            bell.ring();
-        };
-        let task = Cancellable {
-            cancel: cancelled,
-            attempt: Box::pin(attempt),
-        };
-        if self.hub.spawn_attempt(Box::pin(task)) {
-            return Launch::Running(id);
-        }
-        let Some(record) = self.shared().in_flight.remove(&id) else {
-            return Launch::Recorded;
-        };
-        tracing::warn!("{connector:?}: the dial attempt task could not start");
-        self.settle(
-            connector,
-            &DialOutcome::DialFailed(
-                record.address.clone(),
-                CloseCause::new(CloseKind::LocalClose),
-            ),
-            rng,
-        );
-        drop(record);
-        Launch::Recorded
-    }
-
-    /// Apply every result posted for `connector`, in the order posted, each
-    /// through the layer that owns its decision. The attempt leaves
-    /// [`Attempts`] and its nonce leaves the set only here. A result whose
-    /// attempt is no longer held (cancelled at stop) is dropped, which
-    /// releases its channel.
-    pub fn apply_completions<R: RelayRng + ?Sized>(
-        &self,
-        connector: ConnectorId,
-        rng: &mut R,
-    ) -> Vec<Applied> {
-        let applied: Vec<Applied> = self
-            .completions
-            .take(connector)
-            .into_iter()
-            .filter_map(|(id, result)| self.apply_taken(connector, id, result, rng))
-            .collect();
-        applied
-    }
-
-    /// Apply one taken result. `None` when its attempt is no longer held
-    /// (cancelled at stop): the result is dropped, releasing its channel.
-    fn apply_taken<R: RelayRng + ?Sized>(
-        &self,
-        connector: ConnectorId,
-        id: u64,
-        result: TaskResult,
-        rng: &mut R,
-    ) -> Option<Applied> {
-        let Some(record) = self.shared().in_flight.remove(&id) else {
-            drop(result);
-            return None;
-        };
-        let address = record.address.clone();
-        let kept = match self.apply_result(connector, &address, record.aim, result, rng) {
-            Attempt::Done(outcome) => {
-                tracing::debug!("{connector:?} dial {address:?} ended: {outcome:?}");
-                self.settle(connector, &outcome, rng);
-                None
-            }
-            Attempt::Kept(kept) => {
-                let socket = kept.id;
-                self.accept_and_notify(connector, &address, kept, rng)
-                    .then_some(socket)
-            }
-        };
-        // The nonce leaves the set here, after the result is applied.
-        drop(record);
-        Some(Applied { id, address, kept })
-    }
-
-    /// Wait for attempt `id`'s result and apply it alone, on the calling
-    /// thread. Other attempts' results stay posted for whoever applies
-    /// them. `None` when the attempt was applied or cancelled elsewhere.
-    fn finish_one<R: RelayRng + ?Sized>(
-        &self,
-        connector: ConnectorId,
-        id: u64,
-        rng: &mut R,
-    ) -> Option<Applied> {
-        self.wait_posted(id);
-        let (of, result) = self.completions.take_one(id)?;
-        debug_assert_eq!(of, connector);
-        self.apply_taken(connector, id, result, rng)
-    }
-
-    /// Run `connector` at `bound` dials in flight. A test seam: the bound is
-    /// protocol data ([`in_flight_bound`]), and no production crate turns
-    /// on the feature that compiles this.
-    #[cfg(feature = "test-seams")]
-    pub fn set_in_flight_bound(&self, connector: ConnectorId, bound: usize) {
-        self.shared().bounds[connector.index()] = bound;
-    }
-
-    /// Whether attempt `id`'s result is posted and not yet applied.
-    #[must_use]
-    pub fn completed(&self, id: u64) -> bool {
-        self.completions.holds(id)
-    }
-
-    /// Wait until attempt `id`'s result is posted, the dialer stops, or the
-    /// attempt is no longer held.
-    pub fn wait_posted(&self, id: u64) {
-        let gone = || !self.shared().in_flight.contains_key(&id);
-        self.completions.wait_for(id, &self.stop, gone);
-    }
-
-    /// One wake's work, run to its end on the calling thread: the launch,
-    /// the wait for that attempt's result, and that result applied.
-    /// Returns whether a dial was made. A test calls this to run wakes
-    /// without the clock; the owner loop never does (it uses
-    /// [`Self::launch`] and never waits on a dial).
-    pub fn wake<R: RelayRng + ?Sized>(&self, connector: ConnectorId, rng: &mut R) -> bool {
-        match self.launch(connector, rng) {
-            Launch::Nothing => false,
-            Launch::Recorded => true,
-            Launch::Running(id) => {
-                let _applied = self.finish_one(connector, id, rng);
-                true
-            }
-        }
-    }
-
-    /// One dial of `address` with `aim`, outside the wake loop, run to its
-    /// end on the calling thread: the draw of that address, the pending
-    /// attempt, the nonce, the attempt task, the wait for its result and
-    /// its application. Returns the kept session's id. A confirm dial, a
-    /// refusal and a failure return [`None`]: each is recorded before this
-    /// returns, and a confirm dial posts nothing. The owner loop draws
-    /// through [`Self::choose`]; a test dials one named address here.
-    ///
-    /// Readiness comes first, as in [`Self::choose`]. A connector that
-    /// cannot dial returns [`None`] before any draw.
-    ///
-    /// A gray address is drawn here, so the outcome resolves an
-    /// outstanding draw as the lists require. A white address is a
-    /// re-contact and is not drawn. An address on neither list is not
-    /// dialed.
-    pub fn dial<R: RelayRng + ?Sized>(
-        &self,
-        connector: ConnectorId,
-        address: &NetworkAddress,
-        aim: DialAim,
-        rng: &mut R,
-    ) -> Option<SocketId> {
-        if let Err(missing) = self.readiness(connector) {
-            tracing::debug!(
-                "{connector:?} dial {address:?} not made: {}",
-                missing.describe()
-            );
-            return None;
-        }
-        {
-            let mut shared = self.shared();
-            if shared.lists.is_gray(address) {
-                let drawn = shared
-                    .lists
-                    .draw_gray_where(connector, &mut |a| a == address, rng)?;
-                debug_assert_eq!(&drawn, address);
-            } else if !shared.lists.is_white(address) {
-                return None;
-            }
-            if !shared.attempts(connector).begin(address, aim) {
-                return None;
-            }
-        }
-        let nonce = self.nonces.mint(connector, rng);
-        match self.start_attempt(connector, address.clone(), aim, nonce, rng) {
-            Launch::Nothing | Launch::Recorded => None,
-            Launch::Running(id) => self
-                .finish_one(connector, id, rng)
-                .and_then(|applied| applied.kept),
         }
     }
 

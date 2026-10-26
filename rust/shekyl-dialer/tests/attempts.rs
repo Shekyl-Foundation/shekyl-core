@@ -4,8 +4,10 @@
 // BSD-3-Clause
 
 //! Dial attempts off the loop thread (the dialer in-flight bound, revision 2,
-//! Rick 2026-10-25): the brief's tests 1 and 6 to 9. Each attempt is a task;
-//! the loop launches it and applies its result, and never waits on a dial.
+//! Rick 2026-10-25): the brief's tests 1 and 6 to 9, and a stop that wins
+//! before the insert. Each attempt is a task; the loop launches it and
+//! applies its result, and never waits on a dial. A waited dial runs on
+//! the caller.
 
 #[path = "support/log_capture.rs"]
 mod log_capture;
@@ -347,6 +349,67 @@ fn stop_cancels_every_attempt_in_flight_and_the_loop_exits_at_the_bell() {
     );
     assert_eq!(dialer.in_flight(TOR), 0, "nothing is left in flight");
     service.close();
+}
+
+/// One admitted gray address on a dialer that can dial, then stopped
+/// before anything is launched. The held dial would answer; an attempt
+/// that opened a socket shows up in `opened`.
+fn stopped_after_one_gray(
+    seed: u64,
+    n: u16,
+) -> (Sockets, Arc<HeldDial>, Arc<Dialer>, NetworkAddress) {
+    let clock = ManualClock::new(Tick::new(1));
+    let sockets = Sockets::new();
+    let dial = Arc::new(HeldDial::answering(sockets.clone(), vec![reply(NETWORK)]));
+    let (_hub, dialer) = dialer_on(&clock, &sockets, Arc::clone(&dial) as Arc<dyn Dial>);
+    let mut rng = SplitMix64::new(seed);
+    let address = peer(n);
+    dialer
+        .admit_operator(&address, Tick::new(1), &mut rng)
+        .expect("admitted");
+    assert!(dialer.shared().lists.is_gray(&address));
+    dialer.stop();
+    (sockets, dial, dialer, address)
+}
+
+/// The draw stayed seated: still gray, not white, nothing in flight, and
+/// the held dial opened no socket.
+fn assert_draw_stays_seated(
+    sockets: &Sockets,
+    dial: &HeldDial,
+    dialer: &Dialer,
+    address: &NetworkAddress,
+) {
+    assert_eq!(dialer.in_flight(CLEARNET), 0);
+    assert!(
+        dialer.shared().lists.is_gray(address),
+        "a cancelled draw stays seated"
+    );
+    assert!(!dialer.shared().lists.is_white(address));
+    assert_eq!(dialer.shared().lists.gray_count(CLEARNET), 1);
+    assert!(dial.opened().is_empty(), "no socket was opened");
+    assert_eq!(sockets.live(), 0);
+}
+
+/// **Stop, then launch, with no loop running.** The insert reads the stop
+/// flag under the same lock. The begun draw is cancelled with no outcome,
+/// so it stays gray, and nothing is spawned.
+#[test]
+fn a_launch_after_stop_cancels_the_draw_and_opens_nothing() {
+    let (sockets, dial, dialer, address) = stopped_after_one_gray(11, 11);
+    let mut rng = SplitMix64::new(12);
+    assert_eq!(dialer.launch(CLEARNET, &mut rng), Launch::Stopped);
+    assert_draw_stays_seated(&sockets, &dial, &dialer, &address);
+}
+
+/// **Stop, then wake, with no loop running.** The wake runs on the caller
+/// and records nothing: the same cancel as launch, and no socket.
+#[test]
+fn a_wake_after_stop_records_nothing_and_opens_nothing() {
+    let (sockets, dial, dialer, address) = stopped_after_one_gray(13, 13);
+    let mut rng = SplitMix64::new(14);
+    assert!(!dialer.wake(CLEARNET, &mut rng));
+    assert_draw_stays_seated(&sockets, &dial, &dialer, &address);
 }
 
 /// **A finished `Keep` not yet applied still counts** (the brief's test 7).

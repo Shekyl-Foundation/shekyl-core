@@ -28,15 +28,17 @@ shekyl-timing-engine = { path = "../shekyl-timing-engine" }
 shekyl-relay-privacy = { path = "../shekyl-relay-privacy" }
 # A failed address-file write is logged, not lost.
 tracing = "0.1"
-# The cancel signal of a dial attempt task; the seam already depends on it.
-tokio = { version = "1", default-features = false, features = ["sync"] }
+# The cancel signal of a dial attempt, and `select` so the attempt and the
+# cancel are one race. The seam already depends on tokio.
+tokio = { version = "1", default-features = false, features = ["macros", "sync"] }
 # The RNG seam the draws are generic over.
 shekyl-draw-rng = { path = "../shekyl-draw-rng" }
 
 [features]
-# Test seams only: a setter for a connector's in-flight bound, so a test can
-# run the dialer at a bound above the protocol's. No production crate turns
-# it on; the bound is protocol data (rule 71).
+# Test seams only. A setter for a connector's in-flight bound, so a test can
+# run the dialer at a bound above the protocol's, and a non-consuming wait
+# for a posted result. No production crate turns this on; the bound is
+# protocol data (rule 71).
 test-seams = []
 
 [dev-dependencies]
