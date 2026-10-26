@@ -277,6 +277,10 @@ pub struct JobSeat {
     pub miner: MinerFeed,
     /// Where the follower says what the board holds.
     pub posting: watch::Sender<Posting>,
+    /// The witness ring every template draws its `0x0C` commitment from
+    /// (`SO-D12` increment 4c). The bundle producer, when the node runs
+    /// one, files from the same ring.
+    pub witness: Arc<shekyl_bundle_producer::WitnessRing>,
 }
 
 /// Jobs kept for the found-block sink: a found block's generation names
@@ -309,6 +313,7 @@ struct Seated {
     keys: Option<MinerKeys>,
     sync: Option<watch::Receiver<SyncState>>,
     posting: watch::Sender<Posting>,
+    witness: Arc<shekyl_bundle_producer::WitnessRing>,
 }
 
 impl Seated {
@@ -345,6 +350,7 @@ pub(crate) async fn follow<S>(
             keys,
             miner: MinerFeed { found, sync },
             posting,
+            witness,
         }) => {
             let inbox = found.clone();
             let (done_tx, done_rx) = tokio::sync::oneshot::channel();
@@ -356,6 +362,7 @@ pub(crate) async fn follow<S>(
                     keys,
                     sync: Some(sync),
                     posting,
+                    witness,
                 }),
                 Some(SinkJoin {
                     thread,
@@ -653,6 +660,7 @@ where
         return;
     };
     let reader = Arc::clone(shared);
+    let witness = Arc::clone(&seat.witness);
     // Cloned before the build, so a test can replace the hook between wakes.
     #[cfg(test)]
     let between_locks = shared
@@ -678,6 +686,7 @@ where
             keys: &keys,
             params: &params,
             now,
+            witness: &witness,
             #[cfg(test)]
             between_locks: if pass_hook {
                 Some(&invoke_between)

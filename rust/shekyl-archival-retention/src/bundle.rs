@@ -693,6 +693,61 @@ impl BundleBody {
     }
 }
 
+/// A bundle as its producer files it: the commitment over the kept part
+/// and the records, the witness signature over that commitment, the body,
+/// and the reference that names the body by its prunable hash
+/// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.1–§7.3).
+///
+/// `records` are the set bits' records in bitmap order, economy first and
+/// support after. `sign` is the witness's signing capability: it is handed
+/// the 32-byte commitment and returns the canonical scheme-3 signature
+/// under `SCHEME_DOMAIN_WITNESS_BUNDLE` ([`sign_bundle_commitment`] over a
+/// held key). The secret key itself never enters this function, so the
+/// producer's ring can keep it. The fixture producer
+/// (`shekyl-chain-rules`'s `harness::bundle`) assembles through here too.
+///
+/// Nothing is checked: a bitmap that disagrees with the records is a
+/// bundle the verifier refuses, and the queue's admission is that check.
+///
+/// # Errors
+///
+/// Whatever `sign` returns.
+pub fn assemble_bundle<E>(
+    kept: &BundleKept,
+    records: &[BundleRecord],
+    witness_public_key: &[u8; BUNDLE_WITNESS_KEY_LEN],
+    sign: impl FnOnce(&[u8; 32]) -> Result<[u8; BUNDLE_SIGNATURE_LEN], E>,
+) -> Result<(BundleRef, BundleBody), E> {
+    let records_bytes: Vec<u8> = records.iter().flat_map(BundleRecord::encode).collect();
+    let signature = sign(&kept.commitment(&records_bytes))?;
+    let body = BundleBody::new(witness_public_key, &signature, records);
+    Ok((BundleRef::of(kept, &body), body))
+}
+
+/// The witness signature over a bundle commitment: scheme 3 under
+/// `SCHEME_DOMAIN_WITNESS_BUNDLE`, the domain the verifier's step 5 opens.
+///
+/// # Errors
+///
+/// The scheme's signer failed, or returned a signature that is not the
+/// canonical width.
+pub fn sign_bundle_commitment(
+    secret: &shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridSecretKey,
+    commitment: &[u8; 32],
+) -> Result<[u8; BUNDLE_SIGNATURE_LEN], shekyl_crypto_pq::CryptoError> {
+    use shekyl_crypto_pq::signature::SignatureScheme as _;
+    let signature = shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa.sign(
+        secret,
+        shekyl_crypto_pq::signature::SCHEME_DOMAIN_WITNESS_BUNDLE,
+        commitment,
+    )?;
+    signature.to_canonical_bytes().try_into().map_err(|_| {
+        shekyl_crypto_pq::CryptoError::SerializationError(
+            "a scheme-3 signature is not the canonical width".into(),
+        )
+    })
+}
+
 /// The bundle commitment: what the witness signs, under
 /// `SCHEME_DOMAIN_WITNESS_BUNDLE` (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.3,
 /// `SCS-P35`).

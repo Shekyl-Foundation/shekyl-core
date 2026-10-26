@@ -162,9 +162,12 @@ pub(crate) struct ResidentReceiptKey {
 // messages and the handle methods the trait impl below reaches are not
 // reported on their own and carry no marker. When production code
 // constructs a `ResidentReceiptKey`, this expectation is unfulfilled and
-// the lint lane fails until it is removed.
+// the lint lane fails until it is removed. The `test-helpers` build is not
+// production: its `__test_helpers::resident_receipt_key` constructs one for
+// the bundle producer's gate test, and the production lint lane builds
+// without the feature, where the expectation still holds.
 #[cfg_attr(
-    not(test),
+    all(not(test), not(feature = "test-helpers")),
     expect(
         dead_code,
         reason = "STAGED (rule 23): no production caller until the settlement lane's cutover"

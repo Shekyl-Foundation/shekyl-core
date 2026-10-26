@@ -97,4 +97,6 @@ pub use shekyl_p_serve::{
     IDENTITY_ENVELOPE_LEN, RECEIPT_ENVELOPE_LEN,
 };
 #[cfg(any(test, feature = "test-signer"))]
+pub use signer::signer_over_tip;
+#[cfg(any(test, feature = "test-signer"))]
 pub use signer::{signer_at_synced_tip, RefusingKey};

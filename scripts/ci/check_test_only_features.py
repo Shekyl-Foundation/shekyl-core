@@ -290,6 +290,20 @@ PERMANENT: dict[tuple[str, str], str] = {
         "replay-cli",
     ): "the shekyl-chain-replay binary: argument parsing, HTTP transport, "
     "and the settlement schedule the replay resolves rules from",
+    (
+        "shekyl-chain-ingest",
+        "producer",
+    ): "the bundle producer's read path (SO-D12 increment 4c): the fetch "
+    "scheduler, its store-backed facts and the producer's task. The node "
+    "takes it by default; shekyl-ffi, the wallet-side image, stays on "
+    "`pipeline` so the shard-fetch client is not in its graph (SF-D4)",
+    (
+        "shekyl-bundle-producer",
+        "fetch",
+    ): "the producer's challenge read over the fetch scheduler. Off by "
+    "default because the ring alone is linked through the ingest crate's "
+    "`pipeline`, which shekyl-ffi takes; the ingest crate's `producer` "
+    "feature turns it on for the node",
 }
 
 # Crates whose feature table must be exhaustively categorized (third limb).
@@ -311,6 +325,8 @@ PERMANENT: dict[tuple[str, str], str] = {
 # `shekyl-chain-sync` joined 2026-10-23 (CS-3). It is the pure model; its
 # one feature is the floor job's `cs2-long-run`, and its runtime half is the
 # separate crate `shekyl-chain-sync-runtime` (Rick, 2026-10-23).
+# `shekyl-bundle-producer` joined 2026-10-25, the commit whose ingest
+# feature first enables its `fetch` (`SO-D12` increment 4c).
 #
 # This set is opt-in — the crates named below, out of a workspace approaching
 # seventy — so exhaustiveness holds *within* governance. The rule for joining: **a crate
@@ -333,6 +349,7 @@ GOVERNED_OWNERS: frozenset[str] = frozenset(
         "shekyl-noise",
         "shekyl-chain-sync",
         "shekyl-mempool",
+        "shekyl-bundle-producer",
     }
 )
 
@@ -401,6 +418,7 @@ MET_TRIGGER_UNGOVERNED_AT_REGISTRATION: dict[str, tuple[str, frozenset[Hit]]] = 
         "categorization only",
         frozenset({
             ("test-helpers", "shekyl-wallet-rpc", "dev"),
+            ("test-helpers", "shekyl-chain-ingest", "dev"),
         }),
     ),
     "shekyl-fcmp": (
@@ -423,9 +441,13 @@ MET_TRIGGER_UNGOVERNED_AT_REGISTRATION: dict[str, tuple[str, frozenset[Hit]]] = 
     ),
     "shekyl-p-serve": (
         "FINDING: test-signer enabled on NORMAL edges by shekyl-sp-t3-spike (direct) and shekyl-p-host (forwarded via its own test-signer). "
-        "The shekyl-archival-fetch-sched dev edge (2026-10-08) is the scheduler's loopback test signing a real serve behind the SOCKS shim — the same shape as shekyl-p-fetch's.",
+        "The shekyl-archival-fetch-sched dev edge (2026-10-08) is the scheduler's loopback test signing a real serve behind the SOCKS shim — the same shape as shekyl-p-fetch's. "
+        "The shekyl-bundle-producer dev edge (2026-10-25, SO-D12 increment 4c) is the producer's challenge read against a receipt-signing serve behind the same shim — the same shape again; "
+        "the shekyl-chain-ingest dev edge (same date) is the producer's gate test, whose live-path arm serves under an identity test key.",
         frozenset({
+            ("test-signer", "shekyl-chain-ingest", "dev"),
             ("test-signer", "shekyl-archival-fetch-sched", "dev"),
+            ("test-signer", "shekyl-bundle-producer", "dev"),
             ("test-signer", "shekyl-p-fetch", "dev"),
             ("test-signer", "shekyl-p-host", "normal"),
             ("test-signer", "shekyl-sp-t3-spike", "normal"),

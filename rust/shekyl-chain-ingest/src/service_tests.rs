@@ -979,6 +979,7 @@ async fn the_follower_posts_while_synced_and_withdraws_while_behind() {
         super::Follow {
             job: Some(seat),
             pool: None,
+            ..Default::default()
         },
     );
     let mut followed = service.followed();
@@ -1241,6 +1242,7 @@ fn service_mining(
         super::Follow {
             job: Some(seat),
             pool: None,
+            ..Default::default()
         },
     );
     (service, path, posting)
@@ -1339,6 +1341,7 @@ impl SeatedPool {
                     policy: AdmissionPolicy::GENESIS,
                     wall: Arc::new(|| UnixSeconds::from_raw(10)),
                 }),
+                ..Default::default()
             },
         );
         Self {
@@ -1789,8 +1792,10 @@ fn miner_follow(
                 keys: None,
                 miner: crate::follower::MinerFeed { found, sync },
                 posting,
+                witness: Arc::new(shekyl_bundle_producer::WitnessRing::new()),
             }),
             pool: None,
+            ..Default::default()
         },
     )
 }

@@ -738,6 +738,7 @@ async fn a_lone_nodes_own_transaction_is_listed_once_the_relay_shows_it() {
                 policy: AdmissionPolicy::GENESIS,
                 wall: Arc::new(|| UnixSeconds::from_raw(1)),
             }),
+            ..Default::default()
         },
     );
     let listed_now = |board: &shekyl_miner::JobBoard| {
