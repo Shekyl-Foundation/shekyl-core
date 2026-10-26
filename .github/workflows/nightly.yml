@@ -296,7 +296,7 @@ jobs:
                 title: 'nightly chain-ingest ignored set RED',
                 lines: [
                   'The `chain-ingest-ignored` job (shekyl-chain-ingest `--ignored`: the real-proof scenarios, the miner, the captured-chain replay and the measurements) failed.',
-                  'If the job stopped before running anything, the crate\'s ignored set changed: decide in `scripts/ci/ignored_set_chain_ingest.sh` whether the new test is this lane\'s.',
+                  'If the job stopped before running anything, the crate\'s ignored set and the lane\'s list disagree (the error names each test): a new `#[ignore]` is added to `scripts/ci/ignored_set_chain_ingest.sh` or stops being ignored; a listed test that was renamed, deleted or un-ignored is corrected there.',
                 ],
               },
               'store-ignored': {
