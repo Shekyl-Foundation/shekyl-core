@@ -545,13 +545,19 @@ impl Dialer {
     /// Write the address file now: every list address, by range only,
     /// less those under an active ban at this moment (the hub's bans, the
     /// snapshot the draws read). `Ok(false)` when no file was named.
+    ///
+    /// The ban snapshot and the clock are read before the store lock, so no
+    /// hub call is made under it. Two stores that overlap may therefore
+    /// write in either order: the later write can carry the earlier
+    /// snapshot. Each is a whole file of the lists at its own moment, and
+    /// the next store, at most one interval later, replaces it.
     pub fn store_addresses(&self) -> io::Result<bool> {
+        let mut bans = BanSnapshot::take(&self.hub);
+        let now = self.hub.now();
         let store = self.store.lock().expect("address store");
         let Some(store) = store.as_ref() else {
             return Ok(false);
         };
-        let mut bans = BanSnapshot::take(&self.hub);
-        let now = self.hub.now();
         let addresses = self.shared().lists.persistable(&mut bans, now);
         store.write(&addresses)?;
         self.shared().last_store = Some(now);
