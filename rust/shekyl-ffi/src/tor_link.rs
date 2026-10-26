@@ -7,7 +7,7 @@
 //! (`TOR_SUPERVISOR.md` §4.2, "every Tor dial's outcome"). Display only,
 //! never a verdict on the link (`TSR-Q14`).
 //!
-//! The one dialer writes it through [`sink`]; the managed-Tor supervisor in
+//! The one dialer writes it through its `sink`; the managed-Tor supervisor in
 //! `shekyl-daemon` reads it. The cell holds the default tally until the
 //! dialer exists. The tally is counts only: no address, no reply code.
 
