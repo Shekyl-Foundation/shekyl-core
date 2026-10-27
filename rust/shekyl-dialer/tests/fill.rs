@@ -15,8 +15,8 @@ use std::net::Ipv4Addr;
 use shekyl_dialer::{plan, Census, DialAim, DrawList, FillRule, Plan};
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{
-    white_diversity_floor, ConnectorId, DialOutcome, NetworkAddress, NoBans, NoSessions, Peerlist,
-    RefusedSet, Source, Tick, WHITE_REFILL_LINE,
+    white_diversity_floor, ConnectorId, DialOutcome, Ladder, NetworkAddress, NoBans, NoSessions,
+    Peerlist, RefusedSet, Source, Tick, WHITE_REFILL_LINE,
 };
 
 /// A small floor and refill line, so the grid crosses both.
@@ -313,7 +313,8 @@ impl Node {
             }
             DialAim::Confirm => DialOutcome::Confirmed(address),
         };
-        self.list.apply(&outcome, at(self.now), &mut self.rng);
+        self.list
+            .apply(&outcome, at(self.now), Ladder::Climb, &mut self.rng);
         Some(plan)
     }
 }

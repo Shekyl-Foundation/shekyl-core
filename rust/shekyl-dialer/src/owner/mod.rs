@@ -34,6 +34,7 @@
 mod address;
 mod flight;
 mod handshake;
+mod quiet;
 mod ready;
 mod recovery;
 mod tor_tally;
@@ -47,8 +48,8 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 use shekyl_draw_rng::RelayRng;
 use shekyl_peerlist::{
-    white_diversity_floor, CloseCause, CloseKind, ConnectionId, ConnectorId, DialOutcome,
-    NetworkAddress, Peerlist, Refusal, RefusedSet, Source, Tick,
+    white_diversity_floor, CloseCause, CloseKind, ConnectionId, ConnectorId, DialOutcome, Ladder,
+    ListName, NetworkAddress, Peerlist, Refusal, RefusedSet, Source, Tick,
 };
 use shekyl_relay_privacy::params::{MIN_PROVISIONED_OUT_PEERS, P2P_DEFAULT_OUT_PEERS};
 use shekyl_seam::{Hub, SocketId, Subscription, SyncPayload};
@@ -130,10 +131,14 @@ pub struct Shared {
     /// What the Tor dials show, for the managed-Tor supervisor's posture
     /// line (`TOR_SUPERVISOR.md` §4.2). Display only (`TSR-Q14`).
     tor_link: LinkFold,
-    /// Inbound Tor rows last read off the board. [`Dialer::session_closed`]
-    /// does not read the board: the adopt poster calls it while holding
-    /// the table lock. The seam's close poster refreshes this first.
-    inbound_tor: usize,
+    /// Each connector's inbound rows last read off the board.
+    /// [`Dialer::session_closed`] does not read the board: the adopt poster
+    /// calls it while holding the table lock. The seam's close poster
+    /// refreshes this first.
+    inbound: [usize; ConnectorId::COUNT],
+    /// When an attempt on each connector last opened a stream, or when the
+    /// dialer was built: the start of its quiet stretch ([`quiet`]).
+    last_opened: [Tick; ConnectorId::COUNT],
 }
 
 impl Shared {
@@ -225,6 +230,7 @@ impl Dialer {
         let bell = Arc::new(Bell::new());
         let ringing = Arc::clone(&bell);
         let links_watch = hub.links().subscribe(Arc::new(move |_| ringing.ring()));
+        let started = hub.now();
         Self {
             hub,
             shared: Arc::new(Mutex::new(Shared {
@@ -248,7 +254,8 @@ impl Dialer {
                 ],
                 tor_window: None,
                 tor_link: LinkFold::new(),
-                inbound_tor: 0,
+                inbound: [0; ConnectorId::COUNT],
+                last_opened: [started; ConnectorId::COUNT],
             })),
             nonces: HandshakeNonceSet::new(),
             stop: Arc::new(AtomicBool::new(false)),
@@ -527,11 +534,14 @@ impl Dialer {
         } else if let Some(address) = shared.kept.remove(&id.get()) {
             if let Some(connector) = Peerlist::connector_of(&address) {
                 if cause.kind() == CloseKind::SessionRefused {
-                    // Not a dial. The stream was counted when the session
-                    // was accepted, so this does not finish a test and does
-                    // not fold the tally.
+                    // A payload refusal is not a dial. The stream was
+                    // counted when the session was accepted, so this does
+                    // not finish a test and does not fold the tally. It
+                    // settles an outstanding draw and leaves the ladder
+                    // unread. Climb is what a caller passes when the quiet
+                    // stretch is not the decision.
                     let outcome = DialOutcome::PayloadRefused(address.clone());
-                    shared.lists.apply(&outcome, now, rng);
+                    shared.lists.apply(&outcome, now, Ladder::Climb, rng);
                 }
                 // White expiry follows the connection (the gray lifecycle,
                 // item 1): the clock moves to the close.
@@ -661,8 +671,10 @@ impl Dialer {
         now: Tick,
         rng: &mut R,
     ) {
+        Self::note_opened(shared, connector, outcome, now);
+        let ladder = Self::ladder(shared, connector, now);
         shared.attempts(connector).finish(outcome);
-        shared.lists.apply(outcome, now, rng);
+        shared.lists.apply(outcome, now, ladder, rng);
         let held = Self::tor_held(shared);
         shared.tor_link.observe(connector, outcome, held);
     }
@@ -695,10 +707,15 @@ impl Dialer {
                     && shared.tor_window.is_some_and(|window| ran_nanos >= window);
                 if cause.retry_worthy() && !outlasted_tor {
                     let cause = *cause;
+                    let list = if shared.lists.is_white(address) {
+                        ListName::White
+                    } else {
+                        ListName::Gray
+                    };
                     let mut wait = 0u64;
                     let next = shared.attempts(connector).defer_retry(
                         address,
-                        attempts_per_test(connector),
+                        attempts_per_test(connector, list),
                         |next| {
                             wait = retry_wait_nanos(next, rng);
                             Tick::new(now.get().saturating_add(wait))
@@ -712,6 +729,7 @@ impl Dialer {
                             ran_nanos / 1_000_000,
                             wait / 1_000_000
                         );
+                        Self::note_opened(shared, connector, outcome, now);
                         let held = Self::tor_held(shared);
                         shared.tor_link.observe(connector, outcome, held);
                         return;

@@ -541,7 +541,7 @@ enum DialOutcome {
 
 | Variant | When the dialer emits it | List (`apply`) | Failed-test count (the cooldown ladder; *records-was* the failed-address memory, deleted 2026-10-24) | Score |
 | --- | --- | --- | --- | --- |
-| `DialFailed` | The channel never reached a well-formed response, or `network_id` is not ours (`net_node.inl:1370`). The cause is the one the connector closed with, carrying its marks; the test's last attempt reports, after any retries | An outstanding gray draw cools unless the cause proves misbehaviour, which drops it (2026-10-24). A white address stays white. *Records-was: dropped whatever the cause (Rick, 2026-10-16)* | Counted, and the address cools for `cooldown_nanos(count)`, unless the cause proves misbehaviour. A `network_id` mismatch is `LevinHandshakeRejected`, stamped proving on Tor and nothing on clearnet. *Records-was: the memory, Tor only (R2), written where `implicates_address` held; before that on every connector* | No subscription. The mismatch does not call `add_host_fail` |
+| `DialFailed` | The channel never reached a well-formed response, or `network_id` is not ours (`net_node.inl:1370`). The cause is the one the connector closed with, carrying its marks; the test's last attempt reports, after any retries | An outstanding gray draw cools unless the cause proves misbehaviour, which drops it (2026-10-24). A white address is known-working (2026-10-26): it moves to gray and cools at the first rung, or is dropped on proof; in the quiet stretch it stays white. *Records-was: dropped whatever the cause (Rick, 2026-10-16); to 2026-10-26, a white address stayed white* | Counted, and the address cools for `cooldown_nanos(count)`, unless the cause proves misbehaviour. A `network_id` mismatch is `LevinHandshakeRejected`, stamped proving on Tor and nothing on clearnet. *Records-was: the memory, Tor only (R2), written where `implicates_address` held; before that on every connector* | No subscription. The mismatch does not call `add_host_fail` |
 | `PeerlistRefused` | `handle_remote_peerlist` refuses (`net_node.inl:1377`). Same close as `LevinHandshakeRejected`, and the variant carries that cause (2026-10-24) | Same as `DialFailed`: on Tor the cause is stamped proving and the address is dropped; on clearnet it cools. *Records-was: dropped whatever the cause (Rick, 2026-10-16)* | Same as `DialFailed` | The score owner subscribes. A peerlist this node refuses is the event the score records |
 | `PayloadRefused` | A kept session closed with `CloseKind::SessionRefused`: the payload owner declined a delivery after `SessionAccepted` (*records-was:* the strand refused the sync payload before white was written) | White is unchanged. An outstanding draw that was never confirmed returns to drawable gray | Not counted. The peer answered | None |
 | *`HarvestDone` — DELETED (Rick, 2026-10-11; no crate symbol)* | *Records-was: a harvest handshake completed, the session closed, no `adopt`.* Absorbed into `Confirmed`: a confirm-and-close dial learns the peer's sample as a harvest did and writes white. The variant, its `address()` arm, its `apply` arm and its test are gone. *Records-was: left for PR-3 as "more than one line"* | — | — |
@@ -828,7 +828,8 @@ knowledge); retries within a
 test (`shekyl-dialer/src/pace.rs`, `attempts_per_test` and
 `retry_wait_nanos`, and `shekyl-dialer/src/attempts.rs`: the open test,
 in flight or waiting, is one record on `Attempts`; Tor three attempts,
-clearnet one, the address drawn throughout and no in-flight slot held
+clearnet one for gray and two for white (one redial before a white
+address demotes, Rick 2026-10-26), the address drawn throughout and no in-flight slot held
 while waiting, one `DialOutcome` per test, the last attempt's; a Tor
 attempt that times out at or after the managed Tor's `SocksTimeout`
 can expire, 104 s into the attempt's own run (105 s,
@@ -837,12 +838,15 @@ also reads, less Tor's whole-second clock), is final within its test and
 the address cools: Tor retried inside its own window, introduction
 points and descriptor fetches (Rick, 2026-10-26; the Tor 0.4.9.14 lines
 are in `TOR_SUPERVISOR.md`'s reply table). The close cause's window-timeout
-mark says which failures are timeouts: Tor's `0x06` and the dial
-deadline's `TransportTimeout`. An earlier one keeps its retries, as
-`0xF0`, `0xF2`, `0x03`, `0x04` and the gap timeout do; `0x01` is final
-by its own row. On a silently blocked link every attempt ends at
-`0x06` at the window, so the candidates it reaches cool and climb rungs;
-that residual and its bound are in `TOR_SUPERVISOR.md`'s reply table.
+mark says which failures can be the window running out: the dial
+deadline's `TransportTimeout`, and every Tor reply worth a retry, since
+with `ExtendedErrors` on Tor answers its own timeout with the onion code
+it last recorded on the stream (`0xF0` after a descriptor not found; the
+short floor series saw `0xF0` at 104 to 110 s, 2026-10-26). Earlier, each
+keeps its retries, as the gap timeout does; `0x01` is final by its own
+row. On a silently blocked link every attempt ends at
+`0x06` at the window, so the candidates it reaches cool; the quiet
+stretch (below) keeps them at the first step.
 Every failed Tor attempt counts in the posture line's
 tally when it ends, deferred or not); a
 cooldown in place of the drop ("The fill" above; the `DialOutcome` table;
@@ -851,6 +855,65 @@ seats are evictable like drawable ones); the file rule (slice 1 brief
 §7). The values are Assumptions in
 `DAEMON_RELAY_PRIVACY.md` §97. The failed-address memory is deleted
 into this (below).
+
+**The quiet stretch (Rick, 2026-10-26).** While a connector holds no
+session and none has opened there for the quiet stretch, a failed test
+cools at the first step and does not climb (`Ladder::FirstStep` in
+`shekyl-peerlist`: the first rung's cooldown, and the consecutive count
+held at least one). The condition is the dialer's own evidence, read
+when a test cools (`shekyl-dialer/src/owner/quiet.rs`): no session held
+on the connector, outbound or inbound, and no dial on it reached a peer
+for `QUIET_AFTER_NANOS`, five minutes, the same constant the managed-Tor
+posture line reads (`TOR_SUPERVISOR.md` §4.2; the daemon builds the
+supervisor's `Policy` from it), never a second number. Outside the
+condition the ladder steps as before. Both connectors, one mechanism. It
+is the dialer's judgement of its own evidence about addresses, not a
+verdict on the link, and nothing is announced (`TSR-Q14`). Why: on a
+silently blocked link every failure says as much about this node's reach
+as about the address, and before this a long block walked every
+candidate it reached up the ladder toward the hour, so the fill after
+the unblock waited on those rungs (`TOR_SUPERVISOR.md`'s `0x06` row, the
+refuse block of 2026-10-25). Tests: `shekyl-dialer/tests/attempts/quiet.rs`,
+a block with no sessions keeps every cooled address at the first step,
+on both connectors; with one session held failures climb, and so does a
+failure inside the stretch; after the block a cooled address is drawable
+within one first-step cooldown.
+
+*Wargame.* An attacker's dead addresses cannot produce the condition
+while the node holds any session: one honest session, outbound or
+inbound, and failures climb as before, so planting dead addresses buys
+no faster redraw of them. A node that is fully isolated cycles its
+candidates faster, every first step, which helps it find an honest
+address when the block ends; the cost is a dial per address per first
+step on a link that carries nothing. White survives a block because the
+quiet guard stops its demotion: a failed white test in the stretch
+leaves the address white, as a failed gray test does not climb, so the
+node comes back from a block with the white list it had.
+
+**White is known-working (Rick, 2026-10-26; confirmed 2026-10-27).** A
+white address whose test
+fails moves to gray and cools on the ladder (`Partition::fail_test`: the
+first rung, a count of one); a proven misbehaviour drops it, as for gray;
+one success puts it back in white. The test includes its retries: Tor's
+three, with a full-window failure final; on clearnet a white address
+gets one redial after the first retry wait (5 s + U(0, 5 s)) before it
+demotes, and gray stays at one attempt (`attempts_per_test` reads the
+list the address is in). In a quiet stretch a failed white test does not
+demote. Why: white leaving only at the 24 h expiry let a dead white
+address be redrawn with no cooldown for up to a day, holding a dial slot
+and, for a `Keep`, a target place. Tests:
+`shekyl-dialer/tests/attempts/white.rs` and `shekyl-peerlist/tests/door.rs`
+(`a_failed_white_test_moves_it_to_gray_unless_the_stretch_is_quiet`).
+*Records-was (to 2026-10-26): a failed white test changed nothing, and
+only the expiry demoted (`a_failed_redial_leaves_white`).*
+
+*Wargame.* Eclipse: a restart already reloads white as gray, so white
+staying put was never the defence; the fill rules are, and demotion on
+a real failure is consistent with them. A clearnet on-path attacker who
+can drop this node's connections to one honest peer can push it out of
+white: a permanent residual, since clearnet can encrypt and recognize
+but never authenticate a destination. The address stays in gray, so the
+cost to that peer is a trip down the cooldown ladder.
 
 **Recovery (Rick, 2026-10-14; amended 2026-10-24).** A connector whose
 wake finds it under its target, nothing in flight, and no drawable white
@@ -1011,7 +1074,7 @@ file, all before the zone's runtime stops and before the Tor teardown
 on the thread ledger (`p2p-dial-clearnet`, `p2p-dial-tor`); the engine
 lateness report is an interval task on the transport runtime, not a
 thread (decision B, Rick 2026-10-25). Tests:
-`shekyl-dialer/tests/attempts.rs`, and the ledger rows in
+`shekyl-dialer/tests/attempts/`, and the ledger rows in
 `shekyl-ffi/src/zone_ffi_tests.rs`. *Records-was (ACCEPTED for PR-3,
 Rick 2026-10-13, with a reopen criterion this met): the owner loop
 blocked on the TCP dial and the handshake read, so the in-flight bound

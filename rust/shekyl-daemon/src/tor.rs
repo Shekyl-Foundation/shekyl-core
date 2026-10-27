@@ -50,6 +50,14 @@ const REPLY_BOUND: Duration = Duration::from_secs(30);
 /// Tor dial deadline, so the dial's class is Tor's reply, never a race with
 /// that deadline (`TOR_SUPERVISOR.md` §4.2).
 const SOCKS_TIMEOUT: SocksTimeout = shekyl_ffi::tor_link::TOR_SOCKS_TIMEOUT;
+/// The supervisor's waits. Its quiet stretch is the dialer's
+/// (`QUIET_AFTER_NANOS`): the posture line and the dialer's cooldown rule
+/// read one number.
+const fn policy() -> Policy {
+    Policy::provisional(Duration::from_nanos(
+        shekyl_ffi::dialer_ffi::QUIET_AFTER_NANOS,
+    ))
+}
 /// The onion's stream cap.
 const MAX_STREAMS: u16 = 8;
 /// `GETINFO` key for the bootstrap phase. One sample asks this and the listener.
@@ -263,7 +271,7 @@ async fn drive(
     let origin = shekyl_ffi::origin_verdict::watch();
     let mut tor_link = shekyl_ffi::tor_link::watch();
     let started = now(&owner);
-    let (mut core, mut step) = Core::start(Policy::provisional(), connectors, started);
+    let (mut core, mut step) = Core::start(policy(), connectors, started);
     // A receiver marks the current value seen, so a verdict published before
     // the supervisor started is folded once, here. The pin check stays the
     // first action: replacing the startup step would never spawn.
@@ -880,6 +888,20 @@ mod tests {
         assert!(running.iter().any(|key| key == NETWORK_LIVENESS));
         assert!(running.iter().any(|key| key == CIRCUIT_ESTABLISHED));
         assert!(running.starts_with(&bootstrap));
+    }
+
+    /// The posture line's `quiet_after` is the dialer's quiet stretch: one
+    /// number for the line and the cooldown rule (Rick, 2026-10-26). The
+    /// value itself is the dialer's §97 Assumption, provisional until the
+    /// floor-device soak, so this pins the equality and not the value. The
+    /// two clocks differ: the line's stretch also restarts when a Tor
+    /// reaches Running.
+    #[test]
+    fn the_posture_lines_quiet_stretch_is_the_dialers() {
+        assert_eq!(
+            u64::try_from(policy().quiet_after.as_nanos()).expect("small"),
+            shekyl_ffi::dialer_ffi::QUIET_AFTER_NANOS
+        );
     }
 
     /// The managed Tor answers inside the Tor dial deadline: a blocked link

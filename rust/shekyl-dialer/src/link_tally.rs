@@ -16,7 +16,9 @@
 
 use std::sync::Arc;
 
-use shekyl_peerlist::{CloseKind, ConnectorId, DialOutcome};
+use shekyl_peerlist::{ConnectorId, DialOutcome};
+
+use crate::reach::{attempt_stream, AttemptStream};
 
 /// What this node's Tor dials show.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -71,20 +73,13 @@ impl LinkFold {
             return;
         }
         let mut next = self.tally;
-        match outcome {
-            DialOutcome::DialFailed(_, cause) if !cause.opened_a_stream() => {
-                if cause.kind() != CloseKind::LocalClose {
-                    next.unopened = next.unopened.saturating_add(1);
-                }
-            }
-            DialOutcome::PayloadRefused(_) => {}
-            DialOutcome::DialFailed(..)
-            | DialOutcome::PeerlistRefused(..)
-            | DialOutcome::Confirmed(_)
-            | DialOutcome::SessionAccepted(_) => {
+        match attempt_stream(outcome) {
+            AttemptStream::NotADial => {}
+            AttemptStream::Opened => {
                 next.opened = next.opened.saturating_add(1);
                 next.unopened = 0;
             }
+            AttemptStream::Unopened => next.unopened = next.unopened.saturating_add(1),
         }
         next.held = u32::try_from(held).unwrap_or(u32::MAX);
         self.publish(next);
@@ -115,7 +110,7 @@ impl LinkFold {
 mod tests {
     use std::sync::Mutex;
 
-    use shekyl_peerlist::{CloseCause, NetworkAddress};
+    use shekyl_peerlist::{CloseCause, CloseKind, NetworkAddress};
 
     use super::*;
 

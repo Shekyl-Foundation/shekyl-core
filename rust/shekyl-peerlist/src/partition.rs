@@ -30,8 +30,8 @@ use crate::outcome::WhiteClock;
 use crate::sample::sample_prefix;
 use crate::validity::RefusedSet;
 use crate::{
-    cooldown_nanos, DISCLOSE_COUNT, DISCLOSE_WINDOW_NANOS, EXPIRATION_PERIOD_NANOS, GRAY_CAP,
-    INTAKE_SPAN_NANOS, P2P_DISCLOSE_EARLY_SPAN_NANOS, SESSION_INTAKE_CAP, WHITE_CAP,
+    cooldown_nanos, Ladder, DISCLOSE_COUNT, DISCLOSE_WINDOW_NANOS, EXPIRATION_PERIOD_NANOS,
+    GRAY_CAP, INTAKE_SPAN_NANOS, P2P_DISCLOSE_EARLY_SPAN_NANOS, SESSION_INTAKE_CAP, WHITE_CAP,
 };
 
 /// The connector's cached disclosure sample (D3): drawn once, kept for the
@@ -175,8 +175,10 @@ impl Partition {
         )
     }
 
-    /// The ladder rung: consecutive failed tests. Zero for an address that
+    /// Consecutive failed tests stored on the seat. Zero for an address that
     /// is white, unseated, or has not failed since it last became white.
+    /// [`Ladder::FirstStep`] leaves this count where it is and cools for
+    /// the first rung, so the stored count is not that cooldown's rung.
     pub(crate) fn failed_tests(&self, address: &NetworkAddress) -> u32 {
         match self.seat_of(address) {
             Some(Seat::Gray { failures, .. }) => failures,
@@ -413,16 +415,19 @@ impl Partition {
         true
     }
 
-    /// Drop an outstanding draw: the address leaves the partition. A white
-    /// address is not outstanding, so a failed redial leaves it white.
-    /// Only a test that proved misbehaviour ends here (the gray lifecycle).
-    pub(crate) fn drop_outstanding(&mut self, address: &NetworkAddress) -> bool {
+    /// Drop a tested address: an outstanding gray draw or a white address
+    /// leaves the partition. Only a test that proved misbehaviour ends here
+    /// (the gray lifecycle; white is known-working, Rick 2026-10-26).
+    pub(crate) fn drop_tested(&mut self, address: &NetworkAddress) -> bool {
         if !matches!(
             self.seat_of(address),
-            Some(Seat::Gray {
-                phase: GrayPhase::Outstanding,
-                ..
-            })
+            Some(
+                Seat::White(_)
+                    | Seat::Gray {
+                        phase: GrayPhase::Outstanding,
+                        ..
+                    }
+            )
         ) {
             return false;
         }
@@ -430,27 +435,56 @@ impl Partition {
         true
     }
 
-    /// A failed test that proved no misbehaviour: the outstanding draw
-    /// returns to gray and cools until `now` plus [`cooldown_nanos`] of its
-    /// consecutive count, which this increments. Not drawable until
-    /// [`Self::thaw`] passes that tick. A white address is not outstanding
-    /// and is left as it is; so is anything else.
-    pub(crate) fn cool<R: RelayRng + ?Sized>(
+    /// A failed test that proved no misbehaviour. Returns whether the seat
+    /// moved.
+    ///
+    /// - **An outstanding gray draw** returns to gray and cools until `now`
+    ///   plus [`cooldown_nanos`]. On [`Ladder::Climb`] the consecutive count
+    ///   steps and the cooldown is its rung; on [`Ladder::FirstStep`] the
+    ///   cooldown is the first rung and the count does not climb (it is at
+    ///   least one).
+    /// - **A white address** is known-working, so a failed test moves it to
+    ///   gray, cooling at the first rung with a count of one, under the gray
+    ///   cap (Rick, 2026-10-26). On [`Ladder::FirstStep`] it stays white:
+    ///   failures while the connector holds nothing say nothing about it.
+    ///
+    /// A cooling seat is not drawable until [`Self::thaw`] passes its tick.
+    /// Anything else is left as it is.
+    pub(crate) fn fail_test<R: RelayRng + ?Sized>(
         &mut self,
         address: &NetworkAddress,
         now: Tick,
+        ladder: Ladder,
         rng: &mut R,
     ) -> bool {
-        let Some(Seat::Gray {
-            phase: GrayPhase::Outstanding,
-            failures,
-        }) = self.seat_of(address)
-        else {
-            return false;
+        let (failures, rung, from_white) = match (self.seat_of(address), ladder) {
+            (
+                Some(Seat::Gray {
+                    phase: GrayPhase::Outstanding,
+                    failures,
+                }),
+                Ladder::Climb,
+            ) => {
+                let failures = failures.saturating_add(1);
+                (failures, failures, false)
+            }
+            (
+                Some(Seat::Gray {
+                    phase: GrayPhase::Outstanding,
+                    failures,
+                }),
+                Ladder::FirstStep,
+            ) => (failures.max(1), 1, false),
+            (Some(Seat::White(_)), Ladder::Climb) => (1, 1, true),
+            (Some(Seat::White(_)), Ladder::FirstStep) | (Some(Seat::Gray { .. }) | None, _) => {
+                return false;
+            }
         };
-        let failures = failures.saturating_add(1);
-        let until = Tick::new(now.get().saturating_add(cooldown_nanos(failures, rng)));
+        let until = Tick::new(now.get().saturating_add(cooldown_nanos(rung, rng)));
         self.move_seat(address, cooling(until, failures));
+        if from_white {
+            self.evict_gray_over_cap(address, rng);
+        }
         true
     }
 

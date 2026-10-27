@@ -17,7 +17,7 @@ use crate::address_file::{self, AddressFileError};
 use crate::outcome::{DialOutcome, ListName, Refusal, SessionRow, Source, WhiteClock};
 use crate::partition::{DiscloseEarly, DiscloseEarlyEnd, Partition};
 use crate::validity::RefusedSet;
-use crate::{white_diversity_floor, DISCLOSE_COUNT, WHITE_REFILL_LINE};
+use crate::{white_diversity_floor, Ladder, DISCLOSE_COUNT, WHITE_REFILL_LINE};
 
 /// The ban list as the peer list reads it (D4): a question, never a write.
 /// The transport layer's [`BanList`] answers it; [`NoBans`] answers "no"
@@ -549,7 +549,19 @@ impl Peerlist {
     /// The only writer of white and the only drop of an outstanding gray
     /// draw (brief §5). The match is total: the seat, and, for a
     /// confirmation, whether the session stayed.
-    pub fn apply<R: RelayRng + ?Sized>(&mut self, outcome: &DialOutcome, now: Tick, rng: &mut R) {
+    ///
+    /// `ladder` is the cooldown a failed test takes. The dialer chooses it
+    /// from its own evidence, once, when it records the test. A report that
+    /// leaves the address uncooled leaves `ladder` unread. Every caller
+    /// passes the ladder; one that is not the dialer passes
+    /// [`Ladder::Climb`].
+    pub fn apply<R: RelayRng + ?Sized>(
+        &mut self,
+        outcome: &DialOutcome,
+        now: Tick,
+        ladder: Ladder,
+        rng: &mut R,
+    ) {
         let Some(connector) = Self::connector_of(outcome.address()) else {
             return;
         };
@@ -567,19 +579,22 @@ impl Peerlist {
                 partition.confirm(address, now, rng, WhiteClock::Hold);
                 Self::end_disclose_early_if_due(connector, partition, now);
             }
-            // The gray lifecycle (Rick, 2026-10-24): an address leaves gray
-            // only on authenticated proof of misbehaviour, never for a
-            // connection problem. The lists read the cause's marks and
+            // The gray lifecycle (Rick, 2026-10-24): an address leaves the
+            // lists only on authenticated proof of misbehaviour, never for
+            // a connection problem. The lists read the cause's marks and
             // nothing else. A test that proves misbehaviour drops the
-            // outstanding draw; any other failed test returns it to gray
-            // with a cooldown. *Records-was (2026-10-16, #1092): dropped
-            // whatever the cause.*
+            // address, gray or white; any other failed test cools it in
+            // gray, and white is known-working, so a white address whose
+            // test fails moves to gray (Rick, 2026-10-26), unless the
+            // dialer's quiet stretch holds it ([`Ladder::FirstStep`]).
+            // *Records-was (2026-10-16, #1092): dropped whatever the cause;
+            // to 2026-10-26, a failed white test left it white.*
             DialOutcome::DialFailed(address, cause)
             | DialOutcome::PeerlistRefused(address, cause) => {
                 if cause.proves_misbehaviour() {
-                    partition.drop_outstanding(address);
+                    partition.drop_tested(address);
                 } else {
-                    partition.cool(address, now, rng);
+                    partition.fail_test(address, now, ladder, rng);
                 }
             }
             // The strand refused the payload. White is unchanged. An
@@ -620,9 +635,11 @@ impl Peerlist {
         Self::connector_of(address).is_some_and(|c| self.partition(c).is_cooling(address))
     }
 
-    /// How many failed tests in a row `address` has had: the rung of its
-    /// cooldown ladder. Zero after a confirmation, or for an address that
-    /// never failed.
+    /// How many failed tests in a row `address` has had. Zero after a
+    /// confirmation, or for an address that never failed. On
+    /// [`Ladder::Climb`] this is also the rung the cooldown uses. On
+    /// [`Ladder::FirstStep`] the count stays and the cooldown is the first
+    /// rung, so the two are not the same number.
     #[must_use]
     pub fn failed_tests(&self, address: &NetworkAddress) -> u32 {
         Self::connector_of(address).map_or(0, |c| self.partition(c).failed_tests(address))

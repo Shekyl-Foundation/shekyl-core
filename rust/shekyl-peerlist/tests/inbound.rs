@@ -16,7 +16,7 @@ use std::net::Ipv4Addr;
 
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{
-    white_diversity_floor, ConnectionId, ConnectorId, DialOutcome, NetworkAddress, NoBans,
+    white_diversity_floor, ConnectionId, ConnectorId, DialOutcome, Ladder, NetworkAddress, NoBans,
     NoSessions, Peerlist, Refusal, RefusedSet, SessionRow, Source, Tick, DISCLOSE_COUNT,
     SESSION_INTAKE_CAP,
 };
@@ -183,7 +183,12 @@ fn a_nodes_own_address_in_its_sample_enters_a_peer_that_never_dialled_it() {
             .expect("admitted");
     }
     while let Some(drawn) = sender.draw_gray(C, &mut rng) {
-        sender.apply(&DialOutcome::Confirmed(drawn), now(), &mut rng);
+        sender.apply(
+            &DialOutcome::Confirmed(drawn),
+            now(),
+            Ladder::Climb,
+            &mut rng,
+        );
     }
     let own = onion(9_000);
     sender.set_own_address(C, Some(own.clone())).expect("set");
@@ -206,7 +211,12 @@ fn a_nodes_own_address_in_its_sample_enters_a_peer_that_never_dialled_it() {
                 .expect("admitted");
         }
         while let Some(drawn) = fresh.draw_gray(C, &mut rng_sample) {
-            fresh.apply(&DialOutcome::Confirmed(drawn), now(), &mut rng_sample);
+            fresh.apply(
+                &DialOutcome::Confirmed(drawn),
+                now(),
+                Ladder::Climb,
+                &mut rng_sample,
+            );
         }
         fresh.set_own_address(C, Some(own.clone())).expect("set");
         sample = fresh.disclose(C, now(), &mut NoBans, &mut NoSessions, &mut rng_sample);

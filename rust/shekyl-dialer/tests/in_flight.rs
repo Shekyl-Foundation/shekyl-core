@@ -14,8 +14,8 @@ use std::net::Ipv4Addr;
 use shekyl_dialer::{in_flight_bound, plan, Attempts, CandidateFilter, Census, DialAim, DrawList};
 use shekyl_draw_rng::{RelayRng, SplitMix64};
 use shekyl_peerlist::{
-    white_diversity_floor, ConnectorId, DialOutcome, Host, KeptSessions, NetworkAddress, NoBans,
-    Peerlist, RefusedSet, Source, Tick, WHITE_REFILL_LINE,
+    white_diversity_floor, ConnectorId, DialOutcome, Host, KeptSessions, Ladder, NetworkAddress,
+    NoBans, Peerlist, RefusedSet, Source, Tick, WHITE_REFILL_LINE,
 };
 
 /// The kept sessions expiry must see, copied out so a filter can borrow
@@ -201,7 +201,7 @@ fn fill_share(bound: usize, attacker_share: f64, seed: u64) -> f64 {
                 DialAim::Confirm => DialOutcome::Confirmed(a),
             };
             attempts.finish(&outcome);
-            list.apply(&outcome, at(now), &mut rng);
+            list.apply(&outcome, at(now), Ladder::Climb, &mut rng);
         }
         if kept.len() >= TARGET {
             break;

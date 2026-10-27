@@ -32,7 +32,7 @@ use shekyl_options::PeerEndpoint;
 use shekyl_peerlist::Peerlist;
 use std::net::SocketAddr;
 
-pub use shekyl_dialer::in_flight_bound;
+pub use shekyl_dialer::{in_flight_bound, QUIET_AFTER_NANOS};
 pub use shekyl_peerlist::{ConnectorId, NetworkAddress};
 use shekyl_relay_privacy::params::{MIN_PROVISIONED_OUT_PEERS, P2P_DEFAULT_OUT_PEERS};
 use shekyl_rpc_types::DaemonNetwork;

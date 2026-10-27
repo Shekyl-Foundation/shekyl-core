@@ -600,7 +600,8 @@ impl Dialer {
     /// Record a local failure that ended before any I/O, unless the dialer
     /// has stopped: then the pending draw is cancelled and stays seated.
     /// The nonce is dropped on both paths. The hub clock is read before
-    /// the dialer lock.
+    /// the dialer lock, and the inbound rows under the table lock, as the
+    /// settle reads them.
     fn record_local<R: RelayRng + ?Sized>(
         &self,
         connector: ConnectorId,
@@ -611,14 +612,15 @@ impl Dialer {
     ) -> BeforeIo {
         drop(nonce);
         let now = self.hub.now();
-        let mut shared = self.shared();
-        if self.stop.load(Ordering::Acquire) {
-            shared.attempts(connector).cancel(&address);
-            return BeforeIo::Stopped;
-        }
-        let outcome = DialOutcome::DialFailed(address, cause);
-        Self::record(&mut shared, connector, &outcome, now, rng);
-        BeforeIo::Recorded
+        self.with_inbound(|shared| {
+            if self.stop.load(Ordering::Acquire) {
+                shared.attempts(connector).cancel(&address);
+                return BeforeIo::Stopped;
+            }
+            let outcome = DialOutcome::DialFailed(address, cause);
+            Self::record(shared, connector, &outcome, now, rng);
+            BeforeIo::Recorded
+        })
     }
 
     /// The task never started, and its guard has already cancelled the
@@ -633,13 +635,14 @@ impl Dialer {
         rng: &mut R,
     ) -> BeforeIo {
         let now = self.hub.now();
-        let mut shared = self.shared();
-        if self.stop.load(Ordering::Acquire) {
-            return BeforeIo::Stopped;
-        }
-        let outcome = DialOutcome::DialFailed(address, CloseCause::new(CloseKind::LocalClose));
-        Self::record(&mut shared, connector, &outcome, now, rng);
-        BeforeIo::Recorded
+        self.with_inbound(|shared| {
+            if self.stop.load(Ordering::Acquire) {
+                return BeforeIo::Stopped;
+            }
+            let outcome = DialOutcome::DialFailed(address, CloseCause::new(CloseKind::LocalClose));
+            Self::record(shared, connector, &outcome, now, rng);
+            BeforeIo::Recorded
+        })
     }
 
     /// Whether `id` is still enlisted. A posted result stays until it is

@@ -66,19 +66,25 @@ const TOR_INTRODUCTION_TIMEOUT: u16 = 0xF7;
 /// refused, the missing or unusable descriptor, the failed introduction.
 /// Nothing here proves misbehaviour: a SOCKS reply is the proxy's word.
 ///
-/// TTL expired also carries [`Marks::WINDOW_TIMEOUT`]: at or after the
-/// managed Tor's `SocksTimeout` it is final within its test, because **Tor
-/// retried inside its own window** (Rick, 2026-10-26). In Tor 0.4.9.14 the
-/// reply comes only from the stream-end reason `TIMEOUT`
-/// (`src/core/or/reasons.c:128`): the client's `SocksTimeout` ran out on an
-/// onion stream (`src/core/or/connection_edge.c:1222`, `:1250`), or the
-/// service's own connect to its target timed out, which Tor never retries
-/// on an onion stream (`src/core/or/relay.c:892`). Inside that window Tor
-/// already moves to another introduction point
-/// (`src/feature/hs/hs_client.c:1246`) and fetches the descriptor from
-/// another directory (`:1717`, `:1739`, `:1758`). An earlier `0x06` is a
-/// lost circuit or the service's connect, and keeps its retries; the
-/// dialer tells which from the attempt's own run, against the earliest the
+/// Every reply worth a retry also carries [`Marks::WINDOW_TIMEOUT`]: at or
+/// after the managed Tor's `SocksTimeout` it is final within its test,
+/// because **Tor retried inside its own window** (Rick, 2026-10-26). Inside
+/// that window Tor moves to another introduction point (Tor 0.4.9.14
+/// `src/feature/hs/hs_client.c:1246`) and fetches the descriptor from
+/// another directory (`:1717`, `:1739`, `:1758`). When the window runs out
+/// on an onion stream (`src/core/or/connection_edge.c:1222`, `:1250`), Tor
+/// answers with the stream-end reason `TIMEOUT`, `0x06`
+/// (`src/core/or/reasons.c:128`), unless it recorded an onion code on the
+/// stream first: with `ExtendedErrors` on, that code wins
+/// (`src/core/or/connection_edge.c:3894`). A descriptor not found marks it
+/// `0xF0` (`src/feature/hs/hs_client.c:1725`), a failed or timed-out
+/// introduction `0xF2` or `0xF7` (`:1235`), a timed-out rendezvous `0xF3`
+/// (`:1209`). So any of them at the window is Tor's timeout; the floor
+/// device saw `0xF0` at 104 to 110 s (2026-10-26). Earlier, each is a
+/// failure on this try and keeps its retries, as is an early `0x06` (a
+/// lost circuit, or the service's own connect timing out, which Tor does
+/// not retry on an onion stream, `src/core/or/relay.c:892`). The dialer
+/// tells which from the attempt's own run, against the earliest the
 /// managed Tor's `SocksTimeout` can expire.
 pub const fn proxy_reply_marks(reply: u16) -> u8 {
     let retry = matches!(
@@ -100,7 +106,7 @@ pub const fn proxy_reply_marks(reply: u16) -> u8 {
             | TOR_DESCRIPTOR_UNUSABLE
             | TOR_INTRODUCTION_FAILED
     );
-    let window = matches!(reply, SOCKS_TTL_EXPIRED);
+    let window = retry;
     (if retry { Marks::RETRY } else { 0 })
         | (if names { Marks::NAMES_DESTINATION } else { 0 })
         | (if window { Marks::WINDOW_TIMEOUT } else { 0 })
@@ -132,9 +138,9 @@ mod tests {
     use super::*;
 
     /// This connector's reply table (Rick, 2026-10-24; `0x01` final on
-    /// 2026-10-25; `0x06` a window timeout on 2026-10-26): the retry set,
-    /// the final set, the destination-naming replies, and the one reply
-    /// the dialer reads against Tor's window. No reply proves misbehaviour:
+    /// 2026-10-25; the retry set read against Tor's window on 2026-10-26):
+    /// the retry set, the final set, the destination-naming replies, and
+    /// the replies the dialer reads against Tor's window (the retry set). No reply proves misbehaviour:
     /// a SOCKS reply is the proxy's word.
     #[test]
     fn the_onion_reply_table_marks_retries_finals_and_destination_naming() {
@@ -157,7 +163,11 @@ mod tests {
                 naming.contains(&reply),
                 "reply {reply:#x}"
             );
-            assert_eq!(cause.window_timeout(), reply == 0x06, "reply {reply:#x}");
+            assert_eq!(
+                cause.window_timeout(),
+                retry.contains(&reply),
+                "reply {reply:#x}"
+            );
             assert!(!cause.proves_misbehaviour(), "reply {reply:#x}");
             assert_eq!(
                 socks_reply_is_our_request(reply),
