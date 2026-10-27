@@ -17,8 +17,9 @@
 //! Wargame (`P2P_3_SLICE_3_DIALER_BRIEF.md`, the gray lifecycle): an
 //! attacker's dead addresses cannot produce the condition while the node
 //! holds any session; a node that is fully isolated cycles faster, which
-//! helps it find an honest address; white is never cooled, so a block
-//! shorter than the white expiry (24 h) already refills from white.
+//! helps it find an honest address; and white survives a block, because a
+//! failed white test does not demote in the stretch (white is
+//! known-working, Rick 2026-10-26: outside the stretch it moves to gray).
 
 use shekyl_peerlist::{ConnectorId, DialOutcome, Ladder, Tick};
 

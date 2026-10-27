@@ -579,19 +579,22 @@ impl Peerlist {
                 partition.confirm(address, now, rng, WhiteClock::Hold);
                 Self::end_disclose_early_if_due(connector, partition, now);
             }
-            // The gray lifecycle (Rick, 2026-10-24): an address leaves gray
-            // only on authenticated proof of misbehaviour, never for a
-            // connection problem. The lists read the cause's marks and
+            // The gray lifecycle (Rick, 2026-10-24): an address leaves the
+            // lists only on authenticated proof of misbehaviour, never for
+            // a connection problem. The lists read the cause's marks and
             // nothing else. A test that proves misbehaviour drops the
-            // outstanding draw; any other failed test returns it to gray
-            // with a cooldown. *Records-was (2026-10-16, #1092): dropped
-            // whatever the cause.*
+            // address, gray or white; any other failed test cools it in
+            // gray, and white is known-working, so a white address whose
+            // test fails moves to gray (Rick, 2026-10-26), unless the
+            // dialer's quiet stretch holds it ([`Ladder::FirstStep`]).
+            // *Records-was (2026-10-16, #1092): dropped whatever the cause;
+            // to 2026-10-26, a failed white test left it white.*
             DialOutcome::DialFailed(address, cause)
             | DialOutcome::PeerlistRefused(address, cause) => {
                 if cause.proves_misbehaviour() {
-                    partition.drop_outstanding(address);
+                    partition.drop_tested(address);
                 } else {
-                    partition.cool(address, now, ladder, rng);
+                    partition.fail_test(address, now, ladder, rng);
                 }
             }
             // The strand refused the payload. White is unchanged. An

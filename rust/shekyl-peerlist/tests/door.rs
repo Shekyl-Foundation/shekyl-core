@@ -597,34 +597,72 @@ fn a_failed_test_cools_the_draw_a_proving_one_drops_it_and_a_refused_payload_lea
     }
 }
 
-#[test]
-fn a_failed_redial_leaves_white() {
-    let mut rng = SplitMix64::new(8);
+/// `peer`, white: confirmed by this node's own dial.
+fn white_one(seed: u64, peer: &NetworkAddress) -> (Peerlist, SplitMix64) {
+    let mut rng = SplitMix64::new(seed);
     let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
-    let peer = v4(8);
     assert_eq!(
-        list.admit_gray(&peer, Source::Operator, at_hours(0), &mut NoBans, &mut rng),
+        list.admit_gray(peer, Source::Operator, at_hours(0), &mut NoBans, &mut rng),
         Ok(true)
     );
-    draw_until(&mut list, &peer, &mut rng);
+    draw_until(&mut list, peer, &mut rng);
     list.apply(
         &DialOutcome::Confirmed(peer.clone()),
         at_hours(0),
         Ladder::Climb,
         &mut rng,
     );
+    assert!(list.is_white(peer));
+    (list, rng)
+}
+
+/// **White is known-working** (Rick, 2026-10-26, confirmed 2026-10-27). A
+/// white address whose test fails moves to gray and cools at the first
+/// rung, and one success puts it back in white; a proven misbehaviour drops
+/// it, as for gray; in the dialer's quiet stretch ([`Ladder::FirstStep`])
+/// it stays white. *Records-was (to 2026-10-26):
+/// `a_failed_redial_leaves_white`, a failed white test changed nothing and
+/// only the 24 h expiry demoted.*
+#[test]
+fn a_failed_white_test_moves_it_to_gray_unless_the_stretch_is_quiet() {
+    let peer = v4(8);
+    let failed = DialOutcome::DialFailed(
+        peer.clone(),
+        CloseCause::new(CloseKind::LevinHandshakeTimeout),
+    );
+    let (mut list, mut rng) = white_one(8, &peer);
+    list.apply(&failed, at_hours(1), Ladder::Climb, &mut rng);
+    assert!(!list.is_white(&peer), "a failed test demotes");
+    assert!(list.is_cooling(&peer), "it cools in gray");
+    assert_eq!(list.failed_tests(&peer), 1, "at the first rung");
+    // Past its cooldown it is drawn, and one success makes it white again.
+    let connector = Peerlist::connector_of(&peer).expect("served");
+    let drawn = list.draw_gray_where(connector, at_hours(2), &mut |_| true, &mut rng);
+    assert_eq!(drawn.as_ref(), Some(&peer), "it thawed");
     list.apply(
-        &DialOutcome::DialFailed(
-            peer.clone(),
-            CloseCause::new(CloseKind::LevinHandshakeTimeout),
-        ),
-        at_hours(1),
+        &DialOutcome::Confirmed(peer.clone()),
+        at_hours(2),
         Ladder::Climb,
         &mut rng,
     );
+    assert!(list.is_white(&peer), "one success puts it back");
+    assert_eq!(list.failed_tests(&peer), 0);
+
+    let (mut list, mut rng) = white_one(9, &peer);
+    list.apply(&failed, at_hours(1), Ladder::FirstStep, &mut rng);
+    assert!(list.is_white(&peer), "the quiet stretch does not demote");
+
+    let hidden = onion(10);
+    let (mut list, mut rng) = white_one(10, &hidden);
+    let proven = DialOutcome::PeerlistRefused(
+        hidden.clone(),
+        CloseCause::new(CloseKind::LevinHandshakeRejected)
+            .proving_misbehaviour_on(shekyl_peerlist::ConnectorId::Tor),
+    );
+    list.apply(&proven, at_hours(1), Ladder::Climb, &mut rng);
     assert!(
-        list.is_white(&peer),
-        "one failed redial does not demote; the clock does"
+        !list.is_white(&hidden) && !list.is_gray(&hidden),
+        "proof drops it, as for gray"
     );
 }
 

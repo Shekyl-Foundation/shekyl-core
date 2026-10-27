@@ -49,7 +49,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use shekyl_draw_rng::RelayRng;
 use shekyl_peerlist::{
     white_diversity_floor, CloseCause, CloseKind, ConnectionId, ConnectorId, DialOutcome, Ladder,
-    NetworkAddress, Peerlist, Refusal, RefusedSet, Source, Tick,
+    ListName, NetworkAddress, Peerlist, Refusal, RefusedSet, Source, Tick,
 };
 use shekyl_relay_privacy::params::{MIN_PROVISIONED_OUT_PEERS, P2P_DEFAULT_OUT_PEERS};
 use shekyl_seam::{Hub, SocketId, Subscription, SyncPayload};
@@ -707,10 +707,15 @@ impl Dialer {
                     && shared.tor_window.is_some_and(|window| ran_nanos >= window);
                 if cause.retry_worthy() && !outlasted_tor {
                     let cause = *cause;
+                    let list = if shared.lists.is_white(address) {
+                        ListName::White
+                    } else {
+                        ListName::Gray
+                    };
                     let mut wait = 0u64;
                     let next = shared.attempts(connector).defer_retry(
                         address,
-                        attempts_per_test(connector),
+                        attempts_per_test(connector, list),
                         |next| {
                             wait = retry_wait_nanos(next, rng);
                             Tick::new(now.get().saturating_add(wait))

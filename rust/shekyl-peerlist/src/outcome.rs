@@ -70,8 +70,10 @@ pub enum DialOutcome {
     /// The channel never reached a well-formed response, or the peer is on
     /// another network. The lists read the cause's marks and nothing else
     /// (the gray lifecycle, Rick 2026-10-24): a cause that proves
-    /// misbehaviour drops an outstanding gray draw; any other failed test
-    /// returns it to gray with a cooldown. A white address stays white.
+    /// misbehaviour drops the address, gray or white; any other failed test
+    /// cools it in gray. White is known-working, so a white address whose
+    /// test fails moves to gray (Rick, 2026-10-26), except in the dialer's
+    /// quiet stretch.
     ///
     /// The cause is the one the layer that closed stamped, its proxy reply
     /// code included.

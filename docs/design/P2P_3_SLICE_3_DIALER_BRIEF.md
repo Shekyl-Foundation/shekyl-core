@@ -541,7 +541,7 @@ enum DialOutcome {
 
 | Variant | When the dialer emits it | List (`apply`) | Failed-test count (the cooldown ladder; *records-was* the failed-address memory, deleted 2026-10-24) | Score |
 | --- | --- | --- | --- | --- |
-| `DialFailed` | The channel never reached a well-formed response, or `network_id` is not ours (`net_node.inl:1370`). The cause is the one the connector closed with, carrying its marks; the test's last attempt reports, after any retries | An outstanding gray draw cools unless the cause proves misbehaviour, which drops it (2026-10-24). A white address stays white. *Records-was: dropped whatever the cause (Rick, 2026-10-16)* | Counted, and the address cools for `cooldown_nanos(count)`, unless the cause proves misbehaviour. A `network_id` mismatch is `LevinHandshakeRejected`, stamped proving on Tor and nothing on clearnet. *Records-was: the memory, Tor only (R2), written where `implicates_address` held; before that on every connector* | No subscription. The mismatch does not call `add_host_fail` |
+| `DialFailed` | The channel never reached a well-formed response, or `network_id` is not ours (`net_node.inl:1370`). The cause is the one the connector closed with, carrying its marks; the test's last attempt reports, after any retries | An outstanding gray draw cools unless the cause proves misbehaviour, which drops it (2026-10-24). A white address is known-working (2026-10-26): it moves to gray and cools at the first rung, or is dropped on proof; in the quiet stretch it stays white. *Records-was: dropped whatever the cause (Rick, 2026-10-16); to 2026-10-26, a white address stayed white* | Counted, and the address cools for `cooldown_nanos(count)`, unless the cause proves misbehaviour. A `network_id` mismatch is `LevinHandshakeRejected`, stamped proving on Tor and nothing on clearnet. *Records-was: the memory, Tor only (R2), written where `implicates_address` held; before that on every connector* | No subscription. The mismatch does not call `add_host_fail` |
 | `PeerlistRefused` | `handle_remote_peerlist` refuses (`net_node.inl:1377`). Same close as `LevinHandshakeRejected`, and the variant carries that cause (2026-10-24) | Same as `DialFailed`: on Tor the cause is stamped proving and the address is dropped; on clearnet it cools. *Records-was: dropped whatever the cause (Rick, 2026-10-16)* | Same as `DialFailed` | The score owner subscribes. A peerlist this node refuses is the event the score records |
 | `PayloadRefused` | A kept session closed with `CloseKind::SessionRefused`: the payload owner declined a delivery after `SessionAccepted` (*records-was:* the strand refused the sync payload before white was written) | White is unchanged. An outstanding draw that was never confirmed returns to drawable gray | Not counted. The peer answered | None |
 | *`HarvestDone` — DELETED (Rick, 2026-10-11; no crate symbol)* | *Records-was: a harvest handshake completed, the session closed, no `adopt`.* Absorbed into `Confirmed`: a confirm-and-close dial learns the peer's sample as a harvest did and writes white. The variant, its `address()` arm, its `apply` arm and its test are gone. *Records-was: left for PR-3 as "more than one line"* | — | — |
@@ -828,7 +828,8 @@ knowledge); retries within a
 test (`shekyl-dialer/src/pace.rs`, `attempts_per_test` and
 `retry_wait_nanos`, and `shekyl-dialer/src/attempts.rs`: the open test,
 in flight or waiting, is one record on `Attempts`; Tor three attempts,
-clearnet one, the address drawn throughout and no in-flight slot held
+clearnet one for gray and two for white (one redial before a white
+address demotes, Rick 2026-10-26), the address drawn throughout and no in-flight slot held
 while waiting, one `DialOutcome` per test, the last attempt's; a Tor
 attempt that times out at or after the managed Tor's `SocksTimeout`
 can expire, 104 s into the attempt's own run (105 s,
@@ -884,9 +885,35 @@ inbound, and failures climb as before, so planting dead addresses buys
 no faster redraw of them. A node that is fully isolated cycles its
 candidates faster, every first step, which helps it find an honest
 address when the block ends; the cost is a dial per address per first
-step on a link that carries nothing. White is never cooled, so a block
-shorter than the white expiry (24 h) already refills from white; the
-rule matters for gray, and for a block long enough to expire white.
+step on a link that carries nothing. White survives a block because the
+quiet guard stops its demotion: a failed white test in the stretch
+leaves the address white, as a failed gray test does not climb, so the
+node comes back from a block with the white list it had.
+
+**White is known-working (Rick, 2026-10-26; confirmed 2026-10-27).** A
+white address whose test
+fails moves to gray and cools on the ladder (`Partition::fail_test`: the
+first rung, a count of one); a proven misbehaviour drops it, as for gray;
+one success puts it back in white. The test includes its retries: Tor's
+three, with a full-window failure final; on clearnet a white address
+gets one redial after the first retry wait (5 s + U(0, 5 s)) before it
+demotes, and gray stays at one attempt (`attempts_per_test` reads the
+list the address is in). In a quiet stretch a failed white test does not
+demote. Why: white leaving only at the 24 h expiry let a dead white
+address be redrawn with no cooldown for up to a day, holding a dial slot
+and, for a `Keep`, a target place. Tests:
+`shekyl-dialer/tests/attempts/white.rs` and `shekyl-peerlist/tests/door.rs`
+(`a_failed_white_test_moves_it_to_gray_unless_the_stretch_is_quiet`).
+*Records-was (to 2026-10-26): a failed white test changed nothing, and
+only the expiry demoted (`a_failed_redial_leaves_white`).*
+
+*Wargame.* Eclipse: a restart already reloads white as gray, so white
+staying put was never the defence; the fill rules are, and demotion on
+a real failure is consistent with them. A clearnet on-path attacker who
+can drop this node's connections to one honest peer can push it out of
+white: a permanent residual, since clearnet can encrypt and recognize
+but never authenticate a destination. The address stays in gray, so the
+cost to that peer is a trip down the cooldown ladder.
 
 **Recovery (Rick, 2026-10-14; amended 2026-10-24).** A connector whose
 wake finds it under its target, nothing in flight, and no drawable white

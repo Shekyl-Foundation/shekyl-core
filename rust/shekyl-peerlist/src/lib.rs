@@ -171,14 +171,16 @@ pub fn cooldown_nanos<R: shekyl_draw_rng::RelayRng + ?Sized>(consecutive: u32, r
 /// lifecycle).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ladder {
-    /// The consecutive count steps and the cooldown is its rung
-    /// ([`cooldown_nanos`]).
+    /// A failed gray test steps the consecutive count and cools for its
+    /// rung ([`cooldown_nanos`]); a failed white test moves the address to
+    /// gray at the first rung (white is known-working, Rick 2026-10-26).
     Climb,
-    /// The cooldown is the first rung, and the count does not climb: it is
-    /// at least one, and a count already past one stays where it was. The
-    /// dialer picks this while its connector holds no session and none has
-    /// opened for the quiet stretch, when every failure says as much about
-    /// this node's reach as about the address.
+    /// A failed gray test cools for the first rung, and the count does not
+    /// climb: it is at least one, and a count already past one stays where
+    /// it was. A failed white test leaves the address white. The dialer
+    /// picks this while its connector holds no session and none has opened
+    /// for the quiet stretch, when every failure says as much about this
+    /// node's reach as about the address.
     FirstStep,
 }
 

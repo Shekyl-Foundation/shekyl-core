@@ -14,6 +14,7 @@
 mod log_capture;
 
 mod quiet;
+mod white;
 
 use log_capture::log_text;
 use std::collections::{HashMap, VecDeque};
