@@ -41,11 +41,14 @@ def valid_artifact(engine="lmdb", **over):
         "durability": {
             "policy": "DRS-D9 full-fsync-per-commit",
             "sync_mode": "safe",
-            "imposed_argv": ["--regtest", "--db-sync-mode=safe", "--data-dir=/x/subject",
-                             "--p2p-bind-port=1", "--rpc-bind-port=2"],
+            "imposed_argv": ["--network", "regtest", "--dev-difficulty", "1",
+                             "--data-dir", "/x/subject",
+                             "--clearnet-listen", "127.0.0.1:1",
+                             "--rpc-admin-listen", "127.0.0.1:2",
+                             "--p2p-closed-peer", "127.0.0.1:3"],
             "observed": True,
             "resolved_log_line": "2026-09-13T00:00:00Z INFO global: Database sync: "
-                                 "flags=0x1 (safe), sync_mode=0, threshold=1 blocks",
+                                 "flags=0x1 (safe), sync_mode=3, threshold=1 blocks",
             "readback": "the subject daemon's own resolved-flags report",
         },
         "environment": {"loadavg_1m_at_start": 0.3, "loadavg_1m_at_end": 0.4,
@@ -140,27 +143,28 @@ class ArtifactRefusals(unittest.TestCase):
         self._refuse(lambda a: a.pop("durability"), "durability block absent")
 
     def test_refuses_sync_mode_outside_the_allowed_set(self):
-        """The silent-fallthrough guard. `--db-sync-mode=saf` is accepted by the
-        daemon and means DBF_FAST (MDB_NOSYNC) with no diagnostic, so a typo
-        would otherwise produce a confidently-labelled NOSYNC number."""
-        def m(a):
-            a["durability"]["sync_mode"] = "saf"
-            a["durability"]["imposed_argv"] = ["--db-sync-mode=saf"]
-        self._refuse(m, "only ['safe'] satisfies DRS-D9")
+        self._refuse(lambda a: a["durability"].__setitem__("sync_mode", "saf"),
+                     "only ['safe'] satisfies DRS-D9")
 
     def test_refuses_fast_sync_mode_explicitly(self):
+        """A run whose daemon reported `fast` is refused on the label and on the
+        readback, whichever a reader looks at."""
         def m(a):
             a["durability"]["sync_mode"] = "fast"
-            a["durability"]["imposed_argv"] = ["--db-sync-mode=fast"]
+            a["durability"]["resolved_log_line"] = (
+                "INFO global: Database sync: flags=0x2 (fast: MDB_NOSYNC), "
+                "sync_mode=2, threshold=1 blocks")
         self._refuse(m, "MDB_NOSYNC")
 
-    def test_refuses_when_recorded_mode_is_not_the_imposed_mode(self):
-        """Records `safe` while having imposed something else — the exact shape
-        of a mislabelled measurement, and invisible to a check that only reads
-        the label."""
+    def test_refuses_a_label_the_readback_does_not_carry(self):
+        """Records `safe` while the daemon reported something else — the shape
+        of a mislabelled measurement. The daemon takes no sync-mode option, so
+        the readback is the only thing the label can be checked against."""
         self._refuse(lambda a: a["durability"].__setitem__(
-            "imposed_argv", ["--regtest", "--db-sync-mode=fast"]),
-            "is not the mode that was imposed")
+            "resolved_log_line",
+            "INFO global: Database sync: flags=0x4 (fastest: MDB_NOSYNC|MDB_WRITEMAP|"
+            "MDB_MAPASYNC), sync_mode=2, threshold=1000 blocks"),
+            "is not the mode the daemon reported")
 
     def test_refuses_missing_imposed_argv(self):
         self._refuse(lambda a: a["durability"].pop("imposed_argv"),
@@ -192,8 +196,9 @@ class ArtifactRefusals(unittest.TestCase):
     def test_refuses_a_resolved_line_without_the_safe_flag(self):
         self._refuse(lambda a: a["durability"].__setitem__(
             "resolved_log_line",
-            "INFO global: Database sync: flags=0x10 (salvage), sync_mode=0, "
-            "threshold=1 blocks"), "does not report the safe flag")
+            f"INFO global: Database sync: flags=0x{D.DBF_SALVAGE:x} (salvage), "
+            f"sync_mode={D.DB_NOSYNC_ORDINAL}, threshold=1 blocks"),
+            "does not report the safe flag")
 
     def test_refuses_a_non_report_string_as_the_readback(self):
         self._refuse(lambda a: a["durability"].__setitem__(
@@ -479,10 +484,31 @@ class Comparability(unittest.TestCase):
         nothing about the engine. If the mask broke, EVERY real comparison
         would refuse — so this control is what keeps the mask honest."""
         b, c = self._pair()
-        c["durability"]["imposed_argv"] = ["--regtest", "--db-sync-mode=safe",
-                                           "--data-dir=/other/path",
-                                           "--p2p-bind-port=99", "--rpc-bind-port=98"]
+        c["durability"]["imposed_argv"] = ["--network", "regtest", "--dev-difficulty",
+                                           "1", "--data-dir", "/other/path",
+                                           "--clearnet-listen", "127.0.0.1:99",
+                                           "--rpc-admin-listen", "127.0.0.1:98",
+                                           "--p2p-closed-peer", "127.0.0.1:97"]
         self.assertEqual(D.comparability_refusals(b, c), [])
+
+    def test_control_the_equals_spelling_is_masked_too(self):
+        """The grammar takes a value after `=` as well as the next word."""
+        b, c = self._pair()
+        c["durability"]["imposed_argv"] = ["--network", "regtest", "--dev-difficulty",
+                                           "1", "--data-dir=/other/path",
+                                           "--clearnet-listen=127.0.0.1:99",
+                                           "--rpc-admin-listen=127.0.0.1:98",
+                                           "--p2p-closed-peer=127.0.0.1:97"]
+        self.assertEqual(D.comparability_refusals(b, c), [])
+
+    def test_refuses_a_run_without_a_per_run_flag(self):
+        """The mask drops values, not flags: a run that had no closed peer is
+        another experiment, and the comparison says so."""
+        def m(b, c):
+            argv = c["durability"]["imposed_argv"]
+            i = argv.index("--p2p-closed-peer")
+            del argv[i:i + 2]
+        self._refuse(m, "subject argv differs")
 
     def test_refuses_differing_freeze_era_between_artifacts(self):
         self._refuse(lambda b, c: c.__setitem__("thresholds_frozen_at", "cafebabe"),
@@ -735,6 +761,80 @@ class InputErrors(unittest.TestCase):
         self.assertIsNone(R._resolved_sync_line(bare))
         self.assertIsNone(R._resolved_sync_line("/nonexistent/x.log"))
 
+    def test_resolved_line_reader_reads_only_this_spawns_bytes(self):
+        """The seed's log is appended across runs. Read from this spawn's offset,
+        an earlier run's `safe` report cannot stand in for this run's."""
+        d = tempfile.mkdtemp()
+        log = os.path.join(d, "seed.log")
+        with open(log, "w", encoding="utf-8") as fh:
+            fh.write("INFO global: Database sync: flags=0x1 (safe), "
+                     f"sync_mode={D.DB_NOSYNC_ORDINAL}, threshold=1 blocks\n")
+        since = os.path.getsize(log)
+        with open(log, "a", encoding="utf-8") as fh:
+            fh.write("INFO global: Database sync: flags=0x2 (fast: MDB_NOSYNC), "
+                     "sync_mode=0, threshold=250000000 bytes\n")
+        self.assertIn("(fast: MDB_NOSYNC)", R._resolved_sync_line(log, since))
+        self.assertIn("(safe)", R._resolved_sync_line(log))
+        self.assertIsNone(R._resolved_sync_line(log, os.path.getsize(log)))
+
+    def test_a_missing_readback_names_the_rebuild(self):
+        """An unreadable log is a refusal. The check must not pass on a read failure."""
+        msg = R._readback_refusal("subject", "/nonexistent/subject.log", None)
+        self.assertIn("does not carry the daemon's resolved sync report", msg)
+        self.assertIn("rebuild", msg)
+        self.assertIn("/nonexistent/subject.log", msg)
+
+    def test_the_mode_is_read_out_of_the_readback(self):
+        """The parenthetical's open, independent of the sync_mode integer."""
+        nosync = D.DB_NOSYNC_ORDINAL
+        async_ordinal = D.BLOCKCHAIN_DB_SYNC_MODE.index("db_async")
+        for line, mode in (
+                (f"Database sync: flags=0x{D.DBF_SAFE:x} (safe), sync_mode={nosync}, "
+                 "threshold=1 blocks", "safe"),
+                (f"Database sync: flags=0x{D.DBF_FAST:x} (fast: MDB_NOSYNC), "
+                 f"sync_mode={async_ordinal}, threshold=250000000 bytes", "fast"),
+                (f"Database sync: flags=0x{D.DBF_FASTEST:x} (fastest: MDB_NOSYNC|"
+                 f"MDB_WRITEMAP|MDB_MAPASYNC), sync_mode={async_ordinal}, "
+                 "threshold=1000 blocks", "fastest")):
+            with self.subTest(mode=mode):
+                self.assertEqual(D.resolved_sync_mode(line), mode)
+        self.assertIsNone(D.resolved_sync_mode("no report here"))
+        self.assertIsNone(D.resolved_sync_mode(None))
+
+    def test_only_db_nosync_with_the_safe_open_is_drs_d9(self):
+        """`(safe)` with sync_mode=0 is db_defaultsync: the open that lets a sync
+        turn the fsync off. The integer is on the line written at open."""
+        def line(ordinal, flags=D.DBF_SAFE, words="safe"):
+            return (f"Database sync: flags=0x{flags:x} ({words}), "
+                    f"sync_mode={ordinal}, threshold=1 blocks")
+
+        self.assertEqual(D.resolved_line_refusals(line(D.DB_NOSYNC_ORDINAL)), [])
+        for ordinal, name in enumerate(D.BLOCKCHAIN_DB_SYNC_MODE):
+            if ordinal == D.DB_NOSYNC_ORDINAL:
+                continue
+            with self.subTest(name=name):
+                reasons = D.resolved_line_refusals(line(ordinal))
+                self.assertTrue(any(name in reason and "db_nosync" in reason
+                                    for reason in reasons), reasons)
+        self.assertTrue(any("not a blockchain_db_sync_mode" in reason
+                            for reason in D.resolved_line_refusals(line(9))))
+
+    def test_flags_and_the_parenthetical_must_name_the_same_open(self):
+        line = (f"Database sync: flags=0x{D.DBF_SAFE:x} (fast: MDB_NOSYNC), "
+                f"sync_mode={D.DB_NOSYNC_ORDINAL}, threshold=1 blocks")
+        reasons = D.resolved_line_refusals(line)
+        self.assertTrue(any("do not name the same open" in reason for reason in reasons),
+                        reasons)
+        self.assertTrue(any("MDB_NOSYNC" in reason for reason in reasons), reasons)
+
+    def test_bits_beside_the_open_do_not_change_the_verdict(self):
+        """RDONLY and SALVAGE are not durability opens. Beside `safe` at
+        db_nosync they still are DRS-D9; alone they are not."""
+        beside = D.DBF_SAFE | D.DBF_RDONLY | D.DBF_SALVAGE
+        line = (f"Database sync: flags=0x{beside:x} (safe) (salvage), "
+                f"sync_mode={D.DB_NOSYNC_ORDINAL}, threshold=1 blocks")
+        self.assertEqual(D.resolved_line_refusals(line), [])
+
     def test_a_directory_is_a_verdict_not_a_traceback(self):
         p = self._cli("validate", tempfile.mkdtemp())
         self.assertEqual(p.returncode, 1)
@@ -784,23 +884,24 @@ class CommittedArtifacts(unittest.TestCase):
 
 class Preflight(unittest.TestCase):
 
-    def test_refuses_an_unrecognised_sync_mode_before_spawn(self):
-        r = D.measurement_preflight(
-            sync_mode="fast", daemon=__file__,
-            work_dir=".", seed_dir=".", disk_class="ssd_or_nvme")
-        self.assertTrue(any("MDB_NOSYNC" in x for x in r), r)
+    def test_a_relative_daemon_path_is_absolute(self):
+        """The child cwd is the data directory. A relative path would be resolved
+        there, so preflight can see a file the spawn cannot."""
+        rel = os.path.join("build", "bin", "shekyld")
+        got = R.daemon_executable(rel)
+        self.assertTrue(os.path.isabs(got))
+        self.assertEqual(got, os.path.abspath(rel))
+        self.assertEqual(R.daemon_executable(got), got)
 
     def test_refuses_a_missing_daemon_binary(self):
         r = D.measurement_preflight(
-            sync_mode="safe",
             daemon=os.path.join(tempfile.mkdtemp(), "no-such-shekyld"),
             work_dir=".", seed_dir=".", disk_class="ssd_or_nvme")
         self.assertTrue(any("is not a file" in x for x in r), r)
 
     def test_control_a_sane_lmdb_preflight_is_empty(self):
         r = D.measurement_preflight(
-            sync_mode="safe", daemon=__file__,
-            work_dir=".", seed_dir=".", disk_class="ssd_or_nvme")
+            daemon=__file__, work_dir=".", seed_dir=".", disk_class="ssd_or_nvme")
         # work_dir '.' may still lack a sysfs rotational node; declaring the
         # class is what makes this a control rather than a probe of this box.
         self.assertFalse(any("engine switch" in x or "MDB_NOSYNC" in x
