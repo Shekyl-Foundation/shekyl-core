@@ -23,8 +23,8 @@
 use shekyl_peerlist::{ConnectorId, DialOutcome, Ladder, Tick};
 
 use super::{Dialer, Shared};
-use crate::link_tally::opened_a_stream;
 use crate::pace::QUIET_AFTER_NANOS;
+use crate::reach::{attempt_stream, AttemptStream};
 
 impl Dialer {
     /// An attempt on `connector` that opened a stream starts the quiet
@@ -35,7 +35,7 @@ impl Dialer {
         outcome: &DialOutcome,
         now: Tick,
     ) {
-        if opened_a_stream(outcome) {
+        if attempt_stream(outcome) == AttemptStream::Opened {
             shared.last_opened[connector.index()] = now;
         }
     }

@@ -15,10 +15,10 @@
 //!
 //! Lock order: this crate never calls into the hub while it holds its own
 //! lock. A ban snapshot and a board read are taken first, and the lists
-//! lock is taken after they return. The inbound Tor count is the one read
-//! that holds the table lock across the dialer's lock, the order the hub's
-//! posters already take, so a dial outcome cannot publish a count from
-//! before its row. [`Dialer::session_closed`] does not take the table lock:
+//! lock is taken after they return. Each connector's inbound rows are the
+//! one read that holds the table lock across the dialer's lock, the order
+//! the hub's posters already take, so a dial outcome cannot publish a count
+//! from before its row. [`Dialer::session_closed`] does not take the table lock:
 //! the adopt poster calls it while holding that lock, and the mutex is not
 //! re-entrant.
 //!
@@ -36,6 +36,7 @@ pub mod link_tally;
 pub mod nonce;
 pub mod owner;
 pub mod pace;
+mod reach;
 pub mod seeds;
 pub mod store;
 

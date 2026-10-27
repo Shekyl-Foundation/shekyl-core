@@ -872,7 +872,7 @@ silently blocked link every failure says as much about this node's reach
 as about the address, and before this a long block walked every
 candidate it reached up the ladder toward the hour, so the fill after
 the unblock waited on those rungs (`TOR_SUPERVISOR.md`'s `0x06` row, the
-refuse block of 2026-10-25). Tests: `shekyl-dialer/tests/attempts.rs`,
+refuse block of 2026-10-25). Tests: `shekyl-dialer/tests/attempts/quiet.rs`,
 a block with no sessions keeps every cooled address at the first step,
 on both connectors; with one session held failures climb, and so does a
 failure inside the stretch; after the block a cooled address is drawable
@@ -1047,7 +1047,7 @@ file, all before the zone's runtime stops and before the Tor teardown
 on the thread ledger (`p2p-dial-clearnet`, `p2p-dial-tor`); the engine
 lateness report is an interval task on the transport runtime, not a
 thread (decision B, Rick 2026-10-25). Tests:
-`shekyl-dialer/tests/attempts.rs`, and the ledger rows in
+`shekyl-dialer/tests/attempts/`, and the ledger rows in
 `shekyl-ffi/src/zone_ffi_tests.rs`. *Records-was (ACCEPTED for PR-3,
 Rick 2026-10-13, with a reopen criterion this met): the owner loop
 blocked on the TCP dial and the handshake read, so the in-flight bound

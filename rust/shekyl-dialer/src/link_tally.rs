@@ -16,7 +16,9 @@
 
 use std::sync::Arc;
 
-use shekyl_peerlist::{CloseKind, ConnectorId, DialOutcome};
+use shekyl_peerlist::{ConnectorId, DialOutcome};
+
+use crate::reach::{attempt_stream, AttemptStream};
 
 /// What this node's Tor dials show.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -31,19 +33,6 @@ pub struct TorLinkTally {
     /// Tor sessions this node holds now: outbound sessions the dialer
     /// kept, plus inbound sessions on the board.
     pub held: u32,
-}
-
-/// Whether a dial attempt's outcome reached a peer: anything but a failure
-/// before the channel existed. A payload refusal is not a dial; it names a
-/// kept session, whose stream was counted when it was accepted.
-pub(crate) fn opened_a_stream(outcome: &DialOutcome) -> bool {
-    match outcome {
-        DialOutcome::DialFailed(_, cause) => cause.opened_a_stream(),
-        DialOutcome::PayloadRefused(_) => false,
-        DialOutcome::PeerlistRefused(..)
-        | DialOutcome::Confirmed(_)
-        | DialOutcome::SessionAccepted(_) => true,
-    }
 }
 
 /// Where the tally goes. Called under the dialer's lock: it must not block.
@@ -84,14 +73,13 @@ impl LinkFold {
             return;
         }
         let mut next = self.tally;
-        match outcome {
-            DialOutcome::PayloadRefused(_) => {}
-            _ if opened_a_stream(outcome) => {
+        match attempt_stream(outcome) {
+            AttemptStream::NotADial => {}
+            AttemptStream::Opened => {
                 next.opened = next.opened.saturating_add(1);
                 next.unopened = 0;
             }
-            DialOutcome::DialFailed(_, cause) if cause.kind() == CloseKind::LocalClose => {}
-            _ => next.unopened = next.unopened.saturating_add(1),
+            AttemptStream::Unopened => next.unopened = next.unopened.saturating_add(1),
         }
         next.held = u32::try_from(held).unwrap_or(u32::MAX);
         self.publish(next);
@@ -122,7 +110,7 @@ impl LinkFold {
 mod tests {
     use std::sync::Mutex;
 
-    use shekyl_peerlist::{CloseCause, NetworkAddress};
+    use shekyl_peerlist::{CloseCause, CloseKind, NetworkAddress};
 
     use super::*;
 
