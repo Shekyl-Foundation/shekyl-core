@@ -52,7 +52,7 @@ impl QuietRig {
         };
         let dial = Arc::new(HeldDial::answering(sockets.clone(), answers));
         let (hub, dialer) = dialer_on(&clock, &sockets, Arc::clone(&dial) as Arc<dyn Dial>);
-        dialer.set_tor_window(Some(TOR_WINDOW));
+        dialer.set_window(TOR, Some(TOR_WINDOW));
         let mut rng = SplitMix64::new(seed);
         let (mut addresses, cause, took) = match connector {
             ConnectorId::Tor => (onions(5), shekyl_tor::refused(0xF1), Duration::ZERO),

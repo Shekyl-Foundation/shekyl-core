@@ -135,7 +135,7 @@ fn a_built_dialer_reads_no_tor_window() {
     let _bind = seam_bind_lock().lock();
     unbind();
     bind();
-    assert_eq!(dialer().expect("bound").tor_window(), None);
+    assert_eq!(dialer().expect("bound").window(ConnectorId::Tor), None);
     unbind();
 }
 

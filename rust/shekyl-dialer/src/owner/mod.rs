@@ -68,6 +68,7 @@ use crate::link_tally::{LinkFold, TallySink, TorLinkTally};
 use crate::nonce::{HandshakeNonce, HandshakeNonceSet, InFlightNonce};
 use crate::pace::{attempts_per_test, next_wake_nanos, retry_wait_nanos};
 use crate::store::{AddressStore, LoadError, STORE_INTERVAL_NANOS};
+use shekyl_transport_layer::WindowSource;
 
 /// This node's sync payload, read at each handshake. `None` when the core
 /// has not published a tip yet: the dialer then dials nothing, because a
@@ -120,13 +121,14 @@ pub struct Shared {
     applying: usize,
     /// The next attempt id.
     next_attempt: u64,
-    /// Each connector's in-flight bound ([`in_flight_bound`]): protocol
+    /// Each connector's in-flight bound, from its dial profile: protocol
     /// data, the same on every node.
     bounds: [usize; ConnectorId::COUNT],
-    /// The managed Tor's `SocksTimeout`, in nanoseconds, once the daemon
-    /// sets it ([`Dialer::set_tor_window`]). A Tor attempt that times out
-    /// at or after it is final within its test.
-    tor_window: Option<u64>,
+    /// Each connector's dial window, in nanoseconds: its dial deadline, or
+    /// the window it published ([`Dialer::set_window`]); `None` while a
+    /// published window is unknown. An attempt that times out at or after
+    /// it is final within its test.
+    windows: [Option<u64>; ConnectorId::COUNT],
     /// What the Tor dials show, for the managed-Tor supervisor's posture
     /// line (`TOR_SUPERVISOR.md` §4.2). Display only (`TSR-Q14`).
     tor_link: LinkFold,
@@ -251,7 +253,12 @@ impl Dialer {
                 bounds: std::array::from_fn(|index| {
                     dial_profile(ConnectorId::ALL[index]).in_flight_bound
                 }),
-                tor_window: None,
+                windows: std::array::from_fn(|index| {
+                    match dial_profile(ConnectorId::ALL[index]).window {
+                        WindowSource::DialDeadline(nanos) => Some(nanos),
+                        WindowSource::Published => None,
+                    }
+                }),
                 tor_link: LinkFold::new(),
                 inbound: [0; ConnectorId::COUNT],
                 last_opened: [started; ConnectorId::COUNT],
@@ -294,28 +301,34 @@ impl Dialer {
         self.bell.ring();
     }
 
-    /// The earliest the managed Tor's `SocksTimeout` can expire on an onion
-    /// connect and answer `0x06` (`SocksTimeout::earliest_expiry`: Tor's
-    /// window, less its whole-second clock). Tor has already retried
-    /// introduction points and descriptor fetches by then, so a Tor attempt
+    /// The window `connector` publishes with its route, for a connector
+    /// whose dial profile declares [`WindowSource::Published`]: the managed
+    /// Tor's earliest `SocksTimeout` expiry (`SocksTimeout::earliest_expiry`:
+    /// Tor's window, less its whole-second clock). Tor has already retried
+    /// introduction points and descriptor fetches by then, so an attempt
     /// that times out at or after it, measured over the attempt's own run,
     /// is final within its test: the address cools (Rick, 2026-10-26). A
-    /// timeout before it keeps its retries. `None`, the default,
-    /// leaves every timeout worth its retries: an operator's Tor sets its
-    /// own `SocksTimeout`, which this node does not know, and with no Tor
-    /// there is nothing to read. Set where the managed Tor's route is
-    /// published.
-    pub fn set_tor_window(&self, window: Option<std::time::Duration>) {
+    /// timeout before it keeps its retries. `None` leaves every timeout
+    /// worth its retries: an operator's Tor sets its own `SocksTimeout`,
+    /// which this node does not know. A connector whose window is its dial
+    /// deadline publishes nothing: its profile is protocol data (rule 71),
+    /// so the call is refused and logged.
+    pub fn set_window(&self, connector: ConnectorId, window: Option<std::time::Duration>) {
+        if !matches!(dial_profile(connector).window, WindowSource::Published) {
+            tracing::warn!(
+                "{connector:?}: its window is its dial deadline; a published window is refused"
+            );
+            return;
+        }
         let nanos = window.map(|window| u64::try_from(window.as_nanos()).unwrap_or(u64::MAX));
-        self.shared().tor_window = nanos;
+        self.shared().windows[connector.index()] = nanos;
     }
 
-    /// The Tor window [`Self::set_tor_window`] set.
+    /// `connector`'s dial window now: its dial deadline, the window it
+    /// published ([`Self::set_window`]), or `None`.
     #[must_use]
-    pub fn tor_window(&self) -> Option<std::time::Duration> {
-        self.shared()
-            .tor_window
-            .map(std::time::Duration::from_nanos)
+    pub fn window(&self, connector: ConnectorId) -> Option<std::time::Duration> {
+        self.shared().windows[connector.index()].map(std::time::Duration::from_nanos)
     }
 
     /// Send what the Tor dials show to `sink`: the tally now, then each
@@ -682,10 +695,9 @@ impl Dialer {
     /// cause is worth a retry, with attempts left in this test, is not
     /// recorded: the open test waits its [`retry_wait_nanos`] and the
     /// address stays an outstanding draw. The wake at or after the due
-    /// tick makes the next attempt. A Tor timeout whose attempt ran
-    /// `ran_nanos` (timed inside its task) at or past the Tor window is
-    /// not worth one
-    /// ([`Self::set_tor_window`]). Anything else, including a test that is
+    /// tick makes the next attempt. A timeout whose attempt ran `ran_nanos`
+    /// (timed inside its task) at or past the connector's window is not
+    /// worth one ([`Self::window`]). Anything else, including a test that is
     /// not in flight, is the test's one outcome and is recorded. A
     /// deferred Tor failure still counts in the tally: the stream did not
     /// open. The inbound count is taken under the table lock, across the
@@ -701,10 +713,9 @@ impl Dialer {
         self.with_inbound(|shared| {
             let address = outcome.address();
             if let DialOutcome::DialFailed(_, cause) = outcome {
-                let outlasted_tor = connector == ConnectorId::Tor
-                    && cause.window_timeout()
-                    && shared.tor_window.is_some_and(|window| ran_nanos >= window);
-                if cause.retry_worthy() && !outlasted_tor {
+                let outlasted = cause.window_timeout()
+                    && shared.windows[connector.index()].is_some_and(|window| ran_nanos >= window);
+                if cause.retry_worthy() && !outlasted {
                     let cause = *cause;
                     let list = if shared.lists.is_white(address) {
                         ListName::White

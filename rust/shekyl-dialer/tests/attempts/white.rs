@@ -43,7 +43,7 @@ impl WhiteRig {
             std::iter::repeat_n(reply(NETWORK), count).collect(),
         ));
         let (hub, dialer) = dialer_on(&clock, &sockets, Arc::clone(&dial) as Arc<dyn Dial>);
-        dialer.set_tor_window(Some(TOR_WINDOW));
+        dialer.set_window(TOR, Some(TOR_WINDOW));
         let mut rng = SplitMix64::new(seed);
         let addresses: Vec<NetworkAddress> = match connector {
             ConnectorId::Tor => onions(count),
@@ -239,4 +239,35 @@ fn with_one_session_held_white_failures_demote() {
             "{connector:?}: a held session lets the failure demote"
         );
     }
+}
+
+/// **A clearnet white redial is decided by the clearnet window** (the dial
+/// profile brief, test 3). Clearnet's window is its dial deadline: a white
+/// test whose first attempt times out at the deadline has used the whole
+/// window, so it demotes with no redial; a refused connect is not a
+/// timeout and waits for its redial. The connector refuses a published
+/// window: its profile is protocol data.
+#[test]
+fn a_clearnet_white_redial_is_decided_by_the_clearnet_window() {
+    let deadline = match shekyl_peerlist::dial_profile(CLEARNET).window {
+        shekyl_transport_layer::WindowSource::DialDeadline(nanos) => Duration::from_nanos(nanos),
+        shekyl_transport_layer::WindowSource::Published => {
+            panic!("clearnet's window is its deadline")
+        }
+    };
+    let mut rig = WhiteRig::new(CLEARNET, 79, 1);
+    let address = rig.white[0].clone();
+    assert_eq!(rig.dialer.window(CLEARNET), Some(deadline));
+    rig.dialer
+        .set_window(CLEARNET, Some(Duration::from_secs(600)));
+    assert_eq!(
+        rig.dialer.window(CLEARNET),
+        Some(deadline),
+        "a published window is refused"
+    );
+    rig.attempt(CloseCause::new(CloseKind::TransportTimeout), deadline);
+    assert!(
+        !rig.is_white(&address) && rig.is_cooling(&address),
+        "a full-window timeout demotes with no redial"
+    );
 }

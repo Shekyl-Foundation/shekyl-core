@@ -91,7 +91,7 @@ pub(super) struct Finished {
     /// Nanoseconds from the task's first poll to its result, on the hub's
     /// clock. Neither the spawn's scheduling nor the wait in the completion
     /// queue counts, so a timeout's place against the Tor window
-    /// ([`Dialer::set_tor_window`]) is the attempt's own.
+    /// ([`Dialer::window`]) is the attempt's own.
     ran_nanos: u64,
 }
 

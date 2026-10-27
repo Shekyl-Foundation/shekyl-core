@@ -731,7 +731,7 @@ pub fn dial_through_tor(socks: Proxy, network_id: [u8; 16]) -> Result<(), ZoneSt
 /// window: every Tor timeout keeps its retries.
 fn install_tor_proxy(host: &Host, socks: Proxy) {
     if let Some(dialer) = crate::dialer_ffi::dialer() {
-        dialer.set_tor_window(None);
+        dialer.set_window(ConnectorId::Tor, None);
     }
     let (at, authenticates) = (socks.at(), socks.authenticates());
     *host.tor_proxy.lock().expect("tor proxy") = Some(socks);
@@ -836,7 +836,10 @@ pub fn publish_managed_running(
 pub(crate) fn publish_managed_socks(socks: SocketAddr) -> Option<u64> {
     let host = HOST.lock().expect("zone host").clone()?;
     if let Some(dialer) = crate::dialer_ffi::dialer() {
-        dialer.set_tor_window(crate::tor_link::TOR_SOCKS_TIMEOUT.earliest_expiry());
+        dialer.set_window(
+            ConnectorId::Tor,
+            crate::tor_link::TOR_SOCKS_TIMEOUT.earliest_expiry(),
+        );
     }
     *host.tor_proxy.lock().expect("tor proxy") = Some(Proxy::unauthenticated(socks));
     let published =
