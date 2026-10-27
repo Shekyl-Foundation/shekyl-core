@@ -187,6 +187,7 @@ int main(int argc, char const * const argv[])
   ShekylDaemonEntry entry;
   entry.release_name = SHEKYL_RELEASE_NAME;
   entry.version_full = SHEKYL_VERSION_FULL;
+  entry.is_release = SHEKYL_VERSION_IS_RELEASE;
   entry.protocol_version = SHEKYL_PROTOCOL_VERSION;
   entry.run = &remnant_run;
   entry.stop = &remnant_stop;

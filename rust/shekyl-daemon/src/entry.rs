@@ -8,8 +8,8 @@
 //!
 //! Nothing crosses in either direction but what is here. C++ `main()`
 //! hands [`shekyl_daemon_main`] a [`ShekylDaemonEntry`] — its version
-//! strings and two function pointers, `run` and `stop` — and the process
-//! `argc`/`argv`. Rust resolves that vector through
+//! strings, whether this build is a release, and two function pointers,
+//! `run` and `stop` — and the process `argc`/`argv`. Rust resolves that vector through
 //! [`ArgumentVector`](shekyl_ffi::argument_vector::ArgumentVector) and fills
 //! a [`ShekylDaemonSnapshot`], the read-only structure holding exactly the
 //! values whose reader is still C++, and calls `run` with it. The C++
@@ -51,6 +51,9 @@ pub struct ShekylDaemonEntry {
     pub release_name: *const c_char,
     /// `SHEKYL_VERSION_FULL`, NUL-terminated.
     pub version_full: *const c_char,
+    /// `SHEKYL_VERSION_IS_RELEASE`. The same constant the version string
+    /// is built from (`version.cpp.in`), not `debug_assertions` (FLIP-Q3).
+    pub is_release: bool,
     /// `SHEKYL_PROTOCOL_VERSION`.
     pub protocol_version: u32,
     /// The remnant's `run`.
@@ -111,6 +114,7 @@ mod tests {
         ShekylDaemonEntry {
             release_name: release.as_ptr(),
             version_full: version.as_ptr(),
+            is_release: false,
             protocol_version: 3,
             run: None,
             stop: None,

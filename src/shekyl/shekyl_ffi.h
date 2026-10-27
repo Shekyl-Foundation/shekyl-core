@@ -4546,6 +4546,9 @@ typedef void (*ShekylDaemonStopFn)(void);
 struct ShekylDaemonEntry {
   const char* release_name;
   const char* version_full;
+  /// `SHEKYL_VERSION_IS_RELEASE`. Beside the version string: the release
+  /// workflow sets both from `version.cpp.in` (FLIP-Q3).
+  bool is_release;
   uint32_t protocol_version;
   ShekylDaemonRunFn run;
   ShekylDaemonStopFn stop;
