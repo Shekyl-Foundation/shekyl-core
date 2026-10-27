@@ -38,9 +38,10 @@ import random
 BASE = os.path.dirname(os.path.abspath(__file__)) + "/"
 LIVE = []
 for name in ("p2p_tor_gap_cold_20261014_rerunA.tsv", "p2p_tor_gap_cold_20261014_rerunB.tsv"):
-    for row in csv.DictReader(open(BASE + name), delimiter="\t"):
-        if row["outcome"] == "session" and row["c_dial_ns"] not in ("", "-"):
-            LIVE.append(int(row["c_dial_ns"]) / 1e9)
+    with open(BASE + name, newline="") as tsv:
+        for row in csv.DictReader(tsv, delimiter="\t"):
+            if row["outcome"] == "session" and row["c_dial_ns"] not in ("", "-"):
+                LIVE.append(int(row["c_dial_ns"]) / 1e9)
 DEADLINE = 120.0
 TARGET = 12
 ATTEMPTS = {"pre-merge": 1, "head": 3, "full-window-final": 1}
