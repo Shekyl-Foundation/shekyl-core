@@ -177,6 +177,16 @@ jobs:
           run_one "Production-lint lane names every TEST_ONLY owner" \
             python3 scripts/ci/check_production_lint_lane.py
 
+          # Each connector declares its dial numbers in one profile
+          # (shekyl_transport_layer::dial_profile); the dialer and the peer
+          # list read it and hold no per-connector arms. `--selftest` plants
+          # an arm and requires a failure, and the gate fails when it cannot
+          # find the dialer's or the peer list's source (rule 47).
+          run_one "No per-connector arms in the dialer or the peer list (selftest)" \
+            python3 scripts/ci/check_connector_profile_arms.py --selftest
+          run_one "No per-connector arms in the dialer or the peer list" \
+            python3 scripts/ci/check_connector_profile_arms.py
+
           # A job-level `if:` is evaluated before the matrix expands, so a
           # skipped matrix job cannot emit its per-leg check names. When those
           # names are required contexts, that is a required check that CANNOT
