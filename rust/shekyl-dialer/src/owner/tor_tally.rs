@@ -50,7 +50,7 @@ impl Dialer {
         self.session_closed(id, cause, rng);
     }
 
-    /// Read the inbound Tor rows into the cache, then run `body`.
+    /// Read each connector's inbound rows into the cache, then run `body`.
     ///
     /// The table lock is held across the dialer's lock. `body` must not
     /// call back into the hub.
