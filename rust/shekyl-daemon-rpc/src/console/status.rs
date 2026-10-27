@@ -29,43 +29,51 @@ enum MiningReadout {
     /// mining.
     Ready(MiningStatusProvisional),
     Syncing,
-    /// The remote daemon would not say — a restricted listener does not serve
-    /// `/mining_status`. Only reachable on the remote arm; see
-    /// [`fetch_mining_status`].
+    /// The remote daemon would not say. A view listener answers
+    /// `/mining_status` with a grant refusal, and a daemon that does not
+    /// serve the route answers an empty body. Only reachable on the remote
+    /// arm; see [`fetch_mining_status`].
     Unavailable,
 }
 
 /// Fetch `/mining_status`, and treat a failure differently on each arm.
 ///
-/// **The asymmetry is the C++'s and it is carried on purpose.** In-process
-/// the console *is* the daemon, so a `/mining_status` that will not answer is
-/// a fault in this daemon and the command says so. Remotely the daemon may
-/// simply be running a restricted listener, which does not serve the route at
-/// all — an ordinary posture, not a failure, and the status line says "mining
-/// info unavailable" rather than refusing to print the seven other things it
-/// knows. Unifying the arms would either turn a normal restricted daemon into
-/// an error or hide a real local fault.
+/// **The asymmetry is carried on purpose.** In-process the console *is* the
+/// host, so a `/mining_status` that will not answer is a fault in this
+/// daemon and the command says so. Remotely the daemon may be a view
+/// listener: `/mining_status` is `mining-control`, and the stamp answers a
+/// grant refusal (HTTP 200, the JSON-RPC error object) where an absent
+/// route used to be an empty 404. Either is an ordinary posture, not a
+/// failure, and the status line says "mining info unavailable" rather than
+/// refusing to print the seven other things it knows. Unifying the arms
+/// would either turn a view listener into an error or hide a real local
+/// fault.
 fn fetch_mining_status(src: &Source) -> Result<MiningReadout, String> {
     let raw = match src {
         Source::Live(core) => core
-            .json_endpoint("/mining_status", "{}", false)
+            .json_endpoint("/mining_status", "{}", true)
             .ok_or_else(|| "no reply from /mining_status".to_owned())?,
         Source::Remote {
             address, timeout, ..
         } => {
             src.ensure_identity()?;
             match ctl_client::post_blocking(address, "/mining_status", b"{}".to_vec(), *timeout) {
-                // **An empty body is the route declining to exist.** The
-                // control transport does not surface the HTTP status — its
-                // contract is "a response arrived", because every route the
-                // daemon *serves* answers with a JSON body carrying its own
-                // `status`. `/mining_status` is `Visibility::AdminOnly`
-                // (`server.rs`), so a restricted listener has no such route
-                // and axum's fallback answers 404 with no body at all. That
-                // is the only way a zero-length body reaches here, and it is
-                // exactly the case the C++'s `has_mining_info` keyed on.
+                // Two ordinary refusals, before any parse. An empty body is
+                // a route the daemon does not serve: the control transport
+                // does not surface the HTTP status, and axum's fallback is
+                // 404 with no body. A grant refusal is HTTP 200 with the
+                // JSON-RPC error object, which is what a view listener
+                // answers for `/mining_status` (`mining-control`). Any other
+                // body has to be the readout, and a body that is not is a
+                // fault.
                 Ok(raw) if raw.is_empty() => return Ok(MiningReadout::Unavailable),
-                Ok(raw) => String::from_utf8_lossy(&raw).into_owned(),
+                Ok(raw) => {
+                    let text = String::from_utf8_lossy(&raw).into_owned();
+                    if crate::authority::grant_refusal_message(&text).is_some() {
+                        return Ok(MiningReadout::Unavailable);
+                    }
+                    text
+                }
                 // The daemon is not answering at all — no host, no listener.
                 Err(_) => return Ok(MiningReadout::Unavailable),
             }

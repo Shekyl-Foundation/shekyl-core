@@ -22,10 +22,8 @@ use shekyl_daemon_config::resolve::Resolved;
 use shekyl_daemon_config::{
     apply_logging, link_limits, runtime_owner, Network, RuntimeOwner, TABLE,
 };
-use shekyl_daemon_rpc::options::{
-    OptionsFacts, Refusal, RowGrant, ShowRefusal, ShownRow, VisibleRow,
-};
-use shekyl_options::{Code, Diagnostic, Grant, Kind, Row, Source, Value, Visibility};
+use shekyl_daemon_rpc::options::{OptionsFacts, Refusal, ShowRefusal, ShownRow, VisibleRow};
+use shekyl_options::{Code, Diagnostic, Kind, Row, Source, Value, Visibility};
 
 /// The daemon's options handle.
 pub struct DaemonOptions {
@@ -62,15 +60,6 @@ fn source_word(source: &Source) -> &'static str {
         Source::Runtime => "runtime",
         // A machine source is a derived fact, never a row of the table.
         Source::Default | Source::Machine => "default",
-    }
-}
-
-fn grant_of(row: &Row) -> RowGrant {
-    match row.grant {
-        Grant::Health => RowGrant::Health,
-        Grant::Status => RowGrant::Status,
-        Grant::Peers => RowGrant::Peers,
-        Grant::Config => RowGrant::Config,
     }
 }
 
@@ -227,7 +216,7 @@ impl OptionsFacts for DaemonOptions {
             .into_iter()
             .map(|row| VisibleRow {
                 row: shown(row, &live),
-                grant: grant_of(row),
+                grant: row.grant,
             })
             .collect())
     }
@@ -237,7 +226,7 @@ impl OptionsFacts for DaemonOptions {
 mod tests {
     use super::*;
     use shekyl_daemon_config::{choosers, resolve};
-    use shekyl_options::read_cli;
+    use shekyl_options::{read_cli, Grant};
 
     fn handle(args: &[&str]) -> DaemonOptions {
         let cli = read_cli(&TABLE, args.iter().map(std::ffi::OsString::from)).unwrap();
@@ -367,10 +356,10 @@ mod tests {
             .collect();
         assert_eq!(names, table);
         let level = all.iter().find(|v| v.row.name() == "log-level").unwrap();
-        assert_eq!(level.grant, RowGrant::Status);
+        assert_eq!(level.grant, Grant::Status);
         assert_eq!(level.row.source(), "cli");
         let onion = all.iter().find(|v| v.row.name() == "tor-onion").unwrap();
-        assert_eq!(onion.grant, RowGrant::Config);
+        assert_eq!(onion.grant, Grant::Config);
         assert_eq!(
             onion.row.value(),
             Some(None),

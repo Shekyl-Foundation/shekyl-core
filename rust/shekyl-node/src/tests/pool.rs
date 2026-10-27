@@ -33,7 +33,6 @@ fn a_flush_over_a_faulted_pool_file_retires_the_pool() {
     use shekyl_daemon_rpc::pool_methods::{flush_txpool, get_transaction_pool};
     use shekyl_daemon_rpc::read_methods::get_transactions;
     use shekyl_rpc_types::errors::ErrorClass;
-    use shekyl_rpc_types::methods::Grant;
     use shekyl_rpc_types::{GetTransactionsRequest, HashHex, InfoPool};
     let dir = tempfile::tempdir().expect("temp");
     let node = open_posted(dir.path(), &[]);
@@ -85,7 +84,7 @@ fn a_flush_over_a_faulted_pool_file_retires_the_pool() {
             prune: false,
             split: false,
         },
-        Grant::HostOnly,
+        true,
     );
     node.stop();
     assert_eq!(

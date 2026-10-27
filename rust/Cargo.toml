@@ -270,6 +270,10 @@ members = [
     # (wallet). Draft until the §8 parity matrix clears.
     "shekyl-rpc-types",
 
+    # The daemon RPC's grants (RPC_CHANNEL.md §6.1): one vocabulary for the
+    # method table, the option table and the channel's grant payloads.
+    "shekyl-rpc-grants",
+
     # Per-P archival-firewall network transport (2d-2 SP-T1)
     "shekyl-p-transport",
     "shekyl-p2p-transport",

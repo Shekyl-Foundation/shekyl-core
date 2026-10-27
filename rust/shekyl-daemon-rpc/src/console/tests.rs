@@ -2119,10 +2119,9 @@ fn a_shown_zero_connection_count_prints_as_zero() {
 /// A remote daemon that will not serve `/mining_status` still gets a
 /// status line.
 ///
-/// A restricted listener does not serve the route at all — an ordinary
-/// posture, not a fault — so the seven other things the line knows are
-/// still worth printing. The route server has no `/mining_status` row, so
-/// it answers 404.
+/// An absent route is an empty 404 — an ordinary posture, not a fault —
+/// so the seven other things the line knows are still worth printing. The
+/// route server has no `/mining_status` row, so it answers 404.
 #[test]
 fn a_restricted_remote_daemon_still_reports_its_status() {
     let address = route_server(vec![("/get_info", info_reply(100))]);
@@ -2130,6 +2129,90 @@ fn a_restricted_remote_daemon_still_reports_its_status() {
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
     assert!(out.contains("mining info unavailable"), "{out}");
     assert!(out.contains("Height: 100/100"), "{out}");
+}
+
+/// A view listener answers `/mining_status` with the grant refusal, HTTP
+/// 200 and the JSON-RPC error object. That is the same ordinary posture:
+/// mining info is unavailable, and the rest of the line still prints.
+#[test]
+fn a_view_listener_refuses_mining_status_and_status_still_prints() {
+    let row = shekyl_rpc_types::methods::rest_path("/mining_status").expect("a row");
+    let error = crate::authority::Authority::VIEW_LISTENER
+        .admit(row)
+        .expect_err("mining-control");
+    let body = serde_json::to_string(&crate::authority::refusal(serde_json::Value::Null, &error))
+        .expect("the envelope");
+    let address = route_server(vec![
+        ("/get_info", info_reply(100)),
+        ("/mining_status", body),
+    ]);
+    let (code, out) = run(&["status"], Some(&address));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
+    assert!(out.contains("mining info unavailable"), "{out}");
+    assert!(out.contains("Height: 100/100"), "{out}");
+}
+
+/// A mining fault is not a grant refusal. Another error class stays a
+/// failure of the command.
+#[test]
+fn a_mining_status_fault_is_not_unavailable() {
+    let code = shekyl_rpc_types::errors::ErrorClass::Internal.code();
+    let address = route_server(vec![
+        ("/get_info", info_reply(100)),
+        (
+            "/mining_status",
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": null,
+                "error": {"code": code, "message": "boom"}
+            })
+            .to_string(),
+        ),
+    ]);
+    let (code, out) = run(&["status"], Some(&address));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
+    assert!(!out.contains("mining info unavailable"), "{out}");
+}
+
+#[test]
+fn pop_blocks_on_a_remote_daemon_prints_the_new_height() {
+    let body = serde_json::json!({"status": "OK", "height": 42}).to_string();
+    let address = route_server(vec![("/pop_blocks", body)]);
+    let (code, out) = run(&["pop_blocks", "3"], Some(&address));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
+    assert_eq!(out, "new height: 42");
+}
+
+#[test]
+fn pop_blocks_on_a_view_listener_says_the_grant_refusal() {
+    let row = shekyl_rpc_types::methods::rest_path("/pop_blocks").expect("a row");
+    let error = crate::authority::Authority::VIEW_LISTENER
+        .admit(row)
+        .expect_err("host only");
+    let body = serde_json::to_string(&crate::authority::refusal(serde_json::Value::Null, &error))
+        .expect("the envelope");
+    let address = route_server(vec![("/pop_blocks", body)]);
+    let (code, out) = run(&["pop_blocks", "1"], Some(&address));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
+    assert_eq!(out, error.diagnostic.message);
+}
+
+#[test]
+fn pop_blocks_reports_a_failed_status() {
+    let address = route_server(vec![(
+        "/pop_blocks",
+        r#"{"status":"ERROR","height":7}"#.to_owned(),
+    )]);
+    let (code, out) = run(&["pop_blocks", "1"], Some(&address));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
+    assert_eq!(out, "pop_blocks failed -- ERROR");
+}
+
+#[test]
+fn pop_blocks_refuses_zero_before_it_asks() {
+    let (code, out) = run(&["pop_blocks", "0"], Some("127.0.0.1:1"));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
+    assert!(out.contains("at least one"), "{out}");
 }
 
 /// A syncing daemon answers `BUSY`, which is neither mining nor idle.

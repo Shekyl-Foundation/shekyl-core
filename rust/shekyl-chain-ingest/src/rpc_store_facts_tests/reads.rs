@@ -308,9 +308,7 @@ async fn serve_the_block_fetch(facts: Arc<StoreFacts>) -> String {
                         let request: shekyl_rpc_types::GetTransactionsRequest =
                             serde_json::from_slice(&body).expect("a request");
                         let reply = shekyl_daemon_rpc::read_methods::get_transactions(
-                            &*facts,
-                            &request,
-                            shekyl_rpc_types::methods::Grant::Any,
+                            &*facts, &request, false,
                         )
                         .expect("the bodies");
                         serde_json::to_vec(&reply).expect("json")
@@ -425,7 +423,7 @@ async fn get_transactions_answers_the_chain_the_pool_and_a_miss() {
                     prune: false,
                     split: false,
                 },
-                shekyl_rpc_types::methods::Grant::Any,
+                false,
             )
             .expect("answered");
             assert!(reply.status.is_ok());
@@ -520,7 +518,7 @@ async fn the_q1_reads_answer_from_the_store_and_the_pool() {
                 &GetBlocksByHeightRequest {
                     heights: vec![0, landed.height.to_raw(), past],
                 },
-                false,
+                true,
             )
             .expect("blocks");
             assert_eq!(
@@ -558,7 +556,7 @@ async fn the_q1_reads_answer_from_the_store_and_the_pool() {
                         hex::encode(nowhere),
                     ],
                 },
-                false,
+                true,
             )
             .expect("spent");
             assert_eq!(

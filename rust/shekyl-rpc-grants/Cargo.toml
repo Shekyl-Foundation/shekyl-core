@@ -1,0 +1,11 @@
+[package]
+name = "shekyl-rpc-grants"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The daemon RPC's grants (RPC_CHANNEL.md §6.1): the twelve grants, a grant set with its fixed wire bits, and the presets"
+
+[lints]
+workspace = true

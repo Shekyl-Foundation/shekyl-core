@@ -304,9 +304,8 @@ def measure(args):
     # Genesis alone is height 1; N generated blocks leave height N+1.
     target_h = args.height + 1
     # The generating seed calls generateblocks, an armed test lever: it is
-    # served only with the dev-rpc row once dispatch reads the method
-    # table's armed column (DRS-X flip). Today's C++ path ignores the row.
-    # The daemon announces the row at start. The seed log is appended, so
+    # served only with the dev-rpc switch set (RPC_CHANNEL.md section 6.1).
+    # The daemon announces the switch at start. The seed log is appended, so
     # the check reads only the bytes this spawn wrote.
     seed_log = os.path.join(work, "seed.log")
     seed_from = armed_lever.log_size(seed_log)

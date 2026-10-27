@@ -148,6 +148,11 @@ regtest_ignored=$(grep -c '^engine::regtest_e2e::.*: test$' "$ignored" || true)
 #     historical red 2026-09-28: the C++ refused the Rust block at the
 #     bound for its coinbase (the regtest F21 epoch, §3.11), the finding
 #     that fixed the daemon's hard-fork table. Same pool cost as above.
+#   the_armed_switch_on_testnet_serves_two_levers_and_the_setter_refuses_inject —
+#     RT-O36, recorded red in 8cd238c (2026-10-26), then restored. The
+#     setter admitting testnet made inject answer OK; the switch off made
+#     generateblocks come back -32002 rpc.unarmed. One testnet daemon,
+#     zero blocks: an admission probe, so it stays on the per-PR lane.
 ARMED=(
   engine::regtest_e2e::e2e_the_cxx_daemon_answers_join_market_unsupported
   engine::regtest_e2e::origin::restricted_listener_is_withheld_status_and_capped_by_native_handlers
@@ -165,6 +170,7 @@ ARMED=(
   engine::regtest_e2e::get_output_histogram_stays_unrouted
   engine::regtest_e2e::origin::restricted_listener_hides_a_transaction_this_node_has_not_broadcast
   engine::regtest_e2e::origin::get_info_console_commands_answer_on_the_in_process_arm
+  engine::regtest_e2e::the_armed_switch_on_testnet_serves_two_levers_and_the_setter_refuses_inject
 )
 
 # Consensus gates too heavy for the per-PR lane (depth-3 spend, 13 min

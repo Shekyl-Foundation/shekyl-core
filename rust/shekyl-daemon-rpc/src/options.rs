@@ -23,31 +23,7 @@ use serde::{Deserialize, Serialize};
 use crate::info::Disclosure;
 use crate::methods::{RpcFault, RpcRefusal};
 
-/// The grant a row names (`RPC_CHANNEL.md` RT-O24).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RowGrant {
-    /// What a client needs to decide whether it can use the node now.
-    Health,
-    /// This node's own settings that say nothing lasting about it.
-    Status,
-    /// The peer, closed-peer and ban rows.
-    Peers,
-    /// Everything else; the admin preset only.
-    Config,
-}
-
-impl RowGrant {
-    /// Whether a caller with `disclosure` is shown a row of this grant.
-    #[must_use]
-    pub const fn shown_to(self, disclosure: Disclosure) -> bool {
-        match self {
-            Self::Health => true,
-            Self::Status => disclosure.status(),
-            Self::Peers => disclosure.peers(),
-            Self::Config => disclosure.config(),
-        }
-    }
-}
+use shekyl_rpc_types::methods::Grant;
 
 /// One row as `option_show` reports it and `option_set` echoes it
 /// (RT-O25). A value row carries the grammar text, or `null` when the
@@ -267,7 +243,7 @@ pub struct VisibleRow {
     /// The row, rendered.
     pub row: ShownRow,
     /// The grant the row names.
-    pub grant: RowGrant,
+    pub grant: Grant,
 }
 
 /// Why `option_show` could not answer.
@@ -427,7 +403,7 @@ pub fn option_show(
         Ok(rows) => Ok(OptionsResponse {
             options: rows
                 .into_iter()
-                .filter(|r| r.grant.shown_to(disclosure))
+                .filter(|r| disclosure.shows(r.grant))
                 .map(|r| r.row)
                 .collect(),
         }),
@@ -509,11 +485,11 @@ mod tests {
                         true,
                         Some(self.value.lock().unwrap().clone()),
                     ),
-                    grant: RowGrant::Status,
+                    grant: Grant::Status,
                 },
                 VisibleRow {
                     row: ShownRow::secret("tor-socks-password", "default", false),
-                    grant: RowGrant::Config,
+                    grant: Grant::Config,
                 },
             ];
             match names {

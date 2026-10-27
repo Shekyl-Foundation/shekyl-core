@@ -31,6 +31,7 @@ use crate::methods::{
 };
 use crate::read_facts::{ChainReadFacts, CoinbaseRange, CurveTreeFacts, PowAt, PowSeed, SpentAt};
 use shekyl_chain_rules::{EmissionEpochFacts, EmissionEpochStanding};
+use shekyl_rpc_types::methods::caller_bounded;
 use shekyl_rpc_types::{
     BlockEntry, GetBlocksByHeightRequest, GetBlocksByHeightResponse, GetOIndexesRequest,
     GetOIndexesResponse, IsKeyImageSpentRequest, IsKeyImageSpentResponse, KeyImageStatus,
@@ -452,9 +453,9 @@ pub fn get_archival_shard_coverage(
 pub fn get_blocks_by_height(
     facts: &dyn ChainReadFacts,
     request: &GetBlocksByHeightRequest,
-    restricted: bool,
+    host: bool,
 ) -> Result<GetBlocksByHeightResponse, RpcFault> {
-    if restricted && request.heights.len() > RESTRICTED_BLOCK_COUNT {
+    if caller_bounded(host) && request.heights.len() > RESTRICTED_BLOCK_COUNT {
         return Ok(GetBlocksByHeightResponse {
             status: RpcStatus("Too many blocks requested in restricted mode".to_owned()),
             blocks: Vec::new(),
@@ -497,8 +498,8 @@ pub mod tx_codes {
 /// `/get_transactions` over the store and the pool (`DRS_X_STORE_FLIP.md`
 /// DX-Q3, Q1; the review of #1165, ruling 7): today's name and request,
 /// the body in the forms `prune` and `split` choose, its height, time and
-/// output indices from the chain, or its pool entry as `grant` may see it
-/// (S6). The wallet's block fetch and its proofs read it.
+/// output indices from the chain, or its pool entry as the host may see
+/// it (S6). The wallet's block fetch and its proofs read it.
 ///
 /// `as_json` is absent: epee's rendering retires with RK-W (RW-Q4, IG-Q55),
 /// and a request asking for it is refused as bad parameters, naming the
@@ -512,7 +513,7 @@ pub mod tx_codes {
 pub fn get_transactions(
     facts: &dyn ChainReadFacts,
     request: &shekyl_rpc_types::GetTransactionsRequest,
-    grant: shekyl_rpc_types::methods::Grant,
+    host: bool,
 ) -> Result<shekyl_rpc_types::GetTransactionsResponse, shekyl_rpc_types::errors::RpcError> {
     use shekyl_rpc_types::errors::{Diagnostic, ErrorClass, RpcError};
     let status_only = |status: &str| shekyl_rpc_types::GetTransactionsResponse {
@@ -532,8 +533,9 @@ pub fn get_transactions(
             ),
         ));
     }
-    let restricted = grant == shekyl_rpc_types::methods::Grant::Any;
-    if restricted && request.txs_hashes.len() > RESTRICTED_TRANSACTIONS_COUNT {
+    // The per-request cap applies to a bounded caller (§6.3); RT-W10 step 2
+    // replaces it with the bound per row.
+    if caller_bounded(host) && request.txs_hashes.len() > RESTRICTED_TRANSACTIONS_COUNT {
         return Ok(status_only(
             "Too many transactions requested in restricted mode",
         ));
@@ -543,7 +545,7 @@ pub fn get_transactions(
         Err(status) => return Ok(status_only(&status)),
     };
     let hashes: Vec<TxHash> = ids.iter().copied().map(TxHash::from_bytes).collect();
-    let read = facts.transactions(&hashes, crate::pool_methods::scope_for(grant))?;
+    let read = facts.transactions(&hashes, crate::pool_methods::scope_for(host))?;
     if let Some(pruned) = read.pruned_here {
         let id = hex::encode(pruned.to_bytes());
         return Err(RpcError::new(
@@ -610,13 +612,13 @@ pub fn get_o_indexes(
 pub fn is_key_image_spent(
     facts: &dyn ChainReadFacts,
     request: &IsKeyImageSpentRequest,
-    restricted: bool,
+    host: bool,
 ) -> Result<IsKeyImageSpentResponse, RpcFault> {
     let refused = |status: &str| IsKeyImageSpentResponse {
         status: RpcStatus(status.to_owned()),
         spent_status: Vec::new(),
     };
-    if restricted && request.key_images.len() > RESTRICTED_SPENT_KEY_IMAGES_COUNT {
+    if caller_bounded(host) && request.key_images.len() > RESTRICTED_SPENT_KEY_IMAGES_COUNT {
         return Ok(refused("Too many key images queried in restricted mode"));
     }
     let images = match parse_request_hashes(&request.key_images, KI_PARSE_FAILED) {
@@ -656,7 +658,7 @@ mod get_transactions_tests {
                 prune: false,
                 split: false,
             },
-            shekyl_rpc_types::methods::Grant::HostOnly,
+            true,
         )
         .expect_err("refused");
         assert_eq!(

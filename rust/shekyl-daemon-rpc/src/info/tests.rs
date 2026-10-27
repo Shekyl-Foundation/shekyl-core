@@ -593,22 +593,30 @@ fn already_generated_coins_is_the_snapshots_and_is_not_netted() {
     );
 }
 
-/// The listener's posture is what `restricted` reports.
+/// The transitional `restricted` field reports whether the caller is not
+/// the host's administrator, which is what the listener posture meant.
 #[test]
-fn restricted_reports_the_listener() {
+fn restricted_reports_not_host() {
+    use crate::authority::Authority;
     let facts = synced_facts();
     assert!(
-        get_info(&facts, Disclosure::from_listener(true), 0)
+        get_info(&facts, Authority::VIEW_LISTENER.disclosure(), 0)
             .unwrap()
             .restricted
     );
     assert!(
-        !get_info(&facts, Disclosure::from_listener(false), 0)
+        !get_info(&facts, Authority::admin_listener(false).disclosure(), 0)
             .unwrap()
             .restricted
     );
-    assert_eq!(Disclosure::from_listener(true), Disclosure::VIEW);
-    assert_eq!(Disclosure::from_listener(false), Disclosure::FULL);
+    assert_eq!(
+        Authority::admin_listener(false).disclosure(),
+        Disclosure::FULL
+    );
+    // The view listener holds more grants than the `view` preset (`submit`,
+    // `mining-work`), and none of them selects a part of `get_info`.
+    let view = Authority::VIEW_LISTENER.disclosure();
+    assert!(!view.status() && !view.peers() && !view.config() && !view.host());
 }
 
 /// **A restricted reply withholds Status and Peers: the parts are

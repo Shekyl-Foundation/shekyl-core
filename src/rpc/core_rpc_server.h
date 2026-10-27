@@ -48,8 +48,8 @@ namespace cryptonote
 {
   /// Whether a bridged request's origin is the view listener's. Defined
   /// with the origins it compares against (`core_rpc_ffi.cpp`); declared
-  /// here because `core_rpc_server::caller_is_restricted` reads it.
-  bool rpc_origin_is_restricted(const epee::net_utils::connection_context_base* ctx);
+  /// here because `core_rpc_server::caller_is_host` reads it.
+  bool rpc_origin_is_host(const epee::net_utils::connection_context_base* ctx);
 
   /************************************************************************/
   /*                                                                      */
@@ -59,11 +59,11 @@ namespace cryptonote
   public:
 
     //! §55: relay stem-outcome tallies + the §18.4 floor diagnostic, one JSON
-    //! object ({"floor":[...],"tallies":[...]}). Admin-only at the
-    //! Rust route (`if !restricted` — unrestricted listener): this endpoint
-    //! is the anonymity graph, which Sharma Appendix B spends 50-100 probes
-    //! per node to reconstruct. Must not be registered on the restricted
-    //! (public) listener.
+    //! object ({"floor":[...],"tallies":[...]}). Host-only data in the Rust
+    //! method table (RPC_CHANNEL.md §6.1, RT-O9.3): this endpoint is the
+    //! anonymity graph, which Sharma Appendix B spends 50-100 probes per node
+    //! to reconstruct. It is served to the host's administrator and to no
+    //! grant.
     std::string stem_tallies_json() const;
 
     typedef epee::net_utils::connection_context_base connection_context;
@@ -116,33 +116,23 @@ namespace cryptonote
     bool on_get_archival_emission_claim_source(const COMMAND_RPC_GET_ARCHIVAL_EMISSION_CLAIM_SOURCE::request& req, COMMAND_RPC_GET_ARCHIVAL_EMISSION_CLAIM_SOURCE::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
     bool on_get_archival_shard_coverage(const COMMAND_RPC_GET_ARCHIVAL_SHARD_COVERAGE::request& req, COMMAND_RPC_GET_ARCHIVAL_SHARD_COVERAGE::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
     //-----------------------
-    /* The one question a handler asks about its caller.
+    /* The one question a handler asks about its caller: is it the host's
+     * administrator? Host-only data (RPC_CHANNEL.md §6.1, RT-O9.3) — the
+     * pool entries this node has not broadcast — is served to the host and to
+     * no one else. The bridge hands every call one of two origins
+     * (`rpc_origin`), chosen in Rust from the connection's authority; a
+     * null `ctx` is the in-process console calling `on_*` directly, which is
+     * the host. Who may call a method at all is decided in Rust, never here
+     * (`shekyl-rpc-types` `methods.rs`).
      *
-     * `m_restricted` is the listener's configured policy; `ctx` says whether
-     * a remote caller is on the other end, or whether this is the in-process
-     * console calling `on_*` directly. A restricted *caller* is both.
-     *
-     * Handlers used to spell this inline, and the sensitive-data sites spelled
-     * a second, longer form beside it:
-     *
-     *     allow_sensitive = !request_has_rpc_origin || !restricted
-     *
-     * which is `!restricted` for every one of the four (ctx, m_restricted)
-     * combinations — the extra term never changed an answer. It did make the
-     * expression half-repairable: deleting the `&& ctx` conjunct, the obvious
-     * cleanup, leaves `!request_has_rpc_origin` forcing `allow_sensitive`
-     * unconditionally true while looking exactly like a fix. One predicate,
-     * derived once, is why that shape no longer exists to be half-repaired.
-     *
-     * The `&& ctx` idiom is inherited: upstream a null `ctx` meant "an
-     * internal call, trust it". Here the bridge is the *only* caller of most
-     * of these handlers, so the same idiom quietly reads as "trust
-     * everything" — an inherited model whose premise the port changed
-     * (rule 16). Worth suspecting wherever else it appears.
+     * It replaces `caller_is_restricted`, whose `ctx && restricted` idiom was
+     * inherited: upstream a null `ctx` meant "an internal call, trust it",
+     * and the bridge being the only caller made it read as "trust everything"
+     * (rule 16). The question is now asked positively, of an identity.
      */
-    bool caller_is_restricted(const connection_context* ctx) const
+    bool caller_is_host(const connection_context* ctx) const
     {
-      return ctx && rpc_origin_is_restricted(ctx);
+      return !ctx || rpc_origin_is_host(ctx);
     }
 
 private:
@@ -161,7 +151,7 @@ private:
   /// every listener (one RPC start), so the posture is the origin's,
   /// carried per call by the bridge (`core_rpc_ffi.cpp`), never the
   /// server's. The in-process console is the admin arm.
-  const core_rpc_server::connection_context* rpc_origin(bool restricted);
+  const core_rpc_server::connection_context* rpc_origin(bool host);
 
 }
 

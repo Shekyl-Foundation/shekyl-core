@@ -826,8 +826,8 @@ where
 /// declined to answer. `5b0c32f51` ruled the other way on the staking-read
 /// path — loud, never the degrade arm — and the one production caller of these
 /// methods passes `false`, so refusing costs nothing.
-fn pow_hash_or_refuse(requested: bool, restricted: bool) -> Result<bool, RpcFault> {
-    if requested && restricted {
+fn pow_hash_or_refuse(requested: bool, bounded: bool) -> Result<bool, RpcFault> {
+    if requested && bounded {
         return Err(RpcFault::Refused(RpcRefusal {
             code: CORE_RPC_ERROR_CODE_RESTRICTED,
             message: "fill_pow_hash is not available on the restricted listener".to_owned(),
@@ -938,9 +938,9 @@ const TIP_READ_ATTEMPTS: usize = 4;
 pub fn get_last_block_header(
     facts: &dyn ChainFacts,
     fill_pow_hash: bool,
-    restricted: bool,
+    bounded: bool,
 ) -> Result<GetLastBlockHeaderResponse, RpcFault> {
-    let pow = pow_hash_or_refuse(fill_pow_hash, restricted)?;
+    let pow = pow_hash_or_refuse(fill_pow_hash, bounded)?;
     let tip = facts.chain_tip()?;
     // **The readiness check the C++ had, and only here.** `CHECK_CORE_READY()`
     // guarded `on_get_last_block_header` alone among this slice's methods —
@@ -1009,10 +1009,10 @@ pub fn get_last_block_header(
 pub fn get_block_header_by_hash(
     facts: &dyn ChainFacts,
     request: &GetBlockHeaderByHashRequest,
-    restricted: bool,
+    bounded: bool,
 ) -> Result<GetBlockHeaderByHashResponse, RpcFault> {
-    let pow = pow_hash_or_refuse(request.fill_pow_hash, restricted)?;
-    if restricted && request.hashes.len() > RESTRICTED_BLOCK_COUNT {
+    let pow = pow_hash_or_refuse(request.fill_pow_hash, bounded)?;
+    if bounded && request.hashes.len() > RESTRICTED_BLOCK_COUNT {
         return Err(RpcFault::Refused(RpcRefusal {
             code: CORE_RPC_ERROR_CODE_RESTRICTED,
             message: "Too many block headers requested in restricted mode".to_owned(),
@@ -1037,9 +1037,9 @@ pub fn get_block_header_by_hash(
 pub fn get_block_headers_range(
     facts: &dyn ChainFacts,
     request: &GetBlockHeadersRangeRequest,
-    restricted: bool,
+    bounded: bool,
 ) -> Result<GetBlockHeadersRangeResponse, RpcFault> {
-    let pow = pow_hash_or_refuse(request.fill_pow_hash, restricted)?;
+    let pow = pow_hash_or_refuse(request.fill_pow_hash, bounded)?;
     // **Both endpoints are bounded against the tip before any per-height
     // work.** The C++ refused `start > end` *and* either endpoint at or past
     // the chain height in one O(1) test; the first port kept only the
@@ -1074,7 +1074,7 @@ pub fn get_block_headers_range(
     // permits 1001 headers against a cap of 1000 — the same off-by-one the
     // deleted singular `hash` produced on `get_block_header_by_hash`, in the
     // second of the two methods that carry this cap. Found by porting both.
-    if restricted && span > RESTRICTED_BLOCK_HEADER_RANGE {
+    if bounded && span > RESTRICTED_BLOCK_HEADER_RANGE {
         return Err(RpcFault::Refused(RpcRefusal {
             code: CORE_RPC_ERROR_CODE_RESTRICTED,
             message: "Too many block headers requested.".to_owned(),
@@ -2091,10 +2091,10 @@ pub(crate) mod tests {
         );
 
         let mut ours: serde_json::Value = serde_json::to_value(&out).unwrap();
-        // Head of the `get_version` chain (`_v38` = 3.61). A bump that
+        // Head of the `get_version` chain (`_v39` = 3.62). A bump that
         // forgets this include fails on `version` below.
         let mut oracle: serde_json::Value = serde_json::from_str(include_str!(
-            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v38.json"
+            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v39.json"
         ))
         .unwrap();
         for moving in ["consensus_constants_digest", "genesis_hash"] {

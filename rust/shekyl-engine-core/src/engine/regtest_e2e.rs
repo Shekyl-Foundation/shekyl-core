@@ -204,6 +204,14 @@ pub(super) struct GenerateBlocksResp {
     blocks: Vec<String>,
 }
 
+/// The network a test daemon runs on. Regtest for every spawn but the one
+/// that shows what the armed switch serves on a shared test network.
+#[derive(Clone, Copy)]
+enum SpawnNetwork {
+    Regtest,
+    Testnet,
+}
+
 /// How one regtest daemon is spawned.
 ///
 /// The fields are the postures a caller can ask for, named at the call
@@ -211,6 +219,7 @@ pub(super) struct GenerateBlocksResp {
 /// a stem/sink pair takes it once, on the origin.
 struct RegtestSpawn {
     serial: Option<OwnedMutexGuard<()>>,
+    network: SpawnNetwork,
     schedule: Option<RegtestSchedule>,
     restricted_listener: bool,
     console: bool,
@@ -222,6 +231,7 @@ impl RegtestSpawn {
     fn new(serial: Option<OwnedMutexGuard<()>>) -> Self {
         Self {
             serial,
+            network: SpawnNetwork::Regtest,
             schedule: None,
             restricted_listener: false,
             console: false,
@@ -231,6 +241,14 @@ impl RegtestSpawn {
 
     fn with_console(mut self) -> Self {
         self.console = true;
+        self
+    }
+
+    /// Spawn on `network` instead of regtest. The regtest-only rows
+    /// (`dev-difficulty`, the schedule) are not passed off regtest, where the
+    /// daemon refuses them, so such a daemon cannot mine quickly.
+    fn on_network(mut self, network: SpawnNetwork) -> Self {
+        self.network = network;
         self
     }
 
@@ -317,6 +335,13 @@ impl RegtestDaemon {
         Self::spawn(RegtestSpawn::new(Some(serial)).with_restricted_listener()).await
     }
 
+    /// Spawn the daemon offline on testnet, with the armed switch set as on
+    /// every spawn. It has no fixed difficulty, which is regtest's.
+    pub(super) async fn start_on_testnet() -> RegtestDaemon {
+        let serial = serial_lock().lock_owned().await;
+        Self::spawn(RegtestSpawn::new(Some(serial)).on_network(SpawnNetwork::Testnet)).await
+    }
+
     /// Spawn the daemon with an optional regtest schedule on its command
     /// line — `--dev-settlement-epoch-blocks` and
     /// `--dev-archival-reorg-depth`, the regtest-only rows the daemon arms
@@ -341,6 +366,7 @@ impl RegtestDaemon {
     async fn spawn(spec: RegtestSpawn) -> RegtestDaemon {
         let RegtestSpawn {
             serial,
+            network,
             schedule,
             restricted_listener,
             console,
@@ -368,13 +394,13 @@ impl RegtestDaemon {
         // The grammar's spellings (INPUT_GRAMMAR.md §5). Tor is off on
         // every spawn: regtest's default is the managed Tor, and a test
         // daemon has no business launching one.
+        match network {
+            SpawnNetwork::Regtest => cmd.args(["--network", "regtest", "--dev-difficulty", "1"]),
+            SpawnNetwork::Testnet => cmd.args(["--network", "testnet"]),
+        };
         cmd.args([
-            "--network",
-            "regtest",
             "--tor",
             "off",
-            "--dev-difficulty",
-            "1",
             "--rpc-admin-listen",
             &format!("127.0.0.1:{rpc_port}"),
             "--data-dir",
@@ -389,12 +415,11 @@ impl RegtestDaemon {
             // daemon rejected instead of a bare `Malformed`.
             "--log-level",
             "info",
-            // The armed test levers (`generateblocks`, `pop_blocks`) are
-            // served only with this row set once dispatch reads the method
-            // table's `armed` column (DRS-X flip). Today's C++ path does
-            // not read it, so setting it now changes nothing and removes
-            // the flip's red. The daemon announces it at start, and
-            // `await_ready` holds it to that.
+            // The armed test levers (`generateblocks`, `pop_blocks`,
+            // `inject_archival_serve_credit`) are served only with this
+            // switch set (`RPC_CHANNEL.md` §6.1): the RPC layer refuses
+            // them otherwise, on every network. The daemon announces it at
+            // start, and `await_ready` holds it to that.
             "--dev-rpc",
         ]);
         match peering {
@@ -783,14 +808,14 @@ impl RegtestDaemon {
             .expect("daemon was not spawned with a restricted listener")
     }
 
-    /// Mine `n` blocks to `address` (FAKECHAIN-gated daemon RPC).
+    /// Mine `n` blocks to `address` (an armed test lever: `--dev-rpc`).
     pub(super) async fn generate_blocks(&self, n: u64, address: &str) -> GenerateBlocksResp {
         try_generate_blocks(&self.rpc, n, address)
             .await
             .expect("generateblocks")
     }
 
-    /// Roll the chain back `n` blocks (FAKECHAIN-gated `/pop_blocks`, a direct
+    /// Roll the chain back `n` blocks (`/pop_blocks`, an armed test lever, a direct
     /// route — not `json_rpc`). Exercises the daemon's `pop_block`
     /// deferred-insertion tree rollback (popping `H` removes the leaves of
     /// outputs created at `H − maturity`).
@@ -984,7 +1009,7 @@ async fn maybe_capture_live_oracle(
     eprintln!("captured live-oracle spend KAT -> {}", path.display());
 }
 
-/// Mine `n` blocks to `address` over `rpc` (FAKECHAIN-gated `generateblocks`),
+/// Mine `n` blocks to `address` over `rpc` (`generateblocks`, an armed test lever),
 /// returning the RPC error instead of panicking. Free-standing so a caller
 /// that cannot borrow a [`RegtestDaemon`] into a `'static` task — the GF-7
 /// sealing-run background miner, which owns an independent client and must
@@ -1116,6 +1141,81 @@ async fn regtest_daemon_spawns_and_mines_to_wallet_address() {
         "generateblocks should return 3 hashes"
     );
     assert!(after >= before + 3, "chain should advance by >= 3 blocks");
+}
+
+/// The armed switch on a shared test network (`RPC_CHANNEL.md` §6.1,
+/// RT-O36). On testnet, with `dev-rpc` set, `generateblocks` and
+/// `/pop_blocks` pass the armed gate and are served, and
+/// `inject_archival_serve_credit` passes it too but is refused by its
+/// chain setter, which keeps a regtest-only restriction: the network
+/// narrows what the switch enables and never enables a lever.
+///
+/// Zero blocks keeps the probes cheap: a testnet daemon has no fixed
+/// difficulty, and the claim is about admission, not mining. A gate
+/// refusal would be the grant class (-32002); the setter's refusal is the
+/// handler's own error, after the gate.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
+async fn the_armed_switch_on_testnet_serves_two_levers_and_the_setter_refuses_inject() {
+    const OUTSIDE_THE_GRANT: i64 = -32_002;
+    let daemon = RegtestDaemon::start_on_testnet().await;
+    let call = |method: &'static str, params: serde_json::Value| {
+        let rpc = &daemon.rpc;
+        async move {
+            rpc.rpc_call::<_, serde_json::Value>(
+                "json_rpc",
+                Some(json!({ "jsonrpc": "2.0", "id": 0, "method": method, "params": params })),
+            )
+            .await
+            .unwrap_or_else(|e| panic!("{method}: {e:?}"))
+        }
+    };
+
+    let generated = call(
+        "generateblocks",
+        json!({ "amount_of_blocks": 0, "wallet_address": "" }),
+    )
+    .await;
+    assert!(
+        generated.get("error").is_none() && generated["result"]["status"] == "OK",
+        "generateblocks is served on armed testnet: {generated}"
+    );
+
+    let popped = daemon
+        .rpc
+        .rpc_call::<_, serde_json::Value>("pop_blocks", Some(json!({ "nblocks": 0 })))
+        .await
+        .expect("pop_blocks");
+    assert!(
+        popped.get("error").is_none() && popped["status"] == "OK",
+        "/pop_blocks is served on armed testnet: {popped}"
+    );
+
+    let injected = call(
+        "inject_archival_serve_credit",
+        json!({ "p_canonical_id": "11".repeat(32), "shard_id": 0, "settlement_epoch": 0 }),
+    )
+    .await;
+    let error = &injected["error"];
+    assert!(
+        error.is_object(),
+        "inject_archival_serve_credit must be refused off regtest: {injected}"
+    );
+    assert_ne!(
+        error["code"].as_i64(),
+        Some(OUTSIDE_THE_GRANT),
+        "the gate admitted the lever; the refusal is the setter's: {injected}"
+    );
+    assert_eq!(
+        error["message"], "Serve-credit injection failed",
+        "the setter's regtest restriction refused it: {injected}"
+    );
+    let log = std::fs::read_to_string(daemon.data_dir.join("daemon.log")).unwrap_or_default();
+    assert!(
+        log.contains("regtest_inject_archival_serve_credit called off fakechain; refusing"),
+        "the daemon log names the network refusal; tail:\n{}",
+        log_tail(&daemon.data_dir.join("daemon.log"))
+    );
 }
 
 /// Acceptance gate for the §8 step-4 scanner migration (shekyl-oxide → shekyl-wire

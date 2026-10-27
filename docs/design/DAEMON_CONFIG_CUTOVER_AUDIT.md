@@ -194,8 +194,8 @@ of its own, for the same reason as the negative one.
   the last act of §2.2 step 7, so its completion is the one signal that
   the core exists; no second export is needed for it. One server, one
   connection tracker, two routers: `rpc-admin-listen` at the admin
-  preset, `rpc-view-listen` at the view preset
-  (`rust/shekyl-daemon-rpc/src/server.rs`, `serve_presets`). The C++
+  listener, `rpc-view-listen` at the view listener
+  (`rust/shekyl-daemon-rpc/src/server.rs`, `serve_listeners`). The C++
   `core_rpc_server` is one object with no posture of its own: a bridged
   call carries its listener's posture as one of two origins
   (`core_rpc_ffi.cpp`, `rpc_origin`), `caller_is_restricted` reads the

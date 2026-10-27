@@ -29,7 +29,7 @@ fn fetch_alt_chains(src: &Source) -> Result<Vec<AltChainInfo>, String> {
     let reply: GetAlternateChainsResponse = match src {
         Source::Live(core) => {
             let raw = core
-                .json_rpc("get_alternate_chains", "{}", false)
+                .json_rpc("get_alternate_chains", "{}", true)
                 .ok_or_else(|| "no reply from get_alternate_chains".to_owned())?;
             ffi_json_rpc_result(&raw, "get_alternate_chains")?
         }

@@ -435,7 +435,7 @@ impl Node {
 
     /// Whether the node was started with `dev-rpc`: the switch the armed
     /// test levers are admitted under
-    /// (`shekyl_daemon_rpc::mining_methods::admit_armed`).
+    /// (`shekyl_rpc_types::methods::admit_armed`).
     #[must_use]
     pub const fn armed_levers(&self) -> bool {
         self.armed

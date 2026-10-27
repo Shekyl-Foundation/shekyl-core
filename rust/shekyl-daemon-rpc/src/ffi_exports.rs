@@ -8,8 +8,8 @@
 //! The Rust `main()` records the RPC section before the C++ remnant is
 //! constructed ([`configure`]). The remnant's one start call,
 //! [`shekyl_daemon_rpc_start`], carries the core handle and nothing else:
-//! it binds every `rpc-admin-listen` endpoint at the admin preset and every
-//! `rpc-view-listen` endpoint at the view preset, loopback only, with the
+//! it binds every `rpc-admin-listen` endpoint at the admin listener and every
+//! `rpc-view-listen` endpoint at the view listener, loopback only, with the
 //! origin list and the one connection cap, and serves them on a runtime held
 //! here. It is the last act of §2.2 step 7, so its completion is what
 //! `main()` waits for before step 8.
@@ -39,7 +39,7 @@ use crate::conn_limit::ConnLimits;
 use crate::core::CoreRpc;
 use crate::handles::Handles;
 use crate::options::{OptionsAbsent, OptionsHandle};
-use crate::server::{serve_presets, ServerConfig};
+use crate::server::{serve_listeners, ServerConfig};
 
 /// Structural floor, the same pair the transport runtime is built with.
 /// Tokio's unset worker count and its 512 blocking cap are the defaults
@@ -56,6 +56,8 @@ struct Pending {
     section: Rpc,
     options: OptionsHandle,
     handles: Handles,
+    /// The node's `dev-rpc` switch (`RPC_CHANNEL.md` §6.1).
+    armed: bool,
     constructed: oneshot::Sender<Result<(), String>>,
 }
 
@@ -73,6 +75,10 @@ static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
 /// methods read it before any dialer call. Default false, so a process
 /// that never configured still asks the dialer.
 static OFFLINE: AtomicBool = AtomicBool::new(false);
+/// The armed-lever switch the last [`configure`] recorded. [`Pending`] is
+/// taken at start, so the in-process console cannot read it from there.
+/// Default false: a console that runs before configure fails closed.
+static ARMED: AtomicBool = AtomicBool::new(false);
 /// The options handle the last `configure` recorded, for the in-process
 /// console arm, which has the core and not the server's state.
 static OPTIONS: Mutex<Option<OptionsHandle>> = Mutex::new(None);
@@ -101,6 +107,17 @@ fn store_offline(offline: bool) {
     OFFLINE.store(offline, Ordering::Release);
 }
 
+/// Whether this daemon was started with `dev-rpc`. The in-process console
+/// admits an armed lever under this bit. Default false.
+#[must_use]
+pub(crate) fn armed() -> bool {
+    ARMED.load(Ordering::Acquire)
+}
+
+fn store_armed(armed: bool) {
+    ARMED.store(armed, Ordering::Release);
+}
+
 /// Records the RPC section, whether the daemon is offline, and the options
 /// handle (`option_set` and `option_show`'s owner, RT-O26) for the one
 /// start call and returns the receiver that call completes: `Ok(())` once
@@ -114,14 +131,17 @@ pub fn configure(
     options: OptionsHandle,
     handles: Handles,
     offline: bool,
+    armed: bool,
 ) -> oneshot::Receiver<Result<(), String>> {
     let (constructed, rx) = oneshot::channel();
     store_offline(offline);
+    store_armed(armed);
     *slot(&OPTIONS) = Some(Arc::clone(&options));
     *slot(&PENDING) = Some(Pending {
         section,
         options,
         handles,
+        armed,
         constructed,
     });
     rx
@@ -142,6 +162,7 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_start(rpc_server_ptr: *mut c_void) ->
         section,
         options,
         handles,
+        armed,
         constructed,
     }) = slot(&PENDING).take()
     else {
@@ -149,7 +170,7 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_start(rpc_server_ptr: *mut c_void) ->
         return -1;
     };
     // SAFETY: the caller's contract above.
-    match unsafe { start(&section, options, handles, rpc_server_ptr) } {
+    match unsafe { start(&section, options, handles, armed, rpc_server_ptr) } {
         Ok(running) => {
             *slot(&RUNNING) = Some(running);
             // The receiver is gone only if the entry already gave up.
@@ -174,6 +195,7 @@ unsafe fn start(
     section: &Rpc,
     options: OptionsHandle,
     handles: Handles,
+    armed: bool,
     rpc_server_ptr: *mut c_void,
 ) -> Result<Running, String> {
     if rpc_server_ptr.is_null() {
@@ -205,13 +227,14 @@ unsafe fn start(
         conn_limits,
         options,
         handles,
+        armed,
         ..Default::default()
     };
     // Level-triggered: a stop that lands before any acceptor has polled is
     // still observed by `wait_for`. One sender, cloned into every acceptor.
     let (shutdown, shutdown_rx) = watch::channel(false);
     let serve = rt.spawn(async move {
-        if let Err(e) = serve_presets(Arc::new(core), config, admin, view, shutdown_rx).await {
+        if let Err(e) = serve_listeners(Arc::new(core), config, admin, view, shutdown_rx).await {
             tracing::error!("daemon-rpc server error: {e}");
         }
     });
@@ -283,7 +306,13 @@ mod tests {
             cors_origins: Vec::new(),
             connections_max: NonZeroU32::MIN,
         };
-        let _started = configure(section, Arc::new(OptionsAbsent), Handles::absent(), true);
+        let _started = configure(
+            section,
+            Arc::new(OptionsAbsent),
+            Handles::absent(),
+            true,
+            false,
+        );
         assert_eq!(CoreRpc::p2p_state(), Ok(P2pRead::Offline));
         assert_eq!(CoreRpc::peerlist_sizes(), Ok(P2pRead::Offline));
         store_offline(false);
