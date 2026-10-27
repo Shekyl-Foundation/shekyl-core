@@ -278,11 +278,14 @@ def measure(args):
     for sk in held:
         sk.close()
 
-    def spawn(tag, d, argv_extra):
+    def spawn(tag, d, argv_extra, offline=False):
         p2p, rpcp = (sp2p, srpc) if tag == "seed" else (bp2p, brpc)
-        argv = [args.daemon] + common + ["--data-dir", d,
-                                         "--clearnet-listen", f"127.0.0.1:{p2p}",
-                                         "--rpc-admin-listen", f"127.0.0.1:{rpcp}"] + argv_extra
+        # An offline daemon has no clearnet connector, and the grammar refuses
+        # a listen endpoint for a connector that is off.
+        net = ["--clearnet", "off"] if offline else ["--clearnet-listen",
+                                                     f"127.0.0.1:{p2p}"]
+        argv = [args.daemon] + common + ["--data-dir", d] + net + [
+            "--rpc-admin-listen", f"127.0.0.1:{rpcp}"] + argv_extra
         with open(os.path.join(work, f"{tag}.argv"), "a", encoding="utf-8") as fh:
             fh.write(" ".join(argv) + "\n")
         # The SUBJECT's log is truncated; the seed's is appended. That asymmetry is
@@ -312,7 +315,7 @@ def measure(args):
     # the check reads only the bytes this spawn wrote.
     seed_log = os.path.join(work, "seed.log")
     seed_from = armed_lever.log_size(seed_log)
-    proc, _ = spawn("seed", seed_dir, ["--clearnet", "off", armed_lever.FLAG])
+    proc, _ = spawn("seed", seed_dir, [armed_lever.FLAG], offline=True)
     with running(proc, srpc) as seed:
         if not seed.ready:
             _fail(f"seed RPC on 127.0.0.1:{srpc} never came up "
