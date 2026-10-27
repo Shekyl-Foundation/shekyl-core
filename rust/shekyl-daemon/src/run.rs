@@ -325,6 +325,7 @@ fn supervise(
         options,
         handles,
         config.offline(),
+        config.dev.rpc,
     );
     // Step 6: the notify runner, installed before the core that pushes to
     // it exists; its children run on the signal owner's runtime (§2.10).

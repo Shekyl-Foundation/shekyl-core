@@ -25,6 +25,8 @@ strsim = "0.11"
 zeroize = { workspace = true }
 # A v3 onion address is checked, not pattern-matched.
 shekyl-onion-v3 = { path = "../shekyl-onion-v3" }
+# The grant a row names under `option show` (RT-O24): the RPC's grants.
+shekyl-rpc-grants = { path = "../shekyl-rpc-grants" }
 
 [lints]
 workspace = true

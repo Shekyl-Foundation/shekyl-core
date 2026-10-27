@@ -4929,6 +4929,7 @@ name = "shekyl-options"
 version = "3.1.0"
 dependencies = [
  "shekyl-onion-v3",
+ "shekyl-rpc-grants",
  "strsim",
  "toml 0.8.23",
  "zeroize",
@@ -5210,6 +5211,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-rpc-grants"
+version = "3.1.0"
+
+[[package]]
 name = "shekyl-rpc-stream"
 version = "3.1.0"
 dependencies = [
@@ -5253,6 +5258,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "shekyl-portable-storage",
+ "shekyl-rpc-grants",
  "shekyl-units",
  "shekyl-wire",
 ]

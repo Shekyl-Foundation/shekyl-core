@@ -32,6 +32,7 @@ mod blockchain;
 mod identity;
 mod info;
 mod node;
+mod pop_blocks;
 mod status;
 #[cfg(test)]
 mod tests;
@@ -774,6 +775,7 @@ pub unsafe extern "C" fn shekyl_daemon_console_run(
         "diff" => node::show_difficulty(&source),
         "version" => node::version(&source),
         "print_pool_stats" => node::print_transaction_pool_stats(&source, unix_now()),
+        "pop_blocks" => pop_blocks::pop_blocks(&source, args.get(1)),
         _ => return SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN,
     };
     match result {

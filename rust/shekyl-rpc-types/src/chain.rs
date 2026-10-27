@@ -208,7 +208,16 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// id the chain does not hold under `unavailable_tx`. A 3.60 reader decodes
 /// `tx_pool_size` as a number and knows neither key. `get_version` gains
 /// nothing.
-pub const CORE_RPC_VERSION_MINOR: u32 = 61;
+/// 3.62: a refusal by grant is the JSON-RPC error object on every surface
+/// (`RPC_WIRE.md` RW-Q3): class `OutsideTheGrant` (-32002) with its typed
+/// diagnostic, where a gated JSON-RPC method was HTTP 403 with -32601 and a
+/// gated REST path was a 404. A path or a name that is not a method stays
+/// not found. The view listener refuses
+/// `/get_alt_blocks_hashes` (`status`), and `calc_pow` and
+/// `get_coinbase_tx_sum` are refused to a bounded caller as
+/// `OverResourceBound` (-32003) until their bounds are set (RT-W10).
+/// `get_version` gains nothing.
+pub const CORE_RPC_VERSION_MINOR: u32 = 62;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -629,11 +638,12 @@ mod tests {
         // later merge took the next minor, as 3.44 did. 3.59 drops
         // `support_flags` from the connection rows (PWD-T7). 3.60 renames
         // the claim-source bond field to `is_support_complete_tree`. 3.61
-        // answers the chain's reads over a retired pool.
-        assert_eq!(CORE_RPC_VERSION, 196_669);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 61);
+        // answers the chain's reads over a retired pool. 3.62 makes a grant
+        // refusal the error object (RT-W10 step 1).
+        assert_eq!(CORE_RPC_VERSION, 196_670);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 62);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 61);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 62);
     }
 
     #[test]
