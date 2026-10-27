@@ -82,6 +82,23 @@ pub enum WindowSource {
     Published,
 }
 
+/// The quiet threshold: the evidence that a connector reaches nothing. The
+/// dialer's quiet guard holds while the connector holds no session,
+/// outbound or inbound, its last `attempts` attempts all ended without
+/// opening a stream, and at least `span_nanos` has passed since a stream
+/// last opened there; any opened stream resets both. Then a failed test
+/// cools at the first step and does not climb, and a white address is not
+/// demoted (Rick, 2026-10-26 and 2026-10-27).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct QuietThreshold {
+    /// K: the smallest k with `p_fail^k < 10⁻³` on a working link at the
+    /// half-dead fraction, `p_fail` measured on the floor device.
+    pub attempts: u32,
+    /// S: at least one full window, and at least the time K attempts take
+    /// at the connector's bound and pace, in nanoseconds.
+    pub span_nanos: u64,
+}
+
 /// One connector's dial profile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DialProfile {
@@ -99,6 +116,8 @@ pub struct DialProfile {
     pub window: WindowSource,
     /// The gap between the dialer's wakes (R3): one wake, one dial.
     pub wake: JitteredSpan,
+    /// The quiet guard's evidence threshold.
+    pub quiet: QuietThreshold,
 }
 
 /// The retry waits every connector starts from: 5 s + U(0, 5 s) before the
@@ -155,6 +174,16 @@ pub const fn dial_profile(connector: ConnectorId) -> DialProfile {
             cooldown: COOLDOWN,
             window: WindowSource::DialDeadline(CLEARNET_DIAL_WITHIN_NANOS),
             wake: WAKE,
+            // **Derived** (§97, "Gray cooldown"; shekyl-dev data
+            // `dial-profile/2026-10-27-clearnet-pfail`, the floor device):
+            // 0 of 283 attempts to live peers failed, so `p_fail` = 0.5 at
+            // half dead and K = 10. S: ten attempts at bound 1, each holding
+            // the slot for at most the 1.415 s deadline and the next waiting
+            // up to 1.5 s for its wake, about 29 s.
+            quiet: QuietThreshold {
+                attempts: 10,
+                span_nanos: 30 * SECOND_NANOS,
+            },
         },
         // Tor: the bound is Measured on the floor device (§97, "In-flight
         // dial bound"); three attempts per test, since a failed dial is
@@ -168,6 +197,15 @@ pub const fn dial_profile(connector: ConnectorId) -> DialProfile {
             cooldown: COOLDOWN,
             window: WindowSource::Published,
             wake: WAKE,
+            // **Derived** (§97, "Gray cooldown"; shekyl-dev data
+            // `inflight-bound/2026-10-26-final-head`, the floor device): 189
+            // of 336 attempts failed at half dead, `p_fail` 0.5625, so K = 13.
+            // S: thirteen attempts at bound 5 are three rounds, each up to
+            // the full window (replies at 104 to 113 s), about 345 s.
+            quiet: QuietThreshold {
+                attempts: 13,
+                span_nanos: 345 * SECOND_NANOS,
+            },
         },
     }
 }
@@ -198,6 +236,14 @@ mod tests {
             WindowSource::DialDeadline(CLEARNET_DIAL_WITHIN_NANOS)
         );
         assert_eq!(tor.window, WindowSource::Published);
+        assert_eq!(
+            (clearnet.quiet.attempts, clearnet.quiet.span_nanos),
+            (10, 30_000_000_000)
+        );
+        assert_eq!(
+            (tor.quiet.attempts, tor.quiet.span_nanos),
+            (13, 345_000_000_000)
+        );
         for connector in ConnectorId::ALL {
             let profile = dial_profile(*connector);
             let second = profile.retry_waits.before_second;

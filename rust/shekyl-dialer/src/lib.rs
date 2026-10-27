@@ -47,6 +47,6 @@ pub use fill::{plan, Census, DialAim, DrawList, FillRule, Plan};
 pub use link_tally::{TallySink, TorLinkTally};
 pub use nonce::{HandshakeNonce, HandshakeNonceSet, InFlightNonce};
 pub use owner::{session_of, Applied, Dialer, Launch, NotReady, Shared, SnapshotSource};
-pub use pace::{attempts_per_test, draw, next_wake_nanos, retry_wait_nanos, QUIET_AFTER_NANOS};
+pub use pace::{attempts_per_test, draw, next_wake_nanos, retry_wait_nanos};
 pub use seeds::{seeds, SeedNetwork};
 pub use store::{AddressStore, LoadError, STORE_INTERVAL_NANOS};

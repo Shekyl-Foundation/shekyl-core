@@ -858,16 +858,20 @@ seats are evictable like drawable ones); the file rule (slice 1 brief
 `DAEMON_RELAY_PRIVACY.md` §97. The failed-address memory is deleted
 into this (below).
 
-**The quiet stretch (Rick, 2026-10-26).** While a connector holds no
-session and none has opened there for the quiet stretch, a failed test
-cools at the first step and does not climb (`Ladder::FirstStep` in
-`shekyl-peerlist`: the first rung's cooldown, and the consecutive count
-held at least one). The condition is the dialer's own evidence, read
-when a test cools (`shekyl-dialer/src/owner/quiet.rs`): no session held
-on the connector, outbound or inbound, and no dial on it reached a peer
-for `QUIET_AFTER_NANOS`, five minutes, the same constant the managed-Tor
-posture line reads (`TOR_SUPERVISOR.md` §4.2; the daemon builds the
-supervisor's `Policy` from it), never a second number. Outside the
+**The quiet stretch (Rick, 2026-10-26; counted as evidence, 2026-10-27).**
+While a connector holds no session, its last K attempts all ended without
+opening a stream, and at least S has passed since one last opened there,
+a failed test cools at the first step and does not climb
+(`Ladder::FirstStep` in `shekyl-peerlist`: the first rung's cooldown, and
+the consecutive count held at least one). The condition is the dialer's
+own evidence, read when a test cools (`shekyl-dialer/src/owner/quiet.rs`);
+any opened stream resets the count and the span. K and S are the
+connector's dial profile's quiet threshold (`dial_profile(connector).quiet`,
+derived in `DAEMON_RELAY_PRIVACY.md` §97 from each connector's failure
+rate measured on the floor device): clearnet 10 attempts across 30 s, Tor
+13 attempts across 345 s. Tor's S is also the managed-Tor posture line's
+`quiet_after` (`TOR_SUPERVISOR.md` §4.2; the daemon builds the
+supervisor's `Policy` from the profile), never a second number. Outside the
 condition the ladder steps as before. Both connectors, one mechanism. It
 is the dialer's judgement of its own evidence about addresses, not a
 verdict on the link, and nothing is announced (`TSR-Q14`). Why: on a

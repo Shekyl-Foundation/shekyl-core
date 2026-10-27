@@ -32,7 +32,6 @@ use shekyl_options::PeerEndpoint;
 use shekyl_peerlist::Peerlist;
 use std::net::SocketAddr;
 
-pub use shekyl_dialer::QUIET_AFTER_NANOS;
 pub use shekyl_peerlist::{ConnectorId, NetworkAddress};
 use shekyl_rpc_types::DaemonNetwork;
 use shekyl_seam::{connector_from_index, CloseCause, Hub, SocketId, SyncPayload};

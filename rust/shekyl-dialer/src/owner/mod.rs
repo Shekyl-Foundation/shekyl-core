@@ -140,6 +140,9 @@ pub struct Shared {
     /// When an attempt on each connector last opened a stream, or when the
     /// dialer was built: the start of its quiet stretch ([`quiet`]).
     last_opened: [Tick; ConnectorId::COUNT],
+    /// Each connector's attempts ended without opening a stream since one
+    /// last opened there ([`quiet`]).
+    unopened: [u32; ConnectorId::COUNT],
 }
 
 impl Shared {
@@ -262,6 +265,7 @@ impl Dialer {
                 tor_link: LinkFold::new(),
                 inbound: [0; ConnectorId::COUNT],
                 last_opened: [started; ConnectorId::COUNT],
+                unopened: [0; ConnectorId::COUNT],
             })),
             nonces: HandshakeNonceSet::new(),
             stop: Arc::new(AtomicBool::new(false)),
@@ -690,7 +694,7 @@ impl Dialer {
         now: Tick,
         rng: &mut R,
     ) {
-        Self::note_opened(shared, connector, outcome, now);
+        Self::note_attempt(shared, connector, outcome, now);
         let ladder = Self::ladder(shared, connector, now);
         shared.attempts(connector).finish(outcome);
         shared.lists.apply(outcome, now, ladder, rng);
@@ -746,7 +750,7 @@ impl Dialer {
                             ran_nanos / 1_000_000,
                             wait / 1_000_000
                         );
-                        Self::note_opened(shared, connector, outcome, now);
+                        Self::note_attempt(shared, connector, outcome, now);
                         let held = Self::tor_held(shared);
                         shared.tor_link.observe(connector, outcome, held);
                         return;

@@ -27,20 +27,6 @@ pub fn next_wake_nanos<R: RelayRng + ?Sized>(wake: JitteredSpan, rng: &mut R) ->
     draw(wake, rng)
 }
 
-/// Nanoseconds in one second.
-const SECOND_NANOS: u64 = 1_000_000_000;
-
-/// The quiet stretch: how long a connector holds no session and no stream
-/// opens there before a failed test cools at the first step and does not
-/// climb (the dialer, Rick 2026-10-26), and before the managed-Tor
-/// supervisor's posture line says no Tor connection has opened
-/// (`TOR_SUPERVISOR.md` §4.2: the daemon builds its `Policy` from this).
-/// One number for both.
-///
-/// **Assumption** (`DAEMON_RELAY_PRIVACY.md` §97): five minutes,
-/// provisional until the floor-device soak.
-pub const QUIET_AFTER_NANOS: u64 = 300 * SECOND_NANOS;
-
 /// How many attempts one test makes of an address drawn from `list`, on
 /// the connector's `attempts` (the gray lifecycle, Rick 2026-10-24 and
 /// 2026-10-26: a white address is known-working, so its test may give it

@@ -11,7 +11,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use shekyl_dialer::{Dialer, QUIET_AFTER_NANOS};
+use shekyl_dialer::Dialer;
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{CloseCause, CloseKind, ConnectorId, NetworkAddress, Tick};
 use shekyl_seam::{Dial, Hub, SocketId};
@@ -20,7 +20,6 @@ use shekyl_transport_layer::Sockets;
 
 use super::{dialer_on, onions, peer, reply, HeldDial, CLEARNET, NETWORK, TOR, TOR_WINDOW};
 
-const QUIET_AFTER: Duration = Duration::from_nanos(QUIET_AFTER_NANOS);
 /// One rig for white is known-working (Rick, 2026-10-26): `count` addresses
 /// on `connector`, each made white by a kept session that the peer then
 /// closed, so every one is white and none is held.
@@ -116,6 +115,38 @@ impl WhiteRig {
         }
     }
 
+    /// The quiet guard's evidence, with nothing held: S passes, then K
+    /// fresh gray addresses each fail at once (gray is drawn while white is
+    /// under its floor), and stay cooling while the white test runs.
+    fn prime_quiet(&mut self) {
+        let quiet = shekyl_peerlist::dial_profile(self.connector).quiet;
+        self.advance(Duration::from_nanos(quiet.span_nanos));
+        let k = usize::try_from(quiet.attempts).expect("small");
+        let (primers, cause): (Vec<NetworkAddress>, CloseCause) = match self.connector {
+            ConnectorId::Tor => (
+                onions(self.white.len() + k).split_off(self.white.len()),
+                shekyl_tor::refused(0xF1),
+            ),
+            ConnectorId::Clearnet => (
+                (1..=k)
+                    .map(|n| peer(900 + u16::try_from(n).expect("small")))
+                    .collect(),
+                CloseCause::new(CloseKind::DialFailed),
+            ),
+        };
+        for address in &primers {
+            self.dialer
+                .admit_operator(address, self.clock.now(), &mut self.rng)
+                .expect("admitted");
+        }
+        for _ in 0..k {
+            self.attempt(cause, Duration::ZERO);
+        }
+        for address in &primers {
+            assert!(self.is_cooling(address), "{address:?}: a primer failed");
+        }
+    }
+
     fn fail_one_test(&mut self) {
         let (cause, took, attempts) = self.failing_test();
         for _ in 0..attempts {
@@ -194,15 +225,15 @@ fn a_clearnet_white_address_whose_redial_succeeds_stays_white() {
     );
 }
 
-/// **In a quiet stretch white failures do not demote**: nothing held and
-/// nothing opened for the stretch, so the failures say nothing about the
-/// address. Both connectors.
+/// **In a quiet stretch white failures do not demote**: nothing held, the
+/// last K attempts unopened and S passed, so the failures say nothing about
+/// the address. Both connectors.
 #[test]
 fn in_a_quiet_stretch_white_failures_do_not_demote() {
     for (connector, seed) in [(TOR, 75), (CLEARNET, 76)] {
         let mut rig = WhiteRig::new(connector, seed, 1);
         let address = rig.white[0].clone();
-        rig.advance(QUIET_AFTER);
+        rig.prime_quiet();
         rig.fail_one_test();
         assert!(
             rig.is_white(&address) && !rig.is_cooling(&address),
@@ -211,9 +242,8 @@ fn in_a_quiet_stretch_white_failures_do_not_demote() {
     }
 }
 
-/// **With one session held, white failures demote**, though nothing has
-/// opened for the quiet stretch's length: the held session says the link
-/// works. Both connectors.
+/// **With one session held, white failures demote**, though S has passed:
+/// the held session says the link works. Both connectors.
 #[test]
 fn with_one_session_held_white_failures_demote() {
     for (connector, seed) in [(TOR, 77), (CLEARNET, 78)] {
@@ -232,7 +262,8 @@ fn with_one_session_held_white_failures_demote() {
             .find(|address| !held.contains(*address))
             .cloned()
             .expect("one not held");
-        rig.advance(QUIET_AFTER);
+        let span = shekyl_peerlist::dial_profile(connector).quiet.span_nanos;
+        rig.advance(Duration::from_nanos(span));
         rig.fail_one_test();
         assert!(
             !rig.is_white(&failing) && rig.is_cooling(&failing),
