@@ -84,16 +84,17 @@ def _dir_bytes(path, apparent):
                               text=True).stdout.split()[0])
 
 
-def _resolved_sync_line(log_path):
+def _resolved_sync_line(log_path, since=0):
     """The daemon's own report of the durability flags it resolved, or None.
 
-    This is the readback. The daemon logs it at startup for A4, so the harness no
-    longer has to settle for recording the argv it imposed: it can check what the
-    node says it opened with. Read from the SUBJECT's log, the subject being the
-    process whose numbers the artifact carries.
+    This is the readback. The daemon logs it at startup for A4; the daemon takes
+    no sync-mode option (IG-Q4), so the readback is the only record of the
+    durability a run had. Read from `since` (a byte offset), so an appended log
+    yields this spawn's report and not an earlier run's.
     """
     try:
         with open(log_path, encoding="utf-8", errors="replace") as fh:
+            fh.seek(since)
             for line in fh:
                 if "Database sync: flags=0x" in line:
                     # The daemon colourises its log. Strip the escapes: an artifact
@@ -103,6 +104,16 @@ def _resolved_sync_line(log_path):
     except OSError:
         return None
     return None
+
+
+def _log_reports(log_path, marker):
+    """Whether the log carries `marker`. An unreadable log is reported as True:
+    the check is a refusal, and a refusal must not pass on a read failure."""
+    try:
+        with open(log_path, encoding="utf-8", errors="replace") as fh:
+            return any(marker in line for line in fh)
+    except OSError:
+        return True
 
 
 def _loadavg():
@@ -244,8 +255,8 @@ def measure(args):
     os.makedirs(work, exist_ok=True)
     seed_dir = os.path.abspath(args.seed_dir or os.path.join(work, "seed"))
     os.makedirs(seed_dir, exist_ok=True)
-    pre = A.measurement_preflight(sync_mode=args.sync_mode, daemon=args.daemon,
-        work_dir=work, seed_dir=seed_dir, disk_class=args.disk_class)
+    pre = A.measurement_preflight(daemon=args.daemon, work_dir=work,
+        seed_dir=seed_dir, disk_class=args.disk_class)
     if pre:
         _fail("refusing to start:\n  " + "\n  ".join(pre))
     addr = mining_address(args.cargo_timeout)
@@ -258,17 +269,9 @@ def measure(args):
         os.makedirs(seed_dir)
 
     # The grammar's spellings (INPUT_GRAMMAR.md §5). Nothing is wiped on start
-    # (a fresh chain is a fresh data directory), and the daemon takes no
-    # sync-mode option since the configuration cutover: `db-sync-mode` is the
-    # DRS lane's (IG-Q4), the daemon runs the lane's constant, and DRS-D9's
-    # `safe` cannot be imposed from here until that lane gives it a row.
-    # This bench therefore refuses before any daemon starts, naming the
-    # FOLLOWUPS row, rather than record a durability it did not impose.
-    raise SystemExit(
-        "REFUSE: the daemon takes no --db-sync-mode since the daemon-configuration "
-        "cutover (INPUT_GRAMMAR.md IG-Q4: the row is the DRS lane's), so DRS-D9's "
-        "safe mode cannot be imposed and the artifact gate would refuse the record. "
-        "Blocked on the DRS lane's row; see docs/FOLLOWUPS.md, the DRS bench row.")
+    # (a fresh chain is a fresh data directory). The daemon takes no sync-mode
+    # option (IG-Q4): its constant is DRS-D9's, and each run's durability is the
+    # one its daemon reports at start.
     common = ["--network", "regtest", "--dev-difficulty", "1", "--p2p-local",
               "--tor", "off", "--log-level", args.log_level]
     (sp2p, srpc, bp2p, brpc), held = _reserve_ports(4)
@@ -317,6 +320,13 @@ def measure(args):
         if not armed_lever.announced_since(seed_log, seed_from):
             _fail(f"the generating seed did not announce {armed_lever.ANNOUNCEMENT!r} "
                   f"at start; see {work}/seed.log")
+        # The seed is the subject's binary. Its readback, taken before any block
+        # is generated, refuses a daemon without DRS-D9's durability before the
+        # generation is spent; the subject's own readback is checked again below.
+        seed_sync = A.resolved_line_refusals(_resolved_sync_line(seed_log, seed_from))
+        if seed_sync:
+            _fail(f"the generating seed's resolved sync report {seed_sync[0]}; "
+                  f"see {work}/seed.log")
         have_h = _rpc(srpc, "get_info")["result"]["height"]
         seed_reused = have_h > 1
         gen_blocks, gen_wall = 0, None
@@ -405,6 +415,12 @@ def measure(args):
               f"artifact is written: recording the mode we ASKED for while unable to "
               f"see what the daemon opened with is the posture-by-omission A4 "
               f"forbids. A daemon predating the A4 report will not log it — rebuild.")
+    if _log_reports(os.path.join(work, "subject.log"), A.SAFE_MODE_OFF_MARKER):
+        _fail(f"the subject's log reports {A.SAFE_MODE_OFF_MARKER!r} (or could not be "
+              f"read): the store turned its fsync off during the sync, so the IBD ran "
+              f"without DRS-D9 whatever it opened with. No artifact is written. A daemon "
+              f"whose sync-mode constant is parsed as a default does this; see "
+              f"core::init in src/cryptonote_core/cryptonote_core.cpp.")
     if load_at_start is None or load_at_end is None:
         _fail("could not read the load average from os.getloadavg(). System load is a "
               "condition of a wall-time measurement, so no artifact is written rather "
@@ -437,19 +453,16 @@ def measure(args):
         "thresholds_frozen_at": A.FROZEN_AT,
         "durability": {
             "policy": "DRS-D9 full-fsync-per-commit",
-            "sync_mode": args.sync_mode,
+            # OBSERVED: the mode the subject reported resolving at start. The
+            # daemon takes no sync-mode option, so there is nothing imposed to
+            # record beside it.
+            "sync_mode": A.resolved_sync_mode(resolved_line),
             "imposed_argv": subj_argv[1:],
-            # OBSERVED, from the daemon's own report of the flags it resolved.
-            # Earlier revisions recorded False with an honest note that no readback
-            # existed -- `mdb_env_get_flags` is in-process and nothing logged the
-            # resolved mode. A4's enabler landed that log line, so the posture is
-            # measured rather than imposed-and-validated.
             "observed": True,
             "resolved_log_line": resolved_line,
             "readback": "the subject daemon's own startup report of the flags it "
-                        "resolved. The mode is still validated against an allowed set "
-                        "BEFORE spawning, because a refusal that comes before the run "
-                        "costs nothing and this line only arrives after it",
+                        "resolved; the generating seed's report, from the same binary, "
+                        "is checked against DRS-D9 before any block is generated",
         },
         "environment": {
             "loadavg_1m_at_start": load_at_start[0],
@@ -584,7 +597,6 @@ def main():
     m.add_argument("--out", required=True)
     m.add_argument("--daemon", default=os.path.join(ROOT, "build/bin/shekyld"))
     m.add_argument("--work-dir", required=True)
-    m.add_argument("--sync-mode", default="safe")
     m.add_argument("--log-level", default="info",
                    choices=["error", "warn", "info", "debug", "trace"])
     m.add_argument("--startup-timeout", type=float, default=1200.0)

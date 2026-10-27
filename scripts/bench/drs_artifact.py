@@ -30,8 +30,9 @@ IBD_FLOOR_RATIO = 1.25       # <= passes
 IBD_HARD_FAIL_RATIO = 1.50   # >  hard-fails after one documented mitigation cycle
 PEAK_RSS_RATIO = 2.0         # <= passes
 
-# Allowed set, not a spelling check: the daemon accepts `--db-sync-mode=saf` and
-# silently means NOSYNC.
+# The durability DRS-D9 requires, as the daemon names it in its readback.
+# The daemon takes no sync-mode option (IG-Q4); its constant is `safe`, and
+# the readback below is what shows a run had it.
 ALLOWED_SYNC_MODES = ("safe",)
 
 # The daemon reports the durability posture it RESOLVED, as
@@ -45,8 +46,41 @@ ALLOWED_SYNC_MODES = ("safe",)
 # now, so the claim is measured instead of imposed-and-validated.
 RESOLVED_SYNC_RE = r"Database sync: flags=0x([0-9a-f]+)([^,]*), sync_mode=(\d+)"
 # Any of these in the resolved line means LMDB was opened without an fsync per
-# commit, whatever was asked for.
+# commit.
 NOSYNC_MARKERS = ("MDB_NOSYNC", "MDB_MAPASYNC")
+# What `BlockchainLMDB::safesyncmode` logs when a sync turns the fsync off. The
+# resolved line is written at open, before any sync, so it cannot show this;
+# a subject log carrying it ran its IBD without DRS-D9 whatever it opened with.
+SAFE_MODE_OFF_MARKER = "switching safe mode off"
+
+
+def resolved_sync_mode(line):
+    """The mode a resolved sync report names (`safe`, `fast`, `fastest`), or None."""
+    m = re.search(RESOLVED_SYNC_RE, line) if isinstance(line, str) else None
+    if m is None:
+        return None
+    label = m.group(2).strip().strip("()").split(":")[0].strip()
+    return label or None
+
+
+def resolved_line_refusals(line):
+    """Why a daemon's resolved sync report is not DRS-D9's, or [] if it is.
+
+    One rule for the two places it is applied: the finished artifact, and the
+    generating seed's report, read before a day of generation is spent.
+    """
+    if not isinstance(line, str) or not re.search(RESOLVED_SYNC_RE, line):
+        return [f"is {str(line)[:60]!r}, which does not carry the daemon's resolved "
+                "sync report. That line IS the readback: without it nothing shows "
+                "the durability the store was opened with"]
+    hit = [m for m in NOSYNC_MARKERS if m in line]
+    if hit:
+        return [f"reports {hit}: the store was opened WITHOUT an fsync per commit, so "
+                f"DRS-D9 was not in force: {line.strip()[:120]}"]
+    if "(safe)" not in line:
+        return [f"does not report the safe flag, so the resolved posture is not "
+                f"DRS-D9's: {line.strip()[:120]}"]
+    return []
 
 # §1.3 requires the disk TYPE. "unknown" is not a type, so it is not a value.
 ALLOWED_DISK_CLASSES = ("hdd", "ssd_or_nvme")
@@ -237,36 +271,23 @@ def artifact_refusals(a):
     else:
         if d.get("sync_mode") not in ALLOWED_SYNC_MODES:
             r.append(f"durability.sync_mode is {d.get('sync_mode')!r}; only "
-                     f"{list(ALLOWED_SYNC_MODES)} satisfies DRS-D9 on the LMDB path. A "
-                     "value the daemon does not recognise falls through to DBF_FAST "
-                     "(MDB_NOSYNC) in silence")
+                     f"{list(ALLOWED_SYNC_MODES)} satisfies DRS-D9 on the LMDB path")
         argv = d.get("imposed_argv")
         if not isinstance(argv, list) or not argv:
-            r.append("durability.imposed_argv absent — the harness cannot read the env "
-                     "flags back, so the argv it imposed IS the record")
-        elif not any(x == f"--db-sync-mode={d.get('sync_mode')}" for x in argv):
-            r.append(f"durability.imposed_argv does not carry "
-                     f"--db-sync-mode={d.get('sync_mode')}, so the recorded mode is not "
-                     "the mode that was imposed")
+            r.append("durability.imposed_argv absent — the argv is the record of the "
+                     "flags both runs share, which the comparison masks and compares")
         if d.get("observed") is not True:
             r.append("durability.observed must be true: the daemon reports the flags it "
                      "resolved (A4's enabler), so the posture is observable and an "
                      "artifact that does not observe it is not recording a condition it "
                      "could have measured")
         line = d.get("resolved_log_line")
-        if not isinstance(line, str) or not re.search(RESOLVED_SYNC_RE, line):
-            r.append(f"durability.resolved_log_line is {str(line)[:60]!r}, which does "
-                     "not carry the daemon's resolved sync report. That line IS the "
-                     "readback; without it the recorded mode is only what was asked for")
-        else:
-            hit = [m for m in NOSYNC_MARKERS if m in line]
-            if hit:
-                r.append(f"durability.resolved_log_line reports {hit} — the store was "
-                         f"opened WITHOUT an fsync per commit, so DRS-D9 was not in "
-                         f"force whatever sync_mode was requested: {line.strip()[:120]}")
-            elif "(safe)" not in line:
-                r.append(f"durability.resolved_log_line does not report the safe flag, "
-                         f"so the resolved posture is not DRS-D9's: {line.strip()[:120]}")
+        r += [f"durability.resolved_log_line {x}" for x in resolved_line_refusals(line)]
+        reported = resolved_sync_mode(line)
+        if reported is not None and d.get("sync_mode") != reported:
+            r.append(f"durability.sync_mode is {d.get('sync_mode')!r}, which is not the "
+                     f"mode the daemon reported ({reported!r}): the label and the "
+                     "readback disagree")
 
     env = a.get("environment")
     if not isinstance(env, dict):
@@ -445,20 +466,37 @@ def artifact_refusals(a):
     return r
 
 
+# The flags whose values differ between two runs by construction (a data
+# directory, a port) and say nothing about the engine. The grammar takes a
+# value as the next word or after `=` (INPUT_GRAMMAR.md §5); both are masked.
+PER_RUN_FLAGS = ("--data-dir", "--log-file", "--clearnet-listen",
+                 "--rpc-admin-listen", "--p2p-closed-peer")
+
+
 def _masked_argv(a):
-    """Subject argv with engine- and path-specific arguments removed.
+    """Subject argv with the per-run flags' values removed.
 
     §1.3: "same machine, same binary flags except engine". Data directory and
     ports differ between the two runs by construction and say nothing about the
-    engine, so they are masked; everything else must match.
+    engine, so they are masked; everything else must match. No engine flag is
+    masked: the daemon has none. Masking a speculative one would hide a real
+    difference the day one exists, and the mask belongs in the same change
+    that adds the flag.
     """
     out = []
-    for x in a.get("durability", {}).get("imposed_argv", []):
-        # No engine flag is masked: the daemon has none. Masking a speculative
-        # `--db-engine` would hide a real difference the day one exists, and the
-        # mask belongs in the same change that adds the flag.
-        if re.match(r"^--(data-dir|p2p-bind-port|rpc-bind-port|add-exclusive-node|"
-                    r"log-file)=", x):
+    argv = a.get("durability", {}).get("imposed_argv", [])
+    skip_value = False
+    for x in argv:
+        if skip_value:
+            skip_value = False
+            continue
+        if x in PER_RUN_FLAGS:
+            out.append(x)
+            skip_value = True
+            continue
+        flag = x.split("=", 1)[0]
+        if "=" in x and flag in PER_RUN_FLAGS:
+            out.append(flag)
             continue
         out.append(x)
     return out
@@ -689,19 +727,15 @@ def hardware_fingerprint(path, declared_disk_class=None):
     return out
 
 
-def measurement_preflight(sync_mode, daemon, work_dir, seed_dir, disk_class):
+def measurement_preflight(daemon, work_dir, seed_dir, disk_class):
     """Refusals that must fire before any daemon starts or cargo runs.
 
     Same conditions `artifact_refusals` will apply to the finished record, so
-    a day of generation is not spent on a number the gate would decline.
+    a day of generation is not spent on a number the gate would decline. The
+    durability itself is not known until a daemon reports it; `measure` reads
+    the generating seed's report, from the same binary, before generating.
     """
     r = []
-    if sync_mode not in ALLOWED_SYNC_MODES:
-        r.append(f"--sync-mode={sync_mode!r} refused before any daemon was started. "
-                 f"Only {list(ALLOWED_SYNC_MODES)} satisfies DRS-D9, and the daemon "
-                 "accepts an unrecognised value by silently falling back to DBF_FAST "
-                 "(MDB_NOSYNC), so a typo here would measure the wrong durability "
-                 "and say nothing.")
     if not os.path.isfile(daemon):
         r.append(f"{daemon} is not a file — build the daemon in THIS worktree; a "
                  "binary from another tree measures another tree")
