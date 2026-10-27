@@ -298,8 +298,12 @@ mod tests {
     /// Each connector's quiet span S is derived, not written (the Tor
     /// lane's review of item 6): `ceil(K / bound)` rounds, each up to the
     /// connector's dial deadline and its longest wake gap, computed here from
-    /// the named constants. S covers at least one full window, and today it
-    /// is 29.15 s on clearnet and 364.5 s on Tor, as §97 cites.
+    /// the named constants, and S covers at least one full window. Those two
+    /// are the properties. The last two assertions are a record of today's
+    /// values, 29.15 s on clearnet and 364.5 s on Tor, as §97, the slice 3
+    /// brief and `TOR_SUPERVISOR.md` §4.2 cite them: if an honest change to K,
+    /// a bound, a deadline or the wake turns only those red, the derivation
+    /// still holds, so update the record here and in those documents.
     #[test]
     fn the_quiet_span_is_derived_from_the_bound_the_deadline_and_the_wake() {
         for (connector, deadline) in [
