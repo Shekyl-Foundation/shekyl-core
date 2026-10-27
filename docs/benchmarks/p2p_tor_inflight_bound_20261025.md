@@ -150,7 +150,7 @@ the binding cost in both regimes below; the count of plants is not.
   170 planted onions at the cap, planted once: 8 attacker sessions at the
   intake cap (24 addresses per session per 24 h).
 - **In a quiet stretch** (no session held, the last 13 attempts unopened,
-  345 s since one opened: Tor's quiet threshold) a failed test cools at the first step, 2 to 3 min, so a plant is
+  364.5 s since one opened: Tor's quiet threshold) a failed test cools at the first step, 2 to 3 min, so a plant is
   drawable again about every 4 to 5 min, its attempt included: about 13
   draws an hour each, so about 13 plants hold the hour. The node is then
   already holding nothing, which is the eclipse the plants were for, and

@@ -22,7 +22,7 @@
 use shekyl_relay_privacy::params::{MIN_PROVISIONED_OUT_PEERS, P2P_DEFAULT_OUT_PEERS};
 
 use crate::declaration::ConnectorId;
-use crate::spans::CLEARNET_DIAL_WITHIN_NANOS;
+use crate::spans::{CLEARNET_DIAL_WITHIN_NANOS, TOR_DIAL_WITHIN_NANOS};
 
 /// Nanoseconds in one second.
 const SECOND_NANOS: u64 = 1_000_000_000;
@@ -95,8 +95,37 @@ pub struct QuietThreshold {
     /// half-dead fraction, `p_fail` measured on the floor device.
     pub attempts: u32,
     /// S: at least one full window, and at least the time K attempts take
-    /// at the connector's bound and pace, in nanoseconds.
+    /// at the connector's bound and pace, in nanoseconds. Computed by
+    /// [`QuietThreshold::derive`], never written as a literal.
     pub span_nanos: u64,
+}
+
+impl QuietThreshold {
+    /// The threshold for `attempts` (K), with S computed from the values it
+    /// depends on: the connector's in-flight bound, its dial deadline and
+    /// its wake spacing.
+    ///
+    /// K attempts at bound B are `ceil(K / B)` rounds: each slot runs its
+    /// share in turn. An attempt in a round waits at most one wake gap
+    /// (`wake.base_nanos + wake.jitter_nanos`) for its launch and holds its
+    /// slot at most the dial deadline, which no attempt outlasts. So S is
+    /// `ceil(K / B) × (deadline + the longest wake gap)`. It is at least one
+    /// full window: a round is at least the deadline, and the deadline is at
+    /// least the window. If K, the bound, the deadline or the wake moves, S
+    /// follows.
+    #[must_use]
+    pub const fn derive(
+        attempts: u32,
+        in_flight_bound: usize,
+        dial_deadline_nanos: u64,
+        wake: JitteredSpan,
+    ) -> Self {
+        let rounds = (attempts as u64).div_ceil(in_flight_bound as u64);
+        Self {
+            attempts,
+            span_nanos: rounds * (dial_deadline_nanos + wake.base_nanos + wake.jitter_nanos),
+        }
+    }
 }
 
 /// One connector's dial profile.
@@ -158,6 +187,13 @@ const WAKE: JitteredSpan = JitteredSpan {
     jitter_nanos: SECOND_NANOS,
 };
 
+/// Clearnet's in-flight bound, named because its quiet span is derived
+/// from it.
+const CLEARNET_IN_FLIGHT_BOUND: usize = 1;
+
+/// Tor's in-flight bound, named because its quiet span is derived from it.
+const TOR_IN_FLIGHT_BOUND: usize = 5;
+
 /// `connector`'s dial profile: the only per-connector match for these
 /// values.
 #[must_use]
@@ -168,7 +204,7 @@ pub const fn dial_profile(connector: ConnectorId) -> DialProfile {
         // per gray test, and one redial before a white address demotes.
         ConnectorId::Clearnet => DialProfile {
             target: P2P_DEFAULT_OUT_PEERS,
-            in_flight_bound: 1,
+            in_flight_bound: CLEARNET_IN_FLIGHT_BOUND,
             attempts: AttemptsPerTest { gray: 1, white: 2 },
             retry_waits: RETRY_WAITS,
             cooldown: COOLDOWN,
@@ -177,13 +213,14 @@ pub const fn dial_profile(connector: ConnectorId) -> DialProfile {
             // **Derived** (§97, "Gray cooldown"; shekyl-dev data
             // `dial-profile/2026-10-27-clearnet-pfail`, the floor device):
             // 0 of 283 attempts to live peers failed, so `p_fail` = 0.5 at
-            // half dead and K = 10. S: ten attempts at bound 1, each holding
-            // the slot for at most the 1.415 s deadline and the next waiting
-            // up to 1.5 s for its wake, about 29 s.
-            quiet: QuietThreshold {
-                attempts: 10,
-                span_nanos: 30 * SECOND_NANOS,
-            },
+            // half dead and K = 10. S is derived: ten rounds at bound 1, each
+            // up to the 1.415 s deadline and a 1.5 s wake, 29.15 s.
+            quiet: QuietThreshold::derive(
+                10,
+                CLEARNET_IN_FLIGHT_BOUND,
+                CLEARNET_DIAL_WITHIN_NANOS,
+                WAKE,
+            ),
         },
         // Tor: the bound is Measured on the floor device (§97, "In-flight
         // dial bound"); three attempts per test, since a failed dial is
@@ -191,7 +228,7 @@ pub const fn dial_profile(connector: ConnectorId) -> DialProfile {
         // up; the window is the managed Tor's, published with its route.
         ConnectorId::Tor => DialProfile {
             target: MIN_PROVISIONED_OUT_PEERS,
-            in_flight_bound: 5,
+            in_flight_bound: TOR_IN_FLIGHT_BOUND,
             attempts: AttemptsPerTest { gray: 3, white: 3 },
             retry_waits: RETRY_WAITS,
             cooldown: COOLDOWN,
@@ -200,12 +237,10 @@ pub const fn dial_profile(connector: ConnectorId) -> DialProfile {
             // **Derived** (§97, "Gray cooldown"; shekyl-dev data
             // `inflight-bound/2026-10-26-final-head`, the floor device): 189
             // of 336 attempts failed at half dead, `p_fail` 0.5625, so K = 13.
-            // S: thirteen attempts at bound 5 are three rounds, each up to
-            // the full window (replies at 104 to 113 s), about 345 s.
-            quiet: QuietThreshold {
-                attempts: 13,
-                span_nanos: 345 * SECOND_NANOS,
-            },
+            // S is derived: three rounds at bound 5, each up to the 120 s
+            // deadline and a 1.5 s wake, 364.5 s. Every full-window reply
+            // seen (104 to 113 s) is inside the deadline.
+            quiet: QuietThreshold::derive(13, TOR_IN_FLIGHT_BOUND, TOR_DIAL_WITHIN_NANOS, WAKE),
         },
     }
 }
@@ -214,7 +249,7 @@ pub const fn dial_profile(connector: ConnectorId) -> DialProfile {
 mod tests {
     use super::{dial_profile, WindowSource};
     use crate::declaration::ConnectorId;
-    use crate::spans::CLEARNET_DIAL_WITHIN_NANOS;
+    use crate::spans::{CLEARNET_DIAL_WITHIN_NANOS, TOR_DIAL_WITHIN_NANOS};
     use shekyl_relay_privacy::params::{MIN_PROVISIONED_OUT_PEERS, P2P_DEFAULT_OUT_PEERS};
 
     /// The profile table moves today's values unchanged (the dial profile
@@ -236,14 +271,7 @@ mod tests {
             WindowSource::DialDeadline(CLEARNET_DIAL_WITHIN_NANOS)
         );
         assert_eq!(tor.window, WindowSource::Published);
-        assert_eq!(
-            (clearnet.quiet.attempts, clearnet.quiet.span_nanos),
-            (10, 30_000_000_000)
-        );
-        assert_eq!(
-            (tor.quiet.attempts, tor.quiet.span_nanos),
-            (13, 345_000_000_000)
-        );
+        assert_eq!((clearnet.quiet.attempts, tor.quiet.attempts), (10, 13));
         for connector in ConnectorId::ALL {
             let profile = dial_profile(*connector);
             let second = profile.retry_waits.before_second;
@@ -265,5 +293,41 @@ mod tests {
             assert!(profile.in_flight_bound as u64 <= u64::from(profile.target));
             assert!(profile.attempts.gray >= 1 && profile.attempts.white >= profile.attempts.gray);
         }
+    }
+
+    /// Each connector's quiet span S is derived, not written (the Tor
+    /// lane's review of item 6): `ceil(K / bound)` rounds, each up to the
+    /// connector's dial deadline and its longest wake gap, computed here from
+    /// the named constants. S covers at least one full window, and today it
+    /// is 29.15 s on clearnet and 364.5 s on Tor, as §97 cites.
+    #[test]
+    fn the_quiet_span_is_derived_from_the_bound_the_deadline_and_the_wake() {
+        for (connector, deadline) in [
+            (ConnectorId::Clearnet, CLEARNET_DIAL_WITHIN_NANOS),
+            (ConnectorId::Tor, TOR_DIAL_WITHIN_NANOS),
+        ] {
+            let profile = dial_profile(connector);
+            let attempts = u64::from(profile.quiet.attempts);
+            let bound = profile.in_flight_bound as u64;
+            let rounds = attempts.div_ceil(bound);
+            let wake = profile.wake.base_nanos + profile.wake.jitter_nanos;
+            assert_eq!(
+                profile.quiet.span_nanos,
+                rounds * (deadline + wake),
+                "{connector:?}"
+            );
+            assert!(profile.quiet.span_nanos >= deadline, "{connector:?}");
+            if let WindowSource::DialDeadline(window) = profile.window {
+                assert!(profile.quiet.span_nanos >= window, "{connector:?}");
+            }
+        }
+        assert_eq!(
+            dial_profile(ConnectorId::Clearnet).quiet.span_nanos,
+            29_150_000_000
+        );
+        assert_eq!(
+            dial_profile(ConnectorId::Tor).quiet.span_nanos,
+            364_500_000_000
+        );
     }
 }

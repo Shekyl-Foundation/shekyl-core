@@ -9,8 +9,8 @@
 //! opened there, a failed test cools at the first step and does not climb.
 //! K and S are the connector's dial profile's quiet threshold, derived from
 //! its measured failure rate on the floor device, so the guard switches on
-//! once the evidence is in on each connector: about 10 attempts and 30 s on
-//! clearnet, 13 attempts and 345 s on Tor.
+//! once the evidence is in on each connector: 10 attempts and 29.15 s on
+//! clearnet, 13 attempts and 364.5 s on Tor.
 //!
 //! The condition is the dialer's own evidence, read when a test cools. On
 //! a link that carries nothing every failure says as much about this
