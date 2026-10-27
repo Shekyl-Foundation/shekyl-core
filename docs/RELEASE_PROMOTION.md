@@ -155,7 +155,12 @@ then tag** (avoids the "tag not on the default branch" trap that
 5. **Promote to `main`** by merging that pull request with a **merge commit**,
    so `main`'s history shows discrete release points. Never squash, rebase or
    fast-forward: the merge commit is the branch-topology release marker. Its
-   tree must equal the frozen SHA's tree.
+   tree must equal the frozen SHA's tree. The merge's push to `main` runs the
+   grep gates again, and the dial-path freeze's release exemption covers it
+   only on that condition (`is_release_promotion.py`). A red freeze on that
+   push therefore means the merge brought in content `dev` never judged.
+   The step 11 pull request's head is `main`, so the push's result shows
+   there too.
 6. **Sign the tag** on that merge commit with the Foundation signing subkey
    (`6914D74823DDA8DC`), by the ceremony in `SIGNING.md`
    §"Release-tag signing ceremony". The merge happened on the remote, so the
