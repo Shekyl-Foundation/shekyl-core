@@ -12,8 +12,8 @@ use std::net::Ipv4Addr;
 
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{
-    ConnectorId, DialOutcome, NetworkAddress, NoBans, NoSessions, Peerlist, RefusedSet, Source,
-    Tick, GRAY_CAP,
+    ConnectorId, DialOutcome, Ladder, NetworkAddress, NoBans, NoSessions, Peerlist, RefusedSet,
+    Source, Tick, GRAY_CAP,
 };
 
 const C: ConnectorId = ConnectorId::Clearnet;
@@ -45,7 +45,12 @@ fn draw_and_return(
     rng: &mut SplitMix64,
 ) -> Option<NetworkAddress> {
     let drawn = list.draw_gray_where(C, Tick::new(0), eligible, rng)?;
-    list.apply(&DialOutcome::PayloadRefused(drawn.clone()), now(), rng);
+    list.apply(
+        &DialOutcome::PayloadRefused(drawn.clone()),
+        now(),
+        Ladder::Climb,
+        rng,
+    );
     Some(drawn)
 }
 
@@ -195,7 +200,12 @@ fn the_white_draw_takes_white_only_and_counts_hosts() {
         let address = list
             .draw_gray_where(C, Tick::new(0), &mut |_| true, &mut rng)
             .expect("gray");
-        list.apply(&DialOutcome::Confirmed(address.clone()), now(), &mut rng);
+        list.apply(
+            &DialOutcome::Confirmed(address.clone()),
+            now(),
+            Ladder::Climb,
+            &mut rng,
+        );
         white.push(address);
     }
     assert_eq!(

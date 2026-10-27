@@ -546,17 +546,16 @@ impl Peerlist {
             .candidate_hosts(true, eligible)
     }
 
-    /// [`Self::apply_on`] with [`Ladder::Climb`]: a failed test steps the
-    /// cooldown ladder.
-    pub fn apply<R: RelayRng + ?Sized>(&mut self, outcome: &DialOutcome, now: Tick, rng: &mut R) {
-        self.apply_on(outcome, now, Ladder::Climb, rng);
-    }
-
     /// The only writer of white and the only drop of an outstanding gray
     /// draw (brief §5). The match is total: the seat, and, for a
-    /// confirmation, whether the session stayed. `ladder` is the cooldown a
-    /// failed test takes; the dialer chooses it.
-    pub fn apply_on<R: RelayRng + ?Sized>(
+    /// confirmation, whether the session stayed.
+    ///
+    /// `ladder` is the cooldown a failed test takes. The dialer chooses it
+    /// from its own evidence, once, when it records the test. A report that
+    /// leaves the address uncooled leaves `ladder` unread. Every caller
+    /// passes the ladder; one that is not the dialer passes
+    /// [`Ladder::Climb`].
+    pub fn apply<R: RelayRng + ?Sized>(
         &mut self,
         outcome: &DialOutcome,
         now: Tick,
@@ -633,9 +632,11 @@ impl Peerlist {
         Self::connector_of(address).is_some_and(|c| self.partition(c).is_cooling(address))
     }
 
-    /// How many failed tests in a row `address` has had: the rung of its
-    /// cooldown ladder. Zero after a confirmation, or for an address that
-    /// never failed.
+    /// How many failed tests in a row `address` has had. Zero after a
+    /// confirmation, or for an address that never failed. On
+    /// [`Ladder::Climb`] this is also the rung the cooldown uses. On
+    /// [`Ladder::FirstStep`] the count stays and the cooldown is the first
+    /// rung, so the two are not the same number.
     #[must_use]
     pub fn failed_tests(&self, address: &NetworkAddress) -> u32 {
         Self::connector_of(address).map_or(0, |c| self.partition(c).failed_tests(address))

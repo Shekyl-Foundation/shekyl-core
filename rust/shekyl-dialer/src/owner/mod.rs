@@ -48,7 +48,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 use shekyl_draw_rng::RelayRng;
 use shekyl_peerlist::{
-    white_diversity_floor, CloseCause, CloseKind, ConnectionId, ConnectorId, DialOutcome,
+    white_diversity_floor, CloseCause, CloseKind, ConnectionId, ConnectorId, DialOutcome, Ladder,
     NetworkAddress, Peerlist, Refusal, RefusedSet, Source, Tick,
 };
 use shekyl_relay_privacy::params::{MIN_PROVISIONED_OUT_PEERS, P2P_DEFAULT_OUT_PEERS};
@@ -534,11 +534,14 @@ impl Dialer {
         } else if let Some(address) = shared.kept.remove(&id.get()) {
             if let Some(connector) = Peerlist::connector_of(&address) {
                 if cause.kind() == CloseKind::SessionRefused {
-                    // Not a dial. The stream was counted when the session
-                    // was accepted, so this does not finish a test and does
-                    // not fold the tally.
+                    // A payload refusal is not a dial. The stream was
+                    // counted when the session was accepted, so this does
+                    // not finish a test and does not fold the tally. It
+                    // settles an outstanding draw and leaves the ladder
+                    // unread. Climb is what a caller passes when the quiet
+                    // stretch is not the decision.
                     let outcome = DialOutcome::PayloadRefused(address.clone());
-                    shared.lists.apply(&outcome, now, rng);
+                    shared.lists.apply(&outcome, now, Ladder::Climb, rng);
                 }
                 // White expiry follows the connection (the gray lifecycle,
                 // item 1): the clock moves to the close.
@@ -671,7 +674,7 @@ impl Dialer {
         Self::note_opened(shared, connector, outcome, now);
         let ladder = Self::ladder(shared, connector, now);
         shared.attempts(connector).finish(outcome);
-        shared.lists.apply_on(outcome, now, ladder, rng);
+        shared.lists.apply(outcome, now, ladder, rng);
         let held = Self::tor_held(shared);
         shared.tor_link.observe(connector, outcome, held);
     }

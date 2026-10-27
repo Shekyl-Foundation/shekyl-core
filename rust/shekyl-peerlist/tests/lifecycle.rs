@@ -20,8 +20,8 @@ use std::net::{IpAddr, Ipv4Addr};
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::address_file::decode;
 use shekyl_peerlist::{
-    BanQuery, CloseCause, CloseKind, ConnectorId, DialOutcome, KeptSessions, NetworkAddress,
-    NoBans, NoSessions, Peerlist, RefusedSet, Source, Tick, COOLDOWN_CAP_NANOS,
+    BanQuery, CloseCause, CloseKind, ConnectorId, DialOutcome, KeptSessions, Ladder,
+    NetworkAddress, NoBans, NoSessions, Peerlist, RefusedSet, Source, Tick, COOLDOWN_CAP_NANOS,
     COOLDOWN_FIRST_NANOS, EXPIRATION_PERIOD_NANOS, GRAY_CAP,
 };
 
@@ -66,7 +66,7 @@ fn draw_until(list: &mut Peerlist, address: &NetworkAddress, now: Tick, rng: &mu
     for _ in 0..10_000 {
         match list.draw_gray(CLEARNET, rng) {
             Some(drawn) if drawn == *address => return,
-            Some(other) => list.apply(&DialOutcome::PayloadRefused(other), now, rng),
+            Some(other) => list.apply(&DialOutcome::PayloadRefused(other), now, Ladder::Climb, rng),
             None => panic!("gray ran out before {address:?} was drawn"),
         }
     }
@@ -81,7 +81,12 @@ fn kept_at(list: &mut Peerlist, address: &NetworkAddress, now: Tick, rng: &mut S
         Ok(true)
     );
     draw_until(list, address, now, rng);
-    list.apply(&DialOutcome::SessionAccepted(address.clone()), now, rng);
+    list.apply(
+        &DialOutcome::SessionAccepted(address.clone()),
+        now,
+        Ladder::Climb,
+        rng,
+    );
     assert!(list.is_white(address));
 }
 
@@ -168,6 +173,7 @@ fn a_confirm_dial_still_holds_the_clock() {
     list.apply(
         &DialOutcome::Confirmed(peer.clone()),
         at_hours(20),
+        Ladder::Climb,
         &mut rng,
     );
     assert!(!white_after_settle(
@@ -199,7 +205,7 @@ fn a_clearnet_address_failing_every_test_cools_on_the_ladder_and_is_never_droppe
     for (failures, minutes) in (1u32..).zip(rungs) {
         // The test fails at `now`.
         draw_until(&mut list, &peer, at(now), &mut rng);
-        list.apply(&connection_problem(&peer), at(now), &mut rng);
+        list.apply(&connection_problem(&peer), at(now), Ladder::Climb, &mut rng);
         assert!(list.is_gray(&peer), "failure {failures}: still gray");
         assert!(list.is_cooling(&peer), "failure {failures}: cooling");
         assert_eq!(list.failed_tests(&peer), failures);
@@ -227,8 +233,67 @@ fn a_clearnet_address_failing_every_test_cools_on_the_ladder_and_is_never_droppe
     assert!(list.is_gray(&peer), "eight failed tests, never dropped");
     // A completed handshake clears the ladder.
     draw_until(&mut list, &peer, at(now), &mut rng);
-    list.apply(&DialOutcome::Confirmed(peer.clone()), at(now), &mut rng);
+    list.apply(
+        &DialOutcome::Confirmed(peer.clone()),
+        at(now),
+        Ladder::Climb,
+        &mut rng,
+    );
     assert_eq!(list.failed_tests(&peer), 0);
+}
+
+/// A count already past one stays on [`Ladder::FirstStep`], and the
+/// cooldown is the first rung. The quiet stretch depends on both halves:
+/// a block does not launder the history, and it does not leave the address
+/// waiting out the rung it had already climbed. Thawing inside the first
+/// rung's jitter is what fails if the stored count is used as the rung;
+/// a count of one is what fails if the history is cleared.
+#[test]
+fn a_first_step_keeps_a_count_past_one_and_cools_for_the_first_rung() {
+    let mut rng = SplitMix64::new(11);
+    let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
+    let peer = v4(11);
+    assert_eq!(
+        list.admit_gray(&peer, Source::Operator, at(0), &mut NoBans, &mut rng),
+        Ok(true)
+    );
+    let mut now = 0u64;
+    for _ in 0..4 {
+        draw_until(&mut list, &peer, at(now), &mut rng);
+        list.apply(&connection_problem(&peer), at(now), Ladder::Climb, &mut rng);
+        now += COOLDOWN_CAP_NANOS + COOLDOWN_CAP_NANOS / 2 + 1;
+        list.white_count(CLEARNET, at(now), &mut NoBans, &mut NoSessions, &mut rng);
+        assert!(!list.is_cooling(&peer));
+    }
+    assert_eq!(list.failed_tests(&peer), 4);
+
+    draw_until(&mut list, &peer, at(now), &mut rng);
+    list.apply(
+        &connection_problem(&peer),
+        at(now),
+        Ladder::FirstStep,
+        &mut rng,
+    );
+    assert_eq!(list.failed_tests(&peer), 4, "the count stays");
+    assert!(list.is_cooling(&peer));
+
+    list.white_count(
+        CLEARNET,
+        at(now + COOLDOWN_FIRST_NANOS - 1),
+        &mut NoBans,
+        &mut NoSessions,
+        &mut rng,
+    );
+    assert!(list.is_cooling(&peer), "still inside the first rung");
+    assert!(list.draw_gray(CLEARNET, &mut rng).is_none());
+
+    now += COOLDOWN_FIRST_NANOS + COOLDOWN_FIRST_NANOS / 2 + 1;
+    list.white_count(CLEARNET, at(now), &mut NoBans, &mut NoSessions, &mut rng);
+    assert!(
+        !list.is_cooling(&peer),
+        "thawed after the first rung and its jitter"
+    );
+    assert_eq!(list.failed_tests(&peer), 4, "thaw keeps the count");
 }
 
 #[test]
@@ -245,7 +310,7 @@ fn a_restart_retests_every_cooled_address() {
     }
     for _ in 0..3 {
         draw_until(&mut list, &cooled, at(0), &mut rng);
-        list.apply(&connection_problem(&cooled), at(0), &mut rng);
+        list.apply(&connection_problem(&cooled), at(0), Ladder::Climb, &mut rng);
         list.white_count(
             CLEARNET,
             at(2 * HOUR),
@@ -255,7 +320,12 @@ fn a_restart_retests_every_cooled_address() {
         );
     }
     draw_until(&mut list, &cooled, at(2 * HOUR), &mut rng);
-    list.apply(&connection_problem(&cooled), at(2 * HOUR), &mut rng);
+    list.apply(
+        &connection_problem(&cooled),
+        at(2 * HOUR),
+        Ladder::Climb,
+        &mut rng,
+    );
     assert!(list.is_cooling(&cooled));
     assert_eq!(list.failed_tests(&cooled), 4);
 
@@ -304,7 +374,7 @@ fn fill_cooling(
     }
     for _ in 0..count {
         let drawn = list.draw_gray(CLEARNET, rng).expect("a drawable seat");
-        list.apply(&connection_problem(&drawn), now, rng);
+        list.apply(&connection_problem(&drawn), now, Ladder::Climb, rng);
     }
     for address in &addresses {
         assert!(list.is_cooling(address));
@@ -463,7 +533,7 @@ fn a_targeted_draw_past_the_cooldown_draws_the_address() {
         Ok(true)
     );
     draw_until(&mut list, &peer, at(0), &mut rng);
-    list.apply(&connection_problem(&peer), at(0), &mut rng);
+    list.apply(&connection_problem(&peer), at(0), Ladder::Climb, &mut rng);
     assert!(list.is_cooling(&peer));
     let target = peer.clone();
     assert_eq!(

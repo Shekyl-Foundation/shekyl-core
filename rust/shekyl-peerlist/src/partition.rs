@@ -175,8 +175,10 @@ impl Partition {
         )
     }
 
-    /// The ladder rung: consecutive failed tests. Zero for an address that
+    /// Consecutive failed tests stored on the seat. Zero for an address that
     /// is white, unseated, or has not failed since it last became white.
+    /// [`Ladder::FirstStep`] leaves this count where it is and cools for
+    /// the first rung, so the stored count is not that cooldown's rung.
     pub(crate) fn failed_tests(&self, address: &NetworkAddress) -> u32 {
         match self.seat_of(address) {
             Some(Seat::Gray { failures, .. }) => failures,

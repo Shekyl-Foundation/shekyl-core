@@ -12,9 +12,9 @@ use std::net::{IpAddr, Ipv4Addr};
 
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{
-    white_diversity_floor, BanQuery, ConnectionId, DialOutcome, NetworkAddress, NoBans, NoSessions,
-    Peerlist, Refusal, RefusedSet, SessionRow, Source, Tick, DISCLOSE_COUNT, DISCLOSE_WINDOW_NANOS,
-    GRAY_CAP, SESSION_INTAKE_CAP, WHITE_REFILL_LINE,
+    white_diversity_floor, BanQuery, ConnectionId, DialOutcome, Ladder, NetworkAddress, NoBans,
+    NoSessions, Peerlist, Refusal, RefusedSet, SessionRow, Source, Tick, DISCLOSE_COUNT,
+    DISCLOSE_WINDOW_NANOS, GRAY_CAP, SESSION_INTAKE_CAP, WHITE_REFILL_LINE,
 };
 use shekyl_transport_layer::BanList;
 
@@ -49,7 +49,12 @@ fn draw_until(list: &mut Peerlist, address: &NetworkAddress, rng: &mut SplitMix6
     for _ in 0..100_000 {
         match list.draw_gray(connector, rng) {
             Some(drawn) if drawn == *address => return,
-            Some(other) => list.apply(&DialOutcome::PayloadRefused(other), at_hours(0), rng),
+            Some(other) => list.apply(
+                &DialOutcome::PayloadRefused(other),
+                at_hours(0),
+                Ladder::Climb,
+                rng,
+            ),
             None => panic!("gray ran out"),
         }
     }
@@ -71,7 +76,12 @@ fn with_white(
             Ok(true)
         );
         draw_until(list, &a, rng);
-        list.apply(&DialOutcome::Confirmed(a.clone()), at_hours(0), rng);
+        list.apply(
+            &DialOutcome::Confirmed(a.clone()),
+            at_hours(0),
+            Ladder::Climb,
+            rng,
+        );
         made.push(a);
     }
     made
@@ -146,7 +156,12 @@ fn the_sample_is_cached_for_the_window_and_redrawn_after_it() {
     // expiry. A confirm-and-close would not. Then cross the window: 24 h
     // after the draw a new sample is drawn.
     for n in 1..=100 {
-        list.apply(&DialOutcome::SessionAccepted(v4(n)), at_hours(23), &mut rng);
+        list.apply(
+            &DialOutcome::SessionAccepted(v4(n)),
+            at_hours(23),
+            Ladder::Climb,
+            &mut rng,
+        );
     }
     let later = list.disclose(
         connector,
@@ -178,7 +193,12 @@ fn the_sample_is_uniform_over_white_with_our_own_address_as_one_member() {
         // A kept session moves the clock. A confirm-and-close would let
         // white expire and the sample go empty.
         for a in &white {
-            list.apply(&DialOutcome::SessionAccepted(a.clone()), now, &mut rng);
+            list.apply(
+                &DialOutcome::SessionAccepted(a.clone()),
+                now,
+                Ladder::Climb,
+                &mut rng,
+            );
         }
         let sample = list.disclose(connector, now, &mut NoBans, &mut NoSessions, &mut rng);
         assert_eq!(sample.len(), DISCLOSE_COUNT);
@@ -391,6 +411,7 @@ fn a_demoted_entry_is_ordinary_gray_evictable_skipped_at_dial_and_refused_at_adm
     list.apply(
         &DialOutcome::Confirmed(banned.clone()),
         at_hours(11),
+        Ladder::Climb,
         &mut rng,
     );
     assert!(!list.is_white(&banned), "not drawn: no promotion");
@@ -398,6 +419,7 @@ fn a_demoted_entry_is_ordinary_gray_evictable_skipped_at_dial_and_refused_at_adm
     list.apply(
         &DialOutcome::Confirmed(banned.clone()),
         at_hours(11),
+        Ladder::Climb,
         &mut rng,
     );
     assert!(
@@ -446,7 +468,12 @@ fn a_ban_does_not_rebuild_the_cached_sample_and_tor_never_demotes() {
             Ok(true)
         );
         draw_until(&mut list, &onion(n), &mut rng);
-        list.apply(&DialOutcome::Confirmed(onion(n)), at_hours(0), &mut rng);
+        list.apply(
+            &DialOutcome::Confirmed(onion(n)),
+            at_hours(0),
+            Ladder::Climb,
+            &mut rng,
+        );
     }
     assert_eq!(
         list.white_count(hidden, at_hours(1), &mut BanAll, &mut NoSessions, &mut rng),
@@ -731,6 +758,7 @@ fn a_drawn_sample_is_served_unchanged_when_white_drops_below_the_floor_mid_windo
         list.apply(
             &DialOutcome::SessionAccepted(a.clone()),
             at_hours(24),
+            Ladder::Climb,
             &mut rng,
         );
     }
