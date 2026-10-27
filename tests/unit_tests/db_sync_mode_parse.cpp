@@ -42,15 +42,19 @@ namespace
     EXPECT_EQ((uint64_t)1000, out.sync_threshold);
   }
 
-  // The shipped default string must still parse, or this change bricks startup.
-  TEST(DbSyncModeParse, ShippedDefaultStillParses)
+  // What ships is DRS-D9's: the constant core::init opens the store with
+  // parses, to the safe flags, and NOT as the default. db_defaultsync is what
+  // lets Blockchain::safesyncmode switch MDB_NOSYNC on for a sync; db_nosync
+  // leaves the fsync to the store on every commit.
+  TEST(DbSyncModeParse, ShippedConstantIsSafeAndNotADefault)
   {
     db_sync_settings out;
     std::string err;
-    ASSERT_TRUE(parse_db_sync_mode("fast:async:250000000bytes", true, out, err)) << err;
-    EXPECT_EQ(DBF_FAST, out.db_flags);
-    EXPECT_FALSE(out.sync_on_blocks);
-    EXPECT_EQ((uint64_t)250000000, out.sync_threshold);
+    ASSERT_TRUE(parse_db_sync_mode(SHIPPED_DB_SYNC_MODE, SHIPPED_DB_SYNC_MODE_IS_DEFAULT,
+                                   out, err)) << err;
+    EXPECT_EQ(DBF_SAFE, out.db_flags);
+    EXPECT_EQ(db_nosync, out.sync_mode)
+      << "a default sync mode lets a sync turn the fsync off";
   }
 
   // THE SUBJECT. A typo for "safe" must not resolve to the least durable mode.

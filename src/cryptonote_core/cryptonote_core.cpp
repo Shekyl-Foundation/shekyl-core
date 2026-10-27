@@ -304,16 +304,14 @@ namespace cryptonote
 
     // Lane-owned knobs (INPUT_GRAMMAR.md §5, IG-Q4): not ported; constants.
     // `db-sync-mode` and `db-salvage` are the DRS lane's, `keep-alt-blocks`
-    // DRS-E5's. The DRS lane decided `db-sync-mode`: no knob, and the
-    // constant is DRS-D9's, an fsync per commit (`safe`; Rick, 2026-10-26),
-    // the durability the Rust store runs and the one §1.3's IBD floor is
-    // frozen against. It is a decision, so it is not parsed as a default: a
-    // default lets `Blockchain::safesyncmode` turn MDB_NOSYNC on for the
-    // length of a sync, which is the IBD this constant exists to make durable.
-    // `prep-blocks-threads` is refused (P2P_3_CHAIN_SYNC_BRIEF.md CS-Q12); 4 is
-    // today's default until the chain-sync cutover replaces this caller.
-    const std::string db_sync_mode = "safe";
-    const bool db_sync_mode_is_default = false;
+    // DRS-E5's. `db-sync-mode` is decided: no knob, and the constant is
+    // DRS-D9's `safe`, explicit rather than a default (SHIPPED_DB_SYNC_MODE,
+    // cryptonote_core.h, says why), the durability the Rust store runs and
+    // the one §1.3's IBD floor is frozen against. `prep-blocks-threads` is
+    // refused (P2P_3_CHAIN_SYNC_BRIEF.md CS-Q12); 4 is today's default until
+    // the chain-sync cutover replaces this caller.
+    const std::string db_sync_mode = SHIPPED_DB_SYNC_MODE;
+    const bool db_sync_mode_is_default = SHIPPED_DB_SYNC_MODE_IS_DEFAULT;
     const bool db_salvage = false;
     const uint64_t blocks_threads = 4;
     const size_t max_txpool_weight = static_cast<size_t>(snapshot.txpool_weight_max);
