@@ -217,6 +217,11 @@ jobs:
           # tree. The checkout is one commit deep, so the parent and both
           # trees come from GitHub; a request that fails leaves no tree match
           # or no count, and the freeze runs.
+          #
+          # A promotion whose lookup failed and a merge that added content
+          # both end in the freeze, red. Each path says which it took, on a
+          # "promotion check:" line, so the log tells them apart: a failed
+          # lookup is rerun, added content is investigated.
           run_one "Release-promotion rule self-test" \
             python3 scripts/ci/is_release_promotion.py --selftest
           ahead_by=""
@@ -226,20 +231,26 @@ jobs:
             promotion_ref="${GITHUB_BASE_REF:-}"
             if ! ahead_by="$(gh api "repos/${GITHUB_REPOSITORY}/compare/dev...${PR_HEAD_SHA}" --jq '.ahead_by')"; then
               ahead_by=""
+              echo "promotion check: the compare of dev...${PR_HEAD_SHA} failed; a promotion fails the freeze until the job is rerun"
             fi
           elif [ "${GITHUB_EVENT_NAME}" = "push" ] && [ "${GITHUB_REF_NAME:-}" = "main" ]; then
             promotion_ref="main"
-            pushed_tree=""
-            merged=""
-            if pushed="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}" --jq '"\(.commit.tree.sha) \(.parents[1].sha // "")"')"; then
+            if ! pushed="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}" --jq '"\(.commit.tree.sha) \(.parents[1].sha // "")"')"; then
+              echo "promotion check: the lookup of ${GITHUB_SHA} failed; a promotion fails the freeze until the job is rerun"
+            else
               read -r pushed_tree merged <<< "${pushed}"
-            fi
-            if [ -n "${merged}" ] && [ -n "${pushed_tree}" ] \
-               && merged_tree="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${merged}" --jq '.commit.tree.sha')" \
-               && [ "${merged_tree}" = "${pushed_tree}" ]; then
-              tree_matches=(--tree-matches)
-              if ! ahead_by="$(gh api "repos/${GITHUB_REPOSITORY}/compare/dev...${merged}" --jq '.ahead_by')"; then
-                ahead_by=""
+              if [ -z "${merged}" ]; then
+                echo "promotion check: ${GITHUB_SHA} is not a merge, so not a promotion's"
+              elif ! merged_tree="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${merged}" --jq '.commit.tree.sha')"; then
+                echo "promotion check: the lookup of the merged parent ${merged} failed; a promotion fails the freeze until the job is rerun"
+              elif [ "${merged_tree}" != "${pushed_tree}" ]; then
+                echo "promotion check: the pushed tree is not the merged parent ${merged}'s: the merge carries content beyond that dev commit"
+              else
+                tree_matches=(--tree-matches)
+                if ! ahead_by="$(gh api "repos/${GITHUB_REPOSITORY}/compare/dev...${merged}" --jq '.ahead_by')"; then
+                  ahead_by=""
+                  echo "promotion check: the compare of dev...${merged} failed; a promotion fails the freeze until the job is rerun"
+                fi
               fi
             fi
           fi
