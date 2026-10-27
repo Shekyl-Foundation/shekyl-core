@@ -50,6 +50,8 @@ use shekyl_rpc_types::{
     InfoIdentity, InfoP2p, InfoPeers, InfoPool, InfoStatus, RpcStatus, StatusConnections,
 };
 
+use shekyl_rpc_types::methods::{Grant, GrantSet, Preset};
+
 use crate::chain_facts::FactsFault;
 use crate::info_facts::{InfoFacts, PeerFacts, PoolScope, PoolState};
 use crate::methods::{RpcFault, StoreFault};
@@ -60,76 +62,66 @@ use crate::methods::{RpcFault, StoreFault};
 /// Two axes, and the second is not a grant. Host-only data — on this reply,
 /// the pool entries this node has not broadcast — is served to the host's
 /// administrator and to no grant, `admin` included (`RPC_CHANNEL.md` §6.1,
-/// RT-O9.3). Naming the axis here is what stops the channel's daemon slice
-/// from reading "`admin`" as "may see entries not yet broadcast".
+/// RT-O9.3). Naming the axis here is what stops "`admin`" being read as "may
+/// see entries not yet broadcast".
 ///
-/// Today both axes are mapped from the one listener flag
-/// ([`Self::from_listener`]). The RPC channel (RT-W10) maps a connection's
-/// grant set and its host flag onto the same value.
+/// It is made from a connection's [`crate::authority::Authority`]
+/// ([`Self::of`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Disclosure {
-    /// The caller is shown the Status part.
-    status: bool,
-    /// The caller is shown the Peers part.
-    peers: bool,
+    /// The grants whose parts the caller is shown.
+    grants: GrantSet,
     /// The caller is the host's administrator.
     host: bool,
-    /// The caller is shown the Config rows (RT-O24): everything that
-    /// describes the host or links the operator. The admin preset only.
-    config: bool,
-    /// The listener's posture, reported back as `restricted`. Transitional:
-    /// it leaves with that field when the channel's handshake returns the
-    /// grant instead.
-    listener_restricted: bool,
 }
 
 impl Disclosure {
-    /// The unrestricted listener: every part, and host. That listener binds
-    /// loopback only, which is what stands in for a host identity until the
-    /// channel exists.
+    /// Every part, and host: the host's administrator.
     pub const FULL: Self = Self {
-        status: true,
-        peers: true,
+        grants: GrantSet::ALL,
         host: true,
-        config: true,
-        listener_restricted: false,
     };
 
-    /// The restricted listener: the `view` parts, and not host.
+    /// The `view` parts, and not host.
     pub const VIEW: Self = Self {
-        status: false,
-        peers: false,
+        grants: Preset::View.grants(),
         host: false,
-        config: false,
-        listener_restricted: true,
     };
+
+    /// The disclosure a connection holding `grants` is given.
+    #[must_use]
+    pub const fn of(grants: GrantSet, host: bool) -> Self {
+        Self { grants, host }
+    }
+
+    /// Whether the part `grant` selects is shown.
+    #[must_use]
+    pub const fn shows(self, grant: Grant) -> bool {
+        self.grants.holds(grant)
+    }
 
     /// Whether the Status part is shown.
     #[must_use]
     pub const fn status(self) -> bool {
-        self.status
+        self.shows(Grant::Status)
     }
 
     /// Whether the Peers part is shown.
     #[must_use]
     pub const fn peers(self) -> bool {
-        self.peers
+        self.shows(Grant::Peers)
     }
 
     /// Whether the Config rows are shown (RT-O24).
     #[must_use]
     pub const fn config(self) -> bool {
-        self.config
+        self.shows(Grant::Config)
     }
 
-    /// The disclosure a listener's posture gives its callers.
+    /// Whether the caller is the host's administrator.
     #[must_use]
-    pub const fn from_listener(restricted: bool) -> Self {
-        if restricted {
-            Self::VIEW
-        } else {
-            Self::FULL
-        }
+    pub const fn host(self) -> bool {
+        self.host
     }
 }
 
@@ -228,7 +220,7 @@ pub fn get_info(
     // A part the caller is not shown is withheld: absent from the reply,
     // and none of its reads made (RK-D24, RK-Q8). No member is written with
     // a value that means "not this value".
-    let node = if disclosure.status {
+    let node = if disclosure.status() {
         let status = facts.status()?;
         Hidden::Shown(InfoStatus {
             start_time: status.start_time,
@@ -251,7 +243,7 @@ pub fn get_info(
     // Health's `offline` both come from the daemon's configuration, read
     // in two places; if they disagree, one of the reads is wrong, and the
     // reply refuses rather than carry both.
-    let peers = if disclosure.peers {
+    let peers = if disclosure.peers() {
         let state = match facts.peers()? {
             PeerFacts::Offline => InfoP2p::Offline,
             PeerFacts::Running(peers) => InfoP2p::Running(InfoPeers {
@@ -340,7 +332,7 @@ pub fn get_info(
         node,
         peers,
         host,
-        restricted: disclosure.listener_restricted,
+        restricted: !disclosure.host,
     })
 }
 

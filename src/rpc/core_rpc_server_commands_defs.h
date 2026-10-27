@@ -464,9 +464,11 @@ namespace cryptonote
     typedef epee::misc_utils::struct_init<response_t> response;
   };
 
-  // FAKECHAIN-only: inject an archival serve-credit bit through the
-  // production setter (Gate-6 accrual-path regtest stand-in; contract and
-  // pop-range caveat at Blockchain::regtest_inject_archival_serve_credit).
+  // An armed test lever (RPC_CHANNEL.md section 6.1), served only with
+  // dev-rpc; the setter also refuses off regtest. Injects an archival
+  // serve-credit bit through the production setter (Gate-6 accrual-path
+  // regtest stand-in; contract and pop-range caveat at
+  // Blockchain::regtest_inject_archival_serve_credit).
   struct COMMAND_RPC_INJECT_ARCHIVAL_SERVE_CREDIT
   {
     struct request_t: public rpc_request_base

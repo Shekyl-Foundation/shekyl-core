@@ -6,6 +6,7 @@
 //! The posted template, the miner, and the armed levers.
 
 use super::*;
+use shekyl_rpc_types::methods::admit_armed;
 
 /// `get_block_template` reads the posted job (N2): eight zero bytes
 /// at `reserved_offset`, the hashing blob is the block's, and a block
@@ -167,7 +168,7 @@ fn the_miner_starts_reports_and_stops_through_the_handlers() {
 /// grant (DX-Q3, Q8). Red edit: leave the miner running.
 #[test]
 fn generateblocks_reaches_three_more_and_is_refused_unarmed() {
-    use shekyl_daemon_rpc::mining_methods::{admit_armed, codes, generateblocks};
+    use shekyl_daemon_rpc::mining_methods::{codes, generateblocks};
     use shekyl_rpc_types::errors::ErrorClass;
     let row = shekyl_rpc_types::methods::json_rpc("generateblocks").expect("a row");
     let unarmed_dir = tempfile::tempdir().expect("temp");
@@ -252,7 +253,7 @@ fn no_miner_starts_after_the_node_stops() {
 /// alone, with no check of the posted job before or during the wait.
 #[test]
 fn generateblocks_on_a_node_that_is_not_synced_is_refused_at_once() {
-    use shekyl_daemon_rpc::mining_methods::{admit_armed, codes, generateblocks};
+    use shekyl_daemon_rpc::mining_methods::{codes, generateblocks};
     use shekyl_rpc_types::errors::ErrorClass;
     let dir = tempfile::tempdir().expect("temp");
     let node = open_mining(dir.path(), "testnet", shekyl_address::Network::Testnet);
@@ -290,7 +291,7 @@ fn generateblocks_on_a_node_that_is_not_synced_is_refused_at_once() {
 /// on the tip alone.
 #[test]
 fn a_job_withdrawn_mid_wait_ends_generateblocks() {
-    use shekyl_daemon_rpc::mining_methods::{admit_armed, codes, generateblocks};
+    use shekyl_daemon_rpc::mining_methods::{codes, generateblocks};
     use shekyl_rpc_types::errors::ErrorClass;
     let dir = tempfile::tempdir().expect("temp");
     let node = open_posted(dir.path(), &[]);
@@ -331,7 +332,7 @@ fn a_job_withdrawn_mid_wait_ends_generateblocks() {
 /// (the review of #1165, M2). Red edit: the guard stops nothing.
 #[test]
 fn dropping_generateblocks_stops_the_miner_it_started() {
-    use shekyl_daemon_rpc::mining_methods::{admit_armed, generateblocks};
+    use shekyl_daemon_rpc::mining_methods::generateblocks;
     let dir = tempfile::tempdir().expect("temp");
     let node = open_posted(dir.path(), &[]);
     let row = shekyl_rpc_types::methods::json_rpc("generateblocks").expect("a row");
@@ -373,7 +374,7 @@ fn dropping_generateblocks_stops_the_miner_it_started() {
 /// the grant. Red edit: let the count past the tip clamp to genesis.
 #[test]
 fn pop_blocks_refuses_genesis_pops_one_and_the_node_stays_up() {
-    use shekyl_daemon_rpc::mining_methods::{admit_armed, codes, pop_blocks};
+    use shekyl_daemon_rpc::mining_methods::{codes, pop_blocks};
     use shekyl_rpc_types::errors::ErrorClass;
     let row = shekyl_rpc_types::methods::rest_path("/pop_blocks").expect("a row");
     let dir = tempfile::tempdir().expect("temp");
@@ -532,7 +533,7 @@ fn stopping_the_miner_from_a_task_leaves_the_node_running() {
 /// #1165, N3).
 #[test]
 fn generateblocks_after_pop_blocks_completes_on_a_lone_node() {
-    use shekyl_daemon_rpc::mining_methods::{admit_armed, codes, generateblocks, pop_blocks};
+    use shekyl_daemon_rpc::mining_methods::{codes, generateblocks, pop_blocks};
     let generate = shekyl_rpc_types::methods::json_rpc("generateblocks").expect("a row");
     let pop = shekyl_rpc_types::methods::rest_path("/pop_blocks").expect("a row");
     let dir = tempfile::tempdir().expect("temp");

@@ -9,13 +9,12 @@
 //!
 //! Who asks decides what is listed: any caller sees the entries the node
 //! shows; the host's administrator also sees those in their stem phase
-//! (`RPC_CHANNEL.md` RT-O9.3). The dispatcher passes the caller's grant
+//! (`RPC_CHANNEL.md` RT-O9.3). The caller says whether it is the host
 //! through [`scope_for`]; nothing here lists a stem entry to anyone else.
 
 use std::collections::BTreeMap;
 
 use shekyl_rpc_types::errors::RpcError;
-use shekyl_rpc_types::methods::Grant;
 use shekyl_rpc_types::mining::StatusOnlyResponse;
 use shekyl_rpc_types::pool::{
     FlushTxpoolRequest, GetTransactionPoolHashesResponse, GetTransactionPoolResponse,
@@ -28,12 +27,15 @@ use shekyl_types::TxHash;
 use crate::handles::{PoolEntryFacts, PoolFacts};
 use crate::info_facts::PoolScope;
 
-/// The pool a caller under `grant` may see.
+/// The pool `host` may see. Entries not yet broadcast are host-only data
+/// (`RPC_CHANNEL.md` §6.1, RT-O9.3): the host's administrator sees them,
+/// and everyone else sees the broadcast set.
 #[must_use]
-pub const fn scope_for(grant: Grant) -> PoolScope {
-    match grant {
-        Grant::HostOnly => PoolScope::WithUnbroadcast,
-        Grant::Any => PoolScope::Broadcast,
+pub const fn scope_for(host: bool) -> PoolScope {
+    if host {
+        PoolScope::WithUnbroadcast
+    } else {
+        PoolScope::Broadcast
     }
 }
 
@@ -257,21 +259,21 @@ mod tests {
         }
     }
 
-    /// A caller under the `Any` grant is never shown the stem entry; the
+    /// A caller who is not the host is never shown the stem entry; the
     /// host's administrator is (RT-O9.3).
     #[test]
     fn a_stem_entry_reaches_the_host_and_no_one_else() {
-        assert_eq!(scope_for(Grant::Any), PoolScope::Broadcast);
-        assert_eq!(scope_for(Grant::HostOnly), PoolScope::WithUnbroadcast);
+        assert_eq!(scope_for(false), PoolScope::Broadcast);
+        assert_eq!(scope_for(true), PoolScope::WithUnbroadcast);
         let pool = pool();
-        let anyone = get_transaction_pool(&pool, scope_for(Grant::Any)).expect("listing");
+        let anyone = get_transaction_pool(&pool, scope_for(false)).expect("listing");
         assert_eq!(anyone.transactions.len(), 1);
         assert!(anyone.transactions[0].relayed);
-        let host = get_transaction_pool(&pool, scope_for(Grant::HostOnly)).expect("listing");
+        let host = get_transaction_pool(&pool, scope_for(true)).expect("listing");
         assert_eq!(host.transactions.len(), 2);
         assert_eq!(host.spent_key_images.len(), 1, "one image, two spenders");
         assert_eq!(host.spent_key_images[0].txs_hashes.len(), 2);
-        let hashes = get_transaction_pool_hashes(&pool, scope_for(Grant::Any)).expect("hashes");
+        let hashes = get_transaction_pool_hashes(&pool, scope_for(false)).expect("hashes");
         assert_eq!(hashes.tx_hashes, vec![HashHex::from_bytes([1; 32])]);
     }
 

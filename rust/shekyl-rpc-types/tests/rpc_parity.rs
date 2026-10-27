@@ -807,7 +807,7 @@ fn request_sequences_are_omitted_when_empty_and_present_when_not() {
 fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // One row per bump, oldest first. Each is (the vector before the bump,
     // the vector after it).
-    let links: [(&str, &str); 37] = [
+    let links: [(&str, &str); 38] = [
         (
             include_str!("vectors/rpc/get_version_synced_v1.json"),
             include_str!("vectors/rpc/get_version_synced_v2.json"),
@@ -956,6 +956,10 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
             include_str!("vectors/rpc/get_version_synced_v37.json"),
             include_str!("vectors/rpc/get_version_synced_v38.json"),
         ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v38.json"),
+            include_str!("vectors/rpc/get_version_synced_v39.json"),
+        ),
     ];
 
     let version_of = |raw: &str| -> u64 {
@@ -974,7 +978,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // The trailing comment names the minor the *newer* vector carries.
     // `v1` is 3.24, so link `i`'s newer minor is `25 + i`. The comment sits
     // on its element, so it cannot attach to the neighbor.
-    const ADDED_AT_LINK: [&[&str]; 37] = [
+    const ADDED_AT_LINK: [&[&str]; 38] = [
         &[],                                                        // 3.25
         &[],                                                        // 3.26
         &[],                                                        // 3.27
@@ -1012,6 +1016,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.59 (the connection rows drop support_flags with the P2P word, PWD-T7; get_version gains nothing)
         &[], // 3.60 (the claim-source bond field is is_support_complete_tree; get_version gains nothing)
         &[], // 3.61 (a retired pool: get_info's pool_retired and null counts, get_transactions' unavailable_tx; get_version gains nothing)
+        &[], // 3.62 (a grant refusal is the error object, RT-W10 step 1; get_version gains nothing)
     ];
     assert_eq!(
         ADDED_AT_LINK.len(),
@@ -1023,7 +1028,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // `ADDED_AT_LINK`, held to the same standard: a member leaves only where
     // its link names it. Indexed like `ADDED_AT_LINK`; every link but the
     // 3.44 one retires nothing.
-    const REMOVED_AT_LINK: [&[&str]; 37] = [
+    const REMOVED_AT_LINK: [&[&str]; 38] = [
         &[],             // 3.25
         &[],             // 3.26
         &[],             // 3.27
@@ -1061,6 +1066,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.59 (support_flags leaves the connection rows; get_version retires nothing)
         &[], // 3.60 (the renamed bond field is not get_version's; it retires nothing)
         &[], // 3.61 (the retired pool's keys are not get_version's; it retires nothing)
+        &[], // 3.62 (the refusal shape is not get_version's; it retires nothing)
     ];
     assert_eq!(
         REMOVED_AT_LINK.len(),

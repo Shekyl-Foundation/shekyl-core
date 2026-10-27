@@ -21,11 +21,17 @@ use std::sync::Arc;
 
 use shekyl_rpc_types::SubmitTransactionRequest;
 
+use crate::authority::Authority;
 use crate::server::AppState;
 use crate::submit::{phase_c_semaphore, SubmitCaller};
+use axum::Extension;
 
 /// Handle `POST /submit_transaction`.
-pub async fn submit_transaction(State(state): State<Arc<AppState>>, body: String) -> Response {
+pub async fn submit_transaction(
+    State(state): State<Arc<AppState>>,
+    Extension(authority): Extension<Authority>,
+    body: String,
+) -> Response {
     let request: SubmitTransactionRequest = match serde_json::from_str(&body) {
         Ok(request) => request,
         Err(e) => {
@@ -39,15 +45,15 @@ pub async fn submit_transaction(State(state): State<Arc<AppState>>, body: String
         }
     };
 
-    // The endpoint's trust tier is the Dandelion++ embargo-disclosure
-    // boundary (§3.1): a foreign caller on the restricted/public bind must
-    // not be able to probe embargoed pool presence, so it sees only
-    // broadcast-visible identity. The owner (unrestricted/local endpoint)
-    // keeps the F31 resubmit-as-status query.
-    let caller = if state.restricted {
-        SubmitCaller::Foreign
-    } else {
+    // The caller's trust tier is the Dandelion++ embargo-disclosure
+    // boundary (§3.1): anyone but the host's administrator must not be able
+    // to probe embargoed pool presence, so it sees only broadcast-visible
+    // identity (host-only data, `RPC_CHANNEL.md` §6.1). The host keeps the
+    // F31 resubmit-as-status query.
+    let caller = if authority.host() {
         SubmitCaller::Owner
+    } else {
+        SubmitCaller::Foreign
     };
 
     // F39 verification cap, enforced at the async dispatch layer: acquire a
