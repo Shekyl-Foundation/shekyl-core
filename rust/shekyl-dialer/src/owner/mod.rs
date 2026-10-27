@@ -433,6 +433,13 @@ impl Dialer {
 
     /// This node's own addresses on `connector`: never dial candidates,
     /// and the disclosure population's own member (slice 1 §5a).
+    /// This node's own addresses on `connector`, as [`Self::set_own_addresses`]
+    /// last set them: empty when it discloses none there.
+    #[must_use]
+    pub fn own_addresses(&self, connector: ConnectorId) -> Vec<NetworkAddress> {
+        self.shared().own[connector.index()].clone()
+    }
+
     pub fn set_own_addresses(&self, connector: ConnectorId, addresses: Vec<NetworkAddress>) {
         tracing::info!("{connector:?}: this node's own address(es) are {addresses:?}");
         let mut shared = self.shared();
