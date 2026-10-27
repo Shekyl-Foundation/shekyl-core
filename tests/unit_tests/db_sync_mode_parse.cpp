@@ -55,6 +55,12 @@ namespace
     EXPECT_EQ(DBF_SAFE, out.db_flags);
     EXPECT_EQ(db_nosync, out.sync_mode)
       << "a default sync mode lets a sync turn the fsync off";
+    // core::init prints `(int)sync_mode`. BLOCKCHAIN_DB_SYNC_MODE in
+    // scripts/bench/drs_artifact.py is this order.
+    EXPECT_EQ(0, static_cast<int>(db_defaultsync));
+    EXPECT_EQ(1, static_cast<int>(db_sync));
+    EXPECT_EQ(2, static_cast<int>(db_async));
+    EXPECT_EQ(3, static_cast<int>(db_nosync));
   }
 
   // THE SUBJECT. A typo for "safe" must not resolve to the least durable mode.

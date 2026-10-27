@@ -1638,13 +1638,16 @@ open question rather than a case for moving it.
 (Rick, 2026-10-26), parsed as an explicit choice rather than a default, so
 `Blockchain::safesyncmode` is a no-op and no sync turns the fsync off.
 `core::init` logs `Database sync: flags=…, sync_mode=…, threshold=…` for what
-it resolved, and the bench reads that line back twice: from the generating
-seed, before any block is generated, and from the subject, whose numbers the
-artifact carries. Artifacts carry `durability.observed: true` with the line, and
-the gate **refuses** one whose line reports `MDB_NOSYNC`/`MDB_MAPASYNC`, lacks
-the safe flag, or names a mode other than the artifact's `sync_mode`. The line is
-written at open, so it cannot show a later switch; the bench also refuses a run
-whose subject log reports `switching safe mode off`.
+it resolved. `flags` is the `DBF_*` bits and `sync_mode` is
+`blockchain_db_sync_mode` as an integer: `db_nosync` (3) leaves the fsync to
+the store, and `db_defaultsync` (0) is the open that lets `safesyncmode` turn
+it off. The bench reads that line twice — from the generating seed, before any
+block is generated, and from the subject, before the sync is timed. Artifacts
+carry `durability.observed: true` with the line, and the gate **refuses** one
+whose flag bits and parenthetical do not name the same open, whose open is not
+`safe`, whose `sync_mode` is not `db_nosync`, or whose recorded label is not
+the open the line names. The integer is on the line written at open, so a
+default-safe daemon is refused before generation.
 
 **A4 on the LMDB path.** `parse_db_sync_mode` fails closed on an unrecognised
 token, the resolved posture is logged, and the posture is DRS-D9's through the

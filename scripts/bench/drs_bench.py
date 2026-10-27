@@ -106,14 +106,30 @@ def _resolved_sync_line(log_path, since=0):
     return None
 
 
-def _log_reports(log_path, marker):
-    """Whether the log carries `marker`. An unreadable log is reported as True:
-    the check is a refusal, and a refusal must not pass on a read failure."""
-    try:
-        with open(log_path, encoding="utf-8", errors="replace") as fh:
-            return any(marker in line for line in fh)
-    except OSError:
-        return True
+def daemon_executable(path):
+    """Absolute path of the daemon binary.
+
+    The child is spawned with its cwd set to the data directory, so a relative
+    argv0 would be resolved there. Preflight and both launches name this path,
+    which is the file the operator pointed at.
+    """
+    return os.path.abspath(path)
+
+
+def _readback_refusal(who, log_path, line):
+    """The refusal for a spawn's resolved sync line, or None when it is DRS-D9.
+
+    `who` is the spawn (`generating seed`, `subject`). A missing line names the
+    rebuild, because a daemon predating the A4 report does not write one.
+    """
+    reasons = A.resolved_line_refusals(line)
+    if not reasons:
+        return None
+    hint = ""
+    if line is None:
+        hint = " A daemon predating the A4 report will not log it — rebuild."
+    return (f"the {who}'s resolved sync report is not DRS-D9's:\n  "
+            + "\n  ".join(reasons) + hint + f"\nsee {log_path}")
 
 
 def _loadavg():
@@ -255,7 +271,8 @@ def measure(args):
     os.makedirs(work, exist_ok=True)
     seed_dir = os.path.abspath(args.seed_dir or os.path.join(work, "seed"))
     os.makedirs(seed_dir, exist_ok=True)
-    pre = A.measurement_preflight(daemon=args.daemon, work_dir=work,
+    daemon = daemon_executable(args.daemon)
+    pre = A.measurement_preflight(daemon=daemon, work_dir=work,
         seed_dir=seed_dir, disk_class=args.disk_class)
     if pre:
         _fail("refusing to start:\n  " + "\n  ".join(pre))
@@ -284,7 +301,7 @@ def measure(args):
         # a listen endpoint for a connector that is off.
         net = ["--clearnet", "off"] if offline else ["--clearnet-listen",
                                                      f"127.0.0.1:{p2p}"]
-        argv = [args.daemon] + common + ["--data-dir", d] + net + [
+        argv = [daemon] + common + ["--data-dir", d] + net + [
             "--rpc-admin-listen", f"127.0.0.1:{rpcp}"] + argv_extra
         with open(os.path.join(work, f"{tag}.argv"), "a", encoding="utf-8") as fh:
             fh.write(" ".join(argv) + "\n")
@@ -324,12 +341,12 @@ def measure(args):
             _fail(f"the generating seed did not announce {armed_lever.ANNOUNCEMENT!r} "
                   f"at start; see {work}/seed.log")
         # The seed is the subject's binary. Its readback, taken before any block
-        # is generated, refuses a daemon without DRS-D9's durability before the
-        # generation is spent; the subject's own readback is checked again below.
-        seed_sync = A.resolved_line_refusals(_resolved_sync_line(seed_log, seed_from))
-        if seed_sync:
-            _fail(f"the generating seed's resolved sync report {seed_sync[0]}; "
-                  f"see {work}/seed.log")
+        # is generated, refuses a daemon without DRS-D9 before the generation
+        # is spent. The subject's own line is checked again before its sync.
+        seed_line = _resolved_sync_line(seed_log, seed_from)
+        seed_refusal = _readback_refusal("generating seed", seed_log, seed_line)
+        if seed_refusal:
+            _fail(seed_refusal)
         have_h = _rpc(srpc, "get_info")["result"]["height"]
         seed_reused = have_h > 1
         gen_blocks, gen_wall = 0, None
@@ -372,10 +389,14 @@ def measure(args):
                       f"here (tens of seconds to minutes) and is EXCLUDED from the "
                       f"measurement, so raising --startup-timeout does not affect "
                       f"any number.")
-            # The durability READBACK, taken from the subject's own startup report
-            # now that it is up. Read here rather than at the end so a subject that
-            # dies mid-sync still fails on the specific missing thing.
-            resolved_line = _resolved_sync_line(os.path.join(work, "subject.log"))
+            # The durability readback, from this spawn's startup line, before the
+            # sync is timed. The line's sync_mode integer is the open; a line that
+            # is not db_nosync is not a measurement of DRS-D9.
+            subject_log = os.path.join(work, "subject.log")
+            resolved_line = _resolved_sync_line(subject_log)
+            subject_refusal = _readback_refusal("subject", subject_log, resolved_line)
+            if subject_refusal:
+                _fail(subject_refusal)
             # Denominator: first successful get_info to height == seed height.
             # CPU is a delta over the same window. A single end-of-run read
             # would carry startup / RandomX init / store open, which the wall
@@ -412,18 +433,6 @@ def measure(args):
         store_bytes = _dir_bytes(subj_dir, apparent=False)
         store_apparent = _dir_bytes(subj_dir, apparent=True)
 
-    if resolved_line is None:
-        _fail(f"the subject never reported its resolved durability flags in "
-              f"{work}/subject.log. That line is the readback for DRS-D9, so no "
-              f"artifact is written: recording the mode we ASKED for while unable to "
-              f"see what the daemon opened with is the posture-by-omission A4 "
-              f"forbids. A daemon predating the A4 report will not log it — rebuild.")
-    if _log_reports(os.path.join(work, "subject.log"), A.SAFE_MODE_OFF_MARKER):
-        _fail(f"the subject's log reports {A.SAFE_MODE_OFF_MARKER!r} (or could not be "
-              f"read): the store turned its fsync off during the sync, so the IBD ran "
-              f"without DRS-D9 whatever it opened with. No artifact is written. A daemon "
-              f"whose sync-mode constant is parsed as a default does this; see "
-              f"core::init in src/cryptonote_core/cryptonote_core.cpp.")
     if load_at_start is None or load_at_end is None:
         _fail("could not read the load average from os.getloadavg(). System load is a "
               "condition of a wall-time measurement, so no artifact is written rather "

@@ -48,7 +48,7 @@ def valid_artifact(engine="lmdb", **over):
                              "--p2p-closed-peer", "127.0.0.1:3"],
             "observed": True,
             "resolved_log_line": "2026-09-13T00:00:00Z INFO global: Database sync: "
-                                 "flags=0x1 (safe), sync_mode=0, threshold=1 blocks",
+                                 "flags=0x1 (safe), sync_mode=3, threshold=1 blocks",
             "readback": "the subject daemon's own resolved-flags report",
         },
         "environment": {"loadavg_1m_at_start": 0.3, "loadavg_1m_at_end": 0.4,
@@ -153,7 +153,7 @@ class ArtifactRefusals(unittest.TestCase):
             a["durability"]["sync_mode"] = "fast"
             a["durability"]["resolved_log_line"] = (
                 "INFO global: Database sync: flags=0x2 (fast: MDB_NOSYNC), "
-                "sync_mode=0, threshold=1 blocks")
+                "sync_mode=2, threshold=1 blocks")
         self._refuse(m, "MDB_NOSYNC")
 
     def test_refuses_a_label_the_readback_does_not_carry(self):
@@ -163,7 +163,7 @@ class ArtifactRefusals(unittest.TestCase):
         self._refuse(lambda a: a["durability"].__setitem__(
             "resolved_log_line",
             "INFO global: Database sync: flags=0x4 (fastest: MDB_NOSYNC|MDB_WRITEMAP|"
-            "MDB_MAPASYNC), sync_mode=0, threshold=1000 blocks"),
+            "MDB_MAPASYNC), sync_mode=2, threshold=1000 blocks"),
             "is not the mode the daemon reported")
 
     def test_refuses_missing_imposed_argv(self):
@@ -196,8 +196,9 @@ class ArtifactRefusals(unittest.TestCase):
     def test_refuses_a_resolved_line_without_the_safe_flag(self):
         self._refuse(lambda a: a["durability"].__setitem__(
             "resolved_log_line",
-            "INFO global: Database sync: flags=0x10 (salvage), sync_mode=0, "
-            "threshold=1 blocks"), "does not report the safe flag")
+            f"INFO global: Database sync: flags=0x{D.DBF_SALVAGE:x} (salvage), "
+            f"sync_mode={D.DB_NOSYNC_ORDINAL}, threshold=1 blocks"),
+            "does not report the safe flag")
 
     def test_refuses_a_non_report_string_as_the_readback(self):
         self._refuse(lambda a: a["durability"].__setitem__(
@@ -766,8 +767,8 @@ class InputErrors(unittest.TestCase):
         d = tempfile.mkdtemp()
         log = os.path.join(d, "seed.log")
         with open(log, "w", encoding="utf-8") as fh:
-            fh.write("INFO global: Database sync: flags=0x1 (safe), sync_mode=0, "
-                     "threshold=1 blocks\n")
+            fh.write("INFO global: Database sync: flags=0x1 (safe), "
+                     f"sync_mode={D.DB_NOSYNC_ORDINAL}, threshold=1 blocks\n")
         since = os.path.getsize(log)
         with open(log, "a", encoding="utf-8") as fh:
             fh.write("INFO global: Database sync: flags=0x2 (fast: MDB_NOSYNC), "
@@ -776,34 +777,63 @@ class InputErrors(unittest.TestCase):
         self.assertIn("(safe)", R._resolved_sync_line(log))
         self.assertIsNone(R._resolved_sync_line(log, os.path.getsize(log)))
 
-    def test_a_log_that_switched_safe_mode_off_is_reported(self):
-        d = tempfile.mkdtemp()
-        log = os.path.join(d, "subject.log")
-        with open(log, "w", encoding="utf-8") as fh:
-            fh.write("INFO blockchain.db.lmdb: switching safe mode off\n")
-        self.assertTrue(R._log_reports(log, D.SAFE_MODE_OFF_MARKER))
-        with open(log, "w", encoding="utf-8") as fh:
-            fh.write("INFO global: Database sync: flags=0x1 (safe), sync_mode=3, "
-                     "threshold=1 blocks\n")
-        self.assertFalse(R._log_reports(log, D.SAFE_MODE_OFF_MARKER))
-        # An unreadable log refuses: the check must not pass on a read failure.
-        self.assertTrue(R._log_reports(os.path.join(d, "absent.log"),
-                                       D.SAFE_MODE_OFF_MARKER))
+    def test_a_missing_readback_names_the_rebuild(self):
+        """An unreadable log is a refusal. The check must not pass on a read failure."""
+        msg = R._readback_refusal("subject", "/nonexistent/subject.log", None)
+        self.assertIn("does not carry the daemon's resolved sync report", msg)
+        self.assertIn("rebuild", msg)
+        self.assertIn("/nonexistent/subject.log", msg)
 
     def test_the_mode_is_read_out_of_the_readback(self):
+        """The parenthetical's open, independent of the sync_mode integer."""
+        nosync = D.DB_NOSYNC_ORDINAL
+        async_ordinal = D.BLOCKCHAIN_DB_SYNC_MODE.index("db_async")
         for line, mode in (
-                ("Database sync: flags=0x1 (safe), sync_mode=0, threshold=1 blocks",
-                 "safe"),
-                ("Database sync: flags=0x2 (fast: MDB_NOSYNC), sync_mode=0, "
-                 "threshold=250000000 bytes", "fast"),
-                ("Database sync: flags=0x4 (fastest: MDB_NOSYNC|MDB_WRITEMAP|"
-                 "MDB_MAPASYNC), sync_mode=0, threshold=1000 blocks", "fastest")):
+                (f"Database sync: flags=0x{D.DBF_SAFE:x} (safe), sync_mode={nosync}, "
+                 "threshold=1 blocks", "safe"),
+                (f"Database sync: flags=0x{D.DBF_FAST:x} (fast: MDB_NOSYNC), "
+                 f"sync_mode={async_ordinal}, threshold=250000000 bytes", "fast"),
+                (f"Database sync: flags=0x{D.DBF_FASTEST:x} (fastest: MDB_NOSYNC|"
+                 f"MDB_WRITEMAP|MDB_MAPASYNC), sync_mode={async_ordinal}, "
+                 "threshold=1000 blocks", "fastest")):
             with self.subTest(mode=mode):
                 self.assertEqual(D.resolved_sync_mode(line), mode)
         self.assertIsNone(D.resolved_sync_mode("no report here"))
         self.assertIsNone(D.resolved_sync_mode(None))
-        self.assertEqual(D.resolved_line_refusals(
-            "Database sync: flags=0x1 (safe), sync_mode=0, threshold=1 blocks"), [])
+
+    def test_only_db_nosync_with_the_safe_open_is_drs_d9(self):
+        """`(safe)` with sync_mode=0 is db_defaultsync: the open that lets a sync
+        turn the fsync off. The integer is on the line written at open."""
+        def line(ordinal, flags=D.DBF_SAFE, words="safe"):
+            return (f"Database sync: flags=0x{flags:x} ({words}), "
+                    f"sync_mode={ordinal}, threshold=1 blocks")
+
+        self.assertEqual(D.resolved_line_refusals(line(D.DB_NOSYNC_ORDINAL)), [])
+        for ordinal, name in enumerate(D.BLOCKCHAIN_DB_SYNC_MODE):
+            if ordinal == D.DB_NOSYNC_ORDINAL:
+                continue
+            with self.subTest(name=name):
+                reasons = D.resolved_line_refusals(line(ordinal))
+                self.assertTrue(any(name in reason and "db_nosync" in reason
+                                    for reason in reasons), reasons)
+        self.assertTrue(any("not a blockchain_db_sync_mode" in reason
+                            for reason in D.resolved_line_refusals(line(9))))
+
+    def test_flags_and_the_parenthetical_must_name_the_same_open(self):
+        line = (f"Database sync: flags=0x{D.DBF_SAFE:x} (fast: MDB_NOSYNC), "
+                f"sync_mode={D.DB_NOSYNC_ORDINAL}, threshold=1 blocks")
+        reasons = D.resolved_line_refusals(line)
+        self.assertTrue(any("do not name the same open" in reason for reason in reasons),
+                        reasons)
+        self.assertTrue(any("MDB_NOSYNC" in reason for reason in reasons), reasons)
+
+    def test_bits_beside_the_open_do_not_change_the_verdict(self):
+        """RDONLY and SALVAGE are not durability opens. Beside `safe` at
+        db_nosync they still are DRS-D9; alone they are not."""
+        beside = D.DBF_SAFE | D.DBF_RDONLY | D.DBF_SALVAGE
+        line = (f"Database sync: flags=0x{beside:x} (safe) (salvage), "
+                f"sync_mode={D.DB_NOSYNC_ORDINAL}, threshold=1 blocks")
+        self.assertEqual(D.resolved_line_refusals(line), [])
 
     def test_a_directory_is_a_verdict_not_a_traceback(self):
         p = self._cli("validate", tempfile.mkdtemp())
@@ -853,6 +883,15 @@ class CommittedArtifacts(unittest.TestCase):
 
 
 class Preflight(unittest.TestCase):
+
+    def test_a_relative_daemon_path_is_absolute(self):
+        """The child cwd is the data directory. A relative path would be resolved
+        there, so preflight can see a file the spawn cannot."""
+        rel = os.path.join("build", "bin", "shekyld")
+        got = R.daemon_executable(rel)
+        self.assertTrue(os.path.isabs(got))
+        self.assertEqual(got, os.path.abspath(rel))
+        self.assertEqual(R.daemon_executable(got), got)
 
     def test_refuses_a_missing_daemon_binary(self):
         r = D.measurement_preflight(

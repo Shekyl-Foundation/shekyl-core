@@ -13,6 +13,7 @@
 
 import os
 import re
+from typing import NamedTuple, Optional
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DESIGN_DOC = os.path.join(ROOT, "docs/design/DAEMON_REDB_STORE.md")
@@ -36,51 +37,149 @@ PEAK_RSS_RATIO = 2.0         # <= passes
 ALLOWED_SYNC_MODES = ("safe",)
 
 # The daemon reports the durability posture it RESOLVED, as
-#   Database sync: flags=0x1 (safe), sync_mode=0, threshold=1 blocks
-# added for A4 (§4) so that the posture is "explicit rather than a library default
-# reached by omission, and that is only checkable from a running node if the node
-# says which flags it opened with". The harness reads that line out of the
-# subject's own log, which is why `durability.observed` can now be TRUE: earlier
-# revisions recorded `false` and said plainly that no readback existed, because
-# `mdb_env_get_flags` is in-process and nothing logged the resolved mode. It does
-# now, so the claim is measured instead of imposed-and-validated.
+#   Database sync: flags=0x1 (safe), sync_mode=3, threshold=1 blocks
+# `flags` and the parenthetical name one open. `sync_mode` is
+# `blockchain_db_sync_mode` printed as an integer (blockchain.h). The line is
+# written at open, and that integer is what lets `Blockchain::safesyncmode`
+# turn the fsync off later: `db_defaultsync` does, `db_nosync` does not.
+# Added for A4 so the posture is checkable from the node's own log.
 RESOLVED_SYNC_RE = r"Database sync: flags=0x([0-9a-f]+)([^,]*), sync_mode=(\d+)"
-# Any of these in the resolved line means LMDB was opened without an fsync per
-# commit.
+_SYNC_SEGMENT_RE = re.compile(r"\(([^)]*)\)")
+
+# `DBF_*` in blockchain_db.h, which is the hex `core::init` prints.
+DBF_SAFE = 0x1
+DBF_FAST = 0x2
+DBF_FASTEST = 0x4
+DBF_RDONLY = 0x8
+DBF_SALVAGE = 0x10
+
+# The three opens, in the order `core::init` prints their parentheticals.
+# The flag bit and the word are one open; a line whose two spellings differ
+# is not a record of either.
+DURABILITY_OPENS = (
+    ("safe", DBF_SAFE),
+    ("fast", DBF_FAST),
+    ("fastest", DBF_FASTEST),
+)
+_OPEN_NAMES = tuple(name for name, _bit in DURABILITY_OPENS)
+
+# Parenthetical text that means the open has no fsync per commit. `DBF_FAST`
+# and `DBF_FASTEST` are that open; the words catch a line that says so beside
+# a `safe` bit.
 NOSYNC_MARKERS = ("MDB_NOSYNC", "MDB_MAPASYNC")
-# What `BlockchainLMDB::safesyncmode` logs when a sync turns the fsync off. The
-# resolved line is written at open, before any sync, so it cannot show this;
-# a subject log carrying it ran its IBD without DRS-D9 whatever it opened with.
-SAFE_MODE_OFF_MARKER = "switching safe mode off"
+
+# `blockchain_db_sync_mode` (blockchain.h), in enumerator order. The log's
+# `sync_mode=` integer is this index. `db_defaultsync` is what lets
+# `Blockchain::safesyncmode` turn MDB_NOSYNC on for a sync. `db_nosync`
+# leaves the fsync to the store on every commit, which is DRS-D9.
+BLOCKCHAIN_DB_SYNC_MODE = (
+    "db_defaultsync",
+    "db_sync",
+    "db_async",
+    "db_nosync",
+)
+DB_NOSYNC_ORDINAL = BLOCKCHAIN_DB_SYNC_MODE.index("db_nosync")
 
 
-def resolved_sync_mode(line):
-    """The mode a resolved sync report names (`safe`, `fast`, `fastest`), or None."""
-    m = re.search(RESOLVED_SYNC_RE, line) if isinstance(line, str) else None
-    if m is None:
+class ResolvedSyncReport(NamedTuple):
+    """One `Database sync:` line from `core::init`.
+
+    `flags` is the hex. `segments` are the parentheticals, in order.
+    `ordinal` is `sync_mode`.
+    """
+
+    flags: int
+    segments: tuple
+    ordinal: int
+
+    def worded_open(self) -> Optional[str]:
+        """The durability open the parentheticals name, or None."""
+        for segment in self.segments:
+            head = segment.split(":", 1)[0].strip()
+            if head in _OPEN_NAMES:
+                return head
         return None
-    label = m.group(2).strip().strip("()").split(":")[0].strip()
-    return label or None
+
+    def flagged_open(self) -> Optional[str]:
+        """The durability open the flag bits name.
+
+        None when the line does not carry exactly one of the three opens.
+        `DBF_RDONLY` and `DBF_SALVAGE` are not opens, so they do not count.
+        """
+        named = [name for name, bit in DURABILITY_OPENS if self.flags & bit]
+        if len(named) == 1:
+            return named[0]
+        return None
+
+    def ordinal_name(self) -> Optional[str]:
+        """`blockchain_db_sync_mode` for this ordinal, or None when it is not one."""
+        if 0 <= self.ordinal < len(BLOCKCHAIN_DB_SYNC_MODE):
+            return BLOCKCHAIN_DB_SYNC_MODE[self.ordinal]
+        return None
+
+    def nosync_markers(self) -> tuple:
+        """NOSYNC words in the parentheticals, in `NOSYNC_MARKERS` order."""
+        text = " ".join(self.segments)
+        return tuple(marker for marker in NOSYNC_MARKERS if marker in text)
 
 
-def resolved_line_refusals(line):
+def resolved_sync_report(line) -> Optional[ResolvedSyncReport]:
+    """The resolved sync line, parsed, or None when `line` is not one."""
+    if not isinstance(line, str):
+        return None
+    match = re.search(RESOLVED_SYNC_RE, line)
+    if match is None:
+        return None
+    segments = tuple(part.strip() for part in _SYNC_SEGMENT_RE.findall(match.group(2)))
+    return ResolvedSyncReport(int(match.group(1), 16), segments, int(match.group(3)))
+
+
+def resolved_sync_mode(line) -> Optional[str]:
+    """The open the parentheticals name (`safe`, `fast`, `fastest`), or None."""
+    report = resolved_sync_report(line)
+    if report is None:
+        return None
+    return report.worded_open()
+
+
+def resolved_line_refusals(line) -> list:
     """Why a daemon's resolved sync report is not DRS-D9's, or [] if it is.
 
-    One rule for the two places it is applied: the finished artifact, and the
-    generating seed's report, read before a day of generation is spent.
+    One rule for every caller: the finished artifact, the generating seed
+    before any block is generated, and the subject before its sync is timed.
     """
-    if not isinstance(line, str) or not re.search(RESOLVED_SYNC_RE, line):
+    report = resolved_sync_report(line)
+    if report is None:
         return [f"is {str(line)[:60]!r}, which does not carry the daemon's resolved "
                 "sync report. That line IS the readback: without it nothing shows "
                 "the durability the store was opened with"]
-    hit = [m for m in NOSYNC_MARKERS if m in line]
-    if hit:
-        return [f"reports {hit}: the store was opened WITHOUT an fsync per commit, so "
-                f"DRS-D9 was not in force: {line.strip()[:120]}"]
-    if "(safe)" not in line:
-        return [f"does not report the safe flag, so the resolved posture is not "
-                f"DRS-D9's: {line.strip()[:120]}"]
-    return []
+    shown = line.strip()[:120]
+    reasons = []
+    flagged = report.flagged_open()
+    worded = report.worded_open()
+    markers = report.nosync_markers()
+    if flagged != worded:
+        reasons.append(f"has flags=0x{report.flags:x} ({flagged}) and parenthetical "
+                       f"{worded!r}, which do not name the same open: {shown}")
+    elif flagged in ("fast", "fastest") and not markers:
+        # The marker reason names this same fact when the parenthetical carries
+        # the NOSYNC words. This arm is the open whose bits say it and whose
+        # words do not.
+        reasons.append(f"reports {flagged}: the store was opened WITHOUT an fsync "
+                       f"per commit, so DRS-D9 was not in force: {shown}")
+    elif flagged != "safe":
+        reasons.append("does not report the safe flag, so the resolved posture is "
+                       f"not DRS-D9's: {shown}")
+    if markers:
+        reasons.append(f"reports {list(markers)}: the store was opened WITHOUT an "
+                       f"fsync per commit, so DRS-D9 was not in force: {shown}")
+    if report.ordinal != DB_NOSYNC_ORDINAL:
+        got = report.ordinal_name() or "not a blockchain_db_sync_mode"
+        reasons.append(f"has sync_mode={report.ordinal} ({got}); DRS-D9 requires "
+                       f"db_nosync ({DB_NOSYNC_ORDINAL}). A default lets a sync turn "
+                       f"the fsync off: {shown}")
+    return reasons
+
 
 # §1.3 requires the disk TYPE. "unknown" is not a type, so it is not a value.
 ALLOWED_DISK_CLASSES = ("hdd", "ssd_or_nvme")
