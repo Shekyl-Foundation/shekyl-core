@@ -179,10 +179,11 @@ fn with_one_session_held_failures_climb_as_today() {
 /// address has thawed: a wake draws one, and only that one cools again.
 #[test]
 fn after_the_block_a_cooled_address_is_drawable_within_one_first_step_cooldown() {
-    let first_step_and_jitter = Duration::from_nanos(
-        shekyl_peerlist::COOLDOWN_FIRST_NANOS + shekyl_peerlist::COOLDOWN_FIRST_NANOS / 2,
-    );
     for (connector, seed) in [(TOR, 56), (CLEARNET, 57)] {
+        let first_step = shekyl_peerlist::dial_profile(connector)
+            .cooldown
+            .first_nanos;
+        let first_step_and_jitter = Duration::from_nanos(first_step + first_step / 2);
         let mut rig = QuietRig::new(connector, seed, false);
         rig.advance(QUIET_AFTER);
         for _ in 0..4 {

@@ -32,13 +32,15 @@ use shekyl_options::PeerEndpoint;
 use shekyl_peerlist::Peerlist;
 use std::net::SocketAddr;
 
-pub use shekyl_dialer::{in_flight_bound, QUIET_AFTER_NANOS};
+pub use shekyl_dialer::QUIET_AFTER_NANOS;
 pub use shekyl_peerlist::{ConnectorId, NetworkAddress};
-use shekyl_relay_privacy::params::{MIN_PROVISIONED_OUT_PEERS, P2P_DEFAULT_OUT_PEERS};
 use shekyl_rpc_types::DaemonNetwork;
 use shekyl_seam::{connector_from_index, CloseCause, Hub, SocketId, SyncPayload};
 use shekyl_thread_ledger::{DedicatedThread, ThreadName};
 use shekyl_timing_engine::{EngineError, Handle, MonotonicClock, OwnerClass};
+/// Each connector's dial profile: the dialer, the reservation the daemon
+/// records before the seam binds, and the sync rules read it.
+pub use shekyl_transport_layer::dial_profile;
 
 use crate::legacy_util::slice_from_typed_ptr;
 use crate::peerlist_ffi::refused_set;
@@ -388,17 +390,6 @@ pub unsafe extern "C" fn shekyl_core_published_tip(
         }
     }
     1
-}
-
-/// The outbound target a connector is provisioned at: the protocol
-/// constants (`shekyl-relay-privacy`), one source for the dialer and for
-/// the reservation the daemon records before the seam binds.
-#[must_use]
-pub fn default_target(connector: ConnectorId) -> u32 {
-    match connector {
-        ConnectorId::Clearnet => P2P_DEFAULT_OUT_PEERS,
-        ConnectorId::Tor => MIN_PROVISIONED_OUT_PEERS,
-    }
 }
 
 /// The dialer does not exist: the seam is not bound, so the remnant has

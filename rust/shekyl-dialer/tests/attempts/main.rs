@@ -28,7 +28,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use shekyl_capped_stream::{ByteQueue, InboundEnd, QueueHold, Session, StreamEnds};
-use shekyl_dialer::{Dialer, Launch, WAKE_BASE_NANOS, WAKE_JITTER_NANOS};
+use shekyl_dialer::{Dialer, Launch};
 use shekyl_draw_rng::SplitMix64;
 use shekyl_levin::{
     response, BasicNodeData, BucketReader, CoreSyncData, HandshakeRequest, HandshakeResponse,
@@ -45,6 +45,14 @@ use shekyl_transport_layer::Sockets;
 
 const CLEARNET: ConnectorId = ConnectorId::Clearnet;
 const TOR: ConnectorId = ConnectorId::Tor;
+
+/// The wake spacing this file's connector dials at: its dial profile's.
+const WAKE_BASE_NANOS: u64 = shekyl_peerlist::dial_profile(ConnectorId::Tor)
+    .wake
+    .base_nanos;
+const WAKE_JITTER_NANOS: u64 = shekyl_peerlist::dial_profile(ConnectorId::Tor)
+    .wake
+    .jitter_nanos;
 const NETWORK: [u8; 16] = [7; 16];
 const SEND_CAP: usize = 64 * 1024;
 

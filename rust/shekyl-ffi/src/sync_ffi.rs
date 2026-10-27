@@ -9,10 +9,10 @@
 //! the number and compare it itself. Now it hands its counts over and
 //! takes the verdict, so no C++ holds a copy of a Rust-owned value.
 
-use crate::dialer_ffi::{default_target, dialer};
+use crate::dialer_ffi::{dial_profile, dialer};
 use shekyl_seam::connector_from_index;
 
-/// The connector's outbound target: the dialer's, or the compiled default
+/// The connector's outbound target: the dialer's, or its dial profile's
 /// before the dialer exists. 0 for an unknown connector.
 fn target(connector: u32) -> u32 {
     let Some(connector) = connector_from_index(connector) else {
@@ -20,7 +20,7 @@ fn target(connector: u32) -> u32 {
     };
     match dialer() {
         Some(dialer) => u32::try_from(dialer.target(connector)).unwrap_or(u32::MAX),
-        None => default_target(connector),
+        None => dial_profile(connector).target,
     }
 }
 

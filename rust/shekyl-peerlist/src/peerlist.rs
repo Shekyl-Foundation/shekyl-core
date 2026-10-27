@@ -17,7 +17,7 @@ use crate::address_file::{self, AddressFileError};
 use crate::outcome::{DialOutcome, ListName, Refusal, SessionRow, Source, WhiteClock};
 use crate::partition::{DiscloseEarly, DiscloseEarlyEnd, Partition};
 use crate::validity::RefusedSet;
-use crate::{white_diversity_floor, Ladder, DISCLOSE_COUNT, WHITE_REFILL_LINE};
+use crate::{dial_profile, white_diversity_floor, Ladder, DISCLOSE_COUNT, WHITE_REFILL_LINE};
 
 /// The ban list as the peer list reads it (D4): a question, never a write.
 /// The transport layer's [`BanList`] answers it; [`NoBans`] answers "no"
@@ -594,7 +594,13 @@ impl Peerlist {
                 if cause.proves_misbehaviour() {
                     partition.drop_tested(address);
                 } else {
-                    partition.fail_test(address, now, ladder, rng);
+                    partition.fail_test(
+                        address,
+                        now,
+                        ladder,
+                        dial_profile(connector).cooldown,
+                        rng,
+                    );
                 }
             }
             // The strand refused the payload. White is unchanged. An

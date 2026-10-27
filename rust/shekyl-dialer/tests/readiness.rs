@@ -21,9 +21,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use shekyl_dialer::{
-    DialAim, Dialer, NotReady, SnapshotSource, WAKE_BASE_NANOS, WAKE_JITTER_NANOS,
-};
+use shekyl_dialer::{DialAim, Dialer, NotReady, SnapshotSource};
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_peerlist::{ConnectorId, ListName, NetworkAddress, RefusedSet, Tick};
@@ -32,6 +30,14 @@ use shekyl_timing_engine::{Clock, EngineService, ManualClock, OwnerClass};
 use shekyl_transport_layer::Sockets;
 
 const CLEARNET: ConnectorId = ConnectorId::Clearnet;
+
+/// The wake spacing this file's connector dials at: its dial profile's.
+const WAKE_BASE_NANOS: u64 = shekyl_peerlist::dial_profile(ConnectorId::Clearnet)
+    .wake
+    .base_nanos;
+const WAKE_JITTER_NANOS: u64 = shekyl_peerlist::dial_profile(ConnectorId::Clearnet)
+    .wake
+    .jitter_nanos;
 const WAKES: usize = 12;
 
 fn peer(n: u8) -> NetworkAddress {

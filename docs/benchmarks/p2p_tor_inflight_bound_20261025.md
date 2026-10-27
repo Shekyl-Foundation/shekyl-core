@@ -1,7 +1,7 @@
 # The Tor connector's in-flight dial bound, derived 2026-10-25
 
 **Status: DERIVED and MEASURED (the floor device, 2026-10-26).**
-`in_flight_bound(Tor)` = 5 (`rust/shekyl-dialer/src/fill.rs`),
+`dial_profile(Tor).in_flight_bound` = 5 (`rust/shekyl-transport-layer/src/profile.rs`),
 derived on the lifecycle the dialer runs: a Tor attempt that fails at or
 after the managed Tor's `SocksTimeout` is final within its test (Rick,
 2026-10-26). Five is the smallest bound that fills the Tor target within

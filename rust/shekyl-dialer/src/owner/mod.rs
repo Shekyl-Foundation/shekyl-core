@@ -48,10 +48,9 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 use shekyl_draw_rng::RelayRng;
 use shekyl_peerlist::{
-    white_diversity_floor, CloseCause, CloseKind, ConnectionId, ConnectorId, DialOutcome, Ladder,
-    ListName, NetworkAddress, Peerlist, Refusal, RefusedSet, Source, Tick,
+    dial_profile, white_diversity_floor, CloseCause, CloseKind, ConnectionId, ConnectorId,
+    DialOutcome, Ladder, ListName, NetworkAddress, Peerlist, Refusal, RefusedSet, Source, Tick,
 };
-use shekyl_relay_privacy::params::{MIN_PROVISIONED_OUT_PEERS, P2P_DEFAULT_OUT_PEERS};
 use shekyl_seam::{Hub, SocketId, Subscription, SyncPayload};
 use shekyl_timing_engine::{Clock, OwnerHandle};
 
@@ -64,7 +63,7 @@ use self::ready::{park, wait_wake_or_bell, Bell, Waited};
 use self::wake::{plan_wake, Wake};
 use crate::attempts::Attempts;
 use crate::bans::BanSnapshot;
-use crate::fill::{in_flight_bound, DialAim};
+use crate::fill::DialAim;
 use crate::link_tally::{LinkFold, TallySink, TorLinkTally};
 use crate::nonce::{HandshakeNonce, HandshakeNonceSet, InFlightNonce};
 use crate::pace::{attempts_per_test, next_wake_nanos, retry_wait_nanos};
@@ -224,9 +223,10 @@ impl Dialer {
     /// `hub` is usable, the owner loops draw nothing.
     #[must_use]
     pub fn new(hub: Hub, refused: RefusedSet, snapshot: SnapshotSource) -> Self {
-        let mut targets = vec![0usize; ConnectorId::COUNT];
-        targets[ConnectorId::Clearnet.index()] = P2P_DEFAULT_OUT_PEERS as usize;
-        targets[ConnectorId::Tor.index()] = MIN_PROVISIONED_OUT_PEERS as usize;
+        let targets: Vec<usize> = ConnectorId::ALL
+            .iter()
+            .map(|connector| dial_profile(*connector).target as usize)
+            .collect();
         let bell = Arc::new(Bell::new());
         let ringing = Arc::clone(&bell);
         let links_watch = hub.links().subscribe(Arc::new(move |_| ringing.ring()));
@@ -248,10 +248,9 @@ impl Dialer {
                 in_flight: BTreeMap::new(),
                 applying: 0,
                 next_attempt: 0,
-                bounds: [
-                    in_flight_bound(ConnectorId::Clearnet),
-                    in_flight_bound(ConnectorId::Tor),
-                ],
+                bounds: std::array::from_fn(|index| {
+                    dial_profile(ConnectorId::ALL[index]).in_flight_bound
+                }),
                 tor_window: None,
                 tor_link: LinkFold::new(),
                 inbound: [0; ConnectorId::COUNT],
@@ -715,9 +714,9 @@ impl Dialer {
                     let mut wait = 0u64;
                     let next = shared.attempts(connector).defer_retry(
                         address,
-                        attempts_per_test(connector, list),
+                        attempts_per_test(dial_profile(connector).attempts, list),
                         |next| {
-                            wait = retry_wait_nanos(next, rng);
+                            wait = retry_wait_nanos(&dial_profile(connector).retry_waits, next, rng);
                             Tick::new(now.get().saturating_add(wait))
                         },
                     );
@@ -835,7 +834,7 @@ impl Dialer {
                     .clock()
                     .now()
                     .get()
-                    .saturating_add(next_wake_nanos(rng)),
+                    .saturating_add(next_wake_nanos(dial_profile(connector).wake, rng)),
             );
             if owner.arm(deadline).is_err() {
                 break;

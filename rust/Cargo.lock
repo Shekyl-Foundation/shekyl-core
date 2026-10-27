@@ -4382,7 +4382,6 @@ dependencies = [
  "shekyl-onion-v3",
  "shekyl-peer-policy",
  "shekyl-peerlist",
- "shekyl-relay-privacy",
  "shekyl-seam",
  "shekyl-timing-engine",
  "shekyl-tor",

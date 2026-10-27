@@ -370,7 +370,8 @@ defined at `:2240`), moves to the dialer and closes `Keep` rows only.
 A `Confirm` row is never what the cap closes.
 
 **The in-flight bound: Tor 5, clearnet 1 (the dialer in-flight bound,
-revision 2, Rick 2026-10-25).** `in_flight_bound(connector)` is protocol
+revision 2, Rick 2026-10-25).** The connector's in-flight bound
+(`dial_profile(connector).in_flight_bound`, the dial profile) is protocol
 data, the same on every node. It limits how many dials are outstanding,
 not the rate: one launch per wake, at R3's spacing. Tor's five is
 derived (`DAEMON_RELAY_PRIVACY.md` §97;
@@ -825,7 +826,8 @@ close"; the Tor reply table is the Tor connector's,
 `shekyl-tor/src/replies.rs`, and `TOR_SUPERVISOR.md` reads it; the
 transport layer takes the marks as an argument and keeps no SOCKS
 knowledge); retries within a
-test (`shekyl-dialer/src/pace.rs`, `attempts_per_test` and
+test (the connector's dial profile, `.attempts` and `.retry_waits`;
+`shekyl-dialer/src/pace.rs`, `attempts_per_test` and
 `retry_wait_nanos`, and `shekyl-dialer/src/attempts.rs`: the open test,
 in flight or waiting, is one record on `Attempts`; Tor three attempts,
 clearnet one for gray and two for white (one redial before a white
