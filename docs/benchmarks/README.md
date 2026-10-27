@@ -234,7 +234,7 @@ not the engine.
 Two refusals are worth knowing before you run it:
 
 - **A store on `tmpfs` or `ramfs` is refused, before any daemon starts.** fsync
-  there has no backing store to flush, so `--db-sync-mode=safe` is
+  there has no backing store to flush, so the daemon's `safe` mode is
   indistinguishable from `MDB_NOSYNC` and the result is a RAM-disk number
   wearing a strict-durability label. The harness's own first artifact was
   exactly that, from a scratch directory that happened to be a large tmpfs.

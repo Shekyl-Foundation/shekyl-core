@@ -302,13 +302,16 @@ namespace cryptonote
       shekyl_dialer_note_network(static_cast<std::uint8_t>(m_nettype)) == 0,
       false, "Failed to record the dialer's network");
 
-    // Lane-owned knobs (INPUT_GRAMMAR.md §5, IG-Q4): not ported; today's
-    // defaults, as constants, until their lanes decide. `db-sync-mode` and
-    // `db-salvage` are the DRS lane's, `keep-alt-blocks` DRS-E5's.
-    // `prep-blocks-threads` is refused (P2P_3_CHAIN_SYNC_BRIEF.md CS-Q12);
-    // 4 is today's default until the chain-sync cutover replaces this caller.
-    const std::string db_sync_mode = "fast:async:250000000bytes";
-    const bool db_sync_mode_is_default = true;
+    // Lane-owned knobs (INPUT_GRAMMAR.md §5, IG-Q4): not ported; constants.
+    // `db-sync-mode` and `db-salvage` are the DRS lane's, `keep-alt-blocks`
+    // DRS-E5's. `db-sync-mode` is decided: no knob, and the constant is
+    // DRS-D9's `safe`, explicit rather than a default (SHIPPED_DB_SYNC_MODE,
+    // cryptonote_core.h, says why), the durability the Rust store runs and
+    // the one §1.3's IBD floor is frozen against. `prep-blocks-threads` is
+    // refused (P2P_3_CHAIN_SYNC_BRIEF.md CS-Q12); 4 is today's default until
+    // the chain-sync cutover replaces this caller.
+    const std::string db_sync_mode = SHIPPED_DB_SYNC_MODE;
+    const bool db_sync_mode_is_default = SHIPPED_DB_SYNC_MODE_IS_DEFAULT;
     const bool db_salvage = false;
     const uint64_t blocks_threads = 4;
     const size_t max_txpool_weight = static_cast<size_t>(snapshot.txpool_weight_max);

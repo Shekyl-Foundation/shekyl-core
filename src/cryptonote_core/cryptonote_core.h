@@ -86,6 +86,16 @@ namespace cryptonote
    bool parse_db_sync_mode(const std::string &spec, bool is_default,
                            db_sync_settings &out, std::string &error);
 
+   /**
+    * The store's durability, as core::init opens it: DRS-D9's `safe`, an
+    * explicit choice and not a default (the DRS lane, IG-Q4; Rick,
+    * 2026-10-26). Parsed as a default it would let Blockchain::safesyncmode
+    * turn MDB_NOSYNC on for the length of a sync. Named here so the test pins
+    * what ships, not a copy of it.
+    */
+   constexpr const char *SHIPPED_DB_SYNC_MODE = "safe";
+   constexpr bool SHIPPED_DB_SYNC_MODE_IS_DEFAULT = false;
+
    struct test_options {
      const size_t long_term_block_weight_window;
    };
