@@ -869,8 +869,8 @@ any opened stream resets the count and the span. K and S are the
 connector's dial profile's quiet threshold (`dial_profile(connector).quiet`,
 K derived in `DAEMON_RELAY_PRIVACY.md` §97 from each connector's failure
 rate measured on the floor device; S computed from K and the connector's
-bound, dial deadline and wake spacing): clearnet 10 attempts across
-29.15 s, Tor 13 attempts across 364.5 s. Tor's S is also the managed-Tor posture line's
+bound, dial deadline and wake spacing): clearnet 11 attempts across
+32.065 s, Tor 13 attempts across 364.5 s. Tor's S is also the managed-Tor posture line's
 `quiet_after` (`TOR_SUPERVISOR.md` §4.2; the daemon builds the
 supervisor's `Policy` from the profile), never a second number. Outside the
 condition the ladder steps as before. Both connectors, one mechanism. It

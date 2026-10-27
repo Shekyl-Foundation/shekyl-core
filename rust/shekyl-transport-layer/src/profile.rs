@@ -212,11 +212,14 @@ pub const fn dial_profile(connector: ConnectorId) -> DialProfile {
             wake: WAKE,
             // **Derived** (§97, "Gray cooldown"; shekyl-dev data
             // `dial-profile/2026-10-27-clearnet-pfail`, the floor device):
-            // 0 of 283 attempts to live peers failed, so `p_fail` = 0.5 at
-            // half dead and K = 10. S is derived: ten rounds at bound 1, each
-            // up to the 1.415 s deadline and a 1.5 s wake, 29.15 s.
+            // 0 of 283 attempts to live peers failed. With none observed,
+            // the estimate is read at its bound: the 95 % upper bound of the
+            // live-failure rate, about 1.1 %, gives `p_fail` 0.505 at half
+            // dead and K = 11 (the point estimate gives 10). S is derived:
+            // eleven rounds at bound 1, each up to the 1.415 s deadline and a
+            // 1.5 s wake, 32.065 s.
             quiet: QuietThreshold::derive(
-                10,
+                11,
                 CLEARNET_IN_FLIGHT_BOUND,
                 CLEARNET_DIAL_WITHIN_NANOS,
                 WAKE,
@@ -271,7 +274,7 @@ mod tests {
             WindowSource::DialDeadline(CLEARNET_DIAL_WITHIN_NANOS)
         );
         assert_eq!(tor.window, WindowSource::Published);
-        assert_eq!((clearnet.quiet.attempts, tor.quiet.attempts), (10, 13));
+        assert_eq!((clearnet.quiet.attempts, tor.quiet.attempts), (11, 13));
         for connector in ConnectorId::ALL {
             let profile = dial_profile(*connector);
             let second = profile.retry_waits.before_second;
@@ -300,7 +303,7 @@ mod tests {
     /// connector's dial deadline and its longest wake gap, computed here from
     /// the named constants, and S covers at least one full window. Those two
     /// are the properties. The last two assertions are a record of today's
-    /// values, 29.15 s on clearnet and 364.5 s on Tor, as §97, the slice 3
+    /// values, 32.065 s on clearnet and 364.5 s on Tor, as §97, the slice 3
     /// brief and `TOR_SUPERVISOR.md` §4.2 cite them: if an honest change to K,
     /// a bound, a deadline or the wake turns only those red, the derivation
     /// still holds, so update the record here and in those documents.
@@ -327,7 +330,7 @@ mod tests {
         }
         assert_eq!(
             dial_profile(ConnectorId::Clearnet).quiet.span_nanos,
-            29_150_000_000
+            32_065_000_000
         );
         assert_eq!(
             dial_profile(ConnectorId::Tor).quiet.span_nanos,

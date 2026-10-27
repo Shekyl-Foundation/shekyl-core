@@ -54,9 +54,10 @@ pub struct Policy {
     pub fresh_directory_after: u32,
     /// How long no Tor connection is open and none opens, with Tor saying
     /// nothing about its network, before the posture line says so (§4.2):
-    /// a neutral fact, never a cause. The daemon passes the dialer's quiet
-    /// stretch (`shekyl_dialer::QUIET_AFTER_NANOS`), the one number for the
-    /// posture line and the dialer's cooldown rule.
+    /// a neutral fact, never a cause. The daemon passes the Tor connector's
+    /// quiet span S from its dial profile
+    /// (`shekyl_transport_layer::dial_profile(ConnectorId::Tor).quiet.span_nanos`),
+    /// one number for this line and the dialer's quiet guard.
     pub quiet_after: Duration,
 }
 
