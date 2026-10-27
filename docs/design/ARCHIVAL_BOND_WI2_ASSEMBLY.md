@@ -171,7 +171,7 @@ Engine-side `assemble_bond_post` (public):
 
 1. Read sealed `PScanState`; select funding per §3.2.
 2. Curve-tree `assemble_tx` → membership paths for the selected gindexes.
-3. Build the change output (`construct_output` to P's address) and fee
+3. Build the change output (`construct_output` to P's payment keys) and fee
    estimate; derive the prefix parts — key images come back from the actor
    (step 5), so the prefix assembly completes there.
 4. Build the wire `BondPost` prefix-input fields from P's *public* identity

@@ -34,7 +34,6 @@
 #include <cstring>
 #include <string>
 #include <exception>
-#include <boost/program_options.hpp>
 #include "common/command_line.h"
 #include "crypto/hash.h"
 #include "cryptonote_basic/blobdatatype.h"
@@ -108,8 +107,6 @@ namespace cryptonote
 /** a pair of <transaction hash, output index>, typedef for convenience */
 typedef std::pair<crypto::hash, uint64_t> tx_out_index;
 
-extern const command_line::arg_descriptor<std::string> arg_db_sync_mode;
-extern const command_line::arg_descriptor<bool, false> arg_db_salvage;
 
 enum class relay_category : uint8_t
 {
@@ -503,7 +500,7 @@ struct ArchivalEmissionEpochSnapshot
   struct BondRow
   {
     uint64_t join_settlement_epoch = 0;
-    bool is_foundation_complete_tree = false;
+    bool is_support_complete_tree = false;
     /// Flattened (start_epoch, end_exclusive) pairs.
     std::vector<uint64_t> bad_intervals_flat;
   };
@@ -766,7 +763,6 @@ public:
   /**
    * @brief init command line options
    */
-  static void init_options(boost::program_options::options_description& desc);
 
   /**
    * @brief reset profiling stats
@@ -2009,11 +2005,12 @@ public:
   ///
   /// Admission stays pair-epoch-wide (`pass_count > 0`) while the live issuer
   /// is the one-challenge-per-pair-epoch beacon (`challenge_fire_height` /
-  /// `challenge_leaf_index`). The assignment cutover (`assign_epoch` — Rust
-  /// only, no FFI; ARCHIVAL_CHALLENGE_MECHANISM.md §9.5.1) makes this the
-  /// uniqueness question. Named blocker, named caller: do not delete under
-  /// rule 15. Tests that pass their own height are not coverage of a
-  /// production caller that does not exist yet.
+  /// `challenge_leaf_index`). The public urn that was to make this a per-draw
+  /// question is deleted (2026-10-10); the secret draw that replaces it is
+  /// judged in Rust (ARCHIVAL_SERVE_CREDIT_SPEC.md), and this path stays until
+  /// the C++ daemon is retired (DEL-008): do not delete under rule 15 before
+  /// then. Tests that pass their own height are not coverage of a production
+  /// caller that does not exist yet.
   virtual bool has_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
     uint64_t settlement_epoch, uint64_t block_height) const = 0;
   virtual void set_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,

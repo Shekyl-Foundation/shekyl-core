@@ -2219,6 +2219,13 @@ events; a standoff can only permute chain events; so the unit of analysis is **w
 lands on chain**, and the pipeline that produced it is invisible to every observer the
 posture admits.
 
+**Scope (BD-Q1, ruled 2026-10-16).** That last sentence holds for the **chain
+observer**. The network-origin observer of the principal's funding transfer sees that
+transfer as distinct, because it watched it leave the principal: for that observer the
+funding transfer is an event, with a one-block anchor, and the bond-post delay is
+measured from it ([`ARCHIVAL_BOND_POST_DELAY.md`](ARCHIVAL_BOND_POST_DELAY.md) BD-Q1, BD-Q2). The order coin
+stays retired: the chain still carries one attributable event.
+
 The sharper test, and the one §10.12 pass-4 (d) already stated without applying:
 **an event counts only if an observer can see it as distinct.** Distinctness needs
 *attribution*, not mere presence. A transaction that exists on chain but carries no

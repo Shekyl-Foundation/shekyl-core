@@ -1396,7 +1396,7 @@ impl CurveTreeClient {
         // table when its creation block was ingested — so the removals
         // below are present by construction). Blocks 0 and 1 share cutoff
         // 0, whose bucket is empty for the same reason.
-        let through = Self::drained_through(block.height);
+        let through = crate::reference::drained_through(block.height);
         let drained = self.newly_drained_from_index(through);
         let removed: Vec<Gindex> = drained.iter().map(|entry| entry.gindex).collect();
 
@@ -1538,20 +1538,6 @@ impl CurveTreeClient {
             .sum()
     }
 
-    /// The drain cutoff for a reference height: a leaf maturing at `m`
-    /// enters the tree on connection of the *next* block, so the root
-    /// committed in the header at `reference_height` reflects every leaf
-    /// matured through `reference_height - 1`
-    /// (`drained_through = H - 1`, pinned by the CT-2 KAT). Height 0 has no
-    /// predecessor and drains nothing.
-    ///
-    /// `pub(crate)` so the sibling `assemble` module shares the one
-    /// reference-height → drain-cutoff mapping.
-    #[must_use]
-    pub(crate) fn drained_through(reference_height: BlockHeight) -> BlockHeight {
-        reference_height.saturating_sub_count(shekyl_types::BlockCount::ONE)
-    }
-
     /// The last block height passed to [`Self::ingest_block`] — or rebuilt by
     /// [`Self::rollback_to_fork`] / [`Self::resume`] — or `None` when the client
     /// is fresh (no blocks ingested).
@@ -1637,7 +1623,7 @@ impl CurveTreeClient {
                 ingested_tip: self.ingested_tip_height,
             });
         }
-        let through = Self::drained_through(reference_height);
+        let through = crate::reference::drained_through(reference_height);
         let n = self.drained_leaf_count_at(through);
         if let Some(snapshot) = self.snapshot_at(reference_height)? {
             // C3: the snapshot answers with its own `n`, so the one thing
@@ -1708,7 +1694,7 @@ impl CurveTreeClient {
         &self,
         height: BlockHeight,
     ) -> Result<(CurveTreeRoot, u8), ClientError> {
-        let n = self.drained_leaf_count_at(Self::drained_through(height));
+        let n = self.drained_leaf_count_at(crate::reference::drained_through(height));
         self.segment_tier_reading_at_count(n)
     }
 
@@ -1835,8 +1821,10 @@ impl CurveTreeClient {
     /// Number of leaves drained into the tree at `reference_height`.
     #[must_use]
     pub fn drained_leaf_count(&self, reference_height: BlockHeight) -> usize {
-        usize::try_from(self.drained_leaf_count_at(Self::drained_through(reference_height)))
-            .expect("drained leaf count fits usize")
+        usize::try_from(
+            self.drained_leaf_count_at(crate::reference::drained_through(reference_height)),
+        )
+        .expect("drained leaf count fits usize")
     }
 }
 
@@ -2028,22 +2016,6 @@ mod tests {
     }
 
     #[test]
-    fn drained_through_is_reference_minus_one() {
-        assert_eq!(
-            CurveTreeClient::drained_through(BlockHeight::from_raw(0)),
-            BlockHeight::from_raw(0)
-        );
-        assert_eq!(
-            CurveTreeClient::drained_through(BlockHeight::from_raw(1)),
-            BlockHeight::from_raw(0)
-        );
-        assert_eq!(
-            CurveTreeClient::drained_through(BlockHeight::from_raw(61)),
-            BlockHeight::from_raw(60)
-        );
-    }
-
-    #[test]
     fn drained_leaf_count_matches_drain_schedule() {
         // Coinbase at height h matures at h+60 and drains at h+61: counts
         // must track that schedule exactly, with no interpolation between
@@ -2097,7 +2069,7 @@ mod tests {
                 .unwrap();
         }
         for reference in 0..=100u64 {
-            let through = CurveTreeClient::drained_through(BlockHeight::from_raw(reference));
+            let through = crate::reference::drained_through(BlockHeight::from_raw(reference));
             assert_eq!(
                 client.drained_leaf_count_at(through),
                 client.drained_count_from_index(through),

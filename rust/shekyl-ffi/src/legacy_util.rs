@@ -110,12 +110,9 @@ pub(crate) unsafe fn array_from_ptr<const N: usize>(ptr: *const u8) -> Option<[u
 /// `stride`-byte elements. Wire-embedded counts must go through this;
 /// a raw `with_capacity(wire_count)` is the host-abort class SA-R-7
 /// clause 2 names. `stride == 0` is a caller bug and refuses.
-// Ratchet-mandated allocation path (`tests/ffi_boundary_ratchet.rs`), so it stays
-// ungated and available to any future wire parser. Its only non-test callers today
-// are the multisig witness parsers, so allow dead code exactly in the build where
-// that is true — the allow disappears under `--features multisig`, where a genuine
-// disuse would still fail the build.
-#[cfg_attr(not(feature = "multisig"), allow(dead_code))]
+// Ratchet-mandated allocation path (`tests/ffi_boundary_ratchet.rs`).
+// Callers: the multisig witness parsers, and the argument vector's
+// reserve of one slot per pointer the caller addressed.
 pub(crate) fn bounded_capacity<T>(count: usize, stride: usize, remaining: usize) -> Option<Vec<T>> {
     if stride == 0 || count > remaining / stride {
         return None;
@@ -133,9 +130,9 @@ impl ShekylBuffer {
     /// path — [`shekyl_buffer_free`] — must reconstruct the allocation as
     /// `Vec::from_raw_parts(ptr, len, len)`. That is sound *only* when the
     /// leaked allocation was exactly `len` bytes wide, and a `Vec` is under
-    /// no obligation to be: `zstd::bulk::compress`, for one, returns a
-    /// `Vec` sized at `compress_bound(input)` with `len` set to the (always
-    /// strictly smaller) compressed size. Freeing that through a
+    /// no obligation to be: a `Vec` reserved at an upper bound and filled to
+    /// less — the shape of any encoder that sizes its output before it
+    /// knows the result — has capacity above `len`. Freeing that through a
     /// `len`-capacity `Vec` hands the allocator a `Layout` that never
     /// matched the allocation — benign under glibc `free()`, which ignores
     /// the size, and heap corruption under any size-aware allocator.

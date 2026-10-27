@@ -41,6 +41,10 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
+_SCRIPTS = Path(__file__).resolve().parents[4] / "scripts"
+sys.path.insert(0, str(_SCRIPTS))
+import armed_lever  # noqa: E402
+
 # Consensus windows (mirror shekyl-curve-tree::recon constants).
 COINBASE_LOCK = 60
 SPENDABLE_AGE = 10
@@ -87,17 +91,24 @@ class Daemon:
         self.proc = subprocess.Popen(
             [
                 self.binary,
-                "--regtest",
-                "--offline",
-                "--non-interactive",
-                "--fixed-difficulty",
+                "--network",
+                "regtest",
+                "--clearnet",
+                "off",
+                "--tor",
+                "off",
+                "--dev-difficulty",
                 "1",
+                # generateblocks and pop_blocks are armed test levers.
+                armed_lever.FLAG,
                 "--data-dir",
                 self.workdir,
-                "--rpc-bind-port",
-                str(self.port),
+                "--log-file",
+                os.path.join(self.workdir, "shekyld.log"),
+                "--rpc-admin-listen",
+                f"127.0.0.1:{self.port}",
                 "--log-level",
-                "0",
+                "warn",
             ],
             stdout=self.log,
             stderr=subprocess.STDOUT,
@@ -105,10 +116,17 @@ class Daemon:
         # Wait for RPC readiness.
         for _ in range(60):
             try:
-                if self.json_rpc("get_info").get("status") == "OK":
-                    return
+                ready = self.json_rpc("get_info").get("status") == "OK"
             except Exception:
-                time.sleep(0.5)
+                ready = False
+            if ready:
+                if not armed_lever.announced_since(self.log.name, 0):
+                    raise RuntimeError(
+                        f"the daemon did not announce {armed_lever.ANNOUNCEMENT!r} "
+                        f"at start; see {self.log.name}"
+                    )
+                return
+            time.sleep(0.5)
         raise RuntimeError("daemon RPC did not become ready")
 
     def stop(self) -> None:
@@ -220,6 +238,9 @@ def extract_leaf_hash_blob(extra: bytes) -> bytes:
         elif tag == 0x05:  # PQC ownership: varint count + count×{u8,u8,[32]}
             count, pos = _read_varint(extra, pos)
             pos += count * (1 + 1 + 32)
+        elif tag == 0x0C:  # draw commitment: 32 bytes, no length prefix
+            # (`shekyl-wire` `TX_EXTRA_TAG_DRAW_COMMITMENT`; in every coinbase)
+            pos += 32
         elif tag in blob_tags:
             length, pos = _read_varint(extra, pos)
             payload = extra[pos : pos + length]

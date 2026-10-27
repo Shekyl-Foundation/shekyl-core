@@ -10,15 +10,16 @@ use blake2::Blake2s256;
 use zeroize::Zeroizing;
 
 use crate::aead::{self, HASH_LEN};
-use crate::direction::Direction;
+use crate::direction::{RecvDirection, SendDirection};
 
 /// What the symmetric state can fail at. A handshake maps these into its own
 /// error type; which of the two it was says nothing a peer may be told.
 #[derive(Debug)]
 pub enum SymmetricError {
-    /// An AEAD operation failed: a bad tag on open.
+    /// A bad tag on open.
     Decrypt,
-    /// No key where one was needed, or the nonce ran out.
+    /// No key where one was needed, the nonce ran out, or the cipher refused
+    /// to seal.
     State,
 }
 
@@ -113,7 +114,7 @@ impl SymmetricState {
 
     fn encrypt(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, SymmetricError> {
         let key = self.k.as_ref().ok_or(SymmetricError::State)?;
-        let ct = aead::seal(key, self.n, &self.h, plaintext).ok_or(SymmetricError::Decrypt)?;
+        let ct = aead::seal(key, self.n, &self.h, plaintext).ok_or(SymmetricError::State)?;
         self.n = self.n.checked_add(1).ok_or(SymmetricError::State)?;
         Ok(ct)
     }
@@ -136,16 +137,19 @@ impl SymmetricState {
     /// Each direction keeps its own chaining key. Rekey advances the two
     /// directions independently. No key leaves this function.
     #[must_use = "the directions are the session"]
-    pub fn into_directions(self, role: SplitRole) -> (Direction, Direction) {
+    pub fn into_directions(self, role: SplitRole) -> (SendDirection, RecvDirection) {
         let [first, second] = aead::hkdf(&self.ck, &[]);
         let (send_key, recv_key) = match role {
             SplitRole::Initiator => (first, second),
             SplitRole::Responder => (second, first),
         };
         let recv_ck = self.ck.clone();
+        // Both directions carry the session's handshake hash, so a holder can
+        // tell its own session's direction from another's.
+        let h = self.h;
         (
-            Direction::new(self.ck, send_key),
-            Direction::new(recv_ck, recv_key),
+            SendDirection::new(self.ck, send_key, h),
+            RecvDirection::new(recv_ck, recv_key, h),
         )
     }
 
@@ -231,6 +235,34 @@ mod tests {
         assert_eq!(responder_recv.ck_and_k().1, *first);
         assert_eq!(initiator_send.ck_and_k().0, chaining_key);
         assert_eq!(responder_recv.ck_and_k().0, chaining_key);
+    }
+
+    /// Both directions carry the handshake hash of the state they were split
+    /// from, a rekey does not change it, and a second session's directions
+    /// carry their own. The RPC handshake's pending session relies on the
+    /// stamp to know it got its own receiving direction back.
+    #[test]
+    fn both_directions_carry_the_sessions_handshake_hash() {
+        let name = b"Noise_NN_25519_ChaChaPoly_BLAKE2s";
+        let mut one = SymmetricState::new(name, b"prologue");
+        let mut two = SymmetricState::new(name, b"prologue");
+        one.mix_hash(b"session one");
+        two.mix_hash(b"session two");
+        let (h1, h2) = (one.handshake_hash(), two.handshake_hash());
+        assert_ne!(h1, h2);
+
+        let (mut send, recv) = one.into_directions(SplitRole::Initiator);
+        assert_eq!(send.handshake_hash(), h1);
+        assert_eq!(recv.handshake_hash(), h1);
+        send.force_nonce(crate::REKEY_NONCES - 1);
+        send.seal(b"the last nonce of the first key", b"").unwrap();
+        let (_, epoch) = send.seal(b"under the next key", b"").unwrap();
+        assert_ne!(epoch, crate::KeyEpoch::INITIAL, "the direction rekeyed");
+        assert_eq!(send.handshake_hash(), h1, "a rekey keeps the stamp");
+
+        let (other_send, other_recv) = two.into_directions(SplitRole::Responder);
+        assert_eq!(other_send.handshake_hash(), h2);
+        assert_eq!(other_recv.handshake_hash(), h2);
     }
 
     /// Cacophony `Noise_NN_25519_ChaChaPoly_BLAKE2s`, the classical pattern the

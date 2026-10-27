@@ -148,6 +148,11 @@ regtest_ignored=$(grep -c '^engine::regtest_e2e::.*: test$' "$ignored" || true)
 #     historical red 2026-09-28: the C++ refused the Rust block at the
 #     bound for its coinbase (the regtest F21 epoch, §3.11), the finding
 #     that fixed the daemon's hard-fork table. Same pool cost as above.
+#   the_armed_switch_on_testnet_serves_two_levers_and_the_setter_refuses_inject —
+#     RT-O36, recorded red in 8cd238c (2026-10-26), then restored. The
+#     setter admitting testnet made inject answer OK; the switch off made
+#     generateblocks come back -32002 rpc.unarmed. One testnet daemon,
+#     zero blocks: an admission probe, so it stays on the per-PR lane.
 ARMED=(
   engine::regtest_e2e::e2e_the_cxx_daemon_answers_join_market_unsupported
   engine::regtest_e2e::origin::restricted_listener_is_withheld_status_and_capped_by_native_handlers
@@ -157,6 +162,7 @@ ARMED=(
   engine::regtest_e2e::e2e_fcmp_spend_accepted_by_daemon
   engine::regtest_e2e::e2e_fcmp_spend_reorg_restores_pool_and_fee
   engine::regtest_e2e::regtest_daemon_spawns_and_mines_to_wallet_address
+  engine::regtest_e2e::a_stops_last_line_reaches_the_log_file
   engine::regtest_e2e::e2e_refresh_scans_coinbase_balance
   engine::regtest_e2e::e2e_trim_curve_tree_restores_grow_root
   engine::regtest_e2e::e2e_arm3_phantom_slot_collected_at_open
@@ -164,6 +170,7 @@ ARMED=(
   engine::regtest_e2e::get_output_histogram_stays_unrouted
   engine::regtest_e2e::origin::restricted_listener_hides_a_transaction_this_node_has_not_broadcast
   engine::regtest_e2e::origin::get_info_console_commands_answer_on_the_in_process_arm
+  engine::regtest_e2e::the_armed_switch_on_testnet_serves_two_levers_and_the_setter_refuses_inject
 )
 
 # Consensus gates too heavy for the per-PR lane (depth-3 spend, 13 min
@@ -181,6 +188,12 @@ ARMED_SLOW=(
 # name-check below, so the decision cannot rot silently.
 #   generate_ct2_tier_b_fixture — fixture regenerator, not a pass/fail
 #     proposition; run manually when the CT-2 Tier-B scenarios change.
+#   rt_p5::rt_p5_dry_run, rt_p5::rt_p5_registered_run — RT-P5's sizes
+#     part, a registered measurement
+#     (docs/benchmarks/rt_p5_rpc_message_sizes_20261017.md), not a
+#     pass/fail proposition: each writes its trace under RT_P5_OUT and is
+#     run by hand when the registration says. The parser they rely on is
+#     covered by ordinary unit tests in the same module.
 #   The five walks below each call `stake_persona_to_confirmed_bond`, which
 #     submits a `post_kind` 5 JoinMarket. The C++ daemon cannot parse that
 #     byte, and the frozen verify export refuses every JoinMarket
@@ -214,6 +227,8 @@ ARMED_SLOW=(
 #         was ARMED_SLOW.
 DECIDED_DARK=(
   engine::regtest_e2e::generate_ct2_tier_b_fixture
+  engine::regtest_e2e::rt_p5::rt_p5_dry_run
+  engine::regtest_e2e::rt_p5::rt_p5_registered_run
   engine::regtest_e2e::e2e_staker_bond_post_accepted_and_applied
   engine::regtest_e2e::e2e_drain_wire_shape_matches_a_real_transfer
   engine::regtest_e2e::e2e_release_accepted_and_connected
@@ -291,3 +306,72 @@ for t in "${LANE_GATES[@]}"; do
     exit 1
   }
 done
+
+# The armed gates that live outside regtest_e2e, as `<test binary>:<name>`
+# in shekyl-levin's integration tests. Same ratchet, per binary: every
+# ignored test the binary lists is on this list, and every name here is
+# listed, so a rename or a new ignored test fails here rather than going
+# dark. PR lane only: each is a short live run.
+#
+#   refused_inbound — the refused-inbound gate (DAEMON_CONFIG_CUTOVER.md
+#     §5.2; Rick, 2026-10-14): the daemon under a lowered soft descriptor
+#     limit derives its inbound ceiling and refuses the peer past it.
+#     Observed red 2026-10-15 by filling one short of the ceiling: the
+#     extra peer was admitted and the test panicked at "must be refused".
+#     Unix only (PWD-B1: Windows has no per-process descriptor limit); this
+#     script runs on Linux.
+#   socks_credentials — the SOCKS username and password ride the dial
+#     (DAEMON_CONFIG_CUTOVER.md DC-Q7; Rick, 2026-10-17): a daemon behind a
+#     SOCKS5 proxy that takes only RFC 1929 presents the configured pair on
+#     the clearnet and the operator-Tor dial, and a refused pair is named by
+#     its rows while the daemon keeps running. Observed red 2026-10-17 with
+#     both dials forced to no-auth: all three timed out with the proxy
+#     seeing only method 0x00. Unix only (the configuration file's mode).
+ARMED_LEVIN=(
+  refused_inbound:the_inbound_ceiling_derived_from_the_descriptor_limit_refuses_the_next_peer
+  socks_credentials:the_clearnet_dial_presents_its_pair_and_tunnels_through_the_proxy
+  socks_credentials:a_refused_pair_names_its_rows_and_the_daemon_keeps_running
+  socks_credentials:the_operator_tor_dial_presents_its_pair
+)
+
+for entry in "${ARMED_LEVIN[@]}"; do
+  binary="${entry%%:*}"
+  name="${entry#*:}"
+  cargo test -p shekyl-levin --test "$binary" -- --list --ignored >"$ignored" 2>&1
+  listed=$(grep -c ': test$' "$ignored" || true)
+  [ "${listed:-0}" -gt 0 ] || {
+    echo "FATAL: shekyl-levin --test $binary lists no ignored test — the binary moved or the enumeration broke" >&2
+    exit 1
+  }
+  grep -qx "$name: test" "$ignored" || {
+    echo "FATAL: listed gate '$entry' names no ignored test — it was renamed or deleted" >&2
+    exit 1
+  }
+  armed_here=$(printf '%s\n' "${ARMED_LEVIN[@]}" | grep -c "^$binary:" || true)
+  if [ "$listed" -ne "$armed_here" ]; then
+    echo "FATAL: shekyl-levin --test $binary lists $listed ignored test(s), but $armed_here are armed here." >&2
+    echo "A new #[ignore]d test in that binary must be armed (observe it red first) or moved." >&2
+    exit 1
+  fi
+done
+
+if [ "$GATE_LANE" = pr ]; then
+  for entry in "${ARMED_LEVIN[@]}"; do
+    binary="${entry%%:*}"
+    name="${entry#*:}"
+    set +e
+    cargo test -p shekyl-levin --test "$binary" "$name" \
+      -- --ignored --exact --nocapture >"$gate_log" 2>&1
+    status=$?
+    set -e
+    cat "$gate_log"
+    if [ "$status" -ne 0 ]; then
+      echo "FATAL: $entry failed" >&2
+      exit "$status"
+    fi
+    grep -qE '^test result: ok\. 1 passed' "$gate_log" || {
+      echo "FATAL: $entry selected no test — the filter or the name moved" >&2
+      exit 1
+    }
+  done
+fi

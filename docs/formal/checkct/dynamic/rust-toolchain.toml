@@ -1,0 +1,4 @@
+# The shipped toolchain (rust/rust-toolchain.toml): a dynamic row is for the
+# binary the wallet ships, not for whatever rustup defaults to on the box.
+[toolchain]
+channel = "1.94.0"

@@ -183,10 +183,26 @@
                             "ty": {
                               "Struct": [
                                 {
-                                  "name": "address",
+                                  "name": "destination",
                                   "ty": {
-                                    "name": "String",
-                                    "ty": "String"
+                                    "name": "SendDestination",
+                                    "ty": {
+                                      "Enum": [
+                                        {
+                                          "name": "Address",
+                                          "ty": {
+                                            "NewtypeVariant": {
+                                              "name": "String",
+                                              "ty": "String"
+                                            }
+                                          }
+                                        },
+                                        {
+                                          "name": "OwnPersonaFunding",
+                                          "ty": "UnitVariant"
+                                        }
+                                      ]
+                                    }
                                   }
                                 },
                                 {

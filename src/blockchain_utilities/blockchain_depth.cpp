@@ -33,6 +33,7 @@
 #include "common/varint.h"
 #include "cryptonote_core/tx_pool.h"
 #include "cryptonote_core/cryptonote_core.h"
+#include "blockchain_utilities/daemon_network_args.h"
 #include "cryptonote_core/blockchain.h"
 #include "blockchain_db/blockchain_db.h"
 #include "version.h"
@@ -63,9 +64,7 @@ int main(int argc, char* argv[])
   const command_line::arg_descriptor<uint64_t> arg_height  = {"height", "Get min depth for all txes at this height", 0};
   const command_line::arg_descriptor<bool> arg_include_coinbase  = {"include-coinbase", "Include coinbase in the average", false};
 
-  command_line::add_arg(desc_cmd_sett, cryptonote::arg_data_dir);
-  command_line::add_arg(desc_cmd_sett, cryptonote::arg_testnet_on);
-  command_line::add_arg(desc_cmd_sett, cryptonote::arg_stagenet_on);
+  cryptonote::add_data_dir_args(desc_cmd_sett);
   command_line::add_arg(desc_cmd_sett, arg_log_level);
   command_line::add_arg(desc_cmd_sett, arg_txid);
   command_line::add_arg(desc_cmd_sett, arg_height);
@@ -101,10 +100,14 @@ int main(int argc, char* argv[])
 
   LOG_PRINT_L0("Starting...");
 
+  const cryptonote::UtilityNetwork network = cryptonote::utility_network(vm);
+  if (!network.one_network())
+  {
+    std::cerr << cryptonote::utility_network_exclusive << std::endl;
+    return 1;
+  }
   std::string opt_data_dir = command_line::get_arg(vm, cryptonote::arg_data_dir);
-  bool opt_testnet = command_line::get_arg(vm, cryptonote::arg_testnet_on);
-  bool opt_stagenet = command_line::get_arg(vm, cryptonote::arg_stagenet_on);
-  network_type net_type = opt_testnet ? TESTNET : opt_stagenet ? STAGENET : MAINNET;
+  network_type net_type = network.type();
   std::string opt_txid_string = command_line::get_arg(vm, arg_txid);
   uint64_t opt_height = command_line::get_arg(vm, arg_height);
   bool opt_include_coinbase = command_line::get_arg(vm, arg_include_coinbase);
@@ -159,7 +162,7 @@ int main(int argc, char* argv[])
     LOG_PRINT_L0("Error opening database: " << e.what());
     return 1;
   }
-  r = core_storage->init(db, net_type);
+  r = core_storage->init(db, net_type, network.chain_options());
 
   CHECK_AND_ASSERT_MES(r, 1, "Failed to initialize source blockchain storage");
   LOG_PRINT_L0("Source blockchain storage initialized OK");

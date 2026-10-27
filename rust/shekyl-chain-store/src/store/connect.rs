@@ -40,7 +40,9 @@
 //!  9. archival     archival_budget_accruing[E] upserted, or removed at E's
 //!                  close (SI-23); slash log + applied + watermark (SI-22);
 //!                  r_market / sigma_work / budget at a close (SI-21) —
-//!                  `archival_write.rs`, DRS-E4
+//!                  `archival_write.rs`, DRS-E4. When this connect was handed
+//!                  bundles, the admission plan is journaled here, before
+//!                  the seal (`admission_write.rs`, SI-36)
 //! 10. journal      undo_log[h] (SI-6)
 //! ```
 //!
@@ -84,7 +86,7 @@
 //! cardinality: a second bucket, or a hole compensated by a foreign row,
 //! is SI-9, never a verdict.
 
-use shekyl_chain_rules::{ChainValid, RuleSet, TxIdentity};
+use shekyl_chain_rules::{Admitted, ChainValid, DrawableMemo, RuleSet, TxIdentity};
 use shekyl_types::{
     ArchivalLength, BlockHash, BlockHeight, CommitmentBytes, OneTimePubkey, OutputIndexInTx,
 };
@@ -93,17 +95,18 @@ use shekyl_wire::{Ct, Input, Transaction};
 
 use crate::codec::{
     stored_timelock, BlockBody, BlockInfo, Canonical, Coded, CoverageGaps, OutKey, OutTx, Present,
-    Raw, RuleSetInForce, TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment,
-    TxPrunedSegment,
+    Raw, RecordedPow, RuleSetInForce, TxIndex, TxOutputIndices, TxPqcAuthsSegment,
+    TxPrunableSegment, TxPrunedSegment,
 };
 use crate::ids::{AmountIndex, OutputSlot, OutputStorageId, TxStorageId};
 use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{
-    BLOCKS, BLOCK_HEIGHTS, BLOCK_INFO, CURVE_TREE_ROOTS, HF_VERSIONS, OUTPUT_AMOUNTS, OUTPUT_TXS,
-    SPENT_KEYS, TXS_ARCHIVAL_LEN, TXS_PQC_AUTHS, TXS_PQC_AUTH_HASH, TXS_PRUNABLE,
+    BLOCKS, BLOCK_HEIGHTS, BLOCK_INFO, BLOCK_POW, CURVE_TREE_ROOTS, HF_VERSIONS, OUTPUT_AMOUNTS,
+    OUTPUT_TXS, SPENT_KEYS, TXS_ARCHIVAL_LEN, TXS_PQC_AUTHS, TXS_PQC_AUTH_HASH, TXS_PRUNABLE,
     TXS_PRUNABLE_HASH, TXS_PRUNED, TX_INDICES, TX_OUTPUTS,
 };
 
+use super::bundle_view::StoreBundleView;
 use super::error::{CellFault, StoreCannot, StoreError, StoreInvariant};
 use super::header;
 use super::keyed::KeyedTable;
@@ -134,6 +137,13 @@ pub struct Connected {
     /// `Some` only at a boundary `E·SEB`, `E ≥ 2` (DRS-E1 S-PRUNE,
     /// `store/prune.rs`).
     pub pruned: Option<Pruned>,
+    /// How many alt blocks the death rule removed in this connect's
+    /// transaction: those at or below the new tip less the reorg cap in
+    /// force, which no switch can reach (`store/alt.rs`).
+    pub retired_alts: u64,
+    /// Whether the block also sat in the alt table and left it in this
+    /// transaction: a block id has one home (`store/alt.rs`).
+    pub left_alt: bool,
 }
 
 impl<'id> WriteBatch<'_, 'id> {
@@ -163,14 +173,35 @@ impl<'id> WriteBatch<'_, 'id> {
     /// SI-1 (key image), SI-4 (root), SI-8 (`total_burned` overflow) — each
     /// [`StoreError::InvariantViolated`] and each poisoning the batch;
     /// engine errors.
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "the verdict is a one-shot token: connect takes it by value so a connected block cannot be connected again from the same ChainValid"
-    )]
     pub fn connect(
         &self,
         valid: ChainValid<'id, BatchView<'_, 'id>>,
         in_force: RuleSet,
+    ) -> Result<Connected, StoreError> {
+        self.connect_admitting(valid, in_force, None)
+    }
+
+    /// [`connect`](Self::connect), then the block's admitted bundles.
+    ///
+    /// `admitted` is the memo the count phase filed and the verifier's
+    /// [`Admitted`] values. This method does not call the verifier. The
+    /// view is built here, at the height being connected, so the plan and
+    /// the journal name one height. The writes land before the journal
+    /// seals, so `pop` of the block removes them with it. `issued_short`
+    /// counts only draws of the epoch of that height.
+    ///
+    /// # Errors
+    ///
+    /// [`connect`](Self::connect)'s, and the admission writer's.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "the verdict is a one-shot token: connect takes it by value so a connected block cannot be connected again from the same ChainValid"
+    )]
+    pub fn connect_admitting(
+        &self,
+        valid: ChainValid<'id, BatchView<'_, 'id>>,
+        in_force: RuleSet,
+        admitted: Option<(&DrawableMemo, &[Admitted])>,
     ) -> Result<Connected, StoreError> {
         // ---- 1. belts -------------------------------------------------
         // The connecting height is known from the tip's key alone and is
@@ -340,6 +371,11 @@ impl<'id> WriteBatch<'_, 'id> {
         };
         self.open_insert_table(BLOCK_INFO, StoreInvariant::TipMismatch)?
             .insert(height, info.encoded().as_encoded())?;
+        // The PoW `form` computed under the block's seed and this verdict
+        // accepted (CEN-D1/D2/D3), recorded so a switch re-forms the block
+        // without hashing it again (ruling 3, 2026-10-15).
+        self.open_insert_table(BLOCK_POW, StoreInvariant::TipMismatch)?
+            .insert(height, RecordedPow::of(block.pow()).encoded().as_encoded())?;
 
         // ---- 7. rule set (CEN-B3's belt) --------------------------------
         // The belt stores the **id**, and the id is not the set: under
@@ -363,6 +399,20 @@ impl<'id> WriteBatch<'_, 'id> {
 
         // ---- 9. accrual row, slash, epoch close (`archival_write.rs`) ---
         self.record_archival_epoch(BlockHeight::from_raw(height), &valid)?;
+        if let Some((memo, bundles)) = admitted {
+            // The connecting height was noted before this block's row
+            // landed. `chain_view` notes `tip + 1`, and the tip is now this
+            // block, so that note would halt a later fault at the next
+            // height. The view is the batch, and it does not re-note.
+            let chain = BatchView::new(self);
+            let view = StoreBundleView::new(
+                &chain,
+                memo,
+                BlockHeight::from_raw(height),
+                in_force.settlement_schedule(),
+            );
+            self.write_admissions(&view, bundles)?;
+        }
 
         // ---- 10. journal -----------------------------------------------
         let journaled = recording.seal()?;
@@ -374,10 +424,28 @@ impl<'id> WriteBatch<'_, 'id> {
         // slash log's floor is `in_force`'s expression (`SLK-2`).
         let height = BlockHeight::from_raw(height);
         let pruned = self.prune_at_boundary(height, &in_force)?;
+        // ---- 12. one home per block id (`store/alt.rs`) --------------------
+        // After the seal for the prune's reason: the alt table is not chain
+        // state. A promotion's block is its own alt row, and a live arrival
+        // can be offered as an alternative and connected as an extension
+        // from two sessions; either way the block that is now recorded
+        // leaves the alt table here. Its children stay: their parent is a
+        // main-chain block.
+        let left_alt = self.take_alt_block(&block.hash())?;
+        // ---- 13. the death rule (`store/alt.rs`) -------------------------
+        // After the seal for the prune's reason: alt rows are not chain
+        // state and are never journaled. A row at or below `height − cap`
+        // needs a switch deeper than the cap, which none can be.
+        let retired_alts = match height.to_raw().checked_sub(in_force.reorg_cap().to_raw()) {
+            Some(through) => self.retire_alt_blocks(BlockHeight::from_raw(through))?,
+            None => 0,
+        };
         Ok(Connected {
             height,
             journaled,
             pruned,
+            retired_alts,
+            left_alt,
         })
     }
 

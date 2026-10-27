@@ -90,7 +90,7 @@ fn market_posture_has_no_holdings_until_assignment_exists() {
 
 #[test]
 fn foundation_posture_is_complete_tree_with_the_empty_encoding() {
-    let holdings = StakePosture::FoundationCompleteTree
+    let holdings = StakePosture::SupportCompleteTree
         .holdings()
         .expect("foundation posts");
     assert_eq!(
@@ -234,7 +234,7 @@ async fn first_stake_refuses_a_fresh_slot_off_the_cursor() {
     .into_wallet();
     let arc = StdArc::new(TokioRwLock::new(engine));
 
-    let err = Engine::first_stake(arc, 7, StakePosture::FoundationCompleteTree)
+    let err = Engine::first_stake(arc, 7, StakePosture::SupportCompleteTree)
         .await
         .expect_err("off-cursor");
     assert!(
@@ -350,7 +350,7 @@ async fn staker_first_stake_refuses_wrong_slots_and_confirmed_wallets_at_any_slo
         .await
         .expect("bonded persona id");
     let arc = StdArc::new(TokioRwLock::new(opened));
-    let err = Engine::first_stake(arc.clone(), 4, StakePosture::FoundationCompleteTree)
+    let err = Engine::first_stake(arc.clone(), 4, StakePosture::SupportCompleteTree)
         .await
         .expect_err("unrecorded slot on a staker");
     assert!(
@@ -409,7 +409,7 @@ async fn staker_first_stake_refuses_wrong_slots_and_confirmed_wallets_at_any_slo
     .into_wallet();
     let arc = StdArc::new(TokioRwLock::new(opened));
     for slot in [3u32, 4u32] {
-        let err = Engine::first_stake(arc.clone(), slot, StakePosture::FoundationCompleteTree)
+        let err = Engine::first_stake(arc.clone(), slot, StakePosture::SupportCompleteTree)
             .await
             .expect_err("confirmed wallet refuses every slot");
         assert!(
@@ -464,7 +464,7 @@ async fn probe_adopted_slot_refuses_first_stake_before_pscan_corroboration() {
         "the sighting bridge survives the reopen (no seal to refute it)"
     );
     let arc = StdArc::new(TokioRwLock::new(opened));
-    let err = Engine::first_stake(arc, 0, StakePosture::FoundationCompleteTree)
+    let err = Engine::first_stake(arc, 0, StakePosture::SupportCompleteTree)
         .await
         .expect_err("a sighted slot is already staked, never a W2 resume");
     assert!(matches!(err, FirstStakeError::AlreadyStaked), "got {err:?}");
@@ -592,7 +592,7 @@ async fn recovered_mid_session_first_stake_names_the_reopen_remedy() {
     );
 
     let arc = std::sync::Arc::new(tokio::sync::RwLock::new(engine));
-    let err = Engine::first_stake(arc, 0, StakePosture::FoundationCompleteTree)
+    let err = Engine::first_stake(arc, 0, StakePosture::SupportCompleteTree)
         .await
         .expect_err("no actor is resident this session");
     assert!(
@@ -786,21 +786,20 @@ fn bond_fee_refuses_what_the_send_path_refuses() {
     use crate::engine::traits::FeeEstimates;
     use shekyl_rpc_client::FeeRate;
 
-    let snapshot = |e: u64, s: u64, p: u64, mask: u64| FeeEstimates {
-        economy: FeeRate::new(e, mask).expect("economy"),
-        standard: FeeRate::new(s, mask).expect("standard"),
-        priority: FeeRate::new(p, mask).expect("priority"),
-        quantization_mask: mask,
+    let snapshot = |e: u64, s: u64, p: u64| FeeEstimates {
+        economy: FeeRate::new(e).expect("economy"),
+        standard: FeeRate::new(s).expect("standard"),
+        priority: FeeRate::new(p).expect("priority"),
     };
 
-    // Honest 2021-scaling KAT row: accepted, and the fee is the shared
+    // Honest served-ladder KAT row: accepted, and the fee is the shared
     // formula over the bond ceiling — not a number this path invents.
-    let honest = snapshot(333, 1_332, 66_666, 1);
+    let honest = snapshot(333, 1_332, 66_666);
     let fee = bond_fee_from_estimates(honest).expect("an honest snapshot funds a bond");
     assert_eq!(
         fee.to_raw(),
         shekyl_rpc_client::tx_fee::fee_from_weight(
-            &FeeRate::new(333, 1).expect("rate"),
+            &FeeRate::new(333).expect("rate"),
             p_lane_weight_ceiling_bytes()
         ),
         "the bond fee is economy over the P-lane ceiling, via the shared formula"
@@ -812,7 +811,7 @@ fn bond_fee_refuses_what_the_send_path_refuses() {
     // HONEST young-chain rate once the cap was re-provisioned — fixtures
     // must gouge relative to the real bound, not a era-local one).
     let cap = crate::engine::fee_policy::absolute_fee_rate_cap();
-    let gouging = snapshot(cap + 1, cap + 1, cap + 1, 1);
+    let gouging = snapshot(cap + 1, cap + 1, cap + 1);
     match bond_fee_from_estimates(gouging) {
         Err(FirstStakeError::FeeUnreasonable(CeilingViolation::AboveAbsoluteCap { rate })) => {
             assert_eq!(rate, cap + 1);
@@ -820,35 +819,28 @@ fn bond_fee_refuses_what_the_send_path_refuses() {
         other => panic!("a gouging economy tier must be refused by class, got: {other:?}"),
     }
 
-    // The mask bypass reaches this lane too: benign raw rates under an
-    // enormous daemon-controlled mask.
-    match bond_fee_from_estimates(snapshot(1, 1, 1, 1_000_000_000_000_000_000)) {
-        Err(FirstStakeError::FeeUnreasonable(CeilingViolation::AboveAbsoluteCap { .. })) => {}
-        other => panic!("the mask bypass must not survive on the bond lane: {other:?}"),
-    }
-
     // An inverted band is refused here for the same reason it is on the
     // send path, even though only `economy` is read.
-    match bond_fee_from_estimates(snapshot(50, 20, 100, 1)) {
+    match bond_fee_from_estimates(snapshot(50, 20, 100)) {
         Err(FirstStakeError::FeeUnreasonable(CeilingViolation::NonMonotonic { .. })) => {}
         other => panic!("bond must not be more permissive than send: {other:?}"),
     }
 
     // Agreement, stated directly: the two gates accept exactly the same
     // snapshots. A future edit that loosens one and not the other fails.
-    for (e, s, p, m) in [
-        (333, 1_332, 66_666, 1),
-        (13, 52, 13_333, 1),
-        (200_000, 200_000, 200_000, 1),
-        (50, 20, 100, 1),
-        (1, 1, 1, 1_000_000_000_000_000_000),
-        (333, 1_332, 66_666, 10_000),
+    for (e, s, p) in [
+        (333, 1_332, 66_666),
+        (13, 52, 13_333),
+        (200_000, 200_000, 200_000),
+        (50, 20, 100),
+        (cap, cap, cap),
+        (cap, cap, cap + 1),
     ] {
-        let raw = snapshot(e, s, p, m);
+        let raw = snapshot(e, s, p);
         assert_eq!(
             ValidatedFeeEstimates::try_new(raw).is_ok(),
             bond_fee_from_estimates(raw).is_ok(),
-            "send and bond disagree on ({e}, {s}, {p}) mask {m}"
+            "send and bond disagree on ({e}, {s}, {p})"
         );
     }
 }

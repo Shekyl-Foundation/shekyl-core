@@ -86,6 +86,7 @@ async fn an_endpoint_bound_with_a_receipt_signer_closes_with_a_receipt() {
     let receipt = FnDsaHybridSignature::from_canonical_bytes(envelope).expect("a receipt");
     verify_receipt_transcript(
         signer.public_key(),
+        shekyl_archival_retention::PassStream::Economy,
         &NONCE,
         BlockHeight::from_raw(IN_GATE_ANCHOR),
         &ANCHOR_HASH,

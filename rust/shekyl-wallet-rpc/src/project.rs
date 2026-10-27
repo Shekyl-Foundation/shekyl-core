@@ -582,12 +582,16 @@ mod tests {
             fee: 700,
             recipients: vec![
                 SendRecipient {
-                    address: "shekyl1a".to_owned(),
+                    destination: shekyl_engine_state::SendDestination::Address(
+                        "shekyl1a".to_owned(),
+                    ),
                     amount: 1_000,
                     rid: None,
                 },
                 SendRecipient {
-                    address: "shekyl1b".to_owned(),
+                    destination: shekyl_engine_state::SendDestination::Address(
+                        "shekyl1b".to_owned(),
+                    ),
                     amount: 2_500,
                     rid: None,
                 },

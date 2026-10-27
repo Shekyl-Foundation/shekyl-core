@@ -85,7 +85,7 @@ public:
   void on_synchronized(){}
   void safesyncmode(const bool){}
   void set_target_blockchain_height(uint64_t) {}
-  bool init(const boost::program_options::variables_map& vm) { return true; }
+  bool init() { return true; }
   bool deinit(){ return true; }
   bool get_short_chain_history(std::list<crypto::hash>& ids, uint64_t& current_height) const
   { ids.push_back(crypto::null_hash); current_height = chain_height; return true; }
@@ -144,8 +144,8 @@ struct recording_p2p : nodetool::p2p_endpoint_stub<cryptonote::cryptonote_connec
   }
   bool add_host_fail(const epee::net_utils::network_address &address, unsigned int score) override
   { ++host_fails; return true; }
-  bool for_connection(const boost::uuids::uuid&, std::function<void(cryptonote::cryptonote_connection_context&, uint32_t)> f) override
-  { f(lambda_ctx, 0); return true; }
+  bool for_connection(const boost::uuids::uuid&, std::function<void(cryptonote::cryptonote_connection_context&)> f) override
+  { f(lambda_ctx); return true; }
 };
 
 cryptonote::block_complete_entry make_entry(uint64_t height, const crypto::hash& prev, crypto::hash* out_hash = nullptr)

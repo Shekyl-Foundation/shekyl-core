@@ -130,7 +130,8 @@ use shekyl_chain_rules::{
 use shekyl_crypto_hash::keccak256;
 use shekyl_harness_spender::Persona;
 use shekyl_types::archival::{
-    IndexedDraw, IssuedDigest, IssuedDraw, SettlementOutcome, SettlementRow, SlashedHolding,
+    CompleteTreeSet, IndexedDraw, IssuedDigest, IssuedDraw, SettlementOutcome, SettlementRow,
+    SigmaWorkMilli, SlashedHolding,
 };
 use shekyl_types::{BlockCount, BlockHeight, PCanonicalId, SettlementEpoch, ShardId, SHARD_LENGTH};
 use shekyl_units::AtomicUnits;
@@ -141,6 +142,7 @@ use super::store_tests::{cleanup, tmp, TestErr};
 use super::*;
 use crate::archival_snapshot::{hex, ArchivalSnapshot, SnapshotFamily};
 use crate::codec::{Canonical, SettlementEpochBlocks, SlashLogEntry};
+use shekyl_chain_rules::EpochFloor;
 
 const SEB: u64 = 100;
 const RETENTION: u64 = 50;
@@ -419,7 +421,7 @@ fn issue(store: &ChainStore, epoch: u64, personas: u64, plan: Plan) {
     let digest = store
         .begin_read()
         .expect("read")
-        .issued_digest(epoch)
+        .issued_digest(epoch, EpochFloor::NONE)
         .expect("read");
     store
         .regtest_issue_draws(
@@ -589,7 +591,7 @@ impl SlashedChain {
                 "one floor left the bond"
             );
             assert!(
-                snap.slash_applied(&p, ShardId::from_raw(0), slashing_epoch)
+                snap.slash_applied(&p, ShardId::from_raw(0), slashing_epoch, EpochFloor::NONE)
                     .expect("read"),
                 "slash_applied({p:?}, 0, {m})"
             );
@@ -627,14 +629,14 @@ impl SlashedChain {
         assert_eq!(missed.outcome(), SettlementOutcome::Missed);
         for p in ids_in_table_order(self.personas) {
             assert_eq!(
-                snap.settlement_row(&p, shard, SettlementEpoch::from_raw(0))
+                snap.settlement_row(&p, shard, SettlementEpoch::from_raw(0), EpochFloor::NONE)
                     .expect("read"),
                 None,
                 "no draw, no row"
             );
             for e in 1..=self.m {
                 assert_eq!(
-                    snap.settlement_row(&p, shard, SettlementEpoch::from_raw(e))
+                    snap.settlement_row(&p, shard, SettlementEpoch::from_raw(e), EpochFloor::NONE)
                         .expect("read"),
                     Some(missed),
                     "epoch {e} of {p:?}"
@@ -651,7 +653,12 @@ impl SlashedChain {
             for e in 0..self.m {
                 assert!(
                     !snap
-                        .slash_applied(&p, ShardId::from_raw(0), SettlementEpoch::from_raw(e))
+                        .slash_applied(
+                            &p,
+                            ShardId::from_raw(0),
+                            SettlementEpoch::from_raw(e),
+                            EpochFloor::NONE
+                        )
                         .expect("read"),
                     "epoch {e} < M slashed persona {p:?}: the window was not yet full"
                 );
@@ -810,7 +817,7 @@ impl SlashedChain {
 /// inflow; and every Σwork row is zero and no `R_market` row exists, as
 /// before, because a complete-tree persona is not a market member
 /// (`shekyl_archival_retention::market_member_at_epoch`:
-/// `is_foundation_complete_tree ⇒ false`),
+/// `is_support_complete_tree ⇒ false`),
 /// so its credits earn no work and count in no shard. Re-pinned
 /// 2026-10-08 again at CEN-J27: the joins became real bond posts, so the
 /// four personas are the harness's (`Persona::at(0..4)`, whose keys and
@@ -933,3 +940,6 @@ fn slash_scan_bench() {
 
 #[path = "settlement_slash_tests.rs"]
 mod settlement_slash_tests;
+
+#[path = "drawable_walk_tests.rs"]
+mod drawable_walk_tests;

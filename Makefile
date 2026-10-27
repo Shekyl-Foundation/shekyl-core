@@ -1,3 +1,4 @@
+# Copyright (c) 2025-2026, The Shekyl Foundation
 # Copyright (c) 2014-2022, The Monero Project
 #
 # All rights reserved.
@@ -25,8 +26,6 @@
 # INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
 # STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 # THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-ANDROID_STANDALONE_TOOLCHAIN_PATH ?= /usr/local/toolchain
 
 dotgit=$(shell ls -d .git/config)
 ifneq ($(dotgit), .git/config)
@@ -105,11 +104,6 @@ coverage:
 	cd $(builddir)/debug && cmake -D BUILD_TESTS=ON -D CMAKE_BUILD_TYPE=Debug -D COVERAGE=ON $(topdir) && $(MAKE) && $(MAKE) test
 
 # Targets for specific prebuilt builds which will be advertised for updates by their build tag
-
-release-static-android-armv8:
-	mkdir -p $(builddir)/release/translations
-	cd $(builddir)/release/translations && cmake $(topdir)/../translations && $(MAKE)
-	cd $(builddir)/release && CC=aarch64-linux-android-clang CXX=aarch64-linux-android-clang++ cmake -D BUILD_TESTS=OFF -D ARCH="armv8-a" -D STATIC=ON -D CMAKE_BUILD_TYPE=Release -D ANDROID=true -D BUILD_TAG="android-armv8" -D CMAKE_SYSTEM_NAME="Android" -D CMAKE_ANDROID_STANDALONE_TOOLCHAIN="${ANDROID_STANDALONE_TOOLCHAIN_PATH}" -D CMAKE_ANDROID_ARCH_ABI="arm64-v8a" $(topdir) && $(MAKE)
 
 release-static-linux-armv8:
 	mkdir -p $(builddir)/release

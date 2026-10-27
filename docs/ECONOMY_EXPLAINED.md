@@ -27,8 +27,8 @@
 > distort the money supply*, and the locked-supply line of the year-10
 > example. Their figures come from a simulation arm that closed one shard
 > per 10,000-block epoch; the chain now closes a shard per 3 MB of
-> archival bytes, which at baseline traffic is roughly two thousand times
-> as many shards (523,841 closed in ten years, against 263)
+> archival bytes, which at baseline traffic is roughly nine hundred times
+> as many shards (229,864 closed in ten years, against 263)
 > ([`design/ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`](design/ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md)
 > §12.13–§12.14). Do not quote the marked figures.
 
@@ -257,9 +257,9 @@ protocol sets the purse (Loops 3+4); the market sets the population.
 > settlement epoch), not a quantity read from the chain's partition — so
 > the figures are an artefact of the parameter, not a measured property of
 > the design. The chain now closes a shard per
-> 3 MB of archival bytes: baseline traffic closes 523,841 shards in ten
+> 3 MB of archival bytes: baseline traffic closes 229,864 shards in ten
 > years, and at 0.75 coins per shard and the model's six replicas that is
-> about 2.4 million coins of bond at year 10, not ~1,300. The conclusions
+> about 1.0 million coins of bond at year 10, not ~1,300. The conclusions
 > drawn here —
 > "work-priced rather than capital-priced", "nearly zero capital-lockup
 > risk" — do not follow from the current numbers, and the bond's shape is

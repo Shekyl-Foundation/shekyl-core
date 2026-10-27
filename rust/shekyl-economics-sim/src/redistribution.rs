@@ -58,6 +58,10 @@ pub struct Cell {
 
 /// The crossed population. Size and holding-scarcity are treated as independent,
 /// so a cell's weight is the product of its two marginals.
+/// A scarce holder: a shard replicated at most this many times. The W6
+/// quantum's population, named once.
+const SCARCE_R_MAX: u64 = 50;
+
 #[must_use]
 pub fn population() -> Vec<Cell> {
     let mut cells = Vec::new();
@@ -211,13 +215,16 @@ pub fn a2_report(
             if b.margin_skl >= 0.0 { "ok" } else { "UNDER" },
         )?;
     }
-    let s_pre = scarce_share(&pre, 50);
-    let s_post = scarce_share(&post, 50);
+    let s_pre = scarce_share(&pre, SCARCE_R_MAX);
+    let s_post = scarce_share(&post, SCARCE_R_MAX);
     let stranded: Vec<&CellOutcome> = post.iter().filter(|o| o.margin_skl < 0.0).collect();
-    let scarce_stranded = stranded.iter().filter(|o| o.cell.r_market <= 50).count();
+    let scarce_stranded = stranded
+        .iter()
+        .filter(|o| o.cell.r_market <= SCARCE_R_MAX)
+        .count();
     writeln!(
         out,
-        "  -> Scarce-holder (r<=50) aggregate share: PRE-D1 {SP:.4} -> POST-D1 {SO:.4}\n\
+        "  -> Scarce-holder (r<={SR}) aggregate share: PRE-D1 {SP:.4} -> POST-D1 {SO:.4}\n\
          (dilution {D:.2}% of their former share — the W6 quantum, DESCRIPTIVE).\n\
          Cells under water post-D1: {N} of {T} ({SS} of them scarce-holders).\n\
          FLAG: {FLAG}",
@@ -236,6 +243,7 @@ pub fn a2_report(
         } else {
             "no scarce holder stranded below marginal cost"
         },
+        SR = SCARCE_R_MAX,
     )?;
 
     Ok(())
@@ -283,8 +291,8 @@ mod tests {
         // arm is DESCRIPTIVE, so this pins the direction, not a threshold.
         let pre = score(BUDGET, ARCHIVERS, Scoring::PreD1, 0.05, 0.10);
         let post = score(BUDGET, ARCHIVERS, Scoring::PostD1, 0.05, 0.10);
-        let s_pre = scarce_share(&pre, 50);
-        let s_post = scarce_share(&post, 50);
+        let s_pre = scarce_share(&pre, SCARCE_R_MAX);
+        let s_post = scarce_share(&post, SCARCE_R_MAX);
         assert!(
             s_post < s_pre,
             "D1 must dilute scarce holders: pre={s_pre} post={s_post}"

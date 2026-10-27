@@ -90,30 +90,6 @@ namespace levin
     }
   } // anonymous
 
-  // Forwarding shim over shekyl_levin_compress_message (rule 20). Every
-  // decision — is this already compressed, is it exactly one message, is it
-  // the noise/fragment class whose constant on-wire size is the point of
-  // it, is the payload worth compressing, is the result actually smaller —
-  // and the header rewrite itself live in rust/shekyl-levin. This function
-  // holds no policy; it converts buffers.
-  //
-  // The seam moved up from compress_payload to the whole message because
-  // most of those questions are about the bucket header, and a
-  // payload-level seam left them stranded here as a second, weaker copy:
-  // the C++ this replaces checked neither the signature, nor that the
-  // header accounted for every byte after it, nor the noise class.
-  byte_slice try_compress_message(byte_slice input)
-  {
-    const auto data = to_span(input);
-    ShekylBuffer buf{};
-    // Declined (rc == 1) is the ordinary outcome and means "send it as it
-    // is"; the caller keeps ownership of `input` either way.
-    if (shekyl_levin_compress_message(data.data(), data.size(), &buf) != 0)
-      return input;
-
-    return adopt_ffi_buffer(buf);
-  }
-
   // Forwarding shim over shekyl_levin_noise_notify (rule 20): the noise
   // shape — command 0, B|E, zeroed body, exact total size — lives in
   // rust/shekyl-levin, where the read side that discards it already lives.

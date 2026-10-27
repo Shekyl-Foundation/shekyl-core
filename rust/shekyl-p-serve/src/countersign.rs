@@ -5,7 +5,7 @@
 
 //! The serve side of the SF-D8 pass countersignature.
 //!
-//! A `P` answering a shard request binds the daemon's 72-byte request
+//! A `P` answering a shard request binds the daemon's 73-byte request
 //! header, the shard id and a nonce-salted digest of the response it
 //! delivers under `SCHEME_DOMAIN_ATTESTATION`; the daemon verifies that
 //! binding against the `P` public key it already holds from the bond
@@ -53,7 +53,7 @@
 //! struct Odd;
 //! impl PassKey<64> for Odd {
 //!     fn ready(&self, _: u64, _: BlockHeight) -> Result<(), SignRefused> { Ok(()) }
-//!     fn sign_pass(&self, _: &[u8; 112]) -> Result<[u8; 64], SignRefused> {
+//!     fn sign_pass(&self, _: &[u8; 113]) -> Result<[u8; 64], SignRefused> {
 //!         Err(SignRefused::new("never"))
 //!     }
 //! }
@@ -67,7 +67,7 @@
 //! struct Mixed;
 //! impl PassKey<RECEIPT_ENVELOPE_LEN> for Mixed {
 //!     fn ready(&self, _: u64, _: BlockHeight) -> Result<(), SignRefused> { Ok(()) }
-//!     fn sign_pass(&self, _: &[u8; 112]) -> Result<HybridSignature, SignRefused> {
+//!     fn sign_pass(&self, _: &[u8; 113]) -> Result<HybridSignature, SignRefused> {
 //!         Err(SignRefused::new("never"))
 //!     }
 //! }
@@ -87,7 +87,7 @@
 //! struct Plain;
 //! impl PassKey<IDENTITY_ENVELOPE_LEN> for Plain {
 //!     fn ready(&self, _: u64, _: BlockHeight) -> Result<(), SignRefused> { Ok(()) }
-//!     fn sign_pass(&self, _: &[u8; 112]) -> Result<HybridSignature, SignRefused> {
+//!     fn sign_pass(&self, _: &[u8; 113]) -> Result<HybridSignature, SignRefused> {
 //!         Err(SignRefused::new("never"))
 //!     }
 //! }
@@ -246,7 +246,7 @@ where
     /// `sign_failure_count`.
     fn ready(&self, shard_id: u64, anchor_height: BlockHeight) -> Result<(), SignRefused>;
 
-    /// Sign the 112-byte SF-D8 transcript with this key's scheme, under
+    /// Sign the 113-byte SF-D8 transcript with this key's scheme, under
     /// that scheme's domain for it (the attestation domain for the identity
     /// key, the receipt domain for the receipt key).
     ///
@@ -570,7 +570,12 @@ mod tests {
     #[test]
     fn test_key_signer_round_trips_through_the_consensus_verifier() {
         let signer = TestKeySigner::ephemeral(bh(DEPTH + 50));
-        let f = PassRequestHeader::from_parts([7; 32], bh(49), [8; 32]);
+        let f = PassRequestHeader::from_parts(
+            shekyl_archival_retention::PassStream::Economy,
+            [7; 32],
+            bh(49),
+            [8; 32],
+        );
         let digest = [9u8; 32];
         let sig = signer.sign_pass(&f.transcript(7, &digest)).expect("sign");
         assert_eq!(
@@ -579,6 +584,7 @@ mod tests {
         );
         let ok = verify_pass_transcript(
             signer.public_key(),
+            f.stream(),
             f.nonce(),
             f.anchor_height(),
             f.anchor_hash(),
@@ -590,6 +596,7 @@ mod tests {
         // The delivery digest is bound: another digest does not verify.
         assert!(verify_pass_transcript(
             signer.public_key(),
+            f.stream(),
             f.nonce(),
             f.anchor_height(),
             f.anchor_hash(),
@@ -601,6 +608,7 @@ mod tests {
         // Shard id is bound: a neighbouring id does not verify.
         let bad = verify_pass_transcript(
             signer.public_key(),
+            f.stream(),
             f.nonce(),
             f.anchor_height(),
             f.anchor_hash(),

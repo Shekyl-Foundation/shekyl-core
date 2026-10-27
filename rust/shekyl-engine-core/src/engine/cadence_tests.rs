@@ -315,6 +315,7 @@ async fn production_legs_are_registered_and_invoked_each_tick() {
         "submit-lifecycle",
         "serving-liveness",
         "terminal-reject",
+        "pending-outcomes",
         "epoch-claim",
     ] {
         assert!(
@@ -324,11 +325,12 @@ async fn production_legs_are_registered_and_invoked_each_tick() {
     }
     // Fire order is the §3 retire-before-assemble registration order.
     assert_eq!(
-        fired[..4],
+        fired[..5],
         [
             ("submit-lifecycle", 1),
             ("serving-liveness", 1),
             ("terminal-reject", 1),
+            ("pending-outcomes", 1),
             ("epoch-claim", 1)
         ],
         "registration order must be preserved per tick"

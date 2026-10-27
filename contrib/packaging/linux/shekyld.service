@@ -8,7 +8,10 @@ Wants=network-online.target
 # (shekyl.slice, shipped beside this unit; ruled 2026-10-12).
 Slice=shekyl.slice
 Type=simple
-ExecStart=/usr/local/bin/shekyld --non-interactive --data-dir /var/lib/shekyl --log-file /var/log/shekyl/shekyld.log
+# No console unless asked (--console), so nothing reads stdin under the
+# service manager. The two paths are the unit's StateDirectory and
+# LogsDirectory below; the recipe gate holds them equal.
+ExecStart=/usr/local/bin/shekyld --data-dir /var/lib/shekyl --log-file /var/log/shekyl/shekyld.log
 ExecStartPre=/bin/mkdir -p /var/log/shekyl
 
 User=shekyl

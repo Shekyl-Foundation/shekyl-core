@@ -31,9 +31,6 @@ hex = { version = "0.4", default-features = false, features = ["alloc"] }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
 
-curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
-
-shekyl-curve-io = { path = "../shekyl-curve-io", default-features = false }
 # The submit wire contract (SubmitVerdict / RejectCause / SubmitTransactionRequest):
 # the single Rust definition per docs/design/DAEMON_SUBMIT_VERDICT.md §2.3, shared
 # with the daemon-side shekyl-daemon-rpc so wallet and daemon cannot skew.
@@ -55,6 +52,10 @@ shekyl-rpc-types = { path = "../shekyl-rpc-types", default-features = false }
 # Decode edge for `Rpc::get_height` (`HEIGHT_SEMANTICS.md` C2). `no_std`
 # so this crate's aspirational `--no-default-features` path stays open.
 shekyl-types = { path = "../shekyl-types", default-features = false }
+# The fee lattice (`FEE_QUANTIZATION_MASK`, `quantized_fee`): the one
+# rounding a paid fee meets, owned where relay admission reads it. A std
+# crate, like `shekyl-rpc-types` above and for the same reason.
+shekyl-economics = { path = "../shekyl-economics" }
 
 
 [features]
@@ -72,7 +73,5 @@ std = [
   "hex/std",
   "serde/std",
   "serde_json/std",
-
-  "shekyl-curve-io/std",
 ]
 default = ["std"]

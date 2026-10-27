@@ -373,25 +373,27 @@ uint64_t shekyl_long_term_block_weight(
 /// Base block subsidy before weight penalty and release multiplier (0h KAT export).
 uint64_t shekyl_base_block_reward(uint64_t already_generated_coins);
 
-// Admit iff fee >= mask_round_up(weight * min(floors)) - slack_bp.
+// Admit iff fee >= weight * min(floors) rounded up to the fee lattice
+// (shekyl_economics::FEE_QUANTIZATION_MASK), less the admission slack
+// (RELAY_ADMISSION_SLACK_BP, 0); both are the predicate's own constants.
 // floors is at most shekyl_relay_floor_lookback()+1 values; only the
 // minimum is read. A short window is stricter; empty refuses.
 // Returns 1 admit, 0 refuse, -1 bad pointer/length.
 int32_t shekyl_relay_floor_admits(
     uint64_t fee,
     uint64_t weight,
-    uint64_t mask,
     const uint64_t* floors,
-    size_t floors_len,
-    uint32_t slack_bp);
+    size_t floors_len);
 
 // F = R*C*w_ref/M^2, floored at 1. Same function as the ladder's economy
-// rung. The penalty-free zone is EconomicParams::full_reward_zone, not an
-// argument. Returns 0 written, -1 null out_floor, -2 out of u128 domain.
+// rung. w_ref is shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT, not an
+// argument — the same move the lattice and the slack made on
+// shekyl_relay_floor_admits. The penalty-free zone is
+// EconomicParams::full_reward_zone, not an argument.
+// Returns 0 written, -1 null out_floor, -2 out of u128 domain.
 int32_t shekyl_relay_fee_floor(
     uint64_t base_reward,
     uint64_t median,
-    uint64_t ref_tx_weight,
     uint64_t c_scaled,
     uint64_t* out_floor);
 
@@ -404,17 +406,15 @@ uint64_t shekyl_fee_correction(
 
 // G — lookback depth. Rust is the owner.
 uint64_t shekyl_relay_floor_lookback(void);
-// Admission slack, basis points. Rust is the owner; pinned at 0.
-uint32_t shekyl_relay_admission_slack_bp(void);
 
 // Three-slot ladder [economy, standard, priority]. Economy is the relay
-// floor at the same operands. The penalty-free zone is
-// EconomicParams::full_reward_zone, not an argument.
-// Returns 0 written, -1 null, -2 out of domain.
+// floor at the same operands. w_ref is
+// shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT, not an argument.
+// The penalty-free zone is EconomicParams::full_reward_zone, not an
+// argument. Returns 0 written, -1 null, -2 out of domain.
 int32_t shekyl_corrected_fee_ladder(
     uint64_t base_reward,
     uint64_t median,
-    uint64_t ref_tx_weight,
     uint64_t c_scaled,
     uint64_t *out_fees);
 
@@ -1609,40 +1609,15 @@ ShekylSignResult shekyl_sign_fcmp_transaction(
     const uint8_t* tree_root_ptr,
     uint8_t tree_depth);
 
-/// Opaque handle to the Axum-based daemon RPC server.
-typedef struct ShekylDaemonRpcHandle ShekylDaemonRpcHandle;
+/// The remnant's one RPC start (DAEMON_CONFIG_CUTOVER.md §2.3): serves the
+/// RPC section the Rust main() recorded on this core; every listener is
+/// Rust's. 0, or -1 with the refusal logged. `rpc_server_ptr` must stay
+/// alive until `shekyl_daemon_rpc_stop` has returned.
+int32_t shekyl_daemon_rpc_start(void* rpc_server_ptr);
 
-/// Start the Axum daemon RPC server on a dedicated Tokio runtime.
-/// rpc_server_ptr: pointer to an initialized core_rpc_server.
-/// bind_host / bind_port: the operator's --rpc-bind-ip / --rpc-bind-port
-///   values as given.
-/// bind_host_v6: the operator's --rpc-bind-ipv6-address (or the restricted
-///   twin) when --rpc-use-ipv6 is set; NULL otherwise. Rust parses both
-///   families, classifies them, and binds a second socket on this handle
-///   when the v6 address is distinct — C++ does not start a second server.
-///   Wildcard and network binds are refused (RPC_TRANSPORT_POSTURE.md RT-1/RT-2).
-///   C++ composes and validates nothing.
-/// restricted: true to block admin-only endpoints.
-/// cors_origins: optional comma-separated allow-list from
-///   --rpc-access-control-origins; NULL or empty = CORS default-deny.
-/// max_connections / max_connections_per_public_ip /
-///   max_connections_per_private_ip: concurrent-connection caps enforced by the
-///   Rust listener (0 = unlimited), validated there.
-/// Returns an opaque handle, or NULL on failure; parse/cap/bind refusals are
-/// logged with their reason by the Rust side before NULL is returned.
-ShekylDaemonRpcHandle* shekyl_daemon_rpc_start(
-    void* rpc_server_ptr,
-    const char* bind_host,
-    const char* bind_port,
-    const char* bind_host_v6,
-    bool restricted,
-    const char* cors_origins,
-    uint64_t max_connections,
-    uint64_t max_connections_per_public_ip,
-    uint64_t max_connections_per_private_ip);
-
-/// Gracefully stop the Axum daemon RPC server and free the handle.
-void shekyl_daemon_rpc_stop(ShekylDaemonRpcHandle* handle);
+/// Stops the RPC if it runs, drained; the remnant calls it before the core
+/// is destroyed. A no-op when the Rust stop path already stopped it.
+void shekyl_daemon_rpc_stop(void);
 
 /// Copy the thread-ledger report into `buf`, NUL-terminated.
 /// Always returns the report's full length, excluding the NUL. A null
@@ -2634,37 +2609,6 @@ uint64_t shekyl_archival_settlement_epoch_blocks(void);
 /// regtest lever beside the epoch's). Read only to report the schedule.
 uint64_t shekyl_archival_reorg_depth_blocks(void);
 
-/// True iff SHEKYL_SETTLEMENT_EPOCH_BLOCKS or SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS
-/// is present in the environment at all (no validation, no schedule latch).
-/// Drives Blockchain::init's
-/// fail-closed public-network refusal: the schedule is consensus, and on a
-/// non-FAKECHAIN net the lever's presence is the operator error to refuse
-/// on, before any question of the value's validity.
-bool shekyl_archival_settlement_epoch_override_present(void);
-
-/// Arm the regtest schedule levers, SHEKYL_SETTLEMENT_EPOCH_BLOCKS and
-/// SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS (FAKECHAIN startup path only),
-/// latching the validated pair (or the genesis pins when unset). The epoch
-/// is parsed against the cap: SEB <= cap is refused. An unarmed process
-/// ignores the levers entirely.
-///
-/// Returns one of SHEKYL_ARCHIVAL_SEB_ARM_* below, because the refusals
-/// need different remedies.
-uint8_t shekyl_archival_settlement_epoch_arm_regtest(void);
-
-/// Armed (or the variables are unset and the genesis pins latched).
-#define SHEKYL_ARCHIVAL_SEB_ARM_OK                   0
-/// SHEKYL_SETTLEMENT_EPOCH_BLOCKS is not an integer strictly above the reorg
-/// cap in force and at most the genesis pin — an operator input error: fix
-/// the value, lower SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS with it, or unset it.
-#define SHEKYL_ARCHIVAL_SEB_ARM_ERR_INVALID          1
-/// The schedule already latched before the call — an initialization-order
-/// defect in the daemon, NOT a bad value.
-#define SHEKYL_ARCHIVAL_SEB_ARM_ERR_TOO_LATE         2
-/// SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS is not an integer in 1..=the genesis
-/// reorg depth — an operator input error.
-#define SHEKYL_ARCHIVAL_SEB_ARM_ERR_INVALID_REORG_CAP 3
-
 /// Returns 1 and writes the settlement epoch whose close is processed at
 /// `block_height`; 0 (no write) at height 0 or non-boundary heights.
 uint8_t shekyl_archival_epoch_close_due(
@@ -2728,7 +2672,7 @@ struct shekyl_archival_epoch_close_bond
   const uint64_t* bad_intervals_ptr;
   /// Pair count (not u64 count).
   size_t bad_intervals_len;
-  uint8_t is_foundation_complete_tree;
+  uint8_t is_support_complete_tree;
 };
 
 /// One gathered shard-registry row. Layout must match
@@ -3023,7 +2967,8 @@ int32_t shekyl_difficulty_lwma1_next(
 /// The fork-choice comparison (C2-R1b-Q1a): strictly greater cumulative
 /// difficulty switches, equality keeps the incumbent, an operator-
 /// checkpoint match forces the switch. Writes
-/// `SHEKYL_FORK_CHOICE_KEEP_CURRENT` or `SHEKYL_FORK_CHOICE_SWITCH` to
+/// `SHEKYL_FORK_CHOICE_KEEP_CURRENT`, `SHEKYL_FORK_CHOICE_SWITCH` or
+/// `SHEKYL_FORK_CHOICE_FORCED_SWITCH` to
 /// `*out_verdict`; returns 0 on success or
 /// `SHEKYL_DIFFICULTY_ERR_NULL_PTR`.
 int32_t shekyl_difficulty_fork_choice(
@@ -3441,21 +3386,20 @@ typedef void (*ShekylRelayCarrierResolvedCb)(void* ctx, std::uint64_t token, boo
 //! `relay_zone_ffi`.
 #define SHEKYL_RELAY_ZONE_NOISE_ENABLED 2u
 
-//! Open a relay with the caller's epoch length. `configured` is a bit per
-//! connector index and is the relay's identity. A bit past the connector
-//! count refuses the handle. The stem embargo is drawn from the forwarded
-//! connector, not from this mask. `flags` is `SHEKYL_RELAY_ZONE_NOISE_ENABLED`
-//! or zero. Bit 0 is ignored.
-//! Null when a relay cannot be built: SIZE_MAX stems, a zero epoch (would
-//! expire at every wake and spin the relay timer), noise requested with no
-//! open link (Tor is volume cover and takes no envelope), or a noise
-//! channel count other than `CRYPTONOTE_NOISE_CHANNELS`. Treat null as fatal.
+//! Open a relay with the caller's epoch length. Its identity (which
+//! connectors are configured) and whether the development cover carrier
+//! runs are the remnant's preparation (`shekyl_relay_posture_record` for
+//! the test harness; the daemon's Rust main() installs it before `run`).
+//! Null when nothing is installed, or on a `stems` the slot arithmetic
+//! cannot hold, a zero epoch, or a configuration the relay refuses.
 RelayZoneHandle* shekyl_relay_zone_new(std::uint64_t now_ms,
                                        std::size_t stems,
                                        std::uint32_t min_epoch_secs,
-                                       std::uint32_t epoch_jitter_secs,
-                                       std::uint32_t flags,
-                                       std::uint32_t configured);
+                                       std::uint32_t epoch_jitter_secs);
+/// Records the relay's posture for the C++ test harness only: the
+/// daemon's Rust main() records it from its sections (dev-relay-cover).
+/// 0, or -1 for a bit past the connector count.
+int shekyl_relay_posture_record(std::uint32_t configured, bool cover);
 //! The declaration cell for this connector: the peer does not learn this
 //! node's address. Unknown connector bytes are false.
 bool shekyl_connector_address_hidden_from_peer(std::uint8_t connector);
@@ -3480,17 +3424,6 @@ std::uint8_t shekyl_relay_zone_note_achieved_out(std::uint8_t connector, std::ui
 //! public below-floor bit is a targeting oracle, §16.3). False until the
 //! first note for `connector`: no data is never a fabricated zero.
 bool shekyl_relay_zone_floor_snapshot(std::uint8_t connector, std::uint32_t* out_achieved, std::uint32_t* out_floor, bool* out_below);
-
-//! The outbound floor the embargo provisioning assumes (F-8b): counts below
-//! this put real fluff first-passage above the provisioned value.
-std::uint32_t shekyl_relay_zone_min_provisioned_out_peers();
-
-//! Outbound connections a node opens per zone by default. Rust-owned (rule
-//! 20); replaces `#define P2P_DEFAULT_CONNECTIONS_COUNT`. This is the degree
-//! the relay-privacy measurements are taken AT; the floor above is derived
-//! FROM those measurements. Same value today, opposite derivations -- do not
-//! substitute one for the other.
-std::uint32_t shekyl_p2p_default_out_peers();
 
 //! Inbound safety-bound decision (PWD-I7). Rust observes the process and
 //! decides. C++ passes `reserved` — descriptors it has promised but not
@@ -3574,7 +3507,7 @@ struct ShekylStemTallyRow
   std::uint64_t silent;
   std::uint64_t distinct_sources;
   std::uint8_t connector;
-  std::uint8_t pad[7];
+  std::uint8_t _pad[7];
 };
 static_assert(sizeof(ShekylStemTallyRow) == 48, "stem tally row layout");
 
@@ -3733,68 +3666,21 @@ void shekyl_relay_zone_force_fluff(RelayZoneHandle* handle, std::uint64_t now_ms
 //! as a deadline-crossing rollover's do.
 void shekyl_relay_zone_force_epoch(RelayZoneHandle* handle, std::uint64_t now_ms);
 
-// ── Levin ingress + emit framing + compression (IMPLEMENTATION_INDEX.md LV row) ──────
+// ── Levin ingress + emit framing (IMPLEMENTATION_INDEX.md LV row) ──────
 //
-// Levin FFI: ingress admit (PWD-B3 / B3a / B4) plus compression / noise /
-// fragment emit. Ingress policy lives in rust/shekyl-levin; C++ handle_recv
-// is a marshaling shim over shekyl_levin_ingress_admit.
+// Levin FFI: ingress admit (PWD-B3 / B3a / B4) plus noise / fragment emit.
+// Ingress policy lives in rust/shekyl-levin; C++ handle_recv is a
+// marshaling shim over shekyl_levin_ingress_admit. The protocol has no
+// compression (Rick, 2026-10-19): the old compressed-payload flag bit, 0x10,
+// is an undefined bit and is refused at ingress with -8.
 //
-// The epee::levin compression path is a marshaling shim over these exports
-// (emit: contrib/epee/src/levin_base.cpp try_compress_message; receive:
-// contrib/epee/src/levin_compression.cpp), so the Rust-pinned libzstd is the
-// single zstd implementation in the binary — the system-libzstd link and the
-// HAVE_ZSTD build gate are gone. The C++ carries no compression policy: what
-// may be compressed, at what level, above what size, and the COMPRESSED
-// header rewrite are all in rust/shekyl-levin.
+// Return codes (rule 40): 0 = ok (output parameter set); -3 = a noise or
+// fragment size that cannot be emitted; -4 = null pointer; -8 = unknown
+// flag bits at ingress; -9 = unknown dispatch command.
 //
-// Emit is message-level and receive is frame-level, because the questions
-// differ: on the way out, whether a buffer may be compressed at all is a
-// property of its bucket header; on the way in, the handler has already
-// parsed and range-checked that header and holds one opaque zstd frame.
-//
-// Return codes (rule 40): 0 = ok (output parameter set); 1 = compression
-// declined, send uncompressed (not an error; out is nulled); -3 = malformed
-// or size-less frame; -4 = null pointer / undersized output buffer;
-// -6 = the Rust image was built without the zstd feature (production always
-// has it on; pure-Rust feature-off builds only); -7 = a size limit was
-// exceeded; -8 = unknown flag bits at ingress; -9 = unknown dispatch
-// command.
-//
-// -3 and -7 are separate because they call for opposite operator responses
-// — a corrupt or hostile peer versus an honest peer whose batch outgrew the
-// per-command cap — and the receive path closes the connection on both.
-//
-// Variable-length emit (compress, noise, fragment) returns a Rust-allocated
-// ShekylBuffer that MUST be freed with shekyl_buffer_free. Receive is
-// direct-write: size with shekyl_levin_inflated_size, then inflate with
-// shekyl_levin_decompress_into — nothing is allocated on the Rust side on
-// that path, which matters during IBD where these are multi-megabyte block
-// batches once per packet per connection.
+// Noise and fragment emit return a Rust-allocated ShekylBuffer that MUST be
+// freed with shekyl_buffer_free.
 
-//! Compress one finalized Levin message — header and payload together.
-//! 0 = out holds the re-framed COMPRESSED message (free with
-//! shekyl_buffer_free); 1 = declined, send the input unchanged. Decline
-//! covers every refusal: below the 256-byte payload minimum, not smaller
-//! compressed, already compressed, not exactly one message, or the
-//! noise/fragment class whose constant on-wire size must not move. The
-//! caller keeps its input in both cases.
-int32_t shekyl_levin_compress_message(const uint8_t* input, size_t input_len,
-                                      ShekylBuffer* out);
-//! Read a COMPRESSED payload's frame header and report the exact inflated
-//! size. The frame must declare its content size, and that size is checked
-//! against min(max_output, 128 MiB) before the caller sizes anything from
-//! it — pass the packet-size limit the bucket header was checked against,
-//! which makes the bound on an inflated payload identical to the bound the
-//! same connection enforces on an uncompressed one.
-int32_t shekyl_levin_inflated_size(const uint8_t* input, size_t input_len,
-                                   uint64_t max_output, size_t* out_size);
-//! Inflate a COMPRESSED payload directly into caller-owned storage. `out`
-//! must be `out_cap` writable bytes sized from shekyl_levin_inflated_size on
-//! the same input; a frame that does not deliver exactly `out_cap` bytes is
-//! rejected rather than partially written.
-int32_t shekyl_levin_decompress_into(const uint8_t* input, size_t input_len,
-                                     uint8_t* out, size_t out_cap,
-                                     size_t* out_written);
 //! Build a dummy ("noise") message of exactly noise_bytes total length —
 //! command 0, B|E set, zeroed payload; the white-noise cover-traffic unit.
 //! 0 = out set (free with shekyl_buffer_free); -3 when noise_bytes cannot
@@ -3886,87 +3772,6 @@ uint8_t shekyl_block_sync_action(uint8_t outcome, uint8_t drop);
 bool shekyl_block_sync_drop(uint8_t action);
 bool shekyl_block_sync_heavier_score(uint8_t action);
 bool shekyl_block_sync_orphan_resync(uint8_t action);
-
-// ---------------------------------------------------------------------------
-// Daemon ephemeral Tor inbound -- PWD-E7 (docs/design/P2P_2_ENDPOINT_ROUND.md)
-// ---------------------------------------------------------------------------
-// The DEFAULT overlay-endpoint posture: the daemon spawns a managed, pinned
-// tor, mints a v3 onion key IN MEMORY, publishes with ADD_ONION Flags=
-// DiscardPK, and uses the returned ServiceID as its per-boot overlay inbound
-// address. The DataDirectory is a unique 0700 subdirectory of the daemon
-// config folder, wiped on teardown -- a restart cannot reuse entry guards.
-// The operator-provisioned stable posture (--anonymous-inbound + torrc) is a
-// different privacy posture, not a different custody of the same thing, and
-// configuring it makes the ephemeral posture yield. All of the posture logic
-// lives in rust/shekyl-tor-control-daemon; these exports are marshaling.
-//
-// These symbols live in shekyl-ffi (linked by every C++ binary that
-// instantiates node_server via SHEKYL_FFI_LINK_LIBS). daemon_image is a
-// superset, so shekyld sees them too. They are not in shekyl-daemon-rpc:
-// that crate is the Axum HTTP server, not the P2P overlay.
-
-#define SHEKYL_DAEMON_TOR_OK                 0
-#define SHEKYL_DAEMON_TOR_ALREADY_RUNNING    1
-#define SHEKYL_DAEMON_TOR_ARG                2
-#define SHEKYL_DAEMON_TOR_NO_BINARY          3
-#define SHEKYL_DAEMON_TOR_BAD_BINARY         4
-#define SHEKYL_DAEMON_TOR_START_FAILED       5
-#define SHEKYL_DAEMON_TOR_UNAVAILABLE        6
-#define SHEKYL_DAEMON_TOR_NOT_RUNNING        1
-#define SHEKYL_DAEMON_TOR_PUBLISH_FAILED     3
-
-//! Start the managed tor: verify the binary, create a unique wiped
-//! DataDirectory under `data_dir_parent` (the daemon config folder -- never
-//! the DataDirectory itself), bootstrap to 100%, and return its SOCKS
-//! listener. No onion is published yet -- that is shekyl_daemon_tor_publish,
-//! called after the daemon has bound its loopback inbound listener (on an
-//! OS-assigned port; a port guessed before binding could already be taken
-//! and abort init). BLOCKS for the whole sequence (tens of seconds on a
-//! cold bootstrap; bound by bootstrap_timeout_secs plus small constants).
-//! Outputs are NUL-terminated: out_socks_addr (>= 48 bytes; the managed
-//! tor's SOCKS "ip:port" -- the zone's outbound proxy), out_error (>= 256
-//! bytes recommended). Return codes: SHEKYL_DAEMON_TOR_OK; _ALREADY_RUNNING
-//! (refused, not stacked); _ARG; _NO_BINARY (no candidate at all);
-//! _BAD_BINARY (candidate found but unusable: a pinned file's digest
-//! differs, tor's directory holds something that is not pinned, unreadable);
-//! _UNAVAILABLE (Shekyl manages no tor on this build target; out_error is
-//! the reason); _START_FAILED (spawn/bootstrap -- incarnation torn down
-//! before return, so a failed start commits the caller to nothing).
-int shekyl_daemon_tor_start(const char* tor_binary_path, const char* data_dir_parent,
-                            uint32_t bootstrap_timeout_secs,
-                            char* out_socks_addr, size_t out_socks_addr_len,
-                            char* out_error, size_t out_error_len);
-
-//! Publish the per-boot v3 onion on the running managed tor (key minted in
-//! memory, ADD_ONION Flags=DiscardPK PoWDefensesEnabled=1), forwarding
-//! virtual_port (what peers dial) to 127.0.0.1:local_port (the daemon's
-//! already-bound inbound listener), MaxStreams=max_streams per rendezvous
-//! circuit. A Tor that rejects a proof-of-work argument (control status
-//! 512 or 513, and the reply names that argument) fails the publish. Any
-//! other 512 is an ordinary publish failure. There is no second attempt
-//! without proof-of-work.
-//! Outputs are NUL-terminated: out_service_id (>= 57 bytes; 56-char service id, no
-//! ".onion"), out_error (>= 256 bytes recommended). Returns 0 = published;
-//! 1 = no instance running (start first); 2 = argument error; 3 = publish
-//! failed (detail in out_error). A publish failure leaves tor RUNNING: the
-//! ruled degrade is outbound-only on the zone (keep the SOCKS proxy, serve
-//! no overlay inbound this boot) -- do not abort the daemon.
-int shekyl_daemon_tor_publish(uint16_t virtual_port, uint16_t local_port,
-                              uint16_t max_streams,
-                              char* out_service_id, size_t out_service_id_len,
-                              char* out_error, size_t out_error_len);
-
-//! Is the ephemeral tor still up? false when never started, already shut
-//! down, or died. Per PWD-E7 there is no respawn: a death means the overlay
-//! posture is gone for this boot. The daemon's idle loop polls this and, on
-//! the true->false edge, logs once that overlay inbound is lost and that
-//! originated transactions stay fail-closed on the tor zone.
-bool shekyl_daemon_tor_is_alive(void);
-
-//! Bounded teardown of the ephemeral posture (DEL_ONION, SIGTERM -> wait ->
-//! SIGKILL, reap). Idempotent: true when an instance was running and is now
-//! down, false when there was nothing to stop.
-bool shekyl_daemon_tor_shutdown(void);
 
 // ---------------------------------------------------------------------------
 // DRS-P0d logical-state digest v0
@@ -4237,6 +4042,9 @@ struct ShekylOwnedBuffer {
 #define SHEKYL_FORK_CHOICE_KEEP_CURRENT      INT32_C(0)
 /// `shekyl_difficulty_fork_choice`: reorganize onto the alternative.
 #define SHEKYL_FORK_CHOICE_SWITCH            INT32_C(1)
+/// `shekyl_difficulty_fork_choice`: reorganize onto the alternative because
+/// a checkpoint names it; the demoted blocks are discarded (CEN-K7).
+#define SHEKYL_FORK_CHOICE_FORCED_SWITCH     INT32_C(2)
 
 /// `shekyl_pow_randomx_v2_hash` wrote `*out_hash`, or
 /// `shekyl_pow_randomx_v2_set_canonical` pinned the seedhash.
@@ -4319,7 +4127,7 @@ using shekyl_seam_post_fn = void (*)(void* ctx, std::uint64_t id, std::uint32_t 
 /// The previous binding is closed and its harness threads are joined
 /// before the next one is published. Returns 0 when installed or
 /// cleared, -1 when `ceiling` is not a decision.
-int shekyl_seam_bind(void* ctx, shekyl_seam_post_fn post, const shekyl_inbound_ceiling* ceiling);
+int shekyl_seam_bind(void* ctx, shekyl_seam_post_fn post);
 /// Replace the inbound bound on a bound seam. 0 on success, -1 otherwise.
 int shekyl_seam_set_ceiling(const shekyl_inbound_ceiling* ceiling);
 /// Install the in-memory harness dialer. Zone bind does not call this.
@@ -4416,72 +4224,124 @@ constexpr int SHEKYL_PEERLIST_NO_HUB = 4;
 /// BAD_ARGUMENT: a null pointer with a non-zero count; nothing was admitted.
 constexpr int SHEKYL_PEERLIST_BAD_ARGUMENT = 5;
 /// The outbound handshake's result, posted by the Rust dialer as kind
-/// SHEKYL_SEAM_HANDSHAKE after `established` and ahead of any frame. The
-/// strand reads these fields and accepts or refuses the sync payload in
-/// that turn; it does not parse a Levin response.
+/// SHEKYL_SEAM_HANDSHAKE after `established` and ahead of any frame. Rust
+/// has already accepted the kept dial. The strand reads these fields and
+/// does not answer; it does not parse a Levin response. A confirm dial
+/// is not posted.
 struct shekyl_seam_handshake_result {
-  std::uint8_t keep;
-  std::uint8_t _pad[3];
-  std::uint32_t support_flags;
   std::uint64_t current_height;
   std::uint64_t cumulative_difficulty;
   std::uint64_t cumulative_difficulty_top64;
   std::uint8_t top_id[32];
 };
-/// The strand's verdict on the handshake posted for `id`: 1 accepted the
-/// sync payload, 0 refused it. The dialer closes a confirm dial and a
-/// refused dial; a kept and accepted dial stays.
-void shekyl_dialer_handshake_verdict(std::uint64_t id, int accepted);
 /// The inbound handshake's self-connection check: 1 when `nonce` (32 bytes)
 /// is one this node put in flight on `connector`, erasing it; 0 otherwise.
 int shekyl_dial_take_handshake_nonce(std::uint32_t connector, const std::uint8_t* nonce);
-/// `--out-peers` and the anonymity zones' cap: the connector's outbound
-/// target. 0 on success; -1 for a positive cap below the F-8b floor, which
-/// is refused, or an unknown connector. Lowering a cap closes kept
-/// sessions only.
-int shekyl_dialer_set_out_peers(std::uint32_t connector, std::uint32_t cap);
-/// The connector's outbound target as the dialer holds it: the pushed cap,
-/// or the compiled default before any push. 0 for an unknown connector.
-std::uint32_t shekyl_dialer_out_target(std::uint32_t connector);
+/// The chain-sync heuristics that read the outbound target, decided in Rust
+/// (DAEMON_CONFIG_CUTOVER.md §4.2): the handler hands its counts over.
+/// Whether to drop a synced peer on `connector` to make room for a syncing
+/// one: the outbound slots are full and fewer than the search count sync.
+bool shekyl_sync_room_for_syncing_peer(std::uint32_t connector, std::uint32_t syncing, std::uint32_t synced);
+/// Whether to look for more outbound peers to sync from on `connector`.
+bool shekyl_sync_wants_more_outbound(std::uint32_t connector, std::uint32_t outbound);
 /// The core's tip: the dialer's next handshake carries it. Called wherever
 /// the tip changes, and once at start.
 void shekyl_core_publish_tip(std::uint64_t height, std::uint64_t cumulative_difficulty,
     std::uint64_t cumulative_difficulty_top64, const std::uint8_t* top_id);
+
+/// The protocol handler's one entry into the Rust ingest service
+/// (DRS_X_STORE_FLIP.md DX-Q2 item 2). Built and tested; the store flip
+/// routes the handler's block arrivals here, and nothing calls it before.
+/// `shekyl_ingest_bind` installs the post, which enqueues each reply onto
+/// the connection's strand and returns. A null `post` or `ctx` unbinds and
+/// drains replies already accepted before the post is cleared. Ask
+/// `shekyl_ingest_room` before sending; `shekyl_ingest_offer_span` judges
+/// lengths, room and the session bucket, then copies what it is given and
+/// returns at once. Each accepted arrival gets exactly one reply, tagged
+/// with the arrival and the connection.
+constexpr std::uint32_t SHEKYL_INGEST_CONNECTED = 1;
+constexpr std::uint32_t SHEKYL_INGEST_REFUSED = 2;
+constexpr std::uint32_t SHEKYL_INGEST_UNLINKED = 3;
+constexpr std::uint32_t SHEKYL_INGEST_ALREADY_HELD = 4;
+constexpr std::uint32_t SHEKYL_INGEST_HELD = 5;
+/// The door's past-cap hint: judged before the block was stored or hashed,
+/// never proof of a heavier chain. `height` is the depth, `by` the cap.
+constexpr std::uint32_t SHEKYL_INGEST_BEYOND_CAP = 6;
+constexpr std::uint32_t SHEKYL_INGEST_SWITCHED = 7;
+constexpr std::uint32_t SHEKYL_INGEST_PROMOTION_REFUSED = 8;
+/// A stored heavier chain this node cannot follow: a pop met the undo
+/// floor. `height` is the tip, `by` the floor.
+constexpr std::uint32_t SHEKYL_INGEST_CANNOT_FOLLOW_BELOW_FLOOR = 9;
+constexpr std::uint32_t SHEKYL_INGEST_MISSING_BODIES = 10;
+constexpr std::uint32_t SHEKYL_INGEST_CANCELLED = 11;
+constexpr std::uint32_t SHEKYL_INGEST_STOPPED = 12;
+/// A stored heavier chain this node cannot follow: its fork is deeper than
+/// the cap. `height` is the depth, `by` the cap.
+constexpr std::uint32_t SHEKYL_INGEST_CANNOT_FOLLOW_BEYOND_CAP = 13;
+/// `shekyl_ingest_offer_span`'s results. Every refusal is before
+/// acceptance and never a peer fault; THROTTLED lets the handler close the
+/// session, never score it.
+constexpr int SHEKYL_INGEST_ACCEPTED = 0;
+constexpr int SHEKYL_INGEST_NO_ROOM = 1;
+constexpr int SHEKYL_INGEST_THROTTLED = 2;
+constexpr int SHEKYL_INGEST_OVERSIZE = 3;
+constexpr int SHEKYL_INGEST_UNBOUND = -1;
+constexpr int SHEKYL_INGEST_INVALID = -2;
+/// `shekyl_ingest_bind`: an unbind on a thread of the runtime that posts
+/// the replies. It cannot wait for them, so nothing changed. Unbind from
+/// another thread.
+constexpr int SHEKYL_INGEST_REENTRANT = -3;
+
+struct shekyl_ingest_blob {
+  const std::uint8_t* ptr;
+  std::size_t len;
+};
+
+struct shekyl_ingest_arrival {
+  std::uint64_t tag;
+  shekyl_ingest_blob block;
+  const shekyl_ingest_blob* bodies;
+  std::size_t bodies_len;
+};
+
+/// Which fields carry meaning is the kind's (`ingest_ffi.rs`); the rest are
+/// zero. MISSING_BODIES carries its indices beside the struct.
+struct shekyl_ingest_reply {
+  std::uint64_t connection;
+  std::uint64_t tag;
+  std::uint32_t kind;
+  std::uint16_t rule;
+  std::uint8_t _pad[2];
+  std::uint64_t height;
+  std::uint64_t by;
+  std::uint8_t hash[32];
+};
+static_assert(sizeof(shekyl_ingest_reply) == 72, "ingest reply");
+
+using shekyl_ingest_post_fn = void (*)(void* ctx, const shekyl_ingest_reply* reply,
+    const std::uint64_t* indices, std::size_t indices_len);
+
+/// Install `post`. A null `post` or `ctx` unbinds: replies already accepted
+/// are posted before it returns, and `ctx` may be released after. Returns 0,
+/// or SHEKYL_INGEST_REENTRANT for an unbind on the replies' own runtime.
+int shekyl_ingest_bind(void* ctx, shekyl_ingest_post_fn post);
+/// The arrivals the service accepts now; 0 when it is not installed.
+std::uint64_t shekyl_ingest_room(void);
+/// Offer `len` arrivals from `connection`; `solicited` nonzero for blocks
+/// this node asked for.
+int shekyl_ingest_offer_span(std::uint64_t connection, std::uint8_t solicited,
+    const shekyl_ingest_arrival* arrivals, std::size_t len);
+/// `connection` closed.
+void shekyl_ingest_session_closed(std::uint64_t connection);
 /// The tip the core last published (see shekyl_core_publish_tip): 1 and the
 /// fields written, 0 and nothing written before the first publish. A null
 /// out pointer is skipped.
 int shekyl_core_published_tip(std::uint64_t* out_height, std::uint64_t* out_cumulative_difficulty,
     std::uint64_t* out_cumulative_difficulty_top64, std::uint8_t* out_top_id);
-/// An operator-named address (`--add-peer`), into gray whatever its range:
-/// 1 newly entered, 0 already sat or refused, -1 not an address or no dialer.
-int shekyl_peerlist_admit_operator(const shekyl_seam_address* entry);
-/// This node's own dialable address on `connector`; null clears it. 0, or
-/// -1 with no dialer or an unknown connector.
-int shekyl_peerlist_set_own_address(std::uint32_t connector, const shekyl_seam_address* entry);
-/// A closed network (`--add-exclusive-node`): the dialer's candidate
-/// population is exactly these `count` entries, admitted as operator-named.
-/// 0, or -1 with no dialer or a null pointer with a non-zero count.
-int shekyl_dialer_set_exclusive(const shekyl_seam_address* entries, std::size_t count);
 /// The disclosure sample for a response on `session` (the socket id): up to
 /// `cap` entries written to `out`, returning how many. Zero below the white
 /// diversity floor, for an unknown session, or with no dialer.
 std::size_t shekyl_peerlist_disclose(std::uint64_t session, shekyl_seam_address* out, std::size_t cap);
-/// `--allow-local-ip`, as the Rust peer lists' constructor input. Returns
-/// `allow`, so the line that read the flag reads it through this call.
-bool shekyl_peerlist_allow_local_ip(bool allow);
-/// `--p2p-disclose-early` (PR-3 brief revision 3 §2.6): the peer lists disclose
-/// below the white diversity floor, fresh per request, until 24 hours pass
-/// or a connector's white reaches the floor. 0, or SHEKYL_DIALER_DEFERRED
-/// when held for the dialer's build. The option is the one C++ exception
-/// to "no new daemon option"; the daemon-config slice deletes it.
-int shekyl_peerlist_disclose_early(void);
-/// Recorded for the dialer's build: a push made before the seam binds takes
-/// effect when the dialer is built.
-constexpr int SHEKYL_DIALER_DEFERRED = 2;
-/// The address file (`<data dir>/p2pstate.bin`), named once at start: its
-/// addresses enter gray, and the dialer writes it every thirty minutes and
-/// at stop. 0, SHEKYL_DIALER_DEFERRED, or -1 for a null or non-UTF-8 path.
-int shekyl_dialer_open_address_file(const char* path);
 /// Which network this process dials, for seed admission. `nettype` is
 /// `cryptonote::network_type` (0 mainnet, 1 testnet, 2 stagenet, 3
 /// fakechain). Called once from `core::init`, after that choice is
@@ -4505,17 +4365,15 @@ struct shekyl_rpc_peer_facts {
 };
 static_assert(sizeof(shekyl_rpc_peer_facts) == 24, "peer facts layout is pinned on both sides");
 /// White then gray entries in one array; `public_only` nonzero lists the
-/// clearnet lists alone. 0; 1 (offline, nothing written); or -1 for a null
-/// out pointer or no lists online. Release `*out_owner` with shekyl_rpc_peer_list_free.
+/// clearnet lists alone. 0, or -1 for a null out pointer or no lists.
+/// Offline is the RPC's answer, from the bit its configure recorded, and
+/// is not a result here. Release `*out_owner` with shekyl_rpc_peer_list_free.
 int shekyl_rpc_peer_list(std::uint8_t public_only, const shekyl_rpc_peer_facts** out,
     std::size_t* out_len, void** out_owner);
 void shekyl_rpc_peer_list_free(void* owner);
-/// Clearnet white and gray list sizes. 0; 1 (offline, nothing written); or -1.
+/// Clearnet white and gray list sizes. 0, or -1 for a null out pointer or
+/// no lists. Offline is not a result here.
 int shekyl_rpc_peerlist_sizes(std::uint64_t* out_white, std::uint64_t* out_gray);
-/// Whether P2P runs: 0 running, 1 offline, -2 before it is recorded.
-int shekyl_rpc_p2p_state(void);
-/// Record --offline where the p2p layer reads it; returns `offline`.
-bool shekyl_p2p_record_offline(bool offline);
 /// The close kind's name for a log line, from the Rust table; static, never freed.
 const char* shekyl_close_kind_name(std::uint8_t kind);
 /// A peerlist a peer sent over session `session` (the socket id), as it
@@ -4569,51 +4427,25 @@ int shekyl_bans_copy(shekyl_ban_view* out, std::size_t cap, std::size_t* count);
 void shekyl_bans_clear(void);
 int shekyl_executor_record(const char* name, std::size_t lanes, std::size_t workers, std::uint64_t* out_handle);
 void shekyl_executor_release(std::uint64_t handle);
-
-/// Bind clearnet. Writes the bound ports. `ipv6` and `proxy_host` may be
-/// null. `encrypt` nonzero is the clearnet channel option on; zero is off.
-/// Returns 0, or -1 when the bind fails.
-int shekyl_zone_listen_clearnet(
-    const char* ipv4, std::uint16_t port,
-    const char* ipv6, std::uint16_t port_v6, int use_ipv6,
-    const char* proxy_host, std::uint16_t proxy_port, int encrypt,
-    const std::uint8_t* network_id, const shekyl_inbound_ceiling* ceiling,
-    int* out_port, int* out_port_v6);
-/// Bind the Tor forward listener. `extra` may be null. Returns 0, or -1
-/// when the bind fails.
-int shekyl_zone_listen_tor(
-    const char* socks_host, std::uint16_t socks_port,
-    const char* extra, std::uint16_t extra_port,
-    const std::uint8_t* network_id, const shekyl_inbound_ceiling* ceiling,
-    int* out_port);
-/// The SOCKS proxy the Tor connector dials through, for a tor zone with no
-/// inbound listener. `shekyl_zone_listen_tor` installs it for zones that
-/// listen. Returns 0, or -1 when the host cannot be built or the address
-/// does not parse.
-int shekyl_zone_set_tor_proxy(
-    const char* socks_host, std::uint16_t socks_port,
-    const std::uint8_t* network_id, const shekyl_inbound_ceiling* ceiling);
-/// Replace the ceiling later accepts use. Returns 0, or -1 when `ceiling`
-/// is null, not a known decision, or the seam is unbound.
-int shekyl_zone_set_ceiling(const shekyl_inbound_ceiling* ceiling);
-/// Operator inbound cap for one connector. Accept enforces it there and
-/// still enforces the process ceiling on the sum. Returns 0, or -1 for an
-/// unknown connector.
-int shekyl_zone_set_connector_cap(std::uint32_t connector, std::uint32_t cap);
-/// Drop that cap. Later accepts are bounded only by the process ceiling.
-/// Returns 0, or -1 for an unknown connector.
-int shekyl_zone_clear_connector_cap(std::uint32_t connector);
 void shekyl_zone_session_established(std::uint64_t id);
-void shekyl_zone_shutdown(void);
 
-/// The operator's link budget, in KiB/s. A negative value removes that
-/// direction's bucket. Zero or positive installs one. The default is
-/// unlimited, which is the absence of a bucket.
-void shekyl_link_set_up(std::int64_t kbps);
-void shekyl_link_set_down(std::int64_t kbps);
-/// The rate in KiB/s, or -1 when that direction is unlimited.
-std::int64_t shekyl_link_get_up(void);
-std::int64_t shekyl_link_get_down(void);
+/// The operator's link budget is set from Rust only (`p2p-upload-max`,
+/// `p2p-download-max`, at start and through `option_set`); the C++ reads
+/// its counters.
+
+/// The notify runner (DAEMON_CONFIG_CUTOVER.md §2.10): each event site
+/// pushes its facts and returns at once; the Rust runner fills the
+/// configured command's placeholders and runs it. A new block at `height`
+/// with its 32-byte `hash` (null is ignored).
+void shekyl_notify_block(std::uint64_t height, const std::uint8_t* hash);
+/// A reorganization: the height of the first block of the new chain, the
+/// new chain's block count, the blocks added and the blocks removed; the
+/// runner renders `{split-height}` and `{height}` from these.
+void shekyl_notify_reorg(std::uint64_t first_new, std::uint64_t count,
+    std::uint64_t added, std::uint64_t removed);
+/// A block-rate warning: `observed` blocks in a window of `window_s`
+/// seconds where `expected` were due.
+void shekyl_notify_block_rate(std::uint32_t window_s, std::uint64_t observed, std::uint64_t expected);
 /// Bytes and packets the budget has moved. A null pointer is skipped.
 void shekyl_link_totals(std::uint64_t* bytes_down, std::uint64_t* packets_down,
     std::uint64_t* bytes_up, std::uint64_t* packets_up);
@@ -4644,6 +4476,113 @@ std::uint64_t shekyl_recv_mark_ms(std::uint64_t recv_ms, std::uint64_t started_m
 /// not state the bytes, and it does not choose the dialer's seeds
 /// (`shekyl_dialer_note_network` does, from the network the daemon chose).
 int shekyl_network_id(std::uint8_t nettype, std::uint8_t* out);
+
+/// The daemon's entry (DAEMON_CONFIG_CUTOVER.md §2.2, DC-Q13; defined in
+/// `rust/shekyl-daemon/src/entry.rs`, carried by the daemon image). C++
+/// `main()` fills a `ShekylDaemonEntry` and calls `shekyl_daemon_main` with
+/// its own `argc` and `argv`; Rust owns the process from there and calls
+/// `run` with the snapshot of the values whose reader is still C++. The
+/// snapshot's structures, its field
+/// count and `shekyl_daemon_snapshot_parse` / `_free` are defined in
+/// `rust/shekyl-ffi/src/daemon_snapshot_ffi.rs` and carried by every Rust
+/// image, so a binary that only constructs core from a snapshot (the
+/// importer, core_tests) links no daemon image (§2.9). The structures below
+/// are the Rust `#[repr(C)]` definitions member for member;
+/// `SHEKYL_DAEMON_SNAPSHOT_FIELDS` is asserted against
+/// `shekyl_daemon_snapshot_field_count()` at run.
+#define SHEKYL_DAEMON_SNAPSHOT_FIELDS 11u
+
+/// A list of NUL-terminated strings.
+struct ShekylStringList {
+  const char* const* items;
+  size_t len;
+};
+
+/// The admin endpoint a client command dials. `octets` are network order:
+/// a memcpy into a uint32_t is the value `inet_addr` returns. `present` is
+/// false for a daemon start. One member of the snapshot.
+struct ShekylClientEndpoint {
+  uint8_t octets[4];
+  uint16_t port;
+  bool present;
+};
+static_assert(sizeof(ShekylClientEndpoint) == 8,
+    "the console endpoint is four octets, a port and a flag");
+
+/// A mining address the configuration already decoded. `text` is display
+/// only and is never parsed. `ml_kem` is the encapsulation key; the miner
+/// derives the X25519 prefix from `view`. The pointers live as long as the
+/// snapshot's owned data. One member of the snapshot.
+struct ShekylMineAddress {
+  const char* text;
+  uint8_t spend[32];
+  uint8_t view[32];
+  const uint8_t* ml_kem;
+  size_t ml_kem_len;
+};
+
+/// The values whose reader is still C++ (§2.9), filled once by Rust.
+struct ShekylDaemonSnapshot {
+  const char* data_dir;
+  uint8_t network;
+  bool offline;
+  uint64_t fixed_difficulty;
+  uint64_t txpool_weight_max;
+  bool sync;
+  const ShekylMineAddress* mine_address;
+  uint32_t mine_threads;
+  bool console;
+  ShekylStringList command;
+  ShekylClientEndpoint client_endpoint;
+};
+
+/// The remnant's `run`: `noexcept`, returns the exit status. The snapshot is
+/// the whole of what the remnant reads; it parses nothing.
+typedef int (*ShekylDaemonRunFn)(const ShekylDaemonSnapshot* snapshot);
+/// The remnant's `stop`: requests the stop `run` waits for; `noexcept`.
+typedef void (*ShekylDaemonStopFn)(void);
+
+/// What `main()` hands the Rust entry.
+struct ShekylDaemonEntry {
+  const char* release_name;
+  const char* version_full;
+  uint32_t protocol_version;
+  ShekylDaemonRunFn run;
+  ShekylDaemonStopFn stop;
+};
+
+/// The snapshot's field count, from the Rust definition.
+uint32_t shekyl_daemon_snapshot_field_count();
+/// Asks the one stop owner for a stop (§2.2 step 9): the console's `exit`
+/// and the RPC's `stop_daemon`. Returns at once; the remnant never stops
+/// itself.
+void shekyl_daemon_request_stop(void);
+/// Runs the daemon and returns its exit status: 2 a configuration refusal,
+/// 1 a runtime failure, `run`'s status otherwise; a panic aborts.
+/// On Unix, `argc` and `argv` are the argument vector: this image is a
+/// staticlib, and `std::env::args_os` is empty unless Rust's process entry
+/// ran. Each of the `argc` pointers is a non-null string. A null `argv`,
+/// `argc < 1`, or a null slot returns 1 and does not start. On Windows the
+/// argument vector is `GetCommandLineW`; `argc` and `argv` are not read,
+/// because a C `main` argv is the active code page.
+int32_t shekyl_daemon_main(const ShekylDaemonEntry* entry, int argc, const char* const* argv);
+/// A snapshot for a C++ test binary or the importer, from an argument list
+/// (the program first) through the one real parse: no lock, no marker, no
+/// logging. In the ordinary library, not the daemon image. 0 and
+/// `*out` set; 2 with the refusal on standard error; 1 when the vector
+/// cannot be read (a null argument, `argc < 1`, a null slot, or a byte the
+/// platform encoding cannot represent). Released with
+/// `shekyl_daemon_snapshot_free`.
+int32_t shekyl_daemon_snapshot_parse(int argc, const char* const* argv, ShekylDaemonSnapshot** out);
+void shekyl_daemon_snapshot_free(ShekylDaemonSnapshot* snapshot);
+
+/// The daemon's default data directory for `network` (a NUL-terminated
+/// network word), as UTF-8 without a terminator, written into `out` when
+/// `capacity` holds it. Returns the path's length; ask with capacity 0, then
+/// with that length. 0 is a refusal: not a network, no account home, or a
+/// path that is not UTF-8 (DAEMON_CONFIG_CUTOVER.md §2.6; the C++ blockchain
+/// utilities' one default, rust/shekyl-ffi/src/data_dir_ffi.rs).
+size_t shekyl_daemon_data_dir_default(const char* network, uint8_t* out, size_t capacity);
 
 } // extern "C"
 

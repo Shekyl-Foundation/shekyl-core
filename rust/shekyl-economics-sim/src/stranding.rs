@@ -71,7 +71,7 @@ impl Scoring {
             Scoring::PreD1 => {
                 // Per-shard floor at MILLI — the D1 defect: `g/r` floors to 0 past
                 // the cliff, so a bulk holder of common shards scores nothing.
-                let g = g_age_milli(AGE_MILLI, AGE_WEIGHT_MILLI);
+                let g = cliff_g_milli();
                 let per_shard = if r_market == 0 { 0 } else { g / r_market };
                 per_shard.saturating_mul(shards)
             }
@@ -158,6 +158,14 @@ pub const RATIONAL_CLAIM_CADENCE_EPOCHS: u64 = MAX_CLAIM_AGE_W;
 /// earlier revision of this arm priced cadence `1` implicitly and therefore
 /// *overstated* the floor — and with it the claim-cost force in the D3 triangle
 /// (§12.8) — by that factor.
+/// The co-holder cliff: pre-D1's per-shard floor `g / r_market` is zero past
+/// `r_market > g`, with `g` production's age-weighted gain at age 0. One
+/// owner for the figure the reports quote.
+#[must_use]
+pub fn cliff_g_milli() -> u64 {
+    g_age_milli(AGE_MILLI, AGE_WEIGHT_MILLI)
+}
+
 #[must_use]
 pub fn measure(
     budget_atomic: u64,

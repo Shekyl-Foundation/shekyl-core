@@ -86,7 +86,6 @@ pub struct SubmitFactsFfi {
     pub ref_height: u64,
     pub root: [u8; 32],
     pub fee_per_byte: u64,
-    pub fee_quantization_mask: u64,
     pub weight_limit: u64,
     pub chain_height: u64,
     /// Main-chain height of the block containing the submitted txid — the
@@ -121,7 +120,6 @@ impl SubmitFactsFfi {
             ref_height: 0,
             root: [0; 32],
             fee_per_byte: 0,
-            fee_quantization_mask: 0,
             weight_limit: 0,
             chain_height: 0,
             in_chain_height: 0,
@@ -131,7 +129,7 @@ impl SubmitFactsFfi {
 
 // §4.5 layout pins — the Rust twins of daemon_submit_ffi.cpp's
 // static_asserts. A drift on either side fails that side's build.
-const _: () = assert!(std::mem::size_of::<SubmitFactsFfi>() == 104);
+const _: () = assert!(std::mem::size_of::<SubmitFactsFfi>() == 96);
 const _: () = assert!(std::mem::align_of::<SubmitFactsFfi>() == 8);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, in_pool) == 0);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, in_chain) == 1);
@@ -142,15 +140,14 @@ const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, bond_record_probed) =
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, bond_record_exists) == 6);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, emission_probed) == 7);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, emission_claim_conflict) == 8);
-const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, bond_record_bonded_total) == 96);
+const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, bond_record_bonded_total) == 88);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, reserved) == 9);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, ref_height) == 16);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, root) == 24);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, fee_per_byte) == 56);
-const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, fee_quantization_mask) == 64);
-const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, weight_limit) == 72);
-const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, chain_height) == 80);
-const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, in_chain_height) == 88);
+const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, weight_limit) == 64);
+const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, chain_height) == 72);
+const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, in_chain_height) == 80);
 
 // ── §8.7.2 emission fact marshal (rows E6/E7) ──────────────────────────────
 // Mirrors of `daemon_submit_ffi.h`'s emission PODs; the row shapes are the
@@ -167,7 +164,7 @@ pub struct ArchivalEpochCloseBondFfi {
     pub bad_intervals_ptr: *const u64,
     /// Pair count (not u64 count).
     pub bad_intervals_len: usize,
-    pub is_foundation_complete_tree: u8,
+    pub is_support_complete_tree: u8,
 }
 
 /// `shekyl_archival_epoch_close_shard`.
@@ -305,10 +302,6 @@ pub const SHEKYL_RPC_FACTS_ERR_INTERNAL: i32 = -3;
 /// The store reported a height it cannot produce the block for — a
 /// data-integrity fault of this daemon, distinct from a read that threw.
 pub const SHEKYL_RPC_FACTS_ERR_INCONSISTENT: i32 = -4;
-/// The daemon was started offline (`--offline`): a state, not a fault,
-/// and nothing was written. Answered by the peer-list exports and
-/// `shekyl_rpc_p2p_state` (`shekyl-ffi`'s `FACTS_OFFLINE`; Rick, 2026-10-14).
-pub const SHEKYL_RPC_FACTS_OFFLINE: i32 = 1;
 
 /// Twin of `shekyl_rpc_identity_facts` (VC-2): what this daemon **is**, as
 /// opposed to what its chain tip looks like right now.
@@ -538,21 +531,21 @@ impl BlockHeaderFactsFfi {
 /// `fees` is one slot per priced tier: `[economy, standard, priority]`.
 /// `fee_count` reports how many the estimator actually wrote, so a change
 /// to that contract is a refusal rather than a shorter answer read as a
-/// base fee.
+/// base fee. The lattice the wallet rounds a fee to is
+/// `shekyl_economics::FEE_QUANTIZATION_MASK`, a constant; it does not
+/// cross here.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FeeEstimateFactsFfi {
     pub fees: [u64; 3],
-    pub quantization_mask: u64,
     pub fee_count: u8,
     pub reserved: [u8; 7],
 }
 
-const _: () = assert!(std::mem::size_of::<FeeEstimateFactsFfi>() == 40);
+const _: () = assert!(std::mem::size_of::<FeeEstimateFactsFfi>() == 32);
 const _: () = assert!(std::mem::offset_of!(FeeEstimateFactsFfi, fees) == 0);
-const _: () = assert!(std::mem::offset_of!(FeeEstimateFactsFfi, quantization_mask) == 24);
-const _: () = assert!(std::mem::offset_of!(FeeEstimateFactsFfi, fee_count) == 32);
-const _: () = assert!(std::mem::offset_of!(FeeEstimateFactsFfi, reserved) == 33);
+const _: () = assert!(std::mem::offset_of!(FeeEstimateFactsFfi, fee_count) == 24);
+const _: () = assert!(std::mem::offset_of!(FeeEstimateFactsFfi, reserved) == 25);
 
 /// Twin of `shekyl_rpc_net_stats_facts` (RK-5a). Layout pinned both
 /// directions by `tests/unit_tests/rpc_facts_ffi_roundtrip.cpp` via
@@ -578,10 +571,10 @@ pub struct NetStatsFactsFfi {
 #[derive(Clone, Copy, Debug)]
 pub struct ConnectionFactsFfi {
     /// `network_address::str()`: "host:port" for ipv4, the onion for tor.
-    pub address: *const u8,
+    pub address: *const c_char,
     pub address_len: usize,
     /// `network_address::host_str()`: the host alone.
-    pub host: *const u8,
+    pub host: *const c_char,
     pub host_len: usize,
     pub connection_id: [u8; 16],
     /// Unix seconds.
@@ -596,7 +589,6 @@ pub struct ConnectionFactsFfi {
     pub current_speed_up: f64,
     /// The peer's claimed blockchain height.
     pub height: u64,
-    pub support_flags: u32,
     pub port: u16,
     /// `cryptonote_connection_context::state`.
     pub state: u8,
@@ -605,10 +597,9 @@ pub struct ConnectionFactsFfi {
     pub incoming: u8,
     pub localhost: u8,
     pub local_ip: u8,
-    /// 1 when `height`, `support_flags`, and `state` were read. 0 means
-    /// those three are unknown.
+    /// 1 when `height` and `state` were read. 0 means those two are
+    /// unknown.
     pub claims_known: u8,
-    pub reserved: [u8; 4],
 }
 
 /// Twin of `shekyl_rpc_sync_span_facts` (RK-5a). Pinned by layout.
@@ -616,7 +607,7 @@ pub struct ConnectionFactsFfi {
 #[derive(Clone, Copy, Debug)]
 pub struct SyncSpanFactsFfi {
     /// `network_address::str()` of the span's origin.
-    pub remote_address: *const u8,
+    pub remote_address: *const c_char,
     pub remote_address_len: usize,
     pub start_block_height: u64,
     pub nblocks: u64,
@@ -642,7 +633,7 @@ pub struct SyncSpanFactsFfi {
 pub struct PeerFactsFfi {
     /// Already resolved per address arm by the adapter — the ip string for
     /// ipv4, the bare host for ipv6, the whole `host:port` for Tor.
-    pub host: *const u8,
+    pub host: *const c_char,
     pub host_len: usize,
     /// The ipv4 address with its four octets in **network** order, as
     /// `ipv4_network_address::ip()` returns it; 0 for every other arm.
@@ -731,7 +722,13 @@ const _: () = assert!(std::mem::size_of::<InfoPeersFactsFfi>() == 32);
 // `tests/unit_tests/rpc_facts_ffi_roundtrip.cpp` are the whole pin.
 const _: () = assert!(std::mem::size_of::<NetStatsFactsFfi>() == 40);
 
-const _: () = assert!(std::mem::size_of::<ConnectionFactsFfi>() == 128);
+// `port` (u16) and the six trailing `u8`s fill the slot after `height`,
+// so the POD ends on `claims_known`. A tail pad would be a field it does
+// not have.
+const _: () = assert!(std::mem::size_of::<ConnectionFactsFfi>() == 120);
+const _: () = assert!(
+    std::mem::offset_of!(ConnectionFactsFfi, claims_known) + std::mem::size_of::<u8>() == 120
+);
 const _: () = assert!(std::mem::align_of::<ConnectionFactsFfi>() == 8);
 const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, address) == 0);
 const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, address_len) == 8);
@@ -746,15 +743,13 @@ const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, send_count) == 80
 const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, current_speed_down) == 88);
 const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, current_speed_up) == 96);
 const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, height) == 104);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, support_flags) == 112);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, port) == 116);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, state) == 118);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, address_type) == 119);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, incoming) == 120);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, localhost) == 121);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, local_ip) == 122);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, claims_known) == 123);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, reserved) == 124);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, port) == 112);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, state) == 114);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, address_type) == 115);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, incoming) == 116);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, localhost) == 117);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, local_ip) == 118);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, claims_known) == 119);
 
 const _: () = assert!(std::mem::size_of::<SyncSpanFactsFfi>() == 72);
 const _: () = assert!(std::mem::align_of::<SyncSpanFactsFfi>() == 8);
@@ -781,14 +776,8 @@ const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, white) == 22);
 const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, blocked) == 23);
 
 extern "C" {
-    pub fn shekyl_rpc_fee_estimate(
-        h: *mut CoreRpcHandle,
-        grace_blocks: u64,
-        out: *mut FeeEstimateFactsFfi,
-    ) -> i32;
-    /// The grace-blocks ceiling the estimator asserts on. Handle-free.
+    pub fn shekyl_rpc_fee_estimate(h: *mut CoreRpcHandle, out: *mut FeeEstimateFactsFfi) -> i32;
     pub fn shekyl_rpc_identity(h: *mut CoreRpcHandle, out: *mut IdentityFactsFfi) -> i32;
-    pub fn shekyl_rpc_fee_grace_blocks_max() -> u64;
     pub fn shekyl_rpc_net_stats(h: *mut CoreRpcHandle, out: *mut NetStatsFactsFfi) -> i32;
     /// Fills a C++-owned view of the live p2p connections plus the single
     /// instant they were read at; release the owner with
@@ -823,10 +812,6 @@ extern "C" {
     /// How many addresses the clearnet white and gray lists hold, from the
     /// Rust peer lists (`shekyl-ffi`). No core handle.
     pub fn shekyl_rpc_peerlist_sizes(out_white: *mut u64, out_gray: *mut u64) -> i32;
-    /// Whether P2P runs: [`SHEKYL_RPC_FACTS_OK`], [`SHEKYL_RPC_FACTS_OFFLINE`],
-    /// or [`SHEKYL_RPC_FACTS_ERR_NOT_READY`] before the p2p layer has read
-    /// `--offline` (`shekyl-ffi`). No core handle.
-    pub fn shekyl_rpc_p2p_state() -> i32;
     pub fn shekyl_rpc_chain_tip(h: *mut CoreRpcHandle, out: *mut ChainTipFactsFfi) -> i32;
     /// `get_info`'s chain snapshot (RK-5c), read for every caller.
     pub fn shekyl_rpc_info_chain(h: *mut CoreRpcHandle, out: *mut InfoChainFactsFfi) -> i32;
@@ -998,16 +983,22 @@ extern "C" {
     /// the zone directly. Do not build on the round trip.
     pub fn core_rpc_ffi_stem_tallies(h: *mut CoreRpcHandle) -> *mut std::os::raw::c_char;
 
+    /// `host` is whether the caller is the host's administrator, carried per
+    /// call: one `core_rpc_server` answers every connection, so the C++ side
+    /// reads it off the origin the bridge hands the handler, never off
+    /// itself.
     pub fn core_rpc_ffi_json_endpoint(
         h: *mut CoreRpcHandle,
         uri: *const c_char,
         body_json: *const c_char,
+        host: bool,
     ) -> *mut c_char;
 
     pub fn core_rpc_ffi_json_rpc(
         h: *mut CoreRpcHandle,
         method: *const c_char,
         params_json: *const c_char,
+        host: bool,
     ) -> *mut c_char;
 
     pub fn core_rpc_ffi_free_string(s: *mut c_char);
@@ -1091,6 +1082,7 @@ mod unit_test_link_stubs {
         _h: *mut CoreRpcHandle,
         _uri: *const std::os::raw::c_char,
         _body: *const std::os::raw::c_char,
+        _host: bool,
     ) -> *mut std::os::raw::c_char {
         std::ptr::null_mut()
     }
@@ -1099,6 +1091,7 @@ mod unit_test_link_stubs {
         _h: *mut CoreRpcHandle,
         _method: *const std::os::raw::c_char,
         _params: *const std::os::raw::c_char,
+        _host: bool,
     ) -> *mut std::os::raw::c_char {
         std::ptr::null_mut()
     }
@@ -1107,14 +1100,9 @@ mod unit_test_link_stubs {
     #[no_mangle]
     pub extern "C" fn shekyl_rpc_fee_estimate(
         _h: *mut CoreRpcHandle,
-        _grace_blocks: u64,
         _out: *mut FeeEstimateFactsFfi,
     ) -> i32 {
         SHEKYL_RPC_FACTS_ERR_NULL
-    }
-    #[no_mangle]
-    pub extern "C" fn shekyl_rpc_fee_grace_blocks_max() -> u64 {
-        0
     }
     #[no_mangle]
     pub extern "C" fn shekyl_rpc_net_stats(
@@ -1212,12 +1200,6 @@ mod unit_test_link_stubs {
     #[no_mangle]
     pub extern "C" fn shekyl_rpc_peerlist_sizes(_out_white: *mut u64, _out_gray: *mut u64) -> i32 {
         SHEKYL_RPC_FACTS_ERR_NULL
-    }
-    /// "Not recorded yet": the unit tests run no p2p layer, so none has
-    /// read `--offline`.
-    #[no_mangle]
-    pub extern "C" fn shekyl_rpc_p2p_state() -> i32 {
-        SHEKYL_RPC_FACTS_ERR_NOT_READY
     }
     #[no_mangle]
     pub extern "C" fn core_rpc_ffi_create(_p: *mut std::ffi::c_void) -> *mut CoreRpcHandle {

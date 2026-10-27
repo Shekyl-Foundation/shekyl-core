@@ -1,0 +1,166 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# RT-P4's attested build: what each registered run that met RT-P4 was built
+# with (RPC_CHANNEL.md §9 RT-P4 and §13 RT-W9, standing check; RT-O22,
+# ruled 2026-10-11; widened 2026-10-22 to every flag source).
+#
+# scripts/ci/check_rt_p4_standing.py compares the recognised snapshot with
+# this file. An unrecognised key is not by itself a re-run. Drift is a
+# recognised setting that differs, and the message names the device and
+# what to run. An entry outside its key set is invalid, and the scan
+# continues with the other entries.
+#
+# An entry rests on one of two kinds of evidence (`basis`, ruled 2026-10-25):
+#   timing       a registered RT-P4 run on the device; `record` names it.
+#   disassembly  a build whose decapsulation code is identical, by
+#                disassembly, to an attested timing run's
+#                (`identical_to_record`, `identical_to_commit`). The
+#                comparison is committed (`comparison`) and pinned by its
+#                SHA-256 (`comparison_sha256`). A build whose decapsulation
+#                code differs needs a timing run.
+#
+# The floor device's entry is its 2026-10-11 timing run (ba4677446, no
+# rustflags).
+#
+# The laptop's entry is a disassembly entry. Its 2026-10-11 timing run
+# (7b7046579) was built before `+crt-static` reached the MSVC targets on
+# 2026-10-19. The shipped build with the flag (caca14a3f) was compared with
+# it: the decapsulation path's code is identical, the only code that
+# changed on the path being the statically linked C runtime's
+# memcpy/memset. A timing run of that build on 2026-10-25 failed the
+# registered lines on its valid-vs-invalid comparisons, by about 16 ns
+# (0.03 % of a decapsulation). The maintainer ruled on 2026-10-25 that the
+# difference is an observed platform property, accepted under the bounds
+# in RPC_CHANNEL.md §4.3, and that RT-P4 stays met
+# (rt_p4_mlkem_decaps_timing_20261023.md).
+#
+# What `rustflags` leaves out, and why:
+#   - cmake/BuildRust.cmake gives a cross build `CARGO_TARGET_<T>_RUSTFLAGS`
+#     made of `-C link-arg=` values. They change the link, not the code, and
+#     the gate holds every `-C` in that file to `link-arg=`; anything else
+#     there is unrecognised.
+#   - The gate reads files. A RUSTFLAGS set in a build machine's environment
+#     is outside it (it would also replace the config's flags); the build
+#     sets none for an MSVC target.
+#
+# [crates] is the decapsulation closure of fips203, one table for every
+# run: each crate in the measured image, pinned by version and checksum.
+# Three cuts, each a crate that is not object code on that path (the
+# committed disassembly is fips203, subtle, keccak, sha3, zeroize):
+#   - `rand_core` and `cpufeatures` are leaves. They are pinned and not
+#     expanded. `rand_core`'s only edge is `getrandom`, fips203's
+#     `default-rng` feature; decapsulation takes no RNG. `cpufeatures`'s
+#     edge is `libc`, FFI declarations; the detection logic is in
+#     cpufeatures.
+#   - A `*_derive` crate is a leaf for the same reason: the macro is part
+#     of the build, and its host crates are not part of the image.
+#   - `version_check` is generic-array's build script. It is not pinned.
+# A crate outside this closure does not drift the attestation. A new edge
+# that is none of these cuts does.
+#
+# [[unmeasured]] names a target that carries rustflags and has no run.
+# `aarch64-pc-windows-msvc` carries the same `+crt-static` as the attested
+# x86_64 MSVC target. RT-P4 has no aarch64 Windows run.
+#
+# Fields of a run. A key outside this set is invalid:
+#   device               the measured machine, by role
+#   basis                timing | disassembly
+#   record               the record carrying the evidence
+#   commit               the commit the evidence's binary was built from
+#   target               the target triple
+#   identical_to_record  (disassembly) the timing run's record
+#   identical_to_commit  (disassembly) the timing run's commit
+#   comparison           (disassembly) the committed comparison
+#   comparison_sha256    (disassembly) its SHA-256
+#   toolchain            rust/rust-toolchain.toml [toolchain] channel
+#   rustflags            the recognised rustflags for `target`
+#   profile_release      the recognised keys of [profile.release]
+
+[crates.block-buffer]
+version = "0.10.4"
+checksum = "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
+
+[crates.cpufeatures]
+version = "0.2.17"
+checksum = "59ed5838eebb26a2bb2e58f6d5b5316989ae9d08bab10e0e6d103e656d1b0280"
+
+[crates.crypto-common]
+version = "0.1.6"
+checksum = "1bfb12502f3fc46cca1bb51ac28df9d618d813cdc3d2f25b9fe775a34af26bb3"
+
+[crates.digest]
+version = "0.10.7"
+checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
+
+[crates.fips203]
+version = "0.4.3"
+checksum = "c8bdb6454f692ca2a2b45cd554c6828c639d7f9c968cf83a678899ec4443a280"
+
+[crates.generic-array]
+version = "0.14.9"
+checksum = "4bb6743198531e02858aeaea5398fcc883e71851fcbcb5a2f773e2fb6cb1edf2"
+
+[crates.keccak]
+version = "0.1.6"
+checksum = "cb26cec98cce3a3d96cbb7bced3c4b16e3d13f27ec56dbd62cbc8f39cfb9d653"
+
+[crates.rand_core]
+version = "0.6.4"
+checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
+
+[crates.sha3]
+version = "0.10.9"
+checksum = "77fd7028345d415a4034cf8777cd4f8ab1851274233b45f84e3d955502d93874"
+
+[crates.subtle]
+version = "2.6.1"
+checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
+
+[crates.typenum]
+version = "1.20.0"
+checksum = "40ce102ab67701b8526c123c1bab5cbe42d7040ccfd0f64af1a385808d2f43de"
+
+[crates.zeroize]
+version = "1.8.2"
+checksum = "b97154e67e32c85465826e8bcc1c59429aaaf107c1e4a9e53c8d8ccd5eff88d0"
+
+[crates.zeroize_derive]
+version = "1.4.3"
+checksum = "85a5b4158499876c763cb03bc4e49185d3cccbabb15b33c627f7884f43db852e"
+
+[[unmeasured]]
+target = "aarch64-pc-windows-msvc"
+reason = "the other MSVC triple carries the same +crt-static rustflags, and RT-P4 has no aarch64 Windows run"
+
+[[run]]
+device = "the floor device (Raspberry Pi 4, Cortex-A72)"
+basis = "timing"
+record = "docs/benchmarks/rt_p4_mlkem_decaps_timing_20261011.md"
+commit = "ba4677446"
+target = "aarch64-unknown-linux-gnu"
+toolchain = "1.94.0"
+rustflags = []
+
+[run.profile_release]
+panic = "abort"
+overflow-checks = true
+
+[[run]]
+device = "the maintainer's Windows laptop (Intel Core i9-11950H, Tiger Lake)"
+basis = "disassembly"
+record = "docs/benchmarks/rt_p4_mlkem_decaps_timing_20261023.md"
+commit = "caca14a3f"
+target = "x86_64-pc-windows-msvc"
+identical_to_record = "docs/benchmarks/rt_p4_mlkem_decaps_timing_20261011.md"
+identical_to_commit = "7b7046579"
+comparison = "docs/benchmarks/rt_p4_mlkem_decaps_timing_20261023_captures/laptop_x86_disasm_excerpts_crt_static.txt"
+comparison_sha256 = "35187d42d894826941dea0008997c8c9c7daab05ca53848630bfb12521818041"
+toolchain = "1.94.0"
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[run.profile_release]
+panic = "abort"
+overflow-checks = true

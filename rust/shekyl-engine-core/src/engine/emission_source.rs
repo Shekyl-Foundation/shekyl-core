@@ -81,7 +81,7 @@ pub enum EmissionSourceError {
 #[derive(Debug, Clone)]
 pub struct BondRow {
     pub join_settlement_epoch: u64,
-    pub is_foundation_complete_tree: bool,
+    pub is_support_complete_tree: bool,
     pub bad_intervals: Vec<BadInterval>,
 }
 
@@ -293,7 +293,7 @@ impl EpochSnapshot {
             .iter()
             .map(|b| EpochCloseBond {
                 join_settlement_epoch: b.join_settlement_epoch,
-                is_foundation_complete_tree: b.is_foundation_complete_tree,
+                is_support_complete_tree: b.is_support_complete_tree,
                 bad_intervals: &b.bad_intervals,
             })
             .collect()
@@ -397,7 +397,7 @@ fn decode_bond_row(v: &Value) -> Result<BondRow, EmissionSourceError> {
         .collect();
     Ok(BondRow {
         join_settlement_epoch: req_u64(v, "join_settlement_epoch")?,
-        is_foundation_complete_tree: req_bool(v, "is_foundation_complete_tree")?,
+        is_support_complete_tree: req_bool(v, "is_support_complete_tree")?,
         bad_intervals,
     })
 }

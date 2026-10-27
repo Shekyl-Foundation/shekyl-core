@@ -73,7 +73,7 @@ async fn a_refusal_carrying_a_body_is_refused_not_parsed() {
             prunable_as_hex: String::new(),
             prunable_hash: HashHex::from_bytes(prunable_digest),
             archival_len,
-            as_json: String::new(),
+            as_json: None,
             pruned: false,
             double_spend_seen: false,
             location: shekyl_rpc_types::TxLocation::Mined {
@@ -84,6 +84,7 @@ async fn a_refusal_carrying_a_body_is_refused_not_parsed() {
             },
         }],
         missed_tx: Vec::new(),
+        unavailable_tx: Vec::new(),
     };
     let rpc = CannedDaemon(std::sync::Arc::new(
         serde_json::to_vec(&reply).expect("wire type serializes"),
@@ -402,7 +403,7 @@ fn tx_entry_with(tx_hash: TxHash, as_hex: &str, pruned_as_hex: &str) -> TxEntry 
         prunable_as_hex: String::new(),
         prunable_hash: HashHex::from_bytes([0u8; 32]),
         archival_len: 0,
-        as_json: String::new(),
+        as_json: None,
         pruned: false,
         double_spend_seen: false,
         location: shekyl_rpc_types::TxLocation::Mined {

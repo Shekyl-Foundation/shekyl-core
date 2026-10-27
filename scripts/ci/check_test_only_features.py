@@ -90,8 +90,9 @@ crate in `GOVERNED_OWNERS`, **every feature it declares must be in exactly one
 of `TEST_ONLY`, `CONSUMER_OWNED` or `PERMANENT`; an uncategorized feature is
 red** (`default` is exempt — it is the feature table's entry point, and what
 it enables is checked by the other limbs). The pattern the tree already uses
-three times — the bijection gate's `{table: reason}`, `CXX_HOLDER_RE`,
-`RUST_ONLY_TABLES`: the registry is exhaustive, not opt-in. Landed while
+three times — the bijection gate's `{table: reason}`, the census registry's
+`census_rows!` (one status per enforced row), `RUST_ONLY_TABLES`: the
+registry is exhaustive, not opt-in. Landed while
 `shekyl-chain-store` declares no features at all, which is the one moment it
 could be added for free.
 
@@ -177,6 +178,24 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     ): "forges VerifiedTorBinary, the SP-T0c hash-pin witness, for lifecycle "
     "tests that inject an arbitrary unpinned tor",
     (
+        "shekyl-chain-store",
+        "pool-commit-fault",
+    ): "PoolStore::write aborts its next successful closure as a commit "
+    "failure, after that closure has run, so shekyl-mempool's reconcile "
+    "test can show the closure's removals roll back with the transaction. "
+    "Enabled from shekyl-mempool's dev-dependency edge only. The pool's "
+    "reconcile does not know the test exists, and a shipped write commits "
+    "exactly what its closure returned",
+    (
+        "shekyl-mempool",
+        "pool-commit-fault",
+    ): "Pool::plant holds an entry without the door, and "
+    "Pool::refuse_next_commit forwards to PoolStore's, so shekyl-node's "
+    "test can show a flush whose pool-file write faults retires the pool "
+    "for the service too. Enabled from shekyl-node's dev-dependency edge "
+    "only; a shipped pool admits only through its door and commits what "
+    "its closure returned",
+    (
         "shekyl-chain-rules",
         "harness",
     ): "exposes the negative-fixture harness (MockChain, MockSubstrate) as a "
@@ -251,6 +270,13 @@ CONSUMER_OWNED: dict[tuple[str, str], tuple[str, str]] = {
 # trace writer alone with `default-features = false`).
 PERMANENT: dict[tuple[str, str], str] = {
     (
+        "shekyl-chain-sync",
+        "cs2-long-run",
+    ): "the floor-device job's selector: the cs2-long-run workflow passes it "
+    "on the command line, and no crate enables it. It gates one "
+    "cfg(all(test, feature)) module (long_run.rs), so it adds nothing to "
+    "any build but that job's test binary",
+    (
         "shekyl-chain-ingest",
         "pipeline",
     ): "the sequencer, the validate+connect actor and the grader (kameo/tokio) "
@@ -264,6 +290,20 @@ PERMANENT: dict[tuple[str, str], str] = {
         "replay-cli",
     ): "the shekyl-chain-replay binary: argument parsing, HTTP transport, "
     "and the settlement schedule the replay resolves rules from",
+    (
+        "shekyl-chain-ingest",
+        "producer",
+    ): "the bundle producer's read path (SO-D12 increment 4c): the fetch "
+    "scheduler, its store-backed facts and the producer's task. The node "
+    "takes it by default; shekyl-ffi, the wallet-side image, stays on "
+    "`pipeline` so the shard-fetch client is not in its graph (SF-D4)",
+    (
+        "shekyl-bundle-producer",
+        "fetch",
+    ): "the producer's challenge read over the fetch scheduler. Off by "
+    "default because the ring alone is linked through the ingest crate's "
+    "`pipeline`, which shekyl-ffi takes; the ingest crate's `producer` "
+    "feature turns it on for the node",
 }
 
 # Crates whose feature table must be exhaustively categorized (third limb).
@@ -282,6 +322,11 @@ PERMANENT: dict[tuple[str, str], str] = {
 # it: `splitmix` is its only feature and is enabled across a crate boundary
 # from its first day (three dev edges). The name is the generator. It is not
 # the `conformance` grader feature those consumers also carry.
+# `shekyl-chain-sync` joined 2026-10-23 (CS-3). It is the pure model; its
+# one feature is the floor job's `cs2-long-run`, and its runtime half is the
+# separate crate `shekyl-chain-sync-runtime` (Rick, 2026-10-23).
+# `shekyl-bundle-producer` joined 2026-10-25, the commit whose ingest
+# feature first enables its `fetch` (`SO-D12` increment 4c).
 #
 # This set is opt-in — the crates named below, out of a workspace approaching
 # seventy — so exhaustiveness holds *within* governance. The rule for joining: **a crate
@@ -302,6 +347,9 @@ GOVERNED_OWNERS: frozenset[str] = frozenset(
         "shekyl-chain-ingest",
         "shekyl-draw-rng",
         "shekyl-noise",
+        "shekyl-chain-sync",
+        "shekyl-mempool",
+        "shekyl-bundle-producer",
     }
 )
 
@@ -350,7 +398,6 @@ MET_TRIGGER_UNGOVERNED_AT_REGISTRATION: dict[str, tuple[str, frozenset[Hit]]] = 
         frozenset({
             ("std", "shekyl-bulletproofs", "normal"),
             ("std", "shekyl-curve-generators", "normal"),
-            ("std", "shekyl-rpc-client", "normal"),
             ("std", "shekyl-scanner", "normal"),
         }),
     ),
@@ -371,6 +418,7 @@ MET_TRIGGER_UNGOVERNED_AT_REGISTRATION: dict[str, tuple[str, frozenset[Hit]]] = 
         "categorization only",
         frozenset({
             ("test-helpers", "shekyl-wallet-rpc", "dev"),
+            ("test-helpers", "shekyl-chain-ingest", "dev"),
         }),
     ),
     "shekyl-fcmp": (
@@ -393,9 +441,13 @@ MET_TRIGGER_UNGOVERNED_AT_REGISTRATION: dict[str, tuple[str, frozenset[Hit]]] = 
     ),
     "shekyl-p-serve": (
         "FINDING: test-signer enabled on NORMAL edges by shekyl-sp-t3-spike (direct) and shekyl-p-host (forwarded via its own test-signer). "
-        "The shekyl-archival-fetch-sched dev edge (2026-10-08) is the scheduler's loopback test signing a real serve behind the SOCKS shim — the same shape as shekyl-p-fetch's.",
+        "The shekyl-archival-fetch-sched dev edge (2026-10-08) is the scheduler's loopback test signing a real serve behind the SOCKS shim — the same shape as shekyl-p-fetch's. "
+        "The shekyl-bundle-producer dev edge (2026-10-25, SO-D12 increment 4c) is the producer's challenge read against a receipt-signing serve behind the same shim — the same shape again; "
+        "the shekyl-chain-ingest dev edge (same date) is the producer's gate test, whose live-path arm serves under an identity test key.",
         frozenset({
+            ("test-signer", "shekyl-chain-ingest", "dev"),
             ("test-signer", "shekyl-archival-fetch-sched", "dev"),
+            ("test-signer", "shekyl-bundle-producer", "dev"),
             ("test-signer", "shekyl-p-fetch", "dev"),
             ("test-signer", "shekyl-p-host", "normal"),
             ("test-signer", "shekyl-sp-t3-spike", "normal"),

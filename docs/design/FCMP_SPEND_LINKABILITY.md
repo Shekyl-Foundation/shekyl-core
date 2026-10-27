@@ -358,7 +358,7 @@ From the brief's §6.1, refined by the census:
   §6 (d)-9 list: the `0x07` field, the leaf, the RPC `chunk_outputs`, served
   shards, the wallet's leaf-meta copy — all of which may carry the
   *commitment* — and the verifier's `MDEBUG` line at
-  `src/cryptonote_core/blockchain.cpp:4225`, which prints the recomputed
+  `src/cryptonote_core/blockchain.cpp:4224`, which prints the recomputed
   value per input and must print nothing that opens it.
 - **R3 — keep the in-circuit binding.** The circuit continues to bind the
   revealed key to the spent leaf; the fix changes the *statement* (an

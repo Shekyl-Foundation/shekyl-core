@@ -171,7 +171,7 @@ class EraSelection(unittest.TestCase):
             f"### Slice\n\nReviewed at **`{UNBORN}`**.\n\n"
             "Evidence: `cryptonote_core/blockchain.cpp:1`.\n\n"
             "## Decision log\n\n"
-            "| 2026-09-05 | landed `tests/unit_tests/curve_tree_header_root_check.cpp` |\n"
+            "| 2026-09-05 | landed `tests/unit_tests/tx_extra_pqc_field_shape.cpp` |\n"
         ) as doc:
             rc, out = run_gate(doc)
         self.assertEqual(rc, 0, out)

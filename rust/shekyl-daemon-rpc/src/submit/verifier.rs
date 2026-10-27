@@ -81,19 +81,17 @@
 //! untested, unreachable battery.
 
 use curve25519_dalek::constants::ED25519_BASEPOINT_COMPRESSED;
-use rand_core::OsRng;
 
 use shekyl_archival_retention::{
     cold_authority_pin, emission_vin_verify_auth, emission_vin_verify_backing,
-    emission_vin_verify_claims, p_canonical_id_from_hybrid_pubkey, release_pre_cooldown_guards,
-    release_vin_statics, settlement_epoch_at_height, verify_bond_post_ct_balance,
-    verify_join_market_bond_post, verify_release_bond_post, whole_record_last_served,
-    ArchivalBondPostVin, BondPostError, BondPostKind as RetentionBondPostKind, BondTerm,
+    emission_vin_verify_claims_under, p_canonical_id_from_hybrid_pubkey,
+    release_pre_cooldown_guards, release_vin_statics, settlement_epoch_at_height,
+    verify_bond_post_ct_balance, verify_join_market_bond_post, verify_release_bond_post,
+    whole_record_last_served, BondPostError, BondPostKind as RetentionBondPostKind, BondTerm,
     BondTermError, ClaimantBondRecord, CreditPair, EmissionEpochSource, EmissionVerifyContext,
-    EmissionVerifyError, EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor,
-    HoldingsKind, RewardCommit, ShardSet,
+    EmissionVerifyError, EpochCloseBond, EpochCloseInputs, EpochCloseShard, RewardCommit,
 };
-use shekyl_bulletproofs::Bulletproof;
+use shekyl_bulletproofs::{verify_batch, BatchEntry};
 use shekyl_crypto_pq::error::PqcVerifyError;
 use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey;
 use shekyl_crypto_pq::signature::verify_pqc_auth;
@@ -105,12 +103,11 @@ use shekyl_types::archival::ReceiptSignPk;
 use shekyl_types::SigningPayloadHash;
 use shekyl_units::{AtomicUnits, NonZeroAtomicUnits};
 use shekyl_wire::transaction::{
-    BondPost as WireBondPost, BondPostKind as WireBondPostKind, BpPlus, Ct, CtBase, Holdings,
-    Input, PqcAuth, Prunable, PQC_HYBRID_SINGLE_KEY_LEN, PQC_MAX_PUBLIC_KEY_BLOB,
+    BondPost as WireBondPost, BondPostKind as WireBondPostKind, Ct, CtBase, Input, PqcAuth,
+    Prunable, PQC_HYBRID_SINGLE_KEY_LEN, PQC_MAX_PUBLIC_KEY_BLOB,
 };
-use shekyl_wire::varint::write_varint;
 
-use crate::submit::facts::SubmitFacts;
+use crate::submit::facts::{EpochClaimStanding, SubmitFacts};
 use crate::submit::phase_a::{ParsedSubmission, SubmitTxKind};
 use crate::submit::verify::{TxVerifier, VerifyReject};
 
@@ -264,13 +261,8 @@ fn verify_bond_post(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<()
     // (HoldingsUpdate) is REJECTED at the wire.
     let arm = match &bond.kind {
         WireBondPostKind::JoinMarket {
-            bond_spend_pk,
-            receipt_sign_pk,
-            ..
-        } => BondArm::Credit {
-            bond_spend_pk,
-            receipt_sign_pk,
-        },
+            receipt_sign_pk, ..
+        } => BondArm::Credit { receipt_sign_pk },
         WireBondPostKind::Other(tag) if *tag == RetentionBondPostKind::Release as u8 => {
             BondArm::Debit
         }
@@ -347,11 +339,8 @@ fn verify_bond_post(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<()
         ));
     };
     match arm {
-        BondArm::Credit {
-            bond_spend_pk,
-            receipt_sign_pk,
-        } => {
-            verify_credit_arm(bond, bond_spend_pk, receipt_sign_pk, bond_auth, facts)?;
+        BondArm::Credit { receipt_sign_pk } => {
+            verify_credit_arm(bond, receipt_sign_pk, bond_auth, facts)?;
         }
         BondArm::Debit => verify_debit_arm(bond, bond_auth, facts)?,
     }
@@ -501,8 +490,23 @@ fn verify_emission(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(),
             "emission: snapshot carries no E6/E7 fact bundle",
         ));
     };
+    // An expired epoch is refused as expired, before E7 asks for a row the
+    // shim did not read (its rows may be retired; `ARCHIVAL_SETTLEMENT_WRITER.md`
+    // §17). The reason is the claims battery's own `EpochClaimExpired`.
+    for snapshot in &emission_facts.snapshots {
+        if let EpochClaimStanding::Expired { window_floor } = snapshot.standing {
+            return Err(emission_reject(&EmissionVerifyError::EpochClaimExpired {
+                epoch: snapshot.settlement_epoch,
+                floor: window_floor,
+            }));
+        }
+    }
     // E7: every claimed epoch must carry a frozen budget row.
-    if emission_facts.snapshots.iter().any(|s| !s.has_budget_row) {
+    if emission_facts
+        .snapshots
+        .iter()
+        .any(|s| s.standing == EpochClaimStanding::NoBudgetRow)
+    {
         return Err(VerifyReject::malformed(
             "emission E7: a claimed epoch has no frozen budget row",
         ));
@@ -517,9 +521,10 @@ fn verify_emission(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(),
         vout_reward_sum,
     };
     // Borrow-anchored view construction, the archival_ffi shape: owned
-    // rows first, then the borrowing `verify_view` sources (the single
-    // constructor the C++ oracle's shim also uses, so the two paths build
-    // byte-identical views).
+    // rows first, then the borrowing sources, each under the facts'
+    // schedule (`EpochCloseInputs::under_schedule`). Under the process
+    // schedule, which the C++ marshal names, that is the `verify_view` the
+    // C++ oracle's shim builds, byte for byte.
     let bonds_per: Vec<Vec<EpochCloseBond<'_>>> = emission_facts
         .snapshots
         .iter()
@@ -528,7 +533,7 @@ fn verify_emission(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(),
                 .iter()
                 .map(|b| EpochCloseBond {
                     join_settlement_epoch: b.join_settlement_epoch,
-                    is_foundation_complete_tree: b.is_foundation_complete_tree,
+                    is_support_complete_tree: b.is_support_complete_tree,
                     bad_intervals: &b.bad_intervals,
                 })
                 .collect()
@@ -567,7 +572,8 @@ fn verify_emission(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(),
         .zip(&shards_per)
         .zip(&pairs_per)
         .map(|(((snap, bonds), shards), pairs)| EmissionEpochSource {
-            inputs: EpochCloseInputs::verify_view(
+            inputs: EpochCloseInputs::under_schedule(
+                emission_facts.schedule,
                 snap.settlement_epoch,
                 snap.close_block_height,
                 bonds,
@@ -581,8 +587,8 @@ fn verify_emission(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(),
         .collect();
 
     // ── E8: claims battery (§7.1 steps 1–5) ─────────────────────────────
-    let claims =
-        emission_vin_verify_claims(vin, &ctx, &sources).map_err(|e| emission_reject(&e))?;
+    let claims = emission_vin_verify_claims_under(emission_facts.schedule, vin, &ctx, &sources)
+        .map_err(|e| emission_reject(&e))?;
 
     // ── E9 + E10: backing membership proof + the dual hybrid auths ──────
     let reference = facts
@@ -668,14 +674,12 @@ fn emission_reject(e: &EmissionVerifyError) -> VerifyReject {
 /// collateral out, and the identity key is exactly the key a compromised
 /// serving host holds. See `verify_debit_arm`.
 enum BondArm<'a> {
-    /// JoinMarket (§8.7.1). `bond_spend_pk` is what the record will commit,
-    /// authorized by the identity key (BP5). `receipt_sign_pk` is BP6's
-    /// operand: the arm judges it before it reads the record, so a credit
-    /// arm without a key cannot be built.
-    Credit {
-        bond_spend_pk: &'a [u8],
-        receipt_sign_pk: &'a ReceiptSignPk,
-    },
+    /// JoinMarket (§8.7.1), authorized by the identity key (BP5). The
+    /// `bond_spend_pk` the record will commit rides the wire kind and reaches
+    /// the battery through the validator's marshal (`bond_post_vin`).
+    /// `receipt_sign_pk` is BP6's operand: the arm judges it before it reads
+    /// the record, so a credit arm without a key cannot be built.
+    Credit { receipt_sign_pk: &'a ReceiptSignPk },
     /// Release (§8.7.1.1) — carries no `bond_spend_pk` on the wire;
     /// authorized by the record's committed key (row UB3).
     Debit,
@@ -693,7 +697,6 @@ enum BondArm<'a> {
 /// claim slot. It does not read the key.
 fn verify_credit_arm(
     bond: &WireBondPost,
-    bond_spend_pk: &[u8],
     receipt_sign_pk: &ReceiptSignPk,
     bond_auth: &PqcAuth,
     facts: &SubmitFacts,
@@ -730,7 +733,7 @@ fn verify_credit_arm(
             "bond-post: snapshot carries no BP3 record fact",
         ));
     };
-    let Some(vin) = retention_vin(bond, RetentionBondPostKind::JoinMarket, bond_spend_pk) else {
+    let Some(vin) = shekyl_chain_rules::bond_post_vin(bond) else {
         return Err(VerifyReject::malformed(
             "JoinMarket: wire vin could not be marshaled into the retention view",
         ));
@@ -808,7 +811,7 @@ fn verify_debit_arm(
     //
     // The shared consensus function, never a restatement: `verify_release_bond_post`
     // runs the identical guards, so the block path and this arm cannot drift.
-    let Some(vin) = retention_vin(bond, RetentionBondPostKind::Release, &[]) else {
+    let Some(vin) = shekyl_chain_rules::bond_post_vin(bond) else {
         return Err(VerifyReject::malformed(
             "Release: wire vin could not be marshaled into the retention view",
         ));
@@ -879,53 +882,6 @@ fn verify_debit_arm(
     }
 }
 
-/// Marshal the wire bond-post vin into the retention crate's verify view.
-///
-/// Total for a `validate()`d JoinMarket vin (the wire read already enforced
-/// the shard-set bound + duplicate-freeness this re-checks); `None` only
-/// for a hand-built inconsistent value — the seam's non-panicking refusal.
-fn retention_vin(
-    bond: &WireBondPost,
-    post_kind: RetentionBondPostKind,
-    bond_spend_pk: &[u8],
-) -> Option<ArchivalBondPostVin> {
-    let (holdings_kind, shard_ids) = match &bond.holdings {
-        Holdings::ShardSetCompact(ids) => (
-            HoldingsKind::ShardSetCompact,
-            ShardSet::new(ids.clone()).ok()?,
-        ),
-        Holdings::CompleteTree => (HoldingsKind::CompleteTree, ShardSet::empty()),
-    };
-    let kind = match &bond.kind {
-        WireBondPostKind::JoinMarket {
-            receipt_sign_pk,
-            endpoint,
-            ..
-        } => shekyl_archival_retention::BondKind::JoinMarket {
-            bond_spend_pk: bond_spend_pk.to_vec(),
-            // The one JoinMarket form. The receipt key the post committed
-            // rides through, so the retention view is the post that was sent.
-            receipt_sign_pk: receipt_sign_pk.clone(),
-            endpoint: *endpoint,
-        },
-        WireBondPostKind::Other(_) => post_kind.unit_kind()?,
-    };
-    Some(ArchivalBondPostVin {
-        hybrid_public_key: bond.hybrid_public_key.clone(),
-        // The retention descriptor still carries the id as bytes; typing it
-        // is that crate's (RTN-7 §3.2 addressee), not this boundary's.
-        p_canonical_id: bond.p_canonical_id.to_bytes(),
-        kind,
-        holdings: HoldingsDescriptor {
-            kind: holdings_kind,
-            shard_ids,
-        },
-        bonded_total_atomic: bond.bonded_total_atomic,
-        bond_credit: bond.bond_credit,
-        bond_debit: bond.bond_debit,
-    })
-}
-
 /// Resolve the FCMP++ reference root + library layer count for a K12 leg,
 /// shared by the spend and bond-post arms so the layer convention and the
 /// StaleRoot mapping are single-sourced — a future change to either cannot
@@ -977,12 +933,20 @@ fn check_commitment_masks(base: &CtBase) -> Result<(), VerifyReject> {
 /// (bulletproofs_plus.cc). L/R round-count statics
 /// (`n_bulletproof_plus_amounts`) are enforced structurally by the WIP
 /// verifier's round check; unreduced-scalar rejection (`is_reduced`) by
-/// `read_scalar` in the wire conversion.
+/// `read_scalar` in the wire conversion ([`BpPlus::to_bulletproof`]).
+///
+/// The verify is the validator's body ([`shekyl_bulletproofs::verify_batch`],
+/// CEN-H19, ruling R3) over a batch of one: the weights are derived from this
+/// proof and its commitments, not drawn from the node's entropy. A proof
+/// admitted here is admitted by a block's batch except with probability
+/// about `1/ℓ`, and the reverse.
+///
+/// [`BpPlus::to_bulletproof`]: shekyl_wire::BpPlus::to_bulletproof
 fn verify_bpplus_leg(base: &CtBase, prunable: &Prunable) -> Result<(), VerifyReject> {
     let [bp_wire] = prunable.bulletproofs.as_slice() else {
         return Err(VerifyReject::malformed("N8: bulletproofs.len() != 1"));
     };
-    let Some(bp) = bulletproof_from_wire(bp_wire) else {
+    let Some(bp) = bp_wire.to_bulletproof() else {
         return Err(VerifyReject::malformed("N8: Bp+ wire conversion"));
     };
     let bp_commitments: Vec<CompressedPoint> = base
@@ -990,38 +954,13 @@ fn verify_bpplus_leg(base: &CtBase, prunable: &Prunable) -> Result<(), VerifyRej
         .iter()
         .map(|c| CompressedPoint::from(*c))
         .collect();
-    if !bp.verify(&mut OsRng, &bp_commitments) {
+    if !verify_batch(&[BatchEntry {
+        proof: &bp,
+        commitments: &bp_commitments,
+    }]) {
         return Err(VerifyReject::malformed("N8: Bp+ range proof refused"));
     }
     Ok(())
-}
-
-/// Reassemble a [`Bulletproof`] from the wire [`BpPlus`].
-///
-/// The two layouts are byte-identical
-/// (`A‖A1‖B‖r1‖s1‖d1‖vec(L)‖vec(R)`; the round-trip is pinned by
-/// shekyl-tx-builder's mapping test), so the conversion is
-/// serialize-then-`read_plus`. `read_plus` enforces reduced scalars —
-/// the C++ `is_reduced(r1/s1/d1)` parity — and caps L/R at the maximal
-/// round count, so a `None` here is the C++ battery's reject, not a
-/// marshalling loss.
-fn bulletproof_from_wire(bp: &BpPlus) -> Option<Bulletproof> {
-    let mut bytes = Vec::with_capacity((6 + bp.l.len() + bp.r.len()) * 32 + 4);
-    bytes.extend_from_slice(&bp.a);
-    bytes.extend_from_slice(&bp.a1);
-    bytes.extend_from_slice(&bp.b);
-    bytes.extend_from_slice(&bp.r1);
-    bytes.extend_from_slice(&bp.s1);
-    bytes.extend_from_slice(&bp.d1);
-    write_varint(bp.l.len(), &mut bytes).ok()?;
-    for point in &bp.l {
-        bytes.extend_from_slice(point);
-    }
-    write_varint(bp.r.len(), &mut bytes).ok()?;
-    for point in &bp.r {
-        bytes.extend_from_slice(point);
-    }
-    Bulletproof::read_plus(&mut bytes.as_slice()).ok()
 }
 
 /// K12 proper: marshal the parsed submission into [`proof::verify`]'s
@@ -1315,7 +1254,7 @@ pub(crate) fn verify_debit_slot_possession(parsed: &ParsedSubmission) -> Result<
     // fires for it. The shared consensus function, never a local restatement:
     // the block path runs the identical checks inside
     // `verify_release_bond_post`, in the same order.
-    let Some(vin) = retention_vin(bond, RetentionBondPostKind::Release, &[]) else {
+    let Some(vin) = shekyl_chain_rules::bond_post_vin(bond) else {
         return Err(VerifyReject::malformed(
             "debit pre-gate: wire vin could not be marshaled into the retention view",
         ));

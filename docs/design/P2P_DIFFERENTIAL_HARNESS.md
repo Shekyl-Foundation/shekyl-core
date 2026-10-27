@@ -228,7 +228,7 @@ Rust Levin layer. The peer stays; the epee host does not.
 
 `COMMAND_HANDSHAKE` (1001) is an invoke. A notify for 1001 is not this
 exchange. Every handshake in these scripts is the same one: network id
-sixteen bytes of `0x11`, IPv4 `0.0.0.0:18080`, support flags 0, height
+sixteen bytes of `0x11`, IPv4 `0.0.0.0:18080`, height
 1, cumulative difficulty 2, difficulty top64 0, top id thirty-two bytes
 of `0xab`, top version 0, and a nonce whose first eight bytes are
 `1` little-endian. The response is the same node and sync data with an
@@ -245,7 +245,7 @@ close before a whole message is `closed`.
 | 2 | That handshake, split after the 29-byte header. |
 | 3 | That handshake, one byte per write. |
 | 100–115 | That handshake, split on a stride derived from the seed. |
-| 10 | `COMMAND_REQUEST_SUPPORT_FLAGS` (1007) invoke whose payload is that command's cap. |
+| 10 | `COMMAND_TIMED_SYNC` (1002) invoke whose payload is that command's cap (2026-10-19: 1007, the support-flags request, is deleted; the goldens were re-recorded). |
 | 11 | The handshake, then a `NOTIFY_NEW_COMPACT_BLOCK` (2008) notify whose payload is that command's 4 MiB cap. |
 | 20 | The handshake response, then a `COMMAND_TIMED_SYNC` (1002) notify of the bytes `relay`, queued without waiting for the first to flush. The peer's bytes parse as two whole messages. |
 | 30 | The peer closes after 10 bytes of the handshake. |

@@ -54,7 +54,6 @@ use crate::engine::emission_claim::self_check_claims;
 use crate::engine::error::KeyEngineError;
 use crate::engine::pscan::scan_step::BlockRange;
 use crate::engine::stake_timing::DEFAULT_ENTRY_GAP;
-use crate::engine::{Network, ShekylAddress};
 #[cfg(feature = "gf7-hooks")]
 use shekyl_standoff::gf7::{BroadcastTimelineObserver, TimelineEvent};
 
@@ -85,46 +84,40 @@ async fn mint_and_activate(
 }
 
 /// GF-2 boundary (the firewall-critical half of `Engine::stake_in`): the
-/// address the actor projects for the active persona — public-only, built
-/// in-actor, no re-derivation — is one `P`'s own dual-scan recovers.
-/// Construct an output to the *projected* address, then recover it with `P`'s
-/// secret bundle (the `derive_bundle` oracle — test-side only; production
-/// never re-derives). A wrong projection (wrong keys / wrong persona) fails
+/// payment destination the actor hands over for the active persona — public
+/// keys only, taken in-actor, no re-derivation — is one `P`'s own dual-scan
+/// recovers. Construct an output to the handed-over keys, then recover it with
+/// `P`'s secret bundle (the `derive_bundle` oracle — test-side only; production
+/// never re-derives). A wrong handover (wrong keys / wrong persona) fails
 /// recovery.
 #[tokio::test]
-async fn active_persona_receive_address_is_recovered_by_p_dual_scan() {
+async fn active_persona_payment_destination_is_recovered_by_p_dual_scan() {
     use shekyl_crypto_pq::montgomery::ed25519_pk_to_x25519_pk;
     use shekyl_crypto_pq::output::{construct_output, scan_output_recover};
 
     let slot = 3u32;
-    // Address network is the sender's; it does not affect the derived keys
-    // (which the `DerivationNetwork` fixes), only the address encoding.
-    let network = Network::Mainnet;
-
     let stake = spawn_over(&[slot], &[], Some(slot));
-    let address = stake
-        .active_persona_receive_address(network)
+    let destination = stake
+        .active_persona_payment_destination()
         .await
         .expect("accessor")
-        .expect("an active persona projects an address")
-        .encode()
-        .expect("encode P's projected address");
+        .expect("an active persona hands over a payment destination");
 
-    // The address `stake_in` would target, decoded back to key material.
-    let decoded = ShekylAddress::decode_for_network(&address, network).expect("decode");
-    let x25519_pk = ed25519_pk_to_x25519_pk(&decoded.view_key).expect("montgomery");
+    // The keys `stake_in` pays, used as they are: no address in between.
+    let x25519_pk =
+        ed25519_pk_to_x25519_pk(destination.view_pk().as_canonical_bytes()).expect("montgomery");
 
     let amount = 50_000u64;
     let output_index = 7u64;
     let constructed = construct_output(
         &[0x5Au8; 32],
         &x25519_pk,
-        &decoded.ml_kem_encap_key,
-        &decoded.spend_key,
+        destination.ml_kem_ek(),
+        destination.spend_pk().as_canonical_bytes(),
         amount,
         output_index,
     )
-    .expect("construct an output to P's projected address");
+    .expect("construct an output to P's payment destination");
 
     // P's dual-scan (secret bundle via the test oracle) recovers it.
     let keys = derive_bundle(slot);
@@ -142,7 +135,7 @@ async fn active_persona_receive_address_is_recovered_by_p_dual_scan() {
         constructed.view_tag_prefilter,
         output_index,
     )
-    .expect("P recovers the output addressed via the actor's projection");
+    .expect("P recovers the output paid to the actor's handover");
 
     assert_eq!(
         recovered.amount, amount,
@@ -151,17 +144,17 @@ async fn active_persona_receive_address_is_recovered_by_p_dual_scan() {
     assert_eq!(
         &recovered.recovered_spend_key,
         keys.spend_pk.as_canonical_bytes(),
-        "the output is owned by P (projected address == P's receive key)"
+        "the output is owned by P (the handed-over spend key is P's)"
     );
 
-    // Idle actor projects no address (the `NoActivePersona` path).
+    // Idle actor hands over nothing (the `NoActivePersona` path).
     let idle = spawn_over(&[slot], &[], None);
     assert!(
-        idle.active_persona_receive_address(network)
+        idle.active_persona_payment_destination()
             .await
             .expect("accessor")
             .is_none(),
-        "an idle actor projects no receive address"
+        "an idle actor hands over no payment destination"
     );
 }
 

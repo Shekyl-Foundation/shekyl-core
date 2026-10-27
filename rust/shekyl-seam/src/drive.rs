@@ -10,9 +10,11 @@
 //! returned. That is the read window: the session channel holds one frame,
 //! so the socket read stalls behind this wait.
 //!
-//! Zone bind runs [`drive_inbound_async`] as one task per connection on the
-//! transport runtime. The harness's synchronous connect path runs
-//! [`drive_inbound`] on a joined thread. The blocking form is not for the
+//! The installed dialer starts the pump of every adopted session
+//! ([`crate::Dial::drive`], through [`Hub::drive`]). Zone bind runs
+//! [`drive_inbound_async`] as one task per connection on the transport
+//! runtime, accepted and dialed alike. The loopback harness runs
+//! [`drive_inbound`] on a thread it joins. The blocking form is not for the
 //! zone: on a runtime with one blocking lane it drove one connection at a
 //! time and left every later one deaf until the first closed.
 
@@ -22,9 +24,9 @@ use shekyl_capped_stream::Session;
 /// Drive `session` until the reader stops or the handler refuses a frame.
 ///
 /// The cause is the one the connector stored on the session.
-/// [`CloseKind::PeerClosed`] is that cause only when the reader saw
+/// [`crate::CloseKind::PeerClosed`] is that cause only when the reader saw
 /// end-of-file. A session closed with no stored cause is
-/// [`CloseKind::LocalClose`].
+/// [`crate::CloseKind::LocalClose`].
 pub fn drive_inbound(hub: &Hub, id: shekyl_transport_layer::SocketId, mut session: Session) {
     while let Some(frame) = session.recv_blocking() {
         if !hub.deliver(id, frame) {

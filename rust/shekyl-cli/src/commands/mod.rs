@@ -386,6 +386,12 @@ pub fn run(
                 staking::cmd_collect_unstaked(&rpc, &presentation, yes),
                 staking::show_collect,
             ),
+            ResolvedCommand::AcknowledgeStakingOutcome { kind } => present(
+                &presentation,
+                "stake acknowledge",
+                staking::cmd_acknowledge_outcome(&rpc, kind),
+                staking::show_acknowledged,
+            ),
             ResolvedCommand::ShardListAll => present(
                 &presentation,
                 "shard list all",

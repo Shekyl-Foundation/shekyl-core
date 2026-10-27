@@ -25,7 +25,7 @@ lands this document (rule 94). `VC-D*` are dispositions of this round;
 `VC-1`…`VC-4` are the implementation slices §4 names. Neighbours checked:
 `CV-` (cover traffic) is taken and is a different family; `VC-`, `CDG-` and
 `HS-` were free at the anchor.
-**Parent:** [`DAEMON_RPC_KV_CUTOVER.md`](DAEMON_RPC_KV_CUTOVER.md) §7, the
+**Parent:** [`DAEMON_RPC_KV_CUTOVER.md`](../completed/DAEMON_RPC_KV_CUTOVER.md) §7, the
 2026-09-04 rows that found both facts below and named this round without
 building it.
 **Process rule:** [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
@@ -67,12 +67,12 @@ grep -rn "CORE_RPC_VERSION" rust/ src/ tests/ utils/ \
 
 | Hits | What they are |
 | --- | --- |
-| 1 | The producer: `rust/shekyl-daemon-rpc/src/methods.rs:129` fills `GetVersionResponse.version`. |
+| 1 | The producer: `rust/shekyl-daemon-rpc/src/methods.rs:130` fills `GetVersionResponse.version`. |
 | 2 | The producer's own unit test (`methods.rs:1852`, `:1873`) asserts the reply carries the constant. |
 | 4 | The constant's definition: `rust/shekyl-rpc-types/src/chain.rs:44`, `:80`, `:81`, `:82` (major, minor, the packing formula). |
 | 4 | The constant's pins: `chain.rs:383–386` (packed value, packing expression, major, minor — the 2026-09-04 merge-safety fix). |
 | 11 | The oracle-vector parity and chain-delta tests in `rust/shekyl-rpc-types/tests/rpc_parity.rs`. |
-| 2 | The re-export, `rust/shekyl-rpc-types/src/lib.rs:82–83`. |
+| 2 | The re-export, `rust/shekyl-rpc-types/src/lib.rs:87–88`. |
 | 7 | Comments and doc comments (`chain.rs:41`, `:45`, `:338`, `:367`; `headers.rs:16`; `src/rpc/core_rpc_server_commands_defs.h:84`, `:89`). |
 
 **Zero hits compare the constant to a value that came off the wire.** Not
@@ -498,10 +498,10 @@ un-revised number wearing a different face.
 **`VC-R17` splits the seam instead of managing the churn.** The identity facts
 go in their own POD: `ChainTipFactsFfi` does not move, so its layout twins,
 its `_test_fill` / `_rust_fill` seeded indices and its offset pins do not move
-either. The precedent is already in the header — `shekyl_rpc_fee_grace_blocks_max`,
-and `shekyl_rpc_peerlist_limits` (`ffi.rs:741`, `:776`) are narrow exports for
-facts with no business in a bigger POD (`shekyl_rpc_span_pruning_seed` was a
-third until the stripe engine's deletion, 2026-09-21).
+either. The precedent is already in the header — `shekyl_rpc_peerlist_limits`
+(`ffi.rs:741`, `:776`) is a narrow export for facts with no business in a
+bigger POD (`shekyl_rpc_span_pruning_seed` was another until the stripe
+engine's deletion, 2026-09-21).
 `nettype` and the genesis hash are process-lifetime constants — fixed at
 daemon start and per network — while the tip POD's contract is "what the chain
 tip looks like right now"; five of its six callers want a tip and one wants
@@ -862,7 +862,7 @@ derived explicitly in `DESIGN_CONCEPTS.md` as `(60/2) × 24 × 365`, eight
 code sites. `FA-6_VIEW_TAG_ML_KEM.md` :695 derives its key-rotation horizon
 on 365.25: `N_blocks = ⌊(5 × 365.25 × 86400) / T_block⌋ = 1,314,900`, which
 is 262,980 blocks/year *implied* — that literal appears nowhere in the tree.
-(The other 365.25 sites, `console/mod.rs:837` and `util.cpp:1096`, format
+(The other 365.25 sites, `console/mod.rs:842` and `util.cpp:1096`, format
 human-readable durations and are out of scope.) The gap is 180 blocks a
 year, 900 over FA-6's five-year window. The question is not which constant
 wins but whether a rotation horizon derived on a different year length than

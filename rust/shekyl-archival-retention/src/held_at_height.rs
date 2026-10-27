@@ -25,8 +25,7 @@
 //! against the persona **strictly above** `h` (A2, `slash_log_after`). The
 //! judgement over them is consensus arithmetic, which is this crate's (E4
 //! commit 2, the `SAR-Q7` staged pair). The C++ stays live until the
-//! cutover; the LMDB as-of-height cases (`archival_substrate_lmdb.cpp:1674–
-//! 1893`) are this module's tests.
+//! cutover; the as-of-height cases are this module's tests.
 //!
 //! # Three sources, one answer
 //!
@@ -139,8 +138,7 @@ fn removed_holding(entry: &SlashLogEntry, shard: ShardId, at_epoch: SettlementEp
 
 #[cfg(test)]
 mod tests {
-    //! The LMDB as-of-height cases (`archival_substrate_lmdb.cpp:1674–1893`),
-    //! as the fold over the two reads: the log is a `(height, entry)` list
+    //! The as-of-height cases, as the fold over the two reads: the log is a `(height, entry)` list
     //! and `after(h)` is A2's contract — rows strictly above `h` — applied
     //! in the test, so what is asserted is the composition the C++ fused.
     //! The `slash_revert_*` cases beside them are pop-revert tests, which
@@ -250,8 +248,7 @@ mod tests {
         holds_shard_at(SCHEDULE, record, shard(s), at, &log.after(at))
     }
 
-    /// `holds_shard_honors_at_height_across_slash_removal` (:1697). Add
-    /// epoch 2 for both shards, so held heights start at epoch 3's open;
+    /// Held across a slash's removal. Add epoch 2 for both shards, so held heights start at epoch 3's open;
     /// shard 7 is slashed mid-epoch 3 and its tenure is erased from the
     /// record, the log row carrying the add epoch it ended.
     #[test]
@@ -304,7 +301,7 @@ mod tests {
         assert!(!held(&record, &log, 42, h(slash_height - 1)));
     }
 
-    /// `holds_shard_bounds_added_shard_by_its_add_epoch` (:1756): a record
+    /// A shard added after join is bounded by its own add epoch: a record
     /// whose shard 9 carries add epoch 5 against a join at epoch 2 — held
     /// from its *own* add epoch's close, not from join, so a fire height
     /// before or inside the add epoch reads not-held and no unjust slash
@@ -328,7 +325,7 @@ mod tests {
         assert!(!held(&record, &log, 9, open(3)));
     }
 
-    /// `holds_shard_reconstructs_complete_tree_demotion` (:1787): the slash
+    /// A demoted complete tree is reconstructed: the slash
     /// cleared *every* holding, so the pre-image held every shard —
     /// including ones the row does not name. The row's holding kind is
     /// what tells a demoted complete tree from a compact bond that lost its

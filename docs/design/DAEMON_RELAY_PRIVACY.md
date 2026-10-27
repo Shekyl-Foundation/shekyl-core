@@ -215,12 +215,11 @@ this lane.
    Listener, advertised address, seeds, peerlist, and inbound cap stay
    per connector. Collapsing those into one session table is LV-3. The
    protocol handler does not branch on the connector: a session syncs,
-   relays blocks, answers support flags, and takes transactions the
-   same way whatever carried it. The clearnet-only gates are gone:
-   chain sync, compact-block relay, and the support-flags request.
-   The support-flags request goes out on the session's own zone
-   server. A session established before the relay exists logs at
-   error and is not registered.
+   relays blocks, and takes transactions the same way whatever carried
+   it. The clearnet-only gates are gone: chain sync and compact-block
+   relay. (The support-flags request, also once clearnet-only, is
+   deleted with compression, 2026-10-19.) A session established before
+   the relay exists logs at error and is not registered.
 
    `NETWORK_ID` is a handshake value, not a relay field. It is the
    first 16 bytes of `cSHAKE256(S = "shekyl/p2p-network-id-v1",
@@ -665,8 +664,8 @@ against the latency cost for Shekyl's expected topology.
 ### D-7 — the port seam
 
 Rust decides *when* and *to whom*. C++ keeps *how to serialize and send*:
-epee binary serialization, the 1024-byte padding walk, levin framing,
-fragmentation and compression. This workspace has no epee or levin
+epee binary serialization, the 1024-byte padding walk, levin framing and
+fragmentation. This workspace has no epee or levin
 implementation and building one is a separate multi-thousand-line project
 (§8).
 
@@ -17204,6 +17203,8 @@ row. Pins below were read at `98fbd20acb`.
 
 | Value | Where it lives | Basis | What consumes it | Re-measured when, where |
 | --- | --- | --- | --- | --- |
+| Tor dial retry waits: 5 s + U(0, 5 s) before attempt 2, 20 s + U(0, 10 s) before attempt 3; clearnet makes one attempt | `shekyl-dialer` (the gray-lifecycle PR, Rick 2026-10-24) | **Assumption.** Starting values, written down; re-derived from testnet runs on the Rust path | The dialer's retry scheduler: when a retry-worthy failure is dialed again within one test | After the gray-lifecycle PR, on testnet: the distribution of attempt-2 and attempt-3 successes against the waits |
+| Gray cooldown: 2 min after the first failed test, doubling per consecutive failed test, capped at 1 h, each with U(0, 50%) jitter | `shekyl-peerlist` (the gray-lifecycle PR, Rick 2026-10-24) | **Assumption.** Starting values, written down. What the cap means: a dead address costs each node at most about 24 dials a day | The lists: a failed test that proves no misbehaviour cools the address instead of dropping it; the dialer cannot draw a cooling address | After the gray-lifecycle PR, on testnet: how often a cooled address succeeds at its first retest, by rung of the ladder |
 | Clearnet transit, 50 ms | `verify_cost.rs` `ADOPTED_TRANSIT_ASSUMPTION_MS` and its typed twin `ADOPTED_TRANSIT`; the D7 clearnet column's `transit_ms` (`declaration.rs`) | **Assumption.** §21's "at least 50 ms if crossing an ocean", carried forward labelled at §86.2. Never measured on either path | `adopted_hop_ms` (the clearnet `hop`, 175 ms), the clearnet embargo table (`EmbargoTimer::adopted`, mean 190 s), the flood instrument's clearnet row (`conformance::flood::transit_for`) | After RD, on the Rust path: a quantile, not a mean (§86.2), clearnet to clearnet on an established connection, from a floor-representative connection (§94.6) |
 | Tor transit, 1625 ms | `verify_cost.rs` `ANON_ZONE_TRANSIT_ASSUMPTION_MS` and `ANON_ZONE_TRANSIT`; the D7 Tor column's `transit_ms` | **Assumption.** §63.2's "ten times clearnet" upper bound, taken on faith (§89.5). §94's 2026-08 readings (per-session pooled p90 403.8 to 710.9 ms across the day, 590.6 ms interpolated at the modal shape, §94.10 and §94.5) are **RustPath** readings of the network term, taken by `shekyl-tor-transit-spike` over public Tor with no relay in the path; they are recorded, not adopted, because the tail above the measured 8.4 to 16.6 KB span is unmeasured (§94.5) and the re-derivation is §94.10's two-commit procedure | The Tor `hop` (1750 ms) and embargo table; `longest_transit` and through it `shekyl_dandelionpp_origin_retry_interval_seconds` and `shekyl_dandelionpp_propagation_timeout_seconds`; the flood instrument's Tor row | After RD, on the Rust path, under §94's pre-registration: onion-to-onion rendezvous on an established connection, the floor-representative host, at least 8 h of spread for the diurnal swing, the tail shape included |
 | `hop` scheduling term, 0 | `verify_cost.rs` `adopted_hop_ms` doc; §71.3's composition `hop = transit + verification + scheduling`; §94.7 and §94.9 | **CppPath.** The 0 says a stem forward is dispatched at once on the C++ zone strand (`dandelionpp_notify`). That is a claim about `levin_notify.cpp`, not about the Rust `Driver`. The type cannot refuse an omitted term, so it is carried here as a stated omission | `time_between_hop_ms`, through the omission | After RD, on the Rust path: the `Driver`'s decision-to-write span under load. D5's leg 4 (timer lateness, `P2P_TRANSPORT_LAYER.md`) is that instrument once the Rust `Driver` runs; its interim asio run is itself `CppPath` |
@@ -17219,7 +17220,7 @@ row. Pins below were read at `98fbd20acb`.
 | Connector deadlines (`shekyl-transport-layer::spans`; *records-was* `transport_spans` in C++, moved 2026-10-13): clearnet dial 1.415 s, handshake 1.426 s, gap 1.430 s; Tor dial 120 s, gap 37.4 s | `rust/shekyl-transport-layer/src/spans.rs:52` to `:81`; D9 (`P2P_TRANSPORT_LAYER.md`, 2026-09-30); clearnet from `docs/benchmarks/p2p_cutover_crossbuild_20260929.md`, Tor from `docs/benchmarks/p2p_tor_gap_cold_20261014.md` | **Clearnet: CppPath.** The distributions were taken with the C++ dial path in front (`idle_worker` on the two-worker io pool, the starvation defect the dialer brief records) and the C++ Levin handshake inside the gap. The 700 ms GEO-satellite RTT ceiling in the clearnet form is an **Assumption**, stated. **Tor: RustPath** (`TOR_SPANS_BASIS`; Rick, 2026-10-14): cold first contact on the Rust dialer, 189 sessions pooled from two responders. The dial is bounded by Tor's own SOCKS timeout, where the distribution is censored; the gap is twice the pooled p99, 18.69 s, rounded up. Reopen at 500 pooled Rust-path samples. **Ruled 2026-10-08 (Rick):** each connector's gap is the outbound handshake's only clock, armed by the connector | The connector's armed deadlines (`shekyl_zone_params`), the shutdown wait; the dialer's handshake clock | Clearnet: after PR-3, on the Rust dialer, under D9's measurement conditions; into this register. Tor: at 500 pooled Rust-path samples |
 | Levin invoke timer, `P2P_DEFAULT_HANDSHAKE_INVOKE_TIMEOUT` 5000 ms | `src/cryptonote_config.h:199`; armed at `net_node.inl:1414` inside `do_handshake_with_peer` and at `:2696` inside `try_get_support_flags` | **Assumption.** Inherited. **Not the dialer's clock (Rick, 2026-10-08):** the outbound handshake's only clock is each connector's transport gap, the D9 row above | The C++ outbound handshake invoke; the support-flags invoke | Not re-measured. The outbound arm goes with `do_handshake_with_peer` at PR-3; the inbound support-flags arm stays until slice 4 |
 | Dial wake spacing | No code yet. **R3 (Rick, 2026-10-12):** `0.5 s + U(0, 1.0 s)`, mean 1 s, PWD-B2's bounded-uniform shape, drawn per dial (`P2P_3_SLICE_3_DIALER_BRIEF.md`, the fill). *Records-was:* ruled 2026-09-25 as a jittered per-dial wake with no number. Today's pace is the C++ `m_connections_maker_interval` idle maker and the 60 s housekeeping timer (`net_node.h`) | **Assumption.** The shape and the number are ruled; neither is measured | The fill (dialer brief) | After PR-3, on the Rust dialer: dial pacing, into this register |
-| In-flight dial bound | No code yet. Interim one dial per connector (dialer brief, 2026-10-08) | **Assumption.** The fill is one dial per wake, so the interim needs no measurement | The fill | After PR-3, on the Rust dialer: measured and raised, into this register |
+| In-flight dial bound: Tor 5, clearnet 1 | `rust/shekyl-dialer/src/fill.rs` `in_flight_bound`; each dial attempt a task on the transport runtime (the dialer in-flight bound, revision 2, Rick 2026-10-25); a Tor attempt that fails at or after the managed Tor's `SocksTimeout` is final within its test (revision 4, Rick 2026-10-26) | **Derived** (Tor), 2026-10-25, restated 2026-10-26, `docs/benchmarks/p2p_tor_inflight_bound_20261025.md`, with half the draws dead, on the full-window-final lifecycle (a dead attempt modelled at the 120 s dial deadline; the managed Tor answers at 105 s, so the times are an upper bound): five is the smallest bound whose median fill of the 12-session Tor target is within one stem epoch (`min_epoch_secs` 600): 523 s, four 597 s. The record's three-column table is the evidence: one attempt per test gives the same answer (517 s), and three attempts with a waiting `Keep` holding its place meets no horizon (a plateau at about 1,585 s). The half: two attacker sessions at the intake cap (2 × 24) plant as many onions as an honest pool at the diversity floor (48). Dial times: the 189 cold-contact sessions of the 2026-10-14 rerun. Past six the fill stops improving: a dead pending `Keep` holds its target place for its window. **Two regimes, recorded and not changed.** On a large network the bound sets the fill time. On a small one the white diversity floor does: with 64 onions in gray, floor run 1 filled in 258 s at bound 5 against 190 s at bound 1, because the extra slots drew gray down, white stayed under its floor of 48, and the fill rule confirmed rather than kept (one sample: 15 keeps, 45 confirms). That is the floor building white diversity first, as designed. **Fingerprint (`TSR-Q9`).** A stock Tor client's cap on circuits under construction, `MaxClientCircuitsPending` (default 32), counts only general and descriptor-fetch circuits (`CIRCUIT_PURPOSE_COUNTS_TOWARDS_MAXPENDING`), not introduction or rendezvous circuits; the Tor 0.4.9.14 files and lines are in the record. Five connects hold at most five descriptor fetches pending, under a sixth of that cap. **Dead-onion stalling.** A planted dead onion holds one slot and one target place for 105 s, until Tor's `0x06`, then cools: 2 min, doubling to 1 h, with U(0, 50%) jitter. Holding all five slots for an hour takes 5 × 3,600 / 105 ≈ 171 draws. At the 1 h cap a planted onion is drawable at most once an hour, so that is at least 171 planted onions at the cap, planted once: 8 attacker sessions at the intake cap (24 per session per 24 h). Every draw must also land on a plant, so the plants must be nearly all of the drawable pool; at bound one, a fifth as many plants held the whole connector. **Assumption** (clearnet): one, the 2026-10-08 interim; a clearnet dial ends within 1.4 s. *Records-was: one dial per connector, unmeasured, and the loop thread sat inside each dial, so no second dial could start* | The fill (`plan`); the descriptor reservation adds each connector's bound to its target | The floor device: Tor fill time from empty at bound 1 and 5 on a cold boot, after a respawn, and with gray seeded with dead onions; and whether its dial times match the model's |
 | D5 thread budgets: transport `workers` 2, `blocking` 1; `executor_workers` 2 | `net_node.inl:3411` to `:3412` and `:1236`; D5 (`P2P_TRANSPORT_LAYER.md`) | **Assumption.** Each is a placeholder "the run record replaces". None of D5's four legs is recorded yet | `shekyl_zone_params`, the asio executor pool | D5's legs on the floor device. Legs 1 to 3 time the Rust transport and are RustPath when run; leg 4 on the interim asio executor is CppPath and is re-run on the Rust `Driver` after the timing-engine round |
 | `DISCLOSE_COUNT`, 12 | `shekyl-peer-bounds/src/lib.rs` `DISCLOSE_COUNT`, re-exported by `shekyl-peerlist` and read by `shekyl-levin`'s handshake frame bound (PR-3, 2026-10-13); the C++ `P2P_DEFAULT_PEERS_IN_HANDSHAKE` / `P2P_MAX_PEERS_IN_HANDSHAKE` are deleted | **Assumption** (D3, Rick 2026-10-09). A protocol constant, the same on every node and every connector; the number is the interim outbound target carried over, not a derivation | The cached disclosure sample (size and the receiver limit), the per-session intake cap below, the white floor below | After PR-3, on the Rust path: from intake diversity, honest fill, and per-reply exposure (slice 1 brief §2); into this register |
 | Per-session gray intake cap, `2 × DISCLOSE_COUNT` = 24 distinct addresses in any 24-hour span | `shekyl-peerlist/src/lib.rs` `SESSION_INTAKE_CAP`, derived from `DISCLOSE_COUNT`; `INTAKE_SPAN_NANOS` beside it | **Assumption** (D-S1, Rick 2026-10-09). Twice the sample so an honest peer's cached sample cannot reach it; the multiple is not derived | `admit_gray`'s refusal (`PeerlistRefused`), inbound and outbound sessions alike | After PR-3, on the Rust path, with §96 item 3's instrument: time for an attacker to fill gray and the resulting `p_h`, per connector |
@@ -17346,9 +17347,17 @@ left the class. That merge releases the hop and slots the pin's next
 unslotted candidate before the walk; walking first would return the
 departed hop and leave the cursor there. In the stranded state, while
 the current hop is still in the class, the merge does not run and
-nothing moves. The class-of-one
-rotation report (`hop-0 edge cannot rotate`) stays, at rebuild, when
-exactly one outbound session hides the address. `Relay::new` refuses `stems < 2` with a hidden connector (a new
+nothing moves. The class's state (`HiddenClass`: `Empty`, `One`,
+`Several`) is reported when it changes, first at the first epoch
+rebuild (`HiddenClassWatch` in `hidden_slot.rs`). Until that rebuild
+the watch is unarmed: the dialer's opening sessions are not a report.
+One is the class-of-one rotation report (`hop-0 edge cannot rotate`),
+a warning. Empty is a warning that a transaction this node originates
+has no address-hiding session to leave on. A return to several is
+noted as the session count. The three lines name the class. They do
+not say an origin pin has resumed: a pin whose frozen set is exhausted
+stays `NoOwnEdge` until the epoch ends (§98.5). A rebuild that finds
+the state unchanged reports nothing. `Relay::new` refuses `stems < 2` with a hidden connector (a new
 `RelayNewError` variant; the FFI already maps every variant to a null
 handle). No connector is named anywhere in either crate's production
 code; the gate of 98.4 holds that.
@@ -17469,7 +17478,8 @@ the only option that keeps both W3c and rule 3. Ruled (i), above.
   hidden sessions the dialer opens afterwards (rule 2: a session opened
   after the pin never serves it this epoch). Slot 0 refills from those
   sessions for relayed traffic. The class-of-one rotation report names
-  the state at rebuild.
+  the state when it is entered, and the return to several names the
+  session count. Neither line says the held origin has resumed.
 
 ### 98.6 Tests, named by property
 
@@ -17743,6 +17753,30 @@ produced whenever it slotted a hidden peer, now the steady one, and §20.3
 volume cover on the hidden link is unchanged. Not
 examined: `shekyl-tor` and the connector crates, which PR-1 does not
 touch; the dialer's view of the hidden outbound sessions, which is PR-3's.
+
+### 98.12 The class as a published verdict (`GS-Q3`, 2026-10-23)
+
+The hidden class and the origin pin are the fact the posture reads
+(`TOR_SUPERVISOR.md` posture table, `GS-Q3`). `Relay::origin_verdict` reads
+`StemMap::local_origin_leaves` without committing a route. That read is the
+decision `StemMap::route_local_origin` commits, so the published value is the
+next plan's outcome.
+
+The verdict is three states. `Absent`: no outbound session hides this node's
+address, or the epoch does not reserve a slot. `Connected`: one does, and a
+local origin does not leave on it. `Routable`: a local origin leaves on one.
+Health is every state but `Absent` (`TSR-Q4`). `Routable` is `OwnTx` under the
+`status` grant. The pin stays off `health` (`RPC_CHANNEL.md` §6.1): it moves
+when this node's own-edge peers disconnect, and a peer holding `health` while
+being the own edge would otherwise watch the boolean flip on its own
+disconnect.
+
+The production zone's publish writes the verdict to `shekyl-ffi`
+`origin_verdict` after every session change, epoch rebuild and plan. The
+managed-Tor supervisor folds it as one `Input::AddressHidingOrigin`. The
+`HiddenClassWatch` log lines (§98.5) are unchanged and are not this read: the
+watch is silent before the first rebuild and reports the class alone, not the
+pin.
 
 ## 99. ProxyMark reproduction — a progress benchmark, REGISTERED 2026-10-09 (PM-1…PM-3)
 

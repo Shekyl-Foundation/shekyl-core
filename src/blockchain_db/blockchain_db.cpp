@@ -180,26 +180,9 @@ bool txpool_tx_meta_t::upgrade_relay_method(relay_method method) noexcept
   return false;
 }
 
-const command_line::arg_descriptor<std::string> arg_db_sync_mode = {
-  "db-sync-mode"
-, "Specify sync option, using format [safe|fast|fastest]:[sync|async]:[<nblocks_per_sync>[blocks]|<nbytes_per_sync>[bytes]]." 
-, "fast:async:250000000bytes"
-};
-const command_line::arg_descriptor<bool> arg_db_salvage  = {
-  "db-salvage"
-, "Try to salvage a blockchain database if it seems corrupted"
-, false
-};
-
 BlockchainDB *new_db()
 {
   return new BlockchainLMDB();
-}
-
-void BlockchainDB::init_options(boost::program_options::options_description& desc)
-{
-  command_line::add_arg(desc, arg_db_sync_mode);
-  command_line::add_arg(desc, arg_db_salvage);
 }
 
 void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair<transaction, blobdata_ref>& txp, uint64_t block_height, const crypto::hash* tx_hash_ptr, const crypto::hash* tx_prunable_hash_ptr)
@@ -1798,7 +1781,7 @@ std::vector<shekyl_archival_epoch_close_bond>
   {
     shekyl_archival_epoch_close_bond b{};
     b.join_settlement_epoch = row.join_settlement_epoch;
-    b.is_foundation_complete_tree = row.is_foundation_complete_tree ? 1 : 0;
+    b.is_support_complete_tree = row.is_support_complete_tree ? 1 : 0;
     b.bad_intervals_ptr = row.bad_intervals_flat.empty()
       ? nullptr : row.bad_intervals_flat.data();
     b.bad_intervals_len = row.bad_intervals_flat.size() / 2;

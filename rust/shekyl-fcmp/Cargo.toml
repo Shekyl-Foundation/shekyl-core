@@ -34,12 +34,16 @@ curve25519-dalek = { version = "4", default-features = false, features = ["alloc
 # Crypto primitives
 zeroize = { workspace = true }
 rand_core = { version = "0.6", features = ["std"] }
+# The verify's batch weights (ruling R3, CEN-I15): a `ChaCha20Rng` seeded by
+# `shekyl_crypto_hash::cshake256_32` over every value the verify reads, in
+# place of `OsRng`. Both already in the workspace lockfile.
+rand_chacha = { workspace = true }
+shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 
 # FROST multisig (optional)
 transcript = { package = "flexible-transcript", version = "0.3", features = ["recommended"], optional = true }
 modular-frost = { version = "0.11", features = ["ed25519"], optional = true }
 dkg-pedpop = { version = "0.6", optional = true }
-rand_chacha = { version = "0.3", optional = true }
 
 tracing = "0.1"
 thiserror.workspace = true
@@ -62,7 +66,7 @@ rand_chacha = "0.3"
 [features]
 default = ["std"]
 std = []
-multisig = ["shekyl-fcmp-proofs/multisig", "transcript", "modular-frost", "dkg-pedpop", "rand_chacha"]
+multisig = ["shekyl-fcmp-proofs/multisig", "transcript", "modular-frost", "dkg-pedpop"]
 
 [lints]
 workspace = true

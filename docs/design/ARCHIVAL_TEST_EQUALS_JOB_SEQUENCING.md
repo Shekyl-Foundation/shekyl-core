@@ -213,8 +213,9 @@ change post-genesis.
   work than it looks. Running it first turns TJ-A from a two-way argument
   into a decision with a number under it. **The number is under it (§6.2,
   measured 2026-07-29, within-class per review F-1):** bandwidth closes the
-  margin decisively for metered-egress fetchers, **marginally (~1.1×) in the
-  within-cloud cheap-transit cell** (the §5.3 reopen's watch-cell), and not
+  margin decisively for metered-egress fetchers, by **3.3× in the
+  within-cloud cheap-transit cell** (the §5.3 reopen's watch-cell; ~1.1× at
+  one challenge a pair an epoch before λ = 3, §5.7c), and not
   at all for flat-rate actors — where the deterrent needs
   `q_risk* ≈ 0.10` (+reward) on the whole-shard fetch. The receipt branch
   does real work precisely in the flat-rate cell, and TJ-C's deadline
@@ -668,8 +669,8 @@ labor leg says nothing.
 
 | cell | leg 1 (price) | leg 3a (acquisition bytes) | leg 3b (labor) | leg 2 (`T_risk`) |
 | --- | --- | --- | --- | --- |
-| metered retail | decisive (~11×) | **raises it further** (perpetual vs sunk) | raises the entry bar | not needed |
-| metered cheap transit | marginal (~1.1×) | **converts the coin-flip into a standing asymmetry** | raises the entry bar | backup |
+| metered retail | decisive (~33×) | **raises it further** (perpetual vs sunk) | raises the entry bar | not needed |
+| metered cheap transit | 3.3× (§5.7c, measured 2026-08-11: ~1.1× at one challenge an epoch, lifted by λ = 3) | **raises it further** (the coin-flip was already gone at leg 1) | raises the entry bar | backup |
 | flat-rate | inverted | ~0 — quiet, with leg 1 | the only surviving *cost* leg, but payoff-proportional and commoditizable | **carries the cell**, `q_risk* ≈ 0.10` |
 
 So the flat-rate cell rests on **`T_risk` + TJ-C's deadline + a labor threshold

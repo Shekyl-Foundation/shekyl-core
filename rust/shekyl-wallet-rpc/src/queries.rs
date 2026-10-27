@@ -25,9 +25,9 @@ use crate::project::{
 };
 use crate::tenant::{require_open_engine, TenantState};
 use crate::types::{
-    capability_mode_str, GetHeightResult, GetPrimaryAddressResult, GetStakedBalanceResult,
-    GetTransferByIdResult, GetTransfersResult, GetWalletInfoResult, ReceiveAttributionFilter,
-    StakingInfoResult, TransferDirection, TransferState, TransferView,
+    capability_mode_str, GetHeightResult, GetPrimaryAddressResult, GetTransferByIdResult,
+    GetTransfersResult, GetWalletInfoResult, ReceiveAttributionFilter, TransferDirection,
+    TransferState, TransferView,
 };
 
 /// Optional filters for `get_transfers`.
@@ -285,22 +285,8 @@ pub(crate) async fn get_wallet_info(
         // staking fields and the `staking` block absent while the wallet's
         // identity/height/liquid facts stay served.
         let balance = get_balance_result(&snapshot.view);
-        let (posture, serving_priority_not_lowered) = crate::staking::serving_wire(serving);
-        let staking = staking_view.map(|staking_view| StakingInfoResult {
-            staking_enabled: staking_view.staking_enabled,
-            balance: GetStakedBalanceResult {
-                bonded_principal_confirmed: staking_view.balance.bonded_principal_confirmed.into(),
-                bonded_principal_pending: staking_view.balance.bonded_principal_pending.into(),
-                rewards_received_unspent: staking_view.balance.rewards_received_unspent.into(),
-            },
-            staked_output_count: i64::try_from(staking_view.outputs.len()).unwrap_or(i64::MAX),
-            pscan_synced_height: staking_view
-                .pscan_synced_height
-                .map(|h| i64::try_from(h.to_raw()).unwrap_or(i64::MAX)),
-            recovery_pending_reopen: staking_view.recovery_pending_reopen,
-            posture,
-            serving_priority_not_lowered,
-        });
+        let staking = staking_view
+            .map(|staking_view| crate::staking::staking_info_result(&staking_view, serving));
 
         let daemon = engine.daemon().clone();
 
@@ -456,7 +442,9 @@ mod tests {
                     dispatched_at_height: shekyl_types::BlockHeight::from_raw(100),
                     fee: 700,
                     recipients: vec![SendRecipient {
-                        address: "shekyl1a".to_owned(),
+                        destination: shekyl_engine_state::SendDestination::Address(
+                            "shekyl1a".to_owned(),
+                        ),
                         amount: 3_500,
                         rid: None,
                     }],
@@ -676,12 +664,12 @@ mod tests {
         let row = block.rows.get_mut(&[0x05; 32]).expect("row");
         row.recipients = vec![
             SendRecipient {
-                address: "shekyl1a".to_owned(),
+                destination: shekyl_engine_state::SendDestination::Address("shekyl1a".to_owned()),
                 amount: u64::MAX,
                 rid: None,
             },
             SendRecipient {
-                address: "shekyl1b".to_owned(),
+                destination: shekyl_engine_state::SendDestination::Address("shekyl1b".to_owned()),
                 amount: 1,
                 rid: None,
             },

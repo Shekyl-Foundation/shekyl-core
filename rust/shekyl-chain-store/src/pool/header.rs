@@ -7,7 +7,8 @@
 //! header decides (`DRS_E1_SPOOL.md` `SPL-Q8`, with the precondition from
 //! PR #851's review).
 //!
-//! A fresh file is sealed with the crate's `SCHEMA_VERSION` in its own cell
+//! A fresh file is sealed with the pool file's own `POOL_SCHEMA_VERSION` in
+//! its own cell
 //! and both data tables created, in one transaction, so a reader never has
 //! to read *absent table* as *empty pool*. On reopen the cell is read first:
 //! a seal at **another** version **recreates** the file (it is discardable
@@ -15,16 +16,30 @@
 //! version must sit over both tables under their declared types, or the
 //! file is not one this store left behind. Everything that is not a sealed
 //! pool file is **refused and kept**.
+//!
+//! # A recreate is recoverable at every step
+//!
+//! The old file held which transactions this node had in its stem phase,
+//! so it is wiped, not only unlinked — and a wipe is not atomic. So the
+//! validated old file is first **renamed** to the store's own discard path
+//! ([`discard_path`]: the file's name with `.discard` appended), a fresh file
+//! is sealed at the pool's path, and only then is the discarded file
+//! overwritten and removed. Every open first finishes a discard an earlier
+//! run left. An interruption anywhere leaves either the old sealed file or
+//! no file at the pool's path — never a half-wiped one the next open would
+//! refuse as foreign — and the discard path is the store's alone: nothing
+//! but a validated pool file is ever moved there.
 
 use std::path::Path;
 
 use redb::{Database, ReadTransaction, ReadableDatabase, TableDefinition};
 use shekyl_store_codec::{Canonical, Raw};
 
-use crate::codec::{PropertyCellBytes, SchemaVersion, SCHEMA_VERSION};
+use crate::codec::PropertyCellBytes;
 use crate::store::{EngineError, StoreCannot, StoreError};
 
 use super::schema::{POOL_BLOB, POOL_HEADER, POOL_META};
+use super::schema_version::{PoolSchemaVersion, POOL_SCHEMA_VERSION};
 use super::{arm_write, POOL_CACHE_SIZE};
 
 /// The header cell that carries the layout version the file was sealed at.
@@ -34,7 +49,7 @@ pub const POOL_VERSION_KEY: &str = "pool_schema_version";
 /// file.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PoolOpen {
-    /// No file existed; one was created and sealed at [`SCHEMA_VERSION`].
+    /// No file existed; one was created and sealed at [`POOL_SCHEMA_VERSION`].
     Created,
     /// A sealed file at the current version, over its sealed tables, was
     /// opened.
@@ -44,7 +59,7 @@ pub enum PoolOpen {
     /// the old file carried — the caller's one log line names it.
     Recreated {
         /// The layout the discarded file was sealed at.
-        from: SchemaVersion,
+        from: PoolSchemaVersion,
     },
 }
 
@@ -53,7 +68,7 @@ enum Header {
     /// Sealed at the current version, over its sealed tables.
     Current,
     /// Sealed at another version: recreate.
-    Other(SchemaVersion),
+    Other(PoolSchemaVersion),
 }
 
 /// The one entry point: claim `path` if it is free, else read what is there.
@@ -65,6 +80,7 @@ enum Header {
 /// file another process left, is never sealed by a creator that did not
 /// create it.
 pub(super) fn open_or_create(path: &Path) -> Result<(Database, PoolOpen), StoreError> {
+    finish_discard(path).map_err(io_open)?;
     let mut builder = redb::Builder::new();
     builder.set_cache_size(POOL_CACHE_SIZE);
     match create_new(path) {
@@ -78,16 +94,82 @@ pub(super) fn open_or_create(path: &Path) -> Result<(Database, PoolOpen), StoreE
             match read_header(&db)? {
                 Header::Current => Ok((db, PoolOpen::Opened)),
                 Header::Other(from) => {
-                    // Release the engine's file lock before removing.
+                    // Release the engine's file lock before moving it.
                     drop(db);
-                    std::fs::remove_file(path).map_err(io_open)?;
+                    retire(path).map_err(io_open)?;
                     let file = create_new(path).map_err(io_open)?;
-                    seal_fresh(&builder, file, path).map(|db| (db, PoolOpen::Recreated { from }))
+                    let sealed = seal_fresh(&builder, file, path)?;
+                    finish_discard(path).map_err(io_open)?;
+                    Ok((sealed, PoolOpen::Recreated { from }))
                 }
             }
         }
         Err(e) => Err(io_open(e).into()),
     }
+}
+
+/// Where a recreate moves the old file before wiping it (module docs).
+pub(super) fn discard_path(path: &Path) -> std::path::PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".discard");
+    path.with_file_name(name)
+}
+
+/// Move the validated old file at `path` to [`discard_path`], durably: the
+/// rename is one step, so the pool's path holds the old sealed file or
+/// nothing, and the directory is flushed so the move survives a crash.
+fn retire(path: &Path) -> std::io::Result<()> {
+    std::fs::rename(path, discard_path(path))?;
+    sync_parent(path)
+}
+
+/// Wipe and remove a discard an earlier step or an earlier run left. No
+/// discard is nothing to do.
+fn finish_discard(path: &Path) -> std::io::Result<()> {
+    let discard = discard_path(path);
+    match overwrite(&discard) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    }
+    std::fs::remove_file(&discard)?;
+    sync_parent(path)
+}
+
+/// Flush the directory holding `path`, so a rename or unlink in it is
+/// durable. Unix only: elsewhere a directory cannot be opened to flush.
+fn sync_parent(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        let dir = match path.parent() {
+            Some(dir) if !dir.as_os_str().is_empty() => dir,
+            _ => Path::new("."),
+        };
+        std::fs::File::open(dir)?.sync_all()?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
+
+/// Overwrite a pool file's bytes with zeros and flush them, before it is
+/// unlinked: the file held which transactions this node had in its stem
+/// phase and when, and an unlink alone leaves those bytes on the disk for
+/// anyone who reads it later (the review of #1102, S7). Best effort below
+/// the filesystem: a copy-on-write or journaling filesystem may keep old
+/// blocks, which only full-disk encryption covers.
+pub(super) fn overwrite(path: &Path) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new().write(true).open(path)?;
+    let mut left = file.metadata()?.len();
+    let zeros = [0_u8; 8 * 1024];
+    let chunk = u64::try_from(zeros.len()).expect("8 KiB");
+    while left > 0 {
+        let n = left.min(chunk);
+        file.write_all(&zeros[..usize::try_from(n).expect("at most 8 KiB")])?;
+        left -= n;
+    }
+    file.sync_all()
 }
 
 fn create_new(path: &Path) -> std::io::Result<std::fs::File> {
@@ -118,7 +200,7 @@ fn seal_fresh(
             header
                 .insert(
                     POOL_VERSION_KEY,
-                    Raw::<PropertyCellBytes>::new(&SCHEMA_VERSION.encode()),
+                    Raw::<PropertyCellBytes>::new(&POOL_SCHEMA_VERSION.encode()),
                 )
                 .map_err(EngineError::Storage)?;
             txn.open_table(POOL_META).map_err(EngineError::Table)?;
@@ -147,10 +229,10 @@ fn read_header(db: &Database) -> Result<Header, StoreError> {
     let Some(cell) = table.get(POOL_VERSION_KEY).map_err(EngineError::Storage)? else {
         return Err(StoreCannot::PoolFileForeign.into());
     };
-    let Ok(found) = SchemaVersion::decode(cell.value().bytes()) else {
+    let Ok(found) = PoolSchemaVersion::decode(cell.value().bytes()) else {
         return Err(StoreCannot::PoolFileForeign.into());
     };
-    if found != SCHEMA_VERSION {
+    if found != POOL_SCHEMA_VERSION {
         // Another layout recreates, whatever its table set: the seal is
         // this store's, the version is not, and the file is discardable.
         return Ok(Header::Other(found));

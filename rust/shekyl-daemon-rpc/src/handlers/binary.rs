@@ -28,11 +28,13 @@
 
 //! Handlers for binary endpoints (MAP_URI_AUTO_BIN2 family).
 
+use crate::authority::Authority;
 use crate::server::AppState;
 use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
+use axum::Extension;
 use std::sync::Arc;
 
 /// The restricted listener's block cap. Handler policy, single-sourced here
@@ -46,7 +48,7 @@ use std::sync::Arc;
 /// there; only the argument made them dead. Serving it as intended is the
 /// safer reading of unambiguous intent, and pre-genesis there is no client
 /// relying on the gap.
-const RESTRICTED_BLOCK_COUNT: usize = 1000;
+use crate::methods::RESTRICTED_BLOCK_COUNT;
 
 /// `/get_blocks_by_height.bin` (+ `/getblocks_by_height.bin`) — served
 /// natively (RK-4b).
@@ -58,12 +60,13 @@ const RESTRICTED_BLOCK_COUNT: usize = 1000;
 /// that the restricted cap now fires — see [`RESTRICTED_BLOCK_COUNT`].
 pub async fn get_blocks_by_height(
     State(state): State<Arc<AppState>>,
+    Extension(authority): Extension<Authority>,
     body: Bytes,
 ) -> impl IntoResponse {
     let Ok(request) = shekyl_rpc_types::GetBlocksByHeightRequest::from_bin(&body) else {
         return (StatusCode::BAD_REQUEST, "Bad request").into_response();
     };
-    if state.restricted && restricted_cap_refuses(request.heights.len()) {
+    if authority.bounded() && restricted_cap_refuses(request.heights.len()) {
         return bin_status("Too many blocks requested in restricted mode");
     }
     let core = state.core.clone();

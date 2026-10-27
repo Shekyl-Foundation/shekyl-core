@@ -22,7 +22,9 @@ use crate::rules::Rule;
 use crate::verdict::{refused, Locus, Verdict};
 use crate::view::ChainView;
 
-use super::{emptied, record_invariant, BondArm, Post, RecordWriteKind, ServeCreditKey, L7};
+use super::{
+    emptied, record_invariant, BondArm, Post, RecordWriteKind, ReleasePreImage, ServeCreditKey, L7,
+};
 
 impl super::Transition {
     // ---- phase 2: the transactions' arms ---------------------------------
@@ -158,6 +160,7 @@ impl super::Transition {
         let Some(current) = self.post(view, persona)? else {
             return refused(L7::ROW, locus);
         };
+        let pre_image = current.record.clone();
         let record = &mut current.record;
         let held = match &record.holdings {
             Holdings::CompleteTree => 0,
@@ -188,6 +191,12 @@ impl super::Transition {
         record.holdings = emptied();
         record.bad_intervals.push(connect.interval_close);
         current.touch();
+        // The record as it stood before this arm: what the walk that
+        // rebuilds an epoch's drawable set restores (`SO-D12b`).
+        self.releases.push(ReleasePreImage {
+            persona,
+            record: pre_image,
+        });
         Ok(Ok(()))
     }
 

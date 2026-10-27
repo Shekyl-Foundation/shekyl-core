@@ -22,14 +22,14 @@ use shekyl_harness_spender::MinerWallet;
 use shekyl_harness_wallet::coinbase::repay;
 
 use super::connect_fixtures::{
-    at, candidate, candidate_over, connect_chain, formed, judge, root_going_into, spend,
+    at, candidate, candidate_over, connect_chain, formed, judge, priced_on, root_going_into, spend,
     spendable_prefix, FIRST_SPEND_HEIGHT,
 };
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
-use crate::codec::{forged, AltBlock, AltBlockFacts, Canonical, CodecError, Encoded};
+use crate::codec::{forged, AltBlock, AltBlockFacts, AltBodies, Canonical, CodecError, Encoded};
 use crate::lmdb_order::LmdbHashKey;
-use crate::schema::ALT_BLOCKS;
+use crate::schema::{ALT_BLOCKS, ALT_BLOCK_BODIES};
 
 /// `BlockHeight::from_raw`, short enough for a fixture call.
 pub(super) const fn h(n: u64) -> BlockHeight {
@@ -46,6 +46,10 @@ pub(super) fn alt(height: BlockHeight, block: &[u8], witness: Option<Vec<u8>>) -
             height,
             block_weight: BlockWeight::from_raw(300 + raw),
             cumulative_difficulty: CumulativeDifficulty::from_raw(1_000 + u128::from(raw)),
+            pow: crate::codec::RecordedPow {
+                seed: shekyl_types::BlockHash::NULL,
+                pow: shekyl_types::PowHash::from_bytes([0; 32]),
+            },
         },
         block,
         witness,
@@ -85,7 +89,11 @@ pub(super) fn side_candidate(
     previous: BlockHash,
     key_image: usize,
 ) -> Candidate {
-    let filler = fixture::spend(fixture::point(key_image), 2);
+    // Signed: `form` runs the signature sequence at every listed slot
+    // (2026-10-16); the filler's proof is unverified here (no reference
+    // claim at offer) and refused at promotion, which these tests never
+    // reach.
+    let filler = fixture::signed(fixture::spend(fixture::point(key_image), 2));
     candidate(height.to_raw(), previous, vec![filler])
 }
 
@@ -137,6 +145,14 @@ fn insert_admitted(store: &ChainStore, candidate: Candidate) -> Result<(), TestE
     store.write(|batch| Ok(batch.insert_alt_block(valid)?))
 }
 
+fn alt_count(store: &ChainStore) -> u64 {
+    store
+        .begin_read()
+        .expect("read")
+        .alt_block_count()
+        .expect("count")
+}
+
 fn tip_height(store: &ChainStore) -> Option<u64> {
     let snap = store.begin_read().expect("read");
     snap.tip().expect("tip").recorded.map(|t| t.height.to_raw())
@@ -158,7 +174,7 @@ fn hash_at(store: &ChainStore, height: u64) -> Option<BlockHash> {
 fn insert_read_enumerate_remove_and_drop() {
     let path = tmp("alt-ops");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let main = connect_chain(&store, &[vec![], vec![]]).hashes;
+    let main = connect_chain(&store, &[vec![], vec![], vec![]]).hashes;
     let a_cand = side_candidate(h(1), main[0], 3);
     let (a, a_bytes) = (a_cand.block.hash(), a_cand.block.serialize());
     let witness = vec![0xA5; 40];
@@ -249,6 +265,271 @@ fn insert_read_enumerate_remove_and_drop() {
         store.connect_state().is_live(),
         "alt writes are not chain work; nothing halts"
     );
+    cleanup(&path);
+}
+
+/// Plant `bodies` under `key` in `alt_block_bodies` alone, around AL1.
+fn plant_bodies(store: &ChainStore, key: BlockHash, bodies: &AltBodies) {
+    let out: Result<(), TestErr> = store.write(|batch| {
+        batch
+            .txn()
+            .open_table(ALT_BLOCK_BODIES)
+            .map_err(|e| StoreError::from(EngineError::Table(e)))?
+            .insert(
+                LmdbHashKey::from_bytes(*key.as_bytes()),
+                bodies.encoded().as_encoded(),
+            )
+            .map_err(|e| StoreError::from(EngineError::Storage(e)))?;
+        Ok(())
+    });
+    out.expect("plant bodies");
+}
+
+/// The bodies are consensus data held with the row (the review of #1102,
+/// B1): AL1 writes the verdict's listed bodies, AL8 reads them back in
+/// listed order and holds them to the row, and AL2, AL3 and the death rule
+/// remove them with it. A row without its bodies, bodies without a row,
+/// and bodies that are not the header's listed transactions are SI-7.
+#[test]
+fn the_bodies_are_written_read_and_removed_with_the_row() {
+    let path = tmp("alt-bodies");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let main = connect_chain(&store, &[vec![], vec![]]).hashes;
+    let a_cand = side_candidate(h(1), main[0], 3);
+    let (a, a_listed) = (a_cand.block.hash(), a_cand.transactions.clone());
+    assert!(!a_listed.is_empty(), "the fixture lists a body");
+    insert_admitted(&store, a_cand).expect("insert a");
+    // `b` hangs from the main chain, not from `a`, so it outlives the sweep
+    // that takes `a`: a row built on `a` would leave with it.
+    let b_cand = side_candidate(h(2), main[1], 4);
+    let (b, b_listed) = (b_cand.block.hash(), b_cand.transactions.clone());
+    insert_admitted(&store, b_cand).expect("insert b");
+    {
+        let snap = store.begin_read().expect("read");
+        let got = snap.alt_block_bodies(&a).expect("read").expect("held");
+        assert_eq!(got.transactions(), a_listed.as_slice());
+        assert_eq!(snap.alt_block_bodies(&main[1]).expect("read"), None);
+    }
+
+    // The death rule's sweep: at or below height 1, `a` and its bodies.
+    let out: Result<u64, TestErr> = store.write(|batch| Ok(batch.retire_alt_blocks(h(1))?));
+    assert_eq!(out, Ok(1));
+    {
+        let snap = store.begin_read().expect("read");
+        assert_eq!(snap.alt_block_bodies(&a).expect("both gone"), None);
+        let got = snap.alt_block_bodies(&b).expect("read").expect("held");
+        assert_eq!(got.transactions(), b_listed.as_slice());
+    }
+
+    // AL2 takes the bodies with the row.
+    let out: Result<(), TestErr> = store.write(|batch| Ok(batch.remove_alt_block(&b)?));
+    out.expect("remove");
+    assert_eq!(
+        store
+            .begin_read()
+            .expect("read")
+            .alt_block_bodies(&b)
+            .expect("both gone"),
+        None
+    );
+
+    // AL3 too.
+    let judged = store.begin_read().expect("read");
+    let again = admitted(&judged, side_candidate(h(1), main[0], 3));
+    let out: Result<u64, TestErr> = store.write(|batch| {
+        batch.insert_alt_block(again)?;
+        Ok(batch.drop_alt_blocks()?)
+    });
+    assert_eq!(out, Ok(1));
+    assert_eq!(
+        store
+            .begin_read()
+            .expect("read")
+            .alt_block_bodies(&a)
+            .expect("both gone"),
+        None
+    );
+
+    // The belts. A row without its bodies:
+    let row_only = side_candidate(h(1), main[0], 5);
+    let row_id = row_only.block.hash();
+    plant(
+        &store,
+        row_id,
+        &alt(h(1), &row_only.block.serialize(), None),
+    );
+    let is_si7 = |e: StoreError, cell: &str| {
+        matches!(
+            e,
+            StoreError::InvariantViolated(StoreInvariant::CellCorrupt { key, .. }) if key == cell
+        )
+    };
+    let snap = store.begin_read().expect("read");
+    assert!(is_si7(
+        snap.alt_block_bodies(&row_id).expect_err("no bodies"),
+        "alt_block_bodies"
+    ));
+    drop(snap);
+    // Bodies that are not the header's:
+    plant_bodies(&store, row_id, &AltBodies::of(b_listed));
+    let snap = store.begin_read().expect("read");
+    assert!(is_si7(
+        snap.alt_block_bodies(&row_id).expect_err("not its bodies"),
+        "alt_block_bodies"
+    ));
+    drop(snap);
+    // Bodies without a row:
+    let stray = BlockHash::from_bytes([0x5B; 32]);
+    plant_bodies(&store, stray, &AltBodies::of(Vec::new()));
+    let snap = store.begin_read().expect("read");
+    assert!(is_si7(
+        snap.alt_block_bodies(&stray).expect_err("no row"),
+        "alt_blocks"
+    ));
+    cleanup(&path);
+}
+
+/// A removal takes the closure — the rows it selects and every row built
+/// on one of them — so every stored chain still reaches the main chain
+/// (`store/alt.rs`). Over main blocks 0..=2: `a` at 1 on block 0, `b` and
+/// `c` at 2 on `a`, `d` at 3 on `b`, and `e` at 2 on main block 1.
+#[test]
+fn a_removed_row_takes_every_row_built_on_it() {
+    let path = tmp("alt-closure");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let main = connect_chain(&store, &[vec![], vec![], vec![]]).hashes;
+    let branch = |store: &ChainStore| {
+        let a = side_candidate(h(1), main[0], 3);
+        let a_id = a.block.hash();
+        insert_admitted(store, a).expect("a");
+        let b = side_candidate(h(2), a_id, 4);
+        let b_id = b.block.hash();
+        insert_admitted(store, b).expect("b");
+        insert_admitted(store, side_candidate(h(2), a_id, 5)).expect("c");
+        insert_admitted(store, side_candidate(h(3), b_id, 6)).expect("d");
+        a_id
+    };
+    let held = |store: &ChainStore| {
+        store
+            .begin_read()
+            .expect("read")
+            .alt_block_count()
+            .expect("count")
+    };
+    let a = branch(&store);
+    let e = side_candidate(h(2), main[1], 7);
+    let e_id = e.block.hash();
+    insert_admitted(&store, e).expect("e");
+    assert_eq!(held(&store), 5);
+
+    // The death rule at 1 selects `a` alone by height and takes the three
+    // rows above it; `e`, at 2 on the main chain, stays.
+    let out: Result<u64, TestErr> = store.write(|batch| Ok(batch.retire_alt_blocks(h(1))?));
+    assert_eq!(out, Ok(4));
+    assert_eq!(held(&store), 1);
+
+    // A refusal names `a`; its branch leaves with it, `e` stays. The
+    // reply is the rows removed, lowest height first.
+    let a_again = branch(&store);
+    assert_eq!(a_again, a);
+    let out: Result<Vec<BlockHash>, TestErr> =
+        store.write(|batch| Ok(batch.remove_alt_branches(&[a])?));
+    let removed = out.expect("the branch");
+    assert_eq!(removed.len(), 4);
+    assert_eq!(removed[0], a, "the selected row is the lowest");
+    assert!(!removed.contains(&e_id));
+    assert_eq!(held(&store), 1);
+    // A root the store does not hold is the caller's bookkeeping gone wrong.
+    let out: Result<Vec<BlockHash>, TestErr> =
+        store.write(|batch| Ok(batch.remove_alt_branches(&[a])?));
+    assert_eq!(
+        out,
+        Err(TestErr::Store(
+            StoreError::from(AltCannot::NotHeld).to_string()
+        ))
+    );
+
+    // A rewind names the blocks it popped; `e` hangs from main block 1.
+    let out: Result<u64, TestErr> =
+        store.write(|batch| Ok(batch.retire_alt_blocks_on(&[main[1]])?));
+    assert_eq!(out, Ok(1));
+    assert_eq!(held(&store), 0);
+    assert!(store
+        .begin_read()
+        .expect("read")
+        .alt_block(&e_id)
+        .expect("read")
+        .is_none());
+    cleanup(&path);
+}
+
+/// A block id has one home (module docs): AL1 refuses a hash the main
+/// chain records, read in the inserting batch, so a verdict minted on a
+/// snapshot from before that block connected cannot add a second copy.
+#[test]
+fn a_recorded_block_is_refused_as_an_alt_row() {
+    let path = tmp("alt-recorded-refused");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let main = connect_chain(&store, &[vec![], vec![], vec![]]).hashes;
+    let snap = store.begin_read().expect("read");
+    let recorded = match snap.candidate_at(h(2)).expect("candidate") {
+        shekyl_chain_rules::AtHeight::Recorded(candidate) => candidate,
+        shekyl_chain_rules::AtHeight::AboveTip => panic!("height 2 is recorded"),
+    };
+    assert_eq!(recorded.block.hash(), main[2]);
+    let valid = admitted(&snap, recorded);
+    let out: Result<(), TestErr> = store.write(|batch| Ok(batch.insert_alt_block(valid)?));
+    assert_eq!(
+        out,
+        Err(TestErr::Store(
+            StoreError::from(AltCannot::AlreadyHeld).to_string()
+        ))
+    );
+    drop(snap);
+    assert_eq!(alt_count(&store), 0);
+    cleanup(&path);
+}
+
+/// The connect's half: a block the alt table holds leaves it in the write
+/// that records it, and a row built on it stays, its parent now a
+/// main-chain block that the listing names.
+#[test]
+fn a_connect_takes_its_block_out_of_the_alt_table() {
+    let path = tmp("alt-connect-takes");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let main = connect_chain(&store, &[vec![], vec![], vec![]]).hashes;
+    let next = priced_on(
+        &store,
+        candidate_over(root_going_into(&store, 3), 3, main[2], Vec::new()),
+    );
+    let next_id = next.block.hash();
+    insert_admitted(&store, next.clone()).expect("the extension as an alt row");
+    let child = side_candidate(h(4), next_id, 11);
+    let child_id = child.block.hash();
+    insert_admitted(&store, child).expect("its child");
+    assert_eq!(alt_count(&store), 2);
+
+    let out: Result<Connected, TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        Ok(batch.connect(judge(&view, next)?, RuleSet::GENESIS)?)
+    });
+    let connected = out.expect("connect");
+    assert!(connected.left_alt, "the recorded block left the alt table");
+    let snap = store.begin_read().expect("read");
+    assert_eq!(snap.height_of(&next_id).expect("height"), Some(h(3)));
+    assert!(!snap.has_alt_block(&next_id).expect("has"));
+    assert!(
+        snap.has_alt_block(&child_id).expect("has"),
+        "its child stays"
+    );
+    let chains = snap.alternate_chains().expect("chains");
+    assert_eq!(chains.len(), 1);
+    assert_eq!(
+        chains[0].root().hash,
+        next_id,
+        "the child hangs from the main chain"
+    );
+    drop(snap);
     cleanup(&path);
 }
 
@@ -483,8 +764,9 @@ fn a_switch_is_one_transaction_or_none_of_it() {
         let popped = batch.pop()?;
         assert_eq!(popped.height, BlockHeight::from_raw(top));
         batch.insert_alt_block(demoted)?;
-        batch.connect(judge(&view, alt_cand.clone())?, RuleSet::GENESIS)?;
-        batch.remove_alt_block(&alt_top)?;
+        // The connect takes the promoted block's own row (one home per id).
+        let connected = batch.connect(judge(&view, alt_cand.clone())?, RuleSet::GENESIS)?;
+        assert!(connected.left_alt);
         Ok(promoted.attestation_witness().expect("witness").to_vec())
     });
     assert_eq!(
@@ -528,7 +810,6 @@ fn a_switch_is_one_transaction_or_none_of_it() {
             judge(&view, Candidate::new(main_top.clone(), main_txs.clone()))?,
             RuleSet::GENESIS,
         )?;
-        batch.remove_alt_block(&main_top_hash)?;
         // A refusal on a hash never held aborts the whole switch.
         batch.remove_alt_block(&main[0])?;
         Ok(())
@@ -544,7 +825,7 @@ fn a_switch_is_one_transaction_or_none_of_it() {
     let snap = store.begin_read().expect("read");
     assert!(
         snap.has_alt_block(&main_top_hash).expect("has"),
-        "the remove did not land"
+        "the connect's removal did not land"
     );
     assert!(
         !snap.has_alt_block(&alt_top).expect("has"),

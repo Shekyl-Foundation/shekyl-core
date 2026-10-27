@@ -116,7 +116,7 @@ pub const SCHEME_DOMAIN_EMISSION_BACKING: &[u8] = b"shekyl/archival-emission-bac
 pub const SCHEME_DOMAIN_ATTESTATION: &[u8] = b"shekyl/archival-attestation-scheme-v3";
 /// Serve-credit response (surface F).
 pub const SCHEME_DOMAIN_SERVE_CREDIT: &[u8] = b"shekyl/archival-serve-credit-scheme-v1";
-/// A serve receipt, under scheme 3: `P`'s signature over the 112-byte
+/// A serve receipt, under scheme 3: `P`'s signature over the 113-byte
 /// delivery transcript with its **receipt key**
 /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §6). Distinct from
 /// [`SCHEME_DOMAIN_ATTESTATION`], which names the same transcript under the
@@ -419,8 +419,8 @@ impl HybridEd25519MlDsa {
     }
 
     /// Deterministic nested sign for iai benches / KATs. Same nesting as
-    /// [`SignatureScheme::sign`] via [`Self::sign_nested`]; only the PQ half
-    /// uses a fixed seed (stable instruction counts).
+    /// [`SignatureScheme::sign`]; only the PQ half uses a fixed seed (stable
+    /// instruction counts).
     pub fn sign_with_ml_dsa_seed(
         &self,
         secret_key: &HybridSecretKey,

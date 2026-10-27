@@ -461,7 +461,7 @@ async fn restricted_listener_hides_a_transaction_this_node_has_not_broadcast() {
             origin,
             &arc,
             &address,
-            &address,
+            crate::engine::pending::TxDestination::Address(address.clone()),
             amount,
             MINE_BATCH_BLOCKS,
             MAX_MINE_BATCHES,

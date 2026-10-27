@@ -8,10 +8,19 @@
 //! One owner per connector decides, at each wake, which list to draw from
 //! and what the dial is for. This crate is that decision, the state it
 //! reads, and the handshake that holds one channel for the span of the
-//! dial: the fill rule, the wake spacing, the failed-address memory and
+//! dial: the fill rule, the wake spacing, the retries within a test and
 //! the self-connection nonces. The peer lists are `shekyl-peerlist`'s,
 //! and [`shekyl_peerlist::Peerlist::apply`] stays the only writer of gray
 //! and white. The seam drives the channel once the handshake has adopted it.
+//!
+//! Lock order: this crate never calls into the hub while it holds its own
+//! lock. A ban snapshot and a board read are taken first, and the lists
+//! lock is taken after they return. The inbound Tor count is the one read
+//! that holds the table lock across the dialer's lock, the order the hub's
+//! posters already take, so a dial outcome cannot publish a count from
+//! before its row. [`Dialer::session_closed`] does not take the table lock:
+//! the adopt poster calls it while holding that lock, and the mutex is not
+//! re-entrant.
 //!
 //! Placement (Rick, 2026-10-13): a crate of its own over `shekyl-seam` and
 //! `shekyl-peerlist`, which do not depend on each other. The C++ reaches
@@ -23,7 +32,7 @@ pub mod attempts;
 mod bans;
 pub mod candidate;
 pub mod fill;
-pub mod memory;
+pub mod link_tally;
 pub mod nonce;
 pub mod owner;
 pub mod pace;
@@ -31,12 +40,14 @@ pub mod seeds;
 pub mod store;
 
 pub use attempts::Attempts;
-pub use bans::HubBans;
+pub use bans::BanSnapshot;
 pub use candidate::{CandidateFilter, Skip};
-pub use fill::{plan, Census, DialAim, DrawList, FillRule, Plan, IN_FLIGHT_BOUND};
-pub use memory::FailedAddresses;
+pub use fill::{in_flight_bound, plan, Census, DialAim, DrawList, FillRule, Plan};
+pub use link_tally::{TallySink, TorLinkTally};
 pub use nonce::{HandshakeNonce, HandshakeNonceSet, InFlightNonce};
-pub use owner::{session_of, Dialer, Shared, SnapshotSource};
-pub use pace::{next_wake_nanos, WAKE_BASE_NANOS, WAKE_JITTER_NANOS};
+pub use owner::{session_of, Applied, Dialer, Launch, NotReady, Shared, SnapshotSource};
+pub use pace::{
+    attempts_per_test, next_wake_nanos, retry_wait_nanos, WAKE_BASE_NANOS, WAKE_JITTER_NANOS,
+};
 pub use seeds::{seeds, SeedNetwork};
 pub use store::{AddressStore, LoadError, STORE_INTERVAL_NANOS};

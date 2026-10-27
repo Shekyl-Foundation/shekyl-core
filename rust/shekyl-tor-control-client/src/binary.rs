@@ -301,9 +301,15 @@ pub enum TorBinaryError {
         /// Why, as recorded in the pin file.
         reason: &'static str,
     },
-    /// No `tor` was found via the override, the `tor/` directory beside the
-    /// executable, or the system directory under `/opt/shekyl`.
-    NotFound,
+    /// No `tor` was found at any candidate discovery looked at. `searched` is
+    /// that list, in order, composed by the same function discovery uses, so
+    /// the message names this platform's own places and no others: on
+    /// Windows only the `tor/` directory beside the executable, elsewhere also
+    /// the version-exact system directory.
+    NotFound {
+        /// The candidate paths discovery tried, in order.
+        searched: Vec<PathBuf>,
+    },
     /// The candidate, or an entry in its directory, exists but is not a
     /// regular file (a directory, a symlink, a FIFO, a device) — refused
     /// before it is opened, so a FIFO cannot hang discovery.
@@ -313,7 +319,7 @@ pub enum TorBinaryError {
     /// check; other platforms surface the spawn failure instead.)
     NotExecutable(PathBuf),
     /// The candidate is in a pinned directory but is not the pinned
-    /// executable (an override pointed at one of the libraries).
+    /// executable (a configured `tor-file` naming one of the libraries).
     NotTheExecutable(PathBuf),
     /// The candidate could not be read; carries the [`std::io::ErrorKind`] so
     /// permission-denied, vanished, and I/O-error are distinguishable.
@@ -324,10 +330,11 @@ pub enum TorBinaryError {
         kind: std::io::ErrorKind,
     },
     /// tor's directory holds something the pin does not list. **The common
-    /// cause is benign**: the override points at a full extracted Expert
-    /// Bundle, which carries a `pluggable_transports` directory Shekyl does
-    /// not ship. It is refused all the same, because the loader is pointed at
-    /// this directory and will load from it what it finds there.
+    /// cause is benign**: a configured `tor-file` names the `tor` of a full
+    /// extracted Expert Bundle, which carries a `pluggable_transports`
+    /// directory Shekyl does not ship. It is refused all the same, because the
+    /// loader is pointed at this directory and will load from it what it finds
+    /// there.
     UnexpectedEntry {
         /// tor's directory.
         dir: PathBuf,
@@ -380,12 +387,25 @@ impl std::fmt::Display for TorBinaryError {
                 "Shekyl does not manage a tor on this platform ({reason}); run your own tor \
                  and attach it"
             ),
-            Self::NotFound => write!(
+            Self::NotFound { searched } if searched.is_empty() => write!(
                 f,
-                "no tor binary found (install the pinned bundle in the tor/ directory beside \
-                 the executable or under /opt/shekyl/<version>-<target>/, or set \
-                 SHEKYL_TOR_BINARY to the tor inside such a directory)"
+                "no tor binary found, and there was nowhere to look (the running \
+                 executable's directory is unknown); name the tor with tor-file"
             ),
+            Self::NotFound { searched } => {
+                write!(f, "no tor binary found at ")?;
+                for (i, path) in searched.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, " or ")?;
+                    }
+                    write!(f, "{}", path.display())?;
+                }
+                write!(
+                    f,
+                    "; install the pinned bundle there, or name a tor that passes its \
+                     check with tor-file"
+                )
+            }
             Self::NotAFile(p) => {
                 write!(f, "not a regular file: {}", p.display())
             }
@@ -451,12 +471,10 @@ impl std::error::Error for TorBinaryError {}
 /// Discover a `tor` binary and verify its directory against the pin,
 /// returning a [`VerifiedTorBinary`] only if it passes.
 ///
-/// Exactly **one** candidate is chosen, in this order, and it is the one verified:
-///   1. the `SHEKYL_TOR_BINARY` env override (an operator, packager or
-///      developer naming a specific binary — still gated in full: the override
-///      changes *where* we look, never *whether* we verify, so it must name
-///      the `tor` inside a directory holding exactly the pinned files; a
-///      set-but-empty value is treated as unset),
+/// Exactly **one** candidate is chosen, in this order, and it is the one
+/// verified (an operator who names a binary does so with the daemon's
+/// `tor-file` row, through [`discover_and_verify_at`]; nothing is read
+/// from the environment, `INPUT_GRAMMAR.md` IG-Q41):
 ///   2. `tor/tor` next to the running executable (the layout of an unpacked
 ///      release archive — note `std::env::current_exe` is best-effort by its
 ///      own docs, and if it errors this tier is skipped),
@@ -487,57 +505,54 @@ pub fn discover_and_verify() -> Result<VerifiedTorBinary, TorBinaryError> {
         .ok()
         .and_then(|exe| exe.parent().map(Path::to_path_buf));
     let well_known = well_known_candidate(&pin);
-    let path = candidate_from(
-        std::env::var_os("SHEKYL_TOR_BINARY"),
-        exe_dir.as_deref(),
-        well_known.as_deref(),
-        pin.executable,
-    )
-    .ok_or(TorBinaryError::NotFound)?;
+    let searched = candidates(exe_dir.as_deref(), well_known.as_deref(), pin.executable);
+    let path = first_present(&searched).ok_or(TorBinaryError::NotFound { searched })?;
     verify_candidate(&path, &pin)
 }
 
 /// Verify a **caller-supplied** tor path (e.g. from a settings file)
 /// against the pin — the same gate as [`discover_and_verify`], minus discovery.
-/// This is the sanctioned route for configuration: never plumb a config value
-/// through the `SHEKYL_TOR_BINARY` env var (process-global, race-prone).
+/// This is the route for configuration: the daemon's `tor-file` row and the
+/// wallet's setting arrive here, never through the process environment.
 pub fn discover_and_verify_at(path: &Path) -> Result<VerifiedTorBinary, TorBinaryError> {
     let pin = current_pin()?;
     verify_candidate(path, &pin)
 }
 
 /// Select the single `tor` candidate from explicit inputs — the pure core of
-/// discovery, separated from the process globals (env, `current_exe`) so the
-/// precedence rules are unit-testable without racing the parallel test harness
-/// over `std::env`.
+/// discovery, separated from `current_exe` so the precedence rules are
+/// unit-testable.
 ///
-/// Precedence: a non-empty override wins unconditionally (an explicit choice is
-/// never bypassed by a fall-through — even if the file does not exist, so a typo
-/// surfaces as *its* error, not a silent fallback); else `tor/<executable>`
-/// beside the running executable if present; else the version-exact system
-/// candidate if present. Presence is `is_file()` in both discovered tiers, so
+/// Precedence: `tor/<executable>` beside the running executable if present;
+/// else the version-exact system candidate if present. A configured path
+/// (`tor-file`) does not come here: it goes to [`discover_and_verify_at`],
+/// which checks that path and no other, so a typo surfaces as *its* error,
+/// not a silent fallback. Presence is `is_file()` in both discovered tiers, so
 /// a staged non-executable file surfaces as *its* `NotExecutable` error rather
 /// than as "not found".
+#[cfg(test)]
 fn candidate_from(
-    override_var: Option<OsString>,
     exe_dir: Option<&Path>,
     well_known: Option<&Path>,
     executable: &str,
 ) -> Option<PathBuf> {
-    if let Some(p) = override_var {
-        // A set-but-empty override means unset (`SHEKYL_TOR_BINARY= wallet`, an
-        // unexpanded variable in a wrapper script) — fall through to discovery
-        // rather than "verifying" the empty path.
-        if !p.is_empty() {
-            return Some(PathBuf::from(p));
-        }
-    }
-    if let Some(beside) = exe_dir.map(|dir| dir.join(BESIDE_TOR_DIR).join(executable)) {
-        if beside.is_file() {
-            return Some(beside);
-        }
-    }
-    well_known.filter(|wk| wk.is_file()).map(Path::to_path_buf)
+    first_present(&candidates(exe_dir, well_known, executable))
+}
+
+fn first_present(candidates: &[PathBuf]) -> Option<PathBuf> {
+    candidates.iter().find(|path| path.is_file()).cloned()
+}
+
+/// The discovered tiers, in precedence order: `tor/<executable>` beside the
+/// running executable when its directory is known, then the system candidate
+/// where the platform has one. Discovery tries these and a `NotFound` names
+/// them, so the two cannot disagree about where a tor may be.
+fn candidates(exe_dir: Option<&Path>, well_known: Option<&Path>, executable: &str) -> Vec<PathBuf> {
+    exe_dir
+        .map(|dir| dir.join(BESIDE_TOR_DIR).join(executable))
+        .into_iter()
+        .chain(well_known.map(Path::to_path_buf))
+        .collect()
 }
 
 /// Does the path carry any execute bit? (Unix). A file with none would pass

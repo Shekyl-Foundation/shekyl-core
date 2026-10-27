@@ -44,12 +44,11 @@ port — it is not part of this Phase 1 transport deletion.
 | `src/rpc/core_rpc_ffi.h` | C API header for the FFI facade |
 | `src/rpc/core_rpc_ffi.cpp` | Dispatch tables mapping URIs/methods to `on_*` handlers |
 | `rust/shekyl-daemon-rpc/` | Axum crate: server, routes, handlers, types |
-| `rust/shekyl-daemon-rpc/src/ffi_exports.rs` | `shekyl_daemon_rpc_start/stop` FFI exports (daemon-only) |
+| `rust/shekyl-daemon-rpc/src/ffi_exports.rs` | `shekyl_daemon_rpc_start(core)` and `shekyl_daemon_rpc_stop()`: the one start, reading the RPC section the Rust `main()` recorded (`DAEMON_CONFIG_CUTOVER.md` §2.3) |
 | `rust/shekyl-daemon-rpc/src/ctl_client.rs` | `shekyl_daemon_ctl_post/free` — the `shekyld <command>` control client's transport (daemon-only) |
 | `src/daemon/rpc_client.h` | `tools::t_rpc_client`: request/response framing for the control client over that export |
 | `src/shekyl/shekyl_ffi.h` | C++ declarations for Rust FFI functions |
-| `src/daemon/daemon.cpp` | Daemon lifecycle: always starts Axum on the configured RPC port |
-| `src/rpc/rpc_args.cpp` | Shared CLI; daemon registers bind/CORS only (`include_listener_tls_auth=false`) |
+| `src/daemon/daemon.cpp` | The C++ remnant's `run`: calls the one RPC start on the core; the listeners are the RPC section's |
 
 ## Endpoint Coverage
 
@@ -62,7 +61,7 @@ port — it is not part of this Phase 1 transport deletion.
   dispatch tables. `POST /submit_transaction` was the first, served by the
   Rust admission engine (`src/submit/`,
   `design/DAEMON_SUBMIT_VERDICT.md` §2–§3); the KV cutover
-  (`design/DAEMON_RPC_KV_CUTOVER.md`) has been moving the read methods over
+  (`completed/DAEMON_RPC_KV_CUTOVER.md`) has been moving the read methods over
   since, and the table under **RPC surface reachability** below is the list.
   This bullet used to say "1 native Rust endpoint", which stopped being true
   at RK-1 and stayed on the page for six slices — a count is a claim that
@@ -304,7 +303,7 @@ A method is **live** iff it has an Axum route (or `/json_rpc` → FFI method)
 | `get_block_header_by_height` (+ `getblockheaderbyheight`) | `/json_rpc` | **native Rust** (RK-3: over `shekyl_rpc_block_header_at`) | wallet (`shekyl-rpc-client`), python-rpc, stressnet | migrated 2026-08-23 |
 | `get_block` (+ `getblock`) | `/json_rpc` | **native Rust** (RK-3b: over `shekyl_rpc_block_at`) | console (`print_block_by_hash` / `_by_height`, both migrated with it), python-rpc, stressnet | migrated 2026-08-24 |
 | `/get_transactions` (+ `/gettransactions`), `/is_key_image_spent` | yes | **native Rust** (RK-4c: over `shekyl_rpc_transactions` / `shekyl_rpc_key_images_spent`) | wallet, console (`print_tx`, `is_key_image_spent`, both migrated with it), python-rpc | migrated 2026-08-28 |
-| `sync_info`, `get_connections` | `/json_rpc` | **native Rust** (RK-5a: over `shekyl_rpc_sync_spans` / `shekyl_rpc_connections`) — **admin-only**, refused on the restricted listener. `height` and `support_flags` are JSON null when the claim has not landed. A dial on the io pool can leave them unknown until the dialer moves the dial off that pool | console (`sync_info`, `print_cn`), python-rpc | migrated 2026-08-31 |
+| `sync_info`, `get_connections` | `/json_rpc` | **native Rust** (RK-5a: over `shekyl_rpc_sync_spans` / `shekyl_rpc_connections`) — **admin-only**, refused on the restricted listener. `height` is JSON null when the claim has not landed (rows carry no `support_flags`: the P2P word is deleted, 2026-10-19). A dial on the io pool can leave them unknown until the dialer moves the dial off that pool | console (`sync_info`, `print_cn`), python-rpc | migrated 2026-08-31 |
 | `/get_net_stats`, `/get_peer_list` | yes | **native Rust** (RK-5a: over `shekyl_rpc_net_stats` / `shekyl_rpc_peer_list`; since 3.55 the peer list is exported by `shekyl-ffi` from the Rust peer lists and its entries carry no `last_seen`) — **admin-only**, not registered on the restricted listener | console (`print_net_stats`, `print_pl`, `print_pl_stats`), fleet scripts | migrated 2026-08-31 |
 | JSON REST (info, txs, pool, …) | yes | yes | wallets / CLI | keep (RK-2…RK-9) |
 | `/get_o_indexes.bin` | yes | **native Rust** (RK-4a: over `shekyl_rpc_tx_output_indices`, typed `.bin` map in `shekyl-rpc-types::bin_commands`) | wallet (`shekyl-rpc-client`) | migrated 2026-08-24 |
@@ -321,7 +320,7 @@ A method is **live** iff it has an Axum route (or `/json_rpc` → FFI method)
 
 ## Phase 2 (KV cutover)
 
-Specified in [`design/DAEMON_RPC_KV_CUTOVER.md`](design/DAEMON_RPC_KV_CUTOVER.md)
+Specified in [`design/DAEMON_RPC_KV_CUTOVER.md`](completed/DAEMON_RPC_KV_CUTOVER.md)
 (family `RK-`). The Phase-1 sentence "replace epee portable-storage in
 `core_rpc_ffi.cpp` with a Rust-native codec" was re-scoped there: a Rust
 codec cannot serialize C++ structs without a `#[repr(C)]` façade of every

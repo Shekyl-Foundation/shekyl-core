@@ -73,9 +73,13 @@
 use crate::block::Candidate;
 use crate::census::{CenRow, PolicyRow, RowStatus};
 use crate::fault::FormAttempt;
-use crate::harness::fixture::{candidate_on, recorded, repriced, root};
-use crate::harness::{assert_refused, expected_seed, judged, Faulted, MockChain, MockSubstrate};
-use crate::rule_set::RuleSet;
+use crate::harness::expected_references;
+use crate::harness::fixture::{candidate_on, paying_its_floor, recorded, repriced, root};
+use crate::harness::{
+    assert_refused, expected_seed, expected_target, judged, Faulted, MockChain, MockSubstrate,
+};
+use crate::policy::policy_form;
+use crate::rule_set::{AdmissionPolicy, RuleSet};
 use crate::trust::Trust;
 use crate::validate::{form, tx_form, validate};
 use crate::verdict::{ChainValid, Locus, TxSlot, Verdict};
@@ -433,6 +437,16 @@ const SITES: &[Site] = &[
         CenRow::H23,
         "exact consumption: a blob that does not parse cleanly is not a transaction — H23's byte face, by construction",
     ),
+    read_rule(
+        "pruned segment {} exceeds {MAX_TX_SIZE}",
+        CenRow::H1,
+        "the size cap before the pruned parse; the full blob's cap is the arm above",
+    ),
+    read_rule(
+        "trailing byte(s) after the pruned segment",
+        CenRow::H23,
+        "exact consumption of the pruned segment: bytes after the base are not the segment",
+    ),
     // -- `validate_context_free_pruned` --------------------------------------
     rule(
         "transaction has no inputs",
@@ -679,11 +693,14 @@ fn one_block() -> MockChain {
 
 /// Both stages against `chain`; the mock never faults.
 fn judge_on(chain: &MockChain, candidate: Candidate) -> Verdict<()> {
+    let references = expected_references(chain, &candidate);
     let formed = match form(
         candidate,
         &RuleSet::GENESIS,
         &MockSubstrate::default(),
         expected_seed(chain),
+        expected_target(chain, &RuleSet::GENESIS),
+        &references,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,
@@ -765,13 +782,26 @@ fn hold_to_registry(row: CenRow, verdict: Verdict<()>, tx: &Transaction, locus: 
             // Nothing to hold to yet. When the row flips, the arm above runs
             // and demands the refusal — no pin to update.
         }
-        RowStatus::HeldByCxx => {
-            panic!("{row} is held by the C++; a wire arm keyed to it is a classification error")
-        }
         RowStatus::HeldByStore => {
             panic!("{row} is held by the store; a wire arm keyed to it is a classification error")
         }
     }
+}
+
+/// A policy arm's trip is refused by `policy_form` on the arm's own row —
+/// the pool's side of the twin's divergence (DRS-E5 PR-b b1). The trip pays
+/// its own requirement at a floor of one ([`paying_its_floor`]), so CEN-M3
+/// does not answer for a later row in census order.
+fn hold_to_policy(row: PolicyRow, tx: &Transaction) {
+    const FLOORS: [u64; 1] = [1];
+    let paid = paying_its_floor(tx, FLOORS[0]);
+    assert_eq!(
+        policy_form(&paid, &AdmissionPolicy::GENESIS, &FLOORS)
+            .err()
+            .map(|refused| refused.rule),
+        Some(row),
+        "a policy arm's trip is refused by policy_form on its row"
+    );
 }
 
 fn run(site: &Site) {
@@ -780,6 +810,9 @@ fn run(site: &Site) {
         Trip::Lone(build, expect) => {
             let tx = build();
             twin_refuses_on(site, &tx);
+            if let Arm::Policy(row) = site.arm {
+                hold_to_policy(row, &tx);
+            }
             let verdict = tx_form(&tx, TxSlot::Lone, &RuleSet::GENESIS).map(|_| ());
             match (site.arm, expect) {
                 (Arm::Rule(row), Expect::FromRegistry) => {
@@ -861,13 +894,14 @@ fn every_refusal_arm_of_the_twin_is_classified() {
     let invariant = count(|a| matches!(a, Arm::Invariant));
     assert_eq!(
         (parse, rule, policy, invariant),
-        (17, 40, 1, 5),
+        (17, 42, 1, 5),
         "the four counts (parse, rule, policy, invariant) moved — re-derive them, do not re-pin \
          (records-was: (15, 38, 1, 5) over the 59 `Err(` sites, before the key was widened; \
          (16, 40, 1, 5) over 62 until 2026-10-12, when the retired keyless JoinMarket byte \
-         gained its parse refusal)"
+         gained its parse refusal; (17, 40, 1, 5) over 63 until the pruned-segment reader; \
+         (17, 44, 1, 5) over 67 while the pruned reader repeated the version and ct-type arms)"
     );
-    assert_eq!(parse + rule + policy + invariant, 63);
+    assert_eq!(parse + rule + policy + invariant, 65);
 }
 
 /// Shape: a trip is a rule or a policy arm's; a rule arm without one is a

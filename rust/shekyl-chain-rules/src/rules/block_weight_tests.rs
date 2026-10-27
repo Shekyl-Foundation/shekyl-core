@@ -10,14 +10,16 @@
 use super::*;
 use crate::census::CenRow;
 use crate::fault::{FormAttempt, PerHeightRecord};
+use crate::harness::expected_references;
 use crate::harness::fixture::{candidate_on, chain_of, recorded, spendable_chain};
 use crate::harness::{
-    defined, expected_seed, judged, Faulted, FaultingView, MockChain, MockSubstrate, WithheldRead,
+    defined, expected_seed, expected_target, judged, Faulted, FaultingView, MockChain,
+    MockSubstrate, WithheldRead,
 };
 use crate::rule_set::RuleSet;
 use crate::trust::Trust;
 use crate::validate::{form, validate};
-use shekyl_economics::BLOCK_WEIGHT_SURGE_FACTOR;
+use shekyl_economics::{BLOCK_WEIGHT_SURGE_FACTOR, FULL_REWARD_ZONE};
 use shekyl_types::CurveTreeRoot;
 
 const ZONE: u64 = FULL_REWARD_ZONE;
@@ -33,6 +35,10 @@ fn rw(weight: u64, long_term: u64) -> RecordedWeights {
 /// `n` rows all recording `(weight, long_term)`.
 fn uniform(n: usize, weight: u64, long_term: u64) -> Vec<RecordedWeights> {
     vec![rw(weight, long_term); n]
+}
+
+fn over(window: &[RecordedWeights]) -> EffectiveMedian {
+    medians_over(window, &shekyl_economics::EconomicParams::default())
 }
 
 fn ltem(m: &EffectiveMedian) -> u64 {
@@ -132,7 +138,7 @@ fn the_selection_median_matches_the_sorted_reference() {
 
 #[test]
 fn an_empty_window_yields_the_zone_twice() {
-    let m = medians_over(&[]);
+    let m = over(&[]);
     assert_eq!(ltem(&m), ZONE);
     assert_eq!(eff(&m), ZONE);
     assert_eq!(m.limit().to_raw(), 2 * ZONE);
@@ -142,9 +148,27 @@ fn an_empty_window_yields_the_zone_twice() {
 /// read as the zone; one over reads as itself.
 #[test]
 fn the_long_term_median_is_floored_at_the_zone() {
-    assert_eq!(ltem(&medians_over(&uniform(5, 1, ZONE))), ZONE);
-    assert_eq!(ltem(&medians_over(&uniform(5, 1, ZONE - 1))), ZONE);
-    assert_eq!(ltem(&medians_over(&uniform(5, 1, ZONE + 1))), ZONE + 1);
+    assert_eq!(ltem(&over(&uniform(5, 1, ZONE))), ZONE);
+    assert_eq!(ltem(&over(&uniform(5, 1, ZONE - 1))), ZONE);
+    assert_eq!(ltem(&over(&uniform(5, 1, ZONE + 1))), ZONE + 1);
+}
+
+/// The floor is the parameter set's zone. A set with another zone floors
+/// there; the shipped set still floors at [`ZONE`].
+#[test]
+fn medians_from_floors_at_the_parameter_sets_zone() {
+    let mut params = shekyl_economics::EconomicParams::default();
+    let other = ZONE.saturating_mul(3);
+    params.full_reward_zone = other;
+    let floored = medians_from(0, 0, &params);
+    assert_eq!(ltem(&floored), other);
+    assert_eq!(eff(&floored), other);
+    let shipped = medians_from(
+        ZONE - 1,
+        ZONE - 1,
+        &shekyl_economics::EconomicParams::default(),
+    );
+    assert_eq!(ltem(&shipped), ZONE);
 }
 
 /// The effective median's upper clamp at `S · LTEM`: exactly at the
@@ -152,11 +176,11 @@ fn the_long_term_median_is_floored_at_the_zone() {
 #[test]
 fn the_effective_median_is_clamped_at_s_times_the_long_term_median() {
     let ltem_value = ZONE + 1_000;
-    let at_ceiling = medians_over(&uniform(5, S * ltem_value, ltem_value));
+    let at_ceiling = over(&uniform(5, S * ltem_value, ltem_value));
     assert_eq!(eff(&at_ceiling), S * ltem_value);
-    let one_over = medians_over(&uniform(5, S * ltem_value + 1, ltem_value));
+    let one_over = over(&uniform(5, S * ltem_value + 1, ltem_value));
     assert_eq!(eff(&one_over), S * ltem_value);
-    let one_under = medians_over(&uniform(5, S * ltem_value - 1, ltem_value));
+    let one_under = over(&uniform(5, S * ltem_value - 1, ltem_value));
     assert_eq!(eff(&one_under), S * ltem_value - 1);
 }
 
@@ -165,13 +189,10 @@ fn the_effective_median_is_clamped_at_s_times_the_long_term_median() {
 #[test]
 fn the_effective_median_is_floored_at_the_long_term_median() {
     let ltem_value = ZONE + 1_000;
-    assert_eq!(eff(&medians_over(&uniform(5, 1, ltem_value))), ltem_value);
+    assert_eq!(eff(&over(&uniform(5, 1, ltem_value))), ltem_value);
+    assert_eq!(eff(&over(&uniform(5, ltem_value, ltem_value))), ltem_value);
     assert_eq!(
-        eff(&medians_over(&uniform(5, ltem_value, ltem_value))),
-        ltem_value
-    );
-    assert_eq!(
-        eff(&medians_over(&uniform(5, ltem_value + 1, ltem_value))),
+        eff(&over(&uniform(5, ltem_value + 1, ltem_value))),
         ltem_value + 1
     );
 }
@@ -181,7 +202,7 @@ fn the_effective_median_is_floored_at_the_long_term_median() {
 /// holds it. Held so the redundancy stays a fact and not an assumption.
 #[test]
 fn the_effective_median_never_reads_below_the_zone() {
-    let m = medians_over(&uniform(5, 1, 1));
+    let m = over(&uniform(5, 1, 1));
     assert_eq!(ltem(&m), ZONE);
     assert_eq!(eff(&m), ZONE);
 }
@@ -207,7 +228,7 @@ fn the_short_term_median_reads_exactly_the_last_short_window_rows() {
     let mut window = uniform(short * 3, u64::MAX / 2, ltem_value);
     window.extend(uniform(short / 2, ltem_value + 5, ltem_value));
     window.extend(uniform(short / 2, ltem_value + 50, ltem_value));
-    assert_eq!(eff(&medians_over(&window)), ltem_value + 27);
+    assert_eq!(eff(&over(&window)), ltem_value + 27);
 }
 
 #[test]
@@ -308,11 +329,14 @@ fn at_genesis_both_medians_are_the_zone() {
 // ---------------------------------------------------------------------------
 
 fn validated_on(chain: &MockChain, candidate: Candidate) -> Weights {
+    let references = expected_references(chain, &candidate);
     let formed = match form(
         candidate,
         &RuleSet::GENESIS,
         &MockSubstrate::default(),
         expected_seed(chain),
+        expected_target(chain, &RuleSet::GENESIS),
+        &references,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,
@@ -400,4 +424,99 @@ fn a_withheld_weights_window_below_the_tip_is_corrupt_not_a_verdict() {
             record: PerHeightRecord::Block,
         })) if at == BlockHeight::from_raw(6)
     ));
+}
+
+// ---------------------------------------------------------------------------
+// The trajectory: G6/G6b over the generator's three schedules
+// ---------------------------------------------------------------------------
+
+/// The long-term weight follows `tests/block_weight/block_weight.py`'s
+/// trajectory, block by block, over its three schedules: 10 000 maximal
+/// blocks (twice the effective median), 45 000 pseudorandom ones and 5 000
+/// of 90 bytes. The generator's output is frozen in
+/// `tests/vectors/block_weight_trajectory/` (its manifest names the
+/// invocation); the generator stays the generator.
+///
+/// Each block is priced as the validator prices it: [`medians_over`] the
+/// window below it (CEN-G6, and G6b's clamp), then [`long_term_weight`],
+/// the clamp [`Weights::derive`] applies to the block's weight. The window
+/// is fed what this test derived, not the vector's column, so one wrong
+/// step carries forward and the first failure names the step. The windows
+/// are the generator's — the shipped short window of 100, and a long window
+/// of 5 000 where the shipped one is 100 000 — which the rule takes from its
+/// caller ([`medians_over`] over the slice it is handed).
+///
+/// The vector's `EMBW` column is the generator's effective median, which it
+/// clamps below at the zone; the rule clamps at the long-term effective
+/// median, as the C++ does. So the rule's is `max(EMBW, LTEM)` at every
+/// step, and equal where the short median is at or above `LTEM` — the
+/// relation is asserted, which is why `compare.py` never compared that
+/// column. Supersedes the C++ `tests/block_weight` `compare.py` check.
+/// Red edit: perturb one step of the vector's `LTBW` column.
+#[test]
+fn the_long_term_weight_follows_the_generators_trajectory() {
+    const LONG_WINDOW: usize = 5_000;
+    const SCHEDULE: [usize; 3] = [10_000, 45_000, 5_000];
+    assert_eq!(
+        BLOCK_WEIGHT_SHORT_TERM_WINDOW, 100,
+        "the generator's short window is the shipped one"
+    );
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/vectors/block_weight_trajectory/trajectory.txt"
+    );
+    let text = std::fs::read_to_string(path).expect("the frozen trajectory");
+    let rows: Vec<[u64; 4]> = text
+        .lines()
+        .map(|line| {
+            let mut fields =
+                line.split(", ")
+                    .zip(["H ", "BW ", "EMBW ", "LTBW "])
+                    .map(|(field, tag)| {
+                        field
+                            .strip_prefix(tag)
+                            .and_then(|n| n.parse::<u64>().ok())
+                            .unwrap_or_else(|| panic!("an unparseable line: {line}"))
+                    });
+            core::array::from_fn(|_| fields.next().expect("four fields"))
+        })
+        .collect();
+    assert_eq!(
+        rows.len(),
+        SCHEDULE.iter().sum::<usize>(),
+        "the whole schedule"
+    );
+
+    let params = crate::rules::miner::economics();
+    let mut rows = rows.iter().enumerate();
+    for (run, blocks) in SCHEDULE.into_iter().enumerate() {
+        let mut window: std::collections::VecDeque<RecordedWeights> =
+            std::iter::repeat_n(rw(ZONE, ZONE), LONG_WINDOW).collect();
+        for block in 0..blocks {
+            let (line, &[height, bw, embw, ltbw]) = rows.next().expect("the schedule's rows");
+            let at = format!("line {} (run {run}, block {block})", line + 1);
+            assert_eq!(
+                height,
+                u64::try_from(block).expect("fits"),
+                "{at}: the height"
+            );
+            let medians = medians_over(window.make_contiguous(), params);
+            let ltem = medians.long_term_effective_median.to_raw();
+            let effective = medians.effective_median.to_raw();
+            assert_eq!(effective, embw.max(ltem), "{at}: the effective median");
+            assert!(
+                effective >= ZONE,
+                "{at}: the effective median is under the zone"
+            );
+            match run {
+                0 => assert_eq!(bw, 2 * effective, "{at}: the maximal block is the limit"),
+                2 => assert_eq!(bw, 90, "{at}: the minimal schedule"),
+                _ => {}
+            }
+            let long_term = long_term_weight(ltem, bw);
+            assert_eq!(long_term, ltbw, "{at}: the long-term weight");
+            window.pop_front();
+            window.push_back(rw(bw, long_term));
+        }
+    }
 }

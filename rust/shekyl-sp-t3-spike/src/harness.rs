@@ -106,8 +106,8 @@ use shekyl_tor_control_client::control::onion::{
 };
 use shekyl_tor_control_client::control::{
     ask_timed, parse_socks_listeners, wait_until_ready, AskError, BootstrapReadiness, Command,
-    ControlReply, EventSink, ManagedTor, Signal, SocksPort, TorControlClient,
-    TorControlClientConfig, TorLaunch, WaitReadyError,
+    DiskWrites, EventReceiver, EventSink, ManagedTor, Signal, SocksPort, SocksTimeout,
+    TorControlClient, TorControlClientConfig, TorLaunch, WaitReadyError,
 };
 use shekyl_types::PSlot;
 use zeroize::Zeroizing;
@@ -258,7 +258,9 @@ impl ManagedInstance {
                 tor_binary: verified,
                 data_dir,
                 socks_port: SocksPort::Auto,
+                socks_timeout: SocksTimeout::TorDefault,
                 disable_network: false,
+                disk_writes: DiskWrites::Deferred,
                 exit_observer: None,
             }),
             events,
@@ -484,7 +486,7 @@ pub struct Apparatus {
     newnym_unanswered: AtomicU64,
     /// The client tor's async control events, until a caller takes them
     /// ([`Self::observe_client`]).
-    client_events: Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<ControlReply>>>,
+    client_events: Mutex<Option<EventReceiver>>,
     /// The published personas, in slot order.
     pub personas: Vec<Persona>,
     /// The served objects, framed once and handed to every persona — and
@@ -646,14 +648,13 @@ impl Apparatus {
         let mut launches = tokio::task::JoinSet::new();
         // The client tor's async control events. Nothing arrives until a
         // caller subscribes with [`Apparatus::observe_client`].
-        let (client_events_tx, client_events_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (client_sink, client_events_rx) = EventSink::bounded();
         {
             let bin = Arc::clone(&tor_binary);
             let dir = data_dir.join("client-tor");
-            launches.spawn(async move {
-                let sink = EventSink::new(client_events_tx);
-                (None, ManagedInstance::launch(&bin, dir, sink).await)
-            });
+            launches.spawn(
+                async move { (None, ManagedInstance::launch(&bin, dir, client_sink).await) },
+            );
         }
         for slot in 0..persona_count {
             let bin = Arc::clone(&tor_binary);
@@ -803,10 +804,7 @@ impl Apparatus {
     /// control port fails or answers anything but `250`. On a failed
     /// subscription the events are not taken, so the call can be made
     /// again.
-    pub async fn observe_client(
-        &self,
-        events: &[&str],
-    ) -> Result<tokio::sync::mpsc::UnboundedReceiver<ControlReply>, ApparatusError> {
+    pub async fn observe_client(&self, events: &[&str]) -> Result<EventReceiver, ApparatusError> {
         let rx = self
             .client_events
             .lock()

@@ -71,7 +71,7 @@
 #   4  Blake2b DST                    (first Blake2b512::update as a domain; sal_dst-padded tags)
 #   5  keccak / schnorr challenge DST (schnorr sign/verify domain, keccak256(...) hash-to-point/scalar prefix)
 #   6  SHA3-256 direct-prefix         (micro-bucket: a domain prefix fed straight to Sha3_256, outside 1..5)
-#   7  Noise prologue label           (micro-bucket: a label's own bytes mixed into a Noise handshake hash as prologue)
+#   7  Noise BLAKE2s label            (micro-bucket: a label's own bytes hashed by the BLAKE2s of a Noise handshake or record layer: the prologue mixed into the handshake hash, the RPC channel's mac1 key, BLAKE2s-256(label || daemon bundle), its busy reply, keyed BLAKE2s-128(mac1 key; label || mac1), and the record layer's header-protection key, HKDF(record key, label))
 #
 # SUB-LABELS ARE OUT OF SCOPE (documented, not rowed): FROST transcript field
 # labels appended via append_message (b"O_tilde", b"r_o", ...), the schnorr
@@ -84,8 +84,11 @@
 # cryptographic domain separation for our purposes: RandomX Argon salt
 # (RANDOMX_ARGON_SALT, RandomX upstream), Tor SAFECOOKIE HMAC keys, the .onion
 # checksum prefix, file/wire magics (b"SWSP", b"SHEKYLWT/WS", b"SSP1"
-# superscalar-program wire magic, portable_storage header). Rowed at the
-# bottom with mech=x so the exclusion is auditable. (The C++ epee macros
+# superscalar-program wire magic, portable_storage header), and the two Noise
+# protocol names (the RPC channel's and the P2P handshake's: mixed into a
+# handshake hash, but standard pattern names, not Shekyl domain strings).
+# Rowed at the bottom with mech=x so the exclusion is auditable; the gate's
+# third tripwire rejects a Noise protocol-name constant with no x row. (The C++ epee macros
 # PORTABLE_STORAGE_SIGNATUREA/B in contrib/epee are the same 8-byte signature
 # as the first 8 bytes of `shekyl-portable-storage::HEADER`; the registry is
 # a Rust-workspace census, so only the Rust defining site is rowed.)
@@ -109,12 +112,15 @@
 1	shekyl/archival-settlement-select-v1	rust/shekyl-archival-retention/src/settlement_select.rs	SETTLEMENT_SELECT_CUSTOMIZATION	shekyl-live		2026-10-08: which three of a pair's issued draws count at settlement — cSHAKE256(label, beacon ‖ persona ‖ shard_le8 ‖ epoch_le8 ‖ k_le4 ‖ attempt_le4)[..8], a partial Fisher–Yates (ARCHIVAL_SERVE_CREDIT_SPEC.md §9.3)
 1	shekyl/archival-issued-index-v1	rust/shekyl-archival-retention/src/settlement_select.rs	ISSUED_INDEX_CUSTOMIZATION	shekyl-live		2026-10-08: one issued draw's term in its epoch's running digest — cSHAKE256(label, persona ‖ shard_le8 ‖ epoch_le8 ‖ h_le8 ‖ j_le4)[..32], summed modulo 2^256 (ARCHIVAL_SERVE_CREDIT_SPEC.md §10)
 1	shekyl/archival-draw-v1	rust/shekyl-archival-retention/src/secret_draw.rs	DRAW_CUSTOMIZATION	shekyl-live		2026-10-10 (Slice C): selection stream — cSHAKE256(label, seed ‖ block_hash(h) ‖ j_le4 ‖ attempt_le4)[..32], rejection sampling over the static set (ARCHIVAL_SERVE_CREDIT_SPEC.md §4.4)
+1	shekyl/archival-support-draw-v1	rust/shekyl-archival-retention/src/support_draw.rs	SUPPORT_DRAW_CUSTOMIZATION	shekyl-live		2026-10-22 (SO-D12 support stream): one support draw's shard — cSHAKE256(label, seed ‖ block_hash ‖ persona ‖ j_le4 ‖ final_count_le8 ‖ attempt_le4)[..32], rejection sampling over 0..final_count (ARCHIVAL_SUPPORT_DRAW.md §2)
+1	shekyl/archival-support-challenge-nonce-v1	rust/shekyl-archival-retention/src/support_draw.rs	SUPPORT_CHALLENGE_NONCE_CUSTOMIZATION	shekyl-live		2026-10-22 (SO-D12 support stream): a support challenge's nonce — cSHAKE256(label, seed ‖ block_hash ‖ j_le4 ‖ attempt[1])[..32], a different label from archival-challenge-nonce-v1 (ARCHIVAL_SUPPORT_DRAW.md §5)
 1	shekyl/archival-draw-commit-v1	rust/shekyl-archival-retention/src/secret_draw.rs	DRAW_COMMIT_CUSTOMIZATION	shekyl-live		2026-10-10 (Slice C): the coinbase 0x0C commitment — cSHAKE256(label, witness_pk ‖ seed)[..32] (ARCHIVAL_SERVE_CREDIT_SPEC.md §4.2)
 1	shekyl/archival-challenge-nonce-v1	rust/shekyl-archival-retention/src/secret_draw.rs	CHALLENGE_NONCE_CUSTOMIZATION	shekyl-live		2026-10-10 (Slice C): a challenge read's nonce — cSHAKE256(label, seed ‖ block_hash(h) ‖ j_le4 ‖ attempt[1])[..32] (ARCHIVAL_SERVE_CREDIT_SPEC.md §5.2)
 1	shekyl/archival-serve-credit-batch-v1	rust/shekyl-archival-retention/src/secret_draw.rs	SERVE_CREDIT_BATCH_CUSTOMIZATION	shekyl-live		SUPERSEDED by shekyl/archival-serve-credit-bundle-v1 (SCS-P35); no consensus caller, kept until the cutover decides it (ARCHIVAL_SERVE_CREDIT_SPEC.md §11.1). 2026-10-10 (Slice C): the witness signature's set commitment — cSHAKE256(label, seed ‖ h_le8 ‖ frame(r1) ‖ … ‖ frame(rn))[..32] (ARCHIVAL_SERVE_CREDIT_SPEC.md §7.3)
 1	shekyl/archival-serve-credit-bundle-v1	rust/shekyl-archival-retention/src/bundle.rs	BUNDLE_COMMITMENT_CUSTOMIZATION	shekyl-live		2026-10-12 (Slice C): the bundle commitment the witness signs — cSHAKE256(label, seed ‖ h_le8 ‖ count_le4 ‖ bitmap ‖ r1 ‖ … ‖ rn)[..32], the kept part followed by the records, unframed because every record is 1,397 bytes (ARCHIVAL_SERVE_CREDIT_SPEC.md §7.3, SCS-P35). A different message from archival-serve-credit-batch-v1, which stays beside it until the carrier's deletion. STAGED: read by shekyl-chain-rules' verify_bundle; no block path until SO-D12's cutover
 1	shekyl/archival-bundle-prunable-v1	rust/shekyl-archival-retention/src/bundle.rs	BUNDLE_PRUNABLE_CUSTOMIZATION	shekyl-live		2026-10-12 (Slice C): the hash of a bundle's prunable bytes, carried by its reference and the key its body is fetched by — cSHAKE256(label, witness_pk ‖ witness_sig ‖ r1 ‖ … ‖ rn)[..32] (ARCHIVAL_SERVE_CREDIT_SPEC.md §7.3, §7.5, SCS-P36). STAGED with the bundle commitment
 1	shekyl/archival-bundle-root-v1	rust/shekyl-archival-retention/src/bundle.rs	BUNDLE_ROOT_CUSTOMIZATION	shekyl-live		2026-10-12 (Slice C): the block header's root over its bundle references in ascending h — cSHAKE256(label, n_le4 ‖ ref1 ‖ … ‖ refn)[..32] with ref = seed ‖ h_le8 ‖ count_le4 ‖ bitmap ‖ prunable_hash, unframed because a reference states its own count, so it recomputes with no chain (ARCHIVAL_SERVE_CREDIT_SPEC.md §7.3, §9.1, SCS-P23, SCS-P39; the preimage carried a per-reference length frame and no count until 2026-10-12, before any block could carry one). STAGED with the bundle commitment
+1	shekyl/archival-drawable-epoch-v1	rust/shekyl-archival-retention/src/drawable_epoch.rs	DRAWABLE_EPOCH_DIGEST_CUSTOMIZATION	shekyl-live		2026-10-17 (SO-D12 increment 2, ruling B): the digest of an epoch's drawable set, written when h_open(E) connects and compared with a re-walk of the bond journals when E settles — cSHAKE256(label, E_le8 ‖ n_pairs_le8 ‖ (p_canonical_id ‖ shard_le8)* in canonical order ‖ n_personas_le8 ‖ (p_canonical_id ‖ receipt_sign_pk[1837])* ascending by id)[..32]; a local store check, never read by a consensus rule (ARCHIVAL_SERVE_CREDIT_SPEC.md §9.5 check 2, SO-D8d)
 1	shekyl/p-store-aead-v1	rust/shekyl-p-store/src/store.rs	STORE_AEAD_CUSTOMIZATION	shekyl-live		2026-10-10 (WSS-Q1): P's body-store file key — cSHAKE256(label, file_kek)[..32]. Open checks a cell sealed under this key, so a swapped companion file fails before any shard row is trusted.
 1	shekyl/p-store-slot-v1	rust/shekyl-p-store/src/store.rs	STORE_SLOT_CUSTOMIZATION	shekyl-live		2026-10-10 (WSS-Q1): P's per-shard table slot — cSHAKE256(label, store_key ‖ shard_id_le8)[..32]
 1	shekyl/archival-emission-auth-backing-v2	rust/shekyl-archival-retention/src/emission_wire.rs	EMISSION_AUTH_BACKING_CUSTOMIZATION	shekyl-live
@@ -143,6 +149,9 @@
 1	shekyl/p2p-network-id-v1	rust/shekyl-p2p-transport/src/prefix.rs	NETWORK_ID_DST	shekyl-live		first 16 bytes of cSHAKE256(S = this customization, X = genesis block hash). The handshake id; a regenesis rotates it because the hash moves
 1	shekyl/rpc-rendezvous-name-v1	rust/shekyl-rpc-channel/src/lib.rs	RENDEZVOUS_NAME_DST	shekyl-live		RT-O10/RT-O14: first 12 bytes of cSHAKE256(S = this customization, X = network_id || instance label). The name a daemon's local rendezvous is found under, so an instance name never reaches a path
 1	shekyl/rpc-static-fingerprint-v1	rust/shekyl-rpc-channel/src/lib.rs	STATIC_FINGERPRINT_DST	shekyl-live		RT-O14: cSHAKE256(S = this customization, X = X25519 public key || ML-KEM-768 encapsulation key), 32 bytes. The identity a daemon enrols an RPC client under
+1	shekyl/bp-plus-batch-weights-v1	rust/shekyl-bulletproofs/src/derived.rs	BATCH_WEIGHTS_CUSTOMIZATION	shekyl-live		2026-10-15 (CEN-H19, ruling R3): the seed of a Bulletproof+ batch verify's weights — cSHAKE256(label, n_le4 ‖ per entry: len_le4 ‖ proof ‖ m_le4 ‖ C_1 ‖ … ‖ C_m)[..32] over every (proof, commitments) in the batch in block order (transaction order, then proof order), seeding the ChaCha20Rng the verifier draws one weight per proof from; computed before any proof is accumulated. The whole block is the batch (shekyl-chain-rules H19 fold); the submit engine verifies a batch of one; a subset is never verified under a larger batch's seed (CHAIN_RULES_CRATE.md §4.6)
+1	shekyl/fcmp-pp-batch-weights-v1	rust/shekyl-fcmp/src/batch_weights.rs	FCMP_PP_BATCH_WEIGHTS_CUSTOMIZATION	shekyl-live		2026-10-15 (CEN-I15's body, ruling R3 as applied on #1081's review): the seed of a full FCMP++ verify's batch weights — cSHAKE256(label, len_le4 ‖ proof ‖ num_inputs_le4 ‖ layers_u8 ‖ tree_root ‖ signable_tx_hash ‖ n_le4 ‖ KI_1…KI_n ‖ n_le4 ‖ K_1…K_n ‖ n_le4 ‖ C'_1…C'_n)[..32], K the PQC key points compressed, seeding the ChaCha20Rng the Ed25519, Selene and Helios batch verifiers draw their weights from; computed before any statement is queued (CHAIN_RULES_CRATE.md §4.6)
+1	shekyl/fcmp-membership-only-batch-weights-v1	rust/shekyl-fcmp/src/batch_weights.rs	FCMP_MEMBERSHIP_ONLY_BATCH_WEIGHTS_CUSTOMIZATION	shekyl-live		2026-10-15 (ruling R3): the membership-only verify's batch-weight seed (the emission backing path) — the same preimage less the key-image list, under its own label because the statement is another message
 #
 # ── Mechanism 2 — HKDF salt + info ───────────
 # distinctness key = salt|info. The three shared infos (spend/view/kem) are
@@ -184,7 +193,6 @@
 2	shekyl-archival-p-bond-spend-ed25519-v1	rust/shekyl-crypto-pq/src/archival_p.rs	ARCHIVAL_P_BOND_SPEND_ED_INFO	shekyl-live		info
 2	shekyl-archival-p-bond-spend-ml-dsa-65-v1	rust/shekyl-crypto-pq/src/archival_p.rs	ARCHIVAL_P_BOND_SPEND_ML_DSA_INFO	shekyl-live		info
 2	shekyl-archival-p-hs-id-ed25519-v1	rust/shekyl-crypto-pq/src/archival_p.rs	ARCHIVAL_P_HS_ID_INFO	shekyl-live		info
-2	shekyl-archival-p-msg-sign-slh-dsa-192s-v1	rust/shekyl-crypto-pq/src/archival_p.rs	ARCHIVAL_P_MSG_SIGN_INFO	shekyl-live		info
 2	shekyl-archival-p-receipt-ed25519-v1	rust/shekyl-crypto-pq/src/archival_p.rs	ARCHIVAL_P_RECEIPT_ED_INFO	shekyl-live		info
 2	shekyl-archival-p-receipt-fn-dsa-1024-v1	rust/shekyl-crypto-pq/src/archival_p.rs	ARCHIVAL_P_RECEIPT_FN_DSA_INFO	shekyl-live		info
 2	shekyl-v31-hybrid-sign	rust/shekyl-crypto-pq/src/multisig_receiving.rs	LABEL_HYBRID_SIGN	shekyl-live		info
@@ -233,12 +241,20 @@
 # ── Mechanism 6 — SHA3-256 direct-prefix micro-bucket ──────────────────
 6	shekyl-mlkem-chacha-seed	rust/shekyl-crypto-pq/src/account.rs	MLKEM_CHACHA_SEED_PREFIX	shekyl-live		domain prefix fed straight to Sha3_256 (NOT cSHAKE) to derive a ChaCha seed; kept as its own bucket rather than silently folded into mechanism 1
 #
-# ── Mechanism 7 — Noise prologue label ──────────────────────────────────────
-# A label whose own bytes are mixed into a Noise handshake hash as (part of)
-# the prologue, before any message. It is hashed by the handshake's hash, not
-# by cSHAKE, so it is not mechanism 1. (The P2P handshake's prologue is the
-# network id alone, which is a mechanism-1 derivation and has no label here.)
+# ── Mechanism 7 — Noise BLAKE2s label ───────────────────────────────────────
+# A label whose own bytes are hashed by the BLAKE2s of a Noise handshake or
+# record layer. That is the prologue mixed into a handshake hash, the RPC
+# channel's mac1 key (BLAKE2s-256 of the label and the daemon bundle), its
+# busy reply (keyed BLAKE2s-128 under the mac1 key), and the record layer's
+# header-protection key (the Noise HKDF, HMAC-BLAKE2s, with the record key
+# in the chaining-key position and the label as input). It is not cSHAKE,
+# so not mechanism 1, and not `Hkdf::new`, so not mechanism 2. (The P2P
+# handshake's prologue is the network id alone, which is a mechanism-1
+# derivation and has no label here.)
 7	shekyl/rpc-channel-v1	rust/shekyl-rpc-channel/src/lib.rs	CHANNEL_DST	shekyl-live		RT-O14: the RPC channel's prologue is these bytes followed by the 16-byte network id, no separator. Binds the handshake to the channel protocol and to one network
+7	shekyl/rpc-busy-v1	rust/shekyl-rpc-channel/src/lib.rs	BUSY_DST	shekyl-live		RPC_CHANNEL.md section 4.3 (ruled 2026-10-20): the busy reply to a message 1 that passed mac1 and found the handshake budget empty is keyed BLAKE2s-128 under the mac1 key over this label followed by that message 1's mac1, so it answers one attempt and only a bundle holder can forge it
+7	shekyl/rpc-mac1-v1	rust/shekyl-rpc-channel/src/lib.rs	MAC1_DST	shekyl-live		RPC_CHANNEL.md section 4.3 (ruled 2026-10-20): the mac1 key is BLAKE2s-256(this label || the daemon's X25519 key || its ML-KEM-768 encapsulation key); mac1 is keyed BLAKE2s-128 over the Noise message 1, outside it, checked before any long-term key
+7	shekyl/noise-record-header-v1	rust/shekyl-noise/src/classed.rs	RECORD_HEADER_DST	shekyl-live		RPC_CHANNEL.md section 4.4 (RT-O20): the classed framer's header-protection key is the first output of the Noise HKDF with the record key in the chaining-key position and these bytes as input, derived again at each rekey; its first ChaCha20 keystream byte under the record nonce masks the class byte
 #
 # ── TEST-ONLY — domains minted by test/bench code, segregated from production ─
 # Registered so the SEGREGATION is machine-checked: a test-only domain spelled
@@ -270,3 +286,5 @@ x	SHEKYLWT	rust/shekyl-crypto-pq/src/wallet_envelope.rs	(envelope magic)	exclude
 x	SHEKYLWS	rust/shekyl-crypto-pq/src/wallet_envelope.rs	(envelope magic)	excluded		file magic
 x	SSP1	rust/shekyl-pow-randomx/src/superscalar.rs	SUPERSCALAR_PROGRAM_WIRE_MAGIC	excluded		RandomX superscalar-program wire-format tag (ASCII SSP1 = SuperScalar Program v1); format identity, not a hash domain
 x	\x01\x11\x01\x01\x01\x01\x02\x01\x01	rust/shekyl-portable-storage/src/lib.rs	HEADER	excluded		portable_storage 9-byte header+version magic (`shekyl-portable-storage::HEADER`, LV-2a); not a hash domain. Homegrown copies in rpc-client/engine-core deleted with those parsers.
+x	Noise_hybridXK_25519+MLKEM768_ChaChaPoly_BLAKE2s	rust/shekyl-rpc-channel/src/handshake.rs	PROTOCOL_NAME	excluded		Noise protocol name: mixed into a handshake hash, and a standard pattern name, not a Shekyl domain string (RPC_CHANNEL.md section 13, RT-W9; one reason for both protocol names, RT-O22); the RPC channel's handshake
+x	Noise_NNhfs_25519+MLKEM768_ChaChaPoly_BLAKE2s	rust/shekyl-p2p-transport/src/noise.rs	PROTOCOL_NAME	excluded		Noise protocol name: mixed into a handshake hash, and a standard pattern name, not a Shekyl domain string (RPC_CHANNEL.md section 13, RT-W9; one reason for both protocol names, RT-O22); the P2P handshake

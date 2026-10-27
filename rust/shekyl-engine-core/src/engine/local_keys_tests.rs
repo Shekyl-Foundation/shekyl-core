@@ -736,8 +736,7 @@ fn derive_primary_source_secrets_bundle_byte_identical_against_legacy_chain() {
 #[test]
 #[allow(non_snake_case)]
 fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
-    use rand_core::OsRng;
-    use shekyl_bulletproofs::Bulletproof;
+    use shekyl_bulletproofs::{verify_batch, BatchEntry, Bulletproof};
     use shekyl_crypto_pq::kem::HybridCiphertext;
     use shekyl_curve_io::CompressedPoint;
     use shekyl_curve_primitives::Commitment;
@@ -1093,9 +1092,11 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
             .collect();
         let bp = Bulletproof::read_plus(&mut signed_engine.bulletproof_plus.as_slice())
             .unwrap_or_else(|e| panic!("bulletproof_plus deserializes ({context}): {e:?}"));
-        let mut rng = OsRng;
         assert!(
-            bp.verify(&mut rng, &bp_commitments),
+            verify_batch(&[BatchEntry {
+                proof: &bp,
+                commitments: &bp_commitments,
+            }]),
             "BP+ verifier must accept engine-signed range proof ({context})"
         );
 
@@ -1183,13 +1184,12 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
 /// the whole-tx payload hash this composition never forms.
 #[test]
 fn join_market_bond_post_signs_and_verifies_through_prover() {
-    use rand_core::OsRng;
     use shekyl_archival_bond_builder::{build_join_market_vin, verify_credit_funding};
     use shekyl_archival_retention::{
         bond_floor, verify_bond_post_ct_balance, verify_join_market_bond_post, BondCtBalanceError,
         BondPostError, BondTerm, HoldingsDescriptor, HoldingsKind, ShardSet,
     };
-    use shekyl_bulletproofs::Bulletproof;
+    use shekyl_bulletproofs::{verify_batch, BatchEntry, Bulletproof};
     use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
     use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
     use shekyl_crypto_pq::kem::HybridCiphertext;
@@ -1376,9 +1376,11 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
         .collect();
     let bp = Bulletproof::read_plus(&mut signed.bulletproof_plus.as_slice())
         .expect("bulletproof_plus deserializes");
-    let mut rng = OsRng;
     assert!(
-        bp.verify(&mut rng, &bp_commitments),
+        verify_batch(&[BatchEntry {
+            proof: &bp,
+            commitments: &bp_commitments,
+        }]),
         "BP+ verifier must accept the bond-post range proof"
     );
 

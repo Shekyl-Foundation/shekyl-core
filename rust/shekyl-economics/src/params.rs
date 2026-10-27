@@ -35,11 +35,9 @@ pub const BLOCK_WEIGHT_LONG_TERM_WINDOW: u64 = GENERATED_BLOCK_WEIGHT_LONG_TERM_
 /// the block-weight limit is twice the result.
 ///
 /// Generated from `config/consensus_constants.json`
-/// `block_weight_short_term_window_blocks`. Three readers, one key: the
-/// median, the fee estimator's `grace_blocks` assertion and the RPC
-/// `grace_blocks` ceiling (the ceiling is the median's horizon by
-/// derivation). The C++ `CRYPTONOTE_REWARD_BLOCKS_WINDOW` is defined from
-/// the same key.
+/// `block_weight_short_term_window_blocks`. One reader, one key: the
+/// median. The C++ `CRYPTONOTE_REWARD_BLOCKS_WINDOW` is defined from the
+/// same key.
 pub const BLOCK_WEIGHT_SHORT_TERM_WINDOW: u64 = GENERATED_BLOCK_WEIGHT_SHORT_TERM_WINDOW;
 
 /// The emission curve's asymptote in atomic units

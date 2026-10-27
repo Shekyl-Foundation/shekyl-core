@@ -604,6 +604,8 @@ mod tests {
                         tx_bytes: vec![0xd7; 32],
                         funding_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(42)],
                         state: PendingPostState::Pending,
+                        reference_height: shekyl_types::BlockHeight::from_raw(1_000_000),
+                        terminal: None,
                     },
                     shekyl_types::ChainCount::from_raw(1),
                     g,

@@ -1,3 +1,4 @@
+// Copyright (c) 2025-2026, The Shekyl Foundation
 // Copyright (c) 2014-2022, The Monero Project
 // 
 // All rights reserved.
@@ -37,10 +38,6 @@
 
 #ifndef _MSC_VER
 #include <sys/param.h>
-#endif
-
-#if defined(__ANDROID__)
-#include <byteswap.h>
 #endif
 
 #if defined(__sun) && defined(__SVR4)
@@ -173,24 +170,18 @@ static inline uint32_t ident32(uint32_t x) { return x; }
 static inline uint64_t ident64(uint64_t x) { return x; }
 
 #ifndef __OpenBSD__
-#  if defined(__ANDROID__) && defined(__swap16) && !defined(swap16)
-#      define swap16 __swap16
-#  elif !defined(swap16)
+#  if !defined(swap16)
 static inline uint16_t swap16(uint16_t x) {
   return ((x & 0x00ff) << 8) | ((x & 0xff00) >> 8);
 }
 #  endif
-#  if defined(__ANDROID__) && defined(__swap32) && !defined(swap32)
-#      define swap32 __swap32
-#  elif !defined(swap32)
+#  if !defined(swap32)
 static inline uint32_t swap32(uint32_t x) {
   x = ((x & 0x00ff00ff) << 8) | ((x & 0xff00ff00) >> 8);
   return (x << 16) | (x >> 16);
 }
 #  endif
-#  if defined(__ANDROID__) && defined(__swap64) && !defined(swap64)
-#      define swap64 __swap64
-#  elif !defined(swap64)
+#  if !defined(swap64)
 static inline uint64_t swap64(uint64_t x) {
   x = ((x & 0x00ff00ff00ff00ff) <<  8) | ((x & 0xff00ff00ff00ff00) >>  8);
   x = ((x & 0x0000ffff0000ffff) << 16) | ((x & 0xffff0000ffff0000) >> 16);

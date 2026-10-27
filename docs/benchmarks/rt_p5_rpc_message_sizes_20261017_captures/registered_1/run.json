@@ -1,0 +1,46 @@
+{
+  "cell": "registered",
+  "chain_height": 117,
+  "curve_tree_info": {
+    "depth": 1,
+    "height": 116,
+    "leaf_count": 125,
+    "root": "fb88c9c8ae364c2aca77a283cec5bfae993ba8ff69991f1a2f3be829db1708d0",
+    "status": "OK"
+  },
+  "fanout_txs": 4,
+  "shapes": [
+    [
+      1,
+      2
+    ],
+    [
+      2,
+      2
+    ],
+    [
+      4,
+      2
+    ],
+    [
+      8,
+      2
+    ],
+    [
+      1,
+      16
+    ],
+    [
+      2,
+      16
+    ],
+    [
+      4,
+      16
+    ],
+    [
+      8,
+      16
+    ]
+  ]
+}

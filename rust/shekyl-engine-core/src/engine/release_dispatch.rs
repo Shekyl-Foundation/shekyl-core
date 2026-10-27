@@ -55,20 +55,23 @@
 //! dispatch driver's reservation-settlement pass, exactly as for a drain.
 //!
 //! **Failure disposition, and the recovery residue this lane shares.** A
-//! definite FIRST-send refusal (`RejectedTerminal`, or the pre-transport
+//! refusal before any byte left the wallet (the pre-transport
 //! `PersonaMismatch`) releases the seal it just took — see the dispatch
-//! site: the bytes were never admitted or relayed, so the record could
-//! never settle and holding it would brick the lane. A retryable or
-//! ambiguous failure, and a crash between seal and send, HOLD the record:
-//! funds-safe (reservation intact, stored bytes the only re-sendable
-//! form), not yet live — no driver resubmits claims, drains, or releases
-//! today, and that is the registered dispatch-driver slice
-//! (`docs/FOLLOWUPS.md`: terminal-reject prune + byte-identical resubmit,
-//! #572), which cannot land piecemeal because the prune half is a
-//! SECURITY item (the retained bytes are a replay channel; resubmit
-//! without the prune widens it). Until it lands, the stall alarm names a
-//! stuck record in the operator log — funds-safety over liveness, the
-//! posture all three reservation-observed lanes share.
+//! site: the bytes were never handed to a daemon, so the record could
+//! never settle and holding it would brick the lane. Every failure after
+//! the bytes went out HOLDS the record, funds-safe (reservation intact,
+//! stored bytes the only re-sendable form): a daemon's terminal verdict is
+//! recorded on it and stops sending, because the daemon holds valid bytes
+//! and only the chain decides (`ARCHIVAL_BOND_POST_DELAY.md` BD-Q3 Rule 2);
+//! a retryable or ambiguous failure, or a crash between seal and send,
+//! leaves it as it was. A held exit ends when it lands (reservation
+//! settlement) or at its end date, where the dispatch tick releases it
+//! with an outcome (`WALLET_RPC_STAKING_OUTCOMES.md` WR-Q3); past the end
+//! date the retained bytes can never be mined, which closes their replay
+//! channel. No driver resubmits claims, drains or releases within that
+//! lifetime: that is leg 4's resubmit (`docs/FOLLOWUPS.md`
+//! "Drain/claim/release dispatch driver — byte-identical resubmit
+//! remains").
 //!
 //! ## Reachability (the gate PR-C lifted)
 //!
@@ -88,7 +91,11 @@ use std::sync::Arc;
 
 use shekyl_curve_tree::{AssembleInput, ClientError};
 use shekyl_engine_file::WalletFile;
-use shekyl_engine_state::pending_post_block::{PendingPostState, PendingRelease, SealAdmission};
+use shekyl_engine_state::pending_post_block::{
+    PendingPostState, PendingRelease, RecordKind, SealAdmission,
+};
+
+use super::pscan::dispatch::terminal_cause;
 use shekyl_engine_state::pscan_state::PFundingOutputRecord;
 use shekyl_types::BlockHeight;
 use shekyl_units::AtomicUnits;
@@ -114,9 +121,7 @@ use super::stake_engine::{
     AssembleRelease, AssembledReleasePost, PSlot, ReleaseRecordState, StakeEngineError,
 };
 use super::traits::{DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, RefreshEngine};
-use super::transaction_submitter::{
-    BroadcastSubmitError, BroadcastSubmitter, SubmitSuccess, SubmitterError,
-};
+use super::transaction_submitter::{BroadcastSubmitError, BroadcastSubmitter, SubmitSuccess};
 use super::Engine;
 
 /// What one dispatched terminal exit did: the assembled exit's public facts
@@ -131,7 +136,8 @@ pub(crate) struct ReleaseReceipt {
     /// reservation) — the actor's reply embedded whole, not field-restated.
     // Staging (not tolerated dead code, `15-deletion-and-debt.mdc`): this
     // field's production reader is the dispatch driver's recovery slice
-    // (terminal-reject prune + byte-identical resubmit, `docs/FOLLOWUPS.md`)
+    // (leg 4's byte-identical resubmit, `docs/FOLLOWUPS.md`
+    // "Drain/claim/release dispatch driver")
     // — the same reader `DrainReceipt::drain` stages for; the daemon-walk
     // regtest e2e is the test consumer. The façade reads only `submit`.
     #[allow(dead_code)]
@@ -253,15 +259,14 @@ pub(crate) enum ReleaseRequestError {
     /// The assembled bytes' dispatch failed at (or behind) the submit choke
     /// point; the exit was assembled and sealed, and its network fate is the
     /// error's to name. **What happened to the sealed record depends on the
-    /// verdict class** (the dispatch site's disposition match):
-    /// a definite first-send refusal — [`SubmitterError::RejectedTerminal`]
-    /// or the pre-transport [`BroadcastSubmitError::PersonaMismatch`] — has
-    /// already RELEASED it (the bytes were never admitted or relayed, so
-    /// the record could never settle), and the caller may rebuild and retry
-    /// at will; a retryable or ambiguous failure HOLDS it (the bytes may
-    /// have propagated), and the one-live-exit lane stays shut until the
-    /// record settles or the recovery slice (`docs/FOLLOWUPS.md`,
-    /// dispatch-driver prune + resubmit) disposes of it.
+    /// verdict class** (the dispatch site's disposition match): the
+    /// pre-transport [`BroadcastSubmitError::PersonaMismatch`] has already
+    /// RELEASED it (the bytes were never handed to a daemon, so the record
+    /// could never settle), and the caller may rebuild and retry at will;
+    /// every other failure HOLDS it — the bytes may have propagated, or a
+    /// daemon refused bytes it still holds (BD-Q3 Rule 2) — and the
+    /// one-live-exit lane stays shut until the record lands or its end date
+    /// passes (WR-Q3).
     #[error("release broadcast: {0}")]
     Submit(#[from] BroadcastSubmitError),
 }
@@ -284,29 +289,24 @@ impl ReleaseRequestError {
     }
 }
 
-/// Whether a first-send submit failure proves the bytes never propagated —
-/// the release predicate for the seal the seam just took.
+/// Whether a first-send submit failure proves no byte left the wallet — the
+/// release predicate for the seal the seam just took.
 ///
-/// `true` exactly for the two classes whose contract says nothing reached
-/// any pool or relay: a definite terminal daemon verdict
-/// ([`SubmitterError::RejectedTerminal`] — "release-and-rebuild",
-/// `DAEMON_SUBMIT_VERDICT.md` §2.5) and the pre-transport pairing refusal
-/// ([`BroadcastSubmitError::PersonaMismatch`]). `false` for
-/// [`SubmitterError::RejectedRetryable`] (a definite verdict whose remedy
-/// PRESERVES the selection — the record must stay sealed for the
-/// byte-identical resubmit) and [`SubmitterError::Ambiguous`] (no verdict;
-/// the bytes may have propagated — Two Generals — so releasing could free
-/// inputs a live transaction spends).
+/// `true` only for the pre-transport pairing refusal
+/// ([`BroadcastSubmitError::PersonaMismatch`]): it is refused before any
+/// transport, so no daemon holds the bytes. `false` for every daemon
+/// verdict (BD-Q3 Rule 2): a definite [`SubmitterError::RejectedTerminal`](crate::engine::transaction_submitter::SubmitterError::RejectedTerminal)
+/// is recorded on the held record (a lying daemon keeps valid bytes and can
+/// relay them inside the window), [`SubmitterError::RejectedRetryable`](crate::engine::transaction_submitter::SubmitterError::RejectedRetryable)
+/// preserves the selection by contract, and [`SubmitterError::Ambiguous`](crate::engine::transaction_submitter::SubmitterError::Ambiguous)
+/// means the bytes may have propagated (Two Generals). Each of those ends at
+/// the record's end date.
 ///
 /// A pure function so the disposition is testable outcome-by-outcome
 /// without driving the engine to the dispatch stage; the seam's tripwire
 /// pins that the release call sits behind exactly this predicate.
 fn released_on_first_send_failure(e: &BroadcastSubmitError) -> bool {
-    matches!(
-        e,
-        BroadcastSubmitError::PersonaMismatch { .. }
-            | BroadcastSubmitError::Submit(SubmitterError::RejectedTerminal { .. })
-    )
+    matches!(e, BroadcastSubmitError::PersonaMismatch { .. })
 }
 
 #[allow(private_bounds)] // same Engine-trait privacy posture as submit_drain
@@ -609,6 +609,8 @@ where
             tx_bytes: assembled.bound_tx.bytes().to_vec(),
             funding_gindexes: assembled.funding_gindexes.clone(),
             state: PendingPostState::Pending,
+            reference_height,
+            terminal: None,
         };
         let admission = store
             .mutate(move |block| {
@@ -634,24 +636,21 @@ where
         // posture→submitter choke point) — the privacy default: loopback on
         // the operator's own box.
         //
-        // The failure disposition follows the submit taxonomy's own remedies
-        // (`SubmitterError`, `DAEMON_SUBMIT_VERDICT.md` §2.5), and this seam
-        // can apply the terminal one where the claim/drain seams cannot:
-        // this is provably the record's FIRST and only send (the seal
-        // happened in this call, and no driver resubmits releases), so a
-        // definite `RejectedTerminal` verdict means the bytes were never
-        // admitted to any pool and never relayed — the transaction CANNOT
-        // confirm, and holding its reservation would brick the persona's
-        // one-live-exit lane forever (`remove_settled` retires only records
-        // whose inputs get SPENT). The sealed record is therefore released
-        // (`remove_release`: byte-prune + reservation release + generation
-        // bump in one seal) before the refusal propagates — release-and-
-        // rebuild, the remedy the taxonomy names. A `PersonaMismatch`
-        // refusal never reached a transport at all, so it releases too.
-        // `RejectedRetryable` and `Ambiguous` keep the record live — a
-        // retryable verdict preserves the selection by contract, and an
-        // ambiguous one means the bytes MAY have propagated (Two Generals);
-        // the driver's reservation settlement / stall alarm owns their fate.
+        // The failure disposition (BD-Q3 Rule 2: no daemon verdict releases
+        // a submitted record):
+        //
+        // - `PersonaMismatch` is refused before any transport: no byte left
+        //   the wallet and no daemon gave a verdict, so the seal this call
+        //   just took is released (`remove_release`: byte-prune +
+        //   reservation release + generation bump in one seal).
+        // - A definite `RejectedTerminal` is recorded on the record, which
+        //   stays sealed with its reservation. "Never admitted, never
+        //   relayed" holds only for an honest daemon: a lying one keeps valid
+        //   bytes and can relay them inside the window. The record ends at
+        //   its end date (`release_ended`), which also keeps the one-live-exit
+        //   lane from bricking: the lane reopens there, with the outcome.
+        // - `RejectedRetryable` and `Ambiguous` keep the record live as
+        //   before; the end date ends them too.
         let submitter = BroadcastSubmitter::local(persona, Arc::new(daemon));
         match submitter.submit_bound(assembled.bound_tx.clone()).await {
             Ok(submit) => Ok(ReleaseReceipt {
@@ -666,7 +665,16 @@ where
                             (removed.is_some(), ())
                         })
                         .await
-                        .map_err(|e| ReleaseRequestError::state("terminal-reject release", e))?;
+                        .map_err(|e| ReleaseRequestError::state("pre-transport release", e))?;
+                } else if let Some(cause) = terminal_cause(&e) {
+                    store
+                        .mutate(|block| {
+                            let recorded =
+                                block.record_terminal(RecordKind::Release, &persona, cause);
+                            (recorded, ())
+                        })
+                        .await
+                        .map_err(|e| ReleaseRequestError::state("terminal verdict", e))?;
                 }
                 Err(e.into())
             }
@@ -707,18 +715,27 @@ mod tests {
     use super::{admit_exit_record, released_on_first_send_failure, ReleaseRequestError};
 
     /// The release predicate, outcome by outcome — the behavioral half of
-    /// the terminal-reject disposition (the tripwire below pins that the
-    /// seam's release call sits behind exactly this predicate). Releases
-    /// ONLY the two never-propagated classes: a definite terminal verdict,
-    /// and the pre-transport pairing refusal. A retryable verdict preserves
-    /// the selection by contract; an ambiguous outcome may have propagated,
-    /// and releasing it could free inputs a live transaction spends.
+    /// the seam's failure disposition (the tripwire below pins that the
+    /// release call sits behind exactly this predicate). Releases ONLY the
+    /// pre-transport pairing refusal, which no daemon ever saw. No daemon
+    /// verdict releases a submitted record (BD-Q3 Rule 2): a definite
+    /// terminal verdict is recorded on the held record instead (a lying
+    /// daemon keeps valid bytes), a retryable one preserves the selection by
+    /// contract, and an ambiguous one may have propagated.
     #[test]
-    fn only_never_propagated_failures_release_the_seal() {
+    fn only_the_pre_transport_refusal_releases_the_seal() {
         let terminal = BroadcastSubmitError::Submit(SubmitterError::RejectedTerminal {
             kind: TerminalErrorKind::DoubleSpend,
         });
-        assert!(released_on_first_send_failure(&terminal));
+        assert!(
+            !released_on_first_send_failure(&terminal),
+            "a terminal verdict holds the record to its end date (BD-Q3 Rule 2)"
+        );
+        assert_eq!(
+            crate::engine::pscan::dispatch::terminal_cause(&terminal),
+            Some(shekyl_engine_state::pending_post_block::TerminalCause::DoubleSpend),
+            "and is recorded on it"
+        );
 
         let mismatch = BroadcastSubmitError::PersonaMismatch {
             bytes_persona: PCanonicalId::from_bytes([1; 32]),
@@ -822,28 +839,30 @@ mod tests {
             "the exit must not reach for a raw daemon client to broadcast (T-DS-2)"
         );
 
-        // Terminal-reject release: the taxonomy's release-and-rebuild remedy
-        // must stay wired — a definite first-send refusal releases the seal
-        // it just took, or the one-live-exit lane bricks on a transaction
-        // that cannot confirm.
-        let terminal_arm = "RejectedTerminal";
+        // The failure disposition (BD-Q3 Rule 2): the pre-transport refusal
+        // releases the seal it just took; a terminal verdict is recorded on
+        // the held record, never released. The one-live-exit lane reopens
+        // at the record's end date instead (`release_ended`).
+        let record_call = ".record_terminal(RecordKind::Release";
         assert!(
-            code.contains(terminal_arm),
-            "the seam must classify the terminal verdict"
+            code.contains(record_call),
+            "a terminal verdict must be recorded on the held record"
         );
         let release_call = ".remove_release(";
         assert!(
             code.contains(release_call),
-            "a terminal first-send refusal must release the sealed record"
+            "the pre-transport refusal must release the sealed record"
         );
         let guard = "if released_on_first_send_failure(&e) {";
         let guard_at = code
             .find(guard)
             .expect("the release must be gated on the tested predicate, not inlined");
         let release_at = code.find(release_call).expect("checked non-empty above");
+        let record_at = code.find(record_call).expect("checked non-empty above");
         assert!(
-            guard_at < release_at,
-            "the release call must sit behind the predicate the behavioral test covers"
+            guard_at < release_at && release_at < record_at,
+            "the release call must sit behind the predicate the behavioral test covers, \
+             and the verdict's record in the branch after it"
         );
 
         // Persist-before-dispatch ordering pin.

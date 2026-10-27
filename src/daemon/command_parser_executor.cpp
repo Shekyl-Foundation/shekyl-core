@@ -192,35 +192,6 @@ bool t_command_parser_executor::print_blockchain_info(const std::vector<std::str
   return m_executor.print_blockchain_info(start_index, end_index);
 }
 
-bool t_command_parser_executor::set_log_level(const std::vector<std::string>& args)
-{
-  if(args.size() > 1)
-  {
-    std::cout << "Invalid syntax: Too many parameters. For more details, use the help command." << std::endl;
-    return true;
-  }
-
-  if (args.empty())
-  {
-    return m_executor.set_log_categories("+");
-  }
-
-  uint16_t l = 0;
-  if(epee::string_tools::get_xtype_from_string(l, args[0]))
-  {
-    if(4 < l)
-    {
-      std::cout << "Invalid syntax: Wrong number range, use: set_log <log_level_number_0-4>. For more details, use the help command." << std::endl;
-      return true;
-    }
-    return m_executor.set_log_level(l);
-  }
-  else
-  {
-    return m_executor.set_log_categories(args.front());
-  }
-}
-
 bool t_command_parser_executor::print_height(const std::vector<std::string>& args) 
 {
   if (!args.empty()) {
@@ -392,40 +363,11 @@ bool t_command_parser_executor::start_mining(const std::vector<std::string>& arg
   if(nettype != cryptonote::MAINNET)
     std::cout << "Mining to a " << (nettype == cryptonote::TESTNET ? "testnet" : "stagenet") << " address, make sure this is intentional!" << std::endl;
   uint64_t threads_count = 1;
-  bool do_background_mining = false;  
-  bool ignore_battery = false;  
-  if(args.size() > 4)
+  if(args.size() > 2)
   {
     std::cout << "Invalid syntax: Too many parameters. For more details, use the help command." << std::endl;
     return true;
   }
-
-  if(args.size() == 4)
-  {
-    if(args[3] == "true" || command_line::is_yes(args[3]) || args[3] == "1")
-    {
-      ignore_battery = true;
-    }
-    else if(args[3] != "false" && !command_line::is_no(args[3]) && args[3] != "0")
-    {
-      std::cout << "Invalid syntax: Invalid combination of parameters. For more details, use the help command." << std::endl;
-      return true;
-    }
-  }
-
-  if(args.size() >= 3)
-  {
-    if(args[2] == "true" || command_line::is_yes(args[2]) || args[2] == "1")
-    {
-      do_background_mining = true;
-    }
-    else if(args[2] != "false" && !command_line::is_no(args[2]) && args[2] != "0")
-    {
-      std::cout << "Invalid syntax: Invalid combination of parameters. For more details, use the help command." << std::endl;
-      return true;
-    }
-  }
-
   if(args.size() >= 2)
   {
     if (args[1] == "auto" || args[1] == "autodetect")
@@ -442,7 +384,7 @@ bool t_command_parser_executor::start_mining(const std::vector<std::string>& arg
   // Pass the validated ORIGINAL string through; the parse above stays as
   // the syntax/network gate (the parsed struct cannot be re-encoded since
   // the fork-(ii) address layout).
-  m_executor.start_mining(args.front(), threads_count, nettype, do_background_mining, ignore_battery);
+  m_executor.start_mining(args.front(), threads_count, nettype);
 
   return true;
 }
@@ -482,113 +424,7 @@ bool t_command_parser_executor::print_status(const std::vector<std::string>& arg
   return m_executor.print_status();
 }
 
-bool t_command_parser_executor::set_limit(const std::vector<std::string>& args)
-{
-  if(args.size()>1) {
-    std::cout << "Invalid syntax: Too many parameters. For more details, use the help command." << std::endl;
-    return true;
-  }
 
-  if(args.size()==0) {
-    return m_executor.get_limit();
-  }
-  int64_t limit;
-  try {
-      limit = std::stoll(args[0]);
-  }
-  catch(const std::exception& ex) {
-      std::cout << "Invalid syntax: Failed to parse limit. For more details, use the help command." << std::endl;
-      return true;
-  }
-
-  return m_executor.set_limit(limit, limit);
-}
-
-bool t_command_parser_executor::set_limit_up(const std::vector<std::string>& args)
-{
-  if(args.size()>1) {
-    std::cout << "Invalid syntax: Too many parameters. For more details, use the help command." << std::endl;
-    return true;
-  }
-
-  if(args.size()==0) {
-    return m_executor.get_limit_up();
-  }
-  int64_t limit;
-  try {
-      limit = std::stoll(args[0]);
-  }
-  catch(const std::exception& ex) {
-      std::cout << "Invalid syntax: Failed to parse limit. For more details, use the help command." << std::endl;
-      return true;
-  }
-
-  return m_executor.set_limit(0, limit);
-}
-
-bool t_command_parser_executor::set_limit_down(const std::vector<std::string>& args)
-{
-  if(args.size()>1) {
-    std::cout << "Invalid syntax: Too many parameters. For more details, use the help command." << std::endl;
-    return true;
-  }
-
-  if(args.size()==0) {
-    return m_executor.get_limit_down();
-  }
-  int64_t limit;
-  try {
-      limit = std::stoll(args[0]);
-  }
-  catch(const std::exception& ex) {
-      std::cout << "Invalid syntax: Failed to parse limit. For more details, use the help command." << std::endl;
-      return true;
-  }
-
-  return m_executor.set_limit(limit, 0);
-}
-
-bool t_command_parser_executor::out_peers(const std::vector<std::string>& args)
-{
-	bool set = false;
-	uint32_t limit = 0;
-	try {
-		if (!args.empty())
-		{
-			limit = std::stoi(args[0]);
-			set = true;
-		}
-	}
-
-	catch(const std::exception& ex) {
-		_erro("stoi exception");
-		std::cout << "Invalid syntax: Failed to parse number. For more details, use the help command." << std::endl;
-		return true;
-	}
-
-	return m_executor.out_peers(set, limit);
-}
-
-bool t_command_parser_executor::in_peers(const std::vector<std::string>& args)
-{
-	bool set = false;
-	uint32_t limit = 0;
-	try {
-		if (!args.empty())
-		{
-			limit = std::stoi(args[0]);
-			set = true;
-		}
-	}
-
-	catch(const std::exception& ex) {
-		_erro("stoi exception");
-		std::cout << "Invalid syntax: Failed to parse number." << std::endl;
-		return true;
-	}
-
-	return m_executor.in_peers(set, limit);
-}
 
 bool t_command_parser_executor::show_bans(const std::vector<std::string>& args)
 {

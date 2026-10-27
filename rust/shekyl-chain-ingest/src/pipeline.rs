@@ -56,7 +56,8 @@ use std::sync::Arc;
 use kameo::actor::PreparedActor;
 use kameo::error::SendError;
 use shekyl_chain_rules::{
-    form, FormAttempt, InvalidBlock, PaidEmission, StructurallyValid, Substrate, Verdict, Weights,
+    form, FormAttempt, InvalidBlock, PaidEmission, ReferenceClaims, StructurallyValid, Substrate,
+    Verdict, Weights,
 };
 use shekyl_chain_store::archival_snapshot::SnapshotDiff;
 use shekyl_chain_store::store::{ChainStore, StoreError};
@@ -68,7 +69,8 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinSet;
 
 use crate::connector::{
-    Apply, CheckpointState, Connector, ConnectorArgs, Digest, HashAt, Inject, Rewind, RunFault,
+    Apply, CheckpointState, Connector, ConnectorArgs, Digest, HashAt, HeaderAt, Inject,
+    ObserveTarget, Rewind, Rewound, RunFault,
 };
 use crate::grader::Observations;
 use crate::metrics::{Concurrency, Metrics, MetricsArtifact};
@@ -76,6 +78,7 @@ use crate::schedule::ChainRules;
 use crate::seed::{SeedClaim, SeedLedger};
 use crate::sequencer::{SequenceError, Sequencer};
 use crate::source::{IngestEvent, Injection, SequenceNo, Sequenced, ServeCredit, Source};
+use crate::target::TargetLedger;
 use crate::trace::Trace;
 
 /// Knobs with a rationale each (rule 75; module docs).
@@ -612,6 +615,26 @@ pub enum PipelineFault<SrcF, SubF> {
         /// The height whose hash was needed.
         seed_height: BlockHeight,
     },
+    /// No target could be claimed for `height`: the block at a height the
+    /// LWMA-1 window reads is neither read nor recorded.
+    #[error(
+        "no target for height {height}: the header at {header_height} is neither read nor recorded"
+    )]
+    HeaderUnknown {
+        /// The connecting height.
+        height: BlockHeight,
+        /// The height whose header was needed.
+        header_height: BlockHeight,
+    },
+    /// The target ledger observed a corrupt window the store's own view does
+    /// not hold: a defect in the ledger, never a property of the chain.
+    #[error("target ledger defect at height {height}: {corrupt}")]
+    TargetLedger {
+        /// The connecting height.
+        height: BlockHeight,
+        /// What the ledger's derivation observed.
+        corrupt: shekyl_chain_rules::Corrupt,
+    },
     /// A store read outside the actor failed.
     #[error(transparent)]
     Store(#[from] StoreError),
@@ -636,6 +659,18 @@ pub enum PipelineFault<SrcF, SubF> {
         injected_at: BlockHeight,
         /// The bit.
         credit: ServeCredit,
+    },
+    /// The source's `Rewind { to }` would pop a block below the lowest
+    /// poppable height. The writer refused it before any pop; a source
+    /// that asks for it is defective.
+    #[error("rewind to {to} would pop below the lowest poppable height {floor} (tip {tip})")]
+    RewindBelowFloor {
+        /// The rewind's target.
+        to: BlockHeight,
+        /// The tip, unchanged.
+        tip: BlockHeight,
+        /// The lowest poppable height.
+        floor: BlockHeight,
     },
 }
 
@@ -719,7 +754,10 @@ where
     // engine's lock).
     let prepared = PreparedActor::<Connector>::new(kameo::mailbox::unbounded());
     let connector = prepared.actor_ref().clone();
-    let actor_task = prepared.spawn(ConnectorArgs { store, rules });
+    let actor_task = prepared.spawn(ConnectorArgs {
+        store: Arc::new(store),
+        rules,
+    });
 
     let mut drive = Drive {
         source,
@@ -730,6 +768,7 @@ where
         trace: &trace,
         cfg,
         ledger: SeedLedger::new(),
+        targets: TargetLedger::new(),
         form_at,
         next_seq: SequenceNo::FIRST,
         checkpoint_at: trace.checkpoint().map(|(h, _)| h),
@@ -740,6 +779,7 @@ where
         in_flight: JoinSet::new(),
         pending_barrier: None,
         exhausted: false,
+        unclaimable: None,
     };
     let outcome = drive.run_loop().await;
 
@@ -769,6 +809,8 @@ where
     trace: &'a Arc<Trace>,
     cfg: PipelineConfig,
     ledger: SeedLedger,
+    /// The headers the next target claim reads (`target` module docs).
+    targets: TargetLedger,
     /// The height the next `Extend` connects at.
     form_at: BlockHeight,
     /// The sequence number the next event must carry.
@@ -785,7 +827,14 @@ where
     /// The barrier read but not yet committed, if any; `fill` reads
     /// nothing past it.
     pending_barrier: Option<Sequenced<Barrier>>,
+    /// No further event is read: the source ended, or a block was refused
+    /// or found unclaimable before it was formed. A refusal ends the run,
+    /// and nothing past an unformed block has a target to claim.
     exhausted: bool,
+    /// The connecting height whose target claim observed a corrupt window,
+    /// and what it observed. Asked of the writer once the blocks in flight
+    /// have drained (`target` module docs).
+    unclaimable: Option<(BlockHeight, shekyl_chain_rules::Corrupt)>,
 }
 
 impl<Src, S> Drive<'_, Src, S>
@@ -804,6 +853,12 @@ where
             }
             self.try_barrier().await?;
             if self.exhausted && self.in_flight.is_empty() && self.pending_barrier.is_none() {
+                // Every block ahead of an unclaimable one has been judged,
+                // so the writer's tip is its parent: the writer re-derives
+                // the window over its own view and halts on what it sees.
+                if let Some((height, corrupt)) = self.unclaimable.take() {
+                    return Err(self.observe_target(height, corrupt).await);
+                }
                 // Nothing left to read, form or pop. Every numbered event
                 // was formed or advanced over, so nothing can be waiting;
                 // if something is, it is a defect to surface, not a queue
@@ -889,17 +944,62 @@ where
         self.form_at = next_height(Some(height));
         self.ledger.record(height, candidate.block.hash());
         let seed = self.claim_seed(height).await?;
-        if seed != BlockHash::NULL && self.pinned != Some(seed) {
+        let in_force = self.rules.in_force(height);
+        let target = match self.claim_target(height, &in_force).await? {
+            Ok(Ok(target)) => target,
+            // CEN-D6 on the claim's own derivation: `validate` would refuse
+            // the block on the same headers, so that refusal is its verdict
+            // and it is not formed (`target` module docs). The refusal ends
+            // the run, and the ledger has no header at this height for a
+            // successor to claim against, so nothing more is read; the
+            // workers already numbered drain in order.
+            Ok(Err(refused)) => {
+                drop(permit);
+                self.exhausted = true;
+                self.in_flight.spawn_blocking(move || Sequenced {
+                    seq,
+                    event: Ok((height, Err(refused))),
+                });
+                return Ok(());
+            }
+            Err(corrupt) => {
+                self.unclaimable(height, corrupt);
+                return Ok(());
+            }
+        };
+        // The third claim: the height and root of every reference a listed
+        // body names, off the same ledger (`CHAIN_RULES_CRATE.md` §4.6).
+        // Read before this block's own header joins the ledger — a block
+        // cannot reference itself (CEN-I11) — and before the window moves.
+        let references = match ReferenceClaims::from_headers(&self.targets, height, &candidate) {
+            Ok(references) => references,
+            Err(never) => match never {},
+        };
+        if let Err(corrupt) = self.targets.extend(height, &candidate.block, target) {
+            self.unclaimable(height, corrupt);
+            return Ok(());
+        }
+        self.targets.forget_below_window_of(height);
+        // The null seed is genesis's cache, a real 256 MiB fill. Skipping
+        // it here would make the lookup-only longhash fault on block 0.
+        if self.pinned != Some(seed) {
             let substrate = Arc::clone(&self.substrate);
             tokio::task::spawn_blocking(move || substrate.pin_seed(&seed)).await?;
             self.pinned = Some(seed);
         }
         let substrate = Arc::clone(&self.substrate);
         let metrics = Arc::clone(self.metrics);
-        let in_force = self.rules.in_force(height);
         self.in_flight.spawn_blocking(move || {
             let started = std::time::Instant::now();
-            let verdict = form(*candidate, &in_force, &*substrate, seed, FormAttempt::FIRST);
+            let verdict = form(
+                *candidate,
+                &in_force,
+                &*substrate,
+                seed,
+                target,
+                &references,
+                FormAttempt::FIRST,
+            );
             metrics.block_formed(started.elapsed());
             drop(permit);
             Sequenced {
@@ -943,6 +1043,58 @@ where
             self.ledger.forget_below(seed_height);
         }
         Ok(seed)
+    }
+
+    /// The target for a block connecting at `connecting` under `rule_set`:
+    /// the ledger's derivation, after the store has answered every height
+    /// the ledger's window lacks (`target` module docs). The inner `Err` is
+    /// CEN-D6 on the derivation itself; the outer is a corrupt window, the
+    /// writer's to judge.
+    async fn claim_target(
+        &mut self,
+        connecting: BlockHeight,
+        rule_set: &shekyl_chain_rules::RuleSet,
+    ) -> Result<
+        Result<Verdict<shekyl_chain_rules::Target>, shekyl_chain_rules::Corrupt>,
+        PipelineFault<Src::Fault, S::Fault>,
+    > {
+        for height in self.targets.missing_for(connecting) {
+            let recorded = self
+                .connector
+                .ask(HeaderAt { height })
+                .await
+                .map_err(collapse)?;
+            let Some(record) = recorded else {
+                return Err(PipelineFault::HeaderUnknown {
+                    height: connecting,
+                    header_height: height,
+                });
+            };
+            self.targets.record(height, record);
+        }
+        Ok(self.targets.claim(connecting, rule_set))
+    }
+
+    /// A block whose target cannot be claimed: it is not formed, nothing
+    /// more is read, and once the blocks in flight drain the writer is asked
+    /// to judge the window (`run_loop`).
+    fn unclaimable(&mut self, height: BlockHeight, corrupt: shekyl_chain_rules::Corrupt) {
+        self.exhausted = true;
+        self.unclaimable = Some((height, corrupt));
+    }
+
+    /// The writer re-derives the target and its work for `height` over its
+    /// own view. Its halt, if it observes the corruption itself, is the
+    /// run's fault; if its view is consistent, the ledger was wrong.
+    async fn observe_target(
+        &mut self,
+        height: BlockHeight,
+        corrupt: shekyl_chain_rules::Corrupt,
+    ) -> PipelineFault<Src::Fault, S::Fault> {
+        match self.connector.ask(ObserveTarget { height }).await {
+            Err(fault) => collapse(fault),
+            Ok(()) => PipelineFault::TargetLedger { height, corrupt },
+        }
     }
 
     /// Wait for one worker, then take every other one already finished, so
@@ -1103,10 +1255,13 @@ where
             });
         }
         let rewound = self.connector.ask(Rewind { to }).await.map_err(collapse)?;
+        if let Rewound::Refused { tip, floor } = rewound {
+            return Err(PipelineFault::RewindBelowFloor { to, tip, floor });
+        }
         let digest = self.connector.ask(Digest).await.map_err(collapse)?;
         self.report.switches.push(Switch {
             to,
-            popped: rewound.popped,
+            popped: rewound.popped(),
             digest,
         });
         // The popped heights' root comparisons were against the trace's
@@ -1116,6 +1271,7 @@ where
         self.report.weights.retract_above(to);
         self.report.emission.retract_above(to);
         self.ledger.rewind_to(to);
+        self.targets.rewind_to(to);
         self.form_at = next_height(Some(to));
         Ok(())
     }

@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use shekyl_logging::{Config, __test_only_init_with_stderr};
+use shekyl_logging::{Config, LineColour, __test_only_init_with_stderr};
 use tracing::Level;
 
 /// How long a write that starts inside the window waits.
@@ -69,8 +69,14 @@ fn a_stalled_sink_does_not_hold_the_log_call_and_reports_its_drops() {
         until: start + STALL,
         written: Arc::clone(&written),
     };
-    let guard = __test_only_init_with_stderr(Config::stderr_only(Level::DEBUG), sink, QUEUE_LINES)
-        .expect("init");
+    // Plain so the drop report's "WARN shekyl_logging: " stays one span.
+    let guard = __test_only_init_with_stderr(
+        Config::stderr_only(Level::DEBUG),
+        sink,
+        QUEUE_LINES,
+        LineColour::Plain,
+    )
+    .expect("init");
 
     for call in 0..CALLS {
         let started = Instant::now();

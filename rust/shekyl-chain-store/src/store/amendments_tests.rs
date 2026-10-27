@@ -436,7 +436,17 @@ fn the_rust_only_tables_are_catalogued_last_and_named() {
     let issued_draw = schema::ordinal_of("archival_issued_draw").expect("catalogued");
     let issued_digest = schema::ordinal_of("archival_issued_digest").expect("catalogued");
     let block_draws = schema::ordinal_of("archival_block_draws").expect("catalogued");
-    let last = schema::ordinal_of("archival_drawable_digest").expect("catalogued");
+    let drawable_digest = schema::ordinal_of("archival_drawable_digest").expect("catalogued");
+    let block_pow = schema::ordinal_of("block_pow").expect("catalogued");
+    let alt_bodies = schema::ordinal_of("alt_block_bodies").expect("catalogued");
+    let release_journal = schema::ordinal_of("archival_release_journal").expect("catalogued");
+    let complete = schema::ordinal_of("archival_complete_trees").expect("catalogued");
+    let support_unissued = schema::ordinal_of("archival_support_unissued").expect("catalogued");
+    let support_block = schema::ordinal_of("archival_support_block").expect("catalogued");
+    let support_issued = schema::ordinal_of("archival_support_issued").expect("catalogued");
+    let support_settlement = schema::ordinal_of("archival_support_settlement").expect("catalogued");
+    let bundle_queue = schema::ordinal_of("archival_bundle_queue").expect("catalogued");
+    let last = schema::ordinal_of("archival_bundle_body").expect("catalogued");
     // The journal stores ordinals as `u32`. A catalogue that does not fit
     // that width cannot be journaled, so the length check fails here
     // rather than at the first pop.
@@ -444,35 +454,38 @@ fn the_rust_only_tables_are_catalogued_last_and_named() {
         u32::try_from(schema::catalogue().len()).expect("catalogue length fits in a table ordinal");
     // `txs_pqc_auth_hash` was appended last (A3); `txs_archival_len`
     // (`SHT-Q2`) was appended after it, `SO-D10`'s two index tables after
-    // that, and `SO-D12`'s two draw-state tables last, so the six hold the
-    // final slots in that order.
+    // that, `SO-D12`'s two draw-state tables after those, then the switch
+    // PR's recorded proof-of-work, DRS-E5 PR-b's alternative bodies,
+    // `SO-D12`'s Release journal, `SO-D12h`'s frozen complete trees, the
+    // support stream's four tables, and `SO-D12` increment 4c's bundle
+    // queue and body store last, so they hold the final slots in that
+    // order.
     assert_eq!(ordinal.index() + 1, archival_len.index());
     assert_eq!(archival_len.index() + 1, issued_draw.index());
     assert_eq!(issued_draw.index() + 1, issued_digest.index());
     assert_eq!(issued_digest.index() + 1, block_draws.index());
-    assert_eq!(block_draws.index() + 1, last.index());
+    assert_eq!(block_draws.index() + 1, drawable_digest.index());
+    assert_eq!(drawable_digest.index() + 1, block_pow.index());
+    assert_eq!(block_pow.index() + 1, alt_bodies.index());
+    assert_eq!(alt_bodies.index() + 1, release_journal.index());
+    assert_eq!(release_journal.index() + 1, complete.index());
+    assert_eq!(complete.index() + 1, support_unissued.index());
+    assert_eq!(support_unissued.index() + 1, support_block.index());
+    assert_eq!(support_block.index() + 1, support_issued.index());
+    assert_eq!(support_issued.index() + 1, support_settlement.index());
+    assert_eq!(support_settlement.index() + 1, bundle_queue.index());
+    assert_eq!(bundle_queue.index() + 1, last.index());
     assert_eq!(
         last.index() + 1,
         catalogue_len,
-        "archival_drawable_digest is the final catalogue slot"
+        "archival_bundle_body is the final catalogue slot"
     );
-    // 33 LMDB mirrors plus the nine Rust-only tables
-    // (`archival_budget_accruing`, `curve_tree_leaf_counts`, `undo_log`,
-    // `txs_pqc_auth_hash`, `txs_archival_len`, `archival_issued_draw`,
-    // `archival_issued_digest`, `archival_block_draws`,
-    // `archival_drawable_digest`) at SCHEMA_VERSION 23 — 47
-    // mirrors until S-POOL moved `txpool_meta` / `txpool_blob` to the pool
-    // file (layout 12, `schema::MIRRORED_ELSEWHERE`), 45 until S-ALT folded
-    // `archival_alt_attestation_witness` into `alt_blocks` (layout 13,
-    // `schema::FOLDED_INTO`), 44 until DRS-E3 did not port four tree-side
-    // tables (layout 15, `schema::NOT_PORTED`) and added
-    // `curve_tree_leaf_counts`; 44 when `SHT-Q2` added `txs_archival_len`
-    // (layout 18); 38 since DRS-E4 did not port seven archival tables and
-    // added `archival_budget_accruing` (layout 19); 40 since `SO-D10` added
-    // the issued-draw index and its digest (layout 22); 42 since `SO-D12`
-    // added the per-block draw state and the drawable set's digest
-    // (layout 23).
-    assert_eq!(catalogue_len, 42);
+    // 33 LMDB mirrors plus the nineteen Rust-only tables named below.
+    // The pool file holds `txpool_meta` / `txpool_blob`
+    // (`schema::MIRRORED_ELSEWHERE`), `alt_blocks` holds the alternative
+    // block's attestation witness (`schema::FOLDED_INTO`), and the tables
+    // `schema::NOT_PORTED` names are not here.
+    assert_eq!(catalogue_len, 52);
     let names: Vec<&str> = schema::RUST_ONLY_TABLES.iter().map(|(n, _)| *n).collect();
     assert_eq!(
         names,
@@ -485,7 +498,17 @@ fn the_rust_only_tables_are_catalogued_last_and_named() {
             "archival_issued_draw",
             "archival_issued_digest",
             "archival_block_draws",
-            "archival_drawable_digest"
+            "archival_drawable_digest",
+            "block_pow",
+            "alt_block_bodies",
+            "archival_release_journal",
+            "archival_complete_trees",
+            "archival_support_unissued",
+            "archival_support_block",
+            "archival_support_issued",
+            "archival_support_settlement",
+            "archival_bundle_queue",
+            "archival_bundle_body",
         ]
     );
     // One 32-byte codec; `Coded<PqcAuthHash>` on the value side.

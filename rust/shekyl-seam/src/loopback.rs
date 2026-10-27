@@ -13,13 +13,15 @@ use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 
-use shekyl_capped_stream::{QueueHold, StreamEnds};
+use shekyl_capped_stream::{QueueHold, Session, StreamEnds};
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_timing_engine::Tick;
 use shekyl_transport_layer::{CloseCause, SocketId, Sockets};
 
 use crate::dial::{Channel, Dial};
+use crate::drive::drive_inbound;
 use crate::endpoint::{admit, Endpoint};
+use crate::hub::Hub;
 
 struct Slot {
     inject: Option<shekyl_capped_stream::InboundEnd>,
@@ -117,7 +119,9 @@ impl Dial for Loopback {
         }
     }
 
-    fn track_pump(&self, id: SocketId, pump: JoinHandle<()>) {
+    fn drive(&self, hub: &Hub, id: SocketId, session: Session) {
+        let hub = hub.clone();
+        let pump = thread::spawn(move || drive_inbound(&hub, id, session));
         let mut slots = self.slots();
         if let Some(slot) = slots.get_mut(&id) {
             slot.pump = Some(pump);

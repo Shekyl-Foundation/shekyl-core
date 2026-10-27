@@ -58,6 +58,13 @@ shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 # `HYBRID_SCHEME_ID_MULTISIG`) rather than restated as `1` and `2`. Already
 # in the closure through shekyl-ct-balance; this names the edge.
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# CEN-H19's verification half: the block's Bulletproof+ batch, verified with
+# `verify_batch` (weights derived from the batch, ruling R3) over the proofs
+# `shekyl_wire::BpPlus::to_bulletproof` reassembles. Already in this crate's
+# closure through `shekyl-wire`; `shekyl-curve-io` is the commitment type the
+# verifier reads (already reached through the same edge). No store.
+shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
+shekyl-curve-io = { path = "../shekyl-curve-io" }
 # Optional: the `harness` feature's `fixture::point_at` only (see the
 # feature's note). Never enabled on the production surface.
 curve25519-dalek = { version = "4", optional = true }
@@ -69,6 +76,15 @@ curve25519-dalek = { version = "4", optional = true }
 # rules crate does not already reach); never enabled on the production
 # surface.
 shekyl-harness-wallet = { path = "../shekyl-harness-wallet", optional = true }
+# Optional: the `harness` feature's `fixture::range_proof_for`, a real BP+ over
+# the fixture spend's known openings made by the production prover, so the
+# fixture passes CEN-H19's batch in `form` and a test reaches the row it is
+# about. `shekyl-curve-primitives` is the opening type `prove_plus` takes;
+# `rand_chacha` seeds the proof so a fixture is a pure function of its
+# arguments. Both already in the lockfile; never enabled on the production
+# surface.
+shekyl-curve-primitives = { path = "../shekyl-curve-primitives", optional = true }
+rand_chacha = { workspace = true, optional = true }
 
 [features]
 # The negative-fixture harness (`harness.rs`: `MockChain`, `MockSubstrate`,
@@ -91,7 +107,12 @@ shekyl-harness-wallet = { path = "../shekyl-harness-wallet", optional = true }
 # output paying the harness miner, so the store's and the ingest's tests
 # can spend a fixture block's coinbase through a real prover rather than
 # asserting over a filler no wallet could scan.
-harness = ["dep:curve25519-dalek", "dep:shekyl-harness-wallet"]
+harness = [
+  "dep:curve25519-dalek",
+  "dep:shekyl-harness-wallet",
+  "dep:shekyl-curve-primitives",
+  "dep:rand_chacha",
+]
 
 [build-dependencies]
 # Build-script only: read `config/consensus_constants.json` for the two
@@ -142,6 +163,13 @@ shekyl-consensus = { path = "../shekyl-consensus" }
 # `shekyl-crypto-pq` and `shekyl-logging`, so already in `Cargo.lock` —
 # this adds no package to the supply chain (`17-dependency-discipline`).
 trybuild = "1"
+# H19's fold tests (`rules/range_proof_tests.rs`) need real proofs to batch:
+# `Bulletproof::prove_plus` over `shekyl_curve_primitives::Commitment`
+# openings, drawn from a seeded `ChaCha20Rng` so a failure replays. Both are
+# already in the lockfile (the first through `shekyl-bulletproofs`, the second
+# a workspace dependency); test-only.
+shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
+rand_chacha = { workspace = true }
 
 [lints]
 workspace = true

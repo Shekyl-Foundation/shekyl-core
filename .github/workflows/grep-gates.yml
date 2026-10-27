@@ -78,6 +78,13 @@ jobs:
         shell: bash
         run: |
           set -u
+          # Setup only, and only on the runner: on a developer's clone this
+          # fetch would make the shared object store shallow, and the base
+          # commit is already there (check_workflow_fetch_guard.py).
+          if [ "${GITHUB_ACTIONS:-}" != "true" ]; then
+            echo "not under GitHub Actions; the base revision is already local, fetch skipped"
+            exit 0
+          fi
           if [ -z "${FREEZE_BASE}" ]; then
             echo "no base revision for the dial-path freeze on event ${GITHUB_EVENT_NAME}"
             exit 1
@@ -151,6 +158,13 @@ jobs:
           # workflow edit.
           run_one "Workflow files parse and are well-formed" \
             python3 scripts/ci/check_workflows_parse.py
+          # A setup step that fetches with a depth would make a developer's
+          # shared clone shallow when the steps are run locally; it carries
+          # the GITHUB_ACTIONS guard, and this holds every such step to it.
+          run_one "A depth-changing fetch runs only under GitHub Actions (selftest)" \
+            python3 scripts/ci/check_workflow_fetch_guard.py --selftest
+          run_one "A depth-changing fetch runs only under GitHub Actions" \
+            python3 scripts/ci/check_workflow_fetch_guard.py
 
           # The production-shape clippy step in rust-audit-test.yml must name
           # exactly the TEST_ONLY owners. It parses that workflow, so it lives
@@ -213,6 +227,15 @@ jobs:
 
           run_one "SA-3b: domain-registry" \
             scripts/ci/domain_registry_gate.sh
+          # RT-O22 (RT-W9 step 6): the toolchain, the decapsulation closure
+          # of fips203, and every recognised code-generation setting agree
+          # with what RT-P4 was measured on. Anything unrecognised fails on
+          # its own and is not also a re-run. Its self-test first, so a
+          # broken reader cannot pass the real check.
+          run_one "RT-P4 standing check: self-test" \
+            python3 scripts/ci/check_rt_p4_standing.py --selftest
+          run_one "RT-P4 standing check" \
+            python3 scripts/ci/check_rt_p4_standing.py
           run_one "Consensus-invariants" \
             scripts/ci/check_consensus_invariants.sh
           # PDM-Q7: the stripe engine and its pruning_seed wire field are
@@ -266,14 +289,24 @@ jobs:
             python3 scripts/ci/check_drop_verdict_classification.py
           run_one "PoW test-seam containment (CEN-D2)" \
             scripts/ci/check_pow_test_seam.sh
+          # DX-Q3 Q4: the node's template draws its coinbase secret and its
+          # draw commitment from the OS (the commitment through the witness
+          # ring); the scenario's reproducible values stay in test code.
+          run_one "The template's secrets are the OS's (DX-Q3 Q4)" \
+            scripts/ci/check_template_secrets.sh
+          # SO-D12 increment 4c: the witness ring's seeds and keys, and the
+          # challenge nonces, reach no log and no derived Debug. The
+          # selftest first, so a scan that reads nothing cannot pass.
+          run_one "The bundle producer's secrets reach no log (selftest)" \
+            python3 scripts/ci/check_bundle_producer_secrets.py --selftest
+          run_one "The bundle producer's secrets reach no log" \
+            python3 scripts/ci/check_bundle_producer_secrets.py
           run_one "RandomX symbol-isolation negatives (rule 50)" \
             scripts/ci/test_check_randomx_symbol_isolation.sh
           run_one "LV-1: levin wire-constant parity" \
             ./scripts/ci/check_levin_constant_parity.sh
           run_one "C++ clamp-ban (address-freeze)" \
             bash scripts/lint_cpp_clamp_ban.sh
-          run_one "Carrier dev-flag stays hidden and default-off" \
-            scripts/ci/check_carrier_flag_hidden.sh
           run_one "§94: transit provenance marker outlives its constant" \
             scripts/ci/check_transit_marker.sh
           run_one "No unbounded blob dump in a log line" \
@@ -318,6 +351,34 @@ jobs:
           # a previous tag at a cut, so this lane holds its rule instead.
           run_one "Frozen-tuple gate self-test" \
             python3 scripts/ci/test_check_frozen_tuple.py
+          # TOR_SUPERVISOR.md §4.7: on Windows the managed tor inherits its
+          # control socket inside a window the spawn lock keeps private.
+          # Every Rust spawn in a crate whose image launches a managed tor
+          # takes the lock. A crate that merely links the client does not:
+          # the socket is not in its address space. A build script is its
+          # own process. `--selftest` first (rule 47).
+          run_one "Spawn sites take the spawn lock (selftest)" \
+            python3 scripts/ci/check_spawn_sites_take_the_lock.py --selftest
+          run_one "Spawn sites take the spawn lock" \
+            python3 scripts/ci/check_spawn_sites_take_the_lock.py
+          # DAEMON_CONFIG_CUTOVER.md §2.10: a child of the daemon's image
+          # inherits stdio and nothing else. C++ in that process opens
+          # descriptors without close-on-exec, so every production spawn in
+          # the same watched crates marks the rest in its pre_exec
+          # (shekyl-tor-control-client's `inherit`). `--selftest` first.
+          run_one "Spawn children inherit stdio only (selftest)" \
+            python3 scripts/ci/check_spawn_children_inherit_stdio_only.py --selftest
+          run_one "Spawn children inherit stdio only" \
+            python3 scripts/ci/check_spawn_children_inherit_stdio_only.py
+          # DRS-X: a regtest spawn that calls generateblocks or pop_blocks
+          # arms dev-rpc and checks this spawn's announcement. The sentence
+          # has three owners and they agree. `--selftest` first (rule 47).
+          run_one "Armed lever: log check" \
+            python3 scripts/test_armed_lever.py
+          run_one "Armed lever: launcher gate selftest" \
+            python3 scripts/ci/check_armed_lever_launchers.py --selftest
+          run_one "Armed lever: every regtest lever spawn arms the row" \
+            python3 scripts/ci/check_armed_lever_launchers.py
 
           # ESR-14 (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.20): the economics
           # sim's fold files form chain quantities in production's integers

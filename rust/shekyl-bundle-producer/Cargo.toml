@@ -1,0 +1,55 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-bundle-producer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The serve-credit bundle producer: the witness ring, the read plan, and the bundle a mined block files (SO-D12 increment 4c)"
+publish = false
+
+[features]
+default = []
+# The challenge read over the daemon's fetch scheduler, and the
+# classification of its outcome. Off by default: the ring is drawn from by
+# the template producer in `shekyl-chain-ingest`'s `pipeline`, which
+# `shekyl-ffi` (the wallet-side image) links, and the fetch client must not
+# enter that graph (SF-D4; `shekyl-archival-fetch-sched` is daemon-only).
+# `shekyl-chain-ingest`'s `producer` feature turns this on for the node.
+fetch = ["dep:shekyl-archival-fetch-sched"]
+
+[dependencies]
+# The bundle's bytes and its assembler, the nonces, `draw_commit`, `K`.
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+# The draws the producer reads (`DrawTargets`), derived by the verifier's
+# own selection (`draw_targets`).
+shekyl-chain-rules = { path = "../shekyl-chain-rules" }
+# The witness key: scheme 3, drawn from the OS per block.
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# Heights, hashes, personas, shards, `DrawCommitment`.
+shekyl-types = { path = "../shekyl-types" }
+# The one fetch path, with the challenge nonce (feature `fetch`).
+shekyl-archival-fetch-sched = { path = "../shekyl-archival-fetch-sched", optional = true }
+# The target block interval: the spread a read's start is drawn from, and
+# what turns a read's time ceiling into blocks against the filing margin.
+shekyl-difficulty = { path = "../shekyl-difficulty" }
+# The seed, drawn from the OS; the read plan's daemon-local RNG.
+rand = "0.8"
+zeroize = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread", "time", "net"] }
+# The fetch read against the production serve loop behind the loopback
+# SOCKS shim, signing receipts with the staged receipt key's test signer.
+# Dev-only: SF-D4 forbids the serve edge on the shipped graph.
+shekyl-p-serve = { path = "../shekyl-p-serve", features = ["test-signer"] }
+shekyl-p-loopback = { path = "../shekyl-p-loopback" }
+
+[lints]
+workspace = true

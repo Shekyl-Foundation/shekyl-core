@@ -13,7 +13,9 @@
 //! [`Apply`] is a bounded run of consecutive `Extend`s in one closure (the
 //! write-transaction granularity), a [`Rewind`] is one closure of pops.
 //! Between messages the actor holds the store, the rule set in force, and
-//! nothing mutable. (A facts provider sat beside them until E6 slice 7
+//! the drawable memo. The memo is rules-side state the count reads
+//! (`SO-D12b`): not chain state, not persisted, and not undone. (A facts
+//! provider sat beside them until E6 slice 7
 //! wave B — the E2 trace's `borrow` door or production composition from
 //! the owners — handing `connect` what the validator did not yet derive;
 //! every such value is the verdict's now, and `connect` takes the verdict
@@ -33,6 +35,7 @@
 //! | `Fault::View(store error)` | **halt**: the batch aborts, the error is the reply, the actor is over |
 //! | `Fault::Corrupt` | `WriteBatch::refuse_corrupt` arms the halt (SI-10) and its `InvariantViolated` — carrying the validator's value — is the reply; the batch aborts; **terminal** |
 //! | `Fault::Stale(Seed { .. })` | a **driver defect** in replay (RD-Q5): the reply carries the claim, the expectation, and the validator's `Retry`; the writer stays up so a later caller can re-`form` |
+//! | `Fault::Stale(Target { .. })` | a **driver defect** in replay (the target ledger and the store described different chains, `target` module docs): surfaced with the claim, the expectation and the `Retry`; the writer stays up |
 //! | `Fault::Stale(RuleSet { .. })` | a **driver defect** (the schedule handed the two stages different sets): surfaced; the writer stays up |
 //! | the source's height for an `Extend` is not `tip + 1` on the batch's view | a **driver defect** ([`RunFault::HeightClaim`]): surfaced before the rule set is chosen under the wrong height; the writer stays up |
 //! | a parent-side read observes a hole ([`shekyl_chain_rules::Corrupt::HoleBelowTip`]) | `refuse_corrupt` arms SI-7 and the writer **halts**, the same class a rule raises |
@@ -54,17 +57,18 @@
 
 use std::collections::BTreeSet;
 use std::ops::ControlFlow;
+use std::sync::Arc;
 
 use kameo::actor::{Actor, ActorRef, WeakActorRef};
 use kameo::error::{ActorStopReason, PanicError};
 use kameo::message::{Context, Message};
 use shekyl_chain_rules::{
-    recorded, validate, ArchivalDelta, AtHeight, CenRow, ChainView, Corrupt, EffectiveMedian,
-    Fault, HeaderView, InvalidBlock, PaidEmission, PerHeightRecord, Retry, Stale,
-    StructurallyValid, Verdict, ViewRead, Weights,
+    ArchivalDelta, AtHeight, DrawableMemo, Fault, HeaderRecord, HeaderView, InvalidBlock,
+    PaidEmission, StructurallyValid, Verdict, ViewRead, Weights,
 };
 use shekyl_chain_store::archival_snapshot::ArchivalSnapshot;
-use shekyl_chain_store::store::{ChainStore, ReadSnapshot, StoreError, StoreInvariant, WriteBatch};
+use shekyl_chain_store::codec::{FollowingDegraded, FollowingDegradedCell};
+use shekyl_chain_store::store::{ChainStore, ReadSnapshot, StoreError, WriteBatch};
 use shekyl_types::archival::{BondRecord, IndexedDraw, IssuedDigest};
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, PCanonicalId, SettlementEpoch,
@@ -74,119 +78,27 @@ use shekyl_units::AtomicUnits;
 use crate::schedule::ChainRules;
 use crate::source::ServeCredit;
 
-/// Why the writer is over: store-terminal faults only. `Copy` data, so it
-/// can be repeated on every later `Apply` / `Rewind`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RunEnd {
-    /// The store halted (a belt, or SI-10 through `refuse_corrupt`).
-    Halted(StoreInvariant),
-    /// A store engine or capability error ended the writer.
-    StoreFaulted,
-}
-
-impl RunEnd {
-    /// The end a fault brings, if it is store-terminal: a store error ends
-    /// the writer; a driver defect, a missing fact and a bad rewind target
-    /// are replies the driver owns, and the writer stays up.
-    const fn of(fault: &RunFault) -> Option<Self> {
-        match fault {
-            RunFault::Store(StoreError::InvariantViolated(row)) => Some(Self::Halted(*row)),
-            RunFault::Store(_) => Some(Self::StoreFaulted),
-            RunFault::StaleSeed { .. }
-            | RunFault::StaleRuleSet { .. }
-            | RunFault::HeightClaim { .. }
-            | RunFault::NoNextHeight { .. }
-            | RunFault::RewindTarget { .. }
-            | RunFault::InjectOffRegtest { .. }
-            | RunFault::IssueOffRegtest { .. }
-            | RunFault::Over(_) => None,
-        }
-    }
-}
-
-/// The reply error of a connector message: the first occurrence carries
-/// its detail, every later message carries [`RunFault::Over`].
-#[derive(Debug, thiserror::Error)]
-pub enum RunFault {
-    /// The store refused or failed (a belt's halt is
-    /// `StoreError::InvariantViolated`).
-    #[error(transparent)]
-    Store(#[from] StoreError),
-    /// The driver's seed claim disagreed with the store (RD-Q5: a defect).
-    #[error("driver defect: seed claim at height {height} was {claimed:?}, the chain holds {expected:?} ({retry:?})")]
-    StaleSeed {
-        /// The connecting height.
-        height: BlockHeight,
-        /// What the driver claimed.
-        claimed: BlockHash,
-        /// What the store holds at the seed height.
-        expected: BlockHash,
-        /// What the validator would allow next.
-        retry: Retry,
-    },
-    /// `form` and `validate` were handed different rule sets.
-    #[error(
-        "driver defect: rule set handed to form differs from the one in force at height {height}"
-    )]
-    StaleRuleSet {
-        /// The connecting height.
-        height: BlockHeight,
-    },
-    /// The source's height for an `Extend` is not the height the chain
-    /// connects at (`tip + 1` on the batch's view). Nothing is judged: the
-    /// rule set and the record are both keyed by the connecting height,
-    /// and a block judged under the claimed one would be judged
-    /// under the wrong schedule. A driver defect; the writer stays up.
-    #[error(
-        "driver defect: the source claims height {claimed} for a block the chain connects at {connecting}"
-    )]
-    HeightClaim {
-        /// The source's height for the event.
-        claimed: BlockHeight,
-        /// `tip + 1` as the store holds it.
-        connecting: BlockHeight,
-    },
-    /// The recorded tip is `u64::MAX`: there is no next height to build at.
-    /// A chain that long has no successor; the writer stays up.
-    #[error("tip {tip} has no successor height")]
-    NoNextHeight {
-        /// The tip that cannot be extended.
-        tip: BlockHeight,
-    },
-    /// A rewind to `to` when the tip is `tip`.
-    #[error("rewind to {to} is not below the tip {tip:?}")]
-    RewindTarget {
-        /// The target.
-        to: BlockHeight,
-        /// The tip at the time.
-        tip: Option<BlockHeight>,
-    },
-    /// An [`Inject`] under rules other than regtest. The out-of-band write
-    /// has one producer — the regtest injector — and no chain but a
-    /// regtest chain can carry one (DRS-E4 §3.8 item 3); refused here,
-    /// before the store sees it, so a source that carries one into a
-    /// scheduled replay is a driver fault and not a store-terminal one.
-    #[error("inject for {persona} (shard {shard}, epoch {epoch}) under {rules:?}: the out-of-band serve credit is regtest-only", persona = credit.persona, shard = credit.shard, epoch = credit.epoch)]
-    InjectOffRegtest {
-        /// The credit refused.
-        credit: ServeCredit,
-        /// The rules the connector runs under.
-        rules: ChainRules,
-    },
-    /// An [`IssueDraws`] under rules other than regtest: the door has one
-    /// producer, as [`Inject`]'s has, and is refused here for the same
-    /// reason.
-    #[error("issue of draws for epoch {epoch} under {rules:?}: the out-of-band draw issue is regtest-only")]
-    IssueOffRegtest {
-        /// The epoch the draws were for.
-        epoch: SettlementEpoch,
-        /// The rules the connector runs under.
-        rules: ChainRules,
-    },
-    /// The writer is over: a store-terminal fault was already replied.
-    #[error("the writer is over: {0:?}")]
-    Over(RunEnd),
-}
+#[path = "connector_bundles.rs"]
+mod bundles;
+#[path = "connector_connect.rs"]
+mod connect_step;
+#[path = "connector_reads.rs"]
+mod reads;
+#[path = "run_fault.rs"]
+mod run_fault;
+#[path = "switch.rs"]
+mod switch;
+#[cfg(test)]
+pub(crate) use bundles::ApplyAdmitting;
+pub use bundles::{BundleOffered, LearnDraws, Learned, OfferBundle};
+pub(crate) use run_fault::{fault_reply, halt_on_corrupt};
+pub use run_fault::{PlanMismatchReason, RunEnd, RunFault};
+#[cfg(test)]
+pub use switch::AnchorForTests;
+pub use switch::{
+    AltBlocksHeld, OfferAlt, Offered, PlannedBlock, PlannedDemotion, PlannedPromotion,
+    PopBeyondReorgCap, RefusePromotion, Reorganize, SwitchDone, SwitchPlan, Switched, TableRows,
+};
 
 /// What an [`Apply`] did: the blocks that landed, and the refusal that
 /// stopped the run of `Extend`s if one did.
@@ -230,12 +142,39 @@ pub struct Applied {
     pub refused: Option<(BlockHeight, InvalidBlock)>,
 }
 
-/// What a [`Rewind`] did.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Rewound {
-    /// Blocks popped. The tip afterwards is the `to` the message named —
-    /// the handler returns only when it is.
-    pub popped: u64,
+/// What a [`Rewind`] or a [`PopBlocks`] did.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Rewound {
+    /// The blocks above `tip` were popped.
+    Popped {
+        /// How many.
+        popped: u64,
+        /// The tip afterwards.
+        tip: BlockHeight,
+        /// Their listed bodies, read before the pop, lowest block first and
+        /// each block's in its list order: the pool's to judge again.
+        bodies: Vec<shekyl_wire::Transaction>,
+    },
+    /// Refused before any pop: the lowest block it would pop is below
+    /// `floor`, the lowest poppable height (genesis is never popped, nor
+    /// anything the undo journal has retired). The writer is unchanged.
+    Refused {
+        /// The tip, unchanged.
+        tip: BlockHeight,
+        /// The lowest poppable height.
+        floor: BlockHeight,
+    },
+}
+
+impl Rewound {
+    /// Blocks popped; zero when refused.
+    #[must_use]
+    pub const fn popped(&self) -> u64 {
+        match self {
+            Self::Popped { popped, .. } => *popped,
+            Self::Refused { .. } => 0,
+        }
+    }
 }
 
 /// Connect a run of consecutive formed blocks in one write closure.
@@ -247,6 +186,15 @@ pub struct Apply(pub Vec<(BlockHeight, Verdict<StructurallyValid>)>);
 pub struct Rewind {
     /// The height that is the tip afterwards.
     pub to: BlockHeight,
+}
+
+/// Pop `count` blocks from the tip, in one write closure: `pop_blocks`
+/// (`DRS_X_STORE_FLIP.md` DX-Q3, Q7). The target is the tip the writer
+/// holds less `count`, read when the message runs.
+#[derive(Clone, Copy, Debug)]
+pub struct PopBlocks {
+    /// How many.
+    pub count: u64,
 }
 
 /// Write the out-of-band serve credit at the tip, in its own store
@@ -327,6 +275,33 @@ pub struct HashAt {
     pub height: BlockHeight,
 }
 
+/// The header record at a height — identity, header, cumulative difficulty
+/// — for the driver's target claim when its ledger lacks a height the
+/// LWMA-1 window reads (`target` module docs). `None` above the tip.
+#[derive(Clone, Copy, Debug)]
+pub struct HeaderAt {
+    /// The height asked for.
+    pub height: BlockHeight,
+}
+
+/// Re-derive CEN-D4's target for `height`, and the work it adds, over the
+/// writer's own view, when the driver's target ledger observed a corrupt
+/// window — a hole, a work decrease or an overflowing sum — in records the
+/// store supplied (`target` module docs). The writer acts on its own
+/// observation, never on the driver's: a corrupt chain halts it through
+/// `refuse_corrupt`, as `validate`'s derivation would; a consistent one
+/// replies `Ok`, and the ledger was the defect.
+///
+/// `height` must be the height the store connects at next. Above it the
+/// derivation would read past the tip, and a height the writer cannot see
+/// is not a hole; the reply is then `HeightClaim`, a driver defect, and
+/// nothing is halted.
+#[derive(Clone, Copy, Debug)]
+pub struct ObserveTarget {
+    /// The connecting height whose window is re-read.
+    pub height: BlockHeight,
+}
+
 /// The curve-tree root going into `height` — `curve_tree_roots[height]`,
 /// the state the header at `height` commits to (SCW-19; `EMPTY` at `0`).
 /// `None` above `tip + 1`. The read the scenario driver holds the
@@ -365,49 +340,73 @@ pub struct BudgetAccruingOf {
 /// candidate, read on the view the validator will judge it against and
 /// through the definitions the validator uses (`tx_volume_window`,
 /// `mtp_median_at`) — so the template is priced at the operands it will be
-/// judged by, never at a second copy of them. The `get_block_template`
-/// read path in the shape the live daemon (DRS-X) will serve it; the slice-6 scenario driver is
-/// its first consumer.
+/// judged by, never at a second copy of them: `chain_facts_on`, asked of
+/// the connector. The scenario driver reads the chain this way; the tip
+/// follower's producer calls `chain_facts_on` on the snapshot it reads
+/// its claims and the pool on.
 #[derive(Clone, Copy, Debug)]
 pub struct TemplateFacts;
 
-/// [`TemplateFacts`]' reply.
+pub use crate::chain_facts::ChainFacts;
+pub(crate) use crate::chain_facts::{chain_facts_on, FactsStop};
+
+/// The recorded tip, as the dialer's handshake carries it (`SyncPayload`'s
+/// fields): the block count, the tip's cumulative difficulty and its
+/// identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ChainFacts {
-    /// The height the next block connects at (`tip + 1`; `0` when empty).
-    pub connecting: BlockHeight,
-    /// The tip's identity, [`BlockHash::NULL`] when empty (CEN-A2).
-    pub previous: BlockHash,
-    /// The tree state at `connecting` (CEN-B5).
-    pub curve_tree_root: shekyl_types::CurveTreeRoot,
-    /// The parent's gross emission (CEN-F13's accumulator); zero at genesis.
-    pub parent_coins_generated: shekyl_units::AtomicUnits,
-    /// Everything burned through the tip.
-    pub total_burned: shekyl_units::AtomicUnits,
-    /// CEN-F17's `n` at `connecting`: the archival shards the parent
-    /// chain's fold has closed, read through the validator's own definition
-    /// (`shekyl_chain_rules::closed_shards_before`, `shekyl_types::shard_of`
-    /// the parent's `cumulative_archival_len`), so the producer prices the
-    /// fee split at the operand the validator reads
-    /// (`rules::miner::BurnOperands`; E6 slice 7 wave B, re-keyed from the
-    /// leaf count's frozen-segment count by DRS-E4 commit 4).
-    pub closed_shards: shekyl_economics::ClosedShardCount,
-    /// CEN-F20's window at `connecting`.
-    pub tx_volume: shekyl_economics::TxVolume,
-    /// CEN-C2's median at `connecting`; `None` at genesis.
-    pub median_timestamp: Option<shekyl_types::Timestamp>,
-    /// CEN-G6/G6b's two medians at `connecting` — what the producer's
-    /// coinbase is priced against and its body bounded by, read through
-    /// the validator's own definition (`effective_median_at`, slice 7 Q4:
-    /// one derivation, two consumers) and never from the store's recorded
-    /// `long_term_effective_median(tip)`, which is one block stale.
-    pub medians: EffectiveMedian,
+pub struct ChainTip {
+    /// Blocks recorded: the tip's height plus one, the count the
+    /// handshake's `current_height` reports.
+    pub count: shekyl_types::ChainCount,
+    /// The tip's cumulative difficulty.
+    pub cumulative_difficulty: shekyl_difficulty::CumulativeDifficulty,
+    /// The tip's identity.
+    pub top_id: BlockHash,
+}
+
+/// `TipChanged` (`DRS_X_STORE_FLIP.md` DX-Q2 item 5): the one source of the
+/// tip. The connector publishes it on a `watch` after every committed
+/// connect, pop and switch — after the write returns, never before the
+/// commit — and once at start. `seq` rises with each publication, so a
+/// consumer can tell two publications of one tip apart (a pop and the
+/// connect back) and say which it last acted on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TipChanged {
+    /// The publication's number: 0 at start, one more each time.
+    pub seq: u64,
+    /// The tip; `None` on an empty chain.
+    pub tip: Option<ChainTip>,
+}
+
+/// A receiver of [`TipChanged`], for a consumer (the dialer's handshake,
+/// new-block relay, the sync owner, the RPC, the pool, the miner's
+/// template producer).
+#[derive(Clone, Copy, Debug)]
+pub struct WatchTip;
+
+/// The recorded tip on `store` now.
+fn chain_tip(store: &ChainStore) -> Result<Option<ChainTip>, StoreError> {
+    let read = store.begin_read()?;
+    let Some(tip) = read.tip()?.recorded else {
+        return Ok(None);
+    };
+    let AtHeight::Recorded(info) = read.block_info(tip.height)? else {
+        unreachable!("the recorded tip has its row");
+    };
+    Ok(Some(ChainTip {
+        count: shekyl_types::ChainCount::with_tip(tip.height)
+            .expect("a recorded tip has a successor count"),
+        cumulative_difficulty: info.cumulative_difficulty,
+        top_id: tip.hash,
+    }))
 }
 
 /// What the actor is built from.
 pub struct ConnectorArgs {
-    /// The store this actor alone writes.
-    pub store: ChainStore,
+    /// The store this actor alone writes. Shared, so the readers that place
+    /// arrivals and answer the RPC take their snapshots off the same file
+    /// (the ingest service's router, `StoreFacts`); none of them writes.
+    pub store: Arc<ChainStore>,
     /// Which rules are in force at each height (RD-Q10's driver half).
     pub rules: ChainRules,
 }
@@ -416,12 +415,12 @@ pub struct ConnectorArgs {
 /// every write after the first store-terminal fault (module docs). Reads
 /// stay open.
 struct Writer {
-    store: ChainStore,
+    store: Arc<ChainStore>,
     over: Option<RunEnd>,
 }
 
 impl Writer {
-    const fn live(store: ChainStore) -> Self {
+    const fn live(store: Arc<ChainStore>) -> Self {
         Self { store, over: None }
     }
 
@@ -436,21 +435,6 @@ impl Writer {
             return Err(RunFault::Over(end));
         }
         let result = self.store.write(f);
-        self.latch(result)
-    }
-
-    /// One read through a write batch that **aborts**. The producer's
-    /// [`TemplateFacts`](crate::TemplateFacts): the validator's view and
-    /// its poison latch, and no commit. A terminal fault arms the same
-    /// latch `write` does.
-    fn inspect<R, F>(&mut self, f: F) -> Result<R, RunFault>
-    where
-        F: for<'id> FnOnce(&mut WriteBatch<'_, 'id>) -> Result<R, RunFault>,
-    {
-        if let Some(end) = self.over {
-            return Err(RunFault::Over(end));
-        }
-        let result = self.store.inspect(f);
         self.latch(result)
     }
 
@@ -492,6 +476,21 @@ impl Writer {
         self.latch(result)
     }
 
+    /// The store for one operation that reads a snapshot and then writes —
+    /// the switch, which judges on a snapshot before its write closure and
+    /// keeps the verdicts alive through it (`switch.rs`). The same latch as
+    /// [`Self::write`]: refused once over, armed by a terminal fault.
+    fn with_store<R, F>(&mut self, f: F) -> Result<R, RunFault>
+    where
+        F: FnOnce(&ChainStore) -> Result<R, RunFault>,
+    {
+        if let Some(end) = self.over {
+            return Err(RunFault::Over(end));
+        }
+        let result = f(&self.store);
+        self.latch(result)
+    }
+
     /// Arm the latch on a terminal fault; the first stands.
     fn latch<R>(&mut self, result: Result<R, RunFault>) -> Result<R, RunFault> {
         if let Some(end) = result.as_ref().err().and_then(RunEnd::of) {
@@ -510,7 +509,21 @@ impl Writer {
 /// The single writer (module docs).
 pub struct Connector {
     writer: Writer,
+    /// [`TipChanged`]'s one publisher.
+    tip: tokio::sync::watch::Sender<TipChanged>,
+    /// The `following_degraded` latch as the store holds it, published after
+    /// every write that sets it (`DRS_X_STORE_FLIP.md` DX-Q2 item 8). `None`
+    /// is clear.
+    degraded: tokio::sync::watch::Sender<Option<FollowingDegraded>>,
     rules: ChainRules,
+    /// What the run takes on the release's word — `rules.trust()`, read
+    /// once at start. A field rather than a call so a test can reach the
+    /// checkpoint arm of the fork choice with a fixture table no regtest
+    /// run carries ([`AnchorForTests`]).
+    trust: shekyl_chain_rules::Trust,
+    /// Drawable sets the count has already built, keyed by the epoch and
+    /// the opening block's hash. Not chain state (`SO-D12b`).
+    memo: DrawableMemo,
 }
 
 impl Actor for Connector {
@@ -518,10 +531,23 @@ impl Actor for Connector {
     type Error = RunFault;
 
     async fn on_start(args: ConnectorArgs, _actor_ref: ActorRef<Self>) -> Result<Self, RunFault> {
-        Ok(Self {
+        let tip = chain_tip(&args.store)?;
+        let degraded = args
+            .store
+            .begin_read()?
+            .get_property::<FollowingDegradedCell>()?;
+        let mut connector = Self {
+            tip: tokio::sync::watch::Sender::new(TipChanged { seq: 0, tip }),
+            degraded: tokio::sync::watch::Sender::new(degraded),
             writer: Writer::live(args.store),
             rules: args.rules,
-        })
+            trust: args.rules.trust(),
+            memo: DrawableMemo::new(),
+        };
+        // The bundle queue and the body store are reconciled at open
+        // (SI-41): what has no holder is dropped and logged.
+        connector.reconcile_queue()?;
+        Ok(connector)
     }
 
     /// No restart (RD-Q11): a panic stops the actor and it stays stopped.
@@ -536,89 +562,124 @@ impl Actor for Connector {
     }
 }
 
+impl Connector {
+    /// Publish the tip after a committed write (module docs: `TipChanged`).
+    /// A read that fails here leaves the last publication standing: the
+    /// next write meets the same store.
+    pub(crate) fn publish_tip(&self) {
+        if let Ok(tip) = chain_tip(&self.writer.store) {
+            self.tip.send_modify(|now| {
+                now.seq += 1;
+                now.tip = tip;
+            });
+        }
+    }
+}
+
+/// Chain sync's evidence of a heavier chain past the cap
+/// (`P2P_3_CHAIN_SYNC_BRIEF.md` §A item 7): write the `following_degraded`
+/// latch in the connector's own transaction. One latch, one writer. The
+/// reply is whether this message set it; a latch already set keeps its
+/// first evidence.
+#[derive(Clone, Copy, Debug)]
+pub struct RaiseAlarm(pub FollowingDegraded);
+
+/// A receiver of the `following_degraded` latch: `None` is clear.
+#[derive(Clone, Copy, Debug)]
+pub struct WatchLatch;
+
+impl Message<RaiseAlarm> for Connector {
+    type Reply = Result<bool, RunFault>;
+
+    async fn handle(
+        &mut self,
+        msg: RaiseAlarm,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let evidence = msg.0;
+        let set = self.writer.write(|batch| {
+            batch
+                .raise_following_degraded(&evidence)
+                .map_err(RunFault::Store)
+        })?;
+        if set {
+            self.degraded.send_replace(Some(evidence));
+        }
+        Ok(set)
+    }
+}
+
+impl Message<WatchLatch> for Connector {
+    type Reply = tokio::sync::watch::Receiver<Option<FollowingDegraded>>;
+
+    async fn handle(
+        &mut self,
+        _: WatchLatch,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.degraded.subscribe()
+    }
+}
+
+impl Message<WatchTip> for Connector {
+    type Reply = tokio::sync::watch::Receiver<TipChanged>;
+
+    async fn handle(&mut self, _: WatchTip, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        self.tip.subscribe()
+    }
+}
+
+/// The death rule's second bound (`shekyl_chain_store`'s `store/alt.rs`):
+/// after a connect at `height`, every alt block at or below the last anchor
+/// at or below it leaves with its bodies. Its fork point would be below the
+/// anchor, which CEN-E2 refuses at offer and at the switch, so nothing can
+/// promote it. The store's own connect applies the cap; the anchors are the
+/// release's trust, which the store does not hold.
+pub(crate) fn retire_below_the_anchor(
+    batch: &shekyl_chain_store::store::WriteBatch<'_, '_>,
+    trust: &shekyl_chain_rules::Trust,
+    height: BlockHeight,
+) -> Result<u64, shekyl_chain_store::store::StoreError> {
+    match trust.anchors().last_at_or_below(height) {
+        Some(anchor) => batch.retire_alt_blocks(anchor.height),
+        None => Ok(0),
+    }
+}
+
 impl Message<Apply> for Connector {
     type Reply = Result<Applied, RunFault>;
 
     async fn handle(&mut self, msg: Apply, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
         let rules = self.rules;
-        self.writer.write(|batch| {
-            let view = batch.chain_view();
+        let trust = self.trust;
+        let memo = &mut self.memo;
+        let applied = self.writer.write(|batch| {
             let mut applied = Applied::default();
             for (claimed, formed) in msg.0 {
-                // The height is the store's to say, not the source's: the
-                // rule set in force and the row the block is recorded
-                // under are both keyed by the height the
-                // chain connects at, which is `tip + 1` on this view (the
-                // tip advances as the batch connects). The tuple's height
-                // is the source's bookkeeping; where the two disagree the
-                // source is wrong about the chain, and that is a driver
-                // defect surfaced before anything is judged under the
-                // wrong schedule (#852 review).
-                let (height, _) = connecting(view.tip()?)?;
-                if claimed != height {
-                    return Err(RunFault::HeightClaim {
-                        claimed,
-                        connecting: height,
-                    });
-                }
-                let formed = match formed {
-                    Ok(formed) => formed,
-                    Err(refused) => {
-                        applied.refused = Some((height, refused));
-                        break;
-                    }
+                let Some(judged) = connect_step::judge_connecting(
+                    &mut applied,
+                    batch,
+                    rules,
+                    &trust,
+                    memo,
+                    claimed,
+                    formed,
+                )?
+                else {
+                    break;
                 };
-                let in_force = rules.in_force(height);
-                match validate(formed, &view, &in_force, &rules.trust()) {
-                    Ok(Ok(valid)) => {
-                        let hash = valid.block().hash();
-                        let root_after = valid.block().root_after();
-                        let weights = *valid.block().weights();
-                        let emission = *valid.block().emission();
-                        let archival = valid.block().archival().clone();
-                        applied
-                            .exercised
-                            .extend(valid.coverage().iter().map(CenRow::as_str));
-                        batch.connect(valid, in_force)?;
-                        applied.connected.push((height, hash));
-                        applied.roots.push((height, root_after));
-                        applied.weights.push((height, weights));
-                        applied.emission.push((height, emission));
-                        applied.archival.push((height, archival));
-                    }
-                    Ok(Err(refused)) => {
-                        applied.refused = Some((height, refused));
-                        break;
-                    }
-                    Err(Fault::View(e)) => return Err(RunFault::Store(e)),
-                    // SI-10: the refusal arms the halt and *is* the error —
-                    // `ChainStore::write` makes an `InvariantViolated` win
-                    // over anything else the closure returns, so the row
-                    // (which carries the validator's `Corrupt` value) is
-                    // what the caller sees, with no second wrapper to drift
-                    // from it.
-                    Err(Fault::Corrupt(observed)) => {
-                        return Err(RunFault::Store(batch.refuse_corrupt(observed)))
-                    }
-                    Err(Fault::Stale(Stale::Seed {
-                        claimed,
-                        expected,
-                        retry,
-                    })) => {
-                        return Err(RunFault::StaleSeed {
-                            height,
-                            claimed,
-                            expected,
-                            retry,
-                        })
-                    }
-                    Err(Fault::Stale(Stale::RuleSet { .. })) => {
-                        return Err(RunFault::StaleRuleSet { height })
-                    }
-                }
+                let height = judged.height;
+                applied.exercised.extend(judged.exercised());
+                batch.connect(judged.valid, judged.rule_set)?;
+                retire_below_the_anchor(batch, &trust, height)?;
+                connect_step::record_connected(&mut applied, height, judged.facts);
             }
             Ok(applied)
-        })
+        })?;
+        if !applied.connected.is_empty() {
+            self.tip_moved();
+        }
+        Ok(applied)
     }
 }
 
@@ -627,21 +688,138 @@ impl Message<Rewind> for Connector {
 
     async fn handle(&mut self, msg: Rewind, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
         let to = msg.to;
-        self.writer.write(|batch| {
-            let mut popped = 0u64;
-            loop {
-                let tip = batch.chain_view().tip()?.map(|t| t.height);
-                match tip {
-                    Some(tip) if tip > to => {
-                        batch.pop()?;
-                        popped += 1;
-                    }
-                    Some(tip) if tip == to => return Ok(Rewound { popped }),
-                    other => return Err(RunFault::RewindTarget { to, tip: other }),
-                }
-            }
+        self.rewind(|tip| match tip {
+            Some(tip) if tip >= to => Ok(Some(to)),
+            other => Err(RunFault::RewindTarget { to, tip: other }),
         })
     }
+}
+
+impl Message<PopBlocks> for Connector {
+    type Reply = Result<Rewound, RunFault>;
+
+    /// A count past the tip would pop genesis: the floor refuses it like
+    /// any other pop below the lowest poppable height.
+    async fn handle(
+        &mut self,
+        msg: PopBlocks,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.rewind(|tip| match tip {
+            Some(tip) => Ok(tip.checked_sub_count(BlockCount::from_raw(msg.count))),
+            None => Err(RunFault::RewindTarget {
+                to: BlockHeight::ZERO,
+                tip: None,
+            }),
+        })
+    }
+}
+
+impl Connector {
+    /// Pop until the tip is the height `target` names for the tip the
+    /// writer holds; `None` is a target below genesis. Refused, before any
+    /// pop, when the lowest block it would pop is below the lowest poppable
+    /// height; otherwise the popped blocks' bodies are read first and
+    /// returned.
+    ///
+    /// The tip, the floor and the bodies are read on one snapshot, then the
+    /// pop is one write closure. This actor is the store's only writer, so
+    /// the batch's tip is the snapshot's.
+    fn rewind(
+        &mut self,
+        target: impl FnOnce(Option<BlockHeight>) -> Result<Option<BlockHeight>, RunFault>,
+    ) -> Result<Rewound, RunFault> {
+        if let Some(end) = self.writer.over {
+            return Err(RunFault::Over(end));
+        }
+        let (tip, to, bodies) = {
+            let snap = self.writer.read()?;
+            let tip = snap.tip()?.recorded.map(|t| t.height);
+            let to = target(tip)?;
+            let Some(tip) = tip else {
+                return Err(RunFault::RewindTarget {
+                    to: to.unwrap_or(BlockHeight::ZERO),
+                    tip: None,
+                });
+            };
+            let floor = snap.undo_floor()?;
+            let Some(to) = to.filter(|to| pop_stays_above_floor(*to, tip, floor)) else {
+                return Ok(Rewound::Refused { tip, floor });
+            };
+            if to == tip {
+                return Ok(Rewound::Popped {
+                    popped: BlockCount::ZERO.to_raw(),
+                    tip,
+                    bodies: Vec::new(),
+                });
+            }
+            let mut bodies = Vec::new();
+            for height in heights_popped(to, tip) {
+                match snap.candidate_at(height)? {
+                    AtHeight::Recorded(candidate) => bodies.extend(candidate.transactions),
+                    AtHeight::AboveTip => unreachable!("every height to the tip is recorded"),
+                }
+            }
+            (tip, to, bodies)
+        };
+        let popped = tip
+            .checked_sub(to)
+            .ok_or(RunFault::RewindTarget { to, tip: Some(tip) })?;
+        self.writer.write(|batch| {
+            if batch.chain_view().tip()?.map(|t| t.height) != Some(tip) {
+                return Err(RunFault::RewindTarget { to, tip: Some(tip) });
+            }
+            // The popped blocks' identities, read before they go: an alt
+            // branch built on one no longer reaches the main chain, and
+            // leaves with them (`store/alt.rs`, the invariant). A switch's
+            // pops demote what they pop instead, so this is the rewind's.
+            let view = batch.chain_view();
+            let mut gone = Vec::new();
+            for height in heights_popped(to, tip) {
+                match view.header_at(height)? {
+                    AtHeight::Recorded(record) => gone.push(record.hash),
+                    AtHeight::AboveTip => unreachable!("every height to the tip is recorded"),
+                }
+            }
+            drop(view);
+            // One run of pops, then SI-5 over the tree they left
+            // (`pop_many`): the belt is the run's, not each pop's.
+            batch.pop_many(popped.to_raw())?;
+            batch.retire_alt_blocks_on(&gone)?;
+            Ok(())
+        })?;
+        self.tip_moved();
+        Ok(Rewound::Popped {
+            popped: popped.to_raw(),
+            tip: to,
+            bodies,
+        })
+    }
+}
+
+/// The first height a pop of everything above `to` would remove is at or
+/// above `floor`, or the pop removes nothing.
+fn pop_stays_above_floor(to: BlockHeight, tip: BlockHeight, floor: BlockHeight) -> bool {
+    to == tip
+        || to
+            .checked_add(BlockCount::ONE)
+            .is_some_and(|first| first >= floor)
+}
+
+/// Heights strictly above `after`, through `tip`.
+///
+/// The successor of the last height is not named, so a tip at the top of
+/// the axis still walks.
+fn heights_popped(after: BlockHeight, tip: BlockHeight) -> impl Iterator<Item = BlockHeight> {
+    let mut next = after.checked_add(BlockCount::ONE);
+    std::iter::from_fn(move || {
+        let height = next?;
+        if height > tip {
+            return None;
+        }
+        next = height.checked_add(BlockCount::ONE);
+        Some(height)
+    })
 }
 
 impl Message<Inject> for Connector {
@@ -655,7 +833,7 @@ impl Message<Inject> for Connector {
                 rules: self.rules,
             });
         }
-        let at = self.writer.inject(self.rules.trust(), credit)?;
+        let at = self.writer.inject(self.trust, credit)?;
         Ok(Injected { at })
     }
 }
@@ -674,7 +852,7 @@ impl Message<IssueDraws> for Connector {
                 rules: self.rules,
             });
         }
-        self.writer.issue_draws(self.rules.trust(), &msg)
+        self.writer.issue_draws(self.trust, &msg)
     }
 }
 
@@ -718,58 +896,44 @@ impl Message<CheckpointState> for Connector {
 impl Message<TemplateFacts> for Connector {
     type Reply = Result<ChainFacts, RunFault>;
 
-    /// Read on the validator's view, inside a batch that aborts. Every
-    /// operand — `total_burned` included — comes off that one view, and
-    /// `tx_volume_window` / `mtp_median_at` / `effective_median_at` are the
-    /// rules' own definitions.
-    /// A hole or a decreasing prefix sum halts the writer; nothing commits.
+    /// `chain_facts_on` over one committed snapshot. A writer that is
+    /// over answers so, as a write would. A row missing below the tip is
+    /// the store's own error: a snapshot arms nothing (`SnapshotView`'s
+    /// fault policy), and the writer halts when a write meets it. A
+    /// definition that finds the chain corrupt halts the writer here,
+    /// through a batch that commits nothing.
     async fn handle(
         &mut self,
         _: TemplateFacts,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.writer.inspect(|batch| {
-            let total_burned = batch.total_burned()?;
-            let view = batch.chain_view();
-            let tip = view.tip()?;
-            let (connecting, previous) = connecting(tip)?;
-            let curve_tree_root = present(
-                batch,
-                connecting,
-                PerHeightRecord::CurveTreeRoot,
-                view.root_at(connecting),
-            )?;
-            let parent_coins_generated = match tip {
-                None => shekyl_units::AtomicUnits::ZERO,
-                Some(t) => definition(batch, recorded(&view, t.height))?.coins_generated,
-            };
-            let closed_shards = definition(
-                batch,
-                shekyl_chain_rules::closed_shards_before(&view, connecting),
-            )?;
-            let tx_volume = definition(
-                batch,
-                shekyl_chain_rules::tx_volume_window(&view, connecting),
-            )?;
-            let median_timestamp =
-                definition(batch, shekyl_chain_rules::mtp_median_at(&view, connecting))?;
-            let medians = definition(
-                batch,
-                shekyl_chain_rules::effective_median_at(&view, connecting),
-            )?;
-            Ok(ChainFacts {
-                connecting,
-                previous,
-                curve_tree_root,
-                parent_coins_generated,
-                total_burned,
-                closed_shards,
-                tx_volume,
-                median_timestamp,
-                medians,
-            })
-        })
+        if let Some(end) = self.writer.over {
+            return Err(RunFault::Over(end));
+        }
+        let read = chain_facts_on(&self.writer.read()?);
+        match read {
+            Ok(facts) => Ok(facts),
+            Err(FactsStop::NoNextHeight { tip }) => Err(RunFault::NoNextHeight { tip }),
+            Err(FactsStop::Read(ViewRead::View(fault))) => Err(RunFault::Store(fault)),
+            Err(FactsStop::Read(ViewRead::Corrupt(corrupt))) => self
+                .writer
+                .write(|batch| Err::<(), _>(RunFault::Store(batch.refuse_corrupt(corrupt))))
+                .map(|()| unreachable!("the batch was refused")),
+        }
     }
+}
+
+/// A `validate` fault on the connect batch, as the connector's reply — one
+/// mapping for `Apply` and the switch's promotion. The corrupt arm arms the
+/// halt on this batch (SI-10); [`fault_reply`] maps the rest.
+fn validate_fault(
+    batch: &WriteBatch<'_, '_>,
+    height: BlockHeight,
+    fault: Fault<StoreError>,
+) -> RunFault {
+    fault_reply(height, fault, |observed| {
+        RunFault::Store(batch.refuse_corrupt(observed))
+    })
 }
 
 /// The height the next block connects at and the hash it must name as its
@@ -787,82 +951,5 @@ fn connecting(tip: Option<shekyl_chain_rules::Tip>) -> Result<(BlockHeight, Bloc
                 .ok_or(RunFault::NoNextHeight { tip: t.height })?,
             t.hash,
         )),
-    }
-}
-
-/// A [`ViewRead`] from a definition, as a connector fault. A hole halts.
-fn definition<T>(
-    batch: &WriteBatch<'_, '_>,
-    read: Result<T, ViewRead<StoreError>>,
-) -> Result<T, RunFault> {
-    match read {
-        Ok(value) => Ok(value),
-        Err(ViewRead::View(fault)) => Err(RunFault::Store(fault)),
-        Err(ViewRead::Corrupt(corrupt)) => Err(RunFault::Store(batch.refuse_corrupt(corrupt))),
-    }
-}
-
-/// A height the producer asked for as recorded. `AboveTip` inside the
-/// range the caller derived (`tip + 1` for the live root) is
-/// [`Corrupt::HoleBelowTip`] for `record` and halts; a store fault passes
-/// through, and an in-range hole is already that fault from the view.
-fn present<T>(
-    batch: &WriteBatch<'_, '_>,
-    height: BlockHeight,
-    record: PerHeightRecord,
-    at: Result<AtHeight<T>, StoreError>,
-) -> Result<T, RunFault> {
-    match at {
-        Ok(AtHeight::Recorded(value)) => Ok(value),
-        Ok(AtHeight::AboveTip) => Err(RunFault::Store(
-            batch.refuse_corrupt(Corrupt::HoleBelowTip { at: height, record }),
-        )),
-        Err(fault) => Err(RunFault::Store(fault)),
-    }
-}
-
-impl Message<HashAt> for Connector {
-    type Reply = Result<Option<BlockHash>, RunFault>;
-
-    async fn handle(&mut self, msg: HashAt, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
-        Ok(match self.writer.read()?.block_info(msg.height)? {
-            AtHeight::Recorded(info) => Some(info.hash),
-            AtHeight::AboveTip => None,
-        })
-    }
-}
-
-impl Message<RootAt> for Connector {
-    type Reply = Result<Option<CurveTreeRoot>, RunFault>;
-
-    async fn handle(&mut self, msg: RootAt, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
-        Ok(match self.writer.read()?.root_at(msg.height)? {
-            AtHeight::Recorded(root) => Some(root),
-            AtHeight::AboveTip => None,
-        })
-    }
-}
-
-impl Message<BondRecordOf> for Connector {
-    type Reply = Result<Option<BondRecord>, RunFault>;
-
-    async fn handle(
-        &mut self,
-        msg: BondRecordOf,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        Ok(self.writer.read()?.bond_record(&msg.persona)?)
-    }
-}
-
-impl Message<BudgetAccruingOf> for Connector {
-    type Reply = Result<Option<AtomicUnits>, RunFault>;
-
-    async fn handle(
-        &mut self,
-        msg: BudgetAccruingOf,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        Ok(self.writer.read()?.budget_accruing(msg.epoch)?)
     }
 }

@@ -68,8 +68,9 @@ use crate::engine::pending::TxHash;
 ///
 /// # Per-tier `FeeRate`
 ///
-/// `FeeRate` is the `shekyl_rpc_client::FeeRate` (per-weight cost + rounding
-/// mask) returned by [`Rpc::get_fee_rate`]. The three tier fields on
+/// `FeeRate` is the `shekyl_rpc_client::FeeRate` (a per-weight cost; the
+/// fee lattice it is rounded to is `shekyl_economics::FEE_QUANTIZATION_MASK`,
+/// a constant) returned by [`Rpc::get_fee_rate`]. The three tier fields on
 /// this struct correspond one-to-one with the three non-`Custom`
 /// `FeePriority` variants; resolving a `FeePriority` to a `FeeRate`
 /// is a structural projection rather than a fresh daemon call.
@@ -79,13 +80,9 @@ use crate::engine::pending::TxHash;
 /// Per `PHASE_2A_SEND_PATH.md` §3.3, the whole snapshot derives from
 /// **one** `get_fee_estimate` JSON-RPC call (not three per-tier
 /// `get_fee_rate` calls): the response's fee array maps to the three
-/// tiers (`economy`/`standard`/`priority` → indices `0`/`1`/`2`) and
-/// its single `quantization_mask` is stored once on
-/// [`Self::quantization_mask`]. This guarantees the
-/// tier band and the
-/// [`Custom`](super::super::FeePriority::Custom) feerate's rounding
-/// mask all derive from the same daemon view, with no tier-vs-tier
-/// skew from interleaved calls.
+/// tiers (`economy`/`standard`/`priority` → indices `0`/`1`/`2`). This
+/// guarantees the tier band derives from one daemon view, with no
+/// tier-vs-tier skew from interleaved calls.
 ///
 /// [`docs/V3_WALLET_DECISION_LOG.md`]: ../../../../../docs/V3_WALLET_DECISION_LOG.md
 #[non_exhaustive]
@@ -107,15 +104,6 @@ pub struct FeeEstimates {
     /// the fastest tier short of fee-spiking, targeting next-block
     /// inclusion under normal mempool conditions.
     pub priority: FeeRate,
-
-    /// The daemon's fee-rounding `quantization_mask` for this
-    /// snapshot, carried **once** so a
-    /// [`Custom`](super::super::FeePriority::Custom) feerate can be
-    /// constructed against the same daemon view as the tier band
-    /// (`FeeRate::new(rate, quantization_mask)`, §3.3). Identical to
-    /// the `mask` already embedded in each tier `FeeRate`; surfaced
-    /// here so the `Custom` path does not need a fresh daemon call.
-    pub quantization_mask: u64,
 }
 
 /// Outcome of a daemon transaction submission via

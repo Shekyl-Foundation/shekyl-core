@@ -118,7 +118,7 @@ pub(crate) fn assemble_tx_to_sign(
     for recipient in &request.recipients {
         outputs.push(TxOutputContext::Payment {
             dest: OutputDestination {
-                address: recipient.address.clone(),
+                destination: recipient.destination.clone(),
                 rid: recipient.rid,
             },
             amount: recipient.amount_atomic_units.to_raw(),

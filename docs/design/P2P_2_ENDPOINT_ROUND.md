@@ -154,7 +154,7 @@ overlay-zone identity, which PWD-I2 already closed.
 
 ## 3. Substrate (read at the pinned sha)
 
-**`peer_id`'s two jobs.** `is_peer_used` (`src/p2p/net_node.inl:1207-1228`,
+**`peer_id`'s two jobs.** `is_peer_used` (`src/p2p/net_node.inl` lines 1207 to 1228 (at the pinned sha),
 duplicated for anchors at `:1232-1253`) has a pre-loop self-check and a
 per-connection loop:
 
@@ -169,19 +169,19 @@ port)* while the peerlist entry written after pingback holds *(their IP,
 
 **Job 2 has a replacement in the tree; job 1 does not.**
 `has_too_many_connections` (`:3115-3136`) already counts inbound connections by
-`is_same_host`, default max 1 (`src/p2p/net_node.cpp:178`), consulted on the
+`is_same_host`, default max 1 (`src/p2p/net_node.cpp` line 178 (at the pinned sha)), consulted on the
 accept path (`:240`) — an observed property, no minted field. It is simply not
 consulted from the dial side. By contrast the address-based self-check at
 `:1699` compares `zone.m_our_address`, which is assigned only from
 `--anonymous-inbound` (`:674`; the field is commented "in anonymity networks",
-`src/p2p/net_node.h:373`). **The public zone's `m_our_address` is never set, so
+`src/p2p/net_node.h` line 373 (at the pinned sha)). **The public zone's `m_our_address` is never set, so
 that check is empty exactly where job 1 is needed.**
 
 **The daemon never asks for its own endpoint.**
 
 | Available | Where | Used? |
 |---|---|---|
-| `UPNP_GetExternalIPAddress` | `external/miniupnp/miniupnpc/upnpcommands.h:77` | **zero occurrences in the tree** |
+| `UPNP_GetExternalIPAddress` | line 77 of `external/miniupnp/miniupnpc/upnpcommands.h` at `d26148535e` (the submodule left with UPnP, `DAEMON_CONFIG_CUTOVER.md` §4.2) | **zero occurrences in the tree** |
 | `UPNP_AddAnyPortMapping` (returns `reservedPort`) | `upnpcommands.h:160` | unused |
 | `UPNP_GetSpecificPortMappingEntry` | `upnpcommands.h:237` | unused |
 | IGD `controlURL` + `servicetype` in scope | `net_node.inl:3228`, used at `:3239` | used only to add a mapping |
@@ -435,7 +435,7 @@ paraphrase it a fourth time:
 
 > *"Attempt-scoped by construction — bounded by in-flight outbound attempts, so
 > there is no size limit to choose and no eviction policy to get wrong."*
-> — `src/p2p/net_node.h:344-346`
+> — `src/p2p/net_node.h` lines 344 to 346 (at the pinned sha)
 
 The guard is unconditional RAII over a local (`net_node.inl:1074-1077`), so it
 runs on success, failure and timeout alike. **Erase-on-match is not a second
@@ -476,7 +476,7 @@ different means.
   `inflight_handshake_nonce_count` (`:1238`) as the observable.
   **What no test observes** is that `do_handshake_with_peer` attaches the
   termination erase at all — RAII over a local — and the test states that
-  boundary itself at `tests/unit_tests/node_server.cpp:1634-1638` rather than
+  boundary itself at `tests/unit_tests/node_server.cpp` lines 1634 to 1638 (at the pinned sha) rather than
   leaving it to be assumed. **Implementation coverage, not termination-path
   coverage.**
 
@@ -557,12 +557,13 @@ than its title suggests.
 
 ### PWD-E7 — how a node obtains an **overlay** endpoint: two postures, ephemeral by default
 
-> **Amended 2026-10-06 (ruled by Rick, not yet implemented):**
+> **Amended 2026-10-06 and 2026-10-19 (ruled by Rick):**
 > [`TOR_BUNDLE_DISTRIBUTION.md`](TOR_BUNDLE_DISTRIBUTION.md) `TB-1`…`TB-3`
-> rule that a node has Tor unless its operator explicitly declines it, and
-> that the seam row "tor control unavailable" below splits into a refused start
-> and a runtime degrade. The code behaves as this section describes until the
-> refusal lands, which `TB-12` orders last.
+> rule that a node has Tor unless its operator explicitly declines it
+> (`tor = off`). A managed Tor that is absent or fails is announced, never
+> refused (`TB-2`, [`TOR_SUPERVISOR.md`](TOR_SUPERVISOR.md) posture table,
+> `TSR-Q10`). The seam row "tor control unavailable" below applies from the
+> first boot.
 >
 > **Amended 2026-10-15 (ratified by Rick, not yet implemented):**
 > [`TOR_SUPERVISOR.md`](TOR_SUPERVISOR.md) (`TSR-`) makes the managed Tor a
@@ -651,6 +652,12 @@ durable-address warning ruled above is now stated in the flag's own descriptor
 `--no-ephemeral-tor`. Every seam in the table above landed as ruled: no
 verifier, no persisted key, restart mints a new address, a start failure
 degrades to outbound-only on the zone rather than aborting the daemon.
+
+**UPDATE 2026-10-17:** the owner is `shekyl-daemon`'s `tor.rs` over
+`DaemonTorControl` (#1088). The `shekyl_daemon_tor_*` exports, the blocking
+facade and `node_server::add_ephemeral_tor_zone` are deleted
+(`TOR_SUPERVISOR.md` §9). The paragraph above is the record of the wiring
+that landed on 2026-09-09.
 
 ### PWD-E8 — address volatility: the measurement PWD-E7 must ship **before** it can exist
 
@@ -836,6 +843,11 @@ depends only on `shekyl-tor-control-client` and never names
 `shekyl-tor-control-wallet`; its tor's `DataDirectory` is a unique wiped child
 of the daemon's config folder (never reused across boots, so entry guards
 cannot join onions); it carries no vanguard state.
+
+**UPDATE 2026-10-17:** that wiring is deleted. `shekyl-daemon`'s `tor.rs`
+starts and stops the managed Tor over `DaemonTorControl`, on the daemon's
+runtime (`TOR_SUPERVISOR.md` §9, #1088). The crate no longer carries a
+blocking facade or a runtime of its own.
 
 The isolation requirement is carried in the crate's own module doc rather than
 left to this document: *no entry point here may default, infer, or discover which

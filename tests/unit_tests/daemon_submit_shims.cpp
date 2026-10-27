@@ -41,6 +41,7 @@
 #include "cryptonote_core/tx_pool.h"
 #include "cryptonote_protocol/cryptonote_protocol_handler_common.h"
 #include "rpc/daemon_submit_ffi.h"
+#include "shekyl/shekyl_ffi.h"
 #include "span.h"
 #include "tx_blob.h"
 
@@ -286,7 +287,7 @@ struct BlockchainAndPool
 bool init_blockchain(Blockchain& bc, BlockchainDB* db)
 {
   const cryptonote::test_options test_options = {5000};
-  return bc.init(db, cryptonote::FAKECHAIN, true, &test_options, 1);
+  return bc.init(db, cryptonote::FAKECHAIN, &test_options, 1);
 }
 
 // Structurally parseable FCMP++ tx (same shape as txpool_ref_age.cpp's).
@@ -393,8 +394,8 @@ struct ShimFixture
     cert_root = db->root_at(ref_height);
   }
 
-  // fee_scale ≥ 1 clears the floor (with check_fee's 2% buffer); the F34
-  // test passes an absolute fee instead.
+  // fee_scale ≥ 1 clears the floor at zero slack (`needed` is the smallest
+  // fee the predicate admits); the F34 test passes an absolute fee instead.
   // Put the fee **in** the transaction, then re-derive everything from it.
   //
   // There are two ways the fee is read here and they must not disagree.
@@ -410,14 +411,26 @@ struct ShimFixture
   // blob requires, so this settles rather than assuming: at most a couple
   // of rounds, and the final assertion is on the value `add_tx` will
   // actually read, not on a local the test computed for itself.
+  //
+  // The fee lattice is the Rust predicate's own constant
+  // (shekyl_economics::FEE_QUANTIZATION_MASK), so the floor's requirement
+  // is asked of the predicate rather than recomputed here: the smallest
+  // fee at or above `weight * fee_per_byte` that it admits.
+  static uint64_t smallest_admitted_fee(uint64_t weight, uint64_t fee_per_byte)
+  {
+    uint64_t fee = weight * fee_per_byte;
+    while (shekyl_relay_floor_admits(fee, weight, &fee_per_byte, 1) != 1)
+      ++fee;
+    return fee;
+  }
+
   void settle_fee(SubmitTx& s, uint64_t fee_scale)
   {
     const uint64_t fee_per_byte = bap.bc.get_current_fee_per_byte();
-    const uint64_t mask = Blockchain::get_fee_quantization_mask();
     for (int round = 0; round < 4; ++round)
     {
       const size_t weight = shekyl_test_fixtures::tx_blob(s.tx).size();
-      const uint64_t needed = (weight * fee_per_byte + mask - 1) / mask * mask;
+      const uint64_t needed = smallest_admitted_fee(weight, fee_per_byte);
       const uint64_t want = needed * fee_scale;
       if (s.tx.ct_signatures.txnFee == want)
         break;
@@ -554,7 +567,6 @@ TEST(daemon_submit_shims, snapshot_fills_facts_for_clean_state)
   EXPECT_EQ(0, memcmp(facts.root, fx.cert_root.data(), sizeof(facts.root)));
   EXPECT_EQ(facts.tree_depth, 20);
   EXPECT_GT(facts.fee_per_byte, 0u);
-  EXPECT_GE(facts.fee_quantization_mask, 1u);
   EXPECT_GT(facts.weight_limit, 0u);
   EXPECT_EQ(facts.chain_height, ShimFixture::chain_height);
 }

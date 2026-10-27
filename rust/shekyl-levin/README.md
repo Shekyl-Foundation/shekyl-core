@@ -9,19 +9,17 @@ The bottom layer of the p2p stack, byte-identical to the C++ `epee::levin`
 implementation:
 
 - the 29-byte bucket header (`bucket_head2`): signature, length, expect-response,
-  command, Q/S/B/E/COMPRESSED flags, protocol version;
+  command, Q/S/B/E flags, protocol version;
 - whole-message builders for the notification / request / response flows;
 - dummy ("noise") messages and noise-shaped fragmentation for the white-noise
   feature over Tor;
-- the zstd `COMPRESSED` path (cargo feature `zstd`, default on — this crate
-  owns the policy; feature off is only for pure-Rust unavailability tests);
 - an incremental stream reader (`BucketReader`) mirroring the
   `async_protocol_handler::handle_recv` state machine: partial reads,
   signature early-reject, packet-size limits (256 KiB pre-handshake / 100 MB
   post), per-command payload caps and the PWD-B3a ingress discriminator
   (`ingress_payload_cap` — live on C++ `handle_recv` via FFI; a dispatch
   command must be a `DefinedCommand`), noise discard,
-  fragment reassembly, decompression, and message classification. `feed` buffers bytes and
+  fragment reassembly, and message classification. `feed` buffers bytes and
   `next_message` parses one bucket at a time, so — as in `handle_recv`,
   which dispatches inside its parse loop — at most one decoded payload is
   live at a time and an already-delivered message survives a later bucket
@@ -36,19 +34,19 @@ chunk boundaries, and noise sizes.
 
 - **Not the payload codec.** Command bodies are epee `portable_storage`
   blobs; the codec is first-party `shekyl-portable-storage` (LV-2a). This
-  crate owns the typed maps (LV-2b):   handshake / timed-sync /
-  support-flags (1001 / 1002 / 1007) plus `network_address`
+  crate owns the typed maps (LV-2b): handshake / timed-sync
+  (1001 / 1002) plus `network_address`
   and notifies 2002–2004 / 2006–2010. Cryptonote blobs stay opaque bytes.
   Live `shekyld` dual-stack is the `#[ignore]` harness
   `tests/dual_stack.rs` (`SHEKYLD_BIN`); default crate tests spawn no daemon.
 - **Not the connection stack.** No sockets, timeouts, invoke/response
   correlation, or peer management.
-- **Emit side and compression wired; read side is not.** Since 2026-08-06
-  the daemon's compression path runs through this crate (`contrib/epee`'s
-  `levin_compression.cpp` is a marshaling shim over the `shekyl_levin_*`
-  FFI; the vendored libzstd here is the binary's single zstd — no system
-  libzstd, no `HAVE_ZSTD` gate), and since 2026-08-13 the white-noise
-  emitters do too: `epee::levin::make_noise_notify` /
+- **Not a compressor.** The protocol has no compression (Rick, 2026-10-19;
+  the measurement is `docs/benchmarks/zstd_ruzstd_levin_20261020.md`). A
+  bucket carrying the old `0x10` flag bit is refused at ingress like any
+  undefined bit.
+- **Emit side wired; read side is not.** Since 2026-08-13 the white-noise
+  emitters run through this crate: `epee::levin::make_noise_notify` /
   `make_fragmented_notify` forward to this crate's `noise_notify` /
   `fragmented_notify`, so the fragment-padding algorithm has exactly one
   implementation and the byte-exact `make_fragment.*` gtests exercise it
@@ -71,16 +69,9 @@ the remaining C++ oracles (`make_header`, `handle_recv`) — none accepts
 anything those reject. The list itself is in the crate docs; do not count
 or classify it here.
 
-All are unreachable for a conforming sender, and **two stopped being
-divergences at all** at the 2026-08-06 compression cut — kept in the census
-as the record of how they closed, not deleted, because "the difference went
-away" is exactly the claim that rots into folklore once the entry is gone.
-The post-inflate bound was the one reachable exception (a ~34 MB interop
-window against a C++ peer) until the cut brought the C++ receiver onto the
-same `min(packet limit, per-command cap)` bound (entry 4); the emit-side
-strictness stopped being a difference when `epee::levin::
-try_compress_message` became a forwarding shim over this crate, so its
-guards — signature, one-message, and the noise class whose constant on-wire
-size cover traffic depends on — are now simply the emit path (entry 6). Do
-not summarise the census into blanket claims — checking
-each entry is exactly what the single-location census exists to force.
+All are unreachable for a conforming sender, and **one stopped being a
+divergence at all** at the 2026-09-09 ingress cut — kept in the census as the
+record of how it closed, not deleted, because "the difference went away" is
+exactly the claim that rots into folklore once the entry is gone. Do not
+summarise the census into blanket claims — checking each entry is exactly
+what the single-location census exists to force.

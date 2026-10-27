@@ -57,6 +57,7 @@ pub mod address_derivation_freeze;
 pub mod archival_p;
 pub mod archival_p_freeze;
 pub mod bip39;
+mod coinbase;
 pub mod derivation;
 mod encrypted_output_field;
 pub mod error;

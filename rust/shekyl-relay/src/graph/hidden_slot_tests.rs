@@ -628,3 +628,161 @@ fn a_departed_hop_off_slot_zero_walks_to_the_frozen_alternate() {
         assert_eq!(originate(&mut relay, &mut rng), RelayPlan::NoOwnEdge);
     }
 }
+
+/// `GS-Q3`: the relay's verdict for a local origin is the class and the pin,
+/// never the link. It follows the plans this file's first test walks.
+#[test]
+fn the_origin_verdict_follows_the_class_and_the_pin() {
+    for seed in 0..16 {
+        let mut rng = SplitMix64::new(211 + seed);
+        let mut z = Relay::new(
+            DandelionParams::inherited(),
+            2,
+            false,
+            &[ConnectorId::Clearnet, ConnectorId::Tor],
+            0,
+            &mut rng,
+        )
+        .unwrap();
+        assert_eq!(z.origin_verdict(), OriginVerdict::Absent, "no session");
+        z.on_session_established(
+            id(11),
+            PeerDirection::Outbound,
+            ConnectorId::Clearnet,
+            &mut rng,
+        );
+        assert_eq!(
+            z.origin_verdict(),
+            OriginVerdict::Absent,
+            "a session whose peer learns the address is not the class"
+        );
+        for byte in 1..=3 {
+            z.on_session_established(
+                id(byte),
+                PeerDirection::Outbound,
+                ConnectorId::Tor,
+                &mut rng,
+            );
+        }
+        assert_eq!(
+            z.origin_verdict(),
+            OriginVerdict::Routable,
+            "a class session: the origin leaves before any plan"
+        );
+        z.rebuild_stems(&mut rng);
+        assert_eq!(z.origin_verdict(), OriginVerdict::Routable);
+        let RelayPlan::OwnEdge(primary) = originate(&mut z, &mut rng) else {
+            panic!("three address-hiding sessions and no pin");
+        };
+        assert_eq!(z.origin_verdict(), OriginVerdict::Routable);
+        z.on_connection_close(&primary);
+        assert_eq!(
+            z.origin_verdict(),
+            OriginVerdict::Routable,
+            "the frozen alternate is live"
+        );
+        let RelayPlan::OwnEdge(alternate) = originate(&mut z, &mut rng) else {
+            panic!("the alternate was live");
+        };
+        z.on_connection_close(&alternate);
+        assert_eq!(
+            z.origin_verdict(),
+            OriginVerdict::Connected,
+            "the pin is exhausted though a class session is live"
+        );
+        assert_eq!(originate(&mut z, &mut rng), RelayPlan::NoOwnEdge);
+        assert_eq!(z.origin_verdict(), OriginVerdict::Connected);
+        z.rebuild_stems(&mut rng);
+        assert_eq!(
+            z.origin_verdict(),
+            OriginVerdict::Routable,
+            "the rebuild drops the pin"
+        );
+        assert!(matches!(originate(&mut z, &mut rng), RelayPlan::OwnEdge(_)));
+    }
+}
+
+/// A relay with no address-hiding connector never originates over one.
+#[test]
+fn the_origin_verdict_is_false_without_an_address_hiding_connector() {
+    let mut rng = SplitMix64::new(3);
+    let mut z = Relay::new(
+        DandelionParams::inherited(),
+        2,
+        false,
+        &[ConnectorId::Clearnet],
+        0,
+        &mut rng,
+    )
+    .unwrap();
+    z.on_session_established(
+        id(11),
+        PeerDirection::Outbound,
+        ConnectorId::Clearnet,
+        &mut rng,
+    );
+    z.rebuild_stems(&mut rng);
+    assert_eq!(
+        z.origin_verdict(),
+        OriginVerdict::Absent,
+        "a uniform epoch has no class"
+    );
+    assert!(matches!(
+        originate(&mut z, &mut rng),
+        RelayPlan::Stem(_) | RelayPlan::NoRoute
+    ));
+}
+
+/// A uniform index below `len`, for a random walk. `len` is a small test
+/// count, so neither conversion can fail.
+fn draw_below(rng: &mut SplitMix64, len: usize) -> usize {
+    let len = u64::try_from(len).expect("a test count fits u64");
+    usize::try_from(rng.next_u64() % len).expect("below a usize count")
+}
+
+/// After every local-origin plan the verdict is that plan's outcome, over
+/// random session churn and epoch rebuilds.
+#[test]
+fn the_origin_verdict_after_a_plan_is_that_plans_outcome() {
+    for seed in 0..128 {
+        let mut rng = SplitMix64::new(9_000 + seed);
+        let mut z = wide_relay(&[ConnectorId::Clearnet, ConnectorId::Tor], &mut rng);
+        let mut live: Vec<ConnectionId> = Vec::new();
+        let mut next: u8 = 1;
+        for _step in 0..60 {
+            match rng.next_u64() % 6 {
+                0 | 1 => {
+                    let connector = if rng.next_u64().is_multiple_of(3) {
+                        ConnectorId::Clearnet
+                    } else {
+                        ConnectorId::Tor
+                    };
+                    z.on_session_established(
+                        id(next),
+                        PeerDirection::Outbound,
+                        connector,
+                        &mut rng,
+                    );
+                    live.push(id(next));
+                    next = next.wrapping_add(1);
+                }
+                2 if !live.is_empty() => {
+                    let at = draw_below(&mut rng, live.len());
+                    let gone = live.remove(at);
+                    z.on_connection_close(&gone);
+                }
+                3 => z.rebuild_stems(&mut rng),
+                _ => {}
+            }
+            let before = z.origin_verdict().origin_leaves();
+            let plan = originate(&mut z, &mut rng);
+            let leaves = matches!(plan, RelayPlan::OwnEdge(_));
+            assert_eq!(before, leaves, "seed {seed}: verdict before plan {plan:?}");
+            assert_eq!(
+                z.origin_verdict().origin_leaves(),
+                leaves,
+                "seed {seed}: verdict after plan {plan:?}"
+            );
+        }
+    }
+}

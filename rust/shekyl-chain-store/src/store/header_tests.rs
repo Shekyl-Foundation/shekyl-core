@@ -21,8 +21,8 @@ use super::store_tests::{
 use super::*;
 use crate::apply_policy::{ApplyPolicy, ArchivalFamily};
 use crate::codec::{
-    ApplyPolicyCell, Canonical, ProbeCell, PropertyCell, PropertyCellBytes, Raw, SchemaVersion,
-    SchemaVersionCell, TotalBurnedCell, SCHEMA_VERSION,
+    ApplyPolicyCell, Canonical, FollowingDegraded, FollowingDegradedCell, ProbeCell, PropertyCell,
+    PropertyCellBytes, Raw, SchemaVersion, SchemaVersionCell, TotalBurnedCell, SCHEMA_VERSION,
 };
 use crate::family_set::FamilySet;
 use crate::schema::PROPERTIES;
@@ -223,6 +223,56 @@ fn a_missing_zero_or_malformed_pin_is_corruption_not_unpinned() {
             assert_eq!(e.class(), ErrorClass::Invariant, "{label}");
         }
     }
+    cleanup(&path);
+}
+
+/// The `following_degraded` latch (DX-Q2 item 8) is clear on a fresh
+/// store, keeps the first evidence it is given, survives a reopen, and is
+/// not cleared by a later raise.
+#[test]
+fn the_following_degraded_latch_is_one_way_and_keeps_its_first_evidence() {
+    let path = tmp("following-degraded");
+    let first = FollowingDegraded {
+        fork_at: shekyl_types::BlockHeight::from_raw(40),
+        tip: shekyl_types::BlockHash::from_bytes([0xa1; 32]),
+        work: shekyl_difficulty::CumulativeDifficulty::from_raw(101),
+    };
+    let later = FollowingDegraded {
+        fork_at: shekyl_types::BlockHeight::from_raw(7),
+        tip: shekyl_types::BlockHash::from_bytes([0xa2; 32]),
+        work: shekyl_difficulty::CumulativeDifficulty::from_raw(900),
+    };
+    {
+        let store = ChainStore::create(&path, EPOCH).expect("create");
+        let snap = store.begin_read().expect("read");
+        assert_eq!(
+            snap.get_property::<FollowingDegradedCell>().expect("get"),
+            None,
+            "a fresh store's latch is clear"
+        );
+        drop(snap);
+        let set = store
+            .write(|batch| batch.raise_following_degraded(&first))
+            .expect("commit");
+        assert!(set, "the first evidence sets the latch");
+        let again = store
+            .write(|batch| batch.raise_following_degraded(&later))
+            .expect("commit");
+        assert!(!again, "a set latch is not raised again");
+    }
+    let store = ChainStore::create(&path, EPOCH).expect("the same schedule reopens");
+    let snap = store.begin_read().expect("read");
+    assert_eq!(
+        snap.get_property::<FollowingDegradedCell>().expect("get"),
+        Some(first),
+        "the first evidence survives a reopen and a later raise"
+    );
+    drop(snap);
+    drop(store);
+    assert_eq!(
+        raw_get(&path, FollowingDegradedCell::KEY).as_deref(),
+        Some(first.encode().as_slice())
+    );
     cleanup(&path);
 }
 

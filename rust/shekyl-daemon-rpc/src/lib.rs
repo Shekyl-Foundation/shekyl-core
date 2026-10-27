@@ -40,6 +40,8 @@
 // `tracing-core` dispatcher). See V3_WALLET_DECISION_LOG.md
 // (single-image contract, 2026-06-11 amendment).
 
+pub mod authority;
+pub mod ban_methods;
 pub mod bind;
 pub mod chain_facts;
 
@@ -88,12 +90,22 @@ pub mod core;
 pub mod ctl_client;
 pub mod ffi;
 pub mod ffi_exports;
+pub mod ffi_test_hooks;
 pub mod handlers;
+pub mod handles;
 pub mod info;
 pub mod info_facts;
 pub mod methods;
 pub mod middleware;
+pub mod mining_facts;
+pub mod mining_methods;
+pub mod node_methods;
+pub mod options;
+pub mod pool_methods;
+pub mod read_facts;
+pub mod read_methods;
 pub mod server;
 pub mod shard_view;
+pub mod store_facts;
 pub mod submit;
 pub mod types;

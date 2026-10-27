@@ -5,7 +5,7 @@
 
 [package]
 name = "shekyl-dialer"
-description = "The outbound dialer: which address to dial next and why, the pending attempts, the failed-address memory and the self-connection nonces. Over shekyl-peerlist; the C++ reaches it only through shekyl-ffi (P2P_3_SLICE_3_DIALER_BRIEF.md)."
+description = "The outbound dialer: which address to dial next and why, the pending attempts, the retries within a test and the self-connection nonces. Over shekyl-peerlist; the C++ reaches it only through shekyl-ffi (P2P_3_SLICE_3_DIALER_BRIEF.md)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -28,17 +28,35 @@ shekyl-timing-engine = { path = "../shekyl-timing-engine" }
 shekyl-relay-privacy = { path = "../shekyl-relay-privacy" }
 # A failed address-file write is logged, not lost.
 tracing = "0.1"
+# The cancel signal of a dial attempt, and `select` so the attempt and the
+# cancel are one race. The seam already depends on tokio.
+tokio = { version = "1", default-features = false, features = ["macros", "sync"] }
 # The RNG seam the draws are generic over.
 shekyl-draw-rng = { path = "../shekyl-draw-rng" }
 
+[features]
+# Test seams only. A setter for a connector's in-flight bound, so a test can
+# run the dialer at a bound above the protocol's, and a non-consuming wait
+# for a posted result. No production crate turns this on; the bound is
+# protocol data (rule 71).
+test-seams = []
+
 [dev-dependencies]
+# This crate with its test seams, for the integration tests.
+shekyl-dialer = { path = ".", features = ["test-seams"] }
 # The seeded reference generator, for the tests only.
 shekyl-draw-rng = { path = "../shekyl-draw-rng", features = ["splitmix"] }
 # The owner's test rig: a hub over the loopback dialer, with a manual clock.
 shekyl-peer-policy = { path = "../shekyl-peer-policy" }
 shekyl-transport-layer = { path = "../shekyl-transport-layer" }
+# The Tor connector's reply table, for the retry test's refusals.
+shekyl-tor = { path = "../shekyl-tor" }
 # A directory of its own for each address-file test.
 tempfile = "3"
+# The idle-wake warning is asserted from the log line.
+tracing-subscriber = { version = "0.3", features = ["fmt"] }
+# A test dial carries a real gap sender, a tokio oneshot, as the connectors do.
+tokio = { version = "1", default-features = false, features = ["sync"] }
 
 [lints]
 workspace = true

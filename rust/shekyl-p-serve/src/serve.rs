@@ -29,15 +29,15 @@
 //! # The request header and the countersignature (`SF-D5`, `SF-D8`)
 //!
 //! Every request carries exactly one [`REQUEST_HEADER_NAME`] header whose
-//! value decodes canonically to 72 bytes
-//! `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32]`. Missing, duplicate,
-//! malformed, or wrong-length values are the bare 400, and so is an
-//! `anchor_height` outside the persona's gate ([`anchor_within_gate`]).
+//! value decodes canonically to 73 bytes
+//! `stream[1] ‖ nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32]`. Missing,
+//! duplicate, malformed, or wrong-length values are the bare 400, and so is
+//! an `anchor_height` outside the persona's gate ([`anchor_within_gate`]).
 //! The request is judged before the shard store is consulted, so the 400
 //! does not depend on what this persona holds. A valid request for a held
 //! shard is answered with the body and then the
-//! persona's signature over the 112-byte transcript
-//! `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8] ‖ delivery_digest[32]`
+//! persona's signature over the 113-byte transcript
+//! `stream[1] ‖ nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8] ‖ delivery_digest[32]`
 //! — its canonical encoding, the envelope — written **after** the
 //! body, as the last bytes of the response, both inside one
 //! `content-length`. The signer is the host's ([`PassSigner`]); this crate
@@ -691,7 +691,9 @@ where
     let Some(Request::Shard { shard_id, header }) = parse_request(head) else {
         return Resolved::Invalid;
     };
-    let fields = PassRequestHeader::from_bytes(&header);
+    let Some(fields) = PassRequestHeader::from_bytes(&header) else {
+        return Resolved::Invalid;
+    };
     let anchor_height = fields.anchor_height();
     let looked_up = tokio::task::spawn_blocking(move || {
         gate_and_open(&*signer, &*provider, shard_id, anchor_height)
@@ -864,7 +866,9 @@ where
     let Some(Request::Shard { shard_id, header }) = parse_request(head) else {
         return Err(InMemoryServe::BadRequest);
     };
-    let fields = PassRequestHeader::from_bytes(&header);
+    let Some(fields) = PassRequestHeader::from_bytes(&header) else {
+        return Err(InMemoryServe::BadRequest);
+    };
     match gate_and_open(signer, provider, shard_id, fields.anchor_height()) {
         Lookup::Held(body) => Ok((shard_id, fields, body)),
         Lookup::OutOfGate => Err(InMemoryServe::BadRequest),

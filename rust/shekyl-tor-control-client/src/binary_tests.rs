@@ -161,7 +161,12 @@ fn refusals_render_as_single_spaced_sentences() {
     let path = PathBuf::from("/x/tor");
     let errors = [
         TorBinaryError::Unavailable { reason: "r" },
-        TorBinaryError::NotFound,
+        TorBinaryError::NotFound {
+            searched: vec![path.clone(), PathBuf::from("/y/tor")],
+        },
+        TorBinaryError::NotFound {
+            searched: Vec::new(),
+        },
         TorBinaryError::NotAFile(path.clone()),
         TorBinaryError::NotExecutable(path.clone()),
         TorBinaryError::NotTheExecutable(path.clone()),
@@ -296,19 +301,17 @@ fn verify_compares_names_exactly_where_the_platform_does() {
     ));
 }
 
-/// The first thing a developer tries: `SHEKYL_TOR_BINARY` pointed at the
-/// `tor` inside a full extracted Expert Bundle. Its directory carries
-/// `pluggable_transports/`, and the override tier is gated like any other.
+/// The first thing a developer tries: `tor-file` pointed at the `tor`
+/// inside a full extracted Expert Bundle. Its directory carries
+/// `pluggable_transports/`, and a named file is gated like any other.
 #[test]
-fn verify_refuses_a_full_extracted_bundle_through_the_override() {
+fn verify_refuses_a_full_extracted_bundle_named_by_tor_file() {
     let (dir, exe) = staged(&LINUX_FILES);
     let transports = dir.path().join("pluggable_transports");
     std::fs::create_dir(&transports).unwrap();
     std::fs::write(transports.join("lyrebird"), b"transport").unwrap();
 
-    let chosen = candidate_from(Some(exe.clone().into_os_string()), None, None, "tor")
-        .expect("the override is the candidate");
-    match verify_candidate(&chosen, &pin_for(&LINUX_FILES, false).pin()) {
+    match verify_candidate(&exe, &pin_for(&LINUX_FILES, false).pin()) {
         Err(TorBinaryError::UnexpectedEntry { name, .. }) => {
             assert_eq!(name, OsString::from("pluggable_transports"));
         }
@@ -360,6 +363,10 @@ fn verify_refuses_a_directory_the_loader_would_read_as_a_list() {
     }
 }
 
+/// The fixtures are Unix paths. On Windows `/opt/…` has no drive or UNC prefix,
+/// so it is not absolute and the rule rightly refuses it; the loader path is a
+/// Linux variable in any case.
+#[cfg(unix)]
 #[test]
 fn loader_path_rule_accepts_ordinary_directories_only() {
     for ok in [
@@ -522,29 +529,6 @@ fn beside(dir: &Path) -> PathBuf {
     exe
 }
 
-#[test]
-fn candidate_override_wins_even_over_an_existing_beside_binary() {
-    let dir = tempfile::tempdir().unwrap();
-    beside(dir.path());
-    let chosen = candidate_from(
-        Some(OsString::from("/explicit/override/tor")),
-        Some(dir.path()),
-        None,
-        "tor",
-    );
-    // The override is returned verbatim — even though it does not exist —
-    // so a typo surfaces as *its* error, never a silent fallback.
-    assert_eq!(chosen, Some(PathBuf::from("/explicit/override/tor")));
-}
-
-#[test]
-fn candidate_empty_override_is_treated_as_unset() {
-    let dir = tempfile::tempdir().unwrap();
-    let exe = beside(dir.path());
-    let chosen = candidate_from(Some(OsString::new()), Some(dir.path()), None, "tor");
-    assert_eq!(chosen, Some(exe));
-}
-
 /// Tier 2 is `<exe_dir>/tor/tor`. A `tor` file directly beside the
 /// executable — the layout before the bundle had a directory of its own —
 /// is not a candidate: its directory is the executable's and could never
@@ -553,14 +537,11 @@ fn candidate_empty_override_is_treated_as_unset() {
 fn candidate_beside_is_the_tor_directory_not_a_tor_file() {
     let dir = tempfile::tempdir().unwrap();
     write_executable(&dir.path().join("tor"), b"flat");
-    assert_eq!(candidate_from(None, Some(dir.path()), None, "tor"), None);
+    assert_eq!(candidate_from(Some(dir.path()), None, "tor"), None);
 
     let dir = tempfile::tempdir().unwrap();
     let exe = beside(dir.path());
-    assert_eq!(
-        candidate_from(None, Some(dir.path()), None, "tor"),
-        Some(exe)
-    );
+    assert_eq!(candidate_from(Some(dir.path()), None, "tor"), Some(exe));
 }
 
 /// The system tier is consulted when nothing is beside the executable, and
@@ -572,12 +553,12 @@ fn candidate_well_known_yields_to_beside() {
     write_executable(&wk, b"staged");
 
     let empty_beside = tempfile::tempdir().unwrap();
-    let chosen = candidate_from(None, Some(empty_beside.path()), Some(&wk), "tor");
+    let chosen = candidate_from(Some(empty_beside.path()), Some(&wk), "tor");
     assert_eq!(chosen, Some(wk.clone()));
 
     let beside_dir = tempfile::tempdir().unwrap();
     let exe = beside(beside_dir.path());
-    let chosen = candidate_from(None, Some(beside_dir.path()), Some(&wk), "tor");
+    let chosen = candidate_from(Some(beside_dir.path()), Some(&wk), "tor");
     assert_eq!(chosen, Some(exe));
 }
 
@@ -604,7 +585,7 @@ fn well_known_candidate_is_version_exact_from_the_pin() {
 #[test]
 fn candidate_none_when_nothing_is_found() {
     let empty = tempfile::tempdir().unwrap();
-    assert_eq!(candidate_from(None, Some(empty.path()), None, "tor"), None);
+    assert_eq!(candidate_from(Some(empty.path()), None, "tor"), None);
 }
 
 /// The compiled disposition is self-consistent: a pinned target's
@@ -668,4 +649,61 @@ fn bundled_tor_matches_recorded_pin() {
          re-run the full checklist procedure (GPG-verify first), never record a hash \
          from an unverified file",
     );
+}
+
+/// Discovery's candidates, in precedence order: beside the executable, then
+/// the system candidate. A platform with no system candidate (Windows) lists
+/// only the first, and an unknown executable directory drops it.
+#[test]
+fn candidates_are_the_tiers_this_platform_has_in_order() {
+    let exe_dir = Path::new("/srv/shekyl/bin");
+    let system = Path::new("/sys-candidate/tor");
+    assert_eq!(
+        candidates(Some(exe_dir), Some(system), "tor"),
+        vec![exe_dir.join("tor").join("tor"), system.to_path_buf()]
+    );
+    assert_eq!(
+        candidates(Some(exe_dir), None, "tor.exe"),
+        vec![exe_dir.join("tor").join("tor.exe")]
+    );
+    assert_eq!(
+        candidates(None, Some(system), "tor"),
+        vec![system.to_path_buf()]
+    );
+    assert!(candidates(None, None, "tor").is_empty());
+}
+
+/// A NotFound names exactly the paths discovery tried, and no place it did
+/// not look: a Windows-shaped list (beside only) never mentions a Unix system
+/// directory.
+#[test]
+fn not_found_names_the_searched_paths_and_no_others() {
+    let beside = PathBuf::from("/srv/shekyl/bin/tor/tor.exe");
+    let message = TorBinaryError::NotFound {
+        searched: vec![beside.clone()],
+    }
+    .to_string();
+    assert!(message.contains(&beside.display().to_string()), "{message}");
+    assert!(!message.contains("/opt"), "{message}");
+    assert!(message.contains("tor-file"), "{message}");
+
+    let system = PathBuf::from("/sys-candidate/tor");
+    let both = TorBinaryError::NotFound {
+        searched: vec![beside.clone(), system.clone()],
+    }
+    .to_string();
+    assert!(
+        both.contains(&format!("{} or {}", beside.display(), system.display())),
+        "{both}"
+    );
+}
+
+/// On this build target, the system candidate exists exactly where the
+/// platform has the convention, so the message follows the platform.
+#[test]
+fn the_system_candidate_follows_the_platform() {
+    if let TorDisposition::Pinned(pin) = CURRENT_DISPOSITION {
+        let candidate = well_known_candidate(&pin);
+        assert_eq!(candidate.is_some(), cfg!(unix), "{candidate:?}");
+    }
 }

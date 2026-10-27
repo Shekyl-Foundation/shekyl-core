@@ -28,6 +28,7 @@
 
 //! Handler for the `/json_rpc` endpoint (JSON-RPC 2.0 dispatch).
 
+use crate::authority::{refusal, Authority};
 use crate::chain_facts::{FfiChainFacts, FfiP2pFacts};
 use crate::core::CoreRpc;
 use crate::methods::{InternalFault, RpcFault};
@@ -35,64 +36,51 @@ use crate::server::AppState;
 use crate::types::{FfiJsonRpcResult, JsonRpcRequest, JsonRpcResponse};
 use axum::extract::State;
 use axum::http::StatusCode;
+use axum::Extension;
 use axum::Json;
 use std::sync::Arc;
 use tracing::warn;
 
-/// JSON-RPC methods that require unrestricted access.
-///
-/// The daemon's **second** restricted gate. `/json_rpc` itself is served on
-/// both listeners (it is the wallet's main surface), so unlike the REST route
-/// table the gate here cannot be listener selection — it is per-method, inside
-/// the handler. Same privacy fact, different mechanism, and it needs its own
-/// witness: see [`method_is_gated`].
-const RESTRICTED_METHODS: &[&str] = &[
-    "calc_pow",
-    "generateblocks",
-    "get_connections",
-    "set_bans",
-    "get_bans",
-    "banned",
-    "flush_txpool",
-    "get_coinbase_tx_sum",
-    "get_alternate_chains",
-    "relay_tx",
-    "sync_info",
-    "flush_cache",
-    "request_archival_shard",
-];
-
-/// Whether this listener must refuse this JSON-RPC method.
-///
-/// Pure, and the single place the per-method gate is decided — so a test can
-/// call the same function [`handle`] calls, with both arms, without building
-/// an `AppState` (which links `core_rpc_ffi_*`). Deleting the `restricted &&`
-/// here fails [`admin_methods_are_refused_only_on_the_restricted_listener`].
-fn method_is_gated(restricted: bool, method: &str) -> bool {
-    restricted && RESTRICTED_METHODS.contains(&method)
+/// Whether `method` has no row in the method table. [`handle`] matches
+/// [`shekyl_rpc_types::methods::json_rpc`] once and answers that absence
+/// as method-not-found; this names the same absence for the test that
+/// pins a deleted method. A row the connection may not call is a grant
+/// refusal, which is [`handle`]'s other arm.
+#[cfg(test)]
+fn unrouted(method: &str) -> bool {
+    shekyl_rpc_types::methods::json_rpc(method).is_none()
 }
 
 pub async fn handle(
     State(state): State<Arc<AppState>>,
+    Extension(authority): Extension<Authority>,
     Json(request): Json<JsonRpcRequest>,
 ) -> (StatusCode, Json<JsonRpcResponse>) {
     let id = request.id.clone();
     let method = request.method.clone();
 
-    if method_is_gated(state.restricted, &method) {
+    // One lookup, two outcomes. No row: the name is not a method. A row:
+    // admit it. `/json_rpc` itself serves any connection; each method
+    // carries its own policy (§6.1, RT-O32). A refusal is the JSON-RPC
+    // error object with its class and diagnostic (RW-Q3), never
+    // "method not found".
+    let Some(row) = shekyl_rpc_types::methods::json_rpc(&method) else {
         return (
-            StatusCode::FORBIDDEN,
+            StatusCode::OK,
             Json(JsonRpcResponse::error(
                 id,
                 -32601,
-                "Method not allowed in restricted mode".into(),
+                format!("Method not found: {method}"),
             )),
         );
+    };
+    if let Err(error) = authority.admit(row) {
+        return (StatusCode::OK, Json(refusal(id, &error)));
     }
 
-    // Natively-served methods (RK-1, `docs/design/DAEMON_RPC_KV_CUTOVER.md`)
+    // Natively-served methods (RK-1, `docs/completed/DAEMON_RPC_KV_CUTOVER.md`)
     // never reach the C++ dispatch table.
-    if let Some(native) = native_method(&state, &method, &request.params).await {
+    if let Some(native) = native_method(&state, authority, &method, &request.params).await {
         return match native {
             Ok(value) => (StatusCode::OK, Json(JsonRpcResponse::success(id, value))),
             Err(fault) => (StatusCode::OK, Json(native_fault(id, &method, fault))),
@@ -113,8 +101,9 @@ pub async fn handle(
 
     let core = state.core.clone();
     let method_clone = method.clone();
+    let host = authority.host();
     let result =
-        tokio::task::spawn_blocking(move || core.json_rpc(&method_clone, &params_str)).await;
+        tokio::task::spawn_blocking(move || core.json_rpc(&method_clone, &params_str, host)).await;
 
     match result {
         Ok(Some(raw)) => match serde_json::from_str::<FfiJsonRpcResult>(&raw) {
@@ -163,20 +152,20 @@ pub async fn handle(
 }
 
 /// Whether to compute a block's proof-of-work hash: only if the caller asked
-/// **and** the listener is unrestricted — the C++ handler's
+/// **and** the caller is not bounded (§6.3) — the C++ handler's
 /// `req.fill_pow_hash && !restricted`.
 ///
 /// Its own function because it is a policy, not an expression: computing the
-/// long hash is the expensive part of a header read, and a restricted
-/// listener is exactly the one that must not be made to do it on request.
-/// Dropping the `!restricted` here fails [`pow_hash_is_never_computed_for_a_restricted_listener`].
+/// long hash is the expensive part of a header read, and a bounded caller is
+/// exactly the one that must not be made to do it on request. Dropping the
+/// `!bounded` here fails [`pow_hash_is_never_computed_for_a_bounded_caller`].
 ///
-/// RK-5b's methods do **not** use this. They take `restricted` itself and
-/// refuse a restricted caller that asked for the field (`methods::pow_hash_or_refuse`)
-/// rather than blanking it. This stays the policy for RK-2's methods, whose
-/// C++ shape that slice does not reopen.
-fn pow_hash_entitled(requested: bool, restricted: bool) -> bool {
-    requested && !restricted
+/// RK-5b's methods do **not** use this. They refuse a bounded caller that
+/// asked for the field (`methods::pow_hash_or_refuse`) rather than blanking
+/// it. RT-W10 step 2 brings RK-2's methods under the same refusal (§6.3:
+/// never silently truncated).
+fn pow_hash_entitled(requested: bool, bounded: bool) -> bool {
+    requested && !bounded
 }
 
 /// A JSON-RPC method this crate serves itself.
@@ -195,6 +184,8 @@ enum NativeMethod {
     FeeEstimate,
     RequestArchivalShard,
     Info,
+    OptionSet,
+    OptionShow,
 }
 
 /// The names each native method answers to — every alias the C++ dispatch
@@ -225,6 +216,9 @@ fn native_method_for(method: &str) -> Option<NativeMethod> {
         // One spelling: the method was born in the Rust registry (3.31)
         // and never had a C++ alias.
         "request_archival_shard" => NativeMethod::RequestArchivalShard,
+        // RT-O23: the grammar's own words, one spelling each, no REST path.
+        "option_set" => NativeMethod::OptionSet,
+        "option_show" => NativeMethod::OptionShow,
         // RK-5c. One spelling on JSON-RPC, as the C++ table carried it; the
         // `/getinfo` alias is a REST path.
         "get_info" => NativeMethod::Info,
@@ -236,6 +230,7 @@ fn native_method_for(method: &str) -> Option<NativeMethod> {
 /// table. Each arm is one `methods::*` call framed as a JSON value.
 async fn native_method(
     state: &Arc<AppState>,
+    authority: Authority,
     method: &str,
     params: &serde_json::Value,
 ) -> Option<Result<serde_json::Value, RpcFault>> {
@@ -271,7 +266,7 @@ async fn native_method(
                 Ok(request) => request,
                 Err(fault) => return Some(Err(fault)),
             };
-            let fill_pow_hash = pow_hash_entitled(request.fill_pow_hash, state.restricted);
+            let fill_pow_hash = pow_hash_entitled(request.fill_pow_hash, authority.bounded());
             Some(frame_native(
                 run_blocking(state, move |core| {
                     crate::methods::get_block(&FfiChainFacts::new(core), &request, fill_pow_hash)
@@ -284,7 +279,7 @@ async fn native_method(
             // are the transport's facts; they are taken here, before the
             // worker, and the method reads only the parts the disclosure
             // shows (RK-D24).
-            let disclosure = crate::info::Disclosure::from_listener(state.restricted);
+            let disclosure = authority.disclosure();
             let rpc_connections = state.conn_tracker.active_total();
             Some(frame_native(
                 run_blocking(state, move |core| {
@@ -317,13 +312,13 @@ async fn native_method(
                 Ok(request) => request,
                 Err(fault) => return Some(Err(fault)),
             };
-            let restricted = state.restricted;
+            let bounded = authority.bounded();
             Some(frame_native(
                 run_blocking(state, move |core| {
                     crate::methods::get_last_block_header(
                         &FfiChainFacts::new(core),
                         request.fill_pow_hash,
-                        restricted,
+                        bounded,
                     )
                 })
                 .await,
@@ -334,13 +329,13 @@ async fn native_method(
                 Ok(request) => request,
                 Err(fault) => return Some(Err(fault)),
             };
-            let restricted = state.restricted;
+            let bounded = authority.bounded();
             Some(frame_native(
                 run_blocking(state, move |core| {
                     crate::methods::get_block_header_by_hash(
                         &FfiChainFacts::new(core),
                         &request,
-                        restricted,
+                        bounded,
                     )
                 })
                 .await,
@@ -351,13 +346,13 @@ async fn native_method(
                 Ok(request) => request,
                 Err(fault) => return Some(Err(fault)),
             };
-            let restricted = state.restricted;
+            let bounded = authority.bounded();
             Some(frame_native(
                 run_blocking(state, move |core| {
                     crate::methods::get_block_headers_range(
                         &FfiChainFacts::new(core),
                         &request,
-                        restricted,
+                        bounded,
                     )
                 })
                 .await,
@@ -374,6 +369,30 @@ async fn native_method(
                 })
                 .await,
             ))
+        }
+        NativeMethod::OptionSet => {
+            let pairs = match crate::options::option_set_request(params) {
+                Ok(pairs) => pairs,
+                Err(fault) => return Some(Err(fault)),
+            };
+            // The handle's set runs under its own lock and applies to the
+            // owners; neither touches the core, so no worker is taken.
+            Some(frame_native(crate::options::option_set(
+                state.options.as_ref(),
+                &pairs,
+            )))
+        }
+        NativeMethod::OptionShow => {
+            let names = match crate::options::option_show_request(params) {
+                Ok(names) => names,
+                Err(fault) => return Some(Err(fault)),
+            };
+            let disclosure = authority.disclosure();
+            Some(frame_native(crate::options::option_show(
+                state.options.as_ref(),
+                names.as_deref(),
+                disclosure,
+            )))
         }
         NativeMethod::RequestArchivalShard => {
             let request = match crate::shard_view::request_archival_shard_request(params) {
@@ -394,7 +413,7 @@ async fn native_method(
                 Ok(request) => request,
                 Err(fault) => return Some(Err(fault)),
             };
-            let fill_pow_hash = pow_hash_entitled(request.fill_pow_hash, state.restricted);
+            let fill_pow_hash = pow_hash_entitled(request.fill_pow_hash, authority.bounded());
             Some(frame_native(
                 run_blocking(state, move |core| {
                     crate::methods::get_block_header_by_height(
@@ -428,7 +447,9 @@ fn native_fault(id: serde_json::Value, method: &str, fault: RpcFault) -> JsonRpc
         // A refusal is the method answering — a bad request, or a height
         // the chain does not hold. Normal traffic: it carries its own code
         // and message and is not logged as a daemon problem.
-        RpcFault::Refused(refusal) => JsonRpcResponse::error(id, refusal.code, refusal.message),
+        RpcFault::Refused(refusal) => {
+            JsonRpcResponse::error_with_data(id, refusal.code, refusal.message, refusal.data)
+        }
         // The store contradicted itself. The caller is told what
         // contradicted what: every operand is a public chain fact, and a
         // bare "Internal error" would send an operator to the wrong place.
@@ -466,6 +487,12 @@ fn frame_native<T: serde::Serialize>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Whether `authority` is refused the JSON-RPC method `name`, by the gate
+    /// [`handle`] calls.
+    fn refused_to(authority: Authority, name: &str) -> bool {
+        shekyl_rpc_types::methods::json_rpc(name).is_some_and(|row| authority.admit(row).is_err())
+    }
     use crate::chain_facts::FactsFault;
 
     /// The framing keeps causes apart: a facts code is a facts fault, a
@@ -535,11 +562,11 @@ mod tests {
         );
     }
 
-    /// The admin JSON-RPC surface, restated independently of
-    /// `RESTRICTED_METHODS`.
+    /// The admin JSON-RPC surface, restated independently of the method
+    /// table's grant column.
     ///
     /// Same discipline as the REST route table's specification: an oracle that
-    /// iterates `RESTRICTED_METHODS` re-states whatever that list says and so
+    /// iterates the table re-states whatever the table says and so
     /// stays green when a method is dropped from it — which is the edit that
     /// exposes `get_connections` (this node's live peer set) and the ban/mining
     /// controls to unauthenticated callers on the public listener.
@@ -557,10 +584,12 @@ mod tests {
         "sync_info",
         "flush_cache",
         "request_archival_shard",
+        "option_set",
+        "inject_archival_serve_credit",
     ];
 
     /// Every name the daemon serves natively, the method each belongs to,
-    /// and whether the restricted listener must refuse it.
+    /// and whether the view listener is refused it.
     ///
     /// The third column arrived with RK-5a, which brought the first
     /// **admin-only** native methods. Before it, every native name was public
@@ -628,7 +657,7 @@ mod tests {
     /// The dispatcher's own recognizer answers every specified name and
     /// nothing else. This calls `native_method_for` — the function
     /// [`native_method`] dispatches on — so deleting or renaming an alias
-    /// arm turns it red, which an assertion about the restricted list alone
+    /// arm turns it red, which an assertion about the refused list alone
     /// could not do.
     #[test]
     fn native_dispatch_answers_every_alias_and_no_foreign_name() {
@@ -659,19 +688,19 @@ mod tests {
         assert!(native_method_for("hard_fork_info").is_none());
     }
 
-    /// The restricted listener never computes a pow hash, however the request
-    /// is phrased — the whole truth table, since only one of its four cells
-    /// may be true.
+    /// A bounded caller never makes the node compute a pow hash, however the
+    /// request is phrased — the whole truth table, since only one of its four
+    /// cells may be true.
     #[test]
-    fn pow_hash_is_never_computed_for_a_restricted_listener() {
-        assert!(pow_hash_entitled(true, false), "asked for, unrestricted");
-        assert!(!pow_hash_entitled(true, true), "asked for, but restricted");
+    fn pow_hash_is_never_computed_for_a_bounded_caller() {
+        assert!(pow_hash_entitled(true, false), "asked for, the host");
+        assert!(!pow_hash_entitled(true, true), "asked for, but bounded");
         assert!(!pow_hash_entitled(false, false), "not asked for");
-        assert!(!pow_hash_entitled(false, true), "not asked for, restricted");
+        assert!(!pow_hash_entitled(false, true), "not asked for, bounded");
     }
 
     /// Each native name is gated exactly as specified, and none is gated on
-    /// the unrestricted listener — asserted through `method_is_gated`, the
+    /// the admin listener — asserted through [`Authority::admit`], the gate
     /// function `handle` calls, rather than through the list it reads.
     ///
     /// Both directions matter and for different reasons. A public method that
@@ -683,46 +712,69 @@ mod tests {
     fn native_methods_are_gated_exactly_as_specified() {
         for (name, _, gated) in SPECIFIED_NATIVE_METHODS {
             assert_eq!(
-                method_is_gated(true, name),
+                refused_to(Authority::VIEW_LISTENER, name),
                 *gated,
-                "{name}: restricted-listener gating must match the specification"
+                "{name}: the view listener's refusal must match the specification"
             );
             assert!(
-                !method_is_gated(false, name),
-                "{name} must answer on the unrestricted listener"
+                !refused_to(Authority::admin_listener(true), name),
+                "{name} must answer on the admin listener"
             );
         }
     }
 
-    /// Dual-armed, because *refused when restricted* alone passes for a method
+    /// Dual-armed, because *refused to the view listener* alone passes for a
+    /// method
     /// that is refused everywhere — including one that does not exist.
     #[test]
-    fn admin_methods_are_refused_only_on_the_restricted_listener() {
+    fn admin_methods_are_refused_only_to_the_view_listener() {
         for method in SPECIFIED_ADMIN_METHODS {
             assert!(
-                method_is_gated(true, method),
+                refused_to(Authority::VIEW_LISTENER, method),
                 "{method} is specified admin-only but the public listener \
                  serves it"
             );
             assert!(
-                !method_is_gated(false, method),
+                !refused_to(Authority::admin_listener(true), method),
                 "{method} is refused on the admin listener too — the gate is \
-                 not the restricted flag"
+                 not the connection's authority"
             );
         }
     }
 
-    /// The gate names exactly the specified methods: one dropped from
-    /// `RESTRICTED_METHODS` is caught above, one added without review here.
+    /// A name with no row is not served on either listener, as an unrouted
+    /// REST path is not: it is answered as not found before any dispatch,
+    /// so a name the table does not list never reaches the C++ table. A
+    /// deleted method stays unrouted (`get_output_histogram`, SOK-Q3). Red
+    /// edit: let a name with no row through to dispatch.
     #[test]
-    fn restricted_method_list_matches_the_specification() {
-        let mut gated: Vec<&str> = RESTRICTED_METHODS.to_vec();
+    fn a_name_with_no_row_is_not_served_on_either_listener() {
+        for name in ["no_such_method", "get_output_histogram"] {
+            assert!(shekyl_rpc_types::methods::json_rpc(name).is_none());
+            assert!(unrouted(name), "{name}");
+        }
+        assert!(!unrouted("get_info"));
+        assert!(!unrouted("getblockcount"), "an alias is a row's name");
+    }
+
+    /// The gate names exactly the specified methods: one dropped from the
+    /// table's host-only rows is caught above, one added without review here.
+    #[test]
+    fn the_view_listeners_refused_methods_match_the_specification() {
+        use shekyl_rpc_types::methods::{Surface, METHODS};
+        let mut gated: Vec<&str> = METHODS
+            .iter()
+            .filter(|row| {
+                row.surface == Surface::JsonRpc && Authority::VIEW_LISTENER.admit(row).is_err()
+            })
+            .flat_map(shekyl_rpc_types::methods::Method::names)
+            .collect();
         let mut specified: Vec<&str> = SPECIFIED_ADMIN_METHODS.to_vec();
         gated.sort_unstable();
         specified.sort_unstable();
         assert_eq!(
             gated, specified,
-            "the restricted JSON-RPC method list diverged from the \
+            "the view listener's refused JSON-RPC methods diverged from the \
              specification above; change both in the same commit"
         );
     }
@@ -738,8 +790,63 @@ mod tests {
             "get_block_count",
             "get_fee_estimate",
         ] {
-            assert!(!method_is_gated(true, method), "{method}");
-            assert!(!method_is_gated(false, method), "{method}");
+            assert!(!refused_to(Authority::VIEW_LISTENER, method), "{method}");
+            assert!(
+                !refused_to(Authority::admin_listener(true), method),
+                "{method}"
+            );
+        }
+    }
+
+    /// The JSON-RPC names the C++ table serves until the flip, read from its
+    /// source (`src/rpc/core_rpc_ffi.cpp`, `get_jsonrpc_table`).
+    fn cpp_json_rpc_names() -> Vec<String> {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src/rpc/core_rpc_ffi.cpp");
+        let source = std::fs::read_to_string(&path).expect("the C++ JSON-RPC table");
+        let start = source
+            .find("get_jsonrpc_table()")
+            .expect("the table's function");
+        let body = &source[start..];
+        let body = &body[..body.find("return t;").expect("the table's end")];
+        let mut names = Vec::new();
+        for line in body.lines() {
+            let line = line.trim();
+            let quoted = if let Some(rest) = line.strip_prefix("{\"") {
+                rest
+            } else if let Some(rest) = line.strip_prefix("DJRPC_WE(\"") {
+                rest
+            } else {
+                continue;
+            };
+            if let Some(end) = quoted.find('"') {
+                names.push(quoted[..end].to_owned());
+            }
+        }
+        assert!(names.len() >= 20, "the parse found the table: {names:?}");
+        names
+    }
+
+    /// RW-Q7's gate for JSON-RPC: every name the daemon serves, natively or
+    /// through the C++ table, is a row, and every JSON-RPC row is served.
+    #[test]
+    fn every_served_json_rpc_name_is_a_row_and_every_row_is_served() {
+        use shekyl_rpc_types::methods::{json_rpc, Surface, METHODS};
+        let cpp = cpp_json_rpc_names();
+        let native: Vec<&str> = SPECIFIED_NATIVE_METHODS
+            .iter()
+            .map(|(name, _, _)| *name)
+            .collect();
+        for name in cpp.iter().map(String::as_str).chain(native.iter().copied()) {
+            assert!(json_rpc(name).is_some(), "{name} is served but has no row");
+        }
+        for row in METHODS.iter().filter(|row| row.surface == Surface::JsonRpc) {
+            for name in row.names() {
+                assert!(
+                    native_method_for(name).is_some() || cpp.iter().any(|c| c == name),
+                    "{name} is a row that nothing serves"
+                );
+            }
         }
     }
 }

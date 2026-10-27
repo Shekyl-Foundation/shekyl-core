@@ -1,5 +1,5 @@
 ---
-description: The input grammar (IG-1…IG-15) — every identifier a person types or a script depends on, in every shipped binary (command-line flags, config-file keys, shekyl-cli command words, keywords, units, REJECTED names). Apply when adding, renaming, or deleting any option, key, command word or keyword, when writing a refusal a user reads, and when reviewing a name table. The glossary tree and the name tables live in docs/design/INPUT_GRAMMAR.md.
+description: The input grammar (IG-1…IG-15) — every identifier a person types or a script depends on, in every shipped binary (command-line flags, config-file keys, shekyl-cli command words, keywords, units, REJECTED names, and RPC method, parameter and reply-field names). Apply when adding, renaming, or deleting any option, key, command word or keyword, when writing a refusal a user reads, and when reviewing a name table. The glossary tree and the name tables live in docs/design/INPUT_GRAMMAR.md.
 alwaysApply: true
 ---
 
@@ -19,22 +19,29 @@ this rule holds the rules only.
 Every identifier a person types or a script depends on: command-line
 flags of every shipped binary, config-file keys, command words of
 `shekyl-cli` (and of the daemon console until it moves into
-`shekyl-cli`), enumeration keywords, unit spellings, and REJECTED names.
-Out of scope: RPC method names (the RPC lane's wire contract) and log
-category names (`shekyl-logging`'s).
+`shekyl-cli`), enumeration keywords, unit spellings, REJECTED names, and
+RPC method, parameter and reply-field names on the daemon's wire
+(`docs/design/RPC_WIRE.md` RW-Q1, RW-Q10). Out of scope: log category
+names (`shekyl-logging`'s).
 
 ## The rules
 
-**IG-1 Lexical.** An identifier is lowercase ASCII, `[a-z][a-z0-9]*`
-segments joined by single hyphens. Identifiers, keywords and units are
-never translated.
+**IG-1 Lexical.** An identifier is lowercase ASCII `[a-z][a-z0-9]*`
+segments. One path has three renderings and no other: words at the prompt
+(`chain height`); `-`-joined in option names and TOML keys
+(`log-level`); `_`-joined on the RPC wire for method, parameter and
+reply-field names (`chain_height`; RPC_WIRE RW-Q9). Identifiers,
+keywords and units are never translated.
 
 **IG-2 One vocabulary, as a tree.** The glossary is a tree of terms. Each
 term is defined once, project-wide, and lists its parents; a term with no
 parent is a *subject*. A term reused under several parents keeps its one
 meaning. Every segment of every name is a term in the tree, including
 plain words (`file`, `dir`, `max`, `help`): the gate has no exemption
-list.
+list. The glossary is acyclic: no term is its own ancestor through its
+parents, and the gate refuses a cycle. An edge expresses refinement only;
+a name that points at another subject does so by reference (IG-Q42 in
+`docs/design/INPUT_GRAMMAR.md`).
 
 **IG-3 Structure.** A name is a path through the tree: it starts at a
 subject and each segment is a child of the one before. A subject alone is
@@ -72,7 +79,9 @@ endpoint or `<v3>.onion:port`); address (a Shekyl address, checked
 against the network); origin (an explicit web origin, RFC 6454: scheme `http` or
 `https`, a host, an optional port, nothing after; `*` is refused); hash
 (64 hexadecimal characters, a 32-byte value: a transaction id, a block
-hash or a key image); amount (a
+hash or a key image); bytes (base64, RFC 4648 §4, padded: a block's or
+a transaction's serialized bytes; hex is the hash kind only, RPC_WIRE
+RW-Q4); amount (a
 decimal SKL amount with at most `DISPLAY_DECIMAL_POINT` fractional
 digits, `shekyl-units` the one source, parsed exactly to atomic units,
 never a float); name (a wallet's name: one path component, no

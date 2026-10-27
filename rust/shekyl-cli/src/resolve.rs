@@ -183,6 +183,11 @@ pub enum ResolvedCommand {
     CollectUnstaked {
         yes: bool,
     },
+    /// `acknowledge_staking_outcome` — clear the active persona's last
+    /// ending of one kind. `kind` is the wire value.
+    AcknowledgeStakingOutcome {
+        kind: &'static str,
+    },
     ShardListAll,
     ShardListMine,
     ShardShow {

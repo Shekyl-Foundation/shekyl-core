@@ -124,8 +124,9 @@ fn admitting_facts(fx: &SpendFixture) -> SubmitFacts {
             tree_depth: fx.lmdb_depth,
         }),
         fee_per_byte: 1,
-        fee_quantization_mask: 1,
-        weight_limit: 149_400,
+        fee_floor_window: None,
+        pool_refuses_for_room: None,
+        weight_limit: u64::try_from(shekyl_wire::transaction::TX_WEIGHT_LIMIT).unwrap(),
         // Reference age 6: ≥ FCMP_REFERENCE_BLOCK_MIN_AGE (5), well under
         // the max (100).
         chain_height: ChainCount::from_raw(fx.reference_height + 6),
@@ -1062,8 +1063,9 @@ fn non_spend_kinds_refuse_loudly() {
         key_image_conflicts: Vec::new(),
         reference: None,
         fee_per_byte: 1,
-        fee_quantization_mask: 1,
-        weight_limit: 149_400,
+        fee_floor_window: None,
+        pool_refuses_for_room: None,
+        weight_limit: u64::try_from(shekyl_wire::transaction::TX_WEIGHT_LIMIT).unwrap(),
         chain_height: ChainCount::from_raw(200),
         bond_record_exists: None,
         bond_record_bonded_total: None,

@@ -16,11 +16,10 @@ use std::sync::Arc;
 
 use shekyl_dialer::{AddressStore, Dialer, LoadError, STORE_INTERVAL_NANOS};
 use shekyl_draw_rng::SplitMix64;
-use shekyl_levin::SupportFlags;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_peerlist::address_file::AddressFileError;
 use shekyl_peerlist::{ConnectorId, NetworkAddress, RefusedSet, Tick};
-use shekyl_seam::{Hub, SyncPayload};
+use shekyl_seam::{Hub, Route, RoutePublish, SyncPayload};
 use shekyl_timing_engine::{Clock, ManualClock};
 use shekyl_transport_layer::Sockets;
 
@@ -42,7 +41,6 @@ fn dialer() -> (Arc<Dialer>, ManualClock) {
     let dialer = Arc::new(Dialer::new(
         hub,
         RefusedSet::NON_GLOBAL,
-        SupportFlags::ADVERTISED.bits(),
         Arc::new(|| {
             Some(SyncPayload {
                 current_height: 1,
@@ -53,6 +51,17 @@ fn dialer() -> (Arc<Dialer>, ManualClock) {
         }),
     ));
     dialer.set_network_id([7; 16]);
+    // The link is usable: the plan draws only then (TSR-F1).
+    assert!(
+        matches!(
+            dialer
+                .hub()
+                .links()
+                .publish_usable(ConnectorId::Clearnet, Route::Direct, Tick::new(1),),
+            RoutePublish::Installed { .. }
+        ),
+        "the test route was not already usable"
+    );
     (dialer, clock)
 }
 
@@ -185,4 +194,49 @@ fn the_store_is_due_one_interval_after_the_open_and_stop_writes_once_more() {
     // Stop writes once more, whatever the clock.
     dialer.stop();
     assert_eq!(load(), vec![peer(1), peer(2)]);
+}
+
+/// **A banned host is left out of the file, and written again once its ban
+/// expires** (Rick ruled (ii), 2026-10-24; the gray lifecycle's file rule,
+/// at the dialer). The store reads the hub's bans through the same
+/// snapshot the draws read. The ban itself is never saved.
+#[test]
+fn a_banned_host_is_left_out_of_the_file_and_written_again_once_its_ban_expires() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let path = dir.path().join("p2pstate.bin");
+    let (dialer, clock) = dialer();
+    let mut rng = SplitMix64::new(9);
+    dialer
+        .open_address_file(path.clone(), &mut rng)
+        .expect("opened");
+    for n in [1, 2] {
+        dialer
+            .admit_operator(&peer(n), Tick::new(1), &mut rng)
+            .expect("admitted");
+    }
+    let until = Tick::new(clock.now().get() + 60_000_000_000);
+    dialer
+        .hub()
+        .ban_host(peer(1).ip().expect("clearnet"), until);
+
+    assert!(dialer.store_addresses().expect("stored"));
+    assert_eq!(
+        AddressStore::new(path.clone()).load().expect("readable"),
+        vec![peer(2)],
+        "the banned host is left out"
+    );
+    assert!(
+        dialer.shared().lists.is_gray(&peer(1)),
+        "the lists still hold it"
+    );
+
+    clock.set(until);
+    assert!(dialer.store_addresses().expect("stored"));
+    let mut written = AddressStore::new(path).load().expect("readable");
+    written.sort();
+    assert_eq!(
+        written,
+        vec![peer(1), peer(2)],
+        "written again once the ban has expired"
+    );
 }

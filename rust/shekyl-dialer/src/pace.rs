@@ -10,6 +10,7 @@
 //! the connector changes which list is drawn, not the clock.
 
 use shekyl_draw_rng::{bounded_uniform, RelayRng};
+use shekyl_peerlist::ConnectorId;
 
 /// The fixed part of the gap, in nanoseconds.
 ///
@@ -26,4 +27,34 @@ pub const WAKE_JITTER_NANOS: u64 = 1_000_000_000;
 /// uniform draw over `[0, WAKE_JITTER_NANOS]`.
 pub fn next_wake_nanos<R: RelayRng + ?Sized>(rng: &mut R) -> u64 {
     WAKE_BASE_NANOS + bounded_uniform(rng, WAKE_JITTER_NANOS)
+}
+
+/// Nanoseconds in one second.
+const SECOND_NANOS: u64 = 1_000_000_000;
+
+/// How many attempts one test of an address makes on `connector` (the gray
+/// lifecycle, Rick 2026-10-24): three on Tor, where a failed dial is often
+/// a descriptor that has not propagated against a peer that is up, and one
+/// on clearnet. Each attempt after the first follows a wait
+/// ([`retry_wait_nanos`]) that holds no in-flight slot.
+#[must_use]
+pub const fn attempts_per_test(connector: ConnectorId) -> u8 {
+    match connector {
+        ConnectorId::Clearnet => 1,
+        ConnectorId::Tor => 3,
+    }
+}
+
+/// The wait before attempt `next` of a test (2 or 3), in nanoseconds:
+/// 5 s + U(0, 5 s) before the second, 20 s + U(0, 10 s) before the third.
+///
+/// **Assumption** (`DAEMON_RELAY_PRIVACY.md` §97): starting values,
+/// re-derived from testnet runs. A `next` outside 2 and 3 is the third
+/// wait, which never happens: [`attempts_per_test`] caps at three.
+pub fn retry_wait_nanos<R: RelayRng + ?Sized>(next: u8, rng: &mut R) -> u64 {
+    if next <= 2 {
+        5 * SECOND_NANOS + bounded_uniform(rng, 5 * SECOND_NANOS)
+    } else {
+        20 * SECOND_NANOS + bounded_uniform(rng, 10 * SECOND_NANOS)
+    }
 }

@@ -514,7 +514,7 @@ fn assembles_canonical_rows_rewards_and_holdings() {
 fn scarcity_conversion_refuses_at_the_builder() {
     let bonds = [EpochCloseBond {
         join_settlement_epoch: 0,
-        is_foundation_complete_tree: false,
+        is_support_complete_tree: false,
         bad_intervals: &[],
     }];
     let shards = [EpochCloseShard {

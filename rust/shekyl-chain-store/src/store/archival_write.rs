@@ -35,6 +35,7 @@
 //!                archival_last_slash_epoch = watermark, when it moves
 //!  9c. close     archival_r_market[(s, E)], archival_sigma_work[E],
 //!                archival_budget[E] — each insert-once on E          (SI-21)
+//!                archival_complete_trees[E], beside Σwork(E)        (SI-31)
 //! ```
 //!
 //! The C++'s order is kept where the C++ had one (`blockchain_db.cpp:680–
@@ -85,8 +86,9 @@
 //! two integrity checks that have an operand are the validator's — the
 //! index against its digest, and the fold's own count — and arrive through
 //! `refuse_corrupt` as the same row. The issued-draw index and its digest
-//! have no block writer until admission lands; the regtest door below is
-//! their one producer.
+//! are written by [`WriteBatch::write_admissions`](super::write::WriteBatch::write_admissions) from the
+//! rules' admission plan. The regtest door below plants rows no block
+//! admitted, and folds a digest the caller already computed.
 //!
 //! # The regtest injector (§3.8 item 3)
 //!
@@ -113,17 +115,22 @@ use crate::codec::{
     ArchivalLastSlashEpochCell, AttestationWitnessBytes, Canonical, Present, PropertyCell, Raw,
     TotalBurnedCell,
 };
-use crate::ids::{IssuedDrawKey, ServeCreditKey, SettlementKey, SlashAppliedKey, SlashLogKey};
+use crate::ids::{
+    IssuedDrawKey, ReleaseJournalKey, ServeCreditKey, SettlementKey, SlashAppliedKey, SlashLogKey,
+};
 use crate::schema::{
-    ARCHIVAL_ATTESTATION_WITNESS, ARCHIVAL_BOND, ARCHIVAL_BUDGET, ARCHIVAL_BUDGET_ACCRUING,
-    ARCHIVAL_ISSUED_DIGEST, ARCHIVAL_ISSUED_DRAW, ARCHIVAL_R_MARKET, ARCHIVAL_SERVE_CREDIT,
-    ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED, ARCHIVAL_SLASH_LOG,
-    BLOCK_BURN, BLOCK_INFO,
+    ARCHIVAL_ATTESTATION_WITNESS, ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_BOND, ARCHIVAL_BUDGET,
+    ARCHIVAL_BUDGET_ACCRUING, ARCHIVAL_COMPLETE_TREES, ARCHIVAL_DRAWABLE_DIGEST,
+    ARCHIVAL_ISSUED_DIGEST, ARCHIVAL_ISSUED_DRAW, ARCHIVAL_RELEASE_JOURNAL, ARCHIVAL_R_MARKET,
+    ARCHIVAL_SERVE_CREDIT, ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED,
+    ARCHIVAL_SLASH_LOG, ARCHIVAL_SUPPORT_BLOCK, ARCHIVAL_SUPPORT_SETTLEMENT, BLOCK_BURN,
+    BLOCK_INFO,
 };
 
 use super::archival_reads;
 use super::error::{
-    AccrualFault, EngineError, SettlementFault, SlashFault, StoreCannot, StoreError, StoreInvariant,
+    AccrualFault, DigestFault, EngineError, FrozenFault, SettlementFault, SlashFault, StoreCannot,
+    StoreError, StoreInvariant,
 };
 use super::write::WriteBatch;
 use super::ChainStore;
@@ -142,6 +149,7 @@ impl<'id> WriteBatch<'_, 'id> {
         let bonds_apply = self.apply_policy().applies(ArchivalFamily::Bond);
         if bonds_apply {
             self.write_bond_records(delta)?;
+            self.write_release_journal(BlockHeight::from_raw(height), delta)?;
         }
         if self.apply_policy().applies(ArchivalFamily::ServeCredit) {
             self.write_serve_credits(height, delta, bonds_apply)?;
@@ -184,6 +192,34 @@ impl<'id> WriteBatch<'_, 'id> {
                     write.record().encoded().as_encoded(),
                 )?;
             }
+        }
+        Ok(())
+    }
+
+    /// `archival_release_journal[(h, p)] = pre-image` for every Release the
+    /// block connects: the record as it stood before the Release, beside
+    /// the post-image [`Self::write_bond_records`] wrote (`SO-D12`
+    /// increment 2). Insert-once on the tip's height, as the attestation
+    /// witness is (SI-2): a row already under `(h, p)` is a connect at the
+    /// wrong height, since a persona releases once. Governed with the
+    /// records it is the pre-image of, by `ArchivalFamily::Bond`; `pop`
+    /// removes it through the journal.
+    fn write_release_journal(
+        &self,
+        height: BlockHeight,
+        delta: &ArchivalDelta,
+    ) -> Result<(), StoreError> {
+        let releases = delta.releases();
+        if releases.is_empty() {
+            return Ok(());
+        }
+        let mut journal =
+            self.open_insert_table(ARCHIVAL_RELEASE_JOURNAL, StoreInvariant::TipMismatch)?;
+        for release in releases {
+            journal.insert(
+                ReleaseJournalKey::new(height, *release.persona()).key(),
+                release.record().encoded().as_encoded(),
+            )?;
         }
         Ok(())
     }
@@ -302,7 +338,8 @@ impl<'id> WriteBatch<'_, 'id> {
     /// SI-21's two write sets are here. The close freezes the budget:
     /// `archival_budget[E]`, insert-once. The slash pass settles whole:
     /// `archival_sigma_work[E]` and every `(shard, E)` row of
-    /// `archival_r_market` its snapshot named, each insert-once on `E`.
+    /// `archival_r_market` its snapshot named, each insert-once on `E`,
+    /// and with them `archival_complete_trees[E]` (SI-31).
     pub(super) fn record_archival_epoch<V: ChainView<'id>>(
         &self,
         connecting: BlockHeight,
@@ -314,6 +351,7 @@ impl<'id> WriteBatch<'_, 'id> {
             self.write_accrual(delta)?;
         }
         self.write_settlements(delta)?;
+        self.write_support_settlements(delta)?;
         self.write_slashes(connecting, delta)?;
         for gather in delta.gathers() {
             let epoch = gather.epoch();
@@ -335,6 +373,22 @@ impl<'id> WriteBatch<'_, 'id> {
                     StoreInvariant::EpochCloseRewritten { epoch },
                 )?
                 .insert(epoch.to_raw(), gather.sigma_work().encoded().as_encoded())?;
+                // SI-31: the complete trees the gather excluded, frozen
+                // with the `Σwork` they were excluded from. Governed by the
+                // family whose reader needs it — a claim reads both or
+                // neither — as `archival_budget_accruing` is by the family
+                // it serves (`ARW-Q3`).
+                self.open_insert_table(
+                    ARCHIVAL_COMPLETE_TREES,
+                    StoreInvariant::CompleteTreesNotFrozen {
+                        epoch,
+                        observed: FrozenFault::Rewritten,
+                    },
+                )?
+                .insert(
+                    epoch.to_raw(),
+                    gather.complete_trees().encoded().as_encoded(),
+                )?;
             }
         }
         if let Some(close) = delta.close() {
@@ -347,6 +401,81 @@ impl<'id> WriteBatch<'_, 'id> {
                 .insert(epoch.to_raw(), close.budget().encoded().as_encoded())?;
             }
         }
+        self.write_drawable_digest(delta)?;
+        self.write_block_draws(connecting, delta)?;
+        self.write_support_block(connecting, delta)
+    }
+
+    /// 9c. `archival_drawable_digest[E] = digest` at the block that opens
+    /// `E`, insert-once: an epoch opens once, and a row already there is
+    /// SI-29 ([`DigestFault::Rewritten`]) before any journal entry. The
+    /// digest is of the state this block leaves, its slash pass included,
+    /// so it is written after the phase that writes that state. No
+    /// archival family governs it: it has no C++ counterpart to stub, and
+    /// the settlement pass of every session checks it. `pop` removes it
+    /// through the journal, and a reconnect writes the same digest.
+    fn write_drawable_digest(&self, delta: &ArchivalDelta) -> Result<(), StoreError> {
+        let Some(write) = delta.drawable_digest() else {
+            return Ok(());
+        };
+        let epoch = write.epoch();
+        self.open_insert_table(
+            ARCHIVAL_DRAWABLE_DIGEST,
+            StoreInvariant::DrawableDigestNotSingular {
+                epoch,
+                observed: DigestFault::Rewritten,
+            },
+        )?
+        .insert(epoch.to_raw(), write.digest().encoded().as_encoded())?;
+        Ok(())
+    }
+
+    /// 9d. `archival_block_draws[h] = row` at every connecting height,
+    /// insert-once: a block records its count once, and a row already
+    /// there is SI-33 ([`DrawRowFault::Rewritten`]) before any journal
+    /// entry. Written after the digest, which the count at later heights
+    /// compares a rebuild against. No archival family governs it: every
+    /// connect writes the row, as every opening block writes the digest.
+    /// `pop` removes it through the journal, and a reconnect writes the
+    /// same row.
+    fn write_block_draws(
+        &self,
+        connecting: BlockHeight,
+        delta: &ArchivalDelta,
+    ) -> Result<(), StoreError> {
+        self.open_insert_table(
+            ARCHIVAL_BLOCK_DRAWS,
+            StoreInvariant::BlockDrawsNotSingular {
+                height: connecting,
+                observed: super::error::DrawRowFault::Rewritten,
+            },
+        )?
+        .insert(connecting.to_raw(), delta.draws().encoded().as_encoded())?;
+        Ok(())
+    }
+
+    /// 9e. `archival_support_block[h] = count` at every connecting height,
+    /// insert-once: a block records its support count once, and a row
+    /// already there is SI-40 before any journal entry. The count is the
+    /// transition's. While the support schedule is not on the transition
+    /// the count is [`shekyl_types::archival::SupportCount::NONE`]: the
+    /// block issued none. A missing row is the hole, and this zero is not
+    /// that hole. No archival family governs it, for
+    /// [`Self::write_block_draws`]'s reason. `pop` removes it through the
+    /// journal, and the boundary retires it on the draw rows' floor.
+    fn write_support_block(
+        &self,
+        connecting: BlockHeight,
+        delta: &ArchivalDelta,
+    ) -> Result<(), StoreError> {
+        self.open_insert_table(
+            ARCHIVAL_SUPPORT_BLOCK,
+            StoreInvariant::SupportBlockNotSingular { height: connecting },
+        )?
+        .insert(
+            connecting.to_raw(),
+            delta.support_count().encoded().as_encoded(),
+        )?;
         Ok(())
     }
 
@@ -372,6 +501,40 @@ impl<'id> WriteBatch<'_, 'id> {
                 SettlementKey::new(settlement.persona, settlement.shard, settlement.epoch).key(),
                 settlement.row.encoded().as_encoded(),
                 already(settlement),
+            )?;
+        }
+        Ok(())
+    }
+
+    /// The support settlement rows: `archival_support_settlement[(P, E)]`,
+    /// one per tree, insert-once. Governed by the same family as the
+    /// economy rows. A row already there is the epoch settled twice.
+    ///
+    /// The block's support count is [`Self::write_support_block`]: every
+    /// connect records how many support draws the block issued.
+    /// `archival_support_issued` and `archival_support_unissued` still wait
+    /// on admission. [`shekyl_archival_retention::support_slot`] schedules
+    /// a draw, and the slash pass settles the issued rows it is shown.
+    /// Admission is not on the connect path, so this pass reads an empty
+    /// index and writes no settlement row. Filing unanswered draws before
+    /// a bundle can mark a pass would settle misses the stream has not yet
+    /// been able to serve.
+    fn write_support_settlements(&self, delta: &ArchivalDelta) -> Result<(), StoreError> {
+        let rows = delta.support_settlements();
+        if rows.is_empty() || !self.apply_policy().applies(ArchivalFamily::Settlement) {
+            return Ok(());
+        }
+        let already =
+            |s: &shekyl_chain_rules::SupportSettlement| StoreInvariant::SettlementNotSound {
+                epoch: s.epoch,
+                observed: SettlementFault::SupportAlreadySettled { persona: s.persona },
+            };
+        let mut table = self.open_insert_table(ARCHIVAL_SUPPORT_SETTLEMENT, already(&rows[0]))?;
+        for row in rows {
+            table.insert_observing(
+                (row.persona.to_bytes(), row.epoch.to_raw()),
+                row.row.encoded().as_encoded(),
+                already(row),
             )?;
         }
         Ok(())

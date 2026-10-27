@@ -50,7 +50,7 @@ use shekyl_chain_rules::{
 use shekyl_types::{
     ArchivalLength, BlockCount, BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp, TxHash,
 };
-use shekyl_wire::{Ct, Transaction};
+use shekyl_wire::Transaction;
 
 use super::connect_fixtures::{
     batch_root_going_into, candidate, candidate_over, endow_genesis, grown_over, judge, priced,
@@ -58,6 +58,7 @@ use super::connect_fixtures::{
 };
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
+use shekyl_chain_rules::EpochFloor;
 
 /// One judgement, projected to what both views must agree on. The two
 /// views' fault types differ (`StoreError` vs `Infallible`), so a view fault
@@ -113,6 +114,7 @@ struct Env {
 
 impl Substrate for Env {
     type Fault = core::convert::Infallible;
+    type Held = ();
 
     fn local_clock(&self) -> Result<Timestamp, Self::Fault> {
         Ok(self.clock)
@@ -163,7 +165,28 @@ fn run<'id, V: ChainView<'id>>(
 where
     V::Fault: core::fmt::Debug,
 {
-    let formed = match form(candidate, &RuleSet::GENESIS, env, seed, FormAttempt::FIRST) {
+    let target = match super::connect_fixtures::expected_target(view, &RuleSet::GENESIS) {
+        Ok(target) => target,
+        Err(fault) => panic!("the view answers: {fault:?}"),
+    };
+    let connecting = match view.tip() {
+        Ok(tip) => BlockHeight::from_raw(tip.map_or(0, |tip| tip.height.to_raw() + 1)),
+        Err(fault) => panic!("the view answers: {fault:?}"),
+    };
+    let references =
+        match shekyl_chain_rules::ReferenceClaims::from_headers(view, connecting, &candidate) {
+            Ok(references) => references,
+            Err(fault) => panic!("the view answers: {fault:?}"),
+        };
+    let formed = match form(
+        candidate,
+        &RuleSet::GENESIS,
+        env,
+        seed,
+        target,
+        &references,
+        FormAttempt::FIRST,
+    ) {
         Ok(Ok(formed)) => formed,
         Ok(Err(refused)) => {
             return Outcome::FormRefused {
@@ -187,7 +210,7 @@ where
 /// the cumulative work the validator derived for each block (read back off
 /// the verdict the store connected and the store it connected into — the
 /// record both views must then agree on).
-fn twin_chains(len: u64) -> (ChainStore, std::path::PathBuf, MockChain, Vec<Candidate>) {
+pub(super) fn twin_chains(len: u64) -> (ChainStore, std::path::PathBuf, MockChain, Vec<Candidate>) {
     let path = tmp(&format!("conformance-{len}"));
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let mut mock = MockChain::default();
@@ -367,13 +390,26 @@ fn shapes(
             with_body.transactions = vec![body];
             with_body
         };
-        let mut unrecorded = the_spend.clone();
-        match &mut unrecorded.ct {
-            Ct::Fcmp {
-                reference_block, ..
-            } => *reference_block = fixture::UNRECORDED_REFERENCE,
-            Ct::Null(_) => panic!("a spend's ct is Fcmp"),
-        }
+        // Wallet-made, naming the unrecorded reference under valid
+        // signatures (the spender signs after the name moves): since
+        // 2026-10-16 the signature sequence runs in `form` ahead of every
+        // view-bound row, so a reference moved after signing would be
+        // CEN-I18's, not I10's. Over the same chain the grown spend was
+        // built on, spending the one matured coinbase (block 0's) as it
+        // does — a separate candidate, so the two never meet.
+        let unrecorded = {
+            let linked: Vec<shekyl_harness_spender::Linked<'_>> = blocks
+                .iter()
+                .map(|b| shekyl_harness_spender::Linked::new(&b.block, &b.transactions))
+                .collect();
+            shekyl_harness_spender::Spender::over(&linked).spend_coinbase_referencing(
+                shekyl_harness_spender::MinerWallet::harness(),
+                BlockHeight::ZERO,
+                BlockHeight::from_raw(len),
+                0,
+                fixture::UNRECORDED_REFERENCE,
+            )
+        };
         out.push(("I10–I12 anchored spend", listing(the_spend), Env::FIXTURE));
         out.push((
             "I10 unrecorded reference",
@@ -831,12 +867,12 @@ impl ArchivalReads {
             last_served: view.last_served_epoch(&persona, shard)?,
             served: view.served_shards(&persona)?,
             passes: view.pass_count(&persona, shard, epoch)?,
-            r_market: view.r_market(shard, epoch)?,
-            sigma_work: view.sigma_work(epoch)?,
-            budget: view.budget(epoch)?,
+            r_market: view.r_market(shard, epoch, EpochFloor::NONE)?,
+            sigma_work: view.sigma_work(epoch, EpochFloor::NONE)?,
+            budget: view.budget(epoch, EpochFloor::NONE)?,
             watermark: view.last_settled_slash_epoch()?,
             records: view.bond_records()?,
-            slash_applied: view.slash_applied(&persona, shard, epoch)?,
+            slash_applied: view.slash_applied(&persona, shard, epoch, EpochFloor::NONE)?,
             accruing: view.budget_accruing(epoch)?,
         })
     }

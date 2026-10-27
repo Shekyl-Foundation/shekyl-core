@@ -25,47 +25,6 @@
 //! a fixed 32 bytes, so the passes agree on weight whatever they drew.
 //! Which pass's secrets a producer keeps is that producer's question.
 
-use rand::rngs::OsRng;
-use rand::RngCore;
-use shekyl_archival_retention::draw_commit;
-use shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa;
-use shekyl_crypto_pq::CryptoError;
-use shekyl_types::archival::DrawCommitment;
-use zeroize::Zeroizing;
-
-/// Commit to a fresh witness key and a fresh seed, independent of each
-/// other and of everything else, and keep neither.
-///
-/// The seed is wiped when this returns (`Zeroizing`); the secret key wipes
-/// itself on drop.
-///
-/// # Errors
-///
-/// If the OS random source or key generation fails. There is no fallback
-/// commitment.
-pub(crate) fn commit_and_discard() -> Result<DrawCommitment, CryptoError> {
-    let (witness_pk, _witness_sk) = HybridEd25519FnDsa::generate_keypair()?;
-    let mut seed = Zeroizing::new([0u8; 32]);
-    OsRng
-        .try_fill_bytes(seed.as_mut())
-        .map_err(|e| CryptoError::KeyGenerationFailed(format!("OS RNG: {e}")))?;
-    Ok(DrawCommitment::from_bytes(draw_commit(
-        &witness_pk.to_canonical_bytes(),
-        &seed,
-    )))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Two coinbases never share a commitment: each commits to its own
-    /// key and seed (the specification's §4.2, "neither is derived from
-    /// anything two blocks share").
-    #[test]
-    fn two_draws_commit_to_different_secrets() {
-        let a = commit_and_discard().expect("first");
-        let b = commit_and_discard().expect("second");
-        assert_ne!(a, b);
-    }
-}
+// The draw is `shekyl-archival-retention`'s: the Rust template producer and
+// this FFI commit through one function (`DRS_X_STORE_FLIP.md` DX-Q3, Q4).
+pub(crate) use shekyl_archival_retention::commit_and_discard;

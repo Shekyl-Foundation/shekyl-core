@@ -7,7 +7,9 @@
     "Fork choice: the best chain is decided at alt admission by STRICTLY",
     "greater cumulative difficulty — equality keeps the incumbent; an",
     "operator-checkpoint match on the alternative forces the switch",
-    "regardless of difficulty. verdict 0 = keep current, 1 = switch.",
+    "regardless of difficulty. verdict 0 = keep current, 1 = switch,",
+    "2 = checkpoint-forced switch (the demoted chain is discarded,",
+    "CEN-K7; DRS_E5_POOL_ALT_PRUNE.md E5-Q5).",
     "Cumulative difficulties are given as lo/hi u64 halves (the FFI ABI).",
     "",
     "Alt window: for a candidate at bei_height whose stored alt ancestry",
@@ -33,12 +35,13 @@
     "window_entries": 91
   },
   "fork_choice_cases": {
-    "comment": "checkpoint_match forces switch; otherwise strictly-greater-only.",
+    "comment": "checkpoint_match forces the switch (verdict 2, ForcedSwitch: the demoted chain is discarded); otherwise strictly-greater-only (1 switches, 0 keeps).",
     "cases": [
       { "name": "strictly_greater_switches", "current_lo": 10, "current_hi": 0, "alternative_lo": 11, "alternative_hi": 0, "checkpoint_match": false, "verdict": 1 },
       { "name": "equality_keeps_incumbent", "current_lo": 11, "current_hi": 0, "alternative_lo": 11, "alternative_hi": 0, "checkpoint_match": false, "verdict": 0 },
       { "name": "lighter_keeps_incumbent", "current_lo": 11, "current_hi": 0, "alternative_lo": 10, "alternative_hi": 0, "checkpoint_match": false, "verdict": 0 },
-      { "name": "checkpoint_forces_even_when_lighter", "current_lo": 18446744073709551615, "current_hi": 18446744073709551615, "alternative_lo": 0, "alternative_hi": 0, "checkpoint_match": true, "verdict": 1 },
+      { "name": "checkpoint_forces_even_when_lighter", "current_lo": 18446744073709551615, "current_hi": 18446744073709551615, "alternative_lo": 0, "alternative_hi": 0, "checkpoint_match": true, "verdict": 2 },
+      { "name": "checkpoint_on_heavier_chain_is_forced", "current_lo": 10, "current_hi": 0, "alternative_lo": 11, "alternative_hi": 0, "checkpoint_match": true, "verdict": 2 },
       { "name": "hi_word_decides_switch", "current_lo": 18446744073709551615, "current_hi": 0, "alternative_lo": 0, "alternative_hi": 1, "checkpoint_match": false, "verdict": 1 },
       { "name": "hi_word_decides_keep", "current_lo": 0, "current_hi": 1, "alternative_lo": 18446744073709551615, "alternative_hi": 0, "checkpoint_match": false, "verdict": 0 },
       { "name": "equality_across_halves_keeps", "current_lo": 5, "current_hi": 7, "alternative_lo": 5, "alternative_hi": 7, "checkpoint_match": false, "verdict": 0 }

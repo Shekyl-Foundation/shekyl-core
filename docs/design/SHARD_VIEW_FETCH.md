@@ -199,7 +199,8 @@ hash moves with the body, which is what a cached picture is a function of.
 
 ### `SV-D6` — PROPOSED: the method stays restricted
 
-`request_archival_shard` stays in `RESTRICTED_METHODS` (`RK-D6`). A call
+`request_archival_shard` stays the host's: its row in the method table
+(`shekyl-rpc-types`' `methods.rs`, RW-Q7; `RK-D6`). A call
 spends an archivist's Tor bandwidth on a 3 MB body; opened to remote-wallet
 callers it is a way to make any node hammer the archivist set. Viewers reach
 it through a daemon they operate: a wallet's local daemon, or shekyl-web's

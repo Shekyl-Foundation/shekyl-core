@@ -33,7 +33,7 @@ use super::pending::PendingTx;
 use super::principal_stake::StakeInError;
 use super::pscan::start::{PScanHandle, PScanStartError};
 use super::stake_engine::serving::{ServingHandle, ServingStartError};
-use super::staking_read::{StakingReadError, StakingReadView};
+use super::staking_read::{StakingLedgerSnapshot, StakingReadError, StakingReadView};
 use super::traits::{
     DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, PersistenceEngine, RefreshEngine,
 };
@@ -128,11 +128,9 @@ where
     /// [`Self::staking_read_view`] with a caller-supplied ledger snapshot.
     pub fn staking_read_view_with_snapshot(
         &self,
-        staking_enabled: bool,
-        recovery_pending_reopen: bool,
+        snapshot: StakingLedgerSnapshot,
     ) -> Result<StakingReadView, StakingReadError> {
-        self.engine
-            .staking_read_view_with_snapshot(staking_enabled, recovery_pending_reopen)
+        self.engine.staking_read_view_with_snapshot(snapshot)
     }
 
     /// Whether bond-watch adopted a recovered staked slot this session.

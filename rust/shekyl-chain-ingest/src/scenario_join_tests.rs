@@ -63,7 +63,7 @@ const FILL_FROM_COINBASE: u64 = 10;
 /// join epoch, as the C++'s `check_tx_inputs` does; the credit now lists
 /// in the block after, for the epoch after.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "fills two shards with real proofs; minutes. Run in the live lane: cargo test -p shekyl-chain-ingest --features pipeline -- --ignored a_join_is_written"]
+#[ignore = "fills two shards with real proofs; minutes; run by nightly.yml's chain-ingest-ignored job"]
 async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
     let rules = levered_rules();
     let mut scenario = Scenario::open_under("scenario-archival-join", FreeHash, rules);

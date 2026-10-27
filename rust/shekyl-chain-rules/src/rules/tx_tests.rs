@@ -14,12 +14,12 @@ use crate::coverage::RuleCoverage;
 use crate::harness::fixture::{
     candidate_on, coinbase, coinbase_extra, listed, point, pqc_extra, serve_credit_only, G, TWO_G,
 };
-use crate::harness::{assert_refused, credited_to_this_falsifier, formed_on, judged, MockChain};
+use crate::harness::{assert_refused, credited_to_this_falsifier, judge_on, MockChain};
 use crate::rule_set::RuleSet;
 use crate::rules::TxKind;
-use crate::trust::Trust;
-use crate::validate::{tx_form, validate};
+use crate::validate::tx_form;
 use crate::verdict::{Locus, TxSlot};
+use shekyl_economics::FULL_REWARD_ZONE;
 use shekyl_wire::{Ct, CtBase, Input, Transaction};
 
 #[path = "tx_balance_tests.rs"]
@@ -38,25 +38,19 @@ pub(crate) fn refused_lone(tx: &Transaction, row: CenRow) {
     );
 }
 
-/// The same transaction listed first in a block is refused by `validate` on
-/// the same row at `Listed(0)` — one function, two sites.
+/// The same transaction listed first in a block is refused on the same row
+/// at `Listed(0)` — one function, two sites. Through both stages: `form`
+/// runs `tx_form` at every slot, so a block-level refusal of a stateless
+/// row arrives from `form`.
 pub(crate) fn refused_listed(tx: &Transaction, row: CenRow) {
     let chain = MockChain::default();
-    chain.with_view(|view| {
-        let formed = formed_on(&chain, candidate_on(&chain, vec![tx.clone()]));
-        assert_refused(
-            judged(validate(
-                formed,
-                &view,
-                &RuleSet::GENESIS,
-                &Trust::UNANCHORED,
-            )),
-            row,
-            Locus::Tx {
-                slot: TxSlot::Listed(0),
-            },
-        );
-    });
+    assert_refused(
+        judge_on(&chain, candidate_on(&chain, vec![tx.clone()])),
+        row,
+        Locus::Tx {
+            slot: TxSlot::Listed(0),
+        },
+    );
 }
 
 // ---- the class ----------------------------------------------------------
@@ -149,7 +143,7 @@ fn the_limits_are_the_cxx_defines() {
     assert_eq!(cxx_define("CRYPTONOTE_MAX_TX_SIZE"), MAX_TX_SIZE as u64);
     assert_eq!(
         cxx_define("CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE"),
-        COINBASE_BLOB_RESERVED as u64
+        shekyl_wire::transaction::COINBASE_RESERVE as u64
     );
     assert_eq!(
         cxx_define("CRYPTONOTE_MAX_BLOCK_NUMBER"),
@@ -167,22 +161,23 @@ fn the_limits_are_the_cxx_defines() {
     );
 }
 
-/// H3's limit is derived, never restated: the formula is
-/// `get_transaction_weight_limit`'s, its operands are the generated
-/// full-reward zone and the coinbase reserve, and the shipped value is
-/// what the census pins.
+/// H3's limit is the wire crate's `TX_WEIGHT_LIMIT`. The formula — half
+/// the zone less the coinbase reserve — is held here so the generated zone
+/// and that constant cannot drift.
 #[test]
-fn the_weight_limit_is_derived_from_the_zone_and_the_reserve() {
+fn the_weight_limit_is_the_wire_constant() {
+    assert_eq!(max_tx_weight(), shekyl_wire::transaction::TX_WEIGHT_LIMIT);
     assert_eq!(
         max_tx_weight(),
-        (FULL_REWARD_ZONE / 2) as usize - COINBASE_BLOB_RESERVED
+        (FULL_REWARD_ZONE / 2) as usize - shekyl_wire::transaction::COINBASE_RESERVE
     );
-    assert_eq!(max_tx_weight(), 149_400, "the shipped limit (census H3)");
 }
 
 /// The codec's DoS bounds and the consensus limits are the same numbers —
-/// held equal by this test, not by a comment (Q5 as ruled). The rule's
-/// source is the C++ define (above), never the codec.
+/// held equal by this test, not by a comment (Q5 as ruled). The size and
+/// the unlock sentinel are the C++ defines (above). The weight limit is
+/// [`max_tx_weight`], the wire constant, held to the zone formula by
+/// `the_weight_limit_is_the_wire_constant`.
 #[test]
 fn the_limits_equal_the_wire_crates_bounds() {
     assert_eq!(MAX_TX_SIZE, shekyl_wire::transaction::MAX_TX_SIZE);
@@ -237,7 +232,7 @@ fn listed_serialized_to(target: usize) -> Transaction {
 /// Boundary: a transaction of exactly `MAX_TX_SIZE` bytes passes H1; one
 /// byte more is refused on it. The inclusive edge is asserted on the rule
 /// alone — through `tx_form` a megabyte transaction is refused by H3
-/// (149 400) whatever H1 says, in the C++'s order too — and the refusal
+/// (the weight limit) whatever H1 says, in the C++'s order too — and the refusal
 /// side through `tx_form` at both sites names H1, which runs first.
 #[test]
 fn h1_the_size_limit_is_inclusive() {
@@ -833,11 +828,12 @@ fn h19_the_canonical_layout_is_one_proof_sized_to_the_outputs() {
 }
 
 /// Through `tx_form`: a spend whose proof is sized for two outputs but
-/// carries one is refused under H19 — a refusal on a row the registry still
-/// holds `pending` (its verification half is slice 6's), so the row is not
-/// in any passing coverage.
+/// carries one is refused under H19, and a canonical layout passes without
+/// recording the row — `tx_form` judges the layout alone; the row is
+/// recorded by `validate`'s fold once the block's batch has decided
+/// (`rules::range_proof`).
 #[test]
-fn h19_a_non_canonical_layout_is_refused_and_the_row_is_not_yet_recorded() {
+fn h19_a_non_canonical_layout_is_refused_and_the_layout_alone_does_not_record() {
     use crate::harness::fixture::bp_plus_layout_for;
     let mut tx = listed(KI);
     if let Ct::Fcmp {

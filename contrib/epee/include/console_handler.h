@@ -1,3 +1,4 @@
+// Copyright (c) 2025-2026, The Shekyl Foundation
 // Copyright (c) 2006-2013, Andrey N. Sabelnikov, www.sabelnikov.net
 // All rights reserved.
 //
@@ -177,7 +178,7 @@ namespace epee
     bool wait_stdin_data()
     {
 #if !defined(WIN32)
-      #if defined(__OpenBSD__) || defined(__ANDROID__)
+      #if defined(__OpenBSD__)
       int stdin_fileno = fileno(stdin);
       #else
       int stdin_fileno = ::fileno(stdin);

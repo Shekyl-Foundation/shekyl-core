@@ -25,10 +25,9 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use shekyl_levin::{
-    invoke, response, BasicNodeData, BucketReader, CoreSyncData, HandshakeRequest,
-    HandshakeResponse, PortableMap, Received, SupportFlags, SupportFlagsRequest,
-    SupportFlagsResponse, TimedSyncRequest, TimedSyncResponse, COMMAND_HANDSHAKE,
-    COMMAND_REQUEST_SUPPORT_FLAGS, COMMAND_TIMED_SYNC, DEFAULT_MAX_PACKET_SIZE,
+    invoke, BasicNodeData, BucketReader, CoreSyncData, HandshakeRequest, HandshakeResponse,
+    PortableMap, Received, TimedSyncRequest, TimedSyncResponse, COMMAND_HANDSHAKE,
+    COMMAND_TIMED_SYNC, DEFAULT_MAX_PACKET_SIZE,
 };
 
 /// FAKECHAIN (`--regtest`) derives its id from fakechain's genesis pin,
@@ -65,25 +64,22 @@ impl Daemon {
         let log = std::fs::File::create(data_dir.join("daemon.log")).expect("daemon log");
         let child = Command::new(&bin)
             .args([
-                "--regtest",
-                "--non-interactive",
-                "--no-igd",
-                "--out-peers",
-                "0",
-                "--fixed-difficulty",
+                "--network",
+                "regtest",
+                "--tor",
+                "off",
+                "--dev-difficulty",
                 "1",
-                "--p2p-bind-ip",
-                "127.0.0.1",
-                "--p2p-bind-port",
-                &p2p_port.to_string(),
-                "--rpc-bind-ip",
-                "127.0.0.1",
-                "--rpc-bind-port",
-                &rpc_port.to_string(),
+                "--clearnet-listen",
+                &format!("127.0.0.1:{p2p_port}"),
+                "--rpc-admin-listen",
+                &format!("127.0.0.1:{rpc_port}"),
                 "--data-dir",
                 data_dir.to_str().expect("utf8 data dir"),
+                "--log-file",
+                &data_dir.join("shekyld.log").display().to_string(),
                 "--log-level",
-                "0",
+                "warn",
             ])
             .stdout(Stdio::from(log.try_clone().expect("clone log")))
             .stderr(Stdio::from(log))
@@ -278,17 +274,6 @@ impl Session {
         loop {
             match self.next_message() {
                 Received::Response { command, payload } if command == want => return payload,
-                Received::Request { command, payload }
-                    if command == COMMAND_REQUEST_SUPPORT_FLAGS =>
-                {
-                    SupportFlagsRequest::load(&payload).expect("support-flags request");
-                    let body = SupportFlagsResponse {
-                        support_flags: SupportFlags::ADVERTISED,
-                    }
-                    .store()
-                    .expect("store support-flags");
-                    self.send(&response(COMMAND_REQUEST_SUPPORT_FLAGS, &body));
-                }
                 Received::Notification { command, .. } => {
                     // Fresh regtest may still emit cryptonote notifies; maps
                     // under test here are the invoke/response commands.
@@ -347,7 +332,6 @@ fn rust_client_handshakes_with_shekyld() {
     let req = HandshakeRequest {
         node_data: BasicNodeData {
             network_id: regtest_network_id(),
-            support_flags: SupportFlags::ADVERTISED,
         },
         payload_data: CoreSyncData {
             current_height: tip.height,
@@ -374,8 +358,4 @@ fn rust_client_handshakes_with_shekyld() {
     let ts = TimedSyncResponse::load(&payload).expect("decode timed-sync");
     assert_eq!(ts.payload_data.top_id, tip.top_id);
     assert_eq!(ts.payload_data.current_height, tip.height);
-
-    let payload = session.invoke_map(COMMAND_REQUEST_SUPPORT_FLAGS, &SupportFlagsRequest);
-    let flags = SupportFlagsResponse::load(&payload).expect("decode support-flags");
-    assert_eq!(flags.support_flags, SupportFlags::ADVERTISED);
 }

@@ -155,6 +155,8 @@ fn in_progress_states_are_named_before_nothing_staked() {
                 tx_bytes: vec![0xEE; 4],
                 funding_gindexes: Vec::new(),
                 state: PendingPostState::Pending,
+                reference_height: shekyl_types::BlockHeight::from_raw(1_000_000),
+                terminal: None,
             },
             ChainCount::from_raw(5_000),
             g,
@@ -180,6 +182,8 @@ fn in_progress_states_are_named_before_nothing_staked() {
                 anchor_t0: ChainCount::from_raw(1),
                 funding_gindexes: Vec::new(),
                 state: PendingPostState::Pending,
+                reference_height: shekyl_types::BlockHeight::from_raw(1_000_000),
+                terminal: None,
             },
             g,
         ),
@@ -288,6 +292,32 @@ fn the_two_pending_refusals_flatten_to_their_own_arms() {
     assert!(matches!(
         flatten_unstake_error(ReleaseRequestError::BondPostPending),
         UnstakeError::BondConfirming
+    ));
+}
+
+/// A daemon's terminal verdict on the exit reaches the caller as the held
+/// disposition, never as "released, retry at will": the seam keeps that
+/// record (BD-Q3 Rule 2), so a retry would only meet the one-live-exit
+/// lane. The pre-transport pairing refusal is the one released class.
+#[test]
+fn only_the_pairing_refusal_flattens_to_released() {
+    use crate::engine::error::TerminalErrorKind;
+    use crate::engine::transaction_submitter::{BroadcastSubmitError, SubmitterError};
+
+    let terminal = BroadcastSubmitError::Submit(SubmitterError::RejectedTerminal {
+        kind: TerminalErrorKind::DoubleSpend,
+    });
+    assert!(matches!(
+        flatten_unstake_error(ReleaseRequestError::Submit(terminal)),
+        UnstakeError::ExitFateUnknown { .. }
+    ));
+    let mismatch = BroadcastSubmitError::PersonaMismatch {
+        bytes_persona: shekyl_types::PCanonicalId::from_bytes([1; 32]),
+        submitter_persona: shekyl_types::PCanonicalId::from_bytes([2; 32]),
+    };
+    assert!(matches!(
+        flatten_unstake_error(ReleaseRequestError::Submit(mismatch)),
+        UnstakeError::ExitRefusedAndReleased { .. }
     ));
 }
 
@@ -509,6 +539,8 @@ fn a_sealed_exit_is_excluded_so_the_next_live_bond_can_exit() {
                 tx_bytes: vec![0xEE; 4],
                 funding_gindexes: Vec::new(),
                 state: PendingPostState::Pending,
+                reference_height: shekyl_types::BlockHeight::from_raw(1_000_000),
+                terminal: None,
             },
             ChainCount::from_raw(5_000),
             g,

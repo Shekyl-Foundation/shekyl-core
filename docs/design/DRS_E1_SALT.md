@@ -21,6 +21,15 @@ has two arms; `coins_generated` is gone from the row and `block_weight` is
 `BlockWeight` (no presence byte; zero is a codec refusal) at
 `SCHEMA_VERSION` 24. The §3 and §11 rows below record the increment **as
 it landed**; `DRS_E5_POOL_ALT_PRUNE.md` §1.1 is the shape of record.
+**Moved by DRS-E5 PR-b (2026-10-17; the review of #1102, B1):** an alt
+row's listed bodies are consensus data in `alt_block_bodies`
+(Rust-only, ordinal 43, layout 27) — written by AL1 from the verdict,
+removed by AL2 and AL3 with the row, read by **AL8** `alt_block_bodies`
+held to the row's listed hashes (SI-7 otherwise) — and a row leaves the
+table by promotion, a reset, or the death rule: the connect that
+advances the tip removes every row at or below `tip − cap`, and the
+writer every row at or below CEN-E2's anchor floor
+(`DRS_E5_POOL_ALT_PRUNE.md` §2.3).
 This file stays in `design/` as the E1/E5 boundary statement (§0, §2.2,
 §2.3, SAL-13, SAL-14) until E5's plan owns it.
 **Round 0 executed 2026-09-24** at `dev` @ `9532b58f5`
@@ -415,8 +424,10 @@ lands (§10).
   is an attribute — `SAR-Q5` said so — and an attribute is a field. The
   `mdb_put` with flags `0` (an upsert the single writer never exercises as
   one) and "empty stores no row" become `Option<…>` on the record.
-- **SAL-7 — alt data never reaches `ChainView`.** CEN-A4 is *held-by-cxx*
-  because "alt-store membership is not a recorded-chain fact"; CEN-K8's
+- **SAL-7 — alt data never reaches `ChainView`.** CEN-A4 is held by the
+  ingest service's router, not the validator
+  (`held_by_store("shekyl-chain-ingest", "an_arrival_whose_parent_is_unheld_is_unlinked_and_not_stored")`,
+  DRS-X PR 2), because "alt-store membership is not a recorded-chain fact"; CEN-K8's
   reader enumeration finds no consensus-bearing reader of the alt
   bookkeeping. The validator's view is projected from the chain; AL4–AL7
   live on `ReadSnapshot` and the batch's view, and no `ChainView` accessor
@@ -470,7 +481,11 @@ lands (§10).
   the block. E5's demotion sequence is therefore: read the tip's bytes,
   cumulative difficulty, coins and weight and the witness through the
   batch's view, `pop()`, AL1. Stated here so the E5 plan inherits the order
-  rather than discovering `Popped`'s shape.
+  rather than discovering `Popped`'s shape. **Carried and built** (DRS-E5
+  switch PR): `ReadSnapshot::candidate_at` reads each demoted block — block,
+  listed bodies, witness — on a snapshot taken before the write; the cheap
+  tier judges it there and AL1 writes the row from that verdict after the
+  pops (`DRS_E5_POOL_ALT_PRUNE.md` §2.3).
 - **SAL-14 — `rollback_blockchain_switching` is a deletion, not a port**
   *(added on the rulings, 2026-09-25)*. The function (`:1080`, called at
   `:1204`) pops the blocks the failed switch promoted and re-adds the ones
@@ -489,7 +504,13 @@ lands (§10).
   applied nothing non-store. The row belongs to E5's plan with both halves
   and the falsifier (`git grep rollback_blockchain_switching src/` → 0 after
   the cutover); this document names it so the E5 plan inherits a deletion
-  plus an ordering rule, not a translation task.
+  plus an ordering rule, not a translation task. **Carried and built**
+  (DRS-E5 switch PR): the Rust switch is one `store.write`; a promotion
+  verdict aborts it and the store is the pre-switch chain, with no
+  compensating writes (the failing alt suffix is removed afterwards in a
+  write of its own, CEN-K5). The pool half of the ordering rule is PR-b's:
+  until then the demoted bodies come back from the closure's `Ok` and the
+  one caller drops them. The deletion stays `DEL-009`'s, at the store flip.
 - **SAL-15 — the folded witness's §7.1.1 obligation moves with it, and the
   fold lets the "declared, not enforced" boundary be enforced** *(added on
   the rulings, 2026-09-25; checked against `DAEMON_REDB_STORE.md` §7.1.1

@@ -60,8 +60,8 @@ pub enum UnboundedReason {
     ExceedsCounter,
 }
 
-/// The admission decision for public inbound, and the process-wide backstop
-/// when the operator left `--in-peers` unset.
+/// The admission decision for public inbound: the process-wide descriptor
+/// bound, the only inbound bound there is (no operator cap, IG-Q40).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InboundCeiling {
     /// Admit at most this many inbound connections. Zero admits none.

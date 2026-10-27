@@ -311,6 +311,12 @@ pub struct RelayZoneHandle {
     /// path that is almost never read. Off-strand readers clone the `Arc`
     /// (cheap) and copy fixed-size rows; the C++ merge edge emits JSON once.
     stem_tallies: Mutex<Arc<Vec<(ConnectionId, StemTallySnapshot)>>>,
+    /// Where this zone's publish writes the relay's hop-0 verdict. The zone
+    /// [`shekyl_relay_zone_new`] builds, the process's one relay, writes the
+    /// process cell ([`crate::origin_verdict`]); a zone a test builds writes
+    /// a channel of its own, or none. Fixed at construction, so no handle is
+    /// reached into after it is boxed.
+    origin: Option<crate::origin_verdict::OriginPublisher>,
 }
 
 impl RelayZoneHandle {
@@ -334,6 +340,10 @@ impl RelayZoneHandle {
         // holding the lock.
         if let Ok(mut slot) = self.stem_tallies.lock() {
             *slot = snap;
+        }
+        if let Some(publisher) = &self.origin {
+            let zone = self.driver.zone();
+            crate::origin_verdict::publish_to(publisher, zone.origin_verdict());
         }
     }
 }
@@ -560,6 +570,65 @@ unsafe fn read_id(p: *const u8) -> Option<ConnectionId> {
     (b != NIL).then(|| ConnectionId::from_bytes(b))
 }
 
+/// The relay half of the remnant's preparation: one bit per connector
+/// index, and whether the development cover carrier runs. The mask is
+/// computed here, next to [`connectors_from_mask`], so the preparation
+/// stores no dialer type.
+#[must_use]
+pub fn relay_identity(
+    connectors: &[ConnectorId],
+    cover: bool,
+) -> crate::remnant_prep::RelayIdentity {
+    let connectors = connectors
+        .iter()
+        .fold(0u32, |mask, connector| mask | (1u32 << connector.index()));
+    crate::remnant_prep::RelayIdentity { connectors, cover }
+}
+
+/// The C++ test harness writer (`tests/unit_tests/levin.cpp`,
+/// `tests/unit_tests/node_server.cpp`). It overwrites the relay half
+/// between notifiers and does not touch the reservation. Returns 0, or -1
+/// for a bit past the connector count.
+#[no_mangle]
+pub extern "C" fn shekyl_relay_posture_record(configured: u32, cover: bool) -> i32 {
+    if connectors_from_mask(configured).is_err() {
+        return -1;
+    }
+    crate::remnant_prep::state_relay(crate::remnant_prep::RelayIdentity {
+        connectors: configured,
+        cover,
+    });
+    0
+}
+
+/// Opens the relay zone from the remnant's preparation. Null when no
+/// identity is installed: a relay with no identity is not built.
+#[no_mangle]
+pub extern "C" fn shekyl_relay_zone_new(
+    now_ms: u64,
+    stems: usize,
+    min_epoch_secs: u32,
+    epoch_jitter_secs: u32,
+) -> *mut RelayZoneHandle {
+    let Some(identity) = crate::remnant_prep::relay() else {
+        return std::ptr::null_mut();
+    };
+    let flags = if identity.cover {
+        SHEKYL_RELAY_ZONE_NOISE_ENABLED
+    } else {
+        0
+    };
+    new_zone_publishing(
+        now_ms,
+        stems,
+        min_epoch_secs,
+        epoch_jitter_secs,
+        flags,
+        identity.connectors,
+        Some(crate::origin_verdict::process_publisher()),
+    )
+}
+
 /// Open a zone. Release with [`shekyl_relay_zone_free`].
 ///
 /// The epoch length is a parameter because it is C++-owned and already
@@ -588,14 +657,42 @@ unsafe fn read_id(p: *const u8) -> Option<ConnectionId> {
 /// count other than the inherited width, and a noise epoch too short to
 /// carry a full-size message. Every [`shekyl_relay::RelayNewError`] maps
 /// to null because that is the only channel a C ABI has.
-#[no_mangle]
-pub extern "C" fn shekyl_relay_zone_new(
+///
+/// The production export reads the flags and the mask from the remnant's
+/// preparation. The tests state them.
+/// A zone that publishes its hop-0 verdict nowhere: the test constructor.
+#[cfg(test)]
+pub(crate) fn new_zone(
     now_ms: u64,
     stems: usize,
     min_epoch_secs: u32,
     epoch_jitter_secs: u32,
     flags: u32,
     configured: u32,
+) -> *mut RelayZoneHandle {
+    new_zone_publishing(
+        now_ms,
+        stems,
+        min_epoch_secs,
+        epoch_jitter_secs,
+        flags,
+        configured,
+        None,
+    )
+}
+
+/// A zone whose publish writes the relay's hop-0 verdict to `origin`, when
+/// one is given. The production zone is built with the process cell's
+/// publisher; a test that reads the verdict is built with a channel of its
+/// own.
+pub(crate) fn new_zone_publishing(
+    now_ms: u64,
+    stems: usize,
+    min_epoch_secs: u32,
+    epoch_jitter_secs: u32,
+    flags: u32,
+    configured: u32,
+    origin: Option<crate::origin_verdict::OriginPublisher>,
 ) -> *mut RelayZoneHandle {
     if stems == usize::MAX || min_epoch_secs == 0 {
         return std::ptr::null_mut();
@@ -664,6 +761,7 @@ pub extern "C" fn shekyl_relay_zone_new(
         live_stems: AtomicUsize::new(0),
         stem_in_flight: AtomicUsize::new(0),
         stem_tallies: Mutex::new(Arc::new(Vec::new())),
+        origin,
     };
     handle.publish();
     Box::into_raw(Box::new(handle))
@@ -1120,33 +1218,6 @@ pub unsafe extern "C" fn shekyl_relay_zone_floor_snapshot(
         }
         None => false,
     }
-}
-
-/// The outbound-connection floor the embargo provisioning assumes (F-8b, §45).
-///
-/// `fluff_return_ms` is measured at usable degree 12; a zone configured below
-/// that has a real fluff first-passage the embargo was not derived for, in the
-/// privacy-losing direction. The `--tx-proxy` parser refuses counts below this
-/// value. Handle-free: the floor is a property of the derivation, not of any
-/// zone instance.
-#[no_mangle]
-pub extern "C" fn shekyl_relay_zone_min_provisioned_out_peers() -> u32 {
-    shekyl_relay_privacy::params::MIN_PROVISIONED_OUT_PEERS
-}
-
-/// Outbound connections a node opens per zone by default (rule 20: Rust owns
-/// the value, C++ consumes it).
-///
-/// Replaces `#define P2P_DEFAULT_CONNECTIONS_COUNT`. The relay-privacy
-/// instruments simulate the deployed out-degree, so a `#define` C++ could move
-/// without any Rust test failing left the measurements free to describe a
-/// network that does not exist. Not the same quantity as
-/// `shekyl_relay_zone_min_provisioned_out_peers`: this is the configuration
-/// the privacy numbers are measured **at**, that one is a floor derived
-/// **from** those measurements.
-#[no_mangle]
-pub extern "C" fn shekyl_p2p_default_out_peers() -> u32 {
-    shekyl_relay_privacy::params::P2P_DEFAULT_OUT_PEERS
 }
 
 #[no_mangle]

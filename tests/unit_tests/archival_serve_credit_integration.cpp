@@ -431,7 +431,7 @@ TEST(archival_serve_credit, gate2_integration_check_archival_serve_credit_input)
   cryptonote::Blockchain* bc = &bap.bc;
   const cryptonote::test_options test_options = {5000};
   // init() takes ownership; ~Blockchain deletes the DB in deinit().
-  ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0));
+  ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, &test_options, 0));
 
   EXPECT_TRUE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.current_height,
     hash_from_hex(kat.prev_block_hash_hex)));
@@ -480,7 +480,7 @@ TEST(archival_serve_credit, gate2_check_tx_inputs_derives_the_block_hash_from_th
     BlockchainAndPool bap;
     cryptonote::Blockchain* bc = &bap.bc;
     const cryptonote::test_options test_options = {5000};
-    if (!bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0))
+    if (!bc->init(db.release(), cryptonote::FAKECHAIN, &test_options, 0))
       throw std::runtime_error("Blockchain::init failed");
 
     cryptonote::transaction tx_copy = tx;
@@ -500,25 +500,6 @@ TEST(archival_serve_credit, gate2_check_tx_inputs_derives_the_block_hash_from_th
   EXPECT_FALSE(run_against_tip(other_tip))
       << "the record verified against a DIFFERENT parent block, so the index "
          "is not block-bound and one response would answer every challenge";
-}
-
-TEST(archival_serve_credit, gate2_integration_rejects_serve_at_join_epoch)
-{
-  const IntegrationKat kat = load_integration_kat();
-  txin_archival_serve_credit_response resp = load_serve_credit_vin(kat.wire_hex);
-  ASSERT_LT(kat.join_epoch, 0x80u);
-  resp.canonical_bytes.at(KEPT_BLOB_EPOCH_OFFSET) = static_cast<uint8_t>(kat.join_epoch);
-
-  auto db = std::make_unique<ArchivalServeCreditIntegrationDB>();
-  seed_substrate(*db, kat);
-
-  BlockchainAndPool bap;
-  cryptonote::Blockchain* bc = &bap.bc;
-  const cryptonote::test_options test_options = {5000};
-  ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0));
-
-  EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.current_height,
-    hash_from_hex(kat.prev_block_hash_hex)));
 }
 
 // The seal-committed guard: a credit whose challenge-seal block is not yet on
@@ -543,7 +524,7 @@ TEST(archival_serve_credit, gate2_seal_committed_guard_precedes_the_block_hash_r
     ArchivalServeCreditIntegrationDB* db_raw = db.get();
     BlockchainAndPool bap;
     cryptonote::Blockchain* bc = &bap.bc;
-    ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0));
+    ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, &test_options, 0));
 
     db_raw->block_hash_queried_heights.clear(); // ignore any init-time reads
     EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.h_seal,
@@ -560,7 +541,7 @@ TEST(archival_serve_credit, gate2_seal_committed_guard_precedes_the_block_hash_r
     ArchivalServeCreditIntegrationDB* db_raw = db.get();
     BlockchainAndPool bap;
     cryptonote::Blockchain* bc = &bap.bc;
-    ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0));
+    ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, &test_options, 0));
 
     db_raw->block_hash_queried_heights.clear();
     // Guard passes at h_seal + 1 (the seal is now the committed tip), so the gate
@@ -602,8 +583,8 @@ uint64_t expected_fire_height(const IntegrationKat& kat)
 // the gate's boundary on both sides of h_fire, and additionally assert the
 // gate queried the accessor at exactly the deterministically derived h_fire
 // (the height a slash-eligibility mirror derives from the same operands).
-// The accessor's own at_height reconstruction against real LMDB state is
-// pinned separately in archival_substrate_lmdb.cpp.
+// The at_height fold itself is pinned in Rust: shekyl-archival-retention's
+// held_at_height.rs tests.
 
 // Drop-after-fire: P held at h_fire, the holding was removed strictly above
 // h_fire, tip no longer holds. The credit is legitimate — a tip read here was
@@ -625,7 +606,7 @@ TEST(archival_serve_credit, gate2_accepts_credit_when_held_at_fire_but_dropped_b
   BlockchainAndPool bap;
   cryptonote::Blockchain* bc = &bap.bc;
   const cryptonote::test_options test_options = {5000};
-  ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0));
+  ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, &test_options, 0));
 
   EXPECT_TRUE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.current_height,
     hash_from_hex(kat.prev_block_hash_hex)));
@@ -656,7 +637,7 @@ TEST(archival_serve_credit, gate2_rejects_credit_when_not_held_at_fire)
   BlockchainAndPool bap;
   cryptonote::Blockchain* bc = &bap.bc;
   const cryptonote::test_options test_options = {5000};
-  ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0));
+  ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, &test_options, 0));
 
   EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.current_height,
     hash_from_hex(kat.prev_block_hash_hex)));
@@ -681,7 +662,7 @@ TEST(archival_serve_credit, gate2_integration_rejects_duplicate_credit_bit)
   BlockchainAndPool bap;
   cryptonote::Blockchain* bc = &bap.bc;
   const cryptonote::test_options test_options = {5000};
-  ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0));
+  ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, &test_options, 0));
 
   EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.current_height,
     hash_from_hex(kat.prev_block_hash_hex)));

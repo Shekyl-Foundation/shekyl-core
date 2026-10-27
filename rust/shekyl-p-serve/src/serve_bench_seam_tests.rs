@@ -128,6 +128,7 @@ async fn a_served_response_is_the_same_bytes_for_the_same_work() {
         let served = parse_served(response);
         verify_pass_transcript(
             signer.key().public_key(),
+            shekyl_archival_retention::PassStream::Economy,
             &NONCE,
             BlockHeight::from_raw(IN_GATE_ANCHOR),
             &ANCHOR_HASH,

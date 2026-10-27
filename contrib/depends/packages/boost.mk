@@ -11,7 +11,6 @@ $(package)_config_opts_debug=variant=debug
 $(package)_config_opts+=--layout=system --user-config=user-config.jam
 $(package)_config_opts+=threading=multi link=static -sNO_BZIP2=1 -sNO_ZLIB=1
 $(package)_config_opts_linux=threadapi=pthread runtime-link=shared
-$(package)_config_opts_android=threadapi=pthread runtime-link=static target-os=android
 $(package)_config_opts_darwin=--toolset=darwin runtime-link=shared
 $(package)_config_opts_mingw32=binary-format=pe target-os=windows threadapi=win32 runtime-link=static
 $(package)_config_opts_x86_64_mingw32=address-model=64

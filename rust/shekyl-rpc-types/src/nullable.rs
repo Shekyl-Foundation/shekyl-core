@@ -85,6 +85,25 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for Nullable<T> {
     }
 }
 
+/// `deserialize_with` for a member that is **optional and may be `null`**:
+/// absent, `null` and a value are three answers.
+///
+/// Paired with `#[serde(default, skip_serializing_if = "Option::is_none")]`
+/// on an `Option<Nullable<T>>`: a missing member takes the default `None`,
+/// and a present one is handed to [`Nullable`], so `null` decodes to
+/// `Some(Nullable::NULL)` rather than collapsing into the absent `None` as
+/// `Option<Option<T>>` would. For a hidden part's member, absent is withheld
+/// and `null` is "shown, and there is no answer".
+///
+/// # Errors
+///
+/// Whatever [`Nullable`]'s decode refuses.
+pub fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
+    deserializer: D,
+) -> Result<Option<Nullable<T>>, D::Error> {
+    Nullable::deserialize(deserializer).map(Some)
+}
+
 /// `null` is `None`; any value is handed to `T` as the value it is.
 struct NullableVisitor<T>(PhantomData<T>);
 

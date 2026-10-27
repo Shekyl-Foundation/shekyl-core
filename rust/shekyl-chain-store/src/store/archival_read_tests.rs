@@ -17,7 +17,7 @@ use shekyl_chain_rules::{AtHeight, SlashLogFloor};
 use shekyl_store_codec::Coded;
 use shekyl_types::archival::{
     BlockDraws, DrawableDigest, IndexedDraw, IssuedDigest, IssuedDraw, SettlementOutcome,
-    SettlementRow, BLOCK_DRAWS_LEN, MAX_ATTESTATION_WITNESS_BYTES,
+    SettlementRow, SupportIssued, BLOCK_DRAWS_LEN, MAX_ATTESTATION_WITNESS_BYTES,
 };
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
@@ -30,13 +30,17 @@ use crate::codec::{
     ArchivalLastSlashEpochCell, AttestationWitnessBytes, BondRecord, Canonical, Holdings, Present,
     PropertyCell, RMarket, Raw, SigmaWorkMilli, SlashLogEntry, SlashedHolding,
 };
-use crate::ids::{IssuedDrawKey, ServeCreditKey, SettlementKey, SlashAppliedKey, SlashLogKey};
+use crate::ids::{
+    IssuedDrawKey, ServeCreditKey, SettlementKey, SlashAppliedKey, SlashLogKey, SupportIssuedKey,
+};
 use crate::schema::{
     ARCHIVAL_ATTESTATION_WITNESS, ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_BOND, ARCHIVAL_BUDGET,
     ARCHIVAL_BUDGET_ACCRUING, ARCHIVAL_DRAWABLE_DIGEST, ARCHIVAL_ISSUED_DIGEST,
     ARCHIVAL_ISSUED_DRAW, ARCHIVAL_R_MARKET, ARCHIVAL_SERVE_CREDIT, ARCHIVAL_SETTLEMENT,
-    ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED, ARCHIVAL_SLASH_LOG,
+    ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED, ARCHIVAL_SLASH_LOG, ARCHIVAL_SUPPORT_ISSUED,
+    ARCHIVAL_SUPPORT_SETTLEMENT,
 };
+use shekyl_chain_rules::{BlockDrawsFloor, EpochFloor};
 
 pub(super) fn persona(fill: u8) -> PCanonicalId {
     PCanonicalId::from_bytes([fill; 32])
@@ -50,7 +54,7 @@ fn epoch(n: u64) -> SettlementEpoch {
     SettlementEpoch::from_raw(n)
 }
 
-fn record() -> BondRecord {
+pub(super) fn record() -> BondRecord {
     BondRecord {
         hybrid_pubkey: vec![0x11; 64],
         bond_spend_pk: vec![0x22; 32],
@@ -443,29 +447,35 @@ fn a6_to_a8_tell_no_row_from_a_written_zero() {
     let snap = store.begin_read().unwrap();
     // Written zero and absent are different answers (SAR-8).
     assert_eq!(
-        snap.r_market(shard(7), epoch(4)).unwrap(),
+        snap.r_market(shard(7), epoch(4), EpochFloor::NONE).unwrap(),
         Some(RMarket::from_raw(0))
     );
     assert_eq!(
-        snap.r_market(shard(7), epoch(5)).unwrap(),
+        snap.r_market(shard(7), epoch(5), EpochFloor::NONE).unwrap(),
         Some(RMarket::from_raw(3))
     );
-    assert_eq!(snap.r_market(shard(7), epoch(6)).unwrap(), None);
-    assert_eq!(snap.r_market(shard(8), epoch(4)).unwrap(), None);
     assert_eq!(
-        snap.sigma_work(epoch(4)).unwrap(),
+        snap.r_market(shard(7), epoch(6), EpochFloor::NONE).unwrap(),
+        None
+    );
+    assert_eq!(
+        snap.r_market(shard(8), epoch(4), EpochFloor::NONE).unwrap(),
+        None
+    );
+    assert_eq!(
+        snap.sigma_work(epoch(4), EpochFloor::NONE).unwrap(),
         Some(SigmaWorkMilli::from_raw(0))
     );
-    assert_eq!(snap.sigma_work(epoch(5)).unwrap(), None);
+    assert_eq!(snap.sigma_work(epoch(5), EpochFloor::NONE).unwrap(), None);
     assert_eq!(
-        snap.budget(epoch(4)).unwrap(),
+        snap.budget(epoch(4), EpochFloor::NONE).unwrap(),
         Some(AtomicUnits::from_raw(0))
     );
     assert_eq!(
-        snap.budget(epoch(5)).unwrap(),
+        snap.budget(epoch(5), EpochFloor::NONE).unwrap(),
         Some(AtomicUnits::from_raw(1_000))
     );
-    assert_eq!(snap.budget(epoch(6)).unwrap(), None);
+    assert_eq!(snap.budget(epoch(6), EpochFloor::NONE).unwrap(), None);
     cleanup(&path);
 }
 
@@ -633,7 +643,7 @@ fn a12_slash_applied_is_membership_of_the_exact_triple() {
     assert!(!store
         .begin_read()
         .unwrap()
-        .slash_applied(&p, shard(7), epoch(3))
+        .slash_applied(&p, shard(7), epoch(3), EpochFloor::NONE)
         .unwrap());
     drop(store);
     plant(&path, |txn| {
@@ -643,12 +653,18 @@ fn a12_slash_applied_is_membership_of_the_exact_triple() {
     });
     let store = ChainStore::create(&path, EPOCH).expect("reopen");
     let snap = store.begin_read().unwrap();
-    assert!(snap.slash_applied(&p, shard(7), epoch(3)).unwrap());
+    assert!(snap
+        .slash_applied(&p, shard(7), epoch(3), EpochFloor::NONE)
+        .unwrap());
     // Every other coordinate of the triple is a different member.
-    assert!(!snap.slash_applied(&p, shard(7), epoch(4)).unwrap());
-    assert!(!snap.slash_applied(&p, shard(8), epoch(3)).unwrap());
     assert!(!snap
-        .slash_applied(&persona(0xa3), shard(7), epoch(3))
+        .slash_applied(&p, shard(7), epoch(4), EpochFloor::NONE)
+        .unwrap());
+    assert!(!snap
+        .slash_applied(&p, shard(8), epoch(3), EpochFloor::NONE)
+        .unwrap());
+    assert!(!snap
+        .slash_applied(&persona(0xa3), shard(7), epoch(3), EpochFloor::NONE)
         .unwrap());
     cleanup(&path);
 }
@@ -699,7 +715,7 @@ fn a14_settlement_row_is_the_exact_triple_and_absent_is_not_a_miss() {
         store
             .begin_read()
             .unwrap()
-            .settlement_row(&p, shard(7), epoch(3))
+            .settlement_row(&p, shard(7), epoch(3), EpochFloor::NONE)
             .unwrap(),
         None
     );
@@ -716,16 +732,24 @@ fn a14_settlement_row_is_the_exact_triple_and_absent_is_not_a_miss() {
     let store = ChainStore::create(&path, EPOCH).expect("reopen");
     let snap = store.begin_read().unwrap();
     let read = snap
-        .settlement_row(&p, shard(7), epoch(3))
+        .settlement_row(&p, shard(7), epoch(3), EpochFloor::NONE)
         .unwrap()
         .expect("planted");
     assert_eq!(read, missed);
     assert_eq!(read.outcome(), SettlementOutcome::Missed);
     // Every other coordinate is another pair or epoch, and has no row.
-    assert_eq!(snap.settlement_row(&p, shard(7), epoch(4)).unwrap(), None);
-    assert_eq!(snap.settlement_row(&p, shard(8), epoch(3)).unwrap(), None);
     assert_eq!(
-        snap.settlement_row(&persona(0xa5), shard(7), epoch(3))
+        snap.settlement_row(&p, shard(7), epoch(4), EpochFloor::NONE)
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        snap.settlement_row(&p, shard(8), epoch(3), EpochFloor::NONE)
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        snap.settlement_row(&persona(0xa5), shard(7), epoch(3), EpochFloor::NONE)
             .unwrap(),
         None
     );
@@ -746,7 +770,7 @@ fn a14_settlement_row_is_the_exact_triple_and_absent_is_not_a_miss() {
     let err = store
         .begin_read()
         .unwrap()
-        .settlement_row(&p, shard(7), epoch(3))
+        .settlement_row(&p, shard(7), epoch(3), EpochFloor::NONE)
         .unwrap_err();
     assert!(is_si7_undecodable(&err, "archival_settlement"), "{err}");
     cleanup(&path);
@@ -757,7 +781,11 @@ fn a15_issued_draws_is_one_epoch_in_pair_then_height_then_draw_order() {
     let path = tmp("arch-a15");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     assert_eq!(
-        store.begin_read().unwrap().issued_draws(epoch(5)).unwrap(),
+        store
+            .begin_read()
+            .unwrap()
+            .issued_draws(epoch(5), EpochFloor::NONE)
+            .unwrap(),
         vec![]
     );
     drop(store);
@@ -800,9 +828,18 @@ fn a15_issued_draws_is_one_epoch_in_pair_then_height_then_draw_order() {
     });
     let store = ChainStore::create(&path, EPOCH).expect("reopen");
     let snap = store.begin_read().unwrap();
-    assert_eq!(snap.issued_draws(epoch(5)).unwrap(), expected);
-    assert_eq!(snap.issued_draws(epoch(4)).unwrap().len(), 1);
-    assert_eq!(snap.issued_draws(epoch(7)).unwrap(), vec![]);
+    assert_eq!(
+        snap.issued_draws(epoch(5), EpochFloor::NONE).unwrap(),
+        expected
+    );
+    assert_eq!(
+        snap.issued_draws(epoch(4), EpochFloor::NONE).unwrap().len(),
+        1
+    );
+    assert_eq!(
+        snap.issued_draws(epoch(7), EpochFloor::NONE).unwrap(),
+        vec![]
+    );
     drop(snap);
     drop(store);
 
@@ -820,9 +857,83 @@ fn a15_issued_draws_is_one_epoch_in_pair_then_height_then_draw_order() {
     let err = store
         .begin_read()
         .unwrap()
-        .issued_draws(epoch(5))
+        .issued_draws(epoch(5), EpochFloor::NONE)
         .unwrap_err();
     assert!(is_si7_undecodable(&err, "archival_issued_draw"), "{err}");
+    cleanup(&path);
+}
+
+/// One tree's support draws in an epoch come back in `(h, j)` order, and
+/// the settlement row is the tree's, not a shard's.
+#[test]
+fn support_draws_of_one_tree_are_one_epoch_and_one_row() {
+    let path = tmp("arch-support-issued");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    assert!(store
+        .begin_read()
+        .unwrap()
+        .support_issued(epoch(5), EpochFloor::NONE)
+        .unwrap()
+        .is_empty());
+    drop(store);
+
+    let tree = persona(0x3c);
+    let other = persona(0x11);
+    plant(&path, |txn| {
+        let mut issued = txn.open_table(ARCHIVAL_SUPPORT_ISSUED).expect("t");
+        let mut put = |e, p: PCanonicalId, h, j, shard_n, passed| {
+            let row = SupportIssued {
+                shard: shard(shard_n),
+                passed,
+            };
+            issued
+                .insert(
+                    SupportIssuedKey::new(epoch(e), p, BlockHeight::from_raw(h), j).key(),
+                    row.encoded().as_encoded(),
+                )
+                .expect("insert");
+        };
+        put(5, tree, 100, 1, 9, true);
+        put(5, tree, 100, 0, 4, false);
+        put(5, other, 90, 0, 2, true);
+        put(4, tree, 80, 0, 1, true);
+        drop(issued);
+        let mut settled = txn.open_table(ARCHIVAL_SUPPORT_SETTLEMENT).expect("t");
+        let row = SettlementRow::settle(2, 3).expect("served");
+        settled
+            .insert((tree.to_bytes(), 5u64), row.encoded().as_encoded())
+            .expect("row");
+    });
+
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    let snap = store.begin_read().unwrap();
+    let draws = snap.support_issued(epoch(5), EpochFloor::NONE).unwrap();
+    assert_eq!(draws.len(), 3);
+    assert_eq!(draws[0].persona, other);
+    assert_eq!(draws[0].shard, shard(2));
+    assert!(draws[0].state.passed);
+    assert_eq!(draws[1].persona, tree);
+    assert_eq!(draws[1].draw, 0);
+    assert_eq!(draws[1].shard, shard(4));
+    assert!(!draws[1].state.passed);
+    assert_eq!(draws[2].draw, 1);
+    assert_eq!(draws[2].shard, shard(9));
+    assert!(draws[2].state.passed);
+    assert_eq!(
+        snap.support_issued(epoch(4), EpochFloor::NONE)
+            .unwrap()
+            .len(),
+        1
+    );
+    let row = snap
+        .support_settlement(&tree, epoch(5), EpochFloor::NONE)
+        .unwrap()
+        .expect("the tree's row");
+    assert_eq!(row.outcome(), SettlementOutcome::Served);
+    assert!(snap
+        .support_settlement(&other, epoch(5), EpochFloor::NONE)
+        .unwrap()
+        .is_none());
     cleanup(&path);
 }
 
@@ -831,7 +942,11 @@ fn a16_issued_digest_is_the_epochs_cell_and_zero_when_nothing_was_folded() {
     let path = tmp("arch-a16");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     assert_eq!(
-        store.begin_read().unwrap().issued_digest(epoch(5)).unwrap(),
+        store
+            .begin_read()
+            .unwrap()
+            .issued_digest(epoch(5), EpochFloor::NONE)
+            .unwrap(),
         IssuedDigest::ZERO
     );
     drop(store);
@@ -843,9 +958,18 @@ fn a16_issued_digest_is_the_epochs_cell_and_zero_when_nothing_was_folded() {
     });
     let store = ChainStore::create(&path, EPOCH).expect("reopen");
     let snap = store.begin_read().unwrap();
-    assert_eq!(snap.issued_digest(epoch(5)).unwrap(), digest);
-    assert_eq!(snap.issued_digest(epoch(4)).unwrap(), IssuedDigest::ZERO);
-    assert_eq!(snap.issued_digest(epoch(6)).unwrap(), IssuedDigest::ZERO);
+    assert_eq!(
+        snap.issued_digest(epoch(5), EpochFloor::NONE).unwrap(),
+        digest
+    );
+    assert_eq!(
+        snap.issued_digest(epoch(4), EpochFloor::NONE).unwrap(),
+        IssuedDigest::ZERO
+    );
+    assert_eq!(
+        snap.issued_digest(epoch(6), EpochFloor::NONE).unwrap(),
+        IssuedDigest::ZERO
+    );
     cleanup(&path);
 }
 
@@ -886,7 +1010,7 @@ fn a17_served_at_hops_shards_and_point_reads_the_cited_epochs() {
     assert!(store
         .begin_read()
         .unwrap()
-        .served_at(&p, &BTreeSet::from([epoch(2), epoch(9)]))
+        .served_at(&p, &BTreeSet::from([epoch(2), epoch(9)]), EpochFloor::NONE)
         .unwrap()
         .is_empty());
     drop(store);
@@ -937,16 +1061,20 @@ fn a17_served_at_hops_shards_and_point_reads_the_cited_epochs() {
 
     let store = ChainStore::create(&path, EPOCH).expect("reopen");
     let snap = store.begin_read().unwrap();
-    assert!(snap.served_at(&p, &BTreeSet::new()).unwrap().is_empty());
+    assert!(snap
+        .served_at(&p, &BTreeSet::new(), EpochFloor::NONE)
+        .unwrap()
+        .is_empty());
     let cited = snap
-        .served_at(&p, &BTreeSet::from([epoch(9), epoch(2)]))
+        .served_at(&p, &BTreeSet::from([epoch(9), epoch(2)]), EpochFloor::NONE)
         .unwrap();
     let mut expect = BTreeMap::new();
     expect.insert(epoch(2), vec![shard(100)]);
     expect.insert(epoch(9), vec![shard(1)]);
     assert_eq!(cited, expect);
     assert_eq!(
-        snap.served_at(&other, &BTreeSet::from([epoch(2)])).unwrap(),
+        snap.served_at(&other, &BTreeSet::from([epoch(2)]), EpochFloor::NONE)
+            .unwrap(),
         BTreeMap::from([(epoch(2), vec![shard(1)])])
     );
     drop(snap);
@@ -964,7 +1092,7 @@ fn a17_served_at_hops_shards_and_point_reads_the_cited_epochs() {
     let err = store
         .begin_read()
         .unwrap()
-        .served_at(&p, &BTreeSet::from([epoch(9)]))
+        .served_at(&p, &BTreeSet::from([epoch(9)]), EpochFloor::NONE)
         .unwrap_err();
     assert!(is_si7_undecodable(&err, "archival_settlement"), "{err}");
     cleanup(&path);
@@ -1096,7 +1224,8 @@ fn archival_snapshot_refuses_a_second_accruing_row_as_si23() {
 }
 
 // A18, A19 — the draw's per-block state and the drawable set's digest
-// (`SO-D12`). No block writes either yet, so every row here is planted.
+// (`SO-D12`). The count writer fills `archival_block_draws` on connect;
+// these rows are planted so the read is judged apart from that writer.
 
 /// A18 reads a planted row back whole and reads `None` where there is
 /// none. A row with a third value of the revealed flag is SI-7.
@@ -1105,13 +1234,21 @@ fn a18_block_draws_reads_the_row_or_none() {
     let path = tmp("arch-a18");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let at = BlockHeight::from_raw(41);
-    assert_eq!(store.begin_read().unwrap().block_draws(at).unwrap(), None);
+    assert_eq!(
+        store
+            .begin_read()
+            .unwrap()
+            .block_draws(at, BlockDrawsFloor::NONE)
+            .unwrap(),
+        None
+    );
     drop(store);
 
     let row = BlockDraws {
         count: 7,
         carry: 0x8000_0001,
         shortfall: 19,
+        issued_short: 3,
         revealed: true,
     };
     plant(&path, |txn| {
@@ -1121,8 +1258,15 @@ fn a18_block_draws_reads_the_row_or_none() {
     });
     let store = ChainStore::create(&path, EPOCH).expect("reopen");
     let snap = store.begin_read().unwrap();
-    assert_eq!(snap.block_draws(at).unwrap(), Some(row));
-    assert_eq!(snap.block_draws(BlockHeight::from_raw(42)).unwrap(), None);
+    assert_eq!(
+        snap.block_draws(at, BlockDrawsFloor::NONE).unwrap(),
+        Some(row)
+    );
+    assert_eq!(
+        snap.block_draws(BlockHeight::from_raw(42), BlockDrawsFloor::NONE)
+            .unwrap(),
+        None
+    );
     drop(snap);
     drop(store);
 
@@ -1138,7 +1282,11 @@ fn a18_block_draws_reads_the_row_or_none() {
         .expect("insert");
     });
     let store = ChainStore::create(&path, EPOCH).expect("reopen");
-    let err = store.begin_read().unwrap().block_draws(at).unwrap_err();
+    let err = store
+        .begin_read()
+        .unwrap()
+        .block_draws(at, BlockDrawsFloor::NONE)
+        .unwrap_err();
     assert!(is_si7_undecodable(&err, "archival_block_draws"), "{err}");
     cleanup(&path);
 }
@@ -1154,7 +1302,7 @@ fn a19_an_all_zero_drawable_digest_is_a_digest_not_an_absence() {
         store
             .begin_read()
             .unwrap()
-            .drawable_digest(epoch(3))
+            .drawable_digest(epoch(3), EpochFloor::NONE)
             .unwrap(),
         None
     );
@@ -1169,9 +1317,18 @@ fn a19_an_all_zero_drawable_digest_is_a_digest_not_an_absence() {
     });
     let store = ChainStore::create(&path, EPOCH).expect("reopen");
     let snap = store.begin_read().unwrap();
-    assert_eq!(snap.drawable_digest(epoch(3)).unwrap(), Some(zero));
-    assert_eq!(snap.drawable_digest(epoch(4)).unwrap(), Some(other));
-    assert_eq!(snap.drawable_digest(epoch(5)).unwrap(), None);
+    assert_eq!(
+        snap.drawable_digest(epoch(3), EpochFloor::NONE).unwrap(),
+        Some(zero)
+    );
+    assert_eq!(
+        snap.drawable_digest(epoch(4), EpochFloor::NONE).unwrap(),
+        Some(other)
+    );
+    assert_eq!(
+        snap.drawable_digest(epoch(5), EpochFloor::NONE).unwrap(),
+        None
+    );
     // No undecodable case: the cell is fixed at 32 bytes and every 32
     // bytes are a digest, so the table cannot hold a row the codec refuses.
     drop(snap);

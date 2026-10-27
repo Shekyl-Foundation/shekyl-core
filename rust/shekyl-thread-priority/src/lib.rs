@@ -12,7 +12,7 @@
 //! that fails challenge reads it should pass, so none of the mappings is
 //! an idle or background class.
 //!
-//! - **Linux and Android:** `setpriority(PRIO_PROCESS, 0, 19)`. The nice
+//! - **Linux:** `setpriority(PRIO_PROCESS, 0, 19)`. The nice
 //!   value is a per-thread attribute on Linux and `who = 0` is the calling
 //!   thread. `SCHED_OTHER` throughout; never `SCHED_IDLE`.
 //! - **macOS, iOS:** `pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0)`.
@@ -88,7 +88,7 @@ pub fn lower_current_thread() -> Result<(), NotLowered> {
     platform::lower()
 }
 
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(target_os = "linux")]
 mod platform {
     use super::{NotLowered, SERVING_NICE};
 
@@ -137,12 +137,7 @@ mod platform {
     }
 }
 
-#[cfg(not(any(
-    target_os = "linux",
-    target_os = "android",
-    target_vendor = "apple",
-    windows
-)))]
+#[cfg(not(any(target_os = "linux", target_vendor = "apple", windows)))]
 mod platform {
     use super::NotLowered;
 
@@ -155,10 +150,8 @@ mod platform {
 ///
 /// Linux exports `__errno_location` (`libc` 0.2.184,
 /// `unix/linux_like/linux_l4re_shared.rs`, included for `target_os =
-/// "linux"`). Android's bionic exports `__errno`
-/// (`unix/linux_like/android/mod.rs`) and does not export
-/// `__errno_location`. `std::io::Error::last_os_error` already picks the
-/// right one; only the clear-before-`getpriority` has to name it.
+/// "linux"`). `std::io::Error::last_os_error` already reads it; only the
+/// clear-before-`getpriority` has to name it.
 #[cfg(target_os = "linux")]
 fn errno_slot() -> *mut libc::c_int {
     // SAFETY: `__errno_location` returns the calling thread's errno slot,
@@ -166,26 +159,16 @@ fn errno_slot() -> *mut libc::c_int {
     unsafe { libc::__errno_location() }
 }
 
-/// Android's errno slot. Bionic names it `__errno`, not
-/// `__errno_location`.
-#[cfg(target_os = "android")]
-fn errno_slot() -> *mut libc::c_int {
-    // SAFETY: bionic's `__errno` returns the calling thread's errno slot,
-    // valid for the thread's life. Android does not export
-    // `__errno_location`.
-    unsafe { libc::__errno() }
-}
-
 /// The calling thread's nice value, as the kernel reports it.
 ///
-/// Linux and Android only: the read-back the tests and the serving host's
+/// Linux only: the read-back the tests and the serving host's
 /// own check use. `getpriority` returns −1 for a nice of −1 as well as on
 /// failure, so errno is cleared before the call and consulted after it.
 ///
 /// # Errors
 ///
 /// The OS error if the kernel refused the read.
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(target_os = "linux")]
 pub fn current_thread_nice() -> io::Result<i32> {
     // SAFETY: `errno_slot` is this thread's errno slot; `getpriority`
     // takes two integers and reads the calling thread when `who` is 0.
@@ -206,7 +189,7 @@ pub fn current_thread_nice() -> io::Result<i32> {
 mod tests {
     use super::*;
 
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(target_os = "linux")]
     #[test]
     fn lowering_sets_the_calling_thread_and_only_it() {
         let before = current_thread_nice().expect("read nice");
@@ -228,7 +211,7 @@ mod tests {
         );
     }
 
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(target_os = "linux")]
     #[test]
     fn the_proc_stat_nice_field_agrees_with_getpriority() {
         std::thread::spawn(|| {

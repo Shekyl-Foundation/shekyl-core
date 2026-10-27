@@ -874,7 +874,13 @@ that envelope — the call is still made, the response is still a 200
 closed by a well-formed envelope from the right key, and the serve is
 what the cell counts. `crypto_bench_serve_sign` measures the seeded key
 signing that same fixed transcript, so the hybrid sign's cost is gated
-on a trajectory no wire change can move. The one-time drop in the serve
+on a trajectory no wire change can move. The transcript is not a fill of
+the wire length. When the stream byte made that length 113, filling
+`[0x3c; 113]` took one fewer ML-DSA rejection round than the 112-byte
+fill the rolling baseline holds (7.16 M → 5.43 M instructions). The last
+byte is `0x0a`, which keeps the 113-byte transcript on that round count.
+`SIGN_TRAJECTORY_LEN` is 113, and a longer transcript does not compile
+until that constant and the tail are chosen again. The one-time drop in the serve
 cells at that commit (12.36 M → 35.6 K for one leaf) is the signature
 leaving them, absorbed by the rolling baseline on the next `dev`
 rotation.
@@ -951,7 +957,8 @@ production entry and its OS-seeded draw.
 is floating-point: the pinned crate uses hardware `f64` and dispatches to
 AVX2 at run time on x86_64, so an x86 count is a count of code the floor
 device does not run. It is a drift signal for the x86 path and nothing
-else; `BA-T33`'s T3 arm is the floor figure.
+else; `BA-T33`'s T3 arm is the floor figure
+(`ba_t33_fn_dsa_floor_device_20261015.md`, 2026-10-15).
 
 **First counts** (x86_64 development host, gungraun-runner 0.19.3, two
 runs identical): sign 6,675,212 instructions; verify 891,246. Criterion on
@@ -962,6 +969,11 @@ gungraun-runner 0.19.3, two runs identical): sign 6,675,435 instructions;
 sign through the held key 6,010,472 (−9.96 %); verify 891,438. Criterion
 on the same host: sign 442 µs, sign through the held key 411 µs (−7.0 %),
 decoding and holding a key once 52 µs.
+
+**Criterion only, not gated:** `fn_dsa_hybrid_persona_slot_derivation`
+(added 2026-10-15), one persona slot's whole `derive_archival_p_keys`, the
+unit engine assembly pays per held slot; beside the key-generation arm it
+gives the receipt key's share of a slot (`FN_DSA_HYBRID.md` `FND-12`).
 
 ---
 
@@ -1174,3 +1186,7 @@ prescribes (`docs/MID_REWIRE_HARDENING.md` §4.3).
   cell, absorbed by the rolling baseline on the next `dev` rotation; the
   two existing cells are untouched. Schema version unchanged
   (`shekyl_rust_v0`): same class, same counter.
+- `BA-T33` floor arm (2026-10-15): §13's criterion sibling gains
+  `fn_dsa_hybrid_persona_slot_derivation`, criterion only. No gated
+  function is added or changed, and no count moves. Schema version
+  unchanged (`shekyl_rust_v0`).

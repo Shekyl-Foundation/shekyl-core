@@ -27,16 +27,21 @@ use core::marker::PhantomData;
 use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_chain_rules::{
-    AtHeight, BlockOutputs, ChainValid, ChainView, HeaderRecord, HeaderView, RecordedBlock,
-    RecordedWeights, SlashLogFloor, StructurallyValid, Tip, TreeFrontier,
+    AtHeight, BlockDrawsFloor, BlockOutputs, ChainValid, ChainView, Claimable, EpochFloor,
+    HeaderRecord, HeaderView, Pricing, RecordedBlock, RecordedWeights, ReleaseJournalFloor,
+    Settling, SlashLogFloor,
+    StructurallyValid, Tip,
+    TreeFrontier,
 };
 use shekyl_types::archival::{
-    BlockDraws, BondRecord, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, RMarket,
-    ServedShard, SettlementRow, SigmaWorkMilli, SlashLogEntry,
+    BlockDraws, BondRecord, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest,
+    SupportCount,
+    LoggedSlash, PassCount, RMarket, ReleasedRecord, ServedShard, SettlementRow, SigmaWorkMilli,
+    SlashLogEntry,
 };
 use shekyl_types::{
-    BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, PCanonicalId, SettlementEpoch,
-    ShardId, TxHash,
+    BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, LongTermWeight, PCanonicalId,
+    SettlementEpoch, ShardId, TxHash,
 };
 use shekyl_units::AtomicUnits;
 
@@ -112,6 +117,15 @@ impl<'id, T> ChainView<'id> for Stub<T> {
     fn total_burned(&self) -> Result<AtomicUnits, Infallible> {
         Ok(AtomicUnits::ZERO)
     }
+    fn long_term_effective_median_at(
+        &self,
+        _: BlockHeight,
+    ) -> Result<AtHeight<LongTermWeight>, Infallible> {
+        Ok(AtHeight::AboveTip)
+    }
+    fn burned_through(&self, _: BlockHeight) -> Result<AtHeight<AtomicUnits>, Infallible> {
+        Ok(AtHeight::AboveTip)
+    }
     fn bond_record(&self, _: &PCanonicalId) -> Result<Option<BondRecord>, Infallible> {
         Ok(None)
     }
@@ -141,13 +155,26 @@ impl<'id, T> ChainView<'id> for Stub<T> {
     ) -> Result<PassCount, Infallible> {
         Ok(PassCount::ZERO)
     }
-    fn r_market(&self, _: ShardId, _: SettlementEpoch) -> Result<Option<RMarket>, Infallible> {
+    fn r_market(
+        &self,
+        _: ShardId,
+        _: SettlementEpoch,
+        _: EpochFloor<Pricing>,
+    ) -> Result<Option<RMarket>, Infallible> {
         Ok(None)
     }
-    fn sigma_work(&self, _: SettlementEpoch) -> Result<Option<SigmaWorkMilli>, Infallible> {
+    fn sigma_work(
+        &self,
+        _: SettlementEpoch,
+        _: EpochFloor<Claimable>,
+    ) -> Result<Option<SigmaWorkMilli>, Infallible> {
         Ok(None)
     }
-    fn budget(&self, _: SettlementEpoch) -> Result<Option<AtomicUnits>, Infallible> {
+    fn budget(
+        &self,
+        _: SettlementEpoch,
+        _: EpochFloor<Claimable>,
+    ) -> Result<Option<AtomicUnits>, Infallible> {
         Ok(None)
     }
     fn last_settled_slash_epoch(&self) -> Result<Option<SettlementEpoch>, Infallible> {
@@ -161,6 +188,7 @@ impl<'id, T> ChainView<'id> for Stub<T> {
         _: &PCanonicalId,
         _: ShardId,
         _: SettlementEpoch,
+        _: EpochFloor<Settling>,
     ) -> Result<bool, Infallible> {
         Ok(false)
     }
@@ -172,26 +200,72 @@ impl<'id, T> ChainView<'id> for Stub<T> {
         _: &PCanonicalId,
         _: ShardId,
         _: SettlementEpoch,
+        _: EpochFloor<Claimable>,
     ) -> Result<Option<SettlementRow>, Infallible> {
         Ok(None)
     }
-    fn issued_draws(&self, _: SettlementEpoch) -> Result<Vec<IndexedDraw>, Infallible> {
+    fn issued_draws(
+        &self,
+        _: SettlementEpoch,
+        _: EpochFloor<Settling>,
+    ) -> Result<Vec<IndexedDraw>, Infallible> {
         Ok(Vec::new())
     }
-    fn issued_digest(&self, _: SettlementEpoch) -> Result<IssuedDigest, Infallible> {
+    fn issued_digest(
+        &self,
+        _: SettlementEpoch,
+        _: EpochFloor<Settling>,
+    ) -> Result<IssuedDigest, Infallible> {
         Ok(IssuedDigest::ZERO)
     }
     fn served_at(
         &self,
         _: &PCanonicalId,
         _: &BTreeSet<SettlementEpoch>,
+        _: EpochFloor<Claimable>,
     ) -> Result<BTreeMap<SettlementEpoch, Vec<ShardId>>, Infallible> {
         Ok(BTreeMap::new())
     }
-    fn block_draws(&self, _: BlockHeight) -> Result<Option<BlockDraws>, Infallible> {
+    fn block_draws(
+        &self,
+        _: BlockHeight,
+        _: BlockDrawsFloor,
+    ) -> Result<Option<BlockDraws>, Infallible> {
         Ok(None)
     }
-    fn drawable_digest(&self, _: SettlementEpoch) -> Result<Option<DrawableDigest>, Infallible> {
+    fn support_block_count(
+        &self,
+        _: BlockHeight,
+        _: BlockDrawsFloor,
+    ) -> Result<Option<SupportCount>, Infallible> {
         Ok(None)
+    }
+    fn drawable_digest(
+        &self,
+        _: SettlementEpoch,
+        _: EpochFloor<Settling>,
+    ) -> Result<Option<DrawableDigest>, Infallible> {
+        Ok(None)
+    }
+    fn complete_trees(
+        &self,
+        _: SettlementEpoch,
+        _: EpochFloor<Claimable>,
+    ) -> Result<Option<CompleteTreeSet>, Infallible> {
+        Ok(None)
+    }
+    fn release_journal_after(
+        &self,
+        _: BlockHeight,
+        _: ReleaseJournalFloor,
+    ) -> Result<Vec<ReleasedRecord>, Infallible> {
+        Ok(Vec::new())
+    }
+    fn slash_log_rows_after(
+        &self,
+        _: BlockHeight,
+        _: SlashLogFloor,
+    ) -> Result<Vec<LoggedSlash>, Infallible> {
+        Ok(Vec::new())
     }
 }

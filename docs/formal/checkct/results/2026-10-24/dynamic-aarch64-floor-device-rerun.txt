@@ -1,0 +1,91 @@
+dynamic (dudect-style) RE-RUN after the review round — the rule-76 FLOOR DEVICE: Raspberry Pi 4 Model B, Cortex-A72, aarch64 Linux, idle, the daemon inactive
+binary: docs/formal/checkct/dynamic at 40ac33a8c (operands over the full field through wide_reduce; from_repr rows on unrestricted bytes; whole result through black_box before the sink; sample floor), cargo build --release --target aarch64-unknown-linux-gnu, pinned 1.94.0 / LLVM 21.1.8
+run window (UTC): Sat Oct 24 18:27:08 UTC 2026 -> Sat Oct 24 19:03:49 UTC 2026
+
+## default suite, 20000 samples/class
+ct-dynamic: 20000 samples/class x 32 ops; dudect threshold |t| > 4.5; target aarch64
+-- null control (both classes fresh; must show no difference)
+null: fe25519 mul                  t=    0.19  t(crop 1%)=   -0.22  mean ns fixed/random      8055/     8052  no difference seen
+null: helio square                 t=   -0.92  t(crop 1%)=    1.59  mean ns fixed/random      3734/     3747  no difference seen
+null: helio mul                    t=   -0.34  t(crop 1%)=    1.37  mean ns fixed/random      4586/     4594  no difference seen
+-- helioselene::Field25519 (dalek_ff_group::FieldElement)
+fe25519 add                        t=    0.31  t(crop 1%)=   -0.64  mean ns fixed/random      3816/     3809  no difference seen
+fe25519 add [fixed-pair]           t=   -2.11  t(crop 1%)=   -0.60  mean ns fixed/random      3787/     3834  no difference seen
+fe25519 sub                        t=   -0.19  t(crop 1%)=   -0.40  mean ns fixed/random      3665/     3670  no difference seen
+fe25519 sub [fixed-pair]           t=    1.13  t(crop 1%)=   -0.80  mean ns fixed/random      3652/     3627  no difference seen
+fe25519 mul                        t=    1.55  t(crop 1%)=    0.01  mean ns fixed/random      8068/     8038  no difference seen
+fe25519 mul [fixed-pair]           t=   -0.26  t(crop 1%)=    0.85  mean ns fixed/random      8067/     8072  no difference seen
+fe25519 square                     t=   -0.90  t(crop 1%)=   -0.36  mean ns fixed/random      7056/     7067  no difference seen
+fe25519 square [fixed-pair]        t=    0.75  t(crop 1%)=    1.02  mean ns fixed/random      7074/     7064  no difference seen
+fe25519 invert                     t=    0.16  t(crop 1%)=   -0.51  mean ns fixed/random   1977596/  1977579  no difference seen
+fe25519 invert [fixed-pair]        t=    1.81  t(crop 1%)=    1.81  mean ns fixed/random   1977643/  1977460  no difference seen
+fe25519 sqrt                       t=    0.62  t(crop 1%)=    0.29  mean ns fixed/random   2003339/  2003274  no difference seen
+fe25519 sqrt [fixed-pair]          t=    2.13  t(crop 1%)=    0.04  mean ns fixed/random   2003635/  2003310  no difference seen
+fe25519 pow (secret exponent)      t=    0.51  t(crop 1%)=   -1.37  mean ns fixed/random   1973093/  1973028  no difference seen
+fe25519 pow (secret exponent) [fixed-pair] t=   -1.88  t(crop 1%)=   -0.73  mean ns fixed/random   1972835/  1973131  no difference seen
+fe25519 from_repr                  t=    0.61  t(crop 1%)=    2.07  mean ns fixed/random      8711/     8703  no difference seen
+fe25519 from_repr [fixed-pair]     t=    0.67  t(crop 1%)=   -0.35  mean ns fixed/random      8701/     8693  no difference seen
+fe25519 wide_reduce                t=   -1.46  t(crop 1%)=   -1.84  mean ns fixed/random    218904/   218980  no difference seen
+fe25519 wide_reduce [fixed-pair]   t=    0.82  t(crop 1%)=    1.26  mean ns fixed/random    219000/   218955  no difference seen
+-- helioselene::HelioseleneField
+helio add                          t=   -1.74  t(crop 1%)=   -0.89  mean ns fixed/random       841/      870  no difference seen
+helio add [fixed-pair]             t=   -0.40  t(crop 1%)=    1.79  mean ns fixed/random       864/      871  no difference seen
+helio sub                          t=    2.08  t(crop 1%)=   -0.54  mean ns fixed/random       926/      892  no difference seen
+helio sub [fixed-pair]             t=    1.09  t(crop 1%)=    1.13  mean ns fixed/random       912/      895  no difference seen
+helio mul                          t=    0.51  t(crop 1%)=   -0.68  mean ns fixed/random      4661/     4650  no difference seen
+helio mul [fixed-pair]             t=   -0.28  t(crop 1%)=   -0.86  mean ns fixed/random      4653/     4659  no difference seen
+helio square                       t=   -0.30  t(crop 1%)=   -0.09  mean ns fixed/random      3724/     3729  no difference seen
+helio square [fixed-pair]          t=   -0.08  t(crop 1%)=   -1.36  mean ns fixed/random      3724/     3725  no difference seen
+helio invert                       t=    0.13  t(crop 1%)=   -0.38  mean ns fixed/random    681757/   681746  no difference seen
+helio invert [fixed-pair]          t=    2.06  t(crop 1%)=    1.84  mean ns fixed/random    678475/   678315  no difference seen
+helio sqrt                         t=   -0.37  t(crop 1%)=   -0.63  mean ns fixed/random   1054815/  1054836  no difference seen
+helio sqrt [fixed-pair]            t=    0.62  t(crop 1%)=   -0.01  mean ns fixed/random   1054828/  1054787  no difference seen
+helio pow (secret exponent)        t=   -1.62  t(crop 1%)=   -1.07  mean ns fixed/random   1447157/  1447334  no difference seen
+helio pow (secret exponent) [fixed-pair] t=   -0.91  t(crop 1%)=   -0.30  mean ns fixed/random   1447216/  1447340  no difference seen
+helio from_repr                    t=   -0.41  t(crop 1%)=   -0.32  mean ns fixed/random      1016/     1022  no difference seen
+helio from_repr [fixed-pair]       t=    0.24  t(crop 1%)=   -0.22  mean ns fixed/random      1025/     1021  no difference seen
+helio wide_reduce                  t=    0.28  t(crop 1%)=    1.85  mean ns fixed/random      3537/     3530  no difference seen
+helio wide_reduce [fixed-pair]     t=    0.71  t(crop 1%)=   -0.69  mean ns fixed/random      3545/     3530  no difference seen
+-- constant-value control (class 0: one value, allocated fresh per batch; class 1: fresh values)
+constant: helio square             t=   -1.49  t(crop 1%)=   -4.06  mean ns fixed/random      3732/     3753  no difference seen
+constant: helio mul                t=    1.23  t(crop 1%)=    0.85  mean ns fixed/random      4714/     4686  no difference seen
+constant: helio sqrt               t=    0.20  t(crop 1%)=    1.58  mean ns fixed/random   1054821/  1054807  no difference seen
+constant: fe25519 mul              t=   -0.36  t(crop 1%)=    1.14  mean ns fixed/random      8054/     8060  no difference seen
+-- operand property (class 0: structured values, regenerated per batch; class 1: random) — which property moves the time?
+property: helio square sparse      t=   -0.34  t(crop 1%)=   -0.71  mean ns fixed/random      3743/     3748  no difference seen
+property: helio square small       t=   -0.87  t(crop 1%)=    0.61  mean ns fixed/random      3736/     3748  no difference seen
+property: helio square dense       t=   -0.29  t(crop 1%)=   -0.08  mean ns fixed/random      3741/     3745  no difference seen
+property: fe25519 square sparse    t=   -1.56  t(crop 1%)=   -0.67  mean ns fixed/random      7066/     7086  no difference seen
+property: fe25519 square small     t=   -0.95  t(crop 1%)=   -0.01  mean ns fixed/random      7191/     7203  no difference seen
+-- crypto-bigint 0.5.5 Residue::pow with a secret exponent (BINSEC found a branch; unreached by our code)
+residue pow (secret exponent)      t=   -0.82  t(crop 1%)=    0.74  mean ns fixed/random   1534711/  1534815  no difference seen
+residue pow (secret exponent) [fixed-pair] t=    0.75  t(crop 1%)=    0.59  mean ns fixed/random   1534729/  1534664  no difference seen
+-- positive controls (must show a class difference)
+control: branch on a byte          t=  -10.69  t(crop 1%)= -161.28  mean ns fixed/random      8727/     8839  CLASS DIFFERENCE
+control: data-dependent loop       t=-1129.11  t(crop 1%)=-1283.68  mean ns fixed/random       315/    26431  CLASS DIFFERENCE
+
+## 200000 samples/class
+null: fe25519 mul                  t=    1.11  t(crop 1%)=    1.66  mean ns fixed/random      8054/     8047  no difference seen
+null: helio square                 t=   -1.87  t(crop 1%)=   -3.00  mean ns fixed/random      3743/     3752  no difference seen
+null: helio mul                    t=   -1.05  t(crop 1%)=   -0.51  mean ns fixed/random      4586/     4594  no difference seen
+constant: helio square             t=   -1.14  t(crop 1%)=   -0.97  mean ns fixed/random      3750/     3755  no difference seen
+constant: helio mul                t=    3.07  t(crop 1%)=    1.87  mean ns fixed/random      4726/     4704  no difference seen
+constant: helio sqrt               t=   -0.06  t(crop 1%)=    0.01  mean ns fixed/random   1054299/  1054300  no difference seen
+constant: fe25519 mul              t=    1.39  t(crop 1%)=    2.32  mean ns fixed/random      8056/     8047  no difference seen
+null: helio square                 t=    0.03  t(crop 1%)=   -0.40  mean ns fixed/random      3741/     3741  no difference seen
+helio square                       t=   -0.95  t(crop 1%)=    0.96  mean ns fixed/random      3725/     3730  no difference seen
+helio square [fixed-pair]          t=    0.64  t(crop 1%)=   -0.21  mean ns fixed/random      3725/     3722  no difference seen
+constant: helio square             t=    0.01  t(crop 1%)=    0.05  mean ns fixed/random      3741/     3741  no difference seen
+property: helio square sparse      t=   -0.31  t(crop 1%)=    0.61  mean ns fixed/random      3740/     3741  no difference seen
+property: helio square small       t=   -0.50  t(crop 1%)=    1.68  mean ns fixed/random      3741/     3743  no difference seen
+property: helio square dense       t=   -0.06  t(crop 1%)=   -1.87  mean ns fixed/random      3741/     3741  no difference seen
+null: helio mul                    t=    0.67  t(crop 1%)=    3.31  mean ns fixed/random      4600/     4596  no difference seen
+helio mul                          t=    0.16  t(crop 1%)=    1.90  mean ns fixed/random      4680/     4679  no difference seen
+helio mul [fixed-pair]             t=   -0.61  t(crop 1%)=   -0.75  mean ns fixed/random      4670/     4675  no difference seen
+constant: helio mul                t=   -0.06  t(crop 1%)=   -0.04  mean ns fixed/random      4713/     4714  no difference seen
+fe25519 square                     t=    1.95  t(crop 1%)=    3.46  mean ns fixed/random      7067/     7059  no difference seen
+fe25519 square [fixed-pair]        t=   -0.23  t(crop 1%)=   -0.06  mean ns fixed/random      7067/     7068  no difference seen
+property: fe25519 square sparse    t=   -0.72  t(crop 1%)=   -1.08  mean ns fixed/random      7085/     7088  no difference seen
+property: fe25519 square small     t=   -0.65  t(crop 1%)=   -1.87  mean ns fixed/random      7202/     7205  no difference seen
+
+reading: every field row flat, constant and structured operands included; nulls flat; both positive controls detected. Same as the first run (dynamic-aarch64-floor-device.txt): the x86_64 HelioseleneField effect does not appear on this CPU.

@@ -282,6 +282,12 @@ shekyl-p-loopback = { path = "../shekyl-p-loopback" }
 # normal dependencies of shekyl-chain-ingest (rule 17).
 shekyl-block-template = { path = "../shekyl-block-template" }
 shekyl-chain-rules = { path = "../shekyl-chain-rules" }
+# The lib test image both serves `WalletTorControl` and spawns
+# (`engine::regtest_e2e`). Those spawns share an address space with a managed
+# tor, so they take the spawn lock (`TOR_SUPERVISOR.md` §4.7). This direct
+# dev edge is how the test names `spawn_lock`. Already a normal dependency of
+# `shekyl-tor-control-wallet`, which this crate depends on.
+shekyl-tor-control-client = { path = "../shekyl-tor-control-client" }
 # DRS-E4 commit 7: the chain-vector capture (`regtest_e2e.rs`) writes the
 # regtest injector's receipt as the corpus's `Injection` — one type for the
 # `--inject` flag it passes `shekyl-chain-replay fetch`, the manifest row

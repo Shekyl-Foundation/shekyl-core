@@ -41,15 +41,14 @@ use core::convert::Infallible;
 use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_archival_retention::{
-    challenge_nonce, draw_commit, pass_countersignature_message, select_draw, BundleBody,
-    BundleKept, BundleRecord, BundleRef, DrawableEpoch, DrawablePair, PassBitmap,
-    BUNDLE_SIGNATURE_LEN, BUNDLE_WITNESS_KEY_LEN,
+    assemble_bundle, challenge_nonce, draw_commit, pass_countersignature_message, select_draw,
+    sign_bundle_commitment, BundleBody, BundleKept, BundleRecord, BundleRef, DrawableEpoch,
+    DrawablePair, PassBitmap, BUNDLE_SIGNATURE_LEN, BUNDLE_WITNESS_KEY_LEN,
 };
 use shekyl_crypto_pq::fn_dsa_hybrid::{FnDsaHybridSecretKey, HybridEd25519FnDsa};
-use shekyl_crypto_pq::signature::{
-    SignatureScheme as _, SCHEME_DOMAIN_RECEIPT, SCHEME_DOMAIN_WITNESS_BUNDLE,
-};
-use shekyl_types::{BlockHash, BlockHeight, SettlementEpoch};
+use shekyl_crypto_pq::signature::{SignatureScheme as _, SCHEME_DOMAIN_RECEIPT};
+use shekyl_types::archival::ReceiptSignPk;
+use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 
 use crate::archival::BundleView;
 use crate::rule_set::RuleSet;
@@ -70,6 +69,12 @@ pub enum BundleRead {
     Revealed,
     /// [`BundleView::drawable_epoch`].
     DrawableEpoch,
+    /// [`BundleView::support_count`].
+    SupportCount,
+    /// [`BundleView::support_roster`].
+    SupportRoster,
+    /// [`BundleView::archive_width`].
+    ArchiveWidth,
 }
 
 /// The fault a [`FixtureBundleView`] raises, naming the read that failed.
@@ -88,13 +93,17 @@ pub struct FixtureBundleView {
     /// `count(h)`. A height with no entry has no draw state.
     pub counts: BTreeMap<BlockHeight, u32>,
     /// Each block's `0x0C`.
-    pub commitments: BTreeMap<BlockHeight, [u8; 32]>,
+    pub commitments: BTreeMap<BlockHeight, shekyl_types::archival::DrawCommitment>,
     /// The `(h, index)` at which a pair is visibly short.
     pub short: BTreeSet<(BlockHeight, u64)>,
     /// The blocks whose bundle is already admitted.
     pub revealed: BTreeSet<BlockHeight>,
     /// The `h_open(E)` drawable epochs, by the epoch asked for.
     pub drawable_epochs: BTreeMap<SettlementEpoch, DrawableEpoch>,
+    /// Complete trees scheduled at a block, in bitmap order.
+    pub support_roster: BTreeMap<BlockHeight, Vec<crate::archival::SupportSeat>>,
+    /// The archive width a support draw selects from.
+    pub archive_width: BTreeMap<BlockHeight, u64>,
     /// The one read that faults, if any.
     pub fault: Option<BundleRead>,
     /// Every read made, in order.
@@ -160,7 +169,10 @@ impl BundleView for FixtureBundleView {
         Ok(self.counts.get(&h).copied())
     }
 
-    fn draw_commitment(&self, h: BlockHeight) -> Result<Option<[u8; 32]>, BundleReadFaulted> {
+    fn draw_commitment(
+        &self,
+        h: BlockHeight,
+    ) -> Result<Option<shekyl_types::archival::DrawCommitment>, BundleReadFaulted> {
         self.read(BundleRead::DrawCommitment)?;
         Ok(self.commitments.get(&h).copied())
     }
@@ -187,6 +199,29 @@ impl BundleView for FixtureBundleView {
         self.read(BundleRead::DrawableEpoch)?;
         Ok(self.drawable_epochs.get(&epoch))
     }
+
+    fn support_count(&self, h: BlockHeight) -> Result<Option<u32>, BundleReadFaulted> {
+        self.read(BundleRead::SupportCount)?;
+        Ok(Some(
+            u32::try_from(self.support_roster.get(&h).map(Vec::len).unwrap_or(0))
+                .unwrap_or(u32::MAX),
+        ))
+    }
+
+    fn support_roster(
+        &self,
+        h: BlockHeight,
+    ) -> Result<Option<Vec<crate::archival::SupportSeat>>, BundleReadFaulted> {
+        self.read(BundleRead::SupportRoster)?;
+        Ok(Some(
+            self.support_roster.get(&h).cloned().unwrap_or_default(),
+        ))
+    }
+
+    fn archive_width(&self, h: BlockHeight) -> Result<Option<u64>, BundleReadFaulted> {
+        self.read(BundleRead::ArchiveWidth)?;
+        Ok(Some(self.archive_width.get(&h).copied().unwrap_or(0)))
+    }
 }
 
 /// One persona of the fixture: its id, its receipt key pair, the shards
@@ -194,9 +229,9 @@ impl BundleView for FixtureBundleView {
 pub struct FixturePersona {
     /// The persona's canonical id. Arbitrary bytes: nothing here derives
     /// it from an identity key.
-    pub p_id: [u8; 32],
-    /// The receipt public key's canonical bytes.
-    pub receipt_public_key: Vec<u8>,
+    pub persona: PCanonicalId,
+    /// The receipt public key, as a bond record carries it.
+    pub receipt_public_key: ReceiptSignPk,
     /// The receipt secret key.
     pub receipt_secret_key: FnDsaHybridSecretKey,
     /// The shards it holds at `h_open(E)`.
@@ -261,8 +296,8 @@ impl BundleWorld {
                 HybridEd25519FnDsa::keypair_from_seeds(&[n; 32], &[n.wrapping_add(0x80); 32])
                     .expect("fixture receipt keygen");
             FixturePersona {
-                p_id: [n; 32],
-                receipt_public_key: public.to_canonical_bytes(),
+                persona: PCanonicalId::from_bytes([n; 32]),
+                receipt_public_key: public.to_receipt_sign_pk(),
                 receipt_secret_key: secret,
                 shards: shards.to_vec(),
             }
@@ -283,13 +318,11 @@ impl BundleWorld {
         let epoch = rule_set.settlement_schedule().epoch_at(h);
         let drawable = DrawableEpoch::new(
             epoch,
-            personas
-                .iter()
-                .map(|p| (p.p_id, p.receipt_public_key.clone())),
+            personas.iter().map(|p| (p.persona, &p.receipt_public_key)),
             personas.iter().flat_map(|p| {
-                p.shards.iter().map(|shard_id| DrawablePair {
-                    p_id: p.p_id,
-                    shard_id: *shard_id,
+                p.shards.iter().map(|shard| DrawablePair {
+                    persona: p.persona,
+                    shard: ShardId::from_raw(*shard),
                 })
             }),
         )
@@ -300,8 +333,13 @@ impl BundleWorld {
             ..FixtureBundleView::default()
         };
         view.counts.insert(h, count);
-        view.commitments
-            .insert(h, draw_commit(&witness_public_key, &seed));
+        view.commitments.insert(
+            h,
+            shekyl_types::archival::DrawCommitment::from_bytes(draw_commit(
+                &witness_public_key,
+                &seed,
+            )),
+        );
         view.drawable_epochs.insert(epoch, drawable);
 
         Self {
@@ -403,13 +441,14 @@ impl BundleWorld {
         let signer = self
             .personas
             .iter()
-            .find(|p| p.p_id == pair.p_id)
+            .find(|p| p.persona == pair.persona)
             .expect("the pair's persona");
         self.record_signed_by(
             &signer.receipt_secret_key,
-            pair.shard_id,
+            pair.shard.to_raw(),
             attempt,
             anchor,
+            shekyl_archival_retention::PassStream::Economy,
             nonce,
         )
     }
@@ -429,6 +468,7 @@ impl BundleWorld {
         shard_id: u64,
         attempt: u8,
         anchor: BlockHeight,
+        stream: shekyl_archival_retention::PassStream,
         nonce: &[u8; 32],
     ) -> BundleRecord {
         let delivery_digest = [0xDD; 32];
@@ -437,6 +477,7 @@ impl BundleWorld {
             .chain_block_hash(anchor)
             .expect("anchor is at or below the fixture chain's tip");
         let transcript = pass_countersignature_message(
+            stream,
             nonce,
             anchor,
             anchor_hash.as_bytes(),
@@ -486,24 +527,52 @@ impl BundleWorld {
         passes: PassBitmap,
         records: &[BundleRecord],
     ) -> (BundleRef, BundleBody) {
+        self.assemble_support(passes, PassBitmap::none(), records)
+    }
+
+    /// A record signed by persona `index` for `shard` under `stream`.
+    #[must_use]
+    pub fn persona_record(
+        &self,
+        index: usize,
+        shard: u64,
+        stream: shekyl_archival_retention::PassStream,
+        nonce: &[u8; 32],
+    ) -> BundleRecord {
+        let persona = &self.personas[index];
+        self.record_signed_by(
+            &persona.receipt_secret_key,
+            shard,
+            0,
+            self.honest_anchor(),
+            stream,
+            nonce,
+        )
+    }
+
+    /// [`Self::assemble`] with a support bitmap. Economy records come
+    /// first; support records follow, one per set support bit. Assembled
+    /// by the production assembler, signed with the world's witness key.
+    ///
+    /// # Panics
+    ///
+    /// If signing fails.
+    #[must_use]
+    pub fn assemble_support(
+        &self,
+        passes: PassBitmap,
+        support: PassBitmap,
+        records: &[BundleRecord],
+    ) -> (BundleRef, BundleBody) {
         let kept = BundleKept {
             h: self.h,
             seed: self.seed,
             passes,
+            support,
         };
-        let records_bytes: Vec<u8> = records.iter().flat_map(BundleRecord::encode).collect();
-        let commitment = kept.commitment(&records_bytes);
-        let signature: [u8; BUNDLE_SIGNATURE_LEN] = HybridEd25519FnDsa
-            .sign(
-                &self.witness_secret_key,
-                SCHEME_DOMAIN_WITNESS_BUNDLE,
-                &commitment,
-            )
-            .expect("fixture witness signing")
-            .to_canonical_bytes()
-            .try_into()
-            .expect("the canonical signature length");
-        let body = BundleBody::new(&self.witness_public_key, &signature, records);
-        (BundleRef::of(&kept, &body), body)
+        assemble_bundle(&kept, records, &self.witness_public_key, |commitment| {
+            sign_bundle_commitment(&self.witness_secret_key, commitment)
+        })
+        .expect("fixture witness signing")
     }
 }

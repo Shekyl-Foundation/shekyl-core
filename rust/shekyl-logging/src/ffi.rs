@@ -144,6 +144,10 @@ pub const SHEKYL_LOG_ERR_INVALID_UTF8: i32 = -10;
 pub const SHEKYL_LOG_ERR_SUBSCRIBER_INSTALL: i32 = -11;
 /// The tracing forwarder was already installed in this process.
 pub const SHEKYL_LOG_ERR_ALREADY_INSTALLED: i32 = -12;
+/// A sink's writer thread could not be started.
+pub const SHEKYL_LOG_ERR_WRITER_THREAD: i32 = -13;
+/// [`shekyl_log_flush`]'s deadline passed with lines still queued.
+pub const SHEKYL_LOG_ERR_FLUSH_DEADLINE: i32 = -14;
 
 // -----------------------------------------------------------------
 // Global state
@@ -366,6 +370,23 @@ pub unsafe extern "C" fn shekyl_log_shutdown() {
         if let Ok(mut state) = cell.lock() {
             let _ = state.guard.take();
         }
+    }
+}
+
+/// Wait until every line logged before this call has reached its sink, or
+/// `within_ms` milliseconds pass ([`crate::flush`]). Returns
+/// [`SHEKYL_LOG_OK`] or [`SHEKYL_LOG_ERR_FLUSH_DEADLINE`]; never waits
+/// longer than `within_ms`. With no logger initialized there is nothing
+/// queued, and it returns [`SHEKYL_LOG_OK`].
+///
+/// # Safety
+///
+/// No pointer parameters.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_log_flush(within_ms: u32) -> i32 {
+    match crate::flush(std::time::Duration::from_millis(u64::from(within_ms))) {
+        crate::Flushed::Done => SHEKYL_LOG_OK,
+        crate::Flushed::DeadlinePassed => SHEKYL_LOG_ERR_FLUSH_DEADLINE,
     }
 }
 
@@ -801,6 +822,30 @@ pub unsafe extern "C" fn shekyl_log_last_error_message(
 // attempt correctly returns `SHEKYL_LOG_ERR_ALREADY_INIT`.
 // -----------------------------------------------------------------
 
+/// Swaps the live filter for `directive` through the handle `init` or the
+/// C init registered, and records the directive so
+/// [`shekyl_log_get_categories`] and the stateful translator read what is
+/// live. The Rust runtime owner ([`crate::subsystem::apply`]) builds the
+/// directive from typed words, so it is always one `EnvFilter` accepts; the
+/// two `Err`s here are a subscriber that was never installed and a reload
+/// layer that is gone, neither of which a daemon reaches after start.
+pub(crate) fn reload_directive(directive: String) -> Result<(), String> {
+    let Some(cell) = FFI_STATE.get() else {
+        return Err("no subscriber is installed".to_owned());
+    };
+    let mut state = cell
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let filter = EnvFilter::try_new(&directive)
+        .map_err(|e| format!("the directive {directive:?} is not a filter: {e}"))?;
+    state
+        .reload_handle
+        .reload(filter)
+        .map_err(|e| format!("the reload layer is gone: {}", reload_error_text(&e)))?;
+    state.current_directive = directive;
+    Ok(())
+}
+
 #[doc(hidden)]
 pub fn __test_only_reset_ffi_state() {
     if let Some(cell) = FFI_STATE.get() {
@@ -877,6 +922,7 @@ fn init_error_to_code(e: &InitError) -> i32 {
         InitError::FilterParse(_) => SHEKYL_LOG_ERR_FILTER_PARSE,
         InitError::SubscriberInstall(_) => SHEKYL_LOG_ERR_SUBSCRIBER_INSTALL,
         InitError::InvalidDirectory(_) => SHEKYL_LOG_ERR_INVALID_DIRECTORY,
+        InitError::WriterThread(_) => SHEKYL_LOG_ERR_WRITER_THREAD,
     }
 }
 

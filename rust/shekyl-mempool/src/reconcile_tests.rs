@@ -1,0 +1,275 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! Open over a file whose entry does not parse: the entry is dropped and
+//! named, and the pool opens. A reconcile that faults — on a chain read or
+//! on the file's write — changes nothing, in memory or in the file, and the
+//! next one makes the same judgements. Reconciling real entries — mined,
+//! admitted again, refused — needs real spends and is `shekyl-chain-ingest`'s.
+
+use shekyl_chain_rules::harness::fixture::{listed_on, spendable_chain};
+use shekyl_chain_rules::harness::FaultingView;
+use shekyl_chain_rules::{AdmissionPolicy, RuleSet};
+use shekyl_chain_store::pool::{PoolRecord, PoolStore, ReceivedHour};
+use shekyl_types::{KeyImage, TxHash, UnixSeconds};
+
+use super::Removed;
+use crate::pool::{Pool, PoolFault};
+
+fn tmp(name: &str) -> std::path::PathBuf {
+    let mut path = std::env::temp_dir();
+    path.push(format!(
+        "shekyl-mempool-{name}-{}-{:?}.redb",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    drop(std::fs::remove_file(&path));
+    path
+}
+
+/// The clock the opens in this module read.
+const NOW: UnixSeconds = UnixSeconds::from_raw(7_200);
+
+const ADMITTED: PoolRecord = PoolRecord {
+    received: ReceivedHour::from_raw(1),
+    public: true,
+};
+
+/// A pool at `path` holding two fixture spends as admitted entries — each
+/// refused on its bytes when judged again, so a reconcile removes both.
+fn two_planted(path: &std::path::Path) -> (Pool, [TxHash; 2]) {
+    let chain = spendable_chain();
+    let (mut pool, _) = Pool::create(
+        path,
+        crate::Limits {
+            max_weight: u64::MAX,
+        },
+    )
+    .unwrap();
+    let a = pool.plant(listed_on(&chain, [0x41; 32]), ADMITTED);
+    let b = pool.plant(listed_on(&chain, [0x42; 32]), ADMITTED);
+    (pool, [a, b])
+}
+
+/// What the file holds, by hash.
+fn filed(pool: &Pool) -> Vec<TxHash> {
+    let snapshot = pool.store().begin_read().unwrap();
+    snapshot
+        .entries()
+        .unwrap()
+        .map(|entry| entry.unwrap().txid)
+        .collect()
+}
+
+#[test]
+fn a_chain_fault_mid_reconcile_leaves_the_pool_as_it_was() {
+    let path = tmp("reconcile-read-fault");
+    let (mut pool, held) = two_planted(&path);
+    let images = pool.key_images().len();
+    let fault = pool.reconcile(
+        &FaultingView::default(),
+        &RuleSet::GENESIS,
+        &AdmissionPolicy::GENESIS,
+    );
+    assert!(matches!(fault, Err(PoolFault::Chain(_))), "{fault:?}");
+    assert_eq!(pool.len(), 2, "the index still holds both entries");
+    assert_eq!(pool.key_images().len(), images, "and their key images");
+    assert!(held.iter().all(|txid| pool.record(txid) == Some(ADMITTED)));
+    assert_eq!(
+        pool.key_images().spender(&KeyImage::from_bytes([0x41; 32])),
+        Some(held[0])
+    );
+
+    // The retry makes the judgements the faulted one would have.
+    let chain = spendable_chain();
+    let reconciled = chain.with_view(|view| {
+        pool.reconcile(&view, &RuleSet::GENESIS, &AdmissionPolicy::GENESIS)
+            .unwrap()
+    });
+    assert_eq!(reconciled.removed.len(), 2);
+    assert!(pool.is_empty() && pool.key_images().is_empty());
+    assert!(filed(&pool).is_empty(), "the file followed");
+    drop(pool);
+    drop(std::fs::remove_file(&path));
+}
+
+#[test]
+fn a_refused_write_leaves_the_index_and_the_file_as_they_were_and_the_retry_writes_them() {
+    let path = tmp("reconcile-write-fault");
+    let (mut pool, held) = two_planted(&path);
+    let chain = spendable_chain();
+    pool.store().refuse_next_commit();
+    let fault =
+        chain.with_view(|view| pool.reconcile(&view, &RuleSet::GENESIS, &AdmissionPolicy::GENESIS));
+    assert!(matches!(fault, Err(PoolFault::Store(_))), "{fault:?}");
+    assert_eq!(pool.len(), 2, "the index did not run ahead of the file");
+    assert!(held.iter().all(|txid| pool.record(txid) == Some(ADMITTED)));
+    assert_eq!(pool.key_images().len(), 2);
+    assert_eq!(
+        filed(&pool),
+        sorted(held),
+        "the aborted batch took its removals back"
+    );
+
+    let reconciled = chain.with_view(|view| {
+        pool.reconcile(&view, &RuleSet::GENESIS, &AdmissionPolicy::GENESIS)
+            .unwrap()
+    });
+    assert_eq!(reconciled.removed.len(), 2, "the retry judged both again");
+    assert!(pool.is_empty() && pool.key_images().is_empty());
+    assert!(
+        filed(&pool).is_empty(),
+        "and wrote what the faulted one could not"
+    );
+    drop(pool);
+    drop(std::fs::remove_file(&path));
+}
+
+fn sorted(mut txids: [TxHash; 2]) -> Vec<TxHash> {
+    txids.sort();
+    txids.to_vec()
+}
+
+#[test]
+fn an_entry_that_does_not_parse_is_dropped_at_open() {
+    let mut path = std::env::temp_dir();
+    path.push(format!(
+        "shekyl-mempool-unparseable-{}-{:?}.redb",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    drop(std::fs::remove_file(&path));
+    let txid = TxHash::from_bytes([0x51; 32]);
+    {
+        let (store, _) = PoolStore::create(&path).unwrap();
+        let record = ADMITTED;
+        store
+            .write(|batch| batch.insert(txid, &record, b"not a transaction"))
+            .unwrap();
+    }
+    let chain = spendable_chain();
+    chain.with_view(|view| {
+        let (pool, _, reconciled) = Pool::open(
+            &path,
+            NOW,
+            &view,
+            &RuleSet::GENESIS,
+            &AdmissionPolicy::GENESIS,
+        )
+        .unwrap();
+        assert!(pool.is_empty());
+        assert_eq!(reconciled.removed, vec![(txid, Removed::Unparseable)]);
+    });
+    let (store, _) = PoolStore::create(&path).unwrap();
+    assert!(
+        store.begin_read().unwrap().is_empty().unwrap(),
+        "the file lost it too"
+    );
+    drop(store);
+    drop(std::fs::remove_file(&path));
+}
+
+/// The file is not trusted: two admitted entries in it claiming one key
+/// image open without a panic, and the reconcile judges both — here each is
+/// refused on its bytes.
+#[test]
+fn two_filed_entries_claiming_one_image_open_and_are_judged() {
+    let path = tmp("reconcile-shared-image");
+    let chain = spendable_chain();
+    let image = [0x43; 32];
+    let first = listed_on(&chain, image);
+    let mut second = first.clone();
+    second.prefix.unlock_time = 1;
+    let ids = [first.txid_parts().hash, second.txid_parts().hash];
+    assert_ne!(ids[0], ids[1]);
+    {
+        let (store, _) = PoolStore::create(&path).unwrap();
+        for tx in [&first, &second] {
+            store
+                .write(|batch| batch.insert(tx.txid_parts().hash, &ADMITTED, &tx.serialize()))
+                .unwrap();
+        }
+    }
+    let reconciled = chain.with_view(|view| {
+        Pool::open(
+            &path,
+            NOW,
+            &view,
+            &RuleSet::GENESIS,
+            &AdmissionPolicy::GENESIS,
+        )
+        .unwrap()
+        .2
+    });
+    assert_eq!(reconciled.removed.len(), 2, "both judged");
+    drop(std::fs::remove_file(&path));
+}
+
+/// Nothing in the file is trusted (the review of #1102, S2): a row whose
+/// bytes are another transaction than its key names is dropped as
+/// misfiled, and a row whose record does not decode is dropped as
+/// unreadable — each by itself, and the pool opens.
+#[test]
+fn a_misfiled_row_and_an_unreadable_one_are_dropped_and_the_pool_opens() {
+    let path = tmp("reconcile-untrusted");
+    let chain = spendable_chain();
+    let body = listed_on(&chain, [0x44; 32]);
+    let misfiled = TxHash::from_bytes([0x61; 32]);
+    let unreadable = TxHash::from_bytes([0x62; 32]);
+    {
+        let (store, _) = PoolStore::create(&path).unwrap();
+        store
+            .write(|batch| batch.insert(misfiled, &ADMITTED, &body.serialize()))
+            .unwrap();
+        store
+            .write(|batch| batch.insert(unreadable, &ADMITTED, &body.serialize()))
+            .unwrap();
+    }
+    {
+        // A record that does not decode: a public byte of 0xff.
+        let db = redb::Database::open(&path).unwrap();
+        let txn = db.begin_write().unwrap();
+        {
+            let mut meta = txn
+                .open_table(shekyl_chain_store::pool::schema::POOL_META)
+                .unwrap();
+            let mut bytes = shekyl_store_codec::Canonical::encode(&ADMITTED);
+            bytes[8] = 0xff;
+            meta.insert(
+                unreadable.to_bytes(),
+                <shekyl_store_codec::Coded<PoolRecord> as redb::Value>::from_bytes(&bytes),
+            )
+            .unwrap();
+        }
+        txn.commit().unwrap();
+    }
+    let reconciled = chain.with_view(|view| {
+        Pool::open(
+            &path,
+            NOW,
+            &view,
+            &RuleSet::GENESIS,
+            &AdmissionPolicy::GENESIS,
+        )
+        .expect("a discardable file never stops the open")
+        .2
+    });
+    let mut removed = reconciled.removed;
+    removed.sort_by_key(|(txid, _)| *txid);
+    assert_eq!(
+        removed,
+        vec![
+            (misfiled, Removed::Misfiled),
+            (unreadable, Removed::Unreadable)
+        ]
+    );
+    let (store, _) = PoolStore::create(&path).unwrap();
+    assert!(
+        store.begin_read().unwrap().is_empty().unwrap(),
+        "the file lost both"
+    );
+    drop(store);
+    drop(std::fs::remove_file(&path));
+}

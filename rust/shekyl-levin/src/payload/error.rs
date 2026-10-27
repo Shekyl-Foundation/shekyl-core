@@ -57,4 +57,46 @@ pub enum Error {
     /// A `std::string` field was not UTF-8.
     #[error("field {0} is not valid UTF-8")]
     NotUtf8(&'static str),
+    /// The payload is longer than the command's encoded cap. Checked on
+    /// the raw bytes, before the codec builds a section.
+    #[error("payload is {got} bytes, max {max}")]
+    OverCap {
+        /// Observed length.
+        got: usize,
+        /// The command's encoded cap.
+        max: usize,
+    },
+    /// A field's bytes exceed the budget the command is held to.
+    #[error("field {field} is {got} bytes, max {max}")]
+    OverBudget {
+        /// KV key.
+        field: &'static str,
+        /// Observed length.
+        got: usize,
+        /// The budget.
+        max: usize,
+    },
+    /// A header preimage is shorter than a PoW preimage. The header
+    /// response's length-prefix allowance counts two bytes per preimage,
+    /// which holds at and above [`shekyl_wire::MIN_POW_BLOB_SIZE`].
+    #[error("header preimage is {got} bytes, minimum {min}")]
+    PreimageTooShort {
+        /// Observed length.
+        got: usize,
+        /// [`shekyl_wire::MIN_POW_BLOB_SIZE`].
+        min: usize,
+    },
+    /// A list is longer than the count it is held to.
+    #[error("field {field} has {got} entries, max {max}")]
+    OverCount {
+        /// KV key.
+        field: &'static str,
+        /// Observed length.
+        got: usize,
+        /// The count cap.
+        max: usize,
+    },
+    /// A transaction body was neither a full encoding nor a skeleton.
+    #[error("transaction body is neither full nor a skeleton")]
+    TxForm,
 }

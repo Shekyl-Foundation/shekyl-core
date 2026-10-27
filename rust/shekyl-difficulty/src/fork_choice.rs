@@ -11,15 +11,19 @@
 //! **forces** the switch regardless of difficulty.
 //!
 //! The checkpoint arm outranks the difficulty arm deliberately: a
-//! checkpoint-forced switch may promote a *lighter* chain, which is also
-//! why the C++ switch machinery discards (rather than re-admits) the
-//! demoted blocks on that arm — re-admitting the heavier demoted chain
-//! would immediately re-trigger a difficulty switch back; the discard is
-//! the flip-flop terminator (round doc §4b Q1a).
+//! checkpoint-forced switch may promote a *lighter* chain, which is why
+//! the switch discards (rather than re-admits) the demoted blocks on that
+//! arm — re-admitting the heavier demoted chain would immediately
+//! re-trigger a difficulty switch back; the discard is the flip-flop
+//! terminator (round doc §4b Q1a, CEN-K7). The verdict says which arm
+//! fired ([`ForkChoiceVerdict::ForcedSwitch`], `DRS_E5_POOL_ALT_PRUNE.md`
+//! `E5-Q5`), so the switch matches on it rather than re-deriving the
+//! checkpoint test the function was already told.
 //!
-//! Pure over its operands; the C++ side marshals the two cumulative
-//! difficulties as the FFI's `ShekylU128` halves and consumes the verdict
-//! (orchestration stays C++ per rule 20).
+//! Pure over its operands. Two consumers: the Rust switch
+//! (`shekyl-chain-ingest`) and, until `DEL-009`, the C++ alt path, which
+//! marshals the two cumulative difficulties as the FFI's `ShekylU128`
+//! halves.
 
 /// The verdict of one admission-time fork-choice evaluation.
 ///
@@ -31,8 +35,13 @@ pub enum ForkChoiceVerdict {
     /// The incumbent chain stays: the alternative is not strictly heavier
     /// and no checkpoint forces it. Equality keeps the incumbent.
     KeepCurrent = 0,
-    /// Reorganize onto the alternative chain.
+    /// Reorganize onto the alternative chain: it is strictly heavier. The
+    /// demoted blocks re-enter as alternative blocks (CEN-K7).
     Switch = 1,
+    /// Reorganize onto the alternative chain because a checkpoint names it,
+    /// whatever its weight. The demoted blocks are discarded, not
+    /// re-admitted (CEN-K7's flip-flop terminator).
+    ForcedSwitch = 2,
 }
 
 use crate::types::CumulativeDifficulty;
@@ -51,7 +60,7 @@ pub fn fork_choice(
     checkpoint_match: bool,
 ) -> ForkChoiceVerdict {
     if checkpoint_match {
-        return ForkChoiceVerdict::Switch;
+        return ForkChoiceVerdict::ForcedSwitch;
     }
     if alternative_cumulative > current_cumulative {
         ForkChoiceVerdict::Switch
@@ -97,7 +106,17 @@ mod tests {
     fn checkpoint_forces_even_when_lighter() {
         assert_eq!(
             fork_choice(cd(u128::MAX), cd(0), true),
-            ForkChoiceVerdict::Switch
+            ForkChoiceVerdict::ForcedSwitch
+        );
+    }
+
+    #[test]
+    fn a_checkpoint_on_a_heavier_chain_is_still_the_forced_arm() {
+        // The arm is the checkpoint's, not the weight's: a heavier chain
+        // a checkpoint names still discards what it demotes.
+        assert_eq!(
+            fork_choice(cd(10), cd(11), true),
+            ForkChoiceVerdict::ForcedSwitch
         );
     }
 

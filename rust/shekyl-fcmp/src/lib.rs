@@ -12,6 +12,7 @@
 
 #![deny(unsafe_code)]
 
+pub(crate) mod batch_weights;
 #[cfg(feature = "multisig")]
 pub mod frost_dkg;
 #[cfg(feature = "multisig")]

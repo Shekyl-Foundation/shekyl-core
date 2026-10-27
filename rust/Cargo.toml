@@ -51,6 +51,11 @@ members = [
     "shekyl-win-sec",
     "shekyl-thread-priority",
 
+    # The daemon's one RandomX hasher budget (DRS-X PR2-Q3): permits shared
+    # by the ingest service's form workers, the miner and calc_pow, granted
+    # by priority class. See docs/design/DRS_X_STORE_FLIP.md.
+    "shekyl-hash-budget",
+
     # Genesis build/verify tool (`geblock`) — Rust replacement for the deleted
     # C++ genesis_builder (formerly shekyl-dev/tools/genesis_builder). Derives
     # the genesis tx key deterministically (domain-separated cSHAKE over the
@@ -117,6 +122,12 @@ members = [
     # do it. See docs/design/P2P_TRANSPORT_LAYER.md.
     "shekyl-thread-ledger",
 
+    # The daemon's built-in miner loop (DRS-X DX-Q4): workers over the
+    # RandomX verifier, one ledger row each, below the daemon's priority
+    # (SH-3). Staged; the store flip connects it.
+    # See docs/design/DRS_X_STORE_FLIP.md.
+    "shekyl-miner",
+
     # D5's one runtime constructor. The worker count and the blocking
     # cap are inputs. The pool is a row on shekyl-thread-ledger.
     # Daemon-RPC, Tor-control, and the transport all call it. The D5
@@ -133,13 +144,12 @@ members = [
     # See docs/design/SHEKYL_P2P_PROTOCOL.md, PWD-B7.
     "shekyl-peer-policy",
 
-    # Levin p2p framing layer (bucket header, fragments, noise, zstd flag
-    # path) — the byte-exact Rust skeleton of docs/LEVIN_PROTOCOL.md, KAT'd
-    # against the C++ epee::levin oracle. Framing only: no portable_storage,
-    # no sockets. The compression half is production-live (the C++
-    # epee::levin compression path shims through shekyl-ffi's
-    # shekyl_levin_* exports — single-owner libzstd); the framing half is
-    # inert until the scheduled p2p cutover (IMPLEMENTATION_INDEX.md LV row).
+    # Levin p2p framing layer (bucket header, fragments, noise) — the
+    # byte-exact Rust skeleton of docs/LEVIN_PROTOCOL.md, KAT'd against the
+    # C++ epee::levin oracle. Framing only: no portable_storage, no sockets.
+    # Ingress policy and the white-noise emitters are production-live
+    # through shekyl-ffi's shekyl_levin_* exports; the reader is inert until
+    # the scheduled p2p cutover (IMPLEMENTATION_INDEX.md LV row).
     "shekyl-levin",
 
     # LV-2a: binary portable_storage codec. Limits are a parameter so HTTP
@@ -222,6 +232,17 @@ members = [
     # where the validator, the store and RandomX meet.
     "shekyl-chain-ingest",
 
+    # Chain sync's model (CS-2, P2P_3_CHAIN_SYNC_BRIEF.md CS-Q2): events
+    # in, commands out. No store, no runtime, no hasher.
+    "shekyl-chain-sync",
+    "shekyl-chain-sync-runtime",
+
+    # The daemon's transaction pool (DRS-E5 PR-b, DRS_E5_POOL_ALT_PRUNE.md
+    # §2.2): admission through the validator's own door, the key-image map,
+    # the public bit, eviction, template selection, the reconcile at open.
+    # Holds no rule (E5-Q2). Staged for the DRS-X store flip.
+    "shekyl-mempool",
+
     # Foundational monetary-amount newtype (docs/completed/ATOMIC_UNITS_NEWTYPE.md)
     "shekyl-units",
 
@@ -249,6 +270,10 @@ members = [
     # (wallet). Draft until the §8 parity matrix clears.
     "shekyl-rpc-types",
 
+    # The daemon RPC's grants (RPC_CHANNEL.md §6.1): one vocabulary for the
+    # method table, the option table and the channel's grant payloads.
+    "shekyl-rpc-grants",
+
     # Per-P archival-firewall network transport (2d-2 SP-T1)
     "shekyl-p-transport",
     "shekyl-p2p-transport",
@@ -266,6 +291,10 @@ members = [
     # it (RT-O11, RT-O12). Nothing may depend on it; the gate is
     # scripts/ci/check_clatter_not_in_production.py.
     "shekyl-rpc-channel-xcheck",
+    # The RPC channel's stream adapter: AsyncRead and AsyncWrite over
+    # ClassedRecord, for hyper and axum (RPC_CHANNEL.md section 4.4, RT-W9
+    # step 5b). Depends on shekyl-noise, never on the handshake.
+    "shekyl-rpc-stream",
 
     # The peer address union. Levin frames it; the transport layer selects
     # a connector from it. Neither crate defines a second copy.
@@ -338,6 +367,13 @@ members = [
     # crate (`check_p_fetch_dep_cut.py`).
     "shekyl-archival-fetch-sched",
 
+    # The serve-credit bundle producer (SO-D12 increment 4c): the witness
+    # ring the template producer draws from, the read plan, and the bundle
+    # a mined block files to the queue. Its fetch read is behind the
+    # `fetch` feature, which only the node's graph enables; the wallet-side
+    # image links the ring alone.
+    "shekyl-bundle-producer",
+
     # rend-spec-v3 onion hostname from an Ed25519 public key. Encoding
     # only — no Tor instance. Wallet serving (`OnionIdentity`) and daemon
     # fetch (`ServingEndpoint`) both read it so the address a persona
@@ -390,6 +426,25 @@ members = [
     # Unified tracing-based logger init for all Rust binaries
     "shekyl-logging",
 
+    # The input grammar's shared crate (INPUT_GRAMMAR.md IG-15): option tables,
+    # value kinds and parsers, typed diagnostics. Every binary builds its table
+    # from it.
+    "shekyl-options",
+
+    # The daemon's configuration over shekyl-options (DAEMON_CONFIG_CUTOVER.md):
+    # the table, precedence, the file, the lock, the marker, the sections.
+    "shekyl-daemon-config",
+
+    # The daemon's Rust main() and its one signal owner (DAEMON_CONFIG_CUTOVER.md
+    # §2.2); the C++ remnant is a run/stop pair it drives. Exported through
+    # shekyl-daemon-image.
+    "shekyl-daemon",
+
+    # The daemon's one Node (DRS_X_STORE_FLIP.md DX-Q6, N1): the store, the
+    # ingest service, the pool, the hasher budget, the job board and the
+    # socket table. Nothing is routed from C++ until the store flip.
+    "shekyl-node",
+
     # Pure-software RandomX v2 verifier (docs/design/RANDOMX_V2_PLAN.md,
     # RANDOMX_V2_RUST.md). Consumed by shekyl-ffi (Phase 3); not the miner.
     "shekyl-pow-randomx",
@@ -429,6 +484,7 @@ exclude = [
     "shekyl-wire/fuzz",
     "shekyl-engine-state/fuzz",
     "shekyl-p2p-transport/fuzz",
+    "shekyl-noise/fuzz",
     # FCMP++ research crypto, vendored from the monero-oxide fork (pinned by
     # UPSTREAM_MONERO_OXIDE_COMMIT). The clean upstream-formatted mirror lives on
     # the fork — the EC-membership review artifact; this vendored copy is
@@ -478,46 +534,6 @@ repository = "https://github.com/radawson/Shekyl"
 
 [workspace.dependencies]
 thiserror = "2"
-# Single-source zstd pin (decision 2026-08-06). One consumer today:
-# `shekyl-levin`'s COMPRESSED path, which production reaches via the
-# shekyl_levin_* FFI.
-#
-# The original justification — "shard serving is the anticipated second
-# consumer" — was **falsified the same day** by the Z-1 measurement
-# (FOLLOWUPS, "Shard serving on `P`: zstd compression REJECTED by
-# measurement"): Shekyl wire bytes run 7.97–7.995 bits/B of entropy and
-# zstd levels 1/3/9 *expand* every corpus. So this entry is not holding a
-# place for a second consumer, and it is not here for frame
-# interoperability either.
-#
-# It stays because the **feature set below is load-bearing** and must not
-# be re-litigated per crate. A second crate that added `zstd = "0.13"` with
-# defaults would silently re-break the Win64 cross build and re-widen the
-# receive-path C surface, and `links = "zstd"` makes the graph collision a
-# hard error rather than a quiet one (Z-5 records that hazard). Centralising
-# the decision is what makes those failure modes unreachable.
-#
-# `default-features = false` drops all three of the crate's defaults, and
-# each is dropped for a reason — they are not incidental trimming:
-#
-# - `zdict_builder` compiles `zstd/lib/dictBuilder` (`cover.c`), which calls
-#   POSIX `qsort_r`. mingw-w64 has no `qsort_r`, so the Win64 cross build
-#   fails at link with an undefined reference the moment `libshekyl_ffi.a`
-#   carries those objects — which it does since the compression-shim cut
-#   folded `shekyl-levin` into the daemon's Rust image. We train no
-#   dictionaries; the builder is dead weight that breaks a supported target.
-# - `legacy` compiles the decoders for zstd frame formats v0.1–v0.7. Every
-#   frame we inflate came from this same pinned encoder, so a legacy frame
-#   on the wire is by definition non-conforming — keeping those decoders
-#   would only widen the attacker-reachable C surface on the p2p receive
-#   path for a format we never emit.
-# - `arrays` adds a `WriteBuf` impl for `[u8; N]` only. We write into
-#   `Vec<u8>` and `&mut [u8]`, both of which are impl'd unconditionally.
-#
-# What remains is what `shekyl-levin` actually calls: `zstd::bulk` and
-# `zstd::zstd_safe::{get_frame_content_size, decompress}`, over the
-# `std`-enabled `zstd-safe` that the crate pins internally.
-zstd = { version = "0.13", default-features = false }
 serde = { version = "1", features = ["derive"] }
 # Single source of truth for the secret-wiping crate, replacing the
 # per-crate pins that had drifted across two version floors (`1` / `^1.5`)
@@ -672,6 +688,18 @@ shekyl-economics-sim = { opt-level = 3 }
 shekyl-economics = { opt-level = 3 }
 shekyl-block-template = { opt-level = 3 }
 shekyl-tx-weight = { opt-level = 3 }
+# RandomX is hash-bound the same way: every real-RandomX test (the scenario
+# chains under the production substrate, the miner loop) derives a 256 MiB
+# cache and hashes in light mode, and an unoptimised verifier made the
+# miner's one default-lane test take 158 s of every debug `cargo test` run.
+# Optimisation does not change the hash: the crate is spec-vector tested
+# and release builds are what the daemon ships.
+shekyl-pow-randomx = { opt-level = 3 }
+# Its three hashing dependencies: the cache's Argon2d fill and its BLAKE2b
+# compression, and the AES rounds of every program.
+argon2 = { opt-level = 3 }
+blake2 = { opt-level = 3 }
+aes = { opt-level = 3 }
 
 [profile.dev]
 panic = "abort"

@@ -511,7 +511,7 @@ fn parse_network(s: &str) -> Result<Network, String> {
 
 /// The daemon-down hint (CU-1, CLI_USABILITY.md §CU-5 F1): when this run
 /// dials a **loopback** daemon, a refused connection names the invocation
-/// that would start one — `shekyld --testnet` and the port — instead of a
+/// that would start one — `shekyld --network testnet` and the port — instead of a
 /// bare "connection refused". A remote daemon gets no hint: "start it" copy
 /// for a machine the operator may not control would mislead.
 fn daemon_down_hint(cli: &ReplArgs, address: &str) -> Option<String> {
@@ -525,8 +525,8 @@ fn daemon_down_hint(cli: &ReplArgs, address: &str) -> Option<String> {
     let network = parse_network(cli.network_name()).ok()?;
     let flag = match network {
         Network::Mainnet => "",
-        Network::Testnet => " --testnet",
-        Network::Stagenet => " --stagenet",
+        Network::Testnet => " --network testnet",
+        Network::Stagenet => " --network stagenet",
     };
     Some(format!(
         "Start the {name} daemon with: shekyld{flag} (its RPC answers on port {port}).",
@@ -732,8 +732,8 @@ mod tests {
         assert_eq!(repl.daemon().expect("a daemon").address, "127.0.0.1:11029");
     }
 
-    /// `--testnet` / `--stagenet` are the same flags `shekyld` takes and mean
-    /// `--network testnet` / `--network stagenet`. Combining spellings is a
+    /// `--testnet` / `--stagenet` are shorthand for `--network testnet` /
+    /// `--network stagenet`, the spelling `shekyld` takes. Combining spellings is a
     /// parse error, not a precedence rule — a run that says two networks
     /// must not silently pick one (CU-1).
     #[test]
@@ -813,7 +813,7 @@ mod tests {
         let args = |argv: &[&str]| ReplArgs::try_parse_from(argv).expect("parses");
         let testnet = args(&["shekyl-cli", "--testnet"]);
         let hint = daemon_down_hint(&testnet, "127.0.0.1:12029").expect("loopback gets a hint");
-        assert!(hint.contains("shekyld --testnet"), "got {hint}");
+        assert!(hint.contains("shekyld --network testnet"), "got {hint}");
         assert!(hint.contains("12029"), "got {hint}");
         assert!(daemon_down_hint(&testnet, "node.example.com:12029").is_none());
         assert!(

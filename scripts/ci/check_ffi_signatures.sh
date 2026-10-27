@@ -16,6 +16,12 @@
 # every function the header declares anywhere must be a Rust export, so a
 # declaration cannot outlive the function it names.
 #
+# Struct layouts are the second limb. A struct crossing the boundary is a
+# definition, not a declaration, so the signature compile cannot compare
+# it. Every struct a header under src/ defines with the FFI prefix is
+# compared against its #[repr(C)] twin or exempted with a reason
+# (ffi_layout_gate.py GROUPS and EXEMPT); see ffi_layout_gate.cpp.
+#
 # Signature scope: the files in SURFACES below, deliberately. Full-surface generation
 # is blocked on a named cbindgen limitation (cross-crate constant re-exports
 # render as unresolved identifiers — the account/PQ surface). A file is
@@ -66,7 +72,23 @@ SURFACES=(
   "relay:rust/shekyl-ffi/src/relay_zone_ffi/mod.rs"
   "rpc_peerlist:rust/shekyl-ffi/src/rpc_peerlist_ffi.rs"
   "close_cause:rust/shekyl-ffi/src/close_cause_ffi.rs"
+  # The daemon's entry types and the snapshot field-count export
+  # (DAEMON_CONFIG_CUTOVER.md §2.9); the C++ reads the snapshot these define.
+  "daemon_entry:rust/shekyl-daemon/src/entry.rs"
+  # The one RPC start and its stop (DAEMON_CONFIG_CUTOVER.md §2.3).
+  "daemon_rpc:rust/shekyl-daemon-rpc/src/ffi_exports.rs"
+  # The notify runner's three pushes (DAEMON_CONFIG_CUTOVER.md §2.10).
+  "notify:rust/shekyl-ffi/src/notify_ffi.rs"
+  # The utilities' default data directory (DAEMON_CONFIG_CUTOVER.md §2.6).
+  "data_dir:rust/shekyl-ffi/src/data_dir_ffi.rs"
+  # The configuration snapshot, its field count and the test binaries' and
+  # the importer's parse (DAEMON_CONFIG_CUTOVER.md §2.9).
+  "daemon_snapshot:rust/shekyl-ffi/src/daemon_snapshot_ffi.rs"
+  # The chain-sync heuristics' two verdicts (DAEMON_CONFIG_CUTOVER.md §4.2).
+  "sync:rust/shekyl-ffi/src/sync_ffi.rs"
   "tx_extra_codec:rust/shekyl-ffi/src/tx_extra_codec_ffi.rs"
+  # The protocol handler's one entry into the ingest service (DRS-X PR 2).
+  "ingest:rust/shekyl-ffi/src/ingest_ffi.rs"
 )
 
 # The hand-written header with comment lines removed: rustdoc and header
@@ -137,4 +159,19 @@ fi
 
 g++ -fsyntax-only -std=c++17 -I "${workdir}" -I src scripts/ci/ffi_signature_gate.cpp
 
-echo "FFI signatures: hand-written header agrees with the Rust definitions (${total} exports over ${#SURFACES[@]} files checked; $(wc -l <<<"${declared}") declarations all exported)"
+# Struct layouts: ffi_layout_gate.py generates the Rust definitions,
+# checks that every crossing struct a header defines is compared or exempt,
+# compares member names, and writes the asserts ffi_layout_gate.cpp
+# compiles. Its GROUPS list is the pairs; see ffi_layout_gate.cpp for the
+# mechanism note and the negative controls. rpc_facts_ffi.h includes
+# crypto/hash.h, so the TU takes the daemon's include paths.
+read -r layouts exempt < <(python3 scripts/ci/ffi_layout_gate.py "${workdir}")
+if [ -z "${layouts:-}" ]; then
+  echo "error: the layout limb reported nothing" >&2
+  exit 1
+fi
+
+g++ -fsyntax-only -std=c++17 -I "${workdir}" -I src -I contrib/epee/include -I external \
+  scripts/ci/ffi_layout_gate.cpp
+
+echo "FFI signatures: hand-written header agrees with the Rust definitions (${total} exports over ${#SURFACES[@]} files checked; $(wc -l <<<"${declared}") declarations all exported; ${layouts} struct layouts compared, ${exempt} exempt)"

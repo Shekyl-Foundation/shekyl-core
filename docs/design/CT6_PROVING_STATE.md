@@ -1769,13 +1769,14 @@ gindex (`a_re_mined_transaction_is_matched_again_after_a_rollback`).
 
 **What stays late, stated.**
 
-- *Outputs the wallet did not build.* The persona's receive address is
-  public; anything a third party sends to it (`ExternalTransfer`) has no
-  record here and is registered from the scan seal, as before.
+- *Outputs the wallet did not build.* Anything paid to the persona's
+  payment keys by a transaction the persona did not build
+  (`ExternalTransfer`) has no record here and is registered from the scan
+  seal, as before.
 - *The stake-in.* It is an ordinary principal transfer, and the principal's
   send journal keeps recipients and inputs, not the transaction's bytes or
   output keys. Its key is derivable — the retained transaction secret plus
-  the persona's address — but that is a principal-side record of a persona
+  the persona's payment keys — but that is a principal-side record of a persona
   output, a placement question of its own; it stays on the seal path and
   `FOLLOWUPS.md` carries the row. One output per funding, spent by the bond
   post that sweeps it.

@@ -1,20 +1,16 @@
 # FL Round Record — Fee Ladder Derivation
 
-**Status:** OPEN — design round RULED. §8 is signed (FL-R12′ / FL-R17;
-FL-R14 ruled). The round-9 implementation bundle **merged as PR #640**
-(`fb06e1d2b`); the follow-up mechanical sweep (FL-R15 rename + FL-R16b)
-**merged as PR #654**. What keeps the round OPEN is round 19 (§11) and
-the residue queued in [`FOLLOWUPS.md`](../FOLLOWUPS.md) — each row a
-one-liner pointing at its owning §-row, which carries the named blocker.
-FL-R3 **CLOSED premise-refuted at round 19** (2026-09-10): its time-grid
-round (§10) is closed as record and **§11 is OPEN** — the relay floor
-follows raw `C`, the quantizers go, the wallet pays the served rung
-exactly, admission is lookback-min over `G` = 5 (FL-R20…FL-R24, the last
-decided on FL-E3). **§11.6 SIGNED OFF in-channel 2026-09-11:** PR A (the
-consensus operand) is MERGED to `dev`; PR B (relay policy) and PR C (the
-deletion sweep) are cleared to implement. The design branch
-`design/fl-r3-time-grid` is merged and deleted, archive-tagged
-`archive/fl-r3-time-grid-2026-09-11`.
+**Status:** CLOSED — round 19 (§11) closed 2026-10-16. §8 is signed
+(FL-R12′ / FL-R17; FL-R14 ruled); the round-9 implementation bundle merged
+as PR #640 and the mechanical sweep as PR #654; round 19's three PRs are
+landed — PR A (FL-R24, the consensus operand), PR B (FL-R20/FL-R22/FL-R23,
+relay policy) and PR C (#1096: FL-R21's last quantizers, FL-R26, FL-R27
+the lattice a Rust constant off the wire, FL-R28 the cap on exact `C`, the
+floor's one Rust owner built and wired in at the DRS-X store flip). FL-R3
+is CLOSED premise-refuted; its time-grid round (§10) is closed as record,
+archive-tagged `archive/fl-r3-time-grid-2026-09-11`. What the family still
+carries open is owned elsewhere: FL-R13 (the floor's basis) by EUP-5 G,
+the residue in [`FOLLOWUPS.md`](../FOLLOWUPS.md).
 All substance lives in [`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md);
 this file is the thin round-state record only (rule 95 — one owner per
 claim, no restatement). Consensus behavior changes live in the

@@ -270,6 +270,13 @@ harness = false
 name = "fn_dsa_hybrid_iai"
 harness = false
 
+# The stack each scheme-3 operation needs, by a ladder of one process per
+# rung (`FN_DSA_HYBRID.md` §9.1, `BA-T33`'s floor arm). Run from a debug and
+# a release build for the two columns.
+[[example]]
+name = "fn_dsa_stack_ladder"
+path = "examples/fn_dsa_stack_ladder.rs"
+
 [[bin]]
 name = "fa6_decap_prefilter_gate"
 path = "examples/fa6_decap_prefilter_gate.rs"

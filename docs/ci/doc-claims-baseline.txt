@@ -90,7 +90,7 @@
 # SHEKYLD_PREREQUISITES.md no longer cites
 # src/rpc/core_rpc_server.cpp:2987-3008. That range is past the file.
 # The fee estimate is src/rpc/rpc_facts_ffi.cpp:125.
-dead-citations: 44
+dead-citations: 43
 
 # ── declares ──────────────────────────────────────────────────────────────────
 # Documents that have opted a leg in cannot quietly opt back out: dropping a

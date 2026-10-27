@@ -151,8 +151,8 @@ make release-static-win64
 ```
 
 > **Shekyl is 64-bit only.** 32-bit build targets
-> (`release-static-win32`, `release-static-linux-i686`,
-> `release-static-android-armv7`, and the corresponding `depends`
+> (`release-static-win32`, `release-static-linux-i686`, and the
+> corresponding `depends`
 > triples) were permanently retired in v3.1.0-alpha.5 (Chore #3).
 > The C++-side configure refuses non-64-bit hosts via a top-level
 > `CMAKE_SIZEOF_VOID_P` gate, and the Rust workspace carries three

@@ -44,7 +44,7 @@ env:
   # "stdbool.h file not found" otherwise). GitHub-hosted runners ship clang,
   # which is why the Rust workflow never needed this; these jobs run in bare
   # ubuntu containers, which do not.
-  APT_INSTALL_LINUX: 'apt -y install build-essential cmake libboost-all-dev miniupnpc graphviz doxygen libunwind8-dev pkg-config libssl-dev libsodium-dev ccache git curl clang libclang-dev'
+  APT_INSTALL_LINUX: 'apt -y install build-essential cmake libboost-all-dev graphviz doxygen libunwind8-dev pkg-config libssl-dev libsodium-dev ccache git curl clang libclang-dev'
   APT_SET_CONF: |
     tee -a /etc/apt/apt.conf.d/80-custom << EOF
     Acquire::Retries "3";
@@ -238,10 +238,7 @@ jobs:
         run: |
           brew uninstall cmake
           brew update
-          # No system zstd: Levin compression is the Rust-pinned vendored
-          # libzstd inside the linked shekyl image (PR #411). Installing a
-          # host libzstd would reintroduce the dual-lib story we deleted.
-          brew install --quiet cmake boost openssl libpgm miniupnpc libunwind-headers ccache
+          brew install --quiet cmake boost openssl libpgm libunwind-headers ccache
       # Pinned to match rust/rust-toolchain.toml (avoids a parallel-cargo
       # auto-install race in the daemon build). Bump both together.
       - uses: dtolnay/rust-toolchain@1.94.0
@@ -570,6 +567,28 @@ jobs:
             exit 1
           }
 
+      # TSR-Q7 on Windows: the launch module's tests compiled for Windows,
+      # among them the loopback control pair (`ControlPair::new`, which
+      # accepts only its own connect) and the spawn that marks tor's end
+      # inheritable under the spawn lock (the environment test above spawns
+      # through it). Floor = the module's Windows test count (6), so a test
+      # that is cfg'd away or renamed fails here instead of passing as
+      # nothing run.
+      - name: "TSR-Q7: the launch module's tests (Windows)"
+        shell: pwsh
+        working-directory: rust
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          cargo test --locked -p shekyl-tor-control-client --lib -- control::launch::tests:: *> tsr-q7-launch.out
+          $rc = $LASTEXITCODE
+          Get-Content tsr-q7-launch.out
+          if ($rc -ne 0) { exit $rc }
+          $passed = Select-String -Path tsr-q7-launch.out -Pattern 'test result: ok\. (\d+) passed' | ForEach-Object { [int]$_.Matches[0].Groups[1].Value } | Select-Object -First 1
+          if (-not $passed -or $passed -lt 6) {
+            Write-Error "the launch module ran $passed tests on Windows; the floor is 6"
+            exit 1
+          }
+
       # The pre-registered probes (docs/design/WINDOWS_WALLET_PROBE_SHEET.md).
       # BLOCKING, and that is the point of writing them down first: each probe
       # carries a prediction made before any Windows machine ran it, and the
@@ -716,7 +735,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release `
             -DSTATIC=ON `
             -DBUILD_SHARED_LIBS=OFF `
-            -DBUILD_TESTS=OFF `
+            -DBUILD_TESTS=ON `
             -DSTACK_TRACE=OFF `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static
@@ -728,11 +747,12 @@ jobs:
       # WP-W5 of that design round owns renaming this job back.
       - name: build daemon
         shell: pwsh
+        # mdb_copy rides along (one vendored C file): the daemon's prune
+        # warning names shekyl-mdb-copy, so its MSVC compile-fit is gated
+        # here. The link gate itself is the script: the three Rust-linking
+        # binaries exist, and the link log has no LNK4098.
         run: |
-          # mdb_copy rides along (one vendored C file): the daemon's prune
-          # warning names shekyl-mdb-copy, so its MSVC compile-fit is gated
-          # here rather than discovered by the first Windows operator.
-          cmake --build build --config Release --target daemon mdb_copy --parallel 2
+          pwsh -NoProfile -File scripts/ci/msvc_static_crt.ps1 -Stage link
       - name: smoke-test daemon boot and stop
         shell: pwsh
         # The daemon's runtime gate on Windows: boot the built shekyld.exe
@@ -754,10 +774,17 @@ jobs:
         # and its one stop path; a second daemon on the same data directory
         # refused by the lock; a config directory whose access list grants
         # Users write refused with exit 2; another network's data directory
-        # refused by the marker. RT-W14 later adds a service-manager case
-        # (install, start, SERVICE_RUNNING, stop).
+        # refused by the marker; and a daemon in its own process group sent
+        # Ctrl-Break takes its one stop path (Rick, 2026-10-22). RT-W14 later
+        # adds a service-manager case (install, start, SERVICE_RUNNING, stop).
         run: |
           pwsh -NoProfile -File scripts/ci/daemon_boot_stop_smoke.ps1 -Daemon 'build\bin\Release\shekyld.exe'
+      - name: core_tests on MSVC
+        shell: pwsh
+        # The link gate's run half. The script requires the suite's own
+        # report: a positive run count and zero failures.
+        run: |
+          pwsh -NoProfile -File scripts/ci/msvc_static_crt.ps1 -Stage core-tests
 
   source-archive:
     name: "source archive"

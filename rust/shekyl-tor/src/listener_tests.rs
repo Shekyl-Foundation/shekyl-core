@@ -60,7 +60,7 @@ fn config(
     on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
 ) -> Config {
     Config {
-        proxy,
+        proxy: shekyl_socks::Proxy::unauthenticated(proxy),
         anonymous_inbound: inbound.into_iter().map(OperatorInbound::new).collect(),
         ceiling,
         dial_within: dial,
@@ -135,7 +135,7 @@ fn an_ip_address_is_not_dialed() {
         port: 18080,
     });
     let cause = wait_kind(&seen, CloseKind::LocalClose);
-    assert!(!cause.implicates_address(ConnectorId::Tor));
+    assert!(!cause.proves_misbehaviour());
     listener.shutdown();
     drop(engine);
 }
@@ -381,10 +381,10 @@ fn levin_frame(body: usize) -> Vec<u8> {
     )
 }
 
-/// A support-flags request: a complete frame that is not a handshake.
-fn support_flags_frame() -> Vec<u8> {
+/// A timed-sync request: a complete frame that is not a handshake.
+fn timed_sync_frame() -> Vec<u8> {
     frame(
-        shekyl_levin::COMMAND_REQUEST_SUPPORT_FLAGS,
+        shekyl_levin::COMMAND_TIMED_SYNC,
         shekyl_levin::Flags::REQUEST,
         10,
     )
@@ -522,18 +522,18 @@ fn a_complete_frame_ends_the_gap_while_the_verdict_is_slow() {
 }
 
 /// **A complete frame that is not the handshake does not end the gap**
-/// (Copilot on #1056). An inbound peer that sends a support-flags
+/// (Copilot on #1056). An inbound peer that sends another command's
 /// request and stops had held its session with no deadline at all; it
 /// is still silent, and the gap times it out.
 #[test]
-fn an_inbound_peer_that_sends_support_flags_and_stops_is_timed_out() {
+fn an_inbound_peer_that_sends_a_timed_sync_and_stops_is_timed_out() {
     let (engine, mut listener, seen) = start(
         SocketAddr::from((Ipv4Addr::LOCALHOST, 1)),
         InboundCeiling::Bounded(4),
         Tick::new(300_000_000),
     );
     let mut client = StdStream::connect(listener.forward_addr().socket()).expect("connect");
-    client.write_all(&support_flags_frame()).expect("write");
+    client.write_all(&timed_sync_frame()).expect("write");
     let handle = listener.runtime_handle().clone();
     let mut session = handle.block_on(next_session(&mut listener.sessions));
     // Bounded: with the defect the session stays open, and the test
@@ -691,7 +691,7 @@ fn a_name_that_is_not_onion_v3_is_not_dialed() {
         port: 18081,
     });
     let cause = wait_kind(&seen, CloseKind::LocalClose);
-    assert!(!cause.implicates_address(ConnectorId::Tor));
+    assert!(!cause.proves_misbehaviour());
     listener.shutdown();
     drop(engine);
 }
@@ -711,7 +711,7 @@ fn a_closed_socks_port_is_the_proxy_and_does_not_implicate_the_onion() {
         port: 18081,
     });
     let cause = wait_kind(&seen, CloseKind::ProxyUnavailable);
-    assert!(!cause.implicates_address(ConnectorId::Tor));
+    assert!(!cause.proves_misbehaviour());
     listener.shutdown();
     drop(engine);
 }
@@ -754,7 +754,7 @@ fn a_socks_exchange_closed_without_a_reply_is_the_proxy() {
     .expect("listen");
     listener.dial(onion());
     let cause = wait_kind(&recorded.seen, CloseKind::ProxyUnavailable);
-    assert!(!cause.implicates_address(ConnectorId::Tor));
+    assert!(!cause.proves_misbehaviour());
     listener.shutdown();
     drop(engine);
 }

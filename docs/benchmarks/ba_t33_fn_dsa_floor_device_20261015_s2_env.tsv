@@ -1,0 +1,8 @@
+utc	phase	temp_millic	cur_freq_khz	governor	loadavg	shekyld_procs
+2026-10-15T16:22:45Z	start	49173	1800000,1800000,1800000,1200000	ondemand,ondemand,ondemand,ondemand	0.52 0.13 0.04	1
+2026-10-15T16:49:41Z	after_build	67679	1800000,1600000,1800000,1800000	ondemand,ondemand,ondemand,ondemand	4.42 4.15 3.22	1
+2026-10-15T17:17:35Z	after_ladder	55504	1200000,1800000,1800000,1800000	ondemand,ondemand,ondemand,ondemand	0.74 0.74 1.07	1
+2026-10-15T17:17:35Z	sample	56478	1800000,1800000,1800000,1800000	ondemand,ondemand,ondemand,ondemand	0.74 0.74 1.07	1
+2026-10-15T17:17:41Z	sample	57452	1800000,1800000,1800000,1800000	ondemand,ondemand,ondemand,ondemand	0.76 0.74 1.07	1
+2026-10-15T17:17:46Z	sample	56478	1800000,1800000,1800000,1800000	ondemand,ondemand,ondemand,ondemand	0.96 0.79 1.08	1
+2026-10-15T17:17:49Z	end	57452	1500000,1600000,1800000,1800000	ondemand,ondemand,ondemand,ondemand	0.96 0.79 1.08	1

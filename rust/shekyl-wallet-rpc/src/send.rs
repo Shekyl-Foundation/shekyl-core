@@ -13,7 +13,9 @@ use std::num::NonZeroU64;
 
 use serde::Deserialize;
 use serde_json::Value;
-use shekyl_engine_core::{FeePriority, ReservationId, TxHash, TxRecipient, TxRequest};
+use shekyl_engine_core::{
+    FeePriority, ReservationId, TxDestination, TxHash, TxRecipient, TxRequest,
+};
 
 use shekyl_units::AtomicUnitsString;
 
@@ -83,7 +85,7 @@ pub(crate) async fn build_pending_tx(
             .into_iter()
             .map(|r| {
                 Ok(TxRecipient {
-                    address: r.address,
+                    destination: TxDestination::Address(r.address),
                     amount_atomic_units: r.amount.to_atomic_units(),
                     rid: r.rid.as_deref().map(parse_rid).transpose()?,
                 })

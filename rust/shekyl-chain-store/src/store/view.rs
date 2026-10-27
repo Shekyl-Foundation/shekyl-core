@@ -16,10 +16,10 @@
 //! write transaction observe that transaction's own writes, so projecting
 //! the view from the batch gives block *h+1* the chain block *h* left.
 //!
-//! A `ReadSnapshot`-backed view (RPC-side re-validation, DRS-E5's pool
-//! decorator) is a later, separate implementor. It carries no batch brand,
-//! and so cannot mint a `ChainValid` that `connect` accepts — which is the
-//! point of the brand (C2-R8 Q3).
+//! The `ReadSnapshot`-backed view is a separate implementor,
+//! [`SnapshotView`](super::SnapshotView) — what the pool door judges
+//! against. It carries no batch brand, and so cannot mint a `ChainValid`
+//! that `connect` accepts — which is the point of the brand (C2-R8 Q3).
 //!
 //! # The root at `h` is key `h`
 //!
@@ -88,26 +88,29 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_chain_rules::{
-    AtHeight, BlockOutputs, ChainView, HeaderRecord, HeaderView, RecordedBlock, RecordedWeights,
+    AtHeight, BlockDrawsFloor, BlockOutputs, ChainView, Claimable, EpochFloor, HeaderRecord,
+    HeaderView, Pricing, RecordedBlock, RecordedWeights, ReleaseJournalFloor, Settling,
     SlashLogFloor, Tip, TreeFrontier,
 };
 use shekyl_types::archival::{
-    BlockDraws, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, ServedShard, SettlementRow,
+    BlockDraws, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, ServedShard,
+    SettlementRow, SupportCount,
 };
 use shekyl_types::{
-    BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, PCanonicalId, SettlementEpoch,
-    ShardId, TxHash,
+    BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, LongTermWeight, PCanonicalId,
+    SettlementEpoch, ShardId, TxHash,
 };
 use shekyl_units::AtomicUnits;
 
 use crate::codec::{
-    ArchivalLastSlashEpochCell, BlockInfo, BondRecord, RMarket, SigmaWorkMilli, SlashLogEntry,
+    ArchivalLastSlashEpochCell, BlockInfo, BondRecord, CodecError, RMarket, SigmaWorkMilli,
+    SlashLogEntry,
 };
 
 use super::archival_reads;
 use super::chain_reads::{self, ReadFault};
 use super::curve_reads;
-use super::error::StoreError;
+use super::error::{CellFault, StoreError, StoreInvariant};
 use super::leaf_reads;
 use super::tx_reads;
 use super::write::WriteBatch;
@@ -146,6 +149,34 @@ impl<'b, 'id> BatchView<'b, 'id> {
     /// classify absence against it.
     fn tip_row(&self) -> Result<Option<(u64, BlockInfo)>, StoreError> {
         chain_reads::tip_of(self.batch.txn()).map_err(|f| self.arm(f))
+    }
+
+    /// Arm a store invariant on this batch. The admission view uses it for
+    /// a memo miss (SI-35), an index past `D` (SI-37), a recorded coinbase
+    /// extra that does not yield one draw commitment (SI-38), and a visible
+    /// count past `u32` (SI-39). None of those is a read of a table.
+    pub(super) fn arm_row(&self, row: StoreInvariant) -> StoreError {
+        self.batch.poison().arm(row)
+    }
+
+    /// The block recorded at `height`, parsed from `blocks` and checked
+    /// against `block_info`. Above the tip is [`AtHeight::AboveTip`]. A
+    /// missing or unreadable row at or below the tip is SI-7.
+    ///
+    /// [`ChainView::block_at`] drops the miner transaction. The admission
+    /// view reads the coinbase extra from this block, and it scans that
+    /// extra itself: one `0x0C` field, not the coinbase grammar.
+    pub(super) fn recorded_block_at(
+        &self,
+        height: BlockHeight,
+    ) -> Result<AtHeight<shekyl_wire::Block>, StoreError> {
+        let tip = self.tip_row()?;
+        let body = chain_reads::block_body(self.batch.txn(), tip.as_ref(), height.to_raw())
+            .map_err(|f| self.arm(f))?;
+        Ok(match body {
+            AtHeight::AboveTip => AtHeight::AboveTip,
+            AtHeight::Recorded((_, block)) => AtHeight::Recorded(block),
+        })
     }
 }
 
@@ -290,6 +321,52 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
         self.batch.total_burned()
     }
 
+    /// `block_info[height].long_term_effective_median` — the row connect
+    /// wrote for the block (FL-R3-STORE), through the same classified read
+    /// as every other height-keyed projection here.
+    fn long_term_effective_median_at(
+        &self,
+        height: BlockHeight,
+    ) -> Result<AtHeight<LongTermWeight>, StoreError> {
+        let tip = self.tip_row()?;
+        Ok(
+            match chain_reads::info_at(self.batch.txn(), tip.as_ref(), height.to_raw())
+                .map_err(|f| self.arm(f))?
+            {
+                AtHeight::Recorded(info) => AtHeight::Recorded(info.long_term_effective_median),
+                AtHeight::AboveTip => AtHeight::AboveTip,
+            },
+        )
+    }
+
+    /// The `total_burned` fold less the `block_burn` rows in
+    /// `(height, tip]` ([`chain_reads::burned_in`]): the fold as it stood
+    /// after the block at `height` connected. A fold below the rows above
+    /// it is a register that does not hold the sum of its rows — SI-7 on
+    /// the `total_burned` cell, its reason spelled — and arms the batch's
+    /// poison.
+    fn burned_through(&self, height: BlockHeight) -> Result<AtHeight<AtomicUnits>, StoreError> {
+        let Some((tip, _)) = self.tip_row()? else {
+            return Ok(AtHeight::AboveTip);
+        };
+        if height.to_raw() > tip {
+            return Ok(AtHeight::AboveTip);
+        }
+        let fold = self.batch.total_burned()?;
+        let above = chain_reads::burned_in(self.batch.txn(), height.to_raw(), tip)
+            .map_err(|f| self.arm(f))?;
+        match fold.checked_sub(above) {
+            Some(through) => Ok(AtHeight::Recorded(through)),
+            None => Err(self.arm(ReadFault::Invariant(StoreInvariant::CellCorrupt {
+                key: "total_burned",
+                fault: CellFault::Undecodable(CodecError::Invalid {
+                    codec: "total_burned",
+                    reason: "the burned fold is below the block_burn rows it sums",
+                }),
+            }))),
+        }
+    }
+
     // The archival reads (DRS-E4 commit 2): the same bodies
     // `ReadSnapshot` reads the committed chain through (`archival_reads`),
     // over this batch's transaction, with a fault arming the poison. Every
@@ -334,16 +411,25 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
         &self,
         shard: ShardId,
         epoch: SettlementEpoch,
+        floor: EpochFloor<Pricing>,
     ) -> Result<Option<RMarket>, StoreError> {
-        archival_reads::r_market(self.batch.txn(), shard, epoch).map_err(|f| self.arm(f))
+        archival_reads::r_market(self.batch.txn(), shard, epoch, floor).map_err(|f| self.arm(f))
     }
 
-    fn sigma_work(&self, epoch: SettlementEpoch) -> Result<Option<SigmaWorkMilli>, StoreError> {
-        archival_reads::sigma_work(self.batch.txn(), epoch).map_err(|f| self.arm(f))
+    fn sigma_work(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
+    ) -> Result<Option<SigmaWorkMilli>, StoreError> {
+        archival_reads::sigma_work(self.batch.txn(), epoch, floor).map_err(|f| self.arm(f))
     }
 
-    fn budget(&self, epoch: SettlementEpoch) -> Result<Option<AtomicUnits>, StoreError> {
-        archival_reads::budget(self.batch.txn(), epoch).map_err(|f| self.arm(f))
+    fn budget(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
+    ) -> Result<Option<AtomicUnits>, StoreError> {
+        archival_reads::budget(self.batch.txn(), epoch, floor).map_err(|f| self.arm(f))
     }
 
     /// The watermark is a property cell, read through the batch's own
@@ -362,8 +448,9 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
         persona: &PCanonicalId,
         shard: ShardId,
         epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
     ) -> Result<bool, StoreError> {
-        archival_reads::slash_applied(self.batch.txn(), persona, shard, epoch)
+        archival_reads::slash_applied(self.batch.txn(), persona, shard, epoch, floor)
             .map_err(|f| self.arm(f))
     }
 
@@ -376,35 +463,103 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
         persona: &PCanonicalId,
         shard: ShardId,
         epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
     ) -> Result<Option<SettlementRow>, StoreError> {
-        archival_reads::settlement_row(self.batch.txn(), persona, shard, epoch)
+        archival_reads::settlement_row(self.batch.txn(), persona, shard, epoch, floor)
             .map_err(|f| self.arm(f))
     }
 
-    fn issued_draws(&self, epoch: SettlementEpoch) -> Result<Vec<IndexedDraw>, StoreError> {
-        archival_reads::issued_draws(self.batch.txn(), epoch).map_err(|f| self.arm(f))
+    fn issued_draws(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
+    ) -> Result<Vec<IndexedDraw>, StoreError> {
+        archival_reads::issued_draws(self.batch.txn(), epoch, floor).map_err(|f| self.arm(f))
     }
 
-    fn issued_digest(&self, epoch: SettlementEpoch) -> Result<IssuedDigest, StoreError> {
-        archival_reads::issued_digest(self.batch.txn(), epoch).map_err(|f| self.arm(f))
+    fn support_issued(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
+    ) -> Result<Vec<IndexedDraw>, StoreError> {
+        archival_reads::support_issued(self.batch.txn(), epoch, floor).map_err(|f| self.arm(f))
+    }
+
+    fn support_settlement(
+        &self,
+        persona: &PCanonicalId,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
+    ) -> Result<Option<SettlementRow>, StoreError> {
+        archival_reads::support_settlement(self.batch.txn(), persona, epoch, floor)
+            .map_err(|f| self.arm(f))
+    }
+
+    fn issued_digest(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
+    ) -> Result<IssuedDigest, StoreError> {
+        archival_reads::issued_digest(self.batch.txn(), epoch, floor).map_err(|f| self.arm(f))
     }
 
     fn served_at(
         &self,
         persona: &PCanonicalId,
         epochs: &BTreeSet<SettlementEpoch>,
+        floor: EpochFloor<Claimable>,
     ) -> Result<BTreeMap<SettlementEpoch, Vec<ShardId>>, StoreError> {
-        archival_reads::served_at(self.batch.txn(), persona, epochs).map_err(|f| self.arm(f))
+        archival_reads::served_at(self.batch.txn(), persona, epochs, floor).map_err(|f| self.arm(f))
     }
 
-    fn block_draws(&self, height: BlockHeight) -> Result<Option<BlockDraws>, StoreError> {
-        archival_reads::block_draws(self.batch.txn(), height).map_err(|f| self.arm(f))
+    fn block_draws(
+        &self,
+        height: BlockHeight,
+        floor: BlockDrawsFloor,
+    ) -> Result<Option<BlockDraws>, StoreError> {
+        archival_reads::block_draws(self.batch.txn(), height, floor).map_err(|f| self.arm(f))
+    }
+
+    fn support_block_count(
+        &self,
+        height: BlockHeight,
+        floor: BlockDrawsFloor,
+    ) -> Result<Option<SupportCount>, StoreError> {
+        archival_reads::support_block_count(self.batch.txn(), height, floor)
+            .map_err(|f| self.arm(f))
     }
 
     fn drawable_digest(
         &self,
         epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
     ) -> Result<Option<DrawableDigest>, StoreError> {
-        archival_reads::drawable_digest(self.batch.txn(), epoch).map_err(|f| self.arm(f))
+        archival_reads::drawable_digest(self.batch.txn(), epoch, floor).map_err(|f| self.arm(f))
+    }
+
+    fn complete_trees(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
+    ) -> Result<Option<CompleteTreeSet>, StoreError> {
+        archival_reads::complete_trees(self.batch.txn(), epoch, floor).map_err(|f| self.arm(f))
+    }
+
+    fn release_journal_after(
+        &self,
+        height: BlockHeight,
+        floor: ReleaseJournalFloor,
+    ) -> Result<Vec<archival_reads::ReleasedRecord>, StoreError> {
+        archival_reads::release_journal_after(self.batch.txn(), height, floor)
+            .map_err(|f| self.arm(f))
+    }
+
+    fn slash_log_rows_after(
+        &self,
+        height: BlockHeight,
+        floor: SlashLogFloor,
+    ) -> Result<Vec<archival_reads::LoggedSlash>, StoreError> {
+        archival_reads::slash_log_rows_after(self.batch.txn(), height, floor)
+            .map_err(|f| self.arm(f))
     }
 }

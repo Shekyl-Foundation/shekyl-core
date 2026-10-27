@@ -172,6 +172,7 @@ fn refuse(refusal: &ShardViewRefusal) -> RpcFault {
                     open_shard.to_raw()
                 ),
             },
+            data: None,
         }),
         ShardViewRefusal::Unavailable { shard_id, attempts } => RpcFault::Refused(RpcRefusal {
             code: CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE,
@@ -179,10 +180,12 @@ fn refuse(refusal: &ShardViewRefusal) -> RpcFault {
                 "could not retrieve shard {} this time ({attempts} holder(s) tried)",
                 shard_id.to_raw()
             ),
+            data: None,
         }),
         ShardViewRefusal::SkeletonAbsent => RpcFault::Refused(RpcRefusal {
             code: CORE_RPC_ERROR_CODE_ARCHIVAL_SKELETON_ABSENT,
             message: "this daemon holds no archival skeleton and serves no shard view".to_owned(),
+            data: None,
         }),
         ShardViewRefusal::Fault(fault) => RpcFault::Facts(*fault),
     }

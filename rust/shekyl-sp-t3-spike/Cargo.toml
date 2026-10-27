@@ -56,7 +56,8 @@ shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 # is placed in.
 shekyl-types = { path = "../shekyl-types" }
 # `shard_frame`: the served payload is framed as one transaction, and the
-# client's expectation is that frame's row.
+# client's expectation is that frame's row. CEN-H3's weight limit, which
+# this crate uses as the shard overshoot, lives here too.
 shekyl-wire = { path = "../shekyl-wire" }
 # `T_SECONDS`, the target block time: reading B's epoch is the consensus
 # epoch's blocks at that time, not a literal.

@@ -20,7 +20,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_difficulty::{CumulativeDifficulty, GENESIS_DIFFICULTY};
 use shekyl_economics::FULL_REWARD_ZONE;
-use shekyl_types::archival::{RMarket, SigmaWorkMilli};
+use shekyl_types::archival::{CompleteTreeSet, RMarket, SigmaWorkMilli};
 use shekyl_types::{
     AttestationRoot, BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, KeyImage,
     LongTermWeight, SettlementEpoch, ShardId, TxHash,
@@ -126,6 +126,15 @@ pub struct MockChain {
     /// the mock's recorded blocks burn nothing, so a value here is a
     /// planted fold, the way a planted key image is a planted spend.
     total_burned: AtomicUnits,
+    /// Planted per-height burns — the store's `block_burn` rows, which
+    /// `burned_through` nets off the fold above a height. Empty unless a
+    /// fixture names one ([`with_burn_at`](Self::with_burn_at)).
+    burns: BTreeMap<BlockHeight, AtomicUnits>,
+    /// Planted per-height medians — the store's
+    /// `block_info.long_term_effective_median` rows. A height a fixture
+    /// did not name reads the penalty-free zone, the value a chain built
+    /// by `push` alone derives at every height.
+    medians: BTreeMap<BlockHeight, LongTermWeight>,
     /// Planted market prices — CEN-J15's `r_market` read, keyed as the
     /// view keys it ([`with_r_market`](Self::with_r_market)). Empty unless
     /// a fixture prices a shard.
@@ -138,11 +147,18 @@ pub struct MockChain {
     /// denominator, per epoch ([`with_gather`](Self::with_gather)). Empty
     /// unless a fixture settles an epoch.
     sigma_works: BTreeMap<SettlementEpoch, SigmaWorkMilli>,
+    /// Planted frozen complete-tree sets, beside `Σwork`
+    /// ([`with_complete_trees`](Self::with_complete_trees)). A key
+    /// [`with_gather`](Self::with_gather) wrote and nobody replaced is the
+    /// empty set. An epoch with no entry reads `None`.
+    complete_trees: BTreeMap<SettlementEpoch, CompleteTreeSet>,
     /// The slash watermark: the last epoch whose slash pass has run. A
     /// planted price or work total is a row that pass wrote, so planting
-    /// either raises this to its epoch. With the prices, budgets and work
-    /// totals, the archival reads this chain plants; every other archival
-    /// read answers *no bonds*.
+    /// either raises this to its epoch. With the prices, budgets, work
+    /// totals and complete-tree sets, the archival reads this chain plants;
+    /// every other archival read answers *no bonds*. The draw row is the
+    /// zero row and the drawable digest is the empty set's: this chain
+    /// has no bond history, and the count treats a missing row as a hole.
     slash_watermark: Option<SettlementEpoch>,
 }
 
@@ -155,9 +171,12 @@ impl Default for MockChain {
             key_images: BTreeSet::new(),
             transactions: BTreeSet::new(),
             total_burned: AtomicUnits::ZERO,
+            burns: BTreeMap::new(),
+            medians: BTreeMap::new(),
             r_market: BTreeMap::new(),
             budgets: BTreeMap::new(),
             sigma_works: BTreeMap::new(),
+            complete_trees: BTreeMap::new(),
             slash_watermark: None,
         }
     }
@@ -170,6 +189,25 @@ impl MockChain {
     #[must_use]
     pub const fn with_total_burned(mut self, total_burned: AtomicUnits) -> Self {
         self.total_burned = total_burned;
+        self
+    }
+
+    /// Plant the `block_burn` row at `height` — what `burned_through`
+    /// subtracts from the fold for heights below it. The fold itself is
+    /// [`with_total_burned`](Self::with_total_burned); a fixture that
+    /// plants rows above the fold is a fixture, not a chain.
+    #[must_use]
+    pub fn with_burn_at(mut self, height: BlockHeight, burned: AtomicUnits) -> Self {
+        self.burns.insert(height, burned);
+        self
+    }
+
+    /// Plant the long-term effective median in force for the block at
+    /// `height` — the store's `block_info` row the relay floor reads at a
+    /// recorded height.
+    #[must_use]
+    pub fn with_median_at(mut self, height: BlockHeight, median: LongTermWeight) -> Self {
+        self.medians.insert(height, median);
         self
     }
 
@@ -306,7 +344,22 @@ impl MockChain {
     #[must_use]
     pub fn with_gather(mut self, epoch: SettlementEpoch, sigma_work: SigmaWorkMilli) -> Self {
         self.sigma_works.insert(epoch, sigma_work);
+        // The pass writes the set beside Σwork. An empty set is that
+        // value; it does not replace one [`with_complete_trees`](Self::with_complete_trees)
+        // already planted. A missing entry would be
+        // `Corrupt::CompleteTreesAbsent` (SI-31), not an empty market.
+        self.complete_trees.entry(epoch).or_default();
         self.settled_through(epoch)
+    }
+
+    /// Plant `epoch`'s frozen complete-tree set — the personas the slash
+    /// pass excluded from that epoch's market (`SO-D12h`). Replaces a set
+    /// already planted, including the empty one [`with_gather`](Self::with_gather)
+    /// writes. An epoch with no entry reads `None`.
+    #[must_use]
+    pub fn with_complete_trees(mut self, epoch: SettlementEpoch, set: CompleteTreeSet) -> Self {
+        self.complete_trees.insert(epoch, set);
+        self
     }
 
     /// Raise the slash watermark to at least `epoch`: the slash pass has
@@ -407,6 +460,50 @@ impl<'id> ChainView<'id> for MockView<'_, 'id> {
         Ok(self.chain.total_burned)
     }
 
+    /// The planted row, or the zone — the value every `push`-built block
+    /// derives (`Self::ZONE_WEIGHTS` below a 100 000-block window).
+    fn long_term_effective_median_at(
+        &self,
+        height: BlockHeight,
+    ) -> Result<AtHeight<LongTermWeight>, Infallible> {
+        Ok(match self.chain.block(height) {
+            AtHeight::Recorded(_) => AtHeight::Recorded(
+                self.chain
+                    .medians
+                    .get(&height)
+                    .copied()
+                    .unwrap_or(LongTermWeight::from_raw(FULL_REWARD_ZONE)),
+            ),
+            AtHeight::AboveTip => AtHeight::AboveTip,
+        })
+    }
+
+    /// The store's projection on the mock's plants: the fold less every
+    /// planted row above `height`.
+    fn burned_through(&self, height: BlockHeight) -> Result<AtHeight<AtomicUnits>, Infallible> {
+        Ok(match self.chain.block(height) {
+            AtHeight::Recorded(_) => {
+                let above: u64 = self
+                    .chain
+                    .burns
+                    .range((
+                        core::ops::Bound::Excluded(height),
+                        core::ops::Bound::Unbounded,
+                    ))
+                    .map(|(_, burned)| burned.to_raw())
+                    .sum();
+                AtHeight::Recorded(AtomicUnits::from_raw(
+                    self.chain
+                        .total_burned
+                        .to_raw()
+                        .checked_sub(above)
+                        .expect("a fixture plants rows under its fold"),
+                ))
+            }
+            AtHeight::AboveTip => AtHeight::AboveTip,
+        })
+    }
+
     fn block_at(&self, height: BlockHeight) -> Result<AtHeight<RecordedBlock>, Infallible> {
         Ok(match self.chain.block(height) {
             AtHeight::Recorded(block) => AtHeight::Recorded(block.clone()),
@@ -503,15 +600,16 @@ impl<'id> ChainView<'id> for MockView<'_, 'id> {
     // The planted reads are the market price (`MockChain::with_r_market`,
     // which says why: CEN-J15's accept over a closed shard has no driven
     // witness, a shard being `SHARD_LENGTH` of real proof bytes), the
-    // frozen budget and the work total (`MockChain::with_close`,
-    // `with_gather`: CEN-J25's refusal needs an epoch CEN-J23 admits, and
-    // J23's a closed epoch not yet settled), and the slash watermark the
-    // price is read at.
+    // frozen budget, the work total and the complete-tree set beside it
+    // (`MockChain::with_close`, `with_gather`, `with_complete_trees`:
+    // CEN-J25's refusal needs an epoch CEN-J23 admits, and J23's a closed
+    // epoch not yet settled), and the slash watermark the price is read at.
     crate::archival_reads!(
         empty,
         r_market from chain.r_market,
         sigma_work from chain.sigma_works,
         budget from chain.budgets,
+        complete_trees from chain.complete_trees,
         slash_watermark from chain.slash_watermark
     );
 }
@@ -521,8 +619,9 @@ pub mod bundle;
 mod views;
 
 pub use assert::{
-    assert_refused, boundary_pair, credited_to_this_falsifier, defined, expected_seed, formed,
-    formed_on, formed_under, infallible, judged, MockSubstrate,
+    assert_refused, boundary_pair, credited_to_this_falsifier, defined, expected_references,
+    expected_seed, expected_target, formed, formed_on, formed_under, infallible, judge_on, judged,
+    token_for_one_rule, MockSubstrate,
 };
 pub use views::{
     Faulted, FaultingView, NonCanonicalBondView, NonCanonicalHybridKey, WithheldRead,
@@ -531,6 +630,9 @@ pub use views::{
 
 pub mod fixture;
 mod price;
+mod staker_pool;
+
+pub use staker_pool::{burned_staker_chain, StakerPoolChain};
 
 #[cfg(test)]
 #[path = "harness_probe_tests.rs"]

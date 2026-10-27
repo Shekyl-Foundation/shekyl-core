@@ -189,6 +189,9 @@ impl From<LocalRefreshError> for RefreshError {
 /// - [`RpcError::IdentityMismatch`] → [`ProtocolErrorKind::IdentityMismatch`]
 ///   (settled by the orchestrator before the producer runs; tagged on its
 ///   own should one ever arrive)
+/// - [`RpcError::TransactionsUnavailable`] →
+///   [`ProtocolErrorKind::TransactionsUnavailable`] (the block fetch's
+///   `get_transactions` leg, against a daemon whose pool is retired)
 /// - [`RpcError::TransactionsNotFound`] → [`ProtocolErrorKind::InvalidNode`]
 ///   (reachable via the `get_transactions` leg of the block fetch: a
 ///   daemon that names transaction hashes in a block and then reports
@@ -237,5 +240,6 @@ pub(super) const fn classify_rpc_error(err: &RpcError) -> ProtocolErrorKind {
             ProtocolErrorKind::InvalidNode
         }
         RpcError::IdentityMismatch(_) => ProtocolErrorKind::IdentityMismatch,
+        RpcError::TransactionsUnavailable(_) => ProtocolErrorKind::TransactionsUnavailable,
     }
 }

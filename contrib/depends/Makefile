@@ -58,10 +58,22 @@ endif
 host_arch=$(firstword $(subst -, ,$(canonical_host)))
 host_vendor=$(word 2,$(subst -, ,$(canonical_host)))
 full_host_os:=$(subst $(host_arch)-$(host_vendor)-,,$(canonical_host))
-host_os:=$(findstring android,$(full_host_os))
-ifeq ($(host_os),)
-host_os:=$(findstring linux,$(full_host_os))
+
+# config.sub spells Android as linux-android or linux-androideabi.
+# findstring linux matches both, so this refusal has to run before the
+# family match. Otherwise the deleted target configures as Linux
+# (hosts/linux.mk, OpenSSL linux-generic64) while the triple stays
+# Android. Shekyl ships nothing on Android, as the host or as the
+# machine running this makefile. Reopen only when a release decision
+# names an Android product and a CI host that builds it; that decision
+# deletes this refusal in the same change as the host recipe.
+android_os:=$(findstring android,$(full_host_os))$(findstring android,$(full_build_os))
+ifneq ($(android_os),)
+$(error Shekyl refuses to build for Android (host $(canonical_host), build $(build)). Shekyl ships nothing on Android. See docs/CHANGELOG.md, "the Android target is removed".)
 endif
+undefine android_os
+
+host_os:=$(findstring linux,$(full_host_os))
 host_os+=$(findstring darwin,$(full_host_os))
 host_os+=$(findstring freebsd,$(full_host_os))
 host_os+=$(findstring mingw32,$(full_host_os))
@@ -85,9 +97,6 @@ host_cmake=FreeBSD
 endif
 ifeq ($(host_os),darwin)
 host_cmake=Darwin
-endif
-ifeq ($(host_os),android)
-host_cmake=Android
 endif
 
 AT_$(V):=
@@ -232,4 +241,12 @@ download: download-osx download-linux download-win
 
  $(foreach package,$(all_packages),$(eval $(call ext_add_stages,$(package))))
 
-.PHONY: install cached download-one download-osx download-linux download-win download check-packages check-sources
+# Prints the classified host OS and nothing else. The Android refusal
+# above is read while this file is parsed, so it fires before any recipe,
+# including the configure and build lines that make runs even under -n.
+# This goal asks which family was selected. It stays below `all`, which is
+# the default goal.
+show-host-os:
+	@echo $(host_os)
+
+.PHONY: install cached download-one download-osx download-linux download-win download check-packages check-sources show-host-os

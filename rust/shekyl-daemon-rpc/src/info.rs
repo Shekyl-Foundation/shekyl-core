@@ -50,8 +50,10 @@ use shekyl_rpc_types::{
     InfoIdentity, InfoP2p, InfoPeers, InfoPool, InfoStatus, RpcStatus, StatusConnections,
 };
 
+use shekyl_rpc_types::methods::{Grant, GrantSet, Preset};
+
 use crate::chain_facts::FactsFault;
-use crate::info_facts::{InfoFacts, PeerFacts, PoolScope};
+use crate::info_facts::{InfoFacts, PeerFacts, PoolScope, PoolState};
 use crate::methods::{RpcFault, StoreFault};
 
 /// What a caller is shown: which parts its grants select, and whether it is
@@ -60,53 +62,66 @@ use crate::methods::{RpcFault, StoreFault};
 /// Two axes, and the second is not a grant. Host-only data — on this reply,
 /// the pool entries this node has not broadcast — is served to the host's
 /// administrator and to no grant, `admin` included (`RPC_CHANNEL.md` §6.1,
-/// RT-O9.3). Naming the axis here is what stops the channel's daemon slice
-/// from reading "`admin`" as "may see entries not yet broadcast".
+/// RT-O9.3). Naming the axis here is what stops "`admin`" being read as "may
+/// see entries not yet broadcast".
 ///
-/// Today both axes are mapped from the one listener flag
-/// ([`Self::from_listener`]). The RPC channel (RT-W10) maps a connection's
-/// grant set and its host flag onto the same value.
+/// It is made from a connection's [`crate::authority::Authority`]
+/// ([`Self::of`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Disclosure {
-    /// The caller is shown the Status part.
-    status: bool,
-    /// The caller is shown the Peers part.
-    peers: bool,
+    /// The grants whose parts the caller is shown.
+    grants: GrantSet,
     /// The caller is the host's administrator.
     host: bool,
-    /// The listener's posture, reported back as `restricted`. Transitional:
-    /// it leaves with that field when the channel's handshake returns the
-    /// grant instead.
-    listener_restricted: bool,
 }
 
 impl Disclosure {
-    /// The unrestricted listener: every part, and host. That listener binds
-    /// loopback only, which is what stands in for a host identity until the
-    /// channel exists.
+    /// Every part, and host: the host's administrator.
     pub const FULL: Self = Self {
-        status: true,
-        peers: true,
+        grants: GrantSet::ALL,
         host: true,
-        listener_restricted: false,
     };
 
-    /// The restricted listener: the `view` parts, and not host.
+    /// The `view` parts, and not host.
     pub const VIEW: Self = Self {
-        status: false,
-        peers: false,
+        grants: Preset::View.grants(),
         host: false,
-        listener_restricted: true,
     };
 
-    /// The disclosure a listener's posture gives its callers.
+    /// The disclosure a connection holding `grants` is given.
     #[must_use]
-    pub const fn from_listener(restricted: bool) -> Self {
-        if restricted {
-            Self::VIEW
-        } else {
-            Self::FULL
-        }
+    pub const fn of(grants: GrantSet, host: bool) -> Self {
+        Self { grants, host }
+    }
+
+    /// Whether the part `grant` selects is shown.
+    #[must_use]
+    pub const fn shows(self, grant: Grant) -> bool {
+        self.grants.holds(grant)
+    }
+
+    /// Whether the Status part is shown.
+    #[must_use]
+    pub const fn status(self) -> bool {
+        self.shows(Grant::Status)
+    }
+
+    /// Whether the Peers part is shown.
+    #[must_use]
+    pub const fn peers(self) -> bool {
+        self.shows(Grant::Peers)
+    }
+
+    /// Whether the Config rows are shown (RT-O24).
+    #[must_use]
+    pub const fn config(self) -> bool {
+        self.shows(Grant::Config)
+    }
+
+    /// Whether the caller is the host's administrator.
+    #[must_use]
+    pub const fn host(self) -> bool {
+        self.host
     }
 }
 
@@ -167,25 +182,45 @@ pub fn get_info(
     // The pool. Every caller is told how many entries this node has
     // broadcast. How many it holds and has not yet broadcast is host-only,
     // so it is counted only on the host axis; both are then one pool state.
+    //
+    // A retired pool (its file faulted; the node holds none until restart)
+    // answers no count, so the reply says so and carries the chain's
+    // members as ever: the chain is still followed, and a reply refused
+    // whole for the pool's sake would black it out with it.
     let pool = facts.pool_counts(if disclosure.host {
         PoolScope::WithUnbroadcast
     } else {
         PoolScope::Broadcast
     })?;
-    let host = match (disclosure.host, pool.unbroadcast) {
-        (true, Some(tx_pool_unbroadcast_count)) => Hidden::Shown(InfoHost {
-            tx_pool_unbroadcast_count,
+    let (pool, unbroadcast) = match pool {
+        PoolState::Live(counts) => (
+            InfoPool::Live {
+                tx_pool_size: counts.broadcast,
+            },
+            counts.unbroadcast,
+        ),
+        PoolState::Retired => (InfoPool::Retired, None),
+    };
+    let host = match (disclosure.host, &pool, unbroadcast) {
+        (true, InfoPool::Live { .. }, Some(count)) => Hidden::Shown(InfoHost {
+            tx_pool_unbroadcast_count: Some(count),
+        }),
+        // Shown, with no answer: the pool is retired.
+        (true, InfoPool::Retired, _) => Hidden::Shown(InfoHost {
+            tx_pool_unbroadcast_count: None,
         }),
         // Asked for on the host axis and not answered: the facts layer did
         // not make the count it was asked to. Not zero, and not withheld.
-        (true, None) => return Err(RpcFault::Facts(FactsFault::Inconsistent)),
+        (true, InfoPool::Live { .. }, None) => {
+            return Err(RpcFault::Facts(FactsFault::Inconsistent))
+        }
         // Not host: withheld, whatever the facts layer returned.
-        (false, _) => Hidden::Withheld,
+        (false, _, _) => Hidden::Withheld,
     };
     // A part the caller is not shown is withheld: absent from the reply,
     // and none of its reads made (RK-D24, RK-Q8). No member is written with
     // a value that means "not this value".
-    let node = if disclosure.status {
+    let node = if disclosure.status() {
         let status = facts.status()?;
         Hidden::Shown(InfoStatus {
             start_time: status.start_time,
@@ -208,7 +243,7 @@ pub fn get_info(
     // Health's `offline` both come from the daemon's configuration, read
     // in two places; if they disagree, one of the reads is wrong, and the
     // reply refuses rather than carry both.
-    let peers = if disclosure.peers {
+    let peers = if disclosure.peers() {
         let state = match facts.peers()? {
             PeerFacts::Offline => InfoP2p::Offline,
             PeerFacts::Running(peers) => InfoP2p::Running(InfoPeers {
@@ -293,13 +328,11 @@ pub fn get_info(
             total_burned: tip.total_burned,
             staker_emission_share_effective: tip.staker_emission_share,
         },
-        pool: InfoPool {
-            tx_pool_size: pool.broadcast,
-        },
+        pool,
         node,
         peers,
         host,
-        restricted: disclosure.listener_restricted,
+        restricted: !disclosure.host,
     })
 }
 

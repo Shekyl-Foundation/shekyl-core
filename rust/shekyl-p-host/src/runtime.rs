@@ -369,7 +369,7 @@ mod tests {
 
     /// Every thread the serving runtime hands work to reads back at the
     /// serving nice value, and the test's own runtime's threads do not move.
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(target_os = "linux")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn serving_threads_run_at_the_serving_nice_and_the_caller_does_not() {
         use shekyl_thread_priority::{current_thread_nice, SERVING_NICE};

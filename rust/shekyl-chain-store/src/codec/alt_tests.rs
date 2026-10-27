@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 use super::alt::test_block_bytes;
-use super::{AltBlock, AltBlockError, AltBlockFacts};
+use super::{AltBlock, AltBlockError, AltBlockFacts, AltBodies};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_store_codec::{Canonical, CodecError};
 use shekyl_types::{BlockHeight, BlockWeight, MAX_ATTESTATION_WITNESS_BYTES};
@@ -14,6 +14,10 @@ fn facts(weight: u64) -> AltBlockFacts {
         height: BlockHeight::from_raw(41),
         block_weight: BlockWeight::from_raw(weight),
         cumulative_difficulty: CumulativeDifficulty::from_raw((5u128 << 64) | 4),
+        pow: crate::codec::RecordedPow {
+            seed: shekyl_types::BlockHash::from_bytes([0x5E; 32]),
+            pow: shekyl_types::PowHash::from_bytes([0x70; 32]),
+        },
     }
 }
 
@@ -62,6 +66,8 @@ fn an_alt_row_has_no_supply_word() {
     expected.extend_from_slice(&41u64.to_le_bytes()); // height
     expected.extend_from_slice(&2_048u64.to_le_bytes()); // weight, always
     expected.extend_from_slice(&((5u128 << 64) | 4).to_le_bytes()); // one u128
+    expected.extend_from_slice(&[0x5E; 32]); // the recorded PoW's seed
+    expected.extend_from_slice(&[0x70; 32]); // the recorded PoW
     expected.extend_from_slice(&u32::try_from(block().len()).unwrap().to_le_bytes());
     expected.extend_from_slice(&block());
     expected.push(1); // witness present
@@ -69,13 +75,15 @@ fn an_alt_row_has_no_supply_word() {
     expected.extend_from_slice(&witness());
     assert_eq!(
         bytes, expected,
-        "height, weight, difficulty, block, witness — nothing else"
+        "height, weight, difficulty, recorded PoW, block, witness — nothing else"
     );
-    // The facts half is the three scalars; a fourth would not build here.
+    // The facts half is the three scalars and the recorded PoW; a fifth
+    // would not build here.
     let AltBlockFacts {
         height,
         block_weight,
         cumulative_difficulty,
+        pow: _,
     } = record.facts();
     assert_eq!(height, BlockHeight::from_raw(41));
     assert_eq!(block_weight, BlockWeight::from_raw(2_048));
@@ -121,6 +129,8 @@ fn forged(weight: u64, block: &[u8], witness: Option<&[u8]>) -> Vec<u8> {
     out.extend_from_slice(&41u64.to_le_bytes());
     out.extend_from_slice(&weight.to_le_bytes());
     out.extend_from_slice(&((5u128 << 64) | 4).to_le_bytes());
+    out.extend_from_slice(&[0x5E; 32]); // recorded pow: seed
+    out.extend_from_slice(&[0x70; 32]); // recorded pow: hash
     out.extend_from_slice(&u32::try_from(block.len()).unwrap().to_le_bytes());
     out.extend_from_slice(block);
     match witness {
@@ -187,4 +197,46 @@ fn decode_refuses_the_forged_shapes() {
             ..
         })
     ));
+}
+
+/// The listed bodies' codec round-trips none, one and two bodies, and
+/// refuses bytes that do not parse as a transaction, a count the bytes
+/// cannot back and trailing bytes.
+#[test]
+fn the_bodies_round_trip_and_refuse_malformed_rows() {
+    let coinbase = super::BlockBody::parse(&block())
+        .expect("the fixture parses")
+        .miner_transaction
+        .clone();
+    for bodies in [
+        AltBodies::of(Vec::new()),
+        AltBodies::of(vec![coinbase.clone()]),
+        AltBodies::of(vec![coinbase.clone(), coinbase.clone()]),
+    ] {
+        assert_eq!(AltBodies::decode(&bodies.encode()), Ok(bodies));
+    }
+    let reason = |bytes: &[u8]| match AltBodies::decode(bytes) {
+        Err(CodecError::Invalid { reason, .. }) => reason,
+        other => panic!("refused, not {other:?}"),
+    };
+    let good = AltBodies::of(vec![coinbase]).encode();
+    let mut trailing = good.clone();
+    trailing.push(0);
+    assert_eq!(
+        reason(&trailing),
+        "trailing bytes after the alt block's bodies"
+    );
+    // One body of three bytes that are not a transaction.
+    let mut junk = 1u32.to_le_bytes().to_vec();
+    junk.extend_from_slice(&3u32.to_le_bytes());
+    junk.extend_from_slice(&[0xFF; 3]);
+    assert_eq!(
+        reason(&junk),
+        "a listed body does not parse as a transaction"
+    );
+    // A count the remaining bytes cannot hold.
+    assert_eq!(
+        reason(&9u32.to_le_bytes()),
+        "element count exceeds what the row's bytes can hold"
+    );
 }

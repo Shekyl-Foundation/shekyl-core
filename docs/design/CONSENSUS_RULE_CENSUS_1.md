@@ -342,18 +342,19 @@ actually reads it, and deleting it if not.
 > 29 bytes. Local invoke-callback `int` (timeout / destroyed) is API, not
 > wire.
 
-### L-5 — Compression: zstd level 1, min payload 256 B (`compress.rs:25,32`)
+### L-5 — Compression: zstd level 1, min payload 256 B
+
+> **UPDATE 2026-10-19 — PWD-T7:** closed. The protocol has no compression
+> (`SHEKYL_P2P_PROTOCOL.md` PWD-T7): the codec, its FFI exports and the C++
+> shim are deleted, and `0x10` is an undefined flag bit refused at ingress.
+> Nothing is compressed, so nothing interacts with the padding defences below,
+> and there is no inflation ceiling above the packet limit.
 
 Compression before encryption is a **CRIME/BREACH-class oracle** whenever an
 attacker can influence part of a compressed message and observe its length.
 The Dandelion++ work established a 16 KiB/s per-node ceiling and fixed-size
 padding for noise carriers — compression interacts directly with those
-size-based defences. Whether compression is disabled on the paths where
-padding is load-bearing is a question the relay rounds may not have asked,
-because compression lives in the Levin layer and padding lives above it.
-
-`DECOMPRESSED_MAX_SIZE = 128 MB` (`compress.rs:29`) is also a zip-bomb
-ceiling that exceeds the packet ceiling.
+size-based defences.
 
 ### L-6 — Handshake carries `my_port`, `rpc_port`, `peer_id`
 

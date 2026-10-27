@@ -118,15 +118,18 @@ namespace nodetool
     A node's own dialable address reaches peers only as one uniform member
     of its disclosure sample, so a handshake has no field that could join
     a hidden identity to a clearnet one. A peer that still sends `address`
-    is read with the key ignored. */
+    is read with the key ignored.
+
+    No `support_flags` either (Rick, 2026-10-19): with compression gone the
+    word negotiated nothing, and a field always sent as zero is a sentinel.
+    Capability negotiation, if the protocol ever needs one, is designed at
+    the genesis wire freeze. */
   struct basic_node_data
   {
     uuid network_id;
-    uint32_t support_flags;
 
     BEGIN_KV_SERIALIZE_MAP()
       KV_SERIALIZE_VAL_POD_AS_BLOB(network_id)
-      KV_SERIALIZE_OPT(support_flags, (uint32_t)0)
     END_KV_SERIALIZE_MAP()
   };
 
@@ -220,28 +223,8 @@ namespace nodetool
   // establishes for free what the ping spent a connection to learn.
   // The command id is retired, never reused.
 
-  /************************************************************************/
-  /*                                                                      */
-  /************************************************************************/
-  struct COMMAND_REQUEST_SUPPORT_FLAGS
-  {
-    const static int ID = P2P_COMMANDS_POOL_BASE + 7;
+  // COMMAND_REQUEST_SUPPORT_FLAGS (1007) is deleted with the support-flags
+  // word it carried (Rick, 2026-10-19). The command id is retired, never
+  // reused.
 
-    struct request_t
-    {
-      BEGIN_KV_SERIALIZE_MAP()
-      END_KV_SERIALIZE_MAP()    
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct response_t
-    {
-      uint32_t support_flags;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(support_flags)
-      END_KV_SERIALIZE_MAP()    
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
 }

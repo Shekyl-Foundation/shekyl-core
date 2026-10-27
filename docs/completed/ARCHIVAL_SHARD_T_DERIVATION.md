@@ -2043,6 +2043,11 @@ This closes `SHT-7`'s circularity: `L`'s span no longer rests on a byte count fr
 retired segment, and `W` was not selected inside a span that was sized on it. More
 days refine the rate; under the ruling they move `L` only through the falsifier.
 
+**UPDATE 2026-10-22 (C2-R2).** The live heaviest shard is `W` plus
+`TX_WEIGHT_LIMIT` (148,614 B), so 3,148,614 B. The table above, and §10.8's
+19.7 s and 96.8 s, stay the readings at 3,149,400 B. The lines are unchanged,
+and `L = 4` is unchanged.
+
 Reproduce, from `rust/`:
 
 ```text

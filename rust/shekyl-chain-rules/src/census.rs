@@ -56,8 +56,8 @@ pub enum Flag {
 }
 
 /// How a row is held: not yet, by a rule type `validate` runs, by a rule
-/// type this crate enforces at another site, by construction, by a Rust
-/// crate below the validator, or by the C++ ingest driver until cutover.
+/// type this crate enforces at another site, by construction, or by a Rust
+/// crate below the validator.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RowStatus {
     /// No rule yet; the row is counted in the denominator only.
@@ -69,21 +69,19 @@ pub enum RowStatus {
     /// enforces it at a site other than the per-block stages, so no
     /// per-block coverage could ever contain it (`CHAIN_RULES_SLICE_3.md`
     /// Q4). The first is CEN-E5, run once by the writer at open
-    /// (`ReleaseAnchors::conflict_with`); CEN-A1 and CEN-A4 take this
-    /// status at cutover, when their C++ holder leaves and the Rust ingest
-    /// driver decides acceptance topology.
+    /// (`ReleaseAnchors::conflict_with`).
     ///
     /// The registry entry carries the citation — `enforced_at(path, "test")`
     /// — and that is the only copy. The path is compile-pinned; the gate
     /// asserts the named `#[test]` is defined in this crate (rule 47). A
     /// string stored on the value would be a second copy nothing reads, free
-    /// to drift from the entry. Same shape as [`HeldByCxx`](Self::HeldByCxx).
+    /// to drift from the entry. Same shape as
+    /// [`HeldByStore`](Self::HeldByStore), whose test is in the holder.
     ///
-    /// Excluded from [`RuleSet::enforced`](crate::RuleSet::enforced) for the
-    /// same reason a hold is (per-block completeness is measured over what
-    /// `validate` evaluates) and, unlike a hold, **counted as Rust-enforced**
-    /// by the gate: `held_by_cxx` would be false here — the enforcement is
-    /// not the C++'s.
+    /// Excluded from [`RuleSet::enforced`](crate::RuleSet::enforced), since
+    /// per-block completeness is measured over what `validate` evaluates,
+    /// and **counted as enforced** by the gate: the enforcement is this
+    /// crate's, at another site.
     EnforcedAt,
     /// The row holds **by construction**: no runtime site evaluates it
     /// because the type system (or the wire's parser) makes the violation
@@ -122,37 +120,29 @@ pub enum RowStatus {
     /// side of it. Four at mint: CEN-K1a and CEN-K2 (`AltChain::build`
     /// links an alt entry to a recorded row or refuses it), CEN-K3
     /// (`insert_alt_block` refuses a held hash) and CEN-K8 (`HeaderRecord`
-    /// carries no `coins_generated` for an alt entry to disturb).
+    /// carries no `coins_generated` for an alt entry to disturb). The same
+    /// status holds the rows the **switch** enforces — CEN-K5, K5b, K6 and
+    /// K7, held by `shekyl-chain-ingest`, the store's single writer, whose
+    /// switch sequences promotion, the fork choice's match and the demoted
+    /// rows (DRS-E5 a5) — and the two acceptance-topology rows its
+    /// **router** holds, CEN-A1 and CEN-A4 (DRS-X PR 2): like the store, a
+    /// crate the validator does not import, which is what the status names.
     ///
     /// The registry entry cites the crate and the test that proves the
     /// holder refuses — `held_by_store("<crate>", "<test>")` — and the gate
     /// asserts a `#[test] fn <test>` is **defined** in that crate's `src/`
     /// or `tests/`, never merely that the token appears (the same shape as
-    /// [`HeldByCxx`](Self::HeldByCxx); a `#[test]` is to a Rust crate what
-    /// `GENERATE_AND_PLAY` is to `core_tests`). Nothing the compiler can
-    /// pin from here: the holder is outside this crate by construction.
+    /// [`EnforcedAt`](Self::EnforcedAt), whose test is in this crate).
+    /// Nothing the compiler can pin from here: the holder is outside this
+    /// crate by construction.
     ///
     /// Not `by_construction`: that status is a claim about a **type** in
     /// this crate with a falsifier in this crate, and a runtime test in
     /// another crate is neither. Not `enforced_at`: that site is this
     /// crate's. Excluded from [`RuleSet::enforced`](crate::RuleSet::enforced)
     /// as both are (per-block completeness is what `validate` evaluates),
-    /// and **counted as Rust-enforced** by the gate, printed as its own
-    /// figure — unlike a C++ hold it has no expiry.
+    /// and **counted as enforced** by the gate, printed as its own figure.
     HeldByStore,
-    /// Acceptance topology the C++ ingest driver decides — where a block
-    /// *goes* (`ALREADY_EXISTS`, `ORPHANED`), not whether it is valid — and
-    /// so not a predicate `validate` can evaluate (`CHAIN_RULES_SLICE_1.md`
-    /// §4, Q2). The registry entry cites the C++ **test that proves the
-    /// holder refuses** (`held_by_cxx("<file>", "<test>")`); the gate asserts
-    /// the file exists and contains the test, never merely that a token
-    /// appears (PWD-B10). A **deferral with a known expiry**: the cited file
-    /// leaves the tree at cutover, the gate goes red, and the row is
-    /// re-classified then — held rows cannot outlive the C++ silently.
-    /// Excluded from [`RuleSet::enforced`](crate::RuleSet::enforced), so
-    /// completeness is measured over what the validator can hold; the gate
-    /// prints the subtraction beside the fixed denominator.
-    HeldByCxx,
 }
 
 mod sealed {
@@ -182,8 +172,8 @@ pub trait Row:
 
 /// `RowStatus` from an entry's status token. A status other than `pending`,
 /// `implemented(path)`, `enforced_at(path, "test")`,
-/// `by_construction(path, "falsifier")`, `held_by_store("crate", "test")` or
-/// `held_by_cxx("file", "test")` is a macro error at the entry.
+/// `by_construction(path, "falsifier")` or `held_by_store("crate", "test")`
+/// is a macro error at the entry.
 macro_rules! census_status {
     (pending) => {
         $crate::census::RowStatus::Pending
@@ -199,9 +189,6 @@ macro_rules! census_status {
     };
     (held_by_store($krate:literal, $test:literal)) => {
         $crate::census::RowStatus::HeldByStore
-    };
-    (held_by_cxx($file:literal, $test:literal)) => {
-        $crate::census::RowStatus::HeldByCxx
     };
 }
 
@@ -219,10 +206,7 @@ macro_rules! census_status {
 /// the registry-generic face of `Rule`, so the one macro serves both enums.
 macro_rules! census_pin {
     (pending, $name:ident, $var:ident) => {};
-    // Nothing the compiler can pin: the holder is a C++ test. The gate
-    // asserts the cited file exists and contains the test (rule 47).
-    (held_by_cxx($file:literal, $test:literal), $name:ident, $var:ident) => {};
-    // Nothing the compiler can pin either: the holder is a crate this one
+    // Nothing the compiler can pin: the holder is a crate this one
     // does not import (DRS-D12 (i)). The gate asserts the named `#[test]`
     // is defined in that crate (rule 47).
     (held_by_store($krate:literal, $test:literal), $name:ident, $var:ident) => {};
@@ -255,9 +239,8 @@ macro_rules! census_pin {
 ///
 /// Per entry, `status` is `pending`, `implemented(rust::path::to::RuleType)`,
 /// `enforced_at(rust::path::to::RuleType, "test_fn_in_this_crate")`,
-/// `by_construction(rust::path::to::Property, "falsifier_test")`,
-/// `held_by_store("shekyl-chain-store", "test_fn_in_that_crate")` or
-/// `held_by_cxx("tests/…​.cpp", "gen_test_name")`.
+/// `by_construction(rust::path::to::Property, "falsifier_test")` or
+/// `held_by_store("shekyl-chain-store", "test_fn_in_that_crate")`.
 /// Entries must be listed in census §4 order restricted to the flag; the gate
 /// asserts this so `index()` is census-derived. The variant name is the census
 /// id without its `CEN-` prefix (`CEN-D1b` → `D1b`).
@@ -346,10 +329,13 @@ census_rows! {
     /// the gate holds the bijection.
     pub enum CenRow: Consensus {
         // 4.A Acceptance topology (`CHAIN_RULES_SLICE_1.md` §3–§4)
-        // A1/A4: where a block goes, not whether it is valid. The C++ ingest
-        // driver holds these rows until cutover; each entry cites the core
-        // test that observes the outcome byte.
-        A1 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known_is_already_exists"),
+        // A1/A4: where a block goes, not whether it is valid. The ingest
+        // service's router holds them (DRS-X PR 2, `router.rs`): a held
+        // block is `AlreadyHeld`, and a block whose parent neither table
+        // holds is `Unlinked` and not stored. The router is in
+        // `shekyl-chain-ingest`, a crate this one does not import, which is
+        // what `held_by_store` names; `enforced_at` would be a site here.
+        A1 held_by_store("shekyl-chain-ingest", "an_arrival_this_node_holds_is_already_held"),
         A2 implemented(crate::rules::topology::A2),
         // A3: subsumed by B4's empty-witness arm — never its own rule
         // (slice 1 Q3). The validator has no witness-less entry to guard:
@@ -358,10 +344,7 @@ census_rows! {
         // non-empty root with nothing supplied refuses as B4 (slice 8
         // row 10). The second guard the C++ needed is unrepresentable.
         A3 by_construction(crate::block::Candidate, "cen_b4_non_empty_root_with_nothing_supplied_is_refused"),
-        A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_invalid_prev_id"),
-        // A5: subsumed by the 4.G weight rule (slice 7); the pre-parse fast
-        // path is the driver's DoS choice, not a row.
-        A5 pending,
+        A4 held_by_store("shekyl-chain-ingest", "an_arrival_whose_parent_is_unheld_is_unlinked_and_not_stored"),
         // A6/A7: wire invariants (R8 arm B), held by `Block::from_bytes`:
         // no `Block` exists that the parser refused, so no rule sees one.
         // The path is the type — `use` cannot name an associated function.
@@ -489,7 +472,7 @@ census_rows! {
         H16 implemented(crate::rules::tx::H16),
         H17 implemented(crate::rules::tx::H17),
         H18 implemented(crate::rules::tx::H18),
-        H19 pending,
+        H19 implemented(crate::rules::tx::H19),
         H20 implemented(crate::rules::tx::H20),
         H21 implemented(crate::rules::tx::H21),
         H22 implemented(crate::rules::tx::H22),
@@ -583,13 +566,12 @@ census_rows! {
         J26 implemented(crate::rules::tx_emission_against::J26),
         // J29–J37 (minted 2026-10-12, STAGED): the serve-credit bundle's
         // admission checks, a block-level section (`ARCHIVAL_SERVE_CREDIT_SPEC.md`
-        // §9.1). The pure verifier that names them as refusals is built
-        // (`crate::archival::check_section`, `crate::archival::verify_bundle`)
-        // and nothing on the connect path calls it, so no rule type is
-        // bound and each row is `pending`: in the denominator, in no
-        // coverage. `SO-D12`'s cutover increment binds them. J28 is filed
-        // with the bond-post key-shape rows above, where increment 3
-        // minted it. J17 stays unregistered (bucket 3).
+        // §9.1). The pure verifier is built, and increment 4a adds the rule
+        // types `rules::bundle_admission::J29` through `J37`. They are not
+        // bound: no `implemented` entry names them, nothing on the connect
+        // path calls `judge_bundles`, and each row stays `pending` until 4b.
+        // J28 is filed with the bond-post key-shape rows above. J17 stays
+        // unregistered (bucket 3).
         J29 pending,
         J30 pending,
         J31 pending,
@@ -606,20 +588,28 @@ census_rows! {
         // store (DRS-D12 (i)), so each is `held_by_store` with the test in
         // `shekyl-chain-store` that proves it (E5-18). The alt tier's own
         // rows are `enforced_at` its sites: the height-0 claim (K1b), the
-        // tier as the set and order of its steps (K4). K5–K7, K9 and K10
-        // are promotion's and the pop path's (slice 10).
+        // tier as the set and order of its steps (K4). K5–K7 are the
+        // switch's — the single writer's sequencing of the store, in
+        // `shekyl-chain-ingest` (DRS-E5 a5; `DRS_E5_POOL_ALT_PRUNE.md`
+        // §2.3), `held_by_store` with the switch test that proves each. K9
+        // is the pool's (PR-b). CEN-K10 is deleted (bucket 3, 2026-10-17):
+        // reorg retention parked an alternative chain's bodies in the pool,
+        // and the store holds them now.
         K1a held_by_store("shekyl-chain-store", "a_chain_through_two_alt_entries_reaches_a_recorded_row"),
         K1b enforced_at(crate::rules::alt::K1b, "a_height_zero_claim_is_refused_before_anything_is_read"),
         K2 held_by_store("shekyl-chain-store", "the_orphan_is_unlinked_at_the_first_unheld_hash"),
         K3 held_by_store("shekyl-chain-store", "insert_of_a_held_hash_and_remove_of_an_absent_one_are_refusals"),
         K4 enforced_at(crate::rules::alt::K4, "the_cheap_tier_evaluates_the_header_ladder_and_the_alt_arms_and_nothing_else"),
-        K5 pending,
-        K5b pending,
-        K6 pending,
-        K7 pending,
+        K5 held_by_store("shekyl-chain-ingest", "a_promoted_block_that_fails_validate_rolls_back_and_removes_its_suffix"),
+        K5b held_by_store("shekyl-chain-ingest", "a_tampered_witness_on_an_alt_row_fails_promotion_k5b"),
+        K6 held_by_store("shekyl-chain-ingest", "a_heavier_branch_switches_and_equals_the_branch_connected_directly"),
+        K7 held_by_store("shekyl-chain-ingest", "a_checkpoint_forced_switch_discards_the_demoted_chain"),
         K8 held_by_store("shekyl-chain-store", "an_alt_row_has_no_supply_word"),
-        K9 pending,
-        K10 pending,
+        // K9: an alternative block's bodies (DRS-E5 PR-b b4; the review of
+        // #1102, B1) — held by the store beside its row and promoted from
+        // it, then offered to the pool door for relay. Witnessed by the
+        // switch over the production stack.
+        K9 held_by_store("shekyl-chain-ingest", "an_alternatives_bodies_are_the_stores_and_its_promotion_needs_no_pool"),
         // 4.L Storage layer (constraints that reject chain data at write time)
         // L1 is the validator's (C2-R8 Q6): the intra-block half of key-image
         // uniqueness, run in `validate` after every slot; SI-1 is the store's
@@ -637,6 +627,11 @@ census_rows! {
         L7 implemented(crate::archival::L7),
         L8 by_construction(crate::archival::accrue, "l8_an_accrual_that_overflows_is_a_corrupt_view"),
         L9 by_construction(crate::archival::apply_slash, "l9_slashing_a_shard_the_record_does_not_hold_is_a_corrupt_view"),
+        // L10: retired by PDM-Q12 (the freeze retires; the commitment
+        // exists at ingest), so no Rust rule is ever written for it. The
+        // live C++ freeze still enforces it, which keeps the row in bucket 1
+        // and here; the flip deletes that C++ and moves the row to bucket 3
+        // with this entry (DAEMON_REDB_STORE.md, the S-ARCH row; SAR-5).
         L10 pending,
         // L11/L12: growth has no rule type (E3 Round 1, `drain.rs`'s module
         // docs). The rows still bind, because B5 judges the next header's
@@ -647,10 +642,13 @@ census_rows! {
         L11 by_construction(crate::drain::tree_after, "l11_an_accepted_output_left_out_of_the_tree_is_a_different_root"),
         L12 by_construction(crate::drain::tree_after, "l12_a_coinbase_leaf_joins_at_sixty_and_a_listed_leaf_at_ten_and_neither_earlier"),
         // L14: the mechanism is ruled and built (every keyed write is a
-        // declared verb); the five per-site semantics are R8b-3…R8b-7, and
-        // R8b-3…R8b-6 carry no ruling — the porters chose the verbs
-        // (`DRS_E4_ARCHIVAL_WRITER.md`: "L14's four sites are C2-R8b's to
-        // name"). Pending until each is named.
+        // declared verb). The three sites that outlive SO-D12 are named
+        // against their write (DX-Q9, the census row): bond records insert
+        // at the join and replace after it (SI-19, SI-20), the accrual row
+        // is an intended upsert held to one row (SI-23), and curve-root
+        // heights insert (SI-4). Pending until SO-D12's merged increment
+        // deletes the other two, the pass bits and the witness rows
+        // (`ARCHIVAL_SETTLEMENT_WRITER.md` §16.3).
         L14 pending,
         // L16: the as-of-height holdings fold is `holds_shard_at` (DRS-E4
         // commit 2), evaluated by this crate's `ChainView` walk over A1's
@@ -658,9 +656,22 @@ census_rows! {
         // nothing. The falsifier holds the verdict's logged slash to what
         // the fold reads back.
         L16 by_construction(shekyl_archival_retention::holds_shard_at, "l16_the_slash_the_verdict_logs_is_what_the_held_at_height_fold_reads"),
-        // 4.M Mempool admission (the `kept_by_block` axis) — consensus-flagged rows
-        M2 pending,
-        M8 pending,
+        // L17: the draw count. One row per connected height, derived by the
+        // count phase and written by the store (`SO-D12` increment 3). A
+        // windowless schedule records a zero row; every other failure is a
+        // `Corrupt` that halts the writer.
+        L17 implemented(crate::archival::L17),
+        // 4.M Mempool admission — consensus-flagged rows. M2: the pool door
+        // runs the full NIC set because it *is* the validator's per-slot
+        // judgement at `Lone` (DRS-E5 PR-b b2); held by `shekyl-mempool`,
+        // witnessed where the real spends live — the door and a block of
+        // one agree, row for row.
+        M2 held_by_store("shekyl-chain-ingest", "the_door_and_a_block_of_one_agree_on_every_spend"),
+        // M8: the pool's verification cache — the `(reference, height,
+        // root)` triple the proof verified against, held in memory and
+        // consulted at a reconcile (b4); an open trusts no anchor from the
+        // file. `form` never consults it (`E5-Q8`).
+        M8 held_by_store("shekyl-chain-ingest", "a_reconcile_on_the_same_anchor_skips_the_proof_and_an_open_verifies_it"),
     }
 }
 
@@ -671,15 +682,28 @@ census_rows! {
     /// bucket ≠ 3, in census order. Applied by `AdmissionPolicy` (DRS-E5);
     /// a `PolicyRow` cannot enter a `RuleCoverage` — the type forbids it.
     pub enum PolicyRow: Policy {
-        // 4.M Mempool admission (the `kept_by_block` axis) — policy-flagged rows
-        M1 pending,
-        M3 pending,
-        M4 pending,
-        M5 pending,
-        M6 pending,
-        M7 pending,
-        M9 pending,
-        M10 pending,
-        M11 pending,
+        // 4.M Mempool admission — policy-flagged rows. M3, M4 and M5 are
+        // `policy_form`'s (the third call of the pool door, DRS-E5 PR-b b1).
+        // CEN-M11 is deleted (bucket 3): redundant with M3, which refuses a
+        // zero-fee transaction at the one door.
+        // M1, M6 and M7 are the pool's own (`shekyl-mempool`, b2): a
+        // duplicate is not judged; the chain's spent images (M6) and the
+        // pool's (M7) are one I7 read through the decorator. Witnessed over
+        // real spends in `shekyl-chain-ingest`.
+        M1 held_by_store("shekyl-chain-ingest", "the_pool_holds_one_spender_per_image_refuses_duplicates_and_the_floor"),
+        M3 implemented(crate::policy::M3),
+        M4 implemented(crate::policy::M4),
+        M5 implemented(crate::policy::M5),
+        M6 held_by_store("shekyl-chain-ingest", "the_door_and_a_block_of_one_agree_on_every_spend"),
+        M7 held_by_store("shekyl-chain-ingest", "the_pool_holds_one_spender_per_image_refuses_duplicates_and_the_floor"),
+        // M9: the submit engine's seam over the Rust pool
+        // (`shekyl_daemon_rpc::RustPoolShim`), prepared, not routed; its
+        // commit is the pool door. Witnessed by the engine end to end.
+        M9 held_by_store("shekyl-chain-ingest", "the_engine_submits_through_the_rust_pool_and_its_door"),
+        // M10: the pool's eviction (b4) — the weight limit the chain
+        // derives, the cheapest per weight first, the template's refusals;
+        // no timer (an entry leaves when its reference leaves CEN-I11's
+        // window, at the reconcile).
+        M10 held_by_store("shekyl-mempool", "the_cheapest_leave_first_under_weight_pressure"),
     }
 }

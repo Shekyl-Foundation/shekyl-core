@@ -40,6 +40,10 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import drs_artifact as A  # noqa: E402
 
+# scripts/armed_lever.py, one directory up from this file.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import armed_lever  # noqa: E402
+
 ROOT = A.ROOT
 
 
@@ -80,16 +84,17 @@ def _dir_bytes(path, apparent):
                               text=True).stdout.split()[0])
 
 
-def _resolved_sync_line(log_path):
+def _resolved_sync_line(log_path, since=0):
     """The daemon's own report of the durability flags it resolved, or None.
 
-    This is the readback. The daemon logs it at startup for A4, so the harness no
-    longer has to settle for recording the argv it imposed: it can check what the
-    node says it opened with. Read from the SUBJECT's log, the subject being the
-    process whose numbers the artifact carries.
+    This is the readback. The daemon logs it at startup for A4; the daemon takes
+    no sync-mode option (IG-Q4), so the readback is the only record of the
+    durability a run had. Read from `since` (a byte offset), so an appended log
+    yields this spawn's report and not an earlier run's.
     """
     try:
         with open(log_path, encoding="utf-8", errors="replace") as fh:
+            fh.seek(since)
             for line in fh:
                 if "Database sync: flags=0x" in line:
                     # The daemon colourises its log. Strip the escapes: an artifact
@@ -99,6 +104,32 @@ def _resolved_sync_line(log_path):
     except OSError:
         return None
     return None
+
+
+def daemon_executable(path):
+    """Absolute path of the daemon binary.
+
+    The child is spawned with its cwd set to the data directory, so a relative
+    argv0 would be resolved there. Preflight and both launches name this path,
+    which is the file the operator pointed at.
+    """
+    return os.path.abspath(path)
+
+
+def _readback_refusal(who, log_path, line):
+    """The refusal for a spawn's resolved sync line, or None when it is DRS-D9.
+
+    `who` is the spawn (`generating seed`, `subject`). A missing line names the
+    rebuild, because a daemon predating the A4 report does not write one.
+    """
+    reasons = A.resolved_line_refusals(line)
+    if not reasons:
+        return None
+    hint = ""
+    if line is None:
+        hint = " A daemon predating the A4 report will not log it — rebuild."
+    return (f"the {who}'s resolved sync report is not DRS-D9's:\n  "
+            + "\n  ".join(reasons) + hint + f"\nsee {log_path}")
 
 
 def _loadavg():
@@ -240,8 +271,9 @@ def measure(args):
     os.makedirs(work, exist_ok=True)
     seed_dir = os.path.abspath(args.seed_dir or os.path.join(work, "seed"))
     os.makedirs(seed_dir, exist_ok=True)
-    pre = A.measurement_preflight(sync_mode=args.sync_mode, daemon=args.daemon,
-        work_dir=work, seed_dir=seed_dir, disk_class=args.disk_class)
+    daemon = daemon_executable(args.daemon)
+    pre = A.measurement_preflight(daemon=daemon, work_dir=work,
+        seed_dir=seed_dir, disk_class=args.disk_class)
     if pre:
         _fail("refusing to start:\n  " + "\n  ".join(pre))
     addr = mining_address(args.cargo_timeout)
@@ -253,18 +285,24 @@ def measure(args):
         shutil.rmtree(seed_dir, ignore_errors=True)
         os.makedirs(seed_dir)
 
-    common = ["--regtest", "--keep-fakechain", "--fixed-difficulty=1",
-              f"--db-sync-mode={args.sync_mode}", "--allow-local-ip", "--no-igd",
-              "--non-interactive", f"--log-level={args.log_level}"]
+    # The grammar's spellings (INPUT_GRAMMAR.md §5). Nothing is wiped on start
+    # (a fresh chain is a fresh data directory). The daemon takes no sync-mode
+    # option (IG-Q4): its constant is DRS-D9's, and each run's durability is the
+    # one its daemon reports at start.
+    common = ["--network", "regtest", "--dev-difficulty", "1", "--p2p-local",
+              "--tor", "off", "--log-level", args.log_level]
     (sp2p, srpc, bp2p, brpc), held = _reserve_ports(4)
     for sk in held:
         sk.close()
 
-    def spawn(tag, d, argv_extra):
+    def spawn(tag, d, argv_extra, offline=False):
         p2p, rpcp = (sp2p, srpc) if tag == "seed" else (bp2p, brpc)
-        argv = [args.daemon] + common + [f"--data-dir={d}",
-                                         f"--p2p-bind-port={p2p}",
-                                         f"--rpc-bind-port={rpcp}"] + argv_extra
+        # An offline daemon has no clearnet connector, and the grammar refuses
+        # a listen endpoint for a connector that is off.
+        net = ["--clearnet", "off"] if offline else ["--clearnet-listen",
+                                                     f"127.0.0.1:{p2p}"]
+        argv = [daemon] + common + ["--data-dir", d] + net + [
+            "--rpc-admin-listen", f"127.0.0.1:{rpcp}"] + argv_extra
         with open(os.path.join(work, f"{tag}.argv"), "a", encoding="utf-8") as fh:
             fh.write(" ".join(argv) + "\n")
         # The SUBJECT's log is truncated; the seed's is appended. That asymmetry is
@@ -288,11 +326,27 @@ def measure(args):
 
     # Genesis alone is height 1; N generated blocks leave height N+1.
     target_h = args.height + 1
-    proc, _ = spawn("seed", seed_dir, ["--offline"])
+    # The generating seed calls generateblocks, an armed test lever: it is
+    # served only with the dev-rpc switch set (RPC_CHANNEL.md section 6.1).
+    # The daemon announces the switch at start. The seed log is appended, so
+    # the check reads only the bytes this spawn wrote.
+    seed_log = os.path.join(work, "seed.log")
+    seed_from = armed_lever.log_size(seed_log)
+    proc, _ = spawn("seed", seed_dir, [armed_lever.FLAG], offline=True)
     with running(proc, srpc) as seed:
         if not seed.ready:
             _fail(f"seed RPC on 127.0.0.1:{srpc} never came up "
                   f"(exited={seed.proc.poll()}); see {work}/seed.log and seed.argv")
+        if not armed_lever.announced_since(seed_log, seed_from):
+            _fail(f"the generating seed did not announce {armed_lever.ANNOUNCEMENT!r} "
+                  f"at start; see {work}/seed.log")
+        # The seed is the subject's binary. Its readback, taken before any block
+        # is generated, refuses a daemon without DRS-D9 before the generation
+        # is spent. The subject's own line is checked again before its sync.
+        seed_line = _resolved_sync_line(seed_log, seed_from)
+        seed_refusal = _readback_refusal("generating seed", seed_log, seed_line)
+        if seed_refusal:
+            _fail(seed_refusal)
         have_h = _rpc(srpc, "get_info")["result"]["height"]
         seed_reused = have_h > 1
         gen_blocks, gen_wall = 0, None
@@ -319,13 +373,14 @@ def measure(args):
     if seed_h <= 1:
         _fail(f"seed holds only height {seed_h}; nothing to sync")
 
+    # This restart serves the chain. It calls no lever, so it stays unarmed.
     proc, _ = spawn("seed", seed_dir, [])
     with running(proc, srpc) as seed:
         if not seed.ready:
             _fail(f"networked seed RPC on 127.0.0.1:{srpc} never came up "
                   f"(exited={seed.proc.poll()}); see {work}/seed.log and seed.argv")
         subj_proc, subj_argv = spawn(
-            "subject", subj_dir, [f"--add-exclusive-node=127.0.0.1:{sp2p}"])
+            "subject", subj_dir, ["--p2p-closed-peer", f"127.0.0.1:{sp2p}"])
         with running(subj_proc, brpc) as subj:
             if not subj.ready:
                 _fail(f"subject RPC on 127.0.0.1:{brpc} never came up "
@@ -334,10 +389,14 @@ def measure(args):
                       f"here (tens of seconds to minutes) and is EXCLUDED from the "
                       f"measurement, so raising --startup-timeout does not affect "
                       f"any number.")
-            # The durability READBACK, taken from the subject's own startup report
-            # now that it is up. Read here rather than at the end so a subject that
-            # dies mid-sync still fails on the specific missing thing.
-            resolved_line = _resolved_sync_line(os.path.join(work, "subject.log"))
+            # The durability readback, from this spawn's startup line, before the
+            # sync is timed. The line's sync_mode integer is the open; a line that
+            # is not db_nosync is not a measurement of DRS-D9.
+            subject_log = os.path.join(work, "subject.log")
+            resolved_line = _resolved_sync_line(subject_log)
+            subject_refusal = _readback_refusal("subject", subject_log, resolved_line)
+            if subject_refusal:
+                _fail(subject_refusal)
             # Denominator: first successful get_info to height == seed height.
             # CPU is a delta over the same window. A single end-of-run read
             # would carry startup / RandomX init / store open, which the wall
@@ -374,12 +433,6 @@ def measure(args):
         store_bytes = _dir_bytes(subj_dir, apparent=False)
         store_apparent = _dir_bytes(subj_dir, apparent=True)
 
-    if resolved_line is None:
-        _fail(f"the subject never reported its resolved durability flags in "
-              f"{work}/subject.log. That line is the readback for DRS-D9, so no "
-              f"artifact is written: recording the mode we ASKED for while unable to "
-              f"see what the daemon opened with is the posture-by-omission A4 "
-              f"forbids. A daemon predating the A4 report will not log it — rebuild.")
     if load_at_start is None or load_at_end is None:
         _fail("could not read the load average from os.getloadavg(). System load is a "
               "condition of a wall-time measurement, so no artifact is written rather "
@@ -412,19 +465,16 @@ def measure(args):
         "thresholds_frozen_at": A.FROZEN_AT,
         "durability": {
             "policy": "DRS-D9 full-fsync-per-commit",
-            "sync_mode": args.sync_mode,
+            # OBSERVED: the mode the subject reported resolving at start. The
+            # daemon takes no sync-mode option, so there is nothing imposed to
+            # record beside it.
+            "sync_mode": A.resolved_sync_mode(resolved_line),
             "imposed_argv": subj_argv[1:],
-            # OBSERVED, from the daemon's own report of the flags it resolved.
-            # Earlier revisions recorded False with an honest note that no readback
-            # existed -- `mdb_env_get_flags` is in-process and nothing logged the
-            # resolved mode. A4's enabler landed that log line, so the posture is
-            # measured rather than imposed-and-validated.
             "observed": True,
             "resolved_log_line": resolved_line,
             "readback": "the subject daemon's own startup report of the flags it "
-                        "resolved. The mode is still validated against an allowed set "
-                        "BEFORE spawning, because a refusal that comes before the run "
-                        "costs nothing and this line only arrives after it",
+                        "resolved; the generating seed's report, from the same binary, "
+                        "is checked against DRS-D9 before any block is generated",
         },
         "environment": {
             "loadavg_1m_at_start": load_at_start[0],
@@ -447,7 +497,7 @@ def measure(args):
             "prunable_region": A.PRUNABLE_ABSENT,
             "verify_exercised": {"pow": True, "fcmp_pp": False},
             "verify_note": "PoW longhash is computed and checked for every block with "
-                           "no nettype bypass; --fixed-difficulty lowers the TARGET "
+                           "no nettype bypass; --dev-difficulty lowers the TARGET "
                            "only. generateblocks produces coinbase-only blocks, so "
                            "FCMP++ verification is not exercised at all.",
             "seed_height": int(seed_h),
@@ -559,8 +609,8 @@ def main():
     m.add_argument("--out", required=True)
     m.add_argument("--daemon", default=os.path.join(ROOT, "build/bin/shekyld"))
     m.add_argument("--work-dir", required=True)
-    m.add_argument("--sync-mode", default="safe")
-    m.add_argument("--log-level", type=int, default=1)
+    m.add_argument("--log-level", default="info",
+                   choices=["error", "warn", "info", "debug", "trace"])
     m.add_argument("--startup-timeout", type=float, default=1200.0)
     m.add_argument("--gen-timeout", type=float, default=14400.0)
     m.add_argument("--sync-timeout", type=float, default=14400.0)

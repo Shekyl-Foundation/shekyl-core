@@ -86,6 +86,8 @@ async fn seal_pending_drain(engine: &SharedEngine, tx: &shekyl_wire::Transaction
                 tx_bytes,
                 funding_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(1)],
                 state: PendingPostState::Pending,
+                reference_height: shekyl_types::BlockHeight::from_raw(1_000_000),
+                terminal: None,
             },
             shekyl_types::ChainCount::from_raw(1),
             block.generation(),

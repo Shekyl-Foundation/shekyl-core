@@ -225,9 +225,8 @@ mod live {
 
     use shekyl_p_fetch::{FetchError, RequestHeader, Stall, Timeouts};
     use shekyl_sp_t3_spike::harness::{Apparatus, APPARATUS_ANCHOR_HASH, APPARATUS_ANCHOR_HEIGHT};
-    use shekyl_tor_control_client::control::{CircId, ControlReply};
+    use shekyl_tor_control_client::control::{CircId, EventReceiver};
     use shekyl_types::BlockHeight;
-    use tokio::sync::mpsc::UnboundedReceiver;
 
     /// `SF-D6`'s stall-retry budget inside one read.
     const STALL_RETRIES: u32 = 2;
@@ -257,10 +256,19 @@ mod live {
 
     /// Take what tor has reported so far, and what it reports in the next
     /// moment: a stream's last events trail the fetch that caused them.
-    async fn drain(rx: &mut UnboundedReceiver<ControlReply>, into: &mut Observed) {
+    /// Fold every held event into `into`. The sink is bounded, so a window that
+    /// produced more events than it holds loses the newest; the verdict reads
+    /// circuit ids out of these, so a lossy window fails here instead of being
+    /// graded.
+    async fn drain(rx: &mut EventReceiver, into: &mut Observed) {
         while let Ok(Some(reply)) = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await {
             into.fold(&reply);
         }
+        assert_eq!(
+            rx.dropped(),
+            0,
+            "the event sink dropped events, so this window's circuits are incomplete"
+        );
     }
 
     /// Fetch under `header` until it completes, repeating the header on a

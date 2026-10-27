@@ -87,6 +87,13 @@ fn receipt_seed_of(tag: [u8; 32], half: u8) -> [u8; 32] {
     seed
 }
 
+/// The identity-key seed `tag`'s persona signs with — for
+/// [`signed_as`](super::signed_as), which keys and signs a slot as a
+/// persona other than the one the post names.
+pub(super) fn identity_seed_of(tag: [u8; 32]) -> [u8; 64] {
+    seed_of(tag, IDENTITY_HALF)
+}
+
 fn seed_of(tag: [u8; 32], half: u8) -> [u8; 64] {
     let mut seed = [half; 64];
     seed[..32].copy_from_slice(&tag);

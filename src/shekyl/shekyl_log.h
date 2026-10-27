@@ -107,6 +107,8 @@ extern "C" {
 #define SHEKYL_LOG_ERR_INVALID_UTF8              -10
 #define SHEKYL_LOG_ERR_SUBSCRIBER_INSTALL        -11
 #define SHEKYL_LOG_ERR_ALREADY_INSTALLED         -12
+#define SHEKYL_LOG_ERR_WRITER_THREAD             -13
+#define SHEKYL_LOG_ERR_FLUSH_DEADLINE            -14
 
 // -----------------------------------------------------------------
 // Init / shutdown
@@ -143,12 +145,20 @@ int32_t shekyl_log_init_file(
     uint64_t max_bytes,
     uint32_t max_files);
 
-/// Flush the non-blocking writer and drop its worker-thread guard.
-/// The subscriber itself remains installed — `tracing`'s global
-/// default has no un-install — so filter and emit calls continue to
-/// function after shutdown, they just write to stderr/the file
-/// without the async buffer. Safe to call multiple times.
+/// Flush every sink's queue (bounded, as `shekyl_log_flush` with the
+/// crate's `FLUSH_WITHIN`) and stop the writer threads. The subscriber
+/// itself remains installed — `tracing`'s global default has no
+/// un-install — so filter and emit calls still work, but a line logged
+/// after shutdown has no writer and is dropped. Safe to call multiple
+/// times.
 void shekyl_log_shutdown(void);
+
+/// Wait until every line logged before this call has reached its sink
+/// (each sink's queue written and flushed), or until `within_ms`
+/// milliseconds pass; never longer. Returns `SHEKYL_LOG_OK`, or
+/// `SHEKYL_LOG_ERR_FLUSH_DEADLINE` when lines were still queued at the
+/// deadline. With no logger initialized it returns `SHEKYL_LOG_OK`.
+int32_t shekyl_log_flush(uint32_t within_ms);
 
 /// Pin the tracing-forwarder call ordering (init first) and install
 /// idempotency as a process-global one-shot.

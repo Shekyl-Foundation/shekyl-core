@@ -537,7 +537,7 @@ impl CurveTreeClient {
             }
         }
 
-        let cutoff = Self::drained_through(reference.height);
+        let cutoff = crate::reference::drained_through(reference.height);
         let drained_count = self.drained_leaf_count_at(cutoff);
         for (input, position) in inputs.iter().zip(&positions) {
             if *position >= drained_count {

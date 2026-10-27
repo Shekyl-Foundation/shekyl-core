@@ -17,7 +17,9 @@ use crate::harness::fixture::{
 use crate::harness::{assert_refused, defined, MockChain};
 use crate::rule_set::{FakechainSchedule, RuleSet, SettlementEpochBlocks};
 use crate::rules::tx_against::{ReferenceContext, I15};
-use crate::rules::tx_emission_against::judge_emission_claim;
+use crate::rules::tx_emission_against::{
+    emission_epoch_facts, judge_emission_claim, EmissionEpochStanding,
+};
 use crate::rules::TxContext;
 use crate::verdict::{Locus, TxSlot};
 use shekyl_types::archival::SigmaWorkMilli;
@@ -58,8 +60,9 @@ fn short_epochs() -> RuleSet {
     )
 }
 
-/// Off the `Emission` class the sequence judges nothing and records all
-/// three rows vacuous — the row-was-evaluated recording `run_tx` makes.
+/// Off the `Emission` class the sequence judges nothing and records its
+/// two rows vacuous — the row-was-evaluated recording `run_tx` makes. J26
+/// is `form`'s since 2026-10-16 (`judge_proofs`), recorded there.
 #[test]
 fn off_the_emission_class_the_rows_are_recorded_vacuous() {
     let chain = spendable_chain();
@@ -78,7 +81,10 @@ fn off_the_emission_class_the_rows_are_recorded_vacuous() {
         .expect("a spend is not judged here");
         assert!(coverage.contains(CenRow::J23));
         assert!(coverage.contains(CenRow::J25));
-        assert!(coverage.contains(CenRow::J26));
+        assert!(
+            !coverage.contains(CenRow::J26),
+            "J26 is not this sequence's"
+        );
     });
 }
 
@@ -228,4 +234,90 @@ fn j25_refuses_a_claim_the_verify_rejects_and_one_with_no_reference() {
             assert!(!coverage.contains(CenRow::J25));
         }
     });
+}
+
+/// `emission_epoch_facts` gathers only what CEN-J23's citing gate admits.
+/// A claimed epoch far past the tip has no budget and no `Σwork`, and its
+/// slash pass's universe lies above the tip: it is `Unsettled` with the
+/// absent rows — the facts the engine refuses a premature claim on — never
+/// a fault. The settled epoch beside it is gathered.
+#[test]
+fn the_epoch_facts_of_an_unsettled_epoch_are_absent_rows_and_no_snapshot() {
+    let rules = short_epochs();
+    let epoch = SettlementEpoch::from_raw(CLAIMED);
+    let settled_at = rules.settlement_schedule().slash_deadline_height(CLAIMED);
+    let chain = chain_of(settled_at + 6)
+        .with_close(epoch, AtomicUnits::from_raw(1_000_000))
+        .with_gather(epoch, SigmaWorkMilli::from_raw(1_000));
+    let premature = 50;
+    assert!(
+        rules.settlement_schedule().slash_deadline_height(premature) > settled_at + 6,
+        "the premature epoch settles above the tip"
+    );
+    let persona = shekyl_types::PCanonicalId::from_bytes([0x23; 32]);
+    let facts = chain.with_view(|view| {
+        emission_epoch_facts(&view, &rules, &persona, &[CLAIMED, premature])
+            .expect("a premature claim is a fact, not a fault")
+    });
+    assert_eq!(facts.len(), 2);
+    assert!(
+        matches!(
+            &facts[0].standing,
+            EmissionEpochStanding::Settled {
+                sigma_work_milli: 1_000,
+                budget: 1_000_000,
+                ..
+            }
+        ),
+        "the settled epoch is gathered: {:?}",
+        facts[0].standing
+    );
+    assert_eq!(facts[1].settlement_epoch, premature);
+    assert_eq!(
+        facts[1].standing,
+        EmissionEpochStanding::Unsettled {
+            sigma_work_milli: None,
+            budget: None,
+        },
+        "nothing is gathered for it"
+    );
+}
+
+/// An epoch below the claim window at the connecting height is `Expired`,
+/// its own state, and nothing is read for it: here its budget and `Σwork`
+/// are still planted, and the facts carry neither. Its rows may be retired
+/// on a real store, where a read below the claimable floor is SI-32; a
+/// caller that read them would turn an expired claim into a fault. The
+/// oldest epoch the window still admits is not expired. Red edit: drop the
+/// window check in `emission_epoch_facts` — the planted epoch then answers
+/// `Settled` with its rows.
+#[test]
+fn an_epoch_below_the_claim_window_is_expired_and_unread() {
+    let rules = short_epochs();
+    let schedule = rules.settlement_schedule();
+    let expired = SettlementEpoch::from_raw(CLAIMED);
+    // The first block at which `CLAIMED + 1` is the oldest claimable epoch.
+    let connecting = schedule.open_height(CLAIMED + 1 + shekyl_archival_retention::MAX_CLAIM_AGE_W);
+    let chain = chain_of(connecting)
+        .with_close(expired, AtomicUnits::from_raw(1_000_000))
+        .with_gather(expired, SigmaWorkMilli::from_raw(1_000));
+    let persona = shekyl_types::PCanonicalId::from_bytes([0x23; 32]);
+    let facts = chain.with_view(|view| {
+        emission_epoch_facts(&view, &rules, &persona, &[CLAIMED, CLAIMED + 1])
+            .expect("an expired epoch is a fact, not a fault")
+    });
+    assert_eq!(
+        facts[0].standing,
+        EmissionEpochStanding::Expired {
+            window_floor: SettlementEpoch::from_raw(CLAIMED + 1)
+        }
+    );
+    assert_eq!(
+        facts[1].standing,
+        EmissionEpochStanding::Unsettled {
+            sigma_work_milli: None,
+            budget: None,
+        },
+        "the oldest claimable epoch is read, and has no planted rows"
+    );
 }

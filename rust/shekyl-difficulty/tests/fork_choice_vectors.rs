@@ -61,6 +61,7 @@ fn fork_choice_cases_pin_the_rule() {
         let expected = match u64_field(case, "verdict") {
             0 => ForkChoiceVerdict::KeepCurrent,
             1 => ForkChoiceVerdict::Switch,
+            2 => ForkChoiceVerdict::ForcedSwitch,
             other => panic!("{name}: unknown expected verdict {other}"),
         };
         assert_eq!(verdict, expected, "case {name}");

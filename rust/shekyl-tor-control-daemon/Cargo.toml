@@ -20,17 +20,13 @@ publish = false
 # depends on shekyl-tor-control-wallet: the wallet's supervisor, vanguards and
 # cross-incarnation state are exactly what the daemon posture must not touch.
 shekyl-tor-control-client = { path = "../shekyl-tor-control-client" }
-# One-worker multi-thread runtime, recorded on the thread ledger. Not
-# `current_thread`: the actor's tasks must keep running between FFI calls.
-shekyl-runtime = { path = "../shekyl-runtime" }
 
 # The start sequence: tokio for the bootstrap-gate timers and teardown bounds;
 # kameo for the control actor handle it drives. Both are the workspace's
 # established actor stack (shekyl-engine-core, shekyl-tor-control-wallet).
-# The facade's runtime is `shekyl-runtime` (one worker, multi-thread). These
-# features are the actor's: timers, process, and the I/O the control client
-# uses on that runtime.
-tokio = { version = "1", features = ["net", "io-util", "sync", "time", "rt", "rt-multi-thread", "macros", "process", "fs"] }
+# It runs on the caller's runtime (the daemon's). These features are the
+# actor's: timers, process, and the I/O the control client uses.
+tokio = { version = "1", features = ["net", "io-util", "sync", "time", "rt", "macros", "process", "fs"] }
 kameo = { workspace = true }
 # OS CSPRNG for the per-boot hs-id seed mint — the same source the wallet's
 # vanguard rotation draws from.

@@ -18,11 +18,12 @@
 
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
+use crate::fault::FormAttempt;
 use crate::harness::fixture::{
     anchored_on, candidate_on, coinbase, join_market, listed, persona, point, serve_credit_only,
-    spendable_chain, BOND_FLOOR,
+    signed_as, spendable_chain, BOND_FLOOR,
 };
-use crate::harness::{assert_refused, defined, formed_on, judged, MockChain, MockView};
+use crate::harness::{assert_refused, defined, formed_on, judge_on, judged, MockChain, MockView};
 use crate::rule_set::RuleSet;
 use crate::rules::tx_bond::{judge_bond_post, judge_serve_credit_bond};
 use crate::rules::TxContext;
@@ -55,11 +56,13 @@ fn j4_refuses_a_credit_for_a_persona_with_no_record_at_the_pool_slot() {
     let chain = spendable_chain();
     chain.with_view(|view| {
         assert_refused(
-            defined(tx_against(
+            judged(tx_against(
                 &serve_credit_only(P),
                 TxSlot::Lone,
                 &view,
                 &RuleSet::GENESIS,
+                None,
+                FormAttempt::FIRST,
             )),
             CenRow::J4,
             Locus::Input {
@@ -208,8 +211,10 @@ fn judged_post(tx: &Transaction, view: &MockView<'_, '_>) -> (Verdict<()>, RuleC
 
 /// `tx`'s bond slot carrying `key` — edited **after** [`anchored_on`] has
 /// signed, so the slot's signature is the persona's and only the key the
-/// verifier reads has moved. J13 runs before I18, so the row that fires is
-/// the key's, not the signature's.
+/// verifier reads has moved. Through the view-bound sequence J13 runs
+/// before I18's row was read here, so the row that fires is the key's,
+/// not the signature's; through the two stages whole, I18 is `form`'s
+/// since 2026-10-16 and fires first (`j13_refuses_the_same_mis_keyed_join_listed`).
 fn slot_carrying(mut tx: Transaction, key: Vec<u8>) -> Transaction {
     let slot = tx
         .prefix
@@ -260,7 +265,14 @@ fn j13_a_join_signs_with_the_identity_key() {
                 "{name}: a refusal records nothing"
             );
             assert_refused(
-                defined(tx_against(&tx, TxSlot::Lone, &view, &RuleSet::GENESIS)),
+                judged(tx_against(
+                    &tx,
+                    TxSlot::Lone,
+                    &view,
+                    &RuleSet::GENESIS,
+                    None,
+                    FormAttempt::FIRST,
+                )),
                 CenRow::J13,
                 POST_VIN,
             );
@@ -271,7 +283,14 @@ fn j13_a_join_signs_with_the_identity_key() {
             assert!(coverage.contains(row), "{row} recorded on the fixture join");
         }
         assert_refused(
-            defined(tx_against(&join, TxSlot::Lone, &view, &RuleSet::GENESIS)),
+            judged(tx_against(
+                &join,
+                TxSlot::Lone,
+                &view,
+                &RuleSet::GENESIS,
+                None,
+                FormAttempt::FIRST,
+            )),
             CenRow::J27,
             Locus::Tx { slot: TxSlot::Lone },
         );
@@ -338,7 +357,14 @@ fn j14_refuses_a_join_whose_statics_fail_the_verify() {
                 "{name}: a refusal records nothing"
             );
             assert_refused(
-                defined(tx_against(&tx, TxSlot::Lone, &view, &RuleSet::GENESIS)),
+                judged(tx_against(
+                    &tx,
+                    TxSlot::Lone,
+                    &view,
+                    &RuleSet::GENESIS,
+                    None,
+                    FormAttempt::FIRST,
+                )),
                 CenRow::J14,
                 POST_VIN,
             );
@@ -374,18 +400,21 @@ fn j14_refuses_the_same_under_bonded_join_listed() {
     });
 }
 
-/// The same mis-keyed join listed first in a block is refused by
-/// `validate` on J13 at `Listed(0)`'s vin — before the signatures (I18)
-/// and before the fold writes the record.
+/// The mis-keyed join listed first in a block, through both stages. A
+/// join the stranger keyed **and signed** ([`signed_as`]) passes `form`
+/// — I18 verifies under the key the slot carries — and `validate` refuses
+/// it on J13 at `Listed(0)`'s vin, before the fold writes the record. The
+/// join whose key was swapped after the poster signed is doubly invalid,
+/// and since the signature sequence moved into `form` (2026-10-16,
+/// `CHAIN_RULES_CRATE.md` §4.6) the row that fires is I18's at the input,
+/// ahead of every view-bound row — *was* J13's, when `validate` ran I18
+/// after the post rows (the C++'s order within `check_tx_inputs`).
 #[test]
 fn j13_refuses_the_same_mis_keyed_join_listed() {
     let chain = spendable_chain();
     let stranger = persona([0x6b; 32]);
     chain.with_view(|view| {
-        let join = slot_carrying(
-            anchored_on(&chain, join_market(BOND_KI, WHO)),
-            stranger.identity,
-        );
+        let join = signed_as(anchored_on(&chain, join_market(BOND_KI, WHO)), &stranger);
         let formed = formed_on(&chain, candidate_on(&chain, vec![join]));
         assert_refused(
             judged(validate(
@@ -401,6 +430,21 @@ fn j13_refuses_the_same_mis_keyed_join_listed() {
             },
         );
     });
+    // At input 0, not the post's slot: the signing preimage binds every
+    // input's key (CEN-I17), so the swap at slot 1 breaks the funding
+    // spend's signature first, in input order.
+    let swapped = slot_carrying(
+        anchored_on(&chain, join_market(BOND_KI, WHO)),
+        stranger.identity,
+    );
+    assert_refused(
+        judge_on(&chain, candidate_on(&chain, vec![swapped])),
+        CenRow::I18,
+        Locus::Input {
+            slot: TxSlot::Listed(0),
+            input: 0,
+        },
+    );
 }
 
 // ---- CEN-J15: a compact join's held shards at the parent --------------
@@ -484,7 +528,14 @@ fn j15_admits_a_compact_join_of_a_closed_final_priced_shard() {
                 assert!(coverage.contains(row), "{name}: {row} recorded");
             }
             assert_refused(
-                defined(tx_against(&tx, TxSlot::Lone, &view, &RuleSet::GENESIS)),
+                judged(tx_against(
+                    &tx,
+                    TxSlot::Lone,
+                    &view,
+                    &RuleSet::GENESIS,
+                    None,
+                    FormAttempt::FIRST,
+                )),
                 CenRow::J27,
                 Locus::Tx { slot: TxSlot::Lone },
             );
@@ -564,7 +615,14 @@ fn j15_refuses_a_compact_join_one_operand_from_admissible() {
                 "{name}: a refusal records nothing"
             );
             assert_refused(
-                defined(tx_against(&join, TxSlot::Lone, &view, &RuleSet::GENESIS)),
+                judged(tx_against(
+                    &join,
+                    TxSlot::Lone,
+                    &view,
+                    &RuleSet::GENESIS,
+                    None,
+                    FormAttempt::FIRST,
+                )),
                 CenRow::J15,
                 POST_VIN,
             );
@@ -642,7 +700,14 @@ fn j16_a_release_with_no_record_is_refused_on_the_missing_record() {
                 "{name}: a refusal records nothing"
             );
             assert_refused(
-                defined(tx_against(&tx, TxSlot::Lone, &view, &RuleSet::GENESIS)),
+                judged(tx_against(
+                    &tx,
+                    TxSlot::Lone,
+                    &view,
+                    &RuleSet::GENESIS,
+                    None,
+                    FormAttempt::FIRST,
+                )),
                 CenRow::J16,
                 POST_VIN,
             );
@@ -677,7 +742,14 @@ fn j18_a_reinstate_with_no_record_is_refused_on_the_missing_record() {
                 "{name}: a refusal records nothing"
             );
             assert_refused(
-                defined(tx_against(&tx, TxSlot::Lone, &view, &RuleSet::GENESIS)),
+                judged(tx_against(
+                    &tx,
+                    TxSlot::Lone,
+                    &view,
+                    &RuleSet::GENESIS,
+                    None,
+                    FormAttempt::FIRST,
+                )),
                 CenRow::J18,
                 POST_VIN,
             );
@@ -703,7 +775,14 @@ fn an_unnamed_kind_is_l7_in_the_sequence() {
             );
         }
         assert_refused(
-            defined(tx_against(&tx, TxSlot::Lone, &view, &RuleSet::GENESIS)),
+            judged(tx_against(
+                &tx,
+                TxSlot::Lone,
+                &view,
+                &RuleSet::GENESIS,
+                None,
+                FormAttempt::FIRST,
+            )),
             CenRow::L7,
             POST_VIN,
         );

@@ -35,7 +35,8 @@ WI-RPC-2a (`restore_wallet`), WI-RPC-3 (proofs), Phase 4c
 filter), PR-SM-2 (`sign_message` / `verify_message`), PR-SJ-3
 (`abandon_tx`), SJ-DQ-7 (`get_tx_note` / `set_tx_note`), and WI-RPC-5
 (archival principal staking actions: `stake_in`, `get_drain_balance`,
-`drain`), and PR-C (the composed exit: `unstake`, `collect_unstaked`;
+`drain`), WR-Q2 (`acknowledge_staking_outcome`), and PR-C (the
+composed exit: `unstake`, `collect_unstaked`;
 `get_balance.staked` / `claimable_rewards` are live projections,
 no longer hardcoded zeros — and structurally absent, never `"0"`, when
 the staking seal is unreadable, with `get_wallet_info.staking` degrading
@@ -54,8 +55,13 @@ two-part completion fact), with the RESERVED→shipped reconciliation recorded i
 the OpenAPI census (a single overloaded verb was rejected for
 irreversible-step mis-selection; the sweep could not ride `drain`'s
 firewall-pinned active-persona shape). Codes `-29513..-29529`; the two
-dispatch dispositions (`-29521` released / `-29522` held) are distinct
-because they demand opposite client behavior. The claim-era names `claim`
+dispatch dispositions (`-29521` refused before sending, released /
+`-29522` sent and held until it lands or its end date passes) are
+distinct because they demand opposite client behavior. `staking_info`
+reports every staking record in flight (`in_flight`) and how each kind
+last ended without landing (`outcomes`); a held exit's `funds_return_at`
+is the height by which it has either completed or been withdrawn
+(`WALLET_RPC_STAKING_OUTCOMES.md`). The claim-era names `claim`
 and `get_stakes` are REJECTED, not pending (emission claims are
 engine-side; `principal_stakes()` is RPC-forbidden as the P↔principal
 edge). See the OpenAPI header registry and `docs/FOLLOWUPS.md`.

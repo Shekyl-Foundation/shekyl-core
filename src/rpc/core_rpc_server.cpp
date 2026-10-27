@@ -53,7 +53,6 @@ using namespace epee;
 #include "crypto/hash.h"
 #include "rpc/archival_claim_source.h"
 #include "rpc/archival_shard_coverage.h"
-#include "rpc/rpc_args.h"
 #include "core_rpc_server_error_codes.h"
 #include "p2p/net_node.h"
 #include "version.h"
@@ -88,19 +87,6 @@ namespace
 namespace cryptonote
 {
 
-  //-----------------------------------------------------------------------------------
-  void core_rpc_server::init_options(boost::program_options::options_description& desc)
-  {
-    command_line::add_arg(desc, arg_rpc_bind_port);
-    command_line::add_arg(desc, arg_rpc_restricted_bind_port);
-    command_line::add_arg(desc, arg_restricted_rpc);
-    // Daemon inbound RPC is Axum plaintext: no --rpc-login / --rpc-ssl*.
-    cryptonote::rpc_args::init_options(desc, /*any_cert_option=*/false, /*include_listener_tls_auth=*/false);
-    command_line::add_arg(desc, arg_rpc_max_connections_per_public_ip);
-    command_line::add_arg(desc, arg_rpc_max_connections_per_private_ip);
-    command_line::add_arg(desc, arg_rpc_max_connections);
-    command_line::add_arg(desc, arg_rpc_response_soft_limit);
-  }
   //------------------------------------------------------------------------------------------------------------------------------
   core_rpc_server::core_rpc_server(
       core& cr
@@ -108,57 +94,31 @@ namespace cryptonote
     )
     : m_core(cr)
     , m_p2p(p2p)
-    , disable_rpc_ban(false)
   {}
+  //-----------------------------------------------------------------------------------
+  // The origins the bridge hands every bridged handler (core_rpc_ffi.cpp).
+  // Two, so whether the caller is the host's administrator is an identity
+  // and not a flag beside one context (RPC_CHANNEL.md §6.1: host-only data;
+  // RT-O32: the origin carries the host flag only, and the grants stay in
+  // Rust). Addresses default-constructed: an origin asserts "an RPC
+  // client asked", never "this particular peer asked", and a context shared
+  // by every caller must not carry an address anything could score against
+  // (tests/unit_tests/rpc_restricted_gate.cpp).
+  namespace
+  {
+    const core_rpc_server::connection_context host_origin{};
+    const core_rpc_server::connection_context other_origin{};
+  }
+  const core_rpc_server::connection_context* rpc_origin(bool host)
+  {
+    return host ? &host_origin : &other_origin;
+  }
+  bool rpc_origin_is_host(const epee::net_utils::connection_context_base* ctx)
+  {
+    return ctx == &host_origin;
+  }
   core_rpc_server::~core_rpc_server()
   {
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::init(
-      const boost::program_options::variables_map& vm
-      , const bool restricted
-      , const std::string& port
-    )
-  {
-    m_restricted = restricted;
-
-    // Daemon: no inbound login/ssl flags. The connection-cap flags are read
-    // below and handed to the Rust listener, which validates
-    // (ConnLimits::checked) and enforces them.
-    auto rpc_config = cryptonote::rpc_args::process(vm, /*any_cert_option=*/false, /*include_listener_tls_auth=*/false);
-    if (!rpc_config)
-      return false;
-
-    std::string bind_ip_str = rpc_config->bind_ip;
-    std::string bind_ipv6_str = rpc_config->bind_ipv6_address;
-    if (restricted)
-    {
-      const auto restricted_rpc_port_arg = cryptonote::core_rpc_server::arg_rpc_restricted_bind_port;
-      const bool has_restricted_rpc_port_arg = !command_line::is_arg_defaulted(vm, restricted_rpc_port_arg);
-      if (has_restricted_rpc_port_arg && port == command_line::get_arg(vm, restricted_rpc_port_arg))
-      {
-        bind_ip_str = rpc_config->restricted_bind_ip;
-        bind_ipv6_str = rpc_config->restricted_bind_ipv6_address;
-      }
-    }
-    m_rpc_bind_ip = bind_ip_str;
-    // Two fields on purpose: the family's enable and its address are separate
-    // signals. An explicitly empty --rpc-bind-ipv6-address with --rpc-use-ipv6
-    // set must reach Rust as the empty string and be refused there, not be
-    // mistaken for "off" and silently dropped.
-    m_rpc_bind_ipv6 = bind_ipv6_str;
-    m_rpc_use_ipv6 = rpc_config->use_ipv6;
-    m_access_control_origins = rpc_config->access_control_origins;
-    disable_rpc_ban = rpc_config->disable_rpc_ban;
-
-    // Connection-limit args go to the Rust Axum listener as given; it
-    // validates them (ConnLimits::checked) where it enforces them, and logs
-    // the reason if they contradict each other.
-    m_rpc_max_connections = command_line::get_arg(vm, arg_rpc_max_connections);
-    m_rpc_max_connections_per_public_ip = command_line::get_arg(vm, arg_rpc_max_connections_per_public_ip);
-    m_rpc_max_connections_per_private_ip = command_line::get_arg(vm, arg_rpc_max_connections_per_private_ip);
-
-    return true;
   }
   //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::check_core_ready()
@@ -166,24 +126,6 @@ namespace cryptonote
     if(!m_p2p.get_payload_object().is_synchronized())
     {
       return false;
-    }
-    return true;
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::add_host_fail(const connection_context *ctx, unsigned int score)
-  {
-    if(!ctx || !ctx->m_remote_address.is_blockable() || disable_rpc_ban)
-      return false;
-
-    CRITICAL_REGION_LOCAL(m_host_fails_score_lock);
-    uint64_t fails = m_host_fails_score[ctx->m_remote_address.host_str()] += score;
-    MDEBUG("Host " << ctx->m_remote_address.host_str() << " fail score=" << fails);
-    if(fails > RPC_IP_FAILS_BEFORE_BLOCK)
-    {
-      auto it = m_host_fails_score.find(ctx->m_remote_address.host_str());
-      CHECK_AND_ASSERT_MES(it != m_host_fails_score.end(), false, "internal error");
-      it->second = RPC_IP_FAILS_BEFORE_BLOCK/2;
-      m_p2p.block_host(ctx->m_remote_address);
     }
     return true;
   }
@@ -260,7 +202,7 @@ namespace cryptonote
       res.status = "Already mining";
       return true;
     }
-    if(!miner.start(info.address, req.miner_address, static_cast<size_t>(req.threads_count), req.do_background_mining, req.ignore_battery))
+    if(!miner.start(info.address, req.miner_address, static_cast<size_t>(req.threads_count)))
     {
       res.status = "Failed, mining not started";
       LOG_PRINT_L0(res.status);
@@ -296,7 +238,6 @@ namespace cryptonote
 
     const miner& lMiner = m_core.get_miner();
     res.active = lMiner.is_mining();
-    res.is_background_mining_enabled = lMiner.get_is_background_mining_enabled();
     store_difficulty(m_core.get_blockchain_storage().get_difficulty_for_next_block(), res.difficulty, res.wide_difficulty, res.difficulty_top64);
 
     // RPC wire contract: mining_status.block_target is part of the public
@@ -317,16 +258,9 @@ namespace cryptonote
     // The retained original string, not a struct re-encode: since the
     // fork-(ii) address layout the struct alone cannot re-encode an
     // address (no msg_sign_pk field).
-    if (lMiner.is_mining() || lMiner.get_is_background_mining_enabled())
+    if (lMiner.is_mining())
       res.address = lMiner.get_mining_address_str();
     res.pow_algorithm = "RandomX";
-    if (res.is_background_mining_enabled)
-    {
-      res.bg_idle_threshold = lMiner.get_idle_threshold();
-      res.bg_min_idle_seconds = lMiner.get_min_idle_seconds();
-      res.bg_ignore_battery = lMiner.get_ignore_battery();
-      res.bg_target = lMiner.get_mining_target();
-    }
 
     res.status = CORE_RPC_STATUS_OK;
     return true;
@@ -359,34 +293,11 @@ namespace cryptonote
     return true;
   }
   //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::on_set_log_level(const COMMAND_RPC_SET_LOG_LEVEL::request& req, COMMAND_RPC_SET_LOG_LEVEL::response& res, const connection_context *ctx)
-  {
-    RPC_TRACKER(set_log_level);
-    if (req.level < 0 || req.level > 4)
-    {
-      res.status = "Error: log level not valid";
-      return true;
-    }
-    mlog_set_log_level(req.level);
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::on_set_log_categories(const COMMAND_RPC_SET_LOG_CATEGORIES::request& req, COMMAND_RPC_SET_LOG_CATEGORIES::response& res, const connection_context *ctx)
-  {
-    RPC_TRACKER(set_log_categories);
-    mlog_set_log(req.categories.c_str());
-    res.categories = mlog_get_categories();
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::on_get_transaction_pool(const COMMAND_RPC_GET_TRANSACTION_POOL::request& req, COMMAND_RPC_GET_TRANSACTION_POOL::response& res, const connection_context *ctx)
   {
     RPC_TRACKER(get_transaction_pool);
 
-    const bool restricted = caller_is_restricted(ctx);
-    const bool allow_sensitive = !restricted;
+    const bool allow_sensitive = caller_is_host(ctx);
 
     size_t n_txes = m_core.get_pool_transactions_count(allow_sensitive);
     if (n_txes > 0)
@@ -405,8 +316,7 @@ namespace cryptonote
   {
     RPC_TRACKER(get_transaction_pool_hashes);
 
-    const bool restricted = caller_is_restricted(ctx);
-    const bool allow_sensitive = !restricted;
+    const bool allow_sensitive = caller_is_host(ctx);
 
     size_t n_txes = m_core.get_pool_transactions_count(allow_sensitive);
     if (n_txes > 0)
@@ -426,8 +336,7 @@ namespace cryptonote
   {
     RPC_TRACKER(get_transaction_pool_stats);
 
-    const bool restricted = caller_is_restricted(ctx);
-    m_core.get_pool_transaction_stats(res.pool_stats, !restricted);
+    m_core.get_pool_transaction_stats(res.pool_stats, caller_is_host(ctx));
 
     res.status = CORE_RPC_STATUS_OK;
     return true;
@@ -436,9 +345,10 @@ namespace cryptonote
   bool core_rpc_server::on_stop_daemon(const COMMAND_RPC_STOP_DAEMON::request& req, COMMAND_RPC_STOP_DAEMON::response& res, const connection_context *ctx)
   {
     RPC_TRACKER(stop_daemon);
-    // FIXME: replace back to original m_p2p.send_stop_signal() after
-    // investigating why that isn't working quite right.
-    m_p2p.send_stop_signal();
+    // The one stop owner (DAEMON_CONFIG_CUTOVER.md §2.2 step 9) stops the
+    // RPC, drained, before the remnant; a stop from here would end run()
+    // under the handler answering this request.
+    shekyl_daemon_request_stop();
     res.status = CORE_RPC_STATUS_OK;
     return true;
   }
@@ -751,12 +661,10 @@ namespace cryptonote
     
     res.status = CORE_RPC_STATUS_OK;
 
-    if(m_core.get_nettype() != FAKECHAIN)
-    {
-      error_resp.code = CORE_RPC_ERROR_CODE_REGTEST_REQUIRED;
-      error_resp.message = "Regtest required when generating blocks";      
-      return false;
-    }
+    // An armed test lever (RPC_CHANNEL.md §6.1, RT-O9.2): the daemon's
+    // armed-lever switch, checked in Rust before this handler is entered, is
+    // its only gate. The network type never enables it (rule 71); `dev-rpc`
+    // is refused on mainnet (IG-Q49, RT-O36).
 
     // RESERVED / NOT SUPPORTED -- refuse rather than silently generate on the
     // tip, so a caller who asked for a specific parent is told, not guessed at.
@@ -830,12 +738,12 @@ namespace cryptonote
 
     CHECK_CORE_READY();
 
-    if(m_core.get_nettype() != FAKECHAIN)
-    {
-      error_resp.code = CORE_RPC_ERROR_CODE_REGTEST_REQUIRED;
-      error_resp.message = "Regtest required when injecting archival serve credit";
-      return false;
-    }
+    // An armed test lever (RPC_CHANNEL.md §6.1, RT-O9.2). Rust admits the
+    // call against the armed-lever switch before this handler is entered.
+    // The setter keeps a narrower restriction (RT-O36):
+    // Blockchain::regtest_inject_archival_serve_credit refuses unless the
+    // network is regtest. The network narrows what the switch enables; it
+    // never enables the lever. `dev-rpc` is refused on mainnet (IG-Q49).
 
     crypto::hash p_canonical_id;
     if (!epee::string_tools::hex_to_pod(req.p_canonical_id, p_canonical_id))
@@ -1113,76 +1021,6 @@ namespace cryptonote
     return true;
   }
   //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::on_get_limit(const COMMAND_RPC_GET_LIMIT::request& req, COMMAND_RPC_GET_LIMIT::response& res, const connection_context *ctx)
-  {
-    RPC_TRACKER(get_limit);
-
-    res.limit_down = shekyl_link_get_down();
-    res.limit_up = shekyl_link_get_up();
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::on_set_limit(const COMMAND_RPC_SET_LIMIT::request& req, COMMAND_RPC_SET_LIMIT::response& res, const connection_context *ctx)
-  {
-    RPC_TRACKER(set_limit);
-    // -1 = unlimited
-    //  0 = do not modify
-
-    if (req.limit_down > 0)
-    {
-      shekyl_link_set_down(req.limit_down);
-    }
-    else if (req.limit_down < 0)
-    {
-      if (req.limit_down != -1)
-      {
-        res.status = "Invalid parameter";
-        return true;
-      }
-      shekyl_link_set_down(-1);
-    }
-
-    if (req.limit_up > 0)
-    {
-      shekyl_link_set_up(req.limit_up);
-    }
-    else if (req.limit_up < 0)
-    {
-      if (req.limit_up != -1)
-      {
-        res.status = "Invalid parameter";
-        return true;
-      }
-      shekyl_link_set_up(-1);
-    }
-
-    res.limit_down = shekyl_link_get_down();
-    res.limit_up = shekyl_link_get_up();
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::on_out_peers(const COMMAND_RPC_OUT_PEERS::request& req, COMMAND_RPC_OUT_PEERS::response& res, const connection_context *ctx)
-  {
-    RPC_TRACKER(out_peers);
-    if (req.set)
-      m_p2p.change_max_out_public_peers(req.out_peers);
-    res.out_peers = m_p2p.get_max_out_public_peers();
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::on_in_peers(const COMMAND_RPC_IN_PEERS::request& req, COMMAND_RPC_IN_PEERS::response& res, const connection_context *ctx)
-  {
-    RPC_TRACKER(in_peers);
-    if (req.set)
-      m_p2p.change_max_in_public_peers(req.in_peers);
-    res.in_peers = m_p2p.get_max_in_public_peers();
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::on_pop_blocks(const COMMAND_RPC_POP_BLOCKS::request& req, COMMAND_RPC_POP_BLOCKS::response& res, const connection_context *ctx)
   {
     RPC_TRACKER(pop_blocks);
@@ -1207,20 +1045,20 @@ namespace cryptonote
   {
     RPC_TRACKER(relay_tx);
 
-    /* No restricted gate here, deliberately. `relay_tx` is admin-only, and
-       that is decided once — in Rust, at the only transport (`RESTRICTED_METHODS`
-       in `handlers/json_rpc.rs`), which answers 403 before this function is
-       entered. Membership of that list is pinned against an independent
-       specification by `restricted_method_list_matches_the_specification`, so
-       dropping `relay_tx` from it fails a test rather than opening this path.
+    /* No grant check here, deliberately. `relay_tx` is in the `node` grant,
+       and that is decided once — in Rust, at the only transport: the method
+       table's policy column (`shekyl-rpc-types` `methods.rs`, RW-Q7), read by
+       the request's authority before this function is entered. Every row's
+       policy is pinned against RPC_CHANNEL.md §6.1 by a test written from the
+       section, so moving `relay_tx` out of `node` fails a test rather than
+       opening this path.
 
-       This handler used to compute `m_restricted && ctx` and skip the
+       This handler once computed `m_restricted && ctx` and skipped the
        `relay_category::all` arm when it held. That expression could not hold in
-       any reachable state: the restricted listener never gets here, and on the
-       admin listener `m_restricted` is false. It was not defence in depth, it
-       was residue — and residue on a security-shaped expression costs more than
-       it looks, because two reviewers and this author each read it as a live
-       path and priced an exploit from it. RK-D6: the restricted posture is
+       any reachable state. It was not defence in depth, it was residue — and
+       residue on a security-shaped expression costs more than it looks,
+       because two reviewers and this author each read it as a live path and
+       priced an exploit from it. RK-D6: who may call a method is
        single-sourced in Rust. */
 
     bool failed = false;
@@ -1398,54 +1236,4 @@ namespace cryptonote
     res.status = CORE_RPC_STATUS_OK;
     return true;
   }
-  //------------------------------------------------------------------------------------------------------------------------------
-  const command_line::arg_descriptor<std::string, false, true, 2> core_rpc_server::arg_rpc_bind_port = {
-      "rpc-bind-port"
-    , "Port for RPC server"
-    , std::to_string(config::RPC_DEFAULT_PORT)
-    , {{ &cryptonote::arg_testnet_on, &cryptonote::arg_stagenet_on }}
-    , [](std::array<bool, 2> testnet_stagenet, bool defaulted, std::string val)->std::string {
-        if (testnet_stagenet[0] && defaulted)
-          return std::to_string(config::testnet::RPC_DEFAULT_PORT);
-        else if (testnet_stagenet[1] && defaulted)
-          return std::to_string(config::stagenet::RPC_DEFAULT_PORT);
-        return val;
-      }
-    };
-
-  const command_line::arg_descriptor<std::string> core_rpc_server::arg_rpc_restricted_bind_port = {
-      "rpc-restricted-bind-port"
-    , "Port for restricted RPC server"
-    , ""
-    };
-
-  const command_line::arg_descriptor<bool> core_rpc_server::arg_restricted_rpc = {
-      "restricted-rpc"
-    , "Restrict RPC to view only commands and do not return privacy sensitive data in RPC calls"
-    , false
-    };
-
-  const command_line::arg_descriptor<std::size_t> core_rpc_server::arg_rpc_max_connections_per_public_ip = {
-      "rpc-max-connections-per-public-ip"
-    , "Max RPC connections per public IP permitted"
-    , DEFAULT_RPC_MAX_CONNECTIONS_PER_PUBLIC_IP
-  };
-
-  const command_line::arg_descriptor<std::size_t> core_rpc_server::arg_rpc_max_connections_per_private_ip = {
-      "rpc-max-connections-per-private-ip"
-    , "Max RPC connections per private and localhost IP permitted"
-    , DEFAULT_RPC_MAX_CONNECTIONS_PER_PRIVATE_IP
-  };
-
-  const command_line::arg_descriptor<std::size_t> core_rpc_server::arg_rpc_max_connections = {
-      "rpc-max-connections"
-    , "Max RPC connections permitted"
-    , DEFAULT_RPC_MAX_CONNECTIONS
-  };
-
-  const command_line::arg_descriptor<std::size_t> core_rpc_server::arg_rpc_response_soft_limit = {
-      "rpc-response-soft-limit"
-    , "Max response bytes that can be queued, enforced at next response attempt"
-    , DEFAULT_RPC_SOFT_LIMIT_SIZE
-  };
 }  // namespace cryptonote

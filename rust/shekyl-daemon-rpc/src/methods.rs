@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Natively-served RPC methods (`docs/design/DAEMON_RPC_KV_CUTOVER.md` §3.3).
+//! Natively-served RPC methods (`docs/completed/DAEMON_RPC_KV_CUTOVER.md` §3.3).
 //!
 //! Each function is the whole method: it takes a facts trait, applies the
 //! method's rules, and returns the wire type from `shekyl-rpc-types`. No
@@ -116,6 +116,7 @@ impl std::error::Error for StoreFault {}
 pub struct RpcRefusal {
     pub code: i64,
     pub message: String,
+    pub data: Option<serde_json::Value>,
 }
 
 impl RpcRefusal {
@@ -127,6 +128,7 @@ impl RpcRefusal {
         Self {
             code: CORE_RPC_ERROR_CODE_WRONG_PARAM,
             message: message.to_owned(),
+            data: None,
         }
     }
 }
@@ -349,6 +351,7 @@ pub fn get_block(
                 code: CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
                 message: "Internal error: coinbase transaction in the block has the wrong type"
                     .to_owned(),
+                data: None,
             }))
         }
         Err(other) => return Err(RpcFault::Facts(other)),
@@ -367,6 +370,7 @@ pub fn get_block(
                 "Internal error: can't get block by hash. Hash = {}.",
                 request.hash
             ),
+            data: None,
         }));
     };
 
@@ -465,6 +469,7 @@ fn too_big_height(height: BlockHeight, chain: ChainCount) -> RpcFault {
             height.to_raw(),
             newest_block(chain).to_raw(),
         ),
+        data: None,
     })
 }
 
@@ -494,6 +499,7 @@ pub fn get_block_header_by_height(
                     "Internal error: can't get block by height. Height = {}.",
                     height.to_raw()
                 ),
+                data: None,
             }))
         }
         Err(other) => return Err(RpcFault::Facts(other)),
@@ -511,7 +517,7 @@ pub fn get_block_header_by_height(
 /// the low word as a number, the whole value as `0x`-prefixed minimal
 /// lowercase hex (`cryptonote::hex`), and the high word. The masking is the
 /// point, not an accident of casting.
-fn split_128(value: u128) -> (u64, String, u64) {
+pub(crate) fn split_128(value: u128) -> (u64, String, u64) {
     let low = u64::try_from(value & u128::from(u64::MAX)).expect("masked to 64 bits");
     let top = u64::try_from(value >> 64).expect("a u128 shifted right 64 fits in u64");
     (low, format!("0x{value:x}"), top)
@@ -545,7 +551,9 @@ fn block_header(facts: &crate::chain_facts::BlockHeaderFacts) -> BlockHeader {
         block_weight: facts.block_weight,
         num_txes: facts.num_txes,
         pow_hash: facts.pow_hash.map(HashHex::from_bytes),
-        long_term_weight: facts.long_term_weight,
+        // The wire omits a zero long-term weight; `None` (an alt block) is
+        // that omission.
+        long_term_weight: facts.long_term_weight.unwrap_or(0),
         miner_tx_hash: HashHex::from_bytes(facts.miner_tx_hash.to_bytes()),
         curve_tree_root: HashHex::from_bytes(facts.curve_tree_root.to_bytes()),
         attestation_root: HashHex::from_bytes(facts.attestation_root.to_bytes()),
@@ -679,11 +687,16 @@ where
 {
     let mut txs = Vec::new();
     let mut missed = Vec::new();
+    let mut unavailable = Vec::new();
 
     for (id, slot) in ids.iter().zip(slots.iter()) {
         let (pruned, prunable, prunable_hash, location, pruned_flag) = match slot {
             TxSlot::Missed => {
                 missed.push(HashHex::from_bytes(*id));
+                continue;
+            }
+            TxSlot::PoolUnavailable => {
+                unavailable.push(HashHex::from_bytes(*id));
                 continue;
             }
             TxSlot::Chain {
@@ -754,7 +767,7 @@ where
             prunable_as_hex: String::new(),
             prunable_hash: HashHex::from_bytes(*prunable_hash),
             archival_len: archival_len.to_raw(),
-            as_json: String::new(),
+            as_json: None,
             pruned: pruned_flag,
             double_spend_seen,
             location,
@@ -772,23 +785,23 @@ where
                 } else {
                     [pruned.as_slice(), prunable.as_slice()].concat()
                 };
-                entry.as_json = render(&blob, base_only).map_err(|code| {
+                entry.as_json = Some(render(&blob, base_only).map_err(|code| {
                     ProjectionFailed::Render(RenderFailed {
                         txid: entry.tx_hash.to_string(),
                         code,
                     })
-                })?;
+                })?);
             }
         } else {
             let full: Vec<u8> = [pruned.as_slice(), prunable.as_slice()].concat();
             entry.as_hex = hex::encode(&full);
             if request.decode_as_json {
-                entry.as_json = render(&full, false).map_err(|code| {
+                entry.as_json = Some(render(&full, false).map_err(|code| {
                     ProjectionFailed::Render(RenderFailed {
                         txid: entry.tx_hash.to_string(),
                         code,
                     })
-                })?;
+                })?);
             }
         }
 
@@ -799,6 +812,7 @@ where
         status: RpcStatus::ok(),
         txs,
         missed_tx: missed,
+        unavailable_tx: unavailable,
     })
 }
 
@@ -812,11 +826,12 @@ where
 /// declined to answer. `5b0c32f51` ruled the other way on the staking-read
 /// path — loud, never the degrade arm — and the one production caller of these
 /// methods passes `false`, so refusing costs nothing.
-fn pow_hash_or_refuse(requested: bool, restricted: bool) -> Result<bool, RpcFault> {
-    if requested && restricted {
+fn pow_hash_or_refuse(requested: bool, bounded: bool) -> Result<bool, RpcFault> {
+    if requested && bounded {
         return Err(RpcFault::Refused(RpcRefusal {
             code: CORE_RPC_ERROR_CODE_RESTRICTED,
             message: "fill_pow_hash is not available on the restricted listener".to_owned(),
+            data: None,
         }));
     }
     Ok(requested)
@@ -881,8 +896,8 @@ pub fn block_headers_range_request(
 pub fn fee_estimate_request(params: &serde_json::Value) -> Result<GetFeeEstimateRequest, RpcFault> {
     object_params(
         params,
-        "Wrong parameters, expected an object with optional grace_blocks \
-         (a non-negative integer)",
+        "Wrong parameters, expected an object with no members (grace_blocks was \
+         deleted at 3.57)",
     )
 }
 
@@ -923,9 +938,9 @@ const TIP_READ_ATTEMPTS: usize = 4;
 pub fn get_last_block_header(
     facts: &dyn ChainFacts,
     fill_pow_hash: bool,
-    restricted: bool,
+    bounded: bool,
 ) -> Result<GetLastBlockHeaderResponse, RpcFault> {
-    let pow = pow_hash_or_refuse(fill_pow_hash, restricted)?;
+    let pow = pow_hash_or_refuse(fill_pow_hash, bounded)?;
     let tip = facts.chain_tip()?;
     // **The readiness check the C++ had, and only here.** `CHECK_CORE_READY()`
     // guarded `on_get_last_block_header` alone among this slice's methods —
@@ -946,6 +961,7 @@ pub fn get_last_block_header(
             message: "Core is busy: this node is not synchronized, so it has \
                       no chain tip to report."
                 .to_owned(),
+            data: None,
         }));
     }
     // `chain_height` is the count; the tip's own height is one below it
@@ -980,6 +996,7 @@ pub fn get_last_block_header(
         message: "Core is busy: the chain advanced on every attempt to read \
                   its tip."
             .to_owned(),
+        data: None,
     }))
 }
 
@@ -992,13 +1009,14 @@ pub fn get_last_block_header(
 pub fn get_block_header_by_hash(
     facts: &dyn ChainFacts,
     request: &GetBlockHeaderByHashRequest,
-    restricted: bool,
+    bounded: bool,
 ) -> Result<GetBlockHeaderByHashResponse, RpcFault> {
-    let pow = pow_hash_or_refuse(request.fill_pow_hash, restricted)?;
-    if restricted && request.hashes.len() > RESTRICTED_BLOCK_COUNT {
+    let pow = pow_hash_or_refuse(request.fill_pow_hash, bounded)?;
+    if bounded && request.hashes.len() > RESTRICTED_BLOCK_COUNT {
         return Err(RpcFault::Refused(RpcRefusal {
             code: CORE_RPC_ERROR_CODE_RESTRICTED,
             message: "Too many block headers requested in restricted mode".to_owned(),
+            data: None,
         }));
     }
     let mut block_headers = Vec::with_capacity(request.hashes.len());
@@ -1019,9 +1037,9 @@ pub fn get_block_header_by_hash(
 pub fn get_block_headers_range(
     facts: &dyn ChainFacts,
     request: &GetBlockHeadersRangeRequest,
-    restricted: bool,
+    bounded: bool,
 ) -> Result<GetBlockHeadersRangeResponse, RpcFault> {
-    let pow = pow_hash_or_refuse(request.fill_pow_hash, restricted)?;
+    let pow = pow_hash_or_refuse(request.fill_pow_hash, bounded)?;
     // **Both endpoints are bounded against the tip before any per-height
     // work.** The C++ refused `start > end` *and* either endpoint at or past
     // the chain height in one O(1) test; the first port kept only the
@@ -1043,6 +1061,7 @@ pub fn get_block_headers_range(
         return Err(RpcFault::Refused(RpcRefusal {
             code: CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT,
             message: "Invalid start/end heights.".to_owned(),
+            data: None,
         }));
     }
     // The span, not the endpoints, is what the cap bounds — and it is computed
@@ -1055,10 +1074,11 @@ pub fn get_block_headers_range(
     // permits 1001 headers against a cap of 1000 — the same off-by-one the
     // deleted singular `hash` produced on `get_block_header_by_hash`, in the
     // second of the two methods that carry this cap. Found by porting both.
-    if restricted && span > RESTRICTED_BLOCK_HEADER_RANGE {
+    if bounded && span > RESTRICTED_BLOCK_HEADER_RANGE {
         return Err(RpcFault::Refused(RpcRefusal {
             code: CORE_RPC_ERROR_CODE_RESTRICTED,
             message: "Too many block headers requested.".to_owned(),
+            data: None,
         }));
     }
     let mut headers = Vec::new();
@@ -1087,28 +1107,17 @@ pub fn get_block_headers_range(
     })
 }
 
-/// `get_fee_estimate`.
-///
-/// The grace-blocks ceiling is refused **here**, before an FFI call, because
-/// the estimator's own bound is an assertion that throws — and a caller that
-/// learns "invalid parameter" can fix its request, where one that learns
-/// "internal error" cannot.
+/// `get_fee_estimate`: the served ladder at the tip, a function of chain
+/// state alone. The request has no members; one naming the retired
+/// `grace_blocks` is refused by [`fee_estimate_request`] (3.57, FL-R26).
 pub fn get_fee_estimate(
     facts: &dyn ChainFacts,
-    request: &GetFeeEstimateRequest,
+    GetFeeEstimateRequest {}: &GetFeeEstimateRequest,
 ) -> Result<GetFeeEstimateResponse, RpcFault> {
-    let ceiling = facts.fee_grace_blocks_max();
-    if request.grace_blocks > ceiling {
-        return Err(RpcFault::Refused(RpcRefusal {
-            code: CORE_RPC_ERROR_CODE_WRONG_PARAM,
-            message: format!("grace_blocks must not exceed {ceiling}"),
-        }));
-    }
-    let estimate = facts.fee_estimate(request.grace_blocks)?;
+    let estimate = facts.fee_estimate()?;
     Ok(GetFeeEstimateResponse {
         status: RpcStatus::ok(),
         fees: FeeTiers(estimate.fees),
-        quantization_mask: estimate.quantization_mask,
     })
 }
 
@@ -1249,7 +1258,6 @@ fn project_connection(c: &crate::core::ConnectionFacts, now: u64) -> ConnectionI
         current_download: kib_per_second(c.current_speed_down),
         avg_upload: average_kib(c.send_count, live_time),
         current_upload: kib_per_second(c.current_speed_up),
-        support_flags: c.claims_known.then_some(c.support_flags),
         // `hex::encode` is lowercase and undashed, which is exactly what
         // `epee::string_tools::pod_to_hex` produced for this uuid — and it is
         // the encoder this file already uses four times over.
@@ -1470,8 +1478,6 @@ pub(crate) mod tests {
         pub alt_declared_height: Option<BlockHeight>,
         /// The last `fill_pow_hash` `block_header_at` was asked for.
         pub asked_pow: AtomicBool,
-        /// The last `grace_blocks` `fee_estimate` was asked for.
-        pub asked_grace: AtomicU64,
         /// The hash `block_at` was asked for, when it was asked by hash.
         pub asked_hash: std::sync::Mutex<Option<[u8; 32]>>,
         /// When set, `block_at` faults instead of answering.
@@ -1522,18 +1528,8 @@ pub(crate) mod tests {
             })
         }
 
-        fn fee_grace_blocks_max(&self) -> u64 {
-            // The real constant's value, stated by the double rather than
-            // read through a link stub that answers 0 under test.
-            100
-        }
-
-        fn fee_estimate(&self, grace_blocks: u64) -> Result<FeeEstimate, FactsFault> {
-            self.asked_grace.store(grace_blocks, Ordering::SeqCst);
-            Ok(FeeEstimate {
-                fees: [10, 20, 40],
-                quantization_mask: 8,
-            })
+        fn fee_estimate(&self) -> Result<FeeEstimate, FactsFault> {
+            Ok(FeeEstimate { fees: [10, 20, 40] })
         }
 
         fn block_hash_at(&self, height: BlockHeight) -> Result<BlockHashAt, FactsFault> {
@@ -1581,7 +1577,7 @@ pub(crate) mod tests {
                 block: Some(BlockFacts {
                     header,
                     blob: vec![0x01, 0x02, 0xab, 0xff],
-                    json: "{\n  \"major_version\": 1\n}".to_owned(),
+                    json: Some("{\n  \"major_version\": 1\n}".to_owned()),
                     tx_hashes: vec![
                         TxHash::from_bytes(tagged_bytes(61)),
                         TxHash::from_bytes(tagged_bytes(67)),
@@ -1699,7 +1695,6 @@ pub(crate) mod tests {
             header: sample_header(),
             alt_declared_height: None,
             asked_pow: AtomicBool::new(false),
-            asked_grace: AtomicU64::new(u64::MAX),
             asked_hash: std::sync::Mutex::new(None),
             block_fault: None,
         }
@@ -1721,7 +1716,7 @@ pub(crate) mod tests {
             cumulative_difficulty: (1u128 << 71) + 99,
             reward: 600_000_000_000,
             block_weight: 98765,
-            long_term_weight: 87654,
+            long_term_weight: Some(87654),
             num_txes: 7,
             nonce: 305_419_896,
             major_version: 1,
@@ -1891,7 +1886,11 @@ pub(crate) mod tests {
                 e.prunable_as_hex, prunable_as_hex,
                 "prunable_as_hex @ {label}"
             );
-            assert_eq!(e.as_json, as_json, "as_json @ {label}");
+            assert_eq!(
+                e.as_json.as_deref(),
+                (!as_json.is_empty()).then_some(as_json),
+                "as_json @ {label}: absent unless rendered"
+            );
             assert_eq!(e.archival_len, tx.archival_len, "archival_len @ {label}");
         }
     }
@@ -1917,18 +1916,22 @@ pub(crate) mod tests {
         assert!(e.as_hex.is_empty(), "no concatenated form exists");
         assert_eq!(e.pruned_as_hex, pruned_hex);
         assert!(e.prunable_as_hex.is_empty());
-        assert_eq!(e.as_json, format!("{pruned_hex}|base_only=true"));
+        assert_eq!(
+            e.as_json.as_deref(),
+            Some(format!("{pruned_hex}|base_only=true").as_str())
+        );
         assert_eq!(e.archival_len, 0);
     }
 
-    /// Chain, pool and miss land in their own places: the first two become
-    /// entries carrying their location, the third only a `missed_tx` id.
+    /// Chain, pool, miss and an unavailable pool lookup land in their own
+    /// places: the first two become entries carrying their location, the
+    /// third only a `missed_tx` id, the fourth only an `unavailable_tx` id.
     #[test]
     fn chain_pool_and_missed_slots_are_projected_to_their_own_places() {
         let tx = stored_spend();
         let out = project_transactions(
             &req(true, false, false),
-            &[[0x01; 32], [0x02; 32], [0x03; 32]],
+            &[[0x01; 32], [0x02; 32], [0x03; 32], [0x04; 32]],
             &[
                 chain_slot(&tx),
                 TxSlot::Pool {
@@ -1937,9 +1940,10 @@ pub(crate) mod tests {
                     prunable_hash: [0x22; 32],
                     double_spend_seen: true,
                     relayed: true,
-                    received_timestamp: 1_700_000_001,
+                    received_timestamp: Some(1_700_000_001),
                 },
                 TxSlot::Missed,
+                TxSlot::PoolUnavailable,
             ],
             9,
             echo_render(),
@@ -1947,7 +1951,12 @@ pub(crate) mod tests {
         .expect("projection succeeds");
 
         assert_eq!(out.txs.len(), 2, "the miss must not become an entry");
-        assert_eq!(out.missed_tx.len(), 1);
+        assert_eq!(out.missed_tx, vec![HashHex::from_bytes([0x03; 32])]);
+        assert_eq!(
+            out.unavailable_tx,
+            vec![HashHex::from_bytes([0x04; 32])],
+            "an unavailable lookup is neither an entry nor a miss"
+        );
         assert!(matches!(out.txs[0].location, TxLocation::Mined { .. }));
         assert!(matches!(out.txs[1].location, TxLocation::Pooled { .. }));
         assert!(
@@ -2082,10 +2091,10 @@ pub(crate) mod tests {
         );
 
         let mut ours: serde_json::Value = serde_json::to_value(&out).unwrap();
-        // Head of the `get_version` chain (`_v33` = 3.56). A bump that
+        // Head of the `get_version` chain (`_v39` = 3.62). A bump that
         // forgets this include fails on `version` below.
         let mut oracle: serde_json::Value = serde_json::from_str(include_str!(
-            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v33.json"
+            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v39.json"
         ))
         .unwrap();
         for moving in ["consensus_constants_digest", "genesis_hash"] {
@@ -2140,7 +2149,6 @@ pub(crate) mod tests {
             header: sample_header(),
             alt_declared_height: None,
             asked_pow: AtomicBool::new(false),
-            asked_grace: AtomicU64::new(u64::MAX),
             asked_hash: std::sync::Mutex::new(None),
             block_fault: None,
         };
@@ -2206,6 +2214,7 @@ pub(crate) mod tests {
                 message: "Requested block height: 9000000 greater than current top block \
                           height: 1234566"
                     .to_owned(),
+                data: None,
             })
         );
     }
@@ -2338,11 +2347,13 @@ pub(crate) mod tests {
             );
         }
 
+        assert!(
+            fee_estimate_request(&json!({"grace_blocks": 5})).is_err(),
+            "grace_blocks was deleted at 3.57 and is refused, not ignored"
+        );
         assert_eq!(
-            fee_estimate_request(&json!({"grace_blocks": 5}))
-                .unwrap()
-                .grace_blocks,
-            5
+            fee_estimate_request(&json!({})).unwrap(),
+            GetFeeEstimateRequest::default()
         );
         assert_eq!(
             block_header_by_hash_request(&json!({"hashes": []}))
@@ -2399,7 +2410,7 @@ pub(crate) mod tests {
             out.blob, "0102abff",
             "the blob is lowercase hex of the bytes"
         );
-        assert_eq!(out.json, "{\n  \"major_version\": 1\n}");
+        assert_eq!(out.json.as_deref(), Some("{\n  \"major_version\": 1\n}"));
         assert_eq!(out.tx_hashes.len(), 2);
         assert_eq!(out.tx_hashes[0], HashHex::from_bytes(tagged_bytes(61)));
     }
@@ -2449,6 +2460,7 @@ pub(crate) mod tests {
             RpcFault::Refused(RpcRefusal {
                 code: CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
                 message: format!("Internal error: can't get block by hash. Hash = {unknown}."),
+                data: None,
             })
         );
     }
@@ -2465,6 +2477,7 @@ pub(crate) mod tests {
                 code: CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
                 message: "Internal error: coinbase transaction in the block has the wrong type"
                     .to_owned(),
+                data: None,
             })
         );
     }
@@ -2548,6 +2561,7 @@ pub(crate) mod tests {
                 message: "Requested block height: 9000000 greater than current top block \
                           height: 1234609"
                     .to_owned(),
+                data: None,
             })
         );
     }
@@ -2565,6 +2579,7 @@ pub(crate) mod tests {
             RpcFault::Refused(RpcRefusal {
                 code: CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
                 message: "Internal error: can't get block by height. Height = 5.".to_owned(),
+                data: None,
             })
         );
     }
@@ -2717,7 +2732,7 @@ pub(crate) mod tests {
             fill_pow_hash: false,
         };
         assert!(get_block_headers_range(&unsynced, &range, false).is_ok());
-        assert!(get_fee_estimate(&unsynced, &GetFeeEstimateRequest { grace_blocks: 0 }).is_ok());
+        assert!(get_fee_estimate(&unsynced, &GetFeeEstimateRequest::default()).is_ok());
         assert!(get_block_header_by_hash(
             &unsynced,
             &GetBlockHeaderByHashRequest {
@@ -2873,35 +2888,18 @@ pub(crate) mod tests {
         assert!(refusal.message.contains("999"), "{}", refusal.message);
     }
 
-    /// `grace_blocks` past the ceiling is refused before the FFI call, so a
-    /// caller learns "invalid parameter" rather than "internal error".
-    #[test]
-    fn an_oversized_grace_window_is_refused_before_the_facts_call() {
-        let f = facts(false, 0);
-        let ceiling = f.fee_grace_blocks_max();
-        let out = get_fee_estimate(
-            &f,
-            &GetFeeEstimateRequest {
-                grace_blocks: ceiling.saturating_add(1),
-            },
-        );
-        assert!(matches!(out, Err(RpcFault::Refused(_))));
-        assert_eq!(
-            f.asked_grace.load(Ordering::SeqCst),
-            u64::MAX,
-            "the facts layer must not have been called at all"
-        );
-    }
-
-    /// The tiers are reachable by name and the scalar `fee` is gone.
+    /// The tiers are reachable by name; the scalar `fee` and the mask are
+    /// gone, and the reply is the three tiers and the status alone.
     #[test]
     fn the_fee_reply_names_its_tiers() {
         let f = facts(false, 0);
-        let out = get_fee_estimate(&f, &GetFeeEstimateRequest { grace_blocks: 3 }).expect("fees");
-        assert_eq!(f.asked_grace.load(Ordering::SeqCst), 3);
+        let out = get_fee_estimate(&f, &GetFeeEstimateRequest::default()).expect("fees");
         assert_eq!(out.fees.get(shekyl_rpc_types::FeeTier::Low), 10);
         assert_eq!(out.fees.get(shekyl_rpc_types::FeeTier::High), 40);
-        assert_eq!(out.quantization_mask, 8);
+        assert_eq!(
+            serde_json::to_value(&out).expect("serializes"),
+            json!({"status": "OK", "fees": [10, 20, 40]})
+        );
     }
 
     // ── RK-5a: the p2p methods ─────────────────────────────────────────────
@@ -2984,7 +2982,6 @@ pub(crate) mod tests {
             current_speed_down: 4096.0,
             current_speed_up: 2048.0,
             height: 1_234_567,
-            support_flags: 3,
             port: 18080,
             state: 3,
             claims_known: true,
@@ -3036,7 +3033,6 @@ pub(crate) mod tests {
         assert_eq!(c.connection_id, "151c232a31383f464d545b626970777e");
         assert_eq!(c.state, ConnectionState::Normal);
         assert_eq!(c.height, Some(1_234_567));
-        assert_eq!(c.support_flags, Some(3));
         // ipv4: `ip` echoes the host and `port` is the number as a string.
         assert_eq!(c.ip, "192.0.2.7");
         assert_eq!(c.port, "18080");
@@ -3049,7 +3045,6 @@ pub(crate) mod tests {
         let mut raw = connection_facts();
         raw.claims_known = false;
         raw.height = 1_234_567;
-        raw.support_flags = 3;
         raw.state = 3;
         let facts = FakeP2p {
             connections: Ok(ConnectionsSnapshot {
@@ -3065,10 +3060,11 @@ pub(crate) mod tests {
             .connections[0];
         assert_eq!(c.state, ConnectionState::Unknown);
         assert_eq!(c.height, None);
-        assert_eq!(c.support_flags, None);
         let json = serde_json::to_value(c).expect("json");
         assert!(json["height"].is_null());
-        assert!(json["support_flags"].is_null());
+        // `support_flags` left the P2P wire (2026-10-19), and with it the
+        // only source this field had.
+        assert!(json.get("support_flags").is_none());
         assert_eq!(json["state"], "unknown");
     }
 

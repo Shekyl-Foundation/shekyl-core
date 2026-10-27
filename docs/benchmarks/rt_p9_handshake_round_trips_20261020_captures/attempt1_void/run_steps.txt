@@ -1,0 +1,8 @@
+phase registered start, 300 per leg 2026-10-20T05:34:12Z
+leg onion client start 2026-10-20T05:34:15Z
+leg onion client end rc=0 2026-10-20T06:00:38Z
+leg lan client start 2026-10-20T06:00:46Z
+leg lan client end rc=0 2026-10-20T06:00:47Z
+phase registered end onion_rc=0 lan_rc=0 2026-10-20T06:00:52Z
+summary_rc=3
+DONE

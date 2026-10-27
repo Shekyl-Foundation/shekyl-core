@@ -530,14 +530,15 @@ impl std::fmt::Debug for TxToSign {
     }
 }
 
-/// One payment's destination: the address the sign pass decodes, and the
+/// One payment's destination: where the sign pass builds the output to (an
+/// address it decodes, or a persona's keys it uses as given), and the
 /// payment request it answers. `TxOutputContext`'s `Debug` redacts the whole
 /// destination, so neither field reaches a log line.
 #[derive(Debug)]
 #[non_exhaustive]
 pub(crate) struct OutputDestination {
-    /// Canonical encoded recipient address from the build request.
-    pub address: String,
+    /// The build request's destination, verbatim.
+    pub destination: crate::engine::pending::TxDestination,
     /// `TxRecipient::rid`: echoed in this output's encrypted label; `None`
     /// writes the sentinel.
     pub rid: Option<shekyl_engine_state::PaymentRequestId>,

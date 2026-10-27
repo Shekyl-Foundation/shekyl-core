@@ -42,6 +42,19 @@
 //! Minutes of proofs; the live lane (`cargo test -p shekyl-chain-ingest
 //! --features pipeline -- --ignored the_drivers_emission_claim`).
 //!
+//! # A settled epoch's market does not move (`SO-D12h`)
+//!
+//! [`a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slashed`]
+//! is the same claim on a chain where two complete trees were Served
+//! beside the claimant in the claimed epoch. The pass kept them out of the
+//! epoch's market as complete trees and froze that fact beside `Σwork`.
+//! After the pass one of them releases and the other is slashed through
+//! the failure window; both records then hold a compact set, so a re-gather
+//! that read the records would put both in the market. The claim connects,
+//! so CEN-J23 read the flag the pass froze. With the flag read from the
+//! records instead, the same claim is refused at CEN-J25: its recomputed
+//! `Σwork` is not the frozen row.
+//!
 //! # What this does not witness
 //!
 //! The claim's economics against the store (CEN-J21/J23/J25) and its
@@ -52,7 +65,6 @@
 //! legs — the membership-only backing proof and the dual auth — run here
 //! against the wallet-side root as a self-check, as the spend's FCMP does.
 
-use shekyl_archival_retention::settlement_select::issued_draw_term;
 use shekyl_archival_retention::{
     claimant_reward_share, emission_vin_verify_auth, emission_vin_verify_backing,
     epoch_close_compute, shard_contribution_micro, CreditPair, EmissionEpochSource, EpochCloseBond,
@@ -61,27 +73,37 @@ use shekyl_archival_retention::{
 use shekyl_chain_rules::{CenRow, Locus, RecordWriteKind, TxSlot};
 use shekyl_fcmp::proof::{self, ShekylFcmpProof};
 use shekyl_fcmp::PqcKeyScalar;
-use shekyl_types::archival::{
-    FirstPayingHeight, IndexedDraw, IssuedDigest, IssuedDraw, SettlementOutcome,
-};
+use shekyl_types::archival::{FirstPayingHeight, SettlementOutcome};
 use shekyl_types::{BlockCount, BlockHeight, SettlementEpoch, ShardId};
-use shekyl_wire::{Ct, Transaction};
+use shekyl_wire::Transaction;
 use zeroize::Zeroizing;
 
 use crate::archival_driver::{first_spending_height, refused_at, ENDPOINT, FEE};
-use crate::connector::IssueDraws;
-use crate::emission_assembly::{assemble_emission_claim, ClaimTerms};
-use crate::scenario::{FreeHash, Mined, Scenario};
+use crate::chain_drive::{catch_up, issue_draws, spender_owning_before, Driven, IssuedPair};
+use crate::emission_assembly::{
+    assemble_emission_claim, assemble_emission_claim_breaking_fee_proof, ClaimTerms,
+};
+use crate::frozen_membership::{drive_frozen_membership, price_frozen_claim};
+use crate::scenario::{FreeHash, Scenario};
 use crate::scenario_archival::{shard_set, Persona};
 use crate::scenario_shard::{
     close_shards, first_admissible_compact_join, inside_one_epoch, levered_rules, levered_schedule,
-    mine_to, EPOCH_BLOCKS,
+    mine_to, EPOCH_BLOCKS, FILL_FROM_COINBASE,
 };
 use shekyl_harness_spender::{Owner, Recipient, Spender};
+use std::sync::Arc;
 
-/// The fill spends coinbases from here up; the funding spend rides
-/// coinbase 0, below it.
-const FILL_FROM_COINBASE: u64 = 10;
+use shekyl_chain_rules::AdmissionPolicy;
+use shekyl_chain_store::store::SnapshotView;
+use shekyl_daemon_rpc::submit::{
+    parse_submission, ChainSource, DaemonTxVerifier, EpochClaimStanding, RustPoolShim,
+    SubmitCaller, SubmitEngine, SubmitStateShim, TxVerifier,
+};
+use shekyl_mempool::Pool;
+use shekyl_rpc_types::{RejectCause, SubmitVerdict};
+use shekyl_types::UnixSeconds;
+
+use crate::pool_submit_tests::hex;
 
 /// The claim's transaction key. The engine draws one from the OS; the
 /// driver takes it as an argument, and this scenario needs only that it
@@ -92,16 +114,12 @@ const CLAIM_TX_KEY: [u8; 32] = [0x5c; 32];
 /// so G9 has a pair to refuse.
 const TWIN_TX_KEY: [u8; 32] = [0x5d; 32];
 
-/// Feed `spender` every block of `chain` it has not seen.
-fn catch_up(spender: &mut Spender, chain: &[Mined], seen: &mut usize) {
-    for block in &chain[*seen..] {
-        spender.push(block);
-    }
-    *seen = chain.len();
-}
+/// A third claim's transaction key: the `SO-D12h` chain's claim two epochs
+/// below the window.
+const OLDER_TX_KEY: [u8; 32] = [0x5e; 32];
 
 #[tokio::test]
-#[ignore = "minutes of proofs; the live lane"]
+#[ignore = "minutes of proofs; run by nightly.yml's chain-ingest-ignored job"]
 async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
     let rules = levered_rules();
     let mut scenario = Scenario::open_under("scenario-emission-claim", FreeHash, rules);
@@ -178,39 +196,16 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
     // (`SO-D11a`). Nothing admits a draw yet, so they go in through the
     // regtest door, with the digest they fold to.
     let shard = ShardId::from_raw(0);
-    let open = levered_schedule().open_height(served.to_raw());
-    let mut digest = IssuedDigest::ZERO;
-    let draws: Vec<IndexedDraw> = (0..3u64)
-        .map(|k| {
-            let issuing_height = BlockHeight::from_raw(open + k);
-            digest.fold(&issued_draw_term(
-                &persona.id(),
-                shard,
-                served,
-                issuing_height,
-                0,
-            ));
-            IndexedDraw {
-                persona: persona.id(),
-                shard,
-                issuing_height,
-                draw: 0,
-                state: IssuedDraw {
-                    revealed_at: BlockHeight::from_raw(open + k + 1),
-                    passed: true,
-                },
-            }
-        })
-        .collect();
-    scenario
-        .connector()
-        .ask(IssueDraws {
-            epoch: served,
-            draws,
-            digest,
-        })
-        .await
-        .expect("the door issues the draws");
+    issue_draws(
+        &scenario,
+        served,
+        &[IssuedPair {
+            persona: persona.id(),
+            shard,
+            passed: true,
+        }],
+    )
+    .await;
 
     // Up to the slash pass of `served`, not through it. The epoch closed
     // when the count reached `(served + 1) · SEB`, at the block before
@@ -243,7 +238,7 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
     // arithmetic, and the claim below is built from it.
     let bonds = [EpochCloseBond {
         join_settlement_epoch: join_epoch.to_raw(),
-        is_foundation_complete_tree: false,
+        is_support_complete_tree: false,
         bad_intervals: &[],
     }];
     let shards = [EpochCloseShard {
@@ -360,6 +355,103 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
     assert_eq!(r_market, vec![(0, result.r_market_by_shard[0])]);
     assert_eq!(gather.sigma_work().to_raw(), result.sigma_work_milli);
 
+    // The store-backed RPC (DRS-X PR 3) over the chain as it now stands —
+    // the pass connected, the claim not yet listed. The claim source lists
+    // `served` with the claim verify's own gather, which is the arithmetic
+    // above, and `served + 1`, whose pass has not run, without one. The
+    // coverage list holds the closed shard with its one bond and the
+    // market the pass wrote.
+    scenario
+        .reopen(|path| {
+            use shekyl_daemon_rpc::read_methods::{
+                get_archival_emission_claim_source, get_archival_shard_coverage,
+            };
+            use shekyl_rpc_types::{
+                ClaimBondRow, ClaimCreditPair, ClaimShardRow, GetArchivalEmissionClaimSourceRequest,
+            };
+            let store = std::sync::Arc::new(crate::test_support::open_store_under(
+                path,
+                &rules.in_force(BlockHeight::ZERO),
+                shekyl_chain_store::apply_policy::ApplyPolicy::Full,
+            ));
+            let facts = crate::rpc_store_facts_tests::facts_over(
+                std::sync::Arc::clone(&store),
+                path,
+                rules,
+            );
+            let source = get_archival_emission_claim_source(
+                &facts,
+                &GetArchivalEmissionClaimSourceRequest {
+                    p_id: hex::encode(persona.id().to_bytes()),
+                },
+            )
+            .expect("the claim source");
+            assert_eq!(source.chain_height, connecting.to_raw());
+            assert!(source.has_bond_record);
+            assert_eq!(source.join_settlement_epoch, join_epoch.to_raw());
+            assert_eq!(source.held_shard_ids, vec![0]);
+            assert!(source.has_last_served_epoch);
+            assert_eq!(source.last_served_epoch, served.to_raw());
+            let row = source
+                .epochs
+                .iter()
+                .find(|e| e.settlement_epoch == served.to_raw())
+                .expect("the served epoch is in the window");
+            assert!(
+                row.has_budget_row,
+                "Σwork(served) is a row: the epoch is claimable"
+            );
+            assert_eq!(row.sigma_work_milli, result.sigma_work_milli);
+            assert_eq!(row.budget_atomic, close.budget().to_raw());
+            assert_eq!(row.close_block_height, count_at_close);
+            assert_eq!(
+                row.bonds,
+                vec![ClaimBondRow {
+                    join_settlement_epoch: join_epoch.to_raw(),
+                    is_support_complete_tree: false,
+                    bad_intervals_flat: vec![],
+                }]
+            );
+            assert_eq!(
+                row.shards,
+                vec![ClaimShardRow {
+                    shard_id: 0,
+                    freeze_height: closed.close_height.to_raw(),
+                    has_segment: true,
+                }]
+            );
+            assert_eq!(
+                row.credit_pairs,
+                vec![ClaimCreditPair {
+                    bond_idx: 0,
+                    shard_idx: 0,
+                }]
+            );
+            assert_eq!(row.claimant_bond_idx, 0);
+            let next = source
+                .epochs
+                .iter()
+                .find(|e| e.settlement_epoch == served.to_raw() + 1)
+                .expect("the epoch after is in the window");
+            assert!(!next.has_budget_row, "its pass has not run");
+            assert!(next.bonds.is_empty());
+
+            let coverage = get_archival_shard_coverage(&facts).expect("coverage");
+            assert_eq!(coverage.as_of_height, at_pass.to_raw());
+            assert_eq!(coverage.settled_epoch, served.to_raw());
+            let listed = coverage
+                .shards
+                .iter()
+                .find(|r| r.shard_id == 0)
+                .expect("the closed shard is listed");
+            assert_eq!(listed.bonded_count, 1);
+            assert_eq!(listed.freeze_height, closed.close_height.to_raw());
+            assert_eq!(listed.served_count, result.r_market_by_shard[0]);
+            drop(facts);
+            drop(store);
+        })
+        .await;
+
     // CEN-G9 on the pipeline: a block listing this claim beside a twin —
     // the same persona and terms, its own fee input and transaction key,
     // so every per-transaction row admits both — is refused at the twin's
@@ -376,7 +468,7 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
         &Zeroizing::new(TWIN_TX_KEY),
         vec![twin_fee_input.input],
         twin_backing.input,
-        terms,
+        terms.clone(),
         FEE,
         &twin_backing.tree,
     );
@@ -390,20 +482,28 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
         },
     );
 
-    // CEN-J26 on the pipeline: the claim with one byte of its fee-input
-    // FCMP++ proof flipped. The prunable region is outside the prefix, so
-    // J22's signable hash and the vin's backing proof are untouched and
-    // J21, J23 and J25 admit the body as before; the fee proof is the
-    // first row that reads what changed, and it refuses at the
-    // transaction before the signatures (I18, whose preimage also covers
-    // the prunable) are asked. The block does not connect.
-    let mut corrupt_fee_proof = claim_tx.clone();
-    if let Ct::Fcmp {
-        prunable: Some(p), ..
-    } = &mut corrupt_fee_proof.ct
-    {
-        p.fcmp_proof[0] ^= 0x01;
-    }
+    // CEN-J26 on the pipeline: the claim assembled with one byte of its
+    // fee-input FCMP++ proof flipped and signed after the flip. The
+    // prunable region is outside the prefix, so J22's signable hash and the
+    // vin's backing proof are untouched and J21, J23 and J25 admit the body
+    // as before; the signatures cover the flipped region, so CEN-I18
+    // admits it too; the fee proof is the one row that reads what changed.
+    // (A byte flipped after signing is I18's refusal, which runs first in
+    // `form`.) The block does not connect.
+    let corrupt_fee_proof = {
+        let fee_input = spender.owned_input(&owner, fee_key, at_pass);
+        let backing = spender.owned_input(&owner, backing_key, at_pass);
+        let broken = assemble_emission_claim_breaking_fee_proof(
+            persona.keys(),
+            &Zeroizing::new(CLAIM_TX_KEY),
+            vec![fee_input.input],
+            backing.input,
+            terms,
+            FEE,
+            &backing.tree,
+        );
+        Transaction::from_bytes(&broken.bytes).expect("the broken claim's bytes parse")
+    };
     refused_at(
         scenario.mine_listing(vec![corrupt_fee_proof]).await,
         CenRow::J26,
@@ -488,4 +588,175 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
         "the claim's update is the store's row"
     );
     scenario.close().await;
+}
+
+/// `SO-D12h` on the driven chain (module docs), and the claim window's
+/// edge under the per-epoch retirement (§17). The compact persona `P`
+/// joins shard 0 beside two complete trees, `T1` and `T2`; all three are
+/// Served on shard 0 in `served`. The pass excludes `T1` and `T2` from the
+/// market as complete trees and freezes the set beside `Σwork(served)`.
+/// After the pass `T1` releases (an empty compact record, a clean
+/// zero-length interval) and `T2` misses eleven epochs and is slashed (an
+/// empty compact record, an interval that opens eleven epochs after
+/// `served`). Neither change reaches `served`'s market: the claim connects,
+/// at the first block where `served` is the oldest claimable epoch. A claim
+/// one epoch older is refused there as expired at CEN-J25, before any read.
+///
+/// The joins, the draws, the release and the slash are
+/// `drive_frozen_membership`. This test still judges the expired claim and
+/// the pool submission before
+/// it connects the claim those events left.
+///
+/// Red edit: take the flag in CEN-J23 from the records
+/// (`freeze_complete_trees` over A11's rows in place of A22) — `T1` and
+/// `T2` read compact, good through `served` and credited, so both join the
+/// re-gather's market, `R_market(0, served)` reads 3 and `Σwork` grows; the
+/// claim is refused at CEN-J25.
+#[tokio::test]
+#[ignore = "minutes of proofs; run by nightly.yml's chain-ingest-ignored job"]
+async fn a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slashed() {
+    let rules = levered_rules();
+    let mut scenario = Scenario::open_under("scenario-emission-frozen-membership", FreeHash, rules);
+    let mut mined = scenario.mine(first_spending_height().to_raw()).await;
+    let filled = close_shards(&mut scenario, &mut mined, FILL_FROM_COINBASE, 1).await;
+    let [closed] = filled.closed.as_slice() else {
+        panic!("one shard closed");
+    };
+    let join_height = inside_one_epoch(first_admissible_compact_join(&rules, *closed), 1);
+    mine_to(&mut scenario, &mut mined, join_height).await;
+    let mut drive = Driven::begin(scenario, mined);
+    let facts = drive_frozen_membership(&mut drive, *closed).await;
+    let served = facts.served;
+
+    // The persona's outputs were paid in the join. Own them before that
+    // block is scanned, then price every claim this tail judges.
+    let spender = spender_owning_before(
+        &drive.chain,
+        facts.join_height,
+        &[facts.backing_key, facts.fee_key],
+    );
+    let expired = SettlementEpoch::from_raw(served.to_raw() - 1);
+    let two_below = SettlementEpoch::from_raw(served.to_raw() - 2);
+    let (expired_tx, older_tx, served_tx) = {
+        let scenario = &mut drive.scenario;
+        let expired_tx = price_frozen_claim(scenario, &facts, &spender, expired, TWIN_TX_KEY).await;
+        let older_tx =
+            price_frozen_claim(scenario, &facts, &spender, two_below, OLDER_TX_KEY).await;
+        let served_tx = price_frozen_claim(scenario, &facts, &spender, served, CLAIM_TX_KEY).await;
+        (expired_tx, older_tx, served_tx)
+    };
+
+    // One epoch older is expired: refused at CEN-J25's window, before any
+    // row is read — not CEN-J23's missing row, and not the store's SI-32
+    // fault a read below the claimable floor would be. The block does not
+    // connect.
+    refused_at(
+        drive.connect(vec![expired_tx.clone()]).await,
+        CenRow::J25,
+        Locus::Tx {
+            slot: TxSlot::Listed(0),
+        },
+    );
+
+    // The submit path over the Rust pool (CEN-M9's shim) at the same
+    // height. An expired epoch's facts are their own state and are never
+    // read (`EmissionEpochStanding::Expired`), and the verifier refuses the
+    // submission as expired: never E7's missing budget row, and never a
+    // `ShimFault` from a read below the claimable floor. Two epochs below
+    // the oldest claimable one, the rows are already retired. The claim on
+    // the oldest claimable epoch is admitted.
+    let submitted = [expired_tx, older_tx, served_tx.clone()];
+    let path = crate::test_support::tmp("scenario-emission-frozen-submit-pool");
+    let (reasons, verdicts) = drive
+        .scenario
+        .with_store(|store, rules| {
+            let chain = crate::pool_submit_tests::Store { store, rules };
+            let pool = chain
+                .read(|snapshot, rule_set| {
+                    Pool::open(
+                        &path,
+                        UnixSeconds::from_raw(1),
+                        &SnapshotView::new(snapshot),
+                        rule_set,
+                        &AdmissionPolicy::GENESIS,
+                    )
+                    .expect("open")
+                    .0
+                })
+                .expect("a snapshot");
+            let shim = Arc::new(RustPoolShim::new(
+                chain,
+                std::sync::Arc::new(std::sync::Mutex::new(pool)),
+                AdmissionPolicy::GENESIS,
+                || UnixSeconds::from_raw(1),
+            ));
+            let reasons: Vec<String> = submitted[..2]
+                .iter()
+                .map(|tx| {
+                    let parsed = parse_submission(&hex(tx)).expect("the claim parses");
+                    let facts = shim
+                        .snapshot_facts(
+                            &parsed.txid,
+                            &parsed.key_images,
+                            &parsed.reference_block,
+                            parsed.bond_probe(),
+                            parsed.emission_probe().as_ref().map(|(id, e)| (id, *e)),
+                        )
+                        .expect("an expired claim's facts are no shim fault");
+                    let snapshots = &facts.emission.as_ref().expect("the E6/E7 bundle").snapshots;
+                    assert!(
+                        snapshots.iter().all(|s| matches!(
+                            s.standing,
+                            EpochClaimStanding::Expired { window_floor } if window_floor == served.to_raw()
+                        )),
+                        "the expired epoch is its own state, and unread"
+                    );
+                    DaemonTxVerifier
+                        .verify(&parsed, &facts)
+                        .expect_err("an expired claim is refused")
+                        .reason()
+                        .to_owned()
+                })
+                .collect();
+            let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
+            let verdicts: Vec<_> = submitted
+                .iter()
+                .map(|tx| engine.submit(&hex(tx), SubmitCaller::Owner))
+                .collect();
+            (reasons, verdicts)
+        })
+        .await;
+    drop(std::fs::remove_file(&path));
+    for reason in &reasons {
+        assert!(
+            reason.contains("below claim window floor"),
+            "refused as expired, not as a missing row: {reason}"
+        );
+    }
+    let mut verdicts = verdicts.into_iter().map(|v| v.expect("no engine fault"));
+    for _ in 0..2 {
+        assert_eq!(
+            verdicts.next(),
+            Some(SubmitVerdict::Rejected {
+                cause: RejectCause::Malformed
+            })
+        );
+    }
+    assert_eq!(
+        verdicts.next(),
+        Some(SubmitVerdict::Accepted),
+        "the oldest claimable epoch is admitted"
+    );
+
+    let block = drive
+        .connect(vec![served_tx])
+        .await
+        .unwrap_or_else(|outcome| {
+            panic!("the claim on a settled epoch whose complete trees moved connects: {outcome}")
+        });
+    assert_eq!(block.height, facts.connecting);
+    for row in [CenRow::J23, CenRow::J25] {
+        assert!(block.judged_by.contains(&row), "{row} judged the claim");
+    }
+    drive.close().await;
 }

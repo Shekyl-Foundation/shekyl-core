@@ -334,7 +334,7 @@ another name.
   HTTP limits, different crate consumers. They may take a dependency on
   `shekyl-portable-storage` later; they are not LV-2b.
 - **JSON portable_storage.** Separable; no production Rust caller.
-- **Levin framing, compression, noise/fragment emit.** LV-1.
+- **Levin framing, noise/fragment emit.** LV-1.
 - **`handle_recv` / `net_node` connection cutover.** LV-3, blocked on
   LV-2b for useful command interop.
 - **Boost archive peerlist on disk.** Different format.

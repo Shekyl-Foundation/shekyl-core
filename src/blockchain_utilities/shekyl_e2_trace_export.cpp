@@ -50,6 +50,7 @@
 #include "cryptonote_config.h"
 #include "cryptonote_core/blockchain.h"
 #include "cryptonote_core/cryptonote_core.h"
+#include "blockchain_utilities/daemon_network_args.h"
 #include "cryptonote_core/tx_pool.h"
 #include "rolling_median.h"
 #include "shekyl/shekyl_ffi.h"
@@ -252,10 +253,7 @@ int main(int argc, char* argv[])
   const command_line::arg_descriptor<uint64_t> arg_block_stop = {"block-stop", "last height to export (default: the tip; a height above the tip is refused)", 0};
 
   command_line::add_arg(desc_cmd_only, command_line::arg_help);
-  command_line::add_arg(desc_cmd_sett, cryptonote::arg_data_dir);
-  command_line::add_arg(desc_cmd_sett, cryptonote::arg_testnet_on);
-  command_line::add_arg(desc_cmd_sett, cryptonote::arg_stagenet_on);
-  command_line::add_arg(desc_cmd_sett, cryptonote::arg_regtest_on);
+  cryptonote::add_data_dir_args(desc_cmd_sett);
   command_line::add_arg(desc_cmd_sett, arg_log_level);
   command_line::add_arg(desc_cmd_sett, arg_out);
   command_line::add_arg(desc_cmd_sett, arg_block_start);
@@ -295,34 +293,29 @@ int main(int argc, char* argv[])
   }
 
   // The validator claims seeds on the mainnet schedule at every nettype and
-  // reads no environment (RD-F19). A chain mined under a SEEDHASH_EPOCH_*
-  // override is invisible as such in its own data under a fixed target, so
-  // the one place the override can be seen is the environment it is set
-  // in — this process's is the daemon's in the recipe that runs both from
-  // one shell. First evidence, not proof: the recipe still states the
-  // daemon's environment.
+  // reads no environment (RD-F19). A chain mined under a seed-epoch lever
+  // (`dev-pow-seed-epoch-blocks`, a regtest row of the daemon's
+  // configuration) is invisible as such in its own data under a fixed
+  // target; this process records no lever, so the check below holds by
+  // construction and stays as the statement of the requirement.
   if (shekyl_pow_randomx_v2_seed_epoch_overridden())
   {
-    LOG_ERROR("SEEDHASH_EPOCH_* is set in this environment: a chain mined under a seed-epoch override is not one the validator's schedule can replay (RD-F19); unset it, and harvest only from a daemon that ran without it");
+    LOG_ERROR("a seed-epoch lever is recorded in this process: a chain mined under a seed-epoch override is not one the validator's schedule can replay (RD-F19); unset it, and harvest only from a daemon that ran without it");
     return 1;
   }
 
-  const bool opt_testnet = command_line::get_arg(vm, cryptonote::arg_testnet_on);
-  const bool opt_stagenet = command_line::get_arg(vm, cryptonote::arg_stagenet_on);
-  // The daemon's own flag: a regtest chain lives under <data-dir>/fake, its
-  // nettype is FAKECHAIN, and Blockchain::init wants the regtest
-  // test_options the daemon hands it (cryptonote_core.cpp, core::init).
-  const bool opt_regtest = command_line::get_arg(vm, cryptonote::arg_regtest_on);
-  if (opt_regtest && (opt_testnet || opt_stagenet))
+  // A regtest chain's nettype is FAKECHAIN, and Blockchain::init wants the
+  // regtest test_options the daemon hands it (cryptonote_core.cpp, core::init).
+  // The store lives in the data directory itself on every network
+  // (DAEMON_CONFIG_CUTOVER.md §2.6).
+  const cryptonote::UtilityNetwork network = cryptonote::utility_network(vm);
+  if (!network.one_network())
   {
-    LOG_ERROR("--regtest excludes --testnet / --stagenet");
+    LOG_ERROR(cryptonote::utility_network_exclusive);
     return 1;
   }
-  const network_type net_type = opt_regtest ? FAKECHAIN : opt_testnet ? TESTNET : opt_stagenet ? STAGENET : MAINNET;
-  boost::filesystem::path data_dir(command_line::get_arg(vm, cryptonote::arg_data_dir));
-  if (opt_regtest)
-    data_dir /= "fake";
-  const std::string opt_data_dir = data_dir.string();
+  const network_type net_type = network.type();
+  const std::string opt_data_dir = command_line::get_arg(vm, cryptonote::arg_data_dir);
   const uint64_t block_start = command_line::get_arg(vm, arg_block_start);
   // Absent means "the tip"; an explicit value means that value, zero
   // included (genesis alone), and is refused above the tip rather than
@@ -349,8 +342,7 @@ int main(int argc, char* argv[])
     LOG_ERROR("Error opening database: " << e.what());
     return 1;
   }
-  const cryptonote::test_options regtest_test_options = {0};
-  if (!core_storage->init(db, net_type, /*offline=*/true, opt_regtest ? &regtest_test_options : nullptr))
+  if (!core_storage->init(db, net_type, network.chain_options()))
   {
     LOG_ERROR("Failed to initialize source blockchain storage");
     return 1;

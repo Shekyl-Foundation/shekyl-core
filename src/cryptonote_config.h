@@ -54,9 +54,8 @@
 // The short-term block-weight median's window (CEN-G6b), generated from
 // config/consensus_constants.json (`block_weight_short_term_window_blocks`)
 // so that C++ and Rust read one value; the legacy name is kept for its
-// call sites (rule 93: rename when touched). Three readers, one key: the
-// median (update_next_cumulative_weight_limit), the fee estimator's
-// grace_blocks assertion, and the RPC grace_blocks ceiling. Rust owner:
+// call sites (rule 93: rename when touched). One reader: the median
+// (update_next_cumulative_weight_limit). Rust owner:
 // shekyl-economics::params::BLOCK_WEIGHT_SHORT_TERM_WINDOW.
 #define CRYPTONOTE_REWARD_BLOCKS_WINDOW                 SHEKYL_BLOCK_WEIGHT_SHORT_TERM_WINDOW_BLOCKS
 #define CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V2    60000 //size of block (bytes) after which reward for block calculated using block size
@@ -71,10 +70,13 @@
 // the legacy name is kept for its call sites (rule 93). Rust owner:
 // shekyl-economics::params::BLOCK_WEIGHT_LONG_TERM_WINDOW.
 #define CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE   SHEKYL_BLOCK_WEIGHT_LONG_TERM_WINDOW_BLOCKS // size in blocks of the long term block weight median window
-#define CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE          600
+// Literal of `shekyl_wire::transaction::COINBASE_RESERVE` (the grammar's
+// maximum coinbase, margin 0). The header-parse test holds the two equal.
+// Readers of this define go away with the C++ validator and the pool.
+#define CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE          1386
 // Display precision and atomic-unit constant are generated from config/economics_params.json.
-
-#define DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT         ((uint64_t)3000)
+// w_ref is shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT. The floor and
+// the ladder read it inside the FFI; it is not a C++ macro.
 
 // Four-component economics constants are generated from config/economics_params.json.
 
@@ -180,10 +182,12 @@
 #define MAX_RPC_CONTENT_LENGTH                          1048576 // 1 MB
 
 
-// P2P_DEFAULT_CONNECTIONS_COUNT is gone: the default outbound connection count
-// is Rust-owned and reached through `shekyl_p2p_default_out_peers()`
-// (`shekyl/shekyl_ffi.h`). Every relay-privacy measurement simulates the
-// deployed out-degree, so a value C++ could move on its own left those
+// P2P_DEFAULT_CONNECTIONS_COUNT is gone: the outbound connection count is
+// Rust-owned (`shekyl_relay_privacy::params::P2P_DEFAULT_OUT_PEERS`, the
+// dialer's target) and no C++ reads it; the sync heuristics that compared
+// against it hand their counts to `shekyl_sync_*` (`shekyl/shekyl_ffi.h`,
+// DAEMON_CONFIG_CUTOVER.md §4.2). Every relay-privacy measurement simulates
+// the deployed out-degree, so a value C++ could move on its own left those
 // instruments free to describe a network the daemon no longer runs -- F-7's
 // failure mode one layer down. See DAEMON_RELAY_PRIVACY.md §70.
 #define P2P_DEFAULT_HANDSHAKE_INTERVAL                  60           //secondes
@@ -198,12 +202,6 @@
 #define P2P_IP_BLOCKTIME                                (60*60*24)  //24 hour
 #define P2P_IP_FAILS_BEFORE_BLOCK                       10
 
-// 0x01 is unassigned (former compact-vs-full capability bit). Do not reuse:
-// an old peer's bit must not pick up a new meaning.
-#define P2P_SUPPORT_FLAG_ZSTD_COMPRESSION               0x02
-#define P2P_SUPPORT_FLAGS                               (P2P_SUPPORT_FLAG_ZSTD_COMPRESSION)
-
-#define RPC_IP_FAILS_BEFORE_BLOCK                       3
 
 // Shekyl protocol version. Single integer, independent of software version.
 // See docs/VERSIONING.md for the full scheme.
@@ -262,7 +260,6 @@ static_assert(FCMP_REFERENCE_BLOCK_MIN_AGE == 5,
 static_assert(FCMP_REFERENCE_BLOCK_MAX_AGE == 100,
   "FCMP_REFERENCE_BLOCK_MAX_AGE diverged from baseline (100); review consensus implications before updating the sentinel");
 
-#define PER_KB_FEE_QUANTIZATION_DECIMALS        6 // Keep fee quantization at 1e-6 SKL while display precision is 1e-9 SKL.
 #define CRYPTONOTE_SCALING_2021_FEE_ROUNDING_PLACES 2
 
 #define DEFAULT_TXPOOL_MAX_WEIGHT               648000000ull // 3 days at 300000, in bytes

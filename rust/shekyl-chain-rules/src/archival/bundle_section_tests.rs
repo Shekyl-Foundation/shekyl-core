@@ -15,11 +15,12 @@
 use std::sync::OnceLock;
 
 use shekyl_archival_retention::{
-    bundle_root, section_budget, BundleRef, DrawableEpoch, DrawablePair, PassBitmap,
+    bundle_root, section_budget, BundleRef, DrawableEpoch, DrawablePair, PassBitmap, SectionBudget,
     BUNDLE_SECTION_BUDGET_MULTIPLE,
 };
 use shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa;
-use shekyl_types::{BlockHeight, SettlementEpoch};
+use shekyl_types::archival::ReceiptSignPk;
+use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 
 use super::*;
 use crate::harness::bundle::{with_hash, BundleRead, BundleReadFaulted, FixtureBundleView};
@@ -33,6 +34,7 @@ fn reference_at(h: u64, count: u32) -> BundleRef {
             h: BlockHeight::from_raw(h),
             seed: [0x5E; 32],
             passes: PassBitmap::from_passes(count, []).expect("no passes"),
+            support: PassBitmap::none(),
         },
         [0xAB; 32],
     )
@@ -251,7 +253,7 @@ fn a_section_at_its_budget_admits_and_one_over_refuses() {
     let seb = SettlementEpochBlocks::new(10_000).expect("non-zero");
     let c = BUNDLE_SECTION_BUDGET_MULTIPLE;
     let rules = rules_of(seb.get());
-    let over = |counts: &[u32], budget: u64| {
+    let over = |counts: &[u32], budget: SectionBudget| {
         let refs = section_of(counts);
         Err(SectionCheckFailed::Refused(SectionRefused::OverBudget {
             charge: SectionCharge::of(&refs),
@@ -268,7 +270,7 @@ fn a_section_at_its_budget_admits_and_one_over_refuses() {
 
     // `D` = 8: `⌊72 / 10,000⌋` is zero, the count cap is 1, the budget 2.
     let small = section_budget(c, 8, seb);
-    assert_eq!(small, 2);
+    assert_eq!(small, SectionBudget::from_draws(2));
     let small_view = view_holding(&[(0, 8)]);
     admit(&[1, 1], &small_view);
     admit(&[2], &small_view);
@@ -286,7 +288,7 @@ fn a_section_at_its_budget_admits_and_one_over_refuses() {
     // that figure is [`section_budget`]'s, and a section of 584 references
     // does not fit the window (the zero-draw test).
     let wide = section_budget(c, 10_000, seb);
-    assert_eq!(wide, 20);
+    assert_eq!(wide, SectionBudget::from_draws(20));
     let wide_view = view_holding(&[(0, 10_000)]);
     admit(&[10, 10], &wide_view);
     admit(&[4, 6, 10], &wide_view);
@@ -295,7 +297,7 @@ fn a_section_at_its_budget_admits_and_one_over_refuses() {
         over(&[10, 11], wide)
     );
     let large = section_budget(c, 324_000, seb);
-    assert_eq!(large, 584);
+    assert_eq!(large, SectionBudget::from_draws(584));
     assert!(SectionCharge::of(&section_of(&[292, 292])).within(large));
     assert!(!SectionCharge::of(&section_of(&[292, 293])).within(large));
 }
@@ -322,7 +324,7 @@ fn a_zero_draw_bundle_costs_one_and_a_section_of_them_is_bounded() {
     let c = BUNDLE_SECTION_BUDGET_MULTIPLE;
     let rules = rules_of(seb.get());
     let zeros = |n: usize| section_of(&vec![0u32; n]);
-    let over = |refs: &[BundleRef], budget: u64| {
+    let over = |refs: &[BundleRef], budget: SectionBudget| {
         Err(SectionCheckFailed::Refused(SectionRefused::OverBudget {
             charge: SectionCharge::of(refs),
             budget,
@@ -338,7 +340,7 @@ fn a_zero_draw_bundle_costs_one_and_a_section_of_them_is_bounded() {
     // The small network: budget 2. Five hundred zero-draw bundles are
     // inside `W₂` and over that budget.
     let small = section_budget(c, 8, seb);
-    assert_eq!(small, 2);
+    assert_eq!(small, SectionBudget::from_draws(2));
     let view = view_holding(&[(0, 8)]);
     admit(&zeros(1), &view);
     admit(&zeros(2), &view);
@@ -350,7 +352,7 @@ fn a_zero_draw_bundle_costs_one_and_a_section_of_them_is_bounded() {
     // 584 is the large network's budget, and it is not an admission: 501
     // and 584 references put the oldest outside `W₂`.
     let large = section_budget(c, 324_000, seb);
-    assert_eq!(large, 584);
+    assert_eq!(large, SectionBudget::from_draws(584));
     let priced = SectionCharge::of(&zeros(584));
     assert_eq!(priced.get(), 584);
     assert!(priced.within(large));
@@ -398,9 +400,9 @@ fn a_section_awaiting_its_budget_keeps_its_charge() {
     let charge = standing.charge();
     assert_eq!(charge.get(), 586);
     // The number the switch's cap is compared with.
-    assert!(!charge.within(584));
-    assert!(charge.within(586));
-    assert!(charge.within(u64::MAX));
+    assert!(!charge.within(SectionBudget::from_draws(584)));
+    assert!(charge.within(SectionBudget::from_draws(586)));
+    assert!(charge.within(SectionBudget::from_draws(u64::MAX)));
 
     assert_eq!(
         check_section_until_switch(&[], &root_of(&[]), h_incl_of(&[]), &RuleSet::GENESIS),
@@ -467,35 +469,35 @@ fn of_two_section_defects_the_earlier_check_refuses() {
         outcome,
         Err(SectionCheckFailed::Refused(SectionRefused::OverBudget {
             charge: SectionCharge::of(&refs),
-            budget: 2,
+            budget: SectionBudget::from_draws(2),
         }))
     );
     assert_eq!(reads, [BundleRead::DrawableEpoch]);
 }
 
-const PERSONA: [u8; 32] = [0x41; 32];
+const PERSONA: PCanonicalId = PCanonicalId::from_bytes([0x41; 32]);
 
 /// One receipt key, generated once. A drawable epoch parses it.
-fn receipt_key() -> &'static Vec<u8> {
-    static KEY: OnceLock<Vec<u8>> = OnceLock::new();
+fn receipt_key() -> &'static ReceiptSignPk {
+    static KEY: OnceLock<ReceiptSignPk> = OnceLock::new();
     KEY.get_or_init(|| {
         HybridEd25519FnDsa::keypair_from_seeds(&[0x41; 32], &[0x42; 32])
             .expect("fixture receipt key")
             .0
-            .to_canonical_bytes()
+            .to_receipt_sign_pk()
     })
 }
 
 /// Epoch `epoch` with `pairs` shards of one persona. `pairs` is `D`.
 fn drawable(epoch: u64, pairs: u64) -> DrawableEpoch {
     let epoch = SettlementEpoch::from_raw(epoch);
-    let keys = (pairs > 0).then(|| (PERSONA, receipt_key().clone()));
+    let keys = (pairs > 0).then(|| (PERSONA, receipt_key()));
     DrawableEpoch::new(
         epoch,
         keys,
-        (0..pairs).map(|shard_id| DrawablePair {
-            p_id: PERSONA,
-            shard_id,
+        (0..pairs).map(|shard| DrawablePair {
+            persona: PERSONA,
+            shard: ShardId::from_raw(shard),
         }),
     )
     .expect("one persona, distinct shards")
@@ -533,7 +535,10 @@ fn the_cap_is_the_largest_d_among_the_sections_epochs() {
     assert_eq!(SectionCharge::of(&spanning).get(), 4);
     let small_cap = section_budget(BUNDLE_SECTION_BUDGET_MULTIPLE, 0, seb);
     let large_cap = section_budget(BUNDLE_SECTION_BUDGET_MULTIPLE, boundary, seb);
-    assert_eq!((small_cap, large_cap), (2, 20));
+    assert_eq!(
+        (small_cap, large_cap),
+        (SectionBudget::from_draws(2), SectionBudget::from_draws(20))
+    );
 
     let both = view_holding(&[(0, 0), (1, boundary)]);
     both.take_reads();
@@ -656,7 +661,7 @@ fn a_reference_outside_the_window_is_refused_before_the_budget() {
         check_section(&over, &root_of(&over), h_incl, &view, &rules),
         Err(SectionCheckFailed::Refused(SectionRefused::OverBudget {
             charge: SectionCharge::of(&over),
-            budget: 2,
+            budget: SectionBudget::from_draws(2),
         }))
     );
 

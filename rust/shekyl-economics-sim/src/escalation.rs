@@ -69,7 +69,7 @@ pub const ASYMPTOTE_BAND: [u64; 3] = [500_000, 750_000, 900_000];
 /// `n` = 10,279,293; geometric mean ≈ 2.32 M — rounded to one significant
 /// figure and a half. The fold has moved since: under the production fill
 /// rule (ESR-6) the baseline carries 22 of its 50 transactions a block for
-/// eleven years, and its `n` at 10 y is 229,864. On the design's emission
+/// eighteen years, and its `n` at 10 y is 229,864. On the design's emission
 /// curve the largest final `n` is 2,079,614, below the shipped knee.
 /// `stage2::an_out_of_band_knee_is_held_only_while_the_escalation_is_flat`
 /// evaluates the definitions on the current fold, prints the band and
@@ -150,6 +150,18 @@ pub fn family() -> Vec<EscalationCurve> {
         }
     }
     curves
+}
+
+/// The steepest member of [`family`]: the highest asymptote and, among the
+/// candidates that share it, the smallest knee. `max_by_key` on the asymptote
+/// alone returns the last of three equal maxima, the shallowest
+/// (`ECONOMICS_SIM_PHASE0.md` §P0.1); A6, OQ-4 and A2 read this instead.
+#[must_use]
+pub fn steepest() -> EscalationCurve {
+    family()
+        .into_iter()
+        .max_by_key(|c| (c.asymptote, std::cmp::Reverse(c.knee_shards)))
+        .unwrap_or_else(flat_25)
 }
 
 /// The **status-quo** curve: the frozen 25% share, no escalation. The A1
@@ -270,5 +282,12 @@ mod tests {
             knee_shards: KNEE_BAND[2],
         };
         assert!(fast.share(n) > slow.share(n));
+    }
+
+    #[test]
+    fn the_steepest_member_has_the_top_asymptote_and_the_smallest_knee() {
+        let c = steepest();
+        assert_eq!(c.asymptote, *ASYMPTOTE_BAND.iter().max().expect("a band"));
+        assert_eq!(c.knee_shards, *KNEE_BAND.iter().min().expect("a band"));
     }
 }

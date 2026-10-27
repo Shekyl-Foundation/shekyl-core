@@ -9,8 +9,8 @@
 //! the session waits for (Copilot on #1056).
 
 use shekyl_levin::{
-    BucketHead, Flags, HandshakeFrame, HandshakeKind, COMMAND_HANDSHAKE,
-    COMMAND_REQUEST_SUPPORT_FLAGS, HEADER_SIZE, PROTOCOL_VERSION_1,
+    BucketHead, Flags, HandshakeFrame, HandshakeKind, COMMAND_HANDSHAKE, COMMAND_TIMED_SYNC,
+    HEADER_SIZE, PROTOCOL_VERSION_1,
 };
 
 fn frame(command: u32, flags: Flags, expect_response: u8, body: usize) -> Vec<u8> {
@@ -34,8 +34,9 @@ fn handshake_response(body: usize) -> Vec<u8> {
     frame(COMMAND_HANDSHAKE, Flags::RESPONSE, 0, body)
 }
 
-fn support_flags_request() -> Vec<u8> {
-    frame(COMMAND_REQUEST_SUPPORT_FLAGS, Flags::REQUEST, 1, 10)
+/// A request for a command other than the handshake.
+fn timed_sync_request() -> Vec<u8> {
+    frame(COMMAND_TIMED_SYNC, Flags::REQUEST, 1, 10)
 }
 
 #[test]
@@ -96,21 +97,21 @@ fn a_bad_signature_never_completes() {
     );
 }
 
-/// **A support-flags request is not the handshake** (Copilot on #1056):
+/// **Another command's request is not the handshake** (Copilot on #1056):
 /// a peer that sends one and stops is still silent, so its gap stays
 /// armed. The handshake that follows it ends the gap.
 #[test]
 fn a_frame_of_another_command_does_not_end_the_wait() {
     let mut seen = HandshakeFrame::new(HandshakeKind::Request);
-    assert!(!seen.feed(&support_flags_request()));
+    assert!(!seen.feed(&timed_sync_request()));
     assert!(!seen.complete());
     assert!(seen.feed(&handshake_request(40)));
 }
 
 #[test]
 fn frames_in_one_read_are_each_read() {
-    let mut bytes = support_flags_request();
-    bytes.extend(frame(COMMAND_REQUEST_SUPPORT_FLAGS, Flags::REQUEST, 1, 0));
+    let mut bytes = timed_sync_request();
+    bytes.extend(frame(COMMAND_TIMED_SYNC, Flags::REQUEST, 1, 0));
     bytes.extend(handshake_request(40));
     let mut seen = HandshakeFrame::new(HandshakeKind::Request);
     assert!(seen.feed(&bytes));

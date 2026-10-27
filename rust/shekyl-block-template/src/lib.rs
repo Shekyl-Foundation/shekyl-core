@@ -39,8 +39,8 @@
 //!   [`shekyl_economics::price_emission`] owes the miner — the penalised
 //!   emission's miner leg plus the miner's share of the listed fees
 //!   (CEN-F18), whole at genesis (CEN-G13). The `extra` is
-//!   the coinbase grammar's one layout (CEN-I20): pubkey, nonce, one KEM
-//!   blob, one leaf blob.
+//!   the coinbase grammar's one layout (CEN-I20): pubkey, nonce, the
+//!   `0x0C` draw commitment, one KEM blob, one leaf blob.
 //! - **Body.** `transaction_hashes` are the listed bodies' identities, in
 //!   the order listed (CEN-A3/A4); the weight the reward was penalised at
 //!   is the weight the block carries, coinbase included (CEN-F14's
@@ -83,8 +83,9 @@
 //! reward-aware policy: admit a body only when listing it does not lower
 //! the gross coinbase. That rule is policy, not consensus. The daemon's
 //! live scan, `tx_memory_pool::fill_block_template`, is the other policy
-//! (one body may cross the median, then the scan ends). [`Fill`] replaces
-//! that scan once the coinbase reserve is derived; it does not describe it.
+//! (one body may cross the median, then the scan ends). [`Fill`] is the
+//! replacement. The daemon still runs the C++ scan until `tx_pool.cpp`
+//! deletes at the DRS-X flip.
 //!
 //! # How it is tested, by design
 //!
@@ -352,14 +353,22 @@ pub const MAX_REPRICING_PASSES: usize = REPRICING_PASSES;
 /// Build the template for `cx`. See the crate documentation for what the
 /// result satisfies by construction.
 ///
+/// The listing is the caller's, and the template carries every transaction
+/// in it. A block whose weight, coinbase included, passes twice the median
+/// is [`TemplateError::Emission`] of [`EmissionError::BlockTooBig`]. The
+/// fill's bound is twice the median less the coinbase weight it was given.
+/// A listing at the reserve stays inside the limit: a real coinbase weighs
+/// at most the reserve, so the amount's varint cannot push it over.
+///
 /// # Errors
 ///
 /// A [`TemplateError`] when an operand cannot be priced or a body cannot be
 /// listed; never on a consensus question — those are the validator's.
 pub fn build(cx: &TemplateContext<'_>) -> Result<Template, TemplateError> {
-    let total_fees = listed_fees(cx.listed)?;
-    let tx_hashes: Vec<TxHash> = cx.listed.iter().map(Transaction::hash).collect();
-    let bodies_weight = cx.listed.iter().try_fold(0u64, |acc, tx| {
+    let listed = cx.listed;
+    let total_fees = listed_fees(listed)?;
+    let tx_hashes: Vec<TxHash> = listed.iter().map(Transaction::hash).collect();
+    let bodies_weight = listed.iter().try_fold(0u64, |acc, tx| {
         acc.checked_add(weight_of(tx)?)
             .ok_or(TemplateError::WeightOverflow)
     })?;
@@ -419,7 +428,7 @@ pub fn build(cx: &TemplateContext<'_>) -> Result<Template, TemplateError> {
 
     Ok(Template {
         block,
-        transactions: cx.listed.to_vec(),
+        transactions: listed.to_vec(),
         block_weight,
         block_reward: paid.block_reward,
         miner_emission: paid.miner_emission,

@@ -68,16 +68,18 @@ pub enum DialOutcome {
     /// lists unchanged.
     Confirmed(NetworkAddress),
     /// The channel never reached a well-formed response, or the peer is on
-    /// another network. An outstanding gray draw is dropped; a white
-    /// address stays white.
+    /// another network. The lists read the cause's marks and nothing else
+    /// (the gray lifecycle, Rick 2026-10-24): a cause that proves
+    /// misbehaviour drops an outstanding gray draw; any other failed test
+    /// returns it to gray with a cooldown. A white address stays white.
     ///
-    /// The cause is the one the connector closed with, its proxy reply
-    /// code included. The lists do not read it. The dialer's
-    /// failed-address memory does, from this same report, so the list
-    /// write and the memory write cannot disagree about what happened.
+    /// The cause is the one the layer that closed stamped, its proxy reply
+    /// code included.
     DialFailed(NetworkAddress, CloseCause),
-    /// The peer's list was refused. As `DialFailed` for the lists.
-    PeerlistRefused(NetworkAddress),
+    /// The peer's list was refused. As `DialFailed` for the lists, with
+    /// the cause the Levin layer stamped for the refusal: on an
+    /// authenticating connector it proves misbehaviour.
+    PeerlistRefused(NetworkAddress, CloseCause),
     /// A payload was refused. No promotion and no demotion. An outstanding
     /// draw returns to drawable gray.
     PayloadRefused(NetworkAddress),
@@ -91,7 +93,7 @@ impl DialOutcome {
             Self::SessionAccepted(a)
             | Self::Confirmed(a)
             | Self::DialFailed(a, _)
-            | Self::PeerlistRefused(a)
+            | Self::PeerlistRefused(a, _)
             | Self::PayloadRefused(a) => a,
         }
     }

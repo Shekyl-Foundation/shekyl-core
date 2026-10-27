@@ -168,6 +168,9 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::H16,
             CenRow::H17,
             CenRow::H18,
+            // H19 (2026-10-15): the layout half in `tx_form`, the verification
+            // half the block fold that records it (`rules::range_proof`).
+            CenRow::H19,
             CenRow::H20,
             CenRow::H21,
             CenRow::H22,
@@ -217,8 +220,9 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::J16,
             CenRow::J18,
             // Slice 6 row 6 (2026-10-08): the bond post's funding half —
-            // its reference context and the proof over its funding spends,
-            // one row in `judge_reference`'s bond-post arm.
+            // its reference context (`judge_reference`'s bond-post arm,
+            // in `validate`) and the proof over its funding spends
+            // (`judge_proofs`, in `form` since 2026-10-16).
             CenRow::J27,
             // Slice 8 row 8: the emission statics — the vin's parse, the
             // slot's key, the signable hash and the reward commit set.
@@ -238,6 +242,8 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             // DRS-E4 commit 4: the archival transition on the verdict
             // (`DRS_E4_ARCHIVAL_WRITER.md` §6 row 4); L8 and L9 below.
             CenRow::L7,
+            // SO-D12 increment 3: the per-block draw count.
+            CenRow::L17,
         ]
     );
     let by_construction: Vec<CenRow> = CenRow::ALL
@@ -301,14 +307,59 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
         .collect();
     assert_eq!(
         held_by_store,
-        [CenRow::B3, CenRow::K1a, CenRow::K2, CenRow::K3, CenRow::K8],
-        "the rule-set belt at connect (B3, re-classed 2026-10-15, R4); DRS-E5 E5-18: the alt chain's root and linkage (K1a, K2), a held hash refused at \
+        [
+            CenRow::A1,
+            CenRow::A4,
+            CenRow::B3,
+            CenRow::K1a,
+            CenRow::K2,
+            CenRow::K3,
+            CenRow::K5,
+            CenRow::K5b,
+            CenRow::K6,
+            CenRow::K7,
+            CenRow::K8,
+            CenRow::K9,
+            CenRow::M2,
+            CenRow::M8
+        ],
+        "where a block goes, held by the ingest service's router (A1, A4; DRS-X PR 2); \
+         the rule-set belt at connect (B3, re-classed 2026-10-15, R4); DRS-E5 E5-18: the alt chain's root and linkage (K1a, K2), a held hash refused at \
          insert (K3) and no supply word on an alt row (K8) are the store's structures, \
-         proved by the store's tests"
+         proved by the store's tests; promotion (K5), the witness in the alt row (K5b), the \
+         fork choice's match (K6) and the demoted rows (K7) are the switch's (DRS-E5 a5), \
+         proved by the ingest's switch tests; the pool door's full NIC set (M2, DRS-E5 \
+         PR-b), witnessed by the door and a block of one agreeing over real spends; a \
+         block's bodies through that door (K9) and its verification cache (M8)"
     );
-    assert!(PolicyRow::ALL
+    let policy_implemented: Vec<PolicyRow> = PolicyRow::ALL
         .iter()
-        .all(|r| r.status() == RowStatus::Pending));
+        .copied()
+        .filter(|r| r.status() == RowStatus::Implemented)
+        .collect();
+    assert_eq!(
+        policy_implemented,
+        [PolicyRow::M3, PolicyRow::M4, PolicyRow::M5],
+        "DRS-E5 PR-b b1: `policy_form`'s three rows — the fee floor, the extra cap, the \
+         unlock ban"
+    );
+    let policy_held: Vec<PolicyRow> = PolicyRow::ALL
+        .iter()
+        .copied()
+        .filter(|r| r.status() == RowStatus::HeldByStore)
+        .collect();
+    assert_eq!(
+        policy_held,
+        [
+            PolicyRow::M1,
+            PolicyRow::M6,
+            PolicyRow::M7,
+            PolicyRow::M9,
+            PolicyRow::M10
+        ],
+        "DRS-E5 PR-b b2: the pool's own rows — a duplicate (M1), a spent image on the \
+         chain (M6) or in the pool (M7); b3: the engine's seam (M9); b4: eviction (M10)"
+    );
     // SCW-18's compile-time pin is the check; this is the runtime echo so a
     // swapped `implemented(B2)` under the B1 entry cannot hide behind a
     // matching status list.
@@ -367,8 +418,20 @@ fn registries_are_the_expected_size_at_this_increment() {
     // serve-credit bundle's nine admission rows, minted `pending` with the
     // pure verifier that names them as refusals (`archival/bundle.rs`,
     // STAGED — no rule type is bound until `SO-D12`'s cutover).
-    assert_eq!(CenRow::ALL.len(), 163);
-    assert_eq!(PolicyRow::ALL.len(), 9);
+    // Policy 9 → 8 on 2026-10-17: CEN-M11 (zero-fee never relayed) went to
+    // bucket 3 and its entry was deleted (DRS-E5 PR-b b1) — redundant with
+    // M3, which refuses a zero-fee transaction at the one pool door.
+    // 163 → 162 the same day: CEN-K10 (reorg retention, `kept_by_block`'s
+    // stored-anyway admission) went to bucket 3 and its entry was deleted
+    // (the rulings on #1102) — the pool parked an alternative chain's
+    // bodies, and the chain store holds them now. 162 → 161 on 2026-10-18:
+    // CEN-A5 (the size bound before parse) went to bucket 3 and its entry
+    // was deleted (DRS-X PR 2, PR2-Q2) — the parse-cost bound, not
+    // validity, re-homed as the ingest router's admission.
+    // 161 → 162 on 2026-10-21: CEN-L17 (the per-block draw count) minted
+    // with its implementation, `SO-D12` increment 3.
+    assert_eq!(CenRow::ALL.len(), 162);
+    assert_eq!(PolicyRow::ALL.len(), 8);
 }
 
 #[test]

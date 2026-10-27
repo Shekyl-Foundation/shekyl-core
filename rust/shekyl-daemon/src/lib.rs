@@ -1,0 +1,44 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! The daemon's Rust `main()` (`docs/design/DAEMON_CONFIG_CUTOVER.md` §2.2,
+//! DC-Q13).
+//!
+//! `shekyl-daemon-image` exports the one C symbol, `shekyl_daemon_main`,
+//! which calls [`run::main`] with the entry C++ built. Everything here is
+//! safe Rust: the C ABI types are plain data ([`entry`]), the remnant is
+//! reached through function pointers it handed over, and the platform
+//! probes come from `shekyl-ffi`.
+
+#![deny(unsafe_code)]
+
+pub mod entry;
+pub mod help;
+pub mod network;
+pub mod options;
+pub mod run;
+pub mod signals;
+pub mod tor;
+pub mod verify;
+
+pub use entry::{RunFn, ShekylDaemonEntry, StopFn};
+pub use run::{Host, EXIT_FAILED, EXIT_REFUSED};
+
+/// The entry with the real platform: the account's roots from the
+/// operating system, the network id's one derivation, and `args`, the
+/// argument vector the process entry resolved (IG-Q2).
+#[must_use]
+pub fn main(entry: &ShekylDaemonEntry, args: &[std::ffi::OsString]) -> i32 {
+    shekyl_ffi::panic_hook::install();
+    run::main(entry, args, &host())
+}
+
+/// This machine's platform facts and the network id derivation.
+pub(crate) fn host() -> Host {
+    Host {
+        platform: shekyl_ffi::platform::current(),
+        network_id_of: shekyl_ffi::network_id_ffi::network_id_of,
+    }
+}

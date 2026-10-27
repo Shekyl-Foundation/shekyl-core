@@ -24,8 +24,8 @@ use shekyl_units::AtomicUnits;
 
 use super::{
     build_pending_tx_in_state, discard_pending_tx_in_state, submit_pending_tx_in_state,
-    FeePriority, PendingTxError, Reservation, ReservationId, SendError, TxRecipient, TxRequest,
-    STUB_FEE_ATOMIC_UNITS,
+    FeePriority, PendingTxError, Reservation, ReservationId, SendError, TxDestination, TxRecipient,
+    TxRequest, STUB_FEE_ATOMIC_UNITS,
 };
 
 fn make_recovered_output(seed: u8, global_index: u64, amount: u64) -> RecoveredWalletOutput {
@@ -80,7 +80,7 @@ fn populate(
 fn standard_request(amount: u64) -> TxRequest {
     TxRequest {
         recipients: vec![TxRecipient {
-            address: "test_address".to_string(),
+            destination: TxDestination::Address("test_address".to_string()),
             amount_atomic_units: AtomicUnits::from_raw(amount),
             rid: None,
         }],
@@ -487,7 +487,7 @@ fn priority_custom_is_accepted_and_preserved() {
     let mut next_id = 0u64;
     let req = TxRequest {
         recipients: vec![TxRecipient {
-            address: "addr".into(),
+            destination: TxDestination::Address("addr".into()),
             amount_atomic_units: AtomicUnits::from_raw(1_000),
             rid: None,
         }],

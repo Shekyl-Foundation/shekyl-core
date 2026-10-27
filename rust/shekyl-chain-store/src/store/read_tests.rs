@@ -642,3 +642,114 @@ fn the_digest_moves_when_any_family_moves() {
     assert_ne!(before, after);
     cleanup(&path);
 }
+
+// ------------------------------------------------------------------
+// The relay floor's two projections (FL PR C §6)
+// ------------------------------------------------------------------
+
+/// `burned_through(h)` is the fold less the `block_burn` rows above `h`:
+/// on a chain whose fee block really burned, it is the running sum of the
+/// burns the verdicts derived at every recorded height, the fold itself at
+/// the tip, and `AboveTip` past it.
+#[test]
+fn burned_through_is_the_fold_less_the_rows_above_it() {
+    use shekyl_chain_rules::ChainView;
+    let path = tmp("read-burned-through");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let (fee_block, burns) = connect_burning(&store);
+    assert!(
+        burns[usize::try_from(fee_block).expect("small")] > AtomicUnits::ZERO,
+        "the subject: a recorded burn"
+    );
+    let tip = u64::try_from(burns.len() - 1).expect("small");
+    let out: Result<Vec<AtHeight<AtomicUnits>>, TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        (0..=tip + 1)
+            .map(|height| Ok(view.burned_through(h(height))?))
+            .collect()
+    });
+    let read = out.expect("the projection reads");
+    let mut running = AtomicUnits::ZERO;
+    for (height, burn) in burns.iter().enumerate() {
+        running = running.checked_add(*burn).expect("fits");
+        assert_eq!(
+            read[height],
+            AtHeight::Recorded(running),
+            "through {height}"
+        );
+    }
+    assert_eq!(
+        read[usize::try_from(tip).expect("small")],
+        AtHeight::Recorded(
+            store
+                .begin_read()
+                .expect("read")
+                .total_burned()
+                .expect("fold")
+        ),
+        "at the tip the projection is the fold"
+    );
+    assert_eq!(
+        read[usize::try_from(tip + 1).expect("small")],
+        AtHeight::AboveTip
+    );
+    cleanup(&path);
+}
+
+/// A `total_burned` register below the `block_burn` rows it is the sum of
+/// is a register that does not hold what it claims: SI-7 on the cell, its
+/// reason spelled — never a projection that wraps or reads as zero.
+#[test]
+fn a_fold_below_its_rows_is_si7_on_the_register() {
+    use shekyl_chain_rules::ChainView;
+    let path = tmp("read-burned-through-below");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let (fee_block, _) = connect_burning(&store);
+    let seeded: Result<(), TestErr> = store.write(|batch| {
+        batch.upsert_property::<crate::codec::TotalBurnedCell>(&AtomicUnits::ZERO)?;
+        Ok(())
+    });
+    seeded.expect("seed");
+    let out: Result<AtHeight<AtomicUnits>, TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        Ok(view.burned_through(h(fee_block - 1))?)
+    });
+    let row = StoreInvariant::CellCorrupt {
+        key: "total_burned",
+        fault: CellFault::Undecodable(crate::codec::CodecError::Invalid {
+            codec: "total_burned",
+            reason: "the burned fold is below the block_burn rows it sums",
+        }),
+    };
+    assert_eq!(out, Err(TestErr::Store(StoreError::from(row).to_string())));
+    cleanup(&path);
+}
+
+/// `block_burn` rows whose sum leaves `u64` are rows no checked fold could
+/// have folded: SI-8, `FoldOverflow` on `total_burned` — not an absent row.
+#[test]
+fn rows_whose_sum_overflows_are_si8() {
+    use shekyl_chain_rules::ChainView;
+    let path = tmp("read-burned-through-overflow");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let (fee_block, _) = connect_burning(&store);
+    // The zero-fee block below the fee block has no row; plant one at the
+    // rail, so the rows above the height before it cannot be summed.
+    let planted: Result<(), TestErr> = store.write(|batch| {
+        batch.open_upsert_table(crate::schema::BLOCK_BURN)?.upsert(
+            fee_block - 1,
+            AtomicUnits::from_raw(u64::MAX).encoded().as_encoded(),
+        )?;
+        Ok(())
+    });
+    planted.expect("plant");
+    let out: Result<AtHeight<AtomicUnits>, TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        Ok(view.burned_through(h(fee_block - 2))?)
+    });
+    let row = StoreInvariant::FoldOverflow {
+        cell: "total_burned",
+    };
+    assert_eq!(out, Err(TestErr::Store(StoreError::from(row).to_string())));
+    cleanup(&path);
+}

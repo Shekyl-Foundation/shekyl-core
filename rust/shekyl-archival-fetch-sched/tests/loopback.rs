@@ -18,13 +18,19 @@ use std::time::Duration;
 use shekyl_archival_fetch_sched::{
     challenge_read, BlockSpan, ChallengeDraw, ChallengeReadError, ClosedShard, DiscardTxs,
     FactsFault, FetchError, FetchScheduler, Holder, HolderSource, NeedBudget, PFetchClient,
-    ReadFailure, ShardClose, ShardFacts, ShardStanding, Timeouts, ViewDesk, ViewRefusal,
+    ReadFailure, ShardClose, ShardFacts, ShardStanding, SuppliedNonce, Timeouts, ViewDesk,
+    ViewRefusal,
 };
-use shekyl_archival_retention::{challenge_nonce, CHALLENGE_READS, PASS_ANCHOR_DEPTH_BLOCKS};
+use shekyl_archival_retention::{
+    challenge_nonce, support_challenge_nonce, verify_receipt_transcript, PassStream,
+    CHALLENGE_READS, PASS_ANCHOR_DEPTH_BLOCKS,
+};
 use shekyl_p_loopback::{
     endpoint_and_client, fetch_target, fixture_body, fixture_expectation, FIXTURE_SHARD_ID,
 };
-use shekyl_p_serve::{PassSigner, TestKeySigner, IDENTITY_ENVELOPE_LEN};
+use shekyl_p_serve::{
+    PassSigner, TestKeySigner, TestReceiptKeySigner, IDENTITY_ENVELOPE_LEN, RECEIPT_ENVELOPE_LEN,
+};
 use shekyl_types::{ArchivalLength, BlockHash, BlockHeight, PCanonicalId, ShardId};
 use tokio::net::TcpListener;
 
@@ -135,8 +141,10 @@ impl ShardFacts for Facts {
 }
 
 /// `n` holder ids, all resolving (through the shim) to the one endpoint.
+/// Support holders are a second list, empty unless a test sets one.
 struct Holders {
     holders: Mutex<Vec<Holder>>,
+    support: Mutex<Vec<Holder>>,
     /// How many needs have asked who holds the shard.
     lookups: AtomicUsize,
 }
@@ -151,6 +159,7 @@ impl Holders {
             .collect();
         Self {
             holders: Mutex::new(holders),
+            support: Mutex::new(Vec::new()),
             lookups: AtomicUsize::new(0),
         }
     }
@@ -158,12 +167,20 @@ impl Holders {
     fn clear(&self) {
         self.holders.lock().unwrap().clear();
     }
+
+    fn set_support(&self, support: Vec<Holder>) {
+        *self.support.lock().unwrap() = support;
+    }
 }
 
 impl HolderSource for Holders {
     fn holders_of(&self, _shard_id: ShardId) -> Result<Vec<Holder>, FactsFault> {
         self.lookups.fetch_add(1, Ordering::SeqCst);
         Ok(self.holders.lock().unwrap().clone())
+    }
+
+    fn support_holders_of(&self, _shard_id: ShardId) -> Result<Vec<Holder>, FactsFault> {
+        Ok(self.support.lock().unwrap().clone())
     }
 }
 
@@ -369,6 +386,40 @@ async fn read_from_dials_its_assigned_holder_even_when_the_urn_is_empty() {
     assert_eq!(s.endpoint.served_count(), 2);
 }
 
+/// The one drawn holder is the assigned persona, and that persona is also
+/// listed as support beside one other support holder. Every dial misses.
+/// The assigned persona is tried first and is not drawn again; the other
+/// support holder is next. Red edit: leave the assigned id in the support
+/// urn — the tags are then `[1, 1, 9]`.
+#[tokio::test]
+async fn an_assigned_holder_is_dialled_once_then_the_other_support_holder() {
+    let s = stack(FIXTURE_SHARD_ID + 7, 1).await;
+    let assigned = s
+        .holders
+        .holders_of(SHARD)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the one drawn holder");
+    let other = Holder {
+        id: PCanonicalId::from_bytes([9; 32]),
+        target: assigned.target.clone(),
+    };
+    s.holders.set_support(vec![assigned.clone(), other]);
+    let err = s
+        .scheduler
+        .read_from(&assigned, SHARD, Arc::new(DiscardTxs), budget(3, 1))
+        .await
+        .unwrap_err();
+    let ReadFailure::Exhausted { attempts } = err else {
+        panic!("expected exhaustion, got {err:?}");
+    };
+    assert!(attempts
+        .iter()
+        .all(|attempt| matches!(attempt.error, FetchError::Miss)));
+    assert_eq!(holder_tags(&attempts), vec![1, 9], "{attempts:?}");
+}
+
 #[tokio::test]
 async fn a_challenge_read_carries_the_derived_nonce() {
     let s = stack(FIXTURE_SHARD_ID, 1).await;
@@ -380,6 +431,7 @@ async fn a_challenge_read_carries_the_derived_nonce() {
         .next()
         .expect("one holder");
     let draw = ChallengeDraw {
+        stream: PassStream::Economy,
         seed: [0x11; 32],
         block_hash: [0x22; 32],
         draw: 0,
@@ -395,7 +447,7 @@ async fn a_challenge_read_carries_the_derived_nonce() {
     )
     .await
     .expect("the assigned holder serves");
-    assert_eq!(read.header.nonce(), &draw.nonce());
+    assert_eq!(read.header.nonce(), &draw.nonce().nonce);
     assert_eq!(
         read.header.nonce(),
         &challenge_nonce(&draw.seed, &draw.block_hash, draw.draw, draw.attempt)
@@ -438,7 +490,10 @@ async fn a_nonce_read_with_a_wide_budget_dials_only_the_assigned_holder() {
         .read_from_nonce(
             &assigned,
             SHARD,
-            [0x5a; 32],
+            SuppliedNonce {
+                stream: PassStream::Economy,
+                nonce: [0x5a; 32],
+            },
             Arc::new(DiscardTxs),
             budget(3, 1),
         )
@@ -470,6 +525,7 @@ async fn a_challenge_read_does_not_fall_through_to_another_holder() {
         &assigned,
         SHARD,
         ChallengeDraw {
+            stream: PassStream::Economy,
             seed: [0x11; 32],
             block_hash: [0x22; 32],
             draw: 0,
@@ -508,6 +564,7 @@ async fn a_challenge_rejection_retries_the_same_holder_only() {
         &assigned,
         SHARD,
         ChallengeDraw {
+            stream: PassStream::Economy,
             seed: [0x33; 32],
             block_hash: [0x44; 32],
             draw: 1,
@@ -806,4 +863,129 @@ async fn a_cancelled_leader_frees_the_flight() {
     next.abort();
     assert!(next.await.unwrap_err().is_cancelled());
     assert_eq!(desk.cached_count(), 0);
+}
+
+/// One holder under the receipt scheme, over the receipt endpoint.
+fn receipt_holder(
+    key: &shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey,
+) -> Holder<shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey> {
+    Holder {
+        id: PCanonicalId::from_bytes([0x3c; 32]),
+        target: fetch_target(key.clone()),
+    }
+}
+
+/// A scheduler over an endpoint that closes its responses with scheme-3
+/// receipts, and that endpoint's receipt key.
+async fn receipt_stack() -> (
+    shekyl_p_loopback::PServeEndpoint,
+    Arc<FetchScheduler<Facts, Holders>>,
+    shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey,
+) {
+    let signer = Arc::new(TestReceiptKeySigner::ephemeral(BlockHeight::from_raw(
+        OWN_HEIGHT,
+    )));
+    let key = signer.public_key().clone();
+    let (endpoint, client) = endpoint_and_client(
+        FIXTURE_SHARD_ID,
+        fixture_body(),
+        signer as Arc<dyn PassSigner<RECEIPT_ENVELOPE_LEN>>,
+        ephemeral_timeouts(),
+    )
+    .await;
+    let identity = TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT));
+    let holders = Arc::new(Holders::new(0, identity.public_key()));
+    let scheduler = Arc::new(FetchScheduler::new(Arc::new(Facts::new()), holders, client));
+    (endpoint, scheduler, key)
+}
+
+/// A challenge read of a holder named under its receipt key returns the
+/// receipt the bundle verifier opens: the same transcript, under the same
+/// key, with the challenge nonce on it. The read is the one the drawn
+/// reads take; only the holder's scheme is the caller's.
+///
+/// Both streams: a support draw's header names the support stream, its
+/// nonce is the support label's, and its receipt verifies on that stream
+/// and not on the other.
+#[tokio::test]
+async fn a_challenge_read_of_a_receipt_holder_returns_the_receipt() {
+    let (endpoint, scheduler, key) = receipt_stack().await;
+    let seed = [0x11; 32];
+    let block_hash = [0x22; 32];
+    for (served, stream) in [(1, PassStream::Economy), (2, PassStream::Support)] {
+        let draw = ChallengeDraw {
+            stream,
+            seed,
+            block_hash,
+            draw: 0,
+            attempt: 1,
+        };
+        let read = challenge_read(
+            &scheduler,
+            &receipt_holder(&key),
+            SHARD,
+            draw,
+            Arc::new(DiscardTxs),
+            NeedBudget::DEFAULT,
+        )
+        .await
+        .expect("the receipt endpoint serves");
+        assert_eq!(endpoint.served_count(), served);
+        assert_eq!(read.header.stream(), stream);
+        let expected = match stream {
+            PassStream::Economy => challenge_nonce(&seed, &block_hash, 0, 1),
+            PassStream::Support => support_challenge_nonce(&seed, &block_hash, 0, 1),
+        };
+        assert_eq!(read.header.nonce(), &expected);
+        let verify = |stream| {
+            verify_receipt_transcript(
+                &key,
+                stream,
+                read.header.nonce(),
+                read.header.anchor_height(),
+                read.header.anchor_hash(),
+                read.shard.shard_id().to_raw(),
+                read.shard.delivery_digest(),
+                read.shard.signature(),
+            )
+        };
+        verify(stream).expect("the receipt verifies as the bundle verifier's step 8 opens it");
+        let other = match stream {
+            PassStream::Economy => PassStream::Support,
+            PassStream::Support => PassStream::Economy,
+        };
+        assert!(verify(other).is_err(), "a receipt serves one stream");
+    }
+}
+
+/// The live serving host signs with the identity key. A receipt-key
+/// holder of such a host gets a reply its scheme cannot parse: one
+/// completed exchange, `Malformed`, and no receipt.
+#[tokio::test]
+async fn a_receipt_holder_of_an_identity_endpoint_is_malformed() {
+    let s = stack(FIXTURE_SHARD_ID, 1).await;
+    let other = TestReceiptKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT));
+    let err = s
+        .scheduler
+        .read_from_nonce(
+            &receipt_holder(other.public_key()),
+            SHARD,
+            SuppliedNonce {
+                stream: PassStream::Economy,
+                nonce: [0x5a; 32],
+            },
+            Arc::new(DiscardTxs),
+            NeedBudget::DEFAULT,
+        )
+        .await
+        .unwrap_err();
+    let ReadFailure::Exhausted { attempts } = err else {
+        panic!("expected exhaustion, got {err:?}");
+    };
+    assert_eq!(attempts.len(), 1, "{attempts:?}");
+    assert!(
+        matches!(attempts[0].error, FetchError::Malformed(_)),
+        "{attempts:?}"
+    );
+    assert_eq!(s.holders.lookups.load(Ordering::SeqCst), 0);
 }

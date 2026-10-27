@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 //! Chain-tip and version methods — the RK-1 slice of the daemon RPC KV
-//! cutover (`docs/design/DAEMON_RPC_KV_CUTOVER.md` §3.1).
+//! cutover (`docs/completed/DAEMON_RPC_KV_CUTOVER.md` §3.1).
 //!
 //! These are the single Rust definitions of the wire types that
 //! `COMMAND_RPC_GET_HEIGHT` and `COMMAND_RPC_GET_VERSION` used to carry in
@@ -44,7 +44,11 @@ use crate::nullable::Nullable;
 /// `src/rpc/core_rpc_server_commands_defs.h` with `get_version`, its only
 /// reader (RK-D8).
 pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
-/// `CORE_RPC_VERSION_MINOR`. 3.54: `get_info` stops repeating the daemon's
+/// `CORE_RPC_VERSION_MINOR`. 3.57: `get_fee_estimate` takes no
+/// parameters and answers `status` and `fees` alone. `grace_blocks` moved
+/// no rung (FL-R26) and `quantization_mask` is a Rust constant the wallet
+/// shares (`shekyl_economics::FEE_QUANTIZATION_MASK`). `get_version` gains
+/// nothing. 3.54: `get_info` stops repeating the daemon's
 /// network (RK-Q6). `nettype` and the booleans `mainnet`, `testnet` and
 /// `stagenet` are gone from it; `get_version.nettype` is the one place a
 /// daemon names its network. `get_version` gains nothing.
@@ -182,7 +186,38 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// reports that state: `get_info`'s Peers part is `"p2p": "offline"` with
 /// no count (and `"p2p": "running"` with its counts), and `get_peer_list`,
 /// `get_connections` and `sync_info` answer `offline` alone.
-pub const CORE_RPC_VERSION_MINOR: u32 = 56;
+/// 3.58: `option_set` and `option_show` (RT-O23…RT-O27); the JSON-RPC
+/// error object gains `data`, and `-26` is a configuration refusal.
+/// `/set_limit`, `/get_limit`, `/set_log_level` and `/set_log_categories`
+/// are gone (`DAEMON_CONFIG_CUTOVER.md` §2.7), and `/start_mining` no longer
+/// takes `do_background_mining` or `ignore_battery` (§4.2: background
+/// mining's options and runtime arguments); `/mining_status` loses
+/// `is_background_mining_enabled` and the four `bg_*` members with the
+/// miner's background half.
+/// 3.59: `get_connections` and `sync_info` rows lose `support_flags` with
+/// the P2P support-flags word (`SHEKYL_P2P_PROTOCOL.md` PWD-T7): it had no
+/// other source. A row from a 3.58 daemon carries the key, which this
+/// version's `ConnectionInfo` refuses, so the identity check reports the
+/// contract before a reply is decoded.
+/// 3.60: a claim-source bond row names `is_support_complete_tree`. A 3.59
+/// daemon still sends `is_foundation_complete_tree`, which this version
+/// refuses. `get_version` gains nothing.
+/// 3.61: a node whose pool is retired answers the chain's reads.
+/// `get_info` carries `pool_retired: true` with `tx_pool_size` (and the
+/// host's `tx_pool_unbroadcast_count`) `null`; `get_transactions` lists an
+/// id the chain does not hold under `unavailable_tx`. A 3.60 reader decodes
+/// `tx_pool_size` as a number and knows neither key. `get_version` gains
+/// nothing.
+/// 3.62: a refusal by grant is the JSON-RPC error object on every surface
+/// (`RPC_WIRE.md` RW-Q3): class `OutsideTheGrant` (-32002) with its typed
+/// diagnostic, where a gated JSON-RPC method was HTTP 403 with -32601 and a
+/// gated REST path was a 404. A path or a name that is not a method stays
+/// not found. The view listener refuses
+/// `/get_alt_blocks_hashes` (`status`), and `calc_pow` and
+/// `get_coinbase_tx_sum` are refused to a bounded caller as
+/// `OverResourceBound` (-32003) until their bounds are set (RT-W10).
+/// `get_version` gains nothing.
+pub const CORE_RPC_VERSION_MINOR: u32 = 62;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -423,7 +458,11 @@ pub struct GetBlockResponse {
     pub tx_hashes: Vec<HashHex>,
     /// The block in its consensus encoding, lowercase hex.
     pub blob: String,
-    pub json: String,
+    /// epee's rendering of the block (RK-D11). It duplicates `blob`; a
+    /// daemon with no epee renderer — the store-backed handlers of
+    /// `DRS_X_STORE_FLIP.md` DX-Q3 — omits it, and RK-W retires it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub json: Option<String>,
 }
 
 /// Params of `get_block_header_by_height` (alias `getblockheaderbyheight`).
@@ -591,11 +630,20 @@ mod tests {
         // 3.53 writes `get_info`'s amounts as decimal strings.
         // 3.54 retires the network's four names from `get_info`. 3.55 drops
         // `last_seen` from `get_peer_list`: the Rust lists carry no clock.
-        // 3.56 reports offline as a state, never a zero.
-        assert_eq!(CORE_RPC_VERSION, 196_664);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 56);
+        // 3.56 reports offline as a state, never a zero. 3.57 takes
+        // `grace_blocks` and `quantization_mask` off `get_fee_estimate`.
+        // 3.58 adds `option_set` / `option_show` and the error object's
+        // `data`, and retires the four runtime endpoints
+        // (DAEMON_CONFIG_CUTOVER §2.7). Both branches had written 57, so the
+        // later merge took the next minor, as 3.44 did. 3.59 drops
+        // `support_flags` from the connection rows (PWD-T7). 3.60 renames
+        // the claim-source bond field to `is_support_complete_tree`. 3.61
+        // answers the chain's reads over a retired pool. 3.62 makes a grant
+        // refusal the error object (RT-W10 step 1).
+        assert_eq!(CORE_RPC_VERSION, 196_670);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 62);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 56);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 62);
     }
 
     #[test]

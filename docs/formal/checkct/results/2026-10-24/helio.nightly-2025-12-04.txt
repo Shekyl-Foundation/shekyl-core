@@ -1,0 +1,49 @@
+workspace: helio
+cargo-checkct: shekyl-checkct:85271e5   options: --timeout 900
+toolchain: nightly-2025-12-04
+profile.release: panic = "abort" overflow-checks = true 
+targets + rustflags: target = ["x86_64-unknown-linux-gnu", "riscv32imac-unknown-none-elf", "thumbv7em-none-eabihf"] rustflags = ["-C", "linker=rust-lld", "-C", "linker-flavor=ld.lld", "-C", "relocation-model=static"] 
+run window (UTC): Sat Oct 24 08:55:00 PM UTC 2026 -> Sat Oct 24 09:10:21 PM UTC 2026
+
+Summary:
+  driver  target                        entrypoint                           status
+  helio   riscv32imac-unknown-none-elf  helio::driver::helio_add             secure
+  helio   riscv32imac-unknown-none-elf  helio::driver::helio_from_repr       secure
+  helio   riscv32imac-unknown-none-elf  helio::driver::helio_invert          secure
+  helio   riscv32imac-unknown-none-elf  helio::driver::helio_is_odd          secure
+  helio   riscv32imac-unknown-none-elf  helio::driver::helio_mul             secure
+  helio   riscv32imac-unknown-none-elf  helio::driver::helio_neg             secure
+  helio   riscv32imac-unknown-none-elf  helio::driver::helio_pow_secret_exp  secure
+  helio   riscv32imac-unknown-none-elf  helio::driver::helio_sqrt            secure
+  helio   riscv32imac-unknown-none-elf  helio::driver::helio_square          secure
+  helio   riscv32imac-unknown-none-elf  helio::driver::helio_sub             secure
+  helio   riscv32imac-unknown-none-elf  helio::driver::helio_to_repr         secure
+  helio   riscv32imac-unknown-none-elf  helio::driver::helio_wide_reduce     secure
+  helio   thumbv7em-none-eabihf         helio::driver::helio_add             secure
+  helio   thumbv7em-none-eabihf         helio::driver::helio_from_repr       secure
+  helio   thumbv7em-none-eabihf         helio::driver::helio_invert          secure
+  helio   thumbv7em-none-eabihf         helio::driver::helio_is_odd          secure
+  helio   thumbv7em-none-eabihf         helio::driver::helio_mul             secure
+  helio   thumbv7em-none-eabihf         helio::driver::helio_neg             secure
+  helio   thumbv7em-none-eabihf         helio::driver::helio_pow_secret_exp  secure
+  helio   thumbv7em-none-eabihf         helio::driver::helio_sqrt            secure
+  helio   thumbv7em-none-eabihf         helio::driver::helio_square          secure
+  helio   thumbv7em-none-eabihf         helio::driver::helio_sub             secure
+  helio   thumbv7em-none-eabihf         helio::driver::helio_to_repr         secure
+  helio   thumbv7em-none-eabihf         helio::driver::helio_wide_reduce     secure
+  helio   x86_64-unknown-linux-gnu      helio::driver::helio_add             secure
+  helio   x86_64-unknown-linux-gnu      helio::driver::helio_from_repr       secure
+  helio   x86_64-unknown-linux-gnu      helio::driver::helio_invert          secure
+  helio   x86_64-unknown-linux-gnu      helio::driver::helio_is_odd          secure
+  helio   x86_64-unknown-linux-gnu      helio::driver::helio_mul             secure
+  helio   x86_64-unknown-linux-gnu      helio::driver::helio_neg             secure
+  helio   x86_64-unknown-linux-gnu      helio::driver::helio_pow_secret_exp  unknown
+  helio   x86_64-unknown-linux-gnu      helio::driver::helio_sqrt            unknown
+  helio   x86_64-unknown-linux-gnu      helio::driver::helio_square          secure
+  helio   x86_64-unknown-linux-gnu      helio::driver::helio_sub             secure
+  helio   x86_64-unknown-linux-gnu      helio::driver::helio_to_repr         secure
+  helio   x86_64-unknown-linux-gnu      helio::driver::helio_wide_reduce     secure
+UNKNOWN
+Sat Oct 24 09:10:21 PM UTC 2026
+  [checkct:result] Program status is : unknown (900.047)
+  [checkct:result] Program status is : unknown (900.048)

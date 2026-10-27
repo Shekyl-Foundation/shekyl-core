@@ -35,13 +35,14 @@
 
 use crate::apply_policy::ArchivalFamily;
 use shekyl_chain_rules::{AnchorConflict, RuleSet};
-use shekyl_types::{BlockHash, PCanonicalId, TxHash};
+use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, TxHash};
 
 use crate::codec::{SchemaVersion, SettlementEpochBlocks};
 
 pub use super::invariant::{
-    AccrualFault, CellFault, LeafCountFault, LeafDensity, SettlementFault, SlashFault,
-    StoreInvariant, UndoFault,
+    AccrualFault, AdmissionWriteFault, BodyHolderFault, CellFault, DigestFault, DrawRowFault,
+    DrawableFault, EdgeFault, FrozenFault, LeafCountFault, LeafDensity, SettlementFault,
+    SlashFault, StoreInvariant, UndoFault,
 };
 
 /// Why a store operation failed, by class.
@@ -457,6 +458,33 @@ pub enum StoreCannot {
     /// An alt-chain store refusal (DRS-E1 S-ALT, `DRS_E1_SALT.md` §3.2) —
     /// the store's decisions on `alt_blocks`, none of them a fault in it.
     Alt(AltCannot),
+    /// A bundle-queue refusal (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5) — the
+    /// queue's decisions about what it was asked to hold.
+    Queue(QueueCannot),
+}
+
+/// The bundle queue's typed refusals — decisions, not faults.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QueueCannot {
+    /// The queue already holds a bundle for `h`. One per `h`; the first
+    /// valid one wins (§7.5).
+    Held {
+        /// The block the offered bundle is for.
+        h: BlockHeight,
+    },
+    /// The body does not hash to the reference's prunable hash. A body is
+    /// held under the hash its reference names, and accepted on equality.
+    BodyNotReferenced {
+        /// The block the offered bundle is for.
+        h: BlockHeight,
+    },
+    /// The queue holds its bound of entries. The window keeps no more
+    /// heights than that open, so a full queue is a closed window the
+    /// caller did not remove first.
+    Full {
+        /// The bound, `W₂`.
+        capacity: u64,
+    },
 }
 
 /// The alt-chain store's typed refusals — decisions, not faults
@@ -497,19 +525,10 @@ pub enum PoolCannot {
     /// `insert` of a transaction the pool already holds. The pool decides
     /// whether to upsert by removing first, as the C++ `add_tx` does.
     AlreadyHeld,
-    /// `update` of a transaction the pool does not hold.
+    /// `publish` or `stand` of a transaction the pool does not hold.
     NotHeld,
     /// `insert` with no transaction bytes: a pool entry is a transaction.
     EmptyBlob,
-    /// `update` whose relay state does not
-    /// [`follow`](crate::codec::RelayState::follows) the stored one — the
-    /// ratchet's verdict, carried as the type gave it: a changed provenance
-    /// (§92.4, `SPL-Q9`), a phase that is not the stored one or a forward
-    /// step, a responsibility re-armed after observation disarmed it.
-    Relay(crate::codec::RelayRefusal),
-    /// `fcmp_cache` is the all-zero null hash. Absence is `None`; the null
-    /// hash is not a verification (SPL-10).
-    NullFcmpCache,
 }
 
 impl core::fmt::Display for StoreCannot {
@@ -649,6 +668,7 @@ impl core::fmt::Display for StoreCannot {
             },
             Self::Pool(cannot) => write!(f, "pool store: {cannot}"),
             Self::Alt(cannot) => write!(f, "alt-chain store: {cannot}"),
+            Self::Queue(cannot) => write!(f, "bundle queue: {cannot}"),
             Self::PoolFileForeign => f.write_str(
                 "pool file is not one this store wrote and not one it may recreate (no redb \
                  database, no pool header, or a header that does not decode): refused, not \
@@ -664,14 +684,10 @@ impl core::fmt::Display for PoolCannot {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::AlreadyHeld => f.write_str("insert of a transaction the pool already holds"),
-            Self::NotHeld => f.write_str("update of a transaction the pool does not hold"),
+            Self::NotHeld => {
+                f.write_str("publish or stand of a transaction the pool does not hold")
+            }
             Self::EmptyBlob => f.write_str("insert with no transaction bytes"),
-            Self::Relay(refusal) => {
-                write!(f, "update whose relay state does not follow: {refusal}")
-            }
-            Self::NullFcmpCache => {
-                f.write_str("fcmp verification cache is the null hash; absence is None")
-            }
         }
     }
 }
@@ -702,6 +718,27 @@ impl core::error::Error for AltCannot {}
 impl From<AltCannot> for StoreError {
     fn from(cannot: AltCannot) -> Self {
         Self::Cannot(StoreCannot::Alt(cannot))
+    }
+}
+
+impl core::fmt::Display for QueueCannot {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Held { h } => write!(f, "a bundle for height {h} is already queued"),
+            Self::BodyNotReferenced { h } => write!(
+                f,
+                "the body offered for height {h} is not the one its reference names"
+            ),
+            Self::Full { capacity } => write!(f, "the queue holds its bound of {capacity}"),
+        }
+    }
+}
+
+impl core::error::Error for QueueCannot {}
+
+impl From<QueueCannot> for StoreError {
+    fn from(cannot: QueueCannot) -> Self {
+        Self::Cannot(StoreCannot::Queue(cannot))
     }
 }
 

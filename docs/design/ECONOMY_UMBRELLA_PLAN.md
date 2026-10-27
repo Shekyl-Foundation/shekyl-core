@@ -33,8 +33,8 @@ Ordered, because each step's numbers are inputs to the next.
 | **EUP-1** | The emission speed factor per block, as designed (A below), fixed in the code on `dev`. This document and the `DESIGN_CONCEPTS.md` drift corrections (B, C, E) land beside it. | #951 (`fix/esf-per-block`); #948 | landed |
 | **EUP-2** | The economics sim realigned to the code: #936 landed on `dev` first, and the ESF fix (#951) merged over it, carrying the per-block factor into the sim and regenerating its fixtures on the design curve; ESR-8 (restated constants → imports); ESR-10 (fee multiplier and rung mix, each run on `w_ref` and the zone as they are **and** re-derived from the post-quantum ordinary weight). | [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md) | ESR-1…ESR-7 landed (#935, #936); ESR-8 (#1052), ESR-13 (#1050) and ESR-14 (#1060) landed; ESR-11's loop deleted (§5.22); ESR-10 open |
 | **EUP-3** | Staking coupled in: the purse the economics sim computes feeds the population model; L19i's challenge egress in the same model; the bond at the shipped floor. The staking sim is checked against what has been built, and leads what has not. | `shekyl-staking-sim`; the staking-sim row in `FOLLOWUPS.md` (reworded on PR #936 to *Check `shekyl-staking-sim` against the staking code built so far*) | not started |
-| **EUP-4** | The full per-year set, run on the design curve, every scenario, both fee arms, the ESR-7 envelope. **This is the assessment baseline.** §4's criteria are graded against it, and they are written before it runs. | this document | waits on EUP-1…EUP-3 |
-| **EUP-5** | The decisions, with numbers: D (the floor in consensus, holistically), F (the escalation and its GF-7 asymptote), G (zone and `w_ref` derivations, FL-R13), H (challenge doctrine against the budget), I (bond sizing, first-time sim), and the stress test of the 720-block window's length. | each row's owner (§3) | waits on EUP-4 |
+| **EUP-4** | The full per-year set, run on the design curve, every scenario, both fee arms, the ESR-7 envelope. **This is the assessment baseline.** §4's criteria are graded against it, and they are written before it runs. It re-derives the readings of [`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`](ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md) §12.13–§12.14, which are dated flat-fee runs (`FOLLOWUPS.md`). | this document | waits on EUP-1…EUP-3 |
+| **EUP-5** | The decisions, with numbers: D (the floor in consensus, holistically), F (the escalation and its GF-7 asymptote), G (zone and `w_ref` derivations, FL-R13), H (challenge doctrine against the budget), I (bond sizing, first-time sim), and the stress test of the 720-block window's length. Also the component constants — burn base and cap, pool share, staker share and decay, release rails, `tx_volume_baseline` — inherited values whose April derivation is retired (finding E): the parameter sweep (ESR-16), run on the production fee after ESR-15 and ESR-10 and graded at EUP-4, re-derives them, and their values do not change until then; the ESF is the ruled design curve and is excluded (ruled 2026-10-24) | each row's owner (§3) | waits on EUP-4 |
 
 **No production-arm table is run until the ESF fix and #936 are both on
 `dev`** (design-owner lane, 2026-10-04): every number in ESR-1…ESR-7 was
@@ -63,9 +63,9 @@ for direction, not level, until EUP-4.
 | 1 | Emission curve | PoW security budget; predictable, no governance. ESF 22 per block | `DESIGN_CONCEPTS.md` §3, §13; FL-R12′ | → miner pay, staker share (11), fee floor (5), every onset | Code ran 21 per block (A) |
 | 2 | Perpetual tail | Avoid the fee-only end state; 0.3 SKL/min | FL-R12′ | → security budget | — |
 | 3 | Release multiplier | Demand-paced emission, 0.8–1.3× over a 720-block window | Component 1; FL-R24 (operand) | ← volume; → emission (1), correction C (6) | ESR-4 (`896d95c33`): step response over 720 blocks; ESR-6 (`49b313eeb`): pinned at 0.8 while blocks carry 22 of 50 |
-| 4 | Block-weight governance | Penalty past the median; 300 KB zone; 2× limit; penalty applied last | FL-R12′ (order); zone value punted (G) | ← weights; → floor (5), fill rule, paid reward | ESR-6: blocks carry 22 of 50 for eleven years (finding 1) |
-| 5 | Fee ladder | Price block space: Economy `F = R·C·w_ref/M²`, Standard 4F, Priority `max(2RC/M, 4F)` | `FEE_LADDER_DERIVATION.md` §5, §8; FL-R13 open | ← reward, C, median, `w_ref` | ESR-1 (`9d8a52985`): Standard ≈ 3.3 SKL/tx in year 1; ESR-6: year 1 2.36, falls 4.9× once the median grows |
-| 6 | Fee correction C | Keep the miner's margin whole: `(1 − σ)·M_r/(1 − b)` | FL-R20/21 | ← σ (11), burn (8), M_r (3); → floor (5), **block growth** | ESR-6 finding 2: the year blocks first grow is set by `(1 − σ)/(1 − b)` — two-thirds burn, one-third σ |
+| 4 | Block-weight governance | Penalty past the median; 300 KB zone; 2× limit; penalty applied last | FL-R12′ (order); zone value punted (G) | ← weights; → floor (5), fill rule, paid reward | ESR-6 on #936: eleven years, growth in year 11. Re-measured 2026-10-17 (finding 1): eighteen years, growth in year 19 |
+| 5 | Fee ladder | Price block space: Economy `F = R·C·w_ref/M²`, Standard 4F, Priority `max(2RC/M, 4F)` | `FEE_LADDER_DERIVATION.md` §5, §8; FL-R13 open | ← reward, C, median, `w_ref` | the mean ordinary fee prints from year 10 on: 0.92 SKL at year 10, 0.019 at year 60 (`--stage2`); years 1–9 print at EUP-4 prep |
+| 6 | Fee correction C | Keep the miner's margin whole: `(1 − σ)·M_r/(1 − b)` | FL-R20/21 | ← σ (11), burn (8), M_r (3); → floor (5), **block growth** | ESR-6 finding 2: the year blocks first grow is set by `(1 − σ)/(1 − b)` — five-eighths burn, three-eighths σ (0.625 / 0.375, re-measured 2026-10-17) |
 | 7 | Floor enforcement | Relay policy; block-carried transactions bypass it | FL-V2; **Q9 reopened as a bug, 2026-10-02** | → stuffing cost | ESR-7 (`28b0006f4`): cheapest archival byte is a miner's in every era |
 | 8 | Adaptive burn | `50 % × √(V/50) × net supply ratio`, cap 90 % | Component 2; F-D; FL-R16c | ← volume, net supply; → split (9), C (6) | ESR-5 (`eb501b15d`): net supply through its owner, report byte-identical |
 | 9 | Burn split | 25 % of burn → staker pool, 75 % destroyed | Component 2 | → budget (12) | — |
@@ -73,7 +73,7 @@ for direction, not level, until EUP-4.
 | 11 | Staker emission share | Bootstrap subsidy, 15 %, ×0.90/yr | Component 4 | ← emission; → budget (12), C (6) | — |
 | 12 | Archival budget | Emission leg + fee leg; unclaimed after 26 epochs is never created | `ARCHIVAL_BUDGET_SCHEDULE.md` §4 | ← (9), (11); → reward division (13) | — |
 | 13 | Reward division | Pay-for-service by capped serve-work | `REWARD_EMISSION_LEG.md` §4 | ← budget, work; → archiver income | — |
-| 14 | The archival good | Prunable bodies + `pqc_auths`, for rescan, audit, dispute | `V3_STAKER_ARCHIVAL.md`; PDM-Q6, PDM-Q2 | → burden | ESR-6: corpus at year 10 is 229 864 closed shards, against 523 841 before |
+| 14 | The archival good | Prunable bodies + `pqc_auths`, for rescan, audit, dispute | `V3_STAKER_ARCHIVAL.md`; PDM-Q6, PDM-Q2 | → burden | ESR-6: corpus at year 10 is 229 864 closed shards |
 | 15 | Bond | Honesty anchor, slashable; 0.75 SKL per shard | Component 3; magnitude underived (I) | → locked capital, the binding burden (F-G) | — |
 | 16 | Challenge | Exhaustive, 3 per pair per epoch, whole-shard read | `ARCHIVAL_CHALLENGE_MECHANISM.md`; SF-D1 | → archiver egress cost | Not yet in the economics sim (H) |
 | 17 | Coverage | Market-set by budget → APR → entry | L11 | ← budget; → availability | — |
@@ -84,7 +84,7 @@ for direction, not level, until EUP-4.
 breaks:
 
 - **Everything rides the curve.** `F ∝ R`, so every fee, every stuffing
-  cost, every onset year and the year-11 capacity unlock move with the emission
+  cost, every onset year and the capacity unlock (year 19 on the 2026-10-17 run; year 11 on #936) move with the emission
   speed factor (A).
 - **Block growth rides the staker share and the burn** (ESR-6 finding 2). A
   change to the decay schedule, the burn curve or C moves the year the default
@@ -110,16 +110,16 @@ disposition verbatim**.
 
 | | Finding | Rick's disposition | Action | Step |
 | --- | --- | --- | --- | --- |
-| **A** | The design's curve is ESF 22 per block (50 % ~year 11, 80 % ~year 25; year-1 reward ~970). The code applies Monero's per-minute convention, 22 − (2 − 1) = 21 per block: 50 % at ~5.5 years, 2 048 SKL at genesis. Witnessed by the design's year-1 reward row as well as its sentence; the recorder's "ESF-22 milestone" at 5 788 000 blocks is a third figure (ESF 23). | "The code should match the sim, as that is the design - It's entirely likely that the implementation is still in Monero, that happens alot, especially with the old cpp." | The ESF PR: the factor becomes per block; the conversion and its unread C++ macro are deleted; KATs re-minted from the closed form on both sides; digests re-pinned; the captured chains re-captured. | EUP-1 |
+| **A** | The design's curve is ESF 22 per block (50 % ~year 11, 80 % ~year 25; year-1 reward ~970). The code applies Monero's per-minute convention, 22 − (2 − 1) = 21 per block: 50 % at ~5.5 years, 2 048 SKL at genesis. Witnessed by the design's year-1 reward row as well as its sentence; the recorder's "ESF-22 milestone" was 5 788 000 blocks, a third figure (ESF 23); it samples 2 907 270 now. | "The code should match the sim, as that is the design - It's entirely likely that the implementation is still in Monero, that happens alot, especially with the old cpp." | The ESF PR: the factor becomes per block; the conversion and its unread C++ macro are deleted; KATs re-minted from the closed form on both sides; digests re-pinned; the captured chains re-captured. | EUP-1 |
 | **B** | `DESIGN_CONCEPTS.md` still carries the stake-ratio governance signal F-D deleted. | "Great finding, that should be fixed immediately because it is likely to send both humans and agents down the wrong path early." | Corrected in this PR. | EUP-1 |
 | **C** | Component 3's rationale ("FCMP++ needs historical tree state") contradicts its design home: the good is prunable bodies for rescan, audit and dispute. | "This has recently evolved during implementation, and this is one place where the landed code is ahead of the design documents … We need to, but we also need to make sure that we aren't unbalancing the whole cart, as it were." | Corrected in this PR; the balance question is EUP-4's. | EUP-1, EUP-4 |
 | **D** | The anti-stuffing argument assumes a consensus floor; a miner's own transactions bypass it. | "Yes, this is one of the things we need from the sim, and then decide how it should be implemented holistically." | ESR-7 measured it; noted at the argument in this PR; decided at EUP-5 with the floor-basis question. | EUP-5 |
 | **E** | The yield and outcome tables were computed at a flat 0.10 SKL fee and the deleted stake-ratio concept. | "And they should be fixed, based on taking current implementation into the sim. This staking section is where we are ahead, and same problem - how is what we have implemented going to affect the system as a whole." | Marked records-was in this PR; recomputed from the sim at EUP-4. | EUP-1, EUP-4 |
 | **F** | The escalation is described as live and ships flat; the knee was derived from a trajectory the chain does not carry. | "This is a deviation that was recently coded in, and we have to re-evaluate this when we have the sim aligned - then we will probably have to make some design decisions." | Held: the knee test bounds, not pins (2026-10-03); FOLLOWUPS row owned by the GF-7 ceremony. | EUP-5 |
-| **G** | The 300 KB zone and `w_ref = 3 000` were never derived for Shekyl; FL-R13 (floor basis) is open on the same surface. | "Yes, and that punt needs to have some derivation behind it - which is why we stopped to run the sim under the new/current paradigm." | ESR-10's second arm; FOLLOWUPS rows (zone capacity leg; `w_ref`). | EUP-2, EUP-5 |
+| **G** | The 300 KB zone and `w_ref = 3 000` were never derived for Shekyl; FL-R13 (floor basis) is open on the same surface. | "Yes, and that punt needs to have some derivation behind it - which is why we stopped to run the sim under the new/current paradigm." | ESR-10's second arm; FOLLOWUPS rows (zone capacity leg; `w_ref`). **Requirement from FL-V12** (`FEE_LADDER_DERIVATION.md` §2, 2026-10-16): the served rate is whole atomic units per byte, and where `F` is small that resolution acts as an output quantizer — 18 of `--fee-ladder`'s 600 feedback cells toggle one floor unit, worst 833 bp against FL-E1's 50 bp bar. Whatever basis G derives states the served rate's resolution such that one unit of the rate stays inside that bar across the reachable state space. | EUP-2, EUP-5 |
 | **H** | The challenge doctrine's egress (~80× storage, L19i) breaches the budget in calibrated cells; the two were ruled in different rounds. | "Yes, they need to be reconciled." | Egress into the population model. | EUP-3, EUP-5 |
 | **I** | The bond's magnitude has no derivation; F-G found it the binding burden. | "Yes, which is why we need to re-sim it. Or sim it the first time, since it was not part of the original design, or at least not part of the design that was fully assessed." | First-time sim of the bond. | EUP-3, EUP-5 |
-| **J** | Design goal 5 and the release multiplier are intact. | "Yes, I think the 720-block operand has been tested in a number of ways (check this) and is actually more derived than it looks. However, I think we are still calling it provisional because it has NOT been stress tested." | Checked: FL-R24 ruled the operand's *form* (the exact SMA) from FL-E1–E3; window-length arms were run in round 2b and recorded "not selected, not read for selection". The form is derived, the length is provisional, and no stress test of the length has run. ESR-4 put the window into the fold, so step response, boom/bust and a stuffer working the window's edge are now runnable. | EUP-5 |
+| **J** | Design goal 5 and the release multiplier are intact. | "Yes, I think the 720-block operand has been tested in a number of ways (check this) and is actually more derived than it looks. However, I think we are still calling it provisional because it has NOT been stress tested." | Checked: FL-R24 ruled the operand's *form* (the exact SMA) from FL-E1–E3; window-length arms were run in round 2b and recorded "not selected, not read for selection". The form is derived, the length is provisional, and no stress test of the length has run. ESR-4 put the window into the fold, so step response, boom/bust and a stuffer working the window's edge are now runnable; they are written into EUP-5 as their own measurement (§4.2). | EUP-5 |
 
 **One conflict, resolved by the later ruling.** The relayed program lists
 "dead schedule" under ESR-8. Rick ruled on 2026-10-03 that the stake schedule
@@ -163,7 +163,7 @@ Monero number at 2 or above never ran, and those arms are deleted
 | Fee floor's basis, `F = R·C·w_ref/M²` | Reward | **Not derived.** Reward-proportional, so highest at genesis and decaying 1,707× | FL-V11. **Direction RULED** (§3.2, 4): decoupled from the reward; the basis is FL-R13's round, EUP-5 G |
 | `w_ref` = 3,000 | Transaction weight | **Not derived.** No examination record as a choice | CEN-M3; `FOLLOWUPS.md`; EUP-5 G |
 | Zone, 300,000 B | Transaction weight (capacity leg); verification time (cost leg) | **Split.** The cost leg is measured on the device floor. The capacity leg was ratified on an estimate of 4–8 KB a spend; measured, 13.6 KB, so about 22 spends | C2-R2 Q1; `FOLLOWUPS.md`; EUP-5 G |
-| Coinbase reserve, 600 B | Coinbase weight | **Not derived, and ratified on a statement that is false.** C2-R2 Q7 records that a Shekyl coinbase "serializes well under 600 bytes". The minimal one, a single output with no attestation, weighs 1,331 B, of which 1,232 B is `extra`. Bodies the fill's bound allows then make a block over the limit, and the builder returns no template (`bodies_at_the_fills_bound_make_a_block_past_the_limit_while_the_reserve_is_600`) | **New. RULED** (§3.2, 2): derived, with a compile-time assertion; `FOLLOWUPS.md` |
+| Coinbase reserve | Coinbase weight | **Derived 2026-10-22.** The grammar's maximum is 1,386 B (`max_coinbase_weight`, margin 0). A template coinbase at height 5 weighs 1,364 B. *Records-was:* 600 B, ratified on a false statement; the minimal coinbase measured 1,331 B on 2026-10-04, before `0x0C`. | **Done** (§3.2 c) |
 | Transaction weight cap, 149,400 = zone/2 − reserve | The two rows above | **Formula derived; its stated guarantee is 131 B short.** Two maximal transactions and a coinbase are 300,131 B: a sliver of penalty, not a failure | C2-R2 Q7; rides the two rows above |
 | Tail, 0.6 per block | Reward against supply | **Not derived, and not derivable: its size is a ruling.** The same 0.6 as Monero's, on an asymptote of 2³² SKL: 157,680 SKL a year is 0.0037 % of it, where Monero's is about 0.86 % of its supply. FL-R12′ ruled the tail perpetual; no record sizes it. What a tail buys in hash depends on SKL's price, so no chain-internal quantity sizes it. The governance-free form of the choice is a ratio, the tail as a fraction of the asymptote per year, and Rick chooses it. §4's goal 2 is a share test and cannot | FL-V11 ("inherited-unexamined"). **RULED** (§3.2, 3): a criterion, in §4 |
 | Template fill, `decide_listed_body` | Hard-fork version | **Not derived: the reward-aware fill does not run.** The version test is deleted. The daemon's scan lists bodies in fee order, passes one that would exceed 13/10 of the median minus the 600-byte reserve, and stops once listed weight is past the median. `shekyl_block_template::Fill` is the reward-aware policy and is not that scan | **New. RULED** (§3.2, 1): the reward-aware fill is the design; the fill moves to Rust; `FOLLOWUPS.md` |
@@ -175,7 +175,7 @@ Monero number at 2 or above never ran, and those arms are deleted
 | Surge factor and the 100-block window | Verification time of a surge block | **Derived.** The inherited ×50 was re-derived from the device floor's verification time; the config carries 4 | C2-R2 Q3; GAP-7 |
 | Quadratic penalty and the 2× limit | Reward and weight, both as ratios | **Derived.** Scale-free in both operands; shape examined | C2-R2 Q4 |
 | Serialized-size cap, 1,000,000 B | Transaction weight | **Derived** as a parse bound: the weight cap binds first, and it admits 22 inputs of the measured shape | C2-R2 Q6; CEN-I4's measurement |
-| Pool lifetime, 3 days; pool cap, 648 MB | Block time; the zone | **Derived**, against the FCMP++ reference-age window. The cap is "3 days at the zone" and moves with it | C2-R2 Q11 |
+| Pool lifetime, 3 days; pool cap, 648 MB | Block time; the zone | **Derived**, against the FCMP++ reference-age window. The C++ cap is "3 days at the penalty-free zone" (2 160 × 300 000) and moves with it. **The Rust pool's is re-derived on another basis (ruled 2026-10-17, superseding C2-R2 Q11):** no timer — the reference window evicts; the cap is `REFERENCE_BLOCK_MAX_AGE` blocks at the block weight limit, the hard limit (100 × 600 000, 60 MB at genesis), so its horizon is the reference window and its block the heaviest that window may hold; no reorg retention (CEN-K10 deleted). The C++ pool keeps Q11's values until the flip | C2-R2 Q11; `DRS_E5_POOL_ALT_PRUNE.md` decision log 2026-10-17 |
 | `tx_extra` relay cap, 24,576 B | Transaction weight | **Derived**; Shekyl's own value | C2-R2 Q10 |
 | Fee correction `C` and the three rungs | Shekyl's `σ`, `M_r`, `b` | **Derived**, given the floor they multiply | FL-R11, FL-R17, FL-R20 |
 
@@ -203,7 +203,13 @@ of high-fee bodies fills to it, the block is 731 B over, and an honest miner
 has no block to mine while the pool stays full, at the cost to an attacker
 of fee offers that are never collected.
 
-**The fill weighs bodies alone, at every weight.** The reserve's shortfall
+**UPDATE 2026-10-22.** The reserve is 1,386 B (margin 0) and the Rust fill
+prices `bodies + coinbase`. A listing at the fill's bound builds a block
+within the limit, and the sim records that block weight. The C++ scan is
+unchanged and deletes with `tx_pool.cpp` at the DRS-X flip. The two
+paragraphs above and the one below are the reading that change closed.
+
+**The fill weighs bodies alone, at every weight — CLOSED 2026-10-22.** The reserve's shortfall
 at the limit is the visible end of a wider difference. `Fill::admit` and
 `Fill::reward` price the penalty on the bodies' weight; the template and the
 validator weigh the block, coinbase included. So bodies that fit the median
@@ -242,7 +248,12 @@ the three operands.
    grammar allows, attestation included, plus a stated margin, with a
    compile-time assertion that the reserve covers it. C2-R2 Q7 is reopened
    on that basis, ruled together with the zone's capacity leg, and lands
-   before the reward-aware fill goes live.
+   before the reward-aware fill goes live. **UPDATE 2026-10-22.** The cover
+   is the codec test `the_maximal_coinbase_weighs_what_the_grammar_sums`
+   (`rust/shekyl-wire/tests/coinbase_reserve.rs`). It builds the maximal
+   coinbase through the codec and weighs it. The reserve is
+   `max_coinbase_weight()` plus `COINBASE_RESERVE_MARGIN` (0), so an assert
+   of the reserve against that function restates the definition.
 3. **Tail.** "A criterion, not a number": at maturity the tail is at least
    `k` times the median per-block fee revenue on the baseline demand
    scenario, `k ≥ 1` ("Carlsten: the fixed reward must dominate fee
@@ -264,9 +275,9 @@ the three operands.
 | # | Work | Gate |
 | --- | --- | --- |
 | a | The version-gate sweep: every version comparison in the C++, classified by operand, with a gate holding the inventory. **Done 2026-10-05** ([`CXX_VERSION_GATES.md`](CXX_VERSION_GATES.md)): the block-version gates are deleted or collapsed, bar the fill (d); the transaction-version collapse is its own PR | before EUP-4 |
-| b | `Fill::admit_up_to` batches the penalty zone, held to the single-offer walk | EUP-4 prep; the 135-year arms wait on it |
-| c | The coinbase reserve, derived, with its compile-time assertion | with the zone's capacity leg; before (d) |
-| d | The fill moves to `shekyl-block-template`; the C++ fill and gate are deleted. The owner prices and bounds the weight the block carries, coinbase included, and the sim records that weight; the ESR figures that read the fill are re-run | after (c) |
+| b | `Fill::admit_up_to` batches the penalty-free part (built 2026-10-04) and walks the penalty zone one body at a time. The approved zone closed form, held to the single-offer walk, is **not built**: it is the first EUP-4 prep PR (ruling 5, 2026-10-24; [`ECONOMICS_SIM_PHASE0.md`](ECONOMICS_SIM_PHASE0.md) §P0.6) | EUP-4 prep; the 135-year growth arms wait on it |
+| c | The coinbase reserve, derived. **Done 2026-10-22** on the inherited 300,000 B zone (reserve 1,386; `TX_WEIGHT_LIMIT` 148,614). The cover is the codec test `the_maximal_coinbase_weighs_what_the_grammar_sums`. The zone's capacity leg remains EUP-5 G and moves the limit again | with the zone's capacity leg; before (d) |
+| d | The Rust fill prices and bounds the weight the block carries, coinbase included, and the sim records that weight. **Done 2026-10-22.** The C++ fill deletes with `tx_pool.cpp` at the DRS-X flip (DEL-010), not in this change | after (c) |
 | e | Q9, the floor in consensus (D) | after (d): both land in the template and admission path, and the enforced case's arithmetic depends on the fill |
 
 Unchanged and stated so they are not re-asked: `total_staked` stays as bonded
@@ -320,7 +331,11 @@ is 64 s. The growth schedule is not affordable that far as the fill stands —
 `Fill::admit_up_to` batches only the penalty-free part of a block and walks
 the penalty zone one body at a time. Long growth arms wait on that zone being
 closed in form, held to the single-offer walk as the free part is (approved
-2026-10-05 as EUP-4 prep, §3.2 b). The structural arms carry a per-block fee
+2026-10-05 as EUP-4 prep, §3.2 b). Re-measured 2026-10-23
+([`ECONOMICS_SIM_PHASE0.md`](ECONOMICS_SIM_PHASE0.md) §P0.6): on the flat
+control 63 years is 273 s and 66 years passes 1 200 s; on production the
+growth arm passes 1 200 s somewhere past year 80, and every other scenario
+folds 135 years in about a minute. The structural arms carry a per-block fee
 revenue and variance column for the tail criterion (§3.2, 3).
 
 Scenario 9 (high history, low activity) is the first of the structural arms.
@@ -351,6 +366,48 @@ design's fill. The daemon runs the pre-v5 rule until the fill moves to Rust,
 so this reading is the design's behaviour once the fill lands.
 
 ---
+
+
+### 4.2 The 720-block window's length, measured at EUP-5 (Rick, 2026-10-16)
+
+The window's **form** is ruled: the exact SMA, FL-R24, from FL-E1–E3. Its
+**length**, 720 blocks (one day at the 120 s target), is provisional and
+has never been stress tested (§3, item J). ESR-4 put the window into the
+sim's fold, so the length can be measured on production's operand. Three
+measurements, run at EUP-5; each says what it reads and what result
+reopens 720. A threshold the text does not fix is **PROPOSED** and is
+ratified before the run, for the reason §4 gives.
+
+1. **Step response.** A sustained step in demand, up and down
+   (50 → 200 → 50 transactions a block) at each registered age, through
+   the fold's window and the production owners. **Reads:** blocks for
+   `M_r`, `b` and the relay floor to reach 95 % of their new steady
+   state, and the floor's worst one-block rise on the way. **Reopens
+   720 if:** any of the three takes longer than one window to settle
+   (something besides the window is slow), or the capacity criterion in
+   §4's table fails for the whole ramp in a registered scenario — demand
+   outrunning a floor that is still pricing yesterday.
+2. **Boom and bust.** A surge shorter than the window followed by a
+   collapse, at several surge lengths. **Reads:** `M_r`'s excursion and
+   the emission it pays against the neutral trajectory, `b`'s excursion,
+   and how long the floor stays above its post-collapse steady state.
+   **Reopens 720 if:** a surge shorter than the window moves cumulative
+   emission by more than a **PROPOSED** fraction of the neutral
+   trajectory's, or after the collapse the standard rung prices the
+   baseline's demand out (the capacity criterion fails) for longer than
+   one window.
+3. **A miner working the window's edge.** A miner stuffs its own blocks
+   with transactions timed so they enter and leave the window at chosen
+   heights, to raise `M_r` around blocks it produces. **Reads:** the
+   stuffer's net gain per stuffed block (extra reward kept, less the fees
+   it burns), against the same volume stuffed uniformly. **Reopens 720
+   if:** edge-timed stuffing is profitable where uniform stuffing at the
+   same volume is not — the window's length is then the lever — or the
+   ESR-7 envelope minimum falls below the relay floor (§4's Stuffing
+   row).
+
+Planning text only: the measurement is EUP-5's to run, and no code
+changes with this section.
 
 ## 5. What this document does not do
 

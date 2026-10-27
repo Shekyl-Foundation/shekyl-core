@@ -30,7 +30,7 @@ use super::super::network::Network;
 use super::super::output_selector::{OutputCandidate, OutputSelector, SelectedOutputs};
 use super::super::pending::{
     InFlightSubmit, PendingTx, ReservationId, ReservationTTLConfig, SubmitOutcome, TxHash,
-    TxRecipientSummary, TxRequest,
+    TxRecipient, TxRecipientSummary, TxRequest,
 };
 use super::super::refresh::{derive_snapshot_id, LedgerSnapshot};
 use super::super::signer::{SignedTransfer, Signer, TransferSigningContext};
@@ -401,7 +401,8 @@ where
 
         // C2 (2A §3.7.5): when a curve tree is enforced, the reference block
         // anchors `REF_ANCHOR_AGE` behind the tip; an output is in the tree as
-        // of that reference block only if `eligible_height <= reference_height`.
+        // of that reference block only if it matured by the block before it
+        // (`in_tree_at_reference`: `eligible_height < reference_height`).
         // Without a tree there is no FCMP reference, so C2 does not apply.
         let c2_active = matches!(tree_gate, TreeSpendGate::Enforced { .. });
         let (
@@ -459,7 +460,7 @@ where
                     // C2 active: spendability is decided against the *reference*
                     // height, not the per-output eligible height.
                     Some(rh) => {
-                        if td.eligible_height > rh {
+                        if !shekyl_curve_tree::in_tree_at_reference(td.eligible_height, rh) {
                             // Too fresh for the reference block — not in the tree
                             // there even if its leaf is already ingested.
                             let raw = amount.to_raw();
@@ -467,8 +468,8 @@ where
                             not_yet_spendable.push((td.eligible_height, raw));
                         } else if tree_gate.covers(rh) {
                             // The tree has reached the reference height, so its
-                            // root is reconstructable and every `eligible <= rh`
-                            // leaf is present at the reference block — spendable.
+                            // root is reconstructable and every leaf matured before
+                            // `rh` is present at the reference block — spendable.
                             spendable_now_total =
                                 spendable_now_total.saturating_add(amount.to_raw());
                             candidates.push(OutputCandidate { index: idx, amount });
@@ -591,7 +592,10 @@ where
                 SendError::OutputNotYetSpendable {
                     eligible_height,
                     reference_block_height,
-                    wait_blocks: eligible_height.saturating_sub(reference_block_height),
+                    wait_blocks: shekyl_curve_tree::blocks_until_in_tree(
+                        eligible_height,
+                        reference_block_height,
+                    ),
                 }
             } else {
                 SendError::InsufficientFunds {
@@ -911,10 +915,7 @@ where
         let summary: Vec<TxRecipientSummary> = request
             .recipients
             .iter()
-            .map(|recipient| TxRecipientSummary {
-                address: recipient.address.clone(),
-                amount_atomic_units: recipient.amount_atomic_units,
-            })
+            .map(TxRecipient::summary)
             .collect();
 
         // CT-5d: the realized content fingerprint `content_gen` advances against
@@ -923,9 +924,12 @@ where
         // the build rather than feed a wrong value into a consent decision.
         // Ledger-independent, so it runs before the guard to keep the guarded
         // section minimal.
-        let fingerprint =
-            ContentFingerprint::from_build(meta.fee, &summary, meta.selected.total_covered)
-                .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
+        let fingerprint = ContentFingerprint::from_build(
+            meta.fee,
+            &request.recipients,
+            meta.selected.total_covered,
+        )
+        .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
 
         // Build's lock₂ — the same discipline the re-anchor's lock₂
         // applies to its reference (`CT5D_REANCHOR.md` §5), on the axis
@@ -1070,15 +1074,6 @@ where
                 selected.sort_unstable();
                 (held.request.clone(), selected)
             };
-
-            let summary: Vec<TxRecipientSummary> = request
-                .recipients
-                .iter()
-                .map(|r| TxRecipientSummary {
-                    address: r.address.clone(),
-                    amount_atomic_units: r.amount_atomic_units,
-                })
-                .collect();
 
             // --- phase 0 (async, no state lock): fresh reference + fixed-input fee ---
             let fee_snapshot = self
@@ -1258,8 +1253,9 @@ where
             } = signed;
             // Checked + single-sourced with the fresh-build path (§4 F-G); the
             // fee-coverage check above guarantees this succeeds here.
-            let new_fingerprint = ContentFingerprint::from_build(fee, &summary, total_covered)
-                .map_err(ReanchorError::Failed)?;
+            let new_fingerprint =
+                ContentFingerprint::from_build(fee, &request.recipients, total_covered)
+                    .map_err(ReanchorError::Failed)?;
 
             // --- lock₂ (sync): authoritative re-validation + commit the swap ---
             let mut state = self.state.lock().map_err(|_| {
@@ -1525,7 +1521,7 @@ where
                     .recipients
                     .iter()
                     .map(|r| shekyl_engine_state::SendRecipient {
-                        address: r.address.clone(),
+                        destination: r.destination.recorded(),
                         amount: r.amount_atomic_units.to_raw(),
                         rid: r.rid,
                     })

@@ -47,7 +47,6 @@ use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::rules::{Rule, TxContext, TxKind, TxRule, TxScope};
 use crate::verdict::{InvalidBlock, Locus, TxSlot, Verdict};
-use shekyl_economics::FULL_REWARD_ZONE;
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Ct, Input, Transaction};
 
@@ -203,29 +202,23 @@ impl Rule for H6 {
 // Frozen constants beside the rules that read them, not `RuleSet` fields
 // (slice 5 Q5 as amended, on the F21 ground): a limit joins the rule set
 // when a schedule step can name a different one, and none of these can —
-// the C++ NIC's HF dispatch collapses to one arm at HF1. Each is pinned to
-// its `cryptonote_config.h` `#define` by parsing the header (`tx_tests`),
-// and to the wire crate's copy of the same number by an equality test,
-// so the codec's DoS bound and the consensus limit cannot drift apart
-// without a test saying so — and so the rule's source is the C++
-// definition, never the codec (§3.1).
+// the C++ NIC's HF dispatch collapses to one arm at HF1. The size and the
+// unlock sentinel are pinned to their `cryptonote_config.h` `#define`s by
+// parsing the header (`tx_tests`). The coinbase reserve is the wire
+// crate's derivation; the C++ define is a literal held equal to it until
+// the flip deletes the header's readers.
 
 /// CEN-H1: the serialized size a transaction may not exceed —
 /// `CRYPTONOTE_MAX_TX_SIZE`.
 pub(crate) const MAX_TX_SIZE: usize = 1_000_000;
 
-/// CEN-H3's operand: the bytes a block reserves for its coinbase —
-/// `CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE`.
-pub(crate) const COINBASE_BLOB_RESERVED: usize = 600;
-
-/// CEN-H3: the weight a transaction may not exceed — **derived**, never
-/// restated: half the minimum block weight (the full-reward zone,
-/// `shekyl-economics`'s generated constant) less the coinbase reserve, the
-/// C++ `get_transaction_weight_limit`.
+/// CEN-H3: the weight a transaction may not exceed. The wire crate's
+/// [`shekyl_wire::transaction::TX_WEIGHT_LIMIT`]: half the full-reward zone
+/// less the coinbase reserve. This crate does not restate the formula. The
+/// zone is the inherited one and moves again when EUP-5 G rules the
+/// capacity leg.
 pub(crate) const fn max_tx_weight() -> usize {
-    // `FULL_REWARD_ZONE` is a `u64` generated from `config/`; it is a block
-    // weight and fits a `usize` on every target this validator builds for.
-    (FULL_REWARD_ZONE / 2) as usize - COINBASE_BLOB_RESERVED
+    shekyl_wire::transaction::TX_WEIGHT_LIMIT
 }
 
 // SHT-Q2's static relation (RULED, Rick 2026-09-29): no transaction's
@@ -487,10 +480,11 @@ const BP_PLUS_MAX_ROUNDS: usize = 6 + shekyl_wire::transaction::MAX_OUTPUTS.ilog
 /// layout check when a proof is present).
 ///
 /// The **verification** half — the range proof itself, one batch verify
-/// over the block — is the `validate` fold (slice 6 commit 8, Q9). Until
-/// that fold lands the row stays `pending`, and `tx_form` runs this layout
-/// check through [`crate::rules::run_tx_unrecorded`]: a refusal is H19's, a
-/// pass is not coverage.
+/// over the block with weights derived from the batch — is the `validate`
+/// fold (`rules::range_proof`, slice 6 Q9, ruling R3), the `BlockRule` this
+/// type also implements. The fold records the row; `tx_form` runs this
+/// layout check through [`crate::rules::run_tx_unrecorded`], so a refusal
+/// here is H19's and a pass is the layout alone, never coverage.
 pub(crate) struct H19;
 
 impl Rule for H19 {

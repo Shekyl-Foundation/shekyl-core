@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+import atexit
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -147,6 +149,8 @@ def write(repo: Path, rel: str, text: str | None) -> None:
 
 def repo_with(base: dict[str, str | None], head: dict[str, str | None]) -> Path:
     repo = Path(tempfile.mkdtemp(prefix="freeze-"))
+    # Removed when the test exits, whatever a case found.
+    atexit.register(shutil.rmtree, repo, True)
     git(repo, "init", "-q", "-b", "main")
     for rel, text in base.items():
         write(repo, rel, text)

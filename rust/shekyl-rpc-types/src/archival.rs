@@ -21,7 +21,7 @@
 //!   not hold the skeleton the view is read against, so it serves no shard
 //!   view at all.
 //!
-//! The method is admin-only (`RESTRICTED_METHODS`): a shard view is a
+//! The method is the host's (its row in [`crate::methods`]): a shard view is a
 //! fetch the daemon makes on the caller's behalf, and the public listener
 //! does not fetch for strangers (`SV-D6`).
 
@@ -82,6 +82,11 @@ pub const CORE_RPC_ERROR_CODE_ARCHIVAL_SHARD_OPEN: i64 = -24;
 /// request, never a fact about the shard asked for
 /// (`SHARD_VIEW_FETCH.md` `SV-D9`).
 pub const CORE_RPC_ERROR_CODE_ARCHIVAL_SKELETON_ABSENT: i64 = -25;
+
+/// A configuration refusal from `option_set` or `option_show`
+/// (`RPC_CHANNEL.md` RT-O25): the error's `data` member carries the IG-11
+/// diagnostics, each with its stable code. The next free after `-25`.
+pub const CORE_RPC_ERROR_CODE_CONFIG_REFUSED: i64 = -26;
 
 /// The three refusal codes, so a client can check it handles each.
 pub const ARCHIVAL_SHARD_REFUSAL_CODES: [i64; 3] = [

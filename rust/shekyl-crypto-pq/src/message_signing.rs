@@ -192,8 +192,8 @@ pub const MSG_SIG_CANONICAL_LEN: usize =
 
 /// Hard ceiling on the **encoded** armored payload, enforced before any
 /// decoding (SM-R-5 R5-b: bounding decoded output after decode would
-/// allocate an attacker's bytes from a shorter input — the `shekyl-levin`
-/// `decompress_payload` pre-allocation discipline). Covers either
+/// allocate an attacker's bytes from a shorter input — the discipline
+/// `shekyl-levin`'s reader applies to a bucket's declared length). Covers either
 /// parameter set (192s ≈ 21.7 KB, 192f ≈ 47.7 KB encoded) so a pre-freeze
 /// s→f flip does not reopen it.
 pub const MSG_SIG_MAX_ENCODED_LEN: usize = 64 * 1024;
@@ -271,11 +271,9 @@ pub fn derive_message_signing_identity(
 /// Split a 72-byte identity-seed expansion into the R4-a layout and run
 /// the deterministic keygen: `SK.seed ‖ SK.prf ‖ PK.seed` at `n = 24`
 /// each. The **one** place the slice order exists (SM-R-4 R4-a — a wrong
-/// split silently produces a valid-but-different keypair): the principal
-/// identity above and the per-slot archival-P identity
-/// (`archival_p::derive_p_msg_sign_pk`) both feed it, under their own
-/// HKDF labels.
-pub(crate) fn slh_identity_from_okm(
+/// split silently produces a valid-but-different keypair). Only the
+/// principal identity above has an SLH-DSA key: a persona has none.
+fn slh_identity_from_okm(
     okm: &Zeroizing<[u8; MSG_SIGN_IDENTITY_SEED_LEN]>,
 ) -> (slh_dsa_sha2_192s::PublicKey, slh_dsa_sha2_192s::PrivateKey) {
     let mut sk_seed = Zeroizing::new([0u8; SLH_192S_N]);

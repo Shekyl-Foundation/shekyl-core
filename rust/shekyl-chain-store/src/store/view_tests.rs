@@ -23,7 +23,8 @@ use super::*;
 use crate::codec::{forged, BlockBody, BlockInfo, Canonical, CodecError, LeafCount, Present, Raw};
 use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{
-    BLOCKS, BLOCK_INFO, CURVE_TREE_LEAF_COUNTS, CURVE_TREE_ROOTS, SPENT_KEYS, UNDO_LOG,
+    ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_DRAWABLE_DIGEST, BLOCKS, BLOCK_INFO, CURVE_TREE_LEAF_COUNTS,
+    CURVE_TREE_ROOTS, SPENT_KEYS, UNDO_LOG,
 };
 
 /// The store's fault is the only outer arm these tests expect; the
@@ -107,6 +108,37 @@ fn record_leaf_count(batch: &WriteBatch<'_, '_>, key: u64) -> Result<(), StoreEr
     batch
         .open_insert_table(CURVE_TREE_LEAF_COUNTS, PROBE_ROW)?
         .insert(key, LeafCount::from_raw(0).encoded().as_encoded())
+}
+
+/// The zero draw row a connect writes, and epoch 0's empty digest. The
+/// count of the next block reads both.
+fn record_draw_row(batch: &WriteBatch<'_, '_>, height: BlockHeight) -> Result<(), StoreError> {
+    let row = shekyl_types::archival::BlockDraws {
+        count: 0,
+        carry: 0,
+        shortfall: 0,
+        issued_short: 0,
+        revealed: false,
+    };
+    batch
+        .open_insert_table(ARCHIVAL_BLOCK_DRAWS, PROBE_ROW)?
+        .insert(height.to_raw(), row.encoded().as_encoded())
+}
+
+fn record_empty_digest(batch: &WriteBatch<'_, '_>) -> Result<(), StoreError> {
+    let digest = shekyl_chain_rules::DrawableEpoch::new(
+        shekyl_types::SettlementEpoch::from_raw(0),
+        Vec::<(
+            shekyl_types::PCanonicalId,
+            shekyl_types::archival::ReceiptSignPk,
+        )>::new(),
+        [],
+    )
+    .expect("an empty set")
+    .digest();
+    batch
+        .open_insert_table(ARCHIVAL_DRAWABLE_DIGEST, PROBE_ROW)?
+        .insert(0, digest.encoded().as_encoded())
 }
 
 #[test]
@@ -385,6 +417,8 @@ fn a_second_block_in_one_batch_validates_against_the_chain_the_first_left() {
         record_block(batch, 0, &genesis)?;
         record_root(batch, 1, 0xaa)?;
         record_leaf_count(batch, 1)?;
+        record_draw_row(batch, BlockHeight::from_raw(0))?;
+        record_empty_digest(batch)?;
         let view = batch.chain_view();
         // A verdict minted against this batch's view, over a view that
         // already contains block 0. Since E6 slice 1 the rules READ the view:

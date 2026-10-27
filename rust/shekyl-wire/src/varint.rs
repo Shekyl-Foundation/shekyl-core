@@ -77,6 +77,25 @@ impl VarInt for usize {
 /// canonical encoding, so the cap rejects nothing a `u64` can hold.
 pub const MAX_VARINT_LEN: usize = 10;
 
+/// Bytes [`write_varint`] emits for `value`.
+///
+/// One byte per seven payload bits, and at least one. [`MAX_VARINT_LEN`] is
+/// this at `u64::MAX`, so a `u64` the codec writes never takes more.
+#[must_use]
+pub const fn varint_len(mut value: u64) -> usize {
+    let mut len = 1;
+    while value > PAYLOAD as u64 {
+        value >>= 7;
+        len += 1;
+    }
+    len
+}
+
+const _: () = assert!(varint_len(0) == 1);
+const _: () = assert!(varint_len(PAYLOAD as u64) == 1);
+const _: () = assert!(varint_len(PAYLOAD as u64 + 1) == 2);
+const _: () = assert!(varint_len(u64::MAX) == MAX_VARINT_LEN);
+
 /// How a canonical LEB128 `u64` failed to decode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VarintFault {

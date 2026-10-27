@@ -31,20 +31,24 @@
 //! Each handler is a thin async wrapper that offloads the blocking C++ FFI call
 //! to a Tokio blocking thread.
 
+use crate::authority::Authority;
 use crate::server::AppState;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
+use axum::Extension;
 use std::sync::Arc;
 
 /// Offload one blocking C++ JSON dispatch; `None` on FFI failure.
 async fn dispatch_json_raw(
     state: &Arc<AppState>,
+    authority: Authority,
     uri: &'static str,
     body: String,
 ) -> Option<String> {
     let core = state.core.clone();
-    tokio::task::spawn_blocking(move || core.json_endpoint(uri, &body))
+    let host = authority.host();
+    tokio::task::spawn_blocking(move || core.json_endpoint(uri, &body, host))
         .await
         .ok()
         .flatten()
@@ -72,8 +76,13 @@ fn json_error(reason: &str) -> (StatusCode, [(&'static str, &'static str); 1], S
     )
 }
 
-async fn dispatch_json(state: Arc<AppState>, uri: &'static str, body: String) -> impl IntoResponse {
-    match dispatch_json_raw(&state, uri, body).await {
+async fn dispatch_json(
+    state: Arc<AppState>,
+    authority: Authority,
+    uri: &'static str,
+    body: String,
+) -> impl IntoResponse {
+    match dispatch_json_raw(&state, authority, uri, body).await {
         Some(json) => json_ok(json),
         None => json_dispatch_error(),
     }
@@ -83,17 +92,16 @@ macro_rules! json_handler {
     ($fn_name:ident, $uri:expr) => {
         pub async fn $fn_name(
             State(state): State<Arc<AppState>>,
+            Extension(authority): Extension<Authority>,
             body: String,
         ) -> impl IntoResponse {
-            dispatch_json(state, $uri, body).await
+            dispatch_json(state, authority, $uri, body).await
         }
     };
 }
 
-// Unrestricted endpoints
-
 /// `/get_height` (alias `/getheight`) — served natively (RK-1,
-/// `docs/design/DAEMON_RPC_KV_CUTOVER.md`): the body is ignored, as the C++
+/// `docs/completed/DAEMON_RPC_KV_CUTOVER.md`): the body is ignored, as the C++
 /// handler ignored its empty request struct. A facts fault answers with the
 /// same envelope a failed FFI dispatch does.
 pub async fn get_height(State(state): State<Arc<AppState>>, _body: String) -> impl IntoResponse {
@@ -134,11 +142,13 @@ enum TxFault {
 /// (RK-4c). The gather is one FFI call answering per request slot; the
 /// `(split, prune, decode_as_json)` matrix and both refusals are Rust's.
 ///
-/// `state.restricted` decides two things the C++ could not, because the bridge
-/// passed a null `ctx` until #570: the request cap, and whether the pool read
-/// may disclose a transaction the node has not broadcast.
+/// The connection's [`Authority`] decides two things the C++ could not,
+/// because the bridge passed a null `ctx` until #570: the request cap (a
+/// bounded caller's), and whether the pool read may disclose a transaction
+/// the node has not broadcast (the host's alone).
 pub async fn get_transactions(
     State(state): State<Arc<AppState>>,
+    Extension(authority): Extension<Authority>,
     body: String,
 ) -> impl IntoResponse {
     let request: shekyl_rpc_types::GetTransactionsRequest = if body.trim().is_empty() {
@@ -152,8 +162,10 @@ pub async fn get_transactions(
             }
         }
     };
-    let restricted = state.restricted;
-    if restricted && request.txs_hashes.len() > crate::methods::RESTRICTED_TRANSACTIONS_COUNT {
+    // A bounded caller's cap (§6.3); RT-W10 step 2 sets the bound per row.
+    if authority.bounded()
+        && request.txs_hashes.len() > crate::methods::RESTRICTED_TRANSACTIONS_COUNT
+    {
         return json_ok(status_only(
             "Too many transactions requested in restricted mode",
         ));
@@ -167,10 +179,10 @@ pub async fn get_transactions(
     };
     let core = state.core.clone();
     let result = tokio::task::spawn_blocking(move || {
-        // `!restricted` is the pool's sensitivity flag: false withholds a
-        // transaction that is not `relay_category::broadcasted` (§2.2).
+        // The host flag is the pool's sensitivity flag: entries not yet
+        // broadcast are host-only data (§6.1, RT-O9.3).
         let (slots, chain_height) = core
-            .transactions(&ids, !restricted)
+            .transactions(&ids, authority.host())
             .map_err(TxFault::Facts)?;
         // A rendering the daemon cannot produce fails the request rather than
         // answering OK with an empty `as_json`, which is what the C++ did and
@@ -215,6 +227,7 @@ pub async fn get_transactions(
 /// `GET|POST /is_key_image_spent` — served natively (RK-4c).
 pub async fn is_key_image_spent(
     State(state): State<Arc<AppState>>,
+    Extension(authority): Extension<Authority>,
     body: String,
 ) -> impl IntoResponse {
     let request: shekyl_rpc_types::IsKeyImageSpentRequest = if body.trim().is_empty() {
@@ -228,7 +241,7 @@ pub async fn is_key_image_spent(
             }
         }
     };
-    if state.restricted
+    if authority.bounded()
         && request.key_images.len() > crate::methods::RESTRICTED_SPENT_KEY_IMAGES_COUNT
     {
         return json_ok(status_only(
@@ -290,7 +303,6 @@ json_handler!(get_alt_blocks_hashes, "/get_alt_blocks_hashes");
 json_handler!(get_transaction_pool, "/get_transaction_pool");
 json_handler!(get_transaction_pool_hashes, "/get_transaction_pool_hashes");
 json_handler!(get_transaction_pool_stats, "/get_transaction_pool_stats");
-json_handler!(get_limit, "/get_limit");
 
 /// `/get_info` (alias `/getinfo`) — served natively (RK-5c,
 /// `docs/design/DAEMON_RPC_KV_GET_INFO.md`). The body is ignored, as the C++
@@ -299,9 +311,13 @@ json_handler!(get_limit, "/get_limit");
 /// The listener's posture becomes a [`crate::info::Disclosure`], and the
 /// method reads only the parts that disclosure shows (RK-D24). This server's
 /// own connection count is the transport's to supply; it is a Status field.
-pub async fn get_info(State(state): State<Arc<AppState>>, _body: String) -> impl IntoResponse {
+pub async fn get_info(
+    State(state): State<Arc<AppState>>,
+    Extension(authority): Extension<Authority>,
+    _body: String,
+) -> impl IntoResponse {
     let core = state.core.clone();
-    let disclosure = crate::info::Disclosure::from_listener(state.restricted);
+    let disclosure = authority.disclosure();
     let rpc_connections = state.conn_tracker.active_total();
     let result = tokio::task::spawn_blocking(move || {
         let facts = crate::info_facts::FfiInfoFacts::new(core);
@@ -381,17 +397,113 @@ mod tests {
 }
 
 // Restricted-only endpoints (restriction enforced at route registration)
-json_handler!(start_mining, "/start_mining");
+
+/// `/start_mining`: the one request that still reaches C++ carrying values
+/// the option table built (`DAEMON_CONFIG_CUTOVER.md` §2.7, IG-12).
+/// `miner_address` goes through the `mine-address` row's constructor and
+/// `threads_count` through `mine-threads`'s, so a refusal is the grammar's
+/// (IG-11), in the REST envelope with the diagnostic's text; only a request
+/// both rows accept is dispatched. The network check on the address stays
+/// the miner's, as at startup.
+pub async fn start_mining(
+    State(state): State<Arc<AppState>>,
+    Extension(authority): Extension<Authority>,
+    body: String,
+) -> impl IntoResponse {
+    match validate_start_mining(&body) {
+        Ok(()) => dispatch_json(state, authority, "/start_mining", body)
+            .await
+            .into_response(),
+        Err(reason) => json_refused(&reason).into_response(),
+    }
+}
+
+/// The REST error envelope for a request the table refuses: a bad request,
+/// not a dispatch failure.
+fn json_refused(reason: &str) -> (StatusCode, [(&'static str, &'static str); 1], String) {
+    let envelope = shekyl_rpc_types::RestErrorEnvelope {
+        status: shekyl_rpc_types::RpcStatus("ERROR".to_owned()),
+        error: reason.to_owned(),
+    };
+    (
+        StatusCode::BAD_REQUEST,
+        [("content-type", "application/json")],
+        serde_json::to_string(&envelope).expect("plain data serializes"),
+    )
+}
+
+/// Builds the request's two values through their rows. The C++ request
+/// struct reads `miner_address` as a string and `threads_count` as an
+/// integer, so each is checked in that form.
+fn validate_start_mining(body: &str) -> Result<(), String> {
+    use shekyl_daemon_config::TABLE;
+    use shekyl_options::Source;
+    let request: serde_json::Value = if body.trim().is_empty() {
+        serde_json::Value::Object(serde_json::Map::new())
+    } else {
+        serde_json::from_str(body).map_err(|e| format!("the request is not JSON: {e}"))?
+    };
+    let address = request
+        .get("miner_address")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "`miner_address` is required, as a string".to_owned())?;
+    let row = TABLE
+        .row("mine-address")
+        .expect("the table has mine-address");
+    row.kind
+        .parse_text(address)
+        .map_err(|f| f.at("mine-address", Source::Runtime).render())?;
+    let threads = request
+        .get("threads_count")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| "`threads_count` is required, as a non-negative integer".to_owned())?;
+    let row = TABLE
+        .row("mine-threads")
+        .expect("the table has mine-threads");
+    // The C++ reads 0 as "the machine's count", the grammar's `auto`.
+    let text = if threads == 0 {
+        "auto".to_owned()
+    } else {
+        threads.to_string()
+    };
+    row.kind
+        .parse_text(&text)
+        .map_err(|f| f.at("mine-threads", Source::Runtime).render())?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod start_mining_tests {
+    use super::validate_start_mining;
+
+    #[test]
+    fn the_two_values_are_built_through_their_rows() {
+        assert_eq!(
+            validate_start_mining(r#"{"miner_address":"Sabc","threads_count":2}"#),
+            Ok(())
+        );
+        assert_eq!(
+            validate_start_mining(r#"{"miner_address":"Sabc","threads_count":0}"#),
+            Ok(())
+        );
+        let e = validate_start_mining(r#"{"miner_address":"","threads_count":2}"#).unwrap_err();
+        assert!(e.contains("mine-address"), "{e}");
+        let e = validate_start_mining(r#"{"miner_address":"S a","threads_count":2}"#).unwrap_err();
+        assert!(e.contains("mine-address"), "{e}");
+        let e = validate_start_mining(r#"{"miner_address":"Sabc"}"#).unwrap_err();
+        assert!(e.contains("threads_count"), "{e}");
+        let e =
+            validate_start_mining(r#"{"miner_address":"Sabc","threads_count":-1}"#).unwrap_err();
+        assert!(e.contains("threads_count"), "{e}");
+        let e = validate_start_mining("not json").unwrap_err();
+        assert!(e.contains("not JSON"), "{e}");
+    }
+}
 json_handler!(stop_mining, "/stop_mining");
 json_handler!(mining_status, "/mining_status");
 json_handler!(save_bc, "/save_bc");
 json_handler!(set_log_hash_rate, "/set_log_hash_rate");
-json_handler!(set_log_level, "/set_log_level");
-json_handler!(set_log_categories, "/set_log_categories");
 json_handler!(stop_daemon, "/stop_daemon");
-json_handler!(set_limit, "/set_limit");
-json_handler!(out_peers, "/out_peers");
-json_handler!(in_peers, "/in_peers");
 json_handler!(pop_blocks, "/pop_blocks");
 
 /// `/get_net_stats` — process start plus the global throttle counters
@@ -473,36 +585,30 @@ fn render<T: serde::Serialize>(
 
 /// `/get_stem_tallies` — per-successor relay outcome counts (§55).
 ///
-/// **Admin-only (unrestricted listener), and the reason belongs here rather
-/// than in the route table.** In daemon RPC terms: `restricted` is the
-/// *public* limited listener; this route is selected only when
-/// `!restricted` via `server::served_paths`. This endpoint *is* the
+/// **Host-only data (`RPC_CHANNEL.md` §6.1, RT-O9.3), and the reason
+/// belongs here rather than in the method table.** This endpoint *is* the
 /// anonymity graph: which peers this node stems to, and how each has
 /// behaved. Sharma Appendix B spends 50–100 probes per node to reconstruct
-/// exactly that, so serving it on the public listener hands over — for free
-/// and with better fidelity — what an attacker otherwise pays for. **It is
-/// not "just counters": the peer set is the sensitive part, and the counts
-/// merely make it legible.** If anyone later proposes moving this onto the
-/// restricted (public) set, that is the argument to answer first.
+/// exactly that, so serving it to anyone but the host's administrator hands
+/// over — for free and with better fidelity — what an attacker otherwise
+/// pays for. **It is not "just counters": the peer set is the sensitive
+/// part, and the counts merely make it legible.** If anyone later proposes
+/// moving it into a grant, that is the argument to answer first.
 ///
 /// Raw counts, matching the relay layer's own refusal to pre-compute a rate:
 /// the consumer of this endpoint is a human tuning `n_min`, `cut` and
 /// `cooldown`, and a rate would pick the accumulator's memory policy for
 /// them.
 ///
-/// # The gate lives in the route table (§69, §70)
+/// # The gate is the method table's policy
 ///
-/// This route's `Visibility::AdminOnly` row in `server::ROUTES` is the privacy
-/// fact; `server::served_routes` applies `restricted`; `server::assemble`
-/// registers exactly that, and [`crate::server::build_router`] is
-/// `assemble` plus layers. The gate is asserted **on the assembled router**:
-/// a dummy-handler build of the real table answers 200 for this path when
-/// unrestricted and 404 when restricted, and the specification the assertions
-/// run against is written out independently of the route table, so a path
-/// *moved* between listeners fails rather than silently changing the oracle.
-/// A daemon fixture is not owed: the property is route-table selection, and
-/// naming this handler from a test would pull `core_rpc_ffi_*` into the lib
-/// test binary.
+/// The row's policy is `HostOnly`, and the request layer
+/// (`crate::authority::stamp`) refuses this path to every connection that is
+/// not the host's administrator before the handler runs. The gate is asserted
+/// on the assembled router, against a specification written out
+/// independently of the table, so a row moved into a grant fails rather than
+/// silently changing the oracle. A daemon fixture is not owed: naming this
+/// handler from a test would pull `core_rpc_ffi_*` into the lib test binary.
 pub async fn get_stem_tallies(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let core = state.core.clone();
     match tokio::task::spawn_blocking(move || core.stem_tallies())

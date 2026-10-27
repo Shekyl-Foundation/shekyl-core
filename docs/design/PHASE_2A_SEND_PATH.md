@@ -407,21 +407,16 @@ the band and the selected feerate are mutually consistent.
 | `Economy` | `economy` |
 | `Standard` | `standard` |
 | `Priority` | `priority` |
-| `Custom(rate)` | `FeeRate::new(rate, snapshot.quantization_mask)` — mask carried once on the snapshot (see below), clamped to the §3.3 sanity band |
+| `Custom(rate)` | `FeeRate::from_nonzero(rate)`, clamped to the §3.3 sanity band; the lattice a fee is rounded to is `shekyl_economics::FEE_QUANTIZATION_MASK`, a constant (FL-R27), not a snapshot field |
 
 **Atomic single-RPC snapshot.** `DaemonEngine::get_fee_estimates` issues **one**
 `get_fee_estimate` JSON-RPC call (via `Rpc::json_rpc_call`), not three
-`get_fee_rate` calls. The response carries a fee array plus one
-`quantization_mask`; the impl maps the array to all tiers (`economy`,
-`standard`, `priority` → indices 0, 1, 3 per decision log) and stores the single
-`quantization_mask` **once** on the `FeeEstimates` snapshot. This guarantees the
-four-tier band and the `Custom` mask all derive from the same daemon view (no
-tier-vs-tier skew from interleaved calls).
-
-`shekyl-rpc` is Shekyl-owned (renamed crate, Shekyl/FCMP++ divergence, primitive
-deps only) — if a per-tier mask is ever needed, exposing a `FeeRate::mask()`
-accessor is permitted. For Phase 2a the mask is a single snapshot-level quantity,
-so it lives on `FeeEstimates`.
+`get_fee_rate` calls. The response carries the fee array; the impl maps it to
+the three tiers (`economy`, `standard`, `priority` → indices 0, 1, 2). This
+guarantees the tier band derives from one daemon view (no tier-vs-tier skew
+from interleaved calls). The rounding lattice is not served: it is
+`shekyl_economics::FEE_QUANTIZATION_MASK`, read by the wallet's fee
+arithmetic and by the daemon's admission alike (FL-R27).
 
 ### 3.4 Signing context assembly
 
@@ -775,17 +770,22 @@ guarantee C7 requires).
 
 #### 3.7.5 C2 — spendability gate threads selection → assembly → actor
 
-A leaf is in the tree at the reference block only if **`eligible_height ≤
+A leaf is in the tree at the reference block only if **`eligible_height <
 reference_height`**, where `reference_height = tip − REF_ANCHOR_AGE` (the C1
-snapshot anchor; CT client §5.1). Two ages must not be conflated: `SPENDABLE_AGE`
+snapshot anchor; CT client §5.1). The root committed at a height holds the
+leaves matured by the block before it (`drained_through = reference_height −
+1`, pinned by the CT-2 vectors), so an output eligible *at* the reference
+height is not in it. One predicate states this for every wallet path:
+`shekyl_curve_tree::in_tree_at_reference`, and `wait_blocks` is
+`blocks_until_in_tree`. Two ages must not be conflated: `SPENDABLE_AGE`
 governs **tree insertion** (`eligible_height = block_height + SPENDABLE_AGE`),
 while `REF_ANCHOR_AGE` governs **reference-block depth** — the gate is the latter,
-not the bare `MIN_AGE` token. An output whose `eligible_height` lands after the
-reference block is eligible at the tip but **not** at the reference block, so it
-is not yet spendable. Enforced at **three** points:
+not the bare `MIN_AGE` token. An output whose `eligible_height` is the
+reference height or later is eligible at the tip but **not** in the tree at the
+reference block, so it is not yet spendable. Enforced at **three** points:
 
 1. **Selection** (output selector, F3/F4 territory): never pick outputs with
-   `eligible_height > reference_block_height`.
+   `eligible_height >= reference_block_height`.
 2. **Path assembly** (F1 client): the leaf is absent at the reference block →
    assembly fails.
 3. **Surface:** a clean `BuildError::OutputNotYetSpendable { eligible_height,
@@ -1415,8 +1415,8 @@ The concrete surface deltas, now that W and D are pinned:
   calls the structural estimator twice — `output_count = N` and `N+1` — to
   produce both candidate fees. Public; no secret; consistent with the
   estimator's existing contract. **Also add the §3.3 `FeeEstimates` snapshot to
-  the context** (`fee_snapshot: FeeEstimates`, carrying the single
-  `quantization_mask`): the V3.0 `FeeEstimator::estimate_fee` is **synchronous**
+  the context** (`fee_snapshot: FeeEstimates`): the V3.0
+  `FeeEstimator::estimate_fee` is **synchronous**
   and `DaemonFeeEstimator` is **zero-sized** (`fee_estimator.rs:199, 225`), so
   the daemon-derived feerate cannot be fetched *inside* `estimate_fee` without
   re-opening the frozen sync trait surface. Instead `build`'s async block
@@ -1694,7 +1694,7 @@ raised: `IoError::Daemon { fault, .. }` on every path and
 | Daemon is not one this wallet can use (`VC-4`) | `IoError::Daemon` / `FeeEstimatorError::Daemon` with `DaemonFault::Identity(IdentityMismatch)` — one wallet-RPC code per axis |
 | Absurd priority fee | `SendError::Tx(TxError::DaemonFeeUnreasonable { ... })` |
 | Signer / builder failure | `SendError::Tx` (proof or signature construction), `SendError::SignerUnavailable` (no spend-key material in scope), or `SendError::SignerFailed { reason }` (a downstream signer failure) |
-| Output not yet spendable at reference block (`eligible_height > reference_height`) | `BuildError::OutputNotYetSpendable { eligible_height, reference_block_height, wait_blocks }` (C2, §3.7.5) — clean wait-N-blocks signal, **not** an opaque assembly miss |
+| Output not yet spendable at reference block (`eligible_height >= reference_height`) | `BuildError::OutputNotYetSpendable { eligible_height, reference_block_height, wait_blocks }` (C2, §3.7.5) — clean wait-N-blocks signal, **not** an opaque assembly miss |
 | Locally-assembled path malformed (length/shape) | `SendError::BuildInvariant` via the C3 precondition (§3.7.6) — distinguishes local-assembly bug from prover bug **before** committing prover effort |
 | Malformed tx at submit (incl. generic daemon `Failed`) | `TxSubmitOutcome::DaemonRejectedTerminal { Malformed }` → `SubmitError::DaemonRejectedTerminal` (§3.6 honest-subset mapping) |
 | Ambiguous daemon (transport/protocol failure) | `Err(Self::Error)` → `SubmitError::DaemonAmbiguous` (existing R9 discipline) |
@@ -1808,7 +1808,7 @@ step 2), never read from a daemon field.
 - **C7 key-image owner** — single computation at claim time; downstream consumes
   the typed `KeyImage`, never re-normalizes (one confirm-at-2a-3 item: verify the
   crypto-pq derivation emits the sign-bit-canonical encoding).
-- **C2 / C3 / C5** — spendability gate (`eligible_height ≤ reference_height`,
+- **C2 / C3 / C5** — spendability gate (`eligible_height < reference_height`,
   clean error), actor path-precondition check (robustness, not secrecy), and the
   secret-free boundary assertion + scratch-zeroization requirement are pinned.
 

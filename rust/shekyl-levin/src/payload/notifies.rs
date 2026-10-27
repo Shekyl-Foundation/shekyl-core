@@ -4,6 +4,10 @@
 // BSD-3-Clause
 
 //! Cryptonote notify maps 2002–2004 / 2006–2010 (`cryptonote_protocol_defs.h`).
+//!
+//! 2011–2014 are the chain-sync commands ([`super::sync`]). They are named
+//! here, beside the ids they follow, and they are not admitted at ingress:
+//! no handler exists until the cutover.
 
 use shekyl_portable_storage::{Section, Value};
 
@@ -28,6 +32,16 @@ pub const NOTIFY_NEW_COMPACT_BLOCK: u32 = 2008;
 pub const NOTIFY_REQUEST_COMPACT_MISSING_TX: u32 = 2009;
 /// `NOTIFY_GET_TXPOOL_COMPLEMENT`.
 pub const NOTIFY_GET_TXPOOL_COMPLEMENT: u32 = 2010;
+/// Chain-sync header request. The next free id after 2010. Not a
+/// [`crate::DefinedCommand`]: ingress admits a command for dispatch, and
+/// this one has no handler until the cutover.
+pub const NOTIFY_REQUEST_HEADERS: u32 = 2011;
+/// Chain-sync header response.
+pub const NOTIFY_RESPONSE_HEADERS: u32 = 2012;
+/// Chain-sync body request.
+pub const NOTIFY_REQUEST_BODIES: u32 = 2013;
+/// Chain-sync body response.
+pub const NOTIFY_RESPONSE_BODIES: u32 = 2014;
 
 /// Body of `NOTIFY_NEW_COMPACT_BLOCK` (2008), the sole block-announce command.
 /// Header plus optional tx bodies; omitted txs are fetched via 2009.

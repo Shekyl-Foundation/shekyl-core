@@ -139,7 +139,7 @@ impl HeldPersona {
         }
     }
 
-    /// Sign one 112-byte pass transcript with this persona's receipt key,
+    /// Sign one 113-byte pass transcript with this persona's receipt key,
     /// decoding it first if this is the first signature asked of the persona
     /// ([`HeldReceiptKey`]).
     ///

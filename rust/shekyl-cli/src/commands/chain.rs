@@ -315,14 +315,14 @@ pub(crate) fn show_fetch(val: &Value) {
     }
 }
 
-fn coverage_json(list: &crate::daemon::ArchivalShardCoverage) -> Value {
+fn coverage_json(list: &shekyl_rpc_types::GetArchivalShardCoverageResponse) -> Value {
     json!({
         "profit_estimate_available": list.profit_estimate_available,
         "shards": list.shards.iter().map(row_json).collect::<Vec<_>>(),
     })
 }
 
-fn row_json(row: &crate::daemon::ShardCoverageRow) -> Value {
+fn row_json(row: &shekyl_rpc_types::ShardCoverageRow) -> Value {
     json!({
         "shard_id": row.shard_id,
         "bonded_count": row.bonded_count,

@@ -53,7 +53,9 @@ use shekyl_units::AtomicUnits;
 
 use crate::family_set::FamilySet;
 
-use super::{BlobKind, Canonical, CoverageGaps, SchemaVersion, SettlementEpochBlocks};
+use super::{
+    BlobKind, Canonical, CoverageGaps, FollowingDegraded, SchemaVersion, SettlementEpochBlocks,
+};
 
 /// The value shape of the `properties` table (`shape` module docs).
 ///
@@ -308,6 +310,22 @@ property_cells! {
         scope: ChainState,
         value: SettlementEpoch
     },
+
+    /// `following_degraded` — this node saw a heavier chain it refused
+    /// (`DRS_X_STORE_FLIP.md` DX-Q2 item 8; `P2P_3_CHAIN_SYNC_BRIEF.md` §A
+    /// item 7), with the evidence: the fork point, the heavier tip and its
+    /// work.
+    ///
+    /// **Absent means the latch is clear.** One way: the first evidence
+    /// sets it, and only a resync, a new file, clears it. The connector is
+    /// its one writer, for ingest's refusals of a heavier chain and for chain
+    /// sync's past-cap evidence alike. Engine-local: two correct stores of
+    /// one chain may have seen different chains.
+    FollowingDegradedCell {
+        key: "following_degraded",
+        scope: EngineLocal,
+        value: FollowingDegraded
+    },
 }
 
 /// A chain-state cell that exists only in this crate's tests, so the typed
@@ -403,8 +421,15 @@ mod tests {
                     scope: ArchivalLastSlashEpochCell::SCOPE,
                     value: SettlementEpoch::NAME,
                 },
+                PropertyCellSpec {
+                    key: FollowingDegradedCell::KEY,
+                    scope: FollowingDegradedCell::SCOPE,
+                    value: FollowingDegraded::NAME,
+                },
             ]
         );
+        // The latch is the node's own view, never chain state.
+        assert_eq!(FollowingDegradedCell::SCOPE, CellScope::EngineLocal);
         // The two chain-state cells are the digest-domain members.
         assert_eq!(TotalBurnedCell::SCOPE, CellScope::ChainState);
         assert_eq!(ArchivalLastSlashEpochCell::SCOPE, CellScope::ChainState);

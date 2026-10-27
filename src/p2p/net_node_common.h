@@ -67,8 +67,8 @@ namespace nodetool
     /// The countdown lives here. The caller does not pass an atomic, and
     /// does not wait, except an operator RPC that fulfils a promise in
     /// `then` and waits on that promise.
-    virtual size_t post_each(std::function<void(t_connection_context&, uint32_t)> note, std::function<void()> then)=0;
-    virtual bool for_connection(const boost::uuids::uuid&, std::function<void(t_connection_context&, uint32_t)> f)=0;
+    virtual size_t post_each(std::function<void(t_connection_context&)> note, std::function<void()> then)=0;
+    virtual bool for_connection(const boost::uuids::uuid&, std::function<void(t_connection_context&)> f)=0;
     virtual bool block_host(epee::net_utils::network_address address, time_t seconds = 0, bool add_only = false)=0;
     virtual bool unblock_host(const epee::net_utils::network_address &address)=0;
     virtual std::map<std::string, time_t> get_blocked_hosts()=0;
@@ -102,14 +102,14 @@ namespace nodetool
     {
 
     }
-    virtual size_t post_each(std::function<void(t_connection_context&, uint32_t)> note, std::function<void()> then)
+    virtual size_t post_each(std::function<void(t_connection_context&)> note, std::function<void()> then)
     {
       (void)note;
       if (then)
         then();
       return 0;
     }
-    virtual bool for_connection(const boost::uuids::uuid&, std::function<void(t_connection_context&,uint32_t)> f)
+    virtual bool for_connection(const boost::uuids::uuid&, std::function<void(t_connection_context&)> f)
     {
       return false;
     }

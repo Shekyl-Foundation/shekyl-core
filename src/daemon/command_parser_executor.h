@@ -75,10 +75,6 @@ public:
 
   bool print_blockchain_info(const std::vector<std::string>& args);
 
-  bool set_log_level(const std::vector<std::string>& args);
-
-  bool set_log_categories(const std::vector<std::string>& args);
-
   bool print_height(const std::vector<std::string>& args);
 
   bool print_block(const std::vector<std::string>& args);
@@ -103,15 +99,7 @@ public:
 
   bool print_status(const std::vector<std::string>& args);
 
-  bool set_limit(const std::vector<std::string>& args);
 
-  bool set_limit_up(const std::vector<std::string>& args);
-
-  bool set_limit_down(const std::vector<std::string>& args);
-
-  bool out_peers(const std::vector<std::string>& args);
-
-  bool in_peers(const std::vector<std::string>& args);
 
 
   bool show_bans(const std::vector<std::string>& args);

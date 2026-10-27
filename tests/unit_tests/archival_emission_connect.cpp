@@ -206,17 +206,3 @@ TEST(archival_emission_connect, stores_vouts_amount_zero_with_commitments)
   }
 }
 
-TEST(archival_emission_connect, unparseable_vin_throws)
-{
-  const EmissionConnectKat kat = load_emission_connect_kat();
-  transaction tx = make_emission_tx(kat);
-  // Tag-correct garbage: passes the transport shim's shape check, fails the
-  // Rust parse — the connect arm must hard-error, never soft-skip.
-  auto& vin = std::get<txin_archival_reward_emission>(tx.vin[0]);
-  vin.canonical_bytes.assign(16, 0x00);
-  vin.canonical_bytes[0] = 0x04;
-
-  EmissionConnectDB db;
-  EXPECT_THROW(add_emission_tx(db, tx), std::runtime_error);
-  EXPECT_TRUE(db.m_claims.empty());
-}

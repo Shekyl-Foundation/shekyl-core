@@ -108,9 +108,9 @@ pub fn market_member_at_epoch(
     join_settlement_epoch: u64,
     settlement_epoch: u64,
     bad_intervals: &[BadInterval],
-    is_foundation_complete_tree: bool,
+    is_support_complete_tree: bool,
 ) -> bool {
-    if is_foundation_complete_tree {
+    if is_support_complete_tree {
         return false;
     }
     good_through(join_settlement_epoch, settlement_epoch, bad_intervals)
@@ -390,7 +390,7 @@ impl ShardClose {
 #[derive(Debug, Clone)]
 pub struct EpochCloseBond<'a> {
     pub join_settlement_epoch: u64,
-    pub is_foundation_complete_tree: bool,
+    pub is_support_complete_tree: bool,
     pub bad_intervals: &'a [BadInterval],
 }
 
@@ -604,7 +604,7 @@ pub fn as_of_e_served_work(
                 b.join_settlement_epoch,
                 inputs.settlement_epoch,
                 b.bad_intervals,
-                b.is_foundation_complete_tree,
+                b.is_support_complete_tree,
             )
         })
         .collect();
@@ -877,7 +877,7 @@ mod tests {
     fn epoch_close_single_member_full_pipeline() {
         let bonds = [EpochCloseBond {
             join_settlement_epoch: 0,
-            is_foundation_complete_tree: false,
+            is_support_complete_tree: false,
             bad_intervals: &[],
         }];
         let shards = [shard(7, bh(0))];
@@ -900,7 +900,7 @@ mod tests {
         let bonds: Vec<EpochCloseBond<'_>> = (0..=crowd)
             .map(|_| EpochCloseBond {
                 join_settlement_epoch: 0,
-                is_foundation_complete_tree: false,
+                is_support_complete_tree: false,
                 bad_intervals: &[],
             })
             .collect();
@@ -979,7 +979,7 @@ mod tests {
         const N_SHARDS: usize = 40;
         let bonds = [EpochCloseBond {
             join_settlement_epoch: 0,
-            is_foundation_complete_tree: false,
+            is_support_complete_tree: false,
             bad_intervals: &[],
         }];
         // `ClosedAt(0)` so the age term is LIVE — open, the age is zeroed
@@ -1100,7 +1100,7 @@ mod tests {
     fn epoch_close_complete_tree_excluded_from_market_and_sigma() {
         let bonds = [EpochCloseBond {
             join_settlement_epoch: 0,
-            is_foundation_complete_tree: true,
+            is_support_complete_tree: true,
             bad_intervals: &[],
         }];
         let shards = [shard(7, bh(0))];
@@ -1124,7 +1124,7 @@ mod tests {
         // consult, and this KAT is the regression guard on that deletion.
         let bonds = [EpochCloseBond {
             join_settlement_epoch: 0,
-            is_foundation_complete_tree: false,
+            is_support_complete_tree: false,
             bad_intervals: &[],
         }];
         let shards = [shard(7, bh(0))];
@@ -1157,12 +1157,12 @@ mod tests {
         let bonds = [
             EpochCloseBond {
                 join_settlement_epoch: 0,
-                is_foundation_complete_tree: false,
+                is_support_complete_tree: false,
                 bad_intervals: &[],
             },
             EpochCloseBond {
                 join_settlement_epoch: 0,
-                is_foundation_complete_tree: false,
+                is_support_complete_tree: false,
                 bad_intervals: &[],
             },
         ];
@@ -1245,7 +1245,7 @@ mod tests {
         }];
         let bonds = [EpochCloseBond {
             join_settlement_epoch: 0,
-            is_foundation_complete_tree: false,
+            is_support_complete_tree: false,
             bad_intervals: &bad,
         }];
         let shards = [shard(7, bh(0))];
@@ -1262,7 +1262,7 @@ mod tests {
     fn epoch_close_open_shard_zeroes_age_not_scarcity() {
         let bonds = [EpochCloseBond {
             join_settlement_epoch: 0,
-            is_foundation_complete_tree: false,
+            is_support_complete_tree: false,
             bad_intervals: &[],
         }];
         let shards = [EpochCloseShard {
@@ -1284,7 +1284,7 @@ mod tests {
     fn epoch_close_shared_shard_splits_scarcity() {
         let bond = EpochCloseBond {
             join_settlement_epoch: 0,
-            is_foundation_complete_tree: false,
+            is_support_complete_tree: false,
             bad_intervals: &[],
         };
         let bonds = [bond.clone(), bond];

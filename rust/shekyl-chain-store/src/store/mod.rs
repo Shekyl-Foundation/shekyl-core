@@ -90,15 +90,20 @@
 //! answer to either is a rebuild from the block corpus
 //! (`DAEMON_REDB_STORE.md` §11), never a migrator.
 
+mod admission_write;
 mod alt;
 mod alt_reads;
 mod alt_view;
 mod archival_reads;
 mod archival_write;
 mod at_index;
+mod bundle_queue;
+mod bundle_view;
 mod chain_reads;
 mod connect;
 mod curve_reads;
+mod edge;
+mod epoch_retire;
 mod error;
 mod grow;
 mod halt;
@@ -112,6 +117,7 @@ mod prune;
 mod read;
 mod shard_reads;
 mod shared;
+mod snapshot_view;
 mod tx_reads;
 pub(crate) mod undo;
 mod view;
@@ -121,10 +127,13 @@ pub use alt_reads::AltEntry;
 pub use alt_view::{AltChain, AltView};
 pub use archival_reads::{PassCount, ServedShard};
 pub use at_index::AtIndex;
+pub use bundle_queue::{QueueEntry, QueueReconciled};
+pub use bundle_view::{BundleRows, StoreBundleView};
 pub use connect::Connected;
 pub use error::{
-    AccrualFault, AltCannot, CellFault, EngineError, ErrorClass, LeafCountFault, LeafDensity,
-    PoolCannot, SettlementFault, SlashFault, StoreCannot, StoreError, StoreInvariant, UndoFault,
+    AccrualFault, AltCannot, BodyHolderFault, CellFault, DigestFault, DrawRowFault, DrawableFault,
+    EdgeFault, EngineError, ErrorClass, FrozenFault, LeafCountFault, LeafDensity, PoolCannot,
+    QueueCannot, SettlementFault, SlashFault, StoreCannot, StoreError, StoreInvariant, UndoFault,
 };
 pub use halt::ConnectState;
 pub use keyed::{
@@ -133,13 +142,14 @@ pub use keyed::{
 };
 pub use output_reads::RecordedOutput;
 pub use pop::Popped;
-pub use prune::{Horizons, Pruned};
+pub use prune::{EpochFloors, Horizons, Pruned};
 pub use read::{RangeItem, RawBlockBytes, ReadSnapshot, RecordedBlockBody, TipState, TxWalkItem};
 pub use shard_reads::{ClosedShardRows, ShardFold};
+pub use snapshot_view::SnapshotView;
 pub use tx_reads::{PqcAuths, Prunable, SegmentBytes, TxLocation, TxRecord};
-pub use undo::Restorable;
+pub use undo::{RawRows, Restorable};
 pub use view::BatchView;
-pub use write::WriteBatch;
+pub use write::{invariant_of, WriteBatch};
 
 use std::path::Path;
 
@@ -624,9 +634,9 @@ impl ChainStore {
 
     /// Open a write batch, run `f`, and **abort**.
     ///
-    /// The producer's read of the chain (`TemplateFacts`): it needs the
-    /// validator's [`WriteBatch::chain_view`] — the same body, the same
-    /// poison latch — and it must not commit. An invariant the closure
+    /// A read on the validator's own [`WriteBatch::chain_view`] — the same
+    /// body, the same poison latch — that must not commit: a test that
+    /// judges a header on the view a connect would. An invariant the closure
     /// observes still halts the writer, exactly as [`Self::write`] does;
     /// an unpoisoned `Ok` drops the transaction. A connect or a pop inside
     /// `f` is rolled back with it.
@@ -752,8 +762,17 @@ mod conformance_tests;
 mod pop_tests;
 
 #[cfg(test)]
+#[path = "edge_tests.rs"]
+mod edge_tests;
+
+#[cfg(test)]
 #[path = "prune_tests.rs"]
 mod prune_tests;
+
+/// Where the proofs are verified: `form`, never `validate` (2026-10-16).
+#[cfg(test)]
+#[path = "verify_site_tests.rs"]
+mod verify_site_tests;
 
 #[cfg(test)]
 #[path = "amendments_tests.rs"]
@@ -793,6 +812,11 @@ mod slash_scan_bench_tests;
 #[cfg(test)]
 #[path = "alt_tests.rs"]
 mod alt_tests;
+
+/// `SO-D12` increment 4c: the bundle queue and the body store (SI-41).
+#[cfg(test)]
+#[path = "bundle_queue_tests.rs"]
+mod bundle_queue_tests;
 
 /// DRS-E5 slice 9 a3: `AltChain::build` (CEN-K2), the stitched `AltView`
 /// against `BatchView`'s reads below the fork, K1a by construction.

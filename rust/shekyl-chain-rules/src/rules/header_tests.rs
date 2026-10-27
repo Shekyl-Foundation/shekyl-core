@@ -14,7 +14,7 @@ use crate::census::CenRow;
 use crate::fault::FormAttempt;
 use crate::harness::fixture::{candidate, candidate_on, recorded, root};
 use crate::harness::{
-    assert_refused, boundary_pair, defined, formed, formed_on, judged, MockChain,
+    assert_refused, boundary_pair, defined, expected_target, formed, judged, MockChain,
 };
 use crate::harness::{Faulted, MockSubstrate};
 use crate::rule_set::RuleSet;
@@ -49,6 +49,8 @@ fn judge_under(candidate: Candidate, rule_set: &RuleSet) -> Verdict<()> {
         rule_set,
         &MockSubstrate::default(),
         BlockHash::NULL,
+        expected_target(&MockChain::default(), rule_set),
+        &crate::block::ReferenceClaims::EMPTY,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,
@@ -74,7 +76,7 @@ fn check_alone<R: FormRule>(candidate: &Candidate, rule_set: &RuleSet) -> Verdic
 
 /// Run one view-bound rule on its own against `chain`.
 fn check_alone_on<R: BlockRule>(chain: &MockChain, candidate: &Candidate) -> Verdict<()> {
-    let formed = formed_on(chain, candidate.clone());
+    let formed = crate::harness::token_for_one_rule(chain, candidate.clone());
     chain.with_view(|view| {
         defined(R::check(
             &BlockContext::for_tests(&formed, chain.tip(), None),
@@ -257,6 +259,18 @@ fn cen_b5_above_tip_is_a_refusal_not_a_pass() {
         fn total_burned(&self) -> Result<shekyl_units::AtomicUnits, Self::Fault> {
             Ok(shekyl_units::AtomicUnits::ZERO)
         }
+        fn long_term_effective_median_at(
+            &self,
+            _: shekyl_types::BlockHeight,
+        ) -> Result<AtHeight<shekyl_types::LongTermWeight>, Self::Fault> {
+            Ok(AtHeight::AboveTip)
+        }
+        fn burned_through(
+            &self,
+            _: shekyl_types::BlockHeight,
+        ) -> Result<AtHeight<shekyl_units::AtomicUnits>, Self::Fault> {
+            Ok(AtHeight::AboveTip)
+        }
         // No bonds: the honest empty archival state (DRS-E4 §5.2).
         crate::archival_reads!(empty);
     }
@@ -274,7 +288,7 @@ fn cen_b5_above_tip_is_a_refusal_not_a_pass() {
 fn cen_b6_identity_is_block_hash_and_records_the_row() {
     let block = candidate(Vec::new()).block;
     let mut coverage = RuleCoverage::EMPTY;
-    let identity = B6::identity(&block, &mut coverage);
+    let identity = B6::identity_of(&block.pow_blob(), &mut coverage);
     assert_eq!(identity, block.hash());
     assert!(coverage.contains(CenRow::B6));
     assert_eq!(coverage.len(), 1, "B6 records exactly its own row");

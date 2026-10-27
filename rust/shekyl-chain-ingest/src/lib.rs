@@ -74,6 +74,9 @@
 
 #![deny(unsafe_code)]
 
+/// What an arrival costs, and who pays: the door's checks before parse.
+#[cfg(feature = "pipeline")]
+pub mod admission;
 /// E6 slice 8 PR-a (`CHAIN_RULES_SLICE_8.md` §5 row 2 (a)): the corpus's
 /// archival inputs, enumerated both ways.
 #[cfg(all(test, feature = "pipeline"))]
@@ -86,6 +89,10 @@ pub(crate) mod archival_driver;
 /// CEN-J11, and a Release signed by the wrong key is CEN-J13.
 #[cfg(all(test, feature = "pipeline"))]
 mod archival_hint_tests;
+/// DRS-X PR 3e (e2): every block that changes archival state, popped and
+/// connected again, the store compared at each step.
+#[cfg(all(test, feature = "pipeline"))]
+mod archival_pop_roundtrip_tests;
 /// E6 slice 8 PR-a (`CHAIN_RULES_SLICE_8.md` §5 rows 3 and 5): one levered
 /// slash chain, J5 through the Release, a phase at a time.
 #[cfg(all(test, feature = "pipeline"))]
@@ -100,6 +107,24 @@ mod artifact_tests;
 /// pins today's gap; flips when G2 lands (commit 6).
 #[cfg(all(test, feature = "pipeline"))]
 mod body_pairing_tests;
+/// The bundle producer's task: the producer's state machine driven by the
+/// connector's tip and the fetch path (`SO-D12` increment 4c).
+#[cfg(feature = "producer")]
+pub mod bundle_producer;
+#[cfg(all(test, feature = "producer"))]
+mod bundle_producer_gate_tests;
+#[cfg(all(test, feature = "producer"))]
+mod bundle_producer_tests;
+/// Where an arrival goes, and the claims it is formed under.
+/// The two RandomX seeds an arrival may hash under.
+#[cfg(feature = "pipeline")]
+mod cache_window;
+/// The scenario driver that round-trips a connect, and the prune a pop is
+/// held to. The pop tests and the levered slash chain connect through it.
+#[cfg(all(test, feature = "pipeline"))]
+pub(crate) mod chain_drive;
+#[cfg(feature = "pipeline")]
+mod chain_facts;
 #[cfg(feature = "pipeline")]
 pub mod connector;
 pub mod corpus;
@@ -110,9 +135,21 @@ pub mod corpus;
 pub mod emission_assembly;
 #[cfg(feature = "fetch")]
 pub mod fetch;
+/// The tip follower: the seed window, then the pool, then the miner's job.
+#[cfg(feature = "pipeline")]
+pub mod follower;
+/// `SO-D12h`: the frozen-membership chain through the claim window. The
+/// emission test and the pop test each connect the claim.
+#[cfg(all(test, feature = "pipeline"))]
+mod frozen_membership;
 #[cfg(feature = "pipeline")]
 pub mod grader;
+#[cfg(all(test, feature = "pipeline"))]
+mod header_path_tests;
 pub mod metrics;
+/// The Rust miner loop over scenario chains (DRS-X PR 3, DX-Q4).
+#[cfg(all(test, feature = "pipeline"))]
+mod miner_tests;
 pub mod mutation;
 #[cfg(all(test, feature = "pipeline"))]
 #[path = "mutation_tests.rs"]
@@ -121,6 +158,32 @@ mod mutation_tests;
 pub mod pipeline;
 #[cfg(all(test, feature = "pipeline"))]
 mod pipeline_tests;
+/// Step 1 of a switch: the blocks a plan names, formed off the actor.
+#[cfg(feature = "pipeline")]
+pub mod plan_form;
+/// DRS-E5 PR-b (`DRS_E5_POOL_ALT_PRUNE.md` §2.2): the pool door held to
+/// the validator over real spends, and the pool's own rows over them.
+#[cfg(all(test, feature = "pipeline"))]
+mod pool_block_tests;
+#[cfg(all(test, feature = "pipeline"))]
+mod pool_door_tests;
+#[cfg(all(test, feature = "pipeline"))]
+mod pool_restart_tests;
+#[cfg(all(test, feature = "pipeline"))]
+mod pool_submit_tests;
+/// Seats in the arrival window.
+#[cfg(feature = "pipeline")]
+mod room;
+#[cfg(feature = "pipeline")]
+pub mod router;
+/// The RPC's store-backed facts over the scenario chain and the captured
+/// chains (DRS-X PR 3, `DRS_X_STORE_FLIP.md` DX-Q3).
+#[cfg(all(test, feature = "pipeline"))]
+mod rpc_store_facts_tests;
+/// The store flip's native read handlers over scenario chains (DRS-X
+/// PR 3, `DRS_X_STORE_FLIP.md` DX-Q3).
+#[cfg(all(test, feature = "pipeline"))]
+mod rpc_store_reads_tests;
 #[cfg(all(test, feature = "pipeline"))]
 pub(crate) mod scenario;
 #[cfg(all(test, feature = "pipeline"))]
@@ -152,9 +215,31 @@ pub mod schedule;
 pub mod seed;
 #[cfg(feature = "pipeline")]
 pub mod sequencer;
+/// The live arrival path: one door, the router, the connector.
+#[cfg(feature = "pipeline")]
+pub mod service;
+/// The fetch scheduler's store-backed facts (`SV-D9`), read by the shard
+/// view and the bundle producer.
+#[cfg(feature = "producer")]
+pub mod shard_facts;
 pub mod snapshot_json;
 pub mod source;
 pub mod substrate;
+/// DRS-E5 a5 (`DRS_E5_POOL_ALT_PRUNE.md` §2.3): the switch through the
+/// production stack — two drivers, two branches, the store that switched
+/// held to the store that connected the winner directly.
+#[cfg(all(test, feature = "pipeline"))]
+mod switch_tests;
+/// DRS-E5 a6: the switch at the genesis cap, timed (ignored lane).
+#[cfg(all(test, feature = "pipeline"))]
+mod switch_timing_tests;
+#[cfg(all(test, feature = "pipeline"))]
+mod sync_wire_tests;
+#[cfg(feature = "pipeline")]
+pub mod target;
+/// The node's one block template, built by the tip follower on one snapshot.
+#[cfg(feature = "pipeline")]
+mod template;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod trace;
@@ -163,8 +248,11 @@ mod vectors_tests;
 
 #[cfg(feature = "pipeline")]
 pub use connector::{
-    Applied, Apply, ChainFacts, Connector, ConnectorArgs, Digest, HashAt, Inject, Injected,
-    IssueDraws, Rewind, Rewound, RunEnd, RunFault, TemplateFacts,
+    AltBlocksHeld, Applied, Apply, ChainFacts, ChainTip, Connector, ConnectorArgs, Digest, HashAt,
+    Inject, Injected, IssueDraws, OfferAlt, Offered, PlanMismatchReason, PlannedBlock,
+    PlannedDemotion, PlannedPromotion, PopBeyondReorgCap, PopBlocks, RaiseAlarm, RefusePromotion,
+    Reorganize, Rewind, Rewound, RunEnd, RunFault, SwitchDone, SwitchPlan, Switched, TableRows,
+    TemplateFacts, TipChanged, WatchLatch, WatchTip,
 };
 pub use corpus::{CorpusFault, CorpusNet, CorpusReader, CorpusWriter, CORPUS_FORMAT_VERSION};
 #[cfg(feature = "fetch")]

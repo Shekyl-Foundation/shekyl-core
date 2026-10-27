@@ -103,7 +103,7 @@ pub(crate) const UNHELD_ATTESTATION_ROOT: [u8; 32] = [0x5b; 32];
 /// Its own value, like [`ORPHAN_PARENT`]: this module is production code
 /// and cannot reach the rules harness's `UNRECORDED_REFERENCE` (a
 /// test-only feature); the two need not agree, only both be unheld.
-const UNHELD_REFERENCE: BlockHash = BlockHash::from_bytes([0x99; 32]);
+pub const UNHELD_REFERENCE: BlockHash = BlockHash::from_bytes([0x99; 32]);
 
 /// One systematic invalidation. Exhaustive: [`Mutation::ALL`] is every
 /// variant, and a match over it is a compile-time census of the family.
@@ -153,16 +153,27 @@ pub enum Mutation {
     /// hashes differently, and is otherwise the spend it was); the count
     /// unchanged. CEN-G2's index arm at `Listed(0)`.
     SubstitutedBody,
-    /// A listed spend reuses a key image an earlier block spent.
+    /// A listed spend reuses a key image an earlier block spent: the first
+    /// listed spend replaced by the wallet-made respend the caller
+    /// supplies ([`Environment::resigned`]), signed over its own content.
+    /// CEN-I7, at the input. *Records-was:* until 2026-10-16 the family
+    /// moved the key image in place; the signing preimage covers the
+    /// prefix (CEN-I17) and the signature sequence now runs in `form`
+    /// ahead of every view-bound row, so that shape is CEN-I18's.
     DoubleSpend,
     /// A listed spend's `referenceBlock` names a hash the chain never held
-    /// (the harness's `UNRECORDED_REFERENCE`). CEN-I10, at the transaction.
+    /// (the harness's `UNRECORDED_REFERENCE`): the first listed spend
+    /// replaced by the caller's wallet-made body naming it
+    /// ([`Environment::resigned`]; the spender signs after the name
+    /// moves). CEN-I10, at the transaction. *Records-was:* the family
+    /// moved the name in place until 2026-10-16, as for `DoubleSpend`.
     UnknownReference,
     /// A listed spend's `referenceBlock` is the candidate's own parent — a
-    /// block the chain holds, one block old, `MIN_AGE − 1` too young.
-    /// CEN-I11, at the transaction. The old edge of the window is the
-    /// mock's (`I11::window`): a chain past `MAX_AGE` is longer than the
-    /// mutation fixtures build (§3.10).
+    /// block the chain holds, one block old, `MIN_AGE − 1` too young: the
+    /// first listed spend replaced by the caller's wallet-made body naming
+    /// it ([`Environment::resigned`]). CEN-I11, at the transaction. The
+    /// old edge of the window is the mock's (`I11::window`): a chain past
+    /// `MAX_AGE` is longer than the mutation fixtures build (§3.10).
     ReferenceTooRecent,
     /// One byte of a listed spend's first `pqc_auths` slot's signature
     /// flipped. CEN-I18, at that input. The signature is forged and the
@@ -502,29 +513,42 @@ impl Mutation {
                 relist(&mut candidate);
             }
             Self::DoubleSpend => {
-                let &reused = spent_before.first().ok_or(Unmutable::NothingSpentBefore)?;
-                let mut inputs = candidate
-                    .transactions
-                    .iter_mut()
-                    .flat_map(|tx| tx.prefix.inputs.iter_mut());
-                match inputs.find(|input| matches!(input, Input::ToKey { .. })) {
-                    Some(Input::ToKey { key_image, .. }) => *key_image = reused,
-                    _ => return Err(Unmutable::NoSpendToRepeat),
+                spent_before.first().ok_or(Unmutable::NothingSpentBefore)?;
+                let respend = env
+                    .resigned
+                    .map(|r| r.respend)
+                    .ok_or(Unmutable::NoResignedBody { mutation: self })?;
+                let image = key_images(respend)
+                    .first()
+                    .copied()
+                    .ok_or(Unmutable::NoSpendToRepeat)?;
+                if !spent_before.contains(&image) {
+                    return Err(Unmutable::NotARespend);
                 }
-                // One violation: the body changed, so the header lists the
-                // new hash — otherwise this would also be `ReorderedBodies`'
-                // body ↔ hash disagreement (G2), and a G2 refusal would
-                // mask the I7 one this mutation exists to provoke.
-                relist(&mut candidate);
+                Self::replace_first_spend(&mut candidate, respend.clone())?;
             }
             Self::UnknownReference => {
-                Self::move_reference(&mut candidate, UNHELD_REFERENCE)?;
+                let body = env
+                    .resigned
+                    .map(|r| r.unknown_reference)
+                    .ok_or(Unmutable::NoResignedBody { mutation: self })?;
+                if proof_reference(body) != Some(UNHELD_REFERENCE) {
+                    return Err(Unmutable::ReferenceNotAsNamed);
+                }
+                Self::replace_first_spend(&mut candidate, body.clone())?;
             }
             Self::ReferenceTooRecent => {
                 // The parent is on the chain (I10 passes) and one block old
                 // (I11 refuses): the young edge, from the driver.
                 let parent = candidate.block.header.previous;
-                Self::move_reference(&mut candidate, parent)?;
+                let body = env
+                    .resigned
+                    .map(|r| r.reference_too_recent)
+                    .ok_or(Unmutable::NoResignedBody { mutation: self })?;
+                if proof_reference(body) != Some(parent) {
+                    return Err(Unmutable::ReferenceNotAsNamed);
+                }
+                Self::replace_first_spend(&mut candidate, body.clone())?;
             }
             Self::ForgedSignature => {
                 let mut signatures =
@@ -550,22 +574,21 @@ impl Mutation {
         Ok(candidate)
     }
 
-    /// Point the first listed spend's `referenceBlock` at `reference` and
-    /// re-list the header (one violation, as `DoubleSpend` does).
-    fn move_reference(candidate: &mut Candidate, reference: BlockHash) -> Result<(), Unmutable> {
-        let mut references = candidate
+    /// Replace the first listed spend with `body` — the caller's
+    /// wallet-made negative fixture — and re-list the header, so the one
+    /// violation is the body's: the header follows it (otherwise this
+    /// would also be `ReorderedBodies`' body ↔ hash disagreement, CEN-G2,
+    /// and a G2 refusal would mask the row the mutation exists to
+    /// provoke).
+    fn replace_first_spend(candidate: &mut Candidate, body: Transaction) -> Result<(), Unmutable> {
+        let Some(slot) = candidate
             .transactions
-            .iter_mut()
-            .filter_map(|tx| match &mut tx.ct {
-                Ct::Fcmp {
-                    reference_block, ..
-                } => Some(reference_block),
-                Ct::Null(_) => None,
-            });
-        let Some(reference_block) = references.next() else {
-            return Err(Unmutable::NoReferenceToMove);
+            .iter()
+            .position(|tx| !key_images(tx).is_empty())
+        else {
+            return Err(Unmutable::NoSpendToRepeat);
         };
-        *reference_block = reference;
+        candidate.transactions[slot] = body;
         relist(candidate);
         Ok(())
     }
@@ -658,6 +681,28 @@ fn move_unlock_time(tx: &mut Transaction) -> Result<(), Unmutable> {
 
 /// The header lists the bodies as they now are: a body mutation is one
 /// violation only if the hashes follow it (G2 would otherwise mask it).
+/// The key images `tx`'s `ToKey` inputs carry, in input order.
+fn key_images(tx: &Transaction) -> Vec<[u8; 32]> {
+    tx.prefix
+        .inputs
+        .iter()
+        .filter_map(|input| match input {
+            Input::ToKey { key_image, .. } => Some(*key_image),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The `reference_block` `tx` names, if its ct is a proof-bearing one.
+fn proof_reference(tx: &Transaction) -> Option<BlockHash> {
+    match &tx.ct {
+        Ct::Fcmp {
+            reference_block, ..
+        } => Some(*reference_block),
+        Ct::Null(_) => None,
+    }
+}
+
 fn relist(candidate: &mut Candidate) {
     candidate.block.transaction_hashes = candidate
         .transactions
@@ -693,6 +738,30 @@ pub struct Environment<'a> {
     /// the family cannot forge a second from the first; a serve-credit body
     /// carries no signature slot and needs none. Empty for a corpus chain.
     pub twins: &'a [Transaction],
+    /// Wallet-made bodies for the three spend mutations whose in-place
+    /// edit became CEN-I18's on 2026-10-16 (the signature sequence runs in
+    /// `form`, ahead of every view-bound row, and the signing preimage
+    /// covers the prefix): a spend is signed over its content, so the
+    /// family cannot re-sign what it edits, and the caller supplies each
+    /// body signed last, as `twins` are. Absent, the three are
+    /// [`Unmutable::NoResignedBody`] — a corpus chain carries none.
+    pub resigned: Option<Resigned<'a>>,
+}
+
+/// The spend bodies of an [`Environment`], one per mutation, each valid at
+/// the mutated height but for the one thing its mutation names
+/// (`shekyl-harness-spender`'s `spend_coinbase` and
+/// `spend_coinbase_referencing`).
+#[derive(Clone, Copy)]
+pub struct Resigned<'a> {
+    /// A spend of a coinbase an earlier block already spent
+    /// ([`Mutation::DoubleSpend`]).
+    pub respend: &'a Transaction,
+    /// A spend naming [`UNHELD_REFERENCE`] ([`Mutation::UnknownReference`]).
+    pub unknown_reference: &'a Transaction,
+    /// A spend naming the mutated block's parent
+    /// ([`Mutation::ReferenceTooRecent`]).
+    pub reference_too_recent: &'a Transaction,
 }
 
 /// The weight leg of an [`Environment`].
@@ -806,6 +875,20 @@ pub enum Unmutable {
     /// [`Mutation::OverweightBlock`] without an [`Environment::overweight`].
     #[error("OverweightBlock needs the environment's body supply and bound")]
     NoBodySupply,
+    /// A spend mutation without its [`Environment::resigned`] body.
+    #[error("{mutation} needs the environment's wallet-made body")]
+    NoResignedBody {
+        /// The mutation asked for.
+        mutation: Mutation,
+    },
+    /// [`Mutation::DoubleSpend`]'s supplied body spends a coinbase no block
+    /// below the mutated height spent.
+    #[error("the supplied respend spends nothing an earlier block spent")]
+    NotARespend,
+    /// A reference mutation's supplied body names a `reference_block`
+    /// other than the one the mutation names.
+    #[error("the supplied body does not name the reference the mutation names")]
+    ReferenceNotAsNamed,
     /// A `Duplicate*` mutation whose twin must be supplied
     /// ([`Environment::twins`]) found none colliding with the block's keys.
     #[error("no supplied twin collides with the block's {kind:?} key")]

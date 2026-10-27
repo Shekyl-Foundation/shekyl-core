@@ -78,6 +78,32 @@ pub(super) fn frontier<T: ReadTables>(txn: &T) -> Result<TreeFrontier, ReadFault
     })
 }
 
+/// The stored hashes of layer `layer`'s chunks at `chunks`, in order — the
+/// full children SI-5 rebuilds a last chunk from (`edge.rs`). Every chunk
+/// below a layer's count is stored (CTW-8: the grow inserts a new chunk and
+/// overwrites the last one; nothing deletes a full one), so an absent row
+/// is SI-7 on the layer table.
+pub(super) fn layer_chunks<T: ReadTables>(
+    txn: &T,
+    layer: u8,
+    chunks: core::ops::Range<u64>,
+) -> Result<Vec<[u8; 32]>, ReadFault> {
+    let layers = txn.table(CURVE_TREE_LAYERS)?;
+    let mut out = Vec::with_capacity(usize::try_from(chunks.end - chunks.start).unwrap_or(0));
+    for chunk in chunks {
+        let key = LayerChunk::new(TreeLayer::from_raw(layer), ChunkIndex::from_raw(chunk)).key();
+        let Some(guard) = layers.get(key)? else {
+            return Err(absent(LAYERS));
+        };
+        let hash = guard
+            .value()
+            .decode()
+            .map_err(|cause| undecodable(LAYERS, cause))?;
+        out.push(*hash.as_bytes());
+    }
+    Ok(out)
+}
+
 /// The leaf count going into block `height` (module docs).
 pub(super) fn leaf_count_at<T: ReadTables>(
     txn: &T,

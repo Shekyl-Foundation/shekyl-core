@@ -1,0 +1,23 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-hash-budget"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The daemon's one RandomX hasher budget (DRS-X PR2-Q3): a fixed number of permits shared by every hasher, granted by priority class so the miner never holds a permit a higher class waits for"
+publish = false
+
+# No dependencies: a mutex, a condition variable and a counter. Its own
+# crate because three crates that do not otherwise meet take permits from
+# it — the ingest service's form workers, the miner's workers and the RPC's
+# calc_pow — and the RandomX verifier crate, the one thing they share, is
+# held to isolation invariants a scheduler has no business under.
+
+[lints]
+workspace = true

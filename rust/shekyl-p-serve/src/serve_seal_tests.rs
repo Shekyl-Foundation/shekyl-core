@@ -41,6 +41,7 @@ async fn the_countersignature_is_released_only_after_the_whole_body() {
         HybridSignature::from_canonical_bytes(sealed).expect("the last bytes are the signature");
     verify_pass_transcript(
         signer.public_key(),
+        shekyl_archival_retention::PassStream::Economy,
         &NONCE,
         BlockHeight::from_raw(IN_GATE_ANCHOR),
         &ANCHOR_HASH,

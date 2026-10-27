@@ -5,7 +5,7 @@
 
 //! Track-2 end-to-end FAKECHAIN regtest: C++↔Rust FCMP++ verify parity.
 //!
-//! These tests spawn a real `shekyld --regtest` daemon and drive the production
+//! These tests spawn a real `shekyld --network regtest` daemon and drive the production
 //! [`Engine`] against it over the real RPC transport ([`DaemonClient`] /
 //! [`HttpRpc`]). Unlike the rest of the engine test suite (which uses
 //! the in-memory `TestDaemon` mock), the point here is the **submit/verify
@@ -40,7 +40,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-/// What a wallet requires of the `shekyld --regtest` daemon these tests spawn.
+/// What a wallet requires of the `shekyld --network regtest` daemon these tests spawn.
 ///
 /// **The only place `FakechainPolicy::Accept` is selected outside unit tests**
 /// (`VC-R3`): the harness constructs the client in-process, so the affordance
@@ -101,7 +101,14 @@ fn install_wallet_tracing() {
     );
 }
 
-/// A live `shekyld --regtest` daemon spawned for one test, with an ephemeral
+/// The line a daemon started with `--dev-rpc` writes at start (IG-8),
+/// pinned by `shekyl-daemon-config`'s
+/// `the_armed_lever_switch_announces_itself`.
+/// `scripts/ci/check_armed_lever_launchers.py` holds this text equal to
+/// `scripts/armed_lever.py` and to that test.
+const ARMED_ROW_ANNOUNCEMENT: &str = "development lever set: dev-rpc=true";
+
+/// A live `shekyld --network regtest` daemon spawned for one test, with an ephemeral
 /// data dir and RPC port. Killed and cleaned on drop.
 /// Last 40 lines of the daemon's captured log, inlined into panics:
 /// `RegtestDaemon::drop` removes the datadir (log included) as a panic
@@ -116,11 +123,13 @@ fn log_tail(log_path: &std::path::Path) -> String {
         .unwrap_or_else(|e| format!("(daemon log unreadable: {e})"))
 }
 
-/// The fakechain-only regtest schedule levers, as one value so the pair
-/// cannot be set apart: `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` and
-/// `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS`. The daemon refuses `seb ≤ reorg_cap`
-/// at arm (`SEB > D_max` on every nettype); a harness that shortens the
-/// epoch lowers the cap with it.
+/// The regtest-only schedule levers, as one value so the pair cannot be
+/// set apart: the daemon's `dev-settlement-epoch-blocks` and
+/// `dev-archival-reorg-depth` rows, which the wallet process still reads
+/// as `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` and `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS`
+/// (FOLLOWUPS: the wallet engine's lever). The daemon refuses
+/// `seb ≤ reorg_cap` at arm (`SEB > D_max` on every nettype); a harness
+/// that shortens the epoch lowers the cap with it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct RegtestSchedule {
     pub(super) seb: u64,
@@ -128,8 +137,9 @@ pub(super) struct RegtestSchedule {
 }
 
 impl RegtestSchedule {
-    /// Set both levers on this process's environment, for the in-process
-    /// arm that must match the spawned daemon's schedule.
+    /// Set both levers on this process's environment, for the wallet's
+    /// in-process arm that must match the spawned daemon's schedule. The
+    /// daemon itself takes the pair as rows (`spawn`).
     pub(super) fn set_in_process_env(self) {
         std::env::set_var("SHEKYL_SETTLEMENT_EPOCH_BLOCKS", self.seb.to_string());
         std::env::set_var(
@@ -154,7 +164,7 @@ pub(super) struct RegtestDaemon {
     /// judges the chain under a rule set naming that pair, not the
     /// production one).
     schedule: Option<RegtestSchedule>,
-    /// Whether this daemon was started offline (`--offline`). Its
+    /// Whether this daemon was started offline (both connectors off). Its
     /// `get_info` must then report that state, not a count of zero.
     offline: bool,
     /// Held for the daemon's lifetime to serialize e2e tests; released on drop.
@@ -166,22 +176,22 @@ pub(super) struct RegtestDaemon {
 /// How a spawned daemon takes part in peer-to-peer.
 #[derive(Clone, Copy, Debug)]
 enum Peering {
-    /// `--offline`: no listener and no dial. The protocol starts
-    /// synchronized, so a submitted transaction finds no route and is
-    /// broadcast-recorded within milliseconds.
+    /// `--clearnet off --tor off`: no listener and no dial. The protocol
+    /// starts synchronized, so a submitted transaction finds no route and
+    /// is broadcast-recorded within milliseconds.
     Offline,
     /// Bound on loopback and dialling exactly one peer.
     ///
-    /// `--add-exclusive-node` is what keeps the daemon off the public
-    /// network: p2p reads `--regtest` as mainnet, and an exclusive list is
-    /// the condition under which it dials no seed. `--no-ephemeral-tor`
-    /// declines the managed Tor, so the node is clearnet-only and a local
-    /// origin takes the stem slot, not a hidden own-edge.
+    /// `--p2p-closed-peer` is what keeps the daemon off the public
+    /// network: a closed list is the condition under which it dials no
+    /// seed. `--tor off` declines the managed Tor, so the node is
+    /// clearnet-only and a local origin takes the stem slot, not a hidden
+    /// own-edge.
     Linked {
         p2p_port: u16,
         peer_p2p_port: u16,
-        /// `--no-sync`: the daemon never reports itself synchronized, so it
-        /// drops every transaction a peer sends it and relays none.
+        /// `--dev-sync off`: the daemon never reports itself synchronized,
+        /// so it drops every transaction a peer sends it and relays none.
         sink: bool,
     },
 }
@@ -194,6 +204,14 @@ pub(super) struct GenerateBlocksResp {
     blocks: Vec<String>,
 }
 
+/// The network a test daemon runs on. Regtest for every spawn but the one
+/// that shows what the armed switch serves on a shared test network.
+#[derive(Clone, Copy)]
+enum SpawnNetwork {
+    Regtest,
+    Testnet,
+}
+
 /// How one regtest daemon is spawned.
 ///
 /// The fields are the postures a caller can ask for, named at the call
@@ -201,6 +219,7 @@ pub(super) struct GenerateBlocksResp {
 /// a stem/sink pair takes it once, on the origin.
 struct RegtestSpawn {
     serial: Option<OwnedMutexGuard<()>>,
+    network: SpawnNetwork,
     schedule: Option<RegtestSchedule>,
     restricted_listener: bool,
     console: bool,
@@ -212,6 +231,7 @@ impl RegtestSpawn {
     fn new(serial: Option<OwnedMutexGuard<()>>) -> Self {
         Self {
             serial,
+            network: SpawnNetwork::Regtest,
             schedule: None,
             restricted_listener: false,
             console: false,
@@ -221,6 +241,14 @@ impl RegtestSpawn {
 
     fn with_console(mut self) -> Self {
         self.console = true;
+        self
+    }
+
+    /// Spawn on `network` instead of regtest. The regtest-only rows
+    /// (`dev-difficulty`, the schedule) are not passed off regtest, where the
+    /// daemon refuses them, so such a daemon cannot mine quickly.
+    fn on_network(mut self, network: SpawnNetwork) -> Self {
+        self.network = network;
         self
     }
 
@@ -282,9 +310,9 @@ impl RegtestDaemon {
         Self::start_with_regtest_schedule(None).await
     }
 
-    /// Spawn the daemon with its interactive console live, so a test can put
-    /// commands to the **in-process** arm. Opt-in: without `--non-interactive`
-    /// the daemon exits on stdin EOF, which every other spawn relies on.
+    /// Spawn the daemon with its interactive console live (`--console`), so
+    /// a test can put commands to the **in-process** arm. Opt-in: the
+    /// console is what reads stdin; without it nothing does.
     pub(super) async fn start_with_console() -> RegtestDaemon {
         let serial = serial_lock().lock_owned().await;
         Self::spawn(RegtestSpawn::new(Some(serial)).with_console()).await
@@ -293,12 +321,11 @@ impl RegtestDaemon {
     /// Spawn the daemon with a second, restricted listener, so one daemon serves
     /// both postures and a test can put the same request to each.
     ///
-    /// The second listener comes from `--rpc-restricted-bind-port`, which binds
-    /// an additional server with `restricted = true` fixed
-    /// (`src/daemon/daemon.cpp`). That is deliberately *not* `--restricted-rpc`,
-    /// which would flip the posture of the main listener instead — and the main
-    /// listener has to stay unrestricted here, both because the harness drives
-    /// mining through it and because it is the blast-radius control.
+    /// The second listener comes from `--rpc-view-listen`, which binds an
+    /// additional server in the view posture (`RPC_CHANNEL.md` §6.1). The
+    /// admin listener keeps its own posture — and it has to stay admin
+    /// here, both because the harness drives mining through it and because
+    /// it is the blast-radius control.
     ///
     /// The restricted listener is opt-in rather than always-on: this harness is
     /// `#[ignore]`d, so CI would not catch a regression it introduced into the
@@ -308,11 +335,18 @@ impl RegtestDaemon {
         Self::spawn(RegtestSpawn::new(Some(serial)).with_restricted_listener()).await
     }
 
-    /// Spawn the daemon with an optional regtest schedule on the child's
-    /// environment — `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` and
-    /// `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS`, the fakechain-only levers the
-    /// daemon arms at startup (the gate at the top of `Blockchain::init`,
-    /// before the genesis add). The pair moves together: the daemon refuses
+    /// Spawn the daemon offline on testnet, with the armed switch set as on
+    /// every spawn. It has no fixed difficulty, which is regtest's.
+    pub(super) async fn start_on_testnet() -> RegtestDaemon {
+        let serial = serial_lock().lock_owned().await;
+        Self::spawn(RegtestSpawn::new(Some(serial)).on_network(SpawnNetwork::Testnet)).await
+    }
+
+    /// Spawn the daemon with an optional regtest schedule on its command
+    /// line — `--dev-settlement-epoch-blocks` and
+    /// `--dev-archival-reorg-depth`, the regtest-only rows the daemon arms
+    /// at startup (DAEMON_CONFIG_CUTOVER.md §2.2 step 6, before the genesis
+    /// add). The pair moves together: the daemon refuses
     /// an epoch that is not strictly above the reorg cap (`SEB > D_max` is
     /// an invariant of every valid configuration; a shortened epoch runs a
     /// Fakechain rule set whose cap fits inside it). The emission e2e
@@ -332,6 +366,7 @@ impl RegtestDaemon {
     async fn spawn(spec: RegtestSpawn) -> RegtestDaemon {
         let RegtestSpawn {
             serial,
+            network,
             schedule,
             restricted_listener,
             console,
@@ -356,26 +391,40 @@ impl RegtestDaemon {
 
         let log = std::fs::File::create(data_dir.join("daemon.log")).expect("daemon log");
         let mut cmd = Command::new(&bin);
+        // The grammar's spellings (INPUT_GRAMMAR.md §5). Tor is off on
+        // every spawn: regtest's default is the managed Tor, and a test
+        // daemon has no business launching one.
+        match network {
+            SpawnNetwork::Regtest => cmd.args(["--network", "regtest", "--dev-difficulty", "1"]),
+            SpawnNetwork::Testnet => cmd.args(["--network", "testnet"]),
+        };
         cmd.args([
-            "--regtest",
-            "--no-igd",
-            "--fixed-difficulty",
-            "1",
-            "--rpc-bind-ip",
-            "127.0.0.1",
-            "--rpc-bind-port",
-            &rpc_port.to_string(),
+            "--tor",
+            "off",
+            "--rpc-admin-listen",
+            &format!("127.0.0.1:{rpc_port}"),
             "--data-dir",
             data_dir.to_str().expect("utf8 data dir"),
-            // Level 1 (`info`): the submit engine records a Phase C
-            // refusal at `info`, so the log tail a panic inlines names
-            // what the daemon rejected instead of a bare `Malformed`.
+            // Under the data dir, as the old default was; the account's
+            // own `logs/` is not a test's to fill. The daemon logs to
+            // stderr too, which `daemon.log` below captures.
+            "--log-file",
+            &data_dir.join("shekyld.log").display().to_string(),
+            // `info`: the submit engine records a Phase C refusal at
+            // `info`, so the log tail a panic inlines names what the
+            // daemon rejected instead of a bare `Malformed`.
             "--log-level",
-            "1",
+            "info",
+            // The armed test levers (`generateblocks`, `pop_blocks`,
+            // `inject_archival_serve_credit`) are served only with this
+            // switch set (`RPC_CHANNEL.md` §6.1): the RPC layer refuses
+            // them otherwise, on every network. The daemon announces it at
+            // start, and `await_ready` holds it to that.
+            "--dev-rpc",
         ]);
         match peering {
             Peering::Offline => {
-                cmd.arg("--offline");
+                cmd.args(["--clearnet", "off"]);
             }
             Peering::Linked {
                 p2p_port,
@@ -383,24 +432,21 @@ impl RegtestDaemon {
                 sink,
             } => {
                 cmd.args([
-                    "--p2p-bind-ip",
-                    "127.0.0.1",
-                    "--p2p-bind-port",
-                    &p2p_port.to_string(),
-                    "--no-ephemeral-tor",
-                    "--add-exclusive-node",
+                    "--clearnet-listen",
+                    &format!("127.0.0.1:{p2p_port}"),
+                    "--p2p-closed-peer",
                     &format!("127.0.0.1:{peer_p2p_port}"),
                 ]);
                 if sink {
-                    cmd.arg("--no-sync");
+                    cmd.args(["--dev-sync", "off"]);
                 }
             }
         }
-        // `--non-interactive` unless the test drives the daemon's own console:
-        // the console is what reads stdin, and suppressing it is what makes
-        // the in-process arm unreachable.
-        if !console {
-            cmd.arg("--non-interactive");
+        // `--console` only when the test drives the daemon's own console:
+        // the console is what reads stdin, and it is what makes the
+        // in-process arm reachable.
+        if console {
+            cmd.arg("--console");
         }
         let restricted_port = restricted_listener.then(|| {
             let mut taken = p2p_ports.to_vec();
@@ -408,12 +454,11 @@ impl RegtestDaemon {
             Self::free_port_excluding(&taken)
         });
         if let Some(port) = restricted_port {
-            // A second listener on the same daemon. This flag binds an extra
-            // server with `restricted = true` fixed; the main listener keeps
-            // whatever posture it had, which here is unrestricted. Same
-            // handlers behind both — only the posture differs, which is the
-            // whole point: one process, two answers.
-            cmd.args(["--rpc-restricted-bind-port", &port.to_string()]);
+            // A second listener on the same daemon, in the view posture;
+            // the admin listener keeps its own. Same handlers behind both —
+            // only the posture differs, which is the whole point: one
+            // process, two answers.
+            cmd.args(["--rpc-view-listen", &format!("127.0.0.1:{port}")]);
         }
         cmd.stdout(Stdio::from(log.try_clone().expect("clone log")))
             .stderr(Stdio::from(log))
@@ -422,27 +467,19 @@ impl RegtestDaemon {
             // in-process rather than over HTTP. RK-4c shipped that arm broken
             // because only the remote arm was ever exercised.
             .stdin(Stdio::piped());
-        // The SEB lever rides the child env (the daemon reads it at startup,
-        // arms on fakechain, refuses loudly on a bad value). `None` must
-        // scrub the variable, not merely skip setting it: the child inherits
-        // this process's environment, so a lever leaked from the developer's
-        // or CI's shell would silently reschedule a test that intends the
-        // genesis pin.
-        match schedule {
-            Some(schedule) => {
-                cmd.env("SHEKYL_SETTLEMENT_EPOCH_BLOCKS", schedule.seb.to_string());
-                cmd.env(
-                    "SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS",
-                    schedule.reorg_cap.to_string(),
-                );
-            }
-            None => {
-                cmd.env_remove("SHEKYL_SETTLEMENT_EPOCH_BLOCKS");
-                cmd.env_remove("SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS");
-            }
+        // The schedule rides the command line as the two regtest rows (the
+        // daemon arms them at startup and refuses loudly on a bad pair).
+        // The daemon reads no environment, so `None` has nothing to scrub:
+        // a lever in the developer's or CI's shell cannot reach it.
+        if let Some(schedule) = schedule {
+            cmd.args([
+                "--dev-settlement-epoch-blocks",
+                &schedule.seb.to_string(),
+                "--dev-archival-reorg-depth",
+                &schedule.reorg_cap.to_string(),
+            ]);
         }
-        let child = cmd
-            .spawn()
+        let child = shekyl_tor_control_client::spawn_lock::spawn(&mut cmd)
             .unwrap_or_else(|e| panic!("spawn {}: {e}", bin.display()));
 
         // Base URL only — `Rpc::json_rpc_call` appends the `json_rpc` route itself.
@@ -502,6 +539,14 @@ impl RegtestDaemon {
                         "get_info's P2P state must be the daemon's configuration; got {state:?}"
                     );
                     assert_eq!(info.health.p2p.is_offline(), self.offline);
+                    // The armed row is set and the daemon said so at start
+                    // (IG-8's announcement, written before RPC binds).
+                    let log = std::fs::read_to_string(&log_path).unwrap_or_default();
+                    assert!(
+                        log.contains(ARMED_ROW_ANNOUNCEMENT),
+                        "the daemon did not announce `{ARMED_ROW_ANNOUNCEMENT}` at start; log tail:\n{}",
+                        log_tail(&log_path)
+                    );
                     return;
                 }
                 Err(e) => last_err = format!("{e:?}"),
@@ -564,9 +609,11 @@ impl RegtestDaemon {
             .host
             .shown()
             .expect("the harness's listener is the host's, and is told the host-only part")
-            .tx_pool_unbroadcast_count;
+            .tx_pool_unbroadcast_count
+            .expect("the harness's pool is live");
         info.pool
-            .tx_pool_size
+            .tx_pool_size()
+            .expect("the harness's pool is live")
             .checked_add(unbroadcast)
             .expect("two pool counts fit a u64")
     }
@@ -761,14 +808,14 @@ impl RegtestDaemon {
             .expect("daemon was not spawned with a restricted listener")
     }
 
-    /// Mine `n` blocks to `address` (FAKECHAIN-gated daemon RPC).
+    /// Mine `n` blocks to `address` (an armed test lever: `--dev-rpc`).
     pub(super) async fn generate_blocks(&self, n: u64, address: &str) -> GenerateBlocksResp {
         try_generate_blocks(&self.rpc, n, address)
             .await
             .expect("generateblocks")
     }
 
-    /// Roll the chain back `n` blocks (FAKECHAIN-gated `/pop_blocks`, a direct
+    /// Roll the chain back `n` blocks (`/pop_blocks`, an armed test lever, a direct
     /// route — not `json_rpc`). Exercises the daemon's `pop_block`
     /// deferred-insertion tree rollback (popping `H` removes the leaves of
     /// outputs created at `H − maturity`).
@@ -962,7 +1009,7 @@ async fn maybe_capture_live_oracle(
     eprintln!("captured live-oracle spend KAT -> {}", path.display());
 }
 
-/// Mine `n` blocks to `address` over `rpc` (FAKECHAIN-gated `generateblocks`),
+/// Mine `n` blocks to `address` over `rpc` (`generateblocks`, an armed test lever),
 /// returning the RPC error instead of panicking. Free-standing so a caller
 /// that cannot borrow a [`RegtestDaemon`] into a `'static` task — the GF-7
 /// sealing-run background miner, which owns an independent client and must
@@ -983,6 +1030,47 @@ pub(super) async fn try_generate_blocks(
         })),
     )
     .await
+}
+
+/// A stop's last lines reach the log file: the daemon flushes its queued
+/// sinks last, after the lock's release, before it exits (`shekyl-logging`'s
+/// `flush`; Rick's ruling of 2026-10-17, item 7). `Deinitializing core...` is
+/// the last line the stop logs; SIGTERM is the operator's stop.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
+async fn a_stops_last_line_reaches_the_log_file() {
+    const LAST_LINE: &str = "Deinitializing core...";
+    const STOP_WITHIN: Duration = Duration::from_secs(60);
+    let mut daemon = RegtestDaemon::start().await;
+    let pid = daemon.child.id().to_string();
+    let sent = shekyl_tor_control_client::spawn_lock::status(
+        std::process::Command::new("kill").args(["-TERM", &pid]),
+    )
+    .expect("run kill");
+    assert!(sent.success(), "SIGTERM delivered");
+    let deadline = std::time::Instant::now() + STOP_WITHIN;
+    let status = loop {
+        if let Some(status) = daemon.child.try_wait().expect("wait for the daemon") {
+            break status;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the daemon did not stop within {STOP_WITHIN:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert!(status.success(), "a requested stop exits 0: {status}");
+    let log = std::fs::read_to_string(daemon.data_dir.join("shekyld.log")).expect("the log file");
+    assert!(
+        log.contains("stop requested by"),
+        "the stop's first line is in the log file"
+    );
+    assert!(
+        log.contains(LAST_LINE),
+        "the stop's last line is in the log file; its tail:\n{}",
+        log.lines().rev().take(10).collect::<Vec<_>>().join("\n")
+    );
 }
 
 /// Smoke test: the harness spawns a daemon, a fresh wallet's address is mineable,
@@ -1053,6 +1141,81 @@ async fn regtest_daemon_spawns_and_mines_to_wallet_address() {
         "generateblocks should return 3 hashes"
     );
     assert!(after >= before + 3, "chain should advance by >= 3 blocks");
+}
+
+/// The armed switch on a shared test network (`RPC_CHANNEL.md` §6.1,
+/// RT-O36). On testnet, with `dev-rpc` set, `generateblocks` and
+/// `/pop_blocks` pass the armed gate and are served, and
+/// `inject_archival_serve_credit` passes it too but is refused by its
+/// chain setter, which keeps a regtest-only restriction: the network
+/// narrows what the switch enables and never enables a lever.
+///
+/// Zero blocks keeps the probes cheap: a testnet daemon has no fixed
+/// difficulty, and the claim is about admission, not mining. A gate
+/// refusal would be the grant class (-32002); the setter's refusal is the
+/// handler's own error, after the gate.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
+async fn the_armed_switch_on_testnet_serves_two_levers_and_the_setter_refuses_inject() {
+    const OUTSIDE_THE_GRANT: i64 = -32_002;
+    let daemon = RegtestDaemon::start_on_testnet().await;
+    let call = |method: &'static str, params: serde_json::Value| {
+        let rpc = &daemon.rpc;
+        async move {
+            rpc.rpc_call::<_, serde_json::Value>(
+                "json_rpc",
+                Some(json!({ "jsonrpc": "2.0", "id": 0, "method": method, "params": params })),
+            )
+            .await
+            .unwrap_or_else(|e| panic!("{method}: {e:?}"))
+        }
+    };
+
+    let generated = call(
+        "generateblocks",
+        json!({ "amount_of_blocks": 0, "wallet_address": "" }),
+    )
+    .await;
+    assert!(
+        generated.get("error").is_none() && generated["result"]["status"] == "OK",
+        "generateblocks is served on armed testnet: {generated}"
+    );
+
+    let popped = daemon
+        .rpc
+        .rpc_call::<_, serde_json::Value>("pop_blocks", Some(json!({ "nblocks": 0 })))
+        .await
+        .expect("pop_blocks");
+    assert!(
+        popped.get("error").is_none() && popped["status"] == "OK",
+        "/pop_blocks is served on armed testnet: {popped}"
+    );
+
+    let injected = call(
+        "inject_archival_serve_credit",
+        json!({ "p_canonical_id": "11".repeat(32), "shard_id": 0, "settlement_epoch": 0 }),
+    )
+    .await;
+    let error = &injected["error"];
+    assert!(
+        error.is_object(),
+        "inject_archival_serve_credit must be refused off regtest: {injected}"
+    );
+    assert_ne!(
+        error["code"].as_i64(),
+        Some(OUTSIDE_THE_GRANT),
+        "the gate admitted the lever; the refusal is the setter's: {injected}"
+    );
+    assert_eq!(
+        error["message"], "Serve-credit injection failed",
+        "the setter's regtest restriction refused it: {injected}"
+    );
+    let log = std::fs::read_to_string(daemon.data_dir.join("daemon.log")).unwrap_or_default();
+    assert!(
+        log.contains("regtest_inject_archival_serve_credit called off fakechain; refusing"),
+        "the daemon log names the network refusal; tail:\n{}",
+        log_tail(&daemon.data_dir.join("daemon.log"))
+    );
 }
 
 /// Acceptance gate for the §8 step-4 scanner migration (shekyl-oxide → shekyl-wire
@@ -1167,7 +1330,7 @@ async fn e2e_refresh_scans_coinbase_balance() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "Track-2 north-star spend gate; needs SHEKYLD_BIN + a running regtest daemon (the scanner/tx-builder shekyl-wire migrations have landed)"]
 async fn e2e_fcmp_spend_accepted_by_daemon() {
-    use super::pending::{FeePriority, TxRecipient, TxRequest};
+    use super::pending::{FeePriority, TxDestination, TxRecipient, TxRequest};
     use super::refresh::RefreshOptions;
     use super::{DaemonClient, Engine, SoloSigner};
     use shekyl_scanner::WalletLedgerExt;
@@ -1234,7 +1397,7 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
     // Build a real FCMP++ spend (self-send half the balance; the engine adds change + fee).
     let request = TxRequest {
         recipients: vec![TxRecipient {
-            address: address.clone(),
+            destination: TxDestination::Address(address.clone()),
             amount_atomic_units: AtomicUnits::from_raw(unlocked.to_raw() / 2),
             rid: None,
         }],
@@ -1338,7 +1501,7 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
 async fn e2e_fcmp_spend_reorg_restores_pool_and_fee() {
-    use super::pending::{FeePriority, TxRecipient, TxRequest};
+    use super::pending::{FeePriority, TxDestination, TxRecipient, TxRequest};
     use super::refresh::RefreshOptions;
     use super::{DaemonClient, Engine, SoloSigner};
     use shekyl_rpc_types::KeyImageStatus;
@@ -1397,7 +1560,7 @@ async fn e2e_fcmp_spend_reorg_restores_pool_and_fee() {
 
     let request = TxRequest {
         recipients: vec![TxRecipient {
-            address: address.clone(),
+            destination: TxDestination::Address(address.clone()),
             amount_atomic_units: AtomicUnits::from_raw(unlocked.to_raw() / 2),
             rid: None,
         }],
@@ -1611,7 +1774,7 @@ async fn create_wallet(
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; slow (~750 blocks, several min)"]
 async fn e2e_fcmp_spend_over_depth3_tree() {
-    use super::pending::{FeePriority, TxRecipient, TxRequest};
+    use super::pending::{FeePriority, TxDestination, TxRecipient, TxRequest};
     use super::refresh::RefreshOptions;
     use super::Engine;
     use shekyl_scanner::WalletLedgerExt;
@@ -1701,7 +1864,7 @@ async fn e2e_fcmp_spend_over_depth3_tree() {
     );
     let request = TxRequest {
         recipients: vec![TxRecipient {
-            address: address.clone(),
+            destination: TxDestination::Address(address.clone()),
             amount_atomic_units: AtomicUnits::from_raw(spend_amount),
             rid: None,
         }],
@@ -1784,7 +1947,7 @@ async fn overfill_pool(
     arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
     address: &str,
 ) -> Overfilled {
-    use super::pending::{FeePriority, TxRecipient, TxRequest};
+    use super::pending::{FeePriority, TxDestination, TxRecipient, TxRequest};
     use shekyl_economics::FULL_REWARD_ZONE;
     use shekyl_units::AtomicUnits;
     use shekyl_wire::Transaction;
@@ -1817,7 +1980,7 @@ async fn overfill_pool(
     for n in 0..POOL_SPENDS {
         let request = TxRequest {
             recipients: vec![TxRecipient {
-                address: address.to_owned(),
+                destination: TxDestination::Address(address.to_owned()),
                 amount_atomic_units: AtomicUnits::from_raw(1_000_000),
                 rid: None,
             }],
@@ -2109,8 +2272,13 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
     };
     assert!(
         under < bodies.len(),
-        "the pool must overfill the bound: all {} bodies priced",
+        "the pool must overfill the bound: the search priced all {} bodies",
         bodies.len()
+    );
+    assert_eq!(
+        at_bound.transactions.len(),
+        under,
+        "a priced listing is the listing that was supplied"
     );
     assert!(at_bound.block_weight <= limit);
     assert!(
@@ -2128,9 +2296,8 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
     over.transaction_hashes.push(bodies[under].hash());
     eprintln!(
         "Rust-built block at height {height}: {under} bodies / {} B under 2·M = {limit}; the \
-         producer refused {} bodies (BlockTooBig); penalised reward {}",
+         producer refused the next body (BlockTooBig); penalised reward {}",
         at_bound.block_weight,
-        under + 1,
         at_bound.block_reward.to_raw()
     );
     eprintln!(
@@ -2613,7 +2780,16 @@ async fn submit_tier_b_spend(
 ) {
     use shekyl_units::AtomicUnits;
     let amount = AtomicUnits::from_raw(unlocked_balance(arc).await.to_raw() / 4);
-    transfer_to(daemon, arc, address, recipient, amount, batch, max_batches).await;
+    transfer_to(
+        daemon,
+        arc,
+        address,
+        super::pending::TxDestination::Address(recipient.to_string()),
+        amount,
+        batch,
+        max_batches,
+    )
+    .await;
 }
 
 /// Build (retrying past the C2 reference-spendability gate) + submit a transfer
@@ -2622,7 +2798,7 @@ async fn transfer_to(
     daemon: &RegtestDaemon,
     arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
     address: &str,
-    recipient: &str,
+    recipient: super::pending::TxDestination,
     amount: shekyl_units::AtomicUnits,
     batch: u64,
     max_batches: usize,
@@ -2638,7 +2814,7 @@ async fn submit_transfer(
     daemon: &RegtestDaemon,
     arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
     address: &str,
-    recipient: &str,
+    recipient: super::pending::TxDestination,
     amount: shekyl_units::AtomicUnits,
     batch: u64,
     max_batches: usize,
@@ -2646,7 +2822,7 @@ async fn submit_transfer(
     use super::pending::{FeePriority, TxRecipient, TxRequest};
     let request = TxRequest {
         recipients: vec![TxRecipient {
-            address: recipient.to_string(),
+            destination: recipient,
             amount_atomic_units: amount,
             rid: None,
         }],
@@ -2671,14 +2847,61 @@ async fn submit_transfer(
         }
     }
     let pending = pending.expect("transfer must build once reference-spendable");
+    submit_built(arc, &pending, "the transfer").await
+}
+
+/// Fund the active persona with `amount` through the production
+/// `stake_in` (the wallet-RPC and GUI entry: `Engine::stake`), retrying
+/// past the C2 reference-spendability gate, then submit it and mine one
+/// confirming block. The transfer carries `amount` plus the system cover
+/// draw, so callers size by `amount` and never assert the exact funded
+/// figure.
+async fn stake_in_and_confirm(
+    daemon: &RegtestDaemon,
+    arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
+    address: &str,
+    amount: shekyl_units::AtomicUnits,
+    batch: u64,
+    max_batches: usize,
+) {
+    use super::principal_stake::StakeInError;
+    let mut pending = None;
+    for _ in 0..max_batches {
+        let attempt = {
+            let g = arc.read().await;
+            g.stake().stake_in(amount).await
+        };
+        match attempt {
+            Ok(p) => {
+                pending = Some(p);
+                break;
+            }
+            Err(StakeInError::Send(super::error::SendError::OutputNotYetSpendable { .. })) => {
+                daemon.generate_blocks(batch, address).await;
+                refresh(arc).await;
+            }
+            Err(e) => panic!("stake_in: {e:?}"),
+        }
+    }
+    let pending = pending.expect("stake_in must build once reference-spendable");
+    submit_built(arc, &pending, "the stake_in funding").await;
+    daemon.generate_blocks(1, address).await;
+}
+
+/// Submit a built pending transaction and require the daemon's fresh accept.
+async fn submit_built(
+    arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
+    pending: &super::pending::PendingTx,
+    what: &str,
+) -> TxHash {
     let outcome = {
         let g = arc.read().await;
         g.submit_pending_tx_async(pending.id, pending.content_gen)
             .await
-            .expect("daemon must accept the transfer (consensus verify)")
+            .unwrap_or_else(|e| panic!("daemon must accept {what} (consensus verify): {e:?}"))
     };
-    let tx_hash = require_fresh_accept(outcome, "the transfer");
-    eprintln!("daemon accepted transfer: {tx_hash}");
+    let tx_hash = require_fresh_accept(outcome, what);
+    eprintln!("daemon accepted {what}: {tx_hash}");
     tx_hash
 }
 
@@ -2756,22 +2979,20 @@ pub(super) async fn staker_wallet(
     (Arc::new(RwLock::new(engine)), tmp, address)
 }
 
-/// The persona's on-chain receive address, derived in-test from the same
-/// master seed the wallet holds. The production wallet derives the identical
-/// bundle at open (`spawn_stake_engine_if_staker` → `derive_archival_p_keys`);
-/// the harness re-derives only the PUBLIC halves so the principal can fund the
-/// persona over an ordinary wallet-built transfer.
-pub(super) fn persona_address(
+/// The persona's payment destination, derived in-test from the same master
+/// seed the wallet holds. The production wallet derives the identical bundle
+/// at open (`spawn_stake_engine_if_staker` → `derive_archival_p_keys`); the
+/// harness takes only its public keys, for the one walk that pays a persona
+/// outside `stake_in` (the emission claim's post-bond fee input).
+pub(super) fn persona_destination(
     seed: &[u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
     slot: u32,
-) -> String {
+) -> super::pending::TxDestination {
     use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat};
     use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
     let keys = derive_archival_p_keys(seed, DerivationNetwork::Mainnet, SeedFormat::Bip39, slot)
         .expect("derive persona keys");
-    keys.to_address(shekyl_address::Network::Mainnet)
-        .encode()
-        .expect("encode persona address")
+    super::pending::TxDestination::OwnPersona(keys.payment_destination())
 }
 
 /// Run the production P-scan (tight cadence + the shallow
@@ -3134,8 +3355,8 @@ async fn stake_persona_and_submit_bond(
     eprintln!("bond fee from daemon estimate: {bond_fee}");
 
     // Fund the principal past the persona's needs (2×: the transfer's own fee
-    // + selection churn), then fund the persona with one ordinary transfer.
-    // The floor follows the entry's holdings shape.
+    // + selection churn), then fund the persona with one `stake_in`. The
+    // floor follows the entry's holdings shape.
     let floor_holdings = match &stake_entry {
         FixtureStake::FirstStake => HoldingsDescriptor {
             kind: HoldingsKind::CompleteTree,
@@ -3153,12 +3374,14 @@ async fn stake_persona_and_submit_bond(
         MAX_MINE_BATCHES,
     )
     .await;
-    let p_address = persona_address(seed, slot_raw);
-    transfer_to(
+    // The production funding: activate the persona (nothing activates one in
+    // production yet — the test helper drives the actor's own activation),
+    // then `stake_in`, which pays the active persona's handed-over keys.
+    super::test_support::activate_persona(&*arc.read().await, slot_raw).await;
+    stake_in_and_confirm(
         daemon,
         &arc,
         &principal,
-        &p_address,
         funding,
         MINE_BATCH_BLOCKS,
         MAX_MINE_BATCHES,
@@ -3207,7 +3430,7 @@ async fn stake_persona_and_submit_bond(
                 match super::Engine::first_stake(
                     arc.clone(),
                     slot_raw,
-                    super::StakePosture::FoundationCompleteTree,
+                    super::StakePosture::SupportCompleteTree,
                 )
                 .await
                 {
@@ -3352,8 +3575,9 @@ async fn stake_persona_and_submit_bond(
 }
 
 /// PR-4 staker harness (`EMISSION_CLAIM_BUILDER.md` §8 PR-4): a staker wallet
-/// funds its persona on-chain (a wallet-built FCMP++ transfer to the persona's
-/// derived receive address — the production rung-1 `ExternalTransfer` funding),
+/// funds its persona on-chain (the production `stake_in`: a wallet-built
+/// FCMP++ transfer to the active persona's payment keys — rung-1
+/// `ExternalTransfer` funding),
 /// the production P-scan discovers the funding, and the production bond path
 /// ([`Engine::assemble_bond_post`](super::Engine::assemble_bond_post) →
 /// posture→submitter choke point) dispatches the bond post over real RPC.
@@ -3483,9 +3707,10 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
 ///   it answers `CommitOutcome::JoinMarketUnsupported` (`ffi_shim.rs`);
 /// - the engine turns that into `Rejected { JoinMarketUnsupported }`, the
 ///   one place that cause is authored, and the wallet's submitter maps it
-///   to `SubmitterError::RejectedTerminal { JoinMarketUnsupported }`, which
-///   the dispatch driver treats as terminal: the post is withdrawn and its
-///   funding reservation released, never resubmitted. Any other answer
+///   to `SubmitterError::RejectedTerminal { JoinMarketUnsupported }`. The
+///   dispatch driver records that cause on the post and never resubmits it;
+///   the post and its funding reservation are held to the post's end date
+///   (BD-Q3 Rule 2), where it ends `rejected`. Any other answer
 ///   (a Rust verdict on the post, a commit fault, a transport error) is a
 ///   different finding.
 ///
@@ -3525,7 +3750,7 @@ async fn e2e_the_cxx_daemon_answers_join_market_unsupported() {
     )
     .await;
 
-    match submitted.verdict {
+    match &submitted.verdict {
         Err(BroadcastSubmitError::Submit(SubmitterError::RejectedTerminal {
             kind: TerminalErrorKind::JoinMarketUnsupported,
         })) => {}
@@ -3550,6 +3775,176 @@ async fn e2e_the_cxx_daemon_answers_join_market_unsupported() {
         "FND-20 tripwire: the C++ daemon answered the wallet-built kind-5 JoinMarket \
          Rejected{{JoinMarketUnsupported}}; the five bonded walks stay DECIDED_DARK"
     );
+
+    the_real_rejection_reads_as_a_held_rejected_stake(&daemon, submitted).await;
+}
+
+/// WR-Q2's falsifier as amended 2026-10-16 (`WALLET_RPC_STAKING_OUTCOMES.md`
+/// WR-Q2), on the real daemon's verdict. The cause is recorded on the held
+/// post through `terminal_cause`, the one mapping the dispatch driver's
+/// terminal arm uses (this harness submits directly, so it records as that
+/// arm does; the arm itself is pinned in `dispatch_tests.rs`). Then:
+///
+/// - the stake reads `refused`, with the refusal sentence and the end date as
+///   `funds_return_at`, and no outcome; the same after a restart, and the
+///   held record keeps the open-time phantom sweep from collecting the slot;
+/// - once the ledger reaches the end date it reads `expired`, keeping the
+///   reason;
+/// - once the production P-scan covers the end date, its dispatch tick
+///   releases the record: `in_flight` is empty and `outcomes` holds one
+///   `rejected` stake with the reason, its funds returned; the same after
+///   another restart.
+async fn the_real_rejection_reads_as_a_held_rejected_stake(
+    daemon: &RegtestDaemon,
+    submitted: SubmittedBondPost,
+) {
+    use super::pscan::start::pending_post_store_for_engine;
+    use super::staking_outcomes::InFlightState;
+    use shekyl_engine_state::pending_post_block::{OutcomeKind, RecordKind, TerminalCause};
+
+    const REASON: &str = "Staking is not available on this node";
+    let verdict = submitted
+        .verdict
+        .as_ref()
+        .expect_err("the tripwire saw a refusal");
+    let cause =
+        super::pscan::end_date::terminal_cause(verdict).expect("a terminal verdict has a cause");
+    assert_eq!(cause, TerminalCause::JoinMarketUnsupported);
+    let persona = submitted.persona_id;
+    let reference_height = {
+        let gate = { submitted.arc.read().await.pending_gate.clone() };
+        pending_post_store_for_engine(submitted.arc.clone(), gate)
+            .mutate(|block| {
+                let recorded = block.record_terminal(RecordKind::Post, &persona, cause);
+                let reference = block.posts().first().map(|p| p.reference_height);
+                (recorded, (recorded, reference))
+            })
+            .await
+            .map(|(recorded, reference)| {
+                assert!(recorded, "the held post takes the cause");
+                reference.expect("the post is held, not released")
+            })
+            .expect("pending seal")
+    };
+    let end = shekyl_types::BlockHeight::from_raw(
+        reference_height.to_raw() + crate::consensus_constants::FCMP_REFERENCE_BLOCK_MAX_AGE,
+    );
+    let in_flight_state = |view: &super::StakingReadView, when: &str| {
+        assert_eq!(view.in_flight.len(), 1, "{when}: one stake in flight");
+        let entry = view.in_flight[0];
+        assert_eq!(entry.kind, RecordKind::Post, "{when}");
+        assert!(
+            entry.sends.is_none(),
+            "{when}: the harness sent around the driver"
+        );
+        let reason = entry.state.reason().expect("a refused stake has a reason");
+        assert!(reason.starts_with(REASON), "{when}: {reason}");
+        assert!(
+            view.outcomes.is_empty(),
+            "{when}: the outcome waits for the release"
+        );
+        entry.state
+    };
+    let refused = InFlightState::Refused {
+        cause,
+        funds_return_at: end,
+    };
+    let view = submitted
+        .arc
+        .read()
+        .await
+        .staking_read_view()
+        .expect("staking read");
+    assert_eq!(in_flight_state(&view, "refused"), refused);
+
+    let creds = super::lifecycle::Credentials::password_only(b"pr4-staker");
+    let wallet = submitted._tmp.path().join("wallet");
+    let reopen = |engine: Arc<RwLock<super::Engine<super::SoloSigner>>>| {
+        let (creds, wallet) = (&creds, &wallet);
+        async move {
+            let lock = Arc::try_unwrap(engine).unwrap_or_else(|_| {
+                panic!(
+                    "engine arc still has co-owners at close: a scan or refresh task is still live"
+                )
+            });
+            lock.into_inner().close(creds).expect("close staker");
+            let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
+                .await
+                .expect("wallet rpc (reopen)");
+            let engine = super::Engine::<super::SoloSigner>::open_full(
+                wallet,
+                creds,
+                shekyl_address::Network::Mainnet,
+                super::DaemonClient::verifying(rpc, regtest_expectation()),
+                shekyl_engine_file::SafetyOverrides::none(),
+            )
+            .expect("reopen the staker")
+            .into_wallet();
+            Arc::new(RwLock::new(engine))
+        }
+    };
+
+    let arc = reopen(submitted.arc).await;
+    let view = arc.read().await.staking_read_view().expect("staking read");
+    assert!(view.staking_enabled, "the held record keeps the slot");
+    assert_eq!(in_flight_state(&view, "refused, restarted"), refused);
+
+    // The ledger reaches the end date: the stake can no longer be mined.
+    let mut expired = false;
+    for _ in 0..8 {
+        let tip = daemon.height().await;
+        let short = end.to_raw().saturating_sub(tip) + 2;
+        daemon.generate_blocks(short, &submitted.principal).await;
+        refresh(&arc).await;
+        let view = arc.read().await.staking_read_view().expect("staking read");
+        if in_flight_state(&view, "expiring") != refused {
+            assert_eq!(
+                view.in_flight[0].state,
+                InFlightState::Expired {
+                    funds_return_at: end,
+                    cause: Some(cause),
+                },
+                "past the end date it reads expired, the reason kept"
+            );
+            expired = true;
+            break;
+        }
+    }
+    assert!(expired, "the ledger never reached the end date");
+
+    // The scan covers the end date, and its dispatch tick releases the stake.
+    let mut released = None;
+    for _ in 0..6 {
+        daemon
+            .generate_blocks(PSCAN_TEST_REORG_DEPTH + 2, &submitted.principal)
+            .await;
+        refresh(&arc).await;
+        pscan_until(&arc, &submitted.pscan_seal, "the end date covered", |s| {
+            s.synced_height() > end
+        })
+        .await;
+        let view = arc.read().await.staking_read_view().expect("staking read");
+        if view.in_flight.is_empty() {
+            released = Some(view);
+            break;
+        }
+    }
+    let view = released.expect("the dispatch tick released the stake at its end date");
+    let check_outcome = |view: &super::StakingReadView, when: &str| {
+        assert!(view.in_flight.is_empty(), "{when}");
+        assert_eq!(view.outcomes.len(), 1, "{when}: one outcome");
+        let outcome = view.outcomes[0];
+        assert_eq!(outcome.kind, RecordKind::Post, "{when}");
+        assert_eq!(outcome.outcome, OutcomeKind::Rejected(cause), "{when}");
+        assert!(outcome.returned_funds(), "{when}: its funds are returned");
+        assert!(outcome.reason().starts_with(REASON), "{when}");
+    };
+    check_outcome(&view, "released");
+    let arc = reopen(arc).await;
+    let view = arc.read().await.staking_read_view().expect("staking read");
+    check_outcome(&view, "released, restarted");
+    let lock = Arc::try_unwrap(arc).unwrap_or_else(|_| panic!("engine arc still shared"));
+    lock.into_inner().close(&creds).expect("close");
 }
 
 /// PR-4c emission-claim harness (`EMISSION_CLAIM_BUILDER.md` §8 PR-4c): the
@@ -3708,13 +4103,16 @@ async fn e2e_emission_claim_accepted_and_applied() {
     // structurally, `BackingSet::fee_sweep`) and at least one fee input.
     // The sweep-all bond leaves exactly ONE (the `BondPostChange` change),
     // so fund the persona once more post-bond — an ordinary rung-1
-    // ExternalTransfer — and re-run the production P-scan so the sealed
+    // ExternalTransfer to the persona's payment keys, not `stake_in`: a bonded
+    // persona's funding is the one event before its bond, and `stake_in` is to
+    // refuse a bonded persona once the production activation path lands
+    // (`docs/FOLLOWUPS.md`). Then re-run the production P-scan so the sealed
     // state carries both records before the claim reads it.
     transfer_to(
         &daemon,
         &fixture.arc,
         &fixture.principal,
-        &persona_address(&seed, SLOT),
+        persona_destination(&seed, SLOT),
         shekyl_units::AtomicUnits::from_raw(CLAIM_FUNDING_CUSHION),
         10,
         24,
@@ -4256,7 +4654,7 @@ async fn e2e_emission_claim_accepted_and_applied() {
 async fn e2e_drain_wire_shape_matches_a_real_transfer() {
     use super::drain_dispatch::DrainRequestError;
     use super::drain_orchestrator::DrainOrchestrationError;
-    use super::pending::{FeePriority, TxRecipient, TxRequest};
+    use super::pending::{FeePriority, TxDestination, TxRecipient, TxRequest};
     use super::stake_engine::PSlot;
     use super::traits::DaemonEngine;
     use shekyl_standoff::EXIT_FEE_RESERVE_ATOMIC;
@@ -4325,7 +4723,7 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
     refresh(&fixture.arc).await;
     let request = TxRequest {
         recipients: vec![TxRecipient {
-            address: principal.clone(),
+            destination: TxDestination::Address(principal.clone()),
             amount_atomic_units: AtomicUnits::from_raw(100_000_000),
             rid: None,
         }],
@@ -5102,11 +5500,12 @@ async fn e2e_arm3_phantom_slot_collected_at_open() {
 /// ran.
 fn capture_build_identity(daemon_version: &str) -> String {
     let git = |args: &[&str]| -> String {
-        let out = Command::new("git")
-            .args(args)
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
-            .output()
-            .expect("git runs in the checkout");
+        let out = shekyl_tor_control_client::spawn_lock::output(
+            Command::new("git")
+                .args(args)
+                .current_dir(env!("CARGO_MANIFEST_DIR")),
+        )
+        .expect("git runs in the checkout");
         assert!(out.status.success(), "git {args:?} failed in the checkout");
         String::from_utf8_lossy(&out.stdout).trim().to_owned()
     };
@@ -5261,23 +5660,25 @@ async fn maybe_capture_chain_vector(
     for injection in injections {
         fetch.arg("--inject").arg(injection.to_string());
     }
-    let fetch = fetch.output().expect("spawn shekyl-chain-replay fetch");
+    let fetch = shekyl_tor_control_client::spawn_lock::output(&mut fetch)
+        .expect("spawn shekyl-chain-replay fetch");
     assert!(
         fetch.status.success(),
         "shekyl-chain-replay fetch failed: {}\n{}",
         String::from_utf8_lossy(&fetch.stdout),
         String::from_utf8_lossy(&fetch.stderr)
     );
-    let export = Command::new(&trace_bin)
-        .arg("--regtest")
-        .arg("--data-dir")
-        .arg(&daemon.data_dir)
-        .arg("--out")
-        .arg(&trace)
-        .arg("--block-stop")
-        .arg(tip.to_string())
-        .output()
-        .expect("spawn shekyl-e2-trace-export");
+    let export = shekyl_tor_control_client::spawn_lock::output(
+        Command::new(&trace_bin)
+            .arg("--regtest")
+            .arg("--data-dir")
+            .arg(&daemon.data_dir)
+            .arg("--out")
+            .arg(&trace)
+            .arg("--block-stop")
+            .arg(tip.to_string()),
+    )
+    .expect("spawn shekyl-e2-trace-export");
     assert!(
         export.status.success(),
         "shekyl-e2-trace-export failed: {}\n{}",
@@ -5402,8 +5803,8 @@ async fn maybe_capture_chain_vector(
         // the value this harness spawned the daemon with, recorded rather
         // than remembered.
         "fixed_difficulty": 1,
-        // The `(SEB, cap)` pair the daemon ran — `SHEKYL_SETTLEMENT_EPOCH_BLOCKS`
-        // and `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS` when levered, the genesis
+        // The `(SEB, cap)` pair the daemon ran — `--dev-settlement-epoch-blocks`
+        // and `--dev-archival-reorg-depth` when levered, the genesis
         // pair when not. What `replay --chain regtest --settlement-epoch-blocks
         // n --reorg-cap m` must be given.
         "settlement_epoch_blocks": settlement_epoch_blocks,
@@ -5817,7 +6218,7 @@ async fn ported_console_commands_answer_on_the_in_process_arm() {
 async fn ported_p2p_console_commands_answer_on_the_in_process_arm() {
     let mut daemon = RegtestDaemon::start_with_console().await;
 
-    // This daemon runs `--offline`, so each peer command prints the state,
+    // This daemon runs offline, so each peer command prints the state,
     // not an empty table (Rick, 2026-10-14).
     for command in ["sync_info", "print_cn", "print_pl", "print_pl_stats"] {
         let out = daemon.console(command);
@@ -5831,20 +6232,30 @@ async fn ported_p2p_console_commands_answer_on_the_in_process_arm() {
         );
     }
 
-    // The bridged leg. `/get_limit` is still C++; when RK-8 migrates it, this
-    // is the assertion that notices if the leg is left naming a dead route.
+    // The limit leg. `/get_limit` was replaced by the link rows
+    // (`RPC_CHANNEL.md` §6.4); the console reads them through the option
+    // show. This daemon runs the default, unlimited, so each line ends in
+    // the limit clause's unlimited form, and a leg that did not answer
+    // would leave the clause out.
     let out = daemon.console("print_net_stats");
+    let limited: Vec<&str> = out
+        .lines()
+        .filter(|line| {
+            (line.starts_with("Received") || line.starts_with("Sent"))
+                && line.contains("bytes")
+                && line.ends_with("no limit")
+        })
+        .collect();
     assert!(
-        out.contains("Received") && out.contains("bytes") && out.contains("of the limit of"),
-        "print_net_stats must render both lines, which needs /get_limit as \
-         well as /get_net_stats; got:\n{out}"
-    );
-    assert!(
-        !out.contains("no reply from /get_limit"),
-        "the bridged /get_limit leg must name a route the C++ table serves; \
-         got:\n{out}"
+        limited.iter().any(|l| l.starts_with("Received"))
+            && limited.iter().any(|l| l.starts_with("Sent")),
+        "print_net_stats must render both lines with the limit clause the \
+         link rows give; got:\n{out}"
     );
 }
 
 #[path = "regtest_e2e_origin.rs"]
 mod origin;
+
+#[path = "regtest_e2e_rt_p5.rs"]
+mod rt_p5;

@@ -1,0 +1,37 @@
+dynamic (dudect-style) run — the fleet MEASUREMENT HOST, operand-property rows (CA-2)
+binary: docs/formal/checkct/dynamic at e8902ca27 (Structured mode), static x86_64, pinned 1.94.0 / LLVM 21.1.8
+class 0: structured operands regenerated per batch (sparse = one random byte per limb; small = high limbs zero; dense = 2^254-1), class 1: uniformly random; plus the fixed / [fixed-pair] / constant rows at 1M
+run window (UTC): Sat Oct 24 04:48:33 PM UTC 2026 -> Sat Oct 24 04:51:44 PM UTC 2026
+
+===== 20000
+property: helio square sparse      t=   -1.46  t(crop 1%)=  -17.25  mean ns fixed/random      2672/     2705  CLASS DIFFERENCE
+property: helio square small       t=   -1.86  t(crop 1%)=  -21.52  mean ns fixed/random      2632/     2660  CLASS DIFFERENCE
+property: helio square dense       t=    0.82  t(crop 1%)=   -7.43  mean ns fixed/random      2544/     2449  CLASS DIFFERENCE
+property: fe25519 square sparse    t=    0.80  t(crop 1%)=    0.81  mean ns fixed/random      3973/     3960  no difference seen
+property: fe25519 square small     t=    0.70  t(crop 1%)=   -0.64  mean ns fixed/random      3242/     3234  no difference seen
+null: helio square                 t=    0.14  t(crop 1%)=    0.48  mean ns fixed/random      1446/     1445  no difference seen
+===== 200000
+property: helio square sparse      t=   -1.20  t(crop 1%)=   -3.43  mean ns fixed/random      1713/     1746  no difference seen
+property: helio square small       t=   -1.83  t(crop 1%)=   -9.03  mean ns fixed/random      1396/     1432  CLASS DIFFERENCE
+property: helio square dense       t=   -2.58  t(crop 1%)=  -84.13  mean ns fixed/random      1298/     1340  CLASS DIFFERENCE
+property: fe25519 square sparse    t=   -1.39  t(crop 1%)=   -1.63  mean ns fixed/random      2912/     2938  no difference seen
+property: fe25519 square small     t=   -0.83  t(crop 1%)=   -1.88  mean ns fixed/random      2849/     2867  no difference seen
+null: helio square                 t=   -0.47  t(crop 1%)=   -0.79  mean ns fixed/random      1331/     1337  no difference seen
+===== 1000000 fixed-pair + fixed
+null: helio square                 t=    0.31  t(crop 1%)=    0.10  mean ns fixed/random      1366/     1364  no difference seen
+helio square                       t=   -2.78  t(crop 1%)=  -73.06  mean ns fixed/random      1287/     1302  CLASS DIFFERENCE
+helio square [fixed-pair]          t=    2.39  t(crop 1%)=   36.69  mean ns fixed/random      1403/     1390  CLASS DIFFERENCE
+constant: helio square             t=   -1.85  t(crop 1%)=  -80.92  mean ns fixed/random      1336/     1345  CLASS DIFFERENCE
+property: helio square sparse      t=   -3.44  t(crop 1%)=  -20.51  mean ns fixed/random      1586/     1605  CLASS DIFFERENCE
+property: helio square small       t=   -4.10  t(crop 1%)=  -69.57  mean ns fixed/random      1323/     1344  CLASS DIFFERENCE
+property: helio square dense       t=   -4.39  t(crop 1%)=  -19.55  mean ns fixed/random      1642/     1668  CLASS DIFFERENCE
+null: helio mul                    t=   -0.03  t(crop 1%)=   -3.39  mean ns fixed/random      1749/     1749  no difference seen
+helio mul                          t=   -0.83  t(crop 1%)=  -33.09  mean ns fixed/random      1699/     1704  CLASS DIFFERENCE
+helio mul [fixed-pair]             t=    2.82  t(crop 1%)=   38.10  mean ns fixed/random      1627/     1610  CLASS DIFFERENCE
+constant: helio mul                t=   -2.24  t(crop 1%)=  -41.28  mean ns fixed/random      1638/     1650  CLASS DIFFERENCE
+fe25519 square                     t=    1.08  t(crop 1%)=    0.63  mean ns fixed/random      2926/     2918  no difference seen
+fe25519 square [fixed-pair]        t=   -1.45  t(crop 1%)=   -1.99  mean ns fixed/random      2966/     2978  no difference seen
+property: fe25519 square sparse    t=    0.08  t(crop 1%)=    2.11  mean ns fixed/random      2952/     2952  no difference seen
+property: fe25519 square small     t=    3.21  t(crop 1%)=    1.76  mean ns fixed/random      2946/     2922  no difference seen
+
+reading: every structured class differs from random for HelioseleneField square (sparse, small and dense all cross; Field25519 square never does), and at 1M two random fixed sets differ strongly ([fixed-pair] square +36.7, mul +38.1). No single operand property explains it; the direction is that lower-activity operands run faster (sparse and small are faster; dense = 2^254-1 is faster too, and its square 2^508 - 2^255 + 1 has very low Hamming weight). Consistent with a switching-activity -> clock mechanism, not with an instruction-level cause (the disassembly shows none). The decisive test is cycles against wall time, or no_turbo + performance governor, on bare metal as root.

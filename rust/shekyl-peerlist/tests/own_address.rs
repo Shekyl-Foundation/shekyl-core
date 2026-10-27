@@ -12,8 +12,8 @@
 
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{
-    white_diversity_floor, ConnectorId, DialOutcome, ListName, NetworkAddress, NoBans, Peerlist,
-    RefusedSet, Source, Tick, DISCLOSE_COUNT,
+    white_diversity_floor, ConnectorId, DialOutcome, ListName, NetworkAddress, NoBans, NoSessions,
+    Peerlist, RefusedSet, Source, Tick, DISCLOSE_COUNT,
 };
 
 const C: ConnectorId = ConnectorId::Tor;
@@ -59,7 +59,7 @@ fn with_an_onion_set_it_is_one_uniform_member_of_the_tor_sample() {
         let mut list = white_at_floor(&mut rng);
         list.set_own_address(C, Some(own()))
             .expect("a Tor address on Tor");
-        let sample = list.disclose(C, now(), &mut NoBans, &mut rng);
+        let sample = list.disclose(C, now(), &mut NoBans, &mut NoSessions, &mut rng);
         assert_eq!(sample.len(), DISCLOSE_COUNT, "seed {seed}: a full sample");
         assert!(
             sample.iter().filter(|a| **a == own()).count() <= 1,
@@ -83,7 +83,7 @@ fn with_no_own_address_nothing_about_this_node_is_disclosed() {
     for seed in 0..50 {
         let mut rng = SplitMix64::new(seed);
         let mut list = white_at_floor(&mut rng);
-        let sample = list.disclose(C, now(), &mut NoBans, &mut rng);
+        let sample = list.disclose(C, now(), &mut NoBans, &mut NoSessions, &mut rng);
         assert_eq!(sample.len(), DISCLOSE_COUNT);
         assert!(!sample.contains(&own()), "seed {seed}");
         for address in &sample {
@@ -114,7 +114,7 @@ fn the_own_address_is_never_a_white_entry_and_clearing_it_removes_it() {
         let mut fresh = white_at_floor(&mut rng);
         fresh.set_own_address(C, Some(own())).expect("set");
         seen |= fresh
-            .disclose(C, now(), &mut NoBans, &mut rng)
+            .disclose(C, now(), &mut NoBans, &mut NoSessions, &mut rng)
             .contains(&own());
     }
     assert!(seen, "the own address is drawn at all");
@@ -125,7 +125,7 @@ fn the_own_address_is_never_a_white_entry_and_clearing_it_removes_it() {
         fresh.set_own_address(C, Some(own())).expect("set");
         fresh.set_own_address(C, None).expect("clear");
         assert!(!fresh
-            .disclose(C, now(), &mut NoBans, &mut rng)
+            .disclose(C, now(), &mut NoBans, &mut NoSessions, &mut rng)
             .contains(&own()));
     }
 }

@@ -70,7 +70,7 @@ pub enum SectionRefused {
         /// The section's charge: the sum of `max(count, 1)`.
         charge: SectionCharge,
         /// The cap the charge exceeded.
-        budget: u64,
+        budget: shekyl_archival_retention::SectionBudget,
     },
 }
 
@@ -159,8 +159,8 @@ impl SectionCharge {
     /// Whether the charge is at most `cap`. [`check_section`] is what
     /// chooses the cap.
     #[must_use]
-    pub const fn within(self, cap: u64) -> bool {
-        self.0 <= cap
+    pub const fn within(self, cap: shekyl_archival_retention::SectionBudget) -> bool {
+        self.0 <= cap.get()
     }
 }
 

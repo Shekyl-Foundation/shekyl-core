@@ -15,12 +15,15 @@ use shekyl_engine_state::pscan_state::MintLineageOutput;
 
 /// A mature funding record: `funding_record` derives
 /// `spendable_height = height + SPENDABLE_AGE (10)`, so a record minted at
-/// height 90 is provable from height 100 onward.
+/// height 90 matures at 100 and is in the tree — provable — at every
+/// reference height from 101 on (`in_tree_at_reference`: the tree committed
+/// at a height holds leaves matured by the block before it).
 fn mature(gindex: u64, amount: u64) -> PFundingOutputRecord {
     funding_record(0, gindex, 90, amount, MintLineageOutput::BondPostChange)
 }
 
-const REF: u64 = 100;
+/// The first reference height at which [`mature`] records are provable.
+const REF: u64 = 101;
 
 /// This bites against the remainder being summed over the projection's
 /// mature-only candidates: a pass that empties
@@ -35,7 +38,7 @@ fn sweep_remainder_counts_the_immature_residue_never_zero() {
     use super::super::stake_engine::PSlot;
 
     let mut immature = mature(3, 1_000_000);
-    immature.spendable_height = BlockHeight::from_raw(REF + 1);
+    immature.spendable_height = BlockHeight::from_raw(REF); // matures at the reference: not in its tree
     let mut other_slot = mature(9, 777);
     other_slot.p_slot = PSlot::from_raw(1);
     // The pass swept the two mature records (40 + 60).
@@ -62,7 +65,7 @@ fn sweep_remainder_counts_the_immature_residue_never_zero() {
 #[test]
 fn drain_balance_sums_only_mature_outputs() {
     let mut immature = mature(3, 1_000_000);
-    immature.spendable_height = BlockHeight::from_raw(REF + 1);
+    immature.spendable_height = BlockHeight::from_raw(REF); // matures at the reference: not in its tree
     let records = [mature(1, 40), mature(2, 60), immature];
 
     let balance =
@@ -156,7 +159,7 @@ fn plan_drain_rejects_zero_target() {
 fn plan_drain_rejects_target_over_spendable_scalar() {
     // Mature spendable is 100; an immature output cannot lift the ceiling.
     let mut immature = mature(2, 1_000);
-    immature.spendable_height = BlockHeight::from_raw(REF + 1);
+    immature.spendable_height = BlockHeight::from_raw(REF); // matures at the reference: not in its tree
     let records = [mature(1, 100), immature];
 
     let err = plan_drain(

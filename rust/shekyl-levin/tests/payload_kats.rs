@@ -3,27 +3,24 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! LV-2b first-drop command maps: 1001 / 1002 / 1003 / 1007.
+//! LV-2b first-drop command maps: 1001 / 1002.
 //!
-//! Round-trips pin OPT-omit, the `network_address` union, and
-//! `cumulative_difficulty_top64` store-always. Empty ping/support-flags
-//! requests match the LV-2a empty-section encoding. Empty peerlists
-//! omit the key (C++ STL-container store).
+//! Round-trips pin the `network_address` union and
+//! `cumulative_difficulty_top64` store-always. Empty peerlists omit the key
+//! (C++ STL-container store).
 
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use shekyl_levin::{
     invoke, BasicNodeData, BucketReader, CoreSyncData, HandshakeRequest, HandshakeResponse,
-    NetworkAddress, PayloadError, PeerlistEntry, PortableMap, Received, SupportFlags,
-    SupportFlagsRequest, SupportFlagsResponse, TimedSyncRequest, TimedSyncResponse,
-    COMMAND_HANDSHAKE,
+    NetworkAddress, PayloadError, PeerlistEntry, PortableMap, Received, TimedSyncRequest,
+    TimedSyncResponse, COMMAND_HANDSHAKE,
 };
-use shekyl_portable_storage::{store_to_binary, Section, HEADER};
+use shekyl_portable_storage::{store_to_binary, Section};
 
 fn node() -> BasicNodeData {
     BasicNodeData {
         network_id: [0x11; 16],
-        support_flags: SupportFlags::default(),
     }
 }
 
@@ -44,49 +41,25 @@ fn round_trip<T: PortableMap + PartialEq + std::fmt::Debug>(value: &T) {
     assert_eq!(&decoded, value);
 }
 
+/// `support_flags` left `basic_node_data` with compression (Rick,
+/// 2026-10-19): it negotiated nothing. A peer that still sends the key is
+/// decoded with it ignored, and a Shekyl node never emits it.
 #[test]
-fn support_flags_request_is_empty_section() {
-    // COMMAND_PING is deleted (PWD-B10); this is the surviving empty-map
-    // command, so it carries the LV-2a empty-section byte pin directly.
-    let bytes = SupportFlagsRequest.store().expect("store");
-    let mut expected = HEADER.to_vec();
-    expected.push(0x00);
-    assert_eq!(bytes, expected);
-    assert_eq!(
-        SupportFlagsRequest::load(&bytes).expect("load"),
-        SupportFlagsRequest
-    );
-}
-
-#[test]
-fn support_flags_response_round_trip() {
-    round_trip(&SupportFlagsResponse {
-        support_flags: SupportFlags::from_bits(1),
-    });
-}
-
-#[test]
-fn advertised_support_flags_are_zstd_only() {
-    assert_eq!(SupportFlags::ADVERTISED, SupportFlags::ZSTD_COMPRESSION);
-    assert_eq!(SupportFlags::ADVERTISED.bits(), 0x02);
-    assert!(!SupportFlags::ADVERTISED.contains(SupportFlags::from_bits(0x01)));
-}
-
-#[test]
-fn opt_fields_omitted_at_default() {
-    let node = node();
-    let section = node.to_section().expect("section");
+fn a_support_flags_key_is_ignored_and_never_emitted() {
+    let mut section = node().to_section().expect("section");
     assert!(section.get("support_flags").is_none());
-    round_trip(&node);
-}
-
-#[test]
-fn opt_fields_present_when_nonzero() {
-    let mut node = node();
-    node.support_flags = SupportFlags::from_bits(1);
-    let section = node.to_section().expect("section");
-    assert!(section.get("support_flags").is_some());
-    round_trip(&node);
+    section.insert(
+        "support_flags",
+        shekyl_portable_storage::Value::UInt32(0x02),
+    );
+    let bytes = store_to_binary(&section).expect("encode");
+    let loaded = BasicNodeData::load(&bytes).expect("load");
+    assert_eq!(loaded, node());
+    assert!(loaded
+        .to_section()
+        .expect("section")
+        .get("support_flags")
+        .is_none());
 }
 
 /// `rpc_port` / `rpc_credits_per_hash` were deleted from `basic_node_data`
@@ -248,15 +221,15 @@ fn unknown_address_type_is_hard_error() {
 
 #[test]
 fn extra_fields_ignored() {
-    let mut flags = SupportFlagsResponse {
-        support_flags: SupportFlags::from_bits(1),
+    let mut section = TimedSyncRequest {
+        payload_data: sync_data(),
     }
     .to_section()
     .expect("section");
-    flags.insert("future", shekyl_portable_storage::Value::Bool(true));
-    let bytes = store_to_binary(&flags).expect("encode");
-    let loaded = SupportFlagsResponse::load(&bytes).expect("load");
-    assert_eq!(loaded.support_flags, SupportFlags::from_bits(1));
+    section.insert("future", shekyl_portable_storage::Value::Bool(true));
+    let bytes = store_to_binary(&section).expect("encode");
+    let loaded = TimedSyncRequest::load(&bytes).expect("load");
+    assert_eq!(loaded.payload_data, sync_data());
 }
 
 #[test]

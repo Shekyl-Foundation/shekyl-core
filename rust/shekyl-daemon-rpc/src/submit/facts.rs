@@ -13,7 +13,8 @@
 //! the engine decides. Zero verdict logic lives behind this trait.
 
 use shekyl_archival_retention::{
-    BadInterval, HoldingsDescriptor, HoldingsKind, HoldingsKindScan, LastServedScan, ShardClose,
+    BadInterval, HoldingsDescriptor, HoldingsKind, HoldingsKindScan, LastServedScan,
+    SettlementSchedule, ShardClose,
 };
 use shekyl_types::{BlockHash, BlockHeight, ChainCount, PCanonicalId, TxHash};
 
@@ -23,9 +24,10 @@ use crate::submit::certificate::VerificationCertificate;
 /// (§4.1: `none | own_txid | other`).
 ///
 /// `OwnTx` means the pool's spender of this key image *is* the submitted
-/// txid (an identity fact, paired with `in_pool`); `Other` means a
-/// different transaction consumes the input — the only arm that can ever
-/// classify as `DoubleSpendConflict`, and only from Phase-D fresh facts.
+/// txid (an identity fact, paired with `in_pool`); `Other` and `Embargoed`
+/// mean a different transaction consumes the input — the only arms that can
+/// ever classify as `DoubleSpendConflict`, only from Phase-D fresh facts,
+/// and `Embargoed` only for the owner tier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyImageConflict {
     /// No pool- or chain-level spender for this key image.
@@ -34,6 +36,13 @@ pub enum KeyImageConflict {
     OwnTx,
     /// A different transaction consumes this key image.
     Other,
+    /// A different transaction consumes this key image, and this node holds
+    /// it unpublished — in its stem phase. Disclosed to the owner tier only:
+    /// a foreign caller is answered as a fresh accept would be, or the
+    /// public submit endpoint maps which stem transactions this node holds
+    /// (the review of #1102, B2). The Rust pool's shim reports it; the C++
+    /// shim, deleted at the flip, reports `Other`.
+    Embargoed,
 }
 
 /// Facts about the submitted reference block, present iff the daemon knows
@@ -93,10 +102,23 @@ pub struct SubmitFacts {
     pub reference: Option<ReferenceFacts>,
     /// Dynamic per-byte fee floor parameter (moves every block — F34).
     pub fee_per_byte: u64,
-    /// Fee quantization mask (`get_fee_quantization_mask`, always ≥ 1).
-    pub fee_quantization_mask: u64,
+    /// The relay floor window at the connecting height (FL-R23's lookback,
+    /// `shekyl_chain_rules::relay_floor_window`), when the shim reads it:
+    /// the engine then judges the fee by the door's own predicate,
+    /// `relay_floor_admits` (CEN-M3), and `fee_per_byte` is not read for
+    /// the gate. `None` from the C++ shim, whose tip-floor rule stands
+    /// until the flip deletes it (DX-Q10; the review of #1102, S5).
+    pub fee_floor_window: Option<Vec<u64>>,
+    /// Whether CEN-M10's rising minimum refuses a fresh submission of this
+    /// transaction's weight and fee against the pool as it stands
+    /// (`shekyl_mempool::RelayView::refuses_for_room`), read by the Rust
+    /// shim at a raced commit. A concealed answer applies it, so a foreign
+    /// caller resubmitting a held stem transaction gets the verdict another
+    /// transaction at its rate would get (Copilot, #1102). `None` from the
+    /// C++ shim and at Phase B.
+    pub pool_refuses_for_room: Option<bool>,
     /// Transaction weight limit (compile-time constant on Shekyl:
-    /// `min_block_weight / 2 − COINBASE_BLOB_RESERVED_SIZE` = 149 400; §3.1).
+    /// `min_block_weight / 2 −` the derived coinbase reserve; §3.1).
     pub weight_limit: u64,
     /// Chain block **count** (`m_db->height()`), the consensus basis for
     /// the ref-age window arithmetic. Typed [`ChainCount`], not
@@ -402,8 +424,15 @@ pub struct EmissionFacts {
     /// conflict classification).
     pub bond: Option<EmissionBondFacts>,
     /// E7: one frozen as-of-`E` snapshot per claimed epoch, claim order
-    /// (alignment is re-checked by `emission_vin_verify_claims`).
+    /// (alignment is re-checked by the claims battery).
     pub snapshots: Vec<EmissionEpochSnapshotFacts>,
+    /// The settlement schedule the facts were gathered under: the rule
+    /// set's, from the Rust shim, which read its snapshot under that set;
+    /// the process schedule from the C++ marshal. The verifier judges the
+    /// claim under it — the window, the finalisation bound and each epoch's
+    /// view — so the facts and their judgement name one schedule, as
+    /// CEN-J25 judges a block's claim under its rule set's.
+    pub schedule: SettlementSchedule,
 }
 
 /// E6: the claimant bond record's verify operands
@@ -425,9 +454,9 @@ pub struct EmissionBondFacts {
 /// view constructor the C++ oracle's FFI shim also uses).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EmissionEpochSnapshotFacts {
-    /// A frozen `budget(E)` row exists — absent means the epoch never
-    /// closed (or was pruned): `Malformed` (§8.7.2 row E7).
-    pub has_budget_row: bool,
+    /// Where the epoch stands for the claim: expired, without a frozen
+    /// budget row (E7), or with one.
+    pub standing: EpochClaimStanding,
     pub settlement_epoch: u64,
     /// The close-processing height `(E+1)·SEB` (shard-age operand).
     pub close_block_height: u64,
@@ -446,11 +475,33 @@ pub struct EmissionEpochSnapshotFacts {
     pub credit_pairs: Vec<EmissionCreditPairFacts>,
 }
 
+/// Where one claimed epoch stands in an [`EmissionEpochSnapshotFacts`] —
+/// one state, so an expired epoch is never told by an absent budget row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EpochClaimStanding {
+    /// Below the claim window at the snapshot's connecting height
+    /// (`ARCHIVAL_SETTLEMENT_WRITER.md` §17). Nothing was read for it — its
+    /// rows may be retired — so the row's other fields are empty, and the
+    /// verifier refuses it as expired (`EpochClaimExpired` at
+    /// `window_floor`) before E7. The C++ marshal never produces it: its
+    /// store keeps rows through the window and its claims battery judges
+    /// expiry.
+    Expired {
+        /// The oldest claimable epoch at the connecting height.
+        window_floor: u64,
+    },
+    /// No frozen `budget(E)` row: the epoch never closed — `Malformed`
+    /// (§8.7.2 row E7).
+    NoBudgetRow,
+    /// A frozen `budget(E)` row exists.
+    BudgetFrozen,
+}
+
 /// One frozen bond row (owned `EpochCloseBond`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EmissionCloseBondFacts {
     pub join_settlement_epoch: u64,
-    pub is_foundation_complete_tree: bool,
+    pub is_support_complete_tree: bool,
     pub bad_intervals: Vec<BadInterval>,
 }
 

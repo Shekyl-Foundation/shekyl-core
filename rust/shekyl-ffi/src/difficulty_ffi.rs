@@ -436,6 +436,9 @@ pub unsafe extern "C" fn shekyl_difficulty_check_timestamp_rule(
 pub const SHEKYL_FORK_CHOICE_KEEP_CURRENT: i32 = 0;
 /// Reorganize onto the alternative chain.
 pub const SHEKYL_FORK_CHOICE_SWITCH: i32 = 1;
+/// Reorganize onto the alternative chain because a checkpoint names it;
+/// the demoted blocks are discarded (CEN-K7, `E5-Q5`).
+pub const SHEKYL_FORK_CHOICE_FORCED_SWITCH: i32 = 2;
 /// Alt-window precondition failure (`shekyl_difficulty_alt_window_plan`):
 /// height-0 candidate or discontiguous alt ancestry.
 pub const SHEKYL_DIFFICULTY_ERR_WINDOW: i32 = -5;
@@ -447,7 +450,8 @@ pub const SHEKYL_DIFFICULTY_ERR_WINDOW: i32 = -5;
 /// the cumulative difficulties in the crate ABI's two-`u64` form.
 ///
 /// Returns [`SHEKYL_DIFFICULTY_OK`] with the verdict
-/// ([`SHEKYL_FORK_CHOICE_KEEP_CURRENT`] / [`SHEKYL_FORK_CHOICE_SWITCH`])
+/// ([`SHEKYL_FORK_CHOICE_KEEP_CURRENT`] / [`SHEKYL_FORK_CHOICE_SWITCH`] /
+/// [`SHEKYL_FORK_CHOICE_FORCED_SWITCH`])
 /// written to `out_verdict`, or [`SHEKYL_DIFFICULTY_ERR_NULL_PTR`].
 ///
 /// # Safety

@@ -313,7 +313,12 @@ pub enum Malformed {
     /// The frame ended with content bytes still ahead of the envelope. A
     /// frame ends exactly where the declared length says (`SF-D6`: body
     /// long of agreed `N`), not at a parse that happened to finish.
-    FrameLong,
+    FrameLong {
+        /// Content bytes left between the frame's end and the envelope.
+        /// A whole frame closed with a wider envelope than the target's
+        /// scheme leaves exactly the difference between the two widths.
+        left: u64,
+    },
     /// The trailing envelope bytes are not a canonical signature of the
     /// target's scheme (`PassVerifyingKey`). Another scheme's signature is
     /// this, whatever key it would verify under: it is not tried.
@@ -349,8 +354,11 @@ impl fmt::Display for Malformed {
             }
             Self::Frame(e) => write!(f, "body is not the shard frame: {e}"),
             Self::FrameShort => f.write_str("frame ran into the signature envelope"),
-            Self::FrameLong => {
-                f.write_str("frame ended with content bytes still ahead of the envelope")
+            Self::FrameLong { left } => {
+                write!(
+                    f,
+                    "frame ended with {left} content bytes still ahead of the envelope"
+                )
             }
             Self::Envelope => f.write_str("envelope is not a canonical hybrid signature"),
         }

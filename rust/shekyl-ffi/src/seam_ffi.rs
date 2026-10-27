@@ -6,7 +6,9 @@
 //! FFI for the p2p seam.
 //!
 //! C++ calls `open`, `send`, and `close`. Rust calls the bound post, which
-//! only enqueues onto the connection's strand. The strand calls back when
+//! only enqueues onto the connection's strand. The hub's post sink is the
+//! chain-sync router (`shekyl_chain_sync_runtime::router`), pass-through here: no
+//! sync owner is attached, so each post is the bound post's, unchanged. The strand calls back when
 //! the handler is armed, when a delivery returns, when `closed` starts,
 //! and when the executor drops the link.
 //!
@@ -17,15 +19,15 @@
 
 use std::ffi::c_void;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::sync::{Arc, Mutex, OnceLock};
-use std::thread;
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
+use shekyl_chain_sync_runtime::router::Router;
 use shekyl_peer_policy::{InboundCeiling, UnboundedReason};
 use shekyl_seam::{
-    connector_from_index, direction_from_index, drive_inbound, CloseCause, CloseKind, ConnectorId,
-    Direction, Endpoint, Hub, Post, SocketId, TOR_HOST_MAX,
+    connector_from_index, direction_from_index, CloseCause, CloseKind, ConnectorId, Direction,
+    Endpoint, Hub, Post, SocketId, TOR_HOST_MAX,
 };
-use shekyl_timing_engine::{Clock, MonotonicClock, Tick};
+use shekyl_timing_engine::{Clock, EngineService, Handle, MonotonicClock, Tick};
 
 use crate::inbound_ceiling_ffi::{
     ShekylInboundCeiling, SHEKYL_INBOUND_CEILING_BOUNDED, SHEKYL_INBOUND_CEILING_COUNT_UNREADABLE,
@@ -85,16 +87,11 @@ pub struct ShekylSeamAddress {
     pub bytes: [u8; TOR_HOST_MAX],
 }
 
-/// What the outbound handshake's result post carries: the strand reads
-/// these fields and accepts or refuses the sync payload in that turn.
+/// What a kept dial's handshake notification carries. The strand reads
+/// these fields and does not answer. Only a kept dial is posted.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ShekylSeamHandshakeResult {
-    /// 1 for a kept dial, 0 for a confirm-and-close dial.
-    pub keep: u8,
-    pub _pad: [u8; 3],
-    /// The peer's support flags, zero included.
-    pub support_flags: u32,
     /// The peer's `CORE_SYNC_DATA`.
     pub current_height: u64,
     pub cumulative_difficulty: u64,
@@ -105,23 +102,20 @@ pub struct ShekylSeamHandshakeResult {
 impl ShekylSeamHandshakeResult {
     /// The struct's bytes in its C layout, written field by field so the
     /// post carries no padding read from the stack.
-    fn to_bytes(self) -> [u8; 64] {
-        let mut out = [0u8; 64];
-        out[0] = self.keep;
-        out[4..8].copy_from_slice(&self.support_flags.to_ne_bytes());
-        out[8..16].copy_from_slice(&self.current_height.to_ne_bytes());
-        out[16..24].copy_from_slice(&self.cumulative_difficulty.to_ne_bytes());
-        out[24..32].copy_from_slice(&self.cumulative_difficulty_top64.to_ne_bytes());
-        out[32..64].copy_from_slice(&self.top_id);
+    fn to_bytes(self) -> [u8; 56] {
+        let mut out = [0u8; 56];
+        out[0..8].copy_from_slice(&self.current_height.to_ne_bytes());
+        out[8..16].copy_from_slice(&self.cumulative_difficulty.to_ne_bytes());
+        out[16..24].copy_from_slice(&self.cumulative_difficulty_top64.to_ne_bytes());
+        out[24..56].copy_from_slice(&self.top_id);
         out
     }
 }
 
 const _: () = {
-    assert!(std::mem::size_of::<ShekylSeamHandshakeResult>() == 64);
-    assert!(std::mem::offset_of!(ShekylSeamHandshakeResult, support_flags) == 4);
-    assert!(std::mem::offset_of!(ShekylSeamHandshakeResult, current_height) == 8);
-    assert!(std::mem::offset_of!(ShekylSeamHandshakeResult, top_id) == 32);
+    assert!(std::mem::size_of::<ShekylSeamHandshakeResult>() == 56);
+    assert!(std::mem::offset_of!(ShekylSeamHandshakeResult, current_height) == 0);
+    assert!(std::mem::offset_of!(ShekylSeamHandshakeResult, top_id) == 24);
 };
 
 /// What `established` carries upward.
@@ -183,23 +177,85 @@ pub(crate) fn hub() -> Option<Hub> {
     STATE.lock().expect("seam state").clone()
 }
 
-/// Tests that bind the process hub take this for the whole test.
+/// Serializes tests that bind a hub or read the process socket table.
 ///
-/// The hub is one static. Two tests binding it at once would publish over
-/// each other. A poisoned lock is the previous test's panic; the next test
-/// still needs the gate.
+/// Production [`install_process_sockets`] and [`shekyl_seam_bind`] do not
+/// take it. They take [`hold_table`], from the table read through the hub
+/// store. A test holds this lock and then binds; bind does not take it
+/// again. The guard is a [`MutexGuard`], so it is `!Send`. A poisoned lock
+/// is the previous holder's panic; the next test still needs the gate.
 #[cfg(test)]
-pub(crate) fn seam_bind_lock() -> &'static Mutex<()> {
-    static LOCK: Mutex<()> = Mutex::new(());
-    &LOCK
+pub(crate) fn seam_bind_lock() -> &'static TestSeam {
+    static GATE: TestSeam = TestSeam(Mutex::new(()));
+    &GATE
 }
 
-/// One admission table for the process. A new binding does not mint ids
+/// The test serializer. [`TestSeam::lock`] is the only way in, so every
+/// caller holds a real [`MutexGuard`].
+#[cfg(test)]
+pub(crate) struct TestSeam(Mutex<()>);
+
+#[cfg(test)]
+impl TestSeam {
+    pub(crate) fn lock(&'static self) -> MutexGuard<'static, ()> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// The table read, the table replace, and the hub store are one section.
+///
+/// Distinct from [`PROCESS_SOCKETS`]: bind calls [`process_sockets`], which
+/// takes that mutex itself, so this one cannot be it. Install and bind both
+/// take this one first, so the two orders cannot deadlock on each other.
+fn hold_table() -> MutexGuard<'static, ()> {
+    static TABLE: Mutex<()> = Mutex::new(());
+    TABLE.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// The node's socket table, or the table a reader created before `main`
+/// installed one. A bound hub keeps the table it was built with, so
+/// [`install_process_sockets`] refuses once a hub exists.
+static PROCESS_SOCKETS: Mutex<Option<shekyl_seam::Sockets>> = Mutex::new(None);
+
+/// Install the node's socket table as the process table.
+///
+/// Returns `false` when a hub is already bound: that hub holds the previous
+/// table, and replacing it would split bans from the zone. An unbound table
+/// a reader created first is replaced, so a later reader sees the node's.
+/// Production `main` installs before any reader, and this replacement is
+/// what a shared test process needs after another test has read the table.
+#[must_use]
+pub fn install_process_sockets(sockets: shekyl_seam::Sockets) -> bool {
+    // The same section [`shekyl_seam_bind`] holds from its table read
+    // through the hub store. A bind in that window makes this install
+    // wait, then see the hub and refuse: the hub keeps the table it was
+    // built with.
+    let _table = hold_table();
+    if hub().is_some() {
+        return false;
+    }
+    let mut slot = PROCESS_SOCKETS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    *slot = Some(sockets);
+    true
+}
+
+/// The process's one admission table. A new binding does not mint ids
 /// again: a `reap` that arrives after the swap names an id the new hub
 /// does not hold.
-pub(crate) fn process_sockets() -> shekyl_seam::Sockets {
-    static TABLE: OnceLock<shekyl_seam::Sockets> = OnceLock::new();
-    TABLE.get_or_init(shekyl_seam::Sockets::new).clone()
+///
+/// Before [`install_process_sockets`], the first call creates the table.
+/// After it, every call is the node's table.
+#[must_use]
+pub fn process_sockets() -> shekyl_seam::Sockets {
+    let mut slot = PROCESS_SOCKETS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if slot.is_none() {
+        *slot = Some(shekyl_seam::Sockets::new());
+    }
+    slot.clone().expect("the table was just set")
 }
 
 /// The process's one clock (Rick, 2026-10-14): ban deadlines, the bound
@@ -209,6 +265,31 @@ pub(crate) fn process_sockets() -> shekyl_seam::Sockets {
 pub(crate) fn process_clock() -> Arc<MonotonicClock> {
     static CLOCK: OnceLock<Arc<MonotonicClock>> = OnceLock::new();
     Arc::clone(CLOCK.get_or_init(|| Arc::new(MonotonicClock::new())))
+}
+
+/// The process's one timing engine. The zone host and the Tor supervisor
+/// arm deadlines on it. The service lives here so a handle alone cannot
+/// close it.
+pub(crate) fn process_engine() -> Handle<MonotonicClock> {
+    let mut slot = process_engine_slot().lock().expect("process engine");
+    if slot.is_none() {
+        let clock = MonotonicClock::clone(&process_clock());
+        *slot = Some(EngineService::start(clock));
+    }
+    slot.as_ref().expect("the engine was just started").handle()
+}
+
+/// Stop the process engine. The next [`process_engine`] starts another.
+pub(crate) fn close_process_engine() {
+    let engine = process_engine_slot().lock().expect("process engine").take();
+    if let Some(engine) = engine {
+        engine.close();
+    }
+}
+
+fn process_engine_slot() -> &'static Mutex<Option<EngineService<MonotonicClock>>> {
+    static ENGINE: Mutex<Option<EngineService<MonotonicClock>>> = Mutex::new(None);
+    &ENGINE
 }
 
 fn ban_now() -> Tick {
@@ -252,9 +333,12 @@ pub(crate) fn ceiling_from_abi(ceiling: ShekylInboundCeiling) -> Option<InboundC
 
 /// Install the post callback and the caller's ceiling.
 ///
-/// A null `post`, a null `ctx`, or a null `ceiling` clears the seam.
-/// Returns 0 when the seam is installed or cleared, and -1 when `ceiling`
-/// is not a known decision.
+/// A null `post` or a null `ctx` clears the seam. Returns 0.
+///
+/// The hub's inbound ceiling is this process's, resolved here from its
+/// descriptor limit and the reservation in the remnant's preparation;
+/// nothing about it crosses from C++. A harness that wants another bound
+/// sets it after the bind with [`shekyl_seam_set_ceiling`].
 ///
 /// A previous binding is closed and its harness threads are joined before
 /// this call publishes the next one. `ctx` from that binding stays valid
@@ -263,43 +347,39 @@ pub(crate) fn ceiling_from_abi(ceiling: ShekylInboundCeiling) -> Option<InboundC
 /// # Safety
 /// `post` does not call back into the seam before it returns.
 /// `ctx` stays valid until the next bind returns, because shutdown still
-/// posts to the previous callback. `ceiling` is readable when non-null.
+/// posts to the previous callback.
 #[no_mangle]
-pub unsafe extern "C" fn shekyl_seam_bind(
-    ctx: *mut c_void,
-    post: Option<PostFn>,
-    ceiling: *const ShekylInboundCeiling,
-) -> i32 {
+pub unsafe extern "C" fn shekyl_seam_bind(ctx: *mut c_void, post: Option<PostFn>) -> i32 {
     let Some(post) = post else {
+        let _table = hold_table();
         store(None);
         return 0;
     };
-    if ctx.is_null() || ceiling.is_null() {
+    if ctx.is_null() {
+        let _table = hold_table();
         store(None);
-        return if ceiling.is_null() && !ctx.is_null() {
-            -1
-        } else {
-            0
-        };
+        return 0;
     }
-    let ceiling = unsafe { *ceiling };
-    let Some(ceiling) = ceiling_from_abi(ceiling) else {
-        store(None);
-        return -1;
-    };
+    let ceiling = crate::inbound_ceiling_ffi::configured();
+    tracing::info!(target: "p2p", ceiling = ?ceiling, "the inbound ceiling the seam binds with");
     let bound = Bound {
         ctx: Ctx(ctx),
         post,
     };
     let clock: Arc<dyn Clock + Send + Sync> = process_clock();
-    let hub = Hub::new(
-        process_sockets(),
-        ceiling,
-        Arc::new(move |item: Post| post_one(&bound, item)),
-        clock,
-    );
-    // `store` stops the previous hub's dialer; this hub's is built after.
-    store(Some(hub.clone()));
+    // The table this hub is built on and the store of the hub are one
+    // critical section with [`install_process_sockets`].
+    let hub = {
+        let _table = hold_table();
+        // The Rust Levin router is the post sink. Until the chain-sync
+        // cutover attaches the sync owner it is pass-through: every post
+        // reaches the C++ handler unchanged.
+        let sink = Router::pass_through(Arc::new(move |item: Post| post_one(&bound, item)));
+        let hub = Hub::new(process_sockets(), ceiling, sink.into_sink(), clock);
+        // `store` stops the previous hub's dialer; this hub's is built after.
+        store(Some(hub.clone()));
+        hub
+    };
     crate::dialer_ffi::ensure_dialer(&hub);
     0
 }
@@ -344,8 +424,8 @@ pub extern "C" fn shekyl_seam_install_loopback() -> i32 {
 /// Returns as soon as the row exists, without waiting for the strand to
 /// arm its handler (the C++ dial path that needed the wait is deleted,
 /// 2026-10-13). `id` is zero and `cause_kind` is the D12 cause when the
-/// dial fails. The inbound pump runs on a thread this call starts;
-/// [`shekyl_seam_reap`] joins it.
+/// dial fails. The inbound pump runs where the installed dialer runs
+/// pumps; the harness's thread is joined by [`shekyl_seam_reap`].
 ///
 /// # Safety
 /// `addr` is readable.
@@ -375,10 +455,7 @@ pub unsafe extern "C" fn shekyl_seam_open(
         Err(cause) => return refused(cause),
     };
     let id = attached.id;
-    let session = attached.session;
-    let hub_pump = hub.clone();
-    let pump = thread::spawn(move || drive_inbound(&hub_pump, id, session));
-    hub.track_pump(id, pump);
+    hub.drive(id, attached.session);
     ShekylSeamOpenResult {
         id: id.get(),
         cause_kind: 0,
@@ -559,7 +636,9 @@ pub extern "C" fn shekyl_seam_record_cause(id: u64, kind: u8, reply: u16) {
         return;
     };
     let cause = if kind == CloseKind::ProxyRefused {
-        CloseCause::proxy_refused(reply)
+        // The C++ has no reply table: a reply recorded here is final and
+        // names nothing. The connectors build their own causes in Rust.
+        CloseCause::proxy_refused(reply, shekyl_transport_layer::Marks::NONE)
     } else {
         CloseCause::new(kind)
     };
@@ -587,8 +666,9 @@ pub extern "C" fn shekyl_seam_inbound_held() -> u64 {
     hub().map(|hub| hub.inbound_held()).unwrap_or(0)
 }
 
+/// The ban table's entries, as the C++ and the daemon's owners reach them.
 #[path = "seam_ban_ffi.rs"]
-mod bans;
+pub mod bans;
 
 pub use bans::ShekylBanView;
 
@@ -742,15 +822,10 @@ fn post_one(bound: &Bound, item: Post) {
         Post::HandshakeResult {
             id,
             connector,
-            keep,
-            support_flags,
             sync,
         } => {
             let observed = routing_c(connector);
             let result = ShekylSeamHandshakeResult {
-                keep: u8::from(keep),
-                _pad: [0; 3],
-                support_flags,
                 current_height: sync.current_height,
                 cumulative_difficulty: sync.cumulative_difficulty,
                 cumulative_difficulty_top64: sync.cumulative_difficulty_top64,
@@ -774,9 +849,9 @@ fn post_one(bound: &Bound, item: Post) {
             connector,
             cause,
         } => {
-            // The dialer hears every close: a kept session leaves its
-            // count, a dial awaiting its verdict fails.
-            crate::dialer_ffi::on_closed(id);
+            // The dialer hears every close, with the cause. A kept session
+            // leaves its count; SessionRefused is the lists' PayloadRefused.
+            crate::dialer_ffi::on_closed(id, cause);
             let observed = routing_c(connector);
             unsafe {
                 (bound.post)(
@@ -806,3 +881,7 @@ fn routing_c(connector: ConnectorId) -> ShekylSeamObserved {
         bytes: [0; TOR_HOST_MAX],
     }
 }
+
+#[cfg(test)]
+#[path = "seam_ffi_tests.rs"]
+mod tests;

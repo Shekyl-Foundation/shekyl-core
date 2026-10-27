@@ -111,9 +111,10 @@ timeouts were cited at `:189`, `:193`, and `:192`.* `NEW_CONNECTION_TIMEOUT_LOCA
 1,200,000 with the comment still saying "2 minutes"
 (`abstract_tcp_server2.inl:60-61`). The send queue is 1,000 messages
 and 100 MiB (`abstract_tcp_server2.h:72-73`). The asio pool is 10
-(`net_node.inl:1150`). The daemon-rpc runtime is still the default
-multi-thread builder (`ffi_exports.rs:162`). Tor control still sets
-`.worker_threads(1)` (`blocking.rs:120`). `Driver::next_wake` is
+(`net_node.inl:1150`). At this pin (`0aa207208`) the daemon-rpc runtime was
+the default multi-thread builder (`shekyl-daemon-rpc` `ffi_exports.rs` line
+162) and Tor control set `.worker_threads(1)` (`shekyl-tor-control-daemon`
+`blocking.rs` line 120). `Driver::next_wake` is
 `driver/mod.rs:158`. `shekyl-p-fetch` and `shekyl-rpc-transport` dial
 through `shekyl-socks`. `shekyl-p-transport` still enables ureq's
 `socks-proxy`. D6's third falsifier does
@@ -321,10 +322,9 @@ first complete handshake frame, on both connectors: its
 `COMMAND_HANDSHAKE` request on a session it opened, its response on one
 this node dialed (`shekyl_levin::HandshakeFrame`). It never ends at
 `session_established`, which is this node's own work, and a complete
-frame of any other command does not end it: the strand answers a
-support-flags request before any handshake, and a peer that sent one
-and stopped would otherwise have held an admission slot with no
-deadline at all. A peer that sends no complete handshake frame inside
+frame of any other command does not end it: a peer that sent one and
+stopped would otherwise have held an admission slot with no deadline at
+all. A peer that sends no complete handshake frame inside
 the gap is the Levin handshake timeout. Each
 driver polls its reader before the gap's wake. A fired wake then waits
 one IO driver turn for the reader (`SilenceGap` in
@@ -359,8 +359,8 @@ names them.
 Both connectors are in. The seam is the handler boundary they attach to:
 one `Sockets` table, the connector's `Session`, and the posts onto that
 connection's strand. A `Dial` is how a channel is born. Zone bind, which
-installs the connector dialer and runs `drive_inbound` on the transport
-runtime, is the cutover and is not in this change. The loopback dialer is
+installs the connector dialer, whose `Dial::drive` runs each session's
+pump as a task on the transport runtime, is the cutover and is not in this change. The loopback dialer is
 the strand harness: it admits on the hub's table and discards outbound
 bytes. It is not a connector. epee still owns every production socket.
 This note is the build before the differential harness and the cutover.
@@ -417,14 +417,24 @@ holds a count, so the destroy post has not run.
   closes both session ends with the cause. The seam inbound drive
   records that cause. `PeerClosed` is the reader's end-of-file and
   nothing else. A silent acceptor is `LevinHandshakeTimeout`. A peer
-  that sends FIN is `PeerClosed`. Forgetting the address is
-  `implicates_address` with the connector: a destination-naming cause
-  counts where the connector's declaration says the destination is
-  authenticated (Rick, 2026-10-13). The naming causes are a rejected
-  Levin handshake and a proxy reply of `0x04`, `0x05`, `0xF0`, `0xF1`,
-  or `0xF2`. So no clearnet cause counts (R2, 2026-10-12), Tor counts
-  those six, and a refused connect counts nowhere. *Records-was: a
-  refused dial and a rejected handshake counted on every connector.*
+  that sends FIN is `PeerClosed`. The cause carries four marks in
+  its spare byte, worth a retry, names the destination, proves
+  misbehaviour (2026-10-24), and a timeout of the dial's own window
+  (2026-10-26: the dial deadline's `TransportTimeout` and Tor's
+  `0x06`; the dialer reads it against the attempt's run time, and a Tor
+  timeout at or after `SocksTimeout` is final within its test): per
+  kind by default, handed in by the
+  connector for a proxy refusal (the Tor connector's reply table,
+  `shekyl-tor/src/replies.rs`; this crate keeps no SOCKS knowledge), and
+  the dialer stamps proof on a Levin rejection or a refused
+  list only where the connector's declaration says the destination is
+  authenticated. The lists read only the marks: proof drops the address,
+  anything else cools it. *Records-was: forgetting the address was
+  `implicates_address` with the connector, counting a rejected Levin
+  handshake and a proxy reply of `0x04`, `0x05`, `0xF0`, `0xF1`, or
+  `0xF2` on Tor (Rick, 2026-10-13) and nothing on clearnet (R2,
+  2026-10-12); before that, a refused dial and a rejected handshake
+  counted on every connector.*
 - Rust records the D12 cause through `Sockets::close`. The first
   `CloseResult::Recorded` wins. `AlreadyClosed` leaves that cause
   where the first call put it.
@@ -569,6 +579,44 @@ Rust posts these onto the connection's strand, and the strand runs them:
 - `closed(id, cause)` runs the inline cancel. The destroy post
   follows as the close rule above says. `cause` is the `repr(C)`
   `CloseCause` already in the FFI header.
+
+**The post sink is the chain-sync router** (`shekyl_chain_sync_runtime::router`,
+CS-3, `P2P_3_CHAIN_SYNC_BRIEF.md` CS-Q8). The hub hands every post to it
+under the table lock, and it never calls back into the hub. The daemon
+builds it **pass-through**: every post goes to the bound post above,
+unchanged. The chain-sync cutover builds it **attached** to the sync
+owner. Attached, it reads each session's Levin bucket headers (command,
+flags, length) and never a payload:
+
+- **To the owner, whole:** 2011–2014 (`SyncCommand`), as a notify (`Q`,
+  no `S`, not a fragment, no response expected), with no undefined flag,
+  within the command's cap. The C++ ingress never admits them. And 2008,
+  an announced block, on the same terms within its cap: announcements
+  are chain sync's, and attaching the router is what moves them.
+- **To the C++ handler, byte for byte:** every other bucket. That is
+  `DefinedCommand`'s set (1001 handshake, 1002 timed sync, 2002 new
+  transactions, 2003 / 2004 get objects, 2006 / 2007 chain, 2009 compact
+  missing transactions, 2010 pool complement, and 2008 while the router
+  is pass-through) and any bucket the router does not admit, which the C++
+  ingress refuses as it does today. `established`, `closed` and the
+  handshake result go to the C++ handler as well, and the owner gets its
+  own copy.
+- **A bucket header that does not read** sends that session's bytes raw
+  to the C++ handler from there on, and its ingress refuses them: the
+  transport's refusal, as today.
+- **One delivery in, at most one out.** The C++ handler's bytes from one
+  delivery are forwarded as one `deliver`, so each delivery still gets
+  exactly one `delivery_finished`. A delivery that carried nothing for
+  the C++ handler is finished by the owner, from its own task.
+- An owner that is gone turns the router back to pass-through.
+- **The claim tap.** An attached router copies the payload of an inbound
+  handshake request and of either direction's timed sync to the owner,
+  which decodes the peer's sync payload as the session's claim. The
+  bytes reach the C++ handler unchanged, and the router reads only the
+  bucket header. Slice 4 deletes the tap when the hub posts the inbound
+  handshake's result.
+
+The cutover deletes this forwarding together with the C++ sync half.
 
 The strand calls back:
 
@@ -790,7 +838,7 @@ a connector deadline.
 Send-queue caps, read at `abstract_tcp_server2.h:72-73`: 1,000 messages
 and `100 * 1024 * 1024` bytes.
 
-Outbound dialing is serial: one dial in flight per connector (the Rust dialer, PR-3; *records-was:* `connections_maker` at `net_node.inl:2009`, deleted 2026-10-13). It reaches
+Outbound dialing is concurrent up to a per-connector bound, Tor 5 and clearnet 1, each attempt a task on the transport runtime (the dialer in-flight bound, revision 2, 2026-10-25; *records-was:* one dial in flight per connector, the Rust dialer from PR-3; before that `connections_maker` at `net_node.inl:2009`, deleted 2026-10-13). It reaches
 `try_to_connect_and_handshake_with_new_peer` (`net_node.inl:1544`) at
 the call sites `:1917` and `:1970`. A transport handshake adds a round
 trip to every dial. A stalled peer holds that loop for the whole
@@ -805,11 +853,11 @@ It was not removed by this round (D8). LV-3 step c deleted it.
 `is_host_limit` is `net_node.inl:231` and reads the Levin registry.
 Connections that have no channel yet are invisible to that read.
 
-Two private tokio runtimes already exist:
-`rust/shekyl-daemon-rpc/src/ffi_exports.rs:162` and
-`rust/shekyl-tor-control-daemon/src/blocking.rs:120`. Both call
-`Builder::new_multi_thread()`. The transport layer must not silently add a
-third (D5, D14).
+At this round's pin (`0aa207208`) two private tokio runtimes existed:
+`rust/shekyl-daemon-rpc/src/ffi_exports.rs` line 162 and
+`rust/shekyl-tor-control-daemon/src/blocking.rs` line 120. Both called
+`Builder::new_multi_thread()`. The transport layer must not silently add
+another (D5, D14).
 
 Sizes that are deletable at cutover, counted at this pin: the two
 `abstract_tcp_server2` files (2,934 lines), `connection_basic` (481
@@ -848,7 +896,7 @@ The session layer judges misbehaviour. The transport layer enforces
 the ban. It does not score a host, and a transport close does not
 call `add_host_fail`. The session layer (Levin framing and the p2p
 protocol) owns session admission: may this peer have a session? That
-is `network_id`, the self-detection nonce, support flags, and
+is `network_id`, the self-detection nonce, and
 PWD-B3's per-command caps, in `handle_handshake`, plus the judgment
 that issues the ban call. Neither layer reads the other's state to
 decide. No wall-clock time crosses that call.
@@ -959,7 +1007,7 @@ and the mechanism does not. "Refuse" means it does not survive.
 | FIN versus RST, linger | epee close / shutdown | **One behaviour for every failure before the channel exists:** close after zero bytes written, FIN, no linger and no RST variant. Step 7 asserts those failures are indistinguishable from the far side. |
 | `add_ref` / `release`, `request_callback`, `send_done` | `i_service_endpoint` | The adapter's contract (D4). Not a copy of epee's refcount. |
 | Executor for invoke timers and idle handlers | `levin_protocol_handler_async.h:229` takes `get_io_context()` for the invoke timer. The pool is 10 threads (`net_node.inl:1150`) | **D6, ruled.** A socketless `io_context` is the interim until the timing engine lands. Its pool is a measured budget, not 10. |
-| Serial outbound dialing | *Records-was* `connections_maker` at `net_node.inl:2009`, call at `:1917`; the Rust dialer's `IN_FLIGHT_BOUND` of one per connector since PR-3 (2026-10-13) | **Stayed serial through the cutover.** The transport layer exposes an asynchronous dial and does not choose the schedule. When and how many to dial is discovery policy, P2P-3 slice 3. The extra round trip is measured in step 7. |
+| Serial outbound dialing | *Records-was* `connections_maker` at `net_node.inl:2009`, call at `:1917`; the Rust dialer's one dial per connector from PR-3 (2026-10-13) to 2026-10-25 | **Stayed serial through the cutover, then concurrent up to a per-connector bound (Tor 5, clearnet 1; the dialer in-flight bound, revision 2).** The transport layer exposes an asynchronous dial (`Dial::connect_async`) and does not choose the schedule. When and how many to dial is discovery policy, P2P-3 slice 3. The extra round trip is measured in step 7. |
 | SSL | `m_state.ssl` on the connection | **Refuse.** |
 
 ## Rate limit is four jobs (RULED 2026-09-28)
@@ -1109,12 +1157,12 @@ RPC and Tor-control runtimes serve the operator. A tokio multi-thread
 runtime has no task priorities, so a shared pool would let a peer flood
 starve wallet RPC, and the reverse. Separate runtimes contain that.
 
-Today each subsystem builds its own runtime. Two already do
-(`shekyl-daemon-rpc` `ffi_exports.rs:162` builds a multi-thread runtime
-and does not set a worker count, so it takes one worker per core;
-`shekyl-tor-control-daemon` `blocking.rs:120` sets `.worker_threads(1)`).
-On a 4-core Pi-4 those two are five workers. A third runtime that also
-took the default would make nine, plus blocking pools. The transport
+At this round's pin (`0aa207208`) each subsystem built its own runtime, and
+two did (`shekyl-daemon-rpc` `ffi_exports.rs` line 162 built a multi-thread
+runtime with no worker count, so it took one worker per core;
+`shekyl-tor-control-daemon` `blocking.rs` line 120 set `.worker_threads(1)`).
+On a 4-core Pi-4 those two were five workers. A third runtime that also
+took the default would have made nine, plus blocking pools. The transport
 layer does not add one that way. The constructor is
 `shekyl-runtime::runtime(RuntimeBudget { workers, blocking }, name)`.
 Both counts are inputs, and `name` is a `ThreadName` (non-empty, no

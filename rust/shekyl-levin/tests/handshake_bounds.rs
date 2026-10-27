@@ -19,7 +19,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 
 use shekyl_levin::{
     ingress_payload_cap, BasicNodeData, CoreSyncData, Flags, HandshakeRequest, HandshakeResponse,
-    NetworkAddress, PeerlistEntry, PortableMap, SupportFlags, TimedSyncRequest, TimedSyncResponse,
+    NetworkAddress, PeerlistEntry, PortableMap, TimedSyncRequest, TimedSyncResponse,
     COMMAND_HANDSHAKE, COMMAND_TIMED_SYNC, HANDSHAKE_FIXED_MAX_BYTES,
     PEERLIST_ENTRY_MAX_ENCODED_BYTES,
 };
@@ -40,7 +40,6 @@ fn largest_entry() -> PeerlistEntry {
 fn node() -> BasicNodeData {
     BasicNodeData {
         network_id: [0xff; 16],
-        support_flags: SupportFlags::from_bits(u32::MAX),
     }
 }
 

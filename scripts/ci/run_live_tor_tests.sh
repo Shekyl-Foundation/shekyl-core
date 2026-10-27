@@ -24,10 +24,12 @@
 # A second bootstrap timeout fails too: one retry, not a loop. A retried run
 # says so in an annotation, so a flake rate that climbs is seen.
 #
-# Usage: run_live_tor_tests.sh <crate> <output-file>
+# Usage: run_live_tor_tests.sh <crate> <output-file> [libtest args...]
 # Run from the `rust/` directory. The caller reads <output-file> for its own
 # assertions (which tests ran, how many); this script's exit status is the
 # test run's. No verdict travels through a pipe (rule 46).
+# Extra arguments are libtest filters (`--exact`, `--skip`), after the
+# ignored-test flags.
 
 # No pipeline in this script carries a verdict (there are none); pipefail is
 # set so that one added later cannot lose its status quietly.
@@ -35,6 +37,12 @@ set -u -o pipefail
 
 crate="${1:?usage: run_live_tor_tests.sh <crate> <output-file>}"
 out="${2:?usage: run_live_tor_tests.sh <crate> <output-file>}"
+# libtest arguments after `--ignored --test-threads=1`. Empty when the caller
+# wants the whole ignored set.
+filter=(--ignored --test-threads=1)
+if [ "$#" -gt 2 ]; then
+  filter+=("${@:3}")
+fi
 
 # How the live suites report a tor that started and did not reach the
 # network: the client and wallet tests panic with "did not bootstrap", and the
@@ -47,7 +55,7 @@ BOOTSTRAP_RE='did not bootstrap|BootstrapTimeout'
 PIN_TEST='bundled_tor_matches_recorded_pin'
 
 attempt() {
-  cargo test --locked -p "$crate" --lib -- --ignored --test-threads=1 > "$out" 2>&1
+  cargo test --locked -p "$crate" --lib -- "${filter[@]}" > "$out" 2>&1
   local rc=$?
   cat "$out"
   return "$rc"

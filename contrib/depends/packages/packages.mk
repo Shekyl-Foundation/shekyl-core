@@ -5,9 +5,6 @@ ifneq ($(GITIAN),1)
 native_packages := native_ccache
 endif
 
-android_native_packages = android_ndk
-android_packages = ncurses readline sodium
-
 darwin_native_packages =
 darwin_packages = ncurses readline sodium
 

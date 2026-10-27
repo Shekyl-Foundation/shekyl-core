@@ -7,31 +7,40 @@
     "RELEASE_CHECKLIST.md 'Bundled Tor pin current' procedure: a digest recorded here must",
     "come from a tarball whose signature was verified against signing_key_fingerprint.",
     "Every target the release builds has exactly one row, pinned or unavailable",
-    "(scripts/ci/check_tor_pin_targets.py). An unavailable row is a ruling unless it",
-    "carries \"pending\": the identifier of the work that will pin it. A pending row",
-    "compiles as unavailable, which is what the binary does today, and is counted by",
-    "the gate: the startup refusal (TB-2) may not land while one remains (TB-12)."
+    "(scripts/ci/check_tor_pin_targets.py). An unavailable row the release builds is a",
+    "gap to close (TB-4). A row may carry \"pending\":",
+    "the identifier of the work that will pin it. A pending row compiles as unavailable,",
+    "which is what the binary does today, and is printed by the gate on every run. A node",
+    "on an unavailable target announces that it has no managed Tor; it is never refused (TB-2).",
+    "\"switched_off\" is a closed shape: an unavailable row that is not pending, whose value",
+    "is the record of the ruling that took the target out of the release matrix (riscv64",
+    "Linux: CA-1). No descriptor builds it; the row stays so a source build still compiles,",
+    "and the gate prints it every run. A pinned row, or a row that is also pending, is refused.",
+    "A macOS row carries two digest sets (TB-11): files, the Developer ID-signed bytes",
+    "that ship and that the binary checks, and upstream, Tor's own as extracted from",
+    "the tarball. tor_bundle.py ties them: every byte outside the code signature is Tor's."
   ],
   "signing_key_fingerprint": "EF6E286DDA85EA2A4BA7DE684E2C6E8793298290",
   "bundle_url": "https://archive.torproject.org/tor-package-archive/torbrowser/{bundle_version}/tor-expert-bundle-{bundle_target}-{bundle_version}.tar.gz",
   "source_url": "https://dist.torproject.org/tor-{tor_version}.tar.gz",
   "source_signature_url": "https://dist.torproject.org/tor-{tor_version}.tar.gz.sha256sum.asc",
+  "signed_url": "https://github.com/Shekyl-Foundation/shekyl-core/releases/download/tor-macos-{bundle_version}-signed/{bundle_target}-{name}",
   "targets": [
     {
       "os": "linux",
       "arch": "x86_64",
       "gitian_host": "x86_64-linux-gnu",
       "disposition": "pinned",
-      "bundle_version": "15.0.24",
+      "bundle_version": "15.0.25",
       "bundle_target": "linux-x86_64",
-      "tor_version": "0.4.9.13",
-      "tarball_sha256": "8e012ec6815d7899cb64011582e2dade88e74119c6661068a2a3252de0ccd7f2",
+      "tor_version": "0.4.9.14",
+      "tarball_sha256": "19cf18726eecb362e0f21d27afa9ea9efe5da928bfdfbb1ceb5fe54519e87f4a",
       "executable": "tor",
       "files": [
-        { "name": "tor", "sha256": "74f5a47bfe0fc7f7c3ec2fe6c772ec6e52d4a9e9e9c95c7f274f5330e02a8813" },
+        { "name": "tor", "sha256": "39c9db0654d2ec218892bd00f75eccb5b641a7222754436c2e4a8d2f764a57d3" },
         { "name": "libevent-2.1.so.7", "sha256": "b51ca562ec232785856c454ce4f3621d957f39d0db87919e237590b0331544ff" },
-        { "name": "libssl.so.3", "sha256": "e95f55c73b63a4e25db7b9c74abdd35c42829ca1dc68f2fb17ae71c4d841381c" },
-        { "name": "libcrypto.so.3", "sha256": "6ed9fc77689324da28567478e0ed226f4f450f71b47852088e9b0b9220eb0404" }
+        { "name": "libssl.so.3", "sha256": "9c2438d086d6c299db04b0bc337bbc8c0acd26c19c71eada2173a5b2ef7cecac" },
+        { "name": "libcrypto.so.3", "sha256": "418208c5c738864cb5653f3eeab650debcc71afbe50d08b0bd5a04b20f1d3c05" }
       ],
       "licenses": ["docs/tor.txt", "docs/libevent.txt", "docs/openssl.txt"]
     },
@@ -40,13 +49,13 @@
       "arch": "aarch64",
       "gitian_host": "aarch64-linux-gnu",
       "disposition": "pinned",
-      "bundle_version": "16.0a13",
+      "bundle_version": "16.0a14",
       "bundle_target": "linux-aarch64",
-      "tor_version": "0.4.9.13",
-      "tarball_sha256": "e1685ff7a531e7b50b77ce231e8be397c835dd2dcb96b2fd8feb02c638acc517",
+      "tor_version": "0.4.9.14",
+      "tarball_sha256": "6c2da4c58b50fb9554f1b1f4f5b23fbdeaf36207baddcd9f90785a854cc04bd2",
       "executable": "tor",
       "files": [
-        { "name": "tor", "sha256": "5ad180229237d10e670ae0475b21d788272da0c13bb89c2617223afcfe3ff477" },
+        { "name": "tor", "sha256": "0acff9cc36f225adf6f068187ec620712ca838ad12c19d69259623effc0ea17b" },
         { "name": "libevent-2.1.so.7", "sha256": "097958f586ffce01273a57557e17062357d92343724e1f112ea61ad8261ce577" },
         { "name": "libssl.so.3", "sha256": "080e70629ffe87e3c5bbbb59bc231da4c5d68100dd6b43b522bcaf8447d85eaf" },
         { "name": "libcrypto.so.3", "sha256": "f50977cdfd82a28ab7ac327daa11841486193888365a149f1409ce5a3b1e61b3" }
@@ -58,14 +67,8 @@
       "arch": "riscv64",
       "gitian_host": "riscv64-linux-gnu",
       "disposition": "unavailable",
-      "reason": "the Tor Project publishes no Expert Bundle for riscv64 Linux"
-    },
-    {
-      "os": "android",
-      "arch": "aarch64",
-      "gitian_host": "aarch64-linux-android",
-      "disposition": "unavailable",
-      "reason": "Shekyl does not manage a Tor process on Android"
+      "reason": "the Tor Project publishes no Expert Bundle for riscv64 Linux",
+      "switched_off": "CA-1"
     },
     {
       "os": "freebsd",
@@ -78,25 +81,64 @@
       "os": "windows",
       "arch": "x86_64",
       "gitian_host": "x86_64-w64-mingw32",
-      "disposition": "unavailable",
-      "reason": "the Windows pin is not adopted until its launch test has run (TB-11)",
-      "pending": "TB-11"
+      "disposition": "pinned",
+      "bundle_version": "15.0.25",
+      "bundle_target": "windows-x86_64",
+      "tor_version": "0.4.9.14",
+      "tarball_sha256": "c1988c701de2f24f7d098d1d6d7f507b58f27740d097f29c246e0524d639b252",
+      "executable": "tor.exe",
+      "files": [
+        { "name": "tor.exe", "sha256": "8c38513b3c4584154158e7c584f4144849dc679a64cd679553d72dad28230c54" }
+      ],
+      "imports": [
+        "ADVAPI32.dll", "CRYPT32.dll", "IPHLPAPI.DLL", "KERNEL32.dll", "SHELL32.dll", "SHLWAPI.dll", "USER32.dll", "WS2_32.dll",
+        "api-ms-win-crt-conio-l1-1-0.dll", "api-ms-win-crt-convert-l1-1-0.dll", "api-ms-win-crt-environment-l1-1-0.dll",
+        "api-ms-win-crt-filesystem-l1-1-0.dll", "api-ms-win-crt-heap-l1-1-0.dll", "api-ms-win-crt-locale-l1-1-0.dll",
+        "api-ms-win-crt-math-l1-1-0.dll", "api-ms-win-crt-private-l1-1-0.dll", "api-ms-win-crt-runtime-l1-1-0.dll",
+        "api-ms-win-crt-stdio-l1-1-0.dll", "api-ms-win-crt-string-l1-1-0.dll", "api-ms-win-crt-time-l1-1-0.dll",
+        "api-ms-win-crt-utility-l1-1-0.dll"
+      ],
+      "licenses": ["docs/tor.txt", "docs/libevent.txt", "docs/openssl.txt", "docs/zlib.txt"]
     },
     {
       "os": "macos",
       "arch": "x86_64",
       "gitian_host": "x86_64-apple-darwin11",
-      "disposition": "unavailable",
-      "reason": "the macOS pin is not adopted until its launch test has run (TB-11)",
-      "pending": "TB-11"
+      "disposition": "pinned",
+      "bundle_version": "15.0.26",
+      "bundle_target": "macos-x86_64",
+      "tor_version": "0.4.9.14",
+      "tarball_sha256": "e1ae4d4a734d28bb590839188511deb3cebc26fcbce9df66d01b2c452060fe95",
+      "executable": "tor",
+      "files": [
+        { "name": "tor", "sha256": "81c00fb8fa85194ad853a9160d8c57029f01aac5e2cdd741b3a057e988a942b9" },
+        { "name": "libevent-2.1.7.dylib", "sha256": "afdbfe863b8dff0d8d23e20073d7f5f1d785fab72df953faa6bc5f2af5933394" }
+      ],
+      "upstream": [
+        { "name": "tor", "sha256": "e249a521aa5b0ff44a39c1dc4b5707ae8cb109d8a26c637b6acbbf6832bf2f14" },
+        { "name": "libevent-2.1.7.dylib", "sha256": "38aea0316e01e1fc52a15941bf523c8bc018ca90655cfa90de568b4a86a82b4b" }
+      ],
+      "licenses": ["docs/tor.txt", "docs/libevent.txt", "docs/openssl.txt"]
     },
     {
       "os": "macos",
       "arch": "aarch64",
       "gitian_host": "aarch64-apple-darwin11",
-      "disposition": "unavailable",
-      "reason": "the macOS pin is not adopted until its launch test has run (TB-11)",
-      "pending": "TB-11"
+      "disposition": "pinned",
+      "bundle_version": "15.0.26",
+      "bundle_target": "macos-aarch64",
+      "tor_version": "0.4.9.14",
+      "tarball_sha256": "a3febb6179152b0b4f56a0f5cc57bf5cc8ecef7db35e7c3e9d5a044c8158c26c",
+      "executable": "tor",
+      "files": [
+        { "name": "tor", "sha256": "23829c8c47c8a13a391d7c0870666d571a65ab71167d0de7b9a560b0a5a76838" },
+        { "name": "libevent-2.1.7.dylib", "sha256": "cc12c96e43d0806e5c1767f6880c96fac3e6d77e7fbc325e47513a4fe1d2eeb2" }
+      ],
+      "upstream": [
+        { "name": "tor", "sha256": "7d5a89b6cec99aab47420040ad86dd5fd5174192e71b6c201b0b10170ba57ebb" },
+        { "name": "libevent-2.1.7.dylib", "sha256": "6dde3faf59255b7cf0cc20d0b3cdf78622266fbf13c534300b8884c76d89b739" }
+      ],
+      "licenses": ["docs/tor.txt", "docs/libevent.txt", "docs/openssl.txt"]
     }
   ]
 }

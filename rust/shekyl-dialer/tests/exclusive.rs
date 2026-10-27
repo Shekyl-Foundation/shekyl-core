@@ -18,10 +18,9 @@ use std::sync::Arc;
 
 use shekyl_dialer::Dialer;
 use shekyl_draw_rng::SplitMix64;
-use shekyl_levin::SupportFlags;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_peerlist::{ConnectorId, NetworkAddress, RefusedSet, Tick};
-use shekyl_seam::{Hub, SyncPayload};
+use shekyl_seam::{Hub, Route, RoutePublish, SyncPayload};
 use shekyl_timing_engine::ManualClock;
 use shekyl_transport_layer::Sockets;
 
@@ -42,7 +41,6 @@ fn dialer() -> Arc<Dialer> {
     let dialer = Arc::new(Dialer::new(
         hub,
         RefusedSet::NON_GLOBAL,
-        SupportFlags::ADVERTISED.bits(),
         Arc::new(|| {
             Some(SyncPayload {
                 current_height: 1,
@@ -53,6 +51,17 @@ fn dialer() -> Arc<Dialer> {
         }),
     ));
     dialer.set_network_id([7; 16]);
+    // The link is usable: the plan draws only then (TSR-F1).
+    assert!(
+        matches!(
+            dialer
+                .hub()
+                .links()
+                .publish_usable(ConnectorId::Clearnet, Route::Direct, Tick::new(1),),
+            RoutePublish::Installed { .. }
+        ),
+        "the test route was not already usable"
+    );
     dialer
 }
 

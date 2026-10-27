@@ -1,8 +1,8 @@
 # Engine cadence driver
 
 **Status: LIVING CONTRACT — implemented 2026-09-07 (legs 1–3 live;
-leg 4 slot registered, body staged per FOLLOWUPS); last verified
-2026-09-07.**
+leg 4 slot registered, body staged per FOLLOWUPS); leg 5, pending
+outcomes, live in #1109; last verified 2026-10-17.**
 
 Ruling of record: `.cursor/plans/wallet_rewrite_audit_cbf7c720.plan.md`
 §"Engine cadence driver" (2026-09-07). This document is the contract of
@@ -27,10 +27,11 @@ surfaces that need one are built and idle:
 - Serving first-publish (`serving/start.rs` / `task.rs`) — one attempt,
   deliberately; a failed start ends the serving lifecycle for the
   session and the remedy is a wallet reopen.
-- Terminal-reject prune / byte-identical resubmit for the
-  claim/drain/release lanes — unbuilt (`docs/FOLLOWUPS.md`
-  "Drain/claim/release dispatch driver" entry), user-visible since PR-C
-  as `-29522 UNSTAKE_FATE_UNKNOWN` with no recovery verb.
+- Byte-identical resubmit for the claim/drain/release lanes — unbuilt
+  (`docs/FOLLOWUPS.md` "Drain/claim/release dispatch driver" entry). Its
+  prune half is the dispatch tick's end-date release
+  (`WALLET_RPC_STAKING_OUTCOMES.md` WR-Q3), which also ends
+  `-29522 UNSTAKE_FATE_UNKNOWN`.
 
 A per-leg scheduler (one timer per concern) is the wrong shape: four
 timers with four ownership stories, four close paths, and four chances
@@ -53,7 +54,7 @@ The rejected-background-sync policy (`engine/mod.rs` §"No wallet-internal
 background sync", WI-1 embedder-held handles) was written when the only
 cadenced work was **principal refresh** — an interactive, user-visible
 catch-up whose progress the embedder must own and render. That premise
-does not extend to the four legs above:
+does not extend to the legs above:
 
 1. None of them is interactive. They are correctness/liveness
    maintenance: a held transaction that is never re-relayed expires; a
@@ -193,7 +194,7 @@ round-trips; it must not run under a merge write-lock
 (`engine/mod.rs:1300–1310`). The driver upgrades its `Weak`, takes
 read locks per leg, and never holds an engine lock across a leg await.
 
-## 3. The four legs
+## 3. The legs
 
 Registered at driver construction. **Order within a tick is fixed:
 retire before assemble** — leg 1 (which releases reservations and
@@ -328,18 +329,32 @@ recorded as a named consumer on the `P` transport row in
 this leg with it. `USER_GUIDE.md` carries the operator-facing
 qualifier.
 
-### Leg 4 — terminal-reject prune / byte-identical resubmit (slot registered now, body unimplemented)
+### Leg 4 — byte-identical resubmit (slot registered, body unimplemented; its prune half landed as the end-date release)
 
 The leg is **registered at construction with an empty body** that
 no-ops and names its debt: the `docs/FOLLOWUPS.md` "Drain/claim/release
-dispatch driver — terminal-reject prune + byte-identical resubmit"
-entry (pre-genesis; the prune half is a security item — the retained
-terminal-reject copy is a replay channel). Registering the slot now is
-the point: when the body lands it inherits this driver's tick,
-ordering, and isolation, and **must not grow its own timer**. The
-empty leg is a STAGED surface with a named consumer (rule 23), not
-dead code; `-29522 UNSTAKE_FATE_UNKNOWN` (PR-C) is the model already
-in production for how its absence is honestly surfaced.
+dispatch driver — byte-identical resubmit remains" entry (pre-genesis).
+The prune half is the dispatch tick's end-date release (`WALLET_RPC_STAKING_OUTCOMES.md` WR-Q3, #1109): every
+claim, drain and exit is released at its end date, past which its
+retained bytes can never be mined, which closes the replay channel the
+retained copy was. Registering the slot now is the point: when the body
+lands it inherits this driver's tick, ordering, and isolation, and
+**must not grow its own timer**. The empty leg is a STAGED surface with
+a named consumer (rule 23), not dead code.
+
+### Leg 5 — pending outcomes (every tick; reads one seal) — live in #1109
+
+Re-derives the `PendingFundsIntegrity` operator alarm
+(`ReservationSpentElsewhere`, lifetime `LatchedRederived`) from the
+durable `spent_elsewhere` outcomes in the sealed pending block
+(`engine/cadence/outcomes.rs`). The outcome is the system of record; the
+dispatch tick writes it when a record reaches its end date with part of
+its reservation spent by another transaction, which nothing outside the
+wallet can do (`WALLET_RPC_STAKING_OUTCOMES.md` WR-Q3). Re-deriving on
+every fire raises the alarm again after a restart and drops it once the
+outcome is acknowledged or replaced. The leg only reads, so it sits
+outside retire-before-assemble; it is registered after leg 4 and before
+leg 3.
 
 ## 4. Claim leg policy
 

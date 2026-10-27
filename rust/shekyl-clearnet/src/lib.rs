@@ -205,12 +205,14 @@ impl<C> Listener<C>
 where
     C: Clock + Clone + Send + Sync + 'static,
 {
-    /// Dial `address`. `proxy` is a SOCKS5 endpoint. `None` connects directly.
+    /// Dial `address`. `proxy` is a SOCKS5 proxy and its pair, if any.
+    /// `None` connects directly.
     ///
     /// The addressing cell is checked first. A name this connector does not
     /// dial is [`CloseKind::LocalClose`] and opens nothing. A SOCKS refusal
-    /// is [`CloseCause::proxy_refused`] with the reply byte.
-    pub fn dial(&self, address: NetworkAddress, proxy: Option<SocketAddr>) {
+    /// is [`CloseCause::proxy_refused`] with the reply byte; a refused
+    /// authentication is [`CloseKind::ProxyUnavailable`].
+    pub fn dial(&self, address: NetworkAddress, proxy: Option<shekyl_socks::Proxy>) {
         let dial = drive::Dial {
             address,
             proxy,

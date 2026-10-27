@@ -23,6 +23,14 @@
 use shekyl_p2p_transport::network_id_from_genesis;
 use shekyl_rpc_types::{genesis_hash_for, DaemonNetwork};
 
+/// The 16-byte id of the network `cryptonote::network_type` code `nettype`
+/// names, for Rust callers; `None` for any other code.
+#[must_use]
+pub fn network_id_of(nettype: u8) -> Option<[u8; 16]> {
+    DaemonNetwork::from_cryptonote(nettype)
+        .map(|net| network_id_from_genesis(&genesis_hash_for(net)))
+}
+
 /// Writes the 16-byte id for `nettype` into `out`. Returns 0, or -1 when
 /// `out` is null or `nettype` is not one of the four networks.
 #[no_mangle]
@@ -30,10 +38,9 @@ pub extern "C" fn shekyl_network_id(nettype: u8, out: *mut u8) -> i32 {
     if out.is_null() {
         return -1;
     }
-    let Some(net) = DaemonNetwork::from_cryptonote(nettype) else {
+    let Some(id) = network_id_of(nettype) else {
         return -1;
     };
-    let id = network_id_from_genesis(&genesis_hash_for(net));
     // The caller asked for 16 bytes and `id` is `[u8; 16]`.
     unsafe { std::ptr::copy_nonoverlapping(id.as_ptr(), out, id.len()) };
     0

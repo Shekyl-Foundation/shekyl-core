@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 //! The p2p-facing read methods — the RK-5a slice of the daemon RPC KV
-//! cutover (`docs/design/DAEMON_RPC_KV_CUTOVER.md` §3.1).
+//! cutover (`docs/completed/DAEMON_RPC_KV_CUTOVER.md` §3.1).
 //!
 //! Single Rust definitions of the wire types `COMMAND_RPC_SYNC_INFO`,
 //! `COMMAND_RPC_GET_NET_STATS`, `COMMAND_RPC_GET_PEER_LIST` and
@@ -226,8 +226,6 @@ pub struct ConnectionInfo {
     pub current_download: u64,
     pub avg_upload: u64,
     pub current_upload: u64,
-    /// JSON null when the strand has not reported the claim.
-    pub support_flags: Option<u32>,
     /// The connection uuid as 32 lowercase hex characters.
     pub connection_id: String,
     /// The peer's claimed blockchain height. JSON null when the strand

@@ -39,7 +39,10 @@
 
 use core::ops::{Range, RangeInclusive};
 use redb::{Key, ReadOnlyTable, ReadTransaction, TableDefinition, Value};
-use shekyl_chain_rules::{AtHeight, RecordedWeights, SlashLogFloor, Tip};
+use shekyl_chain_rules::{
+    AtHeight, BlockDrawsFloor, Claimable, EpochFloor, Pricing, RecordedWeights,
+    ReleaseJournalFloor, Settling, SlashLogFloor, Tip,
+};
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, GlobalOutputIndex, KeyImage, LongTermWeight,
     PCanonicalId, SettlementEpoch, ShardId, TreeLeaf, TreePosition, TxHash,
@@ -58,8 +61,8 @@ use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{BLOCK_BURN, PROPERTIES, SPENT_KEYS, TX_INDICES};
 
 use super::archival_reads::{
-    self, BlockDraws, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, ServedShard,
-    SettlementRow,
+    self, BlockDraws, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest, PassCount,
+    ServedShard, SettlementRow, SupportCount,
 };
 use super::at_index::AtIndex;
 use super::output_reads::{self, RecordedOutput};
@@ -978,26 +981,170 @@ impl ReadSnapshot<'_> {
         &self,
         shard: ShardId,
         epoch: SettlementEpoch,
+        floor: EpochFloor<Pricing>,
     ) -> Result<Option<RMarket>, StoreError> {
-        archival_reads::r_market(&self.txn, shard, epoch)
+        archival_reads::r_market(&self.txn, shard, epoch, floor)
             .map_err(chain_reads::ReadFault::into_plain)
     }
 
     /// **A7.** Frozen `Σwork(E)`, in milli-units. `None` is an epoch that
     /// never closed.
-    pub fn sigma_work(&self, epoch: SettlementEpoch) -> Result<Option<SigmaWorkMilli>, StoreError> {
-        archival_reads::sigma_work(&self.txn, epoch).map_err(chain_reads::ReadFault::into_plain)
+    pub fn sigma_work(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
+    ) -> Result<Option<SigmaWorkMilli>, StoreError> {
+        archival_reads::sigma_work(&self.txn, epoch, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
     }
 
     /// **A8.** Frozen `budget(E)`. `None` is an epoch that never closed.
-    pub fn budget(&self, epoch: SettlementEpoch) -> Result<Option<AtomicUnits>, StoreError> {
-        archival_reads::budget(&self.txn, epoch).map_err(chain_reads::ReadFault::into_plain)
+    pub fn budget(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
+    ) -> Result<Option<AtomicUnits>, StoreError> {
+        archival_reads::budget(&self.txn, epoch, floor).map_err(chain_reads::ReadFault::into_plain)
     }
 
     /// **A9.** Slash watermark ([`ArchivalLastSlashEpochCell`]). `None` is
     /// no epoch settled yet.
     pub fn last_settled_slash_epoch(&self) -> Result<Option<SettlementEpoch>, StoreError> {
         self.get_property::<ArchivalLastSlashEpochCell>()
+    }
+
+    /// Every catalogued table's rows as stored bytes, by table name, in key
+    /// order — the whole file at the byte level, for a **differential**: two
+    /// stores that should hold the same state compared table by table, so a
+    /// difference names its table (`DRS_E5_POOL_ALT_PRUNE.md` a6's
+    /// self-differential: a store that switched A → B against one that
+    /// connected B directly). Not a consensus read and not a digest: no
+    /// rule reads it, and it carries no domain-separated commitment. A
+    /// table absent from the file is absent from the map.
+    ///
+    /// # Errors
+    ///
+    /// Engine errors.
+    pub fn table_rows(&self) -> Result<BTreeMap<&'static str, super::undo::RawRows>, StoreError> {
+        let mut out = BTreeMap::new();
+        for target in crate::schema::undo_targets() {
+            if let Some(rows) = target.raw_rows(&self.txn)? {
+                out.insert(target.name(), rows);
+            }
+        }
+        Ok(out)
+    }
+
+    /// The proof-of-work hash this node recorded for the block at `height`
+    /// (`block_pow`, written by `connect`), under the seed it was computed
+    /// under. [`AtHeight::AboveTip`] past the tip.
+    ///
+    /// # Errors
+    ///
+    /// SI-7 for a recorded height with no row or an undecodable one; engine
+    /// errors.
+    pub fn recorded_pow(
+        &self,
+        height: BlockHeight,
+    ) -> Result<AtHeight<crate::codec::RecordedPow>, StoreError> {
+        match self.tip_row()? {
+            Some((tip, _)) if height.to_raw() <= tip => {}
+            _ => return Ok(AtHeight::AboveTip),
+        }
+        chain_reads::cell(
+            &self.txn,
+            crate::schema::BLOCK_POW,
+            height.to_raw(),
+            "block_pow",
+        )
+        .map_err(chain_reads::ReadFault::into_plain)?
+        .map(AtHeight::Recorded)
+        .ok_or_else(|| {
+            StoreError::InvariantViolated(StoreInvariant::CellCorrupt {
+                key: "block_pow",
+                fault: CellFault::Absent,
+            })
+        })
+    }
+
+    /// **SAL-13.** The recorded block at `height` as the candidate it was:
+    /// the block, every listed transaction's whole wire bytes (`pruned ‖
+    /// pqc_auths ‖ prunable`, [`TxRecord::wire_bytes`]) in the header's
+    /// order, and its attestation witness (A10; CEN-K5b: the witness is
+    /// captured off its height row before the pop). What a switch reads for
+    /// each block it is about to demote, on the snapshot taken before the
+    /// pops (`DRS_E5_POOL_ALT_PRUNE.md` §2.3): the cheap tier judges it, its
+    /// row is written from that verdict, and its listed bodies go back to
+    /// the pool. [`AtHeight::AboveTip`] past the tip.
+    ///
+    /// # Errors
+    ///
+    /// SI-7 when a listed hash has no record, a region a poppable height
+    /// must hold is discarded (the retention prune keeps every body above
+    /// the undo floor, so a body missing there is a store that disagrees
+    /// with its own floor), the reassembled bytes do not parse as a
+    /// transaction, or the witness row is not a witness; whatever
+    /// [`block`](Self::block) and the per-transaction reads return; engine
+    /// errors.
+    pub fn candidate_at(
+        &self,
+        height: BlockHeight,
+    ) -> Result<AtHeight<shekyl_chain_rules::Candidate>, StoreError> {
+        let body = match self.block(height)? {
+            AtHeight::Recorded(body) => body,
+            AtHeight::AboveTip => return Ok(AtHeight::AboveTip),
+        };
+        let corrupt = |key: &'static str, reason: &'static str| {
+            StoreError::InvariantViolated(StoreInvariant::CellCorrupt {
+                key,
+                fault: CellFault::Undecodable(crate::codec::CodecError::Invalid {
+                    codec: "recorded_candidate",
+                    reason,
+                }),
+            })
+        };
+        let mut transactions = Vec::with_capacity(body.block.transaction_hashes.len());
+        for hash in &body.block.transaction_hashes {
+            let Some(record) = self.tx_record(hash)? else {
+                return Err(corrupt(
+                    "tx_indices",
+                    "a listed hash has no recorded transaction",
+                ));
+            };
+            let prunable = match self.tx_prunable(record.location.id)? {
+                AtIndex::Recorded(Prunable::Retained(segment)) => segment,
+                AtIndex::Recorded(Prunable::Discarded) => {
+                    return Err(corrupt(
+                        "txs_prunable",
+                        "a body at a poppable height is discarded",
+                    ))
+                }
+                AtIndex::BeyondCount => {
+                    return Err(corrupt("txs_pruned", "a recorded id is beyond the count"))
+                }
+            };
+            let Some(bytes) = record.wire_bytes(prunable) else {
+                return Err(corrupt(
+                    "txs_pqc_auths",
+                    "a pqc_auths region at a poppable height is discarded",
+                ));
+            };
+            let tx = shekyl_wire::Transaction::read(&mut bytes.as_slice())
+                .map_err(|_| corrupt("txs_pruned", "the reassembled transaction does not parse"))?;
+            transactions.push(tx);
+        }
+        let witness = match self.attestation_witness_at(height)? {
+            AtHeight::Recorded(bytes) => bytes,
+            AtHeight::AboveTip => unreachable!("the block at this height was just read"),
+        };
+        let witness = witness
+            .map(shekyl_types::archival::AttestationWitness::new)
+            .transpose()
+            .map_err(|_| corrupt("archival_attestation_witness", "the row is not a witness"))?;
+        Ok(AtHeight::Recorded(
+            shekyl_chain_rules::Candidate::new(body.block, transactions)
+                .with_attestation_witness(witness),
+        ))
     }
 
     /// **A10.** Attestation witness bytes, unparsed. [`AtHeight::AboveTip`]
@@ -1025,8 +1172,9 @@ impl ReadSnapshot<'_> {
         persona: &PCanonicalId,
         shard: ShardId,
         epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
     ) -> Result<bool, StoreError> {
-        archival_reads::slash_applied(&self.txn, persona, shard, epoch)
+        archival_reads::slash_applied(&self.txn, persona, shard, epoch, floor)
             .map_err(chain_reads::ReadFault::into_plain)
     }
 
@@ -1047,20 +1195,52 @@ impl ReadSnapshot<'_> {
         persona: &PCanonicalId,
         shard: ShardId,
         epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
     ) -> Result<Option<SettlementRow>, StoreError> {
-        archival_reads::settlement_row(&self.txn, persona, shard, epoch)
+        archival_reads::settlement_row(&self.txn, persona, shard, epoch, floor)
             .map_err(chain_reads::ReadFault::into_plain)
     }
 
     /// **A15.** Every draw issued in `epoch`, in `(P, shard, h, j)` order.
-    pub fn issued_draws(&self, epoch: SettlementEpoch) -> Result<Vec<IndexedDraw>, StoreError> {
-        archival_reads::issued_draws(&self.txn, epoch).map_err(chain_reads::ReadFault::into_plain)
+    pub fn issued_draws(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
+    ) -> Result<Vec<IndexedDraw>, StoreError> {
+        archival_reads::issued_draws(&self.txn, epoch, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// Every support draw issued in `epoch`, in `(P, h, j)` order.
+    pub fn support_issued(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
+    ) -> Result<Vec<IndexedDraw>, StoreError> {
+        archival_reads::support_issued(&self.txn, epoch, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// The support row `(persona, epoch)`. `None` is no row, not a miss.
+    pub fn support_settlement(
+        &self,
+        persona: &PCanonicalId,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
+    ) -> Result<Option<SettlementRow>, StoreError> {
+        archival_reads::support_settlement(&self.txn, persona, epoch, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
     }
 
     /// **A16.** The running digest of the draws issued in `epoch`;
     /// [`IssuedDigest::ZERO`] when none was.
-    pub fn issued_digest(&self, epoch: SettlementEpoch) -> Result<IssuedDigest, StoreError> {
-        archival_reads::issued_digest(&self.txn, epoch).map_err(chain_reads::ReadFault::into_plain)
+    pub fn issued_digest(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
+    ) -> Result<IssuedDigest, StoreError> {
+        archival_reads::issued_digest(&self.txn, epoch, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
     }
 
     /// **A17.** The shards `persona` was Served on at each of `epochs`,
@@ -1070,15 +1250,34 @@ impl ReadSnapshot<'_> {
         &self,
         persona: &PCanonicalId,
         epochs: &BTreeSet<SettlementEpoch>,
+        floor: EpochFloor<Claimable>,
     ) -> Result<BTreeMap<SettlementEpoch, Vec<ShardId>>, StoreError> {
-        archival_reads::served_at(&self.txn, persona, epochs)
+        archival_reads::served_at(&self.txn, persona, epochs, floor)
             .map_err(chain_reads::ReadFault::into_plain)
     }
 
     /// **A18.** What the draw's count rule recorded for the block at
     /// `height`, or `None` for a block no row was written for.
-    pub fn block_draws(&self, height: BlockHeight) -> Result<Option<BlockDraws>, StoreError> {
-        archival_reads::block_draws(&self.txn, height).map_err(chain_reads::ReadFault::into_plain)
+    pub fn block_draws(
+        &self,
+        height: BlockHeight,
+        floor: BlockDrawsFloor,
+    ) -> Result<Option<BlockDraws>, StoreError> {
+        archival_reads::block_draws(&self.txn, height, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A23.** How many support draws the block at `height` issued, or
+    /// `None` for a block no row was written for. [`SupportCount::NONE`]
+    /// is a block that issued none. A height below `floor` is SI-34, the
+    /// same window as [`Self::block_draws`].
+    pub fn support_block_count(
+        &self,
+        height: BlockHeight,
+        floor: BlockDrawsFloor,
+    ) -> Result<Option<SupportCount>, StoreError> {
+        archival_reads::support_block_count(&self.txn, height, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
     }
 
     /// **A19.** The digest of `epoch`'s drawable set as written at its
@@ -1087,8 +1286,46 @@ impl ReadSnapshot<'_> {
     pub fn drawable_digest(
         &self,
         epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
     ) -> Result<Option<DrawableDigest>, StoreError> {
-        archival_reads::drawable_digest(&self.txn, epoch)
+        archival_reads::drawable_digest(&self.txn, epoch, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A22.** The complete trees `epoch`'s slash pass excluded from its
+    /// market, as frozen beside `Σwork(E)`, or `None` for an epoch not
+    /// settled. An empty set is a value.
+    pub fn complete_trees(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
+    ) -> Result<Option<CompleteTreeSet>, StoreError> {
+        archival_reads::complete_trees(&self.txn, epoch, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A20.** Every Release journaled strictly above `height`, ascending
+    /// by height and then persona, each with the record it replaced.
+    /// `floor` is the journal's ([`ReleaseJournalFloor`]); a range starting
+    /// below it is SI-28, not an empty answer.
+    pub fn release_journal_after(
+        &self,
+        height: BlockHeight,
+        floor: ReleaseJournalFloor,
+    ) -> Result<Vec<archival_reads::ReleasedRecord>, StoreError> {
+        archival_reads::release_journal_after(&self.txn, height, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A21.** Every slash logged strictly above `height`, every
+    /// persona's, in log order, each with its height. A range starting
+    /// below `floor` is SI-26, as for A2.
+    pub fn slash_log_rows_after(
+        &self,
+        height: BlockHeight,
+        floor: SlashLogFloor,
+    ) -> Result<Vec<archival_reads::LoggedSlash>, StoreError> {
+        archival_reads::slash_log_rows_after(&self.txn, height, floor)
             .map_err(chain_reads::ReadFault::into_plain)
     }
 

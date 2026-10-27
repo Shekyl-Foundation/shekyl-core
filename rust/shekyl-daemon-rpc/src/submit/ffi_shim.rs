@@ -23,9 +23,9 @@ use crate::ffi;
 use crate::submit::certificate::VerificationCertificate;
 use crate::submit::facts::{
     BondProbe, CommitOutcome, EmissionBondFacts, EmissionCloseBondFacts, EmissionCreditPairFacts,
-    EmissionEpochSnapshotFacts, EmissionFacts, EmissionShardFacts, KeyImageConflict,
-    ReferenceFacts, ReleaseFacts, ReleaseRecordFacts, ShimFault, SubmitFacts, SubmitStateShim,
-    TxMeta,
+    EmissionEpochSnapshotFacts, EmissionFacts, EmissionShardFacts, EpochClaimStanding,
+    KeyImageConflict, ReferenceFacts, ReleaseFacts, ReleaseRecordFacts, ShimFault, SubmitFacts,
+    SubmitStateShim, TxMeta,
 };
 use shekyl_archival_retention::{
     BadInterval, HoldingsDescriptor, HoldingsKind, LastServedScan, ShardClose, ShardCloseWire,
@@ -90,7 +90,8 @@ fn facts_from_ffi(
         key_image_conflicts,
         reference,
         fee_per_byte: pod.fee_per_byte,
-        fee_quantization_mask: pod.fee_quantization_mask,
+        fee_floor_window: None,
+        pool_refuses_for_room: None,
         weight_limit: pod.weight_limit,
         chain_height: ChainCount::from_raw(pod.chain_height),
         // bond_record_exists is valid iff the BP3 probe ran (§8.7.1) —
@@ -269,7 +270,7 @@ unsafe fn emission_facts_from_ffi(view: &ffi::SubmitEmissionFactsFfi) -> Result<
         for b in unsafe { slice(snap.bonds, snap.bonds_len) }? {
             bonds.push(EmissionCloseBondFacts {
                 join_settlement_epoch: b.join_settlement_epoch,
-                is_foundation_complete_tree: b.is_foundation_complete_tree != 0,
+                is_support_complete_tree: b.is_support_complete_tree != 0,
                 bad_intervals: unsafe {
                     // Flattened (start, end_exclusive) pairs: 2 × len u64s;
                     // the pair count is C++-supplied, so the doubling is
@@ -306,7 +307,11 @@ unsafe fn emission_facts_from_ffi(view: &ffi::SubmitEmissionFactsFfi) -> Result<
             })
             .collect();
         snapshots.push(EmissionEpochSnapshotFacts {
-            has_budget_row: snap.has_budget_row != 0,
+            standing: if snap.has_budget_row != 0 {
+                EpochClaimStanding::BudgetFrozen
+            } else {
+                EpochClaimStanding::NoBudgetRow
+            },
             settlement_epoch: snap.settlement_epoch,
             close_block_height: snap.close_block_height,
             sigma_work_milli: snap.sigma_work_milli,
@@ -318,7 +323,13 @@ unsafe fn emission_facts_from_ffi(view: &ffi::SubmitEmissionFactsFfi) -> Result<
             credit_pairs,
         });
     }
-    Ok(EmissionFacts { bond, snapshots })
+    // The C++ marshal holds no rule set; the process schedule is the one
+    // its store and its claims battery have always run under.
+    Ok(EmissionFacts {
+        bond,
+        snapshots,
+        schedule: shekyl_archival_retention::SettlementSchedule::effective(),
+    })
 }
 
 /// A slice's data pointer, or NULL when the slice is empty. The C++ submit
@@ -608,8 +619,8 @@ mod tests {
             ref_height: 150,
             root: [0xAA; 32],
             fee_per_byte: 7,
-            fee_quantization_mask: 10,
-            weight_limit: 149_400,
+            weight_limit: u64::try_from(shekyl_wire::transaction::TX_WEIGHT_LIMIT)
+                .expect("the weight limit fits u64"),
             chain_height: 200,
             in_chain_height: 0,
             bond_record_bonded_total: 0,

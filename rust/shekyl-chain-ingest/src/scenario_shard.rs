@@ -71,6 +71,10 @@ pub fn levered_schedule() -> SettlementSchedule {
     SettlementSchedule::new(SettlementEpochBlocks::new(EPOCH_BLOCKS).expect("non-zero"))
 }
 
+/// Coinbases a shard fill spends from. Those below it stay for the posts
+/// that ride the chain: a join spends coinbase 0.
+pub const FILL_FROM_COINBASE: u64 = 10;
+
 /// Spends listed per fill block. One driven coinbase spend measures about
 /// 13.2 KB of archival good and a little more on the wire; sixteen sit
 /// near 230 KB, under the 300,000-byte full-reward zone with room for the

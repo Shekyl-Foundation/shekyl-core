@@ -325,7 +325,7 @@ C++ it describes:
   | `gen_simple_chain_001` (`chaingen001.cpp`) | user txs across rewinds and a side block | 2026-05-05 | **no test**; buildable on `regtest_e2e` (Engine spend + `generateblocks`); owner E2 corpus |
   | `gen_simple_chain_split_1` (`chain_split_1`) | reorg with user txs in the switched-out branch | 2026-05-05 | **no test**; same home |
   | `gen_chain_switch_1` (`chain_switch_1`) | chain switch with txs in both branches, txpool return | 2026-05-05 | **no test**; same home |
-  | `gen_block_reward` (`block_reward`) | reward with fee-paying txs in the block | 2026-05-05 | **no test** with user txs; coinbase-only reward is `economics_c2a_prime_layer3_pop_replay` (enabled) |
+  | `gen_block_reward` (`block_reward`) | reward with fee-paying txs in the block | 2026-05-05 | **no test** with user txs; coinbase-only reward is pinned in Rust (`reward_tests.rs` `the_verdict_carries_the_paid_emission`) |
   | `gen_uint_overflow_1/2` (`integer_overflow`) | input/output amount overflow in a user tx | 2026-05-05 | **no C++ test**; amount arithmetic is checked in Rust (`shekyl-wire` validation, `shekyl-ct-balance`); a chain-level case is the E2 corpus's |
   | `test_transaction_generation_and_ring_signature`, `test_block_creation` (`transaction_tests.cpp`, `--test_transactions`) | serialize → parse round trip of a built tx / block | never run by CTest or CI | `shekyl-wire` `coinbase_roundtrip.rs`, `fcmp_spend_roundtrip.rs`, `coinbase_hash.rs` (daemon-oracle hashes) |
   | 16 `gen_bpp_*` (`bulletproof_plus`) | Monero BP+ hard-fork ladder (`HF_VERSION_BULLETPROOF_PLUS - 1`, proof counts, wrong amount) | never enabled; rule 60 | BP+ verification with no fork ladder: `shekyl-bulletproofs` tests; `fcmp_spend_e2e.rs` (Bp+ + CT balance on a real spend) |

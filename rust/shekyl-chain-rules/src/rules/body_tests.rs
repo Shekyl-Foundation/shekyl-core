@@ -17,10 +17,14 @@
 use super::*;
 use crate::block::Candidate;
 use crate::fault::FormAttempt;
+use crate::harness::fixture::signed;
 use crate::harness::fixture::{
-    self, anchored_on, candidate, candidate_on, listed, listed_on, point_at, spend, spendable_chain,
+    self, anchored_on, candidate, candidate_on, listed, listed_on, point, point_at, spend,
+    spendable_chain,
 };
-use crate::harness::{assert_refused, defined, formed_on, judged, Faulted, MockSubstrate};
+use crate::harness::{
+    assert_refused, defined, expected_target, formed_on, judged, Faulted, MockChain, MockSubstrate,
+};
 use crate::rule_set::RuleSet;
 use crate::trust::Trust;
 use crate::validate::{form, validate};
@@ -29,9 +33,18 @@ use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_
 use shekyl_types::{BlockHash, KeyImage};
 use shekyl_wire::{BondPost, BondPostKind, Holdings};
 
-/// Three distinct listed bodies, the header declaring exactly them.
+/// Three distinct listed bodies, the header declaring exactly them. Their
+/// key images are points (CEN-H11), so `form`'s transaction stage admits
+/// them and the stage's verdict is G2's to give.
+/// Three signed bodies: `form` runs the signature sequence (CEN-I17/I18)
+/// at every listed slot since 2026-10-16, so a body it admits is a signed
+/// one. Unanchored — the reference rows are `validate`'s.
 fn three_bodies() -> Candidate {
-    candidate(vec![listed([1; 32]), listed([2; 32]), listed([3; 32])])
+    candidate(vec![
+        signed(listed(point(1))),
+        signed(listed(point(2))),
+        signed(listed(point(3))),
+    ])
 }
 
 fn check(candidate: &Candidate) -> Verdict<()> {
@@ -45,6 +58,8 @@ fn form_judges(candidate: Candidate) -> Verdict<RuleCoverage> {
         &RuleSet::GENESIS,
         &MockSubstrate::default(),
         BlockHash::NULL,
+        expected_target(&MockChain::default(), &RuleSet::GENESIS),
+        &crate::block::ReferenceClaims::EMPTY,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => Ok(*formed.coverage()),
@@ -147,7 +162,7 @@ fn check_alone_on<R: BlockRule>(
     chain: &crate::harness::MockChain,
     candidate: &Candidate,
 ) -> Verdict<()> {
-    let formed = formed_on(chain, candidate.clone());
+    let formed = crate::harness::token_for_one_rule(chain, candidate.clone());
     chain.with_view(|view| {
         defined(R::check(
             &BlockContext::for_tests(&formed, chain.tip(), None),
@@ -462,6 +477,116 @@ fn cen_g10_two_bond_posts_for_one_p_are_refused_whatever_their_kinds() {
         ],
     );
     check_alone_on::<G10>(&chain, &block).expect("one bond post per P passes G10");
+}
+
+/// The first body [`BlockArchivalKeys`] refuses when `bodies` are added in
+/// order, with its row.
+fn first_refused_added(bodies: &[Transaction]) -> Option<(usize, CenRow)> {
+    let mut keys = BlockArchivalKeys::default();
+    bodies
+        .iter()
+        .enumerate()
+        .find_map(|(n, tx)| keys.add(tx).err().map(|row| (n, row)))
+}
+
+/// The accumulator a block filler asks is the three rows asked one body at
+/// a time: on the G7, G9 and G10 blocks above it refuses the body the row
+/// refuses, on the row's name, and admits each control block whole. A
+/// refused body adds nothing, so a body after it that collides only with
+/// the refused one is admitted.
+#[test]
+fn the_block_archival_keys_refuse_the_body_the_block_rows_refuse() {
+    let join = || BondPostKind::JoinMarket {
+        bond_spend_pk: vec![0xb3; SINGLE_KEY_CANONICAL_LEN],
+        receipt_sign_pk: shekyl_types::archival::ReceiptSignPk::from_bytes(
+            [0x5c; shekyl_types::archival::RECEIPT_SIGN_PK_LEN],
+        ),
+        endpoint: [0xe0; shekyl_wire::transaction::BOND_POST_ENDPOINT_LEN],
+    };
+    let refused = [
+        (
+            vec![
+                body_with(vec![serve_credit_vin(P1, 7, 11)]),
+                body_with(vec![
+                    serve_credit_vin(P1, 8, 11),
+                    serve_credit_vin(P1, 7, 11),
+                ]),
+            ],
+            CenRow::G7,
+        ),
+        (
+            vec![
+                body_with(vec![emission_vin(0xa1, &[11, 12])]),
+                body_with(vec![emission_vin(0xa1, &[12])]),
+            ],
+            CenRow::G9,
+        ),
+        (
+            vec![
+                body_with(vec![bond_post_vin(P1, join())]),
+                body_with(vec![
+                    bond_post_vin(P2, join()),
+                    bond_post_vin(P1, BondPostKind::Other(2)),
+                ]),
+            ],
+            CenRow::G10,
+        ),
+    ];
+    let chain = spendable_chain();
+    for (bodies, row) in refused {
+        let block = candidate_on(&chain, bodies.clone());
+        let by_row = match row {
+            CenRow::G7 => check_alone_on::<G7>(&chain, &block),
+            CenRow::G9 => check_alone_on::<G9>(&chain, &block),
+            _ => check_alone_on::<G10>(&chain, &block),
+        };
+        let refusal = by_row.expect_err("the block row refuses the block");
+        assert_eq!(refusal.rule, row);
+        assert!(matches!(
+            refusal.locus,
+            Locus::Input {
+                slot: TxSlot::Listed(1),
+                ..
+            }
+        ));
+        assert_eq!(first_refused_added(&bodies), Some((1, row)), "{row:?}");
+    }
+    let admitted = [
+        vec![
+            body_with(vec![serve_credit_vin(P1, 7, 11)]),
+            body_with(vec![
+                serve_credit_vin(P1, 8, 11),
+                serve_credit_vin(P1, 7, 12),
+                serve_credit_vin(P2, 7, 11),
+            ]),
+        ],
+        vec![
+            body_with(vec![emission_vin(0xa1, &[11])]),
+            body_with(vec![emission_vin(0xa1, &[12])]),
+            body_with(vec![emission_vin(0xa2, &[11])]),
+        ],
+        vec![
+            body_with(vec![bond_post_vin(P1, join())]),
+            body_with(vec![bond_post_vin(P2, BondPostKind::Other(2))]),
+        ],
+        vec![listed_on(&chain, point_at(60))],
+    ];
+    for bodies in admitted {
+        assert_eq!(first_refused_added(&bodies), None);
+    }
+    // The refused body's P2 post was not added: P2's own post is admitted.
+    let mut keys = BlockArchivalKeys::default();
+    keys.add(&body_with(vec![bond_post_vin(P1, join())]))
+        .expect("the first post");
+    assert_eq!(
+        keys.add(&body_with(vec![
+            bond_post_vin(P2, join()),
+            bond_post_vin(P1, BondPostKind::Other(2)),
+        ])),
+        Err(CenRow::G10)
+    );
+    keys.add(&body_with(vec![bond_post_vin(P2, join())]))
+        .expect("a refused body adds nothing");
 }
 
 #[test]

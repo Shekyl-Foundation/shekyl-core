@@ -27,23 +27,18 @@
 # THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 set(core_tests_sources
-  archival_budget_conservation.cpp
   block_validation.cpp
   checkpoint_conflict_rollback.cpp
   chaingen.cpp
   chaingen001.cpp
   chaingen_main.cpp
-  economics_c2a_prime.cpp
   reorg_watermark_degraded.cpp)
 
 set(core_tests_headers
-  archival_budget_conservation.h
   block_validation.h
   checkpoint_conflict_rollback.h
   chaingen.h
   chaingen_tests_list.h
-  economics_c2a_prime.h
-  economics_chain_helpers.h
   reorg_watermark_degraded.h)
 
 monero_add_minimal_executable(core_tests
@@ -58,6 +53,11 @@ target_link_libraries(core_tests
     device
     ${CMAKE_THREAD_LIBS_INIT}
     ${EXTRA_LIBRARIES})
+# The snapshot this binary constructs the core from comes from the real
+# Rust parse (`shekyl_daemon_snapshot_parse`), which lives in the ordinary
+# library (libshekyl_ffi.a, `daemon_snapshot_ffi.rs`): this binary links
+# no daemon image, so none of the daemon RPC's C++ imports reach its link
+# (Rick, 2026-10-19; the MinGW link of 2026-10-19).
 enable_stack_trace(core_tests)
 set_property(TARGET core_tests
   PROPERTY

@@ -166,13 +166,14 @@ use shekyl_types::{
 use shekyl_units::AtomicUnits;
 
 use crate::codec::{
-    AltBlock, AttestationWitnessBytes, Blob, BlockBody, BlockDraws, BlockInfo, BondRecord, Coded,
-    CurveTreeState, DrawableDigest, IssuedDigest, IssuedDraw, LayerHash, LeafCount, OutKey, OutTx,
-    Present, PropertyCellBytes, RMarket, RuleSetInForce, SettlementRow, SigmaWorkMilli,
-    SlashLogEntry, TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment,
-    UndoLog, Unshaped,
+    AltBlock, AltBodies, AttestationWitnessBytes, Blob, BlockBody, BlockDraws, BlockInfo,
+    BondRecord, Coded, CompleteTreeSet, CurveTreeState, DrawableDigest, IssuedDigest, IssuedDraw,
+    LayerHash, LeafCount, OutKey, OutTx, Present, PropertyCellBytes, QueuedBody, QueuedBundle,
+    RMarket, RecordedPow, RuleSetInForce, SettlementRow, SigmaWorkMilli, SlashLogEntry,
+    SupportCount, SupportIssued, TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment,
+    TxPrunedSegment, UndoLog, Unshaped,
 };
-use crate::ids::IssuedDrawTuple;
+use crate::ids::{IssuedDrawTuple, ReleaseJournalTuple, SupportIssuedTuple};
 use crate::lmdb_order::LmdbHashKey;
 use crate::store::undo::UndoTarget;
 
@@ -219,6 +220,11 @@ pub fn ordinal_of(name: &str) -> Option<TableOrdinal> {
         .position(|target| target.name() == name)
         .and_then(|i| u32::try_from(i).ok())
         .map(TableOrdinal)
+}
+
+/// Every table as the journal replays into it, in catalogue order.
+pub(crate) fn undo_targets() -> &'static [&'static dyn UndoTarget] {
+    UNDO_TARGETS
 }
 
 /// The table `ordinal` names, as the journal replays into it.
@@ -299,7 +305,10 @@ pub const NOT_PORTED: &[(&str, &str)] = &[
         "archival_bond_unbond_log",
         "held by `undo_log`, as the record's and the total's pre-images: the C++ pop journal \
          for a Release (db_lmdb.cpp:6198, `release_pop` reconstructs the pre-image) rebuilt \
-         what the log stores outright, and the pop fold has no caller (DRS-E4 ARW-2, ARW-Q2)",
+         what the log stores outright, and the pop fold has no caller (DRS-E4 ARW-2, ARW-Q2). \
+         The record's pre-image is also kept past the undo window, as history, by the Rust-only \
+         archival_release_journal: a different key and retention, read by the walk that \
+         rebuilds an epoch's drawable set and never by pop (SO-D12 increment 2)",
     ),
     (
         "archival_bond_holdings_update_log",
@@ -439,6 +448,84 @@ pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[
          with a re-walk when it settles (SO-D8d layer 2, SO-D10g): the store's guard that the \
          set a draw's index was resolved against has not drifted. The set itself is never \
          stored. Absent from LMDB for the reason archival_block_draws is",
+    ),
+    (
+        "block_pow",
+        "the proof-of-work hash this node computed for each recorded block, under the seed it \
+         was checked under (DRS-E5, 2026-10-15 ruling 3): a derived fact recorded beside the \
+         block as its cumulative difficulty is, so a reorganization re-judges a block this node \
+         already hashed without RandomX. The C++ kept a transient precompute table and no \
+         per-block record, so LMDB never holds it. Out of the digest domain: a function of the \
+         block the digest's hashes already fold",
+    ),
+    (
+        "alt_block_bodies",
+        "an alternative block's listed bodies, keyed as its alt_blocks row is (DRS-E5 PR-b, the \
+         review of #1102's B1): consensus data a switch connects at promotion, written by AL1 \
+         from the cheap tier's verdict and removed with the row. The C++ held them in the \
+         transaction pool under kept_by_block, a store this node prunes by local policy, so \
+         LMDB never holds them. Not chain state: Excluded from every digest, as alt_blocks is",
+    ),
+    (
+        "archival_release_journal",
+        "each Release's pre-image, the bond record as it stood before the Release emptied its \
+         holdings, keyed by the releasing height and persona and retired one above \
+         h_open of the settling family's oldest kept epoch (SO-D12h): the walk that \
+         rebuilds an epoch's drawable set at its settlement, two \
+         epochs after it opened, restores it, as it gives back the shards the slash log says \
+         were taken. The undo log holds the same pre-image only for its window. The C++ \
+         archival_bond_unbond_log is a pop journal with no reader past pop (NOT_PORTED), so \
+         LMDB holds nothing a reader past the window can use",
+    ),
+    (
+        "archival_complete_trees",
+        "the personas each settled epoch's slash pass excluded from the epoch's market as \
+         complete trees (ARCHIVAL_SETTLEMENT_WRITER.md SO-D12h): the record does not keep the \
+         fact, since a complete tree slashed or released afterwards holds a compact set, so a \
+         claim's re-gather reads the flag here. The C++ gathers at the epoch close and reads \
+         the records as they are now, so LMDB never holds it",
+    ),
+    (
+        "archival_support_unissued",
+        "one complete tree's unissued support draws in one epoch, capped at c \
+         (ARCHIVAL_SUPPORT_DRAW.md §5): a scheduled block the producer did not file. It is not \
+         the economy's shortfall and it is not issued_short. The C++ draws no support stream, \
+         so LMDB never holds it",
+    ),
+    (
+        "archival_support_block",
+        "how many support draws one block issued (ARCHIVAL_SUPPORT_DRAW.md §5): the width of \
+         that block's support bitmap. An unanswered draw is not in this count. The C++ draws \
+         no support stream, so LMDB never holds it",
+    ),
+    (
+        "archival_support_issued",
+        "one complete tree's issued support draws in one epoch (ARCHIVAL_SUPPORT_DRAW.md §3): \
+         the shard each draw selected and whether a pass was admitted. The settlement row is \
+         one per tree, so the shard is the value. The C++ draws no support stream, so LMDB \
+         never holds it",
+    ),
+    (
+        "archival_support_settlement",
+        "what one complete tree settled for one epoch (ARCHIVAL_SUPPORT_DRAW.md §3): the same \
+         three-byte settlement row the economy writes per pair. Keyed by the tree and the \
+         epoch, not by a shard. The C++ draws no support stream, so LMDB never holds it",
+    ),
+    (
+        "archival_bundle_queue",
+        "the pool's own structure for serve-credit bundles (ARCHIVAL_SERVE_CREDIT_SPEC.md §7.5, \
+         SO-D12 increment 4c): one admitted bundle reference per block height inside the \
+         response window, with the tip it was judged against. The C++ has no bundle and no \
+         queue: its challenge path is the public urn deleted with its consensus role \
+         (DEL-008), so LMDB never holds it. Not chain state: Excluded from every digest, as \
+         alt_blocks is",
+    ),
+    (
+        "archival_bundle_body",
+        "a bundle's prunable bytes keyed by the hash its reference names (§7.5): a block will \
+         carry references, never bodies, and pull a body from here by that hash. Every body \
+         has a holder (SI-41). Absent from LMDB for the reason archival_bundle_queue is. Not \
+         chain state: Excluded from every digest",
     ),
 ];
 
@@ -761,10 +848,13 @@ tables! {
     /// `archival_block_draws` — **Rust-only** ([`RUST_ONLY_TABLES`]);
     /// height → the [`BlockDraws`] the count rule recorded for that block
     /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4.3, §10). Written when the block
-    /// connects; its `revealed` flag is set by the block that first admits
-    /// the seed. No block writes it until admission lands (`SO-D12`,
-    /// increment 3), so a height with no row is a block the rule has not
-    /// run for. Appended last but one (ordinal 40).
+    /// connects (`SO-D12` increment 3). `issued_short` is the shortfall
+    /// this block's own admissions reduce: zero in this increment, written
+    /// by admission (increment 4) in this block's batch, and what the next
+    /// block reads off as `shortfall − issued_short`. `revealed` is set by
+    /// a later block, the one that admits this height's seed. A height
+    /// with no row is a block the rule has not run for. Appended last but
+    /// one (ordinal 40).
     pub const ARCHIVAL_BLOCK_DRAWS: TableDefinition<u64, Coded<BlockDraws>> =
         TableDefinition::new("archival_block_draws");
 
@@ -776,6 +866,102 @@ tables! {
     /// (ordinal 41).
     pub const ARCHIVAL_DRAWABLE_DIGEST: TableDefinition<u64, Coded<DrawableDigest>> =
         TableDefinition::new("archival_drawable_digest");
+
+    /// `block_pow` — **Rust-only** ([`RUST_ONLY_TABLES`]); height → the
+    /// [`RecordedPow`] the verdict carried: the proof-of-work hash this
+    /// node computed under the block's seed and accepted, written by
+    /// `connect` beside `block_info` (insert-once, SI-2's handle) and
+    /// reversed by `pop` through the journal. Read by the switch to re-form
+    /// a block without hashing it again (`DRS_E5_POOL_ALT_PRUNE.md`
+    /// 2026-10-15 ruling 3). Appended last (ordinal 42).
+    pub const BLOCK_POW: TableDefinition<u64, Coded<RecordedPow>> =
+        TableDefinition::new("block_pow");
+
+    /// `alt_block_bodies` — **Rust-only** ([`RUST_ONLY_TABLES`]); key order
+    /// `compare_hash32`, as `alt_blocks`; block hash → the alternative
+    /// block's listed bodies ([`AltBodies`]). Written by AL1 beside the
+    /// `alt_blocks` row, removed by AL2 and AL3 with it, read by AL8 when a
+    /// switch promotes the block. Not chain state (§11.2), written outside
+    /// any pop recording. Ordinal 43.
+    pub const ALT_BLOCK_BODIES: TableDefinition<LmdbHashKey, Coded<AltBodies>> =
+        TableDefinition::new("alt_block_bodies");
+
+    /// `archival_release_journal` — **Rust-only** ([`RUST_ONLY_TABLES`]);
+    /// `(height, persona)` → the [`BondRecord`] a Release at that height
+    /// replaced, exactly as it stood before the Release arm changed it.
+    /// Written insert-once by `connect` beside the record's post-image and
+    /// reversed by `pop` through the journal; retired one above `h_open` of
+    /// the settling family's oldest kept epoch
+    /// ([`shekyl_chain_rules::ReleaseJournalFloor`], SI-28), inside the
+    /// slash log's window. The slash log keeps its own floor (A21);
+    /// this journal is the one A20 reads (`SO-D12` increment 2,
+    /// `SO-D12h`). Appended last but one (ordinal 44).
+    pub const ARCHIVAL_RELEASE_JOURNAL: TableDefinition<ReleaseJournalTuple, Coded<BondRecord>> =
+        TableDefinition::new("archival_release_journal");
+
+    /// `archival_complete_trees` — **Rust-only** ([`RUST_ONLY_TABLES`]);
+    /// epoch → the [`CompleteTreeSet`] its slash pass excluded from the
+    /// market as complete trees (`ARCHIVAL_SETTLEMENT_WRITER.md`
+    /// `SO-D12h`). Written by the pass beside `archival_sigma_work[E]`,
+    /// insert-once and whole (SI-21, SI-31), the empty set included, and
+    /// reversed by `pop` through the journal. A claim's re-gather reads it
+    /// for every bond's complete-tree flag (A22). An epoch with no row was
+    /// not settled. Appended last (ordinal 45).
+    pub const ARCHIVAL_COMPLETE_TREES: TableDefinition<u64, Coded<CompleteTreeSet>> =
+        TableDefinition::new("archival_complete_trees");
+
+    /// `archival_support_unissued` — **Rust-only** ([`RUST_ONLY_TABLES`]);
+    /// `(persona, epoch)` → the [`SupportCount`] of support draws scheduled
+    /// for that tree in that epoch and not filed, capped at `c`
+    /// (`ARCHIVAL_SUPPORT_DRAW.md` §5). Not the economy's shortfall.
+    /// Appended last but one (ordinal 46).
+    pub const ARCHIVAL_SUPPORT_UNISSUED: TableDefinition<([u8; 32], u64), Coded<SupportCount>> =
+        TableDefinition::new("archival_support_unissued");
+
+    /// `archival_support_block` — **Rust-only** ([`RUST_ONLY_TABLES`]);
+    /// height → the [`SupportCount`] of support draws that block issued,
+    /// the width of its support bitmap. Written when the block connects,
+    /// insert-once (SI-40), the zero included: a block that issued none
+    /// still has a row. A height with no row was not connected. Retired
+    /// with [`ARCHIVAL_BLOCK_DRAWS`] on the draw rows' floor (SI-34).
+    /// Ordinal 47.
+    pub const ARCHIVAL_SUPPORT_BLOCK: TableDefinition<u64, Coded<SupportCount>> =
+        TableDefinition::new("archival_support_block");
+
+    /// `archival_support_issued` — **Rust-only** ([`RUST_ONLY_TABLES`]);
+    /// `(epoch, persona, height, draw)` → the [`SupportIssued`] row: the
+    /// shard the draw selected and whether a pass was admitted
+    /// (`ARCHIVAL_SUPPORT_DRAW.md` §3). Epoch-major, so one tree's epoch
+    /// is one range in `(height, draw)` order. Appended (ordinal 48).
+    pub const ARCHIVAL_SUPPORT_ISSUED: TableDefinition<SupportIssuedTuple, Coded<SupportIssued>> =
+        TableDefinition::new("archival_support_issued");
+
+    /// `archival_support_settlement` — **Rust-only** ([`RUST_ONLY_TABLES`]);
+    /// `(persona, epoch)` → the [`SettlementRow`] of that tree in that
+    /// epoch. One row per tree, not per shard. Written by the slash pass
+    /// (`ARCHIVAL_SUPPORT_DRAW.md` §3). Ordinal 49.
+    pub const ARCHIVAL_SUPPORT_SETTLEMENT: TableDefinition<([u8; 32], u64), Coded<SettlementRow>> =
+        TableDefinition::new("archival_support_settlement");
+
+    /// `archival_bundle_queue` — **Rust-only** ([`RUST_ONLY_TABLES`]);
+    /// height `h` → the [`QueuedBundle`]: the reference of the one bundle
+    /// for `h` the queue admitted, and the tip it judged it against
+    /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5, `SO-D12` increment 4c). One
+    /// entry per `h`, the first valid one; at most `W₂` entries, since an
+    /// entry leaves when its window closes. Not chain state: written
+    /// outside any pop recording, as `alt_blocks` is. Its body is in
+    /// [`ARCHIVAL_BUNDLE_BODY`] (SI-41). Appended last but one (ordinal 50).
+    pub const ARCHIVAL_BUNDLE_QUEUE: TableDefinition<u64, Coded<QueuedBundle>> =
+        TableDefinition::new("archival_bundle_queue");
+
+    /// `archival_bundle_body` — **Rust-only** ([`RUST_ONLY_TABLES`]);
+    /// prunable hash → the [`QueuedBody`]: a bundle's prunable bytes, keyed
+    /// by the hash its reference names (§7.5). Every body has a holder
+    /// (SI-41): in 4c the queue; an alternative block and a main-chain
+    /// block not past `D_max` are 4b's holders. Not chain state, as the
+    /// queue is not. Appended last (ordinal 51).
+    pub const ARCHIVAL_BUNDLE_BODY: TableDefinition<[u8; 32], Coded<QueuedBody>> =
+        TableDefinition::new("archival_bundle_body");
 }
 
 #[cfg(test)]
@@ -852,6 +1038,23 @@ mod tests {
             ("archival_issued_digest", 39),
             ("archival_block_draws", 40),
             ("archival_drawable_digest", 41),
+            // Layout 26 (DRS-E5 switch PR): the recorded proof-of-work.
+            ("block_pow", 42),
+            // Layout 27 (DRS-E5 PR-b): an alternative block's bodies.
+            ("alt_block_bodies", 43),
+            // Layout 28 (`SO-D12` increment 2): the Release journal.
+            ("archival_release_journal", 44),
+            // Layout 29 (`SO-D12h`): the complete trees a settled epoch's
+            // market excluded, frozen at its slash pass.
+            ("archival_complete_trees", 45),
+            ("archival_support_unissued", 46),
+            ("archival_support_block", 47),
+            ("archival_support_issued", 48),
+            ("archival_support_settlement", 49),
+            // Layout 33 (`SO-D12` increment 4c): the bundle queue and the
+            // body store.
+            ("archival_bundle_queue", 50),
+            ("archival_bundle_body", 51),
         ];
         for &(name, index) in pinned {
             assert_eq!(

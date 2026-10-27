@@ -32,9 +32,7 @@ use shekyl_wire::{Block, Ct, Input, Transaction};
 
 use super::super::store_tests::TestErr;
 use super::super::*;
-use super::{
-    batch_root_going_into, candidate_over, judge_or_corrupt, judge_under, root_going_into,
-};
+use super::{batch_root_going_into, candidate_over, judge_or_corrupt, root_going_into};
 
 /// What a fixture block lists. A chain is a `&[Vec<Listed>]`, one entry
 /// per height from genesis; `connect_chain*` realises each block's entries
@@ -72,6 +70,11 @@ pub(in super::super) enum Listed {
     /// row; the credit for it is [`serve_credit`]'s ([`credited`] pairs
     /// them).
     Join { slot: u32 },
+    /// A **real Release** of the persona at `slot`'s whole bond,
+    /// `bonded_total`, riding the zero-fee spend a join rides
+    /// ([`Grown::release`]). CEN-J16 judges it over the record the chain
+    /// holds, so the persona must have joined in an earlier block.
+    Release { slot: u32, bonded_total: u64 },
     /// A body listed as given, anchored for its height ([`anchor`]): a
     /// serve credit, an emission. Never a spend or a join — their
     /// reference and proof are the chain's to make, not a value a test
@@ -326,6 +329,17 @@ impl Grown {
         self.spend_posting(coinbase, 0, Some(&bond))
     }
 
+    /// A real Release for the block connecting next — [`Listed::Release`]:
+    /// the persona at `slot`'s production Release of `bonded_total`
+    /// ([`Persona::release`]), riding a zero-fee spend of the lowest
+    /// matured unspent coinbase, as [`Self::join`]'s post does.
+    pub(in super::super) fn release(&mut self, slot: u32, bonded_total: u64) -> Transaction {
+        let coinbase = self.next_coinbase();
+        let persona = Persona::at(slot);
+        let bond = persona.release(bonded_total);
+        self.spend_posting(coinbase, 0, Some(&bond))
+    }
+
     /// The lowest matured coinbase no block spent and no spend built for
     /// this block took. Panics when none has matured: the chain is below
     /// `FIRST_SPEND_HEIGHT`, or the block lists more spends than
@@ -464,6 +478,7 @@ impl Grown {
                 Listed::Spend { fee } => self.spend(*fee),
                 Listed::Spends { n, fee } => self.spend_many(*n, *fee),
                 Listed::Join { slot } => self.join(*slot),
+                Listed::Release { slot, bonded_total } => self.release(*slot, *bonded_total),
                 Listed::Body(tx) => anchor(&self.hashes, height, tx.clone()),
             })
             .collect()
@@ -497,8 +512,21 @@ impl Grown {
         rules: &RuleSet,
         txs: &[Transaction],
     ) -> Result<ChainValid<'id, BatchView<'b, 'id>>, StoreError> {
+        self.judge_listing_with_memo(view, rules, txs, None)
+    }
+
+    /// [`Self::judge_listing`] with the connect loop's drawable memo.
+    /// [`None`] is the store harness: every miss rebuilds. A connector
+    /// passes the memo it holds across connects, pops and switches.
+    pub(in super::super) fn judge_listing_with_memo<'b, 'id>(
+        &mut self,
+        view: &BatchView<'b, 'id>,
+        rules: &RuleSet,
+        txs: &[Transaction],
+        memo: Option<&mut shekyl_chain_rules::DrawableMemo>,
+    ) -> Result<ChainValid<'id, BatchView<'b, 'id>>, StoreError> {
         let cand = candidate_at(view, self.height(), self.tip(), txs.to_vec())?;
-        let judged = judge_under(view, cand, rules)?;
+        let judged = super::connect_fixtures::judge_with_memo(view, cand, rules, memo)?;
         self.record(judged.block().block(), txs);
         Ok(judged)
     }

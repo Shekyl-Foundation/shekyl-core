@@ -53,6 +53,10 @@ pub struct JsonRpcResponse {
 pub struct JsonRpcError {
     pub code: i64,
     pub message: String,
+    /// JSON-RPC 2.0's optional member: a configuration refusal's
+    /// diagnostics (RT-O25). Absent on every other error.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,
 }
 
 impl JsonRpcResponse {
@@ -66,11 +70,24 @@ impl JsonRpcResponse {
     }
 
     pub fn error(id: serde_json::Value, code: i64, message: String) -> Self {
+        Self::error_with_data(id, code, message, None)
+    }
+
+    pub fn error_with_data(
+        id: serde_json::Value,
+        code: i64,
+        message: String,
+        data: Option<serde_json::Value>,
+    ) -> Self {
         Self {
             jsonrpc: "2.0",
             id,
             result: None,
-            error: Some(JsonRpcError { code, message }),
+            error: Some(JsonRpcError {
+                code,
+                message,
+                data,
+            }),
         }
     }
 }

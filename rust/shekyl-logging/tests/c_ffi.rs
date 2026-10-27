@@ -241,10 +241,9 @@ fn compile_and_link_harness(
         "-lpthread",
         "-lm",
     ]);
-    // `-ldl` and `-lrt` are Linux/Android-specific: glibc/bionic host
-    // `dlopen`/`dlsym` in a standalone `libdl.so` and realtime-clock
-    // primitives in `librt.so`. Other Unixes put those symbols in
-    // libc itself:
+    // `-ldl` and `-lrt` are Linux-specific: glibc hosts `dlopen`/`dlsym`
+    // in a standalone `libdl.so` and realtime-clock primitives in
+    // `librt.so`. Other Unixes put those symbols in libc itself:
     //   * macOS / iOS  — `libSystem` already covers them; `-ldl` and
     //     `-lrt` simply do not exist on those SDKs and the linker
     //     errors with "library not found".
@@ -252,12 +251,12 @@ fn compile_and_link_harness(
     //     shim on some, missing on others, and `-lrt` is absent.
     //   * Illumos / Solaris — `-lrt` exists but the symbols we rely on
     //     are also in libc; leaving the flag in is safe but we stay
-    //     on the "Linux/Android only" side of the conditional to
-    //     avoid surprising those platforms later.
-    // Keeping these gated on `target_os = "linux"` / `"android"` lets
-    // CI on the BSD/macOS runners exercise the harness without having
-    // to teach every downstream packager to patch them out.
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    //     on the Linux-only side of the conditional to avoid surprising
+    //     those platforms later.
+    // Keeping these gated on `target_os = "linux"` lets CI on the
+    // BSD/macOS runners exercise the harness without having to teach
+    // every downstream packager to patch them out.
+    #[cfg(target_os = "linux")]
     cmd.args(["-ldl", "-lrt"]);
     cmd.status()
 }

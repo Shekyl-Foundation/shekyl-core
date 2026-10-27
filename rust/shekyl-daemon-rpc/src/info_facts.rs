@@ -127,12 +127,22 @@ pub struct InfoPeersFacts {
 }
 
 /// Which of the pool's two counts a caller is owed.
+///
+/// **How each maps onto the Rust pool, for the store flip's implementor**
+/// (`shekyl-mempool`, DRS-E5 PR-b). The two counts come from two different
+/// readers of the pool, and the scope picks the reader: a foreign caller's
+/// count is never the relay view's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PoolScope {
     /// The entries this node has broadcast: what every caller may be told.
+    /// In the Rust pool, `Pool::listing().count()`: the entries
+    /// `shekyl_mempool::shown` admits. Shown is the record's public bit
+    /// alone, so this is the count of public entries.
     Broadcast,
     /// That, and the entries it holds and has not yet broadcast. The second
-    /// is host-only data (`RPC_CHANNEL.md` §6.1, RT-O9.3).
+    /// is host-only data (`RPC_CHANNEL.md` §6.1, RT-O9.3). In the Rust pool,
+    /// `Pool::relay_view().len()`: every entry, those in their stem phase
+    /// included. Only a host caller is answered from it.
     WithUnbroadcast,
 }
 
@@ -152,6 +162,23 @@ pub struct PoolCounts {
     pub unbroadcast: Option<u64>,
 }
 
+/// A pool read's answer, or the state in which the pool has none.
+///
+/// Only the Rust node retires its pool: when the pool's file faults, the
+/// node stops reading the pool until it restarts, while it goes on
+/// following the chain. A read that would need the pool answers
+/// [`PoolState::Retired`] where a reply can carry "no answer" for the pool
+/// alone (`get_info`'s counts, `get_transactions`' pool lookups), and
+/// faults where it cannot (`is_key_image_spent`: an unknown pool spend
+/// must not read as unspent).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PoolState<T> {
+    /// The pool answered.
+    Live(T),
+    /// The node has retired its pool.
+    Retired,
+}
+
 /// The reads behind `get_info`.
 pub trait InfoFacts: Send + Sync {
     /// The chain at its tip. One chain state: see the module docs.
@@ -159,7 +186,8 @@ pub trait InfoFacts: Send + Sync {
     /// The pool's population. With [`PoolScope::WithUnbroadcast`] both
     /// counts are of one pool state, read under one hold of the pool's lock;
     /// with [`PoolScope::Broadcast`] the second is not counted at all.
-    fn pool_counts(&self, scope: PoolScope) -> Result<PoolCounts, FactsFault>;
+    /// [`PoolState::Retired`] when the node has retired its pool.
+    fn pool_counts(&self, scope: PoolScope) -> Result<PoolState<PoolCounts>, FactsFault>;
     /// The chain store's size on disk, in bytes.
     ///
     /// # Errors
@@ -320,15 +348,16 @@ impl InfoFacts for FfiInfoFacts {
         })
     }
 
-    fn pool_counts(&self, scope: PoolScope) -> Result<PoolCounts, FactsFault> {
+    fn pool_counts(&self, scope: PoolScope) -> Result<PoolState<PoolCounts>, FactsFault> {
         let (broadcast, unbroadcast) = self
             .core
             .info_pool_counts(scope == PoolScope::WithUnbroadcast)
             .map_err(FactsFault::from_code)?;
-        Ok(PoolCounts {
+        // The C++ pool is never retired.
+        Ok(PoolState::Live(PoolCounts {
             broadcast,
             unbroadcast,
-        })
+        }))
     }
 
     fn store_size(&self) -> Result<u64, FactsFault> {

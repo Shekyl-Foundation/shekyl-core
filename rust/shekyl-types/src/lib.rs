@@ -550,6 +550,18 @@ hash32! {
     BlockHash
 }
 
+hash32! {
+    /// The Merkle root over a block's transaction hashes
+    /// `[miner_tx_hash, transaction_hashes…]`
+    /// (`GENESIS_TX_WIRE_FORMAT.md` §11).
+    ///
+    /// The middle field of the PoW preimage. Not a [`TxHash`]: a txid names
+    /// one transaction, and this names the tree of them. Not a [`BlockHash`]:
+    /// the block identity is keccak over the length-prefixed preimage that
+    /// contains this root.
+    TxTreeHash
+}
+
 impl BlockHash {
     /// The **null hash** — 32 zero bytes — as a block identity: the genesis
     /// block's `previous` (CEN-A2: a candidate's parent is the tip's hash,
@@ -930,7 +942,7 @@ pub use archival::{
 };
 
 pub mod relay;
-pub use relay::{NetZone, RelayCategory, RelayMethod};
+pub use relay::{NetZone, RelayMethod};
 
 scalar_u64! {
     /// **Wall-clock** seconds since the Unix epoch — a pool entry's
@@ -942,14 +954,6 @@ scalar_u64! {
     /// subtractable from each other. The store's other time words are
     /// block time; this one is the pool's, and it never enters a rule.
     UnixSeconds
-}
-
-hash32! {
-    /// The pool's FCMP++ verification-cache key — `H(proof ‖ referenceBlock
-    /// ‖ key images)` (CEN-M8; `tx_pool.cpp:495`). A cached verdict is
-    /// `Some(hash)`; "no cache" is `None`, never a zero hash with a bit
-    /// beside it (DRS-E1 S-POOL, SPL-10).
-    FcmpVerificationHash
 }
 
 mod block_axis;

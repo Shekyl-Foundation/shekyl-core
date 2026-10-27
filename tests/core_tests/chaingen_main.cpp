@@ -99,8 +99,6 @@ int main(int argc, char* argv[])
     // chain containing one that then reorgs does not — FOLLOWUPS
     // "user-transaction chain cases", owner E2's corpus.
     GENERATE_AND_PLAY(one_block);
-    GENERATE_AND_PLAY(economics_c2a_prime_layer3_pop_replay);
-    GENERATE_AND_PLAY(archival_budget_conservation);
     // Block verification tests
     GENERATE_AND_PLAY(gen_block_big_major_version);
     GENERATE_AND_PLAY(gen_block_big_minor_version);

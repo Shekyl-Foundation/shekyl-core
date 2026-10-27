@@ -25,7 +25,7 @@ use super::actor::StakeEngine;
 use super::bond::{AssembleBond, AssembledBondPost};
 use super::claim::{AssembleEmissionClaim, AssembledEmissionClaim};
 use super::persona::{
-    ActivatePersona, ActivePersona, ActivePersonaReceiveAddress, BondPostPlacement,
+    ActivatePersona, ActivePersona, ActivePersonaPaymentDestination, BondPostPlacement,
     MintPersonaHandle, PersonaIdentityOf, PersonaOnionIdentityOf, PlanBondPost, ServingBodies,
     SignPassTranscript, SignReceiptTranscript,
 };
@@ -35,7 +35,7 @@ use super::types::*;
 use crate::engine::bond_assembly::FundingInputContext;
 use crate::engine::drain_assembly::{AssembleDrain, AssembledDrain};
 use crate::engine::pscan::scan_step::{BlockRange, FundingOutputMatch, ScanStep, ScanStepResult};
-use crate::engine::{Network, ShekylAddress};
+use shekyl_crypto_pq::archival_p::PersonaDestination;
 
 // ---------------------------------------------------------------------------
 
@@ -219,15 +219,14 @@ impl StakeEngineHandle {
             .map_err(collapse_send_error)
     }
 
-    /// The currently-active persona's public [`ShekylAddress`], or `None` when
-    /// idle — the funding side of `Engine::stake_in`. The reply is structurally
-    /// public-only (rule 36); `network` is the principal's network.
-    pub(crate) async fn active_persona_receive_address(
+    /// The currently-active persona's payment destination, or `None` when
+    /// idle — the funding side of `Engine::stake_in`. Public keys only
+    /// (rule 36).
+    pub(crate) async fn active_persona_payment_destination(
         &self,
-        network: Network,
-    ) -> Result<Option<ShekylAddress>, StakeEngineError> {
+    ) -> Result<Option<PersonaDestination>, StakeEngineError> {
         self.actor
-            .ask(ActivePersonaReceiveAddress { network })
+            .ask(ActivePersonaPaymentDestination)
             .await
             .map_err(collapse_send_error)
     }

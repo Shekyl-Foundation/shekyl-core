@@ -62,12 +62,12 @@
 //! builds a `BondRecord` from each field set and asserts nothing is lost.
 
 use shekyl_types::archival::{
-    BadInterval, BlockDraws, BondRecord, DrawableDigest, FirstPayingHeight, HeldShard, Holdings,
-    HoldingsError, HoldingsKind, IssuedDigest, IssuedDraw, RMarket, ReceiptSignPk, SettlementRow,
-    SettlementRowError, SigmaWorkMilli, SlashLogEntry, SlashedHolding, BLOCK_DRAWS_LEN,
-    DRAWABLE_DIGEST_LEN, ISSUED_DIGEST_LEN, MAX_BOND_BAD_INTERVALS, MAX_BOND_KEY_BYTES,
-    MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W_EPOCHS, MAX_HOLDINGS_SHARDS, RECEIPT_SIGN_PK_LEN,
-    SETTLEMENT_ROW_LEN,
+    BadInterval, BlockDraws, BondRecord, CompleteTreeSet, DrawableDigest, FirstPayingHeight,
+    HeldShard, Holdings, HoldingsError, HoldingsKind, IssuedDigest, IssuedDraw, RMarket,
+    ReceiptSignPk, SettlementRow, SettlementRowError, SigmaWorkMilli, SlashLogEntry,
+    SlashedHolding, SupportCount, SupportIssued, BLOCK_DRAWS_LEN, DRAWABLE_DIGEST_LEN,
+    ISSUED_DIGEST_LEN, MAX_BOND_BAD_INTERVALS, MAX_BOND_KEY_BYTES, MAX_CLAIMED_EPOCH_ENTRIES,
+    MAX_CLAIM_AGE_W_EPOCHS, MAX_HOLDINGS_SHARDS, RECEIPT_SIGN_PK_LEN, SETTLEMENT_ROW_LEN,
 };
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
@@ -258,6 +258,45 @@ impl Canonical for SigmaWorkMilli {
     }
 }
 
+/// `archival_complete_trees`'s row (`SO-D12h`): the personas an epoch's
+/// slash pass excluded from its market as complete trees. Layout:
+///
+/// ```text
+/// n         u32 LE
+/// persona   [u8; 32] × n, strictly increasing
+/// ```
+///
+/// `n = 0` is the empty set, a written value. An order the type refuses,
+/// a count the bytes do not back, or trailing bytes is refused. No cap
+/// beyond the bytes: the set is a subset of the bond records, which have
+/// none.
+impl Canonical for CompleteTreeSet {
+    const NAME: &'static str = "complete_tree_set";
+    const FIXED_WIDTH: Option<usize> = None;
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        put_count(out, self.as_slice().len());
+        for persona in self.as_slice() {
+            out.extend_from_slice(persona.as_bytes());
+        }
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        let mut r = Reader::new(Self::NAME, bytes);
+        let n = r.count_bounded(32, usize::MAX, "unreachable: usize::MAX cap")?;
+        let mut ids = Vec::with_capacity(n);
+        for _ in 0..n {
+            ids.push(PCanonicalId::from_bytes(
+                r.array::<32>("buffer ends inside a persona")?,
+            ));
+        }
+        if !r.is_empty() {
+            return Err(r.invalid("trailing bytes after the complete-tree set"));
+        }
+        CompleteTreeSet::new(ids).map_err(|_| r.invalid("personas are not strictly increasing"))
+    }
+}
+
 /// `archival_slash_log`'s row (DRS-E4 `ARW-Q2`). Layout, all little-endian:
 ///
 /// ```text
@@ -409,13 +448,68 @@ impl Canonical for IssuedDigest {
 /// Layout:
 ///
 /// ```text
-/// count       u32 LE   draws this block's producer made
-/// carry       u32 LE   the fraction carried to the next block's count
-/// shortfall   u64 LE   the visible shortfall the count was computed from
-/// revealed    u8       0 = seed not revealed, 1 = revealed
+/// count         u32 LE   draws this block's producer made
+/// carry         u32 LE   the fraction carried to the next block's count
+/// shortfall     u64 LE   the visible shortfall the count was computed from
+/// issued_short  u32 LE   what this block's admissions took off the shortfall
+/// revealed      u8       0 = seed not revealed, 1 = revealed
 /// ```
 ///
 /// A third value of the flag, or trailing bytes, is refused.
+/// `support_count`: one `u32` LE. The unissued counter of one tree in one
+/// epoch, and the support draws one block issued. The same width, two
+/// tables (`ARCHIVAL_SUPPORT_DRAW.md` §5).
+/// `archival_support_issued`'s row (`ARCHIVAL_SUPPORT_DRAW.md` §3).
+/// Layout:
+///
+/// ```text
+/// shard    u64 LE   the shard the draw selected
+/// passed   u8       0 = no pass record admitted, 1 = one admitted
+/// ```
+///
+/// A third value of the flag, or trailing bytes, is refused.
+impl Canonical for SupportIssued {
+    const NAME: &'static str = "support_issued";
+    const FIXED_WIDTH: Option<usize> = Some(SupportIssued::LEN);
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.shard.to_raw().to_le_bytes());
+        out.push(u8::from(self.passed));
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        let mut r = Reader::new(Self::NAME, bytes);
+        let shard = ShardId::from_raw(r.u64()?);
+        let passed = match r.u8()? {
+            0 => false,
+            1 => true,
+            _ => return Err(r.invalid("pass flag is neither 0 nor 1")),
+        };
+        if !r.is_empty() {
+            return Err(r.invalid("trailing bytes after the support draw"));
+        }
+        Ok(Self { shard, passed })
+    }
+}
+
+impl Canonical for SupportCount {
+    const NAME: &'static str = "support_count";
+    const FIXED_WIDTH: Option<usize> = Some(SupportCount::LEN);
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.get().to_le_bytes());
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        let mut r = Reader::new(Self::NAME, bytes);
+        let n = r.u32()?;
+        if !r.is_empty() {
+            return Err(r.invalid("trailing bytes after the support count"));
+        }
+        Ok(Self::new(n))
+    }
+}
+
 impl Canonical for BlockDraws {
     const NAME: &'static str = "block_draws";
     const FIXED_WIDTH: Option<usize> = Some(BLOCK_DRAWS_LEN);
@@ -424,6 +518,7 @@ impl Canonical for BlockDraws {
         out.extend_from_slice(&self.count.to_le_bytes());
         out.extend_from_slice(&self.carry.to_le_bytes());
         out.extend_from_slice(&self.shortfall.to_le_bytes());
+        out.extend_from_slice(&self.issued_short.to_le_bytes());
         out.push(u8::from(self.revealed));
     }
 
@@ -432,6 +527,7 @@ impl Canonical for BlockDraws {
         let count = r.u32()?;
         let carry = r.u32()?;
         let shortfall = r.u64()?;
+        let issued_short = r.u32()?;
         let revealed = match r.u8()? {
             0 => false,
             1 => true,
@@ -444,6 +540,7 @@ impl Canonical for BlockDraws {
             count,
             carry,
             shortfall,
+            issued_short,
             revealed,
         })
     }

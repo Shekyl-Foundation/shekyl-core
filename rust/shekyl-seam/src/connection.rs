@@ -221,7 +221,6 @@ pub struct Connection {
     claimed_height: Option<HeightClaim>,
     accepted_chain_length: Option<ChainLength>,
     last_known_hash: Option<Claimed<[u8; 32]>>,
-    support_flags: Option<Claimed<u32>>,
     advertised: Option<Claimed<AdvertisedEndpoint>>,
 }
 
@@ -236,7 +235,6 @@ impl Connection {
             claimed_height: None,
             accepted_chain_length: None,
             last_known_hash: None,
-            support_flags: None,
             advertised: None,
         }
     }
@@ -302,17 +300,6 @@ impl Connection {
     /// Record the hash the peer asserted.
     pub(crate) fn note_last_known_hash(&mut self, hash: [u8; 32]) {
         self.last_known_hash = Some(Claimed::new(hash));
-    }
-
-    /// The support flags the peer asserted.
-    #[must_use]
-    pub const fn support_flags(&self) -> Option<&Claimed<u32>> {
-        self.support_flags.as_ref()
-    }
-
-    /// Record the support flags the peer asserted.
-    pub(crate) fn note_support_flags(&mut self, flags: u32) {
-        self.support_flags = Some(Claimed::new(flags));
     }
 
     /// The endpoint the handshake advertised.
@@ -401,7 +388,6 @@ mod tests {
         connection.note_advertised(advertised);
         connection.note_claimed_height(4, HeightMessage::Handshake);
         connection.note_last_known_hash([9; 32]);
-        connection.note_support_flags(7);
         assert_eq!(connection.endpoint(), &endpoint(18080, Direction::Inbound));
         assert_eq!(
             connection.advertised().expect("claim").claim().port().get(),
@@ -414,7 +400,6 @@ mod tests {
             *connection.last_known_hash().expect("hash").claim(),
             [9; 32]
         );
-        assert_eq!(*connection.support_flags().expect("flags").claim(), 7);
     }
 
     #[test]

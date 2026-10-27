@@ -210,11 +210,11 @@ pub(super) fn h4_no_inputs() -> Transaction {
     tx
 }
 
+/// Seventeen outputs, every per-output array and `extra` sized to them
+/// (the fixture spend at seventeen, then I19's field), so the rows ahead of
+/// H19's layout half pass and its max-amounts clause is what refuses.
 pub(super) fn h19_seventeen_outputs() -> Transaction {
-    let mut tx = spend2();
-    let out = tx.prefix.outputs[0].clone();
-    tx.prefix.outputs = vec![out; 17];
-    tx
+    with_pqc_extra(crate::harness::fixture::spend(point(9), 17))
 }
 
 pub(super) fn h5_gen_beside_a_spend() -> Transaction {

@@ -21,11 +21,11 @@
 //! # Seven operations (§3.2)
 //!
 //! Writes, inside [`PoolStore::write`]'s closure on a [`PoolBatch`]:
-//! **P1** [`insert`](PoolBatch::insert), **P2** [`update`](PoolBatch::update),
+//! **P1** [`insert`](PoolBatch::insert), **P2** [`publish`](PoolBatch::publish),
 //! **P3** [`remove`](PoolBatch::remove). Reads, on a [`PoolSnapshot`]:
 //! **P4** [`record`](PoolSnapshot::record), **P5** [`blob`](PoolSnapshot::blob),
 //! **P6** [`len`](PoolSnapshot::len), **P7** [`entries`](PoolSnapshot::entries).
-//! None of them classifies (applies a `RelayCategory`), orders by fee,
+//! None of them relays, orders by fee,
 //! parses a transaction, decides eviction or holds an index: those are the
 //! pool's (E5), and the C++ `tx_memory_pool` rebuilds every one of its
 //! in-memory structures from a full enumeration at `init` (SPL-9), so P7 is
@@ -58,8 +58,10 @@
 //!
 //! # The header, and the one case that recreates (`SPL-Q8`)
 //!
-//! A fresh file is sealed with the crate's `SCHEMA_VERSION` in its own
-//! header cell. On reopen the cell is read first. A sealed pool file at
+//! A fresh file is sealed with its own layout number,
+//! [`POOL_SCHEMA_VERSION`] — not the chain file's, so a pool-only change
+//! recreates the pool file and leaves the chain alone — in its own header
+//! cell. On reopen the cell is read first. A sealed pool file at
 //! **another** version is **recreated** — the file is discardable by ruling
 //! and has no corpus to rebuild from — and [`PoolOpen::Recreated`] tells the
 //! caller so it can say so in one log line. Everything else is
@@ -87,18 +89,19 @@ pub mod schema;
 
 mod header;
 mod read;
+mod schema_version;
 mod write;
 
-pub use crate::codec::{
-    ArrivedPhase, BlockRef, Origin, OriginatedPhase, PoolRecord, Readiness, RelayRefusal,
-    RelayState, Responsibility,
-};
+pub use crate::codec::{PoolRecord, ReceivedHour};
 pub use header::{PoolOpen, POOL_VERSION_KEY};
 pub use read::{PoolEntry, PoolSnapshot};
 pub use schema::PoolTxBytes;
+pub use schema_version::{PoolSchemaVersion, POOL_SCHEMA_VERSION};
 pub use write::PoolBatch;
 
 use std::path::Path;
+#[cfg(feature = "pool-commit-fault")]
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use redb::{Database, ReadableDatabase, TableHandle, WriteTransaction};
 use shekyl_store_codec::CodecError;
@@ -114,6 +117,10 @@ pub const POOL_CACHE_SIZE: usize = 64 * 1024 * 1024;
 /// The pool file. One writer, many readers; see the module doc.
 pub struct PoolStore {
     db: Database,
+    /// The next successful [`Self::write`] aborts at commit, after its
+    /// closure has run. Test builds only (`pool-commit-fault`).
+    #[cfg(feature = "pool-commit-fault")]
+    refuse_next_commit: AtomicBool,
 }
 
 impl core::fmt::Debug for PoolStore {
@@ -136,7 +143,16 @@ impl PoolStore {
     /// seal cannot be written. A fresh file the seal fails on is removed
     /// again.
     pub fn create(path: impl AsRef<Path>) -> Result<(Self, PoolOpen), StoreError> {
-        header::open_or_create(path.as_ref()).map(|(db, how)| (Self { db }, how))
+        header::open_or_create(path.as_ref()).map(|(db, how)| {
+            (
+                Self {
+                    db,
+                    #[cfg(feature = "pool-commit-fault")]
+                    refuse_next_commit: AtomicBool::new(false),
+                },
+                how,
+            )
+        })
     }
 
     /// Run `f` inside a write batch and commit if it returns `Ok`. The
@@ -147,7 +163,9 @@ impl PoolStore {
     /// [`EngineError::BeginWrite`] / [`EngineError::Durability`] if the
     /// engine refuses to begin; whatever `f` returns, in which case the
     /// batch is aborted and nothing lands; [`EngineError::Commit`] if the
-    /// engine could not commit.
+    /// engine could not commit. Under `pool-commit-fault` a test may refuse
+    /// that commit after `f` has returned `Ok`; `f`'s writes are in the
+    /// transaction that is then dropped.
     pub fn write<R, E, F>(&self, f: F) -> Result<R, E>
     where
         E: From<StoreError>,
@@ -155,7 +173,34 @@ impl PoolStore {
     {
         let mut batch = PoolBatch::new(arm_write(&self.db)?);
         let outcome = f(&mut batch);
+        #[cfg(feature = "pool-commit-fault")]
+        let outcome = self.refused_commit(outcome);
         batch.complete(outcome)
+    }
+
+    /// Abort `Ok` as a commit failure when a test has asked for it, and
+    /// consume that request. `Err` passes through with the request still
+    /// armed, so the failure that was asked for lands on a commit.
+    #[cfg(feature = "pool-commit-fault")]
+    fn refused_commit<R, E: From<StoreError>>(&self, outcome: Result<R, E>) -> Result<R, E> {
+        if outcome.is_ok() && self.refuse_next_commit.swap(false, Ordering::AcqRel) {
+            return Err(
+                StoreError::from(EngineError::Commit(redb::CommitError::Storage(
+                    redb::StorageError::PreviousIo,
+                )))
+                .into(),
+            );
+        }
+        outcome
+    }
+
+    /// The next [`write`](Self::write) whose closure returns `Ok` aborts as
+    /// [`EngineError::Commit`], after that closure has run. Consumed by
+    /// that write. Test builds only (`pool-commit-fault`); no production
+    /// dependency enables the feature.
+    #[cfg(feature = "pool-commit-fault")]
+    pub fn refuse_next_commit(&self) {
+        self.refuse_next_commit.store(true, Ordering::Release);
     }
 
     /// Begin a read snapshot. Concurrent with a live write batch.

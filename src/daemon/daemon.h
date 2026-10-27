@@ -28,8 +28,9 @@
 
 #pragma once
 
+#include <atomic>
 #include <memory>
-#include <boost/program_options.hpp>
+#include "shekyl/shekyl_ffi.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
 #define SHEKYL_DEFAULT_LOG_CATEGORY "daemon"
@@ -40,9 +41,7 @@ struct t_internals;
 
 class Daemon final {
 public:
-  static void init_options(boost::program_options::options_description & option_spec);
-
-  explicit Daemon(boost::program_options::variables_map const & vm);
+  explicit Daemon(const ShekylDaemonSnapshot& snapshot);
   ~Daemon();
 
   Daemon(Daemon const &) = delete;
@@ -51,12 +50,18 @@ public:
   Daemon & operator=(Daemon &&);
 
   bool run(bool interactive = false);
-  void stop();
 
 private:
   void stop_p2p();
 
   std::unique_ptr<t_internals> mp_internals;
 };
+
+/// The flag the run loop polls; set by `request_stop`.
+extern std::atomic<bool> g_stop_requested;
+
+/// Requests the stop `Daemon::run` is waiting for and returns at once.
+/// Called by the Rust signal owner through the entry's `stop`.
+void request_stop();
 
 } // namespace daemonize

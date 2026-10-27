@@ -137,17 +137,18 @@ impl Rule for G2 {
     const ROW: CenRow = CenRow::G2;
 }
 
-impl FormRule for G2 {
-    fn check(cx: &FormContext<'_>) -> Verdict<()> {
-        let declared = &cx.candidate.block.transaction_hashes;
-        let carried = &cx.candidate.transactions;
+impl G2 {
+    /// The declared list is the carried list. `form` passes the hashes of
+    /// the carried transactions; `bind_body` passes the hashes of full
+    /// bodies and of skeletons. One comparison.
+    pub(crate) fn listed_match(declared: &[TxHash], carried: &[TxHash]) -> Verdict<()> {
         if declared.len() != carried.len() {
             return Err(InvalidBlock::new(Self::ROW, Locus::Block));
         }
         match declared
             .iter()
             .zip(carried)
-            .position(|(hash, body)| Transaction::hash(body) != *hash)
+            .position(|(declared, carried)| declared != carried)
         {
             None => Ok(()),
             Some(first) => Err(InvalidBlock::new(
@@ -157,6 +158,18 @@ impl FormRule for G2 {
                 },
             )),
         }
+    }
+}
+
+impl FormRule for G2 {
+    fn check(cx: &FormContext<'_>) -> Verdict<()> {
+        let carried: Vec<TxHash> = cx
+            .candidate
+            .transactions
+            .iter()
+            .map(Transaction::hash)
+            .collect();
+        Self::listed_match(&cx.candidate.block.transaction_hashes, &carried)
     }
 }
 
@@ -251,6 +264,66 @@ impl ArchivalKey {
             }),
             Input::Gen(_) | Input::ToKey { .. } => None,
         }
+    }
+}
+
+/// The archival keys of the transactions a block lists so far: CEN-G7,
+/// G9 and G10 asked one transaction at a time, for a block being filled
+/// (the pool's template selection, DRS-E5 PR-b). A block lists what its
+/// filler added, in that order, so [`Self::add`] refusing a transaction is
+/// those rows refusing the block that would list it next — by the same
+/// decision bodies: G9's and G10's from `shekyl-archival-retention`, and
+/// G7's set membership.
+#[derive(Clone, Debug, Default)]
+pub struct BlockArchivalKeys {
+    serve_credits: Vec<ServeCreditKey>,
+    claims: Vec<([u8; 32], u64)>,
+    bond_posts: Vec<[u8; 32]>,
+}
+
+impl BlockArchivalKeys {
+    /// Add `tx`'s archival keys after those already added.
+    ///
+    /// # Errors
+    ///
+    /// The row a block listing `tx` after the transactions already added
+    /// is refused on — G7, G9 or G10, in the order the stage runs them —
+    /// and nothing is added.
+    pub fn add(&mut self, tx: &Transaction) -> Result<(), CenRow> {
+        let keys: Vec<ArchivalKey> = tx
+            .prefix
+            .inputs
+            .iter()
+            .filter_map(ArchivalKey::of)
+            .collect();
+        if keys.is_empty() {
+            return Ok(());
+        }
+        let mut next = self.clone();
+        for key in keys {
+            match key {
+                ArchivalKey::ServeCredit { p, shard, epoch } => {
+                    next.serve_credits.push((p, shard, epoch));
+                }
+                ArchivalKey::Claims { p, epochs } => {
+                    next.claims
+                        .extend(epochs.into_iter().map(|epoch| (p, epoch)));
+                }
+                ArchivalKey::BondPost { p } => next.bond_posts.push(p),
+            }
+        }
+        let mut seen = BTreeSet::new();
+        if !next.serve_credits.iter().all(|key| seen.insert(key)) {
+            return Err(G7::ROW);
+        }
+        if !emission_block_claims_unique(&next.claims) {
+            return Err(G9::ROW);
+        }
+        if !bond_post_block_unique(&next.bond_posts) {
+            return Err(G10::ROW);
+        }
+        *self = next;
+        Ok(())
     }
 }
 

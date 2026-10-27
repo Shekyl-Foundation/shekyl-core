@@ -4,7 +4,8 @@
 // BSD-3-Clause
 
 //! Chain-tip facts — the store-agnostic seam behind the RK-1 handlers
-//! (`docs/design/DAEMON_RPC_KV_CUTOVER.md` §3.2–§3.3, RK-D3 / RK-D7).
+//! (`docs/completed/DAEMON_RPC_KV_CUTOVER.md` §3.2–§3.3, RK-D3; RK-D7 is
+//! carried in `docs/design/RPC_WIRE.md`).
 //!
 //! A handler never touches the FFI: it asks a [`ChainFacts`] for what it
 //! needs and decides the rest itself. [`FfiChainFacts`] is today's only
@@ -64,7 +65,7 @@
 //!     cumulative_difficulty: 0,
 //!     reward: 0,
 //!     block_weight: 0,
-//!     long_term_weight: 0,
+//!     long_term_weight: None,
 //!     num_txes: 0,
 //!     nonce: 0,
 //!     major_version: 0,
@@ -164,7 +165,11 @@ pub struct BlockHeaderFacts {
     pub cumulative_difficulty: u128,
     pub reward: u64,
     pub block_weight: u64,
-    pub long_term_weight: u64,
+    /// `None` for a block that is not on the main chain: a long-term weight
+    /// is a function of the chain the block sits on (CEN-G6), and an alt
+    /// block's chain has no recorded medians until it is promoted. The wire
+    /// omits a zero long-term weight, and `None` is that omission.
+    pub long_term_weight: Option<u64>,
     pub num_txes: u64,
     pub nonce: u32,
     pub major_version: u8,
@@ -273,19 +278,9 @@ pub trait ChainFacts: Send + Sync {
         at: BlockLookup,
         fill_pow_hash: bool,
     ) -> Result<BlockHeaderAt, FactsFault>;
-    /// The dynamic base-fee estimate. A `grace_blocks` above
-    /// [`Self::fee_grace_blocks_max`] is refused by the caller first; the
-    /// facts layer refuses it too rather than letting the estimator throw.
-    fn fee_estimate(&self, grace_blocks: u64) -> Result<FeeEstimate, FactsFault>;
-    /// The ceiling `grace_blocks` must not exceed.
-    ///
-    /// **On the trait, not a free function reaching into the FFI.** As a free
-    /// function it read the C++ constant directly, which meant the unit-test
-    /// link stub answered 0 and every request was refused under test — the
-    /// refusal test then passed for the wrong reason, asserting a bound it
-    /// had not exercised. Here the production impl still single-sources the
-    /// constant from C++ and a double can state one.
-    fn fee_grace_blocks_max(&self) -> u64;
+    /// The dynamic base-fee estimate: a function of chain state alone
+    /// (FL-R20, FL-R26), so it takes no parameter.
+    fn fee_estimate(&self) -> Result<FeeEstimate, FactsFault>;
     /// A whole block, named either way. Absence is data ([`BlockAt::block`]
     /// is `None`) for both lookups; the caller knows which it asked for and
     /// so which refusal to produce.
@@ -322,8 +317,10 @@ pub struct BlockFacts {
     /// The block in its consensus encoding. Hex is the handler's job.
     pub blob: Vec<u8>,
     /// epee's rendering of the whole block, produced in C++ and carried
-    /// through untouched (RK-D11).
-    pub json: String,
+    /// through untouched (RK-D11). `None` from a reader with no epee
+    /// renderer — the store-backed facts (`DRS_X_STORE_FLIP.md` DX-Q3):
+    /// the field duplicates `blob`, and RK-W retires it.
+    pub json: Option<String>,
     pub tx_hashes: Vec<TxHash>,
 }
 
@@ -353,11 +350,10 @@ pub trait P2pFacts: Send + Sync {
     fn p2p_state(&self) -> Result<P2pRead<()>, FactsFault>;
 }
 
-/// The dynamic base-fee estimate: three priced tiers and the quantization mask.
+/// The dynamic base-fee estimate: three priced tiers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FeeEstimate {
     pub fees: [u64; 3],
-    pub quantization_mask: u64,
 }
 
 /// Throttle counters and the core's start time.
@@ -402,10 +398,7 @@ fn fee_estimate_from_pod(pod: ffi::FeeEstimateFactsFfi) -> Result<FeeEstimate, F
     if usize::from(pod.fee_count) != pod.fees.len() {
         return Err(FactsFault::Inconsistent);
     }
-    Ok(FeeEstimate {
-        fees: pod.fees,
-        quantization_mask: pod.quantization_mask,
-    })
+    Ok(FeeEstimate { fees: pod.fees })
 }
 
 /// One place where a header POD becomes typed facts.
@@ -429,7 +422,7 @@ fn header_facts_from_pod(pod: &ffi::BlockHeaderFactsFfi) -> BlockHeaderFacts {
             | u128::from(pod.cumulative_difficulty_lo),
         reward: pod.reward,
         block_weight: pod.block_weight,
-        long_term_weight: pod.long_term_weight,
+        long_term_weight: Some(pod.long_term_weight),
         num_txes: pod.num_txes,
         nonce: pod.nonce,
         major_version: pod.major_version,
@@ -506,18 +499,8 @@ impl ChainFacts for FfiChainFacts {
         })
     }
 
-    fn fee_grace_blocks_max(&self) -> u64 {
-        // The C++ constant, single-sourced: `CRYPTONOTE_REWARD_BLOCKS_WINDOW`
-        // behind a handle-free export, never restated here.
-        // SAFETY: a compile-time constant, no handle, no allocation.
-        unsafe { ffi::shekyl_rpc_fee_grace_blocks_max() }
-    }
-
-    fn fee_estimate(&self, grace_blocks: u64) -> Result<FeeEstimate, FactsFault> {
-        let pod = self
-            .core
-            .fee_estimate(grace_blocks)
-            .map_err(FactsFault::from_code)?;
+    fn fee_estimate(&self) -> Result<FeeEstimate, FactsFault> {
+        let pod = self.core.fee_estimate().map_err(FactsFault::from_code)?;
         fee_estimate_from_pod(pod)
     }
 
@@ -572,7 +555,7 @@ impl ChainFacts for FfiChainFacts {
             block: Some(BlockFacts {
                 header: header_facts_from_pod(&pod),
                 blob,
-                json,
+                json: Some(json),
                 tx_hashes: tx_hashes.into_iter().map(TxHash::from_bytes).collect(),
             }),
             chain_height,
@@ -610,13 +593,11 @@ mod tests {
     fn a_fee_pod_that_did_not_write_every_tier_is_inconsistent() {
         let three = ffi::FeeEstimateFactsFfi {
             fees: [1, 2, 3],
-            quantization_mask: 8,
             fee_count: 3,
             reserved: [0; 7],
         };
         let ok = fee_estimate_from_pod(three).expect("three tiers is the contract");
         assert_eq!(ok.fees, [1, 2, 3]);
-        assert_eq!(ok.quantization_mask, 8);
 
         for count in [0, 2, 4] {
             let mut short = three;

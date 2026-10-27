@@ -227,9 +227,10 @@ And `ARCHIVAL_BOND_2D2_SP_T0_TOR.md` DQ-T0.7 (decided 2026-07-02), on the
 
 An earlier revision of this document suggested a "torrc-surface review" could
 settle whether config alone suffices. **That suggestion is withdrawn: the design
-refuses to have such a surface.** `control/launch.rs` passes six typed options
-(`DataDirectory`, `ControlPort auto`, `ControlPortWriteToFile`,
-`CookieAuthentication`, `SocksPort`, `Log`, plus test-only `DisableNetwork`).
+refuses to have such a surface.** `control/launch.rs` passes five typed options
+(`DataDirectory`, `__OwningControllerFD` naming tor's end of the inherited
+control connection, `AvoidDiskWrites`, `SocksPort`, `Log`, plus test-only
+`DisableNetwork`).
 It also names every file tor would otherwise find by itself (`--torrc-file`,
 `--defaults-torrc`, `--GeoIPFile`, `--GeoIPv6File`) as one zero-length file in the
 `DataDirectory`. Leaving those out is not enough: tor then reads its compiled-in

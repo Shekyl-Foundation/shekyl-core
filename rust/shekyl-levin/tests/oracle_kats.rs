@@ -14,11 +14,7 @@
 //! NOT cover the read-side state machine (see `reader_stream.rs`).
 //!
 //! Coverage boundary, stated so it is not mistaken for completeness: these
-//! pin `make_header`, `noise_notify` and `fragmented_notify`.
-//! `try_compress_message` is deliberately **not** byte-pinned — its framing
-//! is identical, but the compressed bytes come from whichever libzstd is
-//! linked, so a golden vector here would pin the codec build rather than the
-//! protocol. Divergence 7 in the crate docs states that in full. The
+//! pin `make_header`, `noise_notify` and `fragmented_notify`. The
 //! constants both sides share are guarded separately, by
 //! `ci/levin-constant-parity`.
 

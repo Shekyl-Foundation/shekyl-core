@@ -12,7 +12,9 @@
 use super::*;
 use crate::fault::{FormAttempt, Retry};
 use crate::harness::fixture::{candidate_on, chain_of};
-use crate::harness::{assert_refused, expected_seed, judged, Faulted, MockChain, MockSubstrate};
+use crate::harness::{
+    assert_refused, expected_seed, expected_target, judged, Faulted, MockChain, MockSubstrate,
+};
 use crate::rule_set::RuleSet;
 use crate::trust::Trust;
 use crate::validate::{form, validate};
@@ -28,7 +30,15 @@ fn judge_with(
     attempt: FormAttempt,
 ) -> Result<Verdict<()>, Fault<core::convert::Infallible>> {
     let candidate = candidate_on(chain, Vec::new());
-    let formed = match form(candidate, &RuleSet::GENESIS, substrate, seed, attempt) {
+    let formed = match form(
+        candidate,
+        &RuleSet::GENESIS,
+        substrate,
+        seed,
+        expected_target(chain, &RuleSet::GENESIS),
+        &crate::block::ReferenceClaims::EMPTY,
+        attempt,
+    ) {
         Ok(Ok(formed)) => formed,
         Ok(Err(refused)) => return Ok(Err(refused)),
         Err(Faulted) => unreachable!("the mock substrate never faults here"),
@@ -117,6 +127,8 @@ fn cen_d2_the_longhash_is_computed_in_form_over_the_pow_blob_under_the_seed() {
         &RuleSet::GENESIS,
         &substrate,
         seed,
+        expected_target(&chain, &RuleSet::GENESIS),
+        &crate::block::ReferenceClaims::EMPTY,
         FormAttempt::FIRST,
     )
     .expect("no fault")
@@ -147,6 +159,8 @@ fn cen_d2_a_verifier_that_cannot_compute_is_a_fault_not_a_verdict() {
         &RuleSet::GENESIS,
         &substrate,
         BlockHash::NULL,
+        expected_target(&MockChain::default(), &RuleSet::GENESIS),
+        &crate::block::ReferenceClaims::EMPTY,
         FormAttempt::FIRST,
     );
     assert!(matches!(result, Err(Faulted)), "unproven, not disproven");
@@ -245,6 +259,8 @@ fn cen_d3_records_and_the_pow_rows_cover_on_a_passing_block() {
         &RuleSet::GENESIS,
         &MockSubstrate::default(),
         seed,
+        expected_target(&chain, &RuleSet::GENESIS),
+        &crate::block::ReferenceClaims::EMPTY,
         FormAttempt::FIRST,
     )
     .expect("no fault")

@@ -18,14 +18,44 @@ license.workspace = true
 # validator never names the store (G1); the pipeline names all three and
 # wires them.
 #
-# Features keep the harvest FFI lean: `shekyl-ffi` depends with
-# `default-features = false` and compiles the trace writer only. The
-# pipeline (kameo/tokio), the corpus fetcher (RPC), and the replay CLI
-# (clap / HTTP / settlement epoch) are optional. Default enables all three
+# Features keep the FFI lean: `shekyl-ffi` depends with
+# `default-features = false, features = ["pipeline"]` — the trace writer
+# and the ingest service its one arrival entry offers into, not the corpus
+# fetcher (RPC) or the replay CLI (clap / HTTP / settlement epoch). The
+# pipeline (kameo/tokio and the service's pool, miner and hasher-budget
+# edges), the fetcher and the CLI are optional. Default enables all three
 # so `cargo test -p shekyl-chain-ingest` is the full crate.
+#
+# `producer` is the bundle producer's read path (SO-D12 increment 4c): the
+# fetch scheduler, its store-backed shard facts, and the task that reads,
+# assembles and files. It is the one feature that brings the shard-fetch
+# client into this crate's graph, so `shekyl-ffi` (the wallet-side image,
+# `pipeline` only) never has it (SF-D4). The witness ring the template
+# draws from is in `pipeline`: it holds secrets and fetches nothing.
 [features]
-default = ["pipeline", "fetch", "replay-cli"]
-pipeline = ["dep:kameo", "dep:tokio"]
+default = ["pipeline", "fetch", "replay-cli", "producer"]
+producer = [
+    "pipeline",
+    "shekyl-bundle-producer/fetch",
+    "dep:shekyl-archival-fetch-sched",
+    "dep:shekyl-crypto-pq",
+    # A read's start delay (`bundle_producer::spawn_read`).
+    "tokio/time",
+]
+pipeline = [
+    "dep:kameo",
+    "dep:tokio",
+    "dep:tracing",
+    "dep:shekyl-hash-budget",
+    "dep:shekyl-miner",
+    "dep:shekyl-mempool",
+    "dep:shekyl-block-template",
+    "dep:shekyl-archival-retention",
+    "dep:shekyl-chain-sync",
+    "dep:rand",
+    "dep:zeroize",
+    "dep:shekyl-bundle-producer",
+]
 fetch = ["dep:shekyl-rpc-client", "dep:shekyl-rpc-types"]
 replay-cli = [
     "pipeline",
@@ -93,15 +123,46 @@ serde_json = { workspace = true }
 
 # pipeline: the one stateful stage is an actor (RD-Q11); form workers are
 # blocking tasks on the same runtime.
+# pipeline: the daemon's one hasher budget (PR2-Q3), which the ingest
+# service's form workers take permits from.
+shekyl-hash-budget = { path = "../shekyl-hash-budget", optional = true }
+# pipeline: the miner's job board and found-block sink, which the ingest
+# service's tip follower feeds and receives from (DX-Q2 item 5, DX-Q4).
+shekyl-miner = { path = "../shekyl-miner", optional = true }
+# pipeline: the pool, as a consumer of the connector (c6): reconciled per
+# tip, a switch's returns and an alternative block's bodies offered to its
+# door, a compact block's bodies resolved from what it shows.
+shekyl-mempool = { path = "../shekyl-mempool", optional = true }
+# pipeline: the node's one block template, built by the tip follower on one
+# snapshot (`DRS_X_STORE_FLIP.md` DX-Q3, N2), and the reward-aware fill it lists
+# bodies under (#1152).
+shekyl-block-template = { path = "../shekyl-block-template", optional = true }
+# pipeline: the template's coinbase secret, drawn from the OS per template
+# (Q4), and its wipe.
+rand = { version = "0.8", optional = true }
+# pipeline: chain sync's own state, the watch the follower posts a job on
+# only while it reads `Synced` (Q13).
+shekyl-chain-sync = { path = "../shekyl-chain-sync", optional = true }
 kameo = { workspace = true, optional = true }
 tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "macros", "sync"], optional = true }
+# A pool-file fault is logged and ingest continues: the file is discardable.
+tracing = { version = "0.1", optional = true }
 
 # fetch: the daemon RPC contract the corpus fetcher speaks.
 shekyl-rpc-client = { path = "../shekyl-rpc-client", optional = true }
 shekyl-rpc-types = { path = "../shekyl-rpc-types", optional = true }
 
+# pipeline: the witness ring the template draws its `0x0C` commitment
+# from (SO-D12 increment 4c), without the crate's `fetch` feature.
+# producer: the same crate's challenge read, and the daemon's fetch
+# scheduler it reads through.
+shekyl-bundle-producer = { path = "../shekyl-bundle-producer", optional = true }
+shekyl-archival-fetch-sched = { path = "../shekyl-archival-fetch-sched", optional = true }
+
 # replay-cli: argument parsing as shekyl-cli does it; HTTP transport for
 # `fetch`; SETTLEMENT_EPOCH_BLOCKS — a consensus constant, not a flag.
+# pipeline also takes `shekyl-archival-retention`: the empty attestation
+# root and the bundle's bytes.
 clap = { version = "4", features = ["derive"], optional = true }
 shekyl-rpc-transport = { path = "../shekyl-rpc-transport", optional = true }
 shekyl-archival-retention = { path = "../shekyl-archival-retention", optional = true }
@@ -116,6 +177,9 @@ curve25519-dalek = { version = "4", default-features = false, features = ["alloc
 zeroize = { workspace = true, optional = true }
 
 [dev-dependencies]
+# Its workers' ledger rows, counted by the same tests.
+shekyl-thread-ledger = { path = "../shekyl-thread-ledger" }
+shekyl-thread-priority = { path = "../shekyl-thread-priority" }
 # `shekyl-chain-rules`' fixtures are behind `harness`, a TEST_ONLY feature
 # (check_test_only_features.py) — never enabled from [dependencies].
 # The rules crate's fixtures — MockSubstrate, the always-satisfying
@@ -123,9 +187,8 @@ zeroize = { workspace = true, optional = true }
 shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
 # The block producer the scenario driver (`scenario.rs`, test-only) builds
 # candidates with — the production template over the production stack
-# (CHAIN_RULES_SLICE_6.md §5.3). Dev-dependency: the driver is a test
-# instrument; the template crate's production consumer is the live
-# daemon's handler at the store flip (DRS-X).
+# (CHAIN_RULES_SLICE_6.md §5.3). Unconditional here for the driver; the
+# [dependencies] edge above is the tip follower's (`template.rs`).
 shekyl-block-template = { path = "../shekyl-block-template" }
 # The harness miner every scenario block pays (`scenario.rs`), and the
 # spender over the scenario's blocks: the wallet-side curve tree mirrors
@@ -139,6 +202,12 @@ shekyl-block-template = { path = "../shekyl-block-template" }
 # a crate and not this crate's module.
 shekyl-harness-wallet = { path = "../shekyl-harness-wallet" }
 shekyl-harness-spender = { path = "../shekyl-harness-spender" }
+# Two subjects over the scenario chain: CEN-M9's witness (the submit
+# engine, with the production verifier, over
+# `shekyl_daemon_rpc::RustPoolShim` — the prepared reversion judged end to
+# end where the real spends live), and DRS-X PR 3's store-backed RPC facts
+# and read handlers, over the scenario chain and the captured chains.
+shekyl-daemon-rpc = { path = "../shekyl-daemon-rpc" }
 # The persona's keys (`derive_archival_p_keys`) and the emission claim's
 # assembly (`emission_assembly.rs`, also behind `harness` above).
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
@@ -165,6 +234,26 @@ redb = { workspace = true }
 # DRS_E2_REPLAY_DRIVER.md §3.10): already in the normal graph via shekyl-wire;
 # named here only so the test can call it directly.
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
+# DRS-X PR 3: the RPC wire types the store-backed facts and read handlers
+# answer on (`rpc_store_facts_tests.rs`, `rpc_store_reads_tests.rs`).
+shekyl-rpc-types = { path = "../shekyl-rpc-types" }
+hex = "0.4"
+# The wallet's block fetch over the store-backed handlers (the review of
+# #1165, ruling 7): the wallet's own client and transport, against a local
+# HTTP stand-in that serves `get_block`, `get_transactions` and
+# `get_o_indexes.bin` from `StoreFacts`.
+# `test-helpers`: the staged receipt capability over a harness persona's
+# keys (`__test_helpers::resident_receipt_key`), for the bundle producer's
+# gate test (SO-D12 increment 4c). TEST_ONLY; this dev edge enables it.
+shekyl-engine-core = { path = "../shekyl-engine-core", features = ["test-helpers"] }
+# The gate test's persona serves its shard on the production serve loop
+# behind the loopback SOCKS shim, its height on a tip cache the test
+# stamps. Dev-only: SF-D4 keeps the serve edge off every shipped graph.
+shekyl-p-loopback = { path = "../shekyl-p-loopback" }
+shekyl-p-host = { path = "../shekyl-p-host", features = ["test-signer"] }
+shekyl-p-serve = { path = "../shekyl-p-serve", features = ["test-signer"] }
+shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
+tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "macros", "sync", "net", "io-util", "time", "test-util"] }
 
 [lints]
 workspace = true

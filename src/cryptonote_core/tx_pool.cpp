@@ -174,8 +174,9 @@ namespace cryptonote
     //
     // shekyl_block_template::Fill::admit is the ruled replacement (admit only
     // when the body does not lower the gross coinbase, bound 2×median less
-    // the reserve). It is not this scan, and this scan does not call it
-    // (docs/FOLLOWUPS.md). The coinbase reserve is still the pinned 600.
+    // the coinbase). It is not this scan, and this scan does not call it.
+    // This scan deletes with tx_pool.cpp at the DRS-X flip (DEL-010). The
+    // reserve it subtracts is the C++ literal of the Rust derivation.
     constexpr size_t LISTED_WEIGHT_OVERSHOOT_NUMERATOR = 13;
     constexpr size_t LISTED_WEIGHT_OVERSHOOT_DENOMINATOR = 10;
     // 13/10 is the inherited 130/100 at the median this node builds, and

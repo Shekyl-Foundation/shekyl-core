@@ -218,8 +218,9 @@ const _: () = assert!(FnDsaHybridPublicKey::CANONICAL_LEN == RECEIPT_SIGN_PK_LEN
 /// An Ed25519 + FN-DSA-1024 secret key. Wiped on drop; never serialized.
 ///
 /// There is no canonical encoding for it and no `Clone`: the receipt key is
-/// re-derived from the wallet seed, and the witness key lives for one block
-/// in memory. Neither is written anywhere.
+/// re-derived from the wallet seed, and the witness key lives in memory, in
+/// the block producer's ring, until that block's bundle is filed. Neither
+/// is written anywhere.
 ///
 /// Both halves live on the heap, each at the one address it was written
 /// to, and are wiped there on drop. The bytes are borrowed, not
@@ -236,6 +237,17 @@ impl std::fmt::Debug for FnDsaHybridSecretKey {
         f.write_str("FnDsaHybridSecretKey([REDACTED])")
     }
 }
+
+// A marker, and it wipes nothing: each half is a `HeapSecret`, which wipes
+// itself in its heap slot when it drops. This impl states that to the type
+// system, so a holder of the key (the block producer's witness ring) can
+// require `ZeroizeOnDrop` of what it holds and have the bound checked.
+const _: () = {
+    fn wipes_itself_on_drop<T: zeroize::ZeroizeOnDrop>() {}
+    let _ = wipes_itself_on_drop::<HeapSecret<ED25519_SECRET_KEY_LENGTH>>;
+    let _ = wipes_itself_on_drop::<HeapSecret<FN_DSA_1024_SECRET_KEY_LENGTH>>;
+};
+impl zeroize::ZeroizeOnDrop for FnDsaHybridSecretKey {}
 
 // Test-support surface, behind `test-utils`.
 #[cfg(any(test, feature = "test-utils"))]

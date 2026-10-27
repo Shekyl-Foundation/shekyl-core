@@ -95,14 +95,15 @@ enum {
 //   offset  9: reserved[7]           (zeroed)
 //   offset 16: ref_height            (u64; reference block main-chain height)
 //   offset 24: root[32]              (curve-tree root at ref_height)
-//   offset 56: fee_per_byte          (u64; check_fee's derived floor param)
-//   offset 64: fee_quantization_mask (u64; ≥ 1)
-//   offset 72: weight_limit          (u64; get_transaction_weight_limit)
-//   offset 80: chain_height          (u64; block count, m_db->height())
-//   offset 88: in_chain_height       (u64; valid iff in_chain — the F40 confirming-block
+//   offset 56: fee_per_byte          (u64; check_fee's derived floor param; the lattice
+//                                      the fee is rounded to is a Rust constant,
+//                                      shekyl_economics::FEE_QUANTIZATION_MASK)
+//   offset 64: weight_limit          (u64; get_transaction_weight_limit)
+//   offset 72: chain_height          (u64; block count, m_db->height())
+//   offset 80: in_chain_height       (u64; valid iff in_chain — the F40 confirming-block
 //                                      height, read under the same lock scope as the
 //                                      membership fact so the pair cannot be racy)
-//   offset 96: bond_record_bonded_total (u64; valid iff bond_record_probed AND the probe
+//   offset 88: bond_record_bonded_total (u64; valid iff bond_record_probed AND the probe
 //                                      kind was _RELEASE -- the debit arm's Phase-D
 //                                      predicate, because an exit preserves the row)
 //
@@ -122,13 +123,11 @@ typedef struct shekyl_submit_facts_ffi {
     uint64_t ref_height;
     uint8_t root[32];
     uint64_t fee_per_byte;
-    uint64_t fee_quantization_mask;
     uint64_t weight_limit;
     uint64_t chain_height;
     uint64_t in_chain_height;
     // The probed record's bonded total, valid iff bond_record_probed AND the
-    // probe kind was _RELEASE. Appended (offset 96) so no existing offset
-    // moves.
+    // probe kind was _RELEASE (offset 88).
     //
     // WHY PRESENCE IS NOT ENOUGH: apply_archival_unbond does a WHOLE-RECORD
     // write, so an exited persona keeps its row with bonded_total_atomic == 0

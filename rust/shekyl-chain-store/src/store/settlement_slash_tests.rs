@@ -45,8 +45,13 @@ fn an_empty_index_settles_nothing_and_slashes_nothing() {
             .is_complete_tree());
         for e in 0..=last {
             assert_eq!(
-                snap.settlement_row(&p, ShardId::from_raw(0), SettlementEpoch::from_raw(e))
-                    .expect("read"),
+                snap.settlement_row(
+                    &p,
+                    ShardId::from_raw(0),
+                    SettlementEpoch::from_raw(e),
+                    EpochFloor::NONE
+                )
+                .expect("read"),
                 None
             );
         }
@@ -97,9 +102,15 @@ fn the_window_passes_over_an_unobserved_epoch_and_counts_a_served_one() {
     let shard = ShardId::from_raw(0);
     let epoch = SettlementEpoch::from_raw;
     let snap = chain.store.begin_read().expect("read");
+    // Read off the slash log, which keeps `k + n` epochs: the applied set
+    // is the settling family's and its old epochs are retired by now
+    // (`EpochFloor`, §17).
+    let floor = slash_floor_at(&snap);
     let slashed_at = |i: u64| -> Vec<u64> {
-        (0..=m + 2)
-            .filter(|e| snap.slash_applied(&id(i), shard, epoch(*e)).expect("read"))
+        snap.slash_log_after(&id(i), whole_log_from(floor), floor)
+            .expect("read")
+            .iter()
+            .map(|entry| entry.epoch.to_raw())
             .collect()
     };
     assert_eq!(slashed_at(0), [m], "every epoch missed: slashed at M");
@@ -117,7 +128,7 @@ fn the_window_passes_over_an_unobserved_epoch_and_counts_a_served_one() {
 
     // The rows the verdicts were read from.
     let outcome = |i: u64, e: u64| {
-        snap.settlement_row(&id(i), shard, epoch(e))
+        snap.settlement_row(&id(i), shard, epoch(e), EpochFloor::NONE)
             .expect("read")
             .map(SettlementRow::outcome)
     };
@@ -136,7 +147,7 @@ fn the_window_passes_over_an_unobserved_epoch_and_counts_a_served_one() {
     assert_eq!(outcome(0, m + 1), Some(SettlementOutcome::Missed));
     assert_eq!(outcome(0, m + 2), None);
     assert_eq!(
-        snap.issued_draws(epoch(m + 2))
+        snap.issued_draws(epoch(m + 2), EpochFloor::NONE)
             .expect("read")
             .iter()
             .filter(|d| d.persona == id(0))
@@ -162,7 +173,11 @@ fn an_index_that_does_not_fold_to_its_digest_halts_the_slash_pass() {
     fn a_draw_gained(store: &ChainStore, epoch: SettlementEpoch) {
         let mut extra = planned_draws(epoch.to_raw(), 2, every_epoch_missed)[0];
         extra.draw = 9;
-        let digest = store.begin_read().unwrap().issued_digest(epoch).unwrap();
+        let digest = store
+            .begin_read()
+            .unwrap()
+            .issued_digest(epoch, EpochFloor::NONE)
+            .unwrap();
         store
             .regtest_issue_draws(Trust::UNANCHORED, epoch, &[extra], digest)
             .expect("issued");
@@ -243,11 +258,26 @@ fn popping_the_deadline_connect_unsettles_the_epoch() {
         let snap = store.begin_read().expect("read");
         ids_in_table_order(2)
             .iter()
-            .map(|p| snap.settlement_row(p, shard, epoch).expect("read"))
+            .map(|p| {
+                snap.settlement_row(p, shard, epoch, EpochFloor::NONE)
+                    .expect("read")
+            })
             .collect()
     };
     let missed = Some(SettlementRow::settle(0, 3).expect("a row"));
     assert_eq!(rows(&chain.store), [missed, missed]);
+    let frozen = |store: &ChainStore| {
+        store
+            .begin_read()
+            .expect("read")
+            .complete_trees(epoch, EpochFloor::NONE)
+            .expect("read")
+    };
+    assert_eq!(
+        frozen(&chain.store),
+        Some(CompleteTreeSet::default()),
+        "the pass froze the epoch's (empty) complete-tree set"
+    );
     let popped: Result<Popped, TestErr> = chain.store.write(|batch| Ok(batch.pop()?));
     assert_eq!(
         popped.expect("pops").height,
@@ -258,13 +288,23 @@ fn popping_the_deadline_connect_unsettles_the_epoch() {
         [None, None],
         "the rows went with the block"
     );
+    assert_eq!(
+        frozen(&chain.store),
+        None,
+        "the frozen set went with the block that settled the epoch (SI-31)"
+    );
     let snap = chain.store.begin_read().expect("read");
     assert_eq!(
         snap.last_settled_slash_epoch().expect("read"),
         Some(SettlementEpoch::from_raw(0)),
         "the watermark is the epoch before"
     );
-    assert_eq!(snap.issued_draws(epoch).expect("read").len(), 6);
+    assert_eq!(
+        snap.issued_draws(epoch, EpochFloor::NONE)
+            .expect("read")
+            .len(),
+        6
+    );
     drop(snap);
     chain.finish();
 }
@@ -314,6 +354,94 @@ fn a_settlement_row_already_recorded_refuses_the_second_write() {
         }
         .row(),
         25
+    );
+    chain.finish();
+}
+
+/// What a settled epoch's pass freezes (`SO-D12h`, SI-31): the personas
+/// its gather excluded from the market as complete trees. Every persona of
+/// this chain is a complete tree. In epoch 1 persona 0 is Served and
+/// persona 1 Missed: the gather credits persona 0 alone and excludes it as
+/// a complete tree, so the set is `{persona 0}` and the epoch has no
+/// market — a zero `Σwork`. Epoch 2 issues nothing: no bond is credited,
+/// and its set is written empty, not skipped. Red edit: in
+/// `freeze_complete_trees`, drop the credit filter — persona 1, Missed,
+/// then joins the set.
+#[test]
+fn a_settled_epoch_freezes_the_complete_trees_its_gather_excluded() {
+    fn plan(epoch: u64, persona: u64) -> Option<&'static [bool]> {
+        match (epoch, persona) {
+            (1, 0) => Some(SERVED),
+            (1, _) => Some(MISSED),
+            _ => None,
+        }
+    }
+    let through = RULES.settlement_schedule().slash_deadline_height(2);
+    let chain = SlashedChain::build_with("slash-frozen-complete-trees", 2, through, plan);
+    let snap = chain.store.begin_read().expect("read");
+    let served = Persona::at(slot(0)).id();
+    assert_eq!(
+        snap.complete_trees(SettlementEpoch::from_raw(1), EpochFloor::NONE)
+            .expect("read")
+            .as_ref()
+            .map(CompleteTreeSet::as_slice),
+        Some([served].as_slice()),
+        "the credited complete tree, and not the missed one"
+    );
+    assert_eq!(
+        snap.sigma_work(SettlementEpoch::from_raw(1), EpochFloor::NONE)
+            .expect("read"),
+        Some(SigmaWorkMilli::from_raw(0)),
+        "a complete tree is no market member"
+    );
+    for e in [0, 2] {
+        assert_eq!(
+            snap.complete_trees(SettlementEpoch::from_raw(e), EpochFloor::NONE)
+                .expect("read"),
+            Some(CompleteTreeSet::default()),
+            "epoch {e} credited nothing: its set is written empty"
+        );
+    }
+    assert_eq!(
+        snap.complete_trees(SettlementEpoch::from_raw(3), EpochFloor::NONE)
+            .expect("read"),
+        None,
+        "an epoch not settled has no row"
+    );
+    drop(snap);
+    chain.finish();
+}
+
+/// The pass freezes an epoch's complete trees once. A set already under
+/// the epoch's key when the pass writes it is SI-31 at the insert.
+#[test]
+fn a_frozen_complete_tree_set_already_recorded_refuses_the_second_write() {
+    let epoch = SettlementEpoch::from_raw(1);
+    let deadline = RULES.settlement_schedule().slash_deadline_height(1);
+    let mut chain =
+        SlashedChain::build_with("slash-frozen-twice", 2, deadline - 1, every_epoch_missed);
+    let planted: Result<(), TestErr> = chain.store.write(|batch| {
+        batch
+            .open_upsert_table(crate::schema::ARCHIVAL_COMPLETE_TREES)?
+            .upsert(
+                epoch.to_raw(),
+                CompleteTreeSet::default().encoded().as_encoded(),
+            )?;
+        Ok(())
+    });
+    planted.expect("planted");
+    let out: Result<(), TestErr> = chain.store.write(|batch| {
+        let view = batch.chain_view();
+        let judged = chain.grown.judge_listing(&view, &RULES, &[])?;
+        batch.connect(judged, RULES)?;
+        Ok(())
+    });
+    let TestErr::Store(message) = out.expect_err("the connect is refused") else {
+        panic!("aborted, not refused");
+    };
+    assert!(
+        message.contains("freezes an epoch's complete trees once"),
+        "the insert names SI-31: {message}"
     );
     chain.finish();
 }

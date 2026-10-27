@@ -12,7 +12,9 @@
 # with the binaries and a `pluggable_transports/` directory Shekyl does not
 # ship, `docs/` with the licence texts), pinned by a pin file written to match.
 # No real tor is needed and nothing is fetched: `stage` finds the tarball in
-# `--sources`.
+# `--sources`. The Windows cases build a minimal PE32+ image whose import
+# tables say what each case needs, so the PE reader is bitten by a file whose
+# every byte this test chose.
 
 import hashlib
 import io
@@ -27,6 +29,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 TOR_BUNDLE = REPO / "scripts" / "release" / "tor_bundle.py"
+TOR_MACHO = REPO / "scripts" / "release" / "tor_macho.py"
+TOR_PE = REPO / "scripts" / "release" / "tor_pe.py"
 TARGETS_GATE = REPO / "scripts" / "ci" / "check_tor_pin_targets.py"
 
 HOST = "x86_64-linux-gnu"
@@ -48,9 +52,9 @@ def sha(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def make_tarball(path):
+def make_tarball(path, members=MEMBERS):
     with tarfile.open(path, "w:gz") as tar:
-        for name, data in MEMBERS.items():
+        for name, data in members.items():
             info = tarfile.TarInfo(name)
             info.size = len(data)
             info.mode = 0o700
@@ -64,6 +68,7 @@ def base_pins(tarball_digest):
         "bundle_url": "https://invalid.example/{bundle_version}/{bundle_target}.tar.gz",
         "source_url": "https://invalid.example/tor-{tor_version}.tar.gz",
         "source_signature_url": "https://invalid.example/tor-{tor_version}.tar.gz.asc",
+        "signed_url": "https://invalid.example/signed-{bundle_version}/{bundle_target}-{name}",
         "targets": [
             {
                 "os": "linux",
@@ -91,11 +96,141 @@ def base_pins(tarball_digest):
     }
 
 
+WIN_HOST = "x86_64-w64-mingw32"
+WIN_IMPORTS = ["KERNEL32.dll", "WS2_32.dll", "api-ms-win-crt-runtime-l1-1-0.dll"]
+
+
+def make_pe(imports, delayed=(), import_rva=None, import_size=None, delay_size=None):
+    """A PE32+ image: the DOS and PE headers, one section, and in it an import
+    table naming `imports` and, when `delayed` is given, a delay-load table
+    naming those. `import_rva` overrides where the import directory points;
+    `import_size` and `delay_size` override the sizes the directories record
+    (the tables themselves are laid out as usual)."""
+    section_rva, section_raw = 0x1000, 0x200
+    import_table_size = 20 * (len(imports) + 1)
+    delay_table_size = 32 * (len(delayed) + 1) if delayed else 0
+    names = bytearray()
+
+    def name_rva(name):
+        rva = section_rva + import_table_size + delay_table_size + len(names)
+        names.extend(name.encode("ascii") + b"\0")
+        return rva
+
+    body = bytearray()
+    for name in imports:
+        descriptor = bytearray(20)
+        descriptor[12:16] = name_rva(name).to_bytes(4, "little")
+        body += descriptor
+    body += bytes(20)
+    for name in delayed:
+        descriptor = bytearray(32)
+        descriptor[0:4] = (1).to_bytes(4, "little")  # attributes: RVA form
+        descriptor[4:8] = name_rva(name).to_bytes(4, "little")
+        body += descriptor
+    if delayed:
+        body += bytes(32)
+    body += names
+
+    image = bytearray(section_raw)
+    image[0:2] = b"MZ"
+    image[0x3C:0x40] = (0x40).to_bytes(4, "little")
+    image[0x40:0x44] = b"PE\0\0"
+    coff = 0x44
+    image[coff : coff + 2] = (0x8664).to_bytes(2, "little")
+    image[coff + 2 : coff + 4] = (1).to_bytes(2, "little")
+    image[coff + 16 : coff + 18] = (240).to_bytes(2, "little")
+    optional = coff + 20
+    image[optional : optional + 2] = (0x20B).to_bytes(2, "little")
+    image[optional + 24 : optional + 32] = (0x140000000).to_bytes(8, "little")
+    image[optional + 108 : optional + 112] = (16).to_bytes(4, "little")
+    directories = optional + 112
+    rva = section_rva if import_rva is None else import_rva
+    image[directories + 8 : directories + 12] = rva.to_bytes(4, "little")
+    recorded = import_table_size if import_size is None else import_size
+    image[directories + 12 : directories + 16] = recorded.to_bytes(4, "little")
+    if delayed:
+        delay = directories + 8 * 13
+        recorded = delay_table_size if delay_size is None else delay_size
+        image[delay : delay + 4] = (section_rva + import_table_size).to_bytes(4, "little")
+        image[delay + 4 : delay + 8] = recorded.to_bytes(4, "little")
+    section = optional + 240
+    image[section : section + 8] = b".idata\0\0"
+    image[section + 8 : section + 12] = len(body).to_bytes(4, "little")
+    image[section + 12 : section + 16] = section_rva.to_bytes(4, "little")
+    image[section + 16 : section + 20] = len(body).to_bytes(4, "little")
+    image[section + 20 : section + 24] = section_raw.to_bytes(4, "little")
+    return bytes(image + body)
+
+
+MAC_HOST = "aarch64-apple-darwin11"
+ARM64 = 0x0100000C
+LC_SEGMENT_64, LC_CODE_SIGNATURE = 0x19, 0x1D
+
+
+def segment(name, vmaddr, vmsize, fileoff, filesize):
+    cmd = bytearray(72)
+    cmd[0:4] = LC_SEGMENT_64.to_bytes(4, "little")
+    cmd[4:8] = (72).to_bytes(4, "little")
+    cmd[8:24] = name.encode().ljust(16, b"\0")
+    for i, value in enumerate((vmaddr, vmsize, fileoff, filesize)):
+        cmd[24 + 8 * i : 32 + 8 * i] = value.to_bytes(8, "little")
+    return bytes(cmd)
+
+
+def make_macho(seed, linkedit_size=0x5F3):
+    """An unsigned 64-bit Mach-O as Tor ships it: a header, a `__TEXT` and a
+    `__LINKEDIT` segment, zero slack after the load commands, code bytes, and
+    `__LINKEDIT` ending the file. `seed` makes two files differ."""
+    text_end = 0x1000
+    commands = segment("__TEXT", 0, text_end, 0, text_end) + segment(
+        "__LINKEDIT", text_end, 0x1000, text_end, linkedit_size
+    )
+    image = bytearray(text_end + linkedit_size)
+    image[0:4] = (0xFEEDFACF).to_bytes(4, "little")
+    image[4:8] = ARM64.to_bytes(4, "little")
+    image[12:16] = (2).to_bytes(4, "little")
+    image[16:20] = (2).to_bytes(4, "little")
+    image[20:24] = len(commands).to_bytes(4, "little")
+    image[32 : 32 + len(commands)] = commands
+    for i in range(0x100, len(image)):
+        image[i] = (i * 7 + seed) % 251 + 1
+    return bytes(image)
+
+
+def sign(upstream, blob=b"\xfa\xde\x0c\xc0" * 128, vmsize_round=0x4000):
+    """What codesign does to `upstream` (measured on the macOS build host, 2026-10-22):
+    one LC_CODE_SIGNATURE appended in the zero slack, the header counting it,
+    the blob on the next 16-byte boundary, and `__LINKEDIT` grown to hold it,
+    its vmsize rounded up to 16 KiB."""
+    image = bytearray(upstream)
+    ncmds = int.from_bytes(image[16:20], "little")
+    sizeofcmds = int.from_bytes(image[20:24], "little")
+    at = 32 + sizeofcmds
+    dataoff = -(-len(image) // 16) * 16
+    image += bytes(dataoff - len(image)) + blob
+    image[16:20] = (ncmds + 1).to_bytes(4, "little")
+    image[20:24] = (sizeofcmds + 16).to_bytes(4, "little")
+    image[at : at + 4] = LC_CODE_SIGNATURE.to_bytes(4, "little")
+    image[at + 4 : at + 8] = (16).to_bytes(4, "little")
+    image[at + 8 : at + 12] = dataoff.to_bytes(4, "little")
+    image[at + 12 : at + 16] = len(blob).to_bytes(4, "little")
+    linkedit = 32 + 72
+    fileoff = int.from_bytes(image[linkedit + 40 : linkedit + 48], "little")
+    filesize = len(image) - fileoff
+    image[linkedit + 32 : linkedit + 40] = (-(-filesize // vmsize_round) * vmsize_round).to_bytes(8, "little")
+    image[linkedit + 48 : linkedit + 56] = filesize.to_bytes(8, "little")
+    return bytes(image)
+
+
+MAC_FILES = ["tor", "libevent-2.1.7.dylib"]
+
+
 class Bench:
     """A scratch directory holding a tarball, its pin file, and room to stage."""
 
     def __init__(self, tmp):
         self.root = Path(tmp)
+        self.host = HOST
         self.sources = self.root / "sources"
         self.sources.mkdir()
         self.tarball = self.sources / "tor-expert-bundle-linux-x86_64-9.9.9.tar.gz"
@@ -115,14 +250,76 @@ class Bench:
             text=True,
         )
 
-    def stage(self, host=HOST):
+    def stage(self, host=None):
         return self.run(
-            "stage", "--host", host, "--sources", str(self.sources),
+            "stage", "--host", host or self.host, "--sources", str(self.sources),
             "--dest", str(self.dest), "--licenses", str(self.licenses),
         )
 
-    def verify(self):
-        return self.run("verify", "--host", HOST, "--dir", str(self.dest))
+    def verify(self, *extra):
+        return self.run("verify", "--host", self.host, "--dir", str(self.dest), *extra)
+
+    def macos(self):
+        """Make the pinned row a macOS bundle: Tor's unsigned `tor` and
+        `libevent` in the tarball, their signed copies in the sources cache,
+        and a row pinning the signed bytes as `files` and Tor's as `upstream`."""
+        self.upstream = {name: make_macho(seed) for seed, name in enumerate(MAC_FILES)}
+        self.shipped = {name: sign(data) for name, data in self.upstream.items()}
+        members = {f"tor/{name}": data for name, data in self.upstream.items()}
+        members["tor/pluggable_transports/lyrebird"] = b"a transport Shekyl does not ship"
+        members["docs/tor.txt"] = b"tor licence"
+        self.tarball = self.sources / "tor-expert-bundle-macos-aarch64-9.9.9.tar.gz"
+        # The only directory stage reads the signed files from.
+        self.signed_cache = self.sources / "tor-signed-macos-aarch64-9.9.9"
+        self.signed_cache.mkdir()
+        for name, data in self.shipped.items():
+            (self.signed_cache / name).write_bytes(data)
+        row = self.pins["targets"][0]
+        row.update(
+            os="macos",
+            arch="aarch64",
+            gitian_host=MAC_HOST,
+            bundle_target="macos-aarch64",
+            tarball_sha256=make_tarball(self.tarball, members),
+            files=[{"name": n, "sha256": sha(d)} for n, d in self.shipped.items()],
+            upstream=[{"name": n, "sha256": sha(d)} for n, d in self.upstream.items()],
+            licenses=["docs/tor.txt"],
+        )
+        self.host = MAC_HOST
+        self.write()
+
+    def tie(self, shipped_tor):
+        """`tie` over a signed directory whose `tor` is `shipped_tor`."""
+        signed = self.root / "tie"
+        shutil.rmtree(signed, ignore_errors=True)
+        signed.mkdir()
+        (signed / "tor").write_bytes(shipped_tor)
+        return self.run("tie", "--tarball", str(self.tarball), "--signed", str(signed))
+
+    def windows(self, pe, imports=WIN_IMPORTS):
+        """Make the pinned row a Windows bundle whose tor.exe is `pe`, with
+        the bundle's other executable beside it (not shipped), and an import
+        list of `imports`."""
+        members = {
+            "tor/tor.exe": pe,
+            "tor/tor-gencert.exe": b"a tool Shekyl does not ship",
+            "docs/tor.txt": b"tor licence",
+            "docs/zlib.txt": b"zlib licence",
+        }
+        self.tarball = self.sources / "tor-expert-bundle-windows-x86_64-9.9.9.tar.gz"
+        row = self.pins["targets"][0]
+        row.update(
+            os="windows",
+            gitian_host=WIN_HOST,
+            bundle_target="windows-x86_64",
+            tarball_sha256=make_tarball(self.tarball, members),
+            executable="tor.exe",
+            files=[{"name": "tor.exe", "sha256": sha(pe)}],
+            imports=list(imports),
+            licenses=["docs/tor.txt", "docs/zlib.txt"],
+        )
+        self.host = WIN_HOST
+        self.write()
 
 
 CASES = []
@@ -216,7 +413,7 @@ def _(b):
     b.pins["targets"][1]["pending"] = "TB-11"
     b.write()
     expect(b.run("disposition", "--host", "riscv64-linux-gnu"), 0, "unavailable")
-    for bad in ("soon", "tb-11", "TB-", "after the launch test", 11):
+    for bad in ("soon", "tb-11", "TB-", "after the launch test", 11, "\u03a4\u0392-11", "TB-\u0661\u0661"):
         b.pins["targets"][1]["pending"] = bad
         b.write()
         expect(b.stage(), 1, "names the")
@@ -353,11 +550,304 @@ def _(b):
     row["os"] = "windows"
     row["gitian_host"] = "x86_64-w64-mingw32"
     row["executable"] = "TOR"
+    row["imports"] = list(WIN_IMPORTS)
     b.write()
     expect(b.run("disposition", "--host", "x86_64-w64-mingw32"), 0, "pinned")
     row["files"].append({"name": "TOR", "sha256": row["files"][0]["sha256"]})
     b.write()
     expect(b.run("disposition", "--host", "x86_64-w64-mingw32"), 1, "a file is listed twice")
+
+
+@case("windows: a tor.exe importing only listed DLLs stages and verifies")
+def _(b):
+    b.windows(make_pe(WIN_IMPORTS), imports=[name.lower() for name in WIN_IMPORTS])
+    expect(b.stage(), 0, "staged tor 0.0.0.1")
+    assert os.listdir(b.dest) == ["tor.exe"], os.listdir(b.dest)
+    expect(b.verify(), 0, "holds exactly the pinned bundle")
+
+
+@case("windows: a planted import the list does not name is refused")
+def _(b):
+    b.windows(make_pe(WIN_IMPORTS + ["version.dll"]))
+    expect(b.stage(), 1, "imports version.dll, which the pin's import list does not name")
+    assert not b.dest.exists(), "a tor.exe that fails its import list leaves nothing staged"
+
+
+@case("windows: verify reads the import table of a staged tor.exe")
+def _(b):
+    b.windows(make_pe(WIN_IMPORTS))
+    expect(b.stage(), 0)
+    b.pins["targets"][0]["imports"].remove("WS2_32.dll")
+    b.write()
+    expect(b.verify(), 1, "imports WS2_32.dll, which the pin's import list does not name")
+
+
+@case("windows: a delay-load import is refused even when the DLL is listed")
+def _(b):
+    b.windows(make_pe(WIN_IMPORTS, delayed=["WS2_32.dll"]))
+    expect(b.stage(), 1, "delay-loads WS2_32.dll; the pin allows no delay-load import")
+    assert not b.dest.exists()
+
+
+@case("windows: a directory with only one of RVA and size set is refused, either table")
+def _(b):
+    # The loader reads an import table from its RVA whatever the size says:
+    # a zero size must not hide the planted import.
+    b.windows(make_pe(WIN_IMPORTS + ["version.dll"], import_size=0))
+    expect(b.stage(), 1, "data directory 1 has RVA 0x1000 and size 0")
+    # Nor hide a delay-load.
+    b.windows(make_pe(WIN_IMPORTS, delayed=["WS2_32.dll"], delay_size=0))
+    expect(b.stage(), 1, "data directory 13 has RVA")
+    # A size with no table behind it is as inconsistent.
+    b.windows(make_pe(WIN_IMPORTS, import_rva=0))
+    expect(b.stage(), 1, "data directory 1 has RVA 0x0 and size")
+    assert not b.dest.exists()
+
+
+@case("windows: an import table the reader cannot follow is refused, not read as empty")
+def _(b):
+    b.windows(make_pe(WIN_IMPORTS, import_rva=0x9000))
+    expect(b.stage(), 1, "RVA 0x9000 is not backed by any section")
+    b.windows(b"MZ" + bytes(62))
+    expect(b.stage(), 1, "not a PE image")
+    # Cut inside the PE32+ optional header's ImageBase (offset 0x58 + 24).
+    b.windows(make_pe(WIN_IMPORTS)[: 0x58 + 28])
+    expect(b.stage(), 1, "truncated PE image")
+
+
+@case("pin file: the import list is a Windows row's, and well formed")
+def _(b):
+    b.windows(make_pe(WIN_IMPORTS))
+    row = b.pins["targets"][0]
+    del row["imports"]
+    b.write()
+    expect(b.stage(), 1, '"imports" is missing; a pinned Windows target must list')
+    row["imports"] = []
+    b.write()
+    expect(b.stage(), 1, '"imports" is not a non-empty list')
+    row["imports"] = ["KERNEL32.dll", "kernel32.DLL"]
+    b.write()
+    expect(b.stage(), 1, "an import is listed twice")
+    row["imports"] = ["..\\KERNEL32.dll"]
+    b.write()
+    expect(b.stage(), 1, "is not a plain file name")
+
+
+@case("pin file: a non-Windows row carrying an import list is refused")
+def _(b):
+    b.pins["targets"][0]["imports"] = list(WIN_IMPORTS)
+    b.write()
+    expect(b.stage(), 1, "only a Windows row has one")
+
+
+# --- macOS: signed files tied to Tor's (TB-11) -----------------------------
+
+
+@case("macos: stage reads the signed cache, and verify --sources ties them")
+def _(b):
+    b.macos()
+    expect(b.stage(), 0, "staged tor 0.0.0.1")
+    assert sorted(os.listdir(b.dest)) == sorted(MAC_FILES), os.listdir(b.dest)
+    for name, data in b.shipped.items():
+        assert (b.dest / name).read_bytes() == data, name
+    note = (b.licenses / "SOURCE.txt").read_text(encoding="utf-8")
+    assert "signed each with its Developer ID" in note and "unmodified" not in note, note
+    for name, data in b.upstream.items():
+        assert sha(data) in note, f"SOURCE.txt names Tor's digest of {name}"
+    expect(b.verify("--sources", str(b.sources)), 0, "holds exactly the pinned bundle")
+
+
+@case("macos: stage takes the signed files from the cache, never Tor's unsigned ones")
+def _(b):
+    b.macos()
+    proc = b.run(
+        "stage", "--host", b.host, "--sources", str(b.sources), "--no-fetch",
+        "--dest", str(b.dest), "--licenses", str(b.licenses),
+    )
+    expect(proc, 0, "staged tor 0.0.0.1")
+    for name, data in b.shipped.items():
+        assert (b.dest / name).read_bytes() == data, name
+
+
+@case("macos: stage --no-fetch with no signed file in the cache refuses and downloads nothing")
+def _(b):
+    b.macos()
+    (b.signed_cache / "tor").unlink()
+    proc = b.run(
+        "stage", "--host", b.host, "--sources", str(b.sources), "--no-fetch",
+        "--dest", str(b.dest), "--licenses", str(b.licenses),
+    )
+    expect(proc, 1, "--no-fetch forbids downloading it")
+    assert "could not fetch" not in proc.stderr, proc.stderr
+    assert not b.dest.exists()
+
+
+@case("macos: a cached signed file that is not the pinned one refuses")
+def _(b):
+    b.macos()
+    (b.signed_cache / "libevent-2.1.7.dylib").write_bytes(sign(b.upstream["libevent-2.1.7.dylib"], blob=b"\x02" * 512))
+    proc = b.run(
+        "stage", "--host", b.host, "--sources", str(b.sources), "--no-fetch",
+        "--dest", str(b.dest), "--licenses", str(b.licenses),
+    )
+    expect(proc, 1, "is not the pinned signed libevent-2.1.7.dylib")
+    assert not b.dest.exists()
+
+
+@case("pin file: a pinned macOS row needs an https signed_url naming the file")
+def _(b):
+    b.macos()
+    for bad in (None, "http://invalid.example/{bundle_target}-{name}", "https://invalid.example/x"):
+        if bad is None:
+            b.pins.pop("signed_url")
+        else:
+            b.pins["signed_url"] = bad
+        b.write()
+        expect(b.stage(), 1, "needs \"signed_url\"")
+    b.pins["signed_url"] = (
+        "https://invalid.example/{bundle_version}/{bundle_target}/{name}/{extra}"
+    )
+    b.write()
+    expect(b.stage(), 1, "signed_url cannot be filled")
+
+
+@case("macos: a signed file that ties but is not the pinned one refuses")
+def _(b):
+    b.macos()
+    (b.signed_cache / "tor").write_bytes(sign(b.upstream["tor"], blob=b"\x01" * 512))
+    proc = b.stage()
+    expect(proc, 1, "is not the pinned signed tor")
+    assert "differs from the upstream file" not in proc.stderr, proc.stderr
+    assert not b.dest.exists()
+
+
+@case("macos: a signed directory with a file too many refuses")
+def _(b):
+    b.macos()
+    (b.signed_cache / "lyrebird").write_bytes(b"x")
+    expect(b.stage(), 1, "the signed files are exactly")
+
+
+@case("macos: a pinned signed file whose code differs from Tor's refuses the tie")
+def _(b):
+    b.macos()
+    forged = bytearray(b.shipped["tor"])
+    forged[0x800] ^= 1
+    (b.signed_cache / "tor").write_bytes(bytes(forged))
+    row = b.pins["targets"][0]
+    row["files"][0]["sha256"] = sha(bytes(forged))
+    b.write()
+    expect(b.stage(), 1, "differs from the upstream file signed at byte 0x800")
+    assert not b.dest.exists()
+
+
+@case("macos: verify needs --sources, and the tie runs there too")
+def _(b):
+    b.macos()
+    expect(b.stage(), 0)
+    expect(b.verify(), 1, "verify needs --sources")
+    # An upstream pin that is not Tor's file: the tie cannot vouch for it.
+    b.pins["targets"][0]["upstream"][0]["sha256"] = "0" * 64
+    b.write()
+    expect(b.verify("--sources", str(b.sources)), 1, "does not match its upstream pin")
+
+
+@case("verify --sources re-checks the cached tarball on every host")
+def _(b):
+    expect(b.stage(), 0)
+    expect(b.verify("--sources", str(b.sources)), 0, "holds exactly the pinned bundle")
+    data = bytearray(b.tarball.read_bytes())
+    data[-1] ^= 1
+    b.tarball.write_bytes(bytes(data))
+    expect(b.verify("--sources", str(b.sources)), 1, "is not the pinned tarball")
+
+
+@case("pin file: a macOS row lists upstream, under the names it ships")
+def _(b):
+    b.macos()
+    row = b.pins["targets"][0]
+    upstream = row.pop("upstream")
+    b.write()
+    expect(b.stage(), 1, "lists Tor's own files as \"upstream\"")
+    row["upstream"] = [dict(upstream[0]), dict(upstream[1], name="libevent.dylib")]
+    b.write()
+    expect(b.stage(), 1, "name different files")
+
+
+@case("pin file: only a macOS row carries upstream")
+def _(b):
+    row = b.pins["targets"][0]
+    row["upstream"] = row["files"]
+    b.write()
+    expect(b.stage(), 1, "only a macOS row has it")
+
+
+@case("tie: Tor's file signed as codesign signs it ties, and both digest sets print")
+def _(b):
+    b.macos()
+    proc = b.tie(b.shipped["tor"])
+    expect(proc, 0)
+    report = json.loads(proc.stdout)
+    assert report == {
+        "files": [{"name": "tor", "sha256": sha(b.shipped["tor"])}],
+        "upstream": [{"name": "tor", "sha256": sha(b.upstream["tor"])}],
+    }, report
+
+
+def _mutated(b, edit):
+    image = bytearray(b.shipped["tor"])
+    edit(image)
+    return bytes(image)
+
+
+TIE_BITES = [
+    ("a byte of Tor's code", lambda i: i.__setitem__(0x900, i[0x900] ^ 1),
+     "differs from the upstream file signed"),
+    ("ncmds not counting the signature",
+     lambda i: i.__setitem__(slice(16, 20), (2).to_bytes(4, "little")),
+     "the load commands do not fill sizeofcmds"),
+    ("sizeofcmds not counting the signature",
+     lambda i: i.__setitem__(slice(20, 24), (144).to_bytes(4, "little")),
+     "a load command runs past the header's sizeofcmds"),
+    ("__LINKEDIT vmsize rounded to 4 KiB, not 16 KiB",
+     lambda i: i.__setitem__(slice(104 + 32, 104 + 40), (0x1000).to_bytes(8, "little")),
+     "differs from the upstream file signed"),
+    ("__LINKEDIT filesize short of the blob",
+     lambda i: i.__setitem__(slice(104 + 48, 104 + 56), (0x5F3).to_bytes(8, "little")),
+     "differs from the upstream file signed"),
+    ("a non-zero padding byte before the blob",
+     lambda i: i.__setitem__(0x1000 + 0x5F3, 0xAA),
+     "differs from the upstream file signed"),
+    ("a byte after the blob",
+     lambda i: i.extend(b"\0"),
+     "run to the end of the file"),
+    ("the signature command's type changed",
+     lambda i: i.__setitem__(slice(176, 180), (0x1E).to_bytes(4, "little")),
+     "is not a code signature, or is not last"),
+]
+
+for _label, _edit, _needle in TIE_BITES:
+    def _bite(b, edit=_edit, needle=_needle):
+        b.macos()
+        expect(b.tie(_mutated(b, edit)), 1, needle)
+    case(f"tie: refuses {_label}")(_bite)
+
+
+@case("tie: refuses a signature written over bytes upstream uses")
+def _(b):
+    b.macos()
+    upstream = bytearray(b.upstream["tor"])
+    upstream[176] = 0x5A  # the slack the signature's command would take
+    b.upstream["tor"] = bytes(upstream)
+    members = {f"tor/{n}": d for n, d in b.upstream.items()}
+    make_tarball(b.tarball, members)
+    expect(b.tie(sign(bytes(upstream))), 1, "overwrites bytes upstream uses")
+
+
+@case("tie: refuses Tor's unsigned file offered as the signed one")
+def _(b):
+    b.macos()
+    expect(b.tie(b.upstream["tor"]), 1, "exactly one 16-byte load command")
 
 
 # --- check_tor_pin_targets.py ---------------------------------------------
@@ -378,7 +868,7 @@ def workflow_yaml(hosts, steps=STAGE_STEP):
 
 def targets_tree(tmp, pins=None, hosts=("x86_64-linux-gnu riscv64-linux-gnu",),
                  workflow_hosts=("x86_64-linux-gnu",), workflow_extra="", workflow=None,
-                 checklist="Expert Bundle 9.9.9 (tor 0.0.0.1)", gate_args=()):
+                 checklist="Expert Bundle 9.9.9 (tor 0.0.0.1)"):
     root = Path(tmp) / "tree"
     (root / "scripts" / "release").mkdir(parents=True)
     (root / "scripts" / "ci").mkdir(parents=True)
@@ -386,7 +876,10 @@ def targets_tree(tmp, pins=None, hosts=("x86_64-linux-gnu riscv64-linux-gnu",),
     (root / "contrib" / "gitian").mkdir(parents=True)
     (root / ".github" / "workflows").mkdir(parents=True)
     (root / "docs").mkdir()
-    shutil.copy(TOR_BUNDLE, root / "scripts" / "release" / TOR_BUNDLE.name)
+    release = root / "scripts" / "release"
+    shutil.copy(TOR_BUNDLE, release / TOR_BUNDLE.name)
+    shutil.copy(TOR_MACHO, release / TOR_MACHO.name)
+    shutil.copy(TOR_PE, release / TOR_PE.name)
     shutil.copy(TARGETS_GATE, root / "scripts" / "ci" / TARGETS_GATE.name)
     (root / "config" / "tor_pins.json").write_text(
         json.dumps(pins if pins is not None else base_pins("0" * 64)), encoding="utf-8"
@@ -406,8 +899,7 @@ def targets_tree(tmp, pins=None, hosts=("x86_64-linux-gnu riscv64-linux-gnu",),
         f"- Current pin: **{checklist}**\n", encoding="utf-8"
     )
     return subprocess.run(
-        [sys.executable, str(root / "scripts" / "ci" / TARGETS_GATE.name), "--root", str(root),
-         *gate_args],
+        [sys.executable, str(root / "scripts" / "ci" / TARGETS_GATE.name), "--root", str(root)],
         capture_output=True,
         text=True,
     )
@@ -521,27 +1013,75 @@ def _(tmp):
     assert "Traceback" not in proc.stderr, proc.stderr
 
 
+def row_for(pins, host):
+    """The target row for `host`, by key: a test does not depend on the
+    order of `base_pins()`'s rows."""
+    (row,) = [row for row in pins["targets"] if row["gitian_host"] == host]
+    return row
+
+
 def pending_pins():
     pins = base_pins("0" * 64)
-    pins["targets"][1]["pending"] = "TB-11"
+    row_for(pins, "riscv64-linux-gnu")["pending"] = "TB-11"
     return pins
 
 
-@tcase("targets: a pending row is reported and passes without --refuse-pending")
+@tcase("targets: a pending row is reported and passes")
 def _(tmp):
     proc = targets_tree(tmp, pins=pending_pins())
     expect(proc, 0, "riscv64-linux-gnu is unavailable pending TB-11")
 
 
-@tcase("targets: --refuse-pending fails while a pending row remains")
-def _(tmp):
-    proc = targets_tree(tmp, pins=pending_pins(), gate_args=("--refuse-pending",))
-    expect(proc, 1, "riscv64-linux-gnu is still pending TB-11")
+def switched_off_pins(record="CA-1"):
+    pins = base_pins("0" * 64)
+    row_for(pins, "riscv64-linux-gnu")["switched_off"] = record
+    return pins
 
 
-@tcase("targets: --refuse-pending passes a ruled-unavailable row")
+@tcase("targets: a switched-off row no descriptor builds is reported and passes")
 def _(tmp):
-    expect(targets_tree(tmp, gate_args=("--refuse-pending",)), 0, "every built host")
+    proc = targets_tree(tmp, pins=switched_off_pins(), hosts=("x86_64-linux-gnu",))
+    expect(proc, 0, "riscv64-linux-gnu is switched off by CA-1 (source builds only)")
+
+
+@tcase("targets: a switched-off row that a descriptor still builds fails")
+def _(tmp):
+    proc = targets_tree(tmp, pins=switched_off_pins())
+    expect(proc, 1, "whose row in config/tor_pins.json is switched off by CA-1")
+
+
+@tcase("targets: an unmarked row no descriptor builds still fails, naming the marker")
+def _(tmp):
+    proc = targets_tree(tmp, hosts=("x86_64-linux-gnu",))
+    expect(proc, 1, "or mark the row \"switched_off\"")
+
+
+@tcase("targets: switched_off must name a record, not a sentence")
+def _(tmp):
+    # The last two are non-ASCII: Greek capitals and Arabic-Indic digits,
+    # which str.isalpha/isdigit would accept and build.rs refuses.
+    for bad in ("off", "ca-1", "CA-", "switched off by Rick", 1, "\u0391\u0392-1", "CA-\u0661"):
+        proc = targets_tree(tmp, pins=switched_off_pins(bad), hosts=("x86_64-linux-gnu",))
+        expect(proc, 1, "names the record of the ruling")
+        shutil.rmtree(Path(tmp) / "tree")
+
+
+@tcase("targets: switched_off on a pinned row is refused")
+def _(tmp):
+    pins = base_pins("0" * 64)
+    row_for(pins, HOST)["switched_off"] = "CA-1"
+    expect(targets_tree(tmp, pins=pins), 1, "belongs on an unavailable row that is not pending")
+
+
+@tcase("targets: a row that is pending and switched off is refused")
+def _(tmp):
+    pins = switched_off_pins()
+    row_for(pins, "riscv64-linux-gnu")["pending"] = "TB-11"
+    expect(
+        targets_tree(tmp, pins=pins, hosts=("x86_64-linux-gnu",)),
+        1,
+        "belongs on an unavailable row that is not pending",
+    )
 
 
 @tcase("targets: a malformed pin file fails")

@@ -18,10 +18,14 @@ fn default_stake_schedule() -> StakeSchedule {
     }
 }
 
+/// Name of the steady baseline. The growth gate selects its year table by
+/// this, and [`all_scenarios`] lists that scenario first.
+pub const BASELINE_STEADY_STATE: &str = "baseline_steady_state";
+
 pub fn scenario_1_baseline(params: &SimParams) -> ScenarioConfig {
     let baseline = params.tx_volume_baseline;
     ScenarioConfig {
-        name: "baseline_steady_state".into(),
+        name: BASELINE_STEADY_STATE.into(),
         description: "Constant moderate transaction volume (1x baseline) over 10 years".into(),
         sim_years: 10,
         volume: VolumeSchedule {
@@ -475,4 +479,28 @@ pub fn gate7_scenarios(params: &SimParams) -> Vec<ScenarioConfig> {
         gate7_asserted_comparator(params, false, "gate7_comparator_asserted_stake"),
         gate7_asserted_comparator(params, true, "gate7_comparator_asserted_stake_growth"),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The gate-7 lock the design quotes (`ECONOMY_EXPLAINED.md`, 117 coins),
+    /// held by no test until Phase 0: the lean bonds-only arm at the end of
+    /// year 1 locks 26 shards' bonds at six replicas and 0.75 SKL a shard.
+    /// The lock model is a floor on the lock, not an estimate
+    /// (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §4).
+    #[test]
+    fn the_lean_bonds_only_lock_is_117_coins_at_the_end_of_year_one() {
+        let params = SimParams::default();
+        let lean = gate7_scenarios(&params)
+            .into_iter()
+            .find(|c| c.name == "gate7_bonds_only_lean")
+            .expect("the lean arm");
+        let lock = lean.archival_lock.expect("gate-7 runs the lock model");
+        assert_eq!(
+            lock.locked_atomic(params.blocks_per_year),
+            117 * u128::from(crate::burden::COIN)
+        );
+    }
 }

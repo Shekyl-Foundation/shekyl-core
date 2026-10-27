@@ -80,10 +80,10 @@ use core::marker::PhantomData;
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, BlockWeight};
 
-use crate::block::{Candidate, StructurallyValid};
+use crate::block::{Candidate, ProvenPow, StructurallyValid};
 use crate::coverage::RuleCoverage;
 use crate::fault::{Fault, Stale};
-use crate::header_ladder::{self, HeaderFacts};
+use crate::header_ladder;
 use crate::rule_set::RuleSet;
 use crate::rules::alt::{K1b, D5, E2, K4};
 use crate::rules::block_weight::block_weight;
@@ -170,6 +170,53 @@ impl Fork {
     }
 }
 
+/// Why CEN-E2 refuses an alternative, before any header is read and before
+/// any coverage is recorded.
+///
+/// [`anchor_band`] returns `None` when E2 does not refuse: no anchor at or
+/// below the recorded tip (the cap does not bind as consensus, `PDM-Q11`),
+/// or the fork sits inside the band. A caller that still declines a deep
+/// unanchored fork is making a local decision, not minting this row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AnchorBand {
+    /// The fork point sits below the last anchor the recorded chain has
+    /// reached.
+    BelowAnchor {
+        /// That anchor's height.
+        anchor: BlockHeight,
+    },
+    /// An anchored chain, and the pop is past the rule set's reorg cap.
+    BeyondCap {
+        /// Recorded blocks the alternative would pop.
+        pops: BlockCount,
+        /// The cap in force.
+        cap: BlockCount,
+    },
+}
+
+/// The two bands of CEN-E2, as a pure predicate. Records nothing.
+///
+/// `None` is not "inside the cap" alone. It is "E2 does not refuse": either
+/// no anchor has been reached, or the fork is inside both bands. The row's
+/// coverage is the caller's, at the site that judged it.
+#[must_use]
+pub fn anchor_band(fork: &Fork, rule_set: &RuleSet, trust: &Trust) -> Option<AnchorBand> {
+    let anchor = trust
+        .anchors()
+        .last_at_or_below(fork.recorded_tip().height)?;
+    if fork.root().height < anchor.height {
+        return Some(AnchorBand::BelowAnchor {
+            anchor: anchor.height,
+        });
+    }
+    let pops = fork.pops();
+    let cap = rule_set.reorg_cap();
+    if pops > cap {
+        return Some(AnchorBand::BeyondCap { pops, cap });
+    }
+    None
+}
+
 /// An alternative block the cheap tier admitted: what the store's AL1
 /// records (`DRS_E5` §2.1, `AltBlockFacts`), and nothing more.
 ///
@@ -206,6 +253,7 @@ pub struct AltValid<'id, V> {
     block_weight: BlockWeight,
     rule_set: RuleSet,
     coverage: RuleCoverage,
+    pow: ProvenPow,
     _brand: Brand<'id>,
     _view: PhantomData<fn(V) -> V>,
 }
@@ -219,11 +267,19 @@ impl<V> core::fmt::Debug for AltValid<'_, V> {
             .field("block_weight", &self.block_weight)
             .field("rule_set", &self.rule_set)
             .field("coverage", &self.coverage)
+            .field("pow", &self.pow)
             .finish_non_exhaustive()
     }
 }
 
 impl<'id, V> AltValid<'id, V> {
+    /// The PoW the tier computed under its seed and accepted (CEN-D1/D2/D3
+    /// over the stitched chain). AL1 records it in the alt row.
+    #[must_use]
+    pub const fn pow(&self) -> ProvenPow {
+        self.pow
+    }
+
     /// The block as received: header, miner transaction, listed bodies
     /// and the attestation witness beside it.
     #[must_use]
@@ -231,8 +287,8 @@ impl<'id, V> AltValid<'id, V> {
         &self.candidate
     }
 
-    /// The candidate, consumed — the bodies are the pool's to hold until
-    /// promotion; the block is the alt row's.
+    /// The candidate, consumed — AL1 stores the block in the alt row and
+    /// the listed bodies beside it.
     #[must_use]
     pub fn into_candidate(self) -> Candidate {
         self.candidate
@@ -304,7 +360,7 @@ impl<'id, V> AltValid<'id, V> {
 /// [`Fault::View`] on the view's own fault; [`Fault::Corrupt`] when the
 /// stitched chain is not the chain it claims (a hole below the parent, a
 /// non-monotone cumulative difficulty); [`Fault::Stale`] when `formed`'s
-/// rule set or seed is not this view's.
+/// rule set, seed or target is not this view's.
 pub fn alt_against<'id, H: AltChainView<'id>>(
     formed: StructurallyValid,
     alt_view: &H,
@@ -335,14 +391,20 @@ pub fn alt_against<'id, H: AltChainView<'id>>(
     // The definitions over the stitched chain, the same derivation
     // `validate` runs over the recorded one. CEN-D5 records only when that
     // derivation produced a target: a D6 refusal is D4's verdict.
-    let HeaderFacts {
-        connecting,
-        cumulative_difficulty,
-        context,
-    } = match header_ladder::derive(&formed, alt_view, rule_set, trust, &mut coverage)? {
-        Ok(facts) => facts,
+    let derived = match header_ladder::derive(
+        formed.seed(),
+        formed.target(),
+        formed.attempt(),
+        alt_view,
+        rule_set,
+        &mut coverage,
+    )? {
+        Ok(derived) => derived,
         Err(refused) => return Ok(Err(refused)),
     };
+    let connecting = derived.connecting;
+    let cumulative_difficulty = derived.cumulative_difficulty;
+    let context = crate::rules::BlockContext::from_derived(&formed, derived, trust);
     D5::record(&mut coverage);
 
     // The header ladder (`DRS_E5` §2.1, CEN-K4): the three segments
@@ -357,6 +419,7 @@ pub fn alt_against<'id, H: AltChainView<'id>>(
     K4::record(&mut coverage);
 
     let hash = formed.hash();
+    let pow = ProvenPow::computed(formed.seed(), formed.pow());
     let block_weight = block_weight(context.formed.candidate());
     drop(context);
     let (candidate, _stateless) = formed.into_parts();
@@ -368,6 +431,7 @@ pub fn alt_against<'id, H: AltChainView<'id>>(
         block_weight,
         rule_set: *rule_set,
         coverage,
+        pow,
         _brand: PhantomData,
         _view: PhantomData,
     }))

@@ -30,16 +30,12 @@
 
 #pragma once 
 
-#include <boost/program_options.hpp>
-#include <boost/logic/tribool_fwd.hpp>
 #include <atomic>
 #include "cryptonote_basic.h"
+#include "shekyl/shekyl_ffi.h"
 #include "verification_context.h"
 #include "difficulty.h"
 #include "math_helper.h"
-#ifdef _WIN32
-#include <windows.h>
-#endif
 
 namespace cryptonote
 {
@@ -62,14 +58,13 @@ namespace cryptonote
   public: 
     miner(i_miner_handler* phandler, const get_block_hash_t& gbh);
     ~miner();
-    bool init(const boost::program_options::variables_map& vm, network_type nettype);
-    static void init_options(boost::program_options::options_description& desc);
+    bool init(const ShekylDaemonSnapshot& snapshot, network_type nettype);
     bool set_block_template(const block& bl, const difficulty_type& diffic, uint64_t height, uint64_t block_reward);
     bool on_block_chain_update();
     // `adr_str` is the caller's original encoded address, retained for
     // display: since the fork-(ii) address layout, an address cannot be
     // re-encoded from `account_public_address` alone (no msg_sign_pk).
-    bool start(const account_public_address& adr, const std::string& adr_str, size_t threads_count, bool do_background = false, bool ignore_battery = false);
+    bool start(const account_public_address& adr, const std::string& adr_str, size_t threads_count);
     uint64_t get_speed() const;
     uint32_t get_threads_count() const;
     void send_stop_signal();
@@ -84,27 +79,7 @@ namespace cryptonote
     void pause();
     void resume();
     void do_print_hashrate(bool do_hr);
-    bool get_is_background_mining_enabled() const;
-    bool get_ignore_battery() const;
-    uint64_t get_min_idle_seconds() const;
-    bool set_min_idle_seconds(uint64_t min_idle_seconds);
-    uint8_t get_idle_threshold() const;
-    bool set_idle_threshold(uint8_t idle_threshold);
-    uint8_t get_mining_target() const;
-    bool set_mining_target(uint8_t mining_target);
     uint64_t get_block_reward() const { return m_block_reward; }
-
-    static constexpr uint8_t  BACKGROUND_MINING_DEFAULT_IDLE_THRESHOLD_PERCENTAGE       = 90;
-    static constexpr uint8_t  BACKGROUND_MINING_MIN_IDLE_THRESHOLD_PERCENTAGE           = 0;
-    static constexpr uint8_t  BACKGROUND_MINING_MAX_IDLE_THRESHOLD_PERCENTAGE           = 99;
-    static constexpr uint16_t BACKGROUND_MINING_DEFAULT_MIN_IDLE_INTERVAL_IN_SECONDS    = 10;
-    static constexpr uint16_t BACKGROUND_MINING_MIN_MIN_IDLE_INTERVAL_IN_SECONDS        = 10;
-    static constexpr uint16_t BACKGROUND_MINING_MAX_MIN_IDLE_INTERVAL_IN_SECONDS        = 3600;
-    static constexpr uint8_t  BACKGROUND_MINING_DEFAULT_MINING_TARGET_PERCENTAGE        = 40;
-    static constexpr uint8_t  BACKGROUND_MINING_MIN_MINING_TARGET_PERCENTAGE            = 1;
-    static constexpr uint8_t  BACKGROUND_MINING_MAX_MINING_TARGET_PERCENTAGE            = 100;
-    static constexpr uint8_t  BACKGROUND_MINING_MINER_MONITOR_INVERVAL_IN_SECONDS       = 10;
-    static constexpr uint64_t BACKGROUND_MINING_DEFAULT_MINER_EXTRA_SLEEP_MILLIS        = 400; // ramp up 
 
   private:
     bool worker_thread();
@@ -144,28 +119,6 @@ namespace cryptonote
     bool m_do_mining;
     std::vector<std::pair<uint64_t, uint64_t>> m_threads_autodetect;
     boost::thread::attributes m_attrs;
-
-    // background mining stuffs ..
-
-    bool set_is_background_mining_enabled(bool is_background_mining_enabled);
-    void set_ignore_battery(bool ignore_battery);
-    bool background_worker_thread();
-    std::atomic<bool> m_is_background_mining_enabled;
-    bool m_ignore_battery;
-    boost::mutex m_is_background_mining_enabled_mutex;
-    boost::condition_variable m_is_background_mining_enabled_cond;
-    std::atomic<bool> m_is_background_mining_started;
-    boost::mutex m_is_background_mining_started_mutex;
-    boost::condition_variable m_is_background_mining_started_cond;    
-    boost::thread m_background_mining_thread;
-    uint64_t m_min_idle_seconds;
-    uint8_t m_idle_threshold;
-    uint8_t m_mining_target;
-    std::atomic<uint64_t> m_miner_extra_sleep;
-    static bool get_system_times(uint64_t& total_time, uint64_t& idle_time);
-    static bool get_process_time(uint64_t& total_time);
-    static uint8_t get_percent_of_total(uint64_t some_time, uint64_t total_time);
-    static boost::logic::tribool on_battery_power();
     std::atomic<uint64_t> m_block_reward;
   };
 }

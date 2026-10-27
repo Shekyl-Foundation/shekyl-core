@@ -45,9 +45,11 @@ pub const DRAWABLE_DIGEST_LEN: usize = 32;
 /// Width of a [`DrawCommitment`].
 pub const DRAW_COMMITMENT_LEN: usize = 32;
 
-/// Width of a stored [`BlockDraws`]: the count and the carry at four bytes
-/// each, the shortfall at eight, and the revealed flag.
-pub const BLOCK_DRAWS_LEN: usize = size_of::<u32>() + size_of::<u32>() + size_of::<u64>() + 1;
+/// Width of a stored [`BlockDraws`]: the count, the carry and
+/// `issued_short` at four bytes each, the shortfall at eight, and the
+/// revealed flag.
+pub const BLOCK_DRAWS_LEN: usize =
+    size_of::<u32>() + size_of::<u32>() + size_of::<u64>() + size_of::<u32>() + 1;
 
 /// What one epoch settled for one pair.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -301,7 +303,7 @@ impl IssuedDigest {
 /// **Every 32-byte value is a commitment. None means "absent" or
 /// "unset".** A commitment nobody can open, such as the all-zero one the
 /// genesis block carries, is still a commitment: its block issues no draw
-/// because no carrier can reveal a seed for it, not because a reader
+/// because no admitted bundle can reveal a seed for it, not because a reader
 /// skipped it. The type has no zero constant, no `Default` and no
 /// emptiness test so that no reader can branch on one.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -336,9 +338,10 @@ impl core::fmt::Debug for DrawCommitment {
 ///
 /// `count` and `carry` are the rule's output at this block, and the next
 /// block's rule reads `carry`. `shortfall` is the visible shortfall the
-/// rule saw. `revealed` is whether a carrier has revealed this block's
-/// seed: until one has, the block's draws are in flight and none of them
-/// is issued.
+/// rule saw. `issued_short` is what this block's admissions took off the
+/// shortfall, and `revealed` is whether an admitted bundle has revealed
+/// this block's seed: until one has, the block's draws are in flight and
+/// none of them is issued.
 ///
 /// A row is written when its block connects and `revealed` is set by the
 /// block that first admits the seed. Both are consensus state, undone with
@@ -352,10 +355,84 @@ pub struct BlockDraws {
     pub count: u32,
     /// The 32-bit fraction carried to the next block's count.
     pub carry: u32,
-    /// The visible shortfall the count was computed from.
+    /// The visible shortfall the count was computed from. Zero on a
+    /// schedule with no response window: no count is computed, so there is
+    /// no shortfall to carry. A windowed epoch opens at
+    /// `COUNTED_DRAWS` times the size of `D`.
     pub shortfall: u64,
-    /// Whether this block's seed has been revealed.
+    /// What this block's admissions took off the shortfall. Zero until
+    /// admission lands (`SO-D12` increment 4): this increment's writer
+    /// records the count and does not admit.
+    pub issued_short: u32,
+    /// Whether this block's seed has been revealed by an admitted bundle.
     pub revealed: bool,
+}
+
+/// A support-stream count: one tree's unissued draws in an epoch, or one
+/// block's issued support draws. Four little-endian bytes
+/// (`ARCHIVAL_SUPPORT_DRAW.md` §5). Capped at `c` by the writer; the
+/// codec stores the number.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SupportCount(u32);
+
+impl SupportCount {
+    /// The stored width.
+    pub const LEN: usize = 4;
+
+    /// A block, or a tree in an epoch, that issued none.
+    ///
+    /// The row a connect writes while the support schedule is not on the
+    /// transition. A store height that was never written is `None`, not
+    /// this value: absence is a hole, and this count is a height that
+    /// issued none.
+    pub const NONE: Self = Self(0);
+
+    /// A count of `n`.
+    #[must_use]
+    pub const fn new(n: u32) -> Self {
+        Self(n)
+    }
+
+    /// The count.
+    #[must_use]
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
+/// One issued support draw (`ARCHIVAL_SUPPORT_DRAW.md` §3).
+///
+/// The key names the tree, the epoch, the issuing block and the draw
+/// index. The shard the draw selected is the value: the settlement row is
+/// one per tree, so the shard is not part of the key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SupportIssued {
+    /// The shard this draw selected, inside the archive at its block.
+    pub shard: ShardId,
+    /// Whether a pass record for this draw has been admitted.
+    pub passed: bool,
+}
+
+impl SupportIssued {
+    /// `shard` as `u64` LE, then the pass flag.
+    pub const LEN: usize = 9;
+}
+
+impl BlockDraws {
+    /// A block that drew nothing: no count, no carry, no shortfall, nothing
+    /// issued, and the seed unrevealed.
+    ///
+    /// The row a schedule with no response window writes, and the row a
+    /// view with no draw table answers. A store height that was never
+    /// written is `None`, not this value: absence is a hole, and this row
+    /// is a height that drew nothing.
+    pub const ZERO: Self = Self {
+        count: 0,
+        carry: 0,
+        shortfall: 0,
+        issued_short: 0,
+        revealed: false,
+    };
 }
 
 /// The digest of one epoch's drawable set, written when the epoch opens

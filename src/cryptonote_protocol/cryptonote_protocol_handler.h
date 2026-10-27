@@ -34,7 +34,6 @@
 
 #pragma once
 
-#include <boost/program_options/variables_map.hpp>
 #include <string>
 
 #include "byte_slice.h"
@@ -103,7 +102,7 @@ namespace cryptonote
     END_INVOKE_MAP2()
 
     bool on_idle();
-    bool init(const boost::program_options::variables_map& vm);
+    bool init();
     bool deinit();
     void set_p2p_endpoint(nodetool::i_p2p_endpoint<connection_context>* p2p);
     //bool process_handshake_data(const blobdata& data, cryptonote_connection_context& context);
@@ -137,18 +136,6 @@ namespace cryptonote
     friend struct ::cryptonote_protocol_handler_test_seam;
     void stop();
     void on_connection_close(cryptonote_connection_context &context);
-    void set_max_out_peers(epee::net_utils::connector_id zone, unsigned int max) { CRITICAL_REGION_LOCAL(m_max_out_peers_lock); m_max_out_peers[zone] = max; }
-    unsigned int get_max_out_peers(epee::net_utils::connector_id zone) const
-    {
-      CRITICAL_REGION_LOCAL(m_max_out_peers_lock);
-      const auto it = m_max_out_peers.find(zone);
-      if (it == m_max_out_peers.end())
-      {
-        MWARNING(epee::net_utils::connector_id_to_string(zone) << " max out peers not set, using default");
-        return shekyl_p2p_default_out_peers();
-      }
-      return it->second;
-    }
     bool no_sync() const { return m_no_sync; }
     void set_no_sync(bool value) { m_no_sync = value; }
     bool needs_new_sync_connections(epee::net_utils::connector_id zone) const;
@@ -203,8 +190,6 @@ namespace cryptonote
     epee::math_helper::once_a_time_seconds<8> m_idle_peer_kicker;
     epee::math_helper::once_a_time_milliseconds<100> m_standby_checker;
     epee::math_helper::once_a_time_seconds<101> m_sync_search_checker;
-    std::unordered_map<epee::net_utils::connector_id, unsigned int> m_max_out_peers;
-    mutable epee::critical_section m_max_out_peers_lock;
     tools::PerformanceTimer m_sync_timer, m_add_timer;
     uint64_t m_last_add_end_time;
     uint64_t m_sync_spans_downloaded, m_sync_old_spans_downloaded, m_sync_bad_spans_downloaded;

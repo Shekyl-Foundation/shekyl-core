@@ -6,7 +6,8 @@
 //! `verify_bundle` against the fixture view (`harness::bundle`).
 //!
 //! The section check lives in `bundle_section_tests`. The census rows and
-//! the staging falsifier live in `bundle_staging_tests`.
+//! the staging falsifier live in `bundle_staging_tests`. Each admission
+//! row, through `judge_bundles`, lives in `bundle_admission_tests`.
 //!
 //! # What these tests bite against, and what they do not cover
 //!
@@ -30,7 +31,8 @@ use shekyl_archival_retention::{
     BUNDLE_WITNESS_LEN, CHALLENGE_READS, PASS_COUNTERSIGNATURE_MESSAGE_LEN,
 };
 use shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa;
-use shekyl_types::{BlockCount, BlockHash, BlockHeight};
+use shekyl_types::archival::ReceiptSignPk;
+use shekyl_types::{BlockCount, BlockHash, BlockHeight, PCanonicalId};
 
 use super::bundle_section_tests::{rules_of, view_holding};
 use super::*;
@@ -152,8 +154,9 @@ fn an_all_miss_bundle_admits_and_issues_every_draw_as_a_miss() {
 
 /// A block with no draws has a bundle with an empty bitmap: valid, issues
 /// nothing (`SCS-P33`), and reads neither a drawable epoch nor a block hash.
-/// Red edit: refuse `count(h) = 0`, or read the drawable epoch before the
-/// early return — the read log then holds `DrawableEpoch`.
+/// The support count is read: zero there is what makes the empty support
+/// bitmap honest. Red edit: refuse `count(h) = 0`, or read the drawable
+/// epoch before the early return — the read log then holds `DrawableEpoch`.
 #[test]
 fn a_bundle_for_a_block_with_no_draws_admits_and_returns_none() {
     let world = BundleWorld::new(0);
@@ -169,15 +172,57 @@ fn a_bundle_for_a_block_with_no_draws_admits_and_returns_none() {
         [
             BundleRead::Revealed,
             BundleRead::DrawCount,
+            BundleRead::SupportCount,
             BundleRead::DrawCommitment
         ]
     );
 }
 
+/// An empty support bitmap is a count refusal when the block issued a
+/// support draw, whether or not the economy stream issued any. The
+/// harness's support count is the roster's length. Red edit: return the
+/// empty observation list from either early path without reading
+/// `support_count` — both cases then admit.
+#[test]
+fn an_empty_support_bitmap_over_an_issued_support_draw_is_a_count_refusal() {
+    let refuse = |count: u32| {
+        let mut world = BundleWorld::new(count);
+        let persona = world.personas[0].persona;
+        let receipt_key = world.personas[0].receipt_public_key.clone();
+        world.view.support_roster.insert(
+            world.h,
+            vec![SupportSeat {
+                persona,
+                receipt_key,
+            }],
+        );
+        let passes: &[u32] = if count == 0 { &[] } else { &[1, 4] };
+        let (reference, body) = world.bundle(passes);
+        assert_eq!(reference.kept().support.count(), 0);
+        world.view.take_reads();
+        assert_eq!(
+            judge(&world, &reference, &body),
+            invalid(BundleInvalid::Count),
+            "economy count {count}"
+        );
+        assert_eq!(
+            world.view.take_reads(),
+            [
+                BundleRead::Revealed,
+                BundleRead::DrawCount,
+                BundleRead::SupportCount
+            ],
+            "refused at the support width, before the commitment"
+        );
+    };
+    refuse(0);
+    refuse(10);
+}
+
 /// The reads of an admitted bundle, in §9.1's order: the one-per-`h` rule
-/// and the count (step 3), the commitment (4), then the drawable epoch, `h`'s
-/// hash and the issued counts (6), then each record's anchor hash (8).
-/// Red edit: hoist any later read above an earlier step.
+/// and the two counts (step 3), the commitment (4), then the drawable
+/// epoch, `h`'s hash and the issued counts (6), then each record's anchor
+/// hash (8). Red edit: hoist any later read above an earlier step.
 #[test]
 fn the_view_is_read_in_the_order_of_the_checks() {
     let world = BundleWorld::new(10);
@@ -186,21 +231,22 @@ fn the_view_is_read_in_the_order_of_the_checks() {
     judge(&world, &reference, &body).expect("admits");
     let reads = world.view.take_reads();
     assert_eq!(
-        reads[..5],
+        reads[..6],
         [
             BundleRead::Revealed,
             BundleRead::DrawCount,
+            BundleRead::SupportCount,
             BundleRead::DrawCommitment,
             BundleRead::DrawableEpoch,
             BundleRead::BlockHash,
         ]
     );
-    let tail: Vec<BundleRead> = reads[5..]
+    let tail: Vec<BundleRead> = reads[6..]
         .iter()
         .copied()
         .skip_while(|r| *r == BundleRead::VisiblyShort)
         .collect();
-    assert!(reads.len() > 5 + tail.len(), "the selection asked the view");
+    assert!(reads.len() > 6 + tail.len(), "the selection asked the view");
     assert_eq!(
         tail,
         [BundleRead::BlockHash, BundleRead::BlockHash],
@@ -406,7 +452,7 @@ fn kat_the_verifier_recomputes_the_specifications_nonces() {
 /// or drop a field of `pass_countersignature_message`.
 #[test]
 fn the_receipts_transcript_is_112_bytes() {
-    assert_eq!(PASS_COUNTERSIGNATURE_MESSAGE_LEN, 112);
+    assert_eq!(PASS_COUNTERSIGNATURE_MESSAGE_LEN, 113);
 }
 
 // ------------------------------------------- step 3: window, one per `h`
@@ -571,9 +617,18 @@ fn a_reference_that_understates_its_count_is_refused_at_admission() {
     let budget_of = |d: u64| section_budget(BUNDLE_SECTION_BUDGET_MULTIPLE, d, seb);
     // `⌊9·4_000 / 10_000⌋ + 1 = 4`, times `c`, is 8. `D = 5_000` is the
     // next count cap, budget 10. `D = 8` is the small network, budget 2.
-    assert_eq!(budget_of(4_000), 8);
-    assert_eq!(budget_of(5_000), 10);
-    assert_eq!(budget_of(8), 2);
+    assert_eq!(
+        budget_of(4_000),
+        shekyl_archival_retention::SectionBudget::from_draws(8)
+    );
+    assert_eq!(
+        budget_of(5_000),
+        shekyl_archival_retention::SectionBudget::from_draws(10)
+    );
+    assert_eq!(
+        budget_of(8),
+        shekyl_archival_retention::SectionBudget::from_draws(2)
+    );
     let at = |reference: &BundleRef, pairs: u64| {
         let view = view_holding(&[(epoch, pairs)]);
         let section = std::slice::from_ref(reference);
@@ -585,7 +640,7 @@ fn a_reference_that_understates_its_count_is_refused_at_admission() {
             &rules,
         )
     };
-    let over = |reference: &BundleRef, budget: u64| {
+    let over = |reference: &BundleRef, budget: shekyl_archival_retention::SectionBudget| {
         Err(SectionCheckFailed::Refused(SectionRefused::OverBudget {
             charge: SectionCharge::of(std::slice::from_ref(reference)),
             budget,
@@ -596,8 +651,20 @@ fn a_reference_that_understates_its_count_is_refused_at_admission() {
             std::slice::from_ref(reference),
         )))
     };
-    assert_eq!(at(&nine, 4_000), over(&nine, 8));
-    assert_eq!(at(&honest, 4_000), over(&honest, 8));
+    assert_eq!(
+        at(&nine, 4_000),
+        over(
+            &nine,
+            shekyl_archival_retention::SectionBudget::from_draws(8)
+        )
+    );
+    assert_eq!(
+        at(&honest, 4_000),
+        over(
+            &honest,
+            shekyl_archival_retention::SectionBudget::from_draws(8)
+        )
+    );
     assert_eq!(at(&nine, 5_000), admitted(&nine));
     assert_eq!(at(&honest, 5_000), admitted(&honest));
 
@@ -608,7 +675,13 @@ fn a_reference_that_understates_its_count_is_refused_at_admission() {
     let none = with_passes(&all_miss, PassBitmap::new(0, &[]).expect("no bits"));
     assert_eq!(none.charge(), 1);
     assert_eq!(at(&none, 8), admitted(&none));
-    assert_eq!(at(&all_miss, 8), over(&all_miss, 2));
+    assert_eq!(
+        at(&all_miss, 8),
+        over(
+            &all_miss,
+            shekyl_archival_retention::SectionBudget::from_draws(2)
+        )
+    );
 
     // Admission refuses each restatement, before anything is opened.
     world.view.take_reads();
@@ -723,7 +796,10 @@ fn a_bundle_that_does_not_open_the_commitment_refuses() {
     // the refusal above is the commitment's and nothing else's.
     forger.view.commitments.insert(
         forger.h,
-        shekyl_archival_retention::draw_commit(&forger.witness_public_key, &forger.seed),
+        shekyl_types::archival::DrawCommitment::from_bytes(shekyl_archival_retention::draw_commit(
+            &forger.witness_public_key,
+            &forger.seed,
+        )),
     );
     assert!(judge(&forger, &forged_ref, &forged_body).is_ok());
 
@@ -731,9 +807,12 @@ fn a_bundle_that_does_not_open_the_commitment_refuses() {
     // `0x0C`, and an all-zero one. Each is a commitment, and neither is
     // this bundle's.
     let honest = world.view.commitments[&world.h];
-    let mut one_bit = honest;
+    let mut one_bit = *honest.as_bytes();
     one_bit[19] ^= 0x04;
-    for other in [one_bit, [0u8; 32]] {
+    for other in [
+        shekyl_types::archival::DrawCommitment::from_bytes(one_bit),
+        shekyl_types::archival::DrawCommitment::from_bytes([0; 32]),
+    ] {
         world.view.commitments.insert(world.h, other);
         let refused = judge(&world, &reference, &body).expect_err("another commitment");
         assert_eq!(refused, BundleRefused::Invalid(BundleInvalid::Commitment));
@@ -777,6 +856,7 @@ fn a_body_the_producer_did_not_sign_refuses_before_any_receipt() {
         [
             BundleRead::Revealed,
             BundleRead::DrawCount,
+            BundleRead::SupportCount,
             BundleRead::DrawCommitment
         ],
         "no drawable epoch, no block hash, no issued count: nothing of steps 6 to 8"
@@ -1025,7 +1105,7 @@ fn a_receipt_under_a_key_the_drawable_epoch_does_not_hold_refuses() {
         .expect("sixteen draws over eight pairs reach the first persona");
     let index = world.selected(draw);
     let pair = world.drawable_epoch().pair(index).expect("in D");
-    assert_eq!(pair.p_id, world.personas[0].p_id);
+    assert_eq!(pair.persona, world.personas[0].persona);
 
     let (key_b_public, key_b_secret) =
         HybridEd25519FnDsa::keypair_from_seeds(&[0xB0; 32], &[0xB1; 32]).expect("keygen");
@@ -1036,7 +1116,14 @@ fn a_receipt_under_a_key_the_drawable_epoch_does_not_hold_refuses() {
         draw,
         0,
     );
-    let signed_by_b = world.record_signed_by(&key_b_secret, pair.shard_id, 0, anchor, &nonce);
+    let signed_by_b = world.record_signed_by(
+        &key_b_secret,
+        pair.shard.to_raw(),
+        0,
+        anchor,
+        shekyl_archival_retention::PassStream::Economy,
+        &nonce,
+    );
     let passes = PassBitmap::from_passes(16, [draw]).expect("in range");
     let (reference, body) = world.assemble(passes, &[signed_by_b]);
 
@@ -1051,17 +1138,17 @@ fn a_receipt_under_a_key_the_drawable_epoch_does_not_hold_refuses() {
     let pairs: Vec<DrawablePair> = (0..world.drawable_epoch().len())
         .map(|i| world.drawable_epoch().pair(i).expect("in D"))
         .collect();
-    let keys: Vec<([u8; 32], Vec<u8>)> = world
+    let keys: Vec<(PCanonicalId, ReceiptSignPk)> = world
         .personas
         .iter()
         .enumerate()
         .map(|(n, p)| {
             let key = if n == 0 {
-                key_b_public.to_canonical_bytes()
+                key_b_public.to_receipt_sign_pk()
             } else {
                 p.receipt_public_key.clone()
             };
-            (p.p_id, key)
+            (p.persona, key)
         })
         .collect();
     world.view.drawable_epochs.insert(
@@ -1129,7 +1216,10 @@ fn of_two_defects_the_earlier_check_refuses() {
     );
     // The record count before the commitment.
     world.view.counts.insert(world.h, 10);
-    world.view.commitments.insert(world.h, [0; 32]);
+    world.view.commitments.insert(
+        world.h,
+        shekyl_types::archival::DrawCommitment::from_bytes([0; 32]),
+    );
     assert_eq!(
         judge(&world, &short_ref, &short_body),
         invalid(BundleInvalid::RecordCount)
@@ -1169,14 +1259,14 @@ fn of_two_defects_the_earlier_check_refuses() {
         invalid(BundleInvalid::Attempt { draw: 9 })
     );
 
-    // Within step 8, records in ascending `j`, each anchor before its own
-    // receipt: draw 1's bad receipt before draw 4's anchor at `h`...
+    // Every anchor before any receipt: draw 1's receipt does not verify
+    // and draw 4 is anchored at `h`. The anchor is the refusal.
     let anchored_at_h = world.record_anchored(4, 0, world.h);
     let records = [bad_receipt, anchored_at_h, world.record(9, 0)];
     let (reference, body) = world.assemble(passes.clone(), &records);
     assert_eq!(
         judge(&world, &reference, &body),
-        invalid(BundleInvalid::Receipt { draw: 1 })
+        invalid(BundleInvalid::Anchor { draw: 4 })
     );
     // ...and draw 4's anchor before draw 9's bad receipt, and before its
     // own: a record anchored at `h` whose receipt is also wrong.
@@ -1189,6 +1279,77 @@ fn of_two_defects_the_earlier_check_refuses() {
     assert_eq!(
         judge(&world, &reference, &body),
         invalid(BundleInvalid::Anchor { draw: 4 })
+    );
+}
+
+/// A support `attempt` is step 7 of the same list as the economy records.
+/// An earlier economy receipt that would not verify, and an earlier
+/// support receipt that would not verify, both lose to a later support
+/// `attempt` past `K`. Red edit: judge each support record's receipt
+/// before the next record's attempt — the refusal becomes `Receipt`.
+#[test]
+fn a_later_support_attempt_refuses_before_an_earlier_receipt() {
+    use shekyl_archival_retention::{select_support_shard, support_challenge_nonce, PassStream};
+
+    let mut world = BundleWorld::new(4);
+    let width = 64u64;
+    world.view.archive_width.insert(world.h, width);
+    let hash = fixture_block_hash(world.h);
+    let seat = |world: &BundleWorld, n: usize| SupportSeat {
+        persona: world.personas[n].persona,
+        receipt_key: world.personas[n].receipt_public_key.clone(),
+    };
+    let support_record = |world: &BundleWorld, draw: u32, attempt: u8| {
+        let persona = &world.personas[draw as usize];
+        let shard =
+            select_support_shard(&world.seed, hash.as_bytes(), &persona.persona, draw, width)
+                .expect("a non-zero archive selects");
+        let nonce = support_challenge_nonce(&world.seed, hash.as_bytes(), draw, attempt);
+        let mut record = world.record_signed_by(
+            &persona.receipt_secret_key,
+            shard,
+            attempt,
+            world.honest_anchor(),
+            PassStream::Support,
+            &nonce,
+        );
+        if attempt < CHALLENGE_READS {
+            record.delivery_digest[0] ^= 1;
+        }
+        record
+    };
+
+    // Economy draw 1's receipt is wrong. The one support record claims a fourth read.
+    let one = vec![seat(&world, 0)];
+    world.view.support_roster.insert(world.h, one);
+    let mut economy = world.record(1, 0);
+    economy.delivery_digest[0] ^= 1;
+    let late = support_record(&world, 0, CHALLENGE_READS);
+    let (reference, body) = world.assemble_support(
+        PassBitmap::from_passes(world.count, [1]).expect("in range"),
+        PassBitmap::from_passes(1, [0]).expect("the one support bit"),
+        &[economy, late],
+    );
+    assert_eq!(
+        judge(&world, &reference, &body),
+        invalid(BundleInvalid::Attempt { draw: 0 }),
+        "the support attempt is judged with the economy records, before any receipt"
+    );
+
+    // Two support records: the first receipt is wrong, the second attempt is past K.
+    let two = vec![seat(&world, 0), seat(&world, 1)];
+    world.view.support_roster.insert(world.h, two);
+    let early = support_record(&world, 0, 0);
+    let later = support_record(&world, 1, CHALLENGE_READS);
+    let (reference, body) = world.assemble_support(
+        PassBitmap::from_passes(world.count, []).expect("no economy passes"),
+        PassBitmap::from_passes(2, [0, 1]).expect("two support bits"),
+        &[early, later],
+    );
+    assert_eq!(
+        judge(&world, &reference, &body),
+        invalid(BundleInvalid::Attempt { draw: 1 }),
+        "a later support attempt wins over an earlier support receipt"
     );
 }
 
@@ -1290,9 +1451,10 @@ fn a_view_with_a_hole_is_unanswered_and_never_a_verdict() {
         [
             BundleRead::Revealed,
             BundleRead::DrawCount,
+            BundleRead::SupportCount,
             BundleRead::DrawCommitment
         ],
-        "the count was answered, and then the commitment was not"
+        "the economy count and the support count were answered, and then the commitment was not"
     );
 
     let (mut world, bundle) = fresh();
@@ -1307,10 +1469,10 @@ fn a_view_with_a_hole_is_unanswered_and_never_a_verdict() {
     let pairs: Vec<DrawablePair> = (0..8)
         .map(|i| world.drawable_epoch().pair(i).expect("in D"))
         .collect();
-    let keys: Vec<([u8; 32], Vec<u8>)> = world
+    let keys: Vec<(PCanonicalId, &ReceiptSignPk)> = world
         .personas
         .iter()
-        .map(|p| (p.p_id, p.receipt_public_key.clone()))
+        .map(|p| (p.persona, &p.receipt_public_key))
         .collect();
     let other_epoch = shekyl_types::SettlementEpoch::from_raw(epoch.to_raw() + 1);
     world.view.drawable_epochs.insert(
@@ -1332,7 +1494,7 @@ fn a_view_with_a_hole_is_unanswered_and_never_a_verdict() {
     let (mut world, bundle) = fresh();
     world.view.drawable_epochs.insert(
         epoch,
-        DrawableEpoch::new(epoch, Vec::<([u8; 32], Vec<u8>)>::new(), []).expect("empty"),
+        DrawableEpoch::new(epoch, Vec::<(PCanonicalId, ReceiptSignPk)>::new(), []).expect("empty"),
     );
     assert_eq!(
         unanswered(&world, &bundle),
@@ -1376,6 +1538,7 @@ fn a_view_fault_surfaces_as_itself_from_every_read() {
     for read in [
         BundleRead::Revealed,
         BundleRead::DrawCount,
+        BundleRead::SupportCount,
         BundleRead::DrawCommitment,
         BundleRead::DrawableEpoch,
         BundleRead::BlockHash,
@@ -1393,4 +1556,57 @@ fn a_view_fault_surfaces_as_itself_from_every_read() {
         );
         assert_eq!(refused.verdict(), None);
     }
+}
+
+/// A support pass sits beside the economy draws and is not one of them:
+/// the economy charge does not grow, and `Admitted::draws` does not gain
+/// the tree. A receipt signed on the economy stream is refused in the
+/// support slot. Red edit: verify the support receipt under
+/// `PassStream::Economy`, or push the observation onto `draws`.
+#[test]
+fn a_support_pass_is_not_serve_credit() {
+    use shekyl_archival_retention::{
+        bundle_charge, select_support_shard, support_challenge_nonce, PassStream,
+    };
+
+    let mut world = BundleWorld::new(4);
+    let persona = world.personas[0].persona;
+    let receipt_key = world.personas[0].receipt_public_key.clone();
+    let width = 64;
+    world.view.archive_width.insert(world.h, width);
+    world.view.support_roster.insert(
+        world.h,
+        vec![SupportSeat {
+            persona,
+            receipt_key,
+        }],
+    );
+    let hash = fixture_block_hash(world.h);
+    let shard = select_support_shard(&world.seed, hash.as_bytes(), &persona, 0, width)
+        .expect("a non-zero archive selects");
+    let support_nonce = support_challenge_nonce(&world.seed, hash.as_bytes(), 0, 0);
+    let economy_nonce =
+        shekyl_archival_retention::challenge_nonce(&world.seed, hash.as_bytes(), 0, 0);
+    let good = world.persona_record(0, shard, PassStream::Support, &support_nonce);
+    let passes = PassBitmap::from_passes(world.count, []).expect("no economy passes");
+    let support = PassBitmap::from_passes(1, [0]).expect("the one support bit");
+    let (reference, body) = world.assemble_support(passes, support, &[good]);
+    let admitted = judge(&world, &reference, &body).expect("the support receipt verifies");
+    assert_eq!(admitted.draws.len(), 4, "the economy draws are unchanged");
+    assert!(admitted.draws.iter().all(|draw| !draw.passed));
+    assert_eq!(admitted.support.len(), 1);
+    assert!(admitted.support[0].passed);
+    assert_eq!(admitted.support[0].persona, persona);
+    assert_eq!(admitted.support[0].shard.to_raw(), shard);
+    assert_eq!(admitted.kept.charge(), bundle_charge(world.count));
+    let wrong = world.persona_record(0, shard, PassStream::Economy, &economy_nonce);
+    let (reference, body) = world.assemble_support(
+        PassBitmap::from_passes(world.count, []).expect("no economy passes"),
+        PassBitmap::from_passes(1, [0]).expect("the one support bit"),
+        &[wrong],
+    );
+    assert_eq!(
+        judge(&world, &reference, &body),
+        invalid(BundleInvalid::Receipt { draw: 0 })
+    );
 }

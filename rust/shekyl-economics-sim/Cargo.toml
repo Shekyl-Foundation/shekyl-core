@@ -25,6 +25,7 @@ shekyl-chain-rules = { path = "../shekyl-chain-rules" }
 # the effective median, the comparison `fill_block_template` makes, called
 # rather than restated (ECONOMICS_SIM_PRODUCTION_REBASE.md ESR-6).
 shekyl-block-template = { path = "../shekyl-block-template" }
+shekyl-wire = { path = "../shekyl-wire" }
 # A4 W9 stuffer: price real transaction weights through the SAME single-sourced
 # predictor the wallet fee path uses (DQ-2G dep-don't-mirror, D-1 hoist).
 shekyl-tx-weight = { path = "../shekyl-tx-weight" }

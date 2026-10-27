@@ -414,7 +414,9 @@ mod tests {
                 dispatched_at_height: shekyl_types::BlockHeight::from_raw(42),
                 fee: 700,
                 recipients: vec![SendRecipient {
-                    address: "shekyl1example".to_owned(),
+                    destination: shekyl_engine_state::SendDestination::Address(
+                        "shekyl1example".to_owned(),
+                    ),
                     amount: 7_000,
                     rid: None,
                 }],

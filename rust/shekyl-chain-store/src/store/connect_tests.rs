@@ -14,7 +14,10 @@
 //! a fresh file (SCW-17). Fixtures live in `connect_fixtures.rs`.
 
 use redb::ReadableTableMetadata;
-use shekyl_chain_rules::{Corrupt, Fault, RowStatus, RuleSet, RuleSetId, Trust};
+use shekyl_archival_retention::{BundleKept, PassBitmap};
+use shekyl_chain_rules::{
+    Admitted, Corrupt, DrawableMemo, Fault, RowStatus, RuleSet, RuleSetId, Trust,
+};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_units::AtomicUnits;
@@ -54,8 +57,11 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
     // leaf count 1 (DRS-E3, every connect); root 1; blocks 1,
     // block_heights 1, block_info 1; hf_versions 1; the open epoch's
     // `archival_budget_accruing` upsert 1 (DRS-E4 commit 5, every connect
-    // that is not a close).
-    assert_eq!(connected.journaled, 14, "no pqc_auths row, no burn rows");
+    // that is not a close); the recorded PoW 1 (`block_pow`); the drawable
+    // digest of epoch 0, which genesis opens, 1 (`SO-D12` increment 2);
+    // the draw row at genesis, 1 (`SO-D12` increment 3);
+    // the support count at genesis, 1 (`ARCHIVAL_SUPPORT_DRAW.md` §5).
+    assert_eq!(connected.journaled, 18, "no pqc_auths row, no burn rows");
 
     let miner = &block.miner_transaction;
     let miner_hash = Hash32::from(miner.hash());
@@ -283,7 +289,44 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
         .value()
         .decode()
         .expect("decodes");
-    assert_eq!(undo.0.len(), 14);
+    assert_eq!(undo.0.len(), 18);
+    // Genesis opens epoch 0 and writes its drawable digest: the empty
+    // set's, since no bond joins before epoch 0. A row, not an absence.
+    let empty = shekyl_chain_rules::DrawableEpoch::new(
+        shekyl_types::SettlementEpoch::from_raw(0),
+        Vec::<(
+            shekyl_types::PCanonicalId,
+            shekyl_types::archival::ReceiptSignPk,
+        )>::new(),
+        [],
+    )
+    .expect("no pair to key");
+    assert_eq!(
+        snap.drawable_digest(
+            shekyl_types::SettlementEpoch::from_raw(0),
+            shekyl_chain_rules::EpochFloor::NONE,
+        )
+        .expect("read"),
+        Some(empty.digest())
+    );
+    assert_eq!(
+        snap.support_block_count(BlockHeight::ZERO, shekyl_chain_rules::BlockDrawsFloor::NONE,)
+            .expect("read"),
+        Some(shekyl_types::archival::SupportCount::NONE),
+        "genesis records that it issued no support draws"
+    );
+    // The recorded PoW (`block_pow`, layout 26): one row at genesis, under
+    // the null seed CEN-D3 names below the first epoch.
+    let pow: crate::codec::RecordedPow = snap
+        .open_table(crate::schema::BLOCK_POW)
+        .expect("t")
+        .get(0)
+        .expect("g")
+        .expect("row")
+        .value()
+        .decode()
+        .expect("decodes");
+    assert_eq!(pow.seed, BlockHash::NULL);
     cleanup(&path);
 }
 
@@ -347,7 +390,8 @@ fn two_blocks_in_one_batch_with_a_spend() {
     // coinbase carries no length and writes none) + 2 outputs × (output_txs
     // + member) + tx_outputs) + leaf count 1 + root 1 + block 3 + hf 1 +
     // the open epoch's `archival_budget_accruing` upsert 1 (DRS-E4 commit
-    // 5) = 27, plus the drain: `s` is past the unlock window, so block
+    // 5) + the recorded PoW 1 (`block_pow`) + the draw row 1 (`SO-D12`
+    // increment 3) + the support count 1 = 30, plus the drain: `s` is past the unlock window, so block
     // `s − W`'s coinbase matures here — one leaf (its leaf row and the two
     // position-map rows, `grow.rs` 3a), the chunk it lands in and the root
     // chunk over it (the tree's `s − W` leaves fit one chunk: two layer
@@ -356,7 +400,7 @@ fn two_blocks_in_one_batch_with_a_spend() {
     assert_eq!(drained_leaves, 1, "block s − W's coinbase alone");
     assert_eq!(layer_writes, 2, "a one-chunk tree: its chunk and the root");
     let drain_rows = 3 * drained_leaves + layer_writes + 1;
-    assert_eq!(c1.journaled, 27 + drain_rows);
+    assert_eq!(c1.journaled, 30 + drain_rows);
     // Dense store ids: one coinbase per block through the spend block
     // (tx_ids `0..=s`, output_ids likewise), then the spend (tx_id `s + 1`,
     // output_ids `s + 1`, `s + 2`); amount_index under 0 equals output_id.
@@ -1021,3 +1065,52 @@ fn coverage_gaps_widen_in_the_committing_batch_and_never_narrow() {
 // fields still passed through — seven until E6 slice 2, six until DRS-E3,
 // five until E6 slice 7 commit 5, one until wave B. Both left with the
 // types on 2026-09-29: there is no field to count.
+
+/// An admission fault halts at the block being connected.
+///
+/// The block row is already in `BLOCK_INFO` when admission runs. Building
+/// the view through `chain_view` would note `tip + 1` and halt the writer
+/// at the next height. The bundle names the next epoch's open, which this
+/// chain has not recorded, so the journal faults SI-36 `RowAbsent`.
+#[test]
+fn an_admission_fault_halts_at_the_admitting_block() {
+    use super::error::AdmissionWriteFault;
+
+    let path = tmp("connect-admission-halt");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let (_, genesis) = connect_genesis(&store);
+    let block = candidate(1, genesis.hash(), Vec::new());
+    let schedule = RuleSet::GENESIS.settlement_schedule();
+    let admitting = BlockHeight::from_raw(1);
+    let unrecorded =
+        BlockHeight::from_raw(schedule.open_height(schedule.epoch_at(admitting).to_raw() + 1));
+    let admitted = [Admitted {
+        kept: BundleKept {
+            h: unrecorded,
+            seed: [0x11; 32],
+            passes: PassBitmap::from_passes(0, []).expect("an empty bitmap"),
+            support: PassBitmap::none(),
+        },
+        draws: Vec::new(),
+        support: Vec::new(),
+    }];
+    let memo = DrawableMemo::new();
+    let out: Result<Connected, TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        let judged = judge(&view, block)?;
+        Ok(batch.connect_admitting(judged, RuleSet::GENESIS, Some((&memo, &admitted)))?)
+    });
+    let row = StoreInvariant::AdmissionWrite {
+        height: unrecorded,
+        observed: AdmissionWriteFault::RowAbsent,
+    };
+    expect_row(&out, row);
+    assert_eq!(
+        store.connect_state(),
+        ConnectState::Halted {
+            at_height: admitting,
+            row,
+        }
+    );
+    cleanup(&path);
+}

@@ -343,8 +343,10 @@ question.
   A systematic pass over every `#if`, `#ifdef`, CMake `if()`, and
   Makefile conditional that gates on a platform predicate that
   *still exists* after Chore #3 — principally `__APPLE__`,
-  `__ANDROID__`, `_MSC_VER`, `__FreeBSD__`, `BSD`, `__linux__`,
+  `_MSC_VER`, `__FreeBSD__`, `BSD`, `__linux__`,
   plus any residual host-triple patterns in `contrib/depends/`.
+  `__ANDROID__` does not: the Android build target is deleted
+  (2026-10-19).
   Produces a coverage report with three columns — site, claimed
   platform, CI-covered y/n — and classifies each row as **delete**
   (platform not actually claimed), **CI add** (claimed and about

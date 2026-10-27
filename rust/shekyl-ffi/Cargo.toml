@@ -46,11 +46,15 @@ shekyl-chain-store = { path = "../shekyl-chain-store" }
 # DRS-E2 trace writer (`e2_trace_ffi`): the one door the C++ LMDB exporter
 # hands bytes through; the format and the checkpoint hashing are Rust's
 # (RD-F9, RD-Q9). Harvest shim — the C++ side dies at cutover (§1.3).
-# Trace writer only (RD-F9, RD-Q9). Default features pull the pipeline,
-# the RPC fetcher and clap — harvest FFI does not need them, and feature
-# unification on `cargo build -p shekyl-ffi` (the daemon image) stays
-# at the writer.
-shekyl-chain-ingest = { path = "../shekyl-chain-ingest", default-features = false }
+# And the ingest service's door (`ingest_ffi`, DRS-X PR 2, DX-Q2 item 2):
+# the protocol handler's one entry, which needs the `pipeline` feature —
+# the service, its connector actor, the pool and the miner it feeds.
+# `kameo` and `tokio` were already in this crate's graph. Not the RPC
+# fetcher or clap: the default features stay off.
+shekyl-chain-ingest = { path = "../shekyl-chain-ingest", default-features = false, features = ["pipeline"] }
+# The chain-sync router is the seam's post sink (`seam_ffi.rs`):
+# pass-through until the cutover attaches the sync owner.
+shekyl-chain-sync-runtime = { path = "../shekyl-chain-sync-runtime" }
 # RandomX v2 light-cache PoW verifier. Consumed by `pow_randomx_ffi.rs`
 # (the `shekyl_pow_randomx_v2_*` exports) which is the consensus PoW
 # verification boundary per `RANDOMX_V2_PHASE3_PLAN.md` §6. Default
@@ -102,21 +106,20 @@ shekyl-relay = { path = "../shekyl-relay" }
 # Peer-attribution policy (PWD-B7): owns the drop rule. This crate only
 # marshals the verdict byte; the decision never lives on the C++ side.
 shekyl-peer-policy = { path = "../shekyl-peer-policy" }
-# Levin payload compression (`levin_ffi.rs`): the C++ epee::levin compression
-# shim reaches the Rust-pinned libzstd through these exports, making it the
-# single zstd in the binary (system-libzstd link dropped).
+# Levin ingress policy and white-noise emit (`levin_ffi.rs`): the C++
+# epee::levin handle_recv and noise shims reach this crate's single copy.
 shekyl-levin = { path = "../shekyl-levin" }
 shekyl-p2p-transport = { path = "../shekyl-p2p-transport" }
 # Genesis block-hash pins (`genesis_hash_for`). `shekyl_network_id` derives
 # the handshake id from that pin; this crate does not restate the hash.
 shekyl-rpc-types = { path = "../shekyl-rpc-types" }
-# Daemon ephemeral-onion posture (`daemon_tor_ffi.rs`, PWD-E7 piece 3): the
-# blocking facade over DaemonTorControl. The facade owns its tokio runtime,
-# so this crate takes no tokio edge of its own.
-shekyl-tor-control-daemon = { path = "../shekyl-tor-control-daemon" }
+# The spawn lock (TOR_SUPERVISOR.md §4.7): the notify runner spawns in the
+# daemon's process, which launches the managed Tor.
+shekyl-tor-control-client = { path = "../shekyl-tor-control-client" }
 # The p2p seam. C++ posts onto the connection strand; this crate
 # records the cause and the byte cap. See P2P_TRANSPORT_LAYER.md.
 shekyl-seam = { path = "../shekyl-seam" }
+shekyl-socks = { path = "../shekyl-socks" }
 # The transport deadlines, the send-queue cap and the runtime budget the zone host runs under.
 shekyl-transport-layer = { path = "../shekyl-transport-layer" }
 # v3 onion hostname <-> service key. The seam stores the key; this crate
@@ -130,6 +133,9 @@ shekyl-capped-stream = { path = "../shekyl-capped-stream" }
 shekyl-net-address = { path = "../shekyl-net-address" }
 shekyl-peerlist = { path = "../shekyl-peerlist" }
 shekyl-dialer = { path = "../shekyl-dialer" }
+# The sections the daemon's owners read (DAEMON_CONFIG_CUTOVER.md §3).
+shekyl-daemon-config = { path = "../shekyl-daemon-config" }
+shekyl-options = { path = "../shekyl-options" }
 shekyl-thread-ledger = { path = "../shekyl-thread-ledger" }
 curve25519-dalek = "4"
 postcard = { version = "1", features = ["alloc"] }
@@ -140,7 +146,7 @@ rcgen = "0.14"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
-tokio = { version = "1", default-features = false, features = ["macros", "net", "rt", "sync", "time"] }
+tokio = { version = "1", default-features = false, features = ["macros", "net", "process", "rt", "sync", "time"] }
 zeroize = { workspace = true }
 libc = "0.2"
 dalek-ff-group = "0.5"
@@ -148,6 +154,10 @@ ciphersuite = "0.4"
 modular-frost = { version = "0.11", features = ["ed25519"], optional = true }
 
 [dev-dependencies]
+# The ingest entry's test starts a service, which takes the hasher budget,
+# over a substrate it defines and a regtest schedule.
+shekyl-hash-budget = { path = "../shekyl-hash-budget" }
+shekyl-chain-rules = { path = "../shekyl-chain-rules" }
 hex = "0.4"
 tempfile = "3"
 rand_core = { version = "0.6", features = ["std"] }
@@ -185,3 +195,11 @@ harness = false
 [[bench]]
 name = "block_connect_verify"
 harness = false
+
+[target.'cfg(windows)'.dependencies]
+# The known-folder roots for the daemon configuration (IG-13).
+shekyl-win-sec = { path = "../shekyl-win-sec" }
+# The snapshot export's narrow argv is the active code page. `windows-sys`
+# 0.61 is already in the lock through shekyl-win-sec; this names the one
+# module `argument_vector` calls (`MultiByteToWideChar`, `CP_ACP`).
+windows-sys = { version = "0.61", features = ["Win32_Globalization"] }

@@ -9,14 +9,16 @@
 //! block's own demand, to [`Fill`](shekyl_block_template::Fill) at the
 //! effective median [`MedianWindow`](crate::median_window::MedianWindow)
 //! holds. What the rule refuses stays until it is older than the mempool
-//! livetime. The two departures from the chain — bodies-only weight, and a
-//! waiting transaction paying the fee of the block it is offered to — are
-//! declared on [`BlockSpace`].
+//! livetime. The departure from the chain — a waiting transaction paying
+//! the fee of the block it is offered to — is declared on [`BlockSpace`].
+//! The block's recorded weight includes the coinbase reserve, the maximum
+//! coinbase.
 
 use std::collections::VecDeque;
 
 use shekyl_block_template::Fill;
 use shekyl_chain_rules::EffectiveMedian;
+use shekyl_wire::transaction::COINBASE_RESERVE;
 
 use crate::fee_model::{FeePoint, OrdinaryTx};
 use crate::median_window::MedianWindow;
@@ -39,11 +41,10 @@ const MEMPOOL_TX_LIVETIME_SECS: u64 = 86_400 * 3;
 /// identical, so a refusal leaves the fill unchanged and every later offer
 /// would be refused the same way: the rule's own batch offer
 /// ([`Fill::admit_up_to`]) is the producer's walk over this pool, not a
-/// shortcut of it. Two departures from the chain, declared in §4 of the
-/// design document: the block's weight is its
-/// bodies' — the coinbase's few hundred bytes are neither priced nor
-/// recorded — and every waiting transaction pays the fee of the block it is
-/// offered to, not the fee it was built with.
+/// shortcut of it. The departure from the chain, declared in §4 of the
+/// design document, is that every waiting transaction pays the fee of the
+/// block it is offered to, not the fee it was built with. The weight the
+/// median records is the block's: the bodies plus the coinbase reserve.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct BlockSpace {
     medians: MedianWindow,
@@ -64,6 +65,8 @@ pub(crate) struct Filled {
     /// The penalised gross reward at the block's weight
     /// ([`Fill::reward`]), before the split.
     pub(crate) paid_reward: u64,
+    /// The block's weight: bodies plus the coinbase reserve.
+    pub(crate) block_weight: u64,
     /// The listed bodies' weight.
     pub(crate) bodies_weight: u64,
     /// The listed bodies' fees.
@@ -72,8 +75,8 @@ pub(crate) struct Filled {
 
 impl BlockSpace {
     /// The medians the next block is judged under.
-    pub(crate) fn medians(&self) -> EffectiveMedian {
-        self.medians.medians()
+    pub(crate) fn medians(&self, params: &shekyl_economics::EconomicParams) -> EffectiveMedian {
+        self.medians.medians(params)
     }
 
     /// Transactions waiting after the last block.
@@ -108,8 +111,15 @@ impl BlockSpace {
 
         let effective = medians.effective_median.to_raw();
         let offered = self.waiting();
-        let mut fill = Fill::empty(effective, at.already_generated, at.volume, at.params)
-            .expect("sim trajectory stays within the reward's arithmetic domain");
+        let coinbase = u64::try_from(COINBASE_RESERVE).expect("the reserve fits");
+        let mut fill = Fill::empty(
+            effective,
+            coinbase,
+            at.already_generated,
+            at.volume,
+            at.params,
+        )
+        .expect("sim trajectory stays within the reward's arithmetic domain");
         let included = fill.admit_up_to(tx.weight, tx.fee_atomic, offered);
         let mut taken = included;
         while taken > 0 {
@@ -126,12 +136,13 @@ impl BlockSpace {
         }
         self.waiting_total -= included;
 
-        let weight = fill.bodies_weight();
+        let weight = fill.block_weight();
         self.medians.push(medians, weight);
         Filled {
             included,
             expired,
             paid_reward: fill.reward(),
+            block_weight: weight,
             bodies_weight: fill.bodies_weight(),
             fees: fill.fees(),
         }
@@ -194,7 +205,7 @@ mod tests {
             params: &params,
         };
         let mut space = BlockSpace::default();
-        let small = space.fill(0, space.medians(), 5, baseline_tx(), &at);
+        let small = space.fill(0, space.medians(&params), 5, baseline_tx(), &at);
         assert_eq!(
             (small.included, space.waiting()),
             (5, 0),
@@ -203,7 +214,7 @@ mod tests {
 
         // More than a livetime of blocks can take, so some of it expires.
         let demand = 1_000_000;
-        let full = space.fill(1, space.medians(), demand, baseline_tx(), &at);
+        let full = space.fill(1, space.medians(&params), demand, baseline_tx(), &at);
         assert!(full.included < demand, "the rule refuses past the median");
         assert_total_is_the_queue(&space);
         assert_eq!(space.waiting(), demand - full.included);
@@ -211,7 +222,7 @@ mod tests {
         let livetime = MEMPOOL_TX_LIVETIME_SECS / params.daa_target_seconds;
         let mut drained = full.included;
         for height in 2..=livetime + 1 {
-            let block = space.fill(height, space.medians(), 0, baseline_tx(), &at);
+            let block = space.fill(height, space.medians(&params), 0, baseline_tx(), &at);
             assert_eq!(
                 block.expired, 0,
                 "nothing is older than the livetime at {height}"
@@ -219,7 +230,7 @@ mod tests {
             drained += block.included;
             assert_total_is_the_queue(&space);
         }
-        let last = space.fill(livetime + 2, space.medians(), 0, baseline_tx(), &at);
+        let last = space.fill(livetime + 2, space.medians(&params), 0, baseline_tx(), &at);
         assert!(last.expired > 0, "the rest is older than the livetime");
         assert_eq!(last.included, 0, "dropped before the block is filled");
         assert_eq!(

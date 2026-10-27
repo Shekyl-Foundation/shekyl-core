@@ -42,7 +42,7 @@ use crate::engine::network::Network;
 use crate::engine::output_selector::WalletGreedyOutputSelector;
 use crate::engine::pending::{
     FeePriority, InFlightSubmit, PendingTx, ReservationId, ReservationTTLConfig, SubmitOutcome,
-    TxRecipient, TxRecipientSummary, TxRequest,
+    TxDestination, TxRecipient, TxRequest,
 };
 use crate::engine::signer::LocalSigner;
 use crate::engine::traits::FeeEstimates;
@@ -109,14 +109,11 @@ fn test_ledger() -> LocalLedger {
 }
 
 fn test_fee_estimates() -> FeeEstimates {
-    // mask=1 keeps `FeeRate`'s fee↔weight roundtrip consistent with the
-    // structural predictor's fee varint term under `converge_fee`.
-    let tiny = FeeRate::new(1, 1).expect("tiny test fee rate is non-zero");
+    let tiny = FeeRate::new(1).expect("tiny test fee rate is non-zero");
     FeeEstimates {
         economy: tiny,
         standard: tiny,
         priority: tiny,
-        quantization_mask: 1,
     }
 }
 
@@ -347,7 +344,7 @@ fn populate_ledger(
 fn standard_request(amount: u64) -> TxRequest {
     TxRequest {
         recipients: vec![TxRecipient {
-            address: test_payment_address(),
+            destination: TxDestination::Address(test_payment_address()),
             amount_atomic_units: AtomicUnits::from_raw(amount),
             rid: None,
         }],
@@ -455,8 +452,8 @@ async fn tree_handle_ingested_through(cap: u64) -> (TempDir, CurveTreeHandle) {
 /// `0x07` blob carries each output's real leaf entry (`CM ‖ record`), so the
 /// tree leaf's identity (`O`, `C`, `CM.x`) equals the ledger output's. Empty
 /// blocks advance the cursor to `synced`. Pick `owned_block` so the leaves
-/// are drained at the reference height: `owned_block + SPENDABLE_AGE <=
-/// synced - REF_ANCHOR_AGE`.
+/// are drained at the reference height: `owned_block + SPENDABLE_AGE <
+/// synced - REF_ANCHOR_AGE` (`in_tree_at_reference`).
 async fn funded_ledger_and_tree(
     specs: &[(u8, u64)],
     owned_block: u64,
@@ -810,7 +807,7 @@ async fn tree_behind_reference_blocks_individually_covered_output() {
 /// 15 − REF_ANCHOR_AGE(6) = 9`. An output at block 1 matures at
 /// `eligible = 1 + SPENDABLE_AGE(10) = 11`: matured at the tip (11 ≤ 15)
 /// **and** in the tree (cursor 15 ≥ 11), but too fresh for the reference
-/// block (11 > 9). The C2 gate must surface a clean
+/// block, whose tree holds leaves matured by 8. The C2 gate must surface a clean
 /// [`SendError::OutputNotYetSpendable`] with a wait-N-blocks signal — not a
 /// spendable candidate, a `SpendUnavailableRebuilding`, or an
 /// `InsufficientFunds`.
@@ -850,12 +847,72 @@ async fn output_not_yet_spendable_at_reference_block() {
             );
             assert_eq!(
                 wait_blocks,
-                shekyl_types::BlockCount::from_raw(2),
-                "spendable once the reference reaches 11 (tip 17)"
+                shekyl_types::BlockCount::from_raw(3),
+                "in the tree committed at reference 12 (tip 18), which holds leaves matured by 11"
             );
         }
         other => panic!("expected OutputNotYetSpendable, got {other:?}"),
     }
+}
+
+/// C2 at its boundary, over a tree that holds the wallet's leaf. The tree
+/// committed at the reference height `r` holds leaves matured by `r − 1`
+/// (`drained_through`, pinned by the CT-2 vectors), so an output whose
+/// eligible height **equals** the reference is not in it yet. The gate must
+/// say so — `OutputNotYetSpendable`, one block to wait — rather than select
+/// the output and leave assembly to refuse it (`CurveTreeUnavailable` with
+/// `OutputNotDrained`), which is what it did when it admitted
+/// `eligible_height <= reference_height`. Found by the RT-P5 dry run
+/// (`docs/benchmarks/rt_p5_rpc_message_sizes_20261017.md`). One block later
+/// the same spend builds.
+#[tokio::test]
+async fn an_output_eligible_at_the_reference_height_waits_one_block() {
+    use shekyl_engine_state::transfer::SPENDABLE_AGE;
+
+    let owned_block: u64 = 1;
+    let eligible = owned_block + SPENDABLE_AGE.to_raw();
+    // The tip at which the reference height is exactly the output's
+    // eligible height.
+    let boundary_tip = eligible + REF_ANCHOR_AGE.to_raw();
+
+    let (ledger, _dir, tree) =
+        funded_ledger_and_tree(&[(1, 50_000)], owned_block, boundary_tip).await;
+    let pending = test_pending_tx_with_tree(Arc::clone(&ledger), tree);
+    let err = pending
+        .build(standard_request(7_000))
+        .await
+        .expect_err("the only output is not in the tree at the reference block");
+    match err {
+        SendError::OutputNotYetSpendable {
+            eligible_height,
+            reference_block_height,
+            wait_blocks,
+        } => {
+            assert_eq!(
+                eligible_height,
+                shekyl_types::BlockHeight::from_raw(eligible)
+            );
+            assert_eq!(
+                reference_block_height,
+                shekyl_types::BlockHeight::from_raw(eligible),
+                "the reference sits exactly at the output's eligible height"
+            );
+            assert_eq!(
+                wait_blocks,
+                shekyl_types::BlockCount::ONE,
+                "the tree at the next reference holds it"
+            );
+        }
+        other => panic!("expected OutputNotYetSpendable, got {other:?}"),
+    }
+
+    let (ledger, _dir, tree) =
+        funded_ledger_and_tree(&[(1, 50_000)], owned_block, boundary_tip + 1).await;
+    let pending = test_pending_tx_with_tree(Arc::clone(&ledger), tree);
+    pending
+        .build(standard_request(7_000))
+        .await
+        .expect("one block later the output is in the tree and the spend builds");
 }
 
 /// C2 wait-blocks KAT: when *multiple* too-fresh outputs are needed to cover
@@ -863,8 +920,8 @@ async fn output_not_yet_spendable_at_reference_block() {
 /// them mature — not the soonest single output (which alone is insufficient
 /// and would underestimate the wait). synced 15 → reference 9; output A
 /// (eligible 11, 10_000) is too small alone for the 30_000 spend (+fee), so
-/// B (eligible 13, 50_000) is also required → the wait is `13 − 9 = 4`, not
-/// `11 − 9 = 2`.
+/// B (eligible 13, 50_000) is also required → B is in the tree committed at
+/// reference 14, so the wait is 5 blocks, not A's 3.
 #[tokio::test]
 async fn output_not_yet_spendable_wait_covers_required_subset() {
     let ledger = Arc::new(test_ledger());
@@ -906,8 +963,8 @@ async fn output_not_yet_spendable_wait_covers_required_subset() {
             );
             assert_eq!(
                 wait_blocks,
-                shekyl_types::BlockCount::from_raw(4),
-                "wait until enough matures, not the soonest"
+                shekyl_types::BlockCount::from_raw(5),
+                "wait until enough is in the tree, not the soonest"
             );
         }
         other => panic!("expected OutputNotYetSpendable, got {other:?}"),
@@ -989,9 +1046,10 @@ async fn real_root_membership_proof_builds_and_submits() {
 /// but it does move on any change to *who gets how much* or the fee.
 #[test]
 fn content_fingerprint_is_order_invariant_and_amount_sensitive() {
-    let r = |addr: &str, amt: u64| TxRecipientSummary {
-        address: addr.to_string(),
+    let r = |addr: &str, amt: u64| TxRecipient {
+        destination: TxDestination::Address(addr.to_string()),
         amount_atomic_units: AtomicUnits::from_raw(amt),
+        rid: None,
     };
     let fee = AtomicUnits::from_raw(1_000);
     let change = AtomicUnits::from_raw(500);
@@ -1032,6 +1090,44 @@ fn content_fingerprint_is_order_invariant_and_amount_sensitive() {
         base,
         ContentFingerprint::from_parts(fee, &[r("addr_a", 11), r("addr_b", 20)], change),
         "a different recipient amount is a content change"
+    );
+}
+
+/// CT-5d (§4 F-G) for `stake_in`'s destination: a persona destination is
+/// compared by its payment keys, so paying a different persona is a content
+/// change, paying the same persona again is not, and a persona never compares
+/// equal to an address.
+#[test]
+fn content_fingerprint_compares_persona_destinations_by_their_keys() {
+    use crate::engine::stake_engine::test_fixtures::derive_bundle;
+    let persona = |slot: u32| TxRecipient {
+        destination: TxDestination::OwnPersona(derive_bundle(slot).payment_destination()),
+        amount_atomic_units: AtomicUnits::from_raw(10),
+        rid: None,
+    };
+    let fee = AtomicUnits::from_raw(1_000);
+    let change = AtomicUnits::from_raw(500);
+
+    let base = ContentFingerprint::from_parts(fee, &[persona(0)], change);
+    assert_eq!(
+        base,
+        ContentFingerprint::from_parts(fee, &[persona(0)], change),
+        "the same persona's keys, derived again, are the same destination"
+    );
+    assert_ne!(
+        base,
+        ContentFingerprint::from_parts(fee, &[persona(1)], change),
+        "a different persona is a content change"
+    );
+    let address = TxRecipient {
+        destination: TxDestination::Address("addr_a".to_string()),
+        amount_atomic_units: AtomicUnits::from_raw(10),
+        rid: None,
+    };
+    assert_ne!(
+        base,
+        ContentFingerprint::from_parts(fee, &[address], change),
+        "a persona never compares equal to an address"
     );
 }
 
@@ -2041,8 +2137,11 @@ async fn concurrent_builds_serialize_on_the_build_permit() {
     use std::future::Future;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    // Two inputs, each funding one build's amount and its fee on the fee
+    // lattice with room to spare: the second input is the smaller one and
+    // its build pays 7 000 plus a fee rounded up to the next 1 000.
     let (ledger, _tree_dir, tree) =
-        funded_ledger_and_tree(&[(1, 50_000), (2, 30_000)], 1, 20).await;
+        funded_ledger_and_tree(&[(1, 50_000), (2, 40_000)], 1, 20).await;
     let entered = Arc::new(AtomicUsize::new(0));
     let gate = Arc::new(tokio::sync::Semaphore::new(0));
     let pending = Arc::new(test_pending_tx_with_tree_and_fee_source(
@@ -2266,12 +2365,11 @@ async fn terminal_keeps_the_journal_row_retryable_removes_it() {
 /// surface-A `pqc_auths` slot, tested there; SA-2b, SIGNATURE_ALIGNMENT.md §2.2.)
 #[tokio::test]
 async fn join_market_bond_post_verifies_over_real_tree() {
-    use rand_core::OsRng;
     use shekyl_archival_retention::{
         verify_bond_post_ct_balance, verify_join_market_bond_post, BondCtBalanceError,
         BondPostError, BondTerm,
     };
-    use shekyl_bulletproofs::Bulletproof;
+    use shekyl_bulletproofs::{verify_batch, BatchEntry, Bulletproof};
     use shekyl_curve_io::CompressedPoint;
     use shekyl_curve_primitives::Commitment;
     use shekyl_units::{AtomicUnits, NonZeroAtomicUnits};
@@ -2314,9 +2412,11 @@ async fn join_market_bond_post_verifies_over_real_tree() {
         .collect();
     let bp = Bulletproof::read_plus(&mut signed.bulletproof_plus.as_slice())
         .expect("bulletproof_plus deserializes");
-    let mut rng = OsRng;
     assert!(
-        bp.verify(&mut rng, &bp_commitments),
+        verify_batch(&[BatchEntry {
+            proof: &bp,
+            commitments: &bp_commitments,
+        }]),
         "BP+ verifier must accept the bond-post range proof"
     );
 
@@ -3419,10 +3519,9 @@ fn populate_ledger_scan_only(
 fn daemon_fee_estimates_distinct() -> FeeEstimates {
     // Distinct, monotonic, under the absolute cap.
     FeeEstimates {
-        economy: FeeRate::new(5, 1).expect("economy rate"),
-        standard: FeeRate::new(10, 1).expect("standard rate"),
-        priority: FeeRate::new(40, 1).expect("priority rate"),
-        quantization_mask: 1,
+        economy: FeeRate::new(5).expect("economy rate"),
+        standard: FeeRate::new(10).expect("standard rate"),
+        priority: FeeRate::new(40).expect("priority rate"),
     }
 }
 
@@ -3490,7 +3589,7 @@ fn assemble_tx_to_sign_rejects_missing_key_image() {
         20,
     );
     let request = standard_request(7_000);
-    let rate = FeeRate::new(10, 1).expect("rate");
+    let rate = FeeRate::new(10).expect("rate");
     let fee_directive = build_fee_directive(
         &rate,
         InputCount::clamped(1),

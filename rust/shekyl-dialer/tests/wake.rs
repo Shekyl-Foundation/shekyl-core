@@ -19,10 +19,9 @@ use std::time::{Duration, Instant};
 
 use shekyl_dialer::{Dialer, WAKE_BASE_NANOS, WAKE_JITTER_NANOS};
 use shekyl_draw_rng::SplitMix64;
-use shekyl_levin::SupportFlags;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_peerlist::{ConnectorId, NetworkAddress, RefusedSet, Tick};
-use shekyl_seam::{Hub, Post, SocketId, SyncPayload};
+use shekyl_seam::{Hub, Post, Route, RoutePublish, SocketId, SyncPayload};
 use shekyl_timing_engine::{Clock, EngineService, ManualClock, OwnerClass};
 use shekyl_transport_layer::Sockets;
 
@@ -66,7 +65,6 @@ fn the_owner_dials_only_after_the_engine_wakes_it_and_once_per_wake() {
     let dialer = Arc::new(Dialer::new(
         hub.clone(),
         RefusedSet::NON_GLOBAL,
-        SupportFlags::ADVERTISED.bits(),
         Arc::new(|| {
             Some(SyncPayload {
                 current_height: 1,
@@ -77,6 +75,17 @@ fn the_owner_dials_only_after_the_engine_wakes_it_and_once_per_wake() {
         }),
     ));
     dialer.set_network_id([7; 16]);
+    // The link is usable: the plan draws only then (TSR-F1).
+    assert!(
+        matches!(
+            dialer
+                .hub()
+                .links()
+                .publish_usable(ConnectorId::Clearnet, Route::Direct, Tick::new(1),),
+            RoutePublish::Installed { .. }
+        ),
+        "the test route was not already usable"
+    );
     let mut rng = SplitMix64::new(1);
     for n in 1..=8 {
         dialer

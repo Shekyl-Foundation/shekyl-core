@@ -18,26 +18,28 @@ use crate::block::Candidate;
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::fault::{Corrupt, Fault, FormAttempt};
+use crate::harness::expected_references;
 use crate::harness::fixture::{
-    candidate, candidate_on, coinbase, recorded, recorded_with_work, G, TWO_G,
+    candidate, candidate_on, coinbase, coinbase_extra, recorded, recorded_with_work, G, TWO_G,
 };
 use crate::harness::{
-    assert_refused, credited_to_this_falsifier, defined, expected_seed, formed_on, judged, Faulted,
-    MockChain, MockSubstrate,
+    assert_refused, credited_to_this_falsifier, defined, expected_seed, expected_target, formed_on,
+    judged, Faulted, MockChain, MockSubstrate,
 };
 use crate::rule_set::RuleSet;
 use crate::rules::{BlockContext, BlockRule, FormContext, FormRule};
 use crate::trust::Trust;
-use crate::validate::{form, validate};
+use crate::validate::{form, form_judged, validate};
 use crate::verdict::{ChainValid, Locus, TxSlot, Verdict};
 use crate::view::{RecordedBlock, Tip};
+use crate::{form_header, judge_header};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_economics::{
     base_block_reward, effective_emission, CirculatingSupply, ClosedShardCount, TxVolume,
 };
-use shekyl_types::{ArchivalLength, BlockHash, BlockHeight, SHARD_LENGTH};
+use shekyl_types::{ArchivalLength, BlockHash, BlockHeight, TxHash, SHARD_LENGTH};
 use shekyl_units::AtomicUnits;
-use shekyl_wire::{Ct, Input, Output, Transaction};
+use shekyl_wire::{Ct, Input, Output, PowBlob, Transaction};
 
 const MINER: Locus = Locus::Tx {
     slot: TxSlot::Miner,
@@ -46,11 +48,14 @@ const MINER: Locus = Locus::Tx {
 /// Judge through both stages against `chain`, claiming the seed the chain
 /// expects (D3); the mock never faults.
 fn judge_on(chain: &MockChain, candidate: Candidate) -> Verdict<()> {
+    let references = expected_references(chain, &candidate);
     let formed = match form(
         candidate,
         &RuleSet::GENESIS,
         &MockSubstrate::default(),
         expected_seed(chain),
+        expected_target(chain, &RuleSet::GENESIS),
+        &references,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,
@@ -93,7 +98,7 @@ fn check_alone<R: FormRule>(candidate: &Candidate) -> Verdict<()> {
 }
 
 fn check_alone_on<R: BlockRule>(chain: &MockChain, candidate: &Candidate) -> Verdict<()> {
-    let formed = formed_on(chain, candidate.clone());
+    let formed = crate::harness::token_for_one_rule(chain, candidate.clone());
     chain.with_view(|view| {
         defined(R::check(
             &BlockContext::for_tests(&formed, chain.tip(), None),
@@ -222,12 +227,15 @@ fn cen_f4_exactly_one_output_above_genesis() {
     let two = with_coinbase(&chain, |tx| {
         let extra = tx.prefix.outputs[0].clone();
         tx.prefix.outputs.push(extra);
-        // Keep F10's arity satisfied so the refusal is F4's alone.
+        // Keep F10's arity satisfied, and refit I20's extra to two outputs
+        // (the miner slot's `tx_form` runs in `form`, ahead of F4), so the
+        // refusal is F4's alone.
         if let Ct::Null(base) = &mut tx.ct {
             base.commitments.push(TWO_G);
             base.enc_amounts.push([0x55; 9]);
             base.enc_labels.push([0x66; 9]);
         }
+        tx.prefix.extra = coinbase_extra(2);
     });
     assert_refused(check_alone_on::<F4>(&chain, &two), CenRow::F4, MINER);
     assert_refused(judge_on(&chain, two), CenRow::F4, MINER);
@@ -752,6 +760,136 @@ fn f8_the_wire_admits_one_output_tag() {
             "output tag {other:#04x} must not decode"
         );
     }
+}
+
+/// A block `form` refuses on G2 does not reach the longhash, even when the
+/// proof would fail.
+#[test]
+fn a_g2_failure_is_refused_before_any_longhash() {
+    let chain = MockChain::default();
+    let mut unpaired = candidate(Vec::new());
+    unpaired
+        .block
+        .transaction_hashes
+        .push(TxHash::from_bytes([0x11; 32]));
+    let no_hash = MockSubstrate {
+        longhash: MockSubstrate::must_not_hash,
+        ..MockSubstrate::default()
+    };
+    match form(
+        unpaired.clone(),
+        &RuleSet::GENESIS,
+        &no_hash,
+        expected_seed(&chain),
+        expected_target(&chain, &RuleSet::GENESIS),
+        &expected_references(&chain, &unpaired),
+        FormAttempt::FIRST,
+    ) {
+        Ok(Err(refused)) => assert_eq!(refused.rule, CenRow::G2),
+        other => panic!("expected G2, got {other:?}"),
+    }
+}
+
+/// A body row `form` refuses is the same row `form_judged` refuses, and
+/// `form` does not hash to reach it. The shapes are the suite's own.
+#[test]
+fn the_body_rows_refuse_on_the_same_row_through_both_entries() {
+    let chain = MockChain::default();
+    let mut unpaired = candidate(Vec::new());
+    unpaired
+        .block
+        .transaction_hashes
+        .push(TxHash::from_bytes([0x11; 32]));
+    let mut no_gen = candidate(Vec::new());
+    no_gen.block.miner_transaction.prefix.inputs.clear();
+    let mut not_null = candidate(Vec::new());
+    let base = match &not_null.block.miner_transaction.ct {
+        Ct::Null(base) | Ct::Fcmp { base, .. } => base.clone(),
+    };
+    not_null.block.miner_transaction.ct = Ct::Fcmp {
+        fee: 0,
+        reference_block: BlockHash::NULL,
+        base,
+        pqc_auths: Vec::new(),
+        prunable: None,
+    };
+    let mut bad_key = candidate(Vec::new());
+    let mut key = [0u8; 32];
+    key[0] = 1;
+    bad_key.block.miner_transaction.prefix.outputs[0].key = key;
+    let mut trivial_mask = candidate(Vec::new());
+    if let Ct::Null(base) = &mut trivial_mask.block.miner_transaction.ct {
+        base.commitments[0] = G;
+    }
+    let mut overflow = candidate(Vec::new());
+    overflow.block.miner_transaction.prefix.outputs[0].amount = u64::MAX;
+    overflow
+        .block
+        .miner_transaction
+        .prefix
+        .outputs
+        .push(Output {
+            amount: 1,
+            key: G,
+            view_tag: 2,
+        });
+    for (candidate, row) in [
+        (unpaired, CenRow::G2),
+        (no_gen, CenRow::F1),
+        (not_null, CenRow::F3),
+        (overflow, CenRow::F7),
+        (bad_key, CenRow::F9),
+        (trivial_mask, CenRow::F10),
+    ] {
+        same_body_row(&chain, candidate, row);
+    }
+}
+
+/// `form` names `row` and does not hash. `form_judged` on that block's own
+/// header proof names `row` too.
+fn same_body_row(chain: &MockChain, candidate: Candidate, row: CenRow) {
+    let references = expected_references(chain, &candidate);
+    let seed = expected_seed(chain);
+    let target = expected_target(chain, &RuleSet::GENESIS);
+    let no_hash = MockSubstrate {
+        longhash: MockSubstrate::must_not_hash,
+        ..MockSubstrate::default()
+    };
+    match form(
+        candidate.clone(),
+        &RuleSet::GENESIS,
+        &no_hash,
+        seed,
+        target,
+        &references,
+        FormAttempt::FIRST,
+    ) {
+        Ok(Err(refused)) => assert_eq!(refused.rule, row, "form"),
+        other => panic!("{row:?}: form gave {other:?}"),
+    }
+    let pow = PowBlob::read(&candidate.block.pow_blob()).expect("preimage");
+    let formed = form_header(
+        &pow,
+        &RuleSet::GENESIS,
+        &MockSubstrate::default(),
+        seed,
+        target,
+        FormAttempt::FIRST,
+    )
+    .expect("mock")
+    .unwrap_or_else(|refused| panic!("{row:?}: the header was refused: {refused}"));
+    chain.with_view(|view| {
+        let judged = match judge_header(&formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED)
+            .expect("view")
+        {
+            Ok(judged) => judged,
+            Err(refused) => panic!("{row:?}: judge_header refused: {refused}"),
+        };
+        match form_judged(candidate, &judged, &references) {
+            Err(refused) => assert_eq!(refused.rule, row, "form_judged"),
+            Ok(_) => panic!("{row:?}: form_judged accepted"),
+        }
+    });
 }
 
 /// CEN-F21 as behaviour, on the economics crate's one constant: the genesis

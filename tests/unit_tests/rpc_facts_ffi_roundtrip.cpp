@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 // Bidirectional layout pin for shekyl_rpc_chain_tip_facts
-// (docs/design/DAEMON_RPC_KV_CUTOVER.md §3.2, RK-D3; the F26 pattern from
+// (docs/completed/DAEMON_RPC_KV_CUTOVER.md §3.2, RK-D3; the F26 pattern from
 // daemon_submit_ffi_roundtrip.cpp): C++ fills / Rust checks and Rust fills /
 // C++ checks, per field from one seed, so a width, order or padding
 // disagreement between the two views fails even where a memcpy echo passes.
@@ -297,13 +297,17 @@ TEST(rpc_facts_ffi_roundtrip, pod_sizes_are_the_documented_ones)
   static_assert(offsetof(shekyl_rpc_info_chain_facts, reserved) == 157, "reserved offset");
   static_assert(sizeof(shekyl_rpc_info_status_facts) == 24, "info-status facts POD changed size");
   static_assert(sizeof(shekyl_rpc_info_peers_facts) == 32, "info-peers facts POD changed size");
-  static_assert(sizeof(shekyl_rpc_fee_estimate_facts) == 40, "fee-estimate facts POD changed size");
+  static_assert(sizeof(shekyl_rpc_fee_estimate_facts) == 32, "fee-estimate facts POD changed size");
 
   // RK-5a's three list PODs. Same reason as `shekyl_rpc_tx_entry` above: they
   // carry pointers, so a fill/check twin has nothing to compare and the
   // layout itself is what must agree with
   // `rust/shekyl-daemon-rpc/src/ffi.rs`.
-  static_assert(sizeof(shekyl_rpc_connection_facts) == 128, "connection facts changed size");
+  static_assert(sizeof(shekyl_rpc_connection_facts) == 120, "connection facts changed size");
+  static_assert(sizeof(shekyl_rpc_connection_facts) ==
+      offsetof(shekyl_rpc_connection_facts, claims_known) +
+        sizeof(shekyl_rpc_connection_facts::claims_known),
+    "connection facts ends on claims_known");
   static_assert(offsetof(shekyl_rpc_connection_facts, address) == 0, "address offset");
   static_assert(offsetof(shekyl_rpc_connection_facts, address_len) == 8, "address_len offset");
   static_assert(offsetof(shekyl_rpc_connection_facts, host) == 16, "host offset");
@@ -317,15 +321,13 @@ TEST(rpc_facts_ffi_roundtrip, pod_sizes_are_the_documented_ones)
   static_assert(offsetof(shekyl_rpc_connection_facts, current_speed_down) == 88, "current_speed_down offset");
   static_assert(offsetof(shekyl_rpc_connection_facts, current_speed_up) == 96, "current_speed_up offset");
   static_assert(offsetof(shekyl_rpc_connection_facts, height) == 104, "height offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, support_flags) == 112, "support_flags offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, port) == 116, "port offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, state) == 118, "state offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, address_type) == 119, "address_type offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, incoming) == 120, "incoming offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, localhost) == 121, "localhost offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, local_ip) == 122, "local_ip offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, claims_known) == 123, "claims_known offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, reserved) == 124, "reserved offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, port) == 112, "port offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, state) == 114, "state offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, address_type) == 115, "address_type offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, incoming) == 116, "incoming offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, localhost) == 117, "localhost offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, local_ip) == 118, "local_ip offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, claims_known) == 119, "claims_known offset");
 
   static_assert(sizeof(shekyl_rpc_sync_span_facts) == 72, "sync span facts changed size");
   static_assert(offsetof(shekyl_rpc_sync_span_facts, remote_address) == 0, "remote_address offset");

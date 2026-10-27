@@ -16,24 +16,24 @@
 //! correction; the weight it multiplies is the ordinary shape at the chain's
 //! depth, and the fee is the unrounded fixed point of that product
 //! ([`shekyl_tx_weight::converge_weight_fee`]). What this module adds is the
-//! order of the calls and the three places the run still departs from the
+//! order of the calls and the two places the run still departs from the
 //! chain, each named below so that none is silent:
 //!
-//! - the fee is paid **unrounded** — the product above carries no quantization
-//!   mask. The wallet rounds up to the daemon's mask (1 000 atomic), which
-//!   has no Rust owner, and the fee-floor instrument in this crate already
-//!   pays exactly (FL-R22);
+//! - the fee is paid **unrounded** — the product above is not rounded to the
+//!   fee lattice. The wallet rounds up to it
+//!   ([`shekyl_economics::quantized_fee`], 1 000 atomic), and the fee-floor
+//!   instrument in this crate pays exactly too (FL-R22);
 //! - the volume, split, burn and median operands are the fold's own, so they
 //!   carry whatever that fold carries (the design document's ESR-3, ESR-4
 //!   and ESR-6).
 
 use shekyl_economics::{
     base_block_reward, corrected_fee_ladder, fee_correction, EconomicParams, FeeLadder, TxVolume,
+    RELAY_FLOOR_REFERENCE_TX_WEIGHT,
 };
 
 use crate::burden::{ordinary_tx_fee, ordinary_tx_weight};
 use crate::calibration::PerByteRate;
-use crate::fee_ladder::REF_TX_WEIGHT;
 
 /// How a run prices an ordinary transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -294,7 +294,7 @@ fn ladder_at(at: &FeePoint<'_>) -> FeeLadder {
     corrected_fee_ladder(
         base_reward,
         at.long_term_median,
-        REF_TX_WEIGHT,
+        RELAY_FLOOR_REFERENCE_TX_WEIGHT,
         correction,
         at.params,
     )
@@ -303,7 +303,9 @@ fn ladder_at(at: &FeePoint<'_>) -> FeeLadder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shekyl_economics::{emission_share_at, relay_fee_floor, FeeCorrection};
+    use shekyl_economics::{
+        emission_share_at, relay_fee_floor, FeeCorrection, RELAY_FLOOR_REFERENCE_TX_WEIGHT,
+    };
     use shekyl_tx_weight::predict_weight;
 
     use crate::burden::normal_tx_shape;
@@ -334,7 +336,7 @@ mod tests {
         let floor = relay_fee_floor(
             base,
             params.full_reward_zone,
-            REF_TX_WEIGHT,
+            RELAY_FLOOR_REFERENCE_TX_WEIGHT,
             FeeCorrection::UNITY,
             &params,
         );
@@ -357,7 +359,7 @@ mod tests {
         let floor = relay_fee_floor(
             base,
             params.full_reward_zone,
-            REF_TX_WEIGHT,
+            RELAY_FLOOR_REFERENCE_TX_WEIGHT,
             FeeCorrection::UNITY,
             &params,
         );

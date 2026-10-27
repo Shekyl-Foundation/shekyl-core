@@ -63,12 +63,12 @@ impl Fixture {
             bonds: vec![
                 EpochCloseBond {
                     join_settlement_epoch: shape.join_settlement_epoch,
-                    is_foundation_complete_tree: false,
+                    is_support_complete_tree: false,
                     bad_intervals: &[],
                 },
                 EpochCloseBond {
                     join_settlement_epoch: shape.join_settlement_epoch,
-                    is_foundation_complete_tree: false,
+                    is_support_complete_tree: false,
                     bad_intervals: &[],
                 },
             ],

@@ -32,7 +32,11 @@
 
 pub mod binary;
 pub mod control;
+pub mod directory_cache;
+pub mod inherit;
 pub mod onion_identity;
+pub mod spawn_lock;
+pub mod supervisor;
 
 #[cfg(test)]
 mod test_support;

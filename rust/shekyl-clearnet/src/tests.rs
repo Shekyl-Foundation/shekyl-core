@@ -545,7 +545,10 @@ fn a_socks_proxy_is_the_path_and_a_refusal_keeps_the_reply() {
             ip: Ipv4Addr::LOCALHOST,
             port: dest_port,
         },
-        Some(SocketAddr::from((Ipv4Addr::LOCALHOST, proxy_port))),
+        Some(shekyl_socks::Proxy::unauthenticated(SocketAddr::from((
+            Ipv4Addr::LOCALHOST,
+            proxy_port,
+        )))),
     );
     let session = handle.block_on(next_session(&mut listener.sessions));
     session.try_send(b"out".to_vec()).expect("send");
@@ -602,7 +605,10 @@ fn a_socks_refusal_carries_the_reply_byte() {
             ip: Ipv4Addr::LOCALHOST,
             port: 9,
         },
-        Some(SocketAddr::from((Ipv4Addr::LOCALHOST, proxy_port))),
+        Some(shekyl_socks::Proxy::unauthenticated(SocketAddr::from((
+            Ipv4Addr::LOCALHOST,
+            proxy_port,
+        )))),
     );
     let start = Instant::now();
     let cause = loop {

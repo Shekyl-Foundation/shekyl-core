@@ -76,6 +76,14 @@ impl Persona {
         Self { keys }
     }
 
+    /// The whole bundle, owned: for a test that hands the persona's keys to
+    /// a holder of its own — a stake actor whose staged receipt capability
+    /// serves as this persona (the bundle producer's gate test).
+    #[must_use]
+    pub fn into_keys(self) -> ArchivalPKeys {
+        self.keys
+    }
+
     /// The whole bundle — what the emission claim's assembly signs and
     /// scans with, and what [`crate::Owner::persona`] reads to source the
     /// outputs a coinbase spend paid it.

@@ -690,9 +690,10 @@ def resolve(path: str) -> int:
 
     Refuses to answer for a path inside a submodule this tree cannot speak for,
     rather than calling it dead. The alternative — count it and carry on — was
-    measured on this very PR: the baseline was taken in a worktree where
-    external/miniupnp was not checked out, so a live citation read as rot and
-    the figure shipped one too high. Counting it the other way is no better,
+    measured on the PR that introduced this rule: the baseline was taken in a
+    worktree where one submodule (then external/miniupnp, since removed with
+    UPnP by the daemon-configuration cutover) was not checked out, so a live
+    citation read as rot and the figure shipped one too high. Counting it the other way is no better,
     because then a number that is supposed to mean one thing would mean "of what
     this checkout could see", and a genuinely dead submodule citation would pass
     locally and fail in CI — inverting this gate's premise that the local run is

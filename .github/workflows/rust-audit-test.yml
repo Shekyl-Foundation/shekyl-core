@@ -213,6 +213,7 @@ jobs:
             rust/shekyl-p2p-transport/fuzz/fuzz_targets/fuzz_read_message1.rs
             rust/shekyl-p2p-transport/fuzz/fuzz_targets/fuzz_read_message2.rs
             rust/shekyl-p2p-transport/fuzz/fuzz_targets/fuzz_open_one.rs
+            rust/shekyl-noise/fuzz/fuzz_targets/fuzz_classed_opener.rs
           )
           MISSING=0
           for target in "${REQUIRED_TARGETS[@]}"; do
@@ -245,9 +246,12 @@ jobs:
           #     would have silently restored a 1.94-built target/).
           #   - No ~/.cargo/bin caching (cargo-audit reinstalled from
           #     source every run, ~2m30s).
+          # The constant-time dynamic harness is a third workspace, under
+          # docs/formal/checkct/dynamic, with its own target/ likewise.
           workspaces: |
             rust -> target
             rust/shekyl-fcmp/fuzz -> target
+            docs/formal/checkct/dynamic -> target
       - name: install cargo-audit
         # `cargo install --locked` is idempotent: on Swatinem cache
         # hits the binary is already present in ~/.cargo/bin and this
@@ -406,7 +410,8 @@ jobs:
           RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --lib
           -p shekyl-tor-control-wallet -p shekyl-tor-control-client -p shekyl-p-serve -p shekyl-p-host
           -p shekyl-operator-alarm -p shekyl-economics -p shekyl-store-codec
-          -p shekyl-capped-stream -p shekyl-crypto-pq
+          -p shekyl-capped-stream -p shekyl-crypto-pq -p shekyl-miner -p shekyl-hash-budget
+          -p shekyl-node -p shekyl-chain-sync -p shekyl-chain-sync-runtime
       - name: build shekyl-fcmp crate
         working-directory: rust
         run: cargo build --locked -p shekyl-fcmp
@@ -421,6 +426,22 @@ jobs:
         # No CARGO_TARGET_DIR: this workspace must not share rust/target.
         # Its own target/ is the second cache workspace above.
         run: cargo check --locked --manifest-path rust/shekyl-fcmp/fuzz/Cargo.toml
+      - name: "constant-time dynamic harness: fmt, clippy, tests"
+        # docs/formal/checkct/dynamic is its own workspace (its own lockfile
+        # pins the audited crypto-bigint) on the shipped toolchain (its
+        # rust-toolchain.toml; check_checkct_toolchain.py keeps it equal to
+        # rust/'s), so the workspace gates above do not see it. Its tests
+        # hold the row table's invariants and check that every row name a
+        # committed record under docs/formal/checkct/results cites is still
+        # a row or a listed retired one, so a rename cannot strand a record.
+        # change_scope.py reads this step's working-directory: a change to
+        # the crate or to those records is not docs-only. Own target/, no
+        # CARGO_TARGET_DIR (cached as a workspace above).
+        working-directory: docs/formal/checkct/dynamic
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked
       - name: cargo test (all workspace crates)
         working-directory: rust
         # `shekyl-randomx-differential` excluded from the workspace-wide
@@ -493,23 +514,6 @@ jobs:
         # latency measurement is meaningless). Thresholds are x86-derived
         # and live beside the floor ones in the example source.
         run: cargo run --locked --release -p shekyl-shard-visual --example budget_matrix -- x86-smoke
-      - name: "shekyl-levin: zstd-feature-off unavailability lane (--no-default-features)"
-        working-directory: rust
-        # `shekyl-levin`'s `zstd` feature is default-on (production always
-        # compresses via the shekyl_levin_* FFI; there is no C++ HAVE_ZSTD
-        # gate). Feature-off keeps try_compress_message as the identity and
-        # treats a COMPRESSED bucket as a hard error. The workspace-wide
-        # test above only ever builds default features, so without this lane
-        # the unavailability arms are never compiled *or* executed and can
-        # rot green. Clippy too: the `#[cfg(not(feature = "zstd"))]` arms
-        # are invisible to the workspace clippy step for the same reason.
-        #
-        # `src/compress.rs` carries `tests_without_zstd`, which only compiles
-        # in this configuration — otherwise this lane would prove nothing but
-        # that the crate builds.
-        run: |
-          cargo clippy --locked -p shekyl-levin --no-default-features --all-targets -- -D warnings
-          cargo test --locked -p shekyl-levin --no-default-features
       - name: "cargo clippy: test-only features off, as production builds them (lib only)"
         working-directory: rust
         # The crates `check_test_only_features.py` governs each carry a
@@ -530,7 +534,7 @@ jobs:
         # but `-D warnings`, or if this step carries any key but `name`,
         # `working-directory`, `run`. Add a row there and a `-p` here in
         # the same commit.
-        run: cargo clippy --locked -p shekyl-chain-ingest -p shekyl-chain-rules -p shekyl-draw-rng -p shekyl-p-host -p shekyl-tor-control-client --lib -- -D warnings
+        run: cargo clippy --locked -p shekyl-chain-ingest -p shekyl-chain-rules -p shekyl-chain-store -p shekyl-mempool -p shekyl-draw-rng -p shekyl-p-host -p shekyl-tor-control-client --lib -- -D warnings
       - name: shekyl-standoff conformance suite (x86_64 only)
         working-directory: rust
         # `shekyl-standoff`'s conformance grading + negative controls

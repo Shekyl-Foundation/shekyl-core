@@ -282,7 +282,88 @@ use super::{Canonical, CodecError};
 ///   the layout this change ends on; it is `25` because the draw-state
 ///   tables took `23` and the alt record `24` while it was open, and it
 ///   is independent of both.
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(25);
+/// - `26` — the proof-of-work hash is recorded beside the block (DRS-E5
+///   switch PR; `DRS_E5_POOL_ALT_PRUNE.md` 2026-10-15 ruling 3).
+///   `block_pow` (`u64 → recorded_pow`, 64 bytes: seed ‖ pow) is born
+///   Rust-only, appended at ordinal 42, written by `connect` for every
+///   block; `alt_block` gains the same 64 bytes after its cumulative
+///   difficulty, written by AL1 from the cheap tier's verdict. A `25` file
+///   lacks the table and its alt rows would decode with the block bytes
+///   mis-framed, so the bump refuses it at open; `alt_block.snap` re-pins
+///   and `recorded_pow.snap` is new. Rebuild from the block corpus, as at
+///   every bump.
+/// - `27` — `alt_block_bodies` (`LmdbHashKey → alt_bodies`, Rust-only,
+///   ordinal 43) is born: an alternative block's listed bodies are
+///   consensus data the switch connects, so the store holds them beside the
+///   alt row instead of the pool (DRS-E5 PR-b; the review of #1102, B1).
+///   `alt_bodies.snap` is new and `tables.snap` re-pins; no existing table,
+///   ordinal or property cell moves. The pool file leaves this number
+///   (`SPL-Q8` as ruled, 2026-10-17): `pool_record.snap` and
+///   `pool_tables.snap` move to `pool_schemas/` under the pool file's own
+///   `POOL_SCHEMA_VERSION` (`crate::pool`), whose history records the
+///   record's reshaping in the same PR. A `26` chain file is refused, as
+///   at every bump.
+/// - `28` — the Release journal (`ARCHIVAL_SETTLEMENT_WRITER.md` §16,
+///   `SO-D12` increment 2). `archival_release_journal` (`(u64, [u8; 32]) →
+///   bond_record`, the record a Release replaced) is born Rust-only,
+///   appended at ordinal 44, written by `connect` for every Release and
+///   retired at the slash log's floor. The same increment gives
+///   `archival_drawable_digest` its writer: every block at an epoch's
+///   open, genesis included, writes the epoch's digest, which the
+///   settlement pass checks. A `27` file lacks the table and holds no
+///   digest for the epochs it opened, so its first settlement would halt;
+///   the bump refuses it at open instead. No value codec moves:
+///   `bond_record.snap` and `drawable_digest.snap` are unchanged, and
+///   `tables.snap` gains the row. Rebuild from the block corpus, as at
+///   every bump.
+/// - `29` — a settled epoch's market membership is frozen at its pass
+///   (`ARCHIVAL_SETTLEMENT_WRITER.md` §17, `SO-D12h`).
+///   `archival_complete_trees` (`u64 → complete_tree_set`: a `u32` count
+///   and the persona ids, strictly increasing) is born Rust-only, appended
+///   at ordinal 45, written by the slash pass beside `archival_sigma_work`
+///   for every settled epoch. A `28` file lacks the table, and a claim on
+///   one of its settled epochs would find `Σwork` without the set (SI-31),
+///   so the bump refuses it at open; `complete_tree_set.snap` is new. The
+///   per-epoch retirement of the same change moves no row's bytes, and the
+///   Release journal's horizon moves from the slash log's floor to one
+///   above `h_open` of the settling family's oldest kept epoch, which
+///   moves no row's bytes either. Rebuild from the block corpus, as at
+///   every bump.
+/// - `30` — the draw count (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4.3, §10,
+///   `SO-D12` increment 3). `BlockDraws` gains `issued_short` (a `u32`
+///   before the revealed flag), so a `29` row would decode as a different
+///   count; `block_draws.snap` re-pins. The table itself is unchanged:
+///   every connect now writes the row, and the boundary batch retires
+///   below the draw-rows floor. A `29` file is refused at open. Rebuild
+///   from the block corpus, as at every bump.
+/// - `31` — the support stream (`ARCHIVAL_SUPPORT_DRAW.md` §5).
+///   `archival_support_unissued` (`(persona, epoch) → support_count`) and
+///   `archival_support_block` (`height → support_count`) are born
+///   Rust-only, appended at ordinals 46 and 47, and with them
+///   `archival_support_issued` (`(epoch, persona, height, draw) →
+///   support_issued`) and `archival_support_settlement`
+///   (`(persona, epoch) → settlement_row`) at ordinals 48 and 49. A `30`
+///   file lacks all four, so a support settlement would read a row the
+///   file cannot hold; the bump refuses it at open. `support_count.snap`
+///   and `support_issued.snap` are new and `tables.snap` gains the four
+///   rows. Rebuild from the block corpus, as at every bump.
+/// - `32` — the `following_degraded` latch (`DRS_X_STORE_FLIP.md` DX-Q2
+///   item 8; `P2P_3_CHAIN_SYNC_BRIEF.md` §A item 7). One engine-local
+///   `properties` cell whose value is the evidence (`following_degraded`:
+///   the fork height, the heavier tip, its work). No table changes and no
+///   row moves; `properties.snap` gains the cell and `following_degraded.snap`
+///   is new. A `31` binary does not know the cell, so the bump refuses a
+///   `32` file under it. Rebuild from the block corpus, as at every bump.
+/// - `33` — the bundle queue and the body store
+///   (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5, `SO-D12` increment 4c).
+///   `archival_bundle_queue` (`h → queued_bundle`) and
+///   `archival_bundle_body` (`prunable_hash → queued_body`) are born
+///   Rust-only, appended at ordinals 50 and 51. A `32` file lacks both, and
+///   a `32` binary would open a `33` file without reconciling a queue it
+///   does not know, so the bump refuses either at open. `queued_bundle.snap`
+///   and `queued_body.snap` are new and `tables.snap` gains the two rows.
+///   Rebuild from the block corpus, as at every bump.
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(33);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -339,10 +420,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(25));
-        assert_eq!(SCHEMA_VERSION.encode(), [25, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(33));
+        assert_eq!(SCHEMA_VERSION.encode(), [33, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[25, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[33, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }

@@ -13,8 +13,8 @@ a required check still reports (as "skipped") and branch protection does
 not wait on a context nobody reports.
 
 A changed file is documentation when it is prose, that is `.md` or `.mdc`
-anywhere or any file under `docs/`, AND nothing the skipped jobs compile or
-run reads it. "Reads it" is computed from the tree, not listed by hand:
+anywhere or any other file under `docs/` outside a consumer tree (below),
+AND nothing the skipped jobs compile or run reads it. "Reads it" is computed from the tree, not listed by hand:
 
 - every path-shaped string literal (no whitespace: a message that mentions
   `docs/FOLLOWUPS.md` in a sentence reads nothing; this is safe only because
@@ -27,12 +27,19 @@ run reads it. "Reads it" is computed from the tree, not listed by hand:
   to it, relative to the consumer's own directory or to its crate's root
   (`CARGO_MANIFEST_DIR`): a crate's `#![doc = include_str!("../README.md")]`
   compiles that crate's README into rustdoc and the doctests, and no other
-  README.
+  README;
+- a relative literal (`../results`) in a consumer that lives under `docs/`
+  names the path it resolves to, against the same two bases, when that
+  path is under `docs/`: the constant-time harness's tests read the
+  records beside the crate.
 
 Consumers are the files the skipped jobs build or run: everything under
 `rust/`, `src/`, `tests/`, `cmake/` and `contrib/`, every `CMakeLists.txt`,
-and each `scripts/` file the consuming workflows invoke by path (read from
-those workflow files), except this classifier, which reads no document. The
+each `scripts/` file the consuming workflows invoke by path, and every
+non-prose file of a consumer tree under `docs/`, a directory a consuming
+workflow builds in (a step's `working-directory:` there); both read from
+those workflow files. This classifier is not a consumer: it reads no
+document. The
 documentation gates' own scripts are not consumers: those gates always run.
 
 A source file is never documentation, however small the edit: a doc-comment
@@ -58,6 +65,8 @@ import sys
 PROSE_SUFFIXES = (".md", ".mdc")
 SELF = "scripts/ci/change_scope.py"
 CONSUMER_DIRS = ("rust/", "src/", "tests/", "cmake/", "contrib/")
+# A step that builds in a directory under docs/ makes it a consumer tree.
+DOCS_WORKING_DIRECTORY = re.compile(r"working-directory:\s*(docs/[A-Za-z0-9_./-]+)")
 CONSUMING_WORKFLOWS = (
     ".github/workflows/build.yml",
     ".github/workflows/rust-audit-test.yml",
@@ -76,26 +85,40 @@ def git(*args):
     return subprocess.run(["git", *args], check=True, capture_output=True, text=True).stdout
 
 
-def is_prose(path):
-    return path.startswith("docs/") or path.endswith(PROSE_SUFFIXES)
+def consuming_workflow_text():
+    texts = []
+    for wf in CONSUMING_WORKFLOWS:
+        try:
+            with open(wf, encoding="utf-8") as f:
+                texts.append(f.read())
+        except OSError:
+            raise RuntimeError(f"cannot read consuming workflow {wf}")
+    return "\n".join(texts)
+
+
+def docs_consumer_trees(workflow_text):
+    """The directories under docs/ that a consuming workflow builds in."""
+    return tuple(sorted({d.rstrip("/") + "/" for d in DOCS_WORKING_DIRECTORY.findall(workflow_text)}))
+
+
+def is_prose(path, trees=()):
+    if path.endswith(PROSE_SUFFIXES):
+        return True
+    return path.startswith("docs/") and not path.startswith(trees)
 
 
 def consumer_files():
     tracked = git("ls-files").splitlines()
-    scripts = set()
-    for wf in CONSUMING_WORKFLOWS:
-        try:
-            with open(wf, encoding="utf-8") as f:
-                scripts.update(re.findall(r"scripts/[A-Za-z0-9_./-]+", f.read()))
-        except OSError:
-            raise RuntimeError(f"cannot read consuming workflow {wf}")
+    text = consuming_workflow_text()
+    scripts = set(re.findall(r"scripts/[A-Za-z0-9_./-]+", text))
+    trees = docs_consumer_trees(text)
     out = []
     for p in tracked:
-        if is_prose(p):
+        if is_prose(p, trees):
             continue
         if p == SELF:
             continue
-        if p.startswith(CONSUMER_DIRS) or p == "CMakeLists.txt" or p.endswith("/CMakeLists.txt") or p in scripts:
+        if p.startswith(CONSUMER_DIRS + trees) or p == "CMakeLists.txt" or p.endswith("/CMakeLists.txt") or p in scripts:
             out.append(p)
     if not out:
         raise RuntimeError("no consumer files found; refusing to classify")
@@ -173,6 +196,11 @@ class Inputs:
                     rel = lit.lstrip("/")
                     for base in {here, root}:
                         self.resolved.add(os.path.normpath(os.path.join(base, rel)))
+                if path.startswith("docs/") and lit.startswith("../") and not PATH_STOP.search(lit):
+                    for base in {here, root}:
+                        target = os.path.normpath(os.path.join(base, lit))
+                        if target.startswith("docs/"):
+                            self.exact.add(target)
                 for m in DOCS_IN_LITERAL.finditer(lit):
                     tail = m.group(1)
                     stop = PATH_STOP.search(tail)
@@ -195,11 +223,11 @@ class Inputs:
         return None
 
 
-def classify(files, inputs):
+def classify(files, inputs, trees):
     """Return (docs_only, reasons). A single non-documentation file decides."""
     reasons = []
     for f in files:
-        if not is_prose(f):
+        if not is_prose(f, trees):
             reasons.append(f"{f}: not prose")
             return False, reasons
         why = inputs.reads(f)
@@ -247,20 +275,29 @@ SELFTEST = [
     ("src/p2p/net_node.inl", False),
     (".github/workflows/build.yml", False),
     ("scripts/ci/change_scope.py", False),
+    ("docs/formal/checkct/dynamic/src/main.rs", False),   # a crate the rust job builds under docs/
+    ("docs/formal/checkct/dynamic/Cargo.lock", False),
+    ("docs/formal/checkct/results/2026-10-24/dynamic-aarch64-floor-device.txt", False),  # its tests read the records
+    ("docs/formal/checkct/README.md", True),              # prose beside that crate stays prose
+    ("docs/formal/checkct/drivers/ctl.rs", True),         # the static harness: no consuming workflow builds it
 ]
 
 
 def selftest():
     inputs = Inputs(consumer_files())
+    trees = docs_consumer_trees(consuming_workflow_text())
     bad = 0
     for path, want in SELFTEST:
-        got, reasons = classify([path], inputs)
+        got, reasons = classify([path], inputs, trees)
         ok = got == want
         bad += not ok
         print(f"[{'ok' if ok else 'WRONG'}] {path}: docs_only={got} (want {want}) — {reasons[-1]}")
     # Subject assertion (rule 47): the scan found the inputs the cases rely on.
     if "docs/design/CRYPTO_DOMAIN_REGISTRY.tsv" not in inputs.exact:
         print("WRONG: the scan did not find the domain registry's include_str!")
+        bad += 1
+    if "docs/formal/checkct/dynamic/" not in trees:
+        print(f"WRONG: the scan did not find the docs consumer tree the rust job builds: {trees}")
         bad += 1
     # The whitespace exclusion narrows what counts as an input. It is safe
     # only while no prose path contains whitespace; assert that here, so a
@@ -297,11 +334,11 @@ def selftest():
         except RuntimeError:
             pass
     # A mixed change is decided by its one code file.
-    got, _ = classify(["docs/design/TOR_SUPERVISOR.md", "rust/shekyl-tor/src/lib.rs"], inputs)
+    got, _ = classify(["docs/design/TOR_SUPERVISOR.md", "rust/shekyl-tor/src/lib.rs"], inputs, trees)
     if got:
         print("WRONG: a docs file plus a .rs file was called docs-only")
         bad += 1
-    print(f"selftest: {len(SELFTEST) + 7 - bad} of {len(SELFTEST) + 7} hold")
+    print(f"selftest: {len(SELFTEST) + 8 - bad} of {len(SELFTEST) + 8} hold")
     return 1 if bad else 0
 
 
@@ -316,7 +353,8 @@ def main():
         return selftest()
     try:
         files = args.files or changed_files(args.base, args.head)
-        docs_only, reasons = classify(files, Inputs(consumer_files()))
+        trees = docs_consumer_trees(consuming_workflow_text())
+        docs_only, reasons = classify(files, Inputs(consumer_files()), trees)
     except Exception as e:  # fail closed on anything
         print(f"scope: cannot decide ({e}); running everything (fail-closed)")
         emit(False)
