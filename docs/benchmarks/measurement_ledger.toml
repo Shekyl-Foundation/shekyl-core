@@ -582,6 +582,7 @@ stale_through = [
   { through = "4c0766da8", note = "The in-flight bound, revision 4, items 10 and 11: the close cause carries a fourth mark, a timeout of the dial's own window, on the dial deadline's TransportTimeout and Tor's 0x06; the dialer reads it against a Tor attempt's start, and a Tor timeout at or after the managed Tor's SocksTimeout ends its test. Clearnet makes one attempt per test, as before; its dial, its handshake, the gap and their I/O are unchanged. This moves no cost. The rows stay stale for the reasons already recorded." },
   { through = "7559d9f81", note = "The in-flight bound, revision 4: the dialer reads the managed Tor's window from its earliest expiry, one second inside SocksTimeout, and times each attempt inside its task; doc comments on the close cause say so. Clearnet's dial, its handshake, the gap and their I/O are unchanged. This moves no cost. The rows stay stale for the reasons already recorded." },
   { through = "5a01801ee", note = "The dial profile: each connector declares its stand-off and pace numbers beside its declaration; the clearnet dial, handshake and gap constants are unchanged and the profile reads the dial deadline as clearnet's window. This moves no cost. The rows stay stale for the reasons already recorded." },
+  { through = "2d868c2dc", note = "The dial profile's quiet threshold: K attempts and a span S per connector, read by the dialer's quiet guard. The clearnet dial, handshake and gap constants are unchanged. This moves no cost. The rows stay stale for the reasons already recorded." },
 ]
 
 [[constant]]
@@ -678,6 +679,7 @@ cleared = [
   { through = "7559d9f81", reason = "The in-flight bound, revision 4: a Tor timeout from 104 s into the attempt's own run, timed inside its task, ends its test; the window comparison and the close cause's doc comments change, and the launch argument does not. Each attempt is still one dial and one gap under the same deadlines; no deadline moved, so the 2026-10-14 capture still prices this tree." },
   { through = "e102eb8c2", reason = "Every Tor reply worth a retry now carries the window-timeout mark, so an onion code at or after the managed Tor's SocksTimeout ends its test as 0x06 does; the reply codes, the dial, the gap, the shutdown wait and their I/O are unchanged, and no deadline moved, so the 2026-10-14 capture still prices this tree." },
   { through = "5a01801ee", reason = "The dial profile: each connector declares its stand-off and pace numbers beside its declaration in this crate; the dial deadline and gap constants are unchanged and the clearnet window names CLEARNET_DIAL_WITHIN_NANOS. No deadline moved and no span gained I/O, so the 2026-10-14 capture still prices this tree." },
+  { through = "2d868c2dc", reason = "The dial profile's quiet threshold: the profile in this crate gains each connector's K attempts and span S, read by the dialer's quiet guard and the managed-Tor supervisor. No deadline or span constant moved and no span gained I/O, so the 2026-10-14 capture still prices this tree." },
 ]
 
 [[constant]]
