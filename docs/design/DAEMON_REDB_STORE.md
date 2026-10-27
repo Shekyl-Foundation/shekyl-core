@@ -1633,32 +1633,28 @@ looks. Deciding needs the block-add path instrumented, which is a follow-on.
 Until then §1.3's floor stands exactly as frozen, and this paragraph records an
 open question rather than a case for moving it.
 
-**Durability is measured, not labelled — and now genuinely observed.** DRS-D9 is
-imposed as `--db-sync-mode=safe`, validated against an allowed set *before* a
-daemon starts, **and then read back from the daemon's own report of the flags it
-resolved**. `core::init` logs `Database sync: flags=0x…, sync_mode=…,
-threshold=…` for exactly this purpose — A4's requirement is only checkable from
-a running node if the node says what it opened with — so artifacts carry
-`durability.observed: true` with the line itself, and the gate **refuses** an
-artifact whose resolved line reports `MDB_NOSYNC`/`MDB_MAPASYNC` or lacks the
-safe flag. An earlier revision of this section recorded `observed: false` and
-said plainly that no readback existed; that was true when written and is not
-now, which is the difference between a recorded gap and a stale claim.
+**Durability is measured, not labelled.** The daemon takes no sync-mode option
+(IG-Q4): the DRS lane decided `db-sync-mode` as a constant, DRS-D9's `safe`
+(Rick, 2026-10-26), parsed as an explicit choice rather than a default, so
+`Blockchain::safesyncmode` is a no-op and no sync turns the fsync off.
+`core::init` logs `Database sync: flags=…, sync_mode=…, threshold=…` for what
+it resolved. `flags` is the `DBF_*` bits and `sync_mode` is
+`blockchain_db_sync_mode` as an integer: `db_nosync` (3) leaves the fsync to
+the store, and `db_defaultsync` (0) is the open that lets `safesyncmode` turn
+it off. The bench reads that line twice — from the generating seed, before any
+block is generated, and from the subject, before the sync is timed. Artifacts
+carry `durability.observed: true` with the line, and the gate **refuses** one
+whose flag bits and parenthetical do not name the same open, whose open is not
+`safe`, whose `sync_mode` is not `db_nosync`, or whose recorded label is not
+the open the line names. The integer is on the line written at open, so a
+default-safe daemon is refused before generation.
 
-**A4 status on the LMDB path, corrected 2026-09-13.** Of the three
-default-by-omission mechanisms this section previously listed, **two are fixed**:
-`parse_db_sync_mode` now **fails closed** on an unrecognised token rather than
-falling through to `DEFAULT_FLAGS` (`--db-sync-mode=saf` refuses to start
-instead of silently selecting `MDB_NOSYNC`), and the resolved posture is now
-logged. **The third stands:** an unspecified `--db-sync-mode` still resolves to
-`DBF_FAST`, and with the argument defaulted the protocol handler calls
-`safesyncmode(false)` for the duration of sync — so **the shipped default
-daemon's IBD still runs at its least durable setting**, which is exactly the
-phase this table measures.
+**A4 on the LMDB path.** `parse_db_sync_mode` fails closed on an unrecognised
+token, the resolved posture is logged, and the posture is DRS-D9's through the
+whole of a sync, IBD included: the daemon's default is its only mode.
 
-A DRS-D9 baseline is consequently slower than a default daemon's IBD and is
-**not** a user-facing sync-time estimate; both engines pay the same cost, so the
-**ratio** is unaffected.
+A DRS-D9 baseline is the daemon's IBD as shipped. Both engines pay the fsync,
+so the **ratio** compares engines, not durability policies.
 
 ### 7.5 DRS-E6 — the validation crate and the surface partition (RULED 2026-09-15, C2-R8 §14 amendment)
 
