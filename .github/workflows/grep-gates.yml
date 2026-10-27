@@ -209,16 +209,53 @@ jobs:
           # asked how far the head is ahead of `dev`; a request that fails
           # leaves the answer empty, which is "not a promotion", and the
           # freeze runs.
+          #
+          # The push that promotion's merge makes to `main` has the previous
+          # `main` tip as its base, so it reads the same epoch (the alpha.10
+          # and alpha.11 merges both went red on `main`). It is exempt when
+          # the pushed commit merges a `dev` commit and has that commit's
+          # tree. The checkout is one commit deep, so the parent and both
+          # trees come from GitHub; a request that fails leaves no tree match
+          # or no count, and the freeze runs.
+          #
+          # A promotion whose lookup failed and a merge that added content
+          # both end in the freeze, red. Each path says which it took, on a
+          # "promotion check:" line, so the log tells them apart: a failed
+          # lookup is rerun, added content is investigated.
           run_one "Release-promotion rule self-test" \
             python3 scripts/ci/is_release_promotion.py --selftest
           ahead_by=""
+          promotion_ref=""
+          tree_matches=()
           if [ "${GITHUB_EVENT_NAME}" = "pull_request" ] && [ -n "${PR_HEAD_SHA}" ]; then
+            promotion_ref="${GITHUB_BASE_REF:-}"
             if ! ahead_by="$(gh api "repos/${GITHUB_REPOSITORY}/compare/dev...${PR_HEAD_SHA}" --jq '.ahead_by')"; then
               ahead_by=""
+              echo "promotion check: the compare of dev...${PR_HEAD_SHA} failed; a promotion fails the freeze until the job is rerun"
+            fi
+          elif [ "${GITHUB_EVENT_NAME}" = "push" ] && [ "${GITHUB_REF_NAME:-}" = "main" ]; then
+            promotion_ref="main"
+            if ! pushed="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}" --jq '"\(.commit.tree.sha) \(.parents[1].sha // "")"')"; then
+              echo "promotion check: the lookup of ${GITHUB_SHA} failed; a promotion fails the freeze until the job is rerun"
+            else
+              read -r pushed_tree merged <<< "${pushed}"
+              if [ -z "${merged}" ]; then
+                echo "promotion check: ${GITHUB_SHA} is not a merge, so not a promotion's"
+              elif ! merged_tree="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${merged}" --jq '.commit.tree.sha')"; then
+                echo "promotion check: the lookup of the merged parent ${merged} failed; a promotion fails the freeze until the job is rerun"
+              elif [ "${merged_tree}" != "${pushed_tree}" ]; then
+                echo "promotion check: the pushed tree is not the merged parent ${merged}'s: the merge carries content beyond that dev commit"
+              else
+                tree_matches=(--tree-matches)
+                if ! ahead_by="$(gh api "repos/${GITHUB_REPOSITORY}/compare/dev...${merged}" --jq '.ahead_by')"; then
+                  ahead_by=""
+                  echo "promotion check: the compare of dev...${merged} failed; a promotion fails the freeze until the job is rerun"
+                fi
+              fi
             fi
           fi
           if python3 scripts/ci/is_release_promotion.py --event "${GITHUB_EVENT_NAME}" \
-               --base-ref "${GITHUB_BASE_REF:-}" --ahead-by "${ahead_by}"; then
+               --base-ref "${promotion_ref}" --ahead-by "${ahead_by}" "${tree_matches[@]}"; then
             echo "SKIP: Ruling A dial-path freeze: every commit here is already in dev, where it was judged"
           else
             run_one "Ruling A: the C++ dial path is frozen until its deletion" \
