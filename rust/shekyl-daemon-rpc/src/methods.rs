@@ -287,7 +287,7 @@ fn required_object_params<T: serde::de::DeserializeOwned>(
 ///
 /// [`RpcFault::Refused`] with [`CORE_RPC_ERROR_CODE_WRONG_PARAM`] when
 /// `params` is present but is not an object this method accepts.
-fn object_params<T: serde::de::DeserializeOwned + Default>(
+pub(crate) fn object_params<T: serde::de::DeserializeOwned + Default>(
     params: &serde_json::Value,
     expected: &str,
 ) -> Result<T, RpcFault> {

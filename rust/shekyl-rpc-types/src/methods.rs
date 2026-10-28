@@ -215,6 +215,7 @@ pub const METHODS: &[Method] = &[
     // JSON-RPC, served by the C++ table until the flip.
     json("submit_block", &["submitblock"], g(MiningWork)),
     // A computation service (RT-O9.4); its bound is RT-W10 step 2's.
+    // Dispatched from the store (`read_methods::calc_pow`).
     unbounded(json("calc_pow", &[], g(MiningWork))),
     json("get_block_template", &["getblocktemplate"], g(MiningWork)),
     json("get_miner_data", &[], g(MiningWork)),
@@ -227,6 +228,8 @@ pub const METHODS: &[Method] = &[
     json("banned", &[], g(Bans)),
     json("flush_txpool", &[], g(Node)),
     // A public chain fact (RT-O9.4); its span bound is RT-W10 step 2's.
+    // Dispatched from the store, with `get_alternate_chains` and the
+    // curve-tree and archival rows below.
     unbounded(json("get_coinbase_tx_sum", &[], g(Chain))),
     json("get_alternate_chains", &[], g(Status)),
     json("relay_tx", &[], g(Node)),

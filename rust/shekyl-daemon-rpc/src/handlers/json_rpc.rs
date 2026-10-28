@@ -187,6 +187,13 @@ enum NativeMethod {
     Info,
     OptionSet,
     OptionShow,
+    CalcPow,
+    CoinbaseTxSum,
+    AlternateChains,
+    CurveTreeInfo,
+    CurveTreeCheckpoint,
+    EmissionClaimSource,
+    ShardCoverage,
 }
 
 /// The names each native method answers to — every alias the C++ dispatch
@@ -223,6 +230,14 @@ fn native_method_for(method: &str) -> Option<NativeMethod> {
         // RK-5c. One spelling on JSON-RPC, as the C++ table carried it; the
         // `/getinfo` alias is a REST path.
         "get_info" => NativeMethod::Info,
+        // Store reads (DX-Q3). One spelling each; the C++ table carried no alias.
+        "calc_pow" => NativeMethod::CalcPow,
+        "get_coinbase_tx_sum" => NativeMethod::CoinbaseTxSum,
+        "get_alternate_chains" => NativeMethod::AlternateChains,
+        "get_curve_tree_info" => NativeMethod::CurveTreeInfo,
+        "get_curve_tree_checkpoint" => NativeMethod::CurveTreeCheckpoint,
+        "get_archival_emission_claim_source" => NativeMethod::EmissionClaimSource,
+        "get_archival_shard_coverage" => NativeMethod::ShardCoverage,
         _ => return None,
     })
 }
@@ -418,6 +433,87 @@ async fn native_method(
                 .await,
             ))
         }
+        NativeMethod::CalcPow => {
+            let request = match crate::methods::object_params(
+                params,
+                "Wrong parameters, expected an object with block_blob, height and seed_hash",
+            ) {
+                Ok(request) => request,
+                Err(fault) => return Some(Err(fault)),
+            };
+            Some(frame_native(
+                on_chain(state, move |chain| {
+                    crate::read_methods::calc_pow(chain.as_ref(), &request)
+                })
+                .await,
+            ))
+        }
+        NativeMethod::CoinbaseTxSum => {
+            let request = match crate::methods::object_params(
+                params,
+                "Wrong parameters, expected an object with height and count",
+            ) {
+                Ok(request) => request,
+                Err(fault) => return Some(Err(fault)),
+            };
+            Some(frame_native(
+                on_chain(state, move |chain| {
+                    crate::read_methods::get_coinbase_tx_sum(chain.as_ref(), &request)
+                })
+                .await,
+            ))
+        }
+        NativeMethod::AlternateChains => Some(frame_native(
+            on_chain(state, |chain| {
+                crate::read_methods::get_alternate_chains(chain.as_ref())
+            })
+            .await,
+        )),
+        NativeMethod::CurveTreeInfo => Some(frame_native(
+            on_chain(state, |chain| {
+                crate::read_methods::get_curve_tree_info(chain.as_ref())
+            })
+            .await,
+        )),
+        NativeMethod::CurveTreeCheckpoint => {
+            let request = match crate::methods::object_params(
+                params,
+                "Wrong parameters, expected an object with block_height",
+            ) {
+                Ok(request) => request,
+                Err(fault) => return Some(Err(fault)),
+            };
+            Some(frame_native(
+                on_chain(state, move |chain| {
+                    crate::read_methods::get_curve_tree_checkpoint(chain.as_ref(), &request)
+                })
+                .await,
+            ))
+        }
+        NativeMethod::EmissionClaimSource => {
+            let request = match crate::methods::object_params(
+                params,
+                "Wrong parameters, expected an object with p_id",
+            ) {
+                Ok(request) => request,
+                Err(fault) => return Some(Err(fault)),
+            };
+            Some(frame_native(
+                on_chain(state, move |chain| {
+                    crate::read_methods::get_archival_emission_claim_source(
+                        chain.as_ref(),
+                        &request,
+                    )
+                })
+                .await,
+            ))
+        }
+        NativeMethod::ShardCoverage => Some(frame_native(
+            on_chain(state, |chain| {
+                crate::read_methods::get_archival_shard_coverage(chain.as_ref())
+            })
+            .await,
+        )),
     }
 }
 
@@ -656,6 +752,25 @@ mod tests {
             NativeMethod::RequestArchivalShard,
             true,
         ),
+        ("calc_pow", NativeMethod::CalcPow, true),
+        ("get_coinbase_tx_sum", NativeMethod::CoinbaseTxSum, true),
+        ("get_alternate_chains", NativeMethod::AlternateChains, true),
+        ("get_curve_tree_info", NativeMethod::CurveTreeInfo, false),
+        (
+            "get_curve_tree_checkpoint",
+            NativeMethod::CurveTreeCheckpoint,
+            false,
+        ),
+        (
+            "get_archival_emission_claim_source",
+            NativeMethod::EmissionClaimSource,
+            false,
+        ),
+        (
+            "get_archival_shard_coverage",
+            NativeMethod::ShardCoverage,
+            false,
+        ),
     ];
 
     /// The dispatcher's own recognizer answers every specified name and
@@ -675,9 +790,9 @@ mod tests {
         // Still the C++ table's: recognizing one here would serve it from a
         // handler that does not exist yet.
         for name in [
-            "get_alternate_chains",
             "mining_status",
             "get_block_by_hash",
+            "submit_block",
             "getblockcount2",
             "",
         ] {
