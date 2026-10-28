@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use shekyl_daemon_config::sections::Tor;
+use shekyl_ffi::dialer_ffi::ConnectorId;
 use shekyl_ffi::origin_verdict::OriginVerdict;
 use shekyl_ffi::tor_link::TorLinkTally;
 use shekyl_ffi::zone_ffi::DownCause;
@@ -50,12 +51,16 @@ const REPLY_BOUND: Duration = Duration::from_secs(30);
 /// Tor dial deadline, so the dial's class is Tor's reply, never a race with
 /// that deadline (`TOR_SUPERVISOR.md` §4.2).
 const SOCKS_TIMEOUT: SocksTimeout = shekyl_ffi::tor_link::TOR_SOCKS_TIMEOUT;
-/// The supervisor's waits. Its quiet stretch is the dialer's
-/// (`QUIET_AFTER_NANOS`): the posture line and the dialer's cooldown rule
-/// read one number.
+/// The supervisor's waits. Its quiet stretch is the Tor connector's span S
+/// from its dial profile (the dial profile brief, item 6): the posture line
+/// and the dialer's quiet guard read one number, though the guard also
+/// counts attempts and the line restarts its clock when a Tor reaches
+/// Running.
 const fn policy() -> Policy {
     Policy::provisional(Duration::from_nanos(
-        shekyl_ffi::dialer_ffi::QUIET_AFTER_NANOS,
+        shekyl_ffi::dialer_ffi::dial_profile(ConnectorId::Tor)
+            .quiet()
+            .span_nanos,
     ))
 }
 /// The onion's stream cap.
@@ -890,17 +895,19 @@ mod tests {
         assert!(running.starts_with(&bootstrap));
     }
 
-    /// The posture line's `quiet_after` is the dialer's quiet stretch: one
-    /// number for the line and the cooldown rule (Rick, 2026-10-26). The
-    /// value itself is the dialer's §97 Assumption, provisional until the
-    /// floor-device soak, so this pins the equality and not the value. The
+    /// The posture line's `quiet_after` is the Tor connector's span S, read
+    /// from its dial profile (the dial profile brief, test 5): one number
+    /// for the line and the dialer's quiet guard. The value is the profile's
+    /// derivation in §97, so this pins the equality and not the value. The
     /// two clocks differ: the line's stretch also restarts when a Tor
-    /// reaches Running.
+    /// reaches Running, and the guard also counts attempts.
     #[test]
     fn the_posture_lines_quiet_stretch_is_the_dialers() {
         assert_eq!(
             u64::try_from(policy().quiet_after.as_nanos()).expect("small"),
-            shekyl_ffi::dialer_ffi::QUIET_AFTER_NANOS
+            shekyl_ffi::dialer_ffi::dial_profile(ConnectorId::Tor)
+                .quiet()
+                .span_nanos
         );
     }
 

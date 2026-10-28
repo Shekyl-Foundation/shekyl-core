@@ -288,17 +288,17 @@ fn the_tor_window_is_the_managed_tors_and_an_operators_tor_has_none() {
     let network_id = [9u8; 16];
     let _host = ensure(network_id).expect("zone host");
     let dialer = crate::dialer_ffi::dialer().expect("the bound dialer");
-    assert_eq!(dialer.tor_window(), None, "no route yet");
+    assert_eq!(dialer.window(ConnectorId::Tor), None, "no route yet");
 
     let managed = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9150);
     assert!(publish_managed_socks(managed).is_some());
     assert_eq!(
-        dialer.tor_window(),
+        dialer.window(ConnectorId::Tor),
         crate::tor_link::TOR_SOCKS_TIMEOUT.earliest_expiry(),
         "the managed Tor's window"
     );
     assert_eq!(
-        dialer.tor_window(),
+        dialer.window(ConnectorId::Tor),
         Some(Duration::from_secs(104)),
         "105 s, less Tor's whole-second clock"
     );
@@ -312,7 +312,7 @@ fn the_tor_window_is_the_managed_tors_and_an_operators_tor_has_none() {
     )
     .expect("the operator's proxy");
     assert_eq!(
-        dialer.tor_window(),
+        dialer.window(ConnectorId::Tor),
         None,
         "an operator's Tor has no known window"
     );

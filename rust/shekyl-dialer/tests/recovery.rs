@@ -63,7 +63,9 @@ fn peer(n: u8) -> NetworkAddress {
 }
 
 /// Past the longest cooldown and its jitter.
-const PAST_COOLDOWN_NANOS: u64 = 2 * shekyl_peerlist::COOLDOWN_CAP_NANOS;
+const PAST_COOLDOWN_NANOS: u64 = 2 * shekyl_peerlist::dial_profile(ConnectorId::Clearnet)
+    .cooldown
+    .cap_nanos;
 
 fn hub_on(clock: &ManualClock) -> Hub {
     Hub::new(

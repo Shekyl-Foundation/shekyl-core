@@ -21,9 +21,18 @@ use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::address_file::decode;
 use shekyl_peerlist::{
     BanQuery, CloseCause, CloseKind, ConnectorId, DialOutcome, KeptSessions, Ladder,
-    NetworkAddress, NoBans, NoSessions, Peerlist, RefusedSet, Source, Tick, COOLDOWN_CAP_NANOS,
-    COOLDOWN_FIRST_NANOS, EXPIRATION_PERIOD_NANOS, GRAY_CAP,
+    NetworkAddress, NoBans, NoSessions, Peerlist, RefusedSet, Source, Tick,
+    EXPIRATION_PERIOD_NANOS, GRAY_CAP,
 };
+
+/// The cooldown ladder these clearnet addresses cool on: the clearnet
+/// connector's dial profile.
+const COOLDOWN_FIRST_NANOS: u64 = shekyl_peerlist::dial_profile(ConnectorId::Clearnet)
+    .cooldown
+    .first_nanos;
+const COOLDOWN_CAP_NANOS: u64 = shekyl_peerlist::dial_profile(ConnectorId::Clearnet)
+    .cooldown
+    .cap_nanos;
 
 const CLEARNET: ConnectorId = ConnectorId::Clearnet;
 const HOUR: u64 = 60 * 60 * 1_000_000_000;

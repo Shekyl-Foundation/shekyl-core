@@ -30,8 +30,9 @@ use crate::outcome::WhiteClock;
 use crate::sample::sample_prefix;
 use crate::validity::RefusedSet;
 use crate::{
-    cooldown_nanos, Ladder, DISCLOSE_COUNT, DISCLOSE_WINDOW_NANOS, EXPIRATION_PERIOD_NANOS,
-    GRAY_CAP, INTAKE_SPAN_NANOS, P2P_DISCLOSE_EARLY_SPAN_NANOS, SESSION_INTAKE_CAP, WHITE_CAP,
+    cooldown_nanos, Cooldown, Ladder, DISCLOSE_COUNT, DISCLOSE_WINDOW_NANOS,
+    EXPIRATION_PERIOD_NANOS, GRAY_CAP, INTAKE_SPAN_NANOS, P2P_DISCLOSE_EARLY_SPAN_NANOS,
+    SESSION_INTAKE_CAP, WHITE_CAP,
 };
 
 /// The connector's cached disclosure sample (D3): drawn once, kept for the
@@ -435,8 +436,8 @@ impl Partition {
         true
     }
 
-    /// A failed test that proved no misbehaviour. Returns whether the seat
-    /// moved.
+    /// A failed test that proved no misbehaviour, on the connector's
+    /// cooldown ladder `cooldown`. Returns whether the seat moved.
     ///
     /// - **An outstanding gray draw** returns to gray and cools until `now`
     ///   plus [`cooldown_nanos`]. On [`Ladder::Climb`] the consecutive count
@@ -455,6 +456,7 @@ impl Partition {
         address: &NetworkAddress,
         now: Tick,
         ladder: Ladder,
+        cooldown: Cooldown,
         rng: &mut R,
     ) -> bool {
         let (failures, rung, from_white) = match (self.seat_of(address), ladder) {
@@ -480,7 +482,10 @@ impl Partition {
                 return false;
             }
         };
-        let until = Tick::new(now.get().saturating_add(cooldown_nanos(rung, rng)));
+        let until = Tick::new(
+            now.get()
+                .saturating_add(cooldown_nanos(cooldown, rung, rng)),
+        );
         self.move_seat(address, cooling(until, failures));
         if from_white {
             self.evict_gray_over_cap(address, rng);

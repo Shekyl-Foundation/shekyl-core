@@ -31,6 +31,7 @@ mod clock;
 mod declaration;
 mod dial;
 mod link;
+mod profile;
 pub mod spans;
 
 pub use admission::{
@@ -48,4 +49,7 @@ pub use declaration::{
 };
 pub use dial::check_dial;
 pub use link::{DownCause, Link, Links, Outbound, Route, RoutePublish, Subscription, Watcher};
+pub use profile::{
+    dial_profile, AttemptsPerTest, Cooldown, DialProfile, JitteredSpan, RetryWaits, WindowSource,
+};
 pub use shekyl_net_address::NetworkAddress;
