@@ -116,6 +116,19 @@ def daemon_executable(path):
     return os.path.abspath(path)
 
 
+def binary_for(tag, daemon, seed_daemon):
+    """Which binary a spawn runs.
+
+    The seed stays the archived C++ daemon after the flip: the flip binary
+    cannot open an LMDB seed directory, and a seed it regenerated is not the
+    chain the subject is measured against. When no seed binary is named, the
+    seed and the subject are the same binary, which is this baseline.
+    """
+    if tag == "seed":
+        return seed_daemon or daemon
+    return daemon
+
+
 def _readback_refusal(who, log_path, line):
     """The refusal for a spawn's resolved sync line, or None when it is DRS-D9.
 
@@ -272,8 +285,13 @@ def measure(args):
     seed_dir = os.path.abspath(args.seed_dir or os.path.join(work, "seed"))
     os.makedirs(seed_dir, exist_ok=True)
     daemon = daemon_executable(args.daemon)
+    seed_daemon = (daemon_executable(args.seed_daemon)
+                   if args.seed_daemon else daemon)
     pre = A.measurement_preflight(daemon=daemon, work_dir=work,
         seed_dir=seed_dir, disk_class=args.disk_class)
+    if seed_daemon != daemon:
+        pre += A.measurement_preflight(daemon=seed_daemon, work_dir=work,
+            seed_dir=seed_dir, disk_class=args.disk_class)
     if pre:
         _fail("refusing to start:\n  " + "\n  ".join(pre))
     addr = mining_address(args.cargo_timeout)
@@ -301,7 +319,7 @@ def measure(args):
         # a listen endpoint for a connector that is off.
         net = ["--clearnet", "off"] if offline else ["--clearnet-listen",
                                                      f"127.0.0.1:{p2p}"]
-        argv = [daemon] + common + ["--data-dir", d] + net + [
+        argv = [binary_for(tag, daemon, seed_daemon)] + common + ["--data-dir", d] + net + [
             "--rpc-admin-listen", f"127.0.0.1:{rpcp}"] + argv_extra
         with open(os.path.join(work, f"{tag}.argv"), "a", encoding="utf-8") as fh:
             fh.write(" ".join(argv) + "\n")
@@ -608,6 +626,10 @@ def main():
                    default=A.REFERENCE_HEIGHT)
     m.add_argument("--out", required=True)
     m.add_argument("--daemon", default=os.path.join(ROOT, "build/bin/shekyld"))
+    m.add_argument("--seed-daemon", default=None,
+                   help="binary that builds and serves the seed chain "
+                        "(default: --daemon). The flip leg passes the archived "
+                        "C++ daemon here and the flip binary as --daemon.")
     m.add_argument("--work-dir", required=True)
     m.add_argument("--log-level", default="info",
                    choices=["error", "warn", "info", "debug", "trace"])

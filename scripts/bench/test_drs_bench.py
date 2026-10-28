@@ -81,6 +81,28 @@ def valid_artifact(engine="lmdb", **over):
     return a
 
 
+class SeedDaemon(unittest.TestCase):
+    """`--seed-daemon` is the archived C++ binary. The subject is `--daemon`.
+
+    A missing default would make the baseline run a different seed from the
+    one this file's other tests assume, and a seed that followed the subject
+    after the flip would regenerate the chain instead of serving the LMDB
+    the C++ wrote.
+    """
+
+    def test_an_unnamed_seed_binary_is_the_subject_binary(self):
+        self.assertEqual(R.binary_for("seed", "/tree/shekyld", None),
+                         "/tree/shekyld")
+        self.assertEqual(R.binary_for("subject", "/tree/shekyld", None),
+                         "/tree/shekyld")
+
+    def test_the_seed_binary_is_not_used_for_the_subject(self):
+        self.assertEqual(R.binary_for("seed", "/flip/shekyld", "/archive/shekyld"),
+                         "/archive/shekyld")
+        self.assertEqual(R.binary_for("subject", "/flip/shekyld", "/archive/shekyld"),
+                         "/flip/shekyld")
+
+
 class FrozenThresholds(unittest.TestCase):
     """§1.3's numbers are pre-registered. This is the guard against fitting one
     to a measurement after the fact, which rule 21 makes a reopening rather
