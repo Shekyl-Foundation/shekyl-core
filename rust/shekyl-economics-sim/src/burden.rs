@@ -88,17 +88,17 @@ pub fn normal_tx_archival_bytes(chain_leaves: u64) -> u64 {
 }
 
 /// Fee of one ordinary (1-in / 2-out) transaction when the curve tree holds
-/// `chain_leaves` outputs and weight is priced at `rate`. The fee is the
-/// wallet's lattice fixed point
-/// ([`Shape::tx_fee_atomic`](crate::calibration::Shape::tx_fee_atomic)).
+/// `chain_leaves` outputs and weight is priced at `rate`. `rounding` names
+/// the pricer: the wallet's lattice, or the flat control arm's unrounded
+/// product ([`Shape::tx_fee_atomic`](crate::calibration::Shape::tx_fee_atomic)).
 #[must_use]
-pub(crate) fn ordinary_tx_fee(chain_leaves: u64, rate: PerByteRate) -> u64 {
+pub(crate) fn ordinary_tx_fee(
+    chain_leaves: u64,
+    rate: PerByteRate,
+    rounding: crate::calibration::FeeRounding,
+) -> u64 {
     let (n_in, n_out) = normal_tx_shape();
-    Shape { n_in, n_out }.tx_fee_atomic(
-        tree_depth_for_leaves(chain_leaves),
-        rate,
-        crate::calibration::FeeRounding::Lattice,
-    )
+    Shape { n_in, n_out }.tx_fee_atomic(tree_depth_for_leaves(chain_leaves), rate, rounding)
 }
 
 /// Weight of one ordinary (1-in / 2-out) transaction paying `fee_atomic`

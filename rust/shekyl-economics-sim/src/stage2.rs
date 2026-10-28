@@ -1496,8 +1496,10 @@ fn a3_stranding_report(
     if years.is_empty() {
         return Ok(());
     }
-    let claim_skl =
-        |a: &A1YearAgg| ordinary_tx_fee(a.cumulative_outputs, a.admission_rate) as f64 / COIN;
+    let rounding = params.fee.fee_rounding();
+    let claim_skl = |a: &A1YearAgg| {
+        ordinary_tx_fee(a.cumulative_outputs, a.admission_rate, rounding) as f64 / COIN
+    };
     let (first, last) = (years[0], years[years.len() - 1]);
     writeln!(
         out,
@@ -1532,7 +1534,7 @@ fn a3_stranding_report(
     for (label, &yi) in ["early", "mid", "late"].iter().zip(picks.iter()) {
         let a = years[yi];
         let budget_per_epoch = per_epoch_atomic(a1_shipped_budget_atomic(a, &flat_25()));
-        let claim_cost = ordinary_tx_fee(a.cumulative_outputs, a.admission_rate);
+        let claim_cost = ordinary_tx_fee(a.cumulative_outputs, a.admission_rate, rounding);
         for &archivers in &A3_ARCHIVER_BAND {
             let pre = crate::stranding::measure(
                 budget_per_epoch,
@@ -1581,7 +1583,7 @@ fn a3_stranding_report(
         .find(|&a| crate::stranding::mean_replication(a, early.n) > g)
         .expect("replication grows without bound in the archiver count");
     let early_budget = per_epoch_atomic(a1_shipped_budget_atomic(early, &flat_25()));
-    let early_claim = ordinary_tx_fee(early.cumulative_outputs, early.admission_rate);
+    let early_claim = ordinary_tx_fee(early.cumulative_outputs, early.admission_rate, rounding);
     let cliff_pre = crate::stranding::measure(
         early_budget,
         early.n,

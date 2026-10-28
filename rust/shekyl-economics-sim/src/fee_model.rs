@@ -151,7 +151,11 @@ impl FeeModel {
                 // of that rate: scaling an already converged fee would price
                 // a varint the payer does not write.
                 let rate = scaled_rate(ladder_at(at).standard, multiplier_milli);
-                ordinary_tx_fee(at.chain_leaves, rate)
+                ordinary_tx_fee(
+                    at.chain_leaves,
+                    rate,
+                    crate::calibration::FeeRounding::Lattice,
+                )
             }
         }
     }
