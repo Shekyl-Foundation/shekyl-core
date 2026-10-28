@@ -563,6 +563,21 @@ impl Actor for Connector {
 }
 
 impl Connector {
+    /// Write the `following_degraded` latch if it is clear, and publish
+    /// the evidence on the watch. `true` when this call set it. One
+    /// writer: the connector's own transaction (DX-Q2 item 8).
+    pub(crate) fn note_degraded(&mut self, evidence: FollowingDegraded) -> Result<bool, RunFault> {
+        let set = self.writer.write(|batch| {
+            batch
+                .raise_following_degraded(&evidence)
+                .map_err(RunFault::Store)
+        })?;
+        if set {
+            self.degraded.send_replace(Some(evidence));
+        }
+        Ok(set)
+    }
+
     /// Publish the tip after a committed write (module docs: `TipChanged`).
     /// A read that fails here leaves the last publication standing: the
     /// next write meets the same store.
@@ -597,15 +612,7 @@ impl Message<RaiseAlarm> for Connector {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         let evidence = msg.0;
-        let set = self.writer.write(|batch| {
-            batch
-                .raise_following_degraded(&evidence)
-                .map_err(RunFault::Store)
-        })?;
-        if set {
-            self.degraded.send_replace(Some(evidence));
-        }
-        Ok(set)
+        self.note_degraded(evidence)
     }
 }
 

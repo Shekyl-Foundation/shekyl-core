@@ -735,7 +735,7 @@ where
     // (CEN-K9), not before.
     if matches!(
         offered,
-        Offered::Held { .. } | Offered::BeyondCap(_) | Offered::SwitchDue(_)
+        Offered::Held { .. } | Offered::BeyondCap { .. } | Offered::SwitchDue(_)
     ) {
         offer_carried(shared, Carried::Alt(arrival.hash())).await;
     }
@@ -770,7 +770,9 @@ fn settled(offered: Offered) -> Result<Reply, Carry> {
         Offered::Unlinked { at } => Ok(Reply::Unlinked { at }),
         Offered::AlreadyHeld => Ok(Reply::AlreadyHeld),
         Offered::Held { height } => Ok(Reply::Held { height }),
-        Offered::BeyondCap(beyond) => Ok(Reply::CannotFollow(CannotFollow::BeyondCap(beyond))),
+        Offered::BeyondCap { beyond, .. } => {
+            Ok(Reply::CannotFollow(CannotFollow::BeyondCap(beyond)))
+        }
         Offered::SwitchDue(plan) => Err(Carry::Switch(Box::new(plan))),
     }
 }
@@ -786,11 +788,15 @@ fn switch_reply(switched: Switched) -> Result<Reply, crate::connector::SwitchDon
         Switched::Refused {
             at, hash, refused, ..
         } => Ok(Reply::PromotionRefused { at, hash, refused }),
-        Switched::BeyondCap(beyond) => Ok(Reply::CannotFollow(CannotFollow::BeyondCap(beyond))),
-        Switched::BelowFloor { tip, floor } => Ok(Reply::CannotFollow(CannotFollow::BelowFloor {
-            tip: BlockHeight::from_raw(tip),
-            floor: BlockHeight::from_raw(floor),
-        })),
+        Switched::BeyondCap { beyond, .. } => {
+            Ok(Reply::CannotFollow(CannotFollow::BeyondCap(beyond)))
+        }
+        Switched::BelowFloor { tip, floor, .. } => {
+            Ok(Reply::CannotFollow(CannotFollow::BelowFloor {
+                tip: BlockHeight::from_raw(tip),
+                floor: BlockHeight::from_raw(floor),
+            }))
+        }
     }
 }
 
@@ -1189,11 +1195,22 @@ mod tests {
         }
     }
 
+    fn evidence() -> shekyl_chain_store::codec::FollowingDegraded {
+        shekyl_chain_store::codec::FollowingDegraded {
+            fork_at: shekyl_types::BlockHeight::from_raw(1),
+            tip: shekyl_types::BlockHash::from_bytes([2u8; 32]),
+            work: shekyl_difficulty::CumulativeDifficulty::from_raw(3),
+        }
+    }
+
     /// A stored alternative past the cap is the proven outcome, not the
     /// door's hint (DX-Q2 item 8).
     #[test]
     fn a_stored_fork_past_the_cap_is_cannot_follow() {
-        let Ok(reply) = settled(Offered::BeyondCap(beyond())) else {
+        let Ok(reply) = settled(Offered::BeyondCap {
+            beyond: beyond(),
+            evidence: evidence(),
+        }) else {
             panic!("settled answers a stored fork past the cap");
         };
         assert_eq!(
@@ -1205,11 +1222,18 @@ mod tests {
     /// Both of a switch's refusals to follow are the proven outcome.
     #[test]
     fn a_switch_past_the_cap_or_below_the_floor_is_cannot_follow() {
-        let Ok(past) = switch_reply(Switched::BeyondCap(beyond())) else {
+        let Ok(past) = switch_reply(Switched::BeyondCap {
+            beyond: beyond(),
+            evidence: evidence(),
+        }) else {
             panic!("a switch past the cap is answered");
         };
         assert_eq!(past, Reply::CannotFollow(CannotFollow::BeyondCap(beyond())));
-        let Ok(floor) = switch_reply(Switched::BelowFloor { tip: 9, floor: 4 }) else {
+        let Ok(floor) = switch_reply(Switched::BelowFloor {
+            tip: 9,
+            floor: 4,
+            evidence: evidence(),
+        }) else {
             panic!("a switch below the floor is answered");
         };
         assert_eq!(
