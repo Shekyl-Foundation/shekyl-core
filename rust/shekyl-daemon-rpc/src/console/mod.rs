@@ -542,26 +542,11 @@ fn is_key_image_spent(src: &Source, args: &[String]) -> Result<String, String> {
         key_images: vec![ki.clone()],
     };
     let reply = match src {
-        // Direct, for `fetch_transactions`'s reason: the C++ route is gone.
-        Source::Live(core) => {
-            let ids = crate::methods::parse_request_hashes(
-                &request.key_images,
-                crate::methods::KI_PARSE_FAILED,
-            )?;
-            let raw = core
-                .key_images_spent(&ids)
-                .map_err(|rc| format!("is_key_image_spent: facts unavailable ({rc})"))?;
-            let mut spent_status = Vec::with_capacity(raw.len());
-            for s in raw {
-                spent_status.push(
-                    shekyl_rpc_types::KeyImageStatus::try_from(s)
-                        .map_err(|e| format!("is_key_image_spent: {e}"))?,
-                );
-            }
-            shekyl_rpc_types::IsKeyImageSpentResponse {
-                status: shekyl_rpc_types::RpcStatus::ok(),
-                spent_status,
-            }
+        // The operator's own node, over the store and the pool.
+        Source::Live(_) => {
+            let chain = open_chain().map_err(|fault| format!("{fault:?}"))?;
+            crate::read_methods::is_key_image_spent(chain.as_read_facts(), &request, true)
+                .map_err(|fault| format!("{fault:?}"))?
         }
         Source::Remote { .. } => {
             let body = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
@@ -612,29 +597,10 @@ fn fetch_transactions(
     request: &shekyl_rpc_types::GetTransactionsRequest,
 ) -> Result<shekyl_rpc_types::GetTransactionsResponse, String> {
     match src {
-        Source::Live(core) => {
-            let ids = crate::methods::parse_request_hashes(
-                &request.txs_hashes,
-                crate::methods::TX_PARSE_FAILED,
-            )?;
-            let (slots, chain_height) = core
-                .transactions(&ids, true)
-                .map_err(|rc| format!("get_transactions: facts unavailable ({rc})"))?;
-            crate::methods::project_transactions(
-                request,
-                &ids,
-                &slots,
-                chain_height,
-                |blob, pruned| core.tx_to_json(blob, pruned),
-            )
-            .map_err(|f| match f {
-                crate::methods::ProjectionFailed::Render(f) => {
-                    format!("could not decode {} to json ({})", f.txid, f.code)
-                }
-                crate::methods::ProjectionFailed::Length(f) => {
-                    format!("could not measure the archival length of {}", f.txid)
-                }
-            })
+        Source::Live(_) => {
+            let chain = open_chain().map_err(|fault| format!("{fault:?}"))?;
+            crate::read_methods::get_transactions(chain.as_read_facts(), request, true)
+                .map_err(|fault| format!("{fault:?}"))
         }
         Source::Remote { .. } => {
             let body = serde_json::to_vec(request).map_err(|e| e.to_string())?;
@@ -780,7 +746,7 @@ pub unsafe extern "C" fn shekyl_daemon_console_run(
         // `get_info`.
         "diff" => node::show_difficulty(&source),
         "version" => node::version(&source),
-        "print_pool_stats" => node::print_transaction_pool_stats(&source, unix_now()),
+        "print_pool_stats" => node::print_transaction_pool_stats(&source),
         "pop_blocks" => pop_blocks::pop_blocks(&source, args.get(1)),
         _ => return SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN,
     };

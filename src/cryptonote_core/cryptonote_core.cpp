@@ -405,7 +405,6 @@ namespace cryptonote
       set_checkpoints(std::move(checkpoints));
     }
     m_offline = snapshot.offline;
-    bool r = true;
 
     // Seeds follow the network just settled, including FAKECHAIN. The id
     // derivation is pure (`get_config` builds every network's id on first
@@ -414,136 +413,9 @@ namespace cryptonote
       shekyl_dialer_note_network(static_cast<std::uint8_t>(m_nettype)) == 0,
       false, "Failed to record the dialer's network");
 
-    // Lane-owned knobs (INPUT_GRAMMAR.md §5, IG-Q4): not ported; constants.
-    // `db-sync-mode` and `db-salvage` are the DRS lane's, `keep-alt-blocks`
-    // DRS-E5's. `db-sync-mode` is decided: no knob, and the constant is
-    // DRS-D9's `safe`, explicit rather than a default (SHIPPED_DB_SYNC_MODE,
-    // cryptonote_core.h, says why), the durability the Rust store runs and
-    // the one §1.3's IBD floor is frozen against. `prep-blocks-threads` is
-    // refused (P2P_3_CHAIN_SYNC_BRIEF.md CS-Q12); 4 is today's default until
-    // the chain-sync cutover replaces this caller.
-    const std::string db_sync_mode = SHIPPED_DB_SYNC_MODE;
-    const bool db_sync_mode_is_default = SHIPPED_DB_SYNC_MODE_IS_DEFAULT;
-    const bool db_salvage = false;
-    const uint64_t blocks_threads = 4;
-    const size_t max_txpool_weight = static_cast<size_t>(snapshot.txpool_weight_max);
-    const bool keep_alt_blocks = false;
-
-    // The network selects the default data subdirectory in the Rust
-    // configuration (DAEMON_CONFIG_CUTOVER.md §2.6); the folder is used as
-    // given on every network, FAKECHAIN included.
-    boost::filesystem::path folder(m_config_folder);
-
-    // make sure the data directory exists, and try to lock it
-    CHECK_AND_ASSERT_MES (boost::filesystem::exists(folder) || boost::filesystem::create_directories(folder), false,
-      std::string("Failed to create directory ").append(folder.string()).c_str());
-
-    // check for blockchain.bin
-    try
-    {
-      const boost::filesystem::path old_files = folder;
-      if (boost::filesystem::exists(old_files / "blockchain.bin"))
-      {
-        MWARNING("Found old-style blockchain.bin in " << old_files.string());
-        MWARNING("Shekyl now uses a new format. You can either remove blockchain.bin to start syncing");
-        MWARNING("the blockchain anew, or use shekyl-blockchain-export and shekyl-blockchain-import to");
-        MWARNING("convert your existing blockchain.bin to the new format. See README.md for instructions.");
-        return false;
-      }
-    }
-    // folder might not be a directory, etc, etc
-    catch (...) { }
-
-    std::unique_ptr<BlockchainDB> db(new_db());
-    if (db == NULL)
-    {
-      LOG_ERROR("Failed to initialize a database");
-      return false;
-    }
-
-    folder /= db->get_db_name();
-    MGINFO("Loading blockchain from folder " << folder.string() << " ...");
-
-    const std::string filename = folder.string();
-    // default to fast:async:1 if overridden
-    blockchain_db_sync_mode sync_mode = db_defaultsync;
-    bool sync_on_blocks = true;
-    uint64_t sync_threshold = 1;
-
-    try
-    {
-      db_sync_settings resolved;
-      std::string db_sync_error;
-      if (!parse_db_sync_mode(db_sync_mode, db_sync_mode_is_default, resolved, db_sync_error))
-      {
-        // Refuse to start. A durability control that silently falls back to its
-        // least durable setting on a typo is the one failure a node cannot
-        // detect from its own behaviour.
-        MFATAL("Invalid --db-sync-mode: " << db_sync_error);
-        return false;
-      }
-
-      uint64_t db_flags = resolved.db_flags;
-      sync_mode = resolved.sync_mode;
-      sync_on_blocks = resolved.sync_on_blocks;
-      sync_threshold = resolved.sync_threshold;
-
-      if (db_salvage)
-        db_flags |= DBF_SALVAGE;
-
-      // A4: report what was RESOLVED, not what was asked for. The point of the
-      // row is that the durability posture is explicit rather than a library
-      // default reached by omission, and that is only checkable from a running
-      // node if the node says which flags it opened with.
-      MGINFO("Database sync: flags=0x" << std::hex << db_flags << std::dec
-        << (db_flags & DBF_SAFE ? " (safe)" : "")
-        << (db_flags & DBF_FAST ? " (fast: MDB_NOSYNC)" : "")
-        << (db_flags & DBF_FASTEST ? " (fastest: MDB_NOSYNC|MDB_WRITEMAP|MDB_MAPASYNC)" : "")
-        << (db_flags & DBF_SALVAGE ? " (salvage)" : "")
-        << ", sync_mode=" << (int)sync_mode
-        << ", threshold=" << sync_threshold << (sync_on_blocks ? " blocks" : " bytes"));
-
-      db->open(filename, db_flags);
-      if(!db->m_open)
-        return false;
-    }
-    catch (const DB_ERROR& e)
-    {
-      LOG_ERROR("Error opening database: " << e.what());
-      return false;
-    }
-
-    m_blockchain_storage.set_user_options(blocks_threads,
-        sync_on_blocks, sync_threshold, sync_mode);
-
-    const difficulty_type fixed_difficulty = snapshot.fixed_difficulty;
-    r = m_blockchain_storage.init(db.release(), m_nettype, regtest ? &regtest_test_options : test_options, fixed_difficulty);
-    CHECK_AND_ASSERT_MES(r, false, "Failed to initialize blockchain storage");
-
-    r = m_mempool.init(max_txpool_weight, m_nettype == FAKECHAIN);
-    CHECK_AND_ASSERT_MES(r, false, "Failed to initialize memory pool");
-
-    // now that we have a valid m_blockchain_storage, re-run admission on
-    // the persisted pool and drop what this binary refuses
-    m_mempool.validate();
-
-    // `block-sync-size` is refused (P2P_3_CHAIN_SYNC_BRIEF.md CS-Q12):
-    // 0, adaptive, until the chain-sync cutover replaces this caller.
+    // The chain is the Rust store. This shell records the network and the
+    // relay entry; it does not open a second database.
     block_sync_size = 0;
-
-    MGINFO("Enforcing checkpoints");
-
-    // Verify the compiled-in checkpoints against the blocks we already
-    // have; a conflict the rollback cannot resolve fail-stops init
-    // (C2-R1b F-1(b)).
-    CHECK_AND_ASSERT_MES(m_blockchain_storage.enforce_checkpoints(), false, "A compiled-in checkpoint conflicts with the local chain and could not be resolved by rollback.");
-
-    r = m_miner.init(snapshot, m_nettype);
-    CHECK_AND_ASSERT_MES(r, false, "Failed to initialize miner instance");
-
-    if (!keep_alt_blocks && !m_blockchain_storage.get_db().is_read_only())
-      m_blockchain_storage.get_db().drop_alt_blocks();
-
     shell_for_relay = this;
     return load_state_data();
   }
@@ -564,8 +436,6 @@ namespace cryptonote
     if (shell_for_relay == this)
       shell_for_relay = nullptr;
     m_miner.stop();
-    m_mempool.deinit();
-    m_blockchain_storage.deinit();
     return true;
   }
   //-----------------------------------------------------------------------------------------------

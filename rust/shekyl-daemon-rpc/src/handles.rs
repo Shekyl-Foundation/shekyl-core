@@ -42,6 +42,8 @@ pub trait ChainRead: ChainFacts + InfoFacts + ChainReadFacts {
     fn as_chain_facts(&self) -> &dyn ChainFacts;
     /// This object as the info-facts trait `get_info` takes.
     fn as_info_facts(&self) -> &dyn InfoFacts;
+    /// This object as the read-facts trait the store methods take.
+    fn as_read_facts(&self) -> &dyn ChainReadFacts;
 }
 
 impl<T> ChainRead for T
@@ -55,28 +57,36 @@ where
     fn as_info_facts(&self) -> &dyn InfoFacts {
         self
     }
+
+    fn as_read_facts(&self) -> &dyn ChainReadFacts {
+        self
+    }
 }
 
 /// A chain-read handle.
 pub type ChainReadHandle = Arc<dyn ChainRead>;
 
-static LIVE_CHAIN: std::sync::Mutex<Option<ChainReadHandle>> = std::sync::Mutex::new(None);
+static LIVE: std::sync::Mutex<Option<Handles>> = std::sync::Mutex::new(None);
 
-/// The chain the running daemon's console reads. Set when the RPC starts,
-/// from the handles the node handed over.
+/// The handles the running daemon's console reads. Set when the RPC starts.
 pub fn publish_live(handles: &Handles) {
-    *LIVE_CHAIN
+    *LIVE
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::clone(&handles.chain));
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(handles.clone());
+}
+
+/// The published handles, or `None` before the RPC has started.
+#[must_use]
+pub fn live_handles() -> Option<Handles> {
+    LIVE.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
 }
 
 /// The published chain, or `None` before the RPC has started.
 #[must_use]
 pub fn live_chain() -> Option<ChainReadHandle> {
-    LIVE_CHAIN
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone()
+    live_handles().map(|handles| handles.chain)
 }
 
 /// One pool entry, as a listing reads it: never when it arrived (S7).

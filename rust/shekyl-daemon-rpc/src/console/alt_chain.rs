@@ -7,30 +7,26 @@
 
 use super::info::fetch_get_info;
 use super::{
-    ffi_json_rpc_result, human_readable_timespan, json_rpc_result, native_json_rpc, require_ok,
-    trimmed, wide_difficulty_decimal, Source,
+    human_readable_timespan, json_rpc_result, native_json_rpc, require_ok, trimmed,
+    wide_difficulty_decimal, Source,
 };
 use shekyl_rpc_types::{AltChainInfo, GetAlternateChainsResponse};
 
 /// The `get_alternate_chains` reply is the wire type `shekyl-rpc-types`
-/// owns ([`GetAlternateChainsResponse`]): one definition for every reader
-/// and for the native handler that will answer it at the flip.
-///
-/// **A bridged leg, on purpose** (§2.1.1): `get_alternate_chains` is RK-8's
-/// and is still served from the C++ table (`core_rpc_ffi.cpp:284`). Each
-/// chain's fields are required: a renamed field is an error naming it,
+/// owns ([`GetAlternateChainsResponse`]): one definition for every reader.
+/// Each chain's fields are required: a renamed field is an error naming it,
 /// where a defaulted `length` would make every alt chain read as zero
-/// blocks long. The `chains` list itself defaults to empty, because epee
-/// omits an empty container: a node with no alternative chains answers
-/// without the field.
-/// Fetch `get_alternate_chains` — bridged on both arms.
+/// blocks long. The `chains` list itself defaults to empty, because an
+/// empty container may be omitted.
+/// Fetch `get_alternate_chains`. In-process it is the store. Remote, it is
+/// one `/json_rpc` post.
 fn fetch_alt_chains(src: &Source) -> Result<Vec<AltChainInfo>, String> {
     let reply: GetAlternateChainsResponse = match src {
-        Source::Live(core) => {
-            let raw = core
-                .json_rpc("get_alternate_chains", "{}", true)
-                .ok_or_else(|| "no reply from get_alternate_chains".to_owned())?;
-            ffi_json_rpc_result(&raw, "get_alternate_chains")?
+        Source::Live(_) => {
+            let chain =
+                crate::handles::live_chain().ok_or_else(|| "the node is not open".to_owned())?;
+            crate::read_methods::get_alternate_chains(chain.as_read_facts())
+                .map_err(|fault| format!("{fault:?}"))?
         }
         Source::Remote { .. } => {
             let body = serde_json::to_vec(&serde_json::json!({
