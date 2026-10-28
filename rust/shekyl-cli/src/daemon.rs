@@ -322,14 +322,13 @@ impl DaemonClient {
         }
     }
 
-    /// Start mining on the daemon (CU-3). The daemon owns the threads; they
-    /// outlive this CLI process.
-    pub fn start_mining(&self, miner_address: &str, threads: u64) -> Result<(), DaemonError> {
+    /// Start the daemon's miner. It mines to the daemon's `mine-address`.
+    /// The request is `{ threads }` (N2).
+    pub fn start_mining(&self, threads: u64) -> Result<(), DaemonError> {
         self.path_rpc(
             "/start_mining",
             &serde_json::json!({
-                "miner_address": miner_address,
-                "threads_count": threads,
+                "threads": threads,
             }),
         )
         .map(|_| ())

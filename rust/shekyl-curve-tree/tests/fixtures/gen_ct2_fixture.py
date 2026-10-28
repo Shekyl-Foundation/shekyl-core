@@ -170,7 +170,7 @@ class Daemon:
 
     def generate(self, n: int, address: str) -> None:
         self.json_rpc(
-            "generateblocks", {"amount_of_blocks": n, "wallet_address": address}
+            "generateblocks", {"count": n}
         )
 
     def pop(self, n: int) -> None:

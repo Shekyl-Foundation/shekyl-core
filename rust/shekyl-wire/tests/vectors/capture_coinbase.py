@@ -130,7 +130,7 @@ def main():
     workdir = tempfile.mkdtemp(prefix="cbcap_")
     daemon, url, log = start_daemon(workdir)
     try:
-        rpc(url, "generateblocks", {"amount_of_blocks": N_BLOCKS, "wallet_address": addr})
+        rpc(url, "generateblocks", {"count": N_BLOCKS})
         hashes = {}
         for h in CAPTURE_HEIGHTS:
             blk = rpc(url, "get_block", {"height": h})

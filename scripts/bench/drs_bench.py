@@ -354,8 +354,7 @@ def measure(args):
             gen_blocks = target_h - have_h
             gt0 = time.time()
             resp = _rpc(srpc, "generateblocks",
-                        {"amount_of_blocks": gen_blocks, "wallet_address": addr,
-                         "starting_nonce": 0}, timeout=args.gen_timeout)
+                        {"count": gen_blocks}, timeout=args.gen_timeout)
             gen_wall = time.time() - gt0
             st = resp.get("result", {}).get("status")
             if st != "OK":

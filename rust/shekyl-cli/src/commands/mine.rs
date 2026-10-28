@@ -224,14 +224,11 @@ pub fn cmd_mine_start(
         ));
     }
 
-    let address = super::balance::primary_address(rpc, "Failed to get the payout address")?;
-
     let threads = threads.unwrap_or_else(default_threads);
-    match dc.start_mining(&address, threads) {
+    match dc.start_mining(threads) {
         Ok(()) => Ok(json!({
             "started": true,
             "threads": threads,
-            "address": address,
         })),
         Err(e) => failed(format!("Failed to start mining: {e}")),
     }

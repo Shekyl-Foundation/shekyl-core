@@ -42,12 +42,7 @@ class Daemon(object):
     def getblocktemplate(self, address, prev_block = "", client = ""):
         getblocktemplate = {
             'method': 'getblocktemplate',
-            'params': {
-                'client': client,
-                'wallet_address': address,
-                'reserve_size' : 8,
-                'prev_block' : prev_block,
-            },
+            'params': {},
             'jsonrpc': '2.0', 
             'id': '0'
         }
@@ -195,12 +190,9 @@ class Daemon(object):
         generateblocks = {
             'method': 'generateblocks',
             'params': {
-                'amount_of_blocks' : blocks,
-                'wallet_address': address,
-                'prev_block': prev_block,
-                'starting_nonce': starting_nonce,
+                'count': blocks,
             },
-            'jsonrpc': '2.0', 
+            'jsonrpc': '2.0',
             'id': '0'
         }
         return self.rpc.send_json_rpc_request(generateblocks)
@@ -216,14 +208,13 @@ class Daemon(object):
 
     def pop_blocks(self, nblocks = 1):
         pop_blocks = {
-            'nblocks' : nblocks,
+            'count' : nblocks,
         }
         return self.rpc.send_request("/pop_blocks", pop_blocks)
 
     def start_mining(self, miner_address, threads_count = 0):
         start_mining = {
-            'miner_address' : miner_address,
-            'threads_count' : threads_count,
+            'threads' : threads_count,
         }
         return self.rpc.send_request('/start_mining', start_mining)
 

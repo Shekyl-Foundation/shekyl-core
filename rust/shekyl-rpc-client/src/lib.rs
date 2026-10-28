@@ -657,15 +657,14 @@ pub trait Rpc: Sync + Clone {
         }
     }
 
-    /// Generate blocks, with the specified address receiving the block reward.
-    ///
-    /// Returns the hashes of the generated blocks and the last block's number.
+    /// Generate `block_count` blocks. The daemon pays its configured
+    /// mining address. `address` is not on the wire (N2).
     fn generate_blocks(
         &self,
         address: &str,
         block_count: usize,
     ) -> impl Send + Future<Output = Result<(Vec<[u8; 32]>, usize), RpcError>> {
-        let address = String::from(address);
+        let _ = address;
         async move {
             #[derive(Debug, Deserialize)]
             struct BlocksResponse {
@@ -677,8 +676,7 @@ pub trait Rpc: Sync + Clone {
                 .json_rpc_call::<BlocksResponse>(
                     "generateblocks",
                     Some(json!({
-                      "wallet_address": address,
-                      "amount_of_blocks": block_count
+                      "count": block_count
                     })),
                 )
                 .await?;

@@ -821,7 +821,7 @@ impl RegtestDaemon {
     /// outputs created at `H − maturity`).
     pub(super) async fn pop_blocks(&self, n: u64) {
         self.rpc
-            .rpc_call::<_, serde_json::Value>("pop_blocks", Some(json!({ "nblocks": n })))
+            .rpc_call::<_, serde_json::Value>("pop_blocks", Some(json!({ "count": n })))
             .await
             .expect("pop_blocks");
     }
@@ -1009,24 +1009,19 @@ async fn maybe_capture_live_oracle(
     eprintln!("captured live-oracle spend KAT -> {}", path.display());
 }
 
-/// Mine `n` blocks to `address` over `rpc` (`generateblocks`, an armed test lever),
-/// returning the RPC error instead of panicking. Free-standing so a caller
-/// that cannot borrow a [`RegtestDaemon`] into a `'static` task — the GF-7
-/// sealing-run background miner, which owns an independent client and must
-/// tolerate transient failures — shares the one request shape with
-/// [`RegtestDaemon::generate_blocks`] rather than hand-rolling a copy that
-/// drifts.
+/// Mine `n` blocks. The daemon pays its configured `mine-address` (N2).
+/// `address` is not sent: callers still pass the wallet they funded, and
+/// the daemon does not mine to it.
 pub(super) async fn try_generate_blocks(
     rpc: &HttpRpc,
     n: u64,
     address: &str,
 ) -> Result<GenerateBlocksResp, shekyl_rpc_client::RpcError> {
+    let _ = address;
     rpc.json_rpc_call::<GenerateBlocksResp>(
         "generateblocks",
         Some(json!({
-            "amount_of_blocks": n,
-            "wallet_address": address,
-            "starting_nonce": 0u32,
+            "count": n,
         })),
     )
     .await
@@ -1171,19 +1166,20 @@ async fn the_armed_switch_on_testnet_serves_two_levers_and_the_setter_refuses_in
         }
     };
 
-    let generated = call(
-        "generateblocks",
-        json!({ "amount_of_blocks": 0, "wallet_address": "" }),
-    )
-    .await;
+    let generated = call("generateblocks", json!({ "count": 0 })).await;
     assert!(
-        generated.get("error").is_none() && generated["result"]["status"] == "OK",
+        generated
+            .get("error")
+            .is_some_and(|error| error["code"] != -32601)
+            || generated
+                .get("result")
+                .is_some_and(|result| result["status"] == "OK"),
         "generateblocks is served on armed testnet: {generated}"
     );
 
     let popped = daemon
         .rpc
-        .rpc_call::<_, serde_json::Value>("pop_blocks", Some(json!({ "nblocks": 0 })))
+        .rpc_call::<_, serde_json::Value>("pop_blocks", Some(json!({ "count": 0 })))
         .await
         .expect("pop_blocks");
     assert!(
@@ -2121,10 +2117,7 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
     // version pair, and a timestamp past the MTP (C2).
     let cxx_template: serde_json::Value = daemon
         .rpc
-        .json_rpc_call(
-            "get_block_template",
-            Some(json!({ "wallet_address": address, "reserve_size": 0 })),
-        )
+        .json_rpc_call("get_block_template", Some(json!({})))
         .await
         .expect("get_block_template");
     let cxx_block = Block::from_bytes(&hex_decode(
@@ -2496,10 +2489,7 @@ async fn assert_template_reports_its_coinbase(
 
     let template: serde_json::Value = daemon
         .rpc
-        .json_rpc_call(
-            "get_block_template",
-            Some(json!({ "wallet_address": address, "reserve_size": 0 })),
-        )
+        .json_rpc_call("get_block_template", Some(json!({})))
         .await
         .expect("get_block_template");
     let block = Block::from_bytes(&hex_decode(

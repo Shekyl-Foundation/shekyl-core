@@ -80,7 +80,7 @@ if ! python3 "$WT/scripts/armed_lever.py" --check-log "$DATA/daemon.out"; then
 fi
 
 curl -s -m 60 -X POST "http://127.0.0.1:$PORT/json_rpc" -H 'Content-Type: application/json' \
-  -d "{\"jsonrpc\":\"2.0\",\"id\":\"0\",\"method\":\"generateblocks\",\"params\":{\"amount_of_blocks\":$BLOCKS,\"wallet_address\":\"$ADDR\",\"starting_nonce\":0}}" \
+  -d "{\"jsonrpc\":\"2.0\",\"id\":\"0\",\"method\":\"generateblocks\",\"params\":{\"count\":$BLOCKS}}" \
   > "$SCRATCH/generate.json" 2>&1
 python3 - "$SCRATCH/generate.json" <<'PY'
 import json,sys
