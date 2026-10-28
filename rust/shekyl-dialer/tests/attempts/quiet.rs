@@ -178,6 +178,28 @@ impl QuietRig {
     }
 }
 
+/// **A connect this node cannot make is quiet evidence** (clearnet drive:
+/// network unreachable, address not available, and permission denied close
+/// as `LocalClose`, this node's link). The lists cool that test. Once K
+/// such attempts have passed across S, further failures stay on the first
+/// step, on both connectors. The Tor tally does not count a local close.
+#[test]
+fn a_connect_this_node_cannot_make_keeps_the_first_step() {
+    for (connector, seed) in [(TOR, 71), (CLEARNET, 72)] {
+        let mut rig = QuietRig::new(connector, seed, false);
+        rig.cause = CloseCause::new(CloseKind::LocalClose);
+        let quiet = rig.go_quiet();
+        rig.fail_each_once();
+        rig.advance(PAST_EVERY_COOLDOWN);
+        assert_eq!(rig.failed_tests(), quiet, "{connector:?}: no climb");
+        assert_eq!(
+            rig.dialer.tor_link_tally().unopened,
+            0,
+            "a local close is not a failed Tor dial"
+        );
+    }
+}
+
 /// **A block with no sessions keeps every cooled address at the first
 /// step** (the quiet stretch, Rick 2026-10-26, test 1), on both
 /// connectors. Once nothing is held and the evidence is in (K unopened
