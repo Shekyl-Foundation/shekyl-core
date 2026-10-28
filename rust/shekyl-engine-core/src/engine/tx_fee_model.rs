@@ -28,7 +28,7 @@ use super::traits::key::FeeDirective;
 // predict_size_and_weight}` and the `kat_*` tests below resolve unchanged — the
 // move is invisible to every caller (§12.3 D-1 constraint).
 pub(crate) use shekyl_tx_weight::{
-    predict_size_and_weight, predict_weight, InputCount, OutputCount,
+    converge_weight_fee_by, predict_size_and_weight, predict_weight, InputCount, OutputCount,
 };
 
 // ── FEE-RATE LAYER (weight model lives in shekyl-tx-weight) ──────────────────
@@ -102,29 +102,16 @@ pub(crate) fn fee_from_weight(rate: &FeeRate, weight: usize) -> u64 {
     tx_fee::fee_from_weight(rate, weight)
 }
 
-/// Iteration bound for [`converge_fee`], and why it is never reached.
-///
-/// If a pass leaves `varint_len(fee)` unchanged it leaves the *weight*
-/// unchanged, so the next pass returns the same fee — that pass was already
-/// the fixed point. Every non-fixed pass therefore consumes one of the ten
-/// varint lengths a `u64` can take, which bounds the iteration at ten
-/// regardless of rate or shape. The bound is one more than that, so the loop
-/// always exits by agreement rather than by exhaustion.
-const MAX_FEE_FIXPOINT_PASSES: usize = 11;
-
 /// Fee fixpoint for one output-count variant (§3.3 / §3.10.1).
 ///
-/// The fee is an **argument** to the weight predictor, not just its product:
-/// the wire carries `varint(fee)`, so `fee = rate x weight(fee)` is a fixed
-/// point. Iterating from a seed at or below it converges monotonically (both
-/// `predict_weight` and [`fee_from_weight`] are non-decreasing), and the
-/// bound above says how fast.
+/// The body is [`converge_weight_fee_by`] with the lattice pricer
+/// `quantized_fee`. `None` is a fee that does not fit in `u64`; it is not a
+/// number, and it is not the unbuildable with-change sentinel.
 ///
-/// Returning before the fixed point under-pays by one varint byte's worth of
-/// rate for a fee that has just crossed a `2^(7k)` boundary. That was
-/// invisible while relay admission carried a percentage buffer; under FL-R20
-/// / FL-R23 it is a hard bounce, and not one the lookback-min can absorb,
-/// because the shortfall is structural rather than temporal.
+/// A non-zero seed is the with-change call, which starts from the no-change
+/// fee. That seed is at or below this variant's least fixed point; a higher
+/// seed would stick above it. The check runs in debug, where a second
+/// convergence from zero is the least point.
 #[must_use]
 pub(crate) fn converge_fee(
     rate: &FeeRate,
@@ -132,22 +119,18 @@ pub(crate) fn converge_fee(
     n_out: OutputCount,
     tree_depth: u8,
     initial_fee: u64,
-) -> u64 {
-    let mut fee = initial_fee;
-    for _ in 0..MAX_FEE_FIXPOINT_PASSES {
-        let next = fee_from_weight(rate, predict_weight(n_in, n_out, tree_depth, fee));
-        if next == fee {
-            return fee;
-        }
-        fee = next;
+) -> Option<u64> {
+    let per_weight = rate.per_weight();
+    let price = |weight: u64| shekyl_economics::quantized_fee(weight, per_weight);
+    let fee = converge_weight_fee_by(n_in, n_out, tree_depth, initial_fee, price)?;
+    if initial_fee != 0 {
+        let least = converge_weight_fee_by(n_in, n_out, tree_depth, 0, price)?;
+        debug_assert!(
+            initial_fee <= least && fee == least,
+            "seed {initial_fee} is above the least fixed point {least}"
+        );
     }
-    // Unreachable per `MAX_FEE_FIXPOINT_PASSES`. Settling on the conservative
-    // side costs one predictor call in a branch that never runs, and is the
-    // difference between a fee that over-pays and one that bounces.
-    fee.max(fee_from_weight(
-        rate,
-        predict_weight(n_in, n_out, tree_depth, fee),
-    ))
+    Some(fee)
 }
 
 /// Populate [`FeeDirective`] for the selected input count and payment outputs `N`.
@@ -156,9 +139,9 @@ pub(crate) fn build_fee_directive(
     n_in: InputCount,
     payment_output_count: OutputCount,
     tree_depth: u8,
-) -> FeeDirective {
+) -> Option<FeeDirective> {
     let n_no_change = payment_output_count;
-    let fee_no_change = converge_fee(rate, n_in, n_no_change, tree_depth, 0);
+    let fee_no_change = converge_fee(rate, n_in, n_no_change, tree_depth, 0)?;
 
     // With-change adds one output. At the output limit a change output would exceed
     // MAX_OUTPUTS, so that variant is *unbuildable* (tx-builder would reject it with
@@ -167,19 +150,20 @@ pub(crate) fn build_fee_directive(
     // pick it and instead falls through to the buildable no-change variant — rather
     // than selecting a change output that fails validation. `clamped` returning a
     // value below the requested `+1` is exactly the "at the limit" signal.
+    // That sentinel is not an overflow: overflow is `None` from this function.
     let with_change_request = payment_output_count.get() + 1; // <= MAX_OUTPUTS + 1, no overflow
     let n_with_change = OutputCount::clamped(with_change_request);
     let fee_with_change = if n_with_change.get() < with_change_request {
         u64::MAX
     } else {
-        converge_fee(rate, n_in, n_with_change, tree_depth, fee_no_change)
+        converge_fee(rate, n_in, n_with_change, tree_depth, fee_no_change)?
     };
 
-    FeeDirective {
+    Some(FeeDirective {
         fee_no_change,
         fee_with_change,
         dust_threshold: dust_threshold_for_rate(rate),
-    }
+    })
 }
 
 /// Fee charged for the no-change variant (orchestrator picks variant in 2a-3).
@@ -268,7 +252,7 @@ mod tests {
         let rate = FeeRate::new(24_184).unwrap();
         let (n_in, n_out, depth) = (InputCount::clamped(1), OutputCount::clamped(1), 1u8);
 
-        let fee = converge_fee(&rate, n_in, n_out, depth, 0);
+        let fee = converge_fee(&rate, n_in, n_out, depth, 0).expect("the fee fits");
         // The (1,1,depth 1) weight at this rate prices just over 2^28, so
         // the varint grows from four bytes to five; the fixed point is that
         // product rounded up to the fee lattice (`FEE_QUANTIZATION_MASK`).
@@ -339,7 +323,9 @@ mod tests {
                         let Ok(rate) = FeeRate::new(pw) else {
                             continue;
                         };
-                        let fee = converge_fee(&rate, n_in, n_out, depth, 0);
+                        let Some(fee) = converge_fee(&rate, n_in, n_out, depth, 0) else {
+                            continue;
+                        };
                         let priced =
                             fee_from_weight(&rate, predict_weight(n_in, n_out, depth, fee));
                         assert_eq!(
@@ -364,7 +350,8 @@ mod tests {
     fn with_change_is_impossible_at_the_output_limit() {
         let rate = FeeRate::new(10).unwrap();
         // Below the limit: with-change is a real, finite fee.
-        let below = build_fee_directive(&rate, InputCount::clamped(1), OutputCount::clamped(2), 1);
+        let below = build_fee_directive(&rate, InputCount::clamped(1), OutputCount::clamped(2), 1)
+            .expect("the fee fits");
         assert!(below.fee_no_change > 0);
         assert!(below.fee_with_change > 0 && below.fee_with_change < u64::MAX);
         assert!(
@@ -381,13 +368,109 @@ mod tests {
             InputCount::clamped(1),
             OutputCount::clamped(usize::MAX),
             1,
-        );
+        )
+        .expect("the no-change fee fits");
         assert!(at_limit.fee_no_change > 0 && at_limit.fee_no_change < u64::MAX);
         assert_eq!(
             at_limit.fee_with_change,
             u64::MAX,
             "with-change unselectable at the limit"
         );
+        assert!(
+            at_limit.fee_no_change != u64::MAX,
+            "overflow is not the unbuildable sentinel"
+        );
+    }
+
+    /// A seed above the least fixed point sticks there. The with-change
+    /// call must not pass one. Red: seed that call from `2 × fee_no_change`.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "least fixed point")]
+    fn a_seed_above_the_least_fixed_point_is_refused() {
+        let rate = FeeRate::new(24_184).unwrap();
+        let (n_in, n_out) = (InputCount::clamped(1), OutputCount::clamped(2));
+        let least = converge_fee(&rate, n_in, n_out, 1, 0).unwrap();
+        let refused = converge_fee(&rate, n_in, n_out, 1, least.saturating_mul(2));
+        panic!("seed above {least} was accepted as {refused:?}");
+    }
+
+    /// The loop this function replaced. Deleted in the commit that records
+    /// the comparison: every non-overflow cell agreed.
+    fn previous_converge_fee(
+        rate: &FeeRate,
+        n_in: InputCount,
+        n_out: OutputCount,
+        tree_depth: u8,
+        initial_fee: u64,
+    ) -> u64 {
+        let mut fee = initial_fee;
+        for _ in 0..11 {
+            let next = fee_from_weight(rate, predict_weight(n_in, n_out, tree_depth, fee));
+            if next == fee {
+                return fee;
+            }
+            fee = next;
+        }
+        fee.max(fee_from_weight(
+            rate,
+            predict_weight(n_in, n_out, tree_depth, fee),
+        ))
+    }
+
+    #[test]
+    fn the_wallet_call_matches_the_previous_loop_where_it_did_not_overflow() {
+        use shekyl_fcmp::MAX_INPUTS;
+        use shekyl_tx_weight::{MAX_OUTPUTS, MAX_TREE_DEPTH};
+
+        let mut compared = 0usize;
+        for n_in in 1..=MAX_INPUTS {
+            for n_out in 1..=MAX_OUTPUTS {
+                for depth in 0..=MAX_TREE_DEPTH {
+                    let n_in = InputCount::clamped(n_in);
+                    let n_out = OutputCount::clamped(n_out);
+                    let w0 = predict_weight(n_in, n_out, depth, 0) as u64;
+                    let mut rates = vec![1u64, 23_840, 24_184];
+                    if w0 != 0 {
+                        for bits in [7u32, 14, 21, 28, 35, 42, 49, 56] {
+                            let centre = (1u64 << bits) / w0;
+                            if centre > 0 {
+                                rates.push(centre);
+                            }
+                        }
+                    }
+                    for rate_raw in rates {
+                        let Ok(rate) = FeeRate::new(rate_raw) else {
+                            continue;
+                        };
+                        for seed in [
+                            0u64,
+                            fee_from_weight(&rate, predict_weight(n_in, n_out, depth, 0)),
+                        ] {
+                            let old = previous_converge_fee(&rate, n_in, n_out, depth, seed);
+                            if tx_fee::try_fee_from_weight(
+                                &rate,
+                                predict_weight(n_in, n_out, depth, old),
+                            )
+                            .is_none()
+                            {
+                                continue;
+                            }
+                            let new = converge_fee(&rate, n_in, n_out, depth, seed);
+                            assert_eq!(
+                                new,
+                                Some(old),
+                                "rate {rate_raw} seed {seed} shape ({}, {}, {depth})",
+                                n_in.get(),
+                                n_out.get()
+                            );
+                            compared += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(compared > 0, "the grid compared nothing");
     }
 
     /// Custom-rate refusals are the CALLER's error class

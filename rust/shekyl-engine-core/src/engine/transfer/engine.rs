@@ -733,7 +733,10 @@ where
             InputCount::clamped(selected.indices.len()),
             OutputCount::clamped(payment_count),
             tree_depth,
-        );
+        )
+        .ok_or(SendError::BuildInvariant {
+            reason: "the fee does not fit in u64",
+        })?;
 
         let candidate_indices: HashSet<OutputId> = candidates.iter().map(|c| c.index).collect();
         for index in &selected.indices {
@@ -1200,7 +1203,10 @@ where
                 InputCount::clamped(selected_indices.len()),
                 OutputCount::clamped(payment_count),
                 depth,
-            );
+            )
+            .ok_or(ReanchorError::Failed(SendError::BuildInvariant {
+                reason: "the fee does not fit in u64",
+            }))?;
 
             // --- phase 2 (prover, lock-free): assemble + fold + sign ---
             let paths = handle

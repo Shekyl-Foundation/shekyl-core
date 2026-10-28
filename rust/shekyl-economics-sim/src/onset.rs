@@ -89,6 +89,8 @@ pub const ONSET_HORIZON_YEARS: u64 = 60;
 
 /// The decades reported in the per-scenario series.
 const DECADES: [u64; 6] = [10, 20, 30, 40, 50, 60];
+/// Ordinary-fee years plus year 1, where the lattice step is reported.
+const LATTICE_YEARS: [u64; 7] = [1, 10, 20, 30, 40, 50, 60];
 
 /// Index of the binding opportunity-cost rate (10 %/yr) in the band.
 const BINDING: usize = OPP_COST_RATE_BAND.len() - 1;
@@ -472,6 +474,7 @@ pub fn onset_report(
     let binding = OPP_COST_RATE_BAND[BINDING];
     let mut results = Vec::new();
     let mut fee_rows: Vec<(String, String)> = Vec::new();
+    let mut lattice_rows: Vec<(String, String)> = Vec::new();
     let mut space_rows: Vec<(String, String)> = Vec::new();
     for scenario in folded {
         let aggs = &scenario.aggs;
@@ -486,6 +489,24 @@ pub fn onset_report(
                         format!(
                             "{:.4}",
                             a.whole_fees_atomic as f64 / a.carried_txs as f64 / COIN
+                        )
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" "),
+        ));
+        lattice_rows.push((
+            scenario.name.clone(),
+            aggs.iter()
+                .filter(|a| LATTICE_YEARS.contains(&a.year))
+                .map(|a| {
+                    if a.carried_txs == 0 || a.whole_fees_atomic == 0 {
+                        "-".to_string()
+                    } else {
+                        let mean = a.whole_fees_atomic as f64 / a.carried_txs as f64;
+                        format!(
+                            "{:.4}",
+                            10_000.0 * shekyl_economics::FEE_QUANTIZATION_MASK as f64 / mean
                         )
                     }
                 })
@@ -578,6 +599,14 @@ pub fn onset_report(
          The run's fee arm made visible: a year's fees are its traffic times this."
     )?;
     for (name, series) in &fee_rows {
+        writeln!(out, "       {:<20} {series}", trunc(name, 20))?;
+    }
+    writeln!(
+        out,
+        "  -> LATTICE STEP, basis points of that year's mean ordinary fee \
+         (1 000 atomic / fee), at y1/10/20/30/40/50/60."
+    )?;
+    for (name, series) in &lattice_rows {
         writeln!(out, "       {:<20} {series}", trunc(name, 20))?;
     }
     writeln!(

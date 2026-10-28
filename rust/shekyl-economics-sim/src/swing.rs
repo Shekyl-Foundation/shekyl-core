@@ -75,9 +75,14 @@ pub const REORG_DEPTH_BLOCKS: u64 = shekyl_archival_retention::ARCHIVAL_REORG_DE
 /// what the flood pays per byte: it enters only through the fee's varint,
 /// which is a byte or two of each transaction's weight.
 #[must_use]
-pub fn max_archival_bytes_per_block(block_weight: u64, n_shards: u64, rate: PerByteRate) -> u64 {
+pub fn max_archival_bytes_per_block(
+    block_weight: u64,
+    n_shards: u64,
+    rate: PerByteRate,
+    rounding: crate::calibration::FeeRounding,
+) -> u64 {
     let depth = tree_depth_for_leaves(honest_leaves_at_closed_shards(n_shards.max(1)));
-    calibration::max_archival_bytes_per_block(block_weight, depth, rate)
+    calibration::max_archival_bytes_per_block(block_weight, depth, rate, rounding)
 }
 
 /// Shards a flood can close over `blocks` at `block_weight` — the max slew of
@@ -89,8 +94,10 @@ pub fn max_shards_per_window(
     block_weight: u64,
     n_shards: u64,
     rate: PerByteRate,
+    rounding: crate::calibration::FeeRounding,
 ) -> u64 {
-    let bytes = max_archival_bytes_per_block(block_weight, n_shards, rate).saturating_mul(blocks);
+    let bytes =
+        max_archival_bytes_per_block(block_weight, n_shards, rate, rounding).saturating_mul(blocks);
     bytes / SHARD_LENGTH.to_raw()
 }
 
@@ -151,6 +158,7 @@ pub fn a6_report(
     n_samples: &[u64],
     forfeit_per_block_atomic: u64,
     admission: &AdmissionAtShards,
+    rounding: crate::calibration::FeeRounding,
 ) -> fmt::Result {
     let curve = crate::escalation::steepest();
     let surge = block_weight_penalty_free();
@@ -187,9 +195,9 @@ pub fn a6_report(
     let mut worst_pen_pts = 0.0_f64;
     for &n in n_samples {
         let rate = admission.at(n);
-        let dn_epoch = max_shards_per_window(EPOCH_BLOCKS, surge, n, rate);
-        let dn_pen = max_shards_per_window(EPOCH_BLOCKS, block_weight_max(), n, rate);
-        let dn_reorg = max_shards_per_window(REORG_DEPTH_BLOCKS, surge, n, rate);
+        let dn_epoch = max_shards_per_window(EPOCH_BLOCKS, surge, n, rate, rounding);
+        let dn_pen = max_shards_per_window(EPOCH_BLOCKS, block_weight_max(), n, rate, rounding);
+        let dn_reorg = max_shards_per_window(REORG_DEPTH_BLOCKS, surge, n, rate, rounding);
         let ds_epoch = delta_share(&curve, n, dn_epoch);
         let ds_reorg = delta_share(&curve, n, dn_reorg);
         let pts = ds_epoch as f64 / SHARE_SCALE as f64 * 100.0;
@@ -256,6 +264,7 @@ pub fn a6_report(
             honest_leaves_at_closed_shards(worst_dn_at_n),
             worst_dn,
             admission.at(worst_dn_at_n),
+            rounding,
         )
         .cost_atomic as f64
             / crate::burden::COIN as f64,
@@ -277,8 +286,20 @@ mod tests {
     #[test]
     fn flood_ceiling_is_finite_and_nearly_depth_flat() {
         let surge = block_weight_penalty_free();
-        let early = max_shards_per_window(EPOCH_BLOCKS, surge, 1_000, RATE);
-        let late = max_shards_per_window(EPOCH_BLOCKS, surge, 5_000_000, RATE);
+        let early = max_shards_per_window(
+            EPOCH_BLOCKS,
+            surge,
+            1_000,
+            RATE,
+            crate::calibration::FeeRounding::Unrounded,
+        );
+        let late = max_shards_per_window(
+            EPOCH_BLOCKS,
+            surge,
+            5_000_000,
+            RATE,
+            crate::calibration::FeeRounding::Unrounded,
+        );
         assert!(early > 0, "a flood must be able to move n at all");
         // Byte-keyed, the ceiling is `B × (archival/weight) / W` per block: the
         // weight the flooder pays for and the archival bytes the operand counts
@@ -314,7 +335,13 @@ mod tests {
                 "single-shard jump at n={n}: {step}"
             );
             // The adversarial slew is finite and reported, not gated here.
-            let dn = max_shards_per_window(EPOCH_BLOCKS, surge, n.max(1), RATE);
+            let dn = max_shards_per_window(
+                EPOCH_BLOCKS,
+                surge,
+                n.max(1),
+                RATE,
+                crate::calibration::FeeRounding::Unrounded,
+            );
             assert!(dn > 0 && delta_share(&curve, n, dn) < SHARE_SCALE);
         }
     }
@@ -327,8 +354,19 @@ mod tests {
         const _: () = assert!(REORG_DEPTH_BLOCKS < EPOCH_BLOCKS);
         let n = 50_000;
         assert!(
-            max_shards_per_window(REORG_DEPTH_BLOCKS, surge, n, RATE)
-                <= max_shards_per_window(EPOCH_BLOCKS, surge, n, RATE)
+            max_shards_per_window(
+                REORG_DEPTH_BLOCKS,
+                surge,
+                n,
+                RATE,
+                crate::calibration::FeeRounding::Unrounded
+            ) <= max_shards_per_window(
+                EPOCH_BLOCKS,
+                surge,
+                n,
+                RATE,
+                crate::calibration::FeeRounding::Unrounded
+            )
         );
     }
 
@@ -348,7 +386,13 @@ mod tests {
                     delta_share(
                         curve,
                         n,
-                        max_shards_per_window(EPOCH_BLOCKS, surge, n, RATE),
+                        max_shards_per_window(
+                            EPOCH_BLOCKS,
+                            surge,
+                            n,
+                            RATE,
+                            crate::calibration::FeeRounding::Unrounded,
+                        ),
                     )
                 })
                 .max()

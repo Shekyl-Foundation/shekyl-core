@@ -359,13 +359,18 @@ struct Block<'a> {
     closed_shards: ClosedShardCount,
     honest_weight: u64,
     honest_fee: u64,
+    rounding: crate::calibration::FeeRounding,
     /// The block as the fold listed it, priced once. A packing prices only
     /// the block it would list, against this.
     honest_paid: PaidEmission,
 }
 
 impl<'a> Block<'a> {
-    fn new(last: &LastBlock, economic: &'a EconomicParams) -> Self {
+    fn new(
+        last: &LastBlock,
+        economic: &'a EconomicParams,
+        rounding: crate::calibration::FeeRounding,
+    ) -> Self {
         let at = FeePoint {
             already_generated: last.already_generated,
             volume: last.volume,
@@ -416,6 +421,7 @@ impl<'a> Block<'a> {
             honest_weight: last.honest_tx.weight,
             honest_fee: last.honest_tx.fee_atomic,
             honest_paid,
+            rounding,
         }
     }
 
@@ -440,11 +446,11 @@ impl<'a> Block<'a> {
     /// The relay stuffer: the rate that gets his bodies listed, and his
     /// campaign's cost for one shard at it.
     fn relay(&self, floor: PerByteRate) -> (PerByteRate, bool, u128) {
-        let shape = stuffer_shape(self.depth, floor);
+        let shape = stuffer_shape(self.depth, floor, self.rounding);
         let mut after_honest = self.honest;
         let at_floor = after_honest.admit(
-            shape.tx_weight(self.depth, floor),
-            shape.tx_fee_atomic(self.depth, floor),
+            shape.tx_weight(self.depth, floor, self.rounding),
+            shape.tx_fee_atomic(self.depth, floor, self.rounding),
         );
         let rate = if at_floor {
             floor
@@ -457,7 +463,7 @@ impl<'a> Block<'a> {
         (
             rate,
             at_floor,
-            stuffer_cost_per_shard_atomic(self.at.chain_leaves, rate),
+            stuffer_cost_per_shard_atomic(self.at.chain_leaves, rate, self.rounding),
         )
     }
 
@@ -495,7 +501,8 @@ impl<'a> Block<'a> {
         // shape walk stays in builder order, so a tie keeps the earlier shape.
         let mut seen = HashSet::new();
         for shape in all_shapes() {
-            let Some(body) = StuffingBody::from_shape(shape, self.depth, floor) else {
+            let Some(body) = StuffingBody::from_shape(shape, self.depth, floor, self.rounding)
+            else {
                 continue;
             };
             if !seen.insert(body) {
@@ -632,8 +639,13 @@ struct StuffingBody {
 impl StuffingBody {
     /// The body `shape` lists at `depth` when `floor` is the rate the
     /// approach charges. Nothing, when the shape has no weight.
-    fn from_shape(shape: Shape, depth: u8, floor: Option<PerByteRate>) -> Option<Self> {
-        let fee = floor.map_or(0, |rate| shape.tx_fee_atomic(depth, rate));
+    fn from_shape(
+        shape: Shape,
+        depth: u8,
+        floor: Option<PerByteRate>,
+        rounding: crate::calibration::FeeRounding,
+    ) -> Option<Self> {
+        let fee = floor.map_or(0, |rate| shape.tx_fee_atomic(depth, rate, rounding));
         let weight = u64::try_from(predict_weight(shape.n_in, shape.n_out, depth, fee)).ok()?;
         if weight == 0 {
             return None;
@@ -801,7 +813,7 @@ pub(crate) fn print_envelope(
         let last = agg.last_block;
         let e = envelope_at(&last, params);
         let economic = params.economic();
-        let block = Block::new(&last, &economic);
+        let block = Block::new(&last, &economic, params.fee.fee_rounding());
         let unenforced = e.miner(AttackKind::MinerUnenforced);
         let (relay_rate, relay_at_floor, relay_atomic) = match e.attack(AttackKind::Relay).cost {
             AttackCost::Relay {
@@ -863,7 +875,7 @@ pub(crate) fn print_envelope(
 /// Every attacker at the block a fold ended a year on.
 pub(crate) fn envelope_at(last: &LastBlock, params: &SimParams) -> Envelope {
     let economic = params.economic();
-    let block = Block::new(last, &economic);
+    let block = Block::new(last, &economic, params.fee.fee_rounding());
     let floor = params.fee.admission_rate(&block.at);
     // Column order is the approach list. A match arm that numbers a column
     // differently from [`AttackKind::ALL`] fails this before the report prints.
@@ -954,7 +966,7 @@ mod tests {
         assert_eq!(roomy_miner.cost_atomic, 0);
         assert_eq!(roomy_miner.placement, Placement::FreeRoom);
         let economic = params.economic();
-        let block = Block::new(&block_at(5, &params), &economic);
+        let block = Block::new(&block_at(5, &params), &economic, params.fee.fee_rounding());
         let chosen = block.cheapest_packing(None, PoolShare::NONE);
         let free = block.honest.penalty_free_bodies().saturating_sub(
             block
@@ -1042,7 +1054,7 @@ mod tests {
         let params = SimParams::default();
         let last = block_at(1_000, &params);
         let economic = params.economic();
-        let block = Block::new(&last, &economic);
+        let block = Block::new(&last, &economic, params.fee.fee_rounding());
         let weight = 20_000;
         let packing = block
             .packing_at(
@@ -1088,7 +1100,7 @@ mod tests {
         let params = SimParams::default();
         let last = block_at(1_000, &params);
         let economic = params.economic();
-        let block = Block::new(&last, &economic);
+        let block = Block::new(&last, &economic, params.fee.fee_rounding());
         let dropped = 3;
         let stuffed = 2;
         let weight = 20_000;

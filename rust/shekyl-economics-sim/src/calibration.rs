@@ -45,8 +45,8 @@
 use serde::Serialize;
 use shekyl_curve_tree::segment::outputs_per_node;
 use shekyl_tx_weight::{
-    converge_weight_fee, predict_archival_len, predict_weight, InputCount, OutputCount,
-    MAX_OUTPUTS, MAX_TREE_DEPTH,
+    converge_weight_fee, converge_weight_fee_by, predict_archival_len, predict_weight, InputCount,
+    OutputCount, MAX_OUTPUTS, MAX_TREE_DEPTH,
 };
 use shekyl_types::SHARD_LENGTH;
 
@@ -124,6 +124,18 @@ impl PerByteRate {
     }
 }
 
+/// Which pricer [`Shape::tx_fee_atomic`] runs.
+///
+/// Production uses the wallet's lattice. The flat control arm's admission
+/// rate is a declared departure and stays the unrounded product.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FeeRounding {
+    /// `quantized_fee`, seed 0: a no-change wallet spend.
+    Lattice,
+    /// `checked_mul`, seed 0. The §4 flat 300 atomic/byte admission only.
+    Unrounded,
+}
+
 /// A transaction shape the builder accepts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Shape {
@@ -133,22 +145,43 @@ pub struct Shape {
 
 impl Shape {
     /// Block weight of one transaction of this shape at `tree_depth`, paying
-    /// `rate`. The weight includes `varint(fee)`, so the fee is
-    /// [`converge_weight_fee`] and this is [`predict_weight`] at that fee.
-    /// Integer throughout (DQ-2G).
+    /// `rate`. The weight includes `varint(fee)`, so the fee is the fixed
+    /// point and this is [`predict_weight`] at that fee. Integer throughout
+    /// (DQ-2G).
     #[must_use]
-    pub fn tx_weight(self, tree_depth: u8, rate: PerByteRate) -> u64 {
-        let fee = self.tx_fee_atomic(tree_depth, rate);
-        u64::try_from(predict_weight(self.n_in, self.n_out, tree_depth, fee)).unwrap_or(u64::MAX)
+    pub fn tx_weight(self, tree_depth: u8, rate: PerByteRate, rounding: FeeRounding) -> u64 {
+        let fee = self.tx_fee_atomic(tree_depth, rate, rounding);
+        u64::try_from(predict_weight(self.n_in, self.n_out, tree_depth, fee))
+            .expect("a transaction weight fits in u64")
     }
 
-    /// Unrounded weight-fee (atomic) of one transaction of this shape at
-    /// `tree_depth`: the fixed point of `weight × rate`. No quantization
-    /// mask — that rounding is the wallet's, and this crate's declared
-    /// divergence from it.
+    /// The fee one transaction of this shape pays at `tree_depth`.
+    ///
+    /// [`FeeRounding::Lattice`] is the wallet's no-change call:
+    /// [`converge_weight_fee_by`] from seed 0 with `quantized_fee`.
+    /// [`FeeRounding::Unrounded`] is the flat control arm's admission rate.
+    /// `None` from the loop is a defect at a rate this sim charges.
     #[must_use]
-    pub fn tx_fee_atomic(self, tree_depth: u8, rate: PerByteRate) -> u64 {
-        converge_weight_fee(rate.atomic(), self.n_in, self.n_out, tree_depth)
+    pub fn tx_fee_atomic(self, tree_depth: u8, rate: PerByteRate, rounding: FeeRounding) -> u64 {
+        let rate_per_weight = rate.atomic();
+        let fee = match rounding {
+            FeeRounding::Lattice => {
+                converge_weight_fee_by(self.n_in, self.n_out, tree_depth, 0, |weight| {
+                    shekyl_economics::quantized_fee(weight, rate_per_weight)
+                })
+            }
+            FeeRounding::Unrounded => {
+                converge_weight_fee(rate_per_weight, self.n_in, self.n_out, tree_depth)
+            }
+        };
+        match fee {
+            Some(fee) => fee,
+            None => panic!(
+                "fee fits: {}-in/{}-out depth {tree_depth} rate {rate_per_weight}",
+                self.n_in.get(),
+                self.n_out.get()
+            ),
+        }
     }
 
     /// Archival bytes one transaction of this shape adds to the fold at
@@ -187,9 +220,14 @@ pub(crate) fn all_shapes() -> impl Iterator<Item = Shape> {
 
 /// Fee per archival byte of `shape` at `tree_depth`, as a rational
 /// `(fee, bytes)`; compared cross-multiplied so the argmax is exact.
-fn fee_per_archival(shape: Shape, tree_depth: u8, rate: PerByteRate) -> (u128, u128) {
+fn fee_per_archival(
+    shape: Shape,
+    tree_depth: u8,
+    rate: PerByteRate,
+    rounding: FeeRounding,
+) -> (u128, u128) {
     (
-        u128::from(shape.tx_fee_atomic(tree_depth, rate)),
+        u128::from(shape.tx_fee_atomic(tree_depth, rate, rounding)),
         u128::from(shape.archival_bytes(tree_depth).max(1)),
     )
 }
@@ -202,9 +240,9 @@ fn cheaper(a: (u128, u128), b: (u128, u128)) -> bool {
 /// The **max-archival-per-fee** shape at `tree_depth` — the one-shot
 /// stuffer's transaction, searched over every shape the builder accepts.
 #[must_use]
-pub fn stuffer_shape(tree_depth: u8, rate: PerByteRate) -> Shape {
+pub fn stuffer_shape(tree_depth: u8, rate: PerByteRate, rounding: FeeRounding) -> Shape {
     all_shapes()
-        .map(|s| (s, fee_per_archival(s, tree_depth, rate)))
+        .map(|s| (s, fee_per_archival(s, tree_depth, rate, rounding)))
         .fold(
             None,
             |best: Option<(Shape, (u128, u128))>, cand| match best {
@@ -225,10 +263,15 @@ pub fn stuffer_shape(tree_depth: u8, rate: PerByteRate) -> Shape {
 /// bytes (at the surge ceiling, 6-in/1-out beats 8-in/1-out by ≈ 3 %). The
 /// physical ceiling on the fold's slew is this search, not the cost search.
 #[must_use]
-pub fn max_archival_bytes_per_block(block_weight: u64, tree_depth: u8, rate: PerByteRate) -> u64 {
+pub fn max_archival_bytes_per_block(
+    block_weight: u64,
+    tree_depth: u8,
+    rate: PerByteRate,
+    rounding: FeeRounding,
+) -> u64 {
     all_shapes()
         .map(|s| {
-            let weight = s.tx_weight(tree_depth, rate);
+            let weight = s.tx_weight(tree_depth, rate, rounding);
             if weight == 0 {
                 0
             } else {
@@ -251,8 +294,8 @@ impl Shape {
 /// bytes — at `tree_depth`. The per-depth rate the reports print; a campaign
 /// is priced by [`stuffer_campaign`], not by multiplying this.
 #[must_use]
-pub fn stuffer_txs_per_shard(tree_depth: u8, rate: PerByteRate) -> u64 {
-    let txs = stuffer_shape(tree_depth, rate)
+pub fn stuffer_txs_per_shard(tree_depth: u8, rate: PerByteRate, rounding: FeeRounding) -> u64 {
+    let txs = stuffer_shape(tree_depth, rate, rounding)
         .txs_for_archival_bytes(tree_depth, u128::from(SHARD_LENGTH.to_raw()));
     u64::try_from(txs).unwrap_or(u64::MAX)
 }
@@ -301,21 +344,26 @@ pub struct StufferCampaign {
 /// campaign starts is not modelled (the operand is a shard count): it can
 /// only lower the count, by under one shard's worth of transactions.
 #[must_use]
-pub fn stuffer_campaign(honest_leaves: u64, delta: u64, rate: PerByteRate) -> StufferCampaign {
+pub fn stuffer_campaign(
+    honest_leaves: u64,
+    delta: u64,
+    rate: PerByteRate,
+    rounding: FeeRounding,
+) -> StufferCampaign {
     let mut remaining = u128::from(SHARD_LENGTH.to_raw()) * u128::from(delta);
     let mut leaves = honest_leaves;
     let mut txs = 0u64;
     let mut cost_atomic = 0u128;
     while remaining > 0 {
         let depth = tree_depth_for_leaves(leaves);
-        let shape = stuffer_shape(depth, rate);
+        let shape = stuffer_shape(depth, rate, rounding);
         let n_out = shape.n_out.get() as u64;
         let to_finish = shape.txs_for_archival_bytes(depth, remaining);
         let take = to_finish.min(stuffer_txs_before_deepening(depth, leaves, n_out));
         // `take ≥ 1` (both operands are), so every pass retires bytes and the
         // loop terminates; `take < to_finish` leaves `remaining > 0`.
         remaining = remaining.saturating_sub(take * u128::from(shape.archival_bytes(depth).max(1)));
-        cost_atomic += take * u128::from(shape.tx_fee_atomic(depth, rate));
+        cost_atomic += take * u128::from(shape.tx_fee_atomic(depth, rate, rounding));
         let take = u64::try_from(take).unwrap_or(u64::MAX);
         txs = txs.saturating_add(take);
         leaves = leaves.saturating_add(take.saturating_mul(n_out));
@@ -328,8 +376,12 @@ pub fn stuffer_campaign(honest_leaves: u64, delta: u64, rate: PerByteRate) -> St
 /// The per-shard rate the reports print; a campaign of `delta` shards is
 /// priced by the campaign function, not by multiplying this.
 #[must_use]
-pub fn stuffer_cost_per_shard_atomic(honest_leaves: u64, rate: PerByteRate) -> u128 {
-    stuffer_campaign(honest_leaves, 1, rate).cost_atomic
+pub fn stuffer_cost_per_shard_atomic(
+    honest_leaves: u64,
+    rate: PerByteRate,
+    rounding: FeeRounding,
+) -> u128 {
+    stuffer_campaign(honest_leaves, 1, rate, rounding).cost_atomic
 }
 
 /// Attacker cost (atomic) to close one more shard under **output
@@ -348,10 +400,14 @@ pub fn stuffer_cost_per_shard_atomic(honest_leaves: u64, rate: PerByteRate) -> u
 /// optimum has at most two shapes with non-zero weight. Searching triples
 /// would find nothing cheaper.
 #[must_use]
-pub fn sustained_stuffer_cost_per_shard_atomic(chain_leaves: u64, rate: PerByteRate) -> u128 {
+pub fn sustained_stuffer_cost_per_shard_atomic(
+    chain_leaves: u64,
+    rate: PerByteRate,
+    rounding: FeeRounding,
+) -> u128 {
     let depth = tree_depth_for_leaves(chain_leaves);
     let shapes: Vec<(Shape, (u128, u128))> = all_shapes()
-        .map(|s| (s, fee_per_archival(s, depth, rate)))
+        .map(|s| (s, fee_per_archival(s, depth, rate, rounding)))
         .collect();
     let mut best: Option<(u128, u128)> = None;
     let mut consider = |cycle: (u128, u128)| {
@@ -450,7 +506,7 @@ mod tests {
         let max_in = InputCount::clamped(usize::MAX).get();
         for rate in rates() {
             for depth in 2..=MAX_TREE_DEPTH {
-                let s = stuffer_shape(depth, rate);
+                let s = stuffer_shape(depth, rate, FeeRounding::Lattice);
                 assert_eq!(
                     (s.n_in.get(), s.n_out.get()),
                     (max_in, 1),
@@ -465,8 +521,8 @@ mod tests {
                     n_out: OutputCount::clamped(MAX_OUTPUTS),
                 };
                 assert!(cheaper(
-                    fee_per_archival(s, depth, rate),
-                    fee_per_archival(leafy, depth, rate)
+                    fee_per_archival(s, depth, rate, FeeRounding::Lattice),
+                    fee_per_archival(leafy, depth, rate, FeeRounding::Lattice)
                 ));
             }
         }
@@ -492,11 +548,11 @@ mod tests {
         // the bottom of a layer wide enough that no sweep delta here deepens it.
         let leaves = layer_capacity(4).unwrap() + 1_000;
         let depth = tree_depth_for_leaves(leaves);
-        let shape = stuffer_shape(depth, CONTROL);
-        let fee = u128::from(shape.tx_fee_atomic(depth, CONTROL));
-        let per_shard = stuffer_cost_per_shard_atomic(leaves, CONTROL);
+        let shape = stuffer_shape(depth, CONTROL, FeeRounding::Unrounded);
+        let fee = u128::from(shape.tx_fee_atomic(depth, CONTROL, FeeRounding::Unrounded));
+        let per_shard = stuffer_cost_per_shard_atomic(leaves, CONTROL, FeeRounding::Unrounded);
         for delta in [1u64, 2, 7, 250, 4_096] {
-            let campaign = stuffer_campaign(leaves, delta, CONTROL);
+            let campaign = stuffer_campaign(leaves, delta, CONTROL, FeeRounding::Unrounded);
             assert_eq!(
                 tree_depth_for_leaves(leaves + campaign.txs * shape.n_out.get() as u64),
                 depth,
@@ -516,7 +572,10 @@ mod tests {
             );
             assert_eq!(campaign.cost_atomic, u128::from(campaign.txs) * fee);
         }
-        assert_eq!(stuffer_campaign(leaves, 1, CONTROL).cost_atomic, per_shard);
+        assert_eq!(
+            stuffer_campaign(leaves, 1, CONTROL, FeeRounding::Unrounded).cost_atomic,
+            per_shard
+        );
     }
 
     #[test]
@@ -529,7 +588,7 @@ mod tests {
         let delta = 100u64;
         let shallow = tree_depth_for_leaves(leaves);
         assert_eq!(shallow, 4);
-        let s4 = stuffer_shape(shallow, CONTROL);
+        let s4 = stuffer_shape(shallow, CONTROL, FeeRounding::Unrounded);
         let n_out = s4.n_out.get() as u64;
         // The k-th transaction (from 0) sees `leaves + k·n_out`; it is at
         // depth 4 while that is ≤ cap.
@@ -538,21 +597,28 @@ mod tests {
         let bytes_after = bytes_total - u128::from(first) * u128::from(s4.archival_bytes(shallow));
         let deep = tree_depth_for_leaves(leaves + first * n_out);
         assert_eq!(deep, 5, "the campaign must actually cross");
-        let s5 = stuffer_shape(deep, CONTROL);
+        let s5 = stuffer_shape(deep, CONTROL, FeeRounding::Unrounded);
         let rest = bytes_after.div_ceil(u128::from(s5.archival_bytes(deep)));
         assert!(rest > 0, "the campaign must continue past the crossing");
 
-        let campaign = stuffer_campaign(leaves, delta, CONTROL);
+        let campaign = stuffer_campaign(leaves, delta, CONTROL, FeeRounding::Unrounded);
         assert_eq!(u128::from(campaign.txs), u128::from(first) + rest);
         assert_eq!(
             campaign.cost_atomic,
-            u128::from(first) * u128::from(s4.tx_fee_atomic(shallow, CONTROL))
-                + rest * u128::from(s5.tx_fee_atomic(deep, CONTROL))
+            u128::from(first)
+                * u128::from(s4.tx_fee_atomic(shallow, CONTROL, FeeRounding::Unrounded))
+                + rest * u128::from(s5.tx_fee_atomic(deep, CONTROL, FeeRounding::Unrounded))
         );
         // And it is neither flat pricing: the crossing is visible in the figure.
         let flat = |d: u8| {
-            stuffer_shape(d, CONTROL).txs_for_archival_bytes(d, bytes_total)
-                * u128::from(stuffer_shape(d, CONTROL).tx_fee_atomic(d, CONTROL))
+            stuffer_shape(d, CONTROL, FeeRounding::Unrounded).txs_for_archival_bytes(d, bytes_total)
+                * u128::from(
+                    stuffer_shape(d, CONTROL, FeeRounding::Unrounded).tx_fee_atomic(
+                        d,
+                        CONTROL,
+                        FeeRounding::Unrounded,
+                    ),
+                )
         };
         assert_ne!(campaign.cost_atomic, flat(shallow));
         assert_ne!(campaign.cost_atomic, flat(deep));
@@ -566,9 +632,11 @@ mod tests {
         let block_weight = crate::swing::block_weight_penalty_free();
         let mut differs_somewhere = false;
         for depth in 2..=MAX_TREE_DEPTH {
-            let best = max_archival_bytes_per_block(block_weight, depth, CONTROL);
-            let s = stuffer_shape(depth, CONTROL);
-            let cost_shape = (block_weight / s.tx_weight(depth, CONTROL)) * s.archival_bytes(depth);
+            let best =
+                max_archival_bytes_per_block(block_weight, depth, CONTROL, FeeRounding::Unrounded);
+            let s = stuffer_shape(depth, CONTROL, FeeRounding::Unrounded);
+            let cost_shape = (block_weight / s.tx_weight(depth, CONTROL, FeeRounding::Unrounded))
+                * s.archival_bytes(depth);
             assert!(best >= cost_shape, "depth {depth}: {best} < {cost_shape}");
             assert!(
                 best <= block_weight,
@@ -587,12 +655,25 @@ mod tests {
     fn cost_per_shard_is_txs_times_fee_and_sustained_is_dearer() {
         let leaves = 100_000;
         let depth = tree_depth_for_leaves(leaves);
-        let expected = u128::from(stuffer_txs_per_shard(depth, CONTROL))
-            * u128::from(stuffer_shape(depth, CONTROL).tx_fee_atomic(depth, CONTROL));
-        assert_eq!(stuffer_cost_per_shard_atomic(leaves, CONTROL), expected);
+        let expected = u128::from(stuffer_txs_per_shard(
+            depth,
+            CONTROL,
+            FeeRounding::Unrounded,
+        )) * u128::from(
+            stuffer_shape(depth, CONTROL, FeeRounding::Unrounded).tx_fee_atomic(
+                depth,
+                CONTROL,
+                FeeRounding::Unrounded,
+            ),
+        );
+        assert_eq!(
+            stuffer_cost_per_shard_atomic(leaves, CONTROL, FeeRounding::Unrounded),
+            expected
+        );
         assert!(expected > 0);
         // Conserving outputs can only add producer transactions to the mix.
-        let sustained = sustained_stuffer_cost_per_shard_atomic(leaves, CONTROL);
+        let sustained =
+            sustained_stuffer_cost_per_shard_atomic(leaves, CONTROL, FeeRounding::Unrounded);
         assert!(sustained >= expected, "{sustained} < {expected}");
         // …and never by more than the dearest single producer would cost.
         let leafy = Shape {
@@ -600,7 +681,7 @@ mod tests {
             n_out: OutputCount::clamped(MAX_OUTPUTS),
         };
         let all_leafy = (u128::from(SHARD_LENGTH.to_raw())
-            * u128::from(leafy.tx_fee_atomic(depth, CONTROL)))
+            * u128::from(leafy.tx_fee_atomic(depth, CONTROL, FeeRounding::Unrounded)))
         .div_ceil(u128::from(leafy.archival_bytes(depth)));
         assert!(sustained <= all_leafy);
     }
@@ -611,7 +692,7 @@ mod tests {
         // archival, so a shard is on the order of W × 300 ≈ 0.9 SKL. This is
         // the §12.13 figure, and it is a fact about the control arm's rate
         // only: the chain serves no such rate (see the next test).
-        let early = stuffer_cost_per_shard_atomic(30_000, CONTROL);
+        let early = stuffer_cost_per_shard_atomic(30_000, CONTROL, FeeRounding::Unrounded);
         let one_skl = u128::from(crate::burden::COIN);
         assert!(
             (one_skl / 2..=2 * one_skl).contains(&early),
@@ -630,8 +711,8 @@ mod tests {
         // rounding makes the sign depth-local. A ratio of bytes, so it holds
         // at every rate.
         for rate in rates() {
-            let early = stuffer_cost_per_shard_atomic(30_000, rate);
-            let late = stuffer_cost_per_shard_atomic(5_000_000_000, rate);
+            let early = stuffer_cost_per_shard_atomic(30_000, rate, FeeRounding::Lattice);
+            let late = stuffer_cost_per_shard_atomic(5_000_000_000, rate, FeeRounding::Lattice);
             let (lo, hi) = (early.min(late), early.max(late));
             assert!(
                 hi * 100 <= lo * 105,
@@ -650,8 +731,8 @@ mod tests {
         // of stuffing cost.
         let leaves = 30_000;
         let [tail, _, genesis] = rates();
-        let at_tail = stuffer_cost_per_shard_atomic(leaves, tail);
-        let at_genesis = stuffer_cost_per_shard_atomic(leaves, genesis);
+        let at_tail = stuffer_cost_per_shard_atomic(leaves, tail, FeeRounding::Lattice);
+        let at_genesis = stuffer_cost_per_shard_atomic(leaves, genesis, FeeRounding::Lattice);
         let cost_ratio = at_genesis as f64 / at_tail as f64;
         let rate_ratio = genesis.atomic() as f64 / tail.atomic() as f64;
         assert!(

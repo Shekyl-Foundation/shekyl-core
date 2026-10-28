@@ -155,6 +155,43 @@ impl ChainCursor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shekyl_economics::FEE_QUANTIZATION_MASK;
+
+    /// E15-1. One baseline year, every block's ordinary fee on the lattice.
+    /// Red: price the block with the unrounded product.
+    #[test]
+    fn a_baseline_years_fees_are_lattice_multiples() {
+        let params = SimParams::default();
+        let economic = params.economic();
+        let mut cursor = ChainCursor::default();
+        let mut generated = 0u128;
+        let mut burned = 0u128;
+        let mut leaves = 0u64;
+        for block in 0..params.blocks_per_year {
+            let priced = cursor.price(
+                ChainStep {
+                    fold_height: block,
+                    chain_height: block,
+                    demand: params.tx_volume_baseline,
+                    leaves,
+                    already_generated: generated,
+                    total_burned: burned,
+                    closed_shards: ClosedShardCount::new(0),
+                },
+                &params,
+                &economic,
+            );
+            assert_eq!(
+                priced.tx.fee_atomic % FEE_QUANTIZATION_MASK,
+                0,
+                "block {block} fee {} is off the lattice",
+                priced.tx.fee_atomic
+            );
+            generated = generated.saturating_add(u128::from(priced.paid_reward()));
+            burned = burned.saturating_add(u128::from(priced.paid.fee_burn.actually_destroyed));
+            leaves = leaves.saturating_add(priced.filled.included.saturating_mul(2));
+        }
+    }
 
     /// The operand is the blocks before this one: an empty window at the
     /// fold's first block, then that block's listed transactions.
