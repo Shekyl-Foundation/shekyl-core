@@ -57,11 +57,13 @@ pub use facts::{
 pub use ffi_shim::FfiSubmitShim;
 pub use gate::phase_c_semaphore;
 pub use phase_a::{parse_submission, ParsedSubmission, PhaseAReject, SubmitTxKind};
-pub use rust_pool_shim::{ChainSource, RustPoolShim};
+pub use rust_pool_shim::{
+    clear_production, install_production, production, ChainSource, RustPoolShim, StoreChain,
+};
 pub use verifier::DaemonTxVerifier;
 pub use verify::{TxVerifier, VerifyFailure, VerifyReject};
 
-/// The production engine: FFI state shim (§4) + native verifier (§3.3's
-/// Phase-C battery). One instance per daemon, shared across transport
-/// workers via `Arc` in the server's `AppState`.
-pub type DaemonSubmitEngine = SubmitEngine<FfiSubmitShim, DaemonTxVerifier>;
+/// The production engine: the node's pool and the native verifier. One
+/// instance per daemon, installed by the node's open and shared across
+/// transport workers via `Arc` in the server's `AppState`.
+pub type DaemonSubmitEngine = SubmitEngine<RustPoolShim<StoreChain>, DaemonTxVerifier>;

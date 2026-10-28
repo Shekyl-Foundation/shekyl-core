@@ -230,11 +230,27 @@ unsafe fn start(
         armed,
         ..Default::default()
     };
+    let Some(shim) = crate::submit::production() else {
+        return Err("the node's pool is not installed for submit".to_owned());
+    };
+    let submit_engine = Arc::new(crate::submit::SubmitEngine::new(
+        shim,
+        crate::submit::DaemonTxVerifier,
+    ));
     // Level-triggered: a stop that lands before any acceptor has polled is
     // still observed by `wait_for`. One sender, cloned into every acceptor.
     let (shutdown, shutdown_rx) = watch::channel(false);
     let serve = rt.spawn(async move {
-        if let Err(e) = serve_listeners(Arc::new(core), config, admin, view, shutdown_rx).await {
+        if let Err(e) = serve_listeners(
+            Arc::new(core),
+            config,
+            submit_engine,
+            admin,
+            view,
+            shutdown_rx,
+        )
+        .await
+        {
             tracing::error!("daemon-rpc server error: {e}");
         }
     });

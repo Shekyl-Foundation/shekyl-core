@@ -7,8 +7,10 @@
 //! the planned reversion (`DAEMON_SUBMIT_VERDICT.md` §11: "`SubmitStateShim`
 //! over C++ FFI | The Rust mempool lands | Swap the trait impl; engine,
 //! contract, wallet untouched"), **prepared, not routed** (DRS-E5 PR-b b3).
-//! Production constructs [`FfiSubmitShim`](super::FfiSubmitShim) until the
-//! DRS-X flip routes this one.
+//! Production constructs this shim (`install_production`, from the node's
+//! open) over the node's one pool. A pool-file fault on the commit retires
+//! that pool through the hook the node supplied, the same flag the service
+//! and the pool handle read.
 //!
 //! # Facts are the chain's and the pool's, read once
 //!
@@ -66,13 +68,14 @@ use shekyl_chain_rules::{
     emission_epoch_facts, relay_floor_at, relay_floor_window, release_last_served, AdmissionPolicy,
     AtHeight, ChainView, EmissionEpochStanding, HeaderView, PolicyRow, RuleSet, Tip,
 };
-use shekyl_chain_store::store::{ReadSnapshot, SnapshotView};
+use shekyl_chain_store::store::{ChainStore, ReadSnapshot, SnapshotView, StoreError};
 use shekyl_mempool::{shown, stateless, Admission, Judged, Pool, RelayView};
 use shekyl_types::archival::{BondRecord, Holdings, MAX_BOND_BAD_INTERVALS};
 use shekyl_types::{
     BlockHash, BlockHeight, ChainCount, PCanonicalId, SettlementEpoch, TxHash, UnixSeconds,
 };
 
+use crate::store_facts::RulesAt;
 use crate::submit::certificate::VerificationCertificate;
 use crate::submit::facts::{
     BondProbe, CommitOutcome, EmissionBondFacts, EmissionCloseBondFacts, EmissionCreditPairFacts,
@@ -81,6 +84,58 @@ use crate::submit::facts::{
     SubmitStateShim, TxMeta,
 };
 use crate::submit::phase_a::parse_submission;
+
+/// One committed snapshot of the node's chain, and the rule set in force
+/// at the height the next block connects at.
+#[derive(Clone)]
+pub struct StoreChain {
+    store: Arc<ChainStore>,
+    rules: Arc<dyn RulesAt>,
+}
+
+impl StoreChain {
+    /// The chain `store` holds, judged under `rules`.
+    #[must_use]
+    pub fn new(store: Arc<ChainStore>, rules: Arc<dyn RulesAt>) -> Self {
+        Self { store, rules }
+    }
+}
+
+impl ChainSource for StoreChain {
+    fn read<R>(&self, f: impl FnOnce(&ReadSnapshot<'_>, &RuleSet) -> R) -> Result<R, ShimFault> {
+        let snap = self.store.begin_read().map_err(|_| ShimFault)?;
+        let view = SnapshotView::new(&snap);
+        let tip = HeaderView::tip(&view).map_err(|_| ShimFault)?;
+        let height = Tip::connecting_height(tip.as_ref());
+        let rule_set = self.rules.in_force(height);
+        Ok(f(&snap, &rule_set))
+    }
+}
+
+/// Retires the service's pool when the submit path meets a pool-file fault.
+pub type RetirePool = Arc<dyn Fn(&StoreError) + Send + Sync>;
+
+fn lock_production() -> MutexGuard<'static, Option<RustPoolShim<StoreChain>>> {
+    PRODUCTION.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+static PRODUCTION: Mutex<Option<RustPoolShim<StoreChain>>> = Mutex::new(None);
+
+/// Install the node's submit shim. A second install replaces the first.
+pub fn install_production(shim: RustPoolShim<StoreChain>) {
+    *lock_production() = Some(shim);
+}
+
+/// The installed shim, for the RPC start. `None` before the node opens.
+#[must_use]
+pub fn production() -> Option<RustPoolShim<StoreChain>> {
+    lock_production().clone()
+}
+
+/// Clear the installed shim. The node's stop calls this.
+pub fn clear_production() {
+    *lock_production() = None;
+}
 
 /// One committed snapshot of the chain and the rule set in force at the
 /// height the next block connects at — what the shim reads, as one
@@ -102,6 +157,20 @@ pub struct RustPoolShim<C> {
     pool: Arc<Mutex<Pool>>,
     policy: AdmissionPolicy,
     clock: fn() -> UnixSeconds,
+    /// Set by the node: a pool-file fault here retires the service's pool.
+    retire: Option<RetirePool>,
+}
+
+impl<C: Clone> Clone for RustPoolShim<C> {
+    fn clone(&self) -> Self {
+        Self {
+            chain: self.chain.clone(),
+            pool: Arc::clone(&self.pool),
+            policy: self.policy,
+            clock: self.clock,
+            retire: self.retire.clone(),
+        }
+    }
 }
 
 impl<C> core::fmt::Debug for RustPoolShim<C> {
@@ -127,7 +196,16 @@ impl<C: ChainSource> RustPoolShim<C> {
             pool,
             policy,
             clock,
+            retire: None,
         }
+    }
+
+    /// `retire` runs when a commit meets a pool-file fault, so the service
+    /// and the pool handle stop reading that pool (the review of #1165, M5).
+    #[must_use]
+    pub fn retiring(mut self, retire: RetirePool) -> Self {
+        self.retire = Some(retire);
+        self
     }
 
     /// The node's pool, locked under the service's policy: a panic that
@@ -541,6 +619,7 @@ impl<C: ChainSource> SubmitStateShim for RustPoolShim<C> {
             .and_then(Result::ok)
             .and_then(Result::ok);
         let now = (self.clock)();
+        let retire = self.retire.clone();
         let outcome = self.chain.read(|snapshot, rule_set| {
             let mut pool = self.pool();
             let view = SnapshotView::new(snapshot);
@@ -579,6 +658,12 @@ impl<C: ChainSource> SubmitStateShim for RustPoolShim<C> {
                 // paying at least as much — the C++ insert-tail prune's
                 // answer.
                 Ok(Admission::PoolFull) => CommitOutcome::PrunedOnInsert,
+                Err(shekyl_mempool::PoolFault::Store(fault)) => {
+                    if let Some(retire) = &retire {
+                        retire(&fault);
+                    }
+                    CommitOutcome::InternalFault
+                }
                 Ok(Admission::Refused(_)) | Err(_) => CommitOutcome::InternalFault,
             }
         });

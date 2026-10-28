@@ -223,6 +223,7 @@ impl Node {
             Arc::new(Metrics::new()),
         ));
         let pool = open_pool(&store, &pool_path, rules)?;
+        let submit_pool = Arc::clone(&pool);
         let departed = pool_departed(Arc::clone(&pool));
         shekyl_ffi::pool_ffi::install(
             Arc::clone(&store),
@@ -329,6 +330,21 @@ impl Node {
             }
         };
         let pool_health = service.pool_health();
+        shekyl_daemon_rpc::submit::install_production(
+            shekyl_daemon_rpc::submit::RustPoolShim::new(
+                shekyl_daemon_rpc::submit::StoreChain::new(
+                    Arc::clone(&store),
+                    Arc::new(RulesOf(rules)),
+                ),
+                submit_pool,
+                AdmissionPolicy::GENESIS,
+                wall_now,
+            )
+            .retiring(Arc::new({
+                let health = pool_health.clone();
+                move |fault| health.retire(fault)
+            })),
+        );
         let rewinder = service.rewinder();
         let at_open = sync_at_open(network);
         tracing::info!(
@@ -401,7 +417,7 @@ impl Node {
         })
     }
 
-    /// The handles the RPC server carries. Live routes do not read them yet.
+    /// The handles the RPC server carries.
     #[must_use]
     pub fn handles(&self) -> Handles {
         self.handles.clone()
@@ -477,6 +493,7 @@ impl Node {
         // and a handle may keep mining control alive past the node.
         self.mining.close();
         shekyl_ffi::pool_ffi::uninstall();
+        shekyl_daemon_rpc::submit::clear_production();
         let Some(runtime) = self
             .runtime
             .lock()

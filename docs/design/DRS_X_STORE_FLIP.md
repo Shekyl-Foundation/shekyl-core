@@ -256,7 +256,7 @@ Each site's semantics are named, and L14 closes. Owner: PR 2's first commit, a c
 
 This discharges FOLLOWUPS "FL-R3-STORE (consumer half)".
 
-**One divergence the flip makes on purpose.** The C++ prices the burn on gross `already_generated_coins`. The Rust owner prices it on the validator's net circulating supply (FL-R16c; `FEE_LADDER_DERIVATION.md` §11.1 item 10). Quote and admission move to the net supply together. It is a **Design** row in DX-Q8's divergence register, citing FL-R16c. Its evidence is a comparison across the E2 corpus: the Rust floor is at most the C++ floor at every height, and equal wherever the burn through the parent is 0. No trace exports the C++ ring's floor today (`rust/shekyl-chain-ingest/src/vectors_tests/relay_floor.rs:18`–`:19`), so the flip PR builds that export and runs the comparison.
+**One divergence the flip makes on purpose.** The C++ prices the burn on gross `already_generated_coins`. The Rust owner prices it on the validator's net circulating supply (FL-R16c; `FEE_LADDER_DERIVATION.md` §11.1 item 10). Quote and admission move to the net supply together. It is a **Design** row in DX-Q8's divergence register, citing FL-R16c.
 
 **The flip updates FL-R16c's "Not in scope" note** (`FEE_LADDER_DERIVATION.md:1602`): `ChainView::burned_through` (`rust/shekyl-chain-rules/src/view.rs:480`) is the per-height fact the note says no store had, and the ring is deleted.
 

@@ -36,7 +36,7 @@ use crate::handles::Handles;
 use crate::middleware::DEFAULT_BODY_LIMIT;
 use crate::options::{OptionsAbsent, OptionsFacts};
 use crate::shard_view::{ShardViewFacts, SkeletonAbsent};
-use crate::submit::{DaemonSubmitEngine, DaemonTxVerifier, FfiSubmitShim, SubmitEngine};
+use crate::submit::DaemonSubmitEngine;
 
 use crate::authority::Authority;
 use axum::http::{HeaderValue, Method};
@@ -419,14 +419,11 @@ where
 pub async fn serve_listeners(
     core: Arc<CoreRpc>,
     config: ServerConfig,
+    submit_engine: Arc<DaemonSubmitEngine>,
     admin: Vec<BoundListener>,
     view: Vec<BoundListener>,
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let submit_engine = Arc::new(SubmitEngine::new(
-        FfiSubmitShim::new(core.clone()),
-        DaemonTxVerifier,
-    ));
     let conn_tracker = ConnTracker::new(config.conn_limits);
     let router_at = |authority: Authority| {
         let state = Arc::new(AppState {
