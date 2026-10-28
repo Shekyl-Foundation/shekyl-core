@@ -8,11 +8,9 @@
 //! carried in `docs/design/RPC_WIRE.md`).
 //!
 //! A handler never touches the FFI: it asks a [`ChainFacts`] for what it
-//! needs and decides the rest itself. [`FfiChainFacts`] is today's only
-//! implementation, reading the C++ core through `shekyl_rpc_chain_tip` and
-//! its siblings (`src/rpc/rpc_facts_ffi.h`). When the Rust chain
-//! store lands (DRS-E) a second implementation reads it directly and this
-//! one is deleted; the handlers and their tests do not move.
+//! needs and decides the rest itself. The live implementation is
+//! [`crate::store_facts::StoreFacts`]. [`FfiChainFacts`] converts the C++
+//! facts shim and is not what the handlers or the in-process console call.
 //!
 //! The shim holds **no policy**: it converts PODs to typed facts and maps
 //! return codes onto [`FactsFault`]. A core-reported `0` target is C5's

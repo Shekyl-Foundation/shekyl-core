@@ -40,6 +40,8 @@ use crate::read_facts::{
 pub trait ChainRead: ChainFacts + InfoFacts + ChainReadFacts {
     /// This object as the chain-facts trait the method functions take.
     fn as_chain_facts(&self) -> &dyn ChainFacts;
+    /// This object as the info-facts trait `get_info` takes.
+    fn as_info_facts(&self) -> &dyn InfoFacts;
 }
 
 impl<T> ChainRead for T
@@ -47,6 +49,10 @@ where
     T: ChainFacts + InfoFacts + ChainReadFacts,
 {
     fn as_chain_facts(&self) -> &dyn ChainFacts {
+        self
+    }
+
+    fn as_info_facts(&self) -> &dyn InfoFacts {
         self
     }
 }
