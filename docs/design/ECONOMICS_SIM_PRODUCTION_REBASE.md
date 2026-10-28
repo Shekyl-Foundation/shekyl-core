@@ -2143,18 +2143,19 @@ third-fee cell in E15-4 exhibits.
 on two aggregate columns.** The production header stops saying
 "unrounded". Ordinary-fee means and the claim sentence move by one unit
 in the last printed place, including one carry (`0.9859` → `0.9860`).
-Closed shards move by 4 (`sustained_growth` year 20, 1 007 124 606 →
-1 007 124 610) and by 1 (`chain_bootstrap`, 3 787 489 → 3 787 490). The
-stuffer shape stays 8-in/1-out. The control arm's fee figures do not
-move. The lattice-step column is new. Year 1 on the baseline is
-**0.0084 bp**, inside the registered (0.003, 0.011). A fee that prints
-`0.0001` SKL is **169.4915 bp** on `sustained_growth` from year 30,
-inside 50–200. The miss: the A4 decomposition's pool and revenue on
-`sustained_growth` move by 2.4 and 1.1 SKL (`144045.3` → `144047.7`,
-`66011.1` → `66012.2`), and its fee column moves by up to 1.4 SKL
-(`late_chain_tail` 20 966.1 → 20 967.4), more than one unit in the last
-place. Those are sums over a campaign, and the pool move follows the
-four-shard change.
+`sustained_growth`'s year-20 `final_outputs` move by 4 (1 007 124 606 →
+1 007 124 610) and its `final_n` stays 2 084 169. `chain_bootstrap`'s
+`final_n` moves by 1 (3 787 489 → 3 787 490). The stuffer shape stays
+8-in/1-out. The control arm's fee figures do not move. The lattice-step
+column is new. Year 1 on the baseline is **0.0084 bp**, inside the
+registered (0.003, 0.011). A fee that prints `0.0001` SKL is
+**169.4915 bp** on `sustained_growth` from year 30, inside 50–200. The
+miss: the A4 decomposition's pool and revenue on `sustained_growth` move
+by 2.4 and 1.1 SKL (`144045.3` → `144047.7`, `66011.1` → `66012.2`), and
+its fee column moves by up to 1.4 SKL (`late_chain_tail` 20 966.1 →
+20 967.4), more than one unit in the last place. Those columns sum a
+campaign's fees into the burn the decomposition reads. `sustained_growth`'s
+closed-shard count does not move.
 
 **E15-4. Held.** Depth 24, 1-in/1-out, rate 2 182 818: the unrounded
 fixed point is 34 359 738 138, rounding it up is 34 359 739 000, and the
