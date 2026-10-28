@@ -120,12 +120,24 @@ namespace cryptonote
   //-----------------------------------------------------------------------------------
   uint64_t core::get_current_blockchain_height() const
   {
-    return m_blockchain_storage.get_current_blockchain_height();
+    std::uint64_t count = 0;
+    if (shekyl_core_height(&count) != 0)
+      return 0;
+    return count;
   }
   //-----------------------------------------------------------------------------------------------
   void core::get_blockchain_top(uint64_t& height, crypto::hash& top_id) const
   {
-    top_id = m_blockchain_storage.get_tail_id(height);
+    std::uint64_t top = 0;
+    std::uint8_t hash[32] = {};
+    if (shekyl_core_top(&top, hash) != 0)
+    {
+      height = 0;
+      top_id = crypto::null_hash;
+      return;
+    }
+    height = top;
+    std::memcpy(top_id.data, hash, sizeof(hash));
   }
   //-----------------------------------------------------------------------------------------------
   bool core::get_blocks(uint64_t start_offset, size_t count, std::vector<std::pair<cryptonote::blobdata,block>>& blocks, std::vector<cryptonote::blobdata>& txs) const
@@ -891,7 +903,38 @@ namespace cryptonote
   //-----------------------------------------------------------------------------------------------
   bool core::find_blockchain_supplement(const std::list<crypto::hash>& qblock_ids, NOTIFY_RESPONSE_CHAIN_ENTRY::request& resp) const
   {
-    return m_blockchain_storage.find_blockchain_supplement(qblock_ids, resp);
+    std::vector<std::uint8_t> ids;
+    ids.reserve(qblock_ids.size() * sizeof(crypto::hash));
+    for (const auto& id : qblock_ids)
+      ids.insert(ids.end(), reinterpret_cast<const std::uint8_t*>(id.data), reinterpret_cast<const std::uint8_t*>(id.data) + sizeof(id.data));
+    ShekylBuffer hashes{nullptr, 0};
+    ShekylBuffer weights{nullptr, 0};
+    std::uint64_t start = 0, total = 0, lo = 0, hi = 0;
+    const int rc = shekyl_core_supplement(
+      ids.empty() ? nullptr : ids.data(), qblock_ids.size(),
+      &hashes, &weights, &start, &total, &lo, &hi);
+    if (rc != 0)
+    {
+      shekyl_buffer_free(hashes.ptr, hashes.len);
+      shekyl_buffer_free(weights.ptr, weights.len);
+      return false;
+    }
+    resp.start_height = start;
+    resp.total_height = total;
+    resp.cumulative_difficulty = lo;
+    resp.cumulative_difficulty_top64 = hi;
+    resp.m_block_ids.clear();
+    resp.m_block_weights.clear();
+    const std::size_t n = hashes.len / sizeof(crypto::hash);
+    resp.m_block_ids.resize(n);
+    if (n)
+      std::memcpy(resp.m_block_ids.data(), hashes.ptr, hashes.len);
+    resp.m_block_weights.resize(weights.len / sizeof(std::uint64_t));
+    if (!resp.m_block_weights.empty())
+      std::memcpy(resp.m_block_weights.data(), weights.ptr, weights.len);
+    shekyl_buffer_free(hashes.ptr, hashes.len);
+    shekyl_buffer_free(weights.ptr, weights.len);
+    return true;
   }
   //-----------------------------------------------------------------------------------------------
   bool core::get_tx_outputs_gindexs(const crypto::hash& tx_id, std::vector<uint64_t>& indexs) const
@@ -1156,7 +1199,10 @@ namespace cryptonote
   //-----------------------------------------------------------------------------------------------
   difficulty_type core::get_block_cumulative_difficulty(uint64_t height) const
   {
-    return m_blockchain_storage.get_db().get_block_cumulative_difficulty(height);
+    std::uint64_t lo = 0, hi = 0;
+    if (shekyl_core_cumulative_difficulty(height, &lo, &hi) != 0)
+      return 0;
+    return (difficulty_type(hi) << 64) | lo;
   }
   //-----------------------------------------------------------------------------------------------
   size_t core::get_pool_transactions_count(bool include_sensitive_txes) const
@@ -1166,12 +1212,19 @@ namespace cryptonote
   //-----------------------------------------------------------------------------------------------
   bool core::have_block_unlocked(const crypto::hash& id, int *where) const
   {
-    return m_blockchain_storage.have_block_unlocked(id, where);
+    std::int32_t found = SHEKYL_CORE_ABSENT;
+    if (shekyl_core_have_block(reinterpret_cast<const std::uint8_t*>(id.data), &found) != 0)
+      return false;
+    if (found == SHEKYL_CORE_ABSENT)
+      return false;
+    if (where)
+      *where = found;
+    return true;
   }
   //-----------------------------------------------------------------------------------------------
   bool core::have_block(const crypto::hash& id, int *where) const
   {
-    return m_blockchain_storage.have_block(id, where);
+    return have_block_unlocked(id, where);
   }
   //-----------------------------------------------------------------------------------------------
   bool core::get_pool_transactions(std::vector<transaction>& txs, bool include_sensitive_data) const
@@ -1226,7 +1279,23 @@ namespace cryptonote
   //-----------------------------------------------------------------------------------------------
   bool core::get_short_chain_history(std::list<crypto::hash>& ids, uint64_t& current_height) const
   {
-    return m_blockchain_storage.get_short_chain_history(ids, current_height);
+    ShekylBuffer hashes{nullptr, 0};
+    std::uint64_t count = 0;
+    if (shekyl_core_short_history(&hashes, &count) != 0)
+    {
+      shekyl_buffer_free(hashes.ptr, hashes.len);
+      return false;
+    }
+    current_height = count;
+    ids.clear();
+    for (std::size_t i = 0; i + sizeof(crypto::hash) <= hashes.len; i += sizeof(crypto::hash))
+    {
+      crypto::hash id = crypto::null_hash;
+      std::memcpy(id.data, hashes.ptr + i, sizeof(id.data));
+      ids.push_back(id);
+    }
+    shekyl_buffer_free(hashes.ptr, hashes.len);
+    return true;
   }
   //-----------------------------------------------------------------------------------------------
   bool core::handle_get_objects(NOTIFY_REQUEST_GET_OBJECTS::request& arg, NOTIFY_RESPONSE_GET_OBJECTS::request& rsp, cryptonote_connection_context& context)
@@ -1236,7 +1305,12 @@ namespace cryptonote
   //-----------------------------------------------------------------------------------------------
   crypto::hash core::get_block_id_by_height(uint64_t height) const
   {
-    return m_blockchain_storage.get_block_id_by_height(height);
+    crypto::hash id = crypto::null_hash;
+    std::uint8_t hash[32] = {};
+    if (shekyl_core_hash_at(height, hash) != 0)
+      return id;
+    std::memcpy(id.data, hash, sizeof(hash));
+    return id;
   }
   //-----------------------------------------------------------------------------------------------
   bool core::get_block_by_hash(const crypto::hash &h, block &blk, bool *orphan) const

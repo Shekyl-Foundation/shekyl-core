@@ -4356,6 +4356,23 @@ int32_t shekyl_pool_hashes(uint8_t sensitive, ShekylBuffer* out);
 /// shekyl_buffer_free. 0 on success.
 int32_t shekyl_pool_complement(const uint8_t* known, size_t known_count, ShekylBuffer* out);
 
+/// The handler's sync reads, each over one snapshot of the node's chain.
+/// 0 is success. 1 is a refusal (empty chain, unknown height, a history
+/// that does not share genesis). -1 is a store fault. -2 is no door.
+#define SHEKYL_CORE_MAIN 0
+#define SHEKYL_CORE_ALT 1
+#define SHEKYL_CORE_ABSENT 2
+int32_t shekyl_core_height(uint64_t* out_count);
+int32_t shekyl_core_top(uint64_t* out_height, uint8_t* out_hash);
+int32_t shekyl_core_hash_at(uint64_t height, uint8_t* out_hash);
+int32_t shekyl_core_have_block(const uint8_t* hash, int32_t* out_where);
+int32_t shekyl_core_cumulative_difficulty(uint64_t height, uint64_t* out_lo, uint64_t* out_hi);
+int32_t shekyl_core_short_history(ShekylBuffer* hashes, uint64_t* out_count);
+int32_t shekyl_core_supplement(const uint8_t* ids, size_t id_count,
+    ShekylBuffer* hashes, ShekylBuffer* weights,
+    uint64_t* out_start, uint64_t* out_total,
+    uint64_t* out_diff_lo, uint64_t* out_diff_hi);
+
 /// The tip the core last published (see shekyl_core_publish_tip): 1 and the
 /// fields written, 0 and nothing written before the first publish. A null
 /// out pointer is skipped.

@@ -98,6 +98,12 @@ fn now() -> UnixSeconds {
     UnixSeconds::from_raw(secs)
 }
 
+/// The installed chain, for the sync reads (`chain_sync_ffi`).
+pub(crate) fn with_store<R>(f: impl FnOnce(&ChainStore) -> R) -> Option<R> {
+    let door = door()?;
+    Some(f(&door.store))
+}
+
 fn door() -> Option<Installed> {
     // Arcs and Copy fields: the lock does not span the admission.
     let guard = lock(&DOOR);
