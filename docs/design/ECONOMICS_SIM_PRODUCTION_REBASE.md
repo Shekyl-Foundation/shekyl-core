@@ -399,8 +399,9 @@ known" lists describe the tree they were written against.
 **Landed.** ESR-15, 2026-10-27, at `11c3f6818` and `f16b9d79c`. One fee
 loop, `converge_weight_fee_by`. The wallet and the production arm pass
 `quantized_fee`; the flat control arm's weight-fees stay the unrounded
-product. §5.25.1 has the run. The lattice step stays 1 000 atomic; its
-size is the open row in `FEE_LADDER_DERIVATION.md` §12.
+product. In the sim the pricer is part of `PerByteRate`, stamped when the
+rate is minted. §5.25.1 has the run. The lattice step stays 1 000 atomic;
+its size is the open row in `FEE_LADDER_DERIVATION.md` §12.
 
 **Where the fixture tests run (2026-10-10).** The two `--stage2` narration
 tests are `#[ignore]`d for cost, and until this date no CI lane ran them: on

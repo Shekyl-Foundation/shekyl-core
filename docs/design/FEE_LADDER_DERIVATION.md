@@ -3312,10 +3312,11 @@ as computed, whichever operand resolution is ruled.
 ## §12 The fee lattice and the rounding loop (ESR-15 landed 2026-10-27; the step's size is open)
 
 The fee loop is `converge_weight_fee_by` in `shekyl-tx-weight`. The caller
-supplies the pricer. The wallet and the sim's production arm pass
-`quantized_fee`; the flat control arm passes the unrounded product. Relay
-admission reads the same `quantized_fee`. The loop is held to seven
-properties (ruled 2026-10-24):
+supplies the pricer. The wallet passes `quantized_fee`. In the sim the
+pricer is part of `PerByteRate`, stamped when the rate is minted: a
+production rate is the lattice, and the flat control arm's admission rate
+is the unrounded product. Relay admission reads the same `quantized_fee`.
+The loop is held to seven properties (ruled 2026-10-24):
 
 1. **Never under-pays.** The fee it returns clears admission at the rate it
    was priced at.

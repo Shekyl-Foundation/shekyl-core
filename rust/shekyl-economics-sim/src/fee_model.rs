@@ -73,7 +73,7 @@ pub const SECTION_12_14_FLAT_FEE_ATOMIC: u64 = 100_000_000;
 /// The admission rate the §12.13 stuffer was priced at: 300 atomic per
 /// byte. Nothing in the chain charges it — the chain's admission rate is
 /// the relay floor. Kept as the control arm's value and nowhere else.
-pub const SECTION_12_13_ADMISSION_RATE: PerByteRate = PerByteRate::from_atomic(300);
+pub const SECTION_12_13_ADMISSION_RATE: PerByteRate = PerByteRate::unrounded(300);
 
 /// Thousandths in one: the multiplier that leaves a rung unchanged.
 const MILLI: u64 = 1_000;
@@ -121,16 +121,6 @@ impl FeeModel {
         multiplier_milli: MILLI,
     };
 
-    /// Production pays the wallet's lattice. The flat control arm's
-    /// weight-fees stay unrounded: that admission rate is not a chain fee.
-    #[must_use]
-    pub(crate) const fn fee_rounding(self) -> crate::calibration::FeeRounding {
-        match self {
-            Self::FlatControl { .. } => crate::calibration::FeeRounding::Unrounded,
-            Self::ProductionStandard { .. } => crate::calibration::FeeRounding::Lattice,
-        }
-    }
-
     /// The flat fee, if this arm charges one. `None` for an arm whose fee
     /// depends on height — which is every arm but the control.
     #[must_use]
@@ -150,12 +140,9 @@ impl FeeModel {
                 // The multiplier scales the rate. The fee is the fixed point
                 // of that rate: scaling an already converged fee would price
                 // a varint the payer does not write.
-                let rate = scaled_rate(ladder_at(at).standard, multiplier_milli);
-                ordinary_tx_fee(
-                    at.chain_leaves,
-                    rate,
-                    crate::calibration::FeeRounding::Lattice,
-                )
+                let rate = scaled_lattice_rate(ladder_at(at).standard, multiplier_milli);
+                ordinary_tx_fee(at.chain_leaves, rate)
+                    .expect("the standard rung does not price an ordinary transaction")
             }
         }
     }
@@ -178,7 +165,7 @@ impl FeeModel {
     pub fn admission_rate(self, at: &FeePoint<'_>) -> PerByteRate {
         match self {
             Self::FlatControl { admission_rate, .. } => admission_rate,
-            Self::ProductionStandard { .. } => PerByteRate::from_atomic(ladder_at(at).economy),
+            Self::ProductionStandard { .. } => PerByteRate::lattice(ladder_at(at).economy),
         }
     }
 
@@ -289,12 +276,14 @@ impl FeeModel {
     }
 }
 
-/// The per-byte rate after the run's multiplier. At [`MILLI`] the rate is
-/// unchanged.
-fn scaled_rate(rate_per_byte: u64, multiplier_milli: u64) -> PerByteRate {
-    let scaled =
-        u128::from(rate_per_byte).saturating_mul(u128::from(multiplier_milli)) / u128::from(MILLI);
-    PerByteRate::from_atomic(u64::try_from(scaled).unwrap_or(u64::MAX))
+/// The production per-byte rate after the run's multiplier, on the wallet's
+/// lattice. At [`MILLI`] the count is unchanged. The pricer is lattice
+/// because only the production arm scales a rung. The product of two `u64`s
+/// fits in `u128`, so the division is exact; a count that does not fit the
+/// rate is a refusal, not a rate of `u64::MAX`.
+fn scaled_lattice_rate(rate_per_byte: u64, multiplier_milli: u64) -> PerByteRate {
+    let scaled = u128::from(rate_per_byte) * u128::from(multiplier_milli) / u128::from(MILLI);
+    PerByteRate::lattice(u64::try_from(scaled).expect("a scaled rung fits the per-byte rate"))
 }
 
 /// The production ladder at `at`: every rung comes from this one call, so

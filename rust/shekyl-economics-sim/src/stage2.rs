@@ -29,9 +29,10 @@ use crate::burden::{
     OUTPUTS_PER_TX_NORMAL, REPLICAS_PER_SHARD, SHARD_BYTES, SKL_FIAT_PRICE_BAND,
 };
 use crate::calibration::{
-    rucknium_shards_equivalent, stuffer_campaign, stuffer_cost_per_shard_atomic, stuffer_shape,
-    stuffer_txs_per_shard, sustained_stuffer_cost_per_shard_atomic, tree_depth_for_leaves,
-    PerByteRate, RUCKNIUM_DURATION_DAYS, RUCKNIUM_SPAM_BYTES_GB, RUCKNIUM_SPAM_FEES_XMR,
+    required_price, rucknium_shards_equivalent, stuffer_campaign, stuffer_cost_per_shard_atomic,
+    stuffer_shape, stuffer_txs_per_shard, sustained_stuffer_cost_per_shard_atomic,
+    tree_depth_for_leaves, PerByteRate, RUCKNIUM_DURATION_DAYS, RUCKNIUM_SPAM_BYTES_GB,
+    RUCKNIUM_SPAM_FEES_XMR,
 };
 use crate::chain_cursor::{ChainCursor, ChainStep};
 use crate::engine::{emitted_at_start, ScenarioConfig, SimParams};
@@ -877,8 +878,7 @@ fn print_stuffer_cost_curve(
     admission: &AdmissionAtShards,
 ) -> fmt::Result {
     let rep = rucknium_shards_equivalent();
-    let rounding = params.fee.fee_rounding();
-    let shape0 = stuffer_shape(tree_depth_for_leaves(1), admission.at(1), rounding);
+    let shape0 = required_price(stuffer_shape(tree_depth_for_leaves(1), admission.at(1)));
     writeln!(
         out,
         "\nA4 (W9) stuffer cost — max-archival-bytes-per-fee shape ({SHAPE}, searched over every\n\
@@ -915,13 +915,14 @@ fn print_stuffer_cost_curve(
         let rate = admission.at(n_shards);
         let chain_leaves = crate::burden::honest_leaves_at_closed_shards(n_shards);
         let depth = tree_depth_for_leaves(chain_leaves);
-        let shape = stuffer_shape(depth, rate, rounding);
-        let fee_tx_skl = shape.tx_fee_atomic(depth, rate, rounding) as f64 / COIN;
-        let txs = stuffer_txs_per_shard(depth, rate, rounding);
+        let shape = required_price(stuffer_shape(depth, rate));
+        let fee_tx_skl = required_price(shape.tx_fee_atomic(depth, rate)) as f64 / COIN;
+        let txs = required_price(stuffer_txs_per_shard(depth, rate));
         let cost_shard_skl =
-            stuffer_cost_per_shard_atomic(chain_leaves, rate, rounding) as f64 / COIN;
+            required_price(stuffer_cost_per_shard_atomic(chain_leaves, rate)) as f64 / COIN;
         let sustained_skl =
-            sustained_stuffer_cost_per_shard_atomic(chain_leaves, rate, rounding) as f64 / COIN;
+            required_price(sustained_stuffer_cost_per_shard_atomic(chain_leaves, rate)) as f64
+                / COIN;
         writeln!(
             out,
             "{n_shards:<15} {depth:>5} {:>12} {fee_tx_skl:>14.6} {txs:>9} {cost_shard_skl:>18.4} {sustained_skl:>20.4}{}",
@@ -1032,7 +1033,6 @@ pub struct A4Decomp {
 /// premium, served-work channel. See [`A4Decomp`]; revenue is `capture · Δpool ·
 /// horizon`, cost is stuffing fees + the coupled bond.
 #[must_use]
-#[allow(clippy::too_many_arguments)] // the pricer travels with the rate into the campaign
 fn a4_decompose(
     whole_burn_atomic: u128,
     n: u64,
@@ -1041,7 +1041,6 @@ fn a4_decompose(
     candidate: &EscalationCurve,
     delta: u64,
     horizon_years: u64,
-    rounding: crate::calibration::FeeRounding,
 ) -> A4Decomp {
     let n2 = n.saturating_add(delta);
     // The share-manipulation Δpool on the honest burn — production's floor on
@@ -1082,12 +1081,11 @@ fn a4_decompose(
     // campaign's own outputs can carry it across a layer boundary, and the
     // integrator prices the two sides at their own depths. One-shot cost —
     // the binding figure — with the transaction count rounded once.
-    let fee_skl = stuffer_campaign(
+    let fee_skl = required_price(stuffer_campaign(
         crate::burden::honest_leaves_at_closed_shards(n),
         delta,
         admission_rate,
-        rounding,
-    )
+    ))
     .cost_atomic as f64
         / COIN;
     let bond_skl = (u128::from(ARCHIVAL_BOND_FLOOR_ATOMIC) * u128::from(delta)) as f64 / COIN
@@ -1136,7 +1134,6 @@ fn a4_decompose(
 
 /// The scalar ROI (the gate quantity) — a thin projection of [`a4_decompose`].
 #[must_use]
-#[allow(clippy::too_many_arguments)] // forwards the campaign's rate and its pricer
 fn a4_stuffing_roi(
     whole_burn_atomic: u128,
     n: u64,
@@ -1145,7 +1142,6 @@ fn a4_stuffing_roi(
     candidate: &EscalationCurve,
     delta: u64,
     horizon_years: u64,
-    rounding: crate::calibration::FeeRounding,
 ) -> f64 {
     a4_decompose(
         whole_burn_atomic,
@@ -1155,7 +1151,6 @@ fn a4_stuffing_roi(
         candidate,
         delta,
         horizon_years,
-        rounding,
     )
     .roi
 }
@@ -1225,7 +1220,6 @@ fn a4_candidate_result(
     sigma: &SigmaCache,
     curve: &EscalationCurve,
     is_flat: bool,
-    rounding: crate::calibration::FeeRounding,
 ) -> A4CandidateResult {
     let mut roi_by_hholdings = [0.0_f64; A4_HONEST_HOLDINGS_BAND.len()];
     let mut worst_at = (0u64, 0u64, 0u64);
@@ -1244,7 +1238,6 @@ fn a4_candidate_result(
                         curve,
                         delta,
                         h,
-                        rounding,
                     );
                     if roi > roi_by_hholdings[k] {
                         roi_by_hholdings[k] = roi;
@@ -1260,7 +1253,6 @@ fn a4_candidate_result(
                                 curve,
                                 delta,
                                 h,
-                                rounding,
                             ));
                         }
                     }
@@ -1292,7 +1284,6 @@ fn a4_candidate_result(
 fn a4_stuffing_report(
     out: &mut impl fmt::Write,
     folded: &[FoldedScenario],
-    rounding: crate::calibration::FeeRounding,
 ) -> Result<Vec<A4ScenarioResult>, fmt::Error> {
     writeln!(
         out,
@@ -1327,10 +1318,10 @@ fn a4_stuffing_report(
     for scenario in folded {
         let aggs = scenario.native();
         let sigma = SigmaCache::build(aggs);
-        let flat25 = a4_candidate_result(aggs, &sigma, &flat_25(), true, rounding);
+        let flat25 = a4_candidate_result(aggs, &sigma, &flat_25(), true);
         let candidates: Vec<A4CandidateResult> = family()
             .iter()
-            .map(|c| a4_candidate_result(aggs, &sigma, c, false, rounding))
+            .map(|c| a4_candidate_result(aggs, &sigma, c, false))
             .collect();
         let last = A4_HONEST_HOLDINGS_BAND.len() - 1;
         // Worst candidate at the realistic (index-0) end — the gate binds here.
@@ -1496,9 +1487,8 @@ fn a3_stranding_report(
     if years.is_empty() {
         return Ok(());
     }
-    let rounding = params.fee.fee_rounding();
     let claim_skl = |a: &A1YearAgg| {
-        ordinary_tx_fee(a.cumulative_outputs, a.admission_rate, rounding) as f64 / COIN
+        required_price(ordinary_tx_fee(a.cumulative_outputs, a.admission_rate)) as f64 / COIN
     };
     let (first, last) = (years[0], years[years.len() - 1]);
     writeln!(
@@ -1534,7 +1524,7 @@ fn a3_stranding_report(
     for (label, &yi) in ["early", "mid", "late"].iter().zip(picks.iter()) {
         let a = years[yi];
         let budget_per_epoch = per_epoch_atomic(a1_shipped_budget_atomic(a, &flat_25()));
-        let claim_cost = ordinary_tx_fee(a.cumulative_outputs, a.admission_rate, rounding);
+        let claim_cost = required_price(ordinary_tx_fee(a.cumulative_outputs, a.admission_rate));
         for &archivers in &A3_ARCHIVER_BAND {
             let pre = crate::stranding::measure(
                 budget_per_epoch,
@@ -1583,7 +1573,10 @@ fn a3_stranding_report(
         .find(|&a| crate::stranding::mean_replication(a, early.n) > g)
         .expect("replication grows without bound in the archiver count");
     let early_budget = per_epoch_atomic(a1_shipped_budget_atomic(early, &flat_25()));
-    let early_claim = ordinary_tx_fee(early.cumulative_outputs, early.admission_rate, rounding);
+    let early_claim = required_price(ordinary_tx_fee(
+        early.cumulative_outputs,
+        early.admission_rate,
+    ));
     let cliff_pre = crate::stranding::measure(
         early_budget,
         early.n,
@@ -1643,11 +1636,7 @@ fn a3_stranding_report(
 /// Prediction: the capped column vanishes, the realistic-end numbers become the
 /// only numbers, and `fee_mult_to_close` is unchanged — because reopen (c) was
 /// sized against the realistic end already.
-fn oq4_deletion_recheck(
-    out: &mut impl fmt::Write,
-    baseline: &FoldedScenario,
-    rounding: crate::calibration::FeeRounding,
-) -> fmt::Result {
+fn oq4_deletion_recheck(out: &mut impl fmt::Write, baseline: &FoldedScenario) -> fmt::Result {
     let aggs = baseline.native();
     let Some(a) = aggs.iter().rfind(|a| a.n > 0) else {
         return Ok(());
@@ -1691,7 +1680,6 @@ fn oq4_deletion_recheck(
             &curve,
             delta,
             horizon,
-            rounding,
         );
         writeln!(
             out,
@@ -1900,7 +1888,7 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
     // stale band behind.
     let oq2_n = oq2_corpus_samples(&trajectories[0]);
     crate::admission::oq2_report(out, &A3_ARCHIVER_BAND, &oq2_n)?;
-    oq4_deletion_recheck(out, baseline, params.fee.fee_rounding())?;
+    oq4_deletion_recheck(out, baseline)?;
     // A2 (W6) — now unblocked by the D3 closure. Budget from the A1-conditional
     // envelope: the strongest surviving candidate's pool at the scenario's n.
     {
@@ -1922,15 +1910,9 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
         let econ = params.economic();
         let forfeit =
             crate::swing::forfeit_at_the_ceiling(params.emission_curve_asymptote / 2, &econ);
-        crate::swing::a6_report(
-            out,
-            &ESCALATION_PREVIEW_N,
-            forfeit,
-            &admission,
-            params.fee.fee_rounding(),
-        )?;
+        crate::swing::a6_report(out, &ESCALATION_PREVIEW_N, forfeit, &admission)?;
     }
-    let a4 = a4_stuffing_report(out, &folded, params.fee.fee_rounding())?;
+    let a4 = a4_stuffing_report(out, &folded)?;
 
     // A5 / TJ-4 / TJ-7 share one per-shard post-D1/D2 reward operand family
     // (see [`shard_reward_operands`]). A5 takes the MAX (stronger forfeit ⇒
@@ -2346,27 +2328,9 @@ mod tests {
         };
         let sigma = honest_sigma_work_milli(a.n, DQ2H_TAIL, 64);
         let rate = a.admission_rate;
-        let rounding = params.fee.fee_rounding();
-        let roi_steep = a4_stuffing_roi(
-            a.whole_burn_atomic,
-            a.n,
-            rate,
-            sigma,
-            &steep,
-            10_000,
-            10,
-            rounding,
-        );
-        let roi_shallow = a4_stuffing_roi(
-            a.whole_burn_atomic,
-            a.n,
-            rate,
-            sigma,
-            &shallow,
-            10_000,
-            10,
-            rounding,
-        );
+        let roi_steep = a4_stuffing_roi(a.whole_burn_atomic, a.n, rate, sigma, &steep, 10_000, 10);
+        let roi_shallow =
+            a4_stuffing_roi(a.whole_burn_atomic, a.n, rate, sigma, &shallow, 10_000, 10);
         assert!(
             roi_steep >= roi_shallow,
             "steeper share must not lower served-work ROI: {roi_steep} < {roi_shallow}"
@@ -2383,7 +2347,6 @@ mod tests {
             &steep,
             10_000,
             10,
-            rounding,
         );
         let roi_spread = a4_stuffing_roi(
             a.whole_burn_atomic,
@@ -2393,7 +2356,6 @@ mod tests {
             &steep,
             10_000,
             10,
-            rounding,
         );
         assert!(
             roi_capped >= roi_spread,

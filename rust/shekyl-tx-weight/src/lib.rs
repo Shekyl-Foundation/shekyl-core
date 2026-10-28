@@ -314,7 +314,7 @@ const U64_VARINT_BYTES_MAX: usize = 10;
 /// fixed point changes `varint_len(fee)`, and a `u64` has at most
 /// [`U64_VARINT_BYTES_MAX`] such lengths. One further pass is the agreement
 /// check, so the loop returns by equality rather than by exhaustion.
-pub const WEIGHT_FEE_FIXPOINT_PASSES: usize = U64_VARINT_BYTES_MAX + 1;
+const WEIGHT_FEE_FIXPOINT_PASSES: usize = U64_VARINT_BYTES_MAX + 1;
 
 /// The one fee loop. `price` maps a weight to the fee that weight is charged,
 /// and the fee comes back as the weight's next argument because the wire
