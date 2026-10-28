@@ -104,6 +104,13 @@ pub(crate) fn with_store<R>(f: impl FnOnce(&ChainStore) -> R) -> Option<R> {
     Some(f(&door.store))
 }
 
+/// The installed pool, for a transaction the chain does not hold.
+pub(crate) fn with_pool<R>(f: impl FnOnce(&Pool) -> R) -> Option<R> {
+    let door = door()?;
+    let pool = lock(&door.pool);
+    Some(f(&pool))
+}
+
 fn door() -> Option<Installed> {
     // Arcs and Copy fields: the lock does not span the admission.
     let guard = lock(&DOOR);

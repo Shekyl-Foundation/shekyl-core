@@ -160,9 +160,75 @@ namespace cryptonote
     return true;
   }
   //-----------------------------------------------------------------------------------------------
+  namespace
+  {
+    void free_buffer(ShekylBuffer& buffer)
+    {
+      shekyl_buffer_free(buffer.ptr, buffer.len);
+      buffer.ptr = nullptr;
+      buffer.len = 0;
+    }
+
+    /// One snapshot of the node's chain, then the pool for whatever that
+    /// snapshot does not hold. `pruned` is not a second read: a region this
+    /// node discarded is missing.
+    bool core_tx_blobs(const std::vector<crypto::hash>& ids, std::vector<cryptonote::blobdata>& txs, std::vector<crypto::hash>& missed)
+    {
+      txs.clear();
+      missed.clear();
+      if (ids.empty())
+        return true;
+      std::vector<std::uint8_t> raw(ids.size() * sizeof(crypto::hash));
+      for (std::size_t i = 0; i < ids.size(); ++i)
+        std::memcpy(raw.data() + i * sizeof(crypto::hash), ids[i].data, sizeof(crypto::hash));
+      ShekylBuffer packed{};
+      if (shekyl_core_txs(raw.data(), ids.size(), &packed) != 0)
+      {
+        free_buffer(packed);
+        return false;
+      }
+      const std::uint8_t* cursor = packed.ptr;
+      const std::uint8_t* const end = packed.ptr == nullptr ? nullptr : packed.ptr + packed.len;
+      for (const crypto::hash& id : ids)
+      {
+        if (cursor == nullptr || cursor >= end)
+        {
+          free_buffer(packed);
+          return false;
+        }
+        const std::uint8_t tag = *cursor++;
+        if (tag == 0)
+        {
+          missed.push_back(id);
+          continue;
+        }
+        if (tag != 1 || static_cast<std::size_t>(end - cursor) < 4)
+        {
+          free_buffer(packed);
+          return false;
+        }
+        const std::uint32_t len = static_cast<std::uint32_t>(cursor[0])
+          | (static_cast<std::uint32_t>(cursor[1]) << 8)
+          | (static_cast<std::uint32_t>(cursor[2]) << 16)
+          | (static_cast<std::uint32_t>(cursor[3]) << 24);
+        cursor += 4;
+        if (static_cast<std::size_t>(end - cursor) < len)
+        {
+          free_buffer(packed);
+          return false;
+        }
+        txs.emplace_back(reinterpret_cast<const char*>(cursor), static_cast<std::size_t>(len));
+        cursor += len;
+      }
+      free_buffer(packed);
+      return true;
+    }
+  }
+  //-----------------------------------------------------------------------------------------------
   bool core::get_transactions(const std::vector<crypto::hash>& txs_ids, std::vector<cryptonote::blobdata>& txs, std::vector<crypto::hash>& missed_txs, bool pruned) const
   {
-    return m_blockchain_storage.get_transactions_blobs(txs_ids, txs, missed_txs, pruned);
+    (void)pruned;
+    return core_tx_blobs(txs_ids, txs, missed_txs);
   }
   //-----------------------------------------------------------------------------------------------
   bool core::get_txpool_backlog(std::vector<tx_backlog_entry>& backlog, bool include_sensitive_txes) const
@@ -173,7 +239,20 @@ namespace cryptonote
   //-----------------------------------------------------------------------------------------------
   bool core::get_transactions(const std::vector<crypto::hash>& txs_ids, std::vector<transaction>& txs, std::vector<crypto::hash>& missed_txs, bool pruned) const
   {
-    return m_blockchain_storage.get_transactions(txs_ids, txs, missed_txs, pruned);
+    (void)pruned;
+    std::vector<cryptonote::blobdata> blobs;
+    if (!core_tx_blobs(txs_ids, blobs, missed_txs))
+      return false;
+    txs.clear();
+    txs.reserve(blobs.size());
+    for (const auto& blob : blobs)
+    {
+      transaction tx;
+      if (!parse_and_validate_tx_from_blob(blob, tx))
+        return false;
+      txs.push_back(std::move(tx));
+    }
+    return true;
   }
   //-----------------------------------------------------------------------------------------------
   bool core::get_alternative_blocks(std::vector<block>& blocks) const
@@ -1300,7 +1379,59 @@ namespace cryptonote
   //-----------------------------------------------------------------------------------------------
   bool core::handle_get_objects(NOTIFY_REQUEST_GET_OBJECTS::request& arg, NOTIFY_RESPONSE_GET_OBJECTS::request& rsp, cryptonote_connection_context& context)
   {
-    return m_blockchain_storage.handle_get_objects(arg, rsp);
+    (void)context;
+    std::uint64_t height = 0;
+    if (shekyl_core_height(&height) != 0)
+      return false;
+    rsp.current_blockchain_height = height;
+    rsp.blocks.clear();
+    rsp.missed_ids.clear();
+    for (const crypto::hash& id : arg.blocks)
+    {
+      ShekylBuffer blob{};
+      ShekylBuffer witness{};
+      int32_t alt = 0;
+      std::uint64_t weight = 0;
+      const int32_t rc = shekyl_core_block(reinterpret_cast<const std::uint8_t*>(id.data), &blob, &witness, &alt, &weight);
+      if (rc == SHEKYL_CORE_ABSENT)
+      {
+        shekyl_buffer_free(blob.ptr, blob.len);
+        shekyl_buffer_free(witness.ptr, witness.len);
+        rsp.missed_ids.push_back(id);
+        continue;
+      }
+      if (rc != 0 || blob.ptr == nullptr)
+      {
+        shekyl_buffer_free(blob.ptr, blob.len);
+        shekyl_buffer_free(witness.ptr, witness.len);
+        return false;
+      }
+      block_complete_entry entry;
+      entry.pruned = arg.prune;
+      entry.block_weight = weight;
+      entry.block.assign(reinterpret_cast<const char*>(blob.ptr), blob.len);
+      if (witness.ptr != nullptr && witness.len != 0)
+        entry.attestation_witness.assign(reinterpret_cast<const char*>(witness.ptr), witness.len);
+      shekyl_buffer_free(blob.ptr, blob.len);
+      shekyl_buffer_free(witness.ptr, witness.len);
+      block parsed;
+      if (!parse_and_validate_block_from_blob(entry.block, parsed))
+        return false;
+      std::vector<cryptonote::blobdata> tx_blobs;
+      std::vector<crypto::hash> missed_txs;
+      if (!get_transactions(parsed.tx_hashes, tx_blobs, missed_txs, false))
+        return false;
+      if (!missed_txs.empty())
+      {
+        rsp.missed_ids.insert(rsp.missed_ids.end(), missed_txs.begin(), missed_txs.end());
+        return false;
+      }
+      entry.txs.reserve(tx_blobs.size());
+      for (auto& tx : tx_blobs)
+        entry.txs.emplace_back(std::move(tx), crypto::null_hash);
+      rsp.blocks.push_back(std::move(entry));
+    }
+    return true;
   }
   //-----------------------------------------------------------------------------------------------
   crypto::hash core::get_block_id_by_height(uint64_t height) const
@@ -1315,12 +1446,39 @@ namespace cryptonote
   //-----------------------------------------------------------------------------------------------
   bool core::get_block_by_hash(const crypto::hash &h, block &blk, bool *orphan) const
   {
-    return m_blockchain_storage.get_block_by_hash(h, blk, orphan);
+    ShekylBuffer blob{};
+    ShekylBuffer witness{};
+    int32_t alt = 0;
+    std::uint64_t weight = 0;
+    const int32_t rc = shekyl_core_block(reinterpret_cast<const std::uint8_t*>(h.data), &blob, &witness, &alt, &weight);
+    cryptonote::blobdata bytes;
+    if (rc == 0 && blob.ptr != nullptr)
+      bytes.assign(reinterpret_cast<const char*>(blob.ptr), blob.len);
+    shekyl_buffer_free(blob.ptr, blob.len);
+    shekyl_buffer_free(witness.ptr, witness.len);
+    if (rc != 0 || bytes.empty())
+      return false;
+    if (!parse_and_validate_block_from_blob(bytes, blk))
+      return false;
+    if (orphan)
+      *orphan = alt != 0;
+    return true;
   }
   //-----------------------------------------------------------------------------------------------
   blobdata core::get_block_attestation_witness(const block &blk) const
   {
-    return m_blockchain_storage.get_block_attestation_witness(blk);
+    const crypto::hash id = get_block_hash(blk);
+    ShekylBuffer blob{};
+    ShekylBuffer witness{};
+    int32_t alt = 0;
+    std::uint64_t weight = 0;
+    const int32_t rc = shekyl_core_block(reinterpret_cast<const std::uint8_t*>(id.data), &blob, &witness, &alt, &weight);
+    blobdata out;
+    if (rc == 0 && witness.ptr != nullptr && witness.len != 0)
+      out.assign(reinterpret_cast<const char*>(witness.ptr), witness.len);
+    shekyl_buffer_free(blob.ptr, blob.len);
+    shekyl_buffer_free(witness.ptr, witness.len);
+    return out;
   }
   //-----------------------------------------------------------------------------------------------
   std::string core::print_pool(bool short_format) const

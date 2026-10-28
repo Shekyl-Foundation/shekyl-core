@@ -13,11 +13,13 @@
 
 use shekyl_chain_rules::AtHeight;
 use shekyl_chain_store::codec::BlockInfo;
-use shekyl_chain_store::store::{ChainStore, ReadSnapshot};
-use shekyl_types::{BlockHash, BlockHeight};
+use shekyl_chain_store::store::{AtIndex, ChainStore, Prunable, ReadSnapshot};
+use shekyl_mempool::Pool;
+use shekyl_types::{BlockHash, BlockHeight, TxHash};
+use shekyl_wire::Transaction;
 
 use crate::legacy_types::ShekylBuffer;
-use crate::pool_ffi::with_store;
+use crate::pool_ffi::{with_pool, with_store};
 
 /// How many hashes a chain-entry reply carries, including the split.
 const SUPPLEMENT_LIMIT: u64 = 10_000;
@@ -407,6 +409,192 @@ fn supplement(store: &ChainStore, ids: &[u8]) -> Result<Option<Supplement>, ()> 
         diff_lo,
         diff_hi,
     }))
+}
+
+/// A block the chain holds: wire bytes, attestation witness (empty when the
+/// block stored none), whether it is an alternative, and its weight.
+fn block_bytes(
+    snap: &ReadSnapshot<'_>,
+    id: &BlockHash,
+) -> Result<Option<(Vec<u8>, Vec<u8>, bool, u64)>, ()> {
+    if let Some(height) = snap.height_of(id).map_err(|_| ())? {
+        let blob = match snap.block_blob(height).map_err(|_| ())? {
+            AtHeight::Recorded(raw) => raw.into_wire_bytes(),
+            AtHeight::AboveTip => return Err(()),
+        };
+        let witness = match snap.attestation_witness_at(height).map_err(|_| ())? {
+            AtHeight::Recorded(Some(bytes)) => bytes,
+            AtHeight::Recorded(None) | AtHeight::AboveTip => Vec::new(),
+        };
+        let weight = match snap.block_info(height).map_err(|_| ())? {
+            AtHeight::Recorded(info) => info.weight.to_raw(),
+            AtHeight::AboveTip => return Err(()),
+        };
+        return Ok(Some((blob, witness, false, weight)));
+    }
+    if let Some(alt) = snap.alt_block(id).map_err(|_| ())? {
+        let witness = alt.attestation_witness().unwrap_or(&[]).to_vec();
+        let weight = alt.block_weight().to_raw();
+        return Ok(Some((alt.block().serialize(), witness, true, weight)));
+    }
+    Ok(None)
+}
+
+/// The chain's wire bytes for `id`, when this node still holds the prunable
+/// region. `None` is not on the chain, or the region was discarded.
+fn chain_tx(snap: &ReadSnapshot<'_>, id: &TxHash) -> Result<Option<Vec<u8>>, ()> {
+    let Some(record) = snap.tx_record(id).map_err(|_| ())? else {
+        return Ok(None);
+    };
+    let AtIndex::Recorded(prunable) = snap.tx_prunable(record.location.id).map_err(|_| ())? else {
+        return Ok(None);
+    };
+    let Prunable::Retained(segment) = prunable else {
+        return Ok(None);
+    };
+    Ok(record.wire_bytes(segment))
+}
+
+fn pool_tx(pool: &Pool, id: &TxHash) -> Option<Vec<u8>> {
+    // Shown only. Resolving a stem body would tell the asker this node
+    // holds it (PR2-Q4, `Pool::shown_body`).
+    pool.shown_body(id).map(Transaction::serialize)
+}
+
+/// `hash`'s block. [`OK`] when the chain holds it: `blob` is the wire
+/// bytes, `witness` is empty when the block carries none, `out_alt` is
+/// nonzero for an alternative, and `out_weight` is the block's weight.
+/// [`SHEKYL_CORE_ABSENT`] when it does not. The witness is the block's own,
+/// so an alternative's witness is not read off the main chain's height.
+///
+/// # Safety
+///
+/// `hash` is 32 readable bytes. The buffers and the two outs are writable.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_core_block(
+    hash: *const u8,
+    blob: *mut ShekylBuffer,
+    witness: *mut ShekylBuffer,
+    out_alt: *mut i32,
+    out_weight: *mut u64,
+) -> i32 {
+    if hash.is_null()
+        || blob.is_null()
+        || witness.is_null()
+        || out_alt.is_null()
+        || out_weight.is_null()
+    {
+        return FAULT;
+    }
+    let mut bytes = [0u8; 32];
+    bytes.copy_from_slice(std::slice::from_raw_parts(hash, 32));
+    let id = BlockHash::from_bytes(bytes);
+    let Some(read) = with_store(
+        |store| -> Result<Option<(Vec<u8>, Vec<u8>, bool, u64)>, ()> {
+            let snap = store.begin_read().map_err(|_| ())?;
+            block_bytes(&snap, &id)
+        },
+    ) else {
+        return UNBOUND;
+    };
+    match read {
+        Ok(Some((block, witness_bytes, alt, weight))) => {
+            blob.write(buffer_of(block));
+            witness.write(buffer_of(witness_bytes));
+            out_alt.write(i32::from(alt));
+            out_weight.write(weight);
+            OK
+        }
+        Ok(None) => SHEKYL_CORE_ABSENT,
+        Err(()) => FAULT,
+    }
+}
+
+/// The transactions `hashes` names, in order. Each record is a `u8` (`0`
+/// missing, `1` held) and, when held, a little-endian `u32` length and the
+/// wire bytes. A chain record whose prunable region was discarded is missing
+/// unless the pool still shows the transaction. A stem entry stays missing.
+///
+/// # Safety
+///
+/// `hashes` is readable for `count * 32` bytes when `count` is nonzero.
+/// `out` is writable.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_core_txs(
+    hashes: *const u8,
+    count: usize,
+    out: *mut ShekylBuffer,
+) -> i32 {
+    if out.is_null() || (hashes.is_null() && count != 0) {
+        return FAULT;
+    }
+    let Some(nbytes) = count.checked_mul(32) else {
+        return FAULT;
+    };
+    let raw = if count == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(hashes, nbytes)
+    };
+    let Some(read) = with_store(|store| -> Result<Vec<Option<Vec<u8>>>, ()> {
+        let snap = store.begin_read().map_err(|_| ())?;
+        let mut found = Vec::with_capacity(count);
+        for chunk in raw.chunks(32) {
+            let mut bytes = [0u8; 32];
+            bytes.copy_from_slice(chunk);
+            found.push(chain_tx(&snap, &TxHash::from_bytes(bytes))?);
+        }
+        Ok(found)
+    }) else {
+        return UNBOUND;
+    };
+    let mut found = match read {
+        Ok(found) => found,
+        Err(()) => return FAULT,
+    };
+    let missing: Vec<TxHash> = found
+        .iter()
+        .enumerate()
+        .filter(|(_, slot)| slot.is_none())
+        .map(|(index, _)| {
+            let mut bytes = [0u8; 32];
+            let start = index * 32;
+            bytes.copy_from_slice(&raw[start..start + 32]);
+            TxHash::from_bytes(bytes)
+        })
+        .collect();
+    if !missing.is_empty() {
+        let Some(pooled) = with_pool(|pool| {
+            missing
+                .iter()
+                .map(|id| pool_tx(pool, id))
+                .collect::<Vec<_>>()
+        }) else {
+            return UNBOUND;
+        };
+        let mut from_pool = pooled.into_iter();
+        for slot in &mut found {
+            if slot.is_none() {
+                *slot = from_pool.next().flatten();
+            }
+        }
+    }
+    let mut packed = Vec::new();
+    for slot in found {
+        match slot {
+            None => packed.push(0),
+            Some(bytes) => {
+                let Ok(len) = u32::try_from(bytes.len()) else {
+                    return FAULT;
+                };
+                packed.push(1);
+                packed.extend_from_slice(&len.to_le_bytes());
+                packed.extend_from_slice(&bytes);
+            }
+        }
+    }
+    out.write(buffer_of(packed));
+    OK
 }
 
 #[cfg(test)]

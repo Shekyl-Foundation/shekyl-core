@@ -4372,6 +4372,19 @@ int32_t shekyl_core_supplement(const uint8_t* ids, size_t id_count,
     ShekylBuffer* hashes, ShekylBuffer* weights,
     uint64_t* out_start, uint64_t* out_total,
     uint64_t* out_diff_lo, uint64_t* out_diff_hi);
+/// The block `hash` names. 0 when held: `blob` is the wire bytes, `witness`
+/// is empty when the block carries none (freed with shekyl_buffer_free),
+/// `out_alt` is nonzero for an alternative, `out_weight` is the block's
+/// weight. SHEKYL_CORE_ABSENT when the chain does not hold it. The witness
+/// is that block's own, including an alternative's.
+int32_t shekyl_core_block(const uint8_t hash[32], ShekylBuffer* blob,
+    ShekylBuffer* witness, int32_t* out_alt, uint64_t* out_weight);
+/// The transactions `hashes` names, `count` of them, in order. `out` is a
+/// record per hash: u8 0 when missing, or u8 1, a little-endian u32 length
+/// and the wire bytes when held. A discarded prunable region is missing
+/// unless the pool still shows the transaction. A stem entry stays missing.
+/// Freed with shekyl_buffer_free. 0 on success.
+int32_t shekyl_core_txs(const uint8_t* hashes, size_t count, ShekylBuffer* out);
 
 /// The tip the core last published (see shekyl_core_publish_tip): 1 and the
 /// fields written, 0 and nothing written before the first publish. A null
