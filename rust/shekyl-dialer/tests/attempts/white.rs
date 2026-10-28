@@ -119,7 +119,7 @@ impl WhiteRig {
     /// fresh gray addresses each fail at once (gray is drawn while white is
     /// under its floor), and stay cooling while the white test runs.
     fn prime_quiet(&mut self) {
-        let quiet = shekyl_peerlist::dial_profile(self.connector).quiet;
+        let quiet = shekyl_peerlist::dial_profile(self.connector).quiet();
         self.advance(Duration::from_nanos(quiet.span_nanos));
         let k = usize::try_from(quiet.attempts).expect("small");
         let (primers, cause): (Vec<NetworkAddress>, CloseCause) = match self.connector {
@@ -262,7 +262,7 @@ fn with_one_session_held_white_failures_demote() {
             .find(|address| !held.contains(*address))
             .cloned()
             .expect("one not held");
-        let span = shekyl_peerlist::dial_profile(connector).quiet.span_nanos;
+        let span = shekyl_peerlist::dial_profile(connector).quiet().span_nanos;
         rig.advance(Duration::from_nanos(span));
         rig.fail_one_test();
         assert!(
@@ -276,16 +276,16 @@ fn with_one_session_held_white_failures_demote() {
 /// profile brief, test 3). Clearnet's window is its dial deadline: a white
 /// test whose first attempt times out at the deadline has used the whole
 /// window, so it demotes with no redial; a refused connect is not a
-/// timeout and waits for its redial. The connector refuses a published
-/// window: its profile is protocol data.
+/// timeout and waits for its redial. A publish does not move that
+/// deadline: it is protocol data.
 #[test]
 fn a_clearnet_white_redial_is_decided_by_the_clearnet_window() {
-    let deadline = match shekyl_peerlist::dial_profile(CLEARNET).window {
-        shekyl_transport_layer::WindowSource::DialDeadline(nanos) => Duration::from_nanos(nanos),
-        shekyl_transport_layer::WindowSource::Published => {
-            panic!("clearnet's window is its deadline")
-        }
-    };
+    let profile = shekyl_peerlist::dial_profile(CLEARNET);
+    assert_eq!(
+        profile.window,
+        shekyl_transport_layer::WindowSource::Deadline
+    );
+    let deadline = Duration::from_nanos(profile.dial_deadline_nanos);
     let mut rig = WhiteRig::new(CLEARNET, 79, 1);
     let address = rig.white[0].clone();
     assert_eq!(rig.dialer.window(CLEARNET), Some(deadline));
@@ -294,7 +294,7 @@ fn a_clearnet_white_redial_is_decided_by_the_clearnet_window() {
     assert_eq!(
         rig.dialer.window(CLEARNET),
         Some(deadline),
-        "a published window is refused"
+        "a publish does not move the deadline"
     );
     rig.attempt(CloseCause::new(CloseKind::TransportTimeout), deadline);
     assert!(

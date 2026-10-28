@@ -59,7 +59,7 @@ const SOCKS_TIMEOUT: SocksTimeout = shekyl_ffi::tor_link::TOR_SOCKS_TIMEOUT;
 const fn policy() -> Policy {
     Policy::provisional(Duration::from_nanos(
         shekyl_ffi::dialer_ffi::dial_profile(ConnectorId::Tor)
-            .quiet
+            .quiet()
             .span_nanos,
     ))
 }
@@ -906,7 +906,7 @@ mod tests {
         assert_eq!(
             u64::try_from(policy().quiet_after.as_nanos()).expect("small"),
             shekyl_ffi::dialer_ffi::dial_profile(ConnectorId::Tor)
-                .quiet
+                .quiet()
                 .span_nanos
         );
     }

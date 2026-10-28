@@ -127,9 +127,6 @@ fn a_push_before_the_dialer_exists_is_refused_not_held() {
     );
 }
 
-/// A dialer is built with no Tor window: until a managed Tor's route is
-/// published, no Tor's `SocksTimeout` is known, and every Tor timeout
-/// keeps its retries.
 /// **The start line states what this node discloses** (the dial profile
 /// brief, item 5). With `clearnet-advertise` set, which the daemon hands
 /// over through `set_own_addresses` before the loop starts, the line names
@@ -155,6 +152,9 @@ fn the_start_line_names_the_advertised_clearnet_address() {
     unbind();
 }
 
+/// A dialer is built with no Tor window: until a managed Tor's route is
+/// published, no Tor's `SocksTimeout` is known, and every Tor timeout
+/// keeps its retries.
 #[test]
 fn a_built_dialer_reads_no_tor_window() {
     let _bind = seam_bind_lock().lock();

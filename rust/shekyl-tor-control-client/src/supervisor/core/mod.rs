@@ -56,7 +56,7 @@ pub struct Policy {
     /// nothing about its network, before the posture line says so (§4.2):
     /// a neutral fact, never a cause. The daemon passes the Tor connector's
     /// quiet span S from its dial profile
-    /// (`shekyl_transport_layer::dial_profile(ConnectorId::Tor).quiet.span_nanos`),
+    /// (`shekyl_transport_layer::dial_profile(ConnectorId::Tor).quiet().span_nanos`),
     /// one number for this line and the dialer's quiet guard.
     pub quiet_after: Duration,
 }

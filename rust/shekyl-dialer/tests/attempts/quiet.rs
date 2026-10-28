@@ -125,7 +125,7 @@ impl QuietRig {
 
     /// The connector's quiet threshold: K attempts and the span S.
     fn threshold(&self) -> (u32, Duration) {
-        let quiet = shekyl_peerlist::dial_profile(self.connector).quiet;
+        let quiet = shekyl_peerlist::dial_profile(self.connector).quiet();
         (quiet.attempts, Duration::from_nanos(quiet.span_nanos))
     }
 
@@ -346,7 +346,7 @@ fn a_stream_that_opens_restarts_the_stretch_kept_or_not() {
 #[test]
 fn the_guard_needs_k_unopened_attempts_across_s() {
     for (connector, seed) in [(TOR, 67), (CLEARNET, 68)] {
-        let attempts = shekyl_peerlist::dial_profile(connector).quiet.attempts;
+        let attempts = shekyl_peerlist::dial_profile(connector).quiet().attempts;
         let k = usize::try_from(attempts).expect("small");
         let mut rig = QuietRig::sized(connector, seed, k + 1, false);
         rig.fail_each_once();
@@ -388,7 +388,7 @@ fn the_guard_needs_k_unopened_attempts_across_s() {
 #[test]
 fn with_a_session_held_the_evidence_does_not_hold_the_ladder() {
     for (connector, seed) in [(TOR, 69), (CLEARNET, 70)] {
-        let attempts = shekyl_peerlist::dial_profile(connector).quiet.attempts;
+        let attempts = shekyl_peerlist::dial_profile(connector).quiet().attempts;
         let k = usize::try_from(attempts).expect("small");
         let mut rig = QuietRig::sized(connector, seed, k + 1, true);
         rig.fail_each_once();

@@ -17,7 +17,8 @@
 //! Adding a connector is one row, and the compiler refuses a connector
 //! without one. Every value is protocol data, the same on every node for
 //! that connector (rule 71); none is an operator setting. The one runtime
-//! input is a connector's window when it is [`WindowSource::Published`].
+//! input is a published retry window, and only a connector whose
+//! [`WindowSource`] is [`WindowSource::Published`] reads it.
 
 use shekyl_relay_privacy::params::{MIN_PROVISIONED_OUT_PEERS, P2P_DEFAULT_OUT_PEERS};
 
@@ -68,17 +69,21 @@ pub struct Cooldown {
     pub cap_nanos: u64,
 }
 
-/// Where a connector's dial window comes from: the span after which a
-/// failed attempt has used the connector's whole window, so its test makes
-/// no further attempt (the full-window rule, Rick 2026-10-26).
+/// Where a connector's retry cutoff comes from. An attempt that times out
+/// at or after the cutoff has used the connector's whole window, so its
+/// test makes no further attempt (the full-window rule, Rick 2026-10-26).
+///
+/// The cutoff is not the dial deadline. Every connector has a dial deadline
+/// ([`DialProfile::dial_deadline_nanos`]): how long one attempt may run.
+/// The retry cutoff is that deadline, or a window published with the route.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WindowSource {
-    /// The connector's own dial deadline, in nanoseconds.
-    DialDeadline(u64),
-    /// Published by the connector when its route is published: the managed
-    /// Tor's `SocksTimeout`, read from its earliest expiry. A proxy whose
-    /// timeout this node does not know publishes none, and every timeout
-    /// through it keeps its retries.
+    /// The retry cutoff is the connector's dial deadline. Protocol data.
+    Deadline,
+    /// Published with the route. The managed Tor publishes its
+    /// `SocksTimeout`, read from its earliest expiry. A proxy whose timeout
+    /// this node does not know publishes none, and every timeout through it
+    /// keeps its retries.
     Published,
 }
 
@@ -94,25 +99,30 @@ pub struct QuietThreshold {
     /// K: the smallest k with `p_fail^k < 10⁻³` on a working link at the
     /// half-dead fraction, `p_fail` measured on the floor device.
     pub attempts: u32,
-    /// S: at least one full window, and at least the time K attempts take
-    /// at the connector's bound and pace, in nanoseconds. Computed by
-    /// [`QuietThreshold::derive`], never written as a literal.
+    /// S, in nanoseconds. The approved upper bound
+    /// `ceil(K / bound) × (dial deadline + the longest wake gap)`, computed
+    /// by [`QuietThreshold::derive`] from the row's K, its in-flight bound,
+    /// its dial deadline and its wake. Never written as a literal.
     pub span_nanos: u64,
 }
 
 impl QuietThreshold {
-    /// The threshold for `attempts` (K), with S computed from the values it
-    /// depends on: the connector's in-flight bound, its dial deadline and
-    /// its wake spacing.
+    /// S for `attempts` (K), from the connector's in-flight bound, its dial
+    /// deadline and its wake spacing.
     ///
-    /// K attempts at bound B are `ceil(K / B)` rounds: each slot runs its
-    /// share in turn. An attempt in a round waits at most one wake gap
-    /// (`wake.base_nanos + wake.jitter_nanos`) for its launch and holds its
-    /// slot at most the dial deadline, which no attempt outlasts. So S is
-    /// `ceil(K / B) × (deadline + the longest wake gap)`. It is at least one
-    /// full window: a round is at least the deadline, and the deadline is at
-    /// least the window. If K, the bound, the deadline or the wake moves, S
-    /// follows.
+    /// The product is `ceil(K / bound) × (deadline + the longest wake gap)`.
+    /// It is an approved upper bound for the rows in [`dial_profile`], not a
+    /// trace of the owner loop: that loop launches one dial per wake and
+    /// skips a wake already at the bound. For those rows the product still
+    /// sits above the time K such launches take, and it is at least one dial
+    /// deadline. A published retry window sits below that deadline. If K,
+    /// the bound, the deadline or the wake moves, S follows.
+    ///
+    /// # Panics
+    ///
+    /// In const evaluation, when `attempts` is zero or `in_flight_bound` is
+    /// zero. A row with nothing to count, or no slot to count it in, is not
+    /// a threshold.
     #[must_use]
     pub const fn derive(
         attempts: u32,
@@ -120,6 +130,8 @@ impl QuietThreshold {
         dial_deadline_nanos: u64,
         wake: JitteredSpan,
     ) -> Self {
+        assert!(attempts >= 1, "the quiet guard counts at least one attempt");
+        assert!(in_flight_bound >= 1, "the in-flight bound is at least one");
         let rounds = (attempts as u64).div_ceil(in_flight_bound as u64);
         Self {
             attempts,
@@ -141,12 +153,46 @@ pub struct DialProfile {
     pub retry_waits: RetryWaits,
     /// The cooldown ladder's ends.
     pub cooldown: Cooldown,
-    /// Where the dial window comes from.
+    /// How long one attempt may run, in nanoseconds. The quiet span is
+    /// derived from this, the bound, K and the wake.
+    pub dial_deadline_nanos: u64,
+    /// Where the retry cutoff comes from.
     pub window: WindowSource,
     /// The gap between the dialer's wakes (R3): one wake, one dial.
     pub wake: JitteredSpan,
-    /// The quiet guard's evidence threshold.
-    pub quiet: QuietThreshold,
+    /// K: how many unopened attempts the quiet guard counts. The span S is
+    /// [`Self::quiet`], derived from this, the bound, the dial deadline and
+    /// the wake. Storing K and computing S means a row cannot pair K with
+    /// another row's deadline.
+    pub quiet_attempts: u32,
+}
+
+impl DialProfile {
+    /// The quiet threshold for this row: K as stored, and S derived from
+    /// this row's bound, dial deadline and wake.
+    #[must_use]
+    pub const fn quiet(self) -> QuietThreshold {
+        QuietThreshold::derive(
+            self.quiet_attempts,
+            self.in_flight_bound,
+            self.dial_deadline_nanos,
+            self.wake,
+        )
+    }
+
+    /// The retry cutoff in force, in nanoseconds.
+    ///
+    /// A [`WindowSource::Deadline`] connector answers from its dial deadline
+    /// and ignores `published`. A [`WindowSource::Published`] connector
+    /// answers with the window its route published, or `None` while that
+    /// is unknown.
+    #[must_use]
+    pub const fn retry_cutoff_nanos(self, published: Option<u64>) -> Option<u64> {
+        match self.window {
+            WindowSource::Deadline => Some(self.dial_deadline_nanos),
+            WindowSource::Published => published,
+        }
+    }
 }
 
 /// The retry waits every connector starts from: 5 s + U(0, 5 s) before the
@@ -187,63 +233,78 @@ const WAKE: JitteredSpan = JitteredSpan {
     jitter_nanos: SECOND_NANOS,
 };
 
-/// Clearnet's in-flight bound, named because its quiet span is derived
-/// from it.
+/// Clearnet's in-flight bound. Its quiet span is derived from it.
 const CLEARNET_IN_FLIGHT_BOUND: usize = 1;
 
-/// Tor's in-flight bound, named because its quiet span is derived from it.
+/// Tor's in-flight bound. Its quiet span is derived from it.
 const TOR_IN_FLIGHT_BOUND: usize = 5;
+
+/// Attempts in one clearnet test of a gray address: one. A clearnet dial
+/// ends within its deadline, so a second attempt is a redial, and gray has
+/// not earned one.
+const CLEARNET_GRAY_ATTEMPTS: u8 = 1;
+
+/// Attempts in one clearnet test of a white address: the first, and one
+/// redial before a known-working address demotes (Rick, 2026-10-26).
+const CLEARNET_WHITE_ATTEMPTS: u8 = 2;
+
+/// Attempts in one Tor test, gray or white. A failed dial is often a
+/// descriptor that has not propagated against a peer that is up.
+const TOR_ATTEMPTS_PER_TEST: u8 = 3;
+
+/// Clearnet's K. The 2026-10-27 floor series saw 0 failures in 283 attempts
+/// to live peers (`dial-profile/2026-10-27-clearnet-pfail`). With none
+/// observed, K is read at the 95 % upper bound of the live-failure rate,
+/// about 1.1 %: `p_fail` 0.505 at half dead, so K is 11. The point estimate
+/// would give 10.
+const CLEARNET_QUIET_ATTEMPTS: u32 = 11;
+
+/// Tor's K. The 2026-10-26 short series (`inflight-bound/2026-10-26-final-head`):
+/// 189 of 336 attempts failed at half dead, `p_fail` 0.5625, so K is 13.
+const TOR_QUIET_ATTEMPTS: u32 = 13;
 
 /// `connector`'s dial profile: the only per-connector match for these
 /// values.
 #[must_use]
 pub const fn dial_profile(connector: ConnectorId) -> DialProfile {
     match connector {
-        // Clearnet: a dial ends within 1.4 s, so one at a time costs a wake
-        // or two (the 2026-10-08 interim, an Assumption in §97); one attempt
-        // per gray test, and one redial before a white address demotes.
+        // Clearnet: a dial ends within its deadline, so one at a time costs
+        // a wake or two (the 2026-10-08 interim, an Assumption in §97). The
+        // retry cutoff is that deadline. S is the row's: eleven rounds at
+        // bound 1, each up to the 1.415 s deadline and a 1.5 s wake, 32.065 s.
         ConnectorId::Clearnet => DialProfile {
             target: P2P_DEFAULT_OUT_PEERS,
             in_flight_bound: CLEARNET_IN_FLIGHT_BOUND,
-            attempts: AttemptsPerTest { gray: 1, white: 2 },
+            attempts: AttemptsPerTest {
+                gray: CLEARNET_GRAY_ATTEMPTS,
+                white: CLEARNET_WHITE_ATTEMPTS,
+            },
             retry_waits: RETRY_WAITS,
             cooldown: COOLDOWN,
-            window: WindowSource::DialDeadline(CLEARNET_DIAL_WITHIN_NANOS),
+            dial_deadline_nanos: CLEARNET_DIAL_WITHIN_NANOS,
+            window: WindowSource::Deadline,
             wake: WAKE,
-            // **Derived** (§97, "Gray cooldown"; shekyl-dev data
-            // `dial-profile/2026-10-27-clearnet-pfail`, the floor device):
-            // 0 of 283 attempts to live peers failed. With none observed,
-            // the estimate is read at its bound: the 95 % upper bound of the
-            // live-failure rate, about 1.1 %, gives `p_fail` 0.505 at half
-            // dead and K = 11 (the point estimate gives 10). S is derived:
-            // eleven rounds at bound 1, each up to the 1.415 s deadline and a
-            // 1.5 s wake, 32.065 s.
-            quiet: QuietThreshold::derive(
-                11,
-                CLEARNET_IN_FLIGHT_BOUND,
-                CLEARNET_DIAL_WITHIN_NANOS,
-                WAKE,
-            ),
+            quiet_attempts: CLEARNET_QUIET_ATTEMPTS,
         },
         // Tor: the bound is Measured on the floor device (§97, "In-flight
-        // dial bound"); three attempts per test, since a failed dial is
-        // often a descriptor that has not propagated against a peer that is
-        // up; the window is the managed Tor's, published with its route.
+        // dial bound"). The retry cutoff is the managed Tor's window,
+        // published with its route; the dial deadline stays on the row, and
+        // S is derived from it. Three rounds at bound 5, each up to the
+        // 120 s deadline and a 1.5 s wake, 364.5 s. Every full-window reply
+        // seen (104 to 113 s) is inside the deadline.
         ConnectorId::Tor => DialProfile {
             target: MIN_PROVISIONED_OUT_PEERS,
             in_flight_bound: TOR_IN_FLIGHT_BOUND,
-            attempts: AttemptsPerTest { gray: 3, white: 3 },
+            attempts: AttemptsPerTest {
+                gray: TOR_ATTEMPTS_PER_TEST,
+                white: TOR_ATTEMPTS_PER_TEST,
+            },
             retry_waits: RETRY_WAITS,
             cooldown: COOLDOWN,
+            dial_deadline_nanos: TOR_DIAL_WITHIN_NANOS,
             window: WindowSource::Published,
             wake: WAKE,
-            // **Derived** (§97, "Gray cooldown"; shekyl-dev data
-            // `inflight-bound/2026-10-26-final-head`, the floor device): 189
-            // of 336 attempts failed at half dead, `p_fail` 0.5625, so K = 13.
-            // S is derived: three rounds at bound 5, each up to the 120 s
-            // deadline and a 1.5 s wake, 364.5 s. Every full-window reply
-            // seen (104 to 113 s) is inside the deadline.
-            quiet: QuietThreshold::derive(13, TOR_IN_FLIGHT_BOUND, TOR_DIAL_WITHIN_NANOS, WAKE),
+            quiet_attempts: TOR_QUIET_ATTEMPTS,
         },
     }
 }
@@ -269,12 +330,11 @@ mod tests {
         assert_eq!((clearnet.in_flight_bound, tor.in_flight_bound), (1, 5));
         assert_eq!((clearnet.attempts.gray, clearnet.attempts.white), (1, 2));
         assert_eq!((tor.attempts.gray, tor.attempts.white), (3, 3));
-        assert_eq!(
-            clearnet.window,
-            WindowSource::DialDeadline(CLEARNET_DIAL_WITHIN_NANOS)
-        );
+        assert_eq!(clearnet.dial_deadline_nanos, CLEARNET_DIAL_WITHIN_NANOS);
+        assert_eq!(tor.dial_deadline_nanos, TOR_DIAL_WITHIN_NANOS);
+        assert_eq!(clearnet.window, WindowSource::Deadline);
         assert_eq!(tor.window, WindowSource::Published);
-        assert_eq!((clearnet.quiet.attempts, tor.quiet.attempts), (11, 13));
+        assert_eq!((clearnet.quiet().attempts, tor.quiet().attempts), (11, 13));
         for connector in ConnectorId::ALL {
             let profile = dial_profile(*connector);
             let second = profile.retry_waits.before_second;
@@ -298,43 +358,57 @@ mod tests {
         }
     }
 
-    /// Each connector's quiet span S is derived, not written (the Tor
-    /// lane's review of item 6): `ceil(K / bound)` rounds, each up to the
-    /// connector's dial deadline and its longest wake gap, computed here from
-    /// the named constants, and S covers at least one full window. Those two
-    /// are the properties. The last two assertions are a record of today's
-    /// values, 32.065 s on clearnet and 364.5 s on Tor, as §97, the slice 3
-    /// brief and `TOR_SUPERVISOR.md` §4.2 cite them: if an honest change to K,
-    /// a bound, a deadline or the wake turns only those red, the derivation
-    /// still holds, so update the record here and in those documents.
+    /// Each connector's quiet span S is derived from its own row (the Tor
+    /// lane's review of item 6): `ceil(K / bound)` times the row's dial
+    /// deadline plus its longest wake gap, and S covers at least that
+    /// deadline. Those two are the properties. The last two assertions are
+    /// a record of today's values, 32.065 s on clearnet and 364.5 s on Tor,
+    /// as §97, the slice 3 brief and `TOR_SUPERVISOR.md` §4.2 cite them: if
+    /// an honest change to K, a bound, a deadline or the wake turns only
+    /// those red, the derivation still holds, so update the record here and
+    /// in those documents.
     #[test]
-    fn the_quiet_span_is_derived_from_the_bound_the_deadline_and_the_wake() {
-        for (connector, deadline) in [
-            (ConnectorId::Clearnet, CLEARNET_DIAL_WITHIN_NANOS),
-            (ConnectorId::Tor, TOR_DIAL_WITHIN_NANOS),
-        ] {
-            let profile = dial_profile(connector);
-            let attempts = u64::from(profile.quiet.attempts);
+    fn the_quiet_span_is_derived_from_the_row() {
+        for connector in ConnectorId::ALL {
+            let profile = dial_profile(*connector);
+            let quiet = profile.quiet();
+            let attempts = u64::from(quiet.attempts);
             let bound = profile.in_flight_bound as u64;
             let rounds = attempts.div_ceil(bound);
             let wake = profile.wake.base_nanos + profile.wake.jitter_nanos;
             assert_eq!(
-                profile.quiet.span_nanos,
-                rounds * (deadline + wake),
+                quiet.span_nanos,
+                rounds * (profile.dial_deadline_nanos + wake),
                 "{connector:?}"
             );
-            assert!(profile.quiet.span_nanos >= deadline, "{connector:?}");
-            if let WindowSource::DialDeadline(window) = profile.window {
-                assert!(profile.quiet.span_nanos >= window, "{connector:?}");
-            }
+            assert!(
+                quiet.span_nanos >= profile.dial_deadline_nanos,
+                "{connector:?}"
+            );
         }
         assert_eq!(
-            dial_profile(ConnectorId::Clearnet).quiet.span_nanos,
+            dial_profile(ConnectorId::Clearnet).quiet().span_nanos,
             32_065_000_000
         );
         assert_eq!(
-            dial_profile(ConnectorId::Tor).quiet.span_nanos,
+            dial_profile(ConnectorId::Tor).quiet().span_nanos,
             364_500_000_000
         );
+    }
+
+    /// The retry cutoff is the row's deadline, or the window the route
+    /// published. A publish does not move a deadline connector.
+    #[test]
+    fn the_retry_cutoff_is_the_deadline_or_what_was_published() {
+        let clearnet = dial_profile(ConnectorId::Clearnet);
+        let published = Some(1);
+        assert_eq!(
+            clearnet.retry_cutoff_nanos(published),
+            Some(clearnet.dial_deadline_nanos)
+        );
+        assert_ne!(clearnet.retry_cutoff_nanos(published), published);
+        let tor = dial_profile(ConnectorId::Tor);
+        assert_eq!(tor.retry_cutoff_nanos(None), None);
+        assert_eq!(tor.retry_cutoff_nanos(published), published);
     }
 }

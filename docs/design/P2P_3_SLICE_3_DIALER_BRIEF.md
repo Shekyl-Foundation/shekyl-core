@@ -866,7 +866,7 @@ a failed test cools at the first step and does not climb
 the consecutive count held at least one). The condition is the dialer's
 own evidence, read when a test cools (`shekyl-dialer/src/owner/quiet.rs`);
 any opened stream resets the count and the span. K and S are the
-connector's dial profile's quiet threshold (`dial_profile(connector).quiet`,
+connector's dial profile's quiet threshold (`dial_profile(connector).quiet()`,
 K derived in `DAEMON_RELAY_PRIVACY.md` §97 from each connector's failure
 rate measured on the floor device; S computed from K and the connector's
 bound, dial deadline and wake spacing): clearnet 11 attempts across

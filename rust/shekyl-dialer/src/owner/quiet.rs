@@ -62,7 +62,7 @@ impl Dialer {
     /// profile's quiet threshold); the climb otherwise.
     pub(super) fn ladder(shared: &Shared, connector: ConnectorId, now: Tick) -> Ladder {
         let index = connector.index();
-        let threshold = dial_profile(connector).quiet;
+        let threshold = dial_profile(connector).quiet();
         let held = shared
             .view(connector)
             .held()
