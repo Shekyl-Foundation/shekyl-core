@@ -54,7 +54,7 @@ namespace cryptonote
         change underneath it; the carrier accepts a message and emits its
         windows over the following cadence ticks, up to about a full epoch
         later (`COVER_TRAFFIC_RESTORATION.md` §3.1e). In that window the
-        transaction can be mined and removed by `tx_memory_pool::take_tx`.
+        transaction can be mined and removed by `pool::take_tx`.
 
         Applying a verdict to a transaction the pool no longer holds is not
         merely useless: arming an F-10 stem observation for it charges the
@@ -74,7 +74,7 @@ namespace cryptonote
         Present only for a stem record. Fluff passes `nullopt` and does not
         draw an embargo. A stem with no connector draws the longest measured
         transit. The value is not stored on the txpool entry: the embargo is
-        drawn at `tx_memory_pool::set_relayed`, and every path to it is
+        drawn at `pool::set_relayed`, and every path to it is
         synchronous with a relay event. */
     virtual void on_transactions_relayed(epee::span<const cryptonote::blobdata> tx_blobs, relay_method tx_relay, std::optional<std::uint8_t> stem_connector) = 0;
 
