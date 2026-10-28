@@ -125,57 +125,12 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/check_doc_headings.py
 
-      - name: Run LMDB schema coverage check
-        # Every table in db_lmdb.cpp's SHEKYL_LMDB_TABLES list must have a
-        # section in docs/LMDB_SCHEMA.md, and the doc's stated total must
-        # match the list. Nine live tables had zero mentions when this gate
-        # was written — absence of a section reads as absence of a table.
-        #
-        # Runs even if earlier checks failed, for the same non-masking
-        # reason as above.
-        if: '!cancelled()'
-        run: python3 scripts/ci/check_lmdb_schema_coverage.py
-
-      - name: Run AFC-1 archival forcing register check
-        # The forcing register (docs/design/archival_forcing_cells.tsv) is the
-        # 34-cell map of which archival apply/revert halves a block sequence
-        # can force. Its value is that its citations RESOLVE, and line anchors
-        # into db_lmdb.cpp drift with every edit — a register of stale anchors
-        # is worse than none, because it reads as checked.
-        #
-        # Extraction is deliberately identical to check_lmdb_schema_coverage's
-        # parse_table_list: two gates pinning one construct with independently
-        # written parsers agree by construction today and diverge silently
-        # later. A looser parser here would MISS a future archival table, which
-        # would then be absent from BOTH sides of the set difference and go
-        # green over a table nothing covers.
-        #
-        # Runs even if earlier checks failed, for the same non-masking reason.
-        if: '!cancelled()'
-        run: python3 scripts/ci/check_archival_forcing_cells.py
-
-      - name: Run AFC-1 forcing register self-test
-        # The gate's four legs were bitten by hand when written; a hand bite
-        # is not a pin. These fixtures hold each leg, including the gate's own
-        # regression: the anchor leg once matched any long word from the
-        # free-text note, so a row could resolve to a comment rather than to
-        # code while reading as checked.
-        if: '!cancelled()'
-        run: python3 scripts/ci/test_check_archival_forcing_cells.py
-
-      - name: Run LMDB schema coverage self-test
-        # The write-pattern leg pins SET membership, not cardinality. A
-        # rotation that keeps the blind-upsert count at 10 and changes
-        # the members must go red — that is the defect that produced the
-        # leg. Instance of 47-gate-subject-assertion.mdc / 50-testing.mdc.
-        if: '!cancelled()'
-        run: python3 scripts/ci/test_check_lmdb_schema_coverage.py
-
       - name: Run DRS-P0d digest-v0 coverage check
         # The logical-state digest v0 must name its three families
-        # (core chain, spent_keys, curve root) at the hasher, the LMDB
-        # walker, the FFI, and the audit read-set — and must record the
-        # archival-journal exclusion. Instance of 47-gate-subject-assertion.mdc.
+        # (core chain, spent_keys, curve root) at the hasher, the FFI,
+        # and the audit read-set — and must record the archival-journal
+        # exclusion. The C++ walker left with the LMDB store.
+        # Instance of 47-gate-subject-assertion.mdc.
         if: '!cancelled()'
         run: python3 scripts/ci/check_drs_p0d_digest_coverage.py
 
@@ -445,73 +400,9 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/test_check_shell_gate_exits.py
 
-      - name: Run DRS-C surface map gate
-        # Tier-A A9: blockchain.cpp's store vocabulary is partitioned into
-        # named validation surfaces, every method in exactly one. The gate
-        # RE-DERIVES the vocabulary from the tree it runs on rather than
-        # trusting a verification stamp: §3.5's stamp sat at 97 while the tree
-        # had moved to 102, and the membership moved further than the total
-        # (+7/-3 for a net +4).
-        #
-        # It derives the alias SET from `BlockchainDB *`/`&` declarations
-        # instead of matching one token, and takes the call OPERATOR from the
-        # declaration's sigil (`*` -> `->`, `&` -> `.`). The first version
-        # matched `m_db->` -- the same derivation that built the table -- so it
-        # was green BY CONSTRUCTION over calls made through any other name, and
-        # missed three live methods. Receiver shapes the derivation cannot
-        # follow (`get_db` on sight, an `auto` binding of the store, a
-        # dereferenced call) are REFUSED over the DERIVED alias set, so a new
-        # alias or a new shape fails loudly instead of shrinking the vocabulary.
-        # Instance of 47-gate-subject-assertion.mdc.
-        if: '!cancelled()'
-        run: python3 scripts/ci/check_drs_c_surface_map.py
-
-      - name: Self-test the DRS-C surface map gate
-        # That gate has been wrong twice in the same way: a receiver shape its
-        # derivation could not follow, silently absent from the vocabulary,
-        # with the bijection green over the gap. Hand-run negative controls
-        # caught neither, because they were written from the same mental model
-        # as the derivation. Every shape is pinned here as a case -- collected,
-        # refused, and the near-misses that must be neither.
-        if: '!cancelled()'
-        run: python3 scripts/ci/test_check_drs_c_surface_map.py
-
-      - name: Run redb key-type ordering gate
-        # The bijection gate checks that every table is MAPPED; this one checks
-        # the mapping reproduces LMDB's ORDERING. That gap was not theoretical:
-        # review of the first landing found three MDB_INTEGERKEY tables mapped
-        # as &[u8] and one DUPSORT multimap whose values ignored compare_uint64
-        # — names 49/49 while four orderings were wrong.
-        # Default-flag tables are deliberately unconstrained: several store
-        # BE(x) 8-byte keys, where big-endian byte-lex IS numeric order, so both
-        # u64 and &[u8] are correct and a rule would fail correct code.
-        # Instance of 47-gate-subject-assertion.mdc.
-        if: '!cancelled()'
-        run: python3 scripts/ci/check_redb_schema_key_types.py
-
-      - name: Run redb key-type ordering selftest
-        # The rule function is what makes INTEGERKEY and dupsort-hash32
-        # collapse unskippable; run the fixture that a name-set elif
-        # swallowing zerokval-uint64 tables (block_info, output_txs) fails.
-        if: '!cancelled()'
-        run: python3 scripts/ci/check_redb_schema_key_types.py --selftest
-
       - name: Run redb schema bijection gate
-        # DRS-0 slice B: every table in SHEKYL_LMDB_TABLES has exactly one
-        # redb TableDefinition and vice versa, no duplicates on either side.
-        # The X-macro is the only admissible source: a table can exist
-        # without being on BlockchainDB's interface. Until 2026-09-13 the
-        # settlement pair existed only on BlockchainLMDB, so a schema built
-        # from the abstract interface would have omitted a write path LMDB
-        # has; SO-D8 promoted it since, which closes the instance, not the
-        # class (rationale of record: check_redb_schema_bijection.py header).
-        # Checks NAMES, not types — ordering is the key-type gate above;
-        # comparator evidence is in lmdb_order's tests; class evidence is
-        # per-row in the audit's §12.
-        # Since S-CHAIN-W commit 1 the schema also carries tables LMDB never
-        # had (`RUST_ONLY_TABLES`, a {table: reason} map in schema.rs). A
-        # definition with neither a twin nor an entry there is still red
-        # with the original extra-leg refusal; the map is not a mode switch.
+        # The Rust table definitions are the denominator and TABLE_CLASSES
+        # names each of them. Ordering lives in lmdb_order's pinned vectors.
         # Instance of 47-gate-subject-assertion.mdc; --selftest proves each
         # refusal.
         if: '!cancelled()'

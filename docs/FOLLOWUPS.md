@@ -777,9 +777,6 @@ Default. Lands before genesis if it should exist at launch.
 - **`epee::wipeable_string` mlock-backed allocator [`contrib/epee/include/wipeable_string.h:83`](../contrib/epee/include/wipeable_string.h)**
   - Target: pre-genesis
 
-- **CryptoNote fossil — hardcoded key-image fixup for Monero blocks [`src/blockchain_db/blockchain_db.cpp`](../src/blockchain_db/blockchain_db.cpp)**
-  - Target: pre-genesis
-
 - **RandomX v2 SHA-256 digest of the 7-symbol `randomx.h` surface** beside `fork-pin-sha` in `randomx-v2-sys`. Reopen: pin-bump of `external/randomx-v2` or a tarball-CI need (checkout-hygiene conjunct fired in PR #754). [`RANDOMX_V2_PLAN.md`](./design/RANDOMX_V2_PLAN.md)
   - Target: pre-genesis
 

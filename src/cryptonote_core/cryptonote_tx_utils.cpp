@@ -38,6 +38,8 @@
 #include <iostream>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
+#include <limits>
 #include "include_base_utils.h"
 #include "string_tools.h"
 using namespace epee;
@@ -47,7 +49,7 @@ using namespace epee;
 #include "crypto/pow_randomx.h"
 #include "tx_pqc_verify.h"
 #include "shekyl/shekyl_ffi.h"
-#include "cryptonote_basic/miner.h"
+#include "cryptonote_basic/difficulty.h"
 #include "shekyl/economics.h"
 #include "crypto/crypto.h"
 #include "crypto/hash.h"
@@ -57,6 +59,24 @@ using namespace crypto;
 
 namespace cryptonote
 {
+  namespace
+  {
+    bool find_nonce_for_given_block(const std::function<bool(const block&, uint64_t, const crypto::hash*, crypto::hash&)>& gbh, block& bl, const difficulty_type& diffic, uint64_t height, const crypto::hash* seed_hash)
+    {
+      for (; bl.nonce != std::numeric_limits<uint32_t>::max(); bl.nonce++)
+      {
+        crypto::hash h;
+        gbh(bl, height, seed_hash, h);
+        if (check_hash(h, diffic))
+        {
+          bl.invalidate_hashes();
+          return true;
+        }
+      }
+      bl.invalidate_hashes();
+      return false;
+    }
+  }
   //---------------------------------------------------------------
   bool construct_miner_tx(size_t height, size_t median_weight, uint64_t already_generated_coins, size_t current_block_weight, uint64_t fee, uint64_t frozen_segment_count, const account_public_address &miner_address, transaction& tx, const blobdata& extra_nonce, size_t max_outs, shekyl::tx_volume_window tx_volume, shekyl::supply_facts supply) {
     tx.vin.clear();
@@ -227,7 +247,7 @@ namespace cryptonote
     // attestation_root: block_header() already defaults to empty_attestation_root()
     // (Rust attestation_root(&[]) via FFI) — the valid empty-set commitment, not
     // null_hash (ARCHIVAL_CREDIT_WIRE.md §3). Genesis has no pass records.
-    miner::find_nonce_for_given_block([](const cryptonote::block &b, uint64_t height, const crypto::hash *seed_hash, crypto::hash &hash){
+    find_nonce_for_given_block([](const cryptonote::block &b, uint64_t height, const crypto::hash *seed_hash, crypto::hash &hash){
       return cryptonote::get_block_longhash(b, hash, height, seed_hash);
     }, bl, 1, 0, NULL);
     bl.invalidate_hashes();

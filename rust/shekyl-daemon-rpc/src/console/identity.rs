@@ -13,7 +13,6 @@ use shekyl_rpc_types::{
     core_rpc_version_string, DaemonNetwork, IdentityExpectation, IdentityMismatch,
 };
 
-use crate::chain_facts::ChainFacts;
 use crate::ctl_client;
 
 use super::{json_rpc_result, Source};

@@ -1398,7 +1398,7 @@ can contain either.
   `admit_armed` like the other two (RT-W10 step 1). **Its setter keeps one
   narrower restriction, on purpose:**
   `Blockchain::regtest_inject_archival_serve_credit`
-  ([`blockchain.cpp`](../../src/cryptonote_core/blockchain.cpp)) refuses
+  (`blockchain.cpp`) refuses
   unless the network is regtest. With the switch armed on testnet or
   stagenet, `generateblocks` and `/pop_blocks` are served and the inject
   lever is refused ("Serve-credit injection failed", the daemon log naming

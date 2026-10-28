@@ -411,12 +411,12 @@ fn supplement(store: &ChainStore, ids: &[u8]) -> Result<Option<Supplement>, ()> 
     }))
 }
 
-/// A block the chain holds: wire bytes, attestation witness (empty when the
-/// block stored none), whether it is an alternative, and its weight.
-fn block_bytes(
-    snap: &ReadSnapshot<'_>,
-    id: &BlockHash,
-) -> Result<Option<(Vec<u8>, Vec<u8>, bool, u64)>, ()> {
+/// Wire bytes, attestation witness (empty when the block stored none),
+/// whether it is an alternative, and its weight.
+type BlockBody = (Vec<u8>, Vec<u8>, bool, u64);
+
+/// A block the chain holds.
+fn block_bytes(snap: &ReadSnapshot<'_>, id: &BlockHash) -> Result<Option<BlockBody>, ()> {
     if let Some(height) = snap.height_of(id).map_err(|_| ())? {
         let blob = match snap.block_blob(height).map_err(|_| ())? {
             AtHeight::Recorded(raw) => raw.into_wire_bytes(),
@@ -489,12 +489,10 @@ pub unsafe extern "C" fn shekyl_core_block(
     let mut bytes = [0u8; 32];
     bytes.copy_from_slice(std::slice::from_raw_parts(hash, 32));
     let id = BlockHash::from_bytes(bytes);
-    let Some(read) = with_store(
-        |store| -> Result<Option<(Vec<u8>, Vec<u8>, bool, u64)>, ()> {
-            let snap = store.begin_read().map_err(|_| ())?;
-            block_bytes(&snap, &id)
-        },
-    ) else {
+    let Some(read) = with_store(|store| -> Result<Option<BlockBody>, ()> {
+        let snap = store.begin_read().map_err(|_| ())?;
+        block_bytes(&snap, &id)
+    }) else {
         return UNBOUND;
     };
     match read {

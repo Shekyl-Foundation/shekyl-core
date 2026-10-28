@@ -299,31 +299,6 @@ fn require_ok(status: &shekyl_rpc_types::RpcStatus) -> Result<(), String> {
     }
 }
 
-/// Unwrap the in-process bridge's own envelope.
-///
-/// `dispatch_jsonrpc_we` answers `{"ok":true,"result":…}` or
-/// `{"ok":false,"error_code":…,"error_message":…}` — **not** a JSON-RPC 2.0
-/// envelope, which is what the remote arm gets from the HTTP listener. Two
-/// shapes for one method because the bridge is not the transport; keeping the
-/// unwrapping in two named functions is what stops the difference being
-/// rediscovered at each new bridged leg.
-fn ffi_json_rpc_result<T: serde::de::DeserializeOwned>(
-    raw: &str,
-    method: &str,
-) -> Result<T, String> {
-    let envelope: crate::types::FfiJsonRpcResult =
-        serde_json::from_str(raw).map_err(|e| format!("malformed {method} reply: {e}"))?;
-    if !envelope.ok {
-        return Err(envelope
-            .error_message
-            .unwrap_or_else(|| format!("{method} failed")));
-    }
-    let result = envelope
-        .result
-        .ok_or_else(|| format!("malformed {method} reply: ok with no result"))?;
-    serde_json::from_value(result).map_err(|e| format!("malformed {method} reply: {e}"))
-}
-
 /// The wide difficulty as a number, or `None` if the daemon sent something
 /// unreadable.
 ///

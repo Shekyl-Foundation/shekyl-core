@@ -266,7 +266,7 @@ namespace cryptonote
       */
      i_cryptonote_protocol* get_protocol(){return m_pprotocol;}
 
-     //-------------------- i_miner_handler -----------------------
+     //-------------------- block found by a miner -----------------------
 
      /**
       * @brief stores and relays a block found by a miner

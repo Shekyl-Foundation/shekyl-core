@@ -11,7 +11,8 @@
 //! the console's own retirement slice, because the C++ forms called the
 //! `get_info` handler directly and that handler is deleted next.
 
-use shekyl_rpc_types::{core_rpc_version_string, daemon_rpc_version, RpcStatus, CORE_RPC_VERSION};
+use shekyl_rpc_types::pool::{GetTransactionPoolStatsResponse, TxpoolStats};
+use shekyl_rpc_types::{core_rpc_version_string, daemon_rpc_version, CORE_RPC_VERSION};
 use shekyl_units::AtomicUnits;
 
 use super::identity::get_version_result;
@@ -107,7 +108,7 @@ fn rpc_version_difference(ours: u32, theirs: u32) -> String {
 
 /// `/get_transaction_pool_stats`'s `pool_stats`. The pool does not record
 /// when a transaction arrived (S7), so there is no age and no histogram.
-fn fetch_pool_stats(src: &Source) -> Result<shekyl_rpc_types::TxpoolStats, String> {
+fn fetch_pool_stats(src: &Source) -> Result<TxpoolStats, String> {
     match src {
         Source::Live(_) => {
             let handles =
@@ -121,9 +122,8 @@ fn fetch_pool_stats(src: &Source) -> Result<shekyl_rpc_types::TxpoolStats, Strin
         }
         Source::Remote { .. } => {
             let raw = src.post_remote("/get_transaction_pool_stats", b"{}".to_vec())?;
-            let reply: shekyl_rpc_types::GetTransactionPoolStatsResponse =
-                serde_json::from_slice(&raw)
-                    .map_err(|e| format!("malformed get_transaction_pool_stats reply: {e}"))?;
+            let reply: GetTransactionPoolStatsResponse = serde_json::from_slice(&raw)
+                .map_err(|e| format!("malformed get_transaction_pool_stats reply: {e}"))?;
             if reply.status.is_ok() {
                 Ok(reply.pool_stats)
             } else {
@@ -149,7 +149,7 @@ pub(super) fn print_transaction_pool_stats(src: &Source) -> Result<String, Strin
 }
 
 #[deny(clippy::arithmetic_side_effects)]
-fn render_pool_stats(stats: &shekyl_rpc_types::TxpoolStats, block_weight_limit: u64) -> String {
+fn render_pool_stats(stats: &TxpoolStats, block_weight_limit: u64) -> String {
     let n = u64::from(stats.txs_total);
     let avg_bytes = stats.bytes_total.checked_div(n).unwrap_or(0);
 
@@ -169,7 +169,7 @@ fn render_pool_stats(stats: &shekyl_rpc_types::TxpoolStats, block_weight_limit: 
         )
     };
 
-    let lines = vec![
+    let lines = [
         format!(
             "{n} tx(es), {} bytes total (min {}, max {}, avg {avg_bytes}, median {})",
             stats.bytes_total, stats.bytes_min, stats.bytes_max, stats.bytes_med
@@ -191,8 +191,8 @@ fn render_pool_stats(stats: &shekyl_rpc_types::TxpoolStats, block_weight_limit: 
 mod tests {
     use super::*;
 
-    fn stats() -> shekyl_rpc_types::TxpoolStats {
-        shekyl_rpc_types::TxpoolStats {
+    fn stats() -> TxpoolStats {
+        TxpoolStats {
             bytes_total: 9_000,
             bytes_min: 2_000,
             bytes_max: 4_000,
@@ -221,7 +221,7 @@ mod tests {
     /// An empty pool divides by nothing: every average is zero.
     #[test]
     fn an_empty_pool_renders_zero_averages() {
-        let empty = shekyl_rpc_types::TxpoolStats::default();
+        let empty = TxpoolStats::default();
         let out = render_pool_stats(&empty, 600_000);
         assert!(
             out.starts_with("0 tx(es), 0 bytes total (min 0, max 0, avg 0, median 0)\n"),
@@ -262,20 +262,13 @@ mod tests {
                 "fee_total": 1, "txs_total": 1, "num_not_relayed": 0
             }
         });
-        assert!(
-            serde_json::from_value::<shekyl_rpc_types::GetTransactionPoolStatsResponse>(
-                whole.clone()
-            )
-            .is_ok()
-        );
+        assert!(serde_json::from_value::<GetTransactionPoolStatsResponse>(whole.clone()).is_ok());
         for member in ["bytes_total", "txs_total", "fee_total", "num_not_relayed"] {
             let mut doc = whole.clone();
             doc["pool_stats"].as_object_mut().unwrap().remove(member);
-            let refusal =
-                serde_json::from_value::<shekyl_rpc_types::GetTransactionPoolStatsResponse>(doc)
-                    .err()
-                    .expect("a missing member must not decode")
-                    .to_string();
+            let refusal = serde_json::from_value::<GetTransactionPoolStatsResponse>(doc)
+                .expect_err("a missing member must not decode")
+                .to_string();
             assert!(refusal.contains(member), "{refusal}");
         }
     }

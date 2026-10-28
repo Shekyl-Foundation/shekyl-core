@@ -2482,7 +2482,7 @@ async fn e2e_cxx_template_fills_to_its_median() {
 #[cfg(test)]
 async fn assert_template_reports_its_coinbase(
     daemon: &RegtestDaemon,
-    address: &str,
+    _address: &str,
     lists_transactions: bool,
 ) {
     use shekyl_wire::Block;

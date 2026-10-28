@@ -2058,7 +2058,7 @@ of harm.
 (`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` **O-2**: "connects only append; pops are
 branch switches"), and the **single** decrease path is **O-3 pop-symmetry** —
 verified at source: `BlockchainLMDB::revert_archival_segment_freezes`
-([`db_lmdb.cpp:7525`](../../src/blockchain_db/lmdb/db_lmdb.cpp#L7525)) is the only
+(`db_lmdb.cpp:7525`) is the only
 writer that deletes segment rows, is explicitly the pop hook, derives its bound
 from the same Rust entry point as the connect hook, and requires an active write
 txn (`throw` otherwise), so it fires only on block pop. **No path exists to
