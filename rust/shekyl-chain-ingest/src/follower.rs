@@ -37,7 +37,7 @@ use shekyl_chain_rules::{
 use shekyl_chain_store::store::{SnapshotView, StoreError};
 use shekyl_chain_sync::SyncState;
 use shekyl_economics::EconomicParams;
-use shekyl_mempool::{stateless, PoolFault};
+use shekyl_mempool::{stateless, Admission, PoolFault};
 use shekyl_miner::{FoundInbox, Generation, JobBoard};
 use shekyl_types::TxHash;
 use shekyl_wire::Transaction;
@@ -537,6 +537,7 @@ where
     };
     let done = with_pool(shared, move |pool, _, view, rule_set, policy, now| {
         let mut division = PoolDivision::default();
+        let mut left = Vec::new();
         if let Some(planted) = planted {
             for (txid, step1) in planted.staged {
                 pool.stage_step1(txid, step1);
@@ -545,18 +546,30 @@ where
                 let bodies: Vec<Transaction> =
                     planted.pending.iter().map(|(tx, _)| tx.clone()).collect();
                 let offers = pool.offer_prepared(planted.pending, now, view, rule_set, policy);
+                for (_, admission) in &offers.admissions {
+                    if let Admission::Admitted { evicted } = admission {
+                        left.extend(evicted.iter().copied());
+                    }
+                }
                 division = divide_pool_faults(offers.faults, &bodies);
             }
         }
-        let reconciled = pool.reconcile(view, rule_set, policy).err();
-        (division, reconciled)
+        let reconciled = match pool.reconcile(view, rule_set, policy) {
+            Ok(done) => {
+                left.extend(done.removed.into_iter().map(|(id, _)| id));
+                None
+            }
+            Err(fault) => Some(fault),
+        };
+        (division, reconciled, left)
     })
     .await;
-    let (division, reconciled) = match done {
+    let (division, reconciled, left) = match done {
         None => return,
         Some(Err(store)) => return shared.fail(ServiceFault::Store(store)),
         Some(Ok(round)) => round,
     };
+    shared.note_departed(&left);
     if let Some(fault) = division.chain {
         shared.fail(ServiceFault::Pool(PoolFault::Chain(fault)));
         return;

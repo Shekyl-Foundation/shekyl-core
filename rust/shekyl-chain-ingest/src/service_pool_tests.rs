@@ -64,6 +64,7 @@ impl Pooled {
                     pool: Arc::clone(&pool),
                     policy: AdmissionPolicy::GENESIS,
                     wall: Arc::new(|| UnixSeconds::from_raw(10)),
+                    departed: None,
                 }),
                 ..Default::default()
             },

@@ -167,6 +167,9 @@ pub mod remnant_prep;
 // Built and tested here; the store flip routes the handler's arrivals to it.
 pub mod ingest_ffi;
 
+// The protocol handler's door into the node's pool (DRS-X flip, DX-Q5).
+pub mod pool_ffi;
+
 // The p2p seam. C++ posts onto the connection strand. Rust records the
 // cause and the byte cap. See P2P_TRANSPORT_LAYER.md.
 pub mod seam_ffi;

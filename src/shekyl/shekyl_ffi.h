@@ -4333,6 +4333,29 @@ int shekyl_ingest_offer_span(std::uint64_t connection, std::uint8_t solicited,
     const shekyl_ingest_arrival* arrivals, std::size_t len);
 /// `connection` closed.
 void shekyl_ingest_session_closed(std::uint64_t connection);
+
+/// The protocol handler's door into the node's pool (DX-Q5).
+/// SHEKYL_POOL_ADMITTED: relay the blob. SHEKYL_POOL_HELD: already held, do
+/// not relay. SHEKYL_POOL_REFUSED_FORM closes the session.
+/// SHEKYL_POOL_REFUSED_STATE keeps it. SHEKYL_POOL_FAULT is ours.
+/// SHEKYL_POOL_UNBOUND: no door is installed.
+#define SHEKYL_POOL_ADMITTED 0
+#define SHEKYL_POOL_HELD 1
+#define SHEKYL_POOL_REFUSED_FORM 2
+#define SHEKYL_POOL_REFUSED_STATE 3
+#define SHEKYL_POOL_FAULT (-1)
+#define SHEKYL_POOL_UNBOUND (-2)
+int32_t shekyl_pool_admit(const uint8_t* blob, size_t len);
+/// 1 when the pool holds `hash`, stem included. 0 when it does not.
+int32_t shekyl_pool_has(const uint8_t hash[32]);
+/// Shown hashes, or every held hash when `sensitive` is nonzero. `out` is
+/// 32*n bytes, freed with shekyl_buffer_free. 0 on success.
+int32_t shekyl_pool_hashes(uint8_t sensitive, ShekylBuffer* out);
+/// Shown bodies whose hash is not among `known_count` hashes. `out` is a
+/// sequence of little-endian u32 lengths and the bytes, freed with
+/// shekyl_buffer_free. 0 on success.
+int32_t shekyl_pool_complement(const uint8_t* known, size_t known_count, ShekylBuffer* out);
+
 /// The tip the core last published (see shekyl_core_publish_tip): 1 and the
 /// fields written, 0 and nothing written before the first publish. A null
 /// out pointer is skipped.

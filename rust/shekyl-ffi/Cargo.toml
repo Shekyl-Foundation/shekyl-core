@@ -52,6 +52,9 @@ shekyl-chain-store = { path = "../shekyl-chain-store" }
 # `kameo` and `tokio` were already in this crate's graph. Not the RPC
 # fetcher or clap: the default features stay off.
 shekyl-chain-ingest = { path = "../shekyl-chain-ingest", default-features = false, features = ["pipeline"] }
+# The pool door (`pool_ffi`, DX-Q5). The flip is when an FFI crate names the pool.
+shekyl-mempool = { path = "../shekyl-mempool" }
+shekyl-chain-rules = { path = "../shekyl-chain-rules" }
 # The chain-sync router is the seam's post sink (`seam_ffi.rs`):
 # pass-through until the cutover attaches the sync owner.
 shekyl-chain-sync-runtime = { path = "../shekyl-chain-sync-runtime" }
@@ -157,7 +160,6 @@ modular-frost = { version = "0.11", features = ["ed25519"], optional = true }
 # The ingest entry's test starts a service, which takes the hasher budget,
 # over a substrate it defines and a regtest schedule.
 shekyl-hash-budget = { path = "../shekyl-hash-budget" }
-shekyl-chain-rules = { path = "../shekyl-chain-rules" }
 hex = "0.4"
 tempfile = "3"
 rand_core = { version = "0.6", features = ["std"] }

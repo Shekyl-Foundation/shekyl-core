@@ -8,10 +8,9 @@
 //! Rust `main` builds it at start, after the network marker and before the
 //! remnant's `run`. It owns the chain store, the ingest service, the pool,
 //! the hasher budget, the cache store, the job board and the socket table.
-//! Nothing is routed into it from C++: the C++ core keeps the live chain
-//! and the live RPC until the flip. An empty store connects the pinned
-//! genesis through the service's door, and that is the only block the
-//! store holds until the flip routes arrivals.
+//! The handler's block arrivals enter the ingest door, and its transactions
+//! enter this pool. An empty store connects the pinned genesis through the
+//! service's door.
 //!
 //! # Stop
 //!
@@ -88,6 +87,7 @@ use shekyl_hash_budget::Budget;
 use shekyl_mempool::Pool;
 use shekyl_miner::{JobBoard, MiningAddress};
 use shekyl_pow_randomx::CacheStore;
+use shekyl_relay::{Responsibilities, TxId};
 use shekyl_runtime::{RuntimeBudget, ThreadName};
 use shekyl_transport_layer::Sockets;
 use shekyl_types::{BlockHeight, UnixSeconds};
@@ -223,6 +223,14 @@ impl Node {
             Arc::new(Metrics::new()),
         ));
         let pool = open_pool(&store, &pool_path, rules)?;
+        let departed = pool_departed(Arc::clone(&pool));
+        shekyl_ffi::pool_ffi::install(
+            Arc::clone(&store),
+            Arc::clone(&pool),
+            rules,
+            AdmissionPolicy::GENESIS,
+            Arc::clone(&departed),
+        );
         let pool_slot = Arc::new(Mutex::new(Some(Arc::clone(&pool))));
         let sockets = Sockets::new();
         let board = Arc::new(JobBoard::new());
@@ -263,6 +271,7 @@ impl Node {
                 pool,
                 policy: AdmissionPolicy::GENESIS,
                 wall: Arc::new(wall_now),
+                departed: Some(departed),
             }),
             producer,
         };
@@ -292,10 +301,7 @@ impl Node {
             }
             // The handler's arrivals enter this door (DX-Q2 item 2). The
             // pump runs on this runtime; unbind must not.
-            shekyl_ffi::ingest_ffi::install(
-                service.door(),
-                tokio::runtime::Handle::current(),
-            );
+            shekyl_ffi::ingest_ffi::install(service.door(), tokio::runtime::Handle::current());
             Ok(service)
         });
         let service = match started {
@@ -470,6 +476,7 @@ impl Node {
         // The miner first: its workers hash on the board this stop withdraws,
         // and a handle may keep mining control alive past the node.
         self.mining.close();
+        shekyl_ffi::pool_ffi::uninstall();
         let Some(runtime) = self
             .runtime
             .lock()
@@ -581,6 +588,24 @@ fn producer_seat(
 
 fn wall_now() -> UnixSeconds {
     UnixSeconds::from_raw(facts::unix_now())
+}
+
+/// Releases a relay responsibility for every id that leaves the pool, then
+/// checks the relay tracks no more than the pool still holds
+/// (`DRS_X_STORE_FLIP.md` §2).
+fn pool_departed(pool: Arc<Mutex<Pool>>) -> shekyl_chain_ingest::service::Departed {
+    let owed = Arc::new(Mutex::new(Responsibilities::default()));
+    Arc::new(move |ids| {
+        let mut owed = owed.lock().unwrap_or_else(PoisonError::into_inner);
+        for id in ids {
+            owed.release(&TxId::from_bytes(id.to_bytes()));
+        }
+        let pool = pool.lock().unwrap_or_else(PoisonError::into_inner);
+        assert!(
+            owed.len() <= pool.relay_view().len(),
+            "a relay responsibility outlived its pool entry"
+        );
+    })
 }
 
 fn rules_of(config: &DaemonConfig) -> Result<ChainRules, OpenError> {

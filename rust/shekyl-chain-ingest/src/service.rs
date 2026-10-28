@@ -54,7 +54,7 @@ use shekyl_chain_rules::{AdmissionPolicy, InvalidBlock, Substrate};
 use shekyl_chain_store::store::{ChainStore, StoreError};
 use shekyl_hash_budget::{Budget, Class};
 use shekyl_mempool::{Pool, PoolFault};
-use shekyl_types::{BlockHash, BlockHeight, UnixSeconds};
+use shekyl_types::{BlockHash, BlockHeight, TxHash, UnixSeconds};
 use shekyl_wire::Transaction;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
@@ -677,6 +677,20 @@ where
         self.pool.is_some() && self.pool_live.load(Ordering::Acquire)
     }
 
+    /// The relay's hook for ids this reconcile took out of the pool.
+    pub(crate) fn note_departed(&self, ids: &[TxHash]) {
+        if ids.is_empty() {
+            return;
+        }
+        if let Some(hook) = self
+            .pool
+            .as_ref()
+            .and_then(|wiring| wiring.departed.as_ref())
+        {
+            hook(ids);
+        }
+    }
+
     /// The pool, when it is wired and live. A caller that also reads the
     /// chain begins its snapshot before it locks this, as [`with_pool`]
     /// does.
@@ -997,6 +1011,9 @@ pub struct Follow {
     pub producer: Option<crate::bundle_producer::ProducerSeat>,
 }
 
+/// Told the ids that left the pool on a reconcile.
+pub type Departed = Arc<dyn Fn(&[TxHash]) + Send + Sync>;
+
 /// The pool, as a consumer of the connector (`DRS_X_STORE_FLIP.md` DX-Q5;
 /// the brief's c6): reconciled by the tip follower after every committed
 /// connect, pop and switch, before the miner's next job; offered a
@@ -1011,6 +1028,11 @@ pub struct PoolWiring {
     pub policy: AdmissionPolicy,
     /// The wall clock its door stamps arrivals with.
     pub wall: Arc<dyn Fn() -> UnixSeconds + Send + Sync>,
+    /// Told the ids that left on this reconcile: evicted to make room, and
+    /// removed because the chain took them or the door now refuses them.
+    /// The relay releases its responsibility for each (`DRS_X_STORE_FLIP.md`
+    /// §2). Absent in a test that does not track responsibilities.
+    pub departed: Option<Departed>,
 }
 
 /// Pops blocks for `pop_blocks` (`DRS_X_STORE_FLIP.md` DX-Q3, Q7), held

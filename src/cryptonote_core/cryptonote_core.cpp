@@ -55,6 +55,8 @@ using namespace epee;
 #include "cryptonote_basic/drop_verdict.h"
 #include "cryptonote_basic/block_ingest.h"
 
+#include <cstring>
+
 #include <boost/filesystem.hpp>
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
@@ -458,52 +460,27 @@ namespace cryptonote
   bool core::handle_incoming_tx(const blobdata& tx_blob, tx_verification_context& tvc, relay_method tx_relay, bool relayed)
   {
     tvc = {};
-
-    TRY_ENTRY();
-
-    CRITICAL_REGION_LOCAL(m_incoming_tx_lock);
-
-    if (tx_blob.size() > get_max_tx_size())
+    (void)relayed;
+    const int32_t outcome = shekyl_pool_admit(
+      reinterpret_cast<const std::uint8_t*>(tx_blob.data()), tx_blob.size());
+    switch (outcome)
     {
-      LOG_PRINT_L1("WRONG TRANSACTION BLOB, too big size " << tx_blob.size() << ", rejected");
-      tvc.m_verifivation_failed = true;
-      tvc.m_too_big = true;
-      return reject_form(tvc);
+      case SHEKYL_POOL_ADMITTED:
+        tvc.m_added_to_pool = true;
+        tvc.m_relay = tx_relay;
+        return true;
+      case SHEKYL_POOL_HELD:
+        return true;
+      case SHEKYL_POOL_REFUSED_FORM:
+        tvc.m_verifivation_failed = true;
+        return reject_form(tvc);
+      case SHEKYL_POOL_REFUSED_STATE:
+        tvc.m_verifivation_failed = true;
+        return reject_state(tvc);
+      default:
+        tvc.m_verifivation_failed = true;
+        return reject_internal(tvc);
     }
-
-    transaction tx;
-    crypto::hash txid;
-    if (!parse_and_validate_tx_from_blob(tx_blob, tx, txid))
-    {
-      LOG_PRINT_L1("Incoming transactions failed to parse, rejected");
-      tvc.m_verifivation_failed = true;
-      return reject_form(tvc);
-    }
-
-    const uint64_t tx_weight = get_transaction_weight(tx, tx_blob.size());
-    if (!add_new_tx(tx, txid, tx_blob, tx_weight, tvc, tx_relay, relayed))
-      return false;
-
-    if (tvc.m_verifivation_failed)
-    {
-      MERROR_VER("Transaction verification failed: " << txid);
-      return false;
-    }
-    else if (tvc.m_verifivation_impossible)
-    {
-      MERROR_VER("Transaction verification impossible: " << txid);
-      return false;
-    }
-    else if (!tvc.m_added_to_pool)
-    {
-      MDEBUG("Transaction " << txid << " not added to pool");
-      return true;
-    }
-
-    MDEBUG("tx added to pool: " << txid);
-
-    return true;
-    CATCH_ENTRY_L0("core::handle_incoming_tx()", false);
   }
   //-----------------------------------------------------------------------------------------------
   bool core::check_tx_semantic(const transaction& tx, tx_verification_context& tvc)
@@ -1205,8 +1182,18 @@ namespace cryptonote
   //-----------------------------------------------------------------------------------------------
   bool core::get_pool_transaction_hashes(std::vector<crypto::hash>& txs, bool include_sensitive_data) const
   {
-    m_mempool.get_transaction_hashes(txs, include_sensitive_data);
-    return true;
+    ShekylBuffer buffer{nullptr, 0};
+    if (shekyl_pool_hashes(include_sensitive_data ? 1 : 0, &buffer) != 0)
+      return false;
+    const bool ok = buffer.len % sizeof(crypto::hash) == 0;
+    if (ok)
+    {
+      txs.resize(buffer.len / sizeof(crypto::hash));
+      if (!txs.empty())
+        std::memcpy(txs.data(), buffer.ptr, buffer.len);
+    }
+    shekyl_buffer_free(buffer.ptr, buffer.len);
+    return ok;
   }
   //-----------------------------------------------------------------------------------------------
   bool core::get_pool_transaction_stats(struct txpool_stats& stats, bool include_sensitive_data) const
@@ -1222,38 +1209,9 @@ namespace cryptonote
   //-----------------------------------------------------------------------------------------------
   bool core::pool_has_tx(const crypto::hash &id) const
   {
-    /* `all`, not `broadcasted`, and the category is the whole content of this
-       function. TWO production callers now, and both ask a LOCAL question to
-       which `all` is the answer by definition:
-
-         - compact-block reconstruction, "do I already hold these bytes so I
-           need not request them" (`cryptonote_protocol_handler.inl`, the
-           MissingTxs arm);
-         - the noise carrier's verdict path, "is this still ours to record
-           against" (`levin_notify.cpp`, via `i_core_events::pool_has_tx`).
-           The carrier can hold a transaction for up to an epoch before
-           sending it, so the pool may have taken it in the meantime; the
-           answer gates the relay record and the F-10 observation
-           (`COVER_TRAFFIC_RESTORATION.md` §3.1e).
-
-       Neither cares about relay class. This read was
-       `relay_category::legacy`, which excludes `local` and `stem`, so a node
-       holding an embargoed stem or an originated `local` entry added it to
-       `need_tx_indices` and re-requested a transaction it already had, whenever
-       some OTHER tx in the same block was genuinely absent.
-
-       `all` is what the consumer already uses: `tx_memory_pool::take_tx`
-       fetches the blob at `all`, so every entry this now reports is one the
-       block-add path will in fact take. Answering NARROWER than the consumer
-       was the defect; answering wider than it would be one too.
-
-       No end-to-end witness exists for that arm -- driving it needs the
-       protocol-handler harness `docs/FOLLOWUPS.md` tracks for the arrival leg
-       (DAEMON_RELAY_PRIVACY.md sec 89.7.2), which does not cover reconstruction.
-       That gap is pre-existing and is not widened here: the classifier rows this
-       depends on (`local` and `stem` are in `all`, and not in `broadcasted`) are
-       pinned in `tests/unit_tests/relay_category.cpp`. */
-    return m_mempool.have_tx(id, relay_category::all);
+    // Membership, stem included: the relay's question (i_core_events). A
+    // compact block resolves shown bodies only, and does not call this.
+    return shekyl_pool_has(reinterpret_cast<const std::uint8_t*>(id.data)) == 1;
   }
   //-----------------------------------------------------------------------------------------------
   bool core::get_pool_transactions_and_spent_keys_info(std::vector<tx_info>& tx_infos, std::vector<spent_key_image_info>& key_image_infos, bool include_sensitive_data) const
@@ -1430,7 +1388,43 @@ namespace cryptonote
   //-----------------------------------------------------------------------------------------------
   bool core::get_txpool_complement(const std::vector<crypto::hash> &hashes, std::vector<cryptonote::blobdata> &txes)
   {
-    return m_mempool.get_complement(hashes, txes);
+    ShekylBuffer buffer{nullptr, 0};
+    const int rc = shekyl_pool_complement(
+      hashes.empty() ? nullptr : reinterpret_cast<const std::uint8_t*>(hashes.data()),
+      hashes.size(), &buffer);
+    if (rc != 0)
+      return false;
+    txes.clear();
+    if (buffer.len == 0)
+    {
+      shekyl_buffer_free(buffer.ptr, buffer.len);
+      return true;
+    }
+    const std::uint8_t* cursor = buffer.ptr;
+    const std::uint8_t* const end = buffer.ptr + buffer.len;
+    bool ok = true;
+    while (ok && cursor != end)
+    {
+      if (static_cast<std::size_t>(end - cursor) < 4)
+      {
+        ok = false;
+        break;
+      }
+      const std::uint32_t len = std::uint32_t(cursor[0])
+        | (std::uint32_t(cursor[1]) << 8)
+        | (std::uint32_t(cursor[2]) << 16)
+        | (std::uint32_t(cursor[3]) << 24);
+      cursor += 4;
+      if (static_cast<std::size_t>(end - cursor) < len)
+      {
+        ok = false;
+        break;
+      }
+      txes.emplace_back(reinterpret_cast<const char*>(cursor), len);
+      cursor += len;
+    }
+    shekyl_buffer_free(buffer.ptr, buffer.len);
+    return ok;
   }
   //-----------------------------------------------------------------------------------------------
   void core::set_target_blockchain_height(uint64_t target_blockchain_height)

@@ -328,6 +328,7 @@ async fn pop_blocks_refuses_genesis_and_returns_two_blocks_bodies_to_the_pool() 
                 pool: Arc::clone(&pool),
                 policy: AdmissionPolicy::GENESIS,
                 wall: Arc::new(|| UnixSeconds::from_raw(1)),
+                departed: None,
             }),
             ..Default::default()
         },
