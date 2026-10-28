@@ -38,7 +38,6 @@ set(unit_tests_sources
   command_line.cpp
   crypto.cpp
   daemon_rpc_client.cpp
-  daemon_submit_ffi_roundtrip.cpp
   db_sync_mode_parse.cpp
   decompose_amount_into_digits.cpp
   device.cpp
@@ -125,10 +124,9 @@ target_link_libraries(unit_tests
     ${EPEE_READLINE}
     # Resolves to libshekyl_daemon_image.a (not libshekyl_ffi.a) because of
     # the SHEKYL_RUST_IMAGE_DAEMON property set below. The daemon image is
-    # the superset (shekyl-ffi + shekyl-daemon-rpc), needed since
-    # daemon_submit_ffi_roundtrip.cpp calls the Rust-side layout twins that
-    # live in shekyl-daemon-rpc. Never name shekyl_ffi literally here — two
-    # Rust archives on one link line is the split-dispatcher regression.
+    # the superset (shekyl-ffi + shekyl-daemon-rpc). Never name shekyl_ffi
+    # literally here — two Rust archives on one link line is the
+    # split-dispatcher regression.
     ${SHEKYL_FFI_LINK_LIBS}
     # rpc repeats after the Rust image (same shape as src/daemon): the
     # daemon image's members import core_rpc_ffi_* / shekyl_submit_*, which

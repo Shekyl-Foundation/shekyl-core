@@ -213,6 +213,7 @@ fn weight_over_limit_rejects_malformed() {
 fn fee_below_floor_rejects_fee_too_low() {
     let mut facts = base_facts();
     facts.fee_per_byte = 1_000_000; // floor far above the 1e6 fixture fee
+    facts.fee_floor_window = Some(vec![1_000_000]);
     let (engine, shim, verifier) = engine(facts, CommitOutcome::Committed);
     assert_eq!(
         engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
@@ -243,6 +244,7 @@ fn a_fee_short_of_the_tip_floor_is_refused_before_the_commit() {
     );
     let mut facts = admitting_facts(&parsed);
     facts.fee_per_byte = fee_per_byte;
+    facts.fee_floor_window = Some(vec![fee_per_byte]);
     let raced_unchanged = CommitOutcome::Raced(Box::new(facts.clone()));
     let (engine, shim, verifier) = engine(facts, raced_unchanged);
     assert_eq!(
@@ -483,7 +485,10 @@ fn a_concealed_answer_is_the_fresh_answer_under_every_public_change() {
     let changes: [(&str, Change); 4] = [
         ("nothing moved", |_| {}),
         ("the reference drifted", |f| f.reference = None),
-        ("the fee floor rose", |f| f.fee_per_byte = u64::MAX),
+        ("the fee floor rose", |f| {
+            f.fee_per_byte = u64::MAX;
+            f.fee_floor_window = Some(vec![u64::MAX]);
+        }),
         ("the pool is full at this rate", |f| {
             f.pool_refuses_for_room = Some(true);
         }),
@@ -618,6 +623,7 @@ fn raced_fee_floor_rise_classifies_fee_too_low() {
     // the exact zombie-Accepted shape the redesign abolishes.
     let mut fresh = base_facts();
     fresh.fee_per_byte = 1_000_000;
+    fresh.fee_floor_window = Some(vec![1_000_000]);
     let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(Box::new(fresh)));
     assert_eq!(
         engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),

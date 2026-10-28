@@ -7,13 +7,9 @@
 //! authority (`docs/design/DAEMON_SUBMIT_VERDICT.md` §3).
 //!
 //! Rust owns parse, structural and semantic validation, fee arithmetic,
-//! verification dispatch, and **verdict classification**; C++ owns byte
-//! storage and index membership behind the narrow [`SubmitStateShim`] seam
-//! (§3.2 / §4). The engine is generic over that seam: production implements
-//! it over the three FFI shims, tests implement it as a deterministic mock,
-//! and when the mempool itself migrates to Rust the Rust mempool implements
-//! the trait — engine, wire contract, and wallet untouched (the *planned*
-//! reversion per §11).
+//! verification dispatch, and **verdict classification**. Production state
+//! is [`RustPoolShim`] over the node's pool. The engine is generic over
+//! [`SubmitStateShim`]: tests implement it as a deterministic mock.
 //!
 //! ## Phase structure (§3.1)
 //!
@@ -40,7 +36,6 @@ pub mod certificate;
 pub mod engine;
 pub mod facts;
 pub mod fee;
-pub mod ffi_shim;
 pub mod gate;
 pub mod phase_a;
 pub mod rust_pool_shim;
@@ -54,7 +49,6 @@ pub use facts::{
     KeyImageConflict, LastServedScanMismatch, ReferenceFacts, ReleaseFacts, ReleaseRecordFacts,
     ShimFault, SubmitFacts, SubmitStateShim, TxMeta,
 };
-pub use ffi_shim::FfiSubmitShim;
 pub use gate::phase_c_semaphore;
 pub use phase_a::{parse_submission, ParsedSubmission, PhaseAReject, SubmitTxKind};
 pub use rust_pool_shim::{

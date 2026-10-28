@@ -75,9 +75,6 @@ namespace cryptonote
     ~core_rpc_server();
 
     network_type nettype() const { return m_core.get_nettype(); }
-    // Core access for the Rust submit shims (daemon_submit_ffi.cpp), which
-    // resolve pool/blockchain/protocol from the same handle the Axum
-    // transport already holds. See DAEMON_SUBMIT_VERDICT.md §4.
     core& get_core() noexcept { return m_core; }
     // P2P access for the RPC facts shims (rpc_facts_ffi.cpp): sync state
     // lives in the protocol handler. See DAEMON_RPC_KV_CUTOVER.md §3.2.

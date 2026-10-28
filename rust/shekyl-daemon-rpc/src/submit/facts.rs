@@ -100,14 +100,12 @@ pub struct SubmitFacts {
     pub key_image_conflicts: Vec<KeyImageConflict>,
     /// Reference-block facts, iff the hash is known to the daemon.
     pub reference: Option<ReferenceFacts>,
-    /// Dynamic per-byte fee floor parameter (moves every block — F34).
+    /// The tip floor, recorded beside the window. The gate reads the window.
     pub fee_per_byte: u64,
     /// The relay floor window at the connecting height (FL-R23's lookback,
-    /// `shekyl_chain_rules::relay_floor_window`), when the shim reads it:
-    /// the engine then judges the fee by the door's own predicate,
-    /// `relay_floor_admits` (CEN-M3), and `fee_per_byte` is not read for
-    /// the gate. `None` from the C++ shim, whose tip-floor rule stands
-    /// until the flip deletes it (DX-Q10; the review of #1102, S5).
+    /// `shekyl_chain_rules::relay_floor_window`). The engine judges the fee
+    /// by `relay_floor_admits` (CEN-M3) over this window. `None` refuses
+    /// (DX-Q10: the one-floor path left with the C++ shim).
     pub fee_floor_window: Option<Vec<u64>>,
     /// Whether CEN-M10's rising minimum refuses a fresh submission of this
     /// transaction's weight and fee against the pool as it stands

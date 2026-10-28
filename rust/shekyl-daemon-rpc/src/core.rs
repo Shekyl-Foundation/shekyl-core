@@ -328,13 +328,6 @@ impl CoreRpc {
         unsafe { consume_c_string(ffi::core_rpc_ffi_stem_tallies(self.handle)) }
     }
 
-    /// Raw handle for the submit shims (`crate::submit::ffi_shim`), which
-    /// call the `shekyl_submit_*` FFI directly rather than through the
-    /// string-dispatch surface above.
-    pub(crate) fn raw_handle(&self) -> *mut ffi::CoreRpcHandle {
-        self.handle
-    }
-
     /// Daemon identity facts (`shekyl_rpc_identity`); `Err(code)` on a
     /// non-OK return, including a null handle.
     ///
