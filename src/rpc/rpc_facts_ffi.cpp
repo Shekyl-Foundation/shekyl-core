@@ -5,31 +5,23 @@
 
 #include "rpc_facts_ffi.h"
 
-#include <atomic>
 #include <chrono>
 #include <cstring>
 #include <future>
 #include <memory>
 #include <string>
 #include <map>
-#include <variant>
 #include <mutex>
 #include <vector>
-#include <limits>
 
 #include "core_rpc_ffi_internal.h"
 #include "core_rpc_server.h"
-#include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_core/cryptonote_core.h"
-#include "cryptonote_core/cryptonote_tx_utils.h"
 #include "cryptonote_protocol/block_queue.h"
 #include "net/net_utils_base.h"
 #include "p2p/net_node.h"
 #include "p2p/seam_board.h"
 #include "p2p/seam_endpoint.h"
-#include "string_tools.h"
-#include "rpc_tx_json.h"
-#include "misc_language.h"
 #include "misc_log_ex.h"
 #include "shekyl/shekyl_ffi.h"
 #include "version.h"
@@ -55,32 +47,8 @@ namespace
 }
 
 namespace daemon_rpc_facts {
-// Body of `shekyl_rpc_chain_tip`;
-// Body of `shekyl_rpc_block_hash_at`;
-// Body of `shekyl_rpc_block_header_at`. Carries what the deleted
-// `on_get_block_header_by_height` did together with the equally deleted
-// `fill_block_header_response`: one lock, the bound, the block, and every
-// field the wire's header carries. This is the only header projection left
-// in the tree;
-// Owns every variable-length payload of one `block_at` answer, so the caller
-// releases them with a single `shekyl_rpc_block_free`. Three separate owners
-// would be three chances to leak one. Named (not anonymous) so the C entry
-// point's `_free` twin below can name the type it deletes.
-struct block_payload_owner
-{
-  std::string blob;
-  std::string json;
-  std::vector<uint8_t> tx_hashes;  // n * 32, contiguous
-}
-;
-// Owns every allocation behind one `blocks_by_height` answer. The entry
-// views point into these vectors, so they must not reallocate after the
-// views are built — hence the two-pass fill: blobs first, pointers second.
-// ── RK-5a owners ────────────────────────────────────────────────────────────
-//
-// Same two-pass discipline as `blocks_owner`: the strings are filled first
-// and the views taken afterwards, because a pointer taken during the fill
-// would dangle the moment a vector reallocated.
+// The strings are filled first and the views taken afterwards, because a
+// pointer taken during the fill would dangle the moment a vector reallocated.
 struct connections_owner
 {
   std::vector<std::string> address;
@@ -94,219 +62,14 @@ struct sync_spans_owner
   std::vector<shekyl_rpc_sync_span_facts> entries;
 }
 ;
-struct blocks_owner
-{
-  std::vector<std::string> blocks;               // one per height
-  std::vector<std::vector<std::string>> txs;     // per height, per tx
-  std::vector<std::vector<const uint8_t*>> tx_ptrs;
-  std::vector<std::vector<size_t>> tx_lens;
-  std::vector<shekyl_rpc_block_entry> entries;
-}
-;
-// Owns every allocation behind one `transactions` answer. Entry views point
-// into these vectors, so the fill is two-pass for `blocks_owner`'s reason:
-// pointers taken in pass one would dangle when a vector reallocated.
-struct transactions_owner
-{
-  std::vector<std::string> pruned;      // one per request slot; empty when missed
-  std::vector<std::string> prunable;
-  std::vector<std::vector<uint64_t>> output_indices;
-  std::vector<shekyl_rpc_tx_entry> entries;
-}
-;
-// Body of `shekyl_rpc_tx_to_json` (RK-D11). No core, no lock: it parses the
-// blob the caller passes and renders it the way epee did, which is the only
-// part of this that has to stay in C++.
-int tx_to_json(const uint8_t* blob, size_t blob_len, uint8_t pruned,
-  const char** out, size_t* out_len, void** out_owner) noexcept
-{
-  if (out_owner)
-    *out_owner = nullptr;
-  if (!out || !out_len || !out_owner || (!blob && blob_len))
-    return SHEKYL_RPC_FACTS_ERR_NULL;
-  *out = nullptr;
-  *out_len = 0;
-  try
-  {
-    const cryptonote::blobdata data(reinterpret_cast<const char*>(blob), blob_len);
-    cryptonote::transaction tx;
-    std::unique_ptr<std::string> rendered(new std::string());
-    if (pruned)
-    {
-      if (!cryptonote::parse_and_validate_tx_base_from_blob(data, tx))
-        return SHEKYL_RPC_FACTS_ERR_INTERNAL;
-      cryptonote::pruned_transaction ptx{tx};
-      *rendered = cryptonote::obj_to_json_str(ptx);
-    }
-    else
-    {
-      if (!cryptonote::parse_and_validate_tx_from_blob(data, tx))
-        return SHEKYL_RPC_FACTS_ERR_INTERNAL;
-      *rendered = cryptonote::obj_to_json_str(tx);
-    }
-    *out = rendered->data();
-    *out_len = rendered->size();
-    *out_owner = rendered.release();
-    return SHEKYL_RPC_FACTS_OK;
-  }
-  catch (const std::exception& e)
-  {
-    MERROR("shekyl_rpc_tx_to_json: " << e.what());
-    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
-  }
-  catch (...)
-  {
-    MERROR("shekyl_rpc_tx_to_json: unknown exception");
-    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
-  }
-}
-// Body of `shekyl_rpc_info_store_file`. The store answers its file names
-// data file first;
 } // namespace daemon_rpc_facts
 
 extern "C" {
 
-// Every export is an exception barrier: a throw from a core / P2P read is
-// logged and becomes SHEKYL_RPC_FACTS_ERR_INTERNAL, never an unwind across
-// the C ABI into Rust (which would abort the daemon). Same discipline as
-// daemon_submit_ffi.cpp's shims.
-// Daemon identity (VC-2). Its own export rather than two more fields on the
-// chain-tip POD: these are process-lifetime constants, and the tip POD's
-// other five callers want a tip (VC-R17).
-int shekyl_rpc_identity(core_rpc_handle* h, shekyl_rpc_identity_facts* out)
-{
-  if (!h || !h->rpc || !out)
-    return SHEKYL_RPC_FACTS_ERR_NULL;
-  try
-  {
-    cryptonote::core& core = h->rpc->get_core();
-    std::memset(out, 0, sizeof(*out));
-    out->nettype = static_cast<uint8_t>(core.get_nettype());
-    if (shekyl_core_hash_at(0, out->genesis_hash) != 0)
-      return SHEKYL_RPC_FACTS_ERR_NOT_READY;
-    return SHEKYL_RPC_FACTS_OK;
-  }
-  catch (const std::exception& e)
-  {
-    MERROR("identity facts: exception: " << e.what());
-    if (out)
-      std::memset(out, 0, sizeof(*out));
-    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
-  }
-}
-
-int shekyl_rpc_chain_tip(core_rpc_handle* h, shekyl_rpc_chain_tip_facts* out)
-{
-  if (!h || !h->rpc || !out)
-    return SHEKYL_RPC_FACTS_ERR_NULL;
-  try
-  {
-    cryptonote::core& core = h->rpc->get_core();
-    // The two scalars, snapshotted here because neither is reachable from a
-    // `Blockchain` and neither can be doubled. `is_synchronized()` lives on
-    // the p2p payload object; `get_target_blockchain_height()` is a plain
-    // `core` member.
-    const uint8_t synchronized =
-      h->rpc->get_p2p().get_payload_object().is_synchronized() ? 1 : 0;
-    const uint64_t target_height = core.get_target_blockchain_height();
-    std::uint64_t top_index = 0;
-    std::uint8_t top_hash[32] = {};
-    if (shekyl_core_top(&top_index, top_hash) != 0)
-      return SHEKYL_RPC_FACTS_ERR_NOT_READY;
-    std::memset(out, 0, sizeof(*out));
-    out->chain_height = top_index + 1;
-    std::memcpy(out->top_hash, top_hash, sizeof(out->top_hash));
-    out->target_height = target_height;
-    out->synchronized = synchronized;
-    out->release_build = SHEKYL_VERSION_IS_RELEASE ? 1 : 0;
-    return SHEKYL_RPC_FACTS_OK;
-  }
-  catch (const std::exception& e)
-  {
-    MERROR("chain tip facts: exception: " << e.what());
-    if (out)
-      std::memset(out, 0, sizeof(*out));
-    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
-  }
-  catch (...)
-  {
-    MERROR("chain tip facts: unknown exception");
-    if (out)
-      std::memset(out, 0, sizeof(*out));
-    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
-  }
-}
-
-// ── RK-5c: `get_info` ──────────────────────────────────────────────────────
-
-int shekyl_rpc_info_chain(core_rpc_handle* h, shekyl_rpc_info_chain_facts* out)
-{
-  if (!h || !h->rpc || !out)
-    return SHEKYL_RPC_FACTS_ERR_NULL;
-  // The handlers and the console read the store. This export remains for
-  // the facts shim's callers that have not moved; it does not open the
-  // C++ chain.
-  (void)h;
-  return SHEKYL_RPC_FACTS_ERR_NOT_READY;
-}
-
-int shekyl_rpc_info_pool_counts(core_rpc_handle* h, uint8_t with_unbroadcast,
-  uint64_t* out_broadcast, uint64_t* out_unbroadcast)
-{
-  if (!h || !h->rpc)
-    return SHEKYL_RPC_FACTS_ERR_NULL;
-  (void)with_unbroadcast;
-  return SHEKYL_RPC_FACTS_ERR_NOT_READY;
-}
-
-int shekyl_rpc_info_status(core_rpc_handle* h, shekyl_rpc_info_status_facts* out,
-  char* version_buf, size_t version_cap, size_t* version_len)
-{
-  if (!h || !h->rpc || !out || !version_buf || !version_len)
-    return SHEKYL_RPC_FACTS_ERR_NULL;
-  (void)version_cap;
-  *version_len = 0;
-  return SHEKYL_RPC_FACTS_ERR_NOT_READY;
-}
-
-int shekyl_rpc_info_peers(core_rpc_handle* h, shekyl_rpc_info_peers_facts* out)
-{
-  if (!h || !h->rpc || !out)
-    return SHEKYL_RPC_FACTS_ERR_NULL;
-  try
-  {
-    std::memset(out, 0, sizeof(*out));
-    out->public_incoming_sockets = shekyl_seam_socket_count(0, 0);
-    out->public_outgoing_sockets = shekyl_seam_socket_count(0, 1);
-    out->tor_incoming_sockets = shekyl_seam_socket_count(1, 0);
-    out->tor_outgoing_sockets = shekyl_seam_socket_count(1, 1);
-    return SHEKYL_RPC_FACTS_OK;
-  }
-  catch (const std::exception& e)
-  {
-    MERROR("info peers facts: exception: " << e.what());
-    std::memset(out, 0, sizeof(*out));
-    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
-  }
-  catch (...)
-  {
-    MERROR("info peers facts: unknown exception");
-    std::memset(out, 0, sizeof(*out));
-    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
-  }
-}
-
-int shekyl_rpc_info_store_file(core_rpc_handle* h, char* path_buf, size_t path_cap,
-  size_t* path_len)
-{
-  if (!h || !h->rpc || !path_buf || !path_len)
-    return SHEKYL_RPC_FACTS_ERR_NULL;
-  (void)path_cap;
-  *path_len = 0;
-  return SHEKYL_RPC_FACTS_ERR_NOT_READY;
-}
-
-// ── RK-5a: the p2p seam ─────────────────────────────────────────────────────
+// Every export is an exception barrier: a throw from a P2P read is logged
+// and becomes SHEKYL_RPC_FACTS_ERR_INTERNAL, never an unwind across the C
+// ABI into Rust. What remains here is the sync half: net stats, connections,
+// and sync spans. Chain and get_info reads go through the store.
 
 int shekyl_rpc_net_stats(core_rpc_handle* h, shekyl_rpc_net_stats_facts* out)
 {
@@ -529,139 +292,6 @@ int shekyl_rpc_sync_spans(core_rpc_handle* h,
 void shekyl_rpc_sync_spans_free(void* owner)
 {
   delete static_cast<daemon_rpc_facts::sync_spans_owner*>(owner);
-}
-
-int shekyl_rpc_block_hash_at(core_rpc_handle* h, uint64_t height,
-  shekyl_rpc_block_hash_facts* out)
-{
-  if (!h || !h->rpc || !out)
-    return SHEKYL_RPC_FACTS_ERR_NULL;
-  std::memset(out, 0, sizeof(*out));
-  uint64_t count = 0;
-  if (shekyl_core_height(&count) != 0)
-    return SHEKYL_RPC_FACTS_ERR_NOT_READY;
-  out->chain_height = count;
-  if (height >= count)
-    return SHEKYL_RPC_FACTS_OK;
-  if (shekyl_core_hash_at(height, out->hash) != 0)
-    return SHEKYL_RPC_FACTS_ERR_NOT_READY;
-  out->found = 1;
-  return SHEKYL_RPC_FACTS_OK;
-}
-
-int shekyl_rpc_fee_estimate(core_rpc_handle* h, shekyl_rpc_fee_estimate_facts* out)
-{
-  if (!h || !h->rpc || !out)
-    return SHEKYL_RPC_FACTS_ERR_NULL;
-  return SHEKYL_RPC_FACTS_ERR_NOT_READY;
-}
-
-int shekyl_rpc_block_header_at(core_rpc_handle* h, const uint8_t* block_hash,
-  uint64_t height, uint8_t fill_pow_hash, shekyl_rpc_block_header_facts* out)
-{
-  if (!h || !h->rpc || !out)
-    return SHEKYL_RPC_FACTS_ERR_NULL;
-  (void)block_hash;
-  (void)height;
-  (void)fill_pow_hash;
-  return SHEKYL_RPC_FACTS_ERR_NOT_READY;
-}
-
-int shekyl_rpc_block_at(core_rpc_handle* h, const uint8_t* block_hash,
-  uint64_t height, uint8_t fill_pow_hash,
-  shekyl_rpc_block_header_facts* out_header,
-  shekyl_rpc_block_payload* out_payload, void** out_owner)
-{
-  if (out_owner)
-    *out_owner = nullptr;
-  if (!h || !h->rpc || !out_header || !out_payload || !out_owner)
-    return SHEKYL_RPC_FACTS_ERR_NULL;
-  (void)block_hash;
-  (void)height;
-  (void)fill_pow_hash;
-  return SHEKYL_RPC_FACTS_ERR_NOT_READY;
-}
-
-int shekyl_rpc_tx_output_indices(core_rpc_handle* h, const uint8_t* txid,
-  const uint64_t** out, size_t* out_len, uint8_t* out_found, void** out_owner)
-{
-  if (out_owner)
-    *out_owner = nullptr;
-  if (!h || !h->rpc || !txid || !out || !out_len || !out_found || !out_owner)
-    return SHEKYL_RPC_FACTS_ERR_NULL;
-  return SHEKYL_RPC_FACTS_ERR_NOT_READY;
-}
-
-void shekyl_rpc_tx_output_indices_free(void* owner)
-{
-  delete static_cast<std::vector<uint64_t>*>(owner);
-}
-
-int shekyl_rpc_blocks_by_height(core_rpc_handle* h, const uint64_t* heights,
-  size_t heights_len, const shekyl_rpc_block_entry** out, size_t* out_len,
-  uint64_t* out_failed_height, uint8_t* out_ok, void** out_owner)
-{
-  if (out_owner)
-    *out_owner = nullptr;
-  if (!h || !h->rpc || !out || !out_len || !out_failed_height || !out_ok || !out_owner)
-    return SHEKYL_RPC_FACTS_ERR_NULL;
-  (void)heights;
-  (void)heights_len;
-  return SHEKYL_RPC_FACTS_ERR_NOT_READY;
-}
-
-int shekyl_rpc_transactions(core_rpc_handle* h, const uint8_t* txids, size_t txids_len,
-  uint8_t include_sensitive, const shekyl_rpc_tx_entry** out, size_t* out_len,
-  uint64_t* out_chain_height, void** out_owner)
-{
-  if (out_owner)
-    *out_owner = nullptr;
-  if (!h || !h->rpc)
-    return SHEKYL_RPC_FACTS_ERR_NULL;
-  (void)txids;
-  (void)txids_len;
-  (void)include_sensitive;
-  (void)out;
-  (void)out_len;
-  (void)out_chain_height;
-  return SHEKYL_RPC_FACTS_ERR_NOT_READY;
-}
-
-void shekyl_rpc_transactions_free(void* owner)
-{
-  delete static_cast<daemon_rpc_facts::transactions_owner*>(owner);
-}
-
-int shekyl_rpc_tx_to_json(const uint8_t* blob, size_t blob_len, uint8_t pruned,
-  const char** out, size_t* out_len, void** out_owner)
-{
-  return daemon_rpc_facts::tx_to_json(blob, blob_len, pruned, out, out_len, out_owner);
-}
-
-void shekyl_rpc_tx_json_free(void* owner)
-{
-  delete static_cast<std::string*>(owner);
-}
-
-int shekyl_rpc_key_images_spent(core_rpc_handle* h, const uint8_t* key_images,
-  size_t count, uint8_t* out_status)
-{
-  if (!h || !h->rpc)
-    return SHEKYL_RPC_FACTS_ERR_NULL;
-  (void)key_images;
-  (void)count;
-  (void)out_status;
-  return SHEKYL_RPC_FACTS_ERR_NOT_READY;
-}
-
-void shekyl_rpc_blocks_by_height_free(void* owner)
-{
-  delete static_cast<daemon_rpc_facts::blocks_owner*>(owner);
-}
-
-void shekyl_rpc_block_free(void* owner)
-{
-  delete static_cast<daemon_rpc_facts::block_payload_owner*>(owner);
 }
 
 void shekyl_rpc_fee_estimate_facts_test_fill(shekyl_rpc_fee_estimate_facts* out, uint64_t seed)

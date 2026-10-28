@@ -5,8 +5,8 @@
 
 //! The store-backed facts: [`ChainFacts`] and [`InfoFacts`] over the Rust
 //! chain store (`DRS_X_STORE_FLIP.md` DX-Q3; RK-D7). The handlers and the
-//! in-process console call this. [`FfiChainFacts`](crate::chain_facts::FfiChainFacts)
-//! still converts the C++ facts shim and is not what those callers use.
+//! in-process console call this. The C++ chain-facts shim is gone. The
+//! protocol handler's sync reads stay on [`crate::chain_facts::FfiP2pFacts`].
 //!
 //! **One snapshot per facts call.** Every method opens one
 //! [`ReadSnapshot`] and reads everything it returns from it, so a reply

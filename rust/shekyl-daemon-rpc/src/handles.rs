@@ -34,9 +34,8 @@ use crate::read_facts::{
     PowSeed, ShardCoverage, SpentAt,
 };
 
-/// The chain reads that replace `FfiChainFacts`, `FfiInfoFacts` and
-/// `ChainReadFacts`' production sources at the flip. One object, the
-/// three traits those handlers already call.
+/// The chain reads. One object, the three traits the handlers call.
+/// The production source is the store.
 pub trait ChainRead: ChainFacts + InfoFacts + ChainReadFacts {
     /// This object as the chain-facts trait the method functions take.
     fn as_chain_facts(&self) -> &dyn ChainFacts;

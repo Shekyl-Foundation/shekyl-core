@@ -242,38 +242,6 @@ pub struct BlockHeaderFactsFfi {
     pub reserved: [u8; 7],
 }
 
-impl BlockHeaderFactsFfi {
-    pub(crate) const fn zeroed() -> Self {
-        Self {
-            hash: [0; 32],
-            prev_hash: [0; 32],
-            miner_tx_hash: [0; 32],
-            curve_tree_root: [0; 32],
-            attestation_root: [0; 32],
-            pow_hash: [0; 32],
-            height: 0,
-            depth: 0,
-            chain_height: 0,
-            timestamp: 0,
-            difficulty_lo: 0,
-            difficulty_hi: 0,
-            cumulative_difficulty_lo: 0,
-            cumulative_difficulty_hi: 0,
-            reward: 0,
-            block_weight: 0,
-            long_term_weight: 0,
-            num_txes: 0,
-            nonce: 0,
-            major_version: 0,
-            minor_version: 0,
-            orphan_status: 0,
-            pow_hash_filled: 0,
-            found: 0,
-            reserved: [0; 7],
-        }
-    }
-}
-
 /// Twin of `shekyl_rpc_fee_estimate_facts` (RK-5b).
 ///
 /// `fees` is one slot per priced tier: `[economy, standard, priority]`.
@@ -524,8 +492,6 @@ const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, white) == 22);
 const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, blocked) == 23);
 
 extern "C" {
-    pub fn shekyl_rpc_fee_estimate(h: *mut CoreRpcHandle, out: *mut FeeEstimateFactsFfi) -> i32;
-    pub fn shekyl_rpc_identity(h: *mut CoreRpcHandle, out: *mut IdentityFactsFfi) -> i32;
     pub fn shekyl_rpc_net_stats(h: *mut CoreRpcHandle, out: *mut NetStatsFactsFfi) -> i32;
     /// Fills a C++-owned view of the live p2p connections plus the single
     /// instant they were read at; release the owner with
@@ -560,126 +526,6 @@ extern "C" {
     /// How many addresses the clearnet white and gray lists hold, from the
     /// Rust peer lists (`shekyl-ffi`). No core handle.
     pub fn shekyl_rpc_peerlist_sizes(out_white: *mut u64, out_gray: *mut u64) -> i32;
-    pub fn shekyl_rpc_chain_tip(h: *mut CoreRpcHandle, out: *mut ChainTipFactsFfi) -> i32;
-    /// `get_info`'s chain snapshot (RK-5c), read for every caller.
-    pub fn shekyl_rpc_info_chain(h: *mut CoreRpcHandle, out: *mut InfoChainFactsFfi) -> i32;
-    /// The pool's population as two counts of one pool state: the entries
-    /// this node has broadcast, and with `with_unbroadcast` non-zero the
-    /// entries it holds and has not yet broadcast. The second is host-only
-    /// data; when it is not asked for it is not counted and
-    /// `out_unbroadcast` is not written.
-    pub fn shekyl_rpc_info_pool_counts(
-        h: *mut CoreRpcHandle,
-        with_unbroadcast: u8,
-        out_broadcast: *mut u64,
-        out_unbroadcast: *mut u64,
-    ) -> i32;
-    /// `get_info`'s Status facts and the build's version string, which is
-    /// written to `version_buf` without a terminator.
-    pub fn shekyl_rpc_info_status(
-        h: *mut CoreRpcHandle,
-        out: *mut InfoStatusFactsFfi,
-        version_buf: *mut u8,
-        version_cap: usize,
-        version_len: *mut usize,
-    ) -> i32;
-    /// `get_info`'s Peers facts.
-    pub fn shekyl_rpc_info_peers(h: *mut CoreRpcHandle, out: *mut InfoPeersFactsFfi) -> i32;
-    /// The path of the chain store's data file, written to `path_buf`
-    /// without a terminator. The size is read from it on this side.
-    pub fn shekyl_rpc_info_store_file(
-        h: *mut CoreRpcHandle,
-        path_buf: *mut u8,
-        path_cap: usize,
-        path_len: *mut usize,
-    ) -> i32;
-    pub fn shekyl_rpc_block_hash_at(
-        h: *mut CoreRpcHandle,
-        height: u64,
-        out: *mut BlockHashFactsFfi,
-    ) -> i32;
-    /// A whole block by hash (32 bytes) or, with `block_hash` null, by
-    /// height. On OK with `found == 1` the payload borrows memory owned by
-    /// `*out_owner`, which must be released with `shekyl_rpc_block_free`.
-    pub fn shekyl_rpc_block_at(
-        h: *mut CoreRpcHandle,
-        block_hash: *const u8,
-        height: u64,
-        fill_pow_hash: u8,
-        out_header: *mut BlockHeaderFactsFfi,
-        out_payload: *mut BlockPayloadFfi,
-        out_owner: *mut *mut std::ffi::c_void,
-    ) -> i32;
-    pub fn shekyl_rpc_block_free(owner: *mut std::ffi::c_void);
-    /// Global output indices of one transaction. `out_found` is 0 when no
-    /// such transaction exists; on OK the view is valid until
-    /// `shekyl_rpc_tx_output_indices_free`.
-    pub fn shekyl_rpc_tx_output_indices(
-        h: *mut CoreRpcHandle,
-        txid: *const u8,
-        out: *mut *const u64,
-        out_len: *mut usize,
-        out_found: *mut u8,
-        out_owner: *mut *mut std::ffi::c_void,
-    ) -> i32;
-    pub fn shekyl_rpc_tx_output_indices_free(owner: *mut std::ffi::c_void);
-    /// Blocks at the given heights, in order. `out_ok` is 0 when a height
-    /// could not be read, with `out_failed_height` naming it.
-    pub fn shekyl_rpc_blocks_by_height(
-        h: *mut CoreRpcHandle,
-        heights: *const u64,
-        heights_len: usize,
-        out: *mut *const BlockEntryFfi,
-        out_len: *mut usize,
-        out_failed_height: *mut u64,
-        out_ok: *mut u8,
-        out_owner: *mut *mut std::ffi::c_void,
-    ) -> i32;
-    pub fn shekyl_rpc_blocks_by_height_free(owner: *mut std::ffi::c_void);
-
-    /// Transactions by hash, answered per request slot (RK-4c). `txids` is
-    /// `txids_len * 32` bytes; `out_chain_height` is the tip, read once for
-    /// the whole gather. On OK the rows borrow memory owned by `*out_owner`,
-    /// released with `shekyl_rpc_transactions_free`.
-    pub fn shekyl_rpc_transactions(
-        h: *mut CoreRpcHandle,
-        txids: *const u8,
-        txids_len: usize,
-        include_sensitive: u8,
-        out: *mut *const TxEntryFfi,
-        out_len: *mut usize,
-        out_chain_height: *mut u64,
-        out_owner: *mut *mut std::ffi::c_void,
-    ) -> i32;
-    pub fn shekyl_rpc_transactions_free(owner: *mut std::ffi::c_void);
-
-    /// epee's JSON rendering of one transaction (RK-D11). No handle, no lock.
-    pub fn shekyl_rpc_tx_to_json(
-        blob: *const u8,
-        blob_len: usize,
-        pruned: u8,
-        out: *mut *const std::os::raw::c_char,
-        out_len: *mut usize,
-        out_owner: *mut *mut std::ffi::c_void,
-    ) -> i32;
-    pub fn shekyl_rpc_tx_json_free(owner: *mut std::ffi::c_void);
-
-    /// Key images, answered per request slot: `out_status` is a caller-owned
-    /// array of `count` bytes (0 unspent, 1 chain, 2 pool). Fixed size, so no
-    /// owner.
-    pub fn shekyl_rpc_key_images_spent(
-        h: *mut CoreRpcHandle,
-        key_images: *const u8,
-        count: usize,
-        out_status: *mut u8,
-    ) -> i32;
-    pub fn shekyl_rpc_block_header_at(
-        h: *mut CoreRpcHandle,
-        block_hash: *const u8,
-        height: u64,
-        fill_pow_hash: u8,
-        out: *mut BlockHeaderFactsFfi,
-    ) -> i32;
 }
 
 /// [`shekyl_seam_session_counts`] wrote the counts.
@@ -757,7 +603,7 @@ extern "C" {
 ///
 /// The lib test binary links no C++ archive, and GNU ld resolves every
 /// symbol a retained function references — the console's remote-arm tests
-/// reach `FfiChainFacts` through the same function as the live arm, so the
+/// reach `FfiP2pFacts` through the same function as the live arm, so the
 /// five symbols that path names must exist. Each stub is the "no core here"
 /// answer: a null handle or the NULL error code. Only symbols a unit test
 /// actually retains are stubbed; a new one shows up as a link error, never
@@ -788,58 +634,9 @@ mod unit_test_link_stubs {
     #[no_mangle]
     pub extern "C" fn core_rpc_ffi_free_string(_s: *mut std::os::raw::c_char) {}
     #[no_mangle]
-    pub extern "C" fn shekyl_rpc_fee_estimate(
-        _h: *mut CoreRpcHandle,
-        _out: *mut FeeEstimateFactsFfi,
-    ) -> i32 {
-        SHEKYL_RPC_FACTS_ERR_NULL
-    }
-    #[no_mangle]
     pub extern "C" fn shekyl_rpc_net_stats(
         _h: *mut CoreRpcHandle,
         _out: *mut NetStatsFactsFfi,
-    ) -> i32 {
-        SHEKYL_RPC_FACTS_ERR_NULL
-    }
-    #[no_mangle]
-    pub extern "C" fn shekyl_rpc_info_chain(
-        _h: *mut CoreRpcHandle,
-        _out: *mut InfoChainFactsFfi,
-    ) -> i32 {
-        SHEKYL_RPC_FACTS_ERR_NULL
-    }
-    #[no_mangle]
-    pub extern "C" fn shekyl_rpc_info_pool_counts(
-        _h: *mut CoreRpcHandle,
-        _with_unbroadcast: u8,
-        _out_broadcast: *mut u64,
-        _out_unbroadcast: *mut u64,
-    ) -> i32 {
-        SHEKYL_RPC_FACTS_ERR_NULL
-    }
-    #[no_mangle]
-    pub extern "C" fn shekyl_rpc_info_status(
-        _h: *mut CoreRpcHandle,
-        _out: *mut InfoStatusFactsFfi,
-        _version_buf: *mut u8,
-        _version_cap: usize,
-        _version_len: *mut usize,
-    ) -> i32 {
-        SHEKYL_RPC_FACTS_ERR_NULL
-    }
-    #[no_mangle]
-    pub extern "C" fn shekyl_rpc_info_peers(
-        _h: *mut CoreRpcHandle,
-        _out: *mut InfoPeersFactsFfi,
-    ) -> i32 {
-        SHEKYL_RPC_FACTS_ERR_NULL
-    }
-    #[no_mangle]
-    pub extern "C" fn shekyl_rpc_info_store_file(
-        _h: *mut CoreRpcHandle,
-        _path_buf: *mut u8,
-        _path_cap: usize,
-        _path_len: *mut usize,
     ) -> i32 {
         SHEKYL_RPC_FACTS_ERR_NULL
     }
@@ -897,121 +694,4 @@ mod unit_test_link_stubs {
     }
     #[no_mangle]
     pub extern "C" fn core_rpc_ffi_destroy(_h: *mut CoreRpcHandle) {}
-    #[no_mangle]
-    pub extern "C" fn shekyl_rpc_chain_tip(
-        _h: *mut CoreRpcHandle,
-        _out: *mut ChainTipFactsFfi,
-    ) -> i32 {
-        SHEKYL_RPC_FACTS_ERR_NULL
-    }
-    #[no_mangle]
-    pub extern "C" fn shekyl_rpc_identity(
-        _h: *mut CoreRpcHandle,
-        _out: *mut IdentityFactsFfi,
-    ) -> i32 {
-        SHEKYL_RPC_FACTS_ERR_NULL
-    }
-    #[no_mangle]
-    pub extern "C" fn shekyl_rpc_block_at(
-        _h: *mut CoreRpcHandle,
-        _block_hash: *const u8,
-        _height: u64,
-        _fill_pow_hash: u8,
-        _out_header: *mut BlockHeaderFactsFfi,
-        _out_payload: *mut BlockPayloadFfi,
-        _out_owner: *mut *mut std::ffi::c_void,
-    ) -> i32 {
-        SHEKYL_RPC_FACTS_ERR_NULL
-    }
-    #[no_mangle]
-    pub extern "C" fn shekyl_rpc_block_free(_owner: *mut std::ffi::c_void) {}
-    #[no_mangle]
-    pub extern "C" fn shekyl_rpc_tx_output_indices(
-        _h: *mut CoreRpcHandle,
-        _txid: *const u8,
-        _out: *mut *const u64,
-        _out_len: *mut usize,
-        _out_found: *mut u8,
-        _out_owner: *mut *mut std::ffi::c_void,
-    ) -> i32 {
-        SHEKYL_RPC_FACTS_ERR_NULL
-    }
-    #[no_mangle]
-    pub extern "C" fn shekyl_rpc_tx_output_indices_free(_owner: *mut std::ffi::c_void) {}
-    #[no_mangle]
-    #[allow(clippy::too_many_arguments)]
-    pub extern "C" fn shekyl_rpc_blocks_by_height(
-        _h: *mut CoreRpcHandle,
-        _heights: *const u64,
-        _heights_len: usize,
-        _out: *mut *const BlockEntryFfi,
-        _out_len: *mut usize,
-        _out_failed_height: *mut u64,
-        _out_ok: *mut u8,
-        _out_owner: *mut *mut std::ffi::c_void,
-    ) -> i32 {
-        SHEKYL_RPC_FACTS_ERR_NULL
-    }
-    #[no_mangle]
-    pub extern "C" fn shekyl_rpc_blocks_by_height_free(_owner: *mut std::ffi::c_void) {}
-
-    #[no_mangle]
-    pub extern "C" fn shekyl_rpc_transactions(
-        _h: *mut super::CoreRpcHandle,
-        _txids: *const u8,
-        _txids_len: usize,
-        _include_sensitive: u8,
-        _out: *mut *const super::TxEntryFfi,
-        _out_len: *mut usize,
-        _out_chain_height: *mut u64,
-        _out_owner: *mut *mut std::ffi::c_void,
-    ) -> i32 {
-        super::SHEKYL_RPC_FACTS_ERR_NULL
-    }
-
-    #[no_mangle]
-    pub extern "C" fn shekyl_rpc_transactions_free(_owner: *mut std::ffi::c_void) {}
-
-    #[no_mangle]
-    pub extern "C" fn shekyl_rpc_tx_to_json(
-        _blob: *const u8,
-        _blob_len: usize,
-        _pruned: u8,
-        _out: *mut *const std::os::raw::c_char,
-        _out_len: *mut usize,
-        _out_owner: *mut *mut std::ffi::c_void,
-    ) -> i32 {
-        super::SHEKYL_RPC_FACTS_ERR_NULL
-    }
-
-    #[no_mangle]
-    pub extern "C" fn shekyl_rpc_tx_json_free(_owner: *mut std::ffi::c_void) {}
-
-    #[no_mangle]
-    pub extern "C" fn shekyl_rpc_key_images_spent(
-        _h: *mut super::CoreRpcHandle,
-        _key_images: *const u8,
-        _count: usize,
-        _out_status: *mut u8,
-    ) -> i32 {
-        super::SHEKYL_RPC_FACTS_ERR_NULL
-    }
-    #[no_mangle]
-    pub extern "C" fn shekyl_rpc_block_hash_at(
-        _h: *mut CoreRpcHandle,
-        _height: u64,
-        _out: *mut BlockHashFactsFfi,
-    ) -> i32 {
-        SHEKYL_RPC_FACTS_ERR_NULL
-    }
-    #[no_mangle]
-    pub extern "C" fn shekyl_rpc_block_header_at(
-        _h: *mut CoreRpcHandle,
-        _block_hash: *const u8,
-        _height: u64,
-        _fill_pow_hash: u8,
-        _out: *mut BlockHeaderFactsFfi,
-    ) -> i32 {
-        SHEKYL_RPC_FACTS_ERR_NULL
-    }
 }
