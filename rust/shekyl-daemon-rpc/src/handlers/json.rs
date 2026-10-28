@@ -105,12 +105,9 @@ macro_rules! json_handler {
 /// handler ignored its empty request struct. A facts fault answers with the
 /// same envelope a failed FFI dispatch does.
 pub async fn get_height(State(state): State<Arc<AppState>>, _body: String) -> impl IntoResponse {
-    let core = state.core.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        let facts = crate::chain_facts::FfiChainFacts::new(core);
-        crate::methods::get_height(&facts)
-    })
-    .await;
+    let chain = Arc::clone(&state.handles.chain);
+    let result =
+        tokio::task::spawn_blocking(move || crate::methods::get_height(chain.as_ref())).await;
     match result {
         Ok(Ok(reply)) => match serde_json::to_string(&reply) {
             Ok(json) => json_ok(json),
@@ -316,12 +313,11 @@ pub async fn get_info(
     Extension(authority): Extension<Authority>,
     _body: String,
 ) -> impl IntoResponse {
-    let core = state.core.clone();
+    let chain = Arc::clone(&state.handles.chain);
     let disclosure = authority.disclosure();
     let rpc_connections = state.conn_tracker.active_total();
     let result = tokio::task::spawn_blocking(move || {
-        let facts = crate::info_facts::FfiInfoFacts::new(core);
-        crate::info::get_info(&facts, disclosure, rpc_connections)
+        crate::info::get_info(chain.as_ref(), disclosure, rpc_connections)
     })
     .await;
     render("get_info", "node facts unavailable", result)

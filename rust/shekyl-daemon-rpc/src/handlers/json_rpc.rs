@@ -29,8 +29,9 @@
 //! Handler for the `/json_rpc` endpoint (JSON-RPC 2.0 dispatch).
 
 use crate::authority::{refusal, Authority};
-use crate::chain_facts::{FfiChainFacts, FfiP2pFacts};
+use crate::chain_facts::FfiP2pFacts;
 use crate::core::CoreRpc;
+use crate::handles::ChainReadHandle;
 use crate::methods::{InternalFault, RpcFault};
 use crate::server::AppState;
 use crate::types::{FfiJsonRpcResult, JsonRpcRequest, JsonRpcResponse};
@@ -228,6 +229,10 @@ fn native_method_for(method: &str) -> Option<NativeMethod> {
 
 /// Dispatch `method` natively if Rust owns it; `None` hands it to the C++
 /// table. Each arm is one `methods::*` call framed as a JSON value.
+///
+/// Chain rows read the node's store handle. `get_connections` and the sync
+/// spans inside `sync_info` still read the C++ handler: those facts live
+/// there until CS-5 deletes the handler's sync half.
 async fn native_method(
     state: &Arc<AppState>,
     authority: Authority,
@@ -236,27 +241,24 @@ async fn native_method(
 ) -> Option<Result<serde_json::Value, RpcFault>> {
     match native_method_for(method)? {
         NativeMethod::Version => Some(frame_native(
-            run_blocking(state, |core| {
-                crate::methods::get_version(&FfiChainFacts::new(core))
-            })
-            .await,
+            on_chain(state, |chain| crate::methods::get_version(chain.as_ref())).await,
         )),
         NativeMethod::BlockCount => Some(frame_native(
-            run_blocking(state, |core| {
-                crate::methods::get_block_count(&FfiChainFacts::new(core))
+            on_chain(state, |chain| {
+                crate::methods::get_block_count(chain.as_ref())
             })
             .await,
         )),
         NativeMethod::BlockHash => {
-            // The params parse is pure and its refusal needs no core, so it
+            // The params parse is pure and its refusal needs no store, so it
             // happens before a worker is taken.
             let height = match crate::methods::get_block_hash_height(params) {
                 Ok(height) => height,
                 Err(fault) => return Some(Err(fault)),
             };
             Some(frame_native(
-                run_blocking(state, move |core| {
-                    crate::methods::get_block_hash(&FfiChainFacts::new(core), height)
+                on_chain(state, move |chain| {
+                    crate::methods::get_block_hash(chain.as_ref(), height)
                 })
                 .await,
             ))
@@ -268,8 +270,8 @@ async fn native_method(
             };
             let fill_pow_hash = pow_hash_entitled(request.fill_pow_hash, authority.bounded());
             Some(frame_native(
-                run_blocking(state, move |core| {
-                    crate::methods::get_block(&FfiChainFacts::new(core), &request, fill_pow_hash)
+                on_chain(state, move |chain| {
+                    crate::methods::get_block(chain.as_ref(), &request, fill_pow_hash)
                 })
                 .await,
             ))
@@ -282,25 +284,24 @@ async fn native_method(
             let disclosure = authority.disclosure();
             let rpc_connections = state.conn_tracker.active_total();
             Some(frame_native(
-                run_blocking(state, move |core| {
-                    let facts = crate::info_facts::FfiInfoFacts::new(core);
-                    crate::info::get_info(&facts, disclosure, rpc_connections)
+                on_chain(state, move |chain| {
+                    crate::info::get_info(chain.as_ref(), disclosure, rpc_connections)
                 })
                 .await,
             ))
         }
-        NativeMethod::SyncInfo => Some(frame_native(
-            run_blocking(state, |core| {
-                // Two fact sources, one worker: `sync_info` is the only
-                // native method that reads the chain and the p2p layer,
-                // and they are not synchronised with each other — see
-                // `methods::sync_info`.
-                let chain = FfiChainFacts::new(Arc::clone(&core));
-                let p2p = FfiP2pFacts::new(core);
-                crate::methods::sync_info(&chain, &p2p)
-            })
-            .await,
-        )),
+        NativeMethod::SyncInfo => {
+            // Two fact sources, one worker: the chain is the store, the
+            // spans are still the C++ handler's (CS-5). They are not
+            // synchronised with each other — see `methods::sync_info`.
+            let chain = Arc::clone(&state.handles.chain);
+            Some(frame_native(
+                run_blocking(state, move |core| {
+                    crate::methods::sync_info(chain.as_ref(), &FfiP2pFacts::new(core))
+                })
+                .await,
+            ))
+        }
         NativeMethod::Connections => Some(frame_native(
             run_blocking(state, |core| {
                 crate::methods::get_connections(&FfiP2pFacts::new(core))
@@ -314,9 +315,9 @@ async fn native_method(
             };
             let bounded = authority.bounded();
             Some(frame_native(
-                run_blocking(state, move |core| {
+                on_chain(state, move |chain| {
                     crate::methods::get_last_block_header(
-                        &FfiChainFacts::new(core),
+                        chain.as_ref(),
                         request.fill_pow_hash,
                         bounded,
                     )
@@ -331,12 +332,8 @@ async fn native_method(
             };
             let bounded = authority.bounded();
             Some(frame_native(
-                run_blocking(state, move |core| {
-                    crate::methods::get_block_header_by_hash(
-                        &FfiChainFacts::new(core),
-                        &request,
-                        bounded,
-                    )
+                on_chain(state, move |chain| {
+                    crate::methods::get_block_header_by_hash(chain.as_ref(), &request, bounded)
                 })
                 .await,
             ))
@@ -348,12 +345,8 @@ async fn native_method(
             };
             let bounded = authority.bounded();
             Some(frame_native(
-                run_blocking(state, move |core| {
-                    crate::methods::get_block_headers_range(
-                        &FfiChainFacts::new(core),
-                        &request,
-                        bounded,
-                    )
+                on_chain(state, move |chain| {
+                    crate::methods::get_block_headers_range(chain.as_ref(), &request, bounded)
                 })
                 .await,
             ))
@@ -364,8 +357,8 @@ async fn native_method(
                 Err(fault) => return Some(Err(fault)),
             };
             Some(frame_native(
-                run_blocking(state, move |core| {
-                    crate::methods::get_fee_estimate(&FfiChainFacts::new(core), &request)
+                on_chain(state, move |chain| {
+                    crate::methods::get_fee_estimate(chain.as_ref(), &request)
                 })
                 .await,
             ))
@@ -415,9 +408,9 @@ async fn native_method(
             };
             let fill_pow_hash = pow_hash_entitled(request.fill_pow_hash, authority.bounded());
             Some(frame_native(
-                run_blocking(state, move |core| {
+                on_chain(state, move |chain| {
                     crate::methods::get_block_header_by_height(
-                        &FfiChainFacts::new(core),
+                        chain.as_ref(),
                         request.height,
                         fill_pow_hash,
                     )
@@ -428,10 +421,21 @@ async fn native_method(
     }
 }
 
+/// Run a chain read on a worker. The handle is the node's store; the HTTP
+/// task must not block on it. A join failure is an [`InternalFault`].
+async fn on_chain<T, F>(state: &Arc<AppState>, f: F) -> Result<T, RpcFault>
+where
+    T: Send + 'static,
+    F: FnOnce(&ChainReadHandle) -> Result<T, RpcFault> + Send + 'static,
+{
+    let chain = Arc::clone(&state.handles.chain);
+    join_fault(tokio::task::spawn_blocking(move || f(&chain)).await)?
+}
+
 /// Run a native method on a worker thread holding the live core.
 ///
-/// Facts reads block on C++; the HTTP task must not. A join failure is an
-/// [`InternalFault`], never a fact about the chain.
+/// What remains here reads the C++ handler (sync spans, connections). A
+/// join failure is an [`InternalFault`], never a fact about the chain.
 async fn run_blocking<T, F>(state: &Arc<AppState>, f: F) -> Result<T, RpcFault>
 where
     T: Send + 'static,
