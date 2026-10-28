@@ -117,7 +117,7 @@ namespace cryptonote
     * limited to, communication among the Blockchain, the transaction pool,
     * any miners, and the network.
     */
-   class core final: public i_miner_handler, public i_core_events
+   class core final: public i_core_events
    {
    public:
 
@@ -262,14 +262,14 @@ namespace cryptonote
       *
       * @return true if the block was added to the main chain, otherwise false
       */
-     bool handle_block_found(block& b, block_verification_context &bvc) final;
+     bool handle_block_found(block& b, block_verification_context &bvc);
 
      /**
       * @copydoc Blockchain::create_block_template
       *
       * @note see Blockchain::create_block_template
       */
-     bool get_block_template(block& b, const account_public_address& adr, difficulty_type& diffic, uint64_t& height, uint64_t& expected_reward, const blobdata& ex_nonce, uint64_t &seed_height, crypto::hash &seed_hash) final;
+     bool get_block_template(block& b, const account_public_address& adr, difficulty_type& diffic, uint64_t& height, uint64_t& expected_reward, const blobdata& ex_nonce, uint64_t &seed_height, crypto::hash &seed_hash);
 
      /**
       * @copydoc Blockchain::get_miner_data
@@ -287,20 +287,6 @@ namespace cryptonote
      //! Hand the stem watch's propagation verdicts to the pool (F-10, §49).
      void on_stem_propagated(epee::span<const crypto::hash> txids) final;
 
-
-     /**
-      * @brief gets the miner instance
-      *
-      * @return a reference to the miner instance
-      */
-     miner& get_miner(){return m_miner;}
-
-     /**
-      * @brief gets the miner instance (const)
-      *
-      * @return a const reference to the miner instance
-      */
-     const miner& get_miner()const{return m_miner;}
 
      /**
       * @brief adds command line options to the given options set
@@ -388,7 +374,10 @@ namespace cryptonote
      template<class t_ids_container, class t_blocks_container, class t_missed_container>
      bool get_blocks(const t_ids_container& block_ids, t_blocks_container& blocks, t_missed_container& missed_bs) const
      {
-       return m_blockchain_storage.get_blocks(block_ids, blocks, missed_bs);
+       (void)block_ids;
+       (void)blocks;
+       (void)missed_bs;
+       return false;
      }
 
      /**
@@ -596,33 +585,6 @@ namespace cryptonote
       * @note see miner::resume
       */
      void resume_mine();
-
-     /**
-      * @brief gets the Blockchain instance
-      *
-      * @return a reference to the Blockchain instance
-      */
-     Blockchain& get_blockchain_storage(){return m_blockchain_storage;}
-
-     /**
-      * @brief gets the Blockchain instance (const)
-      *
-      * @return a const reference to the Blockchain instance
-      */
-     const Blockchain& get_blockchain_storage()const{return m_blockchain_storage;}
-
-     /**
-      * @brief gets the transaction pool instance
-      *
-      * Consumed by the Rust submit shims (daemon_submit_ffi.cpp), which need
-      * direct pool fact queries (identity, key-image conflicts) and the
-      * attested insert tail under one pool→blockchain lock scope
-      * (DAEMON_SUBMIT_VERDICT.md §4.1/§4.2) — surfaces core's per-call
-      * forwarders don't expose.
-      *
-      * @return a reference to the transaction pool instance
-      */
-     tx_memory_pool& get_pool(){return m_mempool;}
 
      /**
       * @copydoc tx_memory_pool::print_pool
@@ -883,15 +845,11 @@ namespace cryptonote
 
 
 
-     tx_memory_pool m_mempool; //!< transaction pool instance
-     Blockchain m_blockchain_storage; //!< Blockchain instance
+     checkpoints m_checkpoints;
 
      i_cryptonote_protocol* m_pprotocol; //!< cryptonote protocol instance
 
      epee::critical_section m_incoming_tx_lock; //!< incoming transaction lock
-
-     //m_miner and m_miner_addres are probably temporary here
-     miner m_miner; //!< miner instance
 
      std::string m_config_folder; //!< folder to look in for configs and other files
 

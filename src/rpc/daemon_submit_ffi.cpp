@@ -939,12 +939,25 @@ int shekyl_submit_snapshot_facts(core_rpc_handle* h,
 {
   if (!h || !h->rpc)
     return SHEKYL_SUBMIT_INTERNAL_FAULT;
-  core& c = h->rpc->get_core();
-  return daemon_submit::snapshot_facts(c.get_pool(), c.get_blockchain_storage(),
-    txid, key_images, n_key_images, reference_block, bond_p_canonical_id,
-    bond_probe_kind, bond_auth_pubkey, bond_auth_pubkey_len, bond_debit,
-    emission_p_canonical_id, emission_epochs, n_emission_epochs, out_emission,
-    out_release, out_facts, out_ki_conflicts);
+  (void)txid;
+  (void)key_images;
+  (void)n_key_images;
+  (void)reference_block;
+  (void)bond_p_canonical_id;
+  (void)bond_probe_kind;
+  (void)bond_auth_pubkey;
+  (void)bond_auth_pubkey_len;
+  (void)bond_debit;
+  (void)emission_p_canonical_id;
+  (void)emission_epochs;
+  (void)n_emission_epochs;
+  (void)out_emission;
+  (void)out_release;
+  (void)out_facts;
+  (void)out_ki_conflicts;
+  // Production submit reads the Rust pool. This export is the deleted
+  // C++ snapshot.
+  return SHEKYL_SUBMIT_INTERNAL_FAULT;
 }
 
 int shekyl_submit_commit_tx(core_rpc_handle* h,
@@ -958,21 +971,25 @@ int shekyl_submit_commit_tx(core_rpc_handle* h,
 {
   if (!h || !h->rpc)
     return SHEKYL_SUBMIT_INTERNAL_FAULT;
-  core& c = h->rpc->get_core();
-  return daemon_submit::commit_tx(c.get_pool(), c.get_blockchain_storage(),
-    blob, blob_len, txid, tx_weight, fee, cert_ref_block, cert_ref_height,
-    cert_root, out_fresh_facts, out_fresh_ki_conflicts, n_key_images);
+  (void)blob;
+  (void)blob_len;
+  (void)txid;
+  (void)tx_weight;
+  (void)fee;
+  (void)cert_ref_block;
+  (void)cert_ref_height;
+  (void)cert_root;
+  (void)out_fresh_facts;
+  (void)out_fresh_ki_conflicts;
+  (void)n_key_images;
+  return SHEKYL_SUBMIT_INTERNAL_FAULT;
 }
 
 int shekyl_submit_relay_tx(core_rpc_handle* h, const uint8_t* txid)
 {
-  if (!h || !h->rpc)
+  if (!h || !h->rpc || !txid)
     return SHEKYL_SUBMIT_INTERNAL_FAULT;
-  core& c = h->rpc->get_core();
-  i_cryptonote_protocol* protocol = c.get_protocol();
-  if (!protocol)
-    return SHEKYL_SUBMIT_INTERNAL_FAULT;
-  return daemon_submit::relay_tx(c.get_pool(), *protocol, txid);
+  return SHEKYL_SUBMIT_INTERNAL_FAULT;
 }
 
 // ── §4.5 round-trip test hooks ──────────────────────────────────────────────

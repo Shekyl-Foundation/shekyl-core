@@ -101,7 +101,6 @@ add_subdirectory(cryptonote_protocol)
 if(NOT IOS)
   add_subdirectory(gen_ssl_cert)
   add_subdirectory(daemon)
-  add_subdirectory(blockchain_utilities)
 endif()
 
 if(BUILD_DEBUG_UTILITIES)

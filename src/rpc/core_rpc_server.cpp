@@ -162,135 +162,33 @@ namespace cryptonote
   //------------------------------------------------------------------------------------------------------------------------------
   //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::on_start_mining(const COMMAND_RPC_START_MINING::request& req, COMMAND_RPC_START_MINING::response& res, const connection_context *ctx)
-  {
-    RPC_TRACKER(start_mining);
-    CHECK_CORE_READY();
-    cryptonote::address_parse_info info;
-    if(!get_account_address_from_str(info, nettype(), req.miner_address))
-    {
-      res.status = "Failed, wrong address";
-      LOG_PRINT_L0(res.status);
-      return true;
-    }
-    if (info.is_subaddress)
-    {
-      res.status = "Mining to subaddress isn't supported yet";
-      LOG_PRINT_L0(res.status);
-      return true;
-    }
-
-    unsigned int concurrency_count = boost::thread::hardware_concurrency() * 4;
-
-    // if we couldn't detect threads, set it to a ridiculously high number
-    if(concurrency_count == 0)
-    {
-      concurrency_count = 257;
-    }
-
-    // if there are more threads requested than the hardware supports
-    // then we fail and log that.
-    if(req.threads_count > concurrency_count)
-    {
-      res.status = "Failed, too many threads relative to CPU cores.";
-      LOG_PRINT_L0(res.status);
-      return true;
-    }
-
-    cryptonote::miner &miner= m_core.get_miner();
-    if (miner.is_mining())
-    {
-      res.status = "Already mining";
-      return true;
-    }
-    if(!miner.start(info.address, req.miner_address, static_cast<size_t>(req.threads_count)))
-    {
-      res.status = "Failed, mining not started";
-      LOG_PRINT_L0(res.status);
-      return true;
-    }
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
+{
+    (void)req; (void)res;
+    return false;
   }
   //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::on_stop_mining(const COMMAND_RPC_STOP_MINING::request& req, COMMAND_RPC_STOP_MINING::response& res, const connection_context *ctx)
-  {
-    RPC_TRACKER(stop_mining);
-    cryptonote::miner &miner= m_core.get_miner();
-    if(!miner.is_mining())
-    {
-      res.status = "Mining never started";
-      LOG_PRINT_L0(res.status);
-      return true;
-    }
-    if(!miner.stop())
-    {
-      res.status = "Failed, mining not stopped";
-      LOG_PRINT_L0(res.status);
-      return true;
-    }
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
+{
+    (void)req; (void)res;
+    return false;
   }
   //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::on_mining_status(const COMMAND_RPC_MINING_STATUS::request& req, COMMAND_RPC_MINING_STATUS::response& res, const connection_context *ctx)
-  {
-    RPC_TRACKER(mining_status);
-
-    const miner& lMiner = m_core.get_miner();
-    res.active = lMiner.is_mining();
-    store_difficulty(m_core.get_blockchain_storage().get_difficulty_for_next_block(), res.difficulty, res.wide_difficulty, res.difficulty_top64);
-
-    // RPC wire contract: mining_status.block_target is part of the public
-    // JSON-RPC surface. The literal 120 (seconds per block) is pinned by
-    // the contract. The round-trip regression test that pins the wire
-    // bytes lives at tests/unit_tests/rpc_target_wire_contract.cpp; see
-    // docs/completed/DAA_LWMA1_PHASE4_PREFLIGHT.md §16.4 for the rationale.
-    static_assert(SHEKYL_DAA_TARGET_SECONDS == 120,
-        "RPC wire contract: mining_status.block_target carries the block "
-        "target time in seconds; 120 is pinned by the public JSON-RPC "
-        "contract.");
-    res.block_target = SHEKYL_DAA_TARGET_SECONDS;
-    if ( lMiner.is_mining() ) {
-      res.speed = lMiner.get_speed();
-      res.threads_count = lMiner.get_threads_count();
-      res.block_reward = lMiner.get_block_reward();
-    }
-    // The retained original string, not a struct re-encode: since the
-    // fork-(ii) address layout the struct alone cannot re-encode an
-    // address (no msg_sign_pk field).
-    if (lMiner.is_mining())
-      res.address = lMiner.get_mining_address_str();
-    res.pow_algorithm = "RandomX";
-
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
+{
+    (void)req; (void)res;
+    return false;
   }
   //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::on_save_bc(const COMMAND_RPC_SAVE_BC::request& req, COMMAND_RPC_SAVE_BC::response& res, const connection_context *ctx)
-  {
-    RPC_TRACKER(save_bc);
-    if( !m_core.get_blockchain_storage().store_blockchain() )
-    {
-      res.status = "Error while storing blockchain";
-      return true;
-    }
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
+{
+    (void)req; (void)res;
+    return false;
   }
   //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::on_set_log_hash_rate(const COMMAND_RPC_SET_LOG_HASH_RATE::request& req, COMMAND_RPC_SET_LOG_HASH_RATE::response& res, const connection_context *ctx)
-  {
-    RPC_TRACKER(set_log_hash_rate);
-    if(m_core.get_miner().is_mining())
-    {
-      m_core.get_miner().do_print_hashrate(req.visible);
-      res.status = CORE_RPC_STATUS_OK;
-    }
-    else
-    {
-      res.status = CORE_RPC_STATUS_NOT_MINING;
-    }
-    return true;
+{
+    (void)req; (void)res;
+    return false;
   }
   //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::on_get_transaction_pool(const COMMAND_RPC_GET_TRANSACTION_POOL::request& req, COMMAND_RPC_GET_TRANSACTION_POOL::response& res, const connection_context *ctx)
@@ -556,51 +454,9 @@ namespace cryptonote
   }
   //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::on_calcpow(const COMMAND_RPC_CALCPOW::request& req, COMMAND_RPC_CALCPOW::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
-  {
-    RPC_TRACKER(calcpow);
-
-    blobdata blockblob;
-    if(!string_tools::parse_hexstr_to_binbuff(req.block_blob, blockblob))
-    {
-      error_resp.code = CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB;
-      error_resp.message = "Wrong block blob";
-      return false;
-    }
-
-    if(!m_core.check_incoming_block_size(blockblob))
-    {
-      error_resp.code = CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB_SIZE;
-      error_resp.message = "Block blob size is too big, rejecting block";
-      return false;
-    }
-    crypto::hash seed_hash, pow_hash;
-    std::string buf;
-    if(req.seed_hash.size())
-    {
-      if (!string_tools::parse_hexstr_to_binbuff(req.seed_hash, buf) ||
-        buf.size() != sizeof(crypto::hash))
-      {
-        error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
-        error_resp.message = "Wrong seed hash";
-        return false;
-      }
-      buf.copy(reinterpret_cast<char *>(&seed_hash), sizeof(crypto::hash));
-    }
-
-    try
-    {
-      cryptonote::get_block_longhash(&(m_core.get_blockchain_storage()), blockblob, pow_hash, req.height,
-        req.seed_hash.size() ? &seed_hash : NULL);
-    }
-    catch (const std::exception &e)
-    {
-      MERROR("Caught unexpected error while hashing in core_rpc_server::on_calc_pow: " << e.what());
-      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
-      error_resp.message = e.what();
-      return false;
-    }
-    res = string_tools::pod_to_hex(pow_hash);
-    return true;
+{
+    (void)req; (void)res;
+    return false;
   }
   //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::on_submitblock(const COMMAND_RPC_SUBMITBLOCK::request& req, COMMAND_RPC_SUBMITBLOCK::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
@@ -654,124 +510,15 @@ namespace cryptonote
   }
   //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::on_generateblocks(const COMMAND_RPC_GENERATEBLOCKS::request& req, COMMAND_RPC_GENERATEBLOCKS::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
-  {
-    RPC_TRACKER(generateblocks);
-
-    CHECK_CORE_READY();
-    
-    res.status = CORE_RPC_STATUS_OK;
-
-    // An armed test lever (RPC_CHANNEL.md §6.1, RT-O9.2): the daemon's
-    // armed-lever switch, checked in Rust before this handler is entered, is
-    // its only gate. The network type never enables it (rule 71); `dev-rpc`
-    // is refused on mainnet (IG-Q49, RT-O36).
-
-    // RESERVED / NOT SUPPORTED -- refuse rather than silently generate on the
-    // tip, so a caller who asked for a specific parent is told, not guessed at.
-    if (!req.prev_block.empty())
-    {
-      error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
-      error_resp.message = "prev_block templates are not supported; build on the tip";
-      return false;
-    }
-    COMMAND_RPC_GETBLOCKTEMPLATE::request template_req;
-    COMMAND_RPC_GETBLOCKTEMPLATE::response template_res;
-    COMMAND_RPC_SUBMITBLOCK::request submit_req;
-    COMMAND_RPC_SUBMITBLOCK::response submit_res;
-
-    template_req.wallet_address = req.wallet_address;
-    submit_req.push_back(std::string{});
-    res.height = m_core.get_blockchain_storage().get_current_blockchain_height();
-
-    for(size_t i = 0; i < req.amount_of_blocks; i++)
-    {
-      bool r = on_getblocktemplate(template_req, template_res, error_resp, ctx);
-      res.status = template_res.status;
-      
-      if (!r) return false;
-
-      blobdata blockblob;
-      if(!string_tools::parse_hexstr_to_binbuff(template_res.blocktemplate_blob, blockblob))
-      {
-        error_resp.code = CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB;
-        error_resp.message = "Wrong block blob";
-        return false;
-      }
-      block b;
-      if(!parse_and_validate_block_from_blob(blockblob, b))
-      {
-        error_resp.code = CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB;
-        error_resp.message = "Wrong block blob";
-        return false;
-      }
-      b.nonce = req.starting_nonce;
-      crypto::hash seed_hash = crypto::null_hash;
-      if (!epee::string_tools::hex_to_pod(template_res.seed_hash, seed_hash))
-      {
-        error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
-        error_resp.message = "Error converting seed hash";
-        return false;
-      }
-      miner::find_nonce_for_given_block([this](const cryptonote::block &b, uint64_t height, const crypto::hash *seed_hash, crypto::hash &hash) {
-        return cryptonote::get_block_longhash(&(m_core.get_blockchain_storage()), b, hash, height, seed_hash);
-      }, b, template_res.difficulty, template_res.height, &seed_hash);
-
-      submit_req.front() = string_tools::buff_to_hex_nodelimer(block_to_blob(b));
-      r = on_submitblock(submit_req, submit_res, error_resp, ctx);
-      res.status = submit_res.status;
-
-      if (!r) return false;
-
-      res.blocks.push_back(epee::string_tools::pod_to_hex(get_block_hash(b)));
-      // Previously re-pointed the next template at the block just mined. After a
-      // successful on_submitblock the tip IS that block, so tip-building is
-      // equivalent -- and prev_block templates are gone (DRS/Stage-3a).
-      res.height = template_res.height;
-    }
-
-    return true;
+{
+    (void)req; (void)res;
+    return false;
   }
   //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::on_inject_archival_serve_credit(const COMMAND_RPC_INJECT_ARCHIVAL_SERVE_CREDIT::request& req, COMMAND_RPC_INJECT_ARCHIVAL_SERVE_CREDIT::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
-  {
-    RPC_TRACKER(inject_archival_serve_credit);
-
-    CHECK_CORE_READY();
-
-    // An armed test lever (RPC_CHANNEL.md §6.1, RT-O9.2). Rust admits the
-    // call against the armed-lever switch before this handler is entered.
-    // The setter keeps a narrower restriction (RT-O36):
-    // Blockchain::regtest_inject_archival_serve_credit refuses unless the
-    // network is regtest. The network narrows what the switch enables; it
-    // never enables the lever. `dev-rpc` is refused on mainnet (IG-Q49).
-
-    crypto::hash p_canonical_id;
-    if (!epee::string_tools::hex_to_pod(req.p_canonical_id, p_canonical_id))
-    {
-      error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
-      error_resp.message = "p_canonical_id is not a 32-byte hex hash";
-      return false;
-    }
-
-    // PC-D4: the tip index the row is attributed to is derived INSIDE the
-    // injector, under the blockchain lock — a snapshot taken here would be
-    // pre-lock and can go stale against a concurrent mine/pop. On refusal
-    // (wrong nettype, empty chain) the daemon log names the reason.
-    // The receipt: the tip index the row was keyed at, from inside the
-    // lock. The caller's only way to learn it (DRS-E4 §3.8 item 3 — the
-    // capture replays the injection as a corpus event at this height).
-    uint64_t attributed_height = 0;
-    if (!m_core.get_blockchain_storage().regtest_inject_archival_serve_credit(
-      p_canonical_id, req.shard_id, req.settlement_epoch, attributed_height))
-    {
-      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
-      error_resp.message = "Serve-credit injection failed";
-      return false;
-    }
-
-    res.height = attributed_height;
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
+{
+    (void)req; (void)res;
+    return false;
   }
   //------------------------------------------------------------------------------------------------------------------------------
   //------------------------------------------------------------------------------------------------------------------------------
@@ -918,57 +665,9 @@ namespace cryptonote
   }
   //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::on_flush_txpool(const COMMAND_RPC_FLUSH_TRANSACTION_POOL::request& req, COMMAND_RPC_FLUSH_TRANSACTION_POOL::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
-  {
-    RPC_TRACKER(flush_txpool);
-
-    bool failed = false;
-    std::vector<crypto::hash> txids;
-    if (req.txids.empty())
-    {
-      std::vector<transaction> pool_txs;
-      bool r = m_core.get_pool_transactions(pool_txs, true);
-      if (!r)
-      {
-        res.status = "Failed to get txpool contents";
-        return true;
-      }
-      for (const auto &tx: pool_txs)
-      {
-        txids.push_back(cryptonote::get_transaction_hash(tx));
-      }
-    }
-    else
-    {
-      for (const auto &str: req.txids)
-      {
-        crypto::hash txid;
-        if(!epee::string_tools::hex_to_pod(str, txid))
-        {
-          failed = true;
-        }
-        else
-        {
-          txids.push_back(txid);
-        }
-      }
-    }
-    if (!m_core.get_blockchain_storage().flush_txes_from_pool(txids))
-    {
-      res.status = "Failed to remove one or more tx(es)";
-      return true;
-    }
-
-    if (failed)
-    {
-      if (txids.empty())
-        res.status = "Failed to parse txid";
-      else
-        res.status = "Failed to parse some of the txids";
-      return true;
-    }
-
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
+{
+    (void)req; (void)res;
+    return false;
   }
   //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::on_get_coinbase_tx_sum(const COMMAND_RPC_GET_COINBASE_TX_SUM::request& req, COMMAND_RPC_GET_COINBASE_TX_SUM::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
@@ -989,56 +688,15 @@ namespace cryptonote
   //------------------------------------------------------------------------------------------------------------------------------
   //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::on_get_alternate_chains(const COMMAND_RPC_GET_ALTERNATE_CHAINS::request& req, COMMAND_RPC_GET_ALTERNATE_CHAINS::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
-  {
-    RPC_TRACKER(get_alternate_chains);
-    try
-    {
-      std::vector<std::pair<Blockchain::block_extended_info, std::vector<crypto::hash>>> chains = m_core.get_blockchain_storage().get_alternative_chains();
-      for (const auto &i: chains)
-      {
-        difficulty_type wdiff = i.first.cumulative_difficulty;
-        res.chains.push_back(COMMAND_RPC_GET_ALTERNATE_CHAINS::chain_info{epee::string_tools::pod_to_hex(get_block_hash(i.first.bl)), i.first.height, i.second.size(), 0, "", 0, {}, std::string()});
-        store_difficulty(wdiff, res.chains.back().difficulty, res.chains.back().wide_difficulty, res.chains.back().difficulty_top64);
-        res.chains.back().block_hashes.reserve(i.second.size());
-        for (const crypto::hash &block_id: i.second)
-          res.chains.back().block_hashes.push_back(epee::string_tools::pod_to_hex(block_id));
-        if (i.first.height < i.second.size())
-        {
-          res.status = "Error finding alternate chain attachment point";
-          return true;
-        }
-        cryptonote::block main_chain_parent_block;
-        try { main_chain_parent_block = m_core.get_blockchain_storage().get_db().get_block_from_height(i.first.height - i.second.size()); }
-        catch (const std::exception &e) { res.status = "Error finding alternate chain attachment point"; return true; }
-        res.chains.back().main_chain_parent_block = epee::string_tools::pod_to_hex(get_block_hash(main_chain_parent_block));
-      }
-      res.status = CORE_RPC_STATUS_OK;
-    }
-    catch (...)
-    {
-      res.status = "Error retrieving alternate chains";
-    }
-    return true;
+{
+    (void)req; (void)res;
+    return false;
   }
   //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::on_pop_blocks(const COMMAND_RPC_POP_BLOCKS::request& req, COMMAND_RPC_POP_BLOCKS::response& res, const connection_context *ctx)
-  {
-    RPC_TRACKER(pop_blocks);
-
-    if (!m_core.get_blockchain_storage().pop_blocks(req.nblocks))
-    {
-      // C2-R1b F-1: a watermark refusal (or a mid-pop failure) must reach
-      // the caller as an explicit error, never as OK with an unchanged
-      // height an operator has to notice.
-      res.height = m_core.get_current_blockchain_height();
-      res.status = "Refused or failed: rollback would cross the prune watermark floor (or popping failed part-way); see the daemon log; remedy for a watermark refusal: resync this node";
-      return true;
-    }
-
-    res.height = m_core.get_current_blockchain_height();
-    res.status = CORE_RPC_STATUS_OK;
-
-    return true;
+{
+    (void)req; (void)res;
+    return false;
   }
   //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::on_relay_tx(const COMMAND_RPC_RELAY_TX::request& req, COMMAND_RPC_RELAY_TX::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
@@ -1136,104 +794,28 @@ namespace cryptonote
   }
   //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::on_get_curve_tree_info(const COMMAND_RPC_GET_CURVE_TREE_INFO::request& req, COMMAND_RPC_GET_CURVE_TREE_INFO::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
-  {
-    RPC_TRACKER(get_curve_tree_info);
-
-    const auto &db = m_core.get_blockchain_storage().get_db();
-    const auto root = db.get_curve_tree_root();
-    res.root = epee::string_tools::buff_to_hex_nodelimer(
-      std::string(reinterpret_cast<const char*>(root.data()), root.size()));
-    res.depth = db.get_curve_tree_depth();
-    res.leaf_count = db.get_curve_tree_leaf_count();
-    res.height = m_core.get_current_blockchain_height() - 1;
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
+{
+    (void)req; (void)res;
+    return false;
   }
   //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::on_get_curve_tree_checkpoint(const COMMAND_RPC_GET_CURVE_TREE_CHECKPOINT::request& req, COMMAND_RPC_GET_CURVE_TREE_CHECKPOINT::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
-  {
-    RPC_TRACKER(get_curve_tree_checkpoint);
-
-    const auto &db = m_core.get_blockchain_storage().get_db();
-    std::vector<uint8_t> checkpoint_data;
-    if (!db.get_curve_tree_checkpoint(req.block_height, checkpoint_data))
-    {
-      error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
-      error_resp.message = "No checkpoint at height " + std::to_string(req.block_height);
-      return false;
-    }
-
-    if (checkpoint_data.size() < 41)
-    {
-      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
-      error_resp.message = "Corrupt checkpoint data";
-      return false;
-    }
-
-    res.root = epee::string_tools::buff_to_hex_nodelimer(
-      std::string(reinterpret_cast<const char*>(checkpoint_data.data()), 32));
-    res.depth = checkpoint_data[32];
-    memcpy(&res.leaf_count, checkpoint_data.data() + 33, sizeof(uint64_t));
-    res.block_height = req.block_height;
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
+{
+    (void)req; (void)res;
+    return false;
   }
   //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::on_get_archival_emission_claim_source(const COMMAND_RPC_GET_ARCHIVAL_EMISSION_CLAIM_SOURCE::request& req, COMMAND_RPC_GET_ARCHIVAL_EMISSION_CLAIM_SOURCE::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
-  {
-    RPC_TRACKER(get_archival_emission_claim_source);
-
-    // `p_id` is the ONLY request field (EMISSION_CLAIM_BUILDER.md §7.2):
-    // the handler branches on nothing claimable-set-derived — the sole
-    // request-dependent branch below is this well-formedness check.
-    crypto::hash p_id;
-    if (!parse_hash256(req.p_id, p_id))
-    {
-      error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
-      error_resp.message = "p_id must be 64 hex characters (32-byte P_canonical_id)";
-      return false;
-    }
-
-    try
-    {
-      // One read view for the whole composite (§7.2 one-read-one-tip): the
-      // tip height, the bond record, and every epoch snapshot come from the
-      // same LMDB read transaction, so the response cannot straddle a block
-      // connect.
-      auto& db = m_core.get_blockchain_storage().get_db();
-      db_rtxn_guard rtxn_guard(&db);
-      rpc::fill_archival_emission_claim_source(db, p_id, res);
-    }
-    catch (const std::exception& e)
-    {
-      MERROR("Failed to gather emission claim source: " << e.what());
-      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
-      error_resp.message = "Failed to gather emission claim source";
-      return false;
-    }
-
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
+{
+    (void)req; (void)res;
+    return false;
   }
   //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::on_get_archival_shard_coverage(const COMMAND_RPC_GET_ARCHIVAL_SHARD_COVERAGE::request& /*req*/, COMMAND_RPC_GET_ARCHIVAL_SHARD_COVERAGE::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
-  {
-    RPC_TRACKER(get_archival_shard_coverage);
+{
+    (void)res;
+    (void)error_resp;
     (void)ctx;
-    try
-    {
-      auto& db = m_core.get_blockchain_storage().get_db();
-      db_rtxn_guard rtxn_guard(&db);
-      rpc::fill_archival_shard_coverage(db, res);
-    }
-    catch (const std::exception& e)
-    {
-      MERROR("Failed to gather archival shard coverage: " << e.what());
-      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
-      error_resp.message = "Failed to gather archival shard coverage";
-      return false;
-    }
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
+    return false;
   }
 }  // namespace cryptonote

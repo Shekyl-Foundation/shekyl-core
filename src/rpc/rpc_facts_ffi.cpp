@@ -1252,16 +1252,8 @@ int shekyl_rpc_identity(core_rpc_handle* h, shekyl_rpc_identity_facts* out)
     cryptonote::core& core = h->rpc->get_core();
     std::memset(out, 0, sizeof(*out));
     out->nettype = static_cast<uint8_t>(core.get_nettype());
-    // Block 0's id. `get_block_id_by_height` returns null_hash for a height
-    // the store does not have, which for height 0 means the chain is not
-    // loaded -- reported as NOT_READY rather than handed over as 32 zero
-    // bytes, because a client comparing against a pinned genesis would read
-    // all-zero as a mismatch and blame the wrong thing.
-    const crypto::hash genesis =
-      core.get_blockchain_storage().get_block_id_by_height(0);
-    if (genesis == crypto::null_hash)
+    if (shekyl_core_hash_at(0, out->genesis_hash) != 0)
       return SHEKYL_RPC_FACTS_ERR_NOT_READY;
-    std::memcpy(out->genesis_hash, genesis.data, sizeof(out->genesis_hash));
     return SHEKYL_RPC_FACTS_OK;
   }
   catch (const std::exception& e)
@@ -1287,8 +1279,17 @@ int shekyl_rpc_chain_tip(core_rpc_handle* h, shekyl_rpc_chain_tip_facts* out)
     const uint8_t synchronized =
       h->rpc->get_p2p().get_payload_object().is_synchronized() ? 1 : 0;
     const uint64_t target_height = core.get_target_blockchain_height();
-    return daemon_rpc_facts::chain_tip(core.get_blockchain_storage(),
-      synchronized, target_height, out);
+    std::uint64_t top_index = 0;
+    std::uint8_t top_hash[32] = {};
+    if (shekyl_core_top(&top_index, top_hash) != 0)
+      return SHEKYL_RPC_FACTS_ERR_NOT_READY;
+    std::memset(out, 0, sizeof(*out));
+    out->chain_height = top_index + 1;
+    std::memcpy(out->top_hash, top_hash, sizeof(out->top_hash));
+    out->target_height = target_height;
+    out->synchronized = synchronized;
+    out->release_build = SHEKYL_VERSION_IS_RELEASE ? 1 : 0;
+    return SHEKYL_RPC_FACTS_OK;
   }
   catch (const std::exception& e)
   {
@@ -1312,31 +1313,11 @@ int shekyl_rpc_info_chain(core_rpc_handle* h, shekyl_rpc_info_chain_facts* out)
 {
   if (!h || !h->rpc || !out)
     return SHEKYL_RPC_FACTS_ERR_NULL;
-  try
-  {
-    cryptonote::core& core = h->rpc->get_core();
-    auto& payload = h->rpc->get_p2p().get_payload_object();
-    daemon_rpc_facts::info_chain_scalars scalars{};
-    // Read once. The C++ handler read this predicate twice, for the target
-    // sentinel and for `synchronized`, and the two could differ.
-    scalars.synchronized = payload.is_synchronized() ? 1 : 0;
-    scalars.core_target_height = core.get_target_blockchain_height();
-    scalars.busy_syncing = payload.is_busy_syncing() ? 1 : 0;
-    scalars.offline = core.offline() ? 1 : 0;
-    return daemon_rpc_facts::info_chain(core.get_blockchain_storage(), scalars, out);
-  }
-  catch (const std::exception& e)
-  {
-    MERROR("info chain facts: exception: " << e.what());
-    std::memset(out, 0, sizeof(*out));
-    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
-  }
-  catch (...)
-  {
-    MERROR("info chain facts: unknown exception");
-    std::memset(out, 0, sizeof(*out));
-    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
-  }
+  // The handlers and the console read the store. This export remains for
+  // the facts shim's callers that have not moved; it does not open the
+  // C++ chain.
+  (void)h;
+  return SHEKYL_RPC_FACTS_ERR_NOT_READY;
 }
 
 int shekyl_rpc_info_pool_counts(core_rpc_handle* h, uint8_t with_unbroadcast,
@@ -1344,8 +1325,8 @@ int shekyl_rpc_info_pool_counts(core_rpc_handle* h, uint8_t with_unbroadcast,
 {
   if (!h || !h->rpc)
     return SHEKYL_RPC_FACTS_ERR_NULL;
-  return daemon_rpc_facts::info_pool_counts(h->rpc->get_core().get_pool(), with_unbroadcast,
-    out_broadcast, out_unbroadcast);
+  (void)with_unbroadcast;
+  return SHEKYL_RPC_FACTS_ERR_NOT_READY;
 }
 
 int shekyl_rpc_info_status(core_rpc_handle* h, shekyl_rpc_info_status_facts* out,
@@ -1353,41 +1334,9 @@ int shekyl_rpc_info_status(core_rpc_handle* h, shekyl_rpc_info_status_facts* out
 {
   if (!h || !h->rpc || !out || !version_buf || !version_len)
     return SHEKYL_RPC_FACTS_ERR_NULL;
+  (void)version_cap;
   *version_len = 0;
-  try
-  {
-    cryptonote::core& core = h->rpc->get_core();
-    daemon_rpc_facts::info_status_scalars scalars{};
-    scalars.start_time = static_cast<uint64_t>(core.get_start_time());
-    // Throws when the volume cannot be queried; the barrier below reports it.
-    scalars.free_space = core.get_free_space();
-    const int rc = daemon_rpc_facts::info_status(core.get_blockchain_storage(), scalars, out);
-    if (rc != SHEKYL_RPC_FACTS_OK)
-      return rc;
-    const std::string version = SHEKYL_VERSION_FULL;
-    if (version.size() > version_cap)
-    {
-      MERROR("info status facts: the version string is " << version.size()
-        << " bytes, over the " << version_cap << " the caller provided");
-      std::memset(out, 0, sizeof(*out));
-      return SHEKYL_RPC_FACTS_ERR_INTERNAL;
-    }
-    std::memcpy(version_buf, version.data(), version.size());
-    *version_len = version.size();
-    return SHEKYL_RPC_FACTS_OK;
-  }
-  catch (const std::exception& e)
-  {
-    MERROR("info status facts: exception: " << e.what());
-    std::memset(out, 0, sizeof(*out));
-    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
-  }
-  catch (...)
-  {
-    MERROR("info status facts: unknown exception");
-    std::memset(out, 0, sizeof(*out));
-    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
-  }
+  return SHEKYL_RPC_FACTS_ERR_NOT_READY;
 }
 
 int shekyl_rpc_info_peers(core_rpc_handle* h, shekyl_rpc_info_peers_facts* out)
@@ -1422,8 +1371,9 @@ int shekyl_rpc_info_store_file(core_rpc_handle* h, char* path_buf, size_t path_c
 {
   if (!h || !h->rpc || !path_buf || !path_len)
     return SHEKYL_RPC_FACTS_ERR_NULL;
-  return daemon_rpc_facts::info_store_file(h->rpc->get_core().get_blockchain_storage(),
-    path_buf, path_cap, path_len);
+  (void)path_cap;
+  *path_len = 0;
+  return SHEKYL_RPC_FACTS_ERR_NOT_READY;
 }
 
 // ── RK-5a: the p2p seam ─────────────────────────────────────────────────────
@@ -1656,15 +1606,24 @@ int shekyl_rpc_block_hash_at(core_rpc_handle* h, uint64_t height,
 {
   if (!h || !h->rpc || !out)
     return SHEKYL_RPC_FACTS_ERR_NULL;
-  return daemon_rpc_facts::block_hash_at(
-    h->rpc->get_core().get_blockchain_storage(), height, out);
+  std::memset(out, 0, sizeof(*out));
+  uint64_t count = 0;
+  if (shekyl_core_height(&count) != 0)
+    return SHEKYL_RPC_FACTS_ERR_NOT_READY;
+  out->chain_height = count;
+  if (height >= count)
+    return SHEKYL_RPC_FACTS_OK;
+  if (shekyl_core_hash_at(height, out->hash) != 0)
+    return SHEKYL_RPC_FACTS_ERR_NOT_READY;
+  out->found = 1;
+  return SHEKYL_RPC_FACTS_OK;
 }
 
 int shekyl_rpc_fee_estimate(core_rpc_handle* h, shekyl_rpc_fee_estimate_facts* out)
 {
   if (!h || !h->rpc || !out)
     return SHEKYL_RPC_FACTS_ERR_NULL;
-  return daemon_rpc_facts::fee_estimate(h->rpc->get_core().get_blockchain_storage(), out);
+  return SHEKYL_RPC_FACTS_ERR_NOT_READY;
 }
 
 int shekyl_rpc_block_header_at(core_rpc_handle* h, const uint8_t* block_hash,
@@ -1672,12 +1631,10 @@ int shekyl_rpc_block_header_at(core_rpc_handle* h, const uint8_t* block_hash,
 {
   if (!h || !h->rpc || !out)
     return SHEKYL_RPC_FACTS_ERR_NULL;
-  crypto::hash id;
-  if (block_hash)
-    std::memcpy(id.data, block_hash, sizeof(id.data));
-  return daemon_rpc_facts::block_header_at(
-    h->rpc->get_core().get_blockchain_storage(), block_hash ? &id : nullptr,
-    height, fill_pow_hash != 0, out);
+  (void)block_hash;
+  (void)height;
+  (void)fill_pow_hash;
+  return SHEKYL_RPC_FACTS_ERR_NOT_READY;
 }
 
 int shekyl_rpc_block_at(core_rpc_handle* h, const uint8_t* block_hash,
@@ -1685,22 +1642,14 @@ int shekyl_rpc_block_at(core_rpc_handle* h, const uint8_t* block_hash,
   shekyl_rpc_block_header_facts* out_header,
   shekyl_rpc_block_payload* out_payload, void** out_owner)
 {
-  // The header promises a null owner on every outcome but a found success,
-  // and this is the earliest point that promise can be kept: a null handle
-  // returns below, and a caller that reuses the slot across calls would
-  // otherwise see the previous call's pointer and free it a second time.
-  // The other out-params are left alone — a stale struct after a non-OK
-  // return is the ordinary C contract and frees nothing.
   if (out_owner)
     *out_owner = nullptr;
   if (!h || !h->rpc || !out_header || !out_payload || !out_owner)
     return SHEKYL_RPC_FACTS_ERR_NULL;
-  crypto::hash id;
-  if (block_hash)
-    std::memcpy(id.data, block_hash, sizeof(id.data));
-  return daemon_rpc_facts::block_at(h->rpc->get_core().get_blockchain_storage(),
-    block_hash ? &id : nullptr, height, fill_pow_hash != 0, out_header, out_payload,
-    out_owner);
+  (void)block_hash;
+  (void)height;
+  (void)fill_pow_hash;
+  return SHEKYL_RPC_FACTS_ERR_NOT_READY;
 }
 
 int shekyl_rpc_tx_output_indices(core_rpc_handle* h, const uint8_t* txid,
@@ -1710,10 +1659,7 @@ int shekyl_rpc_tx_output_indices(core_rpc_handle* h, const uint8_t* txid,
     *out_owner = nullptr;
   if (!h || !h->rpc || !txid || !out || !out_len || !out_found || !out_owner)
     return SHEKYL_RPC_FACTS_ERR_NULL;
-  crypto::hash id;
-  std::memcpy(id.data, txid, sizeof(id.data));
-  return daemon_rpc_facts::tx_output_indices(
-    h->rpc->get_core().get_blockchain_storage(), id, out, out_len, out_found, out_owner);
+  return SHEKYL_RPC_FACTS_ERR_NOT_READY;
 }
 
 void shekyl_rpc_tx_output_indices_free(void* owner)
@@ -1729,9 +1675,9 @@ int shekyl_rpc_blocks_by_height(core_rpc_handle* h, const uint64_t* heights,
     *out_owner = nullptr;
   if (!h || !h->rpc || !out || !out_len || !out_failed_height || !out_ok || !out_owner)
     return SHEKYL_RPC_FACTS_ERR_NULL;
-  return daemon_rpc_facts::blocks_by_height(h->rpc->get_core().get_blockchain_storage(),
-    heights, heights_len,
-    out, out_len, out_failed_height, out_ok, out_owner);
+  (void)heights;
+  (void)heights_len;
+  return SHEKYL_RPC_FACTS_ERR_NOT_READY;
 }
 
 int shekyl_rpc_transactions(core_rpc_handle* h, const uint8_t* txids, size_t txids_len,
@@ -1742,10 +1688,13 @@ int shekyl_rpc_transactions(core_rpc_handle* h, const uint8_t* txids, size_t txi
     *out_owner = nullptr;
   if (!h || !h->rpc)
     return SHEKYL_RPC_FACTS_ERR_NULL;
-  cryptonote::core& core = h->rpc->get_core();
-  return daemon_rpc_facts::transactions(core.get_blockchain_storage(),
-    core.get_pool(), txids, txids_len, include_sensitive, out, out_len,
-    out_chain_height, out_owner);
+  (void)txids;
+  (void)txids_len;
+  (void)include_sensitive;
+  (void)out;
+  (void)out_len;
+  (void)out_chain_height;
+  return SHEKYL_RPC_FACTS_ERR_NOT_READY;
 }
 
 void shekyl_rpc_transactions_free(void* owner)
@@ -1769,9 +1718,10 @@ int shekyl_rpc_key_images_spent(core_rpc_handle* h, const uint8_t* key_images,
 {
   if (!h || !h->rpc)
     return SHEKYL_RPC_FACTS_ERR_NULL;
-  cryptonote::core& core = h->rpc->get_core();
-  return daemon_rpc_facts::key_images_spent(core.get_blockchain_storage(),
-    core.get_pool(), key_images, count, out_status);
+  (void)key_images;
+  (void)count;
+  (void)out_status;
+  return SHEKYL_RPC_FACTS_ERR_NOT_READY;
 }
 
 void shekyl_rpc_blocks_by_height_free(void* owner)

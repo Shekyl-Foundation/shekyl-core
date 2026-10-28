@@ -66,7 +66,6 @@ file(COPY data DESTINATION .) # Copy data directory from source root to build ro
 if (CMAKE_BUILD_TYPE STREQUAL "fuzz" OR OSSFUZZ)
   add_subdirectory(fuzz)
 else ()
-  add_subdirectory(core_tests)
   add_subdirectory(fuzz)
   add_subdirectory(crypto)
   add_subdirectory(performance_tests)
@@ -212,7 +211,6 @@ add_test(NAME wallet-crypto-bench COMMAND shekyl-wallet-crypto-bench)
 
 
 set(enabled_tests
-    core_tests
     difficulty
     block_weight
     hash
