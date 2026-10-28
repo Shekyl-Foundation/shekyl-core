@@ -224,13 +224,26 @@ impl Node {
         ));
         let pool = open_pool(&store, &pool_path, rules)?;
         let submit_pool = Arc::clone(&pool);
-        let departed = pool_departed(Arc::clone(&pool));
+        let owed = Arc::new(Mutex::new(Responsibilities::default()));
+        let departed = pool_departed(Arc::clone(&pool), Arc::clone(&owed));
+        let propagated = Arc::new({
+            let owed = Arc::clone(&owed);
+            move |ids: &[shekyl_types::TxHash]| {
+                let mut owed = owed.lock().unwrap_or_else(PoisonError::into_inner);
+                let ids: Vec<TxId> = ids
+                    .iter()
+                    .map(|id| TxId::from_bytes(id.to_bytes()))
+                    .collect();
+                owed.propagated(&ids);
+            }
+        });
         shekyl_ffi::pool_ffi::install(
             Arc::clone(&store),
             Arc::clone(&pool),
             rules,
             AdmissionPolicy::GENESIS,
             Arc::clone(&departed),
+            propagated,
         );
         let pool_slot = Arc::new(Mutex::new(Some(Arc::clone(&pool))));
         let sockets = Sockets::new();
@@ -343,6 +356,15 @@ impl Node {
             .retiring(Arc::new({
                 let health = pool_health.clone();
                 move |fault| health.retire(fault)
+            }))
+            .nudging(Arc::new({
+                let owed = Arc::clone(&owed);
+                move |txid, blob| {
+                    owed.lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .originated(TxId::from_bytes(txid.to_bytes()));
+                    relay_local(blob);
+                }
             })),
         );
         let rewinder = service.rewinder();
@@ -610,8 +632,10 @@ fn wall_now() -> UnixSeconds {
 /// Releases a relay responsibility for every id that leaves the pool, then
 /// checks the relay tracks no more than the pool still holds
 /// (`DRS_X_STORE_FLIP.md` §2).
-fn pool_departed(pool: Arc<Mutex<Pool>>) -> shekyl_chain_ingest::service::Departed {
-    let owed = Arc::new(Mutex::new(Responsibilities::default()));
+fn pool_departed(
+    pool: Arc<Mutex<Pool>>,
+    owed: Arc<Mutex<Responsibilities>>,
+) -> shekyl_chain_ingest::service::Departed {
     Arc::new(move |ids| {
         let mut owed = owed.lock().unwrap_or_else(PoisonError::into_inner);
         for id in ids {
@@ -623,6 +647,20 @@ fn pool_departed(pool: Arc<Mutex<Pool>>) -> shekyl_chain_ingest::service::Depart
             "a relay responsibility outlived its pool entry"
         );
     })
+}
+
+/// The shell's relay entry. RD deletes it with `levin_notify`.
+fn relay_local(blob: &[u8]) {
+    if blob.is_empty() {
+        return;
+    }
+    // SAFETY: `blob` is a live slice. The shell ignores a call before
+    // `core::init` returns.
+    unsafe { shekyl_shell_relay_local(blob.as_ptr(), blob.len()) }
+}
+
+unsafe extern "C" {
+    fn shekyl_shell_relay_local(blob: *const u8, len: usize);
 }
 
 fn rules_of(config: &DaemonConfig) -> Result<ChainRules, OpenError> {
@@ -743,3 +781,8 @@ async fn connect_genesis(
 
 #[cfg(test)]
 mod tests;
+
+/// The daemon binary supplies this from C++. Unit tests link no C++.
+#[cfg(test)]
+#[no_mangle]
+extern "C" fn shekyl_shell_relay_local(_blob: *const u8, _len: usize) {}

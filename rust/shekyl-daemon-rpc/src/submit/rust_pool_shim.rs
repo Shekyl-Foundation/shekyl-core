@@ -54,9 +54,8 @@
 //! [`CommitOutcome::JoinMarketUnsupported`] is the C++ commit's: the Rust
 //! pool holds a JoinMarket like any post.
 //!
-//! [`SubmitStateShim::relay`] does nothing here: at the flip the relay's
-//! driver takes what the pool holds unpublished, and a nudge from the
-//! engine is that driver's to wire.
+//! [`SubmitStateShim::relay`] hands the committed bytes to the node's
+//! nudge. The engine calls it only after [`CommitOutcome::Committed`].
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -115,6 +114,11 @@ impl ChainSource for StoreChain {
 /// Retires the service's pool when the submit path meets a pool-file fault.
 pub type RetirePool = Arc<dyn Fn(&StoreError) + Send + Sync>;
 
+/// Set by the node: a transaction this node committed is due to the relay.
+/// The engine calls it only for [`CommitOutcome::Committed`], never for a
+/// concealed accept.
+pub type RelayNudge = Arc<dyn Fn(&TxHash, &[u8]) + Send + Sync>;
+
 fn lock_production() -> MutexGuard<'static, Option<RustPoolShim<StoreChain>>> {
     PRODUCTION.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -159,6 +163,8 @@ pub struct RustPoolShim<C> {
     clock: fn() -> UnixSeconds,
     /// Set by the node: a pool-file fault here retires the service's pool.
     retire: Option<RetirePool>,
+    /// Set by the node: a committed transaction is due to the relay.
+    nudge: Option<RelayNudge>,
 }
 
 impl<C: Clone> Clone for RustPoolShim<C> {
@@ -169,6 +175,7 @@ impl<C: Clone> Clone for RustPoolShim<C> {
             policy: self.policy,
             clock: self.clock,
             retire: self.retire.clone(),
+            nudge: self.nudge.clone(),
         }
     }
 }
@@ -197,6 +204,7 @@ impl<C: ChainSource> RustPoolShim<C> {
             policy,
             clock,
             retire: None,
+            nudge: None,
         }
     }
 
@@ -205,6 +213,14 @@ impl<C: ChainSource> RustPoolShim<C> {
     #[must_use]
     pub fn retiring(mut self, retire: RetirePool) -> Self {
         self.retire = Some(retire);
+        self
+    }
+
+    /// `nudge` runs when this node commits a transaction, with its id and
+    /// wire bytes. The pool lock is not held across the call.
+    #[must_use]
+    pub fn nudging(mut self, nudge: RelayNudge) -> Self {
+        self.nudge = Some(nudge);
         self
     }
 
@@ -670,7 +686,22 @@ impl<C: ChainSource> SubmitStateShim for RustPoolShim<C> {
         outcome.unwrap_or(CommitOutcome::InternalFault)
     }
 
-    fn relay(&self, _txid: &TxHash) {}
+    fn relay(&self, txid: &TxHash) {
+        let Some(nudge) = self.nudge.clone() else {
+            return;
+        };
+        // Drop the pool lock before the nudge. The departure hook takes
+        // the responsibility map and then the pool, and the nudge takes
+        // the map.
+        let blob = self.with_pool(|view| {
+            view.entries()
+                .find(|entry| entry.id == *txid)
+                .map(|entry| entry.tx.serialize())
+        });
+        if let Some(blob) = blob {
+            nudge(txid, &blob);
+        }
+    }
 }
 
 #[cfg(test)]

@@ -69,6 +69,25 @@ DISABLE_VS_WARNINGS(4355)
 // basically at least how many bytes the block itself serializes to without the miner tx
 #define BLOCK_SIZE_SANITY_LEEWAY 100
 
+namespace {
+cryptonote::core* shell_for_relay = nullptr;
+}
+
+/// The node's committed transaction, as bytes, for `levin_notify`.
+/// RD deletes this with `levin_notify` (`DRS_X_STORE_FLIP.md` §2).
+/// A call before `core::init` returns, or after `deinit`, does nothing.
+extern "C" void shekyl_shell_relay_local(const std::uint8_t* blob, std::size_t len)
+{
+  if (shell_for_relay == nullptr || blob == nullptr || len == 0)
+    return;
+  auto* protocol = shell_for_relay->get_protocol();
+  if (protocol == nullptr)
+    return;
+  cryptonote::NOTIFY_NEW_TRANSACTIONS::request request;
+  request.txs.emplace_back(reinterpret_cast<const char*>(blob), len);
+  protocol->relay_transactions(request, boost::uuids::nil_uuid(), cryptonote::relay_method::local);
+}
+
 namespace cryptonote
 {
 
@@ -525,6 +544,7 @@ namespace cryptonote
     if (!keep_alt_blocks && !m_blockchain_storage.get_db().is_read_only())
       m_blockchain_storage.get_db().drop_alt_blocks();
 
+    shell_for_relay = this;
     return load_state_data();
   }
   //-----------------------------------------------------------------------------------------------
@@ -541,6 +561,8 @@ namespace cryptonote
   //-----------------------------------------------------------------------------------------------
     bool core::deinit()
   {
+    if (shell_for_relay == this)
+      shell_for_relay = nullptr;
     m_miner.stop();
     m_mempool.deinit();
     m_blockchain_storage.deinit();
@@ -938,6 +960,11 @@ namespace cryptonote
     /* A pass-through by design. The verdict is the relay layer's, the entry
        class is the pool's, and this seam exists only because `notify` holds no
        pool reference — so it forwards and decides nothing. */
+    std::vector<std::uint8_t> raw(txids.size() * sizeof(crypto::hash));
+    for (std::size_t i = 0; i < txids.size(); ++i)
+      std::memcpy(raw.data() + i * sizeof(crypto::hash), txids[i].data, sizeof(crypto::hash));
+    if (!txids.empty())
+      shekyl_pool_propagated(raw.data(), txids.size());
     m_mempool.on_stem_propagated(txids);
   }
   //-----------------------------------------------------------------------------------------------
@@ -967,7 +994,11 @@ namespace cryptonote
     m_mempool.set_relayed(epee::to_span(tx_hashes), tx_relay, stem_connector, just_broadcasted);
 
     if (matches_category(tx_relay, relay_category::broadcasted))
+    {
+      for (const crypto::hash& id : tx_hashes)
+        shekyl_pool_fluffed(reinterpret_cast<const std::uint8_t*>(id.data));
       notify_txpool_event(tx_blobs, epee::to_span(tx_hashes), epee::to_span(txs), just_broadcasted);
+    }
   }
   //-----------------------------------------------------------------------------------------------
   bool core::get_block_template(block& b, const account_public_address& adr, difficulty_type& diffic, uint64_t& height, uint64_t& expected_reward, const blobdata& ex_nonce, uint64_t &seed_height, crypto::hash &seed_hash)

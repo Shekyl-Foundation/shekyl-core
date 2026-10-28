@@ -4355,6 +4355,12 @@ int32_t shekyl_pool_hashes(uint8_t sensitive, ShekylBuffer* out);
 /// sequence of little-endian u32 lengths and the bytes, freed with
 /// shekyl_buffer_free. 0 on success.
 int32_t shekyl_pool_complement(const uint8_t* known, size_t known_count, ShekylBuffer* out);
+/// The relay fluffed `hash`. 0 done, SHEKYL_POOL_FAULT on a pool-file
+/// fault, SHEKYL_POOL_UNBOUND with no door.
+int32_t shekyl_pool_fluffed(const uint8_t hash[32]);
+/// Stemmed transactions that came back. `hashes` is `count` ids.
+/// 0 done, SHEKYL_POOL_UNBOUND with no door.
+int32_t shekyl_pool_propagated(const uint8_t* hashes, size_t count);
 
 /// The handler's sync reads, each over one snapshot of the node's chain.
 /// 0 is success. 1 is a refusal (empty chain, unknown height, a history
@@ -4385,6 +4391,11 @@ int32_t shekyl_core_block(const uint8_t hash[32], ShekylBuffer* blob,
 /// unless the pool still shows the transaction. A stem entry stays missing.
 /// Freed with shekyl_buffer_free. 0 on success.
 int32_t shekyl_core_txs(const uint8_t* hashes, size_t count, ShekylBuffer* out);
+
+/// A transaction this node committed, handed to `levin_notify` as
+/// `relay_method::local`. A call before `core::init` returns, or after
+/// `deinit`, does nothing. RD deletes this with `levin_notify`.
+void shekyl_shell_relay_local(const uint8_t* blob, size_t len);
 
 /// The tip the core last published (see shekyl_core_publish_tip): 1 and the
 /// fields written, 0 and nothing written before the first publish. A null
