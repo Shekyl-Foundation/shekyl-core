@@ -10,7 +10,6 @@ use super::{
     ffi_json_rpc_result, human_readable_timespan, json_rpc_result, native_json_rpc, require_ok,
     trimmed, wide_difficulty_decimal, Source,
 };
-use crate::chain_facts::FfiChainFacts;
 use shekyl_rpc_types::{AltChainInfo, GetAlternateChainsResponse};
 
 /// The `get_alternate_chains` reply is the wire type `shekyl-rpc-types`
@@ -60,8 +59,9 @@ fn fetch_block_headers_by_hash(
         hashes,
         fill_pow_hash: false,
     };
-    let reply = native_json_rpc(src, "get_block_header_by_hash", &request, |core| {
-        crate::methods::get_block_header_by_hash(&FfiChainFacts::new(core.clone()), &request, false)
+    let reply = native_json_rpc(src, "get_block_header_by_hash", &request, |_core| {
+        let chain = super::open_chain()?;
+        crate::methods::get_block_header_by_hash(chain.as_chain_facts(), &request, false)
     })?;
     require_ok(&reply.status)?;
     Ok(reply.block_headers)

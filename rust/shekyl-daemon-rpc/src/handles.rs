@@ -8,11 +8,9 @@
 //! shape: a trait object, and an absent value that answers
 //! [`FactsFault::NotReady`].
 //!
-//! **Nothing here is routed.** The live handlers still read the C++ core.
-//! The handles are on [`crate::server::AppState`] so the flip's edit is
-//! which source a handler calls, and a Rust test can already call them
-//! over a real node. An absent handle never answers with a zero or an
-//! empty list (RK-D23): those are what a live, empty node reports.
+//! The handlers and the in-process console read these handles. An absent
+//! handle never answers with a zero or an empty list (RK-D23): those are
+//! what a live, empty node reports.
 
 use std::net::{IpAddr, Ipv4Addr};
 use std::num::NonZeroUsize;
@@ -39,12 +37,41 @@ use crate::read_facts::{
 /// The chain reads that replace `FfiChainFacts`, `FfiInfoFacts` and
 /// `ChainReadFacts`' production sources at the flip. One object, the
 /// three traits those handlers already call.
-pub trait ChainRead: ChainFacts + InfoFacts + ChainReadFacts {}
+pub trait ChainRead: ChainFacts + InfoFacts + ChainReadFacts {
+    /// This object as the chain-facts trait the method functions take.
+    fn as_chain_facts(&self) -> &dyn ChainFacts;
+}
 
-impl<T> ChainRead for T where T: ChainFacts + InfoFacts + ChainReadFacts {}
+impl<T> ChainRead for T
+where
+    T: ChainFacts + InfoFacts + ChainReadFacts,
+{
+    fn as_chain_facts(&self) -> &dyn ChainFacts {
+        self
+    }
+}
 
 /// A chain-read handle.
 pub type ChainReadHandle = Arc<dyn ChainRead>;
+
+static LIVE_CHAIN: std::sync::Mutex<Option<ChainReadHandle>> = std::sync::Mutex::new(None);
+
+/// The chain the running daemon's console reads. Set when the RPC starts,
+/// from the handles the node handed over.
+pub fn publish_live(handles: &Handles) {
+    *LIVE_CHAIN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::clone(&handles.chain));
+}
+
+/// The published chain, or `None` before the RPC has started.
+#[must_use]
+pub fn live_chain() -> Option<ChainReadHandle> {
+    LIVE_CHAIN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
 
 /// One pool entry, as a listing reads it: never when it arrived (S7).
 #[derive(Clone, Debug, PartialEq, Eq)]

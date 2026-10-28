@@ -23,7 +23,6 @@ use std::time::Duration;
 use shekyl_rpc_types::{GetHeightResponse, RestErrorEnvelope};
 use shekyl_units::AtomicUnits;
 
-use crate::chain_facts::FfiChainFacts;
 use crate::core::CoreRpc;
 use crate::ctl_client;
 
@@ -206,8 +205,9 @@ fn print_block(
     // In-process the console is the operator's own terminal, so the
     // restricted-listener rule does not apply: the C++ passed
     // `fill_pow_hash` straight through here too.
-    let reply = native_json_rpc(src, "get_block", &request, |core| {
-        crate::methods::get_block(&FfiChainFacts::new(core.clone()), &request, true)
+    let reply = native_json_rpc(src, "get_block", &request, |_core| {
+        let chain = open_chain()?;
+        crate::methods::get_block(chain.as_chain_facts(), &request, true)
     })?;
     require_ok(&reply.status)?;
 
@@ -285,6 +285,12 @@ where
     }
 }
 
+fn open_chain() -> Result<crate::handles::ChainReadHandle, crate::methods::RpcFault> {
+    crate::handles::live_chain().ok_or(crate::methods::RpcFault::Facts(
+        crate::chain_facts::FactsFault::NotReady,
+    ))
+}
+
 fn require_ok(status: &shekyl_rpc_types::RpcStatus) -> Result<(), String> {
     if status.is_ok() {
         Ok(())
@@ -330,9 +336,9 @@ fn wide_difficulty_value(wide: &str) -> Option<u128> {
 
 fn print_height(src: &Source) -> Result<String, String> {
     let reply = match src {
-        Source::Live(core) => {
-            let facts = FfiChainFacts::new(core.clone());
-            crate::methods::get_height(&facts).map_err(|e| format!("{e:?}"))?
+        Source::Live(_) => {
+            let chain = open_chain().map_err(|e| format!("{e:?}"))?;
+            crate::methods::get_height(chain.as_chain_facts()).map_err(|e| format!("{e:?}"))?
         }
         Source::Remote { .. } => {
             let body = src.post_remote("/get_height", b"{}".to_vec())?;
@@ -1232,9 +1238,9 @@ fn print_net_stats(src: &Source, now: u64) -> Result<String, String> {
 #[deny(clippy::arithmetic_side_effects)]
 fn sync_info(src: &Source) -> Result<String, String> {
     let reply = native_json_rpc(src, "sync_info", &serde_json::json!({}), |core| {
-        let chain = FfiChainFacts::new(core.clone());
+        let chain = open_chain()?;
         let p2p = crate::chain_facts::FfiP2pFacts::new(core.clone());
-        crate::methods::sync_info(&chain, &p2p)
+        crate::methods::sync_info(chain.as_chain_facts(), &p2p)
     })?;
     let shekyl_rpc_types::P2pReply::Running(reply) = reply else {
         return Ok(OFFLINE_LINE.to_owned());

@@ -222,6 +222,7 @@ unsafe fn start(
     };
     let admin = bind(&section.admin_listen)?;
     let view = bind(&section.view_listen)?;
+    crate::handles::publish_live(&handles);
     let config = ServerConfig {
         cors_origins: section.cors_origins.clone(),
         conn_limits,

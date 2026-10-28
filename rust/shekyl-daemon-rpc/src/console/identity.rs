@@ -13,7 +13,7 @@ use shekyl_rpc_types::{
     core_rpc_version_string, DaemonNetwork, IdentityExpectation, IdentityMismatch,
 };
 
-use crate::chain_facts::{ChainFacts, FfiChainFacts};
+use crate::chain_facts::ChainFacts;
 use crate::ctl_client;
 
 use super::{json_rpc_result, Source};
@@ -35,10 +35,15 @@ impl Source {
     /// itself is built from.
     pub(super) fn network(&self) -> Result<DaemonNetwork, String> {
         match self {
-            Source::Live(core) => FfiChainFacts::new(core.clone())
-                .identity()
-                .map(|identity| identity.nettype)
-                .map_err(|fault| format!("the daemon's network cannot be read: {fault:?}")),
+            Source::Live(_) => {
+                let chain = crate::handles::live_chain()
+                    .ok_or_else(|| "the node is not open".to_owned())?;
+                chain
+                    .as_chain_facts()
+                    .identity()
+                    .map(|identity| identity.nettype)
+                    .map_err(|fault| format!("the daemon's network cannot be read: {fault:?}"))
+            }
             Source::Remote {
                 address,
                 timeout,
