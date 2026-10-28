@@ -472,7 +472,7 @@ term, to be re-graded at EUP-4. EUP-5's decision list (D, F, G, H, I and the
 | --- | --- |
 | A block's weight is its bodies' | **Closed by #1152**, and replaced by a smaller departure (U1 below). `BlockSpace::fill` passes `COINBASE_RESERVE` to `Fill::empty` (`rust/shekyl-economics-sim/src/block_space.rs:114`), the medians record `fill.block_weight()`, and the cursor prices that weight. Phase 1's first commit deletes the row and declares U1 |
 | Fee multiplier on Standard; rung mix; every transaction pays Standard | **ESR-10.** Only `×1` is built outside tests; the pool is one class (`rust/shekyl-economics-sim/src/block_space.rs:52`) |
-| Fee paid unrounded | **ESR-15.** `quantized_fee` appears only in a doc comment |
+| Fee paid unrounded | **Closed by ESR-15.** At the Phase 0 pin the product was unrounded. The production arm calls `quantized_fee`; the flat control arm's weight-fees stay the unrounded product |
 | A claim is one ordinary transaction at the admission rate | **Still needed, and no step is planned.** The owner, `EMISSION_CLAIM_FEE_FLOOR`, exists; the sim does not read it |
 | Gate-7 one shard per `blocks_per_shard`; A3/A4 through the plateau curve | **Still needed**; EUP-4 items in `FOLLOWUPS.md` |
 | Maturity operands | **Still needed; the row's text is stale.** `MATURITY_D` was deleted with the urn reproduction (`eba3d3822`); the operands are now `EVIDENCE_PAIRS` (`rust/shekyl-economics-sim/src/secret_draw.rs:254`) and `projected_pairs` in `mn_feasibility.rs` |

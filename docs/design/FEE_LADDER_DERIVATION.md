@@ -3309,13 +3309,13 @@ RULED (ii)-with-reward; §11.6 goes to spec review
 unchanged except that `check_fee`'s Rust predicate takes the `G+1` floors
 as computed, whichever operand resolution is ruled.
 
-## §12 The fee lattice and the rounding loop (ESR-15; OPEN, registered 2026-10-24)
+## §12 The fee lattice and the rounding loop (ESR-15 landed 2026-10-27; the step's size is open)
 
-ESR-15 ([`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md)
-§2) replaces the sim's unrounded fixed point with one fee loop over a pricing
-function, the loop the wallet and relay admission share. The loop is judged
-against seven properties, written before it is built (the ESR-15 brief's
-§A.2a, ruled 2026-10-24; the brief's terms, relayed 2026-10-24):
+The fee loop is `converge_weight_fee_by` in `shekyl-tx-weight`. The caller
+supplies the pricer. The wallet and the sim's production arm pass
+`quantized_fee`; the flat control arm passes the unrounded product. Relay
+admission reads the same `quantized_fee`. The loop is held to seven
+properties (ruled 2026-10-24):
 
 1. **Never under-pays.** The fee it returns clears admission at the rate it
    was priced at.
@@ -3331,9 +3331,8 @@ against seven properties, written before it is built (the ESR-15 brief's
    forced.
 4. **Exact.** Integer arithmetic throughout; no float reaches the fee.
 5. **Fails closed.** If `weight × rate` or the rounding leaves `u64`, the
-   loop returns `None` and each caller decides explicitly. A saturated result
-   is a violation too: the landed `converge_weight_fee` saturates to a
-   `u64::MAX` fee, which no payer should see and which is not a refusal.
+   loop returns `None` and each caller decides explicitly. A saturated
+   `u64::MAX` is a violation: it is a number, and it is not a refusal.
 6. **Terminates by agreement.** The loop exits when two successive passes
    return the same fee (`next == fee`), never by hitting its pass limit. The
    limit of 11 follows from the varint argument and stays as a
@@ -3343,13 +3342,35 @@ against seven properties, written before it is built (the ESR-15 brief's
    checks against, `shekyl_economics::quantized_fee` and
    `FEE_QUANTIZATION_MASK`, read from one owner.
 
-The lattice's **size** is open. FL-R27 ruled where the constant lives (a
-Rust constant, relay policy, not a config entry), not how fine it is; the six
-decimals are inherited from the C++ `PER_KB_FEE_QUANTIZATION_DECIMALS`.
-ESR-15's PR records the question as a fee-ladder row with its current ground
-(display precision; one shared rounding for payer and admission) and prints
-the lattice step as basis points of the ordinary fee, so the ruling reads a
-measurement: on the committed `--stage2` fixture the ordinary fee falls to
-about 0.0001 SKL by years 30–60, where one 1 000-atomic step is about 100 bp,
-twice the 50 bp bar FL-V12 uses. The six decimals stay until that row is
-ruled.
+The seven properties, graded on the code each loop was. "Representable"
+means `weight × rate` fits in `u64`.
+
+| Property | Old wallet `converge_fee` | Old `converge_weight_fee` | Unified loop |
+| --- | --- | --- | --- |
+| Never under-pays | Held on representable cells | Held on representable cells (the fixed point is the product) | Held |
+| Least | The value from seed 0 is the least; the seed invariant was unasserted | Held (the seed is 0) | Held; a seed above the least point is refused in debug |
+| Bounded over-payment | Held on representable cells | Held: the gap is 0 when the product fits | Held: the worst gap on the grid is 999 atomic |
+| Exact | Held | Held | Held |
+| Fails closed | Violated: `fee_from_weight` returns `u64::MAX` | Violated: `saturating_mul` returns `u64::MAX` | Held: the loop returns `None` |
+| Terminates by agreement | Violated by the exhaustion tail, which returns `fee.max(next)` | The same tail | Held: a return is `next == fee`; exhaustion is a `debug_assert` and then `None` |
+| One lattice | Held: the pricer is `quantized_fee` | Does not apply | Held: payer and admission call `quantized_fee` |
+
+The worst over-payment on the shape space, the varint-boundary rates and
+depths 0, 1 and the maximum is **999 atomic**, one below the mask. One
+cell where rounding the unrounded fee up is a third fee: depth 24,
+1-in/1-out, rate 2 182 818, unrounded 34 359 738 138, rounded up
+34 359 739 000, in-loop 34 361 921 000. The rounding crosses `2^35`.
+
+### The lattice's size — OPEN, owed to EUP-5
+
+`FEE_QUANTIZATION_MASK` is 1 000 atomic, `10^(DISPLAY_DECIMAL_POINT − FEE_DECIMAL_PLACES)`.
+Its ground is display precision and one rounding shared by the payer and
+admission. FL-R18 found the anonymity premise for a fee mechanism empty,
+and FL-R21 deleted `round_money_up_2` on that finding. FL-C1 is why the
+daemon does not serve a lattice of its own (a per-daemon fingerprint), not
+why the step is 1 000. FL-R27 placed the constant in Rust. The six
+decimals stay until EUP-5 rules the size. The loop is correct for any mask.
+
+`--stage2` prints the step in basis points of that year's mean ordinary
+fee. Year 1 on the baseline is 0.0084 bp. Where the fee prints 0.0001 SKL
+the step is 169.4915 bp, above the 50 bp bar FL-V12 uses.
