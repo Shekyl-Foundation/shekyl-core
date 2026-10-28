@@ -5551,6 +5551,7 @@ dependencies = [
  "shekyl-crypto-pq",
  "shekyl-curve-io",
  "shekyl-curve-primitives",
+ "shekyl-economics",
  "shekyl-fcmp",
  "shekyl-scanner",
  "shekyl-tx-builder",

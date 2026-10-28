@@ -3595,7 +3595,8 @@ fn assemble_tx_to_sign_rejects_missing_key_image() {
         InputCount::clamped(1),
         OutputCount::clamped(request.recipients.len()),
         1,
-    );
+    )
+    .expect("the fee fits");
     // The `gindex` must equal the output's `global_output_index` (100) so the
     // index-stability guard passes and the missing-`key_image` check inside
     // `input_context_from_transfer` is reached. The path is unused before
@@ -3673,7 +3674,8 @@ async fn build_then_submit_via_test_daemon_uses_daemon_fee() {
         OutputCount::clamped(n_out),
         2,
         seed,
-    );
+    )
+    .expect("the built shape's fee fits");
     assert_eq!(
         built.fee_atomic_units.to_raw(),
         expected_fee,

@@ -270,7 +270,11 @@ impl FeeEstimator for DaemonFeeEstimator {
         // The counts are type-bounded (`>= 1`), so no `.max(1)` floor is needed.
         let n_in = context.input_count;
         let n_out = context.output_count;
-        let fee = converge_fee(&rate, n_in, n_out, context.tree_depth, 0);
+        let fee = converge_fee(&rate, n_in, n_out, context.tree_depth, 0).ok_or(
+            FeeEstimatorError::DaemonResponseInvalid {
+                reason: "the fee does not fit in u64",
+            },
+        )?;
         Ok(AtomicUnits::from_raw(fee))
     }
 }

@@ -58,8 +58,8 @@ use shekyl_tx_weight::predict_weight;
 use shekyl_types::SHARD_LENGTH;
 
 use crate::calibration::{
-    all_shapes, stuffer_cost_per_shard_atomic, stuffer_shape, tree_depth_for_leaves, PerByteRate,
-    Shape,
+    all_shapes, required_price, stuffer_cost_per_shard_atomic, stuffer_shape,
+    tree_depth_for_leaves, PerByteRate, Shape,
 };
 use crate::engine::SimParams;
 use crate::fee_model::FeePoint;
@@ -440,24 +440,24 @@ impl<'a> Block<'a> {
     /// The relay stuffer: the rate that gets his bodies listed, and his
     /// campaign's cost for one shard at it.
     fn relay(&self, floor: PerByteRate) -> (PerByteRate, bool, u128) {
-        let shape = stuffer_shape(self.depth, floor);
+        let shape = required_price(stuffer_shape(self.depth, floor));
         let mut after_honest = self.honest;
         let at_floor = after_honest.admit(
-            shape.tx_weight(self.depth, floor),
-            shape.tx_fee_atomic(self.depth, floor),
+            required_price(shape.tx_weight(self.depth, floor)),
+            required_price(shape.tx_fee_atomic(self.depth, floor)),
         );
         let rate = if at_floor {
             floor
         } else {
             // Outrank the honest bodies: one atomic unit per byte above their
             // rate, which the pool offers first and the fill rule lists under
-            // the median in their place.
-            PerByteRate::from_atomic(self.honest_fee / self.honest_weight.max(1) + 1)
+            // the median in their place. The pricer stays the floor's.
+            floor.with_atomic(self.honest_fee / self.honest_weight.max(1) + 1)
         };
         (
             rate,
             at_floor,
-            stuffer_cost_per_shard_atomic(self.at.chain_leaves, rate),
+            required_price(stuffer_cost_per_shard_atomic(self.at.chain_leaves, rate)),
         )
     }
 
@@ -633,7 +633,10 @@ impl StuffingBody {
     /// The body `shape` lists at `depth` when `floor` is the rate the
     /// approach charges. Nothing, when the shape has no weight.
     fn from_shape(shape: Shape, depth: u8, floor: Option<PerByteRate>) -> Option<Self> {
-        let fee = floor.map_or(0, |rate| shape.tx_fee_atomic(depth, rate));
+        let fee = match floor {
+            Some(rate) => shape.tx_fee_atomic(depth, rate)?,
+            None => 0,
+        };
         let weight = u64::try_from(predict_weight(shape.n_in, shape.n_out, depth, fee)).ok()?;
         if weight == 0 {
             return None;
