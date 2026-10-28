@@ -2168,6 +2168,35 @@ searches that last step.
 **E15-5. Held.** The copied wallet loop and the new call agree on every
 compared cell that did not overflow. Zero differences.
 
+### 5.26 ESR-16, predicted before the sweep runs (2026-10-28)
+
+Written against `dev` at `716bd8ab7`, before any ESR-16 code. The sweep
+is [`ECONOMICS_SIM_PHASE0.md`](ECONOMICS_SIM_PHASE0.md) §P0.9 step 2.
+Nothing below is a result.
+
+`EconomicParams` already carries the release rails, the burn, the pool
+share, the emission curve, the DAA target, the escalation pair and the
+zone. Generated beside it, and not fields, are the two median windows,
+the surge factor, `SCALE`, `STAKER_EMISSION_SHARE`,
+`STAKER_EMISSION_DECAY`, `BLOCKS_PER_YEAR` and `TX_VOLUME_WINDOW`. The
+windows become const generics, not more runtime fields. `RelayPolicy`
+does not exist. The validator's parameter `OnceLock` is
+`shekyl-chain-rules` `rules/miner.rs`.
+
+- **E16-1.** A run that leaves every swept field at its generated default
+  prints a `--stage2` narration byte-identical to the fixture at this
+  pin, on both arms.
+- **E16-2.** Existing field values do not change. The consensus digest
+  moves once, because fields were added, and the pin is re-cut in the
+  same change.
+- **E16-3.** Production reads `EconomicParams` and `RelayPolicy` through
+  one accessor each. A gate fails when a production site reads a bare
+  generated constant that an accessor owns.
+- **E16-4.** `BLOCKS_PER_YEAR` equals `365 × 86 400 / daa_target_seconds`
+  (262 800 at the shipped target of 120 s). `settlement_epoch_blocks`
+  has one source. The zone and `TX_WEIGHT_LIMIT` stay the pair their
+  equality test names.
+
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
 Under the cycle ruling (§0), staking is being designed now, and the

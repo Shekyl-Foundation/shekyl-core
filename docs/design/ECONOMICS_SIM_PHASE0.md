@@ -379,7 +379,7 @@ sweep can see it. "EP" marks a field `EconomicParams` already has.
 | `RELAY_FLOOR_WINDOW` | `fee/relay.rs:21` | 6 | D (G + 1) | no | no | derived |
 | `RELAY_ADMISSION_SLACK_BP` | `rust/shekyl-economics/src/fee/relay.rs:26` | 0 | P | **no** | imports | ruled (FL-R23 implementation) |
 | `FEE_DECIMAL_PLACES` | `rust/shekyl-economics/src/fee/quantization.rs:21` | 6 | P (relay policy) | no | no | FL-R27 ruled where it lives, not its size; inherited from C++ `PER_KB_FEE_QUANTIZATION_DECIMALS` |
-| `FEE_QUANTIZATION_MASK` | `rust/shekyl-economics/src/fee/quantization.rs:30` | 1 000 atomic | U (from the above) | no | **not read**: the sim pays unrounded (ESR-15) | FL-R27 |
+| `FEE_QUANTIZATION_MASK` | `rust/shekyl-economics/src/fee/quantization.rs:30` | 1 000 atomic | U (from the above) | no | the production arm calls `quantized_fee` (ESR-15, #1213); the mask is not a swept field | FL-R27 |
 | `EMISSION_CLAIM_FEE_FLOOR` | `rust/shekyl-economics/src/fee/ladder.rs:19` | 3.6 SKL | D as a literal (the genesis Economy rung × the claim envelope) | no | **not read** (§4's claim row) | no test recomputes it, so it does not follow a `w_ref` or zone sweep |
 
 ### Block weight, penalty, limit
@@ -581,7 +581,7 @@ only.
 | **I** bond floor | A1 with a reward-proportional principal beside the fixed one; TJ-4 / TJ-7; the staking population fed this sim's purse | A1 burden at 0.75 × R6 × n × rate; A1-L; `cartel::tj_inequalities_report`; `--gate7` (≈ 900× low) | no reward-proportional arm (**EUP-4 prep**); the purse coupling (**EUP-3**) |
 | **H** challenge doctrine | L19i egress against `budget(E)` | only in the staking sim (`--f34-calibrated`) | egress as a burden term: **EUP-3** |
 | 720-block window (umbrella §4.2) | step response, sub-window boom/bust, an edge-timed stuffer | the window is imported with no length knob; step response is a unit test | per-block traces, step and surge schedules, edge stuffer: **EUP-4 prep** |
-| fee lattice size | the lattice step as a fraction of the ordinary fee, against a bar | `FEE_DECIMAL_PLACES = 6`, inherited; the sim does not round | rounding: **ESR-15**; a step-over-fee column: ESR-15 or the sweep. From PROD, the ordinary fee falls to 0.0001 SKL by y30–y60, where one 1 000-atomic step is 100 bp, above the 50 bp bar G uses |
+| fee lattice size | the lattice step as a fraction of the ordinary fee, against a bar | `FEE_DECIMAL_PLACES = 6`, inherited. ESR-15 landed: the production arm rounds, and `--stage2` prints the step (year-1 baseline 0.0084 bp; 169 bp where the fee prints 0.0001 SKL) | the size stays open for EUP-5; six decimals stay until that ruling |
 
 ---
 
@@ -597,7 +597,7 @@ are proposed here.
 | 5. Demand-responsive | multiplier and burn under step, boom/bust and stuffing; window step response; edge stuffer | **partial**: year-end values; step response is a unit test; no edge stuffer | the §4.2 instrument: **EUP-4 prep** |
 | 6. Self-regulating | (a) staker yield; (b) A1-T flat-25 at 10 % by decade, and onset; (c) coverage | (a) exists but divides by the deleted stake-ratio term (finding E); (b) **exists**, both arms; (c) only in the staking sim | **EUP-3** |
 | Capacity | BLOCK SPACE, growth gate | **exists** on the inherited pair | the re-derived pair and the rung mix: **ESR-10** |
-| Usability | mean ordinary fee (`onset.rs`) | **partial**: from year 10, unrounded, a mean | years 1–9: **EUP-4 prep**; rounding: **ESR-15**; rung mix: **ESR-10** |
+| Usability | mean ordinary fee (`onset.rs`) | **partial**: the mean is printed from year 10; the lattice step is printed from year 1. ESR-15 rounded the production arm | years 1–9 of the mean: **EUP-4 prep**; rung mix: **ESR-10** |
 | Tail | per-block fee revenue to ≈ year 135 | **missing** | **EUP-4 prep**, after the zone closed form |
 | Stuffing | `print_envelope`, today / fixed vs relay | **partial**: SKL per shard, not floors per byte; four rows; "tail" is year 45 | every scenario, a floors-per-byte column, true tail rows: **EUP-4 prep** plus the horizon |
 
@@ -671,6 +671,9 @@ steps below and listed at the end.
    - *Predictions owed:* the fixture lines that move and by how much; that no
      onset year, no crossing year and no A1 verdict moves; the
      `--fee-floor` / `--fee-ladder` outputs, which do not round today.
+   - **Landed** 2026-10-28, PR #1213 (`716bd8ab7`). §5.25.1 grades the run.
+     The production arm rounds. `--fee-floor` stayed exact. The size row
+     is open in `FEE_LADDER_DERIVATION.md` §12.
 2. **The parameter sweep** (§B.3a of the brief), as ruled in 2 and 3:
    - **Two generated structs from the one JSON file.** `EconomicParams` is
      chain identity and stays in the digest; every economic constant that is
