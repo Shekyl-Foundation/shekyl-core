@@ -89,6 +89,7 @@ namespace cryptonote
     typedef CORE_SYNC_DATA payload_type;
 
     t_cryptonote_protocol_handler(t_core& rcore, nodetool::i_p2p_endpoint<connection_context>* p_net_layout, bool offline = false);
+    ~t_cryptonote_protocol_handler();
 
     BEGIN_INVOKE_MAP2(cryptonote_protocol_handler)
       HANDLE_NOTIFY_T2(NOTIFY_NEW_TRANSACTIONS, &cryptonote_protocol_handler::handle_notify_new_transactions)
@@ -170,6 +171,8 @@ namespace cryptonote
     bool check_standby_peers();
     bool update_sync_search();
     int try_add_next_blocks(cryptonote_connection_context &context);
+    static void ingest_post(void* ctx, const shekyl_ingest_reply* reply, const std::uint64_t* indices, std::size_t indices_len);
+    void on_ingest_reply(const shekyl_ingest_reply& reply, const std::uint64_t* indices, std::size_t indices_len);
     void request_chain_history(cryptonote_connection_context &context);
     size_t skip_unneeded_hashes(cryptonote_connection_context& context, bool check_block_queue) const;
     bool request_txpool_complement(cryptonote_connection_context &context);

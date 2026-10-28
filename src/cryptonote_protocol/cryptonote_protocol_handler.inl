@@ -44,8 +44,11 @@
 #include <unordered_map>
 #include <list>
 #include <ctime>
+#include <cstring>
 
 #include "p2p/seam_board.h"
+#include "p2p/seam_endpoint.h"
+#include "ingest_offer.h"
 
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "profile_tools.h"
@@ -113,100 +116,6 @@ namespace cryptonote
       + " (" + std::to_string(blob.size()) + " bytes)";
   }
 
-  template <class CryptoHashContainer>
-  inline bool make_block_connect_supplement_from_block_entry(
-    const std::vector<cryptonote::tx_blob_entry>& tx_entries,
-    const CryptoHashContainer& blk_tx_hashes,
-    const cryptonote::blobdata& attestation_witness,
-    cryptonote::block_connect_supplement& connect)
-  {
-    connect.pool.nic_verified = false;
-    // Single assignment site for the credit-wire attestation witness (opaque
-    // bytes). Block-level data lives on block_connect_supplement, not on the
-    // tx-shaped pool_supplement. Compact-announce and get-objects both funnel through here.
-    connect.attestation_witness = attestation_witness;
-
-    if (tx_entries.size() > blk_tx_hashes.size())
-    {
-      MERROR("Failed to make block connect supplement: Too many transaction blobs!");
-      return false;
-    }
-
-    for (const cryptonote::tx_blob_entry& tx_entry: tx_entries)
-    {
-      if (tx_entry.blob.size() > get_max_tx_size())
-      {
-        MERROR("Transaction blob of length " << tx_entry.blob.size() << " is too large to unpack!");
-        return false;
-      }
-
-      // A pruned entry has no place on this wire: pruned spans are never
-      // requested (PDM-Q7), and a pruned body cannot be named here anyway --
-      // its txid mixes an archival length (SHT-Q2) that only the full body
-      // or a store's row can supply, and a block entry carries neither.
-      if (tx_entry.prunable_hash != crypto::null_hash)
-      {
-        MERROR("Pruned transaction not allowed here");
-        return false;
-      }
-
-      cryptonote::transaction tx;
-      crypto::hash tx_hash;
-      const bool parse_success = cryptonote::parse_and_validate_tx_from_blob(tx_entry.blob, tx, tx_hash);
-
-      if (!parse_success)
-      {
-        MERROR("failed to parse and/or validate transaction: "
-          << describe_peer_blob(tx_entry.blob)
-        );
-        return false;
-      }
-      else if (!blk_tx_hashes.count(tx_hash))
-      {
-        MERROR("transaction " << tx_hash << " not in block");
-        return false;
-      }
-
-      connect.pool.txs_by_txid.emplace(tx_hash, std::make_pair(std::move(tx), tx_entry.blob));
-    }
-
-    return true;
-  }
-
-  inline bool make_full_block_connect_supplement_from_block_entry(
-    const cryptonote::block_complete_entry& blk_entry,
-    cryptonote::block_connect_supplement& connect)
-  {
-    cryptonote::block blk;
-    if (!cryptonote::parse_and_validate_block_from_blob(blk_entry.block, blk))
-    {
-      MERROR("sent bad block: failed to parse and/or validate block: "
-        << describe_peer_blob(blk_entry.block)
-      );
-      return false;
-    }
-
-    const std::unordered_set<crypto::hash> blk_tx_hashes(blk.tx_hashes.cbegin(), blk.tx_hashes.cend());
-
-    if (blk_tx_hashes.size() != blk_entry.txs.size())
-    {
-      MERROR("sent bad block entry: number of hashes is not equal number of tx blobs: "
-        << describe_peer_blob(blk_entry.block)
-      );
-      return false;
-    }
-    else if (blk_tx_hashes.size() != blk.tx_hashes.size())
-    {
-      MERROR("sent bad block entry: there are duplicate tx hashes in parsed block: "
-        << describe_peer_blob(blk_entry.block));
-      return false;
-    }
-
-    return make_block_connect_supplement_from_block_entry(
-      blk_entry.txs, blk_tx_hashes, blk_entry.attestation_witness, connect);
-  }
-
-
   //-----------------------------------------------------------------------------------------------------------------------
   // The connector byte the Rust sync verdicts take for a zone.
   inline std::uint32_t sync_connector_of(epee::net_utils::connector_id zone)
@@ -229,6 +138,41 @@ namespace cryptonote
   {
     if(!m_p2p)
       m_p2p = &m_p2p_stub;
+    shekyl_ingest_bind(this, &t_cryptonote_protocol_handler<t_core>::ingest_post);
+  }
+  template<class t_core>
+  t_cryptonote_protocol_handler<t_core>::~t_cryptonote_protocol_handler()
+  {
+    shekyl_ingest_bind(nullptr, nullptr);
+  }
+  template<class t_core>
+  void t_cryptonote_protocol_handler<t_core>::ingest_post(void* ctx, const shekyl_ingest_reply* reply,
+      const std::uint64_t* indices, std::size_t indices_len)
+  {
+    if (ctx && reply)
+      static_cast<t_cryptonote_protocol_handler<t_core>*>(ctx)->on_ingest_reply(*reply, indices, indices_len);
+  }
+  template<class t_core>
+  void t_cryptonote_protocol_handler<t_core>::on_ingest_reply(const shekyl_ingest_reply& reply,
+      const std::uint64_t* indices, std::size_t indices_len)
+  {
+    // for_connection only enqueues onto the connection's strand.
+    const boost::uuids::uuid id = shekyl::seam_connection_id(reply.connection);
+    const std::vector<std::uint64_t> missing(indices, indices + indices_len);
+    m_p2p->for_connection(id, [this, reply, missing](cryptonote_connection_context& context) {
+      if (reply.kind == SHEKYL_INGEST_REFUSED)
+      {
+        LOG_PRINT_CCONTEXT_L0("Block verification failed, dropping connection");
+        drop_connection(context, false, false);
+        return;
+      }
+      if (reply.kind != SHEKYL_INGEST_MISSING_BODIES || missing.empty())
+        return;
+      NOTIFY_REQUEST_COMPACT_MISSING_TX::request req;
+      std::memcpy(&req.block_hash, reply.hash, sizeof(req.block_hash));
+      req.missing_tx_indices = missing;
+      post_notify<NOTIFY_REQUEST_COMPACT_MISSING_TX>(req, context);
+    });
   }
   //-----------------------------------------------------------------------------------------------------------------------
   template<class t_core>
@@ -435,10 +379,6 @@ namespace cryptonote
       << " [Your node is " << abs_diff << " blocks (" << tools::get_human_readable_timespan(abs_diff * SHEKYL_DAA_TARGET_SECONDS) << ") "
       << (0 <= diff ? std::string("behind") : std::string("ahead"))
       << "] " << ENDL << "SYNCHRONIZATION started");
-      if (hshd.current_height >= m_core.get_current_blockchain_height() + 5) // don't switch to unsafe mode just for a few blocks
-      {
-        m_core.safesyncmode(false);
-      }
       if (m_core.get_target_blockchain_height() == 0) // only when sync starts
       {
         m_sync_timer.resume();
@@ -504,163 +444,19 @@ namespace cryptonote
       return 1;
     }
 
-    // Our current weight limit — state, not form. Decline, do not sever.
-    if (!m_core.check_incoming_block_size(arg.b.block))
+    // The door's Oversize is the size check (PR2-Q2). An unsolicited
+    // announcement: Throttled closes the session and scores nothing.
+    const int offered = cryptonote::offer_block_span(
+        shekyl::seam_socket_id(context.m_connection_id), false, {arg.b});
+    if (offered == SHEKYL_INGEST_THROTTLED)
     {
-      LOG_PRINT_CCONTEXT_L1("Announced block blob exceeds our current weight limit; declining to process it, keeping the connection");
-      return 1;
-    }
-
-    // Parse and quick hash incoming block, dropping the connection on failure
-    block new_block;
-    crypto::hash new_block_hash;
-    if (!parse_and_validate_block_from_blob(arg.b.block, new_block, &new_block_hash))
-    {
-      LOG_ERROR_CCONTEXT
-      (
-        "sent wrong block: failed to parse and validate block: "
-        << describe_peer_blob(arg.b.block)
-        << ", dropping connection"
-      );
-
+      LOG_PRINT_CCONTEXT_L1("Announced block past the session's bucket; dropping the connection");
       drop_connection(context, false, false);
-      return 1;
     }
-
-    // Log block info
-    MLOG_P2P_MESSAGE(context << "Received NOTIFY_NEW_COMPACT_BLOCK " << new_block_hash << " (height "
-      << arg.current_blockchain_height << ", " << arg.b.txs.size() << " txes)");
-
-    // Pause mining and resume after block verification to prevent wasted mining cycles while
-    // validating the next block. Needs more research into if this is a DoS vector or not. Invalid
-    // block validation will cause disconnects and bans, so it might not be that bad.
-    m_core.pause_mine();
-    const auto resume_mine_on_leave = epee::misc_utils::create_scope_leave_handler([this](){ m_core.resume_mine(); });
-
-    // This set allows us to quickly sanity check that the block binds all txs contained in this
-    // compact payload, which means that no extra stowaway txs can be harbored. In the case of a
-    // deterministic block verification failure, the peer will be punished accordingly. For other
-    // cases, *once* valid PoW will be required to perform expensive consensus checks for the txs
-    // inside the block.
-    std::unordered_map<crypto::hash, uint64_t> blk_txids_set;
-    for (size_t tx_idx = 0; tx_idx < new_block.tx_hashes.size(); ++tx_idx)
-      blk_txids_set.emplace(new_block.tx_hashes[tx_idx], tx_idx);
-
-    // Check for duplicate txids in parsed block blob
-    if (blk_txids_set.size() != new_block.tx_hashes.size())
-    {
-      MERROR("sent bad block entry: there are duplicate tx hashes in parsed block: "
-        << describe_peer_blob(arg.b.block));
-      drop_connection(context, false, false);
-      return 1;
-    }
-
-    // Keeping a map of the full transactions provided in this payload allows us to pass them
-    // directly to core::handle_single_incoming_block() -> Blockchain::add_block(), which means we
-    // can skip the mempool for faster block propagation. Later in the function, we will erase all
-    // transactions from the relayed block.
-    // The credit-wire attestation witness is bounded by block_complete_entry's own
-    // KV codec (ARCHIVAL_CREDIT_WIRE.md §3, credit-wire CW-2), so an oversized blob
-    // never deserializes into `arg` and no check belongs here. Do not re-add one: it
-    // would be unreachable by construction, and an unreachable guard reads like a
-    // live one to the next maintainer.
-    //
-    // The trade this makes, deliberately: a codec refusal on a NOTIFICATION is
-    // discarded by the levin layer (levin_protocol_handler_async.h drops the notify
-    // return value), so the sender is not dropped the way the old call-site check
-    // dropped it — it only gets an epee-level "Failed to load in_struct" log and a
-    // message that accomplishes nothing. That is the same treatment
-    // txin_archival_reward_emission's in-codec bound already gives, the peer's
-    // resource use is still bounded by levin's own max packet size, and a peer that
-    // stalls a sync this way is collected by the existing request-timeout path.
-    // Unbypassable beats loud here; a bound only some ingresses check is the defect
-    // this replaced.
-    block_connect_supplement connect;
-    if (!make_block_connect_supplement_from_block_entry(arg.b.txs, blk_txids_set, arg.b.attestation_witness, connect))
-    {
-      LOG_ERROR_CCONTEXT
-      (
-        "Failed to parse one or more transactions in compact block with ID " << new_block_hash <<
-        ", dropping connection"
-      );
-
-      drop_connection(context, false, false);
-      return 1;
-    }
-
-    // try adding block to the blockchain
-    block_verification_context bvc = {}; 
-    const bool handle_block_res = m_core.handle_single_incoming_block(arg.b.block,
-      &new_block,
-      bvc,
-      connect);
-
-    // handle result of attempted block add. The tree lives in
-    // shekyl-peer-policy::BlockAnnounceAction (PWD-B7): C++ asks predicates
-    // on the returned action, never on the classification bytes.
-    const uint8_t announce = block_announce_action(bvc, handle_block_res);
-    if (block_added(bvc))
-      raise_remote_height(context, chain_length_of_accepted_block(get_block_height(new_block)));
-    if (block_announce_re_request_txs(announce))
-    {
-        // PoW checking happens before missing transactions checks, so if
-        // this arm fired, we passed PoW — a peer can't get us to re-request
-        // compact blocks for free.
-
-        // Instead of requesting missing transactions by hash like BTC,
-        // we do it by index (thanks to a suggestion from moneromooo) because
-        // we're way cooler .. and also because they're smaller than hashes.
-        std::vector<uint64_t> need_tx_indices;
-        need_tx_indices.reserve(new_block.tx_hashes.size());
-
-        // Collect need_tx_indices by polling blockchain storage and mempool storage
-        for (size_t tx_idx = 0; tx_idx < new_block.tx_hashes.size(); ++tx_idx)
-        {
-          const crypto::hash &tx_hash = new_block.tx_hashes[tx_idx];
-
-          std::vector<cryptonote::blobdata> tx_blobs;
-          std::vector<crypto::hash> missed_txs;
-
-          bool need_tx = !m_core.pool_has_tx(tx_hash);
-          need_tx = need_tx && (!m_core.get_transactions({tx_hash}, tx_blobs, missed_txs, /*pruned=*/true)
-            || !missed_txs.empty());
-
-          if (need_tx)
-            need_tx_indices.push_back(tx_idx);
-        }
-
-        // Make request form
-        MDEBUG("We are missing " << need_tx_indices.size() << " txes for this compact block");
-        for (auto txidx: need_tx_indices)
-          MDEBUG("  tx " << new_block.tx_hashes[txidx]);
-        NOTIFY_REQUEST_COMPACT_MISSING_TX::request missing_tx_req;
-        missing_tx_req.block_hash = new_block_hash;
-        missing_tx_req.current_blockchain_height = arg.current_blockchain_height;
-        missing_tx_req.missing_tx_indices = std::move(need_tx_indices);
-
-        // Post NOTIFY_REQUEST_COMPACT_MISSING_TX request to peer
-        MLOG_P2P_MESSAGE("-->>NOTIFY_REQUEST_COMPACT_MISSING_TX: missing_tx_indices.size()=" << missing_tx_req.missing_tx_indices.size() );
-        post_notify<NOTIFY_REQUEST_COMPACT_MISSING_TX>(missing_tx_req, context);
-    }
-    else if (block_announce_drop(announce))
-    {
-        LOG_PRINT_CCONTEXT_L0("Block verification failed, dropping connection");
-        drop_connection_with_score(context, block_announce_heavier_score(announce) ? P2P_IP_FAILS_BEFORE_BLOCK : 1, false);
-        return 1;
-    }
-    else if (block_announce_our_failure(announce))
-    {
-        LOG_PRINT_CCONTEXT_L0("Block ingest returned false without an attributable drop; not dropping the peer");
-    }
-    else if (block_announce_relay(announce))
-    {
-      arg.b.txs.clear();
-      relay_block(arg, context);
-    }
-    else if (block_announce_request_history(announce))
-    {
-      request_chain_history(context);
-    }
+    else if (offered == SHEKYL_INGEST_OVERSIZE)
+      LOG_PRINT_CCONTEXT_L1("Announced block blob exceeds the door's size bound; keeping the connection");
+    else if (offered != SHEKYL_INGEST_ACCEPTED && offered != SHEKYL_INGEST_NO_ROOM)
+      LOG_PRINT_CCONTEXT_L1("Announced block was not accepted (" << offered << "); keeping the connection");
 
     return 1;
   }  
@@ -1285,368 +1081,36 @@ namespace cryptonote
   int t_cryptonote_protocol_handler<t_core>::try_add_next_blocks(cryptonote_connection_context& context)
   {
     bool force_next_span = false;
-
+    const boost::unique_lock<boost::mutex> sync{m_sync_lock, boost::try_to_lock};
+    if (!sync.owns_lock())
     {
-      // We try to lock the sync lock. If we can, it means no other thread is
-      // currently adding blocks, so we do that for as long as we can from the
-      // block queue. Then, we go back to download.
-      const boost::unique_lock<boost::mutex> sync{m_sync_lock, boost::try_to_lock};
-      if (!sync.owns_lock())
+      MINFO(context << "Failed to lock m_sync_lock, going back to download");
+    }
+    else
+    {
+      uint64_t start_height = 0;
+      std::vector<cryptonote::block_complete_entry> blocks;
+      boost::uuids::uuid span_connection_id{};
+      epee::net_utils::network_address span_origin;
+      if (m_block_queue.get_next_span(start_height, blocks, span_connection_id, span_origin) && !blocks.empty())
       {
-        MINFO(context << "Failed to lock m_sync_lock, going back to download");
-        goto skip;
-      }
-      MDEBUG(context << " lock m_sync_lock, adding blocks to chain...");
-      MLOG_PEER_STATE("adding blocks");
-
-      {
-        m_core.pause_mine();
-        m_add_timer.resume();
-        bool starting = true;
-        epee::misc_utils::auto_scope_leave_caller scope_exit_handler = epee::misc_utils::create_scope_leave_handler([this, &starting]() {
-          m_add_timer.pause();
-          m_core.resume_mine();
-          if (!starting)
-            m_last_add_end_time = tools::get_tick_count();
-        });
-        m_sync_start_time = boost::posix_time::microsec_clock::universal_time();
-        m_sync_start_height = m_core.get_current_blockchain_height();
-        m_period_start_time = m_sync_start_time;
-
-        while (1)
-        {
-          const uint64_t previous_height = m_core.get_current_blockchain_height();
-          uint64_t start_height;
-          std::vector<cryptonote::block_complete_entry> blocks;
-          boost::uuids::uuid span_connection_id;
-          epee::net_utils::network_address span_origin;
-          if (!m_block_queue.get_next_span(start_height, blocks, span_connection_id, span_origin))
-          {
-            MDEBUG(context << " no next span found, going back to download");
-            break;
-          }
-
-          if (blocks.empty())
-          {
-            MERROR(context << "Next span has no blocks");
-            m_block_queue.remove_spans(span_connection_id, start_height);
-            continue;
-          }
-
-          MDEBUG(context << " next span in the queue has blocks " << start_height << "-" << (start_height + blocks.size() - 1)
-              << ", we need " << previous_height);
-
-          block new_block;
-          crypto::hash last_block_hash;
-          if (!parse_and_validate_block_from_blob(blocks.back().block, new_block, last_block_hash))
-          {
-            MERROR(context << "Failed to parse block, but it should already have been parsed");
-            m_block_queue.remove_spans(span_connection_id, start_height);
-            continue;
-          }
-          if (m_core.have_block(last_block_hash))
-          {
-            const uint64_t subchain_height = start_height + blocks.size();
-            LOG_DEBUG_CC(context, "These are old blocks, ignoring: blocks " << start_height << " - " << (subchain_height-1) << ", blockchain height " << m_core.get_current_blockchain_height());
-            m_block_queue.remove_spans(span_connection_id, start_height);
-            ++m_sync_old_spans_downloaded;
-            continue;
-          }
-          if (!parse_and_validate_block_from_blob(blocks.front().block, new_block))
-          {
-            MERROR(context << "Failed to parse block, but it should already have been parsed");
-            m_block_queue.remove_spans(span_connection_id, start_height);
-            continue;
-          }
-          bool parent_known = m_core.have_block(new_block.prev_id);
-          if (!parent_known)
-          {
-            const std::uint64_t confirmed_height = m_block_queue.have_height(new_block.prev_id);
-            if (confirmed_height != std::numeric_limits<std::uint64_t>::max() && confirmed_height + 1 != start_height)
-            {
-              MERROR(context << "Found incorrect height for " << new_block.prev_id << " provided by " << span_connection_id);
-              drop_connection(span_connection_id);
-              // The span must go with the peer. Dropping by id flushes only
-              // that connection's EMPTY spans, and nothing else erases a
-              // filled one -- `on_connection_close` and `flush_stale_spans`
-              // are both empty-only, deliberately, since downloaded blocks
-              // from a departed peer stay useful. This span is not useful:
-              // it is the one whose height was rejected, and if it is the
-              // lowest in the queue `get_next_span` serves it again on every
-              // call, re-runs this check against a peer that is already gone,
-              // and nothing behind it is ever added. Every other failure arm
-              // in this loop removes its span; this one did not.
-              m_block_queue.remove_spans(span_connection_id, start_height);
-              return 1;
-            }
-
-            // it could be:
-            //  - later in the current chain
-            //  - later in an alt chain
-            //  - orphan
-            // if it was requested, then it'll be resolved later, otherwise it's an orphan
-            bool parent_requested = m_block_queue.requested(new_block.prev_id);
-            if (!parent_requested)
-            {
-              // we might be able to ask for that block directly, as we now can request out of order,
-              // otherwise we continue out of order, unless this block is the one we need, in which
-              // case we request block hashes, though it might be safer to disconnect ?
-              if (start_height > previous_height)
-              {
-                MDEBUG(context << "Got block with unknown parent which was not requested, but peer does not have that block - back to download");
-
-                goto skip;
-              }
-
-              // this can happen if a connection was sicced onto a late span, if it did not have those blocks,
-              // since we don't know that at the sic time
-              LOG_ERROR_CCONTEXT("Got block with unknown parent which was not requested - querying block hashes");
-              m_block_queue.remove_spans(span_connection_id, start_height);
-              context.m_needed_objects.clear();
-              context.m_last_response_height = 0;
-              goto skip;
-            }
-
-            // parent was requested, so we wait for it to be retrieved
-            MINFO(context << " parent was requested, we'll get back to it");
-            break;
-          }
-
-          const boost::posix_time::ptime start = boost::posix_time::microsec_clock::universal_time();
-
-          if (starting)
-          {
-            starting = false;
-            if (m_last_add_end_time)
-            {
-              const uint64_t tnow = tools::get_tick_count();
-              const uint64_t ns = tools::ticks_to_ns(tnow - m_last_add_end_time);
-              MINFO("Restarting adding block after idle for " << ns/1e9 << " seconds");
-            }
-          }
-
-          std::vector<block> pblocks;
-          uint8_t prepare_verdict = SHEKYL_DROP_VERDICT_UNCLASSIFIED;
-          if (!m_core.prepare_handle_incoming_blocks(blocks, pblocks, &prepare_verdict))
-          {
-            LOG_ERROR_CCONTEXT("Failure in prepare_handle_incoming_blocks");
-            if (shekyl_drop_verdict_severs(prepare_verdict))
-            {
-              drop_connections(span_origin);
-              if (!m_p2p->for_connection(span_connection_id, [this](cryptonote_connection_context& context){
-                drop_connection(context, false, true);
-              }))
-                LOG_ERROR_CCONTEXT("span connection id not found");
-            }
-            else if (shekyl_drop_verdict_is_internal_failure(prepare_verdict))
-            {
-              LOG_ERROR_CCONTEXT("prepare_handle_incoming_blocks failed on an internal invariant of ours; keeping the connection and charging nothing");
-            }
-            // Span must leave the queue in every class: the drop used to flush
-            // it as a side effect.
-            m_block_queue.remove_spans(span_connection_id, start_height);
-            return 1;
-          }
-          if (!pblocks.empty() && pblocks.size() != blocks.size())
-          {
-            m_core.cleanup_handle_incoming_blocks();
-            LOG_ERROR_CCONTEXT("Internal error: blocks.size() != block_entry.txs.size()");
-            return 1;
-          }
-
-          uint64_t block_process_time_full = 0, transactions_process_time_full = 0;
-          size_t num_txs = 0, blockidx = 0;
-          for(const block_complete_entry& block_entry: blocks)
-          {
-            if (m_stopping)
-            {
-                m_core.cleanup_handle_incoming_blocks();
-                return 1;
-            }
-
-            // process transactions
-            TIME_MEASURE_START(transactions_process_time);
-            num_txs += block_entry.txs.size();
-
-            block_connect_supplement connect;
-            if (!make_full_block_connect_supplement_from_block_entry(block_entry, connect))
-            {
-                drop_connections(span_origin);
-                if (!m_p2p->for_connection(span_connection_id, [this](cryptonote_connection_context& context){
-                  LOG_ERROR_CCONTEXT("transaction parsing failed for 1 or more txs in NOTIFY_RESPONSE_GET_OBJECTS,"
-                    "dropping connections");
-                  drop_connection(context, false, true);
-                }))
-                  LOG_ERROR_CCONTEXT("span connection id not found");
-
-                if (!m_core.cleanup_handle_incoming_blocks())
-                {
-                  LOG_PRINT_CCONTEXT_L0("Failure in cleanup_handle_incoming_blocks");
-                  return 1;
-                }
-                // in case the peer had dropped beforehand, remove the span anyway so other threads can wake up and get it
-                m_block_queue.remove_spans(span_connection_id, start_height);
-                return 1;
-            }
-            TIME_MEASURE_FINISH(transactions_process_time);
-            transactions_process_time_full += transactions_process_time;
-
-            // process block
-
-            TIME_MEASURE_START(block_process_time);
-            block_verification_context bvc = {};
-
-            m_core.handle_incoming_block(block_entry.block,
-              pblocks.empty() ? NULL : &pblocks[blockidx],
-              bvc,
-              connect,
-              false); // <--- process block
-
-            const uint8_t sync = block_sync_action(bvc);
-            if (block_sync_drop(sync))
-            {
-              drop_connections(span_origin);
-              if (!m_p2p->for_connection(span_connection_id, [this, sync](cryptonote_connection_context& context){
-                LOG_PRINT_CCONTEXT_L1("Block verification failed, dropping connection");
-                drop_connection_with_score(context, block_sync_heavier_score(sync) ? P2P_IP_FAILS_BEFORE_BLOCK : 1, true);
-              }))
-                LOG_ERROR_CCONTEXT("span connection id not found");
-
-              if (!m_core.cleanup_handle_incoming_blocks())
-              {
-                LOG_PRINT_CCONTEXT_L0("Failure in cleanup_handle_incoming_blocks");
-                return 1;
-              }
-
-              // in case the peer had dropped beforehand, remove the span anyway so other threads can wake up and get it
-              m_block_queue.remove_spans(span_connection_id, start_height);
-              return 1;
-            }
-            if (block_added(bvc) && m_p2p)
-            {
-              const block* added = !pblocks.empty() ? &pblocks[blockidx] : nullptr;
-              block parsed;
-              if (added == nullptr && parse_and_validate_block_from_blob(block_entry.block, parsed))
-                added = &parsed;
-              if (added != nullptr)
-              {
-                const uint64_t chain_length = chain_length_of_accepted_block(get_block_height(*added));
-                m_p2p->for_connection(span_connection_id, [this, chain_length](cryptonote_connection_context& origin) {
-                  raise_remote_height(origin, chain_length);
-                });
-              }
-            }
-            if (block_sync_orphan_resync(sync))
-            {
-              // C2-R1c-Q3b: an in-loop orphan here means OUR store lost the
-              // parent between the span's parent pre-check and this add --
-              // every enumerated path is local (the 600s checkpoint-reload
-              // rollback discard, an operator pop_blocks, the Q1a flip-flop
-              // discard), so this is degradation and re-sync, never peer
-              // misconduct. A peer that actually misrepresents a span is
-              // caught at the queue bookkeeping-mismatch arm above, which
-              // fires before any state race can. Drop the span, then take
-              // the shared back-to-download path: a bare return would leave
-              // THIS context synchronizing with its request time already
-              // cleared by the response handler, and the idle kicker
-              // selects only contexts with a live request time -- the
-              // download must be put back in motion here, not assumed.
-              LOG_PRINT_CCONTEXT_L1("Block received at sync phase was marked as orphaned -- local chain state moved during span processing; re-syncing without penalizing the origin");
-              // A cleanup failure is logged loudly but must NOT abort the
-              // recovery below: an early return here would recreate the
-              // synchronizing-and-silent stall this arm exists to close
-              // (the request time is already cleared, and pre-fix the
-              // drop-then-reconnect was the recovery). The queue and p2p
-              // steps below do not depend on the core batch state.
-              if (!m_core.cleanup_handle_incoming_blocks())
-                LOG_PRINT_CCONTEXT_L0("Failure in cleanup_handle_incoming_blocks");
-
-              // remove the span so other threads can wake up and get it,
-              // then re-walk the chain DIRECTLY: the pre-orphan
-              // negotiation is dead (its needed-objects window descends
-              // from a chain state we no longer hold), and
-              // request_missing_objects' preconditions assume a live one
-              // -- with the state reset and the span gone, its
-              // nothing-to-request arm answers by dropping the peer,
-              // which is the punishment coming back one layer up. The
-              // shared helper clears the negotiation and requests the
-              // chain from the current tip with a live request time.
-              // m_last_known_hash anchored the dead negotiation too:
-              // request_missing_objects' tail PREPENDS it to later chain
-              // requests, which would restart the walk from the chain we
-              // just rolled off -- clear it so the next negotiation
-              // starts from OUR history alone.
-              m_block_queue.remove_spans(span_connection_id, start_height);
-              context.m_last_response_height = 0;
-              context.m_last_known_hash = crypto::null_hash;
-              request_chain_history(context);
-              return 1;
-            }
-
-            TIME_MEASURE_FINISH(block_process_time);
-            block_process_time_full += block_process_time;
-            ++blockidx;
-
-          } // each download block
-
-          MDEBUG(context << "Block process time (" << blocks.size() << " blocks, " << num_txs << " txs): " << block_process_time_full + transactions_process_time_full << " (" << transactions_process_time_full << "/" << block_process_time_full << ") ms");
-
-          if (!m_core.cleanup_handle_incoming_blocks())
-          {
-            LOG_PRINT_CCONTEXT_L0("Failure in cleanup_handle_incoming_blocks");
-            return 1;
-          }
-
+        (void)span_origin;
+        // A span this node asked for. The door connects it; this loop does not.
+        const int offered = cryptonote::offer_block_span(
+            shekyl::seam_socket_id(span_connection_id), true, blocks);
+        if (offered == SHEKYL_INGEST_ACCEPTED || offered == SHEKYL_INGEST_OVERSIZE || offered == SHEKYL_INGEST_INVALID)
           m_block_queue.remove_spans(span_connection_id, start_height);
-
-          const uint64_t current_blockchain_height = m_core.get_current_blockchain_height();
-          if (current_blockchain_height > previous_height)
-          {
-            const uint64_t target_blockchain_height = m_core.get_target_blockchain_height();
-            const boost::posix_time::time_duration dt = boost::posix_time::microsec_clock::universal_time() - start;
-            const double blocks_per_seconds = (((current_blockchain_height - previous_height) * 1e6) / dt.total_microseconds());
-            calculate_dynamic_span(blocks_per_seconds);
-            std::string progress_message = "";
-            if (current_blockchain_height < target_blockchain_height)
-            {
-              uint64_t completion_percent = (current_blockchain_height * 100 / target_blockchain_height);
-              if (completion_percent == 100) // never show 100% if not actually up to date
-                completion_percent = 99;
-              progress_message = " (" + std::to_string(completion_percent) + "%, "
-                  + std::to_string(target_blockchain_height - current_blockchain_height) + " left";
-              std::string time_message = get_periodic_sync_estimate(current_blockchain_height, target_blockchain_height);
-              if (!time_message.empty())
-              {
-                uint64_t total_blocks_to_sync = target_blockchain_height - m_sync_start_height;
-                uint64_t total_blocks_synced = current_blockchain_height - m_sync_start_height;
-                progress_message += ", " + std::to_string(total_blocks_synced * 100 / total_blocks_to_sync) + "% of total synced";
-                progress_message += ", estimated " + time_message + " left";
-              }
-              progress_message += ")";
-            }
-            std::string timing_message = "";
-            if (ELPP->vRegistry()->allowed(el::Level::Info, "sync-info"))
-              timing_message = std::string(" (") + std::to_string(dt.total_microseconds()/1e6) + " sec, "
-                + std::to_string(blocks_per_seconds)
-                + " blocks/sec), " + std::to_string(m_block_queue.get_data_size() / 1048576.f) + " MB queued in "
-                + std::to_string(m_block_queue.get_num_filled_spans()) + " spans";
-            if (ELPP->vRegistry()->allowed(el::Level::Debug, "sync-info"))
-              timing_message += std::string(": ") + m_block_queue.get_overview(current_blockchain_height);
-            MGINFO_YELLOW("Synced " << current_blockchain_height << "/" << target_blockchain_height
-                << progress_message << timing_message);
-          }
+        if (offered == SHEKYL_INGEST_THROTTLED)
+        {
+          m_block_queue.remove_spans(span_connection_id, start_height);
+          m_p2p->for_connection(span_connection_id, [this](cryptonote_connection_context& origin) {
+            drop_connection(origin, false, true);
+          });
         }
       }
-
-      MLOG_PEER_STATE("stopping adding blocks");
-
       if (should_download_next_span(context, false))
-      {
         force_next_span = true;
-      }
     }
-
-skip:
     if (!request_missing_objects(context, true, force_next_span))
     {
       LOG_ERROR_CCONTEXT("Failed to request missing objects, dropping connection");
@@ -2281,7 +1745,6 @@ skip:
       }
       m_core.on_synchronized();
     }
-    m_core.safesyncmode(true);
 
     // ask for txpool complement from any suitable node if we did not yet
     val_expected = true;

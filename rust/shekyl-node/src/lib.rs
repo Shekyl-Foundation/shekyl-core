@@ -290,6 +290,12 @@ impl Node {
                 }
                 return Err(error);
             }
+            // The handler's arrivals enter this door (DX-Q2 item 2). The
+            // pump runs on this runtime; unbind must not.
+            shekyl_ffi::ingest_ffi::install(
+                service.door(),
+                tokio::runtime::Handle::current(),
+            );
             Ok(service)
         });
         let service = match started {
