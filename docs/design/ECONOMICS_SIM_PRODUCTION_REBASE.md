@@ -2078,6 +2078,43 @@ the binding rate and the decades (`onset.rs`), the floor share and the horizon,
 and the W₂ rig's three anchors as named constants in `mn_feasibility.rs`.
 Both narrations were regenerated after the grading above.
 
+### 5.25 ESR-15, predicted before the run (2026-10-27)
+
+Written against `dev` at `466ffe1f1`, before any ESR-15 code. The seven
+properties are `FEE_LADDER_DERIVATION.md` §12. Nothing below is a result.
+
+Read from the production narration at that pin, not from a run of this
+change: the growth gate admits baseline from year 19 and boom-bust from
+year 15; the A1-T onset years are the table's (`baseline` flat@10 y31,
+best@10 y34; `boom_bust` y26 and y28, both starred; `sustained_growth`
+y22 and y22; `late_chain_tail` y3 and y3; `high_history` y31 and y36).
+The A1 lines that are verdicts are "D2 case … none", "NO DISCRIMINATING
+SCENARIO", "W9 gate … FAIL", and "W10 gate: FAILS".
+
+- **E15-1.** Every production-arm fee `--stage2` charges is a multiple of
+  1 000 atomic. A test walks one baseline year and asserts
+  `fee % FEE_QUANTIZATION_MASK == 0`.
+- **E15-2.** An ordinary fee rises by less than 1 000 atomic, plus at most
+  one varint byte of rate, per transaction. No block-space cell moves.
+  The crossing years stay y19 and y15. No onset year moves. No A1 verdict
+  changes.
+- **E15-3.** Numeric narration lines that move do so in the last printed
+  digit, or past it. The production arm's header stops saying "unrounded".
+  The flat control arm's per-transaction fee stays the flat 0.1 SKL; its
+  weight-fees at the flat 300 atomic/byte admission stay on the unrounded
+  pricer, so that arm's fee figures do not move for the lattice. Closed-shard
+  counts move by at most a few shards, and only where a one-byte weight
+  change crosses a shard boundary. The new column is the lattice step in
+  basis points of that year's mean ordinary fee, `10 000 × 1 000 / fee`.
+  Year 1 on the baseline is registered as **(0.003, 0.011) bp**: the y10
+  mean 0.9228 SKL is 0.0108 bp, and year 1's reward and smaller median
+  both price a higher fee. A cell printed `0.0001` SKL is registered as
+  **50–200 bp**.
+- **E15-4.** At least one cell of the parity grid has an in-loop fixed
+  point different from `quantized_fee(converge_weight_fee(…))`.
+- **E15-5.** The copied wallet loop and the new wallet call agree on every
+  cell that did not overflow. Zero differences.
+
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
 Under the cycle ruling (§0), staking is being designed now, and the
