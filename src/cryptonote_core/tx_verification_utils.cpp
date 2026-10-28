@@ -31,7 +31,9 @@
 #include <limits>
 
 #include "cryptonote_basic/cryptonote_basic.h"
-#include "cryptonote_core/blockchain.h"
+#include "cryptonote_basic/cryptonote_format_utils.h"
+#include "cryptonote_basic/drop_verdict.h"
+#include "cryptonote_config.h"
 #include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_core/tx_verification_utils.h"
 #include "fcmp/ct_semantics.h"
@@ -41,6 +43,105 @@
 #define SHEKYL_DEFAULT_LOG_CATEGORY "blockchain"
 
 #define VER_ASSERT(cond, msgexpr) CHECK_AND_ASSERT_MES(cond, false, msgexpr)
+
+namespace cryptonote
+{
+
+static bool check_commitment_mask_valid(const transaction& tx)
+{
+  const auto& rv = tx.ct_signatures;
+  static_assert(sizeof(ct::key) == 32, "ct::key must be 32 bytes");
+  std::vector<uint8_t> masks_flat;
+  masks_flat.reserve(rv.outPk.size() * sizeof(ct::key));
+  for (const auto& pk : rv.outPk)
+    masks_flat.insert(masks_flat.end(), pk.mask.bytes, pk.mask.bytes + sizeof(ct::key));
+  std::vector<uint64_t> amounts;
+  amounts.reserve(tx.vout.size());
+  for (const auto& o : tx.vout)
+    amounts.push_back(o.amount);
+
+  const uint8_t rc = shekyl_check_commitment_masks(
+    static_cast<uint8_t>(rv.type),
+    tx.vout.size(),
+    masks_flat.empty() ? nullptr : masks_flat.data(), rv.outPk.size(),
+    amounts.empty() ? nullptr : amounts.data());
+  return rc == SHEKYL_OUTPUT_POINTS_OK;
+}
+
+static bool check_tx_outputs(const transaction& tx, tx_verification_context &tvc)
+{
+  if (tx.version < 3)
+  {
+    tvc.m_invalid_output = true;
+    return reject_form(tvc);
+  }
+
+  if (classify_archival_tx(tx.vin).kind != archival_tx_kind::emission)
+  {
+    for (const auto &o: tx.vout) {
+      if (o.amount != 0) {
+        tvc.m_invalid_output = true;
+        return reject_form(tvc);
+      }
+    }
+  }
+
+  if (tx.ct_signatures.type != ct::CTTypeNull &&
+      tx.ct_signatures.type != ct::CTTypeFcmpPlusPlusPqc)
+  {
+    tvc.m_invalid_output = true;
+    return reject_form(tvc);
+  }
+
+  if (tx.unlock_time >= CRYPTONOTE_MAX_BLOCK_HEIGHT_SENTINEL)
+  {
+    tvc.m_invalid_output = true;
+    return reject_form(tvc);
+  }
+
+  if (!check_output_types(tx))
+  {
+    tvc.m_invalid_output = true;
+    return reject_form(tvc);
+  }
+
+  if (!check_commitment_mask_valid(tx))
+  {
+    tvc.m_invalid_output = true;
+    return reject_form(tvc);
+  }
+
+  return true;
+}
+
+crypto::hash compute_fcmp_verification_hash(const transaction& tx)
+{
+  const ct::CtSig &rv = tx.ct_signatures;
+  if (rv.type != ct::CTTypeFcmpPlusPlusPqc)
+    return crypto::null_hash;
+
+  std::vector<uint8_t> buf;
+  buf.reserve(rv.p.fcmp_pp_proof.size() + 32 + tx.vin.size() * 32);
+  buf.insert(buf.end(), rv.p.fcmp_pp_proof.begin(), rv.p.fcmp_pp_proof.end());
+  static_assert(sizeof(rv.referenceBlock) == 32);
+  buf.insert(buf.end(),
+    reinterpret_cast<const uint8_t*>(&rv.referenceBlock),
+    reinterpret_cast<const uint8_t*>(&rv.referenceBlock) + 32);
+  for (const auto& txin : tx.vin)
+  {
+    if (!std::holds_alternative<txin_to_key>(txin))
+      return crypto::null_hash;
+    const auto& ki = std::get<txin_to_key>(txin).k_image;
+    buf.insert(buf.end(),
+      reinterpret_cast<const uint8_t*>(&ki),
+      reinterpret_cast<const uint8_t*>(&ki) + 32);
+  }
+  crypto::hash result;
+  crypto::cn_fast_hash(buf.data(), buf.size(), result);
+  return result;
+}
+
+} // namespace cryptonote
 
 using namespace cryptonote;
 
@@ -92,7 +193,7 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
             return false;
 
         // Rule 6
-        if (!Blockchain::check_tx_outputs(tx, tvc) || tvc.m_verifivation_failed)
+        if (!check_tx_outputs(tx, tvc) || tvc.m_verifivation_failed)
             return false;
 
         // Serve-credit txs are non-spending: they carry no RCT output material

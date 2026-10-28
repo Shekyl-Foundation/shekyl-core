@@ -35,14 +35,18 @@
 #include <boost/function.hpp>
 
 #include "cryptonote_basic/fwd.h"
+#include "cryptonote_basic/cryptonote_basic.h"
+#include "cryptonote_basic/verification_context.h"
+#include "cryptonote_basic/difficulty.h"
 #include "cryptonote_core/i_core_events.h"
+#include "cryptonote_core/tx_verification_utils.h"
 #include "cryptonote_protocol/cryptonote_protocol_handler_common.h"
 #include "cryptonote_protocol/enums.h"
-#include "net/enums.h"
-#include "common/command_line.h"
-#include "tx_pool.h"
-#include "blockchain.h"
-#include "cryptonote_basic/miner.h"
+#include "checkpoints/checkpoints.h"
+#include "syncobj.h"
+#include "math_helper.h"
+#include "rpc/core_rpc_server_commands_defs.h"
+#include "rpc/message_data_structs.h"
 #include "shekyl/shekyl_ffi.h"
 #include "cryptonote_basic/connection_context.h"
 #include "warnings.h"
@@ -56,6 +60,20 @@ enum { HAVE_BLOCK_MAIN_CHAIN, HAVE_BLOCK_ALT_CHAIN, HAVE_BLOCK_INVALID };
 
 namespace cryptonote
 {
+   enum blockchain_db_sync_mode
+   {
+     db_defaultsync,
+     db_sync,
+     db_async,
+     db_nosync
+   };
+
+   // The durability tokens `--db-sync-mode` still parses. The shell does not
+   // open a database with them.
+   #define DBF_SAFE       1
+   #define DBF_FAST       2
+   #define DBF_FASTEST    4
+
    /**
     * @brief the resolved `--db-sync-mode` settings
     *
@@ -141,7 +159,7 @@ namespace cryptonote
      /**
       * @brief calls various idle routines
       *
-      * @note see miner::on_idle and tx_memory_pool::on_idle
+      * @note see miner::on_idle and pool::on_idle
       *
       * @return true
       */
@@ -451,72 +469,72 @@ namespace cryptonote
      void set_checkpoints(checkpoints&& chk_pts);
 
      /**
-      * @copydoc tx_memory_pool::have_tx
+      * @copydoc pool::have_tx
       *
-      * @note see tx_memory_pool::have_tx
+      * @note see pool::have_tx
       */
      bool pool_has_tx(const crypto::hash &txid) const override;
 
      /**
-      * @copydoc tx_memory_pool::get_transactions
+      * @copydoc pool::get_transactions
       * @param include_sensitive_txes include private transactions
       *
-      * @note see tx_memory_pool::get_transactions
+      * @note see pool::get_transactions
       */
      bool get_pool_transactions(std::vector<transaction>& txs, bool include_sensitive_txes = false) const;
 
      /**
-      * @copydoc tx_memory_pool::get_txpool_backlog
+      * @copydoc pool::get_txpool_backlog
       * @param include_sensitive_txes include private transactions
       *
-      * @note see tx_memory_pool::get_txpool_backlog
+      * @note see pool::get_txpool_backlog
       */
      bool get_txpool_backlog(std::vector<tx_backlog_entry>& backlog, bool include_sensitive_txes = false) const;
      
      /**
-      * @copydoc tx_memory_pool::get_transactions
+      * @copydoc pool::get_transactions
       * @param include_sensitive_txes include private transactions
       *
-      * @note see tx_memory_pool::get_transactions
+      * @note see pool::get_transactions
       */
      bool get_pool_transaction_hashes(std::vector<crypto::hash>& txs, bool include_sensitive_txes = false) const;
 
 
     /**
-      * @copydoc tx_memory_pool::get_transactions
+      * @copydoc pool::get_transactions
       * @param include_sensitive_txes include private transactions
       *
-      * @note see tx_memory_pool::get_transactions
+      * @note see pool::get_transactions
       */
      bool get_pool_transaction_stats(struct txpool_stats& stats, bool include_sensitive_txes = false) const;
 
      /**
-      * @copydoc tx_memory_pool::get_transaction
+      * @copydoc pool::get_transaction
       *
-      * @note see tx_memory_pool::get_transaction
+      * @note see pool::get_transaction
       */
      bool get_pool_transaction(const crypto::hash& id, cryptonote::blobdata& tx, relay_category tx_category) const;
 
      /**
-      * @copydoc tx_memory_pool::get_pool_transactions_and_spent_keys_info
+      * @copydoc pool::get_pool_transactions_and_spent_keys_info
       * @param include_sensitive_txes include private transactions
       *
-      * @note see tx_memory_pool::get_pool_transactions_and_spent_keys_info
+      * @note see pool::get_pool_transactions_and_spent_keys_info
       */
      bool get_pool_transactions_and_spent_keys_info(std::vector<tx_info>& tx_infos, std::vector<spent_key_image_info>& key_image_infos, bool include_sensitive_txes = false) const;
 
      /**
-      * @copydoc tx_memory_pool::get_pool_for_rpc
+      * @copydoc pool::get_pool_for_rpc
       *
-      * @note see tx_memory_pool::get_pool_for_rpc
+      * @note see pool::get_pool_for_rpc
       */
      bool get_pool_for_rpc(std::vector<cryptonote::rpc::tx_in_pool>& tx_infos, cryptonote::rpc::key_images_with_tx_hashes& key_image_infos) const;
 
      /**
-      * @copydoc tx_memory_pool::get_transactions_count
+      * @copydoc pool::get_transactions_count
       * @param include_sensitive_txes include private transactions
       *
-      * @note see tx_memory_pool::get_transactions_count
+      * @note see pool::get_transactions_count
       */
      size_t get_pool_transactions_count(bool include_sensitive_txes = false) const;
 
@@ -587,9 +605,9 @@ namespace cryptonote
      void resume_mine();
 
      /**
-      * @copydoc tx_memory_pool::print_pool
+      * @copydoc pool::print_pool
       *
-      * @note see tx_memory_pool::print_pool
+      * @note see pool::print_pool
       */
      std::string print_pool(bool short_format) const;
 

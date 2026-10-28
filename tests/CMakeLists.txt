@@ -71,7 +71,6 @@ else ()
   add_subdirectory(performance_tests)
   add_subdirectory(unit_tests)
   add_subdirectory(difficulty)
-  add_subdirectory(block_weight)
   add_subdirectory(hash)
   # Phase 3a Hole-1 gate (RANDOMX_V2_PHASE3_PLAN.md §7): the C full-dataset
   # vs Rust light-cache PoW parity harness. Needs the imported
@@ -212,7 +211,6 @@ add_test(NAME wallet-crypto-bench COMMAND shekyl-wallet-crypto-bench)
 
 set(enabled_tests
     difficulty
-    block_weight
     hash
     performance_tests
     fuzz

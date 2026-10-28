@@ -43,7 +43,7 @@
 #include "cryptonote_config.h"
 #include "serialization/binary_archive.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
-#include "cryptonote_core/blockchain.h"
+#include "cryptonote_core/tx_verification_utils.h"
 #include "cryptonote_core/tx_pqc_verify.h"
 
 using namespace std;
@@ -823,8 +823,8 @@ TEST(fcmp, verification_cache_hash_deterministic)
   in1.amount = 0;
   tx.vin.push_back(in1);
 
-  crypto::hash h1 = cryptonote::Blockchain::compute_fcmp_verification_hash(tx);
-  crypto::hash h2 = cryptonote::Blockchain::compute_fcmp_verification_hash(tx);
+  crypto::hash h1 = cryptonote::compute_fcmp_verification_hash(tx);
+  crypto::hash h2 = cryptonote::compute_fcmp_verification_hash(tx);
   ASSERT_EQ(h1, h2);
   ASSERT_NE(h1, crypto::null_hash);
 }
@@ -842,10 +842,10 @@ TEST(fcmp, verification_cache_hash_differs_on_proof_change)
   in1.amount = 0;
   tx.vin.push_back(in1);
 
-  crypto::hash h1 = cryptonote::Blockchain::compute_fcmp_verification_hash(tx);
+  crypto::hash h1 = cryptonote::compute_fcmp_verification_hash(tx);
 
   tx.ct_signatures.p.fcmp_pp_proof[0] = 0xFF;
-  crypto::hash h2 = cryptonote::Blockchain::compute_fcmp_verification_hash(tx);
+  crypto::hash h2 = cryptonote::compute_fcmp_verification_hash(tx);
 
   ASSERT_NE(h1, h2);
 }
@@ -863,10 +863,10 @@ TEST(fcmp, verification_cache_hash_differs_on_reference_block_change)
   in1.amount = 0;
   tx.vin.push_back(in1);
 
-  crypto::hash h1 = cryptonote::Blockchain::compute_fcmp_verification_hash(tx);
+  crypto::hash h1 = cryptonote::compute_fcmp_verification_hash(tx);
 
   memset(&tx.ct_signatures.referenceBlock, 0xCC, 32);
-  crypto::hash h2 = cryptonote::Blockchain::compute_fcmp_verification_hash(tx);
+  crypto::hash h2 = cryptonote::compute_fcmp_verification_hash(tx);
 
   ASSERT_NE(h1, h2);
 }
@@ -884,10 +884,10 @@ TEST(fcmp, verification_cache_hash_differs_on_key_image_change)
   in1.amount = 0;
   tx.vin.push_back(in1);
 
-  crypto::hash h1 = cryptonote::Blockchain::compute_fcmp_verification_hash(tx);
+  crypto::hash h1 = cryptonote::compute_fcmp_verification_hash(tx);
 
   std::get<cryptonote::txin_to_key>(tx.vin[0]).k_image.data[0] = 0xFF;
-  crypto::hash h2 = cryptonote::Blockchain::compute_fcmp_verification_hash(tx);
+  crypto::hash h2 = cryptonote::compute_fcmp_verification_hash(tx);
 
   ASSERT_NE(h1, h2);
 }
@@ -898,7 +898,7 @@ TEST(fcmp, verification_cache_hash_null_for_non_fcmp_type)
   tx.version = 2;
   tx.ct_signatures.type = ct::CTTypeNull;
 
-  crypto::hash h = cryptonote::Blockchain::compute_fcmp_verification_hash(tx);
+  crypto::hash h = cryptonote::compute_fcmp_verification_hash(tx);
   ASSERT_EQ(h, crypto::null_hash);
 }
 
@@ -918,11 +918,11 @@ TEST(fcmp, verification_cache_hash_multiple_inputs)
     tx.vin.push_back(in);
   }
 
-  crypto::hash h1 = cryptonote::Blockchain::compute_fcmp_verification_hash(tx);
+  crypto::hash h1 = cryptonote::compute_fcmp_verification_hash(tx);
   ASSERT_NE(h1, crypto::null_hash);
 
   // Same tx must give same hash
-  crypto::hash h2 = cryptonote::Blockchain::compute_fcmp_verification_hash(tx);
+  crypto::hash h2 = cryptonote::compute_fcmp_verification_hash(tx);
   ASSERT_EQ(h1, h2);
 
   // Adding one more input changes the hash
@@ -931,7 +931,7 @@ TEST(fcmp, verification_cache_hash_multiple_inputs)
   extra_in.amount = 0;
   tx.vin.push_back(extra_in);
 
-  crypto::hash h3 = cryptonote::Blockchain::compute_fcmp_verification_hash(tx);
+  crypto::hash h3 = cryptonote::compute_fcmp_verification_hash(tx);
   ASSERT_NE(h1, h3);
 }
 

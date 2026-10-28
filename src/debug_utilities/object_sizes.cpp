@@ -28,13 +28,12 @@
 
 #include <map>
 #include "cryptonote_basic/cryptonote_basic.h"
+#include "common/util.h"
 #include "cryptonote_core/cryptonote_core.h"
-#include "cryptonote_core/blockchain.h"
 #include "p2p/p2p_protocol_defs.h"
 #include "p2p/p2p_protocol_defs.h"
 #include "p2p/net_node.h"
 #include "cryptonote_protocol/cryptonote_protocol_handler.h"
-#include "blockchain_db/lmdb/db_lmdb.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
 #define SHEKYL_DEFAULT_LOG_CATEGORY "debugtools.objectsizes"
@@ -66,16 +65,9 @@ int main(int argc, char* argv[])
   SL(boost::asio::executor_work_guard<boost::asio::io_context::executor_type>);
   SL(boost::asio::steady_timer);
 
-  SL(cryptonote::DB_ERROR);
-  SL(cryptonote::mdb_txn_safe);
-  SL(cryptonote::mdb_threadinfo);
-
-  SL(cryptonote::block_header);
   SL(cryptonote::block);
   SL(cryptonote::transaction_prefix);
   SL(cryptonote::transaction);
-
-  SL(cryptonote::txpool_tx_meta_t);
 
   SL(epee::net_utils::ipv4_network_address);
   SL(epee::net_utils::network_address);

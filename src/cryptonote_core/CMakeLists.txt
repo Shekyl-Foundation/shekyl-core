@@ -27,10 +27,7 @@
 # THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 set(cryptonote_core_sources
-  blockchain.cpp
-  relay_floor_ring.cpp
   cryptonote_core.cpp
-  tx_pool.cpp
   tx_pqc_verify.cpp
   cryptonote_tx_utils.cpp
   tx_verification_utils.cpp
@@ -51,7 +48,6 @@ target_link_libraries(cryptonote_core
     version
     common
     cncrypto
-    blockchain_db
     fcmp
     device
     ${Boost_DATE_TIME_LIBRARY}

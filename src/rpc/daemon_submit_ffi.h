@@ -352,7 +352,7 @@ int shekyl_submit_snapshot_facts(core_rpc_handle* h,
 // check_fee re-gate against fresh params — F34, and the §8.7.1 BP3
 // bond-record re-probe when the reparsed blob carries a bond-post vin —
 // a record appearing during Phase C is a claim-slot race); on clean,
-// executes the attested insert tail (tx_memory_pool::insert_attested_tx)
+// executes the attested insert tail (pool::insert_attested_tx)
 // and the post-prune membership check (F23).
 //
 // cert_* carry the VerificationCertificate facts (§3.3). On RACED, the
@@ -396,46 +396,4 @@ int shekyl_submit_facts_test_check(const shekyl_submit_facts_ffi* facts, uint64_
 
 #ifdef __cplusplus
 } // extern "C"
-
-// ── C++-side implementations over the core objects ──────────────────────────
-//
-// The extern "C" wrappers above only resolve pool/blockchain/protocol from
-// the handle and delegate here. Exposed so the latch-based commit
-// integration test (§10 item 2) can drive the real shim logic against a
-// unit-test pool/blockchain fixture without constructing a core_rpc_server.
-
-namespace cryptonote { class tx_memory_pool; class Blockchain; struct i_cryptonote_protocol; }
-
-namespace daemon_submit {
-
-int snapshot_facts(cryptonote::tx_memory_pool& pool, cryptonote::Blockchain& bc,
-    const uint8_t* txid,
-    const uint8_t* key_images, size_t n_key_images,
-    const uint8_t* reference_block,
-    const uint8_t* bond_p_canonical_id,
-    uint8_t bond_probe_kind,
-    const uint8_t* bond_auth_pubkey, size_t bond_auth_pubkey_len,
-    uint64_t bond_debit,
-    const uint8_t* emission_p_canonical_id,
-    const uint64_t* emission_epochs, size_t n_emission_epochs,
-    shekyl_submit_emission_facts_handle** out_emission,
-    shekyl_submit_release_facts_handle** out_release,
-    shekyl_submit_facts_ffi* out_facts,
-    uint8_t* out_ki_conflicts) noexcept;
-
-int commit_tx(cryptonote::tx_memory_pool& pool, cryptonote::Blockchain& bc,
-    const uint8_t* blob, size_t blob_len,
-    const uint8_t* txid,
-    uint64_t tx_weight, uint64_t fee,
-    const uint8_t* cert_ref_block, uint64_t cert_ref_height,
-    const uint8_t* cert_root,
-    shekyl_submit_facts_ffi* out_fresh_facts,
-    uint8_t* out_fresh_ki_conflicts, size_t n_key_images) noexcept;
-
-int relay_tx(cryptonote::tx_memory_pool& pool,
-    cryptonote::i_cryptonote_protocol& protocol,
-    const uint8_t* txid) noexcept;
-
-} // namespace daemon_submit
-
 #endif // __cplusplus

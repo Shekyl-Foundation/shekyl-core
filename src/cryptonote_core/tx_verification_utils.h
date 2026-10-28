@@ -98,7 +98,7 @@ struct block_connect_supplement
  *     3. Check the transaction version is CURRENT_TRANSACTION_VERSION
  *     4. Check tx weight < get_transaction_weight_limit()
  *     5. Passes core::check_tx_semantic()
- *     6. Passes Blockchain::check_tx_outputs()
+ *     6. Passes check_tx_outputs()
  *     7. Passes ver_mixed_ct_semantics() [Uses batch FCMP++ verification when applicable]
  *
  * For pool_supplement input:
@@ -115,5 +115,7 @@ struct block_connect_supplement
 bool ver_non_input_consensus(const transaction& tx, tx_verification_context& tvc);
 
 bool ver_non_input_consensus(const pool_supplement& ps, tx_verification_context& tvc);
+
+crypto::hash compute_fcmp_verification_hash(const transaction& tx);
 
 } // namespace cryptonote

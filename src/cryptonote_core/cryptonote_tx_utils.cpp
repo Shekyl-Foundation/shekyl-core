@@ -44,8 +44,6 @@ using namespace epee;
 
 #include "common/apply_permutation.h"
 #include "cryptonote_tx_utils.h"
-#include "cryptonote_config.h"
-#include "blockchain.h"
 #include "crypto/pow_randomx.h"
 #include "tx_pqc_verify.h"
 #include "shekyl/shekyl_ffi.h"
@@ -230,7 +228,7 @@ namespace cryptonote
     // (Rust attestation_root(&[]) via FFI) — the valid empty-set commitment, not
     // null_hash (ARCHIVAL_CREDIT_WIRE.md §3). Genesis has no pass records.
     miner::find_nonce_for_given_block([](const cryptonote::block &b, uint64_t height, const crypto::hash *seed_hash, crypto::hash &hash){
-      return cryptonote::get_block_longhash(NULL, b, hash, height, seed_hash);
+      return cryptonote::get_block_longhash(b, hash, height, seed_hash);
     }, bl, 1, 0, NULL);
     bl.invalidate_hashes();
     return true;
@@ -251,15 +249,12 @@ namespace cryptonote
     return true;
   }
 
-  bool get_block_longhash(const Blockchain *pbc, const blobdata& bd, crypto::hash& res, const uint64_t height, const crypto::hash *seed_hash)
+  bool get_block_longhash(const blobdata& bd, crypto::hash& res, const uint64_t height, const crypto::hash *seed_hash)
   {
-    // nullptr means "look it up". The all-zero hash is a valid RandomX
-    // genesis seed, so this cannot collapse to a non-null reference.
-    const crypto::hash seed = seed_hash != nullptr
-      ? *seed_hash
-      : (pbc != nullptr
-           ? pbc->get_pending_block_id_by_height(shekyl_pow_randomx_v2_seedheight(height))
-           : crypto::null_hash);
+    (void)height;
+    // A missing seed is the genesis seed. The store supplies a real seed
+    // when the block is not genesis; this helper no longer looks one up.
+    const crypto::hash seed = seed_hash != nullptr ? *seed_hash : crypto::null_hash;
 
     if (!hash_pow_randomx(bd.data(), bd.size(), seed, res))
     {
@@ -276,16 +271,16 @@ namespace cryptonote
     return true;
   }
 
-  bool get_block_longhash(const Blockchain *pbc, const block& b, crypto::hash& res, const uint64_t height, const crypto::hash *seed_hash)
+  bool get_block_longhash(const block& b, crypto::hash& res, const uint64_t height, const crypto::hash *seed_hash)
   {
     blobdata bd = get_block_hashing_blob(b);
-    return get_block_longhash(pbc, bd, res, height, seed_hash);
+    return get_block_longhash(bd, res, height, seed_hash);
   }
 
-  crypto::hash get_block_longhash(const Blockchain *pbc, const block& b, const uint64_t height, const crypto::hash *seed_hash)
+  crypto::hash get_block_longhash(const block& b, const uint64_t height, const crypto::hash *seed_hash)
   {
     crypto::hash p = crypto::null_hash;
-    get_block_longhash(pbc, b, p, height, seed_hash);
+    get_block_longhash(b, p, height, seed_hash);
     return p;
   }
 }
