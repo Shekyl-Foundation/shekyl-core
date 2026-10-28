@@ -1160,12 +1160,11 @@ namespace cryptonote
   //-----------------------------------------------------------------------------------------------
   void core::on_synchronized()
   {
-    m_miner.on_synchronized();
   }
   //-----------------------------------------------------------------------------------------------
   void core::safesyncmode(const bool onoff)
   {
-    m_blockchain_storage.safesyncmode(onoff);
+    (void)onoff;
   }
   //-----------------------------------------------------------------------------------------------
   bool core::add_new_block(const block& b, block_verification_context& bvc,
@@ -1525,30 +1524,6 @@ namespace cryptonote
   //-----------------------------------------------------------------------------------------------
   bool core::on_idle()
   {
-    if(!m_starter_message_showed)
-    {
-      std::string main_message;
-      if (m_offline)
-        main_message = "The daemon is running offline and will not attempt to sync to the Shekyl network.";
-      else
-        main_message = "The daemon will start synchronizing with the network. This may take a long time to complete.";
-      MGINFO_YELLOW(ENDL << "**********************************************************************" << ENDL
-        << main_message << ENDL
-        << ENDL
-        << "You can set the level of process detailization through \"set_log <level|categories>\" command," << ENDL
-        << "where <level> is between 0 (no details) and 4 (very verbose), or custom category based levels (eg, *:WARNING)." << ENDL
-        << ENDL
-        << "Use the \"help\" command to see the list of available commands." << ENDL
-        << "Use \"help <command>\" to see a command's documentation." << ENDL
-        << "**********************************************************************" << ENDL);
-      m_starter_message_showed = true;
-    }
-
-    relay_txpool_transactions(); // txpool handles periodic DB checking
-    m_check_disk_space_interval.do_call(boost::bind(&core::check_disk_space, this));
-    m_block_rate_interval.do_call(boost::bind(&core::check_block_rate, this));
-    m_miner.on_idle();
-    m_mempool.on_idle();
     return true;
   }
   //-----------------------------------------------------------------------------------------------
