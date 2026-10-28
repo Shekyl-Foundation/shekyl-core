@@ -39,6 +39,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::Extension;
 use axum::Json;
+use shekyl_rpc_types::errors::RpcError;
 use std::sync::Arc;
 use tracing::warn;
 
@@ -84,7 +85,10 @@ pub async fn handle(
     if let Some(native) = native_method(&state, authority, &method, &request.params).await {
         return match native {
             Ok(value) => (StatusCode::OK, Json(JsonRpcResponse::success(id, value))),
-            Err(fault) => (StatusCode::OK, Json(native_fault(id, &method, fault))),
+            Err(NativeFail::Fault(fault)) => {
+                (StatusCode::OK, Json(native_fault(id, &method, fault)))
+            }
+            Err(NativeFail::Error(error)) => (StatusCode::OK, Json(refusal(id, &error))),
         };
     }
 
@@ -187,6 +191,16 @@ enum NativeMethod {
     Info,
     OptionSet,
     OptionShow,
+    SubmitBlock,
+    BlockTemplate,
+    MinerData,
+    GenerateBlocks,
+    SetBans,
+    GetBans,
+    Banned,
+    FlushTxpool,
+    RelayTx,
+    TxpoolBacklog,
     CalcPow,
     CoinbaseTxSum,
     AlternateChains,
@@ -230,6 +244,16 @@ fn native_method_for(method: &str) -> Option<NativeMethod> {
         // RK-5c. One spelling on JSON-RPC, as the C++ table carried it; the
         // `/getinfo` alias is a REST path.
         "get_info" => NativeMethod::Info,
+        "submit_block" | "submitblock" => NativeMethod::SubmitBlock,
+        "get_block_template" | "getblocktemplate" => NativeMethod::BlockTemplate,
+        "get_miner_data" => NativeMethod::MinerData,
+        "generateblocks" => NativeMethod::GenerateBlocks,
+        "set_bans" => NativeMethod::SetBans,
+        "get_bans" => NativeMethod::GetBans,
+        "banned" => NativeMethod::Banned,
+        "flush_txpool" => NativeMethod::FlushTxpool,
+        "relay_tx" => NativeMethod::RelayTx,
+        "get_txpool_backlog" => NativeMethod::TxpoolBacklog,
         // Store reads (DX-Q3). One spelling each; the C++ table carried no alias.
         "calc_pow" => NativeMethod::CalcPow,
         "get_coinbase_tx_sum" => NativeMethod::CoinbaseTxSum,
@@ -242,8 +266,16 @@ fn native_method_for(method: &str) -> Option<NativeMethod> {
     })
 }
 
+/// A native method's failure: a chain read's [`RpcFault`], or a method
+/// that answers with the RW-Q3 [`RpcError`].
+#[derive(Debug, PartialEq, Eq)]
+enum NativeFail {
+    Fault(RpcFault),
+    Error(RpcError),
+}
+
 /// Dispatch `method` natively if Rust owns it; `None` hands it to the C++
-/// table. Each arm is one `methods::*` call framed as a JSON value.
+/// table. Each arm is one handler call framed as a JSON value.
 ///
 /// Chain rows read the node's store handle. `get_connections` and the sync
 /// spans inside `sync_info` still read the C++ handler: those facts live
@@ -253,7 +285,7 @@ async fn native_method(
     authority: Authority,
     method: &str,
     params: &serde_json::Value,
-) -> Option<Result<serde_json::Value, RpcFault>> {
+) -> Option<Result<serde_json::Value, NativeFail>> {
     match native_method_for(method)? {
         NativeMethod::Version => Some(frame_native(
             on_chain(state, |chain| crate::methods::get_version(chain.as_ref())).await,
@@ -269,7 +301,7 @@ async fn native_method(
             // happens before a worker is taken.
             let height = match crate::methods::get_block_hash_height(params) {
                 Ok(height) => height,
-                Err(fault) => return Some(Err(fault)),
+                Err(fault) => return Some(Err(NativeFail::Fault(fault))),
             };
             Some(frame_native(
                 on_chain(state, move |chain| {
@@ -281,7 +313,7 @@ async fn native_method(
         NativeMethod::Block => {
             let request = match crate::methods::block_request(params) {
                 Ok(request) => request,
-                Err(fault) => return Some(Err(fault)),
+                Err(fault) => return Some(Err(NativeFail::Fault(fault))),
             };
             let fill_pow_hash = pow_hash_entitled(request.fill_pow_hash, authority.bounded());
             Some(frame_native(
@@ -326,7 +358,7 @@ async fn native_method(
         NativeMethod::LastBlockHeader => {
             let request = match crate::methods::last_block_header_request(params) {
                 Ok(request) => request,
-                Err(fault) => return Some(Err(fault)),
+                Err(fault) => return Some(Err(NativeFail::Fault(fault))),
             };
             let bounded = authority.bounded();
             Some(frame_native(
@@ -343,7 +375,7 @@ async fn native_method(
         NativeMethod::BlockHeaderByHash => {
             let request = match crate::methods::block_header_by_hash_request(params) {
                 Ok(request) => request,
-                Err(fault) => return Some(Err(fault)),
+                Err(fault) => return Some(Err(NativeFail::Fault(fault))),
             };
             let bounded = authority.bounded();
             Some(frame_native(
@@ -356,7 +388,7 @@ async fn native_method(
         NativeMethod::BlockHeadersRange => {
             let request = match crate::methods::block_headers_range_request(params) {
                 Ok(request) => request,
-                Err(fault) => return Some(Err(fault)),
+                Err(fault) => return Some(Err(NativeFail::Fault(fault))),
             };
             let bounded = authority.bounded();
             Some(frame_native(
@@ -369,7 +401,7 @@ async fn native_method(
         NativeMethod::FeeEstimate => {
             let request = match crate::methods::fee_estimate_request(params) {
                 Ok(request) => request,
-                Err(fault) => return Some(Err(fault)),
+                Err(fault) => return Some(Err(NativeFail::Fault(fault))),
             };
             Some(frame_native(
                 on_chain(state, move |chain| {
@@ -381,7 +413,7 @@ async fn native_method(
         NativeMethod::OptionSet => {
             let pairs = match crate::options::option_set_request(params) {
                 Ok(pairs) => pairs,
-                Err(fault) => return Some(Err(fault)),
+                Err(fault) => return Some(Err(NativeFail::Fault(fault))),
             };
             // The handle's set runs under its own lock and applies to the
             // owners; neither touches the core, so no worker is taken.
@@ -393,7 +425,7 @@ async fn native_method(
         NativeMethod::OptionShow => {
             let names = match crate::options::option_show_request(params) {
                 Ok(names) => names,
-                Err(fault) => return Some(Err(fault)),
+                Err(fault) => return Some(Err(NativeFail::Fault(fault))),
             };
             let disclosure = authority.disclosure();
             Some(frame_native(crate::options::option_show(
@@ -405,7 +437,7 @@ async fn native_method(
         NativeMethod::RequestArchivalShard => {
             let request = match crate::shard_view::request_archival_shard_request(params) {
                 Ok(request) => request,
-                Err(fault) => return Some(Err(fault)),
+                Err(fault) => return Some(Err(NativeFail::Fault(fault))),
             };
             // Not `run_blocking`: the facts source is async by contract — a
             // fetch over the network when a composition root supplies one —
@@ -419,7 +451,7 @@ async fn native_method(
             // happens before a worker is taken — as `on_get_block_hash`'s does.
             let request = match crate::methods::block_header_request(params) {
                 Ok(request) => request,
-                Err(fault) => return Some(Err(fault)),
+                Err(fault) => return Some(Err(NativeFail::Fault(fault))),
             };
             let fill_pow_hash = pow_hash_entitled(request.fill_pow_hash, authority.bounded());
             Some(frame_native(
@@ -439,7 +471,7 @@ async fn native_method(
                 "Wrong parameters, expected an object with block_blob, height and seed_hash",
             ) {
                 Ok(request) => request,
-                Err(fault) => return Some(Err(fault)),
+                Err(fault) => return Some(Err(NativeFail::Fault(fault))),
             };
             Some(frame_native(
                 on_chain(state, move |chain| {
@@ -454,7 +486,7 @@ async fn native_method(
                 "Wrong parameters, expected an object with height and count",
             ) {
                 Ok(request) => request,
-                Err(fault) => return Some(Err(fault)),
+                Err(fault) => return Some(Err(NativeFail::Fault(fault))),
             };
             Some(frame_native(
                 on_chain(state, move |chain| {
@@ -481,7 +513,7 @@ async fn native_method(
                 "Wrong parameters, expected an object with block_height",
             ) {
                 Ok(request) => request,
-                Err(fault) => return Some(Err(fault)),
+                Err(fault) => return Some(Err(NativeFail::Fault(fault))),
             };
             Some(frame_native(
                 on_chain(state, move |chain| {
@@ -496,7 +528,7 @@ async fn native_method(
                 "Wrong parameters, expected an object with p_id",
             ) {
                 Ok(request) => request,
-                Err(fault) => return Some(Err(fault)),
+                Err(fault) => return Some(Err(NativeFail::Fault(fault))),
             };
             Some(frame_native(
                 on_chain(state, move |chain| {
@@ -514,6 +546,146 @@ async fn native_method(
             })
             .await,
         )),
+        NativeMethod::SubmitBlock => {
+            let request = match crate::methods::required_object_params(
+                params,
+                "Wrong parameters, expected an object with body",
+            ) {
+                Ok(request) => request,
+                Err(fault) => return Some(Err(NativeFail::Fault(fault))),
+            };
+            let door = Arc::clone(&state.handles.door);
+            Some(from_error(
+                crate::mining_methods::submit_block(door.as_ref(), request).await,
+            ))
+        }
+        NativeMethod::BlockTemplate => {
+            if let Err(fault) = crate::methods::object_params::<
+                shekyl_rpc_types::mining::GetBlockTemplateRequest,
+            >(params, "Wrong parameters, expected no parameters")
+            {
+                return Some(Err(NativeFail::Fault(fault)));
+            }
+            let mining = Arc::clone(&state.handles.mining);
+            Some(from_error(
+                blocking(move || crate::mining_methods::get_block_template(mining.as_ref())).await,
+            ))
+        }
+        NativeMethod::MinerData => {
+            if let Err(fault) = crate::methods::object_params::<
+                shekyl_rpc_types::mining::GetBlockTemplateRequest,
+            >(params, "Wrong parameters, expected no parameters")
+            {
+                return Some(Err(NativeFail::Fault(fault)));
+            }
+            let mining = Arc::clone(&state.handles.mining);
+            Some(from_error(
+                blocking(move || crate::mining_methods::get_miner_data(mining.as_ref())).await,
+            ))
+        }
+        NativeMethod::GenerateBlocks => {
+            let request = match crate::methods::required_object_params(
+                params,
+                "Wrong parameters, expected an object with count",
+            ) {
+                Ok(request) => request,
+                Err(fault) => return Some(Err(NativeFail::Fault(fault))),
+            };
+            let Some(row) = shekyl_rpc_types::methods::json_rpc("generateblocks") else {
+                return Some(Err(NativeFail::Fault(RpcFault::Internal(
+                    InternalFault::Serialize,
+                ))));
+            };
+            let armed = match shekyl_rpc_types::methods::admit_armed(row, authority.armed_switch())
+            {
+                Ok(armed) => armed,
+                Err(error) => return Some(Err(NativeFail::Error(error))),
+            };
+            let mining = Arc::clone(&state.handles.mining);
+            let door = Arc::clone(&state.handles.door);
+            let chain = Arc::clone(&state.handles.chain);
+            Some(from_error(
+                crate::mining_methods::generateblocks(
+                    &mining,
+                    door.as_ref(),
+                    chain.as_ref(),
+                    armed,
+                    request,
+                )
+                .await,
+            ))
+        }
+        NativeMethod::SetBans => {
+            let request = match crate::methods::object_params(
+                params,
+                "Wrong parameters, expected an object with bans",
+            ) {
+                Ok(request) => request,
+                Err(fault) => return Some(Err(NativeFail::Fault(fault))),
+            };
+            let bans = Arc::clone(&state.handles.bans);
+            Some(from_error(
+                blocking(move || crate::ban_methods::set_bans(bans.as_ref(), &request)).await,
+            ))
+        }
+        NativeMethod::GetBans => {
+            let bans = Arc::clone(&state.handles.bans);
+            Some(from_error(
+                blocking(move || crate::ban_methods::get_bans(bans.as_ref())).await,
+            ))
+        }
+        NativeMethod::Banned => {
+            let request = match crate::methods::required_object_params(
+                params,
+                "Wrong parameters, expected an object with address",
+            ) {
+                Ok(request) => request,
+                Err(fault) => return Some(Err(NativeFail::Fault(fault))),
+            };
+            let bans = Arc::clone(&state.handles.bans);
+            Some(from_error(
+                blocking(move || crate::ban_methods::banned(bans.as_ref(), &request)).await,
+            ))
+        }
+        NativeMethod::FlushTxpool => {
+            let request = match crate::methods::object_params(
+                params,
+                "Wrong parameters, expected an object with txids",
+            ) {
+                Ok(request) => request,
+                Err(fault) => return Some(Err(NativeFail::Fault(fault))),
+            };
+            let pool = Arc::clone(&state.handles.pool);
+            Some(from_error(
+                crate::pool_methods::flush_txpool(pool.as_ref(), &request).await,
+            ))
+        }
+        NativeMethod::RelayTx => {
+            let request = match crate::methods::object_params(
+                params,
+                "Wrong parameters, expected an object with txids",
+            ) {
+                Ok(request) => request,
+                Err(fault) => return Some(Err(NativeFail::Fault(fault))),
+            };
+            let pool = Arc::clone(&state.handles.pool);
+            Some(from_error(
+                blocking(move || crate::pool_methods::relay_tx(pool.as_ref(), &request)).await,
+            ))
+        }
+        NativeMethod::TxpoolBacklog => {
+            let host = authority.host();
+            let pool = Arc::clone(&state.handles.pool);
+            Some(from_error(
+                blocking(move || {
+                    crate::pool_methods::get_txpool_backlog(
+                        pool.as_ref(),
+                        crate::pool_methods::scope_for(host),
+                    )
+                })
+                .await,
+            ))
+        }
     }
 }
 
@@ -575,12 +747,35 @@ fn join_fault<T>(out: Result<T, tokio::task::JoinError>) -> Result<T, RpcFault> 
 /// [`InternalFault`] — never attributed to the core.
 fn frame_native<T: serde::Serialize>(
     reply: Result<T, RpcFault>,
-) -> Result<serde_json::Value, RpcFault> {
+) -> Result<serde_json::Value, NativeFail> {
     match reply {
-        Ok(value) => {
-            serde_json::to_value(value).map_err(|_| RpcFault::Internal(InternalFault::Serialize))
-        }
-        Err(fault) => Err(fault),
+        Ok(value) => serde_json::to_value(value)
+            .map_err(|_| NativeFail::Fault(RpcFault::Internal(InternalFault::Serialize))),
+        Err(fault) => Err(NativeFail::Fault(fault)),
+    }
+}
+
+/// Frame a method whose failure is an [`RpcError`].
+fn from_error<T: serde::Serialize>(
+    reply: Result<T, RpcError>,
+) -> Result<serde_json::Value, NativeFail> {
+    match reply {
+        Ok(value) => serde_json::to_value(value)
+            .map_err(|_| NativeFail::Fault(RpcFault::Internal(InternalFault::Serialize))),
+        Err(error) => Err(NativeFail::Error(error)),
+    }
+}
+
+/// Run a short lock-holding read off the HTTP task. A join failure is an
+/// internal [`RpcError`], the same class a defect in the node is.
+async fn blocking<T, F>(f: F) -> Result<T, RpcError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, RpcError> + Send + 'static,
+{
+    match tokio::task::spawn_blocking(f).await {
+        Ok(result) => result,
+        Err(_) => Err(RpcError::from(crate::chain_facts::FactsFault::Internal)),
     }
 }
 
@@ -603,7 +798,7 @@ mod tests {
         assert_eq!(frame_native(Ok(7)).unwrap(), serde_json::json!(7));
         assert_eq!(
             frame_native::<u64>(Err(RpcFault::Facts(FactsFault::NotReady))).unwrap_err(),
-            RpcFault::Facts(FactsFault::NotReady)
+            NativeFail::Fault(RpcFault::Facts(FactsFault::NotReady))
         );
     }
 
@@ -771,6 +966,18 @@ mod tests {
             NativeMethod::ShardCoverage,
             false,
         ),
+        ("submit_block", NativeMethod::SubmitBlock, false),
+        ("submitblock", NativeMethod::SubmitBlock, false),
+        ("get_block_template", NativeMethod::BlockTemplate, false),
+        ("getblocktemplate", NativeMethod::BlockTemplate, false),
+        ("get_miner_data", NativeMethod::MinerData, false),
+        ("generateblocks", NativeMethod::GenerateBlocks, true),
+        ("set_bans", NativeMethod::SetBans, true),
+        ("get_bans", NativeMethod::GetBans, true),
+        ("banned", NativeMethod::Banned, true),
+        ("flush_txpool", NativeMethod::FlushTxpool, true),
+        ("relay_tx", NativeMethod::RelayTx, true),
+        ("get_txpool_backlog", NativeMethod::TxpoolBacklog, false),
     ];
 
     /// The dispatcher's own recognizer answers every specified name and
@@ -791,8 +998,8 @@ mod tests {
         // handler that does not exist yet.
         for name in [
             "mining_status",
-            "get_block_by_hash",
-            "submit_block",
+            "flush_cache",
+            "inject_archival_serve_credit",
             "getblockcount2",
             "",
         ] {

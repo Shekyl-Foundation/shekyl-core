@@ -212,7 +212,8 @@ pub const METHODS: &[Method] = &[
     json("option_show", &[], g(Health)),
     // Fields are each present under their grant (§6.1).
     json("get_info", &[], g(Health)),
-    // JSON-RPC, served by the C++ table until the flip.
+    // JSON-RPC. Dispatched from the node's handles, except
+    // `flush_cache` and `inject_archival_serve_credit`, which delete.
     json("submit_block", &["submitblock"], g(MiningWork)),
     // A computation service (RT-O9.4); its bound is RT-W10 step 2's.
     // Dispatched from the store (`read_methods::calc_pow`).

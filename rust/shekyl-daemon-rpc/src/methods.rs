@@ -258,7 +258,7 @@ pub fn block_request(params: &serde_json::Value) -> Result<GetBlockRequest, RpcF
 ///
 /// [`RpcFault::Refused`] with [`CORE_RPC_ERROR_CODE_WRONG_PARAM`] for absent
 /// params, a non-object, or an object this method cannot read.
-fn required_object_params<T: serde::de::DeserializeOwned>(
+pub(crate) fn required_object_params<T: serde::de::DeserializeOwned>(
     params: &serde_json::Value,
     expected: &str,
 ) -> Result<T, RpcFault> {

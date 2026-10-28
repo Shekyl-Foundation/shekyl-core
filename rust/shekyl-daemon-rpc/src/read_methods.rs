@@ -5,8 +5,8 @@
 
 //! The store flip's native read handlers (`DRS_X_STORE_FLIP.md` DX-Q3,
 //! PR 3), over [`ChainReadFacts`]. The JSON-RPC rows are dispatched from
-//! `handlers::json_rpc`. The REST and binary rows
-//! are not, yet: those routes still answer from the C++ table. Each
+//! `handlers::json_rpc`, and the REST and `.bin` rows dispatch here too.
+//! Each
 //! answers on the C++ wire (`shekyl_rpc_types::chain_reads`, `archival`);
 //! where it answers differently, the difference is a row in
 //! `DRS_X_STORE_FLIP.md`'s divergence register, and the flip's

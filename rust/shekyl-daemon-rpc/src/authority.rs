@@ -99,6 +99,12 @@ impl Authority {
         self.host
     }
 
+    /// The node's armed-lever switch, as stamped on this connection.
+    #[must_use]
+    pub const fn armed_switch(self) -> bool {
+        self.armed
+    }
+
     /// Whether this connection's requests are bounded (§6.3): every
     /// connection except the host's administrator, whatever its grant.
     #[must_use]
