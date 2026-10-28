@@ -586,6 +586,7 @@ stale_through = [
   { through = "793e30248", note = "The quiet span S is computed in the profile from K, the in-flight bound, the dial deadline and the wake spacing. It reads the dial deadline constants and changes none of them. This moves no cost. The rows stay stale for the reasons already recorded." },
   { through = "0eb355bc5", note = "A doc comment on the profile's quiet-span test. No code changed. This moves no cost. The rows stay stale for the reasons already recorded." },
   { through = "dc617814d", note = "Clearnet's quiet K moves from 10 to 11 (read at the bound of a series with no live failure), and its derived S from 29.15 s to 32.065 s; a doc comment in the Tor supervisor's Policy. No deadline or span constant moved. This moves no cost. The rows stay stale for the reasons already recorded." },
+  { through = "d9bb3e534", note = "The quiet span is derived from the row's dial deadline instead of a stored literal, and the dialer keeps only a published retry window. No deadline or span constant moved. This moves no cost. The rows stay stale for the reasons already recorded." },
 ]
 
 [[constant]]
@@ -686,6 +687,7 @@ cleared = [
   { through = "793e30248", reason = "The quiet span S is computed in the profile from K, the in-flight bound, the dial deadline and the wake spacing. It reads TOR_DIAL_WITHIN_NANOS and CLEARNET_DIAL_WITHIN_NANOS and changes no deadline or span constant; no span gained I/O, so the 2026-10-14 capture still prices this tree." },
   { through = "0eb355bc5", reason = "A doc comment on the profile's quiet-span test. No code changed, so the 2026-10-14 capture still prices this tree." },
   { through = "dc617814d", reason = "Clearnet's quiet K moves from 10 to 11 and its derived S with it; a doc comment in the Tor supervisor's Policy. No deadline or span constant moved and no span gained I/O, so the 2026-10-14 capture still prices this tree." },
+  { through = "d9bb3e534", reason = "The quiet span is derived from the row's dial deadline instead of a stored literal, and the dialer keeps only a published retry window. No deadline or span constant moved and no span gained I/O, so the 2026-10-14 capture still prices this tree." },
 ]
 
 [[constant]]
