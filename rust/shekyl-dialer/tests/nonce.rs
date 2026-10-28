@@ -5,9 +5,18 @@
 
 //! The self-connection nonces and the wake spacing.
 
-use shekyl_dialer::{next_wake_nanos, HandshakeNonceSet, WAKE_BASE_NANOS, WAKE_JITTER_NANOS};
+use shekyl_dialer::{next_wake_nanos, HandshakeNonceSet};
 use shekyl_draw_rng::SplitMix64;
+use shekyl_peerlist::dial_profile;
 use shekyl_peerlist::ConnectorId;
+
+/// The wake spacing this file's connector dials at: its dial profile's.
+const WAKE_BASE_NANOS: u64 = shekyl_peerlist::dial_profile(ConnectorId::Clearnet)
+    .wake
+    .base_nanos;
+const WAKE_JITTER_NANOS: u64 = shekyl_peerlist::dial_profile(ConnectorId::Clearnet)
+    .wake
+    .jitter_nanos;
 
 /// A dial to our own listener: the listener reads the request while the
 /// attempt is still in flight, and finds the nonce in the set.
@@ -95,7 +104,7 @@ fn the_wake_gap_is_half_a_second_plus_up_to_one_second() {
     let mut sum = 0u128;
     let draws = 20_000u64;
     for _ in 0..draws {
-        let gap = next_wake_nanos(&mut rng);
+        let gap = next_wake_nanos(dial_profile(ConnectorId::Clearnet).wake, &mut rng);
         assert!((WAKE_BASE_NANOS..=WAKE_BASE_NANOS + WAKE_JITTER_NANOS).contains(&gap));
         low = low.min(gap);
         high = high.max(gap);

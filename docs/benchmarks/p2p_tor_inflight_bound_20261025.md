@@ -1,7 +1,7 @@
 # The Tor connector's in-flight dial bound, derived 2026-10-25
 
 **Status: DERIVED and MEASURED (the floor device, 2026-10-26).**
-`in_flight_bound(Tor)` = 5 (`rust/shekyl-dialer/src/fill.rs`),
+`dial_profile(Tor).in_flight_bound` = 5 (`rust/shekyl-transport-layer/src/profile.rs`),
 derived on the lifecycle the dialer runs: a Tor attempt that fails at or
 after the managed Tor's `SocksTimeout` is final within its test (Rick,
 2026-10-26). Five is the smallest bound that fills the Tor target within
@@ -149,8 +149,8 @@ the binding cost in both regimes below; the count of plants is not.
   planted onion is drawable at most once an hour, so the hour takes about
   170 planted onions at the cap, planted once: 8 attacker sessions at the
   intake cap (24 addresses per session per 24 h).
-- **In a quiet stretch** (no session held, none opened for five minutes;
-  #1203) a failed test cools at the first step, 2 to 3 min, so a plant is
+- **In a quiet stretch** (no session held, the last 13 attempts unopened,
+  364.5 s since one opened: Tor's quiet threshold) a failed test cools at the first step, 2 to 3 min, so a plant is
   drawable again about every 4 to 5 min, its attempt included: about 13
   draws an hour each, so about 13 plants hold the hour. The node is then
   already holding nothing, which is the eclipse the plants were for, and

@@ -12,37 +12,6 @@
 //! The rule decides the list and the aim. It does not pick the address:
 //! the draw is the peer lists', uniform over the candidates.
 
-use shekyl_peerlist::ConnectorId;
-
-/// The most dials `connector` has in flight at once, of either aim.
-///
-/// Protocol data, the same on every node (rule 71: the network selects
-/// data, never control flow). The bound limits concurrency; the wake pace
-/// (R3) still limits the rate, one launch per wake. Every `Keep` dial is
-/// also under the target: the `Keep` count includes pending `Keep`
-/// attempts ([`crate::Attempts::kept_count`]), so `kept < target` is
-/// already kept sessions plus in-flight keeps under the target. A
-/// `Confirm` dial counts toward this bound and not toward the target, so
-/// the descriptors a connector can hold are its target plus this bound.
-///
-/// - **Tor: 5. Derived** (`DAEMON_RELAY_PRIVACY.md` §97, "In-flight dial
-///   bound"; `docs/benchmarks/p2p_tor_inflight_bound_20261025.md`), with
-///   half the draws dead, on the lifecycle the dialer runs: a Tor attempt
-///   that fails at or after the managed Tor's `SocksTimeout` is final
-///   within its test (Rick, 2026-10-26). Five is the smallest bound whose
-///   median fill of the 12-session target is within one stem epoch
-///   (523 s; four, 597 s); past six the fill stops improving, since a dead
-///   pending `Keep` holds its target place for its window.
-/// - **Clearnet: 1.** A clearnet dial ends within 1.4 s, so one at a time
-///   costs a wake or two; the interim (2026-10-08) stands.
-#[must_use]
-pub const fn in_flight_bound(connector: ConnectorId) -> usize {
-    match connector {
-        ConnectorId::Clearnet => 1,
-        ConnectorId::Tor => 5,
-    }
-}
-
 /// What a dial is for. The aim is input; the outcome is what the dial
 /// became. The handshake owner does not infer one from the other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,7 +89,8 @@ pub struct Plan {
 ///
 /// `floor` is the white diversity floor and `refill_line` the refill
 /// line; both are `shekyl-peerlist`'s. `bound` is the connector's
-/// [`in_flight_bound`]: with that many dials in flight, nothing more.
+/// in-flight bound (`dial_profile(connector).in_flight_bound`): with that
+/// many dials in flight, nothing more.
 ///
 /// A list "holds at least the floor" by its size, and is drawn only when
 /// it has a candidate. A white list at the floor whose every address is

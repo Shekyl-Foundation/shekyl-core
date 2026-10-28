@@ -370,7 +370,8 @@ defined at `:2240`), moves to the dialer and closes `Keep` rows only.
 A `Confirm` row is never what the cap closes.
 
 **The in-flight bound: Tor 5, clearnet 1 (the dialer in-flight bound,
-revision 2, Rick 2026-10-25).** `in_flight_bound(connector)` is protocol
+revision 2, Rick 2026-10-25).** The connector's in-flight bound
+(`dial_profile(connector).in_flight_bound`, the dial profile) is protocol
 data, the same on every node. It limits how many dials are outstanding,
 not the rate: one launch per wake, at R3's spacing. Tor's five is
 derived (`DAEMON_RELAY_PRIVACY.md` §97;
@@ -825,7 +826,8 @@ close"; the Tor reply table is the Tor connector's,
 `shekyl-tor/src/replies.rs`, and `TOR_SUPERVISOR.md` reads it; the
 transport layer takes the marks as an argument and keeps no SOCKS
 knowledge); retries within a
-test (`shekyl-dialer/src/pace.rs`, `attempts_per_test` and
+test (the connector's dial profile, `.attempts` and `.retry_waits`;
+`shekyl-dialer/src/pace.rs`, `attempts_per_test` and
 `retry_wait_nanos`, and `shekyl-dialer/src/attempts.rs`: the open test,
 in flight or waiting, is one record on `Attempts`; Tor three attempts,
 clearnet one for gray and two for white (one redial before a white
@@ -856,16 +858,23 @@ seats are evictable like drawable ones); the file rule (slice 1 brief
 `DAEMON_RELAY_PRIVACY.md` §97. The failed-address memory is deleted
 into this (below).
 
-**The quiet stretch (Rick, 2026-10-26).** While a connector holds no
-session and none has opened there for the quiet stretch, a failed test
-cools at the first step and does not climb (`Ladder::FirstStep` in
-`shekyl-peerlist`: the first rung's cooldown, and the consecutive count
-held at least one). The condition is the dialer's own evidence, read
-when a test cools (`shekyl-dialer/src/owner/quiet.rs`): no session held
-on the connector, outbound or inbound, and no dial on it reached a peer
-for `QUIET_AFTER_NANOS`, five minutes, the same constant the managed-Tor
-posture line reads (`TOR_SUPERVISOR.md` §4.2; the daemon builds the
-supervisor's `Policy` from it), never a second number. Outside the
+**The quiet stretch (Rick, 2026-10-26; counted as evidence, 2026-10-27).**
+While a connector holds no session, its last K attempts all ended without
+opening a stream, and at least S has passed since one last opened there,
+a failed test cools at the first step and does not climb
+(`Ladder::FirstStep` in `shekyl-peerlist`: the first rung's cooldown, and
+the consecutive count held at least one). The condition is the dialer's
+own evidence, read when a test cools (`shekyl-dialer/src/owner/quiet.rs`);
+any opened stream resets the count and the span. A connect this node
+could not make is `LocalClose`: the lists cool that test, so the guard
+counts it unopened; the Tor tally does not (`TSR-Q14`). K and S are the
+connector's dial profile's quiet threshold (`dial_profile(connector).quiet()`,
+K derived in `DAEMON_RELAY_PRIVACY.md` §97 from each connector's failure
+rate measured on the floor device; S computed from K and the connector's
+bound, dial deadline and wake spacing): clearnet 11 attempts across
+32.065 s, Tor 13 attempts across 364.5 s. Tor's S is also the managed-Tor posture line's
+`quiet_after` (`TOR_SUPERVISOR.md` §4.2; the daemon builds the
+supervisor's `Policy` from the profile), never a second number. Outside the
 condition the ladder steps as before. Both connectors, one mechanism. It
 is the dialer's judgement of its own evidence about addresses, not a
 verdict on the link, and nothing is announced (`TSR-Q14`). Why: on a
