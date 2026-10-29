@@ -118,6 +118,28 @@ pub fn note_propagated(ids: &[TxHash]) {
     }
 }
 
+/// The relay's fluff event: the pool shows `id` and the tip follower
+/// rebuilds the posted job (`DRS_X_STORE_FLIP.md` Q9).
+///
+/// [`SHEKYL_POOL_UNBOUND`] with no door, [`SHEKYL_POOL_FAULT`] on a
+/// pool-file fault, `0` otherwise. Idempotent: already-shown is `0`.
+pub fn note_shown(id: TxHash) -> i32 {
+    let shown = lock(&DOOR).as_ref().map(|door| Arc::clone(&door.shown));
+    let Some(result) = with_pool_mut(|pool| pool.fluffed(&id)) else {
+        return SHEKYL_POOL_UNBOUND;
+    };
+    match result {
+        Ok(true) => {
+            if let Some(shown) = shown {
+                shown();
+            }
+            0
+        }
+        Ok(false) => 0,
+        Err(_) => SHEKYL_POOL_FAULT,
+    }
+}
+
 fn now() -> UnixSeconds {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -358,20 +380,7 @@ pub unsafe extern "C" fn shekyl_pool_fluffed(hash: *const u8) -> i32 {
         return SHEKYL_POOL_FAULT;
     };
     let id = TxHash::from_bytes(bytes);
-    let shown = lock(&DOOR).as_ref().map(|door| Arc::clone(&door.shown));
-    let Some(result) = with_pool_mut(|pool| pool.fluffed(&id)) else {
-        return SHEKYL_POOL_UNBOUND;
-    };
-    match result {
-        Ok(true) => {
-            if let Some(shown) = shown {
-                shown();
-            }
-            0
-        }
-        Ok(false) => 0,
-        Err(_) => SHEKYL_POOL_FAULT,
-    }
+    note_shown(id)
 }
 
 /// Transactions that came back from a peer other than the one they were
@@ -408,7 +417,9 @@ pub unsafe extern "C" fn shekyl_pool_propagated(hashes: *const u8, count: usize)
 
 #[cfg(test)]
 mod tests {
-    use super::{shekyl_pool_admit, SHEKYL_POOL_UNBOUND};
+    use shekyl_types::TxHash;
+
+    use super::{note_shown, shekyl_pool_admit, SHEKYL_POOL_UNBOUND};
 
     #[test]
     fn an_admit_with_no_door_is_unbound() {
@@ -417,5 +428,11 @@ mod tests {
             unsafe { shekyl_pool_admit(std::ptr::null(), 0) },
             SHEKYL_POOL_UNBOUND
         );
+    }
+
+    #[test]
+    fn a_shown_note_with_no_door_is_unbound() {
+        super::uninstall();
+        assert_eq!(note_shown(TxHash::from_bytes([0; 32])), SHEKYL_POOL_UNBOUND);
     }
 }

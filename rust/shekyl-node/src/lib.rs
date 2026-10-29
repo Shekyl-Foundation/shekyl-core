@@ -371,11 +371,22 @@ impl Node {
             }))
             .nudging(Arc::new({
                 let owed = Arc::clone(&owed);
+                // Both connectors off: the remnant never constructs the
+                // relay notifier (`net_node.inl` returns before that
+                // assignment; the file is a freeze shrink row). RD's
+                // NoRoute fluff is the shown bit; with no zone the origin
+                // callback applies it here. A node with a connector still
+                // hands the blob to the shell (`DRS_X_STORE_FLIP.md` Q9).
+                let offline = args.config.offline();
                 move |txid, blob| {
                     owed.lock()
                         .unwrap_or_else(PoisonError::into_inner)
                         .originated(TxId::from_bytes(txid.to_bytes()));
-                    relay_local(blob);
+                    if offline {
+                        shekyl_ffi::pool_ffi::note_shown(*txid);
+                    } else {
+                        relay_local(blob);
+                    }
                 }
             }))
             .departing(Arc::clone(&departed)),
@@ -655,7 +666,8 @@ fn pool_departed(owed: Arc<Mutex<Responsibilities>>) -> shekyl_chain_ingest::ser
     })
 }
 
-/// The shell's relay entry. RD deletes it with `levin_notify`.
+/// The shell's relay entry, when a connector is on. RD deletes it with
+/// `levin_notify`. An offline node has no notifier and does not call this.
 fn relay_local(blob: &[u8]) {
     if blob.is_empty() {
         return;
