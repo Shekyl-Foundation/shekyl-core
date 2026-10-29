@@ -85,6 +85,7 @@ fn owner_at(chain: &MockChain, height: BlockHeight, median: u64) -> u64 {
                 long_term_effective_median: median,
             },
             params,
+            shekyl_economics::relay_policy(),
         )
         .expect("priced")
     })
@@ -345,7 +346,7 @@ fn the_ladder_is_the_owners_over_the_floors_operands_and_its_economy_rung_is_the
         };
         assert_eq!(
             Some(ladder),
-            fee_ladder_from(operands, economics()),
+            fee_ladder_from(operands, economics(), shekyl_economics::relay_policy()),
             "the owner's ladder at {height:?}"
         );
         let floor = match chain.with_view(|view| relay_floor_at(&view, height)) {
@@ -459,6 +460,7 @@ fn the_ladder_at_a_correction_of_two_doubles_every_rung() {
             RELAY_FLOOR_REFERENCE_TX_WEIGHT,
             c,
             params,
+            shekyl_economics::relay_policy(),
         )
         .as_slots()
     };

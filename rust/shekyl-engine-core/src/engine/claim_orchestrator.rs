@@ -168,11 +168,12 @@ pub(crate) struct ClaimAssemblyContext<'a> {
     /// are structurally mandatory — the reward is fully consumed by the loud
     /// vout, so it cannot pay its own fee).
     pub fee: u64,
-    /// The value floor the assembly's value gate holds against
-    /// (`ENGINE_CADENCE_DRIVER.md` §4): policy, threaded — the production
-    /// choke point ([`Engine::submit_emission_claim`]) names
-    /// [`EMISSION_CLAIM_FEE_FLOOR`]; tests exercising other properties
-    /// pass `0` to stand the gate down.
+    /// The hold (`ENGINE_CADENCE_DRIVER.md` §4): policy, threaded — the
+    /// production choke point ([`Engine::submit_emission_claim`]) names the
+    /// relay policy's [`EMISSION_CLAIM_FEE_FLOOR`]. The assembly's value
+    /// gate is [`claim_value_floor`](super::emission_claim::claim_value_floor)
+    /// of it and [`Self::fee`]; tests exercising other properties pass `0`,
+    /// which leaves the gate at the live fee.
     ///
     /// [`Engine::submit_emission_claim`]: super::Engine::submit_emission_claim
     /// [`EMISSION_CLAIM_FEE_FLOOR`]: shekyl_economics::EMISSION_CLAIM_FEE_FLOOR
@@ -374,7 +375,8 @@ pub(crate) async fn orchestrate_emission_claim<R: PersonaIsolatedTransport>(
             handle,
             operands,
             tree_ctx,
-            fee_floor: ctx.fee_floor,
+            // Ruling 9: the set clears the live fee, floored by the hold.
+            fee_floor: super::emission_claim::claim_value_floor(ctx.fee, ctx.fee_floor),
             tx_key: TxKeyDraw::Fresh,
         })
         .await?;

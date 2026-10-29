@@ -21,6 +21,10 @@
 # FOLLOWUPS.md, the settlement-schedule lever row): its unarmed value is
 # archival_params()'s, and it is not a read of a bare constant.
 #
+# The economics and relay constants that are fields of EconomicParams or
+# RelayPolicy appear in a production expression only inside
+# shekyl-economics (E16-5).
+#
 # The economics sim is the sweep: it builds parameter sets. Tests are
 # not production. Instance of 47-gate-subject-assertion.mdc.
 
@@ -66,16 +70,51 @@ ARCHIVAL_OWNED = (
 )
 _BARE_ARCHIVAL = re.compile(r"\b(" + "|".join(ARCHIVAL_OWNED) + r")\b")
 
+# The economics and relay constants a production composition reads through
+# EconomicParams or RelayPolicy instead. Their owner is the whole
+# shekyl-economics crate, which defines the shipped values and the shipped
+# spellings (`quantized_fee`, ruled to stay). The kept constants (SCALE,
+# the median and volume windows, TX_WEIGHT_LIMIT) are not here: they are
+# units, structural or derived (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.26).
+ECONOMICS_CRATE = "shekyl-economics"
+ECONOMICS_OWNED = (
+    "BLOCK_WEIGHT_SURGE_FACTOR",
+    "FULL_REWARD_ZONE",
+    "EMISSION_CURVE_ASYMPTOTE",
+    "STAKER_EMISSION_SHARE",
+    "STAKER_EMISSION_DECAY",
+    "BLOCKS_PER_YEAR",
+    "RELAY_FLOOR_REFERENCE_TX_WEIGHT",
+    "STANDARD_RUNG_OVER_ECONOMY",
+    "EMISSION_CLAIM_FEE_FLOOR",
+    "RELAY_ADMISSION_SLACK_BP",
+    "RELAY_FLOOR_LOOKBACK",
+    "RELAY_FLOOR_WINDOW",
+    "FEE_DECIMAL_PLACES",
+    "FEE_QUANTIZATION_MASK",
+)
+_BARE_ECONOMICS = re.compile(r"\b(" + "|".join(ECONOMICS_OWNED) + r")\b")
 
-def bare_archival_reads(body: str) -> list[str]:
-    """Owned archival constants named in code, not in comments or `use` lines."""
+
+def _bare_reads(body: str, pattern: re.Pattern[str]) -> list[str]:
+    """Owned constants named in code, not in comments or `use` lines."""
     found = []
     for line in body.splitlines():
         code = line.split("//", 1)[0]
         if re.match(r"\s*(pub(\([^)]*\))?\s+)?use\b", code):
             continue
-        found.extend(match.group(1) for match in _BARE_ARCHIVAL.finditer(code))
+        found.extend(match.group(1) for match in pattern.finditer(code))
     return found
+
+
+def bare_archival_reads(body: str) -> list[str]:
+    """Owned archival constants named in code."""
+    return _bare_reads(body, _BARE_ARCHIVAL)
+
+
+def bare_economics_reads(body: str) -> list[str]:
+    """Owned economics and relay constants named in code."""
+    return _bare_reads(body, _BARE_ECONOMICS)
 MIN_FILES = 200
 SKIP_CRATES = {
     "shekyl-economics-sim",
@@ -329,6 +368,9 @@ def main() -> int:
         if rel not in ARCHIVAL_OWNERS:
             for name in sorted(set(bare_archival_reads(body))):
                 failures.append(f"{rel}: production reads the bare constant {name}")
+        if rel.split(os.sep)[0] != ECONOMICS_CRATE:
+            for name in sorted(set(bare_economics_reads(body))):
+                failures.append(f"{rel}: production reads the bare constant {name}")
         if "OnceLock<RelayPolicy>" in body:
             failures.append(f"{rel}: RelayPolicy is the const shipped policy")
         if rel == ACCESSOR or rel == RELAY_DEF:
@@ -425,6 +467,15 @@ def selftest() -> int:
     )
     if bare != ["SETTLEMENT_EPOCH_BLOCKS"]:
         print(f"selftest: bare archival reads were {bare}", file=sys.stderr)
+        return 1
+    econ = bare_economics_reads(
+        "use shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT;\n"
+        "let w = shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT;\n"
+        "let p = shekyl_economics::relay_policy().ref_tx_weight;\n"
+        "let f = quantized_fee(w, r); // FEE_QUANTIZATION_MASK\n"
+    )
+    if econ != ["RELAY_FLOOR_REFERENCE_TX_WEIGHT"]:
+        print(f"selftest: bare economics reads were {econ}", file=sys.stderr)
         return 1
     print("economic-accessor selftest passed")
     return 0

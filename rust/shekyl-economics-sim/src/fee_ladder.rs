@@ -179,6 +179,7 @@ fn served_ladder(
         RELAY_FLOOR_REFERENCE_TX_WEIGHT,
         FeeCorrection::from_scaled(c),
         params,
+        shekyl_economics::relay_policy(),
     )
     .as_slots()
 }
@@ -434,6 +435,7 @@ fn standard_units_per_floor_unit(params: &EconomicParams) -> u64 {
         RELAY_FLOOR_REFERENCE_TX_WEIGHT,
         FeeCorrection::UNITY,
         params,
+        shekyl_economics::relay_policy(),
     );
     assert_eq!(
         ladder.standard % ladder.economy,
@@ -930,6 +932,7 @@ mod tests {
                 RELAY_FLOOR_REFERENCE_TX_WEIGHT,
                 FeeCorrection::from_scaled(16 * SCALE),
                 &params,
+                shekyl_economics::relay_policy(),
             )
             .as_slots()
         );

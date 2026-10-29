@@ -459,9 +459,10 @@ pub unsafe extern "C" fn shekyl_corrected_fee_ladder(
     let Some(ladder) = shekyl_economics::checked_corrected_fee_ladder(
         base_reward,
         median,
-        shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT,
+        shekyl_economics::relay_policy().ref_tx_weight,
         shekyl_economics::FeeCorrection::from_scaled(c_scaled),
         &params,
+        shekyl_economics::relay_policy(),
     ) else {
         return -2;
     };
@@ -497,7 +498,7 @@ pub unsafe extern "C" fn shekyl_relay_fee_floor(
     let Some(floor) = shekyl_economics::checked_relay_fee_floor(
         base_reward,
         median,
-        shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT,
+        shekyl_economics::relay_policy().ref_tx_weight,
         shekyl_economics::FeeCorrection::from_scaled(c_scaled),
         &params,
     ) else {
@@ -529,7 +530,9 @@ pub unsafe extern "C" fn shekyl_relay_floor_admits(
     floors: *const u64,
     floors_len: usize,
 ) -> i32 {
-    if floors_len > shekyl_economics::RELAY_FLOOR_WINDOW {
+    // The window is the policy's lookback plus the tip itself.
+    let window_len = shekyl_economics::relay_policy().lookback.saturating_add(1);
+    if u64::try_from(floors_len).map_or(true, |len| len > window_len) {
         return -1;
     }
     // SAFETY: caller contract matches the seam — `floors` addresses

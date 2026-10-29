@@ -313,9 +313,9 @@ pub enum EmissionClaimError {
         value_deferred: Vec<(u64, u64)>,
         /// `checked_add` Σ of the held rewards (below the floor).
         total_reward: u64,
-        /// The floor the set failed to clear
-        /// ([`shekyl_economics::EMISSION_CLAIM_FEE_FLOOR`] in production;
-        /// a parameter so the gate is testable at exact boundaries).
+        /// The floor the set failed to clear ([`claim_value_floor`] of the
+        /// live fee and the hold in production; a parameter so the gate is
+        /// testable at exact boundaries).
         fee_floor: u64,
     },
     /// A single epoch's claim alone exceeds the claims-leg size budget —
@@ -640,8 +640,9 @@ pub struct AssembledClaims {
 /// parameter exists so the bound is testable at exact boundaries).
 ///
 /// `fee_floor` is the value gate (`ENGINE_CADENCE_DRIVER.md` §4:
-/// [`shekyl_economics::EMISSION_CLAIM_FEE_FLOOR`] in production, a
-/// parameter for the same boundary-testability reason): Σreward across
+/// [`claim_value_floor`] of the live fee and the relay policy's hold in
+/// production, a parameter for the same boundary-testability reason):
+/// Σreward across
 /// the **whole** candidate set below the floor refuses
 /// [`EmissionClaimError::ValueDeferred`] — all-or-nothing, before the
 /// size loop, because the floor prices the one claim tx the set would
@@ -649,6 +650,22 @@ pub struct AssembledClaims {
 /// should. Deterministic by construction: the same derived set and floor
 /// produce the same inclusion decision on every wallet (the §4
 /// uniformity claim — policy, not timing).
+/// The value an assembled claim set's Σreward must clear: the live fee the
+/// claim pays, and at least the relay policy's hold (ruling 9, 2026-10-24:
+/// "the ladder at the claim's real weight, floored by the hold"). A set
+/// that clears the hold but not the live fee would pay more in fee than it
+/// claims, so it holds. Both operands are chain state and a uniform
+/// constant, so every wallet reaches the same decision (FL-R18;
+/// `ENGINE_CADENCE_DRIVER.md` §4's uniformity).
+#[must_use]
+pub const fn claim_value_floor(live_fee: u64, hold: u64) -> u64 {
+    if live_fee > hold {
+        live_fee
+    } else {
+        hold
+    }
+}
+
 pub fn assemble_claims(
     derived: &ClaimableEpochs<'_>,
     claims_size_budget: usize,

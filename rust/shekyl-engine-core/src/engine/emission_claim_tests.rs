@@ -632,6 +632,34 @@ fn size_bound_defers_youngest_then_refuses() {
 /// both calls — the inclusion decision is policy-deterministic
 /// (uniform across wallets), which is the §4 uniformity property as
 /// distinct from submission *timing*.
+/// E16-12 (ruling 9): the gate is the live fee floored by the hold. A set
+/// that clears the hold but not the live fee holds; one that clears both
+/// assembles.
+#[test]
+fn value_gate_clears_the_live_fee_floored_by_the_hold() {
+    let source = source_with(10, vec![], vec![snapshot(3), snapshot(4), snapshot(5)]);
+    let derived = derive_claimable_epochs(&source).expect("three claimable");
+    let total: u64 = derived.claimable.iter().map(|c| c.reward).sum();
+    assert!(
+        total > 1,
+        "fixture must carry rewards above one atomic unit"
+    );
+
+    // The hold is cleared (total − 1 ≤ total) but the live fee is not.
+    let above_fee = claim_value_floor(total + 1, total - 1);
+    assert_eq!(above_fee, total + 1);
+    assert!(matches!(
+        assemble_claims(&derived, EMISSION_CLAIMS_SIZE_BUDGET, above_fee),
+        Err(EmissionClaimError::ValueDeferred { fee_floor, .. }) if fee_floor == total + 1
+    ));
+    // Both cleared: the larger of the two is at Σreward.
+    let both = claim_value_floor(total - 1, total);
+    assert_eq!(both, total);
+    assert!(assemble_claims(&derived, EMISSION_CLAIMS_SIZE_BUDGET, both).is_ok());
+    // The hold binds when the live fee is lower.
+    assert_eq!(claim_value_floor(0, total + 1), total + 1);
+}
+
 #[test]
 fn value_gate_holds_whole_set_below_floor_and_precedes_sizing() {
     let source = source_with(10, vec![], vec![snapshot(3), snapshot(4), snapshot(5)]);

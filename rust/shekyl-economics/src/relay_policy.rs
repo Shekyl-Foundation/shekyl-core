@@ -4,7 +4,9 @@
 // BSD-3-Clause
 
 //! Relay policy: the admission lookback, its slack, the fee lattice's
-//! decimal places, and the emission-claim hold.
+//! decimal places, the ladder's reference weight and rung ratios, and the
+//! emission-claim hold, generated from `config/relay_policy.json` (its own
+//! file: the file boundary is the digest boundary, ruled 2026-10-29).
 //!
 //! These select what a node relays. They are not chain identity
 //! ([`crate::params::EconomicParams`] is), so they stay out of the
@@ -18,7 +20,9 @@ use shekyl_units::DISPLAY_DECIMAL_POINT;
 use crate::fee::quantization::quantize_to_mask;
 use crate::fee::{
     EMISSION_CLAIM_FEE_FLOOR, FEE_DECIMAL_PLACES, RELAY_ADMISSION_SLACK_BP, RELAY_FLOOR_LOOKBACK,
+    RELAY_FLOOR_REFERENCE_TX_WEIGHT, STANDARD_RUNG_OVER_ECONOMY,
 };
+use crate::params::GENERATED_PRIORITY_RUNG_FACTOR;
 
 /// Basis points in one whole. [`RelayPolicy::admission_slack_bp`] is
 /// written in these. A slack at or above this admits at zero.
@@ -34,13 +38,25 @@ pub struct RelayPolicy {
     pub admission_slack_bp: u32,
     /// Decimal places the fee lattice keeps.
     pub fee_decimal_places: u32,
-    /// The emission-claim hold, in atomic units.
+    /// The emission-claim hold, in atomic units: the claim leg's priced
+    /// weight at the genesis Economy rung, on the shipped lattice.
     pub emission_claim_fee_floor: u64,
+    /// `w_ref`, the weight the relay floor and every rung fold in
+    /// (`F = R·C·w_ref/M²`). Relay policy until EUP-5 D rules on the floor;
+    /// if D puts the floor into consensus, D's PR moves it into
+    /// [`crate::EconomicParams`] with a digest bump.
+    pub ref_tx_weight: u64,
+    /// Standard over the Economy rung (the relay floor). Same line as
+    /// [`Self::ref_tx_weight`].
+    pub standard_over_economy: u64,
+    /// Priority's factor: Priority is `max(factor·R·C/M, Standard)`. Same
+    /// line as [`Self::ref_tx_weight`].
+    pub priority_factor: u64,
 }
 
 impl RelayPolicy {
-    /// The policy production admits, quotes and holds with. The four
-    /// fields are the relay constants; this value is what readers use.
+    /// The policy production admits, quotes and holds with, generated from
+    /// `config/relay_policy.json`; this value is what readers use.
     ///
     /// `lookback` is [`RELAY_FLOOR_LOOKBACK`], a `usize` of 5.
     // CLIPPY: cast_possible_truncation — usize-to-u64 loses bits only on a
@@ -51,6 +67,9 @@ impl RelayPolicy {
         admission_slack_bp: RELAY_ADMISSION_SLACK_BP,
         fee_decimal_places: FEE_DECIMAL_PLACES,
         emission_claim_fee_floor: EMISSION_CLAIM_FEE_FLOOR,
+        ref_tx_weight: RELAY_FLOOR_REFERENCE_TX_WEIGHT,
+        standard_over_economy: STANDARD_RUNG_OVER_ECONOMY,
+        priority_factor: GENERATED_PRIORITY_RUNG_FACTOR,
     };
 
     /// Atomic units per lattice step, `10^(DISPLAY_DECIMAL_POINT − places)`.
@@ -134,7 +153,12 @@ mod tests {
         assert_eq!(policy.admission_slack_bp, 0);
         assert_eq!(BASIS_POINTS, 10_000);
         assert_eq!(policy.fee_decimal_places, 6);
-        assert_eq!(policy.emission_claim_fee_floor, 3_600_000_000);
+        // Derived (E16-8; recomputed by shekyl-engine-core's
+        // `the_claim_hold_is_the_genesis_economy_fee_at_the_priced_weight`).
+        assert_eq!(policy.emission_claim_fee_floor, 1_398_068_000);
+        assert_eq!(policy.ref_tx_weight, 3_000);
+        assert_eq!(policy.standard_over_economy, 4);
+        assert_eq!(policy.priority_factor, 2);
         assert_eq!(RelayPolicy::default(), policy);
         assert_eq!(*relay_policy(), policy);
         assert_eq!(policy.quantization_mask(), Some(1_000));

@@ -489,6 +489,10 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`ENGINE_CADENCE_DRIVER.md`](design/ENGINE_CADENCE_DRIVER.md) (§3 leg 4)
   - Target: pre-genesis
 
+- **The claim leg prices an allowance, not the claim's weight.** The fee it pays and the relay policy's emission-claim hold are both taken at `CLAIM_PRICED_WEIGHT` (49 152 + 2 048 = 51 200, `cadence/claim.rs`), a static reserve for the non-claims part plus one vin row, not the weight of the claim being built. A predictor from the assembled claim's shape replaces the allowance; the hold's test reads the same constant, so the hold follows with no second edit (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.26, ruling 9).
+  - Owner: [`ENGINE_CADENCE_DRIVER.md`](design/ENGINE_CADENCE_DRIVER.md) (§4)
+  - Target: pre-genesis
+
 - **Q11 zero-fee-input emission claim has no settlement evidence** (destitute mint-pays-fee; named blocker: accrual has no claim-match set).
   - Target: pre-genesis
 

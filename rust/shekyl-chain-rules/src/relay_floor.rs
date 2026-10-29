@@ -126,12 +126,14 @@ pub fn relay_floor_at<'id, V: ChainView<'id>>(
     height: BlockHeight,
 ) -> Result<AtHeight<u64>, ViewRead<V::Fault>> {
     match fee_operands_at(view, height)? {
-        AtHeight::Recorded(operands) => relay_floor_from(operands, economics())
-            .map(AtHeight::Recorded)
-            .ok_or(ViewRead::Corrupt(Corrupt::RelayFloorUnpriceable {
-                at: height,
-                operands,
-            })),
+        AtHeight::Recorded(operands) => {
+            relay_floor_from(operands, economics(), shekyl_economics::relay_policy())
+                .map(AtHeight::Recorded)
+                .ok_or(ViewRead::Corrupt(Corrupt::RelayFloorUnpriceable {
+                    at: height,
+                    operands,
+                }))
+        }
         AtHeight::AboveTip => Ok(AtHeight::AboveTip),
     }
 }
@@ -152,12 +154,14 @@ pub fn fee_ladder_at<'id, V: ChainView<'id>>(
     height: BlockHeight,
 ) -> Result<AtHeight<FeeLadder>, ViewRead<V::Fault>> {
     match fee_operands_at(view, height)? {
-        AtHeight::Recorded(operands) => fee_ladder_from(operands, economics())
-            .map(AtHeight::Recorded)
-            .ok_or(ViewRead::Corrupt(Corrupt::RelayFloorUnpriceable {
-                at: height,
-                operands,
-            })),
+        AtHeight::Recorded(operands) => {
+            fee_ladder_from(operands, economics(), shekyl_economics::relay_policy())
+                .map(AtHeight::Recorded)
+                .ok_or(ViewRead::Corrupt(Corrupt::RelayFloorUnpriceable {
+                    at: height,
+                    operands,
+                }))
+        }
         AtHeight::AboveTip => Ok(AtHeight::AboveTip),
     }
 }

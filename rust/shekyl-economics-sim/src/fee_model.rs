@@ -302,6 +302,7 @@ fn ladder_at(at: &FeePoint<'_>) -> FeeLadder {
         RELAY_FLOOR_REFERENCE_TX_WEIGHT,
         correction,
         at.params,
+        shekyl_economics::relay_policy(),
     )
 }
 
