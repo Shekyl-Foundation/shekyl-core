@@ -208,7 +208,10 @@ async fn a_compact_block_asks_for_a_stem_body_and_resolves_a_shown_one() {
     let asked = door.offer(compact(1, &block)).expect("room").reply().await;
     assert_eq!(
         asked.reply,
-        Reply::MissingBodies { indices: vec![0] },
+        Reply::MissingBodies {
+            hash: block.hash,
+            indices: vec![0],
+        },
         "a stem body is not resolved from the pool"
     );
     let fluffed = pooled.on_pool(|pool, _, _| pool.fluffed(&txid).expect("fluffed"));

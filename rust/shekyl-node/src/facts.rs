@@ -533,7 +533,7 @@ fn local_outcome(reply: Reply) -> LocalOutcome {
         } => LocalOutcome::Refused {
             rule: verdict.rule.to_string(),
         },
-        Reply::MissingBodies { indices } => LocalOutcome::MissingBodies { indices },
+        Reply::MissingBodies { indices, .. } => LocalOutcome::MissingBodies { indices },
         Reply::Unlinked { .. } => LocalOutcome::Unlinked,
         Reply::AlreadyHeld => LocalOutcome::AlreadyHeld,
         Reply::Held { .. } => LocalOutcome::Held,

@@ -285,6 +285,8 @@ pub enum Reply {
     /// Listed bodies neither the arrival carried nor the pool shows, by
     /// their index in the block's list: ask for them and offer it again.
     MissingBodies {
+        /// The block whose list they are: what the re-request names.
+        hash: BlockHash,
         /// The indices, ascending.
         indices: Vec<usize>,
     },

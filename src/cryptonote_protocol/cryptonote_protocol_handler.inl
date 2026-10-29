@@ -131,9 +131,7 @@ namespace cryptonote
                                                                                                               m_ask_for_txpool_complement(true),
                                                                                                               m_stopping(false),
                                                                                                               m_no_sync(false),
-                                                                                                              m_span_limit(BLOCK_QUEUE_NSPANS_MINIMUM),
-                                                                                                              m_span_time(0),
-                                                                                                              m_bss(0)
+                                                                                                              m_span_limit(BLOCK_QUEUE_NSPANS_MINIMUM)
 
   {
     if(!m_p2p)
@@ -166,10 +164,50 @@ namespace cryptonote
         drop_connection(context, false, false);
         return;
       }
+      if (reply.kind == SHEKYL_INGEST_CONNECTED || reply.kind == SHEKYL_INGEST_SWITCHED)
+      {
+        // An add ended: the sync wedge timer reads it, and the peer that
+        // delivered the block holds at least that chain length (what the
+        // deleted connect loop recorded per block).
+        m_last_add_end_time = tools::get_tick_count();
+        raise_remote_height(context, chain_length_of_accepted_block(reply.height));
+        // A block a peer announced that is now this node's tip, while this
+        // node is not behind, is announced on, as this handler did before
+        // the door (the connect loop's relay). A block this node mined or
+        // took through submit_block is not: that announcement is chain
+        // sync's (`Sync::relays`), attached at its cutover (the register,
+        // DRS_X_STORE_FLIP.md §3.1). The tip check keeps a late reply for a
+        // solicited span from announcing a block behind the tip.
+        if (context.m_state == cryptonote_connection_context::state_normal && is_synchronized()
+            && reply.height + 1 == m_core.get_current_blockchain_height())
+        {
+          crypto::hash id;
+          std::memcpy(&id, reply.hash, sizeof(id));
+          block blk;
+          if (m_core.get_block_by_hash(id, blk))
+          {
+            NOTIFY_NEW_COMPACT_BLOCK::request announce;
+            announce.b.block = block_to_blob(blk);
+            announce.b.attestation_witness = m_core.get_block_attestation_witness(blk);
+            announce.current_blockchain_height = m_core.get_current_blockchain_height();
+            relay_block(announce, context);
+          }
+        }
+        return;
+      }
+      if (reply.kind == SHEKYL_INGEST_UNLINKED)
+      {
+        // An announced block whose parent this node lacks is the start of
+        // a sync (the chain-sync ruling): ask the announcer for its chain.
+        if (context.m_state == cryptonote_connection_context::state_normal)
+          request_chain_history(context);
+        return;
+      }
       if (reply.kind != SHEKYL_INGEST_MISSING_BODIES || missing.empty())
         return;
       NOTIFY_REQUEST_COMPACT_MISSING_TX::request req;
       std::memcpy(&req.block_hash, reply.hash, sizeof(req.block_hash));
+      req.current_blockchain_height = m_core.get_current_blockchain_height();
       req.missing_tx_indices = missing;
       post_notify<NOTIFY_REQUEST_COMPACT_MISSING_TX>(req, context);
     });
@@ -193,22 +231,8 @@ namespace cryptonote
     // (P2P_3_CHAIN_SYNC_BRIEF.md CS-Q12): today's defaults until the
     // chain-sync cutover replaces these callers.
     m_block_download_max_size = 0;
-    m_span_time = 2;
 
     return true;
-  }
-  //------------------------------------------------------------------------------------------------------------------------
-  template<class t_core>
-  void t_cryptonote_protocol_handler<t_core>::calculate_dynamic_span(const double blocks_per_seconds)
-  {
-    size_t current_bss = m_bss.load();
-    size_t current_span_limit = m_span_limit.load();
-    MINFO("m_bss : " << current_bss << ", blocks_per_seconds : " << blocks_per_seconds << ", current_span_limit : " << current_span_limit);
-    current_span_limit = (current_bss && blocks_per_seconds) ? (( blocks_per_seconds * 60 * m_span_time ) / current_bss) : BLOCK_QUEUE_NSPANS_MINIMUM;
-    if (current_span_limit < BLOCK_QUEUE_NSPANS_MINIMUM)
-      current_span_limit = BLOCK_QUEUE_NSPANS_MINIMUM;
-    m_span_limit = current_span_limit;
-    MINFO("calculated dynamic span limit is span_limit : " << m_span_limit);
   }
   //------------------------------------------------------------------------------------------------------------------------
   template<class t_core>
@@ -386,6 +410,11 @@ namespace cryptonote
         m_add_timer.pause();
         m_add_timer.reset();
         m_last_add_end_time = 0;
+        // The estimates' origin (get_estimated_remaining_sync_seconds reads
+        // both): where this sync started, in time and in height.
+        m_sync_start_time = boost::posix_time::microsec_clock::universal_time();
+        m_sync_start_height = m_core.get_current_blockchain_height();
+        m_period_start_time = m_sync_start_time;
         m_sync_spans_downloaded = 0;
         m_sync_old_spans_downloaded = 0;
         m_sync_bad_spans_downloaded = 0;
@@ -1490,7 +1519,7 @@ namespace cryptonote
       NOTIFY_REQUEST_GET_OBJECTS::request req;
       bool is_next = false;
       size_t count = 0;
-      size_t l_m_bss = m_bss = m_core.get_block_sync_size(m_core.get_current_blockchain_height());
+      const size_t l_m_bss = m_core.get_block_sync_size(m_core.get_current_blockchain_height());
       std::pair<uint64_t, uint64_t> span = std::make_pair(0, 0);
       if (force_next_span)
       {
@@ -2117,6 +2146,8 @@ skip:
       });
 
     m_block_queue.flush_spans(context.m_connection_id, false);
+    // The door held state for this session (its arrival bucket): release it.
+    cryptonote::ingest_session_closed(shekyl::seam_socket_id(closed_id));
     MLOG_PEER_STATE("closed");
   }
 

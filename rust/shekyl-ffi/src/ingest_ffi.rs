@@ -687,8 +687,12 @@ fn encode(connection: u64, tagged: Tagged) -> (ShekylIngestReply, Vec<u64>) {
             out.height = tip.to_raw();
             out.by = floor.to_raw();
         }
-        Reply::MissingBodies { indices: missing } => {
+        Reply::MissingBodies {
+            hash,
+            indices: missing,
+        } => {
             out.kind = SHEKYL_INGEST_MISSING_BODIES;
+            out.hash = hash.to_bytes();
             indices = missing
                 .into_iter()
                 .map(|i| u64::try_from(i).unwrap_or(u64::MAX))

@@ -189,7 +189,8 @@ where
         let candidate = match assemble(&front, shared.shown_pool().as_deref()) {
             Ok(candidate) => candidate,
             Err(indices) => {
-                front.slot.send(Reply::MissingBodies { indices });
+                let hash = front.hash();
+                front.slot.send(Reply::MissingBodies { hash, indices });
                 continue;
             }
         };

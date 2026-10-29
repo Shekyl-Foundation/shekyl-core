@@ -54,4 +54,10 @@ namespace cryptonote
     }
     return shekyl_ingest_offer_span(connection, solicited ? 1 : 0, arrivals.data(), arrivals.size());
   }
+
+  /// `connection` closed: the door releases what it held for the session.
+  inline void ingest_session_closed(std::uint64_t connection)
+  {
+    shekyl_ingest_session_closed(connection);
+  }
 }

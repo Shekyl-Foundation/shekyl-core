@@ -26,7 +26,7 @@ check and the per-entry connector loop are deleted in PR-3. *Records-was
 (2026-10-11): "`sanitize_peerlist` stays with `handle_remote_peerlist`
 until slice 4".*
 
-**UNFREEZE (Rick, 2026-10-27):** src/cryptonote_protocol/cryptonote_protocol_handler.inl — the flip routes block arrivals through shekyl_ingest_offer_span; the connect loop, the size check, pause_mine and safesyncmode are deleted.
+**UNFREEZE (Rick, 2026-10-27):** src/cryptonote_protocol/cryptonote_protocol_handler.inl — the flip routes block arrivals through shekyl_ingest_offer_span; the connect loop, the size check, pause_mine and safesyncmode are deleted. The reply path keeps what the connect loop recorded: a connected block raises the delivering peer's chain length and the wedge timer, and an announced block that connected as the tip is announced on; an unlinked announcement asks the announcer for its chain; the missing-bodies request names this node's height; a closed session is released at the door; the sync estimates' origin is set where the sync starts.
 
 **UNFREEZE (Rick, 2026-10-27):** src/cryptonote_protocol/cryptonote_protocol_handler.h — the handler declares the ingest reply post and its destructor.
 

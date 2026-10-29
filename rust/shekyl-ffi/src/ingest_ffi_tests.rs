@@ -379,7 +379,10 @@ fn one_of_each() -> Vec<Reply> {
             tip: height,
             floor: BlockHeight::from_raw(2),
         }),
-        Reply::MissingBodies { indices: vec![0] },
+        Reply::MissingBodies {
+            hash: BlockHash::from_bytes([10; 32]),
+            indices: vec![0],
+        },
         Reply::Cancelled { by: ArrivalTag(4) },
         Reply::Stopped,
     ]

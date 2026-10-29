@@ -1111,7 +1111,7 @@ fn outcome_of(reply: Reply, solicited: bool, arrival: Option<BlockHash>) -> Outc
         },
         (SyncReplyAction::Relocate, Reply::Unlinked { at }) => Outcome::Unlinked { at },
         (SyncReplyAction::RequestHeaders, Reply::BeyondCap(_)) => Outcome::BeyondCap,
-        (SyncReplyAction::RequestMissing, Reply::MissingBodies { indices }) => {
+        (SyncReplyAction::RequestMissing, Reply::MissingBodies { indices, .. }) => {
             Outcome::MissingBodies {
                 indices: indices
                     .into_iter()
