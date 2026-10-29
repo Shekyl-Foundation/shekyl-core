@@ -53,8 +53,8 @@
 use serde::Serialize;
 use shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS;
 use shekyl_economics::{
-    base_block_reward, calc_release_multiplier, emission_share_at, params::SCALE,
-    split_block_emission, ClosedShardCount,
+    base_block_reward, calc_release_multiplier, params::SCALE, split_block_emission,
+    ClosedShardCount,
 };
 
 use crate::burden::HonestOutputs;
@@ -182,7 +182,7 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
                 mult_sum,
                 mult_min,
                 blocks_in_epoch,
-                mid_height,
+                economic.emission_schedule().share_at(mid_height),
             ));
             emission_a_acc = 0;
             emission_b_acc = 0;
@@ -261,7 +261,7 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
             mult_sum,
             mult_min,
             blocks_in_epoch,
-            mid_height,
+            economic.emission_schedule().share_at(mid_height),
         ));
     }
 
@@ -321,7 +321,7 @@ fn build_epoch_record(
     mult_sum: u128,
     mult_min: u64,
     blocks: u64,
-    abs_height_mid: u64,
+    share: u64,
 ) -> EpochRecord {
     let budget_a = emission_a + fee;
     let budget_b = emission_b + fee;
@@ -335,7 +335,6 @@ fn build_epoch_record(
     } else {
         0.0
     };
-    let share = emission_share_at(abs_height_mid);
     EpochRecord {
         epoch,
         mean_tx_volume: vol_sum as f64 / blocks as f64,

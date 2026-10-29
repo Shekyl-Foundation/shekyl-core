@@ -6,7 +6,6 @@
 //! Relay floor `F = R·C·w_ref/M²` and lookback-min admission.
 
 use super::correction::FeeCorrection;
-use super::quantization::quantized_fee;
 use crate::params::{EconomicParams, SCALE};
 
 /// Lookback depth `G`, in blocks. Admission takes `min F` over `h′−G ..= h′`,
@@ -65,42 +64,29 @@ pub fn relay_fee_floor(
     checked_relay_fee_floor(base_reward, median, ref_tx_weight, c, params).unwrap_or(u64::MAX)
 }
 
-/// Admit iff `fee ≥ quantized_fee(weight, min(floors))`: the requirement on
-/// the fee lattice ([`super::quantization::FEE_QUANTIZATION_MASK`]), less
-/// [`RELAY_ADMISSION_SLACK_BP`] basis points (zero).
+/// Admit on the shipped [`crate::RelayPolicy`] from [`crate::relay_policy()`]:
+/// `fee` against [`crate::RelayPolicy::admits`].
 ///
 /// `floors` is the `(h′−G ..= h′)` window; only the minimum is read, so
 /// order carries no meaning. A short window is stricter, never looser.
 /// Empty `floors` refuses: no floor is not a floor of zero. A requirement
-/// that leaves `u64` refuses: no fee can state it.
+/// that leaves `u64` refuses: no fee can state it. A fold that varies
+/// the lattice or the slack calls [`crate::RelayPolicy::admits`] on its
+/// own policy.
 ///
 /// Reopening (rule 21): FL-R23 reopens if any operand with a per-block
 /// response enters `F` — a fast term would be amplified by the window
 /// for `G` blocks.
 #[must_use]
 pub fn relay_floor_admits(fee: u64, weight: u64, floors: &[u64]) -> bool {
-    admits_with_slack(fee, weight, floors, RELAY_ADMISSION_SLACK_BP)
-}
-
-/// [`relay_floor_admits`] at an explicit slack. The shipped slack is the
-/// constant; this arm keeps the slack arithmetic testable while it is
-/// pinned at zero.
-fn admits_with_slack(fee: u64, weight: u64, floors: &[u64], slack_bp: u32) -> bool {
-    let Some(&min_floor) = floors.iter().min() else {
-        return false;
-    };
-    let Some(needed) = quantized_fee(weight, min_floor) else {
-        return false;
-    };
-    let needed = u128::from(needed);
-    let threshold = needed - needed * u128::from(slack_bp) / 10_000;
-    u128::from(fee) >= threshold
+    crate::relay_policy().admits(fee, weight, floors)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::quantization::FEE_QUANTIZATION_MASK;
+    use super::super::quantization::{quantized_fee, FEE_QUANTIZATION_MASK};
     use super::*;
+    use crate::RelayPolicy;
     use crate::RELAY_FLOOR_REFERENCE_TX_WEIGHT as W_REF;
 
     #[test]
@@ -236,9 +222,13 @@ mod tests {
     fn slack_lowers_the_requirement_when_it_is_not_zero() {
         let weight = 1_000u64;
         let floor = 100u64;
-        assert!(!admits_with_slack(99_000, weight, &[floor], 0));
-        assert!(admits_with_slack(98_000, weight, &[floor], 200));
-        assert!(!admits_with_slack(97_999, weight, &[floor], 200));
+        let slack = RelayPolicy {
+            admission_slack_bp: 200,
+            ..RelayPolicy::SHIPPED
+        };
+        assert!(!RelayPolicy::SHIPPED.admits(99_000, weight, &[floor]));
+        assert!(slack.admits(98_000, weight, &[floor]));
+        assert!(!slack.admits(97_999, weight, &[floor]));
         assert!(
             relay_floor_admits(100_000, weight, &[floor])
                 && !relay_floor_admits(99_999, weight, &[floor]),

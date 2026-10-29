@@ -28,8 +28,7 @@
 //! the flip deletes.
 
 use shekyl_economics::{
-    fee_ladder_from, relay_floor_from, CirculatingSupply, FeeLadder, FeeOperands,
-    RELAY_FLOOR_LOOKBACK,
+    fee_ladder_from, relay_floor_from, relay_policy, CirculatingSupply, FeeLadder, FeeOperands,
 };
 use shekyl_types::BlockHeight;
 use shekyl_units::AtomicUnits;
@@ -177,8 +176,13 @@ pub fn relay_floor_window<'id, V: ChainView<'id>>(
     connecting: BlockHeight,
 ) -> Result<AtHeight<Vec<u64>>, ViewRead<V::Fault>> {
     let newest = connecting.to_raw();
-    let oldest = newest.saturating_sub(RELAY_FLOOR_LOOKBACK as u64);
-    let mut floors = Vec::with_capacity(RELAY_FLOOR_LOOKBACK + 1);
+    let depth = relay_policy().lookback;
+    let oldest = newest.saturating_sub(depth);
+    let mut floors = Vec::with_capacity(
+        usize::try_from(depth)
+            .unwrap_or(usize::MAX)
+            .saturating_add(1),
+    );
     for h in oldest..=newest {
         match relay_floor_at(view, BlockHeight::from_raw(h))? {
             AtHeight::Recorded(floor) => floors.push(floor),

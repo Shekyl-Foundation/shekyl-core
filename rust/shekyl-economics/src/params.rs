@@ -1,8 +1,19 @@
 //! Economic system parameters — mirrors constants from cryptonote_config.h.
 
+use std::sync::OnceLock;
+
 use serde::{Deserialize, Serialize};
 
 include!(concat!(env!("OUT_DIR"), "/params_generated.rs"));
+
+/// Blocks in a 365-day year at `daa_target_seconds`.
+///
+/// One derivation: `365 × 86_400 / daa_target_seconds`. The shipped target
+/// of 120 s divides the year exactly (262 800). A zero target cannot
+/// divide, and the const evaluation of [`BLOCKS_PER_YEAR`] refuses it.
+pub const fn blocks_per_year(daa_target_seconds: u64) -> u64 {
+    (365 * 86_400) / daa_target_seconds
+}
 
 pub const SCALE: u64 = GENERATED_SCALE;
 
@@ -86,7 +97,7 @@ const _: () = {
     );
     const TAIL_PER_BLOCK: u64 =
         GENERATED_FINAL_SUBSIDY_PER_MINUTE * (GENERATED_DAA_TARGET_SECONDS / 60);
-    const TAIL_PER_YEAR: u64 = TAIL_PER_BLOCK * GENERATED_BLOCKS_PER_YEAR;
+    const TAIL_PER_YEAR: u64 = TAIL_PER_BLOCK * blocks_per_year(GENERATED_DAA_TARGET_SECONDS);
     const HEADROOM: u64 = u64::MAX - GENERATED_EMISSION_CURVE_ASYMPTOTE;
     // ≈ 89,750 years at canonical parameters; 10,000 is the loud floor.
     assert!(
@@ -109,10 +120,10 @@ pub const STAKER_EMISSION_SHARE: u64 = GENERATED_STAKER_EMISSION_SHARE;
 /// rulebook constant (PR 7 §5.3 R2).
 pub const STAKER_EMISSION_DECAY: u64 = GENERATED_STAKER_EMISSION_DECAY;
 
-/// Blocks per year at the configured DAA target
-/// (`shekyl_blocks_per_year`). Used with [`STAKER_EMISSION_DECAY`] to
-/// project the effective staker emission share at a height.
-pub const BLOCKS_PER_YEAR: u64 = GENERATED_BLOCKS_PER_YEAR;
+/// Blocks per year at the shipped DAA target. The const-context spelling
+/// of [`blocks_per_year`]; [`EconomicParams::blocks_per_year`] carries the
+/// same derivation on the parameter set a fold can replace.
+pub const BLOCKS_PER_YEAR: u64 = blocks_per_year(GENERATED_DAA_TARGET_SECONDS);
 
 /// Calibration generation index for the resolved economic parameter set
 /// (**CALIBRATION-PENDING**).
@@ -148,12 +159,16 @@ pub const CALIBRATION_GENERATION: u32 = 1;
 /// Struct-literal construction of [`EconomicParams`] does **not** — public
 /// fields stay open for the digest preimage and build-generated defaults.
 /// Consensus paths obtain a well-formed shape via [`EconomicParams::escalation`]
-/// (or [`EconomicParams::try_escalation`]), which is the typed door for apply.
+/// (or [`EconomicParams::try_escalation`]) and
+/// [`EconomicParams::emission_schedule`], which are the typed doors.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum EconomicParamsError {
     /// Escalation shape (§6.1) rejected by [`EscalationParams::try_new`](crate::escalation::EscalationParams::try_new).
     #[error(transparent)]
     Escalation(#[from] crate::escalation::EscalationShapeError),
+    /// Emission schedule rejected by [`EmissionSchedule::try_new`](crate::emission_share::EmissionSchedule::try_new).
+    #[error(transparent)]
+    Schedule(#[from] crate::emission_share::EmissionScheduleError),
 }
 
 /// Deserialization shim — every `EconomicParams` that arrives from serde is
@@ -178,6 +193,9 @@ struct EconomicParamsWire {
     escalation_knee_n: u64,
     escalation_asymptote_share: u64,
     full_reward_zone: u64,
+    staker_emission_share: u64,
+    staker_emission_decay: u64,
+    blocks_per_year: u64,
 }
 
 impl TryFrom<EconomicParamsWire> for EconomicParams {
@@ -198,13 +216,16 @@ impl TryFrom<EconomicParamsWire> for EconomicParams {
             escalation_knee_n: w.escalation_knee_n,
             escalation_asymptote_share: w.escalation_asymptote_share,
             full_reward_zone: w.full_reward_zone,
+            staker_emission_share: w.staker_emission_share,
+            staker_emission_decay: w.staker_emission_decay,
+            blocks_per_year: w.blocks_per_year,
         };
         p.validate()?;
         Ok(p)
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "EconomicParamsWire")]
 pub struct EconomicParams {
     pub release_min: u64,
@@ -239,10 +260,22 @@ pub struct EconomicParams {
     ///
     /// Authority: `config/consensus_constants.json`
     /// `block_weight_full_reward_zone_bytes`, also read by the C++ header
-    /// generator and by `shekyl-wire`'s `MIN_BLOCK_WEIGHT`. Declared last so
-    /// the params digest appends it (since format `0x03`); the preimage order is
-    /// this declaration order.
+    /// generator and by `shekyl-wire`'s `MIN_BLOCK_WEIGHT`. Appended at
+    /// format `0x03`. The preimage order is this declaration order.
     pub full_reward_zone: u64,
+    /// Base staker emission share before height decay, in [`SCALE`] units.
+    /// At most [`SCALE`]. [`Self::emission_schedule`] is the door.
+    /// [`crate::emission_share_at`] reads the shipped set; a fold prices
+    /// another share by writing this field.
+    pub staker_emission_share: u64,
+    /// Per-year decay of [`Self::staker_emission_share`], in [`SCALE`] units
+    /// (`900_000` = 0.90 of the previous year). At most [`SCALE`].
+    pub staker_emission_decay: u64,
+    /// Blocks in one year of the emission schedule. At least one.
+    /// Production's is [`blocks_per_year`] of [`Self::daa_target_seconds`]
+    /// ([`BLOCKS_PER_YEAR`]). A fold may set another length; the digest
+    /// then differs, which is what makes the year a chain parameter.
+    pub blocks_per_year: u64,
 }
 
 impl Default for EconomicParams {
@@ -261,27 +294,83 @@ impl Default for EconomicParams {
             escalation_knee_n: GENERATED_ESCALATION_KNEE_N,
             escalation_asymptote_share: GENERATED_ESCALATION_ASYMPTOTE_SHARE,
             full_reward_zone: FULL_REWARD_ZONE,
+            staker_emission_share: STAKER_EMISSION_SHARE,
+            staker_emission_decay: STAKER_EMISSION_DECAY,
+            blocks_per_year: blocks_per_year(GENERATED_DAA_TARGET_SECONDS),
         };
         // Build-generated constants must satisfy the frozen shape; the unit test
         // `shipped_defaults_are_well_formed` is the loud gate, this is the
         // debug-only belt so a bad OUT_DIR cannot silently enter consensus paths.
         debug_assert!(
             p.validate().is_ok(),
-            "config/economics_params.json escalation fields are malformed"
+            "config/economics_params.json escalation or emission schedule is malformed"
         );
         p
     }
 }
 
+/// The shipped [`EconomicParams`], resolved once.
+///
+/// Production reads this. A simulation that varies a field builds its own
+/// `EconomicParams` and passes it; it does not replace this set.
+/// The tail subsidy is checked here: a set whose tail does not fit in
+/// `u64` cannot price a block, and the failure is this init rather than
+/// a later rule.
+pub fn economic_params() -> &'static EconomicParams {
+    static PARAMS: OnceLock<EconomicParams> = OnceLock::new();
+    PARAMS.get_or_init(|| {
+        let params = EconomicParams::default();
+        assert!(
+            crate::emission::tail_subsidy_per_block(&params).is_ok(),
+            "config/economics_params.json: final_subsidy_per_minute × (daa_target_seconds / 60) \
+             does not fit u64 — the tail subsidy cannot be priced"
+        );
+        params
+    })
+}
+
 impl EconomicParams {
     /// Reject a parameter set whose escalation numbers violate the **frozen
-    /// shape** (§6.1). Delegates entirely to
-    /// [`EscalationParams::try_new`](crate::escalation::EscalationParams::try_new)
-    /// — one predicate body, no restated rules.
+    /// shape** (§6.1), or whose emission schedule is not a schedule.
     ///
-    /// Does **not** opine on which asymptote is correct (§11.4 ceremony).
+    /// Escalation delegates to
+    /// [`EscalationParams::try_new`](crate::escalation::EscalationParams::try_new).
+    /// The schedule delegates to
+    /// [`EmissionSchedule::try_new`](crate::emission_share::EmissionSchedule::try_new).
+    /// One predicate body each, no restated rules.
+    ///
+    /// Does **not** opine on which asymptote is correct (§11.4 ceremony),
+    /// and does **not** require [`Self::blocks_per_year`] to equal
+    /// [`blocks_per_year`] of [`Self::daa_target_seconds`]. The shipped set
+    /// has that equality. A fold's year is the field.
     pub fn validate(&self) -> Result<(), EconomicParamsError> {
+        self.try_emission_schedule()?;
         self.try_escalation().map(|_| ())
+    }
+
+    /// The emission schedule these fields are.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the fields are not a schedule. Prefer
+    /// [`Self::try_emission_schedule`] at an untrusted boundary. The serde
+    /// door and [`Self::default`] are known-good.
+    #[must_use]
+    pub fn emission_schedule(&self) -> crate::emission_share::EmissionSchedule {
+        self.try_emission_schedule().expect(
+            "EconomicParams emission schedule is malformed; call try_emission_schedule / validate",
+        )
+    }
+
+    /// [`Self::emission_schedule`] as a [`Result`].
+    pub fn try_emission_schedule(
+        &self,
+    ) -> Result<crate::emission_share::EmissionSchedule, EconomicParamsError> {
+        Ok(crate::emission_share::EmissionSchedule::try_new(
+            self.staker_emission_share,
+            self.staker_emission_decay,
+            self.blocks_per_year,
+        )?)
     }
 
     /// Validated escalation shape for this parameter set.
@@ -402,13 +491,21 @@ mod tests {
 mod escalation_param_tests {
     use super::*;
 
+    /// `daa_target_seconds` in this document is 10. The year is
+    /// `blocks_per_year(10)`, not a second key.
     fn valid_json(asymptote: u64, floor: u64) -> String {
+        params_json(asymptote, floor, 150_000, 900_000, blocks_per_year(10))
+    }
+
+    fn params_json(asymptote: u64, floor: u64, share: u64, decay: u64, year: u64) -> String {
         format!(
             r#"{{"release_min":1,"release_max":2,"tx_volume_baseline":3,
                 "burn_base_rate":4,"burn_cap":5,"staker_pool_share":{floor},
                 "emission_curve_asymptote":7,"emission_speed_factor_per_block":8,
                 "final_subsidy_per_minute":9,"daa_target_seconds":10,"full_reward_zone":300000,
-                "escalation_knee_n":100000,"escalation_asymptote_share":{asymptote}}}"#
+                "escalation_knee_n":100000,"escalation_asymptote_share":{asymptote},
+                "staker_emission_share":{share},"staker_emission_decay":{decay},
+                "blocks_per_year":{year}}}"#
         )
     }
 
@@ -436,6 +533,42 @@ mod escalation_param_tests {
     }
 
     #[test]
+    fn deserialization_refuses_a_schedule_the_kernel_does_not_define() {
+        let share = serde_json::from_str::<EconomicParams>(&params_json(
+            250_000,
+            250_000,
+            SCALE + 1,
+            900_000,
+            blocks_per_year(10),
+        ))
+        .expect_err("a share above SCALE is not a schedule");
+        assert!(
+            share.to_string().contains("above SCALE"),
+            "error must name the share: {share}"
+        );
+        let decay = serde_json::from_str::<EconomicParams>(&params_json(
+            250_000,
+            250_000,
+            150_000,
+            SCALE + 1,
+            1,
+        ))
+        .expect_err("a decay above SCALE is not a schedule");
+        assert!(
+            decay.to_string().contains("above SCALE"),
+            "error must name the decay: {decay}"
+        );
+        let year = serde_json::from_str::<EconomicParams>(&params_json(
+            250_000, 250_000, 150_000, 900_000, 0,
+        ))
+        .expect_err("a year of no blocks is not a schedule");
+        assert!(
+            year.to_string().contains("no year"),
+            "error must name the year: {year}"
+        );
+    }
+
+    #[test]
     fn the_neutral_genesis_parameterization_is_accepted_and_flat() {
         use crate::escalation::{staker_pool_share_at, ClosedShardCount};
 
@@ -459,6 +592,16 @@ mod escalation_param_tests {
         // escalation() is infallible for the shipped set.
         let esc = EconomicParams::default().escalation();
         assert_eq!(esc.floor_share().to_raw(), GENERATED_STAKER_POOL_SHARE);
+        let shipped = EconomicParams::default();
+        assert_eq!(shipped.blocks_per_year, 262_800);
+        assert_eq!(
+            shipped.blocks_per_year,
+            blocks_per_year(shipped.daa_target_seconds)
+        );
+        assert_eq!(BLOCKS_PER_YEAR, shipped.blocks_per_year);
+        assert_eq!(shipped.staker_emission_share, STAKER_EMISSION_SHARE);
+        assert_eq!(shipped.staker_emission_decay, STAKER_EMISSION_DECAY);
+        assert_eq!(economic_params(), &shipped);
     }
 
     #[test]

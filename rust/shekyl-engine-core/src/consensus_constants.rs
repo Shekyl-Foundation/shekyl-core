@@ -10,14 +10,9 @@ include!(concat!(
     "/consensus_constants_generated.rs"
 ));
 
-// Sentinel against silent loss-of-meaning if the JSON authority is bumped
-// without revisiting the gate-4 calibration workbook
-// (`docs/design/FOUNDATION_GENESIS_IDENTITY_SET.md` §9.3).
-const _: () = assert!(
-    ARCHIVAL_BOND_FLOOR_ATOMIC == 750_000_000,
-    "ARCHIVAL_BOND_FLOOR_ATOMIC diverged from gate-4 pin (750_000_000 = 0.75 SKL); \
-     update §9.3 calibration and genesis sentinels before changing the JSON authority"
-);
+/// The bond floor. Generated once, in `shekyl-archival-retention`. This
+/// crate used to emit a second copy of the same JSON key.
+pub use shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC;
 
 #[cfg(test)]
 mod tests {

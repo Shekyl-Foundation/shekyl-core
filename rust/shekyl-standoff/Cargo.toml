@@ -26,6 +26,9 @@ conformance = ["dep:shekyl-stats"]
 # asserted). Adds no dependencies: the seam is inert by type (layer 1).
 gf7-hooks = []
 
+[build-dependencies]
+serde_json = { workspace = true }
+
 [dependencies]
 shekyl-stats = { path = "../shekyl-stats", optional = true }
 

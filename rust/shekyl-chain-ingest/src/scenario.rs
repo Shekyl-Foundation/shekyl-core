@@ -202,7 +202,7 @@ where
                     ml_kem_ek: recipient.ml_kem_ek.clone(),
                 }
             },
-            params: EconomicParams::default(),
+            params: shekyl_economics::economic_params().clone(),
             rules,
             next_tx_secret: 1,
             targets: TargetLedger::new(),

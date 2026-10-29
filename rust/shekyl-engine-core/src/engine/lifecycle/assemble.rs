@@ -322,7 +322,7 @@ impl Engine<SoloSigner> {
         // ticks; the wallet surface and daemon are lent per tick.
         let submit_driver =
             tokio::sync::Mutex::new(crate::engine::submit_lifecycle::SubmitLifecycleDriver::new(
-                shekyl_economics::EconomicParams::default().daa_target_seconds,
+                shekyl_economics::economic_params().daa_target_seconds,
             ));
 
         Ok(Self {

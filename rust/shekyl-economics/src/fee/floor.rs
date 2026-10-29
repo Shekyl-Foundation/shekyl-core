@@ -27,7 +27,6 @@ use super::ladder::{checked_corrected_fee_ladder, FeeLadder};
 use super::relay::checked_relay_fee_floor;
 use crate::burn::calc_burn_pct_at;
 use crate::emission::base_block_reward;
-use crate::emission_share::emission_share_at;
 use crate::params::EconomicParams;
 use crate::release::calc_release_multiplier;
 use crate::supply::CirculatingSupply;
@@ -46,7 +45,8 @@ pub const RELAY_FLOOR_REFERENCE_TX_WEIGHT: u64 = 3_000;
 /// that block are a function of.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FeeOperands {
-    /// The block's height — `σ`'s operand (`emission_share_at`).
+    /// The block's height. `σ` is this height on the caller's emission
+    /// schedule.
     pub height: u64,
     /// The parent's gross emission (`block_info.coins_generated` at
     /// `height − 1`; zero at genesis) — `R`'s operand.
@@ -79,9 +79,11 @@ pub struct CorrectionFactors {
 
 /// The one composition of the correction factors.
 ///
-/// [`fee_correction`] recomputes `M_r` from this same volume and these
-/// same release rails, so the reported multiplier and `correction` cannot
-/// be two formulas.
+/// `emission_share` is `params`'s schedule at `height`
+/// ([`crate::EmissionSchedule::share_at`]). The shipped schedule is
+/// [`crate::emission_share_at`]. [`fee_correction`] recomputes `M_r`
+/// from this same volume and these same release rails, so the reported
+/// multiplier and `correction` cannot be two formulas.
 #[must_use]
 pub fn correction_factors_at(
     height: u64,
@@ -89,7 +91,7 @@ pub fn correction_factors_at(
     tx_volume: TxVolume,
     params: &EconomicParams,
 ) -> CorrectionFactors {
-    let emission_share = emission_share_at(height);
+    let emission_share = params.emission_schedule().share_at(height);
     let burn_pct = calc_burn_pct_at(tx_volume, supply, params);
     let release_multiplier = calc_release_multiplier(
         tx_volume,
@@ -303,7 +305,11 @@ mod tests {
         // The factors are that composition, not a second one: `C` at a
         // zero burn is `fee_correction` of the same three owners.
         let factors = correction_factors_at(height, gross.supply, volume, &p);
-        assert_eq!(factors.emission_share, emission_share_at(height));
+        assert_eq!(
+            factors.emission_share,
+            p.emission_schedule().share_at(height)
+        );
+        assert_eq!(factors.emission_share, crate::emission_share_at(height));
         assert_eq!(factors.burn_pct, calc_burn_pct_at(volume, gross.supply, &p));
         assert_eq!(
             factors.release_multiplier,
@@ -323,10 +329,38 @@ mod tests {
             c_gross,
             fee_correction(
                 volume,
-                emission_share_at(height),
+                p.emission_schedule().share_at(height),
                 calc_burn_pct_at(volume, gross.supply, &p).min(SCALE),
                 &p
             )
         );
+    }
+
+    /// σ is the set's schedule. A zero share is a larger `(1−σ)`, so `C`
+    /// rises against the shipped share at the same height.
+    #[test]
+    fn a_replaced_schedule_is_the_share_the_factors_price() {
+        let height = crate::EMISSION_SPLIT_EPOCH;
+        let supply = CirculatingSupply::derive(
+            AtomicUnits::from_raw(1_000_000_000),
+            AtomicUnits::from_raw(0),
+        )
+        .expect("burned ≤ generated");
+        let volume = TxVolume::per_block(50);
+        let shipped = EconomicParams::default();
+        let quiet = EconomicParams {
+            staker_emission_share: 0,
+            ..shipped
+        };
+        let shipped_factors = correction_factors_at(height, supply, volume, &shipped);
+        let replaced = correction_factors_at(height, supply, volume, &quiet);
+        assert_eq!(replaced.emission_share, 0);
+        assert!(shipped_factors.emission_share > 0);
+        assert!(replaced.correction > shipped_factors.correction);
+        assert_eq!(
+            replaced.release_multiplier,
+            shipped_factors.release_multiplier
+        );
+        assert_eq!(replaced.burn_pct, shipped_factors.burn_pct);
     }
 }

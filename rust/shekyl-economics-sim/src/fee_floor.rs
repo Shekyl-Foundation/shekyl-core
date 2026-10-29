@@ -57,7 +57,7 @@ use core::fmt::Write as _;
 use serde::Serialize;
 use shekyl_economics::params::TX_VOLUME_WINDOW;
 use shekyl_economics::{
-    base_block_reward, EconomicParams, TxVolume, BLOCKS_PER_YEAR, RELAY_FLOOR_LOOKBACK,
+    base_block_reward, EconomicParams, RelayPolicy, TxVolume, BLOCKS_PER_YEAR,
     RELAY_FLOOR_REFERENCE_TX_WEIGHT,
 };
 
@@ -70,12 +70,16 @@ use crate::volume_window::VolumeWindow;
 
 const VOLUME_WINDOW: u64 = TX_VOLUME_WINDOW;
 
-/// FL-R23's lookback depth as re-derived at review A-1: the hot-session gap
+/// The shipped lookback ([`RelayPolicy::SHIPPED`]): the hot-session gap
 /// (0–2 blocks) + the network height spread at relay (2) + one block of
 /// slack. The identity the predicate delivers is per receiving node — a
 /// quote at `h` is admitted by identity at every node whose tip is in
-/// `[h, h+G]`.
-pub const LOOKBACK_G: usize = RELAY_FLOOR_LOOKBACK;
+/// `[h, h+G]`. [`LOOKBACK_SWEEP`] is the analysis grid of `G`.
+///
+// CLIPPY: cast_possible_truncation — u64-to-usize loses bits only on a
+// target narrower than 64 bits. The shipped depth is 5.
+#[allow(clippy::cast_possible_truncation)]
+pub const LOOKBACK_G: usize = RelayPolicy::SHIPPED.lookback as usize;
 /// FL-E4's sweep: the first draft's `G` = 3, the re-derived 5, and the
 /// point between, so the grace curve — not the derivation alone — is on
 /// record.

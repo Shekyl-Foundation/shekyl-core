@@ -82,7 +82,7 @@ use super::traits::FeeEstimates;
 /// those docs must be able to follow the link to the derivation.
 #[must_use]
 pub fn absolute_fee_rate_cap() -> u64 {
-    let params = shekyl_economics::params::EconomicParams::default();
+    let params = shekyl_economics::economic_params().clone();
     let r0 = shekyl_economics::emission::base_block_reward(0, &params)
         .expect("genesis reward is defined for already_generated = 0");
     shekyl_economics::corrected_fee_ladder(
@@ -393,7 +393,7 @@ mod tests {
     /// and this pins its value so a parameter change moves it loudly.
     #[test]
     fn absolute_cap_is_the_structural_bound() {
-        let p = shekyl_economics::params::EconomicParams::default();
+        let p = shekyl_economics::economic_params().clone();
         assert_eq!(
             structural_max_correction(&p),
             13 * shekyl_economics::params::SCALE,
@@ -429,7 +429,7 @@ mod tests {
     #[test]
     fn absolute_cap_bounds_the_swept_reachable_maximum() {
         use shekyl_economics::params::SCALE;
-        let p = shekyl_economics::params::EconomicParams::default();
+        let p = shekyl_economics::economic_params().clone();
         let zm = p.full_reward_zone;
         let cap = absolute_fee_rate_cap();
 
