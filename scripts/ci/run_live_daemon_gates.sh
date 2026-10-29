@@ -19,8 +19,9 @@
 # (21 lines, 17 attributes) and would silently disagree with the runner.
 #
 # The accounting is the load-bearing ratchet: every ignored test is on
-# exactly one of the three lists below (ARMED, ARMED_SLOW, DECIDED_DARK),
-# so the undecided set is empty by construction.
+# exactly one of the lists below (ARMED, ARMED_UNIX, ARMED_SLOW,
+# DECIDED_DARK), so the undecided set is empty by construction. ARMED_UNIX
+# names exist only on Unix (`#[cfg(unix)]`); Windows identity omits them.
 #
 # The work splits, and the split is deliberate. The per-name existence checks
 # catch a gate RENAMED OR DELETED -- naming it, and saying the gate is now
@@ -31,8 +32,11 @@
 # biting it: deleting an armed gate reports the name, not a count mismatch.
 #
 # Two lanes share this script (GATE_LANE, default "pr"):
-#   pr    — ARMED, per-PR in build.yml (each gate <= ~3.5 min, measured
-#           2026-09-08 local Release; sum ~20 min).
+#   pr    — ARMED (+ ARMED_UNIX on Unix), per-PR in build.yml after each
+#           OS's shekyld (Ubuntu 24.04, macOS brew, Windows MSVC). Each
+#           OS has its own libraries and linker; a Linux-only live run
+#           would not see them. Each gate <= ~3.5 min, measured 2026-09-08
+#           local Release; sum ~20 min.
 #   slow  — ARMED_SLOW, the nightly live-daemon workflow (depth-3 spend
 #           780 s measured 2026-09-08 local Release, and the two slice-7
 #           gates — too heavy per-PR, still consensus gates). The emission
@@ -53,11 +57,28 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
-export SHEKYLD_BIN="${SHEKYLD_BIN:-$REPO_ROOT/build/bin/shekyld}"
-test -x "$SHEKYLD_BIN" || {
+# Default is the Ubuntu cmake layout. macOS `make` and Windows MSVC put
+# the binary elsewhere; those jobs set SHEKYLD_BIN. A `.exe` suffix is
+# accepted when the default path is missing.
+if [ -z "${SHEKYLD_BIN:-}" ]; then
+  if [ -e "$REPO_ROOT/build/bin/shekyld" ]; then
+    SHEKYLD_BIN="$REPO_ROOT/build/bin/shekyld"
+  elif [ -e "$REPO_ROOT/build/bin/Release/shekyld.exe" ]; then
+    SHEKYLD_BIN="$REPO_ROOT/build/bin/Release/shekyld.exe"
+  else
+    SHEKYLD_BIN="$REPO_ROOT/build/bin/shekyld"
+  fi
+fi
+export SHEKYLD_BIN
+if [ ! -e "$SHEKYLD_BIN" ]; then
   echo "FATAL: no shekyld at $SHEKYLD_BIN" >&2
   exit 1
-}
+fi
+
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) IS_WINDOWS=1 ;;
+  *) IS_WINDOWS=0 ;;
+esac
 
 cd rust
 
@@ -162,7 +183,6 @@ ARMED=(
   engine::regtest_e2e::e2e_fcmp_spend_accepted_by_daemon
   engine::regtest_e2e::e2e_fcmp_spend_reorg_restores_pool_and_fee
   engine::regtest_e2e::regtest_daemon_spawns_and_mines_to_wallet_address
-  engine::regtest_e2e::a_stops_last_line_reaches_the_log_file
   engine::regtest_e2e::e2e_refresh_scans_coinbase_balance
   engine::regtest_e2e::e2e_trim_curve_tree_restores_grow_root
   engine::regtest_e2e::e2e_arm3_phantom_slot_collected_at_open
@@ -173,7 +193,13 @@ ARMED=(
   engine::regtest_e2e::the_armed_switch_on_testnet_serves_two_levers_and_the_setter_refuses_inject
 )
 
-# Consensus gates too heavy for the per-PR lane (depth-3 spend, 13 min
+# Unix-only (`#[cfg(unix)]`). Windows `--list` does not include these, so
+# they sit off the Windows identity and off the Windows PR lane.
+ARMED_UNIX=(
+  engine::regtest_e2e::a_stops_last_line_reaches_the_log_file
+)
+
+# Consensus gates too heavy for the per-PR lane (depth-3 spend, 13 min)
 # measured 2026-09-08; the two slice-7 gates ~5 min each in a debug build,
 # fifty spends apiece). The emission claim (19 min) left with the kind-5
 # walks. The nightly live-daemon workflow runs these with GATE_LANE=slow.
@@ -236,7 +262,12 @@ DECIDED_DARK=(
   engine::regtest_e2e::e2e_emission_claim_accepted_and_applied
 )
 
-for a in "${ARMED[@]}" "${ARMED_SLOW[@]}" "${DECIDED_DARK[@]}"; do
+IDENTITY=("${ARMED[@]}" "${ARMED_SLOW[@]}" "${DECIDED_DARK[@]}")
+if [ "$IS_WINDOWS" -eq 0 ]; then
+  IDENTITY+=("${ARMED_UNIX[@]}")
+fi
+
+for a in "${IDENTITY[@]}"; do
   grep -qx "$a: test" "$ignored" || {
     echo "FATAL: listed gate '$a' names no ignored test — it was renamed or deleted, and its disposition is now dangling" >&2
     exit 1
@@ -254,9 +285,9 @@ done
 # its gate twice, and on this step that is minutes of CI spent re-proving one
 # result; a name on two run lanes is run twice across lanes the same way.
 # The name is the thing to delete, so the message says so.
-repeated=$(printf '%s\n' "${ARMED[@]}" "${ARMED_SLOW[@]}" "${DECIDED_DARK[@]}" | sort | uniq -d)
+repeated=$(printf '%s\n' "${IDENTITY[@]}" | sort | uniq -d)
 [ -z "$repeated" ] || {
-  echo "FATAL: repeated across ARMED/ARMED_SLOW/DECIDED_DARK: $(printf '%s' "$repeated" | tr '\n' ' ')" >&2
+  echo "FATAL: repeated across ARMED/ARMED_UNIX/ARMED_SLOW/DECIDED_DARK: $(printf '%s' "$repeated" | tr '\n' ' ')" >&2
   echo "A repeat inflates the accounting by one and lets an undecided gate balance against it; delete the duplicate line." >&2
   exit 1
 }
@@ -273,16 +304,21 @@ repeated=$(printf '%s\n' "${ARMED[@]}" "${ARMED_SLOW[@]}" "${DECIDED_DARK[@]}" |
 # It sums list LENGTHS, which equals the number of distinct names only
 # because the repeat check above rejects duplicates. That check is
 # load-bearing for this arithmetic, not housekeeping.
-accounted=$(( ${#ARMED[@]} + ${#ARMED_SLOW[@]} + ${#DECIDED_DARK[@]} ))
+accounted=${#IDENTITY[@]}
 if [ "$regtest_ignored" -ne "$accounted" ]; then
-  echo "FATAL: $regtest_ignored ignored regtest_e2e tests, but ${#ARMED[@]} armed + ${#ARMED_SLOW[@]} slow + ${#DECIDED_DARK[@]} dark = $accounted." >&2
-  echo "A new #[ignore]d test must be armed (observe it red first), added to ARMED_SLOW, or decided dark with its reason recorded here." >&2
+  echo "FATAL: $regtest_ignored ignored regtest_e2e tests, but identity length $accounted (ARMED=${#ARMED[@]} UNIX=${#ARMED_UNIX[@]} slow=${#ARMED_SLOW[@]} dark=${#DECIDED_DARK[@]}, windows=$IS_WINDOWS)." >&2
+  echo "A new #[ignore]d test must be armed (observe it red first), added to ARMED_UNIX, ARMED_SLOW, or decided dark with its reason recorded here." >&2
   exit 1
 fi
 
 GATE_LANE="${GATE_LANE:-pr}"
 case "$GATE_LANE" in
-  pr) LANE_GATES=("${ARMED[@]}") ;;
+  pr)
+    LANE_GATES=("${ARMED[@]}")
+    if [ "$IS_WINDOWS" -eq 0 ]; then
+      LANE_GATES+=("${ARMED_UNIX[@]}")
+    fi
+    ;;
   slow) LANE_GATES=("${ARMED_SLOW[@]}") ;;
   *)
     echo "FATAL: unknown GATE_LANE '$GATE_LANE' (expected 'pr' or 'slow')" >&2
@@ -318,8 +354,7 @@ done
 #     limit derives its inbound ceiling and refuses the peer past it.
 #     Observed red 2026-10-15 by filling one short of the ceiling: the
 #     extra peer was admitted and the test panicked at "must be refused".
-#     Unix only (PWD-B1: Windows has no per-process descriptor limit); this
-#     script runs on Linux.
+#     Unix only (PWD-B1: Windows has no per-process descriptor limit).
 #   socks_credentials — the SOCKS username and password ride the dial
 #     (DAEMON_CONFIG_CUTOVER.md DC-Q7; Rick, 2026-10-17): a daemon behind a
 #     SOCKS5 proxy that takes only RFC 1929 presents the configured pair on
@@ -333,6 +368,10 @@ ARMED_LEVIN=(
   socks_credentials:a_refused_pair_names_its_rows_and_the_daemon_keeps_running
   socks_credentials:the_operator_tor_dial_presents_its_pair
 )
+
+if [ "$IS_WINDOWS" -ne 0 ]; then
+  exit 0
+fi
 
 for entry in "${ARMED_LEVIN[@]}"; do
   binary="${entry%%:*}"
