@@ -39,7 +39,7 @@ class Daemon(object):
         self.port = port
         self.rpc = JSONRPC('{protocol}://{host}:{port}'.format(protocol=protocol, host=host, port=port if port else base+idx))
 
-    def getblocktemplate(self, address, prev_block = "", client = ""):
+    def getblocktemplate(self):
         getblocktemplate = {
             'method': 'getblocktemplate',
             'params': {},
@@ -186,7 +186,7 @@ class Daemon(object):
         return self.rpc.send_json_rpc_request(get_info)
     getinfo = get_info
 
-    def generateblocks(self, address, blocks=1, prev_block = "", starting_nonce = 0):
+    def generateblocks(self, blocks=1):
         generateblocks = {
             'method': 'generateblocks',
             'params': {
@@ -212,7 +212,7 @@ class Daemon(object):
         }
         return self.rpc.send_request("/pop_blocks", pop_blocks)
 
-    def start_mining(self, miner_address, threads_count = 0):
+    def start_mining(self, threads_count = 0):
         start_mining = {
             'threads' : threads_count,
         }
