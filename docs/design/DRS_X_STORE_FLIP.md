@@ -165,7 +165,7 @@ Raised by the landing review of PR 3b (design review, 2026-10-24) and ruled as i
 
 ### DX-Q4 — The miner loop is Rust
 
-- The local miner becomes a Rust loop over `shekyl-pow-randomx`, the pure-Rust light-cache hasher that already serves production PoW, for verification **and** for the built-in miner: `miner.cpp` hashes each nonce through its `get_block_hash` callback → `get_block_longhash` → `hash_pow_randomx` → `shekyl_pow_randomx_v2_hash` (`src/crypto/pow_randomx.cpp`; `src/cryptonote_core/cryptonote_tx_utils.cpp:242`, `:264`, at `c92bbdc87d3e9a1b099d08865b9e14c03866ff77`; the flip deleted both files with the C++ chain).
+- The local miner becomes a Rust loop over `shekyl-pow-randomx`, the pure-Rust light-cache hasher that already serves production PoW, for verification **and** for the built-in miner: `miner.cpp` hashes each nonce through its `get_block_hash` callback → `get_block_longhash` → `hash_pow_randomx` → `shekyl_pow_randomx_v2_hash` (the C++ `pow_randomx.cpp` and `cryptonote_tx_utils.cpp` that called it were deleted with the C++ chain in DRS-X; the export stays for the parity gate).
 - `randomx-v2-sys` does not change. The C reference library is not configured into `shekyld`: it is built only for the differential harness and the miner KATs (`CMakeLists.txt:517–525`).
 - A fast miner is an external miner's job, over `get_block_template` / `submit_block`. The built-in miner is a testnet convenience.
 - `miner.cpp` (1,107 lines) deletes.
