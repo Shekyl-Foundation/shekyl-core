@@ -126,12 +126,12 @@ pub extern "C" fn shekyl_compute_burn_split_escalated(
     burn_pct: u64,
     frozen_segment_count: u64,
 ) -> ShekylBurnSplit {
-    use shekyl_economics::{compute_burn_split_at, ClosedShardCount, EconomicParams};
+    use shekyl_economics::{compute_burn_split_at, ClosedShardCount};
     burn_split_to_c(compute_burn_split_at(
         total_fees,
         burn_pct,
         ClosedShardCount::new(frozen_segment_count),
-        &EconomicParams::default(),
+        shekyl_economics::economic_params(),
     ))
 }
 
@@ -172,7 +172,7 @@ pub unsafe extern "C" fn shekyl_compute_fee_burn(
     frozen_segment_count: u64,
     out: *mut ShekylBurnSplit,
 ) -> i32 {
-    use shekyl_economics::{compute_fee_burn, ClosedShardCount, EconomicParams, TxVolume};
+    use shekyl_economics::{compute_fee_burn, ClosedShardCount, TxVolume};
     if out.is_null() {
         return SHEKYL_ECONOMICS_NULL_OUT;
     }
@@ -184,7 +184,7 @@ pub unsafe extern "C" fn shekyl_compute_fee_burn(
         TxVolume::window(tx_count_sum, window_blocks),
         supply,
         ClosedShardCount::new(frozen_segment_count),
-        &EconomicParams::default(),
+        shekyl_economics::economic_params(),
     );
     // SAFETY: non-null per the check above; the caller guarantees writability.
     unsafe { out.write(burn_split_to_c(split)) };
@@ -208,7 +208,7 @@ pub unsafe extern "C" fn shekyl_calc_burn_pct_at(
     total_burned: u64,
     out_pct: *mut u64,
 ) -> i32 {
-    use shekyl_economics::{calc_burn_pct_at, EconomicParams, TxVolume};
+    use shekyl_economics::{calc_burn_pct_at, TxVolume};
     if out_pct.is_null() {
         return SHEKYL_ECONOMICS_NULL_OUT;
     }
@@ -218,7 +218,7 @@ pub unsafe extern "C" fn shekyl_calc_burn_pct_at(
     let pct = calc_burn_pct_at(
         TxVolume::window(tx_count_sum, window_blocks),
         supply,
-        &EconomicParams::default(),
+        shekyl_economics::economic_params(),
     );
     // SAFETY: non-null per the check above.
     unsafe { out_pct.write(pct) };
@@ -260,10 +260,10 @@ pub extern "C" fn shekyl_compute_emission_split(
 /// [`shekyl_compute_burn_split_escalated`].
 #[no_mangle]
 pub extern "C" fn shekyl_staker_pool_share_at(frozen_segment_count: u64) -> u64 {
-    use shekyl_economics::{staker_pool_share_at, ClosedShardCount, EconomicParams};
+    use shekyl_economics::{staker_pool_share_at, ClosedShardCount};
     staker_pool_share_at(
         ClosedShardCount::new(frozen_segment_count),
-        &EconomicParams::default().escalation(),
+        &shekyl_economics::economic_params().escalation(),
     )
     .to_raw()
 }
@@ -277,7 +277,7 @@ pub extern "C" fn shekyl_staker_pool_share_at(frozen_segment_count: u64) -> u64 
 /// applies after the release multiplier (see `shekyl_block_reward`).
 #[no_mangle]
 pub extern "C" fn shekyl_base_block_reward(already_generated_coins: u64) -> u64 {
-    let params = shekyl_economics::params::EconomicParams::default();
+    let params = shekyl_economics::economic_params().clone();
     // The only residual error is a tail-subsidy overflow that canonical
     // params never trigger; fall back to 0 deterministically.
     shekyl_economics::base_block_reward(already_generated_coins, &params).unwrap_or(0)
@@ -363,7 +363,7 @@ pub unsafe extern "C" fn shekyl_block_reward(
     if out_reward.is_null() || out_weight_limit.is_null() {
         return SHEKYL_BLOCK_REWARD_INVALID;
     }
-    let params = shekyl_economics::params::EconomicParams::default();
+    let params = shekyl_economics::economic_params().clone();
 
     // Written on every path, including rejection: the caller logs the limit it
     // was rejected against, and it must come from the same clamp that made the
@@ -403,7 +403,7 @@ pub extern "C" fn shekyl_fee_correction(
     sigma_scaled: u64,
     burn_pct_scaled: u64,
 ) -> u64 {
-    let params = shekyl_economics::params::EconomicParams::default();
+    let params = shekyl_economics::economic_params().clone();
     shekyl_economics::fee_correction(
         shekyl_economics::TxVolume::window(tx_count_sum, window_blocks),
         sigma_scaled,
@@ -445,7 +445,7 @@ pub unsafe extern "C" fn shekyl_corrected_fee_ladder(
     if out_fees.is_null() {
         return -1;
     }
-    let params = shekyl_economics::EconomicParams::default();
+    let params = shekyl_economics::economic_params().clone();
     let Some(ladder) = shekyl_economics::checked_corrected_fee_ladder(
         base_reward,
         median,
@@ -483,7 +483,7 @@ pub unsafe extern "C" fn shekyl_relay_fee_floor(
     if out_floor.is_null() {
         return -1;
     }
-    let params = shekyl_economics::EconomicParams::default();
+    let params = shekyl_economics::economic_params().clone();
     let Some(floor) = shekyl_economics::checked_relay_fee_floor(
         base_reward,
         median,

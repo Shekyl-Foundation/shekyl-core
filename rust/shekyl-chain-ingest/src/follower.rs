@@ -36,7 +36,6 @@ use shekyl_chain_rules::{
 };
 use shekyl_chain_store::store::{SnapshotView, StoreError};
 use shekyl_chain_sync::SyncState;
-use shekyl_economics::EconomicParams;
 use shekyl_mempool::{stateless, PoolFault};
 use shekyl_miner::{FoundInbox, Generation, JobBoard};
 use shekyl_types::TxHash;
@@ -670,7 +669,7 @@ where
         .clone();
     let produced = tokio::task::spawn_blocking(move || {
         let snap = reader.store().begin_read().map_err(Unposted::Store)?;
-        let params = EconomicParams::default();
+        let params = shekyl_economics::economic_params().clone();
         // The hook is `Send`; the producer calls it on this thread. A
         // concrete closure is what coerces to the producer's trait object.
         #[cfg(test)]

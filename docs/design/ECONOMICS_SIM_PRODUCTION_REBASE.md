@@ -2197,6 +2197,49 @@ does not exist. The validator's parameter `OnceLock` is
   has one source. The zone and `TX_WEIGHT_LIMIT` stay the pair their
   equality test names.
 
+### 5.26.1 What the sweep did (2026-10-28)
+
+Graded against §5.26. The default `--stage2` run is the two ignored
+narration tests, release, both arms.
+
+- **E16-1 held.** Both narration fixtures match the bytes at `716bd8ab7`.
+- **E16-2 held on the values, and the pin moved once.** No existing field
+  changed: the economics differential still matches its fixture, and the
+  narrations did not move. Two digests were re-cut in this change. The
+  consensus digest moved because `shekyl_blocks_per_year` was removed
+  (`17742dd72e533964a841784aae639d387dc01bee03ec6c54880012a52d337620`);
+  the year length is the derivation, so the key was a second identity.
+  The `EconomicParams` digest moved because three fields were appended
+  (format `0x05`); the C4 fixture is
+  `blake2b:90fc7496797f94b1e917f570d24663ee180e64ac5dc59793b902d0ba225a1f60`.
+- **E16-3 held.** `economic_params()` and `relay_policy()` are the
+  production reads. `scripts/ci/check_economic_accessors.py` fails a
+  production `EconomicParams::default()` and a second
+  `OnceLock<EconomicParams>`. The economics sim, the staking sim and
+  tests build their own sets.
+- **E16-4 held.** `blocks_per_year(120)` is 262 800, and the shipped
+  field equals it (`shipped_defaults_are_well_formed`).
+  `settlement_epoch_blocks` is generated from
+  `config/consensus_constants.json`; the hand literal is gone. The zone
+  and `TX_WEIGHT_LIMIT` were already that pair and were not retouched.
+
+The stage-2 fold prices the staker share from the run's
+`EconomicParams`. `RelayPolicy` carries the lookback, the slack, the
+fee decimals and the claim hold, outside the digest. The median and
+volume folds take the window length as a const generic
+(`medians_over_window`, `tx_volume_span_of`, `VolumeFold`); production
+instantiates the generated lengths.
+
+`SCALE` and the surge factor stay generated constants. `SCALE` is the
+unit the other fields are written in. The surge factor is the median
+formula's multiplier. `w_ref` (3 000) stays `RELAY_FLOOR_REFERENCE_TX_WEIGHT`;
+ESR-10's re-derived arm still threads it.
+
+The bond floor is generated once, in `shekyl-archival-retention`.
+`shekyl-engine-core` no longer emits a second copy; its 750 000 000
+pin is the test `archival_bond_floor_matches_gate4_calibration`. The
+cover rung is generated from the same JSON key.
+
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
 Under the cycle ruling (§0), staking is being designed now, and the

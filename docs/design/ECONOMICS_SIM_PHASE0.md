@@ -701,6 +701,10 @@ steps below and listed at the end.
      copy goes.
    - *Predictions owed:* every default-valued sweep cell equals the default
      report byte for byte; the sweep's own falsifier per parameter.
+   - The run is graded in
+     [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md)
+     §5.26.1. Both default `--stage2` narrations match the fixture.
+     `w_ref` is still the reference-weight constant; ESR-10 threads it.
 3. **ESR-10**, the multi-class pool (`ESR10_PREDICTIONS.md` §0.1) first, then
    both constant arms. #1152 delivered the one-zone reader (C2-R2 R3), so the
    re-derived arm needs only `w_ref` as a parameter, which step 2 provides.

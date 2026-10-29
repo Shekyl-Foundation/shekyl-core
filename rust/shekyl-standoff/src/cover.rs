@@ -31,14 +31,7 @@
 
 use crate::draw::{bounded_uniform, GapRng};
 
-/// One bond rung in atomic units — the base `bond_floor`, and the cover draw's
-/// **exclusive upper bound**.
-///
-/// Mirrors `shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC`. Kept local
-/// because this crate deliberately has no retention dependency (it is the
-/// leaf-most draw crate); the equality is asserted by `shekyl-engine-core`,
-/// which depends on both, so the mirror cannot drift silently.
-pub const COVER_RUNG_ATOMIC: u64 = 750_000_000;
+include!(concat!(env!("OUT_DIR"), "/cover_rung_generated.rs"));
 
 /// Draw the funding-seam cover, strictly `0 < cover < bond_floor` — uniform
 /// over `[1, COVER_RUNG_ATOMIC)`.

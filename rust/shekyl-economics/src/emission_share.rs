@@ -18,7 +18,7 @@
 //! [`emission_share_at`] closes that over the shipped constants.
 //! [`compute_emission_split`] applies the shipped share to one block.
 
-use crate::params::{BLOCKS_PER_YEAR, SCALE, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE};
+use crate::params::SCALE;
 
 /// The miner and staker legs of one block's emission (CEN-F16).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,15 +105,15 @@ pub fn emission_share(
 }
 
 /// The shipped staker emission share at `height`: [`emission_share`] of
-/// [`STAKER_EMISSION_SHARE`], [`STAKER_EMISSION_DECAY`] and
-/// [`BLOCKS_PER_YEAR`].
+/// the shipped share, decay and year length.
 #[must_use]
 pub fn emission_share_at(height: u64) -> u64 {
+    let params = crate::params::economic_params();
     emission_share(
         height,
-        STAKER_EMISSION_SHARE,
-        STAKER_EMISSION_DECAY,
-        BLOCKS_PER_YEAR,
+        params.staker_emission_share,
+        params.staker_emission_decay,
+        params.blocks_per_year,
     )
 }
 
@@ -149,6 +149,7 @@ pub fn split_block_emission(block_emission: u64, effective_share: u64) -> (u64, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::params::{STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE};
 
     /// Zero emission is the split at zero: both legs are zero.
     #[test]

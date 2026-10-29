@@ -18,7 +18,7 @@
 
 use shekyl_chain_rules::EffectiveMedian;
 use shekyl_economics::{
-    burn::calc_burn_pct_at, emission_share_at, price_emission, CirculatingSupply, ClosedShardCount,
+    burn::calc_burn_pct_at, emission_share, price_emission, CirculatingSupply, ClosedShardCount,
     EconomicParams, EmissionInputs, PaidEmission, TxVolume,
 };
 
@@ -103,7 +103,12 @@ impl ChainCursor {
         let volume = self.window.operand();
         let medians = self.space.medians(economic);
         let supply = net_supply(step.already_generated, step.total_burned);
-        let share = emission_share_at(step.chain_height);
+        let share = emission_share(
+            step.chain_height,
+            economic.staker_emission_share,
+            economic.staker_emission_decay,
+            economic.blocks_per_year,
+        );
         let burn_pct = calc_burn_pct_at(volume, supply, economic);
         let generated = u64::try_from(step.already_generated.min(u128::from(u64::MAX)))
             .expect("clamped to the chain's u64 supply rail");

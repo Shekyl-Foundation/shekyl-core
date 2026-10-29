@@ -1,8 +1,19 @@
 //! Economic system parameters — mirrors constants from cryptonote_config.h.
 
+use std::sync::OnceLock;
+
 use serde::{Deserialize, Serialize};
 
 include!(concat!(env!("OUT_DIR"), "/params_generated.rs"));
+
+/// Blocks in a 365-day year at `daa_target_seconds`.
+///
+/// One derivation: `365 × 86_400 / daa_target_seconds`. The shipped target
+/// of 120 s divides the year exactly (262 800). A zero target cannot
+/// divide, and the const evaluation of [`BLOCKS_PER_YEAR`] refuses it.
+pub const fn blocks_per_year(daa_target_seconds: u64) -> u64 {
+    (365 * 86_400) / daa_target_seconds
+}
 
 pub const SCALE: u64 = GENERATED_SCALE;
 
@@ -86,7 +97,7 @@ const _: () = {
     );
     const TAIL_PER_BLOCK: u64 =
         GENERATED_FINAL_SUBSIDY_PER_MINUTE * (GENERATED_DAA_TARGET_SECONDS / 60);
-    const TAIL_PER_YEAR: u64 = TAIL_PER_BLOCK * GENERATED_BLOCKS_PER_YEAR;
+    const TAIL_PER_YEAR: u64 = TAIL_PER_BLOCK * blocks_per_year(GENERATED_DAA_TARGET_SECONDS);
     const HEADROOM: u64 = u64::MAX - GENERATED_EMISSION_CURVE_ASYMPTOTE;
     // ≈ 89,750 years at canonical parameters; 10,000 is the loud floor.
     assert!(
@@ -109,10 +120,10 @@ pub const STAKER_EMISSION_SHARE: u64 = GENERATED_STAKER_EMISSION_SHARE;
 /// rulebook constant (PR 7 §5.3 R2).
 pub const STAKER_EMISSION_DECAY: u64 = GENERATED_STAKER_EMISSION_DECAY;
 
-/// Blocks per year at the configured DAA target
-/// (`shekyl_blocks_per_year`). Used with [`STAKER_EMISSION_DECAY`] to
-/// project the effective staker emission share at a height.
-pub const BLOCKS_PER_YEAR: u64 = GENERATED_BLOCKS_PER_YEAR;
+/// Blocks per year at the shipped DAA target. The const-context spelling
+/// of [`blocks_per_year`]; [`EconomicParams::blocks_per_year`] carries the
+/// same derivation on the parameter set a fold can replace.
+pub const BLOCKS_PER_YEAR: u64 = blocks_per_year(GENERATED_DAA_TARGET_SECONDS);
 
 /// Calibration generation index for the resolved economic parameter set
 /// (**CALIBRATION-PENDING**).
@@ -178,6 +189,9 @@ struct EconomicParamsWire {
     escalation_knee_n: u64,
     escalation_asymptote_share: u64,
     full_reward_zone: u64,
+    staker_emission_share: u64,
+    staker_emission_decay: u64,
+    blocks_per_year: u64,
 }
 
 impl TryFrom<EconomicParamsWire> for EconomicParams {
@@ -198,13 +212,16 @@ impl TryFrom<EconomicParamsWire> for EconomicParams {
             escalation_knee_n: w.escalation_knee_n,
             escalation_asymptote_share: w.escalation_asymptote_share,
             full_reward_zone: w.full_reward_zone,
+            staker_emission_share: w.staker_emission_share,
+            staker_emission_decay: w.staker_emission_decay,
+            blocks_per_year: w.blocks_per_year,
         };
         p.validate()?;
         Ok(p)
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "EconomicParamsWire")]
 pub struct EconomicParams {
     pub release_min: u64,
@@ -239,10 +256,20 @@ pub struct EconomicParams {
     ///
     /// Authority: `config/consensus_constants.json`
     /// `block_weight_full_reward_zone_bytes`, also read by the C++ header
-    /// generator and by `shekyl-wire`'s `MIN_BLOCK_WEIGHT`. Declared last so
-    /// the params digest appends it (since format `0x03`); the preimage order is
-    /// this declaration order.
+    /// generator and by `shekyl-wire`'s `MIN_BLOCK_WEIGHT`. Appended at
+    /// format `0x03`. The preimage order is this declaration order.
     pub full_reward_zone: u64,
+    /// Base staker emission share before height decay, in [`SCALE`] units.
+    /// [`crate::emission_share_at`] reads [`economic_params`]; a fold that
+    /// prices another schedule reads this field.
+    pub staker_emission_share: u64,
+    /// Per-year decay of [`Self::staker_emission_share`], in [`SCALE`] units
+    /// (`900_000` = 0.90 of the previous year).
+    pub staker_emission_decay: u64,
+    /// Blocks in one year of the emission schedule:
+    /// [`blocks_per_year`] of [`Self::daa_target_seconds`]. A fold may set
+    /// another length; production's is [`BLOCKS_PER_YEAR`].
+    pub blocks_per_year: u64,
 }
 
 impl Default for EconomicParams {
@@ -261,6 +288,9 @@ impl Default for EconomicParams {
             escalation_knee_n: GENERATED_ESCALATION_KNEE_N,
             escalation_asymptote_share: GENERATED_ESCALATION_ASYMPTOTE_SHARE,
             full_reward_zone: FULL_REWARD_ZONE,
+            staker_emission_share: STAKER_EMISSION_SHARE,
+            staker_emission_decay: STAKER_EMISSION_DECAY,
+            blocks_per_year: blocks_per_year(GENERATED_DAA_TARGET_SECONDS),
         };
         // Build-generated constants must satisfy the frozen shape; the unit test
         // `shipped_defaults_are_well_formed` is the loud gate, this is the
@@ -271,6 +301,26 @@ impl Default for EconomicParams {
         );
         p
     }
+}
+
+/// The shipped [`EconomicParams`], resolved once.
+///
+/// Production reads this. A simulation that varies a field builds its own
+/// `EconomicParams` and passes it; it does not replace this set.
+/// The tail subsidy is checked here: a set whose tail does not fit in
+/// `u64` cannot price a block, and the failure is this init rather than
+/// a later rule.
+pub fn economic_params() -> &'static EconomicParams {
+    static PARAMS: OnceLock<EconomicParams> = OnceLock::new();
+    PARAMS.get_or_init(|| {
+        let params = EconomicParams::default();
+        assert!(
+            crate::emission::tail_subsidy_per_block(&params).is_ok(),
+            "config/economics_params.json: final_subsidy_per_minute × (daa_target_seconds / 60) \
+             does not fit u64 — the tail subsidy cannot be priced"
+        );
+        params
+    })
 }
 
 impl EconomicParams {
@@ -459,6 +509,16 @@ mod escalation_param_tests {
         // escalation() is infallible for the shipped set.
         let esc = EconomicParams::default().escalation();
         assert_eq!(esc.floor_share().to_raw(), GENERATED_STAKER_POOL_SHARE);
+        let shipped = EconomicParams::default();
+        assert_eq!(shipped.blocks_per_year, 262_800);
+        assert_eq!(
+            shipped.blocks_per_year,
+            blocks_per_year(shipped.daa_target_seconds)
+        );
+        assert_eq!(BLOCKS_PER_YEAR, shipped.blocks_per_year);
+        assert_eq!(shipped.staker_emission_share, STAKER_EMISSION_SHARE);
+        assert_eq!(shipped.staker_emission_decay, STAKER_EMISSION_DECAY);
+        assert_eq!(economic_params(), &shipped);
     }
 
     #[test]
