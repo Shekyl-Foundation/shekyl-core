@@ -106,8 +106,7 @@ namespace cryptonote
    /**
     * The store's durability, as core::init opens it: DRS-D9's `safe`, an
     * explicit choice and not a default (the DRS lane, IG-Q4; Rick,
-    * 2026-10-26). Parsed as a default it would let Blockchain::safesyncmode
-    * turn MDB_NOSYNC on for the length of a sync. Named here so the test pins
+    * 2026-10-26). The shipped mode is `safe`. Named here so the test pins
     * what ships, not a copy of it.
     */
    constexpr const char *SHIPPED_DB_SYNC_MODE = "safe";
@@ -186,9 +185,8 @@ namespace cryptonote
       * Attempts to add the block to the Blockchain and, on success,
       * optionally updates the miner's block template.
       *
-      * Unlike handle_incoming_block(), a write transaction is created in this method, which means
-      * the caller doesn't have to call prepare_handle_incoming_blocks() nor
-      * cleanup_handle_incoming_blocks() surrounding this call.
+      * Unlike handle_incoming_block(), this call does not take the incoming
+      * transaction lock around the add.
       *
       * @param block_blob the block to be added
       * @param block the block to be added, or NULL
@@ -212,12 +210,6 @@ namespace cryptonote
       * Attempts to add the block to the Blockchain and, on success,
       * optionally updates the miner's block template.
       *
-      * Prerequisite: There must be an active write transaction for the blockchain storage on this
-      *               thread. Typically, this is done by calling prepare_handle_incoming_blocks() on
-      *               this thread before calls to handle_incoming_block(). Then, after calls to
-      *               handle_incoming_block(), a call to cleanup_handle_incoming_blocks() is made
-      *               on this thread to either abort or commit the write transaction.
-      *
       * @param block_blob the block to be added
       * @param block the block to be added, or NULL
       * @param bvc return-by-reference metadata context about the block's validity
@@ -235,20 +227,6 @@ namespace cryptonote
        block_verification_context& bvc, block_connect_supplement& connect,
        bool update_miner_blocktemplate = true);
 
-     /**
-      * @copydoc Blockchain::prepare_handle_incoming_blocks
-      *
-      * @note see Blockchain::prepare_handle_incoming_blocks
-      */
-     bool prepare_handle_incoming_blocks(const std::vector<block_complete_entry> &blocks_entry, std::vector<block> &blocks, uint8_t *drop_verdict = nullptr);
-
-     /**
-      * @copydoc Blockchain::cleanup_handle_incoming_blocks
-      *
-      * @note see Blockchain::cleanup_handle_incoming_blocks
-      */
-     bool cleanup_handle_incoming_blocks(bool force_sync = false);
-     	     	
      /**
       * @brief check the size of a block against the current maximum
       *
@@ -558,20 +536,6 @@ namespace cryptonote
      difficulty_type get_block_cumulative_difficulty(uint64_t height) const;
 
      /**
-      * @copydoc miner::pause
-      *
-      * @note see miner::pause
-      */
-     void pause_mine();
-
-     /**
-      * @copydoc miner::resume
-      *
-      * @note see miner::resume
-      */
-     void resume_mine();
-
-     /**
       * @copydoc pool::print_pool
       *
       * @note see pool::print_pool
@@ -591,13 +555,6 @@ namespace cryptonote
       * @note see miner::on_synchronized
       */
      void on_synchronized();
-
-     /**
-      * @copydoc Blockchain::safesyncmode
-      *
-      * 2note see Blockchain::safesyncmode
-      */
-     void safesyncmode(const bool onoff);
 
      /**
       * @brief sets the target blockchain height

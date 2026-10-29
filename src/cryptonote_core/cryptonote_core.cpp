@@ -755,14 +755,6 @@ namespace cryptonote
     return false;
   }
   //-----------------------------------------------------------------------------------------------
-  void core::pause_mine()
-{
-  }
-  //-----------------------------------------------------------------------------------------------
-  void core::resume_mine()
-  {
-  }
-  //-----------------------------------------------------------------------------------------------
   bool core::handle_block_found(block& b, block_verification_context &bvc)
 {
     return false;
@@ -777,34 +769,11 @@ namespace cryptonote
   {
   }
   //-----------------------------------------------------------------------------------------------
-  void core::safesyncmode(const bool onoff)
-  {
-    (void)onoff;
-  }
-  //-----------------------------------------------------------------------------------------------
   bool core::add_new_block(const block& b, block_verification_context& bvc,
     block_connect_supplement& connect)
 {
     return false;
   }
-  //-----------------------------------------------------------------------------------------------
-  bool core::prepare_handle_incoming_blocks(const std::vector<block_complete_entry> &blocks_entry, std::vector<block> &blocks, uint8_t *drop_verdict)
-  {
-    (void)blocks_entry;
-    (void)blocks;
-    (void)drop_verdict;
-    m_incoming_tx_lock.lock();
-    return true;
-  }
-
-  //-----------------------------------------------------------------------------------------------
-  bool core::cleanup_handle_incoming_blocks(bool force_sync)
-  {
-    (void)force_sync;
-    m_incoming_tx_lock.unlock();
-    return true;
-  }
-
   //-----------------------------------------------------------------------------------------------
   bool core::handle_incoming_block(const blobdata& block_blob, const block *b,
     block_verification_context& bvc, bool update_miner_blocktemplate)
