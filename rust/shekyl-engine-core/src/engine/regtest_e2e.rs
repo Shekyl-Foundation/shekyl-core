@@ -168,6 +168,12 @@ pub(super) struct RegtestDaemon {
     /// Whether this daemon was started offline (both connectors off). Its
     /// `get_info` must then report that state, not a count of zero.
     offline: bool,
+    /// Whether this daemon posts a template at open: a regtest daemon with
+    /// no peers reads `Synced` at open and posts once its follower has
+    /// looped (`shekyl-node` `sync_at_open`). Readiness then includes that
+    /// post: a `generateblocks` sent before it is honestly refused
+    /// `mine.not_synced` by a daemon whose RPC is already up.
+    posts_at_open: bool,
     /// Held for the daemon's lifetime to serialize e2e tests; released on drop.
     /// `None` on the sink of a [`origin::StemSinkPair`], whose origin holds
     /// the one guard for both.
@@ -559,6 +565,7 @@ impl RegtestDaemon {
             restricted_url: restricted_port.map(|p| format!("http://127.0.0.1:{p}")),
             schedule,
             offline,
+            posts_at_open: offline && matches!(network, SpawnNetwork::Regtest),
             _serial: serial,
             recipe,
         };
@@ -567,6 +574,29 @@ impl RegtestDaemon {
     }
 
     /// Poll `get_info` until the daemon answers (or time out).
+    /// A regtest daemon with no peers posts a template once its follower
+    /// has read `Synced`; until then `generateblocks` is refused
+    /// `mine.not_synced` (`no_view`), which is the daemon's honest answer
+    /// and not a test's finding. Ready is the first posted job.
+    async fn await_posted(&self, deadline: Instant, log_path: &std::path::Path) {
+        let mut last = String::new();
+        while Instant::now() < deadline {
+            match self
+                .rpc
+                .json_rpc_call::<GetMinerDataResponse>("get_miner_data", None)
+                .await
+            {
+                Ok(_) => return,
+                Err(e) => last = format!("{e:?}"),
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        panic!(
+            "the daemon posted no template within the readiness window; last answer: {last}; log tail:\n{}",
+            log_tail(log_path)
+        );
+    }
+
     async fn await_ready(&mut self) {
         let deadline = Instant::now() + Duration::from_secs(60);
         let mut last_err = String::new();
@@ -607,6 +637,9 @@ impl RegtestDaemon {
                         "the daemon did not announce `{ARMED_ROW_ANNOUNCEMENT}` at start; log tail:\n{}",
                         log_tail(&log_path)
                     );
+                    if self.posts_at_open {
+                        self.await_posted(deadline, &log_path).await;
+                    }
                     return;
                 }
                 Err(e) => last_err = format!("{e:?}"),
