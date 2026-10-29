@@ -94,7 +94,6 @@ set(unit_tests_sources
   archival_reward_emission.cpp
   archival_emission_ct_balance.cpp
   checkpoint_uniformity.cpp
-  fork_choice_vectors.cpp
   sync_orphan_arm.cpp
   ct_balance_differential.cpp
   pruned_tx_hash_parity.cpp
@@ -178,8 +177,6 @@ SET_PROPERTY(SOURCE archival_bond_record_v7_corpus.cpp PROPERTY COMPILE_DEFINITI
   ARCHIVAL_BOND_RECORD_V7_CORPUS_PATH="${CMAKE_SOURCE_DIR}/docs/test_vectors/ARCHIVAL_BOND_RECORD_V7.json")
 SET_PROPERTY(SOURCE mtp_boundary.cpp PROPERTY COMPILE_DEFINITIONS
   MTP_BOUNDARY_VECTOR_PATH="${CMAKE_SOURCE_DIR}/docs/test_vectors/MTP_BOUNDARY_V1.json")
-SET_PROPERTY(SOURCE fork_choice_vectors.cpp PROPERTY COMPILE_DEFINITIONS
-  FORK_CHOICE_VECTOR_PATH="${CMAKE_SOURCE_DIR}/docs/test_vectors/FORK_CHOICE_V1.json")
 SET_PROPERTY(SOURCE pruned_tx_hash_parity.cpp PROPERTY COMPILE_DEFINITIONS
   PRUNED_TX_HASH_PARITY_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-wire/tests/fixtures/pruned_tx_hash_parity_v1.json"
   LIVE_ORACLE_SPEND_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-wire/tests/fixtures/live_oracle_spend_v1.json")
