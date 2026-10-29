@@ -88,14 +88,107 @@ _CFG_TEST_MOD = re.compile(
 )
 
 
+def _split_top(body: str) -> list[str]:
+    """Split `body` on commas that are not inside parentheses or quotes."""
+    parts: list[str] = []
+    buf: list[str] = []
+    depth = 0
+    quote = False
+    for ch in body:
+        if quote:
+            buf.append(ch)
+            if ch == '"':
+                quote = False
+            continue
+        if ch == '"':
+            quote = True
+            buf.append(ch)
+            continue
+        if ch == "(":
+            depth += 1
+            buf.append(ch)
+            continue
+        if ch == ")":
+            depth = max(0, depth - 1)
+            buf.append(ch)
+            continue
+        if ch == "," and depth == 0:
+            parts.append("".join(buf).strip())
+            buf = []
+            continue
+        buf.append(ch)
+    tail = "".join(buf).strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
+
+def _cfg_bodies(attr: str) -> list[str]:
+    """The interiors of every `cfg(...)` in an attribute list."""
+    bodies: list[str] = []
+    index = 0
+    while True:
+        found = attr.find("cfg(", index)
+        if found < 0:
+            return bodies
+        start = found + 4
+        depth = 1
+        quote = False
+        cursor = start
+        while cursor < len(attr) and depth:
+            ch = attr[cursor]
+            if quote:
+                if ch == '"':
+                    quote = False
+            elif ch == '"':
+                quote = True
+            elif ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+            cursor += 1
+        bodies.append(attr[start : cursor - 1].strip())
+        index = cursor
+
+
+def _false_without_test(expr: str) -> bool:
+    """True when `expr` is false in every build where `test` is false.
+
+    Other atoms stay unknown. `all` is false when any argument is. `any`
+    is false only when every argument is. `not` inverts the always-true
+    case. An atom is that predicate only when it is `test` itself.
+    """
+    expr = expr.strip()
+    if expr.startswith("all(") and expr.endswith(")"):
+        return any(_false_without_test(part) for part in _split_top(expr[4:-1]))
+    if expr.startswith("any(") and expr.endswith(")"):
+        return all(_false_without_test(part) for part in _split_top(expr[4:-1]))
+    if expr.startswith("not(") and expr.endswith(")"):
+        return _true_without_test(expr[4:-1])
+    return expr == "test"
+
+
+def _true_without_test(expr: str) -> bool:
+    """True when `expr` is true in every build where `test` is false."""
+    expr = expr.strip()
+    if expr.startswith("all(") and expr.endswith(")"):
+        parts = _split_top(expr[4:-1])
+        return all(_true_without_test(part) for part in parts)
+    if expr.startswith("any(") and expr.endswith(")"):
+        return any(_true_without_test(part) for part in _split_top(expr[4:-1]))
+    if expr.startswith("not(") and expr.endswith(")"):
+        return _false_without_test(expr[4:-1])
+    return False
+
+
 def _cfg_requires_test(attr: str) -> bool:
-    """True when the attribute list cannot hold in a non-test build."""
-    compact = attr.replace(" ", "")
-    return (
-        "#[cfg(test)]" in compact
-        or "cfg(all(test" in compact
-        or "cfg(any(test" in compact
-    )
+    """True when the attribute list cannot hold in a non-test build.
+
+    Attributes combine by conjunction, so one `cfg` that requires `test`
+    is enough. `cfg(any(test, feature = "…"))` can hold with the feature
+    alone, and stays in the scan.
+    """
+    return any(_false_without_test(body) for body in _cfg_bodies(attr))
 
 
 def cfg_test_module_files() -> set[str]:
@@ -218,9 +311,40 @@ def selftest() -> int:
             print(f"selftest: {rel} classified incorrectly", file=sys.stderr)
             return 1
     sample_mod = "/// note\n#[cfg(test)]\nmod regtest_e2e;\n#[cfg(not(test))]\nmod live;\n"
-    found = {match.group("name") for match in _CFG_TEST_MOD.finditer(sample_mod) if _cfg_requires_test(match.group("attr"))}
+    found = {
+        match.group("name")
+        for match in _CFG_TEST_MOD.finditer(sample_mod)
+        if _cfg_requires_test(match.group("attr"))
+    }
     if found != {"regtest_e2e"}:
         print(f"selftest: cfg(test) modules were {found}", file=sys.stderr)
+        return 1
+    cfg_cases = {
+        "#[cfg(test)]": True,
+        "#[cfg(not(test))]": False,
+        "#[cfg(all(test, unix))]": True,
+        "#[cfg(all(unix, test))]": True,
+        "#[cfg(all(test, feature = \"pipeline\"))]": True,
+        '#[cfg(any(test, feature = "production"))]': False,
+        "#[cfg(any(test, test))]": True,
+        "#[cfg(not(not(test)))]": True,
+        '#[cfg(all(any(test, feature = "x"), test))]': True,
+    }
+    for attr, want in cfg_cases.items():
+        if _cfg_requires_test(attr) != want:
+            print(f"selftest: {attr} classified incorrectly", file=sys.stderr)
+            return 1
+    open_mod = (
+        '#[cfg(any(test, feature = "production"))]\nmod open;\n'
+        '#[cfg(all(test, feature = "pipeline"))]\nmod closed;\n'
+    )
+    open_found = {
+        match.group("name")
+        for match in _CFG_TEST_MOD.finditer(open_mod)
+        if _cfg_requires_test(match.group("attr"))
+    }
+    if open_found != {"closed"}:
+        print(f"selftest: feature-or-test modules were {open_found}", file=sys.stderr)
         return 1
     print("economic-accessor selftest passed")
     return 0

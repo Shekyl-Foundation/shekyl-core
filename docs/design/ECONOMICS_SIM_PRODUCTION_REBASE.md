@@ -2219,8 +2219,10 @@ narration tests, release, both arms.
   requires `relay_policy()` in a production file other than
   `relay_policy.rs`. A path component `tests` or ending `_tests`, and
   a file named `tests.rs`, `*_tests.rs`, `*_test.rs` or
-  `test_support.rs`, and a module declared under `cfg(test)`, is not
-  production. The economics sim, the staking
+  `test_support.rs`, and a module declared under a cfg that requires
+  `test` (`cfg(test)`, `cfg(all(…, test))`, including `not(not(test))`),
+  is not production. `cfg(any(test, feature = "…"))` still compiles
+  when the feature is on, so that file stays in the scan. The economics sim, the staking
   sim and the bench build their own sets.
 - **E16-4 held.** `blocks_per_year(120)` is 262 800, and the shipped
   field equals it (`shipped_defaults_are_well_formed`).
@@ -2230,8 +2232,11 @@ narration tests, release, both arms.
 
 The stage-2 fold prices the staker share from the run's
 `EconomicParams`. `SimParams::economic` writes the share, the decay
-and the year onto that set, and `price_emission` splits the paid
-reward on the set it is given. `RelayPolicy` is the admission
+and the year onto that set. `price_emission`, `correction_factors_at`
+and `project_at_tip` read that set's schedule: the paid reward, the
+fee correction's `σ` and the tip's reported share. The shipped
+callers pass `economic_params()`, whose schedule is
+`emission_share_at`. `RelayPolicy` is the admission
 lattice, the slack, the lookback and the claim hold, outside the
 digest. The shipped wrappers read `relay_policy()`. A fold passes its
 own policy to `admits`, `quantize` and `admitted_floor`. The median
