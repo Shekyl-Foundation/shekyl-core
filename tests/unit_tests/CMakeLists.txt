@@ -71,7 +71,6 @@ set(unit_tests_sources
   rolling_median.cpp
   seed_epoch.cpp
   serialization.cpp
-  slow_memmem.cpp
   sha256.cpp
   stall_detection_calibration.cpp
   stack_trace.cpp
