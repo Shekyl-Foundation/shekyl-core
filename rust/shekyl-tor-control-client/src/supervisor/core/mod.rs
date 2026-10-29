@@ -13,14 +13,15 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use super::posture::{
-    fixes, own_tx, BootstrapLine, Cause, Connectors, OriginVerdict, ProgressWindow, Shown, Space,
-    Status, Syncing,
+    fixes, own_tx, BootstrapLine, Cause, Connectors, Inbound, OriginVerdict, ProgressWindow, Shown,
+    Space, Status, Syncing,
 };
 
 mod announce;
 mod backoff;
 mod dials;
 mod network_view;
+mod probe;
 mod running;
 
 use crate::control::NetworkView;
@@ -28,6 +29,7 @@ use announce::{Announcements, Cadence};
 use backoff::Backoff;
 pub use dials::DialTally;
 use dials::Dials;
+use probe::Probe;
 
 /// How long a respawn waits, and how often a failure is said again.
 ///
@@ -59,6 +61,15 @@ pub struct Policy {
     /// (`shekyl_transport_layer::dial_profile(ConnectorId::Tor).quiet().span_nanos`),
     /// one number for this line and the dialer's quiet guard.
     pub quiet_after: Duration,
+    /// The probe's delay after a round's first upload is drawn uniformly
+    /// from this to [`Self::probe_after_max`] (§4.5, §10): long enough for
+    /// the descriptor to reach the directories, and spread so a directory
+    /// does not see an upload followed at once by a fetch of it.
+    pub probe_after_min: Duration,
+    /// The top of the probe's delay range.
+    pub probe_after_max: Duration,
+    /// How long a probe has to arrive (`TSR-M2`: 60 s).
+    pub probe_within: Duration,
 }
 
 impl Policy {
@@ -77,6 +88,13 @@ impl Policy {
             // reached Running, with at least one unopened dial and nothing
             // held. Not a count of dials.
             quiet_after,
+            // Upload p50 4.6 s (`TSR-M7`); the descriptor then has to reach
+            // the directories the probe's own fetch asks (§10).
+            probe_after_min: Duration::from_secs(15),
+            probe_after_max: Duration::from_secs(60),
+            // Nine of ten probes arrived within 26.44 s and the x86 cluster
+            // reached 46 s (`TSR-M2`, `TSR-M3`).
+            probe_within: Duration::from_secs(60),
         }
     }
 }
@@ -112,8 +130,18 @@ pub enum Action {
     /// The installed route is down because this node is stopping. The
     /// driver leaves the child up; [`Self::StopChild`] wipes it.
     StopRoute,
-    /// `ADD_ONION` with the boot's seed.
+    /// Publish the onion from the boot's seed: `DEL_ONION`, then
+    /// `ADD_ONION`, so a Tor that still holds the service takes it again.
     RepublishOnion,
+    /// Dial this node's own onion with a fresh probe nonce (§4.5). The
+    /// driver answers [`Input::ProbeDialed`], or [`Input::ProbeNotDialed`]
+    /// when it cannot. The core holds the bound.
+    Probe,
+    /// Drop the probe's dial: it missed its bound, or the phase it ran in
+    /// ended. Its nonce leaves the set with it.
+    CancelProbe,
+    /// Publish the inbound facet on the managed route's link (§4.1).
+    PublishInbound(Inbound),
     /// Say the posture. At most once per cap interval, except a recovery.
     /// The driver logs a healthy posture at info and any other at warn.
     Announce,
@@ -222,10 +250,33 @@ pub enum Input {
         /// Sockets Tor reported open.
         open: u64,
     },
-    /// An upload of our descriptor failed.
-    DescriptorFailed,
-    /// An upload of our descriptor reached a directory.
-    DescriptorUploaded,
+    /// The first upload of a descriptor round succeeded (`HS_DESC
+    /// UPLOADED`, coalesced by round): the onion is published, and the
+    /// round's one probe is scheduled. `draw` is a uniform random number
+    /// from the daemon's CSPRNG; the core maps it onto the probe's delay
+    /// range.
+    FirstUploaded {
+        /// Uniform over `u64`.
+        draw: u64,
+    },
+    /// A descriptor round ended. `failed_all`: no upload in it succeeded,
+    /// and at least one failed.
+    UploadRoundEnded {
+        /// No upload of the round reached a directory.
+        failed_all: bool,
+    },
+    /// The probe's nonce is minted, at `minted_at`, and its dial launched.
+    ProbeDialed {
+        /// The mint tick, which names the probe.
+        minted_at: u64,
+    },
+    /// The probe could not be dialed: no route, no tip, or no onion.
+    ProbeNotDialed,
+    /// A probe nonce came back through this node's onion.
+    ProbeArrived {
+        /// The mint tick of the probe that arrived.
+        minted_at: u64,
+    },
     /// The consensus does not recommend this Tor.
     DangerousVersion,
     /// `state` exists in the data directory.
@@ -346,6 +397,17 @@ pub struct Core {
     /// When the live check is next due: [`Action::Sample`] while Running,
     /// [`Action::SayProgress`] while bootstrapping. Only in those phases.
     alive_at: Option<u64>,
+    /// Whether peers can reach this node's onion (§4.1).
+    inbound: Inbound,
+    /// The inbound facet as last asked of the driver.
+    published_inbound: Inbound,
+    /// When the outbound facet last became usable, while it is. A usable
+    /// stretch of a cap restarts the backoff (§4.4).
+    outbound_since: Option<u64>,
+    /// The round's probe (§4.5).
+    probe: Probe,
+    /// The owed republish is a Service remedy: a refusal escalates.
+    service_republish: bool,
 }
 
 impl Core {
@@ -371,6 +433,11 @@ impl Core {
             pin_at: None,
             sample_at: None,
             alive_at: None,
+            inbound: Inbound::NotOffered,
+            published_inbound: Inbound::NotOffered,
+            outbound_since: None,
+            probe: Probe::Idle,
+            service_republish: false,
         };
         let step = core.step(now, vec![Action::CheckPin]);
         (core, step)
@@ -409,15 +476,19 @@ impl Core {
             Input::HostAbsent => self.host_absent(),
             Input::RouteInstalled => self.route_installed(now),
             Input::ForwardAbsent => self.forward_absent(),
-            Input::OnionPublished | Input::DescriptorUploaded => self.onion_published(),
-            Input::OnionRejected => self.onion_rejected(now),
+            Input::OnionPublished => self.onion_published(),
+            Input::FirstUploaded { draw } => self.round_uploaded(now, draw),
+            Input::UploadRoundEnded { failed_all } => self.round_ended(now, failed_all),
+            Input::ProbeDialed { minted_at } => self.probe_dialed(minted_at),
+            Input::ProbeNotDialed => self.probe_not_dialed(),
+            Input::ProbeArrived { minted_at } => self.probe_arrived(now, minted_at),
+            Input::OnionRejected => self.onion_refused(now),
             Input::EndpointReady => self.endpoint_ready(),
             Input::ExternalBlocked => self.external(now, Cause::ExternalBlocked),
             Input::DirectoryUnreachable => self.external(now, Cause::DirectoryUnreachable),
             Input::ClockSkew { seconds } => self.external(now, Cause::ClockSkew { seconds }),
             Input::ClockJumped => self.clock_jumped(),
             Input::TooManyFiles { open } => self.too_many_files(now, open),
-            Input::DescriptorFailed => self.descriptor_failed(),
             Input::DangerousVersion => {
                 self.set_cause(Cause::DangerousVersion);
                 self.say(now, Cadence::Due)
@@ -441,7 +512,8 @@ impl Core {
             self.sample_at = None;
             self.announcements.disarm();
             self.alive_at = None;
-            return self.step(now, Vec::new());
+            let dropped = self.drop_probe();
+            return self.step(now, dropped.into_iter().collect());
         }
         if self.deadline().is_none_or(|due| now < due) {
             return self.step(now, Vec::new());
@@ -495,6 +567,9 @@ impl Core {
                 _ => {}
             }
         }
+        if self.probe.due().is_some_and(|at| now >= at) {
+            actions.extend(self.on_probe_deadline(now));
+        }
         self.step(now, actions)
     }
 
@@ -514,9 +589,11 @@ impl Core {
             cause: self.cause.clone(),
             since: self.since,
             respawn_count: self.respawn_count,
+            // What the node syncs over is the outbound facet: an onion
+            // peers cannot reach still dials out (§4.1).
             sync: Syncing {
                 clearnet: self.connectors.clearnet_on,
-                tor: shown == Shown::Usable,
+                tor: self.outbound_usable(),
             },
             own_tx: own_tx(self.origin, self.connectors),
             fixes: fixes(&self.cause, self.connectors),
@@ -527,6 +604,7 @@ impl Core {
                 (Phase::Running { .. }, Cause::None) => self.dials.line(),
                 _ => None,
             },
+            inbound: self.inbound,
         }
     }
 
@@ -538,6 +616,7 @@ impl Core {
             self.sample_at,
             self.announcements.due(),
             self.alive_at,
+            self.probe.due(),
         ]
         .into_iter()
         .flatten()
@@ -653,9 +732,16 @@ impl Core {
         Vec::new()
     }
 
+    /// The onion is published: `ADD_ONION`'s reply, or a round's first
+    /// upload. An onion offered for the first time is publishing. One that
+    /// was unreachable stays so until a probe arrives.
     fn onion_published(&mut self) -> Vec<Action> {
         if let Phase::Running { onion, .. } = &mut self.phase {
             *onion = Duty::Done;
+            self.service_republish = false;
+            if self.inbound == Inbound::NotOffered {
+                self.inbound = Inbound::Publishing;
+            }
         }
         Vec::new()
     }
@@ -698,17 +784,6 @@ impl Core {
         self.say(now, Cadence::Due)
     }
 
-    fn descriptor_failed(&mut self) -> Vec<Action> {
-        let Phase::Running { onion, .. } = &mut self.phase else {
-            return Vec::new();
-        };
-        if *onion != Duty::Done {
-            return Vec::new();
-        }
-        *onion = Duty::Owed;
-        vec![Action::RepublishOnion]
-    }
-
     fn state_file(&mut self) -> Vec<Action> {
         let Phase::Running { disk, .. } = &mut self.phase else {
             return Vec::new();
@@ -734,7 +809,7 @@ impl Core {
         self.sample_at = None;
         self.announcements.disarm();
         self.alive_at = None;
-        let mut actions = Vec::new();
+        let mut actions: Vec<Action> = self.drop_probe().into_iter().collect();
         if installed {
             actions.push(Action::StopRoute);
         }
@@ -744,6 +819,7 @@ impl Core {
 
     fn process_fault(&mut self, now: u64, cause: Cause, launch_failed: bool) -> Vec<Action> {
         let installed = self.route_done();
+        let dropped = self.drop_probe();
         self.phase = Phase::Absent {
             duty: AbsentDuty::Retry,
         };
@@ -762,7 +838,7 @@ impl Core {
         self.respawn_count = self.respawn_count.saturating_add(1);
         self.set_cause(cause);
         self.pin_at = Some(now.saturating_add(wait));
-        let mut actions = Vec::new();
+        let mut actions: Vec<Action> = dropped.into_iter().collect();
         if installed {
             actions.push(Action::TakeDown);
         }
@@ -772,6 +848,7 @@ impl Core {
 
     fn hold(&mut self, now: u64, cause: Cause, duty: AbsentDuty) -> Vec<Action> {
         let installed = self.route_done();
+        let dropped = self.drop_probe();
         self.phase = Phase::Absent { duty };
         self.sample_at = None;
         self.alive_at = None;
@@ -780,7 +857,7 @@ impl Core {
             AbsentDuty::Held | AbsentDuty::Retry => Some(now.saturating_add(self.cap())),
         };
         self.set_cause(cause);
-        let mut actions = Vec::new();
+        let mut actions: Vec<Action> = dropped.into_iter().collect();
         if installed {
             actions.push(Action::TakeDown);
         }
@@ -859,7 +936,7 @@ impl Core {
     }
 
     fn say_key(&self) -> announce::SayKey {
-        announce::SayKey::new(self.shown(), &self.cause)
+        announce::SayKey::new(self.shown(), &self.cause, self.inbound)
     }
 
     /// The relay's verdict moved. The posture sentence follows whether a
@@ -914,6 +991,14 @@ impl Core {
         if self.degraded() && self.live() {
             return Shown::Degraded;
         }
+        // The inbound facet down degrades a running Tor (§4.3). Publishing
+        // does not: Usable is the outbound link, and an onion not yet proven
+        // is not one found unreachable.
+        if matches!(self.phase, Phase::Running { .. })
+            && matches!(self.inbound, Inbound::Unreachable { .. })
+        {
+            return Shown::Degraded;
+        }
         match self.phase {
             Phase::Running {
                 route: Duty::Done,
@@ -955,24 +1040,49 @@ impl Core {
         )
     }
 
-    /// Move [`Self::posted`] onto the projection. Closing a usable interval
-    /// that lasted a cap records the backoff restart.
+    /// The outbound facet is usable: Running, the route installed, no
+    /// resume pending, and no outbound cause. The inbound facet does not
+    /// enter (§4.1): an onion peers cannot reach still dials out.
+    fn outbound_usable(&self) -> bool {
+        matches!(
+            self.phase,
+            Phase::Running {
+                route: Duty::Done,
+                link: Link::Open,
+                ..
+            }
+        ) && !self.degraded()
+    }
+
+    /// Move [`Self::posted`] onto the projection. Closing an interval in
+    /// which the outbound facet was usable for a cap records the backoff
+    /// restart (§4.4): the facet, not the projection, so an unreachable
+    /// onion does not end it.
     fn settle_shown(&mut self, now: u64) {
-        let shown = self.shown();
-        if self.posted == Shown::Usable
-            && shown != Shown::Usable
-            && now.saturating_sub(self.since) >= self.cap()
-        {
-            self.backoff.note_usable_cap();
+        let outbound = self.outbound_usable();
+        match (self.outbound_since, outbound) {
+            (None, true) => self.outbound_since = Some(now),
+            (Some(since), false) => {
+                if now.saturating_sub(since) >= self.cap() {
+                    self.backoff.note_usable_cap();
+                }
+                self.outbound_since = None;
+            }
+            _ => {}
         }
+        let shown = self.shown();
         if shown != self.posted {
             self.since = now;
             self.posted = shown;
         }
     }
 
-    fn step(&mut self, now: u64, actions: Vec<Action>) -> Step {
+    fn step(&mut self, now: u64, mut actions: Vec<Action>) -> Step {
         self.settle_shown(now);
+        if self.inbound != self.published_inbound {
+            self.published_inbound = self.inbound;
+            actions.push(Action::PublishInbound(self.inbound));
+        }
         Step {
             actions,
             deadline: self.deadline(),

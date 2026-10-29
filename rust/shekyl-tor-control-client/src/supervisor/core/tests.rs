@@ -23,6 +23,9 @@ fn policy() -> Policy {
         alive_every: Duration::from_secs(4),
         fresh_directory_after: 3,
         quiet_after: Duration::from_secs(20),
+        probe_after_min: Duration::from_secs(15),
+        probe_after_max: Duration::from_secs(60),
+        probe_within: Duration::from_secs(60),
     }
 }
 
@@ -535,8 +538,11 @@ fn a_repeated_death_names_the_last_exit_code() {
 }
 
 /// A rejected onion retries on the sample, not in a loop. A descriptor
-/// that fails after a success republishes once; a second failure while
-/// that republish is still owed does not stack another.
+/// round in which every upload failed republishes once; a second such round
+/// while that republish is still owed does not stack another. One failure
+/// in a round that also succeeded is not evidence (`TSR-M7`: 1 of 13).
+/// *Changed by increment 4:* the trigger was every `HS_DESC FAILED`, which
+/// a normal round produces.
 #[test]
 fn an_onion_retries_on_the_sample_and_a_descriptor_failure_does_not_stack() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
@@ -557,7 +563,12 @@ fn an_onion_retries_on_the_sample_and_a_descriptor_failure_does_not_stack() {
         1
     );
     core.on(Input::OnionPublished, due);
-    let failed = core.on(Input::DescriptorFailed, due);
+    let one_failure = core.on(Input::UploadRoundEnded { failed_all: false }, due);
+    assert!(!one_failure
+        .actions
+        .iter()
+        .any(|action| matches!(action, Action::RepublishOnion)));
+    let failed = core.on(Input::UploadRoundEnded { failed_all: true }, due);
     assert_eq!(
         failed
             .actions
@@ -566,7 +577,7 @@ fn an_onion_retries_on_the_sample_and_a_descriptor_failure_does_not_stack() {
             .count(),
         1
     );
-    let stacked = core.on(Input::DescriptorFailed, due);
+    let stacked = core.on(Input::UploadRoundEnded { failed_all: true }, due);
     assert!(!stacked
         .actions
         .iter()
@@ -996,4 +1007,5 @@ fn an_exhausted_pin_holds_the_origin_while_health_stays_true() {
 }
 
 mod pace;
+mod probe;
 mod quiet;

@@ -23,8 +23,9 @@ mod posture;
 
 pub use crate::control::{NetworkView, Reported};
 pub use core::{Action, Core, DialTally, Input, ManagedRunning, Policy, Step};
-pub use events::input_of;
+pub use events::{input_of, round_inputs};
 pub use posture::{
     fixes, held_sentence, install_sentence, own_tx, render, BootstrapLine, BootstrapPace, Cause,
-    Connectors, ManagedTorFix, OriginVerdict, OwnTx, Shown, Space, Status, Syncing, TorSetting,
+    Connectors, Inbound, InboundCause, ManagedTorFix, OriginVerdict, OwnTx, Shown, Space, Status,
+    Syncing, TorSetting,
 };

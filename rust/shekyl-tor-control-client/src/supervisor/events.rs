@@ -8,7 +8,7 @@
 //! Anything this module does not name is `None`. The core never sees it.
 
 use crate::control::{
-    Bootstrap, ClientStatus, GeneralStatus, HsDescAction, Liveness, Recommendation, TorEvent,
+    Bootstrap, ClientStatus, GeneralStatus, Liveness, Recommendation, RoundMark, TorEvent,
 };
 
 use super::core::Input;
@@ -28,8 +28,11 @@ use super::core::Input;
 /// | `CLOCK_JUMPED` | [`Input::ClockJumped`] |
 /// | `TOO_MANY_CONNECTIONS` | [`Input::TooManyFiles`] |
 /// | `DANGEROUS_VERSION` | [`Input::DangerousVersion`] |
-/// | `HS_DESC FAILED` for an upload | [`Input::DescriptorFailed`] |
-/// | `HS_DESC UPLOADED` | [`Input::DescriptorUploaded`] |
+///
+/// `HS_DESC` is not mapped one event at a time. The driver coalesces this
+/// node's own onion's events into rounds (`UploadRounds`, `TSR-Q5`) and
+/// folds each round's marks with [`round_inputs`]: one failed upload in a
+/// normal round is not evidence (`TSR-M7` saw 1 of 13 fail).
 ///
 /// A bootstrap problem Tor has not yet marked `warn` is not outbound-blocked.
 /// Tor sends `warn` from the tenth problem at a phase (§4.2).
@@ -70,15 +73,32 @@ pub fn input_of(event: &TorEvent) -> Option<Input> {
             ClientStatus::CircuitEstablished => Some(Input::ExternalCleared),
             _ => None,
         },
-        TorEvent::HsDesc(event) => match event.action {
-            HsDescAction::Failed if event.descriptor_id.is_none() => Some(Input::DescriptorFailed),
-            HsDescAction::Uploaded => Some(Input::DescriptorUploaded),
-            _ => None,
-        },
-        TorEvent::Log(_) | TorEvent::Unsubscribed | TorEvent::NetworkLiveness(Liveness::Other) => {
-            None
-        }
+        TorEvent::HsDesc(_)
+        | TorEvent::Log(_)
+        | TorEvent::Unsubscribed
+        | TorEvent::NetworkLiveness(Liveness::Other) => None,
     }
+}
+
+/// The inputs a round's marks carry (§4.5, §4.4). A round's first
+/// successful upload is [`Input::FirstUploaded`], the probe's trigger, with
+/// one `draw()` for its delay. A round that ended with no upload succeeded
+/// and at least one failed is [`Input::UploadRoundEnded`] with `failed_all`:
+/// Service-class evidence. A round whose ends were lost (`unfinished`
+/// only) failed nothing. A round's start moves nothing.
+pub fn round_inputs(marks: &[RoundMark], mut draw: impl FnMut() -> u64) -> Vec<Input> {
+    marks
+        .iter()
+        .filter_map(|mark| match *mark {
+            RoundMark::Started => None,
+            RoundMark::FirstUploaded => Some(Input::FirstUploaded { draw: draw() }),
+            RoundMark::Ended {
+                uploaded, failed, ..
+            } => Some(Input::UploadRoundEnded {
+                failed_all: uploaded == 0 && failed > 0,
+            }),
+        })
+        .collect()
 }
 
 /// §4.2's named external cause: a bootstrap problem Tor has marked `warn`,
@@ -90,7 +110,59 @@ fn outbound_blocked(problem: &crate::control::BootstrapProblem) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::input_of;
+    use super::{input_of, round_inputs};
+    use crate::control::RoundMark;
+
+    /// A round's marks become the core's inputs: the first upload is the
+    /// probe's trigger with its draw, a round with no success and a failure
+    /// is the Service evidence, and a round whose ends were lost, or that
+    /// had one failure beside a success, is not. Mapping every `HS_DESC
+    /// FAILED` to a republish again, or treating lost ends as failures,
+    /// fails this.
+    #[test]
+    fn a_rounds_marks_are_the_probes_trigger_and_the_service_evidence() {
+        let mut draws = 0_u64..;
+        let mut draw = || draws.next().expect("endless");
+        let inputs = round_inputs(
+            &[
+                RoundMark::Started,
+                RoundMark::FirstUploaded,
+                RoundMark::Ended {
+                    uploaded: 12,
+                    failed: 1,
+                    unfinished: 3,
+                },
+            ],
+            &mut draw,
+        );
+        assert_eq!(
+            inputs,
+            [
+                Input::FirstUploaded { draw: 0 },
+                Input::UploadRoundEnded { failed_all: false }
+            ]
+        );
+        let failed = round_inputs(
+            &[RoundMark::Ended {
+                uploaded: 0,
+                failed: 16,
+                unfinished: 0,
+            }],
+            &mut draw,
+        );
+        assert_eq!(failed, [Input::UploadRoundEnded { failed_all: true }]);
+        let lost = round_inputs(
+            &[RoundMark::Ended {
+                uploaded: 0,
+                failed: 0,
+                unfinished: 16,
+            }],
+            &mut draw,
+        );
+        assert_eq!(lost, [Input::UploadRoundEnded { failed_all: false }]);
+        let second = round_inputs(&[RoundMark::FirstUploaded], &mut draw);
+        assert_eq!(second, [Input::FirstUploaded { draw: 1 }], "one draw each");
+    }
     use crate::control::{
         Bootstrap, BootstrapProblem, ClientStatus, Liveness, Recommendation, Severity, TorEvent,
     };

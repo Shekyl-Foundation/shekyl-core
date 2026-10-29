@@ -1,0 +1,223 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! The probe of this node's own onion, and the inbound facet it proves
+//! (`TOR_SUPERVISOR.md` §4.1, §4.4, §4.5).
+//!
+//! One probe per descriptor upload round (`TSR-Q5`): the round's first
+//! successful upload schedules it, after a delay drawn uniformly from the
+//! policy's range, so a hostile directory does not see "upload, then an
+//! immediate fetch of the same descriptor". The probe's nonce arriving at
+//! this node's inbound handshake is the evidence. Missing the bound, or a
+//! round in which every upload failed, is Service-class evidence: the onion
+//! is published again on the running Tor, and only a refused republish
+//! escalates to a respawn.
+//!
+//! The probe answers one question, whether this node is reachable at its
+//! own onion (`TSR-Q14`). It never sets or clears an outbound or network
+//! cause, and a probe that cannot be judged (outbound left usable while it
+//! was in flight) is dropped without a verdict.
+
+use super::super::posture::{Cause, Inbound, InboundCause};
+use super::announce::Cadence;
+use super::{duration_ns, Action, Core, Duty, Phase};
+
+/// The probe's place in its round.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Probe {
+    /// None scheduled and none in flight.
+    Idle,
+    /// A round's first upload scheduled one, due at `at`.
+    Scheduled { at: u64 },
+    /// Asked of the driver. It has until `bound_at` to arrive. `minted_at`
+    /// names it once the driver has minted its nonce.
+    InFlight {
+        bound_at: u64,
+        minted_at: Option<u64>,
+    },
+}
+
+impl Probe {
+    /// The deadline the probe holds, if any.
+    pub(super) const fn due(self) -> Option<u64> {
+        match self {
+            Self::Idle => None,
+            Self::Scheduled { at } => Some(at),
+            Self::InFlight { bound_at, .. } => Some(bound_at),
+        }
+    }
+}
+
+impl Core {
+    /// The delay before a probe, from a uniform `draw` over the policy's
+    /// range. The driver draws it from the daemon's CSPRNG.
+    fn probe_delay(&self, draw: u64) -> u64 {
+        let low = duration_ns(self.policy.probe_after_min);
+        let high = duration_ns(self.policy.probe_after_max).max(low);
+        let span = high - low;
+        if span == u64::MAX {
+            return low.saturating_add(draw);
+        }
+        // CLIPPY: `span + 1` fits in u128 and the remainder is at most span.
+        #[allow(clippy::cast_possible_truncation)]
+        let offset = (u128::from(draw) % (u128::from(span) + 1)) as u64;
+        low + offset
+    }
+
+    /// A round's first upload succeeded. It also confirms the onion is
+    /// published, as `ADD_ONION`'s reply does. One probe per round: a round
+    /// that starts while one is scheduled or in flight schedules none.
+    pub(super) fn round_uploaded(&mut self, now: u64, draw: u64) -> Vec<Action> {
+        let actions = self.onion_published();
+        if !matches!(self.phase, Phase::Running { .. }) || self.probe != Probe::Idle {
+            return actions;
+        }
+        self.probe = Probe::Scheduled {
+            at: now.saturating_add(self.probe_delay(draw)),
+        };
+        actions
+    }
+
+    /// A round ended. One in which no upload succeeded and at least one
+    /// failed is Service-class evidence: the onion is unreachable, and is
+    /// published again. A round whose ends were lost says nothing.
+    pub(super) fn round_ended(&mut self, now: u64, failed_all: bool) -> Vec<Action> {
+        if !failed_all || !self.onion_done() {
+            return Vec::new();
+        }
+        self.inbound_down(now, InboundCause::DescriptorRejected)
+    }
+
+    /// The driver minted the probe's nonce and launched the dial.
+    pub(super) fn probe_dialed(&mut self, minted: u64) -> Vec<Action> {
+        if let Probe::InFlight { minted_at, .. } = &mut self.probe {
+            if minted_at.is_none() {
+                *minted_at = Some(minted);
+            }
+        }
+        Vec::new()
+    }
+
+    /// The driver could not dial: no route, no tip, or no onion yet. No
+    /// evidence either way; the next round tries again.
+    pub(super) fn probe_not_dialed(&mut self) -> Vec<Action> {
+        if matches!(self.probe, Probe::InFlight { .. }) {
+            self.probe = Probe::Idle;
+        }
+        Vec::new()
+    }
+
+    /// A probe's nonce came back through this node's onion. Only the probe
+    /// in flight is evidence; one from before a respawn, or one given up
+    /// on, is stale and changes nothing.
+    pub(super) fn probe_arrived(&mut self, now: u64, minted: u64) -> Vec<Action> {
+        let Probe::InFlight {
+            minted_at: Some(current),
+            ..
+        } = self.probe
+        else {
+            return Vec::new();
+        };
+        if current != minted || !matches!(self.phase, Phase::Running { .. }) {
+            return Vec::new();
+        }
+        self.probe = Probe::Idle;
+        let recovered = matches!(self.inbound, Inbound::Unreachable { .. });
+        self.inbound = Inbound::Reachable { evidence_at: now };
+        if recovered {
+            self.say(now, Cadence::Now)
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// The probe's deadline fired: a scheduled probe is due, or one in
+    /// flight missed its bound.
+    pub(super) fn on_probe_deadline(&mut self, now: u64) -> Vec<Action> {
+        match self.probe {
+            Probe::Scheduled { at } if now >= at => {
+                if !self.probe_may_run() {
+                    // Suppressed: outbound is not usable, or the onion is
+                    // owed. The next round schedules the next one.
+                    self.probe = Probe::Idle;
+                    return Vec::new();
+                }
+                self.probe = Probe::InFlight {
+                    bound_at: now.saturating_add(duration_ns(self.policy.probe_within)),
+                    minted_at: None,
+                };
+                vec![Action::Probe]
+            }
+            Probe::InFlight { bound_at, .. } if now >= bound_at => {
+                self.probe = Probe::Idle;
+                let mut actions = vec![Action::CancelProbe];
+                if self.probe_may_run() {
+                    actions.extend(self.inbound_down(now, InboundCause::ProbeTimedOut));
+                }
+                actions
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Outbound is usable and the onion is published: a probe can be judged.
+    fn probe_may_run(&self) -> bool {
+        self.outbound_usable() && self.onion_done()
+    }
+
+    fn onion_done(&self) -> bool {
+        matches!(
+            self.phase,
+            Phase::Running {
+                onion: Duty::Done,
+                ..
+            }
+        )
+    }
+
+    /// Service-class evidence (§4.4): the inbound facet goes down and the
+    /// onion is published again on the running Tor. A probe still in
+    /// flight is cancelled; the republish's own round schedules the next.
+    fn inbound_down(&mut self, now: u64, cause: InboundCause) -> Vec<Action> {
+        let mut actions = Vec::new();
+        if matches!(self.probe, Probe::InFlight { .. }) {
+            actions.push(Action::CancelProbe);
+        }
+        self.probe = Probe::Idle;
+        let since = match self.inbound {
+            Inbound::Unreachable { since, .. } => since,
+            _ => now,
+        };
+        self.inbound = Inbound::Unreachable { cause, since };
+        if let Phase::Running { onion, .. } = &mut self.phase {
+            *onion = Duty::Owed;
+        }
+        self.service_republish = true;
+        actions.push(Action::RepublishOnion);
+        actions.extend(self.say(now, Cadence::Due));
+        actions
+    }
+
+    /// `ADD_ONION` was refused. A republish the probe or a failed round
+    /// asked for is Service-class: its control command failing is a
+    /// process fault (§4.4). The first publish of a Tor keeps waiting for
+    /// its endpoint, as before.
+    pub(super) fn onion_refused(&mut self, now: u64) -> Vec<Action> {
+        if self.service_republish && matches!(self.phase, Phase::Running { .. }) {
+            self.service_republish = false;
+            return self.process_fault(now, Cause::OnionRefused, false);
+        }
+        self.onion_rejected(now)
+    }
+
+    /// Drop the probe at a fault, a hold or a stop. The driver aborts the
+    /// dial; the nonce leaves the set with it.
+    pub(super) fn drop_probe(&mut self) -> Option<Action> {
+        let in_flight = matches!(self.probe, Probe::InFlight { .. });
+        self.probe = Probe::Idle;
+        self.service_republish = false;
+        in_flight.then_some(Action::CancelProbe)
+    }
+}

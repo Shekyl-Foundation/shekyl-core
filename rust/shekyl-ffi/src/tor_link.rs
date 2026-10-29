@@ -59,6 +59,16 @@ pub(crate) fn probe_arrived(minted_at: Tick) {
     PROBE.send_replace(Some(minted_at));
 }
 
+/// One uniform draw from the OS CSPRNG, for the probe's delay
+/// (`TOR_SUPERVISOR.md` §4.5). The supervisor's core maps it onto the
+/// delay range; a predictable delay is the self-probe signature the jitter
+/// exists to hide.
+#[must_use]
+pub fn probe_delay_draw() -> u64 {
+    use shekyl_draw_rng::RelayRng;
+    crate::secure_relay_rng::SecureRelayRng.next_u64()
+}
+
 static TALLY: LazyLock<watch::Sender<TorLinkTally>> =
     LazyLock::new(|| watch::channel(TorLinkTally::default()).0);
 
