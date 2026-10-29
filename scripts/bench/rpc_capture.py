@@ -9,6 +9,7 @@
 # is not sent is named in the omitted list with a reason.
 
 import argparse
+import base64
 import json
 import os
 import urllib.error
@@ -36,6 +37,26 @@ OMITTED = (
     ("relay_tx", "write lever"),
     ("inject_archival_serve_credit", "write lever, and armed"),
     ("/set_log_hash_rate", "write lever"),
+    ("calc_pow", "computes a proof-of-work hash for a supplied blob; not a fact of the stored chain"),
+    ("get_block_template", "needs a wallet address; a template is not a fact of the stored chain"),
+    ("banned", "needs a peer address; the fixture has no ban to ask about"),
+    ("request_archival_shard", "asks the node to fetch a shard"),
+    ("/get_blocks_by_height.bin", "request body is portable_storage, not JSON"),
+    ("/getblocks_by_height.bin", "alias of /get_blocks_by_height.bin; binary, not JSON"),
+    ("/get_o_indexes.bin", "request body is portable_storage, not JSON"),
+    ("/json_rpc", "the endpoint the JSON methods are posted to, not a method"),
+    ("getblockcount", "alias of get_block_count"),
+    ("on_getblockhash", "alias of on_get_block_hash"),
+    ("getblockheaderbyheight", "alias of get_block_header_by_height"),
+    ("getblock", "alias of get_block"),
+    ("getlastblockheader", "alias of get_last_block_header"),
+    ("getblockheaderbyhash", "alias of get_block_header_by_hash"),
+    ("getblockheadersrange", "alias of get_block_headers_range"),
+    ("submitblock", "alias of submit_block"),
+    ("getblocktemplate", "alias of get_block_template"),
+    ("/getheight", "alias of /get_height"),
+    ("/gettransactions", "alias of /get_transactions"),
+    ("/getinfo", "alias of /get_info"),
 )
 
 
@@ -49,8 +70,11 @@ def volatile_fields():
         "get_info.adjusted_time",
         "get_info.start_time",
         "get_info.rpc_connections_count",
+        "get_info.free_space",
         "/get_info.adjusted_time",
         "/get_info.start_time",
+        "/get_info.rpc_connections_count",
+        "/get_info.free_space",
     )
 
 
@@ -74,10 +98,10 @@ def chain_requests(tip_height, tip_hash, genesis_hash, tx_hash=None):
         ("get_block", {"height": 0}),
         ("get_block", {"height": tip_block}),
         ("get_block", {"height": past}),
-        ("get_block_header_by_hash", {"hash": genesis_hash}),
-        ("get_block_header_by_hash", {"hash": tip_hash}),
-        ("get_block_header_by_hash", {"hash": unknown}),
-        ("on_get_block_hash", {"height": tip_block}),
+        ("get_block_header_by_hash", {"hashes": [genesis_hash]}),
+        ("get_block_header_by_hash", {"hashes": [tip_hash]}),
+        ("get_block_header_by_hash", {"hashes": [unknown]}),
+        ("on_get_block_hash", [tip_block]),
         ("get_block_headers_range", {"start_height": 0, "end_height": min(2, tip_block)}),
         ("get_fee_estimate", {}),
         ("get_info", {}),
@@ -85,17 +109,31 @@ def chain_requests(tip_height, tip_hash, genesis_hash, tx_hash=None):
         ("get_coinbase_tx_sum", {"height": 0, "count": 1}),
         ("get_alternate_chains", {}),
         ("get_curve_tree_info", {}),
+        ("get_curve_tree_checkpoint", {"block_height": 0}),
+        ("get_curve_tree_checkpoint", {"block_height": tip_block}),
         ("get_txpool_backlog", {}),
+        ("get_archival_shard_coverage", {}),
+        ("get_archival_emission_claim_source", {"p_id": "00" * 32}),
+        ("option_show", {}),
+        ("get_miner_data", {}),
+        ("get_bans", {}),
+    ]
+    rest = [
+        ("/get_height", {}),
+        ("/get_alt_blocks_hashes", {}),
+        ("/get_transaction_pool", {}),
+        ("/get_transaction_pool_hashes", {}),
+        ("/get_transaction_pool_stats", {}),
+        ("/get_info", {}),
+        ("/mining_status", {}),
+        ("/get_stem_tallies", {}),
+        ("/is_key_image_spent", {"key_images": ["00" * 32]}),
     ]
     if tx_hash:
-        reqs.append(("get_transactions", {"txs_hashes": [tx_hash], "decode_as_json": False}))
-    else:
-        reqs.append(("get_transactions", None))  # omitted at plan time: no tx in hand
-    out = []
-    for method, params in reqs:
-        if params is None:
-            continue
-        out.append({"kind": "json", "method": method, "params": params})
+        rest.append(("/get_transactions", {
+            "txs_hashes": [tx_hash], "decode_as_json": False}))
+    out = [{"kind": "json", "method": method, "params": params} for method, params in reqs]
+    out.extend({"kind": "rest", "method": method, "params": params} for method, params in rest)
     return out
 
 
@@ -108,7 +146,10 @@ def _post(url, body, timeout):
             raw = resp.read()
     except urllib.error.HTTPError as err:
         raw = err.read()
-    return json.loads(raw.decode())
+    try:
+        return json.loads(raw.decode())
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return {"unparsed": True, "raw_base64": base64.b64encode(raw).decode("ascii")}
 
 
 def capture(base_url, requests, out_dir, timeout=60):
@@ -128,7 +169,10 @@ def capture(base_url, requests, out_dir, timeout=60):
             body = params
         else:
             raise ValueError(f"request {i} kind {kind!r} is not json or rest")
-        response = _post(url, body, timeout)
+        try:
+            response = _post(url, body, timeout)
+        except (urllib.error.URLError, TimeoutError, OSError) as err:
+            response = {"capture_error": str(err)}
         record = {"method": method, "params": params, "response": response}
         name = f"{i:03d}-{method.strip('/').replace('/', '_')}.json"
         path = os.path.join(out_dir, name)
@@ -136,8 +180,14 @@ def capture(base_url, requests, out_dir, timeout=60):
             json.dump(record, fh, indent=2)
             fh.write("\n")
         n += 1
+    omitted = [{"method": m, "reason": r} for m, r in OMITTED]
+    if not any(item["method"] == "/get_transactions" for item in requests):
+        omitted.append({
+            "method": "/get_transactions",
+            "reason": "this fixture's capture was given no transaction id",
+        })
     with open(os.path.join(out_dir, "omitted.json"), "w", encoding="utf-8") as fh:
-        json.dump([{"method": m, "reason": r} for m, r in OMITTED], fh, indent=2)
+        json.dump(omitted, fh, indent=2)
         fh.write("\n")
     with open(os.path.join(out_dir, "volatile_fields.json"), "w", encoding="utf-8") as fh:
         json.dump(list(volatile_fields()), fh, indent=2)
