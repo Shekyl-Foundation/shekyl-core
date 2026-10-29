@@ -15,7 +15,7 @@ use shekyl_chain_rules::{CenRow, FakechainSchedule, Substrate};
 use shekyl_chain_store::codec::SettlementEpochBlocks;
 use shekyl_chain_store::store::ChainStore;
 use shekyl_hash_budget::Budget;
-use shekyl_types::{BlockHash, PowHash, Timestamp};
+use shekyl_types::{BlockHash, PowHash, Timestamp, MAX_ATTESTATION_WITNESS_BYTES};
 
 use super::*;
 
@@ -199,6 +199,17 @@ fn a_span_is_answered_per_arrival_through_the_bound_post() {
         "carried bytes past the bound are refused before they are copied"
     );
     assert_eq!(shekyl_ingest_room(), 2, "the heavy span took no seat");
+    let mut fat = arrivals[0];
+    fat.witness = ShekylIngestBlob {
+        ptr: stub.as_ptr(),
+        len: MAX_ATTESTATION_WITNESS_BYTES + 1,
+    };
+    assert_eq!(
+        unsafe { shekyl_ingest_offer_span(7, 1, std::ptr::from_ref(&fat), 1) },
+        SHEKYL_INGEST_OVERSIZE,
+        "a witness past its own cap is refused before a seat is taken"
+    );
+    assert_eq!(shekyl_ingest_room(), 2, "the fat-witness span took no seat");
     assert_eq!(
         unsafe { shekyl_ingest_offer_span(7, 1, arrivals.as_ptr(), arrivals.len()) },
         SHEKYL_INGEST_ACCEPTED

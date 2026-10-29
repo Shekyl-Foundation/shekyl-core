@@ -43,6 +43,8 @@ use shekyl_chain_ingest::service::{
     Tagged, Ticket,
 };
 
+use shekyl_types::MAX_ATTESTATION_WITNESS_BYTES;
+
 use crate::legacy_util::{bounded_capacity, slice_from_ptr, slice_from_typed_ptr};
 
 /// A borrowed byte buffer.
@@ -516,13 +518,7 @@ impl Ceilings {
         if !readable(entry.witness.ptr, entry.witness.len) {
             return Err(CeilingFault::Invalid);
         }
-        let Ok(witness_len) = u64::try_from(entry.witness.len) else {
-            return Err(CeilingFault::Oversize);
-        };
-        let Some(next) = carried.checked_add(witness_len) else {
-            return Err(CeilingFault::Oversize);
-        };
-        if next > self.max_bytes {
+        if entry.witness.len > MAX_ATTESTATION_WITNESS_BYTES {
             return Err(CeilingFault::Oversize);
         }
         Ok(ArrivalLengths {

@@ -1976,8 +1976,8 @@ async fn a_bound_arrival_connects_through_form_judged_without_a_hash() {
             .collect(),
         attestation_witness: Vec::new(),
     };
-    // The door bounds the block and its bodies; the witness is not
-    // counted, and the caller's measure is the door's own.
+    // The door bounds the block and its bodies; the witness is a sidecar
+    // with its own cap, and the caller's measure is the door's own.
     let measured = bound.bytes();
     let with_witness = super::BoundArrival {
         attestation_witness: vec![0; 64],
@@ -1988,6 +1988,12 @@ async fn a_bound_arrival_connects_through_form_judged_without_a_hash() {
         measured,
         bound.block.len() + bound.bodies.iter().map(Vec::len).sum::<usize>()
     );
+    let over = super::BoundArrival {
+        attestation_witness: vec![0; shekyl_types::MAX_ATTESTATION_WITNESS_BYTES + 1],
+        ..bound.clone()
+    };
+    assert_eq!(over.bytes(), measured);
+    assert_eq!(door.offer_bound(vec![over]).err(), Some(Refusal::Oversize));
     let tickets = door.offer_bound(vec![bound]).expect("room");
     let reply = tickets
         .into_iter()

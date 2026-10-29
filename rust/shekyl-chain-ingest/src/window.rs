@@ -17,7 +17,7 @@ use shekyl_chain_rules::{AdmissionPolicy, Corrupt, Fault, RuleSet, Substrate, Vi
 use shekyl_chain_store::store::{ReadSnapshot, SnapshotView, StoreError};
 use shekyl_hash_budget::Class;
 use shekyl_mempool::{Pool, PoolFault};
-use shekyl_types::{BlockHash, BlockHeight, TxHash, UnixSeconds};
+use shekyl_types::{BlockHash, BlockHeight, TxHash, UnixSeconds, MAX_ATTESTATION_WITNESS_BYTES};
 use shekyl_wire::Transaction;
 
 use super::{
@@ -449,9 +449,10 @@ impl Door {
         let Ok(bound) = self.admission.bound() else {
             return Err(Refusal::StoreUnreadable);
         };
-        let oversize = lengths
-            .iter()
-            .any(|arrival| !bound.admits(u64::try_from(arrival.bytes()).unwrap_or(u64::MAX)));
+        let oversize = lengths.iter().any(|arrival| {
+            !bound.admits(u64::try_from(arrival.bytes()).unwrap_or(u64::MAX))
+                || arrival.witness_len > MAX_ATTESTATION_WITNESS_BYTES
+        });
         if oversize {
             return Err(Refusal::Oversize);
         }

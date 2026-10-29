@@ -166,18 +166,22 @@ pub struct ArrivalLengths {
     /// Each carried body's length, in the order the caller listed them.
     pub body_lens: Vec<usize>,
     /// The attestation witness's length; zero when none was carried.
+    /// Bounded by [`shekyl_types::MAX_ATTESTATION_WITNESS_BYTES`], not by
+    /// [`crate::admission::ArrivalBound`].
     pub witness_len: usize,
 }
 
 impl ArrivalLengths {
-    /// The bytes the door bounds ([`Door::max_arrival_bytes`]): the block,
-    /// the bodies it carried, and the attestation witness.
+    /// The bytes the door bounds against [`Door::max_arrival_bytes`]: the
+    /// block and the bodies it carried. The attestation witness is a
+    /// sidecar with its own cap
+    /// ([`shekyl_types::MAX_ATTESTATION_WITNESS_BYTES`]); it is not these
+    /// bytes.
     #[must_use]
     pub fn bytes(&self) -> usize {
         self.body_lens
             .iter()
             .fold(self.block_len, |total, len| total.saturating_add(*len))
-            .saturating_add(self.witness_len)
     }
 
     fn of(arrival: &Arrival) -> Self {
