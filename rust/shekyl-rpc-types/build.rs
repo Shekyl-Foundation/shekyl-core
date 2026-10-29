@@ -185,7 +185,14 @@ use std::path::PathBuf;
 /// it now reads 22, the design's (`DESIGN_CONCEPTS.md` §3). Every block
 /// reward above genesis changes, so this is a different chain, not a pure
 /// rename (`EconomicParams::emission_speed_factor_per_block`).
-const PINNED_DIGEST: &str = "4bad8c3eafe2a03224238d2140e3a5ef3d72ce73c75837d6726d37112f15f54f";
+///
+/// **Re-pinned 2026-10-28 (ESR-16): a KEY was removed.**
+/// `shekyl_blocks_per_year` left this file. The year length is
+/// `365 × 86_400 / daa_target_seconds` (262_800 at the shipped 120 s
+/// target), so a second key was a second chain identity for one
+/// derivation. **No production behaviour changes** — the derived length
+/// equals the deleted key.
+const PINNED_DIGEST: &str = "17742dd72e533964a841784aae639d387dc01bee03ec6c54880012a52d337620";
 
 fn main() {
     let manifest_dir =

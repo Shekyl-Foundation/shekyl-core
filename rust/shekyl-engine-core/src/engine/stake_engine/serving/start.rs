@@ -220,7 +220,7 @@ where
         //
         // Both timings come off the block target, which is already
         // single-sourced here for the staleness bound below.
-        let block_target = shekyl_economics::EconomicParams::default().daa_target_seconds;
+        let block_target = shekyl_economics::economic_params().daa_target_seconds;
         let tip = std::sync::Arc::new(DaemonTipCache::new(daemon_tip::tip_max_age(block_target)));
         // The refresher's own first tick fires immediately, but nothing orders
         // it against this function returning. This read does: the cache is

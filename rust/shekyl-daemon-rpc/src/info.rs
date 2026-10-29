@@ -44,7 +44,7 @@
 //! the stand-ins: no read is now made for a caller who will not receive
 //! what it returns.
 
-use shekyl_economics::{project_at_tip, EconomicParams, TipOperands};
+use shekyl_economics::{project_at_tip, TipOperands};
 use shekyl_rpc_types::{
     GetInfoResponse, HashHex, HealthP2p, Hidden, InfoChain, InfoEconomics, InfoHealth, InfoHost,
     InfoIdentity, InfoP2p, InfoPeers, InfoPool, InfoStatus, RpcStatus, StatusConnections,
@@ -275,7 +275,7 @@ pub fn get_info(
             tx_volume: chain.tx_volume,
             chain_height: height,
         },
-        &EconomicParams::default(),
+        shekyl_economics::economic_params(),
     );
     // More burned than generated is the store contradicting itself. `0` %
     // is a legitimate burn, so it cannot stand for that: the method refuses,

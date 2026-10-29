@@ -270,9 +270,20 @@ pub fn effective_median_at<'id, V: ChainView<'id>>(
 /// pinned in `block_weight_tests`.
 #[must_use]
 pub fn medians_over(window: &[RecordedWeights], params: &EconomicParams) -> EffectiveMedian {
+    medians_over_window::<BLOCK_WEIGHT_SHORT_TERM_WINDOW>(window, params)
+}
+
+/// [`medians_over`] at a short-window length. Production passes
+/// [`BLOCK_WEIGHT_SHORT_TERM_WINDOW`]. EUP-5's window-length stress
+/// builds another (`ECONOMICS_SIM_PHASE0.md`, the const-generic window).
+#[must_use]
+pub fn medians_over_window<const SHORT: u64>(
+    window: &[RecordedWeights],
+    params: &EconomicParams,
+) -> EffectiveMedian {
     let mut long_term: Vec<u64> = window.iter().map(|w| w.long_term_weight.to_raw()).collect();
     // Total: a window longer than the address space is the whole slice.
-    let short_len = usize::try_from(BLOCK_WEIGHT_SHORT_TERM_WINDOW)
+    let short_len = usize::try_from(SHORT)
         .unwrap_or(usize::MAX)
         .min(window.len());
     let mut short_term: Vec<u64> = window[window.len() - short_len..]

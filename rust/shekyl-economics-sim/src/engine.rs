@@ -137,12 +137,20 @@ pub struct SimParams {
     pub emission_curve_asymptote: u64,
     pub emission_speed_factor_per_block: u64,
     pub final_subsidy_per_minute: u64,
-    /// The fold's year: where it draws a year boundary and reads a
-    /// schedule. The staker emission share does **not** follow it: the
-    /// share decays on production's `BLOCKS_PER_YEAR`
-    /// (`emission_share_at`), which is this field's default. A test that
-    /// shortens the year shortens the bookkeeping only.
+    /// The fold's year. [`Self::economic`] writes it onto the emission
+    /// schedule. Production fills the same field with [`blocks_per_year`]
+    /// of the DAA target.
+    ///
+    /// [`blocks_per_year`]: shekyl_economics::blocks_per_year
     pub blocks_per_year: u64,
+    /// Initial staker share of emission, in millionths of
+    /// [`shekyl_economics::params::SCALE`]. [`Self::economic`] writes it
+    /// onto the schedule.
+    pub staker_emission_share: u64,
+    /// Annual decay of [`Self::staker_emission_share`], in millionths of
+    /// [`shekyl_economics::params::SCALE`]. [`Self::economic`] writes it
+    /// onto the schedule.
+    pub staker_emission_decay: u64,
     pub tx_volume_baseline: u64,
     pub release_min: u64,
     pub release_max: u64,
@@ -163,7 +171,9 @@ impl Default for SimParams {
             emission_curve_asymptote: shipped.emission_curve_asymptote,
             emission_speed_factor_per_block: shipped.emission_speed_factor_per_block,
             final_subsidy_per_minute: shipped.final_subsidy_per_minute,
-            blocks_per_year: shekyl_economics::BLOCKS_PER_YEAR,
+            blocks_per_year: shipped.blocks_per_year,
+            staker_emission_share: shipped.staker_emission_share,
+            staker_emission_decay: shipped.staker_emission_decay,
             tx_volume_baseline: shipped.tx_volume_baseline,
             release_min: shipped.release_min,
             release_max: shipped.release_max,
@@ -176,13 +186,14 @@ impl Default for SimParams {
 }
 
 impl SimParams {
-    /// Production [`EconomicParams`] with this run's emission, release, burn
-    /// and staker knobs written over the shipped values. Escalation stays
-    /// shipped here: a candidate knee or asymptote is an
+    /// Production [`EconomicParams`] with this run's emission, release, burn,
+    /// staker and schedule knobs written over the shipped values. Escalation
+    /// stays shipped here: a candidate knee or asymptote is an
     /// [`crate::escalation::EscalationCurve`]. The one construction every
     /// fold uses.
     #[must_use]
     pub fn economic(&self) -> EconomicParams {
+        let shipped = EconomicParams::default();
         EconomicParams {
             release_min: self.release_min,
             release_max: self.release_max,
@@ -193,8 +204,11 @@ impl SimParams {
             emission_curve_asymptote: self.emission_curve_asymptote,
             emission_speed_factor_per_block: self.emission_speed_factor_per_block,
             final_subsidy_per_minute: self.final_subsidy_per_minute,
-            daa_target_seconds: EconomicParams::default().daa_target_seconds,
-            ..EconomicParams::default()
+            daa_target_seconds: shipped.daa_target_seconds,
+            staker_emission_share: self.staker_emission_share,
+            staker_emission_decay: self.staker_emission_decay,
+            blocks_per_year: self.blocks_per_year,
+            ..shipped
         }
     }
 
@@ -511,7 +525,21 @@ mod tests {
             p.final_subsidy_per_minute,
             cfg_u64(&cfg, "final_subsidy_per_minute")
         );
-        assert_eq!(p.blocks_per_year, cfg_u64(&cfg, "shekyl_blocks_per_year"));
+        let consensus: Value =
+            serde_json::from_str(include_str!("../../../config/consensus_constants.json"))
+                .expect("consensus_constants.json must be valid JSON");
+        assert_eq!(
+            p.blocks_per_year,
+            shekyl_economics::blocks_per_year(cfg_u64(&consensus, "daa_target_seconds"))
+        );
+        assert_eq!(
+            p.staker_emission_share,
+            cfg_u64(&cfg, "shekyl_staker_emission_share")
+        );
+        assert_eq!(
+            p.staker_emission_decay,
+            cfg_u64(&cfg, "shekyl_staker_emission_decay")
+        );
         assert_eq!(
             p.tx_volume_baseline,
             cfg_u64(&cfg, "shekyl_tx_volume_baseline")
@@ -557,5 +585,44 @@ mod tests {
         let shipped_reward =
             base_block_reward(0, &shipped).expect("genesis reward on the shipped curve");
         assert!(reward > shipped_reward);
+    }
+
+    /// A replaced schedule is the share the run prices. The year, the
+    /// initial share and the decay are that schedule's three fields.
+    #[test]
+    fn a_replaced_schedule_is_the_share_the_run_prices() {
+        use shekyl_economics::{EconomicParams, EMISSION_SPLIT_EPOCH};
+
+        let shipped = EconomicParams::default();
+        let quiet = SimParams {
+            staker_emission_share: 0,
+            ..SimParams::default()
+        };
+        let quiet_priced = quiet.economic();
+        assert_eq!(
+            quiet_priced
+                .emission_schedule()
+                .share_at(EMISSION_SPLIT_EPOCH),
+            0
+        );
+        assert!(shipped.emission_schedule().share_at(EMISSION_SPLIT_EPOCH) > 0);
+        assert_eq!(quiet_priced.blocks_per_year, shipped.blocks_per_year);
+        assert_eq!(
+            quiet_priced.staker_emission_decay,
+            shipped.staker_emission_decay
+        );
+
+        let fast = SimParams {
+            blocks_per_year: 1,
+            ..SimParams::default()
+        };
+        assert!(
+            fast.economic()
+                .emission_schedule()
+                .share_at(EMISSION_SPLIT_EPOCH + 1)
+                < shipped
+                    .emission_schedule()
+                    .share_at(EMISSION_SPLIT_EPOCH + 1)
+        );
     }
 }

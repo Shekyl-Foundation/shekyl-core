@@ -29,14 +29,25 @@ const _: () = assert!(
 /// `10^(DISPLAY_DECIMAL_POINT − FEE_DECIMAL_PLACES)`.
 pub const FEE_QUANTIZATION_MASK: u64 = 10u64.pow(DISPLAY_DECIMAL_POINT as u32 - FEE_DECIMAL_PLACES);
 
-/// `weight × rate_per_weight`, rounded up to the lattice. `None` when the
-/// product or the rounding leaves `u64`: a requirement no fee can state.
+/// `weight × rate_per_weight`, rounded up to `mask`. `None` when the
+/// product or the rounding leaves `u64`, or when `mask` is zero: a
+/// requirement no fee can state.
+///
+/// [`quantized_fee`] is this on the shipped mask. A [`crate::RelayPolicy`]
+/// passes the mask its decimal places select.
 #[must_use]
-pub const fn quantized_fee(weight: u64, rate_per_weight: u64) -> Option<u64> {
+pub(crate) const fn quantize_to_mask(weight: u64, rate_per_weight: u64, mask: u64) -> Option<u64> {
     match weight.checked_mul(rate_per_weight) {
-        Some(raw) => raw.checked_next_multiple_of(FEE_QUANTIZATION_MASK),
+        Some(raw) => raw.checked_next_multiple_of(mask),
         None => None,
     }
+}
+
+/// `weight × rate_per_weight`, rounded up to the shipped lattice.
+/// `None` when the product or the rounding leaves `u64`.
+#[must_use]
+pub const fn quantized_fee(weight: u64, rate_per_weight: u64) -> Option<u64> {
+    quantize_to_mask(weight, rate_per_weight, FEE_QUANTIZATION_MASK)
 }
 
 #[cfg(test)]

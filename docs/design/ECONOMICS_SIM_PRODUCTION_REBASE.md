@@ -2168,6 +2168,93 @@ searches that last step.
 **E15-5. Held.** The copied wallet loop and the new call agree on every
 compared cell that did not overflow. Zero differences.
 
+### 5.26 ESR-16, predicted before the sweep runs (2026-10-28)
+
+Written against `dev` at `716bd8ab7`, before any ESR-16 code. The sweep
+is [`ECONOMICS_SIM_PHASE0.md`](ECONOMICS_SIM_PHASE0.md) §P0.9 step 2.
+Nothing below is a result.
+
+`EconomicParams` already carries the release rails, the burn, the pool
+share, the emission curve, the DAA target, the escalation pair and the
+zone. Generated beside it, and not fields, are the two median windows,
+the surge factor, `SCALE`, `STAKER_EMISSION_SHARE`,
+`STAKER_EMISSION_DECAY`, `BLOCKS_PER_YEAR` and `TX_VOLUME_WINDOW`. The
+windows become const generics, not more runtime fields. `RelayPolicy`
+does not exist. The validator's parameter `OnceLock` is
+`shekyl-chain-rules` `rules/miner.rs`.
+
+- **E16-1.** A run that leaves every swept field at its generated default
+  prints a `--stage2` narration byte-identical to the fixture at this
+  pin, on both arms.
+- **E16-2.** Existing field values do not change. The consensus digest
+  moves once, because fields were added, and the pin is re-cut in the
+  same change.
+- **E16-3.** Production reads `EconomicParams` and `RelayPolicy` through
+  one accessor each. A gate fails when a production site reads a bare
+  generated constant that an accessor owns.
+- **E16-4.** `BLOCKS_PER_YEAR` equals `365 × 86 400 / daa_target_seconds`
+  (262 800 at the shipped target of 120 s). `settlement_epoch_blocks`
+  has one source. The zone and `TX_WEIGHT_LIMIT` stay the pair their
+  equality test names.
+
+### 5.26.1 What the sweep did (2026-10-28)
+
+Graded against §5.26. The default `--stage2` run is the two ignored
+narration tests, release, both arms.
+
+- **E16-1 held.** Both narration fixtures match the bytes at `716bd8ab7`.
+- **E16-2 held on the values, and the pin moved once.** No existing field
+  changed: the economics differential still matches its fixture, and the
+  narrations did not move. Two digests were re-cut in this change. The
+  consensus digest moved because `shekyl_blocks_per_year` was removed
+  (`17742dd72e533964a841784aae639d387dc01bee03ec6c54880012a52d337620`);
+  the year length is the derivation, so the key was a second identity.
+  The `EconomicParams` digest moved because three fields were appended
+  (format `0x05`); the C4 fixture is
+  `blake2b:90fc7496797f94b1e917f570d24663ee180e64ac5dc59793b902d0ba225a1f60`.
+- **E16-3 held.** `economic_params()` and `relay_policy()` are the
+  production reads. `scripts/ci/check_economic_accessors.py` fails a
+  production `EconomicParams::default()`, a second
+  `OnceLock<EconomicParams>`, and a `OnceLock` of `RelayPolicy`. It
+  requires `relay_policy()` in a production file other than
+  `relay_policy.rs`. A path component `tests` or ending `_tests`, and
+  a file named `tests.rs`, `*_tests.rs`, `*_test.rs` or
+  `test_support.rs`, and a module declared under a cfg that requires
+  `test` (`cfg(test)`, `cfg(all(…, test))`, including `not(not(test))`),
+  is not production. `cfg(any(test, feature = "…"))` still compiles
+  when the feature is on, so that file stays in the scan. The economics sim, the staking
+  sim and the bench build their own sets.
+- **E16-4 held.** `blocks_per_year(120)` is 262 800, and the shipped
+  field equals it (`shipped_defaults_are_well_formed`).
+  `settlement_epoch_blocks` is generated from
+  `config/consensus_constants.json`; the hand literal is gone. The zone
+  and `TX_WEIGHT_LIMIT` were already that pair and were not retouched.
+
+The stage-2 fold prices the staker share from the run's
+`EconomicParams`. `SimParams::economic` writes the share, the decay
+and the year onto that set. `price_emission`, `correction_factors_at`
+and `project_at_tip` read that set's schedule: the paid reward, the
+fee correction's `σ` and the tip's reported share. The shipped
+callers pass `economic_params()`, whose schedule is
+`emission_share_at`. `RelayPolicy` is the admission
+lattice, the slack, the lookback and the claim hold, outside the
+digest. The shipped wrappers read `relay_policy()`. A fold passes its
+own policy to `admits`, `quantize` and `admitted_floor`. The median
+and volume folds take the window length as a const generic
+(`medians_over_window`, `tx_volume_span_of`, `VolumeFold`); production
+instantiates the generated lengths, and EUP-5's window-length stress
+is the second caller.
+
+`SCALE` and the surge factor stay generated constants. `SCALE` is the
+unit the other fields are written in. The surge factor is the median
+formula's multiplier. `w_ref` (3 000) stays `RELAY_FLOOR_REFERENCE_TX_WEIGHT`;
+ESR-10's re-derived arm still threads it.
+
+The bond floor is generated once, in `shekyl-archival-retention`.
+`shekyl-engine-core` no longer emits a second copy; its 750 000 000
+pin is the test `archival_bond_floor_matches_gate4_calibration`. The
+cover rung is generated from the same JSON key.
+
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
 Under the cycle ruling (§0), staking is being designed now, and the
