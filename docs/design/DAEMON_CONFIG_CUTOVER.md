@@ -886,7 +886,9 @@ until the redb cutover, and DRS-E2's `shekyl-e2-trace-export`) keep their
 option sets; the descriptors they share with the daemon (`arg_data_dir`,
 `arg_testnet_on`, `arg_stagenet_on`, `arg_db_sync_mode`) move into a header
 they own, and `src/blockchain_utilities/blockchain_import.cpp:662`'s call to
-`core::init_options` becomes a call into it.
+`core::init_options` becomes a call into it. The store flip deleted
+`shekyl-blockchain-import`, `-export`, `-stats`, `shekyl-mdb-copy` and
+`shekyl-e2-trace-export`; the header they were going to own went with them.
 
 Pre-flight (rule 26), recorded in `docs/design/DAEMON_CONFIG_CUTOVER_AUDIT.md`
 before the first production commit:

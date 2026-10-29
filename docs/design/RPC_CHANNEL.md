@@ -2151,8 +2151,8 @@ construction) instead of loopback TCP.
 - **Rendezvous label (§7.1):** a label set at `CreateFileW` refuses a
   low-integrity read; an inherited label and an `icacls`-applied label both
   carry `NW` only and admit it, while appearing as a Medium label.
-- **Item 4 — Windows callers today:** the Windows build produces only
-  `shekyld.exe` and `shekyl-mdb-copy.exe`; the wallet stack is linked into
+- **Item 4 — Windows callers today:** the Windows build produces
+  `shekyld.exe`; the wallet stack is linked into
   the GUI (`src-tauri` path-depends on `shekyl-engine-core`,
   `shekyl-rpc-client`, `shekyl-scanner`; its embedded engine builds its
   daemon client from the same address). Three consumers, one leg: the GUI's

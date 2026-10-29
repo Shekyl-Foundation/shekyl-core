@@ -419,18 +419,11 @@ cargo build -p shekyl-cli -p shekyl-wallet-rpc --release
 Primary C++ test binaries:
 
 ```bash
-cmake --build build/testnet-release --target unit_tests core_tests -- -j"$(nproc)"
-```
-
-Useful utilities:
-
-```bash
-cmake --build build/testnet-release --target \
-  blockchain_export blockchain_import blockchain_stats gen_multisig -- -j"$(nproc)"
+cmake --build build/testnet-release --target unit_tests -- -j"$(nproc)"
 ```
 
 Note: if your environment reports an issue with the aggregate `tests` meta-target,
-build `unit_tests` and `core_tests` directly as shown above.
+build `unit_tests` directly as shown above.
 
 ### 4) Verify available targets in your build dir
 

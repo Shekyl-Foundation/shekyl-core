@@ -747,10 +747,9 @@ jobs:
       # WP-W5 of that design round owns renaming this job back.
       - name: build daemon
         shell: pwsh
-        # mdb_copy rides along (one vendored C file): the daemon's prune
-        # warning names shekyl-mdb-copy, so its MSVC compile-fit is gated
-        # here. The link gate itself is the script: the three Rust-linking
-        # binaries exist, and the link log has no LNK4098.
+        # The link gate is the script: shekyld exists, and the link log
+        # has no LNK4098. The importer, mdb_copy and core_tests are gone
+        # with the C++ chain.
         run: |
           pwsh -NoProfile -File scripts/ci/msvc_static_crt.ps1 -Stage link
       - name: smoke-test daemon boot and stop
@@ -779,12 +778,6 @@ jobs:
         # adds a service-manager case (install, start, SERVICE_RUNNING, stop).
         run: |
           pwsh -NoProfile -File scripts/ci/daemon_boot_stop_smoke.ps1 -Daemon 'build\bin\Release\shekyld.exe'
-      - name: core_tests on MSVC
-        shell: pwsh
-        # The link gate's run half. The script requires the suite's own
-        # report: a positive run count and zero failures.
-        run: |
-          pwsh -NoProfile -File scripts/ci/msvc_static_crt.ps1 -Stage core-tests
 
   source-archive:
     name: "source archive"
