@@ -1937,9 +1937,11 @@ Proofs anchor to the whole accumulated tree at a reference height
 (`CURVE_TREE_CLIENT.md` §5.1 `select_reference_height`: `tip − REF_ANCHOR_AGE`;
 `MIN`/`MAX_AGE` is reorg/staleness control, **not** an anonymity-set bound), and
 `CTTypeFcmpPlusPlusPqc` is the only admissible output type — enforced at
-consensus in
-[`tx_verification_utils.cpp:124`](../../src/cryptonote_core/tx_verification_utils.cpp#L124)
-(and `:141`), not merely described in an RPC schema. So there is no narrow window
+consensus by the Rust validator: CEN-I2 holds by construction of the wire type
+(`shekyl_wire::Ct` admits two CT types) and CEN-H15 refuses `Null` off the
+coinbase ([`census.rs`](../../rust/shekyl-chain-rules/src/census.rs); the C++
+`tx_verification_utils.cpp:124` and `:141` that enforced it were deleted with
+the C++ chain, DRS-X #1212), not merely described in an RPC schema. So there is no narrow window
 a burst can dominate, and uniform outputs cannot be re-partitioned into
 flood/not-flood by a third party.
 

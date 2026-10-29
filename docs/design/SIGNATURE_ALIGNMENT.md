@@ -69,12 +69,17 @@ message signed under scheme 1 and scheme 2 has **identical signing input**
 - `shekyl_pqc_sign` has **no production C++ caller** — all callers are in
   `tests/unit_tests/fcmp.cpp`. Production C++ never signs and never holds a
   hybrid secret key outside tests (rule 36 holds).
-- The one production consumer is verify-only and on consensus:
-  `src/cryptonote_core/tx_pqc_verify.cpp:148` passes `scheme_id` as a
-  *dispatch parameter* (it never enters the signed bytes) and the message is
-  the input's 32-byte signed hash — since 2026-09-25 (E6 slice 6 commit 7)
-  derived by `shekyl-wire` through `shekyl_tx_pqc_signing_payload_hashes`,
-  no longer a `get_blob_hash` over a C++-assembled payload.
+- The one production consumer is verify-only and on consensus: the Rust
+  verifier's `verify_pqc_auth_slot` (`rust/shekyl-daemon-rpc/src/submit/verifier.rs`).
+  The C++ `tx_pqc_verify.cpp:148` at this row's era (deleted with the C++
+  chain in DRS-X) passed `scheme_id` as a *dispatch parameter* to
+  `shekyl_pqc_verify`, and the message was the input's 32-byte signed hash —
+  since 2026-09-25 (E6 slice 6 commit 7) derived by `shekyl-wire` through
+  `shekyl_tx_pqc_signing_payload_hashes`, no longer a `get_blob_hash` over a
+  C++-assembled payload. That preimage covers the auth's header
+  (`auth_version ‖ scheme_id ‖ flags ‖ len ‖ pk`; `shekyl-wire`
+  `transaction.rs`), so the scheme is bound by the signature even though the
+  verifier reads it as a discriminant.
 - Consequence for SA-R-2: the fix at this boundary is the rule-40 move — the
   Rust export becomes context-specific and **owns its domain constant**; C++
   never carries a domain string it could get wrong.

@@ -11,13 +11,7 @@ src/cryptonote_basic/cryptonote_format_utils.cpp	2	transaction version	false for
 src/cryptonote_basic/cryptonote_format_utils.cpp	1	transaction version	always true for an admitted transaction (version is 3)	collapse	tx-version	if (tx.version > 1)
 src/cryptonote_basic/cryptonote_format_utils.cpp	1	transaction version	always true for an admitted transaction (version is 3)	collapse	tx-version	if (tx.version >= 2 && !is_coinbase(tx))
 src/cryptonote_basic/cryptonote_format_utils.cpp	1	transaction version	false for an admitted transaction; reachable from the wire, where the parser admits version 1	delete	tx-version	return version <= 1;
-src/cryptonote_core/cryptonote_core.cpp	1	transaction version	always true for an admitted transaction (version is 3)	collapse	tx-version	if (tx.version > 1)
-src/cryptonote_core/tx_pqc_verify.cpp	1	PQC auth version	the rule: auth_version is 1	none	none	if (auth.auth_version != 1)
-src/cryptonote_core/tx_pqc_verify.cpp	1	transaction version	false for an admitted transaction; a second statement of the rule	delete	tx-version	if (tx.version < 3 || tx.vin.empty() || std::holds_alternative<txin_gen>(tx.vin[0]))
-src/cryptonote_core/tx_verification_utils.cpp	1	transaction version	live admission bound; both locals are 3, and the parser still admits 1 and 2	collapse	tx-version	if (tx.version < min_tx_version || tx.version > max_tx_version)
-src/cryptonote_core/tx_verification_utils.cpp	1	transaction version	always true for an admitted transaction (version is 3)	collapse	tx-version	if (tx.version >= 2)
 src/net/socks.cpp	2	SOCKS protocol version	the protocol's own check	none	none	if (header.version != 5)
 src/net/socks.cpp	1	SOCKS protocol version	the protocol's own check	none	none	if (header.version != v5_userpass_version)
 src/net/socks.cpp	1	SOCKS protocol version	the protocol's own check	none	none	if (socks_version() != version::v4a_tor)
 src/net/socks.cpp	1	SOCKS protocol version	the protocol's own check	none	none	if (socks_version() != version::v5)
-src/cryptonote_core/tx_verification_utils.cpp	1	transaction version	false for an admitted transaction (version is 3); the output check refuses an older body	delete	tx-version	if (tx.version < 3)
