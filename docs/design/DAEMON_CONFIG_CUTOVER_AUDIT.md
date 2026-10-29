@@ -100,7 +100,7 @@ the peer lists' own entry (§2.8), where the handshake owner reads it
 At the pin a daemon store is the LMDB environment, `lmdb/data.mdb` under the
 data directory
 ([`src/cryptonote_config.h:215`](../../src/cryptonote_config.h),
-`src/blockchain_db/lmdb/db_lmdb.cpp:2016`),
+`src/blockchain_db/lmdb/db_lmdb.cpp`),
 and `p2pstate.bin`
 ([`src/cryptonote_config.h:217`](../../src/cryptonote_config.h)), which PR-3
 made the Rust dialer's address file under the same name

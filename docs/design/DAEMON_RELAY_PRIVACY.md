@@ -117,7 +117,7 @@ this lane.
    by the pool. `relay_method` on the pool entry
    (`tx_pool.cpp`, `blockchain_db.h`) is the relay state machine stored
    beside the coins. **UPDATE 2026-10-02:** the two `origin_zone` bits
-   are unused (`src/blockchain_db/blockchain_db.h:271`). They stay so
+   are unused (`src/blockchain_db/blockchain_db.h`). They stay so
    the record stays 192 bytes, and they are not a connector id.
    `NetZone` stays the zone-parameterized embargo class, not a pool
    field; discriminant 2 is unused so `tor` stays 3. `address_type`

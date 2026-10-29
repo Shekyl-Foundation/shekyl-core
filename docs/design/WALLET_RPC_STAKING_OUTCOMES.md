@@ -84,7 +84,7 @@ round.
   (`engine/stake_engine/helpers.rs:455-463`, `:487-503`), so the offset
   stays uniform.
 - Both daemons refuse a reference older than
-  `FCMP_REFERENCE_BLOCK_MAX_AGE` (100): `src/cryptonote_core/blockchain.cpp:3615-3621`
+  `FCMP_REFERENCE_BLOCK_MAX_AGE` (100): `src/cryptonote_core/blockchain.cpp`
   and `shekyl-chain-rules/src/rules/tx_against.rs:320-324`. A proof built
   at the canonical anchor stays submittable for `PROOF_VALIDITY_HORIZON`
   (94) blocks (`shekyl-curve-tree/src/reference.rs:95-106`).
@@ -232,7 +232,7 @@ cadence driver:
   pool's is three days from that node's admission
   (`CRYPTONOTE_MEMPOOL_TX_LIVETIME`, `src/cryptonote_config.h:104`), about
   2,160 blocks at 120 s, measured from `receive_time`
-  (`src/cryptonote_core/tx_pool.cpp:1080`); a byte-identical resend to a
+  (`src/cryptonote_core/tx_pool.cpp`); a byte-identical resend to a
   node that still holds the transaction does not reset it, and only
   re-admission after eviction, or a relay-method upgrade, does
   (`tx_pool.cpp:498-512`). The Rust pool, live from the DRS-X flip, drops

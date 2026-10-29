@@ -206,7 +206,7 @@ The wire form is the flat `RawTxEntry` (`T/transactions.rs:139-167`). `in_pool` 
 | key | wire type | notes | source |
 |---|---|---|---|
 | `id_hash` | hash64 | | `H:552` |
-| `tx_json` | string (embedded JSON) | `obj_to_json_str` | `H:553`, `src/cryptonote_core/tx_pool.cpp:1577` |
+| `tx_json` | string (embedded JSON) | `obj_to_json_str` | `H:553`, `src/cryptonote_core/tx_pool.cpp` |
 | `blob_size` | u64 | | `H:554` |
 | `weight` | u64? | `KV_SERIALIZE_OPT(weight,0)` | `H:555` |
 | `fee` | u64 | | `H:556` |

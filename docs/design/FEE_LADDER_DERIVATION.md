@@ -36,7 +36,7 @@ a566a466. Round-state record: [`FEE_LADDER_ROUND.md`](FEE_LADDER_ROUND.md).
 ## §0 The question and its jurisdiction
 
 `Blockchain::get_dynamic_base_fee_estimate_2021_scaling`
-(`src/cryptonote_core/blockchain.cpp:4474-4507`) serves a four-rung fee
+(`src/cryptonote_core/blockchain.cpp`) serves a four-rung fee
 ladder (`Fl`/`Fn`/`Fm`/`Fh`) transliterated from ArticMine's Monero 2021
 scaling paper, cited by URL at `blockchain.cpp:4477`. The rungs are
 block-expansion price points: each is (approximately) the per-byte fee at
@@ -411,7 +411,7 @@ by FL-R17.
   `Mfw = min(Mnw, Mlw)`), then a further 2% acceptance buffer.
 - Callers: pool admission `tx_pool.cpp:250` — where the `kept_by_block ||`
   disjunct proves transactions arriving *in blocks* bypass the check — and
-  the daemon submit re-gate `src/rpc/daemon_submit_ffi.cpp:823`. **The fee
+  the daemon submit re-gate `src/rpc/daemon_submit_ffi.cpp`. **The fee
   floor is relay/admission policy, not block validity.** Changing the ladder
   is therefore not a chain-splitting consensus change; but a floor/ladder
   divergence fragments mempools and dead-letters wallets (FL-V5), so the
@@ -455,7 +455,7 @@ FL-C6 explicitly. (Bound is hand-derived; the instrument re-derives it.)
 
 ### FL-V6 — Scaling-test pins are hypothetical-state, not genesis-state
 
-`tests/unit_tests/scaling_2021.cpp:88-119` pins the ladder at a
+`tests/unit_tests/scaling_2021.cpp` pins the ladder at a
 **10 SKL reward** across three median states (340/1400/5400/67000 at
 `Mnw=Mlw=Zm`; 22000 top with `Mnw=15,000,000`; 13/53/1100/14000 at
 `Mnw=Mlw=1,500,000`). Genesis conditions are a 1,024 SKL reward at
@@ -2673,7 +2673,7 @@ Each of these was read at the implementation during the exchange; none is
 taken from another document's prose.
 
 1. **Acceptance is `C`-free.** `Blockchain::check_fee`
-   (`src/cryptonote_core/blockchain.cpp:4476–4491`) admits
+   (`src/cryptonote_core/blockchain.cpp`) admits
    `fee ≥ needed − needed/50` with `needed` rounded up to the quantization
    mask, against `get_current_fee_per_byte()` (`:4453`) — the inherited
    `0.95·R·w_ref/M²`, no `C` anywhere in it. `C` enters only the *served*

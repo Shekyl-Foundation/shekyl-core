@@ -41,7 +41,7 @@ unprompted, against an earlier framing in which the diff discharged §7.1.1.)
 ## 2. The denominator is 34, not 17
 
 17 tables, derived from the `X(LMDB_ARCHIVAL_...)` X-macro at
-`src/blockchain_db/lmdb/db_lmdb.cpp:350-366` rather than hand-listed, each
+`src/blockchain_db/lmdb/db_lmdb.cpp` rather than hand-listed, each
 with **two** cells: an apply half and a revert half. Every cell resolves to
 `FORCED-BY:<event>` or `EXCLUDED:<reason>`.
 

@@ -2570,7 +2570,7 @@ The first three rows are structural: every registered run inherits them from `ba
 - Bond duration 4/4: `DOC:63-65`.
 - Failure window 11/13: from `--failure-confirmation` (config `_comment_archival_failure_window`).
 - Release cooldown 2: L18 seal.
-- Production `bond_duration` has no caller in `rust/` or `src/`: only the re-export at `prod/lib.rs:99` and a comment at `src/blockchain_db/shekyl_types.h:1206` (grep). Its parity KAT (`prod/bond_duration.rs:212-226`) re-types the sim's f64 formula.
+- Production `bond_duration` has no caller in `rust/` or `src/`: only the re-export at `prod/lib.rs:99` and a comment at `src/blockchain_db/shekyl_types.h` (grep). Its parity KAT (`prod/bond_duration.rs:212-226`) re-types the sim's f64 formula.
 
 ### (S) Sweeps / grids
 
