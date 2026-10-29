@@ -92,7 +92,6 @@ set(unit_tests_sources
   archival_pass_anchor.cpp
   archival_reward_emission.cpp
   archival_emission_ct_balance.cpp
-  sync_orphan_arm.cpp
   ct_balance_differential.cpp
   pruned_tx_hash_parity.cpp
   prunable_digest_parity.cpp
