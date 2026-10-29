@@ -28,94 +28,43 @@
 
 #pragma once
 
+#include <unordered_map>
+#include <utility>
+
 #include "cryptonote_basic/blobdatatype.h"
 #include "cryptonote_basic/cryptonote_basic.h"
-#include "cryptonote_basic/verification_context.h"
+
+// What remains of the C++ transaction-verification helpers: the two types
+// the shell's `handle_incoming_block` connect overload still names. The
+// verification itself (`ver_non_input_consensus`, `check_tx_semantic`, the
+// PQC auth battery) was deleted with the C++ chain; the Rust owner is
+// `shekyl-chain-rules` (DRS-X). CS-5 deletes this header with the overload.
 
 namespace cryptonote
 {
 
 /**
- * @brief Maximum transaction weight.
+ * @brief Transaction info that skips the mempool on the way to block handling.
  *
- * Half the minimum block weight, less the coinbase reserve. Not version-dispatched.
- *
- * @return the maximum unconditional transaction weight
- */
-uint64_t get_transaction_weight_limit();
-
-/**
- * @brief Verify the semantics of a group of FCMP++ signatures as a batch (if applicable)
- *
- * Coinbase txs or other transactions with a CT type of CTTypeNull will fail to verify.
- *
- * @param rvv list of signatures to verify
- * @return true if all signatures verified semantics successfully, false otherwise
- */
-bool ver_mixed_ct_semantics(std::vector<const ct::CtSig*> rvv);
-
-/**
- * @brief Used to provide transaction info that skips the mempool to block handling code.
- *
- * Tx-only. Block-level admission data (credit-wire attestation witness) rides
- * [`block_connect_supplement`], not this type.
+ * Tx-only. Block-level admission data rides [`block_connect_supplement`].
  */
 struct pool_supplement
 {
-    // Map of supplemental tx info that we might need to validate a block
     // Maps TXID -> transaction and blob
     std::unordered_map<crypto::hash, std::pair<transaction, blobdata>> txs_by_txid;
     // If set, all the txs' non-input consensus (NIC) rules are verified.
-    // User: If you add an unverified transaction to txs_by_txid, clear this field!
     mutable bool nic_verified = false;
 };
 
 /**
  * @brief Block-level data that rides the connect path alongside the block itself.
- *
- * Separates the tx pool supplement from block-level admission data so
- * `pool_supplement` stays tx-shaped. Both the p2p transport and reorg re-supply
- * thread this single object into `handle_block_to_main_chain` /
- * `handle_alternative_block`.
  */
 struct block_connect_supplement
 {
     pool_supplement pool;
-    // Per-block credit-wire attestation witness (ARCHIVAL_CREDIT_WIRE.md §3, credit-wire CW-2).
-    // Opaque Rust-canonical bytes (count ‖ (nonce ‖ anchor_height ‖
-    // delivery_digest ‖ signature) per pass, SF-D8 v3). Empty until the
-    // transport populates it; empty means "no witness supplied" and stores no
-    // side-table row on main-chain add.
+    // Per-block credit-wire attestation witness (ARCHIVAL_CREDIT_WIRE.md §3).
+    // Opaque Rust-canonical bytes; empty means "no witness supplied".
     blobdata attestation_witness;
 };
-
-/**
- * @brief Verify every non-input consensus rule for a group of non-coinbase transactions
- *
- * List of checks that we do for each transaction:
- *     1. Check tx blob size < get_max_tx_size()
- *     2. Check tx version != 0
- *     3. Check the transaction version is CURRENT_TRANSACTION_VERSION
- *     4. Check tx weight < get_transaction_weight_limit()
- *     5. Passes core::check_tx_semantic()
- *     6. Passes check_tx_outputs()
- *     7. Passes ver_mixed_ct_semantics() [Uses batch FCMP++ verification when applicable]
- *
- * For pool_supplement input:
- * We assume the structure of the pool supplement is already correct: for each value entry, the
- * cryptonote::transaction matches its corresponding blobdata and the TXID map key is correctly
- * calculated for that transaction. We use the .nic_verified field to skip verification
- * for a pool supplement already verified, and we set it on success.
- *
- * @param tx single transaction to verify
- * @param pool_supplement pool supplement to verify
- * @param tvc relevant flags will be set for if/why verification failed
- * @return true if all relevant transactions verify, false otherwise
- */
-bool ver_non_input_consensus(const transaction& tx, tx_verification_context& tvc);
-
-bool ver_non_input_consensus(const pool_supplement& ps, tx_verification_context& tvc);
-
-crypto::hash compute_fcmp_verification_hash(const transaction& tx);
 
 } // namespace cryptonote

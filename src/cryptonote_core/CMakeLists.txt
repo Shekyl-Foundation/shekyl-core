@@ -28,9 +28,6 @@
 
 set(cryptonote_core_sources
   cryptonote_core.cpp
-  tx_pqc_verify.cpp
-  cryptonote_tx_utils.cpp
-  tx_verification_utils.cpp
 )
 
 set(cryptonote_core_headers)

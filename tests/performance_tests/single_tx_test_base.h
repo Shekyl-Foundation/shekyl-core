@@ -31,27 +31,23 @@
 #pragma once
 
 #include "cryptonote_basic/account.h"
-#include "cryptonote_basic/cryptonote_basic.h"
-#include "cryptonote_core/cryptonote_tx_utils.h"
+#include "crypto/crypto.h"
 
+// The derivation benches read a recipient and a transaction public key.
+// The coinbase that used to carry the key was the deleted C++
+// `construct_miner_tx`'s; a fresh keypair is the same input.
 class single_tx_test_base
 {
 public:
   bool init()
   {
-    using namespace cryptonote;
-
     m_bob.generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
-
-    if (!construct_miner_tx(0, 0, 0, 2, 0, /*frozen_segment_count=*/0, m_bob.get_keys().m_account_address, m_tx))
-      return false;
-
-    return shekyl_tx_extra_tx_pubkey(m_tx.extra.data(), m_tx.extra.size(),
-      reinterpret_cast<uint8_t*>(&m_tx_pub_key)) == SHEKYL_TX_EXTRA_OK;
+    crypto::secret_key tx_sec;
+    crypto::generate_keys(m_tx_pub_key, tx_sec);
+    return true;
   }
 
 protected:
   cryptonote::account_base m_bob;
-  cryptonote::transaction m_tx;
   crypto::public_key m_tx_pub_key;
 };

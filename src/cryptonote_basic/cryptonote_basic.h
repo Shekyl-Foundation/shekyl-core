@@ -350,7 +350,7 @@ namespace cryptonote
   // consensus and is consumed by three sites that MUST agree on what a given tx
   // is — check_tx_inputs (CT dispatch), check_tx_outputs (the v3
   // zero-plaintext-vout carve-out for emission reward vouts), and
-  // ver_non_input_consensus (RCT semantics) — so the predicate lives here once
+  // the deleted C++ RCT-semantics dispatch — so the predicate lives here once
   // (REWARD_EMISSION_E3_GATING_ROUND.md §2.2 / §9.5). Do not re-open-code it: a
   // second copy that drifts splits validators on whether a tx is an emission tx.
   enum class archival_tx_kind { none, serve_credit_only, bond_post, emission };
