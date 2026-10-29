@@ -19,7 +19,6 @@ All binaries are placed in `build/release/bin/` (or `build/debug/bin/`).
 | `shekyl-blockchain-stats` | Time-series chain statistics |
 | `shekyl-mdb-copy` | Compact a stopped daemon's LMDB database |
 | `shekyl-utils-deserialize` | Decode hex blobs to human-readable JSON |
-| `shekyl-utils-object-sizes` | Print sizeof for core data structures |
 
 The `shekyl-utils-*` executables are only built when `BUILD_DEBUG_UTILITIES=ON`.
 
@@ -585,18 +584,6 @@ human-readable JSON.
 ```bash
 shekyl-utils-deserialize --input <hex-string>
 ```
-
-### `shekyl-utils-object-sizes`
-
-Prints `sizeof` for the major data structures used throughout the codebase
-(P2P messages, transaction types, wallet structures, etc.). Useful for
-profiling memory layout and detecting struct bloat.
-
-```bash
-shekyl-utils-object-sizes
-```
-
-No options — simply run and inspect the output.
 
 ---
 
