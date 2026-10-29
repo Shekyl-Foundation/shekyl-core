@@ -46,7 +46,6 @@
 #include "daemon/daemon.h"
 #include "misc_log_ex.h"
 #include "p2p/net_node.h"
-#include "rpc/core_rpc_server.h"
 #include "cryptonote_config.h"
 #include "version.h"
 #ifdef STACK_TRACE

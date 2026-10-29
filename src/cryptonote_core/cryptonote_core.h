@@ -45,7 +45,6 @@
 #include "checkpoints/checkpoints.h"
 #include "syncobj.h"
 #include "math_helper.h"
-#include "rpc/core_rpc_server_commands_defs.h"
 #include "rpc/message_data_structs.h"
 #include "shekyl/shekyl_ffi.h"
 #include "cryptonote_basic/connection_context.h"
@@ -484,14 +483,6 @@ namespace cryptonote
      bool get_pool_transactions(std::vector<transaction>& txs, bool include_sensitive_txes = false) const;
 
      /**
-      * @copydoc pool::get_txpool_backlog
-      * @param include_sensitive_txes include private transactions
-      *
-      * @note see pool::get_txpool_backlog
-      */
-     bool get_txpool_backlog(std::vector<tx_backlog_entry>& backlog, bool include_sensitive_txes = false) const;
-     
-     /**
       * @copydoc pool::get_transactions
       * @param include_sensitive_txes include private transactions
       *
@@ -499,36 +490,12 @@ namespace cryptonote
       */
      bool get_pool_transaction_hashes(std::vector<crypto::hash>& txs, bool include_sensitive_txes = false) const;
 
-
-    /**
-      * @copydoc pool::get_transactions
-      * @param include_sensitive_txes include private transactions
-      *
-      * @note see pool::get_transactions
-      */
-     bool get_pool_transaction_stats(struct txpool_stats& stats, bool include_sensitive_txes = false) const;
-
      /**
       * @copydoc pool::get_transaction
       *
       * @note see pool::get_transaction
       */
      bool get_pool_transaction(const crypto::hash& id, cryptonote::blobdata& tx, relay_category tx_category) const;
-
-     /**
-      * @copydoc pool::get_pool_transactions_and_spent_keys_info
-      * @param include_sensitive_txes include private transactions
-      *
-      * @note see pool::get_pool_transactions_and_spent_keys_info
-      */
-     bool get_pool_transactions_and_spent_keys_info(std::vector<tx_info>& tx_infos, std::vector<spent_key_image_info>& key_image_infos, bool include_sensitive_txes = false) const;
-
-     /**
-      * @copydoc pool::get_pool_for_rpc
-      *
-      * @note see pool::get_pool_for_rpc
-      */
-     bool get_pool_for_rpc(std::vector<cryptonote::rpc::tx_in_pool>& tx_infos, cryptonote::rpc::key_images_with_tx_hashes& key_image_infos) const;
 
      /**
       * @copydoc pool::get_transactions_count

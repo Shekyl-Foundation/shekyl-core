@@ -15,7 +15,6 @@
 #include <vector>
 
 #include "core_rpc_ffi_internal.h"
-#include "core_rpc_server.h"
 #include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_protocol/block_queue.h"
 #include "net/net_utils_base.h"
@@ -73,12 +72,12 @@ extern "C" {
 
 int shekyl_rpc_net_stats(core_rpc_handle* h, shekyl_rpc_net_stats_facts* out)
 {
-  if (!h || !h->rpc || !out)
+  if (!h || !h->core || !out)
     return SHEKYL_RPC_FACTS_ERR_NULL;
   try
   {
     std::memset(out, 0, sizeof(*out));
-    out->start_time = static_cast<uint64_t>(h->rpc->get_core().get_start_time());
+    out->start_time = static_cast<uint64_t>(h->core->get_start_time());
     shekyl_link_totals(&out->total_bytes_in, &out->total_packets_in,
       &out->total_bytes_out, &out->total_packets_out);
     return SHEKYL_RPC_FACTS_OK;
@@ -102,7 +101,7 @@ int shekyl_rpc_connections(core_rpc_handle* h, uint64_t* out_now,
 {
   if (out_owner)
     *out_owner = nullptr;
-  if (!h || !h->rpc || !out_now || !out || !out_len || !out_owner)
+  if (!h || !h->p2p || !out_now || !out || !out_len || !out_owner)
     return SHEKYL_RPC_FACTS_ERR_NULL;
   *out = nullptr;
   *out_len = 0;
@@ -123,7 +122,7 @@ int shekyl_rpc_connections(core_rpc_handle* h, uint64_t* out_now,
     // Upcasting to that interface is the sanctioned access, not a way around
     // one: it is the same entry point `get_connections()` uses.
     nodetool::i_p2p_endpoint<cryptonote::cryptonote_connection_context>& endpoint =
-      h->rpc->get_p2p();
+      *h->p2p;
     // Address, direction, the handshake flag, and admission time come from
     // the board. Last receive and last send are unix time of the monotonic
     // byte stamps. Height, support flags, and the pull state are claims:
@@ -241,7 +240,7 @@ int shekyl_rpc_sync_spans(core_rpc_handle* h,
 {
   if (out_owner)
     *out_owner = nullptr;
-  if (!h || !h->rpc || !out || !out_len || !out_owner)
+  if (!h || !h->p2p || !out || !out_len || !out_owner)
     return SHEKYL_RPC_FACTS_ERR_NULL;
   *out = nullptr;
   *out_len = 0;
@@ -249,7 +248,7 @@ int shekyl_rpc_sync_spans(core_rpc_handle* h,
   try
   {
     owned.reset(new daemon_rpc_facts::sync_spans_owner());
-    auto& payload = h->rpc->get_p2p().get_payload_object();
+    auto& payload = h->p2p->get_payload_object();
     const cryptonote::block_queue& queue = payload.get_block_queue();
     queue.foreach([&](const cryptonote::block_queue::span& span)
     {

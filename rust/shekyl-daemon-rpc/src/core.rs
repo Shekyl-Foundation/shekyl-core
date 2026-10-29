@@ -26,22 +26,22 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-//! Thread-safe wrapper over the C++ core_rpc_server FFI handle.
+//! The sync-half facts handle: net stats, connections, sync spans, and
+//! stem tallies. Chain and pool reads go through the store.
 
 use crate::ffi;
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 
 /// Wrapper around the opaque `core_rpc_handle` pointer.
-/// The handle borrows an existing `core_rpc_server` owned by the C++ daemon.
+/// The handle borrows the daemon's `rpc_subject` (core and the p2p server).
 ///
-/// All methods are `&self` because the underlying C++ handlers are already
-/// designed for concurrent access (epee's thread pool model). The FFI calls
-/// block on the C++ side, so Axum dispatches them via `spawn_blocking`.
+/// Methods are `&self`. The reads they make are the sync half, and Axum
+/// dispatches the blocking ones via `spawn_blocking`.
 pub struct CoreRpc {
     handle: *mut ffi::CoreRpcHandle,
 }
 
-// The C++ core_rpc_server handlers use internal locks for thread safety.
+// The sync-half reads do not share mutable state through this handle.
 unsafe impl Send for CoreRpc {}
 unsafe impl Sync for CoreRpc {}
 
@@ -224,7 +224,7 @@ unsafe fn borrowed_string(ptr: *const std::os::raw::c_char, len: usize) -> Strin
 /// carries a discriminator the contract does not define.
 ///
 /// Split out of the `unsafe` walk because that walk cannot be driven without a
-/// live `core_rpc_server`, and this is the part with a decision in it. The
+/// live facts handle, and this is the part with a decision in it. The
 /// pointer arithmetic stays at the call site; what crosses here is already
 /// owned data.
 ///
@@ -263,11 +263,11 @@ fn slot_of(
 }
 
 impl CoreRpc {
-    /// Wrap a raw `core_rpc_server*` obtained from C++.
+    /// Wrap the daemon's `rpc_subject`.
     ///
     /// # Safety
-    /// `rpc_server_ptr` must point to a live, fully-initialized `core_rpc_server`
-    /// that outlives this `CoreRpc`.
+    /// `subject_ptr` must point to a live `rpc_subject` that outlives this
+    /// value, or be null. A subject missing either pointer yields `None`.
     pub unsafe fn from_raw(rpc_server_ptr: *mut std::ffi::c_void) -> Option<Self> {
         let handle = unsafe { ffi::core_rpc_ffi_create(rpc_server_ptr) };
         if handle.is_null() {
@@ -277,30 +277,10 @@ impl CoreRpc {
         }
     }
 
-    /// Dispatch a JSON REST endpoint (e.g. "/get_info"). `host` is whether
-    /// the caller is the host's administrator (`RPC_CHANNEL.md` §6.1, from
-    /// the connection's authority), and it rides with the call: one
-    /// `core_rpc_server` answers every connection, so the C++ handlers read
-    /// it off the origin the bridge hands them (`core_rpc_ffi.cpp`,
-    /// `rpc_origin`). The in-process console passes `true`.
-    pub fn json_endpoint(&self, uri: &str, body: &str, host: bool) -> Option<String> {
-        if self.handle.is_null() {
-            return None;
-        }
-        let c_uri = CString::new(uri).ok()?;
-        let c_body = CString::new(body).ok()?;
-        unsafe {
-            let ptr =
-                ffi::core_rpc_ffi_json_endpoint(self.handle, c_uri.as_ptr(), c_body.as_ptr(), host);
-            consume_c_string(ptr)
-        }
-    }
-
     /// §55: relay stem-outcome tallies as a JSON array string.
     ///
-    /// Not routed through [`Self::json_endpoint`] because the data does not
-    /// live in `core_rpc_server` — it lives in the relay zones, and this is
-    /// the shortest path to it while C++ owns their lifetime.
+    /// The counts live in the relay zones. This is the readout while C++
+    /// owns their lifetime.
     pub fn stem_tallies(&self) -> Option<String> {
         if self.handle.is_null() {
             return None;
@@ -487,18 +467,6 @@ impl CoreRpc {
     /// inventing an offline state.
     pub fn p2p_state() -> Result<P2pRead<()>, i32> {
         offline_answer().unwrap_or(Ok(P2pRead::Running(())))
-    }
-    pub fn json_rpc(&self, method: &str, params: &str, host: bool) -> Option<String> {
-        if self.handle.is_null() {
-            return None;
-        }
-        let c_method = CString::new(method).ok()?;
-        let c_params = CString::new(params).ok()?;
-        unsafe {
-            let ptr =
-                ffi::core_rpc_ffi_json_rpc(self.handle, c_method.as_ptr(), c_params.as_ptr(), host);
-            consume_c_string(ptr)
-        }
     }
 }
 

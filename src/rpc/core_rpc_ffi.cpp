@@ -28,265 +28,32 @@
 
 #include "core_rpc_ffi.h"
 #include "core_rpc_ffi_internal.h"
-#include "core_rpc_server.h"
-#include "core_rpc_server_commands_defs.h"
-#include "storages/portable_storage_template_helper.h"
-#include "serialization/keyvalue_serialization.h"
 
+#include <cstdlib>
 #include <cstring>
+#include <new>
 #include <string>
-#include <unordered_map>
-#include <functional>
-#include <sstream>
+
+#include "misc_log_ex.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
-#define SHEKYL_DEFAULT_LOG_CATEGORY "daemon.rpc.ffi"
+#define SHEKYL_DEFAULT_LOG_CATEGORY "daemon.rpc"
 
-using namespace cryptonote;
-
-// ─── Template Helpers ────────────────────────────────────────────────────────
-
-namespace {
-
-// The origin every bridged request carries: whether the caller is the host's
-// administrator (RPC_CHANNEL.md §6.1, RT-O32).
-//
-// A handler asks `ctx` one question through `caller_is_host`. The answer is
-// the connection's, not the server's: one `core_rpc_server` answers every
-// connection (DAEMON_CONFIG_CUTOVER.md §2.2 step 7), so it cannot be a member
-// of it. It rides with each bridged call as the identity of one of two
-// origins, chosen in Rust from the connection's authority. Who may call a
-// method at all is the Rust method table's; the host flag is the only fact
-// about the caller C++ is told. The in-process console calls
-// `core_rpc_server::on_*` with a null `ctx`, which is the host.
-//
-// What it decides here is the pool reads' `include_sensitive`: whether a
-// transaction this node has not broadcast is disclosed at all (host-only
-// data). Single-sourced so there is one place to be wrong: every dispatcher
-// names `rpc_origin(host)` and nothing else. The guard that the flag arrives
-// is `restricted_listener_hides_a_transaction_this_node_has_not_broadcast`
-// (rust/shekyl-engine-core/src/engine/regtest_e2e_origin.rs) — two live
-// daemons, a transaction one of them has not broadcast, and the three pool
-// routes asked as the host and as another caller. It has to be there rather
-// than beside this file: a C++ test of this helper cannot see whether the
-// dispatchers call it, so reverting one of them would leave such a test
-// green. That one goes red.
-//
-// "Every" includes the two hand-written ones, `dispatch_submitblock` and
-// `dispatch_calcpow`. Neither handler reads `ctx` today; they are converted
-// because a bridge rule with silent exceptions is how the posture once went
-// unread, and a host check added to either later would otherwise be born
-// dead.
-//
-// The addresses are left default-constructed: an origin asserts "an RPC
-// client asked", never "this particular peer asked", and a context shared
-// by every caller must not carry an address anything could score against.
-// The two origins and `rpc_origin_is_host` live in core_rpc_server.cpp (the
-// server's library reads them).
-
-// JSON endpoint: deserialize request from JSON, call handler, serialize response to JSON.
-template<typename COMMAND>
-char* dispatch_json(core_rpc_server& rpc,
-    bool (core_rpc_server::*handler)(const typename COMMAND::request&, typename COMMAND::response&, const core_rpc_server::connection_context*),
-    const char* body_json, bool host)
-{
-    typename COMMAND::request req{};
-    typename COMMAND::response res{};
-
-    if (body_json && body_json[0]) {
-        epee::serialization::load_t_from_json(static_cast<typename COMMAND::request_t&>(req), std::string(body_json));
-    }
-
-    (rpc.*handler)(req, res, rpc_origin(host));
-
-    std::string out;
-    epee::serialization::store_t_to_json(static_cast<const typename COMMAND::response_t&>(res), out);
-    return strdup(out.c_str());
-}
-
-// JSON-RPC: handler with error_resp.
-template<typename COMMAND>
-char* dispatch_jsonrpc_we(core_rpc_server& rpc,
-    bool (core_rpc_server::*handler)(const typename COMMAND::request&, typename COMMAND::response&, epee::json_rpc::error&, const core_rpc_server::connection_context*),
-    const char* params_json, bool host)
-{
-    typename COMMAND::request req{};
-    typename COMMAND::response res{};
-    epee::json_rpc::error error_resp{};
-
-    if (params_json && params_json[0]) {
-        epee::serialization::load_t_from_json(static_cast<typename COMMAND::request_t&>(req), std::string(params_json));
-    }
-
-    bool ok = (rpc.*handler)(req, res, error_resp, rpc_origin(host));
-
-    std::ostringstream oss;
-    if (ok && error_resp.code == 0) {
-        std::string result_json;
-        epee::serialization::store_t_to_json(static_cast<const typename COMMAND::response_t&>(res), result_json);
-        oss << R"({"ok":true,"result":)" << result_json << "}";
-    } else {
-        int code = error_resp.code ? error_resp.code : -32603;
-        // Escape quotes in message for JSON safety
-        std::string msg = error_resp.message.empty() ? "Internal error" : error_resp.message;
-        std::string escaped;
-        for (char c : msg) {
-            if (c == '"') escaped += "\\\"";
-            else if (c == '\\') escaped += "\\\\";
-            else if (c == '\n') escaped += "\\n";
-            else escaped += c;
-        }
-        oss << R"({"ok":false,"error_code":)" << code
-            << R"(,"error_message":")" << escaped << R"("})";
-    }
-    return strdup(oss.str().c_str());
-}
-
-// Dispatch table types
-using json_fn = std::function<char*(core_rpc_server&, const char*, bool)>;
-using jsonrpc_fn = std::function<char*(core_rpc_server&, const char*, bool)>;
-
-#define DJSON(uri, handler, cmd) \
-    {uri, [](core_rpc_server& rpc, const char* body, bool host) -> char* { \
-        return dispatch_json<cmd>(rpc, &core_rpc_server::handler, body, host); \
-    }}
-
-#define DJRPC_WE(method, handler, cmd) \
-    {method, [](core_rpc_server& rpc, const char* params, bool host) -> char* { \
-        return dispatch_jsonrpc_we<cmd>(rpc, &core_rpc_server::handler, params, host); \
-    }}
-
-// ─── Dispatch Tables ─────────────────────────────────────────────────────────
-
-const std::unordered_map<std::string, json_fn>& get_json_table() {
-    static const std::unordered_map<std::string, json_fn> t = {
-        DJSON("/get_alt_blocks_hashes",             on_get_alt_blocks_hashes,        COMMAND_RPC_GET_ALT_BLOCKS_HASHES),
-        DJSON("/get_transaction_pool",              on_get_transaction_pool,         COMMAND_RPC_GET_TRANSACTION_POOL),
-        DJSON("/get_transaction_pool_hashes",       on_get_transaction_pool_hashes,  COMMAND_RPC_GET_TRANSACTION_POOL_HASHES),
-        DJSON("/get_transaction_pool_stats",        on_get_transaction_pool_stats,   COMMAND_RPC_GET_TRANSACTION_POOL_STATS),
-        // Restricted-only endpoints (Rust checks restriction before calling)
-        DJSON("/start_mining",                      on_start_mining,                 COMMAND_RPC_START_MINING),
-        DJSON("/stop_mining",                       on_stop_mining,                  COMMAND_RPC_STOP_MINING),
-        DJSON("/mining_status",                     on_mining_status,                COMMAND_RPC_MINING_STATUS),
-        DJSON("/save_bc",                           on_save_bc,                      COMMAND_RPC_SAVE_BC),
-        DJSON("/set_log_hash_rate",                 on_set_log_hash_rate,            COMMAND_RPC_SET_LOG_HASH_RATE),
-        DJSON("/stop_daemon",                       on_stop_daemon,                  COMMAND_RPC_STOP_DAEMON),
-        DJSON("/pop_blocks",                        on_pop_blocks,                   COMMAND_RPC_POP_BLOCKS),
-    };
-    return t;
-}
-
-// Specialized dispatch for SUBMITBLOCK: request=vector<string>, response has response_t
-char* dispatch_submitblock(core_rpc_server& rpc, const char* params_json, bool host) {
-    COMMAND_RPC_SUBMITBLOCK::request req;
-    COMMAND_RPC_SUBMITBLOCK::response res;
-    epee::json_rpc::error error_resp{};
-
-    if (params_json && params_json[0]) {
-        std::string s(params_json);
-        auto start = s.find('[');
-        auto end = s.rfind(']');
-        if (start != std::string::npos && end != std::string::npos) {
-            std::string inner = s.substr(start + 1, end - start - 1);
-            // Parse quoted strings from the array
-            size_t pos = 0;
-            while ((pos = inner.find('"', pos)) != std::string::npos) {
-                auto close = inner.find('"', pos + 1);
-                if (close != std::string::npos) {
-                    req.push_back(inner.substr(pos + 1, close - pos - 1));
-                    pos = close + 1;
-                } else break;
-            }
-        }
-    }
-
-    bool ok = rpc.on_submitblock(req, res, error_resp, rpc_origin(host));
-    std::ostringstream oss;
-    if (ok && error_resp.code == 0) {
-        std::string result_json;
-        epee::serialization::store_t_to_json(static_cast<const COMMAND_RPC_SUBMITBLOCK::response_t&>(res), result_json);
-        oss << R"({"ok":true,"result":)" << result_json << "}";
-    } else {
-        int code = error_resp.code ? error_resp.code : -32603;
-        std::string msg = error_resp.message.empty() ? "Internal error" : error_resp.message;
-        oss << R"({"ok":false,"error_code":)" << code
-            << R"(,"error_message":")" << msg << R"("})";
-    }
-    return strdup(oss.str().c_str());
-}
-
-// Specialized dispatch for CALCPOW: request has request_t, response=string
-char* dispatch_calcpow(core_rpc_server& rpc, const char* params_json, bool host) {
-    COMMAND_RPC_CALCPOW::request req{};
-    COMMAND_RPC_CALCPOW::response res;
-    epee::json_rpc::error error_resp{};
-
-    if (params_json && params_json[0]) {
-        epee::serialization::load_t_from_json(static_cast<COMMAND_RPC_CALCPOW::request_t&>(req), std::string(params_json));
-    }
-
-    bool ok = rpc.on_calcpow(req, res, error_resp, rpc_origin(host));
-    std::ostringstream oss;
-    if (ok && error_resp.code == 0) {
-        oss << R"({"ok":true,"result":")" << res << R"("})";
-    } else {
-        int code = error_resp.code ? error_resp.code : -32603;
-        std::string msg = error_resp.message.empty() ? "Internal error" : error_resp.message;
-        oss << R"({"ok":false,"error_code":)" << code
-            << R"(,"error_message":")" << msg << R"("})";
-    }
-    return strdup(oss.str().c_str());
-}
-
-const std::unordered_map<std::string, jsonrpc_fn>& get_jsonrpc_table() {
-    static const std::unordered_map<std::string, jsonrpc_fn> t = {
-        // Non-standard request/response commands: manual dispatch
-        {"submit_block",       [](core_rpc_server& rpc, const char* p, bool r) { return dispatch_submitblock(rpc, p, r); }},
-        {"submitblock",        [](core_rpc_server& rpc, const char* p, bool r) { return dispatch_submitblock(rpc, p, r); }},
-        {"calc_pow",           [](core_rpc_server& rpc, const char* p, bool r) { return dispatch_calcpow(rpc, p, r); }},
-        // Handlers with error_resp
-        DJRPC_WE("get_block_template",      on_getblocktemplate,          COMMAND_RPC_GETBLOCKTEMPLATE),
-        DJRPC_WE("getblocktemplate",         on_getblocktemplate,          COMMAND_RPC_GETBLOCKTEMPLATE),
-        DJRPC_WE("get_miner_data",          on_getminerdata,              COMMAND_RPC_GETMINERDATA),
-        DJRPC_WE("generateblocks",          on_generateblocks,             COMMAND_RPC_GENERATEBLOCKS),
-        DJRPC_WE("inject_archival_serve_credit", on_inject_archival_serve_credit, COMMAND_RPC_INJECT_ARCHIVAL_SERVE_CREDIT),
-        DJRPC_WE("set_bans",              on_set_bans,                    COMMAND_RPC_SETBANS),
-        DJRPC_WE("get_bans",              on_get_bans,                    COMMAND_RPC_GETBANS),
-        DJRPC_WE("banned",                on_banned,                      COMMAND_RPC_BANNED),
-        DJRPC_WE("flush_txpool",          on_flush_txpool,                COMMAND_RPC_FLUSH_TRANSACTION_POOL),
-        DJRPC_WE("get_coinbase_tx_sum",    on_get_coinbase_tx_sum,        COMMAND_RPC_GET_COINBASE_TX_SUM),
-        DJRPC_WE("get_alternate_chains",   on_get_alternate_chains,       COMMAND_RPC_GET_ALTERNATE_CHAINS),
-        DJRPC_WE("relay_tx",              on_relay_tx,                    COMMAND_RPC_RELAY_TX),
-        DJRPC_WE("get_txpool_backlog",     on_get_txpool_backlog,         COMMAND_RPC_GET_TRANSACTION_POOL_BACKLOG),
-        DJRPC_WE("flush_cache",            on_flush_cache,                COMMAND_RPC_FLUSH_CACHE),
-        DJRPC_WE("get_curve_tree_info",       on_get_curve_tree_info,        COMMAND_RPC_GET_CURVE_TREE_INFO),
-        DJRPC_WE("get_curve_tree_checkpoint", on_get_curve_tree_checkpoint,  COMMAND_RPC_GET_CURVE_TREE_CHECKPOINT),
-        // Emission claim-source query (EMISSION_CLAIM_BUILDER.md §7): the
-        // wallet-side claim builder's one read. Registered on both
-        // transports from the start (the Rust/Axum transport is the
-        // default; a missing entry here is a 404 — see the curve-tree
-        // comment above).
-        DJRPC_WE("get_archival_emission_claim_source", on_get_archival_emission_claim_source, COMMAND_RPC_GET_ARCHIVAL_EMISSION_CLAIM_SOURCE),
-        DJRPC_WE("get_archival_shard_coverage", on_get_archival_shard_coverage, COMMAND_RPC_GET_ARCHIVAL_SHARD_COVERAGE),
-        // Who may call each row is the Rust method table's policy column
-        // (`shekyl-rpc-types` `methods.rs`, RW-Q7). No C++ re-check (RK-D6;
-        // see `on_relay_tx`).
-    };
-    return t;
-}
-
-} // anonymous namespace
-
-// ─── C API Implementation ────────────────────────────────────────────────────
+// The method tables are gone with the C++ server (DRS_X_STORE_FLIP.md
+// DX-Q3). What remains is the handle the sync-half facts and the stem
+// tallies read. A JSON name Rust does not serve itself is not found.
 
 extern "C" {
 
-core_rpc_handle* core_rpc_ffi_create(void* rpc_server_ptr)
+core_rpc_handle* core_rpc_ffi_create(void* subject_ptr)
 {
-    if (!rpc_server_ptr) return nullptr;
+    if (!subject_ptr) return nullptr;
+    const rpc_subject* subject = static_cast<const rpc_subject*>(subject_ptr);
+    if (!subject->core || !subject->p2p) return nullptr;
     auto* h = new(std::nothrow) core_rpc_handle;
     if (!h) return nullptr;
-    h->rpc = static_cast<core_rpc_server*>(rpc_server_ptr);
+    h->core = subject->core;
+    h->p2p = subject->p2p;
     return h;
 }
 
@@ -297,9 +64,9 @@ void core_rpc_ffi_destroy(core_rpc_handle* h)
 
 char* core_rpc_ffi_stem_tallies(core_rpc_handle* h)
 {
-    if (!h || !h->rpc) return nullptr;
+    if (!h || !h->p2p) return nullptr;
     try {
-        return strdup(h->rpc->stem_tallies_json().c_str());
+        return strdup(h->p2p->stem_tallies_json().c_str());
     } catch (const std::exception& e) {
         MERROR("core_rpc_ffi_stem_tallies: " << e.what());
         return nullptr;
@@ -309,33 +76,15 @@ char* core_rpc_ffi_stem_tallies(core_rpc_handle* h)
 char* core_rpc_ffi_json_endpoint(core_rpc_handle* h,
     const char* uri, const char* body_json, bool host)
 {
-    if (!h || !h->rpc || !uri) return nullptr;
-    const auto& table = get_json_table();
-    auto it = table.find(uri);
-    if (it == table.end()) return nullptr;
-    try {
-        return it->second(*h->rpc, body_json ? body_json : "", host);
-    } catch (const std::exception& e) {
-        MERROR("core_rpc_ffi_json_endpoint(" << uri << "): " << e.what());
-        return nullptr;
-    }
+    (void)h; (void)uri; (void)body_json; (void)host;
+    return nullptr;
 }
 
 char* core_rpc_ffi_json_rpc(core_rpc_handle* h,
     const char* method, const char* params_json, bool host)
 {
-    if (!h || !h->rpc || !method) return nullptr;
-    const auto& table = get_jsonrpc_table();
-    auto it = table.find(method);
-    if (it == table.end()) return nullptr;
-    try {
-        return it->second(*h->rpc, params_json ? params_json : "", host);
-    } catch (const std::exception& e) {
-        MERROR("core_rpc_ffi_json_rpc(" << method << "): " << e.what());
-        std::string err = std::string(R"({"ok":false,"error_code":-32603,"error_message":")")
-            + e.what() + R"("})";
-        return strdup(err.c_str());
-    }
+    (void)h; (void)method; (void)params_json; (void)host;
+    return nullptr;
 }
 
 void core_rpc_ffi_free_string(char* s) { free(s); }

@@ -41,7 +41,7 @@
 
 #include "common/scoped_message_writer.h"
 #include "net/jsonrpc_structs.h"
-#include "rpc/core_rpc_server_commands_defs.h"
+#include "shekyl/shekyl_ffi.h"
 #include "shekyl/shekyl_ffi.h"
 #include "storages/portable_storage_template_helper.h"
 #include "string_tools.h"
@@ -164,7 +164,7 @@ namespace tools
         fail_msg_writer() << fail_msg << " -- json_rpc_request: " << reason;
         return false;
       }
-      if (res.status != CORE_RPC_STATUS_OK) // TODO - handle CORE_RPC_STATUS_BUSY ?
+      if (res.status != std::string("OK"))
       {
         fail_msg_writer() << fail_msg << " -- json_rpc_request: " << res.status;
         m_failed = true;
@@ -182,13 +182,20 @@ namespace tools
         fail_msg_writer() << fail_msg << " -- rpc_request: " << reason;
         return false;
       }
-      if (res.status != CORE_RPC_STATUS_OK) // TODO - handle CORE_RPC_STATUS_BUSY ?
+      if (res.status != std::string("OK"))
       {
         fail_msg_writer() << fail_msg << " -- rpc_request: " << res.status;
         m_failed = true;
         return false;
       }
       return true;
+    }
+
+    // A raw POST. `post` records the failure.
+    bool post_route(const std::string& route, const std::string& payload, std::string& reason)
+    {
+      std::string body;
+      return post(route, payload, body, reason);
     }
 
     // Liveness: a `/get_height` round trip that the transport completes. The

@@ -34,7 +34,7 @@ use crate::core::CoreRpc;
 use crate::handles::ChainReadHandle;
 use crate::methods::{InternalFault, RpcFault};
 use crate::server::AppState;
-use crate::types::{FfiJsonRpcResult, JsonRpcRequest, JsonRpcResponse};
+use crate::types::{JsonRpcRequest, JsonRpcResponse};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::Extension;
@@ -92,68 +92,16 @@ pub async fn handle(
         };
     }
 
-    let params_str = if request.params.is_null()
-        || request.params.is_object()
-            && request
-                .params
-                .as_object()
-                .is_none_or(serde_json::Map::is_empty)
-    {
-        String::new()
-    } else {
-        serde_json::to_string(&request.params).unwrap_or_default()
-    };
-
-    let core = state.core.clone();
-    let method_clone = method.clone();
-    let host = authority.host();
-    let result =
-        tokio::task::spawn_blocking(move || core.json_rpc(&method_clone, &params_str, host)).await;
-
-    match result {
-        Ok(Some(raw)) => match serde_json::from_str::<FfiJsonRpcResult>(&raw) {
-            Ok(ffi_result) if ffi_result.ok => {
-                let value = ffi_result.result.unwrap_or(serde_json::Value::Null);
-                (StatusCode::OK, Json(JsonRpcResponse::success(id, value)))
-            }
-            Ok(ffi_result) => (
-                StatusCode::OK,
-                Json(JsonRpcResponse::error(
-                    id,
-                    ffi_result.error_code.unwrap_or(-32603),
-                    ffi_result
-                        .error_message
-                        .unwrap_or_else(|| "Internal error".into()),
-                )),
-            ),
-            Err(e) => {
-                warn!(method = %method, "Failed to parse FFI JSON-RPC response: {e}");
-                (
-                    StatusCode::OK,
-                    Json(JsonRpcResponse::error(
-                        id,
-                        -32603,
-                        "Internal parse error".into(),
-                    )),
-                )
-            }
-        },
-        Ok(None) => (
-            StatusCode::OK,
-            Json(JsonRpcResponse::error(
-                id,
-                -32601,
-                format!("Method not found: {method}"),
-            )),
-        ),
-        Err(e) => {
-            warn!(method = %method, "spawn_blocking failed: {e}");
-            (
-                StatusCode::OK,
-                Json(JsonRpcResponse::error(id, -32603, "Internal error".into())),
-            )
-        }
-    }
+    // A name in the table that has no native handler is not served.
+    // The C++ method table is gone (DRS_X_STORE_FLIP.md DX-Q3).
+    (
+        StatusCode::OK,
+        Json(JsonRpcResponse::error(
+            id,
+            -32601,
+            format!("Method not found: {method}"),
+        )),
+    )
 }
 
 /// Whether to compute a block's proof-of-work hash: only if the caller asked
@@ -877,10 +825,8 @@ mod tests {
         "get_alternate_chains",
         "relay_tx",
         "sync_info",
-        "flush_cache",
         "request_archival_shard",
         "option_set",
-        "inject_archival_serve_credit",
     ];
 
     /// Every name the daemon serves natively, the method each belongs to,
@@ -994,8 +940,8 @@ mod tests {
                 "{name} must dispatch natively"
             );
         }
-        // Still the C++ table's: recognizing one here would serve it from a
-        // handler that does not exist yet.
+        // Not native handlers. A name with no row is not found before
+        // dispatch; these stay unrecognized here.
         for name in [
             "mining_status",
             "flush_cache",
@@ -1005,7 +951,7 @@ mod tests {
         ] {
             assert!(
                 native_method_for(name).is_none(),
-                "{name} must fall through to the C++ dispatch table"
+                "{name} is not a native handler"
             );
         }
         // Not dispatched natively. Nothing on this side serves the name, so
@@ -1124,52 +1070,19 @@ mod tests {
         }
     }
 
-    /// The JSON-RPC names the C++ table serves until the flip, read from its
-    /// source (`src/rpc/core_rpc_ffi.cpp`, `get_jsonrpc_table`).
-    fn cpp_json_rpc_names() -> Vec<String> {
-        let path =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src/rpc/core_rpc_ffi.cpp");
-        let source = std::fs::read_to_string(&path).expect("the C++ JSON-RPC table");
-        let start = source
-            .find("get_jsonrpc_table()")
-            .expect("the table's function");
-        let body = &source[start..];
-        let body = &body[..body.find("return t;").expect("the table's end")];
-        let mut names = Vec::new();
-        for line in body.lines() {
-            let line = line.trim();
-            let quoted = if let Some(rest) = line.strip_prefix("{\"") {
-                rest
-            } else if let Some(rest) = line.strip_prefix("DJRPC_WE(\"") {
-                rest
-            } else {
-                continue;
-            };
-            if let Some(end) = quoted.find('"') {
-                names.push(quoted[..end].to_owned());
-            }
-        }
-        assert!(names.len() >= 20, "the parse found the table: {names:?}");
-        names
-    }
-
-    /// RW-Q7's gate for JSON-RPC: every name the daemon serves, natively or
-    /// through the C++ table, is a row, and every JSON-RPC row is served.
+    /// RW-Q7's gate for JSON-RPC: every name the daemon serves is a row,
+    /// and every JSON-RPC row is served natively. The C++ table is gone
+    /// (DRS_X_STORE_FLIP.md DX-Q3).
     #[test]
     fn every_served_json_rpc_name_is_a_row_and_every_row_is_served() {
         use shekyl_rpc_types::methods::{json_rpc, Surface, METHODS};
-        let cpp = cpp_json_rpc_names();
-        let native: Vec<&str> = SPECIFIED_NATIVE_METHODS
-            .iter()
-            .map(|(name, _, _)| *name)
-            .collect();
-        for name in cpp.iter().map(String::as_str).chain(native.iter().copied()) {
+        for (name, _, _) in SPECIFIED_NATIVE_METHODS {
             assert!(json_rpc(name).is_some(), "{name} is served but has no row");
         }
         for row in METHODS.iter().filter(|row| row.surface == Surface::JsonRpc) {
             for name in row.names() {
                 assert!(
-                    native_method_for(name).is_some() || cpp.iter().any(|c| c == name),
+                    native_method_for(name).is_some(),
                     "{name} is a row that nothing serves"
                 );
             }

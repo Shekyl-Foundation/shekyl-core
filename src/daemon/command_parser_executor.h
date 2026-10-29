@@ -37,8 +37,6 @@
 #pragma once
 
 #include "daemon/rpc_command_executor.h"
-#include "common/common_fwd.h"
-#include "rpc/core_rpc_server.h"
 
 namespace daemonize {
 
@@ -52,7 +50,7 @@ public:
     , uint16_t port
     , cryptonote::network_type nettype
     , bool is_rpc
-    , cryptonote::core_rpc_server* rpc_server = NULL
+    , void* live = NULL
     );
 
   bool rpc_request_failed() const { return m_executor.rpc_request_failed(); }
@@ -60,12 +58,6 @@ public:
   bool print_peer_list(const std::vector<std::string>& args);
 
   bool print_peer_list_stats(const std::vector<std::string>& args);
-
-  bool save_blockchain(const std::vector<std::string>& args);
-
-  bool show_hash_rate(const std::vector<std::string>& args);
-
-  bool hide_hash_rate(const std::vector<std::string>& args);
 
   bool show_difficulty(const std::vector<std::string>& args);
 
@@ -83,42 +75,15 @@ public:
 
   bool is_key_image_spent(const std::vector<std::string>& args);
 
-  bool print_transaction_pool_long(const std::vector<std::string>& args);
-
-  bool print_transaction_pool_short(const std::vector<std::string>& args);
-
   bool print_transaction_pool_stats(const std::vector<std::string>& args);
-
-  bool start_mining(const std::vector<std::string>& args);
-
-  bool stop_mining(const std::vector<std::string>& args);
-
-  bool mining_status(const std::vector<std::string>& args);
 
   bool stop_daemon(const std::vector<std::string>& args);
 
   bool print_status(const std::vector<std::string>& args);
 
-
-
-
-  bool show_bans(const std::vector<std::string>& args);
-
-  bool ban(const std::vector<std::string>& args);
-
-  bool unban(const std::vector<std::string>& args);
-
-  bool banned(const std::vector<std::string>& args);
-
-  bool flush_txpool(const std::vector<std::string>& args);
-
-  bool print_coinbase_tx_sum(const std::vector<std::string>& args);
-
   bool alt_chain_info(const std::vector<std::string>& args);
 
   bool print_blockchain_dynamic_stats(const std::vector<std::string>& args);
-
-  bool relay_tx(const std::vector<std::string>& args);
 
   bool sync_info(const std::vector<std::string>& args);
 
@@ -129,8 +94,6 @@ public:
 
 
   bool print_net_stats(const std::vector<std::string>& args);
-
-  bool flush_cache(const std::vector<std::string>& args);
 };
 
 } // namespace daemonize

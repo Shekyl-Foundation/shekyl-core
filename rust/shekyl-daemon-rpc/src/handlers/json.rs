@@ -26,10 +26,10 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-//! Handlers for JSON REST endpoints (MAP_URI_AUTO_JON2 family).
+//! Handlers for JSON REST endpoints.
 //!
-//! Each handler is a thin async wrapper that offloads the blocking C++ FFI call
-//! to a Tokio blocking thread.
+//! A handler reads the store, the pool, or the sync-half facts. A name
+//! with no row is not a route.
 
 use crate::authority::Authority;
 use crate::server::AppState;
@@ -38,21 +38,6 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Extension;
 use std::sync::Arc;
-
-/// Offload one blocking C++ JSON dispatch; `None` on FFI failure.
-async fn dispatch_json_raw(
-    state: &Arc<AppState>,
-    authority: Authority,
-    uri: &'static str,
-    body: String,
-) -> Option<String> {
-    let core = state.core.clone();
-    let host = authority.host();
-    tokio::task::spawn_blocking(move || core.json_endpoint(uri, &body, host))
-        .await
-        .ok()
-        .flatten()
-}
 
 fn json_ok(body: String) -> (StatusCode, [(&'static str, &'static str); 1], String) {
     (StatusCode::OK, [("content-type", "application/json")], body)
@@ -74,30 +59,6 @@ fn json_error(reason: &str) -> (StatusCode, [(&'static str, &'static str); 1], S
         [("content-type", "application/json")],
         serde_json::to_string(&envelope).expect("plain data serializes"),
     )
-}
-
-async fn dispatch_json(
-    state: Arc<AppState>,
-    authority: Authority,
-    uri: &'static str,
-    body: String,
-) -> impl IntoResponse {
-    match dispatch_json_raw(&state, authority, uri, body).await {
-        Some(json) => json_ok(json),
-        None => json_dispatch_error(),
-    }
-}
-
-macro_rules! json_handler {
-    ($fn_name:ident, $uri:expr) => {
-        pub async fn $fn_name(
-            State(state): State<Arc<AppState>>,
-            Extension(authority): Extension<Authority>,
-            body: String,
-        ) -> impl IntoResponse {
-            dispatch_json(state, authority, $uri, body).await
-        }
-    };
 }
 
 /// A method failure, on every surface, is the JSON-RPC error object
@@ -306,75 +267,6 @@ pub async fn get_info(
     render("get_info", "node facts unavailable", result)
 }
 
-#[cfg(test)]
-mod tests {
-
-    /// The two ways to omit every field must ask the same question. They did
-    /// not on the C++ bridge, and that split had a live consumer.
-    #[test]
-    fn bodyless_and_empty_object_are_the_same_peer_list_request() {
-        let from_empty_object: shekyl_rpc_types::GetPeerListRequest =
-            serde_json::from_str("{}").expect("an empty object is a valid request");
-        let bodyless = shekyl_rpc_types::GetPeerListRequest::default();
-        assert_eq!(
-            from_empty_object, bodyless,
-            "however a caller omits the fields, it is asking one question"
-        );
-        assert!(
-            bodyless.public_only,
-            "and that question is the declared OPT default, not the \
-             value-initialized zero the old bridge fell back to"
-        );
-        assert!(!bodyless.include_blocked);
-    }
-    use super::json_error;
-
-    /// A native method's failure names its own cause in the envelope —
-    /// never "FFI dispatch failed", which it cannot be.
-    #[test]
-    fn a_store_fault_is_rendered_in_its_own_words() {
-        use super::render;
-        use crate::methods::{RpcFault, StoreFault};
-        use shekyl_types::ChainCount;
-        use shekyl_units::AtomicUnits;
-
-        let store = StoreFault::SupplyInvariant {
-            coins_generated: AtomicUnits::from_raw(1_000),
-            total_burned: AtomicUnits::from_raw(1_001),
-            chain_height: ChainCount::from_raw(77),
-        };
-        let (status, _, body) = render::<shekyl_rpc_types::GetInfoResponse>(
-            "get_info",
-            "node facts unavailable",
-            Ok(Err(RpcFault::Store(store))),
-        );
-        assert_eq!(status, axum::http::StatusCode::INTERNAL_SERVER_ERROR);
-        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(v["status"], "ERROR");
-        assert_eq!(v["error"], store.to_string());
-
-        // A facts code beside it is still the method's generic line.
-        let (_, _, body) = render::<shekyl_rpc_types::GetInfoResponse>(
-            "get_info",
-            "node facts unavailable",
-            Ok(Err(RpcFault::Facts(
-                crate::chain_facts::FactsFault::Inconsistent,
-            ))),
-        );
-        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(v["error"], "node facts unavailable");
-    }
-
-    #[test]
-    fn native_error_envelope_names_the_cause() {
-        let (status, _, body) = json_error("chain facts unavailable");
-        assert_eq!(status, axum::http::StatusCode::INTERNAL_SERVER_ERROR);
-        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(v["status"], "ERROR");
-        assert_eq!(v["error"], "chain facts unavailable");
-    }
-}
-
 /// `/start_mining { threads }`: the built-in miner, on the node's address
 /// (N2). A request that names an address is not this method's.
 pub async fn start_mining(
@@ -402,9 +294,6 @@ pub async fn mining_status(State(state): State<Arc<AppState>>) -> impl IntoRespo
     let mining = Arc::clone(&state.handles.mining);
     rest_blocking(move || crate::mining_methods::mining_status(mining.as_ref())).await
 }
-
-json_handler!(save_bc, "/save_bc");
-json_handler!(set_log_hash_rate, "/set_log_hash_rate");
 
 /// `/stop_daemon`: ask the node to stop. The reply is sent before it goes.
 pub async fn stop_daemon(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -553,5 +442,74 @@ pub async fn get_stem_tallies(State(state): State<Arc<AppState>>) -> impl IntoRe
     {
         Some(body) => json_ok(body),
         None => json_dispatch_error(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    /// The two ways to omit every field must ask the same question. They did
+    /// not on the C++ bridge, and that split had a live consumer.
+    #[test]
+    fn bodyless_and_empty_object_are_the_same_peer_list_request() {
+        let from_empty_object: shekyl_rpc_types::GetPeerListRequest =
+            serde_json::from_str("{}").expect("an empty object is a valid request");
+        let bodyless = shekyl_rpc_types::GetPeerListRequest::default();
+        assert_eq!(
+            from_empty_object, bodyless,
+            "however a caller omits the fields, it is asking one question"
+        );
+        assert!(
+            bodyless.public_only,
+            "and that question is the declared OPT default, not the \
+             value-initialized zero the old bridge fell back to"
+        );
+        assert!(!bodyless.include_blocked);
+    }
+    use super::json_error;
+
+    /// A native method's failure names its own cause in the envelope —
+    /// never "FFI dispatch failed", which it cannot be.
+    #[test]
+    fn a_store_fault_is_rendered_in_its_own_words() {
+        use super::render;
+        use crate::methods::{RpcFault, StoreFault};
+        use shekyl_types::ChainCount;
+        use shekyl_units::AtomicUnits;
+
+        let store = StoreFault::SupplyInvariant {
+            coins_generated: AtomicUnits::from_raw(1_000),
+            total_burned: AtomicUnits::from_raw(1_001),
+            chain_height: ChainCount::from_raw(77),
+        };
+        let (status, _, body) = render::<shekyl_rpc_types::GetInfoResponse>(
+            "get_info",
+            "node facts unavailable",
+            Ok(Err(RpcFault::Store(store))),
+        );
+        assert_eq!(status, axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["status"], "ERROR");
+        assert_eq!(v["error"], store.to_string());
+
+        // A facts code beside it is still the method's generic line.
+        let (_, _, body) = render::<shekyl_rpc_types::GetInfoResponse>(
+            "get_info",
+            "node facts unavailable",
+            Ok(Err(RpcFault::Facts(
+                crate::chain_facts::FactsFault::Inconsistent,
+            ))),
+        );
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["error"], "node facts unavailable");
+    }
+
+    #[test]
+    fn native_error_envelope_names_the_cause() {
+        let (status, _, body) = json_error("chain facts unavailable");
+        assert_eq!(status, axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["status"], "ERROR");
+        assert_eq!(v["error"], "chain facts unavailable");
     }
 }

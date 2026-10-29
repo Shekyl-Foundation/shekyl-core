@@ -226,11 +226,6 @@ namespace cryptonote
     return core_tx_blobs(txs_ids, txs, missed_txs);
   }
   //-----------------------------------------------------------------------------------------------
-  bool core::get_txpool_backlog(std::vector<tx_backlog_entry>& backlog, bool include_sensitive_txes) const
-{
-    return false;
-  }
-  //-----------------------------------------------------------------------------------------------
   bool core::get_transactions(const std::vector<crypto::hash>& txs_ids, std::vector<transaction>& txs, std::vector<crypto::hash>& missed_txs, bool pruned) const
   {
     (void)pruned;
@@ -947,11 +942,6 @@ namespace cryptonote
     return ok;
   }
   //-----------------------------------------------------------------------------------------------
-  bool core::get_pool_transaction_stats(struct txpool_stats& stats, bool include_sensitive_data) const
-{
-    return false;
-  }
-  //-----------------------------------------------------------------------------------------------
   bool core::get_pool_transaction(const crypto::hash &id, cryptonote::blobdata& tx, relay_category tx_category) const
 {
     return false;
@@ -962,16 +952,6 @@ namespace cryptonote
     // Membership, stem included: the relay's question (i_core_events). A
     // compact block resolves shown bodies only, and does not call this.
     return shekyl_pool_has(reinterpret_cast<const std::uint8_t*>(id.data)) == 1;
-  }
-  //-----------------------------------------------------------------------------------------------
-  bool core::get_pool_transactions_and_spent_keys_info(std::vector<tx_info>& tx_infos, std::vector<spent_key_image_info>& key_image_infos, bool include_sensitive_data) const
-{
-    return false;
-  }
-  //-----------------------------------------------------------------------------------------------
-  bool core::get_pool_for_rpc(std::vector<cryptonote::rpc::tx_in_pool>& tx_infos, cryptonote::rpc::key_images_with_tx_hashes& key_image_infos) const
-{
-    return false;
   }
   //-----------------------------------------------------------------------------------------------
   bool core::get_short_chain_history(std::list<crypto::hash>& ids, uint64_t& current_height) const

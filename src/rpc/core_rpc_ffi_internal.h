@@ -32,8 +32,9 @@
 
 #pragma once
 
-namespace cryptonote { class core_rpc_server; }
+#include "rpc_subject.h"
 
 struct core_rpc_handle {
-    cryptonote::core_rpc_server* rpc;
+    cryptonote::core* core;
+    nodetool::node_server<cryptonote::t_cryptonote_protocol_handler<cryptonote::core>>* p2p;
 };
