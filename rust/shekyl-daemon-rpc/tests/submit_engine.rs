@@ -200,7 +200,7 @@ fn weight_over_limit_rejects_malformed() {
     // (C++ order: Rule 4 weight precedes add_tx's fee check).
     let mut facts = base_facts();
     facts.weight_limit = 100;
-    facts.fee_per_byte = u64::MAX; // fee would also fail: weight must win
+    facts.fee_floor_window = Some(vec![u64::MAX]); // the fee would also fail: weight must win
     let (engine, _shim, verifier) = engine(facts, CommitOutcome::Committed);
     assert_eq!(
         engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
@@ -212,7 +212,6 @@ fn weight_over_limit_rejects_malformed() {
 #[test]
 fn fee_below_floor_rejects_fee_too_low() {
     let mut facts = base_facts();
-    facts.fee_per_byte = 1_000_000; // floor far above the 1e6 fixture fee
     facts.fee_floor_window = Some(vec![1_000_000]);
     let (engine, shim, verifier) = engine(facts, CommitOutcome::Committed);
     assert_eq!(
@@ -243,7 +242,6 @@ fn a_fee_short_of_the_tip_floor_is_refused_before_the_commit() {
         parsed.fee
     );
     let mut facts = admitting_facts(&parsed);
-    facts.fee_per_byte = fee_per_byte;
     facts.fee_floor_window = Some(vec![fee_per_byte]);
     let raced_unchanged = CommitOutcome::Raced(Box::new(facts.clone()));
     let (engine, shim, verifier) = engine(facts, raced_unchanged);
@@ -418,7 +416,7 @@ fn raced_in_chain_wins_over_every_other_premise() {
     fresh.in_chain = Some(BlockHeight::from_raw(201));
     fresh.key_image_conflicts = vec![KeyImageConflict::Other, KeyImageConflict::Free];
     fresh.reference = None;
-    fresh.fee_per_byte = u64::MAX;
+    fresh.fee_floor_window = Some(vec![u64::MAX]);
     let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(Box::new(fresh)));
     assert_eq!(
         engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
@@ -486,7 +484,6 @@ fn a_concealed_answer_is_the_fresh_answer_under_every_public_change() {
         ("nothing moved", |_| {}),
         ("the reference drifted", |f| f.reference = None),
         ("the fee floor rose", |f| {
-            f.fee_per_byte = u64::MAX;
             f.fee_floor_window = Some(vec![u64::MAX]);
         }),
         ("the pool is full at this rate", |f| {
@@ -554,7 +551,7 @@ fn raced_key_image_conflict_beats_stale_root() {
     let mut fresh = base_facts();
     fresh.key_image_conflicts = vec![KeyImageConflict::Free, KeyImageConflict::Other];
     fresh.reference = None;
-    fresh.fee_per_byte = u64::MAX;
+    fresh.fee_floor_window = Some(vec![u64::MAX]);
     let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(Box::new(fresh)));
     assert_eq!(
         engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
@@ -622,7 +619,6 @@ fn raced_fee_floor_rise_classifies_fee_too_low() {
     // F34: the floor moved during Phase C with everything else stable —
     // the exact zombie-Accepted shape the redesign abolishes.
     let mut fresh = base_facts();
-    fresh.fee_per_byte = 1_000_000;
     fresh.fee_floor_window = Some(vec![1_000_000]);
     let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(Box::new(fresh)));
     assert_eq!(
@@ -825,7 +821,6 @@ fn with_the_window_the_engines_fee_gate_is_the_doors() {
     let verdict = |fee, window: Option<Vec<u64>>| {
         let hex = hexify(&spend_tx(fee));
         let mut facts = admitting_facts(&parse_submission(&hex).expect("parses"));
-        facts.fee_per_byte = tip;
         facts.fee_floor_window = window;
         let (engine, _shim, _verifier) = engine(facts, CommitOutcome::Committed);
         engine.submit(&hex, SubmitCaller::Owner).unwrap()

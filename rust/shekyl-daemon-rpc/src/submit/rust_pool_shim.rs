@@ -64,8 +64,8 @@ use shekyl_archival_retention::{
     HoldingsKindScan, ShardSet,
 };
 use shekyl_chain_rules::{
-    emission_epoch_facts, relay_floor_at, relay_floor_window, release_last_served, AdmissionPolicy,
-    AtHeight, ChainView, EmissionEpochStanding, HeaderView, PolicyRow, RuleSet, Tip,
+    emission_epoch_facts, relay_floor_window, release_last_served, AdmissionPolicy, AtHeight,
+    ChainView, EmissionEpochStanding, HeaderView, PolicyRow, RuleSet, Tip,
 };
 use shekyl_chain_store::store::{ChainStore, ReadSnapshot, SnapshotView, StoreError};
 use shekyl_mempool::{shown, stateless, Admission, Judged, Pool, RelayView};
@@ -521,11 +521,6 @@ fn gather(
             _ => return Err(ShimFault),
         },
     };
-    let AtHeight::Recorded(fee_per_byte) =
-        relay_floor_at(&view, connecting).map_err(|_| ShimFault)?
-    else {
-        return Err(ShimFault);
-    };
     // The door's fee predicate's operand: the engine judges the fee by
     // CEN-M3's own rule over the window (the review of #1102, S5).
     let AtHeight::Recorded(fee_floor_window) =
@@ -541,7 +536,6 @@ fn gather(
         in_chain,
         key_image_conflicts,
         reference,
-        fee_per_byte,
         fee_floor_window: Some(fee_floor_window),
         pool_refuses_for_room: None,
         weight_limit: u64::try_from(shekyl_wire::transaction::TX_WEIGHT_LIMIT)

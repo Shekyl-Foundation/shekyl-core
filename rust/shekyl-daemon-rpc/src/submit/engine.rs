@@ -424,14 +424,13 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
                 reference.root,
             ))),
             None => {
-                // Unreachable while the fee floor is nonzero (fee 0 <
-                // floor rejects above). Reaching here means the shim
-                // supplied fee_per_byte == 0 — a contract violation —
-                // and minting a root-anchored certificate without a
-                // verified root would forge the §3.3 witness meaning.
-                // Loud failure per the user-absent-context inversion.
+                // Unreachable while the fee floor refuses a zero fee.
+                // Reaching here means the shim supplied a window that
+                // admitted the submission with no reference block, and
+                // minting a root-anchored certificate without a verified
+                // root would forge the §3.3 witness meaning.
                 Err(EngineFault::ShimContract(
-                    "serve-credit submission cleared the fee floor (fee_per_byte == 0?); \
+                    "serve-credit submission cleared the fee floor with no reference block; \
                      no root-anchored certificate can attest a non-spending arm (SP-T4a)",
                 ))
             }

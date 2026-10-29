@@ -100,8 +100,6 @@ pub struct SubmitFacts {
     pub key_image_conflicts: Vec<KeyImageConflict>,
     /// Reference-block facts, iff the hash is known to the daemon.
     pub reference: Option<ReferenceFacts>,
-    /// The tip floor, recorded beside the window. The gate reads the window.
-    pub fee_per_byte: u64,
     /// The relay floor window at the connecting height (FL-R23's lookback,
     /// `shekyl_chain_rules::relay_floor_window`). The engine judges the fee
     /// by `relay_floor_admits` (CEN-M3) over this window. `None` refuses

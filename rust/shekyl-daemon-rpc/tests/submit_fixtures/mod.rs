@@ -281,7 +281,6 @@ pub fn admitting_facts(parsed: &ParsedSubmission) -> SubmitFacts {
             root: FIXTURE_ROOT,
             tree_depth: 8,
         }),
-        fee_per_byte: 1,
         fee_floor_window: Some(vec![1]),
         pool_refuses_for_room: None,
         weight_limit: u64::try_from(shekyl_wire::transaction::TX_WEIGHT_LIMIT).unwrap(),
