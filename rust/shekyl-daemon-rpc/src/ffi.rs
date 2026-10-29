@@ -577,24 +577,6 @@ extern "C" {
     /// the zone directly. Do not build on the round trip.
     pub fn core_rpc_ffi_stem_tallies(h: *mut CoreRpcHandle) -> *mut std::os::raw::c_char;
 
-    /// `host` is whether the caller is the host's administrator, carried per
-    /// call: one `core_rpc_server` answers every connection, so the C++ side
-    /// reads it off the origin the bridge hands the handler, never off
-    /// itself.
-    pub fn core_rpc_ffi_json_endpoint(
-        h: *mut CoreRpcHandle,
-        uri: *const c_char,
-        body_json: *const c_char,
-        host: bool,
-    ) -> *mut c_char;
-
-    pub fn core_rpc_ffi_json_rpc(
-        h: *mut CoreRpcHandle,
-        method: *const c_char,
-        params_json: *const c_char,
-        host: bool,
-    ) -> *mut c_char;
-
     pub fn core_rpc_ffi_free_string(s: *mut c_char);
 
 }
@@ -613,24 +595,6 @@ extern "C" {
 mod unit_test_link_stubs {
     use super::*;
 
-    #[no_mangle]
-    pub extern "C" fn core_rpc_ffi_json_endpoint(
-        _h: *mut CoreRpcHandle,
-        _uri: *const std::os::raw::c_char,
-        _body: *const std::os::raw::c_char,
-        _host: bool,
-    ) -> *mut std::os::raw::c_char {
-        std::ptr::null_mut()
-    }
-    #[no_mangle]
-    pub extern "C" fn core_rpc_ffi_json_rpc(
-        _h: *mut CoreRpcHandle,
-        _method: *const std::os::raw::c_char,
-        _params: *const std::os::raw::c_char,
-        _host: bool,
-    ) -> *mut std::os::raw::c_char {
-        std::ptr::null_mut()
-    }
     #[no_mangle]
     pub extern "C" fn core_rpc_ffi_free_string(_s: *mut std::os::raw::c_char) {}
     #[no_mangle]

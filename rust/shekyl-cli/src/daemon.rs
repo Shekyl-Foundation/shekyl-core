@@ -310,7 +310,7 @@ impl DaemonClient {
     /// POST to one of the daemon's DJSON **path** handlers (`/start_mining`,
     /// `/stop_mining`, `/mining_status`, …). These are not `/json_rpc`
     /// methods: the response is a flat object whose `status` field carries
-    /// `"OK"` or the daemon's refusal text (`core_rpc_ffi.cpp` json table).
+    /// `"OK"` or the daemon's refusal text.
     fn path_rpc(&self, path: &str, body: &Value) -> Result<Value, DaemonError> {
         let url = format!("{}{path}", self.url);
         let parsed = self.post_json(&url, body)?;

@@ -41,7 +41,7 @@
 
 // The method tables are gone with the C++ server (DRS_X_STORE_FLIP.md
 // DX-Q3). What remains is the handle the sync-half facts and the stem
-// tallies read. A JSON name Rust does not serve itself is not found.
+// tallies read.
 
 extern "C" {
 
@@ -71,20 +71,6 @@ char* core_rpc_ffi_stem_tallies(core_rpc_handle* h)
         MERROR("core_rpc_ffi_stem_tallies: " << e.what());
         return nullptr;
     }
-}
-
-char* core_rpc_ffi_json_endpoint(core_rpc_handle* h,
-    const char* uri, const char* body_json, bool host)
-{
-    (void)h; (void)uri; (void)body_json; (void)host;
-    return nullptr;
-}
-
-char* core_rpc_ffi_json_rpc(core_rpc_handle* h,
-    const char* method, const char* params_json, bool host)
-{
-    (void)h; (void)method; (void)params_json; (void)host;
-    return nullptr;
 }
 
 void core_rpc_ffi_free_string(char* s) { free(s); }

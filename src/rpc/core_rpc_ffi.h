@@ -27,13 +27,9 @@
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 // C FFI for the sync-half facts handle and the stem-tally readout.
-// JSON names Rust does not serve itself return NULL.
+// The method tables are gone (DRS_X_STORE_FLIP.md DX-Q3).
 
 #pragma once
-
-#include <stdint.h>
-#include <stdbool.h>
-#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -46,8 +42,6 @@ typedef struct core_rpc_handle core_rpc_handle;
 core_rpc_handle* core_rpc_ffi_create(void* subject_ptr);
 void core_rpc_ffi_destroy(core_rpc_handle* h);
 
-// JSON REST endpoints (/get_info, /get_transactions, etc.).
-// Returns serialized JSON response body, or NULL if the URI is unknown.
 //! \brief §55: relay stem-outcome tallies as a JSON array (caller frees with
 //!        core_rpc_ffi_free_string).
 //!
@@ -55,18 +49,6 @@ void core_rpc_ffi_destroy(core_rpc_handle* h);
 //! hopping through C++ only because net_node owns the relay zone handles.
 //! Disappears with the p2p migration.
 char* core_rpc_ffi_stem_tallies(core_rpc_handle* h);
-
-// No C++ method table remains. Returns NULL.
-char* core_rpc_ffi_json_endpoint(core_rpc_handle* h,
-    const char* uri, const char* body_json, bool host);
-
-// JSON-RPC 2.0 method dispatch.
-// Returns a JSON string:
-//   {"ok":true,"result":{...}}                     on success
-//   {"ok":false,"error_code":N,"error_message":"..."} on handler error
-// Returns NULL only if the method is completely unknown.
-char* core_rpc_ffi_json_rpc(core_rpc_handle* h,
-    const char* method, const char* params_json, bool host);
 
 void core_rpc_ffi_free_string(char* s);
 
