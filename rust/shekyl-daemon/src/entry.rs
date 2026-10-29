@@ -62,6 +62,21 @@ pub struct ShekylDaemonEntry {
     pub stop: Option<StopFn>,
 }
 
+/// The 64-bit layout `main()` fills. `is_release` sits between the version
+/// string and `protocol_version` (FLIP-Q3). The C++ twin is
+/// `tests/unit_tests/daemon_entry_layout.cpp`; the FFI layout gate compares
+/// the two definitions.
+const _: () = {
+    assert!(std::mem::align_of::<ShekylDaemonEntry>() == 8);
+    assert!(std::mem::size_of::<ShekylDaemonEntry>() == 40);
+    assert!(std::mem::offset_of!(ShekylDaemonEntry, release_name) == 0);
+    assert!(std::mem::offset_of!(ShekylDaemonEntry, version_full) == 8);
+    assert!(std::mem::offset_of!(ShekylDaemonEntry, is_release) == 16);
+    assert!(std::mem::offset_of!(ShekylDaemonEntry, protocol_version) == 20);
+    assert!(std::mem::offset_of!(ShekylDaemonEntry, run) == 24);
+    assert!(std::mem::offset_of!(ShekylDaemonEntry, stop) == 32);
+};
+
 /// The daemon's one C entry: C++ `main()` builds an entry and calls this
 /// with its `argc` and `argv`, and Rust owns the process from here.
 /// Returns the exit status.

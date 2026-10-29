@@ -36,6 +36,7 @@ set(unit_tests_sources
   gap7_bp_bench.cpp
   command_line.cpp
   crypto.cpp
+  daemon_entry_layout.cpp
   daemon_rpc_client.cpp
   db_sync_mode_parse.cpp
   decompose_amount_into_digits.cpp
