@@ -15,10 +15,10 @@
 //!
 //! Lock order: this crate never calls into the hub while it holds its own
 //! lock. A ban snapshot and a board read are taken first, and the lists
-//! lock is taken after they return. The inbound Tor count is the one read
-//! that holds the table lock across the dialer's lock, the order the hub's
-//! posters already take, so a dial outcome cannot publish a count from
-//! before its row. [`Dialer::session_closed`] does not take the table lock:
+//! lock is taken after they return. Each connector's inbound rows are the
+//! one read that holds the table lock across the dialer's lock, the order
+//! the hub's posters already take, so a dial outcome cannot publish a count
+//! from before its row. [`Dialer::session_closed`] does not take the table lock:
 //! the adopt poster calls it while holding that lock, and the mutex is not
 //! re-entrant.
 //!
@@ -36,18 +36,17 @@ pub mod link_tally;
 pub mod nonce;
 pub mod owner;
 pub mod pace;
+mod reach;
 pub mod seeds;
 pub mod store;
 
 pub use attempts::Attempts;
 pub use bans::BanSnapshot;
 pub use candidate::{CandidateFilter, Skip};
-pub use fill::{in_flight_bound, plan, Census, DialAim, DrawList, FillRule, Plan};
+pub use fill::{plan, Census, DialAim, DrawList, FillRule, Plan};
 pub use link_tally::{TallySink, TorLinkTally};
 pub use nonce::{HandshakeNonce, HandshakeNonceSet, InFlightNonce};
 pub use owner::{session_of, Applied, Dialer, Launch, NotReady, Shared, SnapshotSource};
-pub use pace::{
-    attempts_per_test, next_wake_nanos, retry_wait_nanos, WAKE_BASE_NANOS, WAKE_JITTER_NANOS,
-};
+pub use pace::{attempts_per_test, draw, next_wake_nanos, retry_wait_nanos};
 pub use seeds::{seeds, SeedNetwork};
 pub use store::{AddressStore, LoadError, STORE_INTERVAL_NANOS};

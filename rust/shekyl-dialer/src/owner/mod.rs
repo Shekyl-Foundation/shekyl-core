@@ -34,6 +34,7 @@
 mod address;
 mod flight;
 mod handshake;
+mod quiet;
 mod ready;
 mod recovery;
 mod tor_tally;
@@ -47,10 +48,9 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 use shekyl_draw_rng::RelayRng;
 use shekyl_peerlist::{
-    white_diversity_floor, CloseCause, CloseKind, ConnectionId, ConnectorId, DialOutcome,
-    NetworkAddress, Peerlist, Refusal, RefusedSet, Source, Tick,
+    dial_profile, white_diversity_floor, CloseCause, CloseKind, ConnectionId, ConnectorId,
+    DialOutcome, Ladder, ListName, NetworkAddress, Peerlist, Refusal, RefusedSet, Source, Tick,
 };
-use shekyl_relay_privacy::params::{MIN_PROVISIONED_OUT_PEERS, P2P_DEFAULT_OUT_PEERS};
 use shekyl_seam::{Hub, SocketId, Subscription, SyncPayload};
 use shekyl_timing_engine::{Clock, OwnerHandle};
 
@@ -63,7 +63,7 @@ use self::ready::{park, wait_wake_or_bell, Bell, Waited};
 use self::wake::{plan_wake, Wake};
 use crate::attempts::Attempts;
 use crate::bans::BanSnapshot;
-use crate::fill::{in_flight_bound, DialAim};
+use crate::fill::DialAim;
 use crate::link_tally::{LinkFold, TallySink, TorLinkTally};
 use crate::nonce::{HandshakeNonce, HandshakeNonceSet, InFlightNonce};
 use crate::pace::{attempts_per_test, next_wake_nanos, retry_wait_nanos};
@@ -120,20 +120,28 @@ pub struct Shared {
     applying: usize,
     /// The next attempt id.
     next_attempt: u64,
-    /// Each connector's in-flight bound ([`in_flight_bound`]): protocol
+    /// Each connector's in-flight bound, from its dial profile: protocol
     /// data, the same on every node.
     bounds: [usize; ConnectorId::COUNT],
-    /// The managed Tor's `SocksTimeout`, in nanoseconds, once the daemon
-    /// sets it ([`Dialer::set_tor_window`]). A Tor attempt that times out
-    /// at or after it is final within its test.
-    tor_window: Option<u64>,
+    /// The retry window each connector published with its route, in
+    /// nanoseconds ([`Dialer::set_window`]). A connector whose cutoff is its
+    /// dial deadline does not read this: the profile's `retry_cutoff_nanos`
+    /// answers from the row. `None` while a published window is unknown.
+    published_windows: [Option<u64>; ConnectorId::COUNT],
     /// What the Tor dials show, for the managed-Tor supervisor's posture
     /// line (`TOR_SUPERVISOR.md` §4.2). Display only (`TSR-Q14`).
     tor_link: LinkFold,
-    /// Inbound Tor rows last read off the board. [`Dialer::session_closed`]
-    /// does not read the board: the adopt poster calls it while holding
-    /// the table lock. The seam's close poster refreshes this first.
-    inbound_tor: usize,
+    /// Each connector's inbound rows last read off the board.
+    /// [`Dialer::session_closed`] does not read the board: the adopt poster
+    /// calls it while holding the table lock. The seam's close poster
+    /// refreshes this first.
+    inbound: [usize; ConnectorId::COUNT],
+    /// When an attempt on each connector last opened a stream, or when the
+    /// dialer was built: the start of its quiet stretch ([`quiet`]).
+    last_opened: [Tick; ConnectorId::COUNT],
+    /// Each connector's attempts ended without opening a stream since one
+    /// last opened there ([`quiet`]).
+    unopened: [u32; ConnectorId::COUNT],
 }
 
 impl Shared {
@@ -219,12 +227,14 @@ impl Dialer {
     /// `hub` is usable, the owner loops draw nothing.
     #[must_use]
     pub fn new(hub: Hub, refused: RefusedSet, snapshot: SnapshotSource) -> Self {
-        let mut targets = vec![0usize; ConnectorId::COUNT];
-        targets[ConnectorId::Clearnet.index()] = P2P_DEFAULT_OUT_PEERS as usize;
-        targets[ConnectorId::Tor.index()] = MIN_PROVISIONED_OUT_PEERS as usize;
+        let targets: Vec<usize> = ConnectorId::ALL
+            .iter()
+            .map(|connector| dial_profile(*connector).target as usize)
+            .collect();
         let bell = Arc::new(Bell::new());
         let ringing = Arc::clone(&bell);
         let links_watch = hub.links().subscribe(Arc::new(move |_| ringing.ring()));
+        let started = hub.now();
         Self {
             hub,
             shared: Arc::new(Mutex::new(Shared {
@@ -242,13 +252,14 @@ impl Dialer {
                 in_flight: BTreeMap::new(),
                 applying: 0,
                 next_attempt: 0,
-                bounds: [
-                    in_flight_bound(ConnectorId::Clearnet),
-                    in_flight_bound(ConnectorId::Tor),
-                ],
-                tor_window: None,
+                bounds: std::array::from_fn(|index| {
+                    dial_profile(ConnectorId::ALL[index]).in_flight_bound
+                }),
+                published_windows: [None; ConnectorId::COUNT],
                 tor_link: LinkFold::new(),
-                inbound_tor: 0,
+                inbound: [0; ConnectorId::COUNT],
+                last_opened: [started; ConnectorId::COUNT],
+                unopened: [0; ConnectorId::COUNT],
             })),
             nonces: HandshakeNonceSet::new(),
             stop: Arc::new(AtomicBool::new(false)),
@@ -288,27 +299,25 @@ impl Dialer {
         self.bell.ring();
     }
 
-    /// The earliest the managed Tor's `SocksTimeout` can expire on an onion
-    /// connect and answer `0x06` (`SocksTimeout::earliest_expiry`: Tor's
-    /// window, less its whole-second clock). Tor has already retried
-    /// introduction points and descriptor fetches by then, so a Tor attempt
-    /// that times out at or after it, measured over the attempt's own run,
-    /// is final within its test: the address cools (Rick, 2026-10-26). A
-    /// timeout before it keeps its retries. `None`, the default,
-    /// leaves every timeout worth its retries: an operator's Tor sets its
-    /// own `SocksTimeout`, which this node does not know, and with no Tor
-    /// there is nothing to read. Set where the managed Tor's route is
-    /// published.
-    pub fn set_tor_window(&self, window: Option<std::time::Duration>) {
+    /// Store the retry window `connector` published with its route.
+    ///
+    /// `None` means this node does not know a window, so every timeout on a
+    /// connector that reads the publish keeps its retries. A connector whose
+    /// cutoff is its dial deadline does not read this store: [`Self::window`]
+    /// answers from the profile (rule 71), and a publish does not move it.
+    pub fn set_window(&self, connector: ConnectorId, window: Option<std::time::Duration>) {
         let nanos = window.map(|window| u64::try_from(window.as_nanos()).unwrap_or(u64::MAX));
-        self.shared().tor_window = nanos;
+        self.shared().published_windows[connector.index()] = nanos;
     }
 
-    /// The Tor window [`Self::set_tor_window`] set.
+    /// `connector`'s retry cutoff now: its dial deadline, the window it
+    /// published ([`Self::set_window`]), or `None` while a published window
+    /// is unknown.
     #[must_use]
-    pub fn tor_window(&self) -> Option<std::time::Duration> {
-        self.shared()
-            .tor_window
+    pub fn window(&self, connector: ConnectorId) -> Option<std::time::Duration> {
+        let shared = self.shared();
+        dial_profile(connector)
+            .retry_cutoff_nanos(shared.published_windows[connector.index()])
             .map(std::time::Duration::from_nanos)
     }
 
@@ -373,8 +382,8 @@ impl Dialer {
     }
 
     /// Run `connector` at `bound` dials in flight. A test seam: the bound is
-    /// protocol data ([`in_flight_bound`]), and no production crate turns
-    /// on the feature that compiles this.
+    /// protocol data (`dial_profile(connector).in_flight_bound`), and no
+    /// production crate turns on the feature that compiles this.
     #[cfg(feature = "test-seams")]
     pub fn set_in_flight_bound(&self, connector: ConnectorId, bound: usize) {
         self.shared().bounds[connector.index()] = bound;
@@ -410,6 +419,13 @@ impl Dialer {
             self.hub.close(*id);
         }
         ids
+    }
+
+    /// This node's own addresses on `connector`, as [`Self::set_own_addresses`]
+    /// last set them: empty when it discloses none there.
+    #[must_use]
+    pub fn own_addresses(&self, connector: ConnectorId) -> Vec<NetworkAddress> {
+        self.shared().own[connector.index()].clone()
     }
 
     /// This node's own addresses on `connector`: never dial candidates,
@@ -527,11 +543,14 @@ impl Dialer {
         } else if let Some(address) = shared.kept.remove(&id.get()) {
             if let Some(connector) = Peerlist::connector_of(&address) {
                 if cause.kind() == CloseKind::SessionRefused {
-                    // Not a dial. The stream was counted when the session
-                    // was accepted, so this does not finish a test and does
-                    // not fold the tally.
+                    // A payload refusal is not a dial. The stream was
+                    // counted when the session was accepted, so this does
+                    // not finish a test and does not fold the tally. It
+                    // settles an outstanding draw and leaves the ladder
+                    // unread. Climb is what a caller passes when the quiet
+                    // stretch is not the decision.
                     let outcome = DialOutcome::PayloadRefused(address.clone());
-                    shared.lists.apply(&outcome, now, rng);
+                    shared.lists.apply(&outcome, now, Ladder::Climb, rng);
                 }
                 // White expiry follows the connection (the gray lifecycle,
                 // item 1): the clock moves to the close.
@@ -661,8 +680,10 @@ impl Dialer {
         now: Tick,
         rng: &mut R,
     ) {
+        Self::note_attempt(shared, connector, outcome, now);
+        let ladder = Self::ladder(shared, connector, now);
         shared.attempts(connector).finish(outcome);
-        shared.lists.apply(outcome, now, rng);
+        shared.lists.apply(outcome, now, ladder, rng);
         let held = Self::tor_held(shared);
         shared.tor_link.observe(connector, outcome, held);
     }
@@ -671,10 +692,9 @@ impl Dialer {
     /// cause is worth a retry, with attempts left in this test, is not
     /// recorded: the open test waits its [`retry_wait_nanos`] and the
     /// address stays an outstanding draw. The wake at or after the due
-    /// tick makes the next attempt. A Tor timeout whose attempt ran
-    /// `ran_nanos` (timed inside its task) at or past the Tor window is
-    /// not worth one
-    /// ([`Self::set_tor_window`]). Anything else, including a test that is
+    /// tick makes the next attempt. A timeout whose attempt ran `ran_nanos`
+    /// (timed inside its task) at or past the connector's window is not
+    /// worth one ([`Self::window`]). Anything else, including a test that is
     /// not in flight, is the test's one outcome and is recorded. A
     /// deferred Tor failure still counts in the tally: the stream did not
     /// open. The inbound count is taken under the table lock, across the
@@ -690,17 +710,23 @@ impl Dialer {
         self.with_inbound(|shared| {
             let address = outcome.address();
             if let DialOutcome::DialFailed(_, cause) = outcome {
-                let outlasted_tor = connector == ConnectorId::Tor
-                    && cause.window_timeout()
-                    && shared.tor_window.is_some_and(|window| ran_nanos >= window);
-                if cause.retry_worthy() && !outlasted_tor {
+                let cutoff = dial_profile(connector)
+                    .retry_cutoff_nanos(shared.published_windows[connector.index()]);
+                let outlasted =
+                    cause.window_timeout() && cutoff.is_some_and(|cutoff| ran_nanos >= cutoff);
+                if cause.retry_worthy() && !outlasted {
                     let cause = *cause;
+                    let list = if shared.lists.is_white(address) {
+                        ListName::White
+                    } else {
+                        ListName::Gray
+                    };
                     let mut wait = 0u64;
                     let next = shared.attempts(connector).defer_retry(
                         address,
-                        attempts_per_test(connector),
+                        attempts_per_test(dial_profile(connector).attempts, list),
                         |next| {
-                            wait = retry_wait_nanos(next, rng);
+                            wait = retry_wait_nanos(&dial_profile(connector).retry_waits, next, rng);
                             Tick::new(now.get().saturating_add(wait))
                         },
                     );
@@ -712,6 +738,7 @@ impl Dialer {
                             ran_nanos / 1_000_000,
                             wait / 1_000_000
                         );
+                        Self::note_attempt(shared, connector, outcome, now);
                         let held = Self::tor_held(shared);
                         shared.tor_link.observe(connector, outcome, held);
                         return;
@@ -817,7 +844,7 @@ impl Dialer {
                     .clock()
                     .now()
                     .get()
-                    .saturating_add(next_wake_nanos(rng)),
+                    .saturating_add(next_wake_nanos(dial_profile(connector).wake, rng)),
             );
             if owner.arm(deadline).is_err() {
                 break;

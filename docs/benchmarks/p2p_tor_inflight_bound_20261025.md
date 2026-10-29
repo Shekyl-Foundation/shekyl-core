@@ -1,7 +1,7 @@
 # The Tor connector's in-flight dial bound, derived 2026-10-25
 
-**Status: DERIVED; the floor-device short series on the final head moves it
-to Measured.** `in_flight_bound(Tor)` = 5 (`rust/shekyl-dialer/src/fill.rs`),
+**Status: DERIVED and MEASURED (the floor device, 2026-10-26).**
+`dial_profile(Tor).in_flight_bound` = 5 (`rust/shekyl-transport-layer/src/profile.rs`),
 derived on the lifecycle the dialer runs: a Tor attempt that fails at or
 after the managed Tor's `SocksTimeout` is final within its test (Rick,
 2026-10-26). Five is the smallest bound that fills the Tor target within
@@ -27,9 +27,12 @@ dead one waiting out its deadline, holds a target slot until it ends.
 The smallest bound whose **median** time to fill the Tor connector's target
 (`MIN_PROVISIONED_OUT_PEERS` = 12) from empty is within **one stem epoch,
 600 s**, when **half the draws are dead**. Never more than the target. A
-dead attempt is modelled at the 120 s dial deadline; the managed Tor
-answers `0x06` at its `SocksTimeout`, 105 s, so the fill times are an upper
-bound.
+dead attempt is modelled at the 120 s dial deadline. The managed Tor
+answers at its 105 s `SocksTimeout`, which fires on a once-a-second check,
+so a full-window reply arrives from 104 s to a few seconds past 105 s
+(104 to 113 s on a healthy link, shekyl-dev data
+`tsr-acceptance/2026-10-25-socks-reply-sources`), always inside 120 s:
+the fill times are an upper bound.
 
 - **The time, 600 s.** The relay redraws its stem graph from the node's
   outbound edges every epoch (`min_epoch_secs` 600, `DAEMON_RELAY_PRIVACY.md`;
@@ -133,15 +136,26 @@ not set from that cap; it is checked against it.
 ## Dead-onion stalling: what holding every slot costs
 
 On the ruled lifecycle a planted dead onion holds one slot and one target
-place for 105 s, until Tor's `0x06`, and its test ends. The address then
+place for about 105 s, until Tor's `0x06` (from 104 s to a few seconds
+past), and its test ends. The address then
 cools in place: 2 min, doubling per failed test to 1 h, with U(0, 50%)
 jitter. To hold all five slots for an hour an attacker needs
-5 × 3,600 / 105 ≈ 171 draws an hour, every one of them a plant. At the
-1 h cap a planted onion is drawable at most once an hour, so that is at
-least 171 planted onions at the cap, planted once: 8 attacker sessions at
-the intake cap (24 addresses per session per 24 h). Every draw must also
-land on a plant, so the plants must be nearly all of the drawable pool:
-every honest onion in gray is drawn at the same rate.
+5 × 3,600 / 105 ≈ 171 draws an hour, every one of them a plant. Every draw
+must land on a plant, so the plants must be nearly all of the drawable
+pool: every honest onion in gray is drawn at the same rate. That share is
+the binding cost in both regimes below; the count of plants is not.
+
+- **While the node holds any session** the ladder climbs. At the 1 h cap a
+  planted onion is drawable at most once an hour, so the hour takes about
+  170 planted onions at the cap, planted once: 8 attacker sessions at the
+  intake cap (24 addresses per session per 24 h).
+- **In a quiet stretch** (no session held, the last 13 attempts unopened,
+  364.5 s since one opened: Tor's quiet threshold) a failed test cools at the first step, 2 to 3 min, so a plant is
+  drawable again about every 4 to 5 min, its attempt included: about 13
+  draws an hour each, so about 13 plants hold the hour. The node is then
+  already holding nothing, which is the eclipse the plants were for, and
+  every honest onion in gray cycles at the same first step, so an honest
+  draw is found as fast as the share allows.
 
 The bound does not make the node easier to stall. At bound one, 34
 plants held the whole connector for an hour; at five, the same plants
@@ -188,9 +202,39 @@ bound 5 halved the median.
   confirms). That is the floor building white diversity first, as
   designed. Today's testnet (14 nodes against 48) is this regime.
 
-## The short series on the final head (floor device, claimed in the usage ledger first)
+## The short series on the final head, 2026-10-26 (`d22ac70aa`, #1190's merged head)
 
-Cold, half dead, and refill after a Tor respawn, at bound 1 and at bound
-5, on #1190's final head: the gray lifecycle and the full-window-final
-rule both in. Recorded below and in §97 with the date; the row then moves
-to Measured.
+Client the floor device, rig as floor run 1 (shekyl-dev data
+`inflight-bound/2026-10-26-final-head`); the probe before it: live onions
+57 of 64 reachable, dead onions 60 of 64 answering `0x06`. The gray
+lifecycle and the full-window-final rule are in. Seconds from the Tor link
+becoming usable to the 12th kept Tor session:
+
+| Case | Bound 1 median (samples) | Bound 5 median (samples) |
+| --- | --- | --- |
+| cold, half dead (gray 128) | 1064 (5) | **508 (5)** |
+| refill after a Tor respawn (gray 64) | 928 (3) | 126 (3) |
+
+**Five meets the horizon on the floor device:** at half dead its median,
+508 s, is inside one stem epoch, against the model's upper bound of 523 s
+(dead attempts modelled at 120 s; the managed Tor answers from 104 s,
+a few seconds past 105 s at most). Bound 1
+took about twice as long. Every sample filled; samples:
+bound 1, 424 to 2981 s; bound 5, 342 to 563 s.
+
+What the series also showed:
+
+- **A full-window failure can arrive as `0xF0`, not `0x06`.** 9 of the
+  series' 79 retried attempts were `0xF0` at 104 s or later. With
+  `ExtendedErrors` on, Tor answers an expired onion stream with the code it
+  last recorded on it (Tor 0.4.9.14 `src/core/or/connection_edge.c:3894`):
+  `0xF0` after a descriptor fetch came back not found and Tor retried at
+  another directory (`src/feature/hs/hs_client.c:1725`). The dialer read
+  only `0x06` and its own deadline against the window, so those tests
+  retried. Each such retry held a dead onion's target place longer, so the
+  medians above are slightly long. Fixed on #1203 (`e102eb8c2`): every
+  Tor reply worth a retry is read against the window.
+- **The window's one-second edge** (`0x06` at 104.97 s) was found by the
+  series' first start and fixed before this run (`7559d9f81`).
+
+The series predates #1203's quiet-stretch rule.

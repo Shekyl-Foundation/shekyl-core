@@ -24,8 +24,9 @@ shekyl-levin = { path = "../shekyl-levin" }
 shekyl-onion-v3 = { path = "../shekyl-onion-v3" }
 # The wake is an owner of the daemon's one timing engine.
 shekyl-timing-engine = { path = "../shekyl-timing-engine" }
-# The two outbound targets of the composition table.
-shekyl-relay-privacy = { path = "../shekyl-relay-privacy" }
+# Each connector's dial profile: the targets, the bound, the retry and
+# cooldown ladders, the window and the wake spacing.
+shekyl-transport-layer = { path = "../shekyl-transport-layer" }
 # A failed address-file write is logged, not lost.
 tracing = "0.1"
 # The cancel signal of a dial attempt, and `select` so the attempt and the
@@ -48,7 +49,6 @@ shekyl-dialer = { path = ".", features = ["test-seams"] }
 shekyl-draw-rng = { path = "../shekyl-draw-rng", features = ["splitmix"] }
 # The owner's test rig: a hub over the loopback dialer, with a manual clock.
 shekyl-peer-policy = { path = "../shekyl-peer-policy" }
-shekyl-transport-layer = { path = "../shekyl-transport-layer" }
 # The Tor connector's reply table, for the retry test's refusals.
 shekyl-tor = { path = "../shekyl-tor" }
 # A directory of its own for each address-file test.

@@ -55,9 +55,9 @@ pub fn reserved_descriptors(config: &DaemonConfig) -> u64 {
     connectors(config)
         .into_iter()
         .map(|c| {
-            let bound =
-                u64::try_from(shekyl_ffi::dialer_ffi::in_flight_bound(c)).unwrap_or(u64::MAX);
-            u64::from(shekyl_ffi::dialer_ffi::default_target(c)).saturating_add(bound)
+            let profile = shekyl_ffi::dialer_ffi::dial_profile(c);
+            let bound = u64::try_from(profile.in_flight_bound).unwrap_or(u64::MAX);
+            u64::from(profile.target).saturating_add(bound)
         })
         .fold(rpc, u64::saturating_add)
 }
@@ -308,8 +308,8 @@ mod tests {
     #[test]
     fn the_reservation_is_the_rpc_cap_plus_each_connectors_target_and_bound() {
         let held = |c: ConnectorId| {
-            u64::from(shekyl_ffi::dialer_ffi::default_target(c))
-                + u64::try_from(shekyl_ffi::dialer_ffi::in_flight_bound(c)).expect("small")
+            let profile = shekyl_ffi::dialer_ffi::dial_profile(c);
+            u64::from(profile.target) + u64::try_from(profile.in_flight_bound).expect("small")
         };
         let both = config(&["--rpc-connections-max", "25"]);
         assert_eq!(

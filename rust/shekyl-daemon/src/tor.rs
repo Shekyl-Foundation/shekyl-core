@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use shekyl_daemon_config::sections::Tor;
+use shekyl_ffi::dialer_ffi::ConnectorId;
 use shekyl_ffi::origin_verdict::OriginVerdict;
 use shekyl_ffi::tor_link::TorLinkTally;
 use shekyl_ffi::zone_ffi::DownCause;
@@ -50,6 +51,18 @@ const REPLY_BOUND: Duration = Duration::from_secs(30);
 /// Tor dial deadline, so the dial's class is Tor's reply, never a race with
 /// that deadline (`TOR_SUPERVISOR.md` §4.2).
 const SOCKS_TIMEOUT: SocksTimeout = shekyl_ffi::tor_link::TOR_SOCKS_TIMEOUT;
+/// The supervisor's waits. Its quiet stretch is the Tor connector's span S
+/// from its dial profile (the dial profile brief, item 6): the posture line
+/// and the dialer's quiet guard read one number, though the guard also
+/// counts attempts and the line restarts its clock when a Tor reaches
+/// Running.
+const fn policy() -> Policy {
+    Policy::provisional(Duration::from_nanos(
+        shekyl_ffi::dialer_ffi::dial_profile(ConnectorId::Tor)
+            .quiet()
+            .span_nanos,
+    ))
+}
 /// The onion's stream cap.
 const MAX_STREAMS: u16 = 8;
 /// `GETINFO` key for the bootstrap phase. One sample asks this and the listener.
@@ -263,7 +276,7 @@ async fn drive(
     let origin = shekyl_ffi::origin_verdict::watch();
     let mut tor_link = shekyl_ffi::tor_link::watch();
     let started = now(&owner);
-    let (mut core, mut step) = Core::start(Policy::provisional(), connectors, started);
+    let (mut core, mut step) = Core::start(policy(), connectors, started);
     // A receiver marks the current value seen, so a verdict published before
     // the supervisor started is folded once, here. The pin check stays the
     // first action: replacing the startup step would never spawn.
@@ -880,6 +893,22 @@ mod tests {
         assert!(running.iter().any(|key| key == NETWORK_LIVENESS));
         assert!(running.iter().any(|key| key == CIRCUIT_ESTABLISHED));
         assert!(running.starts_with(&bootstrap));
+    }
+
+    /// The posture line's `quiet_after` is the Tor connector's span S, read
+    /// from its dial profile (the dial profile brief, test 5): one number
+    /// for the line and the dialer's quiet guard. The value is the profile's
+    /// derivation in §97, so this pins the equality and not the value. The
+    /// two clocks differ: the line's stretch also restarts when a Tor
+    /// reaches Running, and the guard also counts attempts.
+    #[test]
+    fn the_posture_lines_quiet_stretch_is_the_dialers() {
+        assert_eq!(
+            u64::try_from(policy().quiet_after.as_nanos()).expect("small"),
+            shekyl_ffi::dialer_ffi::dial_profile(ConnectorId::Tor)
+                .quiet()
+                .span_nanos
+        );
     }
 
     /// The managed Tor answers inside the Tor dial deadline: a blocked link

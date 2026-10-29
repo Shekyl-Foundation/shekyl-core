@@ -11,11 +11,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::Ipv4Addr;
 
-use shekyl_dialer::{in_flight_bound, plan, Attempts, CandidateFilter, Census, DialAim, DrawList};
+use shekyl_dialer::{plan, Attempts, CandidateFilter, Census, DialAim, DrawList};
 use shekyl_draw_rng::{RelayRng, SplitMix64};
 use shekyl_peerlist::{
-    white_diversity_floor, ConnectorId, DialOutcome, Host, KeptSessions, NetworkAddress, NoBans,
-    Peerlist, RefusedSet, Source, Tick, WHITE_REFILL_LINE,
+    dial_profile, white_diversity_floor, ConnectorId, DialOutcome, Host, KeptSessions, Ladder,
+    NetworkAddress, NoBans, Peerlist, RefusedSet, Source, Tick, WHITE_REFILL_LINE,
 };
 
 /// The kept sessions expiry must see, copied out so a filter can borrow
@@ -63,9 +63,9 @@ fn census(attempts: &Attempts, white: usize, gray: usize) -> Census {
 /// the connector's target.
 #[test]
 fn the_bounds_are_tor_five_and_clearnet_one_and_never_past_the_target() {
-    assert_eq!(in_flight_bound(ConnectorId::Clearnet), 1);
-    assert_eq!(in_flight_bound(ConnectorId::Tor), 5);
-    assert!(in_flight_bound(ConnectorId::Tor) <= TARGET);
+    assert_eq!(dial_profile(ConnectorId::Clearnet).in_flight_bound, 1);
+    assert_eq!(dial_profile(ConnectorId::Tor).in_flight_bound, 5);
+    assert!(dial_profile(ConnectorId::Tor).in_flight_bound <= TARGET);
 }
 
 /// **The target is the ceiling at any bound** (the brief's test 2). With
@@ -201,7 +201,7 @@ fn fill_share(bound: usize, attacker_share: f64, seed: u64) -> f64 {
                 DialAim::Confirm => DialOutcome::Confirmed(a),
             };
             attempts.finish(&outcome);
-            list.apply(&outcome, at(now), &mut rng);
+            list.apply(&outcome, at(now), Ladder::Climb, &mut rng);
         }
         if kept.len() >= TARGET {
             break;

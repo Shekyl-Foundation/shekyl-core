@@ -50,14 +50,16 @@ impl Dialer {
         self.session_closed(id, cause, rng);
     }
 
-    /// Read the inbound Tor rows into the cache, then run `body`.
+    /// Read each connector's inbound rows into the cache, then run `body`.
     ///
     /// The table lock is held across the dialer's lock. `body` must not
     /// call back into the hub.
     pub(super) fn with_inbound<R>(&self, body: impl FnOnce(&mut Shared) -> R) -> R {
         self.hub.with_board(|board| {
             let mut shared = self.shared();
-            shared.inbound_tor = board.count(ConnectorId::Tor, Direction::Inbound);
+            for connector in ConnectorId::ALL {
+                shared.inbound[connector.index()] = board.count(*connector, Direction::Inbound);
+            }
             body(&mut shared)
         })
     }
@@ -68,7 +70,7 @@ impl Dialer {
         shared
             .view(ConnectorId::Tor)
             .held()
-            .saturating_add(shared.inbound_tor)
+            .saturating_add(shared.inbound[ConnectorId::Tor.index()])
     }
 
     /// Publish the held count the supervisor reads.

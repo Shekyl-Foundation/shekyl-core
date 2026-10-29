@@ -16,7 +16,7 @@ use shekyl_peerlist::address_file::{
     decode, encode, AddressFileError, ADDRESS_FILE_MAGIC, ADDRESS_FILE_VERSION, MAX_ENTRIES,
 };
 use shekyl_peerlist::{
-    ConnectorId, DialOutcome, NetworkAddress, NoBans, Peerlist, RefusedSet, Source, Tick,
+    ConnectorId, DialOutcome, Ladder, NetworkAddress, NoBans, Peerlist, RefusedSet, Source, Tick,
 };
 
 fn now() -> Tick {
@@ -99,11 +99,17 @@ fn a_restart_puts_every_address_on_gray() {
         if drawn == v4(1) {
             break drawn;
         }
-        list.apply(&DialOutcome::PayloadRefused(drawn), now(), &mut rng);
+        list.apply(
+            &DialOutcome::PayloadRefused(drawn),
+            now(),
+            Ladder::Climb,
+            &mut rng,
+        );
     };
     list.apply(
         &DialOutcome::SessionAccepted(white.clone()),
         now(),
+        Ladder::Climb,
         &mut rng,
     );
     assert!(list.is_white(&white));

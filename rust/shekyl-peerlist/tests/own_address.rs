@@ -12,8 +12,8 @@
 
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{
-    white_diversity_floor, ConnectorId, DialOutcome, ListName, NetworkAddress, NoBans, NoSessions,
-    Peerlist, RefusedSet, Source, Tick, DISCLOSE_COUNT,
+    white_diversity_floor, ConnectorId, DialOutcome, Ladder, ListName, NetworkAddress, NoBans,
+    NoSessions, Peerlist, RefusedSet, Source, Tick, DISCLOSE_COUNT,
 };
 
 const C: ConnectorId = ConnectorId::Tor;
@@ -42,7 +42,7 @@ fn white_at_floor(rng: &mut SplitMix64) -> Peerlist {
             .expect("admitted");
     }
     while let Some(drawn) = list.draw_gray(C, rng) {
-        list.apply(&DialOutcome::Confirmed(drawn), now(), rng);
+        list.apply(&DialOutcome::Confirmed(drawn), now(), Ladder::Climb, rng);
     }
     list
 }

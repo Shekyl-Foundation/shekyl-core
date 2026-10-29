@@ -142,8 +142,21 @@ Records-was before that: the clock moved only at `SessionAccepted`, and a
 session held past 24 hours expired its own address.* A confirm-and-close
 (`Confirmed`) is not additional contact: the session did not stay, and an
 address already white keeps its clock. Contact
-that arrived inbound does not. One failed redial does not demote; the clock
-does.
+that arrived inbound does not. White is known-working (Rick, 2026-10-26):
+a white address whose test fails, its retries included (on clearnet one
+redial), moves to gray and cools on the ladder, except in the dialer's
+quiet stretch; the clock demotes one that is not tested. *Records-was:
+one failed redial did not demote; only the clock did.*
+
+*Wargame (white is known-working).* A restart already reloads white as
+gray, so the eclipse defence was never white staying put: it is the fill
+rules, and demotion on a real failure is consistent with them. A clearnet
+on-path party who drops this node's connections to one honest peer can
+push it out of white. That is a permanent, accepted residual, since
+clearnet can encrypt and recognize but never authenticate a destination;
+the address stays in gray, at the cost of the cooldown ladder. A block
+does not empty white: in the dialer's quiet stretch a failed white test
+does not demote (`P2P_3_SLICE_3_DIALER_BRIEF.md`, the gray lifecycle).
 
 **Address validity — RULED 2026-10-11 (Rick; formerly the dialer
 brief's D2a; scope settled the same day; R4 2026-10-12).** An address
@@ -435,7 +448,7 @@ The peerlist offers uniform draws and no ordered walk:
 | `SessionAccepted` | Outstanding gray draw: move to white and set `last_observed`. The session stays. Already white, on a session this node opened: move the clock. Anything else: white unchanged. The clock moves again when the kept session closes (`session_ended`, 2026-10-24), and expiry skips the address while the session is live |
 | `Confirmed` | Outstanding gray draw: the same white write. No session remains. Anything else: white unchanged |
 | *`HarvestDone` — DELETED (2026-10-11; no crate symbol)* | Absorbed into `Confirmed` (dialer brief arm 2): a confirm-and-close dial learns the peer's sample as a harvest did and writes white. The variant, its `address()` arm, its `apply` arm and its test are gone. *Records-was, same day: the variant remained and wrote no white, deferred to PR-3 as "more than one line"; before that: one of the six Foundation hosts, the same white write, from any seat* |
-| `DialFailed`, `PeerlistRefused` | Outstanding gray draw: the cause's marks decide (2026-10-24). One that proves misbehaviour drops the address. Any other keeps it gray and cools it: 2 min, doubling per consecutive failed test, capped at 1 h, each with U(0, 50%) jitter; a cooling address is not drawable, and `Confirmed` or `SessionAccepted` clears the count. A white address stays white. *Records-was: dropped whatever the cause (Rick, 2026-10-16; #1092)* |
+| `DialFailed`, `PeerlistRefused` | Outstanding gray draw: the cause's marks decide (2026-10-24). One that proves misbehaviour drops the address. Any other keeps it gray and cools it: 2 min, doubling per consecutive failed test, capped at 1 h, each with U(0, 50%) jitter; a cooling address is not drawable, and `Confirmed` or `SessionAccepted` clears the count. A white address is known-working (Rick, 2026-10-26): proof drops it as for gray; any other failure moves it to gray, cooling at the first rung, except in the dialer's quiet stretch, where it stays white. *Records-was: dropped whatever the cause (Rick, 2026-10-16; #1092); to 2026-10-26, a white address stayed white* |
 | `PayloadRefused` | No promotion, no demotion. An outstanding draw returns to drawable gray |
 
 *Records-was: `handshake_confirmed` was the only writer, and `draw_failed`
@@ -724,9 +737,10 @@ out every address whose host is under an active ban at the moment the
 file is written; the lists still read no transport state of their own. At the next start the
 ban is gone, as before, and so is the address: it comes back only when a
 peer sends it again. On Tor nothing can be banned (D7), so nothing
-changes there. The cost, stated and accepted: on clearnet, until the
-handshake authenticates the peer, an on-path party who provokes a ban
-costs the honest address its place across a restart, and it can be
+changes there. The cost, stated and accepted as permanent: on clearnet,
+which can encrypt and recognize but never authenticate a destination
+(Rick, 2026-10-26), an on-path party who provokes a ban costs the honest
+address its place across a restart, and it can be
 relearned from any peer's sample. *Records-was (5e3f8f238, the same
 day, by mistake): the unruled option (i), "a banned address is written
 like any other"; the ruling was (ii).* Tests:
@@ -848,7 +862,8 @@ They check different things. Neither stands for the other.
    does not draw former white first; `disclose` is a sample of white and
    carries no clock; `DialFailed` and `PeerlistRefused` drop an outstanding
    gray draw; `PayloadRefused` returns that
-   draw to drawable gray; a failed redial leaves white.
+   draw to drawable gray; a failed white test moves it to cooling gray,
+   and in the quiet stretch leaves it white.
    The harness fails if it has no sequence (rule 47).
 4. **The C++ list is gone, and so is the old spelling** (met 2026-10-13, PR-3: the RPC wire history's `_v1`/`_v2` vectors that carried the stripe seed went with it, Rick's ruling of the same day). `rg -n 'm_peers_white|peerlist_manager' src/p2p`
    returns nothing. `rg -n pruning_seed src rust tests` returns nothing,
