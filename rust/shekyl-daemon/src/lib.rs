@@ -29,6 +29,7 @@ pub use run::{Host, EXIT_FAILED, EXIT_REFUSED};
 /// The daemon binary supplies this from C++. This crate's tests link the
 /// node, which calls it, and link no C++.
 #[cfg(test)]
+#[allow(unsafe_code)]
 #[no_mangle]
 extern "C" fn shekyl_shell_relay_local(_blob: *const u8, _len: usize) {}
 

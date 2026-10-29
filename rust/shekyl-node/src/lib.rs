@@ -654,11 +654,26 @@ fn relay_local(blob: &[u8]) {
     if blob.is_empty() {
         return;
     }
+    relay_local_ffi(blob);
+}
+
+#[cfg(not(test))]
+#[allow(unsafe_code)]
+fn relay_local_ffi(blob: &[u8]) {
     // SAFETY: `blob` is a live slice. The shell ignores a call before
     // `core::init` returns.
     unsafe { shekyl_shell_relay_local(blob.as_ptr(), blob.len()) }
 }
 
+#[cfg(test)]
+fn relay_local_ffi(blob: &[u8]) {
+    shekyl_shell_relay_local(blob.as_ptr(), blob.len());
+}
+
+// The C++ shell's one relay entry. The node is the caller; the shell is
+// the definition. Unit tests supply the symbol themselves.
+#[cfg(not(test))]
+#[allow(unsafe_code)]
 unsafe extern "C" {
     fn shekyl_shell_relay_local(blob: *const u8, len: usize);
 }
@@ -784,5 +799,6 @@ mod tests;
 
 /// The daemon binary supplies this from C++. Unit tests link no C++.
 #[cfg(test)]
+#[allow(unsafe_code)]
 #[no_mangle]
 extern "C" fn shekyl_shell_relay_local(_blob: *const u8, _len: usize) {}
