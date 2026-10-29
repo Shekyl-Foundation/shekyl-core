@@ -17,8 +17,9 @@
 //! listener means the dialer drew this node. A **probe** nonce is the
 //! managed Tor supervisor's dial of its own onion: arriving proves the
 //! onion reachable end to end. Both are dropped on arrival. A probe is
-//! not a peer dial: it is never counted in [`HandshakeNonceSet::in_flight`],
-//! and only [`ConnectorId::Tor`] mints one.
+//! not a peer dial: it is never counted in [`HandshakeNonceSet::in_flight`].
+//! The set takes the probe's connector as data; the managed Tor's FFI is the
+//! one caller, and it names the Tor connector.
 //!
 //! The nonce leaves the set on every end path. [`InFlightNonce`] is the
 //! attempt's lifetime: dropping it erases the nonce, so no path can
@@ -49,14 +50,14 @@ pub enum NonceTake {
     NotOurs,
     /// A peer dial of ours arrived at our own listener: drop it.
     SelfConnection,
-    /// The probe minted at `minted_at` arrived on the Tor connector: our own
-    /// onion is reachable. Drop the session; the supervisor hears the arrival.
+    /// The probe minted at `minted_at` arrived on the connector it was
+    /// minted for: our own onion is reachable. Drop the session; the supervisor hears the arrival.
     Probe {
         /// When the probe's nonce was minted, which names the probe.
         minted_at: Tick,
     },
-    /// A probe nonce arrived on a connector that is not Tor's. A defect of
-    /// this node, never evidence: drop the session and log it.
+    /// A probe nonce arrived on a connector it was not minted for. A defect
+    /// of this node, never evidence: drop the session and log it.
     MisroutedProbe,
 }
 
@@ -122,11 +123,17 @@ impl HandshakeNonceSet {
         self.insert(connector, Kind::SelfConnection, rng)
     }
 
-    /// Mint the probe's nonce, on the Tor connector: only the managed Tor
-    /// probes its own onion. `minted_at` names the probe, so an arrival from
-    /// a probe the supervisor has given up on is told apart.
-    pub fn mint_probe<R: RelayRng + ?Sized>(&self, minted_at: Tick, rng: &mut R) -> InFlightNonce {
-        self.insert(ConnectorId::Tor, Kind::Probe { minted_at }, rng)
+    /// Mint a probe nonce on `connector`, the connector whose own address
+    /// is probed (the managed Tor's, named by its FFI). `minted_at` names the
+    /// probe, so an arrival from a probe the supervisor has given up on is
+    /// told apart.
+    pub fn mint_probe<R: RelayRng + ?Sized>(
+        &self,
+        connector: ConnectorId,
+        minted_at: Tick,
+        rng: &mut R,
+    ) -> InFlightNonce {
+        self.insert(connector, Kind::Probe { minted_at }, rng)
     }
 
     /// What `nonce` is, erasing it. The inbound handshake asks this with the
@@ -144,20 +151,19 @@ impl HandshakeNonceSet {
     pub fn take(&self, connector: ConnectorId, nonce: &HandshakeNonce) -> NonceTake {
         self.with(|sets| match sets[connector.index()].remove(nonce) {
             Some(Kind::SelfConnection) => NonceTake::SelfConnection,
-            Some(Kind::Probe { minted_at }) if connector == ConnectorId::Tor => {
-                NonceTake::Probe { minted_at }
-            }
-            Some(Kind::Probe { .. }) => NonceTake::MisroutedProbe,
-            None if connector != ConnectorId::Tor => {
-                let tor = &mut sets[ConnectorId::Tor.index()];
-                if matches!(tor.get(nonce), Some(Kind::Probe { .. })) {
-                    tor.remove(nonce);
-                    NonceTake::MisroutedProbe
-                } else {
-                    NonceTake::NotOurs
+            Some(Kind::Probe { minted_at }) => NonceTake::Probe { minted_at },
+            None => {
+                let elsewhere = sets
+                    .iter_mut()
+                    .find(|set| matches!(set.get(nonce), Some(Kind::Probe { .. })));
+                match elsewhere {
+                    Some(set) => {
+                        set.remove(nonce);
+                        NonceTake::MisroutedProbe
+                    }
+                    None => NonceTake::NotOurs,
                 }
             }
-            None => NonceTake::NotOurs,
         })
     }
 

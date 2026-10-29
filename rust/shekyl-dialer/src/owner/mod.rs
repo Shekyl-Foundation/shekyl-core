@@ -530,20 +530,24 @@ impl Dialer {
     }
 
     /// The managed Tor supervisor's probe of this node's own onion
-    /// (`TOR_SUPERVISOR.md` §4.5): a probe nonce on the Tor connector and
-    /// the handshake request carrying it, built as a peer dial's is, so
+    /// (`TOR_SUPERVISOR.md` §4.5): a probe nonce on `connector` (the FFI
+    /// names Tor's) and the handshake request carrying it, built as a peer dial's is, so
     /// the inbound handshake reaches the nonce check.
     ///
     /// The probe is not a peer dial. It is not drawn, touches no list, no
     /// attempt count, no failure memory and no target, and never counts in
     /// the in-flight bound or the Tor tally. `None` until a tip and the
     /// network id are published: the request carries both.
-    pub fn mint_probe<R: RelayRng + ?Sized>(&self, rng: &mut R) -> Option<ProbeHandshake> {
+    pub fn mint_probe<R: RelayRng + ?Sized>(
+        &self,
+        connector: ConnectorId,
+        rng: &mut R,
+    ) -> Option<ProbeHandshake> {
         let (Some(snapshot), Some(network_id)) = ((self.snapshot)(), self.network_id()) else {
             return None;
         };
         let minted_at = self.hub.now();
-        let nonce = self.nonces.mint_probe(minted_at, rng);
+        let nonce = self.nonces.mint_probe(connector, minted_at, rng);
         let request = handshake::request_frame(network_id, &snapshot, &nonce)?;
         Some(ProbeHandshake {
             nonce,

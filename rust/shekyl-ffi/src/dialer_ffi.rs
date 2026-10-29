@@ -369,11 +369,12 @@ pub unsafe extern "C" fn shekyl_dial_take_handshake_nonce(connector: u32, nonce:
 }
 
 /// The managed Tor supervisor's probe handshake (`TOR_SUPERVISOR.md`
-/// §4.5): a probe nonce in the Tor set and the request carrying it. `None`
-/// when there is no dialer, or no tip or network id yet.
+/// §4.5): a probe nonce in the Tor set and the request carrying it. Only the
+/// managed Tor probes its own address, so this names the Tor connector.
+/// `None` when there is no dialer, or no tip or network id yet.
 #[must_use]
 pub fn mint_probe() -> Option<ProbeHandshake> {
-    dialer()?.mint_probe(&mut SecureRelayRng)
+    dialer()?.mint_probe(ConnectorId::Tor, &mut SecureRelayRng)
 }
 
 /// The core's tip: height, cumulative difficulty (low and high 64 bits)

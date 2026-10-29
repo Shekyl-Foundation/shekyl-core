@@ -118,7 +118,7 @@ fn a_probe_nonce_is_the_probe_on_tor_and_a_defect_elsewhere() {
     let mut rng = SplitMix64::new(7);
     let set = HandshakeNonceSet::new();
     let minted_at = Tick::new(42);
-    let probe = set.mint_probe(minted_at, &mut rng);
+    let probe = set.mint_probe(ConnectorId::Tor, minted_at, &mut rng);
     let peer = set.mint(ConnectorId::Tor, &mut rng);
     assert_eq!(
         set.in_flight(ConnectorId::Tor),
@@ -135,7 +135,7 @@ fn a_probe_nonce_is_the_probe_on_tor_and_a_defect_elsewhere() {
         "a probe arrives once"
     );
 
-    let second = set.mint_probe(Tick::new(43), &mut rng);
+    let second = set.mint_probe(ConnectorId::Tor, Tick::new(43), &mut rng);
     let bytes = *second.bytes();
     let misrouted = set.take(ConnectorId::Clearnet, &bytes);
     assert_eq!(misrouted, NonceTake::MisroutedProbe, "no evidence");
