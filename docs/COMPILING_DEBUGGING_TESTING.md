@@ -327,13 +327,16 @@ The managed tor is started with an empty environment plus, on Linux,
 `LD_LIBRARY_PATH` set to its own directory. A variable exported in your
 shell does not reach it.
 
-To run without Tor on purpose, pass `--no-ephemeral-tor`. The lifecycle
-tests take any tor through `SHEKYL_TEST_TOR_BINARY`, which bypasses the pin
-and exists only in test builds.
+To run without Tor on purpose, pass `--tor off`. The lifecycle tests take
+any tor through `SHEKYL_TEST_TOR_BINARY`, which bypasses the pin and exists
+only in test builds.
 
-On Windows, macOS and FreeBSD there is no managed tor yet
-(`docs/design/TOR_BUNDLE_DISTRIBUTION.md` §5): the daemon says so at start,
-and you attach your own with `--tx-proxy` and `--anonymous-inbound`.
+The managed tor is pinned for Linux (x86_64, aarch64), Windows (x86_64) and
+macOS (x86_64, aarch64); `config/tor_pins.json` is the list. FreeBSD and
+riscv64 Linux have none, because the Tor Project publishes no Expert Bundle
+for them (`docs/design/TOR_BUNDLE_DISTRIBUTION.md` §5). There the daemon says
+so at start. Run your own Tor and set `tor = operator` with `tor-socks`, and
+`tor-onion` with `tor-onion-listen` for inbound.
 
 ## Seed node build (lean daemon)
 
