@@ -14,7 +14,7 @@
 //! ([`shekyl_dial_take_handshake_nonce`]); the disclosure sample for the
 //! two responses the C++ still sends ([`shekyl_peerlist_disclose`]).
 //!
-//! Told: the core's tip ([`shekyl_core_publish_tip`]); the network the
+//! Told: the node's tip ([`publish_chain_tip`], from the connector's `TipChanged`); the network the
 //! daemon chose ([`shekyl_dialer_note_network`]), which selects the
 //! compiled seeds.
 //!
@@ -330,71 +330,29 @@ pub unsafe extern "C" fn shekyl_dial_take_handshake_nonce(connector: u32, nonce:
     }
 }
 
-/// The core's tip: height, cumulative difficulty (low and high 64 bits)
-/// and top block id. The dialer's next handshake carries this snapshot.
-/// Called wherever the tip changes, and once at start.
-///
-/// # Safety
-///
-/// `top_id` points to 32 readable bytes, or is null (ignored).
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_core_publish_tip(
-    height: u64,
-    cumulative_difficulty: u64,
-    cumulative_difficulty_top64: u64,
-    top_id: *const u8,
-) {
-    let Some(bytes) = (unsafe { slice_from_typed_ptr(top_id, 32) }) else {
-        return;
-    };
-    let Ok(top_id) = <[u8; 32]>::try_from(bytes) else {
-        return;
-    };
-    *TIP.lock().expect("tip") = Some(SyncPayload {
-        current_height: height,
-        cumulative_difficulty,
-        cumulative_difficulty_top64,
-        top_id,
-    });
+/// The node's tip, as the dialer's next handshake carries it. The node
+/// forwards every `TipChanged` the connector publishes, and the first one
+/// at start (`DRS_X_STORE_FLIP.md` DX-Q2 item 5: the handshake is a
+/// consumer of the one tip source).
+pub fn publish_tip(tip: SyncPayload) {
+    *TIP.lock().expect("tip") = Some(tip);
     if let Some(dialer) = dialer() {
         dialer.tip_published();
     }
 }
 
-/// The tip the core last published: 1 and the fields written, or 0 and
-/// nothing written when no tip has been published yet. What the dialer's
-/// next handshake carries, so a test of the publish reads it here.
-///
-/// # Safety
-///
-/// Each out pointer is writable, or null (then not written).
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_core_published_tip(
-    out_height: *mut u64,
-    out_cumulative_difficulty: *mut u64,
-    out_cumulative_difficulty_top64: *mut u64,
-    out_top_id: *mut u8,
-) -> i32 {
-    let Some(tip) = *TIP.lock().expect("tip") else {
-        return 0;
-    };
-    unsafe {
-        if !out_height.is_null() {
-            out_height.write(tip.current_height);
-        }
-        if !out_cumulative_difficulty.is_null() {
-            out_cumulative_difficulty.write(tip.cumulative_difficulty);
-        }
-        if !out_cumulative_difficulty_top64.is_null() {
-            out_cumulative_difficulty_top64.write(tip.cumulative_difficulty_top64);
-        }
-        if !out_top_id.is_null() {
-            for (i, byte) in tip.top_id.iter().enumerate() {
-                out_top_id.add(i).write(*byte);
-            }
-        }
-    }
-    1
+/// [`publish_tip`] of a recorded chain tip: the block count the handshake's
+/// `current_height` reports, the cumulative difficulty split into its two
+/// halves, and the top id.
+pub fn publish_chain_tip(tip: &shekyl_chain_ingest::ChainTip) {
+    let wide = tip.cumulative_difficulty.to_raw();
+    publish_tip(SyncPayload {
+        current_height: tip.count.to_raw(),
+        cumulative_difficulty: u64::try_from(wide & u128::from(u64::MAX))
+            .expect("masked to the low 64 bits"),
+        cumulative_difficulty_top64: u64::try_from(wide >> 64).expect("a u128 shifted by 64 fits"),
+        top_id: tip.top_id.to_bytes(),
+    });
 }
 
 /// The dialer does not exist: the seam is not bound, so the remnant has

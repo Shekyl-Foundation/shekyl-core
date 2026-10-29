@@ -216,6 +216,7 @@ impl Node {
         let store_path = args.config.data_dir.join("chain.db");
         let pool_path = args.config.data_dir.join("pool.db");
         let store = Arc::new(open_chain(&store_path, horizons, &anchors)?);
+        tracing::info!("{}", store_durability_line());
         let parallelism = std::thread::available_parallelism().unwrap_or(NonZeroUsize::MIN);
         let budget = Budget::new(parallelism);
         let caches = Arc::new(CacheStore::new());
@@ -354,6 +355,20 @@ impl Node {
                 return Err(OpenError::Service(error.to_string()));
             }
         };
+        // DX-Q2 item 5: the dialer's outbound handshake is a consumer of the
+        // one tip source. Publish the tip the watch holds now, then every
+        // change; the task ends when the connector drops its sender.
+        let mut handshake_tips = tips.clone();
+        runtime.spawn(async move {
+            loop {
+                if let Some(tip) = handshake_tips.borrow_and_update().tip {
+                    shekyl_ffi::dialer_ffi::publish_chain_tip(&tip);
+                }
+                if handshake_tips.changed().await.is_err() {
+                    break;
+                }
+            }
+        });
         let pool_health = service.pool_health();
         shekyl_daemon_rpc::submit::install_production(
             shekyl_daemon_rpc::submit::RustPoolShim::new(
@@ -371,21 +386,17 @@ impl Node {
             }))
             .nudging(Arc::new({
                 let owed = Arc::clone(&owed);
-                // Both connectors off: the remnant never constructs the
-                // relay notifier (`net_node.inl` returns before that
-                // assignment; the file is a freeze shrink row). RD's
-                // NoRoute fluff is the shown bit; with no zone the origin
-                // callback applies it here. A node with a connector still
-                // hands the blob to the shell (`DRS_X_STORE_FLIP.md` Q9).
-                let offline = args.config.offline();
+                // The shell answers whether the relay took the blob. No
+                // route (no notifier bound, whatever the reason: an offline
+                // node never constructs one) is RD's NoRoute fluff, applied
+                // here at the origin, keyed on that answer and on no flag
+                // (`DRS_X_STORE_FLIP.md` Q9, amended 2026-10-29).
                 move |txid, blob| {
                     owed.lock()
                         .unwrap_or_else(PoisonError::into_inner)
                         .originated(TxId::from_bytes(txid.to_bytes()));
-                    if offline {
+                    if !relay_local(blob) {
                         shekyl_ffi::pool_ffi::note_shown(*txid);
-                    } else {
-                        relay_local(blob);
                     }
                 }
             }))
@@ -666,26 +677,27 @@ fn pool_departed(owed: Arc<Mutex<Responsibilities>>) -> shekyl_chain_ingest::ser
     })
 }
 
-/// The shell's relay entry, when a connector is on. RD deletes it with
-/// `levin_notify`. An offline node has no notifier and does not call this.
-fn relay_local(blob: &[u8]) {
+/// The shell's relay entry. RD deletes it with `levin_notify`. `true`
+/// when the relay took the blob; `false` is no route (no notifier bound,
+/// whatever the reason), and the caller applies the fluff at the origin.
+fn relay_local(blob: &[u8]) -> bool {
     if blob.is_empty() {
-        return;
+        return false;
     }
-    relay_local_ffi(blob);
+    relay_local_ffi(blob) != 0
 }
 
 #[cfg(not(test))]
 #[allow(unsafe_code)]
-fn relay_local_ffi(blob: &[u8]) {
-    // SAFETY: `blob` is a live slice. The shell ignores a call before
+fn relay_local_ffi(blob: &[u8]) -> i32 {
+    // SAFETY: `blob` is a live slice. The shell answers 0 to a call before
     // `core::init` returns.
     unsafe { shekyl_shell_relay_local(blob.as_ptr(), blob.len()) }
 }
 
 #[cfg(test)]
-fn relay_local_ffi(blob: &[u8]) {
-    shekyl_shell_relay_local(blob.as_ptr(), blob.len());
+fn relay_local_ffi(blob: &[u8]) -> i32 {
+    shekyl_shell_relay_local(blob.as_ptr(), blob.len())
 }
 
 // The C++ shell's one relay entry. The node is the caller; the shell is
@@ -693,7 +705,7 @@ fn relay_local_ffi(blob: &[u8]) {
 #[cfg(not(test))]
 #[allow(unsafe_code)]
 unsafe extern "C" {
-    fn shekyl_shell_relay_local(blob: *const u8, len: usize);
+    fn shekyl_shell_relay_local(blob: *const u8, len: usize) -> i32;
 }
 
 fn rules_of(config: &DaemonConfig) -> Result<ChainRules, OpenError> {
@@ -763,6 +775,18 @@ fn open_chain(
     }
 }
 
+/// A4: the durability the store opened with, said by the node that opened
+/// it. The DRS bench reads this line back (`scripts/bench/drs_artifact.py`
+/// `STORE_DURABILITY_RE`): the marker is `Store durability: ` and the first
+/// word after it is the policy.
+fn store_durability_line() -> String {
+    let durability = shekyl_chain_store::store::DURABILITY;
+    format!(
+        "Store durability: {} (an fsync per commit, DRS-D9; redb Durability::{durability:?})",
+        format!("{durability:?}").to_lowercase()
+    )
+}
+
 fn anchors_of(rules: ChainRules) -> ReleaseAnchors {
     match rules {
         ChainRules::Scheduled(net) => ReleaseAnchors::for_network(net),
@@ -824,8 +848,11 @@ async fn connect_genesis(
 #[cfg(test)]
 mod tests;
 
-/// The daemon binary supplies this from C++. Unit tests link no C++.
+/// The daemon binary supplies this from C++. Unit tests link no C++, so
+/// a test node has no route: its own transactions fluff at the origin.
 #[cfg(test)]
 #[allow(unsafe_code)]
 #[no_mangle]
-extern "C" fn shekyl_shell_relay_local(_blob: *const u8, _len: usize) {}
+extern "C" fn shekyl_shell_relay_local(_blob: *const u8, _len: usize) -> i32 {
+    0
+}

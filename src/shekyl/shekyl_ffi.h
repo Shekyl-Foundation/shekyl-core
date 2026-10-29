@@ -4012,11 +4012,6 @@ int shekyl_dial_take_handshake_nonce(std::uint32_t connector, const std::uint8_t
 bool shekyl_sync_room_for_syncing_peer(std::uint32_t connector, std::uint32_t syncing, std::uint32_t synced);
 /// Whether to look for more outbound peers to sync from on `connector`.
 bool shekyl_sync_wants_more_outbound(std::uint32_t connector, std::uint32_t outbound);
-/// The core's tip: the dialer's next handshake carries it. Called wherever
-/// the tip changes, and once at start.
-void shekyl_core_publish_tip(std::uint64_t height, std::uint64_t cumulative_difficulty,
-    std::uint64_t cumulative_difficulty_top64, const std::uint8_t* top_id);
-
 /// The protocol handler's one entry into the Rust ingest service
 /// (DRS_X_STORE_FLIP.md DX-Q2 item 2). Built and tested; the store flip
 /// routes the handler's block arrivals here, and nothing calls it before.
@@ -4162,15 +4157,11 @@ int32_t shekyl_core_block(const uint8_t hash[32], ShekylBuffer* blob,
 int32_t shekyl_core_txs(const uint8_t* hashes, size_t count, ShekylBuffer* out);
 
 /// A transaction this node committed, handed to `levin_notify` as
-/// `relay_method::local`. A call before `core::init` returns, or after
-/// `deinit`, does nothing. RD deletes this with `levin_notify`.
-void shekyl_shell_relay_local(const uint8_t* blob, size_t len);
+/// `relay_method::local`. Returns 1 when the relay took it, 0 when there
+/// was no route: before `core::init` returns, after `deinit`, or with no
+/// notifier bound. RD deletes this with `levin_notify`.
+int shekyl_shell_relay_local(const uint8_t* blob, size_t len);
 
-/// The tip the core last published (see shekyl_core_publish_tip): 1 and the
-/// fields written, 0 and nothing written before the first publish. A null
-/// out pointer is skipped.
-int shekyl_core_published_tip(std::uint64_t* out_height, std::uint64_t* out_cumulative_difficulty,
-    std::uint64_t* out_cumulative_difficulty_top64, std::uint8_t* out_top_id);
 /// The disclosure sample for a response on `session` (the socket id): up to
 /// `cap` entries written to `out`, returning how many. Zero below the white
 /// diversity floor, for an unknown session, or with no dialer.

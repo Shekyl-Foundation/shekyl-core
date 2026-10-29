@@ -215,3 +215,20 @@ fn config_on(dir: &Path, network: &str, extra: &[&str]) -> DaemonConfig {
     .expect("config")
     .config
 }
+
+/// The line the DRS bench reads back (`scripts/bench/drs_artifact.py`,
+/// `STORE_DURABILITY_RE`): the marker, then the policy word, and the store's
+/// own constant named in the parenthetical. A drift here refuses the first
+/// flip run at its seed, before generation.
+#[test]
+fn the_store_durability_line_names_the_constant_the_bench_reads() {
+    let line = crate::store_durability_line();
+    assert_eq!(
+        line,
+        "Store durability: immediate (an fsync per commit, DRS-D9; redb Durability::Immediate)"
+    );
+    assert!(matches!(
+        shekyl_chain_store::store::DURABILITY,
+        redb::Durability::Immediate
+    ));
+}
