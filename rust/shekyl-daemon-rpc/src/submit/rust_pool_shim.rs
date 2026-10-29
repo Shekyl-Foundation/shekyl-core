@@ -49,10 +49,8 @@
 //! - anything else — a refusal on the bytes, or by M4/M5, after the engine's
 //!   own Phase A–C passed it, or a fault — is
 //!   [`CommitOutcome::InternalFault`]: two judgements of one transaction
-//!   disagreed, which is a daemon defect, never a verdict.
-//!
-//! [`CommitOutcome::JoinMarketUnsupported`] is the C++ commit's: the Rust
-//! pool holds a JoinMarket like any post.
+//!   disagreed, which is a daemon defect, never a verdict. The Rust pool
+//!   holds a JoinMarket like any post.
 //!
 //! [`SubmitStateShim::relay`] hands the committed bytes to the node's
 //! nudge. The engine calls it only after [`CommitOutcome::Committed`].
@@ -658,7 +656,18 @@ impl<C: ChainSource> SubmitStateShim for RustPoolShim<C> {
                     departed_ids = evicted;
                     CommitOutcome::Committed
                 }
-                Ok(Admission::Duplicate(_) | Admission::Refused(Judged::Chain { .. })) => {
+                // A duplicate, or a chain-bound row the door judges and the
+                // engine's verifier does not: both carry the facts at the
+                // lock, and the engine classifies (a premise that moved
+                // outranks the row; otherwise the row is the verdict,
+                // `Rejected { ConsensusRule, row }`).
+                Ok(
+                    admission @ (Admission::Duplicate(_) | Admission::Refused(Judged::Chain(_))),
+                ) => {
+                    let chain_row = match &admission {
+                        Admission::Refused(Judged::Chain(refused)) => Some(refused.rule),
+                        _ => None,
+                    };
                     let emission_probe = parsed.emission_probe();
                     match gather(
                         snapshot,
@@ -675,7 +684,11 @@ impl<C: ChainSource> SubmitStateShim for RustPoolShim<C> {
                             // stands, for a concealed answer to apply.
                             fresh.pool_refuses_for_room =
                                 Some(pool.relay_view().refuses_for_room(&parsed.tx));
-                            CommitOutcome::Raced(Box::new(fresh))
+                            let fresh = Box::new(fresh);
+                            match chain_row {
+                                Some(row) => CommitOutcome::ChainRefused { row, fresh },
+                                None => CommitOutcome::Raced(fresh),
+                            }
                         }
                         Err(ShimFault) => CommitOutcome::InternalFault,
                     }

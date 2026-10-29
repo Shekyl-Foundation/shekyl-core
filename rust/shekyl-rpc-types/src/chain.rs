@@ -220,7 +220,10 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// 3.63: the flip's client shapes (FLIP-Q4). `start_mining` takes
 /// `{ threads }` and no address. `generateblocks` takes `{ count }`.
 /// `get_block_template` takes no parameters. A retired pool's
-/// `tx_pool_size` is null. `get_version` gains nothing.
+/// `tx_pool_size` is null. `join_market_unsupported` leaves the
+/// `send_raw_transaction` reject-cause set: the Rust daemon admits a
+/// JoinMarket bond post, and no daemon authors the cause. `get_version`
+/// gains nothing.
 pub const CORE_RPC_VERSION_MINOR: u32 = 63;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
@@ -645,7 +648,8 @@ mod tests {
         // answers the chain's reads over a retired pool. 3.62 makes a grant
         // refusal the error object (RT-W10 step 1). 3.63 is the flip's
         // client shapes: `start_mining` takes threads and no address,
-        // `generateblocks` takes a count (FLIP-Q4).
+        // `generateblocks` takes a count (FLIP-Q4), and the reject cause
+        // `join_market_unsupported` leaves the set.
         assert_eq!(CORE_RPC_VERSION, 196_671);
         assert_eq!(CORE_RPC_VERSION, (3 << 16) | 63);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);

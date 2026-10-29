@@ -1235,7 +1235,7 @@ The reply is tagged and has **no `status`**.
 |---|---|---|---|
 | `verdict` | string enum | `accepted` / `already_in_pool` / `already_in_chain` / `rejected` | `T/lib.rs:165-206` |
 | `height` | u64 | `already_in_chain` only | `T/lib.rs:195-198` |
-| `cause` | string enum | `rejected` only: `malformed`, `fee_too_low`, `double_spend_conflict`, `stale_root`, `reference_too_recent`, `reference_not_found`, `join_market_unsupported`; `unrecognized` is only the client's `#[serde(other)]` decode fallback for an unknown value; the daemon never sends it | `T/lib.rs:202-205,218-266` |
+| `cause` | string enum | `rejected` only: `malformed`, `fee_too_low`, `double_spend_conflict`, `stale_root`, `reference_too_recent`, `reference_not_found`, `consensus_rule` (3.63; its `row` names the consensus row, `"CEN-J15"`); `join_market_unsupported` left the set at 3.63; `unrecognized` is only the client's `#[serde(other)]` decode fallback for an unknown value; the daemon never sends it | `T/lib.rs:202-205,218-266` |
 
 A request error is HTTP 400 plain text. An internal fault is HTTP 500 plain text (`D/handlers/submit.rs:29-94`).
 

@@ -535,10 +535,6 @@ pub struct TxMeta {
     pub weight: u64,
     /// Transaction fee (`Ct::Fcmp` fee field).
     pub fee: u64,
-    /// Whether the transaction carries a JoinMarket bond post: the one
-    /// fact about its kind a commit backend may have no decoder for
-    /// ([`CommitOutcome::JoinMarketUnsupported`]).
-    pub carries_join_market: bool,
 }
 
 /// Outcome of the Phase-D check-and-commit (§3.2 / §4.2).
@@ -553,21 +549,23 @@ pub enum CommitOutcome {
     /// the snapshot the enum's dominant variant); **Rust classifies**,
     /// most-terminal-first (§3.1) — the shim never chooses a verdict.
     Raced(Box<SubmitFacts>),
+    /// The pool door refused a chain-bound consensus row at commit. Carries
+    /// the fresh facts like [`Self::Raced`]: a premise that moved under the
+    /// refusal (a competing spend, CEN-I7; a duplicate; a stale root) is
+    /// classified first, most-terminal-first and with the same concealment,
+    /// and only when none did does the engine answer the row the verifier
+    /// does not judge (CEN-J15 is the first): `Rejected { ConsensusRule,
+    /// row }` (RPC 3.63; Rick, 2026-10-29).
+    ChainRefused {
+        /// The row that refused.
+        row: shekyl_chain_rules::CenRow,
+        /// The facts at the commit lock.
+        fresh: Box<SubmitFacts>,
+    },
     /// The insert tail succeeded but the tail's `prune()` evicted the tx
     /// under pool pressure (F23 / defect 0.7) — classified
     /// `Rejected{FeeTooLow}` (pool-pressure variant).
     PrunedOnInsert,
-    /// The backend cannot hold a JoinMarket bond post and did not try.
-    /// Phases A–C passed. Phase D's mutable re-checks do not run: the C++
-    /// commit step decodes no JoinMarket form that carries a receipt key
-    /// (`FN_DSA_HYBRID.md` `FND-20`) and returns before
-    /// `shekyl_submit_commit_tx`. The capability refusal is the verdict.
-    /// A fresh post and a foreign duplicate get the same answer, and a
-    /// key-image or fee race during Phase C is reported as this outcome.
-    /// Retrying the same bytes against this daemon fails the same way.
-    /// Classified `Rejected{JoinMarketUnsupported}`. Deleted with the C++
-    /// commit shim at `DEL-008`.
-    JoinMarketUnsupported,
     /// Internal inconsistency (§3.4: release-mode txid divergence between
     /// the engine hash and C++ `get_transaction_hash` over the same blob,
     /// or a marshalling fault). Never a verdict: surfaced as a loud

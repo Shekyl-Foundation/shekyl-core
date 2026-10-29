@@ -194,6 +194,7 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
                 );
                 return Ok(SubmitVerdict::Rejected {
                     cause: reject.into(),
+                    row: None,
                 });
             }
         }
@@ -265,16 +266,13 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         // `crate::submit::gate`).
         let cert = match self.phase_c(&parsed, &facts)? {
             Ok(cert) => cert,
-            Err(cause) => return Ok(SubmitVerdict::Rejected { cause }),
+            Err(cause) => return Ok(SubmitVerdict::Rejected { cause, row: None }),
         };
 
         // ── Phase D: check-and-commit (shim 2, one short lock) ─────────
         let meta = TxMeta {
             weight: parsed.weight,
             fee: parsed.fee,
-            carries_join_market: parsed.bond_post().is_some_and(|(_, bond)| {
-                matches!(bond.kind, shekyl_wire::BondPostKind::JoinMarket { .. })
-            }),
         };
         match self
             .shim
@@ -291,16 +289,23 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
                 // tail's prune() under pool pressure.
                 Ok(SubmitVerdict::Rejected {
                     cause: RejectCause::FeeTooLow,
+                    row: None,
                 })
             }
             CommitOutcome::Raced(fresh) => Self::classify_race(&parsed, &cert, &fresh, caller),
-            // FND-20: Phases A–C passed. Phase D's mutable re-checks do
-            // not run: the shim returns before `shekyl_submit_commit_tx`
-            // because it cannot reparse these bytes. The capability
-            // refusal is the verdict.
-            CommitOutcome::JoinMarketUnsupported => Ok(SubmitVerdict::Rejected {
-                cause: RejectCause::JoinMarketUnsupported,
-            }),
+            // A chain-bound row refused at commit. A premise that moved under
+            // it outranks it (a competing spend, a duplicate, a stale root:
+            // the same most-terminal-first order as a race, with the same
+            // concealment); only when none did is the row the verdict, and
+            // it rides as the reply's diagnostic parameter so the wallet can
+            // say why (DAEMON_SUBMIT_VERDICT.md §2.5).
+            CommitOutcome::ChainRefused { row, fresh } => Ok(Self::reclassify(
+                &parsed, &cert, &fresh, caller,
+            )
+            .unwrap_or(SubmitVerdict::Rejected {
+                cause: RejectCause::ConsensusRule,
+                row: Some(row.as_str().to_owned()),
+            })),
             CommitOutcome::InternalFault => Err(EngineFault::CommitFault),
         }
     }
@@ -438,19 +443,34 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
     }
 
     /// The Phase-D race classifier: fresh facts in, **most-terminal-first**
-    /// verdict out (§3.1). The C++ never chooses a verdict; this function
-    /// is the single point where a raced commit becomes one.
+    /// verdict out (§3.1). The shim never chooses a verdict; this function
+    /// is the single point where a raced commit becomes one. A `Raced` with
+    /// no re-classifiable premise is a shim contract violation: loud, never
+    /// a guessed verdict.
     fn classify_race(
         parsed: &ParsedSubmission,
         cert: &VerificationCertificate,
         fresh: &SubmitFacts,
         caller: SubmitCaller,
     ) -> Result<SubmitVerdict, EngineFault> {
+        Self::reclassify(parsed, cert, fresh, caller).ok_or(EngineFault::ShimContract(
+            "commit reported Raced but no re-checked premise classifies",
+        ))
+    }
+
+    /// The premises a commit re-checks, most terminal first; `None` when
+    /// none of them moved.
+    fn reclassify(
+        parsed: &ParsedSubmission,
+        cert: &VerificationCertificate,
+        fresh: &SubmitFacts,
+        caller: SubmitCaller,
+    ) -> Option<SubmitVerdict> {
         // 1. Settled identity outranks everything: a reorg plus a
         //    competing spend must still report the settled fact. The F40
         //    height rides the fresh facts for free (§3.1 Phase B).
         if let Some(height) = fresh.in_chain {
-            return Ok(SubmitVerdict::AlreadyInChain {
+            return Some(SubmitVerdict::AlreadyInChain {
                 height: height.to_raw(),
             });
         }
@@ -463,15 +483,16 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         //    would be (concealed, below), never `AlreadyInPool`, so the race
         //    outcome is not an oracle.
         let mut concealed = match disclose_pool_presence(fresh, caller) {
-            PoolDisclosure::Reveal => return Ok(SubmitVerdict::AlreadyInPool),
+            PoolDisclosure::Reveal => return Some(SubmitVerdict::AlreadyInPool),
             PoolDisclosure::Conceal => true,
             PoolDisclosure::Absent => false,
         };
         // 3. Terminal conflict: a *different* transaction consumed one of
         //    our inputs while we verified.
         if fresh.key_image_conflicts.contains(&KeyImageConflict::Other) {
-            return Ok(SubmitVerdict::Rejected {
+            return Some(SubmitVerdict::Rejected {
                 cause: RejectCause::DoubleSpendConflict,
+                row: None,
             });
         }
         // 3a. The same, against a spender this node holds in its stem phase
@@ -486,8 +507,9 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         {
             match caller {
                 SubmitCaller::Owner => {
-                    return Ok(SubmitVerdict::Rejected {
+                    return Some(SubmitVerdict::Rejected {
                         cause: RejectCause::DoubleSpendConflict,
+                        row: None,
                     })
                 }
                 SubmitCaller::Foreign => concealed = true,
@@ -539,8 +561,9 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
                 fresh.bond_record_exists == Some(true)
             };
             if slot_moved {
-                return Ok(SubmitVerdict::Rejected {
+                return Some(SubmitVerdict::Rejected {
                     cause: RejectCause::DoubleSpendConflict,
+                    row: None,
                 });
             }
         }
@@ -548,8 +571,9 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         //     claimant record vanished (a Release connected) or a claimed
         //     epoch was consumed by a competing claim during Phase C.
         if parsed.kind == SubmitTxKind::Emission && fresh.emission_claim_conflict == Some(true) {
-            return Ok(SubmitVerdict::Rejected {
+            return Some(SubmitVerdict::Rejected {
                 cause: RejectCause::DoubleSpendConflict,
+                row: None,
             });
         }
         // 4. Reference/root drift (reorg, pop, root-table motion): the
@@ -571,16 +595,18 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
                 }
             };
             if drifted {
-                return Ok(SubmitVerdict::Rejected {
+                return Some(SubmitVerdict::Rejected {
                     cause: RejectCause::StaleRoot,
+                    row: None,
                 });
             }
         }
         // 5. Dynamic fee floor moved (F34): re-run the same arithmetic
         //    over the fresh params.
         if !fee_clears(parsed.weight, parsed.fee, fresh) {
-            return Ok(SubmitVerdict::Rejected {
+            return Some(SubmitVerdict::Rejected {
                 cause: RejectCause::FeeTooLow,
+                row: None,
             });
         }
         // A concealed answer (a duplicate or a conflict this node holds in
@@ -592,18 +618,15 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         // the pool's rising minimum as a fresh one does at insert
         // (`PrunedOnInsert`'s verdict).
         if concealed {
-            return Ok(if fresh.pool_refuses_for_room == Some(true) {
+            return Some(if fresh.pool_refuses_for_room == Some(true) {
                 SubmitVerdict::Rejected {
                     cause: RejectCause::FeeTooLow,
+                    row: None,
                 }
             } else {
                 SubmitVerdict::Accepted
             });
         }
-        // A `Raced` with no re-classifiable premise is a shim contract
-        // violation — loud, never a guessed verdict.
-        Err(EngineFault::ShimContract(
-            "commit reported Raced but no re-checked premise classifies",
-        ))
+        None
     }
 }

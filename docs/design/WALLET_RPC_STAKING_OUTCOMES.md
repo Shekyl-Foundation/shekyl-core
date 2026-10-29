@@ -111,10 +111,6 @@ round.
   (one settlement epoch between the principal's funding transfer and the
   bond post) is `#[allow(dead_code)]`, "inert until cold-start spacing
   check is wired" (`engine/stake_timing.rs:192-203`).
-- **Today the C++ daemon hides all of this.** It answers every kind-5
-  JoinMarket post `JoinMarketUnsupported` before any reference check
-  (the FOLLOWUPS row "The five bonded regtest walks are decided dark…").
-  The defect appears at `DEL-008`.
 
 **Shown by a dispatch unit test**, committed `#[ignore]`d with its
 reason pointing at the FOLLOWUPS row:
@@ -374,10 +370,8 @@ entry with:
   | `spent_elsewhere` | the end date passed with the record's reserved inputs **partly** spent by another transaction (WR-Q3) | the unspent rest is `returned` |
 
 - **`reason`**: a user sentence, never an enum name (rule 81):
-  - `rejected`: chosen from `TerminalErrorKind`, starting from the
-    sentence already shipped, `STAKING_UNAVAILABLE_ON_THIS_DAEMON`
-    (`dispatch.rs:53-56`). Every other kind gets a row before the commit
-    lands.
+  - `rejected`: chosen from `TerminalErrorKind`; every kind has a row
+    (`staking_outcomes.rs` `refusal`).
   - `expired`: one sentence that does not blame the user, since under
     §1.1 the cause is usually the wallet's own timing. For example: "The
     stake was not accepted in time and has been withdrawn. Its funds are
@@ -413,17 +407,18 @@ gain a match (WR-Q3).
 **Schema.** `PENDING_POST_VERSION` 12 → 13, refuse-not-migrate, schema
 snapshot (rule 42), shared with WR-Q3's `reference_height`.
 
-**Falsifier.** The armed tripwire
-`e2e_the_cxx_daemon_answers_join_market_unsupported`
-(`engine/regtest_e2e.rs:3481`) drives a terminal rejection end to end
-against the real C++ daemon. Extended: after the refusal the record
+**Falsifier.** `a_terminal_verdict_holds_the_post_and_never_resends`
+(`engine/pscan/dispatch_tests.rs`) and
+`a_recorded_verdict_reads_refused_then_expired_with_its_reason`
+(`engine/staking_outcomes.rs`) pin a terminal rejection's arc. After the
+refusal the record
 stays in `in_flight` as `refused`, with its reservation, the reason and
 `funds_return_at`; past the end date, until the release, it shows
 `expired` with the reason; at the release `staking_info` shows
 `outcomes[0].outcome == "rejected"` for `kind == "stake"`, with the
 reason, `funds == "returned"` and `in_flight` empty. After a restart it
-still does. The shipped sentence's "its funds are spendable again"
-(`dispatch.rs:53-56`) becomes the return at `funds_return_at`.
+still does. The pre-flip dispatch log's "its funds are spendable again"
+became the return at `funds_return_at`.
 
 ### WR-Q3 — How a record that will never land ends — RULED 2026-10-15
 
@@ -800,9 +795,7 @@ the honest outcome for that one case.
 ## 6. What this round does not do
 
 - No C++.
-- No wallet-contract removal. `JoinMarketUnsupported` stays enumerated
-  until `DEL-008` deletes it (the FOLLOWUPS row "The five bonded regtest
-  walks are decided dark…").
+- No wallet-contract removal in this round.
 - No change to when or how a bond post is signed. That belongs to the
   bond lane's Round 0 (§1.1).
 - No byte-identical resubmit for claims, drains or exits. That stays
@@ -869,7 +862,7 @@ and the review rulings of 2026-10-17 (§7.3).
 | WR-Q1: expired after a reload, `funds_return_at == r + 100` | `staking_outcomes::tests::an_expired_record_reads_the_same_after_a_reload`; the boundary at `tip == end date` in `a_record_reads_expired_from_a_tip_at_its_end_date` |
 | WR-Q1: no `stalled` | `rg -nw stalled` over the three paths returns only two comments about RPC concurrency in `send.rs`; without `-w` it also matches `installed` |
 | WR-Q1, amended: `refused` below the end date, `expired` with the same reason after it | `a_recorded_verdict_reads_refused_then_expired_with_its_reason` |
-| WR-Q2, amended: the full arc against a real daemon | `e2e_the_cxx_daemon_answers_join_market_unsupported` against the C++ daemon: the stake reads `refused` with the refusal sentence and `funds_return_at` the end date, before and after a restart; `expired` with the reason once the ledger passes the end date; then the production P-scan's dispatch tick releases it and `outcomes` holds one `rejected` stake with the reason and its funds returned, before and after another restart |
+| WR-Q2, amended: the full arc of a terminal refusal | `a_terminal_verdict_holds_the_post_and_never_resends` (the driver records the cause, holds the record and its reservation, never resends, and releases at the end date with the outcome carrying the reason) and `a_recorded_verdict_reads_refused_then_expired_with_its_reason` (the read before and after the end date) |
 | WR-Q3: a refused zero-fee claim ends `ended_unconfirmed` | `the_release_outcome_follows_the_precedence_table`; its sentence and `none_held` in `reasons_are_user_sentences_and_linkage_follows_the_send` |
 | WR-Q3 / WR-Q5: the error line once per start | `the_integrity_error_is_written_once_per_start_and_on_change` |
 | WR-Q2: the acknowledgement by kind and height | `pending_post_block` `an_acknowledgement_clears_every_persona_through_the_height_shown`; through the facade and the seal, `an_acknowledgement_clears_every_personas_outcome_through_the_height_shown`; the CLI default, `acknowledge_defaults_to_the_newest_ending_shown` |

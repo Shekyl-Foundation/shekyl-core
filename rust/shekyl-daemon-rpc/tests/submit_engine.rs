@@ -47,7 +47,7 @@ fn base_facts() -> SubmitFacts {
 }
 
 fn rejected(cause: RejectCause) -> SubmitVerdict {
-    SubmitVerdict::Rejected { cause }
+    SubmitVerdict::Rejected { cause, row: None }
 }
 
 // ── Phase A short-circuit ───────────────────────────────────────────────
@@ -351,6 +351,51 @@ fn pruned_on_insert_rejects_fee_too_low() {
 }
 
 #[test]
+fn a_chain_row_refused_at_commit_is_a_consensus_rule_rejection_naming_the_row() {
+    // R-B (Rick, 2026-10-29): the door judged a chain-bound row the engine's
+    // verifier does not; the answer is a verdict, not a fault, and the row
+    // rides as the reply's diagnostic parameter.
+    let facts = base_facts();
+    let (engine, shim, _verifier) = engine(
+        facts.clone(),
+        CommitOutcome::ChainRefused {
+            row: shekyl_chain_rules::CenRow::J15,
+            fresh: Box::new(facts),
+        },
+    );
+    assert_eq!(
+        engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
+        SubmitVerdict::Rejected {
+            cause: RejectCause::ConsensusRule,
+            row: Some("CEN-J15".to_owned()),
+        }
+    );
+    assert_eq!(shim.relay_count(), 0, "a refused tx must not be nudged");
+}
+
+#[test]
+fn a_premise_that_moved_under_a_chain_row_refusal_outranks_the_row() {
+    // The door refuses a double spend as a chain row (CEN-I7); the engine
+    // answers it as the race it is, in the same most-terminal-first order
+    // and with the same concealment a `Raced` gets, never as the row.
+    let facts = base_facts();
+    let mut fresh = facts.clone();
+    fresh.key_image_conflicts = vec![KeyImageConflict::Other, KeyImageConflict::Free];
+    let refused = CommitOutcome::ChainRefused {
+        row: shekyl_chain_rules::CenRow::I7,
+        fresh: Box::new(fresh),
+    };
+    for caller in [SubmitCaller::Owner, SubmitCaller::Foreign] {
+        let (under_test, _shim, _verifier) = engine(facts.clone(), refused.clone());
+        assert_eq!(
+            under_test.submit(&spend_hex(), caller).unwrap(),
+            rejected(RejectCause::DoubleSpendConflict),
+            "a public conflict is told to every caller ({caller:?})"
+        );
+    }
+}
+
+#[test]
 fn internal_fault_is_a_fault_not_a_verdict() {
     let (engine, shim, _verifier) = engine(base_facts(), CommitOutcome::InternalFault);
     assert_eq!(
@@ -456,6 +501,7 @@ fn an_embargoed_conflict_is_the_owners_alone() {
     };
     let conflict = SubmitVerdict::Rejected {
         cause: RejectCause::DoubleSpendConflict,
+        row: None,
     };
     assert_eq!(
         raced(KeyImageConflict::Embargoed),
@@ -784,7 +830,8 @@ fn emission_claim_slot_race_classifies_double_spend_conflict() {
             .submit(&hexify(&tx), SubmitCaller::Owner)
             .expect("no engine fault"),
         SubmitVerdict::Rejected {
-            cause: RejectCause::DoubleSpendConflict
+            cause: RejectCause::DoubleSpendConflict,
+            row: None,
         },
     );
     assert_eq!(shim.relay_count(), 0, "raced ⇒ no relay nudge");
@@ -827,6 +874,7 @@ fn with_the_window_the_engines_fee_gate_is_the_doors() {
     };
     let too_low = SubmitVerdict::Rejected {
         cause: RejectCause::FeeTooLow,
+        row: None,
     };
     assert!(relay_floor_admits(exact, weight, &floors));
     assert_eq!(
