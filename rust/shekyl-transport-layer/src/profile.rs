@@ -120,9 +120,11 @@ impl QuietThreshold {
     ///
     /// # Panics
     ///
-    /// In const evaluation, when `attempts` is zero or `in_flight_bound` is
-    /// zero. A row with nothing to count, or no slot to count it in, is not
-    /// a threshold.
+    /// When `attempts` is zero or `in_flight_bound` is zero. A row with
+    /// nothing to count, or no slot to count it in, is not a threshold.
+    /// Every row in [`dial_profile`] is evaluated in a constant at build
+    /// time (the unnamed constant after the table), so a bad row is a compile
+    /// error, never a panic in the dialer.
     #[must_use]
     pub const fn derive(
         attempts: u32,
@@ -308,6 +310,22 @@ pub const fn dial_profile(connector: ConnectorId) -> DialProfile {
         },
     }
 }
+
+/// Every row's quiet threshold, evaluated at build time. A row with K or
+/// its in-flight bound at zero fails [`QuietThreshold::derive`]'s assertion
+/// here, and a row whose S falls short of one dial deadline fails the one
+/// below: both are compile errors.
+const _: () = {
+    let mut index = 0;
+    while index < ConnectorId::ALL.len() {
+        let profile = dial_profile(ConnectorId::ALL[index]);
+        assert!(
+            profile.quiet().span_nanos >= profile.dial_deadline_nanos,
+            "a quiet span covers at least one dial deadline"
+        );
+        index += 1;
+    }
+};
 
 #[cfg(test)]
 mod tests {
