@@ -5618,26 +5618,30 @@ async fn maybe_capture_chain_vector(
         match std::env::var_os(var) {
             Some(p) => PathBuf::from(p),
             None => panic!(
-                "{var} not set: the chain-vector capture drives the E2 tools \
-                 (shekyl-chain-replay from `cargo build -p shekyl-chain-ingest --release`; \
-                 shekyl-e2-trace-export from `cmake -DBUILD_E2_TRACE_EXPORT=ON`)"
+                "{var} not set: the chain-vector capture drives shekyl-chain-replay \
+                 (`cargo build -p shekyl-chain-ingest --release`)"
             ),
         }
     };
     let replay_bin = tool("SHEKYL_CHAIN_REPLAY_BIN");
-    let trace_bin = tool("SHEKYL_E2_TRACE_EXPORT_BIN");
     // `get_info.height` is the block COUNT; the top block is one below it.
     let count = daemon.height().await;
     let tip = count.checked_sub(1).expect("a chain with a genesis");
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../shekyl-chain-ingest/tests/vectors")
         .join(shape);
+    // The LMDB harvest that wrote trace.e2 is gone. A capture replaces the
+    // corpus and leaves that file as it was.
+    let kept_trace = root.join("trace.e2");
+    let kept_trace_bytes = std::fs::read(&kept_trace).ok();
     if root.exists() {
         std::fs::remove_dir_all(&root).expect("clear a stale capture");
     }
     std::fs::create_dir_all(&root).expect("create capture dir");
+    if let Some(bytes) = &kept_trace_bytes {
+        std::fs::write(&kept_trace, bytes).expect("keep the pre-flip trace");
+    }
     let corpus = root.join("corpus.e2");
-    let trace = root.join("trace.e2");
 
     let mut fetch = Command::new(&replay_bin);
     fetch
@@ -5658,25 +5662,8 @@ async fn maybe_capture_chain_vector(
         String::from_utf8_lossy(&fetch.stdout),
         String::from_utf8_lossy(&fetch.stderr)
     );
-    let export = shekyl_tor_control_client::spawn_lock::output(
-        Command::new(&trace_bin)
-            .arg("--regtest")
-            .arg("--data-dir")
-            .arg(&daemon.data_dir)
-            .arg("--out")
-            .arg(&trace)
-            .arg("--block-stop")
-            .arg(tip.to_string()),
-    )
-    .expect("spawn shekyl-e2-trace-export");
-    assert!(
-        export.status.success(),
-        "shekyl-e2-trace-export failed: {}\n{}",
-        String::from_utf8_lossy(&export.stdout),
-        String::from_utf8_lossy(&export.stderr)
-    );
 
-    // Beside the pair: every listed transaction's full bytes as
+    // Every listed transaction's full bytes as
     // `txs/<txid>.tx`, for the validator crate's per-rule fixtures. That
     // crate may not reach the ingest crate (G1), so it cannot read the
     // corpus; it reads a real transaction's bytes and mutates ONE field —
@@ -5762,15 +5749,16 @@ async fn maybe_capture_chain_vector(
         "genesis_hash": genesis_hash,
         "built_at_dev_sha": built_at_dev_sha,
         "description":
-            "A regtest chain captured whole as the DRS-E2 replay pair. corpus.e2: \
-             every block 0..=tip_height with the FULL bytes of every listed \
-             transaction (shekyl-chain-replay fetch, RD-F15-verified). trace.e2: the \
-             passed-through facts per block and the daemon's logical-state digest at \
-             the tip (shekyl-e2-trace-export, one LMDB snapshot). Consumed by replay: \
-             shekyl-chain-ingest connects the chain against a real store, so the state \
-             the 4.I rules read is derived, not asserted. Regenerate with \
-             SHEKYL_CAPTURE_CHAIN_VECTORS=1, SHEKYLD_BIN, SHEKYL_CHAIN_REPLAY_BIN and \
-             SHEKYL_E2_TRACE_EXPORT_BIN set, running the named generator --ignored.",
+            "A regtest chain captured as corpus.e2: every block 0..=tip_height \
+             with the FULL bytes of every listed transaction \
+             (shekyl-chain-replay fetch, RD-F15-verified). The LMDB harvest \
+             that wrote trace.e2 is gone with the daemon store; a trace.e2 \
+             beside this corpus is the pre-flip file and is not rewritten. \
+             Consumed by replay: shekyl-chain-ingest connects the chain \
+             against a real store, so the state the 4.I rules read is \
+             derived, not asserted. Regenerate with \
+             SHEKYL_CAPTURE_CHAIN_VECTORS=1, SHEKYLD_BIN and \
+             SHEKYL_CHAIN_REPLAY_BIN set, running the named generator --ignored.",
         "shape": shape,
         "generator": generator,
         "captured_by_daemon_version": daemon_version,
@@ -5809,7 +5797,7 @@ async fn maybe_capture_chain_vector(
         "captured chain vector `{shape}` -> {} ({count} blocks; corpus {} B, trace {} B)",
         root.display(),
         std::fs::metadata(&corpus).map(|m| m.len()).unwrap_or(0),
-        std::fs::metadata(&trace).map(|m| m.len()).unwrap_or(0),
+        std::fs::metadata(&kept_trace).map(|m| m.len()).unwrap_or(0),
     );
 }
 
