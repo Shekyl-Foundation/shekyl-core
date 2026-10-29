@@ -223,10 +223,6 @@ inline std::vector<nodetool::peerlist_entry> disclose(const boost::uuids::uuid& 
   return out;
 }
 
-/// This node's own address on a connector (an operator onion from
-/// `--anonymous-inbound`), told to the Rust lists as one member of that
-/// connector's disclosure population. Returns the address, so the line
-/// that stores it for the operator log keeps its value.
 template <class t_protocol_handler>
 class zone_server final : public zone_binding
 {

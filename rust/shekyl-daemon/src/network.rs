@@ -328,8 +328,8 @@ mod tests {
         assert!(connectors(&offline).is_empty());
     }
 
-    /// The operator's onion is this node's own Tor address, from the
-    /// section: the C++ `--anonymous-inbound` advertisement, read in Rust.
+    /// The operator's onion (`tor-onion`) is this node's own Tor address,
+    /// from the section.
     /// A dial-only Tor has no own address, so the lists' own entry stays
     /// empty and the disclosure carries no per-node Tor value.
     #[test]
