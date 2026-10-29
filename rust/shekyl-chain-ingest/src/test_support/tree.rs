@@ -213,8 +213,11 @@ impl GrownTree {
             .chain(txs)
             .map(|tx| u64::try_from(tx.weight()).expect("a fixture body's weight fits u64"))
             .fold(0u64, u64::saturating_add);
-        let long_term =
-            shekyl_economics::long_term_weight(medians.long_term_effective_median.to_raw(), weight);
+        let long_term = shekyl_economics::long_term_weight(
+            medians.long_term_effective_median.to_raw(),
+            weight,
+            shekyl_economics::economic_params(),
+        );
         // The block as it is, not a settled clone: `reward_for` already
         // wrote the coinbase, and the recorded emission is what the
         // validator will compute for these bytes. A refusal means the

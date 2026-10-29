@@ -269,7 +269,7 @@ pub(crate) struct AgeState {
 }
 
 pub(crate) fn age_state(age_years: u64, params: &EconomicParams) -> AgeState {
-    state_at_height(age_years.saturating_mul(params.blocks_per_year), params)
+    state_at_height(age_years.saturating_mul(params.blocks_per_year()), params)
 }
 
 /// The projected trajectory's state at one height. [`age_state`] is this at
@@ -300,7 +300,7 @@ pub(crate) fn state_at_height(height: u64, params: &EconomicParams) -> AgeState 
 /// decay. A huge year saturates the height rather than wrapping.
 fn lowest_share_height(params: &EconomicParams) -> u64 {
     let schedule = params.emission_schedule();
-    let year = params.blocks_per_year;
+    let year = params.blocks_per_year();
     let year_height = |years: u64| 1u64.saturating_add(years.saturating_mul(year));
     let mut years = 0u64;
     let mut share = schedule.share_at(year_height(0));
@@ -526,7 +526,7 @@ fn feedback_scenario(
         u64::try_from(u128::from(fee_max) * 10_000 / u128::from(fee_min.max(1)) - 10_000)
             .expect("amplitude fits u64");
     FeedbackResult {
-        age_years: st.height / params.blocks_per_year,
+        age_years: st.height / params.blocks_per_year(),
         median,
         elasticity_milli: eps_milli,
         demand_scale,
@@ -998,9 +998,9 @@ mod tests {
         let schedule = params.emission_schedule();
         assert_eq!(schedule.share_at(h), 0);
         assert!(
-            h > params.blocks_per_year,
+            h > params.blocks_per_year(),
             "the shipped share decays for years"
         );
-        assert!(schedule.share_at(h - params.blocks_per_year) > 0);
+        assert!(schedule.share_at(h - params.blocks_per_year()) > 0);
     }
 }

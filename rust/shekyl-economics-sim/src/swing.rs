@@ -45,7 +45,11 @@ pub use shekyl_economics::{blocks_to_surge_saturation, BLOCK_WEIGHT_SURGE_FACTOR
 /// its ceiling, `S ·` the penalty-free zone.
 #[must_use]
 pub fn block_weight_penalty_free() -> u64 {
-    shekyl_economics::effective_median(BLOCK_WEIGHT_FLOOR, u64::MAX)
+    shekyl_economics::effective_median(
+        BLOCK_WEIGHT_FLOOR,
+        u64::MAX,
+        &shekyl_economics::EconomicParams::default(),
+    )
 }
 
 /// The legal per-block ceiling at that median

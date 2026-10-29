@@ -379,7 +379,7 @@ fn note_cap_crossing(first_at_cap: &mut Option<u64>, n_now: u64) {
 #[must_use]
 pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAgg> {
     let economic = params.economic();
-    let total_blocks = params.blocks_per_year * config.sim_years;
+    let total_blocks = params.blocks_per_year() * config.sim_years;
     let mut already_generated =
         emitted_at_start(params.emission_curve_asymptote, config.initial_emitted_ppm);
     let mut total_burned: u128 = 0;
@@ -403,7 +403,7 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
         // outputs accrue after both.
         let leaves_priced = fold.leaves();
         let closed_before = fold.closed_shard_count();
-        let demand = (config.volume.get_volume)(block, params.blocks_per_year);
+        let demand = (config.volume.get_volume)(block, params.blocks_per_year());
         let priced = chain.price(
             ChainStep {
                 fold_height: block,
@@ -454,11 +454,11 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
         // split at every count (`the_shipped_split_is_flat_at_every_count`).
         total_burned += u128::from(priced.paid.burned().to_raw());
 
-        if (block + 1) % params.blocks_per_year == 0 {
-            let year = (block + 1) / params.blocks_per_year;
+        if (block + 1) % params.blocks_per_year() == 0 {
+            let year = (block + 1) / params.blocks_per_year();
             aggs.push(A1YearAgg {
                 year,
-                start_height: config.genesis_height_offset + (year - 1) * params.blocks_per_year,
+                start_height: config.genesis_height_offset + (year - 1) * params.blocks_per_year(),
                 n: fold.closed_shard_count(),
                 n_at_cap: year_n_at_cap.take(),
                 cumulative_outputs: fold.leaves(),

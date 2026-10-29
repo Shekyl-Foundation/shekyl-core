@@ -40,6 +40,11 @@ fn main() {
         serde_json::from_str(&consensus_raw).expect("invalid JSON in consensus_constants.json");
     let daa_target_seconds = get_u64(&consensus_map, "daa_target_seconds");
     let block_weight_surge_factor = get_u64(&consensus_map, "block_weight_short_term_surge_factor");
+    // The block-weight limit's multiple of the effective median and the
+    // long-term weight's clamp, both in SCALE units (ESR-16 completion).
+    let block_weight_limit_multiple = get_u64(&consensus_map, "block_weight_limit_multiple_scaled");
+    let block_weight_long_term_clamp =
+        get_u64(&consensus_map, "block_weight_long_term_clamp_scaled");
     // The penalty-free block-weight zone: the same authority as the surge
     // factor (config/consensus_constants.json drives both the C++ header
     // generator and this). Until E6 slice 4 it was a hand-written C++ macro
@@ -65,6 +70,8 @@ fn main() {
 
     let output = format!(
         "pub const GENERATED_BLOCK_WEIGHT_SURGE_FACTOR: u64 = {block_weight_surge_factor};\n\
+         pub const GENERATED_BLOCK_WEIGHT_LIMIT_MULTIPLE: u64 = {block_weight_limit_multiple};\n\
+         pub const GENERATED_BLOCK_WEIGHT_LONG_TERM_CLAMP: u64 = {block_weight_long_term_clamp};\n\
          pub const GENERATED_BLOCK_WEIGHT_FULL_REWARD_ZONE: u64 = {block_weight_full_reward_zone};\n\
          pub const GENERATED_BLOCK_WEIGHT_LONG_TERM_WINDOW: u64 = {block_weight_long_term_window};\n\
          pub const GENERATED_BLOCK_WEIGHT_SHORT_TERM_WINDOW: u64 = {block_weight_short_term_window};\n\

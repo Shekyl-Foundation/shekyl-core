@@ -24,8 +24,16 @@
 /// properties — reachable, and a strict majority — are asserted beside it
 /// in `shekyl_types::archival`. Re-pinning requires re-running §3's
 /// derivation, the `(m, n)` window re-pin, and the economics-sim arithmetic
-/// that scales with it.
-pub const CHALLENGES_PER_PAIR_PER_EPOCH: u32 = 3;
+/// that scales with it. Generated from `config/consensus_constants.json`
+/// `archival_challenges_per_pair_per_epoch`.
+pub use challenge_count::CHALLENGES_PER_PAIR_PER_EPOCH;
+
+mod challenge_count {
+    include!(concat!(
+        env!("OUT_DIR"),
+        "/archival_challenge_count_generated.rs"
+    ));
+}
 
 const _: () = assert!(
     CHALLENGES_PER_PAIR_PER_EPOCH as usize == shekyl_types::archival::COUNTED_DRAWS,

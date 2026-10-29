@@ -137,7 +137,7 @@ impl BlockSpace {
         self.waiting_total -= included;
 
         let weight = fill.block_weight();
-        self.medians.push(medians, weight);
+        self.medians.push(medians, weight, at.params);
         Filled {
             included,
             expired,

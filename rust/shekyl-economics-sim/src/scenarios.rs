@@ -218,7 +218,7 @@ pub fn scenario_8_late_tail(params: &SimParams) -> ScenarioConfig {
         // ~year 30 in the configured chain timing (derived, not a literal —
         // byte-identical at the default 262_800; see `fee_era` in
         // budget_scenarios.rs for the drift rationale).
-        genesis_height_offset: 30 * params.blocks_per_year,
+        genesis_height_offset: 30 * params.blocks_per_year(),
         archival_lock: None,
     }
 }
@@ -499,7 +499,7 @@ mod tests {
             .expect("the lean arm");
         let lock = lean.archival_lock.expect("gate-7 runs the lock model");
         assert_eq!(
-            lock.locked_atomic(params.blocks_per_year),
+            lock.locked_atomic(params.blocks_per_year()),
             117 * u128::from(crate::burden::COIN)
         );
     }

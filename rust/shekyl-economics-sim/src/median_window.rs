@@ -175,9 +175,16 @@ impl MedianWindow {
 
     /// Record a block of `weight` bytes judged under `medians` — the value
     /// [`Self::medians`] returned for it. Its long-term weight is the
-    /// production clamp at that block's own long-term effective median.
-    pub(crate) fn push(&mut self, medians: EffectiveMedian, weight: u64) {
-        let long_term = long_term_weight(medians.long_term_effective_median.to_raw(), weight);
+    /// production clamp at that block's own long-term effective median,
+    /// under the run's set.
+    pub(crate) fn push(
+        &mut self,
+        medians: EffectiveMedian,
+        weight: u64,
+        params: &shekyl_economics::EconomicParams,
+    ) {
+        let long_term =
+            long_term_weight(medians.long_term_effective_median.to_raw(), weight, params);
         self.long_term.push(long_term);
         self.short_term.push(weight);
     }
@@ -261,12 +268,17 @@ mod tests {
                 );
                 checks += 1;
             }
-            rolling.push(medians, weight);
+            rolling.push(
+                medians,
+                weight,
+                &shekyl_economics::EconomicParams::default(),
+            );
             recorded.push_back(RecordedWeights {
                 weight: BlockWeight::from_raw(weight),
                 long_term_weight: LongTermWeight::from_raw(long_term_weight(
                     medians.long_term_effective_median.to_raw(),
                     weight,
+                    &shekyl_economics::EconomicParams::default(),
                 )),
             });
             if recorded.len() > long {

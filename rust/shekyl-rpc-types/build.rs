@@ -192,7 +192,24 @@ use std::path::PathBuf;
 /// target), so a second key was a second chain identity for one
 /// derivation. **No production behaviour changes** — the derived length
 /// equals the deleted key.
-const PINNED_DIGEST: &str = "17742dd72e533964a841784aae639d387dc01bee03ec6c54880012a52d337620";
+///
+/// **Re-pinned 2026-10-29 (ESR-16 completion,
+/// `ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.26, ruled 2026-10-29): three keys
+/// were ADDED.** `block_weight_limit_multiple_scaled = 2000000` and
+/// `block_weight_long_term_clamp_scaled = 1700000`, both in `SCALE` units, and
+/// `archival_challenges_per_pair_per_epoch = 3`. The chain question, answered
+/// for each: a different limit multiple admits a different heaviest block and
+/// pays a different penalty (the penalty is zero at the limit); a different
+/// clamp is a different long-term weight, so a different long-term median and
+/// set of valid blocks; a different challenge count settles a pair's epoch on
+/// different draws. Each is a split, so each belongs here. The values are the
+/// ones every node already ran: the literal `2` at four Rust sites and the C++
+/// `median * 2`, `long_term_weight`'s `10 / 17` and `7 / 10`, and the hand
+/// `CHALLENGES_PER_PAIR_PER_EPOCH = 3`. The first two are `EconomicParams`
+/// fields now, so the params digest moved to format `0x06` in the same change.
+/// **No production behaviour changes**; the digest moves because the binding
+/// grew.
+const PINNED_DIGEST: &str = "dbb6547554cdec983d8e5a0040a011c412452e744a27554452461963c23566b2";
 
 fn main() {
     let manifest_dir =

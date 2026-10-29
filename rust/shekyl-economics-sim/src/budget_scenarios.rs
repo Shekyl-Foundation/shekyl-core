@@ -139,9 +139,9 @@ fn fee_era(params: &SimParams) -> BudgetScenario {
         // ~year 30 in the configured chain timing. Derived from
         // `blocks_per_year` (not a literal) because the emission-share decay —
         // the quantity this scenario exists to read — is itself computed from
-        // `params.blocks_per_year`; a hardcoded offset would silently
+        // `params.blocks_per_year()`; a hardcoded offset would silently
         // represent a different number of decay-years if the config changed.
-        genesis_height_offset: 30 * params.blocks_per_year,
+        genesis_height_offset: 30 * params.blocks_per_year(),
     }
 }
 

@@ -137,12 +137,10 @@ pub struct SimParams {
     pub emission_curve_asymptote: u64,
     pub emission_speed_factor_per_block: u64,
     pub final_subsidy_per_minute: u64,
-    /// The fold's year. [`Self::economic`] writes it onto the emission
-    /// schedule. Production fills the same field with [`blocks_per_year`]
-    /// of the DAA target.
-    ///
-    /// [`blocks_per_year`]: shekyl_economics::blocks_per_year
-    pub blocks_per_year: u64,
+    /// The DAA target, seconds. [`Self::economic`] writes it onto the set;
+    /// the fold's year is [`Self::blocks_per_year`], derived from it as
+    /// production's is. A run with a shorter year sets a longer target.
+    pub daa_target_seconds: u64,
     /// Initial staker share of emission, in millionths of
     /// [`shekyl_economics::params::SCALE`]. [`Self::economic`] writes it
     /// onto the schedule.
@@ -171,7 +169,7 @@ impl Default for SimParams {
             emission_curve_asymptote: shipped.emission_curve_asymptote,
             emission_speed_factor_per_block: shipped.emission_speed_factor_per_block,
             final_subsidy_per_minute: shipped.final_subsidy_per_minute,
-            blocks_per_year: shipped.blocks_per_year,
+            daa_target_seconds: shipped.daa_target_seconds,
             staker_emission_share: shipped.staker_emission_share,
             staker_emission_decay: shipped.staker_emission_decay,
             tx_volume_baseline: shipped.tx_volume_baseline,
@@ -204,12 +202,18 @@ impl SimParams {
             emission_curve_asymptote: self.emission_curve_asymptote,
             emission_speed_factor_per_block: self.emission_speed_factor_per_block,
             final_subsidy_per_minute: self.final_subsidy_per_minute,
-            daa_target_seconds: shipped.daa_target_seconds,
+            daa_target_seconds: self.daa_target_seconds,
             staker_emission_share: self.staker_emission_share,
             staker_emission_decay: self.staker_emission_decay,
-            blocks_per_year: self.blocks_per_year,
             ..shipped
         }
+    }
+
+    /// Blocks in the fold's year: [`shekyl_economics::blocks_per_year`] of
+    /// [`Self::daa_target_seconds`], the derivation production uses.
+    #[must_use]
+    pub const fn blocks_per_year(&self) -> u64 {
+        shekyl_economics::blocks_per_year(self.daa_target_seconds)
     }
 
     /// The parameters of the control arm: the shipped economics with the
@@ -259,7 +263,7 @@ pub(crate) fn net_supply(already_generated: u128, total_burned: u128) -> Circula
 pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResult {
     let economic = params.economic();
 
-    let total_blocks = params.blocks_per_year * config.sim_years;
+    let total_blocks = params.blocks_per_year() * config.sim_years;
 
     let mut already_generated =
         emitted_at_start(params.emission_curve_asymptote, config.initial_emitted_ppm);
@@ -277,8 +281,8 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
 
     let mut chain = ChainCursor::default();
     for block in 0..total_blocks {
-        let year = block / params.blocks_per_year;
-        let block_in_year = block % params.blocks_per_year;
+        let year = block / params.blocks_per_year();
+        let block_in_year = block % params.blocks_per_year();
 
         if block_in_year == 0 {
             staker_emission_earned_year = 0;
@@ -290,7 +294,7 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
             ChainStep {
                 fold_height: block,
                 chain_height: block + config.genesis_height_offset,
-                demand: (config.volume.get_volume)(block, params.blocks_per_year),
+                demand: (config.volume.get_volume)(block, params.blocks_per_year()),
                 leaves: outputs.leaves(),
                 already_generated,
                 total_burned,
@@ -311,7 +315,7 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
                 (calc_stake_ratio(locked, circulating), Some(locked))
             }
             None => (
-                (config.stake.get_stake_ratio)(block, params.blocks_per_year, circulating),
+                (config.stake.get_stake_ratio)(block, params.blocks_per_year(), circulating),
                 None,
             ),
         };
@@ -341,7 +345,7 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
         staker_emission_earned_year += staker_emission as u128;
         staker_fee_earned_year += fee_split.staker_pool_amount as u128;
 
-        if block_in_year == params.blocks_per_year - 1 || block == total_blocks - 1 {
+        if block_in_year == params.blocks_per_year() - 1 || block == total_blocks - 1 {
             let circ_now = already_generated.saturating_sub(total_burned) as f64 / COIN;
             let supply_emitted_pct =
                 already_generated as f64 / emission_curve_asymptote as f64 * 100.0;
@@ -478,10 +482,12 @@ mod tests {
 
     #[test]
     fn gate7_path_reports_derived_lock_and_legacy_path_omits_it() {
+        // A one-hour block makes a short year: 365 × 24 = 8 760 blocks.
         let params = SimParams {
-            blocks_per_year: 10_000,
+            daa_target_seconds: 3_600,
             ..SimParams::default()
         };
+        assert_eq!(params.blocks_per_year(), 8_760);
 
         let legacy = run_scenario(&params, &tiny_config(None));
         let last = legacy.years.last().expect("snapshot");
@@ -492,8 +498,9 @@ mod tests {
         let gate7 = run_scenario(&params, &tiny_config(Some(tiny_lock_model(0))));
         let last = gate7.years.last().expect("snapshot");
         let locked = last.locked_supply_coins.expect("derived lock reported");
-        // snapshot at block 9_999: 99 shards x 6 replicas x the bond floor
-        let expected = 99.0 * 6.0 * FLOOR as f64 / crate::burden::COIN as f64;
+        // snapshot at block 8_759: 87 shards (one per 100 blocks) x 6
+        // replicas x the bond floor
+        let expected = 87.0 * 6.0 * FLOOR as f64 / crate::burden::COIN as f64;
         assert!((locked - expected).abs() < 1e-6);
         // derived ratio against multi-million-coin circulating is far below
         // the asserted 25%
@@ -529,7 +536,7 @@ mod tests {
             serde_json::from_str(include_str!("../../../config/consensus_constants.json"))
                 .expect("consensus_constants.json must be valid JSON");
         assert_eq!(
-            p.blocks_per_year,
+            p.blocks_per_year(),
             shekyl_economics::blocks_per_year(cfg_u64(&consensus, "daa_target_seconds"))
         );
         assert_eq!(
@@ -606,16 +613,18 @@ mod tests {
             0
         );
         assert!(shipped.emission_schedule().share_at(EMISSION_SPLIT_EPOCH) > 0);
-        assert_eq!(quiet_priced.blocks_per_year, shipped.blocks_per_year);
+        assert_eq!(quiet_priced.blocks_per_year(), shipped.blocks_per_year());
         assert_eq!(
             quiet_priced.staker_emission_decay,
             shipped.staker_emission_decay
         );
 
+        // A one-block year: the DAA target is the whole year.
         let fast = SimParams {
-            blocks_per_year: 1,
+            daa_target_seconds: shekyl_economics::params::SECONDS_PER_YEAR,
             ..SimParams::default()
         };
+        assert_eq!(fast.blocks_per_year(), 1);
         assert!(
             fast.economic()
                 .emission_schedule()

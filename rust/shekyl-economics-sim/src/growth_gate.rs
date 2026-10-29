@@ -265,7 +265,7 @@ pub(crate) fn write_report(
                     out,
                     "       {:>6} {:>8.1} {:>7.0} {:>7.3} {:>7.3} {:>7.3} {:>7.3} {:>7.3} {:>7.3} {:>6}",
                     agg.year,
-                    per_block(agg.carried_txs, params.blocks_per_year),
+                    per_block(agg.carried_txs, params.blocks_per_year()),
                     agg.long_term_median as f64 / 1_000.0,
                     gate.sigma,
                     gate.supply_ratio,
@@ -307,7 +307,7 @@ pub(crate) fn write_report(
                 expired_txs: agg.expired_txs,
             })
             .collect();
-        let growth = congestion_escape_year(&traffic, params.blocks_per_year);
+        let growth = congestion_escape_year(&traffic, params.blocks_per_year());
         writeln!(
             out,
             "       {:<20} zone theta from {}, admitted from {}, blocks grow from {}",
@@ -520,7 +520,7 @@ mod tests {
             })
             .collect();
         assert_eq!(
-            congestion_escape_year(&traffic, params.blocks_per_year),
+            congestion_escape_year(&traffic, params.blocks_per_year()),
             Some(19),
             "blocks grow in year 19"
         );

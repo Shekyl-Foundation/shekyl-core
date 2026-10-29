@@ -186,7 +186,7 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
 
     let params = sim.economic();
 
-    let blocks_per_year = sim.blocks_per_year;
+    let blocks_per_year = sim.blocks_per_year();
     let total_blocks = blocks_per_year * config.sim_years;
     let samples = sample_heights(blocks_per_year, config.sim_years);
 

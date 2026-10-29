@@ -292,10 +292,15 @@ pub extern "C" fn shekyl_effective_block_weight_median(
     long_term_effective: u64,
     short_term_median: u64,
 ) -> u64 {
-    shekyl_economics::effective_median(long_term_effective, short_term_median)
+    shekyl_economics::effective_median(
+        long_term_effective,
+        short_term_median,
+        shekyl_economics::economic_params(),
+    )
 }
 
-/// Bound a block's long-term-median contribution to `[LTEM/1.7, LTEM·1.7]`.
+/// Bound a block's long-term-median contribution to `[LTEM/c, LTEM·c]`, `c`
+/// the shipped long-term clamp (1.7).
 /// Cannot fail. C++ gathers `LTEM`; this is the bound
 /// `get_next_long_term_block_weight` consumes.
 #[no_mangle]
@@ -303,7 +308,11 @@ pub extern "C" fn shekyl_long_term_block_weight(
     long_term_effective: u64,
     block_weight: u64,
 ) -> u64 {
-    shekyl_economics::long_term_weight(long_term_effective, block_weight)
+    shekyl_economics::long_term_weight(
+        long_term_effective,
+        block_weight,
+        shekyl_economics::economic_params(),
+    )
 }
 
 /// Status: reward computed. `out_reward` and `out_weight_limit` are written.

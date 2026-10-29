@@ -761,8 +761,8 @@ pub(crate) fn print_envelope(
 ) -> core::fmt::Result {
     let budgets = [
         ("epoch", shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS),
-        ("year", params.blocks_per_year),
-        ("decade", 10 * params.blocks_per_year),
+        ("year", params.blocks_per_year()),
+        ("decade", 10 * params.blocks_per_year()),
     ];
     writeln!(
         out,
@@ -901,7 +901,7 @@ mod tests {
         // The share is the run's schedule at this height, as the cursor's
         // is. The burn is production's at these operands. The payout
         // reprices the block from them.
-        let chain_height = 2 * params.blocks_per_year;
+        let chain_height = 2 * params.blocks_per_year();
         let already_generated = economic.emission_curve_asymptote / 3;
         let supply = CirculatingSupply::derive(
             AtomicUnits::from_raw(already_generated),

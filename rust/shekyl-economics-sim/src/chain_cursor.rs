@@ -167,7 +167,7 @@ mod tests {
         let mut generated = 0u128;
         let mut burned = 0u128;
         let mut leaves = 0u64;
-        for block in 0..params.blocks_per_year {
+        for block in 0..params.blocks_per_year() {
             let priced = cursor.price(
                 ChainStep {
                     fold_height: block,

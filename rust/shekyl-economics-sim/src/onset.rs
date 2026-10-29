@@ -231,11 +231,11 @@ impl Lever {
 /// (pinned below).
 #[must_use]
 pub fn emission_leg_at_decay(a: &A1YearAgg, params: &SimParams, annual_decay: u64) -> u128 {
-    let mid_height = a.start_height + params.blocks_per_year / 2;
+    let mid_height = a.start_height + params.blocks_per_year() / 2;
     let share = EmissionSchedule::try_new(
         params.staker_emission_share,
         annual_decay,
-        params.blocks_per_year,
+        params.blocks_per_year(),
     )
     .expect("a lever's decay is a schedule on the run's year")
     .share_at(mid_height);
@@ -514,7 +514,7 @@ pub fn onset_report(
                 .collect::<Vec<_>>()
                 .join(" "),
         ));
-        let per_block = |txs: u128| txs as f64 / params.blocks_per_year as f64;
+        let per_block = |txs: u128| txs as f64 / params.blocks_per_year() as f64;
         space_rows.push((
             scenario.name.clone(),
             aggs.iter()
@@ -737,7 +737,7 @@ pub fn lever_report(
 fn tail_skl_per_year(params: &SimParams) -> f64 {
     let per_block = shekyl_economics::tail_subsidy_per_block(&params.economic())
         .expect("the run's tail subsidy is priced");
-    (per_block as f64 / COIN) * params.blocks_per_year as f64
+    (per_block as f64 / COIN) * params.blocks_per_year() as f64
 }
 
 fn trunc(s: &str, n: usize) -> String {
@@ -922,7 +922,7 @@ mod tests {
             a1_year_clearance_ratio(a, fee_only, 0.10, SKL_FIAT_PRICE_BAND[1], KryderRate::Stall);
         let carried: u128 = aggs.iter().map(|y| y.carried_txs).sum();
         let traffic_years =
-            carried as f64 / (params.tx_volume_baseline as f64 * params.blocks_per_year as f64);
+            carried as f64 / (params.tx_volume_baseline as f64 * params.blocks_per_year() as f64);
         let predicted = h / traffic_years;
         let rel = (measured - predicted).abs() / predicted;
         assert!(

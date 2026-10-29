@@ -147,7 +147,7 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
     );
     let mut total_burned: u128 = 0;
 
-    let total_blocks = params.blocks_per_year * scenario.sim_years;
+    let total_blocks = params.blocks_per_year() * scenario.sim_years;
 
     // Per-epoch accumulators (atomic units, u128 to be headroom-safe over 10k
     // blocks of full-supply-scale rewards).
@@ -198,7 +198,7 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
             ChainStep {
                 fold_height: block,
                 chain_height: abs_height,
-                demand: (scenario.get_volume)(block, params.blocks_per_year),
+                demand: (scenario.get_volume)(block, params.blocks_per_year()),
                 leaves: outputs.leaves(),
                 already_generated,
                 total_burned,

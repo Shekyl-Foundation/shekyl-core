@@ -126,11 +126,16 @@ pub struct EffectiveMedian {
 }
 
 impl EffectiveMedian {
-    /// The block-weight limit: twice the effective median (`blockchain.cpp:
-    /// 6100`). Saturating — a limit that wrapped would refuse every block.
+    /// The block-weight limit: the set's limit multiple of the effective
+    /// median ([`shekyl_economics::block_weight_limit`], twice it at the
+    /// shipped parameters). Saturating — a limit that wrapped would refuse
+    /// every block.
     #[must_use]
-    pub const fn limit(&self) -> BlockWeight {
-        BlockWeight::from_raw(self.effective_median.to_raw().saturating_mul(2))
+    pub fn limit(&self, params: &EconomicParams) -> BlockWeight {
+        BlockWeight::from_raw(shekyl_economics::block_weight_limit(
+            self.effective_median.to_raw(),
+            params,
+        ))
     }
 }
 
@@ -193,6 +198,7 @@ impl Weights {
         let long_term = long_term_weight(
             medians.0.long_term_effective_median.to_raw(),
             weight.to_raw(),
+            super::miner::economics(),
         );
         coverage.insert(G6b::ROW);
         Self {
@@ -263,6 +269,21 @@ pub fn effective_median_at<'id, V: ChainView<'id>>(
     Ok(medians_over(&window, super::miner::economics()))
 }
 
+/// The block-weight limit in force for `connecting`: the limit of
+/// [`effective_median_at`]'s medians under the validator's parameter set.
+/// A caller that holds no parameter set of its own (the pool's capacity)
+/// asks the validator for the limit it judges blocks against.
+///
+/// # Errors
+///
+/// [`effective_median_at`]'s.
+pub fn block_weight_limit_at<'id, V: ChainView<'id>>(
+    view: &V,
+    connecting: BlockHeight,
+) -> Result<BlockWeight, ViewRead<V::Fault>> {
+    Ok(effective_median_at(view, connecting)?.limit(super::miner::economics()))
+}
+
 /// CEN-G6/G6b over one window of recorded weights, in height order. The
 /// long median is taken over every row. The short median is taken over the
 /// last `BLOCK_WEIGHT_SHORT_TERM_WINDOW` rows, or the whole window when
@@ -310,7 +331,7 @@ pub fn medians_from(
     params: &EconomicParams,
 ) -> EffectiveMedian {
     let long_term_effective = long_term_median.max(params.full_reward_zone);
-    let effective = effective_median(long_term_effective, short_term_median);
+    let effective = effective_median(long_term_effective, short_term_median, params);
     EffectiveMedian {
         long_term_effective_median: LongTermWeight::from_raw(long_term_effective),
         effective_median: BlockWeight::from_raw(effective),

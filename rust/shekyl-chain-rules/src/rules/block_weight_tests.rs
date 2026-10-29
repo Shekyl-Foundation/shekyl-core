@@ -141,7 +141,7 @@ fn an_empty_window_yields_the_zone_twice() {
     let m = over(&[]);
     assert_eq!(ltem(&m), ZONE);
     assert_eq!(eff(&m), ZONE);
-    assert_eq!(m.limit().to_raw(), 2 * ZONE);
+    assert_eq!(m.limit(&EconomicParams::default()).to_raw(), 2 * ZONE);
 }
 
 /// The long-term floor: a median exactly at the zone and one under both
@@ -237,12 +237,12 @@ fn the_limit_is_twice_the_effective_median_and_saturates() {
         long_term_effective_median: LongTermWeight::from_raw(ZONE),
         effective_median: BlockWeight::from_raw(ZONE + 7),
     };
-    assert_eq!(m.limit().to_raw(), 2 * (ZONE + 7));
+    assert_eq!(m.limit(&EconomicParams::default()).to_raw(), 2 * (ZONE + 7));
     let huge = EffectiveMedian {
         long_term_effective_median: LongTermWeight::from_raw(u64::MAX),
         effective_median: BlockWeight::from_raw(u64::MAX - 1),
     };
-    assert_eq!(huge.limit().to_raw(), u64::MAX);
+    assert_eq!(huge.limit(&EconomicParams::default()).to_raw(), u64::MAX);
 }
 
 // ---------------------------------------------------------------------------
@@ -313,7 +313,7 @@ fn a_young_light_chain_reads_the_zone_on_both_medians() {
     let m = chain.with_view(|view| defined(effective_median_at(&view, BlockHeight::from_raw(12))));
     assert_eq!(ltem(&m), ZONE);
     assert_eq!(eff(&m), ZONE);
-    assert_eq!(m.limit().to_raw(), 2 * ZONE);
+    assert_eq!(m.limit(&EconomicParams::default()).to_raw(), 2 * ZONE);
 }
 
 #[test]
@@ -513,7 +513,7 @@ fn the_long_term_weight_follows_the_generators_trajectory() {
                 2 => assert_eq!(bw, 90, "{at}: the minimal schedule"),
                 _ => {}
             }
-            let long_term = long_term_weight(ltem, bw);
+            let long_term = long_term_weight(ltem, bw, &EconomicParams::default());
             assert_eq!(long_term, ltbw, "{at}: the long-term weight");
             window.pop_front();
             window.push_back(rw(bw, long_term));
