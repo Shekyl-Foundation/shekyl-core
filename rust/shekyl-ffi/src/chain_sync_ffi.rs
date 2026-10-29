@@ -10,6 +10,15 @@
 //! the history is the tip, then ten predecessors, then powers of two, then
 //! genesis; the supplement is the first shared block and up to 10 000
 //! hashes after it, including that block.
+//!
+//! # Deleter (the join rule, `DRS_X_STORE_FLIP.md` FLIP-Q5)
+//!
+//! Every export here answers the C++ protocol handler's sync half, and
+//! chain sync's cutover (CS-5) deletes that caller and these exports with
+//! it: `shekyl_core_height`, `shekyl_core_top`, `shekyl_core_hash_at`,
+//! `shekyl_core_have_block`, `shekyl_core_cumulative_difficulty`,
+//! `shekyl_core_short_history`, `shekyl_core_supplement`,
+//! `shekyl_core_block`, `shekyl_core_txs`. None has a second caller.
 
 use shekyl_chain_rules::AtHeight;
 use shekyl_chain_store::codec::BlockInfo;

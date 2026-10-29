@@ -571,7 +571,8 @@ extern "C" {
     /// owns them) and this consumer is Rust; the hop out to C++ and back
     /// exists only because C++ `net_node` owns the zone handles' lifetime.
     /// It disappears with the p2p migration, at which point this crate reads
-    /// the zone directly. Do not build on the round trip.
+    /// the zone directly. Do not build on the round trip. Deleter: RD, with
+    /// `levin_notify` (`DRS_X_STORE_FLIP.md` FLIP-Q5).
     pub fn core_rpc_ffi_stem_tallies(h: *mut CoreRpcHandle) -> *mut std::os::raw::c_char;
 
     pub fn core_rpc_ffi_free_string(s: *mut c_char);

@@ -28,6 +28,12 @@
 
 //! The sync-half facts handle: net stats, connections, sync spans, and
 //! stem tallies. Chain and pool reads go through the store.
+//!
+//! Each read names its deleter (`DRS_X_STORE_FLIP.md` FLIP-Q5): `net_stats`,
+//! `connections` and `sync_spans` read the C++ protocol handler's sync half
+//! and go at chain sync's cutover; `peer_list` reads the inbound handshake's
+//! side and goes with slice 4; `stem_tallies` reads `levin_notify` and goes
+//! with RD.
 
 use crate::ffi;
 use std::ffi::CStr;

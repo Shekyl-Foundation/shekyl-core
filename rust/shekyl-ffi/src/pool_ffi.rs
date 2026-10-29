@@ -13,6 +13,15 @@
 //! The composition root installs the door with [`install`] and the same
 //! departure hook the tip follower and `flush_txpool` call. Each departure
 //! releases the relay's responsibility for that transaction.
+//!
+//! # Deleter (the join rule, `DRS_X_STORE_FLIP.md` FLIP-Q5)
+//!
+//! Every export here answers the C++ protocol handler's transaction routes
+//! and `levin_notify`, and RD deletes those callers and these exports with
+//! them: `shekyl_pool_admit`, `shekyl_pool_has`, `shekyl_pool_hashes`,
+//! `shekyl_pool_complement`, `shekyl_pool_fluffed`, `shekyl_pool_propagated`.
+//! The one Rust-to-C++ entry beside them, `shekyl_shell_relay_local` (the
+//! shell hands a committed transaction to `levin_notify`), is RD's too.
 
 use std::sync::{Arc, Mutex, MutexGuard};
 
