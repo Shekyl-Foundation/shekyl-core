@@ -5,7 +5,6 @@
 
 #include "crypto/pow_randomx.h"
 
-#include <atomic>
 #include "shekyl/shekyl_ffi.h"
 
 namespace cryptonote
@@ -13,15 +12,6 @@ namespace cryptonote
 
 namespace
 {
-// Atomic because hash_pow_randomx is read from the longhash precompute
-// worker threads (blockchain.cpp's tpool.submit), so a seam that is only
-// safe as long as nobody writes it while they run is correct by argument
-// rather than by construction.
-//
-// Release/acquire, not relaxed: the store must PUBLISH the function
-// pointer. A worker that observed the new pointer without an acquire
-// would have no happens-before edge to that function's construction.
-std::atomic<pow_hash_fn> s_pow_hash_override_for_tests{nullptr};
 
 bool hash_pow_randomx_ffi(const void* blob, size_t len, const crypto::hash& seed_hash, crypto::hash& out)
 {
@@ -33,17 +23,8 @@ bool hash_pow_randomx_ffi(const void* blob, size_t len, const crypto::hash& seed
 }
 } // namespace
 
-void set_pow_hash_override_for_tests(pow_hash_fn fn)
-{
-  s_pow_hash_override_for_tests.store(fn, std::memory_order_release);
-}
-
 bool hash_pow_randomx(const void* blob, size_t len, const crypto::hash& seed_hash, crypto::hash& out)
 {
-  const pow_hash_fn override_fn =
-    s_pow_hash_override_for_tests.load(std::memory_order_acquire);
-  if (override_fn)
-    return override_fn(blob, len, seed_hash, out);
   return hash_pow_randomx_ffi(blob, len, seed_hash, out);
 }
 

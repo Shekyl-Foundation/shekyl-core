@@ -120,9 +120,6 @@ GROUPS = [
             "InfoPeersFactsFfi": "shekyl_rpc_info_peers_facts",
             "PeerFactsFfi": "shekyl_rpc_peer_facts",
             "SeamSessionCountsFfi": "shekyl_seam_session_counts_t",
-            "ArchivalEpochCloseBondFfi": "shekyl_archival_epoch_close_bond",
-            "ArchivalEpochCloseShardFfi": "shekyl_archival_epoch_close_shard",
-            "ArchivalCreditPairFfi": "shekyl_archival_credit_pair",
         },
     },
     {
