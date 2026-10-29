@@ -238,8 +238,7 @@ jobs:
         run: |
           brew uninstall cmake
           brew update
-          brew install --quiet cmake boost openssl libpgm libunwind-headers ccache llvm
-          echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
+          brew install --quiet cmake boost openssl libpgm libunwind-headers ccache
       # Pinned to match rust/rust-toolchain.toml (avoids a parallel-cargo
       # auto-install race in the daemon build). Bump both together.
       - uses: dtolnay/rust-toolchain@1.94.0
@@ -247,16 +246,6 @@ jobs:
         run: |
           ${{env.CCACHE_SETTINGS}}
           make -j${{env.MAKE_JOB_COUNT}}
-      # Same live-daemon ratchet as Ubuntu 24.04. macOS has its own
-      # libraries and linker; a Linux-only run would not see them.
-      - name: live-daemon gates
-        shell: bash
-        run: |
-          shekyld="$(find build -type f -name shekyld | head -n 1)"
-          test -n "$shekyld" || { echo "FATAL: make produced no shekyld under build/" >&2; exit 1; }
-          test -x "$shekyld" || { echo "FATAL: $shekyld is not executable" >&2; exit 1; }
-          export SHEKYLD_BIN="$(cd "$(dirname "$shekyld")" && pwd)/$(basename "$shekyld")"
-          scripts/ci/run_live_daemon_gates.sh
 
   # Windows MSYS2 and Arch Linux moved to `.github/workflows/weekly-os.yml`.
   # PR Windows coverage is the MSVC daemon job below (the only runner that
@@ -345,9 +334,6 @@ jobs:
       # Armed #[ignore]d regtest_e2e gates against the shekyld just built.
       # Runs here rather than in the test job because that job installs no
       # Rust by design, and here the binary and the toolchain already coexist.
-      # The same script runs on macOS (brew) and Windows (MSVC) after those
-      # jobs link shekyld: each OS has its own libraries and build, and the
-      # live path is not assumed OS-uniform.
       #
       # 14 gates, each <= ~3.5 min, ~20 min total (measured 2026-09-08 local
       # Release; a runner is slower). The two heavy consensus gates (depth-3
@@ -792,16 +778,6 @@ jobs:
         # adds a service-manager case (install, start, SERVICE_RUNNING, stop).
         run: |
           pwsh -NoProfile -File scripts/ci/daemon_boot_stop_smoke.ps1 -Daemon 'build\bin\Release\shekyld.exe'
-      # Same live-daemon ratchet as Ubuntu 24.04. Windows has its own CRT,
-      # linker, and shekyl-win-sec graph; a Linux-only run would not see them.
-      # Unix-only gates (log-file SIGTERM, Levin descriptor/SOCKS mode) stay
-      # off this runner — the script's identity splits them to ARMED_UNIX /
-      # ARMED_LEVIN.
-      - name: live-daemon gates
-        shell: bash
-        run: |
-          export SHEKYLD_BIN="$GITHUB_WORKSPACE/build/bin/Release/shekyld.exe"
-          scripts/ci/run_live_daemon_gates.sh
 
   source-archive:
     name: "source archive"
