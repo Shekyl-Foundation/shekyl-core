@@ -426,7 +426,7 @@ async fn restricted_listener_hides_a_transaction_this_node_has_not_broadcast() {
 
     let (wallet, _tmp, address) = mainnet_wallet(origin.rpc_port(), 0x5e).await;
     let arc = Arc::new(RwLock::new(wallet));
-    mine_until_spendable(origin, &arc, &address, MINE_BATCH_BLOCKS, MAX_MINE_BATCHES).await;
+    mine_until_spendable(origin, &arc, MINE_BATCH_BLOCKS, MAX_MINE_BATCHES).await;
 
     let pool_hashes = |reply: &serde_json::Value| -> Vec<String> {
         reply
@@ -464,7 +464,6 @@ async fn restricted_listener_hides_a_transaction_this_node_has_not_broadcast() {
         let txid = submit_transfer(
             origin,
             &arc,
-            &address,
             crate::engine::pending::TxDestination::Address(address.clone()),
             amount,
             MINE_BATCH_BLOCKS,
@@ -525,7 +524,7 @@ async fn restricted_listener_hides_a_transaction_this_node_has_not_broadcast() {
                  ({before:?} before, {after:?} after); discarding the attempt"
             );
             // Clear the pool so the next attempt's counts are its own.
-            origin.generate_blocks(1, &address).await;
+            origin.generate_blocks(1).await;
             assert_eq!(
                 origin.tx_pool_size().await,
                 0,
@@ -596,7 +595,7 @@ async fn restricted_listener_hides_a_transaction_this_node_has_not_broadcast() {
         // block, which is in the broadcast set — so the restricted listener
         // must now show the transaction it withheld a moment ago. A listener
         // that hid every pool transaction would pass everything above.
-        origin.generate_blocks(1, &address).await;
+        origin.generate_blocks(1).await;
         assert_eq!(
             origin.tx_pool_size().await,
             0,
