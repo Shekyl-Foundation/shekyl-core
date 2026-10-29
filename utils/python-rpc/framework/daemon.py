@@ -212,7 +212,7 @@ class Daemon(object):
         }
         return self.rpc.send_request("/pop_blocks", pop_blocks)
 
-    def start_mining(self, threads_count = 0):
+    def start_mining(self, threads_count = "auto"):
         start_mining = {
             'threads' : threads_count,
         }
