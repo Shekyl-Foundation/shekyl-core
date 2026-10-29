@@ -74,9 +74,8 @@ pub struct IdentityFactsFfi {
     pub genesis_hash: [u8; 32],
 }
 
-/// Twin of `shekyl_rpc_chain_tip_facts`. Layout pinned both directions by
-/// `tests/unit_tests/rpc_facts_ffi_roundtrip.cpp` via
-/// `shekyl_rpc_chain_tip_facts_rust_{fill,check}`.
+/// Twin of `shekyl_rpc_chain_tip_facts`. Layout pinned by
+/// `tests/unit_tests/rpc_facts_ffi_roundtrip.cpp`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ChainTipFactsFfi {
@@ -91,9 +90,8 @@ pub struct ChainTipFactsFfi {
     pub reserved: [u8; 6],
 }
 
-/// Twin of `shekyl_rpc_block_hash_facts` (RK-2). Layout pinned both
-/// directions by `tests/unit_tests/rpc_facts_ffi_roundtrip.cpp` via
-/// `shekyl_rpc_block_hash_facts_rust_{fill,check}`.
+/// Twin of `shekyl_rpc_block_hash_facts` (RK-2). Layout pinned by
+/// `tests/unit_tests/rpc_facts_ffi_roundtrip.cpp`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BlockHashFactsFfi {
@@ -263,9 +261,8 @@ const _: () = assert!(std::mem::offset_of!(FeeEstimateFactsFfi, fees) == 0);
 const _: () = assert!(std::mem::offset_of!(FeeEstimateFactsFfi, fee_count) == 24);
 const _: () = assert!(std::mem::offset_of!(FeeEstimateFactsFfi, reserved) == 25);
 
-/// Twin of `shekyl_rpc_net_stats_facts` (RK-5a). Layout pinned both
-/// directions by `tests/unit_tests/rpc_facts_ffi_roundtrip.cpp` via
-/// `shekyl_rpc_net_stats_facts_rust_{fill,check}`.
+/// Twin of `shekyl_rpc_net_stats_facts` (RK-5a). Layout pinned by
+/// `tests/unit_tests/rpc_facts_ffi_roundtrip.cpp`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NetStatsFactsFfi {

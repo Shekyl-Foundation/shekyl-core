@@ -492,44 +492,6 @@ typedef struct shekyl_rpc_info_peers_facts {
 // same way and the stat does not change. A store that names no file, or a
 // path longer than the buffer, is ERR_INTERNAL.
 
-// Layout-twin test hooks (no production callers; see the roundtrip test).
-//
-// **Their value rests on these definitions and their Rust counterparts being
-// independently hand-written.** The pair fills every field from a seed and
-// compares by `memcmp`, so it pins offsets, widths and the seed convention
-// across the ABI — and it can only do that while the two sides are two
-// definitions. Nothing generates them today (bindgen is used once in this
-// tree, for `valgrind-requests` in `shekyl-engine-state`, nowhere near this
-// header), so the risk is not live; but the day a generator is pointed at
-// this file, the roundtrip goes green comparing one definition against
-// itself and stops asserting anything. One comment is proportionate to that;
-// a test would not be, since it cannot observe its own provenance.
-//
-// Note also what they do NOT pin: `found` is field 23 to a seeded filler, so
-// the pair fixes where the byte lives, never *when* it should be zero. A
-// conditional has no input here to be conditional on. Layout, not behaviour.
-void shekyl_rpc_identity_facts_test_fill(shekyl_rpc_identity_facts* out, uint64_t seed);
-int shekyl_rpc_identity_facts_test_check(const shekyl_rpc_identity_facts* facts, uint64_t seed);
-void shekyl_rpc_chain_tip_facts_test_fill(shekyl_rpc_chain_tip_facts* out, uint64_t seed);
-int shekyl_rpc_chain_tip_facts_test_check(const shekyl_rpc_chain_tip_facts* facts, uint64_t seed);
-void shekyl_rpc_block_hash_facts_test_fill(shekyl_rpc_block_hash_facts* out, uint64_t seed);
-int shekyl_rpc_block_hash_facts_test_check(const shekyl_rpc_block_hash_facts* facts, uint64_t seed);
-void shekyl_rpc_fee_estimate_facts_test_fill(shekyl_rpc_fee_estimate_facts* out, uint64_t seed);
-int shekyl_rpc_fee_estimate_facts_test_check(const shekyl_rpc_fee_estimate_facts* facts, uint64_t seed);
-void shekyl_rpc_net_stats_facts_test_fill(shekyl_rpc_net_stats_facts* out, uint64_t seed);
-int shekyl_rpc_net_stats_facts_test_check(const shekyl_rpc_net_stats_facts* facts, uint64_t seed);
-// The three RK-5a list PODs carry pointers, which have no seed value to fill
-// and compare, so they are pinned by layout instead — see
-// `rpc_facts_ffi_roundtrip.cpp`, as `shekyl_rpc_tx_entry` is.
-void shekyl_rpc_block_header_facts_test_fill(shekyl_rpc_block_header_facts* out, uint64_t seed);
-int shekyl_rpc_block_header_facts_test_check(const shekyl_rpc_block_header_facts* facts, uint64_t seed);
-void shekyl_rpc_info_chain_facts_test_fill(shekyl_rpc_info_chain_facts* out, uint64_t seed);
-int shekyl_rpc_info_chain_facts_test_check(const shekyl_rpc_info_chain_facts* facts, uint64_t seed);
-void shekyl_rpc_info_status_facts_test_fill(shekyl_rpc_info_status_facts* out, uint64_t seed);
-int shekyl_rpc_info_status_facts_test_check(const shekyl_rpc_info_status_facts* facts, uint64_t seed);
-void shekyl_rpc_info_peers_facts_test_fill(shekyl_rpc_info_peers_facts* out, uint64_t seed);
-int shekyl_rpc_info_peers_facts_test_check(const shekyl_rpc_info_peers_facts* facts, uint64_t seed);
-
 #ifdef __cplusplus
 } // extern "C"
 #endif // __cplusplus
