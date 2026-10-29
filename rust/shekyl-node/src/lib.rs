@@ -321,6 +321,7 @@ impl Node {
         let service = match started {
             Ok(service) => service,
             Err(error) => {
+                uninstall_process_doors();
                 runtime.shutdown(RUNTIME_SHUTDOWN);
                 return Err(error);
             }
@@ -333,6 +334,7 @@ impl Node {
         let (tips, latch) = match subscribed {
             Ok(pair) => pair,
             Err(error) => {
+                uninstall_process_doors();
                 if let Err(stop) = runtime.block_on(service.stop()) {
                     tracing::error!(
                         "a connector watch did not open, and the service stopped on {stop}"
@@ -515,8 +517,9 @@ impl Node {
         // The miner first: its workers hash on the board this stop withdraws,
         // and a handle may keep mining control alive past the node.
         self.mining.close();
-        shekyl_ffi::pool_ffi::uninstall();
-        shekyl_daemon_rpc::submit::clear_production();
+        // The process doors hold the store (`Door::admission`); leave them
+        // up and `chain.db` stays exclusive after this node has stopped.
+        uninstall_process_doors();
         let Some(runtime) = self
             .runtime
             .lock()
@@ -701,6 +704,15 @@ fn schedule_of(dev: &Dev) -> Result<FakechainSchedule, OpenError> {
         .ok_or_else(|| OpenError::Rules("the settlement epoch length is zero".to_owned()))?;
     FakechainSchedule::new(epoch, shekyl_types::BlockCount::from_raw(cap))
         .map_err(|error| OpenError::Rules(error.to_string()))
+}
+
+/// Drop the process-wide doors that hold the chain store. `install` pairs
+/// with this; a stop or a failed open that already installed must call it,
+/// or the next open in this process meets `DatabaseAlreadyOpen`.
+fn uninstall_process_doors() {
+    shekyl_ffi::ingest_ffi::uninstall();
+    shekyl_ffi::pool_ffi::uninstall();
+    shekyl_daemon_rpc::submit::clear_production();
 }
 
 fn open_chain(
