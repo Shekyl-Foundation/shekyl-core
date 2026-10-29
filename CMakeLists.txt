@@ -1012,23 +1012,13 @@ else()
     set(USE_LTO_DEFAULT false)
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--stack,10485760")
     # Pin the Windows API tier to Vista (0x0600) on 64-bit MinGW so
-    # MinGW-w64's `<winioctl.h>` exposes the Vista+ declarations its
-    # own headers gate on `_WIN32_WINNT` (chiefly
-    # `FSCTL_SET_COMPRESSION`, used by `disable_ntfs_compression` in
-    # `src/blockchain_db/lmdb/db_lmdb.cpp`). 32-bit MinGW was retired
-    # in Chore #3 (v3.1.0-alpha.5) — the root `CMakeLists.txt`
+    # MinGW-w64's headers expose the Vista+ declarations they gate on
+    # `_WIN32_WINNT`. 32-bit MinGW was retired in Chore #3
+    # (v3.1.0-alpha.5) — the root `CMakeLists.txt`
     # `CMAKE_SIZEOF_VOID_P` gate above refuses any i686 configure.
-    #
-    # The tier pin is *one* of two independent mechanisms that keep
-    # that symbol visible on MinGW — the other, living in
-    # `src/blockchain_db/lmdb/db_lmdb.cpp`, is a `#ifndef
-    # FSCTL_SET_COMPRESSION` / manual-define fallback that covers the
-    # *separate* case where MinGW's `<winioctl.h>` closes the
-    # `_FILESYSTEMFSCTL_` guard early under certain include orders
-    # (so the symbol isn't declared regardless of the API tier). The
-    # API-tier pin and the source-side fallback cover different root
-    # causes and are both necessary on the toolchain mixes we ship;
-    # keep them in sync and do not collapse one into the other.
+    # The chain-store file that needed the compression-control
+    # declaration was deleted with the C++ store. The tier pin stays
+    # for the headers this build still includes.
     add_definitions(-DWINVER=0x0600 -D_WIN32_WINNT=0x0600)
   endif()
   set(C_WARNINGS "-Waggregate-return -Wnested-externs -Wold-style-definition -Wstrict-prototypes")
