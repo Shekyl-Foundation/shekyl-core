@@ -794,18 +794,35 @@ def probe_disk_class(path):
     return None
 
 
+def cpu_model_from_cpuinfo(text):
+    """The CPU line `/proc/cpuinfo` actually carries.
+
+    x86 names it `model name`. The floor device (aarch64) has no such line;
+    its board identity is the `Model` line. An empty string is still empty,
+    and the artifact refusal is what reports that.
+    """
+    named = ""
+    board = ""
+    for line in text.splitlines():
+        key, sep, value = line.partition(":")
+        if not sep:
+            continue
+        key = key.strip()
+        if key == "model name" and not named:
+            named = value.strip()
+        elif key == "Model" and not board:
+            board = value.strip()
+    return named or board
+
+
 def hardware_fingerprint(path, declared_disk_class=None):
     """CPU / RAM / disk / fs fingerprint. disk_class is omitted until known.
 
     Does not emit 'unknown': that placeholder is what let a tmpfs run publish
     a figure, and a required field that can hold it cannot fail.
     """
-    cpu = ""
     with open("/proc/cpuinfo", encoding="utf-8") as fh:
-        for line in fh:
-            if line.startswith("model name"):
-                cpu = line.split(":", 1)[1].strip()
-                break
+        cpu = cpu_model_from_cpuinfo(fh.read())
     ram = 0
     with open("/proc/meminfo", encoding="utf-8") as fh:
         for line in fh:

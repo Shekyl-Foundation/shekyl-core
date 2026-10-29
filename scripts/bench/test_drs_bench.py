@@ -932,6 +932,13 @@ class Preflight(unittest.TestCase):
 
 class HardwareFingerprint(unittest.TestCase):
 
+    def test_cpu_model_reads_the_line_the_machine_has(self):
+        x86 = "processor\t: 0\nmodel name\t: QEMU Virtual CPU version 2.5+\n"
+        arm = "processor\t: 0\nCPU part\t: 0xd08\nModel\t\t: Raspberry Pi 4 Model B Rev 1.4\n"
+        self.assertEqual(D.cpu_model_from_cpuinfo(x86), "QEMU Virtual CPU version 2.5+")
+        self.assertEqual(D.cpu_model_from_cpuinfo(arm), "Raspberry Pi 4 Model B Rev 1.4")
+        self.assertEqual(D.cpu_model_from_cpuinfo("processor\t: 0\n"), "")
+
     def test_does_not_emit_unknown_as_a_disk_class(self):
         hw = D.hardware_fingerprint(".", declared_disk_class=None)
         self.assertNotEqual(hw.get("disk_class"), "unknown")
