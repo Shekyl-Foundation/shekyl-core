@@ -214,7 +214,7 @@ enum SpawnNetwork {
 
 /// A full address on `network`, from `seed`. Same derivation the wallet
 /// uses for its primary address, so a spawn can pay coinbase to that wallet.
-fn mine_address_from_seed(seed: &[u8; 64], network: shekyl_address::Network) -> String {
+pub(super) fn mine_address_from_seed(seed: &[u8; 64], network: shekyl_address::Network) -> String {
     use shekyl_crypto_pq::account::{rederive_account, DerivationNetwork, SeedFormat};
     rederive_account(seed, DerivationNetwork::Mainnet, SeedFormat::Bip39)
         .expect("the keys")
@@ -332,8 +332,32 @@ impl RegtestDaemon {
     }
 
     /// Spawn the daemon and wait until its RPC answers `get_info`.
+    ///
+    /// Coinbase goes to a dummy address. A walk that funds a wallet
+    /// uses [`Self::start_for_seed`]: N2 pays `--mine-address`, not the
+    /// `generateblocks` request's address.
     pub(super) async fn start() -> RegtestDaemon {
         Self::start_with_regtest_schedule(None).await
+    }
+
+    /// Spawn mining coinbase to `seed`'s primary address.
+    pub(super) async fn start_for_seed(seed: &[u8; 64]) -> RegtestDaemon {
+        Self::start_for_seed_with_schedule(seed, None).await
+    }
+
+    /// [`Self::start_for_seed`] with a levered regtest schedule.
+    pub(super) async fn start_for_seed_with_schedule(
+        seed: &[u8; 64],
+        schedule: Option<RegtestSchedule>,
+    ) -> RegtestDaemon {
+        let serial = serial_lock().lock_owned().await;
+        let mine_address = mine_address_from_seed(seed, shekyl_address::Network::Mainnet);
+        Self::spawn(
+            RegtestSpawn::new(Some(serial))
+                .with_schedule(schedule)
+                .with_mine_address(mine_address),
+        )
+        .await
     }
 
     /// Spawn the daemon with its interactive console live (`--console`), so
@@ -837,7 +861,11 @@ impl RegtestDaemon {
             .expect("daemon was not spawned with a restricted listener")
     }
 
-    /// Mine `n` blocks to `address` (an armed test lever: `--dev-rpc`).
+    /// Mine `n` blocks (an armed test lever: `--dev-rpc`).
+    ///
+    /// `address` is still the request body the lever used to take. N2
+    /// discarded it: coinbase pays `--mine-address` from spawn. A funding
+    /// walk therefore names the wallet at [`Self::start_for_seed`].
     pub(super) async fn generate_blocks(&self, n: u64, address: &str) -> GenerateBlocksResp {
         try_generate_blocks(&self.rpc, n, address)
             .await
@@ -1266,7 +1294,8 @@ async fn e2e_refresh_scans_coinbase_balance() {
     use shekyl_scanner::WalletLedgerExt;
     use shekyl_units::AtomicUnits;
 
-    let daemon = RegtestDaemon::start().await;
+    let seed = [0x44u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let daemon = RegtestDaemon::start_for_seed(&seed).await;
 
     // Create the wallet (FAKECHAIN = mainnet address format; see the get_curve_tree test).
     let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
@@ -1274,7 +1303,6 @@ async fn e2e_refresh_scans_coinbase_balance() {
         .expect("wallet rpc");
     let tmp = tempfile::tempdir().expect("wallet tempdir");
     let wallet_path = tmp.path().join("wallet");
-    let seed = [0x44u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
     let creds = super::lifecycle::Credentials::password_only(b"track2-refresh");
     let params = super::lifecycle::EngineCreateParams {
         base_path: &wallet_path,
@@ -1364,14 +1392,14 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
     use shekyl_scanner::WalletLedgerExt;
     use shekyl_units::AtomicUnits;
 
-    let daemon = RegtestDaemon::start().await;
+    let seed = [0x33u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let daemon = RegtestDaemon::start_for_seed(&seed).await;
 
     // Create the wallet (FAKECHAIN = mainnet address format; see the get_curve_tree
     // test), close it, and reopen from disk — the same shape as `staker_wallet`. The
     // arc this gate carries is open → refresh → build → submit → confirm: a spend from
     // the still-in-memory created engine would skip the open path (envelope decrypt,
     // ledger load, scan-state restore) that every production spend session starts from.
-    let seed = [0x33u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
     let creds = super::lifecycle::Credentials::password_only(b"track2-spend");
     let (created, tmp) = create_wallet(daemon.rpc_port, &seed, b"track2-spend").await;
     let wallet_path = tmp.path().join("wallet");
@@ -1537,9 +1565,8 @@ async fn e2e_fcmp_spend_reorg_restores_pool_and_fee() {
     use shekyl_units::AtomicUnits;
     use shekyl_wire::{Input, Transaction};
 
-    let daemon = RegtestDaemon::start().await;
-
     let seed = [0x35u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let daemon = RegtestDaemon::start_for_seed(&seed).await;
     let creds = super::lifecycle::Credentials::password_only(b"track2-spend-reorg");
     let (created, tmp) = create_wallet(daemon.rpc_port, &seed, b"track2-spend-reorg").await;
     let wallet_path = tmp.path().join("wallet");
@@ -1821,7 +1848,9 @@ async fn e2e_fcmp_spend_over_depth3_tree() {
     const MINE_BATCH_BLOCKS: u64 = 20;
     const MAX_MINE_BATCHES: usize = 60; // up to 1200 blocks (684 leaves ≈ 745)
 
-    let daemon = RegtestDaemon::start().await;
+    let daemon =
+        RegtestDaemon::start_for_seed(&[0x44u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES])
+            .await;
     let (wallet, _tmp, address) = mainnet_wallet(daemon.rpc_port, 0x44).await;
 
     // Mine (no refresh needed — depth is the daemon's, not the wallet's) until the
@@ -2134,7 +2163,9 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
     use shekyl_wire::{Block, Transaction};
     use zeroize::Zeroizing;
 
-    let daemon = RegtestDaemon::start().await;
+    let daemon =
+        RegtestDaemon::start_for_seed(&[0x79u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES])
+            .await;
     let (wallet, _tmp, address) = mainnet_wallet(daemon.rpc_port, 0x79).await;
     let arc = Arc::new(RwLock::new(wallet));
     let Overfilled {
@@ -2432,7 +2463,9 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; ~50 spends into the pool, several min"]
 async fn e2e_cxx_template_fills_to_its_median() {
-    let daemon = RegtestDaemon::start().await;
+    let daemon =
+        RegtestDaemon::start_for_seed(&[0x77u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES])
+            .await;
     let (wallet, _tmp, address) = mainnet_wallet(daemon.rpc_port, 0x77).await;
     let arc = Arc::new(RwLock::new(wallet));
     let Overfilled {
@@ -2592,7 +2625,9 @@ async fn e2e_trim_curve_tree_restores_grow_root() {
         (depth, leaf_count, root)
     }
 
-    let daemon = RegtestDaemon::start().await;
+    let daemon =
+        RegtestDaemon::start_for_seed(&[0x44u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES])
+            .await;
     let (_wallet, _tmp, address) = mainnet_wallet(daemon.rpc_port, 0x44).await;
 
     // Grow to depth-2 with >= 2 Selene leaf chunks, then record the anchor state.
@@ -2677,7 +2712,9 @@ async fn generate_ct2_tier_b_fixture() {
     // reorg and the re-mined tail still diverges (fresh coinbase output keys).
     const REORG_DEPTH: u64 = 8;
 
-    let daemon = RegtestDaemon::start().await;
+    let daemon =
+        RegtestDaemon::start_for_seed(&[0x44u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES])
+            .await;
     let (wallet, _tmp, address) = mainnet_wallet(daemon.rpc_port, 0x44).await;
     // A second wallet for its address only — the spend recipient (a real
     // non-change regular output, distinct from the self-send change).
@@ -3640,7 +3677,8 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
     /// (the emission-claim e2e sizes its own, larger cushion).
     const FUNDING_CUSHION: u64 = 200_000_000;
 
-    let daemon = RegtestDaemon::start().await;
+    let seed = [0x44u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let daemon = RegtestDaemon::start_for_seed(&seed).await;
     // Schedule guard (serial lock now held): this test's wallet epoch
     // arithmetic must run on the genesis pin. A sibling e2e that armed the
     // SEB lever in this process would otherwise bleed its schedule in
@@ -3651,7 +3689,6 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
         "another test latched a levered settlement-epoch schedule in this process; \
          run the regtest e2es in separate processes"
     );
-    let seed = [0x44u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
     let slot = PSlot::from_raw(SLOT);
     let fixture = stake_persona_to_confirmed_bond(
         &daemon,
@@ -3753,7 +3790,8 @@ async fn e2e_the_cxx_daemon_answers_join_market_unsupported() {
     /// The bond walk's cushion: a non-zero change output, nothing more.
     const FUNDING_CUSHION: u64 = 200_000_000;
 
-    let daemon = RegtestDaemon::start().await;
+    let seed = [0x4Au8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let daemon = RegtestDaemon::start_for_seed(&seed).await;
     // Schedule guard (see the bond walk): wallet epoch arithmetic here must
     // run on the genesis pin; a sibling-armed levered schedule fails loudly.
     assert_eq!(
@@ -3762,7 +3800,6 @@ async fn e2e_the_cxx_daemon_answers_join_market_unsupported() {
         "another test latched a levered settlement-epoch schedule in this process; \
          run the regtest e2es in separate processes"
     );
-    let seed = [0x4Au8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
     let submitted = stake_persona_and_submit_bond(
         &daemon,
         &seed,
@@ -4072,7 +4109,8 @@ async fn e2e_emission_claim_accepted_and_applied() {
     // either direction is a loud named failure, never silent bleed. Run
     // the regtest e2es in separate processes (the module docs' one-test
     // invocation) for green runs.
-    let daemon = RegtestDaemon::start_with_regtest_schedule(Some(SCHEDULE)).await;
+    let seed = [0x55u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let daemon = RegtestDaemon::start_for_seed_with_schedule(&seed, Some(SCHEDULE)).await;
     // The levers are set and deliberately NOT restored afterwards: they are the
     // only input `arm` reads, and once armed the schedule latch is
     // irreversible, so leaving the variable set keeps the process's two
@@ -4087,7 +4125,6 @@ async fn e2e_emission_claim_accepted_and_applied() {
     assert_eq!(armed, SEB, "armed schedule must be the lever value");
 
     // The shared confirmed-bond substrate runs entirely inside epoch 0.
-    let seed = [0x55u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
     let slot = PSlot::from_raw(SLOT);
     // The claimable bond must be a MARKET bond (`ShardSetCompact`): the
     // `first_stake` genesis posture (CompleteTree) is foundation-shaped and
@@ -4693,7 +4730,8 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
     /// byte-diff below compares against the 1-in/2-out transfer.
     const FUNDING_CUSHION: u64 = 40_000_000_000;
 
-    let daemon = RegtestDaemon::start().await;
+    let seed = [0x66u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let daemon = RegtestDaemon::start_for_seed(&seed).await;
     // Schedule guard (serial lock now held): a sibling e2e that armed the SEB
     // lever in this process would bleed its schedule in silently (the
     // `OnceLock` is irreversible) — fail loudly instead.
@@ -4703,7 +4741,6 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
         "another test latched a levered settlement-epoch schedule in this process; \
          run the regtest e2es in separate processes"
     );
-    let seed = [0x66u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
     let slot = PSlot::from_raw(SLOT);
     let fixture = stake_persona_to_confirmed_bond(
         &daemon,
@@ -4981,8 +5018,8 @@ async fn e2e_release_accepted_and_connected() {
     /// only needs to exist, not to price anything).
     const FUNDING_CUSHION: u64 = 12_000_000_000;
 
-    let daemon = RegtestDaemon::start().await;
     let seed = [0x66u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let daemon = RegtestDaemon::start_for_seed(&seed).await;
     let slot = PSlot::from_raw(SLOT);
 
     // A MARKET bond (the ordinary staker shape); the persona never serves,
@@ -5158,13 +5195,12 @@ async fn e2e_unstake_collect_retire_composed_arc() {
     // Arm the levered schedule BEFORE any wallet-side epoch arithmetic (the
     // claim e2e's arming shape, and its containment caveats verbatim: the
     // latch is irreversible and per-process — run this walk alone).
-    let daemon = RegtestDaemon::start_with_regtest_schedule(Some(SCHEDULE)).await;
+    let seed = [0x77u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let daemon = RegtestDaemon::start_for_seed_with_schedule(&seed, Some(SCHEDULE)).await;
     SCHEDULE.set_in_process_env();
     let armed = shekyl_archival_retention::arm_settlement_epoch_override_for_regtest()
         .expect("the schedule levers must arm before any epoch arithmetic latches the schedule");
     assert_eq!(armed, SEB, "armed schedule must be the lever value");
-
-    let seed = [0x77u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
     let slot = PSlot::from_raw(SLOT);
     let market_holdings = shekyl_archival_retention::HoldingsDescriptor {
         kind: shekyl_archival_retention::HoldingsKind::ShardSetCompact,
@@ -5424,7 +5460,8 @@ async fn e2e_arm3_phantom_slot_collected_at_open() {
     use super::stake_engine::PSlot;
 
     const SLOT: u32 = 0;
-    let daemon = RegtestDaemon::start().await;
+    let seed = [0x45u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let daemon = RegtestDaemon::start_for_seed(&seed).await;
     // Schedule guard (see the bond e2e): wallet epoch arithmetic here must
     // run on the genesis pin; a sibling-armed levered schedule fails loudly.
     assert_eq!(
@@ -5433,7 +5470,6 @@ async fn e2e_arm3_phantom_slot_collected_at_open() {
         "another test latched a levered settlement-epoch schedule in this process; \
          run the regtest e2es in separate processes"
     );
-    let seed = [0x45u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
     let slot = PSlot::from_raw(SLOT);
     // `staker_wallet` IS the crash fixture: it persists the bond record (the
     // durable point) and reopens — no assemble, no pending post, no
