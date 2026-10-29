@@ -449,7 +449,7 @@ impl Drive {
                                 self.fold(input).await;
                             }
                             for input in self.round_marks(&parsed) {
-                                tracing::info!(target: "tor", "descriptor round: {input:?}");
+                                say_round(&input);
                                 self.fold(input).await;
                             }
                         }
@@ -953,6 +953,21 @@ impl Drive {
 
     fn now(&self) -> u64 {
         now(&self.owner)
+    }
+}
+
+/// A descriptor round's mark, said as it arrives. The probe's delay draw is
+/// not said: its point is that no directory can predict the probe, and a
+/// log line is one more copy of it.
+fn say_round(input: &Input) {
+    match input {
+        Input::FirstUploaded { .. } => {
+            tracing::info!(target: "tor", "descriptor round: the first upload succeeded");
+        }
+        Input::UploadRoundEnded { failed_all } => {
+            tracing::info!(target: "tor", failed_all, "descriptor round: ended");
+        }
+        _ => {}
     }
 }
 
