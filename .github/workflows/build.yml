@@ -717,7 +717,7 @@ jobs:
         env:
           VCPKG_BINARY_SOURCES: clear;files,C:\vcpkg\archives,readwrite
         run: |
-          vcpkg install --triplet x64-windows-static --overlay-ports="${{ github.workspace }}/vcpkg-overlay/ports" boost openssl libsodium lmdb
+          vcpkg install --triplet x64-windows-static --overlay-ports="${{ github.workspace }}/vcpkg-overlay/ports" boost openssl libsodium
       - name: save vcpkg cache
         if: steps.vcpkg-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
