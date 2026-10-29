@@ -19,6 +19,9 @@ use shekyl_types::{BlockHash, BlockHeight, TxHash};
 use shekyl_wire::Transaction;
 
 use crate::legacy_types::ShekylBuffer;
+use crate::legacy_util::{
+    arr32_from_ptr, bounded_capacity, slice_from_ptr, slice_from_typed_ptr_mut,
+};
 use crate::pool_ffi::{with_pool, with_store};
 
 /// How many hashes a chain-entry reply carries, including the split.
@@ -154,12 +157,18 @@ pub unsafe extern "C" fn shekyl_core_top(out_height: *mut u64, out_hash: *mut u8
     match read {
         Ok(Some((height, hash))) => {
             out_height.write(height);
-            std::slice::from_raw_parts_mut(out_hash, 32).copy_from_slice(&hash);
+            let Some(slot) = slice_from_typed_ptr_mut(out_hash, 32) else {
+                return FAULT;
+            };
+            slot.copy_from_slice(&hash);
             OK
         }
         Ok(None) => {
             out_height.write(0);
-            std::slice::from_raw_parts_mut(out_hash, 32).fill(0);
+            let Some(slot) = slice_from_typed_ptr_mut(out_hash, 32) else {
+                return FAULT;
+            };
+            slot.fill(0);
             REFUSED
         }
         Err(()) => FAULT,
@@ -184,7 +193,10 @@ pub unsafe extern "C" fn shekyl_core_hash_at(height: u64, out_hash: *mut u8) -> 
     };
     match read {
         Ok(Some(info)) => {
-            std::slice::from_raw_parts_mut(out_hash, 32).copy_from_slice(&info.hash.to_bytes());
+            let Some(slot) = slice_from_typed_ptr_mut(out_hash, 32) else {
+                return FAULT;
+            };
+            slot.copy_from_slice(&info.hash.to_bytes());
             OK
         }
         Ok(None) => REFUSED,
@@ -203,8 +215,9 @@ pub unsafe extern "C" fn shekyl_core_have_block(hash: *const u8, out_where: *mut
     if hash.is_null() || out_where.is_null() {
         return FAULT;
     }
-    let mut bytes = [0u8; 32];
-    bytes.copy_from_slice(std::slice::from_raw_parts(hash, 32));
+    let Some(bytes) = arr32_from_ptr(hash) else {
+        return FAULT;
+    };
     let id = BlockHash::from_bytes(bytes);
     let Some(read) = with_store(|store| -> Result<i32, ()> {
         let snap = store.begin_read().map_err(|_| ())?;
@@ -330,10 +343,8 @@ pub unsafe extern "C" fn shekyl_core_supplement(
     let Some(nbytes) = id_count.checked_mul(32) else {
         return FAULT;
     };
-    let raw = if id_count == 0 {
-        &[]
-    } else {
-        std::slice::from_raw_parts(ids, nbytes)
+    let Some(raw) = slice_from_ptr(ids, nbytes) else {
+        return FAULT;
     };
     let Some(read) = with_store(|store| supplement(store, raw)) else {
         return UNBOUND;
@@ -392,8 +403,23 @@ fn supplement(store: &ChainStore, ids: &[u8]) -> Result<Option<Supplement>, ()> 
         return Ok(None);
     };
     let span = count.saturating_sub(start).min(SUPPLEMENT_LIMIT);
-    let mut hashes = Vec::with_capacity((span as usize).saturating_mul(32));
-    let mut weights = Vec::with_capacity((span as usize).saturating_mul(8));
+    let Ok(budget) = usize::try_from(SUPPLEMENT_LIMIT) else {
+        return Err(());
+    };
+    let Some(mut hashes) = bounded_capacity(
+        (span as usize).saturating_mul(32),
+        1,
+        budget.saturating_mul(32),
+    ) else {
+        return Err(());
+    };
+    let Some(mut weights) = bounded_capacity(
+        (span as usize).saturating_mul(8),
+        1,
+        budget.saturating_mul(8),
+    ) else {
+        return Err(());
+    };
     for height in start..start + span {
         let info = info_on(&snap, height)?.ok_or(())?;
         hashes.extend_from_slice(&info.hash.to_bytes());
@@ -486,8 +512,9 @@ pub unsafe extern "C" fn shekyl_core_block(
     {
         return FAULT;
     }
-    let mut bytes = [0u8; 32];
-    bytes.copy_from_slice(std::slice::from_raw_parts(hash, 32));
+    let Some(bytes) = arr32_from_ptr(hash) else {
+        return FAULT;
+    };
     let id = BlockHash::from_bytes(bytes);
     let Some(read) = with_store(|store| -> Result<Option<BlockBody>, ()> {
         let snap = store.begin_read().map_err(|_| ())?;
@@ -529,14 +556,14 @@ pub unsafe extern "C" fn shekyl_core_txs(
     let Some(nbytes) = count.checked_mul(32) else {
         return FAULT;
     };
-    let raw = if count == 0 {
-        &[]
-    } else {
-        std::slice::from_raw_parts(hashes, nbytes)
+    let Some(raw) = slice_from_ptr(hashes, nbytes) else {
+        return FAULT;
     };
     let Some(read) = with_store(|store| -> Result<Vec<Option<Vec<u8>>>, ()> {
         let snap = store.begin_read().map_err(|_| ())?;
-        let mut found = Vec::with_capacity(count);
+        let Some(mut found) = bounded_capacity(count, 32, raw.len()) else {
+            return Err(());
+        };
         for chunk in raw.chunks(32) {
             let mut bytes = [0u8; 32];
             bytes.copy_from_slice(chunk);

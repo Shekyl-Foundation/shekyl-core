@@ -24,6 +24,7 @@ use shekyl_types::{TxHash, UnixSeconds};
 use shekyl_wire::Transaction;
 
 use crate::legacy_types::ShekylBuffer;
+use crate::legacy_util::{arr32_from_ptr, slice_from_ptr};
 
 /// The door admitted it. The handler relays this blob.
 pub const SHEKYL_POOL_ADMITTED: i32 = 0;
@@ -210,10 +211,8 @@ pub unsafe extern "C" fn shekyl_pool_admit(blob: *const u8, len: usize) -> i32 {
     if blob.is_null() && len != 0 {
         return SHEKYL_POOL_FAULT;
     }
-    let bytes = if len == 0 {
-        &[]
-    } else {
-        std::slice::from_raw_parts(blob, len)
+    let Some(bytes) = slice_from_ptr(blob, len) else {
+        return SHEKYL_POOL_FAULT;
     };
     let Some(tx) = parse(bytes) else {
         return SHEKYL_POOL_REFUSED_FORM;
@@ -235,8 +234,9 @@ pub unsafe extern "C" fn shekyl_pool_has(hash: *const u8) -> i32 {
     if hash.is_null() {
         return SHEKYL_POOL_FAULT;
     }
-    let mut bytes = [0u8; 32];
-    bytes.copy_from_slice(std::slice::from_raw_parts(hash, 32));
+    let Some(bytes) = arr32_from_ptr(hash) else {
+        return SHEKYL_POOL_FAULT;
+    };
     let id = TxHash::from_bytes(bytes);
     let pool = lock(&door.pool);
     i32::from(pool.relay_view().record(&id).is_some())
@@ -305,7 +305,10 @@ pub unsafe extern "C" fn shekyl_pool_complement(
         let Some(nbytes) = known_count.checked_mul(32) else {
             return SHEKYL_POOL_FAULT;
         };
-        std::slice::from_raw_parts(known, nbytes)
+        let Some(bytes) = slice_from_ptr(known, nbytes) else {
+            return SHEKYL_POOL_FAULT;
+        };
+        bytes
     };
     let pool = lock(&door.pool);
     let mut packed = Vec::new();
@@ -343,8 +346,9 @@ pub unsafe extern "C" fn shekyl_pool_fluffed(hash: *const u8) -> i32 {
     if hash.is_null() {
         return SHEKYL_POOL_FAULT;
     }
-    let mut bytes = [0u8; 32];
-    bytes.copy_from_slice(std::slice::from_raw_parts(hash, 32));
+    let Some(bytes) = arr32_from_ptr(hash) else {
+        return SHEKYL_POOL_FAULT;
+    };
     let id = TxHash::from_bytes(bytes);
     let Some(result) = with_pool_mut(|pool| pool.fluffed(&id)) else {
         return SHEKYL_POOL_UNBOUND;
@@ -369,10 +373,8 @@ pub unsafe extern "C" fn shekyl_pool_propagated(hashes: *const u8, count: usize)
     let Some(nbytes) = count.checked_mul(32) else {
         return SHEKYL_POOL_FAULT;
     };
-    let raw = if count == 0 {
-        &[]
-    } else {
-        std::slice::from_raw_parts(hashes, nbytes)
+    let Some(raw) = slice_from_ptr(hashes, nbytes) else {
+        return SHEKYL_POOL_FAULT;
     };
     let ids: Vec<TxHash> = raw
         .chunks(32)
