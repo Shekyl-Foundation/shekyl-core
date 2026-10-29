@@ -609,7 +609,7 @@ pub trait SubmitStateShim {
 
     /// Phase D: one short pool→blockchain lock scope — release-mode txid
     /// check first, then the §3.1 re-check list (identity, key images,
-    /// hash-anchored reference + age window, root compare, `check_fee`
+    /// hash-anchored reference + age window, root compare, the fee predicate
     /// re-gate against fresh params), then the existing `add_tx` insert
     /// tail with certificate-gated `fcmp_verified` attestation (§3.5) and
     /// the post-prune membership check (§4.2).

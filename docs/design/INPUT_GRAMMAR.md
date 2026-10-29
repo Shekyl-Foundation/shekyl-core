@@ -657,7 +657,7 @@ The catalog the Rust console and `shekyl-cli` serve (IG-Q25). The interim C++ co
 | `shekyl-utils-object-sizes` | deleted | a C++ debug tool with no remaining job |
 | `shekyl-blockchain-import`, `-export`, `-stats`, `shekyl-mdb-copy` | deleted | the chain store is the Rust store; these read LMDB |
 | `shekyl-utils-deserialize` | stays until `tx decode` (§12.3) lands, then goes | the decode need is real; the Rust codecs serve it |
-| `shekyl-e2-trace-export` | DRS-E2's | the replay driver's own tool |
+| `shekyl-e2-trace-export` | deleted | the C++ LMDB harvest; the replay reads a frozen `trace.e2` |
 | `geblock` | its table is §14.2 | the genesis ceremony tool |
 | `shekyl-chain-replay`, `shekyl-wss-q1b-bench`, and every other binary target the gate enumerates | in the gate (IG-Q27); their tables come with the gate (FOLLOWUPS) | development tools follow the grammar |
 

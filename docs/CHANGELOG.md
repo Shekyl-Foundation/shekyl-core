@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changes
+
+- **The daemon's chain is the Rust store** (`DRS_X_STORE_FLIP.md`). Arrivals, RPC reads, the pool and the fee floor go through the Rust node. The C++ chain, its LMDB store, the blockchain utilities and `shekyl-mdb-copy` are deleted. `CORE_RPC_VERSION` is 3.63. `get_info.release_build` is the build's `SHEKYL_VERSION_IS_RELEASE`. A testnet `dev` node is not synced until chain sync's owner attaches.
+
 ## [3.1.0-alpha.11] - 2026-10-26
 
 ### Upgrading from alpha.10
