@@ -38,7 +38,6 @@ set(unit_tests_sources
   crypto.cpp
   daemon_entry_layout.cpp
   daemon_rpc_client.cpp
-  db_sync_mode_parse.cpp
   decompose_amount_into_digits.cpp
   device.cpp
   difficulty.cpp
@@ -89,7 +88,6 @@ set(unit_tests_sources
   archival_serve_credit.cpp
   archival_bond_post.cpp
   archival_attestation_verify.cpp
-  archival_pass_anchor.cpp
   archival_reward_emission.cpp
   archival_emission_ct_balance.cpp
   ct_balance_differential.cpp

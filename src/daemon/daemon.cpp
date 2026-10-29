@@ -98,7 +98,7 @@ struct t_internals {
   {
     // === core ===
     MGINFO("Initializing core...");
-    if (!core.init(snapshot, nullptr))
+    if (!core.init(snapshot))
     {
       throw std::runtime_error("Failed to initialize core");
     }

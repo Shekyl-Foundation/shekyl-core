@@ -49,25 +49,18 @@
 #define MAKE_IPV4_ADDRESS_PORT(a,b,c,d,e) epee::net_utils::ipv4_network_address{MAKE_IP(a,b,c,d),e}
 #define MAKE_IPV4_SUBNET(a,b,c,d,e) epee::net_utils::ipv4_network_subnet{MAKE_IP(a,b,c,d),e}
 
-namespace cryptonote {
-  class blockchain_storage;
-}
-
 class test_core : public cryptonote::i_core_events
 {
 public:
   virtual bool is_synchronized() const final { return true; }
   void on_synchronized(){}
-  void safesyncmode(const bool){}
   virtual uint64_t get_current_blockchain_height() const final {return 1;}
   void set_target_blockchain_height(uint64_t) {}
-  bool init() {return true ;}
-  bool deinit(){return true;}
   bool get_short_chain_history(std::list<crypto::hash>& ids, uint64_t& current_height) const { return true; }
   // The blocks this core already has. Empty by default, so every test that
   // does not populate it sees the previous unconditional `false`. A test
   // driving `try_add_next_blocks` needs the span's parent to be known, which
-  // is what gates reaching `prepare_handle_incoming_blocks`.
+  // is what gates offering the span to the Rust ingest.
   std::vector<crypto::hash> blocks_we_have;
   bool have_block(const crypto::hash& id, int *where = NULL) const
   {return std::find(blocks_we_have.begin(), blocks_we_have.end(), id) != blocks_we_have.end();}
@@ -88,27 +81,9 @@ public:
   bool handle_single_incoming_block(const cryptonote::blobdata& block_blob, const cryptonote::block *b, cryptonote::block_verification_context& bvc, cryptonote::block_connect_supplement& connect, bool update_miner_blocktemplate = true) { return true; }
   bool handle_incoming_block(const cryptonote::blobdata& block_blob, const cryptonote::block *block, cryptonote::block_verification_context& bvc, bool update_miner_blocktemplate = true) { return true; }
   bool handle_incoming_block(const cryptonote::blobdata& block_blob, const cryptonote::block *block, cryptonote::block_verification_context& bvc, cryptonote::block_connect_supplement& connect, bool update_miner_blocktemplate = true) { return true; }
-  void pause_mine(){}
-  void resume_mine(){}
   bool on_idle(){return true;}
   bool find_blockchain_supplement(const std::list<crypto::hash>& qblock_ids, cryptonote::NOTIFY_RESPONSE_CHAIN_ENTRY::request& resp){return true;}
   bool handle_get_objects(cryptonote::NOTIFY_REQUEST_GET_OBJECTS::request& arg, cryptonote::NOTIFY_RESPONSE_GET_OBJECTS::request& rsp, cryptonote::cryptonote_connection_context& context){return true;}
-  cryptonote::blockchain_storage &get_blockchain_storage() { throw std::runtime_error("Called invalid member function: please never call get_blockchain_storage on the TESTING class test_core."); }
-  bool get_test_drop_download() const {return true;}
-  bool get_test_drop_download_height() const {return true;}
-  bool prepare_handle_incoming_blocks_result = true;
-  uint8_t prepare_handle_incoming_blocks_verdict = SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM;
-  bool prepare_handle_incoming_blocks(const std::vector<cryptonote::block_complete_entry>  &blocks_entry, std::vector<cryptonote::block> &blocks, uint8_t *drop_verdict = nullptr)
-  {
-    if (drop_verdict)
-    {
-      *drop_verdict = prepare_handle_incoming_blocks_result
-                          ? uint8_t(SHEKYL_DROP_VERDICT_UNCLASSIFIED)
-                          : prepare_handle_incoming_blocks_verdict;
-    }
-    return prepare_handle_incoming_blocks_result;
-  }
-  bool cleanup_handle_incoming_blocks(bool force_sync = false) { return true; }
   bool check_incoming_block_size_result = true;
   bool check_incoming_block_size(const cryptonote::blobdata& block_blob) const { return check_incoming_block_size_result; }
   uint64_t get_target_blockchain_height() const { return 1; }
@@ -116,19 +91,15 @@ public:
   virtual void on_transactions_relayed(epee::span<const cryptonote::blobdata> tx_blobs, cryptonote::relay_method tx_relay, std::optional<std::uint8_t>) {}
   virtual void on_stem_propagated(epee::span<const crypto::hash>) {}
   cryptonote::network_type get_nettype() const { return cryptonote::MAINNET; }
-  bool get_pool_transaction(const crypto::hash& id, cryptonote::blobdata& tx_blob, cryptonote::relay_category tx_category) const { return false; }
   /*! Already here for the protocol-handler shim, and now also the
       `i_core_events` override — these fixtures never drive a carrier verdict,
       so the stub's existing answer stands rather than being second-guessed. */
   bool pool_has_tx(const crypto::hash &txid) const override { return false; }
-  bool get_blocks(uint64_t start_offset, size_t count, std::vector<std::pair<cryptonote::blobdata, cryptonote::block>>& blocks, std::vector<cryptonote::blobdata>& txs) const { return false; }
   bool get_transactions(const std::vector<crypto::hash>& txs_ids, std::vector<cryptonote::blobdata>& txs, std::vector<crypto::hash>& missed_txs, bool pruned = false) const { return false; }
   bool get_transactions(const std::vector<crypto::hash>& txs_ids, std::vector<cryptonote::transaction>& txs, std::vector<crypto::hash>& missed_txs) const { return false; }
   bool get_block_by_hash(const crypto::hash &h, cryptonote::block &blk, bool *orphan = NULL) const { return false; }
   cryptonote::blobdata get_block_attestation_witness(const cryptonote::block &blk) const { return {}; }
-  uint64_t get_earliest_ideal_height_for_version(uint8_t version) const { return 0; }
   cryptonote::difficulty_type get_block_cumulative_difficulty(uint64_t height) const { return 0; }
-  bool pad_transactions() { return false; }
   bool get_txpool_complement(const std::vector<crypto::hash> &hashes, std::vector<cryptonote::blobdata> &txes) { return false; }
   bool get_pool_transaction_hashes(std::vector<crypto::hash>& txs, bool include_unrelayed_txes = true) const { return false; }
   crypto::hash get_block_id_by_height(uint64_t height) const { return crypto::null_hash; }
