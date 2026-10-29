@@ -42,7 +42,6 @@
 #include "common/scoped_message_writer.h"
 #include "net/jsonrpc_structs.h"
 #include "shekyl/shekyl_ffi.h"
-#include "shekyl/shekyl_ffi.h"
 #include "storages/portable_storage_template_helper.h"
 #include "string_tools.h"
 
@@ -191,11 +190,32 @@ namespace tools
       return true;
     }
 
-    // A raw POST. `post` records the failure.
+    // A raw POST whose body is a REST/JSON-RPC reply. Transport success is
+    // not command success: a grant refusal and a method error both arrive
+    // as HTTP 200 (RW-Q3). Rust classifies the body.
     bool post_route(const std::string& route, const std::string& payload, std::string& reason)
     {
       std::string body;
-      return post(route, payload, body, reason);
+      if (!post(route, payload, body, reason))
+        return false;
+      uint8_t* out_ptr = nullptr;
+      size_t out_len = 0;
+      const int32_t rc = shekyl_daemon_ctl_rest_outcome(
+        reinterpret_cast<const uint8_t*>(body.data()),
+        body.size(),
+        &out_ptr,
+        &out_len);
+      std::string classified = out_ptr
+        ? std::string(reinterpret_cast<const char*>(out_ptr), out_len)
+        : std::string();
+      shekyl_daemon_ctl_free(out_ptr, out_len);
+      if (rc == SHEKYL_DAEMON_CTL_OK)
+        return true;
+      reason = classified.empty()
+        ? ("control reply error " + std::to_string(rc))
+        : std::move(classified);
+      m_failed = true;
+      return false;
     }
 
     // Liveness: a `/get_height` round trip that the transport completes. The

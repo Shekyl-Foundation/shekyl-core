@@ -1643,6 +1643,9 @@ size_t shekyl_thread_ledger_report(char* buf, size_t len);
 #define SHEKYL_DAEMON_CTL_ERR_TRANSPORT -3
 /// The runtime could not be started, or the caller is already inside one.
 #define SHEKYL_DAEMON_CTL_ERR_RUNTIME   -4
+/// The transport completed; the body is a grant refusal, a method error,
+/// a non-OK status, or not JSON. HTTP 200 is not success (RW-Q3).
+#define SHEKYL_DAEMON_CTL_ERR_REPLY     -5
 
 /// POST `body` to `http://<address>/<route>` and return the response body.
 /// address: "host:port" of the daemon RPC listener (no scheme).
@@ -1666,6 +1669,17 @@ int32_t shekyl_daemon_ctl_post(
 
 /// Release a buffer returned through shekyl_daemon_ctl_post's out pair.
 void shekyl_daemon_ctl_free(uint8_t* ptr, size_t len);
+
+/// Decode a REST/JSON-RPC reply the transport already delivered.
+/// body / body_len: the response body; body may be NULL iff body_len == 0.
+/// out_ptr / out_len: on SHEKYL_DAEMON_CTL_ERR_REPLY the UTF-8 diagnostic;
+///   on OK a NULL/0 pair. Always release with shekyl_daemon_ctl_free.
+/// Returns SHEKYL_DAEMON_CTL_OK, ERR_REPLY, or ERR_NULL_PTR.
+int32_t shekyl_daemon_ctl_rest_outcome(
+    const uint8_t* body,
+    size_t body_len,
+    uint8_t** out_ptr,
+    size_t* out_len);
 
 // Console rendering for natively-served methods (DAEMON_RPC_KV_CUTOVER.md
 // §3.4). Rust: shekyl-daemon-rpc/src/console.rs.

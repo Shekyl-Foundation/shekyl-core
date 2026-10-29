@@ -309,17 +309,12 @@ impl DaemonClient {
 
     /// POST to one of the daemon's DJSON **path** handlers (`/start_mining`,
     /// `/stop_mining`, `/mining_status`, …). These are not `/json_rpc`
-    /// methods: the response is a flat object whose `status` field carries
-    /// `"OK"` or the daemon's refusal text.
+    /// methods. Success is a flat object whose `status` is `"OK"`; a grant
+    /// or method refusal is the JSON-RPC error object on HTTP 200 (RW-Q3).
     fn path_rpc(&self, path: &str, body: &Value) -> Result<Value, DaemonError> {
         let url = format!("{}{path}", self.url);
         let parsed = self.post_json(&url, body)?;
-        match parsed.get("status").and_then(|s| s.as_str()) {
-            Some(status) => classify_path_status(status).map(|()| parsed),
-            None => Err(DaemonError::MalformedResponse(
-                "missing 'status' field".into(),
-            )),
-        }
+        classify_path_body(parsed)
     }
 
     /// Start the daemon's miner. It mines to the daemon's `mine-address`.
@@ -345,6 +340,35 @@ impl DaemonClient {
         let value = self.path_rpc("/mining_status", &serde_json::json!({}))?;
         serde_json::from_value(value)
             .map_err(|e| DaemonError::MalformedResponse(format!("mining_status: {e}")))
+    }
+}
+
+/// Decode a path-RPC body. The JSON-RPC error object (grant, parse, method)
+/// is checked before `status`, because a refusal on this surface has no
+/// `status` field (RW-Q3).
+fn classify_path_body(parsed: Value) -> Result<Value, DaemonError> {
+    if let Some(err) = parsed.get("error") {
+        if err.is_object() {
+            let code = err
+                .get("code")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(-1);
+            let message = err
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            return Err(DaemonError::RpcError { code, message });
+        }
+        if let Some(message) = err.as_str() {
+            return Err(DaemonError::Refused(message.to_owned()));
+        }
+    }
+    match parsed.get("status").and_then(|s| s.as_str()) {
+        Some(status) => classify_path_status(status).map(|()| parsed),
+        None => Err(DaemonError::MalformedResponse(
+            "missing 'status' field".into(),
+        )),
     }
 }
 
@@ -387,7 +411,10 @@ fn classify_ureq_error(err: &ureq::Error) -> DaemonError {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_path_status, is_loopback_endpoint, DaemonError, GetInfoResponse};
+    use super::{
+        classify_path_body, classify_path_status, is_loopback_endpoint, DaemonError,
+        GetInfoResponse,
+    };
 
     #[test]
     fn loopback_classification_uses_the_canonical_host_check() {
@@ -429,6 +456,25 @@ mod tests {
         match classify_path_status("Failed, wrong address") {
             Err(DaemonError::Refused(msg)) => assert!(msg.contains("wrong address")),
             other => panic!("expected Refused, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn path_body_reads_a_json_rpc_error_envelope() {
+        let parsed = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": null,
+            "error": {
+                "code": -32601,
+                "message": "this connection's grant does not include mining"
+            }
+        });
+        match classify_path_body(parsed) {
+            Err(DaemonError::RpcError { code, message }) => {
+                assert_eq!(code, -32601);
+                assert!(message.contains("grant"));
+            }
+            other => panic!("expected RpcError, got {other:?}"),
         }
     }
 
