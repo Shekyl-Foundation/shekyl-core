@@ -44,6 +44,7 @@ rm -rf "$DATA"; mkdir -p "$DATA"
 # switch set (RPC_CHANNEL.md section 6.1). The daemon announces it at
 # start, checked below once RPC is up.
 "$BIN" --network regtest --clearnet off --tor off --dev-difficulty 1 --dev-rpc \
+  --mine-address "$ADDR" \
   --rpc-admin-listen "127.0.0.1:$PORT" \
   --data-dir "$DATA" --log-file "$DATA/shekyld.log" --log-level info < /dev/null > "$DATA/daemon.out" 2>&1 &
 DPID=$!

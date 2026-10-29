@@ -245,6 +245,7 @@ impl Chain {
                             origin: Origin::Local,
                             block: block.clone(),
                             bodies: bodies.clone(),
+                            attestation_witness: Vec::new(),
                         }) {
                             Ok(ticket) => break ticket,
                             Err(_) => tokio::task::yield_now().await,

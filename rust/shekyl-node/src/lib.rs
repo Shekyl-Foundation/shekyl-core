@@ -225,7 +225,7 @@ impl Node {
         let pool = open_pool(&store, &pool_path, rules)?;
         let submit_pool = Arc::clone(&pool);
         let owed = Arc::new(Mutex::new(Responsibilities::default()));
-        let departed = pool_departed(Arc::clone(&pool), Arc::clone(&owed));
+        let departed = pool_departed(Arc::clone(&owed));
         let propagated = Arc::new({
             let owed = Arc::clone(&owed);
             move |ids: &[shekyl_types::TxHash]| {
@@ -285,7 +285,7 @@ impl Node {
                 pool,
                 policy: AdmissionPolicy::GENESIS,
                 wall: Arc::new(wall_now),
-                departed: Some(departed),
+                departed: Some(Arc::clone(&departed)),
             }),
             producer,
         };
@@ -365,7 +365,8 @@ impl Node {
                         .originated(TxId::from_bytes(txid.to_bytes()));
                     relay_local(blob);
                 }
-            })),
+            }))
+            .departing(Arc::clone(&departed)),
         );
         let rewinder = service.rewinder();
         let at_open = sync_at_open(network);
@@ -629,23 +630,15 @@ fn wall_now() -> UnixSeconds {
     UnixSeconds::from_raw(facts::unix_now())
 }
 
-/// Releases a relay responsibility for every id that leaves the pool, then
-/// checks the relay tracks no more than the pool still holds
-/// (`DRS_X_STORE_FLIP.md` §2).
-fn pool_departed(
-    pool: Arc<Mutex<Pool>>,
-    owed: Arc<Mutex<Responsibilities>>,
-) -> shekyl_chain_ingest::service::Departed {
+/// Releases a relay responsibility for every id that leaves the pool.
+/// The hook does not read the pool: a concurrent flush can empty it
+/// between the release and any later count (`DRS_X_STORE_FLIP.md` §2).
+fn pool_departed(owed: Arc<Mutex<Responsibilities>>) -> shekyl_chain_ingest::service::Departed {
     Arc::new(move |ids| {
         let mut owed = owed.lock().unwrap_or_else(PoisonError::into_inner);
         for id in ids {
             owed.release(&TxId::from_bytes(id.to_bytes()));
         }
-        let pool = pool.lock().unwrap_or_else(PoisonError::into_inner);
-        assert!(
-            owed.len() <= pool.relay_view().len(),
-            "a relay responsibility outlived its pool entry"
-        );
     })
 }
 

@@ -45,7 +45,12 @@ namespace cryptonote
           shekyl_ingest_blob{
               reinterpret_cast<const std::uint8_t*>(block.block.data()), block.block.size()},
           txs.empty() ? nullptr : txs.data(),
-          txs.size()});
+          txs.size(),
+          shekyl_ingest_blob{
+              block.attestation_witness.empty()
+                  ? nullptr
+                  : reinterpret_cast<const std::uint8_t*>(block.attestation_witness.data()),
+              block.attestation_witness.size()}});
     }
     return shekyl_ingest_offer_span(connection, solicited ? 1 : 0, arrivals.data(), arrivals.size());
   }

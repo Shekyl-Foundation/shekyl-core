@@ -187,6 +187,7 @@ pub(crate) fn arrival(tag: u64, session: u64, mined: &Mined) -> Arrival {
             .iter()
             .map(shekyl_wire::Transaction::serialize)
             .collect(),
+        attestation_witness: Vec::new(),
     }
 }
 
@@ -636,6 +637,7 @@ fn junk(tag: u64, session: u64, solicited: bool, len: usize) -> Arrival {
         },
         block: vec![0xA5; len],
         bodies: Vec::new(),
+        attestation_witness: Vec::new(),
     }
 }
 

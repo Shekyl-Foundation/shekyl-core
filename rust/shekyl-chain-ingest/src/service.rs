@@ -102,6 +102,8 @@ pub struct Arrival {
     pub block: Vec<u8>,
     /// The listed bodies it carried, as blobs, in any order.
     pub bodies: Vec<Vec<u8>>,
+    /// The attestation witness carried beside the block; empty when none.
+    pub attestation_witness: Vec<u8>,
 }
 
 /// One block chain sync has already proven: its header passed
@@ -146,6 +148,7 @@ impl BoundArrival {
             },
             block_len: self.block.len(),
             body_lens: self.bodies.iter().map(Vec::len).collect(),
+            witness_len: self.attestation_witness.len(),
         }
     }
 }
@@ -162,16 +165,19 @@ pub struct ArrivalLengths {
     pub block_len: usize,
     /// Each carried body's length, in the order the caller listed them.
     pub body_lens: Vec<usize>,
+    /// The attestation witness's length; zero when none was carried.
+    pub witness_len: usize,
 }
 
 impl ArrivalLengths {
-    /// The bytes the door bounds ([`Door::max_arrival_bytes`]): the block
-    /// and the bodies it carried.
+    /// The bytes the door bounds ([`Door::max_arrival_bytes`]): the block,
+    /// the bodies it carried, and the attestation witness.
     #[must_use]
     pub fn bytes(&self) -> usize {
         self.body_lens
             .iter()
             .fold(self.block_len, |total, len| total.saturating_add(*len))
+            .saturating_add(self.witness_len)
     }
 
     fn of(arrival: &Arrival) -> Self {
@@ -180,6 +186,7 @@ impl ArrivalLengths {
             origin: arrival.origin,
             block_len: arrival.block.len(),
             body_lens: arrival.bodies.iter().map(Vec::len).collect(),
+            witness_len: arrival.attestation_witness.len(),
         }
     }
 }
@@ -411,7 +418,7 @@ impl Staged {
             proof: Proof::Hash {
                 class: class_of(arrival.origin),
             },
-            witness: Vec::new(),
+            witness: arrival.attestation_witness,
         }
     }
 
@@ -888,6 +895,7 @@ impl Door {
             origin: Origin::Local,
             block,
             bodies,
+            attestation_witness: Vec::new(),
         };
         loop {
             match self.offer(arrival.clone()) {

@@ -524,6 +524,7 @@ async fn the_follower_pins_the_new_epochs_seed_and_the_miner_mines_its_first_blo
             origin: Origin::Local,
             block: genesis[0].template.block.serialize(),
             bodies: Vec::new(),
+            attestation_witness: Vec::new(),
         })
         .expect("room")
         .reply()

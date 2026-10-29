@@ -197,7 +197,7 @@ pub fn cmd_mine_start(
     remind_if_remote(dc);
 
     // F6 — already mining: relay the daemon's state, no error tone.
-    match dc.mining_status() {
+    let address = match dc.mining_status() {
         Ok(status) if status.active => {
             return Ok(json!({
                 "started": false,
@@ -205,9 +205,9 @@ pub fn cmd_mine_start(
                 "threads": status.threads_count,
             }));
         }
-        Ok(_) => {}
+        Ok(status) => status.address,
         Err(e) => return failed(e.to_string()),
-    }
+    };
 
     // F7 — not synced: `/start_mining` is CHECK_CORE_READY and will return
     // BUSY. Refuse here with the height copy rather than confirm-and-fail.
@@ -229,6 +229,7 @@ pub fn cmd_mine_start(
         Ok(()) => Ok(json!({
             "started": true,
             "threads": threads,
+            "address": address,
         })),
         Err(e) => failed(format!("Failed to start mining: {e}")),
     }

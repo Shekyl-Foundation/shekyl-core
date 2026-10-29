@@ -45,6 +45,19 @@ _SCRIPTS = Path(__file__).resolve().parents[4] / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 import armed_lever  # noqa: E402
 
+_RECIPIENTS = (
+    Path(__file__).resolve().parents[3]
+    / "shekyl-wire"
+    / "tests"
+    / "vectors"
+    / "regtest_mining_recipients.json"
+)
+
+
+def mining_address() -> str:
+    with open(_RECIPIENTS, encoding="utf-8") as fh:
+        return json.load(fh)["recipients"][0]["address"]
+
 # Consensus windows (mirror shekyl-curve-tree::recon constants).
 COINBASE_LOCK = 60
 SPENDABLE_AGE = 10
@@ -88,6 +101,8 @@ class Daemon:
                 "1",
                 # generateblocks and pop_blocks are armed test levers.
                 armed_lever.FLAG,
+                "--mine-address",
+                mining_address(),
                 "--data-dir",
                 self.workdir,
                 "--log-file",

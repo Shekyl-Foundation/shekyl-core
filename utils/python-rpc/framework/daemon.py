@@ -208,7 +208,7 @@ class Daemon(object):
 
     def pop_blocks(self, nblocks = 1):
         pop_blocks = {
-            'count' : nblocks,
+            'nblocks' : nblocks,
         }
         return self.rpc.send_request("/pop_blocks", pop_blocks)
 

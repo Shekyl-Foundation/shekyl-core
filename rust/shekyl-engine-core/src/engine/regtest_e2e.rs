@@ -212,6 +212,25 @@ enum SpawnNetwork {
     Testnet,
 }
 
+/// A full address on `network`, from `seed`. Same derivation the wallet
+/// uses for its primary address, so a spawn can pay coinbase to that wallet.
+fn mine_address_from_seed(seed: &[u8; 64], network: shekyl_address::Network) -> String {
+    use shekyl_crypto_pq::account::{rederive_account, DerivationNetwork, SeedFormat};
+    rederive_account(seed, DerivationNetwork::Mainnet, SeedFormat::Bip39)
+        .expect("the keys")
+        .to_address(network)
+        .encode()
+        .expect("encodes")
+}
+
+fn default_mine_address(network: SpawnNetwork) -> String {
+    let address_network = match network {
+        SpawnNetwork::Regtest => shekyl_address::Network::Mainnet,
+        SpawnNetwork::Testnet => shekyl_address::Network::Testnet,
+    };
+    mine_address_from_seed(&[0x5a; 64], address_network)
+}
+
 /// How one regtest daemon is spawned.
 ///
 /// The fields are the postures a caller can ask for, named at the call
@@ -224,6 +243,7 @@ struct RegtestSpawn {
     restricted_listener: bool,
     console: bool,
     peering: Peering,
+    mine_address: Option<String>,
 }
 
 impl RegtestSpawn {
@@ -236,7 +256,13 @@ impl RegtestSpawn {
             restricted_listener: false,
             console: false,
             peering: Peering::Offline,
+            mine_address: None,
         }
+    }
+
+    fn with_mine_address(mut self, address: String) -> Self {
+        self.mine_address = Some(address);
+        self
     }
 
     fn with_console(mut self) -> Self {
@@ -371,6 +397,7 @@ impl RegtestDaemon {
             restricted_listener,
             console,
             peering,
+            mine_address,
         } = spec;
         install_wallet_tracing();
 
@@ -422,6 +449,8 @@ impl RegtestDaemon {
             // start, and `await_ready` holds it to that.
             "--dev-rpc",
         ]);
+        let mine_address = mine_address.unwrap_or_else(|| default_mine_address(network));
+        cmd.args(["--mine-address", &mine_address]);
         match peering {
             Peering::Offline => {
                 cmd.args(["--clearnet", "off"]);
@@ -821,7 +850,7 @@ impl RegtestDaemon {
     /// outputs created at `H − maturity`).
     pub(super) async fn pop_blocks(&self, n: u64) {
         self.rpc
-            .rpc_call::<_, serde_json::Value>("pop_blocks", Some(json!({ "count": n })))
+            .rpc_call::<_, serde_json::Value>("pop_blocks", Some(json!({ "nblocks": n })))
             .await
             .expect("pop_blocks");
     }
@@ -1083,7 +1112,11 @@ async fn regtest_daemon_spawns_and_mines_to_wallet_address() {
     use shekyl_engine_file::SafetyOverrides;
     use shekyl_engine_prefs::WalletPrefs;
 
-    let daemon = RegtestDaemon::start().await;
+    let seed = [0x11u8; MASTER_SEED_BYTES];
+    let mine_address = mine_address_from_seed(&seed, Network::Mainnet);
+    let serial = serial_lock().lock_owned().await;
+    let daemon =
+        RegtestDaemon::spawn(RegtestSpawn::new(Some(serial)).with_mine_address(mine_address)).await;
     let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
         .await
         .expect("wallet rpc");
@@ -1091,7 +1124,6 @@ async fn regtest_daemon_spawns_and_mines_to_wallet_address() {
 
     let tmp = tempfile::tempdir().expect("wallet tempdir");
     let wallet_path = tmp.path().join("wallet");
-    let seed = [0x11u8; MASTER_SEED_BYTES];
     let creds = Credentials::password_only(b"track2-test");
 
     // FAKECHAIN uses mainnet config/address format (cryptonote_config.h:372), so
@@ -1179,7 +1211,7 @@ async fn the_armed_switch_on_testnet_serves_two_levers_and_the_setter_refuses_in
 
     let popped = daemon
         .rpc
-        .rpc_call::<_, serde_json::Value>("pop_blocks", Some(json!({ "count": 0 })))
+        .rpc_call::<_, serde_json::Value>("pop_blocks", Some(json!({ "nblocks": 0 })))
         .await
         .expect("pop_blocks");
     assert!(

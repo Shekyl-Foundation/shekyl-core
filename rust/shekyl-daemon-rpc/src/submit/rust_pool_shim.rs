@@ -119,6 +119,11 @@ pub type RetirePool = Arc<dyn Fn(&StoreError) + Send + Sync>;
 /// concealed accept.
 pub type RelayNudge = Arc<dyn Fn(&TxHash, &[u8]) + Send + Sync>;
 
+/// Set by the node: ids that left the pool on this commit (CEN-M10
+/// eviction). The pool lock is not held across the call. The same hook
+/// the ingest service uses for a mined departure (`pool_ffi::note_left`).
+pub type PoolDeparted = Arc<dyn Fn(&[TxHash]) + Send + Sync>;
+
 fn lock_production() -> MutexGuard<'static, Option<RustPoolShim<StoreChain>>> {
     PRODUCTION.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -165,6 +170,8 @@ pub struct RustPoolShim<C> {
     retire: Option<RetirePool>,
     /// Set by the node: a committed transaction is due to the relay.
     nudge: Option<RelayNudge>,
+    /// Set by the node: ids that left the pool on this commit.
+    departed: Option<PoolDeparted>,
 }
 
 impl<C: Clone> Clone for RustPoolShim<C> {
@@ -176,6 +183,7 @@ impl<C: Clone> Clone for RustPoolShim<C> {
             clock: self.clock,
             retire: self.retire.clone(),
             nudge: self.nudge.clone(),
+            departed: self.departed.clone(),
         }
     }
 }
@@ -205,6 +213,7 @@ impl<C: ChainSource> RustPoolShim<C> {
             clock,
             retire: None,
             nudge: None,
+            departed: None,
         }
     }
 
@@ -221,6 +230,14 @@ impl<C: ChainSource> RustPoolShim<C> {
     #[must_use]
     pub fn nudging(mut self, nudge: RelayNudge) -> Self {
         self.nudge = Some(nudge);
+        self
+    }
+
+    /// `departed` runs after a commit that evicted pool entries to make
+    /// room, with those ids. The pool lock is not held across the call.
+    #[must_use]
+    pub fn departing(mut self, departed: PoolDeparted) -> Self {
+        self.departed = Some(departed);
         self
     }
 
@@ -630,13 +647,17 @@ impl<C: ChainSource> SubmitStateShim for RustPoolShim<C> {
             .and_then(Result::ok);
         let now = (self.clock)();
         let retire = self.retire.clone();
+        let mut departed_ids = Vec::new();
         let outcome = self.chain.read(|snapshot, rule_set| {
             let mut pool = self.pool();
             let view = SnapshotView::new(snapshot);
             let admitted =
                 pool.admit_judged(parsed.tx.clone(), prior, now, &view, rule_set, &self.policy);
             match admitted {
-                Ok(Admission::Admitted { .. }) => CommitOutcome::Committed,
+                Ok(Admission::Admitted { evicted }) => {
+                    departed_ids = evicted;
+                    CommitOutcome::Committed
+                }
                 Ok(Admission::Duplicate(_) | Admission::Refused(Judged::Chain { .. })) => {
                     let emission_probe = parsed.emission_probe();
                     match gather(
@@ -677,7 +698,15 @@ impl<C: ChainSource> SubmitStateShim for RustPoolShim<C> {
                 Ok(Admission::Refused(_)) | Err(_) => CommitOutcome::InternalFault,
             }
         });
-        outcome.unwrap_or(CommitOutcome::InternalFault)
+        let outcome = outcome.unwrap_or(CommitOutcome::InternalFault);
+        if matches!(outcome, CommitOutcome::Committed) {
+            if let Some(departed) = &self.departed {
+                if !departed_ids.is_empty() {
+                    departed(&departed_ids);
+                }
+            }
+        }
+        outcome
     }
 
     fn relay(&self, txid: &TxHash) {

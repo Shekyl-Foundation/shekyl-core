@@ -65,7 +65,7 @@ def rpc(url, method, params=None):
     return res["result"]
 
 
-def start_daemon(workdir, attempts=5):
+def start_daemon(workdir, addr, attempts=5):
     """Launch shekyld, retrying on a fresh port if it dies before its RPC is ready.
 
     `free_port()` has an inherent TOCTOU race — the port can be claimed between the
@@ -85,7 +85,8 @@ def start_daemon(workdir, attempts=5):
         # spawn, and the announcement is checked once RPC is up.
         daemon = subprocess.Popen(
             [SHEKYLD, "--network", "regtest", "--clearnet", "off", "--tor", "off",
-             "--dev-difficulty", "1", armed_lever.FLAG, "--data-dir", workdir,
+             "--dev-difficulty", "1", armed_lever.FLAG, "--mine-address", addr,
+             "--data-dir", workdir,
              "--log-file", os.path.join(workdir, "shekyld.log"),
              "--rpc-admin-listen", f"127.0.0.1:{port}", "--log-level", "warn"],
             stdout=log, stderr=subprocess.STDOUT)
@@ -128,7 +129,7 @@ def main():
     with open(MINING_RECIPIENTS_PATH) as f:
         addr = json.load(f)["recipients"][0]["address"]
     workdir = tempfile.mkdtemp(prefix="cbcap_")
-    daemon, url, log = start_daemon(workdir)
+    daemon, url, log = start_daemon(workdir, addr)
     try:
         rpc(url, "generateblocks", {"count": N_BLOCKS})
         hashes = {}

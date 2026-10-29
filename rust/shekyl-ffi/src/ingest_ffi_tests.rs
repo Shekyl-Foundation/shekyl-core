@@ -113,6 +113,7 @@ fn a_span_is_answered_per_arrival_through_the_bound_post() {
             block: blob(bytes),
             bodies: std::ptr::null(),
             bodies_len: 0,
+            witness: blob(&[]),
         })
         .collect();
 
@@ -463,6 +464,7 @@ fn an_accepted_arrival_is_answered_stopped_through_the_post_at_a_stop() {
         block: blob(&junk),
         bodies: std::ptr::null(),
         bodies_len: 0,
+        witness: blob(&[]),
     }];
     // Accepted while the runtime is not driven: the span waits in the
     // service's queue.

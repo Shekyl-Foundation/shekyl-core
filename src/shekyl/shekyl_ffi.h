@@ -4056,6 +4056,7 @@ struct shekyl_ingest_arrival {
   shekyl_ingest_blob block;
   const shekyl_ingest_blob* bodies;
   std::size_t bodies_len;
+  shekyl_ingest_blob witness;
 };
 
 /// Which fields carry meaning is the kind's (`ingest_ffi.rs`); the rest are

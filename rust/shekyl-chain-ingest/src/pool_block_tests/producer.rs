@@ -377,6 +377,7 @@ async fn pop_blocks_refuses_genesis_and_returns_two_blocks_bodies_to_the_pool() 
                     .iter()
                     .map(shekyl_wire::Transaction::serialize)
                     .collect(),
+                attestation_witness: Vec::new(),
             })
             .expect("room")
             .reply()

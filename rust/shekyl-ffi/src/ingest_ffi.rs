@@ -53,8 +53,8 @@ pub struct ShekylIngestBlob {
     pub len: usize,
 }
 
-/// One arriving block: the caller's tag, the block blob and the listed
-/// bodies it carried.
+/// One arriving block: the caller's tag, the block blob, the listed
+/// bodies it carried, and the attestation witness beside the block.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ShekylIngestArrival {
@@ -62,6 +62,7 @@ pub struct ShekylIngestArrival {
     pub block: ShekylIngestBlob,
     pub bodies: *const ShekylIngestBlob,
     pub bodies_len: usize,
+    pub witness: ShekylIngestBlob,
 }
 
 /// One reply, as posted. Which fields carry meaning is the `kind`'s:
@@ -512,11 +513,24 @@ impl Ceilings {
             carried = next;
             body_lens.push(blob.len);
         }
+        if !readable(entry.witness.ptr, entry.witness.len) {
+            return Err(CeilingFault::Invalid);
+        }
+        let Ok(witness_len) = u64::try_from(entry.witness.len) else {
+            return Err(CeilingFault::Oversize);
+        };
+        let Some(next) = carried.checked_add(witness_len) else {
+            return Err(CeilingFault::Oversize);
+        };
+        if next > self.max_bytes {
+            return Err(CeilingFault::Oversize);
+        }
         Ok(ArrivalLengths {
             tag: ArrivalTag(entry.tag),
             origin,
             block_len: entry.block.len,
             body_lens,
+            witness_len: entry.witness.len,
         })
     }
 
@@ -543,11 +557,14 @@ impl Ceilings {
             for blob in blobs {
                 bodies.push(unsafe { slice_from_ptr(blob.ptr, blob.len) }?.to_vec());
             }
+            let attestation_witness =
+                unsafe { slice_from_ptr(entry.witness.ptr, entry.witness.len) }?.to_vec();
             span.push(Arrival {
                 tag: ArrivalTag(entry.tag),
                 origin,
                 block,
                 bodies,
+                attestation_witness,
             });
         }
         Some(span)

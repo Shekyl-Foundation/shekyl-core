@@ -332,7 +332,7 @@ def measure(args):
     # the check reads only the bytes this spawn wrote.
     seed_log = os.path.join(work, "seed.log")
     seed_from = armed_lever.log_size(seed_log)
-    proc, _ = spawn("seed", seed_dir, [armed_lever.FLAG], offline=True)
+    proc, _ = spawn("seed", seed_dir, [armed_lever.FLAG, "--mine-address", addr], offline=True)
     with running(proc, srpc) as seed:
         if not seed.ready:
             _fail(f"seed RPC on 127.0.0.1:{srpc} never came up "
