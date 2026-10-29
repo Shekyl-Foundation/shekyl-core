@@ -682,7 +682,12 @@ pub unsafe extern "C" fn shekyl_archival_claimed_epochs_check_and_set(
     if !set.windows(2).all(|w| w[0] < w[1]) {
         return SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ERR_INVALID;
     }
-    match claimed_epochs_check_and_set(&mut set, epoch, current_settled_epoch) {
+    match claimed_epochs_check_and_set(
+        &mut set,
+        epoch,
+        current_settled_epoch,
+        shekyl_archival_retention::archival_params(),
+    ) {
         Ok(true) => {
             // Fail closed rather than overrun: the window prune bounds the set
             // below `set_cap` in practice, but a debug_assert vanishes in

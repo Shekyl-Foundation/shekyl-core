@@ -2269,7 +2269,6 @@ the struct's `try_new`, as `EmissionSchedule::try_new` is the schedule's.
 | bond-duration pair | `BOND_DURATION_BASE_EPOCHS`, `BOND_DURATION_AGE_SCALE` (4, 4) | archival-retention | Fields. |
 | failure window `(m, n)` | `ARCHIVAL_FAILURE_WINDOW_M` / `_N` (11, 13) | archival-retention | Fields. |
 | challenges per pair | `CHALLENGES_PER_PAIR_PER_EPOCH` (3), a hand `const` in `constants.rs`, not a JSON key | archival-retention; the sim | Field, from a new `consensus_constants.json` key. `COUNTED_DRAWS` stays in `shekyl-types`, the settlement row's width, tied to the default by a test. The sim's restated `COUNTED_DRAWS` becomes an import. |
-| attestation anchor lag | `ARCHIVAL_ATTESTATION_ANCHOR_LAG_BLOCKS` (4) | archival-retention | Field. |
 
 *The retention horizon.* `RETENTION_HORIZON_BLOCKS` (420 000) has no
 production reader. `ARCHIVAL_TIMING_CONSTANTS.md` §2.3 names it the
@@ -2308,6 +2307,7 @@ on `shekyl-curve-tree`:
 | shard length | `SHARD_LENGTH`, generated in `shekyl-types` from `archival_shard_length_bytes` | types, chain-rules, chain-ingest, p-fetch, p-loopback, rpc-types | Kept, structural: the unit the closed-shard count, the shard ids and the partition are cut in (rule 18, state-shaped). Reopens if EUP-5 I's bond-floor derivation sweeps shard size: the floor is quoted per shard, so the two move together. |
 | holdings cap | `MAX_HOLDINGS_SHARDS`, generated in `shekyl-types` (4 096) | nine production crates, wire and store-codec among them | Kept, structural: a record's shard-set bound on the wire. |
 | segment leaf count | `SEGMENT_LEAF_COUNT` (25 992) | archival-retention, curve-tree, fcmp | Kept, derived: `38 × 18 × 38`, the curve-tree widths. |
+| attestation anchor lag `L` | `ARCHIVAL_ATTESTATION_ANCHOR_LAG_BLOCKS` (4) | archival-retention `pass_anchor`; FFI | Kept, structural. The placement first made it a field; the code says otherwise. It sizes the anchor window, `PASS_ANCHOR_WINDOW_LEN = L + 1`, the length of the height and hash tables a caller passes across the FFI, and it is tied at compile time to the reorg depth, which is kept: `W₂ + L ≤ D`, and `D + L` is the lowest predecessor with a window. A field would make those tables runtime-sized. |
 | emission epochs cap | `MAX_SETTLEMENT_EPOCHS_PER_EMISSION`, a hand `15` in `emission_wire.rs`; the JSON key `max_settlement_epochs_per_emission` (15) was read by nothing but the digest | archival-retention, chain-rules, engine-core, FFI | Kept, structural (the parse bound), generated from its key (ruling 3), with a test. |
 
 *`RelayPolicy`* (`shekyl-economics`, outside every digest), generated

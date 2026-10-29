@@ -157,7 +157,13 @@ pub(crate) fn claim_complete(
     let previously_held = std::mem::take(&mut s.held);
     for (epoch, reward) in previously_held {
         let still_present = claimed.contains(&epoch) || new_held.iter().any(|(e, _)| *e == epoch);
-        if !still_present && shekyl_archival_retention::epoch_is_claim_expired(epoch, settled) {
+        if !still_present
+            && shekyl_archival_retention::epoch_is_claim_expired(
+                epoch,
+                settled,
+                shekyl_archival_retention::archival_params(),
+            )
+        {
             s.forfeited_total += reward;
             shekyl_operator_alarm::cadence::record_forfeit(alarms, epoch, s.forfeited_total);
             tracing::warn!(

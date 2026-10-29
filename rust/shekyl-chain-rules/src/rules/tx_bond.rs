@@ -53,7 +53,7 @@ use shekyl_archival_retention::{
     verify_join_market_bond_post, verify_reinstate_bond_post, verify_release_bond_post,
     whole_record_last_served, AdmissionShard, ArchivalBondPostVin, BondKind,
     BondPostKind as RetentionKind, HoldingsDescriptor, HoldingsKind, ParentStateHoldings,
-    ShardClose, ShardSet, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
+    ShardClose, ShardSet,
 };
 use shekyl_types::archival::{BondRecord, Holdings};
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
@@ -480,10 +480,10 @@ fn holding_admissible<'id, V: ChainView<'id>>(
     holdings: &HoldingsDescriptor,
 ) -> Result<bool, ViewRead<V::Fault>> {
     fn parent_state(shards: &[AdmissionShard]) -> ParentStateHoldings<'_> {
-        ParentStateHoldings {
+        ParentStateHoldings::with_consensus_age_weight(
             shards,
-            age_weight_milli: ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
-        }
+            shekyl_archival_retention::archival_params(),
+        )
     }
     if holdings.kind == HoldingsKind::CompleteTree {
         return Ok(check_admission(holdings, &parent_state(&[])).is_ok());

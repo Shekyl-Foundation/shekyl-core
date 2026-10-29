@@ -92,25 +92,19 @@
 use core::marker::PhantomData;
 
 use shekyl_archival_retention::{
-    claim_window_floor, SettlementSchedule, CHALLENGE_RESPONSE_BLOCKS, MAX_CLAIM_AGE_W,
-    SETTLEMENT_EPOCH_BLOCKS, SLASH_GRACE_EPOCHS,
+    archival_params, claim_window_floor, SettlementSchedule, SLASH_GRACE_EPOCHS,
 };
 use shekyl_types::{BlockHeight, SettlementEpoch};
 
 /// A family of per-epoch tables that share a last reader (module docs).
 pub trait EpochFamily: Copy + core::fmt::Debug + Eq {
-    /// How many epochs back from the connecting block's epoch the family's
-    /// last reader reaches.
-    const LAG: u64;
-
     /// The oldest epoch a block in epoch `current` can ask the family for:
-    /// `current − LAG`, zero while the chain is younger. A family whose
-    /// reader states its own window answers with that window's expression,
-    /// so the floor and the reader cannot be two derivations of one fact.
+    /// `current − LAG`, `LAG` the family's reach (module docs), zero while
+    /// the chain is younger. A family whose reader states its own window
+    /// answers with that window's expression, so the floor and the reader
+    /// cannot be two derivations of one fact.
     #[must_use]
-    fn oldest_read(current: u64) -> u64 {
-        current.saturating_sub(Self::LAG)
-    }
+    fn oldest_read(current: u64) -> u64;
 }
 
 /// The tables a claim reads (module docs): retained for the claim window.
@@ -126,55 +120,53 @@ pub enum Settling {}
 pub enum Pricing {}
 
 impl EpochFamily for Claimable {
-    const LAG: u64 = MAX_CLAIM_AGE_W;
-
-    /// The claim window's own floor ([`claim_window_floor`]): the epoch
-    /// CEN-J25's window, the verify's `EpochClaimExpired` and the failure
-    /// window's walk (which takes this floor) all stop at.
+    /// The claim window's own floor ([`claim_window_floor`]) under the
+    /// shipped [`archival_params`]: the epoch CEN-J25's window, the verify's
+    /// `EpochClaimExpired` and the failure window's walk (which takes this
+    /// floor) all stop at. `LAG = W`.
     fn oldest_read(current: u64) -> u64 {
-        claim_window_floor(current)
+        claim_window_floor(current, archival_params())
     }
 }
 
 impl EpochFamily for Settling {
-    const LAG: u64 = SLASH_GRACE_EPOCHS;
+    /// `LAG = k` ([`SLASH_GRACE_EPOCHS`]).
+    fn oldest_read(current: u64) -> u64 {
+        current.saturating_sub(SLASH_GRACE_EPOCHS)
+    }
 }
 
 impl EpochFamily for Pricing {
-    const LAG: u64 = SLASH_GRACE_EPOCHS + 1;
+    /// `LAG = k + 1`.
+    fn oldest_read(current: u64) -> u64 {
+        current.saturating_sub(SLASH_GRACE_EPOCHS + 1)
+    }
 }
 
-// The compile-time half of "a reorg never needs a retired row": every
-// height that writes or reads a family's row of epoch `E` lies in an epoch
-// no later than `E + LAG`. A retired `E` has `E + LAG < B − 1`, so all of
-// those heights are below `(B − 1)·SEB`, under the undo floor (whose
-// runtime half, `retention < SEB`, `Horizons::new` refuses at open).
+// "A reorg never needs a retired row": every height that writes or reads a
+// family's row of epoch `E` lies in an epoch no later than `E + LAG`. A
+// retired `E` has `E + LAG < B − 1`, so all of those heights are below
+// `(B − 1)·SEB`, under the undo floor (whose runtime half, `retention <
+// SEB`, `Horizons::new` refuses at open).
 //
 // - Claimable: the close writes `budget(E)` in epoch `E`, the pass writes
 //   the other three in `E + k`, and the claim window and the failure
-//   window read through `E + W`. So `k ≤ W` is the condition.
+//   window read through `E + W`. So `k ≤ W` is the condition;
+//   `ArchivalParams::validate` holds it (`ClaimWindowShorterThanGrace`).
 // - Settling: issuance writes through the slash deadline and the pass
 //   reads in `E + k`. `LAG = k` by definition.
 // - Pricing: the pass writes in `E + k`; J15 reads at the watermark until
 //   the pass of `E + 1`, in `E + 1 + k`. `LAG = k + 1` by definition.
-const _: () = assert!(
-    SLASH_GRACE_EPOCHS <= MAX_CLAIM_AGE_W,
-    "the slash pass writes Σwork(E) and its siblings in epoch E + k; a claim window shorter than \
-     the grace would retire them before the pass that writes them is below the undo floor"
-);
-
+//
 // The draw rows' floor sits strictly under the undo floor. After the
 // boundary of `B` the minimum undo floor is `(B − 1)·SEB + 1`
 // (`retention < SEB`, `Horizons::new`). A windowed schedule retires draws
 // below that height minus `W₂`, so `W₂ ≥ 1` is what puts the floor under
 // the undo floor, and `W₂ < SEB` is what keeps the subtraction inside the
-// epoch the boundary can still reach. A windowless schedule retires below
-// `(B − 1)·SEB`, one under the same undo floor, and names no `W₂`.
-const _: () = assert!(
-    CHALLENGE_RESPONSE_BLOCKS >= 1 && CHALLENGE_RESPONSE_BLOCKS < SETTLEMENT_EPOCH_BLOCKS,
-    "the genesis response window is at least one block and shorter than the epoch, so the draw \
-     rows' floor is strictly below the undo floor"
-);
+// epoch the boundary can still reach. On the shipped set both follow from
+// the W₂ band `ArchivalParams::validate` holds (`W₂ = SEB / 20 ≥ 200`). A
+// windowless schedule retires below `(B − 1)·SEB`, one under the same undo
+// floor, and names no `W₂`.
 
 /// The lowest epoch of family `F` a reader may still ask for: rows below
 /// it may be retired, rows at or above it are kept. Computed from the rule

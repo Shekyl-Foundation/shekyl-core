@@ -198,7 +198,9 @@ pub fn slash_prob_per_epoch(q: f64, m: u32, n: u32) -> f64 {
             .collect();
         // A served head is `HeadNotAMiss`: consensus never consults the window that
         // epoch, so it contributes no slash hazard.
-        if failure_window_slashable(&obs).unwrap_or(false) {
+        if failure_window_slashable(&obs, shekyl_archival_retention::archival_params())
+            .unwrap_or(false)
+        {
             let k = mask.count_ones() as i32;
             p += q.powi(k) * (1.0 - q).powi(width as i32 - k);
         }
@@ -250,7 +252,8 @@ fn absorb_table() -> &'static [bool] {
                         obs.push(BaselineObservation::served(epoch));
                     }
                 }
-                failure_window_slashable(&obs).unwrap_or(false)
+                failure_window_slashable(&obs, shekyl_archival_retention::archival_params())
+                    .unwrap_or(false)
             })
             .collect()
     })

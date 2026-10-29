@@ -231,7 +231,11 @@ impl EpochCache {
 pub fn reinstate_structural_downtime_epochs() -> f64 {
     const SLASH_EPOCH: u64 = 100;
     let held = [0u64];
-    let bonded = bond_floor_of(HoldingsKind::ShardSetCompact, held.len());
+    let bonded = bond_floor_of(
+        HoldingsKind::ShardSetCompact,
+        held.len(),
+        shekyl_archival_retention::archival_params(),
+    );
     let open = [BadInterval {
         start_epoch: SLASH_EPOCH,
         end_exclusive: u64::MAX,

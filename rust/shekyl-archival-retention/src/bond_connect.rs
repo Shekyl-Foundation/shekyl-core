@@ -185,7 +185,12 @@ pub fn release_connect(
     }
     // §3.2 maintained invariant on the record being released — a mismatch is
     // record corruption the release must not paper over.
-    if bond_floor_of(record_holdings_kind, record_held_shard_count) != record_bonded_total {
+    if bond_floor_of(
+        record_holdings_kind,
+        record_held_shard_count,
+        crate::archival_params(),
+    ) != record_bonded_total
+    {
         return Err(ReleaseConnectError::RecordFloorInvariantBroken);
     }
     if record_bad_interval_count >= MAX_BOND_BAD_INTERVALS {
@@ -341,8 +346,11 @@ pub fn reinstate_connect(
     if !holdings_unchanged(record_held_shard_ids, post_held_shard_ids) {
         return Err(ReinstateConnectError::HoldingsChanged);
     }
-    if bond_floor_of(HoldingsKind::ShardSetCompact, record_held_shard_ids.len())
-        != record_bonded_total
+    if bond_floor_of(
+        HoldingsKind::ShardSetCompact,
+        record_held_shard_ids.len(),
+        crate::archival_params(),
+    ) != record_bonded_total
     {
         return Err(ReinstateConnectError::RecordFloorInvariantBroken);
     }

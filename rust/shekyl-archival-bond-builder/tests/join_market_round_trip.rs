@@ -49,7 +49,7 @@ fn join_market_construct_verifies_against_retention() {
     let keys = derive_archival_p_keys(&MASTER, DerivationNetwork::Mainnet, SeedFormat::Bip39, 0)
         .expect("derive P keys");
     let holdings = shard_set(vec![7, 42]);
-    let floor = bond_floor(&holdings);
+    let floor = bond_floor(&holdings, shekyl_archival_retention::archival_params());
     assert!(floor > 0);
 
     // --- construct: vin (no on-vin signature; authorization rides surface A) ---
@@ -120,7 +120,7 @@ fn wrong_credit_amount_breaks_the_balance() {
     let keys = derive_archival_p_keys(&MASTER, DerivationNetwork::Mainnet, SeedFormat::Bip39, 0)
         .expect("derive P keys");
     let holdings = shard_set(vec![7, 42]);
-    let floor = bond_floor(&holdings);
+    let floor = bond_floor(&holdings, shekyl_archival_retention::archival_params());
     let built = build_join_market_vin(keys.bond_post_keys(), holdings, [0xEE; 32])
         .expect("build JoinMarket vin");
 

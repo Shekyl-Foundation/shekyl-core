@@ -10,6 +10,17 @@
 # production file other than its definition: a definition with no reader
 # is not a read.
 #
+# ArchivalParams (ESR-16 completion, ruled 2026-10-29) is read through
+# archival_params(). Outside shekyl-archival-retention no production site
+# names ArchivalParams::SHIPPED or ArchivalParams::default(), and the
+# generated archival constants appear in a production expression only in
+# that crate's owner files (their definitions, re-exports and the shipped
+# set). A `use` line is a path, not a read. The one sanctioned second door
+# into the epoch length is the fakechain schedule latch
+# (`constants::arm_settlement_epoch_override`, `SettlementSchedule::effective`;
+# FOLLOWUPS.md, the settlement-schedule lever row): its unarmed value is
+# archival_params()'s, and it is not a read of a bare constant.
+#
 # The economics sim is the sweep: it builds parameter sets. Tests are
 # not production. Instance of 47-gate-subject-assertion.mdc.
 
@@ -23,6 +34,48 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 RUST = os.path.join(ROOT, "rust")
 ACCESSOR = os.path.join("shekyl-economics", "src", "params.rs")
 RELAY_DEF = os.path.join("shekyl-economics", "src", "relay_policy.rs")
+ARCHIVAL_CRATE = "shekyl-archival-retention"
+ARCHIVAL_DEF = os.path.join(ARCHIVAL_CRATE, "src", "params.rs")
+# The archival crate's files that define, re-export or assemble the shipped
+# constants. Everywhere else a production expression reads the set.
+ARCHIVAL_OWNERS = {
+    os.path.join(ARCHIVAL_CRATE, "build.rs"),
+    os.path.join(ARCHIVAL_CRATE, "src", "params.rs"),
+    os.path.join(ARCHIVAL_CRATE, "src", "bond_floor.rs"),
+    os.path.join(ARCHIVAL_CRATE, "src", "constants.rs"),
+    os.path.join(ARCHIVAL_CRATE, "src", "failure_window.rs"),
+    os.path.join(ARCHIVAL_CRATE, "src", "lib.rs"),
+}
+# The generated archival constants a production composition reads through
+# ArchivalParams instead.
+ARCHIVAL_OWNED = (
+    "ARCHIVAL_BOND_FLOOR_ATOMIC",
+    "SETTLEMENT_EPOCH_BLOCKS",
+    "ARCHIVAL_REWARD_AGE_WEIGHT_MILLI",
+    "MAX_CLAIM_AGE_W",
+    "RELEASE_COOLDOWN_EPOCHS",
+    "BOND_DURATION_BASE_EPOCHS",
+    "BOND_DURATION_AGE_SCALE",
+    "ARCHIVAL_FAILURE_WINDOW_M",
+    "ARCHIVAL_FAILURE_WINDOW_N",
+    "FAILURE_WINDOW_M",
+    "FAILURE_WINDOW_N",
+    "FAILURE_WINDOW_SERVE_BUDGET",
+    "SETTLEMENT_RETENTION_EPOCHS",
+    "CHALLENGES_PER_PAIR_PER_EPOCH",
+)
+_BARE_ARCHIVAL = re.compile(r"\b(" + "|".join(ARCHIVAL_OWNED) + r")\b")
+
+
+def bare_archival_reads(body: str) -> list[str]:
+    """Owned archival constants named in code, not in comments or `use` lines."""
+    found = []
+    for line in body.splitlines():
+        code = line.split("//", 1)[0]
+        if re.match(r"\s*(pub(\([^)]*\))?\s+)?use\b", code):
+            continue
+        found.extend(match.group(1) for match in _BARE_ARCHIVAL.finditer(code))
+    return found
 MIN_FILES = 200
 SKIP_CRATES = {
     "shekyl-economics-sim",
@@ -251,6 +304,8 @@ def main() -> int:
     saw_accessor = False
     saw_relay = False
     saw_relay_read = False
+    saw_archival = False
+    saw_archival_read = False
     failures = []
     for path in files:
         rel = os.path.relpath(path, RUST)
@@ -259,9 +314,21 @@ def main() -> int:
             saw_accessor = True
         if rel == RELAY_DEF and "fn relay_policy(" in text:
             saw_relay = True
+        if rel == ARCHIVAL_DEF and "fn archival_params(" in text:
+            saw_archival = True
         body = strip_cfg_test(text)
         if rel != RELAY_DEF and "relay_policy()" in body:
             saw_relay_read = True
+        if rel != ARCHIVAL_DEF and "archival_params()" in body:
+            saw_archival_read = True
+        in_archival_crate = rel.split(os.sep)[0] == ARCHIVAL_CRATE
+        if not in_archival_crate and (
+            "ArchivalParams::SHIPPED" in body or "ArchivalParams::default()" in body
+        ):
+            failures.append(f"{rel}: a second ArchivalParams accessor")
+        if rel not in ARCHIVAL_OWNERS:
+            for name in sorted(set(bare_archival_reads(body))):
+                failures.append(f"{rel}: production reads the bare constant {name}")
         if "OnceLock<RelayPolicy>" in body:
             failures.append(f"{rel}: RelayPolicy is the const shipped policy")
         if rel == ACCESSOR or rel == RELAY_DEF:
@@ -270,20 +337,23 @@ def main() -> int:
             failures.append(f"{rel}: production builds EconomicParams::default()")
         if "OnceLock<EconomicParams>" in body:
             failures.append(f"{rel}: a second EconomicParams OnceLock")
-    if not saw_accessor or not saw_relay or not saw_relay_read:
+    if not (saw_accessor and saw_relay and saw_relay_read and saw_archival and saw_archival_read):
         print(
             "economic-accessor gate did not see economic_params(), "
-            "relay_policy(), and a production read of relay_policy(). "
-            "The subject is missing.",
+            "relay_policy() and archival_params(), and a production read of "
+            "the last two. The subject is missing.",
             file=sys.stderr,
         )
         return 1
     if failures:
-        print("production reads EconomicParams through economic_params():", file=sys.stderr)
+        print(
+            "production reads the parameter sets through their accessors:",
+            file=sys.stderr,
+        )
         for item in failures:
             print(f"  {item}", file=sys.stderr)
         return 1
-    print(f"economic accessors: {len(files)} production rust files, one of each")
+    print(f"parameter accessors: {len(files)} production rust files, one of each")
     return 0
 
 
@@ -345,6 +415,16 @@ def selftest() -> int:
     }
     if open_found != {"closed"}:
         print(f"selftest: feature-or-test modules were {open_found}", file=sys.stderr)
+        return 1
+    bare = bare_archival_reads(
+        "use shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS;\n"
+        "pub use shekyl_archival_retention::MAX_CLAIM_AGE_W;\n"
+        "// SETTLEMENT_EPOCH_BLOCKS in a comment\n"
+        "let e = h / SETTLEMENT_EPOCH_BLOCKS; // MAX_CLAIM_AGE_W\n"
+        "let w = FAILURE_WINDOW_N_GATHER_BOUND;\n"
+    )
+    if bare != ["SETTLEMENT_EPOCH_BLOCKS"]:
+        print(f"selftest: bare archival reads were {bare}", file=sys.stderr)
         return 1
     print("economic-accessor selftest passed")
     return 0

@@ -132,10 +132,19 @@ fn read_only_predicates_agree_with_connect_mutator() {
     let claimed = vec![15, 20, 30];
     for epoch in 0..=settled + 2 {
         let mut scratch = claimed.clone();
-        let verdict = claimed_epochs_check_and_set(&mut scratch, epoch, settled);
+        let verdict = claimed_epochs_check_and_set(
+            &mut scratch,
+            epoch,
+            settled,
+            shekyl_archival_retention::archival_params(),
+        );
         let expected = if epoch_is_not_settled(epoch, settled) {
             Err(ClaimedEpochsError::NotSettled)
-        } else if epoch_is_claim_expired(epoch, settled) {
+        } else if epoch_is_claim_expired(
+            epoch,
+            settled,
+            shekyl_archival_retention::archival_params(),
+        ) {
             Err(ClaimedEpochsError::Expired)
         } else if claimed_epochs_contains(&claimed, epoch) {
             Ok(false)

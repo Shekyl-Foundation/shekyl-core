@@ -11,9 +11,7 @@ mod common;
 
 use common::SplitMix64;
 use shekyl_standoff::draw::GapRng;
-use shekyl_standoff::{
-    bounded_uniform, draw_entry_gap, COVER_RUNG_ATOMIC, DEFAULT_ENTRY_GAP_WINDOW,
-};
+use shekyl_standoff::{bounded_uniform, draw_entry_gap, DEFAULT_ENTRY_GAP_WINDOW};
 
 /// The reference `spread` stream for seed `0xC0FF_EE12_3456_789A` at the
 /// canonical [`DEFAULT_ENTRY_GAP_WINDOW`] (600). Bit-identical on every
@@ -143,7 +141,7 @@ fn same_seed_reproduces_sequence() {
 /// scale**. The primitive survived the coin retirement — post-retirement
 /// `draw_entry_gap` *is* `bounded_uniform(rng, window)` (so the window scale is
 /// already pinned by [`GOLDEN`]) — and it also backs `draw_cover_amount`
-/// (`cover`, `max = COVER_RUNG_ATOMIC - 2 ≈ 7.5e8`) and the WI-3 send-time
+/// (`cover`, `max = rung - 2 ≈ 7.5e8` at the gate-4 rung) and the WI-3 send-time
 /// dispersal (`shekyl-engine-core::dispatch`), neither of which had a pinned
 /// reference before. Pinning the large-`max` value exercises the wide
 /// rejection-sampling path those callers use and anchors the shared root of all
@@ -154,7 +152,8 @@ const BOUNDED_UNIFORM_COVER_KAT: [u64; 8] = [
 
 #[test]
 fn bounded_uniform_cover_scale_is_pinned() {
-    let max = COVER_RUNG_ATOMIC - 2;
+    // The gate-4 rung, 750 000 000, as the vector's scale.
+    let max = 750_000_000 - 2;
     let mut rng = SplitMix64(GOLDEN_SEED);
     let seq: Vec<u64> = (0..BOUNDED_UNIFORM_COVER_KAT.len())
         .map(|_| bounded_uniform(&mut rng, max))

@@ -40,9 +40,12 @@ fn connect_full_release_effect() {
     assert_eq!(effect.post_holdings.kind, HoldingsKind::ShardSetCompact);
     assert!(effect.post_holdings.shard_ids.is_empty());
     assert_eq!(effect.interval_close, clean_interval_close(E_RELEASE));
-    // §4.3 identity: refund == debit == bond_floor(record's current holdings).
+    // §4.3 identity: refund == debit == bond_floor(record's current holdings, &crate::ArchivalParams::SHIPPED).
     assert_eq!(effect.refund_atomic, RECORD_BONDED);
-    assert_eq!(effect.refund_atomic, bond_floor(&record_holdings()));
+    assert_eq!(
+        effect.refund_atomic,
+        bond_floor(&record_holdings(), &crate::ArchivalParams::SHIPPED)
+    );
 }
 
 #[test]

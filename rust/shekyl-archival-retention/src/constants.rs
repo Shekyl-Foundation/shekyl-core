@@ -19,8 +19,8 @@
 /// settlement counts for one pair. It is not a parameter a caller supplies.
 ///
 /// Jointly pinned with settlement's
-/// [`COUNTED_DRAWS`](shekyl_types::archival::COUNTED_DRAWS): the assert
-/// below keeps them one number. The threshold's own two
+/// [`COUNTED_DRAWS`](shekyl_types::archival::COUNTED_DRAWS): a test on the
+/// shipped [`crate::ArchivalParams`] keeps them one number. The threshold's own two
 /// properties — reachable, and a strict majority — are asserted beside it
 /// in `shekyl_types::archival`. Re-pinning requires re-running §3's
 /// derivation, the `(m, n)` window re-pin, and the economics-sim arithmetic
@@ -35,10 +35,8 @@ mod challenge_count {
     ));
 }
 
-const _: () = assert!(
-    CHALLENGES_PER_PAIR_PER_EPOCH as usize == shekyl_types::archival::COUNTED_DRAWS,
-    "the per-pair challenge count and the draws settlement counts are one decision"
-);
+// The per-pair challenge count and the draws settlement counts are one
+// decision: a test on the shipped set holds them equal (`params.rs`).
 
 /// `k` — the slash grace after `H_close`, **in settlement epochs**: the
 /// slash fold for epoch `E` runs at the first block strictly above
@@ -212,45 +210,10 @@ pub const W2_MIN_DEFENSIBLE_BLOCKS: u64 = 200;
 /// Upper edge of the W₂ band — see [`W2_MIN_DEFENSIBLE_BLOCKS`].
 pub const W2_MAX_DEFENSIBLE_BLOCKS: u64 = 500;
 
-// Keep the doc's "one twentieth of a settlement epoch" literally true. Integer
-// division would silently truncate if `SETTLEMENT_EPOCH_BLOCKS` were ever
-// re-pinned to a non-multiple, leaving the prose claiming a fraction the value
-// is not. Compile-time, so a re-pin cannot land it quietly.
-const _: () = assert!(
-    SETTLEMENT_EPOCH_BLOCKS.is_multiple_of(W2_EPOCH_DIVISOR),
-    "SETTLEMENT_EPOCH_BLOCKS is not a multiple of W2_EPOCH_DIVISOR: CHALLENGE_RESPONSE_BLOCKS \
-     would truncate and no longer be the fraction of an epoch its doc claims; re-pin the \
-     divisor deliberately rather than inheriting a rounded value"
-);
-
-// The one that defends the *ruling* rather than the arithmetic. Divisibility
-// keeps the prose true; this keeps the value inside the band the ruling was
-// made over. A re-pin of `SETTLEMENT_EPOCH_BLOCKS` alone would otherwise carry
-// W₂ out of that band while every claim about it still read as current —
-// `SEB = 100_000` divides evenly and yields 5_000, which no part of the ruling
-// covers.
-const _: () = assert!(
-    CHALLENGE_RESPONSE_BLOCKS >= W2_MIN_DEFENSIBLE_BLOCKS
-        && CHALLENGE_RESPONSE_BLOCKS <= W2_MAX_DEFENSIBLE_BLOCKS,
-    "CHALLENGE_RESPONSE_BLOCKS is outside the band the W2 ruling was made over; a change \
-     to SETTLEMENT_EPOCH_BLOCKS has carried W2 with it. Re-run the ruling (no surviving \
-     upper bound; hard lower bound) before widening the band"
-);
-
-// The slash fold for epoch E must not run before the response window of E's
-// last-issued challenge closes, or in-flight responses read as misses. The fold
-// runs strictly above the deadline (`failure_window.rs`), so `>=` is exact.
-// This is the production pin: grace `k · SEB` against the genesis window.
-// A schedule whose epoch is shorter than `W2_EPOCH_DIVISOR` has no window
-// (`challenge_response_blocks` is `None`); that case is the lever test.
-// `k · divisor ≥ 1` stays true while the division yields 0, so it does not
-// say the window exists.
-const _: () = assert!(
-    SLASH_GRACE_EPOCHS * SETTLEMENT_EPOCH_BLOCKS >= CHALLENGE_RESPONSE_BLOCKS,
-    "the production slash grace (k * SEB) is shorter than the genesis \
-     challenge-response window, so the fold for an epoch would run before \
-     the response window of its last-issued challenge closes"
-);
+// The epoch's couplings to W₂ — a multiple of the divisor, W₂ inside the
+// ruled band, the grace covering W₂ — are `ArchivalParams::validate`'s, and
+// the shipped set is const-asserted to pass it (`params.rs`). A re-pin of the
+// epoch that carries W₂ out of the band stops the build there.
 
 /// Global settlement-epoch boundary (`ARCHIVAL_TIMING_CONSTANTS.md` §1).
 /// Generated from `config/consensus_constants.json` `settlement_epoch_blocks`.
@@ -293,7 +256,7 @@ pub enum SettlementEpochOverrideError {
         "SHEKYL_SETTLEMENT_EPOCH_BLOCKS={raw:?} is not a valid override: expected an \
          integer in {floor}..={max} (strictly above the reorg cap of {reorg_cap}; lower \
          SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS with the epoch); fix the value or unset the variable",
-        max = SETTLEMENT_EPOCH_BLOCKS
+        max = crate::archival_params().settlement_epoch_blocks
     )]
     Invalid {
         /// The rejected raw value, named so the refusal is diagnosable.
@@ -354,7 +317,9 @@ pub fn parse_settlement_epoch_override(
     };
     let floor = settlement_epoch_override_floor(reorg_cap);
     match raw.trim().parse::<u64>() {
-        Ok(v) if (floor..=SETTLEMENT_EPOCH_BLOCKS).contains(&v) => Ok(Some(v)),
+        Ok(v) if (floor..=crate::archival_params().settlement_epoch_blocks).contains(&v) => {
+            Ok(Some(v))
+        }
         _ => Err(SettlementEpochOverrideError::Invalid {
             raw: raw.to_string(),
             floor,
@@ -403,7 +368,7 @@ fn raw_reorg_cap_override() -> Option<String> {
 
 fn latch_unarmed() -> &'static EffectiveSchedule {
     EFFECTIVE.get_or_init(|| EffectiveSchedule {
-        blocks: SETTLEMENT_EPOCH_BLOCKS,
+        blocks: crate::archival_params().settlement_epoch_blocks,
         reorg_cap: ARCHIVAL_REORG_DEPTH_BLOCKS,
         ignored_override: raw_override().is_some() || raw_reorg_cap_override().is_some(),
     })
@@ -467,7 +432,7 @@ pub fn arm_settlement_epoch_override_for_regtest() -> Result<u64, SettlementEpoc
     let reorg_cap = parse_reorg_cap_override(raw_reorg_cap_override().as_deref())?
         .unwrap_or(ARCHIVAL_REORG_DEPTH_BLOCKS);
     let target = parse_settlement_epoch_override(raw_override().as_deref(), reorg_cap)?
-        .unwrap_or(SETTLEMENT_EPOCH_BLOCKS);
+        .unwrap_or(crate::archival_params().settlement_epoch_blocks);
     let latched = EFFECTIVE.get_or_init(|| EffectiveSchedule {
         blocks: target,
         reorg_cap,
@@ -534,7 +499,7 @@ pub fn check_settlement_epoch_override(
     };
     let floor = settlement_epoch_override_floor(reorg_cap);
     let target = match blocks {
-        Some(v) if (floor..=SETTLEMENT_EPOCH_BLOCKS).contains(&v) => v,
+        Some(v) if (floor..=crate::archival_params().settlement_epoch_blocks).contains(&v) => v,
         Some(v) => {
             return Err(SettlementEpochOverrideError::Invalid {
                 raw: v.to_string(),
@@ -542,7 +507,7 @@ pub fn check_settlement_epoch_override(
                 reorg_cap,
             })
         }
-        None => SETTLEMENT_EPOCH_BLOCKS,
+        None => crate::archival_params().settlement_epoch_blocks,
     };
     Ok((target, reorg_cap))
 }

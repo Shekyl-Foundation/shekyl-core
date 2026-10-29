@@ -82,6 +82,7 @@ pub mod failure_window;
 pub mod hash;
 pub mod held_at_height;
 pub mod id;
+pub mod params;
 pub mod pass_anchor;
 pub mod path;
 pub mod release_cooldown;
@@ -221,6 +222,7 @@ pub use failure_window::{
 };
 pub use held_at_height::holds_shard_at;
 pub use id::{p_canonical_id_from_hybrid_pubkey, P_CANONICAL_ID_CUSTOMIZATION};
+pub use params::{archival_params, ArchivalParams, ArchivalParamsError};
 pub use path::{
     challenged_leaf_bytes, verify_segment_path, SegmentPathOpening, CHALLENGED_LEAF_LEN,
 };

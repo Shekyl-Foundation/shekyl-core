@@ -377,8 +377,12 @@ impl RetirementWitness {
         e_last: SettlementEpoch,
         settled_epoch: SettlementEpoch,
     ) -> Option<Self> {
-        epoch_is_claim_expired(e_last.to_raw(), settled_epoch.to_raw())
-            .then_some(Self { p_canonical_id })
+        epoch_is_claim_expired(
+            e_last.to_raw(),
+            settled_epoch.to_raw(),
+            shekyl_archival_retention::archival_params(),
+        )
+        .then_some(Self { p_canonical_id })
     }
 }
 

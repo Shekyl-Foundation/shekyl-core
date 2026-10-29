@@ -288,7 +288,12 @@ impl super::Transition {
             .map(|e| e.to_raw())
             .collect::<Vec<_>>();
         for &epoch in epochs {
-            match claimed_epochs_check_and_set(&mut set, epoch, current_settled) {
+            match claimed_epochs_check_and_set(
+                &mut set,
+                epoch,
+                current_settled,
+                shekyl_archival_retention::archival_params(),
+            ) {
                 Ok(true) => {}
                 // Already claimed (a dedup breach past CEN-J25) or not
                 // claimable (unsettled or expired): never a soft skip.

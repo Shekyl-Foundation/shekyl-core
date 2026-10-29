@@ -41,14 +41,14 @@ pub use outbound_label::{label_plaintext_for_recipient, RidNotEncodable};
 // The fault [`IoError::CurveTreeStore`] carries, re-exported so a consumer can
 // name it without depending on `shekyl-curve-tree`.
 pub use shekyl_curve_tree::StoreOpenFault;
-// The exclusive upper bound of `stake_in`'s system-drawn cover
-// (`Engine::stake_in` sends `amount + cover`, `cover ~ U[1, bound)`).
-// Re-exported so the RPC/CLI disclosure copy renders the bound from the
-// enforcing constant — a hardcoded "0.75 SKL" twin would silently lie the
-// day the rung moves. The exact per-draw figure is deliberately never
+// The archival parameter set. Its `bond_floor_atomic` is the exclusive
+// upper bound of `stake_in`'s system-drawn cover (`Engine::stake_in` sends
+// `amount + cover`, `cover ~ U[1, bound)`). Re-exported so the RPC/CLI
+// disclosure copy renders the bound from the enforcing value — a hardcoded
+// "0.75 SKL" twin would silently lie the day the rung moves. The exact per-draw figure is deliberately never
 // disclosed pre-send (a discard-and-rebuild loop could steer the submitted
 // cover distribution); only this bound is.
-pub use shekyl_standoff::COVER_RUNG_ATOMIC;
+pub use shekyl_archival_retention::archival_params;
 // Re-exported so the wallet-RPC layer's `make_uri` / `parse_uri` projections
 // can consume the one payment-URI codec without a direct `shekyl-address`
 // dependency — mirroring the `ShekylAddress` re-export in [`engine`].
