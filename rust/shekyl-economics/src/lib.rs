@@ -46,8 +46,8 @@ pub use emission::{
     PrePenaltyEmission,
 };
 pub use emission_share::{
-    compute_emission_split, emission_share, emission_share_at, split_block_emission, EmissionSplit,
-    EMISSION_SPLIT_EPOCH,
+    compute_emission_split, emission_share, emission_share_at, split_block_emission,
+    EmissionSchedule, EmissionScheduleError, EmissionSplit, EMISSION_SPLIT_EPOCH,
 };
 pub use escalation::{
     staker_pool_share_at, ClosedShardCount, EscalationParams, EscalationShapeError, ScaledShare,

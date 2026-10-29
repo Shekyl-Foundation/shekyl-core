@@ -2214,9 +2214,14 @@ narration tests, release, both arms.
   `blake2b:90fc7496797f94b1e917f570d24663ee180e64ac5dc59793b902d0ba225a1f60`.
 - **E16-3 held.** `economic_params()` and `relay_policy()` are the
   production reads. `scripts/ci/check_economic_accessors.py` fails a
-  production `EconomicParams::default()` and a second
-  `OnceLock<EconomicParams>`. The economics sim, the staking sim and
-  tests build their own sets.
+  production `EconomicParams::default()`, a second
+  `OnceLock<EconomicParams>`, and a `OnceLock` of `RelayPolicy`. It
+  requires `relay_policy()` in a production file other than
+  `relay_policy.rs`. A path component `tests` or ending `_tests`, and
+  a file named `tests.rs`, `*_tests.rs`, `*_test.rs` or
+  `test_support.rs`, and a module declared under `cfg(test)`, is not
+  production. The economics sim, the staking
+  sim and the bench build their own sets.
 - **E16-4 held.** `blocks_per_year(120)` is 262 800, and the shipped
   field equals it (`shipped_defaults_are_well_formed`).
   `settlement_epoch_blocks` is generated from
@@ -2224,11 +2229,16 @@ narration tests, release, both arms.
   and `TX_WEIGHT_LIMIT` were already that pair and were not retouched.
 
 The stage-2 fold prices the staker share from the run's
-`EconomicParams`. `RelayPolicy` carries the lookback, the slack, the
-fee decimals and the claim hold, outside the digest. The median and
-volume folds take the window length as a const generic
+`EconomicParams`. `SimParams::economic` writes the share, the decay
+and the year onto that set, and `price_emission` splits the paid
+reward on the set it is given. `RelayPolicy` is the admission
+lattice, the slack, the lookback and the claim hold, outside the
+digest. The shipped wrappers read `relay_policy()`. A fold passes its
+own policy to `admits`, `quantize` and `admitted_floor`. The median
+and volume folds take the window length as a const generic
 (`medians_over_window`, `tx_volume_span_of`, `VolumeFold`); production
-instantiates the generated lengths.
+instantiates the generated lengths, and EUP-5's window-length stress
+is the second caller.
 
 `SCALE` and the surge factor stay generated constants. `SCALE` is the
 unit the other fields are written in. The surge factor is the median

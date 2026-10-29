@@ -26,13 +26,10 @@
 //!
 //! For the same reason the snapshot's staleness digest
 //! ([`snapshot_calibration_digest`]) is computed **here**, not in
-//! `shekyl-economics`: it must cover every calibration value the snapshot
-//! displays, and the tier table is only visible from `shekyl-engine-core`.
-//! `shekyl_economics::params_digest` covers `EconomicParams` alone (and
-//! backs the C4 fixture lineage guard, whose tested emission/burn values
-//! depend only on `EconomicParams`); the snapshot additionally surfaces the
-//! staker-emission share/decay and the tier table, so its stamp folds those
-//! in on top of the `EconomicParams` sub-digest.
+//! `shekyl-economics`: it is the engine's stamp over the rulebook.
+//! The preimage is one version byte and `shekyl_economics::params_digest`.
+//! Share and decay move the stamp because they are fields of that digest.
+//! The version byte keeps the stamp off the bare sub-digest.
 //!
 //! # No-cache discipline (§6.3 G5)
 //!
@@ -102,16 +99,14 @@ pub(crate) struct CalibrationStamp {
     /// 8") and treat a mismatch as "stale".
     pub generation: u32,
 
-    /// Blake2b-256 over the **full calibration surface this snapshot
-    /// exposes** (see [`snapshot_calibration_digest`]): the
-    /// [`EconomicParams`](shekyl_economics::EconomicParams) sub-digest
-    /// **plus** the staker-emission share/decay. **Not** raw JSON bytes,
-    /// **not** bincode. Covering only `EconomicParams` (as
-    /// `shekyl_economics::params_digest` does, for the C4 fixture lineage)
-    /// would false-accept a snapshot whose staker calibration changed
-    /// without a `generation` bump. Catches a
-    /// generation increment with no parameter change, and silent
-    /// serialization drift that `generation` alone would miss.
+    /// Blake2b-256 of one version byte and
+    /// [`params_digest`](shekyl_economics::params_digest)
+    /// ([`snapshot_calibration_digest`]). Share and decay move the stamp
+    /// because they are fields of that digest. The version byte keeps
+    /// this stamp off the bare sub-digest. **Not** raw JSON bytes,
+    /// **not** bincode. Catches a generation increment with no parameter
+    /// change, and silent serialization drift that `generation` alone
+    /// would miss.
     pub params_digest: [u8; 32],
 }
 

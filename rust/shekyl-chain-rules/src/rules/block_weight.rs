@@ -273,8 +273,9 @@ pub fn medians_over(window: &[RecordedWeights], params: &EconomicParams) -> Effe
     medians_over_window::<BLOCK_WEIGHT_SHORT_TERM_WINDOW>(window, params)
 }
 
-/// [`medians_over`] at a short-window length. Production passes the
-/// generated constant. A window stress test passes another.
+/// [`medians_over`] at a short-window length. Production passes
+/// [`BLOCK_WEIGHT_SHORT_TERM_WINDOW`]. EUP-5's window-length stress
+/// builds another (`ECONOMICS_SIM_PHASE0.md`, the const-generic window).
 #[must_use]
 pub fn medians_over_window<const SHORT: u64>(
     window: &[RecordedWeights],

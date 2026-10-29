@@ -885,8 +885,8 @@ mod tests {
     use shekyl_block_template::Fill;
     use shekyl_chain_rules::medians_from;
     use shekyl_economics::{
-        burn::calc_burn_pct_at, compute_burn_split_at, emission_share_at, paid_block_reward,
-        split_block_emission, TxVolume, BLOCKS_PER_YEAR,
+        burn::calc_burn_pct_at, compute_burn_split_at, paid_block_reward, split_block_emission,
+        TxVolume,
     };
     use shekyl_units::AtomicUnits;
 
@@ -898,9 +898,10 @@ mod tests {
         let economic = params.economic();
         let zone = economic.full_reward_zone;
         let volume = TxVolume::per_block(params.tx_volume_baseline);
-        // The share and the burn are production's at these operands, as
-        // the cursor's are: the payout reprices the block from them.
-        let chain_height = 2 * BLOCKS_PER_YEAR;
+        // The share is the run's schedule at this height, as the cursor's
+        // is. The burn is production's at these operands. The payout
+        // reprices the block from them.
+        let chain_height = 2 * params.blocks_per_year;
         let already_generated = economic.emission_curve_asymptote / 3;
         let supply = CirculatingSupply::derive(
             AtomicUnits::from_raw(already_generated),
@@ -911,7 +912,7 @@ mod tests {
             already_generated,
             volume,
             long_term_median: zone,
-            sigma_scaled: emission_share_at(chain_height),
+            sigma_scaled: economic.emission_schedule().share_at(chain_height),
             burn_pct_scaled: calc_burn_pct_at(volume, supply, &economic),
             chain_leaves: 50_000_000,
             params: &economic,

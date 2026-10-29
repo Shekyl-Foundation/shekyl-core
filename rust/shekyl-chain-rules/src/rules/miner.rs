@@ -728,8 +728,9 @@ pub fn tx_volume_span(connecting: BlockHeight) -> TxVolumeSpan {
     tx_volume_span_of::<TX_VOLUME_WINDOW>(connecting)
 }
 
-/// [`tx_volume_span`] at a window length. Production passes the generated
-/// constant. A window stress test passes another.
+/// [`tx_volume_span`] at a window length. Production passes
+/// [`TX_VOLUME_WINDOW`]. EUP-5's window-length stress builds another
+/// (`ECONOMICS_SIM_PHASE0.md`, the const-generic window).
 #[must_use]
 pub fn tx_volume_span_of<const W: u64>(connecting: BlockHeight) -> TxVolumeSpan {
     let h = connecting.to_raw();

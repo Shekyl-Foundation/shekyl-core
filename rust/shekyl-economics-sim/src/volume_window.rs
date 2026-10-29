@@ -39,7 +39,8 @@ pub(crate) struct VolumeFold<const W: u64> {
     next: u64,
 }
 
-/// The shipped window. A stress test builds [`VolumeFold`] at another length.
+/// The shipped window. EUP-5's window-length stress builds [`VolumeFold`]
+/// at another length (`ECONOMICS_SIM_PHASE0.md`, the const-generic window).
 pub(crate) type VolumeWindow = VolumeFold<{ TX_VOLUME_WINDOW }>;
 
 impl<const W: u64> VolumeFold<W> {

@@ -211,10 +211,9 @@ fn economics_params_digest_round_trip() {
     assert_eq!(params_digest(&params), params_digest(&params));
 }
 
-/// §6.3 G5: the snapshot stamp must cover *every* calibration value the
-/// snapshot exposes, not just `EconomicParams`. Were it the bare
-/// `EconomicParams` digest, a staker-emission change with no `generation`
-/// bump would be a silent false-accept.
+/// The stamp is one version byte and `params_digest`. Share and decay
+/// move it because they are fields. The version byte keeps the stamp
+/// off the bare sub-digest.
 #[test]
 fn snapshot_calibration_digest_covers_full_surface() {
     let params = EconomicParams::default();

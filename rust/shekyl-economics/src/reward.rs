@@ -16,8 +16,10 @@
 //!
 //! Height [`GENESIS_HEIGHT`] on [`price_emission`] is the **producer's**
 //! arm (CEN-G13): [`paid_block_reward`] runs, and the whole paid reward
-//! goes to the miner. That is [`compute_emission_split`]'s own answer
-//! below `EMISSION_SPLIT_EPOCH`, so this module adds no arm of its own.
+//! goes to the miner. Below `EMISSION_SPLIT_EPOCH` the set's schedule
+//! pays no staker share, which is [`compute_emission_split`]'s answer on
+//! the shipped set. This module adds no arm of its own. A set whose
+//! schedule differs from the shipped one splits on its own schedule.
 //!
 //! The **validator** at genesis does not call [`price_emission`]. The
 //! coinbase sum stands (CEN-F11, `validate_miner_transaction` returns
@@ -27,7 +29,7 @@
 
 use crate::burn::{compute_fee_burn, BurnSplit};
 use crate::emission::{advance_already_generated, paid_block_reward, EmissionError};
-use crate::emission_share::{compute_emission_split, EmissionSplit};
+use crate::emission_share::{split_block_emission, EmissionSplit};
 use crate::escalation::ClosedShardCount;
 use crate::params::EconomicParams;
 use crate::supply::CirculatingSupply;
@@ -149,7 +151,8 @@ impl RewardArithmetic {
 /// Price the block's emission from derived operands.
 ///
 /// At [`GENESIS_HEIGHT`] the paid reward goes whole to the miner; from
-/// block 1 it is split ([`compute_emission_split`]). The fee burn runs at every
+/// block 1 it is split on `inputs.params`'s emission schedule (the
+/// shipped schedule is [`compute_emission_split`]). The fee burn runs at every
 /// height, including genesis: a producer listing nothing passes a zero fee
 /// sum and the three burn legs are zero.
 ///
@@ -169,7 +172,12 @@ pub fn price_emission(inputs: &EmissionInputs<'_>) -> Result<PaidEmission, Rewar
         EmissionError::BlockTooBig => RewardArithmetic::BlockTooBig,
         EmissionError::Overflow => RewardArithmetic::RewardOverflow,
     })?;
-    let split = compute_emission_split(paid, inputs.height);
+    let share = inputs.params.emission_schedule().share_at(inputs.height);
+    let (miner_emission, staker_emission) = split_block_emission(paid, share);
+    let split = EmissionSplit {
+        miner_emission,
+        staker_emission,
+    };
     let fee_burn = compute_fee_burn(
         inputs.total_fees,
         inputs.tx_volume,
@@ -262,6 +270,37 @@ mod tests {
         assert_eq!(later.paid, whole.paid);
         assert!(later.split.staker_emission > 0);
         assert!(later.split.miner_emission < later.paid.to_raw());
+    }
+
+    #[test]
+    fn a_replaced_schedule_splits_the_paid_reward() {
+        let params = EconomicParams {
+            staker_emission_share: 0,
+            ..EconomicParams::default()
+        };
+        let replaced =
+            price_emission(&inputs(&params, EMISSION_SPLIT_EPOCH, 0)).expect("under the median");
+        assert_eq!(replaced.split.staker_emission, 0);
+        assert_eq!(replaced.split.miner_emission, replaced.paid.to_raw());
+
+        let shipped = price_emission(&inputs(&EconomicParams::default(), EMISSION_SPLIT_EPOCH, 0))
+            .expect("under the median");
+        assert!(shipped.split.staker_emission > 0);
+
+        let fast_year = EconomicParams {
+            blocks_per_year: 1,
+            ..EconomicParams::default()
+        };
+        let decayed = fast_year
+            .emission_schedule()
+            .share_at(EMISSION_SPLIT_EPOCH + 1);
+        let barely = EconomicParams::default()
+            .emission_schedule()
+            .share_at(EMISSION_SPLIT_EPOCH + 1);
+        assert!(
+            decayed < barely,
+            "one block is a whole year on the replaced schedule and a fraction on the shipped one"
+        );
     }
 
     #[test]

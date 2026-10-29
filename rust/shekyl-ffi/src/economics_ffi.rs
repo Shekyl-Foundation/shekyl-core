@@ -413,10 +413,11 @@ pub extern "C" fn shekyl_fee_correction(
     .as_scaled()
 }
 
-/// Lookback depth `G`. Rust is the owner; C++ sizes the ring from this.
+/// Lookback depth `G` of the shipped relay policy. Rust is the owner;
+/// C++ sizes the ring from this.
 #[no_mangle]
 pub extern "C" fn shekyl_relay_floor_lookback() -> u64 {
-    shekyl_economics::RELAY_FLOOR_LOOKBACK as u64
+    shekyl_economics::relay_policy().lookback
 }
 
 /// Three-slot ladder `[economy, standard, priority]`. Economy **is** the

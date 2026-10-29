@@ -148,10 +148,8 @@ impl EconomicsEngine for LocalEconomics {
             staker_emission_decay_milli: scale_to_milli_u16(p.staker_emission_decay),
             as_of: CalibrationStamp {
                 generation: CALIBRATION_GENERATION,
-                // Full-surface digest: covers `EconomicParams` *and* the
-                // staker-emission consts this snapshot also exposes
-                // (§6.3 G5) — not just the `EconomicParams` sub-digest
-                // `shekyl_economics::params_digest` produces.
+                // One version byte and `params_digest`. Share and decay
+                // move the stamp because they are fields of that digest.
                 params_digest: snapshot_calibration_digest(p),
             },
         }

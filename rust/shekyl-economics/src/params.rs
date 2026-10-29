@@ -159,12 +159,16 @@ pub const CALIBRATION_GENERATION: u32 = 1;
 /// Struct-literal construction of [`EconomicParams`] does **not** — public
 /// fields stay open for the digest preimage and build-generated defaults.
 /// Consensus paths obtain a well-formed shape via [`EconomicParams::escalation`]
-/// (or [`EconomicParams::try_escalation`]), which is the typed door for apply.
+/// (or [`EconomicParams::try_escalation`]) and
+/// [`EconomicParams::emission_schedule`], which are the typed doors.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum EconomicParamsError {
     /// Escalation shape (§6.1) rejected by [`EscalationParams::try_new`](crate::escalation::EscalationParams::try_new).
     #[error(transparent)]
     Escalation(#[from] crate::escalation::EscalationShapeError),
+    /// Emission schedule rejected by [`EmissionSchedule::try_new`](crate::emission_share::EmissionSchedule::try_new).
+    #[error(transparent)]
+    Schedule(#[from] crate::emission_share::EmissionScheduleError),
 }
 
 /// Deserialization shim — every `EconomicParams` that arrives from serde is
@@ -260,15 +264,17 @@ pub struct EconomicParams {
     /// format `0x03`. The preimage order is this declaration order.
     pub full_reward_zone: u64,
     /// Base staker emission share before height decay, in [`SCALE`] units.
-    /// [`crate::emission_share_at`] reads [`economic_params`]; a fold that
-    /// prices another schedule reads this field.
+    /// At most [`SCALE`]. [`Self::emission_schedule`] is the door.
+    /// [`crate::emission_share_at`] reads the shipped set; a fold prices
+    /// another share by writing this field.
     pub staker_emission_share: u64,
     /// Per-year decay of [`Self::staker_emission_share`], in [`SCALE`] units
-    /// (`900_000` = 0.90 of the previous year).
+    /// (`900_000` = 0.90 of the previous year). At most [`SCALE`].
     pub staker_emission_decay: u64,
-    /// Blocks in one year of the emission schedule:
-    /// [`blocks_per_year`] of [`Self::daa_target_seconds`]. A fold may set
-    /// another length; production's is [`BLOCKS_PER_YEAR`].
+    /// Blocks in one year of the emission schedule. At least one.
+    /// Production's is [`blocks_per_year`] of [`Self::daa_target_seconds`]
+    /// ([`BLOCKS_PER_YEAR`]). A fold may set another length; the digest
+    /// then differs, which is what makes the year a chain parameter.
     pub blocks_per_year: u64,
 }
 
@@ -297,7 +303,7 @@ impl Default for EconomicParams {
         // debug-only belt so a bad OUT_DIR cannot silently enter consensus paths.
         debug_assert!(
             p.validate().is_ok(),
-            "config/economics_params.json escalation fields are malformed"
+            "config/economics_params.json escalation or emission schedule is malformed"
         );
         p
     }
@@ -325,13 +331,46 @@ pub fn economic_params() -> &'static EconomicParams {
 
 impl EconomicParams {
     /// Reject a parameter set whose escalation numbers violate the **frozen
-    /// shape** (§6.1). Delegates entirely to
-    /// [`EscalationParams::try_new`](crate::escalation::EscalationParams::try_new)
-    /// — one predicate body, no restated rules.
+    /// shape** (§6.1), or whose emission schedule is not a schedule.
     ///
-    /// Does **not** opine on which asymptote is correct (§11.4 ceremony).
+    /// Escalation delegates to
+    /// [`EscalationParams::try_new`](crate::escalation::EscalationParams::try_new).
+    /// The schedule delegates to
+    /// [`EmissionSchedule::try_new`](crate::emission_share::EmissionSchedule::try_new).
+    /// One predicate body each, no restated rules.
+    ///
+    /// Does **not** opine on which asymptote is correct (§11.4 ceremony),
+    /// and does **not** require [`Self::blocks_per_year`] to equal
+    /// [`blocks_per_year`] of [`Self::daa_target_seconds`]. The shipped set
+    /// has that equality. A fold's year is the field.
     pub fn validate(&self) -> Result<(), EconomicParamsError> {
+        self.try_emission_schedule()?;
         self.try_escalation().map(|_| ())
+    }
+
+    /// The emission schedule these fields are.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the fields are not a schedule. Prefer
+    /// [`Self::try_emission_schedule`] at an untrusted boundary. The serde
+    /// door and [`Self::default`] are known-good.
+    #[must_use]
+    pub fn emission_schedule(&self) -> crate::emission_share::EmissionSchedule {
+        self.try_emission_schedule().expect(
+            "EconomicParams emission schedule is malformed; call try_emission_schedule / validate",
+        )
+    }
+
+    /// [`Self::emission_schedule`] as a [`Result`](Result).
+    pub fn try_emission_schedule(
+        &self,
+    ) -> Result<crate::emission_share::EmissionSchedule, EconomicParamsError> {
+        Ok(crate::emission_share::EmissionSchedule::try_new(
+            self.staker_emission_share,
+            self.staker_emission_decay,
+            self.blocks_per_year,
+        )?)
     }
 
     /// Validated escalation shape for this parameter set.
@@ -452,13 +491,21 @@ mod tests {
 mod escalation_param_tests {
     use super::*;
 
+    /// `daa_target_seconds` in this document is 10. The year is
+    /// `blocks_per_year(10)`, not a second key.
     fn valid_json(asymptote: u64, floor: u64) -> String {
+        params_json(asymptote, floor, 150_000, 900_000, blocks_per_year(10))
+    }
+
+    fn params_json(asymptote: u64, floor: u64, share: u64, decay: u64, year: u64) -> String {
         format!(
             r#"{{"release_min":1,"release_max":2,"tx_volume_baseline":3,
                 "burn_base_rate":4,"burn_cap":5,"staker_pool_share":{floor},
                 "emission_curve_asymptote":7,"emission_speed_factor_per_block":8,
                 "final_subsidy_per_minute":9,"daa_target_seconds":10,"full_reward_zone":300000,
-                "escalation_knee_n":100000,"escalation_asymptote_share":{asymptote}}}"#
+                "escalation_knee_n":100000,"escalation_asymptote_share":{asymptote},
+                "staker_emission_share":{share},"staker_emission_decay":{decay},
+                "blocks_per_year":{year}}}"#
         )
     }
 
@@ -482,6 +529,42 @@ mod escalation_param_tests {
         assert!(
             err.to_string().contains("below the floor"),
             "error must name the inversion: {err}"
+        );
+    }
+
+    #[test]
+    fn deserialization_refuses_a_schedule_the_kernel_does_not_define() {
+        let share = serde_json::from_str::<EconomicParams>(&params_json(
+            250_000,
+            250_000,
+            SCALE + 1,
+            900_000,
+            blocks_per_year(10),
+        ))
+        .expect_err("a share above SCALE is not a schedule");
+        assert!(
+            share.to_string().contains("above SCALE"),
+            "error must name the share: {share}"
+        );
+        let decay = serde_json::from_str::<EconomicParams>(&params_json(
+            250_000,
+            250_000,
+            150_000,
+            SCALE + 1,
+            1,
+        ))
+        .expect_err("a decay above SCALE is not a schedule");
+        assert!(
+            decay.to_string().contains("above SCALE"),
+            "error must name the decay: {decay}"
+        );
+        let year = serde_json::from_str::<EconomicParams>(&params_json(
+            250_000, 250_000, 150_000, 900_000, 0,
+        ))
+        .expect_err("a year of no blocks is not a schedule");
+        assert!(
+            year.to_string().contains("no year"),
+            "error must name the year: {year}"
         );
     }
 

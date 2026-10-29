@@ -66,8 +66,9 @@
 //! selected the emission split and the year of its decay; a digest that
 //! omitted them would let two nodes agree on a calibration stamp while
 //! paying different staker shares. Appended, so every prior offset is
-//! unchanged. `blocks_per_year` is [`crate::blocks_per_year`] of
-//! `daa_target_seconds`, stored so a fold can replace the schedule.
+//! unchanged. `blocks_per_year` is the schedule's year. Production fills
+//! it with [`crate::blocks_per_year`] of `daa_target_seconds`. A fold may
+//! set another length; the digest then differs.
 //!
 //! The preimage is exactly **129 bytes** (`1` version tag + `16 × 8` u64
 //! fields), hashed with `Blake2b<U32>`:
