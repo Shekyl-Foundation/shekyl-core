@@ -741,6 +741,15 @@ where
         self.pending_ready.notify_one();
     }
 
+    /// A shown-set change at this tip that did not come through the relay's
+    /// hook: a body a pop or a switch returned to the pool, admitted public.
+    /// Q9: the posted job is rebuilt on a shown-set change, not only on a
+    /// tip move; the wake is the attendant's one pending `Notify`, so a
+    /// batch of returns costs at most one rebuild in flight.
+    pub(crate) fn shown_changed(&self) {
+        self.pending_ready.notify_one();
+    }
+
     /// Park `bodies` without waking. The next tip, or the next handed
     /// batch, judges them. A tip that moved under this attempt must not
     /// notify itself.

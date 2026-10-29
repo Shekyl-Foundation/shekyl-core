@@ -21,7 +21,7 @@ use shekyl_chain_rules::{
 };
 use shekyl_chain_store::store::{AltCannot, SnapshotView, StoreCannot, StoreError};
 use shekyl_hash_budget::{Class, Permit};
-use shekyl_mempool::{stateless, Pool, PoolFault};
+use shekyl_mempool::{stateless, Admission, Duplicate, Pool, PoolFault};
 use shekyl_types::{BlockHash, BlockHeight};
 use shekyl_wire::{Block, Transaction};
 use tokio::sync::oneshot;
@@ -1076,6 +1076,19 @@ where
         Some(Err(e)) => return shared.fail(e.into()),
         Some(Ok(offers)) => offers,
     };
+    // A returned body the pool now shows is a shown-set change the relay's
+    // hook never sees (it came from a block, not a submit), and its
+    // admission judged at the tip the pop left, which the pool's work order
+    // keeps behind the heavier tip it last judged at: the attendant's
+    // reconcile re-judges at this tip and the next build lists it. Without
+    // the wake the posted job stayed the one built before the return, and a
+    // `generateblocks` after a pop waited on it for ever.
+    let shown_changed = offers.admissions.iter().any(|(_, admission)| {
+        matches!(
+            admission,
+            Admission::Admitted { .. } | Admission::Duplicate(Duplicate::InPool)
+        )
+    });
     let division = super::window::divide_pool_faults(offers.faults, &bodies);
     if let Some(fault) = division.chain {
         return shared.fail(ServiceFault::Pool(PoolFault::Chain(fault)));
@@ -1085,6 +1098,8 @@ where
     }
     if !division.parked.is_empty() {
         shared.hand_pending(division.parked);
+    } else if shown_changed {
+        shared.shown_changed();
     }
 }
 

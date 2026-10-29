@@ -1515,6 +1515,72 @@ async fn a_body_flushed_between_the_locks_is_left_out_of_the_rebuilt_job() {
     assert_eq!(builds, 2, "the withdrawal was built again");
 }
 
+/// Q9: a body a pop returns to the pool is a shown-set change the relay's
+/// hook never sees, and its admission judges at the tip the pop left, which
+/// the pool's work order keeps behind the heavier tip it last judged at. The
+/// return wakes the attendant: its reconcile re-judges at this tip and the
+/// rebuilt job lists the body. The red is the regtest walk
+/// `e2e_fcmp_spend_reorg_restores_pool_and_fee` on a daemon whose
+/// `offer_carried` admitted without waking: the job posted on the pop's tip
+/// change, before the return, stayed and listed nothing (2026-10-29). In
+/// this harness the attendant may reach the pop's tip after the return and
+/// list the body on that build alone, so this test pins the property, not
+/// the wake.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_body_a_pop_returns_is_listed_by_the_rebuilt_job() {
+    use crate::pool_door_tests::{matured, paying_the_floor};
+
+    let (mut scenario, prefix) = matured("service-pop-returns").await;
+    let tx = paying_the_floor(&mut scenario, &prefix, 0).await;
+    let txid = tx.txid_parts().hash;
+    let next = prefix.last().expect("the chain").height.to_raw() + 1;
+    let mut seated = SeatedPool::start("service-pop-returns");
+    offer_all(&seated.service.door(), 1, &prefix).await;
+    posted_job(
+        &mut seated.posting,
+        &seated.board,
+        CHAIN_POSTED,
+        |_at, job| job.height.to_raw() == next && !lists(job, txid),
+    )
+    .await;
+    seated.show(&tx);
+    seated.wake();
+    posted_job(
+        &mut seated.posting,
+        &seated.board,
+        WAKE_POSTED,
+        |_at, job| lists(job, txid),
+    )
+    .await;
+    let carrying = scenario
+        .mine_listing(vec![tx.clone()])
+        .await
+        .unwrap_or_else(|outcome| panic!("the spend's block lands: {outcome}"));
+    offer_all(&seated.service.door(), 1, std::slice::from_ref(&carrying)).await;
+    posted_job(
+        &mut seated.posting,
+        &seated.board,
+        CHAIN_POSTED,
+        |_at, job| job.height.to_raw() == next + 1 && !lists(job, txid),
+    )
+    .await;
+    seated
+        .service
+        .rewinder()
+        .pop_blocks(1)
+        .await
+        .expect("the pop");
+    posted_job(
+        &mut seated.posting,
+        &seated.board,
+        WAKE_POSTED,
+        |_at, job| job.height.to_raw() == next && lists(job, txid),
+    )
+    .await;
+    seated.stop().await;
+    scenario.close().await;
+}
+
 /// Two builds in a row lose a listed body at one tip: the one rebuild
 /// withdraws for the same reason, and the board rests on `Stuck`, which
 /// `generateblocks` refuses. The next wake, whose first build loses a
