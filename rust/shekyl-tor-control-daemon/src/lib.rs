@@ -66,4 +66,6 @@ pub use shekyl_tor_control_client::control::OnionPow;
 pub use shekyl_tor_control_client::binary::TorBinaryError;
 
 #[cfg(test)]
+mod probe_live_tests;
+#[cfg(test)]
 mod test_support;

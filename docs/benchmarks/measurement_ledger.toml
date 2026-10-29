@@ -587,6 +587,7 @@ stale_through = [
   { through = "0eb355bc5", note = "A doc comment on the profile's quiet-span test. No code changed. This moves no cost. The rows stay stale for the reasons already recorded." },
   { through = "dc617814d", note = "Clearnet's quiet K moves from 10 to 11 (read at the bound of a series with no live failure), and its derived S from 29.15 s to 32.065 s; a doc comment in the Tor supervisor's Policy. No deadline or span constant moved. This moves no cost. The rows stay stale for the reasons already recorded." },
   { through = "d9bb3e534", note = "The quiet span is derived from the row's dial deadline instead of a stored literal, and the dialer keeps only a published retry window. No deadline or span constant moved. This moves no cost. The rows stay stale for the reasons already recorded." },
+  { through = "65d33f49ce", note = "The Tor link gains its inbound facet, published for an incarnation without calling a watcher; a new route resets it. Clearnet's link reads NotOffered and nothing writes it. The clearnet dial, handshake and gap do the same I/O. Not re-measured." },
 ]
 
 [[constant]]
@@ -688,6 +689,7 @@ cleared = [
   { through = "0eb355bc5", reason = "A doc comment on the profile's quiet-span test. No code changed, so the 2026-10-14 capture still prices this tree." },
   { through = "dc617814d", reason = "Clearnet's quiet K moves from 10 to 11 and its derived S with it; a doc comment in the Tor supervisor's Policy. No deadline or span constant moved and no span gained I/O, so the 2026-10-14 capture still prices this tree." },
   { through = "d9bb3e534", reason = "The quiet span is derived from the row's dial deadline instead of a stored literal, and the dialer keeps only a published retry window. No deadline or span constant moved and no span gained I/O, so the 2026-10-14 capture still prices this tree." },
+  { through = "65d33f49ce", reason = "Increment 4's pieces: the Tor link gains its inbound facet, published for an incarnation with no watcher called, and a new route resets it to publishing. Nothing on the Tor dial, the gap or the shutdown wait reads it, and the probe dials outside the connector, so the 2026-10-14 capture still prices this tree." },
 ]
 
 [[constant]]

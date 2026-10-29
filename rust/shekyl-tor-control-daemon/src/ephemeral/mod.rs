@@ -578,7 +578,7 @@ async fn save_directory_cache(data_dir: &Path) -> CacheSave {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -648,7 +648,7 @@ mod tests {
     /// The ignored live tests wait here so a published onion has a network.
     /// A hang bound in a test is not a daemon deadline: nothing in the
     /// supervisor gives a bootstrap up.
-    async fn wait_for_the_network(boot: &mut DaemonTorControl) {
+    pub(crate) async fn wait_for_the_network(boot: &mut DaemonTorControl) {
         let hang = tokio::time::Instant::now() + Duration::from_secs(300);
         let mut watch = boot.watch_bootstrap();
         loop {
@@ -887,7 +887,7 @@ mod tests {
 
     /// The tor process launched with `dir` as its DataDirectory parent.
     #[cfg(target_os = "linux")]
-    fn tor_under(dir: &std::path::Path) -> Option<u32> {
+    pub(crate) fn tor_under(dir: &std::path::Path) -> Option<u32> {
         let needle = dir.to_string_lossy().into_owned();
         std::fs::read_dir("/proc").ok()?.find_map(|entry| {
             let entry = entry.ok()?;
