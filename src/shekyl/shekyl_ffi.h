@@ -2456,12 +2456,10 @@ uint8_t shekyl_archival_serve_credit_epoch_ok(
     uint64_t settlement_epoch,
     uint64_t join_settlement_epoch);
 
-// ---------------------------------------------------------------------------
-// Segment-freeze pipeline (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §5.1). The
-// first-crossing boundary division lives ONLY here; both daemon hooks
-// (add_block freeze processor, pop_block revert) call the entry point and
-// C++ never divides by SHEKYL_ARCHIVAL_SEGMENT_LEAF_COUNT inline
-// (division-one-site tripwire, pipeline doc §8).
+// Segment-freeze count (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §5.1).
+// The C++ hooks that called this are deleted. The export stays until
+// DEL-008 deletes the Rust count with it. C++ does not divide by
+// SHEKYL_ARCHIVAL_SEGMENT_LEAF_COUNT.
 
 /// Frozen-segment count at a curve-tree leaf count:
 /// floor(leaf_count / SEGMENT_LEAF_COUNT).

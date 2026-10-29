@@ -338,7 +338,8 @@ pub const NOT_PORTED: &[(&str, &str)] = &[
         "held nowhere; retired by ruling (PDM-Q12, 2026-09-18), never a fact of this store, \
          nothing migrated: a shard is `[k*W, (k+1)*W)` of `cumulative_archival_len`, closed \
          by `shekyl_types::shard_of` (`SHT-Q2`, DRS-E4 §3.7), so a freeze registry has no \
-         job; the C++ J-segment table lives until cutover (CEN-L10; DRS-E4 ARW-4, SAR-5)",
+         job; the C++ J-segment table was deleted with the store flip \
+         (CEN-L10, bucket 3, 2026-10-28; DRS-E4 ARW-4, SAR-5)",
     ),
     (
         "pending_tree_leaves",

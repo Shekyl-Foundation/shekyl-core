@@ -207,16 +207,11 @@ pub unsafe extern "C" fn shekyl_attestation_root_empty(out_ptr: *mut u8) -> bool
 /// Frozen-segment count at a curve-tree leaf count — the first-crossing
 /// rule (`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` §1/§5.1).
 ///
-/// Both daemon hooks (the `add_block` freeze processor and the
-/// `pop_block` revert) call this; C++ never performs the boundary
-/// division inline (division-one-site tripwire, pipeline doc §8). It is
-/// also the C++ validator's CEN-F17 operand
-/// (`Blockchain::parent_frozen_segment_count`): LMDB keeps no archival
-/// fold, so the C++ cannot count `SHT-Q2`'s `W`-shards, and the Rust
-/// validator's `n` — `shekyl_chain_rules::closed_shards_before`, the
-/// closed archival shards of the parent's `cumulative_archival_len` — is
-/// a ruled divergence (CEN-L10), bit-identical while the escalation ships
-/// flat and closed by the cutover that deletes this entry (E4 §3.9).
+/// The C++ freeze hooks that called this are deleted. The export stays
+/// until `DEL-008` deletes `segment_freeze.rs` with it. The Rust
+/// validator's `n` is `shekyl_chain_rules::closed_shards_before`, the
+/// closed archival shards of the parent's `cumulative_archival_len`
+/// (CEN-L10, bucket 3), bit-identical while the escalation ships flat.
 #[no_mangle]
 pub extern "C" fn shekyl_archival_frozen_segment_count(leaf_count: u64) -> u64 {
     frozen_segment_count(leaf_count)

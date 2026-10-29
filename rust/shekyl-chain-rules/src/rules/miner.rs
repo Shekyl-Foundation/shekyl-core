@@ -56,11 +56,9 @@
 //! parent state ([`closed_shards_before`]): the shards of `W` archival
 //! bytes the parent chain's fold has filled (`SHT-Q2`;
 //! `ARCHIVAL_PRUNED_DAEMON_MODE.md` PDM-Q6 item 4; DRS-E4 `ARW-Q6`). The
-//! C++ template still reads its own partition — the curve tree's frozen
-//! J-segment count (`Blockchain::parent_frozen_segment_count`), the
-//! divergence CEN-L10 rules deliberate: the LMDB store keeps no archival
-//! fold, the escalation ships flat so the split is bit-identical, and the
-//! C++ is deleted at cutover rather than taught a second fold. The
+//! C++ template read its own partition — the curve tree's frozen
+//! J-segment count — the divergence CEN-L10 rules deliberate. That
+//! reader was deleted with the C++ chain (bucket 3, 2026-10-28). The
 //! arithmetic bodies for all of them are Rust already (`shekyl-economics`,
 //! adopted by the slice-4 precursor).
 //!

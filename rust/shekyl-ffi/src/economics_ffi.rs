@@ -107,14 +107,12 @@ pub extern "C" fn shekyl_compute_burn_split(
 ///
 /// Thin FFI over the canonical Rust entry
 /// [`shekyl_economics::compute_burn_split_at`]. `frozen_segment_count` is the
-/// burden operand `n` as the C++ validator has it — its frozen J-segment
-/// count (`shekyl_archival_frozen_segment_count`, `archival_ffi::schedule`),
-/// read **at parent-block state** (M3-1 cached-counter drift class) and
-/// wrapped as [`shekyl_economics::ClosedShardCount`] here, the one marshalling
-/// site. The Rust validator's `n` is the closed archival-shard count
-/// (`shekyl_chain_rules::closed_shards_before`); LMDB keeps no archival fold,
-/// so the C++ cannot take it, and the divergence is CEN-L10's — ruled,
-/// bit-identical while the escalation ships flat, closed at cutover.
+/// burden operand `n`. The C++ validator used to pass its frozen
+/// J-segment count (`shekyl_archival_frozen_segment_count`), read at
+/// parent-block state. That caller is deleted. The Rust validator's `n`
+/// is the closed archival-shard count
+/// (`shekyl_chain_rules::closed_shards_before`). The divergence is
+/// CEN-L10's, ruled, bit-identical while the escalation ships flat.
 /// Numerics stay in shipped `EconomicParams`.
 ///
 /// **The share cannot reach `miner_fee_income`** (§12.11.1 Leg 1). At the
