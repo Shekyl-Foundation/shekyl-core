@@ -34,7 +34,6 @@ set(unit_tests_sources
   economics_c2a_prime.cpp
   bulletproofs_plus.cpp
   gap7_bp_bench.cpp
-  checkpoints.cpp
   command_line.cpp
   crypto.cpp
   daemon_rpc_client.cpp
@@ -93,7 +92,6 @@ set(unit_tests_sources
   archival_pass_anchor.cpp
   archival_reward_emission.cpp
   archival_emission_ct_balance.cpp
-  checkpoint_uniformity.cpp
   sync_orphan_arm.cpp
   ct_balance_differential.cpp
   pruned_tx_hash_parity.cpp

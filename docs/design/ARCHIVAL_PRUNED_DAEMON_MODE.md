@@ -1409,8 +1409,8 @@ fires the reopening trigger both rows named.
 **Binding condition.** `D_max` binds only once a node has an anchored
 chain. A fresh node's exposure is bounded by the anchor `C` and not by
 `D_max` at any value; a node with an empty checkpoint table has no cap
-at all, which is the pin today (`init_default_checkpoints` is a
-rule-71-shaped no-op, `src/checkpoints/checkpoints.cpp:136-145`). The anchor
+at all, which is the pin today (`ReleaseAnchors` is empty on every
+network; the C++ `checkpoints` class is gone). The anchor
 is therefore a **precondition** of `D_max`, not a sibling, and
 `PDM-Q5`'s ordering item is discharged by this sentence.
 

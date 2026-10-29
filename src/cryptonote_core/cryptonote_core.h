@@ -42,7 +42,6 @@
 #include "cryptonote_core/tx_verification_utils.h"
 #include "cryptonote_protocol/cryptonote_protocol_handler_common.h"
 #include "cryptonote_protocol/enums.h"
-#include "checkpoints/checkpoints.h"
 #include "syncobj.h"
 #include "math_helper.h"
 #include "rpc/message_data_structs.h"
@@ -181,7 +180,6 @@ namespace cryptonote
     /**
       * @brief handles a single incoming block
       *
-      * periodic update to checkpoints is triggered here
       * Attempts to add the block to the Blockchain and, on success,
       * optionally updates the miner's block template.
       *
@@ -194,8 +192,7 @@ namespace cryptonote
       * @param extra_block_txs txs belonging to this block that may not be in the mempool
       * @param update_miner_blocktemplate whether or not to update the miner's block template
       *
-      * @return false if loading new checkpoints fails, or the block is not
-      * added, otherwise true
+      * @return false if the block is not added, otherwise true
       */
      bool handle_single_incoming_block(const blobdata& block_blob,
       const block *b,
@@ -206,7 +203,6 @@ namespace cryptonote
      /**
       * @brief handles an incoming block as part of a batch
       *
-      * periodic update to checkpoints is triggered here
       * Attempts to add the block to the Blockchain and, on success,
       * optionally updates the miner's block template.
       *
@@ -216,8 +212,7 @@ namespace cryptonote
       * @param extra_block_txs txs belonging to this block that may not be in the mempool
       * @param update_miner_blocktemplate whether or not to update the miner's block template
       *
-      * @return false if loading new checkpoints fails, or the block is not
-      * added, otherwise true
+      * @return false if the block is not added, otherwise true
       */
      bool handle_incoming_block(const blobdata& block_blob, const block *b,
        block_verification_context& bvc,
@@ -430,20 +425,6 @@ namespace cryptonote
       * @param pprotocol the pointer to set ours as
       */
      void set_cryptonote_protocol(i_cryptonote_protocol* pprotocol);
-
-     /**
-      * @copydoc Blockchain::get_checkpoints
-      *
-      * @note see Blockchain::get_checkpoints()
-      */
-     const checkpoints& get_checkpoints() const;
-
-     /**
-      * @copydoc Blockchain::set_checkpoints
-      *
-      * @note see Blockchain::set_checkpoints()
-      */
-     void set_checkpoints(checkpoints&& chk_pts);
 
      /**
       * @copydoc pool::have_tx
@@ -784,10 +765,6 @@ namespace cryptonote
       * @return true on success, false otherwise
       */
      bool check_block_rate();
-
-
-
-     checkpoints m_checkpoints;
 
      i_cryptonote_protocol* m_pprotocol; //!< cryptonote protocol instance
 

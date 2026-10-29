@@ -46,7 +46,6 @@ using namespace epee;
 #include "misc_language.h"
 #include "file_io_utils.h"
 #include <csignal>
-#include "checkpoints/checkpoints.h"
 #include "fcmp/ct_types.h"
 #include "fcmp/ct_semantics.h"
 #include "tx_verification_utils.h"
@@ -103,15 +102,6 @@ namespace cryptonote
       m_pprotocol = pprotocol;
     else
       m_pprotocol = &m_protocol_stub;
-  }
-  //-----------------------------------------------------------------------------------
-  const checkpoints& core::get_checkpoints() const
-  {
-    return m_checkpoints;
-  }
-  void core::set_checkpoints(checkpoints&& chk_pts)
-  {
-    m_checkpoints = std::move(chk_pts);
   }
   //-----------------------------------------------------------------------------------
   void core::stop()
@@ -361,19 +351,6 @@ namespace cryptonote
     const bool regtest = snapshot.network == static_cast<std::uint8_t>(FAKECHAIN);
     m_nettype = (test_options != NULL || regtest) ? FAKECHAIN : static_cast<network_type>(snapshot.network);
     m_config_folder = snapshot.data_dir;
-    // Uniform across every network (C2-R1b-Q2a, rule 71): checkpoint
-    // wiring is identical on mainnet, testnet and stagenet. Data may
-    // differ per network (the compiled-in list, when one ever exists);
-    // the code path may not. The compiled-in table is the only source --
-    // the data-dir checkpoints.json channel was deleted (PDM-Q-F23).
-    {
-      cryptonote::checkpoints checkpoints;
-      if (!checkpoints.init_default_checkpoints(m_nettype))
-      {
-        throw std::runtime_error("Failed to initialize checkpoints");
-      }
-      set_checkpoints(std::move(checkpoints));
-    }
     m_offline = snapshot.offline;
 
     // Seeds follow the network just settled, including FAKECHAIN. The id
