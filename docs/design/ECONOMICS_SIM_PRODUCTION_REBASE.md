@@ -2197,6 +2197,152 @@ does not exist. The validator's parameter `OnceLock` is
   has one source. The zone and `TX_WEIGHT_LIMIT` stay the pair their
   equality test names.
 
+**Amendment, 2026-10-29: the completion's placement, for ruling.**
+Written against `dev` at `c92bbdc87`, before any completion code. §5.26.1
+graded E16-1 to E16-4. The registered row's falsifier ("a production
+composition that reads a bare economic constant") was not graded, and it
+fires today. This table places every parameter it reaches. Each row is
+one home: `EconomicParams` (the params digest), `ArchivalParams` (a third
+generated struct), `RelayPolicy` (outside every digest), or kept with its
+class (derived, structural, unit/lattice). "Readers" counts production
+files per crate, tests excluded.
+
+*`EconomicParams`* (`shekyl-economics`; the params digest moves once, by
+one format bump):
+
+| Parameter | Today | Readers | Placement |
+| --- | --- | --- | --- |
+| surge factor `S` | `BLOCK_WEIGHT_SURGE_FACTOR`, generated from `block_weight_short_term_surge_factor` (4) | economics `effective_median`; chain-ingest `of_long_term`; through `medians_from`, chain-rules | Field. `effective_median` takes the set. The key exists, so the consensus digest does not move. |
+| limit multiple 2 | a literal at four sites: `apply_weight_penalty`'s `2·median`, `block_weight_limit`, chain-rules `EffectiveMedian::limit`, chain-ingest `of_long_term` | economics, chain-rules, chain-ingest | Field, one reader path. **Two things to rule.** No JSON key exists, so "generated" means a new `consensus_constants.json` key, and the consensus digest moves (the last paragraph). And the 2 in the penalty is also its zero: `R·(2M − w)·w/M²` is zero exactly at the limit. At another multiple `k` the penalty is `R·((k−1)²M² − (w−M)²)/((k−1)²M²)`, whose numerator at `k = 2` is `(2M − w)·w` exactly, so the integer result is unchanged at the shipped value; a test holds it equal over the existing penalty vectors. |
+| long-term clamp 1.7 | `long_term_weight`'s `ltem·10/17` and `ltem + ltem·7/10` | economics; chain-rules `block_weight`; FFI; the sim's median fold | Field in `SCALE` units, 1 700 000. `ltem·SCALE/clamp` is `ltem·10/17` and `ltem·clamp/SCALE` is `ltem + ⌊0.7·ltem⌋`, so both bounds are integer-identical at the shipped value. Same key ruling as the limit multiple. |
+| `blocks_per_year` | a field since #1216, which `validate` does not require to equal the DAA target's year (G6) | `EmissionSchedule`, the digest preimage, the serde wire, `SimParams::economic` | **Not a field.** `EconomicParams::blocks_per_year()` derives it from `daa_target_seconds`; `EmissionSchedule` reads the method. Two sim tests set a short year (`10_000` and `1`) for a fast fold, not because a year needs to differ from its target. They set a DAA target that divides the year (3 600 s gives 8 760; 31 536 000 s gives 1), and their expected values are recomputed at that length. A target that is not whole minutes truncates the tail per block; both are whole minutes. |
+| long-term median window | `BLOCK_WEIGHT_LONG_TERM_WINDOW`, read by `effective_median_at` | chain-rules | A const generic, as the short window is (§2.5), not a field. |
+
+*`ArchivalParams`* (`shekyl-archival-retention`; generated from
+`consensus_constants.json`, covered by the consensus digest; one accessor,
+`archival_params()`, under `check_economic_accessors.py`). Production
+reads only the default: no CLI, no config key, no RPC. The build script's
+range checks (`m ≥ 1`, `n ≥ m`, anchor lag ≥ 2) become the struct's
+`try_new`, as `EmissionSchedule::try_new` is the schedule's.
+`SETTLEMENT_EPOCH_BLOCKS > D_MAX`, checked in chain-rules `reorg.rs`
+today, joins them.
+
+| Parameter | Today | Readers | Placement |
+| --- | --- | --- | --- |
+| bond floor | `ARCHIVAL_BOND_FLOOR_ATOMIC` (750 000 000) and its `const` assert | archival-retention, chain-rules, engine-core, FFI, multisig, standoff | Field. `bond_floor_of` and its callers take the struct. The assert becomes a test on the generated default. |
+| `settlement_epoch_blocks` | `SETTLEMENT_EPOCH_BLOCKS` (10 000) | 37 files in 9 crates (the two sims and the spike among them); 6 `const` contexts (sim `swing`, `secret_draw_production`; staking-sim `JOIN_LAG_BLOCKS`; sp-t3-spike; one test) | Field. The `const` readers become functions of the set or tests on the default. This is the largest swap. |
+| reward age weight | `ARCHIVAL_REWARD_AGE_WEIGHT_MILLI` (2 000) | archival-retention, chain-rules, engine-core, FFI | Field. |
+| claim window `W` | `MAX_CLAIM_AGE_W` (26) | archival-retention, chain-ingest `frozen_membership`, chain-rules, engine-core, FFI | Field. `shekyl-types`' `MAX_CLAIM_AGE_W_EPOCHS` and `MAX_CLAIMED_EPOCH_ENTRIES` stay: they are decode bounds on stored bytes (structural). A test ties them to the default where a `const` assert does now. |
+| release cooldown | `RELEASE_COOLDOWN_EPOCHS` (2) | archival-retention, chain-rules, engine-core, FFI | Field. |
+| bond-duration pair | `BOND_DURATION_BASE_EPOCHS`, `BOND_DURATION_AGE_SCALE` (4, 4) | archival-retention | Fields. |
+| failure window `(m, n)` | `ARCHIVAL_FAILURE_WINDOW_M` / `_N` (11, 13) | archival-retention | Fields. |
+| challenges per pair | `CHALLENGES_PER_PAIR_PER_EPOCH` (3), **a hand `const` in `constants.rs`, not a JSON key** | archival-retention; the sim | Field, from a new `consensus_constants.json` key, so the consensus digest moves (the last paragraph). `COUNTED_DRAWS` stays in `shekyl-types`: it is the settlement row's width (structural). A test ties it to the default; the `const` assert goes. The sim's restated `COUNTED_DRAWS` becomes an import. |
+| attestation anchor lag | `ARCHIVAL_ATTESTATION_ANCHOR_LAG_BLOCKS` (4) | archival-retention | Field. Not in the brief's list, but it is consensus timing, neither derived nor structural, and the falsifier reaches it. |
+
+*Not `ArchivalParams`, by the dependency graph.* `ArchivalParams` lives
+in `shekyl-archival-retention`, which depends on `shekyl-types` and not
+on `shekyl-curve-tree`. These keys are read below it:
+
+| Parameter | Today | Readers | Placement |
+| --- | --- | --- | --- |
+| reorg depth `D_MAX` | `ARCHIVAL_REORG_DEPTH_BLOCKS` (720), **generated by two build scripts** (archival-retention and curve-tree) | chain-rules `D_MAX`, chain-store, chain-ingest (`2·D_MAX < SEEDHASH_EPOCH_BLOCKS`), curve-tree's freeze margin, archival-retention, engine-core; 7 `const` contexts | Kept, structural: the store's reorg window and the curve-tree freeze margin are sized by it, at compile time. One source in `shekyl-types`, the lowest crate both generators' readers depend on (ruling 3); curve-tree's generator goes. |
+| shard length | `SHARD_LENGTH`, generated in `shekyl-types` from `archival_shard_length_bytes` | types, chain-rules, chain-ingest, p-fetch, p-loopback, rpc-types | Kept, structural: the unit the closed-shard count, the shard ids and the partition are cut in (rule 18, state-shaped). No EUP-5 item names it. Reopens if one does, as a `shekyl-types`-level struct. |
+| holdings cap | `MAX_HOLDINGS_SHARDS`, generated in `shekyl-types` (4 096) | nine production crates, wire and store-codec among them | Kept, structural: a record's shard-set bound on the wire. |
+| segment leaf count | `SEGMENT_LEAF_COUNT` (25 992) | archival-retention, curve-tree, fcmp | Kept, derived: `38 × 18 × 38`, the curve-tree widths. |
+| emission epochs cap | `MAX_SETTLEMENT_EPOCHS_PER_EMISSION`, **a hand `15` in `emission_wire.rs`**, while the JSON key `max_settlement_epochs_per_emission` (15) is read by nothing but the digest | archival-retention, chain-rules, engine-core, FFI | Kept, structural (the parse bound). **Two sources with nothing tying them.** Ruling 3: generate it from the key, with a test. |
+| retention horizon | `RETENTION_HORIZON_BLOCKS` (420 000) | no production reader; the staking sim's report | Kept as the staking sim's input. Reported, not cut: a key no production composition reads goes to Rick. |
+
+*`RelayPolicy`* (`shekyl-economics`, outside every digest; generated, not
+assembled from hand constants):
+
+| Parameter | Today | Readers | Placement |
+| --- | --- | --- | --- |
+| `w_ref` | `RELAY_FLOOR_REFERENCE_TX_WEIGHT` (3 000) | `relay_floor_from`, `fee_ladder_from`; FFI; the wallet's absolute cap; the sim | Field. Both functions take the policy; shipped callers pass `relay_policy()`. Relay policy until EUP-5 D rules on the floor; if D puts the floor into consensus, D's PR moves it into `EconomicParams` with a digest bump. |
+| Standard over Economy | `STANDARD_RUNG_OVER_ECONOMY` (4) | `checked_corrected_fee_ladder`; the sim | Field, same line. |
+| Priority's factor | the `2` in `2RC/M` | `checked_corrected_fee_ladder` | Field, same line. |
+| lookback `G`, slack, fee decimals | `RELAY_FLOOR_LOOKBACK`, `RELAY_ADMISSION_SLACK_BP`, `FEE_DECIMAL_PLACES`, assembled into `RelayPolicy::SHIPPED` by hand | chain-rules, daemon-rpc, FFI, the wallet | Fields already; generated (G3). `quantized_fee` stays as the shipped spelling, defined as `RelayPolicy::SHIPPED.quantize`. |
+| claim hold | `EMISSION_CLAIM_FEE_FLOOR`, the literal 3 600 000 000 | engine-core's claim leg | Field, derived: the genesis Economy rung times the claim's weight, with a test that recomputes it. **To rule: the operands.** |
+
+*Where the relay keys live.* Ruling 2 and the brief put them in
+`config/economics_params.json`. That file's membership rule
+(`CLIENT_VERSION_CONSTANTS_VALIDATION.md` §3.7, VC-D7 and VC-D12, quoted
+in its `_comment_digest`) admits only a constant whose different value
+makes a different chain. The consensus digest hashes every key in it that
+does not begin with an underscore, and the build fails on a value that is
+not a non-negative integer. A plain relay key there enters the consensus
+digest. Three ways to keep the ruling's one file and the digest's
+membership both true:
+
+- one named block (`"relay_policy": { … }`) that the digest generator
+  (`shekyl-rpc-types/build.rs`) and its oracle
+  (`check_consensus_digest_oracle.py`) skip by name, with the membership
+  rule amended to say so and a test that the digest is unchanged by the
+  block;
+- underscore-prefixed keys the economics generator reads by name. Smallest
+  change, but it makes the underscore mean both "prose" and "relay data";
+- a second file, which the ruling's "one JSON file" excludes.
+
+The first keeps every rule true and is the one this PR builds unless
+ruled otherwise.
+
+*The claim hold's operands.* Economy is the relay floor by construction
+(`ladder.rs`), so the brief's "Economy rung" and ruling 9's "relay floor"
+are one number. Its value depends on which genesis:
+
+- the chain's genesis operands: an empty volume window (`TxVolume::ZERO`)
+  puts `M_r` at its low rail, `C` = 0.8, and the floor is 27 306 atomic
+  per weight unit;
+- the registered grid's "genesis" at the baseline volume, `C` = 1:
+  34 133.
+
+The claim's weight is what the claim leg prices: `EMISSION_NON_CLAIMS_RESERVE_BYTES`
+(49 152) plus `CLAIM_VIN_ALLOWANCE_BYTES` (2 048), 51 200. The products are
+about 1.40 SKL and 1.75 SKL. Neither reproduces 3.6 SKL, which implies a
+weight of about 105 000 at 34 133. Nothing in the tree prices a claim at
+that weight. Either way, the derived hold is about half the literal, and
+the wallet holds for fewer epochs. Both byte constants live in
+`shekyl-engine-core`, above `shekyl-economics`, so the hold is a generated
+value with its derivation in the JSON comment, and the recomputing test
+lives in engine-core, where the floor and the weight are both visible. No
+new dependency edge.
+
+*The cover rung.* `shekyl-standoff`'s default build depends on nothing:
+it is the float-free path a wallet ships, and `shekyl-archival-retention` pulls
+in the FCMP and PQC crates. Reading the field there would add that edge.
+Instead `draw_cover_amount` takes the rung as an argument, its callers
+pass `archival_params().bond_floor_atomic`, and standoff's build script
+goes. Its golden vector passes the gate-4 value.
+
+*The lattice and the windows (G5, G7).* The sim's production-arm pricer
+and `calibration.rs` take the run's `RelayPolicy` and call its `quantize`;
+`fee_ladder.rs`'s admission reads the run's policy where it reads
+`relay_policy()` now. The long-term window becomes a const generic in
+chain-rules. The sim's `MedianWindow` is parameterised by the same two
+const generics rather than calling `medians_over` per block: that call is
+`O(window)` over a 100 000-row window, at every block of every scenario.
+The existing equality test between the rolling fold and `medians_over`
+holds the two together.
+
+*Kept, with class* (the §2.6 list; the code commits extend it to every
+remaining reader):
+
+| Constant | Class | Reason |
+| --- | --- | --- |
+| `SCALE` | unit | The unit the other fields are written in. |
+| `COIN`, `DISPLAY_DECIMAL_POINT` | unit | The atomic unit. |
+| `TX_WEIGHT_LIMIT` | derived | `MIN_BLOCK_WEIGHT / 2 − COINBASE_RESERVE`, held to the zone by its pair test (E16-4). The `/ 2` is a transaction's share of the zone, a separate number from the limit multiple. |
+| `COINBASE_RESERVE_MARGIN` | derived | Zero by its derivation: the reserve is the grammar's largest coinbase, and any growth is a grammar change that re-runs it. The brief lists it to promote; it has no value to sweep. |
+| `MAX_CLAIM_AGE_W_EPOCHS`, `MAX_CLAIMED_EPOCH_ENTRIES`, `COUNTED_DRAWS`, `SERVE_THRESHOLD_PASSES` | structural | Decode bounds and the settlement row's width, in stored bytes. |
+| `BLOCK_WEIGHT_SHORT_TERM_WINDOW`, `BLOCK_WEIGHT_LONG_TERM_WINDOW`, `TX_VOLUME_WINDOW` | structural | Const generics; production instantiates the generated lengths. |
+| the `daa_*` and `fcmp_reference_*` keys, `ct_type_fcmp_plus_plus_pqc` | not economic | Difficulty and proof consensus; outside the row. |
+| `CALIBRATION_GENERATION` | not a parameter | A tag on the set, not a value the chain computes with. |
+
+The digest consequences reach the predictions, which follow the ruling:
+the brief's E16-10 says the consensus digest does not move. Three rows above add consensus keys (the
+limit multiple, the clamp, the challenge count). Unless they are ruled
+kept, the consensus digest moves once, in the same commit as the params
+digest's format bump.
+
 ### 5.26.1 What the sweep did (2026-10-28)
 
 Graded against §5.26. The default `--stage2` run is the two ignored
