@@ -22,14 +22,15 @@ use crate::fee::{
 
 /// Basis points in one whole. [`RelayPolicy::admission_slack_bp`] is
 /// written in these. A slack at or above this admits at zero.
-const BASIS_POINTS: u128 = 10_000;
+pub const BASIS_POINTS: u32 = 10_000;
 
 /// The relay numbers a node admits and quotes with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RelayPolicy {
     /// Lookback depth `G`, in blocks.
     pub lookback: u64,
-    /// Admission slack, basis points. The shipped value is zero.
+    /// Admission slack, basis points ([`BASIS_POINTS`] is one whole). The
+    /// shipped value is zero.
     pub admission_slack_bp: u32,
     /// Decimal places the fee lattice keeps.
     pub fee_decimal_places: u32,
@@ -86,8 +87,8 @@ impl RelayPolicy {
     #[must_use]
     pub fn admitted_floor(self, floor: u64) -> u64 {
         let floor_wide = u128::from(floor);
-        let reduction =
-            floor_wide.saturating_mul(u128::from(self.admission_slack_bp)) / BASIS_POINTS;
+        let reduction = floor_wide.saturating_mul(u128::from(self.admission_slack_bp))
+            / u128::from(BASIS_POINTS);
         let admitted = floor_wide.saturating_sub(reduction);
         u64::try_from(admitted).expect("slack reduced a floor above the floor it started from")
     }
@@ -131,6 +132,7 @@ mod tests {
         let policy = RelayPolicy::SHIPPED;
         assert_eq!(policy.lookback, 5);
         assert_eq!(policy.admission_slack_bp, 0);
+        assert_eq!(BASIS_POINTS, 10_000);
         assert_eq!(policy.fee_decimal_places, 6);
         assert_eq!(policy.emission_claim_fee_floor, 3_600_000_000);
         assert_eq!(RelayPolicy::default(), policy);
@@ -152,7 +154,7 @@ mod tests {
         assert_ne!(finer.quantize(1, 1), shipped.quantize(1, 1));
 
         let open = RelayPolicy {
-            admission_slack_bp: 10_000,
+            admission_slack_bp: BASIS_POINTS,
             ..shipped
         };
         assert_eq!(open.admitted_floor(100_000), 0);

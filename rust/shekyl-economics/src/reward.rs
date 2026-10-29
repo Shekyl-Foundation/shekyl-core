@@ -5,7 +5,7 @@
 
 //! The paid-reward composition: one function, two callers.
 //!
-//! [`paid_block_reward`], [`compute_emission_split`], [`compute_fee_burn`]
+//! [`paid_block_reward`], [`split_block_emission`], [`compute_fee_burn`]
 //! and [`advance_already_generated`] each own one step. [`price_emission`]
 //! owns the order they run in, so the block template and the validator's
 //! derived arm cannot price two figures. The inputs are already derived —
@@ -17,7 +17,7 @@
 //! Height [`GENESIS_HEIGHT`] on [`price_emission`] is the **producer's**
 //! arm (CEN-G13): [`paid_block_reward`] runs, and the whole paid reward
 //! goes to the miner. Below `EMISSION_SPLIT_EPOCH` the set's schedule
-//! pays no staker share, which is [`compute_emission_split`]'s answer on
+//! pays no staker share, which is [`crate::compute_emission_split`]'s answer on
 //! the shipped set. This module adds no arm of its own. A set whose
 //! schedule differs from the shipped one splits on its own schedule.
 //!
@@ -152,7 +152,7 @@ impl RewardArithmetic {
 ///
 /// At [`GENESIS_HEIGHT`] the paid reward goes whole to the miner; from
 /// block 1 it is split on `inputs.params`'s emission schedule (the
-/// shipped schedule is [`compute_emission_split`]). The fee burn runs at every
+/// shipped schedule is [`crate::compute_emission_split`]). The fee burn runs at every
 /// height, including genesis: a producer listing nothing passes a zero fee
 /// sum and the three burn legs are zero.
 ///

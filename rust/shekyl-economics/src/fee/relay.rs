@@ -65,8 +65,8 @@ pub fn relay_fee_floor(
     checked_relay_fee_floor(base_reward, median, ref_tx_weight, c, params).unwrap_or(u64::MAX)
 }
 
-/// Admit on the shipped [`crate::RelayPolicy`]: `fee` against
-/// [`crate::RelayPolicy::admits`] of [`crate::relay_policy`].
+/// Admit on the shipped [`crate::RelayPolicy`] from [`crate::relay_policy()`]:
+/// `fee` against [`crate::RelayPolicy::admits`].
 ///
 /// `floors` is the `(h′−G ..= h′)` window; only the minimum is read, so
 /// order carries no meaning. A short window is stricter, never looser.

@@ -362,7 +362,7 @@ impl EconomicParams {
         )
     }
 
-    /// [`Self::emission_schedule`] as a [`Result`](Result).
+    /// [`Self::emission_schedule`] as a [`Result`].
     pub fn try_emission_schedule(
         &self,
     ) -> Result<crate::emission_share::EmissionSchedule, EconomicParamsError> {
