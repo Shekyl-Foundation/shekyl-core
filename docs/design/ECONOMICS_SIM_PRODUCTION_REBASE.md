@@ -2213,15 +2213,19 @@ by one format bump:
 | Parameter | At the pin | Readers | Placement |
 | --- | --- | --- | --- |
 | surge factor `S` | `BLOCK_WEIGHT_SURGE_FACTOR`, generated from `block_weight_short_term_surge_factor` (4) | economics `effective_median`; chain-ingest `of_long_term`; through `medians_from`, chain-rules | Field. `effective_median` takes the set. The key exists. |
-| limit multiple | the literal 2 at four Rust sites: `apply_weight_penalty`'s `2·median`, `block_weight_limit`, chain-rules `EffectiveMedian::limit`, chain-ingest `of_long_term`; and C++ `update_next_cumulative_weight_limit` | economics, chain-rules, chain-ingest; C++ | Field in `SCALE` units, `block_weight_limit_multiple` = 2 000 000, from a new `consensus_constants.json` key. The C++ site reads a macro generated from the same key. The penalty is generalised to the multiple (below). `validate` bounds it: above `SCALE`, at most the stated maximum. |
+| limit multiple | the literal 2 at four Rust sites: `apply_weight_penalty`'s `2·median`, `block_weight_limit`, chain-rules `EffectiveMedian::limit`, chain-ingest `of_long_term`; and C++ `update_next_cumulative_weight_limit` | economics, chain-rules, chain-ingest; C++ | Field in `SCALE` units, `block_weight_limit_multiple` = 2 000 000, from a new `consensus_constants.json` key. The penalty is generalised to the multiple (below). `validate` bounds it: above `SCALE`, at most four times the median, on a grain of tenths. |
 | long-term clamp 1.7 | `long_term_weight`'s `ltem·10/17` and `ltem + ltem·7/10` | economics; chain-rules `block_weight`; FFI; the sim's median fold | Field in `SCALE` units, `long_term_weight_clamp` = 1 700 000, from a new key. `⌊ltem·SCALE/clamp⌋ = ⌊ltem·10/17⌋` and `⌊ltem·clamp/SCALE⌋ = ltem + ⌊0.7·ltem⌋`, so both bounds are integer-identical at the shipped value. The C++ reaches it only through `shekyl_long_term_block_weight`. |
 | `blocks_per_year` | a field since #1216, which `validate` does not require to equal the DAA target's year (G6) | `EmissionSchedule`, the digest preimage, the serde wire, `SimParams::economic` | **Not a field.** `EconomicParams::blocks_per_year()` derives it from `daa_target_seconds`; `EmissionSchedule` reads the method. Two sim tests set a short year (`10_000` and `1`) for a fast fold. They set a DAA target that divides the year (3 600 s gives 8 760; 31 536 000 s gives 1), and their expected values are recomputed at that length. Both targets are whole minutes, so the tail per block does not truncate. |
 | long-term median window | `BLOCK_WEIGHT_LONG_TERM_WINDOW`, read by `effective_median_at` | chain-rules | A const generic, as the short window is, not a field. |
 
 The C++ reads of `S` go through `shekyl_effective_block_weight_median`,
 and the reads of 1.7 through `shekyl_long_term_block_weight`. Both are
-Rust owners. The C++ limit `median * 2` is the one C++ site that spells
-a value itself; it reads the generated macro.
+Rust owners. The C++ limit `median * 2` in
+`Blockchain::update_next_cumulative_weight_limit` is the one C++ site
+that spells a value itself. It is not migrated: new code goes into Rust,
+and the DRS-X flip deletes that file with the C++ chain. Until then it
+holds the shipped 2, which is also the only value production reads; the
+key moves only by a ruling.
 
 *The penalty at a multiple `k`.* Today's penalty is
 `R·(2M − w)·w / M²`, zero exactly at the limit `2M`, computed as

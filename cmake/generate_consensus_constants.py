@@ -48,11 +48,6 @@ KEYS_INTEGER = {
     # multiplies it by a u64 median; the value is small but the product
     # is not. Rust owner: shekyl-economics::effective_median.
     "block_weight_short_term_surge_factor": "u64",
-    # The block-weight limit as a multiple of the effective median, in
-    # SCALE units (2000000 = 2x). The penalty reaches zero at the same
-    # multiple. Rust owner: shekyl-economics::EconomicParams::
-    # block_weight_limit_multiple; the C++ limit reads this macro.
-    "block_weight_limit_multiple_scaled": "u64",
     # Penalty-free block-weight zone (bytes): the median is soft-raised to
     # it before the weight penalty and the block-weight limit is twice it
     # (CEN-F14b, CEN-G6b). Was the hand-written
@@ -226,13 +221,6 @@ def main() -> int:
 // of the JSON key.
 #define SHEKYL_BLOCK_WEIGHT_SHORT_TERM_SURGE_FACTOR \
     {emit("block_weight_short_term_surge_factor")}
-
-// The block-weight limit as a multiple of the effective median, in
-// SCALE units (1000000 = 1.0). The Rust owner is shekyl-economics
-// (EconomicParams::block_weight_limit_multiple, block_weight_limit);
-// this macro is the C++ spelling of the JSON key.
-#define SHEKYL_BLOCK_WEIGHT_LIMIT_MULTIPLE_SCALED \
-    {emit("block_weight_limit_multiple_scaled")}
 
 // Penalty-free block-weight zone in bytes (CEN-F14b / G6b). The Rust owner
 // is shekyl-economics (EconomicParams::full_reward_zone); this macro is

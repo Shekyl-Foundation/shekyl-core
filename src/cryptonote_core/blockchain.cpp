@@ -5874,13 +5874,7 @@ bool Blockchain::update_next_cumulative_weight_limit(uint64_t *long_term_effecti
   if (m_current_block_cumul_weight_median <= full_reward_zone)
     m_current_block_cumul_weight_median = full_reward_zone;
 
-  // The limit multiple is generated from consensus_constants.json in SCALE
-  // units (Rust owner: shekyl_economics::block_weight_limit). This C++
-  // spelling holds only whole multiples; production ships 2x.
-  static_assert(SHEKYL_BLOCK_WEIGHT_LIMIT_MULTIPLE_SCALED % SHEKYL_FIXED_POINT_SCALE == 0,
-                "the C++ block-weight limit spells only a whole multiple of the median");
-  m_current_block_cumul_weight_limit = m_current_block_cumul_weight_median
-    * (SHEKYL_BLOCK_WEIGHT_LIMIT_MULTIPLE_SCALED / SHEKYL_FIXED_POINT_SCALE);
+  m_current_block_cumul_weight_limit = m_current_block_cumul_weight_median * 2;
 
   // FL-R23 ring: every tip change — connect, pop, reorg, init — reaches this
   // function, so the ring is maintained here and nowhere else, keyed on
