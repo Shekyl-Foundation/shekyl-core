@@ -1471,18 +1471,17 @@ IBD floor from DRS-0).
 compare) and runner `scripts/bench/drs_bench.py` (`measure` / `check` /
 `validate`) with selftest `scripts/bench/test_drs_bench.py`, wired in
 `docs-gates.yml`.
-The **LMDB arm only**. The redb arm is a **second binary**, not a flag: the
-daemon never compiles two store engines into one build (ruled 2026-09-14),
-so there is no `--engine` selector on the harness and no `new_db()` switch to
-watch for. The harness labels each artifact from the one backend its build
-carries, recorded as `engine_selected_by`; `check` refuses two same-backend
-artifacts because §1.3's floor is a ratio *between* backends. The redb arm
-arrives when a redb-backed `shekyld` build target exists and reports its
-backend — the named blocker, carried in `FOLLOWUPS.md` with its falsifier,
-not by a source probe. An earlier probe that regexed `new_db()` for an
-engine switch was deleted with the flag: it guarded a transition that is
-not on the roadmap. The FFI-export clause is a stated
-fact, not a probed leg.
+**Both arms, one backend per binary.** The daemon never compiles two store
+engines into one build (ruled 2026-09-14), so there is no `--engine`
+selector on the harness and no `new_db()` switch to watch for. The harness
+labels each artifact from the durability line the daemon it ran wrote
+(`engine_selected_by: readback`): the C++ daemon's `Database sync:` names
+`lmdb`, the Rust store's `Store durability:` names `redb`; the pre-flip
+selector stays so the C++ baselines validate. `check` refuses two
+same-backend artifacts because §1.3's floor is a ratio *between* backends,
+and compares the policy the two share, not the engine-specific line. An
+earlier probe that regexed `new_db()` for an engine switch was deleted with
+the flag: it guarded a transition that is not on the roadmap.
 
 Rows landed, all under one scenario label `ibd_coinbase_only`: **IBD wall time**
 (the primary), plus **CPU time**, **peak RSS** and **store size** as free
@@ -1634,24 +1633,27 @@ Until then §1.3's floor stands exactly as frozen, and this paragraph records an
 open question rather than a case for moving it.
 
 **Durability is measured, not labelled.** The daemon takes no sync-mode option
-(IG-Q4): the DRS lane decided `db-sync-mode` as a constant, DRS-D9's `safe`
-(Rick, 2026-10-26), parsed as an explicit choice rather than a default, so
-`Blockchain::safesyncmode` is a no-op and no sync turns the fsync off.
-`core::init` logs `Database sync: flags=…, sync_mode=…, threshold=…` for what
-it resolved. `flags` is the `DBF_*` bits and `sync_mode` is
-`blockchain_db_sync_mode` as an integer: `db_nosync` (3) leaves the fsync to
-the store, and `db_defaultsync` (0) is the open that lets `safesyncmode` turn
-it off. The bench reads that line twice — from the generating seed, before any
-block is generated, and from the subject, before the sync is timed. Artifacts
-carry `durability.observed: true` with the line, and the gate **refuses** one
-whose flag bits and parenthetical do not name the same open, whose open is not
-`safe`, whose `sync_mode` is not `db_nosync`, or whose recorded label is not
-the open the line names. The integer is on the line written at open, so a
-default-safe daemon is refused before generation.
+(IG-Q4): the DRS lane decided `db-sync-mode` as a constant (Rick,
+2026-10-26). The Rust store's constant is
+`shekyl_chain_store::store::DURABILITY`, `redb::Durability::Immediate`, an
+fsync per commit that every write transaction is armed with; nothing turns it
+off for a sync. The node logs it at open:
+`Store durability: immediate (an fsync per commit, DRS-D9; redb Durability::Immediate)`.
+The C++ daemon logged `Database sync: flags=…, sync_mode=…, threshold=…` at its
+LMDB open; the baselines under the DX-Q8 pin carry that line, and the `safe` /
+`db_nosync` reading of it stands for them. The bench reads the line twice —
+from the generating seed, before any block is generated, and from the subject,
+before the sync is timed. Artifacts carry `durability.observed: true` with the
+line, and the gate **refuses** one whose line names a durability other than its
+engine's (`immediate` for `redb`, the `safe` open at `db_nosync` for `lmdb`),
+or whose recorded label is not the engine the line names. The word is on the
+line written at open, so a daemon that opened otherwise is refused before
+generation.
 
-**A4 on the LMDB path.** `parse_db_sync_mode` fails closed on an unrecognised
-token, the resolved posture is logged, and the posture is DRS-D9's through the
-whole of a sync, IBD included: the daemon's default is its only mode.
+**A4 on the Rust store.** The durability is a constant the open declares
+(`DURABILITY`), not a default the engine supplies, and `StoreError::Durability`
+refuses an open the engine will not arm; the posture is DRS-D9's through the
+whole of a sync, IBD included.
 
 A DRS-D9 baseline is the daemon's IBD as shipped. Both engines pay the fsync,
 so the **ratio** compares engines, not durability policies.
@@ -2657,7 +2659,7 @@ reasons row for row** — two instruments, one field, cross-checked:
 excluded nor unconditionally rebuildable.** `archival_attestation_witness` is
 class `small` — digested, consensus-bearing, not excluded by anyone — and it
 reaches the store through `block_connect_supplement::attestation_witness`
-(`src/cryptonote_core/tx_verification_utils.h:87`), populated by the transport,
+(`src/cryptonote_core/tx_verification_utils.h:67`), populated by the transport,
 *"empty until the transport populates it"*. Its bytes ride the coinbase
 transaction's **prunable** side (`ARCHIVAL_CREDIT_WIRE.md`, prunable-residence
 row: *"Header kept; 3.43 KB countersignature on the coinbase-tx prunable

@@ -4,8 +4,8 @@
 # All rights reserved.
 # BSD-3-Clause
 #
-# DRS-BENCH gate: artifact schema, refusals, §1.3 comparator, and the redb-engine
-# blocker probe. The runner that produces artifacts is `drs_bench.py`.
+# DRS-BENCH gate: artifact schema, refusals, §1.3 comparator, and the durability
+# readback that labels the engine. The runner that produces artifacts is `drs_bench.py`.
 #
 # Subject: `docs/design/DAEMON_REDB_STORE.md` §7.4 against §1.3. An artifact is a
 # record of every live axis under one set of measurement conditions; `check`
@@ -31,12 +31,20 @@ IBD_FLOOR_RATIO = 1.25       # <= passes
 IBD_HARD_FAIL_RATIO = 1.50   # >  hard-fails after one documented mitigation cycle
 PEAK_RSS_RATIO = 2.0         # <= passes
 
-# The durability DRS-D9 requires, as the daemon names it in its readback.
-# The daemon takes no sync-mode option (IG-Q4); its constant is `safe`, and
-# the readback below is what shows a run had it.
-ALLOWED_SYNC_MODES = ("safe",)
+# The durability DRS-D9 requires, as each daemon names it in its readback,
+# keyed by the engine whose spelling it is. Neither binary takes a sync-mode
+# option (IG-Q4): each opens its one store at a constant, and the readback
+# below is what shows a run had it. One backend per build, never a switch
+# (ruled 2026-09-14), so an artifact's `engine` says which spelling applies:
+#   lmdb (the C++ daemon)   `Database sync: flags=0x1 (safe), sync_mode=3, ...`
+#   redb (the Rust store)   `Store durability: immediate (an fsync per commit, ...)`
+ALLOWED_SYNC_MODES = {"lmdb": "safe", "redb": "immediate"}
 
-# The daemon reports the durability posture it RESOLVED, as
+# The one policy both spellings are, as an artifact records it. `check`
+# compares this across the two engines; the spellings differ by construction.
+DURABILITY_POLICY = "DRS-D9 full-fsync-per-commit"
+
+# The C++ daemon reports the durability posture it RESOLVED, as
 #   Database sync: flags=0x1 (safe), sync_mode=3, threshold=1 blocks
 # `flags` and the parenthetical name one open. `sync_mode` is
 # `blockchain_db_sync_mode` printed as an integer (blockchain.h). The line is
@@ -45,6 +53,24 @@ ALLOWED_SYNC_MODES = ("safe",)
 # Added for A4 so the posture is checkable from the node's own log.
 RESOLVED_SYNC_RE = r"Database sync: flags=0x([0-9a-f]+)([^,]*), sync_mode=(\d+)"
 _SYNC_SEGMENT_RE = re.compile(r"\(([^)]*)\)")
+
+# The Rust store (`rust/shekyl-chain-store`) reports the durability it opened
+# with, on one line at start:
+#   Store durability: immediate (an fsync per commit, DRS-D9; redb Durability::Immediate)
+# The word after the colon is the store's `DURABILITY` constant
+# (`Durability::Immediate`, an fsync per commit). The line carries no flag bits
+# and no sync-mode integer because the store has no switch that turns the
+# fsync off later: the word is the whole posture. The parenthetical is prose
+# and is not pinned, so a rewording that changes no policy breaks no gate.
+STORE_DURABILITY_RE = r"Store durability: (\w+)"
+STORE_DURABILITY_IMMEDIATE = "immediate"
+
+# What each binary's readback line carries, by the engine that writes it. The
+# runner finds the line by these; `readback_engine` names the engine from them.
+READBACK_MARKERS = {
+    "lmdb": "Database sync: flags=0x",
+    "redb": "Store durability: ",
+}
 
 # `DBF_*` in blockchain_db.h, which is the hex `core::init` prints.
 DBF_SAFE = 0x1
@@ -134,25 +160,93 @@ def resolved_sync_report(line) -> Optional[ResolvedSyncReport]:
     return ResolvedSyncReport(int(match.group(1), 16), segments, int(match.group(3)))
 
 
-def resolved_sync_mode(line) -> Optional[str]:
-    """The open the parentheticals name (`safe`, `fast`, `fastest`), or None."""
-    report = resolved_sync_report(line)
-    if report is None:
+class StoreDurabilityReport(NamedTuple):
+    """One `Store durability:` line from the Rust store's open.
+
+    `mode` is the word after the colon: the store's `DURABILITY` constant as
+    it names it. There are no flag bits and no ordinal to cross-check; the
+    store has no later switch, so the one word is the posture.
+    """
+
+    mode: str
+
+
+def store_durability_report(line) -> Optional[StoreDurabilityReport]:
+    """The Rust store's durability line, parsed, or None when `line` is not one."""
+    if not isinstance(line, str):
         return None
-    return report.worded_open()
+    match = re.search(STORE_DURABILITY_RE, line)
+    if match is None:
+        return None
+    return StoreDurabilityReport(match.group(1))
+
+
+def readback_engine(line) -> Optional[str]:
+    """The engine whose daemon wrote this readback line, or None.
+
+    `Database sync:` is the C++ daemon's LMDB open; `Store durability:` is the
+    Rust store's redb open. One backend per build, never a switch, so the line
+    a binary writes at start names the one store it opens -- which is what the
+    artifact's `engine` label is derived from.
+    """
+    if resolved_sync_report(line) is not None:
+        return "lmdb"
+    if store_durability_report(line) is not None:
+        return "redb"
+    return None
+
+
+def resolved_sync_mode(line) -> Optional[str]:
+    """The durability the readback names, in that daemon's own spelling, or None.
+
+    The C++ line: the open its parentheticals name (`safe`, `fast`, `fastest`).
+    The Rust line: the word after `Store durability:` (`immediate` when DRS-D9).
+    """
+    report = resolved_sync_report(line)
+    if report is not None:
+        return report.worded_open()
+    store = store_durability_report(line)
+    if store is not None:
+        return store.mode
+    return None
 
 
 def resolved_line_refusals(line) -> list:
-    """Why a daemon's resolved sync report is not DRS-D9's, or [] if it is.
+    """Why a daemon's durability readback is not DRS-D9's, or [] if it is.
 
     One rule for every caller: the finished artifact, the generating seed
     before any block is generated, and the subject before its sync is timed.
+    Either binary's line is judged: the C++ daemon's `Database sync:` report
+    must be the safe open at db_nosync with no NOSYNC marker; the Rust store's
+    `Store durability:` line must say `immediate`. Both are an fsync per
+    commit, each in its engine's spelling.
     """
     report = resolved_sync_report(line)
-    if report is None:
-        return [f"is {str(line)[:60]!r}, which does not carry the daemon's resolved "
-                "sync report. That line IS the readback: without it nothing shows "
-                "the durability the store was opened with"]
+    if report is not None:
+        return _lmdb_line_refusals(line, report)
+    store = store_durability_report(line)
+    if store is not None:
+        return _redb_line_refusals(line, store)
+    return [f"is {str(line)[:60]!r}, which does not carry the daemon's resolved "
+            "sync report (the C++ daemon's `Database sync:` line) or the store's "
+            "durability line (the Rust store's `Store durability:` line). That "
+            "line IS the readback: without it nothing shows the durability the "
+            "store was opened with"]
+
+
+def _redb_line_refusals(line, store) -> list:
+    """The Rust store's line, judged: DRS-D9 on the redb path is `immediate`."""
+    if store.mode == STORE_DURABILITY_IMMEDIATE:
+        return []
+    shown = line.strip()[:120]
+    return [f"reports Store durability: {store.mode}; DRS-D9 on the redb path is "
+            f"{STORE_DURABILITY_IMMEDIATE!r} (an fsync per commit, redb "
+            "Durability::Immediate), so the store was opened WITHOUT an fsync per "
+            f"commit: {shown}"]
+
+
+def _lmdb_line_refusals(line, report) -> list:
+    """The C++ daemon's line, judged: the safe open at db_nosync, no NOSYNC word."""
     shown = line.strip()[:120]
     reasons = []
     flagged = report.flagged_open()
@@ -210,22 +304,33 @@ ALLOWED_DISK_CLASS_SOURCES = ("probed", "operator-declared")
 # artifact is what lets a reader check that.
 LOADAVG_FIELDS = ("loadavg_1m_at_start", "loadavg_1m_at_end", "loadavg_5m_at_end")
 
-ENGINE_DEFAULT_LMDB = "daemon-default-lmdb (no engine switch exists)"
-
-# Every selector this gate knows, mapped to the engine it actually selects. An
-# artifact's `engine` must equal the engine its selector selects, in BOTH
-# directions: `redb` claimed under the LMDB default is a relabelled run, and
-# `lmdb` claimed under a redb selector is equally incoherent -- the earlier check
-# caught only the first, so a hand-authored artifact could pass by inverting it.
+# How an artifact's `engine` label was established. One backend per build; the
+# daemon never compiles two store engines into one binary (ruled 2026-09-14),
+# so there is no engine flag and the label comes from the binary, not from an
+# operator.
 #
-# There is deliberately NO redb entry. The runner has no engine selection path:
-# it records ENGINE_DEFAULT_LMDB unconditionally because the daemon always opens
-# LMDB. Until a real selection path exists and records its own provenance, an
-# `engine: redb` artifact cannot be produced OR validated -- so the first run
-# after DRS-E1 lands cannot spend a full measurement on LMDB and discover it at
-# shutdown. Adding the engine here is part of wiring the redb arm, not a
-# precondition for it.
-ENGINE_SELECTORS = {ENGINE_DEFAULT_LMDB: "lmdb"}
+# ENGINE_DEFAULT_LMDB is what the runner recorded before the store flip, when
+# every daemon opened LMDB and the readback could only be the `Database sync:`
+# line; the C++ baseline artifacts carry it. ENGINE_READBACK is what the runner
+# records now: the engine is read out of the durability line the daemon logged
+# at start (`Database sync:` is the LMDB open, `Store durability:` the redb
+# open), which is the one store the binary opens.
+ENGINE_DEFAULT_LMDB = "daemon-default-lmdb (no engine switch exists)"
+ENGINE_READBACK = ("the daemon's own durability line at start: the one store the "
+                   "binary opens")
+
+# Every selector this gate knows, mapped to the engines it can name. An
+# artifact's label must be one its selector can name, and -- under either
+# selector -- the engine the recorded readback line was written by. Both
+# directions: `redb` claimed over a `Database sync:` line is a relabelled LMDB
+# run, which as a candidate would pass §1.3's floor at a ratio near 1.0 with no
+# redb store exercised; `lmdb` claimed over a `Store durability:` line is
+# equally incoherent. An unknown selector is an unverifiable claim about which
+# store ran, and is refused.
+ENGINE_SELECTORS = {
+    ENGINE_DEFAULT_LMDB: frozenset({"lmdb"}),
+    ENGINE_READBACK: frozenset({"lmdb", "redb"}),
+}
 
 # A STATED BOUND ON WHAT A FIXTURE GENERALISES TO, recorded for the same reason as
 # `fs_type`: it is a condition of the measurement, not a detail.
@@ -343,14 +448,15 @@ def artifact_refusals(a):
     elif sel not in ENGINE_SELECTORS:
         r.append(f"engine_selected_by is {sel!r}, which this gate does not know. Known "
                  f"selectors: {sorted(ENGINE_SELECTORS)}. An unknown selector is an "
-                 "unverifiable claim about which store was exercised; a redb selector "
-                 "belongs here as part of wiring the redb arm, alongside the runner "
-                 "path that actually selects it")
-    elif a.get("engine") != ENGINE_SELECTORS[sel]:
-        r.append(f"engine is {a.get('engine')!r} but engine_selected_by selects "
-                 f"{ENGINE_SELECTORS[sel]!r}. The label and the mechanism disagree, so "
-                 "one of them is false: as a candidate this would pass §1.3's floor at "
-                 "a ratio near 1.0 without the claimed store being exercised at all")
+                 "unverifiable claim about which store was exercised; the runner "
+                 "records the one it used, and a new one belongs here alongside the "
+                 "runner path that establishes it")
+    elif a.get("engine") not in ENGINE_SELECTORS[sel]:
+        r.append(f"engine is {a.get('engine')!r} but engine_selected_by {sel!r} can "
+                 f"only name {sorted(ENGINE_SELECTORS[sel])}. The label and the "
+                 "mechanism disagree, so one of them is false: as a candidate this "
+                 "would pass §1.3's floor at a ratio near 1.0 without the claimed "
+                 "store being exercised at all")
     if a.get("thresholds_frozen_at") != FROZEN_AT:
         r.append(f"thresholds_frozen_at is {a.get('thresholds_frozen_at')!r}, not "
                  f"{FROZEN_AT!r} — this artifact was produced against a different "
@@ -368,9 +474,22 @@ def artifact_refusals(a):
         r.append("durability block absent — §1.3(3): artifacts MUST record durability "
                  "configuration, and DRS-D9 is the policy they must record")
     else:
-        if d.get("sync_mode") not in ALLOWED_SYNC_MODES:
-            r.append(f"durability.sync_mode is {d.get('sync_mode')!r}; only "
-                     f"{list(ALLOWED_SYNC_MODES)} satisfies DRS-D9 on the LMDB path")
+        # Per engine: DRS-D9 is one policy with two spellings, and the label must
+        # be the labelled engine's. An lmdb artifact saying `immediate`, or a redb
+        # one saying `safe`, carries a spelling its own daemon cannot have logged.
+        engine = a.get("engine")
+        want = ALLOWED_SYNC_MODES.get(engine)
+        if want is None:
+            # The engine is already refused above; the mode still has to be one
+            # of the two DRS-D9 spellings rather than anything at all.
+            if d.get("sync_mode") not in ALLOWED_SYNC_MODES.values():
+                r.append(f"durability.sync_mode is {d.get('sync_mode')!r}; DRS-D9 is "
+                         f"spelled per engine as {ALLOWED_SYNC_MODES}")
+        elif d.get("sync_mode") != want:
+            r.append(f"durability.sync_mode is {d.get('sync_mode')!r}; on the {engine} "
+                     f"path DRS-D9 is spelled {want!r} (per engine: "
+                     f"{ALLOWED_SYNC_MODES}), so this label is not that engine's "
+                     "DRS-D9")
         argv = d.get("imposed_argv")
         if not isinstance(argv, list) or not argv:
             r.append("durability.imposed_argv absent — the argv is the record of the "
@@ -387,6 +506,13 @@ def artifact_refusals(a):
             r.append(f"durability.sync_mode is {d.get('sync_mode')!r}, which is not the "
                      f"mode the daemon reported ({reported!r}): the label and the "
                      "readback disagree")
+        # The line names the store that wrote it, under EITHER selector: a redb
+        # label over the C++ daemon's `Database sync:` line is an LMDB run.
+        named = readback_engine(line)
+        if named is not None and engine in ALLOWED_SYNC_MODES and named != engine:
+            r.append(f"engine is {engine!r} but durability.resolved_log_line is the "
+                     f"{named} daemon's ({READBACK_MARKERS[named]!r}...): the label "
+                     "and the readback name different stores, so one of them is false")
 
     env = a.get("environment")
     if not isinstance(env, dict):
@@ -602,10 +728,23 @@ def _masked_argv(a):
 
 
 def _durability_policy(a):
-    """The durability block minus the argv, which is compared under the mask."""
-    d = dict(a.get("durability", {}))
-    d.pop("imposed_argv", None)
-    return d
+    """The durability POLICY the two artifacts must share: `policy` and `observed`.
+
+    Not the whole block. `imposed_argv` is compared separately, under the
+    path/port mask. `sync_mode`, `resolved_log_line` and `readback` are the
+    engine's own spelling of the policy and differ between the two binaries by
+    construction: the C++ daemon writes `Database sync: flags=0x1 (safe),
+    sync_mode=3`, the Rust store writes `Store durability: immediate (...)`,
+    and each artifact's readback text names its own line (the C++ baseline's
+    readback text already differs from the three committed artifacts', so that
+    field never was a comparison key). Comparing those would refuse every real
+    lmdb-vs-redb pair, which is the one pair §1.3 is about. `artifact_refusals`
+    has already held each artifact's spelling to its own engine's DRS-D9, so
+    what is left to compare is that both record the same policy and both
+    observed it.
+    """
+    d = a.get("durability", {})
+    return {"policy": d.get("policy"), "observed": d.get("observed")}
 
 
 def comparability_refusals(base, cand):
@@ -629,10 +768,14 @@ def comparability_refusals(base, cand):
                  "load-bearing, so a ratio across machines is not the floor §1.3 froze")
     # imposed_argv lives inside the durability block but is compared SEPARATELY,
     # under the path/port mask: the two runs differ in data directory and ports
-    # by construction. Comparing the block wholesale would refuse every real pair.
+    # by construction. The engine-specific spelling (sync_mode, the line, the
+    # readback text) differs between the two binaries by construction as well.
+    # Comparing the block wholesale would refuse every real pair.
     if _durability_policy(base) != _durability_policy(cand):
-        r.append("durability blocks differ — a ratio between different durability "
-                 "policies measures the policy, not the engine")
+        r.append(f"durability blocks differ in policy or observation "
+                 f"({_durability_policy(base)} vs {_durability_policy(cand)}) — a ratio "
+                 "between different durability policies measures the policy, not the "
+                 "engine")
     bf, cf = base.get("fixture", {}), cand.get("fixture", {})
     # NOT compared, deliberately, and both would be false reds:
     #   height_requested -- two runs that ASKED for different heights but REACHED the

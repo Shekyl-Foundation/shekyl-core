@@ -5,7 +5,7 @@
 # BSD-3-Clause
 #
 # DRS-BENCH runner: two-daemon regtest IBD, emits an artifact or refuses.
-# The gate (schema, refusals, §1.3 compare, redb-engine probe) lives in
+# The gate (schema, refusals, §1.3 compare, durability readback) lives in
 # `drs_artifact.py`. Design record: `docs/design/DAEMON_REDB_STORE.md` §7.4.
 #
 # EXIT CODES for `check`: 0 when no axis is OVER, 1 when any axis is OVER, 2 for a
@@ -20,10 +20,10 @@
 # JSON, the same job as `compare.py`. It is not a second copy of that script:
 # compare.py is iai-callgrind only, and its ids cannot name a two-daemon IBD run.
 #
-# Vehicle: generateblocks is gated on check_core_ready(), which a zero-peer
-# daemon never satisfies, and the protocol handler initialises
-# m_synchronized(offline). So: generate offline, restart networked over the
-# same datadir, measure the subject syncing from it.
+# Vehicle: the seed generates its chain offline, restarts networked over the
+# same datadir, and the subject's sync from it is what is measured. Either
+# daemon's durability line (`Database sync:` from the C++ LMDB open under the
+# DX-Q8 pin, `Store durability:` from the Rust store) labels the engine.
 
 import argparse
 import json
@@ -85,18 +85,21 @@ def _dir_bytes(path, apparent):
 
 
 def _resolved_sync_line(log_path, since=0):
-    """The daemon's own report of the durability flags it resolved, or None.
+    """The daemon's own report of the durability it opened with, or None.
 
-    This is the readback. The daemon logs it at startup for A4; the daemon takes
-    no sync-mode option (IG-Q4), so the readback is the only record of the
-    durability a run had. Read from `since` (a byte offset), so an appended log
-    yields this spawn's report and not an earlier run's.
+    This is the readback. Either binary's line, whichever comes first: the C++
+    daemon's `Database sync: flags=0x…` report or the Rust store's
+    `Store durability: …` line. The daemon logs it at startup for A4; neither
+    binary takes a sync-mode option (IG-Q4), so the readback is the only record
+    of the durability a run had, and which line it is names the one store the
+    binary opens. Read from `since` (a byte offset), so an appended log yields
+    this spawn's report and not an earlier run's.
     """
     try:
         with open(log_path, encoding="utf-8", errors="replace") as fh:
             fh.seek(since)
             for line in fh:
-                if "Database sync: flags=0x" in line:
+                if any(marker in line for marker in A.READBACK_MARKERS.values()):
                     # The daemon colourises its log. Strip the escapes: an artifact
                     # field is a record, and terminal control bytes in one make it
                     # harder to read and to diff.
@@ -117,10 +120,11 @@ def daemon_executable(path):
 
 
 def _readback_refusal(who, log_path, line):
-    """The refusal for a spawn's resolved sync line, or None when it is DRS-D9.
+    """The refusal for a spawn's durability readback, or None when it is DRS-D9.
 
-    `who` is the spawn (`generating seed`, `subject`). A missing line names the
-    rebuild, because a daemon predating the A4 report does not write one.
+    `who` is the spawn (`generating seed`, `subject`). Either binary's line is
+    judged by `resolved_line_refusals`. A missing line names the rebuild,
+    because a daemon predating the A4 report does not write one.
     """
     reasons = A.resolved_line_refusals(line)
     if not reasons:
@@ -128,7 +132,7 @@ def _readback_refusal(who, log_path, line):
     hint = ""
     if line is None:
         hint = " A daemon predating the A4 report will not log it — rebuild."
-    return (f"the {who}'s resolved sync report is not DRS-D9's:\n  "
+    return (f"the {who}'s durability readback is not DRS-D9's:\n  "
             + "\n  ".join(reasons) + hint + f"\nsee {log_path}")
 
 
@@ -260,7 +264,11 @@ def mining_address(timeout):
 
 
 def measure(args):
-    """Run the LMDB IBD baseline and emit an artifact, or refuse.
+    """Run the IBD measurement on the daemon given and emit an artifact, or refuse.
+
+    The binary decides the engine: it opens one store and logs which at start,
+    and the artifact is labelled from that line. The same runner measures the
+    C++ daemon's LMDB arm and the Rust store's redb arm.
 
     The subject is what the artifact describes. The seed is fixture. The seed
     is reused across runs (generation dominates at the reference height); the
@@ -389,8 +397,9 @@ def measure(args):
                       f"measurement, so raising --startup-timeout does not affect "
                       f"any number.")
             # The durability readback, from this spawn's startup line, before the
-            # sync is timed. The line's sync_mode integer is the open; a line that
-            # is not db_nosync is not a measurement of DRS-D9.
+            # sync is timed. Either binary's line; one that is not its own
+            # engine's DRS-D9 spelling (the C++ safe open at db_nosync, the Rust
+            # store's `immediate`) is not a measurement of DRS-D9.
             subject_log = os.path.join(work, "subject.log")
             resolved_line = _resolved_sync_line(subject_log)
             subject_refusal = _readback_refusal("subject", subject_log, resolved_line)
@@ -453,27 +462,36 @@ def measure(args):
     git_rev = subprocess.run(["git", "-C", ROOT, "rev-parse", "HEAD"], check=True,
                              capture_output=True, text=True).stdout.strip()
     scenario = "ibd_coinbase_only"
+    # One backend per build; the daemon never compiles two store engines into
+    # one binary (ruled 2026-09-14). The label is read out of the durability
+    # line the subject logged at start -- the one store the binary opens -- not
+    # from a flag an operator sets. `_readback_refusal` has already held that
+    # line to DRS-D9, so it is one of the two lines the gate knows.
+    engine = A.readback_engine(resolved_line)
+    if engine is None:
+        _fail(f"the subject's readback passed DRS-D9 but names no engine: "
+              f"{resolved_line!r}")
     artifact = {
         "schema_version": A.SCHEMA,
-        # One backend per build; the daemon never compiles two store engines
-        # into one binary (ruled 2026-09-14). The label derives from the
-        # recorded selection mechanism, not from a flag an operator sets.
-        "engine": A.ENGINE_SELECTORS[A.ENGINE_DEFAULT_LMDB],
-        "engine_selected_by": A.ENGINE_DEFAULT_LMDB,
+        "engine": engine,
+        "engine_selected_by": A.ENGINE_READBACK,
         "git_rev": git_rev,
         "thresholds_frozen_at": A.FROZEN_AT,
         "durability": {
-            "policy": "DRS-D9 full-fsync-per-commit",
-            # OBSERVED: the mode the subject reported resolving at start. The
-            # daemon takes no sync-mode option, so there is nothing imposed to
-            # record beside it.
+            "policy": A.DURABILITY_POLICY,
+            # OBSERVED: the durability the subject reported opening with, in its
+            # own engine's spelling (`safe` from the C++ daemon, `immediate`
+            # from the Rust store). Neither takes a sync-mode option, so there
+            # is nothing imposed to record beside it.
             "sync_mode": A.resolved_sync_mode(resolved_line),
             "imposed_argv": subj_argv[1:],
             "observed": True,
             "resolved_log_line": resolved_line,
-            "readback": "the subject daemon's own startup report of the flags it "
-                        "resolved; the generating seed's report, from the same binary, "
-                        "is checked against DRS-D9 before any block is generated",
+            "readback": "the subject daemon's own startup line naming the durability "
+                        "it opened with (the C++ daemon's `Database sync:` report or "
+                        "the Rust store's `Store durability:` line); the generating "
+                        "seed's line, from the same binary, is checked against DRS-D9 "
+                        "before any block is generated",
         },
         "environment": {
             "loadavg_1m_at_start": load_at_start[0],
