@@ -65,6 +65,7 @@ use serde_json::json;
 use shekyl_chain_ingest::source::{Injection, ServeCredit};
 use shekyl_rpc_client::Rpc;
 use shekyl_rpc_transport::HttpRpc;
+use shekyl_rpc_types::mining::GetMinerDataResponse;
 use shekyl_rpc_types::{GetBlockRequest, GetBlockResponse, GetInfoResponse};
 use shekyl_types::{BlockCount, BlockHeight, SettlementEpoch, ShardId, TxHash};
 use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
@@ -866,10 +867,64 @@ impl RegtestDaemon {
     /// `address` is still the request body the lever used to take. N2
     /// discarded it: coinbase pays `--mine-address` from spawn. A funding
     /// walk therefore names the wallet at [`Self::start_for_seed`].
+    ///
+    /// Waits until every pool entry is shown and listed on the posted
+    /// job (`DRS_X_STORE_FLIP.md` Q9) before asking the miner to move the
+    /// tip. A local submit is stem until the relay fluffs it; mining
+    /// before that posts a coinbase-only job and the spend never lands.
     pub(super) async fn generate_blocks(&self, n: u64, address: &str) -> GenerateBlocksResp {
+        self.wait_shown_pool_in_template().await;
         try_generate_blocks(&self.rpc, n, address)
             .await
             .expect("generateblocks")
+    }
+
+    /// Q9: once the relay marks the pool shown, the next template lists
+    /// it. Empty pool returns at once. A live unbroadcast count means
+    /// stem is still held; a shown pool whose backlog is short means the
+    /// follower has not rebuilt the posted job yet.
+    async fn wait_shown_pool_in_template(&self) {
+        const LIMIT: Duration = Duration::from_secs(30);
+        let deadline = Instant::now() + LIMIT;
+        loop {
+            let info = self
+                .rpc
+                .json_rpc_call::<GetInfoResponse>("get_info", None)
+                .await
+                .expect("get_info");
+            let unbroadcast = info
+                .host
+                .shown()
+                .expect("the harness's listener is the host's, and is told the host-only part")
+                .tx_pool_unbroadcast_count
+                .expect("the harness's pool is live");
+            let shown = info
+                .pool
+                .tx_pool_size()
+                .expect("the harness's pool is live");
+            if unbroadcast == 0 && shown == 0 {
+                return;
+            }
+            if Instant::now() >= deadline {
+                panic!(
+                    "the posted job did not list the shown pool within {LIMIT:?} \
+                     (unbroadcast={unbroadcast}, shown={shown}); the relay's \
+                     fluff event must mark the entry shown and wake the tip \
+                     follower (DRS_X_STORE_FLIP.md Q9)"
+                );
+            }
+            if unbroadcast == 0 {
+                match self
+                    .rpc
+                    .json_rpc_call::<GetMinerDataResponse>("get_miner_data", None)
+                    .await
+                {
+                    Ok(data) if data.tx_backlog.len() as u64 == shown => return,
+                    Ok(_) | Err(_) => {}
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 
     /// Roll the chain back `n` blocks (`/pop_blocks`, an armed test lever, a direct

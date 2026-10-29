@@ -19,7 +19,10 @@
 //!    `seed(connecting)`, which is the seed the job hashes under. The job
 //!    does not pin. A seed the slots do not hold leaves the current job in
 //!    place; the next publication tries again. Every other pass that posts
-//!    nothing withdraws the job and says why ([`Posting`]).
+//!    nothing withdraws the job and says why ([`Posting`]). A shown-set
+//!    change at this tip (the relay's fluff event, Q9) wakes this task the
+//!    same way a parked body does, so the posted job lists the newly
+//!    shown body without waiting for the next tip.
 //!
 //! **The found-block sink.** A found block enters through the service's
 //! one door as a local arrival. A full window waits for the reserved seat

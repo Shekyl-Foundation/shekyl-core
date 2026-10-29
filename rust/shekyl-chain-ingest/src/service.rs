@@ -56,7 +56,7 @@ use shekyl_hash_budget::{Budget, Class};
 use shekyl_mempool::{Pool, PoolFault};
 use shekyl_types::{BlockHash, BlockHeight, TxHash, UnixSeconds};
 use shekyl_wire::Transaction;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Notify};
 use tokio::task::JoinSet;
 
 use crate::admission::{ArrivalBound, Buckets};
@@ -561,8 +561,10 @@ pub(crate) struct Shared<S: Substrate> {
     pool_live: Arc<AtomicBool>,
     /// Bodies a span parked because the tip moved under the pool door.
     pending: Mutex<Vec<Transaction>>,
-    /// Wakes the attendant to judge [`pending`](Self::pending).
-    pending_ready: Arc<tokio::sync::Notify>,
+    /// Wakes the attendant: parked bodies, and a shown-set change at this
+    /// tip (Q9: once the relay marks an entry shown, the next template
+    /// lists it — N2 rebuilds the posted job, not only on a tip move).
+    pending_ready: Arc<Notify>,
     /// What a test does to the pool between the producer's two locks.
     /// The build clones it, so a test can replace it between wakes.
     #[cfg(test)]
@@ -760,8 +762,9 @@ where
         )
     }
 
-    /// The attendant waits on this beside the tip.
-    pub(crate) fn pending_ready(&self) -> &tokio::sync::Notify {
+    /// The attendant waits on this beside the tip: parked bodies, and a
+    /// shown-set change at this tip (Q9).
+    pub(crate) fn pending_ready(&self) -> &Notify {
         &self.pending_ready
     }
 
@@ -1021,6 +1024,11 @@ pub struct Follow {
     /// (`SO-D12` increment 4c). It files from the job seat's ring.
     #[cfg(feature = "producer")]
     pub producer: Option<crate::bundle_producer::ProducerSeat>,
+    /// Wakes the tip follower when the pool's shown set changes at this
+    /// tip (`DRS_X_STORE_FLIP.md` Q9). The composition root hands the same
+    /// [`Notify`] the pool door's fluff hook fires. `None` is a private
+    /// notify: tests that admit through the pool lock wake it themselves.
+    pub shown: Option<Arc<Notify>>,
 }
 
 /// Told the ids that left the pool on a reconcile.
@@ -1226,7 +1234,7 @@ where
             pool: follow.pool,
             pool_live: Arc::new(AtomicBool::new(true)),
             pending: Mutex::new(Vec::new()),
-            pending_ready: Arc::new(tokio::sync::Notify::new()),
+            pending_ready: follow.shown.unwrap_or_else(|| Arc::new(Notify::new())),
             #[cfg(test)]
             between_locks: Mutex::new(None),
         });

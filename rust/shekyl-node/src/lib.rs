@@ -91,6 +91,7 @@ use shekyl_relay::{Responsibilities, TxId};
 use shekyl_runtime::{RuntimeBudget, ThreadName};
 use shekyl_transport_layer::Sockets;
 use shekyl_types::{BlockHeight, UnixSeconds};
+use tokio::sync::Notify;
 
 use crate::facts::{
     BansBridge, ChainBridge, DoorBridge, DoorEntry, PoolBridge, StopBridge, Surroundings,
@@ -237,6 +238,13 @@ impl Node {
                 owed.propagated(&ids);
             }
         });
+        // Q9: fluff at this tip rebuilds the posted job. Same Notify the
+        // follower waits on for parked bodies.
+        let shown = Arc::new(Notify::new());
+        let shown_hook: shekyl_ffi::pool_ffi::Shown = {
+            let shown = Arc::clone(&shown);
+            Arc::new(move || shown.notify_one())
+        };
         shekyl_ffi::pool_ffi::install(
             Arc::clone(&store),
             Arc::clone(&pool),
@@ -244,6 +252,7 @@ impl Node {
             AdmissionPolicy::GENESIS,
             Arc::clone(&departed),
             propagated,
+            shown_hook,
         );
         let pool_slot = Arc::new(Mutex::new(Some(Arc::clone(&pool))));
         let sockets = Sockets::new();
@@ -288,6 +297,7 @@ impl Node {
                 departed: Some(Arc::clone(&departed)),
             }),
             producer,
+            shown: Some(shown),
         };
         let service_config = ServiceConfig::default();
         let runtime = shekyl_runtime::runtime(

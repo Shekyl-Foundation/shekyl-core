@@ -46,6 +46,10 @@ pub type Departed = Arc<dyn Fn(&[TxHash]) + Send + Sync>;
 /// responsibility this node armed for it is disarmed (`Responsibilities::propagated`).
 pub type Propagated = Arc<dyn Fn(&[TxHash]) + Send + Sync>;
 
+/// Told when the relay marks a held entry shown (`Pool::fluffed`): the tip
+/// follower rebuilds the posted job at this tip (`DRS_X_STORE_FLIP.md` Q9).
+pub type Shown = Arc<dyn Fn() + Send + Sync>;
+
 struct Installed {
     store: Arc<ChainStore>,
     pool: Arc<Mutex<Pool>>,
@@ -53,6 +57,7 @@ struct Installed {
     policy: AdmissionPolicy,
     departed: Departed,
     propagated: Propagated,
+    shown: Shown,
 }
 
 static DOOR: Mutex<Option<Installed>> = Mutex::new(None);
@@ -71,6 +76,7 @@ pub fn install(
     policy: AdmissionPolicy,
     departed: Departed,
     propagated: Propagated,
+    shown: Shown,
 ) {
     *lock(&DOOR) = Some(Installed {
         store,
@@ -79,6 +85,7 @@ pub fn install(
         policy,
         departed,
         propagated,
+        shown,
     });
 }
 
@@ -148,6 +155,7 @@ fn door() -> Option<Installed> {
         policy: door.policy,
         departed: Arc::clone(&door.departed),
         propagated: Arc::clone(&door.propagated),
+        shown: Arc::clone(&door.shown),
     })
 }
 
@@ -350,11 +358,18 @@ pub unsafe extern "C" fn shekyl_pool_fluffed(hash: *const u8) -> i32 {
         return SHEKYL_POOL_FAULT;
     };
     let id = TxHash::from_bytes(bytes);
+    let shown = lock(&DOOR).as_ref().map(|door| Arc::clone(&door.shown));
     let Some(result) = with_pool_mut(|pool| pool.fluffed(&id)) else {
         return SHEKYL_POOL_UNBOUND;
     };
     match result {
-        Ok(_) => 0,
+        Ok(true) => {
+            if let Some(shown) = shown {
+                shown();
+            }
+            0
+        }
+        Ok(false) => 0,
         Err(_) => SHEKYL_POOL_FAULT,
     }
 }

@@ -1360,7 +1360,9 @@ impl SeatedPool {
     }
 
     /// Admit `tx` and mark it shown. The follower is not woken: the test
-    /// wakes it once the hook it wants is in place.
+    /// wakes it once the hook it wants is in place. Production wakes on
+    /// `shekyl_pool_fluffed` (Q9); tests that admit through this lock
+    /// still call [`Self::wake`].
     fn show(&self, tx: &shekyl_wire::Transaction) {
         use shekyl_chain_rules::AdmissionPolicy;
         use shekyl_chain_store::store::{ChainStore, SnapshotView};
