@@ -725,3 +725,50 @@ fn the_list_paths_and_closes_do_not_deadlock() {
         "every close reached the dialer's callback"
     );
 }
+
+/// **The probe arrives through the inbound handshake's one lookup**
+/// (`TOR_SUPERVISOR.md` §4.5; the probe brief's test 5). A probe nonce taken
+/// on Tor answers 2, which the C++ caller drops as it drops 1, and tells the
+/// supervisor's cell which probe arrived. On clearnet the same kind of nonce
+/// answers 3: dropped, logged, and the cell does not move. A stranger's nonce
+/// answers 0. Answering 1 for the probe, or publishing the clearnet defect
+/// as an arrival, fails this.
+#[test]
+fn a_probe_nonce_reaches_the_supervisor_and_a_misrouted_one_does_not() {
+    let _bind = seam_bind_lock().lock();
+    unbind();
+    bind();
+    let dialer = dialer().expect("bound");
+    ready(&dialer);
+    let tor = u32::try_from(ConnectorId::Tor.index()).expect("small");
+    let clearnet = u32::try_from(ConnectorId::Clearnet.index()).expect("small");
+    let mut arrivals = crate::tor_link::probe_arrivals();
+    arrivals.borrow_and_update();
+
+    let probe = mint_probe().expect("a tip and a network id are published");
+    assert!(!probe.request.is_empty(), "the handshake frame");
+    let taken = unsafe { shekyl_dial_take_handshake_nonce(tor, probe.nonce.bytes().as_ptr()) };
+    assert_eq!(taken, SHEKYL_NONCE_PROBE);
+    assert!(arrivals.has_changed().expect("process-static"));
+    assert_eq!(*arrivals.borrow_and_update(), Some(probe.minted_at));
+
+    let misrouted = mint_probe().expect("again");
+    let taken =
+        unsafe { shekyl_dial_take_handshake_nonce(clearnet, misrouted.nonce.bytes().as_ptr()) };
+    assert_eq!(taken, SHEKYL_NONCE_MISROUTED_PROBE);
+    assert!(
+        !arrivals.has_changed().expect("process-static"),
+        "a defect is never evidence"
+    );
+    let stranger = [0x5a_u8; 32];
+    assert_eq!(
+        unsafe { shekyl_dial_take_handshake_nonce(tor, stranger.as_ptr()) },
+        SHEKYL_NONCE_NOT_OURS
+    );
+    assert_eq!(
+        dialer.in_flight(ConnectorId::Tor),
+        0,
+        "a probe is never a peer dial in flight"
+    );
+    unbind();
+}

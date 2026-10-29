@@ -28,7 +28,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use shekyl_capped_stream::{ByteQueue, InboundEnd, QueueHold, Session, StreamEnds};
-use shekyl_dialer::{Dialer, Launch};
+use shekyl_dialer::{Dialer, Launch, NonceTake};
 use shekyl_draw_rng::SplitMix64;
 use shekyl_levin::{
     response, BasicNodeData, BucketReader, CoreSyncData, HandshakeRequest, HandshakeResponse,
@@ -591,8 +591,9 @@ fn the_nonce_stays_in_flight_until_the_result_is_applied() {
     dialer.wait_posted(id);
     let socket = dial.opened()[0];
     let nonce = dial.request(socket).nonce;
-    assert!(
+    assert_eq!(
         dialer.take_nonce(CLEARNET, &nonce),
+        NonceTake::SelfConnection,
         "posted but not applied: the nonce is still in flight"
     );
     dialer.apply_completions(CLEARNET, &mut rng);
@@ -605,8 +606,9 @@ fn the_nonce_stays_in_flight_until_the_result_is_applied() {
     let socket = *dial.opened().last().expect("the second channel");
     let nonce = dial.request(socket).nonce;
     dialer.apply_completions(CLEARNET, &mut rng);
-    assert!(
-        !dialer.take_nonce(CLEARNET, &nonce),
+    assert_eq!(
+        dialer.take_nonce(CLEARNET, &nonce),
+        NonceTake::NotOurs,
         "applied: the nonce left the set"
     );
 }

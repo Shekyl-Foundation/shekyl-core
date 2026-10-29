@@ -30,13 +30,15 @@ use shekyl_seam::{
     drive_inbound_async, AttemptTask, Channel, CloseCause, CloseKind, ConnectFuture, ConnectorId,
     Dial, Direction, Endpoint, Hub, Route, RoutePublish, SocketId,
 };
-use shekyl_socks::Proxy;
+use shekyl_socks::{Proxy, SocksUsername};
 use shekyl_timing_engine::{Clock, Handle, MonotonicClock, Tick};
 use shekyl_tor::{
     accept_inbound as accept_tor_inbound, dial_one as dial_tor, Admitted as TorAdmitted,
     Inbound as TorInbound,
 };
 use shekyl_transport_layer::spans;
+/// The inbound facet of a link, and why it is down (`TOR_SUPERVISOR.md` §4.1).
+pub use shekyl_transport_layer::{InboundCause, InboundFacet};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 
@@ -828,6 +830,44 @@ pub fn publish_managed_running(
     publish_managed_socks(route.socks())
 }
 
+/// The incarnation and address of the route the managed Tor published last
+/// ([`publish_managed_socks`]). An in-process consumer reads the managed
+/// route against it ([`managed_route`]).
+static MANAGED: Mutex<Option<(u64, SocketAddr)>> = Mutex::new(None);
+
+/// The managed Tor's route for an in-process consumer, with that
+/// consumer's own isolation pair (`TOR_SUPERVISOR.md` §4.5; the brief's
+/// amendment 3).
+///
+/// Read at each use and never cached (`TSR-F10`): `None` unless the Tor
+/// link is usable now on the route the managed Tor published, so an
+/// operator's Tor, a fallen route or a route from before a respawn yields
+/// nothing. The operator's pair is never presented here (DC-Q7): the proxy
+/// carries `isolation` and nothing else. Each purpose (the probe, and the
+/// settlement fetch after it) holds its own fixed per-boot pair, so Tor puts
+/// its streams on circuits of their own, apart from the peer dials, which
+/// offer no authentication, and apart from each other.
+#[must_use]
+pub fn managed_route(isolation: &Arc<SocksUsername>) -> Option<Proxy> {
+    let host = HOST.lock().expect("zone host").clone()?;
+    let (incarnation, at) = (*MANAGED.lock().expect("managed route"))?;
+    let link = host.hub.links().get(ConnectorId::Tor);
+    (link.is_usable() && link.incarnation == incarnation && link.route == Some(Route::Socks(at)))
+        .then(|| Proxy::authenticated_shared(at, Arc::clone(isolation)))
+}
+
+/// Publish the inbound facet of the managed route `incarnation`
+/// (`TOR_SUPERVISOR.md` §4.1). A stale incarnation changes nothing. No
+/// watcher is called: inbound never reaches the dialer (`TSR-F9`).
+pub fn publish_tor_inbound(incarnation: u64, inbound: InboundFacet) -> bool {
+    let Some(host) = HOST.lock().expect("zone host").clone() else {
+        return false;
+    };
+    host.hub
+        .links()
+        .publish_inbound(ConnectorId::Tor, incarnation, inbound)
+}
+
 /// Publish the managed Tor's SOCKS address as the Tor link's route, and
 /// give the dialer that Tor's window: the earliest its
 /// [`crate::tor_link::TOR_SOCKS_TIMEOUT`], the value it was launched with,
@@ -846,6 +886,7 @@ pub(crate) fn publish_managed_socks(socks: SocketAddr) -> Option<u64> {
         host.hub
             .links()
             .publish_usable(ConnectorId::Tor, Route::Socks(socks), host.hub.now());
+    *MANAGED.lock().expect("managed route") = Some((published.incarnation(), socks));
     Some(published.incarnation())
 }
 

@@ -5,7 +5,9 @@
 
 //! What this node's own Tor dials show, one cell for the process
 //! (`TOR_SUPERVISOR.md` §4.2, "every Tor dial's outcome"). Display only,
-//! never a verdict on the link (`TSR-Q14`).
+//! never a verdict on the link (`TSR-Q14`). Beside it, the probe's
+//! arrivals (§4.5): the inbound handshake that took a probe nonce says so
+//! here, and the supervisor alone reads it.
 //!
 //! The one dialer writes it through its `sink`; the managed-Tor supervisor in
 //! `shekyl-daemon` reads it. The cell holds the default tally until the
@@ -13,6 +15,7 @@
 
 use std::sync::{Arc, LazyLock};
 
+use shekyl_timing_engine::Tick;
 use tokio::sync::watch;
 
 pub use shekyl_dialer::TorLinkTally;
@@ -36,6 +39,25 @@ pub const TOR_SOCKS_TIMEOUT: shekyl_tor_control_client::control::SocksTimeout =
     shekyl_tor_control_client::control::SocksTimeout::Below {
         dial_deadline: TOR_DIAL_WITHIN,
     };
+
+/// When the probe that last arrived was minted (`TOR_SUPERVISOR.md` §4.5).
+/// `None` until one arrives.
+static PROBE: LazyLock<watch::Sender<Option<Tick>>> = LazyLock::new(|| watch::channel(None).0);
+
+/// A receiver of the probe's arrivals: each is the mint tick of the probe
+/// whose nonce came back through this node's own onion. The supervisor
+/// compares it with the probe it has in flight; an older one is stale. The
+/// sender is process-static, so the channel never closes.
+#[must_use]
+pub fn probe_arrivals() -> watch::Receiver<Option<Tick>> {
+    PROBE.subscribe()
+}
+
+/// The inbound handshake took a probe nonce on the Tor connector. Every
+/// arrival wakes the receiver, even one naming the same probe again.
+pub(crate) fn probe_arrived(minted_at: Tick) {
+    PROBE.send_replace(Some(minted_at));
+}
 
 static TALLY: LazyLock<watch::Sender<TorLinkTally>> =
     LazyLock::new(|| watch::channel(TorLinkTally::default()).0);

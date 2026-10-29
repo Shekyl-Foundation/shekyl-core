@@ -46,6 +46,12 @@ pub use spawn::{KeptDataDir, LaunchFailure, SpawnError};
 /// connection, whose close exits tor, backstop the child reap.
 const REAP_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// `DEL_ONION` removed the service.
+const DEL_ONION_REMOVED: u16 = 250;
+/// `DEL_ONION` named a service Tor does not hold (`552 Unknown Onion
+/// Service`): nothing of ours is loaded, which is what the delete wanted.
+const DEL_ONION_UNKNOWN: u16 = 552;
+
 /// Spawn-time configuration for [`DaemonTorControl::start`].
 ///
 /// Every instance-identifying input is a parameter (PWD-E9): the binary
@@ -357,6 +363,49 @@ impl DaemonTorControl {
         }
         evaluate_add_onion_reply(&reply, &expected).map_err(DaemonTorPublishError::Publish)?;
         Ok(expected)
+    }
+
+    /// Publish the onion from `seed` again on this running Tor
+    /// (`TOR_SUPERVISOR.md` §4.4, Service class): `DEL_ONION`, then
+    /// [`Self::publish`]. Tor refuses an `ADD_ONION` for a service it still
+    /// holds (`550`, address collision), so a republish that skipped the
+    /// delete could never succeed against a live service. The delete's
+    /// `552` (no such service: a fresh Tor, or one that lost it) is the
+    /// same as a `250`: nothing of ours is loaded. Any other refusal is
+    /// [`DaemonTorPublishError::Publish`], and no `ADD_ONION` is sent.
+    ///
+    /// # Errors
+    /// As [`Self::publish`], and a refused delete.
+    pub async fn republish(
+        &self,
+        seed: &OnionSeed,
+        virtual_port: u16,
+        local_target: SocketAddr,
+        max_streams: u16,
+        pow: OnionPow,
+    ) -> Result<ServiceId, DaemonTorPublishError> {
+        let held = OnionIdentity::from_hs_id_seed(seed.bytes())
+            .service_id()
+            .clone();
+        let reply = match ask_timed(&self.actor, Command::DelOnion(held), self.reply_deadline).await
+        {
+            Ok(reply) => reply,
+            Err(AskError::Timeout) => {
+                return Err(DaemonTorPublishError::Control(ControlError::Timeout));
+            }
+            Err(AskError::Control(control)) => return Err(DaemonTorPublishError::Control(control)),
+            Err(AskError::ActorGone) => return Err(DaemonTorPublishError::Died),
+        };
+        match reply.status() {
+            DEL_ONION_REMOVED | DEL_ONION_UNKNOWN => {}
+            status => {
+                return Err(DaemonTorPublishError::Publish(
+                    AddOnionReplyError::Rejected { status },
+                ))
+            }
+        }
+        self.publish(seed, virtual_port, local_target, max_streams, pow)
+            .await
     }
 
     async fn ask_bounded(

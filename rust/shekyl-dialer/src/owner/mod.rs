@@ -65,7 +65,7 @@ use crate::attempts::Attempts;
 use crate::bans::BanSnapshot;
 use crate::fill::DialAim;
 use crate::link_tally::{LinkFold, TallySink, TorLinkTally};
-use crate::nonce::{HandshakeNonce, HandshakeNonceSet, InFlightNonce};
+use crate::nonce::{HandshakeNonce, HandshakeNonceSet, InFlightNonce, NonceTake};
 use crate::pace::{attempts_per_test, next_wake_nanos, retry_wait_nanos};
 use crate::store::{AddressStore, LoadError, STORE_INTERVAL_NANOS};
 
@@ -178,6 +178,20 @@ impl Shared {
         self.lists.release_draw(address);
         false
     }
+}
+
+/// The probe's handshake, ready to write ([`Dialer::mint_probe`]).
+///
+/// Holding it keeps the nonce in the set: dropping it erases the nonce, so
+/// a probe the supervisor gave up on cannot arrive as evidence afterwards.
+#[derive(Debug)]
+pub struct ProbeHandshake {
+    /// The probe nonce. Keep it until the probe ends.
+    pub nonce: InFlightNonce,
+    /// The `COMMAND_HANDSHAKE` request frame carrying the nonce.
+    pub request: Vec<u8>,
+    /// When the nonce was minted; the arrival names the probe by it.
+    pub minted_at: Tick,
 }
 
 /// The outbound dialer for every connector of one process.
@@ -509,10 +523,33 @@ impl Dialer {
     }
 
     /// The inbound handshake's question: is `nonce` one of ours in flight
-    /// on `connector`? Erases it.
+    /// on `connector`, and of which kind? Erases it.
     #[must_use]
-    pub fn take_nonce(&self, connector: ConnectorId, nonce: &HandshakeNonce) -> bool {
+    pub fn take_nonce(&self, connector: ConnectorId, nonce: &HandshakeNonce) -> NonceTake {
         self.nonces.take(connector, nonce)
+    }
+
+    /// The managed Tor supervisor's probe of this node's own onion
+    /// (`TOR_SUPERVISOR.md` §4.5): a probe nonce on the Tor connector and
+    /// the handshake request carrying it, built as a peer dial's is, so
+    /// the inbound handshake reaches the nonce check.
+    ///
+    /// The probe is not a peer dial. It is not drawn, touches no list, no
+    /// attempt count, no failure memory and no target, and never counts in
+    /// the in-flight bound or the Tor tally. `None` until a tip and the
+    /// network id are published: the request carries both.
+    pub fn mint_probe<R: RelayRng + ?Sized>(&self, rng: &mut R) -> Option<ProbeHandshake> {
+        let (Some(snapshot), Some(network_id)) = ((self.snapshot)(), self.network_id()) else {
+            return None;
+        };
+        let minted_at = self.hub.now();
+        let nonce = self.nonces.mint_probe(minted_at, rng);
+        let request = handshake::request_frame(network_id, &snapshot, &nonce)?;
+        Some(ProbeHandshake {
+            nonce,
+            request,
+            minted_at,
+        })
     }
 
     /// The session `id` closed, with the cause that won.

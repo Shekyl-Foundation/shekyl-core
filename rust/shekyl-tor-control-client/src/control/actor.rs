@@ -1525,8 +1525,12 @@ impl Message<StreamMessage<Result<Framed, ControlError>, (), ()>> for TorControl
                     // on the wire, which is exactly what `ServiceId::parse` exists
                     // to prevent. (The service still dies with the connection.)
                     if in_flight.kind == PendingKind::AddOnion && reply.status() == 250 {
+                        // A republish (`DEL_ONION`, then `ADD_ONION` with the
+                        // same key) records the id once: teardown deletes it once.
                         if let Some(id) = super::onion::parse_service_id(reply.lines()) {
-                            self.published_onions.push(id);
+                            if !self.published_onions.contains(&id) {
+                                self.published_onions.push(id);
+                            }
                         }
                     }
                     tx.send(Ok(reply));

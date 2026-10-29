@@ -27,7 +27,9 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use shekyl_daemon_config::sections::P2p;
-use shekyl_dialer::{seeds, BanSnapshot, Dialer, LoadError, SeedNetwork, Shared};
+use shekyl_dialer::{
+    seeds, BanSnapshot, Dialer, LoadError, NonceTake, ProbeHandshake, SeedNetwork, Shared,
+};
 use shekyl_options::PeerEndpoint;
 use shekyl_peerlist::Peerlist;
 use std::net::SocketAddr;
@@ -306,9 +308,36 @@ fn with_shared<T>(f: impl FnOnce(MutexGuard<'_, Shared>) -> T) -> Option<T> {
     dialer().map(|dialer| f(dialer.shared()))
 }
 
-/// The inbound handshake's self-connection check: 1 when `nonce` is one
-/// this node put in flight on `connector`, erasing it; 0 otherwise. The
+/// [`shekyl_dial_take_handshake_nonce`]: not a nonce of this node's.
+pub const SHEKYL_NONCE_NOT_OURS: i32 = 0;
+/// [`shekyl_dial_take_handshake_nonce`]: this node's own peer dial.
+pub const SHEKYL_NONCE_SELF_CONNECTION: i32 = 1;
+/// [`shekyl_dial_take_handshake_nonce`]: the managed Tor's probe of its own
+/// onion arrived (`TOR_SUPERVISOR.md` §4.5). The supervisor has heard it.
+pub const SHEKYL_NONCE_PROBE: i32 = 2;
+/// [`shekyl_dial_take_handshake_nonce`]: a probe nonce on a connector that
+/// is not Tor's. A defect of this node, logged, never evidence.
+pub const SHEKYL_NONCE_MISROUTED_PROBE: i32 = 3;
+
+/// The code [`shekyl_dial_take_handshake_nonce`] answers for `taken`. Every
+/// code but [`SHEKYL_NONCE_NOT_OURS`] is this node's own dial, which the
+/// caller drops.
+fn take_code(taken: NonceTake) -> i32 {
+    match taken {
+        NonceTake::NotOurs => SHEKYL_NONCE_NOT_OURS,
+        NonceTake::SelfConnection => SHEKYL_NONCE_SELF_CONNECTION,
+        NonceTake::Probe { .. } => SHEKYL_NONCE_PROBE,
+        NonceTake::MisroutedProbe => SHEKYL_NONCE_MISROUTED_PROBE,
+    }
+}
+
+/// The inbound handshake's nonce check, erasing what it finds. The
 /// connector is the inbound session's, not one the request names.
+///
+/// 0 is a peer's handshake. Any other code is this node's own dial, and the
+/// caller drops the session: 1 a peer dial of ours, 2 the managed Tor's
+/// probe of its own onion (the supervisor hears the arrival here), 3 a
+/// probe nonce on another connector (logged as a defect, never evidence).
 ///
 /// # Safety
 ///
@@ -316,18 +345,35 @@ fn with_shared<T>(f: impl FnOnce(MutexGuard<'_, Shared>) -> T) -> Option<T> {
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_dial_take_handshake_nonce(connector: u32, nonce: *const u8) -> i32 {
     let Some(connector) = connector_from_index(connector) else {
-        return 0;
+        return SHEKYL_NONCE_NOT_OURS;
     };
     let Some(bytes) = (unsafe { slice_from_typed_ptr(nonce, 32) }) else {
-        return 0;
+        return SHEKYL_NONCE_NOT_OURS;
     };
     let Ok(nonce) = <[u8; 32]>::try_from(bytes) else {
-        return 0;
+        return SHEKYL_NONCE_NOT_OURS;
     };
-    match dialer() {
-        Some(dialer) => i32::from(dialer.take_nonce(connector, &nonce)),
-        None => 0,
+    let Some(dialer) = dialer() else {
+        return SHEKYL_NONCE_NOT_OURS;
+    };
+    let taken = dialer.take_nonce(connector, &nonce);
+    match taken {
+        NonceTake::Probe { minted_at } => crate::tor_link::probe_arrived(minted_at),
+        NonceTake::MisroutedProbe => tracing::error!(
+            ?connector,
+            "a probe of this node's onion arrived on a connector that is not Tor's; dropped, not evidence"
+        ),
+        NonceTake::NotOurs | NonceTake::SelfConnection => {}
     }
+    take_code(taken)
+}
+
+/// The managed Tor supervisor's probe handshake (`TOR_SUPERVISOR.md`
+/// §4.5): a probe nonce in the Tor set and the request carrying it. `None`
+/// when there is no dialer, or no tip or network id yet.
+#[must_use]
+pub fn mint_probe() -> Option<ProbeHandshake> {
+    dialer()?.mint_probe(&mut SecureRelayRng)
 }
 
 /// The core's tip: height, cumulative difficulty (low and high 64 bits)
