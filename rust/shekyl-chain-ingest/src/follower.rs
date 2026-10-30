@@ -385,25 +385,11 @@ pub(crate) async fn follow<S>(
     // one build of its own. A tip that moves during the extra build is a
     // new sequence and gets its own.
     let mut extra_for: Option<u64> = None;
-    // The tip sequence the posted job was built for. One template per tip
-    // (N2): a job built for the tip before this one is withdrawn before the
-    // pool is reconciled and the next job built, so `get_block_template`
-    // never hands out a job whose parent is no longer the tip and whose
-    // bodies that tip may have mined. A wake at the same tip (the shown
-    // set changed) keeps the job posted until its replacement is.
-    let mut posted_for: Option<u64> = None;
     loop {
         if shared.stopping() {
             break;
         }
         let tip = *tips.borrow_and_update();
-        if posted_for != Some(tip.seq) {
-            if let Some(seat) = seat.as_ref() {
-                if seat.board.posted().is_some() {
-                    seat.board.withdraw();
-                }
-            }
-        }
         if let Err(stop) = install_window(&shared).await {
             crate::service::record_window_stop(&shared, stop);
             break;
@@ -432,7 +418,6 @@ pub(crate) async fn follow<S>(
                 (None, _) => seat.withdraw(NoJob::NoAddress),
                 (Some(_), SyncState::Synced) => {
                     post(&shared, seat, &postings).await;
-                    posted_for = Some(tip.seq);
                     // [`Unbuilt::Retry`]: one more build at this tip. The
                     // pass reconciles the pool on the way in, and a body
                     // that left is left out. A second retry in this same

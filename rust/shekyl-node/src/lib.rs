@@ -407,7 +407,10 @@ impl Node {
             budget.clone(),
             found,
             miner_address,
-            posting.clone(),
+            mining::Watched {
+                posting: posting.clone(),
+                tips: tips.clone(),
+            },
             pool_health.clone(),
         ));
         let started_at = facts::unix_now();
