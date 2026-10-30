@@ -411,6 +411,7 @@ Its number is read from the tree at the flip's pin, never carried from a plan (`
 - `inject_archival_serve_credit` is the host's and an armed lever: **C++ defect** (RT-O9.2 ruled it so; the table restated the defect as policy).
 - `set_bans` takes no numeric `ip`, an absent `seconds` bans until lifted, and `get_bans` and `banned` add `permanent`: **Design** (Q11; the ban file's permanent bans).
 - `relay_tx` answers not ready: **Unbuilt by design**, owner RD (the relay driver).
+- An originated transaction's embargo-expiry fluff (the origin's re-broadcast): the C++ `core::relay_txpool_transactions` re-offered it from the pool's `get_relayable_transactions` on a timer; nothing in Rust does, and on the regtest stem-and-sink pair an origination stayed in its stem phase for 600 s (2026-10-29): **Unbuilt by design**, owner RD (PR-b's brief poses where the responsibility lives; the FOLLOWUPS row carries the observation).
 - A public-network node is not synced, and builds no template, before chain sync's cutover: **Unbuilt by design**, owner chain sync (Q13).
 
 ### 3.2 Function
