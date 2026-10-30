@@ -968,7 +968,10 @@ impl RegtestDaemon {
 
     /// Q9: once the relay marks the pool shown, the next template lists
     /// it. A shown pool whose backlog is short means the follower has not
-    /// rebuilt the posted job yet. An unbroadcast entry is in its stem
+    /// rebuilt the posted job yet, unless the job is full: the fill is
+    /// reward-aware and stops within one body of the median
+    /// (`Fill::admit`), so an overfilled pool is listed as far as the
+    /// policy allows and no further. An unbroadcast entry is in its stem
     /// phase and is not a candidate (the template lists what the node
     /// shows, criterion 2), so it is not waited for: a linked node holds
     /// one through its embargo, and a block mined meanwhile leaves it in
@@ -1009,6 +1012,7 @@ impl RegtestDaemon {
                 .await
             {
                 Ok(data) if data.tx_backlog.len() as u64 == shown => return,
+                Ok(data) if job_is_full(&data) => return,
                 Ok(_) | Err(_) => {}
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -1283,6 +1287,20 @@ async fn maybe_capture_live_oracle(
     )
     .expect("write live-oracle spend fixture");
     eprintln!("captured live-oracle spend KAT -> {}", path.display());
+}
+
+/// Whether the posted job is bounded by the fill policy rather than by the
+/// pool: one more of its lightest listed bodies would pass the median, which
+/// is where `Fill::admit` stops (the median-fill walk asserts the same bound
+/// on the mined block). The sum is of the listed bodies alone; the fill also
+/// counts the coinbase reserve, which `get_miner_data` does not report. The
+/// reserve is a few hundred bytes against spends of about 13 KB, so a job
+/// this predicate calls full is one the fill stopped, not one the follower
+/// has yet to rebuild.
+fn job_is_full(data: &GetMinerDataResponse) -> bool {
+    let listed: u64 = data.tx_backlog.iter().map(|body| body.weight).sum();
+    let lightest = data.tx_backlog.iter().map(|body| body.weight).min();
+    matches!(lightest, Some(lightest) if listed + lightest > data.median_weight)
 }
 
 /// Mine `n` blocks. The daemon pays its configured `mine-address` (N2);
@@ -2767,11 +2785,25 @@ async fn assert_template_reports_its_coinbase(
 ) {
     use shekyl_wire::Block;
 
-    let template: serde_json::Value = daemon
-        .rpc
-        .json_rpc_call("get_block_template", Some(json!({})))
-        .await
-        .expect("get_block_template");
+    // Between a tip change and the follower's next post there is no job
+    // (one template per tip, N2): wait for the one built at this tip.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let template: serde_json::Value = loop {
+        if let Ok(template) = daemon
+            .rpc
+            .json_rpc_call::<serde_json::Value>("get_block_template", Some(json!({})))
+            .await
+        {
+            if template["blocktemplate_blob"].as_str().is_some() {
+                break template;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no job was posted at the tip within 30 s"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
     let block = Block::from_bytes(&hex_decode(
         template["blocktemplate_blob"]
             .as_str()
