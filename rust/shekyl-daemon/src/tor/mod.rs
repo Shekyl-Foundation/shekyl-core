@@ -21,7 +21,7 @@ use std::time::Duration;
 use shekyl_daemon_config::sections::Tor;
 use shekyl_ffi::dialer_ffi::ConnectorId;
 use shekyl_ffi::origin_verdict::OriginVerdict;
-use shekyl_ffi::tor_link::TorLinkTally;
+use shekyl_ffi::tor_link::{ProbeArrival, TorLinkTally};
 use shekyl_ffi::zone_ffi::DownCause;
 use shekyl_timing_engine::{Clock, MonotonicClock, OwnerClass, OwnerHandle, Tick};
 use shekyl_tor_control_client::binary::{
@@ -29,8 +29,8 @@ use shekyl_tor_control_client::binary::{
 };
 use shekyl_tor_control_client::control::{
     parse_bootstrap_progress, parse_event, parse_network_view, parse_socks_listeners,
-    parse_traffic_read, BootstrapState, Command, ControlError, EventReceiver, EventSink,
-    SocksTimeout,
+    parse_traffic_read, BootstrapState, Command, ControlError, EventReceiver, EventSink, ServiceId,
+    SocksTimeout, UploadRounds,
 };
 use shekyl_tor_control_client::supervisor::{
     held_sentence, input_of, install_sentence, render, Action, Cause, Connectors, Core, DialTally,
@@ -39,10 +39,12 @@ use shekyl_tor_control_client::supervisor::{
 };
 use shekyl_tor_control_daemon::{
     space_needed, sweep_stale_data_dirs, CacheSave, DaemonTorConfig, DaemonTorControl,
-    DaemonTorStartError, KeptDataDir, OnionPow, OnionSeed, SpawnError, TorDeath,
+    DaemonTorStartError, IsolationPair, KeptDataDir, OnionPow, OnionSeed, SpawnError, TorDeath,
 };
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
+
+mod probe;
 
 /// A control reply this far past due is a process fault. Not a bootstrap limit.
 const REPLY_BOUND: Duration = Duration::from_secs(30);
@@ -268,6 +270,15 @@ async fn drive(
             return;
         }
     };
+    // The probe's isolation pair, minted beside the seed and held with it
+    // for the boot (§4.5): the probe's circuits are its own.
+    let probe_pair = match IsolationPair::mint() {
+        Ok(pair) => pair,
+        Err(error) => {
+            tracing::error!(target: "global", "the Tor supervisor has no probe isolation: {error}");
+            return;
+        }
+    };
     let (events, incoming) = EventSink::bounded();
     let connectors = Connectors {
         tor: TorSetting::Managed,
@@ -275,6 +286,9 @@ async fn drive(
     };
     let origin = shekyl_ffi::origin_verdict::watch();
     let mut tor_link = shekyl_ffi::tor_link::watch();
+    let mut probe_arrivals = shekyl_ffi::tor_link::probe_arrivals();
+    // An arrival from an earlier supervisor in this process is not this one's.
+    probe_arrivals.borrow_and_update();
     let started = now(&owner);
     let (mut core, mut step) = Core::start(policy(), connectors, started);
     // A receiver marks the current value seen, so a verdict published before
@@ -301,11 +315,17 @@ async fn drive(
         events,
         incoming,
         seed,
+        probe_pair,
         virtual_port,
         stop,
         forward,
         origin,
         tor_link,
+        probe_arrivals,
+        service: None,
+        rounds: None,
+        dropped_seen: 0,
+        probe: None,
         network_view: NetworkView::default(),
         control: None,
         kept: None,
@@ -330,6 +350,8 @@ struct Drive {
     events: EventSink,
     incoming: EventReceiver,
     seed: OnionSeed,
+    /// The probe's isolation pair, held beside the seed for the boot.
+    probe_pair: IsolationPair,
     virtual_port: u16,
     stop: watch::Receiver<bool>,
     forward: watch::Receiver<Option<SocketAddr>>,
@@ -340,6 +362,20 @@ struct Drive {
     /// only (`TSR-Q14`). The value in the cell at start is the baseline.
     /// The loop folds a later change as evidence.
     tor_link: watch::Receiver<TorLinkTally>,
+    /// Each probe whose nonce came back through the onion (§4.5): the mint
+    /// that names it, and the process time the handshake took it. The core
+    /// accepts the take when it names the probe in flight and landed before
+    /// that probe's bound.
+    probe_arrivals: watch::Receiver<Option<ProbeArrival>>,
+    /// The onion as last published.
+    service: Option<ServiceId>,
+    /// That onion's descriptor upload rounds (`TSR-Q5`).
+    rounds: Option<UploadRounds>,
+    /// The event sink's drop count already resynchronised.
+    dropped_seen: u64,
+    /// The probe in flight. The nonce lives on this driver; aborting the
+    /// dial does not erase it ([`probe::Flight`]).
+    probe: Option<probe::Flight>,
     /// Tor's sampled view at the last Running sample, logged when it changes.
     network_view: NetworkView,
     control: Option<DaemonTorControl>,
@@ -388,6 +424,23 @@ impl Drive {
                         self.fold(tally_input(tally)).await;
                     }
                 }
+                changed = self.probe_arrivals.changed() => {
+                    // Process-static: `Err` does not happen. Biased ahead of
+                    // the deadline, so a take already in the cell is folded
+                    // before a bound that has also elapsed. The core still
+                    // compares the take's own time with the bound.
+                    if changed.is_ok() {
+                        let arrived = *self.probe_arrivals.borrow_and_update();
+                        if let Some(arrival) = arrived {
+                            tracing::info!(target: "tor", "this node's onion probe arrived");
+                            self.fold(Input::ProbeArrived {
+                                minted_at: arrival.minted_at.get(),
+                                arrived_at: arrival.arrived_at.get(),
+                            })
+                            .await;
+                        }
+                    }
+                }
                 wake = self.owner.wait_wake_async() => {
                     if wake.is_err() {
                         break;
@@ -396,14 +449,23 @@ impl Drive {
                 }
                 event = self.incoming.recv() => {
                     if let Some(reply) = event {
+                        // One fold for the batch. Folding each input on its
+                        // own replaces the step, and the earlier actions,
+                        // a recovery among them, would never be performed.
+                        let mut inputs = self.round_resync();
                         if let Some(parsed) = parse_event(&reply) {
                             if let Some(input) = input_of(&parsed) {
                                 // A Tor statement the supervisor acts on, said
                                 // as it arrives: what a run records.
                                 tracing::info!(target: "tor", "Tor says {input:?}");
-                                self.fold(input).await;
+                                inputs.push(input);
+                            }
+                            for input in self.round_marks(&parsed) {
+                                probe::say_round(&input);
+                                inputs.push(input);
                             }
                         }
+                        self.fold_many(inputs).await;
                     }
                 }
                 death = self.death_rx.recv() => {
@@ -422,6 +484,7 @@ impl Drive {
                 }
             }
         }
+        self.cancel_probe();
         if let Some(control) = self.control.take() {
             let teardown = control.shutdown().await;
             if let CacheSave::Failed(error) = teardown.cache {
@@ -456,23 +519,41 @@ impl Drive {
         halt
     }
 
-    /// Fold one observation. A process that ended is reaped here when the
-    /// phase does not withdraw a route: there is nothing to take down, and
-    /// the directory is still kept. A [`Action::TakeDown`] reaps after it
-    /// withdraws, so the route is gone before the child is. A
-    /// [`Action::StopRoute`] only withdraws: the shutdown wipe still owns
-    /// the child.
+    /// Fold one observation. See [`Self::fold_many`].
     async fn fold(&mut self, input: Input) {
-        let ended = ends_incarnation(&input);
-        self.step = self.core.on(input, self.now());
-        let take_down = self
-            .step
-            .actions
-            .iter()
-            .any(|action| matches!(action, Action::TakeDown));
-        if ended && !take_down {
-            self.reap().await;
+        self.fold_many(vec![input]).await;
+    }
+
+    /// Fold `inputs` as one step. Each transition's actions are kept, in
+    /// order, and the deadline is the last transition's. An empty list
+    /// leaves the step alone, so a batch that carried nothing does not
+    /// disarm a wait that is already armed.
+    ///
+    /// A process that ended is reaped here when that transition does not
+    /// withdraw a route: there is nothing to take down, and the directory
+    /// is still kept. A [`Action::TakeDown`] reaps after it withdraws, so
+    /// the route is gone before the child is. A [`Action::StopRoute`] only
+    /// withdraws: the shutdown wipe still owns the child.
+    async fn fold_many(&mut self, inputs: Vec<Input>) {
+        if inputs.is_empty() {
+            return;
         }
+        let mut actions = Vec::new();
+        let mut deadline = None;
+        for input in inputs {
+            let ended = ends_incarnation(&input);
+            let step = self.core.on(input, self.now());
+            let take_down = step
+                .actions
+                .iter()
+                .any(|action| matches!(action, Action::TakeDown));
+            actions.extend(step.actions);
+            deadline = step.deadline;
+            if ended && !take_down {
+                self.reap().await;
+            }
+        }
+        self.step = Step { actions, deadline };
     }
 
     async fn act(&mut self, action: Action, halt: &mut bool) -> Vec<Input> {
@@ -522,6 +603,22 @@ impl Drive {
                 }
             }
             Action::Publish(route) => vec![self.publish_route(route)],
+            Action::Probe => vec![self.probe()],
+            Action::CancelProbe => {
+                self.cancel_probe();
+                Vec::new()
+            }
+            Action::RoundStuck => self.round_stuck(),
+            Action::RefetchDescriptor => {
+                let mut stop = self.stop.clone();
+                vec![race_stop(&mut stop, self.refetch())
+                    .await
+                    .unwrap_or_else(|shutdown| shutdown)]
+            }
+            Action::PublishInbound(inbound) => {
+                self.publish_inbound(inbound);
+                Vec::new()
+            }
             Action::RepublishOnion => {
                 let mut stop = self.stop.clone();
                 vec![race_stop(&mut stop, self.republish())
@@ -706,13 +803,16 @@ impl Drive {
         match shekyl_ffi::zone_ffi::publish_managed_running(&route) {
             Some(installed) => {
                 self.incarnation = Some(installed);
+                // A facet decided before the route was in has no incarnation
+                // to name until now.
+                self.publish_inbound(self.core.status().inbound);
                 Input::RouteInstalled
             }
             None => Input::HostAbsent,
         }
     }
 
-    async fn republish(&self) -> Input {
+    async fn republish(&mut self) -> Input {
         let Some(control) = self.control.as_ref() else {
             return Input::ControlEnded;
         };
@@ -720,7 +820,7 @@ impl Drive {
             return Input::ForwardAbsent;
         };
         match control
-            .publish(
+            .republish(
                 &self.seed,
                 self.virtual_port,
                 forward,
@@ -731,6 +831,10 @@ impl Drive {
         {
             Ok(service) => {
                 shekyl_ffi::dialer_ffi::note_own_onion(service.as_str(), self.virtual_port);
+                // A publish starts the onion's rounds afresh: a round left
+                // open by the deleted service is not this one's.
+                self.rounds = Some(UploadRounds::new(service.clone()));
+                self.service = Some(service.clone());
                 tracing::info!(
                     target: "global",
                     "Tor is up: overlay inbound is published at {}.onion:{}, forwarded from {forward}",
@@ -782,6 +886,7 @@ impl Drive {
     /// stop's own death is not a second fault.
     async fn reap(&mut self) {
         self.bootstrap = None;
+        self.cancel_probe();
         let Some(control) = self.control.take() else {
             return;
         };

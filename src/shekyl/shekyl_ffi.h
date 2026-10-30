@@ -4022,8 +4022,11 @@ struct shekyl_seam_handshake_result {
   std::uint64_t cumulative_difficulty_top64;
   std::uint8_t top_id[32];
 };
-/// The inbound handshake's self-connection check: 1 when `nonce` (32 bytes)
-/// is one this node put in flight on `connector`, erasing it; 0 otherwise.
+/// The inbound handshake's nonce check, erasing what it finds. 0 is a
+/// peer's handshake. Any other code is this node's own dial, which the
+/// caller drops: 1 a peer dial of ours, 2 the managed Tor's probe of its
+/// own onion (Rust has told the supervisor), 3 a probe nonce on another
+/// connector (a defect, logged in Rust, never evidence).
 int shekyl_dial_take_handshake_nonce(std::uint32_t connector, const std::uint8_t* nonce);
 /// The chain-sync heuristics that read the outbound target, decided in Rust
 /// (DAEMON_CONFIG_CUTOVER.md §4.2): the handler hands its counts over.

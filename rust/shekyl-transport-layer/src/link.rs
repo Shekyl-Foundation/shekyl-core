@@ -16,9 +16,11 @@
 //! [`Links::get`]; a reader that waits for a change registers a watcher with
 //! [`Links::subscribe`], which is called after every change.
 //!
-//! The inbound facet (whether peers can reach this node's address through the
-//! link) arrives with the supervisor, which is its one source; there is no
-//! slot for it until then.
+//! The inbound facet says whether peers can reach this node's address
+//! through the link. The supervisor that owns the route is its one source
+//! ([`Links::publish_inbound`]). The posture line, the Status read and RPC
+//! read it. The dialer does not: hop 0 needs outbound only (`TSR-F9`), so
+//! an inbound change calls no watcher.
 
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, Weak};
@@ -63,6 +65,32 @@ pub enum Outbound {
     Down { cause: DownCause, since: Tick },
 }
 
+/// Why this node's address is not reachable through the link.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InboundCause {
+    /// The probe of this node's own address did not arrive within its
+    /// bound (`TOR_SUPERVISOR.md` §4.5, `TSR-M2`).
+    ProbeTimedOut,
+    /// A whole round of descriptor uploads failed: no directory took it.
+    DescriptorRejected,
+}
+
+/// Can peers reach this node's address through the link
+/// (`TOR_SUPERVISOR.md` §4.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InboundFacet {
+    /// No address of this node is offered on this link: clearnet's link,
+    /// `tor = off`, and an operator's Tor (its own probe is §4.9's, later).
+    NotOffered,
+    /// The address is offered, and no probe has arrived on this
+    /// incarnation yet.
+    Publishing,
+    /// The last probe arrived, at `evidence_at`.
+    Reachable { evidence_at: Tick },
+    /// Not reachable since `since`, for `cause`.
+    Unreachable { cause: InboundCause, since: Tick },
+}
+
 /// One connector's link.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Link {
@@ -74,6 +102,11 @@ pub struct Link {
     pub route: Option<Route>,
     /// The outbound facet.
     pub outbound: Outbound,
+    /// The inbound facet. Publishing it never changes the incarnation or
+    /// the outbound facet. A new incarnation keeps whether an address is
+    /// offered and drops the evidence: a reachable address is publishing
+    /// again on the next route.
+    pub inbound: InboundFacet,
 }
 
 impl Link {
@@ -81,6 +114,7 @@ impl Link {
         incarnation: 0,
         route: None,
         outbound: Outbound::Unknown,
+        inbound: InboundFacet::NotOffered,
     };
 
     /// Whether dials can leave through this link now.
@@ -196,6 +230,9 @@ impl Links {
                 link.incarnation = link.incarnation.wrapping_add(1);
                 link.route = Some(route);
                 link.outbound = Outbound::Usable { since: now };
+                if link.inbound != InboundFacet::NotOffered {
+                    link.inbound = InboundFacet::Publishing;
+                }
                 RoutePublish::Installed {
                     incarnation: link.incarnation,
                 }
@@ -234,13 +271,38 @@ impl Links {
         changed
     }
 
-    /// Withdraw `connector`'s route: unknown, with none. The zone host does
-    /// this at its shutdown, so a host built later starts from nothing.
+    /// Publish the inbound facet of `incarnation`. Returns whether the link
+    /// changed: a newer route has replaced that incarnation, or the facet
+    /// already reads `inbound`, and then nothing changes.
+    ///
+    /// No watcher is called. The watchers are the outbound facet's readers
+    /// (the dialer parks on the link while it is not usable), and inbound
+    /// never reaches the dialer (`TSR-F9`). Readers of the inbound facet
+    /// read it with [`Self::get`] when they report.
+    pub fn publish_inbound(
+        &self,
+        connector: ConnectorId,
+        incarnation: u64,
+        inbound: InboundFacet,
+    ) -> bool {
+        let mut links = self.links.lock().expect("links");
+        let link = &mut links[connector.index()];
+        if link.incarnation != incarnation || link.inbound == inbound {
+            return false;
+        }
+        link.inbound = inbound;
+        true
+    }
+
+    /// Withdraw `connector`'s route: unknown, with none, and no address
+    /// offered. The zone host does this at its shutdown, so a host built
+    /// later starts from nothing.
     pub fn withdraw(&self, connector: ConnectorId) {
         self.change(connector, |link| {
             link.incarnation = link.incarnation.wrapping_add(1);
             link.route = None;
             link.outbound = Outbound::Unknown;
+            link.inbound = InboundFacet::NotOffered;
         });
     }
 
@@ -414,6 +476,93 @@ mod tests {
         links.withdraw(ConnectorId::Tor);
         assert_eq!(heard.load(Ordering::SeqCst), 1);
         assert!(links.watchers.lock().expect("watchers").by_id.is_empty());
+    }
+
+    /// The inbound facet is published for its incarnation and calls no
+    /// watcher: the dialer, which parks on link changes, never hears it
+    /// (`TSR-F9`). A stale incarnation changes nothing, and a new route
+    /// keeps the offer and drops the evidence. Calling `notify` in
+    /// `publish_inbound`, or skipping the incarnation check, fails this.
+    #[test]
+    fn the_inbound_facet_is_its_incarnations_and_wakes_no_one() {
+        let links = Links::new();
+        let heard = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&heard);
+        let _watching = links.subscribe(Arc::new(move |_| {
+            count.fetch_add(1, Ordering::SeqCst);
+        }));
+        let first = links
+            .publish_usable(ConnectorId::Tor, socks(9050), Tick::new(1))
+            .incarnation();
+        assert_eq!(
+            links.get(ConnectorId::Tor).inbound,
+            InboundFacet::NotOffered,
+            "nothing is offered until the owner says so"
+        );
+        assert!(links.publish_inbound(ConnectorId::Tor, first, InboundFacet::Publishing));
+        let reachable = InboundFacet::Reachable {
+            evidence_at: Tick::new(2),
+        };
+        assert!(links.publish_inbound(ConnectorId::Tor, first, reachable));
+        assert!(
+            !links.publish_inbound(ConnectorId::Tor, first, reachable),
+            "the same facet again is no change"
+        );
+        let link = links.get(ConnectorId::Tor);
+        assert_eq!(link.inbound, reachable);
+        assert_eq!(
+            link.incarnation, first,
+            "inbound never bumps the incarnation"
+        );
+        assert_eq!(
+            link.outbound,
+            Outbound::Usable {
+                since: Tick::new(1)
+            },
+            "nor touches the outbound facet"
+        );
+        assert_eq!(heard.load(Ordering::SeqCst), 1, "only the route install");
+
+        assert!(links.publish_down(
+            ConnectorId::Tor,
+            first,
+            DownCause::ProcessExited,
+            Tick::new(3)
+        ));
+        let second = links
+            .publish_usable(ConnectorId::Tor, socks(9050), Tick::new(4))
+            .incarnation();
+        assert_eq!(
+            links.get(ConnectorId::Tor).inbound,
+            InboundFacet::Publishing,
+            "a new route drops the evidence and keeps the offer"
+        );
+        assert!(
+            !links.publish_inbound(ConnectorId::Tor, first, reachable),
+            "the old incarnation's evidence is stale"
+        );
+        assert_eq!(
+            links.get(ConnectorId::Tor).inbound,
+            InboundFacet::Publishing
+        );
+        assert!(links.publish_inbound(
+            ConnectorId::Tor,
+            second,
+            InboundFacet::Unreachable {
+                cause: InboundCause::ProbeTimedOut,
+                since: Tick::new(5)
+            }
+        ));
+        links.withdraw(ConnectorId::Tor);
+        assert_eq!(
+            links.get(ConnectorId::Tor).inbound,
+            InboundFacet::NotOffered
+        );
+        assert_eq!(
+            links.get(ConnectorId::Clearnet).inbound,
+            InboundFacet::NotOffered,
+            "clearnet offers nothing through its link"
+        );
     }
 
     /// The default boot installs one SOCKS address twice (`listen_tor`, then

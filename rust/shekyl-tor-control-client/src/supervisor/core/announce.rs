@@ -10,6 +10,7 @@
 //! is a different debt from that repeat: a spawn or a pin check drops the
 //! repeat and does not drop the once (`TOR_SUPERVISOR.md` §4.4).
 
+use super::super::posture::{Inbound, InboundCause};
 use super::{Cause, Shown};
 
 /// When an announcement is said.
@@ -31,19 +32,24 @@ pub(super) enum Cadence {
     Once,
 }
 
-/// The shown state and the cause's kind. Detail inside one kind is not a
-/// change (§4.4).
+/// The shown state, the cause's kind, and the inbound facet's cause when
+/// it is down. Detail inside one kind is not a change (§4.4).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct SayKey {
     shown: Shown,
     cause: std::mem::Discriminant<Cause>,
+    inbound: Option<InboundCause>,
 }
 
 impl SayKey {
-    pub(super) fn new(shown: Shown, cause: &Cause) -> Self {
+    pub(super) fn new(shown: Shown, cause: &Cause, inbound: Inbound) -> Self {
         Self {
             shown,
             cause: std::mem::discriminant(cause),
+            inbound: match inbound {
+                Inbound::Unreachable { cause, .. } => Some(cause),
+                Inbound::NotOffered | Inbound::Publishing | Inbound::Reachable { .. } => None,
+            },
         }
     }
 }

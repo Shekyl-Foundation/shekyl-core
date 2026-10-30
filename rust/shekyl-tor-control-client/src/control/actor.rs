@@ -394,6 +394,14 @@ pub enum Command {
     /// `DEL_ONION <service-id>` — tear the service down. Issued on the actor's
     /// shutdown path as well as on demand.
     DelOnion(ServiceId),
+    /// `HSFETCH <service-id>`: fetch the descriptor of this v3 onion again, so
+    /// Tor's client view of that one address is refreshed and no other stream
+    /// is touched (`TOR_SUPERVISOR.md` §4.5: the probe's refetch after a
+    /// miss). The result arrives as `HS_DESC` `REQUESTED`, `RECEIVED` or
+    /// `FAILED` events carrying the descriptor id, which the upload-round
+    /// coalescer never counts. The id is a validated [`ServiceId`], so the
+    /// line cannot carry a second command.
+    HsFetch(ServiceId),
     /// `SETCONF HSLayer2Nodes=… HSLayer3Nodes=…` — pin layer-2/layer-3
     /// vanguard guards (VG-1). The **wallet** supervisor drives this; the
     /// daemon's ephemeral onion has no vanguard state. Built from typed
@@ -489,6 +497,7 @@ impl Command {
             // Infallible by construction — no validation step exists to fail.
             Self::AddOnion(add) => return Ok(add.to_wire_line()),
             Self::DelOnion(id) => return Ok(Zeroizing::new(format!("DEL_ONION {}", id.as_str()))),
+            Self::HsFetch(id) => return Ok(Zeroizing::new(format!("HSFETCH {}", id.as_str()))),
             // Also infallible: every value is a `$hex` specifier that cannot
             // carry a space or control byte (see `vanguards`).
             Self::SetConf(pins) => return Ok(Zeroizing::new(pins.to_wire_line())),
@@ -1525,8 +1534,12 @@ impl Message<StreamMessage<Result<Framed, ControlError>, (), ()>> for TorControl
                     // on the wire, which is exactly what `ServiceId::parse` exists
                     // to prevent. (The service still dies with the connection.)
                     if in_flight.kind == PendingKind::AddOnion && reply.status() == 250 {
+                        // A republish (`DEL_ONION`, then `ADD_ONION` with the
+                        // same key) records the id once: teardown deletes it once.
                         if let Some(id) = super::onion::parse_service_id(reply.lines()) {
-                            self.published_onions.push(id);
+                            if !self.published_onions.contains(&id) {
+                                self.published_onions.push(id);
+                            }
                         }
                     }
                     tx.send(Ok(reply));
@@ -1746,6 +1759,20 @@ mod tests {
         assert_eq!(
             cmd.to_wire().unwrap().as_str(),
             "SETEVENTS STREAM STATUS_CLIENT"
+        );
+    }
+
+    /// `HSFETCH` names the one onion it refreshes, from a validated id: the
+    /// line is the verb and the 56-character address, nothing else.
+    #[test]
+    fn hsfetch_renders_the_one_address() {
+        let id = super::super::onion::ServiceId::parse(
+            "url5xrvawpg5uv275sjyo6w57vvzopdufb7ffykiqnnqxjwecsxm3lid",
+        )
+        .expect("a v3 id");
+        assert_eq!(
+            Command::HsFetch(id).to_wire().unwrap().as_str(),
+            "HSFETCH url5xrvawpg5uv275sjyo6w57vvzopdufb7ffykiqnnqxjwecsxm3lid"
         );
     }
 

@@ -11,8 +11,8 @@
 
 use std::net::SocketAddr;
 
-use super::super::posture::Cause;
-use super::{Action, Core, Disk, Duty, Link, ManagedRunning, Phase};
+use super::super::posture::{Cause, Inbound};
+use super::{Action, Core, Disk, Duty, Link, ManagedRunning, Phase, Probe};
 
 impl Core {
     /// Enter Running.
@@ -26,6 +26,14 @@ impl Core {
         };
         self.dials.restart(now);
         self.set_cause(Cause::None);
+        // A new route drops the inbound evidence and keeps the offer: the
+        // republished onion is publishing until this Tor's probe arrives.
+        if self.inbound != Inbound::NotOffered {
+            self.inbound = Inbound::Publishing;
+        }
+        self.probe = Probe::Idle;
+        self.round = None;
+        self.service_republish = false;
         self.arm_sample(now);
         self.arm_alive(now);
         vec![

@@ -48,7 +48,10 @@ pub use declaration::{
     StackPlan, StreamKind, YesNo,
 };
 pub use dial::check_dial;
-pub use link::{DownCause, Link, Links, Outbound, Route, RoutePublish, Subscription, Watcher};
+pub use link::{
+    DownCause, InboundCause, InboundFacet, Link, Links, Outbound, Route, RoutePublish,
+    Subscription, Watcher,
+};
 pub use profile::{
     dial_profile, AttemptsPerTest, Cooldown, DialProfile, JitteredSpan, RetryWaits, WindowSource,
 };

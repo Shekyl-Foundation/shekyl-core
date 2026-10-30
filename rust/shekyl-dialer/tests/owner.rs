@@ -983,16 +983,40 @@ fn a_refused_payload_on_a_kept_tor_session_is_not_another_open() {
     );
 }
 
-/// An inbound Tor session has no list address and is not a dial. While it
-/// is on the board the quiet line's held count includes it; accepting it
-/// does not move the opened count. The close drops the row before the
-/// dialer is told, and the held count follows.
+/// An inbound Tor row has no list address and is not a dial. A handshake
+/// still open is on the board and is not held: the probe of this node's own
+/// onion is dropped there, before the session is established, so it never
+/// moves the quiet line. Once the handshake finishes the row is a session
+/// and the quiet line's held count includes it. Accepting it does not move
+/// the opened count. The close drops the row before the dialer is told, and
+/// the held count follows. Counting the open handshake as held fails this.
 #[test]
-fn an_inbound_tor_session_is_held_and_is_not_an_opened_dial() {
+fn an_inbound_tor_session_is_held_once_its_handshake_finishes() {
     let rig = rig();
     let attached = rig.hub.connect(&Endpoint::TorInbound).expect("accepted");
     assert_eq!(
         rig.hub.board().count(ConnectorId::Tor, Direction::Inbound),
+        1,
+        "a dial cap counts the handshake"
+    );
+    assert_eq!(
+        rig.hub
+            .board()
+            .established_sessions(ConnectorId::Tor, Direction::Inbound),
+        0
+    );
+    rig.dialer.note_inbound_tor();
+    assert_eq!(
+        rig.dialer.tor_link_tally(),
+        TorLinkTally::default(),
+        "a handshake still open is not a held session"
+    );
+
+    rig.hub.session_established(attached.id);
+    assert_eq!(
+        rig.hub
+            .board()
+            .established_sessions(ConnectorId::Tor, Direction::Inbound),
         1
     );
     rig.dialer.note_inbound_tor();
