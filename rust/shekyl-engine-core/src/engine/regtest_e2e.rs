@@ -2563,7 +2563,7 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
         let hex = hex::encode(block.serialize());
         let rpc = &daemon.rpc;
         async move {
-            rpc.json_rpc_call::<serde_json::Value>("submit_block", Some(json!([hex])))
+            rpc.json_rpc_call::<serde_json::Value>("submit_block", Some(json!({ "body": hex })))
                 .await
         }
     };

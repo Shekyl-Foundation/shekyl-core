@@ -83,10 +83,10 @@ class Daemon(object):
     def submitblock(self, block):
         submitblock = {
             'method': 'submitblock',
-            'params': [ block ],    
-            'jsonrpc': '2.0', 
+            'params': { 'body': block },
+            'jsonrpc': '2.0',
             'id': '0'
-        }    
+        }
         return self.rpc.send_json_rpc_request(submitblock)
     submit_block = submitblock
 
