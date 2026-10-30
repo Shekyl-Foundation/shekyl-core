@@ -801,14 +801,19 @@ async fn an_arrival_forms_in_the_class_its_origin_names() {
             session: SessionId(1),
             solicited,
         };
-        let ticket = door.offer(offered).expect("room and a token");
-        let started = std::time::Instant::now();
         // The attendant may already be waiting in the chain class to pin
-        // the window. The form is the increase after the offer.
+        // the window, and it cannot leave while this test holds the only
+        // permit. The baseline is read before the offer, so the form can
+        // only add to it: read after, a form that reached its wait first
+        // is in the baseline and the count never rises past it.
         let waiting_before = budget.waiting(class);
+        let ticket = door.offer(offered).expect("room and a token");
+        // A ceiling for a form that never waits, not a measurement: the
+        // loop ends the moment the form is waiting, however loaded the host.
+        let started = std::time::Instant::now();
         while budget.waiting(class) <= waiting_before {
             assert!(
-                started.elapsed() < std::time::Duration::from_secs(10),
+                started.elapsed() < std::time::Duration::from_secs(300),
                 "the form never waited in {class:?}"
             );
             tokio::task::yield_now().await;
