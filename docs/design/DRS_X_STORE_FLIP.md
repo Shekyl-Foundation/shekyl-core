@@ -282,8 +282,9 @@ The C++ hits are all in files the flip deletes (`blockchain.{h,cpp}`, `tx_pool.c
 - `get_current_blockchain_height`;
 - `is_synchronized`;
 - `pool_has_tx(txid)`;
-- `on_transactions_relayed(blobs, method, stem_connector)`;
-- `on_stem_propagated(txids)`.
+- `on_transactions_relayed(blobs, method, stem_connector)`.
+
+It asked a fifth, `on_stem_propagated(txids)`, until the relay embargo landed with the flip: the zone now consumes the stem watch's propagated verdict itself, disarms the embargo and marks the transaction shown.
 
 **And the other direction.** The core's periodic `get_relayable_transactions` → `relay_transactions` (`cryptonote_core.cpp:1035–1084`) is the pool's relay state machine driving the sends.
 
@@ -291,8 +292,10 @@ The C++ hits are all in files the flip deletes (`blockchain.{h,cpp}`, `tx_pool.c
 - The shell implements the five `i_core_events` methods by forwarding: height to `TipChanged`; `is_synchronized` stays the C++ protocol handler's `m_synchronized` until chain sync's cutover (FLIP-Q1), because the Rust `SyncState` stays `NoView` on a public network until then and a shell that read it would not relay; `pool_has_tx`, `on_transactions_relayed` and `on_stem_propagated` go to the Rust pool.
 - One Rust → C++ call hands `levin_notify` what the pool's readiness says is due. That is the only new C++ entry, and RD deletes it with `levin_notify`.
 
+**Who owns the embargo** (RX-1, RX-2, Rick 2026-10-29; the relay brief of that day). `shekyl-relay`'s zone (`graph/embargo.rs`) holds every stem's relay state, keyed on the transaction hash and never on the wire. The embargo is the stem watch's observation: a relay position's deadline is its connector's draw, the origin's is the derived retry interval (`origin_retry_ms`, 1,148 s). On fire the zone re-stems once to the source's alternate, captured from its frozen pin (W1, W3c), and fluffs and marks shown only on the second fire or with no live alternate (§12.2, §14.7). An origin that was not sent is held unsent, neither shown nor fluffed, and planned again on the short grid, at the sync turn and at a new session. The pool holds the one shown bit. The origin's re-broadcast responsibility is relay state, closed by RX-1: its retry is its embargo-fire event.
+
 **The flip's relay obligations** (carried from the review of #1102):
-- The flip drives `Responsibilities::release` from every way an entry leaves the pool — eviction, the reconcile's removals and mining — and asserts `len() ≤ pool.len()`, so the relay never holds a responsibility for a transaction the pool no longer has.
+- The flip releases the zone's relay state from every way an entry leaves the pool — eviction, the reconcile's removals and mining — through the node's departure hook (`relay_zone_ffi::note_departed`), so the zone never holds state for a transaction the pool no longer has.
 - The relay nudge fires only on `Committed`, never on a concealed `Accepted`.
 
 **DX-F6 — the landed pool record holds the relay state machine, against D++ acceptance criterion 2.**
@@ -301,7 +304,7 @@ The C++ hits are all in files the flip deletes (`blockchain.{h,cpp}`, `tx_pool.c
   - an arrival `zone: NetZone`.
 - Criterion 2 (`DAEMON_RELAY_PRIVACY.md:113–125`) rules: "**The pool knows one bit: public yet** … owned by the relay and read by the pool", and that `NetZone` is "not a pool field". There are no zones in Shekyl (2026-09-30).
 - It is a projection of the C++ `relay_method` (rule 16). PR-b reshapes it before the pool goes live: the pool record carries the public bit and nothing of the relay's state.
-- Stem, fluff, embargo and arrival connector are the relay owner's (criterion 1). Whether the origin's re-broadcast responsibility is pool or relay state is posed in PR-b's brief, which coordinates with the RD lane.
+- Stem, fluff, embargo and arrival connector are the relay owner's (criterion 1). The origin's re-broadcast responsibility is relay state (RX-1, Rick 2026-10-29; §2, "Who owns the embargo").
 
 ---
 
@@ -411,7 +414,8 @@ Its number is read from the tree at the flip's pin, never carried from a plan (`
 - `inject_archival_serve_credit` is the host's and an armed lever: **C++ defect** (RT-O9.2 ruled it so; the table restated the defect as policy).
 - `set_bans` takes no numeric `ip`, an absent `seconds` bans until lifted, and `get_bans` and `banned` add `permanent`: **Design** (Q11; the ban file's permanent bans).
 - `relay_tx` answers not ready: **Unbuilt by design**, owner RD (the relay driver).
-- An originated transaction's embargo-expiry fluff (the origin's re-broadcast): the C++ `core::relay_txpool_transactions` re-offered it from the pool's `get_relayable_transactions` on a timer; nothing in Rust does, and on the regtest stem-and-sink pair an origination stayed in its stem phase for 600 s (2026-10-29): **Unbuilt by design**, owner RD (PR-b's brief poses where the responsibility lives; the FOLLOWUPS row carries the observation).
+- A stem's embargo on fire: the C++ fluffed it on expiry; Rust re-stems once to the alternate and fluffs only as the last resort, the second fire or no live alternate: **Design** (§14.7 of `DAEMON_RELAY_PRIVACY.md`, reshape adopted unconditionally; RX-1 for the origin, Rick 2026-10-29).
+- An origin whose plan was `NoOwnEdge`: the C++ left it to the pool's short-grid retry; Rust holds it in the zone, neither shown nor fluffed, until an own edge exists: **Design** (RX-2, Rick 2026-10-29; criterion 4).
 - A public-network node is not synced, and builds no template, before chain sync's cutover: **Unbuilt by design**, owner chain sync (Q13).
 
 ### 3.2 Function
