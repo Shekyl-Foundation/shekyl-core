@@ -1823,8 +1823,7 @@ identity endpoint's class and the §5.1 test through the producer's read;
 **Not in this increment:** references on the wire, bodies pulled at
 connect, body fetch from peers, broadcast (4b); the live receipt-key
 selection on the serving host (4b); census flips and deletions (4b); a
-any C++. (A managed Tor's route reached the producer in a later Tor-lane
-PR, described above.)
+any C++.
 
 ## 17. `SO-D12h` — a settled epoch's market membership, and the per-epoch retirement — RULED 2026-10-17, BUILT
 
