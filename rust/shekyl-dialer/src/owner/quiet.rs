@@ -57,10 +57,13 @@ impl Dialer {
     }
 
     /// The ladder a failed test on `connector` takes at `now`: the first
-    /// step while the connector holds no session, outbound or inbound, its
-    /// last K attempts all ended without opening a stream, and at least S
-    /// has passed since a stream last opened there (K and S are its dial
-    /// profile's quiet threshold); the climb otherwise.
+    /// step while the connector holds no session — an outbound one, or an
+    /// inbound one whose handshake has finished — its last K attempts all
+    /// ended without opening a stream, and at least S has passed since a
+    /// stream last opened there (K and S are its dial profile's quiet
+    /// threshold); the climb otherwise. A handshake still open is not a
+    /// session, so the probe of this node's own onion does not climb the
+    /// ladder (§4.5).
     pub(super) fn ladder(shared: &Shared, connector: ConnectorId, now: Tick) -> Ladder {
         let index = connector.index();
         let threshold = dial_profile(connector).quiet();

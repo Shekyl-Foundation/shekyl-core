@@ -8,10 +8,10 @@
 //! Anything this module does not name is `None`. The core never sees it.
 
 use crate::control::{
-    Bootstrap, ClientStatus, GeneralStatus, HsDescAction, Liveness, Recommendation, TorEvent,
+    Bootstrap, ClientStatus, GeneralStatus, Liveness, Recommendation, RoundMark, TorEvent,
 };
 
-use super::core::Input;
+use super::core::{Input, RoundEnd};
 
 /// Events the core acts on (`TOR_SUPERVISOR.md` §4.2). Anything else is `None`.
 ///
@@ -28,8 +28,11 @@ use super::core::Input;
 /// | `CLOCK_JUMPED` | [`Input::ClockJumped`] |
 /// | `TOO_MANY_CONNECTIONS` | [`Input::TooManyFiles`] |
 /// | `DANGEROUS_VERSION` | [`Input::DangerousVersion`] |
-/// | `HS_DESC FAILED` for an upload | [`Input::DescriptorFailed`] |
-/// | `HS_DESC UPLOADED` | [`Input::DescriptorUploaded`] |
+///
+/// `HS_DESC` is not mapped one event at a time. The driver coalesces this
+/// node's own onion's events into rounds (`UploadRounds`, `TSR-Q5`) and
+/// folds each round's marks with [`round_inputs`]: one failed upload in a
+/// normal round is not evidence (`TSR-M7` saw 1 of 13 fail).
 ///
 /// A bootstrap problem Tor has not yet marked `warn` is not outbound-blocked.
 /// Tor sends `warn` from the tenth problem at a phase (§4.2).
@@ -70,15 +73,45 @@ pub fn input_of(event: &TorEvent) -> Option<Input> {
             ClientStatus::CircuitEstablished => Some(Input::ExternalCleared),
             _ => None,
         },
-        TorEvent::HsDesc(event) => match event.action {
-            HsDescAction::Failed if event.descriptor_id.is_none() => Some(Input::DescriptorFailed),
-            HsDescAction::Uploaded => Some(Input::DescriptorUploaded),
-            _ => None,
-        },
-        TorEvent::Log(_) | TorEvent::Unsubscribed | TorEvent::NetworkLiveness(Liveness::Other) => {
-            None
-        }
+        TorEvent::HsDesc(_)
+        | TorEvent::Log(_)
+        | TorEvent::Unsubscribed
+        | TorEvent::NetworkLiveness(Liveness::Other) => None,
     }
+}
+
+/// The inputs a round's marks carry (§4.5, §4.4). A round's end is
+/// [`Input::UploadRoundEnded`], with one `draw()` for the probe's delay: a
+/// round with an upload that succeeded schedules the probe, one in which
+/// every upload ended, none succeeded and at least one failed is
+/// Service-class evidence, and one that still has an upload unfinished, or
+/// whose ends were lost, is neither. A round's start and its first upload
+/// are inputs too: the probe follows the round's end, or
+/// `Policy::round_wait` after its first upload, whichever comes first
+/// (Rick, 2026-10-29), and a round open too long is counted. Each of the
+/// first upload and the end carries its own draw.
+pub fn round_inputs(marks: &[RoundMark], mut draw: impl FnMut() -> u64) -> Vec<Input> {
+    marks
+        .iter()
+        .map(|mark| match *mark {
+            RoundMark::Started => Input::UploadRoundStarted,
+            RoundMark::FirstUploaded => Input::FirstUploaded { draw: draw() },
+            RoundMark::Ended {
+                uploaded,
+                failed,
+                unfinished,
+            } => Input::UploadRoundEnded {
+                end: if uploaded > 0 {
+                    RoundEnd::Uploaded
+                } else if failed > 0 && unfinished == 0 {
+                    RoundEnd::FailedAll
+                } else {
+                    RoundEnd::Unknown
+                },
+                draw: draw(),
+            },
+        })
+        .collect()
 }
 
 /// §4.2's named external cause: a bootstrap problem Tor has marked `warn`,
@@ -90,11 +123,99 @@ fn outbound_blocked(problem: &crate::control::BootstrapProblem) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::input_of;
+    use super::{input_of, round_inputs};
+    use crate::control::RoundMark;
     use crate::control::{
         Bootstrap, BootstrapProblem, ClientStatus, Liveness, Recommendation, Severity, TorEvent,
     };
-    use crate::supervisor::Input;
+    use crate::supervisor::{Input, RoundEnd};
+
+    /// A round's marks become the core's inputs: its start, its first upload
+    /// and its end, each upload and end with a draw of its own. A round with a
+    /// success ends as the probe's trigger, one in which every upload ended
+    /// and one failed as the Service evidence, and one that still has an
+    /// upload unfinished, or whose ends were lost, as neither. Mapping every
+    /// `HS_DESC FAILED` to a republish, or treating a stuck round's open
+    /// uploads as a failed round, fails this.
+    #[test]
+    fn a_rounds_marks_are_its_start_first_upload_and_end() {
+        let mut draws = 0_u64..;
+        let mut draw = || draws.next().expect("endless");
+        let inputs = round_inputs(
+            &[
+                RoundMark::Started,
+                RoundMark::FirstUploaded,
+                RoundMark::Ended {
+                    uploaded: 12,
+                    failed: 1,
+                    unfinished: 3,
+                },
+            ],
+            &mut draw,
+        );
+        assert_eq!(
+            inputs,
+            [
+                Input::UploadRoundStarted,
+                Input::FirstUploaded { draw: 0 },
+                Input::UploadRoundEnded {
+                    end: RoundEnd::Uploaded,
+                    draw: 1
+                }
+            ]
+        );
+        let failed = round_inputs(
+            &[RoundMark::Ended {
+                uploaded: 0,
+                failed: 16,
+                unfinished: 0,
+            }],
+            &mut draw,
+        );
+        assert_eq!(
+            failed,
+            [Input::UploadRoundEnded {
+                end: RoundEnd::FailedAll,
+                draw: 2
+            }]
+        );
+        let lost = round_inputs(
+            &[RoundMark::Ended {
+                uploaded: 0,
+                failed: 0,
+                unfinished: 16,
+            }],
+            &mut draw,
+        );
+        assert_eq!(
+            lost,
+            [Input::UploadRoundEnded {
+                end: RoundEnd::Unknown,
+                draw: 3
+            }]
+        );
+        // A stuck round, or a resync, reports the uploads that never ended.
+        // One failure beside them is not a round in which every upload failed.
+        let open = round_inputs(
+            &[RoundMark::Ended {
+                uploaded: 0,
+                failed: 1,
+                unfinished: 15,
+            }],
+            &mut draw,
+        );
+        assert_eq!(
+            open,
+            [Input::UploadRoundEnded {
+                end: RoundEnd::Unknown,
+                draw: 4
+            }]
+        );
+        assert_eq!(
+            round_inputs(&[RoundMark::FirstUploaded], &mut draw),
+            [Input::FirstUploaded { draw: 5 }]
+        );
+    }
 
     /// Tor saying whether it has a circuit names or clears the network
     /// cause; a clock jump is the general event's.

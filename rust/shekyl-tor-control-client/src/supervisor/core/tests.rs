@@ -23,6 +23,11 @@ fn policy() -> Policy {
         alive_every: Duration::from_secs(4),
         fresh_directory_after: 3,
         quiet_after: Duration::from_secs(20),
+        probe_after_min: Duration::from_secs(15),
+        probe_after_max: Duration::from_secs(60),
+        probe_within: Duration::from_secs(60),
+        round_wait: Duration::from_secs(60),
+        round_stuck_after: Duration::from_secs(300),
     }
 }
 
@@ -534,11 +539,9 @@ fn a_repeated_death_names_the_last_exit_code() {
     assert!(!text.contains("exit code"), "{text}");
 }
 
-/// A rejected onion retries on the sample, not in a loop. A descriptor
-/// that fails after a success republishes once; a second failure while
-/// that republish is still owed does not stack another.
+/// A rejected onion retries on the sample, not in a loop.
 #[test]
-fn an_onion_retries_on_the_sample_and_a_descriptor_failure_does_not_stack() {
+fn an_onion_retries_on_the_sample() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
     bring_up(&mut core);
     core.on(Input::RouteInstalled, 0);
@@ -556,21 +559,6 @@ fn an_onion_retries_on_the_sample_and_a_descriptor_failure_does_not_stack() {
             .count(),
         1
     );
-    core.on(Input::OnionPublished, due);
-    let failed = core.on(Input::DescriptorFailed, due);
-    assert_eq!(
-        failed
-            .actions
-            .iter()
-            .filter(|action| matches!(action, Action::RepublishOnion))
-            .count(),
-        1
-    );
-    let stacked = core.on(Input::DescriptorFailed, due);
-    assert!(!stacked
-        .actions
-        .iter()
-        .any(|action| matches!(action, Action::RepublishOnion)));
 }
 
 /// The first `state` file defers disk writes. Once the route and the onion
@@ -996,4 +984,5 @@ fn an_exhausted_pin_holds_the_origin_while_health_stays_true() {
 }
 
 mod pace;
+mod probe;
 mod quiet;

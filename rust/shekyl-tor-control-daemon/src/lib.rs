@@ -51,17 +51,21 @@
 
 mod data_dir;
 pub mod ephemeral;
+pub mod probe;
 
 pub use data_dir::{space_needed, sweep_stale_data_dirs, TOR_WRITE_HEADROOM};
 pub use ephemeral::{
     CacheSave, DaemonTorConfig, DaemonTorControl, DaemonTorPublishError, DaemonTorStartError,
     KeptDataDir, LaunchFailure, OnionSeed, SpawnError, Teardown, TorDeath,
 };
+pub use probe::{probe_own_onion, IsolationPair, ProbeDial};
 pub use shekyl_tor_control_client::control::OnionPow;
 // Re-exported so the daemon's start seam (`shekyl-daemon`'s `tor.rs`) names
 // one crate (this one) rather than reaching around it to the client for the
 // error type alone.
 pub use shekyl_tor_control_client::binary::TorBinaryError;
 
+#[cfg(test)]
+mod probe_live_tests;
 #[cfg(test)]
 mod test_support;
