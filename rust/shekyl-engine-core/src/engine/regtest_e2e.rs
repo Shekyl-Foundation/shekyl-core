@@ -726,6 +726,19 @@ impl RegtestDaemon {
     /// which stands in for the host until the RPC channel exists; a reply
     /// without the host part would mean it was answered as someone else,
     /// and is a failure, never a zero.
+    /// The tip's hash, from `get_last_block_header`.
+    pub(super) async fn last_block_hash(&self) -> String {
+        let res: serde_json::Value = self
+            .rpc
+            .json_rpc_call("get_last_block_header", Some(json!({})))
+            .await
+            .expect("get_last_block_header");
+        res["block_header"]["hash"]
+            .as_str()
+            .expect("the tip's hash")
+            .to_owned()
+    }
+
     pub(super) async fn tx_pool_size(&self) -> u64 {
         let info = self
             .rpc
@@ -2771,6 +2784,92 @@ async fn e2e_cxx_template_fills_to_its_median() {
         &[],
     )
     .await;
+}
+
+/// A node syncs a chain longer than the ingest door's window from one peer.
+///
+/// The handler downloads spans ahead and hands each to the door; the door
+/// seats a window of arrivals and connects them in its own time. Seen red
+/// on 2026-10-30 (the flip's F-B run and the RPC column's regtest sync):
+/// the first span connected, the rest were offered while the door had no
+/// room, the handler read the gap between the tip and what it had handed
+/// over as "nothing to download from this peer" and dropped it, and the
+/// node stood at height 21 of 82 for thirty minutes. The joiner must reach
+/// the source's tip, and the same tip.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; two daemons, ~2 min"]
+async fn a_node_syncs_a_chain_longer_than_the_doors_window_from_a_peer() {
+    use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
+
+    let serial = serial_lock().lock_owned().await;
+    let seed = [0x5au8; MASTER_SEED_BYTES];
+    let source_p2p = RegtestDaemon::free_port();
+    let sink_p2p = RegtestDaemon::free_port_excluding(&[source_p2p]);
+    let joiner_p2p = RegtestDaemon::free_port_excluding(&[source_p2p, sink_p2p]);
+    let address = mine_address_from_seed(&seed, shekyl_address::Network::Mainnet);
+    // A node with a peer configured reads synced, and posts a job, once it
+    // has linked to one (the pair tests' shape): the source links to a
+    // sink that does not sync, so the chain it mines stays the source's
+    // alone until the joiner arrives.
+    let _sink = RegtestDaemon::spawn(RegtestSpawn::new(None).with_peering(Peering::Linked {
+        p2p_port: sink_p2p,
+        peer_p2p_port: source_p2p,
+        sink: true,
+    }))
+    .await;
+    let source = RegtestDaemon::spawn(
+        RegtestSpawn::new(Some(serial))
+            .with_mine_address(address)
+            .with_peering(Peering::Linked {
+                p2p_port: source_p2p,
+                peer_p2p_port: sink_p2p,
+                sink: false,
+            }),
+    )
+    .await;
+    let linked = Instant::now() + Duration::from_secs(60);
+    while try_generate_blocks(&source.rpc, 1).await.is_err() {
+        assert!(
+            Instant::now() < linked,
+            "the source never read synced against its sink within 60 s"
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    // Five spans of twenty: past one door window, and past the C++ queue's
+    // single span.
+    source.generate_blocks_chunked(99).await;
+    let want = source.height().await;
+    assert_eq!(want, 101, "the source mined its chain");
+    let source_tip = source.last_block_hash().await;
+
+    let joiner = RegtestDaemon::spawn(RegtestSpawn::new(None).with_peering(Peering::Linked {
+        p2p_port: joiner_p2p,
+        peer_p2p_port: source_p2p,
+        sink: false,
+    }))
+    .await;
+    let deadline = Instant::now() + Duration::from_secs(240);
+    loop {
+        let have = joiner.height().await;
+        if have >= want {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the joiner stands at height {have} of {want} after 240 s: the sync stalled"
+        );
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+    assert_eq!(
+        joiner.height().await,
+        want,
+        "the joiner reached the source's height"
+    );
+    assert_eq!(
+        joiner.last_block_hash().await,
+        source_tip,
+        "the joiner reached the source's tip"
+    );
 }
 
 /// `get_block_template.expected_reward` is the sum of the coinbase outputs of

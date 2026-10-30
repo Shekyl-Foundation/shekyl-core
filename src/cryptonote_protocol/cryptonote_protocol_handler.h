@@ -171,6 +171,7 @@ namespace cryptonote
     bool check_standby_peers();
     bool update_sync_search();
     int try_add_next_blocks(cryptonote_connection_context &context);
+    uint64_t sync_head() const;
     static void ingest_post(void* ctx, const shekyl_ingest_reply* reply, const std::uint64_t* indices, std::size_t indices_len);
     void on_ingest_reply(const shekyl_ingest_reply& reply, const std::uint64_t* indices, std::size_t indices_len);
     void request_chain_history(cryptonote_connection_context &context);
@@ -194,6 +195,13 @@ namespace cryptonote
     epee::math_helper::once_a_time_seconds<101> m_sync_search_checker;
     tools::PerformanceTimer m_sync_timer, m_add_timer;
     uint64_t m_last_add_end_time;
+    /// The height the chain reaches once the door connects every span this
+    /// handler handed it, or 0 while nothing of this sync is in the door.
+    /// A span in the door is neither in the queue nor on the chain; read
+    /// from the store's tip alone it is a gap the sync arithmetic would
+    /// request again or drop the peer over. `sync_head()` reads the head
+    /// from here and the tip, whichever is higher.
+    std::atomic<uint64_t> m_door_frontier;
     uint64_t m_sync_spans_downloaded, m_sync_old_spans_downloaded, m_sync_bad_spans_downloaded;
     uint64_t m_sync_download_chain_size, m_sync_download_objects_size;
     size_t m_block_download_max_size;

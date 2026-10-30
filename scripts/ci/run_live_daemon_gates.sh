@@ -153,6 +153,9 @@ ARMED=(
   engine::regtest_e2e::origin::get_info_console_commands_answer_on_the_in_process_arm
   engine::regtest_e2e::the_armed_switch_on_testnet_serves_two_levers_and_knows_no_third
   engine::regtest_e2e::a_dialing_node_hands_its_tip_to_the_peer_it_dials
+  # Observed red 2026-10-30 on the flip at e4280bfbf5 before the sync-head
+  # fix: the joiner stood at height 21 of 101 (one span) until the deadline.
+  engine::regtest_e2e::a_node_syncs_a_chain_longer_than_the_doors_window_from_a_peer
 )
 
 # Consensus gates too heavy for the per-PR lane (depth-3 spend, 13 min

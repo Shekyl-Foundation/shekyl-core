@@ -531,7 +531,13 @@ namespace cryptonote
       }
       block_complete_entry entry;
       entry.pruned = arg.prune;
-      entry.block_weight = weight;
+      // The wire's `block_weight` is a pruned entry's: a full block carries
+      // none, and the receiving handler drops a peer that sends one on a
+      // full block ("returned a block weight for a non pruned block"). Pruned
+      // spans are never requested (PDM-Q7), so this is always 0, as the
+      // deleted C++ left it.
+      (void)weight;
+      entry.block_weight = 0;
       entry.block.assign(reinterpret_cast<const char*>(blob.ptr), blob.len);
       if (witness.ptr != nullptr && witness.len != 0)
         entry.attestation_witness.assign(reinterpret_cast<const char*>(witness.ptr), witness.len);

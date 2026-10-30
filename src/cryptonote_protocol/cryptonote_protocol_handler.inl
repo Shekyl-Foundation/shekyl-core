@@ -160,6 +160,9 @@ namespace cryptonote
     m_p2p->for_connection(id, [this, reply, missing](cryptonote_connection_context& context) {
       if (reply.kind == SHEKYL_INGEST_REFUSED)
       {
+        // What the door held of this sync is not the chain's: the head is
+        // the store's tip again, and the next peer is asked from there.
+        m_door_frontier.store(0);
         LOG_PRINT_CCONTEXT_L0("Block verification failed, dropping connection");
         drop_connection(context, false, false);
         return;
@@ -171,6 +174,15 @@ namespace cryptonote
         // deleted connect loop recorded per block).
         m_last_add_end_time = tools::get_tick_count();
         raise_remote_height(context, chain_length_of_accepted_block(reply.height));
+        // The last block the door held of this sync is on the chain: the
+        // head is the store's tip again. The sync is done when the tip
+        // reaches the target the peers declared, which only this reply
+        // can now say (the connect loop that said it is the door's).
+        if (reply.height + 1 >= m_door_frontier.load())
+          m_door_frontier.store(0);
+        const uint64_t target = m_core.get_target_blockchain_height();
+        if (target && !m_synchronized && m_core.get_current_blockchain_height() >= target)
+          on_connection_synchronized();
         // A block a peer announced that is now this node's tip, while this
         // node is not behind, is announced on, as this handler did before
         // the door (the connect loop's relay). A block this node mined or
@@ -197,6 +209,7 @@ namespace cryptonote
       }
       if (reply.kind == SHEKYL_INGEST_UNLINKED)
       {
+        m_door_frontier.store(0);
         // An announced block whose parent this node lacks is the start of
         // a sync (the chain-sync ruling): ask the announcer for its chain.
         if (context.m_state == cryptonote_connection_context::state_normal)
@@ -221,6 +234,7 @@ namespace cryptonote
     m_add_timer.pause();
     m_add_timer.reset();
     m_last_add_end_time = 0;
+    m_door_frontier = 0;
     m_sync_spans_downloaded = 0;
     m_sync_old_spans_downloaded = 0;
     m_sync_bad_spans_downloaded = 0;
@@ -410,6 +424,7 @@ namespace cryptonote
         m_add_timer.pause();
         m_add_timer.reset();
         m_last_add_end_time = 0;
+        m_door_frontier = 0;
         // The estimates' origin (get_estimated_remaining_sync_seconds reads
         // both): where this sync started, in time and in height.
         m_sync_start_time = boost::posix_time::microsec_clock::universal_time();
@@ -1107,6 +1122,14 @@ namespace cryptonote
     MLOG_PEER_STATE("requesting chain");
   }
   template<class t_core>
+  uint64_t t_cryptonote_protocol_handler<t_core>::sync_head() const
+  {
+    // The chain the sync has: the store's tip, or the height the door will
+    // reach with what this handler already handed it (the header's note on
+    // `m_door_frontier`), whichever is higher.
+    return std::max(m_core.get_current_blockchain_height(), m_door_frontier.load());
+  }
+  template<class t_core>
   int t_cryptonote_protocol_handler<t_core>::try_add_next_blocks(cryptonote_connection_context& context)
   {
     bool force_next_span = false;
@@ -1124,9 +1147,27 @@ namespace cryptonote
       if (m_block_queue.get_next_span(start_height, blocks, span_connection_id, span_origin) && !blocks.empty())
       {
         (void)span_origin;
-        // A span this node asked for. The door connects it; this loop does not.
+        // A span this node asked for. The door connects it; this loop does
+        // not. The door seats a window of arrivals: a span it has no room
+        // for stays in the queue and is offered again on the next standby
+        // pass (`check_standby_peers`, every 100 ms), neither dropped nor
+        // offered in a loop.
+        if (shekyl_ingest_room() < blocks.size())
+        {
+          MLOG_PEER_STATE("the door has no room for the next span, standing by");
+          context.m_state = cryptonote_connection_context::state_standby;
+          return 1;
+        }
         const int offered = cryptonote::offer_block_span(
             shekyl::seam_socket_id(span_connection_id), true, blocks);
+        if (offered == SHEKYL_INGEST_ACCEPTED)
+        {
+          // The span is the door's now: the sync's head moves past it
+          // before the chain does (`sync_head`).
+          const uint64_t past = start_height + blocks.size();
+          uint64_t frontier = m_door_frontier.load();
+          while (frontier < past && !m_door_frontier.compare_exchange_weak(frontier, past)) {}
+        }
         if (offered == SHEKYL_INGEST_ACCEPTED || offered == SHEKYL_INGEST_OVERSIZE || offered == SHEKYL_INGEST_INVALID)
           m_block_queue.remove_spans(span_connection_id, start_height);
         if (offered == SHEKYL_INGEST_THROTTLED)
@@ -1305,7 +1346,7 @@ namespace cryptonote
     boost::uuids::uuid connection_id;
     bool filled;
 
-    const uint64_t blockchain_height = m_core.get_current_blockchain_height();
+    const uint64_t blockchain_height = sync_head();
     if (context.m_remote_blockchain_height <= blockchain_height)
       return false;
     const boost::posix_time::ptime now = boost::posix_time::microsec_clock::universal_time();
@@ -1407,7 +1448,7 @@ namespace cryptonote
       {
         const size_t nspans = m_block_queue.get_num_filled_spans();
         const size_t size = m_block_queue.get_data_size();
-        const uint64_t bc_height = m_core.get_current_blockchain_height();
+        const uint64_t bc_height = sync_head();
         const size_t block_queue_size_threshold = m_block_download_max_size ? m_block_download_max_size : BLOCK_QUEUE_SIZE_THRESHOLD;
         const bool queue_proceed_init = (nspans < m_span_limit.load()) && (size < block_queue_size_threshold);
         // get rid of blocks we already requested, or already have
@@ -1469,7 +1510,7 @@ namespace cryptonote
           bool filled = false;
           boost::posix_time::ptime time;
           boost::uuids::uuid connection_id;
-          if (m_block_queue.has_next_span(m_core.get_current_blockchain_height(), filled, time, connection_id) && filled)
+          if (m_block_queue.has_next_span(sync_head(), filled, time, connection_id) && filled)
           {
             LOG_DEBUG_CC(context, "No other thread is adding blocks, and next span needed is ready, resuming");
             MLOG_PEER_STATE("resuming");
@@ -1512,14 +1553,14 @@ namespace cryptonote
 
     MDEBUG(context << " request_missing_objects: check " << check_having_blocks << ", force_next_span " << force_next_span
         << ", m_needed_objects " << context.m_needed_objects.size() << " lrh " << context.m_last_response_height << ", chain "
-        << m_core.get_current_blockchain_height());
+        << sync_head());
     if(context.m_needed_objects.size() || force_next_span)
     {
       //we know objects that we need, request this objects
       NOTIFY_REQUEST_GET_OBJECTS::request req;
       bool is_next = false;
       size_t count = 0;
-      const size_t l_m_bss = m_core.get_block_sync_size(m_core.get_current_blockchain_height());
+      const size_t l_m_bss = m_core.get_block_sync_size(sync_head());
       std::pair<uint64_t, uint64_t> span = std::make_pair(0, 0);
       if (force_next_span)
       {
@@ -1554,7 +1595,7 @@ namespace cryptonote
         }
         if (skip_unneeded_hashes(context, false) && context.m_needed_objects.empty() && context.m_num_requested == 0)
         {
-          if (context.m_remote_blockchain_height > m_block_queue.get_next_needed_height(m_core.get_current_blockchain_height()))
+          if (context.m_remote_blockchain_height > m_block_queue.get_next_needed_height(sync_head()))
           {
             MERROR(context << "Nothing we can request from this peer, and we did not request anything previously");
             return false;
@@ -1639,7 +1680,7 @@ namespace cryptonote
       }
 
       // we can do nothing, so drop this peer to make room for others unless we think we've downloaded all we need
-      const uint64_t blockchain_height = m_core.get_current_blockchain_height();
+      const uint64_t blockchain_height = sync_head();
       if (std::max(blockchain_height, m_block_queue.get_next_needed_height(blockchain_height)) >= m_core.get_target_blockchain_height())
       {
         context.set_state_normal();
@@ -1656,7 +1697,7 @@ skip:
     // we might have been called from the "received chain entry" handler, and end up
     // here because we can't use any of those blocks (maybe because all of them are
     // actually already requested). In this case, if we can add blocks instead, do so
-    if (m_core.get_current_blockchain_height() < m_core.get_target_blockchain_height())
+    if (sync_head() < m_core.get_target_blockchain_height())
     {
       const boost::unique_lock<boost::mutex> sync{m_sync_lock, boost::try_to_lock};
       if (sync.owns_lock())
