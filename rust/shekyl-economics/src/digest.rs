@@ -1,7 +1,7 @@
 //! Canonical [`EconomicParams`] digest (fixture lineage + snapshot
 //! sub-digest).
 //!
-//! This Blake2b-256 over the sixteen `EconomicParams` fields is
+//! This Blake2b-256 over the eighteen `EconomicParams` fields is
 //! **EconomicParams-scoped** and serves two roles:
 //!
 //! - the **C4 `RecordedChainFixture` lineage guard** — the committed
