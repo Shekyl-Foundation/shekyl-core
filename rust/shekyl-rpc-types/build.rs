@@ -193,23 +193,29 @@ use std::path::PathBuf;
 /// derivation. **No production behaviour changes** — the derived length
 /// equals the deleted key.
 ///
-/// **Re-pinned 2026-10-29 (ESR-16 completion,
-/// `ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.26, ruled 2026-10-29): three keys
-/// were ADDED.** `block_weight_limit_multiple_scaled = 2000000` and
-/// `block_weight_long_term_clamp_scaled = 1700000`, both in `SCALE` units, and
-/// `archival_challenges_per_pair_per_epoch = 3`. The chain question, answered
+/// **Re-pinned 2026-10-30 (ESR-16 completion, #1218;
+/// `ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.26, ruled 2026-10-29 and on review
+/// 2026-10-30): six keys ADDED, one REMOVED.** Added:
+/// `block_weight_limit_multiple_scaled = 2000000` and
+/// `block_weight_long_term_clamp_scaled = 1700000` (`SCALE` units), and the
+/// draw count rule's `archival_draw_catch_up_permille = 700`,
+/// `archival_draw_horizon_floor_blocks = 200`, `archival_count_cap_multiple =
+/// 3` and `archival_bundle_section_budget_multiple = 2`. The chain question,
 /// for each: a different limit multiple admits a different heaviest block and
-/// pays a different penalty (the penalty is zero at the limit); a different
-/// clamp is a different long-term weight, so a different long-term median and
-/// set of valid blocks; a different challenge count settles a pair's epoch on
-/// different draws. Each is a split, so each belongs here. The values are the
-/// ones every node already ran: the literal `2` at four Rust sites and the C++
-/// `median * 2`, `long_term_weight`'s `10 / 17` and `7 / 10`, and the hand
-/// `CHALLENGES_PER_PAIR_PER_EPOCH = 3`. The first two are `EconomicParams`
-/// fields now, so the params digest moved to format `0x06` in the same change.
-/// **No production behaviour changes**; the digest moves because the binding
-/// grew.
-const PINNED_DIGEST: &str = "dbb6547554cdec983d8e5a0040a011c412452e744a27554452461963c23566b2";
+/// pays a different penalty; a different clamp is a different long-term
+/// weight and so a different median; a different catch-up point, horizon
+/// floor or cap is a different draw count at some block, so a different set
+/// of admissible bundle records; a different section multiple admits a
+/// different section. Each is a split. The values are the ones every node ran:
+/// the literal `2` at four Rust sites and the C++ `median * 2`,
+/// `long_term_weight`'s `10 / 17` and `7 / 10`, the count rule's `7 / 10`,
+/// `DRAW_HORIZON_FLOOR`, `COUNT_CAP_MULTIPLE` and
+/// `BUNDLE_SECTION_BUDGET_MULTIPLE`. Removed: `retention_horizon_blocks`,
+/// which no consensus code read (the built prune sweep retires each table at
+/// its last reader's reach, `SO-D12h`). The limit and clamp are
+/// `EconomicParams` fields, so the params digest moved to format `0x06` in
+/// the same change. **No production behaviour changes.**
+const PINNED_DIGEST: &str = "2227f8a01a4a47c9f42e46d3a7c01fc900d4927c03ec71bbbfc74d6be69829bd";
 
 fn main() {
     let manifest_dir =

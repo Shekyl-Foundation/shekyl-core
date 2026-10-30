@@ -68,7 +68,12 @@ pub const BAR_DROPOUT_PERMILLE: u32 = 100;
 fn rule_inputs(shortfall: u64, in_flight: u64, h: u64) -> (u64, u64) {
     (
         shortfall.saturating_sub(in_flight),
-        draw_horizon(h, SETTLEMENT_EPOCH_BLOCKS, CHALLENGE_RESPONSE_BLOCKS),
+        draw_horizon(
+            h,
+            SETTLEMENT_EPOCH_BLOCKS,
+            CHALLENGE_RESPONSE_BLOCKS,
+            shekyl_archival_retention::archival_params(),
+        ),
     )
 }
 
@@ -76,8 +81,15 @@ fn rule_inputs(shortfall: u64, in_flight: u64, h: u64) -> (u64, u64) {
 #[must_use]
 pub fn count_at(pairs: u32, shortfall: u64, in_flight: u64, h: u64, carry: u32) -> (u64, u32) {
     let (u, horizon) = rule_inputs(shortfall, in_flight, h);
-    draw_count(u64::from(pairs), u, horizon, SETTLEMENT_EPOCH_BLOCKS, carry)
-        .expect("the epoch length and the horizon are both nonzero")
+    draw_count(
+        u64::from(pairs),
+        u,
+        horizon,
+        SETTLEMENT_EPOCH_BLOCKS,
+        carry,
+        shekyl_archival_retention::archival_params(),
+    )
+    .expect("the epoch length and the horizon are both nonzero")
 }
 
 /// Whether the cap bound at these inputs: production's answer
@@ -86,9 +98,15 @@ pub fn count_at(pairs: u32, shortfall: u64, in_flight: u64, h: u64, carry: u32) 
 #[must_use]
 pub fn capped_at(pairs: u32, shortfall: u64, in_flight: u64, h: u64) -> bool {
     let (u, horizon) = rule_inputs(shortfall, in_flight, h);
-    draw_target(u64::from(pairs), u, horizon, SETTLEMENT_EPOCH_BLOCKS)
-        .expect("the epoch length and the horizon are both nonzero")
-        .capped
+    draw_target(
+        u64::from(pairs),
+        u,
+        horizon,
+        SETTLEMENT_EPOCH_BLOCKS,
+        shekyl_archival_retention::archival_params(),
+    )
+    .expect("the epoch length and the horizon are both nonzero")
+    .capped
 }
 
 /// Seeds per cell (§5.13).

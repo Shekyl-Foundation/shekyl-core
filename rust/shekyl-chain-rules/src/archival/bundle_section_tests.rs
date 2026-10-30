@@ -16,7 +16,6 @@ use std::sync::OnceLock;
 
 use shekyl_archival_retention::{
     bundle_root, section_budget, BundleRef, DrawableEpoch, DrawablePair, PassBitmap, SectionBudget,
-    BUNDLE_SECTION_BUDGET_MULTIPLE,
 };
 use shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa;
 use shekyl_types::archival::ReceiptSignPk;
@@ -251,7 +250,6 @@ fn a_section_whose_root_does_not_recompute_refuses() {
 #[test]
 fn a_section_at_its_budget_admits_and_one_over_refuses() {
     let seb = SettlementEpochBlocks::new(10_000).expect("non-zero");
-    let c = BUNDLE_SECTION_BUDGET_MULTIPLE;
     let rules = rules_of(seb.get());
     let over = |counts: &[u32], budget: SectionBudget| {
         let refs = section_of(counts);
@@ -269,7 +267,7 @@ fn a_section_at_its_budget_admits_and_one_over_refuses() {
     };
 
     // `D` = 8: `⌊72 / 10,000⌋` is zero, the count cap is 1, the budget 2.
-    let small = section_budget(c, 8, seb);
+    let small = section_budget(shekyl_archival_retention::archival_params(), 8, seb);
     assert_eq!(small, SectionBudget::from_draws(2));
     let small_view = view_holding(&[(0, 8)]);
     admit(&[1, 1], &small_view);
@@ -287,7 +285,7 @@ fn a_section_at_its_budget_admits_and_one_over_refuses() {
     // `D` = 324,000 is the large network's cap of 292 and budget of 584;
     // that figure is [`section_budget`]'s, and a section of 584 references
     // does not fit the window (the zero-draw test).
-    let wide = section_budget(c, 10_000, seb);
+    let wide = section_budget(shekyl_archival_retention::archival_params(), 10_000, seb);
     assert_eq!(wide, SectionBudget::from_draws(20));
     let wide_view = view_holding(&[(0, 10_000)]);
     admit(&[10, 10], &wide_view);
@@ -296,7 +294,7 @@ fn a_section_at_its_budget_admits_and_one_over_refuses() {
         judged(&section_of(&[10, 11]), &wide_view, &rules),
         over(&[10, 11], wide)
     );
-    let large = section_budget(c, 324_000, seb);
+    let large = section_budget(shekyl_archival_retention::archival_params(), 324_000, seb);
     assert_eq!(large, SectionBudget::from_draws(584));
     assert!(SectionCharge::of(&section_of(&[292, 292])).within(large));
     assert!(!SectionCharge::of(&section_of(&[292, 293])).within(large));
@@ -321,7 +319,6 @@ fn a_section_at_its_budget_admits_and_one_over_refuses() {
 #[test]
 fn a_zero_draw_bundle_costs_one_and_a_section_of_them_is_bounded() {
     let seb = SettlementEpochBlocks::new(10_000).expect("non-zero");
-    let c = BUNDLE_SECTION_BUDGET_MULTIPLE;
     let rules = rules_of(seb.get());
     let zeros = |n: usize| section_of(&vec![0u32; n]);
     let over = |refs: &[BundleRef], budget: SectionBudget| {
@@ -339,7 +336,7 @@ fn a_zero_draw_bundle_costs_one_and_a_section_of_them_is_bounded() {
 
     // The small network: budget 2. Five hundred zero-draw bundles are
     // inside `W₂` and over that budget.
-    let small = section_budget(c, 8, seb);
+    let small = section_budget(shekyl_archival_retention::archival_params(), 8, seb);
     assert_eq!(small, SectionBudget::from_draws(2));
     let view = view_holding(&[(0, 8)]);
     admit(&zeros(1), &view);
@@ -351,7 +348,7 @@ fn a_zero_draw_bundle_costs_one_and_a_section_of_them_is_bounded() {
 
     // 584 is the large network's budget, and it is not an admission: 501
     // and 584 references put the oldest outside `W₂`.
-    let large = section_budget(c, 324_000, seb);
+    let large = section_budget(shekyl_archival_retention::archival_params(), 324_000, seb);
     assert_eq!(large, SectionBudget::from_draws(584));
     let priced = SectionCharge::of(&zeros(584));
     assert_eq!(priced.get(), 584);
@@ -533,8 +530,8 @@ fn the_cap_is_the_largest_d_among_the_sections_epochs() {
         reference_at(boundary, 1),
     ];
     assert_eq!(SectionCharge::of(&spanning).get(), 4);
-    let small_cap = section_budget(BUNDLE_SECTION_BUDGET_MULTIPLE, 0, seb);
-    let large_cap = section_budget(BUNDLE_SECTION_BUDGET_MULTIPLE, boundary, seb);
+    let small_cap = section_budget(shekyl_archival_retention::archival_params(), 0, seb);
+    let large_cap = section_budget(shekyl_archival_retention::archival_params(), boundary, seb);
     assert_eq!(
         (small_cap, large_cap),
         (SectionBudget::from_draws(2), SectionBudget::from_draws(20))

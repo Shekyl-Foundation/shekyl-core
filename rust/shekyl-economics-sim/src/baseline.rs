@@ -511,7 +511,7 @@ mod tests {
         assert_eq!(
             header,
             "baseline params digest:    5a63a1d174bf5ef7fda7bb966e3e5e1f2ec00c90c6f7374d37cf146c9238bed2\n\
-             baseline consensus digest: dbb6547554cdec983d8e5a0040a011c412452e744a27554452461963c23566b2\n\
+             baseline consensus digest: 2227f8a01a4a47c9f42e46d3a7c01fc900d4927c03ec71bbbfc74d6be69829bd\n\
              baseline relay digest:     5f19950d8d031d0efa1f8e09f06d92c3b9a357175a9685ab7bd7fd49b45cc6b2\n\
              overrides: (none)\n\
              \n"

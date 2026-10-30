@@ -30,9 +30,13 @@ use crate::bond_floor::{
     SETTLEMENT_EPOCH_BLOCKS,
 };
 use crate::constants::{
-    CHALLENGES_PER_PAIR_PER_EPOCH, SLASH_GRACE_EPOCHS, W2_EPOCH_DIVISOR, W2_MAX_DEFENSIBLE_BLOCKS,
-    W2_MIN_DEFENSIBLE_BLOCKS,
+    SLASH_GRACE_EPOCHS, W2_EPOCH_DIVISOR, W2_MAX_DEFENSIBLE_BLOCKS, W2_MIN_DEFENSIBLE_BLOCKS,
 };
+
+include!(concat!(
+    env!("OUT_DIR"),
+    "/archival_count_rule_generated.rs"
+));
 use crate::failure_window::{
     ARCHIVAL_FAILURE_WINDOW_M, ARCHIVAL_FAILURE_WINDOW_N, SLASH_SETTLEMENT_TIP_LAG_EPOCHS,
     WINDOW_MIN_OBSERVATION_PER_MILLE,
@@ -75,9 +79,20 @@ pub struct ArchivalParams {
     /// The failure window's `n`: observations it counts over.
     /// `archival_failure_window_n`.
     pub failure_window_n: u32,
-    /// Challenges per `(P, shard)` pair per settlement epoch.
-    /// `archival_challenges_per_pair_per_epoch`.
-    pub challenges_per_pair_per_epoch: u32,
+    /// The draw count rule's catch-up point: the share of the epoch, in
+    /// thousandths, by which the top-up aims to finish (§4.3; 700 is the
+    /// spec's 70 %). `archival_draw_catch_up_permille`.
+    pub draw_catch_up_permille: u64,
+    /// The floor on the count rule's horizon `H`, in blocks.
+    /// `archival_draw_horizon_floor_blocks`.
+    pub draw_horizon_floor_blocks: u64,
+    /// The count cap as a multiple of `COUNTED_DRAWS · D/SEB`
+    /// ([`Self::count_cap_base_multiple`] is the product).
+    /// `archival_count_cap_multiple`.
+    pub count_cap_multiple: u64,
+    /// A bundle section's draw budget as a multiple of the count cap, `c`
+    /// (§13.2 V6). `archival_bundle_section_budget_multiple`.
+    pub bundle_section_budget_multiple: u64,
 }
 
 /// A set of archival parameters the chain cannot run, naming the coupling
@@ -123,9 +138,20 @@ pub enum ArchivalParamsError {
     /// past what the retention leaves at the minimum observation rate.
     #[error("failure window n {0} reaches past the retained epochs")]
     FailureWindowPastRetention(u32),
-    /// No challenge per pair: settlement would count nothing.
-    #[error("challenges per pair is zero")]
-    NoChallenges,
+    /// The catch-up point is outside `(0, 1000]` thousandths of the epoch.
+    #[error("draw catch-up {0} permille is outside 1..=1000")]
+    CatchUpOutsideEpoch(u64),
+    /// The horizon floor is zero, which the count rule refuses, or past the
+    /// epoch, which takes `H ≤ SEB` from the target's overflow bound.
+    #[error("draw horizon floor {0} blocks is zero or past the epoch")]
+    HorizonFloorOutsideEpoch(u64),
+    /// The cap multiple is outside `1..=1000`: zero leaves no room above the
+    /// base, and past 1000 the cap's product can leave the target's domain.
+    #[error("count cap multiple {0} is outside 1..=1000")]
+    CapMultipleOutsideBand(u64),
+    /// A section multiple of zero budgets no draw and refuses every section.
+    #[error("bundle section budget multiple is zero")]
+    SectionBudgetZero,
     /// The release cooldown does not outlast the slash grace, so a release
     /// could outrun its last epoch's slash (`ARCHIVAL_TIMING_CONSTANTS.md`
     /// §2.2, the L16 pin).
@@ -155,7 +181,10 @@ struct ArchivalParamsWire {
     bond_duration_age_scale: u64,
     failure_window_m: u32,
     failure_window_n: u32,
-    challenges_per_pair_per_epoch: u32,
+    draw_catch_up_permille: u64,
+    draw_horizon_floor_blocks: u64,
+    count_cap_multiple: u64,
+    bundle_section_budget_multiple: u64,
 }
 
 impl TryFrom<ArchivalParamsWire> for ArchivalParams {
@@ -172,7 +201,10 @@ impl TryFrom<ArchivalParamsWire> for ArchivalParams {
             bond_duration_age_scale: w.bond_duration_age_scale,
             failure_window_m: w.failure_window_m,
             failure_window_n: w.failure_window_n,
-            challenges_per_pair_per_epoch: w.challenges_per_pair_per_epoch,
+            draw_catch_up_permille: w.draw_catch_up_permille,
+            draw_horizon_floor_blocks: w.draw_horizon_floor_blocks,
+            count_cap_multiple: w.count_cap_multiple,
+            bundle_section_budget_multiple: w.bundle_section_budget_multiple,
         };
         match params.validate() {
             Ok(()) => Ok(params),
@@ -194,8 +226,25 @@ impl ArchivalParams {
         bond_duration_age_scale: BOND_DURATION_AGE_SCALE,
         failure_window_m: ARCHIVAL_FAILURE_WINDOW_M,
         failure_window_n: ARCHIVAL_FAILURE_WINDOW_N,
-        challenges_per_pair_per_epoch: CHALLENGES_PER_PAIR_PER_EPOCH,
+        draw_catch_up_permille: GENERATED_DRAW_CATCH_UP_PERMILLE,
+        draw_horizon_floor_blocks: GENERATED_DRAW_HORIZON_FLOOR_BLOCKS,
+        count_cap_multiple: GENERATED_COUNT_CAP_MULTIPLE,
+        bundle_section_budget_multiple: GENERATED_BUNDLE_SECTION_BUDGET_MULTIPLE,
     };
+
+    /// The count cap as a multiple of the base rate `D/SEB`:
+    /// [`Self::count_cap_multiple`] times
+    /// [`COUNTED_DRAWS`](shekyl_types::archival::COUNTED_DRAWS) (9 at the
+    /// shipped 3). The one place the product is formed: the target caps at
+    /// it, the cap predicate asks whether the top-up passes it, and the
+    /// section budget is bounded by it.
+    #[must_use]
+    // CLIPPY: cast_possible_truncation — `COUNTED_DRAWS` is 3.
+    #[allow(clippy::cast_possible_truncation)]
+    pub const fn count_cap_base_multiple(&self) -> u64 {
+        self.count_cap_multiple
+            .saturating_mul(shekyl_types::archival::COUNTED_DRAWS as u64)
+    }
 
     /// Refuse a set the chain cannot run. Every check is a coupling the
     /// shipped build asserts at compile time, so a sweep is held to what
@@ -252,8 +301,23 @@ impl ArchivalParams {
         {
             return Err(ArchivalParamsError::FailureWindowPastRetention(n));
         }
-        if self.challenges_per_pair_per_epoch == 0 {
-            return Err(ArchivalParamsError::NoChallenges);
+        if self.draw_catch_up_permille == 0 || self.draw_catch_up_permille > 1000 {
+            return Err(ArchivalParamsError::CatchUpOutsideEpoch(
+                self.draw_catch_up_permille,
+            ));
+        }
+        if self.draw_horizon_floor_blocks == 0 || self.draw_horizon_floor_blocks > seb {
+            return Err(ArchivalParamsError::HorizonFloorOutsideEpoch(
+                self.draw_horizon_floor_blocks,
+            ));
+        }
+        if self.count_cap_multiple == 0 || self.count_cap_multiple > 1000 {
+            return Err(ArchivalParamsError::CapMultipleOutsideBand(
+                self.count_cap_multiple,
+            ));
+        }
+        if self.bundle_section_budget_multiple == 0 {
+            return Err(ArchivalParamsError::SectionBudgetZero);
         }
         if self.release_cooldown_epochs <= SLASH_GRACE_EPOCHS {
             return Err(ArchivalParamsError::CooldownNotPastGrace(
@@ -343,14 +407,16 @@ mod tests {
         assert_eq!(p.failure_window_serve_budget(), 2);
     }
 
-    /// The challenge count and the draws settlement counts are one
-    /// decision: the settlement row is `COUNTED_DRAWS` wide.
+    /// The shipped count rule is the spec's §13.2: catch-up by 70 %, a
+    /// 200-block floor, a cap of 3 × nominal (9 × base) and `c = 2`.
     #[test]
-    fn the_shipped_challenge_count_is_the_counted_draws() {
-        assert_eq!(
-            ArchivalParams::SHIPPED.challenges_per_pair_per_epoch as usize,
-            shekyl_types::archival::COUNTED_DRAWS
-        );
+    fn the_shipped_count_rule_is_the_specs() {
+        let p = ArchivalParams::SHIPPED;
+        assert_eq!(p.draw_catch_up_permille, 700);
+        assert_eq!(p.draw_horizon_floor_blocks, 200);
+        assert_eq!(p.count_cap_multiple, 3);
+        assert_eq!(p.count_cap_base_multiple(), 9);
+        assert_eq!(p.bundle_section_budget_multiple, 2);
     }
 
     /// `shekyl-types` holds the claim window and its at-rest bound as
@@ -403,8 +469,33 @@ mod tests {
             Err(ArchivalParamsError::FailureWindowPastRetention(26))
         );
         assert_eq!(
-            with(|p| p.challenges_per_pair_per_epoch = 0),
-            Err(ArchivalParamsError::NoChallenges)
+            with(|p| p.draw_catch_up_permille = 0),
+            Err(ArchivalParamsError::CatchUpOutsideEpoch(0))
+        );
+        assert_eq!(
+            with(|p| p.draw_catch_up_permille = 1_001),
+            Err(ArchivalParamsError::CatchUpOutsideEpoch(1_001))
+        );
+        assert_eq!(with(|p| p.draw_catch_up_permille = 1_000), Ok(()));
+        assert_eq!(
+            with(|p| p.draw_horizon_floor_blocks = 0),
+            Err(ArchivalParamsError::HorizonFloorOutsideEpoch(0))
+        );
+        assert_eq!(
+            with(|p| p.draw_horizon_floor_blocks = 10_001),
+            Err(ArchivalParamsError::HorizonFloorOutsideEpoch(10_001))
+        );
+        assert_eq!(
+            with(|p| p.count_cap_multiple = 0),
+            Err(ArchivalParamsError::CapMultipleOutsideBand(0))
+        );
+        assert_eq!(
+            with(|p| p.count_cap_multiple = 1_001),
+            Err(ArchivalParamsError::CapMultipleOutsideBand(1_001))
+        );
+        assert_eq!(
+            with(|p| p.bundle_section_budget_multiple = 0),
+            Err(ArchivalParamsError::SectionBudgetZero)
         );
         assert_eq!(
             with(|p| p.release_cooldown_epochs = SLASH_GRACE_EPOCHS),
@@ -546,5 +637,44 @@ mod tests {
             ..shipped
         };
         assert!(failure_window_slashable(&obs, &narrow).is_err());
+
+        // The count rule: horizon, cap and section budget read the set.
+        use crate::{draw_horizon, draw_target, section_budget};
+        let seb = 10_000;
+        let w2 = 500;
+        assert_eq!(draw_horizon(0, seb, w2, &shipped), 7_000);
+        let catch_up = ArchivalParams {
+            draw_catch_up_permille: 500,
+            ..shipped
+        };
+        assert_eq!(draw_horizon(0, seb, w2, &catch_up), 5_000);
+        assert_eq!(draw_horizon(6_950, seb, w2, &shipped), 200);
+        let floor = ArchivalParams {
+            draw_horizon_floor_blocks: 300,
+            ..shipped
+        };
+        assert_eq!(draw_horizon(6_950, seb, w2, &floor), 300);
+        // A shortfall far past the cap: the target is the cap, and it moves
+        // with the multiple.
+        let capped = draw_target(1_000, u64::MAX / 2, 1_000, seb, &shipped).expect("fits");
+        let wider = ArchivalParams {
+            count_cap_multiple: 4,
+            ..shipped
+        };
+        let capped_wider = draw_target(1_000, u64::MAX / 2, 1_000, seb, &wider).expect("fits");
+        assert!(capped.capped && capped_wider.capped);
+        // `t = (min(·, k·D·H) << 32) / (SEB·H)`, floored, at k = 9 and 12.
+        let at = |k: u128| ((k * 1_000 * 1_000) << 32) / (10_000 * 1_000);
+        assert_eq!(capped.fixed, at(9));
+        assert_eq!(capped_wider.fixed, at(12));
+        let blocks = SettlementEpochBlocks::new(seb).expect("non-zero");
+        let doubled = ArchivalParams {
+            bundle_section_budget_multiple: 4,
+            ..shipped
+        };
+        assert_eq!(
+            section_budget(&doubled, 10_000, blocks).get(),
+            2 * section_budget(&shipped, 10_000, blocks).get()
+        );
     }
 }

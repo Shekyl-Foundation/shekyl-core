@@ -7,37 +7,6 @@
 //! [`ARCHIVAL_RETENTION_GATE2.md`](../../docs/design/ARCHIVAL_RETENTION_GATE2.md) §3.1
 //! and [`ARCHIVAL_TIMING_CONSTANTS.md`](../../docs/design/ARCHIVAL_TIMING_CONSTANTS.md).
 
-/// λ_target — derived challenges issued per `(P, shard)` pair per settlement
-/// epoch. Ruled `3` by the 2-of-3 nesting
-/// (`ARCHIVAL_CHALLENGE_MECHANISM.md` §3): the inner majority settles one
-/// epoch's serve-credit bit, and §3 carries its derivation (liar containment
-/// `3f²(1−f)+f³`, honest survival `a²(3−2a)`, the unanimity rejection, and the
-/// free-rider deterrent `n·I − S`).
-///
-/// **Per *pair*, not per block.** The public urn that spread `λ·D` draws
-/// across an epoch is deleted. This constant remains the number of draws
-/// settlement counts for one pair. It is not a parameter a caller supplies.
-///
-/// Jointly pinned with settlement's
-/// [`COUNTED_DRAWS`](shekyl_types::archival::COUNTED_DRAWS): a test on the
-/// shipped [`crate::ArchivalParams`] keeps them one number. The threshold's own two
-/// properties — reachable, and a strict majority — are asserted beside it
-/// in `shekyl_types::archival`. Re-pinning requires re-running §3's
-/// derivation, the `(m, n)` window re-pin, and the economics-sim arithmetic
-/// that scales with it. Generated from `config/consensus_constants.json`
-/// `archival_challenges_per_pair_per_epoch`.
-pub use challenge_count::CHALLENGES_PER_PAIR_PER_EPOCH;
-
-mod challenge_count {
-    include!(concat!(
-        env!("OUT_DIR"),
-        "/archival_challenge_count_generated.rs"
-    ));
-}
-
-// The per-pair challenge count and the draws settlement counts are one
-// decision: a test on the shipped set holds them equal (`params.rs`).
-
 /// `k` — the slash grace after `H_close`, **in settlement epochs**: the
 /// slash fold for epoch `E` runs at the first block strictly above
 /// `H_slash_deadline(E) = last_block(E) + k·SEB = last_block(E + k)`

@@ -73,8 +73,30 @@ ARCHIVAL_OWNED = (
     "FAILURE_WINDOW_N",
     "FAILURE_WINDOW_SERVE_BUDGET",
     "SETTLEMENT_RETENTION_EPOCHS",
-    "CHALLENGES_PER_PAIR_PER_EPOCH",
+    # The draw count rule (ARCHIVAL_SERVE_CREDIT_SPEC.md §13.2 V2, V6): fields
+    # since the review of 2026-10-30. The names are gone; a reintroduced one
+    # is a second door.
+    "DRAW_HORIZON_FLOOR",
+    "COUNT_CAP_MULTIPLE",
+    "COUNT_CAP_BASE_MULTIPLE",
+    "BUNDLE_SECTION_BUDGET_MULTIPLE",
 )
+# The count rule's numbers that stay constants, each with its class, and the
+# file that defines it. The gate asserts each is still defined there, so a
+# rename or a move cannot drop one from the inventory unseen; a kept name is
+# never also owned. The full-pair weight (1/16) has no name: it is the draw
+# byte's low-nibble test in `select_draw`, the selection algorithm's shape,
+# held by its pinned KAT vectors, not by this list.
+ARCHIVAL_KEPT = {
+    "CHALLENGE_READS": (
+        os.path.join(ARCHIVAL_CRATE, "src", "secret_draw.rs"),
+        "K, ruled (SCS-P13): reads of one draw; sizes the failure window's three reads",
+    ),
+    "DRAW_ATTEMPTS": (
+        os.path.join(ARCHIVAL_CRATE, "src", "secret_draw.rs"),
+        "structural: the selection's 256-attempt cap, the stream's attempt counter",
+    ),
+}
 _BARE_ARCHIVAL = re.compile(r"\b(" + "|".join(ARCHIVAL_OWNED) + r")\b")
 
 # The economics and relay constants a production composition reads through
@@ -510,6 +532,17 @@ def main() -> int:
             failures.append(f"{rel}: production builds EconomicParams::default()")
         if "OnceLock<EconomicParams>" in body:
             failures.append(f"{rel}: a second EconomicParams OnceLock")
+    for name, (owner, _class) in ARCHIVAL_KEPT.items():
+        if name in ARCHIVAL_OWNED:
+            failures.append(f"{name}: kept and owned at once")
+        defined = open(os.path.join(RUST, owner), encoding="utf-8").read()
+        if not re.search(rf"\bpub const {name}\b", defined):
+            print(
+                f"economic-accessor gate: the kept constant {name} is not defined in "
+                f"{owner}. The subject is missing.",
+                file=sys.stderr,
+            )
+            return 1
     sim_scanned, sim_baseline, sim_found = sim_check()
     if sim_scanned < SIM_MIN_FILES or not sim_baseline:
         print(

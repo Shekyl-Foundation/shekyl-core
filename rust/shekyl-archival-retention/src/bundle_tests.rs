@@ -794,30 +794,42 @@ fn a_section_the_root_cannot_count_has_no_root() {
 #[test]
 fn the_section_budget_is_c_count_caps() {
     let seb = SettlementEpochBlocks::new(10_000).expect("non-zero");
-    let c = BUNDLE_SECTION_BUDGET_MULTIPLE;
+    let c = ArchivalParams::SHIPPED.bundle_section_budget_multiple;
     assert_eq!(c, 2, "PROVISIONAL (§13.2 V6)");
     // Below SEB / 9 pairs the floor is zero and the cap is the `+ 1`.
-    assert_eq!(section_budget(c, 0, seb), SectionBudget::from_draws(2));
-    assert_eq!(section_budget(c, 8, seb), SectionBudget::from_draws(2));
-    assert_eq!(section_budget(c, 1_111, seb), SectionBudget::from_draws(2));
+    assert_eq!(
+        section_budget(&with_c(c), 0, seb),
+        SectionBudget::from_draws(2)
+    );
+    assert_eq!(
+        section_budget(&with_c(c), 8, seb),
+        SectionBudget::from_draws(2)
+    );
+    assert_eq!(
+        section_budget(&with_c(c), 1_111, seb),
+        SectionBudget::from_draws(2)
+    );
     // 9 · 1,112 = 10,008: the floor reaches one.
-    assert_eq!(section_budget(c, 1_112, seb), SectionBudget::from_draws(4));
+    assert_eq!(
+        section_budget(&with_c(c), 1_112, seb),
+        SectionBudget::from_draws(4)
+    );
     // §7.4's table: the count cap is 292 at D = 324,000 and 2,791 at
     // D = 3,100,000.
     assert_eq!(
-        section_budget(1, 324_000, seb),
+        section_budget(&with_c(1), 324_000, seb),
         SectionBudget::from_draws(292)
     );
     assert_eq!(
-        section_budget(c, 324_000, seb),
+        section_budget(&with_c(c), 324_000, seb),
         SectionBudget::from_draws(584)
     );
     assert_eq!(
-        section_budget(1, 3_100_000, seb),
+        section_budget(&with_c(1), 3_100_000, seb),
         SectionBudget::from_draws(2_791)
     );
     assert_eq!(
-        section_budget(0, 324_000, seb),
+        section_budget(&with_c(0), 324_000, seb),
         SectionBudget::from_draws(0)
     );
 }
@@ -941,16 +953,16 @@ fn an_unknown_d_is_no_d_for_the_section_and_a_fault_is_itself() {
 fn the_section_budget_saturates() {
     let one = SettlementEpochBlocks::new(1).expect("non-zero");
     assert_eq!(
-        section_budget(2, u64::MAX, one),
+        section_budget(&with_c(2), u64::MAX, one),
         SectionBudget::from_draws(u64::MAX)
     );
     assert_eq!(
-        section_budget(u64::MAX, u64::MAX, one),
+        section_budget(&with_c(u64::MAX), u64::MAX, one),
         SectionBudget::from_draws(u64::MAX)
     );
     let seb = SettlementEpochBlocks::new(10_000).expect("non-zero");
     assert_eq!(
-        section_budget(1, u64::MAX, seb),
+        section_budget(&with_c(1), u64::MAX, seb),
         SectionBudget::from_draws(
             u64::try_from(u128::from(u64::MAX) * 9 / 10_000 + 1).expect("fits")
         )
@@ -980,3 +992,13 @@ mod support_pins;
 /// The production assembler. A sibling so this module stays the vectors.
 #[path = "bundle_assemble_tests.rs"]
 mod assemble_tests;
+
+/// The shipped set at section multiple `c`: the budget's tests name `c`
+/// directly, including the zero and the `u64::MAX` the validator refuses,
+/// because the arithmetic is what they hold.
+fn with_c(c: u64) -> ArchivalParams {
+    ArchivalParams {
+        bundle_section_budget_multiple: c,
+        ..ArchivalParams::SHIPPED
+    }
+}
