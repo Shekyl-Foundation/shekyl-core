@@ -21,6 +21,11 @@ ARTIFACT_GLOB = os.path.join(ROOT, "docs/benchmarks/drs_bench_ibd_*.json")
 
 SCHEMA = "shekyl_drs_bench_v1"
 
+# A block hash and a sha256 of a binary are the same spelling: 32 bytes,
+# lowercase hex. One pattern, so neither site grows its own 64.
+HASH_HEX_CHARS = 64
+_HEX64_RE = re.compile(rf"[0-9a-f]{{{HASH_HEX_CHARS}}}")
+
 # Frozen 2026-09-12 (DRS-0 slice C) BEFORE any measurement existed. Refining a
 # ratio after seeing a number is a threshold CHANGE requiring reopening under
 # rule 21. `FrozenThresholds` cross-checks every value against §1.3 in both
@@ -143,6 +148,24 @@ class ResolvedStoreReport(NamedTuple):
     variant: str
 
 
+class Readback(NamedTuple):
+    """The store one durability line names.
+
+    `engine` is `lmdb` or `redb`. `mode` is the open the line's word names
+    (`safe`, `immediate`, ...), or None when the line parsed and named no
+    open. `refusals` is why that open is not DRS-D9; empty means it is.
+    """
+
+    engine: str
+    mode: Optional[str]
+    refusals: tuple
+
+
+def is_hex64(value) -> bool:
+    """True when `value` is `HASH_HEX_CHARS` lowercase hex characters."""
+    return isinstance(value, str) and _HEX64_RE.fullmatch(value) is not None
+
+
 def resolved_store_report(line) -> Optional[ResolvedStoreReport]:
     """The Rust store's resolved durability line, parsed, or None."""
     if not isinstance(line, str):
@@ -151,17 +174,6 @@ def resolved_store_report(line) -> Optional[ResolvedStoreReport]:
     if match is None:
         return None
     return ResolvedStoreReport(match.group(1), match.group(3))
-
-
-def engine_of_line(line) -> Optional[str]:
-    """The store the readback names: `lmdb` for `core::init`'s line, `redb`
-    for the Rust node's, None for a line that is neither. This is the
-    engine selection path: one backend per binary, named by the binary."""
-    if resolved_store_report(line) is not None:
-        return "redb"
-    if resolved_sync_report(line) is not None:
-        return "lmdb"
-    return None
 
 
 def resolved_sync_report(line) -> Optional[ResolvedSyncReport]:
@@ -175,43 +187,27 @@ def resolved_sync_report(line) -> Optional[ResolvedSyncReport]:
     return ResolvedSyncReport(int(match.group(1), 16), segments, int(match.group(3)))
 
 
-def resolved_sync_mode(line) -> Optional[str]:
-    """The open the readback names: `safe` / `fast` / `fastest` on the LMDB
-    line, the redb mode word (`immediate`, ...) on the Rust store's, or None."""
-    store = resolved_store_report(line)
-    if store is not None:
-        return store.mode.lower()
-    report = resolved_sync_report(line)
-    if report is None:
-        return None
-    return report.worded_open()
+def _shown(line) -> str:
+    return line.strip()[:120]
 
 
-def resolved_line_refusals(line) -> list:
-    """Why a daemon's resolved sync report is not DRS-D9's, or [] if it is.
+def _redb_refusals(store, line) -> tuple:
+    """Why a redb durability line is not an fsync per commit."""
+    shown = _shown(line)
+    reasons = []
+    if store.mode.lower() != store.variant.lower():
+        reasons.append(f"names {store.mode!r} and Durability::{store.variant}, "
+                       f"which do not name the same open: {shown}")
+    if store.variant != REDB_FSYNC_PER_COMMIT:
+        reasons.append(f"reports redb Durability::{store.variant}: the store was "
+                       "opened WITHOUT an fsync per commit, so DRS-D9 was not in "
+                       f"force: {shown}")
+    return tuple(reasons)
 
-    One rule for every caller: the finished artifact, the generating seed
-    before any block is generated, and the subject before its sync is timed.
-    """
-    store = resolved_store_report(line)
-    if store is not None:
-        shown = line.strip()[:120]
-        reasons = []
-        if store.mode.lower() != store.variant.lower():
-            reasons.append(f"names {store.mode!r} and Durability::{store.variant}, "
-                           f"which do not name the same open: {shown}")
-        if store.variant != REDB_FSYNC_PER_COMMIT:
-            reasons.append(f"reports redb Durability::{store.variant}: the store was "
-                           "opened WITHOUT an fsync per commit, so DRS-D9 was not in "
-                           f"force: {shown}")
-        return reasons
-    report = resolved_sync_report(line)
-    if report is None:
-        return [f"is {str(line)[:60]!r}, which does not carry the daemon's resolved "
-                "sync report (`Database sync:` from the LMDB daemon, `Store "
-                "durability:` from the Rust store). That line IS the readback: "
-                "without it nothing shows the durability the store was opened with"]
-    shown = line.strip()[:120]
+
+def _lmdb_refusals(report, line) -> tuple:
+    """Why an LMDB durability line is not `db_nosync` under the safe flag."""
+    shown = _shown(line)
     reasons = []
     flagged = report.flagged_open()
     worded = report.worded_open()
@@ -236,7 +232,77 @@ def resolved_line_refusals(line) -> list:
         reasons.append(f"has sync_mode={report.ordinal} ({got}); DRS-D9 requires "
                        f"db_nosync ({DB_NOSYNC_ORDINAL}). A default lets a sync turn "
                        f"the fsync off: {shown}")
-    return reasons
+    return tuple(reasons)
+
+
+def readback_of(line) -> Optional[Readback]:
+    """The durability line, parsed once.
+
+    The redb line wins when both patterns could match; they do not overlap.
+    None means the line is not a readback.
+    """
+    store = resolved_store_report(line)
+    if store is not None:
+        return Readback("redb", store.mode.lower(), _redb_refusals(store, line))
+    report = resolved_sync_report(line)
+    if report is not None:
+        return Readback("lmdb", report.worded_open(), _lmdb_refusals(report, line))
+    return None
+
+
+def engine_of_line(line) -> Optional[str]:
+    """The store the readback names, or None when `line` is not a readback."""
+    readback = readback_of(line)
+    if readback is None:
+        return None
+    return readback.engine
+
+
+def resolved_sync_mode(line) -> Optional[str]:
+    """The open the readback names, or None when `line` is not a readback.
+
+    `safe` / `fast` / `fastest` on the LMDB line. The redb mode word
+    (`immediate`, ...) on the Rust store's.
+    """
+    readback = readback_of(line)
+    if readback is None:
+        return None
+    return readback.mode
+
+
+def missing_readback_reason(line) -> str:
+    """Why `line` is not a durability readback from either store."""
+    return (f"is {str(line)[:60]!r}, which does not carry the daemon's resolved "
+            "sync report (`Database sync:` from the LMDB daemon, `Store "
+            "durability:` from the Rust store). That line IS the readback: "
+            "without it nothing shows the durability the store was opened with")
+
+
+def resolved_line_refusals(line) -> list:
+    """Why a daemon's resolved sync report is not DRS-D9's, or [] if it is.
+
+    One rule for every caller: the finished artifact, the generating seed
+    before any block is generated, and the subject before its sync is timed.
+    """
+    readback = readback_of(line)
+    if readback is None:
+        return [missing_readback_reason(line)]
+    return list(readback.refusals)
+
+
+def durability_readback_note(same_binary) -> str:
+    """The artifact's account of which binary's readback was checked.
+
+    `same_binary` is true when the seed daemon and the subject daemon are
+    one file. The flip leg's seed is the archived binary that serves the
+    chain, and the note says so.
+    """
+    subject = "the subject daemon's own startup report of the flags it resolved"
+    if same_binary:
+        return (subject + "; the generating seed's report, from the same binary, "
+                "is checked against DRS-D9 before any block is generated")
+    return (subject + "; the generating seed is another binary, and its report "
+            "is checked against DRS-D9 before any block is generated")
 
 
 # §1.3 requires the disk TYPE. "unknown" is not a type, so it is not a value.
@@ -278,7 +344,7 @@ ENGINE_DEFAULT_REDB = "daemon-default-redb (no engine switch exists; the readbac
 # caught only the first, so a hand-authored artifact could pass by inverting it.
 #
 # One backend per binary, never a switch. The selection path is the binary's
-# own readback (`engine_of_line`): the LMDB daemon writes `Database sync:` at
+# own readback (`readback_of`): the LMDB daemon writes `Database sync:` at
 # `core::init`, the flip binary writes `Store durability:` after the Rust
 # store opens. The runner records the selector the readback names, and the
 # validator refuses a label the readback contradicts.
@@ -401,9 +467,7 @@ def artifact_refusals(a):
     elif sel not in ENGINE_SELECTORS:
         r.append(f"engine_selected_by is {sel!r}, which this gate does not know. Known "
                  f"selectors: {sorted(ENGINE_SELECTORS)}. An unknown selector is an "
-                 "unverifiable claim about which store was exercised; a redb selector "
-                 "belongs here as part of wiring the redb arm, alongside the runner "
-                 "path that actually selects it")
+                 "unverifiable claim about which store was exercised")
     elif a.get("engine") != ENGINE_SELECTORS[sel]:
         r.append(f"engine is {a.get('engine')!r} but engine_selected_by selects "
                  f"{ENGINE_SELECTORS[sel]!r}. The label and the mechanism disagree, so "
@@ -440,16 +504,20 @@ def artifact_refusals(a):
                      "artifact that does not observe it is not recording a condition it "
                      "could have measured")
         line = d.get("resolved_log_line")
-        r += [f"durability.resolved_log_line {x}" for x in resolved_line_refusals(line)]
-        reported = resolved_sync_mode(line)
-        if reported is not None and d.get("sync_mode") != reported:
+        # One parse. The mode word and the engine both come off it, so a
+        # label cannot agree with one reading of the line and not the other.
+        readback = readback_of(line)
+        reasons = ([missing_readback_reason(line)] if readback is None
+                   else list(readback.refusals))
+        r += [f"durability.resolved_log_line {x}" for x in reasons]
+        if readback is not None and d.get("sync_mode") != readback.mode:
             r.append(f"durability.sync_mode is {d.get('sync_mode')!r}, which is not the "
-                     f"mode the daemon reported ({reported!r}): the label and the "
+                     f"mode the daemon reported ({readback.mode!r}): the label and the "
                      "readback disagree")
-        named = engine_of_line(line)
-        if named is not None and a.get("engine") != named:
-            r.append(f"engine is {a.get('engine')!r} but the readback names {named!r}: "
-                     "the readback is the selection path, so this is a relabelled run")
+        if readback is not None and a.get("engine") != readback.engine:
+            r.append(f"engine is {a.get('engine')!r} but the readback names "
+                     f"{readback.engine!r}: the readback is the selection path, so "
+                     "this is a relabelled run")
 
     env = a.get("environment")
     if not isinstance(env, dict):
@@ -588,6 +656,20 @@ def artifact_refusals(a):
             r.append(f"fixture.peers_used is {peers!r} — IBD wall time scales with the "
                      "peer count, so a missing or zero count is not a measurement of "
                      "the same experiment")
+        # The three committed baselines (2026-09-13) predate the tip and the
+        # binary hashes. A record may omit them: they are a chain identity
+        # and a provenance, not a condition of the wall-time figure itself.
+        # A value that is present and misshapen is a false identity.
+        # `comparability_refusals` is what requires the tip on both sides.
+        tip = f.get("top_block_hash")
+        if tip is not None and not is_hex64(tip):
+            r.append(f"fixture.top_block_hash is {tip!r} — a chain tip is "
+                     f"{HASH_HEX_CHARS} lowercase hex characters")
+        for key in ("subject_binary_sha256", "seed_binary_sha256"):
+            got = f.get(key)
+            if got is not None and not is_hex64(got):
+                r.append(f"fixture.{key} is {got!r} — a binary's identity is "
+                         f"its sha256, {HASH_HEX_CHARS} lowercase hex characters")
 
     ms = a.get("measures")
     if not isinstance(ms, list) or not ms:
@@ -685,8 +767,9 @@ def comparability_refusals(base, cand):
                      "the two runs were measured against different frozen thresholds")
     # One backend per binary (ruled 2026-09-14): the two engines can only come
     # from two trees, so the revisions differ by construction and the report
-    # carries both. What the pair must share is the fixture, the hardware, the
-    # durability policy and the masked argv, checked below.
+    # carries both. The chain is the tip hash, checked with the fixture. What
+    # the pair must also share is the hardware, the durability policy and the
+    # masked argv.
     if base.get("engine") == cand.get("engine"):
         r.append(f"both artifacts are engine={base.get('engine')!r}; §1.3's floor is a "
                  "ratio BETWEEN engines. Two same-engine runs are a regression "
@@ -713,6 +796,17 @@ def comparability_refusals(base, cand):
         if bf.get(k) != cf.get(k):
             r.append(f"fixture.{k} differs ({bf.get(k)!r} vs {cf.get(k)!r}) — the two "
                      "runs did not do the same work")
+    # Not in the loop above: two absent tips compare equal under `!=`, and
+    # that would accept a pair that never named its chain. Height is not a
+    # chain. The binary hashes are provenance, not a key: the flip's seed
+    # is another file by construction.
+    base_tip, cand_tip = bf.get("top_block_hash"), cf.get("top_block_hash")
+    if not is_hex64(base_tip) or not is_hex64(cand_tip):
+        r.append(f"fixture.top_block_hash is ({base_tip!r}, {cand_tip!r}) — two "
+                 f"runs are one chain only when both name a {HASH_HEX_CHARS}-hex tip")
+    elif base_tip != cand_tip:
+        r.append(f"fixture.top_block_hash differs ({base_tip} vs {cand_tip}) — "
+                 "the two runs did not sync the same chain")
     if _masked_argv(base) != _masked_argv(cand):
         r.append("subject argv differs beyond engine and paths: "
                  f"{_masked_argv(base)} vs {_masked_argv(cand)}")
@@ -912,18 +1006,19 @@ def hardware_fingerprint(path, declared_disk_class=None):
     return out
 
 
-def measurement_preflight(daemon, work_dir, seed_dir, disk_class):
-    """Refusals that must fire before any daemon starts or cargo runs.
+def _binary_file_refusal(path, role):
+    """A missing binary, named by the role it plays in the run."""
+    if os.path.isfile(path):
+        return []
+    if role == "subject":
+        return [f"{path} is not a file — build the subject daemon in THIS worktree; "
+                "a subject binary from another tree measures another tree"]
+    return [f"{path} is not a file — the seed binary is the file that serves the chain"]
 
-    Same conditions `artifact_refusals` will apply to the finished record, so
-    a day of generation is not spent on a number the gate would decline. The
-    durability itself is not known until a daemon reports it; `measure` reads
-    the generating seed's report, from the same binary, before generating.
-    """
+
+def _directory_preflight(work_dir, seed_dir, disk_class):
+    """Where the run writes. One check, however many binaries are spawned."""
     r = []
-    if not os.path.isfile(daemon):
-        r.append(f"{daemon} is not a file — build the daemon in THIS worktree; a "
-                 "binary from another tree measures another tree")
     for label, d in (("--work-dir", work_dir), ("--seed-dir", seed_dir)):
         if not d:
             continue
@@ -940,4 +1035,23 @@ def measurement_preflight(daemon, work_dir, seed_dir, disk_class):
                  "§1.3 requires the disk type in the artifact and the validator "
                  "refuses a placeholder, so pass --disk-class hdd|ssd_or_nvme. It is "
                  "recorded as operator-declared, not probed.")
+    return r
+
+
+def measurement_preflight(daemon, work_dir, seed_dir, disk_class, seed_daemon=None):
+    """Refusals that must fire before any daemon starts or cargo runs.
+
+    Same conditions `artifact_refusals` will apply to the finished record, so
+    a day of generation is not spent on a number the gate would decline. The
+    durability itself is not known until a daemon reports it; `measure` reads
+    each spawn's report before that spawn's work is spent.
+
+    Directories are checked once. Each binary is checked as a file. The
+    subject is this tree's daemon. The seed may be another tree's file:
+    it serves the chain, and it is not the measurement.
+    """
+    r = _binary_file_refusal(daemon, "subject")
+    if seed_daemon is not None and os.path.abspath(seed_daemon) != os.path.abspath(daemon):
+        r += _binary_file_refusal(seed_daemon, "seed")
+    r += _directory_preflight(work_dir, seed_dir, disk_class)
     return r
