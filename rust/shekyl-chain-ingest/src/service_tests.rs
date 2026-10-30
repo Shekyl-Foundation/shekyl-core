@@ -357,6 +357,103 @@ async fn a_span_lands_in_one_commit() {
     cleanup(&path);
 }
 
+/// A substrate whose longhash faults on one block, and is the gated one
+/// for every other: what a run meets when its cache cannot be read.
+struct Faulting {
+    gate: Gated,
+    faulting: BlockHash,
+}
+
+/// The fault [`Faulting`] raises: not a cache miss, so the run does not
+/// place its arrivals again.
+#[derive(Debug)]
+struct FormFault;
+
+impl Substrate for Faulting {
+    type Fault = FormFault;
+    type Held = ();
+
+    fn local_clock(&self) -> Result<Timestamp, Self::Fault> {
+        Ok(self.gate.local_clock().expect("the gate's clock"))
+    }
+
+    fn longhash(&self, pow_blob: &[u8], seed: &BlockHash) -> Result<PowHash, Self::Fault> {
+        if shekyl_wire::identity_of_pow_blob(pow_blob) == self.faulting {
+            return Err(FormFault);
+        }
+        Ok(self.gate.longhash(pow_blob, seed).expect("the gate hashes"))
+    }
+
+    fn pin_seed(&self, seed: &BlockHash) {
+        self.gate.pin_seed(seed);
+    }
+
+    fn prepare_seed(&self, seed: &BlockHash) -> Self::Held {
+        self.gate.prepare_seed(seed);
+    }
+
+    fn longhash_held(
+        &self,
+        pow_blob: &[u8],
+        seed: &BlockHash,
+        _held: &Self::Held,
+    ) -> Result<PowHash, Self::Fault> {
+        self.longhash(pow_blob, seed)
+    }
+}
+
+/// A form that faults fails the service before the run's write: nothing
+/// of the run lands, the arrivals are answered `Stopped`, and the stop
+/// reports the fault. A door that landed the formed prefix first and only
+/// then looked at the fault had a path on which the write's own outcome
+/// (a refusal, a stale view) returned before the fault was ever reported,
+/// and the service ran on as if its substrate were sound; failing before
+/// the write leaves that path no entry.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_form_that_faults_fails_the_service_before_the_run_lands() {
+    let mut y = Scenario::open("service-form-fault-y");
+    let blocks = y.mine(3).await;
+    let path = tmp("service-form-fault");
+    let store: ChainStore = open_store(&path);
+    let service = Service::start(
+        Arc::new(store),
+        RULES,
+        Arc::new(Faulting {
+            gate: Gated::new(),
+            faulting: blocks[1].hash,
+        }),
+        ServiceConfig::default(),
+        Budget::of_host(),
+        super::Follow::default(),
+    );
+    let door = service.door();
+    let span = blocks
+        .iter()
+        .enumerate()
+        .map(|(i, m)| arrival(u64::try_from(i).expect("fits"), 1, m))
+        .collect();
+    let tickets = door.offer_span(span).expect("room");
+    let replies = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        let mut replies = Vec::new();
+        for ticket in tickets {
+            replies.push(ticket.reply().await.reply);
+        }
+        replies
+    })
+    .await
+    .expect("every arrival is answered");
+    assert!(
+        replies.iter().all(|r| matches!(r, Reply::Stopped)),
+        "nothing landed and every arrival was answered Stopped: {replies:?}"
+    );
+    assert!(
+        service.stop().await.is_err(),
+        "the service reports the form's fault"
+    );
+    y.close().await;
+    cleanup(&path);
+}
+
 /// Two arrivals at one height from two sessions: one connects and the
 /// other is held as an alternative. Neither is connected twice.
 #[tokio::test(flavor = "multi_thread")]

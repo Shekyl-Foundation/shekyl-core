@@ -506,7 +506,7 @@ fn rest(arrivals: &mut VecDeque<Parsed>) -> Vec<Parsed> {
 /// What ended the wait for a run's forms before every form was in. The
 /// blocks formed before it still land, in the run's one write; what it
 /// names is answered after that write.
-enum Ended<F> {
+enum Ended {
     /// `form` refused this arrival: it is answered, the rest cancelled.
     Refused {
         arrival: Parsed,
@@ -515,8 +515,6 @@ enum Ended<F> {
     /// The slots moved under this arrival's hash: it and the rest are
     /// placed again.
     Again(Parsed),
-    /// The substrate faulted: the service fails.
-    Fault(F),
 }
 
 /// Connect a run's formed blocks in **one write** once every form of the
@@ -545,7 +543,7 @@ where
     let mut run: Vec<(BlockHeight, Result<StructurallyValid, InvalidBlock>)> =
         Vec::with_capacity(receivers.len());
     let mut formed: Vec<Parsed> = Vec::with_capacity(receivers.len());
-    let mut ended: Option<Ended<S::Fault>> = None;
+    let mut ended: Option<Ended> = None;
     for (height, receiver) in receivers {
         let arrival = arrivals.pop_front().expect("one arrival per claim");
         let Ok(form) = receiver.await else {
@@ -560,34 +558,42 @@ where
                 run.push((height, Ok(valid)));
                 formed.push(arrival);
             }
+            // No form starts after a refusal or a moved slot: the launcher
+            // reads `abandon` before each one, so it is set here, not after
+            // the write that lands the prefix.
             Ok(Err(refused)) => {
+                abandon.store(true, Ordering::Release);
                 ended = Some(Ended::Refused { arrival, refused });
                 break;
             }
             Err(fault) if shared.substrate().cache_absent(&fault) => {
+                abandon.store(true, Ordering::Release);
                 ended = Some(Ended::Again(arrival));
                 break;
             }
+            // A substrate fault fails the service now, before any write:
+            // the prefix formed so far does not land on a service that is
+            // ending, and the fault is never behind a write's own outcome.
             Err(fault) => {
-                ended = Some(Ended::Fault(fault));
-                break;
+                abandon.store(true, Ordering::Release);
+                shared.fail(ServiceFault::Substrate(fault));
+                return Next::Halt;
             }
         }
     }
     // The arrivals a `Next` carries past the write: those formed but not
     // landed, the one that ended the wait, then the rest of the run.
-    let carried = |mut not_landed: Vec<Parsed>,
-                   ended: Option<Ended<S::Fault>>,
-                   arrivals: &mut VecDeque<Parsed>| {
-        match ended {
-            Some(Ended::Refused { arrival, .. } | Ended::Again(arrival)) => {
-                not_landed.push(arrival)
+    let carried =
+        |mut not_landed: Vec<Parsed>, ended: Option<Ended>, arrivals: &mut VecDeque<Parsed>| {
+            match ended {
+                Some(Ended::Refused { arrival, .. } | Ended::Again(arrival)) => {
+                    not_landed.push(arrival)
+                }
+                None => {}
             }
-            Some(Ended::Fault(_)) | None => {}
-        }
-        not_landed.extend(rest(arrivals));
-        not_landed
-    };
+            not_landed.extend(rest(arrivals));
+            not_landed
+        };
     if !run.is_empty() {
         match shared.connector.ask(Apply(run)).await {
             Ok(applied) => {
@@ -647,15 +653,9 @@ where
             };
         }
         Some(Ended::Again(arrival)) => {
-            abandon.store(true, Ordering::Release);
             let mut again = vec![arrival];
             again.extend(rest(arrivals));
             return Next::Again(again);
-        }
-        Some(Ended::Fault(fault)) => {
-            abandon.store(true, Ordering::Release);
-            shared.fail(ServiceFault::Substrate(fault));
-            return Next::Halt;
         }
     }
     match stop {
