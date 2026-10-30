@@ -591,6 +591,7 @@ stale_through = [
   { through = "65d33f49ce", note = "The Tor link gains its inbound facet, published for an incarnation without calling a watcher; a new route resets it. Clearnet's link reads NotOffered and nothing writes it. The clearnet dial, handshake and gap do the same I/O. Not re-measured." },
   { through = "d11a8dd02f", note = "A measurement build logs one line per Levin message from each clearnet session's writer and reader (step 7, item 1). A release build constructs no tap, so its dial, handshake, and gap I/O are unchanged; the handshake gap's frame walk moved into shekyl-levin unchanged. Not re-measured." },
   { through = "579f5614c5", note = "The message-size tap's tracing target moves under shekyl_clearnet, a name only. A release build constructs no tap. Not re-measured." },
+  { through = "9e024da04b", note = "The C5 bench gains a framer-free one-window seal and open, behind the c5-bench feature; production code gains nothing it calls. Not re-measured." },
 ]
 
 [[constant]]
