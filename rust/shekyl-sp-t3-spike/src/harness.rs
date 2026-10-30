@@ -1132,9 +1132,9 @@ fn classify(e: &FetchError) -> FailureKind {
         // over-capacity close also lands here; the serve-side refusal
         // counter is what tells the two apart, and a sweep row it is
         // non-zero for is void, not reinterpreted.)
-        FetchError::Stall(Stall::DialTimeout | Stall::Dial(_) | Stall::ClosedBeforeHead) => {
-            FailureKind::Circuit
-        }
+        FetchError::Stall(
+            Stall::DialTimeout | Stall::Dial(_) | Stall::NoRoute | Stall::ClosedBeforeHead,
+        ) => FailureKind::Circuit,
         // The connection came up and then went quiet.
         FetchError::Stall(Stall::HeadTimeout | Stall::BodyTimeout | Stall::NoClose) => {
             FailureKind::Timeout

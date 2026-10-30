@@ -199,6 +199,10 @@ pub enum Stall {
     /// connection refused, …), or the handshake itself failed. `P` is
     /// unreachable from this proxy right now.
     Dial(String),
+    /// This node has no Tor route to dial through right now: the client
+    /// reads its proxy at each fetch, and the managed Tor is not running.
+    /// Nothing was sent, so nothing was decided about `P`.
+    NoRoute,
     /// No complete head arrived within the head bound.
     HeadTimeout,
     /// No complete head: the connection closed or reset while the request
@@ -246,6 +250,7 @@ impl fmt::Display for Stall {
         match self {
             Self::DialTimeout => f.write_str("dial timed out"),
             Self::Dial(reason) => write!(f, "dial failed: {reason}"),
+            Self::NoRoute => f.write_str("no Tor route on this node"),
             Self::HeadTimeout => f.write_str("no complete head before the head bound"),
             Self::ClosedBeforeHead => f.write_str("connection closed before a complete head"),
             Self::BodyTimeout => f.write_str("body read stalled"),

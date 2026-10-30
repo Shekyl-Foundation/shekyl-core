@@ -846,27 +846,35 @@ struct ManagedRoute {
     at: SocketAddr,
 }
 
-/// The managed Tor's route for an in-process consumer, with that
-/// consumer's own isolation pair (`TOR_SUPERVISOR.md` §4.5; the brief's
-/// amendment 3).
+/// The managed Tor's SOCKS address for an in-process consumer, read at each
+/// use and never cached (`TSR-F10`): `None` unless the Tor link is usable
+/// now on the route the managed Tor published, so an operator's Tor, a
+/// fallen route or a route from before a respawn yields nothing.
 ///
-/// Read at each use and never cached (`TSR-F10`): `None` unless the Tor
-/// link is usable now on the route the managed Tor published, so an
-/// operator's Tor, a fallen route or a route from before a respawn yields
-/// nothing. The publication lives on the zone host, beside the operator's
-/// proxy and never in its place, and dies with that host. The operator's
-/// pair is never presented here (DC-Q7): the proxy carries `isolation` and
-/// nothing else. Each purpose (the probe, and the settlement fetch after
-/// it) holds its own fixed per-boot pair, so Tor puts its streams on
-/// circuits of their own, apart from the peer dials, which offer no
-/// authentication, and apart from each other.
+/// The publication lives on the zone host, beside the operator's proxy and
+/// never in its place, and dies with that host.
+///
+/// An address only. A consumer that presents its own credentials per read
+/// takes this: the settlement fetch client, whose every read presents a
+/// pair from its nonce (`SF-D3`), so its reads share no circuit with each
+/// other, with the peer dials or with the probe.
 #[must_use]
-pub fn managed_route(isolation: &Arc<SocksUsername>) -> Option<Proxy> {
+pub fn managed_socks() -> Option<SocketAddr> {
     let host = HOST.lock().expect("zone host").clone()?;
     let ManagedRoute { incarnation, at } = (*host.managed.lock().expect("managed route"))?;
     let link = host.hub.links().get(ConnectorId::Tor);
     (link.is_usable() && link.incarnation == incarnation && link.route == Some(Route::Socks(at)))
-        .then(|| Proxy::authenticated_shared(at, Arc::clone(isolation)))
+        .then_some(at)
+}
+
+/// The managed Tor's route with a consumer's own fixed isolation pair
+/// (`TOR_SUPERVISOR.md` §4.5): [`managed_socks`], presented with
+/// `isolation` and nothing else. The operator's pair is never presented
+/// here (DC-Q7). The probe is its user: its fixed per-boot pair keeps its
+/// circuits apart from the peer dials, which offer no authentication.
+#[must_use]
+pub fn managed_route(isolation: &Arc<SocksUsername>) -> Option<Proxy> {
+    managed_socks().map(|at| Proxy::authenticated_shared(at, Arc::clone(isolation)))
 }
 
 /// Publish the inbound facet of the managed route `incarnation`

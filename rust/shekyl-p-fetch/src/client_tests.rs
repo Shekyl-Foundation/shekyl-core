@@ -1046,6 +1046,39 @@ async fn a_proxy_that_is_not_listening_is_a_dial_stall() {
     assert!(matches!(stall(out), Stall::Dial(_)));
 }
 
+/// A client that reads its proxy at each fetch (the managed Tor's route,
+/// `TSR-F10`): with no route the fetch is [`Stall::NoRoute`], a stall that
+/// retries the same `P` because nothing was sent; once a route appears the
+/// next fetch dials it. Caching the route at construction, or calling a
+/// missing route anything but a stall, fails this.
+#[tokio::test]
+async fn a_route_read_at_each_fetch_is_no_route_until_one_appears() {
+    use std::sync::Mutex;
+    let keys = keys();
+    let closed = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap()
+    };
+    let route: Arc<Mutex<Option<std::net::SocketAddr>>> = Arc::new(Mutex::new(None));
+    let read = Arc::clone(&route);
+    let client = PFetchClient::with_route(Arc::new(move || *read.lock().expect("route")), fast());
+    let out = client
+        .fetch(&target(&keys), &header(), &expected(), Arc::new(DiscardTxs))
+        .await;
+    let err = out.expect_err("no route");
+    assert!(err.retries_same_p(), "nothing was sent: retry the same P");
+    assert!(matches!(err, FetchError::Stall(Stall::NoRoute)), "{err}");
+
+    *route.lock().expect("route") = Some(closed);
+    let out = client
+        .fetch(&target(&keys), &header(), &expected(), Arc::new(DiscardTxs))
+        .await;
+    assert!(
+        matches!(stall(out), Stall::Dial(_)),
+        "the route that appeared is dialled"
+    );
+}
+
 // ------------------------------------------------------- SF-D8: countersignature
 
 #[tokio::test]

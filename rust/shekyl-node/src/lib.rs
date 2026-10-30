@@ -523,16 +523,18 @@ impl RulesAt for RulesOf {
     }
 }
 
-/// The bundle producer, for a node that mines and reads through a Tor
-/// SOCKS endpoint (`SO-D12` increment 4c).
+/// The bundle producer, for a node that mines and has a Tor (`SO-D12`
+/// increment 4c).
 ///
 /// Only a mining daemon is a witness. The producer reads each drawn pair's
 /// shard through the daemon's fetch scheduler over the store's facts, and
-/// the scheduler dials through an operator's Tor (`tor-socks`). A managed
-/// Tor publishes its SOCKS route to the network after the node opens, so a
-/// node on one runs no producer yet; nor does a node with Tor off. Either
-/// way the templates still draw from the ring, which keeps its bound, and
-/// the node says once why it files nothing.
+/// the scheduler dials through this node's Tor: an operator's at its
+/// `tor-socks` endpoint, or the managed one at the route its supervisor
+/// publishes, read at each fetch (`TOR_SUPERVISOR.md` §4.5, `TSR-F10`). The
+/// managed route appears after the node opens and moves when Tor respawns;
+/// a read while there is none is a stall that retries, and nothing is sent.
+/// A node with Tor off runs no producer: the templates still draw from the
+/// ring, which keeps its bound, and the node says once why it files nothing.
 ///
 /// Only the endpoint of the operator's SOCKS row is used. The fetch client
 /// presents credentials derived from each read's nonce (`SF-D3`: a fresh
@@ -551,20 +553,23 @@ fn producer_seat(
     if !mining {
         return None;
     }
-    let Tor::Operator { socks, .. } = &config.tor else {
-        tracing::info!(
-            "the bundle producer is off: it reads through an operator's Tor SOCKS \
-             endpoint (tor-socks), and this node has none"
-        );
-        return None;
+    let timeouts = shekyl_bundle_producer::read::CHALLENGE_TIMEOUTS;
+    let client = match &config.tor {
+        Tor::Operator { socks, .. } => PFetchClient::with_timeouts(socks.endpoint, timeouts),
+        Tor::Managed { .. } => {
+            PFetchClient::with_route(Arc::new(shekyl_ffi::zone_ffi::managed_socks), timeouts)
+        }
+        Tor::Off => {
+            tracing::info!(
+                "the bundle producer is off: it reads through this node's Tor, and Tor is off"
+            );
+            return None;
+        }
     };
     let scheduler = Arc::new(FetchScheduler::new(
         Arc::new(StoreShardFacts::new(Arc::clone(store))),
         Arc::new(StoreHolderSource::new(Arc::clone(store))),
-        PFetchClient::with_timeouts(
-            socks.endpoint,
-            shekyl_bundle_producer::read::CHALLENGE_TIMEOUTS,
-        ),
+        client,
     ));
     Some(shekyl_chain_ingest::bundle_producer::ProducerSeat {
         witness: Arc::clone(witness),
