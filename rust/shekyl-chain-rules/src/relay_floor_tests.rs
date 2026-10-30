@@ -9,8 +9,8 @@
 
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_economics::{
-    fee_ladder_from, relay_floor_from, CirculatingSupply, FeeOperands, TxVolume, FULL_REWARD_ZONE,
-    RELAY_FLOOR_LOOKBACK, RELAY_FLOOR_WINDOW,
+    fee_ladder_from, relay_floor_from, CirculatingSupply, FeeOperands, RelayPolicy, TxVolume,
+    FULL_REWARD_ZONE, RELAY_FLOOR_LOOKBACK, RELAY_FLOOR_WINDOW,
 };
 use shekyl_types::{BlockHeight, LongTermWeight};
 use shekyl_units::AtomicUnits;
@@ -18,7 +18,10 @@ use shekyl_units::AtomicUnits;
 use crate::fault::{Corrupt, ViewRead};
 use crate::harness::fixture::{recorded_with_work, root};
 use crate::harness::MockChain;
-use crate::relay_floor::{fee_ladder_at, fee_operands_at, relay_floor_at, relay_floor_window};
+use crate::relay_floor::{
+    fee_ladder_at, fee_operands_at, relay_floor_at, relay_floor_under, relay_floor_window,
+    relay_floor_window_under,
+};
 use crate::rules::miner::economics;
 use crate::view::{AtHeight, ChainView, RecordedBlock};
 
@@ -89,6 +92,49 @@ fn owner_at(chain: &MockChain, height: BlockHeight, median: u64) -> u64 {
         )
         .expect("priced")
     })
+}
+
+/// E16-7 for the relay policy's lookback and `w_ref`: the window reads
+/// both from the policy it is given. At `G = 2` it is the last three of the
+/// shipped window's floors; at twice the shipped `w_ref` each floor is the
+/// floor priced at that weight, and none is the shipped one.
+#[test]
+fn the_window_reads_the_policys_lookback_and_reference_weight() {
+    let chain = chain(12, 40).with_total_burned(AtomicUnits::from_raw(600));
+    let connecting = h(12);
+    let shipped = *shekyl_economics::relay_policy();
+    let recorded = |w: Result<AtHeight<Vec<u64>>, _>| match w.expect("the view answers") {
+        AtHeight::Recorded(floors) => floors,
+        AtHeight::AboveTip => panic!("the connecting height is not above the tip"),
+    };
+    let full = recorded(chain.with_view(|view| relay_floor_window(&view, connecting)));
+    let short = RelayPolicy {
+        lookback: 2,
+        ..shipped
+    };
+    let three =
+        recorded(chain.with_view(|view| relay_floor_window_under(&view, connecting, &short)));
+    assert_eq!(three.len(), 3);
+    assert_eq!(three.as_slice(), &full[full.len() - 3..]);
+    let heavy = RelayPolicy {
+        ref_tx_weight: 2 * shipped.ref_tx_weight,
+        ..shipped
+    };
+    let doubled =
+        recorded(chain.with_view(|view| relay_floor_window_under(&view, connecting, &heavy)));
+    assert_eq!(doubled.len(), full.len());
+    for (i, (d, f)) in doubled.iter().zip(&full).enumerate() {
+        assert_ne!(d, f, "floor {i} ignored the policy's w_ref");
+        let height = h(12 - shipped.lookback + i as u64);
+        let alone = chain
+            .with_view(|view| relay_floor_under(&view, height, &heavy))
+            .expect("the view answers");
+        assert_eq!(
+            alone,
+            AtHeight::Recorded(*d),
+            "floor {i} is the owner at its height"
+        );
+    }
 }
 
 /// The window at the connecting height is `G + 1` floors, oldest first,
