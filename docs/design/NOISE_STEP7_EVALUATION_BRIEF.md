@@ -1,5 +1,7 @@
 # Brief A1: the step 7 evaluation record (the Noise flip, phase A)
 
+**Status:** planned. The measurement this brief names has not been taken.
+
 **Revision 2, 2026-10-30.** It replaces revision 1. Item 6's bound is ruled as its own PR (Rick, 2026-10-30).
 **For:** the transport lane. This brief produces evidence and recommendations. It builds nothing that ships.
 **Read at:** `dev` `dc2a617d22`. Re-read every anchor at your own pin.
