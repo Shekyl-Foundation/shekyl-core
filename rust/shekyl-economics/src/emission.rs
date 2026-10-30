@@ -1391,74 +1391,43 @@ mod tests {
         assert_eq!(paid(TxVolume::ZERO), 409_600_000_000);
     }
 
-    /// The penalty as it stood before the limit multiple was a field: the
-    /// C2a port's `amount·(2m − c)·c/m²`. A migration oracle for
-    /// [`apply_weight_penalty`] at the shipped multiple; deleted in this
-    /// PR's last code commit (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.26).
-    fn penalty_at_the_fixed_double(
-        amount: u64,
-        median_weight: u64,
-        current_block_weight: u64,
-        params: &EconomicParams,
-    ) -> Result<u64, EmissionError> {
-        let median = penalty_free_weight(median_weight, params);
-        if current_block_weight <= median {
-            return Ok(amount);
-        }
-        let double_median = u128::from(median) * 2;
-        if u128::from(current_block_weight) > double_median {
-            return Err(EmissionError::BlockTooBig);
-        }
-        let current = u128::from(current_block_weight);
-        let multiplicand = (double_median - current) * current;
-        let median = u128::from(median);
-        let numerator = u128::from(amount)
-            .checked_mul(multiplicand)
-            .ok_or(EmissionError::Overflow)?;
-        let reward = numerator / median / median;
-        Ok(u64::try_from(reward.min(u128::from(amount))).unwrap_or(amount))
-    }
-
-    /// E16-11: at the shipped multiple the generalised penalty is the old
-    /// body for every `(R, M, w)`: on the edges of each arm and on a
-    /// randomised spread, refusals included.
+    /// The penalty at the shipped multiple (2×), pinned as literals: each arm
+    /// (under the median, inside the band, at the limit, past it) and the
+    /// `u128` overflow refusal. These were computed against the body the
+    /// generalised penalty replaced, `amount·(2m − c)·c/m²`, which agreed on
+    /// these and on 50 000 randomised `(R, M, w)` before it was deleted
+    /// (E16-11, `ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.26.2). A change to the
+    /// penalty at the shipped multiple moves one of them.
     #[test]
-    fn the_penalty_at_the_shipped_multiple_is_the_fixed_double() {
+    fn the_penalty_at_the_shipped_multiple_is_pinned() {
         let p = EconomicParams::default();
-        let zone = p.full_reward_zone;
-        let mut cases: Vec<(u64, u64, u64)> = Vec::new();
-        for amount in [0, 1, 409_600_000_000, 1_331_200_000_000, u64::MAX] {
-            for median in [0, zone, zone + 1, 7 * zone, u64::MAX / 2, u64::MAX] {
-                let m = median.max(zone);
-                for w in [
-                    0,
-                    m,
-                    m.saturating_add(1),
-                    m.saturating_add(m / 2),
-                    m.saturating_mul(2).saturating_sub(1),
-                    m.saturating_mul(2),
-                    m.saturating_mul(2).saturating_add(1),
-                    u64::MAX,
-                ] {
-                    cases.push((amount, median, w));
-                }
-            }
-        }
-        let mut x: u64 = 0xD1B5_4A32_D192_ED03;
-        for _ in 0..50_000 {
-            x ^= x << 13;
-            x ^= x >> 7;
-            x ^= x << 17;
-            let amount = x >> (x % 50);
-            let median = x.rotate_left(29) >> (x % 45);
-            let m = median.max(zone);
-            let w = m.saturating_add(x.rotate_left(7) % m.saturating_add(m / 8).max(1));
-            cases.push((amount, median, w));
-        }
-        for (amount, median, w) in cases {
+        let z = p.full_reward_zone;
+        assert_eq!(z, 300_000, "the vectors are written at the shipped zone");
+        for (amount, median, w, want) in [
+            (1_000_000_000_000, z, z, Ok(1_000_000_000_000)),
+            (1_000_000_000_000, z, z + z / 2, Ok(750_000_000_000)),
+            (1_000_000_000_000, z, 2 * z, Ok(0)),
+            (
+                1_000_000_000_000,
+                z,
+                2 * z + 1,
+                Err(EmissionError::BlockTooBig),
+            ),
+            (409_600_000_000, 7 * z, 7 * z + 12_345, Ok(409_585_845_206)),
+            (409_600_000_000, 7 * z, 13 * z + 999, Ok(108_335_262_081)),
+            // A median below the zone is floored at it.
+            (1_331_200_000_000, 0, z + 1, Ok(1_331_199_999_985)),
+            (u64::MAX, 3 * z, 5 * z, Ok(10_248_191_152_060_862_008)),
+            (
+                u64::MAX,
+                u64::MAX / 2,
+                u64::MAX / 2 + u64::MAX / 8,
+                Err(EmissionError::Overflow),
+            ),
+        ] {
             assert_eq!(
                 apply_weight_penalty(amount, median, w, &p),
-                penalty_at_the_fixed_double(amount, median, w, &p),
+                want,
                 "amount {amount}, median {median}, weight {w}"
             );
         }
