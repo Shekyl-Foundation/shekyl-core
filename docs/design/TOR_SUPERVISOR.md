@@ -562,7 +562,10 @@ from the OS CSPRNG beside the onion seed and held with it
 (`IsolationPair`, wiped on drop, redacted in `Debug`). Tor isolates streams
 by SOCKS credentials (`IsolateSOCKSAuth`, its default), so the probe's
 circuits are its own, apart from the peer dials, which offer no
-authentication; the settlement fetch will carry a pair of its own. Isolation
+authentication. The settlement fetch reads only the route's address
+(`zone_ffi::managed_socks`): each of its reads presents credentials from its
+own nonce (`SF-D3`), a fresh circuit per read, which isolates more finely than
+one fixed pair would. Isolation
 separates circuits; it cannot change what the guard sees (below).
 
 What the probe's own dial sees, a SOCKS reply or a close, is logged and

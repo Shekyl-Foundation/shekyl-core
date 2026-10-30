@@ -21,9 +21,6 @@ There is no V3.1 / V3.2 / V3.x release train.
   - Owner: [`ARCHIVAL_BOND_CONSTRUCTION.md`](design/ARCHIVAL_BOND_CONSTRUCTION.md) §10.2 (persona activation, typed contract #2)
   - Target: pre-genesis
 
-- **The bundle producer does not run on a node whose Tor is managed (`SO-D12` increment 4c).** The producer reads through an operator's Tor SOCKS endpoint (`tor-socks`); a managed Tor's SOCKS route is published to the network after the node opens (`shekyl-daemon` `run.rs`, `network::start`), so the node builds no fetch scheduler for it and files no bundle. The route it needs exists since #1220: `shekyl_ffi::zone_ffi::managed_route` returns the managed Tor's route, read at each use, with the caller's own isolation pair (`TOR_SUPERVISOR.md` §4.5). The producer's move onto it, with an isolation pair of its own, is the next Tor-lane PR, reviewed by the settlement lane.
-  - Owner: the Tor-supervisor round with the node's composition — [`ARCHIVAL_SETTLEMENT_WRITER.md`](design/ARCHIVAL_SETTLEMENT_WRITER.md) §16.11 (where it lives)
-  - Target: pre-genesis
 - **The store's bundle view answers no support roster and no archive width.** `StoreBundleView::support_roster` and `archive_width` return `None` (`rust/shekyl-chain-store/src/store/bundle_view.rs`), and the transition writes every block's support count as zero, so no bundle states a support draw on a store chain; the producer and the verifier derive the support stream through `support_seats` once the view answers.
   - Owner: the support-draw lane — [`ARCHIVAL_SUPPORT_DRAW.md`](design/ARCHIVAL_SUPPORT_DRAW.md) §5 (the schedule on the connect path)
   - Target: pre-genesis
