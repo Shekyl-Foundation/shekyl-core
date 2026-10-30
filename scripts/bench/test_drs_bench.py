@@ -59,6 +59,11 @@ class FrozenThresholds(unittest.TestCase):
         self.assertEqual(D.PEAK_RSS_RATIO, 2.0)
         self.assertEqual(D.REFERENCE_HEIGHT, 100_000)
         self.assertEqual(D.FROZEN_AT, "ba4b3c73a")
+        # The floor's direction is as registered as its ratio. These literals
+        # are the doc's, not a read-back of the constants: a swap in the
+        # selector map would still divide, in the wrong direction.
+        self.assertEqual(D.FLOOR_DENOMINATOR_ENGINE, "lmdb")
+        self.assertEqual(D.FLOOR_NUMERATOR_ENGINE, "redb")
 
     def test_each_constant_still_appears_in_section_1_3(self):
         """Fails in BOTH directions, which is what makes it a cross-check and
@@ -74,6 +79,17 @@ class FrozenThresholds(unittest.TestCase):
                 self.assertIn(needle, self.section,
                               f"{needle!r} is not in §1.3: the harness and the frozen "
                               "doc disagree, so one of them was edited alone")
+        # The sentence is "redb (or candidate) IBD wall time ≤ 1.25× LMDB wall
+        # time". The numerator is named first, the denominator after it. A
+        # swap of the two constants renders a needle the section does not have.
+        sentence = self.section.lower()
+        numerator_at = sentence.find(
+            f"{D.FLOOR_NUMERATOR_ENGINE} (or candidate) ibd wall time")
+        denominator_at = sentence.find(
+            f"{D.FLOOR_DENOMINATOR_ENGINE} wall time",
+            numerator_at + 1 if numerator_at >= 0 else 0)
+        self.assertGreater(numerator_at, -1, sentence)
+        self.assertGreater(denominator_at, numerator_at, sentence)
 
 
 class ArtifactRefusals(unittest.TestCase):
@@ -530,6 +546,28 @@ class Comparability(unittest.TestCase):
     def test_refuses_same_engine_pair(self):
         self._refuse(lambda b, c: c.__setitem__("engine", "lmdb"),
                      "ratio BETWEEN engines")
+
+    def test_a_reversed_pair_is_the_reciprocal_of_the_floor(self):
+        """§1.3 divides the redb run by the LMDB run. These two numbers are
+        2× that way and 0.5× swapped, and 0.5× is a PASS. The reciprocal of
+        an OVER must not come back as a report."""
+        lmdb, redb = valid_artifact("lmdb"), valid_artifact("redb")
+        lmdb["measures"][0]["value"] = 100.0
+        redb["measures"][0]["value"] = 200.0
+        reversed_reasons = D.comparability_refusals(redb, lmdb)
+        self.assertTrue(any("reciprocal" in x for x in reversed_reasons),
+                        reversed_reasons)
+        self.assertTrue(any("divides the redb run by the lmdb run" in x
+                            for x in reversed_reasons), reversed_reasons)
+        ordered = D.comparability_refusals(lmdb, redb)
+        self.assertFalse(any("reciprocal" in x for x in ordered), ordered)
+        with self.assertRaises(ValueError) as caught:
+            D.compare(redb, lmdb)
+        self.assertIn("reciprocal", str(caught.exception))
+        report = D.compare(lmdb, redb)
+        wall = next(row for row in report["rows"] if row["name"] == "ibd_wall_time_s")
+        self.assertEqual(wall["ratio"], 2.0)
+        self.assertEqual(wall["verdict"], "OVER")
 
     def test_refuses_differing_durability(self):
         self._refuse(lambda b, c: c["durability"].__setitem__("policy", "relaxed"),

@@ -10,6 +10,8 @@
 # Subject: `docs/design/DAEMON_REDB_STORE.md` §7.4 against §1.3. An artifact is a
 # record of every live axis under one set of measurement conditions; `check`
 # refuses a ratio from two records that disagree about anything but the engine.
+# That difference has one direction. The baseline is the LMDB run, and it is
+# the denominator. The candidate is the redb run.
 
 import os
 import re
@@ -350,6 +352,13 @@ ENGINE_DEFAULT_REDB = "daemon-default-redb (no engine switch exists; the readbac
 # validator refuses a label the readback contradicts.
 ENGINE_SELECTORS = {ENGINE_DEFAULT_LMDB: "lmdb", ENGINE_DEFAULT_REDB: "redb"}
 ENGINE_SELECTOR_OF = {engine: selector for selector, engine in ENGINE_SELECTORS.items()}
+
+# §1.3's floor is the redb run divided by the LMDB run. The baseline artifact
+# is the denominator. The names are the engines the selectors record, so a
+# third engine is a new selector and a new place in this pair. A reversed
+# pair is the reciprocal, and the reciprocal of an OVER is a PASS.
+FLOOR_DENOMINATOR_ENGINE = ENGINE_SELECTORS[ENGINE_DEFAULT_LMDB]
+FLOOR_NUMERATOR_ENGINE = ENGINE_SELECTORS[ENGINE_DEFAULT_REDB]
 
 # A STATED BOUND ON WHAT A FIXTURE GENERALISES TO, recorded for the same reason as
 # `fs_type`: it is a condition of the measurement, not a detail.
@@ -758,6 +767,29 @@ def _durability_policy(a):
     return {"policy": d.get("policy"), "observed": d.get("observed")}
 
 
+def _floor_order_refusal(base, cand):
+    """Why this pair is not §1.3's ratio, or None when it is.
+
+    The floor divides the redb run by the LMDB run. The baseline is the
+    denominator. Two runs of one engine are a regression comparison, which
+    has no threshold here. Any other order is the reciprocal of the floor.
+    """
+    base_engine = base.get("engine")
+    cand_engine = cand.get("engine")
+    if (base_engine == FLOOR_DENOMINATOR_ENGINE
+            and cand_engine == FLOOR_NUMERATOR_ENGINE):
+        return None
+    if base_engine == cand_engine:
+        return (f"both artifacts are engine={base_engine!r}; §1.3's floor is a "
+                "ratio BETWEEN engines. Two same-engine runs are a regression "
+                "comparison, which this gate does not define thresholds for")
+    return (f"baseline is engine={base_engine!r} and candidate is "
+            f"engine={cand_engine!r}; §1.3's floor divides the "
+            f"{FLOOR_NUMERATOR_ENGINE} run by the {FLOOR_DENOMINATOR_ENGINE} "
+            "run. The reversed pair is the reciprocal, and the reciprocal "
+            "of an OVER is a PASS")
+
+
 def comparability_refusals(base, cand):
     """Reasons these two artifacts cannot produce a §1.3 ratio."""
     r = []
@@ -769,11 +801,11 @@ def comparability_refusals(base, cand):
     # from two trees, so the revisions differ by construction and the report
     # carries both. The chain is the tip hash, checked with the fixture. What
     # the pair must also share is the hardware, the durability policy and the
-    # masked argv.
-    if base.get("engine") == cand.get("engine"):
-        r.append(f"both artifacts are engine={base.get('engine')!r}; §1.3's floor is a "
-                 "ratio BETWEEN engines. Two same-engine runs are a regression "
-                 "comparison, which this gate does not define thresholds for")
+    # masked argv. The engine difference itself has one direction, and that
+    # direction is the floor.
+    order = _floor_order_refusal(base, cand)
+    if order:
+        r.append(order)
     if base.get("hardware") != cand.get("hardware"):
         r.append("hardware blocks differ — cross-machine absolute times are not "
                  "load-bearing, so a ratio across machines is not the floor §1.3 froze")
@@ -848,7 +880,16 @@ def saturation_notes(a, tag):
 
 
 def compare(base, cand):
-    """The §1.3 verdict. Callers must have validated both artifacts first."""
+    """The §1.3 verdict. Callers must have validated both artifacts first.
+
+    A pair that is not the floor's order raises rather than returning a
+    report. `comparability_refusals` names the same reason. Raising here
+    is what stops a caller who skipped that list from publishing the
+    reciprocal as a PASS.
+    """
+    order = _floor_order_refusal(base, cand)
+    if order:
+        raise ValueError(order)
     bm = {m["name"]: m["value"] for m in base["measures"]}
     cm = {m["name"]: m["value"] for m in cand["measures"]}
     rows, worst = [], "PASS"
