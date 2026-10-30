@@ -589,6 +589,7 @@ stale_through = [
   { through = "d9bb3e534", note = "The quiet span is derived from the row's dial deadline instead of a stored literal, and the dialer keeps only a published retry window. No deadline or span constant moved. This moves no cost. The rows stay stale for the reasons already recorded." },
   { through = "56d76465a", note = "A build-time check that every dial profile row's quiet threshold is well formed. No deadline or span constant moved. This moves no cost. The rows stay stale for the reasons already recorded." },
   { through = "65d33f49ce", note = "The Tor link gains its inbound facet, published for an incarnation without calling a watcher; a new route resets it. Clearnet's link reads NotOffered and nothing writes it. The clearnet dial, handshake and gap do the same I/O. Not re-measured." },
+  { through = "346e890ffe", note = "Clearnet accepts check an accept-rate gate under the socket table's lock, after the ban and the ceilings and before a socket is reserved; clearnet's row is not assessed, so no node builds a gate yet and an accept does the same work as before. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
 ]
 
 [[constant]]
@@ -693,6 +694,7 @@ cleared = [
   { through = "7098cae175", reason = "Wording, a field name and test fixtures in the Tor connector: the crate doc names the Rust options (tor-socks, tor-onion, tor-onion-listen) in place of the retired C++ flags, Config::anonymous_inbound is operator_onion_binds, publish.rs names note_own_onion in place of m_our_address, one test is renamed, and the fixtures use 11021 and 12021 in place of 18080 and 18081. The dial, the gap, the shutdown wait and their I/O are unchanged, so the 2026-10-14 capture still prices this tree." },
   { through = "56d76465a", reason = "A build-time check that every dial profile row's quiet threshold is well formed. No deadline or span constant moved and no span gained I/O, so the 2026-10-14 capture still prices this tree." },
   { through = "65d33f49ce", reason = "Increment 4's pieces: the Tor link gains its inbound facet, published for an incarnation with no watcher called, and a new route resets it to publishing. Nothing on the Tor dial, the gap or the shutdown wait reads it, and the probe dials outside the connector, so the 2026-10-14 capture still prices this tree." },
+  { through = "346e890ffe", note = "Tor accepts pass no accept-rate gate (the onion's proof-of-work is Tor's row); the change is clearnet's accept, a new close cause, and a once-a-minute report task. The Tor dial and the gap wait are unchanged. Not re-measured." },
 ]
 
 [[constant]]
