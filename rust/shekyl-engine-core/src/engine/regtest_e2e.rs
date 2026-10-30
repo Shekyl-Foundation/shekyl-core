@@ -205,6 +205,14 @@ enum Peering {
         /// so it drops every transaction a peer sends it and relays none.
         sink: bool,
     },
+    /// Bound on loopback and dialling exactly `peers`, two simulated
+    /// peers' listening addresses (the stem width) (`regtest_e2e_peer.rs`): the closed list
+    /// keeps it off every other peer, and each dial is an outbound
+    /// session, so each peer can take a stem slot.
+    Closed {
+        p2p_port: u16,
+        peers: [std::net::SocketAddrV4; 2],
+    },
 }
 
 /// `generateblocks` result fields we care about.
@@ -452,14 +460,20 @@ impl RegtestDaemon {
 
         let bin = Self::binary();
         let offline = matches!(peering, Peering::Offline);
-        let p2p_ports: &[u16] = match &peering {
-            Peering::Offline => &[],
+        let p2p_ports: Vec<u16> = match &peering {
+            Peering::Offline => Vec::new(),
             Peering::Linked {
                 p2p_port,
                 peer_p2p_port,
                 ..
-            } => &[*p2p_port, *peer_p2p_port],
+            } => vec![*p2p_port, *peer_p2p_port],
+            Peering::Closed { p2p_port, peers } => {
+                let mut ports = vec![*p2p_port];
+                ports.extend(peers.iter().map(std::net::SocketAddrV4::port));
+                ports
+            }
         };
+        let p2p_ports = p2p_ports.as_slice();
         let rpc_port = Self::free_port_excluding(p2p_ports);
         let data_dir = std::env::temp_dir().join(format!("shekyl-regtest-{rpc_port}"));
         drop(std::fs::remove_dir_all(&data_dir));
@@ -517,6 +531,12 @@ impl RegtestDaemon {
                 ]);
                 if sink {
                     cmd.args(["--dev-sync", "off"]);
+                }
+            }
+            Peering::Closed { p2p_port, peers } => {
+                cmd.args(["--clearnet-listen", &format!("127.0.0.1:{p2p_port}")]);
+                for peer in peers {
+                    cmd.args(["--p2p-closed-peer", &peer.to_string()]);
                 }
             }
         }
@@ -6895,6 +6915,9 @@ async fn ported_p2p_console_commands_answer_on_the_in_process_arm() {
 
 #[path = "regtest_e2e_origin.rs"]
 mod origin;
+
+#[path = "regtest_e2e_peer.rs"]
+mod peer;
 
 #[path = "regtest_e2e_rt_p5.rs"]
 mod rt_p5;

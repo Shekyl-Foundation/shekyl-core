@@ -182,6 +182,20 @@ ARMED=(
 #     e2e_release_accepted_and_connected — 1 385 s (SEB 32, cap 8).
 #     e2e_unstake_collect_retire_composed_arc — 1 348 s (SEB 8, cap 2;
 #       the 248-block claim window included).
+#   The relay embargo's two live walks (RX-1, Rick 2026-10-29), each
+#   waiting out the origin's 1,148 s retry, so slow lane, not PR lane:
+#     origin::an_origin_with_no_alternate_fluffs_at_its_first_fire_and_is_mined
+#       — origin and sink: the first fire has no alternate and fluffs (W3b);
+#       broadcast at 1 148.6 s, mined, 1 230 s, 2026-10-30. Red before the
+#       embargo landed: the origin held its transaction in stem past 600 s
+#       (2026-10-29).
+#     origin::an_origin_whose_successor_drops_re_stems_to_its_alternate_and_never_fluffs
+#       — the origin and three simulated Levin peers (regtest_e2e_peer.rs):
+#       two take its stem slots and swallow stems, one dials in and fluffs
+#       the transaction back. Re-stem to the alternate at 1 148.0 s, disarmed
+#       by the return, no fluff through a second interval, mined; 2 497 s,
+#       2026-10-30. No daemon option drops stems (Rick, 2026-10-29: the
+#       adversary belongs in the test).
 ARMED_SLOW=(
   engine::regtest_e2e::e2e_fcmp_spend_over_depth3_tree
   engine::regtest_e2e::e2e_cxx_template_fills_to_its_median
@@ -190,6 +204,8 @@ ARMED_SLOW=(
   engine::regtest_e2e::e2e_drain_wire_shape_matches_a_real_transfer
   engine::regtest_e2e::e2e_release_accepted_and_connected
   engine::regtest_e2e::e2e_unstake_collect_retire_composed_arc
+  engine::regtest_e2e::origin::an_origin_with_no_alternate_fluffs_at_its_first_fire_and_is_mined
+  engine::regtest_e2e::origin::an_origin_whose_successor_drops_re_stems_to_its_alternate_and_never_fluffs
 )
 
 # Deliberately never run here, with the reason recorded (rule 23: a decided

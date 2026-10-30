@@ -256,6 +256,11 @@ shekyl-win-sec = { path = "../shekyl-win-sec" }
 # Test doubles answer with the daemon's own wire types (RK-D1), so a double
 # cannot drift from the contract the way a hand-written JSON literal can.
 shekyl-rpc-types = { path = "../shekyl-rpc-types" }
+# The regtest walks' simulated Levin peer (`regtest_e2e_peer.rs`): the
+# adversary lives in the test, speaking the daemon's own codec and its
+# network id derivation. Both are workspace crates already in the graph.
+shekyl-levin = { path = "../shekyl-levin" }
+shekyl-p2p-transport = { path = "../shekyl-p2p-transport" }
 # Self dev-dep (the scanner crate's own bench idiom): enables `test-helpers`
 # for this crate's integration tests, so `tests/sp_r0_arm1_fire.rs` compiles
 # the DQ-F fire harness into the lib-under-test on a plain `cargo test`
