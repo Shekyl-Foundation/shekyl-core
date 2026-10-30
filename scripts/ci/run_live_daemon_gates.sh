@@ -195,7 +195,9 @@ ARMED=(
 #       the transaction back. Re-stem to the alternate at 1 148.0 s, disarmed
 #       by the return, no fluff through a second interval, mined; 2 497 s,
 #       2026-10-30. No daemon option drops stems (Rick, 2026-10-29: the
-#       adversary belongs in the test).
+#       adversary belongs in the test). Red seen 2026-10-30 on a daemon
+#       built to fluff on every fire (the C++ behaviour §14 rejected): the
+#       first fire reached the alternate as a fluff, "the re-stem is a stem".
 ARMED_SLOW=(
   engine::regtest_e2e::e2e_fcmp_spend_over_depth3_tree
   engine::regtest_e2e::e2e_cxx_template_fills_to_its_median
