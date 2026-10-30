@@ -589,6 +589,7 @@ stale_through = [
   { through = "d9bb3e534", note = "The quiet span is derived from the row's dial deadline instead of a stored literal, and the dialer keeps only a published retry window. No deadline or span constant moved. This moves no cost. The rows stay stale for the reasons already recorded." },
   { through = "56d76465a", note = "A build-time check that every dial profile row's quiet threshold is well formed. No deadline or span constant moved. This moves no cost. The rows stay stale for the reasons already recorded." },
   { through = "65d33f49ce", note = "The Tor link gains its inbound facet, published for an incarnation without calling a watcher; a new route resets it. Clearnet's link reads NotOffered and nothing writes it. The clearnet dial, handshake and gap do the same I/O. Not re-measured." },
+  { through = "d11a8dd02f", note = "A measurement build logs one line per Levin message from each clearnet session's writer and reader (step 7, item 1). A release build constructs no tap, so its dial, handshake, and gap I/O are unchanged; the handshake gap's frame walk moved into shekyl-levin unchanged. Not re-measured." },
 ]
 
 [[constant]]
