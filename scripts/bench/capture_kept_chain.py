@@ -77,6 +77,15 @@ def main():
     args = ap.parse_args()
     tx = None if args.tx == "-" else args.tx
 
+    # Before the daemon, the console, or requests.json. A rerun into a
+    # directory that already holds replies would otherwise start a node
+    # and then be refused by the capture, having already overwritten the
+    # previous run's request list.
+    replies_dir = os.path.join(args.out, "replies")
+    occupied = C.occupied_replies_refusal(replies_dir)
+    if occupied:
+        raise SystemExit(occupied)
+
     os.makedirs(args.out, exist_ok=True)
     console_log = os.path.join(args.out, "console.log")
     daemon_log = os.path.join(args.out, "daemon.log")
@@ -113,7 +122,7 @@ def main():
         with open(os.path.join(args.out, "requests.json"), "w", encoding="utf-8") as fh:
             json.dump(requests, fh, indent=2)
             fh.write("\n")
-        n = C.capture(base_url, requests, os.path.join(args.out, "replies"))
+        n = C.capture(base_url, requests, replies_dir)
         record = {
             "datadir": args.data,
             "get_info_height": height,

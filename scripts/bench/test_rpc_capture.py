@@ -89,6 +89,34 @@ class Capture(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     C.reserve_loopback_ports(n)
 
+    def test_a_missing_replies_directory_is_this_runs(self):
+        parent = tempfile.mkdtemp(prefix="rpc-capture-")
+        missing = os.path.join(parent, "replies")
+        self.assertIsNone(C.occupied_replies_refusal(missing))
+
+    def test_a_replies_directory_that_already_holds_a_capture_is_refused(self):
+        """The previous run asked for a transaction. This run does not, so
+        its omitted list would say `/get_transactions` was not requested
+        while the old reply file still sat beside it. The stale file stays,
+        and nothing from this run is written."""
+        out = tempfile.mkdtemp(prefix="rpc-capture-")
+        stale = os.path.join(out, "000-get_transactions.json")
+        stale_body = '{"stale": true}\n'
+        with open(stale, "w", encoding="utf-8") as fh:
+            fh.write(stale_body)
+        with self.assertRaises(ValueError) as caught:
+            C.capture(
+                "http://127.0.0.1:1",
+                [{"kind": "json", "method": "get_block", "params": {"height": 0}}],
+                out,
+                timeout=1)
+        self.assertIn(out, str(caught.exception))
+        self.assertIn("mix replies from two runs", str(caught.exception))
+        with open(stale, encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), stale_body)
+        self.assertFalse(os.path.exists(os.path.join(out, "000-get_block.json")))
+        self.assertFalse(os.path.exists(os.path.join(out, "omitted.json")))
+
     def test_json_rpc_keeps_a_positional_params_list(self):
         """`on_get_block_hash` takes a list. An empty list is still a list:
         coercing it to an object would ask a different question."""

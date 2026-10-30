@@ -197,8 +197,35 @@ def _post(url, body, timeout):
         return {"unparsed": True, "raw_base64": base64.b64encode(raw).decode("ascii")}
 
 
+def occupied_replies_refusal(out_dir):
+    """Why `out_dir` cannot take a capture, or None when it can.
+
+    None means the path is missing or an empty directory: this run's.
+    A capture is one run. `omitted.json` names the methods this run did
+    not ask, so a reply already in the directory is another run sitting
+    beside this run's omitted list. The previous capture is left in place.
+    """
+    if not os.path.exists(out_dir):
+        return None
+    if not os.path.isdir(out_dir):
+        return f"{out_dir} is not a directory; a capture is one run's replies"
+    held = sorted(os.listdir(out_dir))
+    if not held:
+        return None
+    names = ", ".join(held)
+    return (f"{out_dir} already holds a capture ({names}); "
+            "a second capture would mix replies from two runs")
+
+
 def capture(base_url, requests, out_dir, timeout=60):
-    """Write one file per request. Returns the number written."""
+    """Write one file per request. Returns the number written.
+
+    Refuses a directory that already holds a capture, before any write.
+    An empty directory, including one the caller just created, is this run's.
+    """
+    occupied = occupied_replies_refusal(out_dir)
+    if occupied:
+        raise ValueError(occupied)
     os.makedirs(out_dir, exist_ok=True)
     base = base_url.rstrip("/")
     n = 0
