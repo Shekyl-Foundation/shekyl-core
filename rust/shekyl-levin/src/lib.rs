@@ -135,8 +135,8 @@ mod reader;
 pub use error::Error;
 pub use fragment::{fragmented_notify, noise_notify};
 pub use header::{
-    BucketHead, Flags, HandshakeFrame, HandshakeKind, DEFAULT_MAX_PACKET_SIZE, HEADER_SIZE,
-    INITIAL_MAX_PACKET_SIZE, LEVIN_SIGNATURE, PROTOCOL_VERSION_1,
+    BucketHead, Flags, FrameHeads, HandshakeFrame, HandshakeKind, DEFAULT_MAX_PACKET_SIZE,
+    HEADER_SIZE, INITIAL_MAX_PACKET_SIZE, LEVIN_SIGNATURE, PROTOCOL_VERSION_1,
 };
 pub use ingress::{
     ingress_payload_cap, DefinedCommand, BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT, FLAGS_DEFINED,

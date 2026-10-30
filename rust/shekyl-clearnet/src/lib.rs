@@ -62,6 +62,7 @@ mod drive;
 mod handshake;
 mod inode;
 mod seam;
+mod sizes;
 
 #[cfg(unix)]
 pub use inode::socket_descriptors;
