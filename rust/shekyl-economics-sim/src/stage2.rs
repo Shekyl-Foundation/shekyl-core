@@ -380,8 +380,10 @@ fn note_cap_crossing(first_at_cap: &mut Option<u64>, n_now: u64) {
 pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAgg> {
     let economic = params.economic();
     let total_blocks = params.blocks_per_year() * config.sim_years;
-    let mut already_generated =
-        emitted_at_start(params.emission_curve_asymptote, config.initial_emitted_ppm);
+    let mut already_generated = emitted_at_start(
+        params.economic().emission_curve_asymptote,
+        config.initial_emitted_ppm,
+    );
     let mut total_burned: u128 = 0;
     let mut fold = HonestFold::default();
     // Integer atomic accumulators (DQ-2G: the budget quantities never touch f64).
@@ -415,7 +417,7 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
                 closed_shards: ClosedShardCount::new(closed_before),
             },
             params,
-            &economic,
+            economic,
         );
         let last_block = LastBlock {
             chain_height: abs_height,
@@ -471,7 +473,7 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
                 carried_txs: year_carried,
                 demand_txs: year_demand,
                 expired_txs: year_expired,
-                long_term_median: chain.medians(&economic).long_term_effective_median.to_raw(),
+                long_term_median: chain.medians(economic).long_term_effective_median.to_raw(),
                 last_block,
             });
             year_carried = 0;
@@ -1908,8 +1910,10 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
         // mid-chain supply, for A6's penalty-compensation term — measured on
         // the penalty, not asserted.
         let econ = params.economic();
-        let forfeit =
-            crate::swing::forfeit_at_the_ceiling(params.emission_curve_asymptote / 2, &econ);
+        let forfeit = crate::swing::forfeit_at_the_ceiling(
+            params.economic().emission_curve_asymptote / 2,
+            econ,
+        );
         crate::swing::a6_report(out, &ESCALATION_PREVIEW_N, forfeit, &admission)?;
     }
     let a4 = a4_stuffing_report(out, &folded)?;

@@ -172,14 +172,14 @@ mod tests {
                 ChainStep {
                     fold_height: block,
                     chain_height: block,
-                    demand: params.tx_volume_baseline,
+                    demand: params.economic().tx_volume_baseline,
                     leaves,
                     already_generated: generated,
                     total_burned: burned,
                     closed_shards: ClosedShardCount::new(0),
                 },
                 &params,
-                &economic,
+                economic,
             );
             assert_eq!(
                 priced.tx.fee_atomic % FEE_QUANTIZATION_MASK,
@@ -211,7 +211,7 @@ mod tests {
                 closed_shards: ClosedShardCount::ZERO,
             },
             &params,
-            &economic,
+            economic,
         );
         assert_eq!(first.volume, TxVolume::window(0, 0));
         assert_eq!(first.filled.included, 5, "five fit under the zone");
@@ -226,7 +226,7 @@ mod tests {
                 closed_shards: ClosedShardCount::ZERO,
             },
             &params,
-            &economic,
+            economic,
         );
         assert_eq!(second.volume, TxVolume::window(5, 1));
     }

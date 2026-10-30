@@ -6,6 +6,7 @@ use shekyl_economics::{
 };
 use shekyl_units::AtomicUnits;
 
+use crate::baseline::{Baseline, Override, OverrideError};
 use crate::burden::HonestOutputs;
 use crate::chain_cursor::{ChainCursor, ChainStep};
 use crate::fee_model::FeeModel;
@@ -124,96 +125,84 @@ pub struct ScenarioConfig {
     pub archival_lock: Option<ArchivalLockModel>,
 }
 
-/// Knobs of one sim run.
+/// One sim run's parameters: the production [`Baseline`], the named
+/// [`Override`]s that depart from it, and the run's fee arm.
 ///
-/// The default incorporates the shipped economics. Consensus quantities are
-/// read from [`EconomicParams`] and its crate constants, so this struct
-/// never carries a second curve. A design under test replaces fields and
-/// the same fold prices it. [`Self::economic`] writes those knobs onto
-/// production [`EconomicParams`]; the fold calls the production functions.
-/// An escalation alternative is an [`crate::escalation::EscalationCurve`],
-/// which owns the candidate and delegates the ramp.
+/// The sim holds no production value of its own (ESR-16 completion, ruling
+/// 6). [`Self::default`] is the shipped baseline, read from the three
+/// production accessors; [`Self::with_overrides`] writes a run's overrides
+/// on through each struct's validator, so a refused run fails before any
+/// fold. The folds read [`Self::economic`], [`Self::relay`] and
+/// [`Self::archival`] and call the production functions on them. An
+/// escalation candidate is two economic overrides
+/// ([`crate::escalation::EscalationCurve`]).
+#[derive(Clone, Debug)]
 pub struct SimParams {
-    pub emission_curve_asymptote: u64,
-    pub emission_speed_factor_per_block: u64,
-    pub final_subsidy_per_minute: u64,
-    /// The DAA target, seconds. [`Self::economic`] writes it onto the set;
-    /// the fold's year is [`Self::blocks_per_year`], derived from it as
-    /// production's is. A run with a shorter year sets a longer target.
-    pub daa_target_seconds: u64,
-    /// Initial staker share of emission, in millionths of
-    /// [`shekyl_economics::params::SCALE`]. [`Self::economic`] writes it
-    /// onto the schedule.
-    pub staker_emission_share: u64,
-    /// Annual decay of [`Self::staker_emission_share`], in millionths of
-    /// [`shekyl_economics::params::SCALE`]. [`Self::economic`] writes it
-    /// onto the schedule.
-    pub staker_emission_decay: u64,
-    pub tx_volume_baseline: u64,
-    pub release_min: u64,
-    pub release_max: u64,
-    pub burn_base_rate: u64,
-    pub burn_cap: u64,
-    pub staker_pool_share: u64,
+    run: Baseline,
+    overrides: Vec<Override>,
     /// The run's fee arm: what every scenario charges an ordinary
-    /// transaction (`ECONOMICS_SIM_PRODUCTION_REBASE.md` ESR-1).
+    /// transaction (`ECONOMICS_SIM_PRODUCTION_REBASE.md` ESR-1). The sim's
+    /// own input, not a production value.
     pub fee: FeeModel,
 }
 
 impl Default for SimParams {
     fn default() -> Self {
-        // Shipped config. The fields stay public so a run replaces one
-        // without a second fold.
-        let shipped = EconomicParams::default();
         Self {
-            emission_curve_asymptote: shipped.emission_curve_asymptote,
-            emission_speed_factor_per_block: shipped.emission_speed_factor_per_block,
-            final_subsidy_per_minute: shipped.final_subsidy_per_minute,
-            daa_target_seconds: shipped.daa_target_seconds,
-            staker_emission_share: shipped.staker_emission_share,
-            staker_emission_decay: shipped.staker_emission_decay,
-            tx_volume_baseline: shipped.tx_volume_baseline,
-            release_min: shipped.release_min,
-            release_max: shipped.release_max,
-            burn_base_rate: shipped.burn_base_rate,
-            burn_cap: shipped.burn_cap,
-            staker_pool_share: shipped.staker_pool_share,
+            run: Baseline::shipped(),
+            overrides: Vec::new(),
             fee: FeeModel::PRODUCTION_DEFAULT,
         }
     }
 }
 
 impl SimParams {
-    /// Production [`EconomicParams`] with this run's emission, release, burn,
-    /// staker and schedule knobs written over the shipped values. Escalation
-    /// stays shipped here: a candidate knee or asymptote is an
-    /// [`crate::escalation::EscalationCurve`]. The one construction every
-    /// fold uses.
-    #[must_use]
-    pub fn economic(&self) -> EconomicParams {
-        let shipped = EconomicParams::default();
-        EconomicParams {
-            release_min: self.release_min,
-            release_max: self.release_max,
-            tx_volume_baseline: self.tx_volume_baseline,
-            burn_base_rate: self.burn_base_rate,
-            burn_cap: self.burn_cap,
-            staker_pool_share: self.staker_pool_share,
-            emission_curve_asymptote: self.emission_curve_asymptote,
-            emission_speed_factor_per_block: self.emission_speed_factor_per_block,
-            final_subsidy_per_minute: self.final_subsidy_per_minute,
-            daa_target_seconds: self.daa_target_seconds,
-            staker_emission_share: self.staker_emission_share,
-            staker_emission_decay: self.staker_emission_decay,
-            ..shipped
-        }
+    /// The shipped baseline with `overrides` written on, on the production
+    /// fee arm.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::baseline::OverrideError`]: a field a struct does not have,
+    /// a value its validator refuses, or a path given twice.
+    pub fn with_overrides(overrides: Vec<Override>) -> Result<Self, OverrideError> {
+        Ok(Self {
+            run: Baseline::shipped().with(&overrides)?,
+            overrides,
+            fee: FeeModel::PRODUCTION_DEFAULT,
+        })
     }
 
-    /// Blocks in the fold's year: [`shekyl_economics::blocks_per_year`] of
-    /// [`Self::daa_target_seconds`], the derivation production uses.
+    /// The run's [`EconomicParams`]: the shipped set with the run's
+    /// economic overrides. The one set every fold prices with.
+    #[must_use]
+    pub fn economic(&self) -> &EconomicParams {
+        &self.run.economic
+    }
+
+    /// The run's [`shekyl_economics::RelayPolicy`].
+    #[must_use]
+    pub fn relay(&self) -> &shekyl_economics::RelayPolicy {
+        &self.run.relay
+    }
+
+    /// The run's [`shekyl_archival_retention::ArchivalParams`].
+    #[must_use]
+    pub fn archival(&self) -> &shekyl_archival_retention::ArchivalParams {
+        &self.run.archival
+    }
+
+    /// The overrides this run departs from the baseline by, in the order
+    /// given.
+    #[must_use]
+    pub fn overrides(&self) -> &[Override] {
+        &self.overrides
+    }
+
+    /// Blocks in the fold's year: the run's
+    /// [`EconomicParams::blocks_per_year`], the derivation production uses.
     #[must_use]
     pub const fn blocks_per_year(&self) -> u64 {
-        shekyl_economics::blocks_per_year(self.daa_target_seconds)
+        self.run.economic.blocks_per_year()
     }
 
     /// The parameters of the control arm: the shipped economics with the
@@ -265,15 +254,17 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
 
     let total_blocks = params.blocks_per_year() * config.sim_years;
 
-    let mut already_generated =
-        emitted_at_start(params.emission_curve_asymptote, config.initial_emitted_ppm);
+    let mut already_generated = emitted_at_start(
+        params.economic().emission_curve_asymptote,
+        config.initial_emitted_ppm,
+    );
     let mut total_burned: u128 = 0;
     let mut staker_emission_earned_year: u128 = 0;
     let mut staker_fee_earned_year: u128 = 0;
     let mut year_start_circulating: u128 = 0;
 
     let mut snapshots = Vec::new();
-    let emission_curve_asymptote = params.emission_curve_asymptote as u128;
+    let emission_curve_asymptote = params.economic().emission_curve_asymptote as u128;
     // Leaves the block's transactions are built against. The fee prices this
     // count; the block's outputs accrue after it is charged. Burn-split `n`
     // is a different counter and stays zero in this engine.
@@ -301,7 +292,7 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
                 closed_shards: ClosedShardCount::ZERO,
             },
             params,
-            &economic,
+            economic,
         );
         // The circulating supply the burn reads (CEN-F17): net of what the
         // fold has destroyed, at parent state. One operand for both paths.
@@ -322,9 +313,9 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
 
         let multiplier = calc_release_multiplier(
             priced.volume,
-            params.tx_volume_baseline,
-            params.release_min,
-            params.release_max,
+            params.economic().tx_volume_baseline,
+            params.economic().release_min,
+            params.economic().release_max,
         );
         let burn_pct = priced.burn_pct;
 
@@ -419,6 +410,7 @@ mod tests {
         net_supply, run_scenario, ArchivalLockModel, ScenarioConfig, SimParams, StakeSchedule,
         VolumeSchedule,
     };
+    use crate::baseline::Override;
 
     /// The supply the folds' burn reads is generated minus burned, read at
     /// the `u64` rail the chain records both at; equal accumulators net to
@@ -483,10 +475,11 @@ mod tests {
     #[test]
     fn gate7_path_reports_derived_lock_and_legacy_path_omits_it() {
         // A one-hour block makes a short year: 365 × 24 = 8 760 blocks.
-        let params = SimParams {
-            daa_target_seconds: 3_600,
-            ..SimParams::default()
-        };
+        let params =
+            SimParams::with_overrides(vec![
+                Override::parse("economic.daa_target_seconds=3600").expect("well-formed")
+            ])
+            .expect("in band");
         assert_eq!(params.blocks_per_year(), 8_760);
 
         let legacy = run_scenario(&params, &tiny_config(None));
@@ -521,15 +514,15 @@ mod tests {
         let p = SimParams::default();
 
         assert_eq!(
-            p.emission_curve_asymptote,
+            p.economic().emission_curve_asymptote,
             cfg_u64(&cfg, "emission_curve_asymptote")
         );
         assert_eq!(
-            p.emission_speed_factor_per_block,
+            p.economic().emission_speed_factor_per_block,
             cfg_u64(&cfg, "emission_speed_factor_per_block")
         );
         assert_eq!(
-            p.final_subsidy_per_minute,
+            p.economic().final_subsidy_per_minute,
             cfg_u64(&cfg, "final_subsidy_per_minute")
         );
         let consensus: Value =
@@ -540,23 +533,32 @@ mod tests {
             shekyl_economics::blocks_per_year(cfg_u64(&consensus, "daa_target_seconds"))
         );
         assert_eq!(
-            p.staker_emission_share,
+            p.economic().staker_emission_share,
             cfg_u64(&cfg, "shekyl_staker_emission_share")
         );
         assert_eq!(
-            p.staker_emission_decay,
+            p.economic().staker_emission_decay,
             cfg_u64(&cfg, "shekyl_staker_emission_decay")
         );
         assert_eq!(
-            p.tx_volume_baseline,
+            p.economic().tx_volume_baseline,
             cfg_u64(&cfg, "shekyl_tx_volume_baseline")
         );
-        assert_eq!(p.release_min, cfg_u64(&cfg, "shekyl_release_min"));
-        assert_eq!(p.release_max, cfg_u64(&cfg, "shekyl_release_max"));
-        assert_eq!(p.burn_base_rate, cfg_u64(&cfg, "shekyl_burn_base_rate"));
-        assert_eq!(p.burn_cap, cfg_u64(&cfg, "shekyl_burn_cap"));
         assert_eq!(
-            p.staker_pool_share,
+            p.economic().release_min,
+            cfg_u64(&cfg, "shekyl_release_min")
+        );
+        assert_eq!(
+            p.economic().release_max,
+            cfg_u64(&cfg, "shekyl_release_max")
+        );
+        assert_eq!(
+            p.economic().burn_base_rate,
+            cfg_u64(&cfg, "shekyl_burn_base_rate")
+        );
+        assert_eq!(p.economic().burn_cap, cfg_u64(&cfg, "shekyl_burn_cap"));
+        assert_eq!(
+            p.economic().staker_pool_share,
             cfg_u64(&cfg, "shekyl_staker_pool_share")
         );
     }
@@ -571,10 +573,11 @@ mod tests {
 
         let shipped = EconomicParams::default();
         let alternative = shipped.emission_speed_factor_per_block - 1;
-        let run = SimParams {
-            emission_speed_factor_per_block: alternative,
-            ..SimParams::default()
-        };
+        let run = SimParams::with_overrides(vec![Override::parse(&format!(
+            "economic.emission_speed_factor_per_block={alternative}"
+        ))
+        .expect("well-formed")])
+        .expect("in band");
         let priced = run.economic();
         assert_eq!(priced.emission_speed_factor_per_block, alternative);
         assert_eq!(
@@ -587,7 +590,7 @@ mod tests {
             priced.escalation_asymptote_share,
             shipped.escalation_asymptote_share
         );
-        let reward = base_block_reward(0, &priced).expect("genesis reward on the alternative");
+        let reward = base_block_reward(0, priced).expect("genesis reward on the alternative");
         assert_eq!(reward, shipped.emission_curve_asymptote >> alternative);
         let shipped_reward =
             base_block_reward(0, &shipped).expect("genesis reward on the shipped curve");
@@ -601,10 +604,11 @@ mod tests {
         use shekyl_economics::{EconomicParams, EMISSION_SPLIT_EPOCH};
 
         let shipped = EconomicParams::default();
-        let quiet = SimParams {
-            staker_emission_share: 0,
-            ..SimParams::default()
-        };
+        let quiet =
+            SimParams::with_overrides(vec![
+                Override::parse("economic.staker_emission_share=0").expect("well-formed")
+            ])
+            .expect("in band");
         let quiet_priced = quiet.economic();
         assert_eq!(
             quiet_priced
@@ -620,10 +624,12 @@ mod tests {
         );
 
         // A one-block year: the DAA target is the whole year.
-        let fast = SimParams {
-            daa_target_seconds: shekyl_economics::params::SECONDS_PER_YEAR,
-            ..SimParams::default()
-        };
+        let fast = SimParams::with_overrides(vec![Override::parse(&format!(
+            "economic.daa_target_seconds={}",
+            shekyl_economics::params::SECONDS_PER_YEAR
+        ))
+        .expect("well-formed")])
+        .expect("in band");
         assert_eq!(fast.blocks_per_year(), 1);
         assert!(
             fast.economic()

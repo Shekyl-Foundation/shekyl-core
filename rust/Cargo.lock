@@ -4429,10 +4429,12 @@ dependencies = [
  "shekyl-curve-tree",
  "shekyl-economics",
  "shekyl-fcmp",
+ "shekyl-rpc-types",
  "shekyl-tx-weight",
  "shekyl-types",
  "shekyl-units",
  "shekyl-wire",
+ "thiserror",
 ]
 
 [[package]]

@@ -149,10 +149,10 @@ fn theta_at_equal_medians(weight: u64) -> f64 {
 fn fee_gate(block: &GateBlock, params: &SimParams, economic: &EconomicParams) -> FeeGate {
     let scaled = rho_scaled(block, economic);
     let scale = SCALE as f64;
-    let supply_ratio = if params.emission_curve_asymptote == 0 {
+    let supply_ratio = if params.economic().emission_curve_asymptote == 0 {
         0.0
     } else {
-        block.supply_raw as f64 / params.emission_curve_asymptote as f64
+        block.supply_raw as f64 / params.economic().emission_curve_asymptote as f64
     };
     let median_ratio = if block.long_term_median == 0 {
         0.0
@@ -260,7 +260,7 @@ pub(crate) fn write_report(
     {
         Some(baseline) => {
             for agg in baseline.aggs.iter().take(BASELINE_TABLE_YEARS) {
-                let gate = fee_gate(&GateBlock::from_agg(agg), params, &economic);
+                let gate = fee_gate(&GateBlock::from_agg(agg), params, economic);
                 writeln!(
                     out,
                     "       {:>6} {:>8.1} {:>7.0} {:>7.3} {:>7.3} {:>7.3} {:>7.3} {:>7.3} {:>7.3} {:>6}",
@@ -284,7 +284,7 @@ pub(crate) fn write_report(
         let gates: Vec<FeeGate> = scenario
             .aggs
             .iter()
-            .map(|agg| fee_gate(&GateBlock::from_agg(agg), params, &economic))
+            .map(|agg| fee_gate(&GateBlock::from_agg(agg), params, economic))
             .collect();
         let zone = scenario
             .aggs
@@ -501,7 +501,7 @@ mod tests {
         let aggs = crate::stage2::a1_year_aggs(&params, &config);
         let gates: Vec<FeeGate> = aggs
             .iter()
-            .map(|agg| fee_gate(&GateBlock::from_agg(agg), &params, &economic))
+            .map(|agg| fee_gate(&GateBlock::from_agg(agg), &params, economic))
             .collect();
         assert_eq!(format!("{:.3}", gates[0].rho), "0.879");
         assert_eq!(format!("{:.3}", gates[0].theta_at_equal_medians), "1.188");

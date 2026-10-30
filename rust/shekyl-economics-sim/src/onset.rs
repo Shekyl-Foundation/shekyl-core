@@ -233,7 +233,7 @@ impl Lever {
 pub fn emission_leg_at_decay(a: &A1YearAgg, params: &SimParams, annual_decay: u64) -> u128 {
     let mid_height = a.start_height + params.blocks_per_year() / 2;
     let share = EmissionSchedule::try_new(
-        params.staker_emission_share,
+        params.economic().staker_emission_share,
         annual_decay,
         params.blocks_per_year(),
     )
@@ -735,7 +735,7 @@ pub fn lever_report(
 /// The perpetual tail per year in SKL: the owner's tail per block
 /// (`tail_subsidy_per_block`) times the run's `blocks_per_year`.
 fn tail_skl_per_year(params: &SimParams) -> f64 {
-    let per_block = shekyl_economics::tail_subsidy_per_block(&params.economic())
+    let per_block = shekyl_economics::tail_subsidy_per_block(params.economic())
         .expect("the run's tail subsidy is priced");
     (per_block as f64 / COIN) * params.blocks_per_year() as f64
 }
@@ -826,10 +826,10 @@ mod tests {
     /// at each year's last block mints exactly the tail.
     fn assert_tail_era(params: &SimParams, aggs: &[A1YearAgg]) {
         let economic = params.economic();
-        let tail = shekyl_economics::tail_subsidy_per_block(&economic).expect("tail");
+        let tail = shekyl_economics::tail_subsidy_per_block(economic).expect("tail");
         for a in aggs {
             assert_eq!(
-                shekyl_economics::base_block_reward(a.last_block.already_generated, &economic)
+                shekyl_economics::base_block_reward(a.last_block.already_generated, economic)
                     .expect("base"),
                 tail,
                 "y{}: the curve is above the tail; this is not the fee era",
@@ -911,7 +911,10 @@ mod tests {
             crate::burden::honest_leaves_at_closed_shards(crate::escalation::KNEE_BAND[2]),
         );
         let w = shekyl_types::SHARD_LENGTH.to_raw();
-        let base = crate::fee_horizon::fee_era_burn_fraction(&params, params.tx_volume_baseline);
+        let base = crate::fee_horizon::fee_era_burn_fraction(
+            &params,
+            params.economic().tx_volume_baseline,
+        );
         let share = crate::escalation::floor_share() as f64 / SCALE as f64;
         let h = crate::fee_horizon::fee_horizon_years(fee, base, share, 0.10, bytes, w);
         let a = aggs.last().expect("60 years");
@@ -921,8 +924,8 @@ mod tests {
         let measured =
             a1_year_clearance_ratio(a, fee_only, 0.10, SKL_FIAT_PRICE_BAND[1], KryderRate::Stall);
         let carried: u128 = aggs.iter().map(|y| y.carried_txs).sum();
-        let traffic_years =
-            carried as f64 / (params.tx_volume_baseline as f64 * params.blocks_per_year() as f64);
+        let traffic_years = carried as f64
+            / (params.economic().tx_volume_baseline as f64 * params.blocks_per_year() as f64);
         let predicted = h / traffic_years;
         let rel = (measured - predicted).abs() / predicted;
         assert!(

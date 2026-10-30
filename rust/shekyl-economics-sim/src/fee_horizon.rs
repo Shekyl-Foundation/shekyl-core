@@ -61,11 +61,11 @@ pub fn fee_horizon_years(
 pub(crate) fn fee_era_burn_pct(params: &SimParams, tx_per_block: u64) -> u64 {
     calc_burn_pct(
         TxVolume::per_block(tx_per_block),
-        params.tx_volume_baseline,
-        params.emission_curve_asymptote,
-        params.emission_curve_asymptote,
-        params.burn_base_rate,
-        params.burn_cap,
+        params.economic().tx_volume_baseline,
+        params.economic().emission_curve_asymptote,
+        params.economic().emission_curve_asymptote,
+        params.economic().burn_base_rate,
+        params.economic().burn_cap,
     )
 }
 
@@ -80,9 +80,9 @@ pub(crate) fn fee_era_burn_fraction(params: &SimParams, tx_per_block: u64) -> f6
 /// with traffic. Walks up from the baseline one tx/block at a time; the cap is
 /// a few multiples of the baseline, so the walk is short.
 fn burn_cap_volume(params: &SimParams) -> u64 {
-    let baseline = params.tx_volume_baseline;
+    let baseline = params.economic().tx_volume_baseline;
     (baseline..=baseline.saturating_mul(10_000))
-        .find(|&v| fee_era_burn_pct(params, v) >= params.burn_cap)
+        .find(|&v| fee_era_burn_pct(params, v) >= params.economic().burn_cap)
         .expect("burn_cap is reached within 10,000x the baseline volume")
 }
 
@@ -128,11 +128,11 @@ fn write_closed_form(out: &mut impl fmt::Write, params: &SimParams, fee: u64) ->
         R = REPLICAS_PER_SHARD,
         bpt = bytes_per_tx,
         cap_v = cap_volume,
-        cap_ratio = params.burn_cap as f64 / params.burn_base_rate as f64,
+        cap_ratio = params.economic().burn_cap as f64 / params.economic().burn_base_rate as f64,
     )?;
     let volumes = [
         ("scen. 9 tail", SCENARIO_9_TAIL_TX_PER_BLOCK),
-        ("baseline", params.tx_volume_baseline),
+        ("baseline", params.economic().tx_volume_baseline),
         ("at burn_cap", cap_volume),
     ];
     let horizons = |base: f64, share: f64| -> String {
@@ -189,11 +189,11 @@ mod tests {
         // all-fees lever's H is. Both read off the same closed form, which
         // exists only on the flat arm.
         let params = SimParams::section_12_14_control();
-        let baseline = params.tx_volume_baseline;
+        let baseline = params.economic().tx_volume_baseline;
         let cap_v = burn_cap_volume(&params);
         assert!(cap_v > baseline);
-        assert_eq!(fee_era_burn_pct(&params, cap_v), params.burn_cap);
-        assert!(fee_era_burn_pct(&params, cap_v - 1) < params.burn_cap);
+        assert_eq!(fee_era_burn_pct(&params, cap_v), params.economic().burn_cap);
+        assert!(fee_era_burn_pct(&params, cap_v - 1) < params.economic().burn_cap);
 
         let bytes = normal_tx_archival_bytes(honest_leaves_at_closed_shards(KNEE_BAND[2]));
         let w = shekyl_types::SHARD_LENGTH.to_raw();
@@ -227,7 +227,7 @@ mod tests {
         // Above the cap, flat.
         assert_eq!(h_at(cap_v * 10), h_cap);
         // The cap/base ratio from the params is where it tops out.
-        let top = params.burn_cap as f64 / params.burn_base_rate as f64;
+        let top = params.economic().burn_cap as f64 / params.economic().burn_base_rate as f64;
         assert!(((h_cap / h_base) - top).abs() < 0.01);
         // All fees: the same at every volume.
         let all = |_v: u64| fee_horizon_years(fee, 1.0, 1.0, 0.10, bytes, w);

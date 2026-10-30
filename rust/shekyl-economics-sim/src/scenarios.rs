@@ -23,7 +23,7 @@ fn default_stake_schedule() -> StakeSchedule {
 pub const BASELINE_STEADY_STATE: &str = "baseline_steady_state";
 
 pub fn scenario_1_baseline(params: &SimParams) -> ScenarioConfig {
-    let baseline = params.tx_volume_baseline;
+    let baseline = params.economic().tx_volume_baseline;
     ScenarioConfig {
         name: BASELINE_STEADY_STATE.into(),
         description: "Constant moderate transaction volume (1x baseline) over 10 years".into(),
@@ -39,7 +39,7 @@ pub fn scenario_1_baseline(params: &SimParams) -> ScenarioConfig {
 }
 
 pub fn scenario_2_boom_bust(params: &SimParams) -> ScenarioConfig {
-    let baseline = params.tx_volume_baseline;
+    let baseline = params.economic().tx_volume_baseline;
     ScenarioConfig {
         name: "boom_bust_cycle".into(),
         description: "3x volume for 1 year, then 0.3x for 1 year, repeating over 10 years".into(),
@@ -62,7 +62,7 @@ pub fn scenario_2_boom_bust(params: &SimParams) -> ScenarioConfig {
 }
 
 pub fn scenario_3_sustained_growth(params: &SimParams) -> ScenarioConfig {
-    let baseline = params.tx_volume_baseline;
+    let baseline = params.economic().tx_volume_baseline;
     ScenarioConfig {
         name: "sustained_growth".into(),
         description: "Volume increasing 20% per year for 20 years".into(),
@@ -82,7 +82,7 @@ pub fn scenario_3_sustained_growth(params: &SimParams) -> ScenarioConfig {
 }
 
 pub fn scenario_4_stuffing_attack(params: &SimParams) -> ScenarioConfig {
-    let baseline = params.tx_volume_baseline;
+    let baseline = params.economic().tx_volume_baseline;
     ScenarioConfig {
         name: "stuffing_attack".into(),
         description: "20% hash power miner generating 5x fake volume for 30 days (blocks 0-21600), then normal".into(),
@@ -107,7 +107,7 @@ pub fn scenario_4_stuffing_attack(params: &SimParams) -> ScenarioConfig {
 }
 
 pub fn scenario_5_stake_concentration(params: &SimParams) -> ScenarioConfig {
-    let baseline = params.tx_volume_baseline;
+    let baseline = params.economic().tx_volume_baseline;
     ScenarioConfig {
         name: "stake_concentration".into(),
         description: "Single entity staking 30% of supply throughout 10 years".into(),
@@ -125,7 +125,7 @@ pub fn scenario_5_stake_concentration(params: &SimParams) -> ScenarioConfig {
 }
 
 pub fn scenario_6_mass_unstaking(params: &SimParams) -> ScenarioConfig {
-    let baseline = params.tx_volume_baseline;
+    let baseline = params.economic().tx_volume_baseline;
     ScenarioConfig {
         name: "mass_unstaking".into(),
         description: "80% of stakers unlock within 25,000 blocks (~35 days) at year 3".into(),
@@ -157,7 +157,7 @@ pub fn scenario_6_mass_unstaking(params: &SimParams) -> ScenarioConfig {
 }
 
 pub fn scenario_7_bootstrap(params: &SimParams) -> ScenarioConfig {
-    let baseline = params.tx_volume_baseline;
+    let baseline = params.economic().tx_volume_baseline;
     ScenarioConfig {
         name: "chain_bootstrap".into(),
         description:
@@ -318,7 +318,7 @@ fn gate7_scenario(
     volume_growth: bool,
     model: ArchivalLockModel,
 ) -> ScenarioConfig {
-    let baseline = params.tx_volume_baseline;
+    let baseline = params.economic().tx_volume_baseline;
     let get_volume: Box<dyn Fn(u64, u64) -> u64> = if volume_growth {
         // Scenario-3 shape (20%/yr) stretched over the mining era: burn
         // sensitivity read under volume stress.
@@ -368,7 +368,7 @@ fn gate7_asserted_comparator(
     volume_growth: bool,
     name: &str,
 ) -> ScenarioConfig {
-    let baseline = params.tx_volume_baseline;
+    let baseline = params.economic().tx_volume_baseline;
     let get_volume: Box<dyn Fn(u64, u64) -> u64> = if volume_growth {
         Box::new(move |block, blocks_per_year| {
             let year = block / blocks_per_year;
