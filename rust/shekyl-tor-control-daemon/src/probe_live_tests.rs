@@ -144,10 +144,16 @@ async fn subscribe(boot: &DaemonTorControl) {
 async fn round_uploaded(received: &mut EventReceiver, service: &ServiceId) {
     let mut rounds = UploadRounds::new(service.clone());
     let hang = Instant::now() + ROUND_HANG;
+    let dropped_before = received.dropped();
     loop {
         let reply = tokio::time::timeout_at(hang, received.recv())
             .await
-            .expect("an upload round that ends, in time")
+            .unwrap_or_else(|_| {
+                panic!(
+                    "an upload round that ends, in time (events dropped meanwhile: {})",
+                    received.dropped() - dropped_before
+                )
+            })
             .expect("the sink is open");
         let Some(TorEvent::HsDesc(desc)) = shekyl_tor_control_client::control::parse_event(&reply)
         else {
@@ -161,6 +167,14 @@ async fn round_uploaded(received: &mut EventReceiver, service: &ServiceId) {
             return;
         }
     }
+}
+
+/// Read every event the sink holds, so a round's `HS_DESC` events find room.
+/// The sink keeps 256 and drops what arrives past them; a test that has not
+/// read it through a bootstrap would lose the round it then waits for. The
+/// driver reads it continuously.
+fn drain(received: &mut EventReceiver) {
+    while received.try_recv().is_ok() {}
 }
 
 /// Probe `service` through `proxy` and wait up to the bound for the
@@ -232,6 +246,7 @@ async fn reachable(
         if republishes == REMEDY_REPUBLISHES {
             break;
         }
+        drain(received);
         let again = boot
             .republish(seed, VIRTUAL_PORT, stand_in.at, 8, OnionPow::Enabled)
             .await
@@ -290,6 +305,7 @@ async fn a_cold_start_is_reachable_and_the_probe_is_on_its_own_circuit() {
     let mut stand_in = StandIn::bind(probe_request.clone()).await;
     let seed = DaemonTorControl::mint_seed().expect("seed");
     // A fresh Tor holds no service: the delete's 552 is not a failure.
+    drain(&mut received);
     let service = boot
         .republish(&seed, VIRTUAL_PORT, stand_in.at, 8, OnionPow::Enabled)
         .await
@@ -342,6 +358,7 @@ async fn a_respawn_republishes_the_same_onion_and_is_reachable_again() {
     let mut stand_in = StandIn::bind(probe_request.clone()).await;
     let seed = DaemonTorControl::mint_seed().expect("seed");
     let pair = IsolationPair::mint().expect("pair");
+    drain(&mut received);
     let first = boot
         .republish(&seed, VIRTUAL_PORT, stand_in.at, 8, OnionPow::Enabled)
         .await
@@ -386,6 +403,7 @@ async fn a_respawn_republishes_the_same_onion_and_is_reachable_again() {
 
     let request_again = request();
     let mut stand_in = StandIn::bind(request_again.clone()).await;
+    drain(&mut received);
     let second = boot
         .republish(&seed, VIRTUAL_PORT, stand_in.at, 8, OnionPow::Enabled)
         .await
@@ -434,6 +452,7 @@ async fn a_deleted_onion_is_missed_and_the_republish_restores_it() {
     let mut stand_in = StandIn::bind(probe_request.clone()).await;
     let seed = DaemonTorControl::mint_seed().expect("seed");
     let pair = IsolationPair::mint().expect("pair");
+    drain(&mut received);
     let service = boot
         .publish(&seed, VIRTUAL_PORT, stand_in.at, 8, OnionPow::Enabled)
         .await
@@ -465,6 +484,7 @@ async fn a_deleted_onion_is_missed_and_the_republish_restores_it() {
         "a deleted onion is not reachable ({ended:?})"
     );
 
+    drain(&mut received);
     let restored = boot
         .republish(&seed, VIRTUAL_PORT, stand_in.at, 8, OnionPow::Enabled)
         .await
