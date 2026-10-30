@@ -43,8 +43,12 @@ use shekyl_types::archival::SettlementEpochBlocks;
 
 /// The archival consensus parameters. Fields are public so a fold can
 /// copy the shipped set and replace one; [`Self::validate`] is the door a
-/// replaced set passes before it is used.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// replaced set passes before it is used. Deserializing is that door too:
+/// a wire form with the same fields converts through it, as
+/// `shekyl_economics::EconomicParams` does, so no deserialized set is
+/// unchecked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "ArchivalParamsWire")]
 pub struct ArchivalParams {
     /// One bond rung, atomic units (gate-4 §3.2): the per-shard bond floor,
     /// the whole floor of a `CompleteTree` holding, and the cover draw's
@@ -134,6 +138,47 @@ pub enum ArchivalParamsError {
     /// A bond floor below 2 has no cover strictly inside one rung.
     #[error("bond floor {0} is below 2 atomic units")]
     BondFloorBelowTwo(u64),
+}
+
+/// [`ArchivalParams`]' serde wire: the same fields, converted through
+/// [`ArchivalParams::validate`]. The conversion names every field, so the
+/// compiler holds the two lists equal.
+#[derive(serde::Deserialize)]
+#[serde(rename = "ArchivalParams", deny_unknown_fields)]
+struct ArchivalParamsWire {
+    bond_floor_atomic: u64,
+    settlement_epoch_blocks: u64,
+    max_claim_age_w: u64,
+    reward_age_weight_milli: u64,
+    release_cooldown_epochs: u64,
+    bond_duration_base_epochs: u64,
+    bond_duration_age_scale: u64,
+    failure_window_m: u32,
+    failure_window_n: u32,
+    challenges_per_pair_per_epoch: u32,
+}
+
+impl TryFrom<ArchivalParamsWire> for ArchivalParams {
+    type Error = ArchivalParamsError;
+
+    fn try_from(w: ArchivalParamsWire) -> Result<Self, Self::Error> {
+        let params = Self {
+            bond_floor_atomic: w.bond_floor_atomic,
+            settlement_epoch_blocks: w.settlement_epoch_blocks,
+            max_claim_age_w: w.max_claim_age_w,
+            reward_age_weight_milli: w.reward_age_weight_milli,
+            release_cooldown_epochs: w.release_cooldown_epochs,
+            bond_duration_base_epochs: w.bond_duration_base_epochs,
+            bond_duration_age_scale: w.bond_duration_age_scale,
+            failure_window_m: w.failure_window_m,
+            failure_window_n: w.failure_window_n,
+            challenges_per_pair_per_epoch: w.challenges_per_pair_per_epoch,
+        };
+        match params.validate() {
+            Ok(()) => Ok(params),
+            Err(e) => Err(e),
+        }
+    }
 }
 
 impl ArchivalParams {
@@ -398,6 +443,34 @@ mod tests {
 
     /// E16-7: each promoted field is read by the function that uses it. A
     /// reader that still took the constant would not move here.
+    #[test]
+    fn the_serde_door_is_validate() {
+        let shipped = ArchivalParams::SHIPPED;
+        let wire = serde_json::to_value(shipped).expect("serializes");
+        assert_eq!(
+            serde_json::from_value::<ArchivalParams>(wire.clone()).expect("round-trips"),
+            shipped
+        );
+        let refused = ArchivalParams {
+            failure_window_m: 0,
+            ..shipped
+        };
+        let err = serde_json::from_value::<ArchivalParams>(
+            serde_json::to_value(refused).expect("serializes"),
+        )
+        .expect_err("the door refuses what validate refuses");
+        assert_eq!(
+            err.to_string(),
+            ArchivalParamsError::FailureWindowMZero.to_string()
+        );
+        let mut unknown = wire;
+        unknown
+            .as_object_mut()
+            .expect("an object")
+            .insert("anchor_lag_blocks".into(), 4.into());
+        assert!(serde_json::from_value::<ArchivalParams>(unknown).is_err());
+    }
+
     #[test]
     fn each_field_moves_its_reader() {
         use crate::bond_floor::bond_floor_of;

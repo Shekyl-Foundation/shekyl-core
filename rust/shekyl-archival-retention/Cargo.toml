@@ -13,6 +13,9 @@ license.workspace = true
 
 [dependencies]
 thiserror.workspace = true
+# ArchivalParams' serde door (`params.rs`): a fold builds a run's set by
+# name and deserializes it through `validate`, as EconomicParams does.
+serde = { workspace = true }
 sha3 = { version = "0.10", default-features = false }
 shekyl-fcmp = { path = "../shekyl-fcmp" }
 shekyl-curve-io = { path = "../shekyl-curve-io" }
