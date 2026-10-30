@@ -87,6 +87,19 @@ fn start(
     Listener<MonotonicClock>,
     Arc<Mutex<Vec<CloseKind>>>,
 ) {
+    start_on(Sockets::new(), option, within, ceiling)
+}
+
+fn start_on(
+    sockets: Sockets,
+    option: ClearnetOption,
+    within: Tick,
+    ceiling: InboundCeiling,
+) -> (
+    EngineService<MonotonicClock>,
+    Listener<MonotonicClock>,
+    Arc<Mutex<Vec<CloseKind>>>,
+) {
     let engine = EngineService::start(MonotonicClock::new());
     let pool = runtime(harness_budget(), &name("sk-clearnet")).expect("runtime");
     let recorded = causes();
@@ -94,7 +107,7 @@ fn start(
     let listener = listen(
         pool,
         &engine.handle(),
-        Sockets::new(),
+        sockets,
         &config(option, within, ceiling, recorded.sink),
     )
     .expect("listen");
@@ -292,6 +305,58 @@ fn a_zero_ceiling_refuses_before_any_handshake() {
     }
     assert_eq!(listener.tally.queued(), 0);
     assert_eq!(listener.tally.computed(), 0);
+    listener.shutdown();
+    drop(engine);
+}
+
+/// An inbound connection over the accept rate closes before the
+/// handshake: nothing written to it, no handshake queued or computed
+/// (D10.3). The rate is a test shape, not a ruled value: one accept per
+/// host a minute.
+#[test]
+fn an_inbound_over_the_accept_rate_is_not_a_handshake() {
+    use shekyl_transport_layer::{AcceptGate, AcceptRate};
+    let gate = AcceptGate::new(
+        AcceptRate {
+            token_every_nanos: 1,
+            burst: 1_000,
+        },
+        AcceptRate {
+            token_every_nanos: 60_000_000_000,
+            burst: 1,
+        },
+    );
+    let (engine, listener, seen) = start_on(
+        Sockets::with_clearnet_gate(gate),
+        ClearnetOption::On,
+        Tick::new(5_000_000_000),
+        InboundCeiling::Bounded(4),
+    );
+    let _first = connect(listener.local_addr());
+    let start = Instant::now();
+    while listener.sockets.live() == 0 {
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "the first is admitted"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let computed_before = listener.tally.computed();
+    let mut second = connect(listener.local_addr());
+    let mut buf = [0u8; 4];
+    let n = second.read(&mut buf).expect("read");
+    assert_eq!(n, 0, "closed with nothing written");
+    let start = Instant::now();
+    while !seen
+        .lock()
+        .expect("causes")
+        .contains(&CloseKind::AcceptRateExceeded)
+    {
+        assert!(start.elapsed() < Duration::from_secs(2), "refused");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(listener.tally.computed(), computed_before);
+    assert_eq!(listener.sockets.take_accept_rate_refusals().host, 1);
     listener.shutdown();
     drop(engine);
 }

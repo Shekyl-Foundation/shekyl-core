@@ -424,6 +424,7 @@ fn ensure(network_id: [u8; 16]) -> Result<Arc<Host>, ZoneStart> {
     }
     let engine = crate::seam_ffi::process_engine();
     spawn_lateness_report(&handle, engine.clone());
+    spawn_accept_rate_report(&handle, process_sockets());
     let (clearnet_tx, clearnet_rx) = mpsc::unbounded_channel();
     let (tor_tx, tor_rx) = mpsc::unbounded_channel();
     let on_cause: Arc<dyn Fn(CloseCause) + Send + Sync> = Arc::new(|cause| match cause.kind() {
@@ -541,6 +542,30 @@ fn spawn_lateness_report(runtime: &tokio::runtime::Handle, engine: Handle<Monoto
             match tokio::task::spawn_blocking(move || report_lateness(&engine)).await {
                 Ok(true) => {}
                 Ok(false) | Err(_) => return,
+            }
+        }
+    }));
+}
+
+/// Name the clearnet accepts the rate bound refused (D10.3), once a minute
+/// and only when there were some: one line per refused connection is what
+/// a flood would turn into a flood of the log.
+fn spawn_accept_rate_report(runtime: &tokio::runtime::Handle, sockets: shekyl_seam::Sockets) {
+    const EVERY: Duration = Duration::from_secs(60);
+    drop(runtime.spawn(async move {
+        let mut every = tokio::time::interval_at(tokio::time::Instant::now() + EVERY, EVERY);
+        every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            every.tick().await;
+            let refused = sockets.take_accept_rate_refusals();
+            if refused.total() > 0 {
+                tracing::warn!(
+                    over_host_rate = refused.host,
+                    over_connector_rate = refused.connector,
+                    "clearnet connections arrived faster than the protocol's accept rate in the \
+                     last minute and were closed before any handshake; this node keeps serving \
+                     its other peers"
+                );
             }
         }
     }));

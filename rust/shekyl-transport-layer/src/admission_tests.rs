@@ -558,3 +558,80 @@ pub(super) fn apply(sockets: &Sockets, open: &mut Vec<super::OpenSocket>, byte: 
         }
     }
 }
+
+/// A test shape, not a ruled value: one clearnet accept a second for every
+/// host together, burst two, and one a minute for each host.
+fn rate_gated() -> Sockets {
+    use crate::accept_rate::{AcceptGate, AcceptRate};
+    let gate = AcceptGate::new(
+        AcceptRate {
+            token_every_nanos: 1_000_000_000,
+            burst: 2,
+        },
+        AcceptRate {
+            token_every_nanos: 60_000_000_000,
+            burst: 1,
+        },
+    );
+    Sockets::with_clearnet_gate(gate)
+}
+
+#[test]
+fn an_accept_over_the_rate_is_refused_and_reserves_nothing() {
+    let sockets = rate_gated();
+    let host = ip([10, 0, 0, 1]);
+    let _open = sockets
+        .accept_clearnet(host, InboundCeiling::Bounded(8), now())
+        .expect("the first accept pays");
+    let error = sockets
+        .accept_clearnet(host, InboundCeiling::Bounded(8), now())
+        .expect_err("the host's bucket is empty");
+    assert_eq!(refused(error), CloseKind::AcceptRateExceeded);
+    assert_eq!(sockets.live(), 1);
+    assert_eq!(
+        sockets.socket_count(ConnectorId::Clearnet, Direction::Inbound),
+        1
+    );
+    let _second = sockets
+        .accept_clearnet(ip([10, 0, 0, 2]), InboundCeiling::Bounded(8), now())
+        .expect("another host, inside the connector's burst");
+    let error = sockets
+        .accept_clearnet(ip([10, 0, 0, 3]), InboundCeiling::Bounded(8), now())
+        .expect_err("the connector's burst is spent");
+    assert_eq!(refused(error), CloseKind::AcceptRateExceeded);
+    let refusals = sockets.take_accept_rate_refusals();
+    assert_eq!((refusals.host, refusals.connector), (1, 1));
+    assert_eq!(sockets.take_accept_rate_refusals().total(), 0, "taken once");
+}
+
+#[test]
+fn a_banned_or_ceiling_refused_accept_spends_no_token() {
+    let sockets = rate_gated();
+    let host = ip([10, 0, 0, 1]);
+    assert_eq!(sockets.ban_host(host, Tick::new(2_000), now()).len(), 0);
+    for _ in 0..5 {
+        let error = sockets
+            .accept_clearnet(host, InboundCeiling::Bounded(8), now())
+            .expect_err("banned");
+        assert_eq!(refused(error), CloseKind::AdmissionRefused);
+        let error = sockets
+            .accept_clearnet(ip([10, 0, 0, 2]), InboundCeiling::Bounded(0), now())
+            .expect_err("closed");
+        assert_eq!(refused(error), CloseKind::InboundNotAccepted);
+    }
+    assert_eq!(sockets.take_accept_rate_refusals().total(), 0);
+    let _open = sockets
+        .accept_clearnet(ip([10, 0, 0, 2]), InboundCeiling::Bounded(8), now())
+        .expect("its tokens are all there");
+}
+
+#[test]
+fn tor_accepts_pass_no_rate_gate() {
+    let sockets = rate_gated();
+    for _ in 0..10 {
+        let _open = sockets
+            .accept_tor(InboundCeiling::Bounded(64))
+            .expect("Tor is defended by the onion's proof-of-work, not a limiter");
+    }
+    assert_eq!(sockets.take_accept_rate_refusals().total(), 0);
+}

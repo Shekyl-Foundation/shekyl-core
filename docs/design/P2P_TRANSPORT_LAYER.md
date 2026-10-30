@@ -1022,7 +1022,7 @@ open design.
 | --- | --- | --- | --- | --- |
 | Operator link budget | The operator's link is metered, shared, or small | Wire bytes, per direction, for the whole node, across every connector. Once the flip lands, the count includes Noise overhead | Transport layer | Backpressure against a budget refilled from the engine's clock. Connections share it. Unlimited unless the operator sets one |
 | What a peer can make us do | A peer inside a session | Work, per connection, charged on every dispatch before the payload is decoded | Session layer | PWD-B1. Its refill, capacity, initial fill, per-command cost, and exhaustion action stay owed in that section. This row does not settle them. PWD-B3 is the per-command size cap, which is a different bound |
-| Who can reach us | Anyone who can open a TCP connection or a Tor rendezvous | Connections, and the cryptographic work before a session exists | Transport layer | The accept-rate bound before cryptography, the admission ceiling, pre-channel deadlines, and Tor proof-of-work (D4, D10). Already built |
+| Who can reach us | Anyone who can open a TCP connection or a Tor rendezvous | Connections, and the cryptographic work before a session exists | Transport layer | The accept-rate bound before cryptography, the admission ceiling, pre-channel deadlines, and Tor proof-of-work (D4, D10). The ceiling, the deadlines and the proof-of-work are built. The accept-rate bound's mechanism is built; its clearnet rates wait on the step 7 ruling (D10.3) |
 | What goes first when the link is full | Saturation, under a budget or at the link's own limit | Message class | The session layer names the class. The transport writer schedules it | The writer takes a class on each send. New blocks and relay go ahead of bulk such as historical sync replies, and relay-lane conformance holds under saturation. The class list, who assigns a class, and the order among classes are the open design |
 
 **The operator's budget is the carried duty.** `--limit-rate-up`,
@@ -1749,6 +1749,25 @@ listener, and so a connection in the gap phase.
    flood test measures that, in addition to the accept-rate bound. No
    rate is written. The bound is clearnet-only: Tor inbound
    does no Noise work on our side.
+   **Built: the mechanism** (Rick, 2026-10-30: its own PR, merged before
+   the rehearsal). `AcceptGate` in `shekyl-transport-layer`
+   (`accept_rate.rs`) is two token buckets, the connector's and the
+   host's, checked in `Sockets::accept_clearnet` under the socket
+   table's lock, after the ban and the ceilings and before a socket is
+   reserved. An accept spends a token from both or from neither, so a
+   host whose own bucket is empty does not drain the connector's. A
+   host is an IPv4 address, or an IPv6 /64; an IPv4 address carried in
+   IPv6, as a dual-stack listener reports it, is that IPv4 host. The
+   host table holds an entry only while its bucket is refilling, and
+   an entry is made only when the connector's bucket pays, so a
+   flooder walking addresses grows it no faster than the connector's
+   rate admits. A refusal is `AcceptRateExceeded` (D12), with no marks;
+   the node names the refusals once a minute, never once per
+   connection. The rates are protocol data in `accept_bound`, beside
+   the declaration, the same on every node (rule 71): Tor's row is the
+   onion's proof-of-work (item 4), and clearnet's row is not assessed
+   until the step 7 record's ruled table supplies its two rates. A
+   table built from a row that is not assessed has no limiter.
 
 4. **Tor is defended by Tor's proof-of-work, not by a daemon-side
    limiter.** Onion-service PoW is enabled on every onion service we
@@ -1878,7 +1897,7 @@ hand-kept copy.
 
 | Phase | Causes |
 | --- | --- |
-| Before the channel exists | `PrefixMismatch`, `TransportHandshakeFailed`, `TransportTimeout`, `AdmissionRefused`, `InboundNotAccepted`, `DialFailed`, `ProxyRefused`, `ProxyUnavailable`, `LocalClose` |
+| Before the channel exists | `PrefixMismatch`, `TransportHandshakeFailed`, `TransportTimeout`, `AdmissionRefused`, `InboundNotAccepted`, `AcceptRateExceeded`, `DialFailed`, `ProxyRefused`, `ProxyUnavailable`, `LocalClose` |
 | Channel exists, Levin handshake not done | `LevinHandshakeTimeout`, `LevinHandshakeRejected`, `LocalClose` |
 | Any time after the channel exists | `PeerClosed`, `RecordRejected`, `SessionRefused`, `IoError`, `SendQueueFull`, `LocalClose` |
 
@@ -1889,7 +1908,10 @@ connector cap that is positive and full. `InboundNotAccepted` is a
 ceiling of 0 or a connector cap of 0: this node will not take the
 accept. A zero bound is named even when a positive cap is already
 full. The seam info line on this node names whichever of the two was
-returned. The accept closes the socket before any handshake byte.
+returned. `AcceptRateExceeded` is an inbound clearnet connection that
+the connector's or the host's accept-rate bucket could not pay for
+(D10.3); this node names those refusals once a minute in a warning,
+not one line each. The accept closes the socket before any handshake byte.
 The dialer records its own before-channel cause for that close. It
 does not learn which refusal this node chose: this table is not on
 the pipe. `DialFailed` is an outbound TCP connect that did not complete.
