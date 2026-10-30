@@ -6,9 +6,11 @@
 //! How many Tor sessions are held, for the supervisor's posture line.
 //!
 //! Held is the outbound sessions this dialer kept plus the inbound Tor
-//! rows on the seam's board. An inbound accept is not a dial: it does not
-//! move `opened` or `unopened`, and the quiet stretch does not start
-//! again (`TOR_SUPERVISOR.md` §4.2).
+//! sessions whose handshake has finished. A handshake still open is not
+//! one: the probe of this node's own onion is dropped in that handshake,
+//! so it never moves the quiet line or the ladder (`TOR_SUPERVISOR.md`
+//! §4.5). An inbound session is not a dial: it does not move `opened` or
+//! `unopened`, and the quiet stretch does not start again (§4.2).
 //!
 //! The adopt poster calls [`Dialer::session_closed`] while it holds the
 //! table lock, and that mutex is not re-entrant, so the close does not
@@ -27,11 +29,13 @@ use shekyl_seam::SocketId;
 use super::{Dialer, Shared};
 
 impl Dialer {
-    /// An inbound Tor session was accepted, or the board has dropped one.
+    /// An inbound Tor session finished its handshake, or the board has
+    /// dropped one.
     ///
     /// Held sessions are the outbound ones this dialer kept plus the
-    /// inbound Tor rows on the board. The accept is not a dial: `opened`
-    /// and `unopened` stay, and the quiet stretch does not start again.
+    /// inbound Tor sessions on the board. A handshake still open is not
+    /// held. The session is not a dial: `opened` and `unopened` stay, and
+    /// the quiet stretch does not start again.
     pub fn note_inbound_tor(&self) {
         self.with_inbound(Self::publish_tor_held);
     }
@@ -58,7 +62,8 @@ impl Dialer {
         self.hub.with_board(|board| {
             let mut shared = self.shared();
             for connector in ConnectorId::ALL {
-                shared.inbound[connector.index()] = board.count(*connector, Direction::Inbound);
+                shared.inbound[connector.index()] =
+                    board.established_sessions(*connector, Direction::Inbound);
             }
             body(&mut shared)
         })

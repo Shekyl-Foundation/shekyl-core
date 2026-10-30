@@ -179,6 +179,22 @@ impl Board {
             .count()
     }
 
+    /// Rows of this connector and direction whose handshake has finished.
+    ///
+    /// This is a session. [`Self::count`] includes a handshake still open,
+    /// which a dial cap needs and a quiet line does not. The probe of this
+    /// node's own onion is dropped in that handshake, so it occupies
+    /// [`Self::count`] and not a session (`TOR_SUPERVISOR.md` §4.5).
+    #[must_use]
+    pub fn established_sessions(&self, connector: ConnectorId, direction: Direction) -> usize {
+        self.rows
+            .iter()
+            .filter(|row| {
+                row.established() && row.connector() == connector && row.direction() == direction
+            })
+            .count()
+    }
+
     /// Rows in `direction` that have finished the handshake, on every
     /// connector.
     ///
