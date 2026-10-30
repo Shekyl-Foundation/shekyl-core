@@ -13,6 +13,7 @@ import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import capture_kept_chain as K  # noqa: E402
 import rpc_capture as C  # noqa: E402
 
 
@@ -132,6 +133,51 @@ class Capture(unittest.TestCase):
         finally:
             server.shutdown()
             server.server_close()
+
+
+class KeptDatadir(unittest.TestCase):
+    def test_a_directory_that_holds_a_fixture_is_the_subject(self):
+        parent = tempfile.mkdtemp(prefix="kept-datadir-")
+        data = os.path.join(parent, "data")
+        os.mkdir(data)
+        with open(os.path.join(data, "chain"), "w", encoding="utf-8") as fh:
+            fh.write("kept\n")
+        self.assertIsNone(K.kept_datadir_refusal(data))
+
+    def test_a_missing_kept_datadir_is_refused_before_the_output_exists(self):
+        """The daemon creates a missing data directory and opens genesis in
+        it. The height check would then accept that chain. The refusal comes
+        before the output directory, so a mistyped path leaves nothing."""
+        parent = tempfile.mkdtemp(prefix="kept-datadir-")
+        data = os.path.join(parent, "missing")
+        out = os.path.join(parent, "out")
+        argv = sys.argv
+        try:
+            sys.argv = ["capture_kept_chain", os.path.join(parent, "shekyld"), data, out]
+            with self.assertRaises(SystemExit) as caught:
+                K.main()
+        finally:
+            sys.argv = argv
+        self.assertIn(data, str(caught.exception))
+        self.assertIn("does not exist", str(caught.exception))
+        self.assertIn("genesis", str(caught.exception))
+        self.assertFalse(os.path.exists(out))
+        self.assertFalse(os.path.exists(data))
+
+    def test_an_empty_directory_is_not_a_kept_fixture(self):
+        parent = tempfile.mkdtemp(prefix="kept-datadir-")
+        data = os.path.join(parent, "empty")
+        os.mkdir(data)
+        reason = K.kept_datadir_refusal(data)
+        self.assertIn("empty", reason)
+        self.assertIn("genesis", reason)
+
+    def test_a_file_is_not_a_kept_data_directory(self):
+        parent = tempfile.mkdtemp(prefix="kept-datadir-")
+        data = os.path.join(parent, "file")
+        with open(data, "w", encoding="utf-8") as fh:
+            fh.write("x")
+        self.assertIn("not a directory", K.kept_datadir_refusal(data))
 
 
 if __name__ == "__main__":

@@ -14,6 +14,9 @@
 #
 # stdout and stderr go to `console.log` under the output directory. A
 # bind failure or a datadir the binary will not open is in that file.
+# A path that is not already a directory holding a fixture is refused
+# before that file exists: both daemons create a missing data directory
+# and connect genesis into an empty store.
 
 import argparse
 import json
@@ -66,6 +69,31 @@ def _wait_ready(proc, base_url, console_log):
         f"get_info did not answer within {READY_TIMEOUT_S}s; see {console_log}")
 
 
+def kept_datadir_refusal(path):
+    """Why `path` is not a kept datadir, or None when it already holds one.
+
+    The C++ daemon creates a missing data directory
+    (`tools::create_directories_if_necessary`). The Rust daemon does the
+    same in `Lock::take`, then connects genesis when the store is empty.
+    This capture's height check accepts that chain. A kept fixture is a
+    directory that already has entries, so the open is of that fixture.
+    """
+    if not os.path.lexists(path):
+        return (f"{path} does not exist; a missing data directory is not the "
+                "kept fixture. The daemon creates one and opens genesis in it, "
+                "and the capture would record that chain")
+    if not os.path.isdir(path):
+        return f"{path} is not a directory; a kept fixture is a data directory"
+    try:
+        held = os.listdir(path)
+    except OSError as err:
+        return f"{path} cannot be read ({err}); a kept fixture is a data directory"
+    if not held:
+        return (f"{path} is an empty directory; the daemon opens genesis in an "
+                "empty store, and the capture would record that chain")
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser(
         description="Capture the RPC column of one kept regtest datadir")
@@ -76,6 +104,12 @@ def main():
                     help="a transaction id to ask about, or '-' for none")
     args = ap.parse_args()
     tx = None if args.tx == "-" else args.tx
+
+    # Before the output directory and the daemon. A missing path would be
+    # created, genesis would connect, and the height check would accept it.
+    kept = kept_datadir_refusal(args.data)
+    if kept:
+        raise SystemExit(kept)
 
     # Before the daemon, the console, or requests.json. A rerun into a
     # directory that already holds replies would otherwise start a node
