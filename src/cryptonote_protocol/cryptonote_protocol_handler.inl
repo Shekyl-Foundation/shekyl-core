@@ -1136,6 +1136,40 @@ namespace cryptonote
     MLOG_PEER_STATE("requesting chain");
   }
   template<class t_core>
+  void t_cryptonote_protocol_handler<t_core>::pump_door()
+  {
+    // The hand-over that depends on no peer's state. The standby pass hands
+    // a span over while a peer stands by, and a connected reply hands the
+    // next one over while the door works; a context the sync has left in
+    // normal state with the door idle and spans still queued had neither
+    // (the floor device at height 601 of 762, 2026-10-30: the idle kicker
+    // re-read the chain, "all done", and nothing moved again). The idle
+    // tick calls this once a second.
+    const boost::unique_lock<boost::mutex> sync{m_sync_lock, boost::try_to_lock};
+    if (!sync.owns_lock())
+      return;
+    uint64_t start_height = 0;
+    std::vector<cryptonote::block_complete_entry> blocks;
+    boost::uuids::uuid span_connection_id;
+    epee::net_utils::network_address span_origin;
+    if (!m_block_queue.get_next_span_from(m_door_frontier.load(), start_height, blocks, span_connection_id, span_origin) || blocks.empty())
+      return;
+    (void)span_origin;
+    if (shekyl_ingest_room() < blocks.size())
+      return;
+    const int offered = cryptonote::offer_block_span(
+        shekyl::seam_socket_id(span_connection_id), true, blocks);
+    if (offered == SHEKYL_INGEST_ACCEPTED)
+    {
+      const uint64_t past = start_height + blocks.size();
+      uint64_t frontier = m_door_frontier.load();
+      while (frontier < past && !m_door_frontier.compare_exchange_weak(frontier, past)) {}
+      MDEBUG("the idle pump handed span " << start_height << "/" << blocks.size() << " to the door");
+    }
+    else if (offered == SHEKYL_INGEST_OVERSIZE || offered == SHEKYL_INGEST_INVALID)
+      m_block_queue.remove_spans(span_connection_id, start_height);
+  }
+  template<class t_core>
   uint64_t t_cryptonote_protocol_handler<t_core>::sync_head() const
   {
     // The chain the sync has: the store's tip, or the height the door will
@@ -1213,6 +1247,7 @@ namespace cryptonote
     m_idle_peer_kicker.do_call(boost::bind(&t_cryptonote_protocol_handler<t_core>::kick_idle_peers, this));
     m_standby_checker.do_call(boost::bind(&t_cryptonote_protocol_handler<t_core>::check_standby_peers, this));
     m_sync_search_checker.do_call(boost::bind(&t_cryptonote_protocol_handler<t_core>::update_sync_search, this));
+    pump_door();
     return m_core.on_idle();
   }
   //------------------------------------------------------------------------------------------------------------------------

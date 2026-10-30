@@ -172,6 +172,7 @@ namespace cryptonote
     bool update_sync_search();
     int try_add_next_blocks(cryptonote_connection_context &context);
     uint64_t sync_head() const;
+    void pump_door();
     static void ingest_post(void* ctx, const shekyl_ingest_reply* reply, const std::uint64_t* indices, std::size_t indices_len);
     void on_ingest_reply(const shekyl_ingest_reply& reply, const std::uint64_t* indices, std::size_t indices_len);
     void request_chain_history(cryptonote_connection_context &context);
