@@ -16,6 +16,17 @@ use std::net::IpAddr;
 use shekyl_peerlist::{ConnectorId, Direction, Host, NetworkAddress};
 use shekyl_seam::{Endpoint, Hub};
 
+/// What this node discloses of itself on `connector`, given its own
+/// addresses there: the line [`super::Dialer::set_own_addresses`] logs when
+/// they are set. With none, the connector is dial-only.
+pub(super) fn disclosure(connector: ConnectorId, own: &[NetworkAddress]) -> String {
+    if own.is_empty() {
+        format!("{connector:?} is dial-only: this node discloses no address of its own there")
+    } else {
+        format!("{connector:?}: this node discloses {own:?} as its own")
+    }
+}
+
 /// The seam endpoint a list address dials. `None` for an onion host that
 /// is not a v3 address: the lists do not admit one, and a dial of one is
 /// a local close.
@@ -95,5 +106,30 @@ pub(super) fn live_sessions(hub: &Hub, connector: ConnectorId) -> LiveSessions {
     LiveSessions {
         addresses: sessions,
         outbound_hosts,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::Ipv4Addr;
+
+    use shekyl_peerlist::{ConnectorId, NetworkAddress};
+
+    use super::disclosure;
+
+    /// **The line states what this node discloses** (the dial profile
+    /// brief, item 5): the own address when there is one, and dial-only
+    /// when there is none.
+    #[test]
+    fn the_disclosure_line_names_the_own_address_or_dial_only() {
+        let none = disclosure(ConnectorId::Clearnet, &[]);
+        assert!(none.contains("dial-only"), "{none}");
+        let own = NetworkAddress::Ipv4 {
+            ip: Ipv4Addr::new(11, 16, 0, 9),
+            port: 11021,
+        };
+        let line = disclosure(ConnectorId::Clearnet, &[own]);
+        assert!(line.contains("11.16.0.9"), "{line}");
+        assert!(!line.contains("dial-only"), "{line}");
     }
 }

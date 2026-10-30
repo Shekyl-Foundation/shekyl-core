@@ -623,20 +623,20 @@ alpha node sends up to 250 entries, a PR-3 node refuses a list over
 *Records-was: "the release notes must ask testnet operators to upgrade
 together".*
 
-**The node's own address (Rick, 2026-10-13).** Tor: the per-boot onion
-goes from `shekyl-tor`'s publish result to `Peerlist::set_own_address`
-on the Rust side (`daemon_tor_ffi.rs`), and the operator onion of
-`--anonymous-inbound` goes through `shekyl::note_own_address`, the one
-replaced line. Clearnet stays dial-only in PR-3: the node does not know
-its own public host, a host-0 address is non-global and `disclose`
-drops it, and no public-host option is added in C++; the dialer logs at
-startup that clearnet is dial-only until a public address is
-configured. How a clearnet node learns its address is open: operator
-configured, or learned from peers and proved by self-dial with the
-nonce. Neither is implemented. The C++ `m_our_address` keeps its two
-writers because `get_announced_address` reads it for the operator's
-inbound-state log line and six unit tests do; the two dial-path readers
-(`is_self_dial`, the candidate loop) go in step 3.
+**The node's own address (Rick, 2026-10-13).** Every own address
+reaches the lists through `Dialer::set_own_addresses`: never a dial
+candidate, and the disclosure population's own member. The daemon hands
+over what its configuration knows when the network starts
+(`shekyl-daemon` `network::own_at_start`): clearnet's
+`clearnet-advertise` when clearnet is on, and the operator's
+`tor-onion` on the operator's Tor arm, each empty for dial-only
+(`INPUT_GRAMMAR.md` IG-Q18). A managed Tor always publishes: its
+per-boot onion is handed over when Tor publishes it
+(`dialer_ffi::note_own_onion`). The dialer logs what this node
+discloses on a connector, or that it is dial-only there, when the
+address is set, so a managed Tor's line comes with its onion. A
+clearnet node learning its address from peers, proved by a self-dial
+with the nonce, is not implemented.
 
 **The address we announce — SUPERSEDED 2026-10-09 (records-was).**
 `get_local_node_data`
