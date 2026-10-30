@@ -407,7 +407,7 @@ here.
 | `ENOUGH_DIR_INFO` / `NOT_ENOUGH_DIR_INFO` | `STATUS_CLIENT` | outbound facet cause |
 | `NETWORK_LIVENESS UP/DOWN` | `NETWORK_LIVENESS` | external cause on or off: `UP` clears `ExternalBlocked` and `DirectoryUnreachable`, the causes about reaching the network (`TSR-Q14`); no other kind |
 | `CIRCUIT_NOT_ESTABLISHED REASON=` / `CIRCUIT_ESTABLISHED` | `STATUS_CLIENT` | `NOT_ESTABLISHED`: `REASON=DIR_ALL_UNREACHABLE` is the directory cause, `CLOCK_JUMPED` is the general event's, any other reason or none is the blocked link. `ESTABLISHED` clears as `NETWORK_LIVENESS UP` does |
-| `network-liveness`, `status/circuit-established` | `Input::NetworkView`, from the liveness sample's `GETINFO` while Running. The driver omits both keys unless the phase is Running; the core also ignores a view folded before Running | Tor's current view, read even when Tor sends no event (`TSR-Q14`): `Reported::No` on either key names the blocked link when nothing else is named; both `Reported::Yes` clears it. `Reported::Unknown` says nothing |
+| `network-liveness`, `status/circuit-established` | `Input::NetworkView`, from the liveness sample's `GETINFO` while Running. The driver omits both keys unless the phase is Running; the core also ignores a view folded before Running | Tor's current view, read even when Tor sends no event (`TSR-Q14`): `network-liveness=down` names the blocked link when nothing else is named; both `Reported::Yes` clears it. `Reported::Unknown` says nothing. `status/circuit-established=0` is display only: Tor drops its circuits on purpose after a clock jump and says why (`CLOCK_JUMPED`), and the sample after a resume named a block that was not there (§7, the VM suspend of 2026-10-30), while in the refuse block of 2026-10-25 Tor reported a circuit established throughout (Rick, 2026-10-30) |
 | `CLOCK_SKEW SKEW=` | `STATUS_GENERAL` | named cause with the offset; the source is unauthenticated, so the message says Tor reports it, never "your clock is wrong" |
 | `CLOCK_JUMPED TIME=` | `STATUS_GENERAL` | resume: re-evaluate now (Tor closed its circuits) |
 | `DANGEROUS_VERSION` | `STATUS_GENERAL` | announcement; a release question, not a runtime fault |
@@ -499,7 +499,7 @@ faults in the Tor process, so only those respawn:
 | --- | --- | --- |
 | External | Tor's own statements only (`TSR-Q14`): outbound blocked, `NETWORK_LIVENESS DOWN`, `CIRCUIT_NOT_ESTABLISHED`, the sampled view (§4.2), `DIR_ALL_UNREACHABLE`, clock skew | none but waiting; Tor retries itself; announce with the fix; **never respawn** |
 | Service | a descriptor round in which every upload ended and every one failed (an upload still unfinished is not this); a probe that does not complete within the §10 `TSR-M2` bound (60 s) while outbound is usable. One `HS_DESC UPLOADED` round can leave that dial unfinished until the next round (`TSR-Q5`, §4.5). The 2026-10-22 miss returned no SOCKS reply by the bound, and the nonce was never sent | republish on the running Tor: `DEL_ONION`, then `ADD_ONION` with the held seed, the same onion. Tor answers `550` (address collision) to an `ADD_ONION` for a service it still holds, so the delete comes first; its `552` (no such service) is no failure. Escalate to Process only if the control command itself fails |
-| Process | child exit; control EOF or desync; reply past bound; outbound dead past a bound with no external cause standing | respawn |
+| Process | child exit; control EOF or desync; reply past bound; outbound dead past a bound with no external cause standing; a bootstrap stranded by a clock jump (§5, "Stranded after a clock jump"): Tor reported `CLOCK_JUMPED`, then neither the percent nor the bytes moved for the bound, so its retries sit on the clock that was wrong; a slow mirror always has bytes arriving (Rick, 2026-10-30) | respawn |
 | Install | pin fails at spawn, or discovery finds nothing (`TSR-F6`) | no spawn, so the binary is not executed; the daemon starts (the posture table); announce; retry at the cap |
 | Local resource | data directory unwritable or out of space (a fresh spawn sweeps leftover per-boot directories, then checks; a directory kept for an in-boot respawn is not swept); `TOO_MANY_CONNECTIONS` | no spawn (or, for the open-file limit, no respawn); announce; retry at the cap |
 
@@ -864,11 +864,12 @@ that detail, not variants of `ManagedTorFix`.
 
 | State | Source | Shown as | Rendered from the cause | `ManagedTorFix` | Remedy |
 | --- | --- | --- | --- | --- | --- |
-| Outbound blocked | `BOOTSTRAP` warn `REASON`, `NETWORK_LIVENESS DOWN`, `CIRCUIT_NOT_ESTABLISHED`, or `Input::NetworkView` reporting `network-liveness=down` or `status/circuit-established=0` while Running (§4.2) | Degraded (outbound) | this machine cannot reach the Tor network; check the firewall or network. Bridges are `Operator`, not a managed-Tor option | none | wait |
+| Outbound blocked | `BOOTSTRAP` warn with a `REASON` other than `CLOCK_SKEW`, `NETWORK_LIVENESS DOWN`, `CIRCUIT_NOT_ESTABLISHED`, or `Input::NetworkView` reporting `network-liveness=down` while Running (§4.2) | Degraded (outbound) | this machine cannot reach the Tor network; check this computer's date and time, then the firewall or network. The clock comes first: a wrong clock stops every handshake, Tor may name nothing more specific than the handshake (`DONE`, §7, the clock-ahead VM run of 2026-10-30), the date takes ten seconds to check, and NTP is unauthenticated, so a path attacker can move it. Bridges are `Operator`, not a managed-Tor option | none | wait |
 | No directory reachable | `DIR_ALL_UNREACHABLE` | Degraded (outbound) | as above | none | wait |
-| Clock skew | `CLOCK_SKEW SKEW=±s` | Degraded (outbound) | the clock is off by the reported seconds; check time sync | none | wait |
+| Clock skew | `CLOCK_SKEW SKEW=±s`. A `BOOTSTRAP` problem whose `REASON` is `CLOCK_SKEW` comes with it and names nothing else: mapped to the blocked link, it overwrote this cause at every problem (§7, the clock-behind VM run of 2026-10-30) | Degraded (outbound) | the clock is off by the reported seconds; check time sync | none | wait |
 | Waiting on the Tor directory | the last `BOOTSTRAP PROGRESS` phase and when it was reached | Bootstrapping (the phase, and since when); the pace beside it (§4.11) | none; Tor is fetching the network's directory, and a slow mirror can hold it for minutes. With the pace: advancing, slow but normal, or stalled, with the bytes over the window | none | wait |
 | Resumed from suspend | `CLOCK_JUMPED` | Bootstrapping, briefly | none | none | re-evaluate now |
+| Stranded after a clock jump | `CLOCK_JUMPED` during the bootstrap, then neither the percent nor `traffic/read` moving for `Policy::jump_stall_after` (5 min) | Restarting | Tor stopped making progress after this computer's clock changed, and is being started again | none | respawn into the kept directory (§4.4) |
 | Onion unreachable | two consecutive probes past their bound, the second after `HSFETCH`, or a round in which every upload failed | Degraded (inbound) | peers cannot reach this node through Tor right now, and its address is being published again; no fix, after the outbound cause and its fix when one stands | none | republish (`DEL_ONION`, then `ADD_ONION`); a refused republish is a process fault |
 | Tor exited or wedged | exit, EOF, reply bound | Restarting | none unless repeated; then the count and the last exit, and where the previous log is | none | respawn |
 | Tor install defect | the pin gate at spawn | Restarting (held) | the file that failed the pin. The binary is not executed | `RestoreManaged`, plus the fixes the posture table offers | retry at the cap; the message repeats once per cap |
@@ -998,6 +999,37 @@ route deleted for 10 minutes, so every connect fails at once):
 - **Not run:** a blackhole block (silent drop). `pasta` cannot drop
   silently; it runs on the floor device with `tc`, with the soak. If Tor is
   silent there too, the runs are a report for the Tor Project.
+
+**Clock skew and suspend, a Linux VM, 2026-10-30** (a throwaway KVM guest,
+Debian 13; `shekyld` at `176b9d751` with the pinned 15.0.25; testnet,
+clearnet off; shekyl-dev `data/tsr-acceptance/2026-10-30-linux-vm-clock/`):
+
+- **A day ahead:** Tor bootstrapped cold in about 19 s and stated nothing
+  about its clock; no cause was named. The node synced testnet through
+  Tor, and the first probe in a real daemon arrived through the C++
+  inbound handshake in 8.2 s.
+- **Three days ahead:** Tor stated only handshake failures (`DONE`); its
+  log said "Received a bad CERTS cell: At least one certificate expired."
+  with no relay named. The blocked link's words told the operator to
+  check the firewall; they now put the clock first. After the clock was
+  set back, Tor reported the jump, moved from 14 % to 15 %, and sat with
+  no connection for 25 minutes; a respawn into the kept directory
+  bootstrapped in 7 s. That case is now a Process fault (§4.4,
+  "Stranded after a clock jump").
+- **Three days behind:** Tor named the skew outright (`CLOCK_SKEW
+  SKEW=-259200` and `REASON=CLOCK_SKEW` problems). The supervisor named
+  the clock, and the problem's `warn` overwrote it with the blocked link
+  at every problem; a `CLOCK_SKEW` reason no longer does.
+- **Suspend, five minutes in S3:** Tor reported the clock jumped 305 s
+  forward and rebuilt its circuits in 7 s; no respawn and no late reply.
+  The sample after the jump read no circuit and named a block for those
+  7 s, in a sentence that also said Tor carried the traffic. "No circuit"
+  no longer names a block, and the renderer no longer says the link
+  carries traffic beside a cause that says it cannot.
+- **Seen in the stop path, not this round's:** the C++ remnant's
+  teardown throws `std::out_of_range` from `on_connection_close` on every
+  stop observed, caught; one stop, 23 s after a Tor respawn during sync,
+  never exited (FOLLOWUPS, `DAEMON_CONFIG_CUTOVER.md` §2.2).
 
 | Case | Expected | Apparatus |
 | --- | --- | --- |
