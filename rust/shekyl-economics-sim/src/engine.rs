@@ -172,17 +172,26 @@ impl SimParams {
         })
     }
 
-    /// This run with `more` overrides written on, through the same door:
-    /// each struct's validator, and a path the run already overrides refused
-    /// as a duplicate. An escalation candidate is the run plus its two
-    /// economic overrides ([`crate::escalation::EscalationCurve::on`]). The
-    /// fee arm is kept.
+    /// This run with `more` overrides written on, through the same door
+    /// (each struct's validator). A path in `more` replaces the run's
+    /// override on that path: an escalation candidate is the run with its
+    /// two economic fields set to the candidate's values
+    /// ([`crate::escalation::EscalationCurve::on`]), whatever the run set
+    /// them to. A path given twice within `more` is still refused. The fee
+    /// arm is kept.
     ///
     /// # Errors
     ///
     /// [`OverrideError`], as [`Self::with_overrides`].
     pub fn with_more(&self, more: Vec<Override>) -> Result<Self, OverrideError> {
-        let mut overrides = self.overrides.clone();
+        let replaced: std::collections::BTreeSet<String> =
+            more.iter().map(Override::path).collect();
+        let mut overrides: Vec<Override> = self
+            .overrides
+            .iter()
+            .filter(|o| !replaced.contains(&o.path()))
+            .cloned()
+            .collect();
         overrides.extend(more);
         Ok(Self {
             run: Baseline::shipped().with(&overrides)?,

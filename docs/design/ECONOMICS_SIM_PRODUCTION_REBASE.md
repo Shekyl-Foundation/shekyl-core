@@ -2622,7 +2622,11 @@ mode refuses an override and exits 2. Six promoted fields have no
 reader in any `--stage2` figure: the relay lookback, the slack, the claim
 hold and the Priority factor, and the archival release cooldown and
 bond-duration pair. A cell on them prints the baseline report, because
-no figure depends on them; the header names the override.
+no figure depends on them; the header names the override. A run may
+override the escalation pair: the fold prices the run's curve, and each
+candidate section sets the pair to the candidate's values over the run's
+(`SimParams::with_more` replaces a path the run already overrides;
+`a_run_that_overrides_the_escalation_still_builds_its_candidates`).
 
 *A finding.* The W₂ band confines a swept epoch: at the divisor of 20
 and the band `[200, 500]`, `validate` admits an epoch of 4 000 to 10 000

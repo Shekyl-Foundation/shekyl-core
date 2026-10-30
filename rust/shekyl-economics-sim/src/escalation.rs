@@ -211,6 +211,31 @@ pub fn flat_25(run: &SimParams) -> EscalationCurve {
 mod tests {
     use super::*;
 
+    /// A run that overrides an escalation field still builds every
+    /// candidate: the candidate's two values replace the run's on that
+    /// path, and the run's own set keeps its override.
+    #[test]
+    fn a_run_that_overrides_the_escalation_still_builds_its_candidates() {
+        let knee = EscalationParams::MIN_KNEE_N * 2;
+        let run = SimParams::with_overrides(vec![Override {
+            set: ParamSet::Economic,
+            field: "escalation_knee_n".into(),
+            value: knee,
+        }])
+        .expect("in band");
+        assert_eq!(run.economic().escalation_knee_n, knee);
+        let curves = family(&run);
+        assert_eq!(curves.len(), ASYMPTOTE_BAND.len() * KNEE_BAND.len());
+        for c in &curves {
+            assert_eq!(
+                c.share(c.knee_shards),
+                c.asymptote,
+                "the candidate's knee, not the run's"
+            );
+        }
+        assert_eq!(flat_25(&run).share(0), floor_share(&run));
+    }
+
     #[test]
     fn floor_at_zero_plateau_at_knee() {
         for c in family(&SimParams::default()) {
