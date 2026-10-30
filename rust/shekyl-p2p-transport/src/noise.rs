@@ -276,6 +276,18 @@ impl<const INITIATOR: bool> Established<INITIATOR> {
         let (send, recv) = self.sym.into_directions(role);
         channel::session(send, recv)
     }
+
+    /// The raw directions, with no framer: the C5 bench's one-window
+    /// seal and open.
+    #[cfg(feature = "c5-bench")]
+    pub(crate) fn directions(self) -> (shekyl_noise::SendDirection, shekyl_noise::RecvDirection) {
+        let role = if INITIATOR {
+            SplitRole::Initiator
+        } else {
+            SplitRole::Responder
+        };
+        self.sym.into_directions(role)
+    }
 }
 
 #[cfg(test)]

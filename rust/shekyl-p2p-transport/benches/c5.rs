@@ -10,7 +10,7 @@ use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use shekyl_p2p_transport::c5_bench::{self, OpenInit, Session};
+use shekyl_p2p_transport::c5_bench::{self, OpenInit, Session, Windows};
 
 fn initiator(iters: u64) -> Duration {
     let mut total = Duration::ZERO;
@@ -58,6 +58,26 @@ fn seal_open(len: usize, iters: u64) -> Duration {
     total
 }
 
+fn window(len: usize, iters: u64) -> Duration {
+    let plaintext = vec![0xA5u8; len];
+    // One short of the rekey, as `seal_open`: the timed section is seal and
+    // open only.
+    let batch = c5_bench::windows_before_rekey().saturating_sub(1).max(1);
+    let mut total = Duration::ZERO;
+    let mut left = iters;
+    while left > 0 {
+        let mut windows = Windows::connected();
+        let n = left.min(batch);
+        let start = Instant::now();
+        for _ in 0..n {
+            black_box(windows.seal_open(&plaintext));
+        }
+        total += start.elapsed();
+        left -= n;
+    }
+    total
+}
+
 fn rekey(iters: u64) -> Duration {
     let start = Instant::now();
     for _ in 0..iters {
@@ -74,6 +94,15 @@ fn bench_c5(c: &mut Criterion) {
     for len in [64usize, 1_024, 16_384, 65_535] {
         group.bench_function(format!("seal_open/{len}"), |b| {
             b.iter_custom(|iters| seal_open(len, iters))
+        });
+    }
+    // Step 7's window candidates (NOISE_STEP7_EVALUATION_BRIEF.md item 2):
+    // one AEAD seal and open of a W-byte window.
+    for len in [
+        256usize, 512, 1_024, 1_400, 2_048, 4_096, 8_192, 16_384, 65_535,
+    ] {
+        group.bench_function(format!("window/{len}"), |b| {
+            b.iter_custom(|iters| window(len, iters))
         });
     }
     group.bench_function("rekey", |b| b.iter_custom(rekey));
