@@ -1196,10 +1196,7 @@ impl Drop for RegtestDaemon {
         // generator exits. Set by that capture only; every other run still
         // deletes the directory.
         if std::env::var_os("SHEKYL_KEEP_REGTEST_DATA").is_some() {
-            eprintln!(
-                "keeping regtest data dir {}",
-                self.data_dir.display()
-            );
+            eprintln!("keeping regtest data dir {}", self.data_dir.display());
             return;
         }
         drop(std::fs::remove_dir_all(&self.data_dir));
