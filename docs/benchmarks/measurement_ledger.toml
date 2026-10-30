@@ -587,6 +587,7 @@ stale_through = [
   { through = "0eb355bc5", note = "A doc comment on the profile's quiet-span test. No code changed. This moves no cost. The rows stay stale for the reasons already recorded." },
   { through = "dc617814d", note = "Clearnet's quiet K moves from 10 to 11 (read at the bound of a series with no live failure), and its derived S from 29.15 s to 32.065 s; a doc comment in the Tor supervisor's Policy. No deadline or span constant moved. This moves no cost. The rows stay stale for the reasons already recorded." },
   { through = "d9bb3e534", note = "The quiet span is derived from the row's dial deadline instead of a stored literal, and the dialer keeps only a published retry window. No deadline or span constant moved. This moves no cost. The rows stay stale for the reasons already recorded." },
+  { through = "56d76465a", note = "A build-time check that every dial profile row's quiet threshold is well formed. No deadline or span constant moved. This moves no cost. The rows stay stale for the reasons already recorded." },
 ]
 
 [[constant]]
@@ -689,6 +690,7 @@ cleared = [
   { through = "dc617814d", reason = "Clearnet's quiet K moves from 10 to 11 and its derived S with it; a doc comment in the Tor supervisor's Policy. No deadline or span constant moved and no span gained I/O, so the 2026-10-14 capture still prices this tree." },
   { through = "d9bb3e534", reason = "The quiet span is derived from the row's dial deadline instead of a stored literal, and the dialer keeps only a published retry window. No deadline or span constant moved and no span gained I/O, so the 2026-10-14 capture still prices this tree." },
   { through = "7098cae175", reason = "Wording, a field name and test fixtures in the Tor connector: the crate doc names the Rust options (tor-socks, tor-onion, tor-onion-listen) in place of the retired C++ flags, Config::anonymous_inbound is operator_onion_binds, publish.rs names note_own_onion in place of m_our_address, one test is renamed, and the fixtures use 11021 and 12021 in place of 18080 and 18081. The dial, the gap, the shutdown wait and their I/O are unchanged, so the 2026-10-14 capture still prices this tree." },
+  { through = "56d76465a", reason = "A build-time check that every dial profile row's quiet threshold is well formed. No deadline or span constant moved and no span gained I/O, so the 2026-10-14 capture still prices this tree." },
 ]
 
 [[constant]]
