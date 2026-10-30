@@ -49,9 +49,19 @@ pub fn connectors(config: &DaemonConfig) -> Vec<ConnectorId> {
 /// still hold its bound in `Confirm` dials, each one descriptor.
 /// *Records-was (to 2026-10-25): the target alone, one descriptor short per
 /// connector for a `Confirm` dial at target.*
+///
+/// A managed Tor adds [`PROBE_DESCRIPTORS`]: the probe of this node's own
+/// onion holds one while it is in flight (`TOR_SUPERVISOR.md` §4.5). It is
+/// not a peer dial and does not count against the in-flight bound, so the
+/// bound does not cover it. An operator's Tor is not probed yet (§4.9).
 #[must_use]
 pub fn reserved_descriptors(config: &DaemonConfig) -> u64 {
     let rpc = u64::from(config.rpc.connections_max.get());
+    let probe = if matches!(config.tor, Tor::Managed { .. }) {
+        PROBE_DESCRIPTORS
+    } else {
+        0
+    };
     connectors(config)
         .into_iter()
         .map(|c| {
@@ -59,8 +69,12 @@ pub fn reserved_descriptors(config: &DaemonConfig) -> u64 {
             let bound = u64::try_from(profile.in_flight_bound).unwrap_or(u64::MAX);
             u64::from(profile.target).saturating_add(bound)
         })
-        .fold(rpc, u64::saturating_add)
+        .fold(rpc.saturating_add(probe), u64::saturating_add)
 }
+
+/// The descriptors the managed Tor's probe holds: its SOCKS stream, one
+/// probe at a time.
+pub const PROBE_DESCRIPTORS: u64 = 1;
 
 /// What the owners read at their build, recorded before the remnant is
 /// constructed (step 6). The relay identity and the reserved descriptor
@@ -323,6 +337,8 @@ mod tests {
     /// The reservation is the RPC cap plus, for each configured connector,
     /// its outbound target and its in-flight dial bound: the most
     /// descriptors its dials can hold, `Confirm` dials at target included.
+    /// A managed Tor adds its probe's one (the probe brief, amendment 2):
+    /// dropping that term, or adding it for an operator's Tor, fails this.
     #[test]
     fn the_reservation_is_the_rpc_cap_plus_each_connectors_target_and_bound() {
         let held = |c: ConnectorId| {
@@ -330,9 +346,27 @@ mod tests {
             u64::from(profile.target) + u64::try_from(profile.in_flight_bound).expect("small")
         };
         let both = config(&["--rpc-connections-max", "25"]);
+        assert!(
+            matches!(both.tor, Tor::Managed { .. }),
+            "Tor is managed by default"
+        );
         assert_eq!(
             reserved_descriptors(&both),
-            25 + held(ConnectorId::Clearnet) + held(ConnectorId::Tor)
+            25 + held(ConnectorId::Clearnet) + held(ConnectorId::Tor) + PROBE_DESCRIPTORS,
+            "the managed Tor's probe holds one more"
+        );
+        let operator = config(&[
+            "--tor",
+            "operator",
+            "--tor-socks",
+            "127.0.0.1:9050",
+            "--rpc-connections-max",
+            "25",
+        ]);
+        assert_eq!(
+            reserved_descriptors(&operator),
+            25 + held(ConnectorId::Clearnet) + held(ConnectorId::Tor),
+            "an operator's Tor is not probed"
         );
         let offline = config(&[
             "--clearnet",
@@ -346,8 +380,8 @@ mod tests {
         assert!(connectors(&offline).is_empty());
     }
 
-    /// The operator's onion is this node's own Tor address, from the
-    /// section: the C++ `--anonymous-inbound` advertisement, read in Rust.
+    /// The operator's onion (`tor-onion`) is this node's own Tor address,
+    /// from the section.
     /// A dial-only Tor has no own address, so the lists' own entry stays
     /// empty and the disclosure carries no per-node Tor value.
     #[test]

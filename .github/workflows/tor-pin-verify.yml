@@ -56,7 +56,8 @@
 # on that platform, and its required tests, which must each have run and
 # passed there (scripts/ci/require_live_tests.sh). Windows runs fewer: three
 # of the wallet's respawn tests are `#[cfg(unix)]` (docs/FOLLOWUPS.md), and the
-# daemon's death-watcher test kills tor with `kill -9` and is Linux-only. A
+# daemon's death-watcher and probe-respawn tests kill tor with `kill -9` and
+# are Linux-only. A
 # test that one platform cannot run is left off that entry's list, never
 # skipped by a condition inside a step.
 #
@@ -87,37 +88,45 @@ jobs:
             exe: tor
             client_floor: 9
             wallet_floor: 4
-            daemon_floor: 2
+            daemon_floor: 5
             client_tests: >-
               binary::tests::bundled_tor_matches_recorded_pin
               control::actor::live_tests::the_managed_tor_inherits_its_control_end_and_nothing_else
             daemon_tests: >-
               ephemeral::tests::ephemeral_onion_publishes_and_rotates_across_boots
               ephemeral::tests::a_death_watcher_hears_tor_exit_and_tells_it_from_a_stop
+              probe_live_tests::a_cold_start_is_reachable_and_the_probe_is_on_its_own_circuit
+              probe_live_tests::a_respawn_republishes_the_same_onion_and_is_reachable_again
+              probe_live_tests::a_deleted_onion_is_missed_and_the_republish_restores_it
           - label: linux-aarch64
             host: aarch64-linux-gnu
             runner: ubuntu-24.04-arm
             exe: tor
             client_floor: 9
             wallet_floor: 4
-            daemon_floor: 2
+            daemon_floor: 5
             client_tests: >-
               binary::tests::bundled_tor_matches_recorded_pin
               control::actor::live_tests::the_managed_tor_inherits_its_control_end_and_nothing_else
             daemon_tests: >-
               ephemeral::tests::ephemeral_onion_publishes_and_rotates_across_boots
               ephemeral::tests::a_death_watcher_hears_tor_exit_and_tells_it_from_a_stop
+              probe_live_tests::a_cold_start_is_reachable_and_the_probe_is_on_its_own_circuit
+              probe_live_tests::a_respawn_republishes_the_same_onion_and_is_reachable_again
+              probe_live_tests::a_deleted_onion_is_missed_and_the_republish_restores_it
           - label: windows-x86_64
             host: x86_64-w64-mingw32
             runner: windows-latest
             exe: tor.exe
             client_floor: 8
             wallet_floor: 1
-            daemon_floor: 1
+            daemon_floor: 3
             client_tests: >-
               binary::tests::bundled_tor_matches_recorded_pin
             daemon_tests: >-
               ephemeral::tests::ephemeral_onion_publishes_and_rotates_across_boots
+              probe_live_tests::a_cold_start_is_reachable_and_the_probe_is_on_its_own_circuit
+              probe_live_tests::a_deleted_onion_is_missed_and_the_republish_restores_it
           # macOS: the inheritance and death-watcher tests are Linux-only
           # (`cfg(target_os = "linux")`); the wallet's three respawn tests are
           # `cfg(unix)` and run here.
@@ -127,11 +136,13 @@ jobs:
             exe: tor
             client_floor: 8
             wallet_floor: 4
-            daemon_floor: 1
+            daemon_floor: 3
             client_tests: >-
               binary::tests::bundled_tor_matches_recorded_pin
             daemon_tests: >-
               ephemeral::tests::ephemeral_onion_publishes_and_rotates_across_boots
+              probe_live_tests::a_cold_start_is_reachable_and_the_probe_is_on_its_own_circuit
+              probe_live_tests::a_deleted_onion_is_missed_and_the_republish_restores_it
           # The last x86_64 macOS image GitHub offers (retired with macOS 15
           # in 2027); the pin's x86_64 row is tested on Intel, not Rosetta.
           - label: macos-x86_64
@@ -140,11 +151,13 @@ jobs:
             exe: tor
             client_floor: 8
             wallet_floor: 4
-            daemon_floor: 1
+            daemon_floor: 3
             client_tests: >-
               binary::tests::bundled_tor_matches_recorded_pin
             daemon_tests: >-
               ephemeral::tests::ephemeral_onion_publishes_and_rotates_across_boots
+              probe_live_tests::a_cold_start_is_reachable_and_the_probe_is_on_its_own_circuit
+              probe_live_tests::a_deleted_onion_is_missed_and_the_republish_restores_it
     env:
       HOST: ${{ matrix.target.host }}
       TOR_EXE: ${{ matrix.target.exe }}
@@ -319,10 +332,13 @@ jobs:
           # twice, asserting the two boots publish DIFFERENT addresses (the
           # ephemeral property observed, not asserted). The cold-boot cache
           # seed is the step above and is skipped here. Floor = this crate's
-          # remaining ignored count on the entry's platform: Linux 2, the
-          # rotation test and TSR-F1's death watcher (a killed tor is Exited,
-          # a shutdown is Stopped); Windows 1, the rotation test alone, since
-          # the death watcher kills tor with `kill -9` and is Linux-only. `-ge` so
+          # remaining ignored count on the entry's platform: Linux 5, the
+          # rotation test, TSR-F1's death watcher (a killed tor is Exited,
+          # a shutdown is Stopped), and the probe's three (TOR_SUPERVISOR.md
+          # §4.5: reachable on its own circuit, reachable again after a
+          # respawn, a deleted onion missed and restored); Windows and macOS
+          # 3, since the death watcher and the probe's respawn case kill tor
+          # with `kill -9` and are Linux-only. `-ge` so
           # adding a live test never breaks the lane; bump only on a
           # deliberate removal.
           ../scripts/ci/require_live_tests.sh ignored-daemon.out ${{ matrix.target.daemon_tests }}

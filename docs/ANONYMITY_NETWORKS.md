@@ -6,10 +6,9 @@
 > a sidecar client Tor is uncovered. See [`TOR_RELAY.md`](TOR_RELAY.md)
 > and [`design/TOR_COVER_POSTURE.md`](design/TOR_COVER_POSTURE.md). This
 > file's remaining body is the Tor P2P usage matrix. I2P is not a network
-> this daemon dials. This file is not the cover-posture source of truth. Do not copy
-> `--tx-proxy …,10` from Usage as
-> the cover bind: counts below 12 are refused, and cover is TOR_RELAY's
-> shared-instance topology.
+> this daemon dials. This file is not the cover-posture source of truth: for
+> cover, point `tor-socks` at the relay process as `TOR_RELAY.md` shows. A
+> second client Tor is uncovered.
 
 Tor is the anonymity network this daemon dials. I2P is not. The usage of
 Tor is still considered experimental - there are a few pessimistic
@@ -62,28 +61,29 @@ Practical consequences for anonymity relay:
 
 ## Behavior
 
-If _any_ anonymity network is enabled, transactions being broadcast that lack
-a valid "context" (i.e. the transaction did not come from a p2p connection),
-will only be sent to peers on anonymity networks. If an anonymity network is
-enabled but no peers over an anonymity network are available, an error is
-logged and the transaction is kept for future broadcasting over an anonymity
-network. The transaction will not be broadcast unless an anonymity connection
-is made or until `shekyld` is shutdown and restarted with only public
-connections enabled.
+With Tor on (`tor = managed`, the default, or `tor = operator`), this node's
+own transactions go only over a route that hides its address. When no such
+route is available, the node holds them, says so in its posture line, and
+keeps them until one is. It never falls back to clearnet on its own.
+`tor = off` with `clearnet = on` sends them over clearnet, and the posture line
+says that the open network is unencrypted. The posture table is in
+[`design/TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) §1.
 
-Anonymity networks can also be used with `shekyl-cli` and
-`shekyl-wallet-rpc` - the wallets will connect to a daemon through a proxy. The
-daemon must provide a hidden service for the RPC itself, which is separate from
-the hidden service for P2P connections.
+`shekyl-cli` and `shekyl-wallet-rpc` can reach a daemon through a SOCKS proxy.
+The daemon must then provide an onion service for its RPC, separate from the one
+for P2P (see [Wallet over Tor](#wallet-over-tor)).
 
 
-## P2P Commands
+## Peers
 
-Only handshakes, peer timed syncs and transaction broadcast messages are
-supported over anonymity networks. If one `--add-exclusive-node` p2p address
-is specified, then no syncing will take place and only transaction broadcasting
-can occur. It is therefore recommended that `--add-exclusive-node` be combined
-with additional exclusive IPv4 address(es).
+Over Tor the node syncs, relays and broadcasts as it does over clearnet. The
+posture line names what it is syncing over.
+
+`p2p-peer` adds peers by IP endpoint or onion. `p2p-closed-peer` names the only
+peers the node connects to: a non-empty list declares a closed network, on
+every connector. Seeds are ordinary peers. An onion peer needs Tor on and an IP
+peer needs clearnet on; otherwise the daemon refuses to start and names the
+conflict.
 
 For the rebooted chain, the transaction broadcast path should be re-evaluated
 with PQ-authenticated transactions because:
@@ -96,103 +96,85 @@ with PQ-authenticated transactions because:
 
 ## Usage
 
-### Outbound Connections
+The examples use mainnet's ports: P2P 11021 and RPC 11029. Testnet uses 12021
+and 12029, stagenet 13021 and 13029. These options can also go in the
+configuration file ([`USER_GUIDE.md`](USER_GUIDE.md), "Configuration file").
 
-Connecting to an anonymous address requires the command line option
-`--tx-proxy` which tells `shekyld` the ip/port of a socks proxy provided by a
-separate process. On most systems the configuration will look like:
+### The managed Tor
 
-```
---tx-proxy tor,127.0.0.1:9050
-```
+`tor = managed` is the default. The daemon runs the bundled Tor, dials onions
+through it, and publishes a per-boot onion for inbound. There is nothing to
+configure.
 
-which tells `shekyld` that ".onion" p2p addresses can be forwarded to a socks
-proxy at IP 127.0.0.1 port 9050 with the default max outgoing connections.
-An explicit count below 12 is refused at start.
+### Your own Tor: outbound
 
-If desired, peers can be manually specified:
+`tor = operator` dials through a Tor you run, named by its SOCKS endpoint:
 
 ```
---add-exclusive-node rveahdfho7wo4b2m.onion:28083
---add-peer rveahdfho7wo4b2m.onion:28083
+./shekyld --tor operator --tor-socks 127.0.0.1:9050
 ```
 
-Either option can be listed multiple times, and can specify any mix of Tor
-and IPv4 addresses. Using `--add-exclusive-node` will prevent the usage of
-seed nodes on ALL networks, which will typically be undesirable.
+Without `tor-onion` this is dial-only over Tor. If that SOCKS port asks for a
+username and password, set `tor-socks-username` and `tor-socks-password` in the
+configuration file; they are not accepted on the command line.
 
-### Inbound Connections
-
-Receiving anonymity connections is done through the option
-`--anonymous-inbound`. This option tells `shekyld` the inbound address, network
-type, and max connections:
+Peers can be named. Repeat the option for more than one:
 
 ```
---anonymous-inbound rveahdfho7wo4b2m.onion:28083,127.0.0.1:28083,25
+--p2p-peer <56 characters>.onion:11021
+--p2p-closed-peer <56 characters>.onion:11021
 ```
 
-which tells `shekyld` that a max of 25 inbound Tor connections are being
-received at address "rveahdfho7wo4b2m.onion:28083" and forwarded to `shekyld`
-localhost port 28083.
-These addresses will be shared with outgoing peers, over the same network type,
-otherwise the peer will not be notified of the peer address by the proxy.
+`p2p-closed-peer` closes the network on every connector, which is rarely what
+you want.
 
-### Wallet RPC
+### Your own Tor: inbound
 
-An anonymity network can be configured to forward incoming connections to a
-`shekyld` RPC port - which is independent from the configuration for incoming
-P2P anonymity connections. Tor is
-[configured in the same manner](#configuration), except the localhost port
-must be the RPC port (typically 18081 for mainnet) instead of the p2p port:
+Configure an onion service in your Tor ("torrc"):
 
 ```
 HiddenServiceDir /var/lib/tor/data/shekyl
-HiddenServicePort 18081 127.0.0.1:18081
+HiddenServicePort 11021 127.0.0.1:11021
 ```
 
-Then the wallet will be configured to use a Tor address:
-```
---proxy 127.0.0.1:9050
---daemon-address rveahdfho7wo4b2m.onion
-```
-
-An onion address provides the information necessary to authenticate and
-encrypt the connection from end-to-end. If desired, SSL can also be applied to
-the connection with `--daemon-address https://rveahdfho7wo4b2m.onion` which
-requires a server certificate that is signed by a "root" certificate on the
-machine running the wallet. Alternatively, `--daemon-cert-file` can be used to
-specify a certificate to authenticate the server.
-
-Proxies can also be used to connect to "clearnet" (ipv4 addresses or ICANN
-domains), but `--daemon-cert-file` _must_ be used for authentication and
-encryption.
-
-### Network Types
-
-#### Tor
-
-Options `--add-exclusive-node` and `--add-peer` recognize ".onion" addresses,
-and forward those addresses to the proxy provided with `--tx-proxy tor,...`.
-`--tx-proxy i2p` is not a network this daemon accepts.
-
-Option `--anonymous-inbound` recognizes ".onion" addresses, and sends them
-to outgoing Tor connections so the peer can distribute the address to its
-other peers. A `.b32.i2p` address is not an inbound address.
-
-##### Configuration
-
-Tor must be configured for hidden services. An example configuration ("torrc")
-might look like:
+Tor stores the service's key in `/var/lib/tor/data/shekyl`, and its `hostname`
+file holds the `.onion` address. Name that onion and its virtual port with
+`tor-onion`, and the local endpoint the torrc forwards to with
+`tor-onion-listen`:
 
 ```
-HiddenServiceDir /var/lib/tor/data/shekyl
-HiddenServicePort 28083 127.0.0.1:28083
+./shekyld --tor operator --tor-socks 127.0.0.1:9050 \
+    --tor-onion <56 characters>.onion:11021 --tor-onion-listen 127.0.0.1:11021
 ```
 
-This will store key information in `/var/lib/tor/data/shekyl` and will forward
-"Tor port" 28083 to port 28083 of ip 127.0.0.1. The file
-`/var/lib/tor/data/shekyl/hostname` will contain the ".onion" address for use
-with `--anonymous-inbound`.
+The node shares this onion with its Tor peers so they can pass it on. There is
+no inbound count: the daemon's descriptor bound is the only inbound bound.
+
+### Wallet over Tor
+
+An onion service can forward to the daemon's RPC, separately from the P2P one.
+The local port is the RPC port:
+
+```
+HiddenServiceDir /var/lib/tor/data/shekyl-rpc
+HiddenServicePort 11029 127.0.0.1:11029
+```
+
+Then point the wallet at that onion through the Tor SOCKS port:
+
+```
+./shekyl-cli --wallet mywallet \
+    --proxy socks5h://127.0.0.1:9050 \
+    --daemon-address <56 characters>.onion:11029
+```
+
+An onion address authenticates the service and encrypts the connection end to
+end. Whoever operates the daemon still sees which blocks the wallet requests
+and what it broadcasts; see [`USER_GUIDE.md`](USER_GUIDE.md), "Connecting to a
+daemon".
+
+I2P is not a network this daemon dials, and a `.b32.i2p` address is not a peer
+or an inbound address.
 
 ## Privacy Limitations
 

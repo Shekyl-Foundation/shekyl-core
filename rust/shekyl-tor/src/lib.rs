@@ -14,10 +14,13 @@
 //! with the gap as one arm of the wait. Onion-service proof-of-work and
 //! `MaxStreams` are the accept bound. This crate does not add another.
 //!
-//! `--tx-proxy` and `--anonymous-inbound` stay parsed in C++. They arrive
-//! here as [`Config`]. A bind failure returns before a listener exists,
-//! which is the zone not being inserted. The 60-second Tor liveness poll
-//! in `idle_worker` is a timing-table item and is not this connector's.
+//! The operator's Tor is configured in Rust (`shekyl-daemon-config`,
+//! `INPUT_GRAMMAR.md` IG-Q18): `tor-socks` is the SOCKS endpoint outbound
+//! dials through, and `tor-onion` with `tor-onion-listen` is the operator's
+//! own onion and the local endpoint its Tor forwards to. A bind failure
+//! returns before a listener exists, which is the zone not being inserted.
+//! Whether the managed Tor is alive is the managed-Tor supervisor's
+//! liveness sample (`TOR_SUPERVISOR.md` §4.11), not this connector's.
 
 #![deny(unsafe_code)]
 
@@ -48,9 +51,10 @@ pub struct Config {
     /// The SOCKS5 proxy outbound dials go through, with the pair it asks
     /// for, if any.
     pub proxy: shekyl_socks::Proxy,
-    /// Binds from `--anonymous-inbound`. These are the operator's onions.
-    /// They are not a [`ForwardAddr`], so [`publish_forward`] cannot name them.
-    pub anonymous_inbound: Vec<OperatorInbound>,
+    /// The local binds of the operator's own onions (`tor-onion-listen`).
+    /// The operator's Tor published them; they are not a [`ForwardAddr`], so
+    /// [`publish_forward`] cannot name them.
+    pub operator_onion_binds: Vec<OperatorInbound>,
     pub ceiling: InboundCeiling,
     /// Covers the SOCKS exchange, circuit build, and rendezvous.
     pub dial_within: Tick,
@@ -238,7 +242,7 @@ impl<C: Clock + Clone> Drop for Listener<C> {
     }
 }
 
-/// Bind the loopback forward target and any anonymous-inbound addresses.
+/// Bind the loopback forward target and the operator's onion binds.
 ///
 /// `sockets` is the process-wide admission table. Clones share it, and
 /// the ceiling counts every connector on that table. This function keeps
@@ -258,7 +262,7 @@ where
     C: Clock + Clone + Send + Sync + 'static,
 {
     let handle = pool.handle().clone();
-    let (forward_listener, extras) = pool.block_on(bind_all(&config.anonymous_inbound))?;
+    let (forward_listener, extras) = pool.block_on(bind_all(&config.operator_onion_binds))?;
     let forward = ForwardAddr::from_bound(forward_listener.local_addr()?)?;
     let mut extra_addrs = Vec::with_capacity(extras.len());
     for listener in &extras {

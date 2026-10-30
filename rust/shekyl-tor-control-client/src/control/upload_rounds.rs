@@ -144,9 +144,11 @@ impl UploadRounds {
         marks
     }
 
-    /// End the open round now, after the event sink dropped events: the ends that were
-    /// lost will not arrive, and the next round must be able to trigger. `None` when no
-    /// round is open.
+    /// End the open round now. The driver does this when the sink dropped
+    /// events, and when the round has been open too long: the ends still
+    /// missing will not be waited on, and the next round must be able to
+    /// trigger. `None` when no round is open. An upload still in `open` is
+    /// counted unfinished, which is not a failed round.
     pub fn resync(&mut self) -> Option<RoundMark> {
         self.in_round().then(|| self.end())
     }
@@ -280,6 +282,57 @@ mod tests {
         );
     }
 
+    /// A fetch of our own descriptor (the probe's `HSFETCH` after a miss)
+    /// changes no round, even one open on the same HSDir: `REQUESTED` and
+    /// `RECEIVED` are not upload actions, and a fetch's `FAILED` carries the
+    /// descriptor id. Lines in the forms tor 0.4.9 writes
+    /// (`control_events.c`, `event_hs_descriptor_receive_end`). Counting a
+    /// fetch's `FAILED` as an upload's would end the round with no success
+    /// and republish for nothing (Rick, 2026-10-29).
+    #[test]
+    fn a_fetch_of_our_own_descriptor_changes_no_round() {
+        let address = ServiceId::parse(CAPTURED_ONION).expect("address");
+        let hsdir = "$9E67E885D46AE284534EBA3B71A2DFE13A0E4783~Torr4Tor";
+        let desc = "GOkbpjFN0/2R6w08BkOWd3Zj62ZDCvu7bVmkseOLvcY";
+        let mut rounds = UploadRounds::new(address);
+        // Nothing open: a fetch's events start nothing.
+        for line in [
+            format!("HS_DESC REQUESTED {CAPTURED_ONION} NO_AUTH {hsdir} {desc}"),
+            format!("HS_DESC FAILED {CAPTURED_ONION} NO_AUTH {hsdir} {desc} REASON=NOT_FOUND"),
+            format!("HS_DESC RECEIVED {CAPTURED_ONION} NO_AUTH {hsdir} {desc}"),
+        ] {
+            assert!(rounds.observe(&hs_desc_event(&line)).is_empty(), "{line}");
+        }
+        assert!(!rounds.in_round());
+        // A round open on that very HSDir: the fetch's FAILED closes nothing.
+        let upload = format!("HS_DESC UPLOAD {CAPTURED_ONION} UNKNOWN {hsdir} {desc}");
+        assert_eq!(
+            rounds.observe(&hs_desc_event(&upload)),
+            [RoundMark::Started]
+        );
+        for line in [
+            format!("HS_DESC REQUESTED {CAPTURED_ONION} NO_AUTH {hsdir} {desc}"),
+            format!("HS_DESC FAILED {CAPTURED_ONION} NO_AUTH {hsdir} {desc} REASON=NOT_FOUND"),
+            format!("HS_DESC RECEIVED {CAPTURED_ONION} NO_AUTH {hsdir} {desc}"),
+        ] {
+            assert!(rounds.observe(&hs_desc_event(&line)).is_empty(), "{line}");
+        }
+        assert!(rounds.in_round(), "the upload is still open");
+        let uploaded = format!("HS_DESC UPLOADED {CAPTURED_ONION} UNKNOWN {hsdir}");
+        assert_eq!(
+            rounds.observe(&hs_desc_event(&uploaded)),
+            [
+                RoundMark::FirstUploaded,
+                RoundMark::Ended {
+                    uploaded: 1,
+                    failed: 0,
+                    unfinished: 0
+                }
+            ],
+            "the round ends on its own upload, with nothing failed"
+        );
+    }
+
     /// An upload whose end never arrives does not wedge the coalescer: the next batch
     /// of uploads ends the incomplete round and can trigger again (Copilot on #1091).
     #[test]
@@ -309,6 +362,70 @@ mod tests {
         );
         assert_eq!(
             rounds.observe(&round_event(Uploaded, 3, false)),
+            [
+                RoundMark::FirstUploaded,
+                RoundMark::Ended {
+                    uploaded: 1,
+                    failed: 0,
+                    unfinished: 0
+                }
+            ]
+        );
+    }
+
+    /// **A round that never ends does not stall the next** (Rick,
+    /// 2026-10-29). One whose uploads partly ended is closed by the next
+    /// round's first `UPLOAD`. One in which no upload ever ended cannot be
+    /// told from its own late uploads by `UPLOAD` alone (tor starts a
+    /// round's uploads before any ends), so the next round's uploads join
+    /// it; the supervisor counts it as stuck at five minutes and the driver
+    /// calls `resync`, after which the next round's `UPLOAD` starts a round
+    /// of its own and its upload triggers. Dropping the stuck path's resync,
+    /// or the "uploads have begun to end" rule, fails this.
+    #[test]
+    fn a_round_that_never_ends_does_not_stall_the_next() {
+        use HsDescAction::{Upload, Uploaded};
+        // Partly ended: HSDir 2 never reports; the next round's UPLOAD ends it.
+        let mut rounds = UploadRounds::new(ServiceId::parse(CAPTURED_ONION).expect("address"));
+        rounds.observe(&round_event(Upload, 1, true));
+        rounds.observe(&round_event(Upload, 2, true));
+        rounds.observe(&round_event(Uploaded, 1, false));
+        assert_eq!(
+            rounds.observe(&round_event(Upload, 3, true)),
+            [
+                RoundMark::Ended {
+                    uploaded: 1,
+                    failed: 0,
+                    unfinished: 1
+                },
+                RoundMark::Started
+            ]
+        );
+
+        // Nothing ever ended: the next round's UPLOAD joins the open round.
+        let mut rounds = UploadRounds::new(ServiceId::parse(CAPTURED_ONION).expect("address"));
+        rounds.observe(&round_event(Upload, 1, true));
+        rounds.observe(&round_event(Upload, 2, true));
+        assert!(
+            rounds.observe(&round_event(Upload, 3, true)).is_empty(),
+            "indistinguishable from the round's own uploads"
+        );
+        // The stuck path: the supervisor counts it, the driver resyncs.
+        assert_eq!(
+            rounds.resync(),
+            Some(RoundMark::Ended {
+                uploaded: 0,
+                failed: 0,
+                unfinished: 3
+            })
+        );
+        assert_eq!(
+            rounds.observe(&round_event(Upload, 4, true)),
+            [RoundMark::Started],
+            "the next round is a round of its own"
+        );
+        assert_eq!(
+            rounds.observe(&round_event(Uploaded, 4, false)),
             [
                 RoundMark::FirstUploaded,
                 RoundMark::Ended {
