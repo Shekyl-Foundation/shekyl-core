@@ -11,11 +11,10 @@ use serde::Serialize;
 // Importing means the coupling checks below run against the LIVE cluster, so
 // a re-pin that breaks an inequality fails this sim's test.
 //
-// Timing values that live in `config/consensus_constants.json` reach Rust via
-// `shekyl-archival-retention`'s build-generated bond-floor module (W, reorg
-// depth, release cooldown, retention horizon). `SETTLEMENT_EPOCH_BLOCKS` is
-// still hand-pinned in that crate's `constants.rs` (JSON has it too;
-// dual-source cleanup is a separate pass). The slash grace is
+// Every timing value here is generated from `config/consensus_constants.json`:
+// W, the settlement epoch, the release cooldown, the retention horizon and the
+// emission batch cap by `shekyl-archival-retention`'s build script, the reorg
+// depth by `shekyl-types`' (re-exported by archival-retention). The slash grace is
 // `SLASH_GRACE_EPOCHS`, a multiple of the epoch with no JSON key: it has no
 // value of its own to source (DRS-E4 commit 5).
 pub use shekyl_archival_retention::{

@@ -10,6 +10,20 @@ include!(concat!(
     "/archival_bond_floor_generated.rs"
 ));
 
+/// The archival reorg depth `D_max` (`PDM-Q11`). Its one Rust source is
+/// [`shekyl_types::ARCHIVAL_REORG_DEPTH_BLOCKS`] (ESR-16 completion, ruling 3);
+/// re-exported here so this crate's readers name it where its neighbours live.
+pub use shekyl_types::ARCHIVAL_REORG_DEPTH_BLOCKS;
+
+// The pass anchor's genesis reject threshold is `depth + lag`, so the sum must
+// compute. Neither is near `u64::MAX`; the assert keeps a re-pin honest.
+const _: () = assert!(
+    ARCHIVAL_REORG_DEPTH_BLOCKS
+        .checked_add(ARCHIVAL_ATTESTATION_ANCHOR_LAG_BLOCKS)
+        .is_some(),
+    "archival_reorg_depth_blocks + archival_attestation_anchor_lag_blocks fits u64"
+);
+
 use crate::bond_wire::{HoldingsDescriptor, HoldingsKind, MAX_HOLDINGS_SHARDS};
 
 /// Minimum bonded collateral for `holdings` at join-Market (gate-4 §3.2 `== bond_floor` pin),
