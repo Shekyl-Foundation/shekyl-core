@@ -162,6 +162,7 @@ namespace cryptonote
       {
         // What the door held of this sync is not the chain's: the head is
         // the store's tip again, and the next peer is asked from there.
+        MINFO(context << " the door refused height " << reply.height << "; frontier " << m_door_frontier.load() << " dropped");
         m_door_frontier.store(0);
         LOG_PRINT_CCONTEXT_L0("Block verification failed, dropping connection");
         // Every span this peer filled is suspect with the block, and a
@@ -182,7 +183,10 @@ namespace cryptonote
         // can now say (the connect loop that said it is the door's).
         m_block_queue.remove_spans_ending_before(reply.height + 1);
         if (reply.height + 1 >= m_door_frontier.load())
+        {
+          MINFO(context << " the door connected through " << reply.height << ": its frontier " << m_door_frontier.load() << " is the chain's again");
           m_door_frontier.store(0);
+        }
         const uint64_t target = m_core.get_target_blockchain_height();
         if (target && !m_synchronized && m_core.get_current_blockchain_height() >= target)
           on_connection_synchronized();
@@ -223,6 +227,7 @@ namespace cryptonote
       }
       if (reply.kind == SHEKYL_INGEST_UNLINKED)
       {
+        MINFO(context << " the door found height " << reply.height << " unlinked; frontier " << m_door_frontier.load() << " dropped");
         m_door_frontier.store(0);
         // An announced block whose parent this node lacks is the start of
         // a sync (the chain-sync ruling): ask the announcer for its chain.
@@ -1164,7 +1169,7 @@ namespace cryptonote
       const uint64_t past = start_height + blocks.size();
       uint64_t frontier = m_door_frontier.load();
       while (frontier < past && !m_door_frontier.compare_exchange_weak(frontier, past)) {}
-      MDEBUG("the idle pump handed span " << start_height << "/" << blocks.size() << " to the door");
+      MINFO("the idle pump handed span " << start_height << "/" << blocks.size() << " to the door; frontier " << m_door_frontier.load());
     }
     else if (offered == SHEKYL_INGEST_OVERSIZE || offered == SHEKYL_INGEST_INVALID)
       m_block_queue.remove_spans(span_connection_id, start_height);
@@ -1218,7 +1223,10 @@ namespace cryptonote
           const uint64_t past = start_height + blocks.size();
           uint64_t frontier = m_door_frontier.load();
           while (frontier < past && !m_door_frontier.compare_exchange_weak(frontier, past)) {}
+          MINFO(context << " handed span " << start_height << "/" << blocks.size() << " to the door; frontier " << m_door_frontier.load());
         }
+        else
+          MINFO(context << " the door answered " << offered << " to span " << start_height << "/" << blocks.size());
         if (offered == SHEKYL_INGEST_OVERSIZE || offered == SHEKYL_INGEST_INVALID)
           m_block_queue.remove_spans(span_connection_id, start_height);
         if (offered == SHEKYL_INGEST_THROTTLED)
