@@ -4361,7 +4361,7 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
 /// non-empty), not the Q11 zero-fee form, so the fee-subset battery leg
 /// runs live.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "DECIDED_DARK (red on the flip binary 2026-10-29): the daemon answers `inject_archival_serve_credit` with -32601 Method not found; green through the market-bond join, red from A2 until the daemon serves the lever, then ARMED_SLOW"]
+#[ignore = "DECIDED_DARK: serve credit's production path goes live at SO-D12 4b (Rick, 2026-10-29: no inject lever); green on the flip through the daemon-closed shard, the market-bond join and the join-epoch read"]
 async fn e2e_emission_claim_accepted_and_applied() {
     use super::bond_assembly::SpentRecordsDurablyPruned;
     use super::claim_dispatch::EmissionClaimRequestError;
@@ -4574,14 +4574,16 @@ async fn e2e_emission_claim_accepted_and_applied() {
 
     // (A2) Inject one serve-credit bit for (persona, shard 0, `J + 1`).
     //
-    // RED from here on the flip binary (2026-10-29): the daemon answers
-    // `inject_archival_serve_credit` with -32601 "Method not found" — the
-    // dev-only lever fell through to the deleted C++ table
-    // (`DRS_X_STORE_FLIP.md` DX-Q3) and is not yet served in Rust.
-    // Everything above this line ran green on that binary: the shard
-    // filled and priced, the market bond admitted and confirmed, the join
-    // epoch read back. The walk re-arms on its first green rerun once the
-    // daemon serves the lever.
+    // DARK from here (Rick, 2026-10-29: no inject lever; test the
+    // production path). The daemon has no `inject_archival_serve_credit`:
+    // DX-Q3 deleted it with the C++ chain. Serve credit's production path
+    // is SO-D12's bundles, live at 4b (`ARCHIVAL_SETTLEMENT_WRITER.md`
+    // §16.3 item 4), and 4b re-subjects this leg to it: the persona's
+    // wallet serves its shard on an onion service, the mining daemon's
+    // producer reads it over operator Tor and files the bundle, the bundle
+    // is admitted and the epoch credited, then the claim below. Everything
+    // above this line ran green on the flip binary: the shard filled and
+    // priced, the market bond admitted and confirmed, the join epoch read.
     // The bit store is epoch-keyed and injection is height-free, but the
     // height the daemon ATTRIBUTED the bit to is what the pop legs must
     // stay above (the store is not pop-symmetric), so the injector's

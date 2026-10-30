@@ -203,20 +203,16 @@ ARMED_SLOW=(
 #     pass/fail proposition: each writes its trace under RT_P5_OUT and is
 #     run by hand when the registration says. The parser they rely on is
 #     covered by ordinary unit tests in the same module.
-#   e2e_emission_claim_accepted_and_applied — the third market-bond walk,
-#     RED on the flip binary 2026-10-29, not green. Its CEN-J15 darkness
-#     is gone: it fills and prices shard 0, the market bond is admitted
-#     and confirmed, and the join epoch is read back from the record
-#     (SEB 128, cap 16; the claim targets the epoch after the join). It
-#     panics at step A2: the daemon answers `inject_archival_serve_credit`
-#     with -32601 "Method not found" — DX-Q3 deleted the dev-only lever
-#     with the C++ chain (DRS_X_STORE_FLIP.md; DEL-008), and the method
-#     table pins two armed levers. Without a credit the target epoch
-#     closes zero-work and there is nothing to claim. It moves to
-#     ARMED_SLOW on the first green rerun once regtest has a serve path
-#     (SO-D8 Slice C's, or a Rust lever if one is ruled; FOLLOWUPS: the
-#     emission regtest walk). Prior reds: sabotage 2026-09-08 (was
-#     ARMED_SLOW).
+#   e2e_emission_claim_accepted_and_applied — the third market-bond walk.
+#     Dark because serve credit's production path goes live at SO-D12 4b
+#     (Rick, 2026-10-29: no inject lever; test the production path). Its
+#     CEN-J15 darkness is gone: on the flip binary it fills and prices
+#     shard 0, the market bond is admitted and confirmed, and the join
+#     epoch is read back (SEB 128, cap 16), green; its A2 leg calls the
+#     `inject_archival_serve_credit` lever DX-Q3 deleted with the C++
+#     chain. 4b re-subjects A2 to the bundle path and arms it, in the
+#     live-Tor lane (FOLLOWUPS: the emission regtest walk). Prior reds:
+#     sabotage 2026-09-08 (was ARMED_SLOW).
 DECIDED_DARK=(
   engine::regtest_e2e::generate_ct2_tier_b_fixture
   engine::regtest_e2e::rt_p5::rt_p5_dry_run
