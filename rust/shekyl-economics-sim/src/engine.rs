@@ -172,6 +172,25 @@ impl SimParams {
         })
     }
 
+    /// This run with `more` overrides written on, through the same door:
+    /// each struct's validator, and a path the run already overrides refused
+    /// as a duplicate. An escalation candidate is the run plus its two
+    /// economic overrides ([`crate::escalation::EscalationCurve::on`]). The
+    /// fee arm is kept.
+    ///
+    /// # Errors
+    ///
+    /// [`OverrideError`], as [`Self::with_overrides`].
+    pub fn with_more(&self, more: Vec<Override>) -> Result<Self, OverrideError> {
+        let mut overrides = self.overrides.clone();
+        overrides.extend(more);
+        Ok(Self {
+            run: Baseline::shipped().with(&overrides)?,
+            overrides,
+            fee: self.fee,
+        })
+    }
+
     /// The run's [`EconomicParams`]: the shipped set with the run's
     /// economic overrides. The one set every fold prices with.
     #[must_use]

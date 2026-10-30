@@ -38,7 +38,7 @@ pub const BASIS_POINTS: u32 = 10_000;
 /// Deserializes only through [`Self::validate`] (`try_from` a wire form
 /// with the same fields), as [`crate::EconomicParams`] does: there is no
 /// way to deserialize a policy its readers cannot use.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "RelayPolicyWire")]
 pub struct RelayPolicy {
     /// Lookback depth `G`, in blocks.

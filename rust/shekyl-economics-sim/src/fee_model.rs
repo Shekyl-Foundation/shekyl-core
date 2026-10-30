@@ -28,8 +28,8 @@
 //!   and ESR-6).
 
 use shekyl_economics::{
-    base_block_reward, corrected_fee_ladder, fee_correction, EconomicParams, FeeLadder, TxVolume,
-    RELAY_FLOOR_REFERENCE_TX_WEIGHT,
+    base_block_reward, corrected_fee_ladder, fee_correction, EconomicParams, FeeLadder,
+    RelayPolicy, TxVolume,
 };
 
 use crate::burden::{ordinary_tx_fee, ordinary_tx_weight};
@@ -99,6 +99,9 @@ pub struct FeePoint<'a> {
     /// ordinary transaction's weight.
     pub chain_leaves: u64,
     pub params: &'a EconomicParams,
+    /// The run's relay policy: the ladder's `w_ref` and rung ratios, and the
+    /// lattice a production rate is priced on.
+    pub relay: &'a RelayPolicy,
 }
 
 /// One ordinary transaction at a block's state: what it pays and what it
@@ -140,7 +143,7 @@ impl FeeModel {
                 // The multiplier scales the rate. The fee is the fixed point
                 // of that rate: scaling an already converged fee would price
                 // a varint the payer does not write.
-                let rate = scaled_lattice_rate(ladder_at(at).standard, multiplier_milli);
+                let rate = scaled_lattice_rate(ladder_at(at).standard, multiplier_milli, at.relay);
                 ordinary_tx_fee(at.chain_leaves, rate)
                     .expect("the standard rung does not price an ordinary transaction")
             }
@@ -165,7 +168,9 @@ impl FeeModel {
     pub fn admission_rate(self, at: &FeePoint<'_>) -> PerByteRate {
         match self {
             Self::FlatControl { admission_rate, .. } => admission_rate,
-            Self::ProductionStandard { .. } => PerByteRate::lattice(ladder_at(at).economy),
+            Self::ProductionStandard { .. } => {
+                PerByteRate::lattice(ladder_at(at).economy, at.relay)
+            }
         }
     }
 
@@ -281,9 +286,16 @@ impl FeeModel {
 /// because only the production arm scales a rung. The product of two `u64`s
 /// fits in `u128`, so the division is exact; a count that does not fit the
 /// rate is a refusal, not a rate of `u64::MAX`.
-fn scaled_lattice_rate(rate_per_byte: u64, multiplier_milli: u64) -> PerByteRate {
+fn scaled_lattice_rate(
+    rate_per_byte: u64,
+    multiplier_milli: u64,
+    relay: &RelayPolicy,
+) -> PerByteRate {
     let scaled = u128::from(rate_per_byte) * u128::from(multiplier_milli) / u128::from(MILLI);
-    PerByteRate::lattice(u64::try_from(scaled).expect("a scaled rung fits the per-byte rate"))
+    PerByteRate::lattice(
+        u64::try_from(scaled).expect("a scaled rung fits the per-byte rate"),
+        relay,
+    )
 }
 
 /// The production ladder at `at`: every rung comes from this one call, so
@@ -299,10 +311,10 @@ fn ladder_at(at: &FeePoint<'_>) -> FeeLadder {
     corrected_fee_ladder(
         base_reward,
         at.long_term_median,
-        RELAY_FLOOR_REFERENCE_TX_WEIGHT,
+        at.relay.ref_tx_weight,
         correction,
         at.params,
-        shekyl_economics::relay_policy(),
+        at.relay,
     )
 }
 
@@ -327,6 +339,7 @@ mod tests {
             burn_pct_scaled: 0,
             chain_leaves: 1,
             params,
+            relay: shekyl_economics::relay_policy(),
         }
     }
 

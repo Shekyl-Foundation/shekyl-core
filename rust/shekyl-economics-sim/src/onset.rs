@@ -244,8 +244,8 @@ pub fn emission_leg_at_decay(a: &A1YearAgg, params: &SimParams, annual_decay: u6
 
 /// The lever set A1-L prices, in the order printed. `best` is the scenario's
 /// strongest band candidate (A1's selection: max of the min ratio at 10 %).
-fn lever_set(best: EscalationCurve) -> Vec<Lever> {
-    let flat = flat_25();
+fn lever_set(best: EscalationCurve, run: &SimParams) -> Vec<Lever> {
+    let flat = flat_25(run);
     vec![
         Lever {
             label: "shipped: burn x flat 25%",
@@ -335,9 +335,9 @@ const BLOCK_SPACE_YEARS: [u64; 10] = [1, 4, 8, 10, 12, 15, 20, 30, 40, 60];
 
 /// A1's selection rule, applied to one aggregate series: the band candidate
 /// with the greatest min clearance at the binding rate.
-fn best_candidate(aggs: &[A1YearAgg]) -> EscalationCurve {
+fn best_candidate(aggs: &[A1YearAgg], run: &SimParams) -> EscalationCurve {
     let mid_price = SKL_FIAT_PRICE_BAND[1];
-    family()
+    family(run)
         .into_iter()
         .max_by(|a, b| {
             let ra = a1_min_clearance_ratio(
@@ -346,6 +346,7 @@ fn best_candidate(aggs: &[A1YearAgg]) -> EscalationCurve {
                 OPP_COST_RATE_BAND[BINDING],
                 mid_price,
                 KryderRate::Stall,
+                run,
             );
             let rb = a1_min_clearance_ratio(
                 aggs,
@@ -353,6 +354,7 @@ fn best_candidate(aggs: &[A1YearAgg]) -> EscalationCurve {
                 OPP_COST_RATE_BAND[BINDING],
                 mid_price,
                 KryderRate::Stall,
+                run,
             );
             ra.total_cmp(&rb)
         })
@@ -364,12 +366,13 @@ fn year_ratios<'a>(
     aggs: &'a [A1YearAgg],
     rate: f64,
     budget: impl Fn(&A1YearAgg) -> u128 + 'a,
+    run: &'a SimParams,
 ) -> impl Iterator<Item = (u64, f64)> + 'a {
     let mid_price = SKL_FIAT_PRICE_BAND[1];
     a1_sustained_years(aggs).map(move |a| {
         (
             a.year,
-            a1_year_clearance_ratio(a, budget(a), rate, mid_price, KryderRate::Stall),
+            a1_year_clearance_ratio(a, budget(a), rate, mid_price, KryderRate::Stall, run),
         )
     })
 }
@@ -507,7 +510,13 @@ pub fn onset_report(
                         let mean = a.whole_fees_atomic as f64 / a.carried_txs as f64;
                         format!(
                             "{:.4}",
-                            10_000.0 * shekyl_economics::FEE_QUANTIZATION_MASK as f64 / mean
+                            10_000.0
+                                * params
+                                    .relay()
+                                    .quantization_mask()
+                                    .expect("a validated relay policy states its lattice")
+                                    as f64
+                                / mean
                         )
                     }
                 })
@@ -531,8 +540,8 @@ pub fn onset_report(
                 .collect::<Vec<_>>()
                 .join(" |"),
         ));
-        let flat = flat_25();
-        let best = best_candidate(aggs);
+        let flat = flat_25(params);
+        let best = best_candidate(aggs, params);
         let shipped = |c: EscalationCurve| move |a: &A1YearAgg| a1_shipped_budget_atomic(a, &c);
 
         let emission_crossover_year = a1_sustained_years(aggs)
@@ -543,20 +552,22 @@ pub fn onset_report(
                     binding,
                     mid_price,
                     KryderRate::Stall,
+                    params,
                 ) < 1.0
             })
             .map(|a| a.year);
         let onset_by_rate = |c: EscalationCurve| -> Vec<Onset> {
             OPP_COST_RATE_BAND
                 .iter()
-                .map(|&rate| onset_of(year_ratios(aggs, rate, shipped(c))))
+                .map(|&rate| onset_of(year_ratios(aggs, rate, shipped(c), params)))
                 .collect()
         };
         let onset_flat_by_rate = onset_by_rate(flat);
         let onset_best_by_rate = onset_by_rate(best);
-        let flat_binding_by_decade: Vec<(u64, f64)> = year_ratios(aggs, binding, shipped(flat))
-            .filter(|(y, _)| DECADES.contains(y))
-            .collect();
+        let flat_binding_by_decade: Vec<(u64, f64)> =
+            year_ratios(aggs, binding, shipped(flat), params)
+                .filter(|(y, _)| DECADES.contains(y))
+                .collect();
         let series = flat_binding_by_decade
             .iter()
             .map(|(_, r)| {
@@ -655,7 +666,7 @@ pub fn lever_report(
     for idx in picks {
         let scenario = &folded[idx];
         let aggs = &scenario.aggs;
-        let best = best_candidate(aggs);
+        let best = best_candidate(aggs, params);
         writeln!(
             out,
             "\n  {} (n = {} at {} y; best band cand. {}%/{})",
@@ -675,18 +686,21 @@ pub fn lever_report(
             format!("R@{}%", binding_rate_pct()),
             "onset"
         )?;
-        for lever in lever_set(best) {
+        for lever in lever_set(best, params) {
             let min_ratio_by_rate: Vec<f64> = OPP_COST_RATE_BAND
                 .iter()
                 .map(|&rate| {
-                    year_ratios(aggs, rate, |a| lever.budget_atomic(a, params))
+                    year_ratios(aggs, rate, |a| lever.budget_atomic(a, params), params)
                         .map(|(_, r)| r)
                         .fold(f64::INFINITY, f64::min)
                 })
                 .collect();
-            let onset_binding = onset_of(year_ratios(aggs, binding, |a| {
-                lever.budget_atomic(a, params)
-            }));
+            let onset_binding = onset_of(year_ratios(
+                aggs,
+                binding,
+                |a| lever.budget_atomic(a, params),
+                params,
+            ));
             let replicas_sustained_binding = min_ratio_by_rate[BINDING] * REPLICAS_PER_SHARD as f64;
             writeln!(
                 out,
@@ -713,7 +727,7 @@ pub fn lever_report(
         .map(|&r| {
             format!(
                 "{:.2} M @{:.0}%",
-                crate::fee_horizon::shards_funded_by_tail(tail, r) / 1e6,
+                crate::fee_horizon::shards_funded_by_tail(tail, r, params) / 1e6,
                 r * 100.0
             )
         })
@@ -725,7 +739,7 @@ pub fn lever_report(
          shape with a longer fuse, not a structural answer. The lever is the bond itself\n\
          ({BOND:.2} SKL locked per {W} B forever, R = {R}): what it is FOR decides its size.",
         funded.join(", "),
-        BOND = shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC as f64 / COIN,
+        BOND = params.archival().bond_floor_atomic as f64 / COIN,
         W = shekyl_types::SHARD_LENGTH.to_raw(),
         R = REPLICAS_PER_SHARD,
     )?;
@@ -761,8 +775,8 @@ mod tests {
         let params = SimParams::default();
         for config in all_scenarios(&params) {
             let aggs = a1_year_aggs(&params, &config);
-            let flat = flat_25();
-            let lever = lever_set(flat)[0];
+            let flat = flat_25(&SimParams::default());
+            let lever = lever_set(flat, &SimParams::default())[0];
             for a in a1_sustained_years(&aggs) {
                 assert_eq!(
                     lever.budget_atomic(a, &params),
@@ -797,8 +811,8 @@ mod tests {
         let params = SimParams::default();
         let config = at_horizon(all_scenarios(&params).remove(0));
         let aggs = a1_year_aggs(&params, &config);
-        let flat = flat_25();
-        let levers = lever_set(flat);
+        let flat = flat_25(&SimParams::default());
+        let levers = lever_set(flat, &SimParams::default());
         let shipped = levers[0];
         let no_decay = levers[9];
         let whole_tail = levers[7];
@@ -915,14 +929,28 @@ mod tests {
             &params,
             params.economic().tx_volume_baseline,
         );
-        let share = crate::escalation::floor_share() as f64 / SCALE as f64;
-        let h = crate::fee_horizon::fee_horizon_years(fee, base, share, 0.10, bytes, w);
+        let share = crate::escalation::floor_share(&SimParams::default()) as f64 / SCALE as f64;
+        let h = crate::fee_horizon::fee_horizon_years(
+            fee,
+            base,
+            share,
+            0.10,
+            bytes,
+            w,
+            &SimParams::default(),
+        );
         let a = aggs.last().expect("60 years");
         // Fee leg alone, so the comparison isolates the closed form.
-        let flat = flat_25();
+        let flat = flat_25(&SimParams::default());
         let fee_only = year_share_atomic(a.whole_burn_atomic, flat.share(a.n));
-        let measured =
-            a1_year_clearance_ratio(a, fee_only, 0.10, SKL_FIAT_PRICE_BAND[1], KryderRate::Stall);
+        let measured = a1_year_clearance_ratio(
+            a,
+            fee_only,
+            0.10,
+            SKL_FIAT_PRICE_BAND[1],
+            KryderRate::Stall,
+            &SimParams::default(),
+        );
         let carried: u128 = aggs.iter().map(|y| y.carried_txs).sum();
         let traffic_years = carried as f64
             / (params.economic().tx_volume_baseline as f64 * params.blocks_per_year() as f64);

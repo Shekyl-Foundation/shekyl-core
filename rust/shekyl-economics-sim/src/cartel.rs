@@ -80,10 +80,11 @@ use core::fmt;
 
 use shekyl_archival_retention::bond_floor::bond_floor_of;
 use shekyl_archival_retention::{
-    reinstate_connect, BadInterval, HoldingsKind, FAILURE_WINDOW_M, FAILURE_WINDOW_N,
-    MAX_HOLDINGS_SHARDS, SLASH_SETTLEMENT_TIP_LAG_EPOCHS,
+    reinstate_connect, BadInterval, HoldingsKind, MAX_HOLDINGS_SHARDS,
+    SLASH_SETTLEMENT_TIP_LAG_EPOCHS,
 };
 
+use crate::engine::SimParams;
 use crate::proxy::{bond_at_risk_skl, epochs_per_year, expected_epochs_to_first_slash};
 
 /// Horizon for TJ-4 first-slash timing.
@@ -132,8 +133,9 @@ const BISECT_STEPS_MAX: u32 = 32;
 /// converts a hard threshold into a soft one, and the cartel needs not just a
 /// share of draws but the ability to *place* them, which the derivation denies.
 #[must_use]
-pub fn no_slash_attestation_fraction() -> f64 {
-    f64::from(FAILURE_WINDOW_N - FAILURE_WINDOW_M + 1) / f64::from(FAILURE_WINDOW_N)
+pub fn no_slash_attestation_fraction(run: &SimParams) -> f64 {
+    f64::from(run.archival().failure_window_n - run.archival().failure_window_m + 1)
+        / f64::from(run.archival().failure_window_n)
 }
 
 /// Expected epochs until a slash absorbs, for a pair credited on fraction `f`
@@ -148,9 +150,9 @@ pub fn no_slash_attestation_fraction() -> f64 {
 /// [`no_slash_attestation_fraction`], not at it: random friendly draws do not
 /// prevent absorption, they defer it.
 #[must_use]
-pub fn expected_epochs_to_slash(f: f64, horizon_epochs: u64) -> Option<f64> {
+pub fn expected_epochs_to_slash(f: f64, horizon_epochs: u64, run: &SimParams) -> Option<f64> {
     let q = (1.0 - f).clamp(0.0, 1.0);
-    expected_epochs_to_first_slash(q, horizon_epochs)
+    expected_epochs_to_first_slash(q, horizon_epochs, run)
 }
 
 /// Memoized `f → E[epochs to slash]` for one horizon.
@@ -159,16 +161,19 @@ pub fn expected_epochs_to_slash(f: f64, horizon_epochs: u64) -> Option<f64> {
 /// bisection, measurable-domain edge). Each evaluation is a full absorbing DP;
 /// caching by a stable quantisation of `f` keeps the report O(distinct f) DPs
 /// instead of O(table × bisection × operands).
-struct EpochCache {
+struct EpochCache<'a> {
     horizon: u64,
+    /// The run whose failure window the DP folds.
+    run: &'a SimParams,
     /// `(quantised f key, E[epochs])` — linear scan is fine at report scale.
     entries: Vec<(u64, Option<f64>)>,
 }
 
-impl EpochCache {
-    fn new(horizon: u64) -> Self {
+impl<'a> EpochCache<'a> {
+    fn new(horizon: u64, run: &'a SimParams) -> Self {
         Self {
             horizon,
+            run,
             entries: Vec::with_capacity(128),
         }
     }
@@ -184,7 +189,7 @@ impl EpochCache {
         if let Some((_, e)) = self.entries.iter().find(|(kk, _)| *kk == k) {
             return *e;
         }
-        let e = expected_epochs_to_slash(f, self.horizon);
+        let e = expected_epochs_to_slash(f, self.horizon, self.run);
         self.entries.push((k, e));
         e
     }
@@ -228,14 +233,10 @@ impl EpochCache {
 /// verified at source 2026-07-29. Nothing bounds WHEN a `Reinstate` may happen —
 /// the interval stays open indefinitely; there is no reinstate deadline.)
 #[must_use]
-pub fn reinstate_structural_downtime_epochs() -> f64 {
+pub fn reinstate_structural_downtime_epochs(run: &SimParams) -> f64 {
     const SLASH_EPOCH: u64 = 100;
     let held = [0u64];
-    let bonded = bond_floor_of(
-        HoldingsKind::ShardSetCompact,
-        held.len(),
-        shekyl_archival_retention::archival_params(),
-    );
+    let bonded = bond_floor_of(HoldingsKind::ShardSetCompact, held.len(), run.archival());
     let open = [BadInterval {
         start_epoch: SLASH_EPOCH,
         end_exclusive: u64::MAX,
@@ -294,25 +295,33 @@ pub fn reinstate_cycle_net_skl(
     reward_per_epoch_skl: f64,
     downtime_epochs: f64,
     horizon_epochs: u64,
+    run: &SimParams,
 ) -> Option<f64> {
-    let epochs = expected_epochs_to_slash(f, horizon_epochs)?;
+    let epochs = expected_epochs_to_slash(f, horizon_epochs, run)?;
     Some(cycle_net_from_epochs(
         f,
         epochs,
         reward_per_epoch_skl,
         reinstate_friction_skl(f, downtime_epochs, reward_per_epoch_skl),
+        run,
     ))
 }
 
-fn cycle_net_from_epochs(f: f64, epochs: f64, reward_per_epoch_skl: f64, friction_skl: f64) -> f64 {
-    epochs * f * reward_per_epoch_skl - (bond_at_risk_skl() + friction_skl)
+fn cycle_net_from_epochs(
+    f: f64,
+    epochs: f64,
+    reward_per_epoch_skl: f64,
+    friction_skl: f64,
+    run: &SimParams,
+) -> f64 {
+    epochs * f * reward_per_epoch_skl - (bond_at_risk_skl(run) + friction_skl)
 }
 
 /// Highest `f` in `[0, BREAKEVEN_F_SEARCH_HI]` at which absorption is still
 /// measurable within the horizon. Monotone in `f` (more friendly draws ⇒ later
 /// slash ⇒ less mass inside a fixed window), so binary search finds the edge
 /// without an O(n) linear probe of the DP.
-fn measurable_f_hi(cache: &mut EpochCache) -> f64 {
+fn measurable_f_hi(cache: &mut EpochCache<'_>) -> f64 {
     if cache.epochs(0.0).is_none() {
         return 0.0;
     }
@@ -344,18 +353,20 @@ fn measurable_f_hi(cache: &mut EpochCache) -> f64 {
 /// once `(E(f) − d) · f · R` clears the bond it stays cleared, because `E` is
 /// monotone in `f`.
 fn breakeven_in_measurable(
-    cache: &mut EpochCache,
+    cache: &mut EpochCache<'_>,
     hi_bound: f64,
     reward_per_epoch_skl: f64,
     downtime_epochs: f64,
+    run: &SimParams,
 ) -> Option<f64> {
-    let net_at = |f: f64, cache: &mut EpochCache| -> Option<f64> {
+    let net_at = |f: f64, cache: &mut EpochCache<'_>| -> Option<f64> {
         let e = cache.epochs(f)?;
         Some(cycle_net_from_epochs(
             f,
             e,
             reward_per_epoch_skl,
             reinstate_friction_skl(f, downtime_epochs, reward_per_epoch_skl),
+            run,
         ))
     };
 
@@ -406,12 +417,19 @@ pub fn reinstate_breakeven_f(
     reward_per_epoch_skl: f64,
     downtime_epochs: f64,
     horizon_epochs: u64,
+    run: &SimParams,
 ) -> Option<f64> {
-    let mut cache = EpochCache::new(horizon_epochs);
+    let mut cache = EpochCache::new(horizon_epochs, run);
     // No measurable absorption even at f = 0 (should not happen for m-of-n).
     cache.epochs(0.0)?;
     let hi_bound = measurable_f_hi(&mut cache);
-    breakeven_in_measurable(&mut cache, hi_bound, reward_per_epoch_skl, downtime_epochs)
+    breakeven_in_measurable(
+        &mut cache,
+        hi_bound,
+        reward_per_epoch_skl,
+        downtime_epochs,
+        run,
+    )
 }
 
 /// TJ-7 *marginal* gain: extra share of shard pool `g` that `n_sybil` bonds
@@ -441,16 +459,17 @@ pub fn sybil_breakeven_opportunity_rate(
     n_sybil: u64,
     h_honest: u64,
     pool_g_per_epoch_skl: f64,
+    run: &SimParams,
 ) -> Option<f64> {
     if n_sybil <= 1 {
         return None;
     }
-    let locked = (n_sybil - 1) as f64 * bond_at_risk_skl();
+    let locked = (n_sybil - 1) as f64 * bond_at_risk_skl(run);
     if locked <= 0.0 {
         return None;
     }
     let annual_gain =
-        sybil_dilution_gain(n_sybil, h_honest, pool_g_per_epoch_skl) * epochs_per_year();
+        sybil_dilution_gain(n_sybil, h_honest, pool_g_per_epoch_skl) * epochs_per_year(run);
     Some(annual_gain / locked)
 }
 
@@ -467,6 +486,7 @@ fn write_sybil_table(
     out: &mut impl fmt::Write,
     pool_g_per_epoch_skl: f64,
     label: &str,
+    run: &SimParams,
 ) -> fmt::Result {
     writeln!(
         out,
@@ -481,7 +501,7 @@ fn write_sybil_table(
     )?;
     for &(n, h) in &[(2u64, 1u64), (5, 1), (5, 5), (20, 5), (100, 5), (100, 50)] {
         let gain = sybil_dilution_gain(n, h, pool_g_per_epoch_skl);
-        let rate = sybil_breakeven_opportunity_rate(n, h, pool_g_per_epoch_skl);
+        let rate = sybil_breakeven_opportunity_rate(n, h, pool_g_per_epoch_skl, run);
         writeln!(
             out,
             "{:<8} {:>8} {:>16.5} {:>22}",
@@ -507,10 +527,11 @@ pub fn tj_inequalities_report(
     out: &mut impl fmt::Write,
     reward_median_per_epoch_skl: f64,
     reward_max_per_epoch_skl: f64,
+    run: &SimParams,
 ) -> fmt::Result {
     let horizon = TJ4_ABSORPTION_HORIZON_EPOCHS;
-    let ceiling = no_slash_attestation_fraction();
-    let bond = bond_at_risk_skl();
+    let ceiling = no_slash_attestation_fraction(run);
+    let bond = bond_at_risk_skl(run);
 
     writeln!(
         out,
@@ -524,8 +545,8 @@ pub fn tj_inequalities_report(
          makes the slash/Reinstate cycle and the dilution MORE profitable -- so max is\n\
          the ALARM-RAISING end. Tables below run the MEDIAN ({RM:.4} SKL/shard/epoch);\n\
          the max ({RX:.4}) is reported as the bound beneath each.",
-        M = FAILURE_WINDOW_M,
-        N = FAILURE_WINDOW_N,
+        M = run.archival().failure_window_m,
+        N = run.archival().failure_window_n,
         BF = bond,
         C = ceiling,
         RM = reward_median_per_epoch_skl,
@@ -540,7 +561,7 @@ pub fn tj_inequalities_report(
          at attestation fraction f > 0 — so the derived quantity is a break-even f.\n\
          Earnings assume sole credited holder (r = 1) — attacker-favourable."
     )?;
-    let d_struct = reinstate_structural_downtime_epochs();
+    let d_struct = reinstate_structural_downtime_epochs(run);
     writeln!(
         out,
         "  FRICTION (derived, not assumed). What a Reinstate IS (gate-4 SS 3.4/P2B-9):\n\
@@ -576,13 +597,13 @@ pub fn tj_inequalities_report(
     // One shared cache for the table, the headline break-evens, and the remedy
     // curve: E[f] depends on neither the reward nor the downtime, and the
     // measurable-edge probe (the slowest, highest-f DPs) runs once.
-    let mut cache = EpochCache::new(horizon);
+    let mut cache = EpochCache::new(horizon, run);
     for &f in &REPORT_F_GRID {
         match cache.epochs(f) {
             Some(e) => {
                 let earnings = e * f * reward_median_per_epoch_skl;
                 let friction = reinstate_friction_skl(f, d_struct, reward_median_per_epoch_skl);
-                let net = cycle_net_from_epochs(f, e, reward_median_per_epoch_skl, friction);
+                let net = cycle_net_from_epochs(f, e, reward_median_per_epoch_skl, friction, run);
                 writeln!(
                     out,
                     "{:<10.3} {:>14.2} {:>16.4} {:>14.4} {:>16.4}",
@@ -602,8 +623,13 @@ pub fn tj_inequalities_report(
     } else {
         0.0
     };
-    let be_med =
-        breakeven_in_measurable(&mut cache, hi_bound, reward_median_per_epoch_skl, d_struct);
+    let be_med = breakeven_in_measurable(
+        &mut cache,
+        hi_bound,
+        reward_median_per_epoch_skl,
+        d_struct,
+        run,
+    );
     match be_med {
         Some(f) => writeln!(
             out,
@@ -625,7 +651,13 @@ pub fn tj_inequalities_report(
              attestation-resistance (the draw)."
         )?,
     }
-    let be_max = breakeven_in_measurable(&mut cache, hi_bound, reward_max_per_epoch_skl, d_struct);
+    let be_max = breakeven_in_measurable(
+        &mut cache,
+        hi_bound,
+        reward_max_per_epoch_skl,
+        d_struct,
+        run,
+    );
     writeln!(
         out,
         "     bound at the MAX operand ({RX:.4} SKL/shard/epoch): break-even f = {BX}.\n\
@@ -663,7 +695,7 @@ pub fn tj_inequalities_report(
 
     // The remedy curve the (m,n) re-pin needs: break-even f as a function of a
     // hypothetical post-slash cooldown, every cell off the one shared cache.
-    let weeks_per_epoch = 52.0 / epochs_per_year();
+    let weeks_per_epoch = 52.0 / epochs_per_year(run);
     writeln!(
         out,
         "\n  REMEDY CURVE — break-even f vs a hypothetical POST-SLASH COOLDOWN c\n\
@@ -681,8 +713,9 @@ pub fn tj_inequalities_report(
     )?;
     for &c in &[0u64, 1, 2, 4, 8, 16, 32, 64] {
         let d = d_struct + c as f64;
-        let med = breakeven_in_measurable(&mut cache, hi_bound, reward_median_per_epoch_skl, d);
-        let mx = breakeven_in_measurable(&mut cache, hi_bound, reward_max_per_epoch_skl, d);
+        let med =
+            breakeven_in_measurable(&mut cache, hi_bound, reward_median_per_epoch_skl, d, run);
+        let mx = breakeven_in_measurable(&mut cache, hi_bound, reward_max_per_epoch_skl, d, run);
         writeln!(
             out,
             "{:<10} {:>8.1} {:>20} {:>20}",
@@ -730,7 +763,7 @@ pub fn tj_inequalities_report(
          excluded longer than it can possibly earn — which is why the median and\n\
          max columns converge once c + {D:.0} > {M}.",
         D = d_struct,
-        M = FAILURE_WINDOW_M,
+        M = run.archival().failure_window_m,
     )?;
 
     writeln!(
@@ -743,8 +776,8 @@ pub fn tj_inequalities_report(
          below which it pays. Same operand-direction rule as TJ-4: median first,\n\
          max as the alarm-raising bound."
     )?;
-    write_sybil_table(out, reward_median_per_epoch_skl, "MEDIAN")?;
-    write_sybil_table(out, reward_max_per_epoch_skl, "MAX")?;
+    write_sybil_table(out, reward_median_per_epoch_skl, "MEDIAN", run)?;
+    write_sybil_table(out, reward_max_per_epoch_skl, "MAX", run)?;
     writeln!(
         out,
         "  -> the attack pays iff the cartel's real cost of locked capital is BELOW\n\
@@ -773,15 +806,20 @@ mod tests {
         // to forgo. Net is exactly -bond_at_risk at every (reward, downtime).
         for &reward in &[0.0_f64, 1.0, 100.0, 10_000.0] {
             for &downtime in &[0.0_f64, 1.0, 1_000.0] {
-                let net =
-                    reinstate_cycle_net_skl(0.0, reward, downtime, TJ4_ABSORPTION_HORIZON_EPOCHS)
-                        .expect("absorbs at f=0");
+                let net = reinstate_cycle_net_skl(
+                    0.0,
+                    reward,
+                    downtime,
+                    TJ4_ABSORPTION_HORIZON_EPOCHS,
+                    &SimParams::default(),
+                )
+                .expect("absorbs at f=0");
                 assert!(
                     net < 0.0,
                     "f=0 must lose the bond at reward {reward}, got net {net}"
                 );
                 assert!(
-                    (net + bond_at_risk_skl()).abs() < 1e-9,
+                    (net + bond_at_risk_skl(&SimParams::default())).abs() < 1e-9,
                     "f=0 earnings and friction must both be exactly zero"
                 );
             }
@@ -800,7 +838,7 @@ mod tests {
         // connect grew a cooldown gate that now out-binds reachability —
         // re-read the remedy curve's baseline from the new floor; do not
         // patch the pin without doing so.
-        assert!((reinstate_structural_downtime_epochs() - 2.0).abs() < 1e-12);
+        assert!((reinstate_structural_downtime_epochs(&SimParams::default()) - 2.0).abs() < 1e-12);
     }
 
     #[test]
@@ -811,10 +849,22 @@ mod tests {
         // downtime move the cycle net by d*f*R — at f = 0.05 that is 20x
         // smaller than the d*R the full-service pricing would charge.
         let (f, r, d) = (0.05, 2.0, 8.0);
-        let base =
-            reinstate_cycle_net_skl(f, r, 0.0, TJ4_ABSORPTION_HORIZON_EPOCHS).expect("absorbs");
-        let with =
-            reinstate_cycle_net_skl(f, r, d, TJ4_ABSORPTION_HORIZON_EPOCHS).expect("absorbs");
+        let base = reinstate_cycle_net_skl(
+            f,
+            r,
+            0.0,
+            TJ4_ABSORPTION_HORIZON_EPOCHS,
+            &SimParams::default(),
+        )
+        .expect("absorbs");
+        let with = reinstate_cycle_net_skl(
+            f,
+            r,
+            d,
+            TJ4_ABSORPTION_HORIZON_EPOCHS,
+            &SimParams::default(),
+        )
+        .expect("absorbs");
         let delta = base - with;
         assert!(
             (delta - d * f * r).abs() < 1e-9,
@@ -842,8 +892,8 @@ mod tests {
         let r = 2.4;
         let mut prev = -1.0_f64;
         for &d in &[1.0_f64, 3.0, 9.0, 17.0] {
-            let b =
-                reinstate_breakeven_f(r, d, horizon).expect("break-even exists at modest downtime");
+            let b = reinstate_breakeven_f(r, d, horizon, &SimParams::default())
+                .expect("break-even exists at modest downtime");
             assert!(
                 b > prev,
                 "break-even must rise with downtime: {b} !> {prev}"
@@ -861,17 +911,17 @@ mod tests {
         // it is deferred, not prevented. If this ever starts returning None at
         // the ceiling, the draw has become placeable and §9.6's hard reading
         // would be the correct one again.
-        let ceiling = no_slash_attestation_fraction();
+        let ceiling = no_slash_attestation_fraction(&SimParams::default());
         let h = TJ4_ABSORPTION_HORIZON_EPOCHS;
-        let at = expected_epochs_to_slash(ceiling, h);
-        let above = expected_epochs_to_slash(ceiling + 0.05, h);
+        let at = expected_epochs_to_slash(ceiling, h, &SimParams::default());
+        let above = expected_epochs_to_slash(ceiling + 0.05, h, &SimParams::default());
         assert!(at.is_some(), "random draws at the ceiling still absorb");
         assert!(above.is_some(), "and above it");
         // Deferred, though: the wait grows with f.
         assert!(above.unwrap() > at.unwrap());
         // Far above, the horizon truncates and we report None rather than a
         // horizon artifact.
-        assert!(expected_epochs_to_slash(0.95, h).is_none());
+        assert!(expected_epochs_to_slash(0.95, h, &SimParams::default()).is_none());
     }
 
     #[test]
@@ -881,8 +931,9 @@ mod tests {
         let mut prev = 0.0;
         for i in 0..=8 {
             let f = f64::from(i) * 0.02;
-            let e = expected_epochs_to_slash(f, TJ4_ABSORPTION_HORIZON_EPOCHS)
-                .expect("absorbs below ceiling");
+            let e =
+                expected_epochs_to_slash(f, TJ4_ABSORPTION_HORIZON_EPOCHS, &SimParams::default())
+                    .expect("absorbs below ceiling");
             assert!(e >= prev, "E[epochs] fell at f={f}: {e} < {prev}");
             prev = e;
         }
@@ -897,8 +948,13 @@ mod tests {
         // order of magnitude so a DP or bond-scale regression cannot silently
         // move the binding claim. Exact digit drift inside the band is fine;
         // leaving the band is not.
-        let f_med = reinstate_breakeven_f(2.4156, 0.0, TJ4_ABSORPTION_HORIZON_EPOCHS)
-            .expect("must break even at the median representative reward");
+        let f_med = reinstate_breakeven_f(
+            2.4156,
+            0.0,
+            TJ4_ABSORPTION_HORIZON_EPOCHS,
+            &SimParams::default(),
+        )
+        .expect("must break even at the median representative reward");
         assert!(
             (0.020..0.040).contains(&f_med),
             "median-reward break-even f={f_med} drifted from ~0.027"
@@ -907,23 +963,41 @@ mod tests {
         // At a high reward the break-even f collapses toward zero but stays > 0
         // (f = 0 earns nothing). At a reward so low the bond is many epochs of
         // flow, the cycle never pays inside the measurable domain.
-        let f_hi = reinstate_breakeven_f(100.0, 0.0, TJ4_ABSORPTION_HORIZON_EPOCHS)
-            .expect("high reward must still have a positive break-even f");
+        let f_hi = reinstate_breakeven_f(
+            100.0,
+            0.0,
+            TJ4_ABSORPTION_HORIZON_EPOCHS,
+            &SimParams::default(),
+        )
+        .expect("high reward must still have a positive break-even f");
         assert!(f_hi > 0.0 && f_hi < 0.01, "high-reward f={f_hi}");
 
         // Bond is 0.75 SKL; at 0.001 SKL/epoch the bond is 750 epochs of flow —
         // far above E[T]·f for any measurable f.
         assert!(
-            reinstate_breakeven_f(0.001, 0.0, TJ4_ABSORPTION_HORIZON_EPOCHS).is_none(),
+            reinstate_breakeven_f(
+                0.001,
+                0.0,
+                TJ4_ABSORPTION_HORIZON_EPOCHS,
+                &SimParams::default()
+            )
+            .is_none(),
             "tiny reward must not cover the bond"
         );
     }
 
     #[test]
     fn epoch_cache_agrees_with_direct_evaluation() {
-        let mut cache = EpochCache::new(TJ4_ABSORPTION_HORIZON_EPOCHS);
-        for &f in &[0.0_f64, 0.05, 0.15, no_slash_attestation_fraction()] {
-            let direct = expected_epochs_to_slash(f, TJ4_ABSORPTION_HORIZON_EPOCHS);
+        let run = SimParams::default();
+        let mut cache = EpochCache::new(TJ4_ABSORPTION_HORIZON_EPOCHS, &run);
+        for &f in &[
+            0.0_f64,
+            0.05,
+            0.15,
+            no_slash_attestation_fraction(&SimParams::default()),
+        ] {
+            let direct =
+                expected_epochs_to_slash(f, TJ4_ABSORPTION_HORIZON_EPOCHS, &SimParams::default());
             let cached = cache.epochs(f);
             match (direct, cached) {
                 (Some(a), Some(b)) => {
@@ -971,22 +1045,23 @@ mod tests {
         // Cost linear in N against a saturating gain => the break-even rate
         // falls, which is what gives the attack a finite optimum.
         let g = 1.0;
-        let r2 = sybil_breakeven_opportunity_rate(2, 5, g).expect("N=2");
-        let r100 = sybil_breakeven_opportunity_rate(100, 5, g).expect("N=100");
+        let r2 = sybil_breakeven_opportunity_rate(2, 5, g, &SimParams::default()).expect("N=2");
+        let r100 =
+            sybil_breakeven_opportunity_rate(100, 5, g, &SimParams::default()).expect("N=100");
         assert!(
             r100 < r2,
             "break-even rate must fall with N: {r100} !< {r2}"
         );
-        assert!(sybil_breakeven_opportunity_rate(1, 5, g).is_none());
+        assert!(sybil_breakeven_opportunity_rate(1, 5, g, &SimParams::default()).is_none());
     }
 
     #[test]
     fn bond_at_risk_is_the_canonical_floor() {
         // No local bond_floor_skl alias: the cartel arm prices the same
         // per-shard floor A5 exposes through bond_at_risk_skl.
-        assert!(bond_at_risk_skl() > 0.0);
+        assert!(bond_at_risk_skl(&SimParams::default()) > 0.0);
         let floor = shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC as f64
             / crate::burden::COIN as f64;
-        assert!((bond_at_risk_skl() - floor).abs() < 1e-12);
+        assert!((bond_at_risk_skl(&SimParams::default()) - floor).abs() < 1e-12);
     }
 }

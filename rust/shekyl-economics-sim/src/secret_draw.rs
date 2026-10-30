@@ -36,15 +36,23 @@ use shekyl_archival_retention::{
     FAILURE_WINDOW_N, SETTLEMENT_EPOCH_BLOCKS,
 };
 
+use crate::engine::SimParams;
 use crate::mn_feasibility::{
     default_sources, false_slash_bound, max_holder_exposure, FeasibilityTargets, BOND_LIFE_EPOCHS,
 };
 
 /// Draws counted per pair at settlement, and the count a pair must reach to
-/// be observed at all: the daemon's constant, in the width this module's
-/// per-pair counts use.
-pub const COUNTED_DRAWS: u8 = 3;
-const _: () = assert!(COUNTED_DRAWS as usize == shekyl_types::archival::COUNTED_DRAWS);
+/// be observed at all: the daemon's constant
+/// ([`shekyl_types::archival::COUNTED_DRAWS`]), imported, in the width this
+/// module's per-pair counts use. The assert refuses a count past that width
+/// rather than truncating it.
+pub const COUNTED_DRAWS: u8 = {
+    assert!(shekyl_types::archival::COUNTED_DRAWS <= u8::MAX as usize);
+    // CLIPPY: cast_possible_truncation — the assert above bounds it to u8.
+    #[allow(clippy::cast_possible_truncation)]
+    let counted = shekyl_types::archival::COUNTED_DRAWS as u8;
+    counted
+};
 
 /// The bar, in per-mille of pairs short of [`COUNTED_DRAWS`] at 10 %
 /// dropout. PROVISIONAL (the brief's ruling 6); graded on the maximum over
@@ -134,7 +142,8 @@ pub fn window_check(short_permille: f64) -> WindowCheck {
         miss_given_observation: q,
         false_slash_bound: per_pair,
         false_slash_max_holder: max_holder,
-        clears_floor: max_holder <= FeasibilityTargets::operative_defaults().false_slash_target,
+        clears_floor: max_holder
+            <= FeasibilityTargets::operative_defaults(&SimParams::default()).false_slash_target,
         observation_rate,
         epochs_to_m_misses: f64::from(FAILURE_WINDOW_M) / observation_rate,
     }
@@ -194,7 +203,8 @@ pub fn retry_row(correlation: f64) -> RetryRow {
         miss_given_observation: q,
         false_slash_bound: per_pair,
         false_slash_max_holder: max_holder,
-        clears_floor: max_holder <= FeasibilityTargets::operative_defaults().false_slash_target,
+        clears_floor: max_holder
+            <= FeasibilityTargets::operative_defaults(&SimParams::default()).false_slash_target,
     }
 }
 
@@ -202,7 +212,8 @@ pub fn retry_row(correlation: f64) -> RetryRow {
 fn clears_at_read_failure(x: f64) -> bool {
     let q = missed_two_of_three(x);
     let per_pair = false_slash_bound(FAILURE_WINDOW_M, FAILURE_WINDOW_N, q, BOND_LIFE_EPOCHS);
-    max_holder_exposure(per_pair) <= FeasibilityTargets::operative_defaults().false_slash_target
+    max_holder_exposure(per_pair)
+        <= FeasibilityTargets::operative_defaults(&SimParams::default()).false_slash_target
 }
 
 /// The largest probability of a draw going unread, after every try, at
@@ -277,7 +288,7 @@ pub fn render_window_figures(out: &mut impl std::fmt::Write) -> std::fmt::Result
          holdings, against a per-archiver budget of {:.0e}: {}",
         w.false_slash_bound,
         w.false_slash_max_holder,
-        FeasibilityTargets::operative_defaults().false_slash_target,
+        FeasibilityTargets::operative_defaults(&SimParams::default()).false_slash_target,
         if w.clears_floor { "clears" } else { "EXCEEDS" }
     )?;
     writeln!(
@@ -437,7 +448,8 @@ mod tests {
         // the per-pair figure would clear there; this one does not. The
         // point is found from the window, so it moves with a re-pin instead
         // of pinning today's outcome.
-        let budget = FeasibilityTargets::operative_defaults().false_slash_target;
+        let budget =
+            FeasibilityTargets::operative_defaults(&SimParams::default()).false_slash_target;
         let x = clearing_read_failure() + 1e-6;
         let per_pair = false_slash_bound(
             FAILURE_WINDOW_M,

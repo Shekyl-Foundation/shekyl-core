@@ -34,8 +34,9 @@
 use shekyl_archival_retention::reward_arithmetic::ARCHIVAL_PROVISIONAL_CURVE;
 use shekyl_archival_retention::{
     curve_milli, scarcity_micro, work_milli_from_micro, BandedCurveParams,
-    ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
 };
+
+use crate::engine::SimParams;
 
 /// The provisional consensus reward curve, production's own constant.
 #[must_use]
@@ -49,11 +50,6 @@ pub fn reward_curve() -> BandedCurveParams {
 /// honest and attacker shards removes that incumbency advantage — the strongest
 /// case for the stuffer (so a passing gate is robust to it).
 pub const AGE_MILLI: u64 = 0;
-
-/// Age-weight `age_weight_milli`, production's. Irrelevant at [`AGE_MILLI`]
-/// `= 0` (`g` collapses to the base regardless), carried explicitly so the
-/// age-0 choice — not a hidden default — is what zeroes the incumbency term.
-pub const AGE_WEIGHT_MILLI: u64 = ARCHIVAL_REWARD_AGE_WEIGHT_MILLI;
 
 /// DQ-2H replica-count tail: `(per-mille of shards, r_market)` bands — a common
 /// core at the target replica count plus a stranded (under-replicated) head and a
@@ -94,7 +90,12 @@ pub fn shard_r_market(i: u64, tail: &[(u32, u64)]) -> u64 {
 /// the concentration a large `holdings_per_bond` causes — work past the knee,
 /// capped — is modelled exactly, not approximated.
 #[must_use]
-pub fn honest_sigma_work_milli(n: u64, tail: &[(u32, u64)], holdings_per_bond: u64) -> u64 {
+pub fn honest_sigma_work_milli(
+    n: u64,
+    tail: &[(u32, u64)],
+    holdings_per_bond: u64,
+    run: &SimParams,
+) -> u64 {
     let holdings = holdings_per_bond.max(1);
     let curve = reward_curve();
     let mut sigma = 0u64;
@@ -107,7 +108,7 @@ pub fn honest_sigma_work_milli(n: u64, tail: &[(u32, u64)], holdings_per_bond: u
     };
     for i in 0..n {
         let r = shard_r_market(i, tail);
-        let s = scarcity_micro(r, AGE_MILLI, AGE_WEIGHT_MILLI);
+        let s = scarcity_micro(r, AGE_MILLI, run.archival().reward_age_weight_milli);
         // One slot per replica of this shard.
         for _ in 0..r {
             bond_micro = bond_micro.saturating_add(s);
@@ -133,14 +134,19 @@ pub fn honest_sigma_work_milli(n: u64, tail: &[(u32, u64)], holdings_per_bond: u
 /// and it should coincide with the small-bond (uncapped) column, which is the
 /// prediction OQ-4 tests.
 #[must_use]
-pub fn honest_sigma_work_milli_deleted(n: u64, tail: &[(u32, u64)], holdings_per_bond: u64) -> u64 {
+pub fn honest_sigma_work_milli_deleted(
+    n: u64,
+    tail: &[(u32, u64)],
+    holdings_per_bond: u64,
+    run: &SimParams,
+) -> u64 {
     let holdings = holdings_per_bond.max(1);
     let mut sigma = 0u64;
     let mut bond_micro = 0u64;
     let mut in_bond = 0u64;
     for i in 0..n {
         let r = shard_r_market(i, tail);
-        let s = scarcity_micro(r, AGE_MILLI, AGE_WEIGHT_MILLI);
+        let s = scarcity_micro(r, AGE_MILLI, run.archival().reward_age_weight_milli);
         for _ in 0..r {
             bond_micro = bond_micro.saturating_add(s);
             in_bond += 1;
@@ -163,10 +169,10 @@ pub fn honest_sigma_work_milli_deleted(n: u64, tail: &[(u32, u64)], holdings_per
 /// `holdings_per_bond`. The attacker picks a *small* grouping to stay under the
 /// plateau knee (full credit) — attacker-favouring; the same production chain.
 #[must_use]
-pub fn attacker_capped_work_milli(delta: u64, holdings_per_bond: u64) -> u64 {
+pub fn attacker_capped_work_milli(delta: u64, holdings_per_bond: u64, run: &SimParams) -> u64 {
     let holdings = holdings_per_bond.max(1);
     let curve = reward_curve();
-    let s = scarcity_micro(1, AGE_MILLI, AGE_WEIGHT_MILLI); // r = 1, sole first-mover
+    let s = scarcity_micro(1, AGE_MILLI, run.archival().reward_age_weight_milli); // r = 1, sole first-mover
     let mut sigma = 0u64;
     let mut remaining = delta;
     while remaining > 0 {
@@ -201,14 +207,17 @@ mod tests {
         // r-independence still holds up to the loss, so a wildly different tail
         // lands within a milli-per-shard of the same value.
         let n = 5_000u64;
-        let sigma = honest_sigma_work_milli(n, DQ2H_TAIL, 1);
+        let sigma = honest_sigma_work_milli(n, DQ2H_TAIL, 1, &SimParams::default());
         assert!(
             sigma <= n * 1_000 && sigma >= n * 990,
             "uncapped Σwork must be ~n·1000 (below by the per-slot floor): {sigma}"
         );
         // Flat all-r=6 tail: each slot floors 1e6/6 = 166_666 µ → 166 m, ×6 = 996.
         let flat_tail: &[(u32, u64)] = &[(1000, 6)];
-        assert_eq!(honest_sigma_work_milli(n, flat_tail, 1), n * 996);
+        assert_eq!(
+            honest_sigma_work_milli(n, flat_tail, 1, &SimParams::default()),
+            n * 996
+        );
         // The two tails agree to within the per-shard flooring slack (< 1000/shard).
         assert!(sigma.abs_diff(n * 996) < n);
     }
@@ -218,8 +227,8 @@ mod tests {
         // Big holdings push each bond far past the plateau → capped, so Σwork is
         // strictly below the uncapped n × base. This is the concentration lever.
         let n = 5_000u64;
-        let uncapped = honest_sigma_work_milli(n, DQ2H_TAIL, 1);
-        let capped = honest_sigma_work_milli(n, DQ2H_TAIL, 512);
+        let uncapped = honest_sigma_work_milli(n, DQ2H_TAIL, 1, &SimParams::default());
+        let capped = honest_sigma_work_milli(n, DQ2H_TAIL, 512, &SimParams::default());
         assert!(
             capped < uncapped,
             "large bonds must be curve-capped: capped={capped} uncapped={uncapped}"
@@ -234,16 +243,16 @@ mod tests {
         // holdings-invariant, since linear work does not care how bonds are grouped
         // (up to per-bond flooring).
         let n = 5_000u64;
-        let small_capped = honest_sigma_work_milli(n, DQ2H_TAIL, 4);
-        let small_deleted = honest_sigma_work_milli_deleted(n, DQ2H_TAIL, 4);
+        let small_capped = honest_sigma_work_milli(n, DQ2H_TAIL, 4, &SimParams::default());
+        let small_deleted = honest_sigma_work_milli_deleted(n, DQ2H_TAIL, 4, &SimParams::default());
         assert_eq!(
             small_capped, small_deleted,
             "at small bonds the curve is inert, so deletion changes nothing"
         );
         // The capped column collapses onto it: deletion removes the concentration
         // penalty a large naive bond suffered.
-        let big_capped = honest_sigma_work_milli(n, DQ2H_TAIL, 512);
-        let big_deleted = honest_sigma_work_milli_deleted(n, DQ2H_TAIL, 512);
+        let big_capped = honest_sigma_work_milli(n, DQ2H_TAIL, 512, &SimParams::default());
+        let big_deleted = honest_sigma_work_milli_deleted(n, DQ2H_TAIL, 512, &SimParams::default());
         assert!(
             big_deleted > big_capped,
             "deletion must lift the capped case: {big_deleted} !> {big_capped}"
@@ -256,8 +265,8 @@ mod tests {
         // bond for the same Δn — why the attacker splits (and we model them doing
         // so, attacker-favouring).
         let delta = 1_000u64;
-        let small = attacker_capped_work_milli(delta, 4);
-        let big = attacker_capped_work_milli(delta, delta);
+        let small = attacker_capped_work_milli(delta, 4, &SimParams::default());
+        let big = attacker_capped_work_milli(delta, delta, &SimParams::default());
         assert!(
             small > big,
             "small grouping must dodge the cap: {small} !> {big}"

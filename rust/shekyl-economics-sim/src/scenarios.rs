@@ -1,5 +1,4 @@
 use crate::engine::{ArchivalLockModel, ScenarioConfig, SimParams, StakeSchedule, VolumeSchedule};
-use shekyl_archival_retention::{ARCHIVAL_BOND_FLOOR_ATOMIC, SETTLEMENT_EPOCH_BLOCKS};
 
 fn default_stake_schedule() -> StakeSchedule {
     StakeSchedule {
@@ -350,9 +349,10 @@ fn lock_model(
     blocks_per_shard: u64,
     n_p: u64,
     admission_min: u64,
+    run: &SimParams,
 ) -> ArchivalLockModel {
     ArchivalLockModel {
-        bond_floor_atomic: ARCHIVAL_BOND_FLOOR_ATOMIC,
+        bond_floor_atomic: run.archival().bond_floor_atomic,
         replicas_per_shard: replicas,
         blocks_per_shard,
         n_p,
@@ -392,8 +392,8 @@ fn gate7_asserted_comparator(
 }
 
 pub fn gate7_scenarios(params: &SimParams) -> Vec<ScenarioConfig> {
-    let seb = SETTLEMENT_EPOCH_BLOCKS;
-    let floor = ARCHIVAL_BOND_FLOOR_ATOMIC;
+    let seb = params.archival().settlement_epoch_blocks;
+    let floor = params.archival().bond_floor_atomic;
     let floor_coins = floor as f64 / crate::burden::COIN as f64;
     vec![
         // Arm A (bonds-only) across the N_P envelope.
@@ -402,21 +402,21 @@ pub fn gate7_scenarios(params: &SimParams) -> Vec<ScenarioConfig> {
             "gate7_bonds_only_lean",
             "Arm A bonds-only; lean attractor (N_P=79, R=6, shard per SEB)",
             false,
-            lock_model(R_FULL, seb, NP_LEAN, 0),
+            lock_model(R_FULL, seb, NP_LEAN, 0, params),
         ),
         gate7_scenario(
             params,
             "gate7_bonds_only_thick",
             "Arm A bonds-only; thick population (N_P=154, R=6)",
             false,
-            lock_model(R_FULL, seb, NP_THICK, 0),
+            lock_model(R_FULL, seb, NP_THICK, 0, params),
         ),
         gate7_scenario(
             params,
             "gate7_bonds_only_thin",
             "Arm A bonds-only; fee-era-thinned (N_P=40, R=4 partial deep coverage)",
             false,
-            lock_model(R_THIN, seb, NP_THIN, 0),
+            lock_model(R_THIN, seb, NP_THIN, 0, params),
         ),
         // Shard-geometry sensitivity: geometry is not consensus-pinned, so
         // show the read is robust to a 10x denser shard cadence.
@@ -425,7 +425,7 @@ pub fn gate7_scenarios(params: &SimParams) -> Vec<ScenarioConfig> {
             "gate7_bonds_only_lean_dense_shards",
             "Arm A bonds-only; 10x denser shard geometry (shard per 1_000 blocks)",
             false,
-            lock_model(R_FULL, seb / 10, NP_LEAN, 0),
+            lock_model(R_FULL, seb / 10, NP_LEAN, 0, params),
         ),
         // Arm B (hard admission lock) MIN grid, order-of-magnitude around the
         // bond floor, lean population.
@@ -437,7 +437,7 @@ pub fn gate7_scenarios(params: &SimParams) -> Vec<ScenarioConfig> {
                 floor_coins
             ),
             false,
-            lock_model(R_FULL, seb, NP_LEAN, floor),
+            lock_model(R_FULL, seb, NP_LEAN, floor, params),
         ),
         gate7_scenario(
             params,
@@ -447,7 +447,7 @@ pub fn gate7_scenarios(params: &SimParams) -> Vec<ScenarioConfig> {
                 floor_coins * 100.0
             ),
             false,
-            lock_model(R_FULL, seb, NP_LEAN, floor * 100),
+            lock_model(R_FULL, seb, NP_LEAN, floor * 100, params),
         ),
         gate7_scenario(
             params,
@@ -457,7 +457,7 @@ pub fn gate7_scenarios(params: &SimParams) -> Vec<ScenarioConfig> {
                 floor_coins * 10_000.0
             ),
             false,
-            lock_model(R_FULL, seb, NP_LEAN, floor * 10_000),
+            lock_model(R_FULL, seb, NP_LEAN, floor * 10_000, params),
         ),
         // Volume-stress reads (burn gauge under load) for arm A and the
         // largest arm-B MIN.
@@ -466,14 +466,14 @@ pub fn gate7_scenarios(params: &SimParams) -> Vec<ScenarioConfig> {
             "gate7_bonds_only_lean_growth",
             "Arm A bonds-only; lean; 20%/yr volume growth (burn under load)",
             true,
-            lock_model(R_FULL, seb, NP_LEAN, 0),
+            lock_model(R_FULL, seb, NP_LEAN, 0, params),
         ),
         gate7_scenario(
             params,
             "gate7_admission_min_10000x_lean_growth",
             "Arm B 10_000x MIN; lean; 20%/yr volume growth",
             true,
-            lock_model(R_FULL, seb, NP_LEAN, floor * 10_000),
+            lock_model(R_FULL, seb, NP_LEAN, floor * 10_000, params),
         ),
         // Comparators: the assumption being re-priced.
         gate7_asserted_comparator(params, false, "gate7_comparator_asserted_stake"),

@@ -19,7 +19,6 @@ use std::fmt;
 
 use shekyl_economics::{
     calc_release_multiplier, fee_correction, params::SCALE, EconomicParams, TxVolume,
-    RELAY_FLOOR_REFERENCE_TX_WEIGHT, STANDARD_RUNG_OVER_ECONOMY,
 };
 
 use crate::engine::SimParams;
@@ -116,7 +115,12 @@ fn rho_scaled(block: &GateBlock, params: &EconomicParams) -> u64 {
 /// `M == 0` does not admit: the penalty divides by the long-term median.
 /// A product that does not fit in `u128` does not admit either. The
 /// weights and medians a fold actually prices sit far under that rail.
-fn admits_one_more(block: &GateBlock, rho_scaled: u64, rung_over_economy: u64) -> bool {
+fn admits_one_more(
+    block: &GateBlock,
+    rho_scaled: u64,
+    rung_over_economy: u64,
+    run: &SimParams,
+) -> bool {
     let long_term = block.long_term_median;
     if long_term == 0 {
         return false;
@@ -132,7 +136,7 @@ fn admits_one_more(block: &GateBlock, rho_scaled: u64, rung_over_economy: u64) -
     };
     let Some(right) = u128::from(rung_over_economy)
         .checked_mul(u128::from(rho_scaled))
-        .and_then(|product| product.checked_mul(u128::from(RELAY_FLOOR_REFERENCE_TX_WEIGHT)))
+        .and_then(|product| product.checked_mul(u128::from(run.relay().ref_tx_weight)))
         .and_then(|product| product.checked_mul(effective))
         .and_then(|product| product.checked_mul(effective))
     else {
@@ -142,8 +146,8 @@ fn admits_one_more(block: &GateBlock, rho_scaled: u64, rung_over_economy: u64) -
 }
 
 /// `θ = w / (rung · w_ref)`: the admission test when the two medians are equal.
-fn theta_at_equal_medians(weight: u64) -> f64 {
-    weight as f64 / (STANDARD_RUNG_OVER_ECONOMY as f64 * RELAY_FLOOR_REFERENCE_TX_WEIGHT as f64)
+fn theta_at_equal_medians(weight: u64, run: &SimParams) -> f64 {
+    weight as f64 / (run.relay().standard_over_economy as f64 * run.relay().ref_tx_weight as f64)
 }
 
 fn fee_gate(block: &GateBlock, params: &SimParams, economic: &EconomicParams) -> FeeGate {
@@ -164,9 +168,14 @@ fn fee_gate(block: &GateBlock, params: &SimParams, economic: &EconomicParams) ->
         supply_ratio,
         burn: block.burn_pct_scaled as f64 / scale,
         rho: scaled as f64 / scale,
-        theta_at_equal_medians: theta_at_equal_medians(block.weight),
+        theta_at_equal_medians: theta_at_equal_medians(block.weight, params),
         median_ratio,
-        admits_one_more: admits_one_more(block, scaled, STANDARD_RUNG_OVER_ECONOMY),
+        admits_one_more: admits_one_more(
+            block,
+            scaled,
+            params.relay().standard_over_economy,
+            params,
+        ),
     }
 }
 
@@ -216,8 +225,8 @@ pub(crate) fn write_report(
     params: &SimParams,
     folded: &[FoldedScenario],
 ) -> fmt::Result {
-    let rung = STANDARD_RUNG_OVER_ECONOMY;
-    let w_ref = RELAY_FLOOR_REFERENCE_TX_WEIGHT;
+    let rung = params.relay().standard_over_economy;
+    let w_ref = params.relay().ref_tx_weight;
     let economic = params.economic();
     writeln!(
         out,
@@ -391,7 +400,8 @@ mod tests {
             admits_one_more(
                 &block_at(weight, 1_000, 1_000),
                 SCALE,
-                STANDARD_RUNG_OVER_ECONOMY,
+                SimParams::default().relay().standard_over_economy,
+                &SimParams::default(),
             )
         };
         // w_ref = 3000 and the rung is 4, so theta = 1 at weight 12_000.
@@ -405,7 +415,8 @@ mod tests {
             admits_one_more(
                 &block_at(weight, 2_000, 1_000),
                 SCALE,
-                STANDARD_RUNG_OVER_ECONOMY,
+                SimParams::default().relay().standard_over_economy,
+                &SimParams::default(),
             )
         };
         assert!(admits(12_001));
@@ -418,7 +429,8 @@ mod tests {
         assert!(!admits_one_more(
             &block_at(12_000, 1_000, 0),
             SCALE,
-            STANDARD_RUNG_OVER_ECONOMY,
+            SimParams::default().relay().standard_over_economy,
+            &SimParams::default(),
         ));
     }
 

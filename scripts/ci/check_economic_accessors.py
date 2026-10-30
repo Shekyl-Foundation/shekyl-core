@@ -25,8 +25,15 @@
 # RelayPolicy appear in a production expression only inside
 # shekyl-economics (E16-5).
 #
-# The economics sim is the sweep: it builds parameter sets. Tests are
-# not production. Instance of 47-gate-subject-assertion.mdc.
+# The economics sim is the sweep: it builds parameter sets, so the
+# production rules above skip it. It has its own rule (ESR-16 completion,
+# ruling 6): a run is the production baseline plus named overrides, and a
+# fold reads the run's structs. Outside baseline.rs (the one reader of the
+# three accessors) and the instruments whose modes refuse overrides in
+# main.rs, no sim file calls an accessor, builds a shipped default, or
+# names an owned constant: a read of a static is a field an override would
+# pass and never reach. Tests are not production. Instance of
+# 47-gate-subject-assertion.mdc.
 
 from __future__ import annotations
 
@@ -94,6 +101,130 @@ ECONOMICS_OWNED = (
     "FEE_QUANTIZATION_MASK",
 )
 _BARE_ECONOMICS = re.compile(r"\b(" + "|".join(ECONOMICS_OWNED) + r")\b")
+
+
+SIM_SRC = os.path.join("shekyl-economics-sim", "src")
+SIM_BASELINE = os.path.join(SIM_SRC, "baseline.rs")
+# Each excluded file and why: it reads the shipped baseline by design.
+SIM_SHIPPED_ONLY = {
+    "baseline.rs": "the baseline itself: the one reader of the three accessors",
+    "main.rs": "the mode runner: builds runs, reads no parameter",
+    "fee_floor.rs": "--fee-floor refuses overrides in main.rs",
+    "fee_ladder.rs": "--fee-ladder refuses overrides in main.rs",
+    "fee_signal.rs": "reached only from fee_ladder",
+    "fee_bar.rs": "reached only from fee_floor and fee_ladder",
+    "secret_draw.rs": "--secret-draw refuses overrides in main.rs",
+    "secret_draw_production.rs": "--secret-draw-production refuses overrides in main.rs",
+    "rng.rs": "reached only from fee_floor and secret_draw_production",
+    "budget.rs": "--fb1c-c2 refuses overrides in main.rs",
+    "budget_scenarios.rs": "--fb1c-c2 refuses overrides in main.rs",
+}
+SIM_MIN_FILES = 20
+SIM_FORBIDDEN = (
+    "economic_params()",
+    "relay_policy()",
+    "archival_params()",
+    "EconomicParams::default()",
+    "RelayPolicy::SHIPPED",
+    "RelayPolicy::default()",
+    "ArchivalParams::SHIPPED",
+    "ArchivalParams::default()",
+)
+
+
+def strip_strings(body: str) -> str:
+    """Blank the contents of string literals, keeping line breaks.
+
+    The sim's reports name constants in prose (`unclaimed past
+    MAX_CLAIM_AGE_W={CLAIM_AGE}`); a name inside a string is text, not a
+    read. Handles escapes and `r"…"` / `r#"…"#` raw strings; a `'"'` char
+    literal is not a string.
+    """
+    out = []
+    i = 0
+    n = len(body)
+    while i < n:
+        ch = body[i]
+        if ch == "/" and body.startswith("//", i):
+            end = body.find("\n", i)
+            end = n if end < 0 else end
+            out.append(body[i:end])
+            i = end
+            continue
+        if ch == "'" and body.startswith("'\"'", i):
+            out.append("'_'")
+            i += 3
+            continue
+        raw = None
+        if ch == "r" and (i == 0 or not (body[i - 1].isalnum() or body[i - 1] == "_")):
+            j = i + 1
+            while j < n and body[j] == "#":
+                j += 1
+            if j < n and body[j] == '"':
+                raw = "\"" + "#" * (j - i - 1)
+                out.append(body[i : j + 1])
+                i = j + 1
+        if raw is not None:
+            end = body.find(raw, i)
+            end = n if end < 0 else end
+            out.append("".join(c if c == "\n" else " " for c in body[i:end]))
+            out.append(body[end : end + len(raw)])
+            i = end + len(raw)
+            continue
+        if ch == '"':
+            out.append(ch)
+            i += 1
+            while i < n and body[i] != '"':
+                if body[i] == "\\" and i + 1 < n:
+                    out.append("  " if body[i + 1] != "\n" else " \n")
+                    i += 2
+                    continue
+                out.append("\n" if body[i] == "\n" else " ")
+                i += 1
+            if i < n:
+                out.append('"')
+                i += 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def sim_failures(rel: str, body: str) -> list[str]:
+    """A sim file's reads of the shipped set where it should read the run."""
+    body = strip_strings(body)
+    found = []
+    for line in body.splitlines():
+        code = line.split("//", 1)[0]
+        for name in SIM_FORBIDDEN:
+            if name in code:
+                found.append(f"{rel}: the sim reads {name}, not the run")
+    for name in sorted(set(bare_archival_reads(body)) | set(bare_economics_reads(body))):
+        found.append(f"{rel}: the sim reads the bare constant {name}, not the run")
+    return found
+
+
+def sim_check() -> tuple[int, bool, list[str]]:
+    """Scan the sim. Returns (files scanned, baseline reads all three, failures)."""
+    root = os.path.join(RUST, SIM_SRC)
+    scanned = 0
+    baseline_reads = False
+    failures: list[str] = []
+    for name in sorted(os.listdir(root)):
+        if not name.endswith(".rs"):
+            continue
+        rel = os.path.join(SIM_SRC, name)
+        body = strip_cfg_test(open(os.path.join(root, name), encoding="utf-8").read())
+        scanned += 1
+        if rel == SIM_BASELINE:
+            baseline_reads = all(
+                accessor in body
+                for accessor in ("economic_params()", "relay_policy()", "archival_params()")
+            )
+        if name in SIM_SHIPPED_ONLY:
+            continue
+        failures.extend(sim_failures(rel, body))
+    return scanned, baseline_reads, failures
 
 
 def _bare_reads(body: str, pattern: re.Pattern[str]) -> list[str]:
@@ -379,6 +510,16 @@ def main() -> int:
             failures.append(f"{rel}: production builds EconomicParams::default()")
         if "OnceLock<EconomicParams>" in body:
             failures.append(f"{rel}: a second EconomicParams OnceLock")
+    sim_scanned, sim_baseline, sim_found = sim_check()
+    if sim_scanned < SIM_MIN_FILES or not sim_baseline:
+        print(
+            f"economic-accessor gate scanned {sim_scanned} sim files (expected at "
+            f"least {SIM_MIN_FILES}) and saw the baseline read all three accessors: "
+            f"{sim_baseline}. The subject is missing.",
+            file=sys.stderr,
+        )
+        return 1
+    failures.extend(sim_found)
     if not (saw_accessor and saw_relay and saw_relay_read and saw_archival and saw_archival_read):
         print(
             "economic-accessor gate did not see economic_params(), "
@@ -395,7 +536,10 @@ def main() -> int:
         for item in failures:
             print(f"  {item}", file=sys.stderr)
         return 1
-    print(f"parameter accessors: {len(files)} production rust files, one of each")
+    print(
+        f"parameter accessors: {len(files)} production rust files, one of each; "
+        f"{sim_scanned} sim files, the run read in {sim_scanned - len(SIM_SHIPPED_ONLY)}"
+    )
     return 0
 
 
@@ -476,6 +620,24 @@ def selftest() -> int:
     )
     if econ != ["RELAY_FLOOR_REFERENCE_TX_WEIGHT"]:
         print(f"selftest: bare economics reads were {econ}", file=sys.stderr)
+        return 1
+    sim = sim_failures(
+        "sim.rs",
+        "use shekyl_economics::relay_policy;\n"
+        "let p = run.relay().ref_tx_weight; // relay_policy()\n"
+        "let q = shekyl_archival_retention::archival_params();\n"
+        "let e = SETTLEMENT_EPOCH_BLOCKS;\n"
+        "writeln!(out, \"past MAX_CLAIM_AGE_W={W}, \\\"q\\\" \\\n FULL_REWARD_ZONE\");\n"
+        "let c = '\"'; let z = r#\"BLOCKS_PER_YEAR\"#; let f = FULL_REWARD_ZONE;\n",
+    )
+    # The read after the strings is found: a stripper that lost its place
+    # in a string would blank it.
+    if sim != [
+        "sim.rs: the sim reads archival_params(), not the run",
+        "sim.rs: the sim reads the bare constant FULL_REWARD_ZONE, not the run",
+        "sim.rs: the sim reads the bare constant SETTLEMENT_EPOCH_BLOCKS, not the run",
+    ]:
+        print(f"selftest: sim reads were {sim}", file=sys.stderr)
         return 1
     print("economic-accessor selftest passed")
     return 0

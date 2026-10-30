@@ -14,7 +14,6 @@
 
 use std::fmt;
 
-use shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC;
 use shekyl_economics::{burn::calc_burn_pct, params::SCALE, TxVolume};
 
 use crate::burden::{
@@ -48,9 +47,10 @@ pub fn fee_horizon_years(
     rate: f64,
     bytes_per_tx: u64,
     shard_bytes: u64,
+    run: &SimParams,
 ) -> f64 {
     let fee_skl = fee_per_tx_atomic as f64 / COIN;
-    let bond_skl = ARCHIVAL_BOND_FLOOR_ATOMIC as f64 / COIN;
+    let bond_skl = run.archival().bond_floor_atomic as f64 / COIN;
     fee_skl * base_fraction * share_fraction * shard_bytes as f64
         / (bond_skl * REPLICAS_PER_SHARD as f64 * rate * bytes_per_tx as f64)
 }
@@ -88,8 +88,8 @@ fn burn_cap_volume(params: &SimParams) -> u64 {
 
 /// Shards the whole perpetual tail funds at a rate, if every tail SKL went to
 /// archival bonds' opportunity cost.
-pub(crate) fn shards_funded_by_tail(tail_skl_per_year: f64, rate: f64) -> f64 {
-    let bond_skl = ARCHIVAL_BOND_FLOOR_ATOMIC as f64 / COIN;
+pub(crate) fn shards_funded_by_tail(tail_skl_per_year: f64, rate: f64, run: &SimParams) -> f64 {
+    let bond_skl = run.archival().bond_floor_atomic as f64 / COIN;
     tail_skl_per_year / (bond_skl * REPLICAS_PER_SHARD as f64 * rate)
 }
 
@@ -124,7 +124,7 @@ fn write_closed_form(out: &mut impl fmt::Write, params: &SimParams, fee: u64) ->
          (calc_burn_pct, supply emitted) until burn_cap binds at V = {cap_v} tx/block, so H\n\
          rises with traffic up to the cap ({cap_ratio:.1}x the baseline figure) and is flat above:",
         fee = fee as f64 / COIN,
-        bond = ARCHIVAL_BOND_FLOOR_ATOMIC as f64 / COIN,
+        bond = params.archival().bond_floor_atomic as f64 / COIN,
         R = REPLICAS_PER_SHARD,
         bpt = bytes_per_tx,
         cap_v = cap_volume,
@@ -141,14 +141,14 @@ fn write_closed_form(out: &mut impl fmt::Write, params: &SimParams, fee: u64) ->
             .map(|&r| {
                 format!(
                     "{:.0}y @{:.0}%",
-                    fee_horizon_years(fee, base, share, r, bytes_per_tx, w),
+                    fee_horizon_years(fee, base, share, r, bytes_per_tx, w, params),
                     r * 100.0
                 )
             })
             .collect::<Vec<_>>()
             .join(", ")
     };
-    let flat = floor_share() as f64 / SCALE as f64;
+    let flat = floor_share(params) as f64 / SCALE as f64;
     let flat_label = format!("burn x flat {:.0}%", flat * 100.0);
     for (label, share) in [(flat_label.as_str(), flat), ("burn x 100%", 1.0)] {
         for (vlabel, v) in volumes {
@@ -205,10 +205,11 @@ mod tests {
             fee_horizon_years(
                 fee,
                 fee_era_burn_fraction(&params, v),
-                floor_share() as f64 / SCALE as f64,
+                floor_share(&SimParams::default()) as f64 / SCALE as f64,
                 0.10,
                 bytes,
                 w,
+                &SimParams::default(),
             )
         };
         let h_tail = h_at(SCENARIO_9_TAIL_TX_PER_BLOCK);
@@ -230,7 +231,7 @@ mod tests {
         let top = params.economic().burn_cap as f64 / params.economic().burn_base_rate as f64;
         assert!(((h_cap / h_base) - top).abs() < 0.01);
         // All fees: the same at every volume.
-        let all = |_v: u64| fee_horizon_years(fee, 1.0, 1.0, 0.10, bytes, w);
+        let all = |_v: u64| fee_horizon_years(fee, 1.0, 1.0, 0.10, bytes, w, &SimParams::default());
         assert_eq!(all(SCENARIO_9_TAIL_TX_PER_BLOCK), all(cap_v * 10));
     }
 }
