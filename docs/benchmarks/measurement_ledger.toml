@@ -851,6 +851,7 @@ stale_through = [
   { through = "7679944f3", note = "#1108: in_tree_at_reference is the drain cutoff. It does one saturating subtraction and a zero-height check where it compared maturity with the reference directly. The boolean is the same at every height, and blocks_until_in_tree returns zero when the predicate holds. Path assembly, the tree and the prover do the same work. Not measured." },
   { through = "08af7470a1", note = "REQUEST_HEADER_BYTES in serving_route.rs is 73, one stream byte ahead of the nonce. The spend path — tree build, path assembly, the prover — does not read that constant. The hex encoder grows by two characters on the serving route only. Not measured; the rows stay ungraded." },
   { through = "1871825227", note = "The request-header doc and its length assertion name the stream byte (1 + 32 + 8 + 32). The constant stays 73. No function on the spend path changed. Not measured." },
+  { through = "501c0896eb", note = "ESR-16 completion, ruling 3: SEGMENT_FREEZE_REORG_MARGIN_BLOCKS in segment.rs reads shekyl_types::ARCHIVAL_REORG_DEPTH_BLOCKS instead of a constant curve-tree's own build script generated from the same key. The value stays 720; tree build, path assembly and the prover do the same work. Not measured." },
 ]
 
 [[constant]]
