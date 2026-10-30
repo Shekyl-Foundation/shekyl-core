@@ -435,17 +435,13 @@ impl Dialer {
         ids
     }
 
-    /// This node's own addresses on `connector`, as [`Self::set_own_addresses`]
-    /// last set them: empty when it discloses none there.
-    #[must_use]
-    pub fn own_addresses(&self, connector: ConnectorId) -> Vec<NetworkAddress> {
-        self.shared().own[connector.index()].clone()
-    }
-
     /// This node's own addresses on `connector`: never dial candidates,
-    /// and the disclosure population's own member (slice 1 §5a).
+    /// and the disclosure population's own member (slice 1 §5a). Logs what
+    /// this node now discloses there, or that it is dial-only: the line is
+    /// said when the fact is set, so a managed Tor's comes when its onion
+    /// is published, not when the connector starts.
     pub fn set_own_addresses(&self, connector: ConnectorId, addresses: Vec<NetworkAddress>) {
-        tracing::info!("{connector:?}: this node's own address(es) are {addresses:?}");
+        tracing::info!("{}", address::disclosure(connector, &addresses));
         let mut shared = self.shared();
         if let Some(first) = addresses.first() {
             // An address of another connector is refused by the lists and
