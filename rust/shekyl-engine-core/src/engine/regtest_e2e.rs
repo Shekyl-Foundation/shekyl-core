@@ -2848,15 +2848,31 @@ async fn a_node_syncs_a_chain_longer_than_the_doors_window_from_a_peer() {
         sink: false,
     }))
     .await;
-    let deadline = Instant::now() + Duration::from_secs(240);
+    // A stall is the height not moving, not the sync being slow: the box
+    // shares its cores, and the verifier's pace is the measurement of
+    // §3.3, not this test's. The daemon that dropped its peer sat at one
+    // height for the whole run; a loaded box still moves every few seconds.
+    const STALL: Duration = Duration::from_secs(120);
+    const CAP: Duration = Duration::from_secs(900);
+    let started = Instant::now();
+    let (mut last, mut moved) = (0u64, Instant::now());
     loop {
         let have = joiner.height().await;
         if have >= want {
             break;
         }
+        if have != last {
+            last = have;
+            moved = Instant::now();
+        }
         assert!(
-            Instant::now() < deadline,
-            "the joiner stands at height {have} of {want} after 240 s: the sync stalled"
+            moved.elapsed() < STALL,
+            "the joiner stands at height {have} of {want} and has not moved for {STALL:?}: \
+             the sync stalled"
+        );
+        assert!(
+            started.elapsed() < CAP,
+            "the joiner is at height {have} of {want} after {CAP:?}"
         );
         tokio::time::sleep(Duration::from_secs(2)).await;
     }

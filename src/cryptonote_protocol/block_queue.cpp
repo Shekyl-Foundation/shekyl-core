@@ -325,7 +325,13 @@ void block_queue::reset_next_span_time(boost::posix_time::ptime t)
   CHECK_AND_ASSERT_THROW_MES(!blocks.empty(), "No next span to reset time");
   block_map::iterator i = blocks.begin();
   CHECK_AND_ASSERT_THROW_MES(i != blocks.end(), "No next span to reset time");
-  CHECK_AND_ASSERT_THROW_MES(i->blocks.empty(), "Next span is not empty");
+  // The caller read this span as scheduled a moment ago (get_next_span_if_scheduled),
+  // under its own lock. A receipt on another connection's strand can fill it
+  // in between, and a filled span has no request time to reset: nothing to do,
+  // not an invariant broken. Thrown out of the net loop this took a syncing
+  // node down (2026-10-30, a testnet sync from four peers).
+  if (!i->blocks.empty())
+    return;
   (boost::posix_time::ptime&)i->time = t; // sod off, time doesn't influence sorting
 }
 
