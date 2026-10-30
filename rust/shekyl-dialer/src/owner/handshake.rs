@@ -112,15 +112,10 @@ impl Dialer {
             );
             return Err(local());
         };
-        let request = HandshakeRequest {
-            node_data: BasicNodeData { network_id },
-            payload_data: sync_data(&snapshot),
-            nonce: *nonce.bytes(),
-        };
-        let payload = request.store().map_err(|_| local())?;
+        let request = request_frame(network_id, &snapshot, nonce).ok_or_else(local)?;
         Ok(Prepared {
             endpoint,
-            request: invoke(COMMAND_HANDSHAKE, &payload),
+            request,
             network_id,
         })
     }
@@ -335,6 +330,23 @@ impl Drop for Unadopted {
         let _ = open.close(CloseCause::new(CloseKind::LocalClose));
         self.hub.reap(id);
     }
+}
+
+/// The `COMMAND_HANDSHAKE` request frame carrying `nonce`: a peer dial's,
+/// and the probe's (`Dialer::mint_probe`). `None` when the payload does not
+/// encode.
+pub(super) fn request_frame(
+    network_id: [u8; 16],
+    snapshot: &SyncPayload,
+    nonce: &InFlightNonce,
+) -> Option<Vec<u8>> {
+    let request = HandshakeRequest {
+        node_data: BasicNodeData { network_id },
+        payload_data: sync_data(snapshot),
+        nonce: *nonce.bytes(),
+    };
+    let payload = request.store().ok()?;
+    Some(invoke(COMMAND_HANDSHAKE, &payload))
 }
 
 fn sync_data(snapshot: &SyncPayload) -> CoreSyncData {

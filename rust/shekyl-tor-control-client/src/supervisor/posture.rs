@@ -112,6 +112,40 @@ pub enum Shown {
     Degraded,
 }
 
+/// Why this node's onion is not reachable (`TOR_SUPERVISOR.md` §4.4,
+/// Service class).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InboundCause {
+    /// The probe of this node's own onion did not arrive within its bound.
+    ProbeTimedOut,
+    /// A whole round of descriptor uploads failed.
+    DescriptorRejected,
+}
+
+/// Can peers reach this node's onion (`TOR_SUPERVISOR.md` §4.1), in the
+/// caller's clock. Beside the outbound projection, never folded into
+/// [`Cause`]: a blocked link and an unreachable onion can stand together.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Inbound {
+    /// No onion is offered in this posture, or none has been published yet.
+    NotOffered,
+    /// The onion is published, and no probe has arrived on this Tor yet.
+    Publishing,
+    /// The last probe arrived, at `evidence_at`.
+    Reachable {
+        /// When the probe's nonce came back.
+        evidence_at: u64,
+    },
+    /// Not reachable since `since`, for `cause`. The onion is being
+    /// published again.
+    Unreachable {
+        /// Why.
+        cause: InboundCause,
+        /// When the facet went down.
+        since: u64,
+    },
+}
+
 /// Why the phase is what it is. The detail is the variant (`TSR-Q12`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Cause {
@@ -156,6 +190,10 @@ pub enum Cause {
     ReplyLate,
     /// The consensus does not recommend this Tor.
     DangerousVersion,
+    /// Tor refused to publish this node's onion again after the onion was
+    /// found unreachable (§4.4: a Service remedy whose control command
+    /// failed escalates to a respawn).
+    OnionRefused,
 }
 
 /// Free space under Tor's data directory against what a spawn needs.
@@ -405,6 +443,13 @@ pub struct Status {
     /// Tor runs, names no cause, and this node's Tor dials keep failing
     /// (§4.2). A neutral fact for the posture line, never a cause.
     pub tor_quiet: Option<std::time::Duration>,
+    /// Whether peers can reach this node's onion (§4.1). Its cause stands
+    /// beside [`Self::cause`], never instead of it.
+    pub inbound: Inbound,
+    /// Descriptor rounds this boot that were still open after five minutes:
+    /// uploads with neither `UPLOADED` nor `FAILED`, none of the events lost
+    /// on our side. Telemetry for the soak, never a cause (§10).
+    pub stuck_upload_rounds: u32,
 }
 
 /// `OwnTx` from the relay's hop-0 verdict and the connector settings.
@@ -471,7 +516,8 @@ pub fn install_sentence(cause: &Cause) -> Option<&'static str> {
         | Cause::ClockSkew { .. }
         | Cause::TooManyFiles { .. }
         | Cause::ReplyLate
-        | Cause::DangerousVersion => None,
+        | Cause::DangerousVersion
+        | Cause::OnionRefused => None,
     }
 }
 
@@ -584,6 +630,9 @@ pub fn render(status: &Status) -> String {
     } else if let Some(quiet) = quiet_sentence(status) {
         append(&mut text, &quiet);
     }
+    if let Some(inbound) = inbound_sentence(status) {
+        append(&mut text, inbound);
+    }
     if speaks_bootstrap(status) {
         append(
             &mut text,
@@ -676,6 +725,19 @@ fn quiet_sentence(status: &Status) -> Option<String> {
     })
 }
 
+/// The inbound facet's sentence, when it is down (§5, "Onion
+/// unreachable"). No fix: the supervisor publishes the onion again, and
+/// nothing the operator does speeds that. It follows the outbound cause and
+/// its fix, as the pace does.
+fn inbound_sentence(status: &Status) -> Option<&'static str> {
+    match status.inbound {
+        Inbound::Unreachable { .. } => Some(
+            "Peers cannot reach this node through Tor right now. Its address is being published again.",
+        ),
+        Inbound::NotOffered | Inbound::Publishing | Inbound::Reachable { .. } => None,
+    }
+}
+
 /// The named cause. [`Cause::None`] is the absence of one: the bootstrap
 /// line and the quiet fact are [`render`]'s other clauses.
 fn named_cause(status: &Status) -> Option<String> {
@@ -709,6 +771,10 @@ fn named_cause(status: &Status) -> Option<String> {
         Cause::DangerousVersion => {
             Some("Upgrade Shekyl when a release updates the bundled Tor.".to_owned())
         }
+        Cause::OnionRefused => Some(
+            "Tor refused to publish this node's address again and is being started again."
+                .to_owned(),
+        ),
     }
 }
 

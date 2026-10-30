@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use shekyl_dialer::Dialer;
 use shekyl_draw_rng::SplitMix64;
-use shekyl_peerlist::{CloseCause, CloseKind, ConnectorId, NetworkAddress, Tick};
+use shekyl_peerlist::{CloseCause, CloseKind, ConnectorId, Direction, NetworkAddress, Tick};
 use shekyl_seam::{Dial, Endpoint, Hub};
 use shekyl_timing_engine::{Clock, ManualClock};
 use shekyl_transport_layer::Sockets;
@@ -280,28 +280,51 @@ fn after_the_block_a_cooled_address_is_drawable_within_one_first_step_cooldown()
     }
 }
 
+/// The accept `connector` admits. Connecting it occupies a row. The
+/// handshake finishes only when the test calls [`Hub::session_established`].
+fn inbound_accept(connector: ConnectorId) -> Endpoint {
+    match connector {
+        ConnectorId::Tor => Endpoint::TorInbound,
+        ConnectorId::Clearnet => Endpoint::Clearnet {
+            ip: Ipv4Addr::new(11, 17, 9, 9).into(),
+            port: 40_000,
+            direction: Direction::Inbound,
+        },
+    }
+}
+
 /// **An inbound session alone keeps the ladder climbing** (Copilot's review
-/// of #1203). The held count is the connector's, outbound or inbound: an
-/// accepted session on the board, with nothing kept outbound, is a session
-/// held, so failures climb as today. Both connectors.
+/// of #1203). The held count is the connector's, outbound or inbound: a
+/// session whose handshake has finished, with nothing kept outbound, is a
+/// session held, so failures climb as today. A handshake still open is not
+/// that session (`TOR_SUPERVISOR.md` §4.2). Both connectors.
 #[test]
 fn an_inbound_session_alone_keeps_the_ladder_climbing() {
     for (connector, seed) in [(TOR, 62), (CLEARNET, 63)] {
         let mut rig = QuietRig::new(connector, seed, false);
-        let inbound = match connector {
-            ConnectorId::Tor => Endpoint::TorInbound,
-            ConnectorId::Clearnet => Endpoint::Clearnet {
-                ip: Ipv4Addr::new(11, 17, 9, 9).into(),
-                port: 40_000,
-                direction: shekyl_peerlist::Direction::Inbound,
-            },
-        };
-        let _attached = rig.hub.connect(&inbound).expect("accepted");
+        let attached = rig
+            .hub
+            .connect(&inbound_accept(connector))
+            .expect("accepted");
+        assert_eq!(
+            rig.hub.board().count(connector, Direction::Inbound),
+            1,
+            "{connector:?}: the handshake occupies a row"
+        );
         assert_eq!(
             rig.hub
                 .board()
-                .count(connector, shekyl_peerlist::Direction::Inbound),
-            1
+                .established_sessions(connector, Direction::Inbound),
+            0,
+            "{connector:?}: the handshake has not finished"
+        );
+        rig.hub.session_established(attached.id);
+        assert_eq!(
+            rig.hub
+                .board()
+                .established_sessions(connector, Direction::Inbound),
+            1,
+            "{connector:?}: the handshake finished"
         );
         assert_eq!(rig.dialer.kept_sessions(connector), 0, "nothing outbound");
         let (_, span) = rig.threshold();
@@ -314,6 +337,46 @@ fn an_inbound_session_alone_keeps_the_ladder_climbing() {
             rig.failed_tests(),
             vec![4; 5],
             "{connector:?}: an inbound session climbs"
+        );
+    }
+}
+
+/// **An inbound handshake still open does not keep the ladder climbing.**
+/// The row is on the board, which a dial cap counts, and it is not a
+/// session. The probe of this node's own onion is dropped in that
+/// handshake, and a clearnet accept that never finishes is the same shape
+/// (`TOR_SUPERVISOR.md` §4.5). Once the evidence is in, further failures
+/// stay on the first step. Both connectors.
+#[test]
+fn an_open_inbound_handshake_does_not_keep_the_ladder_climbing() {
+    for (connector, seed) in [(TOR, 58), (CLEARNET, 59)] {
+        let mut rig = QuietRig::new(connector, seed, false);
+        let _attached = rig
+            .hub
+            .connect(&inbound_accept(connector))
+            .expect("accepted");
+        assert_eq!(
+            rig.hub.board().count(connector, Direction::Inbound),
+            1,
+            "{connector:?}: a dial cap counts the handshake"
+        );
+        assert_eq!(
+            rig.hub
+                .board()
+                .established_sessions(connector, Direction::Inbound),
+            0,
+            "{connector:?}: the handshake has not finished"
+        );
+        assert_eq!(rig.dialer.kept_sessions(connector), 0, "nothing outbound");
+        let quiet = rig.go_quiet();
+        for _ in 0..4 {
+            rig.fail_each_once();
+            rig.advance(PAST_EVERY_COOLDOWN);
+        }
+        assert_eq!(
+            rig.failed_tests(),
+            quiet,
+            "{connector:?}: an open handshake is not a session"
         );
     }
 }
