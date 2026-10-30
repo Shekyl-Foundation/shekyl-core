@@ -5381,8 +5381,10 @@ dependencies = [
  "serde",
  "serde_json",
  "shekyl-archival-retention",
+ "shekyl-chain-rules",
  "shekyl-economics",
  "shekyl-standoff",
+ "shekyl-types",
 ]
 
 [[package]]

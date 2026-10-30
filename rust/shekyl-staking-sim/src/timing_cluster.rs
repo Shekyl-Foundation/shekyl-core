@@ -12,15 +12,38 @@ use serde::Serialize;
 // a re-pin that breaks an inequality fails this sim's test.
 //
 // Every timing value here is generated from `config/consensus_constants.json`:
-// W, the settlement epoch, the release cooldown, the retention horizon and the
-// emission batch cap by `shekyl-archival-retention`'s build script, the reorg
-// depth by `shekyl-types`' (re-exported by archival-retention). The slash grace is
+// W, the settlement epoch, the release cooldown and the emission batch cap by
+// `shekyl-archival-retention`'s build script, the reorg depth by
+// `shekyl-types`' (re-exported by archival-retention). The slash grace is
 // `SLASH_GRACE_EPOCHS`, a multiple of the epoch with no JSON key: it has no
-// value of its own to source (DRS-E4 commit 5).
+// value of its own to source (DRS-E4 commit 5). The deepest retention is not a
+// constant: the store retires each per-epoch table at its last reader's reach,
+// and [`deepest_retention_epochs`] asks the validator's `EpochFloor` for it.
 pub use shekyl_archival_retention::{
-    ARCHIVAL_REORG_DEPTH_BLOCKS, MAX_CLAIM_AGE_W, RELEASE_COOLDOWN_EPOCHS,
-    RETENTION_HORIZON_BLOCKS, SETTLEMENT_EPOCH_BLOCKS, SLASH_GRACE_EPOCHS,
+    ARCHIVAL_REORG_DEPTH_BLOCKS, MAX_CLAIM_AGE_W, RELEASE_COOLDOWN_EPOCHS, SETTLEMENT_EPOCH_BLOCKS,
+    SLASH_GRACE_EPOCHS,
 };
+
+/// Epochs the store keeps below a settlement boundary for its deepest
+/// family, the claimable tables: the claim window `W` plus the one epoch of
+/// slack the boundary batch keeps (it retires below the floor of the
+/// boundary's previous epoch). Read from chain-rules'
+/// `EpochFloor::<Claimable>::at_boundary` on the genesis schedule, at a
+/// boundary past the window, so the sim reports the reach the chain keeps
+/// rather than a horizon of its own (`SO-D12h`; the retired
+/// `retention_horizon_blocks`, ruled deleted 2026-10-30).
+#[must_use]
+pub fn deepest_retention_epochs() -> u64 {
+    use shekyl_chain_rules::{Claimable, EpochFloor};
+    let schedule = shekyl_archival_retention::SettlementSchedule::GENESIS;
+    let boundary_epoch = MAX_CLAIM_AGE_W + 10;
+    let boundary = shekyl_types::BlockHeight::from_raw(boundary_epoch * SETTLEMENT_EPOCH_BLOCKS);
+    let kept_from = EpochFloor::<Claimable>::at_boundary(boundary, schedule)
+        .kept_from()
+        .expect("a boundary past the claim window retires something")
+        .to_raw();
+    boundary_epoch - kept_from
+}
 
 /// Canonical owner is `emission_wire`'s `usize` bound; this cluster does
 /// block arithmetic in `u64` (usize → u64 is lossless on every supported
@@ -29,9 +52,6 @@ pub const MAX_SETTLEMENT_EPOCHS_PER_EMISSION: u64 =
     shekyl_archival_retention::MAX_SETTLEMENT_EPOCHS_PER_EMISSION as u64;
 
 pub const BLOCK_TIME_SEC: u64 = 120;
-pub const JOIN_LAG_BLOCKS: u64 = SETTLEMENT_EPOCH_BLOCKS;
-pub const EMISSION_BATCH_WINDOW_BLOCKS: u64 =
-    MAX_SETTLEMENT_EPOCHS_PER_EMISSION * SETTLEMENT_EPOCH_BLOCKS;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CouplingCheck {
@@ -54,16 +74,16 @@ pub struct TimingClusterConstants {
     pub settlement_epoch_blocks: u64,
     pub max_settlement_epochs_per_emission: u64,
     pub max_claim_age_w: u64,
-    pub retention_horizon_blocks: u64,
+    pub deepest_retention_blocks: u64,
     pub archival_reorg_depth_blocks: u64,
     pub release_cooldown_epochs: u64,
     pub slash_grace_epochs: u64,
     pub prune_horizon_epochs: u64,
-    pub retention_horizon_epochs: u64,
+    pub deepest_retention_epochs: u64,
     pub settlement_epoch_days: f64,
     pub w_wall_clock_days: f64,
     pub release_cooldown_days: f64,
-    pub retention_horizon_days: f64,
+    pub deepest_retention_days: f64,
     pub archival_reorg_depth_days: f64,
 }
 
@@ -83,23 +103,24 @@ pub struct F4SlowEmitter {
 }
 
 pub fn verify() -> TimingClusterReport {
-    let retention_horizon_epochs = div_ceil(RETENTION_HORIZON_BLOCKS, SETTLEMENT_EPOCH_BLOCKS);
+    let deepest_retention_epochs = deepest_retention_epochs();
+    let deepest_retention_blocks = deepest_retention_epochs * SETTLEMENT_EPOCH_BLOCKS;
     let seb_days = (SETTLEMENT_EPOCH_BLOCKS as f64 * BLOCK_TIME_SEC as f64) / 86_400.0;
 
     let constants = TimingClusterConstants {
         settlement_epoch_blocks: SETTLEMENT_EPOCH_BLOCKS,
         max_settlement_epochs_per_emission: MAX_SETTLEMENT_EPOCHS_PER_EMISSION,
         max_claim_age_w: MAX_CLAIM_AGE_W,
-        retention_horizon_blocks: RETENTION_HORIZON_BLOCKS,
+        deepest_retention_blocks,
         archival_reorg_depth_blocks: ARCHIVAL_REORG_DEPTH_BLOCKS,
         release_cooldown_epochs: RELEASE_COOLDOWN_EPOCHS,
         slash_grace_epochs: SLASH_GRACE_EPOCHS,
         prune_horizon_epochs: MAX_CLAIM_AGE_W,
-        retention_horizon_epochs,
+        deepest_retention_epochs,
         settlement_epoch_days: seb_days,
         w_wall_clock_days: seb_days * MAX_CLAIM_AGE_W as f64,
         release_cooldown_days: seb_days * RELEASE_COOLDOWN_EPOCHS as f64,
-        retention_horizon_days: (RETENTION_HORIZON_BLOCKS as f64 * BLOCK_TIME_SEC as f64)
+        deepest_retention_days: (deepest_retention_blocks as f64 * BLOCK_TIME_SEC as f64)
             / 86_400.0,
         archival_reorg_depth_days: (ARCHIVAL_REORG_DEPTH_BLOCKS as f64 * BLOCK_TIME_SEC as f64)
             / 86_400.0,
@@ -125,17 +146,6 @@ pub fn verify() -> TimingClusterReport {
         detail: format!(
             "RELEASE_COOLDOWN_EPOCHS ({}) > SLASH_GRACE_EPOCHS ({})",
             RELEASE_COOLDOWN_EPOCHS, SLASH_GRACE_EPOCHS
-        ),
-    });
-
-    let retention_min =
-        MAX_CLAIM_AGE_W * SETTLEMENT_EPOCH_BLOCKS + JOIN_LAG_BLOCKS + EMISSION_BATCH_WINDOW_BLOCKS;
-    couplings.push(CouplingCheck {
-        name: "retention_horizon_floor",
-        pass: RETENTION_HORIZON_BLOCKS >= retention_min,
-        detail: format!(
-            "RETENTION_HORIZON_BLOCKS ({}) >= W*SEB + join_lag + batch ({})",
-            RETENTION_HORIZON_BLOCKS, retention_min
         ),
     });
 
@@ -260,13 +270,20 @@ fn slow_emitter_survives(offline_epochs: u64, emit_period: u64) -> bool {
     true
 }
 
-fn div_ceil(num: u64, den: u64) -> u64 {
-    num.div_ceil(den)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The store keeps the claim window and one epoch of slack below a
+    /// boundary: 27 epochs, 270 000 blocks, at the shipped `W` of 26. A
+    /// change to the claimable family's reach in chain-rules moves this.
+    #[test]
+    fn the_deepest_retention_is_the_claim_window_and_one_epoch() {
+        assert_eq!(deepest_retention_epochs(), MAX_CLAIM_AGE_W + 1);
+        assert_eq!(deepest_retention_epochs(), 27);
+        let report = verify();
+        assert_eq!(report.constants.deepest_retention_blocks, 270_000);
+    }
 
     #[test]
     fn timing_cluster_pin_passes() {

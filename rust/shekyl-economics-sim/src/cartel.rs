@@ -245,7 +245,7 @@ pub fn reinstate_structural_downtime_epochs(run: &SimParams) -> f64 {
     // (today 0 — the connect admits a same-epoch close).
     let validation_downtime = (SLASH_EPOCH..SLASH_EPOCH + 64)
         .find_map(|e_reinstate| {
-            reinstate_connect(bonded, &held, &open, &held, e_reinstate)
+            reinstate_connect(bonded, &held, &open, &held, e_reinstate, run.archival())
                 .ok()
                 .map(|c| (c.interval_end_exclusive - 1 - SLASH_EPOCH) as f64)
         })

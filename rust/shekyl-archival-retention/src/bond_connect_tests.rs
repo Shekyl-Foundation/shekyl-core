@@ -301,6 +301,7 @@ fn reinstate_connect_closes_the_open_interval_and_moves_nothing() {
         &intervals,
         &[7, 9],
         RB_EPOCH,
+        crate::archival_params(),
     )
     .unwrap();
     assert_eq!(e.closed_interval_index, 1);
@@ -310,7 +311,14 @@ fn reinstate_connect_closes_the_open_interval_and_moves_nothing() {
 #[test]
 fn reinstate_connect_rejects_growth() {
     assert_eq!(
-        reinstate_connect(0, &[], &[rb_open(5)], &[7, 11], RB_EPOCH),
+        reinstate_connect(
+            0,
+            &[],
+            &[rb_open(5)],
+            &[7, 11],
+            RB_EPOCH,
+            crate::archival_params()
+        ),
         Err(ReinstateConnectError::HoldingsChanged)
     );
 }
@@ -319,7 +327,7 @@ fn reinstate_connect_rejects_growth() {
 fn reinstate_connect_rejects_shape_and_invariant_breaches() {
     let intervals = [rb_open(5)];
     assert_eq!(
-        reinstate_connect(0, &[], &intervals, &[], RB_EPOCH),
+        reinstate_connect(0, &[], &intervals, &[], RB_EPOCH, crate::archival_params()),
         Err(ReinstateConnectError::EmptyPost)
     );
     assert_eq!(
@@ -329,6 +337,7 @@ fn reinstate_connect_rejects_shape_and_invariant_breaches() {
             &intervals,
             &[7, 13], // swap
             RB_EPOCH,
+            crate::archival_params(),
         ),
         Err(ReinstateConnectError::HoldingsChanged)
     );
@@ -339,6 +348,7 @@ fn reinstate_connect_rejects_shape_and_invariant_breaches() {
             &intervals,
             &[7, 9],
             RB_EPOCH,
+            crate::archival_params(),
         ),
         Err(ReinstateConnectError::RecordFloorInvariantBroken)
     );
@@ -349,6 +359,7 @@ fn reinstate_connect_rejects_shape_and_invariant_breaches() {
             &[rb_closed(2, 3)], // nothing open
             &[7, 9],
             RB_EPOCH,
+            crate::archival_params(),
         ),
         Err(ReinstateConnectError::NoOpenInterval)
     );
@@ -359,6 +370,7 @@ fn reinstate_connect_rejects_shape_and_invariant_breaches() {
             &[rb_open(5), rb_open(5)], // coalescing invariant broken
             &[7, 9],
             RB_EPOCH,
+            crate::archival_params(),
         ),
         Err(ReinstateConnectError::MultipleOpenIntervals)
     );
@@ -369,6 +381,7 @@ fn reinstate_connect_rejects_shape_and_invariant_breaches() {
             &[rb_open(RB_EPOCH + 5)], // slash start after the close point
             &[7, 9],
             RB_EPOCH,
+            crate::archival_params(),
         ),
         Err(ReinstateConnectError::IntervalOrdering)
     );
@@ -424,7 +437,14 @@ fn reinstate_connect_rejects_oversize_post() {
     // a record the codec cannot encode.
     let post: Vec<u64> = (0..=(MAX_HOLDINGS_SHARDS as u64)).collect();
     assert_eq!(
-        reinstate_connect(0, &[], &[rb_open(5)], &post, RB_EPOCH),
+        reinstate_connect(
+            0,
+            &[],
+            &[rb_open(5)],
+            &post,
+            RB_EPOCH,
+            crate::archival_params()
+        ),
         Err(ReinstateConnectError::PostOversize)
     );
 }

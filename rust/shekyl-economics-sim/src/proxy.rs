@@ -45,6 +45,7 @@ use shekyl_fcmp::tree::{HELIOS_CHUNK_WIDTH, LEAF_CHUNK_SCALARS, SELENE_CHUNK_WID
 
 use crate::burden::{COIN, SHARD_BYTES};
 use crate::engine::SimParams;
+use crate::secret_draw::COUNTED_DRAWS;
 
 /// Settlement epochs per year under the run: its year in blocks
 /// ([`SimParams::blocks_per_year`]) over its settlement epoch.
@@ -128,8 +129,9 @@ pub fn honest_storage_cost_per_epoch(storage_fiat_per_byte_year: f64, run: &SimP
     max_holdings_bytes() * storage_fiat_per_byte_year / epochs_per_year(run)
 }
 
-/// Proxy re-fetch bandwidth cost per epoch, fiat: `CHALLENGES_PER_PAIR_PER_EPOCH` challenges per held
-/// shard, each re-fetching one `payload_bytes` response.
+/// Proxy re-fetch bandwidth cost per epoch, fiat: the counted draws
+/// ([`COUNTED_DRAWS`], the draws a pair is issued at the count rule's
+/// target) per held shard, each re-fetching one `payload_bytes` response.
 ///
 /// `payload_bytes` is what one challenge obliges the responder to move:
 /// [`RESPONSE_BYTES`] under the pre-TJ opening (the retained pre-pruning
@@ -138,13 +140,8 @@ pub fn honest_storage_cost_per_epoch(storage_fiat_per_byte_year: f64, run: &SimP
 /// operand that moves between the two worlds; the slash machinery below is
 /// payload-independent (it prices `q`, not bytes).
 #[must_use]
-pub fn proxy_refetch_cost_per_epoch(
-    payload_bytes: f64,
-    fetch_fiat_per_byte: f64,
-    run: &SimParams,
-) -> f64 {
-    let responses =
-        MAX_HOLDINGS_SHARDS as f64 * f64::from(run.archival().challenges_per_pair_per_epoch);
+pub fn proxy_refetch_cost_per_epoch(payload_bytes: f64, fetch_fiat_per_byte: f64) -> f64 {
+    let responses = MAX_HOLDINGS_SHARDS as f64 * f64::from(COUNTED_DRAWS);
     responses * payload_bytes * fetch_fiat_per_byte
 }
 
@@ -388,7 +385,7 @@ pub fn proxy_cost_per_epoch(
     run: &SimParams,
 ) -> f64 {
     let shards_at_risk = MAX_HOLDINGS_SHARDS as f64;
-    proxy_refetch_cost_per_epoch(payload_bytes, fetch_fiat_per_byte, run)
+    proxy_refetch_cost_per_epoch(payload_bytes, fetch_fiat_per_byte)
         + shards_at_risk
             * expected_slash_cost_per_epoch(
                 q,
@@ -544,7 +541,7 @@ pub fn a5_proxy_report(
     let reward_per_epoch_fiat = reward_per_epoch_skl * skl_price;
     let horizon = A5_REWARD_HORIZON_EPOCHS as u64;
     for &fp in &FETCH_FIAT_PER_BYTE_BAND {
-        let refetch = proxy_refetch_cost_per_epoch(RESPONSE_BYTES, fp, run);
+        let refetch = proxy_refetch_cost_per_epoch(RESPONSE_BYTES, fp);
         let margin0 = margin_per_epoch(
             RESPONSE_BYTES,
             fp,
@@ -609,9 +606,7 @@ pub fn shard_breakeven_fetch_fiat_per_byte(
     run: &SimParams,
 ) -> f64 {
     honest_storage_cost_per_epoch(storage_fiat_per_byte_year, run)
-        / (MAX_HOLDINGS_SHARDS as f64
-            * f64::from(run.archival().challenges_per_pair_per_epoch)
-            * SHARD_BYTES)
+        / (MAX_HOLDINGS_SHARDS as f64 * f64::from(COUNTED_DRAWS) * SHARD_BYTES)
 }
 
 /// A crossover `q` for the narration: `digits` decimals, or the PoRep limit
@@ -701,7 +696,7 @@ pub fn tj_shard_payload_report(
         "fetch $/GB", "refetch/epoch", "margin@q=0", "q* bond-only", "q* +reward"
     )?;
     for &fp in &FETCH_FIAT_PER_BYTE_BAND {
-        let refetch = proxy_refetch_cost_per_epoch(SHARD_BYTES, fp, run);
+        let refetch = proxy_refetch_cost_per_epoch(SHARD_BYTES, fp);
         let margin0 = margin_per_epoch(
             SHARD_BYTES,
             fp,
@@ -819,13 +814,13 @@ pub fn tj_shard_payload_report(
            and not at all for a flat-rate one.",
         CS = cloud_s,
         CB = CLOUD_STORAGE_FIAT_PER_BYTE_YEAR,
-        TL = proxy_refetch_cost_per_epoch(SHARD_BYTES, FETCH_FIAT_PER_BYTE_BAND[0], run),
-        TH = proxy_refetch_cost_per_epoch(SHARD_BYTES, FETCH_FIAT_PER_BYTE_BAND[1], run),
-        RL = proxy_refetch_cost_per_epoch(SHARD_BYTES, FETCH_FIAT_PER_BYTE_BAND[0], run) / cloud_s,
-        RH = proxy_refetch_cost_per_epoch(SHARD_BYTES, FETCH_FIAT_PER_BYTE_BAND[1], run) / cloud_s,
+        TL = proxy_refetch_cost_per_epoch(SHARD_BYTES, FETCH_FIAT_PER_BYTE_BAND[0]),
+        TH = proxy_refetch_cost_per_epoch(SHARD_BYTES, FETCH_FIAT_PER_BYTE_BAND[1]),
+        RL = proxy_refetch_cost_per_epoch(SHARD_BYTES, FETCH_FIAT_PER_BYTE_BAND[0]) / cloud_s,
+        RH = proxy_refetch_cost_per_epoch(SHARD_BYTES, FETCH_FIAT_PER_BYTE_BAND[1]) / cloud_s,
         HS = honest_storage_cost_per_epoch(STORAGE_FIAT_PER_BYTE_YEAR, run),
-        RXL = proxy_refetch_cost_per_epoch(SHARD_BYTES, FETCH_FIAT_PER_BYTE_BAND[0], run) / honest_storage_cost_per_epoch(STORAGE_FIAT_PER_BYTE_YEAR, run),
-        RXH = proxy_refetch_cost_per_epoch(SHARD_BYTES, FETCH_FIAT_PER_BYTE_BAND[1], run) / honest_storage_cost_per_epoch(STORAGE_FIAT_PER_BYTE_YEAR, run),
+        RXL = proxy_refetch_cost_per_epoch(SHARD_BYTES, FETCH_FIAT_PER_BYTE_BAND[0]) / honest_storage_cost_per_epoch(STORAGE_FIAT_PER_BYTE_YEAR, run),
+        RXH = proxy_refetch_cost_per_epoch(SHARD_BYTES, FETCH_FIAT_PER_BYTE_BAND[1]) / honest_storage_cost_per_epoch(STORAGE_FIAT_PER_BYTE_YEAR, run),
     )?;
     Ok(())
 }
@@ -861,22 +856,14 @@ mod tests {
         let storage =
             honest_storage_cost_per_epoch(STORAGE_FIAT_PER_BYTE_YEAR, &SimParams::default());
 
-        let bulk = proxy_refetch_cost_per_epoch(
-            RESPONSE_BYTES,
-            FETCH_FIAT_PER_BYTE_BAND[0],
-            &SimParams::default(),
-        );
+        let bulk = proxy_refetch_cost_per_epoch(RESPONSE_BYTES, FETCH_FIAT_PER_BYTE_BAND[0]);
         assert!(
             bulk < storage,
             "at bulk transit re-fetch {bulk} must still undercut storage {storage} \
              — this is the surviving half of the W10 concern"
         );
 
-        let retail = proxy_refetch_cost_per_epoch(
-            RESPONSE_BYTES,
-            FETCH_FIAT_PER_BYTE_BAND[1],
-            &SimParams::default(),
-        );
+        let retail = proxy_refetch_cost_per_epoch(RESPONSE_BYTES, FETCH_FIAT_PER_BYTE_BAND[1]);
         assert!(
             retail > storage,
             "at retail egress re-fetch {retail} must EXCEED storage {storage} — if this \
@@ -1047,12 +1034,8 @@ mod tests {
             131,
             &SimParams::default(),
         );
-        let exposure = cost
-            - proxy_refetch_cost_per_epoch(
-                RESPONSE_BYTES,
-                FETCH_FIAT_PER_BYTE_BAND[0],
-                &SimParams::default(),
-            );
+        let exposure =
+            cost - proxy_refetch_cost_per_epoch(RESPONSE_BYTES, FETCH_FIAT_PER_BYTE_BAND[0]);
         let single_shard_exposure =
             expected_slash_cost_per_epoch(q, per_shard, 0.0, 131, &SimParams::default());
         assert!(
@@ -1072,7 +1055,7 @@ mod tests {
         let storage =
             honest_storage_cost_per_epoch(STORAGE_FIAT_PER_BYTE_YEAR, &SimParams::default());
         for &fp in &FETCH_FIAT_PER_BYTE_BAND {
-            let refetch = proxy_refetch_cost_per_epoch(SHARD_BYTES, fp, &SimParams::default());
+            let refetch = proxy_refetch_cost_per_epoch(SHARD_BYTES, fp);
             assert!(
                 refetch > storage,
                 "shard-payload re-fetch {refetch} must exceed storage {storage} at {fp}"
@@ -1108,13 +1091,7 @@ mod tests {
         // And it is exactly S / (challenged bytes per epoch) by construction.
         let expected =
             honest_storage_cost_per_epoch(STORAGE_FIAT_PER_BYTE_YEAR, &SimParams::default())
-                / (MAX_HOLDINGS_SHARDS as f64
-                    * f64::from(
-                        SimParams::default()
-                            .archival()
-                            .challenges_per_pair_per_epoch,
-                    )
-                    * SHARD_BYTES);
+                / (MAX_HOLDINGS_SHARDS as f64 * f64::from(COUNTED_DRAWS) * SHARD_BYTES);
         assert!((be - expected).abs() < 1e-24);
     }
 
@@ -1200,11 +1177,7 @@ mod tests {
         // threshold nobody should lean on.
         let cloud_s =
             honest_storage_cost_per_epoch(CLOUD_STORAGE_FIAT_PER_BYTE_YEAR, &SimParams::default());
-        let t_cheap = proxy_refetch_cost_per_epoch(
-            SHARD_BYTES,
-            FETCH_FIAT_PER_BYTE_BAND[0],
-            &SimParams::default(),
-        );
+        let t_cheap = proxy_refetch_cost_per_epoch(SHARD_BYTES, FETCH_FIAT_PER_BYTE_BAND[0]);
         let ratio = t_cheap / cloud_s;
         assert!(
             ratio > 3.0 && ratio < 3.6,
@@ -1213,22 +1186,13 @@ mod tests {
         // Linear in λ, and dividing the challenge count back out returns the
         // ~1.1× cell TJ-A2d called marginal — the pre-ruling fact is retained
         // here rather than deleted, so the lever's size stays legible.
-        let per_challenge = ratio
-            / f64::from(
-                SimParams::default()
-                    .archival()
-                    .challenges_per_pair_per_epoch,
-            );
+        let per_challenge = ratio / f64::from(COUNTED_DRAWS);
         assert!(
             per_challenge > 1.0 && per_challenge < 1.5,
             "per-challenge cell is the ~1.1x TJ-A2d called marginal, got {per_challenge}"
         );
         // And the retail end stays decisively closed within-class too.
-        let t_retail = proxy_refetch_cost_per_epoch(
-            SHARD_BYTES,
-            FETCH_FIAT_PER_BYTE_BAND[1],
-            &SimParams::default(),
-        );
+        let t_retail = proxy_refetch_cost_per_epoch(SHARD_BYTES, FETCH_FIAT_PER_BYTE_BAND[1]);
         assert!(
             t_retail / cloud_s > 5.0,
             "retail end must remain decisive within-class"

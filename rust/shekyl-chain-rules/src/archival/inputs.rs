@@ -230,6 +230,7 @@ impl super::Transition {
             &record.bad_intervals,
             post_ids,
             epoch,
+            shekyl_archival_retention::archival_params(),
         ) {
             Ok(connect) => connect,
             Err(

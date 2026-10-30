@@ -326,13 +326,15 @@ pub struct ReinstateConnect {
 }
 
 /// Fold the `Reinstate` connect: post-holdings equal current, the record's floor
-/// invariant holds, and exactly one open interval closes at `E + 1`.
+/// invariant holds under `params`' bond floor, and exactly one open interval
+/// closes at `E + 1`. Production passes [`crate::archival_params`].
 pub fn reinstate_connect(
     record_bonded_total: u64,
     record_held_shard_ids: &[u64],
     record_bad_intervals: &[BadInterval],
     post_held_shard_ids: &[u64],
     reinstate_settlement_epoch: u64,
+    params: &crate::ArchivalParams,
 ) -> Result<ReinstateConnect, ReinstateConnectError> {
     if post_held_shard_ids.is_empty() {
         return Err(ReinstateConnectError::EmptyPost);
@@ -349,7 +351,7 @@ pub fn reinstate_connect(
     if bond_floor_of(
         HoldingsKind::ShardSetCompact,
         record_held_shard_ids.len(),
-        crate::archival_params(),
+        params,
     ) != record_bonded_total
     {
         return Err(ReinstateConnectError::RecordFloorInvariantBroken);

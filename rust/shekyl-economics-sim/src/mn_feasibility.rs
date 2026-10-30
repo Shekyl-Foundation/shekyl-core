@@ -397,7 +397,7 @@ impl FeasibilityTargets {
     #[must_use]
     pub fn operative_defaults(run: &SimParams) -> Self {
         Self {
-            lambda_target: f64::from(run.archival().challenges_per_pair_per_epoch),
+            lambda_target: f64::from(crate::secret_draw::COUNTED_DRAWS),
             false_slash_target: 1e-3,
             free_ride_bound: 0.80,
             k_cap: 6.0,

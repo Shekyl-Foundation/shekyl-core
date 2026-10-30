@@ -53,8 +53,10 @@ use crate::measure::{FailureKind, Observation};
 pub const EPOCH: Duration =
     Duration::from_secs(archival_params().settlement_epoch_blocks * T_SECONDS);
 
-/// Challenge reads one drawable pair draws per epoch.
-pub const CHALLENGE_READS_PER_PAIR: u32 = archival_params().challenges_per_pair_per_epoch;
+/// Draws one drawable pair is issued per epoch at the count rule's target:
+/// the counted draws ([`shekyl_types::archival::COUNTED_DRAWS`]).
+#[allow(clippy::cast_possible_truncation)] // COUNTED_DRAWS is 3.
+pub const CHALLENGE_READS_PER_PAIR: u32 = shekyl_types::archival::COUNTED_DRAWS as u32;
 
 /// The list bound on one record's holdings (`MAX_HOLDINGS_SHARDS`). A row of
 /// the table, never its anchor.
