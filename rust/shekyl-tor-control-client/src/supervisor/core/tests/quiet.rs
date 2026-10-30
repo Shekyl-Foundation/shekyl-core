@@ -185,10 +185,14 @@ fn a_tally_from_before_this_tor_does_not_count_as_an_open() {
     );
 }
 
-/// Tor's own view (`TSR-Q14`) governs even when Tor sends no event: a
-/// negative answer names the blocked link at once; both affirmative answers
-/// clear it at once. Unknown says nothing. During a bootstrap no circuit is
-/// built yet, and a view folded then is not a statement.
+/// Tor's own view (`TSR-Q14`) governs even when Tor sends no event: its
+/// liveness verdict `down` names the blocked link at once; both affirmative
+/// answers clear it at once. Unknown says nothing, and neither does "no
+/// circuit established", which is display only. During a bootstrap no
+/// circuit is built yet, and a view folded then is not a statement.
+/// *Changed by the VM clock findings (2026-10-30):* "no circuit" named the
+/// blocked link, and after a resume, when Tor drops its circuits on
+/// purpose, that was a false alarm.
 #[test]
 fn tors_sampled_view_names_and_clears_a_blocked_link_only_while_running() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
@@ -220,8 +224,32 @@ fn tors_sampled_view_names_and_clears_a_blocked_link_only_while_running() {
     let step = core.on(tor_says(Reported::Yes, Reported::Yes), 4);
     assert_eq!(announces(&step), 1, "the recovery is said at once");
     assert_eq!(core.status().cause, Cause::None);
-    core.on(tor_says(Reported::Yes, Reported::No), 5);
-    assert_eq!(core.status().cause, Cause::ExternalBlocked, "no circuit");
+    let step = core.on(tor_says(Reported::Yes, Reported::No), 5);
+    assert_eq!(announces(&step), 0);
+    assert_eq!(
+        core.status().cause,
+        Cause::None,
+        "no circuit is not Tor saying its network is down"
+    );
+}
+
+/// **After a resume, no circuit is not a block** (the VM suspend of
+/// 2026-10-30). Tor drops its circuits on a clock jump and says so; the
+/// sample after it reads `circuit-established=0` with liveness up. That
+/// named the blocked link and said "cannot reach the Tor network" for the
+/// seconds Tor took to rebuild. Reading "no circuit" as "blocked" again
+/// fails this.
+#[test]
+fn the_sample_after_a_clock_jump_names_no_block() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    reach_usable(&mut core);
+    core.on(Input::ClockJumped, 10);
+    let step = core.on(tor_says(Reported::Yes, Reported::No), 11);
+    assert_eq!(announces(&step), 0, "nothing is said");
+    assert_eq!(core.status().cause, Cause::None);
+    assert!(!render(&core.status()).contains("cannot reach"));
+    core.on(tor_says(Reported::Yes, Reported::Yes), 18);
+    assert_eq!(core.status().cause, Cause::None);
 }
 
 /// "Process only when the control connection also fails" (Rick): a blocked

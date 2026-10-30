@@ -114,10 +114,21 @@ pub fn round_inputs(marks: &[RoundMark], mut draw: impl FnMut() -> u64) -> Vec<I
         .collect()
 }
 
+/// The `REASON` Tor gives a bootstrap problem caused by a clock difference
+/// (tor 0.4.9.14: "Clock skew -259201 in directory from DIRSERV;
+/// CLOCK_SKEW"). Tor names the clock in its own `CLOCK_SKEW` status event
+/// beside it, with the seconds.
+const CLOCK_SKEW_REASON: &str = "CLOCK_SKEW";
+
 /// §4.2's named external cause: a bootstrap problem Tor has marked `warn`,
-/// carrying `WARNING` or `REASON`.
+/// carrying `WARNING` or `REASON`. A problem whose reason is the clock is
+/// not a blocked link: Tor's `CLOCK_SKEW` event names that cause, and
+/// mapping the problem to "blocked" overwrote it at every problem, so the
+/// node alternated between "the clock is off" and "check the firewall"
+/// (§7, the clock-behind VM run of 2026-10-30).
 fn outbound_blocked(problem: &crate::control::BootstrapProblem) -> bool {
     problem.recommendation == Recommendation::Warn
+        && problem.reason.as_deref() != Some(CLOCK_SKEW_REASON)
         && (problem.warning.is_some() || problem.reason.is_some())
 }
 
@@ -214,6 +225,42 @@ mod tests {
         assert_eq!(
             round_inputs(&[RoundMark::FirstUploaded], &mut draw),
             [Input::FirstUploaded { draw: 5 }]
+        );
+    }
+
+    /// **A bootstrap problem caused by the clock is not a blocked link**
+    /// (the clock-behind VM run of 2026-10-30). The line is the problem Tor
+    /// sent there, its `CLOCK_SKEW` reason beside the `CLOCK_SKEW` status
+    /// event that names the cause; mapping it to blocked made the node
+    /// alternate between the clock and the firewall. The clock-ahead run's
+    /// problem (`DONE`, a handshake closed on an expired certificate) still
+    /// names the blocked link, whose words now put the clock first. Mapping
+    /// every `warn` problem to blocked again fails this.
+    #[test]
+    fn a_clock_skew_bootstrap_problem_is_not_a_blocked_link() {
+        use crate::control::{parse_event, ReplyFramer};
+        let parse = |line: &str| {
+            let mut framer = ReplyFramer::default();
+            framer.push_bytes(format!("650 {line}\r\n").as_bytes());
+            let reply = framer.next_reply().expect("frames").expect("a reply");
+            parse_event(&reply).expect("an event")
+        };
+        let skew = parse(
+            "STATUS_CLIENT WARN BOOTSTRAP PROGRESS=40 TAG=loading_keys \
+             SUMMARY=\"Loading authority key certs\" \
+             WARNING=\"Clock skew -259201 in directory from DIRSERV\" REASON=CLOCK_SKEW \
+             COUNT=8 RECOMMENDATION=warn HOSTID=\"?\" HOSTADDR=\"192.0.2.1:443\"",
+        );
+        assert!(input_of(&skew).is_none(), "{skew:?}");
+        let done = parse(
+            "STATUS_CLIENT WARN BOOTSTRAP PROGRESS=14 TAG=handshake \
+             SUMMARY=\"Handshaking with a relay\" WARNING=DONE REASON=DONE COUNT=32 \
+             RECOMMENDATION=warn HOSTID=\"0E6E048E32E6CCE9B99F415FBA60584B06117B23\" \
+             HOSTADDR=\"192.0.2.2:9001\"",
+        );
+        assert!(
+            matches!(input_of(&done), Some(Input::ExternalBlocked)),
+            "{done:?}"
         );
     }
 

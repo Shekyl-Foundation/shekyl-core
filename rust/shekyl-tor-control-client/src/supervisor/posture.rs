@@ -194,6 +194,11 @@ pub enum Cause {
     /// found unreachable (§4.4: a Service remedy whose control command
     /// failed escalates to a respawn).
     OnionRefused,
+    /// Tor reported a clock jump during its bootstrap, and then neither its
+    /// percent nor the bytes it read moved for the policy's bound: its
+    /// retries were scheduled on the clock that was wrong. It is started
+    /// again (§4.4).
+    StrandedAfterClockJump,
 }
 
 /// Free space under Tor's data directory against what a spawn needs.
@@ -311,6 +316,12 @@ impl ProgressWindow {
             begun: false,
             line: None,
         }
+    }
+
+    /// When the percent last changed, in the caller's clock.
+    #[must_use]
+    pub const fn moved_at(&self) -> u64 {
+        self.progress_at
     }
 
     /// The last percent a sample or a bootstrap notice reported.
@@ -517,7 +528,8 @@ pub fn install_sentence(cause: &Cause) -> Option<&'static str> {
         | Cause::TooManyFiles { .. }
         | Cause::ReplyLate
         | Cause::DangerousVersion
-        | Cause::OnionRefused => None,
+        | Cause::OnionRefused
+        | Cause::StrandedAfterClockJump => None,
     }
 }
 
@@ -653,10 +665,30 @@ fn speaks_bootstrap(status: &Status) -> bool {
 
 fn behaviour(status: &Status) -> String {
     match status.own_tx {
-        OwnTx::AddressHiding => "Tor is carrying this node's traffic.".to_owned(),
+        // The relay's verdict says an origin leaves on an address-hiding
+        // session now. That the link carries traffic is said only while the
+        // link shows usable, or degraded on its inbound side alone: beside
+        // a fault or a network cause it would contradict the next sentence,
+        // and what is true then is narrower (the VM suspend, 2026-10-30).
+        OwnTx::AddressHiding if link_carries(status) => {
+            "Tor is carrying this node's traffic.".to_owned()
+        }
+        OwnTx::AddressHiding => {
+            "Connections already open through Tor still carry this node's traffic.".to_owned()
+        }
         OwnTx::Held => held_sentence(status.sync),
         OwnTx::ClearnetOnly => "This node is syncing and sending over the open network. Until the encrypted link is in place, that network is unencrypted.".to_owned(),
         OwnTx::Offline => "This node is offline.".to_owned(),
+    }
+}
+
+/// The link is usable outbound: shown usable, or degraded only because the
+/// onion is unreachable (no cause stands).
+fn link_carries(status: &Status) -> bool {
+    match status.shown {
+        Shown::Usable => true,
+        Shown::Degraded => status.cause == Cause::None,
+        Shown::Restarting | Shown::RestartingHeld | Shown::Bootstrapping => false,
     }
 }
 
@@ -757,8 +789,11 @@ fn named_cause(status: &Status) -> Option<String> {
             ),
             None => format!("Tor's data directory {} could not be used.", path.display()),
         }),
+        // Clock first: a wrong clock also stops every handshake, Tor may name
+        // nothing more specific than the handshake (the clock-ahead VM run of
+        // 2026-10-30), and the date takes the operator ten seconds to check.
         Cause::ExternalBlocked | Cause::DirectoryUnreachable => Some(
-            "This machine cannot reach the Tor network. Check the firewall or the network."
+            "This machine cannot reach the Tor network. Check this computer's date and time, then the firewall or the network."
                 .to_owned(),
         ),
         Cause::ClockSkew { seconds } => Some(format!(
@@ -773,6 +808,10 @@ fn named_cause(status: &Status) -> Option<String> {
         }
         Cause::OnionRefused => Some(
             "Tor refused to publish this node's address again and is being started again."
+                .to_owned(),
+        ),
+        Cause::StrandedAfterClockJump => Some(
+            "Tor stopped making progress after this computer's clock changed, and is being started again."
                 .to_owned(),
         ),
     }

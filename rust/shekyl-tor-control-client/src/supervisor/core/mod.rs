@@ -19,6 +19,7 @@ use super::posture::{
 
 mod announce;
 mod backoff;
+mod clock_jump;
 mod dials;
 mod network_view;
 mod probe;
@@ -78,6 +79,11 @@ pub struct Policy {
     /// How long a round may stay open before it is counted as stuck, said
     /// once at debug, and ended in the coalescer so the next round is seen.
     pub round_stuck_after: Duration,
+    /// How long, after Tor reported a clock jump during a bootstrap, the
+    /// percent and `traffic/read` may both stand still before the bootstrap
+    /// counts as stranded and Tor is started again (Rick, 2026-10-30). The
+    /// soak refines it.
+    pub jump_stall_after: Duration,
 }
 
 impl Policy {
@@ -108,6 +114,8 @@ impl Policy {
             // The live tests' wait for a round, where the stuck rounds were
             // found (§10).
             round_stuck_after: Duration::from_secs(300),
+            // Rick, 2026-10-30: 5 minutes; the soak refines it.
+            jump_stall_after: Duration::from_secs(300),
         }
     }
 }
@@ -461,6 +469,8 @@ pub struct Core {
     round: Option<probe::RoundTrack>,
     /// Rounds that stayed open past `Policy::round_stuck_after`, this boot.
     stuck_rounds: u32,
+    /// A clock jump during this bootstrap, and `traffic/read`'s movement.
+    jump: clock_jump::JumpWatch,
     /// The owed republish is a Service remedy: a refusal escalates.
     service_republish: bool,
 }
@@ -494,6 +504,7 @@ impl Core {
             probe: Probe::Idle,
             round: None,
             stuck_rounds: 0,
+            jump: clock_jump::JumpWatch::new(now),
             service_republish: false,
         };
         let step = core.step(now, vec![Action::CheckPin]);
@@ -549,7 +560,7 @@ impl Core {
             Input::ExternalBlocked => self.external(now, Cause::ExternalBlocked),
             Input::DirectoryUnreachable => self.external(now, Cause::DirectoryUnreachable),
             Input::ClockSkew { seconds } => self.external(now, Cause::ClockSkew { seconds }),
-            Input::ClockJumped => self.clock_jumped(),
+            Input::ClockJumped => self.clock_jumped(now),
             Input::TooManyFiles { open } => self.too_many_files(now, open),
             Input::DangerousVersion => {
                 self.set_cause(Cause::DangerousVersion);
@@ -615,6 +626,10 @@ impl Core {
                     self.arm_alive(now);
                 }
                 Phase::Bootstrapping { .. } => {
+                    if let Some(fault) = self.stranded_after_jump(now) {
+                        actions.extend(fault);
+                        return self.step(now, actions);
+                    }
                     self.progress.speak(now);
                     // A named cause is said by its own events, at most once
                     // per cap. The progress line is a different action, so
@@ -706,6 +721,7 @@ impl Core {
         };
         self.launch_failures = 0;
         self.progress = ProgressWindow::start(now, self.policy.alive_every);
+        self.jump = clock_jump::JumpWatch::new(now);
         self.set_cause(Cause::None);
         self.arm_sample(now);
         self.arm_alive(now);
@@ -740,6 +756,10 @@ impl Core {
             self.progress.note_percent(progress, now);
         }
         self.progress.note_read(read, now);
+        self.jump.note_read(read, now);
+        if let Some(fault) = self.stranded_after_jump(now) {
+            return fault;
+        }
         if let Phase::Running { link, .. } = &mut self.phase {
             *link = Link::Open;
             return Vec::new();
@@ -833,7 +853,8 @@ impl Core {
         self.owed_actions()
     }
 
-    fn clock_jumped(&mut self) -> Vec<Action> {
+    fn clock_jumped(&mut self, now: u64) -> Vec<Action> {
+        self.jump.jumped(now);
         match &mut self.phase {
             Phase::Running { link, .. } => *link = Link::Resumed,
             Phase::Bootstrapping { .. } => {}

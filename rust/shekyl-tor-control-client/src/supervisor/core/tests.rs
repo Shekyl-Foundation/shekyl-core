@@ -28,6 +28,7 @@ fn policy() -> Policy {
         probe_within: Duration::from_secs(60),
         round_wait: Duration::from_secs(60),
         round_stuck_after: Duration::from_secs(300),
+        jump_stall_after: Duration::from_secs(300),
     }
 }
 
@@ -983,6 +984,8 @@ fn an_exhausted_pin_holds_the_origin_while_health_stays_true() {
     assert_eq!(core.status().own_tx, OwnTx::Held);
 }
 
+mod clock_jump;
 mod pace;
 mod probe;
 mod quiet;
+mod render;
