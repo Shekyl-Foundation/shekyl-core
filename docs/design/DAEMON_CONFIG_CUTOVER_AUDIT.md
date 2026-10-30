@@ -218,7 +218,7 @@ of its own, for the same reason as the negative one.
   sequence runs on the main thread outside the owner's `block_on`: the
   RPC's stop blocks on its own runtime's drain, and a runtime cannot be
   entered from inside another's `block_on`.
-- **The managed Tor at steps 6, 8 and 9** (`rust/shekyl-daemon/src/tor.rs`).
+- **The managed Tor at steps 6, 8 and 9** (`rust/shekyl-daemon/src/tor/mod.rs`).
   Step 6 spawns `DaemonTorControl::start` on the owner's runtime, so
   discovery and bootstrap overlap the core's construction, and step 8
   awaits it after the RPC rendezvous; nothing blocks the remnant's start

@@ -310,6 +310,9 @@ pub enum Input {
     ProbeArrived {
         /// The mint tick of the probe that arrived.
         minted_at: u64,
+        /// Process time when the handshake took the nonce, on this core's
+        /// clock. Evidence only when it is before the probe's bound.
+        arrived_at: u64,
     },
     /// The consensus does not recommend this Tor.
     DangerousVersion,
@@ -337,10 +340,12 @@ pub enum Input {
 pub enum RoundEnd {
     /// At least one upload reached a directory.
     Uploaded,
-    /// No upload succeeded and at least one failed: Service-class evidence.
+    /// Every upload ended, none succeeded, and at least one failed:
+    /// Service-class evidence. An upload still in flight is [`Self::Unknown`].
     FailedAll,
-    /// The round ended with its ends lost (the sink dropped events, or the
-    /// next round began). Not evidence either way.
+    /// The round ended without a verdict: an upload is still unfinished, or
+    /// its ends were lost (the sink dropped events, or the next round began).
+    /// Not evidence either way.
     Unknown,
 }
 
@@ -535,7 +540,10 @@ impl Core {
             Input::DescriptorRefetched { draw } => self.refetched(now, draw),
             Input::ProbeDialed { minted_at } => self.probe_dialed(minted_at),
             Input::ProbeNotDialed => self.probe_not_dialed(),
-            Input::ProbeArrived { minted_at } => self.probe_arrived(now, minted_at),
+            Input::ProbeArrived {
+                minted_at,
+                arrived_at,
+            } => self.probe_arrived(now, minted_at, arrived_at),
             Input::OnionRejected => self.onion_refused(now),
             Input::EndpointReady => self.endpoint_ready(),
             Input::ExternalBlocked => self.external(now, Cause::ExternalBlocked),

@@ -82,11 +82,12 @@ pub fn input_of(event: &TorEvent) -> Option<Input> {
 
 /// The inputs a round's marks carry (§4.5, §4.4). A round's end is
 /// [`Input::UploadRoundEnded`], with one `draw()` for the probe's delay: a
-/// round with an upload that succeeded schedules the probe, one in which no
-/// upload succeeded and at least one failed is Service-class evidence, and
-/// one whose ends were lost (`unfinished` only) is neither. A round's start
-/// and its first upload are inputs too: the probe follows the round's end,
-/// or `Policy::round_wait` after its first upload, whichever comes first
+/// round with an upload that succeeded schedules the probe, one in which
+/// every upload ended, none succeeded and at least one failed is
+/// Service-class evidence, and one that still has an upload unfinished, or
+/// whose ends were lost, is neither. A round's start and its first upload
+/// are inputs too: the probe follows the round's end, or
+/// `Policy::round_wait` after its first upload, whichever comes first
 /// (Rick, 2026-10-29), and a round open too long is counted. Each of the
 /// first upload and the end carries its own draw.
 pub fn round_inputs(marks: &[RoundMark], mut draw: impl FnMut() -> u64) -> Vec<Input> {
@@ -96,11 +97,13 @@ pub fn round_inputs(marks: &[RoundMark], mut draw: impl FnMut() -> u64) -> Vec<I
             RoundMark::Started => Input::UploadRoundStarted,
             RoundMark::FirstUploaded => Input::FirstUploaded { draw: draw() },
             RoundMark::Ended {
-                uploaded, failed, ..
+                uploaded,
+                failed,
+                unfinished,
             } => Input::UploadRoundEnded {
                 end: if uploaded > 0 {
                     RoundEnd::Uploaded
-                } else if failed > 0 {
+                } else if failed > 0 && unfinished == 0 {
                     RoundEnd::FailedAll
                 } else {
                     RoundEnd::Unknown
@@ -129,10 +132,11 @@ mod tests {
 
     /// A round's marks become the core's inputs: its start, its first upload
     /// and its end, each upload and end with a draw of its own. A round with a
-    /// success ends as the probe's trigger, one with no success and a failure
-    /// as the Service evidence, and one whose ends were lost as neither.
-    /// Mapping every `HS_DESC FAILED` to a republish, or treating lost ends
-    /// as failures, fails this.
+    /// success ends as the probe's trigger, one in which every upload ended
+    /// and one failed as the Service evidence, and one that still has an
+    /// upload unfinished, or whose ends were lost, as neither. Mapping every
+    /// `HS_DESC FAILED` to a republish, or treating a stuck round's open
+    /// uploads as a failed round, fails this.
     #[test]
     fn a_rounds_marks_are_its_start_first_upload_and_end() {
         let mut draws = 0_u64..;
@@ -190,9 +194,26 @@ mod tests {
                 draw: 3
             }]
         );
+        // A stuck round, or a resync, reports the uploads that never ended.
+        // One failure beside them is not a round in which every upload failed.
+        let open = round_inputs(
+            &[RoundMark::Ended {
+                uploaded: 0,
+                failed: 1,
+                unfinished: 15,
+            }],
+            &mut draw,
+        );
+        assert_eq!(
+            open,
+            [Input::UploadRoundEnded {
+                end: RoundEnd::Unknown,
+                draw: 4
+            }]
+        );
         assert_eq!(
             round_inputs(&[RoundMark::FirstUploaded], &mut draw),
-            [Input::FirstUploaded { draw: 4 }]
+            [Input::FirstUploaded { draw: 5 }]
         );
     }
 

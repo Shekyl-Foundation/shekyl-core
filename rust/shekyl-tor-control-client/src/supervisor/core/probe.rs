@@ -11,15 +11,17 @@
 //! first upload, whichever comes first (Rick, 2026-10-29), schedules it,
 //! after a delay drawn uniformly from the policy's range, so a hostile directory does not see "upload, then an
 //! immediate fetch of the same descriptor". The probe's nonce arriving at
-//! this node's inbound handshake is the evidence.
+//! this node's inbound handshake is the evidence, when the handshake took
+//! the nonce before the probe's bound. The evidence time is that take.
 //!
 //! **One miss is not a verdict** (Rick, 2026-10-29). A probe that misses its
 //! bound is followed by `HSFETCH` of this node's own onion, which refreshes
 //! Tor's client view of that one address, and one more probe after a fresh
 //! delay. The onion is unreachable after two consecutive misses, the second
-//! preceded by the refetch; that, or a round in which every upload failed,
-//! is Service-class evidence: the onion is published again on the running
-//! Tor, and only a refused republish escalates to a respawn.
+//! preceded by the refetch; that, or a round in which every upload ended
+//! and every one failed, is Service-class evidence: the onion is published
+//! again on the running Tor, and only a refused republish escalates to a
+//! respawn.
 //!
 //! The probe answers one question, whether this node is reachable at its
 //! own onion (`TSR-Q14`). It never sets or clears an outbound or network
@@ -126,10 +128,11 @@ impl Core {
     /// A round ended. One in which an upload succeeded confirms the onion is
     /// published, as `ADD_ONION`'s reply does, and schedules the round's one
     /// probe unless the round's wait already did; a probe already scheduled,
-    /// in flight or being refetched is not doubled. One in which no upload
-    /// succeeded and at least one failed is Service-class evidence: the
-    /// onion is unreachable, and is published again. A round whose ends
-    /// were lost says nothing.
+    /// in flight or being refetched is not doubled. One in which every upload
+    /// ended, none succeeded and at least one failed is Service-class
+    /// evidence: the onion is unreachable, and is published again. A round
+    /// that still has an upload unfinished, or whose ends were lost, says
+    /// nothing.
     pub(super) fn round_ended(&mut self, now: u64, end: RoundEnd, draw: u64) -> Vec<Action> {
         let track = self.round.take();
         match end {
@@ -234,22 +237,32 @@ impl Core {
     }
 
     /// A probe's nonce came back through this node's onion. Only the probe
-    /// in flight is evidence; one from before a respawn, or one given up
-    /// on, is stale and changes nothing.
-    pub(super) fn probe_arrived(&mut self, now: u64, minted: u64) -> Vec<Action> {
+    /// in flight is evidence, and only when the handshake took the nonce
+    /// before that probe's bound. `arrived_at` is that take, on this core's
+    /// clock; `now` is the fold, which can be later, and it does not move
+    /// the evidence. A nonce taken at or after the bound leaves the probe
+    /// in flight, so the deadline still misses it. One from before a
+    /// respawn, or one given up on, is stale and changes nothing.
+    pub(super) fn probe_arrived(&mut self, now: u64, minted: u64, arrived_at: u64) -> Vec<Action> {
         let Probe::InFlight {
+            bound_at,
             minted_at: Some(current),
             ..
         } = self.probe
         else {
             return Vec::new();
         };
-        if current != minted || !matches!(self.phase, Phase::Running { .. }) {
+        if current != minted
+            || !matches!(self.phase, Phase::Running { .. })
+            || arrived_at >= bound_at
+        {
             return Vec::new();
         }
         self.probe = Probe::Idle;
         let recovered = matches!(self.inbound, Inbound::Unreachable { .. });
-        self.inbound = Inbound::Reachable { evidence_at: now };
+        self.inbound = Inbound::Reachable {
+            evidence_at: arrived_at,
+        };
         if recovered {
             self.say(now, Cadence::Now)
         } else {

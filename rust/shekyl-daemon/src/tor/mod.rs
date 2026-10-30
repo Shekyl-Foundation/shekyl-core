@@ -21,7 +21,7 @@ use std::time::Duration;
 use shekyl_daemon_config::sections::Tor;
 use shekyl_ffi::dialer_ffi::ConnectorId;
 use shekyl_ffi::origin_verdict::OriginVerdict;
-use shekyl_ffi::tor_link::TorLinkTally;
+use shekyl_ffi::tor_link::{ProbeArrival, TorLinkTally};
 use shekyl_ffi::zone_ffi::DownCause;
 use shekyl_timing_engine::{Clock, MonotonicClock, OwnerClass, OwnerHandle, Tick};
 use shekyl_tor_control_client::binary::{
@@ -30,20 +30,21 @@ use shekyl_tor_control_client::binary::{
 use shekyl_tor_control_client::control::{
     parse_bootstrap_progress, parse_event, parse_network_view, parse_socks_listeners,
     parse_traffic_read, BootstrapState, Command, ControlError, EventReceiver, EventSink, ServiceId,
-    SocksTimeout, TorEvent, UploadRounds,
+    SocksTimeout, UploadRounds,
 };
 use shekyl_tor_control_client::supervisor::{
-    held_sentence, input_of, install_sentence, render, round_inputs, Action, Cause, Connectors,
-    Core, DialTally, Inbound, InboundCause, Input, ManagedRunning, NetworkView,
-    OriginVerdict as FoldedOrigin, Policy, Space, Step, Syncing, TorSetting,
+    held_sentence, input_of, install_sentence, render, Action, Cause, Connectors, Core, DialTally,
+    Input, ManagedRunning, NetworkView, OriginVerdict as FoldedOrigin, Policy, Space, Step,
+    Syncing, TorSetting,
 };
 use shekyl_tor_control_daemon::{
-    probe_own_onion, space_needed, sweep_stale_data_dirs, CacheSave, DaemonTorConfig,
-    DaemonTorControl, DaemonTorStartError, IsolationPair, KeptDataDir, OnionPow, OnionSeed,
-    ProbeDial, SpawnError, TorDeath,
+    space_needed, sweep_stale_data_dirs, CacheSave, DaemonTorConfig, DaemonTorControl,
+    DaemonTorStartError, IsolationPair, KeptDataDir, OnionPow, OnionSeed, SpawnError, TorDeath,
 };
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
+
+mod probe;
 
 /// A control reply this far past due is a process fault. Not a bootstrap limit.
 const REPLY_BOUND: Duration = Duration::from_secs(30);
@@ -361,17 +362,20 @@ struct Drive {
     /// only (`TSR-Q14`). The value in the cell at start is the baseline.
     /// The loop folds a later change as evidence.
     tor_link: watch::Receiver<TorLinkTally>,
-    /// The mint tick of each probe whose nonce came back through the onion
-    /// (§4.5). The core decides whether it is the probe in flight.
-    probe_arrivals: watch::Receiver<Option<Tick>>,
+    /// Each probe whose nonce came back through the onion (§4.5): the mint
+    /// that names it, and the process time the handshake took it. The core
+    /// accepts the take when it names the probe in flight and landed before
+    /// that probe's bound.
+    probe_arrivals: watch::Receiver<Option<ProbeArrival>>,
     /// The onion as last published.
     service: Option<ServiceId>,
     /// That onion's descriptor upload rounds (`TSR-Q5`).
     rounds: Option<UploadRounds>,
     /// The event sink's drop count already resynchronised.
     dropped_seen: u64,
-    /// The probe's dial while it is in flight. Aborting it drops its nonce.
-    probe: Option<JoinHandle<()>>,
+    /// The probe in flight. The nonce lives on this driver; aborting the
+    /// dial does not erase it ([`probe::Flight`]).
+    probe: Option<probe::Flight>,
     /// Tor's sampled view at the last Running sample, logged when it changes.
     network_view: NetworkView,
     control: Option<DaemonTorControl>,
@@ -421,12 +425,19 @@ impl Drive {
                     }
                 }
                 changed = self.probe_arrivals.changed() => {
-                    // Process-static: `Err` does not happen.
+                    // Process-static: `Err` does not happen. Biased ahead of
+                    // the deadline, so a take already in the cell is folded
+                    // before a bound that has also elapsed. The core still
+                    // compares the take's own time with the bound.
                     if changed.is_ok() {
                         let arrived = *self.probe_arrivals.borrow_and_update();
-                        if let Some(minted) = arrived {
+                        if let Some(arrival) = arrived {
                             tracing::info!(target: "tor", "this node's onion probe arrived");
-                            self.fold(Input::ProbeArrived { minted_at: minted.get() }).await;
+                            self.fold(Input::ProbeArrived {
+                                minted_at: arrival.minted_at.get(),
+                                arrived_at: arrival.arrived_at.get(),
+                            })
+                            .await;
                         }
                     }
                 }
@@ -438,21 +449,23 @@ impl Drive {
                 }
                 event = self.incoming.recv() => {
                     if let Some(reply) = event {
-                        for input in self.round_resync() {
-                            self.fold(input).await;
-                        }
+                        // One fold for the batch. Folding each input on its
+                        // own replaces the step, and the earlier actions,
+                        // a recovery among them, would never be performed.
+                        let mut inputs = self.round_resync();
                         if let Some(parsed) = parse_event(&reply) {
                             if let Some(input) = input_of(&parsed) {
                                 // A Tor statement the supervisor acts on, said
                                 // as it arrives: what a run records.
                                 tracing::info!(target: "tor", "Tor says {input:?}");
-                                self.fold(input).await;
+                                inputs.push(input);
                             }
                             for input in self.round_marks(&parsed) {
-                                say_round(&input);
-                                self.fold(input).await;
+                                probe::say_round(&input);
+                                inputs.push(input);
                             }
                         }
+                        self.fold_many(inputs).await;
                     }
                 }
                 death = self.death_rx.recv() => {
@@ -506,23 +519,41 @@ impl Drive {
         halt
     }
 
-    /// Fold one observation. A process that ended is reaped here when the
-    /// phase does not withdraw a route: there is nothing to take down, and
-    /// the directory is still kept. A [`Action::TakeDown`] reaps after it
-    /// withdraws, so the route is gone before the child is. A
-    /// [`Action::StopRoute`] only withdraws: the shutdown wipe still owns
-    /// the child.
+    /// Fold one observation. See [`Self::fold_many`].
     async fn fold(&mut self, input: Input) {
-        let ended = ends_incarnation(&input);
-        self.step = self.core.on(input, self.now());
-        let take_down = self
-            .step
-            .actions
-            .iter()
-            .any(|action| matches!(action, Action::TakeDown));
-        if ended && !take_down {
-            self.reap().await;
+        self.fold_many(vec![input]).await;
+    }
+
+    /// Fold `inputs` as one step. Each transition's actions are kept, in
+    /// order, and the deadline is the last transition's. An empty list
+    /// leaves the step alone, so a batch that carried nothing does not
+    /// disarm a wait that is already armed.
+    ///
+    /// A process that ended is reaped here when that transition does not
+    /// withdraw a route: there is nothing to take down, and the directory
+    /// is still kept. A [`Action::TakeDown`] reaps after it withdraws, so
+    /// the route is gone before the child is. A [`Action::StopRoute`] only
+    /// withdraws: the shutdown wipe still owns the child.
+    async fn fold_many(&mut self, inputs: Vec<Input>) {
+        if inputs.is_empty() {
+            return;
         }
+        let mut actions = Vec::new();
+        let mut deadline = None;
+        for input in inputs {
+            let ended = ends_incarnation(&input);
+            let step = self.core.on(input, self.now());
+            let take_down = step
+                .actions
+                .iter()
+                .any(|action| matches!(action, Action::TakeDown));
+            actions.extend(step.actions);
+            deadline = step.deadline;
+            if ended && !take_down {
+                self.reap().await;
+            }
+        }
+        self.step = Step { actions, deadline };
     }
 
     async fn act(&mut self, action: Action, halt: &mut bool) -> Vec<Input> {
@@ -781,127 +812,6 @@ impl Drive {
         }
     }
 
-    /// Publish the inbound facet on the managed route's link. Before a route
-    /// is installed there is nothing to name; [`Self::publish_route`]
-    /// publishes the core's facet when one is.
-    fn publish_inbound(&self, inbound: Inbound) {
-        let Some(incarnation) = self.incarnation else {
-            return;
-        };
-        let facet = link_inbound(inbound);
-        if shekyl_ffi::zone_ffi::publish_tor_inbound(incarnation, facet) {
-            tracing::info!(target: "tor", "this node's onion: {facet:?}");
-        }
-    }
-
-    /// Dial this node's own onion with a fresh probe nonce (§4.5). The
-    /// managed route and the onion are read now (`TSR-F10`). The dial runs on
-    /// its own task; the core's bound ends it with [`Action::CancelProbe`].
-    fn probe(&mut self) -> Input {
-        self.cancel_probe();
-        let Some(service) = self.service.clone() else {
-            return Input::ProbeNotDialed;
-        };
-        let Some(proxy) = shekyl_ffi::zone_ffi::managed_route(self.probe_pair.shared()) else {
-            return Input::ProbeNotDialed;
-        };
-        let Some(handshake) = shekyl_ffi::dialer_ffi::mint_probe() else {
-            return Input::ProbeNotDialed;
-        };
-        let minted_at = handshake.minted_at.get();
-        let port = self.virtual_port;
-        self.probe = Some(tokio::spawn(async move {
-            let started = std::time::Instant::now();
-            let dialed = probe_own_onion(&proxy, &service, port, &handshake.request).await;
-            let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-            match dialed {
-                ProbeDial::Delivered => {
-                    tracing::info!(target: "tor", elapsed_ms, "the onion probe's request was delivered");
-                }
-                other => {
-                    tracing::info!(target: "tor", elapsed_ms, "the onion probe's dial ended: {other:?}");
-                }
-            }
-            // The nonce stays in the set until the dial ends; an arrival
-            // after this is no longer possible.
-            drop(handshake);
-        }));
-        tracing::info!(target: "tor", "probing this node's onion");
-        Input::ProbeDialed { minted_at }
-    }
-
-    /// `HSFETCH` this node's own onion after a first probe miss: Tor refreshes
-    /// its client view of that one address (`TSR-Q14`). Whatever Tor answers,
-    /// the second probe follows, a fresh delay later; the fetch's `HS_DESC`
-    /// events carry the descriptor id, so no upload round counts them.
-    async fn refetch(&self) -> Input {
-        let draw = shekyl_ffi::tor_link::probe_delay_draw();
-        let (Some(control), Some(service)) = (self.control.as_ref(), self.service.clone()) else {
-            return Input::DescriptorRefetched { draw };
-        };
-        match control.ask(Command::HsFetch(service)).await {
-            Ok(reply) if reply.status() == 250 => {
-                tracing::info!(target: "tor", "the onion probe missed; Tor refetches this node's descriptor");
-            }
-            Ok(reply) => {
-                tracing::info!(target: "tor", status = reply.status(), "the onion probe missed; Tor did not take the refetch");
-            }
-            Err(error) => {
-                tracing::info!(target: "tor", "the onion probe missed; the refetch was not asked ({error})");
-            }
-        }
-        Input::DescriptorRefetched { draw }
-    }
-
-    /// Drop the probe's dial, if one is in flight. Its nonce leaves the set.
-    fn cancel_probe(&mut self) {
-        if let Some(task) = self.probe.take() {
-            task.abort();
-        }
-    }
-
-    /// This node's own onion's `HS_DESC` events, coalesced into rounds
-    /// (`TSR-Q5`). Each round's first upload carries a CSPRNG draw for the
-    /// probe's delay.
-    fn round_marks(&mut self, event: &TorEvent) -> Vec<Input> {
-        let (TorEvent::HsDesc(desc), Some(rounds)) = (event, self.rounds.as_mut()) else {
-            return Vec::new();
-        };
-        let marks = rounds.observe(desc);
-        round_inputs(&marks, shekyl_ffi::tor_link::probe_delay_draw)
-    }
-
-    /// A descriptor round has been open five minutes: uploads with neither
-    /// `UPLOADED` nor `FAILED`, no event lost on our side unless the sink
-    /// says so. Said once at debug (Status counts it), and ended in the
-    /// coalescer, so the next round's uploads start a round of their own
-    /// instead of joining one that will never end (§10).
-    fn round_stuck(&mut self) -> Vec<Input> {
-        tracing::debug!(
-            target: "tor",
-            events_dropped = self.incoming.dropped(),
-            "a descriptor upload round has been open for five minutes; ending it"
-        );
-        let Some(mark) = self.rounds.as_mut().and_then(UploadRounds::resync) else {
-            return Vec::new();
-        };
-        round_inputs(&[mark], shekyl_ffi::tor_link::probe_delay_draw)
-    }
-
-    /// The sink dropped events since the last look: an open round's ends may
-    /// be among them, so it ends now and the next round can trigger.
-    fn round_resync(&mut self) -> Vec<Input> {
-        let dropped = self.incoming.dropped();
-        if dropped == self.dropped_seen {
-            return Vec::new();
-        }
-        self.dropped_seen = dropped;
-        let Some(mark) = self.rounds.as_mut().and_then(UploadRounds::resync) else {
-            return Vec::new();
-        };
-        round_inputs(&[mark], shekyl_ffi::tor_link::probe_delay_draw)
-    }
-
     async fn republish(&mut self) -> Input {
         let Some(control) = self.control.as_ref() else {
             return Input::ControlEnded;
@@ -1000,35 +910,6 @@ impl Drive {
 
     fn now(&self) -> u64 {
         now(&self.owner)
-    }
-}
-
-/// A descriptor round's mark, said as it arrives. The probe's delay draw is
-/// not said: its point is that no directory can predict the probe, and a
-/// log line is one more copy of it.
-fn say_round(input: &Input) {
-    if let Input::UploadRoundEnded { end, .. } = input {
-        tracing::info!(target: "tor", ?end, "descriptor round: ended");
-    }
-}
-
-/// The core's inbound facet as the link carries it. The core's clock is the
-/// process clock the link's ticks read.
-fn link_inbound(inbound: Inbound) -> shekyl_ffi::zone_ffi::InboundFacet {
-    use shekyl_ffi::zone_ffi::{InboundCause as LinkCause, InboundFacet};
-    match inbound {
-        Inbound::NotOffered => InboundFacet::NotOffered,
-        Inbound::Publishing => InboundFacet::Publishing,
-        Inbound::Reachable { evidence_at } => InboundFacet::Reachable {
-            evidence_at: Tick::new(evidence_at),
-        },
-        Inbound::Unreachable { cause, since } => InboundFacet::Unreachable {
-            cause: match cause {
-                InboundCause::ProbeTimedOut => LinkCause::ProbeTimedOut,
-                InboundCause::DescriptorRejected => LinkCause::DescriptorRejected,
-            },
-            since: Tick::new(since),
-        },
     }
 }
 

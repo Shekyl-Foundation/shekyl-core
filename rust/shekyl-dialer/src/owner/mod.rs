@@ -184,6 +184,9 @@ impl Shared {
 ///
 /// Holding it keeps the nonce in the set: dropping it erases the nonce, so
 /// a probe the supervisor gave up on cannot arrive as evidence afterwards.
+/// The driver holds it, not the dial task. The dial can end before the
+/// inbound handshake takes the nonce, and aborting the task drops whatever
+/// it owns later, on that task.
 #[derive(Debug)]
 pub struct ProbeHandshake {
     /// The probe nonce. Keep it until the probe ends.

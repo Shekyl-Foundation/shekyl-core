@@ -722,10 +722,17 @@ fn a_probe_nonce_reaches_the_supervisor_and_a_misrouted_one_does_not() {
 
     let probe = mint_probe().expect("a tip and a network id are published");
     assert!(!probe.request.is_empty(), "the handshake frame");
+    let before = dialer.hub().now();
     let taken = unsafe { shekyl_dial_take_handshake_nonce(tor, probe.nonce.bytes().as_ptr()) };
+    let after = dialer.hub().now();
     assert_eq!(taken, SHEKYL_NONCE_PROBE);
     assert!(arrivals.has_changed().expect("process-static"));
-    assert_eq!(*arrivals.borrow_and_update(), Some(probe.minted_at));
+    let arrival = (*arrivals.borrow_and_update()).expect("the probe's nonce was taken");
+    assert_eq!(arrival.minted_at, probe.minted_at);
+    assert!(
+        before <= arrival.arrived_at && arrival.arrived_at <= after,
+        "the stamp is the take, not a later fold"
+    );
 
     let misrouted = mint_probe().expect("again");
     let taken =

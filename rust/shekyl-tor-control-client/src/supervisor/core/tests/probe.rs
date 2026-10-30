@@ -45,6 +45,16 @@ fn uploaded(draw: u64) -> Input {
     }
 }
 
+/// The probe minted at `minted_at` was taken by the handshake at `arrived_at`.
+/// Successes here pass the fold's time as the take, so the evidence time
+/// stays that instant.
+fn arrival(minted_at: u64, arrived_at: u64) -> Input {
+    Input::ProbeArrived {
+        minted_at,
+        arrived_at,
+    }
+}
+
 /// The probe minted at `minted` misses its bound. One miss is not a verdict:
 /// the core refetches the descriptor and judges nothing. The second probe,
 /// after the refetch and a fresh delay, misses too. Returns that verdict
@@ -200,12 +210,7 @@ fn an_arrival_is_reachable_a_miss_republishes_and_a_refusal_respawns() {
         },
         secs(15),
     );
-    let arrived = core.on(
-        Input::ProbeArrived {
-            minted_at: secs(15),
-        },
-        secs(20),
-    );
+    let arrived = core.on(arrival(secs(15), secs(20)), secs(20));
     let reachable = Inbound::Reachable {
         evidence_at: secs(20),
     };
@@ -268,12 +273,7 @@ fn an_arrival_is_reachable_a_miss_republishes_and_a_refusal_respawns() {
         },
         secs(270),
     );
-    let recovered = core.on(
-        Input::ProbeArrived {
-            minted_at: secs(270),
-        },
-        secs(275),
-    );
+    let recovered = core.on(arrival(secs(270), secs(275)), secs(275));
     assert_eq!(announces(&recovered), 1, "a recovery is said at once");
     assert_eq!(core.status().shown, Shown::Usable);
 
@@ -304,7 +304,12 @@ fn an_arrival_is_reachable_a_miss_republishes_and_a_refusal_respawns() {
 #[test]
 fn a_round_with_every_upload_failed_is_unreachable_and_republishes() {
     let mut core = published();
-    core.on(uploaded(0), 0);
+    let succeeded = core.on(uploaded(0), 0);
+    assert_eq!(
+        republishes(&succeeded),
+        0,
+        "an upload that succeeded, even beside a failure, is not evidence"
+    );
     run_to(&mut core, secs(15));
     core.on(
         Input::ProbeDialed {
@@ -328,15 +333,75 @@ fn a_round_with_every_upload_failed_is_unreachable_and_republishes() {
             since: secs(16),
         }
     );
-    let late = core.on(
-        Input::ProbeArrived {
-            minted_at: secs(15),
+    let stacked = core.on(
+        Input::UploadRoundEnded {
+            end: RoundEnd::FailedAll,
+            draw: 0,
         },
-        secs(17),
+        secs(16),
     );
+    assert_eq!(
+        republishes(&stacked),
+        0,
+        "a republish already owed does not stack"
+    );
+    let unfinished = core.on(
+        Input::UploadRoundEnded {
+            end: RoundEnd::Unknown,
+            draw: 0,
+        },
+        secs(16),
+    );
+    assert_eq!(
+        republishes(&unfinished),
+        0,
+        "an upload still unfinished is not evidence"
+    );
+    let late = core.on(arrival(secs(15), secs(17)), secs(17));
     assert!(
         publishes_inbound(&late).is_empty(),
         "the cancelled probe's arrival is stale"
+    );
+}
+
+/// **The arrival's own time.** The handshake stamps when it took the nonce.
+/// A fold that runs after the bound still counts a take from before the
+/// bound, and the evidence time is that stamp. A take at or after the bound
+/// is not evidence: the probe stays in flight and the deadline still misses
+/// it. Judging by the fold's clock, or accepting a late nonce, fails this.
+#[test]
+fn a_timely_arrival_folded_late_is_reachable_and_a_late_one_still_misses() {
+    let mut core = published();
+    core.on(uploaded(0), 0);
+    let (at, step) = run_timed(&mut core, secs(15));
+    assert_eq!(probes(&step), 1);
+    core.on(Input::ProbeDialed { minted_at: at }, at);
+    let bound = at + secs(60);
+    let taken = at + secs(10);
+    let arrived = core.on(arrival(at, taken), bound + secs(5));
+    assert_eq!(
+        core.status().inbound,
+        Inbound::Reachable { evidence_at: taken }
+    );
+    assert_eq!(publishes_inbound(&arrived).len(), 1);
+    let later = core.on_deadline(bound + secs(5));
+    assert_eq!(cancels(&later), 0, "the probe already arrived");
+    assert_eq!(republishes(&later), 0);
+
+    let mut core = published();
+    core.on(uploaded(0), 0);
+    let (at, _) = run_timed(&mut core, secs(15));
+    core.on(Input::ProbeDialed { minted_at: at }, at);
+    let bound = at + secs(60);
+    let late = core.on(arrival(at, bound), bound);
+    assert!(publishes_inbound(&late).is_empty());
+    assert_eq!(core.status().inbound, Inbound::Publishing);
+    let missed = core.on_deadline(bound);
+    assert_eq!(cancels(&missed), 1);
+    assert_eq!(
+        refetches(&missed),
+        1,
+        "the deadline still misses a late take"
     );
 }
 
@@ -355,12 +420,7 @@ fn a_respawn_resets_inbound_and_a_stale_arrival_is_ignored() {
         },
         secs(15),
     );
-    core.on(
-        Input::ProbeArrived {
-            minted_at: secs(15),
-        },
-        secs(16),
-    );
+    core.on(arrival(secs(15), secs(16)), secs(16));
     core.on(uploaded(0), secs(100));
     run_to(&mut core, secs(115));
     core.on(
@@ -391,12 +451,7 @@ fn a_respawn_resets_inbound_and_a_stale_arrival_is_ignored() {
     assert_eq!(core.status().inbound, Inbound::Publishing);
     core.on(Input::RouteInstalled, due);
     core.on(Input::OnionPublished, due);
-    let stale = core.on(
-        Input::ProbeArrived {
-            minted_at: secs(115),
-        },
-        due + 1,
-    );
+    let stale = core.on(arrival(secs(115), due + 1), due + 1);
     assert!(publishes_inbound(&stale).is_empty());
     assert_eq!(core.status().inbound, Inbound::Publishing);
 
@@ -406,15 +461,10 @@ fn a_respawn_resets_inbound_and_a_stale_arrival_is_ignored() {
     let (at, step) = run_timed(&mut core, due + 2 + secs(15));
     assert_eq!(probes(&step), 1);
     core.on(Input::ProbeDialed { minted_at: at }, at);
-    let stale = core.on(
-        Input::ProbeArrived {
-            minted_at: secs(115),
-        },
-        at + 1,
-    );
+    let stale = core.on(arrival(secs(115), at + 1), at + 1);
     assert!(publishes_inbound(&stale).is_empty());
     assert_eq!(core.status().inbound, Inbound::Publishing);
-    core.on(Input::ProbeArrived { minted_at: at }, at + 2);
+    core.on(arrival(at, at + 2), at + 2);
     assert_eq!(
         core.status().inbound,
         Inbound::Reachable {
@@ -499,12 +549,7 @@ fn a_single_miss_refetches_and_an_arrival_after_it_is_reachable() {
         },
         probe_at,
     );
-    let arrived = core.on(
-        Input::ProbeArrived {
-            minted_at: probe_at,
-        },
-        probe_at + 1,
-    );
+    let arrived = core.on(arrival(probe_at, probe_at + 1), probe_at + 1);
     assert_eq!(republishes(&arrived), 0);
     assert_eq!(
         core.status().inbound,
@@ -542,7 +587,7 @@ fn the_probe_follows_the_rounds_end_or_its_wait_whichever_is_first() {
         "60 s after the first upload, then the delay"
     );
     core.on(Input::ProbeDialed { minted_at: at }, at);
-    core.on(Input::ProbeArrived { minted_at: at }, at + 1);
+    core.on(arrival(at, at + 1), at + 1);
     let late = core.on(
         Input::UploadRoundEnded {
             end: RoundEnd::Uploaded,
@@ -606,7 +651,7 @@ fn a_round_open_for_five_minutes_is_counted_once_and_never_a_cause() {
         }
         if probes(&step) > 0 {
             core.on(Input::ProbeDialed { minted_at: due }, due);
-            core.on(Input::ProbeArrived { minted_at: due }, due);
+            core.on(arrival(due, due), due);
         }
     }
     assert!(now >= secs(300));

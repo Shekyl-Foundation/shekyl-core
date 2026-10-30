@@ -27,9 +27,10 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use shekyl_daemon_config::sections::P2p;
-use shekyl_dialer::{
-    seeds, BanSnapshot, Dialer, LoadError, NonceTake, ProbeHandshake, SeedNetwork, Shared,
-};
+/// The probe's handshake. The managed-Tor driver names it here, and does
+/// not depend on the dialer crate.
+pub use shekyl_dialer::ProbeHandshake;
+use shekyl_dialer::{seeds, BanSnapshot, Dialer, LoadError, NonceTake, SeedNetwork, Shared};
 use shekyl_options::PeerEndpoint;
 use shekyl_peerlist::Peerlist;
 use std::net::SocketAddr;
@@ -343,7 +344,15 @@ pub unsafe extern "C" fn shekyl_dial_take_handshake_nonce(connector: u32, nonce:
     };
     let taken = dialer.take_nonce(connector, &nonce);
     match taken {
-        NonceTake::Probe { minted_at } => crate::tor_link::probe_arrived(minted_at),
+        NonceTake::Probe { minted_at } => {
+            // The take's own time, on the process clock the probe's bound
+            // reads. A fold that runs later does not move it.
+            let arrived_at = dialer.hub().now();
+            crate::tor_link::probe_arrived(crate::tor_link::ProbeArrival {
+                minted_at,
+                arrived_at,
+            });
+        }
         NonceTake::MisroutedProbe => tracing::error!(
             ?connector,
             "a probe of this node's onion arrived on a connector that is not Tor's; dropped, not evidence"

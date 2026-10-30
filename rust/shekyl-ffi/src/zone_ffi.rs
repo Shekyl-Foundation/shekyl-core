@@ -65,6 +65,11 @@ struct Host {
     /// presents this pair only when that route is this proxy's address
     /// ([`presented`]).
     tor_proxy: Mutex<Option<Proxy>>,
+    /// The route the managed Tor published last (`TOR_SUPERVISOR.md` §4.5).
+    /// The operator's proxy is [`Self::tor_proxy`] and is never written
+    /// here. The record dies with the host, so a later host cannot read a
+    /// route this one published.
+    managed: Mutex<Option<ManagedRoute>>,
     clearnet_tx: mpsc::UnboundedSender<ClearnetAdmitted>,
     tor_tx: mpsc::UnboundedSender<TorAdmitted>,
     shutdown_timeout: Duration,
@@ -434,6 +439,7 @@ fn ensure(network_id: [u8; 16]) -> Result<Arc<Host>, ZoneStart> {
         sockets: process_sockets(),
         hub: hub.clone(),
         tor_proxy: Mutex::new(None),
+        managed: Mutex::new(None),
         clearnet: Mutex::new(None),
         clearnet_tx,
         tor_tx,
@@ -830,10 +836,15 @@ pub fn publish_managed_running(
     publish_managed_socks(route.socks())
 }
 
-/// The incarnation and address of the route the managed Tor published last
-/// ([`publish_managed_socks`]). An in-process consumer reads the managed
-/// route against it ([`managed_route`]).
-static MANAGED: Mutex<Option<(u64, SocketAddr)>> = Mutex::new(None);
+/// The route the managed Tor last published, named by its link incarnation.
+///
+/// An operator's proxy is [`Host::tor_proxy`] and is never this record.
+/// [`managed_route`] reads it only while the link is still that route.
+#[derive(Clone, Copy)]
+struct ManagedRoute {
+    incarnation: u64,
+    at: SocketAddr,
+}
 
 /// The managed Tor's route for an in-process consumer, with that
 /// consumer's own isolation pair (`TOR_SUPERVISOR.md` §4.5; the brief's
@@ -842,15 +853,17 @@ static MANAGED: Mutex<Option<(u64, SocketAddr)>> = Mutex::new(None);
 /// Read at each use and never cached (`TSR-F10`): `None` unless the Tor
 /// link is usable now on the route the managed Tor published, so an
 /// operator's Tor, a fallen route or a route from before a respawn yields
-/// nothing. The operator's pair is never presented here (DC-Q7): the proxy
-/// carries `isolation` and nothing else. Each purpose (the probe, and the
-/// settlement fetch after it) holds its own fixed per-boot pair, so Tor puts
-/// its streams on circuits of their own, apart from the peer dials, which
-/// offer no authentication, and apart from each other.
+/// nothing. The publication lives on the zone host, beside the operator's
+/// proxy and never in its place, and dies with that host. The operator's
+/// pair is never presented here (DC-Q7): the proxy carries `isolation` and
+/// nothing else. Each purpose (the probe, and the settlement fetch after
+/// it) holds its own fixed per-boot pair, so Tor puts its streams on
+/// circuits of their own, apart from the peer dials, which offer no
+/// authentication, and apart from each other.
 #[must_use]
 pub fn managed_route(isolation: &Arc<SocksUsername>) -> Option<Proxy> {
     let host = HOST.lock().expect("zone host").clone()?;
-    let (incarnation, at) = (*MANAGED.lock().expect("managed route"))?;
+    let ManagedRoute { incarnation, at } = (*host.managed.lock().expect("managed route"))?;
     let link = host.hub.links().get(ConnectorId::Tor);
     (link.is_usable() && link.incarnation == incarnation && link.route == Some(Route::Socks(at)))
         .then(|| Proxy::authenticated_shared(at, Arc::clone(isolation)))
@@ -886,7 +899,10 @@ pub(crate) fn publish_managed_socks(socks: SocketAddr) -> Option<u64> {
         host.hub
             .links()
             .publish_usable(ConnectorId::Tor, Route::Socks(socks), host.hub.now());
-    *MANAGED.lock().expect("managed route") = Some((published.incarnation(), socks));
+    *host.managed.lock().expect("managed route") = Some(ManagedRoute {
+        incarnation: published.incarnation(),
+        at: socks,
+    });
     Some(published.incarnation())
 }
 

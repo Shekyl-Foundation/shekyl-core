@@ -13,7 +13,7 @@ use shekyl_timing_engine::{Clock, ManualClock, Tick};
 use super::super::posture::{
     render, Cause, Connectors, ManagedTorFix, OriginVerdict, OwnTx, Shown, Status, TorSetting,
 };
-use super::{duration_ns, Action, Core, Input, Policy, RoundEnd, Step};
+use super::{duration_ns, Action, Core, Input, Policy, Step};
 
 fn policy() -> Policy {
     Policy {
@@ -539,14 +539,9 @@ fn a_repeated_death_names_the_last_exit_code() {
     assert!(!text.contains("exit code"), "{text}");
 }
 
-/// A rejected onion retries on the sample, not in a loop. A descriptor
-/// round in which every upload failed republishes once; a second such round
-/// while that republish is still owed does not stack another. One failure
-/// in a round that also succeeded is not evidence (`TSR-M7`: 1 of 13).
-/// *Changed by increment 4:* the trigger was every `HS_DESC FAILED`, which
-/// a normal round produces.
+/// A rejected onion retries on the sample, not in a loop.
 #[test]
-fn an_onion_retries_on_the_sample_and_a_descriptor_failure_does_not_stack() {
+fn an_onion_retries_on_the_sample() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
     bring_up(&mut core);
     core.on(Input::RouteInstalled, 0);
@@ -564,44 +559,6 @@ fn an_onion_retries_on_the_sample_and_a_descriptor_failure_does_not_stack() {
             .count(),
         1
     );
-    core.on(Input::OnionPublished, due);
-    let one_failure = core.on(
-        Input::UploadRoundEnded {
-            end: RoundEnd::Uploaded,
-            draw: 0,
-        },
-        due,
-    );
-    assert!(!one_failure
-        .actions
-        .iter()
-        .any(|action| matches!(action, Action::RepublishOnion)));
-    let failed = core.on(
-        Input::UploadRoundEnded {
-            end: RoundEnd::FailedAll,
-            draw: 0,
-        },
-        due,
-    );
-    assert_eq!(
-        failed
-            .actions
-            .iter()
-            .filter(|action| matches!(action, Action::RepublishOnion))
-            .count(),
-        1
-    );
-    let stacked = core.on(
-        Input::UploadRoundEnded {
-            end: RoundEnd::FailedAll,
-            draw: 0,
-        },
-        due,
-    );
-    assert!(!stacked
-        .actions
-        .iter()
-        .any(|action| matches!(action, Action::RepublishOnion)));
 }
 
 /// The first `state` file defers disk writes. Once the route and the onion

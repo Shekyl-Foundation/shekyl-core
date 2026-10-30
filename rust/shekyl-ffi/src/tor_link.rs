@@ -40,23 +40,39 @@ pub const TOR_SOCKS_TIMEOUT: shekyl_tor_control_client::control::SocksTimeout =
         dial_deadline: TOR_DIAL_WITHIN,
     };
 
-/// When the probe that last arrived was minted (`TOR_SUPERVISOR.md` §4.5).
-/// `None` until one arrives.
-static PROBE: LazyLock<watch::Sender<Option<Tick>>> = LazyLock::new(|| watch::channel(None).0);
+/// One probe nonce the inbound handshake took (`TOR_SUPERVISOR.md` §4.5).
+///
+/// `minted_at` names the probe. `arrived_at` is the process time of the
+/// take, on the same clock as the probe's bound. The supervisor accepts
+/// the arrival when that time is before the bound; a later fold does not
+/// move it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProbeArrival {
+    /// The mint tick that names the probe.
+    pub minted_at: Tick,
+    /// When the handshake took the nonce.
+    pub arrived_at: Tick,
+}
 
-/// A receiver of the probe's arrivals: each is the mint tick of the probe
-/// whose nonce came back through this node's own onion. The supervisor
-/// compares it with the probe it has in flight; an older one is stale. The
+/// The probe that last arrived (`TOR_SUPERVISOR.md` §4.5). `None` until one
+/// arrives. The cell keeps the latest take: the driver holds one probe's
+/// nonce, so a second take is a later probe.
+static PROBE: LazyLock<watch::Sender<Option<ProbeArrival>>> =
+    LazyLock::new(|| watch::channel(None).0);
+
+/// A receiver of the probe's arrivals. The supervisor compares `minted_at`
+/// with the probe it has in flight and `arrived_at` with that probe's bound.
+/// An older mint, or a take at or after the bound, is not evidence. The
 /// sender is process-static, so the channel never closes.
 #[must_use]
-pub fn probe_arrivals() -> watch::Receiver<Option<Tick>> {
+pub fn probe_arrivals() -> watch::Receiver<Option<ProbeArrival>> {
     PROBE.subscribe()
 }
 
 /// The inbound handshake took a probe nonce on the Tor connector. Every
 /// arrival wakes the receiver, even one naming the same probe again.
-pub(crate) fn probe_arrived(minted_at: Tick) {
-    PROBE.send_replace(Some(minted_at));
+pub(crate) fn probe_arrived(arrival: ProbeArrival) {
+    PROBE.send_replace(Some(arrival));
 }
 
 /// One uniform draw from the OS CSPRNG, for the probe's delay

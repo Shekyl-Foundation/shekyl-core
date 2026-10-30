@@ -144,9 +144,11 @@ impl UploadRounds {
         marks
     }
 
-    /// End the open round now, after the event sink dropped events: the ends that were
-    /// lost will not arrive, and the next round must be able to trigger. `None` when no
-    /// round is open.
+    /// End the open round now. The driver does this when the sink dropped
+    /// events, and when the round has been open too long: the ends still
+    /// missing will not be waited on, and the next round must be able to
+    /// trigger. `None` when no round is open. An upload still in `open` is
+    /// counted unfinished, which is not a failed round.
     pub fn resync(&mut self) -> Option<RoundMark> {
         self.in_round().then(|| self.end())
     }
