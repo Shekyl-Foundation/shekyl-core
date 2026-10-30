@@ -396,6 +396,13 @@ sentence quotes a superseded figure, and no live section says
 records-was. Appendix C's briefs are kept as sent, and their "already
 known" lists describe the tree they were written against.
 
+**Landed.** ESR-15, 2026-10-27, at `11c3f6818` and `f16b9d79c`. One fee
+loop, `converge_weight_fee_by`. The wallet and the production arm pass
+`quantized_fee`; the flat control arm's weight-fees stay the unrounded
+product. In the sim the pricer is part of `PerByteRate`, stamped when the
+rate is minted. §5.25.1 has the run. The lattice step stays 1 000 atomic;
+its size is the open row in `FEE_LADDER_DERIVATION.md` §12.
+
 **Where the fixture tests run (2026-10-10).** The two `--stage2` narration
 tests are `#[ignore]`d for cost, and until this date no CI lane ran them: on
 PR #1009 both fixtures drifted at `783053554` and were regenerated two
@@ -473,7 +480,6 @@ defect.
 | Budget disposition (b) is unpenalised | (b) is the unmodulated subsidy, a counterfactual of the release multiplier. The penalty in (a) is bounded by the fees of the transactions that crossed the median, since the fill rule admits no other | Stated in `budget.rs` |
 | Every ordinary transaction pays Standard | No wallet escalates its rung under congestion; the user chooses. Blocks past the median are what Priority pays for | ESR-10's rung mix |
 | A claim is one ordinary transaction at the admission rate | The claim's own envelope and the wallet's claim hold floor (`EMISSION_CLAIM_FEE_FLOOR`) are not modelled | Stated here |
-| Fee paid unrounded | The product is the fixed point of `shekyl_tx_weight::converge_weight_fee` — the wallet's iteration without the lattice. The wallet rounds each fee up to the lattice, `shekyl_economics::FEE_QUANTIZATION_MASK` (1 000 atomic), through `quantized_fee`, the function relay admission runs. The fee-floor instrument in this crate pays unrounded too (FL-R22). At most 1 000 atomic per transaction, below print precision | Stated here. The lattice has its owner, so calling `quantized_fee` closes the row. That changes both narration fixtures in their last printed digits, so it is its own step: ESR-15 |
 | Fee floor enforced in consensus | Not the current system: the floor is relay policy (C2-R2 Q9, reopened 2026-10-02) | Second arm of ESR-7 |
 | Traffic schedules, opportunity-cost band, SKL price band, storage and Kryder terms, replica target `R = 6` | No production owner exists | Exogenous; each declared at its definition |
 | The fee-floor instrument's floor at `SCALE` resolution | FL-E1–E3 measure the floor's per-block slew, which is finer than one atomic unit per byte; the owner rounds to whole units | `fee_floor.rs`; pinned to `relay_fee_floor` and the ladder's `4F` by `the_floor_is_the_owners_at_scale_resolution` |
@@ -2077,6 +2083,177 @@ the binding rate and the decades (`onset.rs`), the floor share and the horizon,
 `CHALLENGED_LEAF_LEN`, `COUNT_CAP_BASE_MULTIPLE`, `CO_HOLDERS`, `SCARCE_R_MAX`,
 and the W₂ rig's three anchors as named constants in `mn_feasibility.rs`.
 Both narrations were regenerated after the grading above.
+
+### 5.25 ESR-15, predicted before the run (2026-10-27)
+
+Written against `dev` at `466ffe1f1`, before any ESR-15 code. The seven
+properties are `FEE_LADDER_DERIVATION.md` §12. Nothing below is a result.
+
+Read from the production narration at that pin, not from a run of this
+change: the growth gate admits baseline from year 19 and boom-bust from
+year 15; the A1-T onset years are the table's (`baseline` flat@10 y31,
+best@10 y34; `boom_bust` y26 and y28, both starred; `sustained_growth`
+y22 and y22; `late_chain_tail` y3 and y3; `high_history` y31 and y36).
+The A1 lines that are verdicts are "D2 case … none", "NO DISCRIMINATING
+SCENARIO", "W9 gate … FAIL", and "W10 gate: FAILS".
+
+- **E15-1.** Every production-arm fee `--stage2` charges is a multiple of
+  1 000 atomic. A test walks one baseline year and asserts
+  `fee % FEE_QUANTIZATION_MASK == 0`.
+- **E15-2.** An ordinary fee rises by less than 1 000 atomic, plus at most
+  one varint byte of rate, per transaction. No block-space cell moves.
+  The crossing years stay y19 and y15. No onset year moves. No A1 verdict
+  changes.
+- **E15-3.** Numeric narration lines that move do so in the last printed
+  digit, or past it. The production arm's header stops saying "unrounded".
+  The flat control arm's per-transaction fee stays the flat 0.1 SKL; its
+  weight-fees at the flat 300 atomic/byte admission stay on the unrounded
+  pricer, so that arm's fee figures do not move for the lattice. Closed-shard
+  counts move by at most a few shards, and only where a one-byte weight
+  change crosses a shard boundary. The new column is the lattice step in
+  basis points of that year's mean ordinary fee, `10 000 × 1 000 / fee`.
+  Year 1 on the baseline is registered as **(0.003, 0.011) bp**: the y10
+  mean 0.9228 SKL is 0.0108 bp, and year 1's reward and smaller median
+  both price a higher fee. A cell printed `0.0001` SKL is registered as
+  **50–200 bp**.
+- **E15-4.** At least one cell of the parity grid has an in-loop fixed
+  point different from `quantized_fee(converge_weight_fee(…))`.
+- **E15-5.** The copied wallet loop and the new wallet call agree on every
+  cell that did not overflow. Zero differences.
+
+#### 5.25.1 What the run said (2026-10-27)
+
+Graded against §5.25 on `dev` `466ffe1f1`. The red narration run moved
+both fixtures (production at line 1, control at the new column). The
+control arm's claim cost had gone through the lattice; `f16b9d79c` puts
+it back on the arm's pricer, and the regenerated control fixture adds
+only the lattice-step column.
+
+**E15-1. Held.** `a_baseline_years_fees_are_lattice_multiples` walks one
+baseline year and every ordinary fee is a multiple of 1 000 atomic.
+
+**E15-2. Held.** No block-space cell moves. The growth gate still admits
+baseline from year 19 and boom-bust from year 15. No onset year moves.
+The A1 lines stay "D2 case … none", "NO DISCRIMINATING SCENARIO",
+"W9 gate … FAIL", and "W10 gate: FAILS". The ordinary fee sits within
+one lattice step of `rate × weight(fee)` (worst gap 999 atomic), and a
+varint byte the rounding forces adds one byte of rate, which the
+third-fee cell in E15-4 exhibits.
+
+**E15-3. Held for the per-transaction prints and the control arm; missed
+on two aggregate columns.** The production header stops saying
+"unrounded". Ordinary-fee means and the claim sentence move by one unit
+in the last printed place, including one carry (`0.9859` → `0.9860`).
+`sustained_growth`'s year-20 `final_outputs` move by 4 (1 007 124 606 →
+1 007 124 610) and its `final_n` stays 2 084 169. `chain_bootstrap`'s
+`final_n` moves by 1 (3 787 489 → 3 787 490). The stuffer shape stays
+8-in/1-out. The control arm's fee figures do not move. The lattice-step
+column is new. Year 1 on the baseline is **0.0084 bp**, inside the
+registered (0.003, 0.011). A fee that prints `0.0001` SKL is
+**169.4915 bp** on `sustained_growth` from year 30, inside 50–200. The
+miss: the A4 decomposition's pool and revenue on `sustained_growth` move
+by 2.4 and 1.1 SKL (`144045.3` → `144047.7`, `66011.1` → `66012.2`), and
+its fee column moves by up to 1.4 SKL (`late_chain_tail` 20 966.1 →
+20 967.4), more than one unit in the last place. Those columns sum a
+campaign's fees into the burn the decomposition reads. `sustained_growth`'s
+closed-shard count does not move.
+
+**E15-4. Held.** Depth 24, 1-in/1-out, rate 2 182 818: the unrounded
+fixed point is 34 359 738 138, rounding it up is 34 359 739 000, and the
+in-loop lattice fee is 34 361 921 000. The rate sits in the last lattice
+step below `2^35`, so the rounding crosses a varint boundary. Aiming the
+zero-fee weight at the boundary does not produce a cell; the parity test
+searches that last step.
+
+**E15-5. Held.** The copied wallet loop and the new call agree on every
+compared cell that did not overflow. Zero differences.
+
+### 5.26 ESR-16, predicted before the sweep runs (2026-10-28)
+
+Written against `dev` at `716bd8ab7`, before any ESR-16 code. The sweep
+is [`ECONOMICS_SIM_PHASE0.md`](ECONOMICS_SIM_PHASE0.md) §P0.9 step 2.
+Nothing below is a result.
+
+`EconomicParams` already carries the release rails, the burn, the pool
+share, the emission curve, the DAA target, the escalation pair and the
+zone. Generated beside it, and not fields, are the two median windows,
+the surge factor, `SCALE`, `STAKER_EMISSION_SHARE`,
+`STAKER_EMISSION_DECAY`, `BLOCKS_PER_YEAR` and `TX_VOLUME_WINDOW`. The
+windows become const generics, not more runtime fields. `RelayPolicy`
+does not exist. The validator's parameter `OnceLock` is
+`shekyl-chain-rules` `rules/miner.rs`.
+
+- **E16-1.** A run that leaves every swept field at its generated default
+  prints a `--stage2` narration byte-identical to the fixture at this
+  pin, on both arms.
+- **E16-2.** Existing field values do not change. The consensus digest
+  moves once, because fields were added, and the pin is re-cut in the
+  same change.
+- **E16-3.** Production reads `EconomicParams` and `RelayPolicy` through
+  one accessor each. A gate fails when a production site reads a bare
+  generated constant that an accessor owns.
+- **E16-4.** `BLOCKS_PER_YEAR` equals `365 × 86 400 / daa_target_seconds`
+  (262 800 at the shipped target of 120 s). `settlement_epoch_blocks`
+  has one source. The zone and `TX_WEIGHT_LIMIT` stay the pair their
+  equality test names.
+
+### 5.26.1 What the sweep did (2026-10-28)
+
+Graded against §5.26. The default `--stage2` run is the two ignored
+narration tests, release, both arms.
+
+- **E16-1 held.** Both narration fixtures match the bytes at `716bd8ab7`.
+- **E16-2 held on the values, and the pin moved once.** No existing field
+  changed: the economics differential still matches its fixture, and the
+  narrations did not move. Two digests were re-cut in this change. The
+  consensus digest moved because `shekyl_blocks_per_year` was removed
+  (`17742dd72e533964a841784aae639d387dc01bee03ec6c54880012a52d337620`);
+  the year length is the derivation, so the key was a second identity.
+  The `EconomicParams` digest moved because three fields were appended
+  (format `0x05`); the C4 fixture is
+  `blake2b:90fc7496797f94b1e917f570d24663ee180e64ac5dc59793b902d0ba225a1f60`.
+- **E16-3 held.** `economic_params()` and `relay_policy()` are the
+  production reads. `scripts/ci/check_economic_accessors.py` fails a
+  production `EconomicParams::default()`, a second
+  `OnceLock<EconomicParams>`, and a `OnceLock` of `RelayPolicy`. It
+  requires `relay_policy()` in a production file other than
+  `relay_policy.rs`. A path component `tests` or ending `_tests`, and
+  a file named `tests.rs`, `*_tests.rs`, `*_test.rs` or
+  `test_support.rs`, and a module declared under a cfg that requires
+  `test` (`cfg(test)`, `cfg(all(…, test))`, including `not(not(test))`),
+  is not production. `cfg(any(test, feature = "…"))` still compiles
+  when the feature is on, so that file stays in the scan. The economics sim, the staking
+  sim and the bench build their own sets.
+- **E16-4 held.** `blocks_per_year(120)` is 262 800, and the shipped
+  field equals it (`shipped_defaults_are_well_formed`).
+  `settlement_epoch_blocks` is generated from
+  `config/consensus_constants.json`; the hand literal is gone. The zone
+  and `TX_WEIGHT_LIMIT` were already that pair and were not retouched.
+
+The stage-2 fold prices the staker share from the run's
+`EconomicParams`. `SimParams::economic` writes the share, the decay
+and the year onto that set. `price_emission`, `correction_factors_at`
+and `project_at_tip` read that set's schedule: the paid reward, the
+fee correction's `σ` and the tip's reported share. The shipped
+callers pass `economic_params()`, whose schedule is
+`emission_share_at`. `RelayPolicy` is the admission
+lattice, the slack, the lookback and the claim hold, outside the
+digest. The shipped wrappers read `relay_policy()`. A fold passes its
+own policy to `admits`, `quantize` and `admitted_floor`. The median
+and volume folds take the window length as a const generic
+(`medians_over_window`, `tx_volume_span_of`, `VolumeFold`); production
+instantiates the generated lengths, and EUP-5's window-length stress
+is the second caller.
+
+`SCALE` and the surge factor stay generated constants. `SCALE` is the
+unit the other fields are written in. The surge factor is the median
+formula's multiplier. `w_ref` (3 000) stays `RELAY_FLOOR_REFERENCE_TX_WEIGHT`;
+ESR-10's re-derived arm still threads it.
+
+The bond floor is generated once, in `shekyl-archival-retention`.
+`shekyl-engine-core` no longer emits a second copy; its 750 000 000
+pin is the test `archival_bond_floor_matches_gate4_calibration`. The
+cover rung is generated from the same JSON key.
 
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 

@@ -245,7 +245,8 @@ const _: () = assert!(
 );
 
 /// Global settlement-epoch boundary (`ARCHIVAL_TIMING_CONSTANTS.md` §1).
-pub const SETTLEMENT_EPOCH_BLOCKS: u64 = 10_000;
+/// Generated from `config/consensus_constants.json` `settlement_epoch_blocks`.
+pub use crate::bond_floor::SETTLEMENT_EPOCH_BLOCKS;
 
 use crate::bond_floor::ARCHIVAL_REORG_DEPTH_BLOCKS;
 

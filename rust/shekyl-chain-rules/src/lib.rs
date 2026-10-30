@@ -211,13 +211,14 @@ pub use rule_set::{
 };
 pub use rules::anchors::{AnchorConflict, Remedy};
 pub use rules::block_weight::{
-    effective_median_at, even_pair_median, median, medians_from, medians_over, EffectiveMedian,
-    Weights,
+    effective_median_at, even_pair_median, median, medians_from, medians_over, medians_over_window,
+    EffectiveMedian, Weights,
 };
 pub use rules::body::{ArchivalKey, BlockArchivalKeys};
 pub use rules::difficulty::{cumulative_difficulty_after, target_claim, Target};
 pub use rules::miner::{
-    closed_shards_before, closed_shards_through, tx_volume_span, tx_volume_window, TxVolumeSpan,
+    closed_shards_before, closed_shards_through, tx_volume_span, tx_volume_span_of,
+    tx_volume_window, TxVolumeSpan,
 };
 #[cfg(any(test, feature = "harness"))]
 pub use rules::proofs::probes;

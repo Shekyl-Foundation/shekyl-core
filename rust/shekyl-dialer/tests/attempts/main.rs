@@ -28,7 +28,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use shekyl_capped_stream::{ByteQueue, InboundEnd, QueueHold, Session, StreamEnds};
-use shekyl_dialer::{Dialer, Launch, WAKE_BASE_NANOS, WAKE_JITTER_NANOS};
+use shekyl_dialer::{Dialer, Launch};
 use shekyl_draw_rng::SplitMix64;
 use shekyl_levin::{
     response, BasicNodeData, BucketReader, CoreSyncData, HandshakeRequest, HandshakeResponse,
@@ -45,6 +45,14 @@ use shekyl_transport_layer::Sockets;
 
 const CLEARNET: ConnectorId = ConnectorId::Clearnet;
 const TOR: ConnectorId = ConnectorId::Tor;
+
+/// The wake spacing this file's connector dials at: its dial profile's.
+const WAKE_BASE_NANOS: u64 = shekyl_peerlist::dial_profile(ConnectorId::Tor)
+    .wake
+    .base_nanos;
+const WAKE_JITTER_NANOS: u64 = shekyl_peerlist::dial_profile(ConnectorId::Tor)
+    .wake
+    .jitter_nanos;
 const NETWORK: [u8; 16] = [7; 16];
 const SEND_CAP: usize = 64 * 1024;
 
@@ -770,12 +778,23 @@ const TOR_WINDOW: Duration = Duration::from_secs(104);
 /// on a dialer that knows the Tor window. Returns the dialer, the dial and
 /// the onion, after the attempt's result is applied.
 fn one_tor_attempt(seed: u64, cause: CloseCause, took: Duration) -> TorAttempt {
+    one_tor_attempt_under(seed, cause, took, Some(TOR_WINDOW))
+}
+
+/// [`one_tor_attempt`], with `window` the window the Tor connector
+/// published: `None` for an operator's Tor, whose timeout is unknown.
+fn one_tor_attempt_under(
+    seed: u64,
+    cause: CloseCause,
+    took: Duration,
+    window: Option<Duration>,
+) -> TorAttempt {
     let clock = ManualClock::new(Tick::new(1_000_000_000));
     let sockets = Sockets::new();
     let dial = Arc::new(HeldDial::answering(sockets.clone(), Vec::new()));
     dial.refuse_after(&clock, cause, took);
     let (_hub, dialer) = dialer_on(&clock, &sockets, Arc::clone(&dial) as Arc<dyn Dial>);
-    dialer.set_tor_window(Some(TOR_WINDOW));
+    dialer.set_window(TOR, window);
     let mut rng = SplitMix64::new(seed);
     let onion = onions(1).remove(0);
     dialer
@@ -926,7 +945,7 @@ fn a_timeout_inside_the_window_retries_however_late_it_is_applied() {
     let dial = Arc::new(HeldDial::answering(sockets.clone(), Vec::new()));
     dial.refuse_after(&clock, shekyl_tor::refused(0x06), Duration::from_secs(103));
     let (_hub, dialer) = dialer_on(&clock, &sockets, Arc::clone(&dial) as Arc<dyn Dial>);
-    dialer.set_tor_window(Some(TOR_WINDOW));
+    dialer.set_window(TOR, Some(TOR_WINDOW));
     let mut rng = SplitMix64::new(47);
     let onion = onions(1).remove(0);
     dialer
@@ -943,4 +962,18 @@ fn a_timeout_inside_the_window_retries_however_late_it_is_applied() {
         "the queue's wait is not the attempt's"
     );
     assert_eq!(dialer.shared().lists.failed_tests(&onion), 0);
+}
+
+/// **With no window published, a full-window timeout retries as before**
+/// (the dial profile brief, test 3). An operator's Tor publishes none: its
+/// `SocksTimeout` is unknown, so even a `0x06` at 110 s keeps its retries.
+#[test]
+fn with_no_window_published_a_tor_timeout_keeps_its_retries() {
+    one_tor_attempt_under(
+        66,
+        shekyl_tor::refused(0x06),
+        Duration::from_secs(110),
+        None,
+    )
+    .assert_retries();
 }

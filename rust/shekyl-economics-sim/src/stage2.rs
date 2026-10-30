@@ -29,9 +29,10 @@ use crate::burden::{
     OUTPUTS_PER_TX_NORMAL, REPLICAS_PER_SHARD, SHARD_BYTES, SKL_FIAT_PRICE_BAND,
 };
 use crate::calibration::{
-    rucknium_shards_equivalent, stuffer_campaign, stuffer_cost_per_shard_atomic, stuffer_shape,
-    stuffer_txs_per_shard, sustained_stuffer_cost_per_shard_atomic, tree_depth_for_leaves,
-    PerByteRate, RUCKNIUM_DURATION_DAYS, RUCKNIUM_SPAM_BYTES_GB, RUCKNIUM_SPAM_FEES_XMR,
+    required_price, rucknium_shards_equivalent, stuffer_campaign, stuffer_cost_per_shard_atomic,
+    stuffer_shape, stuffer_txs_per_shard, sustained_stuffer_cost_per_shard_atomic,
+    tree_depth_for_leaves, PerByteRate, RUCKNIUM_DURATION_DAYS, RUCKNIUM_SPAM_BYTES_GB,
+    RUCKNIUM_SPAM_FEES_XMR,
 };
 use crate::chain_cursor::{ChainCursor, ChainStep};
 use crate::engine::{emitted_at_start, ScenarioConfig, SimParams};
@@ -877,7 +878,7 @@ fn print_stuffer_cost_curve(
     admission: &AdmissionAtShards,
 ) -> fmt::Result {
     let rep = rucknium_shards_equivalent();
-    let shape0 = stuffer_shape(tree_depth_for_leaves(1), admission.at(1));
+    let shape0 = required_price(stuffer_shape(tree_depth_for_leaves(1), admission.at(1)));
     writeln!(
         out,
         "\nA4 (W9) stuffer cost — max-archival-bytes-per-fee shape ({SHAPE}, searched over every\n\
@@ -914,12 +915,14 @@ fn print_stuffer_cost_curve(
         let rate = admission.at(n_shards);
         let chain_leaves = crate::burden::honest_leaves_at_closed_shards(n_shards);
         let depth = tree_depth_for_leaves(chain_leaves);
-        let shape = stuffer_shape(depth, rate);
-        let fee_tx_skl = shape.tx_fee_atomic(depth, rate) as f64 / COIN;
-        let txs = stuffer_txs_per_shard(depth, rate);
-        let cost_shard_skl = stuffer_cost_per_shard_atomic(chain_leaves, rate) as f64 / COIN;
+        let shape = required_price(stuffer_shape(depth, rate));
+        let fee_tx_skl = required_price(shape.tx_fee_atomic(depth, rate)) as f64 / COIN;
+        let txs = required_price(stuffer_txs_per_shard(depth, rate));
+        let cost_shard_skl =
+            required_price(stuffer_cost_per_shard_atomic(chain_leaves, rate)) as f64 / COIN;
         let sustained_skl =
-            sustained_stuffer_cost_per_shard_atomic(chain_leaves, rate) as f64 / COIN;
+            required_price(sustained_stuffer_cost_per_shard_atomic(chain_leaves, rate)) as f64
+                / COIN;
         writeln!(
             out,
             "{n_shards:<15} {depth:>5} {:>12} {fee_tx_skl:>14.6} {txs:>9} {cost_shard_skl:>18.4} {sustained_skl:>20.4}{}",
@@ -1078,11 +1081,11 @@ fn a4_decompose(
     // campaign's own outputs can carry it across a layer boundary, and the
     // integrator prices the two sides at their own depths. One-shot cost —
     // the binding figure — with the transaction count rounded once.
-    let fee_skl = stuffer_campaign(
+    let fee_skl = required_price(stuffer_campaign(
         crate::burden::honest_leaves_at_closed_shards(n),
         delta,
         admission_rate,
-    )
+    ))
     .cost_atomic as f64
         / COIN;
     let bond_skl = (u128::from(ARCHIVAL_BOND_FLOOR_ATOMIC) * u128::from(delta)) as f64 / COIN
@@ -1484,8 +1487,9 @@ fn a3_stranding_report(
     if years.is_empty() {
         return Ok(());
     }
-    let claim_skl =
-        |a: &A1YearAgg| ordinary_tx_fee(a.cumulative_outputs, a.admission_rate) as f64 / COIN;
+    let claim_skl = |a: &A1YearAgg| {
+        required_price(ordinary_tx_fee(a.cumulative_outputs, a.admission_rate)) as f64 / COIN
+    };
     let (first, last) = (years[0], years[years.len() - 1]);
     writeln!(
         out,
@@ -1520,7 +1524,7 @@ fn a3_stranding_report(
     for (label, &yi) in ["early", "mid", "late"].iter().zip(picks.iter()) {
         let a = years[yi];
         let budget_per_epoch = per_epoch_atomic(a1_shipped_budget_atomic(a, &flat_25()));
-        let claim_cost = ordinary_tx_fee(a.cumulative_outputs, a.admission_rate);
+        let claim_cost = required_price(ordinary_tx_fee(a.cumulative_outputs, a.admission_rate));
         for &archivers in &A3_ARCHIVER_BAND {
             let pre = crate::stranding::measure(
                 budget_per_epoch,
@@ -1569,7 +1573,10 @@ fn a3_stranding_report(
         .find(|&a| crate::stranding::mean_replication(a, early.n) > g)
         .expect("replication grows without bound in the archiver count");
     let early_budget = per_epoch_atomic(a1_shipped_budget_atomic(early, &flat_25()));
-    let early_claim = ordinary_tx_fee(early.cumulative_outputs, early.admission_rate);
+    let early_claim = required_price(ordinary_tx_fee(
+        early.cumulative_outputs,
+        early.admission_rate,
+    ));
     let cliff_pre = crate::stranding::measure(
         early_budget,
         early.n,

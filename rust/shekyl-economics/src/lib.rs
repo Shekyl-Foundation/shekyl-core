@@ -23,6 +23,7 @@ pub mod emission_share;
 pub mod escalation;
 pub mod fee;
 pub mod params;
+pub mod relay_policy;
 pub mod release;
 pub mod reward;
 pub mod supply;
@@ -45,8 +46,8 @@ pub use emission::{
     PrePenaltyEmission,
 };
 pub use emission_share::{
-    compute_emission_split, emission_share, emission_share_at, split_block_emission, EmissionSplit,
-    EMISSION_SPLIT_EPOCH,
+    compute_emission_split, emission_share, emission_share_at, split_block_emission,
+    EmissionSchedule, EmissionScheduleError, EmissionSplit, EMISSION_SPLIT_EPOCH,
 };
 pub use escalation::{
     staker_pool_share_at, ClosedShardCount, EscalationParams, EscalationShapeError, ScaledShare,
@@ -60,9 +61,11 @@ pub use fee::{
     RELAY_FLOOR_WINDOW, STANDARD_RUNG_OVER_ECONOMY,
 };
 pub use params::{
-    calc_stake_ratio, EconomicParams, EconomicParamsError, BLOCKS_PER_YEAR, CALIBRATION_GENERATION,
-    EMISSION_CURVE_ASYMPTOTE, FULL_REWARD_ZONE, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
+    blocks_per_year, calc_stake_ratio, economic_params, EconomicParams, EconomicParamsError,
+    BLOCKS_PER_YEAR, CALIBRATION_GENERATION, EMISSION_CURVE_ASYMPTOTE, FULL_REWARD_ZONE,
+    STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
 };
+pub use relay_policy::{relay_policy, RelayPolicy, BASIS_POINTS};
 pub use release::calc_release_multiplier;
 pub use reward::{
     configured_emission, price_emission, EmissionInputs, PaidEmission, RewardArithmetic,

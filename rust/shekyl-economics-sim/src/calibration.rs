@@ -9,10 +9,10 @@
 //! operand `n` counts the shards **closed** by cumulative archival length —
 //! `|pqc_auths| + |prunable|` per transaction, `W` bytes per shard (`SHT-Q2`,
 //! `shekyl_types::shard_of`). A stuffer therefore buys **archival bytes per
-//! fee**, and the fee is `weight × rate` — the rate being the run's admission
-//! rate at the block the campaign lands in
-//! ([`crate::fee_model::FeeModel::admission_rate`]: the production relay floor,
-//! or the control arm's flat figure) — so the lever is the ratio
+//! fee**, and the fee is the fixed point of that weight at the run's admission
+//! rate. The rate carries its pricer, stamped when the rate is minted
+//! ([`crate::fee_model::FeeModel::admission_rate`]: the production relay floor
+//! on the lattice, or the control arm's unrounded figure), so the lever is the ratio
 //! `archival_len / weight` over the shapes the builder accepts
 //! (`1..=MAX_INPUTS` × `1..=MAX_OUTPUTS`). That ratio is **maximised by
 //! inputs, not outputs**: each input carries a hybrid PQC authorisation
@@ -42,11 +42,11 @@
 //! March-2024 figures are an order-of-magnitude anchor + proof-of-willingness
 //! (§12.3 DQ-2C), re-expressed in Shekyl's unit below — never hard-coded.
 
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 use shekyl_curve_tree::segment::outputs_per_node;
 use shekyl_tx_weight::{
-    converge_weight_fee, predict_archival_len, predict_weight, InputCount, OutputCount,
-    MAX_OUTPUTS, MAX_TREE_DEPTH,
+    converge_weight_fee, converge_weight_fee_by, predict_archival_len, predict_weight, InputCount,
+    OutputCount, MAX_OUTPUTS, MAX_TREE_DEPTH,
 };
 use shekyl_types::SHARD_LENGTH;
 
@@ -105,23 +105,95 @@ pub fn tree_depth_for_leaves(n: u64) -> u8 {
     MAX_TREE_DEPTH
 }
 
-/// A fee rate: atomic units per byte of transaction weight. A type of its
-/// own so that a rate cannot be passed where a leaf count, a depth or a
-/// shard count is expected — the functions that take one take several
-/// other integers beside it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-pub struct PerByteRate(u64);
+/// How a [`PerByteRate`] turns a weight into the fee the wire carries.
+///
+/// Production rates use the wallet's lattice. The flat control arm's
+/// admission rate is a declared departure and stays the unrounded product.
+/// Ordering is declaration order, and it is the tie-break after the atomic
+/// count on [`PerByteRate`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum FeePricer {
+    /// `quantized_fee`, seed 0: a no-change wallet spend.
+    Lattice,
+    /// `checked_mul`, seed 0.
+    Unrounded,
+}
+
+/// A fee rate: atomic units per byte of transaction weight, and the
+/// [`FeePricer`] that charges that weight.
+///
+/// A type of its own so that a rate cannot be passed where a leaf count, a
+/// depth or a shard count is expected — the functions that take one take
+/// several other integers beside it. The pricer is part of the rate. A
+/// lattice rate and an unrounded rate of the same count are different
+/// rates, and [`Self::with_atomic`] keeps the pricer of the rate it was
+/// raised from.
+///
+/// Ordering is the atomic count, then the pricer. The serialized form is
+/// the count alone: a report prints that number, and the pricer stays on
+/// the in-memory rate that produced it. There is no `Deserialize`. A bare
+/// number has no pricer, and reading one back would invent one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PerByteRate {
+    atomic: u64,
+    pricer: FeePricer,
+}
+
+impl Serialize for PerByteRate {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_u64(self.atomic)
+    }
+}
 
 impl PerByteRate {
+    /// A production rate. The wallet's lattice prices it.
     #[must_use]
-    pub const fn from_atomic(atomic_per_byte: u64) -> Self {
-        Self(atomic_per_byte)
+    pub const fn lattice(atomic_per_byte: u64) -> Self {
+        Self {
+            atomic: atomic_per_byte,
+            pricer: FeePricer::Lattice,
+        }
+    }
+
+    /// The flat control arm's admission rate. The unrounded product prices it.
+    #[must_use]
+    pub const fn unrounded(atomic_per_byte: u64) -> Self {
+        Self {
+            atomic: atomic_per_byte,
+            pricer: FeePricer::Unrounded,
+        }
     }
 
     #[must_use]
     pub const fn atomic(self) -> u64 {
-        self.0
+        self.atomic
     }
+
+    #[must_use]
+    pub const fn pricer(self) -> FeePricer {
+        self.pricer
+    }
+
+    /// The same pricer at a new count. The relay stuffer's outranking rate
+    /// is the floor it was raised from.
+    #[must_use]
+    pub const fn with_atomic(self, atomic_per_byte: u64) -> Self {
+        Self {
+            atomic: atomic_per_byte,
+            pricer: self.pricer,
+        }
+    }
+}
+
+/// A price a caller has committed to folding or printing.
+///
+/// `None` is a rate that does not fit a fee in `u64`. A search skips that
+/// shape. A caller that already chose the shape refuses here; the panic
+/// points at that caller. [`Shape::tx_fee_atomic`] itself stays `Option`.
+#[must_use]
+#[track_caller]
+pub(crate) fn required_price<T>(price: Option<T>) -> T {
+    price.expect("the rate does not price this shape")
 }
 
 /// A transaction shape the builder accepts.
@@ -133,22 +205,35 @@ pub struct Shape {
 
 impl Shape {
     /// Block weight of one transaction of this shape at `tree_depth`, paying
-    /// `rate`. The weight includes `varint(fee)`, so the fee is
-    /// [`converge_weight_fee`] and this is [`predict_weight`] at that fee.
-    /// Integer throughout (DQ-2G).
+    /// `rate`. The weight includes `varint(fee)`, so the fee is the fixed
+    /// point and this is [`predict_weight`] at that fee. Integer throughout
+    /// (DQ-2G). `None` when the fee or the weight does not fit in `u64`.
     #[must_use]
-    pub fn tx_weight(self, tree_depth: u8, rate: PerByteRate) -> u64 {
-        let fee = self.tx_fee_atomic(tree_depth, rate);
-        u64::try_from(predict_weight(self.n_in, self.n_out, tree_depth, fee)).unwrap_or(u64::MAX)
+    pub fn tx_weight(self, tree_depth: u8, rate: PerByteRate) -> Option<u64> {
+        let fee = self.tx_fee_atomic(tree_depth, rate)?;
+        u64::try_from(predict_weight(self.n_in, self.n_out, tree_depth, fee)).ok()
     }
 
-    /// Unrounded weight-fee (atomic) of one transaction of this shape at
-    /// `tree_depth`: the fixed point of `weight × rate`. No quantization
-    /// mask — that rounding is the wallet's, and this crate's declared
-    /// divergence from it.
+    /// The fee one transaction of this shape pays at `tree_depth`.
+    ///
+    /// The rate's pricer decides the loop. [`FeePricer::Lattice`] is the
+    /// wallet's no-change call: [`converge_weight_fee_by`] from seed 0 with
+    /// `quantized_fee`. [`FeePricer::Unrounded`] is the flat control arm's
+    /// admission rate. `None` is a fee that does not fit in `u64`. A search
+    /// skips that shape; [`required_price`] is the caller that already chose one.
     #[must_use]
-    pub fn tx_fee_atomic(self, tree_depth: u8, rate: PerByteRate) -> u64 {
-        converge_weight_fee(rate.atomic(), self.n_in, self.n_out, tree_depth)
+    pub fn tx_fee_atomic(self, tree_depth: u8, rate: PerByteRate) -> Option<u64> {
+        let rate_per_weight = rate.atomic();
+        match rate.pricer() {
+            FeePricer::Lattice => {
+                converge_weight_fee_by(self.n_in, self.n_out, tree_depth, 0, |weight| {
+                    shekyl_economics::quantized_fee(weight, rate_per_weight)
+                })
+            }
+            FeePricer::Unrounded => {
+                converge_weight_fee(rate_per_weight, self.n_in, self.n_out, tree_depth)
+            }
+        }
     }
 
     /// Archival bytes one transaction of this shape adds to the fold at
@@ -187,11 +272,12 @@ pub(crate) fn all_shapes() -> impl Iterator<Item = Shape> {
 
 /// Fee per archival byte of `shape` at `tree_depth`, as a rational
 /// `(fee, bytes)`; compared cross-multiplied so the argmax is exact.
-fn fee_per_archival(shape: Shape, tree_depth: u8, rate: PerByteRate) -> (u128, u128) {
-    (
-        u128::from(shape.tx_fee_atomic(tree_depth, rate)),
+/// `None` when the shape's fee does not fit.
+fn fee_per_archival(shape: Shape, tree_depth: u8, rate: PerByteRate) -> Option<(u128, u128)> {
+    Some((
+        u128::from(shape.tx_fee_atomic(tree_depth, rate)?),
         u128::from(shape.archival_bytes(tree_depth).max(1)),
-    )
+    ))
 }
 
 fn cheaper(a: (u128, u128), b: (u128, u128)) -> bool {
@@ -201,10 +287,11 @@ fn cheaper(a: (u128, u128), b: (u128, u128)) -> bool {
 
 /// The **max-archival-per-fee** shape at `tree_depth` — the one-shot
 /// stuffer's transaction, searched over every shape the builder accepts.
+/// `None` when no shape's fee fits in `u64`.
 #[must_use]
-pub fn stuffer_shape(tree_depth: u8, rate: PerByteRate) -> Shape {
+pub fn stuffer_shape(tree_depth: u8, rate: PerByteRate) -> Option<Shape> {
     all_shapes()
-        .map(|s| (s, fee_per_archival(s, tree_depth, rate)))
+        .filter_map(|s| fee_per_archival(s, tree_depth, rate).map(|ratio| (s, ratio)))
         .fold(
             None,
             |best: Option<(Shape, (u128, u128))>, cand| match best {
@@ -212,8 +299,7 @@ pub fn stuffer_shape(tree_depth: u8, rate: PerByteRate) -> Shape {
                 _ => Some(cand),
             },
         )
-        .expect("the shape space is non-empty")
-        .0
+        .map(|(shape, _)| shape)
 }
 
 /// The **max-archival-per-block** figure at `tree_depth`: the most archival
@@ -227,13 +313,13 @@ pub fn stuffer_shape(tree_depth: u8, rate: PerByteRate) -> Shape {
 #[must_use]
 pub fn max_archival_bytes_per_block(block_weight: u64, tree_depth: u8, rate: PerByteRate) -> u64 {
     all_shapes()
-        .map(|s| {
-            let weight = s.tx_weight(tree_depth, rate);
-            if weight == 0 {
+        .filter_map(|s| {
+            let weight = s.tx_weight(tree_depth, rate)?;
+            Some(if weight == 0 {
                 0
             } else {
                 (block_weight / weight).saturating_mul(s.archival_bytes(tree_depth))
-            }
+            })
         })
         .max()
         .unwrap_or(0)
@@ -249,12 +335,13 @@ impl Shape {
 
 /// Transactions of [`stuffer_shape`] that close one shard — `W` archival
 /// bytes — at `tree_depth`. The per-depth rate the reports print; a campaign
-/// is priced by [`stuffer_campaign`], not by multiplying this.
+/// is priced by [`stuffer_campaign`], not by multiplying this. `None` when
+/// the stuffer shape does not price.
 #[must_use]
-pub fn stuffer_txs_per_shard(tree_depth: u8, rate: PerByteRate) -> u64 {
-    let txs = stuffer_shape(tree_depth, rate)
-        .txs_for_archival_bytes(tree_depth, u128::from(SHARD_LENGTH.to_raw()));
-    u64::try_from(txs).unwrap_or(u64::MAX)
+pub fn stuffer_txs_per_shard(tree_depth: u8, rate: PerByteRate) -> Option<u64> {
+    let shape = stuffer_shape(tree_depth, rate)?;
+    let txs = shape.txs_for_archival_bytes(tree_depth, u128::from(SHARD_LENGTH.to_raw()));
+    Some(u64::try_from(txs).unwrap_or(u64::MAX))
 }
 
 /// Transactions of a shape minting `n_out` outputs each that a tree of
@@ -300,36 +387,43 @@ pub struct StufferCampaign {
 /// transactions. The fold's position inside the current shard when the
 /// campaign starts is not modelled (the operand is a shard count): it can
 /// only lower the count, by under one shard's worth of transactions.
+/// `None` when a segment's shape does not price.
 #[must_use]
-pub fn stuffer_campaign(honest_leaves: u64, delta: u64, rate: PerByteRate) -> StufferCampaign {
+pub fn stuffer_campaign(
+    honest_leaves: u64,
+    delta: u64,
+    rate: PerByteRate,
+) -> Option<StufferCampaign> {
     let mut remaining = u128::from(SHARD_LENGTH.to_raw()) * u128::from(delta);
     let mut leaves = honest_leaves;
     let mut txs = 0u64;
     let mut cost_atomic = 0u128;
     while remaining > 0 {
         let depth = tree_depth_for_leaves(leaves);
-        let shape = stuffer_shape(depth, rate);
+        let shape = stuffer_shape(depth, rate)?;
+        let fee = shape.tx_fee_atomic(depth, rate)?;
         let n_out = shape.n_out.get() as u64;
         let to_finish = shape.txs_for_archival_bytes(depth, remaining);
         let take = to_finish.min(stuffer_txs_before_deepening(depth, leaves, n_out));
         // `take ≥ 1` (both operands are), so every pass retires bytes and the
         // loop terminates; `take < to_finish` leaves `remaining > 0`.
         remaining = remaining.saturating_sub(take * u128::from(shape.archival_bytes(depth).max(1)));
-        cost_atomic += take * u128::from(shape.tx_fee_atomic(depth, rate));
+        cost_atomic += take * u128::from(fee);
         let take = u64::try_from(take).unwrap_or(u64::MAX);
         txs = txs.saturating_add(take);
         leaves = leaves.saturating_add(take.saturating_mul(n_out));
     }
-    StufferCampaign { txs, cost_atomic }
+    Some(StufferCampaign { txs, cost_atomic })
 }
 
 /// Attacker cost (atomic) to close one more shard — `W` archival bytes —
 /// against a tree of `honest_leaves`: [`stuffer_campaign`] at `delta = 1`.
 /// The per-shard rate the reports print; a campaign of `delta` shards is
-/// priced by the campaign function, not by multiplying this.
+/// priced by the campaign function, not by multiplying this. `None` when
+/// the campaign does not price.
 #[must_use]
-pub fn stuffer_cost_per_shard_atomic(honest_leaves: u64, rate: PerByteRate) -> u128 {
-    stuffer_campaign(honest_leaves, 1, rate).cost_atomic
+pub fn stuffer_cost_per_shard_atomic(honest_leaves: u64, rate: PerByteRate) -> Option<u128> {
+    Some(stuffer_campaign(honest_leaves, 1, rate)?.cost_atomic)
 }
 
 /// Attacker cost (atomic) to close one more shard under **output
@@ -346,12 +440,15 @@ pub fn stuffer_cost_per_shard_atomic(honest_leaves: u64, rate: PerByteRate) -> u
 /// program; after the Charnes–Cooper transform it is a linear program with
 /// two equality constraints (the balance and the normalisation), so a basic
 /// optimum has at most two shapes with non-zero weight. Searching triples
-/// would find nothing cheaper.
+/// would find nothing cheaper. `None` when no shape prices, or no cycle does.
 #[must_use]
-pub fn sustained_stuffer_cost_per_shard_atomic(chain_leaves: u64, rate: PerByteRate) -> u128 {
+pub fn sustained_stuffer_cost_per_shard_atomic(
+    chain_leaves: u64,
+    rate: PerByteRate,
+) -> Option<u128> {
     let depth = tree_depth_for_leaves(chain_leaves);
     let shapes: Vec<(Shape, (u128, u128))> = all_shapes()
-        .map(|s| (s, fee_per_archival(s, depth, rate)))
+        .filter_map(|s| fee_per_archival(s, depth, rate).map(|ratio| (s, ratio)))
         .collect();
     let mut best: Option<(u128, u128)> = None;
     let mut consider = |cycle: (u128, u128)| {
@@ -378,8 +475,8 @@ pub fn sustained_stuffer_cost_per_shard_atomic(chain_leaves: u64, rate: PerByteR
             ));
         }
     }
-    let (fee, bytes) = best.expect("the shape space is non-empty");
-    (u128::from(SHARD_LENGTH.to_raw()) * fee).div_ceil(bytes)
+    let (fee, bytes) = best?;
+    Some((u128::from(SHARD_LENGTH.to_raw()) * fee).div_ceil(bytes))
 }
 
 #[cfg(test)]
@@ -392,6 +489,10 @@ mod tests {
     /// two ends are the floor's owner at the curve's two ends
     /// (`FEE_LADDER_DERIVATION.md` FL-V11), not figures restated here: 20
     /// and 34 133 atomic per byte on the shipped curve.
+    fn priced<T>(price: Option<T>) -> T {
+        price.expect("priced")
+    }
+
     fn rates() -> [PerByteRate; 3] {
         use shekyl_economics::fee::{relay_fee_floor, FeeCorrection};
         use shekyl_economics::{
@@ -401,7 +502,7 @@ mod tests {
 
         let params = EconomicParams::default();
         let floor_at = |reward: u64| {
-            PerByteRate::from_atomic(relay_fee_floor(
+            PerByteRate::lattice(relay_fee_floor(
                 reward,
                 params.full_reward_zone,
                 RELAY_FLOOR_REFERENCE_TX_WEIGHT,
@@ -450,7 +551,7 @@ mod tests {
         let max_in = InputCount::clamped(usize::MAX).get();
         for rate in rates() {
             for depth in 2..=MAX_TREE_DEPTH {
-                let s = stuffer_shape(depth, rate);
+                let s = priced(stuffer_shape(depth, rate));
                 assert_eq!(
                     (s.n_in.get(), s.n_out.get()),
                     (max_in, 1),
@@ -465,8 +566,8 @@ mod tests {
                     n_out: OutputCount::clamped(MAX_OUTPUTS),
                 };
                 assert!(cheaper(
-                    fee_per_archival(s, depth, rate),
-                    fee_per_archival(leafy, depth, rate)
+                    priced(fee_per_archival(s, depth, rate)),
+                    priced(fee_per_archival(leafy, depth, rate))
                 ));
             }
         }
@@ -492,11 +593,11 @@ mod tests {
         // the bottom of a layer wide enough that no sweep delta here deepens it.
         let leaves = layer_capacity(4).unwrap() + 1_000;
         let depth = tree_depth_for_leaves(leaves);
-        let shape = stuffer_shape(depth, CONTROL);
-        let fee = u128::from(shape.tx_fee_atomic(depth, CONTROL));
-        let per_shard = stuffer_cost_per_shard_atomic(leaves, CONTROL);
+        let shape = priced(stuffer_shape(depth, CONTROL));
+        let fee = u128::from(priced(shape.tx_fee_atomic(depth, CONTROL)));
+        let per_shard = priced(stuffer_cost_per_shard_atomic(leaves, CONTROL));
         for delta in [1u64, 2, 7, 250, 4_096] {
-            let campaign = stuffer_campaign(leaves, delta, CONTROL);
+            let campaign = priced(stuffer_campaign(leaves, delta, CONTROL));
             assert_eq!(
                 tree_depth_for_leaves(leaves + campaign.txs * shape.n_out.get() as u64),
                 depth,
@@ -516,7 +617,10 @@ mod tests {
             );
             assert_eq!(campaign.cost_atomic, u128::from(campaign.txs) * fee);
         }
-        assert_eq!(stuffer_campaign(leaves, 1, CONTROL).cost_atomic, per_shard);
+        assert_eq!(
+            priced(stuffer_campaign(leaves, 1, CONTROL)).cost_atomic,
+            per_shard
+        );
     }
 
     #[test]
@@ -529,7 +633,7 @@ mod tests {
         let delta = 100u64;
         let shallow = tree_depth_for_leaves(leaves);
         assert_eq!(shallow, 4);
-        let s4 = stuffer_shape(shallow, CONTROL);
+        let s4 = priced(stuffer_shape(shallow, CONTROL));
         let n_out = s4.n_out.get() as u64;
         // The k-th transaction (from 0) sees `leaves + k·n_out`; it is at
         // depth 4 while that is ≤ cap.
@@ -538,21 +642,22 @@ mod tests {
         let bytes_after = bytes_total - u128::from(first) * u128::from(s4.archival_bytes(shallow));
         let deep = tree_depth_for_leaves(leaves + first * n_out);
         assert_eq!(deep, 5, "the campaign must actually cross");
-        let s5 = stuffer_shape(deep, CONTROL);
+        let s5 = priced(stuffer_shape(deep, CONTROL));
         let rest = bytes_after.div_ceil(u128::from(s5.archival_bytes(deep)));
         assert!(rest > 0, "the campaign must continue past the crossing");
 
-        let campaign = stuffer_campaign(leaves, delta, CONTROL);
+        let campaign = priced(stuffer_campaign(leaves, delta, CONTROL));
         assert_eq!(u128::from(campaign.txs), u128::from(first) + rest);
         assert_eq!(
             campaign.cost_atomic,
-            u128::from(first) * u128::from(s4.tx_fee_atomic(shallow, CONTROL))
-                + rest * u128::from(s5.tx_fee_atomic(deep, CONTROL))
+            u128::from(first) * u128::from(priced(s4.tx_fee_atomic(shallow, CONTROL)))
+                + rest * u128::from(priced(s5.tx_fee_atomic(deep, CONTROL)))
         );
         // And it is neither flat pricing: the crossing is visible in the figure.
         let flat = |d: u8| {
-            stuffer_shape(d, CONTROL).txs_for_archival_bytes(d, bytes_total)
-                * u128::from(stuffer_shape(d, CONTROL).tx_fee_atomic(d, CONTROL))
+            let shape = priced(stuffer_shape(d, CONTROL));
+            shape.txs_for_archival_bytes(d, bytes_total)
+                * u128::from(priced(shape.tx_fee_atomic(d, CONTROL)))
         };
         assert_ne!(campaign.cost_atomic, flat(shallow));
         assert_ne!(campaign.cost_atomic, flat(deep));
@@ -567,8 +672,9 @@ mod tests {
         let mut differs_somewhere = false;
         for depth in 2..=MAX_TREE_DEPTH {
             let best = max_archival_bytes_per_block(block_weight, depth, CONTROL);
-            let s = stuffer_shape(depth, CONTROL);
-            let cost_shape = (block_weight / s.tx_weight(depth, CONTROL)) * s.archival_bytes(depth);
+            let s = priced(stuffer_shape(depth, CONTROL));
+            let cost_shape =
+                (block_weight / priced(s.tx_weight(depth, CONTROL))) * s.archival_bytes(depth);
             assert!(best >= cost_shape, "depth {depth}: {best} < {cost_shape}");
             assert!(
                 best <= block_weight,
@@ -587,12 +693,16 @@ mod tests {
     fn cost_per_shard_is_txs_times_fee_and_sustained_is_dearer() {
         let leaves = 100_000;
         let depth = tree_depth_for_leaves(leaves);
-        let expected = u128::from(stuffer_txs_per_shard(depth, CONTROL))
-            * u128::from(stuffer_shape(depth, CONTROL).tx_fee_atomic(depth, CONTROL));
-        assert_eq!(stuffer_cost_per_shard_atomic(leaves, CONTROL), expected);
+        let shape = priced(stuffer_shape(depth, CONTROL));
+        let expected = u128::from(priced(stuffer_txs_per_shard(depth, CONTROL)))
+            * u128::from(priced(shape.tx_fee_atomic(depth, CONTROL)));
+        assert_eq!(
+            priced(stuffer_cost_per_shard_atomic(leaves, CONTROL)),
+            expected
+        );
         assert!(expected > 0);
         // Conserving outputs can only add producer transactions to the mix.
-        let sustained = sustained_stuffer_cost_per_shard_atomic(leaves, CONTROL);
+        let sustained = priced(sustained_stuffer_cost_per_shard_atomic(leaves, CONTROL));
         assert!(sustained >= expected, "{sustained} < {expected}");
         // …and never by more than the dearest single producer would cost.
         let leafy = Shape {
@@ -600,7 +710,7 @@ mod tests {
             n_out: OutputCount::clamped(MAX_OUTPUTS),
         };
         let all_leafy = (u128::from(SHARD_LENGTH.to_raw())
-            * u128::from(leafy.tx_fee_atomic(depth, CONTROL)))
+            * u128::from(priced(leafy.tx_fee_atomic(depth, CONTROL))))
         .div_ceil(u128::from(leafy.archival_bytes(depth)));
         assert!(sustained <= all_leafy);
     }
@@ -611,7 +721,7 @@ mod tests {
         // archival, so a shard is on the order of W × 300 ≈ 0.9 SKL. This is
         // the §12.13 figure, and it is a fact about the control arm's rate
         // only: the chain serves no such rate (see the next test).
-        let early = stuffer_cost_per_shard_atomic(30_000, CONTROL);
+        let early = priced(stuffer_cost_per_shard_atomic(30_000, CONTROL));
         let one_skl = u128::from(crate::burden::COIN);
         assert!(
             (one_skl / 2..=2 * one_skl).contains(&early),
@@ -630,8 +740,8 @@ mod tests {
         // rounding makes the sign depth-local. A ratio of bytes, so it holds
         // at every rate.
         for rate in rates() {
-            let early = stuffer_cost_per_shard_atomic(30_000, rate);
-            let late = stuffer_cost_per_shard_atomic(5_000_000_000, rate);
+            let early = priced(stuffer_cost_per_shard_atomic(30_000, rate));
+            let late = priced(stuffer_cost_per_shard_atomic(5_000_000_000, rate));
             let (lo, hi) = (early.min(late), early.max(late));
             assert!(
                 hi * 100 <= lo * 105,
@@ -650,8 +760,8 @@ mod tests {
         // of stuffing cost.
         let leaves = 30_000;
         let [tail, _, genesis] = rates();
-        let at_tail = stuffer_cost_per_shard_atomic(leaves, tail);
-        let at_genesis = stuffer_cost_per_shard_atomic(leaves, genesis);
+        let at_tail = priced(stuffer_cost_per_shard_atomic(leaves, tail));
+        let at_genesis = priced(stuffer_cost_per_shard_atomic(leaves, genesis));
         let cost_ratio = at_genesis as f64 / at_tail as f64;
         let rate_ratio = genesis.atomic() as f64 / tail.atomic() as f64;
         assert!(
@@ -661,5 +771,43 @@ mod tests {
         let one_skl = u128::from(crate::burden::COIN);
         assert!(at_genesis > 100 * one_skl, "genesis {at_genesis}");
         assert!(at_tail * 10 < one_skl, "tail {at_tail}");
+    }
+
+    #[test]
+    fn a_rate_keeps_the_pricer_it_was_minted_with() {
+        let floor = PerByteRate::lattice(20);
+        let raised = floor.with_atomic(21);
+        assert_eq!(raised.pricer(), FeePricer::Lattice);
+        assert_eq!(raised.atomic(), 21);
+        assert_eq!(
+            PerByteRate::unrounded(300).with_atomic(301).pricer(),
+            FeePricer::Unrounded
+        );
+        assert_ne!(PerByteRate::lattice(300), PerByteRate::unrounded(300));
+        assert!(PerByteRate::lattice(300) < PerByteRate::unrounded(300));
+        assert_eq!(
+            serde_json::to_string(&PerByteRate::lattice(300)).unwrap(),
+            "300"
+        );
+        assert_eq!(
+            serde_json::to_string(&PerByteRate::unrounded(300)).unwrap(),
+            "300"
+        );
+    }
+
+    #[test]
+    fn an_unrepresentable_rate_prices_no_shape() {
+        let rate = PerByteRate::lattice(u64::MAX);
+        let shape = Shape {
+            n_in: InputCount::clamped(1),
+            n_out: OutputCount::clamped(1),
+        };
+        assert_eq!(shape.tx_fee_atomic(1, rate), None);
+        assert_eq!(stuffer_shape(1, rate), None);
+        assert_eq!(stuffer_campaign(1_000, 1, rate), None);
+        assert_eq!(
+            max_archival_bytes_per_block(crate::swing::block_weight_penalty_free(), 1, rate),
+            0
+        );
     }
 }

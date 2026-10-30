@@ -55,9 +55,9 @@ pub fn reserved_descriptors(config: &DaemonConfig) -> u64 {
     connectors(config)
         .into_iter()
         .map(|c| {
-            let bound =
-                u64::try_from(shekyl_ffi::dialer_ffi::in_flight_bound(c)).unwrap_or(u64::MAX);
-            u64::from(shekyl_ffi::dialer_ffi::default_target(c)).saturating_add(bound)
+            let profile = shekyl_ffi::dialer_ffi::dial_profile(c);
+            let bound = u64::try_from(profile.in_flight_bound).unwrap_or(u64::MAX);
+            u64::from(profile.target).saturating_add(bound)
         })
         .fold(rpc, u64::saturating_add)
 }
@@ -114,6 +114,25 @@ pub fn own_clearnet(config: &DaemonConfig) -> Vec<NetworkAddress> {
             .collect(),
         Clearnet::Off => Vec::new(),
     }
+}
+
+/// What this node states as its own on each connector when it starts: the
+/// connectors whose own addresses the configuration knows. Clearnet, when
+/// it is on: `clearnet-advertise`, none for dial-only. Tor, on the
+/// operator's arm: the named onion, none for dial-only (`INPUT_GRAMMAR.md`
+/// IG-Q18). A managed Tor always publishes: its per-boot onion is stated
+/// when Tor publishes it (`dialer_ffi::note_own_onion`). A connector that
+/// is off states nothing.
+#[must_use]
+pub fn own_at_start(config: &DaemonConfig) -> Vec<(ConnectorId, Vec<NetworkAddress>)> {
+    let mut own = Vec::new();
+    if matches!(config.clearnet, Clearnet::On { .. }) {
+        own.push((ConnectorId::Clearnet, own_clearnet(config)));
+    }
+    if matches!(config.tor, Tor::Operator { .. }) {
+        own.push((ConnectorId::Tor, own_onion(config).into_iter().collect()));
+    }
+    own
 }
 
 /// This node's own onion on the operator's Tor, when one is named.
@@ -227,9 +246,8 @@ pub fn start(
     if config.offline() {
         return Ok(started);
     }
-    shekyl_ffi::dialer_ffi::set_own_addresses(ConnectorId::Clearnet, own_clearnet(config))?;
-    if let Some(onion) = own_onion(config) {
-        shekyl_ffi::dialer_ffi::set_own_addresses(ConnectorId::Tor, vec![onion])?;
+    for (connector, own) in own_at_start(config) {
+        shekyl_ffi::dialer_ffi::set_own_addresses(connector, own)?;
     }
     shekyl_ffi::dialer_ffi::apply_p2p(&config.p2p, &address_file(&config.data_dir))?;
     if let Clearnet::On { listen, socks, .. } = &config.clearnet {
@@ -308,8 +326,8 @@ mod tests {
     #[test]
     fn the_reservation_is_the_rpc_cap_plus_each_connectors_target_and_bound() {
         let held = |c: ConnectorId| {
-            u64::from(shekyl_ffi::dialer_ffi::default_target(c))
-                + u64::try_from(shekyl_ffi::dialer_ffi::in_flight_bound(c)).expect("small")
+            let profile = shekyl_ffi::dialer_ffi::dial_profile(c);
+            u64::from(profile.target) + u64::try_from(profile.in_flight_bound).expect("small")
         };
         let both = config(&["--rpc-connections-max", "25"]);
         assert_eq!(
@@ -328,8 +346,8 @@ mod tests {
         assert!(connectors(&offline).is_empty());
     }
 
-    /// The operator's onion is this node's own Tor address, from the
-    /// section: the C++ `--anonymous-inbound` advertisement, read in Rust.
+    /// The operator's onion (`tor-onion`) is this node's own Tor address,
+    /// from the section.
     /// A dial-only Tor has no own address, so the lists' own entry stays
     /// empty and the disclosure carries no per-node Tor value.
     #[test]
@@ -355,6 +373,60 @@ mod tests {
             own_onion(&config(&[])),
             None,
             "managed: the onion is published later"
+        );
+    }
+
+    /// **What this node states as its own at start** (the dial profile
+    /// brief, item 5; IG-Q18): clearnet when it is on, with
+    /// `clearnet-advertise` or none for dial-only; Tor on the operator's
+    /// arm, with its onion or none for dial-only. A managed Tor states its
+    /// per-boot onion when Tor publishes it, so nothing is stated for it
+    /// here, and an off connector states nothing.
+    #[test]
+    fn own_addresses_are_stated_at_start_only_where_the_config_knows_them() {
+        let connectors = |c: &DaemonConfig| -> Vec<ConnectorId> {
+            own_at_start(c)
+                .into_iter()
+                .map(|(connector, _)| connector)
+                .collect()
+        };
+        assert_eq!(
+            own_at_start(&config(&[])),
+            vec![(ConnectorId::Clearnet, Vec::new())],
+            "defaults: clearnet dial-only; the managed onion comes when published"
+        );
+        assert_eq!(
+            connectors(&config(&["--clearnet", "off", "--tor", "off"])),
+            Vec::<ConnectorId>::new()
+        );
+        let dial_only = config(&["--tor", "operator", "--tor-socks", "127.0.0.1:9050"]);
+        assert_eq!(
+            own_at_start(&dial_only),
+            vec![
+                (ConnectorId::Clearnet, Vec::new()),
+                (ConnectorId::Tor, Vec::new())
+            ],
+            "the operator's Tor with no onion is dial-only on Tor"
+        );
+        let host = onion_host();
+        let with_onion = config(&[
+            "--clearnet",
+            "off",
+            "--tor",
+            "operator",
+            "--tor-socks",
+            "127.0.0.1:9050",
+            "--tor-onion",
+            &format!("{host}:11021"),
+            "--tor-onion-listen",
+            "127.0.0.1:41021",
+        ]);
+        assert_eq!(
+            own_at_start(&with_onion),
+            vec![(
+                ConnectorId::Tor,
+                vec![NetworkAddress::Tor { host, port: 11021 }]
+            )]
         );
     }
 

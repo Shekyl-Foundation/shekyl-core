@@ -6,11 +6,13 @@
 //! Whether an attempt reached a peer. One classification for every
 //! connector.
 //!
-//! The quiet stretch and the Tor posture tally both read it. A connector
-//! stamps its own close cause; this module names no network. A later
-//! connector, I2P included, arrives as the same [`DialOutcome`]. The
-//! dialer dispatches. The connector has already said whether its channel
-//! existed.
+//! The Tor posture tally reads [`attempt_stream`]. The quiet stretch reads
+//! [`quiet_evidence`]. They agree, except on this node's own close: the
+//! tally does not count it as a failed Tor dial, and the quiet stretch
+//! does, because the lists cool that test. A connector stamps its own
+//! close cause; this module names no network. A later connector, I2P
+//! included, arrives as the same [`DialOutcome`]. The dialer dispatches.
+//! The connector has already said whether its channel existed.
 
 use shekyl_peerlist::{CloseKind, DialOutcome};
 
@@ -23,10 +25,23 @@ pub(crate) enum AttemptStream {
     /// A dial ended before a channel existed. The Tor tally counts it
     /// unopened. The quiet stretch does not start again.
     Unopened,
-    /// Not a dial. A payload refusal names a session already counted.
-    /// This node's own close is not a failed dial. Neither the stretch
-    /// nor the tally's dial counts move.
+    /// Not a dial, for the Tor tally. A payload refusal names a session
+    /// already counted. This node's own close is not a failed Tor dial.
+    /// The quiet stretch does not read this variant for that close: the
+    /// lists cool the test, so [`quiet_evidence`] counts it unopened.
     NotADial,
+}
+
+/// What one outcome does to the quiet count.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum QuietEvidence {
+    /// A stream opened. The unopened count resets and the span starts again.
+    Opened,
+    /// A test ended with no stream. The lists cool it, so it counts,
+    /// including this node's own close.
+    Unopened,
+    /// Not a test. A payload refusal names a session already counted.
+    NotATest,
 }
 
 /// Sort `outcome`. The match is total and names no connector.
@@ -47,13 +62,32 @@ pub(crate) fn attempt_stream(outcome: &DialOutcome) -> AttemptStream {
     }
 }
 
+/// What the quiet guard counts. A failed test that opened no stream adds
+/// to the unopened count, including [`CloseKind::LocalClose`]: the lists
+/// cool that test, and a connect this node could not make is the evidence
+/// the guard exists to read. A payload refusal is not a test. The Tor
+/// tally keeps [`attempt_stream`], which does not count a local close.
+pub(crate) fn quiet_evidence(outcome: &DialOutcome) -> QuietEvidence {
+    match attempt_stream(outcome) {
+        AttemptStream::Opened => QuietEvidence::Opened,
+        AttemptStream::Unopened => QuietEvidence::Unopened,
+        AttemptStream::NotADial => {
+            if matches!(outcome, DialOutcome::DialFailed(_, _)) {
+                QuietEvidence::Unopened
+            } else {
+                QuietEvidence::NotATest
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::Ipv4Addr;
 
     use shekyl_peerlist::{CloseCause, CloseKind, DialOutcome, NetworkAddress};
 
-    use super::{attempt_stream, AttemptStream};
+    use super::{attempt_stream, quiet_evidence, AttemptStream, QuietEvidence};
 
     fn address() -> NetworkAddress {
         NetworkAddress::Ipv4 {
@@ -112,6 +146,25 @@ mod tests {
         assert_eq!(
             attempt_stream(&DialOutcome::PayloadRefused(address)),
             AttemptStream::NotADial
+        );
+    }
+
+    /// This node's own close is not a failed Tor dial, and it is quiet
+    /// evidence: the lists cool it. A payload refusal is neither.
+    #[test]
+    fn a_local_close_counts_for_the_quiet_guard_and_not_the_tally() {
+        let local = failed(CloseKind::LocalClose);
+        assert_eq!(attempt_stream(&local), AttemptStream::NotADial);
+        assert_eq!(quiet_evidence(&local), QuietEvidence::Unopened);
+        let refused = DialOutcome::PayloadRefused(address());
+        assert_eq!(quiet_evidence(&refused), QuietEvidence::NotATest);
+        assert_eq!(
+            quiet_evidence(&failed(CloseKind::TransportTimeout)),
+            QuietEvidence::Unopened
+        );
+        assert_eq!(
+            quiet_evidence(&failed(CloseKind::LevinHandshakeRejected)),
+            QuietEvidence::Opened
         );
     }
 }

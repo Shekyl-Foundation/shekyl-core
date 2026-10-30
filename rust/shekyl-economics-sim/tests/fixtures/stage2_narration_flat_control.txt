@@ -148,6 +148,16 @@ The run's fee arm made visible: a year's fees are its traffic times this.
        chain_bootstrap      0.1000 0.1000 0.1000 0.1000 0.1000 0.1000
        late_chain_tail      0.1000 0.1000 0.1000 0.1000 0.1000 0.1000
        high_history_low_act 0.1000 0.1000 0.1000 0.1000 0.1000 0.1000
+  -> LATTICE STEP, basis points of that year's mean ordinary fee (1 000 atomic / fee), at y1/10/20/30/40/50/60.
+       baseline_steady_stat 0.1000 0.1000 0.1000 0.1000 0.1000 0.1000 0.1000
+       boom_bust_cycle      0.1000 0.1000 0.1000 0.1000 0.1000 0.1000 0.1000
+       sustained_growth     0.1000 0.1000 0.1000 0.1000 0.1000 0.1000 0.1000
+       stuffing_attack      0.1000 0.1000 0.1000 0.1000 0.1000 0.1000 0.1000
+       stake_concentration  0.1000 0.1000 0.1000 0.1000 0.1000 0.1000 0.1000
+       mass_unstaking       0.1000 0.1000 0.1000 0.1000 0.1000 0.1000 0.1000
+       chain_bootstrap      0.1000 0.1000 0.1000 0.1000 0.1000 0.1000 0.1000
+       late_chain_tail      0.1000 0.1000 0.1000 0.1000 0.1000 0.1000 0.1000
+       high_history_low_act 0.1000 0.1000 0.1000 0.1000 0.1000 0.1000 0.1000
   -> BLOCK SPACE (ESR-6) at y1/4/8/10/12/15/20/30/40/60: carried/demanded transactions per block, the long-term
 median at year end (KB), and transactions per block dropped unserved after the pool
 livetime. Blocks take what the producer's fill rule admits at the effective median.

@@ -29,7 +29,9 @@ use std::fmt;
 use shekyl_types::SHARD_LENGTH;
 
 use crate::burden::honest_leaves_at_closed_shards;
-use crate::calibration::{self, stuffer_campaign, tree_depth_for_leaves, PerByteRate};
+use crate::calibration::{
+    self, required_price, stuffer_campaign, tree_depth_for_leaves, PerByteRate,
+};
 use crate::escalation::{EscalationCurve, SHARE_SCALE};
 use crate::stage2::AdmissionAtShards;
 
@@ -252,11 +254,11 @@ pub fn a6_report(
         RDP = worst_reorg_pts,
         W = worst_epoch_pts,
         WP = worst_pen_pts,
-        C = stuffer_campaign(
+        C = required_price(stuffer_campaign(
             honest_leaves_at_closed_shards(worst_dn_at_n),
             worst_dn,
             admission.at(worst_dn_at_n),
-        )
+        ))
         .cost_atomic as f64
             / crate::burden::COIN as f64,
         P = penalty_compensation_skl_per_epoch(forfeit_per_block_atomic),
@@ -327,8 +329,8 @@ mod tests {
         const _: () = assert!(REORG_DEPTH_BLOCKS < EPOCH_BLOCKS);
         let n = 50_000;
         assert!(
-            max_shards_per_window(REORG_DEPTH_BLOCKS, surge, n, RATE)
-                <= max_shards_per_window(EPOCH_BLOCKS, surge, n, RATE)
+            max_shards_per_window(REORG_DEPTH_BLOCKS, surge, n, RATE,)
+                <= max_shards_per_window(EPOCH_BLOCKS, surge, n, RATE,)
         );
     }
 
