@@ -1,5 +1,6 @@
 # Brief C: the rehearsal on the final wire (the Noise flip, phase C)
 
+**Status:** BRIEF, revision 2 (2026-10-30): a lane's instructions for phase C of the Noise flip, not a design record.
 **Revision 2, 2026-10-30.** It replaces revision 1. The accept-rate bound and the soak period are ruled (Rick, 2026-10-30).
 **For:** the transport lane, with the dialer lane for the K and S follow-up (C4) and the refusal cells.
 **Read at:** `dev` `dc2a617d22`. Re-read every anchor at your own pin.
