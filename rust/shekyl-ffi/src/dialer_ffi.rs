@@ -177,10 +177,6 @@ pub(crate) fn start_connector(connector: ConnectorId, engine: &Handle<MonotonicC
             return false;
         }
     };
-    tracing::info!(
-        "{}",
-        disclosure(connector, &dialer.own_addresses(connector))
-    );
     admit_compiled_seeds(&dialer, connector);
     let name = match ThreadName::new(&format!("p2p-dial-{connector:?}").to_lowercase()) {
         Ok(name) => name,
@@ -213,17 +209,6 @@ pub(crate) fn start_connector(connector: ConnectorId, engine: &Handle<MonotonicC
             dialer.release_owner(connector);
             false
         }
-    }
-}
-
-/// The start line for `connector`: what this node discloses of itself
-/// there, read from its own addresses (`clearnet-advertise` on clearnet,
-/// the published onion on Tor). With none, the connector is dial-only.
-fn disclosure(connector: ConnectorId, own: &[NetworkAddress]) -> String {
-    if own.is_empty() {
-        format!("{connector:?} is dial-only: this node discloses no address of its own there")
-    } else {
-        format!("{connector:?}: this node discloses {own:?} as its own")
     }
 }
 

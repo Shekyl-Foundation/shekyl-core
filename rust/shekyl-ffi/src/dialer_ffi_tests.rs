@@ -132,31 +132,6 @@ fn a_push_before_the_dialer_exists_is_refused_not_held() {
     );
 }
 
-/// **The start line states what this node discloses** (the dial profile
-/// brief, item 5). With `clearnet-advertise` set, which the daemon hands
-/// over through `set_own_addresses` before the loop starts, the line names
-/// the address; with none, the connector is dial-only.
-#[test]
-fn the_start_line_names_the_advertised_clearnet_address() {
-    let _bind = seam_bind_lock().lock();
-    unbind();
-    bind();
-    let dialer = dialer().expect("bound");
-    let none = disclosure(
-        ConnectorId::Clearnet,
-        &dialer.own_addresses(ConnectorId::Clearnet),
-    );
-    assert!(none.contains("dial-only"), "{none}");
-    set_own_addresses(ConnectorId::Clearnet, vec![address(9)]).expect("a dialer");
-    let line = disclosure(
-        ConnectorId::Clearnet,
-        &dialer.own_addresses(ConnectorId::Clearnet),
-    );
-    assert!(line.contains("11.16.0.9"), "{line}");
-    assert!(!line.contains("dial-only"), "{line}");
-    unbind();
-}
-
 /// A dialer is built with no Tor window: until a managed Tor's route is
 /// published, no Tor's `SocksTimeout` is known, and every Tor timeout
 /// keeps its retries.
