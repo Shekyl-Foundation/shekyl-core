@@ -356,6 +356,20 @@ impl RegtestDaemon {
         Self::start_for_seed_with_schedule(seed, None).await
     }
 
+    /// [`Self::start_for_seed`] with the restricted listener bound as well:
+    /// an offline daemon mining to `seed`'s address, whose own transactions
+    /// are shown at once (no route, RD's NoRoute fluff at the origin).
+    pub(super) async fn start_for_seed_with_restricted_listener(seed: &[u8; 64]) -> RegtestDaemon {
+        let serial = serial_lock().lock_owned().await;
+        let mine_address = mine_address_from_seed(seed, shekyl_address::Network::Mainnet);
+        Self::spawn(
+            RegtestSpawn::new(Some(serial))
+                .with_mine_address(mine_address)
+                .with_restricted_listener(),
+        )
+        .await
+    }
+
     /// [`Self::start_for_seed`] with a levered regtest schedule.
     pub(super) async fn start_for_seed_with_schedule(
         seed: &[u8; 64],
@@ -933,9 +947,12 @@ impl RegtestDaemon {
     const MINE_CHUNK: u64 = 32;
 
     /// Q9: once the relay marks the pool shown, the next template lists
-    /// it. Empty pool returns at once. A live unbroadcast count means
-    /// stem is still held; a shown pool whose backlog is short means the
-    /// follower has not rebuilt the posted job yet.
+    /// it. A shown pool whose backlog is short means the follower has not
+    /// rebuilt the posted job yet. An unbroadcast entry is in its stem
+    /// phase and is not a candidate (the template lists what the node
+    /// shows, criterion 2), so it is not waited for: a linked node holds
+    /// one through its embargo, and a block mined meanwhile leaves it in
+    /// the pool.
     async fn wait_shown_pool_in_template(&self) {
         const LIMIT: Duration = Duration::from_secs(30);
         let deadline = Instant::now() + LIMIT;
@@ -955,7 +972,7 @@ impl RegtestDaemon {
                 .pool
                 .tx_pool_size()
                 .expect("the harness's pool is live");
-            if unbroadcast == 0 && shown == 0 {
+            if shown == 0 {
                 return;
             }
             if Instant::now() >= deadline {
@@ -966,15 +983,13 @@ impl RegtestDaemon {
                      follower (DRS_X_STORE_FLIP.md Q9)"
                 );
             }
-            if unbroadcast == 0 {
-                match self
-                    .rpc
-                    .json_rpc_call::<GetMinerDataResponse>("get_miner_data", None)
-                    .await
-                {
-                    Ok(data) if data.tx_backlog.len() as u64 == shown => return,
-                    Ok(_) | Err(_) => {}
-                }
+            match self
+                .rpc
+                .json_rpc_call::<GetMinerDataResponse>("get_miner_data", None)
+                .await
+            {
+                Ok(data) if data.tx_backlog.len() as u64 == shown => return,
+                Ok(_) | Err(_) => {}
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }

@@ -149,6 +149,7 @@ ARMED=(
   engine::regtest_e2e::jsonrpc_we_carries_handler_status_through_the_result_envelope
   engine::regtest_e2e::get_output_histogram_stays_unrouted
   engine::regtest_e2e::origin::restricted_listener_hides_a_transaction_this_node_has_not_broadcast
+  engine::regtest_e2e::origin::restricted_listener_names_a_transaction_this_node_shows
   engine::regtest_e2e::origin::get_info_console_commands_answer_on_the_in_process_arm
   engine::regtest_e2e::the_armed_switch_on_testnet_serves_two_levers_and_knows_no_third
   engine::regtest_e2e::a_dialing_node_hands_its_tip_to_the_peer_it_dials
