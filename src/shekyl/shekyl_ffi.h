@@ -3451,9 +3451,21 @@ void shekyl_inbound_ceiling_resolve(std::uint64_t reserved,
 //! origin. Canonical, not blob-derived — blob bytes are not a stable identity
 //! across relay hops (F-9). The observation deadline is drawn in the zone from
 //! its cached adopted-embargo timer at `now_ms` (not rebuilt at the FFI edge).
+//! `blobs` carries each transaction's bytes beside its hash: the zone holds
+//! them for the embargo's reshape or last-resort fluff, keyed on the hash and
+//! never on the wire (DAEMON_RELAY_PRIVACY.md §12.2). The origin's deadline is
+//! the derived retry interval (RX-1); a relay position's is its draw.
 void shekyl_relay_zone_record_stem(RelayZoneHandle* handle,
-    const std::uint8_t* hashes, std::size_t n,
+    const std::uint8_t* hashes, const ShekylRelayBlob* blobs, std::size_t n,
     const std::uint8_t* successor, const std::uint8_t* source,
+    std::uint64_t now_ms);
+
+//! Hold this node's own transactions, which were not sent (AwaitSync,
+//! NoOwnEdge, a failed own-edge write, a carrier discard): not shown, not
+//! fluffed (RX-2, Rick 2026-10-29). The zone plans them again on its wake.
+//! Deleter: RD, with levin_notify.
+void shekyl_relay_zone_hold_origin(RelayZoneHandle* handle,
+    const std::uint8_t* hashes, const ShekylRelayBlob* blobs, std::size_t n,
     std::uint64_t now_ms);
 
 //! Record `n` arrived canonical tx hashes, `from` a peer (16-byte uuid, or
@@ -3593,8 +3605,16 @@ std::size_t shekyl_relay_zone_queue_fluff(RelayZoneHandle* handle, std::uint64_t
 //! learns and apply it after poll returns — the C++ producer did exactly
 //! this, recording a stem observation from the resolution callback, until
 //! review caught it. No callback may throw across the boundary.
-void shekyl_relay_zone_poll(RelayZoneHandle* handle, std::uint64_t now_ms, void* ctx,
+//!
+//! `node_synchronised` is the handler's sync state until CS-5: a turn to
+//! synchronised plans every held origin at once. `on_stem` sends a reshape to
+//! the alternate, or a held origin's first send, on the ordinary wire
+//! (same shape as on_fluff; the bytes are the transaction's own). The zone
+//! marks shown in the pool, in Rust, whatever it fluffs as the last resort.
+void shekyl_relay_zone_poll(RelayZoneHandle* handle, std::uint64_t now_ms,
+                            bool node_synchronised, void* ctx,
                             ShekylRelayFluffCb on_fluff,
+                            ShekylRelayFluffCb on_stem,
                             ShekylRelayNoiseSendCb on_noise,
                             ShekylRelayCarrierResolvedCb on_carrier_resolved);
 
@@ -4122,9 +4142,6 @@ int32_t shekyl_pool_complement(const uint8_t* known, size_t known_count, ShekylB
 /// The relay fluffed `hash`. 0 done, SHEKYL_POOL_FAULT on a pool-file
 /// fault, SHEKYL_POOL_UNBOUND with no door.
 int32_t shekyl_pool_fluffed(const uint8_t hash[32]);
-/// Stemmed transactions that came back. `hashes` is `count` ids.
-/// 0 done, SHEKYL_POOL_UNBOUND with no door.
-int32_t shekyl_pool_propagated(const uint8_t* hashes, size_t count);
 
 /// The handler's sync reads, each over one snapshot of the node's chain.
 /// 0 is success. 1 is a refusal (empty chain, unknown height, a history

@@ -190,14 +190,8 @@ pub extern "C" fn shekyl_dandelionpp_propagation_timeout_seconds() -> u64 {
 /// holding for no new information.
 #[no_mangle]
 pub extern "C" fn shekyl_dandelionpp_origin_retry_interval_seconds() -> u64 {
-    static RETRY_SECS: OnceLock<u64> = OnceLock::new();
-    *RETRY_SECS.get_or_init(|| {
-        let params = DandelionParams::adopted_for_transit_ms(shekyl_relay::longest_transit());
-        u64::from(
-            EmbargoTimer::adopted(&params)
-                .judge_failed_after_secs(shekyl_relay_privacy::params::origin_retry_one_in()),
-        )
-    })
+    // One derivation, in the relay that uses it (`shekyl_relay::origin_retry_ms`).
+    u64::from(shekyl_relay::origin_retry_secs())
 }
 
 #[cfg(test)]

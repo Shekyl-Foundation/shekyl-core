@@ -19,7 +19,7 @@
 //! Every export here answers the C++ protocol handler's transaction routes
 //! and `levin_notify`, and RD deletes those callers and these exports with
 //! them: `shekyl_pool_admit`, `shekyl_pool_has`, `shekyl_pool_hashes`,
-//! `shekyl_pool_complement`, `shekyl_pool_fluffed`, `shekyl_pool_propagated`.
+//! `shekyl_pool_complement`, `shekyl_pool_fluffed`.
 //! The one Rust-to-C++ entry beside them, `shekyl_shell_relay_local` (the
 //! shell hands a committed transaction to `levin_notify`), is RD's too.
 
@@ -51,10 +51,6 @@ pub const SHEKYL_POOL_UNBOUND: i32 = -2;
 /// Told when transactions leave the pool: eviction, a reconcile, a flush.
 pub type Departed = Arc<dyn Fn(&[TxHash]) + Send + Sync>;
 
-/// Told when a stemmed transaction came back from somewhere else, so a
-/// responsibility this node armed for it is disarmed (`Responsibilities::propagated`).
-pub type Propagated = Arc<dyn Fn(&[TxHash]) + Send + Sync>;
-
 /// Told when the relay marks a held entry shown (`Pool::fluffed`): the tip
 /// follower rebuilds the posted job at this tip (`DRS_X_STORE_FLIP.md` Q9).
 pub type Shown = Arc<dyn Fn() + Send + Sync>;
@@ -65,7 +61,6 @@ struct Installed {
     rules: ChainRules,
     policy: AdmissionPolicy,
     departed: Departed,
-    propagated: Propagated,
     shown: Shown,
 }
 
@@ -84,7 +79,6 @@ pub fn install(
     rules: ChainRules,
     policy: AdmissionPolicy,
     departed: Departed,
-    propagated: Propagated,
     shown: Shown,
 ) {
     *lock(&DOOR) = Some(Installed {
@@ -93,7 +87,6 @@ pub fn install(
         rules,
         policy,
         departed,
-        propagated,
         shown,
     });
 }
@@ -103,23 +96,10 @@ pub fn uninstall() {
     *lock(&DOOR) = None;
 }
 
-/// Release relay responsibilities for `ids`, then assert the relay tracks
-/// no more transactions than the pool holds.
+/// Tell the departure hook which ids left the pool: the relay zone forgets
+/// their relay state (`relay_zone_ffi::note_departed`).
 pub fn note_left(ids: &[TxHash]) {
     let Some(hook) = lock(&DOOR).as_ref().map(|door| Arc::clone(&door.departed)) else {
-        return;
-    };
-    if !ids.is_empty() {
-        hook(ids);
-    }
-}
-
-/// Disarm relay responsibilities for transactions that came back.
-pub fn note_propagated(ids: &[TxHash]) {
-    let Some(hook) = lock(&DOOR)
-        .as_ref()
-        .map(|door| Arc::clone(&door.propagated))
-    else {
         return;
     };
     if !ids.is_empty() {
@@ -185,7 +165,6 @@ fn door() -> Option<Installed> {
         rules: door.rules,
         policy: door.policy,
         departed: Arc::clone(&door.departed),
-        propagated: Arc::clone(&door.propagated),
         shown: Arc::clone(&door.shown),
     })
 }
@@ -390,38 +369,6 @@ pub unsafe extern "C" fn shekyl_pool_fluffed(hash: *const u8) -> i32 {
     };
     let id = TxHash::from_bytes(bytes);
     note_shown(id)
-}
-
-/// Transactions that came back from a peer other than the one they were
-/// stemmed to. Disarms a responsibility this node armed for each.
-///
-/// # Safety
-///
-/// `hashes` is readable for `count * 32` bytes when `count` is nonzero.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_pool_propagated(hashes: *const u8, count: usize) -> i32 {
-    if hashes.is_null() && count != 0 {
-        return SHEKYL_POOL_FAULT;
-    }
-    let Some(nbytes) = count.checked_mul(32) else {
-        return SHEKYL_POOL_FAULT;
-    };
-    let Some(raw) = slice_from_ptr(hashes, nbytes) else {
-        return SHEKYL_POOL_FAULT;
-    };
-    let ids: Vec<TxHash> = raw
-        .chunks(32)
-        .map(|chunk| {
-            let mut bytes = [0u8; 32];
-            bytes.copy_from_slice(chunk);
-            TxHash::from_bytes(bytes)
-        })
-        .collect();
-    if door().is_none() {
-        return SHEKYL_POOL_UNBOUND;
-    }
-    note_propagated(&ids);
-    0
 }
 
 #[cfg(test)]

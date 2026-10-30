@@ -289,18 +289,6 @@ namespace cryptonote
     return res;
   }
   //-----------------------------------------------------------------------------------------------
-  void core::on_stem_propagated(const epee::span<const crypto::hash> txids)
-  {
-    /* A pass-through by design. The verdict is the relay layer's, the entry
-       class is the pool's, and this seam exists only because `notify` holds no
-       pool reference — so it forwards and decides nothing. */
-    std::vector<std::uint8_t> raw(txids.size() * sizeof(crypto::hash));
-    for (std::size_t i = 0; i < txids.size(); ++i)
-      std::memcpy(raw.data() + i * sizeof(crypto::hash), txids[i].data, sizeof(crypto::hash));
-    if (!txids.empty())
-      shekyl_pool_propagated(raw.data(), txids.size());
-  }
-  //-----------------------------------------------------------------------------------------------
   void core::on_transactions_relayed(const epee::span<const cryptonote::blobdata> tx_blobs, const relay_method tx_relay, const std::optional<std::uint8_t> stem_connector)
   {
     (void)stem_connector;

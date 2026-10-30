@@ -77,18 +77,5 @@ namespace cryptonote
         drawn at `pool::set_relayed`, and every path to it is
         synchronous with a relay event. */
     virtual void on_transactions_relayed(epee::span<const cryptonote::blobdata> tx_blobs, relay_method tx_relay, std::optional<std::uint8_t> stem_connector) = 0;
-
-    /*! The stem watch resolved these transactions as PROPAGATED — each was
-        seen arriving from somewhere other than the peer it was stemmed to
-        (F-10, §49).
-
-        Hashes rather than blobs: the verdict's join key is the canonical hash
-        (F-9), the watch already holds it, and re-deriving it from bytes at
-        this seam would re-introduce the identity F-9 exists to avoid.
-
-        A relay-layer FACT, not a pool instruction. What the pool does with it
-        — today, disarm the origin's re-broadcast for `local` entries — is the
-        pool's decision, made where the entry's class is known. */
-    virtual void on_stem_propagated(epee::span<const crypto::hash> txids) = 0;
   };
 }

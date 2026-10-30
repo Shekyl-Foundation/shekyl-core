@@ -161,7 +161,6 @@ namespace
         //! Propagation verdicts, in arrival order. Read by
         //! `stem_watch_records_and_arrival_resolves`, which is what makes the
         //! forwarding leg asserted rather than inferred from the watch.
-        std::vector<crypto::hash> stem_propagated_;
         //! Txids the pool no longer holds — the mined-while-queued case the
         //! carrier made reachable (COVER_TRAFFIC_RESTORATION.md §3.1e).
         //! Empty by default, so every existing fixture sees a pool that still
@@ -194,12 +193,6 @@ namespace
         virtual uint64_t get_current_blockchain_height() const final
         {
             return 0;
-        }
-
-        virtual void on_stem_propagated(epee::span<const crypto::hash> txids) override final
-        {
-            for (const auto& id : txids)
-                stem_propagated_.push_back(id);
         }
 
         virtual bool pool_has_tx(const crypto::hash &txid) const override final
@@ -280,11 +273,6 @@ namespace
         }
 
         //! \return Every propagation verdict forwarded so far, in arrival order.
-        const std::vector<crypto::hash>& stem_propagated() const noexcept
-        {
-            return stem_propagated_;
-        }
-
         std::vector<cryptonote::blobdata> take_relayed(cryptonote::relay_method relay)
         {
             auto elems = relayed_.find(relay);
@@ -2735,16 +2723,10 @@ TEST_F(levin_notify, stem_watch_records_and_arrival_resolves)
     EXPECT_EQ(0u, notifier.stem_in_flight())
         << "the same txs arriving from another peer must resolve the observations";
 
-    /* The FORWARDING leg, asserted rather than inferred. `stem_in_flight`
-       reaching zero says the watch resolved; it says nothing about the verdict
-       reaching core, and the disarm consumer lives on the far side of
-       `on_stem_propagated`. A dispatch that resolved the observations and
-       forwarded nothing passes the line above — which is this assertion's
-       negative control: drop the `core->on_stem_propagated` call in
-       `levin_notify.cpp`'s `record_arrival` and this goes red on its own. */
-    EXPECT_EQ(cryptonote::levin::stem_watch_tx_hashes(txs), events_.stem_propagated())
-        << "the propagation verdicts must cross into core, keyed by canonical "
-           "hash and in arrival order";
+    /* The verdict no longer crosses into core: the zone disarms the embargo
+       itself and marks the transaction shown in the pool, Rust to Rust
+       (`shekyl-relay` `record_arrival`; `relay_zone_ffi` `mark_shown`). The
+       zone's own tests witness both; this asserts the uuid reaches it. */
 }
 
 /*! A stem that never left must not be recorded as relayed.

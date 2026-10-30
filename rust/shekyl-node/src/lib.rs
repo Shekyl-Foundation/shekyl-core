@@ -87,7 +87,6 @@ use shekyl_hash_budget::Budget;
 use shekyl_mempool::Pool;
 use shekyl_miner::{JobBoard, MiningAddress};
 use shekyl_pow_randomx::CacheStore;
-use shekyl_relay::{Responsibilities, TxId};
 use shekyl_runtime::{RuntimeBudget, ThreadName};
 use shekyl_transport_layer::Sockets;
 use shekyl_types::{BlockHeight, UnixSeconds};
@@ -226,19 +225,7 @@ impl Node {
         ));
         let pool = open_pool(&store, &pool_path, rules)?;
         let submit_pool = Arc::clone(&pool);
-        let owed = Arc::new(Mutex::new(Responsibilities::default()));
-        let departed = pool_departed(Arc::clone(&owed));
-        let propagated = Arc::new({
-            let owed = Arc::clone(&owed);
-            move |ids: &[shekyl_types::TxHash]| {
-                let mut owed = owed.lock().unwrap_or_else(PoisonError::into_inner);
-                let ids: Vec<TxId> = ids
-                    .iter()
-                    .map(|id| TxId::from_bytes(id.to_bytes()))
-                    .collect();
-                owed.propagated(&ids);
-            }
-        });
+        let departed = pool_departed();
         // Q9: fluff at this tip rebuilds the posted job. Same Notify the
         // follower waits on for parked bodies.
         let shown = Arc::new(Notify::new());
@@ -252,7 +239,6 @@ impl Node {
             rules,
             AdmissionPolicy::GENESIS,
             Arc::clone(&departed),
-            propagated,
             shown_hook,
         );
         let pool_slot = Arc::new(Mutex::new(Some(Arc::clone(&pool))));
@@ -385,16 +371,14 @@ impl Node {
                 move |fault| health.retire(fault)
             }))
             .nudging(Arc::new({
-                let owed = Arc::clone(&owed);
-                // The shell answers whether the relay took the blob. No
-                // route (no notifier bound, whatever the reason: an offline
-                // node never constructs one) is RD's NoRoute fluff, applied
-                // here at the origin, keyed on that answer and on no flag
-                // (`DRS_X_STORE_FLIP.md` Q9, amended 2026-10-29).
+                // The shell answers 0 only when no relay exists: an offline
+                // node never constructs one, so there is no network to hide
+                // from and the transaction is shown at once (RX-2, Rick
+                // 2026-10-29). With a relay, the answer is 1 before the zone
+                // plans on its strand, so `NoOwnEdge` and `AwaitSync` never
+                // reach this branch: the zone holds those (`hold_origin`),
+                // neither fluffed nor shown.
                 move |txid, blob| {
-                    owed.lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .originated(TxId::from_bytes(txid.to_bytes()));
                     if !relay_local(blob) {
                         shekyl_ffi::pool_ffi::note_shown(*txid);
                     }
@@ -665,16 +649,12 @@ fn wall_now() -> UnixSeconds {
     UnixSeconds::from_raw(facts::unix_now())
 }
 
-/// Releases a relay responsibility for every id that leaves the pool.
-/// The hook does not read the pool: a concurrent flush can empty it
-/// between the release and any later count (`DRS_X_STORE_FLIP.md` §2).
-fn pool_departed(owed: Arc<Mutex<Responsibilities>>) -> shekyl_chain_ingest::service::Departed {
-    Arc::new(move |ids| {
-        let mut owed = owed.lock().unwrap_or_else(PoisonError::into_inner);
-        for id in ids {
-            owed.release(&TxId::from_bytes(id.to_bytes()));
-        }
-    })
+/// Every id that leaves the pool releases its relay state in the zone
+/// (`DRS_X_STORE_FLIP.md` §2): the zone's per-transaction state stays
+/// bounded by the pool. The hook does not read the pool: a concurrent flush
+/// can empty it between the release and any later count.
+fn pool_departed() -> shekyl_chain_ingest::service::Departed {
+    Arc::new(shekyl_ffi::relay_zone_ffi::note_departed)
 }
 
 /// The shell's relay entry. RD deletes it with `levin_notify`. `true`
