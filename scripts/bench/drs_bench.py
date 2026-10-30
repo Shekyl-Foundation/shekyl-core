@@ -96,7 +96,7 @@ def _resolved_sync_line(log_path, since=0):
         with open(log_path, encoding="utf-8", errors="replace") as fh:
             fh.seek(since)
             for line in fh:
-                if "Database sync: flags=0x" in line:
+                if "Database sync: flags=0x" in line or "Store durability:" in line:
                     # The daemon colourises its log. Strip the escapes: an artifact
                     # field is a record, and terminal control bytes in one make it
                     # harder to read and to diff.
@@ -104,6 +104,19 @@ def _resolved_sync_line(log_path, since=0):
     except OSError:
         return None
     return None
+
+
+def _readback_line(daemon_log, console_log, daemon_since=0, console_since=0):
+    """A spawn's readback: from the log file it was given, else its console.
+
+    The flip binary writes its `Store durability:` line through tracing to
+    `--log-file` and nothing to the console; the LMDB daemon writes `Database
+    sync:` to both. Reading the log file first serves either.
+    """
+    line = _resolved_sync_line(daemon_log, daemon_since)
+    if line is not None:
+        return line
+    return _resolved_sync_line(console_log, console_since)
 
 
 def daemon_executable(path):
@@ -319,8 +332,12 @@ def measure(args):
         # a listen endpoint for a connector that is off.
         net = ["--clearnet", "off"] if offline else ["--clearnet-listen",
                                                      f"127.0.0.1:{p2p}"]
+        # Each spawn logs to its own file in `work`: the readback is read from
+        # it (`_readback_line`), and two daemons on one host no longer share
+        # the binary's default log file.
         argv = [binary_for(tag, daemon, seed_daemon)] + common + ["--data-dir", d] + net + [
-            "--rpc-admin-listen", f"127.0.0.1:{rpcp}"] + argv_extra
+            "--rpc-admin-listen", f"127.0.0.1:{rpcp}",
+            "--log-file", os.path.join(work, f"{tag}.daemon.log")] + argv_extra
         with open(os.path.join(work, f"{tag}.argv"), "a", encoding="utf-8") as fh:
             fh.write(" ".join(argv) + "\n")
         # The SUBJECT's log is truncated; the seed's is appended. That asymmetry is
@@ -331,6 +348,8 @@ def measure(args):
         # directory be read as this run's readback — `work` is not wiped between
         # runs, only the subject's data directory is.
         mode = "a" if tag == "seed" else "w"
+        if tag != "seed":
+            open(os.path.join(work, f"{tag}.daemon.log"), "w", encoding="utf-8").close()
         log = open(os.path.join(work, f"{tag}.log"), mode, encoding="utf-8")
         try:
             proc = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT, cwd=d)
@@ -350,6 +369,8 @@ def measure(args):
     # the check reads only the bytes this spawn wrote.
     seed_log = os.path.join(work, "seed.log")
     seed_from = armed_lever.log_size(seed_log)
+    seed_daemon_log = os.path.join(work, "seed.daemon.log")
+    seed_daemon_from = armed_lever.log_size(seed_daemon_log)
     proc, _ = spawn("seed", seed_dir, [armed_lever.FLAG], offline=True)
     with running(proc, srpc) as seed:
         if not seed.ready:
@@ -361,7 +382,7 @@ def measure(args):
         # The seed is the subject's binary. Its readback, taken before any block
         # is generated, refuses a daemon without DRS-D9 before the generation
         # is spent. The subject's own line is checked again before its sync.
-        seed_line = _resolved_sync_line(seed_log, seed_from)
+        seed_line = _readback_line(seed_daemon_log, seed_log, seed_daemon_from, seed_from)
         seed_refusal = _readback_refusal("generating seed", seed_log, seed_line)
         if seed_refusal:
             _fail(seed_refusal)
@@ -411,7 +432,8 @@ def measure(args):
             # sync is timed. The line's sync_mode integer is the open; a line that
             # is not db_nosync is not a measurement of DRS-D9.
             subject_log = os.path.join(work, "subject.log")
-            resolved_line = _resolved_sync_line(subject_log)
+            resolved_line = _readback_line(os.path.join(work, "subject.daemon.log"),
+                                           subject_log)
             subject_refusal = _readback_refusal("subject", subject_log, resolved_line)
             if subject_refusal:
                 _fail(subject_refusal)
@@ -472,13 +494,17 @@ def measure(args):
     git_rev = subprocess.run(["git", "-C", ROOT, "rev-parse", "HEAD"], check=True,
                              capture_output=True, text=True).stdout.strip()
     scenario = "ibd_coinbase_only"
+    # One backend per build; the daemon never compiles two store engines
+    # into one binary (ruled 2026-09-14). The label derives from the subject's
+    # own readback, which names the store it opened, not from a flag an
+    # operator sets. The readback was already refused above if it is neither.
+    engine = A.engine_of_line(resolved_line)
+    if engine is None:
+        _fail(f"the subject's readback names no store: {resolved_line!r}")
     artifact = {
         "schema_version": A.SCHEMA,
-        # One backend per build; the daemon never compiles two store engines
-        # into one binary (ruled 2026-09-14). The label derives from the
-        # recorded selection mechanism, not from a flag an operator sets.
-        "engine": A.ENGINE_SELECTORS[A.ENGINE_DEFAULT_LMDB],
-        "engine_selected_by": A.ENGINE_DEFAULT_LMDB,
+        "engine": engine,
+        "engine_selected_by": A.ENGINE_SELECTOR_OF[engine],
         "git_rev": git_rev,
         "thresholds_frozen_at": A.FROZEN_AT,
         "durability": {

@@ -30,25 +30,32 @@ import drs_artifact as D  # noqa: E402
 import drs_bench as R  # noqa: E402
 
 
+# The two readbacks, as each store writes them at open. The LMDB line is
+# `core::init`'s; the redb line is the Rust node's `store_durability_line`.
+LMDB_READBACK = ("2026-09-13T00:00:00Z INFO global: Database sync: "
+                 "flags=0x1 (safe), sync_mode=3, threshold=1 blocks")
+REDB_READBACK = ("2026-10-30T13:35:30.989265Z  INFO shekyl_node: Store durability: "
+                 "immediate (an fsync per commit, DRS-D9; redb Durability::Immediate)")
+
+
 def valid_artifact(engine="lmdb", **over):
     a = {
         "schema_version": D.SCHEMA,
         "engine": engine,
         "engine_selected_by": D.ENGINE_DEFAULT_LMDB if engine == "lmdb" else
-                              "--db-engine=redb",
+                              D.ENGINE_DEFAULT_REDB,
         "git_rev": "0123456789abcdef",
         "thresholds_frozen_at": D.FROZEN_AT,
         "durability": {
             "policy": "DRS-D9 full-fsync-per-commit",
-            "sync_mode": "safe",
+            "sync_mode": "safe" if engine == "lmdb" else "immediate",
             "imposed_argv": ["--network", "regtest", "--dev-difficulty", "1",
                              "--data-dir", "/x/subject",
                              "--clearnet-listen", "127.0.0.1:1",
                              "--rpc-admin-listen", "127.0.0.1:2",
                              "--p2p-closed-peer", "127.0.0.1:3"],
             "observed": True,
-            "resolved_log_line": "2026-09-13T00:00:00Z INFO global: Database sync: "
-                                 "flags=0x1 (safe), sync_mode=3, threshold=1 blocks",
+            "resolved_log_line": LMDB_READBACK if engine == "lmdb" else REDB_READBACK,
             "readback": "the subject daemon's own resolved-flags report",
         },
         "environment": {"loadavg_1m_at_start": 0.3, "loadavg_1m_at_end": 0.4,
@@ -166,7 +173,7 @@ class ArtifactRefusals(unittest.TestCase):
 
     def test_refuses_sync_mode_outside_the_allowed_set(self):
         self._refuse(lambda a: a["durability"].__setitem__("sync_mode", "saf"),
-                     "only ['safe'] satisfies DRS-D9")
+                     "only ['safe', 'immediate'] satisfies DRS-D9")
 
     def test_refuses_fast_sync_mode_explicitly(self):
         """A run whose daemon reported `fast` is refused on the label and on the
@@ -338,17 +345,50 @@ class ArtifactRefusals(unittest.TestCase):
         self._refuse(lambda a: a.__setitem__("engine_selected_by", "magic"),
                      "which this gate does not know")
 
-    def test_redb_artifacts_are_unreachable_until_a_selector_exists(self):
-        """The F7 guarantee made checkable. The runner has no redb selection path,
-        so no redb selector is known and an `engine: redb` artifact can be neither
-        produced nor validated. Adding the selector is part of wiring the redb arm;
-        this test turns red then, which is the reminder."""
-        self.assertNotIn("redb", set(D.ENGINE_SELECTORS.values()))
-        for sel in list(D.ENGINE_SELECTORS) + ["--db-engine=redb", "whatever"]:
+    def test_the_redb_selector_is_the_readback_and_nothing_else(self):
+        """The redb arm (the flip binary, DRS-X) has one selection path: the
+        daemon's own readback names the store it opened. A redb artifact
+        validates under that selector alone; under the LMDB default, a
+        flag that never existed, or an unknown word it is refused."""
+        self.assertEqual(D.ENGINE_SELECTORS[D.ENGINE_DEFAULT_REDB], "redb")
+        self.assertEqual(D.artifact_refusals(valid_artifact("redb")), [])
+        for sel in [D.ENGINE_DEFAULT_LMDB, "--db-engine=redb", "whatever"]:
             a = valid_artifact("redb")
             a["engine_selected_by"] = sel
             self.assertTrue(D.artifact_refusals(a),
                             f"an engine=redb artifact validated under selector {sel!r}")
+
+    def test_refuses_an_engine_label_the_readback_contradicts(self):
+        """The readback is the selection mechanism, so a label it does not
+        name is a relabelled run whichever way it is turned."""
+        a = valid_artifact("lmdb")
+        a["durability"]["resolved_log_line"] = REDB_READBACK
+        a["durability"]["sync_mode"] = "immediate"
+        r = D.artifact_refusals(a)
+        self.assertTrue(any("readback names" in x and "redb" in x for x in r), r)
+        b = valid_artifact("redb")
+        b["durability"]["resolved_log_line"] = LMDB_READBACK
+        b["durability"]["sync_mode"] = "safe"
+        r = D.artifact_refusals(b)
+        self.assertTrue(any("readback names" in x and "lmdb" in x for x in r), r)
+
+    def test_refuses_a_redb_store_opened_without_an_fsync_per_commit(self):
+        """redb's `Eventual` and `None` defer the fsync; only `Immediate` is
+        DRS-D9. The line's two spellings must also agree."""
+        for variant in ("Eventual", "None"):
+            a = valid_artifact("redb")
+            a["durability"]["sync_mode"] = variant.lower()
+            a["durability"]["resolved_log_line"] = (
+                f"INFO shekyl_node: Store durability: {variant.lower()} (an fsync per "
+                f"commit, DRS-D9; redb Durability::{variant})")
+            r = D.artifact_refusals(a)
+            self.assertTrue(any("WITHOUT an fsync" in x for x in r), (variant, r))
+        a = valid_artifact("redb")
+        a["durability"]["resolved_log_line"] = (
+            "INFO shekyl_node: Store durability: immediate (an fsync per commit, "
+            "DRS-D9; redb Durability::Eventual)")
+        r = D.artifact_refusals(a)
+        self.assertTrue(any("do not name the same" in x for x in r), r)
 
     def test_refuses_missing_engine_selected_by(self):
         self._refuse(lambda a: a.pop("engine_selected_by"), "engine_selected_by absent")
@@ -548,11 +588,26 @@ class Comparability(unittest.TestCase):
         c["fixture"]["height_requested"] = b["fixture"]["height_requested"] - 1
         self.assertEqual(D.comparability_refusals(b, c), [])
 
-    def test_refuses_artifacts_from_different_trees(self):
-        """§1.3 requires the same binary with only the engine differing, so a ratio
-        across trees can attribute a consensus change to the engine."""
-        self._refuse(lambda b, c: c.__setitem__("git_rev", "deadbeefc"),
-                     "git_rev differs")
+    def test_a_pair_from_two_trees_is_the_comparison_and_reports_both_revs(self):
+        """One backend per binary: the two engines can only come from two
+        trees (the pre-flip daemon and the flip, DX-Q8 §3.3), so differing
+        revisions are the comparison, not a refusal, and the report names
+        both."""
+        b, c = valid_artifact("lmdb"), valid_artifact("redb")
+        c["git_rev"] = "deadbeefc"
+        self.assertEqual(D.comparability_refusals(b, c), [])
+        rep = D.compare(b, c)
+        self.assertEqual((rep["baseline_git_rev"], rep["candidate_git_rev"]),
+                         ("0123456789abcdef", "deadbeefc"))
+
+    def test_the_durability_policy_compares_across_the_two_stores_names(self):
+        """`safe` and `immediate` are one policy; a run that did not observe
+        its readback, or names another policy, is not comparable."""
+        b, c = valid_artifact("lmdb"), valid_artifact("redb")
+        self.assertEqual(D.comparability_refusals(b, c), [])
+        c["durability"]["policy"] = "something else"
+        self.assertTrue(any("durability blocks differ" in x
+                            for x in D.comparability_refusals(b, c)))
 
     def test_refuses_same_engine_pair(self):
         self._refuse(lambda b, c: c.__setitem__("engine", "lmdb"),
@@ -782,6 +837,37 @@ class InputErrors(unittest.TestCase):
         self.addCleanup(os.unlink, bare)
         self.assertIsNone(R._resolved_sync_line(bare))
         self.assertIsNone(R._resolved_sync_line("/nonexistent/x.log"))
+
+    def test_resolved_line_reader_reads_the_rust_stores_report(self):
+        """The flip binary writes its readback through tracing to the log
+        file it is given, not to the console; the reader must know the line."""
+        d = tempfile.mkdtemp()
+        log = os.path.join(d, "subject.daemon.log")
+        with open(log, "w", encoding="utf-8") as fh:
+            fh.write("other\n" + REDB_READBACK + "\n")
+        line = R._resolved_sync_line(log)
+        self.assertIsNotNone(line)
+        self.assertIn("Durability::Immediate", line)
+        self.assertEqual(D.resolved_sync_mode(line), "immediate")
+        self.assertEqual(D.engine_of_line(line), "redb")
+        self.assertEqual(D.engine_of_line(LMDB_READBACK), "lmdb")
+        self.assertIsNone(D.engine_of_line("nothing"))
+
+    def test_readback_is_read_from_the_daemons_log_file_first(self):
+        """Each spawn is given `--log-file`; the console is the fallback for a
+        daemon that prints its log there (the archived C++ seed does both)."""
+        d = tempfile.mkdtemp()
+        daemon_log = os.path.join(d, "subject.daemon.log")
+        console = os.path.join(d, "subject.log")
+        with open(console, "w", encoding="utf-8") as fh:
+            fh.write(LMDB_READBACK + "\n")
+        self.assertIn("(safe)", R._readback_line(daemon_log, console))
+        with open(daemon_log, "w", encoding="utf-8") as fh:
+            fh.write(REDB_READBACK + "\n")
+        self.assertIn("Durability::Immediate", R._readback_line(daemon_log, console))
+        self.assertIsNone(R._readback_line(daemon_log, console,
+                                           os.path.getsize(daemon_log),
+                                           os.path.getsize(console)))
 
     def test_resolved_line_reader_reads_only_this_spawns_bytes(self):
         """The seed's log is appended across runs. Read from this spawn's offset,

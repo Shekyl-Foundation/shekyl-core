@@ -31,10 +31,19 @@ IBD_FLOOR_RATIO = 1.25       # <= passes
 IBD_HARD_FAIL_RATIO = 1.50   # >  hard-fails after one documented mitigation cycle
 PEAK_RSS_RATIO = 2.0         # <= passes
 
-# The durability DRS-D9 requires, as the daemon names it in its readback.
-# The daemon takes no sync-mode option (IG-Q4); its constant is `safe`, and
-# the readback below is what shows a run had it.
-ALLOWED_SYNC_MODES = ("safe",)
+# The durability DRS-D9 requires, as each store names it in its readback.
+# The daemon takes no sync-mode option (IG-Q4); the LMDB daemon's constant is
+# `safe`, the Rust store's (the flip binary, DRS-X) is redb's `Immediate`, an
+# fsync per commit under either name. The readbacks below show a run had it.
+ALLOWED_SYNC_MODES = ("safe", "immediate")
+
+# The Rust store's readback, written by the node after the store opens:
+#   Store durability: immediate (an fsync per commit, DRS-D9; redb Durability::Immediate)
+# The word and the `Durability::` variant are one open, like the LMDB line's
+# flag and parenthetical. Only `Immediate` fsyncs every commit; `Eventual`
+# and `None` defer it.
+RESOLVED_STORE_RE = r"Store durability: (\w+) \(([^)]*)redb Durability::(\w+)\)"
+REDB_FSYNC_PER_COMMIT = "Immediate"
 
 # The daemon reports the durability posture it RESOLVED, as
 #   Database sync: flags=0x1 (safe), sync_mode=3, threshold=1 blocks
@@ -123,6 +132,38 @@ class ResolvedSyncReport(NamedTuple):
         return tuple(marker for marker in NOSYNC_MARKERS if marker in text)
 
 
+class ResolvedStoreReport(NamedTuple):
+    """One `Store durability:` line from the Rust node.
+
+    `mode` is the word; `variant` is the redb `Durability::` the store opened
+    with.
+    """
+
+    mode: str
+    variant: str
+
+
+def resolved_store_report(line) -> Optional[ResolvedStoreReport]:
+    """The Rust store's resolved durability line, parsed, or None."""
+    if not isinstance(line, str):
+        return None
+    match = re.search(RESOLVED_STORE_RE, line)
+    if match is None:
+        return None
+    return ResolvedStoreReport(match.group(1), match.group(3))
+
+
+def engine_of_line(line) -> Optional[str]:
+    """The store the readback names: `lmdb` for `core::init`'s line, `redb`
+    for the Rust node's, None for a line that is neither. This is the
+    engine selection path: one backend per binary, named by the binary."""
+    if resolved_store_report(line) is not None:
+        return "redb"
+    if resolved_sync_report(line) is not None:
+        return "lmdb"
+    return None
+
+
 def resolved_sync_report(line) -> Optional[ResolvedSyncReport]:
     """The resolved sync line, parsed, or None when `line` is not one."""
     if not isinstance(line, str):
@@ -135,7 +176,11 @@ def resolved_sync_report(line) -> Optional[ResolvedSyncReport]:
 
 
 def resolved_sync_mode(line) -> Optional[str]:
-    """The open the parentheticals name (`safe`, `fast`, `fastest`), or None."""
+    """The open the readback names: `safe` / `fast` / `fastest` on the LMDB
+    line, the redb mode word (`immediate`, ...) on the Rust store's, or None."""
+    store = resolved_store_report(line)
+    if store is not None:
+        return store.mode.lower()
     report = resolved_sync_report(line)
     if report is None:
         return None
@@ -148,11 +193,24 @@ def resolved_line_refusals(line) -> list:
     One rule for every caller: the finished artifact, the generating seed
     before any block is generated, and the subject before its sync is timed.
     """
+    store = resolved_store_report(line)
+    if store is not None:
+        shown = line.strip()[:120]
+        reasons = []
+        if store.mode.lower() != store.variant.lower():
+            reasons.append(f"names {store.mode!r} and Durability::{store.variant}, "
+                           f"which do not name the same open: {shown}")
+        if store.variant != REDB_FSYNC_PER_COMMIT:
+            reasons.append(f"reports redb Durability::{store.variant}: the store was "
+                           "opened WITHOUT an fsync per commit, so DRS-D9 was not in "
+                           f"force: {shown}")
+        return reasons
     report = resolved_sync_report(line)
     if report is None:
         return [f"is {str(line)[:60]!r}, which does not carry the daemon's resolved "
-                "sync report. That line IS the readback: without it nothing shows "
-                "the durability the store was opened with"]
+                "sync report (`Database sync:` from the LMDB daemon, `Store "
+                "durability:` from the Rust store). That line IS the readback: "
+                "without it nothing shows the durability the store was opened with"]
     shown = line.strip()[:120]
     reasons = []
     flagged = report.flagged_open()
@@ -211,6 +269,7 @@ ALLOWED_DISK_CLASS_SOURCES = ("probed", "operator-declared")
 LOADAVG_FIELDS = ("loadavg_1m_at_start", "loadavg_1m_at_end", "loadavg_5m_at_end")
 
 ENGINE_DEFAULT_LMDB = "daemon-default-lmdb (no engine switch exists)"
+ENGINE_DEFAULT_REDB = "daemon-default-redb (no engine switch exists; the readback names the store)"
 
 # Every selector this gate knows, mapped to the engine it actually selects. An
 # artifact's `engine` must equal the engine its selector selects, in BOTH
@@ -218,14 +277,13 @@ ENGINE_DEFAULT_LMDB = "daemon-default-lmdb (no engine switch exists)"
 # `lmdb` claimed under a redb selector is equally incoherent -- the earlier check
 # caught only the first, so a hand-authored artifact could pass by inverting it.
 #
-# There is deliberately NO redb entry. The runner has no engine selection path:
-# it records ENGINE_DEFAULT_LMDB unconditionally because the daemon always opens
-# LMDB. Until a real selection path exists and records its own provenance, an
-# `engine: redb` artifact cannot be produced OR validated -- so the first run
-# after DRS-E1 lands cannot spend a full measurement on LMDB and discover it at
-# shutdown. Adding the engine here is part of wiring the redb arm, not a
-# precondition for it.
-ENGINE_SELECTORS = {ENGINE_DEFAULT_LMDB: "lmdb"}
+# One backend per binary, never a switch. The selection path is the binary's
+# own readback (`engine_of_line`): the LMDB daemon writes `Database sync:` at
+# `core::init`, the flip binary writes `Store durability:` after the Rust
+# store opens. The runner records the selector the readback names, and the
+# validator refuses a label the readback contradicts.
+ENGINE_SELECTORS = {ENGINE_DEFAULT_LMDB: "lmdb", ENGINE_DEFAULT_REDB: "redb"}
+ENGINE_SELECTOR_OF = {engine: selector for selector, engine in ENGINE_SELECTORS.items()}
 
 # A STATED BOUND ON WHAT A FIXTURE GENERALISES TO, recorded for the same reason as
 # `fs_type`: it is a condition of the measurement, not a detail.
@@ -370,7 +428,8 @@ def artifact_refusals(a):
     else:
         if d.get("sync_mode") not in ALLOWED_SYNC_MODES:
             r.append(f"durability.sync_mode is {d.get('sync_mode')!r}; only "
-                     f"{list(ALLOWED_SYNC_MODES)} satisfies DRS-D9 on the LMDB path")
+                     f"{list(ALLOWED_SYNC_MODES)} satisfies DRS-D9 (safe on the LMDB "
+                     "path, immediate on the redb path)")
         argv = d.get("imposed_argv")
         if not isinstance(argv, list) or not argv:
             r.append("durability.imposed_argv absent — the argv is the record of the "
@@ -387,6 +446,10 @@ def artifact_refusals(a):
             r.append(f"durability.sync_mode is {d.get('sync_mode')!r}, which is not the "
                      f"mode the daemon reported ({reported!r}): the label and the "
                      "readback disagree")
+        named = engine_of_line(line)
+        if named is not None and a.get("engine") != named:
+            r.append(f"engine is {a.get('engine')!r} but the readback names {named!r}: "
+                     "the readback is the selection path, so this is a relabelled run")
 
     env = a.get("environment")
     if not isinstance(env, dict):
@@ -602,10 +665,15 @@ def _masked_argv(a):
 
 
 def _durability_policy(a):
-    """The durability block minus the argv, which is compared under the mask."""
-    d = dict(a.get("durability", {}))
-    d.pop("imposed_argv", None)
-    return d
+    """The durability policy a run had, in store-neutral terms.
+
+    The argv is compared under the mask. The readback line and the mode word
+    are each store's own (`safe` on LMDB, `immediate` on redb) and both are
+    DRS-D9, so the policy compares on the `policy` name and whether the
+    readback was observed, which is what the two runs must share.
+    """
+    d = a.get("durability", {})
+    return {"policy": d.get("policy"), "observed": d.get("observed")}
 
 
 def comparability_refusals(base, cand):
@@ -615,11 +683,10 @@ def comparability_refusals(base, cand):
         if base.get(field) != cand.get(field):
             r.append(f"{field} differs ({base.get(field)!r} vs {cand.get(field)!r}) — "
                      "the two runs were measured against different frozen thresholds")
-    if base.get("git_rev") != cand.get("git_rev"):
-        r.append(f"git_rev differs ({str(base.get('git_rev'))[:9]} vs "
-                 f"{str(cand.get('git_rev'))[:9]}) — §1.3 requires the same binary and "
-                 "flags with only the engine differing, so a ratio across trees can "
-                 "attribute a consensus or code change to the engine")
+    # One backend per binary (ruled 2026-09-14): the two engines can only come
+    # from two trees, so the revisions differ by construction and the report
+    # carries both. What the pair must share is the fixture, the hardware, the
+    # durability policy and the masked argv, checked below.
     if base.get("engine") == cand.get("engine"):
         r.append(f"both artifacts are engine={base.get('engine')!r}; §1.3's floor is a "
                  "ratio BETWEEN engines. Two same-engine runs are a regression "
@@ -750,7 +817,9 @@ def compare(base, cand):
     return {"schema_version": "shekyl_drs_bench_compare_v1",
             "load_conditions": load_note, "contention_notes": contention,
             "thresholds_frozen_at": FROZEN_AT, "baseline_engine": base["engine"],
-            "candidate_engine": cand["engine"], "rows": rows, "verdict": worst,
+            "candidate_engine": cand["engine"],
+            "baseline_git_rev": base.get("git_rev"), "candidate_git_rev": cand.get("git_rev"),
+            "rows": rows, "verdict": worst,
             "fixture_shortfalls": short}
 
 
