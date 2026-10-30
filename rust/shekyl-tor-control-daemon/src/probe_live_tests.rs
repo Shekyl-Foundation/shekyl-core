@@ -141,7 +141,7 @@ async fn subscribe(boot: &DaemonTorControl) {
 /// Wait for `service`'s next round to end with an upload that succeeded:
 /// the supervisor's trigger (Rick, 2026-10-29). A round that never ends
 /// fails the test at [`ROUND_HANG`]: the trigger's premise is that rounds end.
-async fn round_uploaded(received: &mut EventReceiver, service: &ServiceId) {
+async fn round_uploaded(received: &mut EventReceiver, service: &ServiceId, which: &str) {
     let mut rounds = UploadRounds::new(service.clone());
     let hang = Instant::now() + ROUND_HANG;
     let dropped_before = received.dropped();
@@ -150,8 +150,9 @@ async fn round_uploaded(received: &mut EventReceiver, service: &ServiceId) {
             .await
             .unwrap_or_else(|_| {
                 panic!(
-                    "an upload round that ends, in time (events dropped meanwhile: {})",
-                    received.dropped() - dropped_before
+                    "the {which} round ends in time (events dropped meanwhile: {}, rounds open: {})",
+                    received.dropped() - dropped_before,
+                    rounds.in_round()
                 )
             })
             .expect("the sink is open");
@@ -252,7 +253,7 @@ async fn reachable(
             .await
             .expect("the remedy's republish");
         assert_eq!(&again, service, "the held seed is the same onion");
-        round_uploaded(received, service).await;
+        round_uploaded(received, service, "remedy's republish").await;
     }
     panic!(
         "not reachable within {REMEDY_REPUBLISHES} republish of the remedy \
@@ -310,7 +311,7 @@ async fn a_cold_start_is_reachable_and_the_probe_is_on_its_own_circuit() {
         .republish(&seed, VIRTUAL_PORT, stand_in.at, 8, OnionPow::Enabled)
         .await
         .expect("publish");
-    round_uploaded(&mut received, &service).await;
+    round_uploaded(&mut received, &service, "first publish").await;
 
     let pair = IsolationPair::mint().expect("pair");
     let (_republishes, latency) = reachable(
@@ -363,7 +364,7 @@ async fn a_respawn_republishes_the_same_onion_and_is_reachable_again() {
         .republish(&seed, VIRTUAL_PORT, stand_in.at, 8, OnionPow::Enabled)
         .await
         .expect("publish");
-    round_uploaded(&mut received, &first).await;
+    round_uploaded(&mut received, &first, "first Tor's").await;
     reachable(
         &boot,
         &mut received,
@@ -409,7 +410,7 @@ async fn a_respawn_republishes_the_same_onion_and_is_reachable_again() {
         .await
         .expect("republish after the respawn");
     assert_eq!(second, first, "the held seed is the same onion");
-    round_uploaded(&mut received, &second).await;
+    round_uploaded(&mut received, &second, "respawned Tor's").await;
     reachable(
         &boot,
         &mut received,
@@ -464,7 +465,7 @@ async fn a_deleted_onion_is_missed_and_the_republish_restores_it() {
         Err(DaemonTorPublishError::Publish(AddOnionReplyError::Rejected { status: 550 })) => {}
         other => panic!("a second ADD_ONION for a held service is a collision, got {other:?}"),
     }
-    round_uploaded(&mut received, &service).await;
+    round_uploaded(&mut received, &service, "first publish").await;
 
     let deleted = boot
         .ask(Command::DelOnion(service.clone()))
@@ -490,7 +491,7 @@ async fn a_deleted_onion_is_missed_and_the_republish_restores_it() {
         .await
         .expect("the republish restores it");
     assert_eq!(restored, service);
-    round_uploaded(&mut received, &restored).await;
+    round_uploaded(&mut received, &restored, "restored onion's").await;
     reachable(
         &boot,
         &mut received,
