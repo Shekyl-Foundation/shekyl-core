@@ -358,6 +358,7 @@ stale_through = [
   { through = "678eb42df", note = "SO-D12 4c: RequestHeader::on_stream in shekyl-p-fetch header.rs builds the same 73-byte header with a caller-named stream byte, so a challenge read on the support stream carries the stream its receipt verifies under. Same bytes per read, same handshake; no read, hash, sign or socket operation is added. Not re-measured." },
   { through = "3a1e5a9d4", note = "SO-D12 4c: Malformed::FrameLong carries the count of content bytes left ahead of the envelope, the value the reader already held when it refused. One u64 in an error value on a refused read; a good read is unchanged. Not re-measured." },
   { through = "6cf2bff68", note = "SO-D12 4c: Timeouts::fetch_ceiling in shekyl-p-fetch client.rs is a const fn summing the existing bounds, called at compile time by the bundle producer; no fetch runs it. The producer now starts at most MAX_INFLIGHT (8) challenge reads at once where it spawned every due read and let the rest queue on the client's semaphore, so the client's concurrency is the 8 it already was. No read, hash, signature or socket operation is added. Not re-measured." },
+  { through = "6e5d82e510", note = "The fetch client can read its SOCKS address at each fetch (the managed Tor's route) instead of holding one: a function call before the TCP connect, and with no route the fetch is Stall::NoRoute before any I/O. The dial, the head and body reads and the countersignature check are unchanged. Not re-measured." },
 ]
 
 [[constant]]
