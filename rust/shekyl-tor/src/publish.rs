@@ -11,8 +11,8 @@
 //! function: [`crate::listen`] returns before a listener exists, and the
 //! caller does not insert the zone.
 //!
-//! The address this returns is what the session layer stores as
-//! `m_our_address`. The C++ options stay where they are parsed.
+//! The address this returns is this node's own onion: the caller records it
+//! in the dialer's lists with `shekyl_ffi::dialer_ffi::note_own_onion`.
 //! [`crate::ForwardAddr`] is the only address this function accepts.
 //! [`crate::OperatorInbound`] does not convert into it.
 
@@ -27,7 +27,8 @@ use crate::ForwardAddr;
 /// What inbound is after the forward listener is bound.
 #[derive(Debug)]
 pub enum InboundPosture {
-    /// The onion is published. Hand this address up as `m_our_address`.
+    /// The onion is published. Record this address as this node's own onion
+    /// (`shekyl_ffi::dialer_ffi::note_own_onion`).
     Published { address: NetworkAddress },
     /// Tor is up and outbound still works. The onion was not published.
     OutboundOnly { fault: PublishFault },
@@ -99,7 +100,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn loopback() -> ForwardAddr {
-        ForwardAddr::from_bound(SocketAddr::from((Ipv4Addr::LOCALHOST, 18080))).expect("loopback")
+        ForwardAddr::from_bound(SocketAddr::from((Ipv4Addr::LOCALHOST, 11021))).expect("loopback")
     }
 
     fn id() -> ServiceId {
@@ -110,7 +111,7 @@ mod tests {
     #[tokio::test]
     async fn a_pow_refusal_is_not_published_again() {
         let calls = AtomicUsize::new(0);
-        let posture = publish_forward(loopback(), 18080, |pow| {
+        let posture = publish_forward(loopback(), 11021, |pow| {
             assert_eq!(pow, OnionPow::Enabled);
             calls.fetch_add(1, Ordering::Relaxed);
             async { Err(DaemonTorPublishError::PowRefused { status: 512 }) }
@@ -127,12 +128,12 @@ mod tests {
 
     #[tokio::test]
     async fn a_published_onion_is_the_address_handed_up() {
-        let posture = publish_forward(loopback(), 18081, |_pow| async { Ok(id()) }).await;
+        let posture = publish_forward(loopback(), 12021, |_pow| async { Ok(id()) }).await;
         match posture {
             InboundPosture::Published { address } => match address {
                 NetworkAddress::Tor { host, port } => {
                     assert!(host.ends_with(".onion"));
-                    assert_eq!(port, 18081);
+                    assert_eq!(port, 12021);
                 }
                 _ => panic!("expected a tor address"),
             },
@@ -142,7 +143,7 @@ mod tests {
 
     #[test]
     fn a_routable_socket_is_not_a_forward_address() {
-        let routable = SocketAddr::from((Ipv4Addr::new(203, 0, 113, 10), 18080));
+        let routable = SocketAddr::from((Ipv4Addr::new(203, 0, 113, 10), 11021));
         assert!(ForwardAddr::from_bound(routable).is_err());
         let operator = crate::OperatorInbound::new(routable);
         assert!(ForwardAddr::from_bound(operator.bind()).is_err());

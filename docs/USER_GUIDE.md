@@ -1182,8 +1182,10 @@ prompts for the current password, then the new one twice.
 
 ### Daemon won't sync
 
-- **Firewall:** Ensure port 11021 (P2P) is open for inbound connections, or
-  use `--out-peers` to increase outbound connections.
+- **Firewall:** Ensure port 11021 (P2P) is open for inbound connections.
+  The outbound count is a protocol constant, not an option: a node that
+  takes no inbound still syncs over the peers it dials. The daemon's
+  "p2p inbound state" log line says how many inbound connections it holds.
 - **Disk space:** A full node needs ~50 GB. There is no pruning flag. The
   stripe engine was deleted 2026-09-21 (`PDM-Q7`); uniform archival discard
   has not landed (S-PRUNE, `docs/design/DRS_E1_SPRUNE.md`).
