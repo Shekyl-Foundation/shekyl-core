@@ -249,11 +249,29 @@ pub fn effective_median_at<'id, V: ChainView<'id>>(
     view: &V,
     connecting: BlockHeight,
 ) -> Result<EffectiveMedian, ViewRead<V::Fault>> {
+    effective_median_at_windows::<BLOCK_WEIGHT_LONG_TERM_WINDOW, BLOCK_WEIGHT_SHORT_TERM_WINDOW, V>(
+        view, connecting,
+    )
+}
+
+/// [`effective_median_at`] at a long and a short window length. Production
+/// passes [`BLOCK_WEIGHT_LONG_TERM_WINDOW`] and
+/// [`BLOCK_WEIGHT_SHORT_TERM_WINDOW`]; the lengths are const generics, not
+/// parameter-set fields, so a window is sized at compile time and never read
+/// from a runtime value (ESR-16 completion, G7). EUP-5's window-length
+/// stress instantiates another pair, and the sim's rolling window
+/// (`shekyl-economics-sim`'s `MedianWindow`) is parameterised by the same
+/// two.
+///
+/// # Errors
+///
+/// [`effective_median_at`]'s.
+pub fn effective_median_at_windows<'id, const LONG: u64, const SHORT: u64, V: ChainView<'id>>(
+    view: &V,
+    connecting: BlockHeight,
+) -> Result<EffectiveMedian, ViewRead<V::Fault>> {
     let window = match view
-        .weights_window(
-            connecting,
-            BlockCount::from_raw(BLOCK_WEIGHT_LONG_TERM_WINDOW),
-        )
+        .weights_window(connecting, BlockCount::from_raw(LONG))
         .map_err(ViewRead::View)?
     {
         AtHeight::Recorded(window) => window,
@@ -266,7 +284,10 @@ pub fn effective_median_at<'id, V: ChainView<'id>>(
             }))
         }
     };
-    Ok(medians_over(&window, super::miner::economics()))
+    Ok(medians_over_window::<SHORT>(
+        &window,
+        super::miner::economics(),
+    ))
 }
 
 /// The block-weight limit in force for `connecting`: the limit of
@@ -295,7 +316,8 @@ pub fn medians_over(window: &[RecordedWeights], params: &EconomicParams) -> Effe
 }
 
 /// [`medians_over`] at a short-window length. Production passes
-/// [`BLOCK_WEIGHT_SHORT_TERM_WINDOW`]. EUP-5's window-length stress
+/// [`BLOCK_WEIGHT_SHORT_TERM_WINDOW`]; the long window is the slice, cut by
+/// [`effective_median_at_windows`]' read. EUP-5's window-length stress
 /// builds another (`ECONOMICS_SIM_PHASE0.md`, the const-generic window).
 #[must_use]
 pub fn medians_over_window<const SHORT: u64>(

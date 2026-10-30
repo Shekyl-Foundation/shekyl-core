@@ -301,6 +301,44 @@ fn the_long_window_is_the_chain_below_its_length() {
     const { assert!(7 < BLOCK_WEIGHT_LONG_TERM_WINDOW) };
 }
 
+/// Past `W_long` a block ages out, held at a window short enough to pass:
+/// [`effective_median_at_windows`] at a five-block long and a three-block
+/// short window over a seven-block chain reads the last five rows, so
+/// blocks 0 and 1 are out of both medians, and the result is
+/// [`medians_over_window`] over those five. The shipped instance is the
+/// same function at the shipped lengths ([`effective_median_at`]); the
+/// young-chain test above pins the arm below `W_long`, this one the arm
+/// past it, which no shipped-length fixture can reach.
+#[test]
+fn a_block_past_the_long_window_ages_out() {
+    let heavy = ZONE + 10_000;
+    let light = ZONE + 100;
+    let chain_with = |old: u64| {
+        (0..7u64).fold(MockChain::default(), |chain, h| {
+            let lt = if h < 2 { old } else { heavy - h };
+            chain.push_weighing(recorded(1_000 + h * 120), CurveTreeRoot::EMPTY, rw(lt, lt))
+        })
+    };
+    let at = BlockHeight::from_raw(7);
+    let read = |chain: &MockChain| {
+        chain.with_view(|view| defined(effective_median_at_windows::<5, 3, _>(&view, at)))
+    };
+    let last_five: Vec<_> = (2..7u64).map(|h| rw(heavy - h, heavy - h)).collect();
+    let expected = medians_over_window::<3>(&last_five, &EconomicParams::default());
+    assert_eq!(read(&chain_with(light)), expected);
+    // Blocks 0 and 1 moved from light to far heavier: nothing moves, because
+    // neither is in a window any more.
+    assert_eq!(read(&chain_with(heavy * 10)), expected);
+    // And the same seven blocks under the shipped windows do see them.
+    let shipped = chain_with(light).with_view(|view| defined(effective_median_at(&view, at)));
+    let shipped_heavy =
+        chain_with(heavy * 10).with_view(|view| defined(effective_median_at(&view, at)));
+    assert_ne!(
+        shipped, shipped_heavy,
+        "the shipped long window holds blocks 0 and 1"
+    );
+}
+
 /// The regime every fixture chain sits in, stated as a pin rather than
 /// left implicit: a young, light chain's long-term median is **the zone**
 /// — the floor arm, not a computed median — and its effective median is

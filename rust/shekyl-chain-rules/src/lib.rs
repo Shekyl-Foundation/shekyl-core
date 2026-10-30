@@ -211,8 +211,8 @@ pub use rule_set::{
 };
 pub use rules::anchors::{AnchorConflict, Remedy};
 pub use rules::block_weight::{
-    block_weight_limit_at, effective_median_at, even_pair_median, median, medians_from,
-    medians_over, medians_over_window, EffectiveMedian, Weights,
+    block_weight_limit_at, effective_median_at, effective_median_at_windows, even_pair_median,
+    median, medians_from, medians_over, medians_over_window, EffectiveMedian, Weights,
 };
 pub use rules::body::{ArchivalKey, BlockArchivalKeys};
 pub use rules::difficulty::{cumulative_difficulty_after, target_claim, Target};
