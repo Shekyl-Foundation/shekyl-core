@@ -26,6 +26,8 @@ fn policy() -> Policy {
         probe_after_min: Duration::from_secs(15),
         probe_after_max: Duration::from_secs(60),
         probe_within: Duration::from_secs(60),
+        round_wait: Duration::from_secs(60),
+        round_stuck_after: Duration::from_secs(300),
     }
 }
 

@@ -85,16 +85,19 @@ pub fn input_of(event: &TorEvent) -> Option<Input> {
 /// round with an upload that succeeded schedules the probe, one in which no
 /// upload succeeded and at least one failed is Service-class evidence, and
 /// one whose ends were lost (`unfinished` only) is neither. A round's start
-/// and its first upload move nothing: the probe waits for the round to end
-/// (Rick, 2026-10-29), so the directory its fetch asks has the descriptor.
+/// and its first upload are inputs too: the probe follows the round's end,
+/// or `Policy::round_wait` after its first upload, whichever comes first
+/// (Rick, 2026-10-29), and a round open too long is counted. Each of the
+/// first upload and the end carries its own draw.
 pub fn round_inputs(marks: &[RoundMark], mut draw: impl FnMut() -> u64) -> Vec<Input> {
     marks
         .iter()
-        .filter_map(|mark| match *mark {
-            RoundMark::Started | RoundMark::FirstUploaded => None,
+        .map(|mark| match *mark {
+            RoundMark::Started => Input::UploadRoundStarted,
+            RoundMark::FirstUploaded => Input::FirstUploaded { draw: draw() },
             RoundMark::Ended {
                 uploaded, failed, ..
-            } => Some(Input::UploadRoundEnded {
+            } => Input::UploadRoundEnded {
                 end: if uploaded > 0 {
                     RoundEnd::Uploaded
                 } else if failed > 0 {
@@ -103,7 +106,7 @@ pub fn round_inputs(marks: &[RoundMark], mut draw: impl FnMut() -> u64) -> Vec<I
                     RoundEnd::Unknown
                 },
                 draw: draw(),
-            }),
+            },
         })
         .collect()
 }
@@ -124,14 +127,14 @@ mod tests {
     };
     use crate::supervisor::{Input, RoundEnd};
 
-    /// A round's marks become the core's inputs at its end: a round with a
-    /// success is the probe's trigger with its draw, a round with no success
-    /// and a failure is the Service evidence, and a round whose ends were
-    /// lost is neither. Its start and its first upload move nothing.
-    /// Triggering on the first upload again, mapping every `HS_DESC FAILED`
-    /// to a republish, or treating lost ends as failures, fails this.
+    /// A round's marks become the core's inputs: its start, its first upload
+    /// and its end, each upload and end with a draw of its own. A round with a
+    /// success ends as the probe's trigger, one with no success and a failure
+    /// as the Service evidence, and one whose ends were lost as neither.
+    /// Mapping every `HS_DESC FAILED` to a republish, or treating lost ends
+    /// as failures, fails this.
     #[test]
-    fn a_rounds_end_is_the_probes_trigger_and_the_service_evidence() {
+    fn a_rounds_marks_are_its_start_first_upload_and_end() {
         let mut draws = 0_u64..;
         let mut draw = || draws.next().expect("endless");
         let inputs = round_inputs(
@@ -148,10 +151,14 @@ mod tests {
         );
         assert_eq!(
             inputs,
-            [Input::UploadRoundEnded {
-                end: RoundEnd::Uploaded,
-                draw: 0
-            }]
+            [
+                Input::UploadRoundStarted,
+                Input::FirstUploaded { draw: 0 },
+                Input::UploadRoundEnded {
+                    end: RoundEnd::Uploaded,
+                    draw: 1
+                }
+            ]
         );
         let failed = round_inputs(
             &[RoundMark::Ended {
@@ -165,7 +172,7 @@ mod tests {
             failed,
             [Input::UploadRoundEnded {
                 end: RoundEnd::FailedAll,
-                draw: 1
+                draw: 2
             }]
         );
         let lost = round_inputs(
@@ -180,10 +187,13 @@ mod tests {
             lost,
             [Input::UploadRoundEnded {
                 end: RoundEnd::Unknown,
-                draw: 2
+                draw: 3
             }]
         );
-        assert!(round_inputs(&[RoundMark::FirstUploaded], &mut draw).is_empty());
+        assert_eq!(
+            round_inputs(&[RoundMark::FirstUploaded], &mut draw),
+            [Input::FirstUploaded { draw: 4 }]
+        );
     }
 
     /// Tor saying whether it has a circuit names or clears the network

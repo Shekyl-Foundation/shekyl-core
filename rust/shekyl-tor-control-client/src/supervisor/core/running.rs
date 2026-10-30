@@ -32,6 +32,7 @@ impl Core {
             self.inbound = Inbound::Publishing;
         }
         self.probe = Probe::Idle;
+        self.round = None;
         self.service_republish = false;
         self.arm_sample(now);
         self.arm_alive(now);

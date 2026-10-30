@@ -371,6 +371,70 @@ mod tests {
         );
     }
 
+    /// **A round that never ends does not stall the next** (Rick,
+    /// 2026-10-29). One whose uploads partly ended is closed by the next
+    /// round's first `UPLOAD`. One in which no upload ever ended cannot be
+    /// told from its own late uploads by `UPLOAD` alone (tor starts a
+    /// round's uploads before any ends), so the next round's uploads join
+    /// it; the supervisor counts it as stuck at five minutes and the driver
+    /// calls `resync`, after which the next round's `UPLOAD` starts a round
+    /// of its own and its upload triggers. Dropping the stuck path's resync,
+    /// or the "uploads have begun to end" rule, fails this.
+    #[test]
+    fn a_round_that_never_ends_does_not_stall_the_next() {
+        use HsDescAction::{Upload, Uploaded};
+        // Partly ended: HSDir 2 never reports; the next round's UPLOAD ends it.
+        let mut rounds = UploadRounds::new(ServiceId::parse(CAPTURED_ONION).expect("address"));
+        rounds.observe(&round_event(Upload, 1, true));
+        rounds.observe(&round_event(Upload, 2, true));
+        rounds.observe(&round_event(Uploaded, 1, false));
+        assert_eq!(
+            rounds.observe(&round_event(Upload, 3, true)),
+            [
+                RoundMark::Ended {
+                    uploaded: 1,
+                    failed: 0,
+                    unfinished: 1
+                },
+                RoundMark::Started
+            ]
+        );
+
+        // Nothing ever ended: the next round's UPLOAD joins the open round.
+        let mut rounds = UploadRounds::new(ServiceId::parse(CAPTURED_ONION).expect("address"));
+        rounds.observe(&round_event(Upload, 1, true));
+        rounds.observe(&round_event(Upload, 2, true));
+        assert!(
+            rounds.observe(&round_event(Upload, 3, true)).is_empty(),
+            "indistinguishable from the round's own uploads"
+        );
+        // The stuck path: the supervisor counts it, the driver resyncs.
+        assert_eq!(
+            rounds.resync(),
+            Some(RoundMark::Ended {
+                uploaded: 0,
+                failed: 0,
+                unfinished: 3
+            })
+        );
+        assert_eq!(
+            rounds.observe(&round_event(Upload, 4, true)),
+            [RoundMark::Started],
+            "the next round is a round of its own"
+        );
+        assert_eq!(
+            rounds.observe(&round_event(Uploaded, 4, false)),
+            [
+                RoundMark::FirstUploaded,
+                RoundMark::Ended {
+                    uploaded: 1,
+                    failed: 0,
+                    unfinished: 0
+                }
+            ]
+        );
+    }
+
     /// After the sink drops events, `resync` ends the open round at once, and the next
     /// batch starts a round that triggers. Nothing is open after it.
     #[test]

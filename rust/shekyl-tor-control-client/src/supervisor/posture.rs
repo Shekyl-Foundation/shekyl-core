@@ -446,6 +446,10 @@ pub struct Status {
     /// Whether peers can reach this node's onion (§4.1). Its cause stands
     /// beside [`Self::cause`], never instead of it.
     pub inbound: Inbound,
+    /// Descriptor rounds this boot that were still open after five minutes:
+    /// uploads with neither `UPLOADED` nor `FAILED`, none of the events lost
+    /// on our side. Telemetry for the soak, never a cause (§10).
+    pub stuck_upload_rounds: u32,
 }
 
 /// `OwnTx` from the relay's hop-0 verdict and the connector settings.

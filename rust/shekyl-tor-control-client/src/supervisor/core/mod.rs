@@ -70,6 +70,14 @@ pub struct Policy {
     pub probe_after_max: Duration,
     /// How long a probe has to arrive (`TSR-M2`: 60 s).
     pub probe_within: Duration,
+    /// How long after a round's first upload the probe stops waiting for the
+    /// round to end (Rick, 2026-10-29): five times the longest round measured
+    /// to end (12 s, §10), so most directories have the descriptor, and a
+    /// round whose last uploads hang does not hold the probe until the next.
+    pub round_wait: Duration,
+    /// How long a round may stay open before it is counted as stuck, said
+    /// once at debug, and ended in the coalescer so the next round is seen.
+    pub round_stuck_after: Duration,
 }
 
 impl Policy {
@@ -95,6 +103,11 @@ impl Policy {
             // Nine of ten probes arrived within 26.44 s and the x86 cluster
             // reached 46 s (`TSR-M2`, `TSR-M3`).
             probe_within: Duration::from_secs(60),
+            // Five times the longest round that ended (7 to 12 s, §10).
+            round_wait: Duration::from_secs(60),
+            // The live tests' wait for a round, where the stuck rounds were
+            // found (§10).
+            round_stuck_after: Duration::from_secs(300),
         }
     }
 }
@@ -147,6 +160,10 @@ pub enum Action {
     RefetchDescriptor,
     /// Publish the inbound facet on the managed route's link (§4.1).
     PublishInbound(Inbound),
+    /// A descriptor round has been open for `Policy::round_stuck_after`:
+    /// say it once at debug, and end the coalescer's open round so the next
+    /// round's uploads start a round of their own. Counted in Status.
+    RoundStuck,
     /// Say the posture. At most once per cap interval, except a recovery.
     /// The driver logs a healthy posture at info and any other at warn.
     Announce,
@@ -254,6 +271,15 @@ pub enum Input {
     TooManyFiles {
         /// Sockets Tor reported open.
         open: u64,
+    },
+    /// A descriptor round began: its first `HS_DESC UPLOAD`.
+    UploadRoundStarted,
+    /// A round's first upload reached a directory. The probe follows the
+    /// round's end, or `Policy::round_wait` after this, whichever comes
+    /// first; `draw` sets the delay if the wait runs out first.
+    FirstUploaded {
+        /// Uniform over `u64`.
+        draw: u64,
     },
     /// A descriptor round ended (`HS_DESC`, coalesced by round, `TSR-Q5`).
     /// A round with an upload that succeeded schedules the round's one probe
@@ -426,6 +452,10 @@ pub struct Core {
     outbound_since: Option<u64>,
     /// The round's probe (§4.5).
     probe: Probe,
+    /// The descriptor round open now, while one is.
+    round: Option<probe::RoundTrack>,
+    /// Rounds that stayed open past `Policy::round_stuck_after`, this boot.
+    stuck_rounds: u32,
     /// The owed republish is a Service remedy: a refusal escalates.
     service_republish: bool,
 }
@@ -457,6 +487,8 @@ impl Core {
             published_inbound: Inbound::NotOffered,
             outbound_since: None,
             probe: Probe::Idle,
+            round: None,
+            stuck_rounds: 0,
             service_republish: false,
         };
         let step = core.step(now, vec![Action::CheckPin]);
@@ -497,6 +529,8 @@ impl Core {
             Input::RouteInstalled => self.route_installed(now),
             Input::ForwardAbsent => self.forward_absent(),
             Input::OnionPublished => self.onion_published(),
+            Input::UploadRoundStarted => self.round_started(now),
+            Input::FirstUploaded { draw } => self.first_uploaded(now, draw),
             Input::UploadRoundEnded { end, draw } => self.round_ended(now, end, draw),
             Input::DescriptorRefetched { draw } => self.refetched(now, draw),
             Input::ProbeDialed { minted_at } => self.probe_dialed(minted_at),
@@ -587,6 +621,9 @@ impl Core {
                 _ => {}
             }
         }
+        if self.round_due().is_some_and(|at| now >= at) {
+            actions.extend(self.on_round_deadline(now));
+        }
         if self.probe.due().is_some_and(|at| now >= at) {
             actions.extend(self.on_probe_deadline(now));
         }
@@ -625,6 +662,7 @@ impl Core {
                 _ => None,
             },
             inbound: self.inbound,
+            stuck_upload_rounds: self.stuck_rounds,
         }
     }
 
@@ -637,6 +675,7 @@ impl Core {
             self.announcements.due(),
             self.alive_at,
             self.probe.due(),
+            self.round_due(),
         ]
         .into_iter()
         .flatten()

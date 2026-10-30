@@ -46,8 +46,13 @@ const VIRTUAL_PORT: u16 = 11021;
 const PROBE_WITHIN: Duration = Duration::from_secs(60);
 /// The supervisor's shortest delay after a round's first upload (§10).
 const PROBE_AFTER: Duration = Duration::from_secs(15);
-/// How long a test waits for a round to end. Not a daemon bound.
+/// How long a test waits for a round's first upload. Not a daemon bound.
 const ROUND_HANG: Duration = Duration::from_secs(300);
+/// The supervisor's wait for a round after its first upload, read from its
+/// policy: one number for the daemon and this test.
+fn round_wait() -> Duration {
+    shekyl_tor_control_client::supervisor::Policy::provisional(Duration::ZERO).round_wait
+}
 
 /// The forward target: an accepted stream whose first bytes are the probe's
 /// request is the probe arriving. It is reported, then held until the test
@@ -138,34 +143,38 @@ async fn subscribe(boot: &DaemonTorControl) {
     assert_eq!(reply.status(), 250);
 }
 
-/// Wait for `service`'s next round to end with an upload that succeeded:
-/// the supervisor's trigger (Rick, 2026-10-29). A round that never ends
-/// fails the test at [`ROUND_HANG`]: the trigger's premise is that rounds end.
+/// Wait as the supervisor does for `service`'s next round (Rick,
+/// 2026-10-29): until it ends with an upload that succeeded, or
+/// [`round_wait`] after its first upload, whichever comes first. A round
+/// with no first upload in [`ROUND_HANG`] fails the test, naming the round.
 async fn round_uploaded(received: &mut EventReceiver, service: &ServiceId, which: &str) {
     let mut rounds = UploadRounds::new(service.clone());
     let hang = Instant::now() + ROUND_HANG;
     let dropped_before = received.dropped();
+    let mut wait_until: Option<Instant> = None;
     loop {
-        let reply = tokio::time::timeout_at(hang, received.recv())
-            .await
-            .unwrap_or_else(|_| {
-                panic!(
-                    "the {which} round ends in time (events dropped meanwhile: {}, rounds open: {})",
-                    received.dropped() - dropped_before,
-                    rounds.in_round()
-                )
-            })
-            .expect("the sink is open");
+        let until = wait_until.map_or(hang, |at| at.min(hang));
+        let Ok(reply) = tokio::time::timeout_at(until, received.recv()).await else {
+            assert!(
+                wait_until.is_some(),
+                "the {which} round's first upload in time (events dropped meanwhile: {})",
+                received.dropped() - dropped_before
+            );
+            return;
+        };
+        let reply = reply.expect("the sink is open");
         let Some(TorEvent::HsDesc(desc)) = shekyl_tor_control_client::control::parse_event(&reply)
         else {
             continue;
         };
-        if rounds
-            .observe(&desc)
-            .iter()
-            .any(|mark| matches!(mark, RoundMark::Ended { uploaded, .. } if *uploaded > 0))
-        {
-            return;
+        for mark in rounds.observe(&desc) {
+            match mark {
+                RoundMark::FirstUploaded if wait_until.is_none() => {
+                    wait_until = Some(Instant::now() + round_wait());
+                }
+                RoundMark::Ended { uploaded, .. } if uploaded > 0 => return,
+                _ => {}
+            }
         }
     }
 }

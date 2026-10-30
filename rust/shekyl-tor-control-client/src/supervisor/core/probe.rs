@@ -7,8 +7,9 @@
 //! (`TOR_SUPERVISOR.md` §4.1, §4.4, §4.5).
 //!
 //! One probe per descriptor upload round (`TSR-Q5`): the end of a round in
-//! which an upload succeeded schedules it, after a delay drawn uniformly from
-//! the policy's range, so a hostile directory does not see "upload, then an
+//! which an upload succeeded, or `Policy::round_wait` after the round's
+//! first upload, whichever comes first (Rick, 2026-10-29), schedules it,
+//! after a delay drawn uniformly from the policy's range, so a hostile directory does not see "upload, then an
 //! immediate fetch of the same descriptor". The probe's nonce arriving at
 //! this node's inbound handshake is the evidence.
 //!
@@ -47,6 +48,29 @@ pub(super) enum Probe {
     Refetching,
 }
 
+/// The descriptor round open now (§4.5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct RoundTrack {
+    started_at: u64,
+    /// When its first upload succeeded, and the draw that came with it.
+    first: Option<(u64, u64)>,
+    /// The round's one probe has been scheduled, or was not wanted.
+    triggered: bool,
+    /// The round has been counted as stuck.
+    stuck: bool,
+}
+
+impl RoundTrack {
+    const fn new(started_at: u64) -> Self {
+        Self {
+            started_at,
+            first: None,
+            triggered: false,
+            stuck: false,
+        }
+    }
+}
+
 /// Which probe of a round this is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Attempt {
@@ -83,18 +107,36 @@ impl Core {
         low + offset
     }
 
+    /// A round began.
+    pub(super) fn round_started(&mut self, now: u64) -> Vec<Action> {
+        self.round = Some(RoundTrack::new(now));
+        Vec::new()
+    }
+
+    /// A round's first upload reached a directory: the probe waits for the
+    /// round's end, or `Policy::round_wait` from now.
+    pub(super) fn first_uploaded(&mut self, now: u64, draw: u64) -> Vec<Action> {
+        let track = self.round.get_or_insert(RoundTrack::new(now));
+        if track.first.is_none() {
+            track.first = Some((now, draw));
+        }
+        Vec::new()
+    }
+
     /// A round ended. One in which an upload succeeded confirms the onion is
     /// published, as `ADD_ONION`'s reply does, and schedules the round's one
-    /// probe; a round that ends while one is scheduled, in flight or being
-    /// refetched schedules none. One in which no upload succeeded and at
-    /// least one failed is Service-class evidence: the onion is unreachable,
-    /// and is published again. A round whose ends were lost says nothing.
+    /// probe unless the round's wait already did; a probe already scheduled,
+    /// in flight or being refetched is not doubled. One in which no upload
+    /// succeeded and at least one failed is Service-class evidence: the
+    /// onion is unreachable, and is published again. A round whose ends
+    /// were lost says nothing.
     pub(super) fn round_ended(&mut self, now: u64, end: RoundEnd, draw: u64) -> Vec<Action> {
+        let track = self.round.take();
         match end {
             RoundEnd::Uploaded => {
                 let actions = self.onion_published();
-                if matches!(self.phase, Phase::Running { .. }) && self.probe == Probe::Idle {
-                    self.schedule(now, draw, Attempt::First);
+                if !track.is_some_and(|track| track.triggered) {
+                    self.trigger(now, draw);
                 }
                 actions
             }
@@ -103,6 +145,57 @@ impl Core {
             }
             RoundEnd::FailedAll | RoundEnd::Unknown => Vec::new(),
         }
+    }
+
+    /// The round's one probe: scheduled while Running with none in hand.
+    fn trigger(&mut self, now: u64, draw: u64) {
+        if matches!(self.phase, Phase::Running { .. }) && self.probe == Probe::Idle {
+            self.schedule(now, draw, Attempt::First);
+        }
+    }
+
+    /// When the open round next needs the core: its wait for the probe, or
+    /// the moment it counts as stuck.
+    pub(super) fn round_due(&self) -> Option<u64> {
+        let track = self.round?;
+        let wait = track
+            .first
+            .filter(|_| !track.triggered)
+            .map(|(at, _)| at.saturating_add(duration_ns(self.policy.round_wait)));
+        let stuck = (!track.stuck).then(|| {
+            track
+                .started_at
+                .saturating_add(duration_ns(self.policy.round_stuck_after))
+        });
+        wait.into_iter().chain(stuck).min()
+    }
+
+    /// The open round's deadline fired. Its wait ran out: the probe goes
+    /// ahead with the first upload's draw. It has been open too long: it is
+    /// counted, and the driver says so once and ends it in the coalescer.
+    pub(super) fn on_round_deadline(&mut self, now: u64) -> Vec<Action> {
+        let Some(mut track) = self.round else {
+            return Vec::new();
+        };
+        let mut actions = Vec::new();
+        if let Some((at, draw)) = track.first {
+            if !track.triggered && now >= at.saturating_add(duration_ns(self.policy.round_wait)) {
+                track.triggered = true;
+                self.trigger(now, draw);
+            }
+        }
+        if !track.stuck
+            && now
+                >= track
+                    .started_at
+                    .saturating_add(duration_ns(self.policy.round_stuck_after))
+        {
+            track.stuck = true;
+            self.stuck_rounds = self.stuck_rounds.saturating_add(1);
+            actions.push(Action::RoundStuck);
+        }
+        self.round = Some(track);
+        actions
     }
 
     /// The refetch after a first miss was asked: the second probe is
@@ -262,6 +355,7 @@ impl Core {
     pub(super) fn drop_probe(&mut self) -> Option<Action> {
         let in_flight = matches!(self.probe, Probe::InFlight { .. });
         self.probe = Probe::Idle;
+        self.round = None;
         self.service_republish = false;
         in_flight.then_some(Action::CancelProbe)
     }

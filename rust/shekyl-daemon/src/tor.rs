@@ -577,6 +577,7 @@ impl Drive {
                 self.cancel_probe();
                 Vec::new()
             }
+            Action::RoundStuck => self.round_stuck(),
             Action::RefetchDescriptor => {
                 let mut stop = self.stop.clone();
                 vec![race_stop(&mut stop, self.refetch())
@@ -868,6 +869,23 @@ impl Drive {
         };
         let marks = rounds.observe(desc);
         round_inputs(&marks, shekyl_ffi::tor_link::probe_delay_draw)
+    }
+
+    /// A descriptor round has been open five minutes: uploads with neither
+    /// `UPLOADED` nor `FAILED`, no event lost on our side unless the sink
+    /// says so. Said once at debug (Status counts it), and ended in the
+    /// coalescer, so the next round's uploads start a round of their own
+    /// instead of joining one that will never end (§10).
+    fn round_stuck(&mut self) -> Vec<Input> {
+        tracing::debug!(
+            target: "tor",
+            events_dropped = self.incoming.dropped(),
+            "a descriptor upload round has been open for five minutes; ending it"
+        );
+        let Some(mark) = self.rounds.as_mut().and_then(UploadRounds::resync) else {
+            return Vec::new();
+        };
+        round_inputs(&[mark], shekyl_ffi::tor_link::probe_delay_draw)
     }
 
     /// The sink dropped events since the last look: an open round's ends may
