@@ -227,7 +227,7 @@ tables has one cause. Each item names what would show it wrong.
 | **ESR-8** | Restated constants become imports, or are declared in §4. The stake schedule, the stake ratio and `ActivityMetric.total_staked` stay (Rick, 2026-10-03): staking is being built now, and the sim is the instrument for designing it. A staking surface the daemon does not read yet is not dead. Rejected: deleting the stake schedule as dead. | The census's restated-constant rows are each closed by an import, a deletion, or a §4 entry; staking surfaces are excepted from deletion. Appendix A2 holds none open. |
 | **ESR-9** | Every live passage that quotes a superseded figure or reads as history is replaced by the current one, with the history in git (ruled 2026-10-15). In scope: the documents that quote the old tables (§12.13–§12.14 rows); the FL-E1 note in [`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md) §11.7, re-measured before it is replaced; the staking-sim plan's clause that L11–L19 figures become records-was rows (§6, EUP-3's to restate before it runs); and Appendix A, which Appendix A2's re-census supersedes; and the thin-margin counts that `FEE_LADDER_DERIVATION.md` (the arm table of §10.10) and `FEE_LADDER_ROUND.md` (round 16b) quote from a column the sim no longer prints. Also in scope: the deleted fee-ladder arms (`served_ceil_cq`, and the quantized, hysteresis, rate-limited and grid columns), the FL-R3 and FL-R18 sweep lines `--fee-ladder` no longer prints, and the §4 nearest-pow2 row. | No current-tense sentence quotes a superseded figure, and no live section says records-was. |
 | **ESR-15** | One fee loop over a pricing function: the ordinary fee is the lattice-rounded fixed point of weight and rate, paid as the wallet pays it (`shekyl_economics::quantized_fee`), and §4's unrounded-fee row is deleted. The loop is judged against seven properties (the brief's §A.2a, ruled 2026-10-24; [`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md) §12): never under-pays; least (the least fixed point, from a seed at or below it); bounded over-payment (`f − rate × weight(f) < MASK` at the final weight); exact; fails closed (`None`, never a saturated fee); terminates by agreement (two successive passes equal, never the pass limit); one lattice on both sides. Its own step, after ESR-9 and before ESR-10 runs (ruled 2026-10-17): ESR-10's fixture changes then come from ESR-10 alone. Its PR records the lattice's size as an open fee-ladder row with its current ground, and prints the lattice step as basis points of the ordinary fee (ruling 7, 2026-10-24); the six decimals stay until ruled. Predictions are written before it runs. | A fee `--stage2` charges on the production arm that is not a multiple of `FEE_QUANTIZATION_MASK`; a loop output that fails one of the seven properties on any registered cell. |
-| **ESR-16** | The parameter sweep (the brief's §B.3a; ruled 2026-10-24, [`ECONOMICS_SIM_PHASE0.md`](ECONOMICS_SIM_PHASE0.md) §P0.9). Two generated structs from the one JSON file: `EconomicParams` is chain identity and stays in the digest, and every consensus constant that is not yet a field becomes one, promoted in one PR so the digest and the C4 fixtures move once; `RelayPolicy` (G, the admission slack, the fee decimals, the emission-claim hold) stays outside the digest, on FL-R27's reasoning. One accessor per struct, onto which the validator's `OnceLock`, the FFI's `default()` sites and the wallet cap collapse, and a gate that holds it: production reads only the default. The windows become const generics, not runtime buffers. Each two-source constant gets one source in the lowest crate with a test holding the derived pair equal (the zone and `TX_WEIGHT_LIMIT`; `settlement_epoch_blocks`; `BLOCKS_PER_YEAR` from the DAA target). The bond floor's `const` asserts become a test on the generated default, the cover rung derives from the field, and `engine-core`'s second generated copy goes. The sim varies both structs; production never does. | A production composition that reads a bare economic constant, or resolves parameters anywhere but the accessor (the gate); a default-valued sweep cell that differs from the default report by one byte. |
+| **ESR-16** | The parameter sweep (the brief's §B.3a; ruled 2026-10-24, [`ECONOMICS_SIM_PHASE0.md`](ECONOMICS_SIM_PHASE0.md) §P0.9; the completion's placement ruled 2026-10-29, §5.26). Three generated structs, one source file each, the file boundary the digest boundary: `EconomicParams` is chain identity in the params digest, every economic consensus constant a field, promoted so each digest and the C4 fixture move once; `ArchivalParams` is the archival consensus set, in the consensus digest; `RelayPolicy` (G, the admission slack, the fee decimals, `w_ref`, the rung ratios, the emission-claim hold) stays outside both, on FL-R27's reasoning. One accessor per struct, onto which the validator's `OnceLock`, the FFI's `default()` sites and the wallet cap collapse, and a gate that holds it: production reads only the default. A sim run is that baseline plus named overrides, each through its struct's validator. The windows become const generics, not runtime buffers. Each two-source constant gets one source in the lowest crate with a test holding the derived pair equal (the zone and `TX_WEIGHT_LIMIT`; `settlement_epoch_blocks`; `BLOCKS_PER_YEAR` from the DAA target). The bond floor's `const` asserts become a test on the generated default, the cover rung derives from the field, and `engine-core`'s second generated copy goes. The sim varies both structs; production never does. | A production composition that reads a bare economic constant, or resolves parameters anywhere but the accessor (the gate); a default-valued sweep cell that differs from the default report by one byte. |
 
 The constant-fee closed form for the fee horizon (`onset.rs`, and the two
 tests that pin it) describes a fee the chain does not charge. It is
@@ -298,7 +298,8 @@ is demand paying up and which part is the constant.
 The re-derived arm is expressible through parameters:
 `shekyl_chain_rules::medians_from` floors the medians at
 `EconomicParams::full_reward_zone` (`55d5266a7`, #1152), so the zone has one
-reader. `w_ref` is the parameter it still needs, which ESR-16 provides.
+reader, and `w_ref` is `RelayPolicy::ref_tx_weight`, which a run sets with
+`--set relay.ref_tx_weight=…` (§5.26). The arm is a sweep cell.
 
 **Build list (ruled 2026-10-24; the brief's §B.0–§B.7 as relayed, and
 [`ESR10_PREDICTIONS.md`](ESR10_PREDICTIONS.md) §0).** In order: the
@@ -479,7 +480,7 @@ defect.
 | The pool's livetime is a restated C++ define | `CRYPTONOTE_MEMPOOL_TX_LIVETIME` has no Rust owner until the pool moves (`DRS_E1_SPOOL.md`); the sim's copy is pinned to the header by a test | Stated at its definition |
 | Budget disposition (b) is unpenalised | (b) is the unmodulated subsidy, a counterfactual of the release multiplier. The penalty in (a) is bounded by the fees of the transactions that crossed the median, since the fill rule admits no other | Stated in `budget.rs` |
 | Every ordinary transaction pays Standard | No wallet escalates its rung under congestion; the user chooses. Blocks past the median are what Priority pays for | ESR-10's rung mix |
-| A claim is one ordinary transaction at the admission rate | The claim's own envelope and the wallet's claim hold floor (`EMISSION_CLAIM_FEE_FLOOR`) are not modelled | Stated here |
+| A claim is one ordinary transaction at the admission rate | The claim's own envelope (51 200 weight priced) and the wallet's value gate, `Σreward ≥ max(live fee, hold)` with the hold `RelayPolicy::emission_claim_fee_floor` (1 398 068 000 atomic, the genesis Economy fee at that weight), are not modelled | Stated here |
 | Fee floor enforced in consensus | Not the current system: the floor is relay policy (C2-R2 Q9, reopened 2026-10-02) | Second arm of ESR-7 |
 | Traffic schedules, opportunity-cost band, SKL price band, storage and Kryder terms, replica target `R = 6` | No production owner exists | Exogenous; each declared at its definition |
 | The fee-floor instrument's floor at `SCALE` resolution | FL-E1–E3 measure the floor's per-block slew, which is finer than one atomic unit per byte; the owner rounds to whole units | `fee_floor.rs`; pinned to `relay_fee_floor` and the ladder's `4F` by `the_floor_is_the_owners_at_scale_resolution` |
@@ -2511,6 +2512,134 @@ The bond floor is generated once, in `shekyl-archival-retention`.
 `shekyl-engine-core` no longer emits a second copy; its 750 000 000
 pin is the test `archival_bond_floor_matches_gate4_calibration`. The
 cover rung is generated from the same JSON key.
+
+### 5.26.2 What the completion did (2026-10-29)
+
+Graded against the amendment's E16-5 to E16-14 and the ESR-16 row's
+falsifier, PR #1218 from `c92bbdc87`. The default `--stage2` run is the
+two ignored narration tests, release, both arms.
+
+- **E16-5 held.** `scripts/ci/check_economic_accessors.py` fails a
+  production read of an owned archival constant outside its owner files
+  and of an owned economics or relay constant outside
+  `shekyl-economics`, and a sim read of an accessor, a shipped default
+  or an owned constant outside `baseline.rs` and the modules whose modes
+  refuse overrides. It asserts its subject: at least 200 production
+  files and 20 sim files, each accessor defined and read, and
+  `baseline.rs` reading all three. Red checks: a bare
+  `SETTLEMENT_EPOCH_BLOCKS` and a bare `RELAY_FLOOR_REFERENCE_TX_WEIGHT`
+  in `shekyl-chain-store` `store/read.rs` each failed it; a bare
+  `SETTLEMENT_EPOCH_BLOCKS` and a `relay_policy()` call in the sim's
+  `proxy.rs` failed it, naming both.
+- **E16-6 held.** Both narration fixtures match the bytes at `c92bbdc87`
+  at every verified head. A cell overriding all twenty promoted fields
+  at their shipped values (three economic, ten archival, seven relay)
+  prints a narration byte-identical to the fixture, on both arms
+  (the binary at `b288ef52b`, `--stage2` with twenty `--set` overrides, each arm's stderr below the six-line header compared with `cmp`; a one-field `economic.release_min` cell matched too). The header is printed by the mode runner above the
+  narration and pinned as literals by
+  `a_baseline_runs_header_is_the_three_digests_and_no_overrides`.
+- **E16-7 held.** One test per promoted field mutates it on a test set
+  and watches its reader move. Economic: the surge factor
+  (`the_surge_ceiling_reads_the_sets_factor`), the clamp
+  (`the_long_term_clamp_reads_the_sets_clamp`), the limit multiple
+  (`the_limit_and_the_penalty_read_the_sets_multiple`). Archival: all ten
+  (`each_field_moves_its_reader`). Relay: Standard, Priority and `w_ref`
+  (`each_policy_field_moves_its_rung`), the slack
+  (`slack_lowers_the_requirement_when_it_is_not_zero`), the decimals
+  (`an_alternative_policy_changes_the_lattice_and_the_slack`, E16-9), the
+  hold (`value_gate_clears_the_live_fee_floored_by_the_hold`), and the
+  lookback with `w_ref` through the admission window
+  (`the_window_reads_the_policys_lookback_and_reference_weight`). The
+  lookback's reader read the shipped policy itself until `be9d7d7bc`,
+  which gave the window the policy it is handed; that commit lands after
+  the oracle's deletion and does not touch the penalty.
+- **E16-8 held.** The hold is 1 398 068 000 atomic, about 1.40 SKL,
+  against the literal 3.6 SKL: 61.2 % lower. `shekyl-engine-core`'s
+  `the_claim_hold_is_the_genesis_economy_fee_at_the_priced_weight`
+  recomputes it from `relay_floor_from` at the genesis operands
+  (Economy 27 306 atomic per weight unit) and the leg's 51 200 weight.
+- **E16-9 held.** At `relay.fee_decimal_places = 8` (lattice step 10),
+  every production-arm fee of a baseline year is a multiple of 10 and
+  the run's admission accepts each at that block's Economy rung; some
+  fee is off the shipped 1 000-atomic lattice, so the run's lattice, not
+  the shipped one, priced it
+  (`a_finer_lattice_reaches_the_fee_and_admission_takes_it`).
+- **E16-10 held.** One commit, `614664759`, moves the consensus pin
+  (`rust/shekyl-rpc-types/build.rs`), the params format byte and the C4
+  fixture. `4c0943bfa` edits a `_comment` key of the consensus file,
+  which the canonical form excludes, and the relay file's two commits
+  move neither digest (`the_relay_policy_file_is_outside_the_digest_and_disjoint`).
+  `EconomicParams::blocks_per_year` is a method. Params digest: format
+  `0x06`, a 145-byte preimage (the format byte and eighteen
+  little-endian `u64` fields); the C4 fixture is
+  `blake2b:5a63a1d174bf5ef7fda7bb966e3e5e1f2ec00c90c6f7374d37cf146c9238bed2`.
+  Consensus digest:
+  `dbb6547554cdec983d8e5a0040a011c412452e744a27554452461963c23566b2`.
+- **E16-11 held.** The generalised penalty equalled the old body on the
+  edges of each arm and on 50 000 randomised `(R, M, w)` at every
+  verified head while the oracle stood. `3fea2c967` deletes the oracle
+  and pins nine vectors it confirmed: each arm, a median floored at the
+  zone, the `u64` rail, and the `u128` overflow refusal.
+- **E16-12 held.** `value_gate_clears_the_live_fee_floored_by_the_hold`:
+  a set clearing the hold but not the live fee holds; one clearing both
+  assembles.
+- **E16-13 held in part.** The shipped `ArchivalParams` passes
+  `validate`, the set's door (deserializing goes through it). `m = 0`,
+  `n < m` and an epoch no longer than the reorg depth are refused
+  (`validate_refuses_each_broken_coupling`). The anchor-lag clause does
+  not apply: the lag is kept structural (the kept table above), and
+  `shekyl-archival-retention`'s build script refuses a lag below 2.
+- **E16-14 held.** `SimParams` holds the run's three structs, its
+  overrides and its fee arm, and no copied production field. A baseline
+  run's header prints the three digests and `overrides: (none)`. A
+  missing field, a value a validator refuses, a value past its field's
+  width and a path given twice each fail when the run is built
+  (`the_door_refuses_before_the_fold`); the binary exits 2 on each,
+  before any fold.
+- **The row's falsifier does not fire.** The gate holds production and
+  the sim, and a default-valued cell prints the default report.
+
+*The penalty's `u128` bound* (owed by the amendment). The checked
+product is largest as `w → M`, about `amount · e² · M²`, refused at
+`2¹²⁸`. With `amount < 2⁴¹` (the largest paid reward is below it), the
+shipped `e = 1` holds for every `M < 2⁴³·⁵` (about 1.2·10¹³ bytes) and
+the largest `e` `validate` admits, 29 (`k = 3.9`, `k − 1 = 29/10`), for
+every `M < 2³⁸·⁶` (about 4·10¹¹ bytes). The medians' clamps do not bound
+`M` over a chain's life (the long-term median may rise 1.7× a window),
+so these are thresholds a chain would have to grow past, refused the way
+the shipped arithmetic refuses them; no arithmetic is widened and the
+maximum `k` stands.
+
+*The relay label.* `relay_policy_digest`: Blake2b-256 over a 57-byte
+preimage (format byte `0x01`, the seven fields as little-endian `u64`),
+`5f19950d8d031d0efa1f8e09f06d92c3b9a357175a9685ab7bd7fd49b45cc6b2` at the
+shipped policy. A report label only; no block, peer or wallet compares
+it.
+
+*Where an override reaches.* `--set set.field=value` is read by
+`--stage2` alone, which prints a cell beside its baseline; every other
+mode refuses an override and exits 2. Six promoted fields have no
+reader in any `--stage2` figure: the relay lookback, the slack, the claim
+hold and the Priority factor, and the archival release cooldown and
+bond-duration pair. A cell on them prints the baseline report, because
+no figure depends on them; the header names the override.
+
+*A finding.* The W₂ band confines a swept epoch: at the divisor of 20
+and the band `[200, 500]`, `validate` admits an epoch of 4 000 to 10 000
+blocks. A sweep past that is a re-run of the W₂ ruling, not a parameter
+change.
+
+*Kept, the full list.* The kept table above, plus: the reorg depth
+(structural; one Rust source in `shekyl-types`), the shard length and
+the holdings cap (structural; the shard length reopens if EUP-5 I sweeps
+shard size), the segment leaf count (derived), the anchor lag
+(structural), the emission batch cap (structural, generated from its
+key, held to the C++ header's buffer size by a `shekyl-ffi` test), the
+retention horizon (generated, read only by the staking sim, until it is
+ruled deleted or restated against the built sweep), and the C++
+`median * 2` in `Blockchain::update_next_cumulative_weight_limit`
+(the shipped multiple; not migrated, deleted with the C++ chain by the
+DRS-X flip).
 
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 

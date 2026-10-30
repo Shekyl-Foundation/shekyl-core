@@ -129,9 +129,10 @@ pub fn penalty_free_weight(median_weight: u64, params: &EconomicParams) -> u64 {
 /// when that reaches `2¹²⁸`. With `amount < 2⁴¹` (the largest paid reward,
 /// `M_r` at its top rail on the first curve block, is below it) the
 /// shipped `e = 1` is safe for every `M < 2⁴³·⁵` (about 1.2·10¹³ bytes),
-/// and the largest `e` a set can carry, 30
-/// ([`MAX_BLOCK_WEIGHT_LIMIT_MULTIPLE`](crate::block_weight::MAX_BLOCK_WEIGHT_LIMIT_MULTIPLE)),
-/// for every `M < 2³⁸·⁶` (about 4·10¹¹ bytes). The medians' clamps do not
+/// and the largest `e` a set can carry, 29 (`k = 3.9`: `k − 1 = 29/10` in
+/// lowest terms; the tenths grain up to
+/// [`MAX_BLOCK_WEIGHT_LIMIT_MULTIPLE`](crate::block_weight::MAX_BLOCK_WEIGHT_LIMIT_MULTIPLE)
+/// gives no larger numerator), for every `M < 2³⁸·⁶` (about 4·10¹¹ bytes). The medians' clamps do not
 /// bound `M` over a chain's life (the long-term median may rise 1.7× a
 /// window); these are thresholds a chain would have to grow past, refused
 /// in the same way the shipped arithmetic refuses them.
