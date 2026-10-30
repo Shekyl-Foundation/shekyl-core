@@ -3782,7 +3782,7 @@ TEST_F(levin_notify, a_transaction_already_in_the_carrier_is_not_enqueued_twice)
     for (auto& ctx : contexts_)
         ctx.process_send_queue();
     while (receiver_.notified_size())
-        receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>();
+        receiver_.get_raw_notification(); // carrier fragments do not parse; see the drain above
 }
 
 /*! **The discard matrix: the two relay classes retry by different mechanisms,
