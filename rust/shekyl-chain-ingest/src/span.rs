@@ -503,7 +503,34 @@ fn rest(arrivals: &mut VecDeque<Parsed>) -> Vec<Parsed> {
     arrivals.drain(..).collect()
 }
 
-/// Connect a run's formed blocks in order as each `form` ends.
+/// What ended the wait for a run's forms before every form was in. The
+/// blocks formed before it still land, in the run's one write; what it
+/// names is answered after that write.
+enum Ended<F> {
+    /// `form` refused this arrival: it is answered, the rest cancelled.
+    Refused {
+        arrival: Parsed,
+        refused: InvalidBlock,
+    },
+    /// The slots moved under this arrival's hash: it and the rest are
+    /// placed again.
+    Again(Parsed),
+    /// The substrate faulted: the service fails.
+    Fault(F),
+}
+
+/// Connect a run's formed blocks in **one write** once every form of the
+/// run has ended, or the first refusal or fault has: one transaction, one
+/// commit, one `TipChanged` per run.
+///
+/// The door connected each block as its form ended, one write and one
+/// commit each: two fsyncs per block under `Immediate`, where the C++
+/// handler's connect loop opened one batch for a whole span. On a disk
+/// whose fsync costs 150 ms that was the flip's whole IBD cost gap
+/// (DRS-D6's mitigation cycle, 2026-10-30). The durability policy does
+/// not change: the run's commit is fsynced and atomic, and a crash rolls
+/// the open run back, to be fetched again; a node following the tip runs
+/// one block anyway.
 async fn connect_run<S>(
     shared: &Arc<Shared<S>>,
     arrivals: &mut VecDeque<Parsed>,
@@ -515,78 +542,120 @@ where
     S: Substrate + Send + Sync + 'static,
     S::Fault: core::fmt::Debug + Send + 'static,
 {
+    let mut run: Vec<(BlockHeight, Result<StructurallyValid, InvalidBlock>)> =
+        Vec::with_capacity(receivers.len());
+    let mut formed: Vec<Parsed> = Vec::with_capacity(receivers.len());
+    let mut ended: Option<Ended<S::Fault>> = None;
     for (height, receiver) in receivers {
         let arrival = arrivals.pop_front().expect("one arrival per claim");
-        let Ok(formed) = receiver.await else {
+        let Ok(form) = receiver.await else {
             return Next::Halt;
         };
         if shared.stopping() {
             abandon.store(true, Ordering::Release);
             return Next::Halt;
         }
-        let formed = match formed {
-            Ok(Ok(formed)) => formed,
+        match form {
+            Ok(Ok(valid)) => {
+                run.push((height, Ok(valid)));
+                formed.push(arrival);
+            }
             Ok(Err(refused)) => {
-                arrival.slot.send(Reply::Refused(refused));
-                return Next::Cancel {
-                    by: arrival.tag,
-                    rest: rest(arrivals),
-                };
+                ended = Some(Ended::Refused { arrival, refused });
+                break;
             }
             Err(fault) if shared.substrate().cache_absent(&fault) => {
-                // The slots moved under the hash. Place again: the run pins
-                // the window it needs, and a miss does not derive.
-                abandon.store(true, Ordering::Release);
-                let mut again = vec![arrival];
-                again.extend(rest(arrivals));
-                return Next::Again(again);
+                ended = Some(Ended::Again(arrival));
+                break;
             }
             Err(fault) => {
-                abandon.store(true, Ordering::Release);
-                shared.fail(ServiceFault::Substrate(fault));
-                return Next::Halt;
+                ended = Some(Ended::Fault(fault));
+                break;
             }
-        };
-        match shared
-            .connector
-            .ask(Apply(vec![(height, Ok(formed))]))
-            .await
-        {
-            Ok(applied) => match applied.refused {
-                // This path only applies a block whose parent was the tip.
-                // CEN-A2 then says that parent is no longer the tip, at the
-                // same height: a replacement, not a block this peer proved
-                // invalid. A height change is `HeightClaim`, below.
-                Some((_, refused)) if refused.rule == CenRow::A2 => {
-                    abandon.store(true, Ordering::Release);
-                    let mut again = vec![arrival];
-                    again.extend(rest(arrivals));
-                    return Next::Again(again);
+        }
+    }
+    // The arrivals a `Next` carries past the write: those formed but not
+    // landed, the one that ended the wait, then the rest of the run.
+    let carried = |mut not_landed: Vec<Parsed>,
+                   ended: Option<Ended<S::Fault>>,
+                   arrivals: &mut VecDeque<Parsed>| {
+        match ended {
+            Some(Ended::Refused { arrival, .. } | Ended::Again(arrival)) => {
+                not_landed.push(arrival)
+            }
+            Some(Ended::Fault(_)) | None => {}
+        }
+        not_landed.extend(rest(arrivals));
+        not_landed
+    };
+    if !run.is_empty() {
+        match shared.connector.ask(Apply(run)).await {
+            Ok(applied) => {
+                let landed = applied.connected.len().min(formed.len());
+                let not_landed = formed.split_off(landed);
+                for ((height, hash), arrival) in applied.connected.iter().zip(formed) {
+                    arrival.slot.send(Reply::Connected {
+                        height: *height,
+                        hash: *hash,
+                    });
                 }
-                Some((_, refused)) => {
-                    abandon.store(true, Ordering::Release);
-                    arrival.slot.send(Reply::Refused(refused));
-                    return Next::Cancel {
-                        by: arrival.tag,
-                        rest: rest(arrivals),
-                    };
+                match applied.refused {
+                    // This path only applies a block whose parent was the
+                    // tip. CEN-A2 then says that parent is no longer the
+                    // tip, at the same height: a replacement, not a block
+                    // this peer proved invalid. A height change is
+                    // `HeightClaim`, below.
+                    Some((_, refused)) if refused.rule == CenRow::A2 => {
+                        abandon.store(true, Ordering::Release);
+                        return Next::Again(carried(not_landed, ended, arrivals));
+                    }
+                    Some((_, refused)) => {
+                        abandon.store(true, Ordering::Release);
+                        let mut not_landed = not_landed.into_iter();
+                        let arrival = not_landed.next().expect("the refused block was in the run");
+                        arrival.slot.send(Reply::Refused(refused));
+                        return Next::Cancel {
+                            by: arrival.tag,
+                            rest: carried(not_landed.collect(), ended, arrivals),
+                        };
+                    }
+                    None if !not_landed.is_empty() => {
+                        abandon.store(true, Ordering::Release);
+                        return Next::Again(carried(not_landed, ended, arrivals));
+                    }
+                    None => {}
                 }
-                None => {
-                    let (height, hash) = applied.connected[0];
-                    arrival.slot.send(Reply::Connected { height, hash });
-                }
-            },
+            }
             Err(SendError::HandlerError(fault)) if is_stale(&fault) => {
                 abandon.store(true, Ordering::Release);
-                let mut again = vec![arrival];
-                again.extend(rest(arrivals));
-                return Next::Again(again);
+                return Next::Again(carried(formed, ended, arrivals));
             }
             Err(err) => {
                 abandon.store(true, Ordering::Release);
                 shared.fail(unreachable_or(err));
                 return Next::Halt;
             }
+        }
+    }
+    match ended {
+        None => {}
+        Some(Ended::Refused { arrival, refused }) => {
+            arrival.slot.send(Reply::Refused(refused));
+            return Next::Cancel {
+                by: arrival.tag,
+                rest: rest(arrivals),
+            };
+        }
+        Some(Ended::Again(arrival)) => {
+            abandon.store(true, Ordering::Release);
+            let mut again = vec![arrival];
+            again.extend(rest(arrivals));
+            return Next::Again(again);
+        }
+        Some(Ended::Fault(fault)) => {
+            abandon.store(true, Ordering::Release);
+            shared.fail(ServiceFault::Substrate(fault));
+            return Next::Halt;
         }
     }
     match stop {

@@ -304,6 +304,59 @@ async fn a_span_from_the_tip_connects_in_order() {
     cleanup(&path);
 }
 
+/// A span the door accepts lands in one write: one commit and one
+/// `TipChanged` for the run, at the run's last block, not one per block
+/// (DRS-D6's mitigation, 2026-10-30: the door committed once per block,
+/// two fsyncs each, where the C++ batched a whole span). Every block is
+/// still answered `Connected` at its height, in order.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_span_lands_in_one_commit() {
+    use crate::connector::TipChanged;
+    let mut y = Scenario::open("service-one-commit-y");
+    let blocks = y.mine(6).await;
+    let gate = Arc::new(Gated::new());
+    let (service, path) = service(
+        "service-one-commit",
+        Arc::clone(&gate),
+        ServiceConfig::default(),
+    );
+    let door = service.door();
+    assert!(
+        door.room() >= blocks.len(),
+        "the span fits the door's window"
+    );
+    let mut tips = service.watch_tip().await.expect("watch");
+    assert_eq!(*tips.borrow_and_update(), TipChanged { seq: 0, tip: None });
+    let replies = offer_all(&door, 1, &blocks).await;
+    for (mined, reply) in blocks.iter().zip(&replies) {
+        assert_eq!(
+            *reply,
+            Reply::Connected {
+                height: mined.height,
+                hash: mined.hash
+            }
+        );
+    }
+    assert!(
+        tips.has_changed().expect("open"),
+        "the run published its tip"
+    );
+    let published = *tips.borrow_and_update();
+    assert_eq!(
+        published.seq, 1,
+        "one commit for the span, not {}",
+        published.seq
+    );
+    assert_eq!(
+        published.tip.map(|t| t.top_id),
+        Some(blocks[blocks.len() - 1].hash),
+        "the one publication is the run's last block"
+    );
+    service.stop().await.expect("stops");
+    y.close().await;
+    cleanup(&path);
+}
+
 /// Two arrivals at one height from two sessions: one connects and the
 /// other is held as an alternative. Neither is connected twice.
 #[tokio::test(flavor = "multi_thread")]
@@ -1678,9 +1731,13 @@ async fn a_closed_sync_channel_withdraws_the_job_and_following_goes_on() {
     let mut followed = service.followed();
     drop(sync_tx);
     offer_all(&service.door(), 1, &blocks).await;
+    // The span lands in one commit, so the follower has one publication to
+    // reach, not one per block: the tip watch's sequence after the offers.
+    let published = service.watch_tip().await.expect("watch").borrow().seq;
+    assert!(published >= 1, "the span published its tip");
     tokio::time::timeout(
         std::time::Duration::from_secs(20),
-        followed.wait_for(|at| *at >= 2),
+        followed.wait_for(|at| *at >= published),
     )
     .await
     .expect("the follower still follows")
