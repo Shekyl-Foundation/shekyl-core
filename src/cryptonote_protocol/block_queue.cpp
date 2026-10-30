@@ -388,6 +388,42 @@ bool block_queue::has_next_span(const boost::uuids::uuid &connection_id, bool &f
   return true;
 }
 
+bool block_queue::get_next_span_from(uint64_t min_start, uint64_t &height, std::vector<cryptonote::block_complete_entry> &bcel, boost::uuids::uuid &connection_id, epee::net_utils::network_address &addr) const
+{
+  boost::unique_lock<boost::recursive_mutex> lock(mutex);
+  for (block_map::const_iterator i = blocks.begin(); i != blocks.end(); ++i)
+  {
+    if (i->start_block_height < min_start || i->blocks.empty())
+      continue;
+    height = i->start_block_height;
+    bcel = i->blocks;
+    connection_id = i->connection_id;
+    addr = i->origin;
+    return true;
+  }
+  return false;
+}
+
+bool block_queue::has_filled_span_from(uint64_t min_start) const
+{
+  boost::unique_lock<boost::recursive_mutex> lock(mutex);
+  for (const auto &span: blocks)
+    if (span.start_block_height >= min_start && !span.blocks.empty())
+      return true;
+  return false;
+}
+
+void block_queue::remove_spans_ending_before(uint64_t height)
+{
+  boost::unique_lock<boost::recursive_mutex> lock(mutex);
+  for (block_map::iterator i = blocks.begin(); i != blocks.end(); )
+  {
+    block_map::iterator j = i++;
+    if (j->start_block_height + j->nblocks <= height)
+      erase_block(j);
+  }
+}
+
 bool block_queue::has_next_span(uint64_t height, bool &filled, boost::posix_time::ptime &time, boost::uuids::uuid &connection_id) const
 {
   boost::unique_lock<boost::recursive_mutex> lock(mutex);

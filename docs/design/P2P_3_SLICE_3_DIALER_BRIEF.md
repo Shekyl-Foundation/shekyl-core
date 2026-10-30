@@ -48,6 +48,10 @@ until slice 4".*
 
 **UNFREEZE (Rick, 2026-10-13):** src/p2p/net_node.h — the cutover's commit (c): `init` loses its proxy parameter and the zone struct its listen, proxy, announce and cap fields; the rest is deletion.
 
+**UNFREEZE (Rick, 2026-10-30):** src/cryptonote_protocol/block_queue.cpp — the flip's sync half meets the ingest door (the DRS-X flip's §3 legs, 2026-10-30): `reset_next_span_time` is a no-op for a span a receipt on another strand filled between the scheduled read and the reset, where its invariant check threw out of the net loop; `get_next_span_from`, `has_filled_span_from` and `remove_spans_ending_before` let a span the handler handed the door stay queued, and so read as held, until the door's connected reply erases it. CS-5 deletes the file.
+
+**UNFREEZE (Rick, 2026-10-30):** src/cryptonote_protocol/block_queue.h — the three declarations above.
+
 **UNFREEZE (Rick, 2026-10-29):** src/cryptonote_protocol/levin_notify.cpp — the flip's relay embargo (RX-1, RX-2; the relay brief of 2026-10-29): `record_stem_observation` hands the zone each transaction's bytes beside its hash (`relay_tx_spans_of`); `hold_origin` gives the zone an origin that was not sent (`AwaitSync`, `NoOwnEdge`, a failed own-edge write, a carrier discard) in place of the returns that left it to the deleted pool's retry; both polls pass the handler's sync state and a `relay_effects::on_stem` callback that writes a reshape or a held origin's send on the ordinary wire; `record_arrival` no longer forwards the propagated set, which the zone now consumes. RD deletes all of it with `levin_notify`.
 
 **UNFREEZE (Rick, 2026-10-13):** src/cryptonote_protocol/levin_notify.cpp — the cutover's commit (c): `make_relay` and the `notify` constructors take no connector mask and no carrier flag; the relay's identity and `dev-relay-cover` are the posture the Rust `main()` records (`shekyl_relay_zone_new` reads it).

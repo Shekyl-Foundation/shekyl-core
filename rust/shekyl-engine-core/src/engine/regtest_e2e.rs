@@ -2799,18 +2799,33 @@ async fn e2e_cxx_template_fills_to_its_median() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; two daemons, ~2 min"]
 async fn a_node_syncs_a_chain_longer_than_the_doors_window_from_a_peer() {
-    use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
+    sync_from_a_peer(100, [0x5au8; 64]).await;
+}
 
+/// A node syncs fifteen spans from one peer: more than the handler
+/// downloads ahead (ten spans), so spans the door has been handed and has
+/// not yet connected sit beside spans still arriving. Seen red on
+/// 2026-10-30 at the end of the 762-block F-B sync on two hosts: a handed
+/// span was removed from the queue before the door connected it, its
+/// heights were requested again, the queue filled with overlapping spans,
+/// and the node stood at 724 of 762 with the door reporting no room. The
+/// five-span test above never runs ahead of its own downloads and cannot
+/// see this.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; two daemons and 300 blocks, several min"]
+async fn a_node_syncs_fifteen_spans_from_a_peer() {
+    sync_from_a_peer(300, [0x5bu8; 64]).await;
+}
+
+/// The two-daemon sync walk: a source linked to a non-syncing sink mines
+/// `blocks`; a joiner linked to the source must reach its tip, moving at
+/// least every 120 s.
+async fn sync_from_a_peer(blocks: u64, seed: [u8; 64]) {
     let serial = serial_lock().lock_owned().await;
-    let seed = [0x5au8; MASTER_SEED_BYTES];
     let source_p2p = RegtestDaemon::free_port();
     let sink_p2p = RegtestDaemon::free_port_excluding(&[source_p2p]);
     let joiner_p2p = RegtestDaemon::free_port_excluding(&[source_p2p, sink_p2p]);
     let address = mine_address_from_seed(&seed, shekyl_address::Network::Mainnet);
-    // A node with a peer configured reads synced, and posts a job, once it
-    // has linked to one (the pair tests' shape): the source links to a
-    // sink that does not sync, so the chain it mines stays the source's
-    // alone until the joiner arrives.
     let _sink = RegtestDaemon::spawn(RegtestSpawn::new(None).with_peering(Peering::Linked {
         p2p_port: sink_p2p,
         peer_p2p_port: source_p2p,
@@ -2835,11 +2850,9 @@ async fn a_node_syncs_a_chain_longer_than_the_doors_window_from_a_peer() {
         );
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
-    // Five spans of twenty: past one door window, and past the C++ queue's
-    // single span.
-    source.generate_blocks_chunked(99).await;
+    source.generate_blocks_chunked(blocks - 1).await;
     let want = source.height().await;
-    assert_eq!(want, 101, "the source mined its chain");
+    assert_eq!(want, blocks + 1, "the source mined its chain");
     let source_tip = source.last_block_hash().await;
 
     let joiner = RegtestDaemon::spawn(RegtestSpawn::new(None).with_peering(Peering::Linked {
@@ -2848,12 +2861,8 @@ async fn a_node_syncs_a_chain_longer_than_the_doors_window_from_a_peer() {
         sink: false,
     }))
     .await;
-    // A stall is the height not moving, not the sync being slow: the box
-    // shares its cores, and the verifier's pace is the measurement of
-    // §3.3, not this test's. The daemon that dropped its peer sat at one
-    // height for the whole run; a loaded box still moves every few seconds.
     const STALL: Duration = Duration::from_secs(120);
-    const CAP: Duration = Duration::from_secs(900);
+    const CAP: Duration = Duration::from_secs(1800);
     let started = Instant::now();
     let (mut last, mut moved) = (0u64, Instant::now());
     loop {

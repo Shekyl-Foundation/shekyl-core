@@ -211,6 +211,10 @@ ARMED_SLOW=(
   engine::regtest_e2e::e2e_unstake_collect_retire_composed_arc
   engine::regtest_e2e::origin::an_origin_with_no_alternate_fluffs_at_its_first_fire_and_is_mined
   engine::regtest_e2e::origin::an_origin_whose_successor_drops_re_stems_to_its_alternate_and_never_fluffs
+  # Observed red 2026-10-30 (the handed-over span removed from the queue
+  # before the door connected it): the joiner stood at one height with the
+  # door reporting no room, as the F-B subjects did at 724 of 762.
+  engine::regtest_e2e::a_node_syncs_fifteen_spans_from_a_peer
 )
 
 # Deliberately never run here, with the reason recorded (rule 23: a decided

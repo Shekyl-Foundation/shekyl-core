@@ -164,7 +164,9 @@ namespace cryptonote
         // the store's tip again, and the next peer is asked from there.
         m_door_frontier.store(0);
         LOG_PRINT_CCONTEXT_L0("Block verification failed, dropping connection");
-        drop_connection(context, false, false);
+        // Every span this peer filled is suspect with the block, and a
+        // handed span the door refused would otherwise stay queued as held.
+        drop_connection(context, false, true);
         return;
       }
       if (reply.kind == SHEKYL_INGEST_CONNECTED || reply.kind == SHEKYL_INGEST_SWITCHED)
@@ -178,11 +180,23 @@ namespace cryptonote
         // head is the store's tip again. The sync is done when the tip
         // reaches the target the peers declared, which only this reply
         // can now say (the connect loop that said it is the door's).
+        m_block_queue.remove_spans_ending_before(reply.height + 1);
         if (reply.height + 1 >= m_door_frontier.load())
           m_door_frontier.store(0);
         const uint64_t target = m_core.get_target_blockchain_height();
         if (target && !m_synchronized && m_core.get_current_blockchain_height() >= target)
           on_connection_synchronized();
+        // The next span the queue holds for the door is handed over from
+        // the standby pass; a context the sync left in normal state ("nothing
+        // to do for now") is put back on that pass here, or the queue would
+        // hold its spans until a peer spoke.
+        if (context.m_state == cryptonote_connection_context::state_normal
+            && m_block_queue.has_filled_span_from(m_door_frontier.load()))
+        {
+          context.m_state = cryptonote_connection_context::state_standby;
+          ++context.m_callback_request_count;
+          m_p2p->request_callback(context);
+        }
         // A block a peer announced that is now this node's tip, while this
         // node is not behind, is announced on, as this handler did before
         // the door (the connect loop's relay). A block this node mined or
@@ -1144,7 +1158,7 @@ namespace cryptonote
       std::vector<cryptonote::block_complete_entry> blocks;
       boost::uuids::uuid span_connection_id{};
       epee::net_utils::network_address span_origin;
-      if (m_block_queue.get_next_span(start_height, blocks, span_connection_id, span_origin) && !blocks.empty())
+      if (m_block_queue.get_next_span_from(m_door_frontier.load(), start_height, blocks, span_connection_id, span_origin) && !blocks.empty())
       {
         (void)span_origin;
         // A span this node asked for. The door connects it; this loop does
@@ -1162,13 +1176,16 @@ namespace cryptonote
             shekyl::seam_socket_id(span_connection_id), true, blocks);
         if (offered == SHEKYL_INGEST_ACCEPTED)
         {
-          // The span is the door's now: the sync's head moves past it
-          // before the chain does (`sync_head`).
+          // The span is the door's now, and it stays in the queue until
+          // the door's connected reply erases it: removed here, its
+          // heights would be neither on the chain nor in the queue, and
+          // the next request would ask the peer for them again (seen as
+          // overlapping spans and a door with no room left).
           const uint64_t past = start_height + blocks.size();
           uint64_t frontier = m_door_frontier.load();
           while (frontier < past && !m_door_frontier.compare_exchange_weak(frontier, past)) {}
         }
-        if (offered == SHEKYL_INGEST_ACCEPTED || offered == SHEKYL_INGEST_OVERSIZE || offered == SHEKYL_INGEST_INVALID)
+        if (offered == SHEKYL_INGEST_OVERSIZE || offered == SHEKYL_INGEST_INVALID)
           m_block_queue.remove_spans(span_connection_id, start_height);
         if (offered == SHEKYL_INGEST_THROTTLED)
         {
@@ -1510,8 +1527,9 @@ namespace cryptonote
           bool filled = false;
           boost::posix_time::ptime time;
           boost::uuids::uuid connection_id;
-          if (m_block_queue.has_next_span(sync_head(), filled, time, connection_id) && filled)
+          if (m_block_queue.has_filled_span_from(m_door_frontier.load()))
           {
+            filled = true;
             LOG_DEBUG_CC(context, "No other thread is adding blocks, and next span needed is ready, resuming");
             MLOG_PEER_STATE("resuming");
             context.m_state = cryptonote_connection_context::state_standby;
