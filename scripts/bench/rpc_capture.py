@@ -12,6 +12,7 @@ import argparse
 import base64
 import json
 import os
+import socket
 import urllib.error
 import urllib.request
 
@@ -137,6 +138,50 @@ def chain_requests(tip_height, tip_hash, genesis_hash, tx_hash=None):
     return out
 
 
+def reserve_loopback_ports(n):
+    """Bind `n` loopback sockets to port 0 and return `(ports, sockets)`.
+
+    The sockets stay open so the kernel cannot hand the same ephemeral
+    port out again before the caller has all of them. The caller closes
+    them before a daemon binds. A foreign process can still take a port
+    in that gap; the spawn's console log is where that shows up.
+
+    The bench reserves four ports the same way, for two daemons. This
+    holds the one admin port the kept-chain capture binds. View listen
+    is not reserved: it defaults to none, and the column does not use it.
+    """
+    if isinstance(n, bool) or not isinstance(n, int) or n < 1:
+        raise ValueError(f"port count {n!r} is not a positive count")
+    socks = [socket.socket() for _ in range(n)]
+    try:
+        for sk in socks:
+            sk.bind(("127.0.0.1", 0))
+        ports = [sk.getsockname()[1] for sk in socks]
+    except OSError:
+        for sk in socks:
+            sk.close()
+        raise
+    if len(set(ports)) != n:
+        for sk in socks:
+            sk.close()
+        raise RuntimeError(f"port reservation collided: {ports}")
+    return ports, socks
+
+
+def json_rpc(base_url, method, params=None, timeout=60):
+    """One JSON-RPC call against `base_url`.
+
+    `params` is the daemon's params value: an object, or a positional
+    list (`on_get_block_hash`). None is an empty object, which is what
+    a method with no arguments takes. An empty list stays a list.
+    """
+    if params is None:
+        params = {}
+    url = base_url.rstrip("/") + "/json_rpc"
+    body = {"jsonrpc": "2.0", "id": "0", "method": method, "params": params}
+    return _post(url, body, timeout)
+
+
 def _post(url, body, timeout):
     data = json.dumps(body).encode()
     req = urllib.request.Request(
@@ -161,16 +206,13 @@ def capture(base_url, requests, out_dir, timeout=60):
         kind = item["kind"]
         method = item["method"]
         params = item.get("params", {})
-        if kind == "json":
-            url = base + "/json_rpc"
-            body = {"jsonrpc": "2.0", "id": "0", "method": method, "params": params}
-        elif kind == "rest":
-            url = base + method
-            body = params
-        else:
-            raise ValueError(f"request {i} kind {kind!r} is not json or rest")
         try:
-            response = _post(url, body, timeout)
+            if kind == "json":
+                response = json_rpc(base, method, params, timeout)
+            elif kind == "rest":
+                response = _post(base + method, params, timeout)
+            else:
+                raise ValueError(f"request {i} kind {kind!r} is not json or rest")
         except (urllib.error.URLError, TimeoutError, OSError) as err:
             response = {"capture_error": str(err)}
         record = {"method": method, "params": params, "response": response}

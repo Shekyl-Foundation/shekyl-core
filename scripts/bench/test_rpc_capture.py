@@ -20,8 +20,10 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         n = int(self.headers.get("Content-Length", "0"))
         body = json.loads(self.rfile.read(n).decode())
+        params = body.get("params")
+        height = params.get("height") if isinstance(params, dict) else None
         reply = {"jsonrpc": "2.0", "id": body.get("id"), "result": {
-            "method": body.get("method"), "height": body.get("params", {}).get("height")}}
+            "method": body.get("method"), "params": params, "height": height}}
         raw = json.dumps(reply).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -58,6 +60,7 @@ class Capture(unittest.TestCase):
             self.assertIn("get_connections", methods)
         finally:
             server.shutdown()
+            server.server_close()
 
     def test_chain_requests_cover_genesis_tip_and_past_the_tip(self):
         reqs = C.chain_requests(97, "ab" * 32, "cd" * 32)
@@ -68,6 +71,39 @@ class Capture(unittest.TestCase):
     def test_an_empty_chain_is_refused(self):
         with self.assertRaises(ValueError):
             C.chain_requests(0, "ab" * 32, "cd" * 32)
+
+    def test_reserved_ports_are_distinct_loopback_ports(self):
+        ports, held = C.reserve_loopback_ports(3)
+        try:
+            self.assertEqual(len(ports), 3)
+            self.assertEqual(len(set(ports)), 3)
+            for sk, port in zip(held, ports):
+                self.assertEqual(sk.getsockname()[:2], ("127.0.0.1", port))
+        finally:
+            for sk in held:
+                sk.close()
+
+    def test_a_port_count_that_is_not_a_count_is_refused(self):
+        for n in (0, -1, True, None):
+            with self.subTest(n=n):
+                with self.assertRaises(ValueError):
+                    C.reserve_loopback_ports(n)
+
+    def test_json_rpc_keeps_a_positional_params_list(self):
+        """`on_get_block_hash` takes a list. An empty list is still a list:
+        coercing it to an object would ask a different question."""
+        server = HTTPServer(("127.0.0.1", 0), _Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            url = f"http://127.0.0.1:{server.server_address[1]}"
+            filled = C.json_rpc(url, "on_get_block_hash", [96], timeout=5)
+            empty = C.json_rpc(url, "on_get_block_hash", [], timeout=5)
+            self.assertEqual(filled["result"]["params"], [96])
+            self.assertEqual(empty["result"]["params"], [])
+        finally:
+            server.shutdown()
+            server.server_close()
 
 
 if __name__ == "__main__":
