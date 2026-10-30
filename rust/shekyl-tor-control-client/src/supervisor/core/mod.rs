@@ -140,6 +140,11 @@ pub enum Action {
     /// Drop the probe's dial: it missed its bound, or the phase it ran in
     /// ended. Its nonce leaves the set with it.
     CancelProbe,
+    /// `HSFETCH` this node's own onion: a first probe missed, and Tor's own
+    /// client view of the address is refreshed before the second probe
+    /// (`TSR-Q14`: Tor does Tor; no other stream is touched). The driver
+    /// answers [`Input::DescriptorRefetched`].
+    RefetchDescriptor,
     /// Publish the inbound facet on the managed route's link (§4.1).
     PublishInbound(Inbound),
     /// Say the posture. At most once per cap interval, except a recovery.
@@ -250,20 +255,23 @@ pub enum Input {
         /// Sockets Tor reported open.
         open: u64,
     },
-    /// The first upload of a descriptor round succeeded (`HS_DESC
-    /// UPLOADED`, coalesced by round): the onion is published, and the
-    /// round's one probe is scheduled. `draw` is a uniform random number
-    /// from the daemon's CSPRNG; the core maps it onto the probe's delay
-    /// range.
-    FirstUploaded {
+    /// A descriptor round ended (`HS_DESC`, coalesced by round, `TSR-Q5`).
+    /// A round with an upload that succeeded schedules the round's one probe
+    /// (Rick, 2026-10-29: after the round, not its first upload, so the
+    /// directory the probe's fetch asks has the descriptor). `draw` is a
+    /// uniform random number from the daemon's CSPRNG; the core maps it onto
+    /// the probe's delay range.
+    UploadRoundEnded {
+        /// How the round ended.
+        end: RoundEnd,
         /// Uniform over `u64`.
         draw: u64,
     },
-    /// A descriptor round ended. `failed_all`: no upload in it succeeded,
-    /// and at least one failed.
-    UploadRoundEnded {
-        /// No upload of the round reached a directory.
-        failed_all: bool,
+    /// The descriptor refetch after a first miss (`HSFETCH`) was asked;
+    /// `draw` sets the second probe's delay, as a round's does.
+    DescriptorRefetched {
+        /// Uniform over `u64`.
+        draw: u64,
     },
     /// The probe's nonce is minted, at `minted_at`, and its dial launched.
     ProbeDialed {
@@ -296,6 +304,18 @@ pub enum Input {
     /// Tor says it reaches its network: `NETWORK_LIVENESS UP` or
     /// `CIRCUIT_ESTABLISHED`.
     ExternalCleared,
+}
+
+/// How a descriptor round ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RoundEnd {
+    /// At least one upload reached a directory.
+    Uploaded,
+    /// No upload succeeded and at least one failed: Service-class evidence.
+    FailedAll,
+    /// The round ended with its ends lost (the sink dropped events, or the
+    /// next round began). Not evidence either way.
+    Unknown,
 }
 
 /// Actions and the next absolute deadline, in the caller's clock units.
@@ -477,8 +497,8 @@ impl Core {
             Input::RouteInstalled => self.route_installed(now),
             Input::ForwardAbsent => self.forward_absent(),
             Input::OnionPublished => self.onion_published(),
-            Input::FirstUploaded { draw } => self.round_uploaded(now, draw),
-            Input::UploadRoundEnded { failed_all } => self.round_ended(now, failed_all),
+            Input::UploadRoundEnded { end, draw } => self.round_ended(now, end, draw),
+            Input::DescriptorRefetched { draw } => self.refetched(now, draw),
             Input::ProbeDialed { minted_at } => self.probe_dialed(minted_at),
             Input::ProbeNotDialed => self.probe_not_dialed(),
             Input::ProbeArrived { minted_at } => self.probe_arrived(now, minted_at),

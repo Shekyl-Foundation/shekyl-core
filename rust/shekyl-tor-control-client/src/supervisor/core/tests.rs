@@ -13,7 +13,7 @@ use shekyl_timing_engine::{Clock, ManualClock, Tick};
 use super::super::posture::{
     render, Cause, Connectors, ManagedTorFix, OriginVerdict, OwnTx, Shown, Status, TorSetting,
 };
-use super::{duration_ns, Action, Core, Input, Policy, Step};
+use super::{duration_ns, Action, Core, Input, Policy, RoundEnd, Step};
 
 fn policy() -> Policy {
     Policy {
@@ -563,12 +563,24 @@ fn an_onion_retries_on_the_sample_and_a_descriptor_failure_does_not_stack() {
         1
     );
     core.on(Input::OnionPublished, due);
-    let one_failure = core.on(Input::UploadRoundEnded { failed_all: false }, due);
+    let one_failure = core.on(
+        Input::UploadRoundEnded {
+            end: RoundEnd::Uploaded,
+            draw: 0,
+        },
+        due,
+    );
     assert!(!one_failure
         .actions
         .iter()
         .any(|action| matches!(action, Action::RepublishOnion)));
-    let failed = core.on(Input::UploadRoundEnded { failed_all: true }, due);
+    let failed = core.on(
+        Input::UploadRoundEnded {
+            end: RoundEnd::FailedAll,
+            draw: 0,
+        },
+        due,
+    );
     assert_eq!(
         failed
             .actions
@@ -577,7 +589,13 @@ fn an_onion_retries_on_the_sample_and_a_descriptor_failure_does_not_stack() {
             .count(),
         1
     );
-    let stacked = core.on(Input::UploadRoundEnded { failed_all: true }, due);
+    let stacked = core.on(
+        Input::UploadRoundEnded {
+            end: RoundEnd::FailedAll,
+            draw: 0,
+        },
+        due,
+    );
     assert!(!stacked
         .actions
         .iter()

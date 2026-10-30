@@ -11,7 +11,7 @@ use crate::control::{
     Bootstrap, ClientStatus, GeneralStatus, Liveness, Recommendation, RoundMark, TorEvent,
 };
 
-use super::core::Input;
+use super::core::{Input, RoundEnd};
 
 /// Events the core acts on (`TOR_SUPERVISOR.md` §4.2). Anything else is `None`.
 ///
@@ -80,22 +80,29 @@ pub fn input_of(event: &TorEvent) -> Option<Input> {
     }
 }
 
-/// The inputs a round's marks carry (§4.5, §4.4). A round's first
-/// successful upload is [`Input::FirstUploaded`], the probe's trigger, with
-/// one `draw()` for its delay. A round that ended with no upload succeeded
-/// and at least one failed is [`Input::UploadRoundEnded`] with `failed_all`:
-/// Service-class evidence. A round whose ends were lost (`unfinished`
-/// only) failed nothing. A round's start moves nothing.
+/// The inputs a round's marks carry (§4.5, §4.4). A round's end is
+/// [`Input::UploadRoundEnded`], with one `draw()` for the probe's delay: a
+/// round with an upload that succeeded schedules the probe, one in which no
+/// upload succeeded and at least one failed is Service-class evidence, and
+/// one whose ends were lost (`unfinished` only) is neither. A round's start
+/// and its first upload move nothing: the probe waits for the round to end
+/// (Rick, 2026-10-29), so the directory its fetch asks has the descriptor.
 pub fn round_inputs(marks: &[RoundMark], mut draw: impl FnMut() -> u64) -> Vec<Input> {
     marks
         .iter()
         .filter_map(|mark| match *mark {
-            RoundMark::Started => None,
-            RoundMark::FirstUploaded => Some(Input::FirstUploaded { draw: draw() }),
+            RoundMark::Started | RoundMark::FirstUploaded => None,
             RoundMark::Ended {
                 uploaded, failed, ..
             } => Some(Input::UploadRoundEnded {
-                failed_all: uploaded == 0 && failed > 0,
+                end: if uploaded > 0 {
+                    RoundEnd::Uploaded
+                } else if failed > 0 {
+                    RoundEnd::FailedAll
+                } else {
+                    RoundEnd::Unknown
+                },
+                draw: draw(),
             }),
         })
         .collect()
@@ -112,15 +119,19 @@ fn outbound_blocked(problem: &crate::control::BootstrapProblem) -> bool {
 mod tests {
     use super::{input_of, round_inputs};
     use crate::control::RoundMark;
+    use crate::control::{
+        Bootstrap, BootstrapProblem, ClientStatus, Liveness, Recommendation, Severity, TorEvent,
+    };
+    use crate::supervisor::{Input, RoundEnd};
 
-    /// A round's marks become the core's inputs: the first upload is the
-    /// probe's trigger with its draw, a round with no success and a failure
-    /// is the Service evidence, and a round whose ends were lost, or that
-    /// had one failure beside a success, is not. Mapping every `HS_DESC
-    /// FAILED` to a republish again, or treating lost ends as failures,
-    /// fails this.
+    /// A round's marks become the core's inputs at its end: a round with a
+    /// success is the probe's trigger with its draw, a round with no success
+    /// and a failure is the Service evidence, and a round whose ends were
+    /// lost is neither. Its start and its first upload move nothing.
+    /// Triggering on the first upload again, mapping every `HS_DESC FAILED`
+    /// to a republish, or treating lost ends as failures, fails this.
     #[test]
-    fn a_rounds_marks_are_the_probes_trigger_and_the_service_evidence() {
+    fn a_rounds_end_is_the_probes_trigger_and_the_service_evidence() {
         let mut draws = 0_u64..;
         let mut draw = || draws.next().expect("endless");
         let inputs = round_inputs(
@@ -137,10 +148,10 @@ mod tests {
         );
         assert_eq!(
             inputs,
-            [
-                Input::FirstUploaded { draw: 0 },
-                Input::UploadRoundEnded { failed_all: false }
-            ]
+            [Input::UploadRoundEnded {
+                end: RoundEnd::Uploaded,
+                draw: 0
+            }]
         );
         let failed = round_inputs(
             &[RoundMark::Ended {
@@ -150,7 +161,13 @@ mod tests {
             }],
             &mut draw,
         );
-        assert_eq!(failed, [Input::UploadRoundEnded { failed_all: true }]);
+        assert_eq!(
+            failed,
+            [Input::UploadRoundEnded {
+                end: RoundEnd::FailedAll,
+                draw: 1
+            }]
+        );
         let lost = round_inputs(
             &[RoundMark::Ended {
                 uploaded: 0,
@@ -159,14 +176,15 @@ mod tests {
             }],
             &mut draw,
         );
-        assert_eq!(lost, [Input::UploadRoundEnded { failed_all: false }]);
-        let second = round_inputs(&[RoundMark::FirstUploaded], &mut draw);
-        assert_eq!(second, [Input::FirstUploaded { draw: 1 }], "one draw each");
+        assert_eq!(
+            lost,
+            [Input::UploadRoundEnded {
+                end: RoundEnd::Unknown,
+                draw: 2
+            }]
+        );
+        assert!(round_inputs(&[RoundMark::FirstUploaded], &mut draw).is_empty());
     }
-    use crate::control::{
-        Bootstrap, BootstrapProblem, ClientStatus, Liveness, Recommendation, Severity, TorEvent,
-    };
-    use crate::supervisor::Input;
 
     /// Tor saying whether it has a circuit names or clears the network
     /// cause; a clock jump is the general event's.

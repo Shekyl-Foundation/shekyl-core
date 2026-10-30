@@ -280,6 +280,57 @@ mod tests {
         );
     }
 
+    /// A fetch of our own descriptor (the probe's `HSFETCH` after a miss)
+    /// changes no round, even one open on the same HSDir: `REQUESTED` and
+    /// `RECEIVED` are not upload actions, and a fetch's `FAILED` carries the
+    /// descriptor id. Lines in the forms tor 0.4.9 writes
+    /// (`control_events.c`, `event_hs_descriptor_receive_end`). Counting a
+    /// fetch's `FAILED` as an upload's would end the round with no success
+    /// and republish for nothing (Rick, 2026-10-29).
+    #[test]
+    fn a_fetch_of_our_own_descriptor_changes_no_round() {
+        let address = ServiceId::parse(CAPTURED_ONION).expect("address");
+        let hsdir = "$9E67E885D46AE284534EBA3B71A2DFE13A0E4783~Torr4Tor";
+        let desc = "GOkbpjFN0/2R6w08BkOWd3Zj62ZDCvu7bVmkseOLvcY";
+        let mut rounds = UploadRounds::new(address);
+        // Nothing open: a fetch's events start nothing.
+        for line in [
+            format!("HS_DESC REQUESTED {CAPTURED_ONION} NO_AUTH {hsdir} {desc}"),
+            format!("HS_DESC FAILED {CAPTURED_ONION} NO_AUTH {hsdir} {desc} REASON=NOT_FOUND"),
+            format!("HS_DESC RECEIVED {CAPTURED_ONION} NO_AUTH {hsdir} {desc}"),
+        ] {
+            assert!(rounds.observe(&hs_desc_event(&line)).is_empty(), "{line}");
+        }
+        assert!(!rounds.in_round());
+        // A round open on that very HSDir: the fetch's FAILED closes nothing.
+        let upload = format!("HS_DESC UPLOAD {CAPTURED_ONION} UNKNOWN {hsdir} {desc}");
+        assert_eq!(
+            rounds.observe(&hs_desc_event(&upload)),
+            [RoundMark::Started]
+        );
+        for line in [
+            format!("HS_DESC REQUESTED {CAPTURED_ONION} NO_AUTH {hsdir} {desc}"),
+            format!("HS_DESC FAILED {CAPTURED_ONION} NO_AUTH {hsdir} {desc} REASON=NOT_FOUND"),
+            format!("HS_DESC RECEIVED {CAPTURED_ONION} NO_AUTH {hsdir} {desc}"),
+        ] {
+            assert!(rounds.observe(&hs_desc_event(&line)).is_empty(), "{line}");
+        }
+        assert!(rounds.in_round(), "the upload is still open");
+        let uploaded = format!("HS_DESC UPLOADED {CAPTURED_ONION} UNKNOWN {hsdir}");
+        assert_eq!(
+            rounds.observe(&hs_desc_event(&uploaded)),
+            [
+                RoundMark::FirstUploaded,
+                RoundMark::Ended {
+                    uploaded: 1,
+                    failed: 0,
+                    unfinished: 0
+                }
+            ],
+            "the round ends on its own upload, with nothing failed"
+        );
+    }
+
     /// An upload whose end never arrives does not wedge the coalescer: the next batch
     /// of uploads ends the incomplete round and can trigger again (Copilot on #1091).
     #[test]

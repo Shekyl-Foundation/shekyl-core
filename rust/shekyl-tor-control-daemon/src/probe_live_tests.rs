@@ -46,10 +46,8 @@ const VIRTUAL_PORT: u16 = 11021;
 const PROBE_WITHIN: Duration = Duration::from_secs(60);
 /// The supervisor's shortest delay after a round's first upload (§10).
 const PROBE_AFTER: Duration = Duration::from_secs(15);
-/// How long a test waits for a round. Not a daemon bound.
+/// How long a test waits for a round to end. Not a daemon bound.
 const ROUND_HANG: Duration = Duration::from_secs(300);
-/// How long after a round's first upload a test waits for the round to end.
-const ROUND_SETTLE: Duration = Duration::from_secs(60);
 
 /// The forward target: an accepted stream whose first bytes are the probe's
 /// request is the probe arriving. It is reported, then held until the test
@@ -140,33 +138,27 @@ async fn subscribe(boot: &DaemonTorControl) {
     assert_eq!(reply.status(), 250);
 }
 
-/// Wait for `service`'s next round to finish uploading: its first
-/// successful upload, then the round's end or [`ROUND_SETTLE`] after that
-/// upload, whichever comes first. `TSR-M3` probed after its uploads had
-/// settled; a probe right after the first upload can find the descriptor
-/// for the current period not yet on the directories (`0xF0`), which is
-/// the core's timing question, not what these tests pin.
+/// Wait for `service`'s next round to end with an upload that succeeded:
+/// the supervisor's trigger (Rick, 2026-10-29). A round that never ends
+/// fails the test at [`ROUND_HANG`]: the trigger's premise is that rounds end.
 async fn round_uploaded(received: &mut EventReceiver, service: &ServiceId) {
     let mut rounds = UploadRounds::new(service.clone());
     let hang = Instant::now() + ROUND_HANG;
-    let mut settle: Option<Instant> = None;
     loop {
-        let until = settle.map_or(hang, |at| at.min(hang));
-        let Ok(reply) = tokio::time::timeout_at(until, received.recv()).await else {
-            assert!(settle.is_some(), "an upload round in time");
-            return;
-        };
-        let reply = reply.expect("the sink is open");
+        let reply = tokio::time::timeout_at(hang, received.recv())
+            .await
+            .expect("an upload round that ends, in time")
+            .expect("the sink is open");
         let Some(TorEvent::HsDesc(desc)) = shekyl_tor_control_client::control::parse_event(&reply)
         else {
             continue;
         };
-        for mark in rounds.observe(&desc) {
-            match mark {
-                RoundMark::FirstUploaded => settle = Some(Instant::now() + ROUND_SETTLE),
-                RoundMark::Ended { uploaded, .. } if uploaded > 0 && settle.is_some() => return,
-                _ => {}
-            }
+        if rounds
+            .observe(&desc)
+            .iter()
+            .any(|mark| matches!(mark, RoundMark::Ended { uploaded, .. } if *uploaded > 0))
+        {
+            return;
         }
     }
 }
@@ -198,20 +190,17 @@ async fn probe_once(
     }
 }
 
-/// The rounds a test gives the supervisor's remedy (§4.4) before it fails.
-const REMEDY_ROUNDS: u32 = 3;
+/// The republishes a test allows (Rick, 2026-10-29: one or none once the
+/// probe waits for the round's end and refetches before its second try;
+/// needing more is a finding).
+const REMEDY_REPUBLISHES: u32 = 1;
 
-/// Probe `service` after its round, and on a miss do what the supervisor
-/// does: publish it again and probe after that round. Returns the round the
-/// probe arrived in (1 is the first) and its latency, with the stand-in
-/// still holding the probe's stream.
-///
-/// A single probe can miss on a healthy Tor: on the x86 diagnostic of
-/// 2026-10-29 (tor 0.4.9.13) a first probe after the first round's uploads
-/// answered `0xF0`, and one probe after a republish missed while the same
-/// Tor still held its client state from the miss before it (`TOR_SUPERVISOR.md`
-/// §10, `TSR-M3`). What these tests pin is that the dial reaches the onion
-/// within the remedy, not that one probe never misses.
+/// Probe `service` as the supervisor does (`TOR_SUPERVISOR.md` §4.5): the
+/// probe, and on a miss `HSFETCH` of the onion and one more probe after a
+/// fresh delay; two misses in a row republish, and the next round's probe
+/// starts again. Returns how many republishes it took and the arriving
+/// probe's latency, with the stand-in still holding the probe's stream.
+/// Each probe is preceded by the supervisor's shortest delay.
 #[allow(clippy::too_many_arguments)]
 async fn reachable(
     boot: &DaemonTorControl,
@@ -223,13 +212,26 @@ async fn reachable(
     request: &[u8],
 ) -> (u32, Duration) {
     let mut misses = Vec::new();
-    for round in 1..=REMEDY_ROUNDS {
-        tokio::time::sleep(PROBE_AFTER).await;
-        let (arrived, ended) = probe_once(&proxy_for(boot, pair), service, stand_in, request).await;
-        if let Some(latency) = arrived {
-            return (round, latency);
+    for republishes in 0..=REMEDY_REPUBLISHES {
+        for second in [false, true] {
+            if second {
+                let fetched = boot
+                    .ask(Command::HsFetch(service.clone()))
+                    .await
+                    .expect("HSFETCH");
+                assert_eq!(fetched.status(), 250, "Tor takes the refetch");
+            }
+            tokio::time::sleep(PROBE_AFTER).await;
+            let (arrived, ended) =
+                probe_once(&proxy_for(boot, pair), service, stand_in, request).await;
+            if let Some(latency) = arrived {
+                return (republishes, latency);
+            }
+            misses.push((republishes, second, ended));
         }
-        misses.push(ended);
+        if republishes == REMEDY_REPUBLISHES {
+            break;
+        }
         let again = boot
             .republish(seed, VIRTUAL_PORT, stand_in.at, 8, OnionPow::Enabled)
             .await
@@ -237,7 +239,10 @@ async fn reachable(
         assert_eq!(&again, service, "the held seed is the same onion");
         round_uploaded(received, service).await;
     }
-    panic!("not reachable within {REMEDY_ROUNDS} rounds of the remedy: {misses:?}");
+    panic!(
+        "not reachable within {REMEDY_REPUBLISHES} republish of the remedy \
+         (republishes, after the refetch, how the dial ended): {misses:?}"
+    );
 }
 
 /// The client rendezvous circuits Tor holds to `service`, each with whether
@@ -262,7 +267,7 @@ fn proxy_for(boot: &DaemonTorControl, pair: &IsolationPair) -> Proxy {
 }
 
 /// **Test 6.** A cold start publishes, and a probe arrives inside its bound
-/// within the remedy's rounds ([`reachable`]). The probe's rendezvous circuit carries its
+/// within the remedy ([`reachable`]). The probe's rendezvous circuit carries its
 /// SOCKS username: Tor built it for the probe's pair, and a peer dial,
 /// which offers no authentication, cannot join it (`IsolateSOCKSAuth`).
 #[tokio::test]
@@ -292,7 +297,7 @@ async fn a_cold_start_is_reachable_and_the_probe_is_on_its_own_circuit() {
     round_uploaded(&mut received, &service).await;
 
     let pair = IsolationPair::mint().expect("pair");
-    let (_round, latency) = reachable(
+    let (_republishes, latency) = reachable(
         &boot,
         &mut received,
         &seed,
@@ -315,7 +320,7 @@ async fn a_cold_start_is_reachable_and_the_probe_is_on_its_own_circuit() {
 
 /// **Test 7.** A Tor killed and respawned into its kept directory
 /// republishes the same onion from the held seed, and is reachable again
-/// within the remedy's rounds.
+/// within the remedy.
 #[tokio::test]
 #[cfg(target_os = "linux")]
 #[ignore = "requires a Tor binary via SHEKYL_TEST_TOR_BINARY (bootstraps twice, network)"]

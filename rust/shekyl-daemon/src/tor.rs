@@ -577,6 +577,12 @@ impl Drive {
                 self.cancel_probe();
                 Vec::new()
             }
+            Action::RefetchDescriptor => {
+                let mut stop = self.stop.clone();
+                vec![race_stop(&mut stop, self.refetch())
+                    .await
+                    .unwrap_or_else(|shutdown| shutdown)]
+            }
             Action::PublishInbound(inbound) => {
                 self.publish_inbound(inbound);
                 Vec::new()
@@ -823,6 +829,29 @@ impl Drive {
         Input::ProbeDialed { minted_at }
     }
 
+    /// `HSFETCH` this node's own onion after a first probe miss: Tor refreshes
+    /// its client view of that one address (`TSR-Q14`). Whatever Tor answers,
+    /// the second probe follows, a fresh delay later; the fetch's `HS_DESC`
+    /// events carry the descriptor id, so no upload round counts them.
+    async fn refetch(&self) -> Input {
+        let draw = shekyl_ffi::tor_link::probe_delay_draw();
+        let (Some(control), Some(service)) = (self.control.as_ref(), self.service.clone()) else {
+            return Input::DescriptorRefetched { draw };
+        };
+        match control.ask(Command::HsFetch(service)).await {
+            Ok(reply) if reply.status() == 250 => {
+                tracing::info!(target: "tor", "the onion probe missed; Tor refetches this node's descriptor");
+            }
+            Ok(reply) => {
+                tracing::info!(target: "tor", status = reply.status(), "the onion probe missed; Tor did not take the refetch");
+            }
+            Err(error) => {
+                tracing::info!(target: "tor", "the onion probe missed; the refetch was not asked ({error})");
+            }
+        }
+        Input::DescriptorRefetched { draw }
+    }
+
     /// Drop the probe's dial, if one is in flight. Its nonce leaves the set.
     fn cancel_probe(&mut self) {
         if let Some(task) = self.probe.take() {
@@ -960,14 +989,8 @@ impl Drive {
 /// not said: its point is that no directory can predict the probe, and a
 /// log line is one more copy of it.
 fn say_round(input: &Input) {
-    match input {
-        Input::FirstUploaded { .. } => {
-            tracing::info!(target: "tor", "descriptor round: the first upload succeeded");
-        }
-        Input::UploadRoundEnded { failed_all } => {
-            tracing::info!(target: "tor", failed_all, "descriptor round: ended");
-        }
-        _ => {}
+    if let Input::UploadRoundEnded { end, .. } = input {
+        tracing::info!(target: "tor", ?end, "descriptor round: ended");
     }
 }
 

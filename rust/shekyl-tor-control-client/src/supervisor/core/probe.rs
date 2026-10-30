@@ -6,14 +6,19 @@
 //! The probe of this node's own onion, and the inbound facet it proves
 //! (`TOR_SUPERVISOR.md` §4.1, §4.4, §4.5).
 //!
-//! One probe per descriptor upload round (`TSR-Q5`): the round's first
-//! successful upload schedules it, after a delay drawn uniformly from the
-//! policy's range, so a hostile directory does not see "upload, then an
+//! One probe per descriptor upload round (`TSR-Q5`): the end of a round in
+//! which an upload succeeded schedules it, after a delay drawn uniformly from
+//! the policy's range, so a hostile directory does not see "upload, then an
 //! immediate fetch of the same descriptor". The probe's nonce arriving at
-//! this node's inbound handshake is the evidence. Missing the bound, or a
-//! round in which every upload failed, is Service-class evidence: the onion
-//! is published again on the running Tor, and only a refused republish
-//! escalates to a respawn.
+//! this node's inbound handshake is the evidence.
+//!
+//! **One miss is not a verdict** (Rick, 2026-10-29). A probe that misses its
+//! bound is followed by `HSFETCH` of this node's own onion, which refreshes
+//! Tor's client view of that one address, and one more probe after a fresh
+//! delay. The onion is unreachable after two consecutive misses, the second
+//! preceded by the refetch; that, or a round in which every upload failed,
+//! is Service-class evidence: the onion is published again on the running
+//! Tor, and only a refused republish escalates to a respawn.
 //!
 //! The probe answers one question, whether this node is reachable at its
 //! own onion (`TSR-Q14`). It never sets or clears an outbound or network
@@ -22,29 +27,41 @@
 
 use super::super::posture::{Cause, Inbound, InboundCause};
 use super::announce::Cadence;
-use super::{duration_ns, Action, Core, Duty, Phase};
+use super::{duration_ns, Action, Core, Duty, Phase, RoundEnd};
 
 /// The probe's place in its round.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Probe {
     /// None scheduled and none in flight.
     Idle,
-    /// A round's first upload scheduled one, due at `at`.
-    Scheduled { at: u64 },
+    /// Scheduled, due at `at`.
+    Scheduled { at: u64, attempt: Attempt },
     /// Asked of the driver. It has until `bound_at` to arrive. `minted_at`
     /// names it once the driver has minted its nonce.
     InFlight {
         bound_at: u64,
         minted_at: Option<u64>,
+        attempt: Attempt,
     },
+    /// The first probe missed; the refetch is asked and its answer awaited.
+    Refetching,
+}
+
+/// Which probe of a round this is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Attempt {
+    /// The round's probe.
+    First,
+    /// The probe after a miss and the refetch: its miss is the verdict.
+    AfterRefetch,
 }
 
 impl Probe {
     /// The deadline the probe holds, if any.
     pub(super) const fn due(self) -> Option<u64> {
         match self {
-            Self::Idle => None,
-            Self::Scheduled { at } => Some(at),
+            Self::Idle | Self::Refetching => None,
+            Self::Scheduled { at, .. } => Some(at),
             Self::InFlight { bound_at, .. } => Some(bound_at),
         }
     }
@@ -66,28 +83,42 @@ impl Core {
         low + offset
     }
 
-    /// A round's first upload succeeded. It also confirms the onion is
-    /// published, as `ADD_ONION`'s reply does. One probe per round: a round
-    /// that starts while one is scheduled or in flight schedules none.
-    pub(super) fn round_uploaded(&mut self, now: u64, draw: u64) -> Vec<Action> {
-        let actions = self.onion_published();
-        if !matches!(self.phase, Phase::Running { .. }) || self.probe != Probe::Idle {
-            return actions;
+    /// A round ended. One in which an upload succeeded confirms the onion is
+    /// published, as `ADD_ONION`'s reply does, and schedules the round's one
+    /// probe; a round that ends while one is scheduled, in flight or being
+    /// refetched schedules none. One in which no upload succeeded and at
+    /// least one failed is Service-class evidence: the onion is unreachable,
+    /// and is published again. A round whose ends were lost says nothing.
+    pub(super) fn round_ended(&mut self, now: u64, end: RoundEnd, draw: u64) -> Vec<Action> {
+        match end {
+            RoundEnd::Uploaded => {
+                let actions = self.onion_published();
+                if matches!(self.phase, Phase::Running { .. }) && self.probe == Probe::Idle {
+                    self.schedule(now, draw, Attempt::First);
+                }
+                actions
+            }
+            RoundEnd::FailedAll if self.onion_done() => {
+                self.inbound_down(now, InboundCause::DescriptorRejected)
+            }
+            RoundEnd::FailedAll | RoundEnd::Unknown => Vec::new(),
         }
-        self.probe = Probe::Scheduled {
-            at: now.saturating_add(self.probe_delay(draw)),
-        };
-        actions
     }
 
-    /// A round ended. One in which no upload succeeded and at least one
-    /// failed is Service-class evidence: the onion is unreachable, and is
-    /// published again. A round whose ends were lost says nothing.
-    pub(super) fn round_ended(&mut self, now: u64, failed_all: bool) -> Vec<Action> {
-        if !failed_all || !self.onion_done() {
-            return Vec::new();
+    /// The refetch after a first miss was asked: the second probe is
+    /// scheduled after a fresh delay.
+    pub(super) fn refetched(&mut self, now: u64, draw: u64) -> Vec<Action> {
+        if self.probe == Probe::Refetching && matches!(self.phase, Phase::Running { .. }) {
+            self.schedule(now, draw, Attempt::AfterRefetch);
         }
-        self.inbound_down(now, InboundCause::DescriptorRejected)
+        Vec::new()
+    }
+
+    fn schedule(&mut self, now: u64, draw: u64, attempt: Attempt) {
+        self.probe = Probe::Scheduled {
+            at: now.saturating_add(self.probe_delay(draw)),
+            attempt,
+        };
     }
 
     /// The driver minted the probe's nonce and launched the dial.
@@ -137,7 +168,7 @@ impl Core {
     /// flight missed its bound.
     pub(super) fn on_probe_deadline(&mut self, now: u64) -> Vec<Action> {
         match self.probe {
-            Probe::Scheduled { at } if now >= at => {
+            Probe::Scheduled { at, attempt } if now >= at => {
                 if !self.probe_may_run() {
                     // Suppressed: outbound is not usable, or the onion is
                     // owed. The next round schedules the next one.
@@ -147,14 +178,28 @@ impl Core {
                 self.probe = Probe::InFlight {
                     bound_at: now.saturating_add(duration_ns(self.policy.probe_within)),
                     minted_at: None,
+                    attempt,
                 };
                 vec![Action::Probe]
             }
-            Probe::InFlight { bound_at, .. } if now >= bound_at => {
+            Probe::InFlight {
+                bound_at, attempt, ..
+            } if now >= bound_at => {
                 self.probe = Probe::Idle;
                 let mut actions = vec![Action::CancelProbe];
-                if self.probe_may_run() {
-                    actions.extend(self.inbound_down(now, InboundCause::ProbeTimedOut));
+                if !self.probe_may_run() {
+                    return actions;
+                }
+                match attempt {
+                    // One miss is not a verdict: refresh Tor's client view
+                    // of this address, then probe once more.
+                    Attempt::First => {
+                        self.probe = Probe::Refetching;
+                        actions.push(Action::RefetchDescriptor);
+                    }
+                    Attempt::AfterRefetch => {
+                        actions.extend(self.inbound_down(now, InboundCause::ProbeTimedOut));
+                    }
                 }
                 actions
             }
