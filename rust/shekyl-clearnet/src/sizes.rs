@@ -33,9 +33,11 @@ use shekyl_levin::{
 };
 use shekyl_transport_layer::spans::MEASUREMENT_SPANS;
 
-/// The tracing target the lines are written under, so a measurement node's
-/// log filter can keep them and nothing else at that level.
-pub(crate) const TARGET: &str = "shekyl_step7::message_size";
+/// The tracing target the lines are written under. It sits under
+/// `shekyl_clearnet`, which the `p2p` log subsystem covers, so a
+/// measurement node keeps the lines with `log-category = { p2p = "info" }`
+/// and a reader selects them by this target.
+pub(crate) const TARGET: &str = "shekyl_clearnet::message_size";
 
 /// Which way the message went.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
