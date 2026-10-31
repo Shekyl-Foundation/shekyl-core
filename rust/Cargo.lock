@@ -4774,6 +4774,7 @@ version = "3.1.0"
 name = "shekyl-levin"
 version = "3.1.0"
 dependencies = [
+ "libc",
  "proptest",
  "shekyl-archival-retention",
  "shekyl-crypto-hash",
@@ -4782,6 +4783,7 @@ dependencies = [
  "shekyl-peer-bounds",
  "shekyl-portable-storage",
  "shekyl-rpc-types",
+ "shekyl-transport-layer",
  "shekyl-types",
  "shekyl-wire",
  "thiserror",

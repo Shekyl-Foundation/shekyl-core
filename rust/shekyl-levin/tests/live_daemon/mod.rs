@@ -11,6 +11,8 @@
 
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
+#[cfg(unix)]
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -202,11 +204,121 @@ pub fn rpc_ok(rpc_port: u16) -> bool {
     s.read_to_end(&mut buf).is_ok() && String::from_utf8_lossy(&buf).contains("\"height\"")
 }
 
+/// Connect to `127.0.0.1:port` with `source` as the local address, so the
+/// accept attributes the socket to that host.
+pub fn connect_from(source: Ipv4Addr, port: u16) -> std::io::Result<TcpStream> {
+    #[cfg(unix)]
+    {
+        unix_connect_from(source, port)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (source, port);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "a simulated peer binds its own loopback host on unix",
+        ))
+    }
+}
+
+/// `socket` then `bind` then `connect`. The fd is owned by the `OwnedFd`
+/// from the moment `socket` returns it.
+#[cfg(unix)]
+fn unix_connect_from(source: Ipv4Addr, port: u16) -> std::io::Result<TcpStream> {
+    // SOCK_CLOEXEC so a later child of this process does not inherit the
+    // peer socket. macOS has no SOCK_CLOEXEC; the live gate runs on Linux.
+    #[cfg(target_os = "linux")]
+    let kind = libc::SOCK_STREAM | libc::SOCK_CLOEXEC;
+    #[cfg(not(target_os = "linux"))]
+    let kind = libc::SOCK_STREAM;
+    // SAFETY: socket returns a new fd or -1. A non-negative fd is owned here
+    // and is moved into OwnedFd before any other use, which closes it.
+    let fd = unsafe { libc::socket(libc::AF_INET, kind, 0) };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let owned = unsafe { OwnedFd::from_raw_fd(fd) };
+    // SAFETY: sockaddr_in is a C struct of integers. Zero is a valid value.
+    // sin_family, sin_port and sin_addr are set before the kernel reads it.
+    let mut local: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+    local.sin_family =
+        libc::sa_family_t::try_from(libc::AF_INET).expect("AF_INET fits an address family");
+    local.sin_port = 0;
+    local.sin_addr.s_addr = u32::from(source).to_be();
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
+    {
+        local.sin_len = std::mem::size_of::<libc::sockaddr_in>() as u8;
+    }
+    let len = libc::socklen_t::try_from(std::mem::size_of::<libc::sockaddr_in>())
+        .expect("a sockaddr_in fits a socklen");
+    // SAFETY: owned is a live socket, local is an initialized sockaddr_in,
+    // and len is its size.
+    let bound = unsafe { libc::bind(owned.as_raw_fd(), (&raw const local).cast(), len) };
+    if bound != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut remote = local;
+    remote.sin_port = port.to_be();
+    remote.sin_addr.s_addr = u32::from(Ipv4Addr::LOCALHOST).to_be();
+    // SAFETY: same socket, an initialized sockaddr_in for 127.0.0.1:port.
+    let connected = unsafe { libc::connect(owned.as_raw_fd(), (&raw const remote).cast(), len) };
+    if connected != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(TcpStream::from(owned))
+}
+
 /// FAKECHAIN (`--network regtest`) derives its id from fakechain's genesis pin.
 pub fn regtest_network_id() -> shekyl_p2p_transport::NetworkId {
     shekyl_p2p_transport::network_id_from_genesis(&shekyl_rpc_types::genesis_hash_for(
         shekyl_rpc_types::DaemonNetwork::Fakechain,
     ))
+}
+
+/// One IPv4 host on the loopback network. The accept gate's host key is
+/// the address (`HostKey::V4`), so peers that should not share a bucket
+/// each bind one of these. `127.0.0.1` is the harness probe, and peers
+/// start at `127.0.0.2`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LoopbackHost(Ipv4Addr);
+
+impl LoopbackHost {
+    /// The `ordinal`-th simulated peer. Ordinal 0 is `127.0.0.2`.
+    pub fn peer(ordinal: u32) -> Self {
+        let first = u32::from(Ipv4Addr::new(127, 0, 0, 2));
+        let addr = first.checked_add(ordinal).expect("loopback ordinal");
+        let ip = Ipv4Addr::from(addr);
+        assert_eq!(
+            ip.octets()[0],
+            127,
+            "a simulated peer stays on the loopback network"
+        );
+        Self(ip)
+    }
+
+    /// The address the daemon's accept observes.
+    pub fn ip(self) -> Ipv4Addr {
+        self.0
+    }
+}
+
+/// How long clearnet's connector takes to refill one token.
+///
+/// Peers spaced at this interval are admits the connector bucket can pay
+/// for (`CLEARNET_CONNECTOR_RATE`, read from the row the daemon uses).
+pub fn connector_refill() -> Duration {
+    match shekyl_transport_layer::accept_bound(shekyl_transport_layer::ConnectorId::Clearnet) {
+        shekyl_transport_layer::Assessment::Assessed(
+            shekyl_transport_layer::AcceptBound::ConnectorAndHost { connector, .. },
+        ) => Duration::from_nanos(connector.token_every_nanos),
+        _ => panic!("clearnet's accept bound is a connector bucket and a host bucket"),
+    }
 }
 
 /// What a simulated peer's socket did.
@@ -227,16 +339,18 @@ pub enum PeerOutcome {
 /// as a free connection and understate every figure in the table.
 ///
 /// `shook` is set the moment the handshake is answered, so a caller can
-/// wait for admission without joining the thread.
+/// wait for admission without joining the thread. `host` is the address
+/// the daemon's accept attributes the peer to.
 pub fn spawn_peer(
     p2p_port: u16,
+    host: LoopbackHost,
     stop: Arc<AtomicBool>,
     shook: Arc<AtomicBool>,
 ) -> std::thread::JoinHandle<PeerOutcome> {
+    let Ok(stream) = connect_from(host.ip(), p2p_port) else {
+        return std::thread::spawn(|| PeerOutcome::Failed);
+    };
     std::thread::spawn(move || {
-        let Ok(stream) = TcpStream::connect(("127.0.0.1", p2p_port)) else {
-            return PeerOutcome::Failed;
-        };
         drop(stream.set_read_timeout(Some(Duration::from_millis(500))));
         drop(stream.set_write_timeout(Some(Duration::from_secs(10))));
         drop(stream.set_nodelay(true));
