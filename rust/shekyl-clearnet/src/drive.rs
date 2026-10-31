@@ -792,9 +792,7 @@ async fn write_half(
         &node_gate(),
         &mut stall,
         |plain| {
-            if let Some(tap) = sizes.as_mut() {
-                tap.feed(plain);
-            }
+            sizes.feed(plain);
             seam.encode(plain)
                 .map(Cow::Owned)
                 .map_err(|_| CloseKind::RecordRejected)
@@ -825,10 +823,8 @@ async fn read_half(
             tracing::debug!(conn, "clearnet first bytes read");
         }
         let plain = seam.push(chunk).map_err(|_| CloseKind::RecordRejected)?;
-        if let Some(tap) = sizes.as_mut() {
-            for piece in &plain {
-                tap.feed(piece);
-            }
+        for piece in &plain {
+            sizes.feed(piece);
         }
         if !handshake.complete() && plain.iter().any(|piece| handshake.feed(piece)) {
             frame.store(true, Ordering::Release);
