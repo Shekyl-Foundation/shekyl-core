@@ -905,13 +905,13 @@ impl LeafStore {
     /// when the cell is absent (the same posture as [`Self::leaf_count`]
     /// reads; `init_tables` seeds it to 0 on a fresh store).
     ///
-    /// **Not** `shekyl_archival_retention::frozen_segment_count` — that
+    /// **Not** the frozen-segment count the archival C++ path read (deleted, `DEL-008`) — that
     /// helper is first-crossing completeness (`⌊leaf_count / E⌋`) and is
     /// what the daemon registry writes. This cursor is burial-gated
     /// ([`segment_freeze_eligible`]): a completed but unburied segment
     /// does not advance it. D-5's refresh operand is *this* number;
     /// `COMPLETETREE_ACTIVATION.md` drafted the getter as
-    /// `frozen_segment_count()`, which is amended here so the two facts
+    /// that deleted count, which is amended here so the two facts
     /// cannot share a name. Slice 2's `CompleteTreePrefix.frozen_count`
     /// is this value.
     ///

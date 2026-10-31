@@ -17,8 +17,6 @@
 //! | [`codes`] | Shared early verdict codes + error mappers |
 //! | [`schedule`] | Settlement-epoch / challenge height FFI |
 //! | [`serve_credit`] | Serve-credit vin verify |
-//! | [`attestation`] | Credit-wire attestation admission |
-//! | [`bond`] | Bond-post verify / connect / pop |
 //! | [`epoch_close`] | Failure window, prune, epoch-close compute |
 //! | [`emission`] | Emission vin + claimed-epochs writer |
 //! | [`ct_balance`] | Bond-post CT balance |
@@ -27,8 +25,6 @@
 //! Split from the former monofile so the archival C edge stays reviewable.
 //! Pattern matches [`crate::relay_zone_ffi`].
 
-mod attestation;
-mod bond;
 mod codes;
 mod ct_balance;
 mod draw;
@@ -36,9 +32,7 @@ mod emission;
 mod epoch_close;
 mod schedule;
 mod serve_credit;
-mod shard_coverage;
 
-pub use attestation::{ShekylArchivalAttestationVerifyCtx, ShekylArchivalPidPubkey};
 pub use codes::*;
 pub(crate) use draw::commit_and_discard;
 pub use epoch_close::ShekylArchivalEmissionEpochSnapshot;
@@ -48,10 +42,6 @@ pub use schedule::{
 };
 
 // Re-export FFI entry points for `use super::*` in tests and in-crate callers.
-#[allow(unused_imports)] // re-export surface; not all used inside this crate
-pub use attestation::*;
-#[allow(unused_imports)]
-pub use bond::*;
 #[allow(unused_imports)]
 pub use ct_balance::*;
 #[allow(unused_imports)]
@@ -62,10 +52,6 @@ pub use epoch_close::*;
 pub use schedule::*;
 #[allow(unused_imports)]
 pub use serve_credit::*;
-pub use shard_coverage::*;
 
 #[cfg(test)]
 mod tests;
-
-#[cfg(test)]
-mod attestation_verify_tests;

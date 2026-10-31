@@ -313,7 +313,7 @@ fn verify_bond_post(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<()
     }
 
     // ── BP2: canonical-id recomputation from the vin's pubkey ───────────
-    // Native twin of `shekyl_archival_p_canonical_id_from_pubkey`
+    // Native twin of `shekyl_archival_retention::p_canonical_id_from_hybrid_pubkey` (its FFI export `shekyl_archival_p_canonical_id_from_pubkey` is deleted, `DEL-008`)
     // (blockchain.cpp:4739-4751): the claimed id must derive from the
     // claimed identity key, so the BP3 record probe (keyed on the claim)
     // and the BP5 auth pin (keyed on the pubkey) bind the same P. The

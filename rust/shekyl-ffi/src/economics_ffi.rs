@@ -108,7 +108,8 @@ pub extern "C" fn shekyl_compute_burn_split(
 /// Thin FFI over the canonical Rust entry
 /// [`shekyl_economics::compute_burn_split_at`]. `frozen_segment_count` is the
 /// burden operand `n`. The C++ validator used to pass its frozen
-/// J-segment count (`shekyl_archival_frozen_segment_count`), read at
+/// J-segment count (the closed archival-shard count the caller reads from the fold,
+/// `shekyl_chain_rules::closed_shards_before`), read at
 /// parent-block state. That caller is deleted. The Rust validator's `n`
 /// is the closed archival-shard count
 /// (`shekyl_chain_rules::closed_shards_before`). The divergence is

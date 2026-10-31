@@ -302,8 +302,8 @@ pub const NOT_PORTED: &[(&str, &str)] = &[
     (
         "archival_bond_unbond_log",
         "held by `undo_log`, as the record's and the total's pre-images: the C++ pop journal \
-         for a Release (db_lmdb.cpp:6198, `release_pop` reconstructs the pre-image) rebuilt \
-         what the log stores outright, and the pop fold has no caller (DRS-E4 ARW-2, ARW-Q2). \
+         for a Release rebuilt the pre-image that this log stores outright, and that \
+         journal and its fold are deleted (DRS-E4 ARW-2, ARW-Q2; DEL-008). \
          The record's pre-image is also kept past the undo window, as history, by the Rust-only \
          archival_release_journal: a different key and retention, read by the walk that \
          rebuilds an epoch's drawable set and never by pop (SO-D12 increment 2)",
@@ -317,7 +317,7 @@ pub const NOT_PORTED: &[(&str, &str)] = &[
     (
         "archival_bond_reinstate_log",
         "held by `undo_log`, as the record's pre-image: the C++ pop journal for a Reinstate \
-         (db_lmdb.cpp:6342, `reinstate_pop`) was a view of that log (DRS-E4 ARW-2, ARW-Q2)",
+         was a view of that log, and is deleted (DRS-E4 ARW-2, ARW-Q2; DEL-008)",
     ),
     (
         "archival_epoch_close_log",

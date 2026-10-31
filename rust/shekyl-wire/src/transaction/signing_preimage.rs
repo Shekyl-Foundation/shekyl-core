@@ -60,7 +60,7 @@ impl PqcSigningPreimage {
     /// object with a different key: the pass record (registry sub-root,
     /// challenged leaf, path), under `SCHEME_DOMAIN_SERVE_CREDIT`, by the
     /// bond's registered key, with the Ed25519 leg on the vin and the ML-DSA
-    /// leg in the pruned record (`shekyl_archival_verify_serve_credit_vin`,
+    /// leg in the pruned record (the serve-credit verifier in `shekyl-archival-retention` (its FFI export `shekyl_archival_verify_serve_credit_vin` is deleted, `DEL-008`),
     /// CEN-J10). This preimage is the wrong object for it, not a missing one.
     #[must_use]
     pub fn of(tx: &Transaction) -> Option<Self> {

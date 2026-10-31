@@ -71,8 +71,8 @@ enum SetDerivation {
     /// ACTIVATION.md` D-1): frozen segments are exactly `[0, frozen_count)`,
     /// so the obligation is one number, never a stored list. `frozen_count`
     /// is the store's burial-gated freeze cursor (`LeafStore::
-    /// next_freeze_seg`), **not** `shekyl_archival_retention::
-    /// frozen_segment_count` — that helper is first-crossing completeness
+    /// next_freeze_seg`), **not** `the frozen-segment count the archival C++ path read
+    /// (deleted, `DEL-008`)` — that helper is first-crossing completeness
     /// and would admit unburied segments as owed.
     CompleteTreePrefix { frozen_count: u64 },
 }

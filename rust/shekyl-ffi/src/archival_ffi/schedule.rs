@@ -9,40 +9,13 @@
 // home, `shekyl_archival_retention::consensus_state`; this module marshals
 // it across the C edge and computes none of it.
 use shekyl_archival_retention::{
-    challenge_fire_height, challenge_leaf_chunk_bounds, challenge_seal_height,
-    challenge_seal_on_chain, empty_attestation_root, epoch_close_height, frozen_segment_count,
-    p_canonical_id_from_hybrid_pubkey, ATTESTATION_HEADER_LEN, MAX_ATTESTATION_RECORDS,
+    empty_attestation_root, ATTESTATION_HEADER_LEN, MAX_ATTESTATION_RECORDS,
     MAX_ATTESTATION_WITNESS_BYTES,
 };
 pub use shekyl_archival_retention::{
     settlement_epoch_last_block, settlement_epoch_open_height,
     settlement_epoch_slash_deadline_height,
 };
-
-/// Recompute `P_canonical_id` from hybrid pubkey bytes (gate-4 §3.4 / emission §6.1).
-///
-/// Returns `1` on success and writes 32 bytes to `out_p_id`. Returns `0` when
-/// `hybrid_pubkey_ptr` or `out_p_id` is null, or when `hybrid_pubkey_len == 0`.
-/// Non-empty buffers of any length are hashed as-is — this entry does not
-/// enforce a fixed hybrid-pubkey wire length; callers that need that check
-/// must validate before calling.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_archival_p_canonical_id_from_pubkey(
-    hybrid_pubkey_ptr: *const u8,
-    hybrid_pubkey_len: usize,
-    out_p_id: *mut u8,
-) -> u8 {
-    if hybrid_pubkey_ptr.is_null() || out_p_id.is_null() || hybrid_pubkey_len == 0 {
-        return 0;
-    }
-    let pubkey = unsafe { std::slice::from_raw_parts(hybrid_pubkey_ptr, hybrid_pubkey_len) };
-    let pid = p_canonical_id_from_hybrid_pubkey(pubkey);
-    unsafe {
-        // `PCanonicalId` is the domain newtype; take the raw bytes at the C edge.
-        std::ptr::copy_nonoverlapping(pid.as_bytes().as_ptr(), out_p_id, 32);
-    }
-    1
-}
 
 /// Overflow-checked sum of plaintext output amounts (rule 20: integer
 /// arithmetic on untrusted tx amounts lives behind the FFI, single-sourced so
@@ -76,12 +49,6 @@ pub unsafe extern "C" fn shekyl_checked_sum_amounts(
     }
     unsafe { *out_sum = sum };
     0
-}
-
-/// First block of settlement epoch `E` (`H_open`).
-#[no_mangle]
-pub extern "C" fn shekyl_archival_epoch_open_height(settlement_epoch: u64) -> u64 {
-    settlement_epoch_open_height(settlement_epoch)
 }
 
 // ── Attestation-witness cross-language constant authorities (credit-wire CW-2,
@@ -118,76 +85,6 @@ pub extern "C" fn shekyl_archival_attestation_witness_max_bytes() -> u64 {
     MAX_ATTESTATION_WITNESS_BYTES as u64
 }
 
-/// Last block of settlement epoch `E` — `(E+1)·SEB − 1`, the credit
-/// deadline `H_close`. One below [`shekyl_archival_epoch_close_processing_height`];
-/// the two were once both named "close height" and were confused for it.
-#[no_mangle]
-pub extern "C" fn shekyl_archival_epoch_last_block(settlement_epoch: u64) -> u64 {
-    settlement_epoch_last_block(settlement_epoch)
-}
-
-/// The close-**processing** boundary for settlement epoch `E` — `(E+1)·SEB`,
-/// the height `process_archival_epoch_close_at_height` runs the close at and
-/// the `close_block_height` shard-age operand the close compute received.
-/// Single-sources `consensus_state::epoch_close_height` so the emission
-/// snapshot gather does not re-derive the boundary by hand (that function's
-/// own pinned rationale). Returns 0 for the overflowing (impossible) epoch;
-/// callers treat 0 as invalid.
-#[no_mangle]
-pub extern "C" fn shekyl_archival_epoch_close_processing_height(settlement_epoch: u64) -> u64 {
-    epoch_close_height(settlement_epoch).unwrap_or(0)
-}
-
-/// Last block before slash may fire for settlement epoch `E`
-/// (`H_slash_deadline = last_block(E + SLASH_GRACE_EPOCHS)`, one epoch of
-/// grace under the process-latched schedule). The grace itself has no C
-/// entry: it was `shekyl_archival_challenge_resolution_blocks`, a block
-/// count no C++ site ever called, deleted with the constant (DRS-E4
-/// commit 5); C++ reads the deadline, never the operand.
-#[no_mangle]
-pub extern "C" fn shekyl_archival_epoch_slash_deadline_height(settlement_epoch: u64) -> u64 {
-    settlement_epoch_slash_deadline_height(settlement_epoch)
-}
-
-/// Seal height for epoch open (`H_seal` in gate-2 §3.4).
-#[no_mangle]
-pub extern "C" fn shekyl_archival_challenge_seal_height(h_open: u64) -> u64 {
-    challenge_seal_height(h_open)
-}
-
-/// Is the epoch's challenge seal block committed at `chain_height`? (1 = on
-/// chain, 0 = not yet.) `chain_height` is the block count (`m_db->height()`), so
-/// the seal (`H_seal = challenge_seal_height(h_open)`) is on chain iff
-/// `H_seal < chain_height`. The serve-credit gate calls this before reading
-/// `block_hash(H_seal)`, so a future-epoch (attacker-chosen `settlement_epoch`)
-/// input is rejected by predicate rather than by catching a `BLOCK_DNE` throw.
-#[no_mangle]
-pub extern "C" fn shekyl_archival_challenge_seal_on_chain(h_open: u64, chain_height: u64) -> u8 {
-    u8::from(challenge_seal_on_chain(h_open, chain_height))
-}
-
-/// Beacon fire height `H_fire` for `(P, shard, E)` (gate-2 §3.4).
-#[no_mangle]
-pub extern "C" fn shekyl_archival_challenge_fire_height(
-    h_open: u64,
-    h_close: u64,
-    block_hash_at_seal: *const u8,
-    p_id: *const u8,
-    shard_id: u64,
-    settlement_epoch: u64,
-) -> u64 {
-    if block_hash_at_seal.is_null() || p_id.is_null() {
-        return 0;
-    }
-    let seal_hash = unsafe { std::slice::from_raw_parts(block_hash_at_seal, 32) };
-    let mut hash = [0u8; 32];
-    hash.copy_from_slice(seal_hash);
-    let pid = unsafe { std::slice::from_raw_parts(p_id, 32) };
-    let mut p = [0u8; 32];
-    p.copy_from_slice(pid);
-    challenge_fire_height(h_open, h_close, &hash, &p, shard_id, settlement_epoch)
-}
-
 /// Empty-set archival attestation root — `attestation_root(&[])`
 /// (`ARCHIVAL_CREDIT_WIRE.md` §3). The valid empty commitment a block header
 /// carries when it has no pass records; **not** the all-zero `null_hash`.
@@ -204,50 +101,10 @@ pub unsafe extern "C" fn shekyl_attestation_root_empty(out_ptr: *mut u8) -> bool
     true
 }
 
-/// Frozen-segment count at a curve-tree leaf count — the first-crossing
-/// rule (`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` §1/§5.1).
-///
-/// The C++ freeze hooks that called this are deleted. The export stays
-/// until `DEL-008` deletes `segment_freeze.rs` with it. The Rust
-/// validator's `n` is `shekyl_chain_rules::closed_shards_before`, the
-/// closed archival shards of the parent's `cumulative_archival_len`
-/// (CEN-L10, bucket 3), bit-identical while the escalation ships flat.
-#[no_mangle]
-pub extern "C" fn shekyl_archival_frozen_segment_count(leaf_count: u64) -> u64 {
-    frozen_segment_count(leaf_count)
-}
-
-/// Leaf-layer chunk backing challenged index `leaf_index_in_segment` of
-/// frozen shard `shard_id`, as a global position range over the daemon's
-/// leaf table (pipeline doc §6.2). Returns 1 and writes the bounds; 0
-/// (no write) when the index is out of segment range, the position
-/// overflows, or an out pointer is null — verifier-input rejection, not
-/// abort.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_archival_challenge_leaf_chunk_bounds(
-    shard_id: u64,
-    leaf_index_in_segment: u64,
-    out_first_leaf_position: *mut u64,
-    out_leaf_count: *mut u64,
-) -> u8 {
-    if out_first_leaf_position.is_null() || out_leaf_count.is_null() {
-        return 0;
-    }
-    match challenge_leaf_chunk_bounds(shard_id, leaf_index_in_segment) {
-        Some(bounds) => {
-            unsafe {
-                *out_first_leaf_position = bounds.first_leaf_position;
-                *out_leaf_count = bounds.leaf_count;
-            }
-            1
-        }
-        None => 0,
-    }
-}
-
 #[cfg(test)]
 mod connect_order_tests {
     use super::*;
+    use shekyl_archival_retention::epoch_close_height;
 
     /// The slash-settle operand for epoch `E` (first block above the
     /// deadline) must be STRICTLY greater than `E`'s close-fire operand —

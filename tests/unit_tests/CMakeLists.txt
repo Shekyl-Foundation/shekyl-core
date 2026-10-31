@@ -87,7 +87,6 @@ set(unit_tests_sources
   archival_credit_wire.cpp
   archival_serve_credit.cpp
   archival_bond_post.cpp
-  archival_attestation_verify.cpp
   archival_reward_emission.cpp
   archival_emission_ct_balance.cpp
   ct_balance_differential.cpp
@@ -166,8 +165,6 @@ SET_PROPERTY(SOURCE archival_serve_credit_integration.cpp PROPERTY COMPILE_DEFIN
 # of each definition's value (CMake only treats quotes as delimiters at
 # argument start), so the compiler receives -DNAME="/abs/path" and the
 # macro expands to a valid C string literal — verified in build.ninja.
-SET_PROPERTY(SOURCE archival_attestation_verify.cpp PROPERTY COMPILE_DEFINITIONS
-  ATTESTATION_V3_PINNED_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/attestation_pass_countersignature_v3_pinned.json")
 SET_PROPERTY(SOURCE archival_bond_record_v7_corpus.cpp PROPERTY COMPILE_DEFINITIONS
   ARCHIVAL_BOND_RECORD_V7_CORPUS_PATH="${CMAKE_SOURCE_DIR}/docs/test_vectors/ARCHIVAL_BOND_RECORD_V7.json")
 SET_PROPERTY(SOURCE mtp_boundary.cpp PROPERTY COMPILE_DEFINITIONS
