@@ -1599,7 +1599,7 @@ name, now quantified.
   ([`42-serialization-policy`](../../.cursor/rules/42-serialization-policy.mdc)).
 - **FFI:** `archival_ffi.rs` constructs `BandedCurveParams` **internally** from the
   generated constants — the plateau **does not cross the FFI signature**
-  (`shekyl_archival_epoch_close_compute` takes bonds/shards/credit-pairs only).
+  (`shekyl_archival_epoch_close_compute` (deleted, `DEL-008`) takes bonds/shards/credit-pairs only).
 - **C++: source-unchanged but behaviourally live.** `db_lmdb.cpp` and
   `blockchain_db.h` call the curve-bearing FFI entry points, so C++ needs **no
   edit** while its results change. *State this explicitly in the implementing PR* —

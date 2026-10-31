@@ -46,7 +46,7 @@ privacy gain does not enter the arithmetic.
 > pinned at `dev@37accf6f` (the brief's read); `dev` has since shed ~195 lines
 > above the serve-credit arm, so today's numbers are lower. Identifiers
 > (`h_close`, `challenge_seal_on_chain`, `ctx.settlement_epoch`,
-> `shekyl_archival_verify_serve_credit_vin`) are stable; re-pin at Slice C.
+> `shekyl_archival_verify_serve_credit_vin` (deleted, `DEL-008`)) are stable; re-pin at Slice C.
 
 > **F5 (§1.5) → `PL-D1`, CLOSED by `PL-D3` — PR #745
 > (`feat/pl-d3-pedersen-leaf-commitment`), ratified by Rick 2026-09-14.** The
@@ -208,7 +208,7 @@ admitted with `E ≠ epoch(current_height)`. `SO-D8` §12 stands as written.
 `serve_credit.rs:168–169` refuses when `response.settlement_epoch !=
 ctx.settlement_epoch`. `ctx.settlement_epoch` is populated at
 `blockchain.cpp:5304` from `sc_settlement_epoch` — **the value parsed out of
-the same record at `:5124`**. `shekyl_archival_verify_serve_credit_vin` has one
+the same record at `:5124`**. `shekyl_archival_verify_serve_credit_vin` (deleted, `DEL-008`) has one
 production caller (`:5315`). The check compares the record against a copy of
 itself and refuses nothing.
 
@@ -251,7 +251,7 @@ therefore **Rick's**:
 >   knowingly (Q14); (c) **SUPERSEDED 2026-09-16 (Q15):** the 2026-09-13
 >   coverage plan was an isolated FFI test
 >   (`shekyl-ffi/src/archival_ffi/tests.rs` driving
->   `shekyl_archival_verify_serve_credit_vin`). That test cannot cover the
+>   `shekyl_archival_verify_serve_credit_vin` (deleted, `DEL-008`)). That test cannot cover the
 >   new row. The falsifier is a `shekyl-chain-rules` `CenRow` whose
 >   negative fixture refuses `settlement_epoch ≠ settlement_epoch_at_height(h)`
 >   with typed `InvalidBlock` — not a full-path future-epoch vector, which
