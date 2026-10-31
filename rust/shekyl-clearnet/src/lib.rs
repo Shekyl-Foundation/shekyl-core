@@ -61,6 +61,7 @@ use tokio::sync::mpsc;
 mod drive;
 mod handshake;
 mod inode;
+mod linger;
 mod seam;
 
 #[cfg(unix)]
@@ -71,6 +72,7 @@ pub use shekyl_capped_stream::Session;
 pub use drive::{
     accept_inbound, accept_one, dial_one, zero_tally, Accept, Admitted, Dial, Inbound,
 };
+pub use linger::Linger;
 use seam::ChannelChoice as Choice;
 
 /// How many responder handshakes the blocking pool computed, and how many

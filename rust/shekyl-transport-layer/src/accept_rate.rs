@@ -261,6 +261,17 @@ impl AcceptGate {
         self.hosts.len()
     }
 
+    /// How many refused connections may linger half-closed at once for
+    /// `span` (D10.2): the connector bucket's burst plus the tokens it
+    /// refills across `span`, the number of connections this connector
+    /// admits in that time. A refusal beyond it closes at once.
+    #[must_use]
+    pub fn linger_cap(&self, span: Tick) -> usize {
+        let refilled = span.get() / self.connector_rate.token_every_nanos;
+        let cap = u64::from(self.connector_rate.burst).saturating_add(refilled);
+        usize::try_from(cap).unwrap_or(usize::MAX)
+    }
+
     /// The most host entries whose buckets can be not full at one instant:
     /// the connector's burst, plus one per connector interval across the
     /// time a host bucket takes to refill from empty.

@@ -220,3 +220,12 @@ fn each_connector_s_bound_matches_what_its_declaration_observes() {
         }
     }
 }
+
+/// The linger cap is what the connector admits in one span: its burst plus
+/// one per interval across the span.
+#[test]
+fn the_linger_cap_is_what_the_connector_admits_in_one_span() {
+    let gate = gate(rate(SECOND / 10, 4), rate(SECOND, 1));
+    assert_eq!(gate.linger_cap(Tick::new(1_426_000_000)), 4 + 14);
+    assert_eq!(gate.linger_cap(Tick::new(0)), 4);
+}

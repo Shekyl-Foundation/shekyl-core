@@ -376,6 +376,17 @@ impl Sockets {
             .unwrap_or_default()
     }
 
+    /// How many refused clearnet accepts may linger half-closed at once
+    /// for `span` (D10.2): what the accept-rate gate's connector bucket
+    /// admits in that time ([`AcceptGate::linger_cap`]). Zero with no gate.
+    #[must_use]
+    pub fn clearnet_linger_cap(&self, span: Tick) -> usize {
+        self.lock()
+            .clearnet_rate
+            .as_ref()
+            .map_or(0, |gate| gate.linger_cap(span))
+    }
+
     fn lock(&self) -> MutexGuard<'_, Inner> {
         self.inner.lock().expect("socket table lock poisoned")
     }

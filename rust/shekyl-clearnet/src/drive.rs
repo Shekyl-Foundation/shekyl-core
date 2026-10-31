@@ -36,6 +36,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::handshake::{self, Setup};
+use crate::linger::Linger;
 use crate::seam::{SeamRecv, SeamSend};
 use crate::{ChannelChoice, HandshakeTally, Session};
 
@@ -87,6 +88,9 @@ pub struct Dial {
 
 pub struct Accept {
     pub stream: TcpStream,
+    /// Where a refused accept is closed: half-closed until its first
+    /// flight arrives (D10.2).
+    pub linger: Linger,
     pub sockets: Sockets,
     pub ceiling: InboundCeiling,
     pub kind: ChannelChoice,
@@ -124,6 +128,13 @@ where
     C: Clock + Clone + Send + Sync + 'static,
     F: Fn() -> InboundCeiling + Send,
 {
+    let linger = Linger::spawn(
+        engine.clone(),
+        inbound
+            .sockets
+            .clearnet_linger_cap(inbound.handshake_within),
+        inbound.handshake_within,
+    );
     loop {
         let stream = match listener.accept().await {
             Ok((stream, _)) => stream,
@@ -139,6 +150,7 @@ where
         };
         let accept = Accept {
             stream,
+            linger: linger.clone(),
             sockets: inbound.sockets.clone(),
             ceiling: (inbound.ceiling)(),
             kind: inbound.kind,
@@ -160,6 +172,7 @@ where
 {
     let Accept {
         stream,
+        linger,
         sockets,
         ceiling,
         kind,
@@ -179,12 +192,13 @@ where
     let reserved = match sockets.accept_clearnet(peer.ip(), ceiling, now) {
         Ok(open) => open,
         Err(OpenError::Refused(cause)) => {
-            close_before_channel(stream).await;
+            linger.close(stream).await;
             on_cause(cause);
             return;
         }
         Err(OpenError::Exhausted) => {
-            finish_before_channel(stream, &on_cause, CloseKind::AdmissionRefused).await;
+            linger.close(stream).await;
+            on_cause(CloseCause::new(CloseKind::AdmissionRefused));
             return;
         }
     };
@@ -421,7 +435,7 @@ async fn finish_before_channel(
 /// arrived, at most one initiator flight (D10.1), is read and dropped
 /// without waiting, and only then is the socket closed. Nothing here
 /// waits for the peer: a refused connection holds no task.
-async fn close_before_channel(mut stream: TcpStream) {
+pub(crate) async fn close_before_channel(mut stream: TcpStream) {
     drop(stream.shutdown().await);
     // `into_std` leaves the socket non-blocking, so each read takes only
     // what the kernel already holds.

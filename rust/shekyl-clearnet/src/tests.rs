@@ -696,3 +696,122 @@ fn a_socks_refusal_carries_the_reply_byte() {
 
 #[path = "gap_tests.rs"]
 mod gap_tests;
+
+/// A gate refusing every inbound from one host after its first, whose
+/// connector admits `burst` at once and one more every `every`: the linger
+/// cap for a span is `burst + span / every`. Test shapes, not ruled values.
+fn refusing_gate(every: u64, burst: u32) -> Sockets {
+    use shekyl_transport_layer::{AcceptGate, AcceptRate};
+    Sockets::with_clearnet_gate(AcceptGate::new(
+        AcceptRate {
+            token_every_nanos: every,
+            burst,
+        },
+        AcceptRate {
+            token_every_nanos: 60_000_000_000,
+            burst: 1,
+        },
+    ))
+}
+
+fn wait_for_refusals(seen: &Arc<Mutex<Vec<CloseKind>>>, count: usize) {
+    let start = Instant::now();
+    while seen
+        .lock()
+        .expect("causes")
+        .iter()
+        .filter(|kind| **kind == CloseKind::AcceptRateExceeded)
+        .count()
+        < count
+    {
+        assert!(start.elapsed() < Duration::from_secs(2), "refusal {count}");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+/// What a refused client sees when it writes its first flight `after` its
+/// connect, as a Noise initiator on the internet does: `None` for an
+/// orderly end, or the socket error an RST left.
+fn flight_after(mut client: StdStream, after: Duration) -> Option<std::io::Error> {
+    std::thread::sleep(after);
+    client
+        .write_all(&[0x5a; shekyl_p2p_transport::INITIATOR_FLIGHT_LEN])
+        .expect("the flight");
+    let mut buf = [0u8; 4];
+    let read = client.read(&mut buf);
+    std::thread::sleep(Duration::from_millis(50));
+    match (read, client.take_error().expect("socket error")) {
+        (_, Some(error)) | (Err(error), None) => Some(error),
+        (Ok(n), None) => {
+            assert_eq!(n, 0, "nothing written to a refused peer");
+            None
+        }
+    }
+}
+
+/// The refusal comes first and the flight 50 ms later, at a socket the
+/// accept refused: it is held half-closed until the flight arrives, so
+/// the far side sees FIN and no RST (D10.2).
+#[test]
+fn a_flight_written_after_the_refusal_ends_with_fin_not_rst() {
+    let (engine, listener, seen) = start_on(
+        refusing_gate(100_000_000, 4),
+        ClearnetOption::On,
+        Tick::new(5_000_000_000),
+        InboundCeiling::Bounded(4),
+    );
+    let _first = connect(listener.local_addr());
+    let start = Instant::now();
+    while listener.sockets.live() == 0 {
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "the first is admitted"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let refused = connect(listener.local_addr());
+    wait_for_refusals(&seen, 1);
+    let error = flight_after(refused, Duration::from_millis(50));
+    assert!(error.is_none(), "an RST answered the flight: {error:?}");
+    listener.shutdown();
+    drop(engine);
+}
+
+/// The linger cap holds: with room for two, the third refusal closes at
+/// once and its late flight is answered with RST (the residual D10.2
+/// states), while the two held sockets still end with FIN.
+#[test]
+fn refusals_past_the_linger_cap_close_at_once() {
+    // Burst 1, one token per 5 s span: a cap of 1 + 1 = 2.
+    let (engine, listener, seen) = start_on(
+        refusing_gate(5_000_000_000, 1),
+        ClearnetOption::On,
+        Tick::new(5_000_000_000),
+        InboundCeiling::Bounded(8),
+    );
+    let _first = connect(listener.local_addr());
+    let start = Instant::now();
+    while listener.sockets.live() == 0 {
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "the first is admitted"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let held_a = connect(listener.local_addr());
+    wait_for_refusals(&seen, 1);
+    let held_b = connect(listener.local_addr());
+    wait_for_refusals(&seen, 2);
+    let past_cap = connect(listener.local_addr());
+    wait_for_refusals(&seen, 3);
+    assert!(
+        flight_after(past_cap, Duration::from_millis(50)).is_some(),
+        "the refusal past the cap closed at once"
+    );
+    for (name, held) in [("first", held_a), ("second", held_b)] {
+        let error = flight_after(held, Duration::ZERO);
+        assert!(error.is_none(), "the {name} held socket: {error:?}");
+    }
+    listener.shutdown();
+    drop(engine);
+}

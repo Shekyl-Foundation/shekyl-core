@@ -1732,21 +1732,37 @@ listener, and so a connection in the gap phase.
    failure still
    closes the same way: FIN after zero bytes written. Step 7 measures
    that.
-   **A refusal at accept drains before it closes** (Rick, 2026-10-30).
+   **A refusal at accept lingers half-closed** (Rick, 2026-10-30/31).
    Linux answers a close with unread bytes in the receive queue with
-   RST, and a peer refused at accept has usually sent its first flight
-   already, so a plain shutdown-then-close made every accept-time
-   refusal an RST after the FIN, visible from outside. Every refusal in
-   `accept_clearnet` (the ban, the ceilings, the accept rate) now goes
-   through one close: shut the write side (the FIN), read and drop what
-   has already arrived, at most one initiator flight (item 1's bound),
-   without waiting, then close. A refused connection holds no task while
-   it drains. Bytes that arrive after the close are answered with RST as
-   any closed socket answers them; that is the peer writing to a closed
-   port, the same for every path. `close_tests.rs` pins the kernel's
-   RST on an undrained close and the FIN on this one. The refusals after
-   accept, inside the handshake, are step 7 item 7's capture matrix:
-   they get the same close if it shows them resetting.
+   RST, and answers bytes that reach a closed socket with RST too. A
+   Noise initiator writes its first flight as soon as it connects, so on
+   the internet that flight usually arrives after an accept-time refusal,
+   which takes microseconds. Every refusal in `accept_clearnet` (the ban,
+   the ceilings, the accept rate) therefore shuts its write side at once
+   (the FIN) and stays open for reading until one initiator flight
+   (item 1's bound) has arrived and been dropped, or until the
+   connector's handshake span passes (1.426 s on clearnet). Only then is
+   it closed, with nothing unread. One task per accept loop holds every
+   lingering socket, with one owner on the timing engine carrying the
+   earliest deadline (every socket lingers for the same span, so the
+   earliest is the oldest); no socket has a task of its own.
+   **The cap.** At most the connector's accept-rate burst plus the
+   tokens it refills across the span may linger at once
+   (`AcceptGate::linger_cap`): what the connector admits in one span.
+   While clearnet's rates are not assessed there is no gate and the cap
+   is zero.
+   **Residual (stated, accepted).** A refusal beyond the cap closes at
+   once, after dropping what has already arrived. A flight that reaches
+   it later is answered with RST, so under a flood past the cap, and
+   today on every refusal until the rates are ruled, a refused peer can
+   tell a refusal at accept from a refusal after it. A peer that writes
+   after its flight, or after the span, gets RST from any closed socket,
+   on every path. `close_tests.rs` pins the kernel's RST on an undrained
+   close and the FIN on the drained one; `tests.rs` pins a flight written
+   50 ms after the refusal ending with FIN, and the third refusal past a
+   cap of two ending with RST while the two held end with FIN. The
+   refusals after accept, inside the handshake, are step 7 item 7's
+   capture matrix: they get the same close if it shows them resetting.
 
 3. **Clearnet accept rate is owned here.** This document owns the
    FOLLOWUPS row on connection admission before the channel exists. The
@@ -1930,7 +1946,7 @@ never one line per connection (Rick, 2026-10-30): a warning when the
 accept rate refused anything, and an info line when only the ceilings
 or the ban list did, because a node at its ceiling refuses in ordinary
 service. The accept closes the socket before any handshake byte, with
-FIN and never RST (D10.2 below).
+FIN and no RST up to the linger cap (D10.2 below).
 The dialer records its own before-channel cause for that close. It
 does not learn which refusal this node chose: this table is not on
 the pipe. `DialFailed` is an outbound TCP connect that did not complete.
