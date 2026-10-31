@@ -73,6 +73,9 @@
 //! shared `127.0.0.1` is one host bucket, and a faster launch is a refusal
 //! rather than a connection to cost.
 
+// Linux only: macOS loopback holds only 127.0.0.1 unless aliased.
+#![cfg(target_os = "linux")]
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;

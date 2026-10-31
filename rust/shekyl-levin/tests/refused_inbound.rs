@@ -22,7 +22,8 @@
 //! parent waits one connector refill between connects, so the rate admits
 //! them and the ceiling is what refuses the next one.
 
-#![cfg(unix)]
+// Linux only: macOS loopback holds only 127.0.0.1 unless aliased.
+#![cfg(target_os = "linux")]
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
