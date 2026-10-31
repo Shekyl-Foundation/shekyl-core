@@ -1355,7 +1355,7 @@ the boundary after its freeze epoch, a persona id, a `retain(k)`); a
 archival-serving RPC on the daemon; an archiver-backed daemon
 distinguishable from a plain one by disk or by wire.
 
-### `PDM-Q10` RULED 2026-09-18 — "Not retained" is the existing split transaction read; no new RPC
+### `PDM-Q10` RULED 2026-09-18, AMENDED 2026-10-31 (`SB-Q2`) — "Not retained" is the ordinary transaction read in its pruned form, the skeleton; no new RPC
 
 **Grounded at** `dev@20ebdf1e5`; `shekyl-daemon-rpc/src/methods.rs:552-605`
 read at source.
@@ -1368,21 +1368,27 @@ the onion answers to a whole-shard read and a fixed set of bare statuses
 request, a 404 for a shard not held and a 503 for a fault of the
 persona's own (`ARCHIVAL_SERVING_ROUTE.md`). None of them is a
 daemon-side retention read. So the
-contract is **the ordinary transaction read's split form**:
-`get_transactions` with `prune` / `split` returns, per tx, `pruned`,
-`prunable`, `prunable_hash` and a `pruned_flag` (the
-`(split, prune, decode_as_json)` matrix at `methods.rs:552-605`). "Not
-retained" is that response with `prunable` empty, `prunable_hash` (and,
-after A3, `pqc_auth_hash`) present, `pruned_flag` set — **identical on
-every daemon**, inside the body horizon (it has the body, returns it) and
-outside (no daemon has it; *re-keyed 2026-09-22 from "inside `W`"*). A discarded body and a never-held one are one
+contract is **the ordinary transaction read in its pruned form** —
+`IG-Q55`'s `prune` switch (RULED 2026-10-19; `split`, `prunable_as_hex`
+and `pruned` are deleted), under which every chain entry is **the
+skeleton**: the pruned segment exactly plus the three txid operands
+`prunable_hash`, `pqc_auth_hash` (`None` ⇔ the identity has no third
+component) and `archival_len`. One shape above and below the body
+horizon, keyed by the request's switch and never by retention; the
+`pqc_auths` bytes never ride in it (`DRS_SB_BELOW_HORIZON.md` `SB-Q2`,
+RULED 2026-10-31). A full-form request for a transaction past the horizon
+is not an error: the slot answers `archived { shard: k }` and no body,
+`k` the transaction's shard — public calendar data, identical on every
+daemon — and the text says every daemon keeps the skeleton and the
+archive serves the body. A discarded body and a never-held one are one
 state (F32 leg (iii)) and the response does not distinguish them. The
 wallet-side store answers the onion; the daemon answers its operator.
 Nothing to design.
 
 **Falsifier.** A daemon RPC that reports archival retention, holdings, or
-a per-shard "not retained" variant; or two daemons at the same height
-answering the same split read differently.
+a per-shard "not retained" variant; two daemons at the same height
+answering the same pruned read differently; or a pruned entry whose shape
+depends on whether the node holds the archival good.
 
 ### `PDM-Q11` RULED 2026-09-17 — `D_max`: shape frozen, numeric provisional, home `CEN-E2`
 
@@ -1853,7 +1859,7 @@ or the question block named). Grades as recorded there.
 | `PDM-Q7` | Stripe engine / `--prune-blockchain`; unbonded retention exceptions | **RULED 2026-09-18** — removed completely; nothing of the engine survives as design (F17's "worth taking" refuted: assignment, advertisement and coverage are the bond, the bond, and price); **C++ engine, both flags, and the `pruning_seed` wire field DELETED 2026-09-21** (`feat/pruning-seed-wire-deletion`; the first draft's "dies at `DRS-E*`" misread `S0`, which forbids *implementing* in C++, not deleting — and the wire half did not die with the store; the "send `0`, ignore non-zero" retirement was superseded by deletion once the field was seen to be `PWD-I1`'s shape with eight free marker values against a uniformly-zero fleet), nothing ported into S-PRUNE; `--sync-pruned-blocks` deleted **under Q5's rejection** (trust-the-txid with no anchor); gated by `scripts/ci/check_no_stripe_engine.sh`; `prune_blockchain` REJECTED in the daemon RPC registry (`get_blockchain_pruning_seed` is a core getter, not a method — dies with the engine); RPC seed fields dropped at the cutover's `CORE_RPC_VERSION` bump. **Unbonded retention exceptions PERMITTED** — retention and serving are different acts; a floor, not a hazard |
 | `PDM-Q8` | Privacy (density vs query; serve-side uniformity) | **RULED 2026-09-18** — serve side as ruled 2026-09-13, strengthened by #775 (no serving state on any daemon; all daemons prune); fetch side closed by citation: Tor client with no address (`SF-D3`), test-is-a-read indistinguishability (`ARCHIVAL_CHALLENGE_MECHANISM.md` §9; `SF-D5`/`SF-D8`; `SF-D10` draw), the persona never fetches — its daemon does, episodically; ~~two-`W` rollout the one bounded exception~~ VOID 2026-09-22 (no `W` to roll; Q2 re-ruled) |
 | `PDM-Q9` | Archiver's retention set: source, binding, lapse, coverage floor, recovery fetch | **RULED 2026-09-18 on #774, adopting #775's criterion (`PDM-Q-F33`; #775 OPEN at ruling, landed `e685ef1cd` before #774 — F33's re-key done by PDM, `docs/pdm-f33-rekey-775`)** — the daemon holds archival *consensus* state only and **no serving state, ever**; all daemons prune uniformly. **The daemon-storage candidate is REJECTED and withdrawn.** Binding: nothing (wallet holds bond + store); RPC: none new (`get_prunable_range` withdrawn); lapse: the wallet-side store's (#775 FOLLOWUPS row); floor: Foundation `CompleteTree` behind a persona, structural, counts personas; recovery: episodic daemon fetch, retains nothing; advertisement: none. **The specified-to-scarce window is when the wallet fills its store from the local daemon.** #775's leaf-shaped rows re-keyed under Q6/Q12 by PDM (F33 discharged 2026-09-18) |
-| `PDM-Q10` | RPC contract for "not retained" | **RULED 2026-09-18** — no new RPC: "not retained" is `get_transactions`' existing split form (`methods.rs:552-605`) with `prunable` empty, hash rows present, `pruned_flag` set — identical on every daemon; discarded and never-held are one state (F32); the wallet-side store answers the onion, the daemon answers its operator |
+| `PDM-Q10` | RPC contract for "not retained" | **RULED 2026-09-18, AMENDED 2026-10-31 (`SB-Q2`)** — no new RPC: under `IG-Q55`'s `prune` every chain entry is the skeleton (pruned segment + `prunable_hash`, `pqc_auth_hash`, `archival_len`), one shape above and below the horizon; a full-form request past the horizon answers `archived { shard }` at the slot, never an error; discarded and never-held are one state (F32); the wallet-side store answers the onion, the daemon answers its operator (`DRS_SB_BELOW_HORIZON.md`) |
 | `PDM-Q11` | `D_max`, the consensus reorg cap — the one constant F10 (Q2), F19 (Q1) **and the store's undo-log retention (S-CHAIN-W SCW-7, 2026-09-15: retention ≥ `D_max`)** all derive from; home is `is_alternative_block_allowed` above the checkpoint — census row **`CEN-E2`** (F30; `CEN-E1` is the equality rule, the band-1 trust assertion) — so the checkpoint (Q5) is its precondition; not archival-scoped, carried here until ruled | **RULED 2026-09-17** — shape frozen (a *detectability boundary*, home `CEN-E2`, the anchor a precondition), **numeric `720` PROVISIONAL** on the `bond_duration` precedent with the two shallower arguments recorded beside it, re-pinned at the Round-2 gate with `n`, `W` and `w_launch` (four numerics; `w_launch` joined 2026-09-18); the owner ask is discharged by the ruling itself; `CEN-E1`/`CEN-E2` re-key still owed in F27's PR (F30) |
 | `PDM-Q12` | The freeze pipeline and the wallet-side `LeafStore` under Q6's unit — does the freeze retire when the commitment exists at ingest; `LeafStore` as deletion target (F21) | **RULED 2026-09-18, amended the same day on #775 (Q9 RULED; the conditional is discharged)** — the freeze retires (commitment exists at ingest; membership derivable, F32), not a migration; dependents re-point to the **wallet-side store rebuilt around bodies** (the daemon holds no serving state); `LeafStore`'s leaf-shaped internals (`open_frozen_segment_body`, `ServingReader`, `FrozenSegmentPruned`), `segment_freeze.rs`, the freeze half of `challenge.rs`/`path.rs` are a Rust deletion surface at the cutover (`DEL-008`, cutover-blocked by their C++ callers; *was* "at E4 / S-ARCH", corrected 2026-10-10) — **the store itself is rebuilt, not deleted**; `StoreShardProvider` keeps reading it; `get_prunable_range` withdrawn; the C++ freeze symbols delete in that same `DEL-008` row — the callers are what keep `segment_freeze.rs` and `challenge.rs` cutover-blocked; no wire-invariance claim — the verifier change is item 4 row 1; no reversion criterion beyond Q6's own |
 

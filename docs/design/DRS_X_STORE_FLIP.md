@@ -404,7 +404,7 @@ Its number is read from the tree at the flip's pin, never carried from a plan (`
 - `do_not_relay`: **Design** (the stem phase is `relayed: false`; no other relay state).
 - `tx_json`, and `get_transactions`' `as_json`: **Removed** (epee's rendering, retiring in RK-W; RW-Q4, IG-Q55). `decode_as_json: true` is refused as bad parameters. The C++-backed server also drops `as_json` when it rendered none, so today's replies lose the field they always sent empty.
 - `get_transactions`' pool entry has no `received_timestamp`: **Design** (S7, as the pool listing's).
-- `get_transactions` refuses a transaction whose body this node has pruned, naming it: **Design** (the prunable region and `pqc_auths` go together, and the wire cannot be recomposed without them; C++ never discarded a body).
+- `get_transactions` for a transaction whose body is past the horizon: **Superseded by `SB-Q2`** (`DRS_SB_BELOW_HORIZON.md`, RULED 2026-10-31). The flip's refusal (`pruned_here`) is not the contract: under `prune` every entry is the skeleton, and a full-form request past the horizon answers `archived { shard }` at the slot. Lands after this PR merges, before the next release cut.
 - `inject_archival_serve_credit` is the host's and an armed lever: **C++ defect** (RT-O9.2 ruled it so; the table restated the defect as policy).
 - `set_bans` takes no numeric `ip`, an absent `seconds` bans until lifted, and `get_bans` and `banned` add `permanent`: **Design** (Q11; the ban file's permanent bans).
 - `relay_tx` answers not ready: **Unbuilt by design**, owner RD (the relay driver).
