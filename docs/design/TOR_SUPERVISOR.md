@@ -555,17 +555,23 @@ only on its own connector, because a peer is handed it. A probe nonce is
 never handed to a peer, so one presented on another connector is found,
 logged as this node's defect, dropped, and never evidence.
 
-The probe reads the managed route at each use (`TSR-F10`) through
-`shekyl_ffi::zone_ffi::managed_route`, the one way an in-process consumer
-reads it: only while the link is usable on the route the managed Tor
-published, and carrying the consumer's own isolation pair, never the
-operator's (DC-Q7). The publication record lives on the zone host, beside
-the operator's proxy and never in its place, and dies with that host. The probe's pair is a random per-boot username minted
-from the OS CSPRNG beside the onion seed and held with it
-(`IsolationPair`, wiped on drop, redacted in `Debug`). Tor isolates streams
-by SOCKS credentials (`IsolateSOCKSAuth`, its default), so the probe's
-circuits are its own, apart from the peer dials, which offer no
-authentication; the settlement fetch will carry a pair of its own. Isolation
+An in-process consumer reads the managed route at each use and never
+caches it (`TSR-F10`). The publication record lives on the zone host,
+beside the operator's proxy and never in its place, and dies with that
+host. It answers only while the Tor link is usable on the route the
+managed Tor published, so an operator's Tor, a fallen route, or a route
+from before a respawn is not a route. There are two readers.
+`shekyl_ffi::zone_ffi::managed_socks` is the address alone. The
+settlement fetch takes that: each of its reads presents credentials from
+its own nonce (`SF-D3`), a fresh circuit per read, apart from the other
+reads, from the peer dials, and from the probe. `managed_route` is that
+same address presented with the caller's own fixed isolation pair and
+nothing else, never the operator's pair (DC-Q7). The probe is that
+reader. Its pair is a random per-boot username minted from the OS CSPRNG
+beside the onion seed and held with it (`IsolationPair`, wiped on drop,
+redacted in `Debug`). Tor isolates streams by SOCKS credentials
+(`IsolateSOCKSAuth`, its default), so the probe's circuits are its own,
+apart from the peer dials, which offer no authentication. Isolation
 separates circuits; it cannot change what the guard sees (below).
 
 What the probe's own dial sees, a SOCKS reply or a close, is logged and

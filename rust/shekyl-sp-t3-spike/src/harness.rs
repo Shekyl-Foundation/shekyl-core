@@ -1118,10 +1118,11 @@ impl Apparatus {
 /// Map the production client's error taxonomy onto the measurement's.
 ///
 /// `SF-D6` types outcomes by what the *scheduler* should do next; §6.4 types
-/// them by whether Tor or the apparatus is to blame. The two agree on the
-/// no-complete-exchange side (a stall is the network) and collapse on the
-/// completed side: every decided refusal — miss, malformed, bad
-/// countersignature, content — means the apparatus, not the path, is wrong.
+/// them by whether Tor or the apparatus is to blame. A stall on a dial that
+/// was attempted is the network. A missing route was never a dial, so it is
+/// the apparatus. On the completed side every decided refusal — miss,
+/// malformed, bad countersignature, content — means the apparatus, not the
+/// path, is wrong.
 fn classify(e: &FetchError) -> FailureKind {
     match e {
         // The SOCKS dial against an `.onion` is what builds the rendezvous, so
@@ -1143,7 +1144,13 @@ fn classify(e: &FetchError) -> FailureKind {
         // `content-length`. Pre-head I/O is `ClosedBeforeHead` at the
         // emission site — `Stall::Io` is body-phase only.
         FetchError::Stall(Stall::Truncated { .. } | Stall::Io(_)) => FailureKind::Truncated,
-        FetchError::Miss
+        // A completed refusal is the apparatus. So is `NoRoute`: this
+        // harness builds every client with a fixed proxy, and a
+        // route-reading client that found none sent nothing, so Tor was
+        // not asked. Filing that stall under `Circuit` would record a
+        // failed rendezvous for a dial that never started.
+        FetchError::Stall(Stall::NoRoute)
+        | FetchError::Miss
         | FetchError::Rejected
         | FetchError::Unavailable
         | FetchError::Unsigned
@@ -1417,6 +1424,11 @@ mod tests {
         assert_eq!(
             classify(&FetchError::Stall(Stall::ClosedBeforeHead)),
             FailureKind::Circuit
+        );
+        // No proxy: the harness never dialled. That is the apparatus, not Tor.
+        assert_eq!(
+            classify(&FetchError::Stall(Stall::NoRoute)),
+            FailureKind::Refused
         );
         assert_eq!(
             classify(&FetchError::Stall(Stall::HeadTimeout)),
