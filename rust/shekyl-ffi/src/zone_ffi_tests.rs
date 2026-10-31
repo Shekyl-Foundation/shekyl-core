@@ -585,3 +585,17 @@ fn a_pair_is_presented_only_at_its_own_proxy() {
     assert!(!elsewhere.authenticates(), "another proxy gets no pair");
     assert!(!presented(at, None).authenticates());
 }
+
+/// The minute report counts the two admission refusals by cause and starts
+/// again after each report; no other close is counted.
+#[test]
+fn the_refusal_report_counts_admission_refusals_by_cause() {
+    let refusals = AdmissionRefusals::default();
+    refusals.count(CloseKind::InboundNotAccepted);
+    refusals.count(CloseKind::AdmissionRefused);
+    refusals.count(CloseKind::AdmissionRefused);
+    refusals.count(CloseKind::PeerClosed);
+    refusals.count(CloseKind::AcceptRateExceeded);
+    assert_eq!(refusals.take(), (1, 2));
+    assert_eq!(refusals.take(), (0, 0), "each report starts again");
+}

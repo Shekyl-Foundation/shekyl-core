@@ -12,6 +12,7 @@
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::num::NonZeroUsize;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
@@ -424,14 +425,13 @@ fn ensure(network_id: [u8; 16]) -> Result<Arc<Host>, ZoneStart> {
     }
     let engine = crate::seam_ffi::process_engine();
     spawn_lateness_report(&handle, engine.clone());
-    spawn_accept_rate_report(&handle, process_sockets());
+    let refusals = Arc::new(AdmissionRefusals::default());
+    spawn_refusal_report(&handle, process_sockets(), Arc::clone(&refusals));
     let (clearnet_tx, clearnet_rx) = mpsc::unbounded_channel();
     let (tor_tx, tor_rx) = mpsc::unbounded_channel();
-    let on_cause: Arc<dyn Fn(CloseCause) + Send + Sync> = Arc::new(|cause| match cause.kind() {
-        kind @ (CloseKind::AdmissionRefused | CloseKind::InboundNotAccepted) => {
-            tracing::info!("seam accept refused cause {kind:?}");
-        }
-        kind => tracing::debug!(kind = ?kind, "zone socket"),
+    let on_cause: Arc<dyn Fn(CloseCause) + Send + Sync> = Arc::new(move |cause| {
+        refusals.count(cause.kind());
+        tracing::debug!(kind = ?cause.kind(), "zone socket");
     });
     let host = Arc::new(Host {
         pool: Mutex::new(Some(pool)),
@@ -547,24 +547,74 @@ fn spawn_lateness_report(runtime: &tokio::runtime::Handle, engine: Handle<Monoto
     }));
 }
 
-/// Name the clearnet accepts the rate bound refused (D10.3), once a minute
-/// and only when there were some: one line per refused connection is what
-/// a flood would turn into a flood of the log.
-fn spawn_accept_rate_report(runtime: &tokio::runtime::Handle, sockets: shekyl_seam::Sockets) {
+/// Accepts the admission checks refused before any handshake, counted
+/// between reports. The accept rate's refusals are counted by its gate
+/// ([`shekyl_seam::Sockets::take_accept_rate_refusals`]).
+#[derive(Debug, Default)]
+struct AdmissionRefusals {
+    /// The inbound ceiling admits no inbound connection
+    /// ([`CloseKind::InboundNotAccepted`]).
+    inbound_closed: AtomicU64,
+    /// The socket table was full, or the peer is banned
+    /// ([`CloseKind::AdmissionRefused`]).
+    full_or_banned: AtomicU64,
+}
+
+impl AdmissionRefusals {
+    fn count(&self, kind: CloseKind) {
+        let counter = match kind {
+            CloseKind::InboundNotAccepted => &self.inbound_closed,
+            CloseKind::AdmissionRefused => &self.full_or_banned,
+            _ => return,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn take(&self) -> (u64, u64) {
+        (
+            self.inbound_closed.swap(0, Ordering::Relaxed),
+            self.full_or_banned.swap(0, Ordering::Relaxed),
+        )
+    }
+}
+
+/// Name the connections refused before any handshake, once a minute and
+/// only when there were some: one line per refused connection is what a
+/// flood turns into a flood of the log (Rick, 2026-10-30).
+///
+/// A node at its ceiling refuses connections in ordinary service, so that
+/// minute is reported at info. A minute in which the accept rate (D10.3)
+/// refused anything is a warning: connections arrived faster than the
+/// protocol serves.
+fn spawn_refusal_report(
+    runtime: &tokio::runtime::Handle,
+    sockets: shekyl_seam::Sockets,
+    refusals: Arc<AdmissionRefusals>,
+) {
     const EVERY: Duration = Duration::from_secs(60);
     drop(runtime.spawn(async move {
         let mut every = tokio::time::interval_at(tokio::time::Instant::now() + EVERY, EVERY);
         every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             every.tick().await;
-            let refused = sockets.take_accept_rate_refusals();
-            if refused.total() > 0 {
+            let rate = sockets.take_accept_rate_refusals();
+            let (inbound_closed, full_or_banned) = refusals.take();
+            if rate.total() > 0 {
                 tracing::warn!(
-                    over_host_rate = refused.host,
-                    over_connector_rate = refused.connector,
-                    "clearnet connections arrived faster than the protocol's accept rate in the \
-                     last minute and were closed before any handshake; this node keeps serving \
-                     its other peers"
+                    over_host_rate = rate.host,
+                    over_connector_rate = rate.connector,
+                    inbound_closed,
+                    full_or_banned,
+                    "connections arrived faster than the protocol's accept rate in the last \
+                     minute and were closed before any handshake; this node keeps serving its \
+                     other peers"
+                );
+            } else if inbound_closed > 0 || full_or_banned > 0 {
+                tracing::info!(
+                    inbound_closed,
+                    full_or_banned,
+                    "connections were refused before any handshake in the last minute: the \
+                     inbound limit was reached or closed, or the peer is banned"
                 );
             }
         }

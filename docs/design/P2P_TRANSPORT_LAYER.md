@@ -1732,6 +1732,21 @@ listener, and so a connection in the gap phase.
    failure still
    closes the same way: FIN after zero bytes written. Step 7 measures
    that.
+   **A refusal at accept drains before it closes** (Rick, 2026-10-30).
+   Linux answers a close with unread bytes in the receive queue with
+   RST, and a peer refused at accept has usually sent its first flight
+   already, so a plain shutdown-then-close made every accept-time
+   refusal an RST after the FIN, visible from outside. Every refusal in
+   `accept_clearnet` (the ban, the ceilings, the accept rate) now goes
+   through one close: shut the write side (the FIN), read and drop what
+   has already arrived, at most one initiator flight (item 1's bound),
+   without waiting, then close. A refused connection holds no task while
+   it drains. Bytes that arrive after the close are answered with RST as
+   any closed socket answers them; that is the peer writing to a closed
+   port, the same for every path. `close_tests.rs` pins the kernel's
+   RST on an undrained close and the FIN on this one. The refusals after
+   accept, inside the handshake, are step 7 item 7's capture matrix:
+   they get the same close if it shows them resetting.
 
 3. **Clearnet accept rate is owned here.** This document owns the
    FOLLOWUPS row on connection admission before the channel exists. The
@@ -1910,8 +1925,12 @@ accept. A zero bound is named even when a positive cap is already
 full. The seam info line on this node names whichever of the two was
 returned. `AcceptRateExceeded` is an inbound clearnet connection that
 the connector's or the host's accept-rate bucket could not pay for
-(D10.3); this node names those refusals once a minute in a warning,
-not one line each. The accept closes the socket before any handshake byte.
+(D10.3). This node names all three refusals once a minute, by cause,
+never one line per connection (Rick, 2026-10-30): a warning when the
+accept rate refused anything, and an info line when only the ceilings
+or the ban list did, because a node at its ceiling refuses in ordinary
+service. The accept closes the socket before any handshake byte, with
+FIN and never RST (D10.2 below).
 The dialer records its own before-channel cause for that close. It
 does not learn which refusal this node chose: this table is not on
 the pipe. `DialFailed` is an outbound TCP connect that did not complete.
