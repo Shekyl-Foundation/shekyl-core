@@ -6,7 +6,9 @@ and 3b of §12 are implemented. Increment 1 is the link the dialer reads
 is the supervisor: sans-IO core, timing-engine driver, respawn, and the
 managed route published only from `Running`. `TSR-M2` is recorded
 (2026-10-22, the floor device); the driver's base stays 1 s and its cap
-stays 60 s. `TSR-M8` is not recorded, so the suspend check is still open.
+stays 60 s. `TSR-M8` is recorded (Windows and macOS, §10): only Windows
+counts a sleep in `Instant`, and the supervisor counts awake time on every
+platform (§5, "Resumed from suspend").
 Increment 3b is the public directory cache (`TSR-Q8`). Increment 4 is the
 probe of this node's own onion and the link's inbound facet (#1220).
 Increment 5's route publishing is absorbed into increment 3 (2026-10-22).
@@ -401,14 +403,15 @@ here.
 | Input | Source | Effect |
 | --- | --- | --- |
 | child exited | a wait on Tor's process: the reap on Unix, the process handle on Windows (`TSR-F16`) | process fault |
-| control connection EOF, desync, or a reply past the reply bound | the control actor; while Running, a liveness sample every 30 s (provisional, `Policy::alive_every`) gives the bound a question to time out on, since a wedged Tor sends no event and closes nothing | process fault (a wedged Tor is a dead Tor) |
+| control connection EOF, desync, or a reply past the reply bound (awake time: a bound found expired more than `control::RESUMED_AFTER` late was a sleep, and starts again, §5 "Resumed from suspend") | the control actor; while Running, a liveness sample every 30 s (provisional, `Policy::alive_every`) gives the bound a question to time out on, since a wedged Tor sends no event and closes nothing | process fault (a wedged Tor is a dead Tor) |
 | `BOOTSTRAP PROGRESS=` | `STATUS_CLIENT` | progress: the phase and when it was reached, which §5 shows; never a fault |
 | `BOOTSTRAP` with `WARNING`/`REASON` and `RECOMMENDATION=warn` | `STATUS_CLIENT` | named external cause (outbound blocked and kin). Tor sends `warn` from the tenth problem at a phase, so a few refused connections at startup raise nothing |
 | `ENOUGH_DIR_INFO` / `NOT_ENOUGH_DIR_INFO` | `STATUS_CLIENT` | outbound facet cause |
 | `NETWORK_LIVENESS UP/DOWN` | `NETWORK_LIVENESS` | external cause on or off: `UP` clears `ExternalBlocked` and `DirectoryUnreachable`, the causes about reaching the network (`TSR-Q14`); no other kind |
 | `CIRCUIT_NOT_ESTABLISHED REASON=` / `CIRCUIT_ESTABLISHED` | `STATUS_CLIENT` | `NOT_ESTABLISHED`: `REASON=DIR_ALL_UNREACHABLE` is the directory cause, `CLOCK_JUMPED` is the general event's, any other reason or none is the blocked link. `ESTABLISHED` clears as `NETWORK_LIVENESS UP` does |
-| `network-liveness`, `status/circuit-established` | `Input::NetworkView`, from the liveness sample's `GETINFO` while Running. The driver omits both keys unless the phase is Running; the core also ignores a view folded before Running | Tor's current view, read even when Tor sends no event (`TSR-Q14`): `Reported::No` on either key names the blocked link when nothing else is named; both `Reported::Yes` clears it. `Reported::Unknown` says nothing |
+| `network-liveness`, `status/circuit-established` | `Input::NetworkView`, from the liveness sample's `GETINFO` while Running. The driver omits both keys unless the phase is Running; the core also ignores a view folded before Running | Tor's current view, read even when Tor sends no event (`TSR-Q14`): `network-liveness=down` names the blocked link when nothing else is named; both `Reported::Yes` clears it. `Reported::Unknown` says nothing. `status/circuit-established=0` is display only: Tor drops its circuits on purpose after a clock jump and says why (`CLOCK_JUMPED`), and the sample after a resume named a block that was not there (§7, the VM suspend of 2026-10-30), while in the refuse block of 2026-10-25 Tor reported a circuit established throughout (Rick, 2026-10-30) |
 | `CLOCK_SKEW SKEW=` | `STATUS_GENERAL` | named cause with the offset; the source is unauthenticated, so the message says Tor reports it, never "your clock is wrong" |
+| Tor's log text: "Received a bad CERTS cell: At least one certificate expired." and "Certificate already expired." / "Certificate not yet valid." "Either their clock is set wrong, or your clock is wrong."; and a `BOOTSTRAP` problem with `REASON=DONE` and a `HOSTID` | `WARN`/`NOTICE` log events; `STATUS_CLIENT` | the certificates' clock cause (§5, "Certificates out of date"; Rick, 2026-10-30), named only when, within `Policy::clock_evidence_within` (60 s), Tor logged a certificate line at least three times **and** its `DONE` problems named at least three distinct relays. A wrong clock makes every relay's certificate look out of date, and one relay presenting a bad certificate is one relay. The certificate line names no relay (`torcert.c`), so the relays come from the problems: `DONE` means the TLS handshake completed and Tor closed the connection, which a blocked network cannot produce. Tor logs the certificate lines at `warn` only for a directory authority's handshake (protocol-warn, `info` by default, for any other relay, `channeltls.c`), so the lines heard come from authorities. **This is the one place Tor's free log text is read**: `TSR-Q14` applied to free text on purpose. The strings are pinned by `the_certificate_lines_are_tors_own_text` (`supervisor/events.rs`) and re-checked at every re-pin (`RELEASE_CHECKLIST.md`). While the evidence stands, a blocked link from the same problems keeps the clock cause; fewer leaves the blocked link's wording, which names the clock first |
 | `CLOCK_JUMPED TIME=` | `STATUS_GENERAL` | resume: re-evaluate now (Tor closed its circuits) |
 | `DANGEROUS_VERSION` | `STATUS_GENERAL` | announcement; a release question, not a runtime fault |
 | `DIR_ALL_UNREACHABLE` | `STATUS_GENERAL` | named external cause |
@@ -499,7 +502,7 @@ faults in the Tor process, so only those respawn:
 | --- | --- | --- |
 | External | Tor's own statements only (`TSR-Q14`): outbound blocked, `NETWORK_LIVENESS DOWN`, `CIRCUIT_NOT_ESTABLISHED`, the sampled view (§4.2), `DIR_ALL_UNREACHABLE`, clock skew | none but waiting; Tor retries itself; announce with the fix; **never respawn** |
 | Service | a descriptor round in which every upload ended and every one failed (an upload still unfinished is not this); a probe that does not complete within the §10 `TSR-M2` bound (60 s) while outbound is usable. One `HS_DESC UPLOADED` round can leave that dial unfinished until the next round (`TSR-Q5`, §4.5). The 2026-10-22 miss returned no SOCKS reply by the bound, and the nonce was never sent | republish on the running Tor: `DEL_ONION`, then `ADD_ONION` with the held seed, the same onion. Tor answers `550` (address collision) to an `ADD_ONION` for a service it still holds, so the delete comes first; its `552` (no such service) is no failure. Escalate to Process only if the control command itself fails |
-| Process | child exit; control EOF or desync; reply past bound; outbound dead past a bound with no external cause standing | respawn |
+| Process | child exit; control EOF or desync; reply past bound; outbound dead past a bound with no external cause standing; a bootstrap stranded by a clock jump (§5, "Stranded after a clock jump"): Tor reported `CLOCK_JUMPED`, then neither the percent nor the bytes moved for the bound, so its retries sit on the clock that was wrong; a slow mirror always has bytes arriving (Rick, 2026-10-30) | respawn |
 | Install | pin fails at spawn, or discovery finds nothing (`TSR-F6`) | no spawn, so the binary is not executed; the daemon starts (the posture table); announce; retry at the cap |
 | Local resource | data directory unwritable or out of space (a fresh spawn sweeps leftover per-boot directories, then checks; a directory kept for an in-boot respawn is not swept); `TOO_MANY_CONNECTIONS` | no spawn (or, for the open-file limit, no respawn); announce; retry at the cap |
 
@@ -864,11 +867,13 @@ that detail, not variants of `ManagedTorFix`.
 
 | State | Source | Shown as | Rendered from the cause | `ManagedTorFix` | Remedy |
 | --- | --- | --- | --- | --- | --- |
-| Outbound blocked | `BOOTSTRAP` warn `REASON`, `NETWORK_LIVENESS DOWN`, `CIRCUIT_NOT_ESTABLISHED`, or `Input::NetworkView` reporting `network-liveness=down` or `status/circuit-established=0` while Running (§4.2) | Degraded (outbound) | this machine cannot reach the Tor network; check the firewall or network. Bridges are `Operator`, not a managed-Tor option | none | wait |
+| Outbound blocked | `BOOTSTRAP` warn with a `REASON` other than `CLOCK_SKEW`, `NETWORK_LIVENESS DOWN`, `CIRCUIT_NOT_ESTABLISHED`, or `Input::NetworkView` reporting `network-liveness=down` while Running (§4.2) | Degraded (outbound) | this machine cannot reach the Tor network; check this computer's date and time, then the firewall or network. The clock comes first: a wrong clock stops every handshake, Tor may name nothing more specific than the handshake (`DONE`, §7, the clock-ahead VM run of 2026-10-30), the date takes ten seconds to check, and NTP is unauthenticated, so a path attacker can move it. Bridges are `Operator`, not a managed-Tor option | none | wait |
 | No directory reachable | `DIR_ALL_UNREACHABLE` | Degraded (outbound) | as above | none | wait |
-| Clock skew | `CLOCK_SKEW SKEW=±s` | Degraded (outbound) | the clock is off by the reported seconds; check time sync | none | wait |
+| Clock skew | `CLOCK_SKEW SKEW=±s`. A `BOOTSTRAP` problem whose `REASON` is `CLOCK_SKEW` comes with it and names nothing else: mapped to the blocked link, it overwrote this cause at every problem (§7, the clock-behind VM run of 2026-10-30) | Degraded (outbound) | the clock is off by the reported seconds; check time sync | none | wait |
+| Certificates out of date | §4.2's certificate lines, three or more, and `DONE` handshake problems naming three or more distinct relays, within `Policy::clock_evidence_within` (60 s), during a bootstrap. A measured `CLOCK_SKEW` stays named in its place | Degraded (outbound) | Tor reports that this computer's date or time looks wrong, so it cannot connect; check this computer's date and time | none | wait |
 | Waiting on the Tor directory | the last `BOOTSTRAP PROGRESS` phase and when it was reached | Bootstrapping (the phase, and since when); the pace beside it (§4.11) | none; Tor is fetching the network's directory, and a slow mirror can hold it for minutes. With the pace: advancing, slow but normal, or stalled, with the bytes over the window | none | wait |
-| Resumed from suspend | `CLOCK_JUMPED` | Bootstrapping, briefly | none | none | re-evaluate now |
+| Resumed from suspend | `CLOCK_JUMPED`; and, on every platform, a timer the driver was awaiting (`wait_wake`, or `ask_timed`) that fired more than `control::RESUMED_AFTER` (10 s) late. Time inside a bounded ask is awake: a deadline left behind while that ask ran is overdue work, not a sleep. The driver folds `Input::Resumed` before the reply (Rick, 2026-10-30) | Bootstrapping, briefly | none | none | re-evaluate now: one sample at once. Windows count awake time: on that late timer the bootstrap's stall window and the stranded check's byte mark, the probe's bound (a scheduled probe waits at least `probe_after_min` from the wake), the quiet stretch and an open round's waits start again from the wake, and the sample and liveness cadences re-arm from it, so nothing that came due in the sleep fires. The reply bound uses the same lateness in `control::ask_timed`: a bound found expired that late starts again, the same reply is awaited, and the lateness is reported so the driver folds `Input::Resumed` before it. A respawn backoff and a repeated announcement are left as they are. `Instant` counts through a sleep on Windows and stops on Linux and macOS (`TSR-M8`), so a waited timer is late on Windows and not on the other two; the windows follow the timer on all three. A sleep that ends within 10 s of a deadline is not seen; it adds at most that to a window |
+| Stranded after a clock jump | `CLOCK_JUMPED` during the bootstrap, then neither the percent nor a known `traffic/read` moving for `Policy::jump_stall_after` (5 min), judged at a sample (a count Tor did not give is unknown, not a stall) | Restarting | Tor stopped making progress after this computer's clock changed, and is being started again | none | respawn into the kept directory (§4.4) |
 | Onion unreachable | two consecutive probes past their bound, the second after `HSFETCH`, or a round in which every upload failed | Degraded (inbound) | peers cannot reach this node through Tor right now, and its address is being published again; no fix, after the outbound cause and its fix when one stands | none | republish (`DEL_ONION`, then `ADD_ONION`); a refused republish is a process fault |
 | Tor exited or wedged | exit, EOF, reply bound | Restarting | none unless repeated; then the count and the last exit, and where the previous log is | none | respawn |
 | Tor install defect | the pin gate at spawn | Restarting (held) | the file that failed the pin. The binary is not executed | `RestoreManaged`, plus the fixes the posture table offers | retry at the cap; the message repeats once per cap |
@@ -999,6 +1004,48 @@ route deleted for 10 minutes, so every connect fails at once):
   silently; it runs on the floor device with `tc`, with the soak. If Tor is
   silent there too, the runs are a report for the Tor Project.
 
+**Clock skew and suspend, a Linux VM, 2026-10-30** (a throwaway KVM guest,
+Debian 13; `shekyld` at `176b9d751` with the pinned 15.0.25; testnet,
+clearnet off; shekyl-dev `data/tsr-acceptance/2026-10-30-linux-vm-clock/`):
+
+- **A day ahead:** Tor bootstrapped cold in about 19 s and stated nothing
+  about its clock; no cause was named. The node synced testnet through
+  Tor, and the first probe in a real daemon arrived through the C++
+  inbound handshake in 8.2 s.
+- **Three days ahead:** Tor stated only handshake failures (`DONE`); its
+  log said "Received a bad CERTS cell: At least one certificate expired."
+  with no relay named. The blocked link's words told the operator to
+  check the firewall; they now put the clock first, and three such lines
+  with three relays' closed handshakes name the clock (§5, "Certificates
+  out of date"). After the clock was
+  set back, Tor reported the jump, moved from 14 % to 15 %, and sat with
+  no connection for 25 minutes; a respawn into the kept directory
+  bootstrapped in 7 s. That case is now a Process fault (§4.4,
+  "Stranded after a clock jump").
+- **Three days behind:** Tor named the skew outright (`CLOCK_SKEW
+  SKEW=-259200` and `REASON=CLOCK_SKEW` problems). The supervisor named
+  the clock, and the problem's `warn` overwrote it with the blocked link
+  at every problem; a `CLOCK_SKEW` reason no longer does.
+- **Suspend, five minutes in S3:** Tor reported the clock jumped 305 s
+  forward and rebuilt its circuits in 7 s; no respawn and no late reply.
+  The sample after the jump read no circuit and named a block for those
+  7 s, in a sentence that also said Tor carried the traffic. "No circuit"
+  no longer names a block, and the renderer no longer says the link
+  carries traffic beside a cause that says it cannot.
+- **Set back a day while Running:** Tor reported the 86 399 s backward
+  jump, rebuilt its circuits in 1.6 s, and carried the traffic for the
+  next 4 h 40 min with no respawn and no cause. A backward jump while
+  Running needs no stranded trigger of its own. Tor's next descriptor
+  upload came 4 h 39 min after the jump, against its 60 to 120 min
+  cadence: it was scheduled on the clock that ran ahead. The probe
+  follows rounds, so the inbound facet rested on the evidence from before
+  the jump until then; the next probe arrived.
+- **Seen in the stop path, not this round's:** the C++ remnant's
+  teardown throws `std::out_of_range` from `on_connection_close` on most
+  stops, caught; two stops never exited, one 23 s after a Tor respawn
+  during sync and one after 4 h 40 min of steady running (FOLLOWUPS,
+  `DAEMON_CONFIG_CUTOVER.md` §2.2).
+
 | Case | Expected | Apparatus |
 | --- | --- | --- |
 | kill the Tor child | respawn; the same onion republished; the dialer resumes; no draws while down | a kill by PID (`kill -9`, `taskkill /F`) |
@@ -1065,7 +1112,7 @@ run's conditions are in `shekyl-dev`, `data/tsr-preflight/2026-10-19*/`.
 | `TSR-M5` | Tor's file descriptors at load; the limit the child inherits. **Measured 2026-10-19** under `TSR-M4`'s load: **36 to 38** open; soft limit 524288 as launched; idle 13 to 15 | the descriptor budget |
 | `TSR-M6` | when Tor first writes `state` after bootstrap under `AvoidDiskWrites 1`, and whether a kill loses guard changes made since. **Measured 2026-10-19**: the first write came 603.8 s and 601.9 s after bootstrap, then about every 610 s. A clean exit saved all 20 guards; a kill wrote nothing at exit, leaving the last periodic write's 20. x86: 602.1 and 603.7 s. A Tor killed before its first write leaves a respawn to sample new guards: that window is the re-roll still open to an attacker who can crash Tor early | whether the kept directory needs more than `TSR-Q1` gives it |
 | `TSR-M7` | descriptor upload time after `ADD_ONION` and after a republish. **Measured 2026-10-19**: the first `UPLOADED` 4.43 s after `ADD_ONION`, 3.53 s after a respawn into the kept directory republished the held key; 1 of 13 uploads in the republish round failed, the case `TSR-Q5`'s rounds absorb. x86: 3.11 and 4.58 s | the upload bound |
-| `TSR-M8` | the monotonic clock across suspend on Windows and macOS | suspend handling |
+| `TSR-M8` | the monotonic clock across suspend on Windows and macOS (both measured). **Windows, measured 2026-10-30** (Rick's laptop, bare metal, Windows 11 23H2 build 22631.7652; Modern Standby, the only sleep its firmware offers; one run, on mains; shekyl-dev `data/tsr-m8/2026-10-30-windows/`): `std::time::Instant` (`QueryPerformanceCounter`) kept counting through a 206.5 s standby, and wall and monotonic time agreed to 30.5 µs across it, with no step over the run. So on Windows every deadline armed before a sleep comes due at once on wake, and a window that included the sleep would misfire: a reply outstanding at the sleep would be late, a stall window held across it past its bound, a probe in flight past its own. The supervisor therefore counts awake time on every platform (§5, "Resumed from suspend"; Rick, 2026-10-30): a timer it was waiting on that fires more than 10 s late is a resume, and every window starts again from the wake. A deadline left late because the driver was inside another ask is overdue work, not a resume. On Linux `Instant` is `CLOCK_MONOTONIC`, which stops during suspend: a timer the driver was waiting on is not late, and the windows stay where they stood (the VM suspend of 2026-10-30, §7). Not covered on Windows: S3 (absent there), hibernate, a standby long enough to fall into hibernate, battery. **macOS, measured 2026-10-31** (the Foundation's macOS build host, a Mac mini M2 Pro, macOS 27.0.1; on mains; the same program; shekyl-dev `data/tsr-m8/2026-10-31-macos/`): `Instant` stopped during a 302 s sleep (`pmset sleepnow`, woken by a scheduled RTC alarm): wall time advanced 301.747 s and `Instant` 1.007 s. macOS behaves as Linux does: a waited timer is not late, and the windows stay where they stood. Not covered on macOS: battery, standby (off on that host), Intel Macs | suspend handling |
 | `TSR-M9` | no onion address in the daemon Tor's log events at `notice`. **Measured 2026-10-19**: 0 of 36 `NOTICE`/`WARN`/`ERR` events carried one, across a publish, 40 probes and a republish. x86: 0 of 33 | the log category |
 | `TSR-M10` | the delete time of a used `DataDirectory` on the floor device's storage. **Measured 2026-10-19**: 100 used cold directories, p50 11 ms, max 13 ms each. x86: max 7 ms | the tombstone delete bound |
 | `TSR-M11` | on Windows, whether a killed and reaped `tor.exe` has released its `DataDirectory` files (`lock`, `state`, `tor.log`) when the reap returns. **Measured 2026-10-16** (Windows 11 23H2, Defender real-time protection on; the pinned 15.0.24 `tor.exe`, launched as #1083 does): 0 failures in 400, by kill and by owner-close, each followed at once by the tombstone rename and by a recursive delete. Every file is released by the time `WaitForSingleObject` returns | a respawn into the kept directory (`TSR-Q1`) and the tombstone rename (§4.7) do not wait for the directory's files once the reap has returned |
@@ -1097,9 +1144,8 @@ stop path, not a bound.
 before increment 3 (§12), the first increment whose code uses a bound they set;
 increment 2 uses none. They were taken on 2026-10-19, after the re-pin, on the Tor that ships
 (0.4.9.14), the Pi 4 setting each value (the table above); `TSR-M11` is measured
-(above). `TSR-M2` is measured (2026-10-22, above). `TSR-M8` needs the
-suspend apparatus, and is measured on the implementation branch before its
-PR leaves draft.
+(above). `TSR-M2` is measured (2026-10-22, above). `TSR-M8` is measured on
+Windows (2026-10-30) and macOS (2026-10-31, §10).
 
 **Seeded start (`TSR-Q8`), measured on an x86 dev box 2026-10-19 and
 2026-10-20** (tor 0.4.9.14; raw rows in `shekyl-dev`,
@@ -1206,7 +1252,7 @@ are fixed before the work starts:
    and the one typed read and renderer are `shekyl-tor-control-client`'s
    `supervisor` module. `TSR-M2` is recorded (2026-10-22); the driver's base
    stays 1 s and its cap stays 60 s. `TSR-M8` (the monotonic clock across
-   suspend) is not recorded yet. Health and `OwnTx` project the relay's
+   suspend) is recorded on Windows and macOS (§10). Health and `OwnTx` project the relay's
    hop-0 verdict (`OriginVerdict`), folded as `Input::AddressHidingOrigin`
    (`GS-Q3`, the GUI sync lane's `GS-C1`); the link is the phase and
    `Syncing.tor`.
@@ -1268,6 +1314,6 @@ Examined and found nothing to change: the pin gate and TB-7's launch
 environment; the `shekyl-socks` client, which keeps the reply byte the
 evidence attribution needs. Not examined, and next round's scope: the Windows
 and macOS process and filesystem behaviour this design assumes (rename after
-reap, kill semantics, the monotonic clock across suspend), which only §7 and
-`TSR-M8` can settle; and the wallet's Tor under the same standard, which is
+reap, kill semantics), which only §7 can settle (the monotonic clock across
+suspend is settled, `TSR-M8`); and the wallet's Tor under the same standard, which is
 outside this brief.

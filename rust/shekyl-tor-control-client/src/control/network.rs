@@ -34,11 +34,18 @@ pub struct NetworkView {
 }
 
 impl NetworkView {
-    /// Either key answered in the negative. Unknown is not a negative, so
-    /// one unknown key does not name a blocked link by itself.
+    /// Tor's own liveness verdict is negative: `network-liveness=down`.
+    /// That is Tor's statement about its network (`TSR-Q14`).
+    ///
+    /// No circuit established is not: Tor drops its circuits on purpose
+    /// after a clock jump and says why (`CLOCK_JUMPED`), and during a refused
+    /// block it kept reporting one established (§7, 2026-10-25). Reading
+    /// "no circuit" as "blocked" was our inference, and after a resume it
+    /// named a block that was not there (§7, the VM suspend of 2026-10-30).
+    /// The circuit key is display only.
     #[must_use]
     pub const fn reports_blocked(self) -> bool {
-        matches!(self.liveness, Reported::No) || matches!(self.circuits, Reported::No)
+        matches!(self.liveness, Reported::No)
     }
 
     /// Both keys answered in the affirmative: Tor says it reaches its network.

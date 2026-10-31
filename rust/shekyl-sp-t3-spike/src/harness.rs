@@ -997,8 +997,8 @@ impl Apparatus {
         .await
         .map_err(|e| match e {
             AskError::Timeout => ApparatusError::NewnymUnanswered,
-            AskError::Control(c) => ApparatusError::Control(c.to_string()),
-            AskError::ActorGone => {
+            AskError::Control { error, .. } => ApparatusError::Control(error.to_string()),
+            AskError::ActorGone { .. } => {
                 ApparatusError::Control("tor control actor gone during SIGNAL NEWNYM".to_owned())
             }
         })?;

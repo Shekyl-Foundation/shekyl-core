@@ -173,6 +173,29 @@ impl Core {
         wait.into_iter().chain(stuck).min()
     }
 
+    /// The machine slept (§5, "Resumed from suspend"). A probe in flight
+    /// gets its whole bound from the wake. A scheduled probe waits at least
+    /// the delay's floor, so it does not dial while Tor rebuilds the
+    /// circuits it closed (7 s in the VM suspend, §7). An open round's
+    /// waits start again from the wake.
+    pub(super) fn probe_resumed(&mut self, now: u64) {
+        match &mut self.probe {
+            Probe::InFlight { bound_at, .. } => {
+                *bound_at = now.saturating_add(duration_ns(self.policy.probe_within));
+            }
+            Probe::Scheduled { at, .. } => {
+                *at = (*at).max(now.saturating_add(duration_ns(self.policy.probe_after_min)));
+            }
+            Probe::Idle | Probe::Refetching => {}
+        }
+        if let Some(track) = &mut self.round {
+            track.started_at = now;
+            if let Some((first_at, _)) = &mut track.first {
+                *first_at = now;
+            }
+        }
+    }
+
     /// The open round's deadline fired. Its wait ran out: the probe goes
     /// ahead with the first upload's draw. It has been open too long: it is
     /// counted, and the driver says so once and ends it in the coalescer.

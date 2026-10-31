@@ -200,6 +200,10 @@ pub struct BootstrapProblem {
     pub count: Option<u32>,
     /// `RECOMMENDATION=`. Tor sends `warn` from the tenth problem at a phase.
     pub recommendation: Recommendation,
+    /// `HOSTID=`, the relay the failed connection was to. `None` when Tor
+    /// sent `?` (the problem had no relay connection) or the value is not a
+    /// fingerprint.
+    pub host: Option<RelayFingerprint>,
 }
 
 /// A bootstrap problem's `RECOMMENDATION=`.
@@ -402,6 +406,7 @@ fn bootstrap(fields: &Fields) -> Bootstrap {
             Some("warn") => Recommendation::Warn,
             _ => Recommendation::Other,
         },
+        host: fields.value("HOSTID").and_then(RelayFingerprint::parse),
     });
     Bootstrap {
         // A percentage: a number above 100 is malformed, as `bootstrap` reads it.
@@ -562,9 +567,28 @@ mod tests {
                     reason: Some("CONNECTREFUSED".to_owned()),
                     count: Some(10),
                     recommendation: Recommendation::Warn,
+                    host: RelayFingerprint::parse("24E2F139121D4394C54B5BCC368B3B411857C413"),
                 }),
             })
         );
+    }
+
+    /// A problem with no relay connection carries `HOSTID="?"`: no relay.
+    #[test]
+    fn a_problem_without_a_relay_names_none() {
+        let (_, status) = client(
+            "STATUS_CLIENT WARN BOOTSTRAP PROGRESS=5 TAG=conn SUMMARY=\"Connecting to a relay\" \
+             WARNING=\"No route to host\" REASON=NOROUTE COUNT=1 RECOMMENDATION=warn \
+             HOSTID=\"?\" HOSTADDR=\"?\"",
+        );
+        let ClientStatus::Bootstrap(Bootstrap {
+            problem: Some(problem),
+            ..
+        }) = status
+        else {
+            panic!("a bootstrap problem: {status:?}");
+        };
+        assert_eq!(problem.host, None);
     }
 
     #[test]

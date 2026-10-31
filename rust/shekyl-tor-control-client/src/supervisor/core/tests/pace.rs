@@ -167,7 +167,9 @@ fn a_cause_and_the_pace_are_said_together() {
     let cause = text
         .find("cannot reach the Tor network")
         .expect("the cause");
-    let fix = text.find("Check the firewall").expect("the fix");
+    let fix = text
+        .find("Check this computer's date and time")
+        .expect("the fix, the clock first");
     let stall = text.find("Nothing arrived").expect("the stall");
     assert!(
         cause < fix && fix < stall,
