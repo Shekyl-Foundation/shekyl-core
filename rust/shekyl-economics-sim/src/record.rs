@@ -186,7 +186,7 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
 
     let params = sim.economic();
 
-    let blocks_per_year = sim.blocks_per_year;
+    let blocks_per_year = sim.blocks_per_year();
     let total_blocks = blocks_per_year * config.sim_years;
     let samples = sample_heights(blocks_per_year, config.sim_years);
 
@@ -208,7 +208,7 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
                 closed_shards: ClosedShardCount::ZERO,
             },
             &sim,
-            &params,
+            params,
         );
         outputs.accrue(priced.filled.included);
 
@@ -226,9 +226,9 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
             };
             let multiplier = calc_release_multiplier(
                 priced.volume,
-                sim.tx_volume_baseline,
-                sim.release_min,
-                sim.release_max,
+                sim.economic().tx_volume_baseline,
+                sim.economic().release_min,
+                sim.economic().release_max,
             );
             // Pool-weighted total: at V3.0 the sim has no separate
             // weighted aggregate, so the principal `total_staked` stands
@@ -237,7 +237,7 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
             records.push(RecordedRow {
                 height: block,
                 already_generated_coins: ag_start,
-                base_block_reward: base_block_reward(ag_start, &params)
+                base_block_reward: base_block_reward(ag_start, params)
                     .expect("sim neutral trajectory stays within the arithmetic domain"),
                 release_multiplier_milli: multiplier / 1000,
                 tx_volume: priced.filled.included,
@@ -263,14 +263,14 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
         (5 * blocks_per_year, "≈5 yr"),
         (10 * blocks_per_year, "≈10 yr"),
         (
-            half_emitted_height(&params),
+            half_emitted_height(params),
             "first height with half the asymptote emitted (≈ yr 11 at ESF 22 per block)",
         ),
     ]
     .into_iter()
     .map(|(height, note)| NeutralMilestone {
         height,
-        base_emission_at_neutral: base_emission_at(height, &params)
+        base_emission_at_neutral: base_emission_at(height, params)
             .expect("neutral projection stays within supply bounds"),
         note: note.to_string(),
     })
@@ -284,7 +284,7 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
 
     RecordedChainFixture {
         calibration_generation: shekyl_economics::CALIBRATION_GENERATION,
-        params_digest: digest_label(&params_digest(&params)),
+        params_digest: digest_label(&params_digest(params)),
         scenario: config.name,
         staking_state: staking_state.to_string(),
         records,

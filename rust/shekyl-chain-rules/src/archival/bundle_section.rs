@@ -17,7 +17,7 @@ use core::fmt;
 
 use shekyl_archival_retention::{
     bundle_root, section_budget, section_d_max, BundleRef, BundleWireError, DrawableEpoch,
-    SettlementSchedule, TooManyReferences, BUNDLE_SECTION_BUDGET_MULTIPLE,
+    SettlementSchedule, TooManyReferences,
 };
 use shekyl_types::BlockHeight;
 
@@ -263,7 +263,11 @@ pub fn check_section<V: BundleView>(
     let Some(d_max) = d_max else {
         return Ok(SectionStanding::Awaiting(charge));
     };
-    let cap = section_budget(BUNDLE_SECTION_BUDGET_MULTIPLE, d_max, schedule.blocks());
+    let cap = section_budget(
+        shekyl_archival_retention::archival_params(),
+        d_max,
+        schedule.blocks(),
+    );
     if charge.within(cap) {
         Ok(SectionStanding::Admitted(charge))
     } else {

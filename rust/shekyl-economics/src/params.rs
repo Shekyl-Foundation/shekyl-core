@@ -12,8 +12,11 @@ include!(concat!(env!("OUT_DIR"), "/params_generated.rs"));
 /// of 120 s divides the year exactly (262 800). A zero target cannot
 /// divide, and the const evaluation of [`BLOCKS_PER_YEAR`] refuses it.
 pub const fn blocks_per_year(daa_target_seconds: u64) -> u64 {
-    (365 * 86_400) / daa_target_seconds
+    SECONDS_PER_YEAR / daa_target_seconds
 }
+
+/// Seconds in the 365-day year [`blocks_per_year`] divides.
+pub const SECONDS_PER_YEAR: u64 = 365 * 86_400;
 
 pub const SCALE: u64 = GENERATED_SCALE;
 
@@ -169,6 +172,10 @@ pub enum EconomicParamsError {
     /// Emission schedule rejected by [`EmissionSchedule::try_new`](crate::emission_share::EmissionSchedule::try_new).
     #[error(transparent)]
     Schedule(#[from] crate::emission_share::EmissionScheduleError),
+    /// Block-weight governor rejected by
+    /// [`BlockWeightGovernor::try_new`](crate::block_weight::BlockWeightGovernor::try_new).
+    #[error(transparent)]
+    BlockWeight(#[from] crate::block_weight::BlockWeightShapeError),
 }
 
 /// Deserialization shim — every `EconomicParams` that arrives from serde is
@@ -195,7 +202,9 @@ struct EconomicParamsWire {
     full_reward_zone: u64,
     staker_emission_share: u64,
     staker_emission_decay: u64,
-    blocks_per_year: u64,
+    block_weight_surge_factor: u64,
+    block_weight_limit_multiple: u64,
+    long_term_weight_clamp: u64,
 }
 
 impl TryFrom<EconomicParamsWire> for EconomicParams {
@@ -218,7 +227,9 @@ impl TryFrom<EconomicParamsWire> for EconomicParams {
             full_reward_zone: w.full_reward_zone,
             staker_emission_share: w.staker_emission_share,
             staker_emission_decay: w.staker_emission_decay,
-            blocks_per_year: w.blocks_per_year,
+            block_weight_surge_factor: w.block_weight_surge_factor,
+            block_weight_limit_multiple: w.block_weight_limit_multiple,
+            long_term_weight_clamp: w.long_term_weight_clamp,
         };
         p.validate()?;
         Ok(p)
@@ -271,11 +282,24 @@ pub struct EconomicParams {
     /// Per-year decay of [`Self::staker_emission_share`], in [`SCALE`] units
     /// (`900_000` = 0.90 of the previous year). At most [`SCALE`].
     pub staker_emission_decay: u64,
-    /// Blocks in one year of the emission schedule. At least one.
-    /// Production's is [`blocks_per_year`] of [`Self::daa_target_seconds`]
-    /// ([`BLOCKS_PER_YEAR`]). A fold may set another length; the digest
-    /// then differs, which is what makes the year a chain parameter.
-    pub blocks_per_year: u64,
+    /// Short-term surge factor `S`: the effective median is the short-term
+    /// median clamped to `[LTEM, S · LTEM]`
+    /// ([`effective_median`](crate::effective_median)). At least one.
+    /// Authority: `config/consensus_constants.json`
+    /// `block_weight_short_term_surge_factor` (ratified 4, C2-R2 Q3).
+    pub block_weight_surge_factor: u64,
+    /// The block-weight limit as a multiple of the effective median, in
+    /// [`SCALE`] units (`2_000_000` is the ratified 2×). The weight penalty
+    /// reaches zero at the same multiple
+    /// ([`block_weight_limit`](crate::block_weight_limit)). Authority:
+    /// `block_weight_limit_multiple_scaled`.
+    pub block_weight_limit_multiple: u64,
+    /// A block's long-term weight is its weight clamped to
+    /// `[LTEM · SCALE / c, LTEM · c / SCALE]`, `c` this field in [`SCALE`]
+    /// units (`1_700_000` is the inherited 1.7;
+    /// [`long_term_weight`](crate::long_term_weight)). Authority:
+    /// `block_weight_long_term_clamp_scaled`.
+    pub long_term_weight_clamp: u64,
 }
 
 impl Default for EconomicParams {
@@ -296,7 +320,9 @@ impl Default for EconomicParams {
             full_reward_zone: FULL_REWARD_ZONE,
             staker_emission_share: STAKER_EMISSION_SHARE,
             staker_emission_decay: STAKER_EMISSION_DECAY,
-            blocks_per_year: blocks_per_year(GENERATED_DAA_TARGET_SECONDS),
+            block_weight_surge_factor: GENERATED_BLOCK_WEIGHT_SURGE_FACTOR,
+            block_weight_limit_multiple: GENERATED_BLOCK_WEIGHT_LIMIT_MULTIPLE,
+            long_term_weight_clamp: GENERATED_BLOCK_WEIGHT_LONG_TERM_CLAMP,
         };
         // Build-generated constants must satisfy the frozen shape; the unit test
         // `shipped_defaults_are_well_formed` is the loud gate, this is the
@@ -339,13 +365,38 @@ impl EconomicParams {
     /// [`EmissionSchedule::try_new`](crate::emission_share::EmissionSchedule::try_new).
     /// One predicate body each, no restated rules.
     ///
-    /// Does **not** opine on which asymptote is correct (§11.4 ceremony),
-    /// and does **not** require [`Self::blocks_per_year`] to equal
-    /// [`blocks_per_year`] of [`Self::daa_target_seconds`]. The shipped set
-    /// has that equality. A fold's year is the field.
+    /// The block-weight governor delegates to
+    /// [`BlockWeightGovernor::try_new`](crate::block_weight::BlockWeightGovernor::try_new).
+    ///
+    /// Does **not** opine on which asymptote is correct (§11.4 ceremony).
     pub fn validate(&self) -> Result<(), EconomicParamsError> {
         self.try_emission_schedule()?;
+        self.try_block_weight_governor()?;
         self.try_escalation().map(|_| ())
+    }
+
+    /// Blocks in one year of the emission schedule:
+    /// [`blocks_per_year`] of [`Self::daa_target_seconds`]. A fold with
+    /// another year sets another DAA target, which is the one coherent way
+    /// to have one: the tail per block moves with it. A zero target has
+    /// no year and reads as zero, which [`Self::validate`] refuses.
+    #[must_use]
+    pub const fn blocks_per_year(&self) -> u64 {
+        match SECONDS_PER_YEAR.checked_div(self.daa_target_seconds) {
+            Some(blocks) => blocks,
+            None => 0,
+        }
+    }
+
+    /// The block-weight governor these fields are.
+    pub fn try_block_weight_governor(
+        &self,
+    ) -> Result<crate::block_weight::BlockWeightGovernor, EconomicParamsError> {
+        Ok(crate::block_weight::BlockWeightGovernor::try_new(
+            self.block_weight_surge_factor,
+            self.block_weight_limit_multiple,
+            self.long_term_weight_clamp,
+        )?)
     }
 
     /// The emission schedule these fields are.
@@ -369,7 +420,7 @@ impl EconomicParams {
         Ok(crate::emission_share::EmissionSchedule::try_new(
             self.staker_emission_share,
             self.staker_emission_decay,
-            self.blocks_per_year,
+            self.blocks_per_year(),
         )?)
     }
 
@@ -491,21 +542,22 @@ mod tests {
 mod escalation_param_tests {
     use super::*;
 
-    /// `daa_target_seconds` in this document is 10. The year is
-    /// `blocks_per_year(10)`, not a second key.
+    /// `daa_target_seconds` in this document is 10, so its year is
+    /// `blocks_per_year(10)`, derived and not a key.
     fn valid_json(asymptote: u64, floor: u64) -> String {
-        params_json(asymptote, floor, 150_000, 900_000, blocks_per_year(10))
+        params_json(asymptote, floor, 150_000, 900_000, 10)
     }
 
-    fn params_json(asymptote: u64, floor: u64, share: u64, decay: u64, year: u64) -> String {
+    fn params_json(asymptote: u64, floor: u64, share: u64, decay: u64, daa: u64) -> String {
         format!(
             r#"{{"release_min":1,"release_max":2,"tx_volume_baseline":3,
                 "burn_base_rate":4,"burn_cap":5,"staker_pool_share":{floor},
                 "emission_curve_asymptote":7,"emission_speed_factor_per_block":8,
-                "final_subsidy_per_minute":9,"daa_target_seconds":10,"full_reward_zone":300000,
+                "final_subsidy_per_minute":9,"daa_target_seconds":{daa},"full_reward_zone":300000,
                 "escalation_knee_n":100000,"escalation_asymptote_share":{asymptote},
                 "staker_emission_share":{share},"staker_emission_decay":{decay},
-                "blocks_per_year":{year}}}"#
+                "block_weight_surge_factor":4,"block_weight_limit_multiple":2000000,
+                "long_term_weight_clamp":1700000}}"#
         )
     }
 
@@ -539,7 +591,7 @@ mod escalation_param_tests {
             250_000,
             SCALE + 1,
             900_000,
-            blocks_per_year(10),
+            10,
         ))
         .expect_err("a share above SCALE is not a schedule");
         assert!(
@@ -551,7 +603,7 @@ mod escalation_param_tests {
             250_000,
             150_000,
             SCALE + 1,
-            1,
+            SECONDS_PER_YEAR,
         ))
         .expect_err("a decay above SCALE is not a schedule");
         assert!(
@@ -561,7 +613,7 @@ mod escalation_param_tests {
         let year = serde_json::from_str::<EconomicParams>(&params_json(
             250_000, 250_000, 150_000, 900_000, 0,
         ))
-        .expect_err("a year of no blocks is not a schedule");
+        .expect_err("a DAA target of zero has no year, so no schedule");
         assert!(
             year.to_string().contains("no year"),
             "error must name the year: {year}"
@@ -593,12 +645,12 @@ mod escalation_param_tests {
         let esc = EconomicParams::default().escalation();
         assert_eq!(esc.floor_share().to_raw(), GENERATED_STAKER_POOL_SHARE);
         let shipped = EconomicParams::default();
-        assert_eq!(shipped.blocks_per_year, 262_800);
+        assert_eq!(shipped.blocks_per_year(), 262_800);
         assert_eq!(
-            shipped.blocks_per_year,
+            shipped.blocks_per_year(),
             blocks_per_year(shipped.daa_target_seconds)
         );
-        assert_eq!(BLOCKS_PER_YEAR, shipped.blocks_per_year);
+        assert_eq!(BLOCKS_PER_YEAR, shipped.blocks_per_year());
         assert_eq!(shipped.staker_emission_share, STAKER_EMISSION_SHARE);
         assert_eq!(shipped.staker_emission_decay, STAKER_EMISSION_DECAY);
         assert_eq!(economic_params(), &shipped);

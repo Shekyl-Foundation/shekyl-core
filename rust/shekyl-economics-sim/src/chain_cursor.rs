@@ -97,7 +97,7 @@ impl ChainCursor {
     pub(crate) fn price<'a>(
         &mut self,
         step: ChainStep,
-        params: &SimParams,
+        params: &'a SimParams,
         economic: &'a EconomicParams,
     ) -> PricedBlock<'a> {
         let volume = self.window.operand();
@@ -115,6 +115,7 @@ impl ChainCursor {
             burn_pct_scaled: burn_pct,
             chain_leaves: step.leaves,
             params: economic,
+            relay: params.relay(),
         };
         let tx = params.fee.ordinary_tx(&fee_point);
         let filled = self
@@ -167,19 +168,19 @@ mod tests {
         let mut generated = 0u128;
         let mut burned = 0u128;
         let mut leaves = 0u64;
-        for block in 0..params.blocks_per_year {
+        for block in 0..params.blocks_per_year() {
             let priced = cursor.price(
                 ChainStep {
                     fold_height: block,
                     chain_height: block,
-                    demand: params.tx_volume_baseline,
+                    demand: params.economic().tx_volume_baseline,
                     leaves,
                     already_generated: generated,
                     total_burned: burned,
                     closed_shards: ClosedShardCount::new(0),
                 },
                 &params,
-                &economic,
+                economic,
             );
             assert_eq!(
                 priced.tx.fee_atomic % FEE_QUANTIZATION_MASK,
@@ -191,6 +192,63 @@ mod tests {
             burned = burned.saturating_add(u128::from(priced.paid.fee_burn.actually_destroyed));
             leaves = leaves.saturating_add(priced.filled.included.saturating_mul(2));
         }
+    }
+
+    /// E16-9. At `relay.fee_decimal_places = 8` every production-arm fee in
+    /// one baseline year is a multiple of 10 atomic, and the run's admission
+    /// accepts every one at that block's Economy rung. Some fee is off the
+    /// shipped 1 000-atomic lattice, so the run's lattice, not the shipped
+    /// one, is what priced it: a pricer that ignored the override would pass
+    /// the first two checks and fail this one.
+    #[test]
+    fn a_finer_lattice_reaches_the_fee_and_admission_takes_it() {
+        let params = SimParams::with_overrides(vec![crate::baseline::Override::parse(
+            "relay.fee_decimal_places=8",
+        )
+        .expect("well-formed")])
+        .expect("eight decimals pass the relay validator");
+        assert_eq!(params.relay().quantization_mask(), Some(10));
+        let economic = params.economic();
+        let mut cursor = ChainCursor::default();
+        let (mut generated, mut burned, mut leaves) = (0u128, 0u128, 0u64);
+        let mut off_the_shipped_lattice = 0u64;
+        for block in 0..params.blocks_per_year() {
+            let priced = cursor.price(
+                ChainStep {
+                    fold_height: block,
+                    chain_height: block,
+                    demand: economic.tx_volume_baseline,
+                    leaves,
+                    already_generated: generated,
+                    total_burned: burned,
+                    closed_shards: ClosedShardCount::new(0),
+                },
+                &params,
+                economic,
+            );
+            let fee = priced.tx.fee_atomic;
+            assert_eq!(
+                fee % 10,
+                0,
+                "block {block} fee {fee} is off the run's lattice"
+            );
+            let economy = params.fee.admission_rate(&priced.fee_point).atomic();
+            assert!(
+                params.relay().admits(fee, priced.tx.weight, &[economy]),
+                "block {block}: fee {fee} at weight {} refused at Economy {economy}",
+                priced.tx.weight
+            );
+            if fee % FEE_QUANTIZATION_MASK != 0 {
+                off_the_shipped_lattice += 1;
+            }
+            generated = generated.saturating_add(u128::from(priced.paid_reward()));
+            burned = burned.saturating_add(u128::from(priced.paid.fee_burn.actually_destroyed));
+            leaves = leaves.saturating_add(priced.filled.included.saturating_mul(2));
+        }
+        assert!(
+            off_the_shipped_lattice > 0,
+            "every fee sat on the shipped lattice: the override did not reach the pricer"
+        );
     }
 
     /// The operand is the blocks before this one: an empty window at the
@@ -211,7 +269,7 @@ mod tests {
                 closed_shards: ClosedShardCount::ZERO,
             },
             &params,
-            &economic,
+            economic,
         );
         assert_eq!(first.volume, TxVolume::window(0, 0));
         assert_eq!(first.filled.included, 5, "five fit under the zone");
@@ -226,7 +284,7 @@ mod tests {
                 closed_shards: ClosedShardCount::ZERO,
             },
             &params,
-            &economic,
+            economic,
         );
         assert_eq!(second.volume, TxVolume::window(5, 1));
     }

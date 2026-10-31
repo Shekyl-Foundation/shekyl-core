@@ -173,7 +173,6 @@ Term hygiene: "rotation" is a §11.8 defect on a noun — rename to "activation"
 PQC Multisig: MSW-6 landing residue.
 PQC Multisig : Option-D residue left standing after the F-6
 PQC Multisig : external adversarial review (Phase 5).
-Rename `RETENTION_HORIZON_BLOCKS` (hygiene, C2-R1b residue).
 Threshold signatures: one missing primitive, two named customers (ruled 2026-09-03).
 PQC Multisig : cryptographer review (Phase 6).
 PQC Multisig : headless co-signer service.

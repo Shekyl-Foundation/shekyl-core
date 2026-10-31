@@ -682,7 +682,12 @@ pub unsafe extern "C" fn shekyl_archival_claimed_epochs_check_and_set(
     if !set.windows(2).all(|w| w[0] < w[1]) {
         return SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ERR_INVALID;
     }
-    match claimed_epochs_check_and_set(&mut set, epoch, current_settled_epoch) {
+    match claimed_epochs_check_and_set(
+        &mut set,
+        epoch,
+        current_settled_epoch,
+        shekyl_archival_retention::archival_params(),
+    ) {
         Ok(true) => {
             // Fail closed rather than overrun: the window prune bounds the set
             // below `set_cap` in practice, but a debug_assert vanishes in
@@ -701,5 +706,36 @@ pub unsafe extern "C" fn shekyl_archival_claimed_epochs_check_and_set(
         Ok(false) => SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ALREADY_CLAIMED,
         Err(ClaimedEpochsError::NotSettled) => SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ERR_NOT_SETTLED,
         Err(ClaimedEpochsError::Expired) => SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ERR_EXPIRED,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The C++ header's `SHEKYL_EMISSION_MAX_SETTLEMENT_EPOCHS` sizes the
+    /// epoch buffers its callers hand [`super::shekyl_archival_emission_vin_extract`];
+    /// it is a hand-written mirror of the generated
+    /// [`shekyl_archival_retention::MAX_SETTLEMENT_EPOCHS_PER_EMISSION`]. A key
+    /// raised without the header would make every C++ caller's buffer too short
+    /// for a vin the parse accepts, so the extract would refuse it on capacity.
+    #[test]
+    fn the_headers_epoch_buffer_is_the_wire_cap() {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src/shekyl/shekyl_ffi.h");
+        let header = std::fs::read_to_string(&path).expect("the emission entry's header");
+        let mut defined = None;
+        for line in header.lines() {
+            let mut words = line.split_whitespace();
+            if words.next() == Some("#define")
+                && words.next() == Some("SHEKYL_EMISSION_MAX_SETTLEMENT_EPOCHS")
+            {
+                let value = words.next().expect("the define carries a value");
+                defined = Some(value.parse::<usize>().expect("a decimal cap"));
+            }
+        }
+        assert_eq!(
+            defined,
+            Some(shekyl_archival_retention::MAX_SETTLEMENT_EPOCHS_PER_EMISSION),
+            "SHEKYL_EMISSION_MAX_SETTLEMENT_EPOCHS in shekyl_ffi.h"
+        );
     }
 }

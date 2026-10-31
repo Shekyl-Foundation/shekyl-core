@@ -588,7 +588,7 @@ impl InfoFacts for StoreFacts {
             cumulative_difficulty: info.cumulative_difficulty.to_raw(),
             difficulty_target: shekyl_difficulty::T_SECONDS,
             total_transactions: snap.tx_count().map_err(store_fault)?,
-            block_weight_limit: medians.limit().to_raw(),
+            block_weight_limit: medians.limit(shekyl_economics::economic_params()).to_raw(),
             block_weight_median: medians.effective_median.to_raw(),
             adjusted_time: adjusted_time(&view, next, info.timestamp.to_raw(), self.node.now())?,
             already_generated_coins: info.coins_generated,

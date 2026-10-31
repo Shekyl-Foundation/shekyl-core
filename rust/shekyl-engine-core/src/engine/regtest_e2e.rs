@@ -4302,7 +4302,13 @@ async fn stake_persona_and_submit_bond(
         },
         FixtureStake::MarketBond(h) => h.clone(),
     };
-    let funding = AtomicUnits::from_raw(bond_floor(&floor_holdings) + bond_fee + funding_cushion);
+    let funding = AtomicUnits::from_raw(
+        bond_floor(
+            &floor_holdings,
+            shekyl_archival_retention::archival_params(),
+        ) + bond_fee
+            + funding_cushion,
+    );
     mine_until_unlocked_at_least(
         daemon,
         &arc,
@@ -5757,7 +5763,10 @@ async fn e2e_release_accepted_and_connected() {
         shard_ids: shekyl_archival_retention::ShardSet::new(vec![SHARD_ID])
             .expect("one-shard holdings"),
     };
-    let expected_bonded = bond_floor(&market_holdings);
+    let expected_bonded = bond_floor(
+        &market_holdings,
+        shekyl_archival_retention::archival_params(),
+    );
     let fixture = stake_persona_to_confirmed_bond(
         &daemon,
         &seed,
@@ -5977,7 +5986,10 @@ async fn e2e_unstake_collect_retire_composed_arc() {
         shard_ids: shekyl_archival_retention::ShardSet::new(vec![SHARD_ID])
             .expect("one-shard holdings"),
     };
-    let expected_bonded = bond_floor(&market_holdings);
+    let expected_bonded = bond_floor(
+        &market_holdings,
+        shekyl_archival_retention::archival_params(),
+    );
     let fixture = stake_persona_to_confirmed_bond(
         &daemon,
         &seed,

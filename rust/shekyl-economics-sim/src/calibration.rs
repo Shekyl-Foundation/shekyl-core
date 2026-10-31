@@ -51,6 +51,7 @@ use shekyl_tx_weight::{
 use shekyl_types::SHARD_LENGTH;
 
 use crate::burden::SHARD_BYTES;
+use shekyl_economics::RelayPolicy;
 
 // ── Rucknium March-2024 anchor (DQ-2C; report/calibration only) ──────────────
 /// Sustained duration of the incident, days (report §6). Weeks, not a burst.
@@ -113,8 +114,9 @@ pub fn tree_depth_for_leaves(n: u64) -> u8 {
 /// count on [`PerByteRate`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum FeePricer {
-    /// `quantized_fee`, seed 0: a no-change wallet spend.
-    Lattice,
+    /// [`RelayPolicy::quantize`] on the run's lattice, seed 0: a no-change
+    /// wallet spend under the run's relay policy.
+    Lattice(RelayPolicy),
     /// `checked_mul`, seed 0.
     Unrounded,
 }
@@ -146,12 +148,13 @@ impl Serialize for PerByteRate {
 }
 
 impl PerByteRate {
-    /// A production rate. The wallet's lattice prices it.
+    /// A production rate. The wallet's lattice under the run's relay
+    /// policy prices it.
     #[must_use]
-    pub const fn lattice(atomic_per_byte: u64) -> Self {
+    pub const fn lattice(atomic_per_byte: u64, relay: &RelayPolicy) -> Self {
         Self {
             atomic: atomic_per_byte,
-            pricer: FeePricer::Lattice,
+            pricer: FeePricer::Lattice(*relay),
         }
     }
 
@@ -225,9 +228,9 @@ impl Shape {
     pub fn tx_fee_atomic(self, tree_depth: u8, rate: PerByteRate) -> Option<u64> {
         let rate_per_weight = rate.atomic();
         match rate.pricer() {
-            FeePricer::Lattice => {
+            FeePricer::Lattice(relay) => {
                 converge_weight_fee_by(self.n_in, self.n_out, tree_depth, 0, |weight| {
-                    shekyl_economics::quantized_fee(weight, rate_per_weight)
+                    relay.quantize(weight, rate_per_weight)
                 })
             }
             FeePricer::Unrounded => {
@@ -482,6 +485,7 @@ pub fn sustained_stuffer_cost_per_shard_atomic(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::SimParams;
     use crate::fee_model::SECTION_12_13_ADMISSION_RATE as CONTROL;
 
     /// The relay floor at the penalty-free zone with `C = 1`, at the tail
@@ -502,13 +506,16 @@ mod tests {
 
         let params = EconomicParams::default();
         let floor_at = |reward: u64| {
-            PerByteRate::lattice(relay_fee_floor(
-                reward,
-                params.full_reward_zone,
-                RELAY_FLOOR_REFERENCE_TX_WEIGHT,
-                FeeCorrection::UNITY,
-                &params,
-            ))
+            PerByteRate::lattice(
+                relay_fee_floor(
+                    reward,
+                    params.full_reward_zone,
+                    RELAY_FLOOR_REFERENCE_TX_WEIGHT,
+                    FeeCorrection::UNITY,
+                    &params,
+                ),
+                shekyl_economics::relay_policy(),
+            )
         };
         let tail = floor_at(tail_subsidy_per_block(&params).expect("tail"));
         let genesis = floor_at(base_block_reward(0, &params).expect("genesis reward"));
@@ -668,7 +675,7 @@ mod tests {
         // The physical ceiling is argmax ⌊B/w⌋·archival over every shape; the
         // fee-per-byte argmin is a candidate, never above the max. At the
         // surge ceiling the two differ: whole transactions, finite block.
-        let block_weight = crate::swing::block_weight_penalty_free();
+        let block_weight = crate::swing::block_weight_penalty_free(&SimParams::default());
         let mut differs_somewhere = false;
         for depth in 2..=MAX_TREE_DEPTH {
             let best = max_archival_bytes_per_block(block_weight, depth, CONTROL);
@@ -775,18 +782,28 @@ mod tests {
 
     #[test]
     fn a_rate_keeps_the_pricer_it_was_minted_with() {
-        let floor = PerByteRate::lattice(20);
+        let floor = PerByteRate::lattice(20, shekyl_economics::relay_policy());
         let raised = floor.with_atomic(21);
-        assert_eq!(raised.pricer(), FeePricer::Lattice);
+        assert_eq!(
+            raised.pricer(),
+            FeePricer::Lattice(*shekyl_economics::relay_policy())
+        );
         assert_eq!(raised.atomic(), 21);
         assert_eq!(
             PerByteRate::unrounded(300).with_atomic(301).pricer(),
             FeePricer::Unrounded
         );
-        assert_ne!(PerByteRate::lattice(300), PerByteRate::unrounded(300));
-        assert!(PerByteRate::lattice(300) < PerByteRate::unrounded(300));
+        assert_ne!(
+            PerByteRate::lattice(300, shekyl_economics::relay_policy()),
+            PerByteRate::unrounded(300)
+        );
+        assert!(
+            PerByteRate::lattice(300, shekyl_economics::relay_policy())
+                < PerByteRate::unrounded(300)
+        );
         assert_eq!(
-            serde_json::to_string(&PerByteRate::lattice(300)).unwrap(),
+            serde_json::to_string(&PerByteRate::lattice(300, shekyl_economics::relay_policy()))
+                .unwrap(),
             "300"
         );
         assert_eq!(
@@ -797,7 +814,7 @@ mod tests {
 
     #[test]
     fn an_unrepresentable_rate_prices_no_shape() {
-        let rate = PerByteRate::lattice(u64::MAX);
+        let rate = PerByteRate::lattice(u64::MAX, shekyl_economics::relay_policy());
         let shape = Shape {
             n_in: InputCount::clamped(1),
             n_out: OutputCount::clamped(1),
@@ -806,7 +823,11 @@ mod tests {
         assert_eq!(stuffer_shape(1, rate), None);
         assert_eq!(stuffer_campaign(1_000, 1, rate), None);
         assert_eq!(
-            max_archival_bytes_per_block(crate::swing::block_weight_penalty_free(), 1, rate),
+            max_archival_bytes_per_block(
+                crate::swing::block_weight_penalty_free(&SimParams::default()),
+                1,
+                rate
+            ),
             0
         );
     }

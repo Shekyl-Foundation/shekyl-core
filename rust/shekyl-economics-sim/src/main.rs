@@ -1,4 +1,5 @@
 mod admission;
+mod baseline;
 mod block_space;
 mod budget;
 mod budget_scenarios;
@@ -65,12 +66,62 @@ use std::io::Write;
 /// flat fee per transaction, the fee the `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`
 /// §12.13–§12.14 tables were measured on. Without it the run charges the
 /// production ladder (`fee_model.rs`). Every such report names its arm.
+/// The run's overrides: every `--set set.field=value`, in order
+/// (`baseline.rs`). Parsed and applied before any mode runs.
+fn overrides_from_args() -> Result<Vec<baseline::Override>, baseline::OverrideError> {
+    let args: Vec<String> = std::env::args().collect();
+    let mut overrides = Vec::new();
+    let mut i = 1;
+    while i < args.len() {
+        if args[i] == "--set" {
+            let text = args.get(i + 1).map_or("", String::as_str);
+            overrides.push(baseline::Override::parse(text)?);
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    Ok(overrides)
+}
+
+/// Refuse a run and exit before any fold.
+fn refuse(reason: &str) -> ! {
+    eprintln!("shekyl-economics-sim: {reason}");
+    std::process::exit(2);
+}
+
 fn main() {
-    let params = if std::env::args().any(|a| a == "--control-flat-fee") {
-        SimParams::section_12_14_control()
-    } else {
-        SimParams::default()
+    let control = std::env::args().any(|a| a == "--control-flat-fee");
+    let arm = |mut params: SimParams| {
+        if control {
+            params.fee = SimParams::section_12_14_control().fee;
+        }
+        params
     };
+    let overrides = overrides_from_args().unwrap_or_else(|e| refuse(&e.to_string()));
+    let params =
+        arm(SimParams::with_overrides(overrides).unwrap_or_else(|e| refuse(&e.to_string())));
+
+    // Every report starts with the baseline's three digests and the run's
+    // overrides (ESR-16 completion, ruling 6).
+    let mut header = String::new();
+    baseline::write_header(&mut header, params.overrides()).expect("String sink is infallible");
+    eprint!("{header}");
+
+    // A sweep cell is a `--stage2` run: it alone prints a cell beside its
+    // baseline. Every other mode reads the shipped baseline, so an override
+    // there would change nothing it prints, or change it with no baseline
+    // beside it.
+    let stage2 = std::env::args().any(|a| a == "--stage2");
+    if !params.overrides().is_empty() && !stage2 {
+        refuse("overrides are read by --stage2 only: it prints a cell beside its baseline");
+    }
+    // An override on a field the mode's report does not read would print
+    // the baseline, which reads as "no effect": refused before the fold.
+    let (mode, reads) = baseline::stage2_reach(control);
+    if let Err(e) = baseline::check_reach(params.overrides(), params.baseline(), mode, reads) {
+        refuse(&e.to_string());
+    }
 
     if std::env::args().any(|a| a == "--fb1c-c2") {
         eprintln!("{}", params.fee.label());
@@ -159,7 +210,7 @@ fn main() {
         return;
     }
 
-    if std::env::args().any(|a| a == "--stage2") {
+    if stage2 {
         // The I/O boundary lives here, in the binary target: the arm modules
         // *render* into a sink (`fmt::Write`) and `main` performs the write.
         // That keeps each report next to the model it renders — the
@@ -168,7 +219,17 @@ fn main() {
         // construction rather than by exemption.
         let mut narration = String::new();
         stage2::run_stage2(&mut narration, &params).expect("String sink is infallible");
-        eprint!("{narration}");
+        if params.overrides().is_empty() {
+            eprint!("{narration}");
+        } else {
+            let mut baseline_narration = String::new();
+            stage2::run_stage2(&mut baseline_narration, &arm(SimParams::default()))
+                .expect("String sink is infallible");
+            eprint!(
+                "{}",
+                baseline::beside_baseline(&narration, &baseline_narration)
+            );
+        }
         return;
     }
 

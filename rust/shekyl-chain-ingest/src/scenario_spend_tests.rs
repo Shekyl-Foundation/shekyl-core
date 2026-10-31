@@ -385,7 +385,11 @@ async fn bodies_at_the_fills_bound_are_admitted() {
         coinbase_weight <= COINBASE_RESERVE,
         "the built coinbase is within the derived reserve"
     );
-    let limit = block.weights.medians.limit().to_raw();
+    let limit = block
+        .weights
+        .medians
+        .limit(&shekyl_economics::EconomicParams::default())
+        .to_raw();
     assert_eq!(
         limit,
         zone.saturating_mul(2),

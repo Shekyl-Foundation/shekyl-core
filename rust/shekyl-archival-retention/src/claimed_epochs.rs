@@ -25,30 +25,17 @@
 //! dead weight. An insert-only set would have a continuously-claiming honest
 //! `P` overflow the entry cap at roughly epoch `W + slack` (~15 months in).
 
-use crate::MAX_CLAIM_AGE_W;
+use crate::ArchivalParams;
 
-/// Entry cap on the at-rest set: claim window `W` plus reorg slack.
+/// Entry cap on the at-rest set: claim window `W` plus reorg slack, 32.
 ///
-/// §6.3 pins the cap at 32; the const assertion below keeps the derived form
-/// honest against the pin if `max_claim_age_w` ever moves in
-/// `config/consensus_constants.json`. The cap is unreachable through
+/// §6.3 pins the cap. Its one source is `shekyl-types`' decode bound
+/// ([`shekyl_types::archival::MAX_CLAIMED_EPOCH_ENTRIES`]), structural
+/// because it bounds stored bytes; the shipped `W + 6` equals it by test
+/// (`params.rs`). The cap is unreachable through
 /// [`claimed_epochs_check_and_set`] (a pruned, windowed set holds at most
 /// `W` entries); it bounds what an untrusted at-rest decode will accept.
-pub const MAX_CLAIMED_EPOCH_ENTRIES: u64 = MAX_CLAIM_AGE_W + 6;
-
-const _: () = assert!(
-    MAX_CLAIM_AGE_W == shekyl_types::archival::MAX_CLAIM_AGE_W_EPOCHS,
-    "config/consensus_constants.json max_claim_age_w must equal the frozen pin \
-     shekyl_types::archival::MAX_CLAIM_AGE_W_EPOCHS (the daemon store bounds a bond \
-     record's claimed-epoch span by it)"
-);
-
-const _: () = assert!(
-    MAX_CLAIMED_EPOCH_ENTRIES == shekyl_types::archival::MAX_CLAIMED_EPOCH_ENTRIES as u64,
-    "REWARD_EMISSION_LEG.md §6.3 pins the claimed-epoch cap at 32 \
-     (W = 26 + 6 reorg slack); the frozen pin lives in shekyl-types::archival \
-     (the daemon store bounds its decode by it) and this derivation must equal it"
-);
+pub const MAX_CLAIMED_EPOCH_ENTRIES: u64 = shekyl_types::archival::MAX_CLAIMED_EPOCH_ENTRIES as u64;
 
 /// Rejection reasons for [`claimed_epochs_check_and_set`]; the set is not
 /// mutated on error.
@@ -69,9 +56,9 @@ pub fn claimed_epochs_contains(set: &[u64], epoch: u64) -> bool {
     set.binary_search(&epoch).is_ok()
 }
 
-/// The oldest still-claimable settlement epoch — `current_settled_epoch − W`
-/// (`MAX_CLAIM_AGE_W`). An epoch strictly below this floor has fallen out of the
-/// reward-claim window.
+/// The oldest still-claimable settlement epoch — `current_settled_epoch − W`,
+/// `W` the set's claim window. An epoch strictly below this floor has fallen
+/// out of the reward-claim window.
 ///
 /// **Single source of the claim-window boundary.** The claim check
 /// ([`claimed_epochs_check_and_set`]) and 2d-1's persona-retirement predicate both
@@ -79,8 +66,8 @@ pub fn claimed_epochs_contains(set: &[u64], epoch: u64) -> bool {
 /// off-by-one between consumers — a retire boundary even one epoch shorter than the
 /// claim window would wipe a persona that can still claim (stuck funds).
 #[must_use]
-pub fn claim_window_floor(current_settled_epoch: u64) -> u64 {
-    current_settled_epoch.saturating_sub(MAX_CLAIM_AGE_W)
+pub fn claim_window_floor(current_settled_epoch: u64, params: &ArchivalParams) -> u64 {
+    current_settled_epoch.saturating_sub(params.max_claim_age_w)
 }
 
 /// True when `epoch` has fallen below the claim window and can no longer be
@@ -88,8 +75,12 @@ pub fn claim_window_floor(current_settled_epoch: u64) -> u64 {
 /// literal `Expired` boundary the claim check enforces. `current_settled_epoch`
 /// must be a **finalized** settled epoch (the in-progress epoch is not settled).
 #[must_use]
-pub fn epoch_is_claim_expired(epoch: u64, current_settled_epoch: u64) -> bool {
-    epoch < claim_window_floor(current_settled_epoch)
+pub fn epoch_is_claim_expired(
+    epoch: u64,
+    current_settled_epoch: u64,
+    params: &ArchivalParams,
+) -> bool {
+    epoch < claim_window_floor(current_settled_epoch, params)
 }
 
 /// True when `epoch` is not yet a closed settlement epoch
@@ -140,6 +131,7 @@ pub fn claimed_epochs_check_and_set(
     set: &mut Vec<u64>,
     epoch: u64,
     current_settled_epoch: u64,
+    params: &ArchivalParams,
 ) -> Result<bool, ClaimedEpochsError> {
     // Both boundaries resolve through the read-only predicates — the *same*
     // functions the wallet claim builder (top) and the 2d-1 persona-retirement
@@ -148,12 +140,12 @@ pub fn claimed_epochs_check_and_set(
     if epoch_is_not_settled(epoch, current_settled_epoch) {
         return Err(ClaimedEpochsError::NotSettled);
     }
-    if epoch_is_claim_expired(epoch, current_settled_epoch) {
+    if epoch_is_claim_expired(epoch, current_settled_epoch, params) {
         return Err(ClaimedEpochsError::Expired);
     }
 
     // Prune entries that have themselves fallen below the window floor.
-    let window_floor = claim_window_floor(current_settled_epoch);
+    let window_floor = claim_window_floor(current_settled_epoch, params);
     set.retain(|&e| e >= window_floor);
 
     match set.binary_search(&epoch) {
@@ -171,21 +163,37 @@ pub fn claimed_epochs_check_and_set(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::MAX_CLAIM_AGE_W;
 
     #[test]
     fn accepts_new_epoch_and_dedups_repeat() {
         let mut set = Vec::new();
-        assert_eq!(claimed_epochs_check_and_set(&mut set, 10, 12), Ok(true));
-        assert_eq!(claimed_epochs_check_and_set(&mut set, 10, 12), Ok(false));
+        assert_eq!(
+            claimed_epochs_check_and_set(&mut set, 10, 12, &ArchivalParams::SHIPPED),
+            Ok(true)
+        );
+        assert_eq!(
+            claimed_epochs_check_and_set(&mut set, 10, 12, &ArchivalParams::SHIPPED),
+            Ok(false)
+        );
         assert_eq!(set, vec![10]);
     }
 
     #[test]
     fn out_of_order_insert_keeps_sorted() {
         let mut set = Vec::new();
-        assert_eq!(claimed_epochs_check_and_set(&mut set, 11, 13), Ok(true));
-        assert_eq!(claimed_epochs_check_and_set(&mut set, 9, 13), Ok(true));
-        assert_eq!(claimed_epochs_check_and_set(&mut set, 10, 13), Ok(true));
+        assert_eq!(
+            claimed_epochs_check_and_set(&mut set, 11, 13, &ArchivalParams::SHIPPED),
+            Ok(true)
+        );
+        assert_eq!(
+            claimed_epochs_check_and_set(&mut set, 9, 13, &ArchivalParams::SHIPPED),
+            Ok(true)
+        );
+        assert_eq!(
+            claimed_epochs_check_and_set(&mut set, 10, 13, &ArchivalParams::SHIPPED),
+            Ok(true)
+        );
         assert_eq!(set, vec![9, 10, 11]);
     }
 
@@ -193,11 +201,11 @@ mod tests {
     fn rejects_unsettled_epochs_without_mutation() {
         let mut set = vec![5];
         assert_eq!(
-            claimed_epochs_check_and_set(&mut set, 12, 12),
+            claimed_epochs_check_and_set(&mut set, 12, 12, &ArchivalParams::SHIPPED),
             Err(ClaimedEpochsError::NotSettled)
         );
         assert_eq!(
-            claimed_epochs_check_and_set(&mut set, 13, 12),
+            claimed_epochs_check_and_set(&mut set, 13, 12, &ArchivalParams::SHIPPED),
             Err(ClaimedEpochsError::NotSettled)
         );
         assert_eq!(set, vec![5]);
@@ -208,13 +216,13 @@ mod tests {
         let current = MAX_CLAIM_AGE_W + 10;
         let mut set = vec![current - 1];
         assert_eq!(
-            claimed_epochs_check_and_set(&mut set, 9, current),
+            claimed_epochs_check_and_set(&mut set, 9, current, &ArchivalParams::SHIPPED),
             Err(ClaimedEpochsError::Expired)
         );
         assert_eq!(set, vec![current - 1]);
         // Window edge: `current − W` is the oldest claimable epoch.
         assert_eq!(
-            claimed_epochs_check_and_set(&mut set, 10, current),
+            claimed_epochs_check_and_set(&mut set, 10, current, &ArchivalParams::SHIPPED),
             Ok(true)
         );
     }
@@ -225,11 +233,14 @@ mod tests {
         // the stale entries fall out as part of the insert.
         let mut set = Vec::new();
         for e in 1..=3 {
-            assert_eq!(claimed_epochs_check_and_set(&mut set, e, e + 1), Ok(true));
+            assert_eq!(
+                claimed_epochs_check_and_set(&mut set, e, e + 1, &ArchivalParams::SHIPPED),
+                Ok(true)
+            );
         }
         let current = MAX_CLAIM_AGE_W + 30;
         assert_eq!(
-            claimed_epochs_check_and_set(&mut set, current - 1, current),
+            claimed_epochs_check_and_set(&mut set, current - 1, current, &ArchivalParams::SHIPPED),
             Ok(true)
         );
         assert_eq!(set, vec![current - 1]);
@@ -244,7 +255,12 @@ mod tests {
         let mut set = Vec::new();
         for current in 1..=200u64 {
             assert_eq!(
-                claimed_epochs_check_and_set(&mut set, current - 1, current),
+                claimed_epochs_check_and_set(
+                    &mut set,
+                    current - 1,
+                    current,
+                    &ArchivalParams::SHIPPED
+                ),
                 Ok(true),
                 "honest claim rejected at epoch {current}"
             );

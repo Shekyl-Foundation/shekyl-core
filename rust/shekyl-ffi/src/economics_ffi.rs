@@ -290,10 +290,15 @@ pub extern "C" fn shekyl_effective_block_weight_median(
     long_term_effective: u64,
     short_term_median: u64,
 ) -> u64 {
-    shekyl_economics::effective_median(long_term_effective, short_term_median)
+    shekyl_economics::effective_median(
+        long_term_effective,
+        short_term_median,
+        shekyl_economics::economic_params(),
+    )
 }
 
-/// Bound a block's long-term-median contribution to `[LTEM/1.7, LTEM·1.7]`.
+/// Bound a block's long-term-median contribution to `[LTEM/c, LTEM·c]`, `c`
+/// the shipped long-term clamp (1.7).
 /// Cannot fail. C++ gathers `LTEM`; this is the bound
 /// `get_next_long_term_block_weight` consumes.
 #[no_mangle]
@@ -301,7 +306,11 @@ pub extern "C" fn shekyl_long_term_block_weight(
     long_term_effective: u64,
     block_weight: u64,
 ) -> u64 {
-    shekyl_economics::long_term_weight(long_term_effective, block_weight)
+    shekyl_economics::long_term_weight(
+        long_term_effective,
+        block_weight,
+        shekyl_economics::economic_params(),
+    )
 }
 
 /// Status: reward computed. `out_reward` and `out_weight_limit` are written.
@@ -448,9 +457,10 @@ pub unsafe extern "C" fn shekyl_corrected_fee_ladder(
     let Some(ladder) = shekyl_economics::checked_corrected_fee_ladder(
         base_reward,
         median,
-        shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT,
+        shekyl_economics::relay_policy().ref_tx_weight,
         shekyl_economics::FeeCorrection::from_scaled(c_scaled),
         &params,
+        shekyl_economics::relay_policy(),
     ) else {
         return -2;
     };
@@ -486,7 +496,7 @@ pub unsafe extern "C" fn shekyl_relay_fee_floor(
     let Some(floor) = shekyl_economics::checked_relay_fee_floor(
         base_reward,
         median,
-        shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT,
+        shekyl_economics::relay_policy().ref_tx_weight,
         shekyl_economics::FeeCorrection::from_scaled(c_scaled),
         &params,
     ) else {
@@ -518,7 +528,9 @@ pub unsafe extern "C" fn shekyl_relay_floor_admits(
     floors: *const u64,
     floors_len: usize,
 ) -> i32 {
-    if floors_len > shekyl_economics::RELAY_FLOOR_WINDOW {
+    // The window is the policy's lookback plus the tip itself.
+    let window_len = shekyl_economics::relay_policy().lookback.saturating_add(1);
+    if u64::try_from(floors_len).map_or(true, |len| len > window_len) {
         return -1;
     }
     // SAFETY: caller contract matches the seam — `floors` addresses

@@ -614,7 +614,7 @@ fn build_bond_fixture(receipt: Option<&shekyl_types::archival::ReceiptSignPk>) -
         kind: HoldingsKind::CompleteTree,
         shard_ids: ShardSet::empty(),
     };
-    let floor = bond_floor(&holdings);
+    let floor = bond_floor(&holdings, shekyl_archival_retention::archival_params());
     assert!(
         floor > 0 && INPUT_AMOUNT > floor + FEE,
         "fixture funding covers the bond"
@@ -1540,11 +1540,13 @@ fn build_release_fixture(auth_key: ReleaseAuthKey) -> ReleaseFixture {
     .expect("derive archival P keys");
 
     // The record being exited holds the flat CompleteTree floor.
-    let record_bonded_total =
-        shekyl_archival_retention::bond_floor(&shekyl_archival_retention::HoldingsDescriptor {
+    let record_bonded_total = shekyl_archival_retention::bond_floor(
+        &shekyl_archival_retention::HoldingsDescriptor {
             kind: shekyl_archival_retention::HoldingsKind::CompleteTree,
             shard_ids: shekyl_archival_retention::ShardSet::empty(),
-        });
+        },
+        shekyl_archival_retention::archival_params(),
+    );
     assert!(record_bonded_total > 0, "the exited record is funded");
 
     let built = build_release_vin(p_keys.bond_post_keys(), record_bonded_total)

@@ -8,7 +8,7 @@
 //!
 //! Where [`crate::draw::draw_entry_gap`] decorrelates *when* `P` funds and
 //! enters, this draws *how much* the principal sends on top of the public
-//! `bond_floor`: `cover ~ U(0, bond_floor)` = `U[1, COVER_RUNG_ATOMIC)`. That
+//! `bond_floor`: `cover ~ U(0, bond_floor)` = `U[1, rung)`. That
 //! puts the funded amount strictly between rung multiples, so a bond post can
 //! never be *proven* to be one. See [`draw_cover_amount`] for the full role.
 //!
@@ -31,10 +31,11 @@
 
 use crate::draw::{bounded_uniform, GapRng};
 
-include!(concat!(env!("OUT_DIR"), "/cover_rung_generated.rs"));
-
-/// Draw the funding-seam cover, strictly `0 < cover < bond_floor` — uniform
-/// over `[1, COVER_RUNG_ATOMIC)`.
+/// Draw the funding-seam cover, strictly `0 < cover < rung` — uniform over
+/// `[1, rung)`, `rung` one bond rung: the archival bond floor, which the
+/// caller passes (`shekyl_archival_retention::archival_params().bond_floor_atomic`;
+/// 750 000 000 at the gate-4 pin). This crate reads no consensus constant of
+/// its own: it is the dependency-free path a wallet ships.
 ///
 /// # What the cover is for (two roles; verified at source, `ARCHIVAL_COVER_DRAW.md`)
 ///
@@ -64,16 +65,24 @@ include!(concat!(env!("OUT_DIR"), "/cover_rung_generated.rs"));
 ///   stays unambiguous. `cover == RUNG` is excluded too, so the funded amount
 ///   never lands *on* the next rung boundary.
 #[must_use]
-pub fn draw_cover_amount<R: GapRng + ?Sized>(rng: &mut R) -> u64 {
-    // `cover ∈ [1, RUNG)`: `bounded_uniform` is inclusive of `max`, so
-    // `1 + U[0, RUNG-2]` gives `[1, RUNG-1]` — strictly `0 < cover < RUNG`.
-    const SPAN_MAX: u64 = COVER_RUNG_ATOMIC - 2;
-    1 + bounded_uniform(rng, SPAN_MAX)
+pub fn draw_cover_amount<R: GapRng + ?Sized>(rng: &mut R, rung: u64) -> u64 {
+    // `cover ∈ [1, rung)`: `bounded_uniform` is inclusive of `max`, so
+    // `1 + U[0, rung-2]` gives `[1, rung-1]` — strictly `0 < cover < rung`.
+    // A rung of 2 has the one cover 1; a rung below 2 has none, and the
+    // archival parameters refuse a floor that small.
+    debug_assert!(
+        rung >= 2,
+        "a cover rung below 2 has no cover strictly inside it"
+    );
+    1 + bounded_uniform(rng, rung.saturating_sub(2))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The gate-4 rung, a test vector.
+    const COVER_RUNG_ATOMIC: u64 = 750_000_000;
 
     struct Seq(Vec<u64>, usize);
     impl GapRng for Seq {
@@ -93,7 +102,7 @@ mod tests {
             0,
         );
         for _ in 0..64 {
-            let cover = draw_cover_amount(&mut rng);
+            let cover = draw_cover_amount(&mut rng, COVER_RUNG_ATOMIC);
             assert!(
                 cover > 0,
                 "cover {cover} hit the reserved opt-out sentinel 0"
@@ -109,7 +118,11 @@ mod tests {
         // unambiguous. `cover == 0` would also put `funded` exactly on a rung
         // boundary — the very tell the draw removes.
         let mut rng = Seq(vec![0], 0);
-        assert_eq!(draw_cover_amount(&mut rng), 1, "raw 0 must map to 1, not 0");
+        assert_eq!(
+            draw_cover_amount(&mut rng, COVER_RUNG_ATOMIC),
+            1,
+            "raw 0 must map to 1, not 0"
+        );
     }
 
     #[test]
@@ -119,7 +132,7 @@ mod tests {
         // clean bond floor and cannot be proven to be a bond funding.
         let mut rng = Seq(vec![u64::MAX, 1, 42, u64::MAX / 3], 0);
         for k in 1u64..8 {
-            let funded = COVER_RUNG_ATOMIC * k + draw_cover_amount(&mut rng);
+            let funded = COVER_RUNG_ATOMIC * k + draw_cover_amount(&mut rng, COVER_RUNG_ATOMIC);
             assert!(
                 funded > COVER_RUNG_ATOMIC * k,
                 "funded {funded} on lower boundary"

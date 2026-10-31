@@ -420,8 +420,9 @@ the P0b audit, 2026-09-05.)
 ### `archival_serve_credit`
 
 Affirmative serve-credit pass per `(P_id, shard_id, settlement_epoch, block)`
-— **per CHALLENGE, not per pair-epoch** (`PC-D4`). A pair-epoch holds up to
-`CHALLENGES_PER_PAIR_PER_EPOCH` rows, one per block that challenged it, and
+— **per CHALLENGE, not per pair-epoch** (`PC-D4`). A pair-epoch holds one
+row per block that challenged it (the count rule issues a pair
+`COUNTED_DRAWS`, 3, at its target), and
 consensus counts passes by **enumerating** them: no field anywhere carries a
 tally (`PC-D1`/`PC-D5`).
 

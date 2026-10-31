@@ -521,7 +521,7 @@ fn a_record_served_at_epoch_zero_is_refused_by_its_own_anchor() {
     // Premise, from consensus's own predicate rather than restated here: an
     // exit at the very epoch a record served is inside the cooldown.
     assert!(
-        !release_cooldown_elapsed(Some(0), 0),
+        !release_cooldown_elapsed(Some(0), 0, shekyl_archival_retention::archival_params()),
         "premise: the serving epoch itself is not past the cooldown"
     );
     let mut r = ready();
@@ -580,7 +580,8 @@ fn slash_settlement_is_checked_even_when_the_cooldown_has_elapsed() {
     r.last_settled_slash = SlashWatermark::SettledThrough(3);
     assert!(release_cooldown_elapsed(
         r.last_served.as_verify_operand(),
-        r.current_settlement_epoch
+        r.current_settlement_epoch,
+        shekyl_archival_retention::archival_params()
     ));
     assert_eq!(
         r.ensure_exit_ready(),

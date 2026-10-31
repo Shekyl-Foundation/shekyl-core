@@ -54,7 +54,10 @@ fn a_full_window_of_missed_epochs_slashes_and_two_of_three_clears() {
         window.push(obs.expect("an observed epoch"));
     }
     assert_eq!(window.len(), usize::try_from(n).unwrap());
-    assert_eq!(failure_window_slashable(&window), Ok(true));
+    assert_eq!(
+        failure_window_slashable(&window, &shekyl_archival_retention::ArchivalParams::SHIPPED),
+        Ok(true)
+    );
 }
 
 #[test]
@@ -69,7 +72,10 @@ fn one_of_three_counts_as_a_miss_the_signal_pass_priority_hid() {
     let window: Vec<BaselineObservation> = (0..n)
         .map(|i| observe(head - i, 1, 3).expect("observed"))
         .collect();
-    assert_eq!(failure_window_slashable(&window), Ok(true));
+    assert_eq!(
+        failure_window_slashable(&window, &shekyl_archival_retention::ArchivalParams::SHIPPED),
+        Ok(true)
+    );
 }
 
 #[test]
@@ -95,7 +101,10 @@ fn under_issued_epochs_decay_to_non_observation_and_do_not_slash() {
 
     let window: Vec<BaselineObservation> = raw.into_iter().flatten().collect();
     assert_eq!(window.len(), 2, "only the two real observations survive");
-    assert_eq!(failure_window_slashable(&window), Ok(false));
+    assert_eq!(
+        failure_window_slashable(&window, &shekyl_archival_retention::ArchivalParams::SHIPPED),
+        Ok(false)
+    );
 
     // Negative control at genuinely the same epoch positions: re-walk the
     // scenario's own head-down sequence (head 2000 + n + 5, the epochs the
@@ -109,5 +118,11 @@ fn under_issued_epochs_decay_to_non_observation_and_do_not_slash() {
         all_miss.push(observe(e, 0, 3).expect("observed"));
         e -= 1;
     }
-    assert_eq!(failure_window_slashable(&all_miss), Ok(true));
+    assert_eq!(
+        failure_window_slashable(
+            &all_miss,
+            &shekyl_archival_retention::ArchivalParams::SHIPPED
+        ),
+        Ok(true)
+    );
 }

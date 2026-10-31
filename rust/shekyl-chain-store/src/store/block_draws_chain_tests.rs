@@ -393,9 +393,15 @@ fn compose(set_size: u64, h_open: u64, through: u64) -> Vec<BlockDraws> {
         let (count, next) = draw_count(
             set_size,
             visible.saturating_sub(in_flight),
-            draw_horizon(h - h_open, seb, window),
+            draw_horizon(
+                h - h_open,
+                seb,
+                window,
+                shekyl_archival_retention::archival_params(),
+            ),
             seb,
             carry,
+            shekyl_archival_retention::archival_params(),
         )
         .expect("the horizon fits");
         carry = next;
