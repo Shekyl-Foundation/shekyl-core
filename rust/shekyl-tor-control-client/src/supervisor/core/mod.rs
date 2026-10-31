@@ -374,6 +374,8 @@ pub enum Input {
     /// The delay of a probe [`Action::Recheck`] asked for. `draw` is from the
     /// daemon's CSPRNG, as a round's is.
     RecheckDrawn {
+        /// The recheck it answers.
+        why: Recheck,
         /// Uniform over `u64`.
         draw: u64,
     },
@@ -539,10 +541,14 @@ pub struct Core {
     round: Option<probe::RoundTrack>,
     /// Rounds that stayed open past `Policy::round_stuck_after`, this boot.
     stuck_rounds: u32,
-    /// Where the descriptor's lifetime is counted from: the last round's
-    /// first upload, or a later probe arrival (§4.5, "Overdue"). None before
-    /// the first upload and after the probe is dropped.
+    /// Where the descriptor's lifetime is counted from (§4.5, "Overdue"):
+    /// the last round's first upload, or the last overdue check and its
+    /// probe's arrival. Only an upload shows the descriptor's age, so no
+    /// other arrival moves it. None before the first upload and after the
+    /// probe is dropped.
     lifetime_from: Option<u64>,
+    /// The recheck the probe in hand answers; None for a round's probe.
+    probe_for: Option<Recheck>,
     /// A clock jump during this bootstrap, and `traffic/read`'s movement.
     jump: clock_jump::JumpWatch,
     /// This bootstrap's certificate lines and closed handshakes (§4.2).
@@ -581,6 +587,7 @@ impl Core {
             round: None,
             stuck_rounds: 0,
             lifetime_from: None,
+            probe_for: None,
             jump: clock_jump::JumpWatch::new(now),
             clock_evidence: clock_evidence::ClockEvidence::default(),
             service_republish: false,
@@ -627,7 +634,7 @@ impl Core {
             Input::FirstUploaded { draw } => self.first_uploaded(now, draw),
             Input::UploadRoundEnded { end, draw } => self.round_ended(now, end, draw),
             Input::DescriptorRefetched { draw } => self.refetched(now, draw),
-            Input::RecheckDrawn { draw } => self.recheck_drawn(now, draw),
+            Input::RecheckDrawn { why, draw } => self.recheck_drawn(now, why, draw),
             Input::ProbeDialed { minted_at } => self.probe_dialed(minted_at),
             Input::ProbeNotDialed => self.probe_not_dialed(),
             Input::ProbeArrived {

@@ -646,13 +646,16 @@ directories very likely dropped the descriptor while the onion read
 Reachable on evidence from before the jump. Two triggers close that:
 
 - **The upload is overdue.** No round has begun within the descriptor's
-  lifetime (`Policy::descriptor_lifetime`) of the last round's first upload,
-  or of the last probe arrival, whichever is later. The lifetime is counted
-  on the supervisor's clock (awake time; a resume restarts it from the wake,
-  §5), and is disarmed while a round is open. A round that ends with no
-  upload leaves the old anchor standing, so the check can be due at once.
-  When it fires the next lifetime counts from then, whether or not a probe
-  runs, so a suppressed probe does not ask again at every tick.
+  lifetime (`Policy::descriptor_lifetime`) of the last round's first upload.
+  The lifetime is counted on the supervisor's clock (awake time; a resume
+  restarts it from the wake, §5), and is disarmed while a round is open. A
+  round that ends with no upload leaves the old anchor standing, so the
+  check can be due at once. When the check fires, the next lifetime counts
+  from then, whether or not a probe runs, so a suppressed probe does not ask
+  again at every tick; if its probe arrives, from the arrival. Only an
+  upload shows how old the descriptor is, so no other probe's arrival moves
+  the anchor: a jump's probe arriving an hour after the last upload would
+  otherwise hold the check an hour past the descriptor's expiry.
 - **Tor reported a clock jump while Running.** A probe at the jump alone is
   not enough: it passes on the descriptor from before the jump, and the
   overdue check is what sees the directories drop it.
@@ -660,9 +663,8 @@ Reachable on evidence from before the jump. Two triggers close that:
 Each asks for one probe (`Action::Recheck`), only while Running with no
 probe scheduled, in flight or being refetched. The driver says why at info
 and answers with a CSPRNG draw (`Input::RecheckDrawn`); the probe then waits
-the usual 15 to 60 s and takes the same path as a round's: an arrival counts
-the next lifetime from itself, and a miss is followed by `HSFETCH`, a second
-probe, then a republish. The suppression rules are unchanged, and the probe
+the usual 15 to 60 s and takes the same path as a round's: a miss is
+followed by `HSFETCH`, a second probe, then a republish. The suppression rules are unchanged, and the probe
 stays outside the dial tally and the in-flight bound (`TSR-Q14`).
 
 **Stated costs.** A failure Tor does not notice, and that causes no re-upload,

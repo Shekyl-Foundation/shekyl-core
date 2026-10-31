@@ -16,7 +16,8 @@
 //!
 //! **Outside a round** (§4.5, "Overdue"; Rick, 2026-10-31): one probe when
 //! no round has begun within the descriptor's lifetime of the last round's
-//! first upload or the last arrival, counted on this clock, and one when
+//! first upload (or of the last overdue check, or its probe's arrival),
+//! counted on this clock, and one when
 //! Tor reports a clock jump while Running. Each draws its own delay through
 //! the driver ([`Action::Recheck`]) and then runs as a round's probe does.
 //!
@@ -146,7 +147,7 @@ impl Core {
             RoundEnd::Uploaded => {
                 let actions = self.onion_published();
                 if !track.is_some_and(|track| track.triggered) {
-                    self.trigger(now, draw);
+                    self.trigger(now, draw, None);
                 }
                 actions
             }
@@ -157,10 +158,12 @@ impl Core {
         }
     }
 
-    /// The round's one probe: scheduled while Running with none in hand.
-    fn trigger(&mut self, now: u64, draw: u64) {
+    /// The round's one probe, or a recheck's (`why`): scheduled while
+    /// Running with none in hand.
+    fn trigger(&mut self, now: u64, draw: u64, why: Option<Recheck>) {
         if matches!(self.phase, Phase::Running { .. }) && self.probe == Probe::Idle {
             self.schedule(now, draw, Attempt::First);
+            self.probe_for = why;
         }
     }
 
@@ -214,8 +217,8 @@ impl Core {
     /// The recheck's delay was drawn: the probe is scheduled as a round's
     /// is, so it waits at least the delay's floor and takes the same miss
     /// path (`HSFETCH`, a second probe, then a republish).
-    pub(super) fn recheck_drawn(&mut self, now: u64, draw: u64) -> Vec<Action> {
-        self.trigger(now, draw);
+    pub(super) fn recheck_drawn(&mut self, now: u64, why: Recheck, draw: u64) -> Vec<Action> {
+        self.trigger(now, draw, Some(why));
         Vec::new()
     }
 
@@ -256,7 +259,7 @@ impl Core {
         if let Some((at, draw)) = track.first {
             if !track.triggered && now >= at.saturating_add(duration_ns(self.policy.round_wait)) {
                 track.triggered = true;
-                self.trigger(now, draw);
+                self.trigger(now, draw, None);
             }
         }
         if !track.stuck
@@ -331,12 +334,15 @@ impl Core {
             return Vec::new();
         }
         self.probe = Probe::Idle;
-        // The directory had a live descriptor at the take: the next
-        // lifetime counts from it.
-        self.lifetime_from = Some(
-            self.lifetime_from
-                .map_or(arrived_at, |at| at.max(arrived_at)),
-        );
+        // The overdue probe arrived: the next lifetime counts from it (Rick,
+        // 2026-10-31). Any other arrival says a descriptor is live, not how
+        // old it is, so the lifetime stays on the upload.
+        if self.probe_for == Some(Recheck::UploadOverdue) {
+            self.lifetime_from = Some(
+                self.lifetime_from
+                    .map_or(arrived_at, |at| at.max(arrived_at)),
+            );
+        }
         let recovered = matches!(self.inbound, Inbound::Unreachable { .. });
         self.inbound = Inbound::Reachable {
             evidence_at: arrived_at,
@@ -448,6 +454,7 @@ impl Core {
         self.probe = Probe::Idle;
         self.round = None;
         self.lifetime_from = None;
+        self.probe_for = None;
         self.service_republish = false;
         in_flight.then_some(Action::CancelProbe)
     }

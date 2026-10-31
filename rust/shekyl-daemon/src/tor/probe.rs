@@ -205,6 +205,7 @@ pub(super) fn recheck(why: Recheck) -> Input {
         ),
     }
     Input::RecheckDrawn {
+        why,
         draw: shekyl_ffi::tor_link::probe_delay_draw(),
     }
 }
