@@ -10,8 +10,30 @@
 # production file other than its definition: a definition with no reader
 # is not a read.
 #
-# The economics sim is the sweep: it builds parameter sets. Tests are
-# not production. Instance of 47-gate-subject-assertion.mdc.
+# ArchivalParams (ESR-16 completion, ruled 2026-10-29) is read through
+# archival_params(). Outside shekyl-archival-retention no production site
+# names ArchivalParams::SHIPPED or ArchivalParams::default(), and the
+# generated archival constants appear in a production expression only in
+# that crate's owner files (their definitions, re-exports and the shipped
+# set). A `use` line is a path, not a read. The one sanctioned second door
+# into the epoch length is the fakechain schedule latch
+# (`constants::arm_settlement_epoch_override`, `SettlementSchedule::effective`;
+# FOLLOWUPS.md, the settlement-schedule lever row): its unarmed value is
+# archival_params()'s, and it is not a read of a bare constant.
+#
+# The economics and relay constants that are fields of EconomicParams or
+# RelayPolicy appear in a production expression only inside
+# shekyl-economics (E16-5).
+#
+# The economics sim is the sweep: it builds parameter sets, so the
+# production rules above skip it. It has its own rule (ESR-16 completion,
+# ruling 6): a run is the production baseline plus named overrides, and a
+# fold reads the run's structs. Outside baseline.rs (the one reader of the
+# three accessors) and the instruments whose modes refuse overrides in
+# main.rs, no sim file calls an accessor, builds a shipped default, or
+# names an owned constant: a read of a static is a field an override would
+# pass and never reach. Tests are not production. Instance of
+# 47-gate-subject-assertion.mdc.
 
 from __future__ import annotations
 
@@ -23,6 +45,229 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 RUST = os.path.join(ROOT, "rust")
 ACCESSOR = os.path.join("shekyl-economics", "src", "params.rs")
 RELAY_DEF = os.path.join("shekyl-economics", "src", "relay_policy.rs")
+ARCHIVAL_CRATE = "shekyl-archival-retention"
+ARCHIVAL_DEF = os.path.join(ARCHIVAL_CRATE, "src", "params.rs")
+# The archival crate's files that define, re-export or assemble the shipped
+# constants. Everywhere else a production expression reads the set.
+ARCHIVAL_OWNERS = {
+    os.path.join(ARCHIVAL_CRATE, "build.rs"),
+    os.path.join(ARCHIVAL_CRATE, "src", "params.rs"),
+    os.path.join(ARCHIVAL_CRATE, "src", "bond_floor.rs"),
+    os.path.join(ARCHIVAL_CRATE, "src", "constants.rs"),
+    os.path.join(ARCHIVAL_CRATE, "src", "failure_window.rs"),
+    os.path.join(ARCHIVAL_CRATE, "src", "lib.rs"),
+}
+# The generated archival constants a production composition reads through
+# ArchivalParams instead.
+ARCHIVAL_OWNED = (
+    "ARCHIVAL_BOND_FLOOR_ATOMIC",
+    "SETTLEMENT_EPOCH_BLOCKS",
+    "ARCHIVAL_REWARD_AGE_WEIGHT_MILLI",
+    "MAX_CLAIM_AGE_W",
+    "RELEASE_COOLDOWN_EPOCHS",
+    "BOND_DURATION_BASE_EPOCHS",
+    "BOND_DURATION_AGE_SCALE",
+    "ARCHIVAL_FAILURE_WINDOW_M",
+    "ARCHIVAL_FAILURE_WINDOW_N",
+    "FAILURE_WINDOW_M",
+    "FAILURE_WINDOW_N",
+    "FAILURE_WINDOW_SERVE_BUDGET",
+    "SETTLEMENT_RETENTION_EPOCHS",
+    # The draw count rule (ARCHIVAL_SERVE_CREDIT_SPEC.md §13.2 V2, V6): fields
+    # since the review of 2026-10-30. The names are gone; a reintroduced one
+    # is a second door.
+    "DRAW_HORIZON_FLOOR",
+    "COUNT_CAP_MULTIPLE",
+    "COUNT_CAP_BASE_MULTIPLE",
+    "BUNDLE_SECTION_BUDGET_MULTIPLE",
+)
+# The count rule's numbers that stay constants, each with its class, and the
+# file that defines it. The gate asserts each is still defined there, so a
+# rename or a move cannot drop one from the inventory unseen; a kept name is
+# never also owned. The full-pair weight (1/16) has no name: it is the draw
+# byte's low-nibble test in `select_draw`, the selection algorithm's shape,
+# held by its pinned KAT vectors, not by this list.
+ARCHIVAL_KEPT = {
+    "CHALLENGE_READS": (
+        os.path.join(ARCHIVAL_CRATE, "src", "secret_draw.rs"),
+        "K, ruled (SCS-P13): reads of one draw; sizes the failure window's three reads",
+    ),
+    "DRAW_ATTEMPTS": (
+        os.path.join(ARCHIVAL_CRATE, "src", "secret_draw.rs"),
+        "structural: the selection's 256-attempt cap, the stream's attempt counter",
+    ),
+}
+_BARE_ARCHIVAL = re.compile(r"\b(" + "|".join(ARCHIVAL_OWNED) + r")\b")
+
+# The economics and relay constants a production composition reads through
+# EconomicParams or RelayPolicy instead. Their owner is the whole
+# shekyl-economics crate, which defines the shipped values and the shipped
+# spellings (`quantized_fee`, ruled to stay). The kept constants (SCALE,
+# the median and volume windows, TX_WEIGHT_LIMIT) are not here: they are
+# units, structural or derived (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.26).
+ECONOMICS_CRATE = "shekyl-economics"
+ECONOMICS_OWNED = (
+    "BLOCK_WEIGHT_SURGE_FACTOR",
+    "FULL_REWARD_ZONE",
+    "EMISSION_CURVE_ASYMPTOTE",
+    "STAKER_EMISSION_SHARE",
+    "STAKER_EMISSION_DECAY",
+    "BLOCKS_PER_YEAR",
+    "RELAY_FLOOR_REFERENCE_TX_WEIGHT",
+    "STANDARD_RUNG_OVER_ECONOMY",
+    "EMISSION_CLAIM_FEE_FLOOR",
+    "RELAY_ADMISSION_SLACK_BP",
+    "RELAY_FLOOR_LOOKBACK",
+    "RELAY_FLOOR_WINDOW",
+    "FEE_DECIMAL_PLACES",
+    "FEE_QUANTIZATION_MASK",
+)
+_BARE_ECONOMICS = re.compile(r"\b(" + "|".join(ECONOMICS_OWNED) + r")\b")
+
+
+SIM_SRC = os.path.join("shekyl-economics-sim", "src")
+SIM_BASELINE = os.path.join(SIM_SRC, "baseline.rs")
+# Each excluded file and why: it reads the shipped baseline by design.
+SIM_SHIPPED_ONLY = {
+    "baseline.rs": "the baseline itself: the one reader of the three accessors",
+    "main.rs": "the mode runner: builds runs, reads no parameter",
+    "fee_floor.rs": "--fee-floor refuses overrides in main.rs",
+    "fee_ladder.rs": "--fee-ladder refuses overrides in main.rs",
+    "fee_signal.rs": "reached only from fee_ladder",
+    "fee_bar.rs": "reached only from fee_floor and fee_ladder",
+    "secret_draw.rs": "--secret-draw refuses overrides in main.rs",
+    "secret_draw_production.rs": "--secret-draw-production refuses overrides in main.rs",
+    "rng.rs": "reached only from fee_floor and secret_draw_production",
+    "budget.rs": "--fb1c-c2 refuses overrides in main.rs",
+    "budget_scenarios.rs": "--fb1c-c2 refuses overrides in main.rs",
+}
+SIM_MIN_FILES = 20
+SIM_FORBIDDEN = (
+    "economic_params()",
+    "relay_policy()",
+    "archival_params()",
+    "EconomicParams::default()",
+    "RelayPolicy::SHIPPED",
+    "RelayPolicy::default()",
+    "ArchivalParams::SHIPPED",
+    "ArchivalParams::default()",
+)
+
+
+def strip_strings(body: str) -> str:
+    """Blank the contents of string literals, keeping line breaks.
+
+    The sim's reports name constants in prose (`unclaimed past
+    MAX_CLAIM_AGE_W={CLAIM_AGE}`); a name inside a string is text, not a
+    read. Handles escapes and `r"…"` / `r#"…"#` raw strings; a `'"'` char
+    literal is not a string.
+    """
+    out = []
+    i = 0
+    n = len(body)
+    while i < n:
+        ch = body[i]
+        if ch == "/" and body.startswith("//", i):
+            end = body.find("\n", i)
+            end = n if end < 0 else end
+            out.append(body[i:end])
+            i = end
+            continue
+        if ch == "'" and body.startswith("'\"'", i):
+            out.append("'_'")
+            i += 3
+            continue
+        raw = None
+        if ch == "r" and (i == 0 or not (body[i - 1].isalnum() or body[i - 1] == "_")):
+            j = i + 1
+            while j < n and body[j] == "#":
+                j += 1
+            if j < n and body[j] == '"':
+                raw = "\"" + "#" * (j - i - 1)
+                out.append(body[i : j + 1])
+                i = j + 1
+        if raw is not None:
+            end = body.find(raw, i)
+            end = n if end < 0 else end
+            out.append("".join(c if c == "\n" else " " for c in body[i:end]))
+            out.append(body[end : end + len(raw)])
+            i = end + len(raw)
+            continue
+        if ch == '"':
+            out.append(ch)
+            i += 1
+            while i < n and body[i] != '"':
+                if body[i] == "\\" and i + 1 < n:
+                    out.append("  " if body[i + 1] != "\n" else " \n")
+                    i += 2
+                    continue
+                out.append("\n" if body[i] == "\n" else " ")
+                i += 1
+            if i < n:
+                out.append('"')
+                i += 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def sim_failures(rel: str, body: str) -> list[str]:
+    """A sim file's reads of the shipped set where it should read the run."""
+    body = strip_strings(body)
+    found = []
+    for line in body.splitlines():
+        code = line.split("//", 1)[0]
+        for name in SIM_FORBIDDEN:
+            if name in code:
+                found.append(f"{rel}: the sim reads {name}, not the run")
+    for name in sorted(set(bare_archival_reads(body)) | set(bare_economics_reads(body))):
+        found.append(f"{rel}: the sim reads the bare constant {name}, not the run")
+    return found
+
+
+def sim_check() -> tuple[int, bool, list[str]]:
+    """Scan the sim. Returns (files scanned, baseline reads all three, failures)."""
+    root = os.path.join(RUST, SIM_SRC)
+    scanned = 0
+    baseline_reads = False
+    failures: list[str] = []
+    for name in sorted(os.listdir(root)):
+        if not name.endswith(".rs"):
+            continue
+        rel = os.path.join(SIM_SRC, name)
+        body = strip_cfg_test(open(os.path.join(root, name), encoding="utf-8").read())
+        scanned += 1
+        if rel == SIM_BASELINE:
+            baseline_reads = all(
+                accessor in body
+                for accessor in ("economic_params()", "relay_policy()", "archival_params()")
+            )
+        if name in SIM_SHIPPED_ONLY:
+            continue
+        failures.extend(sim_failures(rel, body))
+    return scanned, baseline_reads, failures
+
+
+def _bare_reads(body: str, pattern: re.Pattern[str]) -> list[str]:
+    """Owned constants named in code, not in comments or `use` lines."""
+    found = []
+    for line in body.splitlines():
+        code = line.split("//", 1)[0]
+        if re.match(r"\s*(pub(\([^)]*\))?\s+)?use\b", code):
+            continue
+        found.extend(match.group(1) for match in pattern.finditer(code))
+    return found
+
+
+def bare_archival_reads(body: str) -> list[str]:
+    """Owned archival constants named in code."""
+    return _bare_reads(body, _BARE_ARCHIVAL)
+
+
+def bare_economics_reads(body: str) -> list[str]:
+    """Owned economics and relay constants named in code."""
+    return _bare_reads(body, _BARE_ECONOMICS)
 MIN_FILES = 200
 SKIP_CRATES = {
     "shekyl-economics-sim",
@@ -251,6 +496,8 @@ def main() -> int:
     saw_accessor = False
     saw_relay = False
     saw_relay_read = False
+    saw_archival = False
+    saw_archival_read = False
     failures = []
     for path in files:
         rel = os.path.relpath(path, RUST)
@@ -259,9 +506,24 @@ def main() -> int:
             saw_accessor = True
         if rel == RELAY_DEF and "fn relay_policy(" in text:
             saw_relay = True
+        if rel == ARCHIVAL_DEF and "fn archival_params(" in text:
+            saw_archival = True
         body = strip_cfg_test(text)
         if rel != RELAY_DEF and "relay_policy()" in body:
             saw_relay_read = True
+        if rel != ARCHIVAL_DEF and "archival_params()" in body:
+            saw_archival_read = True
+        in_archival_crate = rel.split(os.sep)[0] == ARCHIVAL_CRATE
+        if not in_archival_crate and (
+            "ArchivalParams::SHIPPED" in body or "ArchivalParams::default()" in body
+        ):
+            failures.append(f"{rel}: a second ArchivalParams accessor")
+        if rel not in ARCHIVAL_OWNERS:
+            for name in sorted(set(bare_archival_reads(body))):
+                failures.append(f"{rel}: production reads the bare constant {name}")
+        if rel.split(os.sep)[0] != ECONOMICS_CRATE:
+            for name in sorted(set(bare_economics_reads(body))):
+                failures.append(f"{rel}: production reads the bare constant {name}")
         if "OnceLock<RelayPolicy>" in body:
             failures.append(f"{rel}: RelayPolicy is the const shipped policy")
         if rel == ACCESSOR or rel == RELAY_DEF:
@@ -270,20 +532,47 @@ def main() -> int:
             failures.append(f"{rel}: production builds EconomicParams::default()")
         if "OnceLock<EconomicParams>" in body:
             failures.append(f"{rel}: a second EconomicParams OnceLock")
-    if not saw_accessor or not saw_relay or not saw_relay_read:
+    for name, (owner, _class) in ARCHIVAL_KEPT.items():
+        if name in ARCHIVAL_OWNED:
+            failures.append(f"{name}: kept and owned at once")
+        defined = open(os.path.join(RUST, owner), encoding="utf-8").read()
+        if not re.search(rf"\bpub const {name}\b", defined):
+            print(
+                f"economic-accessor gate: the kept constant {name} is not defined in "
+                f"{owner}. The subject is missing.",
+                file=sys.stderr,
+            )
+            return 1
+    sim_scanned, sim_baseline, sim_found = sim_check()
+    if sim_scanned < SIM_MIN_FILES or not sim_baseline:
+        print(
+            f"economic-accessor gate scanned {sim_scanned} sim files (expected at "
+            f"least {SIM_MIN_FILES}) and saw the baseline read all three accessors: "
+            f"{sim_baseline}. The subject is missing.",
+            file=sys.stderr,
+        )
+        return 1
+    failures.extend(sim_found)
+    if not (saw_accessor and saw_relay and saw_relay_read and saw_archival and saw_archival_read):
         print(
             "economic-accessor gate did not see economic_params(), "
-            "relay_policy(), and a production read of relay_policy(). "
-            "The subject is missing.",
+            "relay_policy() and archival_params(), and a production read of "
+            "the last two. The subject is missing.",
             file=sys.stderr,
         )
         return 1
     if failures:
-        print("production reads EconomicParams through economic_params():", file=sys.stderr)
+        print(
+            "production reads the parameter sets through their accessors:",
+            file=sys.stderr,
+        )
         for item in failures:
             print(f"  {item}", file=sys.stderr)
         return 1
-    print(f"economic accessors: {len(files)} production rust files, one of each")
+    print(
+        f"parameter accessors: {len(files)} production rust files, one of each; "
+        f"{sim_scanned} sim files, the run read in {sim_scanned - len(SIM_SHIPPED_ONLY)}"
+    )
     return 0
 
 
@@ -345,6 +634,43 @@ def selftest() -> int:
     }
     if open_found != {"closed"}:
         print(f"selftest: feature-or-test modules were {open_found}", file=sys.stderr)
+        return 1
+    bare = bare_archival_reads(
+        "use shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS;\n"
+        "pub use shekyl_archival_retention::MAX_CLAIM_AGE_W;\n"
+        "// SETTLEMENT_EPOCH_BLOCKS in a comment\n"
+        "let e = h / SETTLEMENT_EPOCH_BLOCKS; // MAX_CLAIM_AGE_W\n"
+        "let w = FAILURE_WINDOW_N_GATHER_BOUND;\n"
+    )
+    if bare != ["SETTLEMENT_EPOCH_BLOCKS"]:
+        print(f"selftest: bare archival reads were {bare}", file=sys.stderr)
+        return 1
+    econ = bare_economics_reads(
+        "use shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT;\n"
+        "let w = shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT;\n"
+        "let p = shekyl_economics::relay_policy().ref_tx_weight;\n"
+        "let f = quantized_fee(w, r); // FEE_QUANTIZATION_MASK\n"
+    )
+    if econ != ["RELAY_FLOOR_REFERENCE_TX_WEIGHT"]:
+        print(f"selftest: bare economics reads were {econ}", file=sys.stderr)
+        return 1
+    sim = sim_failures(
+        "sim.rs",
+        "use shekyl_economics::relay_policy;\n"
+        "let p = run.relay().ref_tx_weight; // relay_policy()\n"
+        "let q = shekyl_archival_retention::archival_params();\n"
+        "let e = SETTLEMENT_EPOCH_BLOCKS;\n"
+        "writeln!(out, \"past MAX_CLAIM_AGE_W={W}, \\\"q\\\" \\\n FULL_REWARD_ZONE\");\n"
+        "let c = '\"'; let z = r#\"BLOCKS_PER_YEAR\"#; let f = FULL_REWARD_ZONE;\n",
+    )
+    # The read after the strings is found: a stripper that lost its place
+    # in a string would blank it.
+    if sim != [
+        "sim.rs: the sim reads archival_params(), not the run",
+        "sim.rs: the sim reads the bare constant FULL_REWARD_ZONE, not the run",
+        "sim.rs: the sim reads the bare constant SETTLEMENT_EPOCH_BLOCKS, not the run",
+    ]:
+        print(f"selftest: sim reads were {sim}", file=sys.stderr)
         return 1
     print("economic-accessor selftest passed")
     return 0

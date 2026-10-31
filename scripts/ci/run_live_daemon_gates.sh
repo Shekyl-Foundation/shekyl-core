@@ -225,7 +225,14 @@ ARMED_SLOW=(
 #       e2e_unstake_collect_retire_composed_arc — sabotage 2026-09-08.
 #       e2e_emission_claim_accepted_and_applied — sabotage 2026-09-08;
 #         was ARMED_SLOW.
+#   capture_chain_keeps_its_datadir — the DX-Q8 chain generator. One
+#     regtest daemon, data directory kept on drop, the directory asserted
+#     still present. Run by hand with SHEKYLD_BIN before
+#     scripts/bench/capture_kept_chain.py. Not a pass/fail proposition for
+#     this lane: the subject is the keep, and the lane would spend a
+#     daemon start proving a bool. Sibling of generate_ct2_tier_b_fixture.
 DECIDED_DARK=(
+  engine::regtest_e2e::capture_chain_keeps_its_datadir
   engine::regtest_e2e::generate_ct2_tier_b_fixture
   engine::regtest_e2e::rt_p5::rt_p5_dry_run
   engine::regtest_e2e::rt_p5::rt_p5_registered_run

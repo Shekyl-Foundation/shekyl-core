@@ -32,15 +32,19 @@ use crate::params::EconomicParams;
 use crate::release::calc_release_multiplier;
 use crate::supply::CirculatingSupply;
 use crate::volume::TxVolume;
+use crate::RelayPolicy;
 
 /// Reference transaction weight `w_ref` the floor and every rung fold in.
 ///
 /// The basis question (FL-R13) is EUP-5 G's. Until that ruling derives the
 /// weight from a Shekyl ordinary transaction, the value is the inherited
-/// 3 000. The FFI entries, the wallet's absolute cap and the economics sim
-/// read this constant. The scalar entries stay parameterized, so a domain
-/// test can pass `0` and `u64::MAX`.
-pub const RELAY_FLOOR_REFERENCE_TX_WEIGHT: u64 = 3_000;
+/// 3 000. Generated from `config/relay_policy.json`
+/// `relay_floor_reference_tx_weight`: the shipped
+/// [`RelayPolicy::ref_tx_weight`](crate::RelayPolicy::ref_tx_weight).
+/// Production reads the policy; the scalar entries stay parameterized, so
+/// a domain test can pass `0` and `u64::MAX`.
+pub const RELAY_FLOOR_REFERENCE_TX_WEIGHT: u64 =
+    crate::params::GENERATED_RELAY_FLOOR_REFERENCE_TX_WEIGHT;
 
 /// One block's fee operands: the chain state the floor and the ladder at
 /// that block are a function of.
@@ -122,14 +126,18 @@ fn base_reward_at(operands: FeeOperands, params: &EconomicParams) -> Option<u64>
 }
 
 /// The relay floor at the operands: `F = R·C·w_ref/M²`, floored at 1
-/// ([`checked_relay_fee_floor`]). `None` when the parameters cannot price
-/// the tail or the scalars leave the `u128` domain.
+/// ([`checked_relay_fee_floor`]), `w_ref` the policy's. `None` when the
+/// parameters cannot price the tail or the scalars leave the `u128` domain.
 #[must_use]
-pub fn relay_floor_from(operands: FeeOperands, params: &EconomicParams) -> Option<u64> {
+pub fn relay_floor_from(
+    operands: FeeOperands,
+    params: &EconomicParams,
+    policy: &RelayPolicy,
+) -> Option<u64> {
     checked_relay_fee_floor(
         base_reward_at(operands, params)?,
         operands.long_term_effective_median,
-        RELAY_FLOOR_REFERENCE_TX_WEIGHT,
+        policy.ref_tx_weight,
         fee_correction_at(operands, params),
         params,
     )
@@ -137,15 +145,21 @@ pub fn relay_floor_from(operands: FeeOperands, params: &EconomicParams) -> Optio
 
 /// The served three-rung ladder at the same operands. Its economy rung
 /// is [`relay_floor_from`]'s value by construction (FL-R6): one
-/// derivation serves the quote and admits against it.
+/// derivation serves the quote and admits against it. The rungs and
+/// `w_ref` are the policy's.
 #[must_use]
-pub fn fee_ladder_from(operands: FeeOperands, params: &EconomicParams) -> Option<FeeLadder> {
+pub fn fee_ladder_from(
+    operands: FeeOperands,
+    params: &EconomicParams,
+    policy: &RelayPolicy,
+) -> Option<FeeLadder> {
     checked_corrected_fee_ladder(
         base_reward_at(operands, params)?,
         operands.long_term_effective_median,
-        RELAY_FLOOR_REFERENCE_TX_WEIGHT,
+        policy.ref_tx_weight,
         fee_correction_at(operands, params),
         params,
+        policy,
     )
 }
 
@@ -186,8 +200,12 @@ mod tests {
         let at = |age: u64, v: u64, median: u64| {
             let height = age * BLOCKS_PER_YEAR;
             let ag = projected_already_generated(height, &p).expect("projected");
-            relay_floor_from(operands(height, ag, 0, TxVolume::per_block(v), median), &p)
-                .expect("priced")
+            relay_floor_from(
+                operands(height, ag, 0, TxVolume::per_block(v), median),
+                &p,
+                &crate::RelayPolicy::SHIPPED,
+            )
+            .expect("priced")
         };
         // Genesis: σ = 0, R₀ = 1 024 SKL, C = 1 at the baseline, so
         // F = R₀·w_ref/Zm² = 34 133.
@@ -224,9 +242,13 @@ mod tests {
             fee_correction_at(at(50, FULL_REWARD_ZONE), &p).as_scaled(),
             1_999_942
         );
-        assert_eq!(relay_floor_from(at(50, FULL_REWARD_ZONE), &p), Some(39));
         assert_eq!(
-            fee_ladder_from(at(50, FULL_REWARD_ZONE), &p).map(FeeLadder::as_slots),
+            relay_floor_from(at(50, FULL_REWARD_ZONE), &p, &crate::RelayPolicy::SHIPPED),
+            Some(39)
+        );
+        assert_eq!(
+            fee_ladder_from(at(50, FULL_REWARD_ZONE), &p, &crate::RelayPolicy::SHIPPED)
+                .map(FeeLadder::as_slots),
             Some([39, 156, 7_999])
         );
         // Quiet: M_r at its low rail, no burn, C = 0.8, F = 15.
@@ -234,27 +256,56 @@ mod tests {
             fee_correction_at(at(0, FULL_REWARD_ZONE), &p).as_scaled(),
             799_976
         );
-        assert_eq!(relay_floor_from(at(0, FULL_REWARD_ZONE), &p), Some(15));
+        assert_eq!(
+            relay_floor_from(at(0, FULL_REWARD_ZONE), &p, &crate::RelayPolicy::SHIPPED),
+            Some(15)
+        );
         // Congested: M_r at its high rail and b at its cap, C = 13.0, F = 259.
         assert_eq!(
             fee_correction_at(at(500, FULL_REWARD_ZONE), &p).as_scaled(),
             12_999_623
         );
-        assert_eq!(relay_floor_from(at(500, FULL_REWARD_ZONE), &p), Some(259));
+        assert_eq!(
+            relay_floor_from(at(500, FULL_REWARD_ZONE), &p, &crate::RelayPolicy::SHIPPED),
+            Some(259)
+        );
         // Wider medians: 3·Zm truncates to 4, 10·Zm to the `max(1)` floor,
         // and a median no block can carry still answers 1.
-        assert_eq!(relay_floor_from(at(50, 3 * FULL_REWARD_ZONE), &p), Some(4));
-        assert_eq!(relay_floor_from(at(50, 10 * FULL_REWARD_ZONE), &p), Some(1));
         assert_eq!(
-            relay_floor_from(at(50, 100_000 * FULL_REWARD_ZONE), &p),
+            relay_floor_from(
+                at(50, 3 * FULL_REWARD_ZONE),
+                &p,
+                &crate::RelayPolicy::SHIPPED
+            ),
+            Some(4)
+        );
+        assert_eq!(
+            relay_floor_from(
+                at(50, 10 * FULL_REWARD_ZONE),
+                &p,
+                &crate::RelayPolicy::SHIPPED
+            ),
+            Some(1)
+        );
+        assert_eq!(
+            relay_floor_from(
+                at(50, 100_000 * FULL_REWARD_ZONE),
+                &p,
+                &crate::RelayPolicy::SHIPPED
+            ),
             Some(1)
         );
         // A median below the zone is floored to it.
         assert_eq!(
-            relay_floor_from(operands(0, 0, 0, TxVolume::per_block(50), 1), &p),
+            relay_floor_from(
+                operands(0, 0, 0, TxVolume::per_block(50), 1),
+                &p,
+                &crate::RelayPolicy::SHIPPED
+            ),
             relay_floor_from(
                 operands(0, 0, 0, TxVolume::per_block(50), FULL_REWARD_ZONE),
-                &p
+                &p,
+                &crate::RelayPolicy::SHIPPED
             ),
         );
     }
@@ -279,8 +330,11 @@ mod tests {
                 TxVolume::per_block(v),
                 median,
             );
-            let ladder = fee_ladder_from(ops, &p).expect("priced");
-            assert_eq!(Some(ladder.economy), relay_floor_from(ops, &p));
+            let ladder = fee_ladder_from(ops, &p, &crate::RelayPolicy::SHIPPED).expect("priced");
+            assert_eq!(
+                Some(ladder.economy),
+                relay_floor_from(ops, &p, &crate::RelayPolicy::SHIPPED)
+            );
             assert_eq!(ladder.standard, 4 * ladder.economy);
         }
     }
@@ -302,7 +356,10 @@ mod tests {
             c_net < c_gross,
             "a tenth of the emission burned lowers the burn ratio's operand, so b falls and C with it"
         );
-        assert!(relay_floor_from(net, &p) < relay_floor_from(gross, &p));
+        assert!(
+            relay_floor_from(net, &p, &crate::RelayPolicy::SHIPPED)
+                < relay_floor_from(gross, &p, &crate::RelayPolicy::SHIPPED)
+        );
         // The factors are that composition, not a second one: `C` at a
         // zero burn is `fee_correction` of the same three owners.
         let factors = correction_factors_at(height, gross.supply, volume, &p);

@@ -136,6 +136,7 @@ async fn the_window_off_the_store_is_the_owner_over_its_rows() {
                     long_term_effective_median: median,
                 },
                 &params,
+                shekyl_economics::relay_policy(),
             )
             .expect("priced")
         };

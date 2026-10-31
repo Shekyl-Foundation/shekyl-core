@@ -6,7 +6,6 @@
 //! `R_market` / `Σwork` values. C++ performs no consensus arithmetic of its
 //! own (`20-rust-vs-cpp-policy.mdc` §4; `40-ffi-discipline.mdc` coarse-call rule).
 
-use crate::bond_floor::ARCHIVAL_REWARD_AGE_WEIGHT_MILLI;
 #[cfg(test)]
 use crate::constants::SETTLEMENT_EPOCH_BLOCKS;
 use crate::reward_arithmetic::{
@@ -433,7 +432,7 @@ pub struct EpochCloseInputs<'a> {
 
 impl<'a> EpochCloseInputs<'a> {
     /// The close under `schedule`: the epoch length from the schedule the
-    /// caller holds, the age weight from the compiled constants — the
+    /// caller holds, the age weight from `params` — the
     /// **single** source every view draws from, so the validator's close,
     /// the close FFI shim and the verify views cannot drift on a param (the
     /// `SETTLEMENT_EPOCH_BLOCKS → effective_settlement_epoch_blocks()`
@@ -449,12 +448,13 @@ impl<'a> EpochCloseInputs<'a> {
         bonds: &'a [EpochCloseBond<'a>],
         shards: &'a [EpochCloseShard],
         credit_pairs: &'a [CreditPair],
+        params: &crate::ArchivalParams,
     ) -> Self {
         Self {
             settlement_epoch,
             close_block_height,
             settlement_epoch_blocks: schedule.blocks().get(),
-            age_weight_milli: ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
+            age_weight_milli: params.reward_age_weight_milli,
             bonds,
             shards,
             credit_pairs,
@@ -463,7 +463,8 @@ impl<'a> EpochCloseInputs<'a> {
 
     /// The close-path construction for callers without a rule set (the
     /// close FFI shim): [`Self::under_schedule`] over
-    /// [`SettlementSchedule::effective`].
+    /// [`SettlementSchedule::effective`] and the shipped
+    /// [`crate::archival_params`].
     #[must_use]
     pub fn close_view(
         settlement_epoch: u64,
@@ -479,6 +480,7 @@ impl<'a> EpochCloseInputs<'a> {
             bonds,
             shards,
             credit_pairs,
+            crate::archival_params(),
         )
     }
 
@@ -726,6 +728,7 @@ pub const FOUNDATION_EXCLUDED_FROM_MARKET: bool = true;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bond_floor::ARCHIVAL_REWARD_AGE_WEIGHT_MILLI;
 
     /// A block index from a literal, for the tables below.
     const fn bh(index: u64) -> BlockHeight {

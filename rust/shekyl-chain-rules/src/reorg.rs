@@ -46,8 +46,8 @@
 //! The retention prune's pop floor (`DRS_E1_SPRUNE.md` §7) is a belt
 //! *because* the undo floor `tip − D_max` sits strictly above the body
 //! horizon's `h_scarce + 1`, and that ordering is exactly
-//! `SETTLEMENT_EPOCH_BLOCKS > D_max`. Asserted at compile time on the
-//! production constants. The cap is rule-set data (`RuleSet::reorg_cap`;
+//! `SETTLEMENT_EPOCH_BLOCKS > D_max`. `ArchivalParams::validate` holds it,
+//! and the shipped set is asserted to pass it at compile time. The cap is rule-set data (`RuleSet::reorg_cap`;
 //! `GENESIS` carries this constant, a Fakechain set names its own), and
 //! the store's undo retention is boxed between them — at least the
 //! in-force set's cap, strictly inside the session's epoch — at open and at
@@ -55,9 +55,7 @@
 //! whose cap fits (rule 71: nettype selects data, the data satisfies the
 //! same invariant).
 
-use shekyl_archival_retention::{
-    ARCHIVAL_REORG_DEPTH_BLOCKS, FAILURE_WINDOW_N, SETTLEMENT_EPOCH_BLOCKS, SLASH_GRACE_EPOCHS,
-};
+use shekyl_archival_retention::{archival_params, ARCHIVAL_REORG_DEPTH_BLOCKS, SLASH_GRACE_EPOCHS};
 use shekyl_types::archival::SettlementEpochBlocks;
 use shekyl_types::{BlockCount, BlockHeight};
 
@@ -70,11 +68,9 @@ use shekyl_types::{BlockCount, BlockHeight};
 /// `SEB > D_max` assertion below.
 pub const D_MAX: BlockCount = BlockCount::from_raw(ARCHIVAL_REORG_DEPTH_BLOCKS);
 
-const _: () = assert!(
-    SETTLEMENT_EPOCH_BLOCKS > D_MAX.to_raw(),
-    "SETTLEMENT_EPOCH_BLOCKS <= D_MAX: the retention prune's undo floor (tip - D_max) would not \
-     sit above the body horizon (DRS_E1_SPRUNE.md §3, §7); re-pin one with the other"
-);
+// `SETTLEMENT_EPOCH_BLOCKS > D_MAX` is `ArchivalParams::validate`'s
+// (`EpochNotPastReorg`; DRS_E1_SPRUNE.md §3, §7), and the shipped set is
+// const-asserted to pass it.
 
 const _: () = assert!(
     D_MAX.to_raw() > 0,
@@ -98,7 +94,7 @@ const _: () = assert!(
 /// m-of-n `(m, n, serve_budget)`.
 #[must_use]
 pub fn journal_horizon(tip: BlockHeight) -> Option<BlockHeight> {
-    journal_horizon_under(tip, SETTLEMENT_EPOCH_BLOCKS, D_MAX)
+    journal_horizon_under(tip, archival_params().settlement_epoch_blocks, D_MAX)
 }
 
 /// The slash log's retirement floor at a tip, under a schedule and a reorg
@@ -185,7 +181,8 @@ pub fn journal_horizon_under(
 /// `u64::from` would be the idiomatic widening of `n` but is not `const`.
 #[allow(clippy::cast_lossless)]
 const fn window_blocks(epoch_blocks: u64, reorg_cap: BlockCount) -> Option<u64> {
-    let Some(epochs) = SLASH_GRACE_EPOCHS.checked_add(FAILURE_WINDOW_N as u64) else {
+    let Some(epochs) = SLASH_GRACE_EPOCHS.checked_add(archival_params().failure_window_n as u64)
+    else {
         return None;
     };
     let Some(blocks) = epochs.checked_mul(epoch_blocks) else {
@@ -197,6 +194,7 @@ const fn window_blocks(epoch_blocks: u64, reorg_cap: BlockCount) -> Option<u64> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shekyl_archival_retention::{FAILURE_WINDOW_N, SETTLEMENT_EPOCH_BLOCKS};
 
     #[test]
     fn the_cap_is_the_anchor_depth_and_below_the_epoch() {

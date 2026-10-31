@@ -149,7 +149,10 @@ fn holdings_must_be_empty_not_merely_floor_zero() {
     };
     // Non-empty holdings have a non-zero floor, so this trips the floor
     // equality first; zero the floor operand to reach the holdings guard.
-    assert_ne!(bond_floor(&v.holdings), 0);
+    assert_ne!(
+        bond_floor(&v.holdings, shekyl_archival_retention::archival_params()),
+        0
+    );
     assert!(matches!(
         verify(&v),
         Err(BondPostError::ReleaseFloorMismatch)
@@ -169,7 +172,7 @@ fn a_non_zero_post_connect_total_is_not_a_full_exit() {
         kind: HoldingsKind::ShardSetCompact,
         shard_ids: ShardSet::new(vec![4]).expect("one shard"),
     };
-    let floor = bond_floor(&v.holdings);
+    let floor = bond_floor(&v.holdings, shekyl_archival_retention::archival_params());
     assert_ne!(
         floor, 0,
         "premise: a non-empty descriptor has a non-zero floor"

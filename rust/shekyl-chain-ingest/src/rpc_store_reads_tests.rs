@@ -215,8 +215,11 @@ async fn the_claim_source_lists_the_window_and_gathers_what_the_gate_admits() {
         let settled = levered_schedule().epoch_at(h(connecting)).to_raw();
         assert_eq!(source.current_settled_epoch, settled);
         assert!(!source.has_bond_record);
-        let window: Vec<u64> =
-            (shekyl_archival_retention::claim_window_floor(settled)..settled).collect();
+        let window: Vec<u64> = (shekyl_archival_retention::claim_window_floor(
+            settled,
+            shekyl_archival_retention::archival_params(),
+        )..settled)
+            .collect();
         assert_eq!(
             source
                 .epochs

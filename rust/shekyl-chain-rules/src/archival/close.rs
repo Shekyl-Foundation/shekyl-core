@@ -690,6 +690,7 @@ fn fold_epoch(
         &snapshot.bonds,
         &snapshot.shards,
         &snapshot.pairs,
+        shekyl_archival_retention::archival_params(),
     );
     let result = epoch_close_compute(&inputs)
         .expect("every credit pair indexes the bonds and shards it was built from");

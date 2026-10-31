@@ -156,13 +156,19 @@ impl super::Transition {
         let relative = connecting
             .checked_sub(open)
             .expect("a block is at or after its epoch's open");
-        let horizon = draw_horizon(relative.to_raw(), schedule.blocks().get(), window.get());
+        let horizon = draw_horizon(
+            relative.to_raw(),
+            schedule.blocks().get(),
+            window.get(),
+            shekyl_archival_retention::archival_params(),
+        );
         let Some((count, carry)) = draw_count(
             set_size,
             unsettled,
             horizon,
             schedule.blocks().get(),
             carry_in,
+            shekyl_archival_retention::archival_params(),
         ) else {
             return Err(fault(connecting, DrawCountFault::NoTarget));
         };
@@ -509,8 +515,17 @@ mod tests {
             let hit = transition
                 .block_draws(&view, None, &mut count_memo, &mut coverage)
                 .expect("the opening hash hits");
-            let horizon = draw_horizon(1, seb, window);
-            let (count, carry) = draw_count(1, 0, horizon, seb, 0).expect("the horizon fits");
+            let horizon =
+                draw_horizon(1, seb, window, shekyl_archival_retention::archival_params());
+            let (count, carry) = draw_count(
+                1,
+                0,
+                horizon,
+                seb,
+                0,
+                shekyl_archival_retention::archival_params(),
+            )
+            .expect("the horizon fits");
             assert_ne!(carry, 0, "one pair leaves a fraction");
             assert_eq!(
                 hit,
@@ -533,8 +548,15 @@ mod tests {
             let miss = transition
                 .block_draws(&view, None, &mut miss_memo, &mut miss_coverage)
                 .expect("the miss rebuilds the empty set");
-            let (empty_count, empty_carry) =
-                draw_count(0, 0, horizon, seb, 0).expect("the horizon fits");
+            let (empty_count, empty_carry) = draw_count(
+                0,
+                0,
+                horizon,
+                seb,
+                0,
+                shekyl_archival_retention::archival_params(),
+            )
+            .expect("the horizon fits");
             assert_eq!((empty_count, empty_carry), (0, 0));
             assert_eq!(miss, BlockDraws::ZERO);
             assert_ne!(hit.carry, miss.carry);

@@ -492,6 +492,10 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`ENGINE_CADENCE_DRIVER.md`](design/ENGINE_CADENCE_DRIVER.md) (§3 leg 4)
   - Target: pre-genesis
 
+- **The claim leg prices an allowance, not the claim's weight.** The fee it pays and the relay policy's emission-claim hold are both taken at `CLAIM_PRICED_WEIGHT` (49 152 + 2 048 = 51 200, `cadence/claim.rs`), a static reserve for the non-claims part plus one vin row, not the weight of the claim being built. A predictor from the assembled claim's shape replaces the allowance; the hold's test reads the same constant, so the hold follows with no second edit (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.26, ruling 9).
+  - Owner: [`ENGINE_CADENCE_DRIVER.md`](design/ENGINE_CADENCE_DRIVER.md) (§4)
+  - Target: pre-genesis
+
 - **Q11 zero-fee-input emission claim has no settlement evidence** (destitute mint-pays-fee; named blocker: accrual has no claim-match set).
   - Target: pre-genesis
 
@@ -927,9 +931,6 @@ Default. Lands before genesis if it should exist at launch.
 
 - **PQC Multisig : external adversarial review (Phase 5).**
   - Target: pre-genesis
-
-- **Rename `RETENTION_HORIZON_BLOCKS` (hygiene, C2-R1b residue).** The name reads as a reorg bound and cost the program one wrong ruling draft (the tip-derived floor); under the watermark form it is only the archival sweep floor. Rename toward its actual job (e.g. `ARCHIVAL_SWEEP_FLOOR_BLOCKS`) with the [`ARCHIVAL_TIMING_CONSTANTS.md`](design/ARCHIVAL_TIMING_CONSTANTS.md) row updated in the same change.
-  - Target: post-genesis
 
 - **Threshold signatures: one missing primitive, two named customers (ruled 2026-09-03).** PQC multisig and quorum-style attestation (C2-R0 candidate C6's decisive constraint) wait on the **same external event**: a practical, standardized threshold construction for the **ML-DSA leg**. The classical half is not the problem — FROST-style Schnorr thresholds are mature for the Ed25519 leg — but hybrid signing means the PQ leg cannot be waved off: a threshold classical signature bolted to k-of-n individual PQ signatures inherits the fat certificate's size *and* its signer-naming (the C6 tier-1 persona-linkage oracle: an **attested, gap-free** presence/absence ledger — absences are *recorded*, not merely unobserved, so the adversary reads a ledger the chain maintains for them — and a **permanent** one: personas that ever signed stay linkable from history even after any later format fix). Whoever notices NIST or the research community shipping a practical lattice threshold scheme reopens **both** customers at once — one row so they cannot be reopened separately. Realistic horizon: years (interactive round complexity; security-analysis maturity). Owner: crypto lane; the V4 row below is the *transition* consumer of the same event.
   - Target: post-genesis

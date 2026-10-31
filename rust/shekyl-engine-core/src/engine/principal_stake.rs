@@ -29,7 +29,7 @@
 //! because this is the transaction whose amount is observed.
 
 use rand_core::RngCore as _;
-use shekyl_standoff::{draw_cover_amount, COVER_RUNG_ATOMIC};
+use shekyl_standoff::draw_cover_amount;
 use shekyl_units::AtomicUnits;
 
 use super::fee_estimator::FeePriority;
@@ -40,15 +40,9 @@ use super::traits::{
 };
 use super::{EngineSignerKind, SendError};
 
-// `shekyl-standoff` mirrors the bond rung locally (it has no retention
-// dependency, being the leaf draw crate). This crate depends on both, so it is
-// the one place that can assert the mirror has not drifted — a divergence would
-// silently move the cover's upper bound off `bond_floor`, so the funded amount
-// could land on a rung boundary and the unprovability property would break.
-const _: () = assert!(
-    COVER_RUNG_ATOMIC == shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC,
-    "cover rung mirror drifted from ARCHIVAL_BOND_FLOOR_ATOMIC"
-);
+// The cover rung is the archival bond floor, passed to the draw from the
+// one parameter set (`archival_params()`), so the cover's upper bound cannot
+// move off `bond_floor`: there is no second copy to drift.
 
 /// Why [`Engine::stake_in`](super::Engine::stake_in) could not build the funding
 /// transfer.
@@ -208,7 +202,10 @@ where
             .try_fill_bytes(&mut probe)
             .map_err(StakeInError::RngSourceFailed)?;
         let mut rng = OsRngGapAdapter;
-        let cover = AtomicUnits::from_raw(draw_cover_amount(&mut rng));
+        let cover = AtomicUnits::from_raw(draw_cover_amount(
+            &mut rng,
+            shekyl_archival_retention::archival_params().bond_floor_atomic,
+        ));
         let funded = amount
             .checked_add(cover)
             .ok_or(StakeInError::CoverOverflow {
@@ -241,7 +238,7 @@ mod tests {
     use super::StakeInError;
     use crate::engine::pending::TxDestination;
     use crate::engine::test_support::{activate_persona, staker_engine};
-    use shekyl_standoff::COVER_RUNG_ATOMIC;
+    use shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC as COVER_RUNG_ATOMIC;
     use shekyl_units::AtomicUnits;
 
     /// This suite's deterministic-seed multiplier (`test_support::fixed_seed`).

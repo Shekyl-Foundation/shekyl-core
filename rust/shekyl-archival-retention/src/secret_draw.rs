@@ -17,10 +17,10 @@
 //! hash side, which that increment does not move.
 
 use shekyl_curve_io::write_varint;
-use shekyl_types::archival::COUNTED_DRAWS;
 use shekyl_types::BlockHeight;
 
 use crate::hash::cshake256_32;
+use crate::ArchivalParams;
 
 /// cSHAKE256 customization for [`select_draw`] (rule 30: one label, one
 /// function, versioned).
@@ -41,33 +41,6 @@ pub const SERVE_CREDIT_BATCH_CUSTOMIZATION: &[u8] = b"shekyl/archival-serve-cred
 /// [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](../../../docs/design/ARCHIVAL_SERVE_CREDIT_SPEC.md)
 /// §4.4: the 256th attempt selects whatever its weight, so the loop is total.
 pub const DRAW_ATTEMPTS: u32 = 256;
-
-/// Floor on the count-rule horizon `H`, in blocks.
-/// [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](../../../docs/design/ARCHIVAL_SERVE_CREDIT_SPEC.md)
-/// §4.3.
-pub const DRAW_HORIZON_FLOOR: u64 = 200;
-
-/// The count cap, as a multiple of `COUNTED_DRAWS · D/SEB`: a block's
-/// target is at most this many times the rate that would issue every pair
-/// its counted draws once over the epoch (spec §3, "count cap"; §4.3).
-///
-/// **PROVISIONAL** (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §13.2). Reopen on the
-/// sim or on testnet measurement.
-pub const COUNT_CAP_MULTIPLE: u64 = 3;
-
-/// The count cap as a multiple of the base rate `D/SEB`:
-/// [`COUNT_CAP_MULTIPLE`] times [`COUNTED_DRAWS`]. §4.3's `3 · 3·D/SEB`,
-/// and the `9` of its integer form.
-///
-/// The one place the product is formed. [`draw_target`] caps at it,
-/// [`cap_binds`] asks whether the top-up passes it, and
-/// [`crate::section_budget`] bounds a section by it, so the section budget
-/// cannot drift from the count rule it is derived from.
-#[allow(clippy::cast_possible_truncation)] // `COUNTED_DRAWS` is 3.
-pub const COUNT_CAP_BASE_MULTIPLE: u64 = COUNT_CAP_MULTIPLE * COUNTED_DRAWS as u64;
-
-// §4.3 writes the integer form with this product as a literal.
-const _: () = assert!(COUNT_CAP_BASE_MULTIPLE == 9);
 
 /// Reads of one draw before the challenger abandons it. Admission
 /// refuses `attempt ≥ K` (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §5.3, `SCS-P13`).
@@ -230,19 +203,22 @@ pub fn serve_credit_batch_commitment(
     Some(cshake256_32(SERVE_CREDIT_BATCH_CUSTOMIZATION, &input))
 }
 
-/// The count-rule horizon `H` at epoch-relative height `r`.
+/// The count-rule horizon `H` at epoch-relative height `r`, under
+/// `params`' catch-up point `p` (thousandths) and floor `f`:
 ///
-/// `H = max(200, 0.7·SEB − r)` while `r < 0.7·SEB`, and
-/// `H = max(200, SEB − W₂ − r)` after.
+/// `H = max(f, ⌊p·SEB/1000⌋ − r)` while `r < ⌊p·SEB/1000⌋`, and
+/// `H = max(f, SEB − W₂ − r)` after. At the shipped `p = 700`, `f = 200`
+/// it is §4.3's `max(200, 0.7·SEB − r)`: `⌊700·SEB/1000⌋ = ⌊7·SEB/10⌋`
+/// for every `SEB`.
 #[must_use]
-pub fn draw_horizon(r: u64, seb: u64, response_window: u64) -> u64 {
-    let early_end = seb.saturating_mul(7) / 10;
+pub fn draw_horizon(r: u64, seb: u64, response_window: u64, params: &ArchivalParams) -> u64 {
+    let early_end = seb.saturating_mul(params.draw_catch_up_permille) / 1000;
     let span = if r < early_end {
         early_end - r
     } else {
         seb.saturating_sub(response_window).saturating_sub(r)
     };
-    span.max(DRAW_HORIZON_FLOOR)
+    span.max(params.draw_horizon_floor_blocks)
 }
 
 /// One block's draw target before the carry, and which side of the cap
@@ -252,7 +228,7 @@ pub struct DrawTarget {
     /// `t`: the target in draws, with 32 fractional bits.
     pub fixed: u128,
     /// Whether the cap bound: `D·H + SEB·u > 9·D·H`, strictly, with `9` the
-    /// [`COUNT_CAP_BASE_MULTIPLE`]. A target
+    /// set's [`ArchivalParams::count_cap_base_multiple`]. A target
     /// that lands exactly on the cap is not capped; nothing was held down.
     /// Exact for every input: see [`draw_target`].
     pub capped: bool,
@@ -292,7 +268,13 @@ pub struct DrawTarget {
 /// none of which is in production; the genesis schedule pins `SEB` and
 /// `H` well above zero and the target well below the limit.
 #[must_use]
-pub fn draw_target(set_size: u64, shortfall: u64, horizon: u64, seb: u64) -> Option<DrawTarget> {
+pub fn draw_target(
+    set_size: u64,
+    shortfall: u64,
+    horizon: u64,
+    seb: u64,
+    params: &ArchivalParams,
+) -> Option<DrawTarget> {
     if seb == 0 || horizon == 0 {
         return None;
     }
@@ -303,9 +285,10 @@ pub fn draw_target(set_size: u64, shortfall: u64, horizon: u64, seb: u64) -> Opt
     // Neither product can overflow: each is two `u64`s in a `u128`.
     let base = d * h;
     let top_up = epoch * u;
-    let capped = cap_binds(base, top_up);
+    let multiple = params.count_cap_base_multiple();
+    let capped = cap_binds(base, top_up, multiple);
     let weighted = base.saturating_add(top_up);
-    let cap = base.saturating_mul(u128::from(COUNT_CAP_BASE_MULTIPLE));
+    let cap = base.saturating_mul(u128::from(multiple));
     // `checked_shl` checks the shift amount, not the bits shifted out; a
     // multiplication refuses a numerator that does not fit.
     let numer = weighted.min(cap).checked_mul(1 << 32)?;
@@ -316,7 +299,7 @@ pub fn draw_target(set_size: u64, shortfall: u64, horizon: u64, seb: u64) -> Opt
 }
 
 /// Whether the cap bound: `SEB·u > 8·D·H`, exactly, from `base = D·H` and
-/// `top_up = SEB·u`. `8` is [`COUNT_CAP_BASE_MULTIPLE`] less the base the
+/// `top_up = SEB·u`. `8` is the base `multiple` less the base the
 /// top-up is added to: `D·H + SEB·u > 9·D·H` is `SEB·u > 8·D·H`. An
 /// `8·D·H` that does not fit a `u128` is at least `2^128`, and every
 /// `SEB·u` is strictly below that, so it is not capped.
@@ -324,8 +307,8 @@ pub fn draw_target(set_size: u64, shortfall: u64, horizon: u64, seb: u64) -> Opt
 /// Its own function so the predicate is defined on every input, including
 /// those whose target does not fit and for which [`draw_target`] has no
 /// value to return.
-fn cap_binds(base: u128, top_up: u128) -> bool {
-    match base.checked_mul(u128::from(COUNT_CAP_BASE_MULTIPLE - 1)) {
+fn cap_binds(base: u128, top_up: u128, multiple: u64) -> bool {
+    match base.checked_mul(u128::from(multiple.saturating_sub(1))) {
         Some(room) => top_up > room,
         None => false,
     }
@@ -351,8 +334,9 @@ pub fn draw_count(
     horizon: u64,
     seb: u64,
     prev_carry: u32,
+    params: &ArchivalParams,
 ) -> Option<(u64, u32)> {
-    let t = draw_target(set_size, shortfall, horizon, seb)?.fixed;
+    let t = draw_target(set_size, shortfall, horizon, seb, params)?.fixed;
     let acc = u128::from(prev_carry).saturating_add(t);
     let count = u64::try_from(acc >> 32).unwrap_or(u64::MAX);
     let carry = u32::try_from(acc & 0xffff_ffff).expect("a 32-bit mask fits a u32");
@@ -719,28 +703,35 @@ mod tests {
     fn the_horizon_never_drops_below_the_floor() {
         let seb = 10_000;
         let w2 = 500;
-        assert_eq!(draw_horizon(0, seb, w2), 7_000);
-        assert_eq!(draw_horizon(6_999, seb, w2), 200);
-        assert_eq!(draw_horizon(7_000, seb, w2), 2_500);
-        assert_eq!(draw_horizon(9_999, seb, w2), 200);
+        assert_eq!(draw_horizon(0, seb, w2, crate::archival_params()), 7_000);
+        assert_eq!(draw_horizon(6_999, seb, w2, crate::archival_params()), 200);
+        assert_eq!(
+            draw_horizon(7_000, seb, w2, crate::archival_params()),
+            2_500
+        );
+        assert_eq!(draw_horizon(9_999, seb, w2, crate::archival_params()), 200);
     }
 
     #[test]
     fn the_count_carries_the_fraction_and_caps_at_nine_times_base() {
         // D = SEB, u = 0, H = 200: t = (D·H << 32) / (SEB·H) = 1 << 32,
         // so count = 1 + (carry == 0).
-        let (count, carry) = draw_count(10_000, 0, 200, 10_000, 0).expect("H and SEB");
+        let (count, carry) =
+            draw_count(10_000, 0, 200, 10_000, 0, crate::archival_params()).expect("H and SEB");
         assert_eq!((count, carry), (1, 0));
 
         // Half a draw per block: D = SEB/2. First block count 0, carry
         // 2^31; the next adds another half and issues one.
-        let (count, carry) = draw_count(5_000, 0, 200, 10_000, 0).expect("H and SEB");
+        let (count, carry) =
+            draw_count(5_000, 0, 200, 10_000, 0, crate::archival_params()).expect("H and SEB");
         assert_eq!((count, carry), (0, 1 << 31));
-        let (count, carry) = draw_count(5_000, 0, 200, 10_000, carry).expect("H and SEB");
+        let (count, carry) =
+            draw_count(5_000, 0, 200, 10_000, carry, crate::archival_params()).expect("H and SEB");
         assert_eq!((count, carry), (1, 0));
 
         // The 9× cap: a huge shortfall cannot push t above 9·D/SEB.
-        let (count, _) = draw_count(10_000, u64::MAX, 200, 10_000, 0).expect("H and SEB");
+        let (count, _) = draw_count(10_000, u64::MAX, 200, 10_000, 0, crate::archival_params())
+            .expect("H and SEB");
         assert_eq!(count, 9);
     }
 
@@ -757,7 +748,8 @@ mod tests {
     #[test]
     fn the_cap_binds_only_when_the_uncapped_side_exceeds_it() {
         let nine = 9u128 << 32;
-        let at = |u| draw_target(10_000, u, 200, 10_000).expect("H and SEB");
+        let at =
+            |u| draw_target(10_000, u, 200, 10_000, crate::archival_params()).expect("H and SEB");
         // One below: 17,990,000 / 2,000,000 = 1799/200 = 8.995 draws,
         // floored at 32 fractional bits. Under the cap.
         let below = at(1_599);
@@ -797,14 +789,20 @@ mod tests {
         );
         // An empty set draws nothing and is not capped: 0 > 0 is false.
         assert_eq!(
-            draw_target(0, 0, 200, 10_000),
+            draw_target(0, 0, 200, 10_000, crate::archival_params()),
             Some(DrawTarget {
                 fixed: 0,
                 capped: false
             })
         );
-        assert_eq!(draw_target(10_000, 0, 0, 10_000), None);
-        assert_eq!(draw_target(10_000, 0, 200, 0), None);
+        assert_eq!(
+            draw_target(10_000, 0, 0, 10_000, crate::archival_params()),
+            None
+        );
+        assert_eq!(
+            draw_target(10_000, 0, 200, 0, crate::archival_params()),
+            None
+        );
     }
 
     /// The predicate where the target's own arithmetic saturates. Each
@@ -828,6 +826,7 @@ mod tests {
             cap_binds(
                 u128::from(d) * u128::from(h),
                 u128::from(seb) * u128::from(u),
+                ArchivalParams::SHIPPED.count_cap_base_multiple(),
             )
         };
 
@@ -862,14 +861,18 @@ mod tests {
 
         // The target does not fit on the review's input, and neither
         // function invents one. `checked_shl` returned a truncated 1 here.
-        assert_eq!(draw_target(m / 8, m, m, m), None);
-        assert_eq!(draw_count(m / 8, m, m, m, 0), None);
+        assert_eq!(draw_target(m / 8, m, m, m, crate::archival_params()), None);
+        assert_eq!(
+            draw_count(m / 8, m, m, m, 0, crate::archival_params()),
+            None
+        );
         // One below the limit fits; the limit does not. D = 2^95 / H with
         // u = 0: the minimum is D·H itself.
-        let fits = draw_target(1 << 63, 0, 1 << 32, 1 << 20).expect("D·H = 2^95 fits");
+        let fits = draw_target(1 << 63, 0, 1 << 32, 1 << 20, crate::archival_params())
+            .expect("D·H = 2^95 fits");
         assert_eq!(fits.fixed, (1u128 << 127) / (1u128 << 52));
         assert_eq!(
-            draw_target(1 << 63, 0, 1 << 33, 1 << 20),
+            draw_target(1 << 63, 0, 1 << 33, 1 << 20, crate::archival_params()),
             None,
             "D·H = 2^96"
         );
@@ -883,7 +886,9 @@ mod tests {
     /// operands, and `>=` at a second boundary.
     #[test]
     fn the_cap_and_the_target_hold_at_a_large_unsaturated_input() {
-        let at = |u| draw_target(1 << 40, u, 1 << 20, 1 << 30).expect("H and SEB");
+        let at = |u| {
+            draw_target(1 << 40, u, 1 << 20, 1 << 30, crate::archival_params()).expect("H and SEB")
+        };
         // The cap is 9·D/SEB = 9·2^10 draws: 9·2^42 with 32 fractional bits.
         let cap = 9u128 << 42;
         assert_eq!(
@@ -930,15 +935,28 @@ mod tests {
             for shortfall in [0, 1, 1_599, 1_600, 1_601, 7_000, 972_000, u64::MAX] {
                 for horizon in [200, 2_500, 7_000] {
                     for carry in [0, 1, 1 << 31, u32::MAX] {
-                        let target =
-                            draw_target(set_size, shortfall, horizon, 10_000).expect("H and SEB");
+                        let target = draw_target(
+                            set_size,
+                            shortfall,
+                            horizon,
+                            10_000,
+                            crate::archival_params(),
+                        )
+                        .expect("H and SEB");
                         let acc = target.fixed + u128::from(carry);
                         let expected = (
                             u64::try_from(acc >> 32).expect("nine draws a pair at most"),
                             u32::try_from(acc & mask).expect("masked"),
                         );
                         assert_eq!(
-                            draw_count(set_size, shortfall, horizon, 10_000, carry),
+                            draw_count(
+                                set_size,
+                                shortfall,
+                                horizon,
+                                10_000,
+                                carry,
+                                crate::archival_params()
+                            ),
                             Some(expected),
                             "D = {set_size}, u = {shortfall}, H = {horizon}, carry = {carry}"
                         );
@@ -948,7 +966,10 @@ mod tests {
                 }
             }
         }
-        assert_eq!(draw_count(10_000, 0, 0, 10_000, 0), None);
+        assert_eq!(
+            draw_count(10_000, 0, 0, 10_000, 0, crate::archival_params()),
+            None
+        );
     }
 
     #[test]

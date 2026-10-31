@@ -493,7 +493,7 @@ pub fn emission_vin_verify_claims_under(
     // accept-at-`h_close + 1`), so the same-block close/claim race is
     // foreclosed structurally.
     let current_settled = schedule.epoch_at_height(ctx.current_block_height);
-    let window_floor = claim_window_floor(current_settled);
+    let window_floor = claim_window_floor(current_settled, crate::archival_params());
     for &epoch in &vin.settlement_epochs {
         let finalized = schedule
             .close_height(epoch)

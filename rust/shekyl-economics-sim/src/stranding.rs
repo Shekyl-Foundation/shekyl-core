@@ -36,10 +36,11 @@
 
 use shekyl_archival_retention::{
     curve_milli, g_age_milli, reward_share_floor, scarcity_micro, work_milli_from_micro,
-    MAX_CLAIM_AGE_W, MAX_HOLDINGS_SHARDS,
+    MAX_HOLDINGS_SHARDS,
 };
 
-use crate::population::{reward_curve, AGE_MILLI, AGE_WEIGHT_MILLI};
+use crate::engine::SimParams;
+use crate::population::{reward_curve, AGE_MILLI};
 
 /// DQ-2H archiver size classes: `(share of archivers per-mille, shards held)` —
 /// binary + heavy-tailed (many small, few at the `MAX_HOLDINGS_SHARDS` cap). The
@@ -66,18 +67,19 @@ pub enum Scoring {
 impl Scoring {
     /// One bond's work (milli) holding `shards` shards each replicated `r_market`.
     #[must_use]
-    pub fn work_milli(self, shards: u64, r_market: u64) -> u64 {
+    pub fn work_milli(self, shards: u64, r_market: u64, run: &SimParams) -> u64 {
         match self {
             Scoring::PreD1 => {
                 // Per-shard floor at MILLI — the D1 defect: `g/r` floors to 0 past
                 // the cliff, so a bulk holder of common shards scores nothing.
-                let g = cliff_g_milli();
+                let g = cliff_g_milli(run);
                 let per_shard = if r_market == 0 { 0 } else { g / r_market };
                 per_shard.saturating_mul(shards)
             }
             Scoring::PostD1 => {
                 // Production path: accumulate micro, floor once at the aggregate.
-                let per_shard_micro = scarcity_micro(r_market, AGE_MILLI, AGE_WEIGHT_MILLI);
+                let per_shard_micro =
+                    scarcity_micro(r_market, AGE_MILLI, run.archival().reward_age_weight_milli);
                 work_milli_from_micro(per_shard_micro.saturating_mul(shards))
             }
         }
@@ -140,11 +142,15 @@ pub struct StrandingOutcome {
 /// may claim once per `MAX_CLAIM_AGE_W` window, amortising **one** claim
 /// transaction across that many epochs of accrued reward, which lowers the
 /// claim-cost viability floor by the same factor. `1` is the naive per-epoch
-/// claimer; [`MAX_CLAIM_AGE_W`] is the rational batcher and the **bound** on the
-/// amortisation (claim later than that and the epoch expires — *supply never
-/// created*, `ARCHIVAL_BUDGET_SCHEDULE.md` §4). Purely archiver-side behaviour:
-/// **no consensus change**, which is what makes it the cheapest of the levers.
-pub const RATIONAL_CLAIM_CADENCE_EPOCHS: u64 = MAX_CLAIM_AGE_W;
+/// claimer; the run's claim window `W` (`ArchivalParams::max_claim_age_w`) is
+/// the rational batcher and the **bound** on the amortisation (claim later
+/// than that and the epoch expires — *supply never created*,
+/// `ARCHIVAL_BUDGET_SCHEDULE.md` §4). Purely archiver-side behaviour: **no
+/// consensus change**, which is what makes it the cheapest of the levers.
+#[must_use]
+pub fn rational_claim_cadence_epochs(run: &SimParams) -> u64 {
+    run.archival().max_claim_age_w
+}
 
 /// Measure stranding for one epoch's `budget_atomic` over the DQ-2H population,
 /// under `scoring`. A class claims iff its accrued reward over
@@ -162,8 +168,8 @@ pub const RATIONAL_CLAIM_CADENCE_EPOCHS: u64 = MAX_CLAIM_AGE_W;
 /// `r_market > g`, with `g` production's age-weighted gain at age 0. One
 /// owner for the figure the reports quote.
 #[must_use]
-pub fn cliff_g_milli() -> u64 {
-    g_age_milli(AGE_MILLI, AGE_WEIGHT_MILLI)
+pub fn cliff_g_milli(run: &SimParams) -> u64 {
+    g_age_milli(AGE_MILLI, run.archival().reward_age_weight_milli)
 }
 
 #[must_use]
@@ -174,6 +180,7 @@ pub fn measure(
     claim_cost_atomic: u64,
     claim_cadence_epochs: u64,
     scoring: Scoring,
+    run: &SimParams,
 ) -> StrandingOutcome {
     // Amortise one claim tx across the batching window.
     let claim_cost_atomic = claim_cost_atomic / claim_cadence_epochs.max(1);
@@ -189,7 +196,7 @@ pub fn measure(
         // this is a *count of discrete archivers*, not a quantity, so a fractional
         // class member is meaningless and flooring is the honest reading.
         let count = archivers * u64::from(per_mille) / 1000;
-        let work = scoring.work_milli(shards, mean_r);
+        let work = scoring.work_milli(shards, mean_r, run);
         let capped = if work > 0 {
             curve_milli(work, &curve)
         } else {
@@ -259,13 +266,16 @@ mod tests {
         // ≈ 1000 at age 0) the pre-fix per-shard floor returns 0 for EVERY shard,
         // so a bulk holder scores nothing; the post-fix micro path still pays.
         let deep_r = 2_000; // past the cliff
-        assert_eq!(Scoring::PreD1.work_milli(4_096, deep_r), 0);
-        assert!(Scoring::PostD1.work_milli(4_096, deep_r) > 0);
+        assert_eq!(
+            Scoring::PreD1.work_milli(4_096, deep_r, &SimParams::default()),
+            0
+        );
+        assert!(Scoring::PostD1.work_milli(4_096, deep_r, &SimParams::default()) > 0);
         // Below the cliff both score, and pre-fix is never ABOVE post-fix
         // (per-shard flooring only discards).
         let shallow_r = 6;
-        let pre = Scoring::PreD1.work_milli(4_096, shallow_r);
-        let post = Scoring::PostD1.work_milli(4_096, shallow_r);
+        let pre = Scoring::PreD1.work_milli(4_096, shallow_r, &SimParams::default());
+        let post = Scoring::PostD1.work_milli(4_096, shallow_r, &SimParams::default());
         assert!(pre > 0 && post > 0);
         assert!(
             pre <= post,
@@ -285,8 +295,24 @@ mod tests {
         let n = 1_000u64; // early corpus
         let archivers = 40_000u64;
         let claim_cost = 10_000_000u64; // 0.01 SKL
-        let pre = measure(budget, n, archivers, claim_cost, 1, Scoring::PreD1);
-        let post = measure(budget, n, archivers, claim_cost, 1, Scoring::PostD1);
+        let pre = measure(
+            budget,
+            n,
+            archivers,
+            claim_cost,
+            1,
+            Scoring::PreD1,
+            &SimParams::default(),
+        );
+        let post = measure(
+            budget,
+            n,
+            archivers,
+            claim_cost,
+            1,
+            Scoring::PostD1,
+            &SimParams::default(),
+        );
         assert!(
             pre.mean_r > 1_000,
             "test must reach the cliff: r={}",
@@ -317,6 +343,7 @@ mod tests {
             10_000_000,
             1,
             Scoring::PostD1,
+            &SimParams::default(),
         );
         assert!((0.0..=1.0).contains(&out.stranded_fraction));
         assert!((0.0..=1.0).contains(&out.non_claiming_fraction));
@@ -331,14 +358,23 @@ mod tests {
         let budget = 1_000_000_000u64; // small pool ⇒ small per-epoch rewards
         let (n, archivers) = (10_000u64, 3_000u64);
         let claim_cost = 5_000_000u64; // 0.005 SKL
-        let naive = measure(budget, n, archivers, claim_cost, 1, Scoring::PostD1);
+        let naive = measure(
+            budget,
+            n,
+            archivers,
+            claim_cost,
+            1,
+            Scoring::PostD1,
+            &SimParams::default(),
+        );
         let batched = measure(
             budget,
             n,
             archivers,
             claim_cost,
-            RATIONAL_CLAIM_CADENCE_EPOCHS,
+            rational_claim_cadence_epochs(&SimParams::default()),
             Scoring::PostD1,
+            &SimParams::default(),
         );
         assert!(
             batched.non_claiming_fraction <= naive.non_claiming_fraction,

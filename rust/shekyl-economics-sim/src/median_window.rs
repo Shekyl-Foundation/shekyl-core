@@ -150,22 +150,30 @@ impl Multiset {
 /// CEN-G6/G6b over a fold's blocks: the long window of long-term weights
 /// and the short window of weights, and the medians the next block is
 /// judged under.
+///
+/// The two lengths are the const generics
+/// [`shekyl_chain_rules::effective_median_at_windows`] takes, defaulting to
+/// the shipped pair, so a window-length run instantiates the validator's
+/// own lengths rather than a sim-side setting.
 #[derive(Debug, Clone)]
-pub(crate) struct MedianWindow {
+pub(crate) struct MedianWindow<
+    const LONG: u64 = BLOCK_WEIGHT_LONG_TERM_WINDOW,
+    const SHORT: u64 = BLOCK_WEIGHT_SHORT_TERM_WINDOW,
+> {
     long_term: RollingMedian,
     short_term: RollingMedian,
 }
 
-impl Default for MedianWindow {
+impl<const LONG: u64, const SHORT: u64> Default for MedianWindow<LONG, SHORT> {
     fn default() -> Self {
         Self {
-            long_term: RollingMedian::new(window_len(BLOCK_WEIGHT_LONG_TERM_WINDOW)),
-            short_term: RollingMedian::new(window_len(BLOCK_WEIGHT_SHORT_TERM_WINDOW)),
+            long_term: RollingMedian::new(window_len(LONG)),
+            short_term: RollingMedian::new(window_len(SHORT)),
         }
     }
 }
 
-impl MedianWindow {
+impl<const LONG: u64, const SHORT: u64> MedianWindow<LONG, SHORT> {
     /// The medians the next block is priced and bounded against. At a
     /// fold's first block both windows are empty and both medians are the
     /// zone, as at the chain's genesis.
@@ -175,9 +183,16 @@ impl MedianWindow {
 
     /// Record a block of `weight` bytes judged under `medians` — the value
     /// [`Self::medians`] returned for it. Its long-term weight is the
-    /// production clamp at that block's own long-term effective median.
-    pub(crate) fn push(&mut self, medians: EffectiveMedian, weight: u64) {
-        let long_term = long_term_weight(medians.long_term_effective_median.to_raw(), weight);
+    /// production clamp at that block's own long-term effective median,
+    /// under the run's set.
+    pub(crate) fn push(
+        &mut self,
+        medians: EffectiveMedian,
+        weight: u64,
+        params: &shekyl_economics::EconomicParams,
+    ) {
+        let long_term =
+            long_term_weight(medians.long_term_effective_median.to_raw(), weight, params);
         self.long_term.push(long_term);
         self.short_term.push(weight);
     }
@@ -190,7 +205,7 @@ fn window_len(blocks: u64) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shekyl_chain_rules::{median, medians_over, RecordedWeights};
+    use shekyl_chain_rules::{median, medians_over, medians_over_window, RecordedWeights};
     use shekyl_types::{BlockWeight, LongTermWeight};
 
     /// A deterministic stream with repeats, so the even-count rule and
@@ -235,47 +250,87 @@ mod tests {
         assert_eq!(RollingMedian::new(3).median(), 0, "the median of nothing");
     }
 
-    /// The whole of CEN-G6/G6b, block by block, against
-    /// `shekyl_chain_rules::medians_over` over the same recorded weights:
-    /// a stream long enough to evict from the 100 000-row long window,
-    /// with weights that cross the zone and the clamps. `medians_over` is
-    /// an `O(window)` selection, so it is asked at every step for the first
-    /// 3 000 blocks, every 4 999th step to the window's fill, and every
-    /// 997th after it, where eviction runs.
-    #[test]
-    fn the_window_is_medians_over_at_every_checked_block() {
-        let long = window_len(BLOCK_WEIGHT_LONG_TERM_WINDOW);
+    /// The whole of CEN-G6/G6b, block by block, against the validator's
+    /// `medians_over_window::<SHORT>` over the same recorded weights, the
+    /// last `LONG` of them: a stream long enough to evict from the long
+    /// window, with weights that cross the zone and the clamps.
+    /// `medians_over_window` is an `O(window)` selection, so it is asked at
+    /// every step for the first `dense` blocks, every 4 999th step to the
+    /// window's fill, and every `sparse`th after it, where eviction runs.
+    fn holds_against_the_validator<const LONG: u64, const SHORT: u64>(
+        dense: usize,
+        sparse: usize,
+    ) -> usize {
+        let long = window_len(LONG);
+        let params = shekyl_economics::EconomicParams::default();
         let weights = stream(7, long + 30_000, 1_500_000);
-        let mut rolling = MedianWindow::default();
+        let mut rolling = MedianWindow::<LONG, SHORT>::default();
         let mut recorded: VecDeque<RecordedWeights> = VecDeque::new();
         let mut checks = 0usize;
         for (step, weight) in weights.into_iter().enumerate() {
-            let medians = rolling.medians(&shekyl_economics::EconomicParams::default());
-            let checked = step < 3_000 || step % 4_999 == 0 || (step >= long && step % 997 == 0);
+            let medians = rolling.medians(&params);
+            let checked = step < dense || step % 4_999 == 0 || (step >= long && step % sparse == 0);
             if checked {
                 let window: Vec<_> = recorded.iter().copied().collect();
                 assert_eq!(
                     medians,
-                    medians_over(&window, &shekyl_economics::EconomicParams::default()),
-                    "block {step}"
+                    medians_over_window::<SHORT>(&window, &params),
+                    "block {step}, windows {LONG}/{SHORT}"
                 );
                 checks += 1;
             }
-            rolling.push(medians, weight);
+            rolling.push(medians, weight, &params);
             recorded.push_back(RecordedWeights {
                 weight: BlockWeight::from_raw(weight),
                 long_term_weight: LongTermWeight::from_raw(long_term_weight(
                     medians.long_term_effective_median.to_raw(),
                     weight,
+                    &params,
                 )),
             });
             if recorded.len() > long {
                 recorded.pop_front();
             }
         }
+        checks
+    }
+
+    /// At the shipped windows, where the validator's own entry is
+    /// `medians_over`: the 100 000-row long window fills and evicts.
+    #[test]
+    fn the_window_is_medians_over_at_every_checked_block() {
+        let checks = holds_against_the_validator::<
+            BLOCK_WEIGHT_LONG_TERM_WINDOW,
+            BLOCK_WEIGHT_SHORT_TERM_WINDOW,
+        >(3_000, 997);
         assert!(
             checks > 3_000 + 30,
             "the eviction regime was checked ({checks} checks)"
+        );
+        // The shipped instance of the generic is the shipped entry.
+        let window = vec![
+            RecordedWeights {
+                weight: BlockWeight::from_raw(9),
+                long_term_weight: LongTermWeight::from_raw(9),
+            };
+            3
+        ];
+        let params = shekyl_economics::EconomicParams::default();
+        assert_eq!(
+            medians_over(&window, &params),
+            medians_over_window::<BLOCK_WEIGHT_SHORT_TERM_WINDOW>(&window, &params)
+        );
+    }
+
+    /// At a pair a window-length run would build: a 500-block long and a
+    /// 7-block short window, both evicting tens of thousands of times, every
+    /// block checked once the long window is full.
+    #[test]
+    fn a_short_window_pair_is_the_validators_at_every_block() {
+        let checks = holds_against_the_validator::<500, 7>(3_000, 1);
+        assert!(
+            checks > 30_000,
+            "every evicting block was checked ({checks} checks)"
         );
     }
 }
