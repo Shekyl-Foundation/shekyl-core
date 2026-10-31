@@ -79,6 +79,9 @@ KNOWN_RUSTFLAGS = frozenset({"target-feature=+crt-static"})
 KNOWN_BUILD_ENV = frozenset({
     "AR", "AR_<T>", "CC", "CC_<T>", "CFLAGS", "CFLAGS_<T>", "CXX",
     "CXXFLAGS", "LDFLAGS", "NM", "RANLIB", "CARGO_TARGET_<T>_LINKER",
+    # Where cargo writes, pinned to the path the link reads (#1228); it
+    # selects a directory, never a codegen setting.
+    "CARGO_TARGET_DIR",
     "CARGO_TARGET_<T>_RUSTFLAGS", "MACOSX_DEPLOYMENT_TARGET", "SDKROOT",
 })
 KNOWN_BUILD_FLAGS = frozenset({
