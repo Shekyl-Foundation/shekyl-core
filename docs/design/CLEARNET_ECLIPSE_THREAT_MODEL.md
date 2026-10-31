@@ -5,7 +5,7 @@
 
 Everything else here is a working draft, for the round to rule.
 **Premise (Rick, 2026-10-27):** worst case, Tor is not available. The clearnet connector has to stand on its own; switching to Tor avoids the problem rather than fixing it.
-**Read at:** `dev` `c72048125`. Every anchor was re-verified at `90ef1bc9ae` (2026-10-30); only the reconnect throttle's heading moved, to `P2P_TRANSPORT_LAYER.md:1942`.
+**Read at:** `dev` `c72048125`. Every anchor was re-verified at `90ef1bc9ae` (2026-10-30), and the reconnect throttle's heading again with #1226 (2026-10-31): `P2P_TRANSPORT_LAYER.md:1999`.
 **Clearnet authentication:** clearnet can encrypt and recognize, but never authenticate a destination (Rick, 2026-10-26). Every on-path residual below is permanent and accepted, not pending.
 
 ## 1. What "capture all paths" means, and what it buys
@@ -36,7 +36,7 @@ There are two different ways to capture a node, and they need different position
 ### Step 2: filling gray costs almost nothing
 
 - **Any established session can feed gray, inbound ones included.** `peer_sync_idle_maker` (`net_node.inl:686`) sends a timed sync on every established connection. The response's list goes to `received_peerlist` → `shekyl_peerlist_admit_received` → `admit_received_list` (`zone_server.h:196`, `peerlist_ffi.rs:159`). An attacker only has to connect to us.
-- **The intake cap is per session, and a reconnect resets it.** D-S1 allows 24 distinct addresses per session per 24 h (`SESSION_INTAKE_CAP`, `peerlist.rs:218`, `:288`), and "the session ended; its intake ledger goes with it" (`peerlist.rs:312`). The design doc names the gap itself: "a host that reconnects buys a fresh session and a fresh cap" (`P2P_TRANSPORT_LAYER.md:1942`, the clearnet reconnect throttle, registered 2026-10-09 and not built). Even once built, that throttle is per host, and step 1 makes hosts free.
+- **The intake cap is per session, and a reconnect resets it.** D-S1 allows 24 distinct addresses per session per 24 h (`SESSION_INTAKE_CAP`, `peerlist.rs:218`, `:288`), and "the session ended; its intake ledger goes with it" (`peerlist.rs:312`). The design doc names the gap itself: "a host that reconnects buys a fresh session and a fresh cap" (`P2P_TRANSPORT_LAYER.md:1999`, the clearnet reconnect throttle, registered 2026-10-09 and not built). Even once built, that throttle is per host, and step 1 makes hosts free.
 - **The cost:** `GRAY_CAP` is 5000 (`lib.rs:120`), and 5000 ÷ 24 is about 210 short sessions. After that, every attacker admission evicts a uniformly random other gray seat (`evict_gray_over_cap`), so the attacker's share of gray rises towards 1 for as long as the feed runs. Honest inflow is bounded by honest disclosures: 12 per response, white only, and none below the floor.
 - **The addresses can be live.** The same VPS answers on as many IPv6 addresses as it lists, so they pass our tests and are promoted to white like any honest peer. Honest nodes that dial them promote them too, and then disclose them to everyone (white-only disclosure is no barrier to a live attacker).
 
