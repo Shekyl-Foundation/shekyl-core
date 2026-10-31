@@ -64,10 +64,14 @@ impl JumpWatch {
 }
 
 impl Core {
-    /// The stranded-bootstrap check, at each sample and live deadline while
-    /// bootstrapping. A process fault (respawn into the kept directory) when
-    /// a reported jump is followed by `jump_stall_after` with neither the
-    /// percent nor a known byte count moving.
+    /// The stranded-bootstrap check, at each sample while bootstrapping and
+    /// nowhere else: the sample is what reads the percent and the bytes, so
+    /// the check never judges marks older than the reply it just folded.
+    /// Samples run every `sample_every` through a bootstrap; a sample that
+    /// never returns is the reply bound's process fault. A process fault
+    /// (respawn into the kept directory) when a reported jump is followed by
+    /// `jump_stall_after` with neither the percent nor a known byte count
+    /// moving.
     pub(super) fn stranded_after_jump(&mut self, now: u64) -> Option<Vec<Action>> {
         if !matches!(self.phase, Phase::Bootstrapping { .. }) {
             return None;

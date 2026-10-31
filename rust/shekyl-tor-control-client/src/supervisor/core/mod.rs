@@ -626,10 +626,6 @@ impl Core {
                     self.arm_alive(now);
                 }
                 Phase::Bootstrapping { .. } => {
-                    if let Some(fault) = self.stranded_after_jump(now) {
-                        actions.extend(fault);
-                        return self.step(now, actions);
-                    }
                     self.progress.speak(now);
                     // A named cause is said by its own events, at most once
                     // per cap. The progress line is a different action, so

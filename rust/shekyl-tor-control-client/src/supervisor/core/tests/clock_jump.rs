@@ -140,3 +140,28 @@ fn an_unknown_byte_count_is_not_a_stall() {
     );
     assert_eq!(core.status().cause, Cause::StrandedAfterClockJump);
 }
+
+/// The check is judged on a fresh sample, never on the marks a deadline
+/// finds cached: bytes that resumed after the last sample would otherwise
+/// be missed, and a respawn cannot be taken back by the sample that shows
+/// them. A deadline past the bound asks for a sample and takes nothing
+/// down; that sample, with more bytes, is a slow mirror. Judging at the
+/// alive deadline fails this.
+#[test]
+fn a_deadline_past_the_bound_samples_before_it_judges() {
+    let mut core = bootstrapping();
+    sample(&mut core, secs(5), 14, 1_000);
+    core.on(Input::ClockJumped, secs(10));
+    let mut at = secs(10);
+    while at < secs(10) + secs(300) {
+        sample(&mut core, at, 14, 1_000);
+        at += secs(5);
+    }
+    let due = secs(10) + secs(301);
+    let step = core.on_deadline(due);
+    assert!(!takes_down(&step), "a deadline does not judge cached marks");
+    assert!(step.actions.contains(&super::super::Action::Sample));
+    let step = sample(&mut core, due, 14, 250_000);
+    assert!(!takes_down(&step), "bytes arrived: a slow mirror");
+    assert_eq!(core.status().respawn_count, 0);
+}
