@@ -482,6 +482,8 @@ Against DRS-D6's floor the measurement host's wall figures are past 1.25× at bo
 
 ---
 
+
+**The post-lever re-take (2026-10-31, ruled by Rick the same day; the artifact is `shekyl-dev`'s `infrastructure/captures/drs-x-flip/28afdacd1b/retake-502e413bac/`).** The measurement host's figures above were invalidated by the fsync probe (§3.2): a device whose flush latency swings from 145 ms to 56 s cannot produce a ratio between two runs taken hours apart. The ruling: re-take both arms post-lever, C++ and flip interleaved, the probe beside them as the control channel, a run with a probe stall in its window not counting, on another x86 host of the class whose probe is clean. The staging host (the same class) ran it at `502e413bac` against the archived `c72048125` daemon seeding every run (12:24–13:27Z): F-B 202.3/259.1 s (1.28×, BAND) and 235.3/256.9 s (1.09×); F-A 693.1/564.7 s (0.81×) and 620.7/536.0 s (0.86×), C++/flip, every artifact validated. **None of the eight runs counts:** the probe stalled inside every run's window (3–15 stalls above 1.5 s per window, 42.6 s at most; over the session 78 stalls in 3,483 samples, 1,482 s stalled), with the flip, the C++ and nothing of ours running alike. The figures agree with the invalidated ones in direction and band, and are recorded for that and no more. **No x86 host of the frozen class with a clean probe was free** (the other staker is claimed by another lane and is of the same class); the DRS-D6 verdict is owed from one, with the probe beside it, and the thresholds do not move.
 ## 4. Order of work
 
 1. **PR-b**, brief issued 2026-10-16; merged 2026-10-18 (#1102).
