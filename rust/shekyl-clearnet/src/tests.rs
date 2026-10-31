@@ -815,3 +815,61 @@ fn refusals_past_the_linger_cap_close_at_once() {
     listener.shutdown();
     drop(engine);
 }
+
+/// A refused peer that never writes is held until the span passes, then
+/// closed, and its slot is free again: twice over, so the second expiry
+/// rests on the timing engine's deadline re-arming after its first wake.
+/// The span here is 300 ms and the cap two.
+#[test]
+fn idle_refusals_close_at_the_span_and_free_their_slots() {
+    let span = Duration::from_millis(300);
+    // Burst 1, one token per 300 ms span: a cap of 1 + 1 = 2.
+    let (engine, listener, seen) = start_on(
+        refusing_gate(300_000_000, 1),
+        ClearnetOption::On,
+        Tick::new(300_000_000),
+        InboundCeiling::Bounded(8),
+    );
+    let _first = connect(listener.local_addr());
+    let start = Instant::now();
+    while listener.sockets.live() == 0 {
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "the first is admitted"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let mut refused = 0;
+    let mut refuse = || {
+        let client = connect(listener.local_addr());
+        refused += 1;
+        wait_for_refusals(&seen, refused);
+        client
+    };
+    // Round one: two idle holds fill the cap, then the span passes.
+    let idle_a = refuse();
+    let idle_b = refuse();
+    std::thread::sleep(span * 2);
+    let late = refuse();
+    assert!(
+        flight_after(late, Duration::from_millis(50)).is_none(),
+        "the expired holds freed their slots, so this one lingered"
+    );
+    for (name, idle) in [("first", idle_a), ("second", idle_b)] {
+        assert!(
+            flight_after(idle, Duration::ZERO).is_some(),
+            "the {name} idle hold was closed at the span"
+        );
+    }
+    // Round two, after the engine's first wakes.
+    let _idle_c = refuse();
+    let _idle_d = refuse();
+    std::thread::sleep(span * 2);
+    let later = refuse();
+    assert!(
+        flight_after(later, Duration::from_millis(50)).is_none(),
+        "the second round of holds expired too"
+    );
+    listener.shutdown();
+    drop(engine);
+}
