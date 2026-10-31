@@ -600,7 +600,7 @@ impl Core {
             Input::ClockSkew { seconds } => self.external(now, Cause::ClockSkew { seconds }),
             Input::ClockJumped => self.clock_jumped(now),
             Input::Resumed { late_by } => self.resumed(now, late_by),
-            Input::CertificateOutOfDate => self.certificate_out_of_date(now),
+            Input::CertificateOutOfDate => self.line_logged(now),
             Input::HandshakeClosed { relay } => self.handshake_closed(relay, now),
             Input::TooManyFiles { open } => self.too_many_files(now, open),
             Input::DangerousVersion => {

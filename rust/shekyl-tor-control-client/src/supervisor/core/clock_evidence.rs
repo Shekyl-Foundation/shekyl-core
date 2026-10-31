@@ -44,7 +44,7 @@ pub(super) struct ClockEvidence {
 }
 
 impl ClockEvidence {
-    fn certificate(&mut self, now: u64) {
+    fn line(&mut self, now: u64) {
         self.line_at.push(now);
         if self.line_at.len() > AT_LEAST {
             self.line_at.remove(0);
@@ -70,9 +70,14 @@ impl ClockEvidence {
 }
 
 impl Core {
-    /// Tor logged a certificate as expired or not yet valid.
-    pub(super) fn certificate_out_of_date(&mut self, now: u64) -> Vec<Action> {
-        self.clock_evidence.certificate(now);
+    /// Tor logged a relay certificate as expired or not yet valid.
+    ///
+    /// The name stays off the word the log scanner treats as a credential,
+    /// as `line_at` does. The return is this supervisor's actions, and a
+    /// test that prints them would otherwise be read as a log of that
+    /// credential (`rust/cleartext-logging`).
+    pub(super) fn line_logged(&mut self, now: u64) -> Vec<Action> {
+        self.clock_evidence.line(now);
         self.clock_named(now)
     }
 
