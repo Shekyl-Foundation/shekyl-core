@@ -1,7 +1,6 @@
 # Brief: one judge of failed dials; each connector says how its failures are judged (dialer / p2p lane)
 
-**Status: OPEN** — brief, revision 2, ruled 2026-10-31 (Rick). Its Round 0 return is [`DIALER_OUTAGE_EVIDENCE.md`](DIALER_OUTAGE_EVIDENCE.md).
-
+**Status:** Design
 **Revision 2, 2026-10-31. Replaces revision 1 in full.**
 **For:** the dialer (p2p) lane.
 - Round 0 first: bring back the design (§4) for Rick's ruling, then build one PR off `dev`.
