@@ -53,7 +53,7 @@ as a security property.
 | `shekyl-engine-core/…/stake_engine/claim.rs:337,484` | sign | claim / emission payload hash | **no** — bare hash |
 | `shekyl-ffi/src/legacy_core.rs:157` (`shekyl_pqc_sign`) | sign | raw FFI `message` | **no** — bare, arbitrary |
 | `shekyl-ffi/src/legacy_fcmp.rs:734` | verify | FFI `msg` | **no** — bare |
-| `shekyl-ffi/src/archival_ffi/serve_credit.rs:117` | verify | `response.signature_preimage()` | yes — `shekyl/archival-serve-credit-response-v1` |
+| `shekyl-ffi/src/archival_ffi/serve_credit.rs` (the verify export deleted, `DEL-008`; the preimage is `shekyl-archival-retention`'s) | verify | `response.signature_preimage()` | yes — `shekyl/archival-serve-credit-response-v1` |
 | `shekyl-daemon-rpc/src/submit/verifier.rs:885,901` | verify | `payload_hash` (consensus) | **no** — bare hash |
 | `shekyl-archival-retention/src/emission_verify.rs:764` | verify | `msg` | **no** — bare |
 

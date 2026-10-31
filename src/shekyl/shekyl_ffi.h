@@ -1956,25 +1956,6 @@ uint8_t shekyl_check_commitment_masks(
 // DEL-008 deletes the Rust count with it. C++ does not divide by
 // SHEKYL_ARCHIVAL_SEGMENT_LEAF_COUNT.
 
-/// Operator coverage ranking (`ARCHIVAL_SHARD_SELECTION_LIST.md` SL-D4).
-/// C++ fills operands; Rust computes join-adjusted scarcity, expected-profit,
-/// and order. 0 = OK, 1 = marshal, 2 = out_cap < in_len.
-typedef struct ShekylArchivalShardCoverageIn {
-  uint64_t shard_id;
-  uint64_t bonded_count;
-  uint64_t served_count;
-  uint64_t freeze_height;
-} ShekylArchivalShardCoverageIn;
-
-typedef struct ShekylArchivalShardCoverageOut {
-  uint64_t shard_id;
-  uint64_t bonded_count;
-  uint64_t served_count;
-  uint64_t freeze_height;
-  uint64_t join_scarcity_micro;
-  uint64_t expected_profit_atomic;
-} ShekylArchivalShardCoverageOut;
-
 
 // ---------------------------------------------------------------------------
 // Archival epoch-close consensus computation (ARCHIVAL_CONSENSUS_STATE.md §3.3,

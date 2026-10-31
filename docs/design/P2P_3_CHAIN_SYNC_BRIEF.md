@@ -1400,7 +1400,7 @@ handler.
 | 5 | Its tests | `:53-74` |
 | 6 | C++ caller, in `update_sync_search` | `.inl:1747` |
 | 7 | C++ caller, in `needs_new_sync_connections` | `.inl:2553` |
-| 8 | Declarations | `src/shekyl/shekyl_ffi.h:4251-4257` |
+| 8 | Declarations | `src/shekyl/shekyl_ffi.h:3445-3451` |
 | 9 | Module | `rust/shekyl-ffi/src/lib.rs:184` |
 | 10 | FFI signature gate's registration | `scripts/ci/check_ffi_signatures.sh:87-88` |
 | 11 | `sync_connector_of` | 1c #9 |
@@ -1432,7 +1432,7 @@ handler.
 | 4 | `shekyl_block_announce_heavier_score` | `rust/shekyl-ffi/src/peer_policy_ffi.rs:256-259` |
 | 5 | `shekyl_block_sync_heavier_score` | `peer_policy_ffi.rs:291-294` |
 | 6 | FFI tests | `peer_policy_ffi.rs:305`, `312`, `486-487`, `507-508`, `533`, `544` |
-| 7 | C declarations | `src/shekyl/shekyl_ffi.h:3766`, `:3773` |
+| 7 | C declarations | `src/shekyl/shekyl_ffi.h:2960`, `:2967` |
 | 8 | C++ wrappers | `src/cryptonote_basic/block_ingest.h:102-105`, `:133-136` |
 | 9 | Announce use | `.inl:648` |
 | 10 | Sync use | `.inl:1511` |

@@ -1334,7 +1334,7 @@ length or version prefix that makes extension clean. It does not.
   (`tx_extra.h:213–228`). Header = 49 B (`p_id‖s‖E‖kind`,
   `attestation_wire.rs:29`). **No version prefix. No length prefix.**
 - Admission requires `headers.len().is_multiple_of(ATTESTATION_HEADER_LEN)`
-  and `k ≤ 256` (`shekyl-ffi/src/archival_ffi/attestation.rs:204–207`).
+  and `k ≤ 256` (the deleted FFI shim's check, `DEL-008`; `MAX_ATTESTATION_RECORDS` in `shekyl-archival-retention`).
   Appending 32 B of `H(witness_pk)` is `32 ≢ 0 (mod 49)` and is refused.
   Prefixing 32 B (or a version byte) is a format change to a
   genesis-frozen field (rule 42).
