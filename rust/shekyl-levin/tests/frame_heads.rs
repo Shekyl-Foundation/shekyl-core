@@ -8,7 +8,7 @@
 //! are split across feeds; a header that does not read ends the walk.
 
 use shekyl_levin::{
-    BucketHead, Flags, FrameHeads, COMMAND_HANDSHAKE, COMMAND_TIMED_SYNC, HEADER_SIZE,
+    AfterFrame, BucketHead, Flags, FrameHeads, COMMAND_HANDSHAKE, COMMAND_TIMED_SYNC, HEADER_SIZE,
     PROTOCOL_VERSION_1,
 };
 
@@ -30,7 +30,10 @@ fn walk<'a>(feeds: impl IntoIterator<Item = &'a [u8]>) -> (Vec<(u32, u64)>, bool
     let mut frames = FrameHeads::new();
     let mut seen = Vec::new();
     for bytes in feeds {
-        frames.feed(bytes, |head| seen.push((head.command, head.payload_len)));
+        frames.feed(bytes, |head| {
+            seen.push((head.command, head.payload_len));
+            AfterFrame::Continue
+        });
     }
     (seen, frames.ended())
 }
@@ -58,7 +61,10 @@ fn a_frame_split_byte_by_byte_is_handed_over_on_its_last_byte() {
     let mut frames = FrameHeads::new();
     let mut seen = 0;
     for (i, byte) in stream.iter().enumerate() {
-        frames.feed(std::slice::from_ref(byte), |_| seen += 1);
+        frames.feed(std::slice::from_ref(byte), |_| {
+            seen += 1;
+            AfterFrame::Continue
+        });
         assert_eq!(seen, usize::from(i + 1 == stream.len()), "byte {i}");
     }
 }
@@ -81,4 +87,25 @@ fn a_bad_signature_ends_the_walk_and_later_frames_are_ignored() {
     let (seen, ended) = walk([good.as_slice(), bad.as_slice(), good.as_slice()]);
     assert_eq!(seen, [(COMMAND_HANDSHAKE, 0)]);
     assert!(ended);
+}
+
+#[test]
+fn stop_leaves_the_rest_of_the_slice_unread() {
+    let mut stream = frame(COMMAND_HANDSHAKE, 0);
+    stream.extend(frame(COMMAND_TIMED_SYNC, 4));
+    let mut frames = FrameHeads::new();
+    let mut seen = Vec::new();
+    frames.feed(&stream, |head| {
+        seen.push(head.command);
+        AfterFrame::Stop
+    });
+    assert_eq!(seen, [COMMAND_HANDSHAKE]);
+    // The tail was not read, so the walker is still at a header boundary
+    // and the same bytes are the next frame.
+    frames.feed(&stream[HEADER_SIZE..], |head| {
+        seen.push(head.command);
+        AfterFrame::Continue
+    });
+    assert_eq!(seen, [COMMAND_HANDSHAKE, COMMAND_TIMED_SYNC]);
+    assert!(!frames.ended());
 }

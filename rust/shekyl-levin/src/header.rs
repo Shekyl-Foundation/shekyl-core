@@ -286,12 +286,22 @@ impl HandshakeFrame {
 
     /// Feed the next `bytes` read from the peer. Returns whether the
     /// handshake frame has arrived, now or before; once true it stays true.
+    ///
+    /// The walk stops at that frame. Bytes after it in the same slice are
+    /// not read, which is the gap's old rule: the tracker is finished, and
+    /// a later header in the same read is the strand's.
     pub fn feed(&mut self, bytes: &[u8]) -> bool {
         if !self.complete {
             let kind = self.kind;
             let complete = &mut self.complete;
-            self.frames
-                .feed(bytes, |head| *complete |= kind.matches(head));
+            self.frames.feed(bytes, |head| {
+                if kind.matches(head) {
+                    *complete = true;
+                    AfterFrame::Stop
+                } else {
+                    AfterFrame::Continue
+                }
+            });
         }
         self.complete
     }
@@ -301,6 +311,20 @@ impl HandshakeFrame {
     pub const fn complete(&self) -> bool {
         self.complete
     }
+}
+
+/// What the walk does after handing over one complete frame.
+///
+/// [`AfterFrame::Stop`] ends this `feed` call. The unread tail of that
+/// slice is left unread: a caller that stops and then feeds a later slice
+/// is starting at a header boundary only if it passes the tail first.
+/// [`HandshakeFrame`] stops for good, so it never feeds the tail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AfterFrame {
+    /// Keep walking this slice.
+    Continue,
+    /// This frame is the last one this call should hand over.
+    Stop,
 }
 
 /// A Levin byte stream walked frame by frame, fed the bytes as they come.
@@ -332,8 +356,9 @@ impl FrameHeads {
     }
 
     /// Feed the next `bytes` of the stream. `on_frame` is called once for
-    /// each frame these bytes complete, in stream order.
-    pub fn feed(&mut self, mut bytes: &[u8], mut on_frame: impl FnMut(&BucketHead)) {
+    /// each frame these bytes complete, in stream order. [`AfterFrame::Stop`]
+    /// returns before the rest of `bytes` is read.
+    pub fn feed(&mut self, mut bytes: &[u8], mut on_frame: impl FnMut(&BucketHead) -> AfterFrame) {
         while !self.bad {
             let (head, left) = match self.body {
                 Some(body) => body,
@@ -363,8 +388,7 @@ impl FrameHeads {
                 return;
             }
             self.body = None;
-            on_frame(&head);
-            if bytes.is_empty() {
+            if on_frame(&head) == AfterFrame::Stop || bytes.is_empty() {
                 return;
             }
         }
