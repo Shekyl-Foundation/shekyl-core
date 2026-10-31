@@ -1750,7 +1750,12 @@ listener, and so a connection in the gap phase.
    tokens it refills across the span may linger at once
    (`AcceptGate::linger_cap`): what the connector admits in one span.
    While clearnet's rates are not assessed there is no gate and the cap
-   is zero.
+   is zero. A lingering socket holds a descriptor outside the inbound
+   occupancy, so the daemon reserves the cap with the rest of its
+   descriptors (`reserved_descriptors`, `shekyl-daemon`) when clearnet
+   is on, and the inbound ceiling makes room for it (Rick, 2026-10-31).
+   The reservation and the gate read one formula over the row
+   (`linger_cap`), so they cannot disagree when the rates are written.
    **Residual (stated, accepted).** A refusal beyond the cap closes at
    once, after dropping what has already arrived. A flight that reaches
    it later is answered with RST, so under a flood past the cap, and

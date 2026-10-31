@@ -229,3 +229,34 @@ fn the_linger_cap_is_what_the_connector_admits_in_one_span() {
     assert_eq!(gate.linger_cap(Tick::new(1_426_000_000)), 4 + 14);
     assert_eq!(gate.linger_cap(Tick::new(0)), 4);
 }
+
+/// The reservation's figure and the gate's cap are one formula over the
+/// row: a row with a limiter gives the gate's cap, and a row without one
+/// (Tor's proof-of-work, or not assessed) reserves nothing.
+#[test]
+fn the_row_s_linger_cap_is_the_gate_s() {
+    let span = Tick::new(1_426_000_000);
+    let row = Assessment::Assessed(AcceptBound::ConnectorAndHost {
+        connector: rate(SECOND / 10, 4),
+        host: rate(SECOND, 1),
+    });
+    let gate = AcceptGate::for_bound(row).expect("a rate");
+    assert_eq!(linger_cap(row, span), 18);
+    assert_eq!(
+        usize::try_from(linger_cap(row, span)).expect("small"),
+        gate.linger_cap(span)
+    );
+    assert_eq!(
+        linger_cap(Assessment::Assessed(AcceptBound::OnionPow), span),
+        0
+    );
+    assert_eq!(linger_cap(Assessment::NotAssessed, span), 0);
+    for connector in ConnectorId::ALL {
+        let gate = AcceptGate::for_bound(accept_bound(*connector));
+        assert_eq!(
+            linger_cap(accept_bound(*connector), span),
+            gate.map_or(0, |g| u64::try_from(g.linger_cap(span)).expect("small")),
+            "{connector:?}"
+        );
+    }
+}

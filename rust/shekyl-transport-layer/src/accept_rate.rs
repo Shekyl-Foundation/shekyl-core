@@ -93,6 +93,31 @@ pub const fn accept_bound(connector: ConnectorId) -> Assessment<AcceptBound> {
     }
 }
 
+/// How many refused connections may linger half-closed at once for `span`
+/// under a connector's row (D10.2): its connector bucket's burst plus the
+/// tokens it refills across `span`, the connections it admits in that
+/// time. Zero for a row with no daemon-side limiter or not assessed.
+///
+/// Lingering sockets hold descriptors outside the inbound occupancy, so the
+/// daemon reserves this many beside the inbound ceiling; the accept loop's
+/// gate caps its lingering at the same figure ([`AcceptGate::linger_cap`]).
+#[must_use]
+pub fn linger_cap(bound: Assessment<AcceptBound>, span: Tick) -> u64 {
+    match bound {
+        Assessment::Assessed(AcceptBound::ConnectorAndHost { connector, .. })
+            if connector.is_rate() =>
+        {
+            cap_for(connector, span)
+        }
+        Assessment::Assessed(_) | Assessment::NotAssessed => 0,
+    }
+}
+
+const fn cap_for(connector: AcceptRate, span: Tick) -> u64 {
+    let refilled = span.get() / connector.token_every_nanos;
+    (connector.burst as u64).saturating_add(refilled)
+}
+
 /// What one bucket's host key is: an IPv4 address, or an IPv6 /64.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum HostKey {
@@ -267,9 +292,7 @@ impl AcceptGate {
     /// admits in that time. A refusal beyond it closes at once.
     #[must_use]
     pub fn linger_cap(&self, span: Tick) -> usize {
-        let refilled = span.get() / self.connector_rate.token_every_nanos;
-        let cap = u64::from(self.connector_rate.burst).saturating_add(refilled);
-        usize::try_from(cap).unwrap_or(usize::MAX)
+        usize::try_from(cap_for(self.connector_rate, span)).unwrap_or(usize::MAX)
     }
 
     /// The most host entries whose buckets can be not full at one instant:

@@ -54,9 +54,26 @@ pub fn connectors(config: &DaemonConfig) -> Vec<ConnectorId> {
 /// onion holds one while it is in flight (`TOR_SUPERVISOR.md` §4.5). It is
 /// not a peer dial and does not count against the in-flight bound, so the
 /// bound does not cover it. An operator's Tor is not probed yet (§4.9).
+///
+/// Clearnet adds its linger cap
+/// ([`shekyl_ffi::zone_ffi::clearnet_linger_descriptors`]): a refused
+/// accept is held half-closed until its first flight arrives or the
+/// handshake span passes (`P2P_TRANSPORT_LAYER.md` D10.2), each one a
+/// descriptor outside the inbound occupancy, up to that cap. It scales
+/// with the clearnet accept rates, and is zero until they are ruled.
 #[must_use]
 pub fn reserved_descriptors(config: &DaemonConfig) -> u64 {
+    reservation(config, shekyl_ffi::zone_ffi::clearnet_linger_descriptors())
+}
+
+/// [`reserved_descriptors`] with the clearnet linger cap given.
+fn reservation(config: &DaemonConfig, clearnet_linger: u64) -> u64 {
     let rpc = u64::from(config.rpc.connections_max.get());
+    let linger = if config.clearnet == Clearnet::Off {
+        0
+    } else {
+        clearnet_linger
+    };
     let probe = if matches!(config.tor, Tor::Managed { .. }) {
         PROBE_DESCRIPTORS
     } else {
@@ -69,7 +86,10 @@ pub fn reserved_descriptors(config: &DaemonConfig) -> u64 {
             let bound = u64::try_from(profile.in_flight_bound).unwrap_or(u64::MAX);
             u64::from(profile.target).saturating_add(bound)
         })
-        .fold(rpc.saturating_add(probe), u64::saturating_add)
+        .fold(
+            rpc.saturating_add(probe).saturating_add(linger),
+            u64::saturating_add,
+        )
 }
 
 /// The descriptors the managed Tor's probe holds: its SOCKS stream, one
@@ -378,6 +398,23 @@ mod tests {
         ]);
         assert_eq!(reserved_descriptors(&offline), 7);
         assert!(connectors(&offline).is_empty());
+    }
+
+    /// Clearnet's linger cap joins the reservation when clearnet is on, so
+    /// the inbound ceiling makes room for refused accepts held half-closed;
+    /// with clearnet off it adds nothing. The real cap is zero until the
+    /// clearnet rates are ruled, so the growth is shown with a given cap,
+    /// and the daemon's own figure is the reservation at the real one.
+    #[test]
+    fn the_reservation_grows_by_the_clearnet_linger_cap() {
+        let on = config(&["--rpc-connections-max", "25"]);
+        assert_eq!(reservation(&on, 37), reservation(&on, 0) + 37);
+        let off = config(&["--clearnet", "off", "--rpc-connections-max", "25"]);
+        assert_eq!(reservation(&off, 37), reservation(&off, 0));
+        assert_eq!(
+            reserved_descriptors(&on),
+            reservation(&on, shekyl_ffi::zone_ffi::clearnet_linger_descriptors())
+        );
     }
 
     /// The operator's onion (`tor-onion`) is this node's own Tor address,

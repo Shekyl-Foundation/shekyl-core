@@ -621,6 +621,20 @@ fn spawn_refusal_report(
     }));
 }
 
+/// The descriptors refused clearnet accepts may hold while they linger
+/// half-closed (D10.2): the clearnet row's linger cap over the clearnet
+/// handshake span, the figure the process socket table's gate caps its
+/// lingering at. They sit outside the inbound occupancy, so the daemon
+/// reserves them beside the inbound ceiling. Zero until the clearnet rates
+/// are ruled.
+#[must_use]
+pub fn clearnet_linger_descriptors() -> u64 {
+    shekyl_transport_layer::linger_cap(
+        shekyl_transport_layer::accept_bound(shekyl_transport_layer::ConnectorId::Clearnet),
+        Tick::new(spans::CLEARNET_HANDSHAKE_WITHIN_NANOS),
+    )
+}
+
 /// One lateness report. `false` when the engine has closed.
 fn report_lateness(engine: &Handle<MonotonicClock>) -> bool {
     for class in shekyl_timing_engine::OwnerClass::ALL {

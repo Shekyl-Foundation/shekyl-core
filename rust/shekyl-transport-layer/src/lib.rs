@@ -35,7 +35,9 @@ mod link;
 mod profile;
 pub mod spans;
 
-pub use accept_rate::{accept_bound, AcceptBound, AcceptGate, AcceptRate, AcceptRefusals, HostKey};
+pub use accept_rate::{
+    accept_bound, linger_cap, AcceptBound, AcceptGate, AcceptRate, AcceptRefusals, HostKey,
+};
 pub use admission::{
     CloseResult, Direction, ObservedEndpoint, OpenError, OpenSocket, SocketId, Sockets,
 };
