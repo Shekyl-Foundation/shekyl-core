@@ -980,8 +980,7 @@ the Windows CI job beside the boot-and-stop smoke test (#1072), and in
 - **Binary replaced on disk:** the running Tor unaffected; after its death
   nothing unverified spawned and the refusal named its fixes; restoring the
   file recovered at the next retry.
-- **Slow link:** not run here (no `tc`); it runs on the floor device with
-  the soak.
+- **Slow link:** needs `tc`; run on the floor device (below).
 
 **Re-run, 2026-10-24** (the fixes' build, 4f90d40b7):
 
@@ -1006,9 +1005,8 @@ route deleted for 10 minutes, so every connect fails at once):
 - **Dials:** every Tor dial in the block ended at Tor's `0x06` at 105–106 s,
   never at the dial deadline; the first got `0xF0`, the descriptor fetch
   failing locally. A dial opened 6 s after the unblock.
-- **Not run:** a blackhole block (silent drop). `pasta` cannot drop
-  silently; it runs on the floor device with `tc`, with the soak. If Tor is
-  silent there too, the runs are a report for the Tor Project.
+- **A silent drop** cannot be made with `pasta`; it ran on the floor device
+  with `tc` (below), and Tor was silent there too.
 
 **Clock skew and suspend, a Linux VM, 2026-10-30** (a throwaway KVM guest,
 Debian 13; `shekyld` at `176b9d751` with the pinned 15.0.25; testnet,
@@ -1051,6 +1049,38 @@ clearnet off; shekyl-dev `data/tsr-acceptance/2026-10-30-linux-vm-clock/`):
   stops, caught; two stops never exited, one 23 s after a Tor respawn
   during sync and one after 4 h 40 min of steady running (FOLLOWUPS,
   `DAEMON_CONFIG_CUTOVER.md` §2.2).
+
+**Slow link and silent drop, the floor device, 2026-10-31** (Pi 4, Ubuntu
+26.04.1 aarch64; `shekyld` built natively at `ffb7259051`, the build the
+seven-day soak runs, whose supervisor, Tor crates and dialer are unchanged
+in the merged #1222; the pinned 16.0a14 aarch64 bundle; testnet, clearnet
+off; faults on a network namespace's link only; shekyl-dev
+`data/tsr-acceptance/2026-10-31-pi-floor/`):
+
+- **Baseline:** a cold bootstrap took 9 s and about 2.0 MB.
+- **Slow link, 40 kbit both ways, cold start:** bootstrap took 548 s, past
+  the old 300 s, with no respawn and no Tor warning. Tor's percentage held
+  for 3 min 1 s on the consensus and 3 min 35 s on relay descriptors; every
+  30 s the operator saw the percentage, the bytes that arrived, and "a slow
+  directory mirror can hold this for minutes". A slow bootstrap is not a
+  fault in any class (`TSR-F7`), so no slower rate needs its own run.
+- **Silent drop, 10 minutes while Running and synced:** Tor stated nothing
+  about its network (no `NETWORK_LIVENESS`, no `CIRCUIT_NOT_ESTABLISHED`,
+  no warning); its only lines were "Rend stream is 105 seconds late" as
+  each dial reached `SocksTimeout`. Every session closed 2 min 10 s in;
+  the neutral line came at 5 min 41 s; no respawn. Twelve dials in the
+  block, all ending at Tor's `0x06` at 105 s. Traffic was carried again
+  2 min 44 s after the unblock: every candidate was waiting out its first
+  cooldown. With the refuse block this is the data for a Tor Project
+  report.
+- **The lists through the drop:** no address was lost, but all six white
+  entries were demoted to gray during the block and returned 10 minutes
+  after it. The quiet guard never engaged (it needs 13 unopened attempts
+  on Tor; the block made 12), so each failed white test demoted. That is
+  the dialer lane's, in its outage-evidence round (Rick, 2026-10-31); this
+  supervisor's behaviour is unchanged.
+- **Stops:** both exited 1.1 s after `SIGTERM`, one after 67 minutes
+  including the drop.
 
 | Case | Expected | Apparatus |
 | --- | --- | --- |
@@ -1292,11 +1322,15 @@ are fixed before the work starts:
    kill, wedge (after the liveness-sample fix), stop and seeded start pass
    (2026-10-23); outbound blocked (refused, under `TSR-Q14`), disk full at
    boot and while running, crash loop, binary replaced and Tor down at start
-   pass (2026-10-24 and 2026-10-25, after their fixes). Open: the blackhole
-   block and the slow link (both need `tc`, on the floor device), clock skew
-   and suspend (a VM; `TSR-M8`), the Windows and macOS runs (`TSR-F15`), and
-   the floor-device soak, which also records the probe's latency under its
-   isolation pair and its arrival rate.
+   pass (2026-10-24 and 2026-10-25, after their fixes). Clock skew and
+   suspend ran on a VM (2026-10-30; `TSR-M8` measured on Windows and
+   macOS) and their findings are fixed; the slow link and a silent drop
+   (under `TSR-Q14`) pass on the floor device (2026-10-31). Open: the VM
+   cases on a build with the fixes, the Windows and macOS runs
+   (`TSR-F15`), and the
+   floor-device soak, running since 2026-10-31 at `ffb7259051`, which also
+   records the probe's latency under its isolation pair and its arrival
+   rate.
 
 ## 13. Review denominator
 
