@@ -521,10 +521,6 @@
       "state": "UNREVIEWED"
     },
     {
-      "id": "CEN-L10",
-      "state": "DIVERGENT"
-    },
-    {
       "id": "CEN-L11",
       "state": "CHECKED-CONFORMANT"
     },

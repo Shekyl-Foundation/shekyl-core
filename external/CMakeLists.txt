@@ -30,7 +30,9 @@
 
 
 
-add_subdirectory(db_drivers)
+# liblmdb is not a daemon target (DEL-004). The vendor tree stays at
+# external/db_drivers/liblmdb and nothing in this build compiles it.
+
 add_subdirectory(qrcodegen)
 # external/randomx (v1) is no longer configured: its last linker
 # (cncrypto's rx-slow-hash.c) was deleted with the claim-era v1 hashing

@@ -58,13 +58,13 @@ takes one word, so no second network can be named. Companion rows:
 - `--dev-difficulty <N>` — pin difficulty to a constant. Unset means
   "use adaptive difficulty," so for instant-mining the harness must pass
   `--dev-difficulty 1` (or another small value)
-  (`src/cryptonote_core/blockchain.cpp:895–897, 1263–1265`).
+  (`src/cryptonote_core/blockchain.cpp, 1263–1265`).
 - `--clearnet off --tor off` — no listener and no dial (recommended for
   hermetic tests). The store persists across runs in the data directory;
   a fresh chain is a fresh directory.
 
 **On-demand block generation.** The JSON-RPC method `generateblocks`
-exists (`src/rpc/core_rpc_server.h:139`,
+exists (`src/rpc/core_rpc_server.h`,
 `src/rpc/core_rpc_server.cpp:2234–2305`). It loops
 `getblocktemplate` → `find_nonce_for_given_block` (RandomX longhash) →
 `submitblock` for the requested count. It is an armed test lever
@@ -105,7 +105,7 @@ The chain persists across daemon restarts in the data directory.
 ### V3-specific caveats
 
 **FCMP++ tx-type enforcement is bypassed on `FAKECHAIN`.**
-`src/cryptonote_core/blockchain.cpp:3403–3434` wraps the
+`src/cryptonote_core/blockchain.cpp` wraps the
 `CTTypeFcmpPlusPlusPqc` enforcement, version bounds, and input-count
 limits in `if (m_nettype != network_type::FAKECHAIN) { ... }`. Regtest
 will accept legacy/test-generator txs that would be rejected on
@@ -129,7 +129,7 @@ verification reads `m_db->get_curve_tree_root_at_height` as before, so
 header coherence and proof anchoring are now both exercised on regtest.
 
 **FCMP++ reference-block age rules still run.**
-`src/cryptonote_core/blockchain.cpp:3801–3855` is **not** wrapped in a
+`src/cryptonote_core/blockchain.cpp` is **not** wrapped in a
 `FAKECHAIN` skip. V3 spends must reference a curve-tree root from a
 sufficiently-aged block, in regtest just as on mainnet. The harness
 must therefore mine enough blocks before constructing test transfers
@@ -137,7 +137,7 @@ for the curve-tree state to be valid; "spawn daemon, build tx
 immediately" will fail validation.
 
 **PoW is not bypassed.** `check_hash` runs in the block path
-(`src/cryptonote_core/blockchain.cpp:4445–4451`). With
+(`src/cryptonote_core/blockchain.cpp`). With
 `--fixed-difficulty 1` the work is trivial (microseconds per block on
 modern hardware), but the path is exercised. There is no separate
 "skip PoW" toggle.
@@ -356,7 +356,7 @@ RPC. The closest available signal is the daemon binary version
 field.
 
 **`get_info` response:** the struct at
-`src/rpc/core_rpc_server_commands_defs.h:676–778` contains height,
+`src/rpc/core_rpc_server_commands_defs.h` contains height,
 difficulty, daemon version, protocol version, Shekyl-NG economics
 fields, peer counts. No `fee_version` / `fee_policy_id`.
 
@@ -465,7 +465,7 @@ wallet cannot reactively detect the recoverable stale-root case.
 ### Evidence of absence
 
 **Validation sets only the generic flag.** Reference-block age/identity
-validation in `src/cryptonote_core/blockchain.cpp:3801–3855` (the FCMP++
+validation in `src/cryptonote_core/blockchain.cpp` (the FCMP++
 reference-block rules, **not** wrapped in a `FAKECHAIN` skip per §1) detects
 the staleness conditions as **distinct** points — not-found (`:3803`),
 too-recent (`:3811`), too-old (`:3822`), depth-out-of-range (`:3846`) — but

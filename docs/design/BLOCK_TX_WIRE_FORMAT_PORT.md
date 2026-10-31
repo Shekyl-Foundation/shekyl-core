@@ -79,7 +79,7 @@ framing — to be where Rust and the C++ serializer disagree.
 - Block + tx + rct serialization: `src/cryptonote_basic/cryptonote_basic.h`
   (`BEGIN_SERIALIZE`/`FIELD` blocks for `block`, `block_header` — note
   `FIELD(curve_tree_root)` — `transaction`, `transaction_prefix`).
-- Coinbase construction: `src/cryptonote_core/cryptonote_tx_utils.cpp:119`
+- Coinbase construction: C++ `construct_miner_tx` (`cryptonote_tx_utils.cpp:119` at its era, deleted with the C++ chain in DRS-X); the builder is `rust/shekyl-block-template/src/lib.rs`
   `construct_miner_tx`; per-output PQC at `:200` `shekyl_construct_output`.
 - The rct/proof section + proof type (`FcmpPlusPlusPqc`, and the coinbase's null
   case): `src/ringct/` + `cryptonote_basic`.

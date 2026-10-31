@@ -27,11 +27,10 @@
 //! when one leaves (CEN-M10), which go into a template, and the pool file
 //! (S-POOL) with its reconcile at open.
 //!
-//! # Nothing here is wired live
+//! # Wired at the flip
 //!
-//! The C++ `tx_memory_pool` is the daemon's pool until the DRS-X flip,
-//! which wires this crate in and deletes the C++ (`DEL-010`). No FFI crate
-//! depends on this one (DX-Q5, DX-Q7).
+//! `shekyl-ffi`'s `pool_ffi` is the protocol handler's door (DX-Q5). The
+//! C++ `tx_memory_pool` deletes in the same PR (`DEL-010`).
 
 mod block;
 mod door;

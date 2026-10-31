@@ -27,11 +27,7 @@
 # THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 set(rpc_sources
-  archival_claim_source.cpp
-  archival_shard_coverage.cpp
-  core_rpc_server.cpp
   core_rpc_ffi.cpp
-  daemon_submit_ffi.cpp
   rpc_facts_ffi.cpp
   instanciations.cpp)
 
@@ -39,16 +35,12 @@ set(rpc_sources
 set(rpc_headers)
 
 set(rpc_private_headers
-  archival_claim_source.h
-  archival_shard_coverage.h
-  core_rpc_server.h
+  rpc_subject.h
   core_rpc_ffi.h
   core_rpc_ffi_internal.h
   rpc_tx_json.h
-  daemon_submit_ffi.h
   rpc_facts_ffi.h
-  core_rpc_server_commands_defs.h
-  core_rpc_server_error_codes.h)
+)
 
 
 monero_private_headers(rpc

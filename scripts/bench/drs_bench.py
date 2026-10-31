@@ -396,7 +396,7 @@ def measure(args):
     seed_from = armed_lever.log_size(seed_log)
     seed_daemon_log = os.path.join(work, "seed.daemon.log")
     seed_daemon_from = armed_lever.log_size(seed_daemon_log)
-    proc, _ = spawn("seed", seed_dir, [armed_lever.FLAG], offline=True)
+    proc, _ = spawn("seed", seed_dir, [armed_lever.FLAG, "--mine-address", addr], offline=True)
     with running(proc, srpc) as seed:
         if not seed.ready:
             _fail(f"seed RPC on 127.0.0.1:{srpc} never came up "
@@ -421,8 +421,7 @@ def measure(args):
             gen_blocks = target_h - have_h
             gt0 = time.time()
             resp = _rpc(srpc, "generateblocks",
-                        {"amount_of_blocks": gen_blocks, "wallet_address": addr,
-                         "starting_nonce": 0}, timeout=args.gen_timeout)
+                        {"count": gen_blocks}, timeout=args.gen_timeout)
             gen_wall = time.time() - gt0
             st = resp.get("result", {}).get("status")
             if st != "OK":

@@ -213,6 +213,7 @@ impl PhaseAReject {
     pub fn verdict(&self) -> SubmitVerdict {
         SubmitVerdict::Rejected {
             cause: RejectCause::Malformed,
+            row: None,
         }
     }
 }

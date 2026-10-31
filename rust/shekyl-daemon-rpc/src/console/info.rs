@@ -22,7 +22,6 @@ use shekyl_rpc_types::{GetInfoResponse, RestErrorEnvelope};
 
 use super::Source;
 use crate::info::Disclosure;
-use crate::info_facts::FfiInfoFacts;
 
 /// One `get_info`, on whichever arm the console is running.
 ///
@@ -36,13 +35,16 @@ use crate::info_facts::FfiInfoFacts;
 /// named, which answers with what that listener discloses.
 pub(super) fn fetch_get_info(src: &Source) -> Result<GetInfoResponse, String> {
     let reply = match src {
-        Source::Live(core) => {
-            let facts = FfiInfoFacts::new(core.clone());
-            crate::info::get_info(&facts, Disclosure::FULL, 0).map_err(|fault| match fault {
-                // Said in full: the operator at the console is the one who
-                // has to act on a store that contradicts itself.
-                crate::methods::RpcFault::Store(store) => store.to_string(),
-                other => format!("{other:?}"),
+        Source::Live(_) => {
+            let chain =
+                crate::handles::live_chain().ok_or_else(|| "the node is not open".to_owned())?;
+            crate::info::get_info(chain.as_info_facts(), Disclosure::FULL, 0).map_err(|fault| {
+                match fault {
+                    // Said in full: the operator at the console is the one who
+                    // has to act on a store that contradicts itself.
+                    crate::methods::RpcFault::Store(store) => store.to_string(),
+                    other => format!("{other:?}"),
+                }
             })?
         }
         Source::Remote { .. } => {

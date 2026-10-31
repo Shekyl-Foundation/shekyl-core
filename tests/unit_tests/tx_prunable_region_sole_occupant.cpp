@@ -44,12 +44,11 @@
 #include <cstring>
 #include <sstream>
 
-#include "cryptonote_basic/account.h"
 #include "cryptonote_basic/cryptonote_basic.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_config.h"
-#include "cryptonote_core/cryptonote_tx_utils.h"
 #include "serialization/binary_archive.h"
+#include "string_tools.h"
 
 using namespace cryptonote;
 
@@ -164,25 +163,25 @@ void expect_prunable_region_has_one_occupant(transaction &t, const char *what)
 // A miner tx: CTTypeNull, so the assertion is that its tail is empty. This arm is
 // the one that catches an append landing on the coinbase path, where the null
 // early-out means nothing commits to the appended bytes at all.
+//
+// The fixture is the pinned mainnet GENESIS_TX: a production coinbase written
+// by the Rust writer (five founder outputs, PQC tx_extra), not a C++
+// constructor's — `construct_miner_tx` was deleted with the C++ chain. The
+// Rust statement of the same tail is shekyl-wire's
+// `coinbase_segments_are_the_whole_blob_and_two_empty_tails`.
 TEST(tx_prunable_region, miner_tx_has_no_prunable_tail)
 {
-  account_base acc;
-  acc.generate(crypto::secret_key{}, false, false, FAKECHAIN);
-  transaction tx = AUTO_VAL_INIT(tx);
-  const blobdata extra_nonce;
-  ASSERT_TRUE(construct_miner_tx(0, 0, 10000000000000, 1000, /*fee=*/0,
-                                 /*frozen_segment_count=*/0,
-                                 acc.get_keys().m_account_address, tx, extra_nonce,
-                                 /*max_outs=*/1));
-
-  // Round-trip through the binary archive so `unprunable_size` is stamped: it is
-  // only assigned inside the serializer (cryptonote_basic.h:635/707).
   blobdata blob;
-  ASSERT_TRUE(t_serializable_object_to_blob(tx, blob));
+  ASSERT_TRUE(epee::string_tools::parse_hexstr_to_binbuff(
+      get_config(MAINNET).GENESIS_TX, blob));
+  // Parsing through the binary archive stamps `unprunable_size`: it is only
+  // assigned inside the serializer (cryptonote_basic.h:635/707).
   transaction parsed;
   ASSERT_TRUE(parse_and_validate_tx_from_blob(blob, parsed));
+  ASSERT_TRUE(std::holds_alternative<txin_gen>(parsed.vin.at(0)));
+  ASSERT_EQ(ct::CTTypeNull, parsed.ct_signatures.type);
 
-  expect_prunable_region_has_one_occupant(parsed, "construct_miner_tx");
+  expect_prunable_region_has_one_occupant(parsed, "GENESIS_TX coinbase");
 }
 
 // The serve-credit arm: the one shape whose prunable region is EMPTY *by

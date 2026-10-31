@@ -52,17 +52,8 @@
 //     the blob boundary (leg i, pseudoOuts side) or the dispatch check
 //     (leg ii).
 //
-//  3. dispatch_verdict_invariant_under_blob_variation — BITES against a
-//     deserialization change that parsed the backing out of the blob into
-//     `pseudoOuts` (leg i, pseudoOuts side) or bumped the dispatch size
-//     check in lockstep (leg ii): it drives the FULL production dispatch
-//     (`ver_non_input_consensus`) on two txs identical except for their
-//     `canonical_bytes` and asserts both accept, plus a control tx whose
-//     pseudoOuts carries an appended commitment, asserting the dispatch
-//     size check (leg ii) rejects it before the balance leaf. Does NOT
-//     cover: `check_tx_inputs` (input consensus — backing verify, auth
-//     content), which is the regtest e2e's scope (CB-4 follow-up (a),
-//     closed by this arm's landing), not this KAT's.
+//  3. (deleted with the C++ dispatch — see the note at the end of this
+//     file for the Rust rules that pin leg i's pseudoOuts side and leg ii.)
 //
 // A future edit that routes the backing into the balance MUST flip the
 // biting assertions here; per the Q11 reversion clause that edit is a
@@ -82,7 +73,6 @@ extern "C"
 #include "cryptonote_basic/cryptonote_basic.h"
 #include "cryptonote_basic/verification_context.h"
 #include "cryptonote_config.h"
-#include "cryptonote_core/tx_verification_utils.h"
 #include "fcmp/bulletproofs_plus.h"
 #include "fcmp/ct_ops.h"
 #include "fcmp/ct_semantics.h"
@@ -321,47 +311,13 @@ TEST(archival_emission_ct_balance, backing_inclusion_shape_rejects_in_production
 // an assertion below. The control tx pins leg ii directly: the
 // coordinated-regression accepting shape (backing appended to pseudoOuts)
 // must reject through the dispatch, not survive to an accepting balance.
-TEST(archival_emission_ct_balance, dispatch_verdict_invariant_under_blob_variation)
-{
-  const ct::CtSig rv = make_balanced_emission_rv();
-
-  const ct::key backing_O = ct::commit(500, ct::skGen());
-  const ct::key backing_O_prime = ct::commit(9999, ct::skGen());
-  const transaction tx_O = make_emission_tx(rv, backing_O);
-  const transaction tx_O_prime = make_emission_tx(rv, backing_O_prime);
-
-  // The two txs differ ONLY in canonical_bytes — pin the delta so a
-  // fixture drift cannot silently turn this arm into a same-tx tautology.
-  ASSERT_NE(std::get<txin_archival_reward_emission>(tx_O.vin[0]).canonical_bytes,
-    std::get<txin_archival_reward_emission>(tx_O_prime.vin[0]).canonical_bytes);
-  ASSERT_EQ(tx_O.ct_signatures.outPk[0].mask, tx_O_prime.ct_signatures.outPk[0].mask);
-
-  tx_verification_context tvc_O{};
-  tx_verification_context tvc_O_prime{};
-  EXPECT_TRUE(ver_non_input_consensus(tx_O, tvc_O));
-  EXPECT_TRUE(ver_non_input_consensus(tx_O_prime, tvc_O_prime));
-  EXPECT_FALSE(tvc_O.m_verifivation_failed);
-  EXPECT_FALSE(tvc_O_prime.m_verifivation_failed);
-
-  // Leg-ii control: the accepting shape of the coordinated regression —
-  // the backing commitment appended to the pseudo side — must reject
-  // through the dispatch (pseudoOuts.size() != spend_input_count at
-  // tx_verification_utils.cpp; the leaf's own size check backstops it).
-  transaction tx_included = make_emission_tx(rv, backing_O);
-  tx_included.ct_signatures.p.pseudoOuts.push_back(backing_O);
-  // The extra pseudo-out is a body the serializer refuses. Sizing must
-  // return a length and must not record that fragment as the blob size;
-  // the dispatch, below, is what rejects it.
-  blobdata fragment;
-  ASSERT_FALSE(tx_to_blob(tx_included, fragment));
-  ASSERT_FALSE(tx_included.is_blob_size_valid());
-  EXPECT_EQ(get_transaction_blob_size(tx_included), fragment.size());
-  EXPECT_FALSE(tx_included.is_blob_size_valid());
-  EXPECT_EQ(get_transaction_weight(tx_included), get_transaction_weight(tx_included, fragment.size()));
-  EXPECT_FALSE(tx_included.is_blob_size_valid());
-  tx_verification_context tvc_included{};
-  EXPECT_FALSE(ver_non_input_consensus(tx_included, tvc_included));
-  EXPECT_TRUE(tvc_included.m_verifivation_failed);
-  EXPECT_TRUE(tvc_included.m_invalid_input);
-  EXPECT_FALSE(tx_included.is_blob_size_valid());
-}
+// Arm 3 (`dispatch_verdict_invariant_under_blob_variation`) drove the C++
+// non-input-consensus dispatch (`ver_non_input_consensus`) over the same two
+// txs and a pseudoOuts-appended control. That dispatch was deleted with the
+// C++ chain (DRS-X); the Rust rules pin both legs: the emission balance over
+// the loud reward and the pseudo-out count in
+// `shekyl-chain-rules` `h22_every_departure_from_the_emission_shape_or_balance_is_refused`
+// (a second pseudo-out is refused; a wrong reward is refused) and
+// `i9_the_pseudo_out_count_must_equal_the_input_count_on_a_spend`; the backing
+// cannot enter the Rust balance by type — `tx_balance` reads the CT base and
+// prunable, never a vin's `canonical_bytes`.

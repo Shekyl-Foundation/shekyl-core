@@ -47,10 +47,6 @@ Section "Shekyl Core (required)" SecCore
   File "${BIN_DIR}\shekyld.exe"
   File /nonfatal "${BIN_DIR}\shekyl-cli.exe"
   File /nonfatal "${BIN_DIR}\shekyl-wallet-rpc.exe"
-  ; Hard-required, not /nonfatal: operator docs name this tool for compacting
-  ; the database, so an installer without it ships a broken instruction —
-  ; better to fail the makensis run than omit it silently.
-  File "${BIN_DIR}\shekyl-mdb-copy.exe"
 
   WriteRegStr HKLM "Software\Shekyl" "InstallDir" "$INSTDIR"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\Shekyl" \
@@ -97,7 +93,6 @@ Section "Uninstall"
   Delete "$INSTDIR\shekyld.exe"
   Delete "$INSTDIR\shekyl-cli.exe"
   Delete "$INSTDIR\shekyl-wallet-rpc.exe"
-  Delete "$INSTDIR\shekyl-mdb-copy.exe"
   Delete "$INSTDIR\uninstall.exe"
   RMDir "$INSTDIR"
 

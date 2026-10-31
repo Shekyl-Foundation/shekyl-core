@@ -239,8 +239,8 @@ pub(crate) fn undo_target(ordinal: TableOrdinal) -> Option<&'static dyn UndoTarg
 /// must **not** have a definition in this file, its twin must be a
 /// definition in `crate::pool::schema`, and two entries must not name the
 /// same twin; `check_redb_schema_key_types.py` has no definition here to
-/// constrain and is told so. The class table (`accumulator/class.rs`) is
-/// the LMDB inventory and keeps a row for each.
+/// constrain and is told so. The class table names the Rust twin, not
+/// this LMDB spelling.
 pub const MIRRORED_ELSEWHERE: &[(&str, &str, &str)] = &[
     (
         "txpool_meta",
@@ -266,8 +266,7 @@ pub const MIRRORED_ELSEWHERE: &[(&str, &str, &str)] = &[
 /// must **not** have a definition in this file, and its host must be a
 /// definition in this file; `check_redb_schema_key_types.py` has no
 /// definition here to constrain and its floor moved with the fold. The
-/// class table (`accumulator/class.rs`) is the LMDB inventory and keeps a
-/// row for each.
+/// class table names the host table, not this LMDB spelling.
 pub const FOLDED_INTO: &[(&str, &str, &str)] = &[(
     "archival_alt_attestation_witness",
     "alt_blocks",
@@ -289,11 +288,10 @@ pub const FOLDED_INTO: &[(&str, &str, &str)] = &[(
 /// relationships that the gate cannot tell apart and a reader must: a
 /// journal whose function `undo_log` performs (the data is there, as
 /// pre-images) and a table retired by ruling (the data is nowhere, and
-/// nothing was lost). Each reason leads with which. The class table
-/// (`accumulator/class.rs`) is the LMDB inventory and keeps a row for each.
-/// This is not a deletion register — the C++ tables live until cutover — it
-/// is the record that the Rust store answered the requirement without the
-/// table, and why.
+/// nothing was lost). Each reason leads with which. The class table does
+/// not name these LMDB spellings. The C++ tables were deleted with the
+/// store. This is the record that the Rust store answered the requirement
+/// without the table, and why.
 pub const NOT_PORTED: &[(&str, &str)] = &[
     (
         "archival_emission_claim_log",
@@ -340,7 +338,8 @@ pub const NOT_PORTED: &[(&str, &str)] = &[
         "held nowhere; retired by ruling (PDM-Q12, 2026-09-18), never a fact of this store, \
          nothing migrated: a shard is `[k*W, (k+1)*W)` of `cumulative_archival_len`, closed \
          by `shekyl_types::shard_of` (`SHT-Q2`, DRS-E4 §3.7), so a freeze registry has no \
-         job; the C++ J-segment table lives until cutover (CEN-L10; DRS-E4 ARW-4, SAR-5)",
+         job; the C++ J-segment table was deleted with the store flip \
+         (CEN-L10, bucket 3, 2026-10-28; DRS-E4 ARW-4, SAR-5)",
     ),
     (
         "pending_tree_leaves",
@@ -375,12 +374,10 @@ pub const NOT_PORTED: &[(&str, &str)] = &[
 ];
 
 /// Tables this crate defines that have **no** X-macro twin, each with the
-/// reason it exists. Read by `check_redb_schema_bijection.py` (a definition
-/// is either mirrored or named here — never silently extra) and by
-/// `check_redb_schema_key_types.py` (no LMDB flags to derive a key type
-/// from). Out of the digest domain by construction: the accumulator's
-/// class table is the LMDB inventory, and a table absent from it with a
-/// reason here is a named exclusion, not an omission.
+/// reason it exists. The bijection gate compares definitions to the class
+/// table and does not read this list. Out of the digest domain by
+/// construction: each of these tables is `Excluded` in the class table,
+/// and the reason here is why.
 pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[
     (
         "archival_budget_accruing",
@@ -1087,8 +1084,12 @@ mod tests {
                 "{name}: a mirrored table's reason is a sentence, not a token"
             );
             assert!(
-                crate::accumulator::class_for_table(name).is_some(),
-                "{name}: the class table is the LMDB inventory and keeps this row"
+                crate::accumulator::class_for_table(twin).is_some(),
+                "{twin}: the pool twin has no class row"
+            );
+            assert!(
+                crate::accumulator::class_for_table(name).is_none(),
+                "{name}: the LMDB spelling is not a Rust table"
             );
         }
     }
@@ -1111,8 +1112,12 @@ mod tests {
                 "{name}: a folded table's reason is a sentence, not a token"
             );
             assert!(
-                crate::accumulator::class_for_table(name).is_some(),
-                "{name}: the class table is the LMDB inventory and keeps this row"
+                crate::accumulator::class_for_table(host).is_some(),
+                "{host}: the host table has no class row"
+            );
+            assert!(
+                crate::accumulator::class_for_table(name).is_none(),
+                "{name}: a folded LMDB name is not a Rust table"
             );
         }
     }
@@ -1130,9 +1135,10 @@ mod tests {
                 reason.split_whitespace().count() >= 8,
                 "{name}: a Rust-only table's reason is a sentence, not a token"
             );
-            assert!(
-                crate::accumulator::class_for_table(name).is_none(),
-                "{name}: a Rust-only table has no LMDB class row; its exclusion is the reason here"
+            assert_eq!(
+                crate::accumulator::class_for_table(name),
+                Some(crate::accumulator::AccumulatorClass::Excluded),
+                "{name}: a table LMDB never had is excluded from the digest"
             );
         }
     }

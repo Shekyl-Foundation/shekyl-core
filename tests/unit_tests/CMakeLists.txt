@@ -29,19 +29,15 @@
 set(unit_tests_sources
   account.cpp
   apply_permutation.cpp
-  blockchain_db.cpp
   block_queue.cpp
   block_reward.cpp
   economics_c2a_prime.cpp
   bulletproofs_plus.cpp
   gap7_bp_bench.cpp
-  checkpoints.cpp
   command_line.cpp
   crypto.cpp
+  daemon_entry_layout.cpp
   daemon_rpc_client.cpp
-  daemon_submit_ffi_roundtrip.cpp
-  daemon_submit_shims.cpp
-  db_sync_mode_parse.cpp
   decompose_amount_into_digits.cpp
   device.cpp
   difficulty.cpp
@@ -56,8 +52,6 @@ set(unit_tests_sources
   keccak.cpp
   levin.cpp
   logging.cpp
-  long_term_block_weight.cpp
-  lmdb.cpp
   main.cpp
   memwipe.cpp
   mining_parity.cpp
@@ -73,13 +67,9 @@ set(unit_tests_sources
   random.cpp
   rpc_target_wire_contract.cpp
   rpc_facts_ffi_roundtrip.cpp
-  rpc_facts_shims.cpp
-  rpc_restricted_gate.cpp
   rolling_median.cpp
-  scaling_2021.cpp
   seed_epoch.cpp
   serialization.cpp
-  slow_memmem.cpp
   sha256.cpp
   stall_detection_calibration.cpp
   stack_trace.cpp
@@ -96,36 +86,15 @@ set(unit_tests_sources
   aligned.cpp
   archival_credit_wire.cpp
   archival_serve_credit.cpp
-  archival_serve_credit_integration.cpp
   archival_bond_post.cpp
-  archival_bond_post_integration.cpp
   archival_attestation_verify.cpp
-  archival_pass_anchor.cpp
   archival_reward_emission.cpp
-  archival_emission_connect.cpp
   archival_emission_ct_balance.cpp
-  archival_segment_freeze.cpp
-  checkpoint_uniformity.cpp
-  fork_choice_vectors.cpp
-  reorg_watermark.cpp
-  sync_orphan_arm.cpp
-  archival_substrate_lmdb.cpp
-  archival_bond_record_v7_corpus.cpp
-  archival_claim_source_rpc.cpp
-  archival_shard_coverage_rpc.cpp
   ct_balance_differential.cpp
-  tx_extra_pqc_field_shape.cpp
-  deferred_insertion.cpp
-  economics_b5_fee_coinbase.cpp
-  economics_tx_volume_window.cpp
   pruned_tx_hash_parity.cpp
   prunable_digest_parity.cpp
   tx_prunable_region_sole_occupant.cpp
-  pow_longhash_gate.cpp
-  txpool_ref_age.cpp
-  txpool_relay_timers.cpp
   relay_category.cpp
-  pending_tree_fuzz.cpp
   )
 
 set(unit_tests_headers
@@ -139,8 +108,6 @@ target_link_libraries(unit_tests
     fcmp
     cryptonote_protocol
     cryptonote_core
-    blockchain_db
-    lmdb_lib
     rpc
     net
     serialization
@@ -151,10 +118,9 @@ target_link_libraries(unit_tests
     ${EPEE_READLINE}
     # Resolves to libshekyl_daemon_image.a (not libshekyl_ffi.a) because of
     # the SHEKYL_RUST_IMAGE_DAEMON property set below. The daemon image is
-    # the superset (shekyl-ffi + shekyl-daemon-rpc), needed since
-    # daemon_submit_ffi_roundtrip.cpp calls the Rust-side layout twins that
-    # live in shekyl-daemon-rpc. Never name shekyl_ffi literally here — two
-    # Rust archives on one link line is the split-dispatcher regression.
+    # the superset (shekyl-ffi + shekyl-daemon-rpc). Never name shekyl_ffi
+    # literally here — two Rust archives on one link line is the
+    # split-dispatcher regression.
     ${SHEKYL_FFI_LINK_LIBS}
     # rpc repeats after the Rust image (same shape as src/daemon): the
     # daemon image's members import core_rpc_ffi_* / shekyl_submit_*, which
@@ -206,21 +172,12 @@ SET_PROPERTY(SOURCE archival_bond_record_v7_corpus.cpp PROPERTY COMPILE_DEFINITI
   ARCHIVAL_BOND_RECORD_V7_CORPUS_PATH="${CMAKE_SOURCE_DIR}/docs/test_vectors/ARCHIVAL_BOND_RECORD_V7.json")
 SET_PROPERTY(SOURCE mtp_boundary.cpp PROPERTY COMPILE_DEFINITIONS
   MTP_BOUNDARY_VECTOR_PATH="${CMAKE_SOURCE_DIR}/docs/test_vectors/MTP_BOUNDARY_V1.json")
-SET_PROPERTY(SOURCE fork_choice_vectors.cpp PROPERTY COMPILE_DEFINITIONS
-  FORK_CHOICE_VECTOR_PATH="${CMAKE_SOURCE_DIR}/docs/test_vectors/FORK_CHOICE_V1.json")
 SET_PROPERTY(SOURCE pruned_tx_hash_parity.cpp PROPERTY COMPILE_DEFINITIONS
   PRUNED_TX_HASH_PARITY_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-wire/tests/fixtures/pruned_tx_hash_parity_v1.json"
   LIVE_ORACLE_SPEND_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-wire/tests/fixtures/live_oracle_spend_v1.json")
 SET_PROPERTY(SOURCE prunable_digest_parity.cpp PROPERTY COMPILE_DEFINITIONS
   PRUNABLE_DIGEST_PARITY_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-wire/tests/fixtures/prunable_digest_parity_v1.json"
   PQC_SIGNING_PREIMAGE_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-wire/tests/fixtures/pqc_signing_preimage_v1.json")
-SET_PROPERTY(SOURCE archival_bond_post_integration.cpp PROPERTY COMPILE_FLAGS
-  -DGATE4_KAT_FIXTURE_PATH="\\"${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/gate4_lifecycle_kat_v1.json\\"")
-SET_PROPERTY(SOURCE archival_emission_connect.cpp PROPERTY COMPILE_FLAGS
-  -DEMISSION_CONNECT_KAT_FIXTURE_PATH="\\"${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/emission_connect_kat_v1.json\\"")
-SET_PROPERTY(SOURCE archival_substrate_lmdb.cpp PROPERTY COMPILE_FLAGS
-  -DEMISSION_CONNECT_KAT_FIXTURE_PATH="\\"${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/emission_connect_kat_v1.json\\"")
-
 SET_PROPERTY(SOURCE memwipe.cpp PROPERTY COMPILE_FLAGS -Ofast)
 
 add_test(

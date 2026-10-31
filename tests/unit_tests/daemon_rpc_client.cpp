@@ -96,14 +96,35 @@ namespace
   // tests and produce a false pass or hang).
   constexpr uint16_t REFUSED_PORT = 1;
   constexpr uint32_t LOOPBACK = 0x0100007f; // 127.0.0.1 in epee's int32 form
+
+  // A stand-in for the deleted mining-status request. The client under
+  // test is the transport and the status check, not that method.
+  struct probe_request
+  {
+    BEGIN_KV_SERIALIZE_MAP()
+    END_KV_SERIALIZE_MAP()
+  };
+
+  struct probe_response
+  {
+    std::string status;
+    bool active;
+    uint64_t speed;
+
+    BEGIN_KV_SERIALIZE_MAP()
+      KV_SERIALIZE(status)
+      KV_SERIALIZE(active)
+      KV_SERIALIZE(speed)
+    END_KV_SERIALIZE_MAP()
+  };
 }
 
 TEST(daemon_rpc_client, good_answer_leaves_failed_clear)
 {
   n_shot_http_server server(R"({"status":"OK","active":true,"speed":42})");
   tools::t_rpc_client client(LOOPBACK, server.port());
-  cryptonote::COMMAND_RPC_MINING_STATUS::request req{};
-  cryptonote::COMMAND_RPC_MINING_STATUS::response res{};
+  probe_request req{};
+  probe_response res{};
   ASSERT_TRUE(client.rpc_request(req, res, "/mining_status", "fail"));
   EXPECT_EQ(res.speed, 42u);
   EXPECT_FALSE(client.failed());
@@ -121,8 +142,8 @@ TEST(daemon_rpc_client, non_ok_status_sets_failed)
 {
   n_shot_http_server server(R"({"status":"BUSY","active":false,"speed":0})");
   tools::t_rpc_client client(LOOPBACK, server.port());
-  cryptonote::COMMAND_RPC_MINING_STATUS::request req{};
-  cryptonote::COMMAND_RPC_MINING_STATUS::response res{};
+  probe_request req{};
+  probe_response res{};
   EXPECT_FALSE(client.rpc_request(req, res, "/mining_status", "fail"));
   EXPECT_TRUE(client.failed());
 }
@@ -131,8 +152,8 @@ TEST(daemon_rpc_client, json_rpc_error_member_sets_failed)
 {
   n_shot_http_server server(R"({"jsonrpc":"2.0","id":"0","error":{"code":-32601,"message":"Method not found"}})");
   tools::t_rpc_client client(LOOPBACK, server.port());
-  cryptonote::COMMAND_RPC_MINING_STATUS::request req{};
-  cryptonote::COMMAND_RPC_MINING_STATUS::response res{};
+  probe_request req{};
+  probe_response res{};
   EXPECT_FALSE(client.basic_json_rpc_request(req, res, "mining_status"));
   EXPECT_TRUE(client.failed());
   EXPECT_EQ(server.request().rfind("POST /json_rpc HTTP/1.1", 0), 0u) << server.request();
@@ -148,8 +169,8 @@ TEST(daemon_rpc_client, failure_is_sticky_across_a_later_success)
     std::string(R"({"status":"OK","active":true,"speed":1})"),
   });
   tools::t_rpc_client client(LOOPBACK, server.port());
-  cryptonote::COMMAND_RPC_MINING_STATUS::request req{};
-  cryptonote::COMMAND_RPC_MINING_STATUS::response res{};
+  probe_request req{};
+  probe_response res{};
   EXPECT_FALSE(client.rpc_request(req, res, "/mining_status", "fail"));
   EXPECT_TRUE(client.failed());
   EXPECT_TRUE(client.rpc_request(req, res, "/mining_status", "fail"));

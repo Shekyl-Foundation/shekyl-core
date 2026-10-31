@@ -92,8 +92,8 @@ const _: () = assert!(
 /// Deterministic in its one consensus input (O-1); non-decreasing on a
 /// branch because leaf count is (O-2); the pop revert deletes exactly the
 /// rows with `shard_id >= frozen_segment_count(post_trim_leaf_count)`
-/// (O-3). Both daemon hooks consume this function via
-/// `shekyl_archival_frozen_segment_count`.
+/// (O-3). The C++ hooks that called this through the FFI are deleted. The
+/// function stays until `DEL-008`.
 #[must_use]
 pub const fn frozen_segment_count(leaf_count: u64) -> u64 {
     leaf_count / SEGMENT_LEAF_COUNT

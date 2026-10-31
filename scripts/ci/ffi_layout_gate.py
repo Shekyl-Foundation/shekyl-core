@@ -98,7 +98,6 @@ GROUPS = [
         "headers": [
             "src/shekyl/shekyl_ffi.h",
             "src/rpc/rpc_facts_ffi.h",
-            "src/rpc/daemon_submit_ffi.h",
         ],
         "bounds": [],
         # Opaque: C++ holds only its pointer, and its members are Rust types.
@@ -121,15 +120,6 @@ GROUPS = [
             "InfoPeersFactsFfi": "shekyl_rpc_info_peers_facts",
             "PeerFactsFfi": "shekyl_rpc_peer_facts",
             "SeamSessionCountsFfi": "shekyl_seam_session_counts_t",
-            "SubmitFactsFfi": "shekyl_submit_facts_ffi",
-            "SubmitEmissionBondFfi": "shekyl_submit_emission_bond_ffi",
-            "SubmitEmissionSnapshotFfi": "shekyl_submit_emission_snapshot_ffi",
-            "SubmitEmissionFactsFfi": "shekyl_submit_emission_facts_ffi",
-            "SubmitReleaseRecordFfi": "shekyl_submit_release_record_ffi",
-            "SubmitReleaseFactsFfi": "shekyl_submit_release_facts_ffi",
-            "ArchivalEpochCloseBondFfi": "shekyl_archival_epoch_close_bond",
-            "ArchivalEpochCloseShardFfi": "shekyl_archival_epoch_close_shard",
-            "ArchivalCreditPairFfi": "shekyl_archival_credit_pair",
         },
     },
     {

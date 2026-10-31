@@ -89,6 +89,7 @@ namespace cryptonote
     typedef CORE_SYNC_DATA payload_type;
 
     t_cryptonote_protocol_handler(t_core& rcore, nodetool::i_p2p_endpoint<connection_context>* p_net_layout, bool offline = false);
+    ~t_cryptonote_protocol_handler();
 
     BEGIN_INVOKE_MAP2(cryptonote_protocol_handler)
       HANDLE_NOTIFY_T2(NOTIFY_NEW_TRANSACTIONS, &cryptonote_protocol_handler::handle_notify_new_transactions)
@@ -170,11 +171,14 @@ namespace cryptonote
     bool check_standby_peers();
     bool update_sync_search();
     int try_add_next_blocks(cryptonote_connection_context &context);
+    uint64_t sync_head() const;
+    void pump_door();
+    static void ingest_post(void* ctx, const shekyl_ingest_reply* reply, const std::uint64_t* indices, std::size_t indices_len);
+    void on_ingest_reply(const shekyl_ingest_reply& reply, const std::uint64_t* indices, std::size_t indices_len);
     void request_chain_history(cryptonote_connection_context &context);
     size_t skip_unneeded_hashes(cryptonote_connection_context& context, bool check_block_queue) const;
     bool request_txpool_complement(cryptonote_connection_context &context);
     void hit_score(cryptonote_connection_context &context, int32_t score);
-    void calculate_dynamic_span(const double blocks_per_seconds);
 
     t_core& m_core;
 
@@ -192,12 +196,18 @@ namespace cryptonote
     epee::math_helper::once_a_time_seconds<101> m_sync_search_checker;
     tools::PerformanceTimer m_sync_timer, m_add_timer;
     uint64_t m_last_add_end_time;
+    /// The height past every span this handler has handed the ingest door
+    /// in this sync, or 0 while nothing of it is in the door. A handed span
+    /// stays in the queue until the door connects it, so the queue's
+    /// arithmetic and its hash lookups keep covering it; this marks where
+    /// the next span to hand over begins (`block_queue::get_next_span_from`),
+    /// and `sync_head()` reads the head from here and the tip, whichever is
+    /// higher.
+    std::atomic<uint64_t> m_door_frontier;
     uint64_t m_sync_spans_downloaded, m_sync_old_spans_downloaded, m_sync_bad_spans_downloaded;
     uint64_t m_sync_download_chain_size, m_sync_download_objects_size;
     size_t m_block_download_max_size;
-    size_t m_span_time;
     std::atomic<size_t> m_span_limit;
-    std::atomic<size_t> m_bss;
 
     // Values for sync time estimates
     boost::posix_time::ptime m_sync_start_time;

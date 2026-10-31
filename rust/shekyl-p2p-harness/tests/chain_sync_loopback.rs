@@ -754,6 +754,7 @@ async fn a_locator_hash_held_only_as_an_alternative_is_skipped() {
             origin: Origin::Local,
             block: sibling.serialize(),
             bodies,
+            attestation_witness: Vec::new(),
         })
         .expect("room");
     let reply = ticket.reply().await.reply;

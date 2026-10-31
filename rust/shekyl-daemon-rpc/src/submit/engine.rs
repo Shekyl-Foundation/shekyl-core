@@ -11,6 +11,8 @@
 //! classification — is testable with deterministic mocks (§10 item 2)
 //! before the FFI shims exist.
 
+use std::time::{Duration, Instant};
+
 use shekyl_rpc_types::{RejectCause, SubmitVerdict};
 use shekyl_types::{BlockHeight, ChainCount};
 
@@ -21,6 +23,71 @@ use crate::submit::fee::fee_clears;
 use crate::submit::phase_a::{parse_submission, ParsedSubmission, SubmitTxKind};
 use crate::submit::verifier::verify_debit_slot_possession;
 use crate::submit::verify::TxVerifier;
+
+/// Where a submit spent its time: each phase's end, measured from the
+/// request's arrival at the engine. The one `info` line per answer carries
+/// it, so a slow accept is on the operator's record as a refusal already
+/// is. A phase the submit never reached is absent.
+struct SubmitClock {
+    started: Instant,
+    /// Phase A's end: the bytes parsed and, for a release bond-post, the
+    /// possession pre-gate passed.
+    admitted: Option<Duration>,
+    /// Phase B's end: the fact snapshot taken.
+    snapshotted: Option<Duration>,
+    /// Phase C's end: the policy arithmetic and the crypto battery passed.
+    verified: Option<Duration>,
+    /// Phase D's end: the check-and-commit answered.
+    committed: Option<Duration>,
+}
+
+impl SubmitClock {
+    fn start() -> Self {
+        Self {
+            started: Instant::now(),
+            admitted: None,
+            snapshotted: None,
+            verified: None,
+            committed: None,
+        }
+    }
+
+    fn elapsed(&self) -> Duration {
+        self.started.elapsed()
+    }
+}
+
+impl core::fmt::Display for SubmitClock {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut sep = "";
+        for (name, end) in [
+            ("a", self.admitted),
+            ("b", self.snapshotted),
+            ("c", self.verified),
+            ("d", self.committed),
+        ] {
+            if let Some(end) = end {
+                write!(f, "{sep}{name}={}ms", end.as_millis())?;
+                sep = " ";
+            }
+        }
+        if sep.is_empty() {
+            f.write_str("none")
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// The verdict's kind for the log line: never its row or height.
+fn verdict_name(verdict: &SubmitVerdict) -> &'static str {
+    match verdict {
+        SubmitVerdict::Accepted => "accepted",
+        SubmitVerdict::AlreadyInPool => "already-in-pool",
+        SubmitVerdict::AlreadyInChain { .. } => "already-in-chain",
+        SubmitVerdict::Rejected { .. } => "rejected",
+    }
+}
 
 /// An internal fault — **never a verdict** (§3.4 / §4.2). The transport
 /// layer surfaces it as a transport-level error (the client's `Err` arm),
@@ -160,6 +227,35 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
     /// transport-level internal-fault arm (HTTP 5xx at the RPC layer, the
     /// client's `Err`), never a verdict.
     pub fn submit(&self, tx_hex: &str, caller: SubmitCaller) -> Result<SubmitVerdict, EngineFault> {
+        let mut clock = SubmitClock::start();
+        let answer = self.submit_phased(tx_hex, caller, &mut clock);
+        let total_ms = clock.started.elapsed().as_millis();
+        match &answer {
+            Ok(verdict) => tracing::info!(
+                verdict = verdict_name(verdict),
+                bytes = tx_hex.len() / 2,
+                total_ms,
+                phases = %clock,
+                "submit answered"
+            ),
+            Err(fault) => tracing::warn!(
+                %fault,
+                bytes = tx_hex.len() / 2,
+                total_ms,
+                phases = %clock,
+                "submit faulted"
+            ),
+        }
+        answer
+    }
+
+    /// The phases, A to D, with the clock marked at each one's end.
+    fn submit_phased(
+        &self,
+        tx_hex: &str,
+        caller: SubmitCaller,
+        clock: &mut SubmitClock,
+    ) -> Result<SubmitVerdict, EngineFault> {
         // ── Phase A: Rust-native admission, no FFI (§3.1) ──────────────
         let parsed = match parse_submission(tx_hex) {
             Ok(parsed) => parsed,
@@ -194,9 +290,12 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
                 );
                 return Ok(SubmitVerdict::Rejected {
                     cause: reject.into(),
+                    row: None,
                 });
             }
         }
+
+        clock.admitted = Some(clock.elapsed());
 
         // ── Phase B: POD fact snapshot (shim 1, one short lock) ────────
         // A bond-post additionally asks an archival-bond question, keyed on
@@ -222,6 +321,8 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
                 emission_probe.as_ref().map(|(id, epochs)| (id, *epochs)),
             )
             .map_err(|_| EngineFault::SnapshotFault)?;
+
+        clock.snapshotted = Some(clock.elapsed());
 
         // Early return on identity only -- with one exception above it, the
         // debit arm's possession pre-gate, which refuses BEFORE this point
@@ -265,21 +366,21 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         // `crate::submit::gate`).
         let cert = match self.phase_c(&parsed, &facts)? {
             Ok(cert) => cert,
-            Err(cause) => return Ok(SubmitVerdict::Rejected { cause }),
+            Err(cause) => return Ok(SubmitVerdict::Rejected { cause, row: None }),
         };
+
+        clock.verified = Some(clock.elapsed());
 
         // ── Phase D: check-and-commit (shim 2, one short lock) ─────────
         let meta = TxMeta {
             weight: parsed.weight,
             fee: parsed.fee,
-            carries_join_market: parsed.bond_post().is_some_and(|(_, bond)| {
-                matches!(bond.kind, shekyl_wire::BondPostKind::JoinMarket { .. })
-            }),
         };
-        match self
+        let outcome = self
             .shim
-            .commit(&parsed.blob, &parsed.txid, &meta, &cert, &facts)
-        {
+            .commit(&parsed.blob, &parsed.txid, &meta, &cert, &facts);
+        clock.committed = Some(clock.elapsed());
+        match outcome {
             CommitOutcome::Committed => {
                 // Post-commit relay nudge (shim 3, §4.3): latency only —
                 // the D++ embargo + periodic loop are the guarantee.
@@ -291,16 +392,23 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
                 // tail's prune() under pool pressure.
                 Ok(SubmitVerdict::Rejected {
                     cause: RejectCause::FeeTooLow,
+                    row: None,
                 })
             }
             CommitOutcome::Raced(fresh) => Self::classify_race(&parsed, &cert, &fresh, caller),
-            // FND-20: Phases A–C passed. Phase D's mutable re-checks do
-            // not run: the shim returns before `shekyl_submit_commit_tx`
-            // because it cannot reparse these bytes. The capability
-            // refusal is the verdict.
-            CommitOutcome::JoinMarketUnsupported => Ok(SubmitVerdict::Rejected {
-                cause: RejectCause::JoinMarketUnsupported,
-            }),
+            // A chain-bound row refused at commit. A premise that moved under
+            // it outranks it (a competing spend, a duplicate, a stale root:
+            // the same most-terminal-first order as a race, with the same
+            // concealment); only when none did is the row the verdict, and
+            // it rides as the reply's diagnostic parameter so the wallet can
+            // say why (DAEMON_SUBMIT_VERDICT.md §2.5).
+            CommitOutcome::ChainRefused { row, fresh } => Ok(Self::reclassify(
+                &parsed, &cert, &fresh, caller,
+            )
+            .unwrap_or(SubmitVerdict::Rejected {
+                cause: RejectCause::ConsensusRule,
+                row: Some(row.as_str().to_owned()),
+            })),
             CommitOutcome::InternalFault => Err(EngineFault::CommitFault),
         }
     }
@@ -424,14 +532,13 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
                 reference.root,
             ))),
             None => {
-                // Unreachable while the fee floor is nonzero (fee 0 <
-                // floor rejects above). Reaching here means the shim
-                // supplied fee_per_byte == 0 — a contract violation —
-                // and minting a root-anchored certificate without a
-                // verified root would forge the §3.3 witness meaning.
-                // Loud failure per the user-absent-context inversion.
+                // Unreachable while the fee floor refuses a zero fee.
+                // Reaching here means the shim supplied a window that
+                // admitted the submission with no reference block, and
+                // minting a root-anchored certificate without a verified
+                // root would forge the §3.3 witness meaning.
                 Err(EngineFault::ShimContract(
-                    "serve-credit submission cleared the fee floor (fee_per_byte == 0?); \
+                    "serve-credit submission cleared the fee floor with no reference block; \
                      no root-anchored certificate can attest a non-spending arm (SP-T4a)",
                 ))
             }
@@ -439,19 +546,34 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
     }
 
     /// The Phase-D race classifier: fresh facts in, **most-terminal-first**
-    /// verdict out (§3.1). The C++ never chooses a verdict; this function
-    /// is the single point where a raced commit becomes one.
+    /// verdict out (§3.1). The shim never chooses a verdict; this function
+    /// is the single point where a raced commit becomes one. A `Raced` with
+    /// no re-classifiable premise is a shim contract violation: loud, never
+    /// a guessed verdict.
     fn classify_race(
         parsed: &ParsedSubmission,
         cert: &VerificationCertificate,
         fresh: &SubmitFacts,
         caller: SubmitCaller,
     ) -> Result<SubmitVerdict, EngineFault> {
+        Self::reclassify(parsed, cert, fresh, caller).ok_or(EngineFault::ShimContract(
+            "commit reported Raced but no re-checked premise classifies",
+        ))
+    }
+
+    /// The premises a commit re-checks, most terminal first; `None` when
+    /// none of them moved.
+    fn reclassify(
+        parsed: &ParsedSubmission,
+        cert: &VerificationCertificate,
+        fresh: &SubmitFacts,
+        caller: SubmitCaller,
+    ) -> Option<SubmitVerdict> {
         // 1. Settled identity outranks everything: a reorg plus a
         //    competing spend must still report the settled fact. The F40
         //    height rides the fresh facts for free (§3.1 Phase B).
         if let Some(height) = fresh.in_chain {
-            return Ok(SubmitVerdict::AlreadyInChain {
+            return Some(SubmitVerdict::AlreadyInChain {
                 height: height.to_raw(),
             });
         }
@@ -464,15 +586,16 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         //    would be (concealed, below), never `AlreadyInPool`, so the race
         //    outcome is not an oracle.
         let mut concealed = match disclose_pool_presence(fresh, caller) {
-            PoolDisclosure::Reveal => return Ok(SubmitVerdict::AlreadyInPool),
+            PoolDisclosure::Reveal => return Some(SubmitVerdict::AlreadyInPool),
             PoolDisclosure::Conceal => true,
             PoolDisclosure::Absent => false,
         };
         // 3. Terminal conflict: a *different* transaction consumed one of
         //    our inputs while we verified.
         if fresh.key_image_conflicts.contains(&KeyImageConflict::Other) {
-            return Ok(SubmitVerdict::Rejected {
+            return Some(SubmitVerdict::Rejected {
                 cause: RejectCause::DoubleSpendConflict,
+                row: None,
             });
         }
         // 3a. The same, against a spender this node holds in its stem phase
@@ -487,8 +610,9 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         {
             match caller {
                 SubmitCaller::Owner => {
-                    return Ok(SubmitVerdict::Rejected {
+                    return Some(SubmitVerdict::Rejected {
                         cause: RejectCause::DoubleSpendConflict,
+                        row: None,
                     })
                 }
                 SubmitCaller::Foreign => concealed = true,
@@ -540,8 +664,9 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
                 fresh.bond_record_exists == Some(true)
             };
             if slot_moved {
-                return Ok(SubmitVerdict::Rejected {
+                return Some(SubmitVerdict::Rejected {
                     cause: RejectCause::DoubleSpendConflict,
+                    row: None,
                 });
             }
         }
@@ -549,8 +674,9 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         //     claimant record vanished (a Release connected) or a claimed
         //     epoch was consumed by a competing claim during Phase C.
         if parsed.kind == SubmitTxKind::Emission && fresh.emission_claim_conflict == Some(true) {
-            return Ok(SubmitVerdict::Rejected {
+            return Some(SubmitVerdict::Rejected {
                 cause: RejectCause::DoubleSpendConflict,
+                row: None,
             });
         }
         // 4. Reference/root drift (reorg, pop, root-table motion): the
@@ -572,16 +698,18 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
                 }
             };
             if drifted {
-                return Ok(SubmitVerdict::Rejected {
+                return Some(SubmitVerdict::Rejected {
                     cause: RejectCause::StaleRoot,
+                    row: None,
                 });
             }
         }
         // 5. Dynamic fee floor moved (F34): re-run the same arithmetic
         //    over the fresh params.
         if !fee_clears(parsed.weight, parsed.fee, fresh) {
-            return Ok(SubmitVerdict::Rejected {
+            return Some(SubmitVerdict::Rejected {
                 cause: RejectCause::FeeTooLow,
+                row: None,
             });
         }
         // A concealed answer (a duplicate or a conflict this node holds in
@@ -593,18 +721,53 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         // the pool's rising minimum as a fresh one does at insert
         // (`PrunedOnInsert`'s verdict).
         if concealed {
-            return Ok(if fresh.pool_refuses_for_room == Some(true) {
+            return Some(if fresh.pool_refuses_for_room == Some(true) {
                 SubmitVerdict::Rejected {
                     cause: RejectCause::FeeTooLow,
+                    row: None,
                 }
             } else {
                 SubmitVerdict::Accepted
             });
         }
-        // A `Raced` with no re-classifiable premise is a shim contract
-        // violation — loud, never a guessed verdict.
-        Err(EngineFault::ShimContract(
-            "commit reported Raced but no re-checked premise classifies",
-        ))
+        None
+    }
+}
+
+#[cfg(test)]
+mod clock_tests {
+    use super::*;
+
+    #[test]
+    fn a_clock_with_no_phase_reached_reads_none() {
+        assert_eq!(SubmitClock::start().to_string(), "none");
+    }
+
+    #[test]
+    fn marked_phases_read_in_order_with_their_milliseconds() {
+        let mut clock = SubmitClock::start();
+        clock.admitted = Some(Duration::from_millis(3));
+        clock.verified = Some(Duration::from_millis(1_250));
+        assert_eq!(clock.to_string(), "a=3ms c=1250ms");
+    }
+
+    #[test]
+    fn a_verdict_is_named_by_kind_alone() {
+        assert_eq!(verdict_name(&SubmitVerdict::Accepted), "accepted");
+        assert_eq!(
+            verdict_name(&SubmitVerdict::AlreadyInPool),
+            "already-in-pool"
+        );
+        assert_eq!(
+            verdict_name(&SubmitVerdict::AlreadyInChain { height: 7 }),
+            "already-in-chain"
+        );
+        assert_eq!(
+            verdict_name(&SubmitVerdict::Rejected {
+                cause: RejectCause::FeeTooLow,
+                row: Some("row".to_owned()),
+            }),
+            "rejected"
+        );
     }
 }

@@ -29,6 +29,7 @@
 #include "common/command_line.h"
 #include "net/parse.h"
 #include "string_tools_lexical.h"
+#include "cryptonote_basic/cryptonote_basic_impl.h"
 #include "daemon/command_parser_executor.h"
 #include <boost/filesystem.hpp>
 #include <boost/algorithm/string/predicate.hpp>
@@ -43,9 +44,9 @@ t_command_parser_executor::t_command_parser_executor(
   , uint16_t port
   , cryptonote::network_type nettype
   , bool is_rpc
-  , cryptonote::core_rpc_server* rpc_server
+  , void* live
   )
-  : m_executor(ip, port, nettype, is_rpc, rpc_server)
+  : m_executor(ip, port, nettype, is_rpc, live)
 {}
 
 bool t_command_parser_executor::print_peer_list(const std::vector<std::string>& args)
@@ -88,35 +89,6 @@ bool t_command_parser_executor::print_peer_list_stats(const std::vector<std::str
   }
 
   return m_executor.print_peer_list_stats();
-}
-
-bool t_command_parser_executor::save_blockchain(const std::vector<std::string>& args)
-{
-  if (!args.empty()) {
-    std::cout << "Invalid syntax: No parameters expected. For more details, use the help command." << std::endl;
-    return true;
-  }
-  return m_executor.save_blockchain();
-}
-
-bool t_command_parser_executor::show_hash_rate(const std::vector<std::string>& args)
-{
-  if (!args.empty()) {
-    std::cout << "Invalid syntax: No parameters expected. For more details, use the help command." << std::endl;
-    return true;
-  }
-
-  return m_executor.show_hash_rate();
-}
-
-bool t_command_parser_executor::hide_hash_rate(const std::vector<std::string>& args)
-{
-  if (!args.empty()) {
-    std::cout << "Invalid syntax: No parameters expected. For more details, use the help command." << std::endl;
-    return true;
-  }
-
-  return m_executor.hide_hash_rate();
 }
 
 bool t_command_parser_executor::show_difficulty(const std::vector<std::string>& args)
@@ -296,26 +268,6 @@ bool t_command_parser_executor::is_key_image_spent(const std::vector<std::string
   return true;
 }
 
-bool t_command_parser_executor::print_transaction_pool_long(const std::vector<std::string>& args)
-{
-  if (!args.empty()) {
-    std::cout << "Invalid syntax: No parameters expected. For more details, use the help command." << std::endl;
-    return true;
-  }
-
-  return m_executor.print_transaction_pool_long();
-}
-
-bool t_command_parser_executor::print_transaction_pool_short(const std::vector<std::string>& args)
-{
-  if (!args.empty()) {
-    std::cout << "Invalid syntax: No parameters expected. For more details, use the help command." << std::endl;
-    return true;
-  }
-
-  return m_executor.print_transaction_pool_short();
-}
-
 bool t_command_parser_executor::print_transaction_pool_stats(const std::vector<std::string>& args)
 {
   if (!args.empty()) {
@@ -324,84 +276,6 @@ bool t_command_parser_executor::print_transaction_pool_stats(const std::vector<s
   }
 
   return m_executor.print_transaction_pool_stats();
-}
-
-bool t_command_parser_executor::start_mining(const std::vector<std::string>& args)
-{
-  if(!args.size())
-  {
-    std::cout << "Invalid syntax: At least one parameter expected. For more details, use the help command." << std::endl;
-    return true;
-  }
-
-  cryptonote::address_parse_info info;
-  cryptonote::network_type nettype = cryptonote::MAINNET;
-  if(!cryptonote::get_account_address_from_str(info, cryptonote::MAINNET, args.front()))
-  {
-    if(!cryptonote::get_account_address_from_str(info, cryptonote::TESTNET, args.front()))
-    {
-      if(!cryptonote::get_account_address_from_str(info, cryptonote::STAGENET, args.front()))
-      {
-        std::cout << "Invalid syntax: Target account address has wrong format. For more details, use the help command." << std::endl;
-        return true;
-      }
-      else
-      {
-        nettype = cryptonote::STAGENET;
-      }
-    }
-    else
-    {
-      nettype = cryptonote::TESTNET;
-    }
-  }
-  if (info.is_subaddress)
-  {
-    tools::fail_msg_writer() << "subaddress for mining reward is not yet supported!" << std::endl;
-    return true;
-  }
-  if(nettype != cryptonote::MAINNET)
-    std::cout << "Mining to a " << (nettype == cryptonote::TESTNET ? "testnet" : "stagenet") << " address, make sure this is intentional!" << std::endl;
-  uint64_t threads_count = 1;
-  if(args.size() > 2)
-  {
-    std::cout << "Invalid syntax: Too many parameters. For more details, use the help command." << std::endl;
-    return true;
-  }
-  if(args.size() >= 2)
-  {
-    if (args[1] == "auto" || args[1] == "autodetect")
-    {
-      threads_count = 0;
-    }
-    else
-    {
-      bool ok = epee::string_tools::get_xtype_from_string(threads_count, args[1]);
-      threads_count = (ok && 0 < threads_count) ? threads_count : 1;
-    }
-  }
-
-  // Pass the validated ORIGINAL string through; the parse above stays as
-  // the syntax/network gate (the parsed struct cannot be re-encoded since
-  // the fork-(ii) address layout).
-  m_executor.start_mining(args.front(), threads_count, nettype);
-
-  return true;
-}
-
-bool t_command_parser_executor::stop_mining(const std::vector<std::string>& args)
-{
-  if (!args.empty()) {
-    std::cout << "Invalid syntax: No parameters expected. For more details, use the help command." << std::endl;
-    return true;
-  }
-
-  return m_executor.stop_mining();
-}
-
-bool t_command_parser_executor::mining_status(const std::vector<std::string>& args)
-{
-  return m_executor.mining_status();
 }
 
 bool t_command_parser_executor::stop_daemon(const std::vector<std::string>& args)
@@ -425,163 +299,6 @@ bool t_command_parser_executor::print_status(const std::vector<std::string>& arg
 }
 
 
-
-bool t_command_parser_executor::show_bans(const std::vector<std::string>& args)
-{
-  if (!args.empty()) {
-    std::cout << "Invalid syntax: No parameters expected. For more details, use the help command." << std::endl;
-    return true;
-  }
-
-  return m_executor.print_bans();
-}
-
-bool t_command_parser_executor::ban(const std::vector<std::string>& args)
-{
-  if (args.size() != 1 && args.size() != 2) {
-    std::cout << "Invalid syntax: Expects one or two parameters. For more details, use the help command." << std::endl;
-    return true;
-  }
-  time_t seconds = P2P_IP_BLOCKTIME;
-  if (args.size() > 1)
-  {
-    try
-    {
-      seconds = std::stoi(args[1]);
-    }
-    catch (const std::exception &e)
-    {
-      std::cout << "Invalid syntax: Failed to parse seconds. For more details, use the help command." << std::endl;
-      return true;
-    }
-    if (seconds == 0)
-    {
-      std::cout << "Seconds must be greater than 0." << std::endl;
-      return true;
-    }
-  }
-  if (boost::starts_with(args[0], "@"))
-  {
-    const std::string ban_list = args[0].substr(1);
-
-    try
-    {
-      const boost::filesystem::path ban_list_path(ban_list);
-      boost::system::error_code ec;
-      if (!boost::filesystem::exists(ban_list_path, ec))
-      {
-        std::cout << "Can't find ban list file " + ban_list + " - " + ec.message() << std::endl;
-        return true;
-      }
-
-      bool ret = true;
-      std::ifstream ifs(ban_list_path.string());
-      for (std::string line; std::getline(ifs, line); )
-      {
-        // ignore comments after '#' character
-        const size_t pound_idx = line.find('#');
-        if (pound_idx != std::string::npos)
-          line.resize(pound_idx);
-
-        // trim whitespace and ignore empty lines
-        boost::trim(line);
-        if (line.empty())
-          continue;
-
-        auto subnet = net::get_ipv4_subnet_address(line);
-        if (subnet)
-        {
-          ret &= m_executor.ban(subnet->str(), seconds);
-          continue;
-        }
-        const expect<epee::net_utils::network_address> parsed_addr = net::get_network_address(line, 0);
-        if (parsed_addr)
-        {
-          ret &= m_executor.ban(parsed_addr->host_str(), seconds);
-          continue;
-        }
-        std::cout << "Invalid IP address or IPv4 subnet: " << line << std::endl;
-      }
-      return ret;
-    }
-    catch (const std::exception &e)
-    {
-      std::cout << "Error loading ban list: " << e.what() << std::endl;
-      return false;
-    }
-  }
-  else
-  {
-    const std::string ip = args[0];
-    return m_executor.ban(ip, seconds);
-  }
-}
-
-bool t_command_parser_executor::unban(const std::vector<std::string>& args)
-{
-  if (args.size() != 1) {
-    std::cout << "Invalid syntax: One parameter expected. For more details, use the help command." << std::endl;
-    return true;
-  }
-
-  std::string ip = args[0];
-  return m_executor.unban(ip);
-}
-
-bool t_command_parser_executor::banned(const std::vector<std::string>& args)
-{
-  if (args.size() != 1) {
-    std::cout << "Invalid syntax: One parameter expected. For more details, use the help command." << std::endl;
-    return true;
-  }
-  std::string address = args[0];
-  return m_executor.banned(address);
-}
-
-bool t_command_parser_executor::flush_txpool(const std::vector<std::string>& args)
-{
-  if (args.size() > 1) {
-    std::cout << "Invalid syntax: Too many parameters. For more details, use the help command." << std::endl;
-    return true;
-  }
-
-  std::string txid;
-  if (args.size() == 1)
-  {
-    crypto::hash hash;
-    if (!parse_hash256(args[0], hash))
-    {
-      std::cout << "Invalid syntax: Failed to parse tx id. For more details, use the help command." << std::endl;
-      return true;
-    }
-    txid = args[0];
-  }
-  return m_executor.flush_txpool(txid);
-}
-
-bool t_command_parser_executor::print_coinbase_tx_sum(const std::vector<std::string>& args)
-{
-  if(!args.size())
-  {
-    std::cout << "Invalid syntax: At least one parameter expected. For more details, use the help command." << std::endl;
-    return true;
-  }
-
-  uint64_t height = 0;
-  uint64_t count = 0;
-  if(!epee::string_tools::get_xtype_from_string(height, args[0]))
-  {
-    std::cout << "Invalid syntax: Wrong starter block height parameter. For more details, use the help command." << std::endl;
-    return true;
-  }
-  if(args.size() >1 && !epee::string_tools::get_xtype_from_string(count, args[1]))
-  {
-    std::cout << "wrong count parameter" << std::endl;
-    return true;
-  }
-
-  return m_executor.print_coinbase_tx_sum(height, count);
-}
 
 bool t_command_parser_executor::alt_chain_info(const std::vector<std::string>& args)
 {
@@ -639,25 +356,6 @@ bool t_command_parser_executor::print_blockchain_dynamic_stats(const std::vector
   return m_executor.print_blockchain_dynamic_stats(nblocks);
 }
 
-bool t_command_parser_executor::relay_tx(const std::vector<std::string>& args)
-{
-  if (args.size() != 1)
-  {
-    std::cout << "Invalid syntax: One parameter expected. For more details, use the help command." << std::endl;
-    return true;
-  }
-
-  std::string txid;
-  crypto::hash hash;
-  if (!parse_hash256(args[0], hash))
-  {
-    std::cout << "Invalid syntax: Failed to parse tx id. For more details, use the help command." << std::endl;
-    return true;
-  }
-  txid = args[0];
-  return m_executor.relay_tx(txid);
-}
-
 bool t_command_parser_executor::sync_info(const std::vector<std::string>& args)
 {
   if (args.size() != 0) {
@@ -696,30 +394,6 @@ bool t_command_parser_executor::pop_blocks(const std::vector<std::string>& args)
 bool t_command_parser_executor::version(const std::vector<std::string>& args)
 {
   return m_executor.version();
-}
-
-bool t_command_parser_executor::flush_cache(const std::vector<std::string>& args)
-{
-  bool bad_blocks = false;
-  std::string arg;
-
-  if (args.empty())
-    goto show_list;
-
-  for (size_t i = 0; i < args.size(); ++i)
-  {
-    arg = args[i];
-    if (arg == "bad-blocks")
-      bad_blocks = true;
-    else
-      goto show_list;
-  }
-  return m_executor.flush_cache(bad_blocks);
-
-show_list:
-  std::cout << "Invalid cache type: " << arg << std::endl;
-  std::cout << "Cache types: bad-blocks" << std::endl;
-  return true;
 }
 
 } // namespace daemonize

@@ -1643,6 +1643,9 @@ size_t shekyl_thread_ledger_report(char* buf, size_t len);
 #define SHEKYL_DAEMON_CTL_ERR_TRANSPORT -3
 /// The runtime could not be started, or the caller is already inside one.
 #define SHEKYL_DAEMON_CTL_ERR_RUNTIME   -4
+/// The transport completed; the body is a grant refusal, a method error,
+/// a non-OK status, or not JSON. HTTP 200 is not success (RW-Q3).
+#define SHEKYL_DAEMON_CTL_ERR_REPLY     -5
 
 /// POST `body` to `http://<address>/<route>` and return the response body.
 /// address: "host:port" of the daemon RPC listener (no scheme).
@@ -1667,6 +1670,17 @@ int32_t shekyl_daemon_ctl_post(
 /// Release a buffer returned through shekyl_daemon_ctl_post's out pair.
 void shekyl_daemon_ctl_free(uint8_t* ptr, size_t len);
 
+/// Decode a REST/JSON-RPC reply the transport already delivered.
+/// body / body_len: the response body; body may be NULL iff body_len == 0.
+/// out_ptr / out_len: on SHEKYL_DAEMON_CTL_ERR_REPLY the UTF-8 diagnostic;
+///   on OK a NULL/0 pair. Always release with shekyl_daemon_ctl_free.
+/// Returns SHEKYL_DAEMON_CTL_OK, ERR_REPLY, or ERR_NULL_PTR.
+int32_t shekyl_daemon_ctl_rest_outcome(
+    const uint8_t* body,
+    size_t body_len,
+    uint8_t** out_ptr,
+    size_t* out_len);
+
 // Console rendering for natively-served methods (DAEMON_RPC_KV_CUTOVER.md
 // §3.4). Rust: shekyl-daemon-rpc/src/console.rs.
 #define SHEKYL_DAEMON_CONSOLE_OK            0
@@ -1676,7 +1690,7 @@ void shekyl_daemon_ctl_free(uint8_t* ptr, size_t len);
 #define SHEKYL_DAEMON_CONSOLE_ERR_AMBIGUOUS_SOURCE -4  // both rpc_server_ptr and address given
 
 /// Run one console command (`argv[0]` selects) and return its rendered text.
-/// rpc_server_ptr: the live core_rpc_server in-process, else NULL.
+/// rpc_server_ptr: the live rpc_subject in-process, else NULL.
 /// address: "host:port" of the daemon RPC when running as `shekyld <cmd>`,
 ///   else NULL. Exactly one of the two is set.
 /// out_ptr / out_len: on OK the text to print, on ERR_REQUEST the reason;
@@ -2456,12 +2470,10 @@ uint8_t shekyl_archival_serve_credit_epoch_ok(
     uint64_t settlement_epoch,
     uint64_t join_settlement_epoch);
 
-// ---------------------------------------------------------------------------
-// Segment-freeze pipeline (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §5.1). The
-// first-crossing boundary division lives ONLY here; both daemon hooks
-// (add_block freeze processor, pop_block revert) call the entry point and
-// C++ never divides by SHEKYL_ARCHIVAL_SEGMENT_LEAF_COUNT inline
-// (division-one-site tripwire, pipeline doc §8).
+// Segment-freeze count (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §5.1).
+// The C++ hooks that called this are deleted. The export stays until
+// DEL-008 deletes the Rust count with it. C++ does not divide by
+// SHEKYL_ARCHIVAL_SEGMENT_LEAF_COUNT.
 
 /// Frozen-segment count at a curve-tree leaf count:
 /// floor(leaf_count / SEGMENT_LEAF_COUNT).
@@ -2964,35 +2976,6 @@ int32_t shekyl_difficulty_lwma1_next(
     uint64_t chain_height,
     struct shekyl_u128* out_next_difficulty);
 
-/// The fork-choice comparison (C2-R1b-Q1a): strictly greater cumulative
-/// difficulty switches, equality keeps the incumbent, an operator-
-/// checkpoint match forces the switch. Writes
-/// `SHEKYL_FORK_CHOICE_KEEP_CURRENT`, `SHEKYL_FORK_CHOICE_SWITCH` or
-/// `SHEKYL_FORK_CHOICE_FORCED_SWITCH` to
-/// `*out_verdict`; returns 0 on success or
-/// `SHEKYL_DIFFICULTY_ERR_NULL_PTR`.
-int32_t shekyl_difficulty_fork_choice(
-    struct shekyl_u128 current_cumulative,
-    struct shekyl_u128 alternative_cumulative,
-    uint8_t checkpoint_match,
-    int32_t* out_verdict);
-
-/// Alt-chain LWMA window selection (C2-R1b-Q1b / CEN-D5): which
-/// main-chain height range `[*out_main_start, *out_main_stop)` and how
-/// many newest alt entries fill the window for a candidate at
-/// `bei_height` whose stored alt ancestry has `alt_len` blocks starting
-/// at `first_alt_height` (ignored when `alt_len == 0`). Returns 0, or
-/// `SHEKYL_DIFFICULTY_ERR_WINDOW` on a height-0 candidate or
-/// discontiguous ancestry (fail closed), or
-/// `SHEKYL_DIFFICULTY_ERR_NULL_PTR`.
-int32_t shekyl_difficulty_alt_window_plan(
-    uint64_t bei_height,
-    uint64_t alt_len,
-    uint64_t first_alt_height,
-    uint64_t* out_main_start,
-    uint64_t* out_main_stop,
-    uint64_t* out_alt_take_newest);
-
 /// PoW-target predicate: does `hash` satisfy `difficulty`?
 ///
 /// Wraps the `shekyl-difficulty` crate's `check_hash` — the unified
@@ -3468,9 +3451,21 @@ void shekyl_inbound_ceiling_resolve(std::uint64_t reserved,
 //! origin. Canonical, not blob-derived — blob bytes are not a stable identity
 //! across relay hops (F-9). The observation deadline is drawn in the zone from
 //! its cached adopted-embargo timer at `now_ms` (not rebuilt at the FFI edge).
+//! `blobs` carries each transaction's bytes beside its hash: the zone holds
+//! them for the embargo's reshape or last-resort fluff, keyed on the hash and
+//! never on the wire (DAEMON_RELAY_PRIVACY.md §12.2). The origin's deadline is
+//! the derived retry interval (RX-1); a relay position's is its draw.
 void shekyl_relay_zone_record_stem(RelayZoneHandle* handle,
-    const std::uint8_t* hashes, std::size_t n,
+    const std::uint8_t* hashes, const ShekylRelayBlob* blobs, std::size_t n,
     const std::uint8_t* successor, const std::uint8_t* source,
+    std::uint64_t now_ms);
+
+//! Hold this node's own transactions, which were not sent (AwaitSync,
+//! NoOwnEdge, a failed own-edge write, a carrier discard): not shown, not
+//! fluffed (RX-2, Rick 2026-10-29). The zone plans them again on its wake.
+//! Deleter: RD, with levin_notify.
+void shekyl_relay_zone_hold_origin(RelayZoneHandle* handle,
+    const std::uint8_t* hashes, const ShekylRelayBlob* blobs, std::size_t n,
     std::uint64_t now_ms);
 
 //! Record `n` arrived canonical tx hashes, `from` a peer (16-byte uuid, or
@@ -3610,8 +3605,16 @@ std::size_t shekyl_relay_zone_queue_fluff(RelayZoneHandle* handle, std::uint64_t
 //! learns and apply it after poll returns — the C++ producer did exactly
 //! this, recording a stem observation from the resolution callback, until
 //! review caught it. No callback may throw across the boundary.
-void shekyl_relay_zone_poll(RelayZoneHandle* handle, std::uint64_t now_ms, void* ctx,
+//!
+//! `node_synchronised` is the handler's sync state until CS-5: a turn to
+//! synchronised plans every held origin at once. `on_stem` sends a reshape to
+//! the alternate, or a held origin's first send, on the ordinary wire
+//! (same shape as on_fluff; the bytes are the transaction's own). The zone
+//! marks shown in the pool, in Rust, whatever it fluffs as the last resort.
+void shekyl_relay_zone_poll(RelayZoneHandle* handle, std::uint64_t now_ms,
+                            bool node_synchronised, void* ctx,
                             ShekylRelayFluffCb on_fluff,
+                            ShekylRelayFluffCb on_stem,
                             ShekylRelayNoiseSendCb on_noise,
                             ShekylRelayCarrierResolvedCb on_carrier_resolved);
 
@@ -3792,198 +3795,6 @@ int32_t shekyl_logical_state_digest_v0(
     const uint8_t* curve_root,
     uint8_t* out_digest);
 
-// ---------------------------------------------------------------------------
-// DRS-E2 trace writer (`docs/design/DRS_E2_REPLAY_DRIVER.md` §3.9, RD-Q2).
-// The one door the C++ LMDB exporter (`shekyl_e2_trace_export`) hands
-// bytes through. HARVEST SHIM: this surface and its C++ caller die with
-// the daemon at cutover (§1.3). The artifact's format is Rust-minted; its
-// checkpoint is the daemon's own `logical_state_digest_v0` (hashed in Rust
-// through `shekyl_logical_state_digest_v0`, RD-Q9) handed over finished —
-// the C++ never hashes, and walks no family twice.
-//
-// Lifecycle: open -> push_facts* (consecutive heights) -> push_checkpoint?
-// (at most one, at the last facts row) -> finish (trailer, frees) | abort
-// (frees, file left truncated).
-// ---------------------------------------------------------------------------
-struct ShekylE2TraceWriter;
-
-/// Create `path` (`path_len` UTF-8 bytes, not NUL-terminated) and write the
-/// header. NULL on failure (reason logged).
-struct ShekylE2TraceWriter* shekyl_e2_trace_open(const uint8_t* path, size_t path_len);
-
-/// Facts at `height` (the next consecutive height): the six recorded
-/// facts in the trace's `Facts` order (oracle comparison inputs, never
-/// handed to `connect`), `root_after` 32 bytes, cumulative difficulty as
-/// (lo, hi) u64 halves.
-int32_t shekyl_e2_trace_push_facts(
-    struct ShekylE2TraceWriter* writer,
-    uint64_t height,
-    uint64_t weight,
-    uint64_t long_term_weight,
-    uint64_t coins_generated,
-    uint64_t burned,
-    const uint8_t* root_after,
-    uint64_t long_term_effective_median,
-    uint64_t cumulative_difficulty_lo,
-    uint64_t cumulative_difficulty_hi);
-
-/// The LMDB logical state after the last facts row (the covered tip): the
-/// 32-byte `digest_v0` `BlockchainLMDB::logical_state_digest_v0` computed
-/// under one read snapshot. Height is the writer's last facts row — this
-/// call does not take one.
-int32_t shekyl_e2_trace_push_checkpoint(
-    struct ShekylE2TraceWriter* writer,
-    const uint8_t* digest);
-
-// ---------------------------------------------------------------------------
-// DRS-E4 archival snapshot (`DRS_E4_ARCHIVAL_WRITER.md` §3.8.1, ARW-25):
-// the checkpoint's other encoding. The C++ walker
-// (`BlockchainLMDB::archival_snapshot_rows`) decodes each archival LMDB row
-// and hands the FIELDS over (ARW-Q10 (a)); Rust encodes every row in its
-// canonical form, so the two sides share one encoder and the C++ never
-// writes a byte of the record. A trace at `TRACE_VERSION 0x01` carries
-// exactly one snapshot, pushed after the checkpoint; `finish` refuses a
-// writer holding one and not the other.
-//
-// Every pusher returns SHEKYL_E2_TRACE_OK or an error code. A row the
-// snapshot refuses (a duplicate key, a second singleton, a holdings set the
-// typed domain rejects, an epoch-marker seq) is SHEKYL_E2_TRACE_ERR_ROW
-// (-6): the LMDB state is what the C++ wrote, so the walker throws rather
-// than drops the row.
-//
-// Lifecycle: snapshot_new -> push_* (any order; Rust sorts) ->
-// trace_push_archival_snapshot (consumes the builder) | snapshot_free.
-// `write_json` does not consume: the ARW-Q15 capture dumps the rows beside
-// the trace.
-// ---------------------------------------------------------------------------
-struct ShekylE2ArchivalSnapshot;
-
-/// An empty snapshot builder. NULL only on allocation failure.
-struct ShekylE2ArchivalSnapshot* shekyl_e2_archival_snapshot_new(void);
-
-/// Free an unconsumed builder. NULL is a no-op.
-void shekyl_e2_archival_snapshot_free(struct ShekylE2ArchivalSnapshot* snapshot);
-
-/// One `archival_bond` row from the decoded `ArchivalBondValue`:
-/// `holdings_kind` is the record's kind byte (0 compact / 1 complete tree);
-/// `held_shards` and `add_epochs` are the compact set's two index-parallel
-/// arrays of `holdings_count` each (ignored for a complete tree);
-/// `bad_intervals` is `bad_interval_count` `(start_epoch, end_exclusive)`
-/// pairs laid out as `2 × count` u64s; `first_paying_emission_height` keeps
-/// the record's 0 = unset sentinel. A NULL array pointer is permitted only
-/// with a zero count.
-int32_t shekyl_e2_archival_snapshot_push_bond(
-    struct ShekylE2ArchivalSnapshot* snapshot,
-    const uint8_t* persona,
-    const uint8_t* hybrid_pubkey,
-    size_t hybrid_pubkey_len,
-    const uint8_t* bond_spend_pk,
-    size_t bond_spend_pk_len,
-    const uint8_t* endpoint,
-    uint64_t join_settlement_epoch,
-    uint64_t bonded_total,
-    uint8_t holdings_kind,
-    const uint64_t* held_shards,
-    const uint64_t* add_epochs,
-    size_t holdings_count,
-    const uint64_t* bad_intervals,
-    size_t bad_interval_count,
-    const uint64_t* claimed_epochs,
-    size_t claimed_count,
-    uint64_t first_paying_emission_height);
-
-/// One `archival_serve_credit` pass bit: the key `(P, shard, E, height)`.
-int32_t shekyl_e2_archival_snapshot_push_serve_credit(
-    struct ShekylE2ArchivalSnapshot* snapshot,
-    const uint8_t* persona,
-    uint64_t shard,
-    uint64_t epoch,
-    uint64_t height);
-
-/// One `archival_r_market` count. `r == 0` is dropped on the Rust side
-/// (§3.8.1: a zero count is the row's absence).
-int32_t shekyl_e2_archival_snapshot_push_r_market(
-    struct ShekylE2ArchivalSnapshot* snapshot,
-    uint64_t shard,
-    uint64_t epoch,
-    uint64_t r);
-
-/// One `archival_sigma_work` row.
-int32_t shekyl_e2_archival_snapshot_push_sigma_work(
-    struct ShekylE2ArchivalSnapshot* snapshot,
-    uint64_t epoch,
-    uint64_t sigma_work_milli);
-
-/// One frozen `archival_budget` row.
-int32_t shekyl_e2_archival_snapshot_push_budget(
-    struct ShekylE2ArchivalSnapshot* snapshot,
-    uint64_t epoch,
-    uint64_t budget);
-
-/// One `archival_attestation_witness` blob at `height`. An empty blob is
-/// the row's absence; do not push it.
-int32_t shekyl_e2_archival_snapshot_push_attestation_witness(
-    struct ShekylE2ArchivalSnapshot* snapshot,
-    uint64_t height,
-    const uint8_t* bytes,
-    size_t len);
-
-/// One `archival_slash_log` entry at `(height, seq)` from the decoded
-/// `ArchivalSlashRevertValue`: `holding_pre_kind` is its pre-slash holdings
-/// kind byte (0 compact / 1 complete tree), `slashed_shard_add_epoch` the
-/// erased shard's add-epoch (compact only). Epoch-marker rows
-/// (`kArchivalSlashLogEpochMarkerSeq`) are not rows of the snapshot and
-/// are refused with SHEKYL_E2_TRACE_ERR_ROW; the walker skips them. The
-/// slashed amount is projected out (§3.8.1).
-int32_t shekyl_e2_archival_snapshot_push_slash_log(
-    struct ShekylE2ArchivalSnapshot* snapshot,
-    uint64_t height,
-    uint32_t seq,
-    const uint8_t* persona,
-    uint64_t shard,
-    uint64_t epoch,
-    uint8_t holding_pre_kind,
-    uint64_t slashed_shard_add_epoch);
-
-/// One `archival_slash_applied` key `(P, shard, E)`.
-int32_t shekyl_e2_archival_snapshot_push_slash_applied(
-    struct ShekylE2ArchivalSnapshot* snapshot,
-    const uint8_t* persona,
-    uint64_t shard,
-    uint64_t epoch);
-
-/// The singleton `archival_budget_accruing` row: the open epoch and the
-/// checked sum of its per-height accruals so far. Omit when the open epoch
-/// has accrued no row yet.
-int32_t shekyl_e2_archival_snapshot_set_budget_accruing(
-    struct ShekylE2ArchivalSnapshot* snapshot,
-    uint64_t epoch,
-    uint64_t total);
-
-/// The singleton `archival_last_slash_epoch` watermark. Omit when the
-/// property is unset (the C++ UINT64_MAX reading).
-int32_t shekyl_e2_archival_snapshot_set_last_slash_epoch(
-    struct ShekylE2ArchivalSnapshot* snapshot,
-    uint64_t epoch);
-
-/// The `0x04` record after the checkpoint, at the writer's last facts
-/// row. Consumes `snapshot` on every return; `writer` stays usable.
-int32_t shekyl_e2_trace_push_archival_snapshot(
-    struct ShekylE2TraceWriter* writer,
-    struct ShekylE2ArchivalSnapshot* snapshot);
-
-/// Write the rows as `shekyl_e4_archival_rows_v1` JSON to `path`
-/// (`path_len` UTF-8 bytes, not NUL-terminated). Does not consume.
-int32_t shekyl_e2_archival_snapshot_write_json(
-    const struct ShekylE2ArchivalSnapshot* snapshot,
-    const uint8_t* path,
-    size_t path_len);
-
-/// Trailer, flush, free. Consumes the handle either way.
-int32_t shekyl_e2_trace_finish(struct ShekylE2TraceWriter* writer);
-
-/// Free without a trailer.
-void shekyl_e2_trace_abort(struct ShekylE2TraceWriter* writer);
 
 } // extern "C"
 
@@ -4002,20 +3813,6 @@ struct ShekylOwnedBuffer {
   size_t size() const { return buf.len; }
 };
 
-#define SHEKYL_E2_TRACE_OK               0
-#define SHEKYL_E2_TRACE_ERR_NULL_PTR    -1
-#define SHEKYL_E2_TRACE_ERR_OVERFLOW    -2
-/// A facts height gap, a height past u64::MAX, an unanchored checkpoint, a
-/// duplicate checkpoint, facts after the checkpoint — or, for the archival
-/// snapshot, one pushed before the checkpoint, a second one, or a `finish`
-/// with the checkpoint and no snapshot.
-#define SHEKYL_E2_TRACE_ERR_SEQUENCE    -3
-#define SHEKYL_E2_TRACE_ERR_IO          -4
-#define SHEKYL_E2_TRACE_ERR_BAD_PATH    -5
-/// An archival row the snapshot refuses (DRS_E4_ARCHIVAL_WRITER.md §3.8.1):
-/// a duplicate key, a second singleton, a holdings set or kind byte the
-/// typed domain rejects, an epoch-marker slash-log seq.
-#define SHEKYL_E2_TRACE_ERR_ROW         -6
 
 /// `shekyl_difficulty_lwma1_next` returned successfully and
 /// `*out_next_difficulty` carries the next-block difficulty target.
@@ -4034,17 +3831,8 @@ struct ShekylOwnedBuffer {
 /// Rust workspace runs `panic = "abort"` so any panic terminates the
 /// process before reaching the return path.
 #define SHEKYL_DIFFICULTY_ERR_INTERNAL       -4
-/// `shekyl_difficulty_alt_window_plan` preconditions failed: height-0
-/// candidate or alt ancestry not contiguous with the candidate.
+/// A window precondition the difficulty crate refuses.
 #define SHEKYL_DIFFICULTY_ERR_WINDOW         -5
-
-/// `shekyl_difficulty_fork_choice`: the incumbent chain stays.
-#define SHEKYL_FORK_CHOICE_KEEP_CURRENT      INT32_C(0)
-/// `shekyl_difficulty_fork_choice`: reorganize onto the alternative.
-#define SHEKYL_FORK_CHOICE_SWITCH            INT32_C(1)
-/// `shekyl_difficulty_fork_choice`: reorganize onto the alternative because
-/// a checkpoint names it; the demoted blocks are discarded (CEN-K7).
-#define SHEKYL_FORK_CHOICE_FORCED_SWITCH     INT32_C(2)
 
 /// `shekyl_pow_randomx_v2_hash` wrote `*out_hash`, or
 /// `shekyl_pow_randomx_v2_set_canonical` pinned the seedhash.
@@ -4247,11 +4035,6 @@ int shekyl_dial_take_handshake_nonce(std::uint32_t connector, const std::uint8_t
 bool shekyl_sync_room_for_syncing_peer(std::uint32_t connector, std::uint32_t syncing, std::uint32_t synced);
 /// Whether to look for more outbound peers to sync from on `connector`.
 bool shekyl_sync_wants_more_outbound(std::uint32_t connector, std::uint32_t outbound);
-/// The core's tip: the dialer's next handshake carries it. Called wherever
-/// the tip changes, and once at start.
-void shekyl_core_publish_tip(std::uint64_t height, std::uint64_t cumulative_difficulty,
-    std::uint64_t cumulative_difficulty_top64, const std::uint8_t* top_id);
-
 /// The protocol handler's one entry into the Rust ingest service
 /// (DRS_X_STORE_FLIP.md DX-Q2 item 2). Built and tested; the store flip
 /// routes the handler's block arrivals here, and nothing calls it before.
@@ -4305,6 +4088,7 @@ struct shekyl_ingest_arrival {
   shekyl_ingest_blob block;
   const shekyl_ingest_blob* bodies;
   std::size_t bodies_len;
+  shekyl_ingest_blob witness;
 };
 
 /// Which fields carry meaning is the kind's (`ingest_ffi.rs`); the rest are
@@ -4336,11 +4120,68 @@ int shekyl_ingest_offer_span(std::uint64_t connection, std::uint8_t solicited,
     const shekyl_ingest_arrival* arrivals, std::size_t len);
 /// `connection` closed.
 void shekyl_ingest_session_closed(std::uint64_t connection);
-/// The tip the core last published (see shekyl_core_publish_tip): 1 and the
-/// fields written, 0 and nothing written before the first publish. A null
-/// out pointer is skipped.
-int shekyl_core_published_tip(std::uint64_t* out_height, std::uint64_t* out_cumulative_difficulty,
-    std::uint64_t* out_cumulative_difficulty_top64, std::uint8_t* out_top_id);
+
+/// The protocol handler's door into the node's pool (DX-Q5).
+/// SHEKYL_POOL_ADMITTED: relay the blob. SHEKYL_POOL_HELD: already held, do
+/// not relay. SHEKYL_POOL_REFUSED_FORM closes the session.
+/// SHEKYL_POOL_REFUSED_STATE keeps it. SHEKYL_POOL_FAULT is ours.
+/// SHEKYL_POOL_UNBOUND: no door is installed.
+#define SHEKYL_POOL_ADMITTED 0
+#define SHEKYL_POOL_HELD 1
+#define SHEKYL_POOL_REFUSED_FORM 2
+#define SHEKYL_POOL_REFUSED_STATE 3
+#define SHEKYL_POOL_FAULT (-1)
+#define SHEKYL_POOL_UNBOUND (-2)
+int32_t shekyl_pool_admit(const uint8_t* blob, size_t len);
+/// 1 when the pool holds `hash`, stem included. 0 when it does not.
+int32_t shekyl_pool_has(const uint8_t hash[32]);
+/// Shown hashes, or every held hash when `sensitive` is nonzero. `out` is
+/// 32*n bytes, freed with shekyl_buffer_free. 0 on success.
+int32_t shekyl_pool_hashes(uint8_t sensitive, ShekylBuffer* out);
+/// Shown bodies whose hash is not among `known_count` hashes. `out` is a
+/// sequence of little-endian u32 lengths and the bytes, freed with
+/// shekyl_buffer_free. 0 on success.
+int32_t shekyl_pool_complement(const uint8_t* known, size_t known_count, ShekylBuffer* out);
+/// The relay fluffed `hash`. 0 done, SHEKYL_POOL_FAULT on a pool-file
+/// fault, SHEKYL_POOL_UNBOUND with no door.
+int32_t shekyl_pool_fluffed(const uint8_t hash[32]);
+
+/// The handler's sync reads, each over one snapshot of the node's chain.
+/// 0 is success. 1 is a refusal (empty chain, unknown height, a history
+/// that does not share genesis). -1 is a store fault. -2 is no door.
+#define SHEKYL_CORE_MAIN 0
+#define SHEKYL_CORE_ALT 1
+#define SHEKYL_CORE_ABSENT 2
+int32_t shekyl_core_height(uint64_t* out_count);
+int32_t shekyl_core_top(uint64_t* out_height, uint8_t* out_hash);
+int32_t shekyl_core_hash_at(uint64_t height, uint8_t* out_hash);
+int32_t shekyl_core_have_block(const uint8_t* hash, int32_t* out_where);
+int32_t shekyl_core_cumulative_difficulty(uint64_t height, uint64_t* out_lo, uint64_t* out_hi);
+int32_t shekyl_core_short_history(ShekylBuffer* hashes, uint64_t* out_count);
+int32_t shekyl_core_supplement(const uint8_t* ids, size_t id_count,
+    ShekylBuffer* hashes, ShekylBuffer* weights,
+    uint64_t* out_start, uint64_t* out_total,
+    uint64_t* out_diff_lo, uint64_t* out_diff_hi);
+/// The block `hash` names. 0 when held: `blob` is the wire bytes, `witness`
+/// is empty when the block carries none (freed with shekyl_buffer_free),
+/// `out_alt` is nonzero for an alternative, `out_weight` is the block's
+/// weight. SHEKYL_CORE_ABSENT when the chain does not hold it. The witness
+/// is that block's own, including an alternative's.
+int32_t shekyl_core_block(const uint8_t hash[32], ShekylBuffer* blob,
+    ShekylBuffer* witness, int32_t* out_alt, uint64_t* out_weight);
+/// The transactions `hashes` names, `count` of them, in order. `out` is a
+/// record per hash: u8 0 when missing, or u8 1, a little-endian u32 length
+/// and the wire bytes when held. A discarded prunable region is missing
+/// unless the pool still shows the transaction. A stem entry stays missing.
+/// Freed with shekyl_buffer_free. 0 on success.
+int32_t shekyl_core_txs(const uint8_t* hashes, size_t count, ShekylBuffer* out);
+
+/// A transaction this node committed, handed to `levin_notify` as
+/// `relay_method::local`. Returns 1 when the relay took it, 0 when there
+/// was no route: before `core::init` returns, after `deinit`, or with no
+/// notifier bound. RD deletes this with `levin_notify`.
+int shekyl_shell_relay_local(const uint8_t* blob, size_t len);
+
 /// The disclosure sample for a response on `session` (the socket id): up to
 /// `cap` entries written to `out`, returning how many. Zero below the white
 /// diversity floor, for an unknown session, or with no dialer.
@@ -4549,6 +4390,9 @@ typedef void (*ShekylDaemonStopFn)(void);
 struct ShekylDaemonEntry {
   const char* release_name;
   const char* version_full;
+  /// `SHEKYL_VERSION_IS_RELEASE`. Beside the version string: the release
+  /// workflow sets both from `version.cpp.in` (FLIP-Q3).
+  bool is_release;
   uint32_t protocol_version;
   ShekylDaemonRunFn run;
   ShekylDaemonStopFn stop;

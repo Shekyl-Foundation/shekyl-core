@@ -168,13 +168,13 @@ pub enum RejectCause {
     /// Reference block hash unknown to this daemon (typically: daemon not
     /// yet synced to it). Sync-gated retry (§2.5).
     ReferenceNotFound,
-    /// A JoinMarket bond post this daemon cannot admit: its C++ commit
-    /// step has no decoder for the receipt-key form (FND-20). Phases A–C
-    /// passed; Phase D's mutable re-checks do not run, because the shim
-    /// returns before `shekyl_submit_commit_tx`. Deleted with the C++
-    /// commit shim (DEL-008).
-    JoinMarketUnsupported,
+    /// A consensus row refused the transaction against this chain when the
+    /// pool committed it (3.63; the flip). Terminal: the bytes are sound and
+    /// the chain decides. The row rides as `Rejected`'s `row` ("CEN-J15").
+    ConsensusRule,
     /// Forward-compat catch-all: a cause this client build does not know.
+    /// A pre-flip daemon's `join_market_unsupported` (left the set at
+    /// 3.63) reads as this.
     #[serde(other)]
     Unrecognized,
 }
@@ -344,8 +344,8 @@ Request-surface trims relative to `COMMAND_RPC_SEND_RAW_TX`:
 | `Rejected{StaleRoot}` | Rebuild the **proof** over the same input selection against a fresh root. This constructs the wallet's deferred `ProofStale` path and closes the `fcmp_root_stale` FOLLOWUPS criterion (its named reopen was exactly "a daemon-side stale-root signal"). |
 | `Rejected{ReferenceTooRecent}` | Timed backoff (min-age is 5 blocks; the wallet built too close to the tip), then resubmit-same-bytes. |
 | `Rejected{ReferenceNotFound}` | Sync-gated: consult daemon health context (§5.2). If the daemon is behind, wait for sync and resubmit-same-bytes; if the daemon is synced and still does not know the reference, treat as `StaleRoot`. Own-daemon-gated branching per §7.2. |
+| `Rejected{ConsensusRule, row}` | Terminal release; no rebuild (the bytes are sound; the chain's state refused them under the named row, and a rebuild meets the same state). BD-Q3 Rule 2 holds the record and its funding to the end date; the wallet records the row (`TerminalCause::ConsensusRule { row }`, pending-post v14) and tells its user "the chain refused it under consensus rule CEN-J15". A premise that moved under the refusal (a competing spend, a duplicate, a stale root) is classified first, in the race order of §3.1 and with its concealment, so a double spend the door refuses as CEN-I7 is still `DoubleSpendConflict`; the row is the verdict only when nothing else moved. Added at 3.63 (the flip; Rick, 2026-10-29): before it, a chain-bound refusal at the pool's commit reached the wallet as an internal fault, a retryable class, and the wallet resent a post the chain refuses every time. |
 | `Rejected{Unrecognized}` | Release + one-shot rebuild (the F28 loop-breaker applies). |
-| `Rejected{JoinMarketUnsupported}` | Terminal release, no rebuild. Phases A–C passed. Phase D's mutable re-checks do not run: the C++ commit shim cannot reparse these bytes and returns before `shekyl_submit_commit_tx` (`ffi_shim.rs`, FND-20). The capability refusal is the verdict, including when a key-image or fee race would also have refused — retrying the same bytes against this daemon fails the same way. Identity short-circuits (`AlreadyInChain`, the owner's `AlreadyInPool`) return before commit and are not this cause. The pending stake is withdrawn and its funding is spendable again; staking resumes against a daemon that admits a JoinMarket. Deleted with the C++ commit shim (`DEL-008`). |
 | `Err(RpcError)` | The ambiguous case. Hold locks, TTL, resubmit-same-bytes; the next definite verdict resolves. |
 
 **Idempotent resubmission is the status query.** Under identity-first
@@ -1767,9 +1767,9 @@ completeness check.
 
 | Site | What |
 | --- | --- |
-| `src/cryptonote_core/tx_pool.h:677` | member declaration |
-| `src/cryptonote_core/tx_pool.cpp:161-167` | resubmit gate (defect 0.2) |
-| `src/cryptonote_core/tx_pool.cpp:764` | insert on stuck-sweep |
+| `src/cryptonote_core/tx_pool.h` | member declaration |
+| `src/cryptonote_core/tx_pool.cpp` | resubmit gate (defect 0.2) |
+| `src/cryptonote_core/tx_pool.cpp` | insert on stuck-sweep |
 
 Re-verified at round 6 (minor c): the grep returns **exactly these three
 sites** — no stats getters, serialization, or RPC readers exist. The member
@@ -1781,17 +1781,17 @@ deletes clean. PR-5's re-grep remains the backstop.
 | --- | --- |
 | `src/cryptonote_core/tx_sanity_check.{h,cpp}` | both overloads |
 | `src/cryptonote_core/CMakeLists.txt:34` | build entry |
-| `src/rpc/core_rpc_server.cpp:53`, `:1153` | include + only production call |
+| `src/rpc/core_rpc_server.cpp`, `:1153` | include + only production call |
 | `src/wallet/wallet2.cpp:55` | **dead include** (no call site) — drops with the include sweep |
 
 ### 9.3 Legacy submit endpoint
 
 | Site | What | Disposition |
 | --- | --- | --- |
-| `src/rpc/core_rpc_server.cpp:1044-1143` | `on_send_raw_tx` | delete (PR-5) |
-| `src/rpc/core_rpc_server.h:113-114`, `:199` | route maps + declaration | delete |
-| `src/rpc/core_rpc_server_commands_defs.h:557` | `COMMAND_RPC_SEND_RAW_TX` epee defs | delete |
-| `src/rpc/core_rpc_ffi.cpp:198-199` | `DJSON` legacy-route dispatch entries | delete |
+| `src/rpc/core_rpc_server.cpp` | `on_send_raw_tx` | delete (PR-5) |
+| `src/rpc/core_rpc_server.h`, `:199` | route maps + declaration | delete |
+| `src/rpc/core_rpc_server_commands_defs.h` | `COMMAND_RPC_SEND_RAW_TX` epee defs | delete |
+| `src/rpc/core_rpc_ffi.cpp` | `DJSON` legacy-route dispatch entries | delete |
 | `rust/shekyl-daemon-rpc/src/server.rs:98-103`, `handlers/json.rs:70` | axum proxy routes for the legacy endpoint | replaced by the native typed route (PR-3); deleted PR-5 |
 | `rust/shekyl-rpc-client/src/lib.rs:191-`, `:488-522` | `TxRelayResponse` + string-keyed `publish_transaction` | replaced by typed verdict (PR-4) |
 | `src/wallet/wallet2.cpp:196`, `:7681-7690` | legacy C++ wallet caller (`get_text_reason`, `commit_tx`) | ports to the new endpoint as a minimal epee marshaling shim (transport-only per rule 20); its richer error text comes from the verdict cause |

@@ -23,13 +23,15 @@
 #      check_consensus_invariants.sh); the source-level FOLLOWUPS
 #      disposition sketched an unmangled-name grep, which can never
 #      match a C++-mangled symbol — this check demangles first.
-#   3. The Rust verifier's C-ABI export (`shekyl_pow_randomx_v2_hash`)
-#      IS present. Guards against the inverse failure: a daemon that
-#      silently dropped the Rust verifier (and also proves this script
-#      is looking at a binary that actually embeds the verifier — on a
-#      shared-library build the verifier lives in a .so and every
-#      presence check here would fail loudly instead of passing
-#      vacuously).
+#   3. A `shekyl_pow_randomx` substring IS present. The C-ABI export
+#      (`shekyl_pow_randomx_v2_hash`) is a one-line wrapper the linker
+#      may inline under LTO (Ubuntu 24.04 / gcc 14); the crate's
+#      rust-mangled symbols still carry the substring. Guards against
+#      the inverse failure: a daemon that silently dropped the Rust
+#      verifier (and also proves this script is looking at a binary
+#      that actually embeds the verifier — on a shared-library build
+#      the verifier lives in a .so and every presence check here would
+#      fail loudly instead of passing vacuously).
 #   4. `aes`-crate symbols (`_ZN3aes`) are present — the expected
 #      disposition recorded when Phase 2b added aes-0.9.0: the crate's
 #      Rust-mangled internals are visible in a verifier-linked static
@@ -48,13 +50,13 @@
 #      fell off. Exact names, same dialect as checks 1/2/5 — a glob
 #      cannot catch an arbitrarily renamed seam, and this check does
 #      not claim to. A new setter is a new name added here and in
-#      check_pow_test_seam.sh together. Anchored (rule 47) on
-#      `cryptonote::hash_pow_randomx` and the slot
-#      `s_pow_hash_override_for_tests`: if either is gone the dispatch
-#      moved and both gates re-home in that PR.
+#      check_pow_test_seam.sh together. The former presence anchors
+#      (`cryptonote::hash_pow_randomx`, `s_pow_hash_override_for_tests`)
+#      left with the seam; checks 3 and 4 are the remaining anchors that
+#      make this absence falsifiable.
 #
-# Checks 3, 4 and 6's anchors make 1, 2, 5 and 6 falsifiable: a stripped
-# binary or a wrong path cannot pass all six.
+# Checks 3 and 4 make 1, 2, 5 and 6 falsifiable: a stripped binary or a
+# wrong path cannot pass all six.
 
 set -euo pipefail
 
@@ -111,16 +113,17 @@ else
   echo "OK: no deleted CryptoNote DAA symbol (next_difficulty family)"
 fi
 
-# --- Check 3: Rust verifier FFI export present ---
+# --- Check 3: Rust verifier symbols present ---
 # No `grep -q` on these presence checks: -q exits at the first match and
 # SIGPIPEs the upstream printf on a large symbol table, which under
 # `pipefail` turns a FOUND symbol into a failed pipeline (observed on the
 # 24k-line Release shekyld table). Plain grep >/dev/null reads the whole
-# stream.
-if printf '%s\n' "$SYMS" | grep -E '[[:space:]]shekyl_pow_randomx_v2_hash$' >/dev/null; then
-  echo "OK: Rust verifier FFI export (shekyl_pow_randomx_v2_hash) present"
+# stream. Substring, not an end-anchored C ABI: LTO may inline
+# `shekyl_pow_randomx_v2_hash` while the crate's mangled names remain.
+if printf '%s\n' "$SYMS" | grep 'shekyl_pow_randomx' >/dev/null; then
+  echo "OK: Rust verifier symbols (shekyl_pow_randomx) present"
 else
-  echo "FAIL: shekyl_pow_randomx_v2_hash absent from '$BIN'." >&2
+  echo "FAIL: no shekyl_pow_randomx symbol in '$BIN'." >&2
   echo "  Either the daemon dropped the Rust verifier, or this is a" >&2
   echo "  shared-library build (the verifier lives in a .so). Run this" >&2
   echo "  check against a static Release build (the CI shape)." >&2
@@ -149,29 +152,10 @@ else
 fi
 
 # --- Check 6: pinned PoW test setter unreachable from production ---
-# Anchor first: the dispatch that consults the seam, and the seam's slot,
-# must both be in the binary. Without them, the absence assertions below
-# would pass over a daemon whose PoW path moved elsewhere.
-# [[:space:]] not a literal space: same dialect as check 1.
-if printf '%s\n' "$SYMS_DEMANGLED" | grep -E '[[:space:]][Tt][[:space:]]cryptonote::hash_pow_randomx\(' >/dev/null; then
-  echo "OK: PoW dispatch cryptonote::hash_pow_randomx present"
-else
-  echo "FAIL: cryptonote::hash_pow_randomx absent from '$BIN'." >&2
-  echo "  The PoW dispatch moved (daemon Rust cutover?). Re-home this check" >&2
-  echo "  and scripts/ci/check_pow_test_seam.sh in the same PR." >&2
-  fail=1
-fi
-# Demangled GNU nm: `b cryptonote::(anonymous namespace)::s_pow_hash_override_for_tests`
-# — the name is preceded by `::`, not a space. End-anchor the unique slot name.
-if printf '%s\n' "$SYMS_DEMANGLED" | grep -E 's_pow_hash_override_for_tests$' >/dev/null; then
-  echo "OK: PoW test-seam slot s_pow_hash_override_for_tests present (seam still consulted)"
-else
-  echo "FAIL: s_pow_hash_override_for_tests absent from '$BIN'." >&2
-  echo "  The seam slot was renamed or the dispatch no longer consults it;" >&2
-  echo "  update this check and check_pow_test_seam.sh together." >&2
-  fail=1
-fi
-# Exact setter: function symbols only. The slot above is data and expected.
+# The seam's dispatch and slot left with the C++ override. Absence of the
+# setter and of the deleted schema names is the remaining subject; checks
+# 3 and 4 are the presence anchors that keep this from passing vacuously.
+# Exact setter: function symbols only.
 if matches="$(printf '%s\n' "$SYMS_DEMANGLED" | grep -E '[[:space:]][TtWw][[:space:]]cryptonote::set_pow_hash_override_for_tests\(')"; then
   echo "FAIL: PoW hash override setter reachable from production (survived --gc-sections):" >&2
   printf '%s\n' "$matches" >&2
