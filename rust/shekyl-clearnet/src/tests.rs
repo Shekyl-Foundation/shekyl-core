@@ -816,6 +816,88 @@ fn refusals_past_the_linger_cap_close_at_once() {
     drop(engine);
 }
 
+/// Two listeners share one linger cap. With room for two, both filled on
+/// the first listener, a refusal on the second closes at once: a cap per
+/// listener would hold that socket and its late flight would end with FIN
+/// (D10.2).
+#[test]
+fn two_listeners_share_the_linger_cap() {
+    let span = Tick::new(5_000_000_000);
+    let sockets = refusing_gate(span.get(), 1);
+    assert_eq!(sockets.clearnet_linger_cap(span), 2);
+    let engine = EngineService::start(MonotonicClock::new());
+    let pool = runtime(harness_budget(), &name("sk-clearnet-two")).expect("runtime");
+    let recorded = causes();
+    let seen = Arc::clone(&recorded.seen);
+    let (admitted_tx, admitted_rx) = mpsc::unbounded_channel();
+    let sockets_for_loops = sockets.clone();
+    let on_cause = Arc::clone(&recorded.sink);
+    let linger_engine = engine.handle();
+    let cap = sockets.clearnet_linger_cap(span);
+    let (addr_a, addr_b) = pool.block_on(async move {
+        let linger = super::Linger::spawn(linger_engine.clone(), cap, span);
+        let make_inbound = || super::Inbound {
+            sockets: sockets_for_loops.clone(),
+            ceiling: || InboundCeiling::Bounded(8),
+            kind: ChannelChoice::Plain,
+            network_id: ID,
+            handshake_within: span,
+            gap_within: None,
+            tally: Arc::new(super::zero_tally()),
+            on_cause: Arc::clone(&on_cause),
+            send_queue_bytes: 65_536,
+            admitted: admitted_tx.clone(),
+            linger: linger.clone(),
+            backoff: Duration::from_millis(1),
+        };
+        let listener_a = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .expect("bind");
+        let listener_b = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .expect("bind");
+        let addr_a = listener_a.local_addr().expect("addr");
+        let addr_b = listener_b.local_addr().expect("addr");
+        tokio::spawn(super::accept_inbound(
+            listener_a,
+            make_inbound(),
+            linger_engine.clone(),
+        ));
+        tokio::spawn(super::accept_inbound(
+            listener_b,
+            make_inbound(),
+            linger_engine,
+        ));
+        (addr_a, addr_b)
+    });
+    let _keep_admitted = admitted_rx;
+    let _admitted = connect(addr_a);
+    let start = Instant::now();
+    while sockets.live() == 0 {
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "the first is admitted"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let held_a = connect(addr_a);
+    wait_for_refusals(&seen, 1);
+    let held_b = connect(addr_a);
+    wait_for_refusals(&seen, 2);
+    let past = connect(addr_b);
+    wait_for_refusals(&seen, 3);
+    assert!(
+        flight_after(past, Duration::from_millis(50)).is_some(),
+        "the second listener shares the cap, so this refusal closed at once"
+    );
+    for (label, held) in [("first", held_a), ("second", held_b)] {
+        let error = flight_after(held, Duration::ZERO);
+        assert!(error.is_none(), "the {label} held socket: {error:?}");
+    }
+    pool.shutdown(Duration::from_millis(50));
+    drop(engine);
+}
+
 /// A refused peer that never writes is held until the span passes, then
 /// closed, and its slot is free again: twice over, so the second expiry
 /// rests on the timing engine's deadline re-arming after its first wake.

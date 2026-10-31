@@ -19,7 +19,7 @@ use shekyl_capped_stream::{node_gate, process_write_stall, Session};
 use shekyl_clearnet::{
     accept_inbound as accept_clearnet_inbound, channel_choice, dial_one as dial_clearnet,
     zero_tally, Admitted as ClearnetAdmitted, ClearnetOption, Dial as ClearnetDial,
-    Inbound as ClearnetInbound,
+    Inbound as ClearnetInbound, Linger,
 };
 use shekyl_net_address::NetworkAddress;
 use shekyl_peer_policy::InboundCeiling;
@@ -685,8 +685,17 @@ pub fn start_clearnet(
         tracing::info!("the clearnet zone dials {route:?}");
     }
     crate::dialer_ffi::start_connector(ConnectorId::Clearnet, &host.engine);
+    // One linger task for every listener. The daemon reserved this cap
+    // once; a task per listener would hold that many sockets per listener.
+    let linger = {
+        let engine = host.engine.clone();
+        let span = host.clearnet_handshake_within;
+        let cap = host.sockets.clearnet_linger_cap(span);
+        host.handle
+            .block_on(async move { Linger::spawn(engine, cap, span) })
+    };
     for listener in listeners {
-        spawn_clearnet(&host, listener, kind, Arc::clone(&tally));
+        spawn_clearnet(&host, listener, kind, Arc::clone(&tally), linger.clone());
     }
     Ok(locals)
 }
@@ -696,6 +705,7 @@ fn spawn_clearnet(
     listener: TcpListener,
     kind: shekyl_clearnet::ChannelChoice,
     tally: Arc<shekyl_clearnet::HandshakeTally>,
+    linger: Linger,
 ) {
     let hub = host.hub.clone();
     let inbound = ClearnetInbound {
@@ -709,6 +719,7 @@ fn spawn_clearnet(
         on_cause: Arc::clone(&host.on_cause),
         send_queue_bytes: host.send_queue_bytes,
         admitted: host.clearnet_tx.clone(),
+        linger,
         backoff: ACCEPT_BACKOFF,
     };
     let engine = host.engine.clone();

@@ -286,6 +286,12 @@ where
     let send_queue_bytes = config.send_queue_bytes;
     let shutdown_timeout = config.shutdown_timeout;
     let ceiling = config.ceiling;
+    // The spawn needs the runtime. One task for this connector: a later
+    // listener would clone the same handle.
+    let linger_engine = engine.clone();
+    let linger_cap = sockets.clearnet_linger_cap(handshake_within);
+    let linger =
+        pool.block_on(async move { Linger::spawn(linger_engine, linger_cap, handshake_within) });
     let inbound = Inbound {
         sockets,
         ceiling: move || ceiling,
@@ -297,6 +303,7 @@ where
         on_cause: Arc::clone(&config.on_cause),
         send_queue_bytes,
         admitted: admitted_tx,
+        linger,
         backoff: config.accept_backoff,
     };
     let engine = engine.clone();

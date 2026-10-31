@@ -15,12 +15,14 @@
 //! passes. Only then is it closed, with nothing unread, so the far side
 //! sees FIN and no RST.
 //!
-//! One task holds every lingering socket of an accept loop, and one owner
-//! on the timing engine carries the earliest deadline. Every socket
-//! lingers for the same span, so the earliest is always the oldest. How
-//! many may linger at once is capped by what the connector admits in one
-//! span ([`Sockets::clearnet_linger_cap`]); a refusal beyond the cap closes
-//! at once and leaves the RST residual D10.2 states.
+//! One task for the connector holds every lingering socket of every accept
+//! loop, and one owner on the timing engine carries the earliest deadline.
+//! Every socket lingers for the same span, so the earliest is always the
+//! oldest. How many may linger at once is capped by what the connector
+//! admits in one span ([`Sockets::clearnet_linger_cap`]); a refusal beyond
+//! the cap closes at once and leaves the RST residual D10.2 states. Two
+//! listen endpoints share that cap, which is the cap the daemon reserves
+//! once.
 
 use std::collections::VecDeque;
 use std::future::poll_fn;
@@ -37,8 +39,8 @@ use tokio::sync::mpsc;
 
 use crate::drive::{close_before_channel, drain_initiator_flight};
 
-/// The way into an accept loop's linger task. Clones share the task and
-/// the count.
+/// The way into the connector's linger task. Clones share the task, the
+/// count, and the cap.
 #[derive(Clone)]
 pub struct Linger {
     tx: mpsc::UnboundedSender<TcpStream>,
@@ -47,8 +49,9 @@ pub struct Linger {
 }
 
 impl Linger {
-    /// Start the linger task for one accept loop. `cap` is how many may
-    /// linger at once; `span` is how long one may.
+    /// Start the connector's linger task. `cap` is how many sockets may
+    /// linger at once; `span` is how long one may. Every accept loop of
+    /// the connector clones the handle this returns.
     pub fn spawn<C>(engine: Handle<C>, cap: usize, span: Tick) -> Self
     where
         C: Clock + Clone + Send + Sync + 'static,

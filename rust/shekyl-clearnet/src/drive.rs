@@ -110,6 +110,9 @@ pub struct Accept {
 ///
 /// `ceiling` is read on every accept, so a later change is visible.
 /// `gap_within` of `None` publishes the connection with no Levin deadline.
+/// `linger` is the connector's one task (D10.2): every accept loop clones
+/// the same handle, so the cap the daemon reserved once is the cap they
+/// share.
 pub struct Inbound<F> {
     pub sockets: Sockets,
     pub ceiling: F,
@@ -121,6 +124,7 @@ pub struct Inbound<F> {
     pub on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
     pub send_queue_bytes: usize,
     pub admitted: mpsc::UnboundedSender<Admitted>,
+    pub linger: Linger,
     pub backoff: Duration,
 }
 
@@ -129,13 +133,6 @@ where
     C: Clock + Clone + Send + Sync + 'static,
     F: Fn() -> InboundCeiling + Send,
 {
-    let linger = Linger::spawn(
-        engine.clone(),
-        inbound
-            .sockets
-            .clearnet_linger_cap(inbound.handshake_within),
-        inbound.handshake_within,
-    );
     loop {
         let stream = match listener.accept().await {
             Ok((stream, _)) => stream,
@@ -151,7 +148,7 @@ where
         };
         let accept = Accept {
             stream,
-            linger: linger.clone(),
+            linger: inbound.linger.clone(),
             sockets: inbound.sockets.clone(),
             ceiling: (inbound.ceiling)(),
             kind: inbound.kind,

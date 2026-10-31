@@ -1742,10 +1742,12 @@ listener, and so a connection in the gap phase.
    (the FIN) and stays open for reading until one initiator flight
    (item 1's bound) has arrived and been dropped, or until the
    connector's handshake span passes (1.426 s on clearnet). Only then is
-   it closed, with nothing unread. One task per accept loop holds every
-   lingering socket, with one owner on the timing engine carrying the
-   earliest deadline (every socket lingers for the same span, so the
-   earliest is the oldest); no socket has a task of its own.
+   it closed, with nothing unread. One task for the connector holds every
+   lingering socket of every accept loop, with one owner on the timing
+   engine carrying the earliest deadline (every socket lingers for the
+   same span, so the earliest is the oldest); no socket has a task of its
+   own. Two listen endpoints therefore share the cap the daemon reserves
+   once.
    **The cap.** At most the connector's accept-rate burst plus the
    tokens it refills across the span may linger at once
    (`AcceptGate::linger_cap`): what the connector admits in one span.
@@ -1763,8 +1765,10 @@ listener, and so a connection in the gap phase.
    after its flight, or after the span, gets RST from any closed socket,
    on every path. `close_tests.rs` pins the kernel's RST on an undrained
    close and the FIN on the drained one; `tests.rs` pins a flight written
-   50 ms after the refusal ending with FIN, and the third refusal past a
-   cap of two ending with RST while the two held end with FIN. The
+   50 ms after the refusal ending with FIN, the third refusal past a cap
+   of two ending with RST while the two held end with FIN, and two
+   listeners sharing that cap so a refusal on the second listener, once
+   the first has filled it, ends with RST. The
    refusals after accept, inside the handshake, are step 7 item 7's
    capture matrix: they get the same close if it shows them resetting.
 
@@ -1806,8 +1810,9 @@ listener, and so a connection in the gap phase.
    rate admits. A refusal is `AcceptRateExceeded` (D12), with no marks.
    The socket table counts every accept refusal — the rate, a ban, a
    ceiling, a cap — at the decision, and the node names those counts
-   once a minute, never once per connection. The rates are protocol data
-   in `accept_bound`, beside
+   once a minute, never once per connection. One linger task is shared
+   by every clearnet listener (D10.2). The rates are protocol data in
+   `accept_bound`, beside
    the declaration, the same on every node (rule 71): Tor's row is the
    onion's proof-of-work (item 4), and clearnet's row carries the two
    buckets above. The build refuses a connector whose inbound peers have
