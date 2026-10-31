@@ -269,13 +269,8 @@ impl HandshakeKind {
 #[derive(Debug)]
 pub struct HandshakeFrame {
     kind: HandshakeKind,
-    head: [u8; HEADER_SIZE],
-    have: usize,
-    /// The frame being read: its body bytes still to come, and whether it
-    /// is the handshake frame.
-    body: Option<(u64, bool)>,
+    frames: FrameHeads,
     complete: bool,
-    bad: bool,
 }
 
 impl HandshakeFrame {
@@ -284,51 +279,29 @@ impl HandshakeFrame {
     pub fn new(kind: HandshakeKind) -> Self {
         Self {
             kind,
-            head: [0; HEADER_SIZE],
-            have: 0,
-            body: None,
+            frames: FrameHeads::new(),
             complete: false,
-            bad: false,
         }
     }
 
     /// Feed the next `bytes` read from the peer. Returns whether the
     /// handshake frame has arrived, now or before; once true it stays true.
-    pub fn feed(&mut self, mut bytes: &[u8]) -> bool {
-        while !self.complete && !self.bad {
-            let (left, handshake) = match self.body {
-                Some(body) => body,
-                None => {
-                    let take = (HEADER_SIZE - self.have).min(bytes.len());
-                    self.head[self.have..self.have + take].copy_from_slice(&bytes[..take]);
-                    self.have += take;
-                    bytes = &bytes[take..];
-                    if self.have < HEADER_SIZE {
-                        return false;
-                    }
-                    self.have = 0;
-                    match BucketHead::read(&self.head) {
-                        Ok(head) => (head.payload_len, self.kind.matches(&head)),
-                        Err(_) => {
-                            self.bad = true;
-                            return false;
-                        }
-                    }
+    ///
+    /// The walk stops at that frame. Bytes after it in the same slice are
+    /// not read, which is the gap's old rule: the tracker is finished, and
+    /// a later header in the same read is the strand's.
+    pub fn feed(&mut self, bytes: &[u8]) -> bool {
+        if !self.complete {
+            let kind = self.kind;
+            let complete = &mut self.complete;
+            self.frames.feed(bytes, |head| {
+                if kind.matches(head) {
+                    *complete = true;
+                    AfterFrame::Stop
+                } else {
+                    AfterFrame::Continue
                 }
-            };
-            let take = usize::try_from(left).map_or(bytes.len(), |left| left.min(bytes.len()));
-            bytes = &bytes[take..];
-            let left = left.saturating_sub(u64::try_from(take).unwrap_or(left));
-            if left > 0 {
-                self.body = Some((left, handshake));
-                return false;
-            }
-            self.body = None;
-            if handshake {
-                self.complete = true;
-            } else if bytes.is_empty() {
-                return false;
-            }
+            });
         }
         self.complete
     }
@@ -337,5 +310,99 @@ impl HandshakeFrame {
     #[must_use]
     pub const fn complete(&self) -> bool {
         self.complete
+    }
+}
+
+/// What the walk does after handing over one complete frame.
+///
+/// [`AfterFrame::Stop`] ends this `feed` call. The unread tail of that
+/// slice is left unread: a caller that stops and then feeds a later slice
+/// is starting at a header boundary only if it passes the tail first.
+/// [`HandshakeFrame`] stops for good, so it never feeds the tail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AfterFrame {
+    /// Keep walking this slice.
+    Continue,
+    /// This frame is the last one this call should hand over.
+    Stop,
+}
+
+/// A Levin byte stream walked frame by frame, fed the bytes as they come.
+/// Each complete frame, the [`HEADER_SIZE`]-byte header and the
+/// `payload_len` bytes it declares, is handed to the caller with its header
+/// when its last byte arrives. The payload is read past, never kept.
+///
+/// A header that does not read ([`BucketHead::read`]) ends the walk: what
+/// follows a bad signature is not frames, and every later feed is ignored.
+#[derive(Debug)]
+pub struct FrameHeads {
+    head: [u8; HEADER_SIZE],
+    have: usize,
+    /// The frame being read: its header and its body bytes still to come.
+    body: Option<(BucketHead, u64)>,
+    bad: bool,
+}
+
+impl FrameHeads {
+    /// A walk that has seen no byte.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            head: [0; HEADER_SIZE],
+            have: 0,
+            body: None,
+            bad: false,
+        }
+    }
+
+    /// Feed the next `bytes` of the stream. `on_frame` is called once for
+    /// each frame these bytes complete, in stream order. [`AfterFrame::Stop`]
+    /// returns before the rest of `bytes` is read.
+    pub fn feed(&mut self, mut bytes: &[u8], mut on_frame: impl FnMut(&BucketHead) -> AfterFrame) {
+        while !self.bad {
+            let (head, left) = match self.body {
+                Some(body) => body,
+                None => {
+                    let take = (HEADER_SIZE - self.have).min(bytes.len());
+                    self.head[self.have..self.have + take].copy_from_slice(&bytes[..take]);
+                    self.have += take;
+                    bytes = &bytes[take..];
+                    if self.have < HEADER_SIZE {
+                        return;
+                    }
+                    self.have = 0;
+                    match BucketHead::read(&self.head) {
+                        Ok(head) => (head, head.payload_len),
+                        Err(_) => {
+                            self.bad = true;
+                            return;
+                        }
+                    }
+                }
+            };
+            let take = usize::try_from(left).map_or(bytes.len(), |left| left.min(bytes.len()));
+            bytes = &bytes[take..];
+            let left = left.saturating_sub(u64::try_from(take).unwrap_or(left));
+            if left > 0 {
+                self.body = Some((head, left));
+                return;
+            }
+            self.body = None;
+            if on_frame(&head) == AfterFrame::Stop || bytes.is_empty() {
+                return;
+            }
+        }
+    }
+
+    /// Whether a header failed to read, which ended the walk.
+    #[must_use]
+    pub const fn ended(&self) -> bool {
+        self.bad
+    }
+}
+
+impl Default for FrameHeads {
+    fn default() -> Self {
+        Self::new()
     }
 }

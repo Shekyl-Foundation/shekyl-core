@@ -308,10 +308,12 @@ add_dependencies(shekyl_ffi shekyl_rust)
 # so `rust/shekyl-daemon-image` builds both crates into one staticlib with a
 # unified Cargo graph (one dispatcher; see that crate's docs).
 
-# The cold-first-contact measurement build only (Rick, 2026-10-14): the
-# Tor gap deadline lifted to 120 s, the dial's bound. Never on in a release build;
-# scripts/ci/check_measurement_spans.py fails any release path that sets it.
-option(SHEKYL_MEASUREMENT_SPANS "Measurement build only: lift the Tor gap deadline to 120 s" OFF)
+# The measurement build only (Rick, 2026-10-14, extended for step 7): the
+# Tor gap deadline lifted to 120 s, and the clearnet message-size tap.
+# Never on in a release build; scripts/ci/check_measurement_spans.py fails
+# any release path that sets it. Clearnet's feature is empty — it does not
+# enable the transport-layer feature — and both names sit on this one line.
+option(SHEKYL_MEASUREMENT_SPANS "Measurement build only: lift the Tor gap to 120 s and record Levin message sizes" OFF)
 set(_measurement_features "")
 set(_daemon_image_dir "${RUST_BUILD_DIR}")
 if(SHEKYL_MEASUREMENT_SPANS)
@@ -321,9 +323,10 @@ if(SHEKYL_MEASUREMENT_SPANS)
     # the archive, so the generator never runs cargo to rebuild it without
     # the feature, and a release daemon keeps the 120 s gap. Selecting the
     # crate as well lets the command line name its feature; cargo unifies it
-    # into the daemon image's graph.
+    # into the daemon image's graph. Clearnet is already in that graph, so
+    # naming its feature is enough.
     set(_measurement_target_dir "${CMAKE_BINARY_DIR}/cargo-measurement")
-    set(_measurement_features -p shekyl-transport-layer --features shekyl-transport-layer/measurement-spans --target-dir ${_measurement_target_dir})
+    set(_measurement_features -p shekyl-transport-layer --features shekyl-transport-layer/measurement-spans,shekyl-clearnet/measurement-spans --target-dir ${_measurement_target_dir})
     string(REPLACE "${RUST_SOURCE_DIR}/target" "${_measurement_target_dir}" _daemon_image_dir "${RUST_BUILD_DIR}")
     message(WARNING "SHEKYL_MEASUREMENT_SPANS is ON: this daemon is a measurement build, not a release")
 endif()
