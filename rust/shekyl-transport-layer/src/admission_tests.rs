@@ -604,6 +604,68 @@ fn an_accept_over_the_rate_is_refused_and_reserves_nothing() {
     assert!(!sockets.take_accept_refusals().any(), "taken once");
 }
 
+/// A harness row spends nothing. Several reservations of one host leave
+/// that host's token, and the listener's accept of it still pays. A zero
+/// ceiling and a ban still refuse the reservation and still count.
+#[test]
+fn a_reserved_inbound_spends_no_accept_token() {
+    let sockets = rate_gated();
+    let host = ip([10, 0, 0, 1]);
+    let ceiling = InboundCeiling::Bounded(8);
+    // More rows than either bucket holds. Dropping one would release it,
+    // so the live count is the rows still held.
+    let mut held = Vec::new();
+    for _ in 0..4 {
+        held.push(
+            sockets
+                .reserve_clearnet_inbound(host, ceiling, now())
+                .expect("a reservation spends no token"),
+        );
+    }
+    assert_eq!(
+        sockets.live(),
+        u64::try_from(held.len()).expect("held count")
+    );
+    assert!(
+        !sockets.take_accept_refusals().any(),
+        "a reservation is not a refusal"
+    );
+    held.push(
+        sockets
+            .accept_clearnet(host, ceiling, now())
+            .expect("the host's token is still there"),
+    );
+    let error = sockets
+        .accept_clearnet(host, ceiling, now())
+        .expect_err("the host's bucket is now empty");
+    assert_eq!(refused(error), CloseKind::AcceptRateExceeded);
+    assert_eq!(
+        sockets.live(),
+        u64::try_from(held.len()).expect("held count"),
+        "the refusal reserved nothing"
+    );
+    let refusals = sockets.take_accept_refusals();
+    assert_eq!(refusals.over_host_rate, 1);
+    assert_eq!(
+        refusals.over_connector_rate, 0,
+        "the host refusal spent no connector token"
+    );
+    let closed = sockets
+        .reserve_clearnet_inbound(host, InboundCeiling::Bounded(0), now())
+        .expect_err("a zero ceiling still closes the reservation");
+    assert_eq!(refused(closed), CloseKind::InboundNotAccepted);
+    let banned = ip([10, 0, 0, 9]);
+    assert_eq!(sockets.ban_host(banned, Tick::new(2_000), now()).len(), 0);
+    let error = sockets
+        .reserve_clearnet_inbound(banned, ceiling, now())
+        .expect_err("a ban still refuses the reservation");
+    assert_eq!(refused(error), CloseKind::AdmissionRefused);
+    let refusals = sockets.take_accept_refusals();
+    assert_eq!(refusals.inbound_closed, 1);
+    assert_eq!(refusals.full_or_banned, 1);
+    assert_eq!(refusals.over_rate(), 0, "neither consulted the gate");
+}
+
 #[test]
 fn a_banned_or_ceiling_refused_accept_spends_no_token() {
     let sockets = rate_gated();

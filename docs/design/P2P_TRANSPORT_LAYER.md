@@ -1800,7 +1800,10 @@ listener, and so a connection in the gap phase.
    (`accept_rate.rs`) is two token buckets, the connector's and the
    host's, checked in `Sockets::accept_clearnet` under the socket
    table's lock, after the ban and the ceilings and before a socket is
-   reserved. An accept spends a token from both or from neither, so a
+   reserved. The in-memory loopback harness is not that accept: it
+   reserves a row through `reserve_clearnet_inbound` (the ban, the
+   ceilings, an id) and spends no token. An accept spends a token from
+   both or from neither, so a
    host whose own bucket is empty does not drain the connector's. A
    host is an IPv4 address, or an IPv6 /64; an IPv4 address carried in
    IPv6, as a dual-stack listener reports it, is that IPv4 host. The

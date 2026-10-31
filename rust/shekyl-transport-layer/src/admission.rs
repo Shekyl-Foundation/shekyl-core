@@ -423,6 +423,19 @@ fn refuse_inbound(
     LimitStance::classify(limit, total).refusal()
 }
 
+/// Which inbound clearnet row this call is reserving.
+///
+/// A network accept spends the accept-rate gate. A reservation does not:
+/// the harnesses that call it have no handshake for the gate to price,
+/// and the listener's accept is the only call that does.
+#[derive(Clone, Copy)]
+enum ClearnetInbound {
+    /// [`Sockets::accept_clearnet`]: ban, ceiling, rate, then the row.
+    Network,
+    /// [`Sockets::reserve_clearnet_inbound`]: ban, ceiling, then the row.
+    Reserved,
+}
+
 /// The socket table. Clones share it. A poisoned lock aborts the process:
 /// a panic while the table was held has already broken the count.
 #[derive(Clone, Debug)]
@@ -498,12 +511,48 @@ impl Sockets {
     /// the host's rate bucket cannot pay for is
     /// [`CloseKind::AcceptRateExceeded`] (D10.3); it is decided after the
     /// ban and the ceilings, so a connection those refuse spends no token.
-    /// Every refusal reserves nothing.
+    /// Every refusal reserves nothing. This is the listener's accept.
+    /// A harness reserves through [`Self::reserve_clearnet_inbound`] and
+    /// spends no token.
     pub fn accept_clearnet(
         &self,
         ip: IpAddr,
         ceiling: InboundCeiling,
         now: Tick,
+    ) -> Result<OpenSocket, OpenError> {
+        self.clearnet_inbound(ip, ceiling, now, ClearnetInbound::Network)
+    }
+
+    /// Reserve an inbound clearnet row that is not a network accept.
+    ///
+    /// The listener's accept is [`Self::accept_clearnet`], and that is
+    /// the call that spends an accept-rate token. This one is the row a
+    /// harness reserves: the in-memory loopback dialer, and the tests
+    /// that admit through it. A harness has no handshake, so the gate
+    /// has nothing to price, and the socket table is process-global, so
+    /// charging the harness would spend the tokens the listener's
+    /// accepts are counted against.
+    ///
+    /// A ban, a full ceiling and a ceiling of zero still refuse, and
+    /// still count on the refusal ledger. The rate is not consulted, so
+    /// the refusal is never [`CloseKind::AcceptRateExceeded`].
+    pub fn reserve_clearnet_inbound(
+        &self,
+        ip: IpAddr,
+        ceiling: InboundCeiling,
+        now: Tick,
+    ) -> Result<OpenSocket, OpenError> {
+        self.clearnet_inbound(ip, ceiling, now, ClearnetInbound::Reserved)
+    }
+
+    /// Ban, then the ceilings, then the rate when `inbound` is a network
+    /// accept, then the row. One order, so the two callers cannot drift.
+    fn clearnet_inbound(
+        &self,
+        ip: IpAddr,
+        ceiling: InboundCeiling,
+        now: Tick,
+        inbound: ClearnetInbound,
     ) -> Result<OpenSocket, OpenError> {
         let endpoint = ObservedEndpoint::Host(ip);
         assert!(
@@ -517,13 +566,19 @@ impl Sockets {
         if let Err(refusal) = refuse_inbound(&inner, ConnectorId::Clearnet, ceiling) {
             return Err(refusal.record(&mut inner));
         }
-        // The gate borrow ends before the refusal is recorded.
-        let rate_refusal = inner
-            .clearnet_rate
-            .as_mut()
-            .and_then(|gate| gate.admit(ip, now).err());
-        if let Some(bucket) = rate_refusal {
-            return Err(AcceptRefusal::from(bucket).record(&mut inner));
+        match inbound {
+            ClearnetInbound::Network => {
+                // The gate borrow ends before the refusal is recorded.
+                let rate_refusal = inner
+                    .clearnet_rate
+                    .as_mut()
+                    .and_then(|gate| gate.admit(ip, now).err());
+                if let Some(bucket) = rate_refusal {
+                    return Err(AcceptRefusal::from(bucket).record(&mut inner));
+                }
+            }
+            // A harness has no handshake. The gate prices the listener's accept.
+            ClearnetInbound::Reserved => {}
         }
         admitted(self, &mut inner, ConnectorId::Clearnet, endpoint)
     }

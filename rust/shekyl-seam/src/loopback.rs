@@ -8,6 +8,8 @@
 //! It admits on the hub's socket table and builds a [`StreamEnds`]. A thread
 //! discards outbound messages the way `write_capped` will once zone bind owns
 //! the socket. Nothing here is a peer. Zone bind does not install this dialer.
+//! Admitting a clearnet inbound here reserves a row and spends no accept-rate
+//! token. The clearnet listener's accept is the call the gate prices.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
