@@ -454,6 +454,148 @@ async fn a_form_that_faults_fails_the_service_before_the_run_lands() {
     cleanup(&path);
 }
 
+/// A run whose last block lists a spend anchored on a root the run itself
+/// writes: the spend connecting at `AT` references block `AT − 5` (CEN-I11's
+/// newest admissible reference), whose root is the tree's state after
+/// block `AT − 6`, and the span handed over is `AT − 6 ..= AT`, so that
+/// root exists only in the run's open transaction when block `AT` is
+/// judged. The whole run lands, in one commit, each block answered at its
+/// height. The run also crosses the first seed boundary of a fresh store
+/// in the sibling test above (genesis under the null seed, block 1 under
+/// genesis's): one run, two seeds pinned, one commit.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_spend_anchored_on_a_root_its_own_run_writes_lands_with_it() {
+    use crate::test_support::{h, Family, FIRST_SPEND_HEIGHT};
+    use shekyl_harness_spender::Spender;
+    let at = FIRST_SPEND_HEIGHT + 1;
+    let mut y = Scenario::open("service-run-anchor-y");
+    let mut blocks = y.mine(at).await;
+    let spend = {
+        let spender = Spender::over(&blocks);
+        spender.spend_coinbase(y.wallet(), h(0), h(at), Family::Main.fee())
+    };
+    let spending = y
+        .mine_listing(vec![spend])
+        .await
+        .unwrap_or_else(|outcome| panic!("the spend's block connects on the scenario: {outcome}"));
+    assert_eq!(spending.height, h(at));
+    let spending_hash = spending.hash;
+    blocks.push(spending);
+    let gate = Arc::new(Gated::new());
+    let (service, path) = service(
+        "service-run-anchor",
+        Arc::clone(&gate),
+        ServiceConfig::default(),
+    );
+    let door = service.door();
+    let mut tips = service.watch_tip().await.expect("watch");
+    // Everything below the reference root's block, in spans as the door
+    // has room; then the dependent run as one span.
+    let split = usize::try_from(at - 6).expect("fits");
+    let before = offer_all(&door, 1, &blocks[..split]).await;
+    assert!(
+        before.iter().all(|r| matches!(r, Reply::Connected { .. })),
+        "{before:?}"
+    );
+    let seq_before = tips.borrow_and_update().seq;
+    let run = &blocks[split..];
+    assert_eq!(run.len(), 7);
+    assert!(door.room() >= run.len(), "the run fits the door's window");
+    let replies = offer_all(&door, 1, run).await;
+    for (mined, reply) in run.iter().zip(&replies) {
+        assert_eq!(
+            *reply,
+            Reply::Connected {
+                height: mined.height,
+                hash: mined.hash
+            },
+            "block {} of the run",
+            mined.height
+        );
+    }
+    let published = *tips.borrow_and_update();
+    assert_eq!(
+        published.seq,
+        seq_before + 1,
+        "the run landed in one commit"
+    );
+    assert_eq!(
+        published.tip.map(|t| t.top_id),
+        Some(spending_hash),
+        "the one publication is the spending block"
+    );
+    // The spend is on the chain the service holds: its key image is spent.
+    let (on_chain, as_alt) = homes(&service, spending_hash);
+    assert!(on_chain && !as_alt);
+    service.stop().await.expect("stops");
+    y.close().await;
+    cleanup(&path);
+}
+
+/// A run across a seed boundary lands in one commit: the span
+/// `2107 ..= 2113` straddles height 2112, the first block hashed under
+/// the seed at height 2048 (`SEEDHASH_EPOCH_BLOCKS + SEEDHASH_EPOCH_LAG`),
+/// so the run's forms hash under two seeds, both pinned for the one run,
+/// and the run's one write records both halves. Ignored: it mines 2,114
+/// blocks, and the nightly ignored lane runs it.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "mines past the first seed epoch; the chain-ingest ignored lane runs it"]
+async fn a_run_across_a_seed_boundary_lands_in_one_commit() {
+    use shekyl_difficulty::{SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG};
+    let boundary = SEEDHASH_EPOCH_BLOCKS + SEEDHASH_EPOCH_LAG; // 2112
+    let mut y = Scenario::open("service-seed-run-y");
+    let blocks = y.mine(boundary + 2).await;
+    let gate = Arc::new(Gated::new());
+    let (service, path) = service(
+        "service-seed-run",
+        Arc::clone(&gate),
+        ServiceConfig::default(),
+    );
+    let door = service.door();
+    let mut tips = service.watch_tip().await.expect("watch");
+    let split = usize::try_from(boundary - 5).expect("fits");
+    let before = offer_all(&door, 1, &blocks[..split]).await;
+    assert!(
+        before.iter().all(|r| matches!(r, Reply::Connected { .. })),
+        "{before:?}"
+    );
+    let seq_before = tips.borrow_and_update().seq;
+    let pins_before = gate.pins();
+    let run = &blocks[split..];
+    assert_eq!(run.len(), 7);
+    let replies = offer_all(&door, 1, run).await;
+    for (mined, reply) in run.iter().zip(&replies) {
+        assert_eq!(
+            *reply,
+            Reply::Connected {
+                height: mined.height,
+                hash: mined.hash
+            },
+            "block {} of the run",
+            mined.height
+        );
+    }
+    let published = *tips.borrow_and_update();
+    assert_eq!(
+        published.seq,
+        seq_before + 1,
+        "the run landed in one commit"
+    );
+    assert!(
+        gate.pins() - pins_before >= 2,
+        "the one run pinned a seed on each side of the boundary ({} pins)",
+        gate.pins() - pins_before
+    );
+    assert_eq!(
+        gate.canonical(),
+        Some(blocks[usize::try_from(SEEDHASH_EPOCH_BLOCKS).expect("fits")].hash),
+        "the canonical slot holds the new epoch's seed, block 2048's"
+    );
+    service.stop().await.expect("stops");
+    y.close().await;
+    cleanup(&path);
+}
+
 /// Two arrivals at one height from two sessions: one connects and the
 /// other is held as an alternative. Neither is connected twice.
 #[tokio::test(flavor = "multi_thread")]
