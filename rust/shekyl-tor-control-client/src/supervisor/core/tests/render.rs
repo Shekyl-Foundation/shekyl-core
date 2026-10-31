@@ -79,9 +79,11 @@ const EVERY_OWN_TX: [OwnTx; 4] = [
 /// "Tor is carrying this node's traffic" is said only while the link shows
 /// usable, or degraded on its inbound side alone, whatever the relay's
 /// verdict: beside every other shown state and every cause it would
-/// contradict what follows. Saying it from the verdict alone, as before,
-/// fails this for every pair of a fault or network cause with an
-/// address-hiding origin.
+/// contradict what follows. Saying it from the verdict alone fails this for
+/// every pair of a fault or network cause with an address-hiding origin.
+/// Open connections are said to carry traffic only while degraded, when the
+/// Tor holding them still runs; a restarting or bootstrapping Tor holds
+/// none, and saying so beside a lagging verdict fails this.
 #[test]
 fn no_rendering_says_tor_carries_traffic_beside_a_cause_that_says_it_cannot() {
     let mut rendered = 0;
@@ -103,11 +105,19 @@ fn no_rendering_says_tor_carries_traffic_beside_a_cause_that_says_it_cannot() {
                     !carries || allowed,
                     "{cause:?} / {shown:?} / {own_tx:?}: {text}"
                 );
+                let open_only = text.contains("Connections already open through Tor still carry");
                 if own_tx == OwnTx::AddressHiding && !allowed {
-                    assert!(
-                        text.contains("Connections already open through Tor still carry"),
-                        "{cause:?} / {shown:?}: {text}"
-                    );
+                    // Degraded: the Tor holding the connections still runs.
+                    // Restarting or bootstrapping: it ended, and no sentence
+                    // says its connections carry anything.
+                    if shown == Shown::Degraded {
+                        assert!(open_only, "{cause:?} / {shown:?}: {text}");
+                    } else {
+                        assert!(
+                            !open_only && text.contains("holding its own transactions"),
+                            "{cause:?} / {shown:?}: {text}"
+                        );
+                    }
                 }
             }
         }

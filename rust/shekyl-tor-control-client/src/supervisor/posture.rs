@@ -666,29 +666,44 @@ fn speaks_bootstrap(status: &Status) -> bool {
 fn behaviour(status: &Status) -> String {
     match status.own_tx {
         // The relay's verdict says an origin leaves on an address-hiding
-        // session now. That the link carries traffic is said only while the
-        // link shows usable, or degraded on its inbound side alone: beside
-        // a fault or a network cause it would contradict the next sentence,
-        // and what is true then is narrower (the VM suspend, 2026-10-30).
-        OwnTx::AddressHiding if link_carries(status) => {
-            "Tor is carrying this node's traffic.".to_owned()
-        }
-        OwnTx::AddressHiding => {
-            "Connections already open through Tor still carry this node's traffic.".to_owned()
-        }
+        // session. What is true of the traffic depends on the Tor that held
+        // those sessions, so the shown state picks the sentence: the verdict
+        // lags a Tor that ended until the relay sees its sessions close.
+        OwnTx::AddressHiding => match carriage(status) {
+            Carriage::Carries => "Tor is carrying this node's traffic.".to_owned(),
+            Carriage::OpenOnly => {
+                "Connections already open through Tor still carry this node's traffic.".to_owned()
+            }
+            Carriage::Gone => held_sentence(status.sync),
+        },
         OwnTx::Held => held_sentence(status.sync),
         OwnTx::ClearnetOnly => "This node is syncing and sending over the open network. Until the encrypted link is in place, that network is unencrypted.".to_owned(),
         OwnTx::Offline => "This node is offline.".to_owned(),
     }
 }
 
-/// The link is usable outbound: shown usable, or degraded only because the
-/// onion is unreachable (no cause stands).
-fn link_carries(status: &Status) -> bool {
+/// What the Tor behind an address-hiding verdict can carry.
+enum Carriage {
+    /// Shown usable, or degraded only because the onion is unreachable (no
+    /// cause stands): the link carries traffic.
+    Carries,
+    /// Degraded with a cause: the Tor that holds the open connections is
+    /// still running, and a sentence that it carries the traffic would
+    /// contradict the cause that follows (the VM suspend, 2026-10-30).
+    OpenOnly,
+    /// Restarting, or bootstrapping a new process: the Tor that held the
+    /// sessions has ended or is being taken down, so its connections carry
+    /// nothing. The node is held until Tor is back, as the verdict will say
+    /// once the relay sees the sessions close.
+    Gone,
+}
+
+fn carriage(status: &Status) -> Carriage {
     match status.shown {
-        Shown::Usable => true,
-        Shown::Degraded => status.cause == Cause::None,
-        Shown::Restarting | Shown::RestartingHeld | Shown::Bootstrapping => false,
+        Shown::Usable => Carriage::Carries,
+        Shown::Degraded if status.cause == Cause::None => Carriage::Carries,
+        Shown::Degraded => Carriage::OpenOnly,
+        Shown::Restarting | Shown::RestartingHeld | Shown::Bootstrapping => Carriage::Gone,
     }
 }
 
