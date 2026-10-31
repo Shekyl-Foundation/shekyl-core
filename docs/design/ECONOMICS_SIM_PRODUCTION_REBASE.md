@@ -2513,11 +2513,15 @@ The bond floor is generated once, in `shekyl-archival-retention`.
 pin is the test `archival_bond_floor_matches_gate4_calibration`. The
 cover rung is generated from the same JSON key.
 
-### 5.26.2 What the completion did (2026-10-29)
+### 5.26.2 What the completion did (2026-10-29, regraded 2026-10-30)
 
 Graded against the amendment's E16-5 to E16-14 and the ESR-16 row's
-falsifier, PR #1218 from `c92bbdc87`. The default `--stage2` run is the
-two ignored narration tests, release, both arms.
+falsifier. PR #1218 branched from `c92bbdc87` and is tested on `dev` at
+`90ef1bc9a`, merged into the branch at `e56f75e6e`. The review of
+2026-10-30 found two must-fixes and a scope gap; the rulings of that day
+(the challenge count and the retention horizon deleted) and the fixes
+are graded here. The default `--stage2` run is the two ignored narration
+tests, release, both arms.
 
 - **E16-5 held.** `scripts/ci/check_economic_accessors.py` fails a
   production read of an owned archival constant outside its owner files
@@ -2530,20 +2534,39 @@ two ignored narration tests, release, both arms.
   `SETTLEMENT_EPOCH_BLOCKS` and a bare `RELAY_FLOOR_REFERENCE_TX_WEIGHT`
   in `shekyl-chain-store` `store/read.rs` each failed it; a bare
   `SETTLEMENT_EPOCH_BLOCKS` and a `relay_policy()` call in the sim's
-  `proxy.rs` failed it, naming both.
+  `proxy.rs` failed it, naming both. The draw count rule (§13.2 of
+  `ARCHIVAL_SERVE_CREDIT_SPEC.md`), the review's scope gap, is in the
+  inventory: its retired names (`DRAW_HORIZON_FLOOR`,
+  `COUNT_CAP_MULTIPLE`, `COUNT_CAP_BASE_MULTIPLE`,
+  `BUNDLE_SECTION_BUDGET_MULTIPLE`) are owned, and the constants that
+  stay (`CHALLENGE_READS`, `DRAW_ATTEMPTS`) are a kept list with their
+  class, which the gate holds defined in their owner file. Red checks: a
+  bare `DRAW_HORIZON_FLOOR` in `read.rs` fails it; `CHALLENGE_READS`
+  renamed fails it as a missing subject. The falsifier therefore holds
+  by test for every named constant; the full-pair weight's `x[8] & 0x0F`
+  has no name and holds by its pinned KAT vectors and this inventory.
 - **E16-6 held.** Both narration fixtures match the bytes at `c92bbdc87`
-  at every verified head. A cell overriding all twenty promoted fields
-  at their shipped values (three economic, ten archival, seven relay)
-  prints a narration byte-identical to the fixture, on both arms
-  (the binary at `b288ef52b`, `--stage2` with twenty `--set` overrides, each arm's stderr below the six-line header compared with `cmp`; a one-field `economic.release_min` cell matched too). The header is printed by the mode runner above the
-  narration and pinned as literals by
+  at every verified head, `e56f75e6e` included. A cell overriding, at
+  their shipped values, every promoted field the arm reads prints a
+  narration byte-identical to its fixture: on the production arm the
+  surge factor, the limit multiple, the clamp, the bond floor, the epoch,
+  `W`, `(m, n)`, the fee decimals, `w_ref` and the Standard ratio; on the
+  control arm the same less the clamp and the relay fields: 11 and 7
+  overrides, both byte-identical at `e56f75e6e`. The
+  promoted fields no `--stage2` figure reads are refused at the door
+  (below), so no default-valued cell on them exists to compare. The
+  header is printed by the mode runner above the narration and pinned
+  as literals by
   `a_baseline_runs_header_is_the_three_digests_and_no_overrides`.
 - **E16-7 held.** One test per promoted field mutates it on a test set
   and watches its reader move. Economic: the surge factor
   (`the_surge_ceiling_reads_the_sets_factor`), the clamp
   (`the_long_term_clamp_reads_the_sets_clamp`), the limit multiple
-  (`the_limit_and_the_penalty_read_the_sets_multiple`). Archival: all ten
-  (`each_field_moves_its_reader`). Relay: Standard, Priority and `w_ref`
+  (`the_limit_and_the_penalty_read_the_sets_multiple`). Archival: all
+  thirteen, the four count-rule fields among them
+  (`each_field_moves_its_reader`: the horizon floor, the catch-up point,
+  the cap multiple and the section multiple each move `draw_horizon`,
+  `draw_target` or `section_budget`). Relay: Standard, Priority and `w_ref`
   (`each_policy_field_moves_its_rung`), the slack
   (`slack_lowers_the_requirement_when_it_is_not_zero`), the decimals
   (`an_alternative_policy_changes_the_lattice_and_the_slack`, E16-9), the
@@ -2552,7 +2575,11 @@ two ignored narration tests, release, both arms.
   (`the_window_reads_the_policys_lookback_and_reference_weight`). The
   lookback's reader read the shipped policy itself until `be9d7d7bc`,
   which gave the window the policy it is handed; that commit lands after
-  the oracle's deletion and does not touch the penalty.
+  the oracle's deletion and does not touch the penalty. Per mode, the
+  review's item 1: `every_declared_reader_moves_its_report` runs each
+  field `--stage2` declares, on its arm, and fails naming any whose
+  report does not move. At `e56f75e6e` it passes on all 26 production
+  and 22 control fields (3 864 s).
 - **E16-8 held.** The hold is 1 398 068 000 atomic, about 1.40 SKL,
   against the literal 3.6 SKL: 61.2 % lower. `shekyl-engine-core`'s
   `the_claim_hold_is_the_genesis_economy_fee_at_the_priced_weight`
@@ -2564,17 +2591,23 @@ two ignored narration tests, release, both arms.
   fee is off the shipped 1 000-atomic lattice, so the run's lattice, not
   the shipped one, priced it
   (`a_finer_lattice_reaches_the_fee_and_admission_takes_it`).
-- **E16-10 held.** One commit, `614664759`, moves the consensus pin
-  (`rust/shekyl-rpc-types/build.rs`), the params format byte and the C4
-  fixture. `4c0943bfa` edits a `_comment` key of the consensus file,
-  which the canonical form excludes, and the relay file's two commits
-  move neither digest (`the_relay_policy_file_is_outside_the_digest_and_disjoint`).
+- **E16-10 missed in the letter.** The consensus digest moved in two
+  commits, not one: `614664759` (the limit multiple, the clamp and the
+  challenge count added; the params format byte and the C4 fixture with
+  it), and `6b5a75869` after the review (the challenge count removed, the
+  retention horizon removed, the draw count rule's four keys added).
+  Against `c92bbdc87` the consensus file has six keys added and one
+  removed; the params digest moved once, in `614664759`. The second move
+  is the review's and the rulings' (Rick, 2026-10-30), and it is one
+  commit. `4c0943bfa` and the comment edits since touch `_comment` keys,
+  which the canonical form excludes; the relay file moves neither digest
+  (`the_relay_policy_file_is_outside_the_digest_and_disjoint`).
   `EconomicParams::blocks_per_year` is a method. Params digest: format
   `0x06`, a 145-byte preimage (the format byte and eighteen
   little-endian `u64` fields); the C4 fixture is
   `blake2b:5a63a1d174bf5ef7fda7bb966e3e5e1f2ec00c90c6f7374d37cf146c9238bed2`.
   Consensus digest:
-  `dbb6547554cdec983d8e5a0040a011c412452e744a27554452461963c23566b2`.
+  `2227f8a01a4a47c9f42e46d3a7c01fc900d4927c03ec71bbbfc74d6be69829bd`.
 - **E16-11 held.** The generalised penalty equalled the old body on the
   edges of each arm and on 50 000 randomised `(R, M, w)` at every
   verified head while the oracle stood. `3fea2c967` deletes the oracle
@@ -2586,16 +2619,22 @@ two ignored narration tests, release, both arms.
 - **E16-13 held in part.** The shipped `ArchivalParams` passes
   `validate`, the set's door (deserializing goes through it). `m = 0`,
   `n < m` and an epoch no longer than the reorg depth are refused
-  (`validate_refuses_each_broken_coupling`). The anchor-lag clause does
-  not apply: the lag is kept structural (the kept table above), and
-  `shekyl-archival-retention`'s build script refuses a lag below 2.
+  (`validate_refuses_each_broken_coupling`), as are the count rule's
+  bounds: a catch-up outside `(0, 1000]`, a horizon floor of zero or past
+  the epoch, a cap multiple outside `1..=1000`, a section multiple of
+  zero. The anchor-lag clause does not apply: the lag is kept structural
+  (the kept table above), and `shekyl-archival-retention`'s build script
+  refuses a lag below 2. The challenge count and its `NoChallenges`
+  clause are deleted.
 - **E16-14 held.** `SimParams` holds the run's three structs, its
   overrides and its fee arm, and no copied production field. A baseline
   run's header prints the three digests and `overrides: (none)`. A
   missing field, a value a validator refuses, a value past its field's
   width and a path given twice each fail when the run is built
-  (`the_door_refuses_before_the_fold`); the binary exits 2 on each,
-  before any fold.
+  (`the_door_refuses_before_the_fold`), and a field the mode does not
+  read, or one the run leaves inert, fails at the mode's reach
+  (`the_reach_refuses_an_unread_or_inert_field`); the binary exits 2 on
+  each, before any fold.
 - **The row's falsifier does not fire.** The gate holds production and
   the sim, and a default-valued cell prints the default report.
 
@@ -2618,15 +2657,36 @@ it.
 
 *Where an override reaches.* `--set set.field=value` is read by
 `--stage2` alone, which prints a cell beside its baseline; every other
-mode refuses an override and exits 2. Six promoted fields have no
-reader in any `--stage2` figure: the relay lookback, the slack, the claim
-hold and the Priority factor, and the archival release cooldown and
-bond-duration pair. A cell on them prints the baseline report, because
-no figure depends on them; the header names the override. A run may
-override the escalation pair: the fold prices the run's curve, and each
-candidate section sets the pair to the candidate's values over the run's
+mode refuses an override and exits 2. `--stage2` declares, per fee arm,
+the fields its report reads (`STAGE2_PRODUCTION_READS`, 26;
+`STAGE2_CONTROL_READS`, 22), and refuses any other before the fold:
+"field has no reader in --stage2". The lists are measured by
+`every_declared_reader_moves_its_report`, whose first run named the
+fields that do not move: the reward age weight (read, but every shard is
+scored at age 0, where `g` is its base), the release cooldown and the
+bond-duration pair on both arms; the relay lookback, the slack, the claim
+hold and the Priority factor on the production arm (every ordinary fee
+pays Standard, and no fold admits against a window); the long-term clamp
+on the control arm. The draw count rule's four fields have no
+`--stage2` reader either. `--secret-draw-production`, which calls the
+count rule, reads the shipped set and refuses overrides; making it a
+sweep mode is EUP-5 H's instrument. The escalation knee is refused while
+the escalation is flat (the shipped asymptote equals the pool share),
+because no knee then moves the fold; with the asymptote overridden it is
+read. Each candidate section sets the escalation pair over the run's
 (`SimParams::with_more` replaces a path the run already overrides;
 `a_run_that_overrides_the_escalation_still_builds_its_candidates`).
+
+*Deleted on review (Rick, 2026-10-30).* The challenge count
+(`archival_challenges_per_pair_per_epoch`, its field and its constant):
+the spec retired the concept for the counted draws, no consensus code
+read it, and a node with another value validated the same chain. Its
+readers in the sim and the spike take `COUNTED_DRAWS`, which at the count
+rule's target is the draws a pair is issued. The retention horizon
+(`retention_horizon_blocks` and its constant): the built sweep retires
+each table at its last reader's reach and never read it; the staking sim
+reports the deepest retention from `EpochFloor::<Claimable>`, `W + 1` =
+27 epochs.
 
 *A finding.* The W₂ band confines a swept epoch: at the divisor of 20
 and the band `[200, 500]`, `validate` admits an epoch of 4 000 to 10 000
@@ -2638,12 +2698,15 @@ change.
 the holdings cap (structural; the shard length reopens if EUP-5 I sweeps
 shard size), the segment leaf count (derived), the anchor lag
 (structural), the emission batch cap (structural, generated from its
-key, held to the C++ header's buffer size by a `shekyl-ffi` test), the
-retention horizon (generated, read only by the staking sim, until it is
-ruled deleted or restated against the built sweep), and the C++
-`median * 2` in `Blockchain::update_next_cumulative_weight_limit`
-(the shipped multiple; not migrated, deleted with the C++ chain by the
-DRS-X flip).
+key, held to the C++ header's buffer size by a `shekyl-ffi` test), and
+from the draw count rule `K` (`CHALLENGE_READS`, 3, ruled `SCS-P13`; it
+sizes the failure window), `DRAW_ATTEMPTS` (256, structural) and the
+full-pair weight 1/16 (the draw byte's low nibble, the selection
+algorithm's shape, pinned by its KAT vectors). The C++ `median * 2` in
+`Blockchain::update_next_cumulative_weight_limit` holds the shipped
+multiple and is not migrated: the DRS-X flip (#1212) deletes that file
+with the C++ chain. If the flip slips past the next release, a check
+that the C++ literal and the generated multiple agree lands before it.
 
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
