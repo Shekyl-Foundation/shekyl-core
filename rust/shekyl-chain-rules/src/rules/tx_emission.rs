@@ -195,8 +195,8 @@ impl TxRule for J22 {
 /// amount) vouts in vout order, each as `(commitment, amount, one-time
 /// key)` — the 72-byte `mask ‖ amount_le8 ‖ key` entries the C++ flattens
 /// for the verify — and the reward total is their **checked sum**, the
-/// inflation-audit operand (`shekyl_checked_sum_amounts`: overflow
-/// refuses). Zero-amount vouts are ordinary confidential change and join
+/// inflation-audit operand (an overflow refuses; the C++'s checked-sum FFI
+/// went with `DEL-008`). Zero-amount vouts are ordinary confidential change and join
 /// neither. The one predicate the row states beyond the definition is the
 /// C++'s `outPk.size() == vout.size()`: a commitment per output, so the
 /// set is well-defined (CEN-H17's arity clause names it first in

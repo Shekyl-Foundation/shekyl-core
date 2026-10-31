@@ -17,40 +17,6 @@ pub use shekyl_archival_retention::{
     settlement_epoch_slash_deadline_height,
 };
 
-/// Overflow-checked sum of plaintext output amounts (rule 20: integer
-/// arithmetic on untrusted tx amounts lives behind the FFI, single-sourced so
-/// the emission reward total cannot drift between the check_tx_inputs operand
-/// and the CT-balance shape check). Writes the sum to `*out_sum` and returns
-/// `0` on success, `1` on `u64` overflow or invalid arguments — the caller must
-/// reject the tx on any non-zero return. `amounts_ptr` may be null iff `len == 0`.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_checked_sum_amounts(
-    amounts_ptr: *const u64,
-    len: usize,
-    out_sum: *mut u64,
-) -> u8 {
-    if out_sum.is_null() {
-        return 1;
-    }
-    if len == 0 {
-        unsafe { *out_sum = 0 };
-        return 0;
-    }
-    if amounts_ptr.is_null() {
-        return 1;
-    }
-    let amounts = unsafe { std::slice::from_raw_parts(amounts_ptr, len) };
-    let mut sum: u64 = 0;
-    for &a in amounts {
-        match sum.checked_add(a) {
-            Some(s) => sum = s,
-            None => return 1,
-        }
-    }
-    unsafe { *out_sum = sum };
-    0
-}
-
 // ── Attestation-witness cross-language constant authorities (credit-wire CW-2,
 //    gate CW-1b-iv). These expose the Rust-side authoritative values so C++ can
 //    assert its own `config::` constants agree — the real gate replacing the "must

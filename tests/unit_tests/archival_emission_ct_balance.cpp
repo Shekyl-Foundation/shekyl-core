@@ -32,8 +32,9 @@
 //  1. backing_identity_O_vs_O_prime — BITES against a refactor that parsed
 //     the blob into the balance OPERANDS (leg i, operand side): it derives
 //     `spend_input_count`/`total_reward` through the SAME production
-//     functions the dispatch uses (classify_archival_tx +
-//     shekyl_checked_sum_amounts), on two txs differing ONLY in the
+//     function the dispatch uses (classify_archival_tx; the reward sum is
+//     CEN-J24's operand in Rust, summed here only to compare), on two txs
+//     differing ONLY in the
 //     backing bytes, and asserts the operands do not move. Also pins leg
 //     (iii): `EXPECT_TRUE(verdict_O)` fails if the leaf size check is
 //     bumped to `+ 1`. Does NOT cover: the `verdict_O == verdict_O_prime`
@@ -64,6 +65,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <vector>
 
 extern "C"
@@ -86,24 +88,20 @@ namespace {
 constexpr uint64_t kFee = 7;
 constexpr uint64_t kReward = 100;
 
-// Production reward-total derivation: the SAME overflow-checked FFI the
-// dispatch emission branch uses (tx_verification_utils.cpp), fed the
-// plaintext vout amounts. The vin blob is never an input, so the mint
-// credit cannot be perturbed by the backing bytes. Calling the production
-// FFI (not a test-local sum) is the point — a mirror would verify the
-// mirror, not the code the dispatch runs (50-testing.mdc "Test the
-// production code, not a local re-implementation").
+// The reward total this arm compares across the two txs. The production
+// checked sum is the Rust rule's (CEN-J24, `shekyl_chain_rules::rules::
+// tx_emission`, whose test refuses the overflowing set); the C++ dispatch
+// no longer sums vouts, and the FFI it once summed through went with
+// DEL-008. This helper exists to show the operand does not move between
+// O and O', so a plain checked fold is the honest instrument.
 uint64_t checked_reward_sum(const transaction& tx)
 {
-  std::vector<uint64_t> vout_amounts;
-  vout_amounts.reserve(tx.vout.size());
-  for (const auto& o : tx.vout)
-    vout_amounts.push_back(o.amount);
   uint64_t total = 0;
-  const uint8_t overflow = shekyl_checked_sum_amounts(
-    vout_amounts.empty() ? nullptr : vout_amounts.data(),
-    vout_amounts.size(), &total);
-  EXPECT_EQ(overflow, 0u);
+  for (const auto& o : tx.vout)
+  {
+    EXPECT_LE(o.amount, std::numeric_limits<uint64_t>::max() - total);
+    total += o.amount;
+  }
   return total;
 }
 

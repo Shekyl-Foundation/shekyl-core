@@ -1827,16 +1827,6 @@ uint8_t shekyl_check_commitment_masks(
     const uint64_t* amounts_ptr);
 
 
-// Overflow-checked amount sum, called by `tests/unit_tests/archival_emission_ct_balance.cpp`.
-/// Overflow-checked sum of plaintext output amounts (rule 20: amount
-/// arithmetic on untrusted tx data lives behind the FFI). Writes the sum to
-/// *out_sum; returns 0 on success, 1 on u64 overflow or invalid args (the
-/// caller MUST reject the tx on any non-zero return). `amounts_ptr` may be
-/// null iff `len == 0`.
-uint8_t shekyl_checked_sum_amounts(
-    const uint64_t* amounts_ptr,
-    size_t len,
-    uint64_t* out_sum);
 // ---------------------------------------------------------------------------
 // LWMA-1 difficulty-adjustment FFI surface
 //

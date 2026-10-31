@@ -46,45 +46,6 @@ fn extract_null_ptr_is_null() {
 }
 
 #[test]
-fn checked_sum_amounts_sums_overflows_and_guards() {
-    // Empty set (null allowed iff len == 0) sums to 0.
-    let mut out: u64 = 7;
-    assert_eq!(
-        unsafe { shekyl_checked_sum_amounts(ptr::null(), 0, &raw mut out) },
-        0
-    );
-    assert_eq!(out, 0);
-
-    // Normal sum.
-    let amounts = [1u64, 2, 3, 4];
-    let mut sum: u64 = 0;
-    assert_eq!(
-        unsafe { shekyl_checked_sum_amounts(amounts.as_ptr(), amounts.len(), &raw mut sum) },
-        0
-    );
-    assert_eq!(sum, 10);
-
-    // Overflow rejects (non-zero return, caller must reject the tx).
-    let overflow = [u64::MAX, 1];
-    let mut bad: u64 = 0;
-    assert_eq!(
-        unsafe { shekyl_checked_sum_amounts(overflow.as_ptr(), overflow.len(), &raw mut bad) },
-        1
-    );
-
-    // Null out pointer and null data with non-zero len both reject.
-    assert_eq!(
-        unsafe { shekyl_checked_sum_amounts(amounts.as_ptr(), amounts.len(), ptr::null_mut()) },
-        1
-    );
-    let mut o: u64 = 0;
-    assert_eq!(
-        unsafe { shekyl_checked_sum_amounts(ptr::null(), 3, &raw mut o) },
-        1
-    );
-}
-
-#[test]
 fn bond_ct_balance_ffi_rejects_null_with_nonzero_count() {
     let code = unsafe {
         shekyl_archival_verify_bond_post_ct_balance(ptr::null(), 1, ptr::null(), 0, 0, 0, 0)

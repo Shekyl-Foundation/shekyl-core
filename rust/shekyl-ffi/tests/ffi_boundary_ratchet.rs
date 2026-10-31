@@ -65,7 +65,6 @@ const BASELINE: &[(&str, usize, usize)] = &[
     // shekyl-archival-retention::attestation_admission (E6 slice 8 row 10
     // c1); the header-parse buffer went with it. The file is the shim.
     ("archival_ffi/ct_balance.rs", 1, 0),
-    ("archival_ffi/schedule.rs", 1, 0),
     ("ct_balance_ffi.rs", 5, 0),
     // 2 -> 3 (2026-09-01): shekyl_difficulty_check_timestamp_rule reads the
     // <= 11-element u64 MTP window — the C2-R3 rule crossing (consensus rule
