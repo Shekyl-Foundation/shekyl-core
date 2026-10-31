@@ -1046,6 +1046,65 @@ async fn a_proxy_that_is_not_listening_is_a_dial_stall() {
     assert!(matches!(stall(out), Stall::Dial(_)));
 }
 
+/// A client that reads its proxy at each fetch (the managed Tor's route,
+/// `TSR-F10`) follows the route as it appears, moves and goes. With no
+/// route a fetch is [`Stall::NoRoute`], a stall that retries the same `P`
+/// because nothing was sent. Each published route takes the next fetch,
+/// the new one and not the one before it (a respawn moves the route). A
+/// withdrawn route sends nothing to either. Caching the first route,
+/// keeping a route once it is withdrawn, or calling a missing route
+/// anything but a stall, fails this.
+#[tokio::test]
+async fn a_route_read_at_each_fetch_follows_the_route_as_it_moves() {
+    use std::sync::Mutex;
+    let keys = keys();
+    let first = Stub::start(Script::Respond(signed_response(&keys, &header()))).await;
+    let second = Stub::start(Script::Respond(signed_response(&keys, &header()))).await;
+    let route: Arc<Mutex<Option<std::net::SocketAddr>>> = Arc::new(Mutex::new(None));
+    let read = Arc::clone(&route);
+    let client = PFetchClient::with_route(Arc::new(move || *read.lock().expect("route")), fast());
+    let publish = |at: Option<std::net::SocketAddr>| *route.lock().expect("route") = at;
+    // What each stub saw since the last look, once it has recorded.
+    let reached = || async {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        (first.seen().len(), second.seen().len())
+    };
+
+    let err = client
+        .fetch(&target(&keys), &header(), &expected(), Arc::new(DiscardTxs))
+        .await
+        .expect_err("no route");
+    assert!(err.retries_same_p(), "nothing was sent: retry the same P");
+    assert!(matches!(err, FetchError::Stall(Stall::NoRoute)), "{err}");
+    assert_eq!(reached().await, (0, 0), "no route: nothing was sent");
+
+    publish(Some(first.proxy));
+    client
+        .fetch(&target(&keys), &header(), &expected(), Arc::new(DiscardTxs))
+        .await
+        .expect("read through the first route");
+    assert_eq!(
+        reached().await,
+        (1, 0),
+        "the route that appeared is dialled"
+    );
+
+    publish(Some(second.proxy));
+    client
+        .fetch(&target(&keys), &header(), &expected(), Arc::new(DiscardTxs))
+        .await
+        .expect("read through the moved route");
+    assert_eq!(reached().await, (0, 1), "the moved route, not the first");
+
+    publish(None);
+    let err = client
+        .fetch(&target(&keys), &header(), &expected(), Arc::new(DiscardTxs))
+        .await
+        .expect_err("the route was withdrawn");
+    assert!(matches!(err, FetchError::Stall(Stall::NoRoute)), "{err}");
+    assert_eq!(reached().await, (0, 0), "a withdrawn route sends nothing");
+}
+
 // ------------------------------------------------------- SF-D8: countersignature
 
 #[tokio::test]

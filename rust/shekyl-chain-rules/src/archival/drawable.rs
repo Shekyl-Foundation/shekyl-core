@@ -82,7 +82,7 @@
 use std::collections::BTreeMap;
 
 use shekyl_archival_retention::{
-    DrawableEpoch, DrawablePair, SettlementSchedule, FAILURE_WINDOW_N, SLASH_GRACE_EPOCHS,
+    DrawableEpoch, DrawablePair, SettlementSchedule, SLASH_GRACE_EPOCHS,
 };
 use shekyl_types::archival::{
     BondRecord, DrawableDigest, HeldShard, Holdings, LoggedSlash, ReleasedRecord, SlashedHolding,
@@ -106,8 +106,8 @@ pub const WALK_BACK_EPOCHS: u64 = 1 + SLASH_GRACE_EPOCHS;
 // floor is [`ReleaseJournalFloor`], derived from the settling family, and
 // the pass's walk starts at it. Re-pinning the grace or the window so the
 // slash-log half reaches below its floor fails here.
-#[allow(clippy::cast_lossless)] // `u64::from` is not const.
-const _: () = assert!(WALK_BACK_EPOCHS <= SLASH_GRACE_EPOCHS + FAILURE_WINDOW_N as u64);
+// `1 + k ≤ k + n` is `n ≥ 1`, which `ArchivalParams::validate` holds
+// (`m ≥ 1`, `n ≥ m`).
 
 /// The count of shards closed and final at `h_open`: the prefix both
 /// derivations keep a compact shard inside. A complete tree contributes

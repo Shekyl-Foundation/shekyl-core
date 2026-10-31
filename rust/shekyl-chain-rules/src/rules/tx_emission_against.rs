@@ -541,6 +541,7 @@ impl J25 {
                     &g.snapshot.bonds,
                     &g.snapshot.shards,
                     &g.snapshot.pairs,
+                    shekyl_archival_retention::archival_params(),
                 ),
                 persisted_sigma_work_milli: g.sigma_work_milli,
                 claimant_bond_idx: g.snapshot.claimant_bond_idx,

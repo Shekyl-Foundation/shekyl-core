@@ -90,7 +90,7 @@ pub mod error;
 pub mod header;
 pub mod target;
 
-pub use client::{PFetchClient, Timeouts, MAX_INFLIGHT};
+pub use client::{PFetchClient, ProxyRoute, Timeouts, MAX_INFLIGHT};
 pub use error::{FetchError, Malformed, NextMove, Stall};
 pub use header::RequestHeader;
 /// The content and grammar verdicts a fetch carries, re-exported so a

@@ -185,7 +185,10 @@ pub unsafe extern "C" fn shekyl_archival_check_bond_admission(
         Ok(s) => s,
         Err(e) => return e.code(),
     };
-    let parent_state = ParentStateHoldings::with_consensus_age_weight(&shards);
+    let parent_state = ParentStateHoldings::with_consensus_age_weight(
+        &shards,
+        shekyl_archival_retention::archival_params(),
+    );
     match check_admission_of(kind, vin_shard_count, &parent_state) {
         Ok(()) => SHEKYL_ARCHIVAL_ADMISSION_OK,
         Err(e) => e.code(),

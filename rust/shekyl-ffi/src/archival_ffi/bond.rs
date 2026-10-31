@@ -770,6 +770,7 @@ pub unsafe extern "C" fn shekyl_archival_reinstate_connect(
         &bad,
         &post,
         reinstate_settlement_epoch,
+        shekyl_archival_retention::archival_params(),
     ) {
         Ok(e) => {
             unsafe {

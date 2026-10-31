@@ -764,11 +764,21 @@ async fn a_refused_block_cancels_the_rest_of_its_span_and_no_hash_starts_after_i
     cleanup(&path);
 }
 
-/// An arrival's `form` waits in its origin's class (PR2-Q3): a block this
-/// node asked for in the chain's, an announcement in the unsolicited one.
+/// An arrival waits for a hasher permit in its origin's class (PR2-Q3): a
+/// block this node asked for in the chain's, an announcement in the
+/// unsolicited one. This bites against an origin stamped onto the wrong
+/// class. It does not cover which step holds the permit: the pin and the
+/// form share that class, and the pin reaches the wait first.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_arrival_forms_in_the_class_its_origin_names() {
     use shekyl_hash_budget::Class;
+    use std::time::Duration;
+    /// How long a form may take to reach its permit wait. The observation
+    /// ends when the waiter is counted; this bounds a form that never is.
+    const CLASS_WAIT_WITHIN: Duration = Duration::from_secs(10);
+    /// The pause between waiter-count reads. The bound is a failure
+    /// ceiling, so the reads must not spin a core until it expires.
+    const CLASS_WAIT_POLL: Duration = Duration::from_millis(20);
     let mut y = Scenario::open("service-class-y");
     let blocks = y.mine(3).await;
     let budget = Budget::new(NonZeroUsize::MIN);
@@ -790,7 +800,7 @@ async fn an_arrival_forms_in_the_class_its_origin_names() {
         .into_iter()
         .enumerate()
     {
-        let held = {
+        let header_permit = {
             let budget = budget.clone();
             tokio::task::spawn_blocking(move || budget.acquire(Class::HeaderPow))
                 .await
@@ -801,19 +811,27 @@ async fn an_arrival_forms_in_the_class_its_origin_names() {
             session: SessionId(1),
             solicited,
         };
+        // Sampled before the offer. The span can be inside its permit wait
+        // before the next statement runs, and that waiter would already be
+        // in a later sample. The permit above stays held, so a waiter
+        // counted here cannot be granted and leave.
+        let waiting_at_offer = budget.waiting(class);
         let ticket = door.offer(offered).expect("room and a token");
-        let started = std::time::Instant::now();
-        // The attendant may already be waiting in the chain class to pin
-        // the window. The form is the increase after the offer.
-        let waiting_before = budget.waiting(class);
-        while budget.waiting(class) <= waiting_before {
-            assert!(
-                started.elapsed() < std::time::Duration::from_secs(10),
-                "the form never waited in {class:?}"
-            );
-            tokio::task::yield_now().await;
-        }
-        drop(held);
+        let appeared = tokio::time::timeout(CLASS_WAIT_WITHIN, async {
+            while budget.waiting(class) == waiting_at_offer {
+                tokio::time::sleep(CLASS_WAIT_POLL).await;
+            }
+        })
+        .await;
+        assert!(appeared.is_ok(), "the form never waited in {class:?}");
+        assert_eq!(
+            budget.waiting(class),
+            waiting_at_offer
+                .checked_add(1)
+                .expect("the waiter count fits"),
+            "one waiter in {class:?}"
+        );
+        drop(header_permit);
         let reply = ticket.reply().await;
         assert!(matches!(reply.reply, Reply::Connected { .. }), "{reply:?}");
     }

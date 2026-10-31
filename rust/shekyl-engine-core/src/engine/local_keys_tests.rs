@@ -1219,7 +1219,7 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
         kind: HoldingsKind::ShardSetCompact,
         shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
     };
-    let floor = bond_floor(&holdings);
+    let floor = bond_floor(&holdings, shekyl_archival_retention::archival_params());
     assert!(
         floor > 0,
         "bond floor must be positive for the fixture holdings"

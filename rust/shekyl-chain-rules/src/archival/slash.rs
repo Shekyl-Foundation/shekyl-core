@@ -51,8 +51,7 @@ use shekyl_archival_retention::settlement_select::{
 };
 use shekyl_archival_retention::{
     good_through, holds_shard_at, settle_support, settlement_window_slashable,
-    slash_open_interval_to_append, SupportSettlementKey, ARCHIVAL_BOND_FLOOR_ATOMIC,
-    MAX_BOND_BAD_INTERVALS,
+    slash_open_interval_to_append, SupportSettlementKey, MAX_BOND_BAD_INTERVALS,
 };
 use shekyl_types::archival::{
     BondRecord, HeldShard, Holdings, IndexedDraw, IssuedDigest, IssuedDraw, SettlementOutcome,
@@ -118,7 +117,8 @@ pub(crate) fn apply_slash(
         }
         record.bad_intervals.push(open);
     }
-    let burned = AtomicUnits::from_raw(ARCHIVAL_BOND_FLOOR_ATOMIC);
+    let burned =
+        AtomicUnits::from_raw(shekyl_archival_retention::archival_params().bond_floor_atomic);
     record.bonded_total = record
         .bonded_total
         .checked_sub(burned)
@@ -519,6 +519,7 @@ impl super::Transition {
                     .map_err(ViewRead::View)
                     .map(|row| row.map(SettlementRow::outcome))
             },
+            shekyl_archival_retention::archival_params(),
         )
     }
 
@@ -582,6 +583,7 @@ impl super::Transition {
             floor,
             |earlier| in_standing(record, earlier),
             |earlier| self.outcome(view, persona, shard, earlier),
+            shekyl_archival_retention::archival_params(),
         )
     }
 
@@ -769,6 +771,7 @@ mod support_settlement_tests {
                     None
                 })
             },
+            shekyl_archival_retention::archival_params(),
         )
         .expect("the rows answer")
     }

@@ -55,6 +55,12 @@ pub fn connectors(config: &DaemonConfig) -> Vec<ConnectorId> {
 /// not a peer dial and does not count against the in-flight bound, so the
 /// bound does not cover it. An operator's Tor is not probed yet (§4.9).
 ///
+/// A node that runs the bundle producer adds its reads' descriptors
+/// ([`shekyl_node::producer_descriptors`]): it mines and has a Tor, managed
+/// or the operator's, and each started settlement read holds a SOCKS
+/// stream (`ARCHIVAL_SETTLEMENT_WRITER.md` §16.11). Those are not peer
+/// dials either.
+///
 /// Clearnet adds its linger cap
 /// ([`shekyl_ffi::zone_ffi::clearnet_linger_descriptors`]): a refused
 /// accept is held half-closed until its first flight arrives or the
@@ -79,6 +85,7 @@ fn reservation(config: &DaemonConfig, clearnet_linger: u64) -> u64 {
     } else {
         0
     };
+    let producer = shekyl_node::producer_descriptors(config);
     connectors(config)
         .into_iter()
         .map(|c| {
@@ -87,7 +94,9 @@ fn reservation(config: &DaemonConfig, clearnet_linger: u64) -> u64 {
             u64::from(profile.target).saturating_add(bound)
         })
         .fold(
-            rpc.saturating_add(probe).saturating_add(linger),
+            rpc.saturating_add(probe)
+                .saturating_add(producer)
+                .saturating_add(linger),
             u64::saturating_add,
         )
 }
@@ -414,6 +423,72 @@ mod tests {
         assert_eq!(
             reserved_descriptors(&on),
             reservation(&on, shekyl_ffi::zone_ffi::clearnet_linger_descriptors())
+        );
+    }
+
+    /// A full mainnet address the parser accepts as `mine-address`. The
+    /// reservation follows that row, so the test goes through the same door
+    /// as the daemon.
+    fn mining_address() -> String {
+        shekyl_address::ShekylAddress::new(
+            shekyl_address::Network::Mainnet,
+            [0xaa; 32],
+            [0xbb; 32],
+            [0xee; shekyl_address::MSG_SIGN_PK_LEN],
+            vec![0xcc; shekyl_address::PQC_PAYLOAD_LEN],
+        )
+        .encode()
+        .expect("a full address encodes")
+    }
+
+    /// A node that mines adds the bundle producer's reads to the
+    /// reservation, under a managed Tor and under an operator's: each
+    /// started settlement read holds a SOCKS stream. With Tor off it runs
+    /// no producer and adds nothing. Leaving the term out, or adding it for
+    /// one Tor only, fails this. The mining row is a parsed `mine-address`.
+    #[test]
+    fn a_mining_node_with_a_tor_reserves_its_settlement_reads() {
+        let address = mining_address();
+        let with_tor = |tor: &[&str]| {
+            let mut args = vec!["--rpc-connections-max", "25"];
+            args.extend_from_slice(tor);
+            config(&args)
+        };
+        let mining = |tor: &[&str]| {
+            let mut args = vec![
+                "--mine-address",
+                address.as_str(),
+                "--rpc-connections-max",
+                "25",
+            ];
+            args.extend_from_slice(tor);
+            let config = config(&args);
+            assert!(
+                config.mine.address.is_some(),
+                "the parser accepted the address"
+            );
+            config
+        };
+        for tor in [
+            &[][..],
+            &["--tor", "operator", "--tor-socks", "127.0.0.1:9050"][..],
+        ] {
+            let idle = with_tor(tor);
+            let mining = mining(tor);
+            let reads = shekyl_node::producer_descriptors(&mining);
+            assert!(reads > 0, "{:?}: the producer runs", mining.tor);
+            assert_eq!(
+                reserved_descriptors(&mining),
+                reserved_descriptors(&idle) + reads,
+                "{:?}: the reads are reserved",
+                mining.tor
+            );
+        }
+        let off = &["--tor", "off"][..];
+        assert_eq!(
+            reserved_descriptors(&mining(off)),
+            reserved_descriptors(&with_tor(off)),
+            "Tor off runs no producer"
         );
     }
 

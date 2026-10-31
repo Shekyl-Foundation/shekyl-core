@@ -577,7 +577,11 @@ impl ChainReadFacts for StoreFacts {
                 })
             }
         };
-        let window: Vec<u64> = (claim_window_floor(settled.to_raw())..settled.to_raw()).collect();
+        let window: Vec<u64> = (claim_window_floor(
+            settled.to_raw(),
+            shekyl_archival_retention::archival_params(),
+        )..settled.to_raw())
+            .collect();
         let epochs =
             emission_epoch_facts(&view, &rule_set, persona, &window).map_err(derivation_fault)?;
         Ok(ClaimSource {

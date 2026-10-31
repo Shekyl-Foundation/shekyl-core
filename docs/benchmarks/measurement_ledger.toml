@@ -358,6 +358,7 @@ stale_through = [
   { through = "678eb42df", note = "SO-D12 4c: RequestHeader::on_stream in shekyl-p-fetch header.rs builds the same 73-byte header with a caller-named stream byte, so a challenge read on the support stream carries the stream its receipt verifies under. Same bytes per read, same handshake; no read, hash, sign or socket operation is added. Not re-measured." },
   { through = "3a1e5a9d4", note = "SO-D12 4c: Malformed::FrameLong carries the count of content bytes left ahead of the envelope, the value the reader already held when it refused. One u64 in an error value on a refused read; a good read is unchanged. Not re-measured." },
   { through = "6cf2bff68", note = "SO-D12 4c: Timeouts::fetch_ceiling in shekyl-p-fetch client.rs is a const fn summing the existing bounds, called at compile time by the bundle producer; no fetch runs it. The producer now starts at most MAX_INFLIGHT (8) challenge reads at once where it spawned every due read and let the rest queue on the client's semaphore, so the client's concurrency is the 8 it already was. No read, hash, signature or socket operation is added. Not re-measured." },
+  { through = "6e5d82e510", note = "The fetch client can read its SOCKS address at each fetch (the managed Tor's route) instead of holding one: a function call before the TCP connect, and with no route the fetch is Stall::NoRoute before any I/O. The dial, the head and body reads and the countersignature check are unchanged. Not re-measured." },
 ]
 
 [[constant]]
@@ -858,6 +859,7 @@ stale_through = [
   { through = "7679944f3", note = "#1108: in_tree_at_reference is the drain cutoff. It does one saturating subtraction and a zero-height check where it compared maturity with the reference directly. The boolean is the same at every height, and blocks_until_in_tree returns zero when the predicate holds. Path assembly, the tree and the prover do the same work. Not measured." },
   { through = "08af7470a1", note = "REQUEST_HEADER_BYTES in serving_route.rs is 73, one stream byte ahead of the nonce. The spend path — tree build, path assembly, the prover — does not read that constant. The hex encoder grows by two characters on the serving route only. Not measured; the rows stay ungraded." },
   { through = "1871825227", note = "The request-header doc and its length assertion name the stream byte (1 + 32 + 8 + 32). The constant stays 73. No function on the spend path changed. Not measured." },
+  { through = "501c0896eb", note = "ESR-16 completion, ruling 3: SEGMENT_FREEZE_REORG_MARGIN_BLOCKS in segment.rs reads shekyl_types::ARCHIVAL_REORG_DEPTH_BLOCKS instead of a constant curve-tree's own build script generated from the same key. The value stays 720; tree build, path assembly and the prover do the same work. Not measured." },
 ]
 
 [[constant]]

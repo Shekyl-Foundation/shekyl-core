@@ -21,9 +21,6 @@ There is no V3.1 / V3.2 / V3.x release train.
   - Owner: [`ARCHIVAL_BOND_CONSTRUCTION.md`](design/ARCHIVAL_BOND_CONSTRUCTION.md) §10.2 (persona activation, typed contract #2)
   - Target: pre-genesis
 
-- **The bundle producer does not run on a node whose Tor is managed (`SO-D12` increment 4c).** The producer reads through an operator's Tor SOCKS endpoint (`tor-socks`); a managed Tor's SOCKS route is published to the network after the node opens (`shekyl-daemon` `run.rs`, `network::start`), so the node builds no fetch scheduler for it and files no bundle. The route it needs exists since #1220: `shekyl_ffi::zone_ffi::managed_route` returns the managed Tor's route, read at each use, with the caller's own isolation pair (`TOR_SUPERVISOR.md` §4.5). The producer's move onto it, with an isolation pair of its own, is the next Tor-lane PR, reviewed by the settlement lane.
-  - Owner: the Tor-supervisor round with the node's composition — [`ARCHIVAL_SETTLEMENT_WRITER.md`](design/ARCHIVAL_SETTLEMENT_WRITER.md) §16.11 (where it lives)
-  - Target: pre-genesis
 - **The store's bundle view answers no support roster and no archive width.** `StoreBundleView::support_roster` and `archive_width` return `None` (`rust/shekyl-chain-store/src/store/bundle_view.rs`), and the transition writes every block's support count as zero, so no bundle states a support draw on a store chain; the producer and the verifier derive the support stream through `support_seats` once the view answers.
   - Owner: the support-draw lane — [`ARCHIVAL_SUPPORT_DRAW.md`](design/ARCHIVAL_SUPPORT_DRAW.md) §5 (the schedule on the connect path)
   - Target: pre-genesis
@@ -489,6 +486,10 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`ENGINE_CADENCE_DRIVER.md`](design/ENGINE_CADENCE_DRIVER.md) (§3 leg 4)
   - Target: pre-genesis
 
+- **The claim leg prices an allowance, not the claim's weight.** The fee it pays and the relay policy's emission-claim hold are both taken at `CLAIM_PRICED_WEIGHT` (49 152 + 2 048 = 51 200, `cadence/claim.rs`), a static reserve for the non-claims part plus one vin row, not the weight of the claim being built. A predictor from the assembled claim's shape replaces the allowance; the hold's test reads the same constant, so the hold follows with no second edit (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.26, ruling 9).
+  - Owner: [`ENGINE_CADENCE_DRIVER.md`](design/ENGINE_CADENCE_DRIVER.md) (§4)
+  - Target: pre-genesis
+
 - **Q11 zero-fee-input emission claim has no settlement evidence** (destitute mint-pays-fee; named blocker: accrual has no claim-match set).
   - Target: pre-genesis
 
@@ -925,9 +926,6 @@ Default. Lands before genesis if it should exist at launch.
 - **PQC Multisig : external adversarial review (Phase 5).**
   - Target: pre-genesis
 
-- **Rename `RETENTION_HORIZON_BLOCKS` (hygiene, C2-R1b residue).** The name reads as a reorg bound and cost the program one wrong ruling draft (the tip-derived floor); under the watermark form it is only the archival sweep floor. Rename toward its actual job (e.g. `ARCHIVAL_SWEEP_FLOOR_BLOCKS`) with the [`ARCHIVAL_TIMING_CONSTANTS.md`](design/ARCHIVAL_TIMING_CONSTANTS.md) row updated in the same change.
-  - Target: post-genesis
-
 - **Threshold signatures: one missing primitive, two named customers (ruled 2026-09-03).** PQC multisig and quorum-style attestation (C2-R0 candidate C6's decisive constraint) wait on the **same external event**: a practical, standardized threshold construction for the **ML-DSA leg**. The classical half is not the problem — FROST-style Schnorr thresholds are mature for the Ed25519 leg — but hybrid signing means the PQ leg cannot be waved off: a threshold classical signature bolted to k-of-n individual PQ signatures inherits the fat certificate's size *and* its signer-naming (the C6 tier-1 persona-linkage oracle: an **attested, gap-free** presence/absence ledger — absences are *recorded*, not merely unobserved, so the adversary reads a ledger the chain maintains for them — and a **permanent** one: personas that ever signed stay linkable from history even after any later format fix). Whoever notices NIST or the research community shipping a practical lattice threshold scheme reopens **both** customers at once — one row so they cannot be reopened separately. Realistic horizon: years (interactive round complexity; security-analysis maturity). Owner: crypto lane; the V4 row below is the *transition* consumer of the same event.
   - Target: post-genesis
 
@@ -1103,6 +1101,9 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
 
 - **After the core's deinit the daemon's main thread can sleep on disk, silently (the PR-3 cold-first-contact rerun, 2026-10-14).** After `Deinitializing core...` the main thread sat in state D, gaining no CPU time across 5 s, and the log said nothing. Two of four captured stops cleared within about 30 s; the store was on a rotating drive, and no stack can be taken from a non-dumpable daemon, so the stop path must report on itself. Falsify by a stop of the same rig that logs the remnant's deinit with its elapsed time and stays inside a stated bound.
+  - Owner: [`DAEMON_CONFIG_CUTOVER.md`](design/DAEMON_CONFIG_CUTOVER.md) §2.2 (step 9, the stop sequence)
+  - Target: pre-genesis
+- **A daemon stop can hang after the managed Tor is torn down, and the remnant's teardown throws on most stops (the Tor lane's VM clock runs, 2026-10-30 and 10-31).** One stop, SIGTERM 23 s after a managed-Tor respawn during sync, tore Tor down in 0.2 s and then never exited: the peers closed within a minute and every thread waited on a futex or epoll until SIGKILL (thread states in shekyl-dev `data/tsr-acceptance/2026-10-30-linux-vm-clock/stuck-stop-threads.txt`; the log is `skew3.out.gz` there). Every stop observed before the second hang also threw `std::out_of_range` five times from `node_server::on_connection_close` under `~node_server` (caught): a connection is closed after what it depends on is gone. The next stops took 1 to 2 s. A second hang (2026-10-31, the backward-jump run) came after 4 h 40 min of steady running with no respawn: Tor was torn down, the peers closed in the same second, no throw was logged, and every thread waited with no socket open until SIGKILL (`stuck-stop-threads-2.txt`, log `back.out.gz`). So the trigger is not the respawn. Falsify by stopping the daemon, both shortly after a Tor respawn while it syncs and after hours of steady running, repeatedly, inside the unit's stop timeout, with no throw in the teardown.
   - Owner: [`DAEMON_CONFIG_CUTOVER.md`](design/DAEMON_CONFIG_CUTOVER.md) §2.2 (step 9, the stop sequence)
   - Target: pre-genesis
 - **A C++ Levin debug line writes a raw byte into the log (the PR-3 §4 run, 2026-10-14).** `LEVIN_PACKET_SENT` and `LEVIN_PACKET_RECEIVED` (`contrib/epee/include/net/levin_protocol_handler_async.h:163` and `:591`) stream `m_have_to_return_data`, a `uint8_t`, as a character, so `r?=` is followed by a NUL or another control byte, and tools read the daemon's log as a binary file (42 such lines in one node's 14-minute log at `--log-level 2`). Not fixed in C++ (rule 20): the lines are deleted with their file, when the C++ Levin connection moves to Rust.

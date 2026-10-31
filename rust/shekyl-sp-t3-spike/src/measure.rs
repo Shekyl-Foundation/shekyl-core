@@ -76,12 +76,14 @@ pub enum FailureKind {
     /// sample because a mid-body RST is Tor. A complete exchange of the
     /// wrong body length is [`Self::Refused`] instead (the apparatus).
     Truncated,
-    /// A **completed** exchange the production client refused: a bare 404 or
-    /// 400, a malformed head or envelope, a countersignature that is missing
-    /// or does not verify under `P`'s key. `SF-D6` classes every one of these as a miss,
-    /// not a stall, and none of them is Tor's doing — a non-zero count here
-    /// means the apparatus is wrong (anchor gate, key, fixture), never that
-    /// the path was slow.
+    /// The apparatus, not the path. A completed exchange the production
+    /// client refused — a bare 404 or 400, a malformed head or envelope, a
+    /// countersignature that is missing or does not verify under `P`'s key —
+    /// or a fetch that never dialled because this process had no proxy
+    /// (`Stall::NoRoute`). `SF-D6` classes the completed refusals as a miss,
+    /// not a stall. None of these is Tor's doing. A non-zero count means the
+    /// apparatus is wrong (anchor gate, key, fixture, or a client with no
+    /// route), never that the path was slow.
     Refused,
 }
 

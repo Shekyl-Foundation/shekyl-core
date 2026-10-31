@@ -41,5 +41,9 @@ shekyl-curve-tree = { path = "../shekyl-curve-tree" }
 # never divides by W itself (05-system-thinking "a formula two lanes need is a
 # function"; ARCHIVAL_SHARD_COUNT_CUTOVER.md §F step 3).
 shekyl-types = { path = "../shekyl-types" }
+# The consensus digest a report's header prints (`baseline.rs`), imported
+# rather than recomputed from the canonical files.
+shekyl-rpc-types = { path = "../shekyl-rpc-types" }
+thiserror.workspace = true
 serde = { workspace = true }
 serde_json = "1"

@@ -18,7 +18,7 @@
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::sync::watch;
@@ -26,9 +26,9 @@ use zeroize::{Zeroize, Zeroizing};
 
 use shekyl_tor_control_client::binary::VerifiedTorBinary;
 use shekyl_tor_control_client::control::{
-    ask_timed, evaluate_add_onion_reply, AddOnion, AddOnionReplyError, AskError, BootstrapState,
-    Command, ControlError, DiskWrites, EventSink, OnionFlags, OnionPort, OnionPow, ServiceId,
-    SocksTimeout, TorControlClient, TorExit,
+    ask_timed, evaluate_add_onion_reply, AddOnion, AddOnionReplyError, AskError, Asked,
+    BootstrapState, Command, ControlError, ControlReply, DiskWrites, EventSink, OnionFlags,
+    OnionPort, OnionPow, Resume, ServiceId, SocksTimeout, TorControlClient, TorExit,
 };
 use shekyl_tor_control_client::directory_cache;
 use shekyl_tor_control_client::onion_identity::OnionIdentity;
@@ -209,6 +209,10 @@ pub struct DaemonTorControl {
     exit_watch: watch::Receiver<Option<TorExit>>,
     socks_addr: SocketAddr,
     reply_deadline: Duration,
+    /// A sleep a control ask on this incarnation observed, until the driver
+    /// takes it. The asks are `&self`, and one driver task runs them one at
+    /// a time: the mutex is that shared borrow, not a second schedule.
+    resume: Mutex<Resume>,
     /// Set when [`Self::shutdown`] begins, so [`Self::death`] can tell that
     /// stop from Tor exiting on its own.
     stopping: Arc<AtomicBool>,
@@ -348,16 +352,11 @@ impl DaemonTorControl {
         let request = AddOnion::new(identity.mint_onion_key(), port, max_streams)
             .with_flags(OnionFlags { discard_pk: true })
             .with_pow(pow);
-        let reply = match ask_timed(&self.actor, Command::AddOnion(request), self.reply_deadline)
-            .await
-        {
-            Ok(reply) => reply,
-            Err(AskError::Timeout) => {
-                return Err(DaemonTorPublishError::Control(ControlError::Timeout));
-            }
-            Err(AskError::Control(control)) => return Err(DaemonTorPublishError::Control(control)),
-            Err(AskError::ActorGone) => return Err(DaemonTorPublishError::Died),
-        };
+        let reply = self
+            .settle_ask(
+                ask_timed(&self.actor, Command::AddOnion(request), self.reply_deadline).await,
+            )
+            .map_err(Self::publish_error)?;
         if let Some(refused) = pow_refusal(pow, reply.status(), reply.lines()) {
             return Err(refused);
         }
@@ -387,15 +386,9 @@ impl DaemonTorControl {
         let held = OnionIdentity::from_hs_id_seed(seed.bytes())
             .service_id()
             .clone();
-        let reply = match ask_timed(&self.actor, Command::DelOnion(held), self.reply_deadline).await
-        {
-            Ok(reply) => reply,
-            Err(AskError::Timeout) => {
-                return Err(DaemonTorPublishError::Control(ControlError::Timeout));
-            }
-            Err(AskError::Control(control)) => return Err(DaemonTorPublishError::Control(control)),
-            Err(AskError::ActorGone) => return Err(DaemonTorPublishError::Died),
-        };
+        let reply = self
+            .settle_ask(ask_timed(&self.actor, Command::DelOnion(held), self.reply_deadline).await)
+            .map_err(Self::publish_error)?;
         match reply.status() {
             DEL_ONION_REMOVED | DEL_ONION_UNKNOWN => {}
             status => {
@@ -412,12 +405,61 @@ impl DaemonTorControl {
         &self,
         command: Command,
         deadline: Duration,
-    ) -> Result<shekyl_tor_control_client::control::ControlReply, DaemonTorStartError> {
-        match ask_timed(&self.actor, command, deadline).await {
-            Ok(reply) => Ok(reply),
-            Err(AskError::Timeout) => Err(DaemonTorStartError::Control(ControlError::Timeout)),
-            Err(AskError::Control(control)) => Err(DaemonTorStartError::Control(control)),
-            Err(AskError::ActorGone) => Err(DaemonTorStartError::Died(None)),
+    ) -> Result<ControlReply, DaemonTorStartError> {
+        self.settle_ask(ask_timed(&self.actor, command, deadline).await)
+            .map_err(Self::start_error)
+    }
+
+    /// Keep the wait's sleep, whichever way the ask ended, and hand back
+    /// Tor's answer. A later ask on this handle combines with it
+    /// ([`Resume::later`]); the driver takes the one sleep after the whole
+    /// action.
+    fn settle_ask(&self, waited: Result<Asked, AskError>) -> Result<ControlReply, AskError> {
+        match waited {
+            Ok(asked) => {
+                self.note_resume(asked.resume());
+                Ok(asked.into_reply())
+            }
+            Err(error) => {
+                self.note_resume(error.resume());
+                Err(error)
+            }
+        }
+    }
+
+    fn note_resume(&self, observed: Resume) {
+        let mut slot = self.resume_slot();
+        *slot = (*slot).later(observed);
+    }
+
+    /// The sleep observed since the last take, then [`Resume::Awake`].
+    /// The driver folds it once, ahead of the reply the ask produced.
+    #[must_use]
+    pub fn take_resume(&self) -> Resume {
+        std::mem::take(&mut *self.resume_slot())
+    }
+
+    /// The slot. A poisoned lock still holds the last observation: the
+    /// supervisor would rather restart its windows than lose the sleep.
+    fn resume_slot(&self) -> std::sync::MutexGuard<'_, Resume> {
+        self.resume
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn publish_error(error: AskError) -> DaemonTorPublishError {
+        match error {
+            AskError::Timeout => DaemonTorPublishError::Control(ControlError::Timeout),
+            AskError::Control { error, .. } => DaemonTorPublishError::Control(error),
+            AskError::ActorGone { .. } => DaemonTorPublishError::Died,
+        }
+    }
+
+    fn start_error(error: AskError) -> DaemonTorStartError {
+        match error {
+            AskError::Timeout => DaemonTorStartError::Control(ControlError::Timeout),
+            AskError::Control { error, .. } => DaemonTorStartError::Control(error),
+            AskError::ActorGone { .. } => DaemonTorStartError::Died(None),
         }
     }
 

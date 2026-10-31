@@ -568,6 +568,68 @@ fn a_managed_tor_death_takes_its_own_incarnation_down_and_no_later_one() {
     }
 }
 
+/// The managed route as an in-process consumer reads it, at each use
+/// (`TSR-F10`): nothing before the managed Tor publishes, its address while
+/// the link is usable on that route, nothing once that route falls, the new
+/// port after a respawn, and nothing for an operator's Tor, whose pair is
+/// never re-presented. The settlement fetch client takes the address; the
+/// probe takes it with its own pair. Caching the address, or answering for
+/// an operator's route or a fallen one, fails this.
+#[test]
+fn the_managed_route_is_read_at_each_use_and_only_while_it_stands() {
+    let _bind = crate::seam_ffi::seam_bind_lock().lock();
+    let mut executor = 0u8;
+    let ceiling = ShekylInboundCeiling {
+        kind: SHEKYL_INBOUND_CEILING_UNLIMITED,
+        ceiling: 0,
+        soft_limit: 0,
+        held: 0,
+    };
+    let bound = unsafe {
+        shekyl_seam_bind(
+            std::ptr::addr_of_mut!(executor).cast::<c_void>(),
+            Some(discard),
+        )
+    };
+    assert_eq!(bound, 0);
+    assert_eq!(unsafe { shekyl_seam_set_ceiling(&raw const ceiling) }, 0);
+    let network_id = [13u8; 16];
+    let _host = ensure(network_id).expect("zone host");
+    let pair = Arc::new(shekyl_socks::SocksUsername::new(b"probe", b"x").expect("a pair"));
+    assert_eq!(managed_socks(), None, "no managed route yet");
+    assert!(managed_route(&pair).is_none());
+
+    let first = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9150);
+    let incarnation = publish_managed_socks(first).expect("published");
+    assert_eq!(managed_socks(), Some(first));
+    let proxy = managed_route(&pair).expect("the probe's proxy");
+    assert_eq!(proxy.at(), first);
+    assert!(proxy.authenticates(), "with the probe's own pair");
+
+    assert!(publish_tor_down(incarnation, DownCause::ProcessExited));
+    assert_eq!(managed_socks(), None, "a fallen route is no route");
+
+    let respawned = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9151);
+    publish_managed_socks(respawned).expect("republished");
+    assert_eq!(managed_socks(), Some(respawned), "read now, not cached");
+
+    dial_through_tor(
+        Proxy::unauthenticated(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9050)),
+        network_id,
+    )
+    .expect("an operator's proxy");
+    assert_eq!(
+        managed_socks(),
+        None,
+        "an operator's Tor is not the managed route"
+    );
+
+    shutdown();
+    unsafe {
+        shekyl_seam_bind(std::ptr::null_mut(), None);
+    }
+}
+
 /// A pair is presented to the proxy it was given for and to no other
 /// (DC-Q7): a route at another address, such as a managed Tor's port, dials
 /// unauthenticated.

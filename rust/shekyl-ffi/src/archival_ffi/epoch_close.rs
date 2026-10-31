@@ -10,8 +10,7 @@ use shekyl_archival_retention::{
     epoch_close_due_at_height, failure_window_slashable, good_through, prune_below_epoch_at_height,
     serve_credit_epoch_ok, settlement_epoch_at_height, slash_open_interval_to_append, BadInterval,
     BaselineObservation, CreditPair, EpochCloseBond, EpochCloseInputs, EpochCloseShard, ShardClose,
-    ShardCloseWire, FAILURE_WINDOW_M, FAILURE_WINDOW_N, FAILURE_WINDOW_SERVE_BUDGET,
-    MAX_CLAIM_AGE_W,
+    ShardCloseWire,
 };
 /// Returns `1` when `settlement_epoch >= join_settlement_epoch + 1` (gate-4 §2.2 `E_first` lower bound).
 #[no_mangle]
@@ -128,9 +127,10 @@ pub unsafe extern "C" fn shekyl_archival_failure_window_params(
         return SHEKYL_ARCHIVAL_FAILURE_WINDOW_ERR_MARSHAL;
     }
     unsafe {
-        *m_out = FAILURE_WINDOW_M;
-        *n_out = FAILURE_WINDOW_N;
-        *serve_budget_out = FAILURE_WINDOW_SERVE_BUDGET;
+        let params = shekyl_archival_retention::archival_params();
+        *m_out = params.failure_window_m;
+        *n_out = params.failure_window_n;
+        *serve_budget_out = params.failure_window_serve_budget();
     }
     SHEKYL_ARCHIVAL_FAILURE_WINDOW_ABSORB
 }
@@ -191,7 +191,7 @@ pub unsafe extern "C" fn shekyl_archival_failure_window_slashable(
             served: served != 0,
         })
         .collect();
-    match failure_window_slashable(&observations) {
+    match failure_window_slashable(&observations, shekyl_archival_retention::archival_params()) {
         Ok(true) => SHEKYL_ARCHIVAL_FAILURE_WINDOW_SLASH,
         Ok(false) => SHEKYL_ARCHIVAL_FAILURE_WINDOW_ABSORB,
         Err(_) => SHEKYL_ARCHIVAL_FAILURE_WINDOW_ERR_MARSHAL,
@@ -331,12 +331,13 @@ fn in_the_rows_terms(
     e: &shekyl_archival_retention::SettlementEpochOverrideError,
 ) -> SettlementScheduleRefusal {
     use shekyl_archival_retention::SettlementEpochOverrideError as E;
-    use shekyl_archival_retention::{ARCHIVAL_REORG_DEPTH_BLOCKS, SETTLEMENT_EPOCH_BLOCKS};
+    use shekyl_archival_retention::ARCHIVAL_REORG_DEPTH_BLOCKS;
+    let epoch_max = shekyl_archival_retention::archival_params().settlement_epoch_blocks;
     match e {
         E::Invalid {
             floor, reorg_cap, ..
         } => SettlementScheduleRefusal::Epoch(format!(
-            "an integer from {floor} to {SETTLEMENT_EPOCH_BLOCKS}, strictly above the archival reorg depth of {reorg_cap}"
+            "an integer from {floor} to {epoch_max}, strictly above the archival reorg depth of {reorg_cap}"
         )),
         E::InvalidReorgCap { .. } => SettlementScheduleRefusal::Reorg(format!(
             "an integer from 1 to {ARCHIVAL_REORG_DEPTH_BLOCKS}"
@@ -379,7 +380,10 @@ pub unsafe extern "C" fn shekyl_archival_epoch_close_due(
 /// pin, applied daemon-side).
 #[no_mangle]
 pub extern "C" fn shekyl_archival_claim_window_floor(current_settled_epoch: u64) -> u64 {
-    claim_window_floor(current_settled_epoch)
+    claim_window_floor(
+        current_settled_epoch,
+        shekyl_archival_retention::archival_params(),
+    )
 }
 
 /// Returns `1` and writes the prune horizon (`tip_epoch − MAX_CLAIM_AGE_W`) when the
@@ -396,7 +400,10 @@ pub unsafe extern "C" fn shekyl_archival_prune_below_epoch(
     if out_prune_below_epoch.is_null() {
         return 0;
     }
-    match prune_below_epoch_at_height(block_height, MAX_CLAIM_AGE_W) {
+    match prune_below_epoch_at_height(
+        block_height,
+        shekyl_archival_retention::archival_params().max_claim_age_w,
+    ) {
         Some(below) => {
             unsafe { *out_prune_below_epoch = below };
             1

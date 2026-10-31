@@ -232,8 +232,15 @@ fn the_count_reads_the_prior_row_and_resets_at_the_opening_block() {
         .challenge_response_blocks()
         .expect("20 blocks has a window of 1")
         .get();
-    let (count, carry) = draw_count(0, 750, draw_horizon(1, 20, window), 20, planted.carry)
-        .expect("the horizon fits");
+    let (count, carry) = draw_count(
+        0,
+        750,
+        draw_horizon(1, 20, window, shekyl_archival_retention::archival_params()),
+        20,
+        planted.carry,
+        shekyl_archival_retention::archival_params(),
+    )
+    .expect("the horizon fits");
     assert_eq!(delta.draws().shortfall, 750);
     assert_eq!(delta.draws().carry, carry);
     assert_eq!(u64::from(delta.draws().count), count);
