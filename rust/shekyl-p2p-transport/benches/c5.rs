@@ -38,19 +38,22 @@ fn responder(iters: u64) -> Duration {
     total
 }
 
-fn seal_open(len: usize, iters: u64) -> Duration {
-    let plaintext = vec![0xA5u8; len];
-    // One short of the rekey. The handshake that starts the next batch is
-    // outside the timed section, so the reported time is seal and open only.
-    let batch = c5_bench::seal_opens_before_rekey().saturating_sub(1).max(1);
+/// `connect` runs outside the clock. `step` is the timed seal and open,
+/// `batch` times per session, one short of a rekey.
+fn timed_batches<S>(
+    iters: u64,
+    batch: u64,
+    mut connect: impl FnMut() -> S,
+    mut step: impl FnMut(&mut S),
+) -> Duration {
     let mut total = Duration::ZERO;
     let mut left = iters;
     while left > 0 {
-        let mut session = Session::connected();
+        let mut session = connect();
         let n = left.min(batch);
         let start = Instant::now();
         for _ in 0..n {
-            black_box(session.seal_open(&plaintext));
+            step(&mut session);
         }
         total += start.elapsed();
         left -= n;
@@ -58,24 +61,20 @@ fn seal_open(len: usize, iters: u64) -> Duration {
     total
 }
 
+fn seal_open(len: usize, iters: u64) -> Duration {
+    let plaintext = vec![0xA5u8; len];
+    let batch = c5_bench::seal_opens_before_rekey().saturating_sub(1).max(1);
+    timed_batches(iters, batch, Session::connected, |session| {
+        black_box(session.seal_open(&plaintext));
+    })
+}
+
 fn window(len: usize, iters: u64) -> Duration {
     let plaintext = vec![0xA5u8; len];
-    // One short of the rekey, as `seal_open`: the timed section is seal and
-    // open only.
     let batch = c5_bench::windows_before_rekey().saturating_sub(1).max(1);
-    let mut total = Duration::ZERO;
-    let mut left = iters;
-    while left > 0 {
-        let mut windows = Windows::connected();
-        let n = left.min(batch);
-        let start = Instant::now();
-        for _ in 0..n {
-            black_box(windows.seal_open(&plaintext));
-        }
-        total += start.elapsed();
-        left -= n;
-    }
-    total
+    timed_batches(iters, batch, Windows::connected, |windows| {
+        black_box(windows.seal_open(&plaintext));
+    })
 }
 
 fn rekey(iters: u64) -> Duration {

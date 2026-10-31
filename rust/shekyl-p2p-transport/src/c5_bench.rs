@@ -44,14 +44,21 @@ pub struct Session {
     recv: RecvHalf,
 }
 
+/// One finished handshake. [`Session`] frames it; [`Windows`] takes the
+/// raw directions. The bench times what happens after this returns.
+fn established() -> (crate::Established<true>, crate::Established<false>) {
+    let (init, message1) = Initiator::new(&NID).expect("initiator");
+    let ready = Responder::new(&NID)
+        .read_message1(&message1)
+        .expect("message 1");
+    let (responder, message2) = ready.write_message2().expect("message 2");
+    let initiator = init.read_message2(&message2).expect("message 2");
+    (initiator, responder)
+}
+
 impl Session {
     pub fn connected() -> Self {
-        let (init, message1) = Initiator::new(&NID).expect("initiator");
-        let ready = Responder::new(&NID)
-            .read_message1(&message1)
-            .expect("message 1");
-        let (responder, message2) = ready.write_message2().expect("message 2");
-        let initiator = init.read_message2(&message2).expect("message 2");
+        let (initiator, responder) = established();
         let (send, _init_recv) = initiator.split();
         let (_resp_send, recv) = responder.split();
         Self { send, recv }
@@ -91,12 +98,7 @@ pub struct Windows {
 
 impl Windows {
     pub fn connected() -> Self {
-        let (init, message1) = Initiator::new(&NID).expect("initiator");
-        let ready = Responder::new(&NID)
-            .read_message1(&message1)
-            .expect("message 1");
-        let (responder, message2) = ready.write_message2().expect("message 2");
-        let initiator = init.read_message2(&message2).expect("message 2");
+        let (initiator, responder) = established();
         let (send, _init_recv) = initiator.directions();
         let (_resp_send, recv) = responder.directions();
         Self { send, recv }
