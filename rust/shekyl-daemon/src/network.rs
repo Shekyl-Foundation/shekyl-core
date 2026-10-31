@@ -390,35 +390,55 @@ mod tests {
         assert!(connectors(&offline).is_empty());
     }
 
+    /// A full mainnet address the parser accepts as `mine-address`. The
+    /// reservation follows that row, so the test goes through the same door
+    /// as the daemon.
+    fn mining_address() -> String {
+        shekyl_address::ShekylAddress::new(
+            shekyl_address::Network::Mainnet,
+            [0xaa; 32],
+            [0xbb; 32],
+            [0xee; shekyl_address::MSG_SIGN_PK_LEN],
+            vec![0xcc; shekyl_address::PQC_PAYLOAD_LEN],
+        )
+        .encode()
+        .expect("a full address encodes")
+    }
+
     /// A node that mines adds the bundle producer's reads to the
     /// reservation, under a managed Tor and under an operator's: each
     /// started settlement read holds a SOCKS stream. With Tor off it runs
     /// no producer and adds nothing. Leaving the term out, or adding it for
-    /// one Tor only, fails this.
+    /// one Tor only, fails this. The mining row is a parsed `mine-address`.
     #[test]
     fn a_mining_node_with_a_tor_reserves_its_settlement_reads() {
-        let mine = |mut config: DaemonConfig| {
-            config.mine.address = Some(shekyl_daemon_config::sections::MineAddress {
-                text: String::new(),
-                spend: [0; 32],
-                view: [0; 32],
-                x25519: [0; 32],
-                ml_kem: Vec::new(),
-            });
+        let address = mining_address();
+        let with_tor = |tor: &[&str]| {
+            let mut args = vec!["--rpc-connections-max", "25"];
+            args.extend_from_slice(tor);
+            config(&args)
+        };
+        let mining = |tor: &[&str]| {
+            let mut args = vec![
+                "--mine-address",
+                address.as_str(),
+                "--rpc-connections-max",
+                "25",
+            ];
+            args.extend_from_slice(tor);
+            let config = config(&args);
+            assert!(
+                config.mine.address.is_some(),
+                "the parser accepted the address"
+            );
             config
         };
-        let managed = config(&["--rpc-connections-max", "25"]);
-        let operator = config(&[
-            "--tor",
-            "operator",
-            "--tor-socks",
-            "127.0.0.1:9050",
-            "--rpc-connections-max",
-            "25",
-        ]);
-        let off = config(&["--tor", "off", "--rpc-connections-max", "25"]);
-        for idle in [managed, operator] {
-            let mining = mine(idle.clone());
+        for tor in [
+            &[][..],
+            &["--tor", "operator", "--tor-socks", "127.0.0.1:9050"][..],
+        ] {
+            let idle = with_tor(tor);
+            let mining = mining(tor);
             let reads = shekyl_node::producer_descriptors(&mining);
             assert!(reads > 0, "{:?}: the producer runs", mining.tor);
             assert_eq!(
@@ -428,9 +448,10 @@ mod tests {
                 mining.tor
             );
         }
+        let off = &["--tor", "off"][..];
         assert_eq!(
-            reserved_descriptors(&mine(off.clone())),
-            reserved_descriptors(&off),
+            reserved_descriptors(&mining(off)),
+            reserved_descriptors(&with_tor(off)),
             "Tor off runs no producer"
         );
     }

@@ -604,9 +604,14 @@ fn producer_tor(config: &DaemonConfig) -> Option<ProducerTor> {
 /// either Tor.
 #[must_use]
 pub fn producer_descriptors(config: &DaemonConfig) -> u64 {
-    producer_tor(config).map_or(0, |_| {
-        u64::try_from(shekyl_bundle_producer::read::READS_AT_ONCE.get()).unwrap_or(u64::MAX)
-    })
+    if producer_tor(config).is_none() {
+        return 0;
+    }
+    // One stream per fetch slot. `READS_AT_ONCE` is the client's slot count,
+    // and that count fits a descriptor count on every platform this node
+    // builds for.
+    u64::try_from(shekyl_bundle_producer::read::READS_AT_ONCE.get())
+        .expect("READS_AT_ONCE fits a descriptor count")
 }
 
 fn wall_now() -> UnixSeconds {
