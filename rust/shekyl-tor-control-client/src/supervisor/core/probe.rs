@@ -14,6 +14,12 @@
 //! this node's inbound handshake is the evidence, when the handshake took
 //! the nonce before the probe's bound. The evidence time is that take.
 //!
+//! **Outside a round** (§4.5, "Overdue"; Rick, 2026-10-31): one probe when
+//! no round has begun within the descriptor's lifetime of the last round's
+//! first upload or the last arrival, counted on this clock, and one when
+//! Tor reports a clock jump while Running. Each draws its own delay through
+//! the driver ([`Action::Recheck`]) and then runs as a round's probe does.
+//!
 //! **One miss is not a verdict** (Rick, 2026-10-29). A probe that misses its
 //! bound is followed by `HSFETCH` of this node's own onion, which refreshes
 //! Tor's client view of that one address, and one more probe after a fresh
@@ -30,7 +36,7 @@
 
 use super::super::posture::{Cause, Inbound, InboundCause};
 use super::announce::Cadence;
-use super::{duration_ns, Action, Core, Duty, Phase, RoundEnd};
+use super::{duration_ns, Action, Core, Duty, Phase, Recheck, RoundEnd};
 
 /// The probe's place in its round.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -121,6 +127,7 @@ impl Core {
         let track = self.round.get_or_insert(RoundTrack::new(now));
         if track.first.is_none() {
             track.first = Some((now, draw));
+            self.lifetime_from = Some(now);
         }
         Vec::new()
     }
@@ -173,11 +180,50 @@ impl Core {
         wait.into_iter().chain(stuck).min()
     }
 
+    /// When the descriptor's lifetime runs out with no round begun: the
+    /// lifetime from its anchor, while no round is open. A round that ends
+    /// with no upload leaves the old anchor, so the check can be due at
+    /// once: nothing shows a fresh descriptor.
+    pub(super) fn overdue_due(&self) -> Option<u64> {
+        if self.round.is_some() {
+            return None;
+        }
+        self.lifetime_from
+            .map(|at| at.saturating_add(duration_ns(self.policy.descriptor_lifetime)))
+    }
+
+    /// The descriptor's lifetime ran out with no round begun (§4.5,
+    /// "Overdue"). The next lifetime counts from now, whether or not a
+    /// probe runs, so a suppressed one does not ask again at every tick.
+    pub(super) fn on_overdue_deadline(&mut self, now: u64) -> Vec<Action> {
+        self.lifetime_from = Some(now);
+        self.recheck(Recheck::UploadOverdue)
+    }
+
+    /// Ask for a probe outside a round, while Running with none in hand.
+    /// A probe already scheduled, in flight or being refetched answers the
+    /// same question.
+    pub(super) fn recheck(&self, why: Recheck) -> Vec<Action> {
+        if matches!(self.phase, Phase::Running { .. }) && self.probe == Probe::Idle {
+            vec![Action::Recheck(why)]
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// The recheck's delay was drawn: the probe is scheduled as a round's
+    /// is, so it waits at least the delay's floor and takes the same miss
+    /// path (`HSFETCH`, a second probe, then a republish).
+    pub(super) fn recheck_drawn(&mut self, now: u64, draw: u64) -> Vec<Action> {
+        self.trigger(now, draw);
+        Vec::new()
+    }
+
     /// The machine slept (§5, "Resumed from suspend"). A probe in flight
     /// gets its whole bound from the wake. A scheduled probe waits at least
     /// the delay's floor, so it does not dial while Tor rebuilds the
     /// circuits it closed (7 s in the VM suspend, §7). An open round's
-    /// waits start again from the wake.
+    /// waits, and the descriptor's lifetime, start again from the wake.
     pub(super) fn probe_resumed(&mut self, now: u64) {
         match &mut self.probe {
             Probe::InFlight { bound_at, .. } => {
@@ -187,6 +233,9 @@ impl Core {
                 *at = (*at).max(now.saturating_add(duration_ns(self.policy.probe_after_min)));
             }
             Probe::Idle | Probe::Refetching => {}
+        }
+        if let Some(at) = &mut self.lifetime_from {
+            *at = now;
         }
         if let Some(track) = &mut self.round {
             track.started_at = now;
@@ -282,6 +331,12 @@ impl Core {
             return Vec::new();
         }
         self.probe = Probe::Idle;
+        // The directory had a live descriptor at the take: the next
+        // lifetime counts from it.
+        self.lifetime_from = Some(
+            self.lifetime_from
+                .map_or(arrived_at, |at| at.max(arrived_at)),
+        );
         let recovered = matches!(self.inbound, Inbound::Unreachable { .. });
         self.inbound = Inbound::Reachable {
             evidence_at: arrived_at,
@@ -392,6 +447,7 @@ impl Core {
         let in_flight = matches!(self.probe, Probe::InFlight { .. });
         self.probe = Probe::Idle;
         self.round = None;
+        self.lifetime_from = None;
         self.service_republish = false;
         in_flight.then_some(Action::CancelProbe)
     }

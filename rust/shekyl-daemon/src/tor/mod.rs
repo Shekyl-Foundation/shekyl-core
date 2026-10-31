@@ -566,6 +566,7 @@ impl Drive {
                     Err(shutdown) => vec![shutdown],
                 }
             }
+            Action::Recheck(why) => vec![probe::recheck(why)],
             Action::PublishInbound(inbound) => {
                 self.publish_inbound(inbound);
                 Vec::new()

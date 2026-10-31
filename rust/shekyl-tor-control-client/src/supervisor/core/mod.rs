@@ -90,6 +90,12 @@ pub struct Policy {
     /// both reach their count before the clock is named (§4.2; Rick,
     /// 2026-10-30).
     pub clock_evidence_within: Duration,
+    /// How long an onion-service descriptor lives at a directory. With no
+    /// upload round begun this long after the last round's first upload, or
+    /// the last probe arrival, the directories may have dropped it, and a
+    /// probe asks (§4.5, "Overdue"; Rick, 2026-10-31). Tor's
+    /// `HS_DESC_DEFAULT_LIFETIME`, re-checked at every re-pin.
+    pub descriptor_lifetime: Duration,
 }
 
 impl Policy {
@@ -128,8 +134,28 @@ impl Policy {
             // holds such a pass several times over, and keeps a line from
             // one stretch from pairing with relays from another.
             clock_evidence_within: Duration::from_secs(60),
+            // `HS_DESC_DEFAULT_LIFETIME` (3 h) in tor 0.4.9.14:
+            // `src/feature/hs/hs_descriptor.h:30`, set as the descriptor's
+            // lifetime at `src/feature/hs/hs_service.c:1942`.
+            descriptor_lifetime: DESCRIPTOR_LIFETIME,
         }
     }
+}
+
+/// Tor's `HS_DESC_DEFAULT_LIFETIME` at the pinned tor 0.4.9.14
+/// (`src/feature/hs/hs_descriptor.h:30`): 3 hours.
+pub const DESCRIPTOR_LIFETIME: Duration = Duration::from_secs(3 * 60 * 60);
+
+/// Why the supervisor asks for a probe outside a round (§4.5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Recheck {
+    /// No upload round began within the descriptor's lifetime of the last
+    /// round's first upload or the last probe arrival: the directories may
+    /// have dropped the descriptor.
+    UploadOverdue,
+    /// Tor reported a clock jump while Running. Its next upload may be
+    /// scheduled on the clock that jumped.
+    ClockJumped,
 }
 
 /// What the driver does next.
@@ -178,6 +204,9 @@ pub enum Action {
     /// (`TSR-Q14`: Tor does Tor; no other stream is touched). The driver
     /// answers [`Input::DescriptorRefetched`].
     RefetchDescriptor,
+    /// A probe outside a round (§4.5): draw its delay. The driver says why
+    /// at info and answers [`Input::RecheckDrawn`].
+    Recheck(Recheck),
     /// Publish the inbound facet on the managed route's link (§4.1).
     PublishInbound(Inbound),
     /// A descriptor round has been open for `Policy::round_stuck_after`:
@@ -339,6 +368,12 @@ pub enum Input {
     /// The descriptor refetch after a first miss (`HSFETCH`) was asked;
     /// `draw` sets the second probe's delay, as a round's does.
     DescriptorRefetched {
+        /// Uniform over `u64`.
+        draw: u64,
+    },
+    /// The delay of a probe [`Action::Recheck`] asked for. `draw` is from the
+    /// daemon's CSPRNG, as a round's is.
+    RecheckDrawn {
         /// Uniform over `u64`.
         draw: u64,
     },
@@ -504,6 +539,10 @@ pub struct Core {
     round: Option<probe::RoundTrack>,
     /// Rounds that stayed open past `Policy::round_stuck_after`, this boot.
     stuck_rounds: u32,
+    /// Where the descriptor's lifetime is counted from: the last round's
+    /// first upload, or a later probe arrival (§4.5, "Overdue"). None before
+    /// the first upload and after the probe is dropped.
+    lifetime_from: Option<u64>,
     /// A clock jump during this bootstrap, and `traffic/read`'s movement.
     jump: clock_jump::JumpWatch,
     /// This bootstrap's certificate lines and closed handshakes (§4.2).
@@ -541,6 +580,7 @@ impl Core {
             probe: Probe::Idle,
             round: None,
             stuck_rounds: 0,
+            lifetime_from: None,
             jump: clock_jump::JumpWatch::new(now),
             clock_evidence: clock_evidence::ClockEvidence::default(),
             service_republish: false,
@@ -587,6 +627,7 @@ impl Core {
             Input::FirstUploaded { draw } => self.first_uploaded(now, draw),
             Input::UploadRoundEnded { end, draw } => self.round_ended(now, end, draw),
             Input::DescriptorRefetched { draw } => self.refetched(now, draw),
+            Input::RecheckDrawn { draw } => self.recheck_drawn(now, draw),
             Input::ProbeDialed { minted_at } => self.probe_dialed(minted_at),
             Input::ProbeNotDialed => self.probe_not_dialed(),
             Input::ProbeArrived {
@@ -684,6 +725,9 @@ impl Core {
         if self.round_due().is_some_and(|at| now >= at) {
             actions.extend(self.on_round_deadline(now));
         }
+        if self.overdue_due().is_some_and(|at| now >= at) {
+            actions.extend(self.on_overdue_deadline(now));
+        }
         if self.probe.due().is_some_and(|at| now >= at) {
             actions.extend(self.on_probe_deadline(now));
         }
@@ -736,6 +780,7 @@ impl Core {
             self.alive_at,
             self.probe.due(),
             self.round_due(),
+            self.overdue_due(),
         ]
         .into_iter()
         .flatten()
@@ -891,14 +936,25 @@ impl Core {
         self.owed_actions()
     }
 
+    /// Tor reported a clock jump. Re-evaluate now with one sample. While
+    /// Running, also one probe (§4.5, "Overdue"): Tor's next upload may be
+    /// scheduled on the clock that jumped, and the probe shows whether the
+    /// onion is still reachable meanwhile.
     fn clock_jumped(&mut self, now: u64) -> Vec<Action> {
         self.jump.jumped(now);
-        match &mut self.phase {
-            Phase::Running { link, .. } => *link = Link::Resumed,
-            Phase::Bootstrapping { .. } => {}
+        let running = match &mut self.phase {
+            Phase::Running { link, .. } => {
+                *link = Link::Resumed;
+                true
+            }
+            Phase::Bootstrapping { .. } => false,
             _ => return Vec::new(),
+        };
+        let mut actions = vec![Action::Sample];
+        if running {
+            actions.extend(self.recheck(Recheck::ClockJumped));
         }
-        vec![Action::Sample]
+        actions
     }
 
     fn too_many_files(&mut self, now: u64, open: u64) -> Vec<Action> {
