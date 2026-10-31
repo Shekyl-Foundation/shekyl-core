@@ -17,6 +17,11 @@
 //! connection's stream on its own, so windows per message and burst
 //! timing are read per session.
 //!
+//! A direction whose walk ends on a header that does not read logs one
+//! `levin walk ended` line, with its direction and session: nothing after
+//! it in that direction is recorded, and the record counts those sessions
+//! rather than reading their silence as no traffic.
+//!
 //! The tap reads session plaintext, beneath the seam's record layer, so
 //! the same lines come from a plain channel and a Noise channel: the
 //! plaintext control (item 10) reads them too.
@@ -117,6 +122,8 @@ pub(crate) struct SizeTap {
     way: Way,
     conn: u64,
     frames: FrameHeads,
+    /// The walk ended on a header that does not read, and that was logged.
+    ended_noted: bool,
 }
 
 impl SizeTap {
@@ -130,6 +137,7 @@ impl SizeTap {
             way,
             conn,
             frames: FrameHeads::new(),
+            ended_noted: false,
         }
     }
 
@@ -147,6 +155,27 @@ impl SizeTap {
                 "levin message"
             );
         });
+        if self.walk_ended() {
+            tracing::info!(
+                target: TARGET,
+                way = self.way.name(),
+                conn = self.conn,
+                t_ns = since_first_line(),
+                "levin walk ended"
+            );
+        }
+    }
+
+    /// `true` once, the first time the walk has ended on a header that does
+    /// not read. Every message after it in this direction goes unrecorded,
+    /// so the record counts the sessions whose walk ended (Rick,
+    /// 2026-10-31) instead of reading their silence as no traffic.
+    fn walk_ended(&mut self) -> bool {
+        if self.ended_noted || !self.frames.ended() {
+            return false;
+        }
+        self.ended_noted = true;
+        true
     }
 
     fn feed_into(&mut self, plaintext: &[u8], mut emit: impl FnMut(Line)) {
@@ -242,6 +271,24 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn a_walk_that_ends_on_a_bad_header_is_noted_once() {
+        let mut stream = frame(COMMAND_TIMED_SYNC, 0);
+        let mut bad = frame(COMMAND_TIMED_SYNC, 0);
+        bad[0] ^= 0xFF;
+        stream.extend(bad);
+        let mut tap = SizeTap::tap(Way::Received, 3);
+        let mut lines = 0;
+        tap.feed_into(&frame(COMMAND_HANDSHAKE, 4), |_| lines += 1);
+        assert!(!tap.walk_ended(), "a walk that reads is not ended");
+        tap.feed_into(&stream, |_| lines += 1);
+        assert_eq!(lines, 2, "the frames before the bad header are lines");
+        assert!(tap.walk_ended(), "the bad header ends the walk");
+        tap.feed_into(&frame(COMMAND_TIMED_SYNC, 0), |_| lines += 1);
+        assert!(!tap.walk_ended(), "noted once per direction");
+        assert_eq!(lines, 2, "nothing after the end is a line");
     }
 
     #[test]
