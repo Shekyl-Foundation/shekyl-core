@@ -11,6 +11,9 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 ## Pre-genesis
 
+- **A wallet reopened from disk right after its close can meet the curve-tree store's `DatabaseAlreadyOpen` when the bounded wait for the closed actor's drop runs out** (`REOPEN_LOCK_RELEASE_TIMEOUT`, 2 s, `curve_tree_actor.rs`). Seen once in fifty runs of the spend walk on a loaded virtual host (shekyl-core #1212's control, run 15, load 7). The bound is a guess at a drop lag; the reopen path is production's (`close` → `open_full`), so a wider bound or a wait on the actor's drop itself is the fix, with a test that holds the lock across the reopen.
+  - Owner: the wallet engine's curve-tree actor — `rust/shekyl-engine-core/src/engine/curve_tree_actor.rs` (the reopen-after-shutdown race it documents)
+  - Target: pre-genesis
 - **`config-file` has no spelling for "no configuration file", so a test daemon must be handed an empty file in a directory its account owns the whole way up.** The daemon reads `/etc/shekyl/shekyld-<network>.toml` by default, and a fleet host's own testnet file turned a harness spawn red; the harness now names an empty file, but the file's rule (no writable directory above it outside root and the daemon's account) rules out `TMPDIR`, a checkout under a group umask and a CI container's home, so the harness hunts for a base (`XDG_RUNTIME_DIR`, the home, `/run`). A grammar row that means "the defaults and nothing else" would end the hunt; the grammar's no-negation rule decides its spelling.
   - Owner: the daemon-config lane — [`INPUT_GRAMMAR.md`](design/INPUT_GRAMMAR.md) §5 (`config-file`), from shekyl-core #1212's harness
   - Target: pre-genesis
