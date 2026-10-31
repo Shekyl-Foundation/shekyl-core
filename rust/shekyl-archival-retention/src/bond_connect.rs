@@ -185,7 +185,12 @@ pub fn release_connect(
     }
     // §3.2 maintained invariant on the record being released — a mismatch is
     // record corruption the release must not paper over.
-    if bond_floor_of(record_holdings_kind, record_held_shard_count) != record_bonded_total {
+    if bond_floor_of(
+        record_holdings_kind,
+        record_held_shard_count,
+        crate::archival_params(),
+    ) != record_bonded_total
+    {
         return Err(ReleaseConnectError::RecordFloorInvariantBroken);
     }
     if record_bad_interval_count >= MAX_BOND_BAD_INTERVALS {
@@ -321,13 +326,15 @@ pub struct ReinstateConnect {
 }
 
 /// Fold the `Reinstate` connect: post-holdings equal current, the record's floor
-/// invariant holds, and exactly one open interval closes at `E + 1`.
+/// invariant holds under `params`' bond floor, and exactly one open interval
+/// closes at `E + 1`. Production passes [`crate::archival_params`].
 pub fn reinstate_connect(
     record_bonded_total: u64,
     record_held_shard_ids: &[u64],
     record_bad_intervals: &[BadInterval],
     post_held_shard_ids: &[u64],
     reinstate_settlement_epoch: u64,
+    params: &crate::ArchivalParams,
 ) -> Result<ReinstateConnect, ReinstateConnectError> {
     if post_held_shard_ids.is_empty() {
         return Err(ReinstateConnectError::EmptyPost);
@@ -341,8 +348,11 @@ pub fn reinstate_connect(
     if !holdings_unchanged(record_held_shard_ids, post_held_shard_ids) {
         return Err(ReinstateConnectError::HoldingsChanged);
     }
-    if bond_floor_of(HoldingsKind::ShardSetCompact, record_held_shard_ids.len())
-        != record_bonded_total
+    if bond_floor_of(
+        HoldingsKind::ShardSetCompact,
+        record_held_shard_ids.len(),
+        params,
+    ) != record_bonded_total
     {
         return Err(ReinstateConnectError::RecordFloorInvariantBroken);
     }

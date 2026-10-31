@@ -535,6 +535,7 @@ mod tests {
                         RELAY_FLOOR_REFERENCE_TX_WEIGHT,
                         FeeCorrection::from_scaled(c),
                         &params,
+                        shekyl_economics::relay_policy(),
                     );
                     let owned = u128::from(ladder.economy);
                     assert_eq!(

@@ -169,6 +169,33 @@ mod tests {
             .collect()
     }
 
+    /// `RelayPolicy` lives in its own file, outside the digest (ESR-16
+    /// completion, ruled 2026-10-29): the file boundary is the digest
+    /// boundary. The canonical form does not read it, and no key of it is
+    /// also a key of a digested file, so a relay value can neither enter
+    /// the chain's identity nor shadow a consensus key.
+    #[test]
+    fn the_relay_policy_file_is_outside_the_digest_and_disjoint() {
+        const RELAY: &str = "config/relay_policy.json";
+        assert!(!CANONICAL_FILES.contains(&RELAY));
+        let keys = |text: &str| -> std::collections::BTreeSet<String> {
+            let doc: serde_json::Value = serde_json::from_str(text).expect("JSON");
+            doc.as_object()
+                .expect("a JSON object")
+                .keys()
+                .filter(|k| !k.starts_with('_'))
+                .cloned()
+                .collect()
+        };
+        let relay_path = format!("{}/../../{RELAY}", env!("CARGO_MANIFEST_DIR"));
+        let relay = keys(&std::fs::read_to_string(relay_path).expect("the relay file is readable"));
+        assert!(relay.len() >= 7, "the relay file holds the policy's keys");
+        for (file, text) in live_files() {
+            let shared: Vec<_> = keys(&text).intersection(&relay).cloned().collect();
+            assert!(shared.is_empty(), "{file} and {RELAY} share {shared:?}");
+        }
+    }
+
     #[test]
     fn kat_pins_the_canonical_form_and_its_digest() {
         let canonical = canonical_form(&kat()).expect("the KAT documents canonicalise");

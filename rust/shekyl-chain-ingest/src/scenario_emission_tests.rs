@@ -256,6 +256,7 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
         &bonds,
         &shards,
         &pairs,
+        shekyl_archival_retention::archival_params(),
     );
     let result = epoch_close_compute(&inputs).expect("the pair indexes its bond and shard");
     let share = claimant_reward_share(&EmissionEpochSource {

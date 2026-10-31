@@ -28,7 +28,6 @@ rewrite → P2B-6 §7 threat re-center → **this cluster's values** (sim-backed
 | `SETTLEMENT_EPOCH_BLOCKS` | **10_000** (inherited) | Global settlement boundary; `E_join = height / SEB` | Emission §3 |
 | `MAX_SETTLEMENT_EPOCHS_PER_EMISSION` | **15** | Max epochs per emission vin; work vector + dedup batch | Emission §3 |
 | `MAX_CLAIM_AGE_W` (`W`) | **26** | E-3 forfeiture horizon (settlement epochs); **hot prune** | Archival state §5 |
-| `RETENTION_HORIZON_BLOCKS` | **420_000** | Min block-span archival derived state survives before prune sweep | Archival state §5 |
 | `ARCHIVAL_REORG_DEPTH_BLOCKS` | **720** | Max processable reorg depth (blocks); `pop_block` + wallet refresh; **since 2026-09-13 also the pass-countersignature anchor depth** (`SF-D8`: requester anchors a shard read to `block_hash(tip − this)`) | Gate-4 §5, P2B-5, `ARCHIVAL_SHARD_FETCH.md` `SF-D8` |
 | `ARCHIVAL_ATTESTATION_ANCHOR_LAG_BLOCKS` (`L`) | **4** (**PROVISIONAL**, 2026-09-13) | Half-width of the pass-anchor admission window `[h − 720 − L, h − 720]` and of `P`'s pre-sign gate `[p − 720 − L, p − 720 + L]`; `≥ 2` build-enforced. Falsifier: W₂ / PD-F-2 dispersion — p99 fetch-plus-retry under 2 min → 3; over 6 min → tighten `SF-D6`'s retry budget, do not raise `L`. Read 2026-10-02: 149.7 s with one retry and 190.4 s with two on the worse day, so 4 holds; the retry budget is 2, whose longest read is exactly 6 min | `ARCHIVAL_SHARD_FETCH.md` `SF-D8` |
 | `RELEASE_COOLDOWN_EPOCHS` | **2** | Grace after last serve before `Release` (settlement epochs) | Gate-4 §3.4–§4.3 |
@@ -91,7 +90,7 @@ add-epoch record field.
 ```text
 settlement_epoch(height) = height / SETTLEMENT_EPOCH_BLOCKS    // integer division
 prune_horizon_epochs     = W                                   // = 26
-retention_horizon_epochs = ceil(RETENTION_HORIZON_BLOCKS / SEB) // = 42 (audit / sweep only)
+deepest_retention_epochs = W + 1                               // = 27: the claimable tables' reach, EpochFloor (§2.3)
 ```
 
 At default **120 s** block time (`daa_target_seconds`), `SEB = 10_000` ⇒ one settlement
@@ -100,27 +99,26 @@ epoch ≈ **13.9 days** (~2 weeks).
 | Derived (wall clock @ 120 s/block) | Value |
 |------------------------------------|-------|
 | `W` = 26 epochs | ~**361 days** (~1 year claim headroom) |
-| `RETENTION_HORIZON_BLOCKS` | ~**583 days** (~19 months block-span floor) |
+| deepest retention, `W + 1` = 27 epochs | ~**375 days** |
 | `ARCHIVAL_REORG_DEPTH_BLOCKS` | ~**24 hours** |
 | `RELEASE_COOLDOWN_EPOCHS` = 2 | ~**28 days** |
 | `SLASH_GRACE_EPOCHS` = 1 | ~**13.9 days** (one SEB, by construction) |
 | `bond_duration` range (base 4, scale 4) | ~**8 weeks** (youngest deep) → ~**9 months** (oldest) |
 
-### 1.1 Reorg depth vs retention horizon (load-bearing split)
+### 1.1 Reorg depth vs retention (load-bearing split)
 
-**`REORG_HORIZON` is deleted.** The prior pin conflated two unrelated jobs:
+Two unrelated jobs, two answers:
 
-| Job | Constant | Question it answers |
-|-----|----------|---------------------|
+| Job | Answer | Question it answers |
+|-----|--------|---------------------|
 | **Processable reorg** | `ARCHIVAL_REORG_DEPTH_BLOCKS` | How far back may consensus `pop_block` and the wallet re-fetch bond/emission caches? |
-| **Retention floor** | `RETENTION_HORIZON_BLOCKS` | How long must archival derived state remain before a prune sweep may drop it? |
+| **Retention** | each per-epoch table's last reader's reach (`EpochFloor`, §2.3) | How long must archival derived state remain before the prune sweep drops it? |
 
-A 19-month **reorg** depth asserted clean revert of 19 months of chain history — moot in
-PoW (an attacker who out-hashed that window has already won). A 19-month **retention**
-floor is correct: it is `W` claim epochs plus join lag and in-flight batch window expressed
-in blocks (§2.3).
+A reorg depth of the retention's length would assert clean revert of a year of chain
+history — moot in PoW (an attacker who out-hashed that window has already won). Retention
+is not a constant: the sweep keeps each table exactly as long as a block may still read it.
 
-Wallet refresh (P2B-5) tracks **`ARCHIVAL_REORG_DEPTH_BLOCKS`**, not `RETENTION_HORIZON_BLOCKS`.
+Wallet refresh (P2B-5) tracks **`ARCHIVAL_REORG_DEPTH_BLOCKS`**, not the retention.
 Ordinary scan safety (`NetworkSafetyConstants::max_reorg_depth`, default 10 confirmations)
 is a separate, shallower UX finality knob — see §2.3.
 
@@ -181,18 +179,18 @@ the only thing open. The JSON key `challenge_resolution_blocks` is gone (no gene
 it; the multiple has no value of its own to source), and the slash grace is sourced through
 `settlement_epoch_blocks`.
 
-### 2.3 Retention horizon floor (blocks — not reorg depth)
+### 2.3 Retention (not reorg depth)
 
-```text
-RETENTION_HORIZON_BLOCKS  ≥  W × SETTLEMENT_EPOCH_BLOCKS
-                            + join_lag_blocks
-                            + emission_batch_window_blocks
-
-420_000  ≥  26 × 10_000 + 10_000 + 15 × 10_000  =  420_000     ✓  (tight pin)
-```
-
-`join_lag_blocks = SEB` (`E_first ≥ E_join + 1`). `emission_batch_window_blocks =
-MAX_SETTLEMENT_EPOCHS_PER_EMISSION × SEB`.
+The store retires each per-epoch table below its last reader's reach (chain-rules
+`EpochFloor`; `ARCHIVAL_SETTLEMENT_WRITER.md` §17, `SO-D12h`): `W` epochs for the claimable
+family (the claim window, the failure window's walk), `k` and `k + 1` for the settling and
+pricing families. The boundary batch retires below the floor of the boundary's previous
+epoch, so the deepest table, the claimable family, keeps `W + 1` epochs: 27, 270 000 blocks
+at the shipped `W` and `SEB`. `shekyl-staking-sim --timing-cluster` reports it by calling
+`EpochFloor::<Claimable>::at_boundary`. A claim that batches `MAX_SETTLEMENT_EPOCHS_PER_EMISSION`
+epochs claims inside the window, so it needs no retention past `W`; a join's first epoch is
+priced by the pricing family. No separate horizon is kept: the key
+`retention_horizon_blocks` is deleted (ruled 2026-10-30).
 
 This is a **retention** bound only. It does **not** set reorg processing depth.
 
@@ -240,8 +238,7 @@ Hot consensus structures pruned for epochs with `E < tip_epoch − W`:
 - derived `R_market` / `Σwork` views
 - per-`P` `ClaimedEpochSet` entries (verify rejects ancient `E`)
 
-`prune_horizon_epochs = W = **26**`. `RETENTION_HORIZON_BLOCKS` is the block-span floor for
-retention sweeps and audit — it does **not** inflate `prune_horizon_epochs` via `max()`.
+`prune_horizon_epochs = W = **26**`; the sweep keeps one epoch of slack below it (§2.3).
 
 ---
 
@@ -264,7 +261,6 @@ Unchanged — bond timing moves value between terms; it does not add supply.
 ## 5. Checklist
 
 - [x] Numeric `W` = 26
-- [x] `RETENTION_HORIZON_BLOCKS` = 420_000
 - [x] `ARCHIVAL_REORG_DEPTH_BLOCKS` = 720
 - [x] `RELEASE_COOLDOWN_EPOCHS` = 2
 - [x] `SLASH_GRACE_EPOCHS` = 1 (one SEB by construction; + T-A16 margin §2.2) — *was `CHALLENGE_RESOLUTION_BLOCKS = 10_000` until 2026-09-30*

@@ -250,7 +250,7 @@ pub fn emission_vin_for(p_pubkey: Vec<u8>, epochs: &[u64]) -> Input {
 
 /// The bond floor a [`join_market`] posts and is bonded at — the
 /// complete-tree floor, one bond (`bond_floor_of(CompleteTree, _)`).
-pub const BOND_FLOOR: u64 = shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC;
+pub const BOND_FLOOR: u64 = shekyl_archival_retention::archival_params().bond_floor_atomic;
 
 /// A parseable **serve-credit vin** — the kept half of the response
 /// (`RF-D1`) crediting the persona tagged `p` for `shard` in

@@ -10,6 +10,7 @@
 //! 20 000. Heights below are chosen against that and nothing else.
 
 use super::*;
+use shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS;
 
 use shekyl_types::ChainCount;
 

@@ -230,6 +230,7 @@ async fn claim_of(
         &bonds,
         &shards,
         &pairs,
+        shekyl_archival_retention::archival_params(),
     );
     let result = epoch_close_compute(&inputs).expect("the pair indexes its bond and shard");
     let share = claimant_reward_share(&EmissionEpochSource {
@@ -426,7 +427,10 @@ async fn a_popped_claim_restores_the_epoch_its_prune_dropped_and_a_second_claim_
         second_connecting.to_raw(),
         "the first block where Σwork(E_new) is a row"
     );
-    assert_eq!(claim_window_floor(at_epoch), e_old.to_raw() + 1);
+    assert_eq!(
+        claim_window_floor(at_epoch, shekyl_archival_retention::archival_params()),
+        e_old.to_raw() + 1
+    );
     mine_to(&mut scenario, &mut mined, second_connecting).await;
     catch_up(&mut spender, &mined, &mut seen);
     let second = claim_of(
@@ -459,7 +463,7 @@ async fn a_popped_claim_restores_the_epoch_its_prune_dropped_and_a_second_claim_
     let rebuilt = below + BlockCount::ONE;
     assert_eq!(schedule.epoch_at(rebuilt).to_raw(), at_epoch - 1);
     assert_eq!(
-        claim_window_floor(at_epoch - 1),
+        claim_window_floor(at_epoch - 1, shekyl_archival_retention::archival_params()),
         e_old.to_raw(),
         "E_old is inside the window again"
     );

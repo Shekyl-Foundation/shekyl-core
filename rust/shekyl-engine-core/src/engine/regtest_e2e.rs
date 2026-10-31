@@ -109,9 +109,10 @@ fn install_wallet_tracing() {
 const ARMED_ROW_ANNOUNCEMENT: &str = "development lever set: dev-rpc=true";
 
 /// A live `shekyld --network regtest` daemon spawned for one test, with an ephemeral
-/// data dir and RPC port. Killed and cleaned on drop.
+/// data dir and RPC port. Killed on drop. The data dir goes with it, unless
+/// this spawn is the DX-Q8 capture (`start_keeping_data`).
 /// Last 40 lines of the daemon's captured log, inlined into panics:
-/// `RegtestDaemon::drop` removes the datadir (log included) as a panic
+/// on the deleting path `Drop` removes the datadir (log included) as a panic
 /// unwinds, so a "see the log file" pointer would name a deleted file.
 fn log_tail(log_path: &std::path::Path) -> String {
     std::fs::read_to_string(log_path)
@@ -167,6 +168,9 @@ pub(super) struct RegtestDaemon {
     /// Whether this daemon was started offline (both connectors off). Its
     /// `get_info` must then report that state, not a count of zero.
     offline: bool,
+    /// When true, `Drop` leaves `data_dir` in place. Set only by
+    /// `start_keeping_data`. Every other spawn deletes the directory.
+    keep_data: bool,
     /// Held for the daemon's lifetime to serialize e2e tests; released on drop.
     /// `None` on the sink of a [`origin::StemSinkPair`], whose origin holds
     /// the one guard for both.
@@ -224,6 +228,9 @@ struct RegtestSpawn {
     restricted_listener: bool,
     console: bool,
     peering: Peering,
+    /// Leave the data directory in place when the daemon is dropped.
+    /// The DX-Q8 capture is the caller. The default deletes.
+    keep_data: bool,
 }
 
 impl RegtestSpawn {
@@ -236,6 +243,7 @@ impl RegtestSpawn {
             restricted_listener: false,
             console: false,
             peering: Peering::Offline,
+            keep_data: false,
         }
     }
 
@@ -264,6 +272,15 @@ impl RegtestSpawn {
 
     fn with_peering(mut self, peering: Peering) -> Self {
         self.peering = peering;
+        self
+    }
+
+    /// Keep the data directory when the daemon is dropped.
+    ///
+    /// [`RegtestDaemon::start_keeping_data`] is the caller. Every other
+    /// spawn deletes.
+    fn keeping_data(mut self) -> Self {
+        self.keep_data = true;
         self
     }
 }
@@ -308,6 +325,18 @@ impl RegtestDaemon {
     /// Spawn the daemon and wait until its RPC answers `get_info`.
     pub(super) async fn start() -> RegtestDaemon {
         Self::start_with_regtest_schedule(None).await
+    }
+
+    /// Spawn a daemon whose data directory survives [`Drop`].
+    ///
+    /// The DX-Q8 column (`scripts/bench/capture_kept_chain.py`) reads the
+    /// directory after the generator exits. Every other spawn still deletes
+    /// its directory. The choice is this method. `Drop` does not read the
+    /// environment, so a leftover variable cannot keep every daemon the
+    /// process spawned.
+    pub(super) async fn start_keeping_data() -> RegtestDaemon {
+        let serial = serial_lock().lock_owned().await;
+        Self::spawn(RegtestSpawn::new(Some(serial)).keeping_data()).await
     }
 
     /// Spawn the daemon with its interactive console live (`--console`), so
@@ -371,6 +400,7 @@ impl RegtestDaemon {
             restricted_listener,
             console,
             peering,
+            keep_data,
         } = spec;
         install_wallet_tracing();
 
@@ -500,6 +530,7 @@ impl RegtestDaemon {
             restricted_url: restricted_port.map(|p| format!("http://127.0.0.1:{p}")),
             schedule,
             offline,
+            keep_data,
             _serial: serial,
         };
         daemon.await_ready().await;
@@ -899,8 +930,45 @@ impl Drop for RegtestDaemon {
     fn drop(&mut self) {
         drop(self.child.kill());
         drop(self.child.wait());
+        // The DX-Q8 capture asks to keep the directory. Every other spawn
+        // deletes it. The flag is set by `start_keeping_data`. Drop does
+        // not read the environment, so one kept generator cannot keep
+        // every daemon in the process.
+        if self.keep_data {
+            eprintln!("keeping regtest data dir {}", self.data_dir.display());
+            return;
+        }
         drop(std::fs::remove_dir_all(&self.data_dir));
     }
+}
+
+/// The DX-Q8 chain generator.
+///
+/// Spawns one regtest daemon and leaves its data directory when the daemon
+/// is dropped. `scripts/bench/capture_kept_chain.py` opens that directory.
+/// The assertion is the keep: if `Drop` deleted the directory, this fails.
+/// The directory is the product; remove it when the capture is done. The
+/// path is printed as the daemon drops.
+///
+/// `get_info.height` counts the genesis block as 1. That chain is what the
+/// column's reads ask for. The generator does not mine past it.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "DX-Q8 chain generator: requires SHEKYLD_BIN; keeps the datadir"]
+async fn capture_chain_keeps_its_datadir() {
+    const GENESIS_CHAIN_HEIGHT: u64 = 1;
+    let data_dir = {
+        let daemon = RegtestDaemon::start_keeping_data().await;
+        let data_dir = daemon.data_dir.clone();
+        assert!(
+            daemon.height().await >= GENESIS_CHAIN_HEIGHT,
+            "a kept chain has a genesis block"
+        );
+        data_dir
+    };
+    assert!(
+        data_dir.is_dir(),
+        "Drop keeps the data directory the capture reads"
+    );
 }
 
 /// A fresh accept, not `AlreadyInPool` / `AlreadyInChain`. Those also return
@@ -3364,7 +3432,13 @@ async fn stake_persona_and_submit_bond(
         },
         FixtureStake::MarketBond(h) => h.clone(),
     };
-    let funding = AtomicUnits::from_raw(bond_floor(&floor_holdings) + bond_fee + funding_cushion);
+    let funding = AtomicUnits::from_raw(
+        bond_floor(
+            &floor_holdings,
+            shekyl_archival_retention::archival_params(),
+        ) + bond_fee
+            + funding_cushion,
+    );
     mine_until_unlocked_at_least(
         daemon,
         &arc,
@@ -4971,7 +5045,10 @@ async fn e2e_release_accepted_and_connected() {
         shard_ids: shekyl_archival_retention::ShardSet::new(vec![SHARD_ID])
             .expect("one-shard holdings"),
     };
-    let expected_bonded = bond_floor(&market_holdings);
+    let expected_bonded = bond_floor(
+        &market_holdings,
+        shekyl_archival_retention::archival_params(),
+    );
     let fixture = stake_persona_to_confirmed_bond(
         &daemon,
         &seed,
@@ -5149,7 +5226,10 @@ async fn e2e_unstake_collect_retire_composed_arc() {
         shard_ids: shekyl_archival_retention::ShardSet::new(vec![SHARD_ID])
             .expect("one-shard holdings"),
     };
-    let expected_bonded = bond_floor(&market_holdings);
+    let expected_bonded = bond_floor(
+        &market_holdings,
+        shekyl_archival_retention::archival_params(),
+    );
     let fixture = stake_persona_to_confirmed_bond(
         &daemon,
         &seed,

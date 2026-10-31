@@ -255,6 +255,7 @@ pub(crate) async fn drive_frozen_membership(
         &bonds,
         &shards,
         &pairs,
+        shekyl_archival_retention::archival_params(),
     );
     let result = epoch_close_compute(&inputs).expect("the pairs index their bonds and shard");
     assert_eq!(result.r_market_by_shard, vec![1], "one market member");
@@ -326,7 +327,10 @@ pub(crate) async fn drive_frozen_membership(
 
     let connecting = BlockHeight::from_raw(schedule.open_height(served.to_raw() + MAX_CLAIM_AGE_W));
     assert_eq!(
-        claim_window_floor(schedule.epoch_at(connecting).to_raw()),
+        claim_window_floor(
+            schedule.epoch_at(connecting).to_raw(),
+            shekyl_archival_retention::archival_params()
+        ),
         served.to_raw(),
         "`served` is the oldest claimable epoch at the claim"
     );

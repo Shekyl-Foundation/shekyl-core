@@ -19,12 +19,11 @@
 
 use std::collections::BTreeSet;
 
-use shekyl_archival_retention::{
-    challenge_leaf_index, CHALLENGES_PER_PAIR_PER_EPOCH, SEGMENT_LEAF_COUNT,
-};
+use shekyl_archival_retention::{challenge_leaf_index, SEGMENT_LEAF_COUNT};
+use shekyl_types::archival::COUNTED_DRAWS;
 
 /// The set of segment-leaf indices the challenge derivation names for one
-/// `(P, s, E)`, across all `CHALLENGES_PER_PAIR_PER_EPOCH` of its challenges.
+/// `(P, s, E)`, across all `COUNTED_DRAWS` of its draws.
 ///
 /// **`PC-D3` moved this from one index to at most three** — the derivation now
 /// takes the challenge's block, so a pair-epoch's three challenges sample three
@@ -35,7 +34,7 @@ use shekyl_archival_retention::{
 /// progress toward a threshold it does not approach.
 fn named_leaf_indices(p_id: &[u8; 32], shard_id: u64, settlement_epoch: u64) -> BTreeSet<u32> {
     let mut named = BTreeSet::new();
-    for challenge in 0..CHALLENGES_PER_PAIR_PER_EPOCH {
+    for challenge in 0..u32::try_from(COUNTED_DRAWS).expect("three draws") {
         // Distinct blocks stand in for the epoch's distinct challenge blocks;
         // under PC-D2 each is the block its record rode in on.
         let mut prev_block_hash = [0u8; 32];

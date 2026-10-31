@@ -142,12 +142,12 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
     let economic = params.economic();
 
     let mut already_generated = emitted_at_start(
-        params.emission_curve_asymptote,
+        params.economic().emission_curve_asymptote,
         scenario.initial_emitted_ppm,
     );
     let mut total_burned: u128 = 0;
 
-    let total_blocks = params.blocks_per_year * scenario.sim_years;
+    let total_blocks = params.blocks_per_year() * scenario.sim_years;
 
     // Per-epoch accumulators (atomic units, u128 to be headroom-safe over 10k
     // blocks of full-supply-scale rewards).
@@ -198,22 +198,22 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
             ChainStep {
                 fold_height: block,
                 chain_height: abs_height,
-                demand: (scenario.get_volume)(block, params.blocks_per_year),
+                demand: (scenario.get_volume)(block, params.blocks_per_year()),
                 leaves: outputs.leaves(),
                 already_generated,
                 total_burned,
                 closed_shards: ClosedShardCount::ZERO,
             },
             params,
-            &economic,
+            economic,
         );
-        let base_reward = base_block_reward(priced.fee_point.already_generated, &economic)
+        let base_reward = base_block_reward(priced.fee_point.already_generated, economic)
             .expect("sim neutral trajectory stays within the arithmetic domain");
         let multiplier = calc_release_multiplier(
             priced.volume,
-            params.tx_volume_baseline,
-            params.release_min,
-            params.release_max,
+            params.economic().tx_volume_baseline,
+            params.economic().release_min,
+            params.economic().release_max,
         );
         let emission_share = priced.emission_share;
 

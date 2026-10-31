@@ -52,7 +52,7 @@ use std::collections::HashSet;
 use shekyl_block_template::Fill;
 use shekyl_economics::{
     burn::calc_burn_pct_at, price_emission, CirculatingSupply, ClosedShardCount, EconomicParams,
-    EmissionInputs, PaidEmission,
+    EmissionInputs, PaidEmission, RelayPolicy,
 };
 use shekyl_tx_weight::predict_weight;
 use shekyl_types::SHARD_LENGTH;
@@ -365,7 +365,7 @@ struct Block<'a> {
 }
 
 impl<'a> Block<'a> {
-    fn new(last: &LastBlock, economic: &'a EconomicParams) -> Self {
+    fn new(last: &LastBlock, economic: &'a EconomicParams, relay: &'a RelayPolicy) -> Self {
         let at = FeePoint {
             already_generated: last.already_generated,
             volume: last.volume,
@@ -374,6 +374,7 @@ impl<'a> Block<'a> {
             burn_pct_scaled: last.burn_pct_scaled,
             chain_leaves: last.chain_leaves,
             params: economic,
+            relay,
         };
         assert_eq!(
             last.burn_pct_scaled,
@@ -760,9 +761,9 @@ pub(crate) fn print_envelope(
     folded: &[crate::stage2::FoldedScenario],
 ) -> core::fmt::Result {
     let budgets = [
-        ("epoch", shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS),
-        ("year", params.blocks_per_year),
-        ("decade", 10 * params.blocks_per_year),
+        ("epoch", params.archival().settlement_epoch_blocks),
+        ("year", params.blocks_per_year()),
+        ("decade", 10 * params.blocks_per_year()),
     ];
     writeln!(
         out,
@@ -804,7 +805,7 @@ pub(crate) fn print_envelope(
         let last = agg.last_block;
         let e = envelope_at(&last, params);
         let economic = params.economic();
-        let block = Block::new(&last, &economic);
+        let block = Block::new(&last, economic, params.relay());
         let unenforced = e.miner(AttackKind::MinerUnenforced);
         let (relay_rate, relay_at_floor, relay_atomic) = match e.attack(AttackKind::Relay).cost {
             AttackCost::Relay {
@@ -866,7 +867,7 @@ pub(crate) fn print_envelope(
 /// Every attacker at the block a fold ended a year on.
 pub(crate) fn envelope_at(last: &LastBlock, params: &SimParams) -> Envelope {
     let economic = params.economic();
-    let block = Block::new(last, &economic);
+    let block = Block::new(last, economic, params.relay());
     let floor = params.fee.admission_rate(&block.at);
     // Column order is the approach list. A match arm that numbers a column
     // differently from [`AttackKind::ALL`] fails this before the report prints.
@@ -897,11 +898,11 @@ mod tests {
     fn block_at(offered: u64, params: &SimParams) -> LastBlock {
         let economic = params.economic();
         let zone = economic.full_reward_zone;
-        let volume = TxVolume::per_block(params.tx_volume_baseline);
+        let volume = TxVolume::per_block(params.economic().tx_volume_baseline);
         // The share is the run's schedule at this height, as the cursor's
         // is. The burn is production's at these operands. The payout
         // reprices the block from them.
-        let chain_height = 2 * params.blocks_per_year;
+        let chain_height = 2 * params.blocks_per_year();
         let already_generated = economic.emission_curve_asymptote / 3;
         let supply = CirculatingSupply::derive(
             AtomicUnits::from_raw(already_generated),
@@ -913,18 +914,19 @@ mod tests {
             volume,
             long_term_median: zone,
             sigma_scaled: economic.emission_schedule().share_at(chain_height),
-            burn_pct_scaled: calc_burn_pct_at(volume, supply, &economic),
+            burn_pct_scaled: calc_burn_pct_at(volume, supply, economic),
             chain_leaves: 50_000_000,
-            params: &economic,
+            params: economic,
+            relay: params.relay(),
         };
         let honest_tx: OrdinaryTx = params.fee.ordinary_tx(&at);
-        let medians = medians_from(zone, zone, &economic);
+        let medians = medians_from(zone, zone, economic);
         let mut fill = Fill::empty(
             medians.effective_median.to_raw(),
             u64::try_from(shekyl_wire::transaction::COINBASE_RESERVE).expect("fits"),
             at.already_generated,
             volume,
-            &economic,
+            economic,
         )
         .expect("priced");
         fill.admit_up_to(honest_tx.weight, honest_tx.fee_atomic, offered);
@@ -958,7 +960,11 @@ mod tests {
         assert_eq!(roomy_miner.cost_atomic, 0);
         assert_eq!(roomy_miner.placement, Placement::FreeRoom);
         let economic = params.economic();
-        let block = Block::new(&block_at(5, &params), &economic);
+        let block = Block::new(
+            &block_at(5, &params),
+            economic,
+            shekyl_economics::relay_policy(),
+        );
         let chosen = block.cheapest_packing(None, PoolShare::NONE);
         let free = block.honest.penalty_free_bodies().saturating_sub(
             block
@@ -1046,7 +1052,7 @@ mod tests {
         let params = SimParams::default();
         let last = block_at(1_000, &params);
         let economic = params.economic();
-        let block = Block::new(&last, &economic);
+        let block = Block::new(&last, economic, shekyl_economics::relay_policy());
         let weight = 20_000;
         let packing = block
             .packing_at(
@@ -1067,7 +1073,7 @@ mod tests {
                 w,
                 last.already_generated,
                 last.volume,
-                &economic,
+                economic,
             )
             .expect("priced")
         };
@@ -1092,7 +1098,7 @@ mod tests {
         let params = SimParams::default();
         let last = block_at(1_000, &params);
         let economic = params.economic();
-        let block = Block::new(&last, &economic);
+        let block = Block::new(&last, economic, shekyl_economics::relay_policy());
         let dropped = 3;
         let stuffed = 2;
         let weight = 20_000;
@@ -1126,7 +1132,7 @@ mod tests {
         let payout = |reward: u64, fees: u64, own: u64| -> i128 {
             let miner_emission = split_block_emission(reward, last.sigma_scaled).0;
             let split =
-                compute_burn_split_at(fees, last.burn_pct_scaled, block.closed_shards, &economic);
+                compute_burn_split_at(fees, last.burn_pct_scaled, block.closed_shards, economic);
             let recovered = if fees == 0 || own == 0 {
                 0
             } else {

@@ -1089,7 +1089,7 @@ fn effective_block_weight_median_matches_the_crate() {
     for st in [0, zone / 10, zone, zone * 2, zone * 100, u64::MAX] {
         assert_eq!(
             shekyl_effective_block_weight_median(zone, st),
-            shekyl_economics::effective_median(zone, st),
+            shekyl_economics::effective_median(zone, st, shekyl_economics::economic_params()),
             "st={st}"
         );
     }
@@ -1105,7 +1105,7 @@ fn long_term_block_weight_matches_the_crate() {
     for w in [0, zone / 10, zone, zone * 2, 1_000_000, u64::MAX] {
         assert_eq!(
             shekyl_long_term_block_weight(zone, w),
-            shekyl_economics::long_term_weight(zone, w),
+            shekyl_economics::long_term_weight(zone, w, shekyl_economics::economic_params()),
             "w={w}"
         );
     }

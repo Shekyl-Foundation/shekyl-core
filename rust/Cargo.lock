@@ -3871,6 +3871,7 @@ dependencies = [
  "curve25519-dalek",
  "hex",
  "rand 0.8.6",
+ "serde",
  "serde_json",
  "sha3",
  "shekyl-archival-retention",
@@ -4428,10 +4429,12 @@ dependencies = [
  "shekyl-curve-tree",
  "shekyl-economics",
  "shekyl-fcmp",
+ "shekyl-rpc-types",
  "shekyl-tx-weight",
  "shekyl-types",
  "shekyl-units",
  "shekyl-wire",
+ "thiserror",
 ]
 
 [[package]]
@@ -5378,15 +5381,16 @@ dependencies = [
  "serde",
  "serde_json",
  "shekyl-archival-retention",
+ "shekyl-chain-rules",
  "shekyl-economics",
  "shekyl-standoff",
+ "shekyl-types",
 ]
 
 [[package]]
 name = "shekyl-standoff"
 version = "3.1.0"
 dependencies = [
- "serde_json",
  "shekyl-stats",
 ]
 

@@ -46,7 +46,7 @@
 
 use std::collections::BTreeSet;
 
-use shekyl_chain_rules::{effective_median_at, ChainView, Fault, Tip, REFERENCE_BLOCK_MAX_AGE};
+use shekyl_chain_rules::{block_weight_limit_at, ChainView, Fault, Tip, REFERENCE_BLOCK_MAX_AGE};
 use shekyl_chain_store::store::StoreError;
 use shekyl_types::TxHash;
 
@@ -68,7 +68,7 @@ impl Limits {
     /// The view's fault, or a weight window it cannot answer.
     pub fn at<'id, V: ChainView<'id>>(chain: &V) -> Result<Self, Fault<V::Fault>> {
         let connecting = Tip::connecting_height(chain.tip().map_err(Fault::View)?.as_ref());
-        let block = effective_median_at(chain, connecting)?.limit().to_raw();
+        let block = block_weight_limit_at(chain, connecting)?.to_raw();
         Ok(Self {
             max_weight: REFERENCE_BLOCK_MAX_AGE.to_raw().saturating_mul(block),
         })

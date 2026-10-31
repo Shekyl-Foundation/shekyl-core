@@ -54,8 +54,6 @@ use shekyl_types::ChainCount;
 use shekyl_types::{BlockHeight, GlobalOutputIndex, PCanonicalId, PSlot};
 use shekyl_units::AtomicUnits;
 
-use crate::consensus_constants::ARCHIVAL_BOND_FLOOR_ATOMIC;
-
 use super::local_ledger::LocalLedger;
 use super::signer::EngineSignerKind;
 use super::staking_outcomes::{self, InFlightRecord, ReportedOutcome};
@@ -294,13 +292,14 @@ pub(crate) fn staked_balance_from_records(
     })
 }
 
-/// `count × ARCHIVAL_BOND_FLOOR_ATOMIC`, checked. The bond principal per
+/// `count × bond floor` (the shipped archival set's), checked. The bond principal per
 /// post is the consensus bond floor by construction (the WI-2 assemble path
 /// bonds exactly the floor); a count large enough to overflow is corrupt
 /// state and fails closed.
 fn principal_for_bond_count(count: usize) -> Result<AtomicUnits, StakingReadError> {
     let count = u64::try_from(count).map_err(|_| StakingReadError::Overflow)?;
-    ARCHIVAL_BOND_FLOOR_ATOMIC
+    shekyl_archival_retention::archival_params()
+        .bond_floor_atomic
         .checked_mul(count)
         .map(AtomicUnits::from_raw)
         .ok_or(StakingReadError::Overflow)
@@ -510,6 +509,7 @@ impl<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::consensus_constants::ARCHIVAL_BOND_FLOOR_ATOMIC;
 
     use std::collections::BTreeMap;
 

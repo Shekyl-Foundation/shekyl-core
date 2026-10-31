@@ -1,7 +1,7 @@
 //! Canonical [`EconomicParams`] digest (fixture lineage + snapshot
 //! sub-digest).
 //!
-//! This Blake2b-256 over the sixteen `EconomicParams` fields is
+//! This Blake2b-256 over the eighteen `EconomicParams` fields is
 //! **EconomicParams-scoped** and serves two roles:
 //!
 //! - the **C4 `RecordedChainFixture` lineage guard** — the committed
@@ -43,7 +43,7 @@
 //! round-trip test and the C4 fixtures (which call this same function —
 //! there is no second encoder).
 //!
-//! # Canonical byte layout (format version `0x05`)
+//! # Canonical byte layout (format version `0x06`)
 //!
 //! **`0x01` → `0x02` (Stage 3a):** the D2 escalation added
 //! `escalation_knee_n` and `escalation_asymptote_share`. They are appended, so
@@ -66,16 +66,24 @@
 //! selected the emission split and the year of its decay; a digest that
 //! omitted them would let two nodes agree on a calibration stamp while
 //! paying different staker shares. Appended, so every prior offset is
-//! unchanged. `blocks_per_year` is the schedule's year. Production fills
-//! it with [`crate::blocks_per_year`] of `daa_target_seconds`. A fold may
-//! set another length; the digest then differs.
+//! unchanged.
 //!
-//! The preimage is exactly **129 bytes** (`1` version tag + `16 × 8` u64
+//! **`0x05` → `0x06` (ESR-16 completion, ruled 2026-10-29):**
+//! `blocks_per_year` removed — it is derived from `daa_target_seconds`
+//! ([`EconomicParams::blocks_per_year`]), and a field let a set hold a year
+//! its own DAA target contradicts — and `block_weight_surge_factor`,
+//! `block_weight_limit_multiple` and `long_term_weight_clamp` appended.
+//! The three select the effective median, the limit and the long-term
+//! median, so a digest that omitted them would let two nodes agree on a
+//! calibration stamp while admitting different blocks. Offsets up to 121
+//! are unchanged.
+//!
+//! The preimage is exactly **145 bytes** (`1` version tag + `18 × 8` u64
 //! fields), hashed with `Blake2b<U32>`:
 //!
 //! | Offset | Width | Field                              | Notes               |
 //! |--------|-------|------------------------------------|---------------------|
-//! | 0      | 1     | format version tag                 | `0x05`              |
+//! | 0      | 1     | format version tag                 | `0x06`              |
 //! | 1      | 8     | `release_min`                      | u64 LE              |
 //! | 9      | 8     | `release_max`                      | u64 LE              |
 //! | 17     | 8     | `tx_volume_baseline`               | u64 LE              |
@@ -91,7 +99,9 @@
 //! | 97     | 8     | `full_reward_zone`                 | u64 LE              |
 //! | 105    | 8     | `staker_emission_share`            | u64 LE              |
 //! | 113    | 8     | `staker_emission_decay`            | u64 LE              |
-//! | 121    | 8     | `blocks_per_year`                  | u64 LE              |
+//! | 121    | 8     | `block_weight_surge_factor`        | u64 LE              |
+//! | 129    | 8     | `block_weight_limit_multiple`      | u64 LE              |
+//! | 137    | 8     | `long_term_weight_clamp`           | u64 LE              |
 //!
 //! The field order is the [`EconomicParams`] declaration order.
 //! Format `0x03` appended `full_reward_zone` and left every earlier offset
@@ -114,10 +124,10 @@ use crate::params::EconomicParams;
 /// Format-version tag prefixed to the digest preimage. Bump on any
 /// change to the field set, order, or widths in the [module
 /// docs](self) byte-layout table.
-pub const DIGEST_FORMAT_VERSION: u8 = 0x05;
+pub const DIGEST_FORMAT_VERSION: u8 = 0x06;
 
 /// Length in bytes of the canonical digest preimage (`1` version tag +
-/// `16 × 8` u64 fields = **129**). Exposed for the round-trip test's
+/// `18 × 8` u64 fields = **145**). Exposed for the round-trip test's
 /// fixed-buffer assertion.
 ///
 /// **Kept honest by `preimage_length_matches_the_documented_layout`**, which
@@ -127,7 +137,7 @@ pub const DIGEST_FORMAT_VERSION: u8 = 0x05;
 /// building a second node from a stale table computes a different digest than
 /// the running network, which is the exact failure the version tag exists to
 /// prevent.
-pub const DIGEST_PREIMAGE_LEN: usize = 1 + 16 * 8;
+pub const DIGEST_PREIMAGE_LEN: usize = 1 + 18 * 8;
 
 /// Serialize `params` to the canonical fixed-width little-endian
 /// preimage documented in the [module docs](self).
@@ -157,7 +167,9 @@ fn canonical_preimage(params: &EconomicParams) -> [u8; DIGEST_PREIMAGE_LEN] {
     put(params.full_reward_zone);
     put(params.staker_emission_share);
     put(params.staker_emission_decay);
-    put(params.blocks_per_year);
+    put(params.block_weight_surge_factor);
+    put(params.block_weight_limit_multiple);
+    put(params.long_term_weight_clamp);
     debug_assert_eq!(off, DIGEST_PREIMAGE_LEN);
     buf
 }
@@ -201,7 +213,9 @@ mod tests {
             full_reward_zone: 0xC1C2_C3C4_C5C6_C7C8,
             staker_emission_share: 0xD1D2_D3D4_D5D6_D7D8,
             staker_emission_decay: 0xE1E2_E3E4_E5E6_E7E8,
-            blocks_per_year: 0xF1F2_F3F4_F5F6_F7F8,
+            block_weight_surge_factor: 0xF1F2_F3F4_F5F6_F7F8,
+            block_weight_limit_multiple: 0x0A0B_0C0D_0E0F_1011,
+            long_term_weight_clamp: 0x1A1B_1C1D_1E1F_2021,
         };
         let buf = canonical_preimage(&p);
         assert_eq!(buf[0], DIGEST_FORMAT_VERSION);
@@ -212,6 +226,7 @@ mod tests {
         assert_eq!(&buf[73..81], &0x9192_9394_9596_9798u64.to_le_bytes());
         assert_eq!(&buf[97..105], &0xC1C2_C3C4_C5C6_C7C8u64.to_le_bytes());
         assert_eq!(&buf[121..129], &0xF1F2_F3F4_F5F6_F7F8u64.to_le_bytes());
+        assert_eq!(&buf[137..145], &0x1A1B_1C1D_1E1F_2021u64.to_le_bytes());
     }
 
     #[test]
@@ -253,8 +268,8 @@ mod tests {
     /// message names the obligation: change the layout, update the table.
     #[test]
     fn preimage_length_matches_the_documented_layout() {
-        const DOCUMENTED_FIELDS: usize = 16;
-        const DOCUMENTED_LEN: usize = 129;
+        const DOCUMENTED_FIELDS: usize = 18;
+        const DOCUMENTED_LEN: usize = 145;
 
         assert_eq!(
             DIGEST_PREIMAGE_LEN, DOCUMENTED_LEN,
@@ -269,7 +284,7 @@ mod tests {
         );
 
         // The last documented offset plus its width must land exactly on the end.
-        const LAST_FIELD_OFFSET: usize = 121; // blocks_per_year
+        const LAST_FIELD_OFFSET: usize = 137; // long_term_weight_clamp
         assert_eq!(
             LAST_FIELD_OFFSET + 8,
             DIGEST_PREIMAGE_LEN,
@@ -280,8 +295,8 @@ mod tests {
         let buf = canonical_preimage(&EconomicParams::default());
         assert_eq!(buf.len(), DOCUMENTED_LEN);
         assert_eq!(
-            buf[0], 0x05,
-            "the byte-layout table advertises 0x05; the encoder must write it"
+            buf[0], 0x06,
+            "the byte-layout table advertises 0x06; the encoder must write it"
         );
     }
 }

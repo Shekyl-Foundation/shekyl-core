@@ -3449,7 +3449,7 @@ worked byte sweep at the pinned cadence (`SETTLEMENT_EPOCH_BLOCKS = 10_000`,
 | Constant | Value |
 |----------|-------|
 | `MAX_CLAIM_AGE_W` (`W`) | **26** settlement epochs (~361 d) |
-| `RETENTION_HORIZON_BLOCKS` | **420_000** blocks (~583 d retention floor) |
+| deepest retention (`W + 1`, `EpochFloor::<Claimable>`) | **27** settlement epochs (~375 d) |
 | `ARCHIVAL_REORG_DEPTH_BLOCKS` | **720** blocks (~24 h processable reorg) |
 | `RELEASE_COOLDOWN_EPOCHS` | **2** |
 | `SLASH_GRACE_EPOCHS` | **1** (one `SEB` by construction; T-A16 margin; *was `CHALLENGE_RESOLUTION_BLOCKS = 10_000` until 2026-09-30*) |
@@ -4928,7 +4928,7 @@ the sim.
 |---|---|---|
 | epoch | 10,000 blocks × 120 s = **13.9 days** | `settlement_epoch_blocks`, `daa_target_seconds` (`config/consensus_constants.json`) |
 | shard bytes | 200 × 19.6 KB = **3.92 MB** | a 2-input, 2-output single-sig spend's good from code constants (`ARCHIVAL_SHARD_T_DERIVATION.md` §8.1: 10,778 B of authorizations + 8,128 B FCMP++ at 8 layers + ~643 B BP+ + 64 B pseudo-outs). Not the 16.7 KB/tx that sized `T = 200`, an estimate made before the domain ruling |
-| reads per (P, shard) per epoch | **3** whole-shard reads | `CHALLENGES_PER_PAIR_PER_EPOCH = 3` (`ARCHIVAL_CHALLENGE_MECHANISM.md`). Organic and band-2 serving are **excluded**: there is no authority for them (`SHT-5`), so `c` is a lower bound on that leg |
+| reads per (P, shard) per epoch | **3** whole-shard reads | `COUNTED_DRAWS = 3`, the draws the count rule issues a pair at its target (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §3, §4.3). Organic and band-2 serving are **excluded**: there is no authority for them (`SHT-5`), so `c` is a lower bound on that leg |
 | storage, floor device | $145/TB portable SSD over 36 months = **$4.03/TB-month** | [cheapestssd.com, portable SSDs by $/TB, September 2026](https://cheapestssd.com/portable-ssd/) (SanDisk Extreme 2 TB at $145/TB); rule 76's floor is a Pi 4 with attached storage |
 | storage, rented | Hetzner Storage Box €3.20 ≈ **$3.70/TB-month**, traffic included; Backblaze B2 **$6.95/TB-month** | [Hetzner Storage Box review, 2026](https://hiltonsoftware.co/tools/hetzner-storage); [Backblaze B2 pricing](https://www.backblaze.com/cloud-storage/pricing) |
 | egress | home flat-rate **$0 marginal**; AWS **$0.09/GB** (first 10 TB) | [EgressCost.com, AWS data transfer out](https://egresscost.com/aws/data-transfer-pricing/) |
