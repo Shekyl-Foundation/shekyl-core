@@ -126,10 +126,17 @@ fn an_unknown_byte_count_is_not_a_stall() {
     let mut at = back + secs(5);
     while at < back + secs(300) {
         let step = sample(&mut core, at, 14, 1_000);
-        assert!(!takes_down(&step), "inside the bound after the count returned, at {at}");
+        assert!(
+            !takes_down(&step),
+            "inside the bound after the count returned, at {at}"
+        );
         at += secs(5);
     }
     sample(&mut core, back + secs(300), 14, 1_000);
-    assert_eq!(core.status().respawn_count, 1, "a known count, flat for the bound");
+    assert_eq!(
+        core.status().respawn_count,
+        1,
+        "a known count, flat for the bound"
+    );
     assert_eq!(core.status().cause, Cause::StrandedAfterClockJump);
 }
