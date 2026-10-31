@@ -346,6 +346,22 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/bench/test_drs_bench.py
 
+      - name: Run DRS-BENCH readback selftest
+        # The durability line is parsed once, the refusal names the file
+        # the line was read from, and `--seed-daemon` is a second binary.
+        # Split from `test_drs_bench.py` so that file stays the refusals
+        # and the comparison. The synthetic artifact both files mutate
+        # lives in `drs_fixture.py`.
+        if: '!cancelled()'
+        run: python3 scripts/bench/test_drs_readback.py
+
+      - name: Run RPC column capture selftest
+        # `rpc_capture.py` writes one file per chain read and reserves the
+        # loopback port the kept-chain capture binds. The capture's own
+        # console log is where a bind failure is written.
+        if: '!cancelled()'
+        run: python3 scripts/bench/test_rpc_capture.py
+
       - name: Run benchmark comparator tests
         # `scripts/bench/compare.py` decides the per-PR benchmark gate: which
         # delta is a fail, which is a warn, and what a zero baseline means.

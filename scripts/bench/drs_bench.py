@@ -5,7 +5,7 @@
 # BSD-3-Clause
 #
 # DRS-BENCH runner: two-daemon regtest IBD, emits an artifact or refuses.
-# The gate (schema, refusals, §1.3 compare, durability readback) lives in
+# The gate (schema, refusals, §1.3 compare, redb-engine probe) lives in
 # `drs_artifact.py`. Design record: `docs/design/DAEMON_REDB_STORE.md` §7.4.
 #
 # EXIT CODES for `check`: 0 when no axis is OVER, 1 when any axis is OVER, 2 for a
@@ -20,12 +20,13 @@
 # JSON, the same job as `compare.py`. It is not a second copy of that script:
 # compare.py is iai-callgrind only, and its ids cannot name a two-daemon IBD run.
 #
-# Vehicle: the seed generates its chain offline, restarts networked over the
-# same datadir, and the subject's sync from it is what is measured. Either
-# daemon's durability line (`Database sync:` from the C++ LMDB open under the
-# DX-Q8 pin, `Store durability:` from the Rust store) labels the engine.
+# Vehicle: generateblocks is gated on check_core_ready(), which a zero-peer
+# daemon never satisfies, and the protocol handler initialises
+# m_synchronized(offline). So: generate offline, restart networked over the
+# same datadir, measure the subject syncing from it.
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -85,21 +86,18 @@ def _dir_bytes(path, apparent):
 
 
 def _resolved_sync_line(log_path, since=0):
-    """The daemon's own report of the durability it opened with, or None.
+    """The daemon's own report of the durability flags it resolved, or None.
 
-    This is the readback. Either binary's line, whichever comes first: the C++
-    daemon's `Database sync: flags=0x…` report or the Rust store's
-    `Store durability: …` line. The daemon logs it at startup for A4; neither
-    binary takes a sync-mode option (IG-Q4), so the readback is the only record
-    of the durability a run had, and which line it is names the one store the
-    binary opens. Read from `since` (a byte offset), so an appended log yields
-    this spawn's report and not an earlier run's.
+    This is the readback. The daemon logs it at startup for A4; the daemon takes
+    no sync-mode option (IG-Q4), so the readback is the only record of the
+    durability a run had. Read from `since` (a byte offset), so an appended log
+    yields this spawn's report and not an earlier run's.
     """
     try:
         with open(log_path, encoding="utf-8", errors="replace") as fh:
             fh.seek(since)
             for line in fh:
-                if any(marker in line for marker in A.READBACK_MARKERS.values()):
+                if "Database sync: flags=0x" in line or "Store durability:" in line:
                     # The daemon colourises its log. Strip the escapes: an artifact
                     # field is a record, and terminal control bytes in one make it
                     # harder to read and to diff.
@@ -107,6 +105,24 @@ def _resolved_sync_line(log_path, since=0):
     except OSError:
         return None
     return None
+
+
+def _readback_line(daemon_log, console_log, daemon_since=0, console_since=0):
+    """A spawn's readback and the file it was read from.
+
+    Returns `(line, path)`, or `(None, None)` when neither file has one.
+    The flip binary writes its `Store durability:` line through tracing to
+    `--log-file` and nothing to the console; the LMDB daemon writes `Database
+    sync:` to both. The log file is read first, so either daemon is served
+    and the refusal can name the file the line came from.
+    """
+    line = _resolved_sync_line(daemon_log, daemon_since)
+    if line is not None:
+        return line, daemon_log
+    line = _resolved_sync_line(console_log, console_since)
+    if line is not None:
+        return line, console_log
+    return None, None
 
 
 def daemon_executable(path):
@@ -119,21 +135,53 @@ def daemon_executable(path):
     return os.path.abspath(path)
 
 
-def _readback_refusal(who, log_path, line):
-    """The refusal for a spawn's durability readback, or None when it is DRS-D9.
+def binary_for(tag, daemon, seed_daemon):
+    """Which binary a spawn runs.
 
-    `who` is the spawn (`generating seed`, `subject`). Either binary's line is
-    judged by `resolved_line_refusals`. A missing line names the rebuild,
-    because a daemon predating the A4 report does not write one.
+    The seed stays the archived C++ daemon after the flip: the flip binary
+    cannot open an LMDB seed directory, and a seed it regenerated is not the
+    chain the subject is measured against. When no seed binary is named, the
+    seed and the subject are the same binary, which is this baseline.
+    """
+    if tag == "seed":
+        return seed_daemon or daemon
+    return daemon
+
+
+def _readback_refusal(who, line, found_at, daemon_log, console_log):
+    """The refusal for a spawn's resolved sync line, or None when it is DRS-D9.
+
+    `who` is the spawn (`generating seed`, `subject`). A line names the file
+    it was read from. A missing line names both files: the flip binary writes
+    the report to the log file it was given, and the console is the fallback.
     """
     reasons = A.resolved_line_refusals(line)
     if not reasons:
         return None
-    hint = ""
+    head = f"the {who}'s resolved sync report is not DRS-D9's:\n  " + "\n  ".join(reasons)
     if line is None:
-        hint = " A daemon predating the A4 report will not log it — rebuild."
-    return (f"the {who}'s durability readback is not DRS-D9's:\n  "
-            + "\n  ".join(reasons) + hint + f"\nsee {log_path}")
+        return (head + " The report is written to the log file the spawn was "
+                "given; the console is the fallback.\n"
+                f"see {daemon_log}\nsee {console_log}")
+    return head + f"\nsee {found_at}"
+
+
+# How much of a daemon binary one read takes. The size is the read, not a
+# protocol constant: a daemon is a few tens of megabytes.
+_BINARY_READ_BYTES = 1 << 20
+
+
+def binary_sha256(path):
+    """sha256 of a daemon binary, lowercase hex.
+
+    The artifact records this instead of the path. A path is a host fact
+    (rule 37); the hash is the file.
+    """
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(_BINARY_READ_BYTES), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _loadavg():
@@ -264,11 +312,7 @@ def mining_address(timeout):
 
 
 def measure(args):
-    """Run the IBD measurement on the daemon given and emit an artifact, or refuse.
-
-    The binary decides the engine: it opens one store and logs which at start,
-    and the artifact is labelled from that line. The same runner measures the
-    C++ daemon's LMDB arm and the Rust store's redb arm.
+    """Run the LMDB IBD baseline and emit an artifact, or refuse.
 
     The subject is what the artifact describes. The seed is fixture. The seed
     is reused across runs (generation dominates at the reference height); the
@@ -280,8 +324,10 @@ def measure(args):
     seed_dir = os.path.abspath(args.seed_dir or os.path.join(work, "seed"))
     os.makedirs(seed_dir, exist_ok=True)
     daemon = daemon_executable(args.daemon)
+    seed_daemon = (daemon_executable(args.seed_daemon)
+                   if args.seed_daemon else daemon)
     pre = A.measurement_preflight(daemon=daemon, work_dir=work,
-        seed_dir=seed_dir, disk_class=args.disk_class)
+        seed_dir=seed_dir, disk_class=args.disk_class, seed_daemon=seed_daemon)
     if pre:
         _fail("refusing to start:\n  " + "\n  ".join(pre))
     addr = mining_address(args.cargo_timeout)
@@ -309,8 +355,12 @@ def measure(args):
         # a listen endpoint for a connector that is off.
         net = ["--clearnet", "off"] if offline else ["--clearnet-listen",
                                                      f"127.0.0.1:{p2p}"]
-        argv = [daemon] + common + ["--data-dir", d] + net + [
-            "--rpc-admin-listen", f"127.0.0.1:{rpcp}"] + argv_extra
+        # Each spawn logs to its own file in `work`: the readback is read from
+        # it (`_readback_line`), and two daemons on one host no longer share
+        # the binary's default log file.
+        argv = [binary_for(tag, daemon, seed_daemon)] + common + ["--data-dir", d] + net + [
+            "--rpc-admin-listen", f"127.0.0.1:{rpcp}",
+            "--log-file", os.path.join(work, f"{tag}.daemon.log")] + argv_extra
         with open(os.path.join(work, f"{tag}.argv"), "a", encoding="utf-8") as fh:
             fh.write(" ".join(argv) + "\n")
         # The SUBJECT's log is truncated; the seed's is appended. That asymmetry is
@@ -321,6 +371,10 @@ def measure(args):
         # directory be read as this run's readback — `work` is not wiped between
         # runs, only the subject's data directory is.
         mode = "a" if tag == "seed" else "w"
+        if tag != "seed":
+            daemon_log = os.path.join(work, f"{tag}.daemon.log")
+            with open(daemon_log, "w", encoding="utf-8"):
+                pass
         log = open(os.path.join(work, f"{tag}.log"), mode, encoding="utf-8")
         try:
             proc = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT, cwd=d)
@@ -340,6 +394,8 @@ def measure(args):
     # the check reads only the bytes this spawn wrote.
     seed_log = os.path.join(work, "seed.log")
     seed_from = armed_lever.log_size(seed_log)
+    seed_daemon_log = os.path.join(work, "seed.daemon.log")
+    seed_daemon_from = armed_lever.log_size(seed_daemon_log)
     proc, _ = spawn("seed", seed_dir, [armed_lever.FLAG, "--mine-address", addr], offline=True)
     with running(proc, srpc) as seed:
         if not seed.ready:
@@ -348,11 +404,14 @@ def measure(args):
         if not armed_lever.announced_since(seed_log, seed_from):
             _fail(f"the generating seed did not announce {armed_lever.ANNOUNCEMENT!r} "
                   f"at start; see {work}/seed.log")
-        # The seed is the subject's binary. Its readback, taken before any block
+        # The seed may be another binary: the flip leg's seed is the archived
+        # daemon that serves the chain. Its readback, taken before any block
         # is generated, refuses a daemon without DRS-D9 before the generation
         # is spent. The subject's own line is checked again before its sync.
-        seed_line = _resolved_sync_line(seed_log, seed_from)
-        seed_refusal = _readback_refusal("generating seed", seed_log, seed_line)
+        seed_line, seed_found_at = _readback_line(
+            seed_daemon_log, seed_log, seed_daemon_from, seed_from)
+        seed_refusal = _readback_refusal(
+            "generating seed", seed_line, seed_found_at, seed_daemon_log, seed_log)
         if seed_refusal:
             _fail(seed_refusal)
         have_h = _rpc(srpc, "get_info")["result"]["height"]
@@ -397,19 +456,22 @@ def measure(args):
                       f"measurement, so raising --startup-timeout does not affect "
                       f"any number.")
             # The durability readback, from this spawn's startup line, before the
-            # sync is timed. Either binary's line; one that is not its own
-            # engine's DRS-D9 spelling (the C++ safe open at db_nosync, the Rust
-            # store's `immediate`) is not a measurement of DRS-D9.
+            # sync is timed. The line's sync_mode integer is the open; a line that
+            # is not db_nosync is not a measurement of DRS-D9.
             subject_log = os.path.join(work, "subject.log")
-            resolved_line = _resolved_sync_line(subject_log)
-            subject_refusal = _readback_refusal("subject", subject_log, resolved_line)
+            subject_daemon_log = os.path.join(work, "subject.daemon.log")
+            subject_line, subject_found_at = _readback_line(
+                subject_daemon_log, subject_log)
+            subject_refusal = _readback_refusal(
+                "subject", subject_line, subject_found_at,
+                subject_daemon_log, subject_log)
             if subject_refusal:
                 _fail(subject_refusal)
             # Denominator: first successful get_info to height == seed height.
             # CPU is a delta over the same window. A single end-of-run read
             # would carry startup / RandomX init / store open, which the wall
             # figure excludes.
-            t0, reached, peers = subj.ready_at, 0, 0
+            t0, reached, peers, tip = subj.ready_at, 0, 0, None
             rss_samples = []
             cpu_at_start = _cpu_seconds(subj.pid)
             load_at_start = _loadavg()
@@ -422,6 +484,7 @@ def measure(args):
                     time.sleep(1)
                     continue
                 reached = info["height"]
+                tip = info.get("top_block_hash")
                 peers = max(peers, info.get("outgoing_connections_count", 0))
                 rss = _peak_rss_bytes(subj.pid)
                 if rss is not None:
@@ -458,40 +521,45 @@ def measure(args):
         _fail(f"subject reached height {reached} of {seed_h} in {elapsed:.1f}s and did "
               "not converge. A partial sync is not a shorter measurement of the same "
               "thing — it is a different experiment, so no artifact is written.")
+    # The same get_info that ended the sync. Height equality is not chain
+    # equality once the seed can be an archived binary: two chains can share
+    # a height and not a tip.
+    if not A.is_hex64(tip):
+        _fail(f"subject get_info named tip {tip!r}, which is not "
+              f"{A.HASH_HEX_CHARS} lowercase hex characters. Height equality "
+              "is not chain equality, so no artifact is written.")
 
     git_rev = subprocess.run(["git", "-C", ROOT, "rev-parse", "HEAD"], check=True,
                              capture_output=True, text=True).stdout.strip()
     scenario = "ibd_coinbase_only"
-    # One backend per build; the daemon never compiles two store engines into
-    # one binary (ruled 2026-09-14). The label is read out of the durability
-    # line the subject logged at start -- the one store the binary opens -- not
-    # from a flag an operator sets. `_readback_refusal` has already held that
-    # line to DRS-D9, so it is one of the two lines the gate knows.
-    engine = A.readback_engine(resolved_line)
-    if engine is None:
-        _fail(f"the subject's readback passed DRS-D9 but names no engine: "
-              f"{resolved_line!r}")
+    # One backend per build; the daemon never compiles two store engines
+    # into one binary (ruled 2026-09-14). The label derives from the subject's
+    # own readback, the same parse the refusal above already judged, not from
+    # a flag an operator sets. The seed may be another file. The two hashes
+    # say which files ran; a path would be a host fact (rule 37).
+    readback = A.readback_of(subject_line)
+    if readback is None or readback.mode is None:
+        _fail(f"the subject's readback names no store: {subject_line!r}")
+    engine = readback.engine
+    same_binary = seed_daemon == daemon
+    subject_sha = binary_sha256(daemon)
+    seed_sha = subject_sha if same_binary else binary_sha256(seed_daemon)
     artifact = {
         "schema_version": A.SCHEMA,
         "engine": engine,
-        "engine_selected_by": A.ENGINE_READBACK,
+        "engine_selected_by": A.ENGINE_SELECTOR_OF[engine],
         "git_rev": git_rev,
         "thresholds_frozen_at": A.FROZEN_AT,
         "durability": {
-            "policy": A.DURABILITY_POLICY,
-            # OBSERVED: the durability the subject reported opening with, in its
-            # own engine's spelling (`safe` from the C++ daemon, `immediate`
-            # from the Rust store). Neither takes a sync-mode option, so there
-            # is nothing imposed to record beside it.
-            "sync_mode": A.resolved_sync_mode(resolved_line),
+            "policy": "DRS-D9 full-fsync-per-commit",
+            # OBSERVED: the mode the subject reported resolving at start. The
+            # daemon takes no sync-mode option, so there is nothing imposed to
+            # record beside it.
+            "sync_mode": readback.mode,
             "imposed_argv": subj_argv[1:],
             "observed": True,
-            "resolved_log_line": resolved_line,
-            "readback": "the subject daemon's own startup line naming the durability "
-                        "it opened with (the C++ daemon's `Database sync:` report or "
-                        "the Rust store's `Store durability:` line); the generating "
-                        "seed's line, from the same binary, is checked against DRS-D9 "
-                        "before any block is generated",
+            "resolved_log_line": subject_line,
+            "readback": A.durability_readback_note(same_binary),
         },
         "environment": {
             "loadavg_1m_at_start": load_at_start[0],
@@ -508,6 +576,9 @@ def measure(args):
         "fixture": {
             "nettype": "fakechain",
             "height_reached": int(reached),
+            "top_block_hash": tip,
+            "subject_binary_sha256": subject_sha,
+            "seed_binary_sha256": seed_sha,
             "height_requested": int(args.height),
             "reference_height": A.REFERENCE_HEIGHT,
             "tx_per_block": 0,
@@ -625,6 +696,10 @@ def main():
                    default=A.REFERENCE_HEIGHT)
     m.add_argument("--out", required=True)
     m.add_argument("--daemon", default=os.path.join(ROOT, "build/bin/shekyld"))
+    m.add_argument("--seed-daemon", default=None,
+                   help="binary that builds and serves the seed chain "
+                        "(default: --daemon). The flip leg passes the archived "
+                        "C++ daemon here and the flip binary as --daemon.")
     m.add_argument("--work-dir", required=True)
     m.add_argument("--log-level", default="info",
                    choices=["error", "warn", "info", "debug", "trace"])

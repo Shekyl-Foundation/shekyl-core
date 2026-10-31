@@ -110,9 +110,10 @@ fn install_wallet_tracing() {
 const ARMED_ROW_ANNOUNCEMENT: &str = "development lever set: dev-rpc=true";
 
 /// A live `shekyld --network regtest` daemon spawned for one test, with an ephemeral
-/// data dir and RPC port. Killed and cleaned on drop.
+/// data dir and RPC port. Killed on drop. The data dir goes with it, unless
+/// this spawn is the DX-Q8 capture (`start_keeping_data`).
 /// Last 40 lines of the daemon's captured log, inlined into panics:
-/// `RegtestDaemon::drop` removes the datadir (log included) as a panic
+/// on the deleting path `Drop` removes the datadir (log included) as a panic
 /// unwinds, so a "see the log file" pointer would name a deleted file.
 fn log_tail(log_path: &std::path::Path) -> String {
     std::fs::read_to_string(log_path)
@@ -174,6 +175,9 @@ pub(super) struct RegtestDaemon {
     /// post: a `generateblocks` sent before it is honestly refused
     /// `mine.not_synced` by a daemon whose RPC is already up.
     posts_at_open: bool,
+    /// When true, `Drop` leaves `data_dir` in place. Set only by
+    /// `start_keeping_data`. Every other spawn deletes the directory.
+    keep_data: bool,
     /// Held for the daemon's lifetime to serialize e2e tests; released on drop.
     /// `None` on the sink of a [`origin::StemSinkPair`], whose origin holds
     /// the one guard for both.
@@ -263,6 +267,11 @@ struct RegtestSpawn {
     console: bool,
     peering: Peering,
     mine_address: Option<String>,
+    /// Leave the data directory in place when the daemon is dropped.
+    /// The DX-Q8 capture asks for it per spawn; a diagnostic loop asks
+    /// for every spawn of the process with `SHEKYL_KEEP_REGTEST_DATA`
+    /// set, read once here. The default deletes.
+    keep_data: bool,
 }
 
 impl RegtestSpawn {
@@ -276,6 +285,7 @@ impl RegtestSpawn {
             console: false,
             peering: Peering::Offline,
             mine_address: None,
+            keep_data: std::env::var_os("SHEKYL_KEEP_REGTEST_DATA").is_some(),
         }
     }
 
@@ -309,6 +319,15 @@ impl RegtestSpawn {
 
     fn with_peering(mut self, peering: Peering) -> Self {
         self.peering = peering;
+        self
+    }
+
+    /// Keep the data directory when the daemon is dropped.
+    ///
+    /// [`RegtestDaemon::start_keeping_data`] is the caller. Every other
+    /// spawn deletes.
+    fn keeping_data(mut self) -> Self {
+        self.keep_data = true;
         self
     }
 }
@@ -393,6 +412,18 @@ impl RegtestDaemon {
         .await
     }
 
+    /// Spawn a daemon whose data directory survives [`Drop`].
+    ///
+    /// The DX-Q8 column (`scripts/bench/capture_kept_chain.py`) reads the
+    /// directory after the generator exits. Every other spawn still deletes
+    /// its directory, unless the process runs as a diagnostic loop with
+    /// `SHEKYL_KEEP_REGTEST_DATA` set, which keeps every spawn's. `Drop`
+    /// reads nothing from the environment.
+    pub(super) async fn start_keeping_data() -> RegtestDaemon {
+        let serial = serial_lock().lock_owned().await;
+        Self::spawn(RegtestSpawn::new(Some(serial)).keeping_data()).await
+    }
+
     /// Spawn the daemon with its interactive console live (`--console`), so
     /// a test can put commands to the **in-process** arm. Opt-in: the
     /// console is what reads stdin; without it nothing does.
@@ -455,6 +486,7 @@ impl RegtestDaemon {
             console,
             peering,
             mine_address,
+            keep_data,
         } = spec;
         install_wallet_tracing();
 
@@ -600,6 +632,7 @@ impl RegtestDaemon {
             schedule,
             offline,
             posts_at_open: offline && matches!(network, SpawnNetwork::Regtest),
+            keep_data,
             _serial: serial,
             recipe,
         };
@@ -1192,15 +1225,45 @@ impl Drop for RegtestDaemon {
     fn drop(&mut self) {
         drop(self.child.kill());
         drop(self.child.wait());
-        // The DX-Q8 RPC column needs the daemon's data directory after the
-        // generator exits. Set by that capture only; every other run still
-        // deletes the directory.
-        if std::env::var_os("SHEKYL_KEEP_REGTEST_DATA").is_some() {
+        // The flag was set at spawn: by `start_keeping_data` for the DX-Q8
+        // capture, or for every spawn of a diagnostic loop that keeps its
+        // daemons' logs (`SHEKYL_KEEP_REGTEST_DATA`, read once at spawn).
+        // Drop reads nothing from the environment.
+        if self.keep_data {
             eprintln!("keeping regtest data dir {}", self.data_dir.display());
             return;
         }
         drop(std::fs::remove_dir_all(&self.data_dir));
     }
+}
+
+/// The DX-Q8 chain generator.
+///
+/// Spawns one regtest daemon and leaves its data directory when the daemon
+/// is dropped. `scripts/bench/capture_kept_chain.py` opens that directory.
+/// The assertion is the keep: if `Drop` deleted the directory, this fails.
+/// The directory is the product; remove it when the capture is done. The
+/// path is printed as the daemon drops.
+///
+/// `get_info.height` counts the genesis block as 1. That chain is what the
+/// column's reads ask for. The generator does not mine past it.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "DX-Q8 chain generator: requires SHEKYLD_BIN; keeps the datadir"]
+async fn capture_chain_keeps_its_datadir() {
+    const GENESIS_CHAIN_HEIGHT: u64 = 1;
+    let data_dir = {
+        let daemon = RegtestDaemon::start_keeping_data().await;
+        let data_dir = daemon.data_dir.clone();
+        assert!(
+            daemon.height().await >= GENESIS_CHAIN_HEIGHT,
+            "a kept chain has a genesis block"
+        );
+        data_dir
+    };
+    assert!(
+        data_dir.is_dir(),
+        "Drop keeps the data directory the capture reads"
+    );
 }
 
 /// A fresh accept, not `AlreadyInPool` / `AlreadyInChain`. Those also return
