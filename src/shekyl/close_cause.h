@@ -55,4 +55,5 @@ _Static_assert(offsetof(shekyl_close_cause, reply_code) == 2, "close cause reply
 #define SHEKYL_CLOSE_LOCAL_CLOSE 14
 #define SHEKYL_CLOSE_INBOUND_NOT_ACCEPTED 15
 #define SHEKYL_CLOSE_PROXY_UNAVAILABLE 16
+#define SHEKYL_CLOSE_ACCEPT_RATE_EXCEEDED 17
 #endif

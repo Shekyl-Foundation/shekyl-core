@@ -60,9 +60,26 @@ pub fn connectors(config: &DaemonConfig) -> Vec<ConnectorId> {
 /// or the operator's, and each started settlement read holds a SOCKS
 /// stream (`ARCHIVAL_SETTLEMENT_WRITER.md` §16.11). Those are not peer
 /// dials either.
+///
+/// Clearnet adds its linger cap
+/// ([`shekyl_ffi::zone_ffi::clearnet_linger_descriptors`]): a refused
+/// accept is held half-closed until its first flight arrives or the
+/// handshake span passes (`P2P_TRANSPORT_LAYER.md` D10.2), each one a
+/// descriptor outside the inbound occupancy, up to that cap. It scales
+/// with the clearnet accept rates, and is zero until they are ruled.
 #[must_use]
 pub fn reserved_descriptors(config: &DaemonConfig) -> u64 {
+    reservation(config, shekyl_ffi::zone_ffi::clearnet_linger_descriptors())
+}
+
+/// [`reserved_descriptors`] with the clearnet linger cap given.
+fn reservation(config: &DaemonConfig, clearnet_linger: u64) -> u64 {
     let rpc = u64::from(config.rpc.connections_max.get());
+    let linger = if config.clearnet == Clearnet::Off {
+        0
+    } else {
+        clearnet_linger
+    };
     let probe = if matches!(config.tor, Tor::Managed { .. }) {
         PROBE_DESCRIPTORS
     } else {
@@ -77,7 +94,9 @@ pub fn reserved_descriptors(config: &DaemonConfig) -> u64 {
             u64::from(profile.target).saturating_add(bound)
         })
         .fold(
-            rpc.saturating_add(probe).saturating_add(producer),
+            rpc.saturating_add(probe)
+                .saturating_add(producer)
+                .saturating_add(linger),
             u64::saturating_add,
         )
 }
@@ -349,12 +368,19 @@ mod tests {
     /// descriptors its dials can hold, `Confirm` dials at target included.
     /// A managed Tor adds its probe's one (the probe brief, amendment 2):
     /// dropping that term, or adding it for an operator's Tor, fails this.
+    /// Clearnet adds its linger cap (D10.2).
     #[test]
     fn the_reservation_is_the_rpc_cap_plus_each_connectors_target_and_bound() {
         let held = |c: ConnectorId| {
             let profile = shekyl_ffi::dialer_ffi::dial_profile(c);
             u64::from(profile.target) + u64::try_from(profile.in_flight_bound).expect("small")
         };
+        // Clearnet's refused accepts linger half-closed, up to its cap.
+        let linger = shekyl_ffi::zone_ffi::clearnet_linger_descriptors();
+        assert!(
+            linger > 0,
+            "clearnet's accept rates are written, so it lingers"
+        );
         let both = config(&["--rpc-connections-max", "25"]);
         assert!(
             matches!(both.tor, Tor::Managed { .. }),
@@ -362,7 +388,7 @@ mod tests {
         );
         assert_eq!(
             reserved_descriptors(&both),
-            25 + held(ConnectorId::Clearnet) + held(ConnectorId::Tor) + PROBE_DESCRIPTORS,
+            25 + held(ConnectorId::Clearnet) + linger + held(ConnectorId::Tor) + PROBE_DESCRIPTORS,
             "the managed Tor's probe holds one more"
         );
         let operator = config(&[
@@ -375,7 +401,7 @@ mod tests {
         ]);
         assert_eq!(
             reserved_descriptors(&operator),
-            25 + held(ConnectorId::Clearnet) + held(ConnectorId::Tor),
+            25 + held(ConnectorId::Clearnet) + linger + held(ConnectorId::Tor),
             "an operator's Tor is not probed"
         );
         let offline = config(&[
@@ -388,6 +414,23 @@ mod tests {
         ]);
         assert_eq!(reserved_descriptors(&offline), 7);
         assert!(connectors(&offline).is_empty());
+    }
+
+    /// Clearnet's linger cap joins the reservation when clearnet is on, so
+    /// the inbound ceiling makes room for refused accepts held half-closed;
+    /// with clearnet off it adds nothing. The real cap is zero until the
+    /// clearnet rates are ruled, so the growth is shown with a given cap,
+    /// and the daemon's own figure is the reservation at the real one.
+    #[test]
+    fn the_reservation_grows_by_the_clearnet_linger_cap() {
+        let on = config(&["--rpc-connections-max", "25"]);
+        assert_eq!(reservation(&on, 37), reservation(&on, 0) + 37);
+        let off = config(&["--clearnet", "off", "--rpc-connections-max", "25"]);
+        assert_eq!(reservation(&off, 37), reservation(&off, 0));
+        assert_eq!(
+            reserved_descriptors(&on),
+            reservation(&on, shekyl_ffi::zone_ffi::clearnet_linger_descriptors())
+        );
     }
 
     /// A full mainnet address the parser accepts as `mine-address`. The

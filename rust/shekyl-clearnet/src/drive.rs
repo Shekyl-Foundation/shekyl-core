@@ -22,7 +22,7 @@ use shekyl_capped_stream::{
 };
 use shekyl_levin::{HandshakeFrame, HandshakeKind};
 use shekyl_net_address::NetworkAddress;
-use shekyl_p2p_transport::NetworkId;
+use shekyl_p2p_transport::{NetworkId, INITIATOR_FLIGHT_LEN};
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_socks::{connect as socks_connect, Destination, Proxy, ProxyWarn, SocksError};
 use shekyl_timing_engine::{Clock, Handle, OwnerClass, OwnerHandle, Tick};
@@ -36,6 +36,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::handshake::{self, Setup};
+use crate::linger::Linger;
 use crate::seam::{SeamRecv, SeamSend};
 use crate::sizes::{SizeTap, Way};
 use crate::{ChannelChoice, HandshakeTally, Session};
@@ -88,6 +89,9 @@ pub struct Dial {
 
 pub struct Accept {
     pub stream: TcpStream,
+    /// Where a refused accept is closed: half-closed until its first
+    /// flight arrives (D10.2).
+    pub linger: Linger,
     pub sockets: Sockets,
     pub ceiling: InboundCeiling,
     pub kind: ChannelChoice,
@@ -125,6 +129,13 @@ where
     C: Clock + Clone + Send + Sync + 'static,
     F: Fn() -> InboundCeiling + Send,
 {
+    let linger = Linger::spawn(
+        engine.clone(),
+        inbound
+            .sockets
+            .clearnet_linger_cap(inbound.handshake_within),
+        inbound.handshake_within,
+    );
     loop {
         let stream = match listener.accept().await {
             Ok((stream, _)) => stream,
@@ -140,6 +151,7 @@ where
         };
         let accept = Accept {
             stream,
+            linger: linger.clone(),
             sockets: inbound.sockets.clone(),
             ceiling: (inbound.ceiling)(),
             kind: inbound.kind,
@@ -160,7 +172,8 @@ where
     C: Clock + Clone + Send + 'static,
 {
     let Accept {
-        mut stream,
+        stream,
+        linger,
         sockets,
         ceiling,
         kind,
@@ -173,19 +186,20 @@ where
         admitted,
     } = accept;
     let Ok(peer) = stream.peer_addr() else {
-        finish_before_channel(&mut stream, &on_cause, CloseKind::TransportHandshakeFailed).await;
+        finish_before_channel(stream, &on_cause, CloseKind::TransportHandshakeFailed).await;
         return;
     };
     let now = engine.clock().now();
     let reserved = match sockets.accept_clearnet(peer.ip(), ceiling, now) {
         Ok(open) => open,
         Err(OpenError::Refused(cause)) => {
-            drop(stream.shutdown().await);
+            linger.close(stream).await;
             on_cause(cause);
             return;
         }
         Err(OpenError::Exhausted) => {
-            finish_before_channel(&mut stream, &on_cause, CloseKind::AdmissionRefused).await;
+            linger.close(stream).await;
+            on_cause(CloseCause::new(CloseKind::AdmissionRefused));
             return;
         }
     };
@@ -359,7 +373,7 @@ where
             return;
         }
         Err(OpenError::Exhausted) => {
-            finish_before_channel(&mut stream, &on_cause, CloseKind::LocalClose).await;
+            finish_before_channel(stream, &on_cause, CloseKind::LocalClose).await;
             return;
         }
     };
@@ -405,12 +419,40 @@ fn socket_of(address: &NetworkAddress) -> Option<(IpAddr, u16)> {
 }
 
 async fn finish_before_channel(
-    stream: &mut TcpStream,
+    stream: TcpStream,
     on_cause: &Arc<dyn Fn(CloseCause) + Send + Sync>,
     kind: CloseKind,
 ) {
-    drop(stream.shutdown().await);
+    close_before_channel(stream).await;
     on_cause(CloseCause::new(kind));
+}
+
+/// Close a connection refused at accept: FIN after zero bytes written, and
+/// never RST (D10.2's one behaviour for every failure before the channel).
+///
+/// Linux answers a close with unread bytes in the receive queue with RST,
+/// and a peer refused at accept has usually sent its first flight already.
+/// So the write side is shut first (the FIN), then what has already
+/// arrived, at most one initiator flight (D10.1), is read and dropped
+/// without waiting, and only then is the socket closed. Nothing here
+/// waits for the peer: a refused connection holds no task.
+pub(crate) async fn close_before_channel(mut stream: TcpStream) {
+    drop(stream.shutdown().await);
+    // `into_std` leaves the socket non-blocking, so each read takes only
+    // what the kernel already holds.
+    let Ok(mut socket) = stream.into_std() else {
+        return;
+    };
+    let mut flight = [0u8; INITIATOR_FLIGHT_LEN];
+    let mut left = flight.len();
+    while left > 0 {
+        match std::io::Read::read(&mut socket, &mut flight[..left]) {
+            Ok(0) => break,
+            Ok(read) => left = left.saturating_sub(read),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => break,
+        }
+    }
 }
 
 struct ChannelOpen {
@@ -863,6 +905,10 @@ pub fn zero_tally() -> HandshakeTally {
         queued: AtomicU64::new(0),
     }
 }
+
+#[cfg(test)]
+#[path = "close_tests.rs"]
+mod close_tests;
 
 #[cfg(test)]
 mod tests {

@@ -19,6 +19,7 @@ use shekyl_net_address::NetworkAddress;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_timing_engine::Tick;
 
+use crate::accept_rate::{accept_bound, AcceptGate, AcceptRefusals};
 use crate::ban::{BanLeft, BanList, Ipv4Subnet, ListedBan};
 use crate::declaration::{declaration, Assessment, BannableInbound, ConnectorId, InboundIdentity};
 use crate::dial::check_dial;
@@ -157,6 +158,10 @@ const fn admission_refused() -> OpenError {
     OpenError::Refused(CloseCause::new(CloseKind::AdmissionRefused))
 }
 
+const fn accept_rate_exceeded() -> OpenError {
+    OpenError::Refused(CloseCause::new(CloseKind::AcceptRateExceeded))
+}
+
 const fn inbound_not_accepted() -> OpenError {
     OpenError::Refused(CloseCause::new(CloseKind::InboundNotAccepted))
 }
@@ -271,16 +276,20 @@ struct Inner {
     /// An operator cap for one connector. `None` means that connector has
     /// no cap of its own. The process ceiling applies either way.
     zone_caps: [Option<u32>; ConnectorId::COUNT],
+    /// Clearnet's accept-rate bound (D10.3), or `None` when its row has no
+    /// limiter.
+    clearnet_rate: Option<AcceptGate>,
 }
 
 impl Inner {
-    fn new() -> Self {
+    fn new(clearnet_rate: Option<AcceptGate>) -> Self {
         Self {
             next_id: 1,
             occupancy: Occupancy::new(),
             live: HashMap::new(),
             bans: BanList::new(),
             zone_caps: [None; ConnectorId::COUNT],
+            clearnet_rate,
         }
     }
 
@@ -340,12 +349,42 @@ pub struct Sockets {
 }
 
 impl Sockets {
-    /// An empty table.
+    /// An empty table. Clearnet accepts pass the gate its row in
+    /// [`accept_bound`] describes.
     #[must_use]
     pub fn new() -> Self {
+        Self::with_clearnet_gate(AcceptGate::for_bound(accept_bound(ConnectorId::Clearnet)))
+    }
+
+    /// An empty table whose clearnet accepts pass `gate`, or no gate, in
+    /// place of the connector's row: for harnesses and tests that exercise
+    /// the mechanism with rates the table does not hold. The daemon's table
+    /// is [`Self::new`].
+    #[must_use]
+    pub fn with_clearnet_gate(gate: Option<AcceptGate>) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(Inner::new())),
+            inner: Arc::new(Mutex::new(Inner::new(gate))),
         }
+    }
+
+    /// Clearnet accepts the rate bound refused since the last call.
+    pub fn take_accept_rate_refusals(&self) -> AcceptRefusals {
+        self.lock()
+            .clearnet_rate
+            .as_mut()
+            .map(AcceptGate::take_refusals)
+            .unwrap_or_default()
+    }
+
+    /// How many refused clearnet accepts may linger half-closed at once
+    /// for `span` (D10.2): what the accept-rate gate's connector bucket
+    /// admits in that time ([`AcceptGate::linger_cap`]). Zero with no gate.
+    #[must_use]
+    pub fn clearnet_linger_cap(&self, span: Tick) -> usize {
+        self.lock()
+            .clearnet_rate
+            .as_ref()
+            .map_or(0, |gate| gate.linger_cap(span))
     }
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
@@ -373,7 +412,11 @@ impl Sockets {
     /// other connector's inbound row are one sum. A banned address, and a
     /// positive ceiling or connector cap that is full, are
     /// [`CloseKind::AdmissionRefused`]. A ceiling or connector cap of zero
-    /// is [`CloseKind::InboundNotAccepted`]. Either refusal reserves nothing.
+    /// is [`CloseKind::InboundNotAccepted`]. An accept the connector's or
+    /// the host's rate bucket cannot pay for is
+    /// [`CloseKind::AcceptRateExceeded`] (D10.3); it is decided after the
+    /// ban and the ceilings, so a connection those refuse spends no token.
+    /// Every refusal reserves nothing.
     pub fn accept_clearnet(
         &self,
         ip: IpAddr,
@@ -390,6 +433,11 @@ impl Sockets {
             return Err(admission_refused());
         }
         refuse_inbound(&inner, ConnectorId::Clearnet, ceiling)?;
+        if let Some(gate) = inner.clearnet_rate.as_mut() {
+            if !gate.admit(ip, now) {
+                return Err(accept_rate_exceeded());
+            }
+        }
         self.mint(
             &mut inner,
             ConnectorId::Clearnet,
