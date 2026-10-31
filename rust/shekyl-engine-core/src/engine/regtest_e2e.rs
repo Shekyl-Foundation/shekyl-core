@@ -35,7 +35,7 @@
 
 #![cfg(test)]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
@@ -154,8 +154,8 @@ impl RegtestSchedule {
 pub(super) struct RegtestDaemon {
     child: Child,
     data_dir: PathBuf,
-    /// The private directory under the account's home that holds this
-    /// daemon's empty configuration file. Removed with the daemon.
+    /// The private directory that holds this daemon's empty configuration
+    /// file (`private_config_dir`). Removed with the daemon.
     config_dir: PathBuf,
     rpc_port: u16,
     rpc: HttpRpc,
@@ -335,17 +335,25 @@ impl RegtestSpawn {
 }
 
 /// A directory only this account can enter, holding one daemon's empty
-/// configuration file: `~/.shekyl-regtest/<rpc port>/shekyld.toml`, mode
-/// 0700 on the directories and 0600 on the file. The daemon's rule refuses
-/// a configuration file with a group- or world-writable directory anywhere
-/// above it, which rules out `TMPDIR` and a checkout built under a group
-/// umask; the account's home is the one place the account owns the whole
-/// way up. The parent stays; each daemon's directory goes with it.
+/// configuration file, `<base>/.shekyl-regtest/<rpc port>/shekyld.toml`:
+/// mode 0700 on the directories and 0600 on the file. The daemon refuses a
+/// configuration file with a directory above it that another account could
+/// write (owned by neither root nor the daemon's account, or with a group or
+/// other write bit), which rules out `TMPDIR` and a checkout built under a
+/// group umask, and in a CI container the home directory too (owned by a
+/// different uid). The base is the first candidate whose every directory
+/// passes that same rule, from [`config_base`]; the parent stays, and each
+/// daemon's directory goes with it.
 fn private_config_dir(rpc_port: u16) -> PathBuf {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .expect("HOME names the account's home directory");
-    let parent = home.join(".shekyl-regtest");
+    let parent = config_base()
+        .unwrap_or_else(|tried| {
+            panic!(
+                "no directory this account owns the whole way up for the daemon's empty \
+                 configuration file (the daemon refuses one with a writable directory \
+                 above it outside root and its own account); tried {tried:?}"
+            )
+        })
+        .join(".shekyl-regtest");
     let dir = parent.join(rpc_port.to_string());
     drop(std::fs::remove_dir_all(&dir));
     let mut builder = std::fs::DirBuilder::new();
@@ -371,6 +379,55 @@ fn private_config_dir(rpc_port: u16) -> PathBuf {
             .expect("create the empty config file"),
     );
     dir
+}
+
+/// The first candidate base directory whose every directory, itself and up
+/// to the root, is owned by root or by this account and carries no group or
+/// other write bit: the daemon's rule for a configuration file's place. The
+/// candidates, in order: the account's runtime directory (`XDG_RUNTIME_DIR`,
+/// 0700 by contract), its home, and `/run` (writable by root alone, which is
+/// what a CI container runs as). `Err` lists what was tried.
+fn config_base() -> Result<PathBuf, Vec<PathBuf>> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let me = std::fs::metadata("/proc/self")
+            .map(|m| m.uid())
+            .expect("this process's uid");
+        let candidates: Vec<PathBuf> = [
+            std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from),
+            std::env::var_os("HOME").map(PathBuf::from),
+            Some(PathBuf::from("/run")),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        let owned_the_whole_way_up = |base: &Path| {
+            base.ancestors().all(|dir| {
+                std::fs::metadata(dir)
+                    .map(|m| (m.uid() == 0 || m.uid() == me) && m.mode() & 0o022 == 0)
+                    .unwrap_or(false)
+            })
+        };
+        let writable_by_me = |base: &Path| {
+            let probe = base.join(format!(".shekyl-regtest-probe-{}", std::process::id()));
+            let ok = std::fs::create_dir(&probe).is_ok();
+            drop(std::fs::remove_dir(&probe));
+            ok
+        };
+        for base in &candidates {
+            if base.is_dir() && owned_the_whole_way_up(base) && writable_by_me(base) {
+                return Ok(base.clone());
+            }
+        }
+        Err(candidates)
+    }
+    #[cfg(not(unix))]
+    {
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .ok_or_else(Vec::new)
+    }
 }
 
 impl RegtestDaemon {
@@ -560,7 +617,7 @@ impl RegtestDaemon {
         // directory above it, so the file cannot sit under the data
         // directory (`TMPDIR` is world-writable) nor in the checkout (a
         // group umask makes it group-writable); it sits in a private
-        // directory under the account's home.
+        // directory under a base this account owns the whole way up.
         let config_dir = private_config_dir(rpc_port);
         let config_file = config_dir.join("shekyld.toml");
 

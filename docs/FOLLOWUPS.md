@@ -11,6 +11,9 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 ## Pre-genesis
 
+- **`config-file` has no spelling for "no configuration file", so a test daemon must be handed an empty file in a directory its account owns the whole way up.** The daemon reads `/etc/shekyl/shekyld-<network>.toml` by default, and a fleet host's own testnet file turned a harness spawn red; the harness now names an empty file, but the file's rule (no writable directory above it outside root and the daemon's account) rules out `TMPDIR`, a checkout under a group umask and a CI container's home, so the harness hunts for a base (`XDG_RUNTIME_DIR`, the home, `/run`). A grammar row that means "the defaults and nothing else" would end the hunt; the grammar's no-negation rule decides its spelling.
+  - Owner: the daemon-config lane — [`INPUT_GRAMMAR.md`](design/INPUT_GRAMMAR.md) §5 (`config-file`), from shekyl-core #1212's harness
+  - Target: pre-genesis
 - **A submit's latency is the pool file's fsync latency, and every admission forces a filesystem-wide journal commit the chain store's commits queue behind (SPL-Q4's reopening evidence, not yet the BENCH result the clause names).** Seen on the flip's measurement host: one submit held 30 s in `pool.db`'s `fdatasync` at `jbd2_log_wait_commit`; green submits 375–1,070 ms per sync beside a resident daemon, 145 ms without. Batching admissions into one commit per short window would keep D9's per-commit fsync and bound the coupling; the SPL-13 measurement decides.
   - Owner: the pool lane — [`DRS_E1_SPOOL.md`](design/DRS_E1_SPOOL.md) §9 SPL-Q4 and §11 (2026-10-31)
   - Target: pre-genesis
