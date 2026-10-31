@@ -11,6 +11,8 @@
 //! classification — is testable with deterministic mocks (§10 item 2)
 //! before the FFI shims exist.
 
+use std::time::{Duration, Instant};
+
 use shekyl_rpc_types::{RejectCause, SubmitVerdict};
 use shekyl_types::{BlockHeight, ChainCount};
 
@@ -21,6 +23,71 @@ use crate::submit::fee::fee_clears;
 use crate::submit::phase_a::{parse_submission, ParsedSubmission, SubmitTxKind};
 use crate::submit::verifier::verify_debit_slot_possession;
 use crate::submit::verify::TxVerifier;
+
+/// Where a submit spent its time: each phase's end, measured from the
+/// request's arrival at the engine. The one `info` line per answer carries
+/// it, so a slow accept is on the operator's record as a refusal already
+/// is. A phase the submit never reached is absent.
+struct SubmitClock {
+    started: Instant,
+    /// Phase A's end: the bytes parsed and, for a release bond-post, the
+    /// possession pre-gate passed.
+    admitted: Option<Duration>,
+    /// Phase B's end: the fact snapshot taken.
+    snapshotted: Option<Duration>,
+    /// Phase C's end: the policy arithmetic and the crypto battery passed.
+    verified: Option<Duration>,
+    /// Phase D's end: the check-and-commit answered.
+    committed: Option<Duration>,
+}
+
+impl SubmitClock {
+    fn start() -> Self {
+        Self {
+            started: Instant::now(),
+            admitted: None,
+            snapshotted: None,
+            verified: None,
+            committed: None,
+        }
+    }
+
+    fn elapsed(&self) -> Duration {
+        self.started.elapsed()
+    }
+}
+
+impl core::fmt::Display for SubmitClock {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut sep = "";
+        for (name, end) in [
+            ("a", self.admitted),
+            ("b", self.snapshotted),
+            ("c", self.verified),
+            ("d", self.committed),
+        ] {
+            if let Some(end) = end {
+                write!(f, "{sep}{name}={}ms", end.as_millis())?;
+                sep = " ";
+            }
+        }
+        if sep.is_empty() {
+            f.write_str("none")
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// The verdict's kind for the log line: never its row or height.
+fn verdict_name(verdict: &SubmitVerdict) -> &'static str {
+    match verdict {
+        SubmitVerdict::Accepted => "accepted",
+        SubmitVerdict::AlreadyInPool => "already-in-pool",
+        SubmitVerdict::AlreadyInChain { .. } => "already-in-chain",
+        SubmitVerdict::Rejected { .. } => "rejected",
+    }
+}
 
 /// An internal fault — **never a verdict** (§3.4 / §4.2). The transport
 /// layer surfaces it as a transport-level error (the client's `Err` arm),
@@ -160,6 +227,35 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
     /// transport-level internal-fault arm (HTTP 5xx at the RPC layer, the
     /// client's `Err`), never a verdict.
     pub fn submit(&self, tx_hex: &str, caller: SubmitCaller) -> Result<SubmitVerdict, EngineFault> {
+        let mut clock = SubmitClock::start();
+        let answer = self.submit_phased(tx_hex, caller, &mut clock);
+        let total_ms = clock.started.elapsed().as_millis();
+        match &answer {
+            Ok(verdict) => tracing::info!(
+                verdict = verdict_name(verdict),
+                bytes = tx_hex.len() / 2,
+                total_ms,
+                phases = %clock,
+                "submit answered"
+            ),
+            Err(fault) => tracing::warn!(
+                %fault,
+                bytes = tx_hex.len() / 2,
+                total_ms,
+                phases = %clock,
+                "submit faulted"
+            ),
+        }
+        answer
+    }
+
+    /// The phases, A to D, with the clock marked at each one's end.
+    fn submit_phased(
+        &self,
+        tx_hex: &str,
+        caller: SubmitCaller,
+        clock: &mut SubmitClock,
+    ) -> Result<SubmitVerdict, EngineFault> {
         // ── Phase A: Rust-native admission, no FFI (§3.1) ──────────────
         let parsed = match parse_submission(tx_hex) {
             Ok(parsed) => parsed,
@@ -199,6 +295,8 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
             }
         }
 
+        clock.admitted = Some(clock.elapsed());
+
         // ── Phase B: POD fact snapshot (shim 1, one short lock) ────────
         // A bond-post additionally asks an archival-bond question, keyed on
         // the vin's claimed p_canonical_id (BP2 pins the claim to the pubkey
@@ -223,6 +321,8 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
                 emission_probe.as_ref().map(|(id, epochs)| (id, *epochs)),
             )
             .map_err(|_| EngineFault::SnapshotFault)?;
+
+        clock.snapshotted = Some(clock.elapsed());
 
         // Early return on identity only -- with one exception above it, the
         // debit arm's possession pre-gate, which refuses BEFORE this point
@@ -269,15 +369,18 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
             Err(cause) => return Ok(SubmitVerdict::Rejected { cause, row: None }),
         };
 
+        clock.verified = Some(clock.elapsed());
+
         // ── Phase D: check-and-commit (shim 2, one short lock) ─────────
         let meta = TxMeta {
             weight: parsed.weight,
             fee: parsed.fee,
         };
-        match self
+        let outcome = self
             .shim
-            .commit(&parsed.blob, &parsed.txid, &meta, &cert, &facts)
-        {
+            .commit(&parsed.blob, &parsed.txid, &meta, &cert, &facts);
+        clock.committed = Some(clock.elapsed());
+        match outcome {
             CommitOutcome::Committed => {
                 // Post-commit relay nudge (shim 3, §4.3): latency only —
                 // the D++ embargo + periodic loop are the guarantee.
@@ -628,5 +731,43 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
             });
         }
         None
+    }
+}
+
+#[cfg(test)]
+mod clock_tests {
+    use super::*;
+
+    #[test]
+    fn a_clock_with_no_phase_reached_reads_none() {
+        assert_eq!(SubmitClock::start().to_string(), "none");
+    }
+
+    #[test]
+    fn marked_phases_read_in_order_with_their_milliseconds() {
+        let mut clock = SubmitClock::start();
+        clock.admitted = Some(Duration::from_millis(3));
+        clock.verified = Some(Duration::from_millis(1_250));
+        assert_eq!(clock.to_string(), "a=3ms c=1250ms");
+    }
+
+    #[test]
+    fn a_verdict_is_named_by_kind_alone() {
+        assert_eq!(verdict_name(&SubmitVerdict::Accepted), "accepted");
+        assert_eq!(
+            verdict_name(&SubmitVerdict::AlreadyInPool),
+            "already-in-pool"
+        );
+        assert_eq!(
+            verdict_name(&SubmitVerdict::AlreadyInChain { height: 7 }),
+            "already-in-chain"
+        );
+        assert_eq!(
+            verdict_name(&SubmitVerdict::Rejected {
+                cause: RejectCause::FeeTooLow,
+                row: Some("row".to_owned()),
+            }),
+            "rejected"
+        );
     }
 }
