@@ -166,6 +166,22 @@ pub enum DefinedCommand {
 }
 
 impl DefinedCommand {
+    /// Every arm, in declaration order. [`Self::wire_id`] and
+    /// [`Self::from_wire`] match the same set, so a new command is a new
+    /// arm in all three.
+    pub const ALL: [Self; 10] = [
+        Self::Handshake,
+        Self::TimedSync,
+        Self::NewTransactions,
+        Self::RequestGetObjects,
+        Self::ResponseGetObjects,
+        Self::RequestChain,
+        Self::ResponseChainEntry,
+        Self::NewCompactBlock,
+        Self::RequestCompactMissingTx,
+        Self::GetTxpoolComplement,
+    ];
+
     /// Wire id this arm speaks.
     #[must_use]
     pub const fn wire_id(self) -> u32 {
@@ -248,24 +264,11 @@ pub fn ingress_payload_cap(command: u32, flags: Flags) -> Result<u64, Error> {
 mod tests {
     use super::*;
 
-    const ALL_DEFINED: &[DefinedCommand] = &[
-        DefinedCommand::Handshake,
-        DefinedCommand::TimedSync,
-        DefinedCommand::NewTransactions,
-        DefinedCommand::RequestGetObjects,
-        DefinedCommand::ResponseGetObjects,
-        DefinedCommand::RequestChain,
-        DefinedCommand::ResponseChainEntry,
-        DefinedCommand::NewCompactBlock,
-        DefinedCommand::RequestCompactMissingTx,
-        DefinedCommand::GetTxpoolComplement,
-    ];
-
     #[test]
     fn defined_set_has_ten_arms() {
         // 10 live commands: ping gone (PWD-B10), support flags gone
         // (2026-10-19), 2001 gone (PWD-B6).
-        assert_eq!(ALL_DEFINED.len(), 10);
+        assert_eq!(DefinedCommand::ALL.len(), 10);
         assert!(DefinedCommand::from_wire(1003).is_none());
         assert!(DefinedCommand::from_wire(1007).is_none());
         assert!(DefinedCommand::from_wire(2001).is_none());
@@ -282,8 +285,8 @@ mod tests {
 
     #[test]
     fn from_wire_roundtrips_every_arm() {
-        for cmd in ALL_DEFINED {
-            assert_eq!(DefinedCommand::from_wire(cmd.wire_id()), Some(*cmd));
+        for cmd in DefinedCommand::ALL {
+            assert_eq!(DefinedCommand::from_wire(cmd.wire_id()), Some(cmd));
             assert!(cmd.payload_cap() > 0);
         }
     }
