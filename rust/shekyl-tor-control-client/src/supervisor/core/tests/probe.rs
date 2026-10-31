@@ -14,7 +14,9 @@
 use std::time::Duration;
 
 use super::super::super::posture::{render, Cause, Inbound, InboundCause, Shown};
-use super::super::{duration_ns, Action, Core, Input, RoundEnd, Step};
+use super::super::{
+    duration_ns, Action, Core, Input, Policy, Recheck, RoundEnd, Step, DESCRIPTOR_LIFETIME,
+};
 use super::{announces, bring_up, managed, policy, reach_usable, socks, takes_down};
 
 fn secs(seconds: u64) -> u64 {
@@ -671,4 +673,250 @@ fn a_round_open_for_five_minutes_is_counted_once_and_never_a_cause() {
     );
     core.on(Input::UploadRoundStarted, secs(402));
     assert_eq!(core.status().stuck_upload_rounds, 1);
+}
+
+// The overdue upload and the clock jump (§4.5, "Overdue"; Rick, 2026-10-31).
+
+/// The policy's descriptor lifetime: three hours.
+fn lifetime() -> u64 {
+    secs(3 * 60 * 60)
+}
+
+fn rechecks(step: &Step) -> Vec<Recheck> {
+    step.actions
+        .iter()
+        .filter_map(|action| match action {
+            Action::Recheck(why) => Some(*why),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Run every deadline up to `at`, answering each liveness sample, and keep
+/// each recheck asked on the way with its time. A deadline that does not
+/// move after it is served fails here, rather than looping.
+fn rechecks_to(core: &mut Core, at: u64) -> Vec<(u64, Recheck)> {
+    let mut asked = Vec::new();
+    let mut served = None;
+    while let Some(due) = core.deadline().filter(|due| *due <= at) {
+        assert_ne!(served, Some(due), "the deadline at {due} did not move");
+        served = Some(due);
+        let step = core.on_deadline(due);
+        if step.actions.contains(&Action::Sample) {
+            core.on(
+                Input::DirectorySample {
+                    progress: Some(100),
+                    socks: None,
+                    read: None,
+                },
+                due,
+            );
+        }
+        asked.extend(rechecks(&step).into_iter().map(|why| (due, why)));
+    }
+    asked
+}
+
+/// A published core whose round began at `round_at`, with its first upload
+/// then and its probe arrived. Returns the core and the first upload, from
+/// which the next lifetime counts.
+fn reached(round_at: u64) -> (Core, u64) {
+    let mut core = published();
+    core.on(Input::UploadRoundStarted, round_at);
+    core.on(Input::FirstUploaded { draw: 0 }, round_at);
+    core.on(uploaded(0), round_at + secs(5));
+    let (probe_at, step) = run_timed(&mut core, round_at + secs(20));
+    assert_eq!(probes(&step), 1, "the round's probe");
+    core.on(
+        Input::ProbeDialed {
+            minted_at: probe_at,
+        },
+        probe_at,
+    );
+    let arrived = probe_at + secs(5);
+    core.on(arrival(probe_at, arrived), arrived);
+    assert!(matches!(core.status().inbound, Inbound::Reachable { .. }));
+    (core, round_at)
+}
+
+/// The recheck's delay is drawn and its probe runs at the delay's floor.
+/// Returns the probe's time.
+fn probe_after_recheck(core: &mut Core, why: Recheck, asked_at: u64) -> u64 {
+    core.on(Input::RecheckDrawn { why, draw: 0 }, asked_at);
+    let (probe_at, step) = run_timed(core, asked_at + secs(15));
+    assert_eq!(
+        probes(&step),
+        1,
+        "one probe, a jittered delay after the ask"
+    );
+    assert_eq!(probe_at, asked_at + secs(15), "at least the delay's floor");
+    probe_at
+}
+
+/// Tor's `HS_DESC_DEFAULT_LIFETIME` at the pinned tor 0.4.9.14
+/// (`src/feature/hs/hs_descriptor.h:30`) is 3 hours, and the daemon's policy
+/// uses it. A re-pin that changes it fails here until the policy follows
+/// (`RELEASE_CHECKLIST.md`, "Bundled Tor pin current").
+#[test]
+fn the_descriptor_lifetime_is_tors_three_hours() {
+    assert_eq!(DESCRIPTOR_LIFETIME, Duration::from_secs(3 * 60 * 60));
+    assert_eq!(
+        Policy::provisional(Duration::from_secs(1)).descriptor_lifetime,
+        DESCRIPTOR_LIFETIME
+    );
+}
+
+/// No round begins within the descriptor's lifetime of the last round's
+/// first upload (the round's probe arriving does not move it): one recheck
+/// at the lifetime, one probe a jittered delay later, and none again before
+/// the next lifetime, counted from that probe's arrival.
+#[test]
+fn an_overdue_upload_gives_one_probe() {
+    let (mut core, anchor) = reached(0);
+    assert_eq!(
+        rechecks_to(&mut core, anchor + lifetime() + secs(1)),
+        [(anchor + lifetime(), Recheck::UploadOverdue)]
+    );
+    let probe_at = probe_after_recheck(&mut core, Recheck::UploadOverdue, anchor + lifetime());
+    core.on(
+        Input::ProbeDialed {
+            minted_at: probe_at,
+        },
+        probe_at,
+    );
+    let arrived = probe_at + secs(5);
+    core.on(arrival(probe_at, arrived), arrived);
+    assert_eq!(
+        rechecks_to(&mut core, arrived + lifetime() - secs(1)),
+        [],
+        "the next lifetime counts from the arrival"
+    );
+    assert_eq!(
+        rechecks_to(&mut core, arrived + lifetime()),
+        [(arrived + lifetime(), Recheck::UploadOverdue)]
+    );
+}
+
+/// A round that begins just inside the lifetime is not overdue, while it is
+/// open.
+#[test]
+fn a_round_just_inside_the_lifetime_gives_no_probe() {
+    let (mut core, anchor) = reached(0);
+    assert_eq!(rechecks_to(&mut core, anchor + lifetime() - secs(1)), []);
+    core.on(Input::UploadRoundStarted, anchor + lifetime() - secs(1));
+    assert_eq!(
+        rechecks_to(&mut core, anchor + lifetime() + secs(120)),
+        [],
+        "an open round is the upload"
+    );
+}
+
+/// A round that ends with no upload leaves the old anchor standing:
+/// nothing shows a fresh descriptor, so the check is due at once.
+#[test]
+fn a_round_that_ends_with_no_upload_leaves_the_upload_overdue() {
+    let (mut core, anchor) = reached(0);
+    let started = anchor + lifetime() - secs(60);
+    assert_eq!(rechecks_to(&mut core, started), []);
+    core.on(Input::UploadRoundStarted, started);
+    let ended = anchor + lifetime() + secs(60);
+    assert_eq!(rechecks_to(&mut core, ended), []);
+    core.on(
+        Input::UploadRoundEnded {
+            end: RoundEnd::Unknown,
+            draw: 0,
+        },
+        ended,
+    );
+    assert!(
+        core.deadline().is_some_and(|due| due <= ended),
+        "due at once"
+    );
+    let step = core.on_deadline(ended);
+    assert_eq!(rechecks(&step), [Recheck::UploadOverdue]);
+    assert_eq!(
+        rechecks_to(&mut core, ended + lifetime() - secs(1)),
+        [],
+        "the next lifetime counts from the check"
+    );
+}
+
+/// `CLOCK_JUMPED` while Running asks one probe, a jittered delay later; with
+/// a probe already in flight it asks none. During a bootstrap it asks none.
+#[test]
+fn a_clock_jump_gives_one_probe_or_none_with_one_in_flight() {
+    let (mut core, uploaded_at) = reached(0);
+    let jumped = uploaded_at + secs(600);
+    let step = core.on(Input::ClockJumped, jumped);
+    assert!(step.actions.contains(&Action::Sample), "re-evaluate now");
+    assert_eq!(rechecks(&step), [Recheck::ClockJumped]);
+    let probe_at = probe_after_recheck(&mut core, Recheck::ClockJumped, jumped);
+    core.on(
+        Input::ProbeDialed {
+            minted_at: probe_at,
+        },
+        probe_at,
+    );
+    let again = core.on(Input::ClockJumped, probe_at + secs(1));
+    assert_eq!(rechecks(&again), [], "the probe in flight answers it");
+
+    let (mut booting, _) = Core::start(policy(), managed(true), 0);
+    booting.on(Input::PinAccepted, 0);
+    booting.on(Input::Spawned, 0);
+    let during = booting.on(Input::ClockJumped, secs(1));
+    assert_eq!(
+        rechecks(&during),
+        [],
+        "no onion to probe while bootstrapping"
+    );
+}
+
+/// The overdue probe takes the existing miss path: a miss refetches, the
+/// probe after the refetch misses too, and the onion is published again.
+#[test]
+fn an_overdue_probe_that_misses_twice_republishes() {
+    let (mut core, anchor) = reached(0);
+    assert_eq!(
+        rechecks_to(&mut core, anchor + lifetime()),
+        [(anchor + lifetime(), Recheck::UploadOverdue)]
+    );
+    let probe_at = probe_after_recheck(&mut core, Recheck::UploadOverdue, anchor + lifetime());
+    core.on(
+        Input::ProbeDialed {
+            minted_at: probe_at,
+        },
+        probe_at,
+    );
+    let (_, verdict) = misses_twice(&mut core, probe_at);
+    assert_eq!(republishes(&verdict), 1);
+    assert!(matches!(
+        core.status().inbound,
+        Inbound::Unreachable {
+            cause: InboundCause::ProbeTimedOut,
+            ..
+        }
+    ));
+}
+
+/// A jump's probe arriving shows a descriptor is live, not how old it is:
+/// the overdue check still counts from the last upload, so it is not held
+/// past the descriptor's expiry.
+#[test]
+fn a_jump_probe_arriving_does_not_move_the_lifetime() {
+    let (mut core, uploaded_at) = reached(0);
+    let jumped = uploaded_at + secs(3600);
+    core.on(Input::ClockJumped, jumped);
+    let probe_at = probe_after_recheck(&mut core, Recheck::ClockJumped, jumped);
+    core.on(
+        Input::ProbeDialed {
+            minted_at: probe_at,
+        },
+        probe_at,
+    );
+    core.on(arrival(probe_at, probe_at + secs(5)), probe_at + secs(5));
+    assert!(matches!(core.status().inbound, Inbound::Reachable { .. }));
+    assert_eq!(
+        rechecks_to(&mut core, uploaded_at + lifetime()),
+        [(uploaded_at + lifetime(), Recheck::UploadOverdue)]
+    );
 }

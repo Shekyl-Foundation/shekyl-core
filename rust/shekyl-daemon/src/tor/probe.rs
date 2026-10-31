@@ -18,7 +18,7 @@
 use shekyl_ffi::dialer_ffi::ProbeHandshake;
 use shekyl_timing_engine::Tick;
 use shekyl_tor_control_client::control::{Command, TorEvent, UploadRounds};
-use shekyl_tor_control_client::supervisor::{round_inputs, Inbound, InboundCause, Input};
+use shekyl_tor_control_client::supervisor::{round_inputs, Inbound, InboundCause, Input, Recheck};
 use shekyl_tor_control_daemon::{probe_own_onion, ProbeDial};
 use tokio::task::JoinHandle;
 
@@ -188,6 +188,25 @@ impl Drive {
         if shekyl_ffi::zone_ffi::publish_tor_inbound(incarnation, facet) {
             tracing::info!(target: "tor", "this node's onion: {facet:?}");
         }
+    }
+}
+
+/// A probe outside a round (§4.5): say why, and draw its delay from the
+/// CSPRNG, as a round's probe does.
+pub(super) fn recheck(why: Recheck) -> Input {
+    match why {
+        Recheck::UploadOverdue => tracing::info!(
+            target: "tor",
+            "no descriptor upload began within the descriptor's lifetime; probing this node's onion"
+        ),
+        Recheck::ClockJumped => tracing::info!(
+            target: "tor",
+            "Tor reported a clock jump; probing this node's onion"
+        ),
+    }
+    Input::RecheckDrawn {
+        why,
+        draw: shekyl_ffi::tor_link::probe_delay_draw(),
     }
 }
 
