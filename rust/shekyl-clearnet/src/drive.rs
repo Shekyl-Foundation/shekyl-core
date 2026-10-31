@@ -440,11 +440,23 @@ pub(crate) async fn close_before_channel(mut stream: TcpStream) {
     drop(stream.shutdown().await);
     // `into_std` leaves the socket non-blocking, so each read takes only
     // what the kernel already holds.
-    let Ok(mut socket) = stream.into_std() else {
+    let Ok(socket) = stream.into_std() else {
         return;
     };
+    drain_initiator_flight(socket, INITIATOR_FLIGHT_LEN);
+}
+
+/// Drop up to `left` bytes the kernel already holds, without waiting.
+///
+/// The socket is non-blocking (`TcpStream::into_std` extracts the fd and
+/// does not clear that flag). A read therefore takes only what has
+/// arrived. Bytes still unread when the socket is dropped are what Linux
+/// answers with RST (D10.2), so both closes that must end in FIN — a
+/// refusal that does not linger, and a linger that has finished — drain
+/// here before the drop.
+pub(crate) fn drain_initiator_flight(mut socket: std::net::TcpStream, left: usize) {
     let mut flight = [0u8; INITIATOR_FLIGHT_LEN];
-    let mut left = flight.len();
+    let mut left = left.min(flight.len());
     while left > 0 {
         match std::io::Read::read(&mut socket, &mut flight[..left]) {
             Ok(0) => break,

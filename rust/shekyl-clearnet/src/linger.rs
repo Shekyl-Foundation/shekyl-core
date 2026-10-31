@@ -35,7 +35,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
-use crate::drive::close_before_channel;
+use crate::drive::{close_before_channel, drain_initiator_flight};
 
 /// The way into an accept loop's linger task. Clones share the task and
 /// the count.
@@ -204,22 +204,14 @@ fn read_flight(lingering: &mut Lingering, cx: &mut Context<'_>) -> bool {
     }
 }
 
-/// Drop what is left unread, without waiting, then close. The reads go to
-/// the kernel directly: tokio's `try_read` answers from its cached
-/// readiness and could leave bytes queued, which the close would answer
-/// with RST.
+/// Drop what is left unread, without waiting, then close.
+///
+/// The reads go to the kernel directly ([`drain_initiator_flight`]):
+/// tokio's `try_read` answers from its cached readiness and could leave
+/// bytes queued, which the close would answer with RST.
 fn finish(lingering: Lingering, held: &AtomicUsize) {
-    if let Ok(mut socket) = lingering.socket.into_std() {
-        let mut flight = [0u8; INITIATOR_FLIGHT_LEN];
-        let mut left = lingering.left;
-        while left > 0 {
-            match std::io::Read::read(&mut socket, &mut flight[..left]) {
-                Ok(0) => break,
-                Ok(read) => left = left.saturating_sub(read),
-                Err(error) if error.kind() == ErrorKind::Interrupted => {}
-                Err(_) => break,
-            }
-        }
+    if let Ok(socket) = lingering.socket.into_std() {
+        drain_initiator_flight(socket, lingering.left);
     }
     held.fetch_sub(1, Ordering::AcqRel);
 }
