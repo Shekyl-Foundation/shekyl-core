@@ -20,7 +20,7 @@
 //! no tag → the empty blob), reads each distinct pass `p_id`'s bond hybrid
 //! pubkey, fills the SF-D8 anchor window from the connecting chain for the
 //! block's predecessor, and hands all of it to
-//! `shekyl_archival_verify_attestation`, whose body is
+//! the attestation verify (the C++ FFI entry went with `DEL-008`), whose body is
 //! [`AttestationSet`] — parse, root, then
 //! countersignatures.
 //!

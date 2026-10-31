@@ -365,7 +365,7 @@ pub fn parse_submission(tx_hex: &str) -> Result<ParsedSubmission, PhaseAReject> 
 
     // Emission statics (§8.7.2). E1: the opaque vin must decode and
     // validate under the canonical `emission_wire` codec — the same reader
-    // the C++ oracle reaches through `shekyl_archival_retention`'s emission-vin parse (its FFI export `shekyl_archival_emission_vin_extract` is deleted, `DEL-008`)
+    // the deleted C++ oracle reached through `shekyl_archival_retention`'s emission-vin parse (`DEL-008`)
     // — parsed once here and carried on the submission. EV3: the loud
     // reward vout sum must be non-zero (wire validate() already pinned it
     // overflow-free).

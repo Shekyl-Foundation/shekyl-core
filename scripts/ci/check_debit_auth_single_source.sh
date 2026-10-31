@@ -11,7 +11,7 @@
 # host holds, and which would therefore turn a host compromise into a
 # collateral drain. The pin is `shekyl-archival-retention::debit_auth_pin`;
 # the SELECTOR is `requires_cold_authority`; consensus reaches both through
-# `cold_authority_pin` / `shekyl_archival_cold_authority_pin`.
+# `cold_authority_pin` (the C++ FFI entry went with `DEL-008`).
 #
 #   Release          always            (UB3 before UB9, §8.7.1.1)
 #   JoinMarket       never             (the credit that COMMITS the cold key)
@@ -167,7 +167,7 @@ if [ -n "$hits" ]; then
   echo "FAIL: a C++ statement compares an auth key against a stored bond_spend_pk."
   echo "      The debit-auth predicate has one implementation"
   echo "      (shekyl-archival-retention::cold_authority_pin); call"
-  echo "      shekyl_archival_cold_authority_pin instead of re-deriving it."
+  echo "      it instead of re-deriving it."
   printf '%s\n' "$hits"
   fail=1
 fi

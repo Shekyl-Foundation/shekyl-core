@@ -27,7 +27,7 @@
 //! because consensus forbids it `pqc_auths` (CEN-H20) and its hybrid
 //! countersignature is over the pass record, by the bond's registered key,
 //! with the Ed25519 leg on the vin and the ML-DSA leg in the pruned record
-//! (the serve-credit verifier in `shekyl-archival-retention` (its FFI export `shekyl_archival_verify_serve_credit_vin` is deleted, `DEL-008`), CEN-J10). Its zero entry here
+//! (the serve-credit verifier, CEN-J10, pending in `shekyl-chain-rules`). Its zero entry here
 //! is that boundary recorded, and it is why CEN-I18 is vacuous on the form.
 //!
 //! **Why a fixture and not a live comparison.** The payload was assembled in

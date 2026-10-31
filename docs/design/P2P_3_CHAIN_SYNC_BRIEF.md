@@ -1400,7 +1400,7 @@ handler.
 | 5 | Its tests | `:53-74` |
 | 6 | C++ caller, in `update_sync_search` | `.inl:1747` |
 | 7 | C++ caller, in `needs_new_sync_connections` | `.inl:2553` |
-| 8 | Declarations | `src/shekyl/shekyl_ffi.h:3445-3451` |
+| 8 | Declarations | `src/shekyl/shekyl_ffi.h:3163-3169` |
 | 9 | Module | `rust/shekyl-ffi/src/lib.rs:184` |
 | 10 | FFI signature gate's registration | `scripts/ci/check_ffi_signatures.sh:87-88` |
 | 11 | `sync_connector_of` | 1c #9 |

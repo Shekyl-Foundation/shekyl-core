@@ -59,9 +59,7 @@ include!(concat!(
 /// Generated from `config/consensus_constants.json`
 /// (`max_settlement_epochs_per_emission`) by this crate's `build.rs`, which
 /// refuses a value outside the wire's `1..=15`. Structural, not swept (ESR-16
-/// completion, ruling 3). The C++ header's `SHEKYL_EMISSION_MAX_SETTLEMENT_EPOCHS`,
-/// which sizes the C++ callers' epoch buffers, is held to it by a `shekyl-ffi`
-/// test.
+/// completion, ruling 3).
 pub const MAX_SETTLEMENT_EPOCHS_PER_EMISSION: usize = GENERATED_MAX_SETTLEMENT_EPOCHS_PER_EMISSION;
 
 /// Structural DoS cap on the opaque `FcmpMembershipOnly` proof blob.
@@ -132,7 +130,7 @@ pub struct WorkEpochClaim {
 /// membership-only proof opens the proven leaf's commitment to it in-circuit
 /// (`PL-D3`, `FCMP_SPEND_LINKABILITY.md` §6.2) — so the key `auth_backing` is
 /// verified under (`emission_verify::emission_vin_verify_auth`, step 8 of the
-/// coarse `shekyl_emission_vin_verify` FFI call) is the proven leaf's key, not
+/// emission verify; its coarse FFI crossing went with `DEL-008`) is the proven leaf's key, not
 /// merely *a* key. The former `pqc_pk_hash` field (the leaf hash carried on
 /// the wire and checked by a hash gate) was removed with `PL-D3`: the leaf
 /// value is no longer a public function of the key, and the opening proof is

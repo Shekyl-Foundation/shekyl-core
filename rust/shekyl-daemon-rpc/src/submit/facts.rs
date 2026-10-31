@@ -445,7 +445,7 @@ pub struct EmissionBondFacts {
 }
 
 /// E7: one frozen as-of-`E` gather snapshot
-/// (`ShekylArchivalEmissionEpochSnapshot`'s owned twin; the verifier
+/// (the owned twin of the FFI's emission-epoch snapshot, deleted with the archival C++ path, `DEL-008`; the verifier
 /// borrows these into `EpochCloseInputs::verify_view`, the single-sourced
 /// view constructor the C++ oracle's FFI shim also uses).
 #[derive(Debug, Clone, PartialEq, Eq)]

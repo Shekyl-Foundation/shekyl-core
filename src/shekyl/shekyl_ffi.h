@@ -579,7 +579,8 @@ uint8_t shekyl_fcmp_verify(
 /// Verify a membership-only FCMP++ proof (reward-emission backing; NO key image).
 /// Mirror of shekyl_fcmp_verify without the key-image array. Anti-replay for this
 /// path is the emission per-epoch dedup, not a key image; the hybrid leaf-gated
-/// auth check is step 8 inside the coarse shekyl_emission_vin_verify call.
+/// auth check ran as step 8 of the C++ emission verify that `DEL-008` deleted; the
+/// Rust rule is `shekyl_chain_rules::rules::tx_emission`.
 /// po_count must equal pqc_hash_count.
 /// po_count must be in 1..=MAX_INPUTS (= 8); 0 or larger is rejected up front.
 /// Returns 0 on success, else the VerifyError discriminant:
@@ -1713,11 +1714,6 @@ int32_t shekyl_daemon_console_run(
 // Archival serve-credit verification (ARCHIVAL_RETENTION_GATE2.md §5.3)
 // ---------------------------------------------------------------------------
 
-// ABI pins, mirrored by `const _: () = assert!(...)` in
-// rust/shekyl-ffi/src/archival_ffi/codes.rs. See the note on
-// `prev_block_hash` above for why a mid-struct addition does NOT fail cleanly
-// and why offsets are pinned rather than only the size.
-
 #define SHEKYL_ARCHIVAL_VERIFY_OK                    0
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_NULL_PTR        1
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_WIRE              2
@@ -1746,19 +1742,6 @@ uint8_t shekyl_archival_serve_credit_extract(
     uint8_t* out_p_canonical_id,
     uint64_t* out_shard_id,
     uint64_t* out_settlement_epoch);
-
-// ---------------------------------------------------------------------------
-// Credit-wire attestation admission verify (CW-3, ARCHIVAL_CREDIT_WIRE.md §3-§4)
-// ---------------------------------------------------------------------------
-// The recompute-and-compare + countersignature verify that replaces the interim
-// check_attestation_root. ALL logic is in Rust (shekyl_archival_verify_attestation):
-// C++ reads LMDB by keys step-1 names, fills the ctx with raw bytes, and obeys the
-// verdict — it parses nothing and decides nothing. Codes mirror archival_ffi.rs
-// (hand-maintained header, rule 25); the Rust side pins each to its literal
-// (attestation_verify_tests::verdict_codes_are_pinned). Only OK == 0 is
-// consensus-relevant (C++ accepts iff OK, rejects on any non-OK); the rest are the
-// distinct MERROR_VER diagnostics that split marshaling drift from forgery.
-
 
 // Bond-post CT balance (ARCHIVAL_BOND_GATE4.md §3.2)
 #define SHEKYL_ARCHIVAL_BOND_CT_BALANCE_OK                    0
@@ -1843,214 +1826,8 @@ uint8_t shekyl_check_commitment_masks(
     size_t num_masks,
     const uint64_t* amounts_ptr);
 
-// JoinMarket bond-post semantic verify (gate-4 §3.5; hybrid pubkey + P_id hint stay C++).
-// Codes 1 (NULL_PTR), 19 (LEN_OVERFLOW), and 23 (BOND_SPEND_PK_COUPLING) are shared
-// vin-marshaling guards from the common vin marshaler, so BOTH bond-post entry points
-// can return them: JoinMarket returns 0-10, 19, or 23; Release additionally returns
-// 11-18 and 20-22.
-#define SHEKYL_ARCHIVAL_BOND_POST_OK                           0
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR                 1
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND                2
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_SHARD_SET_EMPTY           3
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_COMPLETE_TREE_WITH_SHARDS 4
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_DEBIT_NONZERO        5
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_BOTH_TERMS                6
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_FLOOR_ZERO                7
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_FLOOR_MISMATCH            8
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_EXISTS             9
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND            10
 
-
-// Release bond-post semantic verify (gate-4 §3.5 debit path; PHASE_2B_FSM_RETOOL.md
-// P2B-8). Extends the shared SHEKYL_ARCHIVAL_BOND_POST_* error space above: 11-18,
-// 20, 21, and 22 are Release-semantic; 19 (LEN_OVERFLOW) and 23
-// (BOND_SPEND_PK_COUPLING) are shared vin-marshaling guards returned by both
-// entry points (see the JoinMarket block above).
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_RELEASE    11
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_MISSING          12
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_NOTHING_TO_RELEASE       13
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_RELEASE_CREDIT           14
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_RELEASE_FLOOR_MISMATCH   15
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_FULL_RELEASE         16
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_NOT_FULL          17
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_COOLDOWN_NOT_ELAPSED    18
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_LEN_OVERFLOW            19
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_RELEASE_HOLDINGS_NOT_EMPTY 20
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_INTERVAL_LOG_FULL       21
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_SLASH_SETTLEMENT_PENDING 22
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING  23
-
-// HoldingsUpdate bond-post semantics (gate-4 §4.4; PHASE_2B_FSM_RETOOL.md P2B-7,
-// grace-tail DROP). Extends the shared SHEKYL_ARCHIVAL_BOND_POST_* space: 24-30
-// are the ADD (credit) arm, 31-35 the DROP (grace-tail debit) arm; the shared
-// vin-marshaling guards (19 LEN_OVERFLOW, 23 BOND_SPEND_PK_COUPLING) and the
-// HOLDINGS_KIND guard (10) apply to both entry points as above.
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_HOLDINGS_UPDATE 24
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ON_COMPLETE_TREE     25
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_POST_NOT_COMPACT     26
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ADD_TERMS            27
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_GOOD_STANDING    28
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_SINGLE_ADD       29
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ADD_FLOOR_MISMATCH   30
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_TERMS           31
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_SINGLE_DROP      32
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_LAST_SHARD      33
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_FLOOR_MISMATCH  34
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_WITHIN_HORIZON  35
-// The record is not Bonded (zero collateral / no held shards) — P2B-7 Pin 1:
-// HoldingsUpdate is Bonded→Bonded; an Exited or slash-emptied record re-enters
-// via JoinMarket/Reinstate, never a voluntary adjustment. Shared by both HU arms.
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_RECORD_NOT_BONDED    36
-
-// Reinstate bond-post semantics (gate-4 §3.4; P2B-9 reinstatement pins). Extends
-// the shared SHEKYL_ARCHIVAL_BOND_POST_* space: 37-44 are Reinstate-semantic; the
-// shared marshaling guards (10 HOLDINGS_KIND, 19 LEN_OVERFLOW, 23
-// BOND_SPEND_PK_COUPLING) and the reused RECORD_MISSING (12) /
-// SHARD_SET_EMPTY (2) apply as above.
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_REINSTATE    37
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_ON_COMPLETE_TREE 38
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_POST_NOT_COMPACT 39
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_NOT_SLASHED      40
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_MULTIPLE_OPEN    41
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_LOG_HEADROOM     42
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_TERMS            43
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_HOLDINGS_CHANGED 44
-// RETIRED — never returned. Code 45 was the Reinstate verify-level oversize belt,
-// removed with the Rust ShardSet newtype (an oversize post is now
-// unrepresentable in the vin's holdings). The symbol stays DEFINED and reserved
-// (rather than renumbering 46/47/48) so the Rust<->C++ code contract is explicit
-// and a stray/legacy 45 maps to a meaningful message, not "unknown".
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_POST_OVERSIZE_RETIRED 45
-// Record bonded_total != bond_floor(record holdings) — floor-drifted record,
-// rejected at verify so the tx never rides to the connect fold's FATAL belt.
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_RECORD_FLOOR     46
-// Shared vin marshal (every bond-post verify entry): the vin's holdings shard
-// count exceeds the wire codec bound (MAX_HOLDINGS_SHARDS) — the FFI marshal
-// routes through ShardSet::new, a second decoder for the same wire object.
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_COUNT_EXCEEDED 47
-// Shared vin marshal: the vin's holdings carry a duplicate shard id (rejected
-// at the same ShardSet::new boundary as the count cap — "a set on the wire").
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_DUPLICATE_SHARD 48
-
-
-// Cold-authority gate. Rust owns both halves:
-//   selector  requires_cold_authority — Release always; HoldingsUpdate iff
-//             bond_debit > 0; JoinMarket / Reinstate never
-//   pin       presented pqc_auths key vs the record's COMMITTED bond_spend_pk
-// C++ marshals and logs. A record committing no canonical-length key
-// authorizes NOTHING -- fail closed, no identity-key fallback. Code 51 is
-// the cross-check (gate invoked for a post the selector excludes):
-// INTERNAL_FAILURE, never the sender's form.
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_NO_RECORD_KEY 49
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_KEY_MISMATCH  50
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_COLD_AUTHORITY_POST 51
-
-// Shared vin marshal: the EU-D3 serving-endpoint coupling (32 bytes on
-// JoinMarket, none on any other kind) — the sibling of
-// BOND_SPEND_PK_COUPLING.
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_ENDPOINT_COUPLING       52
-
-
-// Segment-freeze count (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §5.1).
-// The C++ hooks that called this are deleted. The export stays until
-// DEL-008 deletes the Rust count with it. C++ does not divide by
-// SHEKYL_ARCHIVAL_SEGMENT_LEAF_COUNT.
-
-
-// ---------------------------------------------------------------------------
-// Archival epoch-close consensus computation (ARCHIVAL_CONSENSUS_STATE.md §3.3,
-// §3.5). The daemon gathers raw LMDB rows and delegates the entire consensus
-// computation — membership, R_market counting, age weighting, scarcity, curve,
-// Σwork — to Rust in one coarse call (40-ffi-discipline.mdc). C++ performs no
-// consensus arithmetic.
-
-// Same-epoch slash-coalescing decision (P2B-9 Pin 5). The decision AND the
-// interval shape live Rust-side; the C++ slash writer appends exactly what
-// the call returns, deciding nothing.
-#define SHEKYL_ARCHIVAL_SLASH_INTERVAL_COALESCE    0
-#define SHEKYL_ARCHIVAL_SLASH_INTERVAL_APPEND      1
-#define SHEKYL_ARCHIVAL_SLASH_INTERVAL_ERR_MARSHAL 2
-
-// Sliding-window m-of-n failure confirmation
-// (docs/completed/ARCHIVAL_FAILURE_CONFIRMATION_PIN.md §1). A single missed
-// baseline is NOT a slashable failure: the slash fires only when m misses fall
-// within the last n baseline OBSERVATIONS for a (P_id, shard). The gather (LMDB
-// reads) is C++; the decision, the parameters, and the window contract are Rust.
-#define SHEKYL_ARCHIVAL_FAILURE_WINDOW_ABSORB      0
-#define SHEKYL_ARCHIVAL_FAILURE_WINDOW_SLASH       1
-#define SHEKYL_ARCHIVAL_FAILURE_WINDOW_ERR_MARSHAL 2
-
-/* `epoch` inserted into the claimed set (stale entries pruned in place). */
-#define SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_INSERTED        0
-/* `epoch` already claimed — hard error on the connect path (WS-2 §6.2). */
-#define SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ALREADY_CLAIMED 1
-/* `epoch >= current_settled_epoch`: not yet settled. */
-#define SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ERR_NOT_SETTLED 2
-/* `epoch` below the claim window (`MAX_CLAIM_AGE_W`). */
-#define SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ERR_EXPIRED     3
-/* Null pointer, capacity overflow, or non-strictly-increasing set. */
-#define SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ERR_INVALID     4
-
-#define SHEKYL_ARCHIVAL_EPOCH_CLOSE_OK                0
-#define SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_NULL_PTR      1
-#define SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_LEN_OVERFLOW  2
-#define SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_INDEX_RANGE   3
-
-/* ---------------------------------------------------------------------------
- * C-1 emission-vin verify FFI (REWARD_EMISSION_E3_GATING_ROUND.md §9.5 items
- * 3–5; REWARD_EMISSION_VIN_PLAN.md §7.1). Two entries: a pre-parse extractor
- * for operand gathering, and the coarse verify call running the full §7.1
- * body (claims 1–5, membership-only backing 6, hybrid auth gate 8) in one
- * FFI crossing. Step 7 (FCMP balance over fee txin_to_keys) stays with the
- * existing C++ tx layer.
- * ------------------------------------------------------------------------ */
-
-/* Verdict: the emission vin verified end-to-end. */
-#define SHEKYL_EMISSION_VIN_OK                        0
-/* Required pointer was null (or an output buffer too small). */
-#define SHEKYL_EMISSION_VIN_ERR_NULL_PTR              1
-/* Canonical bytes failed the wire parse or structural re-validate. */
-#define SHEKYL_EMISSION_VIN_ERR_WIRE                  2
-/* Caller marshaling inconsistent (snapshot misalignment, malformed gather,
- * claimant index out of range) — a daemon bug surfaced loudly, never a
- * claimant-attributable rejection. */
-#define SHEKYL_EMISSION_VIN_ERR_MARSHAL               3
-/* Step 1: claimed epoch not finalized at the carrying height. */
-#define SHEKYL_EMISSION_VIN_ERR_EPOCH_NOT_FINALIZED   4
-/* Step 1: claimed epoch below the claim window (MAX_CLAIM_AGE_W). */
-#define SHEKYL_EMISSION_VIN_ERR_EPOCH_EXPIRED         5
-/* Step 2: no bond record for the claimant. */
-#define SHEKYL_EMISSION_VIN_ERR_BOND_MISSING          6
-/* Step 2: vin holdings descriptor does not match the bond record. */
-#define SHEKYL_EMISSION_VIN_ERR_HOLDINGS_MISMATCH     7
-/* Step 2: claimed epoch precedes the join epoch's claimable range. */
-#define SHEKYL_EMISSION_VIN_ERR_EPOCH_BEFORE_JOIN     8
-/* Step 3 (WS-2 read-only layer): epoch already in the claimed set. */
-#define SHEKYL_EMISSION_VIN_ERR_ALREADY_CLAIMED       9
-/* Step 4: work claim contradicts the frozen as-of-E recompute. */
-#define SHEKYL_EMISSION_VIN_ERR_WORK_MISMATCH         10
-/* Step 5 (R1.B zero-tolerance): reward differs from the recompute. */
-#define SHEKYL_EMISSION_VIN_ERR_REWARD_MISMATCH       11
-/* Step 5 (loud inflation check): Σ rewards != reward vout sum. */
-#define SHEKYL_EMISSION_VIN_ERR_VOUT_SUM_MISMATCH     12
-/* Retired (PL-D3, 2026-09-14): never emitted. The leaf hash left the vin and
-   the binding is the membership-only proof's in-circuit opening; a wrong key
-   now rejects as BACKING_REJECTED. Number reserved, never reused. */
-#define SHEKYL_EMISSION_VIN_ERR_BACKING_LEAF          13
-/* Step 6: membership-only proof rejected. */
-#define SHEKYL_EMISSION_VIN_ERR_BACKING_REJECTED      14
-/* Step 8: auth pubkey/signature failed hybrid deserialization. */
-#define SHEKYL_EMISSION_VIN_ERR_AUTH_MALFORMED        15
-/* Step 8: hybrid auth signature rejected over its Q1 binding message. */
-#define SHEKYL_EMISSION_VIN_ERR_AUTH_REJECTED         16
-/// PWD-B7: drop verdict for a shekyl_emission_vin_verify error code.
-uint8_t shekyl_emission_vin_drop_verdict(uint8_t code);
-
-/* Upper bound on settlement_epochs per emission vin — mirrors the Rust wire
- * pin MAX_SETTLEMENT_EPOCHS_PER_EMISSION (emission_wire.rs; the parse rejects
- * longer sets), sizing the extract/verify epoch output buffers. */
-#define SHEKYL_EMISSION_MAX_SETTLEMENT_EPOCHS         15
-
+// Overflow-checked amount sum, called by `tests/unit_tests/archival_emission_ct_balance.cpp`.
 /// Overflow-checked sum of plaintext output amounts (rule 20: amount
 /// arithmetic on untrusted tx data lives behind the FFI). Writes the sum to
 /// *out_sum; returns 0 on success, 1 on u64 overflow or invalid args (the
@@ -2060,65 +1837,6 @@ uint8_t shekyl_checked_sum_amounts(
     const uint64_t* amounts_ptr,
     size_t len,
     uint64_t* out_sum);
-
-/// Block-level intra-block cross-tx (P, E) uniqueness verdict (E3 gating
-/// round §6.2 layer 2; decision-placement pin §9.5 item 6 — C++ marshals the
-/// block's claim pairs, Rust decides). `pairs_ptr` is a flattened array of
-/// `num_pairs` 40-byte entries: p_canonical_id[32] || epoch[8] (LE; any
-/// consistent injective encoding preserves the verdict), one entry per
-/// (P, E_i) of every emission vin in the block, in block order. Returns 1
-/// when every pair is distinct, 0 on any duplicate or on a null pointer
-/// with num_pairs > 0 (fail closed).
-uint8_t shekyl_emission_block_claims_unique(
-    const uint8_t* pairs_ptr,
-    size_t num_pairs);
-
-/// The full §7.1 emission verify body in one coarse crossing. Operands:
-/// - vin bytes: the opaque blob, tag included (C++ never parses inside it).
-/// - Bond record: the claimant's PRE-BLOCK ArchivalBondValue fields keyed by
-///   the extract call's P_canonical_id; `bond_present == 0` marshals "no
-///   record" (reject; remaining bond arguments are then ignored).
-/// - snapshots: one frozen as-of-E snapshot per claimed epoch in claim
-///   order (gather_archival_emission_epoch_snapshot), each carrying the
-///   persisted Σwork(E) and budget(E) close rows.
-/// - tree_root (32 bytes) / tree_depth: the reference block's curve-tree
-///   root context; signable_tx_hash (32 bytes): the emission tx's signable
-///   hash.
-/// - reward_commits: the ordered reward vout commit set as flattened
-///   72-byte entries (commitment[32] ‖ amount_plain LE u64[8] ‖
-///   one_time_key[32]) — the R1.A destination binding; reward_commits_len
-///   is the ENTRY count.
-/// - vout_reward_sum: Σ reward vout amount_plain (step 5's loud compare).
-///
-/// On SHEKYL_EMISSION_VIN_OK, `*out_total_reward` is the verified Σ reward
-/// (the connect arm's mint amount) and `out_epochs_ptr[0..*out_epochs_len]`
-/// the epochs to commit via shekyl_archival_claimed_epochs_check_and_set, in
-/// wire order (`epochs_cap >= 15` suffices). Outputs are zeroed on entry; a
-/// non-zero return never leaves stale values.
-uint8_t shekyl_emission_vin_verify(
-    const uint8_t* vin_ptr,
-    size_t vin_len,
-    uint64_t current_block_height,
-    uint64_t vout_reward_sum,
-    uint8_t bond_present,
-    uint64_t bond_join_settlement_epoch,
-    uint8_t bond_holdings_kind,
-    const uint64_t* bond_shard_ids_ptr,
-    size_t bond_shard_ids_len,
-    const uint64_t* claimed_epochs_ptr,
-    size_t claimed_epochs_len,
-    const struct shekyl_archival_emission_epoch_snapshot* snapshots_ptr,
-    size_t snapshots_len,
-    const uint8_t* tree_root,
-    uint8_t tree_depth,
-    const uint8_t* signable_tx_hash,
-    const uint8_t* reward_commits_ptr,
-    size_t reward_commits_len,
-    uint64_t* out_total_reward,
-    uint64_t* out_epochs_ptr,
-    size_t epochs_cap,
-    size_t* out_epochs_len);
-
 // ---------------------------------------------------------------------------
 // LWMA-1 difficulty-adjustment FFI surface
 //

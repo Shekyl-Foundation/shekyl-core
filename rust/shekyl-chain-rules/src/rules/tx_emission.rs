@@ -12,7 +12,7 @@
 //! with the emission vin removed (CEN-J22), and the **reward commit set** is
 //! the loud vouts in vout order with their checked sum (CEN-J24). The two
 //! definition rows yield the operands of the verify crossing — CEN-J25,
-//! `shekyl_emission_vin_verify(…, signable_tx_hash, commits, count, …)` —
+//! the C++'s one verify crossing (deleted by `DEL-008`) —
 //! which is row 9's and reads them from here ([`J22::signable_hash`],
 //! [`J24::reward_commits`]), so the pool, the block and the verify cannot
 //! disagree on what the auths signed over.
@@ -66,7 +66,7 @@ pub(crate) fn the_emission<'tx>(cx: &TxContext<'tx>) -> Option<(usize, &'tx [u8]
 
 /// CEN-J19: the emission vin's opaque bytes parse as an
 /// [`ArchivalRewardEmissionVin`] **and are consumed exactly** — the FFI
-/// extractor's parse (`shekyl_archival_emission_vin_extract`:
+/// extractor's parse (the C++ extract FFI, deleted by `DEL-008`:
 /// `ArchivalRewardEmissionVin::read` and an empty remainder). The census
 /// row's "claimed epochs, ≥ 1" is the codec's: `read` refuses an epoch
 /// count outside `1..=MAX_SETTLEMENT_EPOCHS_PER_EMISSION`, so the C++'s
@@ -109,7 +109,7 @@ impl TxRule for J19 {
 /// the vin's `P_canonical_id` — [`p_canonical_id_from_hybrid_pubkey`] over
 /// the slot's key equals it over the vin's `p_pubkey`, the id being the
 /// comparable because the vin's key stays inside the opaque blob (the C++:
-/// `shekyl_archival_p_canonical_id_from_pubkey(emission_auth.hybrid_public_key)
+/// `p_canonical_id_from_hybrid_pubkey(emission_auth.hybrid_public_key)
 /// == p_canonical_id`). The tx-wide hybrid signature over that slot
 /// (CEN-I17/I18) is then **P's**: the claim is signed by the persona whose
 /// record it draws on, the bond post's key-equality pin (CEN-J13) with the
