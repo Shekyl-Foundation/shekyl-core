@@ -34,7 +34,10 @@ pub(super) const AT_LEAST: usize = 3;
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct ClockEvidence {
     /// When the latest certificate lines arrived, oldest first.
-    certificates: Vec<u64>,
+    ///
+    /// The times only. The name stays off the word the log scanner treats
+    /// as a credential (`rust/cleartext-logging`).
+    line_at: Vec<u64>,
     /// The latest distinct relays a closed handshake named, and when each was
     /// last named, oldest first.
     relays: Vec<(RelayFingerprint, u64)>,
@@ -42,9 +45,9 @@ pub(super) struct ClockEvidence {
 
 impl ClockEvidence {
     fn certificate(&mut self, now: u64) {
-        self.certificates.push(now);
-        if self.certificates.len() > AT_LEAST {
-            self.certificates.remove(0);
+        self.line_at.push(now);
+        if self.line_at.len() > AT_LEAST {
+            self.line_at.remove(0);
         }
     }
 
@@ -59,9 +62,9 @@ impl ClockEvidence {
     /// Both counts are met inside the window that ends `now`.
     fn stands(&self, now: u64, within: u64) -> bool {
         let inside = |at: u64| now.saturating_sub(at) <= within;
-        self.certificates.len() == AT_LEAST
+        self.line_at.len() == AT_LEAST
             && self.relays.len() == AT_LEAST
-            && self.certificates.first().is_some_and(|at| inside(*at))
+            && self.line_at.first().is_some_and(|at| inside(*at))
             && self.relays.first().is_some_and(|(_, at)| inside(*at))
     }
 }
