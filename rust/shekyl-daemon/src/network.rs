@@ -368,12 +368,19 @@ mod tests {
     /// descriptors its dials can hold, `Confirm` dials at target included.
     /// A managed Tor adds its probe's one (the probe brief, amendment 2):
     /// dropping that term, or adding it for an operator's Tor, fails this.
+    /// Clearnet adds its linger cap (D10.2).
     #[test]
     fn the_reservation_is_the_rpc_cap_plus_each_connectors_target_and_bound() {
         let held = |c: ConnectorId| {
             let profile = shekyl_ffi::dialer_ffi::dial_profile(c);
             u64::from(profile.target) + u64::try_from(profile.in_flight_bound).expect("small")
         };
+        // Clearnet's refused accepts linger half-closed, up to its cap.
+        let linger = shekyl_ffi::zone_ffi::clearnet_linger_descriptors();
+        assert!(
+            linger > 0,
+            "clearnet's accept rates are written, so it lingers"
+        );
         let both = config(&["--rpc-connections-max", "25"]);
         assert!(
             matches!(both.tor, Tor::Managed { .. }),
@@ -381,7 +388,7 @@ mod tests {
         );
         assert_eq!(
             reserved_descriptors(&both),
-            25 + held(ConnectorId::Clearnet) + held(ConnectorId::Tor) + PROBE_DESCRIPTORS,
+            25 + held(ConnectorId::Clearnet) + linger + held(ConnectorId::Tor) + PROBE_DESCRIPTORS,
             "the managed Tor's probe holds one more"
         );
         let operator = config(&[
@@ -394,7 +401,7 @@ mod tests {
         ]);
         assert_eq!(
             reserved_descriptors(&operator),
-            25 + held(ConnectorId::Clearnet) + held(ConnectorId::Tor),
+            25 + held(ConnectorId::Clearnet) + linger + held(ConnectorId::Tor),
             "an operator's Tor is not probed"
         );
         let offline = config(&[

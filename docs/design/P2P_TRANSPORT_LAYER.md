@@ -1022,7 +1022,7 @@ open design.
 | --- | --- | --- | --- | --- |
 | Operator link budget | The operator's link is metered, shared, or small | Wire bytes, per direction, for the whole node, across every connector. Once the flip lands, the count includes Noise overhead | Transport layer | Backpressure against a budget refilled from the engine's clock. Connections share it. Unlimited unless the operator sets one |
 | What a peer can make us do | A peer inside a session | Work, per connection, charged on every dispatch before the payload is decoded | Session layer | PWD-B1. Its refill, capacity, initial fill, per-command cost, and exhaustion action stay owed in that section. This row does not settle them. PWD-B3 is the per-command size cap, which is a different bound |
-| Who can reach us | Anyone who can open a TCP connection or a Tor rendezvous | Connections, and the cryptographic work before a session exists | Transport layer | The accept-rate bound before cryptography, the admission ceiling, pre-channel deadlines, and Tor proof-of-work (D4, D10). The ceiling, the deadlines and the proof-of-work are built. The accept-rate bound's mechanism is built; its clearnet rates wait on the step 7 ruling (D10.3) |
+| Who can reach us | Anyone who can open a TCP connection or a Tor rendezvous | Connections, and the cryptographic work before a session exists | Transport layer | The accept-rate bound before cryptography, the admission ceiling, pre-channel deadlines, and Tor proof-of-work (D4, D10). The ceiling, the deadlines and the proof-of-work are built. The accept-rate bound is built, with clearnet's rates written as Assumptions until the step 7 flood measurement re-derives them (D10.3) |
 | What goes first when the link is full | Saturation, under a budget or at the link's own limit | Message class | The session layer names the class. The transport writer schedules it | The writer takes a class on each send. New blocks and relay go ahead of bulk such as historical sync replies, and relay-lane conformance holds under saturation. The class list, who assigns a class, and the order among classes are the open design |
 
 **The operator's budget is the carried duty.** `--limit-rate-up`,
@@ -1600,8 +1600,8 @@ Pi-4 C5 run, 2026-09-26, the floor device (aarch64, 4 cores), about 90 seconds:
 [`p2p_c5_pi4_20260926T005507Z.txt`](../benchmarks/p2p_c5_pi4_20260926T005507Z.txt).
 Initiator 928 µs, responder 685 µs, one rekey 5.06 µs, seal/open of
 65,535 bytes 889 µs. The responder figure is the per-connection cost
-D10.3's clearnet accept-rate bound is derived from. The bound waits on
-a stated CPU budget. No rate is written here. Clearnet deadline milliseconds are the
+D10.3's clearnet accept-rate bound is derived from; its rates are
+Assumptions against a proposed CPU budget of about 1 % of a core (D10.3). Clearnet deadline milliseconds are the
 2026-09-30 update below. Tor's stay in the benchmark record.
 
 UPDATE 2026-09-29: each deadline is the p99 of honest completions on
@@ -1774,17 +1774,24 @@ listener, and so a connection in the gap phase.
    mechanism is an accept-rate bound at accept, before any cryptographic
    work, per connector and per host, because clearnet's declaration says
    inbound peers have an observable address. Whether to aggregate hosts
-   by subnet is a policy question for measurement. The values come from
-   the measured per-connection crypto cost against a stated CPU budget.
-   No number is written before that measurement (rule 26 B9). The
-   responder side of a handshake is 685 µs on the Pi 4 (C5, 2026-09-26).
-   That is the per-connection cost. The accept-rate values still wait
-   on the stated CPU budget. The handshake's cryptography runs on the
-   runtime's blocking pool (clearnet connector, RULED 2026-09-27), so
-   the blocking cap bounds how many handshakes compute at once. The
-   flood test measures that, in addition to the accept-rate bound. No
-   rate is written. The bound is clearnet-only: Tor inbound
-   does no Noise work on our side.
+   by subnet is a policy question for measurement; an IPv6 host is its
+   /64 (Rick, 2026-10-30). The responder side of a handshake is 685 µs
+   on the Pi 4 (C5, 2026-09-26): the per-connection cost.
+   **The rates are Assumptions, written ahead of the flood measurement**
+   (Rick, 2026-10-31; `DAEMON_RELAY_PRIVACY.md` §97): the connector's
+   bucket one token every 100 ms with a burst of 20, the host's one
+   token every 6 s with a burst of 3. At the full connector rate the
+   responder spends about 0.7 % of a floor-device core (684.5 µs × 10 a
+   second), which proposes a CPU budget of about 1 % of a core; honest
+   arrivals sit about two hundred times below the rate; a host's burst
+   holds a dial and a white redial, or a few nodes behind one NAT. The
+   linger cap these give is 34 descriptors (D10.2 above). The step 7
+   record's item 6, the flood measured against this limiter, re-derives
+   them. The handshake's cryptography runs on the runtime's blocking
+   pool (clearnet connector, RULED 2026-09-27), so the blocking cap
+   bounds how many handshakes compute at once; the flood test measures
+   that too. The bound is clearnet-only: Tor inbound does no Noise work
+   on our side.
    **Built: the mechanism** (Rick, 2026-10-30: its own PR, merged before
    the rehearsal). `AcceptGate` in `shekyl-transport-layer`
    (`accept_rate.rs`) is two token buckets, the connector's and the
@@ -1801,9 +1808,10 @@ listener, and so a connection in the gap phase.
    the node names the refusals once a minute, never once per
    connection. The rates are protocol data in `accept_bound`, beside
    the declaration, the same on every node (rule 71): Tor's row is the
-   onion's proof-of-work (item 4), and clearnet's row is not assessed
-   until the step 7 record's ruled table supplies its two rates. A
-   table built from a row that is not assessed has no limiter.
+   onion's proof-of-work (item 4), and clearnet's row carries the two
+   buckets above. The build refuses a connector whose inbound peers have
+   an address but whose bound is not assessed, and one whose inbound
+   peers are the zone but which carries a daemon-side limiter.
 
 4. **Tor is defended by Tor's proof-of-work, not by a daemon-side
    limiter.** Onion-service PoW is enabled on every onion service we

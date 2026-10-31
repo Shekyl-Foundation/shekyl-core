@@ -31,7 +31,7 @@ use std::net::IpAddr;
 
 use shekyl_timing_engine::Tick;
 
-use crate::declaration::{Assessment, ConnectorId};
+use crate::declaration::{declaration, Assessment, BannableInbound, ConnectorId};
 
 /// One bucket's shape, as the generic cell rate algorithm reads it: one
 /// token every `token_every_nanos`, and at most `burst` tokens spent at
@@ -79,19 +79,85 @@ pub enum AcceptBound {
     OnionPow,
 }
 
+/// Clearnet's connector bucket: one token every 100 ms, a burst of 20.
+///
+/// **Assumption** (Rick, 2026-10-31; `DAEMON_RELAY_PRIVACY.md` §97). At the
+/// full rate the responder spends about 0.7 % of a floor-device core
+/// (10 handshakes a second at 684.5 µs each, C5), which proposes a CPU
+/// budget of about 1 % of a core. Honest arrivals sit about two hundred
+/// times below it. With the clearnet handshake span the linger cap is 34
+/// descriptors. Re-derived by the step 7 record's item 6, the flood
+/// measured against this limiter.
+pub const CLEARNET_CONNECTOR_RATE: AcceptRate = AcceptRate {
+    token_every_nanos: 100_000_000,
+    burst: 20,
+};
+
+/// Clearnet's host bucket (an IPv4 address, or an IPv6 /64): one token
+/// every 6 s, a burst of 3.
+///
+/// **Assumption** (Rick, 2026-10-31; §97). A dial and a white redial from
+/// one peer, and a few nodes behind one NAT, fit the burst. Re-derived with
+/// the connector's rate.
+pub const CLEARNET_HOST_RATE: AcceptRate = AcceptRate {
+    token_every_nanos: 6_000_000_000,
+    burst: 3,
+};
+
 /// The connector's accept-rate bound: protocol data, one row per connector.
 ///
-/// Clearnet's rates come from the step 7 record's ruled table, derived
-/// from the responder's cost against a stated CPU budget (D10.3). No rate
-/// is written before that ruling, so its row is not assessed yet, and a
-/// table built from it has no clearnet limiter.
+/// A connector whose inbound peers have an observable address
+/// (`BannableInbound::Yes`) carries both buckets, and one whose inbound
+/// peers are the zone carries the onion's proof-of-work; the build refuses
+/// any other pairing (below).
 #[must_use]
 pub const fn accept_bound(connector: ConnectorId) -> Assessment<AcceptBound> {
     match connector {
-        ConnectorId::Clearnet => Assessment::NotAssessed,
+        ConnectorId::Clearnet => Assessment::Assessed(AcceptBound::ConnectorAndHost {
+            connector: CLEARNET_CONNECTOR_RATE,
+            host: CLEARNET_HOST_RATE,
+        }),
         ConnectorId::Tor => Assessment::Assessed(AcceptBound::OnionPow),
     }
 }
+
+// Every connector's bound, checked against its declaration at build time:
+// a connector whose inbound peers have an address is never left without a
+// limiter, nor given rates that cannot pay, and one whose inbound peers are
+// the zone is never given a daemon-side limiter an attacker could trip for
+// every honest peer (D10.3, D10.4).
+const _: () = {
+    let mut index = 0;
+    while index < ConnectorId::ALL.len() {
+        let connector = ConnectorId::ALL[index];
+        let observed = declaration(connector.column()).bannable_inbound();
+        match (observed, accept_bound(connector)) {
+            (
+                Assessment::Assessed(BannableInbound::Yes),
+                Assessment::Assessed(AcceptBound::ConnectorAndHost { connector, host }),
+            ) => assert!(
+                connector.is_rate() && host.is_rate(),
+                "an observable-address connector's buckets can pay"
+            ),
+            (Assessment::Assessed(BannableInbound::Yes), _) => {
+                panic!("a connector whose inbound peers have an address has an assessed bound")
+            }
+            (
+                Assessment::Assessed(BannableInbound::NoAddress),
+                Assessment::Assessed(AcceptBound::OnionPow),
+            ) => {}
+            (Assessment::Assessed(BannableInbound::NoAddress), _) => {
+                panic!("a connector whose inbound peers are the zone has no daemon-side limiter")
+            }
+            (Assessment::NotAssessed, _) => {
+                panic!(
+                    "every connector's declaration says whether its inbound peers have an address"
+                )
+            }
+        }
+        index += 1;
+    }
+};
 
 /// How many refused connections may linger half-closed at once for `span`
 /// under a connector's row (D10.2): its connector bucket's burst plus the
