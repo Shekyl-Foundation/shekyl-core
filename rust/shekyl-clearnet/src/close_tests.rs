@@ -10,7 +10,9 @@
 //! socket error is set.
 
 use std::io::{Read, Write};
-use std::net::{Shutdown, TcpListener as StdListener, TcpStream as StdStream};
+#[cfg(target_os = "linux")]
+use std::net::Shutdown;
+use std::net::{TcpListener as StdListener, TcpStream as StdStream};
 use std::time::{Duration, Instant};
 
 use shekyl_p2p_transport::INITIATOR_FLIGHT_LEN;
