@@ -11,6 +11,9 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 ## Pre-genesis
 
+- **A submit's latency is the pool file's fsync latency, and every admission forces a filesystem-wide journal commit the chain store's commits queue behind (SPL-Q4's reopening evidence, not yet the BENCH result the clause names).** Seen on the flip's measurement host: one submit held 30 s in `pool.db`'s `fdatasync` at `jbd2_log_wait_commit`; green submits 375–1,070 ms per sync beside a resident daemon, 145 ms without. Batching admissions into one commit per short window would keep D9's per-commit fsync and bound the coupling; the SPL-13 measurement decides.
+  - Owner: the pool lane — [`DRS_E1_SPOOL.md`](design/DRS_E1_SPOOL.md) §9 SPL-Q4 and §11 (2026-10-31)
+  - Target: pre-genesis
 - **`shekyld`'s process entry is still C++ `main` (DC-Q13 (b)); Grammar §0's Rust entry is unbuilt.** The command line is an `ArgumentVector`: on Unix the `argc`/`argv` `main` passes, on Windows `GetCommandLineW`, because a staticlib's `std::env::args_os` is empty where Rust's `lang_start` did not run. The rustc-emitted entry is what runs that startup (it collects `args_os` into `from_os_strings`, installs `SIGPIPE` and the stack-overflow guard) and what RT-16's SCM dispatcher needs. Blocked on a ruling that amends DC-Q13 (b) so rustc links `shekyld` and the C++ remnant is the callee — falsify by the binary's entry calling `lang_start`, with that ruling amended.
   - Owner: [`DAEMON_CONFIG_CUTOVER.md`](design/DAEMON_CONFIG_CUTOVER.md) §2.2
   - Target: pre-genesis

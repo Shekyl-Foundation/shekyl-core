@@ -154,6 +154,9 @@ impl RegtestSchedule {
 pub(super) struct RegtestDaemon {
     child: Child,
     data_dir: PathBuf,
+    /// The private directory under the account's home that holds this
+    /// daemon's empty configuration file. Removed with the daemon.
+    config_dir: PathBuf,
     rpc_port: u16,
     rpc: HttpRpc,
     /// Base URL of the second, restricted listener, when one was
@@ -268,9 +271,8 @@ struct RegtestSpawn {
     peering: Peering,
     mine_address: Option<String>,
     /// Leave the data directory in place when the daemon is dropped.
-    /// The DX-Q8 capture asks for it per spawn; a diagnostic loop asks
-    /// for every spawn of the process with `SHEKYL_KEEP_REGTEST_DATA`
-    /// set, read once here. The default deletes.
+    /// The DX-Q8 capture is the caller. The default deletes, except under
+    /// a failing test (`Drop` keeps the directory while its thread panics).
     keep_data: bool,
 }
 
@@ -285,7 +287,7 @@ impl RegtestSpawn {
             console: false,
             peering: Peering::Offline,
             mine_address: None,
-            keep_data: std::env::var_os("SHEKYL_KEEP_REGTEST_DATA").is_some(),
+            keep_data: false,
         }
     }
 
@@ -330,6 +332,45 @@ impl RegtestSpawn {
         self.keep_data = true;
         self
     }
+}
+
+/// A directory only this account can enter, holding one daemon's empty
+/// configuration file: `~/.shekyl-regtest/<rpc port>/shekyld.toml`, mode
+/// 0700 on the directories and 0600 on the file. The daemon's rule refuses
+/// a configuration file with a group- or world-writable directory anywhere
+/// above it, which rules out `TMPDIR` and a checkout built under a group
+/// umask; the account's home is the one place the account owns the whole
+/// way up. The parent stays; each daemon's directory goes with it.
+fn private_config_dir(rpc_port: u16) -> PathBuf {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .expect("HOME names the account's home directory");
+    let parent = home.join(".shekyl-regtest");
+    let dir = parent.join(rpc_port.to_string());
+    drop(std::fs::remove_dir_all(&dir));
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder
+        .create(&dir)
+        .expect("create the private config directory");
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    drop(
+        options
+            .open(dir.join("shekyld.toml"))
+            .expect("create the empty config file"),
+    );
+    dir
 }
 
 impl RegtestDaemon {
@@ -416,9 +457,9 @@ impl RegtestDaemon {
     ///
     /// The DX-Q8 column (`scripts/bench/capture_kept_chain.py`) reads the
     /// directory after the generator exits. Every other spawn still deletes
-    /// its directory, unless the process runs as a diagnostic loop with
-    /// `SHEKYL_KEEP_REGTEST_DATA` set, which keeps every spawn's. `Drop`
-    /// reads nothing from the environment.
+    /// its directory, unless its test is failing: `Drop` keeps a panicking
+    /// test's daemon directory, since its logs are what the failure needs.
+    /// `Drop` reads nothing from the environment (#1221).
     pub(super) async fn start_keeping_data() -> RegtestDaemon {
         let serial = serial_lock().lock_owned().await;
         Self::spawn(RegtestSpawn::new(Some(serial)).keeping_data()).await
@@ -510,6 +551,18 @@ impl RegtestDaemon {
         let data_dir = std::env::temp_dir().join(format!("shekyl-regtest-{rpc_port}"));
         drop(std::fs::remove_dir_all(&data_dir));
         std::fs::create_dir_all(&data_dir).expect("create data dir");
+        // The daemon reads `/etc/shekyl/shekyld-<network>.toml` by default,
+        // and a fleet host's own testnet file (its `p2p-peer` rows against
+        // the `clearnet off` below) is not a test daemon's: a test's result
+        // must not depend on the host it runs on. A named empty file means
+        // the defaults and nothing else. The daemon refuses a configuration
+        // file that any other account could write, on the file or on any
+        // directory above it, so the file cannot sit under the data
+        // directory (`TMPDIR` is world-writable) nor in the checkout (a
+        // group umask makes it group-writable); it sits in a private
+        // directory under the account's home.
+        let config_dir = private_config_dir(rpc_port);
+        let config_file = config_dir.join("shekyld.toml");
 
         let log = std::fs::File::create(data_dir.join("daemon.log")).expect("daemon log");
         let mut cmd = Command::new(&bin);
@@ -527,6 +580,8 @@ impl RegtestDaemon {
             &format!("127.0.0.1:{rpc_port}"),
             "--data-dir",
             data_dir.to_str().expect("utf8 data dir"),
+            "--config-file",
+            config_file.to_str().expect("utf8 config path"),
             // Under the data dir, as the old default was; the account's
             // own `logs/` is not a test's to fill. The daemon logs to
             // stderr too, which `daemon.log` below captures.
@@ -626,6 +681,7 @@ impl RegtestDaemon {
         let mut daemon = RegtestDaemon {
             child,
             data_dir,
+            config_dir,
             rpc_port,
             rpc,
             restricted_url: restricted_port.map(|p| format!("http://127.0.0.1:{p}")),
@@ -1225,11 +1281,13 @@ impl Drop for RegtestDaemon {
     fn drop(&mut self) {
         drop(self.child.kill());
         drop(self.child.wait());
-        // The flag was set at spawn: by `start_keeping_data` for the DX-Q8
-        // capture, or for every spawn of a diagnostic loop that keeps its
-        // daemons' logs (`SHEKYL_KEEP_REGTEST_DATA`, read once at spawn).
-        // Drop reads nothing from the environment.
-        if self.keep_data {
+        drop(std::fs::remove_dir_all(&self.config_dir));
+        // The DX-Q8 capture asks to keep the directory (`start_keeping_data`).
+        // A failing test keeps it too: the daemon's logs are the evidence
+        // the failure needs, and that is decided here, in the code, not by
+        // an environment toggle any run could pick up (#1221). Every other
+        // spawn deletes it.
+        if self.keep_data || std::thread::panicking() {
             eprintln!("keeping regtest data dir {}", self.data_dir.display());
             return;
         }
