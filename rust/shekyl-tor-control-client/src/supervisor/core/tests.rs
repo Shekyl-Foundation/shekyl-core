@@ -30,6 +30,9 @@ fn policy() -> Policy {
         round_stuck_after: Duration::from_secs(300),
         jump_stall_after: Duration::from_secs(300),
         clock_evidence_within: Duration::from_secs(60),
+        // These tests step time by inputs alone and leave deadlines unfired;
+        // the resume tests pass the daemon's value.
+        resumed_after: Duration::MAX,
     }
 }
 
@@ -1012,3 +1015,4 @@ mod pace;
 mod probe;
 mod quiet;
 mod render;
+mod resume;

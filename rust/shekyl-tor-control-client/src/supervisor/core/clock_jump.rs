@@ -63,6 +63,14 @@ impl JumpWatch {
     }
 }
 
+impl JumpWatch {
+    /// The machine slept: the byte mark starts again from the wake, so the
+    /// bound counts awake time (§5, "Resumed from suspend").
+    pub(super) fn resumed(&mut self, now: u64) {
+        self.read_moved_at = now;
+    }
+}
+
 impl Core {
     /// The stranded-bootstrap check, at each sample while bootstrapping and
     /// nowhere else: the sample is what reads the percent and the bytes, so

@@ -364,6 +364,15 @@ impl ProgressWindow {
         self.refresh(now);
     }
 
+    /// The machine slept (§5, "Resumed from suspend"): the percent's hold
+    /// and the byte window start again from the wake, so the sleep reads as
+    /// neither a held percent nor a window with nothing arriving.
+    pub fn resumed(&mut self, now: u64) {
+        self.progress_at = now;
+        self.marks.clear();
+        self.refresh(now);
+    }
+
     /// The progress deadline: the line begins here and is said. From now on
     /// every sample keeps it current.
     pub fn speak(&mut self, now: u64) {

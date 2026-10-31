@@ -616,6 +616,14 @@ impl Drive {
                 Vec::new()
             }
             Action::RoundStuck => self.round_stuck(),
+            Action::Resumed { late_by } => {
+                tracing::info!(
+                    target: "tor",
+                    late_by_secs = late_by.as_secs(),
+                    "the supervisor's timers came due late: this machine slept, and its windows start again from the wake"
+                );
+                Vec::new()
+            }
             Action::RefetchDescriptor => {
                 let mut stop = self.stop.clone();
                 vec![race_stop(&mut stop, self.refetch())
