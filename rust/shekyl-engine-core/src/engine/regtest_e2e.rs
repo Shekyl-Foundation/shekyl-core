@@ -1045,27 +1045,33 @@ impl RegtestDaemon {
     /// job (`DRS_X_STORE_FLIP.md` Q9) before asking the miner to move the
     /// tip. A local submit is stem until the relay fluffs it; mining
     /// before that posts a coinbase-only job and the spend never lands.
+    ///
+    /// One call per [`Self::MINE_CHUNK`] blocks: a block costs a few
+    /// seconds on a disk where each of its two syncs takes most of a
+    /// second, and a long stretch asked for in one call would outlive the
+    /// harness's 180 s HTTP timeout there while fitting on a fast disk,
+    /// which would make the test's result depend on its host.
     pub(super) async fn generate_blocks(&self, n: u64) -> GenerateBlocksResp {
         self.wait_shown_pool_in_template().await;
-        try_generate_blocks(&self.rpc, n)
-            .await
-            .expect("generateblocks")
-    }
-
-    /// [`Self::generate_blocks`] in chunks of at most [`Self::MINE_CHUNK`]:
-    /// a long empty stretch (a shard's finality and pricing, the claim
-    /// window) at a few seconds a block would otherwise outlive the
-    /// harness's 180 s HTTP timeout on one call.
-    pub(super) async fn generate_blocks_chunked(&self, n: u64) {
         let mut mined = 0u64;
-        while mined < n {
+        let mut blocks = Vec::new();
+        loop {
             let chunk = (n - mined).min(Self::MINE_CHUNK);
-            self.generate_blocks(chunk).await;
+            let resp = try_generate_blocks(&self.rpc, chunk)
+                .await
+                .expect("generateblocks");
+            blocks.extend(resp.blocks);
             mined += chunk;
+            if mined >= n {
+                return GenerateBlocksResp {
+                    height: resp.height,
+                    blocks,
+                };
+            }
         }
     }
 
-    /// Blocks per `generateblocks` call in [`Self::generate_blocks_chunked`].
+    /// Blocks per `generateblocks` call in [`Self::generate_blocks`].
     const MINE_CHUNK: u64 = 32;
 
     /// Q9: once the relay marks the pool shown, the next template lists
@@ -2978,7 +2984,7 @@ async fn sync_from_a_peer(blocks: u64, seed: [u8; 64]) {
         );
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
-    source.generate_blocks_chunked(blocks - 1).await;
+    source.generate_blocks(blocks - 1).await;
     let want = source.height().await;
     assert_eq!(want, blocks + 1, "the source mined its chain");
     let source_tip = source.last_block_hash().await;
@@ -3838,7 +3844,7 @@ async fn close_shard_through_the_daemon(
     let mut spends = 1usize;
     let mut archival_bytes = per_spend;
     let supply_ahead = spends_needed + 2 * u64::try_from(FILL_SPENDS_PER_BLOCK).expect("fits");
-    daemon.generate_blocks_chunked(supply_ahead).await;
+    daemon.generate_blocks(supply_ahead).await;
     refresh(arc).await;
     eprintln!(
         "shard fill: supply mined ahead ({supply_ahead} blocks), tip {}, {:?} elapsed",
@@ -3966,7 +3972,7 @@ async fn close_shard_through_the_daemon(
     );
     let count = daemon.height().await;
     if count <= scan_tip {
-        daemon.generate_blocks_chunked(scan_tip + 1 - count).await;
+        daemon.generate_blocks(scan_tip + 1 - count).await;
     }
     refresh(arc).await;
     let scanned = pscan_until_within(
@@ -3996,9 +4002,7 @@ async fn close_shard_through_the_daemon(
     let pass_height = sched.slash_deadline_height(priced_by_epoch);
     let count = daemon.height().await;
     if count <= pass_height {
-        daemon
-            .generate_blocks_chunked(pass_height + 1 - count)
-            .await;
+        daemon.generate_blocks(pass_height + 1 - count).await;
     }
     let mut watermark_seen = None;
     for _ in 0..8 {
@@ -6150,7 +6154,7 @@ async fn e2e_unstake_collect_retire_composed_arc() {
     // the recorded conditional that routed this arm to PR-C.
     let window_blocks =
         (shekyl_archival_retention::MAX_CLAIM_AGE_W + 4) * SEB + PSCAN_TEST_REORG_DEPTH + 4;
-    daemon.generate_blocks_chunked(window_blocks).await;
+    daemon.generate_blocks(window_blocks).await;
     refresh(&fixture.arc).await;
     let retired_state = pscan_until(
         &fixture.arc,
