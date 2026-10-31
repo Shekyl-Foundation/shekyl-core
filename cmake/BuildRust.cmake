@@ -121,6 +121,14 @@ endif()
 set(_rust_env_clear
     "CC=" "CXX=" "CFLAGS=" "CXXFLAGS=" "LDFLAGS="
     "AR=" "RANLIB=" "NM="
+    # The library this file links is ${RUST_BUILD_DIR}/libshekyl_ffi.a, under
+    # the workspace's own target directory. cargo builds wherever
+    # CARGO_TARGET_DIR points, so a shell that exports it for Rust work would
+    # otherwise build the fresh library elsewhere while the link step picks up
+    # whatever stale copy sits at the linked path: a daemon with new C++ over
+    # old Rust, and nothing to say so. The variable is pinned here to the
+    # path the link reads.
+    "CARGO_TARGET_DIR=${RUST_SOURCE_DIR}/target"
 )
 
 if(RUST_CROSS_ENV)
