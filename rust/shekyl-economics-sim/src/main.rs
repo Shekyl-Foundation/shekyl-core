@@ -116,6 +116,12 @@ fn main() {
     if !params.overrides().is_empty() && !stage2 {
         refuse("overrides are read by --stage2 only: it prints a cell beside its baseline");
     }
+    // An override on a field the mode's report does not read would print
+    // the baseline, which reads as "no effect": refused before the fold.
+    let (mode, reads) = baseline::stage2_reach(control);
+    if let Err(e) = baseline::check_reach(params.overrides(), params.baseline(), mode, reads) {
+        refuse(&e.to_string());
+    }
 
     if std::env::args().any(|a| a == "--fb1c-c2") {
         eprintln!("{}", params.fee.label());

@@ -127,6 +127,26 @@ pub enum OverrideError {
     /// of order.
     #[error("override {0} is given twice")]
     Duplicate(String),
+    /// The mode's report reads no such field: a cell on it would print the
+    /// baseline, which reads as "no effect".
+    #[error("override {path}: field has no reader in {mode}")]
+    NoReader {
+        /// `set.field`.
+        path: String,
+        /// The mode and arm, as the operator names them.
+        mode: &'static str,
+    },
+    /// The field is read, but moves nothing in this run without another
+    /// setting (the escalation knee on a flat escalation).
+    #[error("override {path}: moves nothing in {mode} while {why}")]
+    Inert {
+        /// `set.field`.
+        path: String,
+        /// The mode and arm.
+        mode: &'static str,
+        /// The run's state that makes it inert.
+        why: &'static str,
+    },
     /// The struct's validator refused the overridden set (or the value does
     /// not fit the field's width).
     #[error("{set} overrides refused by its validator: {reason}", set = .set.name())]
@@ -217,6 +237,172 @@ fn apply<T: Serialize + DeserializeOwned>(
         set,
         reason: e.to_string(),
     })
+}
+
+/// One field a mode's report reads, and a value in its validator's band at
+/// which the report moves. The per-mode lists below are the reach a cell
+/// has: an override outside its mode's list is refused
+/// ([`check_reach`]), and `every_declared_reader_moves_its_report` runs
+/// each entry and fails when the report does not move, so a field listed
+/// as read that no figure depends on fails by name. A mode that gains a
+/// reader lists the field in the same commit.
+#[derive(Clone, Copy, Debug)]
+pub struct Reader {
+    /// `set.field`.
+    pub path: &'static str,
+    /// A value the field's validator accepts that moves the report.
+    // Read by `every_declared_reader_moves_its_report`: the binary has no
+    // library target, so a field only a test reads is dead in the bin (the
+    // `cartel.rs` precedent).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub moves_at: u64,
+    /// When the field moves the report only under another setting: what
+    /// must hold of the run, why, and the override that makes it hold.
+    pub only_if: Option<Condition>,
+}
+
+/// A run state a field needs before its value moves any figure.
+#[derive(Clone, Copy, Debug)]
+pub struct Condition {
+    /// The state that leaves the field inert, as the refusal names it.
+    pub inert_while: &'static str,
+    /// Whether the run is in that state.
+    pub inert: fn(&Baseline) -> bool,
+    /// An override that leaves it (the test's companion).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub companion: (&'static str, u64),
+}
+
+const fn read(path: &'static str, moves_at: u64) -> Reader {
+    Reader {
+        path,
+        moves_at,
+        only_if: None,
+    }
+}
+
+/// The escalation knee moves the fold's pool share only off a flat
+/// escalation: at the shipped asymptote, equal to the pool share, the ramp
+/// has no span and every knee prices the same.
+const KNEE: Reader = Reader {
+    path: "economic.escalation_knee_n",
+    moves_at: 1_000_000,
+    only_if: Some(Condition {
+        inert_while: "the escalation is flat (escalation_asymptote_share equals staker_pool_share)",
+        inert: |run| run.economic.escalation_asymptote_share == run.economic.staker_pool_share,
+        companion: ("economic.escalation_asymptote_share", 500_000),
+    }),
+};
+
+/// The fields `--stage2` reads on both arms: the fold's economics and the
+/// archival arms' parameters. Measured, not assumed
+/// (`every_declared_reader_moves_its_report`): the reward age weight is
+/// read but inert, because the sim scores every shard at age 0, where `g`
+/// is its base; the release cooldown and the bond-duration pair reach no
+/// `--stage2` figure. None of the three is listed, so a cell on one is
+/// refused.
+macro_rules! stage2_common {
+    () => {
+        [
+            read("economic.release_min", 850_000),
+            read("economic.release_max", 1_250_000),
+            read("economic.tx_volume_baseline", 60),
+            read("economic.burn_base_rate", 450_000),
+            read("economic.burn_cap", 850_000),
+            read("economic.staker_pool_share", 200_000),
+            read(
+                "economic.emission_curve_asymptote",
+                4_200_000_000_000_000_000,
+            ),
+            read("economic.emission_speed_factor_per_block", 21),
+            read("economic.final_subsidy_per_minute", 250_000_000),
+            read("economic.daa_target_seconds", 180),
+            read("economic.escalation_asymptote_share", 500_000),
+            KNEE,
+            read("economic.full_reward_zone", 350_000),
+            read("economic.staker_emission_share", 120_000),
+            read("economic.staker_emission_decay", 850_000),
+            read("economic.block_weight_surge_factor", 6),
+            read("economic.block_weight_limit_multiple", 3_000_000),
+            read("archival.bond_floor_atomic", 800_000_000),
+            read("archival.settlement_epoch_blocks", 8_000),
+            read("archival.max_claim_age_w", 30),
+            read("archival.failure_window_m", 10),
+            read("archival.failure_window_n", 12),
+        ]
+    };
+}
+
+/// `--stage2` on the production fee arm: the common set, the long-term
+/// clamp, and the relay fields the production ladder prices the fee with
+/// (`w_ref`, the Standard ratio, the lattice). The lookback, the slack, the
+/// claim hold and the Priority factor are not read: every ordinary
+/// transaction pays Standard and no fold admits against a window.
+pub const STAGE2_PRODUCTION_READS: &[Reader] = &{
+    let common = stage2_common!();
+    let more = [
+        read("economic.long_term_weight_clamp", 2_000_000),
+        read("relay.fee_decimal_places", 8),
+        read("relay.ref_tx_weight", 4_000),
+        read("relay.standard_over_economy", 5),
+    ];
+    let mut all = [read("", 0); 26];
+    let mut i = 0;
+    while i < common.len() {
+        all[i] = common[i];
+        i += 1;
+    }
+    let mut j = 0;
+    while j < more.len() {
+        all[i + j] = more[j];
+        j += 1;
+    }
+    all
+};
+
+/// `--stage2 --control-flat-fee`: the flat fee prices no ladder, so no
+/// relay field reaches it, and the long-term clamp moves no figure the
+/// control arm prints.
+pub const STAGE2_CONTROL_READS: &[Reader] = &stage2_common!();
+
+/// The reach of the mode a run is printed in: its name and its readers.
+#[must_use]
+pub fn stage2_reach(control: bool) -> (&'static str, &'static [Reader]) {
+    if control {
+        ("--stage2 --control-flat-fee", STAGE2_CONTROL_READS)
+    } else {
+        ("--stage2", STAGE2_PRODUCTION_READS)
+    }
+}
+
+/// Refuse an override the mode's report does not read, or one its run
+/// leaves inert, before any fold.
+///
+/// # Errors
+///
+/// [`OverrideError::NoReader`] or [`OverrideError::Inert`].
+pub fn check_reach(
+    overrides: &[Override],
+    run: &Baseline,
+    mode: &'static str,
+    reads: &[Reader],
+) -> Result<(), OverrideError> {
+    for o in overrides {
+        let path = o.path();
+        let Some(reader) = reads.iter().find(|r| r.path == path) else {
+            return Err(OverrideError::NoReader { path, mode });
+        };
+        if let Some(condition) = reader.only_if {
+            if (condition.inert)(run) {
+                return Err(OverrideError::Inert {
+                    path,
+                    mode,
+                    why: condition.inert_while,
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -527,6 +713,146 @@ mod tests {
         .expect("String sink");
         assert!(
             header.ends_with("overrides:\n  relay.fee_decimal_places=8\n  economic.burn_cap=1\n\n")
+        );
+    }
+
+    #[test]
+    fn the_reach_refuses_an_unread_or_inert_field() {
+        let shipped = Baseline::shipped();
+        let (mode, reads) = stage2_reach(true);
+        assert_eq!(
+            check_reach(&[set("relay.ref_tx_weight=4000")], &shipped, mode, reads),
+            Err(OverrideError::NoReader {
+                path: "relay.ref_tx_weight".into(),
+                mode: "--stage2 --control-flat-fee",
+            })
+        );
+        let (mode, reads) = stage2_reach(false);
+        assert_eq!(
+            check_reach(&[set("relay.ref_tx_weight=4000")], &shipped, mode, reads),
+            Ok(())
+        );
+        assert!(matches!(
+            check_reach(
+                &[set("economic.escalation_knee_n=1000000")],
+                &shipped,
+                mode,
+                reads
+            ),
+            Err(OverrideError::Inert { .. })
+        ));
+        let off_flat = shipped
+            .with(&[set("economic.escalation_asymptote_share=500000")])
+            .expect("in band");
+        assert_eq!(
+            check_reach(
+                &[
+                    set("economic.escalation_asymptote_share=500000"),
+                    set("economic.escalation_knee_n=1000000"),
+                ],
+                &off_flat,
+                mode,
+                reads
+            ),
+            Ok(())
+        );
+        // Every declared value passes its validator.
+        for (mode, reads) in [stage2_reach(false), stage2_reach(true)] {
+            for r in reads {
+                let mut cell =
+                    vec![Override::parse(&format!("{}={}", r.path, r.moves_at))
+                        .expect("well-formed")];
+                if let Some(c) = r.only_if {
+                    cell.push(
+                        Override::parse(&format!("{}={}", c.companion.0, c.companion.1))
+                            .expect("well-formed"),
+                    );
+                }
+                assert!(
+                    shipped.with(&cell).is_ok(),
+                    "{mode}: {} = {}",
+                    r.path,
+                    r.moves_at
+                );
+            }
+        }
+    }
+
+    /// E16-7 per mode (the review of 2026-10-30): each field a mode
+    /// declares as read moves that mode's report at its declared value, on
+    /// the arm it is declared for. A field whose effect needs another
+    /// setting is compared against a cell with that setting alone. The
+    /// cells run in parallel; each is a full `--stage2` narration.
+    #[test]
+    #[ignore = "one full --stage2 narration per declared field on both arms; run with --release --ignored; nightly economics-sim-ignored"]
+    fn every_declared_reader_moves_its_report() {
+        use crate::engine::SimParams;
+        let narrate = |overrides: Vec<Override>, control: bool| -> String {
+            let mut run = SimParams::with_overrides(overrides).expect("a declared value passes");
+            if control {
+                run.fee = SimParams::section_12_14_control().fee;
+            }
+            let mut out = String::new();
+            crate::stage2::run_stage2(&mut out, &run).expect("String sink");
+            out
+        };
+        let parse = |path: &str, value: u64| {
+            Override::parse(&format!("{path}={value}")).expect("well-formed")
+        };
+        // Every narration the test needs, once: each arm's reference (the
+        // baseline, or a field's companion alone) and each field's cell.
+        let mut narrations: Vec<(Vec<Override>, bool)> = Vec::new();
+        let mut index = |overrides: Vec<Override>, control: bool| -> usize {
+            if let Some(i) = narrations
+                .iter()
+                .position(|(o, c)| *o == overrides && *c == control)
+            {
+                return i;
+            }
+            narrations.push((overrides, control));
+            narrations.len() - 1
+        };
+        let mut pairs: Vec<(String, usize, usize)> = Vec::new();
+        for (control, (mode, reads)) in [(false, stage2_reach(false)), (true, stage2_reach(true))] {
+            for r in reads {
+                let base: Vec<Override> = r
+                    .only_if
+                    .map(|c| vec![parse(c.companion.0, c.companion.1)])
+                    .unwrap_or_default();
+                let mut cell = base.clone();
+                cell.push(parse(r.path, r.moves_at));
+                let (b, c) = (index(base, control), index(cell, control));
+                pairs.push((format!("{mode}: {}={}", r.path, r.moves_at), b, c));
+            }
+        }
+        let threads = std::thread::available_parallelism().map_or(4, std::num::NonZero::get);
+        // A cell whose fold panics is a failure named with the rest, not the
+        // end of the run.
+        let mut text: Vec<Option<String>> = Vec::with_capacity(narrations.len());
+        for chunk in narrations.chunks(threads) {
+            let done: Vec<Option<String>> = std::thread::scope(|scope| {
+                let handles: Vec<_> = chunk
+                    .iter()
+                    .map(|(overrides, control)| {
+                        scope.spawn(move || narrate(overrides.clone(), *control))
+                    })
+                    .collect();
+                handles.into_iter().map(|h| h.join().ok()).collect()
+            });
+            text.extend(done);
+        }
+        let unmoved: Vec<String> = pairs
+            .iter()
+            .filter_map(|(name, b, c)| match (&text[*b], &text[*c]) {
+                (Some(base), Some(cell)) if base == cell => Some(name.clone()),
+                (Some(_), Some(_)) => None,
+                _ => Some(format!("{name} (the fold panicked)")),
+            })
+            .collect();
+        assert!(
+            unmoved.is_empty(),
+            "declared but the report did not move:\n  {}",
+            unmoved.join("\n  ")
         );
     }
 

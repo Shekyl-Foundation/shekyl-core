@@ -219,6 +219,12 @@ impl SimParams {
         &self.run.archival
     }
 
+    /// The run's three structs.
+    #[must_use]
+    pub fn baseline(&self) -> &Baseline {
+        &self.run
+    }
+
     /// The overrides this run departs from the baseline by, in the order
     /// given.
     #[must_use]

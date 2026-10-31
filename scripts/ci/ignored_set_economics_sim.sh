@@ -12,7 +12,8 @@
 # on 2026-10-15 stayed named on main's copy). Each branch now judges
 # itself, and the `workflow_dispatch` `ref` input proves a branch's own set.
 #
-# The tests run here are the narration pins and the ESR-11 timing set. The
+# The tests run here are the narration pins, the ESR-11 timing set and the
+# per-mode reader test (each field a mode declares moves its report). The
 # two regeneration helpers, `regen_baseline_fixture` and
 # `regen_stage2_narration_fixtures`, WRITE the committed fixtures: they are
 # named as helpers and never run here, because a lane that regenerated the
@@ -35,7 +36,8 @@ branch="${BRANCH:-the checked-out ref}"
 
 run_tests='stage2::tests::stage2_narration_matches_the_committed_fixture
 stage2::tests::stage2_narration_flat_control_matches_the_committed_fixture
-secret_draw_production::tests::the_esr11_timing_set_runs_and_the_table_renders'
+secret_draw_production::tests::the_esr11_timing_set_runs_and_the_table_renders
+baseline::tests::every_declared_reader_moves_its_report'
 helpers='record::tests::regen_baseline_fixture
 stage2::tests::regen_stage2_narration_fixtures'
 
