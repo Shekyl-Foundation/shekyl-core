@@ -315,8 +315,17 @@ where
             .daemon
             .submit_transaction(tx_bytes)
             .await
-            .map_err(|_| SubmitterError::Ambiguous {
-                kind: AmbiguousErrorKind::DaemonUnavailable,
+            .map_err(|error| {
+                // The verdict's absence is ambiguous to the caller (Two
+                // Generals), but what the transport saw is not a secret:
+                // the log says it, so an operator reading "unavailable"
+                // can tell a refused connection from a reply that was not
+                // a verdict.
+                let error: crate::engine::error::IoError = error.into();
+                tracing::warn!(%error, "submit: the daemon gave no verdict");
+                SubmitterError::Ambiguous {
+                    kind: AmbiguousErrorKind::DaemonUnavailable,
+                }
             })?;
         // The typed verdict carries NO txid field — neither path reads an id back from
         // the daemon (identity is always locally computed, anti-untrusted-daemon).
