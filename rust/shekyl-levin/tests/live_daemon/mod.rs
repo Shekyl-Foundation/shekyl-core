@@ -11,8 +11,6 @@
 
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
-#[cfg(unix)]
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -206,72 +204,16 @@ pub fn rpc_ok(rpc_port: u16) -> bool {
 
 /// Connect to `127.0.0.1:port` with `source` as the local address, so the
 /// accept attributes the socket to that host.
+///
+/// `socket2` binds before it connects, which `std` cannot. Its `Socket::new`
+/// sets close-on-exec (non-inheritable on Windows), so a later child of this
+/// process does not inherit the peer socket, and it fills in the BSD
+/// address length itself.
 pub fn connect_from(source: Ipv4Addr, port: u16) -> std::io::Result<TcpStream> {
-    #[cfg(unix)]
-    {
-        unix_connect_from(source, port)
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (source, port);
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "a simulated peer binds its own loopback host on unix",
-        ))
-    }
-}
-
-/// `socket` then `bind` then `connect`. The fd is owned by the `OwnedFd`
-/// from the moment `socket` returns it.
-#[cfg(unix)]
-fn unix_connect_from(source: Ipv4Addr, port: u16) -> std::io::Result<TcpStream> {
-    // SOCK_CLOEXEC so a later child of this process does not inherit the
-    // peer socket. macOS has no SOCK_CLOEXEC; the live gate runs on Linux.
-    #[cfg(target_os = "linux")]
-    let kind = libc::SOCK_STREAM | libc::SOCK_CLOEXEC;
-    #[cfg(not(target_os = "linux"))]
-    let kind = libc::SOCK_STREAM;
-    // SAFETY: socket returns a new fd or -1. A non-negative fd is owned here
-    // and is moved into OwnedFd before any other use, which closes it.
-    let fd = unsafe { libc::socket(libc::AF_INET, kind, 0) };
-    if fd < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    let owned = unsafe { OwnedFd::from_raw_fd(fd) };
-    // SAFETY: sockaddr_in is a C struct of integers. Zero is a valid value.
-    // sin_family, sin_port and sin_addr are set before the kernel reads it.
-    let mut local: libc::sockaddr_in = unsafe { std::mem::zeroed() };
-    local.sin_family =
-        libc::sa_family_t::try_from(libc::AF_INET).expect("AF_INET fits an address family");
-    local.sin_port = 0;
-    local.sin_addr.s_addr = u32::from(source).to_be();
-    #[cfg(any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "netbsd",
-        target_os = "openbsd"
-    ))]
-    {
-        local.sin_len = std::mem::size_of::<libc::sockaddr_in>() as u8;
-    }
-    let len = libc::socklen_t::try_from(std::mem::size_of::<libc::sockaddr_in>())
-        .expect("a sockaddr_in fits a socklen");
-    // SAFETY: owned is a live socket, local is an initialized sockaddr_in,
-    // and len is its size.
-    let bound = unsafe { libc::bind(owned.as_raw_fd(), (&raw const local).cast(), len) };
-    if bound != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    let mut remote = local;
-    remote.sin_port = port.to_be();
-    remote.sin_addr.s_addr = u32::from(Ipv4Addr::LOCALHOST).to_be();
-    // SAFETY: same socket, an initialized sockaddr_in for 127.0.0.1:port.
-    let connected = unsafe { libc::connect(owned.as_raw_fd(), (&raw const remote).cast(), len) };
-    if connected != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(TcpStream::from(owned))
+    let socket = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None)?;
+    socket.bind(&SocketAddr::from((source, 0)).into())?;
+    socket.connect(&SocketAddr::from((Ipv4Addr::LOCALHOST, port)).into())?;
+    Ok(socket.into())
 }
 
 /// FAKECHAIN (`--network regtest`) derives its id from fakechain's genesis pin.
