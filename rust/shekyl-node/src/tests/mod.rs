@@ -25,6 +25,7 @@ mod bans;
 mod mining;
 mod open;
 mod pool;
+mod producer;
 
 fn config_at(dir: &Path) -> DaemonConfig {
     dev_config(dir, &[])

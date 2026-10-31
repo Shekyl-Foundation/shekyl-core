@@ -54,6 +54,12 @@ pub fn connectors(config: &DaemonConfig) -> Vec<ConnectorId> {
 /// onion holds one while it is in flight (`TOR_SUPERVISOR.md` §4.5). It is
 /// not a peer dial and does not count against the in-flight bound, so the
 /// bound does not cover it. An operator's Tor is not probed yet (§4.9).
+///
+/// A node that runs the bundle producer adds its reads' descriptors
+/// ([`shekyl_node::producer_descriptors`]): it mines and has a Tor, managed
+/// or the operator's, and each started settlement read holds a SOCKS
+/// stream (`ARCHIVAL_SETTLEMENT_WRITER.md` §16.11). Those are not peer
+/// dials either.
 #[must_use]
 pub fn reserved_descriptors(config: &DaemonConfig) -> u64 {
     let rpc = u64::from(config.rpc.connections_max.get());
@@ -62,6 +68,7 @@ pub fn reserved_descriptors(config: &DaemonConfig) -> u64 {
     } else {
         0
     };
+    let producer = shekyl_node::producer_descriptors(config);
     connectors(config)
         .into_iter()
         .map(|c| {
@@ -69,7 +76,10 @@ pub fn reserved_descriptors(config: &DaemonConfig) -> u64 {
             let bound = u64::try_from(profile.in_flight_bound).unwrap_or(u64::MAX);
             u64::from(profile.target).saturating_add(bound)
         })
-        .fold(rpc.saturating_add(probe), u64::saturating_add)
+        .fold(
+            rpc.saturating_add(probe).saturating_add(producer),
+            u64::saturating_add,
+        )
 }
 
 /// The descriptors the managed Tor's probe holds: its SOCKS stream, one
@@ -378,6 +388,51 @@ mod tests {
         ]);
         assert_eq!(reserved_descriptors(&offline), 7);
         assert!(connectors(&offline).is_empty());
+    }
+
+    /// A node that mines adds the bundle producer's reads to the
+    /// reservation, under a managed Tor and under an operator's: each
+    /// started settlement read holds a SOCKS stream. With Tor off it runs
+    /// no producer and adds nothing. Leaving the term out, or adding it for
+    /// one Tor only, fails this.
+    #[test]
+    fn a_mining_node_with_a_tor_reserves_its_settlement_reads() {
+        let mine = |mut config: DaemonConfig| {
+            config.mine.address = Some(shekyl_daemon_config::sections::MineAddress {
+                text: String::new(),
+                spend: [0; 32],
+                view: [0; 32],
+                x25519: [0; 32],
+                ml_kem: Vec::new(),
+            });
+            config
+        };
+        let managed = config(&["--rpc-connections-max", "25"]);
+        let operator = config(&[
+            "--tor",
+            "operator",
+            "--tor-socks",
+            "127.0.0.1:9050",
+            "--rpc-connections-max",
+            "25",
+        ]);
+        let off = config(&["--tor", "off", "--rpc-connections-max", "25"]);
+        for idle in [managed, operator] {
+            let mining = mine(idle.clone());
+            let reads = shekyl_node::producer_descriptors(&mining);
+            assert!(reads > 0, "{:?}: the producer runs", mining.tor);
+            assert_eq!(
+                reserved_descriptors(&mining),
+                reserved_descriptors(&idle) + reads,
+                "{:?}: the reads are reserved",
+                mining.tor
+            );
+        }
+        assert_eq!(
+            reserved_descriptors(&mine(off.clone())),
+            reserved_descriptors(&off),
+            "Tor off runs no producer"
+        );
     }
 
     /// The operator's onion (`tor-onion`) is this node's own Tor address,

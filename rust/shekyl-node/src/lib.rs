@@ -247,7 +247,7 @@ impl Node {
         // Every template draws its `0x0C` commitment from this ring, and the
         // bundle producer files from it (`SO-D12` increment 4c).
         let witness = Arc::new(shekyl_bundle_producer::WitnessRing::new());
-        let producer = producer_seat(args.config, &store, &witness, keys.is_some());
+        let producer = producer_seat(args.config, &store, &witness);
         let follow = Follow {
             job: Some(JobSeat {
                 board: Arc::clone(&board),
@@ -545,25 +545,22 @@ fn producer_seat(
     config: &DaemonConfig,
     store: &Arc<ChainStore>,
     witness: &Arc<shekyl_bundle_producer::WitnessRing>,
-    mining: bool,
 ) -> Option<shekyl_chain_ingest::bundle_producer::ProducerSeat> {
     use shekyl_archival_fetch_sched::{FetchScheduler, PFetchClient};
     use shekyl_chain_ingest::shard_facts::{StoreHolderSource, StoreShardFacts};
-    use shekyl_daemon_config::sections::Tor;
-    if !mining {
-        return None;
-    }
-    let timeouts = shekyl_bundle_producer::read::CHALLENGE_TIMEOUTS;
-    let client = match &config.tor {
-        Tor::Operator { socks, .. } => PFetchClient::with_timeouts(socks.endpoint, timeouts),
-        Tor::Managed { .. } => {
-            PFetchClient::with_route(Arc::new(shekyl_ffi::zone_ffi::managed_socks), timeouts)
-        }
-        Tor::Off => {
+    let Some(tor) = producer_tor(config) else {
+        if config.mine.address.is_some() {
             tracing::info!(
                 "the bundle producer is off: it reads through this node's Tor, and Tor is off"
             );
-            return None;
+        }
+        return None;
+    };
+    let timeouts = shekyl_bundle_producer::read::CHALLENGE_TIMEOUTS;
+    let client = match tor {
+        ProducerTor::Operator(endpoint) => PFetchClient::with_timeouts(endpoint, timeouts),
+        ProducerTor::Managed => {
+            PFetchClient::with_route(Arc::new(shekyl_ffi::zone_ffi::managed_socks), timeouts)
         }
     };
     let scheduler = Arc::new(FetchScheduler::new(
@@ -575,6 +572,40 @@ fn producer_seat(
         witness: Arc::clone(witness),
         read: shekyl_chain_ingest::bundle_producer::read_through(scheduler),
         start_spread: shekyl_bundle_producer::READ_START_SPREAD,
+    })
+}
+
+/// The Tor the bundle producer reads through.
+enum ProducerTor {
+    /// The operator's, at its `tor-socks` endpoint.
+    Operator(std::net::SocketAddr),
+    /// The managed one, at the route its supervisor publishes.
+    Managed,
+}
+
+/// The Tor the bundle producer reads through, when this configuration runs
+/// it: the node mines and has a Tor. `None` runs no producer. The one
+/// decision [`producer_seat`] and [`producer_descriptors`] both read.
+fn producer_tor(config: &DaemonConfig) -> Option<ProducerTor> {
+    use shekyl_daemon_config::sections::Tor;
+    config.mine.address.as_ref()?;
+    match &config.tor {
+        Tor::Operator { socks, .. } => Some(ProducerTor::Operator(socks.endpoint)),
+        Tor::Managed { .. } => Some(ProducerTor::Managed),
+        Tor::Off => None,
+    }
+}
+
+/// The descriptors the bundle producer can hold, for the daemon's inbound
+/// ceiling: each started read holds one SOCKS stream for as long as it
+/// holds a slot of the fetch client, and the producer starts at most
+/// [`READS_AT_ONCE`](shekyl_bundle_producer::read::READS_AT_ONCE), the
+/// client's slots. Zero when this configuration runs no producer, under
+/// either Tor.
+#[must_use]
+pub fn producer_descriptors(config: &DaemonConfig) -> u64 {
+    producer_tor(config).map_or(0, |_| {
+        u64::try_from(shekyl_bundle_producer::read::READS_AT_ONCE.get()).unwrap_or(u64::MAX)
     })
 }
 
