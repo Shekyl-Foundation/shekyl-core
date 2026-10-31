@@ -12,6 +12,10 @@
 //! The Tor connector is not this driver. It reads the route a publish
 //! installs and dials. Questions to Tor stay on the owning control
 //! connection (`TSR-Q9`).
+//!
+//! A sleep is a timer this driver was waiting on, found more than
+//! `control::RESUMED_AFTER` late: the select wake, or a control ask. The
+//! core does not infer one from a deadline that merely looks late.
 
 use std::collections::VecDeque;
 use std::net::SocketAddr;
@@ -29,13 +33,13 @@ use shekyl_tor_control_client::binary::{
 };
 use shekyl_tor_control_client::control::{
     parse_bootstrap_progress, parse_event, parse_network_view, parse_socks_listeners,
-    parse_traffic_read, BootstrapState, Command, ControlError, EventReceiver, EventSink, ServiceId,
-    SocksTimeout, UploadRounds,
+    parse_traffic_read, resume_lateness, BootstrapState, Command, ControlError, EventReceiver,
+    EventSink, Resume, ServiceId, SocksTimeout, UploadRounds,
 };
 use shekyl_tor_control_client::supervisor::{
-    held_sentence, input_of, install_sentence, render, Action, Cause, Connectors, Core, DialTally,
-    Input, ManagedRunning, NetworkView, OriginVerdict as FoldedOrigin, Policy, Space, Step,
-    Syncing, TorSetting,
+    clock_evidence_of, held_sentence, input_of, install_sentence, render, Action, Cause,
+    Connectors, Core, DialTally, Input, ManagedRunning, NetworkView, OriginVerdict as FoldedOrigin,
+    Policy, Space, Step, Syncing, TorSetting,
 };
 use shekyl_tor_control_daemon::{
     space_needed, sweep_stale_data_dirs, CacheSave, DaemonTorConfig, DaemonTorControl,
@@ -394,7 +398,11 @@ impl Drive {
             if self.perform().await {
                 break;
             }
-            arm(&self.owner, self.step.deadline);
+            // Captured before the arm. The wait's lateness is this interval,
+            // not how late a deadline stored during `perform` looks afterwards.
+            let armed = self.step.deadline;
+            let entered = self.now();
+            arm(&self.owner, armed);
             tokio::select! {
                 biased;
                 changed = self.stop.changed() => {
@@ -445,7 +453,7 @@ impl Drive {
                     if wake.is_err() {
                         break;
                     }
-                    self.step = self.core.on_deadline(self.now());
+                    self.step = self.step_after_wake(armed, entered, self.now());
                 }
                 event = self.incoming.recv() => {
                     if let Some(reply) = event {
@@ -454,6 +462,13 @@ impl Drive {
                         // a recovery among them, would never be performed.
                         let mut inputs = self.round_resync();
                         if let Some(parsed) = parse_event(&reply) {
+                            // Evidence first: a problem that is also the
+                            // blocked link is judged against the clock it
+                            // may already name.
+                            if let Some(input) = clock_evidence_of(&parsed) {
+                                tracing::debug!(target: "tor", "Tor's clock evidence {input:?}");
+                                inputs.push(input);
+                            }
                             if let Some(input) = input_of(&parsed) {
                                 // A Tor statement the supervisor acts on, said
                                 // as it arrives: what a run records.
@@ -576,11 +591,14 @@ impl Drive {
                 Vec::new()
             }
             Action::CheckPin => vec![self.pin()],
-            Action::Spawn { fresh_directory } => vec![self.spawn(fresh_directory).await],
+            Action::Spawn { fresh_directory } => {
+                let spawned = self.spawn(fresh_directory).await;
+                self.resume_before(vec![spawned])
+            }
             Action::Sample => {
                 let mut stop = self.stop.clone();
                 match race_stop(&mut stop, self.sample()).await {
-                    Ok(inputs) => inputs,
+                    Ok(inputs) => self.resume_before(inputs),
                     Err(shutdown) => vec![shutdown],
                 }
             }
@@ -592,13 +610,13 @@ impl Drive {
                 };
                 match race_stop(&mut stop, control.defer_disk_writes()).await {
                     Err(shutdown) => vec![shutdown],
-                    Ok(Ok(())) => Vec::new(),
+                    Ok(Ok(())) => self.resume_before(Vec::new()),
                     Ok(Err(error)) => {
                         tracing::warn!(
                             target: "global",
                             "leaving Tor writing its state ({error})"
                         );
-                        Vec::new()
+                        self.resume_before(Vec::new())
                     }
                 }
             }
@@ -609,11 +627,24 @@ impl Drive {
                 Vec::new()
             }
             Action::RoundStuck => self.round_stuck(),
+            Action::Resumed { late_by } => {
+                // Milliseconds, not whole seconds: a wake 10 s and a
+                // fraction late is past the threshold, and whole seconds
+                // would record it as the threshold itself.
+                let late_by_ms = u64::try_from(late_by.as_millis()).unwrap_or(u64::MAX);
+                tracing::info!(
+                    target: "tor",
+                    late_by_ms,
+                    "a timer the supervisor was waiting on came due late: this machine slept, and its windows start again from the wake"
+                );
+                Vec::new()
+            }
             Action::RefetchDescriptor => {
                 let mut stop = self.stop.clone();
-                vec![race_stop(&mut stop, self.refetch())
-                    .await
-                    .unwrap_or_else(|shutdown| shutdown)]
+                match race_stop(&mut stop, self.refetch()).await {
+                    Ok(input) => self.resume_before(vec![input]),
+                    Err(shutdown) => vec![shutdown],
+                }
             }
             Action::PublishInbound(inbound) => {
                 self.publish_inbound(inbound);
@@ -621,9 +652,10 @@ impl Drive {
             }
             Action::RepublishOnion => {
                 let mut stop = self.stop.clone();
-                vec![race_stop(&mut stop, self.republish())
-                    .await
-                    .unwrap_or_else(|shutdown| shutdown)]
+                match race_stop(&mut stop, self.republish()).await {
+                    Ok(input) => self.resume_before(vec![input]),
+                    Err(shutdown) => vec![shutdown],
+                }
             }
             Action::TakeDown => {
                 self.withdraw_route(DownCause::ProcessExited);
@@ -639,6 +671,41 @@ impl Drive {
                 Vec::new()
             }
         }
+    }
+
+    /// The select wait returned at `woke`. `armed` is the deadline it was
+    /// waiting on, and `entered` is when that wait began. A timer found more
+    /// than `control::RESUMED_AFTER` late resets the windows first; the work
+    /// still due then runs on the new ones. A tick already past when the
+    /// wait began is overdue work.
+    fn step_after_wake(&mut self, armed: Option<u64>, entered: u64, woke: u64) -> Step {
+        let mut actions = Vec::new();
+        if let Some(due) = armed {
+            let until_due = Duration::from_nanos(due.saturating_sub(entered));
+            let waited = Duration::from_nanos(woke.saturating_sub(entered));
+            if let Resume::Slept { late_by } = resume_lateness(until_due, waited) {
+                actions.extend(self.core.on(Input::Resumed { late_by }, woke).actions);
+            }
+        }
+        let step = self.core.on_deadline(woke);
+        actions.extend(step.actions);
+        Step {
+            actions,
+            deadline: step.deadline,
+        }
+    }
+
+    /// A control ask returned. A sleep it observed is the first input, so
+    /// the reply is judged on windows that start at the wake. A stop that
+    /// drops the ask does not come here: that ask wrote nothing.
+    fn resume_before(&mut self, mut inputs: Vec<Input>) -> Vec<Input> {
+        let Some(control) = self.control.as_ref() else {
+            return inputs;
+        };
+        if let Resume::Slept { late_by } = control.take_resume() {
+            inputs.insert(0, Input::Resumed { late_by });
+        }
+        inputs
     }
 
     fn pin(&mut self) -> Input {

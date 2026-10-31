@@ -36,6 +36,9 @@ tracing = "0.1"
 
 [dev-dependencies]
 tempfile = "3"
+# The reservation test mines through a parsed address. The address crate
+# owns that grammar.
+shekyl-address = { path = "../shekyl-address" }
 # The driver's stop-vs-ask race is tested on tokio's paused clock.
 tokio = { version = "1", default-features = false, features = ["macros", "rt", "sync", "time", "test-util"] }
 shekyl-onion-v3 = { path = "../shekyl-onion-v3" }

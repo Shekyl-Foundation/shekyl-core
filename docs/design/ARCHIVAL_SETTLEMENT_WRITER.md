@@ -1794,8 +1794,17 @@ moved from `shekyl-daemon-image`). `shekyl-ffi`, the wallet-side image,
 links the ingest crate with `pipeline` only, so the fetch client stays out
 of its graph (SF-D4). The task (`bundle_producer.rs`) wakes on the
 connector's tip and on each read's end. The node runs it when it mines and
-has an operator's Tor SOCKS endpoint; a managed Tor publishes its route to
-the network after the node opens, so a node on one runs no producer yet.
+has a Tor: through an operator's `tor-socks` endpoint, or through the
+managed Tor's route, which the fetch client reads at each fetch
+(`shekyl_ffi::zone_ffi::managed_socks`; `TOR_SUPERVISOR.md` §4.5, `TSR-F10`)
+because it appears after the node opens and moves when Tor respawns. A read
+while there is no route is `Stall::NoRoute`: nothing was sent, and it
+retries the same `P`. Each read still presents its own credentials from its
+nonce (`SF-D3`), so settlement reads share no circuit with each other, the
+peer dials or the probe. A node with Tor off runs no producer. Where it
+runs, under either Tor, the daemon reserves its reads' descriptors for the
+inbound ceiling: one SOCKS stream per slot of the fetch client,
+`READS_AT_ONCE` (`shekyl_node::producer_descriptors`).
 
 **Tests.** The gate (`bundle_producer_gate_tests`, live lane): a compact
 bond on a closed shard, the ring drawing every template, the producer's own
@@ -1816,8 +1825,8 @@ identity endpoint's class and the §5.1 test through the producer's read;
 
 **Not in this increment:** references on the wire, bodies pulled at
 connect, body fetch from peers, broadcast (4b); the live receipt-key
-selection on the serving host (4b); census flips and deletions (4b); a
-managed Tor's route to the producer; any C++.
+selection on the serving host (4b); census flips and deletions (4b); any
+C++.
 
 ## 17. `SO-D12h` — a settled epoch's market membership, and the per-epoch retirement — RULED 2026-10-17, BUILT
 

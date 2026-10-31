@@ -13,7 +13,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use kameo::actor::Spawn;
@@ -21,8 +21,8 @@ use tokio::sync::{oneshot, watch};
 
 use shekyl_tor_control_client::binary::VerifiedTorBinary;
 use shekyl_tor_control_client::control::{
-    BootstrapReadiness, Command, DiskWrites, EventSink, ManagedTor, SocksPort, SocksTimeout,
-    TorControlClient, TorControlClientConfig, TorLaunch,
+    BootstrapReadiness, Command, DiskWrites, EventSink, ManagedTor, Resume, SocksPort,
+    SocksTimeout, TorControlClient, TorControlClientConfig, TorLaunch,
 };
 use shekyl_tor_control_client::directory_cache;
 
@@ -173,6 +173,7 @@ impl DaemonTorControl {
             exit_watch,
             socks_addr: SocketAddr::from(([127, 0, 0, 1], 0)),
             reply_deadline,
+            resume: Mutex::new(Resume::Awake),
             stopping: Arc::new(AtomicBool::new(false)),
             copied,
             bootstrapped: false,

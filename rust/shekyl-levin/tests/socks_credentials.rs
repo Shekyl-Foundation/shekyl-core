@@ -26,7 +26,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use live_daemon::{free_port, rpc_ok};
+use live_daemon::{distinct_ports, rpc_ok};
 
 const USERNAME: &[u8] = b"shekyl-operator";
 const PASSWORD: &[u8] = b"proxy-password";
@@ -168,7 +168,7 @@ struct Daemon {
 }
 
 impl Daemon {
-    fn start(test: &str, args: &[String], toml: &str) -> Self {
+    fn start(test: &str, rpc_port: u16, args: &[String], toml: &str) -> Self {
         let bin = PathBuf::from(std::env::var_os("SHEKYLD_BIN").unwrap_or_else(|| {
             panic!(
                 "SHEKYLD_BIN not set. Build the daemon and run e.g. \
@@ -176,7 +176,6 @@ impl Daemon {
                  --test socks_credentials -- --ignored --nocapture ({test})"
             )
         }));
-        let rpc_port = free_port();
         let data_dir = owner_only_base().join(format!("shekyl-{test}-{rpc_port}"));
         drop(std::fs::remove_dir_all(&data_dir));
         // Owner-only: the daemon refuses a configuration file whose directory
@@ -310,12 +309,12 @@ fn pair_toml(option: &str) -> String {
     )
 }
 
-fn clearnet_args(proxy: SocketAddr, peer: SocketAddr) -> Vec<String> {
+fn clearnet_args(proxy: SocketAddr, listen: u16, peer: SocketAddr) -> Vec<String> {
     vec![
         "--tor".into(),
         "off".into(),
         "--clearnet-listen".into(),
-        format!("127.0.0.1:{}", free_port()),
+        format!("127.0.0.1:{listen}"),
         "--clearnet-socks".into(),
         proxy.to_string(),
         "--p2p-closed-peer".into(),
@@ -329,10 +328,14 @@ fn clearnet_args(proxy: SocketAddr, peer: SocketAddr) -> Vec<String> {
 #[ignore = "live: requires SHEKYLD_BIN; spawns a daemon behind a SOCKS5 proxy"]
 fn the_clearnet_dial_presents_its_pair_and_tunnels_through_the_proxy() {
     let proxy = AuthProxy::start(true);
-    let peer = SocketAddr::from((Ipv4Addr::LOCALHOST, free_port()));
+    // The proxy already holds its port. These three are the daemon's admin
+    // listener, its clearnet listener, and the peer it dials.
+    let [rpc_port, listen, peer_port] = distinct_ports();
+    let peer = SocketAddr::from((Ipv4Addr::LOCALHOST, peer_port));
     let _daemon = Daemon::start(
         "socks-clearnet",
-        &clearnet_args(proxy.at, peer),
+        rpc_port,
+        &clearnet_args(proxy.at, listen, peer),
         &pair_toml("clearnet-socks"),
     );
     let seen = proxy.wait_for(|s| s.tunneled > 0);
@@ -352,10 +355,12 @@ fn the_clearnet_dial_presents_its_pair_and_tunnels_through_the_proxy() {
 fn a_refused_pair_names_its_rows_and_the_daemon_keeps_running() {
     const NAMED: &str = "refused this node's username and password";
     let proxy = AuthProxy::start(false);
-    let peer = SocketAddr::from((Ipv4Addr::LOCALHOST, free_port()));
+    let [rpc_port, listen, peer_port] = distinct_ports();
+    let peer = SocketAddr::from((Ipv4Addr::LOCALHOST, peer_port));
     let mut daemon = Daemon::start(
         "socks-refused",
-        &clearnet_args(proxy.at, peer),
+        rpc_port,
+        &clearnet_args(proxy.at, listen, peer),
         &pair_toml("clearnet-socks"),
     );
     let seen = proxy.wait_for(|s| s.pair.is_some());
@@ -388,8 +393,10 @@ fn a_refused_pair_names_its_rows_and_the_daemon_keeps_running() {
 #[ignore = "live: requires SHEKYLD_BIN; spawns a daemon behind a SOCKS5 proxy"]
 fn the_operator_tor_dial_presents_its_pair() {
     let proxy = AuthProxy::start(true);
+    let [rpc_port] = distinct_ports();
     let _daemon = Daemon::start(
         "socks-tor",
+        rpc_port,
         &[
             "--clearnet".into(),
             "off".into(),

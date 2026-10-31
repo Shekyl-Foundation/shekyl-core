@@ -19,9 +19,12 @@ use super::posture::{
 
 mod announce;
 mod backoff;
+mod clock_evidence;
+mod clock_jump;
 mod dials;
 mod network_view;
 mod probe;
+mod resume;
 mod running;
 
 use crate::control::NetworkView;
@@ -78,6 +81,15 @@ pub struct Policy {
     /// How long a round may stay open before it is counted as stuck, said
     /// once at debug, and ended in the coalescer so the next round is seen.
     pub round_stuck_after: Duration,
+    /// How long, after Tor reported a clock jump during a bootstrap, the
+    /// percent and `traffic/read` may both stand still before the bootstrap
+    /// counts as stranded and Tor is started again (Rick, 2026-10-30). The
+    /// soak refines it.
+    pub jump_stall_after: Duration,
+    /// The window in which certificate lines and closed handshakes must
+    /// both reach their count before the clock is named (§4.2; Rick,
+    /// 2026-10-30).
+    pub clock_evidence_within: Duration,
 }
 
 impl Policy {
@@ -108,6 +120,14 @@ impl Policy {
             // The live tests' wait for a round, where the stuck rounds were
             // found (§10).
             round_stuck_after: Duration::from_secs(300),
+            // Rick, 2026-10-30: 5 minutes; the soak refines it.
+            jump_stall_after: Duration::from_secs(300),
+            // The clock-ahead run's five certificate lines and its first
+            // ten handshake problems fell within 10 s (§7); Tor retries its
+            // handshakes every few seconds while it bootstraps. A minute
+            // holds such a pass several times over, and keeps a line from
+            // one stretch from pairing with relays from another.
+            clock_evidence_within: Duration::from_secs(60),
         }
     }
 }
@@ -164,6 +184,12 @@ pub enum Action {
     /// say it once at debug, and end the coalescer's open round so the next
     /// round's uploads start a round of their own. Counted in Status.
     RoundStuck,
+    /// A timer the driver was waiting on fired `late_by` late: the machine
+    /// slept, and every window started again from the wake. Said once at info.
+    Resumed {
+        /// How far past its deadline the waited timer fired.
+        late_by: Duration,
+    },
     /// Say the posture. At most once per cap interval, except a recovery.
     /// The driver logs a healthy posture at info and any other at warn.
     Announce,
@@ -267,6 +293,23 @@ pub enum Input {
     },
     /// Tor resumed and closed its circuits.
     ClockJumped,
+    /// The driver was waiting on a timer and found it more than
+    /// `control::RESUMED_AFTER` late ([`crate::control::resume_lateness`]).
+    /// The machine slept. Folded before the reply that wait produced, so
+    /// the reply is judged on windows that start at the wake.
+    Resumed {
+        /// How far past its deadline the waited timer fired.
+        late_by: Duration,
+    },
+    /// Tor logged a relay's certificate as expired or not yet valid (§4.2).
+    /// The line names no relay.
+    CertificateOutOfDate,
+    /// A bootstrap problem with `REASON=DONE`: the TLS handshake with this
+    /// relay completed and Tor closed the connection.
+    HandshakeClosed {
+        /// The problem's `HOSTID`.
+        relay: crate::control::RelayFingerprint,
+    },
     /// The open-file limit. The process stays up.
     TooManyFiles {
         /// Sockets Tor reported open.
@@ -461,6 +504,10 @@ pub struct Core {
     round: Option<probe::RoundTrack>,
     /// Rounds that stayed open past `Policy::round_stuck_after`, this boot.
     stuck_rounds: u32,
+    /// A clock jump during this bootstrap, and `traffic/read`'s movement.
+    jump: clock_jump::JumpWatch,
+    /// This bootstrap's certificate lines and closed handshakes (§4.2).
+    clock_evidence: clock_evidence::ClockEvidence,
     /// The owed republish is a Service remedy: a refusal escalates.
     service_republish: bool,
 }
@@ -494,6 +541,8 @@ impl Core {
             probe: Probe::Idle,
             round: None,
             stuck_rounds: 0,
+            jump: clock_jump::JumpWatch::new(now),
+            clock_evidence: clock_evidence::ClockEvidence::default(),
             service_republish: false,
         };
         let step = core.step(now, vec![Action::CheckPin]);
@@ -546,10 +595,13 @@ impl Core {
             } => self.probe_arrived(now, minted_at, arrived_at),
             Input::OnionRejected => self.onion_refused(now),
             Input::EndpointReady => self.endpoint_ready(),
-            Input::ExternalBlocked => self.external(now, Cause::ExternalBlocked),
+            Input::ExternalBlocked => self.blocked(now),
             Input::DirectoryUnreachable => self.external(now, Cause::DirectoryUnreachable),
             Input::ClockSkew { seconds } => self.external(now, Cause::ClockSkew { seconds }),
-            Input::ClockJumped => self.clock_jumped(),
+            Input::ClockJumped => self.clock_jumped(now),
+            Input::Resumed { late_by } => self.resumed(now, late_by),
+            Input::CertificateOutOfDate => self.line_logged(now),
+            Input::HandshakeClosed { relay } => self.handshake_closed(relay, now),
             Input::TooManyFiles { open } => self.too_many_files(now, open),
             Input::DangerousVersion => {
                 self.set_cause(Cause::DangerousVersion);
@@ -706,6 +758,8 @@ impl Core {
         };
         self.launch_failures = 0;
         self.progress = ProgressWindow::start(now, self.policy.alive_every);
+        self.jump = clock_jump::JumpWatch::new(now);
+        self.clock_evidence = clock_evidence::ClockEvidence::default();
         self.set_cause(Cause::None);
         self.arm_sample(now);
         self.arm_alive(now);
@@ -740,6 +794,10 @@ impl Core {
             self.progress.note_percent(progress, now);
         }
         self.progress.note_read(read, now);
+        self.jump.note_read(read, now);
+        if let Some(fault) = self.stranded_after_jump(now) {
+            return fault;
+        }
         if let Phase::Running { link, .. } = &mut self.phase {
             *link = Link::Open;
             return Vec::new();
@@ -833,7 +891,8 @@ impl Core {
         self.owed_actions()
     }
 
-    fn clock_jumped(&mut self) -> Vec<Action> {
+    fn clock_jumped(&mut self, now: u64) -> Vec<Action> {
+        self.jump.jumped(now);
         match &mut self.phase {
             Phase::Running { link, .. } => *link = Link::Resumed,
             Phase::Bootstrapping { .. } => {}
@@ -1103,6 +1162,7 @@ impl Core {
             Cause::ExternalBlocked
                 | Cause::DirectoryUnreachable
                 | Cause::ClockSkew { .. }
+                | Cause::CertificatesOutOfDate
                 | Cause::TooManyFiles { .. }
         )
     }

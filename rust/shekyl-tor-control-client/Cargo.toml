@@ -69,7 +69,10 @@ windows-sys = { version = "0.61", features = [
 shekyl-timing-engine = { path = "../shekyl-timing-engine" }
 hex-literal = "1"
 tempfile = "3"
-tokio = { version = "1", features = ["net", "io-util", "sync", "time", "rt", "macros"] }
+# `test-util`: the reply bound's resume tests pause time and jump it, as
+# Windows' clock jumps across a sleep (`control/ready.rs`). A feature of the
+# tokio already in Cargo.lock, so no new crate.
+tokio = { version = "1", features = ["net", "io-util", "sync", "time", "rt", "macros", "test-util"] }
 
 [lints]
 workspace = true

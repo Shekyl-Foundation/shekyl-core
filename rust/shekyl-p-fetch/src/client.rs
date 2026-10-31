@@ -137,11 +137,32 @@ impl Default for Timeouts {
     }
 }
 
+/// Where a fetch's SOCKS dial goes.
+enum Proxy {
+    /// One address for the client's life: an operator's Tor (`tor-socks`).
+    Fixed(SocketAddr),
+    /// Read at each fetch: the managed Tor's route, which a respawn can move
+    /// and which is absent while that Tor is not running (`TSR-F10`).
+    ReadAtUse(ProxyRoute),
+}
+
+/// The managed Tor's SOCKS address now, or `None` while there is none.
+pub type ProxyRoute = Arc<dyn Fn() -> Option<SocketAddr> + Send + Sync>;
+
+impl Proxy {
+    fn now(&self) -> Option<SocketAddr> {
+        match self {
+            Self::Fixed(at) => Some(*at),
+            Self::ReadAtUse(route) => route(),
+        }
+    }
+}
+
 /// The shard-fetch client. One per daemon; `Clone`-free by design — the
 /// in-flight cap is a property of the process's Tor instance, so a second
 /// client would be a second cap.
 pub struct PFetchClient {
-    proxy: SocketAddr,
+    proxy: Proxy,
     /// `Arc` so a permit can be *owned* and travel into the blocking
     /// check tasks — see [`Self::fetch`] on cancellation.
     slots: Arc<Semaphore>,
@@ -151,7 +172,7 @@ pub struct PFetchClient {
 impl std::fmt::Debug for PFetchClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PFetchClient")
-            .field("proxy", &self.proxy)
+            .field("proxy", &self.proxy.now())
             .field("available_slots", &self.slots.available_permits())
             .field("timeouts", &self.timeouts)
             .finish()
@@ -177,6 +198,24 @@ impl PFetchClient {
     /// [`Self::new`] with explicit per-step bounds.
     #[must_use]
     pub fn with_timeouts(proxy: SocketAddr, timeouts: Timeouts) -> Self {
+        Self::with_proxy(Proxy::Fixed(proxy), timeouts)
+    }
+
+    /// A client that reads its proxy at each fetch from `route`: the
+    /// managed Tor's SOCKS address, which a respawn can move and which is
+    /// absent while that Tor is not running (`TSR-F10`: never cached). A
+    /// fetch with no route is [`Stall::NoRoute`]: nothing was sent.
+    ///
+    /// The route is an address only. Each read still presents its own
+    /// credentials from its nonce (`SF-D3`), so reads share no circuit with
+    /// each other, with the node's peer dials (which offer no
+    /// authentication), or with any other purpose's pair.
+    #[must_use]
+    pub fn with_route(route: ProxyRoute, timeouts: Timeouts) -> Self {
+        Self::with_proxy(Proxy::ReadAtUse(route), timeouts)
+    }
+
+    fn with_proxy(proxy: Proxy, timeouts: Timeouts) -> Self {
         Self {
             proxy,
             slots: Arc::new(Semaphore::new(MAX_INFLIGHT)),
@@ -383,8 +422,11 @@ impl PFetchClient {
     ) -> Result<TcpStream, FetchError> {
         let host = endpoint.onion_address();
         let credentials = header.socks_credentials();
+        let Some(proxy) = self.proxy.now() else {
+            return Err(FetchError::Stall(Stall::NoRoute));
+        };
         let connect = async {
-            let mut stream = TcpStream::connect(self.proxy)
+            let mut stream = TcpStream::connect(proxy)
                 .await
                 .map_err(|err| FetchError::Stall(Stall::Dial(err.to_string())))?;
             socks_connect(

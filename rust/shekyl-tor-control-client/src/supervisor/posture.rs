@@ -181,6 +181,10 @@ pub enum Cause {
         /// The reported difference, in seconds.
         seconds: i64,
     },
+    /// Tor logged relays' certificates as expired or not yet valid, from
+    /// enough distinct relays within the window that the clock, not a relay,
+    /// is the cause (§4.2). Tor stated no offset.
+    CertificatesOutOfDate,
     /// Tor hit the open-file limit.
     TooManyFiles {
         /// How many sockets Tor reported open.
@@ -194,6 +198,11 @@ pub enum Cause {
     /// found unreachable (§4.4: a Service remedy whose control command
     /// failed escalates to a respawn).
     OnionRefused,
+    /// Tor reported a clock jump during its bootstrap, and then neither its
+    /// percent nor the bytes it read moved for the policy's bound: its
+    /// retries were scheduled on the clock that was wrong. It is started
+    /// again (§4.4).
+    StrandedAfterClockJump,
 }
 
 /// Free space under Tor's data directory against what a spawn needs.
@@ -313,6 +322,12 @@ impl ProgressWindow {
         }
     }
 
+    /// When the percent last changed, in the caller's clock.
+    #[must_use]
+    pub const fn moved_at(&self) -> u64 {
+        self.progress_at
+    }
+
     /// The last percent a sample or a bootstrap notice reported.
     #[must_use]
     pub const fn percent(&self) -> u8 {
@@ -346,6 +361,15 @@ impl ProgressWindow {
             }
             self.marks.push_back(ReadMark { at: now, bytes });
         }
+        self.refresh(now);
+    }
+
+    /// The machine slept (§5, "Resumed from suspend"): the percent's hold
+    /// and the byte window start again from the wake, so the sleep reads as
+    /// neither a held percent nor a window with nothing arriving.
+    pub fn resumed(&mut self, now: u64) {
+        self.progress_at = now;
+        self.marks.clear();
         self.refresh(now);
     }
 
@@ -514,10 +538,12 @@ pub fn install_sentence(cause: &Cause) -> Option<&'static str> {
         | Cause::ExternalBlocked
         | Cause::DirectoryUnreachable
         | Cause::ClockSkew { .. }
+        | Cause::CertificatesOutOfDate
         | Cause::TooManyFiles { .. }
         | Cause::ReplyLate
         | Cause::DangerousVersion
-        | Cause::OnionRefused => None,
+        | Cause::OnionRefused
+        | Cause::StrandedAfterClockJump => None,
     }
 }
 
@@ -653,10 +679,45 @@ fn speaks_bootstrap(status: &Status) -> bool {
 
 fn behaviour(status: &Status) -> String {
     match status.own_tx {
-        OwnTx::AddressHiding => "Tor is carrying this node's traffic.".to_owned(),
+        // The relay's verdict says an origin leaves on an address-hiding
+        // session. What is true of the traffic depends on the Tor that held
+        // those sessions, so the shown state picks the sentence: the verdict
+        // lags a Tor that ended until the relay sees its sessions close.
+        OwnTx::AddressHiding => match carriage(status) {
+            Carriage::Carries => "Tor is carrying this node's traffic.".to_owned(),
+            Carriage::OpenOnly => {
+                "Connections already open through Tor still carry this node's traffic.".to_owned()
+            }
+            Carriage::Gone => held_sentence(status.sync),
+        },
         OwnTx::Held => held_sentence(status.sync),
         OwnTx::ClearnetOnly => "This node is syncing and sending over the open network. Until the encrypted link is in place, that network is unencrypted.".to_owned(),
         OwnTx::Offline => "This node is offline.".to_owned(),
+    }
+}
+
+/// What the Tor behind an address-hiding verdict can carry.
+enum Carriage {
+    /// Shown usable, or degraded only because the onion is unreachable (no
+    /// cause stands): the link carries traffic.
+    Carries,
+    /// Degraded with a cause: the Tor that holds the open connections is
+    /// still running, and a sentence that it carries the traffic would
+    /// contradict the cause that follows (the VM suspend, 2026-10-30).
+    OpenOnly,
+    /// Restarting, or bootstrapping a new process: the Tor that held the
+    /// sessions has ended or is being taken down, so its connections carry
+    /// nothing. The node is held until Tor is back, as the verdict will say
+    /// once the relay sees the sessions close.
+    Gone,
+}
+
+fn carriage(status: &Status) -> Carriage {
+    match status.shown {
+        Shown::Usable => Carriage::Carries,
+        Shown::Degraded if status.cause == Cause::None => Carriage::Carries,
+        Shown::Degraded => Carriage::OpenOnly,
+        Shown::Restarting | Shown::RestartingHeld | Shown::Bootstrapping => Carriage::Gone,
     }
 }
 
@@ -757,13 +818,22 @@ fn named_cause(status: &Status) -> Option<String> {
             ),
             None => format!("Tor's data directory {} could not be used.", path.display()),
         }),
+        // Clock first: a wrong clock also stops every handshake, Tor may name
+        // nothing more specific than the handshake (the clock-ahead VM run of
+        // 2026-10-30), and the date takes the operator ten seconds to check.
         Cause::ExternalBlocked | Cause::DirectoryUnreachable => Some(
-            "This machine cannot reach the Tor network. Check the firewall or the network."
+            "This machine cannot reach the Tor network. Check this computer's date and time, then the firewall or the network."
                 .to_owned(),
         ),
         Cause::ClockSkew { seconds } => Some(format!(
             "The clock is off by {seconds} seconds. Check time sync."
         )),
+        // Tor's evidence, not a measurement: the source is relays, so the
+        // sentence says what Tor reports rather than that the clock is wrong.
+        Cause::CertificatesOutOfDate => Some(
+            "Tor reports that this computer's date or time looks wrong, so it cannot connect. Check this computer's date and time."
+                .to_owned(),
+        ),
         Cause::TooManyFiles { open } => Some(format!(
             "Tor reached the open-file limit ({open} open). Raise the limit."
         )),
@@ -773,6 +843,10 @@ fn named_cause(status: &Status) -> Option<String> {
         }
         Cause::OnionRefused => Some(
             "Tor refused to publish this node's address again and is being started again."
+                .to_owned(),
+        ),
+        Cause::StrandedAfterClockJump => Some(
+            "Tor stopped making progress after this computer's clock changed, and is being started again."
                 .to_owned(),
         ),
     }
