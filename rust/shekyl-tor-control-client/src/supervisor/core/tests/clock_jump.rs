@@ -18,11 +18,15 @@ fn secs(seconds: u64) -> u64 {
 }
 
 fn sample(core: &mut Core, at: u64, percent: u8, read: u64) -> Step {
+    sample_read(core, at, percent, Some(read))
+}
+
+fn sample_read(core: &mut Core, at: u64, percent: u8, read: Option<u64>) -> Step {
     core.on(
         Input::DirectorySample {
             progress: Some(percent),
             socks: None,
-            read: Some(read),
+            read,
         },
         at,
     )
@@ -92,4 +96,40 @@ fn a_stall_without_a_jump_or_with_bytes_arriving_is_not_a_fault() {
         0,
         "bytes arriving: a slow mirror after the jump"
     );
+}
+
+/// A `traffic/read` Tor did not give is unknown, never a stall
+/// (`control/traffic.rs`). With no count ever read, a jump and a held
+/// percent are not enough. With counts read and then lost, the lost stretch
+/// is not evidence either, and the bound starts again when a count returns.
+/// Treating a missing count as unchanged fails both.
+#[test]
+fn an_unknown_byte_count_is_not_a_stall() {
+    let mut core = bootstrapping();
+    core.on(Input::ClockJumped, secs(5));
+    for i in 2..=200 {
+        let step = sample_read(&mut core, secs(5 * i), 14, None);
+        assert!(!takes_down(&step), "never known, at {i}");
+    }
+    assert_eq!(core.status().respawn_count, 0, "no count was ever read");
+
+    let mut core = bootstrapping();
+    sample(&mut core, secs(5), 14, 1_000);
+    core.on(Input::ClockJumped, secs(10));
+    for i in 3..=200 {
+        let step = sample_read(&mut core, secs(5 * i), 14, None);
+        assert!(!takes_down(&step), "lost, at {i}");
+    }
+    // The count returns, flat: a full bound from its return, not before.
+    let back = secs(5 * 201);
+    sample(&mut core, back, 14, 1_000);
+    let mut at = back + secs(5);
+    while at < back + secs(300) {
+        let step = sample(&mut core, at, 14, 1_000);
+        assert!(!takes_down(&step), "inside the bound after the count returned, at {at}");
+        at += secs(5);
+    }
+    sample(&mut core, back + secs(300), 14, 1_000);
+    assert_eq!(core.status().respawn_count, 1, "a known count, flat for the bound");
+    assert_eq!(core.status().cause, Cause::StrandedAfterClockJump);
 }

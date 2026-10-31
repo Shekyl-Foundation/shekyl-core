@@ -13,9 +13,10 @@
 //!
 //! A slow bootstrap is not a fault (Rick, 2026-10-19), and this rule keeps
 //! that: it respawns only when Tor itself reported `CLOCK_JUMPED` during
-//! this bootstrap, and since the jump both the percent and `traffic/read`
-//! have stood still for `Policy::jump_stall_after`. A slow directory mirror
-//! always had bytes arriving. Both conditions are Tor's statements.
+//! this bootstrap, and since the jump both the percent and a known
+//! `traffic/read` have stood still for `Policy::jump_stall_after`. A slow
+//! directory mirror always had bytes arriving. Both conditions are Tor's
+//! statements, and a count Tor did not give is no statement.
 //!
 //! The jump is held for the rest of the bootstrap, not cleared at the next
 //! percent: in the stranded run Tor moved from 14 % to 15 % after the jump
@@ -29,7 +30,8 @@ use super::{duration_ns, Action, Core, Phase};
 pub(super) struct JumpWatch {
     /// When Tor reported `CLOCK_JUMPED` during this bootstrap.
     jumped_at: Option<u64>,
-    /// The last `traffic/read`, and when it last grew.
+    /// The last `traffic/read`, `None` while unknown, and when it last
+    /// changed or became unknown.
     read: Option<u64>,
     read_moved_at: u64,
 }
@@ -49,15 +51,15 @@ impl JumpWatch {
     }
 
     /// A sample's `traffic/read`. A count that grew, or the first one, moves
-    /// the mark; one that went backwards starts the count again.
+    /// the mark; one that went backwards starts the count again. A reply
+    /// without a count is unknown, never zero (`control/traffic.rs`): bytes
+    /// that cannot be read are not bytes that stood still, so it moves the
+    /// mark too, and the next known count starts the bound again.
     pub(super) fn note_read(&mut self, read: Option<u64>, now: u64) {
-        let Some(bytes) = read else {
-            return;
-        };
-        if self.read.is_none_or(|before| bytes != before) {
+        if read.is_none() || read != self.read {
             self.read_moved_at = now;
         }
-        self.read = Some(bytes);
+        self.read = read;
     }
 }
 
@@ -65,7 +67,7 @@ impl Core {
     /// The stranded-bootstrap check, at each sample and live deadline while
     /// bootstrapping. A process fault (respawn into the kept directory) when
     /// a reported jump is followed by `jump_stall_after` with neither the
-    /// percent nor the bytes moving.
+    /// percent nor a known byte count moving.
     pub(super) fn stranded_after_jump(&mut self, now: u64) -> Option<Vec<Action>> {
         if !matches!(self.phase, Phase::Bootstrapping { .. }) {
             return None;
