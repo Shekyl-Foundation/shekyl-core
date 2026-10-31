@@ -897,7 +897,7 @@ pub fn render_summary(out: &mut impl std::fmt::Write, report: &Report) -> std::f
          that never serves; adm/never/late/lost = where the blocks' bundles went; att/dr, max, \
          last = select_draw attempts per draw, the most, and draws that reached attempt \
          {DRAW_ATTEMPTS}",
-        CAPM = shekyl_archival_retention::COUNT_CAP_BASE_MULTIPLE,
+        CAPM = shekyl_archival_retention::archival_params().count_cap_base_multiple(),
     )?;
     writeln!(
         out,
@@ -1038,8 +1038,15 @@ mod tests {
         // The function is production's, argument for argument.
         assert_eq!(
             count_at(4_096, 9_000, 1_234, 4_321, 77),
-            draw_count(4_096, 9_000 - 1_234, draw_horizon(4_321, SEB, W2), SEB, 77)
-                .expect("H and SEB")
+            draw_count(
+                4_096,
+                9_000 - 1_234,
+                draw_horizon(4_321, SEB, W2, shekyl_archival_retention::archival_params()),
+                SEB,
+                77,
+                shekyl_archival_retention::archival_params()
+            )
+            .expect("H and SEB")
         );
     }
 
@@ -1199,9 +1206,10 @@ mod tests {
             let (count, next) = draw_count(
                 u64::from(D),
                 shortfall.saturating_sub(in_flight),
-                draw_horizon(h64, SEB, W2),
+                draw_horizon(h64, SEB, W2, shekyl_archival_retention::archival_params()),
                 SEB,
                 carry,
+                shekyl_archival_retention::archival_params(),
             )
             .expect("H and SEB");
             assert_eq!(

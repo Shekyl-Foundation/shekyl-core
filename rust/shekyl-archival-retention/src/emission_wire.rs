@@ -47,10 +47,22 @@ use crate::id::p_canonical_id_from_hybrid_pubkey;
 /// tag and this wire tag agree.
 pub const VIN_TYPE_ARCHIVAL_REWARD_EMISSION: u8 = 0x04;
 
+include!(concat!(
+    env!("OUT_DIR"),
+    "/emission_epochs_cap_generated.rs"
+));
+
 /// Per-emission settlement-epoch batch cap (`REWARD_EMISSION_LEG.md` §5.3
 /// `u64[MAX]`, `1 ≤ MAX ≤ 15`; the §6.6 F4 drain-vs-batch invariant is **signed**
 /// at `W = 26`, batch `15`, `SEB = 10_000`).
-pub const MAX_SETTLEMENT_EPOCHS_PER_EMISSION: usize = 15;
+///
+/// Generated from `config/consensus_constants.json`
+/// (`max_settlement_epochs_per_emission`) by this crate's `build.rs`, which
+/// refuses a value outside the wire's `1..=15`. Structural, not swept (ESR-16
+/// completion, ruling 3). The C++ header's `SHEKYL_EMISSION_MAX_SETTLEMENT_EPOCHS`,
+/// which sizes the C++ callers' epoch buffers, is held to it by a `shekyl-ffi`
+/// test.
+pub const MAX_SETTLEMENT_EPOCHS_PER_EMISSION: usize = GENERATED_MAX_SETTLEMENT_EPOCHS_PER_EMISSION;
 
 /// Structural DoS cap on the opaque `FcmpMembershipOnly` proof blob.
 ///
@@ -1106,15 +1118,16 @@ mod tests {
         );
     }
 
-    /// Boundary roundtrips the r5 review found uncovered: the 15-epoch batch
-    /// cap, scarcity at `u32::MAX`, tree_depth extremes, and exact-consumption
+    /// Boundary roundtrips the r5 review found uncovered: the batch cap (read
+    /// from the generated constant, so a re-pinned key moves the test with it), scarcity at `u32::MAX`, tree_depth extremes, and exact-consumption
     /// of an unmodified serialize.
     #[test]
     fn emission_boundary_roundtrips() {
-        // (a) MAX_SETTLEMENT_EPOCHS_PER_EMISSION = 15 epochs, aligned amounts +
+        // (a) MAX_SETTLEMENT_EPOCHS_PER_EMISSION epochs, aligned amounts +
         // claims; roundtrip through the EXACT parser so full consumption of a
         // clean serialize is proven, not assumed.
-        let epochs: Vec<u64> = (1..=15).collect();
+        let cap = MAX_SETTLEMENT_EPOCHS_PER_EMISSION as u64;
+        let epochs: Vec<u64> = (1..=cap).collect();
         let mut vin = sample_vin();
         vin.settlement_epochs = epochs.clone();
         vin.reward_amount_plain = epochs.iter().map(|e| e * 1_000).collect();
@@ -1131,19 +1144,19 @@ mod tests {
             .collect();
         let wire = vin.serialize().unwrap();
         let decoded = ArchivalRewardEmissionVin::read_payload_exact(&mut &wire[1..]).unwrap();
-        assert_eq!(decoded, vin, "15-epoch max batch must roundtrip exactly");
+        assert_eq!(decoded, vin, "the max batch must roundtrip exactly");
 
         // (b) One past the cap must reject on write.
         let mut over = vin.clone();
-        over.settlement_epochs.push(16);
-        over.reward_amount_plain.push(16_000);
+        over.settlement_epochs.push(cap + 1);
+        over.reward_amount_plain.push((cap + 1) * 1_000);
         over.work_claim.push(WorkEpochClaim {
-            epoch: 16,
+            epoch: cap + 1,
             shard_entries: vec![],
         });
         assert!(matches!(
             over.serialize(),
-            Err(WireError::EpochCountOutOfRange { got: 16 })
+            Err(WireError::EpochCountOutOfRange { got }) if got == MAX_SETTLEMENT_EPOCHS_PER_EMISSION + 1
         ));
 
         // (c) scarcity_micro at u32::MAX roundtrips losslessly.

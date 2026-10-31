@@ -137,7 +137,7 @@ impl BlockSpace {
         self.waiting_total -= included;
 
         let weight = fill.block_weight();
-        self.medians.push(medians, weight);
+        self.medians.push(medians, weight, at.params);
         Filled {
             included,
             expired,
@@ -203,6 +203,7 @@ mod tests {
             burn_pct_scaled: 0,
             chain_leaves: 1,
             params: &params,
+            relay: shekyl_economics::relay_policy(),
         };
         let mut space = BlockSpace::default();
         let small = space.fill(0, space.medians(&params), 5, baseline_tx(), &at);

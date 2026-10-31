@@ -182,9 +182,21 @@ fn height_zero_and_all_of_epoch_zero_issue_no_draw() {
         SETTLEMENT_EPOCH_BLOCKS / 2,
         SETTLEMENT_EPOCH_BLOCKS - 1,
     ] {
-        let horizon = draw_horizon(r, SETTLEMENT_EPOCH_BLOCKS, CHALLENGE_RESPONSE_BLOCKS);
-        let (count, next) = draw_count(d, shortfall, horizon, SETTLEMENT_EPOCH_BLOCKS, carry)
-            .expect("the schedule's epoch and horizon are non-zero");
+        let horizon = draw_horizon(
+            r,
+            SETTLEMENT_EPOCH_BLOCKS,
+            CHALLENGE_RESPONSE_BLOCKS,
+            shekyl_archival_retention::archival_params(),
+        );
+        let (count, next) = draw_count(
+            d,
+            shortfall,
+            horizon,
+            SETTLEMENT_EPOCH_BLOCKS,
+            carry,
+            shekyl_archival_retention::archival_params(),
+        )
+        .expect("the schedule's epoch and horizon are non-zero");
         assert_eq!(count, 0, "no draw at block {r} of epoch 0");
         carry = next;
     }

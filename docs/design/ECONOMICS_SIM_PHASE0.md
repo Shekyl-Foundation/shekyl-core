@@ -703,11 +703,19 @@ steps below and listed at the end.
      report byte for byte; the sweep's own falsifier per parameter.
    - The run is graded in
      [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md)
-     §5.26.1. Both default `--stage2` narrations match the fixture.
-     `w_ref` is still the reference-weight constant; ESR-10 threads it.
+     §5.26.1, the completion (#1218, ruled 2026-10-29) in §5.26.2. Three
+     generated structs, one file each: `EconomicParams`
+     (`economics_params.json` and three consensus keys, in the params
+     digest), `ArchivalParams` (`consensus_constants.json`, in the
+     consensus digest) and `RelayPolicy` (`relay_policy.json`, outside
+     both). A sim run is the production baseline plus named overrides
+     (`--set set.field=value`, `--stage2` only), each through its struct's
+     validator; every report opens with the three digests and the
+     overrides, and a cell prints each moved figure beside its baseline.
 3. **ESR-10**, the multi-class pool (`ESR10_PREDICTIONS.md` §0.1) first, then
-   both constant arms. #1152 delivered the one-zone reader (C2-R2 R3), so the
-   re-derived arm needs only `w_ref` as a parameter, which step 2 provides.
+   both constant arms. #1152 delivered the one-zone reader (C2-R2 R3), and
+   `w_ref` is `RelayPolicy::ref_tx_weight`, which a run sets with
+   `--set relay.ref_tx_weight=…` (step 2), so the re-derived arm is a cell.
    ESR-10 runs before the sweep grades the release rails: `M_r` sits at 0.8
    while 22 of 50 are carried (ruling 4).
    - *Predictions owed:* the registered set, amended against the post-#1152

@@ -5,7 +5,7 @@
 //! the M_r-neutral view (`max(curve, TAIL)`) used as the fee-ladder operand,
 //! not a stage of the paid pipeline.
 
-use crate::params::EconomicParams;
+use crate::params::{EconomicParams, SCALE};
 use crate::volume::TxVolume;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -108,13 +108,34 @@ pub fn penalty_free_weight(median_weight: u64, params: &EconomicParams) -> u64 {
 /// is no post-tail era in which it would recover — which is why the
 /// penalty is the LAST operator, not an emission stage.
 ///
-/// Shape (per the C2a port, arithmetic unchanged): the effective median is
-/// [`penalty_free_weight`]; at or below it no penalty; above twice it the
-/// block is rejected ([`EmissionError::BlockTooBig`]); otherwise
-/// `amount·(2m − c)·c/m²` in `u128`, fail-closed on overflow. The zone is
-/// read from `params`, never taken from the caller: a consensus constant a
-/// caller could vary per call is a second source (E6 slice 4 §3.1 S8 — the
-/// C++ used to supply it on every call).
+/// Shape: the effective median `M` is [`penalty_free_weight`]; at or below
+/// it no penalty; above the limit `k·M` ([`block_weight_limit`], `k` the
+/// set's [`EconomicParams::block_weight_limit_multiple`]) the block is
+/// rejected ([`EmissionError::BlockTooBig`]); otherwise the reward is
+/// `amount · (1 − ((w − M)/((k − 1)·M))²)`, zero at the limit. With
+/// `k − 1 = e / s` in lowest terms and `x = w − M`:
+///
+/// ```text
+/// reward = ⌊⌊amount · (e·M − s·x) · (e·M + s·x) / (e·M)⌋ / (e·M)⌋
+/// ```
+///
+/// At the shipped `k = 2`, `e = s = 1`, the factors are `2M − w` and `w`,
+/// and the divisor is `M` twice: the C2a port's `amount·(2m − c)·c/m²`
+/// term for term, the same intermediate magnitudes and the same refusals
+/// (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.26, the penalty at a
+/// multiple). Every product is checked: an overflow is
+/// [`EmissionError::Overflow`], never a wrap. The product is largest at
+/// `x → 0`, where it is about `amount · e² · M²`, so it is refused only
+/// when that reaches `2¹²⁸`. With `amount < 2⁴¹` (the largest paid reward,
+/// `M_r` at its top rail on the first curve block, is below it) the
+/// shipped `e = 1` is safe for every `M < 2⁴³·⁵` (about 1.2·10¹³ bytes),
+/// and the largest `e` a set can carry, 29 (`k = 3.9`: `k − 1 = 29/10` in
+/// lowest terms; the tenths grain up to
+/// [`MAX_BLOCK_WEIGHT_LIMIT_MULTIPLE`](crate::block_weight::MAX_BLOCK_WEIGHT_LIMIT_MULTIPLE)
+/// gives no larger numerator), for every `M < 2³⁸·⁶` (about 4·10¹¹ bytes). The medians' clamps do not
+/// bound `M` over a chain's life (the long-term median may rise 1.7× a
+/// window); these are thresholds a chain would have to grow past, refused
+/// in the same way the shipped arithmetic refuses them.
 pub(crate) fn apply_weight_penalty(
     amount: u64,
     median_weight: u64,
@@ -126,29 +147,47 @@ pub(crate) fn apply_weight_penalty(
     if current_block_weight <= median {
         return Ok(amount);
     }
-    // `2 * median` in u128: the comparison must not wrap for medians above
-    // u64::MAX / 2, which consensus never produces but the FFI edge cannot
+    // The limit in u128: the comparison must not wrap for medians near
+    // u64::MAX, which consensus never produces but the FFI edge cannot
     // assume away.
-    let double_median = u128::from(median) * 2;
-    if u128::from(current_block_weight) > double_median {
+    let median = u128::from(median);
+    let current = u128::from(current_block_weight);
+    if current > median * u128::from(params.block_weight_limit_multiple) / u128::from(SCALE) {
         return Err(EmissionError::BlockTooBig);
     }
 
-    let current = u128::from(current_block_weight);
-    // Cannot overflow and so is deliberately unguarded: `double_median -
-    // current` is below `median` (we are past the `current <= median`
-    // return), and `current <= 2 * median`, so the product stays under
-    // `2 * u64::MAX^2 < u128::MAX`.
-    let multiplicand = (double_median - current) * current;
-    let median = u128::from(median);
-
+    let (e, s) = limit_excess_in_lowest_terms(params);
+    let em = e * median;
+    let sx = s * (current - median);
+    // `sx ≤ em` because `current` is at most the limit, so this does not
+    // underflow; at `e = s = 1` it is `2M − w`.
+    let multiplicand = (em - sx)
+        .checked_mul(em + sx)
+        .ok_or(EmissionError::Overflow)?;
     let numerator = u128::from(amount)
         .checked_mul(multiplicand)
         .ok_or(EmissionError::Overflow)?;
-    let reward = numerator / median / median;
+    let reward = numerator / em / em;
 
     let capped = reward.min(u128::from(amount));
     Ok(u64::try_from(capped).unwrap_or(amount))
+}
+
+/// `k − 1` of the set's limit multiple, in lowest terms over [`SCALE`]:
+/// `(e, s)` with `(k − SCALE) / SCALE = e / s`. `(1, 1)` at the shipped
+/// `k = 2·SCALE`. A set that passed
+/// [`EconomicParams::validate`] has `k > SCALE`, on a grain of `SCALE/10`,
+/// so `s ≤ 10` and `e ≤ 30`.
+fn limit_excess_in_lowest_terms(params: &EconomicParams) -> (u128, u128) {
+    let d = params
+        .block_weight_limit_multiple
+        .saturating_sub(SCALE)
+        .max(1);
+    let (mut a, mut b) = (d, SCALE);
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    (u128::from(d / a), u128::from(SCALE / a))
 }
 
 /// **THE one owner of the paid block reward** (FL-R12′, signed round 8):
@@ -351,7 +390,9 @@ pub fn block_reward_with_penalty(
     )
 }
 
-/// The block weight limit implied by an effective median: `2 * max(median, zone)`.
+/// The block weight limit implied by an effective median: `k · max(median,
+/// zone)`, `k` the set's [`EconomicParams::block_weight_limit_multiple`] in
+/// [`SCALE`] units (`2 · max(median, zone)` at the shipped `k`).
 ///
 /// Exposed so a caller that must REPORT the limit it rejected against reads it
 /// from the same place the rejection came from, instead of recomputing the
@@ -359,7 +400,9 @@ pub fn block_reward_with_penalty(
 /// Saturating: the true limit above `u64::MAX / 2` is unrepresentable, and a
 /// saturated value is only ever used for diagnostics.
 pub fn block_weight_limit(median_weight: u64, params: &EconomicParams) -> u64 {
-    median_weight.max(params.full_reward_zone).saturating_mul(2)
+    let median = u128::from(median_weight.max(params.full_reward_zone));
+    let limit = median * u128::from(params.block_weight_limit_multiple) / u128::from(SCALE);
+    u64::try_from(limit).unwrap_or(u64::MAX)
 }
 
 /// Advance `already_generated_coins` by a block reward.
@@ -1347,5 +1390,77 @@ mod tests {
         // The empty window is the 0.8 rail either way (genesis / FAKECHAIN).
         assert_eq!(paid(TxVolume::ZERO), paid(TxVolume::per_block(0)));
         assert_eq!(paid(TxVolume::ZERO), 409_600_000_000);
+    }
+
+    /// The penalty at the shipped multiple (2×), pinned as literals: each arm
+    /// (under the median, inside the band, at the limit, past it) and the
+    /// `u128` overflow refusal. These were computed against the body the
+    /// generalised penalty replaced, `amount·(2m − c)·c/m²`, which agreed on
+    /// these and on 50 000 randomised `(R, M, w)` before it was deleted
+    /// (E16-11, `ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.26.2). A change to the
+    /// penalty at the shipped multiple moves one of them.
+    #[test]
+    fn the_penalty_at_the_shipped_multiple_is_pinned() {
+        let p = EconomicParams::default();
+        let z = p.full_reward_zone;
+        assert_eq!(z, 300_000, "the vectors are written at the shipped zone");
+        for (amount, median, w, want) in [
+            (1_000_000_000_000, z, z, Ok(1_000_000_000_000)),
+            (1_000_000_000_000, z, z + z / 2, Ok(750_000_000_000)),
+            (1_000_000_000_000, z, 2 * z, Ok(0)),
+            (
+                1_000_000_000_000,
+                z,
+                2 * z + 1,
+                Err(EmissionError::BlockTooBig),
+            ),
+            (409_600_000_000, 7 * z, 7 * z + 12_345, Ok(409_585_845_206)),
+            (409_600_000_000, 7 * z, 13 * z + 999, Ok(108_335_262_081)),
+            // A median below the zone is floored at it.
+            (1_331_200_000_000, 0, z + 1, Ok(1_331_199_999_985)),
+            (u64::MAX, 3 * z, 5 * z, Ok(10_248_191_152_060_862_008)),
+            (
+                u64::MAX,
+                u64::MAX / 2,
+                u64::MAX / 2 + u64::MAX / 8,
+                Err(EmissionError::Overflow),
+            ),
+        ] {
+            assert_eq!(
+                apply_weight_penalty(amount, median, w, &p),
+                want,
+                "amount {amount}, median {median}, weight {w}"
+            );
+        }
+    }
+
+    /// E16-7: the limit multiple is read from the set. At 3× the limit is
+    /// three medians, the penalty reaches zero there and not before, and a
+    /// block past it is refused.
+    #[test]
+    fn the_limit_and_the_penalty_read_the_sets_multiple() {
+        let mut p = EconomicParams {
+            block_weight_limit_multiple: 3 * SCALE,
+            ..EconomicParams::default()
+        };
+        p.validate().expect("3x is a valid multiple");
+        let m = p.full_reward_zone;
+        assert_eq!(block_weight_limit(m, &p), 3 * m);
+        let amount = 1_000_000_000_000;
+        assert_eq!(apply_weight_penalty(amount, m, 3 * m, &p), Ok(0));
+        assert!(apply_weight_penalty(amount, m, 2 * m, &p).unwrap() > 0);
+        assert_eq!(
+            apply_weight_penalty(amount, m, 3 * m + 1, &p),
+            Err(EmissionError::BlockTooBig)
+        );
+        // Halfway to the limit, the penalty is a quarter: (1 − (1/2)²).
+        assert_eq!(
+            apply_weight_penalty(amount, m, 2 * m, &p),
+            Ok(750_000_000_000)
+        );
+        // A multiple on the tenth grain reduces with s > 1: 2.5× is e/s = 3/2.
+        p.block_weight_limit_multiple = 25 * SCALE / 10;
+        assert_eq!(limit_excess_in_lowest_terms(&p), (3, 2));
+        assert_eq!(apply_weight_penalty(amount, m, 5 * m / 2, &p), Ok(0));
     }
 }

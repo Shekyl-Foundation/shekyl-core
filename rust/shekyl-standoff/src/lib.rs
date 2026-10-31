@@ -65,7 +65,7 @@ pub mod cover;
 pub mod draw;
 pub mod reserve;
 
-pub use cover::{draw_cover_amount, COVER_RUNG_ATOMIC};
+pub use cover::draw_cover_amount;
 pub use draw::{bounded_uniform, draw_entry_gap, GapRng, DEFAULT_ENTRY_GAP_WINDOW};
 pub use reserve::EXIT_FEE_RESERVE_ATOMIC;
 

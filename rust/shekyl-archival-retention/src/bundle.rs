@@ -67,7 +67,7 @@ use shekyl_types::archival::SettlementEpochBlocks;
 use shekyl_types::{BlockHeight, SettlementEpoch};
 
 use crate::hash::cshake256_32;
-use crate::secret_draw::COUNT_CAP_BASE_MULTIPLE;
+use crate::ArchivalParams;
 use crate::SettlementSchedule;
 
 /// cSHAKE256 customization for [`bundle_commitment`] (rule 30: one label,
@@ -105,13 +105,6 @@ pub const BUNDLE_KEPT_FIXED_LEN: usize = BUNDLE_SEED_LEN + 8 + 4;
 /// A reference before its bitmap: the kept part's fixed bytes and the
 /// 32-byte hash of the prunable part.
 pub const BUNDLE_REF_FIXED_LEN: usize = BUNDLE_KEPT_FIXED_LEN + 32;
-
-/// The section budget's multiple of the count cap, `c`.
-///
-/// **PROVISIONAL** (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §13.2 V6, `SCS-P20`).
-/// Reopen when it binds on the first build, or when section bytes,
-/// propagation to Tor peers, the orphan rate or `BA-T33` say otherwise.
-pub const BUNDLE_SECTION_BUDGET_MULTIPLE: u64 = 2;
 
 // The specification's widths (§6.2, §7.2, §7.4), as numbers, against the
 // widths derived from the scheme. A scheme whose key or signature has a
@@ -878,18 +871,28 @@ pub const fn bundle_charge(count: u32) -> u64 {
 /// ```
 ///
 /// `d_max` is the largest `D` among the epochs of the bundles in the
-/// section, and `c` is [`BUNDLE_SECTION_BUDGET_MULTIPLE`] in production.
-/// `⌊9·D / SEB⌋ + 1` is the count cap: the per-block target is at most
-/// `9·D / SEB` and the carry adds less than one. The `9` is
-/// [`COUNT_CAP_BASE_MULTIPLE`], the one the count rule caps at. The `+ 1` is what lets a
-/// network below `SEB / 9` pairs admit a bundle at all.
+/// section, and `c` is `params`'
+/// [`bundle_section_budget_multiple`](ArchivalParams::bundle_section_budget_multiple)
+/// (2, `SCS-P20`, PROVISIONAL §13.2 V6). `⌊9·D / SEB⌋ + 1` is the count
+/// cap: the per-block target is at most `9·D / SEB` and the carry adds less
+/// than one. The `9` is the set's
+/// [`count_cap_base_multiple`](ArchivalParams::count_cap_base_multiple), the
+/// one the count rule caps at. The `+ 1` is what lets a network below
+/// `SEB / 9` pairs admit a bundle at all.
 ///
 /// Computed in 128 bits and saturated: a budget above `u64::MAX` binds
 /// nothing a `u64` sum can reach.
 #[must_use]
-pub fn section_budget(c: u64, d_max: u64, seb: SettlementEpochBlocks) -> SectionBudget {
-    let cap = u128::from(d_max) * u128::from(COUNT_CAP_BASE_MULTIPLE) / u128::from(seb.get()) + 1;
-    SectionBudget(u64::try_from(u128::from(c).saturating_mul(cap)).unwrap_or(u64::MAX))
+pub fn section_budget(
+    params: &ArchivalParams,
+    d_max: u64,
+    seb: SettlementEpochBlocks,
+) -> SectionBudget {
+    let cap = u128::from(d_max) * u128::from(params.count_cap_base_multiple())
+        / u128::from(seb.get())
+        + 1;
+    let c = u128::from(params.bundle_section_budget_multiple);
+    SectionBudget(u64::try_from(c.saturating_mul(cap)).unwrap_or(u64::MAX))
 }
 
 /// The section budget, in draws: [`section_budget`]'s result.

@@ -747,7 +747,8 @@ fn the_mock_view_and_the_batch_view_answer_the_same_reads() {
                         row.long_term_weight.to_raw(),
                         shekyl_economics::long_term_weight(
                             shekyl_economics::FULL_REWARD_ZONE,
-                            row.weight.to_raw()
+                            row.weight.to_raw(),
+                            shekyl_economics::economic_params(),
                         ),
                         "height {h}"
                     );

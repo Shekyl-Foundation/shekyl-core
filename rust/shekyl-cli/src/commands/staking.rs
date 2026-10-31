@@ -142,7 +142,7 @@ pub fn cmd_stake_in(
     presentation.say("");
     presentation.say(format!(
         "A randomized privacy amount (less than {} SKL) is sent on top of the",
-        format_amount(shekyl_wallet_rpc::COVER_RUNG_ATOMIC)
+        format_amount(shekyl_wallet_rpc::archival_params().bond_floor_atomic)
     ));
     presentation.say("amount above. It stays yours: it becomes part of your staking balance.");
     presentation.say("It is chosen automatically and cannot be shown before sending.");

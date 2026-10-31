@@ -1,0 +1,13 @@
+{
+  "_comment": "RelayPolicy (ESR-16 completion, ECONOMICS_SIM_PRODUCTION_REBASE.md §5.26, ruled 2026-10-29): what a node relays and quotes, OUTSIDE every chain-identity digest (the params and consensus digests). This file is not chain identity: its own file so the digest boundary is the file boundary. shekyl-economics' relay_policy_digest names a policy in a report; it is a label, which no block, peer or wallet compares. A consensus key placed here fails generation, because shekyl-economics' generator requires its keys from economics_params.json; shekyl-economics' tests hold the two files disjoint, and shekyl-rpc-types' canonical form does not read this one. No operator changes it: there is no CLI flag, configuration key or RPC; only a release changes it, after a ruling. Keys beginning with an underscore are prose.",
+  "_comment_admission": "relay_floor_lookback: G, the admission window's depth in blocks (FL-R23). relay_admission_slack_bp: the admission slack in basis points, shipped zero (FL-R24). fee_decimal_places: the fee lattice's decimals; the one relay value a wallet applies locally, so a release that changes it bounces an older wallet's fees (the lattice-size row, FEE_LADDER_DERIVATION.md §12, owed to EUP-5).",
+  "relay_floor_lookback": 5,
+  "relay_admission_slack_bp": 0,
+  "fee_decimal_places": 6,
+  "_comment_ladder": "relay_floor_reference_tx_weight: w_ref, the weight the floor and every rung fold in (FL-R13; inherited 3000 until EUP-5 G derives it from a Shekyl ordinary transaction). standard_rung_over_economy: Standard is this multiple of the Economy rung, the relay floor. priority_rung_factor: Priority is max(factor·R·C/M, Standard). All three are relay policy until EUP-5 D rules on the floor; if D puts the floor into consensus, D's PR moves them into EconomicParams with a digest bump.",
+  "relay_floor_reference_tx_weight": 3000,
+  "standard_rung_over_economy": 4,
+  "priority_rung_factor": 2,
+  "_comment_claim_hold": "emission_claim_fee_floor_atomic: the wallet's emission-claim hold (ENGINE_CADENCE_DRIVER.md §4; ruling 9, 2026-10-24). Derived, not chosen: the fee on the shipped lattice for the claim leg's priced weight (EMISSION_NON_CLAIMS_RESERVE_BYTES 49152 + CLAIM_VIN_ALLOWANCE_BYTES 2048 = 51200) at the chain's genesis Economy rung (an empty volume window, C = 0.8: 27306 atomic per weight unit). 51200 × 27306 = 1398067200, rounded up to the 1000-atomic lattice. shekyl-engine-core recomputes it from relay_floor_from at the genesis operands and the leg's weight; a change to either fails that test. The value gate is Σreward ≥ max(live fee, hold).",
+  "emission_claim_fee_floor_atomic": 1398068000
+}
