@@ -11,6 +11,9 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 ## Pre-genesis
 
+- **The performance budget's tooling does not exist yet: the adversarial-block builder, the crash harness (`SIGKILL` trials and `dm-log-writes` replay), the catch-up harness mode, and the fsync probe as a harness channel** (`DAEMON_REDB_STORE.md` §1.3a rule 7). One PR on the DRS line after the flip, so the first gated release cut after CS-5 has it.
+  - Owner: the DRS line — [`DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md) §1.3a
+  - Target: pre-genesis
 - **`shekyld`'s process entry is still C++ `main` (DC-Q13 (b)); Grammar §0's Rust entry is unbuilt.** The command line is an `ArgumentVector`: on Unix the `argc`/`argv` `main` passes, on Windows `GetCommandLineW`, because a staticlib's `std::env::args_os` is empty where Rust's `lang_start` did not run. The rustc-emitted entry is what runs that startup (it collects `args_os` into `from_os_strings`, installs `SIGPIPE` and the stack-overflow guard) and what RT-16's SCM dispatcher needs. Blocked on a ruling that amends DC-Q13 (b) so rustc links `shekyld` and the C++ remnant is the callee — falsify by the binary's entry calling `lang_start`, with that ruling amended.
   - Owner: [`DAEMON_CONFIG_CUTOVER.md`](design/DAEMON_CONFIG_CUTOVER.md) §2.2
   - Target: pre-genesis
@@ -49,6 +52,9 @@ There is no V3.1 / V3.2 / V3.x release train.
   - Target: pre-genesis
 - **`txpool-weight-max` is deleted at the DRS-X flip (IG-Q11, amended 2026-10-17).** The Rust pool derives its cap from the chain, `REFERENCE_BLOCK_MAX_AGE` blocks at the block weight limit (`DRS_E5_POOL_ALT_PRUNE.md` CEN-M10), and reads no option. The option joins the retired options at the flip, refused with "the pool's cap derives from the chain (CEN-M10)". Until then it feeds the C++ pool its inherited 648000000 bytes. Blocked on the flip, which deletes the C++ pool. The flip's evidence (DX-Q8) carries the reopening measurement: pool RSS on a floor device at a realistic weight limit. If the pool, not the chain, binds first, the remedy is a compact in-memory representation, not an option.
   - Owner: the DRS-X flip — [`DRS_X_STORE_FLIP.md`](design/DRS_X_STORE_FLIP.md)
+  - Target: pre-genesis
+- **`mining_status` reports `speed` in whole hashes per second, so a miner below 1 H/s reads `0`.** Observed 2026-10-31 on testnet: a one-thread miner at full CPU read `0` for more than 30 minutes, while four-thread miners read 4 to 5. RandomX on testnet runs at about 1 H/s a thread, so one thread sits at the boundary, and the field cannot tell a slow miner from a stopped one; a block paid to the address is the only measure. Both producers truncate: the C++ miner that alpha.11 still serves (`miner::get_speed`, hashes over milliseconds in integers) and the Rust `mining_methods::mining_status` the flip routes (`MiningFacts::status` in `shekyl-node` divides hashes by the window's whole seconds into `MiningStatusResponse::speed: u64`). The fix carries the rate below one hash a second on the Rust wire (the hashes and the window, or milli-hashes) before the flip makes it the served answer.
+  - Owner: the DRS-X lane, which built the Rust mining methods (#1165) and routes them at the flip (#1212) — [`DRS_X_STORE_FLIP.md`](design/DRS_X_STORE_FLIP.md)
   - Target: pre-genesis
 - **What the relay does with the pool's `unpublished()` entries at open.** Stem-phase entries persist across a restart (ruled 2026-10-17 on #1102, `DRS_E5_POOL_ALT_PRUNE.md` §2.2), and after a restart nothing tells this node's own submissions from arrivals still in stem, so the relay treats them alike. Whether it re-stems, fluffs or waits on them is the relay's to decide when the DRS-X flip wires the relay driver to the pool. Blocked on that wiring.
   - Owner: the relay lane — [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md) (`shekyl-relay`, DX-F6)

@@ -37,6 +37,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::handshake::{self, Setup};
 use crate::seam::{SeamRecv, SeamSend};
+use crate::sizes::{SizeTap, Way};
 use crate::{ChannelChoice, HandshakeTally, Session};
 
 #[derive(Clone, Copy)]
@@ -783,6 +784,7 @@ async fn write_half(
         }
     };
     let mut stall = shekyl_capped_stream::WriteStall::new(conn);
+    let mut sizes = SizeTap::new(Way::Sent, conn);
     let cause = write_capped(
         &mut write,
         &outbound,
@@ -790,6 +792,7 @@ async fn write_half(
         &node_gate(),
         &mut stall,
         |plain| {
+            sizes.feed(plain);
             seam.encode(plain)
                 .map(Cow::Owned)
                 .map_err(|_| CloseKind::RecordRejected)
@@ -811,6 +814,7 @@ async fn read_half(
 ) -> CloseCause {
     // The responder's timestamps (Rick, 2026-10-14): first byte read.
     let mut first_read = true;
+    let mut sizes = SizeTap::new(Way::Received, conn);
     // The peer's handshake frame, over the plaintext the seam hands up: it
     // ends the handshake gap.
     read_capped(&mut read, inbound, &overfull, &node_gate(), conn, |chunk| {
@@ -819,6 +823,9 @@ async fn read_half(
             tracing::debug!(conn, "clearnet first bytes read");
         }
         let plain = seam.push(chunk).map_err(|_| CloseKind::RecordRejected)?;
+        for piece in &plain {
+            sizes.feed(piece);
+        }
         if !handshake.complete() && plain.iter().any(|piece| handshake.feed(piece)) {
             frame.store(true, Ordering::Release);
         }
