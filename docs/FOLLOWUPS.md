@@ -19,6 +19,7 @@ There is no V3.1 / V3.2 / V3.x release train.
   - Target: pre-genesis
 - **A submit's latency is the pool file's fsync latency, and every admission forces a filesystem-wide journal commit the chain store's commits queue behind (SPL-Q4's reopening evidence, not yet the BENCH result the clause names).** Seen on the flip's measurement host: one submit held 30 s in `pool.db`'s `fdatasync` at `jbd2_log_wait_commit`; green submits 375–1,070 ms per sync beside a resident daemon, 145 ms without. Batching admissions into one commit per short window would keep D9's per-commit fsync and bound the coupling; the SPL-13 measurement decides.
   - Owner: the pool lane — [`DRS_E1_SPOOL.md`](design/DRS_E1_SPOOL.md) §9 SPL-Q4 and §11 (2026-10-31)
+  - Target: pre-genesis
 - **The performance budget's tooling does not exist yet: the adversarial-block builder, the crash harness (`SIGKILL` trials and `dm-log-writes` replay), the catch-up harness mode, and the fsync probe as a harness channel** (`DAEMON_REDB_STORE.md` §1.3a rule 7). One PR on the DRS line after the flip, so the first gated release cut after CS-5 has it.
   - Owner: the DRS line — [`DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md) §1.3a
   - Target: pre-genesis
