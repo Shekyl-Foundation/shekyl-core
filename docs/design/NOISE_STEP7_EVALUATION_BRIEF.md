@@ -1,5 +1,6 @@
 # Brief A1: the step 7 evaluation record (the Noise flip, phase A)
 
+**Status: OPEN** — active plan, revision 2, ruled 2026-10-30 (Rick). Work started 2026-10-30: the message-size recorder (item 1) is built and its node is recording; the accept-rate bound's mechanism (item 6) is built, awaiting this record's ruled values. The decisions table is not written yet.
 **Revision 2, 2026-10-30.** It replaces revision 1. Item 6's bound is ruled as its own PR (Rick, 2026-10-30).
 **For:** the transport lane. This brief produces evidence and recommendations. It builds nothing that ships.
 **Read at:** `dev` `dc2a617d22`. Re-read every anchor at your own pin.
@@ -10,7 +11,7 @@
 | --- | --- | --- |
 | A | Evidence, with `dev-clearnet-encrypt` still in place | This brief is A1 |
 | B | The framing PR | Implements A1's ruled decisions |
-| C | The rehearsal on the final wire | `claude/NOISE_FLIP_REHEARSAL_BRIEF.md` |
+| C | The rehearsal on the final wire | `docs/design/NOISE_FLIP_REHEARSAL_BRIEF.md` |
 | D | The flip | A rule 07 flag day |
 
 The rest of phase A belongs to other briefs:
@@ -69,7 +70,7 @@ Use the floor device (rule 76) and roles, not hosts (rule 37). Claim every host 
    - **The gap.** The accept-rate bound D10.3 assigns to this layer is not built. `shekyl-transport-layer/src/admission.rs` has the occupancy ceiling and bans only. Today a flood of message 1s is limited only by the blocking pool's cap.
    - **The CPU budget.** Propose, for Rick's ruling, the share of a Pi core that inbound handshakes may take. D10.3 says no rate is written before that budget.
    - **The values.** Derive the per-connector and per-host accept rates from the responder cost: 684.5 µs per handshake (C5), about 1,460 per second per core.
-     - An IPv6 host is its /64, the unit the eclipse threat model's item 1 adopts (`claude/CLEARNET_ECLIPSE_THREAT_MODEL.md`).
+     - An IPv6 host is its /64 (Rick, 2026-10-30), the unit the clearnet eclipse threat model's item 1 adopts. That model is not in this repository yet.
      - Whether to aggregate hosts further is a measured question (D10.3).
    - **The measurement.** Under a message-1 flood, measure honest-session service in two configurations:
      - today, with only the blocking cap;
