@@ -192,7 +192,30 @@ use std::path::PathBuf;
 /// target), so a second key was a second chain identity for one
 /// derivation. **No production behaviour changes** — the derived length
 /// equals the deleted key.
-const PINNED_DIGEST: &str = "17742dd72e533964a841784aae639d387dc01bee03ec6c54880012a52d337620";
+///
+/// **Re-pinned 2026-10-30 (ESR-16 completion, #1218;
+/// `ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.26, ruled 2026-10-29 and on review
+/// 2026-10-30): six keys ADDED, one REMOVED.** Added:
+/// `block_weight_limit_multiple_scaled = 2000000` and
+/// `block_weight_long_term_clamp_scaled = 1700000` (`SCALE` units), and the
+/// draw count rule's `archival_draw_catch_up_permille = 700`,
+/// `archival_draw_horizon_floor_blocks = 200`, `archival_count_cap_multiple =
+/// 3` and `archival_bundle_section_budget_multiple = 2`. The chain question,
+/// for each: a different limit multiple admits a different heaviest block and
+/// pays a different penalty; a different clamp is a different long-term
+/// weight and so a different median; a different catch-up point, horizon
+/// floor or cap is a different draw count at some block, so a different set
+/// of admissible bundle records; a different section multiple admits a
+/// different section. Each is a split. The values are the ones every node ran:
+/// the literal `2` at four Rust sites and the C++ `median * 2`,
+/// `long_term_weight`'s `10 / 17` and `7 / 10`, the count rule's `7 / 10`,
+/// `DRAW_HORIZON_FLOOR`, `COUNT_CAP_MULTIPLE` and
+/// `BUNDLE_SECTION_BUDGET_MULTIPLE`. Removed: `retention_horizon_blocks`,
+/// which no consensus code read (the built prune sweep retires each table at
+/// its last reader's reach, `SO-D12h`). The limit and clamp are
+/// `EconomicParams` fields, so the params digest moved to format `0x06` in
+/// the same change. **No production behaviour changes.**
+const PINNED_DIGEST: &str = "2227f8a01a4a47c9f42e46d3a7c01fc900d4927c03ec71bbbfc74d6be69829bd";
 
 fn main() {
     let manifest_dir =

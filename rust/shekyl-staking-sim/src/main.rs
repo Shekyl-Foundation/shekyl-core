@@ -733,11 +733,11 @@ fn print_timing_cluster_report() {
     let report = timing_cluster::verify();
     eprintln!("shekyl-staking-sim — archival timing cluster pin (ARCHIVAL_TIMING_CONSTANTS.md)");
     eprintln!(
-        "  W={} epochs (~{:.1} d)  retention={} blocks (~{:.0} d)  reorg_depth={} blocks (~{:.1} h)",
+        "  W={} epochs (~{:.1} d)  deepest retention={} blocks (~{:.0} d)  reorg_depth={} blocks (~{:.1} h)",
         report.constants.max_claim_age_w,
         report.constants.w_wall_clock_days,
-        report.constants.retention_horizon_blocks,
-        report.constants.retention_horizon_days,
+        report.constants.deepest_retention_blocks,
+        report.constants.deepest_retention_days,
         report.constants.archival_reorg_depth_blocks,
         report.constants.archival_reorg_depth_days * 24.0,
     );

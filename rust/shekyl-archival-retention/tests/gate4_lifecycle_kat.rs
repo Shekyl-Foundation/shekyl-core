@@ -282,7 +282,10 @@ fn gate4_lifecycle_kat_vectors() {
         ArchivalBondPostVin::read_payload_exact(&mut cursor).expect("parse join bond-post");
     verify_join_market_bond_post(&join_vin, false).expect("join verify");
     assert_eq!(
-        bond_floor(&join_vin.holdings),
+        bond_floor(
+            &join_vin.holdings,
+            &shekyl_archival_retention::ArchivalParams::SHIPPED
+        ),
         join["bond_credit"].as_u64().expect("bond_credit")
     );
 

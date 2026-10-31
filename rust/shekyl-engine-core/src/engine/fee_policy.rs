@@ -60,7 +60,7 @@ use super::traits::FeeEstimates;
 ///         at canonical parameters, with no rounding on top.
 /// R   ≤ base_block_reward(0)                                (monotone in already_generated)
 /// Mfw ≥ Zm
-/// cap = corrected_fee_ladder(R₀, Zm, w_ref, C_max).priority
+/// cap = corrected_fee_ladder(R₀, Zm, w_ref, C_max, shekyl_economics::relay_policy()).priority
 /// ```
 ///
 /// The bound is loose against the reachable maximum by design: a cap exists
@@ -88,9 +88,10 @@ pub fn absolute_fee_rate_cap() -> u64 {
     shekyl_economics::corrected_fee_ladder(
         r0,
         params.full_reward_zone,
-        shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT,
+        shekyl_economics::relay_policy().ref_tx_weight,
         shekyl_economics::FeeCorrection::from_scaled(structural_max_correction(&params)),
         &params,
+        shekyl_economics::relay_policy(),
     )
     .priority
 }
@@ -463,9 +464,10 @@ mod tests {
                         let prio = shekyl_economics::corrected_fee_ladder(
                             base,
                             zm,
-                            shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT,
+                            shekyl_economics::relay_policy().ref_tx_weight,
                             c,
                             &p,
+                            shekyl_economics::relay_policy(),
                         )
                         .priority;
                         if prio > worst.0 {

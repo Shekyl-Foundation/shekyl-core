@@ -1225,7 +1225,9 @@ mod tests {
                     served: !missed[i],
                 })
                 .collect();
-            if failure_window_slashable(&observations).expect("well-formed window") {
+            if failure_window_slashable(&observations, shekyl_archival_retention::archival_params())
+                .expect("well-formed window")
+            {
                 return Some(index);
             }
         }
@@ -1336,7 +1338,7 @@ mod tests {
             BaselineObservation::missed(99),
         ];
         assert_eq!(
-            failure_window_slashable(&observations),
+            failure_window_slashable(&observations, shekyl_archival_retention::archival_params()),
             Err(FailureWindowError::HeadNotAMiss)
         );
     }

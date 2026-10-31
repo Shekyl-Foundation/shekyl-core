@@ -11,17 +11,9 @@
 
 use core::num::NonZeroU64;
 
-use crate::constants::{
-    effective_settlement_epoch_blocks, SETTLEMENT_EPOCH_BLOCKS, SLASH_GRACE_EPOCHS,
-    W2_EPOCH_DIVISOR,
-};
+use crate::constants::{effective_settlement_epoch_blocks, SLASH_GRACE_EPOCHS, W2_EPOCH_DIVISOR};
 use shekyl_types::archival::SettlementEpochBlocks;
 use shekyl_types::{BlockHeight, SettlementEpoch};
-
-const _: () = assert!(
-    SETTLEMENT_EPOCH_BLOCKS > 0,
-    "settlement epoch must be nonzero"
-);
 
 /// The epoch geometry over one [`SettlementEpochBlocks`]: which epoch a
 /// height sits in, where an epoch opens, closes and is slash-final, and
@@ -61,13 +53,8 @@ impl core::fmt::Debug for SettlementSchedule {
 }
 
 impl SettlementSchedule {
-    /// The genesis schedule: [`SETTLEMENT_EPOCH_BLOCKS`] per epoch.
-    pub const GENESIS: Self = Self {
-        blocks: match SettlementEpochBlocks::new(SETTLEMENT_EPOCH_BLOCKS) {
-            Some(blocks) => blocks,
-            None => panic!("SETTLEMENT_EPOCH_BLOCKS is non-zero (asserted above)"),
-        },
-    };
+    /// The genesis schedule: the shipped [`crate::ArchivalParams`]' epoch.
+    pub const GENESIS: Self = crate::ArchivalParams::SHIPPED.schedule();
 
     /// The geometry over `blocks` per epoch.
     #[must_use]

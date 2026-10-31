@@ -19,7 +19,6 @@ use core::marker::PhantomData;
 use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_difficulty::{CumulativeDifficulty, GENESIS_DIFFICULTY};
-use shekyl_economics::FULL_REWARD_ZONE;
 use shekyl_types::archival::{CompleteTreeSet, RMarket, SigmaWorkMilli};
 use shekyl_types::{
     AttestationRoot, BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, KeyImage,
@@ -220,7 +219,7 @@ impl MockChain {
     /// penalty-free zone, both columns; a weights fixture uses
     /// [`push_weighing`](Self::push_weighing).
     pub fn push(self, block: RecordedBlock, root_after: CurveTreeRoot) -> Self {
-        self.push_weighing(block, root_after, Self::ZONE_WEIGHTS)
+        self.push_weighing(block, root_after, Self::zone_weights())
     }
 
     /// [`push`](Self::push) with the block's recorded weights named — what
@@ -253,7 +252,7 @@ impl MockChain {
         root_after: CurveTreeRoot,
         leaf_count_after: u64,
     ) -> Self {
-        self.push_tree_weighing(block, root_after, leaf_count_after, Self::ZONE_WEIGHTS)
+        self.push_tree_weighing(block, root_after, leaf_count_after, Self::zone_weights())
     }
 
     /// [`push_tree`](Self::push_tree) with the block's recorded weights
@@ -277,11 +276,14 @@ impl MockChain {
     }
 
     /// The penalty-free zone in both weight columns — what a block whose
-    /// fixture is not about weights records.
-    const ZONE_WEIGHTS: RecordedWeights = RecordedWeights {
-        weight: BlockWeight::from_raw(FULL_REWARD_ZONE),
-        long_term_weight: LongTermWeight::from_raw(FULL_REWARD_ZONE),
-    };
+    /// fixture is not about weights records — at the shipped set's zone.
+    fn zone_weights() -> RecordedWeights {
+        let zone = shekyl_economics::economic_params().full_reward_zone;
+        RecordedWeights {
+            weight: BlockWeight::from_raw(zone),
+            long_term_weight: LongTermWeight::from_raw(zone),
+        }
+    }
 
     fn push_recording(
         mut self,
@@ -461,19 +463,17 @@ impl<'id> ChainView<'id> for MockView<'_, 'id> {
     }
 
     /// The planted row, or the zone — the value every `push`-built block
-    /// derives (`Self::ZONE_WEIGHTS` below a 100 000-block window).
+    /// derives (`Self::zone_weights` below a 100 000-block window).
     fn long_term_effective_median_at(
         &self,
         height: BlockHeight,
     ) -> Result<AtHeight<LongTermWeight>, Infallible> {
         Ok(match self.chain.block(height) {
-            AtHeight::Recorded(_) => AtHeight::Recorded(
-                self.chain
-                    .medians
-                    .get(&height)
-                    .copied()
-                    .unwrap_or(LongTermWeight::from_raw(FULL_REWARD_ZONE)),
-            ),
+            AtHeight::Recorded(_) => {
+                AtHeight::Recorded(self.chain.medians.get(&height).copied().unwrap_or(
+                    LongTermWeight::from_raw(shekyl_economics::economic_params().full_reward_zone),
+                ))
+            }
             AtHeight::AboveTip => AtHeight::AboveTip,
         })
     }

@@ -594,7 +594,10 @@ fn claim_classify_maps_the_refusal_taxonomy() {
 #[test]
 fn claim_complete_forfeits_only_expired_missing_epochs() {
     let settled = 1_000;
-    let floor = shekyl_archival_retention::claim_window_floor(settled);
+    let floor = shekyl_archival_retention::claim_window_floor(
+        settled,
+        shekyl_archival_retention::archival_params(),
+    );
     assert!(floor > 1, "test needs room below the claim window");
     let expired = floor - 1;
     let unexpired = settled - 1;

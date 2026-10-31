@@ -27,8 +27,8 @@
 
 use shekyl_archival_retention::{
     bundle_root, section_budget, BundleBody, BundleRecord, BundleRef, DrawableEpoch, DrawablePair,
-    PassBitmap, BUNDLE_RECORD_LEN, BUNDLE_SECTION_BUDGET_MULTIPLE, BUNDLE_WITNESS_KEY_LEN,
-    BUNDLE_WITNESS_LEN, CHALLENGE_READS, PASS_COUNTERSIGNATURE_MESSAGE_LEN,
+    PassBitmap, BUNDLE_RECORD_LEN, BUNDLE_WITNESS_KEY_LEN, BUNDLE_WITNESS_LEN, CHALLENGE_READS,
+    PASS_COUNTERSIGNATURE_MESSAGE_LEN,
 };
 use shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa;
 use shekyl_types::archival::ReceiptSignPk;
@@ -614,7 +614,7 @@ fn a_reference_that_understates_its_count_is_refused_at_admission() {
     let seb = SettlementEpochBlocks::new(10_000).expect("non-zero");
     let rules = rules_of(seb.get());
     let epoch = rules.settlement_schedule().epoch_at(honest.h()).to_raw();
-    let budget_of = |d: u64| section_budget(BUNDLE_SECTION_BUDGET_MULTIPLE, d, seb);
+    let budget_of = |d: u64| section_budget(shekyl_archival_retention::archival_params(), d, seb);
     // `⌊9·4_000 / 10_000⌋ + 1 = 4`, times `c`, is 8. `D = 5_000` is the
     // next count cap, budget 10. `D = 8` is the small network, budget 2.
     assert_eq!(

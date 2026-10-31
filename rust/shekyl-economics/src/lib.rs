@@ -65,7 +65,10 @@ pub use params::{
     BLOCKS_PER_YEAR, CALIBRATION_GENERATION, EMISSION_CURVE_ASYMPTOTE, FULL_REWARD_ZONE,
     STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
 };
-pub use relay_policy::{relay_policy, RelayPolicy, BASIS_POINTS};
+pub use relay_policy::{
+    relay_policy, relay_policy_digest, RelayPolicy, RelayPolicyError, BASIS_POINTS,
+    RELAY_DIGEST_FORMAT_VERSION,
+};
 pub use release::calc_release_multiplier;
 pub use reward::{
     configured_emission, price_emission, EmissionInputs, PaidEmission, RewardArithmetic,

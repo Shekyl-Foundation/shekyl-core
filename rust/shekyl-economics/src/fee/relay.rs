@@ -13,8 +13,12 @@ use crate::params::{EconomicParams, SCALE};
 /// `[h, h+G]`.
 ///
 /// Derived from the hot-session quote-to-broadcast gap (0–2) + the network
-/// height spread at relay (2) + one block of slack.
-pub const RELAY_FLOOR_LOOKBACK: usize = 5;
+/// height spread at relay (2) + one block of slack. Generated from
+/// `config/relay_policy.json` `relay_floor_lookback`; the shipped
+/// [`crate::RelayPolicy`]'s.
+// CLIPPY: cast_possible_truncation — the depth is 5; usize is at least 32 bits.
+#[allow(clippy::cast_possible_truncation)]
+pub const RELAY_FLOOR_LOOKBACK: usize = crate::params::GENERATED_RELAY_FLOOR_LOOKBACK as usize;
 
 /// `G + 1` — the ring / FFI window length.
 pub const RELAY_FLOOR_WINDOW: usize = RELAY_FLOOR_LOOKBACK + 1;
@@ -22,7 +26,11 @@ pub const RELAY_FLOOR_WINDOW: usize = RELAY_FLOOR_LOOKBACK + 1;
 /// Admission slack, basis points. Pinned at zero: the lookback closes the
 /// quote-to-broadcast gap exactly. Re-introducing a buffer is this constant
 /// and its KAT. What makes zero safe is `shekyl-tx-weight`'s weight gate.
-pub const RELAY_ADMISSION_SLACK_BP: u32 = 0;
+/// Generated from `config/relay_policy.json` `relay_admission_slack_bp`.
+// CLIPPY: cast_possible_truncation — the build script refuses a value
+// that does not fit u32.
+#[allow(clippy::cast_possible_truncation)]
+pub const RELAY_ADMISSION_SLACK_BP: u32 = crate::params::GENERATED_RELAY_ADMISSION_SLACK_BP as u32;
 
 /// Fee median `M` every rung and the relay floor divide by.
 ///

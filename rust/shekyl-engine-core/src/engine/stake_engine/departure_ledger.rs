@@ -58,7 +58,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_types::BlockHash;
 
-use shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS;
+use shekyl_archival_retention::SettlementSchedule;
 
 use crate::engine::daemon::synced_chain_facts::{AnchoredView, ChainAnchor, TimelineBreak};
 
@@ -233,14 +233,17 @@ impl DepartureLedger {
         self.absent_since
             .retain(|&shard_id, _| !obligation.owes(shard_id));
 
-        let now_epoch = view.at().to_raw() / SETTLEMENT_EPOCH_BLOCKS;
+        // The process's schedule: the shipped epoch, or a regtest wallet's
+        // armed lever, as every other wallet epoch read takes it.
+        let schedule = SettlementSchedule::effective();
+        let now_epoch = schedule.epoch_at_height(view.at().to_raw());
         let mut releasable = Vec::new();
         for &shard_id in pinned {
             if obligation.owes(shard_id) {
                 continue;
             }
             let first_absent = *self.absent_since.entry(shard_id).or_insert(view);
-            let absent_epoch = first_absent.at().to_raw() / SETTLEMENT_EPOCH_BLOCKS;
+            let absent_epoch = schedule.epoch_at_height(first_absent.at().to_raw());
             if now_epoch.saturating_sub(absent_epoch) >= EPOCHS_BEFORE_PIN_RELEASE {
                 releasable.push(shard_id);
             }

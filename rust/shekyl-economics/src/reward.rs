@@ -287,8 +287,9 @@ mod tests {
             .expect("under the median");
         assert!(shipped.split.staker_emission > 0);
 
+        // A one-block year: the DAA target is the whole year.
         let fast_year = EconomicParams {
-            blocks_per_year: 1,
+            daa_target_seconds: crate::params::SECONDS_PER_YEAR,
             ..EconomicParams::default()
         };
         let decayed = fast_year

@@ -317,9 +317,11 @@ mod tests {
     /// Red edit: pass the support debt as `shortfall`.
     #[test]
     fn a_support_miss_does_not_move_the_economy_target() {
-        let before = draw_target(8, 0, 200, SETTLEMENT_EPOCH_BLOCKS).expect("fits");
+        let before = draw_target(8, 0, 200, SETTLEMENT_EPOCH_BLOCKS, crate::archival_params())
+            .expect("fits");
         let _debt = SupportUnissued::zero().note_unfiled();
-        let after = draw_target(8, 0, 200, SETTLEMENT_EPOCH_BLOCKS).expect("fits");
+        let after = draw_target(8, 0, 200, SETTLEMENT_EPOCH_BLOCKS, crate::archival_params())
+            .expect("fits");
         assert_eq!(before, after);
     }
 

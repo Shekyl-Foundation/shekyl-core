@@ -756,7 +756,10 @@ where
             .map(|s| s.funding_outputs().to_vec())
             .unwrap_or_default();
 
-        let floor = AtomicUnits::from_raw(bond_floor(holdings));
+        let floor = AtomicUnits::from_raw(bond_floor(
+            holdings,
+            shekyl_archival_retention::archival_params(),
+        ));
         // Align with the wire builder / retention verifier: a zero floor is
         // structurally invalid holdings, not a sweep-to-empty success that
         // would later index an empty `paths` vector. Typed refusal before

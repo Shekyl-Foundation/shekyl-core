@@ -183,8 +183,7 @@ use shekyl_archival_retention::{
     epoch_is_before_join, epoch_is_claim_expired, epoch_is_not_settled, shard_contribution_micro,
     ArchivalRewardEmissionVin, EmissionEpochSource, EmissionVerifyContext, EmissionWireError,
     EpochCloseBond, HoldingsDescriptor, MembershipOnlyBacking, ServedWork, ShardWorkEntry,
-    WorkEpochClaim, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, MAX_BACKING_PROOF_BYTES,
-    MAX_SETTLEMENT_EPOCHS_PER_EMISSION, WORK_MICRO_PER_MILLI, WORK_MILLI_SCALE,
+    WorkEpochClaim, MAX_BACKING_PROOF_BYTES, MAX_SETTLEMENT_EPOCHS_PER_EMISSION,
 };
 use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
 use shekyl_wire::transaction::TX_WEIGHT_LIMIT;
@@ -207,12 +206,11 @@ use super::emission_source::{BondContext, EmissionClaimSource, EpochSnapshot};
 // which would overflow" instead of the message below, i.e. the guard would fail
 // to explain itself exactly when it fires. `u128` cannot overflow from `u64`
 // operands, so the diagnostic is preserved for any value the config can produce.
-const _: () = assert!(
-    (WORK_MICRO_PER_MILLI as u128)
-        * ((WORK_MILLI_SCALE as u128) + (ARCHIVAL_REWARD_AGE_WEIGHT_MILLI as u128))
-        <= u32::MAX as u128,
-    "compiled constants must keep scarcity_micro within the u32 wire field"
-);
+//
+// The age weight is a field of `ArchivalParams`, so the check is that set's:
+// `ArchivalParams::validate` refuses a weight whose scarcity could cross the
+// `u32` wire field (`AgeWeightPastWireField`), and the shipped set is
+// const-asserted to pass it.
 
 /// Bytes of the [`TX_WEIGHT_LIMIT`] envelope reserved for everything
 /// outside the emission vin, sized by worst-case arithmetic over the wire
@@ -315,9 +313,9 @@ pub enum EmissionClaimError {
         value_deferred: Vec<(u64, u64)>,
         /// `checked_add` Σ of the held rewards (below the floor).
         total_reward: u64,
-        /// The floor the set failed to clear
-        /// ([`shekyl_economics::EMISSION_CLAIM_FEE_FLOOR`] in production;
-        /// a parameter so the gate is testable at exact boundaries).
+        /// The floor the set failed to clear ([`claim_value_floor`] of the
+        /// live fee and the hold in production; a parameter so the gate is
+        /// testable at exact boundaries).
         fee_floor: u64,
     },
     /// A single epoch's claim alone exceeds the claims-leg size budget —
@@ -495,7 +493,11 @@ pub fn derive_claimable_epochs(
             skipped.push((epoch, EpochSkip::NotSettled));
             continue;
         }
-        if epoch_is_claim_expired(epoch, source.current_settled_epoch) {
+        if epoch_is_claim_expired(
+            epoch,
+            source.current_settled_epoch,
+            shekyl_archival_retention::archival_params(),
+        ) {
             skipped.push((epoch, EpochSkip::WindowExpired));
             continue;
         }
@@ -638,8 +640,9 @@ pub struct AssembledClaims {
 /// parameter exists so the bound is testable at exact boundaries).
 ///
 /// `fee_floor` is the value gate (`ENGINE_CADENCE_DRIVER.md` §4:
-/// [`shekyl_economics::EMISSION_CLAIM_FEE_FLOOR`] in production, a
-/// parameter for the same boundary-testability reason): Σreward across
+/// [`claim_value_floor`] of the live fee and the relay policy's hold in
+/// production, a parameter for the same boundary-testability reason):
+/// Σreward across
 /// the **whole** candidate set below the floor refuses
 /// [`EmissionClaimError::ValueDeferred`] — all-or-nothing, before the
 /// size loop, because the floor prices the one claim tx the set would
@@ -647,6 +650,22 @@ pub struct AssembledClaims {
 /// should. Deterministic by construction: the same derived set and floor
 /// produce the same inclusion decision on every wallet (the §4
 /// uniformity claim — policy, not timing).
+/// The value an assembled claim set's Σreward must clear: the live fee the
+/// claim pays, and at least the relay policy's hold (ruling 9, 2026-10-24:
+/// "the ladder at the claim's real weight, floored by the hold"). A set
+/// that clears the hold but not the live fee would pay more in fee than it
+/// claims, so it holds. Both operands are chain state and a uniform
+/// constant, so every wallet reaches the same decision (FL-R18;
+/// `ENGINE_CADENCE_DRIVER.md` §4's uniformity).
+#[must_use]
+pub const fn claim_value_floor(live_fee: u64, hold: u64) -> u64 {
+    if live_fee > hold {
+        live_fee
+    } else {
+        hold
+    }
+}
+
 pub fn assemble_claims(
     derived: &ClaimableEpochs<'_>,
     claims_size_budget: usize,
