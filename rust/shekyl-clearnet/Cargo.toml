@@ -27,5 +27,12 @@ shekyl-transport-layer = { path = "../shekyl-transport-layer" }
 tokio = { version = "1", default-features = false, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
 tracing = "0.1"
 
+[features]
+# The step 7 message-size tap. Empty on purpose: it must not enable
+# `shekyl-transport-layer/measurement-spans`. CMake turns both features on
+# together, on the one `SHEKYL_MEASUREMENT_SPANS` line. A Cargo edge would
+# fail `check_measurement_spans.py`.
+measurement-spans = []
+
 [lints]
 workspace = true

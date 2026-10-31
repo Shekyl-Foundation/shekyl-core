@@ -63,6 +63,7 @@ mod handshake;
 mod inode;
 mod linger;
 mod seam;
+mod sizes;
 
 #[cfg(unix)]
 pub use inode::socket_descriptors;
