@@ -11,6 +11,9 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 ## Pre-genesis
 
+- **The performance budget's tooling does not exist yet: the adversarial-block builder, the crash harness (`SIGKILL` trials and `dm-log-writes` replay), the catch-up harness mode, and the fsync probe as a harness channel** (`DAEMON_REDB_STORE.md` §1.3a rule 7). One PR on the DRS line after the flip, so the first gated release cut after CS-5 has it.
+  - Owner: the DRS line — [`DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md) §1.3a
+  - Target: pre-genesis
 - **`shekyld`'s process entry is still C++ `main` (DC-Q13 (b)); Grammar §0's Rust entry is unbuilt.** The command line is an `ArgumentVector`: on Unix the `argc`/`argv` `main` passes, on Windows `GetCommandLineW`, because a staticlib's `std::env::args_os` is empty where Rust's `lang_start` did not run. The rustc-emitted entry is what runs that startup (it collects `args_os` into `from_os_strings`, installs `SIGPIPE` and the stack-overflow guard) and what RT-16's SCM dispatcher needs. Blocked on a ruling that amends DC-Q13 (b) so rustc links `shekyld` and the C++ remnant is the callee — falsify by the binary's entry calling `lang_start`, with that ruling amended.
   - Owner: [`DAEMON_CONFIG_CUTOVER.md`](design/DAEMON_CONFIG_CUTOVER.md) §2.2
   - Target: pre-genesis
