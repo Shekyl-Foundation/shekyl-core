@@ -2977,117 +2977,6 @@ async fn e2e_cxx_template_fills_to_its_median() {
     .await;
 }
 
-/// A node syncs a chain longer than the ingest door's window from one peer.
-///
-/// The handler downloads spans ahead and hands each to the door; the door
-/// seats a window of arrivals and connects them in its own time. Seen red
-/// on 2026-10-30 (the flip's F-B run and the RPC column's regtest sync):
-/// the first span connected, the rest were offered while the door had no
-/// room, the handler read the gap between the tip and what it had handed
-/// over as "nothing to download from this peer" and dropped it, and the
-/// node stood at height 21 of 82 for thirty minutes. The joiner must reach
-/// the source's tip, and the same tip.
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; two daemons, ~2 min"]
-async fn a_node_syncs_a_chain_longer_than_the_doors_window_from_a_peer() {
-    sync_from_a_peer(100, [0x5au8; 64]).await;
-}
-
-/// A node syncs fifteen spans from one peer: more than the handler
-/// downloads ahead (ten spans), so spans the door has been handed and has
-/// not yet connected sit beside spans still arriving. Seen red on
-/// 2026-10-30 at the end of the 762-block F-B sync on two hosts: a handed
-/// span was removed from the queue before the door connected it, its
-/// heights were requested again, the queue filled with overlapping spans,
-/// and the node stood at 724 of 762 with the door reporting no room. The
-/// five-span test above never runs ahead of its own downloads and cannot
-/// see this.
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; two daemons and 300 blocks, several min"]
-async fn a_node_syncs_fifteen_spans_from_a_peer() {
-    sync_from_a_peer(300, [0x5bu8; 64]).await;
-}
-
-/// The two-daemon sync walk: a source linked to a non-syncing sink mines
-/// `blocks`; a joiner linked to the source must reach its tip, moving at
-/// least every 120 s.
-async fn sync_from_a_peer(blocks: u64, seed: [u8; 64]) {
-    let serial = serial_lock().lock_owned().await;
-    let source_p2p = RegtestDaemon::free_port();
-    let sink_p2p = RegtestDaemon::free_port_excluding(&[source_p2p]);
-    let joiner_p2p = RegtestDaemon::free_port_excluding(&[source_p2p, sink_p2p]);
-    let address = mine_address_from_seed(&seed, shekyl_address::Network::Mainnet);
-    let _sink = RegtestDaemon::spawn(RegtestSpawn::new(None).with_peering(Peering::Linked {
-        p2p_port: sink_p2p,
-        peer_p2p_port: source_p2p,
-        sink: true,
-    }))
-    .await;
-    let source = RegtestDaemon::spawn(
-        RegtestSpawn::new(Some(serial))
-            .with_mine_address(address)
-            .with_peering(Peering::Linked {
-                p2p_port: source_p2p,
-                peer_p2p_port: sink_p2p,
-                sink: false,
-            }),
-    )
-    .await;
-    let linked = Instant::now() + Duration::from_secs(60);
-    while try_generate_blocks(&source.rpc, 1).await.is_err() {
-        assert!(
-            Instant::now() < linked,
-            "the source never read synced against its sink within 60 s"
-        );
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-    source.generate_blocks(blocks - 1).await;
-    let want = source.height().await;
-    assert_eq!(want, blocks + 1, "the source mined its chain");
-    let source_tip = source.last_block_hash().await;
-
-    let joiner = RegtestDaemon::spawn(RegtestSpawn::new(None).with_peering(Peering::Linked {
-        p2p_port: joiner_p2p,
-        peer_p2p_port: source_p2p,
-        sink: false,
-    }))
-    .await;
-    const STALL: Duration = Duration::from_secs(120);
-    const CAP: Duration = Duration::from_secs(1800);
-    let started = Instant::now();
-    let (mut last, mut moved) = (0u64, Instant::now());
-    loop {
-        let have = joiner.height().await;
-        if have >= want {
-            break;
-        }
-        if have != last {
-            last = have;
-            moved = Instant::now();
-        }
-        assert!(
-            moved.elapsed() < STALL,
-            "the joiner stands at height {have} of {want} and has not moved for {STALL:?}: \
-             the sync stalled"
-        );
-        assert!(
-            started.elapsed() < CAP,
-            "the joiner is at height {have} of {want} after {CAP:?}"
-        );
-        tokio::time::sleep(Duration::from_secs(2)).await;
-    }
-    assert_eq!(
-        joiner.height().await,
-        want,
-        "the joiner reached the source's height"
-    );
-    assert_eq!(
-        joiner.last_block_hash().await,
-        source_tip,
-        "the joiner reached the source's tip"
-    );
-}
-
 /// `get_block_template.expected_reward` is the sum of the coinbase outputs of
 /// the template it returns. `lists_transactions` states which template the
 /// caller set up, so a pool that did not fill (or did not drain) fails here
@@ -3728,378 +3617,6 @@ async fn mine_until_pool_drains(daemon: &RegtestDaemon, what: &str, blocks_per_b
     }
 }
 
-/// What [`close_shard_through_the_daemon`] left on the chain: the shard,
-/// the block that closed it, and the slash pass that priced it — the
-/// three post-genesis operands CEN-J15 reads for a compact join onto it.
-#[derive(Clone, Copy, Debug)]
-struct ClosedShard {
-    shard: ShardId,
-    /// The height whose fold first counted the shard closed — the coverage
-    /// row's `freeze_height`, the block `closed_and_final` measures
-    /// finality from.
-    close_height: u64,
-    /// The settled epoch whose slash pass first found the shard final and
-    /// so wrote its `r_market` row (`scenario_shard.rs`
-    /// `first_pricing_epoch`, the same arithmetic).
-    priced_by_epoch: u64,
-    /// The block that ran that pass. A join connecting above it reads the
-    /// watermark at its parent; one block earlier the post is J15's.
-    pass_height: u64,
-    /// The wallet spends the fill listed, and their archival bytes.
-    spends: usize,
-    archival_bytes: u64,
-}
-
-/// Close `shard` on the live daemon's chain and wait until a compact join
-/// onto it is admissible: CEN-J15's three post-genesis operands
-/// (`shekyl-chain-rules` `tx_bond.rs` `holding_admissible`), each read
-/// back from the daemon rather than assumed.
-///
-/// 1. **Closed.** Ordinary wallet transfers — one-input self-sends of a
-///    small fixed amount, about 13 KB of archival good each (the prunable
-///    region and the hybrid auths, `Transaction::archival_len`) — are
-///    built, submitted and mined [`FILL_SPENDS_PER_BLOCK`] at a time until
-///    the chain's cumulative archival length passes `(shard + 1) · W`
-///    (`SHARD_LENGTH`, 3 000 000 bytes). The wallet's own byte count only
-///    decides when to stop building; the exit is the daemon's.
-/// 2. **Final.** `reorg_cap` more blocks, after which the daemon's
-///    `get_archival_shard_coverage` — `ClosedUniverse::final_before` at
-///    the next connecting height, the predicate J15 applies at the
-///    parent — lists the shard. That listing is the loop's exit, and its
-///    `freeze_height` is held to the block the wallet's count crossed in.
-/// 3. **Priced.** The slash pass of the first epoch whose deadline sits at
-///    or above `close + reorg_cap + 1` (`SO-D11f`: a pass prices every
-///    shard final as of its parent) writes the shard's `r_market` row.
-///    The chain is mined through that pass — the block at the deadline
-///    runs it (`scan_slashes`) — and the coverage reply's watermark is
-///    held to the epoch. Under the production grace
-///    (`SLASH_GRACE_EPOCHS = 1`) the pass of epoch `w` is the last block
-///    of epoch `w + 1`, so the earliest join lands in epoch `w + 2`: a
-///    walk that shortens its epoch to make this cheap must still expect
-///    its bond two epochs after the pricing epoch, never one.
-///
-/// This is `shekyl-chain-ingest`'s `close_shards` through the daemon's
-/// front door: the ingest harness drives the connector in-process with a
-/// spender over fixture coinbases; here every spend is a production wallet
-/// transfer over RPC and every block the daemon's own template. `W` is the
-/// production constant and nothing here is a lever, so the cost is a few
-/// hundred real proofs — minutes in a debug build — which is why every
-/// caller sits in `scripts/ci/run_live_daemon_gates.sh`'s slow lane.
-///
-/// **The spender is the caller's staker wallet, opened before the fill.**
-/// The retention prune (`shekyl-chain-store` `prune.rs`, S-PRUNE)
-/// discards a closed shard's bodies — the prunable regions and the hybrid
-/// auths, the archival good itself — at the epoch boundary two epochs
-/// after the shard's close epoch, `(close_epoch + 2) · SEB`, and this
-/// node then refuses `/get_transactions` for them in every form
-/// (`tx.pruned_here`). A wallet opened after that cannot scan the fill
-/// from this node: its refresh is refused at the first fill block
-/// (observed 2026-10-29 under a two-block epoch), and the P-scan reads
-/// full bodies (SP-6) that no pruned node can serve. So the wallet that
-/// will stake is the wallet that fills: its refresh follows the fill
-/// block by block, and once the shard is closed the helper runs its
-/// P-scan over the fill before mining on — the chain stands still while
-/// it scans — so every later P-scan resumes from that seal. The schedule
-/// must leave the P-scan's finality lag ([`PSCAN_TEST_REORG_DEPTH`])
-/// between the close and that boundary; the helper refuses one that does
-/// not. Runs first on an otherwise empty chain: the byte count assumes
-/// the coinbases, which carry no archival good, are all that came before,
-/// and the daemon's `--mine-address` is the wallet's primary address, so
-/// its coinbases are the supply.
-async fn close_shard_through_the_daemon(
-    daemon: &RegtestDaemon,
-    arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
-    address: &str,
-    pscan_seal: &std::path::Path,
-    shard: ShardId,
-    schedule: RegtestSchedule,
-) -> ClosedShard {
-    use super::pending::{FeePriority, TxDestination, TxRecipient, TxRequest};
-    use shekyl_archival_retention::{SettlementEpochBlocks, SettlementSchedule};
-    use shekyl_types::archival::SHARD_LENGTH;
-    use shekyl_units::AtomicUnits;
-    use shekyl_wire::Transaction;
-
-    /// Spends listed per fill block: sixteen one-input spends sit near
-    /// 230 KB, under the 300 000-byte full-reward zone with room for the
-    /// coinbase (`scenario_shard.rs` `SPENDS_PER_BLOCK`, the same figure).
-    const FILL_SPENDS_PER_BLOCK: usize = 16;
-    const MINE_BATCH_BLOCKS: u64 = 10;
-    const MAX_MINE_BATCHES: usize = 24;
-    /// Retries of one spend's build past the wallet's not-yet-spendable
-    /// and not-enough-unlocked refusals, each after a batch of blocks.
-    const MAX_BUILD_RETRIES: usize = 24;
-
-    let started = Instant::now();
-    let w = SHARD_LENGTH.to_raw();
-    let target_bytes = shard
-        .to_raw()
-        .checked_add(1)
-        .and_then(|k| k.checked_mul(w))
-        .expect("a test shard's end fits a u64");
-    let request = TxRequest {
-        recipients: vec![TxRecipient {
-            destination: TxDestination::Address(address.to_owned()),
-            amount_atomic_units: AtomicUnits::from_raw(1_000_000),
-            rid: None,
-        }],
-        priority: FeePriority::Standard,
-    };
-
-    // Build one spend, retrying past the wallet's readiness ladder (the
-    // reference-spendability gate and the unlocked supply), and return
-    // its sealed pending with its archival length.
-    async fn build_fill_spend(
-        daemon: &RegtestDaemon,
-        arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
-        request: &TxRequest,
-        n: usize,
-    ) -> (super::pending::PendingTx, u64) {
-        for _ in 0..MAX_BUILD_RETRIES {
-            let attempt = {
-                let g = arc.read().await;
-                g.build_pending_tx_async(request).await
-            };
-            match attempt {
-                Ok(pending) => {
-                    let len = Transaction::from_bytes(&pending.tx_bytes)
-                        .expect("a built spend parses")
-                        .archival_len()
-                        .to_raw();
-                    return (pending, len);
-                }
-                Err(
-                    e @ (super::error::SendError::OutputNotYetSpendable { .. }
-                    | super::error::SendError::InsufficientFunds { .. }),
-                ) => {
-                    eprintln!("shard fill spend {n}: {e}; mining more");
-                    daemon.generate_blocks(MINE_BATCH_BLOCKS).await;
-                    refresh(arc).await;
-                }
-                Err(e) => daemon.panic_with_log("build shard-fill spend", format!("{e:?}")),
-            }
-        }
-        panic!("shard fill spend {n} never built within {MAX_BUILD_RETRIES} retries");
-    }
-
-    // The first coinbase spendable, then a sample spend sizes the fill: the
-    // wallet takes one input per small spend, so the supply is one matured
-    // coinbase per spend, mined ahead now because empty blocks are cheap
-    // and proofs are not. The sample is submitted, not dropped — it is the
-    // fill's first spend.
-    mine_until_spendable(daemon, arc, MINE_BATCH_BLOCKS, MAX_MINE_BATCHES).await;
-    let (first, per_spend) = build_fill_spend(daemon, arc, &request, 0).await;
-    assert!(per_spend > 0, "a wallet spend carries archival good");
-    let spends_needed = target_bytes.div_ceil(per_spend) + 1;
-    eprintln!(
-        "shard fill: {per_spend} archival bytes per spend; about {spends_needed} spends close \
-         shard {} (W = {w}); tip {}",
-        shard.to_raw(),
-        daemon.height().await,
-    );
-    submit_built(arc, &first, "shard-fill spend 0").await;
-    let mut spends = 1usize;
-    let mut archival_bytes = per_spend;
-    let supply_ahead = spends_needed + 2 * u64::try_from(FILL_SPENDS_PER_BLOCK).expect("fits");
-    daemon.generate_blocks(supply_ahead).await;
-    refresh(arc).await;
-    eprintln!(
-        "shard fill: supply mined ahead ({supply_ahead} blocks), tip {}, {:?} elapsed",
-        daemon.height().await,
-        started.elapsed()
-    );
-
-    // The fill. Build while the wallet's byte count is short of the
-    // shard's end, then mine empty blocks for finality; the exit is the
-    // daemon listing the shard.
-    let cap = schedule.reorg_cap;
-    let max_blocks = spends_needed / u64::try_from(FILL_SPENDS_PER_BLOCK).expect("fits") + cap + 64;
-    let mut crossed_in: Option<u64> = None;
-    let mut blocks = 0u64;
-    let listed = loop {
-        let coverage = daemon.shard_coverage().await;
-        if coverage
-            .shards
-            .iter()
-            .any(|row| row.shard_id == shard.to_raw())
-        {
-            break coverage;
-        }
-        assert!(
-            blocks < max_blocks,
-            "shard {} never listed final after {blocks} fill blocks ({spends} spends, \
-             {archival_bytes}/{target_bytes} archival bytes; coverage as of {} lists {} \
-             final shard(s), crossed in {crossed_in:?})",
-            shard.to_raw(),
-            coverage.as_of_height,
-            coverage.frozen_count,
-        );
-        if archival_bytes < target_bytes {
-            for _ in 0..FILL_SPENDS_PER_BLOCK {
-                let (pending, len) = build_fill_spend(daemon, arc, &request, spends).await;
-                submit_built(arc, &pending, "a shard-fill spend").await;
-                spends += 1;
-                archival_bytes += len;
-            }
-            let before = daemon.height().await;
-            mine_until_pool_drains(daemon, "a shard-fill batch", 1).await;
-            refresh(arc).await;
-            let after = daemon.height().await;
-            if archival_bytes >= target_bytes && crossed_in.is_none() {
-                // One block drained the batch: the crossing spend is in
-                // it, and that is the height the daemon's fold closes the
-                // shard at. More than one, and the crossing block is one
-                // of them; the height check below then only bounds.
-                crossed_in = Some(after - 1);
-                eprintln!(
-                    "shard fill: the wallet's byte count crossed {target_bytes} in the batch \
-                     mined over {}..{} ({spends} spends); mining {cap} blocks for finality",
-                    before,
-                    after - 1
-                );
-                if after - before != 1 {
-                    crossed_in = Some(u64::MAX);
-                }
-            }
-        } else {
-            daemon.generate_blocks(1).await;
-        }
-        blocks += 1;
-        if let Some(crossed) = crossed_in.filter(|c| *c != u64::MAX) {
-            let tip = daemon.height().await;
-            assert!(
-                tip <= crossed + cap + 8,
-                "the wallet's byte count closed shard {} at {crossed} but the daemon lists {} \
-                 final shard(s) at tip {tip}, {cap} + 8 blocks later: the fold and \
-                 `Transaction::archival_len` disagree",
-                shard.to_raw(),
-                coverage.frozen_count,
-            );
-        }
-        if blocks.is_multiple_of(4) {
-            eprintln!(
-                "shard fill: tip {}, {spends} spends, {archival_bytes}/{target_bytes} archival \
-                 bytes, {} final shard(s), {:?} elapsed",
-                daemon.height().await,
-                coverage.frozen_count,
-                started.elapsed()
-            );
-        }
-    };
-    let row = listed
-        .shards
-        .iter()
-        .find(|row| row.shard_id == shard.to_raw())
-        .expect("the loop exited on the listing");
-    let close_height = row.freeze_height;
-    if let Some(crossed) = crossed_in.filter(|c| *c != u64::MAX) {
-        assert_eq!(
-            close_height,
-            crossed,
-            "the daemon closed shard {} at {close_height}; the wallet's archival byte count \
-             crossed its end in the block at {crossed}",
-            shard.to_raw()
-        );
-    }
-    eprintln!(
-        "shard {} closed at {close_height} and final as of {} ({spends} spends, {archival_bytes} \
-         archival bytes, {blocks} fill blocks, {:?} elapsed)",
-        shard.to_raw(),
-        listed.as_of_height,
-        started.elapsed()
-    );
-
-    // The staker wallet's P-scan covers the fill now, ahead of the
-    // retention prune (doc comment): the scan frontier trails the tip by
-    // the test horizon, so the tip is first raised just far enough for the
-    // close block to sit inside it, and that tip must still be below the
-    // boundary whose connect discards the shard.
-    let sched = SettlementSchedule::new(
-        SettlementEpochBlocks::new(schedule.seb).expect("a schedule's epoch is non-zero"),
-    );
-    let prune_boundary = sched.open_height(sched.epoch_at_height(close_height) + 2);
-    let scan_tip = close_height + PSCAN_TEST_REORG_DEPTH + 1;
-    assert!(
-        scan_tip < prune_boundary,
-        "the P-scan needs the tip at {scan_tip} to cover the close block {close_height}, but \
-         the boundary at {prune_boundary} discards shard {}'s bodies first: an epoch of {} is \
-         too short for the scan's finality lag; raise SEB",
-        shard.to_raw(),
-        schedule.seb
-    );
-    let count = daemon.height().await;
-    if count <= scan_tip {
-        daemon.generate_blocks(scan_tip + 1 - count).await;
-    }
-    refresh(arc).await;
-    let scanned = pscan_until_within(
-        arc,
-        pscan_seal,
-        "the shard fill, ahead of the retention prune",
-        |s| s.synced_height().to_raw() > close_height,
-        Duration::from_secs(1800),
-    )
-    .await;
-    eprintln!(
-        "P-scan covered the fill: frontier {} past the close block {close_height}, tip {}, \
-         prune boundary {prune_boundary} ({:?} elapsed)",
-        scanned.synced_height(),
-        daemon.height().await,
-        started.elapsed()
-    );
-
-    // Priced: the first pass whose parent sees the shard final, then the
-    // watermark read back. The block at the deadline runs the pass
-    // (`scan_slashes`: the count after it exceeds the deadline), so the
-    // chain count must exceed the deadline.
-    let final_for_a_pass_at = close_height + cap + 1;
-    let priced_by_epoch = (0u64..)
-        .find(|&e| sched.slash_deadline_height(e) >= final_for_a_pass_at)
-        .expect("a test chain's epochs are small");
-    let pass_height = sched.slash_deadline_height(priced_by_epoch);
-    let count = daemon.height().await;
-    if count <= pass_height {
-        daemon.generate_blocks(pass_height + 1 - count).await;
-    }
-    let mut watermark_seen = None;
-    for _ in 0..8 {
-        let coverage = daemon.shard_coverage().await;
-        // The wire's epoch is 0 both before any pass and after the pass
-        // of epoch 0; the settled epoch's budget row exists only after a
-        // pass (the close writes it; the emission walk pins it positive).
-        let watermark = (coverage.settled_epoch > 0 || coverage.budget_atomic > 0)
-            .then_some(coverage.settled_epoch);
-        watermark_seen = Some((coverage.as_of_height, watermark, coverage.budget_atomic));
-        if watermark.is_some_and(|settled| settled >= priced_by_epoch) {
-            break;
-        }
-        daemon.generate_blocks(1).await;
-    }
-    let (as_of, watermark, budget) = watermark_seen.expect("read at least once");
-    assert!(
-        watermark.is_some_and(|settled| settled >= priced_by_epoch),
-        "the slash pass of epoch {priced_by_epoch} (the block at {pass_height}) must have \
-         priced shard {} (closed {close_height}, final from {final_for_a_pass_at}); the \
-         coverage as of {as_of} reports watermark {watermark:?}, budget {budget}",
-        shard.to_raw()
-    );
-    eprintln!(
-        "shard {} priced: settled epoch {watermark:?} ≥ {priced_by_epoch} (pass at \
-         {pass_height}); tip {}; a compact join is admissible from here ({:?} elapsed)",
-        shard.to_raw(),
-        daemon.height().await,
-        started.elapsed()
-    );
-    ClosedShard {
-        shard,
-        close_height,
-        priced_by_epoch,
-        pass_height,
-        spends,
-        archival_bytes,
-    }
-}
-
 /// The confirmed-bond substrate [`stake_persona_to_confirmed_bond`] hands
 /// back: the wallet handles plus the **block geography** the emission-claim
 /// e2e derives its epoch arithmetic from. The geography is returned
@@ -4201,13 +3718,13 @@ enum FixtureStake {
 /// `wallet` is the staker wallet to stake from when the caller opened it
 /// already — the market-bond walks open it before the shard fill, so its
 /// scans cover the fill ahead of the retention prune
-/// ([`close_shard_through_the_daemon`]); `None` opens one here.
+/// ([`shard::close_shard_through_the_daemon`]); `None` opens one here.
 ///
 /// The post this builds is a kind-5 JoinMarket (`FN_DSA_HYBRID.md` §8),
 /// which the Rust daemon admits. Every caller runs in
 /// `scripts/ci/run_live_daemon_gates.sh`'s slow lane. A caller naming a
 /// market bond (`FixtureStake::MarketBond`) closes and prices the shard
-/// it names first ([`close_shard_through_the_daemon`]): CEN-J15 refuses a
+/// it names first ([`shard::close_shard_through_the_daemon`]): CEN-J15 refuses a
 /// compact join onto a shard that is not closed, final and priced at the
 /// parent, and the pool door judges it at commit.
 async fn stake_persona_to_confirmed_bond(
@@ -4688,7 +4205,7 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
 /// CEN-J15 admits that join only after the shard is closed, final and
 /// priced by a slash pass, so the walk opens by closing the shard with
 /// real wallet spends and mining through the pass that prices it
-/// ([`close_shard_through_the_daemon`]). The confirmed-bond fixture then
+/// ([`shard::close_shard_through_the_daemon`]). The confirmed-bond fixture then
 /// runs, and the epoch its join lands in — `J`, read back from the
 /// daemon's bond record, at least two epochs past the pricing epoch
 /// (the pass of epoch `w` is the last block of `w + 1`) — is the walk's
@@ -4818,7 +4335,7 @@ async fn e2e_emission_claim_accepted_and_applied() {
     let wallet = staker_wallet(daemon.rpc_port, &seed, slot).await;
     let pscan_seal =
         shekyl_engine_file::paths::pscan_state_path_from(&wallet.1.path().join("wallet"));
-    let closed = close_shard_through_the_daemon(
+    let closed = shard::close_shard_through_the_daemon(
         &daemon,
         &wallet.0,
         &wallet.2,
@@ -5734,7 +5251,7 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
 /// **The schedule is levered (`SEB = 32`), for the join and not for the
 /// exit.** The bond is a market bond, and CEN-J15 admits a compact join
 /// only onto a shard that is closed, final and priced by a slash pass
-/// ([`close_shard_through_the_daemon`]); the production epoch never
+/// ([`shard::close_shard_through_the_daemon`]); the production epoch never
 /// settles inside a test, so the walk takes a short one and arms the
 /// wallet to match; an unserved persona's exit itself needs no lever.
 ///
@@ -5793,7 +5310,7 @@ async fn e2e_release_accepted_and_connected() {
     let wallet = staker_wallet(daemon.rpc_port, &seed, slot).await;
     let pscan_seal =
         shekyl_engine_file::paths::pscan_state_path_from(&wallet.1.path().join("wallet"));
-    let closed = close_shard_through_the_daemon(
+    let closed = shard::close_shard_through_the_daemon(
         &daemon,
         &wallet.0,
         &wallet.2,
@@ -5935,7 +5452,7 @@ async fn e2e_release_accepted_and_connected() {
 /// against a real daemon.
 ///
 /// The bond is a market bond onto shard 0, so the walk opens by closing
-/// and pricing that shard ([`close_shard_through_the_daemon`]): CEN-J15
+/// and pricing that shard ([`shard::close_shard_through_the_daemon`]): CEN-J15
 /// admits the join only after a slash pass has priced the shard, and
 /// under an eight-block epoch that pass is within two epochs of the
 /// close. Every height below is relative to the exit, so the fill moves
@@ -6020,7 +5537,7 @@ async fn e2e_unstake_collect_retire_composed_arc() {
     let wallet = staker_wallet(daemon.rpc_port, &seed, slot).await;
     let pscan_seal =
         shekyl_engine_file::paths::pscan_state_path_from(&wallet.1.path().join("wallet"));
-    let closed = close_shard_through_the_daemon(
+    let closed = shard::close_shard_through_the_daemon(
         &daemon,
         &wallet.0,
         &wallet.2,
@@ -6375,144 +5892,6 @@ async fn e2e_arm3_phantom_slot_collected_at_open() {
     );
     eprintln!("arm #3 production discharge: phantom bonded_slots[{SLOT}] collected at open");
     reopened.close(&creds).expect("close");
-}
-
-/// **A node that dials carries its tip** (`DRS_X_STORE_FLIP.md` DX-Q2
-/// item 5; the design review's M2): the connector publishes the tip once
-/// at start and after every connect, the dialer's readiness reads that
-/// publication (`NotReady::NoTip` until it exists), and the outbound
-/// handshake's `current_height` is the block count it published. Before
-/// the forwarder that carries the publication to the dialer, a Rust
-/// daemon never dialed at all: readiness stayed `NoTip`.
-///
-/// Two daemons, each the other's one closed peer. `B` first, then `A`,
-/// which links to `B` at genesis — a node is synchronized from a
-/// handshake with a peer at its own height, and the miner posts no job
-/// before that, so `A` could not mine alone. `A` mines `MINED` blocks,
-/// then **restarts on its own data directory**: the new process has no
-/// session, reads its tip from the store, publishes it once at start,
-/// and dials `B`. `B`'s `get_connections` must then show an **incoming**
-/// connection it did not have before the restart whose `height` is
-/// `MINED + 1`, the block count `A` came back with. The connection id
-/// is what makes it a fresh handshake rather than the old session's row
-/// updated by sync; `incoming` is what makes it `A`'s dial rather than
-/// `B`'s redial of `A`, whose handshake `A` only answers.
-///
-/// The designed red is the tip forwarder's revert: `A` still mines (`B`
-/// dials it, which is `A`'s handshake), but the restarted `A` never dials
-/// (`NoTip`), and `B` sees no new incoming connection inside the wait.
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; two daemons and one restart"]
-async fn a_dialing_node_hands_its_tip_to_the_peer_it_dials() {
-    use std::collections::BTreeSet;
-
-    const MINED: u64 = 20;
-    const LINK_WAIT: Duration = Duration::from_secs(90);
-
-    async fn incoming_on(daemon: &RegtestDaemon) -> Vec<shekyl_rpc_types::ConnectionInfo> {
-        let reply: shekyl_rpc_types::P2pReply<shekyl_rpc_types::GetConnectionsResponse> = daemon
-            .rpc
-            .json_rpc_call("get_connections", None)
-            .await
-            .expect("get_connections");
-        reply
-            .into_running()
-            .expect("a linked daemon's P2P runs; it must not report offline")
-            .connections
-            .into_iter()
-            .filter(|c| c.incoming)
-            .collect()
-    }
-
-    let serial = serial_lock().lock_owned().await;
-    let port_a = RegtestDaemon::free_port();
-    let port_b = RegtestDaemon::free_port_excluding(&[port_a]);
-    let b = RegtestDaemon::spawn(
-        RegtestSpawn::new(Some(serial)).with_peering(Peering::Linked {
-            p2p_port: port_b,
-            peer_p2p_port: port_a,
-            sink: false,
-        }),
-    )
-    .await;
-    let mut a = RegtestDaemon::spawn(RegtestSpawn::new(None).with_peering(Peering::Linked {
-        p2p_port: port_a,
-        peer_p2p_port: port_b,
-        sink: false,
-    }))
-    .await;
-
-    // Linked at genesis: `A` synchronized, so its miner posts a job. The
-    // job follows the sync state by one follower pass, so the miner is
-    // asked rather than the flag (`get_info` said synchronized while the
-    // posting still read `no_view`, observed 2026-10-29): the one refusal
-    // retried is the wire-pinned `mine.not_synced`.
-    let deadline = Instant::now() + LINK_WAIT;
-    loop {
-        match try_generate_blocks(&a.rpc, 1).await {
-            Ok(_) => break,
-            Err(e) if format!("{e:?}").contains("mine.not_synced") && Instant::now() < deadline => {
-                tokio::time::sleep(Duration::from_millis(250)).await;
-            }
-            Err(e) => a.panic_with_log(
-                "A's miner never posted a job (A never synchronized against B?)",
-                format!("{e:?}; B's log tail:\n{}", b.log_tail()),
-            ),
-        }
-    }
-    a.generate_blocks(MINED - 1).await;
-    assert_eq!(
-        a.height().await,
-        MINED + 1,
-        "A mined {MINED} blocks on genesis"
-    );
-    let before: BTreeSet<String> = incoming_on(&b)
-        .await
-        .into_iter()
-        .map(|c| c.connection_id)
-        .collect();
-    eprintln!(
-        "A at block count {}; B holds {} incoming connection(s) before the restart",
-        MINED + 1,
-        before.len()
-    );
-
-    // The restarted `A` has no session and a stored tip; its first dial
-    // is the proposition.
-    a.restart_keeping_chain().await;
-    let deadline = Instant::now() + LINK_WAIT;
-    loop {
-        let incoming = incoming_on(&b).await;
-        let fresh: Vec<&shekyl_rpc_types::ConnectionInfo> = incoming
-            .iter()
-            .filter(|c| !before.contains(&c.connection_id))
-            .collect();
-        if let Some(c) = fresh.iter().find(|c| c.height == Some(MINED + 1)) {
-            eprintln!(
-                "B: fresh incoming connection {} from {} claims height {:?} — the restarted \
-                 dialer handed B its tip",
-                c.connection_id, c.address, c.height
-            );
-            break;
-        }
-        let seen = fresh
-            .iter()
-            .map(|c| format!("{} height {:?}", c.address, c.height))
-            .collect::<Vec<_>>()
-            .join(", ");
-        if Instant::now() >= deadline {
-            a.panic_with_log(
-                "the restarted A never handed B its tip",
-                format!(
-                    "after {LINK_WAIT:?}: fresh incoming connections on B: [{seen}] (wanted one at \
-                     height Some({})); B's log tail:\n{}",
-                    MINED + 1,
-                    b.log_tail()
-                ),
-            );
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
 }
 
 /// The build a captured chain names: the daemon's own, held to the checkout
@@ -7278,3 +6657,9 @@ mod peer;
 
 #[path = "regtest_e2e_rt_p5.rs"]
 mod rt_p5;
+
+#[path = "regtest_e2e_shard.rs"]
+mod shard;
+
+#[path = "regtest_e2e_sync.rs"]
+mod sync;

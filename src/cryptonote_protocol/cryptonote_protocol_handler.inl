@@ -1141,6 +1141,58 @@ namespace cryptonote
     MLOG_PEER_STATE("requesting chain");
   }
   template<class t_core>
+  typename t_cryptonote_protocol_handler<t_core>::span_hand_result
+  t_cryptonote_protocol_handler<t_core>::hand_span_to_door()
+  {
+    // The caller holds m_sync_lock. The idle pump and the peer standby
+    // pass both hand the next span through here, and each decides only
+    // what "no room" and "throttled" mean for its own caller.
+    span_hand_result handed;
+    std::vector<cryptonote::block_complete_entry> blocks;
+    epee::net_utils::network_address span_origin;
+    if (!m_block_queue.get_next_span_from(m_door_frontier.load(), handed.start_height, blocks, handed.connection_id, span_origin) || blocks.empty())
+      return handed;
+    (void)span_origin;
+    handed.blocks = blocks.size();
+    if (shekyl_ingest_room() < blocks.size())
+    {
+      handed.outcome = span_hand::no_room;
+      return handed;
+    }
+    handed.code = cryptonote::offer_block_span(
+        shekyl::seam_socket_id(handed.connection_id), true, blocks);
+    if (handed.code == SHEKYL_INGEST_ACCEPTED)
+    {
+      const uint64_t past = handed.start_height + handed.blocks;
+      uint64_t frontier = m_door_frontier.load();
+      while (frontier < past && !m_door_frontier.compare_exchange_weak(frontier, past)) {}
+      handed.outcome = span_hand::accepted;
+      return handed;
+    }
+    if (handed.code == SHEKYL_INGEST_NO_ROOM)
+    {
+      handed.outcome = span_hand::no_room;
+      return handed;
+    }
+    if (handed.code == SHEKYL_INGEST_OVERSIZE || handed.code == SHEKYL_INGEST_INVALID)
+      m_block_queue.remove_spans(handed.connection_id, handed.start_height);
+    if (handed.code == SHEKYL_INGEST_THROTTLED)
+    {
+      m_block_queue.remove_spans(handed.connection_id, handed.start_height);
+      handed.outcome = span_hand::throttled;
+      return handed;
+    }
+    handed.outcome = span_hand::declined;
+    return handed;
+  }
+  template<class t_core>
+  void t_cryptonote_protocol_handler<t_core>::drop_throttled_peer(const boost::uuids::uuid& id)
+  {
+    m_p2p->for_connection(id, [this](cryptonote_connection_context& origin) {
+      drop_connection(origin, false, true);
+    });
+  }
+  template<class t_core>
   void t_cryptonote_protocol_handler<t_core>::pump_door()
   {
     // The hand-over that depends on no peer's state. The standby pass hands
@@ -1153,26 +1205,23 @@ namespace cryptonote
     const boost::unique_lock<boost::mutex> sync{m_sync_lock, boost::try_to_lock};
     if (!sync.owns_lock())
       return;
-    uint64_t start_height = 0;
-    std::vector<cryptonote::block_complete_entry> blocks;
-    boost::uuids::uuid span_connection_id;
-    epee::net_utils::network_address span_origin;
-    if (!m_block_queue.get_next_span_from(m_door_frontier.load(), start_height, blocks, span_connection_id, span_origin) || blocks.empty())
-      return;
-    (void)span_origin;
-    if (shekyl_ingest_room() < blocks.size())
-      return;
-    const int offered = cryptonote::offer_block_span(
-        shekyl::seam_socket_id(span_connection_id), true, blocks);
-    if (offered == SHEKYL_INGEST_ACCEPTED)
+    const span_hand_result handed = hand_span_to_door();
+    switch (handed.outcome)
     {
-      const uint64_t past = start_height + blocks.size();
-      uint64_t frontier = m_door_frontier.load();
-      while (frontier < past && !m_door_frontier.compare_exchange_weak(frontier, past)) {}
-      MINFO("the idle pump handed span " << start_height << "/" << blocks.size() << " to the door; frontier " << m_door_frontier.load());
+    case span_hand::none:
+    case span_hand::no_room:
+      return;
+    case span_hand::accepted:
+      MINFO("the idle pump handed span " << handed.start_height << "/" << handed.blocks << " to the door; frontier " << m_door_frontier.load());
+      return;
+    case span_hand::declined:
+      MINFO("the idle pump: the door answered " << handed.code << " to span " << handed.start_height << "/" << handed.blocks);
+      return;
+    case span_hand::throttled:
+      MINFO("the idle pump drops a throttled peer for span " << handed.start_height << "/" << handed.blocks);
+      drop_throttled_peer(handed.connection_id);
+      return;
     }
-    else if (offered == SHEKYL_INGEST_OVERSIZE || offered == SHEKYL_INGEST_INVALID)
-      m_block_queue.remove_spans(span_connection_id, start_height);
   }
   template<class t_core>
   uint64_t t_cryptonote_protocol_handler<t_core>::sync_head() const
@@ -1193,49 +1242,31 @@ namespace cryptonote
     }
     else
     {
-      uint64_t start_height = 0;
-      std::vector<cryptonote::block_complete_entry> blocks;
-      boost::uuids::uuid span_connection_id{};
-      epee::net_utils::network_address span_origin;
-      if (m_block_queue.get_next_span_from(m_door_frontier.load(), start_height, blocks, span_connection_id, span_origin) && !blocks.empty())
+      // A span this node asked for. The door connects it; this loop does
+      // not. The door seats a window of arrivals: a span it has no room
+      // for stays in the queue and is offered again on the next standby
+      // pass (`check_standby_peers`, every 100 ms), neither dropped nor
+      // offered in a loop. The span stays queued until the connected
+      // reply erases it.
+      const span_hand_result handed = hand_span_to_door();
+      switch (handed.outcome)
       {
-        (void)span_origin;
-        // A span this node asked for. The door connects it; this loop does
-        // not. The door seats a window of arrivals: a span it has no room
-        // for stays in the queue and is offered again on the next standby
-        // pass (`check_standby_peers`, every 100 ms), neither dropped nor
-        // offered in a loop.
-        if (shekyl_ingest_room() < blocks.size())
-        {
-          MLOG_PEER_STATE("the door has no room for the next span, standing by");
-          context.m_state = cryptonote_connection_context::state_standby;
-          return 1;
-        }
-        const int offered = cryptonote::offer_block_span(
-            shekyl::seam_socket_id(span_connection_id), true, blocks);
-        if (offered == SHEKYL_INGEST_ACCEPTED)
-        {
-          // The span is the door's now, and it stays in the queue until
-          // the door's connected reply erases it: removed here, its
-          // heights would be neither on the chain nor in the queue, and
-          // the next request would ask the peer for them again (seen as
-          // overlapping spans and a door with no room left).
-          const uint64_t past = start_height + blocks.size();
-          uint64_t frontier = m_door_frontier.load();
-          while (frontier < past && !m_door_frontier.compare_exchange_weak(frontier, past)) {}
-          MINFO(context << " handed span " << start_height << "/" << blocks.size() << " to the door; frontier " << m_door_frontier.load());
-        }
-        else
-          MINFO(context << " the door answered " << offered << " to span " << start_height << "/" << blocks.size());
-        if (offered == SHEKYL_INGEST_OVERSIZE || offered == SHEKYL_INGEST_INVALID)
-          m_block_queue.remove_spans(span_connection_id, start_height);
-        if (offered == SHEKYL_INGEST_THROTTLED)
-        {
-          m_block_queue.remove_spans(span_connection_id, start_height);
-          m_p2p->for_connection(span_connection_id, [this](cryptonote_connection_context& origin) {
-            drop_connection(origin, false, true);
-          });
-        }
+      case span_hand::none:
+        break;
+      case span_hand::no_room:
+        MLOG_PEER_STATE("the door has no room for the next span, standing by");
+        context.m_state = cryptonote_connection_context::state_standby;
+        return 1;
+      case span_hand::accepted:
+        MINFO(context << " handed span " << handed.start_height << "/" << handed.blocks << " to the door; frontier " << m_door_frontier.load());
+        break;
+      case span_hand::declined:
+        MINFO(context << " the door answered " << handed.code << " to span " << handed.start_height << "/" << handed.blocks);
+        break;
+      case span_hand::throttled:
+        MINFO(context << " the door answered " << handed.code << " to span " << handed.start_height << "/" << handed.blocks);
+        drop_throttled_peer(handed.connection_id);
+        break;
       }
       if (should_download_next_span(context, false))
         force_next_span = true;

@@ -83,7 +83,14 @@ pub const HANDSHAKE_FIXED_MAX_BYTES: u64 = 239;
 pub const MAX_OBJECT_REQUEST_COUNT: u64 = 100;
 
 /// `BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT` (`cryptonote_config.h`).
+/// The locator's cap: how many block ids a short history may name.
 pub const BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT: u64 = 25_000;
+
+/// `BLOCKS_IDS_SYNCHRONIZING_DEFAULT_COUNT` (`cryptonote_config.h`).
+/// How many block ids a chain-entry reply carries, including the split.
+/// Not the locator cap: a chain entry is a window, and the locator is
+/// the sparse name of a chain.
+pub const BLOCKS_IDS_SYNCHRONIZING_DEFAULT_COUNT: u64 = 10_000;
 
 /// Portable-storage over-bound for an array of `count` 32-byte hashes:
 /// 48 bytes/entry covers type tag + length + blob + array share; +256

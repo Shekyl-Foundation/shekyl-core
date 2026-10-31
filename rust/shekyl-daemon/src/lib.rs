@@ -31,7 +31,9 @@ pub use run::{Host, EXIT_FAILED, EXIT_REFUSED};
 #[cfg(test)]
 #[allow(unsafe_code)]
 #[no_mangle]
-extern "C" fn shekyl_shell_relay_local(_blob: *const u8, _len: usize) {}
+extern "C" fn shekyl_shell_relay_local(_blob: *const u8, _len: usize) -> i32 {
+    0
+}
 
 /// The entry with the real platform: the account's roots from the
 /// operating system, the network id's one derivation, and `args`, the

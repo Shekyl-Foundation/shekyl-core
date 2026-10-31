@@ -170,6 +170,21 @@ namespace cryptonote
     bool kick_idle_peers();
     bool check_standby_peers();
     bool update_sync_search();
+    /// What handing the next queued span to the ingest door did. The
+    /// caller holds `m_sync_lock` and branches only on `no_room` and
+    /// `throttled`; the hand itself moves the frontier and drops a span
+    /// the door will not keep.
+    enum class span_hand { none, no_room, accepted, declined, throttled };
+    struct span_hand_result
+    {
+      span_hand outcome = span_hand::none;
+      boost::uuids::uuid connection_id{};
+      uint64_t start_height = 0;
+      size_t blocks = 0;
+      int code = 0;
+    };
+    span_hand_result hand_span_to_door();
+    void drop_throttled_peer(const boost::uuids::uuid &id);
     int try_add_next_blocks(cryptonote_connection_context &context);
     uint64_t sync_head() const;
     void pump_door();

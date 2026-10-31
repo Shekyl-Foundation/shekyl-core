@@ -28,7 +28,9 @@ use tokio::sync::oneshot;
 
 use super::{Accepted, ArrivalTag, CannotFollow, Proof, Reply, ReplySlot, ServiceFault, Shared};
 use crate::cache_window::AltSpend;
-use crate::connector::{Apply, ObserveTarget, OfferAlt, Offered, Reorganize, RunFault, Switched};
+use crate::connector::{
+    Apply, ObserveTarget, OfferAlt, Offered, Reorganize, RunFault, Settlement, Switched,
+};
 use crate::plan_form::{form_plan, PlanStop};
 use crate::router::{claim_alt, claim_run, ClaimStop, ClaimedAlt, Claims};
 use crate::substrate::Branch;
@@ -503,32 +505,34 @@ fn rest(arrivals: &mut VecDeque<Parsed>) -> Vec<Parsed> {
     arrivals.drain(..).collect()
 }
 
-/// What ended the wait for a run's forms before every form was in. The
-/// blocks formed before it still land, in the run's one write; what it
-/// names is answered after that write.
-enum Ended {
-    /// `form` refused this arrival: it is answered, the rest cancelled.
+/// One formed block of a run: the height it claims, the arrival the
+/// reply goes to, and the verdict the connector connects.
+struct FormedBlock {
+    height: BlockHeight,
+    arrival: Parsed,
+    valid: StructurallyValid,
+}
+
+/// What stopped the forms before every arrival of the run was in.
+/// The blocks formed before it still land, in the run's one write;
+/// this is answered after that write.
+enum FormStop {
+    /// `form` refused this arrival.
     Refused {
         arrival: Parsed,
         refused: InvalidBlock,
     },
-    /// The slots moved under this arrival's hash: it and the rest are
-    /// placed again.
+    /// The slots moved under this arrival's hash.
     Again(Parsed),
 }
 
-/// Connect a run's formed blocks in **one write** once every form of the
-/// run has ended, or the first refusal or fault has: one transaction, one
-/// commit, one `TipChanged` per run.
+/// Connect a run's formed blocks in one write once every form of the
+/// run has ended, or the first refusal or fault has: one transaction,
+/// one commit, one `TipChanged` when anything connected.
 ///
-/// The door connected each block as its form ended, one write and one
-/// commit each: two fsyncs per block under `Immediate`, where the C++
-/// handler's connect loop opened one batch for a whole span. On a disk
-/// whose fsync costs 150 ms that was the flip's whole IBD cost gap
-/// (DRS-D6's mitigation cycle, 2026-10-30). The durability policy does
-/// not change: the run's commit is fsynced and atomic, and a crash rolls
-/// the open run back, to be fetched again; a node following the tip runs
-/// one block anyway.
+/// The prefix is answered `Connected` before the stop is answered. A
+/// crash rolls the open run back. Durability of that one commit is the
+/// store's.
 async fn connect_run<S>(
     shared: &Arc<Shared<S>>,
     arrivals: &mut VecDeque<Parsed>,
@@ -540,10 +544,8 @@ where
     S: Substrate + Send + Sync + 'static,
     S::Fault: core::fmt::Debug + Send + 'static,
 {
-    let mut run: Vec<(BlockHeight, Result<StructurallyValid, InvalidBlock>)> =
-        Vec::with_capacity(receivers.len());
-    let mut formed: Vec<Parsed> = Vec::with_capacity(receivers.len());
-    let mut ended: Option<Ended> = None;
+    let mut formed: Vec<FormedBlock> = Vec::with_capacity(receivers.len());
+    let mut form_stop = None;
     for (height, receiver) in receivers {
         let arrival = arrivals.pop_front().expect("one arrival per claim");
         let Ok(form) = receiver.await else {
@@ -554,21 +556,22 @@ where
             return Next::Halt;
         }
         match form {
-            Ok(Ok(valid)) => {
-                run.push((height, Ok(valid)));
-                formed.push(arrival);
-            }
+            Ok(Ok(valid)) => formed.push(FormedBlock {
+                height,
+                arrival,
+                valid,
+            }),
             // No form starts after a refusal or a moved slot: the launcher
             // reads `abandon` before each one, so it is set here, not after
             // the write that lands the prefix.
             Ok(Err(refused)) => {
                 abandon.store(true, Ordering::Release);
-                ended = Some(Ended::Refused { arrival, refused });
+                form_stop = Some(FormStop::Refused { arrival, refused });
                 break;
             }
             Err(fault) if shared.substrate().cache_absent(&fault) => {
                 abandon.store(true, Ordering::Release);
-                ended = Some(Ended::Again(arrival));
+                form_stop = Some(FormStop::Again(arrival));
                 break;
             }
             // A substrate fault fails the service now, before any write:
@@ -581,60 +584,31 @@ where
             }
         }
     }
-    // The arrivals a `Next` carries past the write: those formed but not
-    // landed, the one that ended the wait, then the rest of the run.
-    let carried =
-        |mut not_landed: Vec<Parsed>, ended: Option<Ended>, arrivals: &mut VecDeque<Parsed>| {
-            match ended {
-                Some(Ended::Refused { arrival, .. } | Ended::Again(arrival)) => {
-                    not_landed.push(arrival)
-                }
-                None => {}
-            }
-            not_landed.extend(rest(arrivals));
-            not_landed
-        };
-    if !run.is_empty() {
+    if !formed.is_empty() {
+        let mut block_arrivals = Vec::with_capacity(formed.len());
+        let mut run = Vec::with_capacity(formed.len());
+        for block in formed {
+            block_arrivals.push(block.arrival);
+            run.push((block.height, Ok(block.valid)));
+        }
+        let submitted = run.len();
         match shared.connector.ask(Apply(run)).await {
-            Ok(applied) => {
-                let landed = applied.connected.len().min(formed.len());
-                let not_landed = formed.split_off(landed);
-                for ((height, hash), arrival) in applied.connected.iter().zip(formed) {
-                    arrival.slot.send(Reply::Connected {
-                        height: *height,
-                        hash: *hash,
-                    });
-                }
-                match applied.refused {
-                    // This path only applies a block whose parent was the
-                    // tip. CEN-A2 then says that parent is no longer the
-                    // tip, at the same height: a replacement, not a block
-                    // this peer proved invalid. A height change is
-                    // `HeightClaim`, below.
-                    Some((_, refused)) if refused.rule == CenRow::A2 => {
-                        abandon.store(true, Ordering::Release);
-                        return Next::Again(carried(not_landed, ended, arrivals));
-                    }
-                    Some((_, refused)) => {
-                        abandon.store(true, Ordering::Release);
-                        let mut not_landed = not_landed.into_iter();
-                        let arrival = not_landed.next().expect("the refused block was in the run");
-                        arrival.slot.send(Reply::Refused(refused));
-                        return Next::Cancel {
-                            by: arrival.tag,
-                            rest: carried(not_landed.collect(), ended, arrivals),
-                        };
-                    }
-                    None if !not_landed.is_empty() => {
-                        abandon.store(true, Ordering::Release);
-                        return Next::Again(carried(not_landed, ended, arrivals));
-                    }
-                    None => {}
+            Ok(mut applied) => {
+                let settlement = applied.take_settlement(submitted);
+                if let Some(next) = settle(
+                    &applied.connected,
+                    settlement,
+                    &mut block_arrivals,
+                    form_stop,
+                    arrivals,
+                    abandon,
+                ) {
+                    return next;
                 }
             }
             Err(SendError::HandlerError(fault)) if is_stale(&fault) => {
                 abandon.store(true, Ordering::Release);
-                return Next::Again(carried(formed, ended, arrivals));
+                return Next::Again(carry(block_arrivals, form_stop, arrivals));
             }
             Err(err) => {
                 abandon.store(true, Ordering::Release);
@@ -642,21 +616,9 @@ where
                 return Next::Halt;
             }
         }
-    }
-    match ended {
-        None => {}
-        Some(Ended::Refused { arrival, refused }) => {
-            arrival.slot.send(Reply::Refused(refused));
-            return Next::Cancel {
-                by: arrival.tag,
-                rest: rest(arrivals),
-            };
-        }
-        Some(Ended::Again(arrival)) => {
-            let mut again = vec![arrival];
-            again.extend(rest(arrivals));
-            return Next::Again(again);
-        }
+    } else if let Some(stop) = form_stop {
+        abandon.store(true, Ordering::Release);
+        return stop_next(stop, arrivals);
     }
     match stop {
         None => Next::Continue,
@@ -685,6 +647,118 @@ where
             Next::Halt
         }
         Some(ClaimStop::Moved) => Next::Again(rest(arrivals)),
+    }
+}
+
+/// Answer `Connected` for the prefix and leave the unlanded tail in `arrivals`.
+fn answer_connected(
+    arrivals: &mut Vec<Parsed>,
+    connected: &[(BlockHeight, BlockHash)],
+    landed: usize,
+) {
+    let tail = arrivals.split_off(landed);
+    for ((height, hash), arrival) in connected.iter().zip(arrivals.drain(..)) {
+        arrival.slot.send(Reply::Connected {
+            height: *height,
+            hash: *hash,
+        });
+    }
+    *arrivals = tail;
+}
+
+/// The arrivals a `Next` carries past the write: those formed but not
+/// landed, the one that ended the wait, then the rest of the run.
+fn carry(
+    mut pending: Vec<Parsed>,
+    stop: Option<FormStop>,
+    queued: &mut VecDeque<Parsed>,
+) -> Vec<Parsed> {
+    if let Some(stop) = stop {
+        let arrival = match stop {
+            FormStop::Refused { arrival, .. } | FormStop::Again(arrival) => arrival,
+        };
+        pending.push(arrival);
+    }
+    pending.extend(queued.drain(..));
+    pending
+}
+
+/// Answer a form stop. The caller has already set `abandon`.
+fn stop_next(stop: FormStop, queued: &mut VecDeque<Parsed>) -> Next {
+    match stop {
+        FormStop::Refused { arrival, refused } => {
+            arrival.slot.send(Reply::Refused(refused));
+            Next::Cancel {
+                by: arrival.tag,
+                rest: queued.drain(..).collect(),
+            }
+        }
+        FormStop::Again(arrival) => {
+            let mut again = vec![arrival];
+            again.extend(queued.drain(..));
+            Next::Again(again)
+        }
+    }
+}
+
+/// Turn one apply's settlement into the next step. `None` is a run that
+/// landed with no form stop: the claim stop, if any, is still to answer.
+fn settle(
+    connected: &[(BlockHeight, BlockHash)],
+    settlement: Settlement,
+    arrivals: &mut Vec<Parsed>,
+    form_stop: Option<FormStop>,
+    queued: &mut VecDeque<Parsed>,
+    abandon: &AtomicBool,
+) -> Option<Next> {
+    match settlement {
+        Settlement::Landed { landed } => {
+            answer_connected(arrivals, connected, landed);
+            match form_stop {
+                None => None,
+                Some(stop) => {
+                    abandon.store(true, Ordering::Release);
+                    Some(stop_next(stop, queued))
+                }
+            }
+        }
+        // CEN-A2 says the parent is no longer the tip, at the same height:
+        // a replacement, not a block this peer proved invalid.
+        Settlement::Refused { landed, refused } if refused.rule == CenRow::A2 => {
+            answer_connected(arrivals, connected, landed);
+            abandon.store(true, Ordering::Release);
+            Some(Next::Again(carry(
+                std::mem::take(arrivals),
+                form_stop,
+                queued,
+            )))
+        }
+        Settlement::Refused { landed, refused } => {
+            answer_connected(arrivals, connected, landed);
+            abandon.store(true, Ordering::Release);
+            if arrivals.is_empty() {
+                return Some(Next::Halt);
+            }
+            let arrival = arrivals.remove(0);
+            arrival.slot.send(Reply::Refused(refused));
+            Some(Next::Cancel {
+                by: arrival.tag,
+                rest: carry(std::mem::take(arrivals), form_stop, queued),
+            })
+        }
+        Settlement::Short { landed } => {
+            answer_connected(arrivals, connected, landed);
+            abandon.store(true, Ordering::Release);
+            Some(Next::Again(carry(
+                std::mem::take(arrivals),
+                form_stop,
+                queued,
+            )))
+        }
+        Settlement::Broken => {
+            abandon.store(true, Ordering::Release);
+            Some(Next::Halt)
+        }
     }
 }
 

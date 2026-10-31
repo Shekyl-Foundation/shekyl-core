@@ -135,6 +135,65 @@ def daemon_executable(path):
     return os.path.abspath(path)
 
 
+def seed_uses_this_binary(daemon, seed_daemon):
+    """True when the generating seed is this daemon, not a named archive.
+
+    An unnamed seed is this binary. A path that names the same file as
+    `--daemon` is this binary. A distinct `--seed-daemon` is the archived
+    daemon.
+    """
+    if not seed_daemon:
+        return True
+    return os.path.abspath(daemon) == os.path.abspath(seed_daemon)
+
+
+def seed_generation_argv(uses_this_binary, flag, address):
+    """Arguments after the binary for the generating seed.
+
+    This binary takes the armed lever and `--mine-address`: the payout is
+    not on its generateblocks body. The archived daemon takes the armed
+    lever only. It has no `--mine-address`; the address rides its request.
+    """
+    if uses_this_binary:
+        return [flag, "--mine-address", address]
+    return [flag]
+
+
+def generateblocks_body(engine, count, address):
+    """The generateblocks object for the store `engine` names.
+
+    `redb` sends `count` only. `lmdb` sends the archived trio: the block
+    count, the wallet address, and a zero starting nonce.
+    """
+    if engine == "redb":
+        return {"count": count}
+    if engine == "lmdb":
+        return {
+            "amount_of_blocks": count,
+            "wallet_address": address,
+            "starting_nonce": 0,
+        }
+    raise ValueError(f"no generateblocks body for engine {engine!r}")
+
+
+def generation_shape_refusal(uses_this_binary, engine):
+    """Why this binary and this readback cannot generate, or None.
+
+    This binary's store is redb. A named archived seed's store is lmdb.
+    A redb readback on a distinct seed means that seed is this binary and
+    was named in the wrong place. An lmdb readback on this binary means
+    the binary is not the flip.
+    """
+    if uses_this_binary and engine != "redb":
+        return (f"this binary's readback is {engine!r}, not redb: the generating "
+                "seed is the flip daemon and its store is the Rust store")
+    if (not uses_this_binary) and engine != "lmdb":
+        return (f"a distinct --seed-daemon read back {engine!r}, not lmdb: "
+                "a redb seed is this binary, named with --daemon and no "
+                "--seed-daemon")
+    return None
+
+
 def binary_for(tag, daemon, seed_daemon):
     """Which binary a spawn runs.
 
@@ -396,7 +455,11 @@ def measure(args):
     seed_from = armed_lever.log_size(seed_log)
     seed_daemon_log = os.path.join(work, "seed.daemon.log")
     seed_daemon_from = armed_lever.log_size(seed_daemon_log)
-    proc, _ = spawn("seed", seed_dir, [armed_lever.FLAG, "--mine-address", addr], offline=True)
+    uses_this_binary = seed_uses_this_binary(daemon, args.seed_daemon)
+    proc, _ = spawn(
+        "seed", seed_dir,
+        seed_generation_argv(uses_this_binary, armed_lever.FLAG, addr),
+        offline=True)
     with running(proc, srpc) as seed:
         if not seed.ready:
             _fail(f"seed RPC on 127.0.0.1:{srpc} never came up "
@@ -414,6 +477,10 @@ def measure(args):
             "generating seed", seed_line, seed_found_at, seed_daemon_log, seed_log)
         if seed_refusal:
             _fail(seed_refusal)
+        seed_engine = A.engine_of_line(seed_line)
+        shape_refusal = generation_shape_refusal(uses_this_binary, seed_engine)
+        if shape_refusal:
+            _fail(shape_refusal)
         have_h = _rpc(srpc, "get_info")["result"]["height"]
         seed_reused = have_h > 1
         gen_blocks, gen_wall = 0, None
@@ -421,7 +488,8 @@ def measure(args):
             gen_blocks = target_h - have_h
             gt0 = time.time()
             resp = _rpc(srpc, "generateblocks",
-                        {"count": gen_blocks}, timeout=args.gen_timeout)
+                        generateblocks_body(seed_engine, gen_blocks, addr),
+                        timeout=args.gen_timeout)
             gen_wall = time.time() - gt0
             st = resp.get("result", {}).get("status")
             if st != "OK":

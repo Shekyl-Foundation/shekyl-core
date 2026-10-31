@@ -39,6 +39,7 @@ mod pool;
 mod rate;
 mod reconcile;
 mod relay;
+mod resolve;
 mod template;
 mod view;
 
@@ -48,5 +49,6 @@ pub use evict::{Evicted, Limits};
 pub use pool::{Admission, Duplicate, Pool, PoolFault};
 pub use reconcile::{Reconciled, Removed};
 pub use relay::{shown, Entry, Listed, RelayView};
+pub use resolve::resolve_shown;
 pub use template::{select, select_admitting, select_shown, ListedTx, Selected, ShownBody};
 pub use view::{KeyImages, PoolView};

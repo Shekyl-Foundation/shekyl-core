@@ -126,7 +126,7 @@ regtest_ignored=$(grep -c '^engine::regtest_e2e::.*: test$' "$ignored" || true)
 #     bridged pool routes and not the native one; the native
 #     /get_transactions handler passing `true` for the flag panicked naming
 #     that route alone. ~77 s measured, local Release daemon.
-#   a_dialing_node_hands_its_tip_to_the_peer_it_dials — DX-Q2 item 5 (the
+#   sync::a_dialing_node_hands_its_tip_to_the_peer_it_dials — DX-Q2 item 5 (the
 #     design review's M2): a restarted node's first outbound handshake
 #     carries the tip it read from its store. Two daemons, one restart.
 #     Red check seen 2026-10-29 (the flip's owner, local debug build) with
@@ -152,10 +152,10 @@ ARMED=(
   engine::regtest_e2e::origin::restricted_listener_names_a_transaction_this_node_shows
   engine::regtest_e2e::origin::get_info_console_commands_answer_on_the_in_process_arm
   engine::regtest_e2e::the_armed_switch_on_testnet_serves_two_levers_and_knows_no_third
-  engine::regtest_e2e::a_dialing_node_hands_its_tip_to_the_peer_it_dials
+  engine::regtest_e2e::sync::a_dialing_node_hands_its_tip_to_the_peer_it_dials
   # Observed red 2026-10-30 on the flip at e4280bfbf5 before the sync-head
   # fix: the joiner stood at height 21 of 101 (one span) until the deadline.
-  engine::regtest_e2e::a_node_syncs_a_chain_longer_than_the_doors_window_from_a_peer
+  engine::regtest_e2e::sync::a_node_syncs_a_chain_longer_than_the_doors_window_from_a_peer
 )
 
 # Consensus gates too heavy for the per-PR lane (depth-3 spend, 13 min
@@ -187,12 +187,12 @@ ARMED=(
 #       the 248-block claim window included).
 #   The relay embargo's two live walks (RX-1, Rick 2026-10-29), each
 #   waiting out the origin's 1,148 s retry, so slow lane, not PR lane:
-#     origin::an_origin_with_no_alternate_fluffs_at_its_first_fire_and_is_mined
+#     origin::embargo::an_origin_with_no_alternate_fluffs_at_its_first_fire_and_is_mined
 #       — origin and sink: the first fire has no alternate and fluffs (W3b);
 #       broadcast at 1 148.6 s, mined, 1 230 s, 2026-10-30. Red before the
 #       embargo landed: the origin held its transaction in stem past 600 s
 #       (2026-10-29).
-#     origin::an_origin_whose_successor_drops_re_stems_to_its_alternate_and_never_fluffs
+#     origin::embargo::an_origin_whose_successor_drops_re_stems_to_its_alternate_and_never_fluffs
 #       — the origin and three simulated Levin peers (regtest_e2e_peer.rs):
 #       two take its stem slots and swallow stems, one dials in and fluffs
 #       the transaction back. Re-stem to the alternate at 1 148.0 s, disarmed
@@ -209,12 +209,12 @@ ARMED_SLOW=(
   engine::regtest_e2e::e2e_drain_wire_shape_matches_a_real_transfer
   engine::regtest_e2e::e2e_release_accepted_and_connected
   engine::regtest_e2e::e2e_unstake_collect_retire_composed_arc
-  engine::regtest_e2e::origin::an_origin_with_no_alternate_fluffs_at_its_first_fire_and_is_mined
-  engine::regtest_e2e::origin::an_origin_whose_successor_drops_re_stems_to_its_alternate_and_never_fluffs
+  engine::regtest_e2e::origin::embargo::an_origin_with_no_alternate_fluffs_at_its_first_fire_and_is_mined
+  engine::regtest_e2e::origin::embargo::an_origin_whose_successor_drops_re_stems_to_its_alternate_and_never_fluffs
   # Observed red 2026-10-30 (the handed-over span removed from the queue
   # before the door connected it): the joiner stood at one height with the
   # door reporting no room, as the F-B subjects did at 724 of 762.
-  engine::regtest_e2e::a_node_syncs_fifteen_spans_from_a_peer
+  engine::regtest_e2e::sync::a_node_syncs_fifteen_spans_from_a_peer
 )
 
 # Deliberately never run here, with the reason recorded (rule 23: a decided

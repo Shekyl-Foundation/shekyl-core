@@ -318,16 +318,6 @@ struct JsonRpcEnvelope<T> {
     error: Option<JsonRpcRefusal>,
 }
 
-fn rpc_hex(value: &str) -> Result<Vec<u8>, RpcError> {
-    hex::decode(value).map_err(|_| RpcError::InvalidNode("expected hex wasn't hex".to_string()))
-}
-
-fn hash_hex(hash: &str) -> Result<[u8; 32], RpcError> {
-    rpc_hex(hash)?
-        .try_into()
-        .map_err(|_| RpcError::InvalidNode("hash wasn't 32-bytes".to_string()))
-}
-
 // The submit wire contract is defined once in `shekyl-rpc-types`
 // (`docs/design/DAEMON_SUBMIT_VERDICT.md` §2.3's single-Rust-definition
 // rule) and re-exported here so wallet-side consumers reach it through
@@ -659,33 +649,32 @@ pub trait Rpc: Sync + Clone {
 
     /// Generate `block_count` blocks. The daemon pays its configured
     /// mining address. `address` is not on the wire (N2).
+    ///
+    /// The count is the chain's block count, the same quantity
+    /// [`Self::get_height`] returns: the tip's height plus one.
     fn generate_blocks(
         &self,
         address: &str,
         block_count: usize,
-    ) -> impl Send + Future<Output = Result<(Vec<[u8; 32]>, usize), RpcError>> {
+    ) -> impl Send + Future<Output = Result<(Vec<[u8; 32]>, ChainCount), RpcError>> {
         let _ = address;
         async move {
-            #[derive(Debug, Deserialize)]
-            struct BlocksResponse {
-                blocks: Vec<String>,
-                height: usize,
-            }
-
-            let res = self
-                .json_rpc_call::<BlocksResponse>(
+            let reply = self
+                .json_rpc_call::<shekyl_rpc_types::mining::GenerateBlocksResponse>(
                     "generateblocks",
                     Some(json!({
                       "count": block_count
                     })),
                 )
                 .await?;
-
-            let mut blocks = Vec::with_capacity(res.blocks.len());
-            for block in res.blocks {
-                blocks.push(hash_hex(&block)?);
+            if !reply.status.is_ok() {
+                return Err(RpcError::InvalidNode(format!(
+                    "generateblocks refused: {}",
+                    reply.status.0
+                )));
             }
-            Ok((blocks, res.height))
+            let blocks = reply.blocks.iter().map(|block| block.to_bytes()).collect();
+            Ok((blocks, ChainCount::from_raw(reply.height)))
         }
     }
 
