@@ -434,6 +434,74 @@ Index and CHANGELOG use the Tier-A framing when reopen fires.
 
 Marshal-tax remains qualitative; Path B stands on rule 40.
 
+### 1.3a Daemon performance and stability budget — pre-registration (DRAFT, 2026-10-31)
+
+**Status: DRAFT pre-registration.** Every number below is a proposal until Rick rules it; the open items are §1.3a.6. It is written **before any valid post-lever flip figure exists** (the post-lever figures taken so far are invalid under the fsync-probe rule, `DRS_X_STORE_FLIP.md` §3.3) and lands before valid ones do: a budget written after the number it judges is a budget fitted to it. Identifier family **`PB-`** (`IMPLEMENTATION_INDEX.md` §2).
+
+**Why it exists.** §1.3's IBD floor is a *ratio* against LMDB. It gates the flip and dies with it: once LMDB is deleted there is nothing to compare against, and §1.3 deferred its absolute rows to "the first LMDB baseline". What matters to users and to privacy is absolute: whether the node keeps up, recovers, stays inside the device's memory and disk, and leaves people no reason to fall back to remote nodes (§1.3: slower IBD → fewer full nodes → more remote-node use). **Stability outranks speed** (§1.3: security and privacy over speed): the pass/fail rows (§1.3a.2) gate before any speed row is read.
+
+**§1.3a.1 Rules**
+
+1. **When.** At the flip, as a record that gates nothing: the flip is gated by §1.3's ratio alone. From the first release cut after CS-5, **every release cut** gates on it. Daemon runs happen at releases, not on every build.
+2. **Where.** Two devices: the **reference** (§1.3's hardware class, x86_64 server class, CPU, RAM and disk recorded in the artifact) and the **floor** (the floor device of record, DX-Q8 Leg 5's). **Host qualification before any row runs**, two questions kept apart: *latency*, a 30-minute fsync-probe soak at rest with no stall above 1.5 s, the probe's median, p99 and maximum recorded; and *durability*, the storage's write-cache posture recorded as a fact (the device model; whether a volatile write cache is enabled and whether it is power-loss protected, from the NVMe controller's identification, `hdparm -W` for SATA, or the hypervisor's cache mode for a virtual disk), a volatile cache without power-loss protection failing the host because it voids DRS-D9 whatever the latency reads. A median flush in the microseconds is the signal to verify that posture, not a failure by itself: power-loss-protected storage completes durable flushes that fast, and slow acknowledgement proves nothing about persistence. No resident daemon runs. The probe runs beside every measured row as a control channel, and a row with a probe stall inside it does not count.
+3. **Durability.** Production policy only (DRS-D9: `Immediate`, two-phase commit), read back from the daemon into every artifact.
+4. **Load profiles**, pre-registered here and never chosen after a run: the **design load** of **N transactions per block** (proposal: 30), each a 2-in/2-out FCMP++ spend with the production signature set; the **stress load** of 4× the design load; the **adversarial block** of PB-D1.
+5. **Two runs per row.** Both meet the budget or the row misses.
+6. **A miss blocks the release cut.** A budget is amended only by a recorded ruling with its reason, and the amendment applies from the **next** cut, never to the run that missed. There is no "accept this once".
+7. **Production code only.** Every row exercises the shipped daemon through its real doors: no levers, no test-only seams. The tooling the rows need (the adversarial-block builder, the crash harness, the catch-up harness mode, the probe as a harness channel) is final tooling under `scripts/bench` and `scripts/ci`.
+
+**§1.3a.2 Stability rows (pass/fail, read first)**
+
+| Row | Subject | Pass condition | How measured | Owner |
+| --- | --- | --- | --- | --- |
+| **PB-S1** | Process-crash consistency | 100 % of trials: every operation the daemon acknowledged before the fault survives the reopen (a connect it published as the tip is at or below the reopened tip; a submit it answered `Accepted` is in the reopened pool), every in-flight operation is whole or absent, and the chain's state digest equals a clean replay to the reopened tip. The pool is checked by its own listing against the acknowledged ids, since the chain digest does not fold it | at least 200 `SIGKILL` trials at random points spread across a sync commit, a switch (pop and replay), a pool commit and an idle tip; the harness records each acknowledgement as it arrives, then reopens, lists and digests | DRS line |
+| **PB-S2** | Power-loss consistency | PB-S1's condition at every replayed crash point, against the acknowledgements recorded up to that point of the capture | `dm-log-writes` capture of a sync and a switch, replayed to every flush/FUA boundary and to points between them; reopen, list and digest each. A kill cannot test this: the kernel still flushes a killed process's buffered writes, a power cut loses them | DRS line |
+| **PB-S3** | Recovery time after an unclean stop | open-to-serving ≤ **60 s** reference, ≤ **5 min** floor, on the **reference dataset**: the pruned steady-state store after PB-R3's simulated year of 120 s blocks at design load, the same dataset on both devices (a small fixture would pass without testing the at-size requirement; the dataset is §1.3a.6's item 5) | time from process start to the first answered `get_info` after a PB-S1 kill and after a PB-S2 replay; redb's behaviour at size is unmeasured and the store sets no repair option | DRS line |
+| **PB-S4** | No unbounded growth | RSS slope and open-handle count flat over a 7-day soak at design load; file size follows §1.3a.4 | soak on both devices, sampled hourly | DRS line |
+| **PB-S5** | Reader pinning | §3.6.1's three mitigations are in force, and under the adversarial-reader workload the file grows by no more than **2×** what the same connects grow it with no reader (proposal; §3.6.1 picked mechanisms and left the constants to BENCH, so this ceiling and the workload are §1.3a.6's item 6) | the workload: heavy reads held up to the read-transaction deadline, as many at once as the store's semaphore admits, renewed for the run, while the writer connects a week of design-load blocks; file size before and after, against the no-reader run | DRS line |
+
+**§1.3a.3 Throughput and latency rows**
+
+| Row | Subject | Proposal: reference / floor | Why | How measured |
+| --- | --- | --- | --- | --- |
+| **PB-D1** | Adversarial block: validate, connect, commit, publish the tip | ≤ **2 s** / ≤ **10 s** | the interval is 120 s; relay and the next miner must not wait on our slowest node, and 10 s on the floor leaves more than 90 % of the interval | the block built from whichever shape in a pre-registered set costs the most to verify, the heaviest post-quantum signature kind among them, at the block weight limit |
+| **PB-D1s** | Store share of PB-D1 (connect plus commit, verification excluded) | ≤ **250 ms** / ≤ **1 s** | a store regression shows separately from a verifier regression | the same run, the writer's span timings |
+| **PB-D2** | Catch-up after a week offline (5,040 blocks at design load) to a usable tip | ≤ **15 min** / ≤ **2 h** | what a returning user feels; within the body horizon, so daemon and store work alone | the subject stops at a height, the seed advances a week, the subject resumes |
+| **PB-D2r** | Reads stay responsive during catch-up | wallet-path RPC p99 ≤ **250 ms** / ≤ **1 s** | a syncing node still answers its wallet; a writer must not starve readers | a fixed wallet-shaped RPC mix (`get_info`, header and block reads, curve-tree reads) during PB-D2 |
+| **PB-D3** | Stress catch-up: PB-D2 at stress load | finishes, at a rate ≥ **1.5×** chain growth on the floor device | the floor device must never fall permanently behind | as PB-D2 |
+| **PB-D4** | A switch of depth 10 at design load | ≤ **5 s** / ≤ **30 s** | a reorg must not take a node out of service | the regtest switch through the production fork choice, a validating user spend demoted and returned to the pool (`DRS_X_STORE_FLIP.md` §3.2) |
+
+**§1.3a.4 Resource rows**
+
+| Row | Subject | Proposal | Why | Notes |
+| --- | --- | --- | --- | --- |
+| **PB-R1** | Peak RSS, steady state and during PB-D2/PB-D3 | ≤ **50 %** of the floor device's RAM; the reference recorded | the node shares the device with the wallet and the OS | the store cache is a fixed 1 GiB and the pool cache 64 MiB, which on a 2 GiB floor device fails this row by themselves; the floor device's RAM is §1.3a.6's second item |
+| **PB-R2** | Write volume on the floor device at design load | ≤ **1 GB a day** | keeps an ordinary SD card or eMMC alive for years at steady state | the daemon's `write_bytes` over 24 h of following |
+| **PB-R3** | File size against logical size after a simulated year of 120 s blocks | ≤ **1.5×** | fills §1.3's deferred ceiling | the steady-state store is a pruned one: S-PRUNE landed 2026-09-25 (`DRS_E1_SPRUNE.md`), its discard running inside every connect at an epoch boundary (`store/connect.rs`, step 11, `prune_at_boundary`), so the row is measurable now |
+| **PB-R4** | Pruned steady-state footprint | growth after the horizon is full equals the permanent rows' bytes per block, within 10 % | daemon disk is bounded by design; this proves it | owner: the budget's tooling PR on the DRS line (rule 7); the prune it measures is landed (`store/prune.rs`) |
+| **PB-R5** | Discard at an epoch boundary | PB-D1s holds for the block whose connect runs the discard; three discard cycles grow the file by no more than PB-R4 | a discard is a large delete inside the connect's own transaction (`connect.rs` step 11): it must not stall the writer, and freed pages must be reused | owner: the budget's tooling PR on the DRS line (rule 7) |
+
+**§1.3a.5 Fresh-node bootstrap (targets only; the mechanism is the bootstrap lane's)**
+
+A full sync from genesis pulls the chain by consensus until the tip is the current valid tip, which makes the wallet **usable**; verification of history then runs in the background as archivists' bodies arrive over Tor (Rick, 2026-10-31).
+
+| Row | Subject | Proposal | Note |
+| --- | --- | --- | --- |
+| **PB-B1** | Time to usable from an empty store | the bootstrap lane proposes it before it has measurements; Rick rules | the privacy number: it decides whether users run their own node |
+| **PB-B2** | Background verification never degrades the foreground | PB-D1, PB-D2r and tip-following latency hold while background verification runs | the foreground has priority, always |
+| **PB-B3** | Background verification is resumable | a restart (a PB-S1 kill) resumes from recorded progress and never restarts from genesis | stability, not speed |
+| **PB-B4** | Progress is visible | `get_info` reports the verified height separately from the tip height | the user can see what is done |
+
+**§1.3a.6 Open for Rick (the draft's questions; ruled answers replace this list)**
+
+1. The design load's transactions per block (proposal: 30).
+2. The floor device's RAM, against PB-R1 and the fixed 1 GiB store cache.
+3. Every number in §1.3a.2–§1.3a.4: changed now, or after landing only by rule 6.
+4. The tooling the rows need, as one PR on the DRS line after the flip, so the first gated release cut has it (the FOLLOWUPS row).
+5. PB-S3's reference dataset (proposal: PB-R3's pruned steady-state store after a simulated year at design load, on both devices).
+6. PB-S5's growth ceiling (proposal: 2× the no-reader growth) and its reader workload, which §3.6.1 left to BENCH.
+7. Rule 2's durability question as amended on review: the storage's write-cache posture as the recorded fact, a microsecond median as the signal to verify it rather than a failure; the draft had rejected a fast median outright.
+
 ### 1.4 Non-unification (DRS-D3) — load-bearing rationale
 
 **Do not** defend DRS-D3 with “overhead” or “less code.” Efficiency loses to
