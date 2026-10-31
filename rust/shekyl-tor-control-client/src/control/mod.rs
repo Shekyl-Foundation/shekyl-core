@@ -77,7 +77,10 @@ pub use onion::{
     evaluate_add_onion_reply, parse_service_id, AddOnion, AddOnionReplyError, OnionFlags, OnionKey,
     OnionPort, OnionPow, ServiceId, ONION_KEY_BYTES, SERVICE_ID_CHARS,
 };
-pub use ready::{ask_timed, wait_until_ready, AskError, WaitReadyError, RESUMED_AFTER};
+pub use ready::{
+    ask_timed, resume_lateness, wait_until_ready, AskError, Asked, Resume, WaitReadyError,
+    RESUMED_AFTER,
+};
 pub use safecookie::{verify_server_hash, ControlCookie, ServerVerified};
 pub use stream::{parse_stream_event, CircId, StreamEvent, StreamStatus};
 pub use traffic::parse_traffic_read;

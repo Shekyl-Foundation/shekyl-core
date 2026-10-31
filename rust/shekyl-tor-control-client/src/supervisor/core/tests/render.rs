@@ -126,3 +126,27 @@ fn no_rendering_says_tor_carries_traffic_beside_a_cause_that_says_it_cannot() {
     }
     assert_eq!(rendered, 16 * 5 * 4);
 }
+
+/// Tor's process ends while the relay still holds an address-hiding
+/// verdict: the sessions over the dead Tor close only after the relay sees
+/// them go. Until then the line says the node is held and claims nothing
+/// for connections the dead Tor held. Rendering the open-connections
+/// sentence from the lagging verdict fails this.
+#[test]
+fn a_dead_tor_carries_nothing_while_the_verdict_lags() {
+    let (mut core, _) = super::Core::start(super::policy(), super::managed(true), 0);
+    super::reach_usable(&mut core);
+    core.on(super::carrying(), 0);
+    assert_eq!(core.status().own_tx, OwnTx::AddressHiding);
+    let step = core.on(
+        super::Input::ProcessEnded { exit_code: Some(9) },
+        5_000_000_000,
+    );
+    assert!(super::takes_down(&step));
+    let status = core.status();
+    assert_eq!(status.shown, Shown::Restarting);
+    assert_eq!(status.own_tx, OwnTx::AddressHiding, "the verdict lags");
+    let text = render(&status);
+    assert!(!text.contains("carry"), "{text}");
+    assert!(text.contains("holding its own transactions"), "{text}");
+}

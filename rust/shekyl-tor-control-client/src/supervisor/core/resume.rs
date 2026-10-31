@@ -10,14 +10,17 @@
 //! through it on Windows (`TSR-M8`). On Windows every window armed before a
 //! sleep had silently included it at wake, and two misfired: a stall window
 //! held across the sleep was already past its bound, and a probe in flight
-//! had missed its own. The core sees a resume once: some deadline is always
-//! armed while Tor is live, and a deadline found later than
-//! `Policy::resumed_after` (`control::RESUMED_AFTER`) means the process could
-//! not run, so the machine slept. It is checked at every input and every
-//! deadline, before either is judged, so a reply or an event that arrives
-//! first after the wake is not judged against windows that include the
-//! sleep. The reply bound is the control layer's (`control::ask_timed`) and
-//! follows the same rule there.
+//! had missed its own.
+//!
+//! The core does not decide that the machine slept. A deadline left in the
+//! past while the driver was awaiting Tor is ordinary: a control ask may
+//! take the whole reply bound, and the drive loop does not poll its other
+//! deadlines until that ask returns. The driver says so, with
+//! [`Input::Resumed`], only when a timer it was waiting on fired more than
+//! [`crate::control::RESUMED_AFTER`] late ([`crate::control::resume_lateness`]):
+//! the select wake, or the reply bound ([`crate::control::ask_timed`]). It
+//! folds that input before the reply the slept ask produced, so the reply
+//! is judged on windows that start at the wake.
 //!
 //! On a resume every window starts again from the wake: the bootstrap's
 //! stall window and the stranded check's byte mark, the probe's bound, the
@@ -27,24 +30,15 @@
 //! A respawn backoff and a repeated announcement are left as they are: a
 //! pin check for an absent Tor and a line that repeats the current state
 //! are what the wake should do anyway.
-//!
-//! On Linux and macOS the clock stopped, no deadline is late, and nothing
-//! here runs: the windows resumed where they stood, and none fires in a
-//! burst on either.
 
-use super::{duration_ns, Action, Core, Phase};
+use std::time::Duration;
+
+use super::{Action, Core, Phase};
 
 impl Core {
-    /// Restart the windows when a deadline is found late enough to mean the
-    /// machine slept. The returned actions come before the input's own.
-    pub(super) fn resume_if_slept(&mut self, now: u64) -> Vec<Action> {
-        let Some(due) = self.deadline() else {
-            return Vec::new();
-        };
-        let late = now.saturating_sub(due);
-        if late <= duration_ns(self.policy.resumed_after) {
-            return Vec::new();
-        }
+    /// The machine slept. Restart the windows from `now`. `late_by` is how
+    /// late the waited timer was, and it is said once.
+    pub(super) fn resumed(&mut self, now: u64, late_by: Duration) -> Vec<Action> {
         if self.sample_at.is_some() {
             self.arm_sample(now);
         }
@@ -55,9 +49,7 @@ impl Core {
         self.jump.resumed(now);
         self.dials.restart(now);
         self.probe_resumed(now);
-        let mut actions = vec![Action::Resumed {
-            late_by: std::time::Duration::from_nanos(late),
-        }];
+        let mut actions = vec![Action::Resumed { late_by }];
         if matches!(
             self.phase,
             Phase::Bootstrapping { .. } | Phase::Running { .. }

@@ -3,30 +3,24 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Windows count awake time on every platform (§5, "Resumed from suspend";
-//! Rick, 2026-10-30). On Windows `Instant` counts through a sleep
-//! (`TSR-M8`): these tests jump the clock ten minutes, as a wake does there,
-//! and check that no window that included the sleep fires.
+//! Windows count awake time (§5, "Resumed from suspend"; Rick, 2026-10-30).
+//!
+//! The core does not decide that the machine slept. The driver says so
+//! with [`Input::Resumed`], and only then do the windows start again.
+//! These tests jump the clock ten minutes, as a wake does on Windows
+//! (`TSR-M8`), and check both halves: the resume pardons the sleep, and
+//! the same jump with no resume is a stall.
 
 use std::time::Duration;
 
 use super::super::super::posture::{Cause, Inbound};
-use super::super::{duration_ns, Action, Core, Input, Policy, RoundEnd, Step};
+use super::super::{duration_ns, Action, Core, Input, Step};
 use super::{managed, policy, reach_usable};
-use crate::control::RESUMED_AFTER;
 
 const SLEEP: u64 = 600;
 
 fn secs(seconds: u64) -> u64 {
     duration_ns(Duration::from_secs(seconds))
-}
-
-/// The test policy with the daemon's resume threshold.
-fn resuming() -> Policy {
-    Policy {
-        resumed_after: RESUMED_AFTER,
-        ..policy()
-    }
 }
 
 fn sample(percent: u8, read: u64) -> Input {
@@ -35,6 +29,10 @@ fn sample(percent: u8, read: u64) -> Input {
         socks: None,
         read: Some(read),
     }
+}
+
+fn slept(late_by: Duration) -> Input {
+    Input::Resumed { late_by }
 }
 
 /// Fire every deadline up to `to` on time, answering each sample with
@@ -61,11 +59,17 @@ fn resumed(step: &Step) -> bool {
         .any(|action| matches!(action, Action::Resumed { .. }))
 }
 
+fn cancels_probe(step: &Step) -> bool {
+    step.actions
+        .iter()
+        .any(|action| matches!(action, Action::CancelProbe | Action::RefetchDescriptor))
+}
+
 /// A bootstrap whose jump is held from earlier, flat for 15 s before the
 /// sleep: without the resume, the first look after a ten-minute sleep sees
 /// the percent and the bytes still for ten minutes.
 fn stalled_before_a_sleep() -> Core {
-    let (mut core, _) = Core::start(resuming(), managed(true), 0);
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
     core.on(Input::PinAccepted, 0);
     core.on(Input::Spawned, 0);
     assert!(!run(&mut core, secs(5), 14, 1_000));
@@ -74,16 +78,16 @@ fn stalled_before_a_sleep() -> Core {
     core
 }
 
-/// The wake's first look is the timer: the deadline is found ten minutes
-/// late, the windows start again, and a sample is asked at once. No
-/// respawn at the wake; a stall of five awake minutes after it still is
-/// one. Judging the windows on the raw clock fails the first half;
-/// restarting the jump itself, or never judging again, fails the second.
+/// The wake's first look is the timer: the driver reports the sleep, the
+/// windows start again, and a sample is asked at once. No respawn at the
+/// wake; a stall of five awake minutes after it still is one. Judging the
+/// windows on the raw clock fails the first half; restarting the jump
+/// itself, or never judging again, fails the second.
 #[test]
 fn a_sleep_in_a_bootstrap_is_not_a_stall_and_an_awake_stall_still_is() {
     let mut core = stalled_before_a_sleep();
     let wake = secs(20 + SLEEP);
-    let step = core.on_deadline(wake);
+    let step = core.on(slept(Duration::from_secs(SLEEP)), wake);
     assert!(resumed(&step), "{:?}", step.actions);
     assert!(step.actions.contains(&Action::Sample), "re-evaluate now");
     core.on(sample(14, 1_000), wake);
@@ -100,17 +104,38 @@ fn a_sleep_in_a_bootstrap_is_not_a_stall_and_an_awake_stall_still_is() {
     assert_eq!(core.status().respawn_count, 1);
 }
 
-/// The wake's first look is a reply: the sample asked before the sleep
-/// answers after it, ahead of the timer. It is judged after the resume,
-/// not against windows that include the sleep. Detecting the resume only
-/// at a deadline fails this.
+/// The reply that was in flight is folded after the resume, so it is
+/// judged on the new windows. Folding it on the raw clock fails this.
 #[test]
 fn a_reply_that_arrives_first_after_a_wake_is_judged_after_the_resume() {
     let mut core = stalled_before_a_sleep();
     let wake = secs(20 + SLEEP);
-    let step = core.on(sample(14, 1_000), wake);
+    let step = core.on(slept(Duration::from_secs(SLEEP)), wake);
     assert!(resumed(&step), "{:?}", step.actions);
+    core.on(sample(14, 1_000), wake);
     assert_eq!(respawns(&core), 0);
+}
+
+/// The same reply, with no resume, is a stall. The core does not hide a
+/// sleep the driver did not report.
+#[test]
+fn a_jumped_sample_without_a_resume_is_a_stall() {
+    let mut core = stalled_before_a_sleep();
+    let wake = secs(20 + SLEEP);
+    let step = core.on(sample(14, 1_000), wake);
+    assert!(!resumed(&step), "{:?}", step.actions);
+    assert_eq!(core.status().cause, Cause::StrandedAfterClockJump);
+    assert_eq!(respawns(&core), 1);
+}
+
+/// A deadline found late is not itself a resume. The select classifies the
+/// wait; `on_deadline` only runs the work that is due.
+#[test]
+fn a_late_deadline_does_not_infer_a_sleep() {
+    let mut core = stalled_before_a_sleep();
+    let wake = secs(20 + SLEEP);
+    let step = core.on_deadline(wake);
+    assert!(!resumed(&step), "{:?}", step.actions);
 }
 
 /// A probe in flight through the sleep gets its whole bound from the wake:
@@ -118,12 +143,12 @@ fn a_reply_that_arrives_first_after_a_wake_is_judged_after_the_resume() {
 /// evidence. Leaving the bound where it was fails this.
 #[test]
 fn a_probe_in_flight_through_a_sleep_keeps_a_whole_bound() {
-    let (mut core, _) = Core::start(resuming(), managed(true), 0);
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
     reach_usable(&mut core);
     core.on(Input::StateFileAppeared, 0);
     core.on(
         Input::UploadRoundEnded {
-            end: RoundEnd::Uploaded,
+            end: super::super::RoundEnd::Uploaded,
             draw: 0,
         },
         0,
@@ -141,15 +166,18 @@ fn a_probe_in_flight_through_a_sleep_keeps_a_whole_bound() {
     }
     core.on(Input::ProbeDialed { minted_at: at }, at);
     let wake = at + secs(SLEEP);
-    let step = core.on_deadline(wake);
+    let step = core.on(slept(Duration::from_secs(SLEEP)), wake);
     assert!(resumed(&step), "{:?}", step.actions);
     assert!(
-        !step
-            .actions
-            .iter()
-            .any(|action| matches!(action, Action::CancelProbe | Action::RefetchDescriptor)),
+        !cancels_probe(&step),
         "no miss at the wake: {:?}",
         step.actions
+    );
+    let due = core.on_deadline(wake);
+    assert!(
+        !cancels_probe(&due),
+        "the bound was re-armed: {:?}",
+        due.actions
     );
     let taken = wake + secs(5);
     core.on(
@@ -170,7 +198,7 @@ fn a_probe_in_flight_through_a_sleep_keeps_a_whole_bound() {
 /// the stretch's start where it was fails this.
 #[test]
 fn the_quiet_stretch_counts_awake_time() {
-    let (mut core, _) = Core::start(resuming(), managed(true), 0);
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
     reach_usable(&mut core);
     core.on(Input::StateFileAppeared, 0);
     let quiet = super::super::DialTally {
@@ -182,7 +210,7 @@ fn the_quiet_stretch_counts_awake_time() {
     run(&mut core, secs(15), 100, 1_000);
     assert_eq!(core.status().tor_quiet, None);
     let wake = secs(15 + SLEEP);
-    let step = core.on_deadline(wake);
+    let step = core.on(slept(Duration::from_secs(SLEEP)), wake);
     assert!(resumed(&step), "{:?}", step.actions);
     // The next liveness deadline judges the stretch: the sleep is not in it.
     run(

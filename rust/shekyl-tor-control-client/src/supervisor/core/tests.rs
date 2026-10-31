@@ -30,9 +30,6 @@ fn policy() -> Policy {
         round_stuck_after: Duration::from_secs(300),
         jump_stall_after: Duration::from_secs(300),
         clock_evidence_within: Duration::from_secs(60),
-        // These tests step time by inputs alone and leave deadlines unfired;
-        // the resume tests pass the daemon's value.
-        resumed_after: Duration::MAX,
     }
 }
 
@@ -349,27 +346,6 @@ fn a_clock_jump_is_one_sample_and_the_reply_restores_the_line() {
     assert_eq!(core.status().shown, Shown::Usable);
     assert_eq!(core.status().since, 6_000);
     assert!(core.status().health);
-}
-
-/// Tor's process ends while the relay still holds an address-hiding
-/// verdict: the sessions over the dead Tor close only after the relay sees
-/// them go. Until then the line says the node is held and claims nothing
-/// for connections the dead Tor held. Rendering the open-connections
-/// sentence from the lagging verdict fails this.
-#[test]
-fn a_dead_tor_carries_nothing_while_the_verdict_lags() {
-    let (mut core, _) = Core::start(policy(), managed(true), 0);
-    reach_usable(&mut core);
-    core.on(carrying(), 0);
-    assert_eq!(core.status().own_tx, OwnTx::AddressHiding);
-    let step = core.on(Input::ProcessEnded { exit_code: Some(9) }, 5_000_000_000);
-    assert!(takes_down(&step));
-    let status = core.status();
-    assert_eq!(status.shown, Shown::Restarting);
-    assert_eq!(status.own_tx, OwnTx::AddressHiding, "the verdict lags");
-    let text = render(&status);
-    assert!(!text.contains("carry"), "{text}");
-    assert!(text.contains("holding its own transactions"), "{text}");
 }
 
 /// A refused pin is not executed. The hold waits out the cap, then checks

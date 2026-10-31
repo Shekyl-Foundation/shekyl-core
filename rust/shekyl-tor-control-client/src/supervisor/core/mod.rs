@@ -90,10 +90,6 @@ pub struct Policy {
     /// both reach their count before the clock is named (§4.2; Rick,
     /// 2026-10-30).
     pub clock_evidence_within: Duration,
-    /// How late a deadline must be found to mean the machine slept: every
-    /// window then starts again from the wake (§5, "Resumed from suspend").
-    /// The daemon passes `control::RESUMED_AFTER`, the reply bound's value.
-    pub resumed_after: Duration,
 }
 
 impl Policy {
@@ -132,7 +128,6 @@ impl Policy {
             // holds such a pass several times over, and keeps a line from
             // one stretch from pairing with relays from another.
             clock_evidence_within: Duration::from_secs(60),
-            resumed_after: crate::control::RESUMED_AFTER,
         }
     }
 }
@@ -189,10 +184,10 @@ pub enum Action {
     /// say it once at debug, and end the coalescer's open round so the next
     /// round's uploads start a round of their own. Counted in Status.
     RoundStuck,
-    /// A deadline was found `late_by` late: the machine slept, and every
-    /// window started again from the wake. Said once at info.
+    /// A timer the driver was waiting on fired `late_by` late: the machine
+    /// slept, and every window started again from the wake. Said once at info.
     Resumed {
-        /// How late the earliest deadline was found.
+        /// How far past its deadline the waited timer fired.
         late_by: Duration,
     },
     /// Say the posture. At most once per cap interval, except a recovery.
@@ -298,6 +293,14 @@ pub enum Input {
     },
     /// Tor resumed and closed its circuits.
     ClockJumped,
+    /// The driver was waiting on a timer and found it more than
+    /// `control::RESUMED_AFTER` late ([`crate::control::resume_lateness`]).
+    /// The machine slept. Folded before the reply that wait produced, so
+    /// the reply is judged on windows that start at the wake.
+    Resumed {
+        /// How far past its deadline the waited timer fired.
+        late_by: Duration,
+    },
     /// Tor logged a relay's certificate as expired or not yet valid (§4.2).
     /// The line names no relay.
     CertificateOutOfDate,
@@ -552,8 +555,7 @@ impl Core {
     /// not keep it, and a reference would only clone the fields out.
     #[allow(clippy::needless_pass_by_value)]
     pub fn on(&mut self, input: Input, now: u64) -> Step {
-        let mut actions = self.resume_if_slept(now);
-        actions.extend(match input {
+        let actions = match input {
             Input::PinAccepted => self.pin_accepted(),
             Input::PinRefused => self.hold(now, Cause::PinRefused, AbsentDuty::Held),
             Input::BundleMissing => self.hold(now, Cause::BundleMissing, AbsentDuty::Held),
@@ -597,6 +599,7 @@ impl Core {
             Input::DirectoryUnreachable => self.external(now, Cause::DirectoryUnreachable),
             Input::ClockSkew { seconds } => self.external(now, Cause::ClockSkew { seconds }),
             Input::ClockJumped => self.clock_jumped(now),
+            Input::Resumed { late_by } => self.resumed(now, late_by),
             Input::CertificateOutOfDate => self.certificate_out_of_date(now),
             Input::HandshakeClosed { relay } => self.handshake_closed(relay, now),
             Input::TooManyFiles { open } => self.too_many_files(now, open),
@@ -611,7 +614,7 @@ impl Core {
             Input::DialEvidence(tally) => self.dial_evidence(tally, now),
             Input::NetworkView(view) => self.network_view(now, view),
             Input::ExternalCleared => self.external_cleared(now),
-        });
+        };
         self.step(now, actions)
     }
 
@@ -626,10 +629,10 @@ impl Core {
             let dropped = self.drop_probe();
             return self.step(now, dropped.into_iter().collect());
         }
-        let mut actions = self.resume_if_slept(now);
         if self.deadline().is_none_or(|due| now < due) {
-            return self.step(now, actions);
+            return self.step(now, Vec::new());
         }
+        let mut actions = Vec::new();
         let pin_due = self.pin_at.is_some_and(|at| now >= at);
         if self.announcements.on_deadline(
             now,
