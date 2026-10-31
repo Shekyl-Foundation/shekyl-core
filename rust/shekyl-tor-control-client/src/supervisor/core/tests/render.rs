@@ -33,6 +33,7 @@ fn every_cause() -> Vec<Cause> {
         Cause::ExternalBlocked,
         Cause::DirectoryUnreachable,
         Cause::ClockSkew { seconds: -259_200 },
+        Cause::CertificatesOutOfDate,
         Cause::TooManyFiles { open: 1024 },
         Cause::ReplyLate,
         Cause::DangerousVersion,
@@ -51,6 +52,7 @@ fn every_cause() -> Vec<Cause> {
             | Cause::ExternalBlocked
             | Cause::DirectoryUnreachable
             | Cause::ClockSkew { .. }
+            | Cause::CertificatesOutOfDate
             | Cause::TooManyFiles { .. }
             | Cause::ReplyLate
             | Cause::DangerousVersion
@@ -122,5 +124,5 @@ fn no_rendering_says_tor_carries_traffic_beside_a_cause_that_says_it_cannot() {
             }
         }
     }
-    assert_eq!(rendered, 15 * 5 * 4);
+    assert_eq!(rendered, 16 * 5 * 4);
 }

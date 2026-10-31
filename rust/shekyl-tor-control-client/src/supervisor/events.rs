@@ -80,6 +80,69 @@ pub fn input_of(event: &TorEvent) -> Option<Input> {
     }
 }
 
+/// The evidence that names the clock from relays' certificates (§4.2,
+/// [`Input::CertificateOutOfDate`], [`Input::HandshakeClosed`]). The core
+/// pairs them; none of them names a cause alone.
+///
+/// | Event | Input |
+/// | --- | --- |
+/// | a log line carrying one of [`CERTIFICATE_OUT_OF_DATE`] | [`Input::CertificateOutOfDate`] |
+/// | `BOOTSTRAP` problem with `REASON=DONE` and a `HOSTID` | [`Input::HandshakeClosed`] |
+///
+/// This is the one place Tor's free log text is read (`TSR-Q14` applied to
+/// it on purpose: the strings are Tor's own statements, pinned to the
+/// bundled source by `the_certificate_lines_are_tors_own_text` and
+/// re-checked at every re-pin, `RELEASE_CHECKLIST.md`). A problem event
+/// carries both this input and, from the tenth problem, [`input_of`]'s
+/// blocked link; the driver folds this one first.
+#[must_use]
+pub fn clock_evidence_of(event: &TorEvent) -> Option<Input> {
+    match event {
+        TorEvent::Log(log)
+            if CERTIFICATE_OUT_OF_DATE
+                .iter()
+                .any(|line| log.message.contains(line)) =>
+        {
+            Some(Input::CertificateOutOfDate)
+        }
+        TorEvent::Client {
+            status:
+                ClientStatus::Bootstrap(Bootstrap {
+                    problem: Some(problem),
+                    ..
+                }),
+            ..
+        } if problem.reason.as_deref() == Some(HANDSHAKE_CLOSED_REASON) => {
+            problem.host.map(|relay| Input::HandshakeClosed { relay })
+        }
+        _ => None,
+    }
+}
+
+/// Tor's log text for a relay certificate outside its lifetime by this
+/// computer's clock (tor 0.4.9.14, the bundled pin):
+///
+/// - `src/feature/relay/torcert.c`, `or_handshake_certs_ed25519_ok`:
+///   "Received a bad CERTS cell: At least one certificate expired." (the
+///   clock-ahead VM run, §7);
+/// - `src/lib/tls/x509_openssl.c`, `log_cert_lifetime`: "Certificate %s.
+///   Either their clock is set wrong, or your clock is wrong." with
+///   "already expired" or "not yet valid".
+///
+/// Both log at `warn` only for a directory authority's handshake, and at
+/// protocol-warn (`info` unless `ProtocolWarnings` is set) otherwise
+/// (`src/core/or/channeltls.c`), so the lines this supervisor hears come
+/// from authorities; the relays the problems name may be any.
+pub const CERTIFICATE_OUT_OF_DATE: [&str; 3] = [
+    "Received a bad CERTS cell: At least one certificate expired.",
+    "Certificate already expired. Either their clock is set wrong, or your clock is wrong.",
+    "Certificate not yet valid. Either their clock is set wrong, or your clock is wrong.",
+];
+
+/// The `REASON` of a handshake problem whose TLS completed before Tor
+/// closed the connection (`orconn_end_reason_to_control_string`, `DONE`).
+const HANDSHAKE_CLOSED_REASON: &str = "DONE";
+
 /// The inputs a round's marks carry (§4.5, §4.4). A round's end is
 /// [`Input::UploadRoundEnded`], with one `draw()` for the probe's delay: a
 /// round with an upload that succeeded schedules the probe, one in which
@@ -134,7 +197,7 @@ fn outbound_blocked(problem: &crate::control::BootstrapProblem) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{input_of, round_inputs};
+    use super::{clock_evidence_of, input_of, round_inputs, CERTIFICATE_OUT_OF_DATE};
     use crate::control::RoundMark;
     use crate::control::{
         Bootstrap, BootstrapProblem, ClientStatus, Liveness, Recommendation, Severity, TorEvent,
@@ -264,6 +327,72 @@ mod tests {
         );
     }
 
+    fn parsed(line: &str) -> TorEvent {
+        use crate::control::{parse_event, ReplyFramer};
+        let mut framer = ReplyFramer::default();
+        framer.push_bytes(format!("650 {line}\r\n").as_bytes());
+        let reply = framer.next_reply().expect("frames").expect("a reply");
+        parse_event(&reply).expect("an event")
+    }
+
+    /// The certificate lines are Tor 0.4.9.14's own text: the clock-ahead
+    /// run's line as Tor sent it, and `log_cert_lifetime`'s format filled
+    /// with each of its two problems (`x509_openssl.c`). A reworded Tor
+    /// fails this at the re-pin (`RELEASE_CHECKLIST.md`). A different bad
+    /// CERTS cell is not a clock statement.
+    #[test]
+    fn the_certificate_lines_are_tors_own_text() {
+        let lifetime = |problem: &str| {
+            format!(
+                "Certificate {problem}. Either their clock is set wrong, or your clock is wrong."
+            )
+        };
+        let lines = [
+            "WARN Received a bad CERTS cell: At least one certificate expired.".to_owned(),
+            format!("WARN {}", lifetime("already expired")),
+            format!("NOTICE {}", lifetime("not yet valid")),
+        ];
+        for line in &lines {
+            assert_eq!(
+                clock_evidence_of(&parsed(line)),
+                Some(Input::CertificateOutOfDate),
+                "{line}"
+            );
+        }
+        assert_eq!(CERTIFICATE_OUT_OF_DATE.len(), lines.len());
+        for other in [
+            "WARN Received a bad CERTS cell: The link certificate didn't match the TLS public key",
+            "WARN Problem bootstrapping. Stuck at 14% (handshake): Handshaking with a relay.",
+        ] {
+            assert_eq!(clock_evidence_of(&parsed(other)), None, "{other}");
+        }
+    }
+
+    /// A handshake problem whose TLS completed (`REASON=DONE`) names its
+    /// relay as clock evidence; a refused or unrouted connection does not,
+    /// and neither does a problem with no relay. Counting every problem's
+    /// relay would let a blocked network supply the relays.
+    #[test]
+    fn a_closed_handshake_names_its_relay_and_nothing_else_does() {
+        let problem = |reason: &str, host: &str| {
+            parsed(&format!(
+                "STATUS_CLIENT WARN BOOTSTRAP PROGRESS=14 TAG=handshake \
+                 SUMMARY=\"Handshaking with a relay\" WARNING={reason} REASON={reason} \
+                 COUNT=3 RECOMMENDATION=ignore HOSTID=\"{host}\" HOSTADDR=\"192.0.2.2:9001\""
+            ))
+        };
+        let relay = "0E6E048E32E6CCE9B99F415FBA60584B06117B23";
+        assert_eq!(
+            clock_evidence_of(&problem("DONE", relay)),
+            Some(Input::HandshakeClosed {
+                relay: crate::control::RelayFingerprint::parse(relay).expect("a fingerprint"),
+            })
+        );
+        assert_eq!(clock_evidence_of(&problem("CONNECTREFUSED", relay)), None);
+        assert_eq!(clock_evidence_of(&problem("NOROUTE", relay)), None);
+        assert_eq!(clock_evidence_of(&problem("DONE", "?")), None);
+    }
+
     /// Tor saying whether it has a circuit names or clears the network
     /// cause; a clock jump is the general event's.
     #[test]
@@ -325,6 +454,7 @@ mod tests {
                     reason: Some("CONNECTREFUSED".to_owned()),
                     count: Some(10),
                     recommendation: Recommendation::Warn,
+                    host: None,
                 }),
             }),
         };

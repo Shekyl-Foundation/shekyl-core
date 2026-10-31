@@ -181,6 +181,10 @@ pub enum Cause {
         /// The reported difference, in seconds.
         seconds: i64,
     },
+    /// Tor logged relays' certificates as expired or not yet valid, from
+    /// enough distinct relays within the window that the clock, not a relay,
+    /// is the cause (§4.2). Tor stated no offset.
+    CertificatesOutOfDate,
     /// Tor hit the open-file limit.
     TooManyFiles {
         /// How many sockets Tor reported open.
@@ -525,6 +529,7 @@ pub fn install_sentence(cause: &Cause) -> Option<&'static str> {
         | Cause::ExternalBlocked
         | Cause::DirectoryUnreachable
         | Cause::ClockSkew { .. }
+        | Cause::CertificatesOutOfDate
         | Cause::TooManyFiles { .. }
         | Cause::ReplyLate
         | Cause::DangerousVersion
@@ -814,6 +819,12 @@ fn named_cause(status: &Status) -> Option<String> {
         Cause::ClockSkew { seconds } => Some(format!(
             "The clock is off by {seconds} seconds. Check time sync."
         )),
+        // Tor's evidence, not a measurement: the source is relays, so the
+        // sentence says what Tor reports rather than that the clock is wrong.
+        Cause::CertificatesOutOfDate => Some(
+            "Tor reports that this computer's date or time looks wrong, so it cannot connect. Check this computer's date and time."
+                .to_owned(),
+        ),
         Cause::TooManyFiles { open } => Some(format!(
             "Tor reached the open-file limit ({open} open). Raise the limit."
         )),

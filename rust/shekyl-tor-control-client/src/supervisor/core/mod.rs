@@ -19,6 +19,7 @@ use super::posture::{
 
 mod announce;
 mod backoff;
+mod clock_evidence;
 mod clock_jump;
 mod dials;
 mod network_view;
@@ -84,6 +85,10 @@ pub struct Policy {
     /// counts as stranded and Tor is started again (Rick, 2026-10-30). The
     /// soak refines it.
     pub jump_stall_after: Duration,
+    /// The window in which certificate lines and closed handshakes must
+    /// both reach their count before the clock is named (§4.2; Rick,
+    /// 2026-10-30).
+    pub clock_evidence_within: Duration,
 }
 
 impl Policy {
@@ -116,6 +121,12 @@ impl Policy {
             round_stuck_after: Duration::from_secs(300),
             // Rick, 2026-10-30: 5 minutes; the soak refines it.
             jump_stall_after: Duration::from_secs(300),
+            // The clock-ahead run's five certificate lines and its first
+            // ten handshake problems fell within 10 s (§7); Tor retries its
+            // handshakes every few seconds while it bootstraps. A minute
+            // holds such a pass several times over, and keeps a line from
+            // one stretch from pairing with relays from another.
+            clock_evidence_within: Duration::from_secs(60),
         }
     }
 }
@@ -275,6 +286,15 @@ pub enum Input {
     },
     /// Tor resumed and closed its circuits.
     ClockJumped,
+    /// Tor logged a relay's certificate as expired or not yet valid (§4.2).
+    /// The line names no relay.
+    CertificateOutOfDate,
+    /// A bootstrap problem with `REASON=DONE`: the TLS handshake with this
+    /// relay completed and Tor closed the connection.
+    HandshakeClosed {
+        /// The problem's `HOSTID`.
+        relay: crate::control::RelayFingerprint,
+    },
     /// The open-file limit. The process stays up.
     TooManyFiles {
         /// Sockets Tor reported open.
@@ -471,6 +491,8 @@ pub struct Core {
     stuck_rounds: u32,
     /// A clock jump during this bootstrap, and `traffic/read`'s movement.
     jump: clock_jump::JumpWatch,
+    /// This bootstrap's certificate lines and closed handshakes (§4.2).
+    clock_evidence: clock_evidence::ClockEvidence,
     /// The owed republish is a Service remedy: a refusal escalates.
     service_republish: bool,
 }
@@ -505,6 +527,7 @@ impl Core {
             round: None,
             stuck_rounds: 0,
             jump: clock_jump::JumpWatch::new(now),
+            clock_evidence: clock_evidence::ClockEvidence::default(),
             service_republish: false,
         };
         let step = core.step(now, vec![Action::CheckPin]);
@@ -557,10 +580,12 @@ impl Core {
             } => self.probe_arrived(now, minted_at, arrived_at),
             Input::OnionRejected => self.onion_refused(now),
             Input::EndpointReady => self.endpoint_ready(),
-            Input::ExternalBlocked => self.external(now, Cause::ExternalBlocked),
+            Input::ExternalBlocked => self.blocked(now),
             Input::DirectoryUnreachable => self.external(now, Cause::DirectoryUnreachable),
             Input::ClockSkew { seconds } => self.external(now, Cause::ClockSkew { seconds }),
             Input::ClockJumped => self.clock_jumped(now),
+            Input::CertificateOutOfDate => self.certificate_out_of_date(now),
+            Input::HandshakeClosed { relay } => self.handshake_closed(relay, now),
             Input::TooManyFiles { open } => self.too_many_files(now, open),
             Input::DangerousVersion => {
                 self.set_cause(Cause::DangerousVersion);
@@ -718,6 +743,7 @@ impl Core {
         self.launch_failures = 0;
         self.progress = ProgressWindow::start(now, self.policy.alive_every);
         self.jump = clock_jump::JumpWatch::new(now);
+        self.clock_evidence = clock_evidence::ClockEvidence::default();
         self.set_cause(Cause::None);
         self.arm_sample(now);
         self.arm_alive(now);
@@ -1120,6 +1146,7 @@ impl Core {
             Cause::ExternalBlocked
                 | Cause::DirectoryUnreachable
                 | Cause::ClockSkew { .. }
+                | Cause::CertificatesOutOfDate
                 | Cause::TooManyFiles { .. }
         )
     }

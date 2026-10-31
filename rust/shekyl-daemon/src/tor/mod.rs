@@ -33,9 +33,9 @@ use shekyl_tor_control_client::control::{
     SocksTimeout, UploadRounds,
 };
 use shekyl_tor_control_client::supervisor::{
-    held_sentence, input_of, install_sentence, render, Action, Cause, Connectors, Core, DialTally,
-    Input, ManagedRunning, NetworkView, OriginVerdict as FoldedOrigin, Policy, Space, Step,
-    Syncing, TorSetting,
+    clock_evidence_of, held_sentence, input_of, install_sentence, render, Action, Cause,
+    Connectors, Core, DialTally, Input, ManagedRunning, NetworkView, OriginVerdict as FoldedOrigin,
+    Policy, Space, Step, Syncing, TorSetting,
 };
 use shekyl_tor_control_daemon::{
     space_needed, sweep_stale_data_dirs, CacheSave, DaemonTorConfig, DaemonTorControl,
@@ -454,6 +454,13 @@ impl Drive {
                         // a recovery among them, would never be performed.
                         let mut inputs = self.round_resync();
                         if let Some(parsed) = parse_event(&reply) {
+                            // Evidence first: a problem that is also the
+                            // blocked link is judged against the clock it
+                            // may already name.
+                            if let Some(input) = clock_evidence_of(&parsed) {
+                                tracing::debug!(target: "tor", "Tor's clock evidence {input:?}");
+                                inputs.push(input);
+                            }
                             if let Some(input) = input_of(&parsed) {
                                 // A Tor statement the supervisor acts on, said
                                 // as it arrives: what a run records.
