@@ -55,8 +55,7 @@ impl Daemon {
                  --test dual_stack -- --ignored"
             ),
         };
-        let rpc_port = free_port();
-        let p2p_port = free_port();
+        let [rpc_port, p2p_port] = distinct_ports();
         let data_dir = std::env::temp_dir().join(format!("shekyl-lv2b-dual-{p2p_port}"));
         drop(std::fs::remove_dir_all(&data_dir));
         std::fs::create_dir_all(&data_dir).expect("create data dir");
@@ -137,9 +136,34 @@ impl Drop for Daemon {
     }
 }
 
+/// Probes of port 0 before the test gives up. Same bound as `live_daemon`.
+const PORT_PROBES: usize = 64;
+
 fn free_port() -> u16 {
     let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral");
     l.local_addr().expect("local_addr").port()
+}
+
+/// A free port that is none of `taken`. Two probes of port 0 can be one
+/// port, and the daemon then cannot bind both listeners.
+fn free_port_excluding(taken: &[u16]) -> u16 {
+    for _ in 0..PORT_PROBES {
+        let port = free_port();
+        if !taken.contains(&port) {
+            return port;
+        }
+    }
+    panic!("could not obtain a port distinct from {taken:?}");
+}
+
+/// `N` ports, each different.
+fn distinct_ports<const N: usize>() -> [u16; N] {
+    let mut ports = [0u16; N];
+    for i in 0..N {
+        let port = free_port_excluding(&ports[..i]);
+        ports[i] = port;
+    }
+    ports
 }
 
 fn wait_tcp(p2p_port: u16, deadline: Instant) {

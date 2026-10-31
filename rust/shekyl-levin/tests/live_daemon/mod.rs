@@ -47,8 +47,10 @@ impl Daemon {
                  --test {test} -- --ignored --nocapture"
             )
         }));
-        let rpc_port = free_port();
-        let p2p_port = free_port();
+        // One draw. Two probes of port 0 can return the same number, and
+        // the daemon dies if its admin listener and its clearnet listener
+        // are that number.
+        let [rpc_port, p2p_port] = distinct_ports();
         let data_dir = std::env::temp_dir().join(format!("shekyl-{test}-{p2p_port}"));
         drop(std::fs::remove_dir_all(&data_dir));
         std::fs::create_dir_all(&data_dir).expect("create data dir");
@@ -152,6 +154,35 @@ impl Drop for Daemon {
 pub fn free_port() -> u16 {
     let l = std::net::TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).expect("bind");
     l.local_addr().expect("addr").port()
+}
+
+/// How many probes of port 0 before the test gives up. A collision is the
+/// kernel handing one port back. A stuck allocator should fail the test.
+const PORT_PROBES: usize = 64;
+
+/// A free port that is none of `taken`. Each probe binds port 0 and releases
+/// it, so the kernel may return a number already in `taken`, and a daemon
+/// given one number for two listeners dies at startup.
+pub fn free_port_excluding(taken: &[u16]) -> u16 {
+    for _ in 0..PORT_PROBES {
+        let port = free_port();
+        if !taken.contains(&port) {
+            return port;
+        }
+    }
+    panic!("could not obtain a port distinct from {taken:?}");
+}
+
+/// `N` ports, each different. The part of the startup collision this process
+/// creates; a port taken by something else between the release and the
+/// daemon's bind is still a race.
+pub fn distinct_ports<const N: usize>() -> [u16; N] {
+    let mut ports = [0u16; N];
+    for i in 0..N {
+        let port = free_port_excluding(&ports[..i]);
+        ports[i] = port;
+    }
+    ports
 }
 
 pub fn rpc_ok(rpc_port: u16) -> bool {
