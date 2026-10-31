@@ -15,15 +15,22 @@
 //! Unix only: Windows has no per-process descriptor limit, and the daemon's
 //! ceiling there is unbounded by design (PWD-B1). `#[ignore]`d: requires
 //! `SHEKYLD_BIN`, and run by `scripts/ci/run_live_daemon_gates.sh`.
+//!
+//! The fill is not one host. Clearnet admits one token per connector
+//! interval and three per IPv4 address (`CLEARNET_CONNECTOR_RATE`,
+//! `CLEARNET_HOST_RATE`). Each peer binds its own loopback address and the
+//! parent waits one connector refill between connects, so the rate admits
+//! them and the ceiling is what refuses the next one.
 
-#![cfg(unix)]
+// Linux only: macOS loopback holds only 127.0.0.1 unless aliased.
+#![cfg(target_os = "linux")]
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 mod live_daemon;
-use live_daemon::{spawn_peer, Daemon, PeerOutcome};
+use live_daemon::{connector_refill, spawn_peer, Daemon, LoopbackHost, PeerOutcome};
 
 /// The child's soft descriptor limit. Low enough that the derived ceiling
 /// is a few dozen peers, high enough that the daemon starts (its store,
@@ -78,16 +85,26 @@ fn the_inbound_ceiling_derived_from_the_descriptor_limit_refuses_the_next_peer()
          (headroom = limit - held - reserved)"
     );
 
-    // Fill it: `ceiling` peers, each admitted (its handshake answered).
+    // Fill it: `ceiling` peers, each a distinct loopback host, each connect
+    // one connector refill after the last. The parent connects, so a stall
+    // slows the fill instead of releasing a burst the connector refuses.
     let stop = Arc::new(AtomicBool::new(false));
+    let pace = connector_refill();
     let mut peers = Vec::new();
-    for _ in 0..ceiling {
+    for ordinal in 0..ceiling {
+        if ordinal > 0 {
+            std::thread::sleep(pace);
+        }
         let shook = Arc::new(AtomicBool::new(false));
         peers.push((
-            spawn_peer(daemon.p2p_port, Arc::clone(&stop), Arc::clone(&shook)),
+            spawn_peer(
+                daemon.p2p_port,
+                LoopbackHost::peer(ordinal),
+                Arc::clone(&stop),
+                Arc::clone(&shook),
+            ),
             shook,
         ));
-        std::thread::sleep(Duration::from_millis(10));
     }
     let all_admitted = wait_until(Duration::from_secs(60), || {
         peers.iter().all(|(_, shook)| shook.load(Ordering::SeqCst))
@@ -106,7 +123,12 @@ fn the_inbound_ceiling_derived_from_the_descriptor_limit_refuses_the_next_peer()
     // handshake. Observed as the peer's socket ending without a handshake
     // response, within a bound a slow accept loop cannot reach.
     let extra_shook = Arc::new(AtomicBool::new(false));
-    let extra = spawn_peer(daemon.p2p_port, Arc::clone(&stop), Arc::clone(&extra_shook));
+    let extra = spawn_peer(
+        daemon.p2p_port,
+        LoopbackHost::peer(ceiling),
+        Arc::clone(&stop),
+        Arc::clone(&extra_shook),
+    );
     let finished = wait_until(Duration::from_secs(20), || extra.is_finished());
     assert!(
         finished && !extra_shook.load(Ordering::SeqCst),
@@ -134,4 +156,21 @@ fn the_inbound_ceiling_derived_from_the_descriptor_limit_refuses_the_next_peer()
     for (handle, _) in peers {
         assert_eq!(handle.join().expect("peer thread"), PeerOutcome::Admitted);
     }
+}
+
+/// The address a peer binds is the address an accept observes. The ceiling
+/// gate depends on this: one loopback address is one host bucket.
+#[test]
+fn a_peer_bound_to_its_loopback_host_is_that_host_at_accept() {
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).expect("bind");
+    let port = listener.local_addr().expect("port").port();
+    let host = LoopbackHost::peer(0);
+    let client = live_daemon::connect_from(host.ip(), port).expect("connect");
+    let (_accepted, from) = listener.accept().expect("accept");
+    drop(client);
+    assert_eq!(from.ip(), std::net::IpAddr::V4(host.ip()));
+    assert_eq!(
+        LoopbackHost::peer(1).ip(),
+        std::net::Ipv4Addr::new(127, 0, 0, 3)
+    );
 }

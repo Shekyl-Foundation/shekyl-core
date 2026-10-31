@@ -202,11 +202,99 @@ pub fn rpc_ok(rpc_port: u16) -> bool {
     s.read_to_end(&mut buf).is_ok() && String::from_utf8_lossy(&buf).contains("\"height\"")
 }
 
+/// Why a simulated peer could not reach the daemon.
+#[derive(Debug)]
+pub enum ConnectFromError {
+    /// No socket could be made: a fault of the rig, never a peer outcome.
+    Socket(std::io::Error),
+    /// The source address could not be bound: this host does not answer on
+    /// it. A fault of the rig, never a peer outcome.
+    Bind {
+        source: Ipv4Addr,
+        error: std::io::Error,
+    },
+    /// The daemon did not accept the connection: a peer outcome.
+    Connect(std::io::Error),
+}
+
+impl std::fmt::Display for ConnectFromError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Socket(error) => write!(f, "no socket for a simulated peer: {error}"),
+            Self::Bind { source, error } => write!(
+                f,
+                "a simulated peer cannot bind {source}: this host does not answer on it ({error})"
+            ),
+            Self::Connect(error) => write!(f, "the daemon did not accept the peer: {error}"),
+        }
+    }
+}
+
+/// Connect to `127.0.0.1:port` with `source` as the local address, so the
+/// accept attributes the socket to that host.
+///
+/// `socket2` binds before it connects, which `std` cannot. Its `Socket::new`
+/// sets close-on-exec (non-inheritable on Windows), so a later child of this
+/// process does not inherit the peer socket, and it fills in the BSD
+/// address length itself. A bind that fails is its own error, naming the
+/// address, so a rig fault is never counted as a peer the daemon refused.
+pub fn connect_from(source: Ipv4Addr, port: u16) -> Result<TcpStream, ConnectFromError> {
+    let socket = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None)
+        .map_err(ConnectFromError::Socket)?;
+    socket
+        .bind(&SocketAddr::from((source, 0)).into())
+        .map_err(|error| ConnectFromError::Bind { source, error })?;
+    socket
+        .connect(&SocketAddr::from((Ipv4Addr::LOCALHOST, port)).into())
+        .map_err(ConnectFromError::Connect)?;
+    Ok(socket.into())
+}
+
 /// FAKECHAIN (`--network regtest`) derives its id from fakechain's genesis pin.
 pub fn regtest_network_id() -> shekyl_p2p_transport::NetworkId {
     shekyl_p2p_transport::network_id_from_genesis(&shekyl_rpc_types::genesis_hash_for(
         shekyl_rpc_types::DaemonNetwork::Fakechain,
     ))
+}
+
+/// One IPv4 host on the loopback network. The accept gate's host key is
+/// the address (`HostKey::V4`), so peers that should not share a bucket
+/// each bind one of these. `127.0.0.1` is the harness probe, and peers
+/// start at `127.0.0.2`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LoopbackHost(Ipv4Addr);
+
+impl LoopbackHost {
+    /// The `ordinal`-th simulated peer. Ordinal 0 is `127.0.0.2`.
+    pub fn peer(ordinal: u32) -> Self {
+        let first = u32::from(Ipv4Addr::new(127, 0, 0, 2));
+        let addr = first.checked_add(ordinal).expect("loopback ordinal");
+        let ip = Ipv4Addr::from(addr);
+        assert_eq!(
+            ip.octets()[0],
+            127,
+            "a simulated peer stays on the loopback network"
+        );
+        Self(ip)
+    }
+
+    /// The address the daemon's accept observes.
+    pub fn ip(self) -> Ipv4Addr {
+        self.0
+    }
+}
+
+/// How long clearnet's connector takes to refill one token.
+///
+/// Peers spaced at this interval are admits the connector bucket can pay
+/// for (`CLEARNET_CONNECTOR_RATE`, read from the row the daemon uses).
+pub fn connector_refill() -> Duration {
+    match shekyl_transport_layer::accept_bound(shekyl_transport_layer::ConnectorId::Clearnet) {
+        shekyl_transport_layer::Assessment::Assessed(
+            shekyl_transport_layer::AcceptBound::ConnectorAndHost { connector, .. },
+        ) => Duration::from_nanos(connector.token_every_nanos),
+        _ => panic!("clearnet's accept bound is a connector bucket and a host bucket"),
+    }
 }
 
 /// What a simulated peer's socket did.
@@ -216,7 +304,9 @@ pub enum PeerOutcome {
     Admitted,
     /// The daemon closed the socket before answering the handshake.
     Closed,
-    /// The peer could not connect, or the socket failed otherwise.
+    /// The daemon did not accept the connection, or the socket failed
+    /// after it. A rig fault (no socket, a source address this host does
+    /// not answer on) is a panic, not this.
     Failed,
 }
 
@@ -227,16 +317,24 @@ pub enum PeerOutcome {
 /// as a free connection and understate every figure in the table.
 ///
 /// `shook` is set the moment the handshake is answered, so a caller can
-/// wait for admission without joining the thread.
+/// wait for admission without joining the thread. `host` is the address
+/// the daemon's accept attributes the peer to.
 pub fn spawn_peer(
     p2p_port: u16,
+    host: LoopbackHost,
     stop: Arc<AtomicBool>,
     shook: Arc<AtomicBool>,
 ) -> std::thread::JoinHandle<PeerOutcome> {
+    let stream = match connect_from(host.ip(), p2p_port) {
+        Ok(stream) => stream,
+        Err(ConnectFromError::Connect(_)) => return std::thread::spawn(|| PeerOutcome::Failed),
+        // The rig cannot make this peer: fail the gate, naming why, rather
+        // than count a peer the daemon never saw.
+        Err(rig @ (ConnectFromError::Socket(_) | ConnectFromError::Bind { .. })) => {
+            panic!("{rig}")
+        }
+    };
     std::thread::spawn(move || {
-        let Ok(stream) = TcpStream::connect(("127.0.0.1", p2p_port)) else {
-            return PeerOutcome::Failed;
-        };
         drop(stream.set_read_timeout(Some(Duration::from_millis(500))));
         drop(stream.set_write_timeout(Some(Duration::from_secs(10))));
         drop(stream.set_nodelay(true));
