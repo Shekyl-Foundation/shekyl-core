@@ -6,7 +6,9 @@ and 3b of §12 are implemented. Increment 1 is the link the dialer reads
 is the supervisor: sans-IO core, timing-engine driver, respawn, and the
 managed route published only from `Running`. `TSR-M2` is recorded
 (2026-10-22, the floor device); the driver's base stays 1 s and its cap
-stays 60 s. `TSR-M8` is not recorded, so the suspend check is still open.
+stays 60 s. `TSR-M8` is recorded (Windows and macOS, §10): only Windows
+counts a sleep in `Instant`, and the supervisor counts awake time on every
+platform (§5, "Resumed from suspend").
 Increment 3b is the public directory cache (`TSR-Q8`). Increment 4 is the
 probe of this node's own onion and the link's inbound facet (#1220).
 Increment 5's route publishing is absorbed into increment 3 (2026-10-22).
@@ -1101,7 +1103,7 @@ run's conditions are in `shekyl-dev`, `data/tsr-preflight/2026-10-19*/`.
 | `TSR-M5` | Tor's file descriptors at load; the limit the child inherits. **Measured 2026-10-19** under `TSR-M4`'s load: **36 to 38** open; soft limit 524288 as launched; idle 13 to 15 | the descriptor budget |
 | `TSR-M6` | when Tor first writes `state` after bootstrap under `AvoidDiskWrites 1`, and whether a kill loses guard changes made since. **Measured 2026-10-19**: the first write came 603.8 s and 601.9 s after bootstrap, then about every 610 s. A clean exit saved all 20 guards; a kill wrote nothing at exit, leaving the last periodic write's 20. x86: 602.1 and 603.7 s. A Tor killed before its first write leaves a respawn to sample new guards: that window is the re-roll still open to an attacker who can crash Tor early | whether the kept directory needs more than `TSR-Q1` gives it |
 | `TSR-M7` | descriptor upload time after `ADD_ONION` and after a republish. **Measured 2026-10-19**: the first `UPLOADED` 4.43 s after `ADD_ONION`, 3.53 s after a respawn into the kept directory republished the held key; 1 of 13 uploads in the republish round failed, the case `TSR-Q5`'s rounds absorb. x86: 3.11 and 4.58 s | the upload bound |
-| `TSR-M8` | the monotonic clock across suspend on Windows and macOS. **Windows, measured 2026-10-30** (Rick's laptop, bare metal, Windows 11 23H2 build 22631.7652; Modern Standby, the only sleep its firmware offers; one run, on mains; shekyl-dev `data/tsr-m8/2026-10-30-windows/`): `std::time::Instant` (`QueryPerformanceCounter`) kept counting through a 206.5 s standby, and wall and monotonic time agreed to 30.5 µs across it, with no step over the run. So on Windows every deadline armed before a sleep comes due at once on wake, and a window that included the sleep would misfire: a reply outstanding at the sleep would be late, a stall window held across it past its bound, a probe in flight past its own. The supervisor therefore counts awake time on every platform (§5, "Resumed from suspend"; Rick, 2026-10-30): a deadline found more than 10 s late is a resume, and every window starts again from the wake. On Linux `Instant` is `CLOCK_MONOTONIC`, which stops during suspend: no deadline is late, and the windows resume where they stood (the VM suspend of 2026-10-30, §7). Not covered on Windows: S3 (absent there), hibernate, a standby long enough to fall into hibernate, battery. macOS is open | suspend handling |
+| `TSR-M8` | the monotonic clock across suspend on Windows and macOS (both measured). **Windows, measured 2026-10-30** (Rick's laptop, bare metal, Windows 11 23H2 build 22631.7652; Modern Standby, the only sleep its firmware offers; one run, on mains; shekyl-dev `data/tsr-m8/2026-10-30-windows/`): `std::time::Instant` (`QueryPerformanceCounter`) kept counting through a 206.5 s standby, and wall and monotonic time agreed to 30.5 µs across it, with no step over the run. So on Windows every deadline armed before a sleep comes due at once on wake, and a window that included the sleep would misfire: a reply outstanding at the sleep would be late, a stall window held across it past its bound, a probe in flight past its own. The supervisor therefore counts awake time on every platform (§5, "Resumed from suspend"; Rick, 2026-10-30): a deadline found more than 10 s late is a resume, and every window starts again from the wake. On Linux `Instant` is `CLOCK_MONOTONIC`, which stops during suspend: no deadline is late, and the windows resume where they stood (the VM suspend of 2026-10-30, §7). Not covered on Windows: S3 (absent there), hibernate, a standby long enough to fall into hibernate, battery. **macOS, measured 2026-10-31** (the Foundation's macOS build host, a Mac mini M2 Pro, macOS 27.0.1; on mains; the same program; shekyl-dev `data/tsr-m8/2026-10-31-macos/`): `Instant` stopped during a 302 s sleep (`pmset sleepnow`, woken by a scheduled RTC alarm): wall time advanced 301.747 s and `Instant` 1.007 s. macOS behaves as Linux does, so the resume code finds no late deadline there. Not covered on macOS: battery, standby (off on that host), Intel Macs | suspend handling |
 | `TSR-M9` | no onion address in the daemon Tor's log events at `notice`. **Measured 2026-10-19**: 0 of 36 `NOTICE`/`WARN`/`ERR` events carried one, across a publish, 40 probes and a republish. x86: 0 of 33 | the log category |
 | `TSR-M10` | the delete time of a used `DataDirectory` on the floor device's storage. **Measured 2026-10-19**: 100 used cold directories, p50 11 ms, max 13 ms each. x86: max 7 ms | the tombstone delete bound |
 | `TSR-M11` | on Windows, whether a killed and reaped `tor.exe` has released its `DataDirectory` files (`lock`, `state`, `tor.log`) when the reap returns. **Measured 2026-10-16** (Windows 11 23H2, Defender real-time protection on; the pinned 15.0.24 `tor.exe`, launched as #1083 does): 0 failures in 400, by kill and by owner-close, each followed at once by the tombstone rename and by a recursive delete. Every file is released by the time `WaitForSingleObject` returns | a respawn into the kept directory (`TSR-Q1`) and the tombstone rename (§4.7) do not wait for the directory's files once the reap has returned |
@@ -1133,9 +1135,8 @@ stop path, not a bound.
 before increment 3 (§12), the first increment whose code uses a bound they set;
 increment 2 uses none. They were taken on 2026-10-19, after the re-pin, on the Tor that ships
 (0.4.9.14), the Pi 4 setting each value (the table above); `TSR-M11` is measured
-(above). `TSR-M2` is measured (2026-10-22, above). `TSR-M8` needs the
-suspend apparatus, and is measured on the implementation branch before its
-PR leaves draft.
+(above). `TSR-M2` is measured (2026-10-22, above). `TSR-M8` is measured on
+Windows (2026-10-30) and macOS (2026-10-31, §10).
 
 **Seeded start (`TSR-Q8`), measured on an x86 dev box 2026-10-19 and
 2026-10-20** (tor 0.4.9.14; raw rows in `shekyl-dev`,
@@ -1242,7 +1243,7 @@ are fixed before the work starts:
    and the one typed read and renderer are `shekyl-tor-control-client`'s
    `supervisor` module. `TSR-M2` is recorded (2026-10-22); the driver's base
    stays 1 s and its cap stays 60 s. `TSR-M8` (the monotonic clock across
-   suspend) is not recorded yet. Health and `OwnTx` project the relay's
+   suspend) is recorded on Windows and macOS (§10). Health and `OwnTx` project the relay's
    hop-0 verdict (`OriginVerdict`), folded as `Input::AddressHidingOrigin`
    (`GS-Q3`, the GUI sync lane's `GS-C1`); the link is the phase and
    `Syncing.tor`.
@@ -1304,6 +1305,6 @@ Examined and found nothing to change: the pin gate and TB-7's launch
 environment; the `shekyl-socks` client, which keeps the reply byte the
 evidence attribution needs. Not examined, and next round's scope: the Windows
 and macOS process and filesystem behaviour this design assumes (rename after
-reap, kill semantics, the monotonic clock across suspend), which only §7 and
-`TSR-M8` can settle; and the wallet's Tor under the same standard, which is
+reap, kill semantics), which only §7 can settle (the monotonic clock across
+suspend is settled, `TSR-M8`); and the wallet's Tor under the same standard, which is
 outside this brief.
