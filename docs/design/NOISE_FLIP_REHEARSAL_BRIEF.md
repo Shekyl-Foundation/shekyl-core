@@ -1,7 +1,6 @@
 # Brief C: the rehearsal on the final wire (the Noise flip, phase C)
 
-**Status:** not started. Phase C runs after A and B.
-
+**Status: OPEN** — active plan, revision 2, ruled 2026-10-30 (Rick). Not started: it waits on its four prerequisites below (A1 ruled, B merged, the accept-rate bound merged, A6 shipped).
 **Revision 2, 2026-10-30.** It replaces revision 1. The accept-rate bound and the soak period are ruled (Rick, 2026-10-30).
 **For:** the transport lane, with the dialer lane for the K and S follow-up (C4) and the refusal cells.
 **Read at:** `dev` `dc2a617d22`. Re-read every anchor at your own pin.
@@ -13,7 +12,7 @@
 
 ## Prerequisites (each merged or shipped before C starts)
 
-- **A1 ruled** (`claude/NOISE_STEP7_EVALUATION_BRIEF.md`): W, the flush policy, Nagle, the rekey interval, the CPU budget, and the accept-rate values.
+- **A1 ruled** (`docs/design/NOISE_STEP7_EVALUATION_BRIEF.md`): W, the flush policy, Nagle, the rekey interval, the CPU budget, and the accept-rate values.
 - **B merged.** It carries:
   - fixed windows with the authenticated occupancy;
   - the ruled flush policy and rekey;
