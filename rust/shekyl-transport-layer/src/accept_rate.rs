@@ -165,8 +165,9 @@ const _: () = {
 /// time. Zero for a row with no daemon-side limiter or not assessed.
 ///
 /// Lingering sockets hold descriptors outside the inbound occupancy, so the
-/// daemon reserves this many beside the inbound ceiling; the accept loop's
-/// gate caps its lingering at the same figure ([`AcceptGate::linger_cap`]).
+/// daemon reserves this many beside the inbound ceiling; the connector's
+/// one linger task caps the sockets it holds at the same figure
+/// ([`AcceptGate::linger_cap`]).
 #[must_use]
 pub fn linger_cap(bound: Assessment<AcceptBound>, span: Tick) -> u64 {
     match bound {
@@ -182,6 +183,21 @@ pub fn linger_cap(bound: Assessment<AcceptBound>, span: Tick) -> u64 {
 const fn cap_for(connector: AcceptRate, span: Tick) -> u64 {
     let refilled = span.get() / connector.token_every_nanos;
     (connector.burst as u64).saturating_add(refilled)
+}
+
+/// Descriptors a clearnet node reserves for sockets held half-closed after
+/// an accept-time refusal (D10.2): [`linger_cap`] of clearnet's row across
+/// the clearnet handshake span.
+///
+/// The connector's linger task caps the sockets it holds at the same
+/// figure, read from the live gate ([`AcceptGate::linger_cap`]). The
+/// reservation and the gate therefore share one formula.
+#[must_use]
+pub fn clearnet_linger_descriptors() -> u64 {
+    linger_cap(
+        accept_bound(ConnectorId::Clearnet),
+        Tick::new(crate::spans::CLEARNET_HANDSHAKE_WITHIN_NANOS),
+    )
 }
 
 /// What one bucket's host key is: an IPv4 address, or an IPv6 /64.
@@ -264,25 +280,19 @@ pub struct AcceptGate {
     /// The table size that triggers the next sweep: twice what survived the
     /// last one, so a sweep is amortised over the inserts that reach it.
     sweep_at: usize,
-    refused: AcceptRefusals,
 }
 
-/// Connections the gate refused since the counts were last taken, by the
-/// bucket that could not pay.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct AcceptRefusals {
-    /// The host's own bucket was empty.
-    pub host: u64,
+/// Which of a connector's buckets could not pay for one accept.
+///
+/// The socket table records it. The gate does not count: a ban and a
+/// ceiling are decided before the gate, and they are refusals of the same
+/// accept even though the gate never saw them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RateRefusal {
+    /// The host's bucket was empty. The connector's token was not spent.
+    Host,
     /// The host could pay, and the connector's bucket was empty.
-    pub connector: u64,
-}
-
-impl AcceptRefusals {
-    /// Both counts together.
-    #[must_use]
-    pub const fn total(self) -> u64 {
-        self.host.saturating_add(self.connector)
-    }
+    Connector,
 }
 
 impl AcceptGate {
@@ -299,7 +309,6 @@ impl AcceptGate {
             connector: Bucket::default(),
             hosts: HashMap::new(),
             sweep_at: SWEEP_FLOOR,
-            refused: AcceptRefusals::default(),
         })
     }
 
@@ -320,17 +329,15 @@ impl AcceptGate {
     /// proceed, or neither is and it is refused: a host whose own bucket is
     /// empty does not drain the connector's, and a refusal by the
     /// connector's bucket leaves no host entry behind.
-    pub fn admit(&mut self, ip: IpAddr, now: Tick) -> bool {
+    pub fn admit(&mut self, ip: IpAddr, now: Tick) -> Result<(), RateRefusal> {
         let now = now.get();
         let key = HostKey::of(ip);
         let host = self.hosts.get(&key).copied().unwrap_or_default();
         let Some(host_tat) = host.after_spend(self.host_rate, now) else {
-            self.refused.host = self.refused.host.saturating_add(1);
-            return false;
+            return Err(RateRefusal::Host);
         };
         let Some(connector_tat) = self.connector.after_spend(self.connector_rate, now) else {
-            self.refused.connector = self.refused.connector.saturating_add(1);
-            return false;
+            return Err(RateRefusal::Connector);
         };
         self.connector.spend(connector_tat);
         self.hosts.entry(key).or_default().spend(host_tat);
@@ -338,12 +345,7 @@ impl AcceptGate {
             self.hosts.retain(|_, bucket| !bucket.is_full(now));
             self.sweep_at = SWEEP_FLOOR.max(self.hosts.len().saturating_mul(2));
         }
-        true
-    }
-
-    /// The refusals since the last call, and start counting again.
-    pub fn take_refusals(&mut self) -> AcceptRefusals {
-        std::mem::take(&mut self.refused)
+        Ok(())
     }
 
     /// Host entries in the table now, swept or not.

@@ -62,14 +62,15 @@ pub fn connectors(config: &DaemonConfig) -> Vec<ConnectorId> {
 /// dials either.
 ///
 /// Clearnet adds its linger cap
-/// ([`shekyl_ffi::zone_ffi::clearnet_linger_descriptors`]): a refused
-/// accept is held half-closed until its first flight arrives or the
-/// handshake span passes (`P2P_TRANSPORT_LAYER.md` D10.2), each one a
-/// descriptor outside the inbound occupancy, up to that cap. It scales
-/// with the clearnet accept rates, and is zero until they are ruled.
+/// ([`shekyl_ffi::clearnet_linger_descriptors`]): a refused accept is held
+/// half-closed until its first flight arrives or the handshake span passes
+/// (`P2P_TRANSPORT_LAYER.md` D10.2), each one a descriptor outside the
+/// inbound occupancy, up to that cap. With the written clearnet rates the
+/// cap is the connector's burst plus the tokens it refills across the
+/// handshake span, and every listener shares it.
 #[must_use]
 pub fn reserved_descriptors(config: &DaemonConfig) -> u64 {
-    reservation(config, shekyl_ffi::zone_ffi::clearnet_linger_descriptors())
+    reservation(config, shekyl_ffi::clearnet_linger_descriptors())
 }
 
 /// [`reserved_descriptors`] with the clearnet linger cap given.
@@ -376,7 +377,7 @@ mod tests {
             u64::from(profile.target) + u64::try_from(profile.in_flight_bound).expect("small")
         };
         // Clearnet's refused accepts linger half-closed, up to its cap.
-        let linger = shekyl_ffi::zone_ffi::clearnet_linger_descriptors();
+        let linger = shekyl_ffi::clearnet_linger_descriptors();
         assert!(
             linger > 0,
             "clearnet's accept rates are written, so it lingers"
@@ -418,9 +419,9 @@ mod tests {
 
     /// Clearnet's linger cap joins the reservation when clearnet is on, so
     /// the inbound ceiling makes room for refused accepts held half-closed;
-    /// with clearnet off it adds nothing. The real cap is zero until the
-    /// clearnet rates are ruled, so the growth is shown with a given cap,
-    /// and the daemon's own figure is the reservation at the real one.
+    /// with clearnet off it adds nothing. The growth is shown with a given
+    /// cap of 37, and the daemon's own figure is the reservation at the
+    /// real cap.
     #[test]
     fn the_reservation_grows_by_the_clearnet_linger_cap() {
         let on = config(&["--rpc-connections-max", "25"]);
@@ -429,7 +430,7 @@ mod tests {
         assert_eq!(reservation(&off, 37), reservation(&off, 0));
         assert_eq!(
             reserved_descriptors(&on),
-            reservation(&on, shekyl_ffi::zone_ffi::clearnet_linger_descriptors())
+            reservation(&on, shekyl_ffi::clearnet_linger_descriptors())
         );
     }
 

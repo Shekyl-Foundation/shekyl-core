@@ -38,32 +38,35 @@ fn a_host_spends_its_burst_then_waits_one_interval_per_token() {
     let mut gate = gate(rate(1, 1_000), rate(SECOND, 3));
     for spend in 0..3 {
         assert!(
-            gate.admit(v4(1), Tick::new(0)),
+            gate.admit(v4(1), Tick::new(0)).is_ok(),
             "spend {spend} of the burst"
         );
     }
-    assert!(!gate.admit(v4(1), Tick::new(0)), "the burst is spent");
     assert!(
-        !gate.admit(v4(1), Tick::new(SECOND - 1)),
+        gate.admit(v4(1), Tick::new(0)).is_err(),
+        "the burst is spent"
+    );
+    assert!(
+        gate.admit(v4(1), Tick::new(SECOND - 1)).is_err(),
         "one nanosecond early"
     );
     assert!(
-        gate.admit(v4(1), Tick::new(SECOND)),
+        gate.admit(v4(1), Tick::new(SECOND)).is_ok(),
         "one interval refills one token"
     );
-    assert!(!gate.admit(v4(1), Tick::new(SECOND)));
+    assert!(gate.admit(v4(1), Tick::new(SECOND)).is_err());
 }
 
 #[test]
 fn an_idle_bucket_refills_to_its_burst_and_no_further() {
     let mut gate = gate(rate(1, 1_000), rate(SECOND, 2));
-    assert!(gate.admit(v4(1), Tick::new(0)));
-    assert!(gate.admit(v4(1), Tick::new(0)));
+    assert!(gate.admit(v4(1), Tick::new(0)).is_ok());
+    assert!(gate.admit(v4(1), Tick::new(0)).is_ok());
     let later = Tick::new(100 * SECOND);
-    assert!(gate.admit(v4(1), later));
-    assert!(gate.admit(v4(1), later));
+    assert!(gate.admit(v4(1), later).is_ok());
+    assert!(gate.admit(v4(1), later).is_ok());
     assert!(
-        !gate.admit(v4(1), later),
+        gate.admit(v4(1), later).is_err(),
         "a long idle is still a burst of two"
     );
 }
@@ -71,18 +74,18 @@ fn an_idle_bucket_refills_to_its_burst_and_no_further() {
 #[test]
 fn a_host_refused_by_its_own_bucket_does_not_drain_the_connector() {
     let mut gate = gate(rate(SECOND, 4), rate(SECOND, 1));
-    assert!(gate.admit(v4(1), Tick::new(0)));
+    assert!(gate.admit(v4(1), Tick::new(0)).is_ok());
     for _ in 0..10 {
-        assert!(!gate.admit(v4(1), Tick::new(0)));
+        assert!(gate.admit(v4(1), Tick::new(0)).is_err());
     }
     for other in 2..5 {
         assert!(
-            gate.admit(v4(other), Tick::new(0)),
+            gate.admit(v4(other), Tick::new(0)).is_ok(),
             "host {other} still finds the connector's tokens"
         );
     }
     assert!(
-        !gate.admit(v4(9), Tick::new(0)),
+        gate.admit(v4(9), Tick::new(0)).is_err(),
         "the connector's burst is four"
     );
 }
@@ -90,11 +93,11 @@ fn a_host_refused_by_its_own_bucket_does_not_drain_the_connector() {
 #[test]
 fn a_connector_refusal_leaves_no_host_entry() {
     let mut gate = gate(rate(SECOND, 1), rate(SECOND, 5));
-    assert!(gate.admit(v4(1), Tick::new(0)));
-    assert!(!gate.admit(v4(2), Tick::new(0)));
+    assert!(gate.admit(v4(1), Tick::new(0)).is_ok());
+    assert!(gate.admit(v4(2), Tick::new(0)).is_err());
     assert_eq!(gate.host_entries(), 1);
     assert!(
-        gate.admit(v4(2), Tick::new(SECOND)),
+        gate.admit(v4(2), Tick::new(SECOND)).is_ok(),
         "the refused host spent nothing"
     );
 }
@@ -109,9 +112,9 @@ fn an_ipv4_address_carried_in_ipv6_is_that_ipv4_host() {
         "two IPv4 hosts behind a dual-stack listener are two hosts, not one /64"
     );
     let mut gate = gate(rate(1, 1_000), rate(SECOND, 1));
-    assert!(gate.admit(v4(7), Tick::new(0)));
-    assert!(!gate.admit(mapped(7), Tick::new(0)));
-    assert!(gate.admit(mapped(8), Tick::new(0)));
+    assert!(gate.admit(v4(7), Tick::new(0)).is_ok());
+    assert!(gate.admit(mapped(7), Tick::new(0)).is_err());
+    assert!(gate.admit(mapped(8), Tick::new(0)).is_ok());
 }
 
 #[test]
@@ -122,12 +125,12 @@ fn an_ipv6_host_is_its_64() {
     assert_eq!(HostKey::of(a), HostKey::of(same_64));
     assert_ne!(HostKey::of(a), HostKey::of(next_64));
     let mut gate = gate(rate(1, 1_000), rate(SECOND, 1));
-    assert!(gate.admit(a, Tick::new(0)));
+    assert!(gate.admit(a, Tick::new(0)).is_ok());
     assert!(
-        !gate.admit(same_64, Tick::new(0)),
+        gate.admit(same_64, Tick::new(0)).is_err(),
         "walking the low 64 bits is one host"
     );
-    assert!(gate.admit(next_64, Tick::new(0)));
+    assert!(gate.admit(next_64, Tick::new(0)).is_ok());
 }
 
 /// A flooder walking a fresh /64 on every connection, far faster than the
@@ -151,7 +154,7 @@ fn a_flood_of_fresh_64s_cannot_grow_the_host_table_past_its_bound() {
             0,
             1,
         ]);
-        if gate.admit(host, Tick::new(i * step)) {
+        if gate.admit(host, Tick::new(i * step)).is_ok() {
             admitted += 1;
         }
         assert!(
@@ -177,18 +180,18 @@ fn a_rate_with_no_interval_or_no_burst_is_not_a_rate() {
 #[test]
 fn the_end_of_the_clock_refuses_instead_of_saturating() {
     let mut gate = gate(rate(SECOND, 2), rate(SECOND, 2));
-    assert!(gate.admit(v4(1), Tick::new(u64::MAX - 2 * SECOND)));
-    assert!(gate.admit(v4(1), Tick::new(u64::MAX - 2 * SECOND)));
+    assert!(gate.admit(v4(1), Tick::new(u64::MAX - 2 * SECOND)).is_ok());
+    assert!(gate.admit(v4(1), Tick::new(u64::MAX - 2 * SECOND)).is_ok());
     assert!(
-        !gate.admit(v4(1), Tick::new(u64::MAX - 2 * SECOND)),
+        gate.admit(v4(1), Tick::new(u64::MAX - 2 * SECOND)).is_err(),
         "the burst is spent"
     );
     let end = Tick::new(u64::MAX);
     assert!(
-        !gate.admit(v4(2), end),
+        gate.admit(v4(2), end).is_err(),
         "no refill instant exists past the end"
     );
-    assert!(!gate.admit(v4(2), end));
+    assert!(gate.admit(v4(2), end).is_err());
 }
 
 /// The row follows the declaration: a connector whose inbound peers are
@@ -259,4 +262,13 @@ fn the_row_s_linger_cap_is_the_gate_s() {
             "{connector:?}"
         );
     }
+    // The daemon reserves this figure. It is the clearnet row across the
+    // handshake span, not a second formula.
+    assert_eq!(
+        clearnet_linger_descriptors(),
+        linger_cap(
+            accept_bound(ConnectorId::Clearnet),
+            Tick::new(crate::spans::CLEARNET_HANDSHAKE_WITHIN_NANOS),
+        )
+    );
 }

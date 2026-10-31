@@ -1749,18 +1749,17 @@ listener, and so a connection in the gap phase.
    **The cap.** At most the connector's accept-rate burst plus the
    tokens it refills across the span may linger at once
    (`AcceptGate::linger_cap`): what the connector admits in one span.
-   While clearnet's rates are not assessed there is no gate and the cap
-   is zero. A lingering socket holds a descriptor outside the inbound
+   With the written rates and the 1.426 s clearnet handshake span that
+   cap is 34. A lingering socket holds a descriptor outside the inbound
    occupancy, so the daemon reserves the cap with the rest of its
    descriptors (`reserved_descriptors`, `shekyl-daemon`) when clearnet
    is on, and the inbound ceiling makes room for it (Rick, 2026-10-31).
    The reservation and the gate read one formula over the row
-   (`linger_cap`), so they cannot disagree when the rates are written.
+   (`linger_cap`).
    **Residual (stated, accepted).** A refusal beyond the cap closes at
    once, after dropping what has already arrived. A flight that reaches
-   it later is answered with RST, so under a flood past the cap, and
-   today on every refusal until the rates are ruled, a refused peer can
-   tell a refusal at accept from a refusal after it. A peer that writes
+   it later is answered with RST, so under a flood past the cap a refused
+   peer can tell a refusal at accept from a refusal after it. A peer that writes
    after its flight, or after the span, gets RST from any closed socket,
    on every path. `close_tests.rs` pins the kernel's RST on an undrained
    close and the FIN on the drained one; `tests.rs` pins a flight written
@@ -1804,9 +1803,11 @@ listener, and so a connection in the gap phase.
    host table holds an entry only while its bucket is refilling, and
    an entry is made only when the connector's bucket pays, so a
    flooder walking addresses grows it no faster than the connector's
-   rate admits. A refusal is `AcceptRateExceeded` (D12), with no marks;
-   the node names the refusals once a minute, never once per
-   connection. The rates are protocol data in `accept_bound`, beside
+   rate admits. A refusal is `AcceptRateExceeded` (D12), with no marks.
+   The socket table counts every accept refusal — the rate, a ban, a
+   ceiling, a cap — at the decision, and the node names those counts
+   once a minute, never once per connection. The rates are protocol data
+   in `accept_bound`, beside
    the declaration, the same on every node (rule 71): Tor's row is the
    onion's proof-of-work (item 4), and clearnet's row carries the two
    buckets above. The build refuses a connector whose inbound peers have

@@ -648,20 +648,6 @@ fn a_pair_is_presented_only_at_its_own_proxy() {
     assert!(!presented(at, None).authenticates());
 }
 
-/// The minute report counts the two admission refusals by cause and starts
-/// again after each report; no other close is counted.
-#[test]
-fn the_refusal_report_counts_admission_refusals_by_cause() {
-    let refusals = AdmissionRefusals::default();
-    refusals.count(CloseKind::InboundNotAccepted);
-    refusals.count(CloseKind::AdmissionRefused);
-    refusals.count(CloseKind::AdmissionRefused);
-    refusals.count(CloseKind::PeerClosed);
-    refusals.count(CloseKind::AcceptRateExceeded);
-    assert_eq!(refusals.take(), (1, 2));
-    assert_eq!(refusals.take(), (0, 0), "each report starts again");
-}
-
 /// The descriptors the daemon reserves for lingering refusals are the cap
 /// the process socket table's gate lingers at, over the span the clearnet
 /// accept loop lingers for.
@@ -669,7 +655,7 @@ fn the_refusal_report_counts_admission_refusals_by_cause() {
 fn the_linger_reservation_is_the_process_gate_s_cap() {
     let span = Tick::new(spans::CLEARNET_HANDSHAKE_WITHIN_NANOS);
     assert_eq!(
-        clearnet_linger_descriptors(),
+        crate::clearnet_linger_descriptors(),
         u64::try_from(process_sockets().clearnet_linger_cap(span)).expect("small")
     );
 }

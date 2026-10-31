@@ -356,7 +356,7 @@ fn an_inbound_over_the_accept_rate_is_not_a_handshake() {
         std::thread::sleep(Duration::from_millis(5));
     }
     assert_eq!(listener.tally.computed(), computed_before);
-    assert_eq!(listener.sockets.take_accept_rate_refusals().host, 1);
+    assert_eq!(listener.sockets.take_accept_refusals().over_host_rate, 1);
     listener.shutdown();
     drop(engine);
 }
