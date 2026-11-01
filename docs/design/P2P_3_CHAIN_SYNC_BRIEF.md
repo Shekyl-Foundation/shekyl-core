@@ -175,7 +175,7 @@ owner of block propagation.
 | `handle_notify_new_transactions`, `relay_transactions` | RD | Untouched by CS |
 | `request_txpool_complement` | CS | Redesign: the sync owner sends the request from Rust at its transition to `Synced`; the reply, `NOTIFY_NEW_TRANSACTIONS`, goes through RD's route (CS-Q10) |
 | `handle_notify_get_txpool_complement` | RD | Serving the complement stays RD's |
-| `hit_score`, `drop_connection_with_score`, `drop_connections` | — | Per CS-Q5. Each still drops; the scores they pass are inert since the automatic ban was deleted (this PR); deleted with the handler |
+| `hit_score`, `drop_connection_with_score`, `drop_connections` | — | Per CS-Q5. Each still drops; the scores they pass are inert since the automatic ban was deleted (#1250); deleted with the handler |
 | `shekyl-peer-policy`'s `BlockIngest`, `BlockAnnounceAction`, `BlockSyncAction` and their FFI predicates (`peer_policy_ffi.rs`, `block_ingest.h`; landed Rust, PWD-B7) | CS | **Keep and extend additively.** CS-Q2's mapping from the entry's reply to an action is built in this crate, under PWD-B7's tri-state verdict (CS-Q4). Only the `heavier_score` arm (`block_peer.rs:103`, `:175`; used at `.inl:649`, `:1512`) retires, per CS-Q5. The C++ predicates go with the sync half |
 | Sync-time estimate pair, `cumulative_block_sync_weight` | CS | Redesign. Progress is read from the header chain (rule 80). The Monero mainnet size table is deleted (rules 60, 71) |
 | `log_connections` | console | Delete. The console reads the board |
@@ -184,7 +184,7 @@ owner of block propagation.
 | `prep-blocks-threads`, `block-sync-size`, `span-limit`, `block-download-max-size` (`INPUT_GRAMMAR.md:272`, **X**), and the hardcoded `m_block_download_max_size = 0`, `m_span_time = 2` (`.inl` `init`) | CS | Per CS-Q12: refused; the constants stand until the cutover |
 | Constructor and `deinit` (found by CS-4's read, as are the rows below) | CS | Shrink: the sync half's members and their initialisers go with it; what RD's routes use stays until the file goes (CS-Q9) |
 | `set_p2p_endpoint` | RD | Stays: the transaction routes send through the endpoint |
-| `drop_connection(context, add_fail, flush)` | RD | Stays as the plain drop RD's routes call; its `add_fail` argument is inert since the automatic ban was deleted (this PR); deleted with the handler |
+| `drop_connection(context, add_fail, flush)` | RD | Stays as the plain drop RD's routes call; its `add_fail` argument is inert since the automatic ban was deleted (#1250); deleted with the handler |
 | `drop_connection(uuid)` | CS | Delete: its one caller is `try_add_next_blocks` |
 | `stop` | RD | Stays while the handler does (`net_node.inl` calls it at shutdown) |
 | `post_notify` | RD | Stays for 2002; its sync uses (2004, 2006, 2007, 2008, 2009, 2010's request) go with their callers |
@@ -915,7 +915,7 @@ the existing types are extended, not replaced.
 
 ## CS-Q5. Scoring: rebuild `add_host_fail` in Rust, or delete it?
 
-**Problem** (as posed at this brief's ground; the automatic ban is deleted, this PR).
+**Problem** (as posed at this brief's ground; the automatic ban is deleted, #1250).
 - `add_host_fail` (`net_node.inl:349`) added weights (1, 5, 10)
   into an un-decaying per-host map. At more than
   `P2P_IP_FAILS_BEFORE_BLOCK` (10, `cryptonote_config.h:200`) it banned the
@@ -1027,12 +1027,12 @@ nothing:
   - The rest of the crate stays and is extended (CS-Q1, CS-Q4).
 
 **`add_host_fail` is deleted ahead of the cutover** (Rick, 2026-11-01;
-this PR, with the C++ ban interface): the method, its five calls, its
+#1250, with the C++ ban interface): the method, its five calls, its
 declarations, `m_host_fails_score` and its lock,
 `P2P_IP_FAILS_BEFORE_BLOCK` and the test override. Every site already
 dropped the connection before the call, so only the score went. The
 handler's score arguments (`drop_connection`'s `add_fail`,
-`drop_connection_with_score`'s `score`) are inert since the automatic ban was deleted (this PR); deleted with the handler.
+`drop_connection_with_score`'s `score`) are inert since the automatic ban was deleted (#1250); deleted with the handler.
 
 **What stays:** operator bans and their expiry, and the registered
 reconnect throttle, which is not a ban.
@@ -1349,7 +1349,7 @@ checked by its name.
 | 1 | Constructor | `.inl:217-232` |
 | 2 | `deinit` | `.inl:270-274` |
 | 3 | `set_p2p_endpoint` | `.inl:276-283` |
-| 4 | `drop_connection(ctx, add_fail, flush)` | `.inl:2576-2580` (its `add_fail` is inert since the automatic ban was deleted, this PR) |
+| 4 | `drop_connection(ctx, add_fail, flush)` | `.inl:2576-2580` (its `add_fail` is inert since the automatic ban was deleted, #1250) |
 | 5 | `drop_connection(uuid)` | `.inl:2582-2589` |
 | 6 | `stop` | `.inl:2661-2666`; called `net_node.inl:554` |
 | 7 | `post_notify` | `.h:214-223` |
@@ -1397,12 +1397,12 @@ handler.
 | 11 | `sync_connector_of` | 1c #9 |
 | 12 | `P2P_DEFAULT_SYNC_SEARCH_CONNECTIONS_COUNT` (no C++ user) | `src/cryptonote_config.h:200` |
 
-**3a. The score arguments `add_host_fail` left (CS-Q5).** `add_host_fail`, its calls, its declarations, `m_host_fails_score` and `P2P_IP_FAILS_BEFORE_BLOCK` were deleted ahead of the cutover (this PR).
+**3a. The score arguments `add_host_fail` left (CS-Q5).** `add_host_fail`, its calls, its declarations, `m_host_fails_score` and `P2P_IP_FAILS_BEFORE_BLOCK` were deleted ahead of the cutover (#1250).
 
 | # | Site | Location | Sync half? |
 | --- | --- | --- | --- |
-| 1 | `drop_connection_with_score`'s `score` | `cryptonote_protocol_handler.inl:2189` | yes (1a #33); inert since the automatic ban was deleted (this PR); deleted with the handler |
-| 2 | `drop_connection`'s `add_fail` | `cryptonote_protocol_handler.inl:2199` | yes; inert since the automatic ban was deleted (this PR); deleted with the handler |
+| 1 | `drop_connection_with_score`'s `score` | `cryptonote_protocol_handler.inl:2189` | yes (1a #33); inert since the automatic ban was deleted (#1250); deleted with the handler |
+| 2 | `drop_connection`'s `add_fail` | `cryptonote_protocol_handler.inl:2199` | yes; inert since the automatic ban was deleted (#1250); deleted with the handler |
 
 **3b. `heavier_score`, every site.**
 

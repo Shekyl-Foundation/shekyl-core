@@ -58,7 +58,7 @@ The inbound ceiling is descriptor headroom (`InboundCeiling`, `shekyl-peer-polic
 
 ### Step 5: a peer could get a host banned (deleted 2026-11-01)
 
-Until this PR, the C++ scored peers and banned them, on clearnet hosts only. `add_host_fail` banned a host for 24 h past 10 points. It was fed by a refused timed-sync peer list, a wrong-network or outbound handshake, and the protocol handler's drops: score 5 for the chain-entry checks and for `hit_score`'s lower-height drop. Someone on the path posing as an honest peer could get that peer banned with three chain-entry violations. The ban demoted the address from white, and barred-first eviction (#1235) would then have removed it. CS-Q5 (c) had ruled this deleted (Rick, 2026-10-18), but the deletion sat in the chain-sync cutover's table. This PR deletes it with the C++ ban interface. Bans are operator configuration only (`shekyl_ban_*`, the RPC's `set_bans`).
+Until #1250, the C++ scored peers and banned them, on clearnet hosts only. `add_host_fail` banned a host for 24 h past 10 points. It was fed by a refused timed-sync peer list, a wrong-network or outbound handshake, and the protocol handler's drops: score 5 for the chain-entry checks and for `hit_score`'s lower-height drop. Someone on the path posing as an honest peer could get that peer banned with three chain-entry violations. The ban demoted the address from white, and barred-first eviction (#1235) would then have removed it. CS-Q5 (c) had ruled this deleted (Rick, 2026-10-18), but the deletion sat in the chain-sync cutover's table. This PR deletes it with the C++ ban interface. Bans are operator configuration only (`shekyl_ban_*`, the RPC's `set_bans`).
 
 ### What it costs the attacker
 
