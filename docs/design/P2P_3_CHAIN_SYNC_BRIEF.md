@@ -175,8 +175,8 @@ owner of block propagation.
 | `handle_notify_new_transactions`, `relay_transactions` | RD | Untouched by CS |
 | `request_txpool_complement` | CS | Redesign: the sync owner sends the request from Rust at its transition to `Synced`; the reply, `NOTIFY_NEW_TRANSACTIONS`, goes through RD's route (CS-Q10) |
 | `handle_notify_get_txpool_complement` | RD | Serving the complement stays RD's |
-| `hit_score`, `drop_connection_with_score`, `drop_connections` | — | Per CS-Q5. Each still drops; the scores they pass are inert since the automatic ban was deleted (#1250); deleted with the handler |
-| `shekyl-peer-policy`'s `BlockIngest`, `BlockAnnounceAction`, `BlockSyncAction` and their FFI predicates (`peer_policy_ffi.rs`, `block_ingest.h`; landed Rust, PWD-B7) | CS | **Keep and extend additively.** CS-Q2's mapping from the entry's reply to an action is built in this crate, under PWD-B7's tri-state verdict (CS-Q4). Only the `heavier_score` arm (`block_peer.rs:103`, `:175`; used at `.inl:649`, `:1512`) retires, per CS-Q5. The C++ predicates go with the sync half |
+| `hit_score`, `drop_connections` | — | `hit_score` still drops the session at `DROP_PEERS_ON_SCORE`. That counter goes with the handler (CS-Q5). `drop_connection_with_score` was deleted with the automatic ban (#1250): a drop carries no weight |
+| `shekyl-peer-policy`'s `BlockIngest`, `BlockAnnounceAction`, `BlockSyncAction` and their FFI predicates (`peer_policy_ffi.rs`, `block_ingest.h`; landed Rust, PWD-B7) | CS | **Keep and extend additively.** CS-Q2's mapping from the entry's reply to an action is built in this crate, under PWD-B7's tri-state verdict (CS-Q4). `Drop` and `DropBadPow` stay, so that mapping can name a PoW refusal. `heavier_score` had no production caller and existed only to pick a ban weight; it was deleted with the automatic ban (#1250). The C++ predicates go with the sync half |
 | Sync-time estimate pair, `cumulative_block_sync_weight` | CS | Redesign. Progress is read from the header chain (rule 80). The Monero mainnet size table is deleted (rules 60, 71) |
 | `log_connections` | console | Delete. The console reads the board |
 | `safesyncmode`, the `pause_mine`/`resume_mine` coupling | — | Delete. `safesyncmode` is an LMDB knob and leaves with DRS-X; the miner reacts to tip changes, not to sync |
@@ -184,7 +184,7 @@ owner of block propagation.
 | `prep-blocks-threads`, `block-sync-size`, `span-limit`, `block-download-max-size` (`INPUT_GRAMMAR.md:272`, **X**), and the hardcoded `m_block_download_max_size = 0`, `m_span_time = 2` (`.inl` `init`) | CS | Per CS-Q12: refused; the constants stand until the cutover |
 | Constructor and `deinit` (found by CS-4's read, as are the rows below) | CS | Shrink: the sync half's members and their initialisers go with it; what RD's routes use stays until the file goes (CS-Q9) |
 | `set_p2p_endpoint` | RD | Stays: the transaction routes send through the endpoint |
-| `drop_connection(context, add_fail, flush)` | RD | Stays as the plain drop RD's routes call; its `add_fail` argument is inert since the automatic ban was deleted (#1250); deleted with the handler |
+| `drop_connection(context, flush)` | RD | Stays as the plain drop RD's routes call. `add_fail` was deleted with the automatic ban (#1250): a drop carries no weight |
 | `drop_connection(uuid)` | CS | Delete: its one caller is `try_add_next_blocks` |
 | `stop` | RD | Stays while the handler does (`net_node.inl` calls it at shutdown) |
 | `post_notify` | RD | Stays for 2002; its sync uses (2004, 2006, 2007, 2008, 2009, 2010's request) go with their callers |
@@ -1017,28 +1017,31 @@ nothing:
     direction.
 
 **What goes:**
-- `hit_score` and `m_score`;
-- the dialer brief's "score owner" sentence;
-- **landed Rust (ruled with the rest):** the `heavier_score` arm of
-  `BlockAnnounceAction` and `BlockSyncAction`
-  (`shekyl-peer-policy/src/block_peer.rs:103`, `:175`), and its two FFI
-  predicates (`peer_policy_ffi.rs:257`, `:292`).
-  - This arm exists only to pick a score weight.
-  - The rest of the crate stays and is extended (CS-Q1, CS-Q4).
+- `hit_score` and `m_score` (still live: the counter drops the session
+  at `DROP_PEERS_ON_SCORE`, and it goes with the handler);
+- the dialer brief's "score owner" sentence (deleted in #1250);
 
-**`add_host_fail` is deleted ahead of the cutover** (Rick, 2026-11-01;
-#1250, with the C++ ban interface): the method, its five calls, its
-declarations, `m_host_fails_score` and its lock,
-`P2P_IP_FAILS_BEFORE_BLOCK` and the test override. Every site already
-dropped the connection before the call, so only the score went. The
-handler's score arguments (`drop_connection`'s `add_fail`,
-`drop_connection_with_score`'s `score`) are inert since the automatic ban was deleted (#1250); deleted with the handler.
+**Deleted with the automatic ban** (Rick, 2026-11-01; #1250), ahead of
+the cutover:
+- `add_host_fail`, its five calls, its declarations,
+  `m_host_fails_score` and its lock, `P2P_IP_FAILS_BEFORE_BLOCK`, and
+  the test override. Every site already dropped the connection before
+  the call, so only the score went.
+- The handler's score arguments: `drop_connection`'s `add_fail` and
+  `drop_connection_with_score`. The drop that remains is
+  `drop_connection(context, flush_all_spans)`.
+- `heavier_score` on `BlockAnnounceAction` and `BlockSyncAction`, its
+  two FFI predicates, and the C++ wrappers. It had no production
+  caller. It existed only to pick a ban weight. `Drop` and
+  `DropBadPow` stay: CS-Q2 maps an ingest outcome onto an action, and
+  the bad-PoW arm is that action, not a score. The rest of the crate
+  stays and is extended (CS-Q1, CS-Q4).
 
 **What stays:** operator bans and their expiry, and the registered
 reconnect throttle, which is not a ban.
 
-What CS still cuts at its cutover, with the sync half: `hit_score`,
-`m_score`, the `heavier_score` arm and the inert score arguments.
+What CS still cuts at its cutover, with the sync half: `hit_score`
+and `m_score`.
 
 **Wargame.**
 - **Invalid-PoW spam from rotating IPv6 addresses.**
@@ -1325,7 +1328,7 @@ checked by its name.
 | 30 | `handle_request_compact_missing_tx` (2009) | `.inl:668-770` | `.h:154` | CS | :161 |
 | 31 | `request_txpool_complement` | `.inl:2516-2529`; its trigger in #17, `:2286-2310` | `.h:175` | CS | :163 |
 | 32 | `hit_score` | `.inl:2531-2542` | `.h:176` | — | :165 |
-| 33 | `drop_connection_with_score` | `.inl:2563-2574` | `.h:166` | — | :165 |
+| 33 | `drop_connection_with_score` | deleted in #1250. The drop is `drop_connection(context, flush_all_spans)` | deleted in #1250 | — | :165 |
 | 34 | `drop_connections` | `.inl:2591-2622` | `.h:168` | — | :165 |
 | 35 | `get_estimated_remaining_sync_seconds` | `.inl:1213-1241` | `.h:207` | CS | :167 |
 | 36 | `get_periodic_sync_estimate` | `.inl:1243-1260` | `.h:208` | CS | :167 |
@@ -1349,7 +1352,7 @@ checked by its name.
 | 1 | Constructor | `.inl:217-232` |
 | 2 | `deinit` | `.inl:270-274` |
 | 3 | `set_p2p_endpoint` | `.inl:276-283` |
-| 4 | `drop_connection(ctx, add_fail, flush)` | `.inl:2576-2580` (its `add_fail` is inert since the automatic ban was deleted, #1250) |
+| 4 | `drop_connection(ctx, flush)` | `.inl` (definition). `add_fail` was deleted with the automatic ban (#1250) |
 | 5 | `drop_connection(uuid)` | `.inl:2582-2589` |
 | 6 | `stop` | `.inl:2661-2666`; called `net_node.inl:554` |
 | 7 | `post_notify` | `.h:214-223` |
@@ -1397,28 +1400,18 @@ handler.
 | 11 | `sync_connector_of` | 1c #9 |
 | 12 | `P2P_DEFAULT_SYNC_SEARCH_CONNECTIONS_COUNT` (no C++ user) | `src/cryptonote_config.h:200` |
 
-**3a. The score arguments `add_host_fail` left (CS-Q5).** `add_host_fail`, its calls, its declarations, `m_host_fails_score` and `P2P_IP_FAILS_BEFORE_BLOCK` were deleted ahead of the cutover (#1250).
+**3a. Score arguments (CS-Q5).** Deleted with the automatic ban (#1250),
+in the same change as `add_host_fail`: `drop_connection_with_score` and
+`drop_connection`'s `add_fail`. The drop that remains is
+`drop_connection(context, flush_all_spans)`. `hit_score` still drops
+the session at `DROP_PEERS_ON_SCORE`; that counter goes with the handler.
+Falsifier: `rg -n 'drop_connection_with_score|add_fail' src tests` returns nothing.
 
-| # | Site | Location | Sync half? |
-| --- | --- | --- | --- |
-| 1 | `drop_connection_with_score`'s `score` | `cryptonote_protocol_handler.inl:2189` | yes (1a #33); inert since the automatic ban was deleted (#1250); deleted with the handler |
-| 2 | `drop_connection`'s `add_fail` | `cryptonote_protocol_handler.inl:2199` | yes; inert since the automatic ban was deleted (#1250); deleted with the handler |
-
-**3b. `heavier_score`, every site.**
-
-| # | Site | Location |
-| --- | --- | --- |
-| 1 | `BlockAnnounceAction::heavier_score` | `rust/shekyl-peer-policy/src/block_peer.rs:102-105` |
-| 2 | `BlockSyncAction::heavier_score` | `block_peer.rs:174-177` |
-| 3 | Its test | `block_peer.rs:229` |
-| 4 | `shekyl_block_announce_heavier_score` | `rust/shekyl-ffi/src/peer_policy_ffi.rs:256-259` |
-| 5 | `shekyl_block_sync_heavier_score` | `peer_policy_ffi.rs:291-294` |
-| 6 | FFI tests | `peer_policy_ffi.rs:305`, `312`, `486-487`, `507-508`, `533`, `544` |
-| 7 | C declarations | `src/shekyl/shekyl_ffi.h:2960`, `:2967` |
-| 8 | C++ wrappers | `src/cryptonote_basic/block_ingest.h:102-105`, `:133-136` |
-| 9 | Announce use | `.inl:648` |
-| 10 | Sync use | `.inl:1511` |
-| 11 | C++ test | `tests/unit_tests/peer_policy_block_ingest.cpp:119` |
+**3b. `heavier_score` (CS-Q5).** Deleted in the same change. It had no
+production caller on `dev` either (the old cites `.inl:649` and `:1512`
+did not call it). It existed only to pick a ban weight. `Drop` and
+`DropBadPow` stay for CS-Q2's action mapping.
+Falsifier: `rg -n heavier_score rust src tests` returns nothing.
 
 **4. CS-Q12's hardcoded values.**
 

@@ -403,11 +403,24 @@ namespace
     }
   };
 
-  //! Whether the process ban list covers `host`.
-  bool host_is_banned(const char *host)
+  //! Answers from `shekyl_ban_remaining_ns`. Only `none` means the host
+  //! is not banned. A deadline and a permanent ban cover it. `not_an_address`
+  //! means the text was not a host, so it is not evidence of a clean list.
+  enum class ban_cover : int
+  {
+    not_an_address = -2,
+    none = 0,
+    deadline = 1,
+    permanent = 2,
+  };
+
+  //! The host this test named is not on the process ban list.
+  void expect_host_not_banned(const char *host, unsigned step, const char *step_name)
   {
     std::uint64_t left = 0;
-    return shekyl_ban_remaining_ns(host, &left) > 0;
+    const int answer = shekyl_ban_remaining_ns(host, &left);
+    EXPECT_EQ(static_cast<int>(ban_cover::none), answer)
+        << host << " after " << step_name << " " << step << " answered " << answer;
   }
 
   const char *const PEER_HOST = "203.0.113.7";
@@ -434,7 +447,10 @@ TEST(node_server, a_peer_naming_another_network_is_dropped_every_time_and_never_
   cprotocol.set_p2p_endpoint(&server);
 
   nodetool::COMMAND_HANDSHAKE_T<cryptonote::CORE_SYNC_DATA>::request request{};
-  request.node_data.network_id = boost::uuids::uuid{{1}};
+  // The server is constructed, not `init()`'d, so its network id is the
+  // nil uuid the constructor writes. This is another network.
+  const boost::uuids::uuid another_network{{1}};
+  request.node_data.network_id = another_network;
   epee::byte_slice body;
   ASSERT_TRUE(epee::serialization::store_t_to_binary(request, body));
 
@@ -446,8 +462,8 @@ TEST(node_server, a_peer_naming_another_network_is_dropped_every_time_and_never_
     epee::byte_stream reply;
     levin.invoke(nodetool::COMMAND_HANDSHAKE_T<cryptonote::CORE_SYNC_DATA>::ID,
         epee::to_span(body), reply, context);
-    ASSERT_EQ(attempt, server.dropped.size()) << "try " << unsigned{attempt} << " was dropped";
-    EXPECT_FALSE(host_is_banned(PEER_HOST)) << "banned after try " << unsigned{attempt};
+    ASSERT_EQ(attempt, server.dropped.size()) << "try " << unsigned{attempt} << ": drop count mismatch";
+    expect_host_not_banned(PEER_HOST, attempt, "try");
   }
 }
 
@@ -483,8 +499,8 @@ TEST(cryptonote_protocol_handler, a_peer_claiming_a_lower_height_is_dropped_ever
       lower.current_height = claim;
       cprotocol.process_payload_sync_data(lower, context, false);
     }
-    ASSERT_EQ(session, server.dropped.size()) << "session " << unsigned{session} << " was dropped";
-    EXPECT_FALSE(host_is_banned(PEER_HOST)) << "banned after session " << unsigned{session};
+    ASSERT_EQ(session, server.dropped.size()) << "session " << unsigned{session} << ": drop count mismatch";
+    expect_host_not_banned(PEER_HOST, session, "session");
   }
 }
 

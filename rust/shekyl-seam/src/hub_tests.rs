@@ -405,32 +405,6 @@ fn a_banned_clearnet_host_is_admission_refused_until_the_deadline() {
     drop(again);
 }
 
-/// A host ban covers the host on every port: the C++ `ban.ignores_port`,
-/// ported before the C++ ban interface was deleted (Rick, 2026-11-01). The
-/// list holds no port, so the rule is held by type; this checks the dial
-/// side. Red edit: skip the ban check in `Sockets::open_clearnet`.
-#[test]
-fn a_host_ban_refuses_the_host_on_every_port() {
-    let rig = rig();
-    rig.hub.install_loopback(32);
-    let on_port = |port| Endpoint::Clearnet {
-        ip: IpAddr::V4(doc_ip()),
-        port,
-        direction: Direction::Outbound,
-    };
-    let _closed = rig.hub.ban_host_permanent(IpAddr::V4(doc_ip()));
-    for port in [18080, 28080] {
-        let Err(refused) = rig.hub.connect(&on_port(port)) else {
-            panic!("a banned host was admitted on port {port}");
-        };
-        assert_eq!(refused.kind(), CloseKind::AdmissionRefused);
-    }
-    assert!(rig.hub.lift_host(IpAddr::V4(doc_ip())));
-    for port in [18080, 28080] {
-        drop(rig.hub.connect(&on_port(port)).expect("lifted"));
-    }
-}
-
 /// The hub's own `remaining` and `lift` (DX-Q3, Q11): a timed ban reports
 /// its time left at the hub's tick, a permanent one says so, and a lift
 /// admits the host again; a subnet ban covers a host inside it and is

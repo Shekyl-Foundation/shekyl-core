@@ -123,7 +123,7 @@ pub extern "C" fn shekyl_block_ingest_is_rejected(outcome: u8) -> bool {
     BlockIngest::from_byte(outcome).is_rejected()
 }
 
-/// Should a drop (if any) carry the heavier PoW-DoS score?
+/// Whether this outcome is the bad-PoW refusal.
 #[no_mangle]
 pub extern "C" fn shekyl_block_ingest_is_bad_pow(outcome: u8) -> bool {
     BlockIngest::from_byte(outcome).is_bad_pow()
@@ -254,11 +254,6 @@ pub extern "C" fn shekyl_block_announce_drop(action: u8) -> bool {
 }
 
 #[no_mangle]
-pub extern "C" fn shekyl_block_announce_heavier_score(action: u8) -> bool {
-    BlockAnnounceAction::from_byte(action).heavier_score()
-}
-
-#[no_mangle]
 pub extern "C" fn shekyl_block_announce_our_failure(action: u8) -> bool {
     BlockAnnounceAction::from_byte(action).our_failure()
 }
@@ -289,11 +284,6 @@ pub extern "C" fn shekyl_block_sync_drop(action: u8) -> bool {
 }
 
 #[no_mangle]
-pub extern "C" fn shekyl_block_sync_heavier_score(action: u8) -> bool {
-    BlockSyncAction::from_byte(action).heavier_score()
-}
-
-#[no_mangle]
 pub extern "C" fn shekyl_block_sync_orphan_resync(action: u8) -> bool {
     BlockSyncAction::from_byte(action).orphan_resync()
 }
@@ -302,14 +292,13 @@ pub extern "C" fn shekyl_block_sync_orphan_resync(action: u8) -> bool {
 mod tests {
     use super::{
         shekyl_block_announce_action, shekyl_block_announce_drop,
-        shekyl_block_announce_heavier_score, shekyl_block_announce_our_failure,
-        shekyl_block_announce_re_request_txs, shekyl_block_announce_relay,
-        shekyl_block_announce_request_history, shekyl_block_ingest_already_exists,
-        shekyl_block_ingest_is_added, shekyl_block_ingest_is_bad_pow,
-        shekyl_block_ingest_is_orphaned, shekyl_block_ingest_is_rejected,
-        shekyl_block_ingest_missing_txs, shekyl_block_ingest_record,
-        shekyl_block_ingest_reject_form, shekyl_block_ingest_reject_internal,
-        shekyl_block_sync_action, shekyl_block_sync_drop, shekyl_block_sync_heavier_score,
+        shekyl_block_announce_our_failure, shekyl_block_announce_re_request_txs,
+        shekyl_block_announce_relay, shekyl_block_announce_request_history,
+        shekyl_block_ingest_already_exists, shekyl_block_ingest_is_added,
+        shekyl_block_ingest_is_bad_pow, shekyl_block_ingest_is_orphaned,
+        shekyl_block_ingest_is_rejected, shekyl_block_ingest_missing_txs,
+        shekyl_block_ingest_record, shekyl_block_ingest_reject_form,
+        shekyl_block_ingest_reject_internal, shekyl_block_sync_action, shekyl_block_sync_drop,
         shekyl_block_sync_orphan_resync, shekyl_drop_verdict_classify, shekyl_drop_verdict_combine,
         shekyl_drop_verdict_is_internal_failure, shekyl_drop_verdict_severs,
     };
@@ -483,10 +472,6 @@ mod tests {
                 );
                 assert_eq!(shekyl_block_announce_drop(action), expected.drop_peer());
                 assert_eq!(
-                    shekyl_block_announce_heavier_score(action),
-                    expected.heavier_score()
-                );
-                assert_eq!(
                     shekyl_block_announce_our_failure(action),
                     expected.our_failure()
                 );
@@ -503,10 +488,6 @@ mod tests {
                 let sync = shekyl_block_sync_action(outcome, drop);
                 assert_eq!(sync, expected_sync.to_byte());
                 assert_eq!(shekyl_block_sync_drop(sync), expected_sync.drop_peer());
-                assert_eq!(
-                    shekyl_block_sync_heavier_score(sync),
-                    expected_sync.heavier_score()
-                );
                 assert_eq!(
                     shekyl_block_sync_orphan_resync(sync),
                     expected_sync.orphan_resync()
@@ -530,9 +511,6 @@ mod tests {
             .filter(|h| *h)
             .count();
             assert!(hits <= 1, "announce byte {byte} hit {hits}");
-            if shekyl_block_announce_heavier_score(byte) {
-                assert!(shekyl_block_announce_drop(byte));
-            }
             if byte == 0 || byte >= 7 {
                 assert_eq!(announce, BlockAnnounceAction::None);
                 assert_eq!(hits, 0);
@@ -541,7 +519,6 @@ mod tests {
             if byte >= 4 {
                 assert!(!shekyl_block_sync_drop(byte));
                 assert!(!shekyl_block_sync_orphan_resync(byte));
-                assert!(!shekyl_block_sync_heavier_score(byte));
             }
         }
     }

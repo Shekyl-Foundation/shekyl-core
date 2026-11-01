@@ -99,11 +99,6 @@ namespace cryptonote
     return shekyl_block_announce_drop(action);
   }
 
-  inline bool block_announce_heavier_score(uint8_t action)
-  {
-    return shekyl_block_announce_heavier_score(action);
-  }
-
   inline bool block_announce_our_failure(uint8_t action)
   {
     return shekyl_block_announce_our_failure(action);
@@ -128,11 +123,6 @@ namespace cryptonote
   inline bool block_sync_drop(uint8_t action)
   {
     return shekyl_block_sync_drop(action);
-  }
-
-  inline bool block_sync_heavier_score(uint8_t action)
-  {
-    return shekyl_block_sync_heavier_score(action);
   }
 
   inline bool block_sync_orphan_resync(uint8_t action)

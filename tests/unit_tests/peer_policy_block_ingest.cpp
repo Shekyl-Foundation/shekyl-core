@@ -116,8 +116,6 @@ TEST(peer_policy_block_ingest, announce_action_predicates_are_exclusive_over_the
         + (shekyl_block_announce_relay(byte) ? 1 : 0)
         + (shekyl_block_announce_request_history(byte) ? 1 : 0);
     EXPECT_LE(hits, 1) << "byte " << static_cast<int>(byte);
-    if (shekyl_block_announce_heavier_score(byte))
-      EXPECT_TRUE(shekyl_block_announce_drop(byte));
   }
 }
 

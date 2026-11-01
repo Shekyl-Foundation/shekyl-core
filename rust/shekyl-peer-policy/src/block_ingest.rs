@@ -79,12 +79,10 @@ pub enum BlockIngest {
     /// [`DropVerdict`] on the same context, not this arm.
     Rejected = 7,
 
-    /// Refused because the PoW does not meet the target. Same drop
-    /// question as [`Self::Rejected`]. The extra score weight it once
-    /// selected has had no effect since the automatic ban was deleted
-    /// (Rick, 2026-11-01); the weight's arm goes with CS-Q5.
-    /// Unrepresentable together with [`Self::MissingTxs`]: PoW runs
-    /// first.
+    /// Refused because the PoW does not meet the target. The drop
+    /// question is the same as [`Self::Rejected`]. The action arm is
+    /// distinct so a later close cause can name PoW. Unrepresentable
+    /// together with [`Self::MissingTxs`]: PoW runs first.
     RejectedBadPow = 8,
 }
 
@@ -146,7 +144,7 @@ impl BlockIngest {
         matches!(self, Self::Rejected | Self::RejectedBadPow)
     }
 
-    /// Should a drop (if any) carry the heavier PoW-DoS score?
+    /// Whether this outcome is the bad-PoW refusal.
     #[must_use]
     pub const fn is_bad_pow(self) -> bool {
         matches!(self, Self::RejectedBadPow)

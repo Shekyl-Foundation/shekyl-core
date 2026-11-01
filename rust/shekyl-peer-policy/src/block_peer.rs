@@ -24,9 +24,12 @@ pub enum BlockAnnounceAction {
     None = 0,
     /// Fluffy payload incomplete. Re-request by index; do not drop.
     ReRequestMissingTxs = 1,
-    /// Attributable drop, ordinary score.
+    /// Sever the session. The refusal is not bad PoW.
     Drop = 2,
-    /// Attributable drop, heavier PoW-DoS score.
+    /// Sever the session because the PoW missed the target.
+    ///
+    /// Separate from [`Self::Drop`] so a later close cause can name
+    /// PoW. Neither arm is a score.
     DropBadPow = 3,
     /// `handle_*` returned false without a severing drop: our failure.
     OurFailure = 4,
@@ -100,11 +103,6 @@ impl BlockAnnounceAction {
     }
 
     #[must_use]
-    pub const fn heavier_score(self) -> bool {
-        matches!(self, Self::DropBadPow)
-    }
-
-    #[must_use]
     pub const fn our_failure(self) -> bool {
         matches!(self, Self::OurFailure)
     }
@@ -124,13 +122,17 @@ impl BlockAnnounceAction {
 ///
 /// There is no compact-tx re-request here. Missing-txs without a
 /// severing drop continues (the next block typically orphans and takes
-/// the re-sync arm). A severing drop still severs: sync has no "finish
-/// fetching this block" alternative.
+/// the re-sync arm). A severing drop still severs: sync has no way to
+/// finish fetching this block. `DropBadPow` is that drop when the
+/// refusal is bad PoW, so a later close cause can name it. Neither
+/// arm is a score.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum BlockSyncAction {
     Continue = 0,
+    /// Sever the session. The refusal is not bad PoW.
     Drop = 1,
+    /// Sever the session because the PoW missed the target.
     DropBadPow = 2,
     OrphanResync = 3,
 }
@@ -169,11 +171,6 @@ impl BlockSyncAction {
     #[must_use]
     pub const fn drop_peer(self) -> bool {
         matches!(self, Self::Drop | Self::DropBadPow)
-    }
-
-    #[must_use]
-    pub const fn heavier_score(self) -> bool {
-        matches!(self, Self::DropBadPow)
     }
 
     #[must_use]
@@ -226,7 +223,7 @@ mod tests {
                 let action = BlockAnnounceAction::from_ingest(outcome, drop, true);
                 assert_eq!(action.drop_peer(), drop.severs(), "{outcome:?} {drop:?}");
                 assert_eq!(
-                    action.heavier_score(),
+                    action == BlockAnnounceAction::DropBadPow,
                     drop.severs() && outcome.is_bad_pow(),
                     "{outcome:?} {drop:?}"
                 );
