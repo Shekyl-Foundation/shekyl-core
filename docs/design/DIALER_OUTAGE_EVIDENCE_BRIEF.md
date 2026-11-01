@@ -86,7 +86,7 @@ As data, beside the dial profile:
    - none.
    - Proposed for Tor: a stream opened during the attempt.
    - For clearnet: the wargame in §5 decides it.
-3. ~~**Its clearing rule**~~ — **amended (Rick, 2026-10-31): clearing is the judge's behaviour, not a declaration.** The first corroborating event clears the excused cooldowns of addresses with no counted failure. *Rejected (rule 21):* a per-connector clearing rule; each connector's input is its corroboration declaration. *Reopen when* a connector shows signs of life while its dials still cannot succeed, so the first event must not clear. *Records-was: "what restores addresses that cooled on uncorroborated failures once the link is shown working. Proposed: the first corroborating event clears them."*
+3. **Clearing is the judge's behaviour, not a declaration (Rick, 2026-10-31):** the first corroborating event clears the excused cooldowns of addresses with no counted failure. A per-connector clearing rule is rejected under rule 21 (`DIALER_OUTAGE_EVIDENCE.md` §9, with its reopen criterion).
 4. **Its backoff values:** what the profile already has (retries, waits, ladder steps and cap, window). Each value says what it means for this connector's failures.
 
 ### 4.3 What the judge guarantees, for every connector
@@ -123,16 +123,15 @@ These are invariants. Each is tested against every connector's declarations, not
 2. **The same block, with the link shown working on both sides of a failure:** a sign of life within δ before the failure (another attempt's stream opening, or a byte received on a counted session) **and** one within δ after it. The failing white is demoted. With life on one side only, it is excused.
 3. **After the block, the first corroborating event:** addresses with no counted failure that were excused during the block are drawable at once; addresses with counted failures keep their rung.
 
-*Records-was (to 2026-10-31, amended on #1229's review to the ruled bracket, `OE-D5`, and hold the rung, `OE-D6`): test 1 "cools at the first step"; test 2 "one concurrent dial opens a stream mid-attempt: the failing white is demoted", which supplies neither the after-failure sign of life nor necessarily the before-failure one; test 3 "addresses cooled during the block are drawable at once".*
 4. **A Destination failure with no corroboration:** it still counts against the address (a refusal is never excused as an outage).
 5. **A Local failure:** never counts against the address, on either connector.
 6. **Boot with the network down:** no demotion, no climb.
 7. **The probe never corroborates.**
-8. **Every invariant in 4.3, run against each connector's declarations.** A connector cannot leave a failure unmapped: each observation it can make is a variant its stamping matches totally into a `DialFailure` (the judge's own type, `DIALER_OUTAGE_EVIDENCE.md` §2.2), so an unmapped one does not compile; a test pins every row. *Records-was: "a test that a cause with no declared evidence kind fails the build", which the type now guarantees.*
+8. **Every invariant in 4.3, run against each connector's declarations.** A connector cannot leave a failure unmapped: each observation it can make is a variant its stamping matches totally into a `DialFailure` (the judge's own type, `DIALER_OUTAGE_EVIDENCE.md` §2.2), so an unmapped one does not compile; a test pins every row.
 
 ## 7. Live (Pi; claim it in the ledger after the Tor soak's claim ends, about 2026-11-07 06:17Z)
 
-Repeat the Tor lane's blackhole case (10 minutes of silent drops while running) and the refuse case. Add a clearnet blackhole. **Added 2026-10-31 (Rick):**
+Repeat the Tor lane's blackhole case (10 minutes of silent drops while running) and the refuse case. Add a clearnet blackhole, and:
 - blackholes of 10, 20 and 30 s;
 - pulsed loss, 25 s down and 15 s up, for ten minutes;
 - both connectors, counting white demotions;
@@ -145,7 +144,7 @@ Leave in-flight Tor attempts to run (TSR-Q14: Tor retries inside its own window)
 - recovery after that blackhole within the refuse case's order of magnitude;
 - an unchanged eclipse-share result: the in-flight bound's 90 % gray test, under the new judge.
 
-**Measured, not gated:** the 10, 20 and 30 s blackholes and the pulsed-loss run measure the bracket's residual (`DIALER_OUTAGE_EVIDENCE.md` §3.3): a failure inside an outage shorter than about 2δ (≈ 30 s) is bracketed by signs of life on both sides and counts by design, so these can demote white with a correct judge. Their white demotions and Tor's unblock-to-first-open time are recorded; **their acceptance thresholds are Rick's to set** from the readings. *Records-was (2026-10-31, split on #1229's review): every case under "no white demotion in any case", which the ruled residual contradicts for the short and pulsed runs.*
+**Measured, not gated:** the 10, 20 and 30 s blackholes and the pulsed-loss run measure the bracket's residual (`DIALER_OUTAGE_EVIDENCE.md` §3.3): a failure inside an outage shorter than about 2δ (≈ 30 s) is bracketed by signs of life on both sides and counts by design, so these can demote white with a correct judge. Their white demotions and Tor's unblock-to-first-open time are recorded; **their acceptance thresholds are Rick's to set** from the readings.
 
 ## Out of scope
 
