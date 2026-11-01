@@ -606,6 +606,8 @@ stale_through = [
   { through = "16698c94aa", note = "One linger task for the connector is cloned into every accept loop, in place of a task per loop. A refused accept still shuts its write side and reads until one flight arrives or the handshake span passes. An admitted connection's dial, handshake and gap do the same I/O. Not re-measured." },
   { through = "ab1fb2bc1a", note = "The in-memory loopback harness reserves its clearnet row (the ban, the ceilings, an id) and spends no accept-rate token. The listener's accept still passes the gate before a socket is reserved. An admitted connection's dial, handshake and gap do the same I/O. Not re-measured." },
   { through = "30cdb22bf9", note = "The Tor supervisor's directory check (#1232): a new inbound cause, DescriptorNotFound, in link.rs beside the two the link already carries, set after a probe's check. No clearnet code path changes; dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "482e42e014", note = "Tests only, ported from the deleted C++ ban tests; admitted I/O unchanged." },
+  { through = "d57f15525c", note = "Tests and the module doc only: the ban tests are split and the doc names the operator as the list's only writer; admitted I/O unchanged." },
 ]
 
 [[constant]]
@@ -714,6 +716,8 @@ cleared = [
   { through = "b80d43d2fd", reason = "The accept gate returns which bucket could not pay, and the socket table counts accept refusals; the clearnet linger figure moves beside linger_cap. Tor's accept builds no linger. The Tor dial, the gap and the shutdown wait do the same I/O, so the 2026-10-14 capture still prices this tree." },
   { through = "ab1fb2bc1a", reason = "The loopback harness reserves a clearnet row and spends no accept-rate token. Tor's accept passes no gate. The Tor dial, the gap and the shutdown wait do the same I/O, so the 2026-10-14 capture still prices this tree." },
   { through = "30cdb22bf9", reason = "The Tor supervisor's directory check (#1232): a new inbound cause, DescriptorNotFound, in link.rs beside the two the link already carries, set after a probe's check. The dial, the gap, the shutdown wait and their I/O are unchanged, so the capture still prices this tree." },
+  { through = "482e42e014", reason = "Tests only, ported from the deleted C++ ban tests; admitted I/O unchanged." },
+  { through = "d57f15525c", reason = "Tests and the module doc only: the ban tests are split and the doc names the operator as the list's only writer; admitted I/O unchanged." },
 ]
 
 [[constant]]

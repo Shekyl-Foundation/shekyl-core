@@ -60,6 +60,10 @@ until slice 4".*
 
 **UNFREEZE (Rick, 2026-10-19):** src/p2p/net_node.h — with the above: the `post_each` and `for_connection` declarations take a callback of the connection alone; the connection's `support_flags`, the zone config's `m_support_flags`, the 1007 handler's map entry and the two support-flags declarations are deleted.
 
+**UNFREEZE (Rick, 2026-11-01):** src/cryptonote_protocol/cryptonote_protocol_handler.inl — the score arguments the deleted automatic ban read are deleted (#1250): every drop site calls `drop_connection(context, flush_all_spans)` in place of `drop_connection(context, add_fail, flush_all_spans)` or `drop_connection_with_score(context, score, flush_all_spans)`, the scored overload is deleted, and the drop's debug line no longer prints a score. No drop site is added or removed.
+
+**UNFREEZE (Rick, 2026-11-01):** src/cryptonote_protocol/cryptonote_protocol_handler.h — `drop_connection` is declared as `(context, flush_all_spans)` with its definition, and `drop_connection_with_score`'s declaration is deleted (#1250).
+
 **UPDATE 2026-10-09 (Rick):** `COMMAND_HANDSHAKE` carries no address
 field on any connector (the handshake-address ruling below, which
 replaces "The address we announce"); `disclose_count` is the protocol
@@ -536,11 +540,9 @@ One report. The dialer emits it on every end path. Slice 1's `apply`
 is the only writer of gray and white, and the match is total. The
 lists read only the cause's marks; the dialer holds no failed-address
 memory (*records-was:* it was the memory's only writer; deleted
-2026-10-24, "Failed-address memory" below). The score owner subscribes to `PeerlistRefused` and
-writes neither store. The handshake task does not call
-`add_host_fail`. That function stays: inbound and the open
-`cryptonote_protocol_handler` row still use it. It is in flight, not
-dead.
+2026-10-24, "Failed-address memory" below). No outcome subscribes a
+score. The automatic ban, and `add_host_fail`, were deleted
+(2026-11-01): no peer can make a ban.
 
 ```rust
 enum DialOutcome {
@@ -552,14 +554,14 @@ enum DialOutcome {
 }
 ```
 
-| Variant | When the dialer emits it | List (`apply`) | Failed-test count (the cooldown ladder; *records-was* the failed-address memory, deleted 2026-10-24) | Score |
-| --- | --- | --- | --- | --- |
-| `DialFailed` | The channel never reached a well-formed response, or `network_id` is not ours (`net_node.inl:1370`). The cause is the one the connector closed with, carrying its marks; the test's last attempt reports, after any retries | An outstanding gray draw cools unless the cause proves misbehaviour, which drops it (2026-10-24). A white address is known-working (2026-10-26): it moves to gray and cools at the first rung, or is dropped on proof; in the quiet stretch it stays white. *Records-was: dropped whatever the cause (Rick, 2026-10-16); to 2026-10-26, a white address stayed white* | Counted, and the address cools for `cooldown_nanos(count)`, unless the cause proves misbehaviour. A `network_id` mismatch is `LevinHandshakeRejected`, stamped proving on Tor and nothing on clearnet. *Records-was: the memory, Tor only (R2), written where `implicates_address` held; before that on every connector* | No subscription. The mismatch does not call `add_host_fail` |
-| `PeerlistRefused` | `handle_remote_peerlist` refuses (`net_node.inl:1377`). Same close as `LevinHandshakeRejected`, and the variant carries that cause (2026-10-24) | Same as `DialFailed`: on Tor the cause is stamped proving and the address is dropped; on clearnet it cools. *Records-was: dropped whatever the cause (Rick, 2026-10-16)* | Same as `DialFailed` | The score owner subscribes. A peerlist this node refuses is the event the score records |
-| `PayloadRefused` | A kept session closed with `CloseKind::SessionRefused`: the payload owner declined a delivery after `SessionAccepted` (*records-was:* the strand refused the sync payload before white was written) | White is unchanged. An outstanding draw that was never confirmed returns to drawable gray | Not counted. The peer answered | None |
+| Variant | When the dialer emits it | List (`apply`) | Failed-test count (the cooldown ladder; *records-was* the failed-address memory, deleted 2026-10-24) |
+| --- | --- | --- | --- |
+| `DialFailed` | The channel never reached a well-formed response, or `network_id` is not ours (`net_node.inl:1370`). The cause is the one the connector closed with, carrying its marks; the test's last attempt reports, after any retries | An outstanding gray draw cools unless the cause proves misbehaviour, which drops it (2026-10-24). A white address is known-working (2026-10-26): it moves to gray and cools at the first rung, or is dropped on proof; in the quiet stretch it stays white. *Records-was: dropped whatever the cause (Rick, 2026-10-16); to 2026-10-26, a white address stayed white* | Counted, and the address cools for `cooldown_nanos(count)`, unless the cause proves misbehaviour. A `network_id` mismatch is `LevinHandshakeRejected`, stamped proving on Tor and nothing on clearnet. *Records-was: the memory, Tor only (R2), written where `implicates_address` held; before that on every connector* |
+| `PeerlistRefused` | `handle_remote_peerlist` refuses (`net_node.inl:1377`). Same close as `LevinHandshakeRejected`, and the variant carries that cause (2026-10-24) | Same as `DialFailed`: on Tor the cause is stamped proving and the address is dropped; on clearnet it cools. *Records-was: dropped whatever the cause (Rick, 2026-10-16)* | Same as `DialFailed` |
+| `PayloadRefused` | A kept session closed with `CloseKind::SessionRefused`: the payload owner declined a delivery after `SessionAccepted` (*records-was:* the strand refused the sync payload before white was written) | White is unchanged. An outstanding draw that was never confirmed returns to drawable gray | Not counted. The peer answered |
 | *`HarvestDone` — DELETED (Rick, 2026-10-11; no crate symbol)* | *Records-was: a harvest handshake completed, the session closed, no `adopt`.* Absorbed into `Confirmed`: a confirm-and-close dial learns the peer's sample as a harvest did and writes white. The variant, its `address()` arm, its `apply` arm and its test are gone. *Records-was: left for PR-3 as "more than one line"* | — | — |
-| `Confirmed` | Aim `Confirm`. Rust's handshake checks passed. The owner closed the unadopted channel. No adopt, no post, no row (*records-was:* the strand accepted and the owner closed in that turn) | An outstanding gray draw moves to white and `last_observed` is set. No session remains. Anything else writes nothing | Cleared for that address | None |
-| `SessionAccepted` | Aim `Keep`. Rust's handshake checks passed and the session was not already closed. Recorded in one lists-lock section before the handshake notification (*records-was:* the strand accepted and the session stays) | An outstanding gray draw moves to white and `last_observed` is set. An address that is already white, on a session this node opened, moves the clock. Anything else writes nothing | Cleared for that address | None |
+| `Confirmed` | Aim `Confirm`. Rust's handshake checks passed. The owner closed the unadopted channel. No adopt, no post, no row (*records-was:* the strand accepted and the owner closed in that turn) | An outstanding gray draw moves to white and `last_observed` is set. No session remains. Anything else writes nothing | Cleared for that address |
+| `SessionAccepted` | Aim `Keep`. Rust's handshake checks passed and the session was not already closed. Recorded in one lists-lock section before the handshake notification (*records-was:* the strand accepted and the session stays) | An outstanding gray draw moves to white and `last_observed` is set. An address that is already white, on a session this node opened, moves the clock. Anything else writes nothing | Cleared for that address |
 
 *Records-was: slice 1's `handshake_confirmed` and `draw_failed` were
 three endings sharing one name. Neither spelling is in Rust. They are
@@ -1200,8 +1202,9 @@ two dial sites (`:1677`, `:1735`). Inbound is `handle_handshake`
 (`:2752`), which does not call it. Once those calls are gone the
 function has no caller, so the definition and the declaration go with
 them. That is dead, not in flight. `handle_handshake`,
-`detect_self_handshake`, `try_get_support_flags`, and `add_host_fail`
-keep the callers named below.
+`detect_self_handshake` and `try_get_support_flags` keep the callers
+named below; `add_host_fail` was deleted with the automatic ban
+(2026-11-01).
 
 | What | Where, at `f317d979c4` | `rg` when it has landed |
 | --- | --- | --- |

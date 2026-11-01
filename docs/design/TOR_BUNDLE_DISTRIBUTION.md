@@ -38,7 +38,7 @@ the Foundation's hosts showed what that costs once Tor is not optional.
 1. **No published artifact carries tor.** The release job copies four binaries
    into the package (`.github/workflows/gitian.yml:132`) and never mentions tor.
 2. **A node with no pinned tor runs clearnet-only and says so at a level nobody
-   reads.** The message is `MINFO` (`src/p2p/net_node.inl:869`), hidden at the
+   reads.** The message is `MINFO` (`src/p2p/net_node.inl` line 869 at `81a16fbae4`), hidden at the
    default log level. That is PWD-E7's ruled "calm skip"
    (`rust/shekyl-tor-control-daemon/src/blocking.rs` line 65 at `e0fb3eaa8`;
    the file is since deleted), not a defect in the code.

@@ -151,216 +151,6 @@ namespace nodetool
     return false;
   }
   //-----------------------------------------------------------------------------------
-  namespace
-  {
-    bool ban_duration_ns(time_t seconds, std::uint64_t* out)
-    {
-      if (seconds <= 0)
-        return false;
-      const auto whole = static_cast<std::uint64_t>(seconds);
-      if (whole > std::numeric_limits<std::uint64_t>::max() / 1000000000ull)
-        return false;
-      *out = whole * 1000000000ull;
-      return true;
-    }
-
-    time_t remaining_seconds(std::uint64_t ns)
-    {
-      const std::uint64_t sec = (ns + 999999999ull) / 1000000000ull;
-      if (sec > static_cast<std::uint64_t>(std::numeric_limits<time_t>::max()))
-        return std::numeric_limits<time_t>::max();
-      return static_cast<time_t>(sec);
-    }
-
-    std::vector<shekyl_ban_view> copy_bans()
-    {
-      std::vector<shekyl_ban_view> views;
-      for (int attempt = 0; attempt < 3; ++attempt)
-      {
-        std::size_t count = 0;
-        if (shekyl_bans_copy(nullptr, 0, &count) != 0 && count == 0)
-          return {};
-        views.resize(count);
-        if (count == 0)
-          return views;
-        std::size_t again = 0;
-        shekyl_bans_copy(views.data(), views.size(), &again);
-        if (again <= views.size())
-        {
-          views.resize(again);
-          return views;
-        }
-      }
-      return {};
-    }
-  }
-
-  template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::is_remote_host_allowed(const epee::net_utils::network_address &address, time_t *t)
-  {
-    if (!address.is_blockable())
-      return true;
-    const std::string host = address.host_str();
-    std::uint64_t left = 0;
-    const int rc = shekyl_ban_remaining_ns(host.c_str(), &left);
-    if (rc == 2)
-    {
-      if (t)
-        *t = 0;
-      return false;
-    }
-    if (rc != 1)
-      return true;
-    if (t)
-      *t = remaining_seconds(left);
-    return false;
-  }
-  //-----------------------------------------------------------------------------------
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::block_host(epee::net_utils::network_address addr, time_t seconds, bool /*add_only*/)
-  {
-    if(!addr.is_blockable())
-      return false;
-
-    std::uint64_t duration_ns = 0;
-    if (!ban_duration_ns(seconds, &duration_ns))
-      return false;
-    const std::string host_str = addr.host_str();
-    // The list closes the sockets it drops. This does not walk the Levin
-    // registry. A shorter duration does not shorten a ban already stored.
-    if (shekyl_ban_for(host_str.c_str(), 0, duration_ns) != 0)
-      return false;
-
-    MCLOG_CYAN(el::Level::Info, "global", "Host " << host_str << " blocked.");
-    return true;
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::unblock_host(const epee::net_utils::network_address &address)
-  {
-    const std::string host_str = address.host_str();
-    if (shekyl_ban_lift(host_str.c_str(), 0) != 0)
-      return false;
-    MCLOG_CYAN(el::Level::Info, "global", "Host " << host_str << " unblocked.");
-    return true;
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::block_subnet(const epee::net_utils::ipv4_network_subnet &subnet, time_t seconds)
-  {
-    std::uint64_t duration_ns = 0;
-    if (!ban_duration_ns(seconds, &duration_ns))
-      return false;
-    const std::string host_str = subnet.host_str();
-    if (shekyl_ban_for(host_str.c_str(), 1, duration_ns) != 0)
-      return false;
-
-    MCLOG_CYAN(el::Level::Info, "global", "Subnet " << host_str << " blocked.");
-    return true;
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::unblock_subnet(const epee::net_utils::ipv4_network_subnet &subnet)
-  {
-    const std::string host_str = subnet.host_str();
-    if (shekyl_ban_lift(host_str.c_str(), 1) != 0)
-      return false;
-    MCLOG_CYAN(el::Level::Info, "global", "Subnet " << host_str << " unblocked.");
-    return true;
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::block_host_permanent(epee::net_utils::network_address addr)
-  {
-    if (!addr.is_blockable())
-      return false;
-    const std::string host_str = addr.host_str();
-    if (shekyl_ban_permanent(host_str.c_str(), 0) != 0)
-      return false;
-    MCLOG_CYAN(el::Level::Info, "global", "Host " << host_str << " blocked.");
-    return true;
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::block_subnet_permanent(const epee::net_utils::ipv4_network_subnet &subnet)
-  {
-    const std::string host_str = subnet.host_str();
-    if (shekyl_ban_permanent(host_str.c_str(), 1) != 0)
-      return false;
-    MCLOG_CYAN(el::Level::Info, "global", "Subnet " << host_str << " blocked.");
-    return true;
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::host_ban_is_permanent(const epee::net_utils::network_address &address) const
-  {
-    if (!address.is_blockable())
-      return false;
-    std::uint64_t left = 0;
-    return shekyl_ban_remaining_ns(address.host_str().c_str(), &left) == 2;
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  std::vector<shekyl_ban_view> node_server<t_payload_net_handler>::ban_list()
-  {
-    return copy_bans();
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::is_host_blocked(const epee::net_utils::network_address &address, time_t *seconds)
-  {
-    return !is_remote_host_allowed(address, seconds);
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  std::map<std::string, time_t> node_server<t_payload_net_handler>::get_blocked_hosts()
-  {
-    std::map<std::string, time_t> hosts;
-    for (const auto& row : copy_bans())
-    {
-      if (row.kind != 1)
-        continue;
-      hosts.emplace(row.text, remaining_seconds(row.remaining_ns));
-    }
-    return hosts;
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  std::map<epee::net_utils::ipv4_network_subnet, time_t> node_server<t_payload_net_handler>::get_blocked_subnets()
-  {
-    std::map<epee::net_utils::ipv4_network_subnet, time_t> subnets;
-    for (const auto& row : copy_bans())
-    {
-      if (row.kind != 2)
-        continue;
-      const auto parsed = net::get_ipv4_subnet_address(row.text);
-      if (!parsed)
-        continue;
-      subnets.emplace(*parsed, remaining_seconds(row.remaining_ns));
-    }
-    return subnets;
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::add_host_fail(const epee::net_utils::network_address &address, unsigned int score)
-  {
-    if(!address.is_blockable())
-      return false;
-
-    CRITICAL_REGION_LOCAL(m_host_fails_score_lock);
-    uint64_t fails = m_host_fails_score[address.host_str()] += score;
-    MDEBUG("Host " << address.host_str() << " fail score=" << fails);
-    if(fails > P2P_IP_FAILS_BEFORE_BLOCK)
-    {
-      auto it = m_host_fails_score.find(address.host_str());
-      CHECK_AND_ASSERT_MES(it != m_host_fails_score.end(), false, "internal error");
-      it->second = P2P_IP_FAILS_BEFORE_BLOCK/2;
-      block_host(address);
-    }
-    return true;
-  }
-  //-----------------------------------------------------------------------------------
   //-----------------------------------------------------------------------------------
   inline bool append_net_address(
       std::vector<epee::net_utils::network_address> & seed_nodes
@@ -576,7 +366,6 @@ namespace nodetool
       {
         LOG_WARNING_CC(context, "COMMAND_TIMED_SYNC: failed to handle_remote_peerlist(...), closing connection.");
         m_network_zones.at(epee::net_utils::require_session_connector(context.m_connector)).m_net_server.get_config_object().close(context.m_connection_id );
-        add_host_fail(context.m_remote_address);
       }
       if (!m_payload_handler.process_payload_sync_data(rsp.payload_data, context, false))
       {
@@ -894,7 +683,6 @@ namespace nodetool
 
       LOG_INFO_CC(context, "WRONG NETWORK AGENT CONNECTED! id=" << arg.node_data.network_id);
       drop_connection(context);
-      add_host_fail(context.m_remote_address);
       return 1;
     }
 
@@ -902,7 +690,6 @@ namespace nodetool
     {
       LOG_WARNING_CC(context, "COMMAND_HANDSHAKE came not from incoming connection");
       drop_connection(context);
-      add_host_fail(context.m_remote_address);
       return 1;
     }
 

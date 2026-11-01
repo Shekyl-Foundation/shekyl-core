@@ -56,6 +56,10 @@ There are two different ways to capture a node, and they need different position
 
 The inbound ceiling is descriptor headroom (`InboundCeiling`, `shekyl-peer-policy`). An attacker with free hosts can fill it too, so every inbound slot is theirs as well. A per-host inbound limit doesn't bind for the same reason as step 1.
 
+### Step 5: a peer could get a host banned (deleted 2026-11-01)
+
+Until #1250, the C++ scored peers and banned them, on clearnet hosts only. `add_host_fail` banned a host for 24 h past 10 points. It was fed by a refused timed-sync peer list, a wrong-network or outbound handshake, and the protocol handler's drops: score 5 for the chain-entry checks and for `hit_score`'s lower-height drop. Someone on the path posing as an honest peer could get that peer banned with three chain-entry violations. The ban demoted the address from white, and barred-first eviction (#1235) would then have removed it. CS-Q5 (c) had ruled this deleted (Rick, 2026-10-18), but the deletion sat in the chain-sync cutover's table. This PR deletes it with the C++ ban interface. Bans are operator configuration only (`shekyl_ban_*`, the RPC's `set_bans`).
+
 ### What it costs the attacker
 
 - **Resources:** one VPS with an IPv6 /64 and a script. No hashpower for the eclipse itself, only for a double-spend against the eclipsed node.
@@ -68,7 +72,7 @@ The inbound ceiling is descriptor headroom (`InboundCeiling`, `shekyl-peer-polic
 - **White needs our own successful test.** Nobody can write white directly.
 - **A received list is admitted or refused whole:** one foreign-connector entry, or the 25th address, refuses the whole list (D7, D-S1).
 - **The gray cap with uniform eviction,** now including cooling seats (#1185): a bound on memory, though not on composition.
-- **No misbehaviour is ever proven on clearnet.** An attacker cannot get honest addresses removed, only cooled.
+- **No misbehaviour is ever proven on clearnet, and no peer can make a ban.** A failed dial cools an address and never drops it. Only the operator bans. *Records-was: this line made the claim while the C++ automatic ban (step 5) was live.*
 
 ## 4. On-path capture (needs a position)
 
@@ -86,6 +90,7 @@ Against NN, any of these can MITM every new clearnet session. A MITM is a malici
 1. **A host is a /128.** Defining an IPv6 host as its /64 is identity, not diversity: it gives the per-host rules (draw, outbound, bans, intake, the future reconnect throttle) the meaning they already claim. This is separate from the withdrawn `/24` diversity question.
    - **Ruled for the accept-rate bound** (Rick, 2026-10-30; #1226).
    - **The other per-host rules move in this round's first PR:** the draw, outbound sessions, bans, intake and the reconnect throttle.
+   - **IPv4-mapped IPv6 is the IPv4 host** (found 2026-11-01). Only the accept gate folds `::ffff:a.b.c.d` to IPv4 (`accept_rate.rs:218`). Bans, the per-host rules and the lists compare the raw address. A listener on `[::]` is dual-stack on Linux by default, so IPv4 peers arrive mapped, and a ban on `1.2.3.0/24` does not cover them. Fold once where an address enters (the listener's accept and the list door), and delete the gate's private fold.
 2. **Intake is reset by a reconnect.** Key it by source host (the group from item 1), not by session. This is the registered reconnect throttle with its unit corrected.
 3. **The restart hands over the outbound set at gray's share.** This is in tension with the fresh-look ruling, and needs Rick. The choices:
    - keep fresh look, and rely on items 1, 2 and 4 to bound gray's composition;
