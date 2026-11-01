@@ -464,7 +464,7 @@ Marshal-tax remains qualitative; Path B stands on rule 40.
 
 | Row | Subject | Proposal: reference / floor | Why | How measured |
 | --- | --- | --- | --- | --- |
-| **PB-D1** | Adversarial block: validate, connect, commit, publish the tip | ≤ **2 s** / ≤ **10 s** | the interval is 120 s; relay and the next miner must not wait on our slowest node, and 10 s on the floor leaves more than 90 % of the interval | the block built from whichever shape in a pre-registered set costs the most to verify, the heaviest post-quantum signature kind among them, at the block weight limit |
+| **PB-D1** | Adversarial block: validate, connect, commit, publish the tip | ≤ **2 s** / ≤ **10 s** | the interval is 120 s; relay and the next miner must not wait on our slowest node, and 10 s on the floor leaves more than 90 % of the interval | the block built from whichever shape in §1.3a.7's pre-registered set costs the most to verify, the heaviest post-quantum signature kind among them, at the block weight limit |
 | **PB-D1s** | Store share of PB-D1 (connect plus commit, verification excluded) | ≤ **250 ms** / ≤ **1 s** | a store regression shows separately from a verifier regression | the same run, the writer's span timings |
 | **PB-D2** | Catch-up after a week offline (5,040 blocks at design load) to a usable tip | ≤ **15 min** / ≤ **2 h** | what a returning user feels; within the body horizon, so daemon and store work alone | the subject stops at a height, the seed advances a week, the subject resumes |
 | **PB-D2r** | Reads stay responsive during catch-up | wallet-path RPC p99 ≤ **250 ms** / ≤ **1 s** | a syncing node still answers its wallet; a writer must not starve readers | a fixed wallet-shaped RPC mix (`get_info`, header and block reads, curve-tree reads) during PB-D2 |
@@ -501,6 +501,23 @@ A full sync from genesis pulls the chain by consensus until the tip is the curre
 5. PB-S3's reference dataset (proposal: PB-R3's pruned steady-state store after a simulated year at design load, on both devices).
 6. PB-S5's growth ceiling (proposal: 2× the no-reader growth) and its reader workload, which §3.6.1 left to BENCH.
 7. Rule 2's durability question as amended on review: the storage's write-cache posture as the recorded fact, a microsecond median as the signal to verify it rather than a failure; the draft had rejected a fast median outright.
+
+**§1.3a.7 PB-D1's shape set (pre-registered; Rick, 2026-11-01)**
+
+Fixed before any run (rule 4), and never extended after a number is seen. Each shape is one block of transactions of that shape, filled to the block weight limit. PB-D1 is the block that costs the most to verify; PB-D1s is read on the same runs.
+
+| # | Shape | Why it is in the set |
+| --- | --- | --- |
+| 1 | 1-in/2-out spends | the per-transaction fixed costs (one proof and one signature set per transaction) are highest per byte in the smallest spend |
+| 2 | 8-in/2-out spends, at the input cap (`MAX_FCMP_INPUTS`) | the most membership proof and key images per transaction |
+| 3 | the multisig container at its maximum signers | the heaviest post-quantum signature kind |
+| 4 | spends at the output cap (`MAX_OUTPUTS`, 16) | the most range proof and outputs per transaction, and the most tree leaves per block |
+| 5 | emission claims | the claim's own verification path |
+| 6 | bond posts | the bond post's own verification path |
+| 7 | 8-in/2-out spends whose inputs' tree references are spread across the reference window, not all at the tip | the same verification as shape 2 with the most distinct store reads: the shape that stresses PB-D1s, the store's share |
+| 8 | the block's serve-credit bundle at its maximum record count | bundles are verified per block once SO-D12 4b lands, so their worst case belongs in the set. In the set **from the release cut where 4b lands**; its builder is 4b's, because 4b builds the bundle |
+
+The builder for shapes 1–7 is the DRS line's tooling (rule 7; the FOLLOWUPS row). It builds every transaction with the production wallet path and submits it through the subject's RPC, as the crash harness's transaction source does.
 
 ### 1.4 Non-unification (DRS-D3) — load-bearing rationale
 
