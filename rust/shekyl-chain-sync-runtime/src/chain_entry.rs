@@ -11,12 +11,12 @@
 //! responder that replaces this path. This module does not grow a second
 //! responder.
 //!
-//! [`short_history`] is the model's [`locator`](shekyl_chain_sync::locator)
+//! [`short_history`] is the model's [`locator`]
 //! over one snapshot. An empty chain locates the null hash and does not
 //! read: [`serve`](crate::serve)'s fork walk starts that locator at
 //! genesis. [`supplement`] is the 2007 chain entry: the first locator
 //! hash this chain holds, then at most
-//! [`BLOCKS_IDS_SYNCHRONIZING_DEFAULT_COUNT`](shekyl_levin::BLOCKS_IDS_SYNCHRONIZING_DEFAULT_COUNT)
+//! [`BLOCKS_IDS_SYNCHRONIZING_DEFAULT_COUNT`]
 //! blocks including that one, and the tip's cumulative difficulty.
 //!
 //! A transaction a peer asks for is not read here. Whether it is shown
@@ -192,7 +192,7 @@ pub fn short_history(store: &ChainStore) -> Result<(ChainCount, Vec<[u8; 32]>), 
 /// last hash is not this chain's genesis, or no locator hash is on the
 /// main chain. The window starts at the first hash that is, includes
 /// that block, and stops at
-/// [`BLOCKS_IDS_SYNCHRONIZING_DEFAULT_COUNT`](shekyl_levin::BLOCKS_IDS_SYNCHRONIZING_DEFAULT_COUNT)
+/// [`BLOCKS_IDS_SYNCHRONIZING_DEFAULT_COUNT`]
 /// blocks or the tip, whichever comes first. The difficulty is the tip's.
 ///
 /// # Errors
