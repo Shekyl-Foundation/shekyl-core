@@ -162,6 +162,24 @@ jobs:
       run: |
         ${{env.CCACHE_SETTINGS}}
         make depends target=${{ matrix.toolchain.host }} -j4
+    # The hardening gate on what this leg staged, in the leg's own object
+    # format (DAEMON_CONFIG_CUTOVER.md DC-Q21): ELF for the Linux and FreeBSD
+    # hosts (the host readelf parses any ELF), PE through the mingw
+    # toolchain's objdump, Mach-O through the depends-built cctools otool,
+    # named by the prefix `contrib/depends/<host>/native/bin/<host>-`. The
+    # Rust wallet binaries are not built for Windows (cmake/BuildRust.cmake),
+    # so that leg checks the daemon alone.
+    - name: binary hardening on the staged binaries
+      shell: bash
+      run: |
+        host=${{ matrix.toolchain.host }}
+        bindir=build/$host/release/bin
+        case "$host" in
+          *-w64-mingw32) bins="$bindir/shekyld.exe" ;;
+          *) bins="$bindir/shekyld $bindir/shekyl-cli $bindir/shekyl-wallet-rpc" ;;
+        esac
+        # shellcheck disable=SC2086
+        scripts/ci/check_binary_hardening.sh --tool-prefix "contrib/depends/$host/native/bin/$host-" $bins
     - uses: actions/upload-artifact@v6
       if: ${{ matrix.toolchain.host == 'x86_64-w64-mingw32' || matrix.toolchain.host == 'x86_64-apple-darwin11' || matrix.toolchain.host == 'aarch64-apple-darwin11' || matrix.toolchain.host == 'x86_64-unknown-linux-gnu' || matrix.toolchain.host == 'aarch64-linux-gnu' }}
       with:
