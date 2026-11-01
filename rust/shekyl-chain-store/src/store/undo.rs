@@ -51,7 +51,7 @@ use redb::{
 };
 
 use crate::codec::{
-    post_image, Blob, BlobKind, Canonical, CodecError, Coded, Present, UndoEntry, UndoLog, Unshaped,
+    post_image, Blob, BlobKind, Canonical, CodecError, Coded, Present, UndoEntry, UndoLog,
 };
 use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{self, UNDO_LOG};
@@ -70,13 +70,6 @@ use super::write::Poison;
 /// byte-string key accepts anything. A `Coded<V>` row is checked by
 /// `V::decode` itself — the same strict decode the read path runs.
 pub trait Restorable: Value {
-    /// Whether a table over this value type has a writer and is therefore
-    /// **created by the seal** (S-CHAIN-R amendment A2). `true` for every
-    /// shape but [`Unshaped`]: the seal set is derived from the value
-    /// shapes, never kept as a second list (`schema` module docs, *The seal
-    /// creates every table with a writer*).
-    const SEALED: bool = true;
-
     /// `Err(reason)` if `from_bytes` would panic or misread `bytes`.
     fn well_formed(bytes: &[u8]) -> Result<(), &'static str> {
         match Self::fixed_width() {
@@ -122,12 +115,10 @@ impl Restorable for () {}
 impl Restorable for LmdbHashKey {}
 impl Restorable for &[u8] {}
 
-// The four map-value shapes (`codec::shape`). A codec row is well-formed iff
-// it decodes — strictly, under its own codec, which is a stronger check
+// The three map-value shapes (`codec::shape`). A codec row is well-formed
+// iff it decodes — strictly, under its own codec, which is a stronger check
 // than the width the default performs and the one the read path makes; a
-// blob row iff its kind says so; a set-table row iff it is zero-width; an
-// unshaped table has no rows at all, so a journal entry naming one is
-// malformed by construction.
+// blob row iff its kind says so; a set-table row iff it is zero-width.
 impl Restorable for Present {}
 impl<V: Canonical + 'static> Restorable for Coded<V> {
     fn well_formed(bytes: &[u8]) -> Result<(), &'static str> {
@@ -140,14 +131,6 @@ impl<V: Canonical + 'static> Restorable for Coded<V> {
 impl<K: BlobKind> Restorable for Blob<K> {
     fn well_formed(bytes: &[u8]) -> Result<(), &'static str> {
         K::well_formed(bytes)
-    }
-}
-
-impl Restorable for Unshaped {
-    const SEALED: bool = false;
-
-    fn well_formed(_bytes: &[u8]) -> Result<(), &'static str> {
-        Err("an unshaped table has no rows")
     }
 }
 
@@ -171,16 +154,15 @@ pub(crate) enum Undone {
     /// journaled write left — its post-image digest disagrees (SI-6):
     /// something wrote around the journal, or the file is corrupt.
     PostImageMismatch,
-    /// The entry names an unshaped table, or its bytes would not decode
-    /// (SI-7).
+    /// The entry's bytes would not decode (SI-7).
     Malformed(&'static str),
 }
 
 /// A table as the catalogue dispatches to it: a replay target (from a
 /// [`TableOrdinal`] to a typed `open_table`) and, since S-CHAIN-R amendment
 /// A2, a **seal** target — created at `ChainStore::create` and required by
-/// `header::verify` iff its value shape has a writer
-/// ([`Restorable::SEALED`]). Implemented for both definition shapes;
+/// `header::verify`; every catalogued table has a writer, so every one is
+/// sealed. Implemented for both definition shapes;
 /// object-safe so the schema can hold every table in one
 /// `&[&dyn UndoTarget]`.
 pub(crate) trait UndoTarget {
@@ -195,11 +177,7 @@ pub(crate) trait UndoTarget {
     /// value, so the caller names the row.
     fn undo(&self, txn: &WriteTransaction, entry: &UndoEntry) -> Result<Undone, StoreError>;
 
-    /// Whether the seal creates this table (its value shape has a writer).
-    fn sealed(&self) -> bool;
-
-    /// Open — and so create — the table in the seal transaction. A no-op
-    /// for a table the seal does not cover.
+    /// Open — and so create — the table in the seal transaction.
     ///
     /// # Errors
     ///
@@ -245,14 +223,8 @@ where
         TableHandle::name(self)
     }
 
-    fn sealed(&self) -> bool {
-        V::SEALED
-    }
-
     fn create(&self, txn: &WriteTransaction) -> Result<(), EngineError> {
-        if V::SEALED {
-            txn.open_table(*self).map_err(EngineError::Table)?;
-        }
+        txn.open_table(*self).map_err(EngineError::Table)?;
         Ok(())
     }
 
@@ -277,13 +249,6 @@ where
     }
 
     fn undo(&self, txn: &WriteTransaction, entry: &UndoEntry) -> Result<Undone, StoreError> {
-        // An `Unshaped` table has no writer, so no journal row can name it
-        // honestly; refuse before `remove` could reach the uninhabited
-        // `from_bytes`. `well_formed` alone guards only `prior`, and an
-        // `Inserted` entry has none.
-        if !V::SEALED {
-            return Ok(Undone::Malformed("journal entry names an unshaped table"));
-        }
         let (key, prior, post) = match entry {
             UndoEntry::Inserted { key, post, .. } => (key, None, post),
             UndoEntry::Replaced {

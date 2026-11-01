@@ -81,11 +81,11 @@ pub(super) fn seal(
     Ok(provenance)
 }
 
-/// Amendment A2's other half: a sealed file has every table with a writer.
+/// Amendment A2's other half: a sealed file has every catalogued table.
 /// One that lacks a table this store's seal would have created was not
 /// written by this store — SI-7, the table named as the cell.
 fn verify_sealed_tables(txn: &ReadTransaction) -> Result<(), StoreError> {
-    for table in schema::UNDO_TARGETS.iter().filter(|t| t.sealed()) {
+    for table in schema::UNDO_TARGETS {
         if !table.exists(txn)? {
             return Err(StoreInvariant::CellCorrupt {
                 key: table.name(),

@@ -118,8 +118,7 @@ pub use undo::{post_image, UndoEntry, UndoLog, POST_IMAGE_DST};
 // The shared contract, re-exported at its existing path: `crate::codec::X`
 // resolves for every caller it did before the move.
 pub use shekyl_store_codec::{
-    exact, Blob, BlobKind, Canonical, CodecError, Coded, Encoded, EncodedBuf, NoRow, Present, Raw,
-    Unshaped,
+    exact, Blob, BlobKind, Canonical, CodecError, Coded, Encoded, EncodedBuf, Present, Raw,
 };
 
 /// Name arbitrary bytes as a row of a `Coded<V>` table **without** going

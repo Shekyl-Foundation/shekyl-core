@@ -104,7 +104,7 @@ DRS-D12 — no store handle by construction).
 | Phantom tables in schema/audit | **none** (P0a). At the pin: `staker_accrual`, `staker_claims` — **0** hits in `db_lmdb.{h,cpp}`; their sections died with the claim-era wire deletion, and the gate's ghost leg refuses their return |
 | `m_db->` sites / distinct methods | **253** in `blockchain.cpp`; **97** distinct methods (same 97 across all files — no extra methods outside that vocabulary) |
 | Atomicity audit | **rewritten by P0b (2026-09-05)** — covers all **declared** tables (matrix gate-pinned; declared, not runtime — DRS-W5 records that a writable `open()` deletes `hf_starting_heights`, leaving 46), all **three** prune shapes — one atomic, two checkpointed — and the store lifecycle (`open()`, `reset()`, `migrate()`); was: 183 lines, April 2026, **0** archival hits vs **702** in `db_lmdb.cpp` (22 of the live tables post-dated it) |
-| Hardfork pop | **UPDATE 2026-10-08:** `HardFork` and the `set`/`get` interface are deleted; LMDB's `hf_versions` has no writer and no reader, and stays declared only because this store's schema is defined against the LMDB table list ([`CXX_VERSION_GATES.md`](CXX_VERSION_GATES.md) §5). **UPDATE 2026-10-06:** `on_block_popped` and the reorg rescan are deleted with the vote window, so nothing reads `hf_versions` above the tip. `HardFork::add` still writes the scheduled version on connect. The interface still has **set/get only**, no delete (`blockchain_db.h:1938,1947`); the row goes with the class |
+| Hardfork pop | **Closed:** the C++ hard-fork mechanism and LMDB left with the flip, and this store's table of the rule set in force per height is `rule_set_in_force` (layout 34; it was `hf_versions`, a name it shared with Monero's fork table). **UPDATE 2026-10-08:** `HardFork` and the `set`/`get` interface are deleted ([`CXX_VERSION_GATES.md`](CXX_VERSION_GATES.md) §5). **UPDATE 2026-10-06:** `on_block_popped` and the reorg rescan are deleted with the vote window, so nothing reads `hf_versions` above the tip. `HardFork::add` still writes the scheduled version on connect. The interface still has **set/get only**, no delete (`blockchain_db.h:1938,1947`); the row goes with the class |
 
 ### Oracles of record — status
 
@@ -783,7 +783,7 @@ outcome likelier rather than less.
 **The three tables ruled not-to-port do not touch this vocabulary — derived,
 not assumed.** `txs_prunable_tip` (deleted from both stores 2026-09-22, v15/v10),
 `txs` and `hf_starting_heights` are ruled out
-of the Rust store (E1's target is 46 tables, not 49). **Zero** of the 102
+of the Rust store (both left its catalogue at layout 34). **Zero** of the 102
 methods names any of them: they are reached only through
 `BlockchainLMDB::add_transaction_data`, `remove_transaction_data`,
 `prune_worker`, `open` and `drop_hard_fork_info`, none of which is in
@@ -1274,7 +1274,7 @@ pressure. **DRS-0 freezes accumulator design** (constrains codecs):
 | --- | --- |
 | **Set-shaped** (`spent_keys`, `output_txs`, `block_heights`, `tx_indices`, …) | Order-independent incremental accumulator (XOR or additive field hash of per-element canonical encodings); update on insert, reverse on delete; **pop-symmetric by construction** |
 | **Append-mostly** (`blocks`, `txs_*`, `curve_tree_leaves`, …) | Running chained hash. **Pop-symmetric by *checkpoint*, not by construction** — `H_n = h(H_{n-1} ‖ x_n)` cannot be reversed one step without retaining `H_{n-1}`; the fourth row's mechanism is what bounds the drift (DRS-0 slice A) |
-| **Small** (`properties`, `curve_tree_meta`, `hf_versions`, archival journals, …) | Full-domain digest every block (cheap) |
+| **Small** (`properties`, `curve_tree_meta`, `rule_set_in_force`, archival journals, …) | Full-domain digest every block (cheap) |
 | **Torn-commit / durability visibility** | **Reopen + full-domain reconciliation** of incremental accumulators at **declared checkpoint heights**, not every block |
 
 Total coverage = every table in inventory contributes to some accumulator or
@@ -2553,7 +2553,7 @@ reasons row for row** — two instruments, one field, cross-checked:
 | --- | --- | --- |
 | **Not chain state** | ~~`txpool_meta`, `txpool_blob`~~ (**moved out of this file 2026-09-24, S-POOL, layout 12** — the boundary this row predicted, drawn: they are `pool_meta` / `pool_blob` in `shekyl-chain-store::pool`'s own file and cannot be in a digest over this one), `alt_blocks` (~~`archival_alt_attestation_witness`~~ — **folded into `alt_blocks` 2026-09-25, S-ALT, layout 13**: the witness is `AltBlock::attestation_witness`, one row, one lifetime) | Replaying **main-chain** blocks produces the main chain. The pool is unconfirmed by definition and the alt surface is by definition what the chain did not take; two honest nodes at one height legitimately differ. Slice A excludes these from **all future digests** on the same ground. Slice C's §5.1 pick moves the pool out of the consensus store file entirely, which makes this a boundary rather than an exception — **built by S-POOL**; the alt surface's file was S-ALT's question (`SPL-Q2`'s reopener) and was **answered the other way** 2026-09-25 — it stays in this file, `Excluded`, because a switch is one transaction with `connect`/`pop` or it is not a switch (`DRS_E1_SALT.md` SAL-1, SAL-10); the boundary is now **enforced** by a test, not only declared (SAL-15) |
 | **Node-local by prune policy** | `txs_prunable` (`txs_prunable_tip` and `output_metadata` were in this class until their deletion, 2026-09-22) | Rebuildable **only from bytes a pruning node has deliberately discarded**. Replay cannot recreate what the local corpus no longer holds, and D10's own premise is *local* blocks |
-| **Dead** | `txs` (never written, DRS-W4), `hf_starting_heights` (dropped at every writable `open()`, DRS-W5) | Empty domain. Trivially satisfied and trivially uninteresting |
+| **Dead** | none: `txs` (DRS-W4) and `hf_starting_heights` (DRS-W5) left the catalogue at layout 34 | — |
 
 > **AMENDED at `edb35dbb1` (2026-09-12, same day): the middle group's rationale
 > is on a TRIGGER, not retired here.** *(Line anchors in this block are

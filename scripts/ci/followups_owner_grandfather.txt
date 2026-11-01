@@ -36,8 +36,6 @@ TJ price premise — NOT codeable, tracked here with its falsifiers as reopen tr
 Superseded-section cross-reference sweep (docs hygiene, split out by the batching rule — added 2026-07-28).
 Live-pin index, independent of doc status (process-structural — added 2026-07-28, from the reopen-(d) Round-0 review).
 Daemon chain store (`DRS-*`) — gap-close pass landed in design.
-`txs` is a zero-write, zero-read LMDB table (P0b DRS-W4).
-`hf_starting_heights` deleted at every writable `open()` (P0b DRS-W5).
 DRS-BENCH — resource/privacy/IBD/pop suite (not throughput).
 DRS-D3c — root-and-frontier parity, daemon vs wallet.
 Round-2 stressnet re-pin of the failure-window `m`/`n` — must be JOINT with reopen (d)
