@@ -86,7 +86,7 @@ As data, beside the dial profile:
    - none.
    - Proposed for Tor: a stream opened during the attempt.
    - For clearnet: the wargame in §5 decides it.
-3. **Its clearing rule:** what restores addresses that cooled on uncorroborated failures once the link is shown working. Proposed: the first corroborating event clears them.
+3. ~~**Its clearing rule**~~ — **amended (Rick, 2026-10-31): clearing is the judge's behaviour, not a declaration.** The first corroborating event clears the excused cooldowns of addresses with no counted failure. *Rejected (rule 21):* a per-connector clearing rule; each connector's input is its corroboration declaration. *Reopen when* a connector shows signs of life while its dials still cannot succeed, so the first event must not clear. *Records-was: "what restores addresses that cooled on uncorroborated failures once the link is shown working. Proposed: the first corroborating event clears them."*
 4. **Its backoff values:** what the profile already has (retries, waits, ladder steps and cap, window). Each value says what it means for this connector's failures.
 
 ### 4.3 What the judge guarantees, for every connector
@@ -130,7 +130,13 @@ These are invariants. Each is tested against every connector's declarations, not
 
 ## 7. Live (Pi; claim it in the ledger after the Tor soak's claim ends, about 2026-11-07 06:17Z)
 
-Repeat the Tor lane's blackhole case (10 minutes of silent drops while running) and the refuse case. Add a clearnet blackhole. Pass criteria:
+Repeat the Tor lane's blackhole case (10 minutes of silent drops while running) and the refuse case. Add a clearnet blackhole. **Added 2026-10-31 (Rick):**
+- blackholes of 10, 20 and 30 s;
+- pulsed loss, 25 s down and 15 s up, for ten minutes;
+- both connectors, counting white demotions;
+- on Tor, the time from unblock to the first stream open.
+
+Leave in-flight Tor attempts to run (TSR-Q14: Tor retries inside its own window). Pass criteria:
 - no white demotion in any case;
 - recovery after a blackhole within the refuse case's order of magnitude;
 - an unchanged eclipse-share result: the in-flight bound's 90 % gray test, under the new judge.
