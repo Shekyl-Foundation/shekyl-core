@@ -313,9 +313,9 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 
 The public-network refusal now in C++ (`blockchain.cpp:416-433`) becomes the IG-8 parse refusal; the announcement stays (IG-14).
 
-### REJECTED rows carried from `removed_flags.cpp`
+### REJECTED rows carried from `removed_flags.cpp`, and the pruning lane's
 
-Criterion: a REJECTED row exists for a capability a user could reasonably ask for again. Implementation switches and folds leave no trace.
+Criterion: a REJECTED row exists for a capability a user could reasonably ask for again. Implementation switches and folds leave no trace. The two pruning rows are `DRS_SB_BELOW_HORIZON.md` SB-Q6's: the body horizon is a rule of the epoch calendar, with no option, no `option show` row and no lever.
 
 | Name | Disposition | Reason |
 |---|---|---|
@@ -324,6 +324,8 @@ Criterion: a REJECTED row exists for a capability a user could reasonably ask fo
 | `bootstrap-daemon-address`, `bootstrap-daemon-login`, `bootstrap-daemon-proxy` | X | no proxying to a third-party daemon |
 | `public-node` | X | no public-node advertisement |
 | `max-connections-per-ip` | X | no per-host inbound cap (the reason in `removed_flags.cpp`) |
+| `prune-blockchain` | X | every daemon discards the same bodies at the same boundary (`ARCHIVAL_PRUNED_DAEMON_MODE.md` `PDM-Q2`, `PDM-Q9`); there is no node-local retention to choose (`PDM-Q7`). Bodies below the horizon are not held by any daemon; the archive serves them (`DRS_SB_BELOW_HORIZON.md` SB-Q6) |
+| `sync-pruned-blocks` | X | trust-the-txid with no anchor; the skeleton band below the checkpoint is `PDM-Q5`'s and needs no flag (SB-Q6) |
 | `no-rust-rpc`, `confirm-external-bind`, `rpc-ignore-ipv4`, `hide-my-port` | – | an implementation switch, a confirmation, a fold into the listen lists, and an advert now derived |
 
 The `removed_flags` shim, its FOLLOWUPS sunset row, and its C++ tests go with the cutover; the X rows live in the Rust table.
@@ -817,11 +819,11 @@ Each shape's fields today, and their names under this Part. The census from sour
 
 `get_block_header_by_hash`'s slot (`hash`, `block_header`) goes: a list reply is in selector order and an unknown item is `null` in its slot (IG-Q53).
 
-**Block** (`block_show`, `block_list`): `block_header` → `header`; `blob` → `body` (bytes); `tx_hashes` → `tx`, a list of `{id, body}` (`block_list` carries each body, as `get_blocks_by_height.bin` does today; `block_show` the same element; each `body` is the pruned form when `prune` is set, IG-Q55); the first output's global index → `output_index` (RW-Q5). `miner_tx_hash` repeats the header's and goes; `json`, epee's rendering, goes (RW-Q4).
+**Block** (`block_show`, `block_list`): `block_header` → `header`; `blob` → `body` (bytes); `tx_hashes` → `tx`, a list of `{id, body}` (`block_list` carries each body, as `get_blocks_by_height.bin` does today; `block_show` the same element; each `body` is the skeleton when `prune` is set — the pruned form with `prunable_hash`, `pqc_auth_hash` and `archival_size` beside it, IG-Q55 as SB-Q2 amends it); a transaction whose body this node discarded at the archival horizon answers its slot as `archived`, `{id, shard}`, instead of a body (`archived` → `archived`, the slot state; `DRS_SB_BELOW_HORIZON.md` SB-Q2); the first output's global index → `output_index` (RW-Q5). `miner_tx_hash` repeats the header's and goes; `json`, epee's rendering, goes (RW-Q4).
 
 **Chain height** (`chain_height`): `height` (`/get_height`'s and `get_block_count`'s count) → `height`, the tip's ordinal (IG-Q45); `hash` → `hash`, the tip's.
 
-**Transaction** (`tx_show`, `tx_list`): `tx_hash` → `id`; `as_hex`, `pruned_as_hex` → `body` (bytes; the pruned form when `prune` is set, IG-Q55); `prunable_as_hex` and `as_json` go; `prunable_hash` → `prunable_hash`; `archival_len` → `archival_size` (bytes); `pruned` goes (the request says); `in_pool` → `pooled` (switch); `double_spend_seen` goes (IG-Q57); `block_height` → `mined_height`; `confirmations` → `confirmations`; `block_timestamp` → `mined_time`; `output_indices` → `output_index` (a list); `relayed` → `public` (switch: the pool's one bit, IG-Q57; `true` for every caller below host-only, since an entry not yet public is host-only, RT-O9.3); `received_timestamp` goes with the pool's receive time (IG-Q57). `txs_hashes` → `id`; `missed_tx` goes (`null` in the slot).
+**Transaction** (`tx_show`, `tx_list`): `tx_hash` → `id`; `as_hex`, `pruned_as_hex` → `body` (bytes; the pruned segment when `prune` is set, IG-Q55 — never with the `pqc_auths` bytes appended, SB-Q2); `prunable_as_hex` and `as_json` go; `prunable_hash` → `prunable_hash`; `pqc_auth_hash` → `pqc_auth_hash` (a nullable hash: the `pqc_auths` region's digest, the txid's third operand; `null` where the identity has no third component, the coinbase); `archival_len` → `archival_size` (bytes); `pruned` goes (the request says); `archived` (`{tx_hash, shard}`, the side list beside `missed_tx`) → `archived`, the slot state: this node discarded the body with its shard at the archival horizon and the archive serves it (`PDM-Q10`, SB-Q2); never under `prune`, since every node holds the skeleton at every horizon, and never a transaction that carries no archival good, whose skeleton is its whole body; `in_pool` → `pooled` (switch); `double_spend_seen` goes (IG-Q57); `block_height` → `mined_height`; `confirmations` → `confirmations`; `block_timestamp` → `mined_time`; `output_indices` → `output_index` (a list); `relayed` → `public` (switch: the pool's one bit, IG-Q57; `true` for every caller below host-only, since an entry not yet public is host-only, RT-O9.3); `received_timestamp` goes with the pool's receive time (IG-Q57). `txs_hashes` → `id`; `missed_tx` goes (`null` in the slot).
 
 **Spent** (`chain_spent`): `key_images` → `key_image`; `spent_status` (0, 1, 2) → a list of one-of `unspent`, `chain`, `txpool`, in request order.
 
@@ -932,9 +934,10 @@ Every method, parameter and field name above, with the holder its walk starts fr
 | parameters of dev_chain_pop (argument) | `chain` | `count` |
 | block header fields | `block header` | `version_major`, `version_minor`, `time`, `parent`, `nonce`, `orphan`, `height`, `depth`, `hash`, `difficulty`, `difficulty_cumulative`, `reward`, `weight`, `weight_longterm`, `tx_count`, `pow`, `coinbase`, `curve_root`, `attestation_root` |
 | block fields | `block` | `header`, `body`, `tx`, `output_index` |
-| block tx element | `tx` | `id`, `body` |
+| block tx element | `tx` | `id`, `body`, `prunable_hash`, `pqc_auth_hash`, `archival_size` |
+| archived slot state (tx_show/list, block_show/list) | `tx` | `archived`, `id`, `shard` |
 | chain_height fields | `chain` | `height`, `hash` |
-| tx entry fields | `tx` | `id`, `body`, `prunable_hash`, `archival_size`, `pooled`, `mined_height`, `confirmations`, `mined_time`, `output_index`, `public` |
+| tx entry fields | `tx` | `id`, `body`, `prunable_hash`, `pqc_auth_hash`, `archival_size`, `pooled`, `mined_height`, `confirmations`, `mined_time`, `output_index`, `public` |
 | fee fields | `fee` | `economy`, `standard`, `high` |
 | coinbase sum fields | `chain coinbase sum` | `emission`, `fee` |
 | alt chain element | `chain alt` | `hash`, `height`, `difficulty_cumulative`, `block`, `parent` |
@@ -998,8 +1001,11 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | id | tx, connection, shard, epoch, txpool | an identifier: a transaction's id (a hash), a connection's, a shard's | |
 | key | spent | a key; only in `key image` | |
 | image | key | a key image (a hash) | |
-| prune | tx | a switch: carry the pruned body | |
+| prune | tx | a switch: carry the skeleton — the pruned segment with the txid's operands `prunable_hash`, `pqc_auth_hash` and `archival_size` (`DRS_SB_BELOW_HORIZON.md` SB-Q2) | |
 | prunable | tx | the prunable part of a transaction | |
+| pqc | tx | the transaction's `pqc_auths` region, the post-quantum authorizations; only in `pqc auth hash` | |
+| auth | pqc | an authorization; only in `pqc auth hash`, the region's digest, the txid's third operand | |
+| archived | tx | a slot state: this node discarded the body with its shard at the archival horizon, and the archive serves it; carries `id` and `shard` (`PDM-Q10`, SB-Q2) | |
 | public | tx | the pool's one bit: the relay has made the transaction public (`DAEMON_RELAY_PRIVACY.md` acceptance criterion 2) | |
 | private | txpool | entries whose `public` bit is unset; with `count`, host-only (RT-O9.3) | |
 | confirmations | tx | blocks since the transaction's | |
@@ -1130,7 +1136,7 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | epoch | claim, joined, served, settled, slash | a fixed-length run of blocks: the epoch its parent names | |
 | from | block, failure, span | the first height | |
 | gray | peer | the gray peer list | |
-| hash | alt, chain, daemon, header, prunable, shard | a 32-byte hash that identifies what its parent names | |
+| hash | alt, auth, chain, daemon, header, prunable, shard | a 32-byte hash that identifies what its parent names; under `auth`, the digest of the `pqc_auths` region | |
 | height | alt, claim, closing, connection, coverage, curve, daemon, freeze, header, mined, pow, seed, sync, target, template | a block height, an ordinal: the height of what its parent names (a tip, a target, a block) | |
 | inbound | clearnet, connection, peer, tor | connections other nodes open to us | |
 | list | block, header | *verb* — print the entries; on the wire, a bounded list (RW-Q1) | block:verb, header:verb |
@@ -1199,7 +1205,7 @@ Three consequences amend RT-O23's wire (`RPC_CHANNEL.md` §6.4), landed with #10
 
 **IG-Q54 — the wire kinds of time, quantities and fractions — RULED 2026-10-19, as recommended.** RW-Q10 takes units out of names (`_seconds`, `_time`, `_timestamp`, `_milli`, `_micro`, `_pct`, KiB/s), so each unit must live in its kind. The economics ratios (`burn_pct`, `release_multiplier`, `staker_emission_share_effective`) are fixed-point at `shekyl_fixed_point_scale` = 1,000,000 (`config/economics_params.json`; `SCALE` in `rust/shekyl-economics/src/params.rs`), whatever their names say. RW-Q4's shared-kind rule ("where a wire kind is also a grammar kind, the syntax is IG-6's") would make a duration or a byte count IG-6's `quantity`, a string such as `"3600s"` or `"100MiB"`, on the wire. *Recommended:* as RW-Q4 did for the amount, these are wire kinds of their own, integers whose unit the kind fixes: `time` (unix seconds), `duration` (seconds), byte counts (bytes), rates (units per second), and `milli` and `micro`, a ratio in thousandths and in millionths. No field needs a percent: the economics ratios and the sync span's relative speed are `micro`, so no `percent` kind is minted. A client does arithmetic on them, and a renderer applies the unit once. Each kind's unit is stated once in RW-Q4's registry, never in a name. The console keeps IG-6's `quantity` for what an operator types (`--duration 1h`).
 
-**IG-Q55 — a transaction's body — RULED 2026-10-19, as recommended.** `/get_transactions` takes three switches that choose which of four always-present fields are filled (`decode_as_json`, `prune`, `split`). The wallet's block fetch reads the pruned form (`rust/shekyl-engine-core/src/engine/block_fetch.rs`), and only tests read the prunable part alone. *Recommended:* wherever a transaction's body is carried — `tx_show`, `tx_list`, and each transaction of `block_show` and `block_list` — the method takes the input `prune` (a switch, off by default), which makes each `body` the pruned form; a pruned entry then carries `prunable_hash`. The wallet's scan reads blocks with pruned bodies (`block_fetch.rs`), so `block_list` needs the switch as much as `tx_list` does. `split` and the JSON rendering go (RW-Q4).
+**IG-Q55 — a transaction's body — RULED 2026-10-19, as recommended.** `/get_transactions` takes three switches that choose which of four always-present fields are filled (`decode_as_json`, `prune`, `split`). The wallet's block fetch reads the pruned form (`rust/shekyl-engine-core/src/engine/block_fetch.rs`), and only tests read the prunable part alone. *Recommended:* wherever a transaction's body is carried — `tx_show`, `tx_list`, and each transaction of `block_show` and `block_list` — the method takes the input `prune` (a switch, off by default), which makes each `body` the pruned form; a pruned entry then carries the txid's operands `prunable_hash`, `pqc_auth_hash` and `archival_size` — the skeleton, one shape at every horizon (`DRS_SB_BELOW_HORIZON.md` SB-Q2, which amended this row 2026-10-31). Without `prune`, a slot whose body this node discarded at the archival horizon is `archived` (`{id, shard}`), not a failure (§18). The wallet's scan reads blocks with pruned bodies (`block_fetch.rs`), so `block_list` needs the switch as much as `tx_list` does. `split` and the JSON rendering go (RW-Q4).
 
 **IG-Q56 — the proof-of-work hash in a header — RULED 2026-10-19, as recommended.** `fill_pow_hash` has two restricted-listener policies: `get_block` and `get_block_header_by_height` blank the field silently, and the other three header methods refuse with `-19`. *Recommended:* one input, `pow` (a switch, off by default); a caller whose grant or resource bound does not cover it is refused with the RW-Q3 class that applies, never answered with a blank; the field is absent when not asked for.
 
