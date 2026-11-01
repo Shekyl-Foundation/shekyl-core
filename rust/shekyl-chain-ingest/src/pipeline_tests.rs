@@ -375,7 +375,7 @@ async fn a_corpus_replays_end_to_end_and_the_redb_digest_matches_the_trace_check
     // expectation, and both equal the state computed from the chain.
     let Checkpoint { at, ours, theirs } = report.checkpoint.expect("covered-tip checkpoint");
     assert_eq!(at, h(4));
-    assert_eq!(ours, theirs, "redb and the LMDB-shaped checkpoint agree");
+    assert_eq!(ours, theirs, "redb and the baseline checkpoint agree");
     assert_eq!(ours, expected_state(&chain));
     // The measurement carries the concurrency it was taken under.
     assert_eq!(

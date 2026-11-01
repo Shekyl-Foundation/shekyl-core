@@ -25,18 +25,18 @@
 //! ```
 //!
 //! At most one checkpoint, at the **covered tip** (the last facts row):
-//! LMDB's spent set is tip-only (RD-F18), so a checkpoint at any other
-//! height would pair a past chain with the present set. The writer takes
-//! no height — it uses the last facts row — and refuses a second one and
-//! any facts after it. The on-disk height is that tip, so a reader can
-//! still name the expectation.
+//! the logical-state digest's spent set is the tip's (RD-F18), so a
+//! checkpoint at any other height would pair a past chain with the present
+//! set. The writer takes no height — it uses the last facts row — and
+//! refuses a second one and any facts after it. The on-disk height is that
+//! tip, so a reader can still name the expectation.
 //!
 //! # The checkpoint's two encodings (version `0x01`)
 //!
 //! The `0x02` record is the v0 digest — the chain / spent-set / curve-root
 //! state, unchanged. The `0x04` record is the **archival snapshot**
 //! (`DRS_E4_ARCHIVAL_WRITER.md` §3.8.1): the archival state at the same
-//! tip as canonical rows, ten positional families, which the grader
+//! tip as canonical rows, ten positional families, which the replay
 //! compares row by row rather than through a hash (`ARW-25`: at one
 //! checkpoint per chain a diff names the family and the key a hash would
 //! only say differed). Under `TRACE_VERSION` `0x01` the two records are
@@ -55,8 +55,8 @@
 //!
 //! # The two doors (RD-Q2, RULED)
 //!
-//! A trace is read through exactly two typed doors, and the types are the
-//! grader's law:
+//! A trace is read through exactly two typed doors, and the types keep a
+//! comparison input from becoming a connect input:
 //!
 //! - [`Trace::borrow`] yields [`Borrowed<Facts>`] — the recorded values as
 //!   **comparison inputs** for the replay's oracles (roots, weights, the
@@ -67,26 +67,24 @@
 //!   NOT-PARITY-EVIDENCE while any came this way (§5). The last such fact
 //!   became the verdict's on 2026-09-29, and the conversion went with the
 //!   type; `borrow` feeds the oracles alone.
-//! - [`Trace::expect`] yields [`Expected<Digest>`] for the **grader
-//!   only**: the LMDB side's logical-state digest at a checkpoint. It is
+//! - [`Trace::expect`] yields [`Expected<Digest>`] for the comparison
+//!   alone: the baseline's logical-state digest at a checkpoint. It is
 //!   deliberately not convertible into anything `connect` accepts.
 //!   [`Trace::archival_snapshot`] is the same door for the archival rows:
-//!   `Expected<&ArchivalSnapshot>`, the grader's comparison partner and
-//!   nothing a connect can read.
+//!   `Expected<&ArchivalSnapshot>`, the comparison's partner and nothing a
+//!   connect can read.
 //!
-//! A grader that read a borrowed fact as evidence, or a connect that read an
+//! A replay that read a borrowed fact as evidence, or a connect that read an
 //! expectation as a fact, is a type error, not a review catch.
 //!
-//! # Checkpoints are computed in Rust
+//! # Checkpoints are the store's own digest
 //!
-//! The exporter asks the daemon's own LMDB digest walker
-//! (`BlockchainLMDB::logical_state_digest_v0`, one read snapshot across
-//! the three families) and hands the writer the finished 32 bytes through
-//! [`TraceWriter::push_checkpoint`]. That walker hashes through the FFI
-//! with `digest_v0` — the same function the redb read
-//! (`ReadSnapshot::logical_state_digest_v0`, commit 2) applies to its own
-//! families. The C++ never hashes; the two sides cannot have hashed
-//! differently. The checkpoint is the **outer** digest only: the redb read
+//! [`crate::rebaseline`] reads `logical_state_digest_v0` off the store a
+//! run left and hands the writer the finished 32 bytes through
+//! [`TraceWriter::push_checkpoint`]. That read hashes with `digest_v0`,
+//! the same function a later replay's `ReadSnapshot::logical_state_digest_v0`
+//! applies to its own families, so the two sides cannot have hashed
+//! differently. The checkpoint is the **outer** digest only: the read
 //! returns no components, so a DIVERGE names the height and not the
 //! family; if a real chain ever diverges, widening both sides to carry the
 //! three components is the diagnosis step (rule 21 reopener: the first
@@ -274,35 +272,34 @@ pub enum TraceFault {
     TrailingBytes,
 }
 
-/// The five passed-through facts for one height, plus the two values LMDB
-/// recorded that Rust now derives and the replay holds it to (§3.4): the
-/// accumulator D4 reads (SI-10's observer) and the root after the drain
-/// (DRS-E3's oracle, CTW-5).
+/// The facts one height's store rows recorded, which a later replay holds
+/// its own derivation to (§3.4): the weights, the accumulator D4 reads
+/// (SI-10's observer), the burn, and the root after the drain (DRS-E3's
+/// oracle, CTW-5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Facts {
-    /// `block_info.bi_weight`.
+    /// The block's weight.
     pub weight: BlockWeight,
-    /// `block_info.bi_long_term_block_weight`.
+    /// The block's long-term weight.
     pub long_term_weight: LongTermWeight,
-    /// `block_info.bi_coins`.
+    /// Coins generated through this block.
     pub coins_generated: AtomicUnits,
-    /// `block_burn[h]`, zero when the row is absent.
+    /// The amount this block destroyed, zero when the row records none.
     pub burned: AtomicUnits,
-    /// `curve_tree_roots[h + 1]` — the root the C++ grower left after this
+    /// `curve_tree_roots[h + 1]` — the root the store recorded after this
     /// block's drain. **Not passed through** since DRS-E3: `validate`
     /// derives the root and `connect` records the verdict's. Kept in the
-    /// record as the comparison input for the derived-vs-trace oracle
+    /// record as the comparison input for the derived-vs-baseline oracle
     /// (`DRS_E3_CURVE_WRITER.md` §3.8, CTW-5), and read by CEN-B5 through
     /// the next captured header regardless.
     pub root_after: CurveTreeRoot,
     /// The long-term effective median in force for the block (S-CHAIN-R
-    /// A1, SCR-19). LMDB stores no such row: the exporter re-derives it
-    /// over the recorded long-term weights with the daemon's own rolling
-    /// median, exactly as `add_block` did; the weights oracle compares the
-    /// verdict's (CEN-G6) against it.
+    /// A1, SCR-19). The store records the median the block was judged
+    /// under; the weights oracle compares the verdict's (CEN-G6) against it.
     pub long_term_effective_median: LongTermWeight,
-    /// `block_info.bi_diff` — the accumulator D4 reads; recorded so the
-    /// SI-10 observer has the LMDB value to compare against.
+    /// Cumulative difficulty through this block — the accumulator D4 reads,
+    /// recorded so the SI-10 observer has the baseline's value to compare
+    /// against.
     pub cumulative_difficulty: CumulativeDifficulty,
 }
 
@@ -349,21 +346,21 @@ pub struct Borrowed<T>(T);
 
 impl<T> Borrowed<T> {
     /// The value, for a reader that must see it (a log, an artifact).
-    /// Not for the grader: an expectation comes through [`Trace::expect`].
+    /// Not an expectation: that comes through [`Trace::expect`].
     #[must_use]
     pub const fn value(&self) -> &T {
         &self.0
     }
 }
 
-/// A checkpoint read through the `expect` door: the LMDB side's logical
-/// state after a height, for the grader alone. Not convertible into a
+/// A checkpoint read through the `expect` door: the baseline's logical
+/// state after a height, for the comparison alone. Not convertible into a
 /// connect input.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Expected<T>(T);
 
 impl<T> Expected<T> {
-    /// The expectation, for the grader.
+    /// The expectation, for the comparison.
     #[must_use]
     pub const fn value(&self) -> &T {
         &self.0
@@ -374,7 +371,7 @@ impl<T> Expected<T> {
 // Writer
 // ---------------------------------------------------------------------------
 
-/// Writes a trace as the exporter hands facts and families across.
+/// Writes a trace as the caller hands facts and the checkpoint across.
 #[derive(Debug)]
 pub struct TraceWriter<W: Write> {
     out: W,
@@ -439,10 +436,9 @@ impl<W: Write> TraceWriter<W> {
         Ok(())
     }
 
-    /// The logical state after the covered tip — the LMDB walker's digest
-    /// (module docs), or a redb-side state being recorded as an expectation
-    /// when re-baselining from Rust after cutover. Written at the last facts
-    /// height.
+    /// The logical state after the covered tip — the store's
+    /// `logical_state_digest_v0` (module docs), recorded as the expectation
+    /// a later replay compares. Written at the last facts height.
     ///
     /// # Errors
     ///
@@ -464,8 +460,8 @@ impl<W: Write> TraceWriter<W> {
     }
 
     /// The archival state at the checkpoint's height, as §3.8.1's rows —
-    /// the LMDB walker's marshal, or the redb read when re-baselining.
-    /// Written after [`push_checkpoint`](Self::push_checkpoint), at its
+    /// the store's `archival_snapshot`. Written after
+    /// [`push_checkpoint`](Self::push_checkpoint), at its
     /// height: the two records are one checkpoint's two encodings.
     ///
     /// # Errors
@@ -658,15 +654,16 @@ impl Trace {
         }
     }
 
-    /// The `borrow` door: the facts `connect` needs at `height`, as
-    /// passed-through. `None` where the trace does not reach.
+    /// The `borrow` door: the baseline's facts at `height`, as comparison
+    /// inputs. `None` where the trace does not reach.
     #[must_use]
     pub fn borrow(&self, height: BlockHeight) -> Option<Borrowed<Facts>> {
         self.facts.get(&height.to_raw()).copied().map(Borrowed)
     }
 
-    /// The `expect` door: the LMDB logical state after `height`, for the
-    /// grader. `None` where that height is not the covered-tip checkpoint.
+    /// The `expect` door: the baseline's logical state after `height`, for
+    /// the comparison. `None` where that height is not the covered-tip
+    /// checkpoint.
     #[must_use]
     pub fn expect(&self, height: BlockHeight) -> Option<Expected<Digest>> {
         match self.checkpoint {
@@ -683,7 +680,7 @@ impl Trace {
     }
 
     /// The checkpoint's other encoding: the archival state after the
-    /// covered tip as §3.8.1's rows, for the grader. `None` exactly when
+    /// covered tip as §3.8.1's rows, for the comparison. `None` exactly when
     /// the trace carries no checkpoint.
     #[must_use]
     pub fn archival_snapshot(&self) -> Option<(BlockHeight, Expected<&ArchivalSnapshot>)> {

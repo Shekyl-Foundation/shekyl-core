@@ -9,16 +9,19 @@
 //!
 //! ```text
 //! Source ──► Form (N workers) ──► Sequencer ──► Validate+Connect ──► Sinks
-//! (corpus │  (stateless; real     (restore the  (one actor; owns    (digest/grader,
-//!  now,   │   RandomX per worker)  source order; the ChainStore;     checkpoint,
-//!  p2p at │                        Rewind is a   one write closure   metrics)
+//! (corpus │  (stateless; real     (restore the  (one actor; owns    (checkpoint,
+//!  now,   │   RandomX per worker)  source order; the ChainStore;     metrics)
+//!  p2p at │                        Rewind is a   one write closure
 //!  DRS-X) │                        barrier)      per handler)
 //! ```
 //!
-//! DRS-E2's replay driver is this pipeline with a corpus [`Source`] and a
-//! grader sink; the store flip (DRS-X) swaps the source for the p2p feed
-//! and drops the grader. There is no second connect path — a harness that
-//! admitted blocks through code production never runs is the C++ defect
+//! DRS-E2's replay driver is this pipeline with a corpus [`Source`]. The
+//! trace a replay compares against is the Rust baseline [`rebaseline`]
+//! writes from a previous run of the same chain (`DAEMON_REDB_STORE.md`
+//! §12.1): a refusal, or a derived value that differs, is a change in what
+//! this pipeline decides. The store flip (DRS-X) swaps the source for the
+//! p2p feed. There is no second connect path — a harness that admitted
+//! blocks through code production never runs is the C++ defect
 //! (`core_tests` / `chaingen`) this crate exists not to reproduce.
 //!
 //! # What lives here
@@ -32,9 +35,10 @@
 //!   **verifies** completeness against each header (RD-F15) and whose
 //!   reader re-verifies on every record. Network-shaped only; the trace is
 //!   a different artifact with a different door (RD-Q2).
-//! - [`trace`] — the LMDB-only facts and one digest checkpoint at the
-//!   covered tip (RD-F18), with typed [`trace::Borrowed`] / [`trace::Expected`]
-//!   doors. This is the harvest artifact `shekyl-ffi` compiles; the pipeline
+//! - [`trace`] — one facts record per height and one digest checkpoint at
+//!   the covered tip (RD-F18), with typed [`trace::Borrowed`] /
+//!   [`trace::Expected`] doors. [`rebaseline`] writes that artifact from
+//!   the store a run left; `shekyl-ffi` compiles the writer. The pipeline
 //!   stages sit behind the `pipeline` feature so the daemon image does not
 //!   pull the replay driver to write a trace.
 //! - [`substrate`] — the production [`Substrate`](shekyl_chain_rules::Substrate):
@@ -60,7 +64,7 @@
 //!   `[dev-dependencies]` edge, so no shipping build carries it either.
 //!
 //! Form is `shekyl_chain_rules::form`. The sequencer, the validate+connect
-//! actor, the grader and the replay driver live behind `feature = "pipeline"`.
+//! actor and the replay driver live behind `feature = "pipeline"`.
 //!
 //! # What this crate never does
 //!
