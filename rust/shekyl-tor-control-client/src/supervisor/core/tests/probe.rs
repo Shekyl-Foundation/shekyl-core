@@ -17,28 +17,28 @@ use super::super::super::posture::{render, Cause, Inbound, InboundCause, Shown};
 use super::super::{duration_ns, Action, Core, Input, RoundEnd, Step};
 use super::{announces, bring_up, managed, policy, reach_usable, socks, takes_down};
 
-fn secs(seconds: u64) -> u64 {
+pub(super) fn secs(seconds: u64) -> u64 {
     duration_ns(Duration::from_secs(seconds))
 }
 
-fn count(step: &Step, wanted: fn(&Action) -> bool) -> usize {
+pub(super) fn count(step: &Step, wanted: fn(&Action) -> bool) -> usize {
     step.actions.iter().filter(|action| wanted(action)).count()
 }
 
-fn probes(step: &Step) -> usize {
+pub(super) fn probes(step: &Step) -> usize {
     count(step, |action| matches!(action, Action::Probe))
 }
 
-fn cancels(step: &Step) -> usize {
+pub(super) fn cancels(step: &Step) -> usize {
     count(step, |action| matches!(action, Action::CancelProbe))
 }
 
-fn refetches(step: &Step) -> usize {
+pub(super) fn refetches(step: &Step) -> usize {
     count(step, |action| matches!(action, Action::RefetchDescriptor))
 }
 
 /// A round ended with an upload that succeeded: the probe's trigger.
-fn uploaded(draw: u64) -> Input {
+pub(super) fn uploaded(draw: u64) -> Input {
     Input::UploadRoundEnded {
         end: RoundEnd::Uploaded,
         draw,
@@ -48,7 +48,7 @@ fn uploaded(draw: u64) -> Input {
 /// The probe minted at `minted_at` was taken by the handshake at `arrived_at`.
 /// Successes here pass the fold's time as the take, so the evidence time
 /// stays that instant.
-fn arrival(minted_at: u64, arrived_at: u64) -> Input {
+pub(super) fn arrival(minted_at: u64, arrived_at: u64) -> Input {
     Input::ProbeArrived {
         minted_at,
         arrived_at,
@@ -86,11 +86,11 @@ fn misses_twice(core: &mut Core, minted: u64) -> (u64, Step) {
     run_timed(core, probe_at + secs(60))
 }
 
-fn republishes(step: &Step) -> usize {
+pub(super) fn republishes(step: &Step) -> usize {
     count(step, |action| matches!(action, Action::RepublishOnion))
 }
 
-fn publishes_inbound(step: &Step) -> Vec<Inbound> {
+pub(super) fn publishes_inbound(step: &Step) -> Vec<Inbound> {
     step.actions
         .iter()
         .filter_map(|action| match action {
@@ -103,7 +103,7 @@ fn publishes_inbound(step: &Step) -> Vec<Inbound> {
 /// A Running, usable core whose onion is published, at time 0. The state
 /// file has appeared, so the only deadlines are the liveness sample and
 /// what the probe arms.
-fn published() -> Core {
+pub(super) fn published() -> Core {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
     reach_usable(&mut core);
     core.on(Input::StateFileAppeared, 0);
@@ -114,12 +114,32 @@ fn published() -> Core {
 /// Run deadlines up to `at`, answering each liveness sample, and stop at
 /// the first step that starts or drops a probe. Returns that step, or the
 /// last one taken.
-fn run_to(core: &mut Core, at: u64) -> Step {
+pub(super) fn run_to(core: &mut Core, at: u64) -> Step {
     run_timed(core, at).1
 }
 
+/// The driver folds the directory list in the same turn the check is
+/// asked. A list still outstanding is one this test did not name: the
+/// round reached no directory, and the probe alone decides. Folding once
+/// the probe is already being judged would hide that verdict inside the
+/// wait, so it is refused.
+fn fold_unnamed_directories(core: &mut Core, at: u64) {
+    let drawn = core.on(
+        Input::DirectoriesDrawn {
+            fetches: Vec::new(),
+        },
+        at,
+    );
+    assert!(
+        drawn.actions.is_empty(),
+        "the list was folded after the probe was already being judged: {drawn:?}"
+    );
+}
+
 /// [`run_to`], with the time of the step it returns.
-fn run_timed(core: &mut Core, at: u64) -> (u64, Step) {
+pub(super) fn run_timed(core: &mut Core, at: u64) -> (u64, Step) {
+    // A check asked before this wait, by a round ending.
+    fold_unnamed_directories(core, at);
     let mut last = Step {
         actions: Vec::new(),
         deadline: None,
@@ -129,6 +149,11 @@ fn run_timed(core: &mut Core, at: u64) -> (u64, Step) {
         when = due;
         let step = core.on_deadline(due);
         let sampled = step.actions.contains(&Action::Sample);
+        // A check asked by this deadline, the round's wait among them.
+        // Fold it before the next deadline, as the driver does.
+        if step.actions.contains(&Action::CheckDirectories) {
+            fold_unnamed_directories(core, due);
+        }
         last = Step {
             actions: step.actions,
             deadline: step.deadline,
