@@ -41,9 +41,6 @@ const TOR_ONION_ADDRESS_REJECTED: u16 = 0xF6;
 
 /// RFC 1928 §6. General SOCKS server failure.
 const SOCKS_GENERAL_FAILURE: u16 = 0x01;
-/// RFC 1928 §6. The connection is not allowed by the ruleset: this node's
-/// own Tor policy.
-const SOCKS_RULESET_REFUSED: u16 = 0x02;
 /// RFC 1928 §6. Network unreachable.
 const SOCKS_NETWORK_UNREACHABLE: u16 = 0x03;
 /// RFC 1928 §6. TTL expired.
@@ -157,15 +154,16 @@ pub const fn refused(reply: u16) -> CloseCause {
 /// - **Local:** network unreachable (`0x03`: produced in one place only, when
 ///   Tor decides every directory server is unreachable and fails the streams
 ///   still waiting, `DIR_ALL_UNREACHABLE`, `mainloop.c:1095-1107`: Tor saying
-///   its own network is down); the ruleset refusal (`0x02`: only this node's
-///   own Tor policy, `connection_edge.c:1685` onward; a service sends DONE
-///   for an unoffered port, `:4096-4103`); command and address type not
-///   supported (`0x07`, `0x08`: Tor rejected this node's own SOCKS request,
-///   `proto_socks.c:615`, `:653`). `0x02` is Local only while no
-///   destination-port policy is configured: the managed Tor sets none, and
-///   an operator's own Tor that sets `RejectPlaintextPorts` would let a
-///   gossiped port produce it (put to the Tor lane, #1235).
-/// - **Uncertain:** general failure (`0x01`: Tor sends it for many endings,
+///   its own network is down); command and address type not supported
+///   (`0x07`, `0x08`: Tor rejected the shape of this node's own SOCKS
+///   request, `proto_socks.c:615`, `:653`; the connector only ever sends a
+///   v3 onion hostname, whatever address it dials).
+/// - **Uncertain:** the ruleset refusal (`0x02`, ruled Rick 2026-10-31):
+///   this node's own Tor policy, which can depend on the gossiped port under
+///   an operator's own Tor (`RejectPlaintextPorts`), so it counts once the
+///   link is shown working and an address it refuses climbs; the managed
+///   Tor sets no such policy, so there it never arrives; general failure
+///   (`0x01`: Tor sends it for many endings,
 ///   `reasons.c:109-155`; a circuit destroyed after the stream joins it
 ///   comes back as a plain `0x01`, `connection_edge.c:400-411`, so a hostile
 ///   guard that destroys each rendezvous circuit, or this node's own guard
@@ -175,11 +173,12 @@ pub const fn refused(reply: u16) -> CloseCause {
 ///   descriptor, the failed introduction and the two timeouts (`0xF0`,
 ///   `0xF2`, `0xF3`, `0xF7`); and any reply not listed.
 ///
-/// Each retry is the reply table's above, unchanged: **Tor does Tor** (Rick,
-/// 2026-10-31). Tor has already retried inside its own window before it
-/// answers (another introduction point, another directory), so a reply it
-/// gives as final is its definitive answer, and the dialer does not add a
-/// redial over it.
+/// Each retry is the reply table's above, unchanged. Tor does Tor
+/// (`TSR-Q14`, ruled 2026-10-25), and the finality is the full-window rule
+/// (Rick, 2026-10-26): Tor has already retried inside its own window before
+/// it answers (another introduction point, another directory), so a reply
+/// it gives as final is its definitive answer, and the dialer does not add
+/// a redial over it.
 #[must_use]
 pub const fn stamp_reply(reply: u16) -> DialFailure {
     let retry = if proxy_reply_marks(reply) & Marks::RETRY != 0 {
@@ -194,7 +193,6 @@ pub const fn stamp_reply(reply: u16) -> DialFailure {
         | TOR_CLIENT_AUTH_REJECTED
         | TOR_ONION_ADDRESS_REJECTED => DialFailure::destination(retry, Reached::NoStream),
         SOCKS_NETWORK_UNREACHABLE
-        | SOCKS_RULESET_REFUSED
         | SOCKS_COMMAND_NOT_SUPPORTED
         | SOCKS_ADDRESS_TYPE_NOT_SUPPORTED => DialFailure::local(retry, Reached::NoStream),
         _ => DialFailure::uncertain(retry, Reached::NoStream),
@@ -268,7 +266,7 @@ mod tests {
     #[test]
     fn each_onion_reply_is_stamped_with_its_evidence() {
         let destination = [0x05, 0xF1, 0xF4, 0xF5, 0xF6];
-        let local = [0x02, 0x03, 0x07, 0x08];
+        let local = [0x03, 0x07, 0x08];
         for reply in 0u16..=0x0100 {
             let failure = stamp_reply(reply);
             let expected = if destination.contains(&reply) {
