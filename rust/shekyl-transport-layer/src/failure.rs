@@ -192,52 +192,21 @@ impl DialFailure {
 }
 
 /// How an outbound stream ended after it opened, as shared code observes
-/// it: the input to a connector's stream-end stamping. A closed subset of
-/// the D12 kinds. The Levin layer's two kinds are not here: a Levin
-/// handshake timeout and a rejection are the Levin layer's to stamp, not
-/// the connector's ([`DialFailure::refused_by_peer`], [`Evidence::Uncertain`]).
+/// it: what shared code hands a connector to stamp. Only what that code
+/// sees on the stream. A connector's own after-channel observations (a
+/// record layer that refuses a record) are that connector's to stamp from
+/// its own code; this node's own acts (a hub refusal, its own close) are
+/// [`Evidence::Local`], built by the hub or the dialer, so no connector
+/// has a row in which it could call them something else; the Levin
+/// layer's two kinds are the Levin layer's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StreamEnd {
     /// The peer closed the stream.
     PeerClosed,
-    /// A record did not open.
-    RecordRejected,
     /// A read or write failed.
     IoError,
     /// The send queue passed its cap: the far side did not drain.
     SendQueueFull,
-    /// This node's hub refused the session.
-    SessionRefused,
-    /// This node closed the stream.
-    LocalClose,
-}
-
-impl StreamEnd {
-    /// The stream end a D12 kind records, or `None` for a kind that is not
-    /// a connector's to stamp after the channel: every before-channel kind,
-    /// the accept-only kinds, and the Levin layer's two.
-    #[must_use]
-    pub const fn of(kind: CloseKind) -> Option<Self> {
-        match kind {
-            CloseKind::PeerClosed => Some(Self::PeerClosed),
-            CloseKind::RecordRejected => Some(Self::RecordRejected),
-            CloseKind::IoError => Some(Self::IoError),
-            CloseKind::SendQueueFull => Some(Self::SendQueueFull),
-            CloseKind::SessionRefused => Some(Self::SessionRefused),
-            CloseKind::LocalClose => Some(Self::LocalClose),
-            CloseKind::PrefixMismatch
-            | CloseKind::TransportHandshakeFailed
-            | CloseKind::TransportTimeout
-            | CloseKind::AdmissionRefused
-            | CloseKind::DialFailed
-            | CloseKind::ProxyRefused
-            | CloseKind::LevinHandshakeTimeout
-            | CloseKind::LevinHandshakeRejected
-            | CloseKind::InboundNotAccepted
-            | CloseKind::ProxyUnavailable
-            | CloseKind::AcceptRateExceeded => None,
-        }
-    }
 }
 
 /// How one dial ended, as the layer that observed it reports it: the
@@ -259,11 +228,13 @@ impl DialEnd {
 
     /// This node's own failure before any I/O, with the D12 cause
     /// [`CloseKind::LocalClose`]: no endpoint, no dialer installed, the
-    /// socket table exhausted, a task that never started.
+    /// socket table exhausted, a task that never started. Not a definitive
+    /// answer about the destination, so it keeps its redial; a Local
+    /// failure never counts, so the redial costs only a wake.
     #[must_use]
     pub const fn local_close() -> Self {
         Self {
-            failure: DialFailure::local(Retry::Final, Reached::NoStream),
+            failure: DialFailure::local(Retry::Again, Reached::NoStream),
             cause: CloseCause::new(CloseKind::LocalClose),
         }
     }
@@ -283,8 +254,8 @@ impl DialEnd {
 
 #[cfg(test)]
 mod tests {
-    use super::{DialFailure, Evidence, Proof, ProofKind, Reached, Retry, StreamEnd};
-    use crate::{CloseKind, ConnectorId};
+    use super::{DialFailure, Evidence, Proof, ProofKind, Reached, Retry};
+    use crate::ConnectorId;
 
     /// Proof of misbehaviour follows the connector's declaration: a peer's
     /// refusal proves it on Tor (an onion address is the service's key)
@@ -320,28 +291,6 @@ mod tests {
                     "{connector:?}"
                 );
             }
-        }
-    }
-
-    /// Every kind a connector stamps after the channel maps to its stream
-    /// end, and no other kind does: a before-channel kind, an accept-only
-    /// kind or a Levin kind cannot reach a connector's stream-end table.
-    #[test]
-    fn only_the_after_channel_ends_reach_a_connectors_stream_table() {
-        let stamped = [
-            CloseKind::PeerClosed,
-            CloseKind::RecordRejected,
-            CloseKind::IoError,
-            CloseKind::SendQueueFull,
-            CloseKind::SessionRefused,
-            CloseKind::LocalClose,
-        ];
-        for kind in CloseKind::ALL {
-            assert_eq!(
-                StreamEnd::of(*kind).is_some(),
-                stamped.contains(kind),
-                "{kind:?}"
-            );
         }
     }
 

@@ -55,9 +55,7 @@ pub use declaration::{
     StackPlan, StreamKind, YesNo,
 };
 pub use dial::check_dial;
-pub use failure::{
-    DialEnd, DialFailure, Evidence, Proof, ProofKind, Reached, Retry, StreamEnd,
-};
+pub use failure::{DialEnd, DialFailure, Evidence, Proof, ProofKind, Reached, Retry, StreamEnd};
 pub use link::{
     DownCause, InboundCause, InboundFacet, Link, Links, Outbound, Route, RoutePublish,
     Subscription, Watcher,

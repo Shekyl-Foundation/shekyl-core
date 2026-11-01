@@ -137,7 +137,14 @@ pub const fn refused(reply: u16) -> CloseCause {
 
 /// What a reply from this node's Tor is evidence of (`DIALER_OUTAGE_EVIDENCE.md`
 /// §3.2, `OE-D4`, the Tor lane reviews). A reply is before the channel, so
-/// no stream opened. Each retry is the reply table's above, unchanged.
+/// no stream opened.
+///
+/// Each retry is the reply table's above, unchanged: **Tor does Tor** (Rick,
+/// 2026-10-31). Tor has already retried inside its own window before it
+/// answers (another introduction point, another directory), so a reply it
+/// gives as final is its definitive answer, and the dialer does not add a
+/// redial over it. This is why `0x01`, `0x05` and `0xF1` stay final where
+/// clearnet's refusal keeps its redial.
 ///
 /// - **Destination:** general failure (`0x01`: a live service's port
 ///   refuses, after a working rendezvous), connection refused (`0x05`),
@@ -212,22 +219,15 @@ impl Observed {
     }
 }
 
-/// How an onion stream ended after it opened (§3.2). Every Tor stream
-/// crosses the one guard link, so a circuit that collapses with this
-/// node's link looks the same as an onion that hangs up: a peer close and
-/// an I/O error are Uncertain, and keep their retry. A record that does
-/// not open came from the authenticated onion: Destination. This node's
-/// own close or refusal is Local.
+/// How an onion stream ended after it opened (§3.2), from what shared
+/// code observed. Every Tor stream crosses the one guard link, so a
+/// circuit that collapses with this node's link looks the same as an onion
+/// that hangs up: each end is Uncertain and keeps its redial.
 #[must_use]
 pub const fn stamp_stream_end(end: StreamEnd) -> DialFailure {
     match end {
-        StreamEnd::PeerClosed | StreamEnd::IoError => {
+        StreamEnd::PeerClosed | StreamEnd::IoError | StreamEnd::SendQueueFull => {
             DialFailure::uncertain(Retry::Again, Reached::StreamOpened)
-        }
-        StreamEnd::SendQueueFull => DialFailure::uncertain(Retry::Final, Reached::StreamOpened),
-        StreamEnd::RecordRejected => DialFailure::destination(Retry::Final, Reached::StreamOpened),
-        StreamEnd::SessionRefused | StreamEnd::LocalClose => {
-            DialFailure::local(Retry::Final, Reached::StreamOpened)
         }
     }
 }
@@ -272,24 +272,18 @@ mod tests {
         }
     }
 
-    /// After the stream opened, a close and an I/O error are Uncertain on
-    /// Tor (the one guard link), a bad record is the onion's, and this
-    /// node's own close or refusal is Local.
+    /// After the stream opened, every end shared code observes is
+    /// Uncertain on Tor (the one guard link) and keeps its redial.
     #[test]
-    fn an_onion_streams_end_is_stamped_by_this_connector() {
-        for (end, evidence) in [
-            (StreamEnd::PeerClosed, Evidence::Uncertain),
-            (StreamEnd::IoError, Evidence::Uncertain),
-            (StreamEnd::SendQueueFull, Evidence::Uncertain),
-            (
-                StreamEnd::RecordRejected,
-                Evidence::Destination(Proof::ABSENT),
-            ),
-            (StreamEnd::SessionRefused, Evidence::Local),
-            (StreamEnd::LocalClose, Evidence::Local),
+    fn an_onion_streams_end_is_uncertain() {
+        for end in [
+            StreamEnd::PeerClosed,
+            StreamEnd::IoError,
+            StreamEnd::SendQueueFull,
         ] {
             let failure = stamp_stream_end(end);
-            assert_eq!(failure.evidence(), evidence, "{end:?}");
+            assert_eq!(failure.evidence(), Evidence::Uncertain, "{end:?}");
+            assert_eq!(failure.retry(), Retry::Again, "{end:?}");
             assert_eq!(failure.reached(), Reached::StreamOpened, "{end:?}");
         }
     }
