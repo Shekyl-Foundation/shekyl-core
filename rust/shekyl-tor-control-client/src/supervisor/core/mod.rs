@@ -146,18 +146,6 @@ impl Policy {
 /// (`src/feature/hs/hs_descriptor.h:30`): 3 hours.
 pub const DESCRIPTOR_LIFETIME: Duration = Duration::from_secs(3 * 60 * 60);
 
-/// Why the supervisor asks for a probe outside a round (§4.5).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Recheck {
-    /// No upload round began within the descriptor's lifetime of the last
-    /// round's first upload or the last probe arrival: the directories may
-    /// have dropped the descriptor.
-    UploadOverdue,
-    /// Tor reported a clock jump while Running. Its next upload may be
-    /// scheduled on the clock that jumped.
-    ClockJumped,
-}
-
 /// What the driver does next.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Action {
@@ -204,9 +192,15 @@ pub enum Action {
     /// (`TSR-Q14`: Tor does Tor; no other stream is touched). The driver
     /// answers [`Input::DescriptorRefetched`].
     RefetchDescriptor,
-    /// A probe outside a round (§4.5): draw its delay. The driver says why
-    /// at info and answers [`Input::RecheckDrawn`].
-    Recheck(Recheck),
+    /// Tor reported a clock jump while Running: draw the delay of one probe
+    /// (§4.5, "Overdue"). The driver says so at info and answers
+    /// [`Input::JumpProbeDrawn`].
+    ProbeAfterJump,
+    /// No upload round began within the descriptor's lifetime of the last
+    /// round's first upload (§4.5, "Overdue"): Tor broke its own lifetime.
+    /// Said at info. The [`Self::RepublishOnion`] that follows forces a
+    /// fresh upload.
+    DescriptorOverdue,
     /// Publish the inbound facet on the managed route's link (§4.1).
     PublishInbound(Inbound),
     /// A descriptor round has been open for `Policy::round_stuck_after`:
@@ -371,11 +365,9 @@ pub enum Input {
         /// Uniform over `u64`.
         draw: u64,
     },
-    /// The delay of a probe [`Action::Recheck`] asked for. `draw` is from the
-    /// daemon's CSPRNG, as a round's is.
-    RecheckDrawn {
-        /// The recheck it answers.
-        why: Recheck,
+    /// The delay of the probe [`Action::ProbeAfterJump`] asked for. `draw` is
+    /// from the daemon's CSPRNG, as a round's is.
+    JumpProbeDrawn {
         /// Uniform over `u64`.
         draw: u64,
     },
@@ -542,13 +534,10 @@ pub struct Core {
     /// Rounds that stayed open past `Policy::round_stuck_after`, this boot.
     stuck_rounds: u32,
     /// Where the descriptor's lifetime is counted from (§4.5, "Overdue"):
-    /// the last round's first upload, or the last overdue check and its
-    /// probe's arrival. Only an upload shows the descriptor's age, so no
-    /// other arrival moves it. None before the first upload and after the
-    /// probe is dropped.
+    /// the last round's first upload, or the last overdue republish. Only an
+    /// upload shows the descriptor's age. None before the first upload and
+    /// after the probe is dropped.
     lifetime_from: Option<u64>,
-    /// The recheck the probe in hand answers; None for a round's probe.
-    probe_for: Option<Recheck>,
     /// A clock jump during this bootstrap, and `traffic/read`'s movement.
     jump: clock_jump::JumpWatch,
     /// This bootstrap's certificate lines and closed handshakes (§4.2).
@@ -587,7 +576,6 @@ impl Core {
             round: None,
             stuck_rounds: 0,
             lifetime_from: None,
-            probe_for: None,
             jump: clock_jump::JumpWatch::new(now),
             clock_evidence: clock_evidence::ClockEvidence::default(),
             service_republish: false,
@@ -634,7 +622,7 @@ impl Core {
             Input::FirstUploaded { draw } => self.first_uploaded(now, draw),
             Input::UploadRoundEnded { end, draw } => self.round_ended(now, end, draw),
             Input::DescriptorRefetched { draw } => self.refetched(now, draw),
-            Input::RecheckDrawn { why, draw } => self.recheck_drawn(now, why, draw),
+            Input::JumpProbeDrawn { draw } => self.jump_probe_drawn(now, draw),
             Input::ProbeDialed { minted_at } => self.probe_dialed(minted_at),
             Input::ProbeNotDialed => self.probe_not_dialed(),
             Input::ProbeArrived {
@@ -959,7 +947,7 @@ impl Core {
         };
         let mut actions = vec![Action::Sample];
         if running {
-            actions.extend(self.recheck(Recheck::ClockJumped));
+            actions.extend(self.jump_probe());
         }
         actions
     }

@@ -23,8 +23,7 @@ mod posture;
 
 pub use crate::control::{NetworkView, Reported};
 pub use core::{
-    Action, Core, DialTally, Input, ManagedRunning, Policy, Recheck, RoundEnd, Step,
-    DESCRIPTOR_LIFETIME,
+    Action, Core, DialTally, Input, ManagedRunning, Policy, RoundEnd, Step, DESCRIPTOR_LIFETIME,
 };
 pub use events::{clock_evidence_of, input_of, round_inputs, CERTIFICATE_OUT_OF_DATE};
 pub use posture::{

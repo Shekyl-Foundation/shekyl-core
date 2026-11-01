@@ -14,12 +14,12 @@
 //! this node's inbound handshake is the evidence, when the handshake took
 //! the nonce before the probe's bound. The evidence time is that take.
 //!
-//! **Outside a round** (§4.5, "Overdue"; Rick, 2026-10-31): one probe when
-//! no round has begun within the descriptor's lifetime of the last round's
-//! first upload (or of the last overdue check, or its probe's arrival),
-//! counted on this clock, and one when
-//! Tor reports a clock jump while Running. Each draws its own delay through
-//! the driver ([`Action::Recheck`]) and then runs as a round's probe does.
+//! **Outside a round** (§4.5, "Overdue"; Rick, 2026-10-31): when no round
+//! has begun within the descriptor's lifetime of the last round's first
+//! upload, counted on this clock, the onion is published again, which
+//! forces a fresh upload; and when Tor reports a clock jump while Running,
+//! one probe, which draws its delay through the driver
+//! ([`Action::ProbeAfterJump`]) and then runs as a round's probe does.
 //!
 //! **One miss is not a verdict** (Rick, 2026-10-29). A probe that misses its
 //! bound is followed by `HSFETCH` of this node's own onion, which refreshes
@@ -37,7 +37,7 @@
 
 use super::super::posture::{Cause, Inbound, InboundCause};
 use super::announce::Cadence;
-use super::{duration_ns, Action, Core, Duty, Phase, Recheck, RoundEnd};
+use super::{duration_ns, Action, Core, Duty, Phase, RoundEnd};
 
 /// The probe's place in its round.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -147,7 +147,7 @@ impl Core {
             RoundEnd::Uploaded => {
                 let actions = self.onion_published();
                 if !track.is_some_and(|track| track.triggered) {
-                    self.trigger(now, draw, None);
+                    self.trigger(now, draw);
                 }
                 actions
             }
@@ -158,12 +158,11 @@ impl Core {
         }
     }
 
-    /// The round's one probe, or a recheck's (`why`): scheduled while
-    /// Running with none in hand.
-    fn trigger(&mut self, now: u64, draw: u64, why: Option<Recheck>) {
+    /// The round's one probe, or the jump's: scheduled while Running with
+    /// none in hand.
+    fn trigger(&mut self, now: u64, draw: u64) {
         if matches!(self.phase, Phase::Running { .. }) && self.probe == Probe::Idle {
             self.schedule(now, draw, Attempt::First);
-            self.probe_for = why;
         }
     }
 
@@ -196,29 +195,49 @@ impl Core {
     }
 
     /// The descriptor's lifetime ran out with no round begun (§4.5,
-    /// "Overdue"). The next lifetime counts from now, whether or not a
-    /// probe runs, so a suppressed one does not ask again at every tick.
+    /// "Overdue"; Rick, 2026-10-31). Tor broke its own lifetime, and the
+    /// directories drop the descriptor at their next cleanup. Publish the
+    /// onion again from the held seed (`DEL_ONION`, then `ADD_ONION`), which
+    /// forces a fresh upload; that round's probe judges the facet. Inbound
+    /// is not marked down: nothing shows peers cannot reach the onion yet. A
+    /// refused republish is a process fault, as the Service remedy's is. The
+    /// next lifetime counts from now, so a republish that brings no round
+    /// does not ask again at every tick.
     pub(super) fn on_overdue_deadline(&mut self, now: u64) -> Vec<Action> {
         self.lifetime_from = Some(now);
-        self.recheck(Recheck::UploadOverdue)
+        let Phase::Running { onion, .. } = &mut self.phase else {
+            return Vec::new();
+        };
+        if *onion != Duty::Done {
+            return Vec::new();
+        }
+        *onion = Duty::Owed;
+        self.service_republish = true;
+        let mut actions = vec![Action::DescriptorOverdue];
+        if matches!(self.probe, Probe::InFlight { .. }) {
+            actions.push(Action::CancelProbe);
+        }
+        self.probe = Probe::Idle;
+        actions.push(Action::RepublishOnion);
+        actions
     }
 
-    /// Ask for a probe outside a round, while Running with none in hand.
-    /// A probe already scheduled, in flight or being refetched answers the
-    /// same question.
-    pub(super) fn recheck(&self, why: Recheck) -> Vec<Action> {
+    /// Tor reported a clock jump while Running: ask for one probe, with
+    /// none in hand. A probe already scheduled, in flight or being
+    /// refetched answers the same question.
+    pub(super) fn jump_probe(&self) -> Vec<Action> {
         if matches!(self.phase, Phase::Running { .. }) && self.probe == Probe::Idle {
-            vec![Action::Recheck(why)]
+            vec![Action::ProbeAfterJump]
         } else {
             Vec::new()
         }
     }
 
-    /// The recheck's delay was drawn: the probe is scheduled as a round's
-    /// is, so it waits at least the delay's floor and takes the same miss
-    /// path (`HSFETCH`, a second probe, then a republish).
-    pub(super) fn recheck_drawn(&mut self, now: u64, why: Recheck, draw: u64) -> Vec<Action> {
-        self.trigger(now, draw, Some(why));
+    /// The jump probe's delay was drawn: it is scheduled as a round's is, so
+    /// it waits at least the delay's floor and takes the same miss path
+    /// (`HSFETCH`, a second probe, then a republish).
+    pub(super) fn jump_probe_drawn(&mut self, now: u64, draw: u64) -> Vec<Action> {
+        self.trigger(now, draw);
         Vec::new()
     }
 
@@ -259,7 +278,7 @@ impl Core {
         if let Some((at, draw)) = track.first {
             if !track.triggered && now >= at.saturating_add(duration_ns(self.policy.round_wait)) {
                 track.triggered = true;
-                self.trigger(now, draw, None);
+                self.trigger(now, draw);
             }
         }
         if !track.stuck
@@ -334,15 +353,6 @@ impl Core {
             return Vec::new();
         }
         self.probe = Probe::Idle;
-        // The overdue probe arrived: the next lifetime counts from it (Rick,
-        // 2026-10-31). Any other arrival says a descriptor is live, not how
-        // old it is, so the lifetime stays on the upload.
-        if self.probe_for == Some(Recheck::UploadOverdue) {
-            self.lifetime_from = Some(
-                self.lifetime_from
-                    .map_or(arrived_at, |at| at.max(arrived_at)),
-            );
-        }
         let recovered = matches!(self.inbound, Inbound::Unreachable { .. });
         self.inbound = Inbound::Reachable {
             evidence_at: arrived_at,
@@ -454,7 +464,6 @@ impl Core {
         self.probe = Probe::Idle;
         self.round = None;
         self.lifetime_from = None;
-        self.probe_for = None;
         self.service_republish = false;
         in_flight.then_some(Action::CancelProbe)
     }

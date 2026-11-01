@@ -566,7 +566,14 @@ impl Drive {
                     Err(shutdown) => vec![shutdown],
                 }
             }
-            Action::Recheck(why) => vec![probe::recheck(why)],
+            Action::ProbeAfterJump => vec![probe::jump_probe()],
+            Action::DescriptorOverdue => {
+                tracing::info!(
+                    target: "tor",
+                    "no descriptor upload began within the descriptor's lifetime; publishing this node's onion again"
+                );
+                Vec::new()
+            }
             Action::PublishInbound(inbound) => {
                 self.publish_inbound(inbound);
                 Vec::new()
