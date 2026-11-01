@@ -127,6 +127,7 @@ close_kinds! {
     (14, LocalClose, Every, Marks::NONE, "SHEKYL_CLOSE_LOCAL_CLOSE"),
     (15, InboundNotAccepted, BeforeChannel, Marks::NONE, "SHEKYL_CLOSE_INBOUND_NOT_ACCEPTED"),
     (16, ProxyUnavailable, BeforeChannel, Marks::RETRY, "SHEKYL_CLOSE_PROXY_UNAVAILABLE"),
+    (17, AcceptRateExceeded, BeforeChannel, Marks::NONE, "SHEKYL_CLOSE_ACCEPT_RATE_EXCEEDED"),
 }
 
 /// The three marks a layer stamps on its own causes (the gray lifecycle,
@@ -409,6 +410,7 @@ mod tests {
             CloseKind::LocalClose,
             CloseKind::InboundNotAccepted,
             CloseKind::ProxyUnavailable,
+            CloseKind::AcceptRateExceeded,
         ];
         let gap = [
             CloseKind::LevinHandshakeTimeout,
