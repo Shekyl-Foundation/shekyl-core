@@ -923,3 +923,67 @@ fn a_refused_inbound_handshake_opens_nothing() {
         Some(CloseKind::SessionRefused)
     );
 }
+
+/// An inbound row's open is posted before its pump is woken for the next
+/// frame, so the owner hears `Opened` ahead of anything the peer sends
+/// after reading the handshake reply. The poster stalls on `Opened`: a hub
+/// that woke the pump first would let the next frame's `Deliver` land
+/// while the open is still being posted. Red edit: wake the row before
+/// posting the open in `delivery_finished`.
+#[test]
+fn an_inbound_open_is_posted_before_the_next_frame_is_delivered() {
+    let posts = Arc::new(Mutex::new(VecDeque::new()));
+    let clock = ManualClock::new(Tick::new(1));
+    let recorded = Arc::clone(&posts);
+    let poster: Arc<dyn Fn(Post) + Send + Sync> = Arc::new(move |post| {
+        if matches!(post, Post::Opened { .. }) {
+            thread::sleep(Duration::from_millis(200));
+        }
+        recorded.lock().expect("posts").push_back(post);
+    });
+    let hub = Hub::new(
+        Sockets::new(),
+        InboundCeiling::Bounded(8),
+        poster,
+        Arc::new(clock.clone()),
+    );
+    let rig = Rig { hub, posts, clock };
+    let mut opened = adopt(&rig, Direction::Inbound, 32);
+    service(&rig, true);
+    let session = opened.session.take().expect("session");
+    let hub = rig.hub.clone();
+    let id = opened.id;
+    let pump = thread::spawn(move || drive_inbound(&hub, id, session));
+    opened
+        .inbound
+        .blocking_send(b"handshake".to_vec())
+        .expect("inject");
+    assert!(rig.hub.wait_delivery_posted(id, 0));
+    // The peer's next frame is waiting while the handler holds the first.
+    opened
+        .inbound
+        .blocking_send(b"after the reply".to_vec())
+        .expect("inject");
+    rig.hub.session_established(id);
+    rig.hub.delivery_finished(id, true);
+    assert!(rig.hub.wait_delivery_posted(id, 1));
+    let kinds: Vec<&'static str> = rig
+        .posts
+        .lock()
+        .expect("posts")
+        .iter()
+        .map(|post| match post {
+            Post::Opened { .. } => "opened",
+            Post::Deliver { .. } => "deliver",
+            Post::Established { .. } => "established",
+            Post::HandshakeResult { .. } => "handshake",
+            Post::Closed { .. } => "closed",
+        })
+        .collect();
+    assert_eq!(kinds, vec!["deliver", "opened", "deliver"]);
+    rig.hub.close(id);
+    for _ in 0..4 {
+        service(&rig, true);
+    }
+    pump.join().expect("pump");
+}
