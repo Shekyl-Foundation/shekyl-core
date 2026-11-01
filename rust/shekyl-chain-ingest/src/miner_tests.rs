@@ -270,10 +270,14 @@ async fn the_miner_mines_through_the_connector_and_leaves_a_superseded_job() {
         status.per_thread.iter().map(|r| r.hashes).sum::<u64>()
     );
 
-    miner.stop();
+    miner.stop().join();
     // The join is the ledger's: a row leaves after its thread is joined.
     // (`/proc` can still list a joined thread until the kernel reaps it.)
-    assert_eq!(miner_rows(), 0, "stopping joins every worker");
+    assert_eq!(
+        miner_rows(),
+        0,
+        "joining the stopped workers removes every row"
+    );
     s.close().await;
 }
 
@@ -315,7 +319,7 @@ async fn the_miner_extends_the_chain_block_after_block() {
             .await
             .unwrap_or_else(|outcome| panic!("block {expected} connects: {outcome}"));
     }
-    miner.stop();
+    miner.stop().join();
     s.close().await;
 }
 
@@ -387,7 +391,7 @@ fn a_form_takes_the_permit_the_miner_left_free() {
         "the miner keeps the permit it already holds"
     );
     drop(permit);
-    miner.stop();
+    miner.stop().join();
 }
 
 /// The loop's hash rate per worker, for the report: one worker, then every
@@ -455,7 +459,7 @@ fn the_miners_rate_per_worker() {
             rates.join(", "),
             status.not_lowered
         );
-        miner.stop();
+        miner.stop().join();
     }
 }
 
@@ -555,7 +559,7 @@ async fn the_follower_pins_the_new_epochs_seed_and_the_miner_mines_its_first_blo
             .is_some(),
         "the new epoch's seed is held"
     );
-    miner.stop();
+    miner.stop().join();
     service.stop().await.expect("stops");
     y.close().await;
     crate::test_support::cleanup(&path);

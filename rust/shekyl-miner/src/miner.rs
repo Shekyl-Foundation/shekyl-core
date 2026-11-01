@@ -9,7 +9,7 @@ use std::io;
 use std::num::NonZeroUsize;
 use std::ops::RangeInclusive;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
 use shekyl_difficulty::check_hash;
@@ -20,7 +20,7 @@ use shekyl_types::PowHash;
 
 use crate::address::MiningAddress;
 use crate::found::{Found, FoundBlocks};
-use crate::job::{JobBoard, NONE_SEEN};
+use crate::job::{Claim, JobBoard, NONE_SEEN};
 use crate::rate::{HashRate, RateRing};
 
 /// Why [`Miner::start`] started nothing.
@@ -91,15 +91,37 @@ struct Shared {
     started: Instant,
     rates: Vec<RateRing>,
     not_lowered: AtomicUsize,
+    /// Each worker's seed while it holds that seed's cache: set before the
+    /// lookup and cleared after the cache is dropped, so a reader never
+    /// sees a worker without a cache it holds.
+    held: Vec<Mutex<Option<Seedhash>>>,
+    /// Each worker has returned, or is about to: its join will not wait.
+    exited: Vec<AtomicBool>,
 }
 
 impl Shared {
     fn second(&self) -> u64 {
         self.started.elapsed().as_secs()
     }
+
+    fn hold(&self, index: usize, seed: Option<Seedhash>) {
+        *self.held[index]
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = seed;
+    }
 }
 
-/// The running miner. Dropping it stops and joins every worker.
+/// Marks a worker exited when it returns, unwinding included.
+struct Exiting<'a>(&'a AtomicBool);
+
+impl Drop for Exiting<'_> {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Release);
+    }
+}
+
+/// The running miner. Dropping it stops and joins every worker;
+/// [`Miner::stop`] stops it without waiting for them.
 pub struct Miner {
     shared: Arc<Shared>,
     workers: Vec<DedicatedThread>,
@@ -126,6 +148,7 @@ fn nonce_range(index: usize, threads: NonZeroUsize) -> RangeInclusive<u32> {
 /// One worker: lower its priority, then mine each newer job until it is
 /// superseded, solved, or the range runs out; stop when told.
 fn work(shared: &Shared, index: usize, range: RangeInclusive<u32>) {
+    let _exiting = Exiting(&shared.exited[index]);
     if let Err(refused) = shekyl_thread_priority::lower_current_thread() {
         let before = shared.not_lowered.fetch_add(1, Ordering::Relaxed);
         if before == 0 {
@@ -144,7 +167,9 @@ fn work(shared: &Shared, index: usize, range: RangeInclusive<u32>) {
         // validator's spare, and the seed is the job's, not one this loop
         // pinned. `pin_canonical` is the fill. A template whose seed is not
         // held is the composition root's bug; this worker leaves the job.
+        shared.hold(index, Some(seed));
         let Some(cache) = shared.caches.lookup(&seed) else {
+            shared.hold(index, None);
             tracing::error!(
                 seed = %posted.job.seed,
                 height = %posted.job.height,
@@ -168,33 +193,44 @@ fn work(shared: &Shared, index: usize, range: RangeInclusive<u32>) {
             };
             let pow = compute_hash(&cache, &preimage);
             drop(permit);
+            // A stop does not wait for this hash: what it finished after
+            // the stop is dropped here, and the claim below re-reads the
+            // flag under the board's lock, where the stop sets it.
+            if shared.stop.load(Ordering::Acquire) {
+                break;
+            }
             rate.record(shared.second());
             if !check_hash(&pow, posted.job.difficulty) {
                 continue;
             }
-            if shared.board.claim(posted.generation) {
-                let mut block = posted.job.block.clone();
-                block.header.nonce = nonce;
-                let found = Found {
-                    block,
-                    height: posted.job.height,
-                    generation: posted.generation,
-                    pow: PowHash::from_bytes(pow),
-                };
-                tracing::info!(
+            let mut block = posted.job.block.clone();
+            block.header.nonce = nonce;
+            let found = Found {
+                block,
+                height: posted.job.height,
+                generation: posted.generation,
+                pow: PowHash::from_bytes(pow),
+            };
+            match shared
+                .board
+                .claim_and_deliver(posted.generation, &shared.stop, || {
+                    shared.found.deliver(found)
+                }) {
+                Claim::Delivered => tracing::info!(
                     height = %posted.job.height,
                     generation = posted.generation.to_raw(),
                     "the miner found a block"
-                );
-                if !shared.found.deliver(found) {
-                    tracing::error!(
-                        height = %posted.job.height,
-                        "the miner found a block and nothing receives it"
-                    );
-                }
+                ),
+                Claim::InboxClosed => tracing::error!(
+                    height = %posted.job.height,
+                    "the miner found a block and nothing receives it"
+                ),
+                Claim::Stopped | Claim::Superseded => {}
             }
             break;
         }
+        drop(cache);
+        shared.hold(index, None);
     }
 }
 
@@ -227,6 +263,8 @@ impl Miner {
             started: Instant::now(),
             rates: (0..threads.get()).map(|_| RateRing::new()).collect(),
             not_lowered: AtomicUsize::new(0),
+            held: (0..threads.get()).map(|_| Mutex::new(None)).collect(),
+            exited: (0..threads.get()).map(|_| AtomicBool::new(false)).collect(),
         });
         let name = ThreadName::new(WORKER_NAME).expect("a fixed, valid thread name");
         let mut miner = Self {
@@ -265,17 +303,33 @@ impl Miner {
         }
     }
 
-    /// Stop every worker and join it.
-    pub fn stop(mut self) {
-        self.halt();
+    /// Stop every worker without waiting for them, and return them to be
+    /// joined.
+    ///
+    /// A worker in a hash finishes it first, and a hash at nice 19 on a busy
+    /// host can take most of a minute, so the stop does not wait: the
+    /// returned [`Draining`] holds the workers. Nothing they finish after
+    /// this returns reaches the found-block inbox ([`JobBoard`]'s claim
+    /// reads the stop under the lock the stop sets it under).
+    #[must_use = "the stopped workers are joined through what this returns"]
+    pub fn stop(mut self) -> Draining {
+        self.signal();
+        Draining {
+            shared: Arc::clone(&self.shared),
+            workers: std::mem::take(&mut self.workers),
+        }
     }
 
-    fn halt(&mut self) {
+    fn signal(&self) {
         // The board flag first, then the budget: a worker blocked in
         // `acquire_unless` reads the flag only after `wake`, and a worker
         // between hashes sees the flag in `next_after`.
         self.shared.board.stop(&self.shared.stop);
         self.shared.budget.wake();
+    }
+
+    fn halt(&mut self) {
+        self.signal();
         for worker in &mut self.workers {
             if worker.join().is_err() {
                 tracing::error!("a miner thread panicked");
@@ -291,9 +345,87 @@ impl Drop for Miner {
     }
 }
 
+/// A stopped miner's workers, still finishing the hashes they were in.
+/// Each holds the cache of the seed it was mining until its hash ends.
+/// Dropping it joins them.
+pub struct Draining {
+    shared: Arc<Shared>,
+    workers: Vec<DedicatedThread>,
+}
+
+impl Draining {
+    /// Every worker has returned: joining does not wait.
+    #[must_use]
+    pub fn finished(&self) -> bool {
+        self.shared
+            .exited
+            .iter()
+            .all(|exited| exited.load(Ordering::Acquire))
+    }
+
+    /// A worker still holds a cache for a seed other than `seed`; with
+    /// `None`, for any seed.
+    #[must_use]
+    pub fn holds_other_than(&self, seed: Option<&Seedhash>) -> bool {
+        holds_other_than(&self.shared.held, seed)
+    }
+
+    /// Join every worker. Waits for the hashes they are still in.
+    pub fn join(mut self) {
+        self.join_all();
+    }
+
+    fn join_all(&mut self) {
+        for worker in &mut self.workers {
+            if worker.join().is_err() {
+                tracing::error!("a miner thread panicked");
+            }
+        }
+        self.workers.clear();
+    }
+}
+
+impl Drop for Draining {
+    fn drop(&mut self) {
+        self.join_all();
+    }
+}
+
+fn holds_other_than(held: &[Mutex<Option<Seedhash>>], seed: Option<&Seedhash>) -> bool {
+    held.iter().any(|slot| {
+        slot.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .is_some_and(|holding| Some(holding) != seed)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A start waits only for stopped workers holding another seed's cache:
+    /// one on the same seed shares it, and none at all holds nothing.
+    #[test]
+    fn a_draining_worker_holds_only_the_seed_it_was_mining() {
+        let a = Seedhash::from_bytes([1; 32]);
+        let b = Seedhash::from_bytes([2; 32]);
+        let held = vec![Mutex::new(None), Mutex::new(Some(a))];
+        assert!(
+            !holds_other_than(&held, Some(&a)),
+            "the same seed is shared"
+        );
+        assert!(
+            holds_other_than(&held, Some(&b)),
+            "another seed is a second cache"
+        );
+        assert!(
+            holds_other_than(&held, None),
+            "with no job posted, any seed counts"
+        );
+        let idle = vec![Mutex::new(None), Mutex::new(None)];
+        assert!(!holds_other_than(&idle, None), "workers that hold nothing");
+    }
 
     #[test]
     fn the_nonce_ranges_partition_the_space() {

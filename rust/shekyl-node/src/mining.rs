@@ -27,9 +27,10 @@ use shekyl_daemon_rpc::mining_facts::{
 use shekyl_daemon_rpc::mining_methods::codes;
 use shekyl_hash_budget::Budget;
 use shekyl_miner::{
-    FoundBlocks, Job, JobBoard, Miner, MinerConfig, MinerStartRefused, MinerStatus, MiningAddress,
+    Draining, FoundBlocks, Job, JobBoard, Miner, MinerConfig, MinerStartRefused, MinerStatus,
+    MiningAddress,
 };
-use shekyl_pow_randomx::CacheStore;
+use shekyl_pow_randomx::{CacheStore, Seedhash};
 use shekyl_rpc_types::errors::Diagnostic;
 use shekyl_types::BlockHeight;
 use shekyl_units::AtomicUnits;
@@ -120,6 +121,11 @@ pub struct MiningControl {
     tips: watch::Receiver<TipChanged>,
     pool: PoolHealth,
     miner: Mutex<Option<Miner>>,
+    /// Stopped miners' workers still finishing the hash they were in. A
+    /// stop does not wait for them; [`Self::start`] waits for those holding
+    /// another seed's cache, and [`Node::stop`](crate::Node::stop) joins
+    /// the rest after the store has closed.
+    draining: Mutex<Vec<Draining>>,
     /// Set by [`Node::stop`](crate::Node::stop): no miner starts after it.
     closed: AtomicBool,
 }
@@ -144,22 +150,69 @@ impl MiningControl {
             tips: watches.tips,
             pool,
             miner: Mutex::new(None),
+            draining: Mutex::new(Vec::new()),
             closed: AtomicBool::new(false),
         }
     }
 
     /// Stop the miner and refuse every later start: the node is stopping.
+    /// Does not wait for the workers' hashes; [`Self::join_drained`] does,
+    /// once the node has closed what it holds.
     pub(crate) fn close(&self) {
         let mut running = self.lock();
         self.closed.store(true, Ordering::Release);
         if let Some(miner) = running.take() {
             drop(running);
-            miner.stop();
+            self.park(miner.stop());
+        }
+    }
+
+    /// Join every stopped miner's workers. Waits for the hashes they are
+    /// still in: [`Node::stop`](crate::Node::stop) calls it last, after the
+    /// store has closed.
+    pub(crate) fn join_drained(&self) {
+        let draining = std::mem::take(&mut *self.drain_lock());
+        for workers in draining {
+            workers.join();
         }
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Option<Miner>> {
         self.miner.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn drain_lock(&self) -> std::sync::MutexGuard<'_, Vec<Draining>> {
+        self.draining.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Keep a stopped miner's workers, and join any earlier ones that have
+    /// already returned (their join does not wait).
+    fn park(&self, workers: Draining) {
+        let mut draining = self.drain_lock();
+        reap_finished(&mut draining);
+        draining.push(workers);
+    }
+
+    /// Before a start: join the stopped workers that still hold a cache for
+    /// a seed other than the posted job's, or for any seed when no job is
+    /// posted. Workers on the same seed share that cache with the new ones,
+    /// so a stop and a start never keep two seeds' caches alive at once.
+    /// Waits for at most one hash per worker joined.
+    fn settle_drained(&self) {
+        let seed = self
+            .board
+            .posted()
+            .map(|(_, job)| Seedhash::from_bytes(*job.seed.as_bytes()));
+        let mut draining = self.drain_lock();
+        reap_finished(&mut draining);
+        let (other, same): (Vec<_>, Vec<_>) = std::mem::take(&mut *draining)
+            .into_iter()
+            .partition(|workers| workers.holds_other_than(seed.as_ref()));
+        *draining = same;
+        drop(draining);
+        for workers in other {
+            workers.join();
+        }
     }
 
     /// Start the miner with `threads` workers; `None` is the host's
@@ -179,6 +232,7 @@ impl MiningControl {
         if running.is_some() {
             return Err(MiningRefused::Running);
         }
+        self.settle_drained();
         let host = std::thread::available_parallelism().unwrap_or(NonZeroUsize::MIN);
         let threads = threads.unwrap_or(host);
         if threads > host {
@@ -199,11 +253,15 @@ impl MiningControl {
         Ok(())
     }
 
-    /// Stop the miner and join its workers. `false` when it was not
-    /// running. The node keeps running.
+    /// Stop the miner. `false` when it was not running. Returns without
+    /// waiting for the workers' hashes: nothing they finish after this
+    /// returns becomes a block. The node keeps running.
     pub fn stop(&self) -> bool {
-        let running = self.lock().take();
-        running.map(Miner::stop).is_some()
+        let Some(miner) = self.lock().take() else {
+            return false;
+        };
+        self.park(miner.stop());
+        true
     }
 
     /// Whether the miner is running.
@@ -371,6 +429,18 @@ impl MiningFacts for MiningControl {
             pool_retired: self.pool.retired(),
             absent: status.no_job.as_ref().map(no_job_diagnostic),
         })
+    }
+}
+
+/// Join the stopped workers that have all returned. Their join does not
+/// wait.
+fn reap_finished(draining: &mut Vec<Draining>) {
+    let (done, live): (Vec<_>, Vec<_>) = std::mem::take(draining)
+        .into_iter()
+        .partition(Draining::finished);
+    *draining = live;
+    for workers in done {
+        workers.join();
     }
 }
 
