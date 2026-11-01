@@ -83,9 +83,7 @@ pub(crate) async fn fetch_proof_tx<R: Rpc>(
             Some(
                 serde_json::to_value(GetTransactionsRequest {
                     txs_hashes: vec![txid_hex],
-                    decode_as_json: false,
                     prune: true,
-                    split: false,
                 })
                 .map_err(|e| RpcError::InternalError(format!("encode request: {e}")))?,
             ),
@@ -173,9 +171,7 @@ async fn fetch_proof_txs<R: Rpc>(
                 Some(
                     serde_json::to_value(GetTransactionsRequest {
                         txs_hashes: hashes_hex,
-                        decode_as_json: false,
                         prune: true,
-                        split: false,
                     })
                     .map_err(|e| RpcError::InternalError(format!("encode request: {e}")))?,
                 ),

@@ -200,3 +200,22 @@ that held them: `_v2` to `_v1` minus exactly the identifier fields of
 (PDM-Q7). The `_v4` delta covers neither (it is `get_peer_list` only), so
 those two deltas are no longer asserted and the three `_v3` vectors rest
 on their parity tests alone.
+
+**3.64 — `get_transactions` answers the skeleton, and five fixtures have a
+successor.** The pruned form is the skeleton (`SB-Q2`): `pruned_as_hex` is
+the pruned segment alone and every entry carries `pqc_auth_hash` (null
+for a body with no `pqc_auths` region); `prunable_as_hex`, `as_json` and
+`pruned` retire with the `split` and `decode_as_json` request switches
+(`IG-Q55`). Each successor is its predecessor minus exactly those keys
+plus `pqc_auth_hash`
+(`the_3_64_vectors_are_their_predecessors_reshaped_to_the_skeleton`):
+`get_transactions_chain_and_pool_v4`, `_request_v2` and
+`_request_defaults_v2`; and two whose meaning changed with the form and so
+take new names — `get_transactions_split_form_v3` becomes
+`_pruned_form_v1` (there is no split form, only the pruned one) and
+`_decoded_v3` becomes `_coinbase_v1` (there is no decoding; what that
+fixture pinned was a coinbase's whole body). `get_transactions_archived_v1`
+is a case no predecessor could express: a full body this node discarded,
+answered as `{tx_hash, shard}` under `archived` where the 3.63 daemon
+refused the reply (`PDM-Q10`). `get_version_synced_v41` is the chain's
+3.64 link.

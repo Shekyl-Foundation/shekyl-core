@@ -782,6 +782,21 @@ impl ReadSnapshot<'_> {
         tx_reads::archival_good_at(&self.txn, id).map_err(chain_reads::ReadFault::into_plain)
     }
 
+    /// **T5.** The archival shard the transaction at `location` belongs
+    /// to: `shekyl_types::shard_of` over the cumulative archival length
+    /// before it, assembled from the parent block's cell and the block's
+    /// earlier `txs_archival_len` rows (`SB-Q2`). The RPC's `archived`
+    /// slot state names this shard (`PDM-Q10`).
+    ///
+    /// # Errors
+    ///
+    /// A missing parent cell is **SI-7**; an id below its block's first id
+    /// is **SI-9**; an overflowing fold is **SI-8**; engine errors pass
+    /// through.
+    pub fn tx_shard(&self, location: TxLocation) -> Result<ShardId, StoreError> {
+        tx_reads::shard_at(&self.txn, location).map_err(chain_reads::ReadFault::into_plain)
+    }
+
     /// **T4b.** Whether the transaction at `id` is in the **archival shard
     /// partition's domain** — it carries archival good (`SHT-Q1` RULED, Rick
     /// 2026-09-27; `docs/completed/ARCHIVAL_SHARD_T_DERIVATION.md` §2).

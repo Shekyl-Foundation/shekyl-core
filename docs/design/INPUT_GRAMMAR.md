@@ -633,7 +633,7 @@ The catalog the Rust console and `shekyl-cli` serve (IG-Q25). The interim C++ co
 | `is_key_image_spent <ki>` | `chain spent <key-image>` | hash | |
 | `pop_blocks <n>` | — | | –: no grammar successor; it is an armed test lever (RPC_CHANNEL RT-O9.2, §6.4) |
 | `print_block <hash\|height>` | `block show <hash\|height>` | hash or integer | |
-| `print_tx <hash> [+hex] [+json]` | `tx show <id>` | hash; `--body`; `--json` is the session's | shares the wallet's word |
+| `print_tx <hash> [+hex]` | `tx show <id>` | hash; `--body`; `--json` is the session's | shares the wallet's word; `+json` went with epee's rendering (IG-Q55) |
 | `relay_tx <txid>` | `tx relay <id>` | hash | |
 | `print_pool`, `print_pool_sh`, `print_pool_stats`, `flush_txpool [txid]` | `txpool list [--short]`, `txpool stats`, `txpool flush [id]` | | |
 | `print_pl [white] [gray] [limit]`, `print_pl_stats`, `print_cn`, `print_net_stats` | `peer list [--white] [--gray] [--max N]`, `peer stats`, `peer connections`, `p2p stats` | | |

@@ -69,8 +69,10 @@ use shekyl_rpc_types::{
     TxEntry,
 };
 use shekyl_scanner::ScannableBlock;
-use shekyl_types::{ArchivalLength, PrunableHash, TxHash};
-use shekyl_wire::{block::MAX_BLOCK_BLOB_SIZE, transaction::MAX_TX_SIZE, Block, Transaction};
+use shekyl_types::{ArchivalLength, PqcAuthHash, PrunableHash, TxHash};
+use shekyl_wire::{
+    block::MAX_BLOCK_BLOB_SIZE, transaction::MAX_TX_SIZE, Block, SkeletonTx, Transaction,
+};
 
 /// Monero restricts `get_transactions` to 100 hashes per call on the
 /// restricted RPC (`core_rpc_server.cpp`); batch accordingly. Shared
@@ -202,17 +204,18 @@ fn parse_block_blob(blob_hex: &str, expected_number: usize) -> Result<Block, Rpc
     Ok(block)
 }
 
-/// Hex-decode and parse one pruned transaction blob via the canonical
-/// [`shekyl_wire::Transaction::from_bytes`], which rejects blobs larger than
-/// `MAX_TX_SIZE` up front (the untrusted-daemon DoS bound) and requires exact
-/// consumption (`GENESIS_TX_WIRE_FORMAT.md` §12 — trailing bytes rejected).
-/// This parses and validates shape only. Identity is [`parse_tx_batch`]'s job:
-/// it checks each returned `tx_hash` against the requested hash in order AND
-/// recomputes the body's own hash, mixing the reply's `prunable_hash` as the
-/// operand §11 says the pruned form needs. The label alone is not an
-/// association — the daemon chooses it.
-fn parse_pruned_tx(pruned_hex: &str, tx_hash_hex: &str) -> Result<Transaction, RpcError> {
-    parse_tx_blob(pruned_hex, tx_hash_hex, TxBodyForm::Pruned)
+/// Parse one skeleton's unprunable bytes via the canonical
+/// [`shekyl_wire::Transaction::from_pruned_bytes`], which rejects blobs
+/// larger than `MAX_TX_SIZE` up front (the untrusted-daemon DoS bound) and
+/// requires exact consumption of the pruned segment (`SB-Q2`: bytes after
+/// the base would read as authentications and proof data that the
+/// skeleton's txid ignores). This parses and validates shape only. Identity
+/// is [`parse_tx_batch`]'s job: it checks each returned `tx_hash` against
+/// the requested hash in order AND recomputes the skeleton's own txid from
+/// the reply's three operands. The label alone is not an association — the
+/// daemon chooses it.
+fn parse_pruned_tx(skeleton: &SkeletonTx, tx_hash_hex: &str) -> Result<Transaction, RpcError> {
+    parse_tx_bytes(&skeleton.unprunable, tx_hash_hex, TxBodyForm::Pruned)
 }
 
 /// As [`parse_pruned_tx`], for a **full** (unpruned) body: the same DoS bound,
@@ -224,27 +227,40 @@ fn parse_pruned_tx(pruned_hex: &str, tx_hash_hex: &str) -> Result<Transaction, R
 /// storage-pruned spend is rejected here rather than surviving to a bogus
 /// hash downstream.
 fn parse_full_tx(full_hex: &str, tx_hash_hex: &str) -> Result<Transaction, RpcError> {
-    parse_tx_blob(full_hex, tx_hash_hex, TxBodyForm::Full)
+    parse_tx_bytes(
+        &decode_tx_hex(full_hex, tx_hash_hex)?,
+        tx_hash_hex,
+        TxBodyForm::Full,
+    )
 }
 
-/// Shared parse body behind [`parse_pruned_tx`] / [`parse_full_tx`]; `form`
-/// selects the canonical-shape validator matching the body form requested.
-fn parse_tx_blob(
-    blob_hex: &str,
-    tx_hash_hex: &str,
-    form: TxBodyForm,
-) -> Result<Transaction, RpcError> {
-    // DoS pre-bound: `hex::decode` allocates ~`blob_hex.len() / 2` bytes, so
-    // bound the *input* length before decoding — otherwise a hostile daemon
-    // could force a large allocation that `from_bytes`'s own `MAX_TX_SIZE`
-    // guard only catches after the decode. A pruned blob is at most a full tx
-    // (`MAX_TX_SIZE` bytes ⇒ `2 * MAX_TX_SIZE` hex chars).
+/// Hex-decode one body under the untrusted-daemon DoS bound.
+///
+/// `hex::decode` allocates ~`blob_hex.len() / 2` bytes, so the *input*
+/// length is bounded before decoding — otherwise a hostile daemon could
+/// force a large allocation that the parser's own `MAX_TX_SIZE` guard only
+/// catches after the decode. A pruned segment is at most a full tx
+/// (`MAX_TX_SIZE` bytes ⇒ `2 * MAX_TX_SIZE` hex chars).
+fn decode_tx_hex(blob_hex: &str, tx_hash_hex: &str) -> Result<Vec<u8>, RpcError> {
     if blob_hex.len() > MAX_TX_SIZE.saturating_mul(2) {
         return Err(invalid_tx_error(tx_hash_hex));
     }
-    let bytes = hex::decode(blob_hex)
-        .map_err(|_| RpcError::InvalidNode("tx blob wasn't hex".to_string()))?;
-    let tx = Transaction::from_bytes(&bytes).map_err(|_| invalid_tx_error(tx_hash_hex))?;
+    hex::decode(blob_hex).map_err(|_| RpcError::InvalidNode("tx blob wasn't hex".to_string()))
+}
+
+/// Shared parse body behind [`parse_pruned_tx`] / [`parse_full_tx`]; `form`
+/// selects the parser and the canonical-shape validator matching the body
+/// form requested.
+fn parse_tx_bytes(
+    bytes: &[u8],
+    tx_hash_hex: &str,
+    form: TxBodyForm,
+) -> Result<Transaction, RpcError> {
+    let tx = match form {
+        TxBodyForm::Pruned => Transaction::from_pruned_bytes(bytes),
+        TxBodyForm::Full => Transaction::from_bytes(bytes),
+    }
+    .map_err(|_| invalid_tx_error(tx_hash_hex))?;
     // Canonical-shape gate: the daemon is untrusted, so reject any tx that is not a
     // well-formed, block-height-only Shekyl transaction before it reaches the scanner.
     // Pruned bodies take the pruned-safe context-free subset (`validate()`'s
@@ -332,9 +348,7 @@ async fn fetch_transactions<R: Rpc>(
                 Some(
                     serde_json::to_value(GetTransactionsRequest {
                         txs_hashes: hashes_hex,
-                        decode_as_json: false,
                         prune,
-                        split: false,
                     })
                     .map_err(|e| RpcError::InternalError(format!("encode request: {e}")))?,
                 ),
@@ -406,10 +420,10 @@ pub(crate) fn refuse_unless_ok(status: &RpcStatus, method: &'static str) -> Resu
 /// must match and each entry's claimed `tx_hash` must equal the requested hash
 /// for its slot. That label check is the cheap failure, not the association:
 /// the daemon chooses the label as freely as the body, so every body is then
-/// **re-hashed and compared** — the pruned form through
-/// [`Transaction::hash_with_supplied_prunable`], which takes the reply's
-/// `prunable_hash` and `archival_len` as the operands §11 requires, and the
-/// full form through `hash()` directly. An unchecked reorder or substitution would otherwise
+/// **re-hashed and compared** — the pruned form as the skeleton it is
+/// ([`SkeletonTx::txid`]: the pruned segment with the reply's
+/// `pqc_auth_hash`, `prunable_hash` and `archival_len` as the operands §11
+/// requires, `SB-Q2`), and the full form through `hash()` directly. An unchecked reorder or substitution would otherwise
 /// mis-assign the running global output index (assigned by walking txs in
 /// block order) and record wrong txids — exactly the failure the untrusted-node
 /// model must reject. (The P-scan's SP-6 exhaustiveness gate recomputes full
@@ -418,14 +432,13 @@ pub(crate) fn refuse_unless_ok(status: &RpcStatus, method: &'static str) -> Resu
 /// total length exact, so no separate cardinality check is needed after
 /// batching.
 ///
-/// Body-field selection: a pruned request answers in the split form
-/// (`pruned_as_hex`). A full request answers in the **non-split** form
-/// (`as_hex`) — except that the daemon falls back to the split form when the
-/// prunable section is empty, in which case the pruned body *is* the full
-/// body, so `pruned_as_hex` is accepted as the fallback. A body served
-/// through the fallback still passes [`parse_full_tx`]'s complete validator,
-/// so a hostile daemon cannot use the fallback to smuggle a
-/// prunable-stripped spend.
+/// Body-field selection: a pruned request answers in `pruned_as_hex`, the
+/// pruned segment alone. A full request answers in `as_hex`, the whole
+/// body — except that a body with no archival good is its own skeleton, and
+/// the daemon answers that in `pruned_as_hex`, so it is accepted as the
+/// fallback. A body served through the fallback still passes
+/// [`parse_full_tx`]'s complete validator, so a hostile daemon cannot use
+/// the fallback to smuggle a prunable-stripped spend.
 pub(crate) fn parse_tx_batch(
     batch: &[TxHash],
     txs: &[TxEntry],
@@ -450,12 +463,24 @@ pub(crate) fn parse_tx_batch(
         }
         let tx_hash_hex = t.tx_hash.to_string();
         let non_empty = |s: &str| (!s.is_empty()).then(|| s.to_owned());
-        let parsed = match form {
+        // The parsed body, and the skeleton it was parsed from when the
+        // form is pruned: the binding below hashes the skeleton, not the
+        // body, so the operands travel with the bytes they were served with.
+        let (parsed, skeleton) = match form {
             TxBodyForm::Pruned => {
                 let pruned_hex = non_empty(&t.pruned_as_hex).ok_or_else(|| {
                     RpcError::InvalidNode("transaction response missing pruned_as_hex".to_string())
                 })?;
-                parse_pruned_tx(&pruned_hex, &tx_hash_hex)?
+                let skeleton = SkeletonTx {
+                    unprunable: decode_tx_hex(&pruned_hex, &tx_hash_hex)?,
+                    prunable_hash: PrunableHash::from_bytes(t.prunable_hash.to_bytes()),
+                    pqc_auth_hash: t
+                        .pqc_auth_hash
+                        .into_option()
+                        .map(|hash| PqcAuthHash::from_bytes(hash.to_bytes())),
+                    archival_len: ArchivalLength::from_raw(t.archival_len),
+                };
+                (parse_pruned_tx(&skeleton, &tx_hash_hex)?, Some(skeleton))
             }
             TxBodyForm::Full => {
                 let full_hex = non_empty(&t.as_hex)
@@ -463,7 +488,7 @@ pub(crate) fn parse_tx_batch(
                     .ok_or_else(|| {
                         RpcError::InvalidNode("transaction response missing as_hex".to_string())
                     })?;
-                parse_full_tx(&full_hex, &tx_hash_hex)?
+                (parse_full_tx(&full_hex, &tx_hash_hex)?, None)
             }
         };
 
@@ -476,17 +501,18 @@ pub(crate) fn parse_tx_batch(
         // bytes closes it: to substitute a body the daemon would have to find
         // one whose hash is a txid someone else named first.
         //
-        // The pruned form takes its prunable digest and its archival length
-        // from the reply, which are also the daemon's to choose — and it
-        // gains nothing by it. Choosing them freely leaves it solving
-        // `H(prefix ‖ base ‖ pqc ‖ X ‖ len) = txid` for `X` and `len`, a
-        // keccak preimage, not a substitution.
-        let recomputed = match form {
-            TxBodyForm::Pruned => parsed.hash_with_supplied_prunable(
-                PrunableHash::from_bytes(t.prunable_hash.to_bytes()),
-                ArchivalLength::from_raw(t.archival_len),
-            ),
-            TxBodyForm::Full => parsed.hash(),
+        // The pruned form takes its three operands from the reply, which
+        // are also the daemon's to choose — and it gains nothing by it.
+        // Choosing them freely leaves it solving
+        // `H(prefix ‖ base ‖ P ‖ X ‖ len) = txid` for `P`, `X` and `len`, a
+        // keccak preimage, not a substitution. An arity the prefix cannot
+        // carry, or one it needs and was not given, hashes to another
+        // identity and is refused the same way.
+        let recomputed = match &skeleton {
+            Some(skeleton) => skeleton
+                .txid()
+                .map_err(|_| invalid_tx_error(&tx_hash_hex))?,
+            None => parsed.hash(),
         };
         if recomputed != *expected_hash {
             return Err(RpcError::InvalidNode(format!(

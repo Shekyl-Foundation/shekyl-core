@@ -137,7 +137,7 @@ pub use p2p::{
     SyncInfoResponse, SyncSpan,
 };
 pub use transactions::{
-    GetTransactionsRequest, GetTransactionsResponse, IsKeyImageSpentRequest,
+    ArchivedTx, GetTransactionsRequest, GetTransactionsResponse, IsKeyImageSpentRequest,
     IsKeyImageSpentResponse, KeyImageStatus, KeyImageStatusError, TxEntry, TxEntryError,
     TxLocation,
 };

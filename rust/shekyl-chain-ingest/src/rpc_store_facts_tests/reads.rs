@@ -339,8 +339,8 @@ async fn serve_the_block_fetch(facts: Arc<StoreFacts>) -> String {
 
 /// The wallet's block fetch reads a block and its spend from the
 /// store-backed handlers (the review of #1165, ruling 7): `get_block`,
-/// `get_transactions` in the pruned form the wallet asks for — with no
-/// `as_json` — and the first output index. The wallet binds each pruned
+/// `get_transactions` in the pruned form the wallet asks for, and the
+/// first output index. The wallet binds each pruned
 /// body to the hash it asked by (its `prunable_hash` and archival length),
 /// so a body served wrong fails here. A lone `Node` holds no spendable
 /// output, so the chain is the scenario's, read through the same
@@ -385,9 +385,10 @@ async fn the_wallets_block_fetch_reads_a_spend_from_the_store_backed_handlers() 
 
 /// `get_transactions` over the store and a pool: a mined transaction
 /// carries its height and output indices; a pool entry is `in_pool`,
-/// relayed, with no receive time; an id held nowhere is missed; nothing
-/// carries `as_json` (the review of #1165, ruling 7). Red edit: the gather
-/// passes over the pool.
+/// relayed, with no receive time; an id held nowhere is missed; the full
+/// form carries each whole body and no `archived` state, since nothing is
+/// discarded this side of the first boundary (`SB-Q2`). Red edit: the
+/// gather passes over the pool.
 #[tokio::test]
 async fn get_transactions_answers_the_chain_the_pool_and_a_miss() {
     let (mut scenario, mined) = crate::pool_door_tests::matured("rpc-get-transactions").await;
@@ -420,9 +421,7 @@ async fn get_transactions_answers_the_chain_the_pool_and_a_miss() {
                         hex::encode(pooled.hash().to_bytes()),
                         hex::encode(nowhere),
                     ],
-                    decode_as_json: false,
                     prune: false,
-                    split: false,
                 },
                 false,
             )
@@ -456,9 +455,9 @@ async fn get_transactions_answers_the_chain_the_pool_and_a_miss() {
                 }
             );
             assert_eq!(pool_entry.as_hex, hex::encode(pooled.serialize()));
-            assert!(reply.txs.iter().all(|entry| entry.as_json.is_none()));
+            assert!(reply.archived.is_empty());
             let wire = serde_json::to_string(&reply).expect("json");
-            assert!(!wire.contains("as_json"), "absent, not empty: {wire}");
+            assert!(!wire.contains("archived"), "absent, not empty: {wire}");
             assert!(!wire.contains("received_timestamp"), "{wire}");
         })
         .await;

@@ -358,11 +358,9 @@ mod check_workflows {
                                     .expect("txid is 32 bytes of hex"),
                                 as_hex: String::new(),
                                 pruned_as_hex: (*body_hex).clone(),
-                                prunable_as_hex: String::new(),
                                 prunable_hash: shekyl_rpc_types::HashHex::ZERO,
+                                pqc_auth_hash: shekyl_rpc_types::Nullable::NULL,
                                 archival_len: 0,
-                                as_json: None,
-                                pruned: false,
                                 double_spend_seen: false,
                                 location: if self.pooled.contains(h.as_str()) {
                                     shekyl_rpc_types::TxLocation::Pooled {
@@ -396,6 +394,7 @@ mod check_workflows {
                         txs,
                         missed_tx: missed,
                         unavailable_tx: Vec::new(),
+                        archived: Vec::new(),
                     })
                     .expect("wire type serializes")
                 }

@@ -80,9 +80,7 @@ fn a_flush_over_a_faulted_pool_file_retires_the_pool() {
         &*handles.chain,
         &GetTransactionsRequest {
             txs_hashes: vec![asked(&coinbase).to_string(), asked(&planted).to_string()],
-            decode_as_json: false,
             prune: false,
-            split: false,
         },
         true,
     );

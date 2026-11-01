@@ -20,7 +20,20 @@ use shekyl_types::{
     ArchivalLength, AttestationRoot, BlockHash, CurveTreeRoot, PrunableHash, TxHash,
 };
 use shekyl_wire::transaction::UNLOCK_TIME_BLOCK_SENTINEL;
-use shekyl_wire::{BlockHeader, Ct, CtBase, Input, Output, TxPrefix};
+use shekyl_wire::{BlockHeader, Ct, CtBase, Input, Output, SkeletonTx, TxPrefix};
+
+/// A skeleton over `unprunable` with null operands: what the daemon serves
+/// for a spend whose prunable region and `pqc_auths` are both empty, which
+/// is every fixture below. The parse tests exercise the bytes; the binding
+/// tests exercise the operands through `parse_tx_batch`.
+fn skeleton(unprunable: &[u8]) -> SkeletonTx {
+    SkeletonTx {
+        unprunable: unprunable.to_vec(),
+        prunable_hash: PrunableHash::from_bytes([0u8; 32]),
+        pqc_auth_hash: None,
+        archival_len: ArchivalLength::ZERO,
+    }
+}
 
 /// A daemon that answers every route with one fixed document, so a test
 /// can hand the consumer a reply the wire permits but the contract does
@@ -70,11 +83,9 @@ async fn a_refusal_carrying_a_body_is_refused_not_parsed() {
             tx_hash: HashHex::from_bytes(txid.to_bytes()),
             as_hex: String::new(),
             pruned_as_hex: hex::encode(&body),
-            prunable_as_hex: String::new(),
             prunable_hash: HashHex::from_bytes(prunable_digest),
+            pqc_auth_hash: shekyl_rpc_types::Nullable::NULL,
             archival_len,
-            as_json: None,
-            pruned: false,
             double_spend_seen: false,
             location: shekyl_rpc_types::TxLocation::Mined {
                 block_height: 3,
@@ -85,6 +96,7 @@ async fn a_refusal_carrying_a_body_is_refused_not_parsed() {
         }],
         missed_tx: Vec::new(),
         unavailable_tx: Vec::new(),
+        archived: Vec::new(),
     };
     let rpc = CannedDaemon(std::sync::Arc::new(
         serde_json::to_vec(&reply).expect("wire type serializes"),
@@ -187,22 +199,21 @@ fn parse_pruned_tx_round_trips_and_rejects_trailing() {
     let tx = pruned_spend_tx(0);
     let mut bytes = Vec::new();
     tx.write(&mut bytes).expect("Vec write is infallible");
-    let hexed = hex::encode(&bytes);
-    let parsed = parse_pruned_tx(&hexed, "").expect("pruned tx round trips");
+    let parsed = parse_pruned_tx(&skeleton(&bytes), "").expect("pruned tx round trips");
     assert_eq!(parsed.prefix.outputs.len(), 2);
 
     let mut trailing = bytes.clone();
     trailing.push(0xAB);
     assert!(matches!(
-        parse_pruned_tx(&hex::encode(&trailing), ""),
+        parse_pruned_tx(&skeleton(&trailing), ""),
         Err(RpcError::InvalidNode(_))
     ));
 }
 
 #[test]
-fn parse_pruned_tx_rejects_non_hex() {
+fn decode_tx_hex_rejects_non_hex() {
     assert!(matches!(
-        parse_pruned_tx("zz", ""),
+        decode_tx_hex("zz", ""),
         Err(RpcError::InvalidNode(_))
     ));
 }
@@ -234,7 +245,7 @@ fn parse_pruned_tx_rejects_coinbase_shaped() {
     // A valid coinbase passes the context-free validator, then is_coinbase rejects it.
     assert!(real_coinbase.validate_context_free_pruned().is_ok());
     assert!(matches!(
-        parse_pruned_tx(&hex::encode(real_coinbase.serialize()), ""),
+        parse_pruned_tx(&skeleton(&real_coinbase.serialize()), ""),
         Err(RpcError::InvalidNode(_))
     ));
 
@@ -265,7 +276,7 @@ fn parse_pruned_tx_rejects_coinbase_shaped() {
     };
     assert!(gen_fcmp.validate_context_free_pruned().is_err());
     assert!(matches!(
-        parse_pruned_tx(&hex::encode(gen_fcmp.serialize()), ""),
+        parse_pruned_tx(&skeleton(&gen_fcmp.serialize()), ""),
         Err(RpcError::InvalidNode(_))
     ));
 }
@@ -283,7 +294,7 @@ fn parse_pruned_tx_rejects_single_output_spend() {
         base.commitments.truncate(1);
     }
     assert!(matches!(
-        parse_pruned_tx(&hex::encode(tx.serialize()), ""),
+        parse_pruned_tx(&skeleton(&tx.serialize()), ""),
         Err(RpcError::InvalidNode(_))
     ));
 }
@@ -400,11 +411,9 @@ fn tx_entry_with(tx_hash: TxHash, as_hex: &str, pruned_as_hex: &str) -> TxEntry 
         tx_hash: HashHex::from_bytes(tx_hash.to_bytes()),
         as_hex: as_hex.to_owned(),
         pruned_as_hex: pruned_as_hex.to_owned(),
-        prunable_as_hex: String::new(),
         prunable_hash: HashHex::from_bytes([0u8; 32]),
+        pqc_auth_hash: shekyl_rpc_types::Nullable::NULL,
         archival_len: 0,
-        as_json: None,
-        pruned: false,
         double_spend_seen: false,
         location: shekyl_rpc_types::TxLocation::Mined {
             block_height: 1,
@@ -545,8 +554,8 @@ fn a_reply_without_a_tx_hash_label_is_refused_at_the_boundary() {
     let doc = serde_json::json!({
         "status": "OK",
         "txs": [{
-            "as_hex": "", "pruned_as_hex": blob, "prunable_as_hex": "",
-            "prunable_hash": "00".repeat(32), "as_json": "",
+            "as_hex": "", "pruned_as_hex": blob,
+            "prunable_hash": "00".repeat(32), "pqc_auth_hash": null,
             "in_pool": false, "double_spend_seen": false,
             "block_height": 1, "confirmations": 1, "block_timestamp": 0
         }]
@@ -622,7 +631,8 @@ fn parse_full_tx_rejects_a_prunable_stripped_spend_naming_the_pruned_daemon() {
     }
     // The same blob is fine on the pruned path — the split is the form, not
     // the tx.
-    parse_pruned_tx(&stripped_hex, "").expect("pruned form accepts the stripped spend");
+    parse_pruned_tx(&skeleton(&pruned_spend_tx(0).serialize()), "")
+        .expect("pruned form accepts the stripped spend");
 
     // A body that is malformed BEYOND the missing prunable section (a
     // single-output spend violates the anti-deanon minimum) keeps the
@@ -664,8 +674,8 @@ fn parse_tx_batch_empty_is_ok_full_form_too() {
 
 /// Hex of a valid pruned non-miner spend with the given `unlock_time` — for the
 /// block-height-only ingestion gate tests.
-fn pruned_tx_hex_with_unlock_time(unlock_time: u64) -> String {
-    hex::encode(pruned_spend_tx(unlock_time).serialize())
+fn pruned_skeleton_with_unlock_time(unlock_time: u64) -> SkeletonTx {
+    skeleton(&pruned_spend_tx(unlock_time).serialize())
 }
 
 #[test]
@@ -673,23 +683,23 @@ fn parse_pruned_tx_rejects_timestamp_form_unlock_time() {
     // A structurally valid pruned tx whose `unlock_time` is the timestamp
     // form is non-canonical (consensus rejects it — GENESIS §9 creation
     // cut); ingestion must refuse it so the scanner never sees it.
-    let bad = pruned_tx_hex_with_unlock_time(UNLOCK_TIME_BLOCK_SENTINEL);
+    let bad = pruned_skeleton_with_unlock_time(UNLOCK_TIME_BLOCK_SENTINEL);
     assert!(matches!(
         parse_pruned_tx(&bad, ""),
         Err(RpcError::InvalidNode(_))
     ));
     // The largest block-form value still parses.
-    let ok = pruned_tx_hex_with_unlock_time(UNLOCK_TIME_BLOCK_SENTINEL - 1);
+    let ok = pruned_skeleton_with_unlock_time(UNLOCK_TIME_BLOCK_SENTINEL - 1);
     assert!(parse_pruned_tx(&ok, "").is_ok());
 }
 
 #[test]
-fn parse_pruned_tx_rejects_oversized_hex_before_decode() {
+fn decode_tx_hex_rejects_oversized_hex_before_decode() {
     // DoS pre-bound: a hex string longer than `2 * MAX_TX_SIZE` is rejected
     // by length before `hex::decode` allocates. All-hex chars of even
     // length, so only the length gate (not a decode error) can fire.
     let oversized = "0".repeat(MAX_TX_SIZE * 2 + 2);
-    assert!(parse_pruned_tx(&oversized, "").is_err());
+    assert!(decode_tx_hex(&oversized, "").is_err());
 }
 
 #[test]

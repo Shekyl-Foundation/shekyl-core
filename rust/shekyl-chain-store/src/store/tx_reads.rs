@@ -72,7 +72,10 @@
 use core::marker::PhantomData;
 
 use redb::{ReadableTable, ReadableTableMetadata, TableDefinition, TableHandle};
-use shekyl_types::{ArchivalLength, BlockHeight, PqcAuthHash, PrunableHash, TxHash};
+use shekyl_types::{
+    shard_of, storage_ids_through, ArchivalLength, BlockHeight, PqcAuthHash, PrunableHash, ShardId,
+    TxHash,
+};
 use shekyl_wire::SkeletonTx;
 
 use crate::codec::{
@@ -82,12 +85,12 @@ use crate::codec::{
 use crate::ids::TxStorageId;
 use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{
-    TXS_ARCHIVAL_LEN, TXS_PQC_AUTHS, TXS_PQC_AUTH_HASH, TXS_PRUNABLE, TXS_PRUNABLE_HASH,
-    TXS_PRUNED, TX_INDICES, TX_OUTPUTS,
+    BLOCK_INFO, TXS_ARCHIVAL_LEN, TXS_PQC_AUTHS, TXS_PQC_AUTH_HASH, TXS_PRUNABLE,
+    TXS_PRUNABLE_HASH, TXS_PRUNED, TX_INDICES, TX_OUTPUTS,
 };
 
 use super::at_index::AtIndex;
-use super::chain_reads::{absent, undecodable, ReadFault, ReadTables};
+use super::chain_reads::{self, absent, undecodable, ReadFault, ReadTables};
 use super::error::{HeldRegion, StoreInvariant};
 
 // ---------------------------------------------------------------- types
@@ -589,6 +592,54 @@ pub(super) fn archival_good_at<T: ReadTables>(
         (None, Some(_), true) => return Err(half(HeldRegion::PqcAuths)),
     };
     Ok(AtIndex::Recorded(answer))
+}
+
+/// **T5.** The archival shard the transaction at `location` belongs to
+/// (`SB-Q2`; `PDM-Q10`): [`shard_of`] over the cumulative archival length
+/// **before** it — the parent block's `cumulative_archival_len` cell, plus
+/// the `txs_archival_len` rows of the transactions its block recorded
+/// before it (the coinbase first, CEN-F; a sparse row is zero). `shard_of`
+/// is the partition's one boundary function; this read only assembles its
+/// operand, the way the prune's descent and the shard walk do.
+///
+/// The caller holds a [`TxLocation`] T1 or T3 answered, so the block exists
+/// and the id is below the count. An id below its block's first id is the
+/// index disagreeing with the dense issue order, **SI-9**.
+pub(super) fn shard_at<T: ReadTables>(txn: &T, location: TxLocation) -> Result<ShardId, ReadFault> {
+    let (before, first) = match location.height.to_raw().checked_sub(1) {
+        None => (ArchivalLength::ZERO, 0),
+        Some(parent) => {
+            let info = chain_reads::cell(txn, BLOCK_INFO, parent, "block_info")?
+                .ok_or_else(|| absent("block_info"))?;
+            let first = storage_ids_through(info.cumulative_tx_count, parent).ok_or(
+                ReadFault::Invariant(StoreInvariant::FoldOverflow {
+                    cell: "block_info.cumulative_tx_count",
+                }),
+            )?;
+            (info.cumulative_archival_len, first)
+        }
+    };
+    let id = location.id.to_raw();
+    if id < first {
+        return Err(not_dense());
+    }
+    let lens = txn.table(TXS_ARCHIVAL_LEN)?;
+    let mut cum = before;
+    for earlier in first..id {
+        let len = match lens.get(earlier)? {
+            Some(guard) => guard
+                .value()
+                .decode()
+                .map_err(|cause| undecodable("txs_archival_len", cause))?,
+            None => ArchivalLength::ZERO,
+        };
+        cum = cum
+            .checked_add(len)
+            .ok_or(ReadFault::Invariant(StoreInvariant::FoldOverflow {
+                cell: "block_info.cumulative_archival_len",
+            }))?;
+    }
+    Ok(shard_of(cum))
 }
 
 /// **T4b.** Whether the transaction at `id` is in the **archival shard

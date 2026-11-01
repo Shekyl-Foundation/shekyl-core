@@ -191,17 +191,16 @@ pub struct BlocksAt {
 
 /// What [`ChainReadFacts::transactions`] gathered for `get_transactions`:
 /// one slot per id asked, and the chain height confirmations count from,
-/// both read off one snapshot.
+/// both read off one snapshot. A body this node has discarded is a slot
+/// like any other — its skeleton with [`crate::core::ArchivalGood::Discarded`]
+/// — and the projection decides, per the request's form, whether that is
+/// an entry or an `archived` state (`PDM-Q10`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TransactionsAt {
     /// One slot per id, in request order.
     pub slots: Vec<crate::core::TxSlot>,
     /// The chain's height: the tip's plus one.
     pub chain_height: u64,
-    /// The first id whose body this node has pruned — its prunable region
-    /// and `pqc_auths` go together — so the wire cannot recompose it; the
-    /// slots stop before it.
-    pub pruned_here: Option<TxHash>,
 }
 
 /// Where a key image is spent.
