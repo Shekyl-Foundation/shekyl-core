@@ -1372,7 +1372,7 @@ flowchart TD
   B[DRS-B Path B Rust consumers]
   MAT[DRS-MAT wallet e2e matrix LMDB x redb]
   X[DRS-X deletion register + unlink LMDB if D2 closed]
-  SB[DRS-SB set-B discard in the Rust daemon — first post-cutover increment, PDM-Q-S0]
+  SB[DRS-SB the daemon below the body horizon — skeleton form, archived slot, refusals, re-tenses; SB-Q2]
   G{D2 closed?}
   G1[Genesis redb-only]
   G2[Genesis LMDB + surfaces]
@@ -1397,7 +1397,7 @@ flowchart TD
   B --> X
   MAT --> X
   X --> SB
-  SB -->|genesis does not precede discard| G
+  SB -->|genesis does not precede the below-horizon contract| G
   G -->|yes| G1
   G -->|reopened| G2
 ```
@@ -1416,7 +1416,7 @@ flowchart TD
 | **DRS-MAT** | Wallet Phase 6a / Track-2 as **LMDB×redb CI matrix** from first redb read path | During shadow | Continuous discharge (E-8), not a late phase |
 | **DRS-B** | Path B consumers | Replaced by [`DRS_X_STORE_FLIP.md`](DRS_X_STORE_FLIP.md) (DRS-X Round 0, ruled 2026-10-16) | No façade under `Blockchain` (DX-Q1): the C++ consumers that survive the flip — the protocol handler and `levin_notify` — call a thin `core` shell (DEL-002) that forwards to Rust, and their owners (chain sync, RD) delete it. |
 | **DRS-X** | **The store flip** | Ruled: [`DRS_X_STORE_FLIP.md`](DRS_X_STORE_FLIP.md) (Round 0, Rick 2026-10-16, DX-Q1…DX-Q9) | Six PRs (DX-Q7): PR-b (the Rust pool), PR 2 (router, arrival entry, `TipChanged`, hasher budget), PR 3 (Rust RPC handlers, miner loop), PR 3n (`shekyl-node`, the daemon's one Node, built at start and unrouted, N1), PR 3b (the handlers over the pool, the router and the node), then the flip, which deletes LMDB, `Blockchain`, `tx_memory_pool`, the C++ RPC server whole (DX-Q3) and DEL-004/008/009/010's C++, gated by DX-Q8's divergence register. DEL-008's gate holds at genesis (Rick, 2026-10-18): Slice C's admission rows implemented, CEN-J8–J10 retired, the draw live; until then testnet archival runs on the Rust path as it stands, carriers included. |
-| **DRS-SB** | **Set-B discard in the Rust daemon** — the design is [`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md) (`PDM-Q1`/`Q2` the retained set and the discard predicate; `PDM-Q3` the residual consensus reads); this row is only its place in the order. Node added 2026-10-10. | **After X** — `PDM-Q-S0` (RULED 2026-09-12): not implemented in the C++ daemon, lands in the Rust daemon after the cutover, and **genesis does not precede it**. | Replaces nothing in C++: the inherited `prune_worker` engine was deleted 2026-09-21 (§3.5's UPDATE), and the C++ serve-credit leaf read it would have had to coexist with deletes at X (`DEL-008`), so the discard and that read are never live together (`PDM-Q3`). The store carries **no node-variable content** until this lands (§11.2's note). The §7 graph places this node between `DRS-X` and the D2 diamond, so neither genesis is reachable without it. |
+| **DRS-SB** | **The daemon below the body horizon** — the below-horizon read contract: the skeleton as the one pruned form on every surface, the `archived` slot for a full-form request past the horizon, the operator refusals, and the re-tenses of the statements that described the discard as pending. Ruled in [`DRS_SB_BELOW_HORIZON.md`](DRS_SB_BELOW_HORIZON.md) (`SB-Q1`…`SB-Q8`, RULED 2026-10-31; register §3). The discard itself is **built**: S-PRUNE (2026-09-25, `rust/shekyl-chain-store/src/store/prune.rs`) is `PDM-Q2`'s predicate, uniform under `PDM-Q9`, and is not rebuilt here (`SB-Q1`). Node added 2026-10-10 as *set-B discard*; re-scoped 2026-10-31. | **After X, before the next release cut** — the code increment (`SB-Q2`, Brief B) lands after #1212 merges and before the next release cut, because a long-lived testnet closes real shards and runs real discards; **genesis does not precede it** (`PDM-Q-S0`). | Replaces nothing in C++: the inherited `prune_worker` engine was deleted 2026-09-21 (§3.5's UPDATE), and the C++ serve-credit leaf read deletes at X (`DEL-008`), so the discard and that read are never live together (`PDM-Q3`). The store carries **no node-variable content, before or after the discard** (§11.2; `SB-F1`): every daemon's store is identical below the horizon at the same tip. The §7 graph places this node between `DRS-X` and the D2 diamond, so neither genesis is reachable without it. |
 
 ### 7.1 DRS-P0 — multi-PR envelope (honest “one audit pass”)
 
@@ -2667,10 +2667,10 @@ reasons row for row** — two instruments, one field, cross-checked:
 > `PDM-Q` by this block**; the uniform-schedule-versus-uniform-content
 > distinction above is what forced the question to be stated precisely enough to
 > be seen as malformed, and that is all it was needed for.
-> **`archival_attestation_witness`'s conditional row reopens on the same
-> event**, having dissolved only while nothing could discard and nothing could
-> acquire pruned. Neither is settled until the new mechanism's discard shape is
-> ruled (`PDM-Q`, PR #723) — still a trigger, now with a direction.
+> **`archival_attestation_witness`'s row is closed as corpus** (`SB-Q8`,
+> 2026-10-31): the discard shape is ruled and built (`PDM-Q2`, S-PRUNE), it
+> is uniform, and the witness is bound for every body, so the row reopens
+> only if a S-PRUNE horizon ever names the table.
 >
 > **Cross-reference:** slice A reached the same place from the digest side, and
 > its reopening subsection states the conjunct this trigger needs — *discard
@@ -2716,28 +2716,32 @@ reasons row for row** — two instruments, one field, cross-checked:
 >   wallets can still scan?"), which is `PDM-Q`'s question and not a digest
 >   classification.
 >
-> **The consequence for the port is positive and time-boxed.** With the
+> **The consequence for the port is positive and permanent.** With the
 > inherited prune not coming over, the Rust store has **no node-variable
-> content by construction** until set-B discard lands — so the digest oracle
-> commissions against a **uniform** reference rather than a merely
-> currently-uniform one. That is the cleanest window there will be, and it
-> closes the day discard lands.
+> content by construction** — before set-B discard landed (S-PRUNE,
+> 2026-09-25) and after it, because the discard is uniform (`PDM-Q2`,
+> `PDM-Q9`; `prune_tests.rs`
+> `pruned_and_unpruned_stores_place_every_shard_alike`): every daemon's store
+> is identical below the horizon at the same tip. So the digest oracle
+> commissions against a **uniform** reference, and no window closes
+> (`DRS_SB_BELOW_HORIZON.md` `SB-Q4`, `SB-F1`).
 
 
-**And one CONDITIONAL row, which is the interesting one because it is neither
-excluded nor unconditionally rebuildable.** `archival_attestation_witness` is
-class `small` — digested, consensus-bearing, not excluded by anyone — and it
-reaches the store through `block_connect_supplement::attestation_witness`
-(`src/cryptonote_core/tx_verification_utils.h:67`), populated by the transport,
-*"empty until the transport populates it"*. Its bytes ride the coinbase
-transaction's **prunable** side (`ARCHIVAL_CREDIT_WIRE.md`, prunable-residence
-row: *"Header kept; 3.43 KB countersignature on the coinbase-tx prunable
-side"*). So it is reconstructible from the local corpus **iff the node retains
-that prunable region**, and on a pruning node it is not — the same dependency
-the `node-local` group carries, on a table nobody has classified that way.
-**Flagged for the implementation to confirm at the byte level rather than
-asserted here:** what this section establishes is that the table's rebuild path
-runs through prunable bytes, not that the projection is exact.
+**And the row that was CONDITIONAL, closed as corpus (`SB-Q8`, RULED
+2026-10-31).** `archival_attestation_witness` is class `small` — digested,
+consensus-bearing, not excluded by anyone — and reaches the store from the
+block's connect supplement, populated by the transport. It was graded
+*reconstructible iff the node retains the prunable region* because its bytes
+ride the coinbase transaction's prunable side on the wire
+(`ARCHIVAL_CREDIT_WIRE.md`, prunable-residence row). That conditional has no
+instance: the table is **corpus** (§9's KEEP-C), written at connect and kept
+on every node, never discarded, never derived from the prunable region —
+because `bind_body` (`rust/shekyl-chain-rules/src/header_path.rs`,
+`B4::bind_root`) binds the attestation witness for **every** body, skeleton
+bodies included, so skeleton sync below the horizon needs it and it can never
+enter set B. Falsifier: a skeleton-synced store binds a block whose shard is
+discarded and its `attestation_witness_at(h)` reads `Recorded`. A S-PRUNE
+horizon that ever names the table reopens this row.
 
 **Consequence, stated rather than patched.** D10 reads *"All non-block-corpus
 tables must be rebuildable by replaying local blocks through `apply_block`"*.
