@@ -743,8 +743,8 @@ fn filled(
 }
 
 /// The heights a section holds, in order.
-fn heights(refs: &[BundleRef]) -> Vec<u64> {
-    refs.iter().map(|r| r.h().to_raw()).collect()
+fn heights(refs: &[BundleRef]) -> Vec<BlockHeight> {
+    refs.iter().map(BundleRef::h).collect()
 }
 
 /// What the template fills is a section the rule admits: ascending, inside
@@ -802,11 +802,17 @@ fn a_filled_section_takes_the_oldest_first_and_fills_what_is_left() {
     let rules = rules_of(seb.get());
     let view = view_holding(&[(0, 10_000)]);
     let queued = section_of(&[15, 10, 5, 1]);
-    assert_eq!(heights(&filled(&queued, 104, &view, &rules)), [100, 102]);
+    assert_eq!(
+        heights(&filled(&queued, 104, &view, &rules)),
+        [100, 102].map(BlockHeight::from_raw)
+    );
     // Budget 2 (`D` = 8): the two oldest one-draw bundles, and nothing after.
     let small = view_holding(&[(0, 8)]);
     let ones = section_of(&[1, 1, 1]);
-    assert_eq!(heights(&filled(&ones, 103, &small, &rules)), [100, 101]);
+    assert_eq!(
+        heights(&filled(&ones, 103, &small, &rules)),
+        [100, 101].map(BlockHeight::from_raw)
+    );
 }
 
 /// A reference outside the window of the including block is not taken:
@@ -826,7 +832,10 @@ fn a_filled_section_holds_only_references_inside_the_window() {
     ];
     // At 600: 99 is 501 below, outside; 100 is 500 below, inside; 600 is
     // the including block itself.
-    assert_eq!(heights(&filled(&queued, 600, &view, &rules)), [100, 599]);
+    assert_eq!(
+        heights(&filled(&queued, 600, &view, &rules)),
+        [100, 599].map(BlockHeight::from_raw)
+    );
 }
 
 /// A reference whose epoch's `D` the view does not hold is passed over,
@@ -849,7 +858,10 @@ fn a_filled_section_passes_over_an_unknown_d_and_out_of_order_references() {
         reference_at(boundary, 1),
     ];
     let section = filled(&queued, boundary + 1, &view, &rules);
-    assert_eq!(heights(&section), [boundary - 2, boundary - 1]);
+    assert_eq!(
+        heights(&section),
+        [boundary - 2, boundary - 1].map(BlockHeight::from_raw)
+    );
     assert_eq!(
         section[0].count(),
         1,
@@ -875,6 +887,6 @@ fn a_larger_d_epoch_in_the_section_raises_its_budget() {
     ];
     assert_eq!(
         heights(&filled(&queued, boundary + 1, &view, &rules)),
-        [boundary - 2, boundary - 1, boundary]
+        [boundary - 2, boundary - 1, boundary].map(BlockHeight::from_raw)
     );
 }
