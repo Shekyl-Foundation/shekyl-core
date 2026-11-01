@@ -66,7 +66,7 @@ use super::archival_reads::{
 };
 use super::at_index::AtIndex;
 use super::output_reads::{self, RecordedOutput};
-use super::tx_reads::{self, Prunable, TxLocation, TxRecord};
+use super::tx_reads::{self, ArchivalGood, TxLocation, TxRecord};
 
 use super::chain_reads;
 use super::curve_reads;
@@ -473,7 +473,7 @@ impl ReadSnapshot<'_> {
     ///
     /// # Errors
     ///
-    /// As [`tx_prunable`](Self::tx_prunable): an id at or past the dense
+    /// As [`tx_archival_good`](Self::tx_archival_good): an id at or past the dense
     /// count is [`AtIndex::BeyondCount`]; a hole below it is SI-9.
     pub fn tx_output_count(&self, id: TxStorageId) -> Result<AtIndex<u64>, StoreError> {
         Ok(
@@ -744,41 +744,42 @@ impl ReadSnapshot<'_> {
     }
 
     /// **T3.** The permanent half of the transaction with `hash` — where it
-    /// is, its pruned and `pqc_auths` segments, its two permanent hash rows
-    /// — or `None`. Replaces `get_pruned_tx_blob`, `get_prunable_tx_hash`,
-    /// `get_tx_block_height`, and with [`tx_prunable`](Self::tx_prunable)
-    /// the whole of `get_tx_blob` ([`TxRecord::wire_bytes`], STX-8).
+    /// is, its pruned segment, and the three permanent operand rows (the
+    /// skeleton, [`skeleton_of`](super::skeleton_of)) — or `None`. Replaces
+    /// `get_pruned_tx_blob`, `get_prunable_tx_hash`, `get_tx_block_height`,
+    /// and with [`tx_archival_good`](Self::tx_archival_good) the whole of
+    /// `get_tx_blob` ([`TxRecord::wire_bytes`], STX-8).
     ///
     /// # Errors
     ///
     /// A recorded transaction missing its pruned segment or its prunable
-    /// hash row, or a `pqc_auths` segment without its hash row, is **SI-7**
-    /// (§7.7 legs (i)–(ii)). A hash row without its segment is
-    /// [`PqcAuths::Discarded`](super::PqcAuths::Discarded) — the retention
-    /// prune's one state for that region, not a fault. A present index
-    /// whose `tx_id` is at or past the dense count is **SI-9**; an
-    /// undecodable row is SI-7; engine errors pass through.
+    /// hash row is **SI-7** (§7.7 leg (i)). A present index whose `tx_id` is
+    /// at or past the dense count is **SI-9**; an undecodable row is SI-7;
+    /// engine errors pass through.
     pub fn tx_record(&self, hash: &TxHash) -> Result<Option<TxRecord>, StoreError> {
         tx_reads::record_at(&self.txn, hash).map_err(chain_reads::ReadFault::into_plain)
     }
 
-    /// **T4.** Whether this node holds the prunable region of the
-    /// transaction at `id` — the archival good (`PDM-Q6` item 1;
+    /// **T4.** Whether this node holds the **archival good** of the
+    /// transaction at `id` — its prunable region and, for a 4-part txid,
+    /// its `pqc_auths` region, as one unit (`PDM-Q6` item 1; `SB-Q2`;
     /// `DRS_E1_STX.md` §2.3). Replaces `get_prunable_tx_blob`.
     ///
     /// Bound first: at or beyond [`tx_count`](Self::tx_count) this is
     /// [`AtIndex::BeyondCount`] and no row is read — `TxStorageId::from_raw`
     /// is public, so a forged or stale id is invalid input, not corruption.
-    /// Below it, [`Prunable::Retained`] or [`Prunable::Discarded`] — the
-    /// latter §7.7 leg (iii)'s defined state, never an absence.
+    /// Below it, [`ArchivalGood::Retained`] or [`ArchivalGood::Discarded`]
+    /// — the latter §7.7 leg (iii)'s defined state, never an absence.
     ///
     /// # Errors
     ///
     /// An id below the count with no primary `txs_pruned` row is **SI-9**;
-    /// below it with no `txs_prunable_hash` row is **SI-7** (leg (i));
-    /// engine errors pass through.
-    pub fn tx_prunable(&self, id: TxStorageId) -> Result<AtIndex<Prunable>, StoreError> {
-        tx_reads::prunable_at(&self.txn, id).map_err(chain_reads::ReadFault::into_plain)
+    /// below it with no `txs_prunable_hash` row, or with a `pqc_auths`
+    /// segment and no `txs_pqc_auth_hash` row, is **SI-7** (legs (i)–(ii));
+    /// one region held and the other not is **SI-42**; engine errors pass
+    /// through.
+    pub fn tx_archival_good(&self, id: TxStorageId) -> Result<AtIndex<ArchivalGood>, StoreError> {
+        tx_reads::archival_good_at(&self.txn, id).map_err(chain_reads::ReadFault::into_plain)
     }
 
     /// **T4b.** Whether the transaction at `id` is in the **archival shard
@@ -791,7 +792,7 @@ impl ReadSnapshot<'_> {
     /// from a pruned body would place its own discarded spends outside the
     /// domain and split shard boundaries against an archival node.
     ///
-    /// Bound first, as [`tx_prunable`](Self::tx_prunable).
+    /// Bound first, as [`tx_archival_good`](Self::tx_archival_good).
     ///
     /// # Errors
     ///
@@ -805,7 +806,7 @@ impl ReadSnapshot<'_> {
     /// **T5.** The `output_amounts` indices of the outputs of the
     /// transaction at `id`, in `vout` order. Replaces
     /// `get_tx_amount_output_indices`. Bound first, as
-    /// [`tx_prunable`](Self::tx_prunable).
+    /// [`tx_archival_good`](Self::tx_archival_good).
     ///
     /// # Errors
     ///
@@ -1111,9 +1112,12 @@ impl ReadSnapshot<'_> {
                     "a listed hash has no recorded transaction",
                 ));
             };
-            let prunable = match self.tx_prunable(record.location.id)? {
-                AtIndex::Recorded(Prunable::Retained(segment)) => segment,
-                AtIndex::Recorded(Prunable::Discarded) => {
+            let (prunable, pqc_auths) = match self.tx_archival_good(record.location.id)? {
+                AtIndex::Recorded(ArchivalGood::Retained {
+                    prunable,
+                    pqc_auths,
+                }) => (prunable, pqc_auths),
+                AtIndex::Recorded(ArchivalGood::Discarded) => {
                     return Err(corrupt(
                         "txs_prunable",
                         "a body at a poppable height is discarded",
@@ -1123,12 +1127,7 @@ impl ReadSnapshot<'_> {
                     return Err(corrupt("txs_pruned", "a recorded id is beyond the count"))
                 }
             };
-            let Some(bytes) = record.wire_bytes(prunable) else {
-                return Err(corrupt(
-                    "txs_pqc_auths",
-                    "a pqc_auths region at a poppable height is discarded",
-                ));
-            };
+            let bytes = record.wire_bytes(prunable, pqc_auths);
             let tx = shekyl_wire::Transaction::read(&mut bytes.as_slice())
                 .map_err(|_| corrupt("txs_pruned", "the reassembled transaction does not parse"))?;
             transactions.push(tx);

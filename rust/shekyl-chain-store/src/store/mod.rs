@@ -132,8 +132,9 @@ pub use bundle_view::{BundleRows, StoreBundleView};
 pub use connect::Connected;
 pub use error::{
     AccrualFault, AltCannot, BodyHolderFault, CellFault, DigestFault, DrawRowFault, DrawableFault,
-    EdgeFault, EngineError, ErrorClass, FrozenFault, LeafCountFault, LeafDensity, PoolCannot,
-    QueueCannot, SettlementFault, SlashFault, StoreCannot, StoreError, StoreInvariant, UndoFault,
+    EdgeFault, EngineError, ErrorClass, FrozenFault, HeldRegion, LeafCountFault, LeafDensity,
+    PoolCannot, QueueCannot, SettlementFault, SlashFault, StoreCannot, StoreError, StoreInvariant,
+    UndoFault,
 };
 pub use halt::ConnectState;
 pub use keyed::{
@@ -146,7 +147,7 @@ pub use prune::{EpochFloors, Horizons, Pruned};
 pub use read::{RangeItem, RawBlockBytes, ReadSnapshot, RecordedBlockBody, TipState, TxWalkItem};
 pub use shard_reads::{ClosedShardRows, ShardFold};
 pub use snapshot_view::SnapshotView;
-pub use tx_reads::{PqcAuths, Prunable, SegmentBytes, TxLocation, TxRecord};
+pub use tx_reads::{skeleton_of, ArchivalGood, SegmentBytes, TxLocation, TxRecord};
 pub use undo::{RawRows, Restorable};
 pub use view::BatchView;
 pub use write::{invariant_of, WriteBatch};

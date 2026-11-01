@@ -40,7 +40,7 @@ use shekyl_chain_rules::{
     Claimable, ClosedUniverse, EpochFloor, Pricing, SettlementSchedule,
 };
 use shekyl_chain_store::store::{
-    AltCannot, AltChain, AtIndex, Prunable, ReadSnapshot, SnapshotView, StoreCannot, StoreError,
+    AltCannot, AltChain, ArchivalGood, AtIndex, ReadSnapshot, SnapshotView, StoreCannot, StoreError,
 };
 use shekyl_pow_randomx::{compute_hash, Seedhash};
 use shekyl_types::archival::Holdings;
@@ -229,9 +229,15 @@ fn whole_tx(snap: &ReadSnapshot<'_>, hash: &TxHash) -> Result<Option<Vec<u8>>, F
         tracing::error!(?hash, "a listed transaction has no record");
         return Err(FactsFault::Inconsistent);
     };
-    match snap.tx_prunable(record.location.id).map_err(store_fault)? {
-        AtIndex::Recorded(Prunable::Retained(prunable)) => Ok(record.wire_bytes(prunable)),
-        AtIndex::Recorded(Prunable::Discarded) => Ok(None),
+    match snap
+        .tx_archival_good(record.location.id)
+        .map_err(store_fault)?
+    {
+        AtIndex::Recorded(ArchivalGood::Retained {
+            prunable,
+            pqc_auths,
+        }) => Ok(Some(record.wire_bytes(prunable, pqc_auths))),
+        AtIndex::Recorded(ArchivalGood::Discarded) => Ok(None),
         AtIndex::BeyondCount => {
             tracing::error!(?hash, "a recorded transaction's id is past the count");
             Err(FactsFault::Inconsistent)
@@ -253,21 +259,20 @@ fn chain_slot(
     };
     let id = record.location.id;
     let height = record.location.height;
-    let prunable = match snap.tx_prunable(id).map_err(store_fault)? {
-        AtIndex::Recorded(Prunable::Retained(prunable)) => prunable.into_wire_bytes(),
-        AtIndex::Recorded(Prunable::Discarded) => return Ok(Some(None)),
+    let (prunable, pqc_auths) = match snap.tx_archival_good(id).map_err(store_fault)? {
+        AtIndex::Recorded(ArchivalGood::Retained {
+            prunable,
+            pqc_auths,
+        }) => (prunable.into_wire_bytes(), pqc_auths),
+        AtIndex::Recorded(ArchivalGood::Discarded) => return Ok(Some(None)),
         AtIndex::BeyondCount => {
             tracing::error!(?hash, "a recorded transaction's id is past the count");
             return Err(FactsFault::Inconsistent);
         }
     };
     let mut pruned = record.pruned.into_wire_bytes();
-    match record.pqc_auths {
-        None => {}
-        Some(shekyl_chain_store::store::PqcAuths::Retained(pqc)) => {
-            pruned.extend(pqc.into_wire_bytes());
-        }
-        Some(shekyl_chain_store::store::PqcAuths::Discarded) => return Ok(Some(None)),
+    if let Some(pqc) = pqc_auths {
+        pruned.extend(pqc.into_wire_bytes());
     }
     let output_indices = match snap.tx_output_indices(id).map_err(store_fault)? {
         AtIndex::Recorded(indices) => indices.0.iter().map(|index| index.to_raw()).collect(),

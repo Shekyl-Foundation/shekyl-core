@@ -108,7 +108,7 @@
 //! # Not journaled, by design (§4, §7)
 //!
 //! A discard is not pop-reversible: the bytes are gone from every node at
-//! the same boundary, and `Prunable::Discarded` is the one state for
+//! the same boundary, and `ArchivalGood::Discarded` is the one state for
 //! *discarded* and *never held* (§7.7 leg iii). So the batch writes through
 //! the raw tables after the connect's recording is sealed, and the undo row
 //! for the boundary block carries the block's writes and none of the

@@ -535,6 +535,31 @@ pub enum StoreInvariant {
     /// Not chain state, so it poisons the batch and leaves the writer
     /// live. Never a verdict on a block.
     BundleBodyHolder(BodyHolderFault),
+    /// **SI-42** — the archival good is one unit (`PDM-Q6` item 1; `SB-Q2`).
+    /// A 4-part transaction's prunable region (`txs_prunable[id]`) and its
+    /// `pqc_auths` region (`txs_pqc_auths[id]`) are written together by
+    /// `connect` and discarded together by the retention prune, which
+    /// deletes both tables over one id range (`prune.rs`). A read that finds
+    /// one held and the other not is this halt: it is neither §7.7 leg
+    /// (iii)'s discarded state nor a recorded body, and no path writes it.
+    /// Fatal, never a verdict on a block.
+    ArchivalGoodHalfHeld {
+        /// The storage id whose two regions disagree.
+        id: crate::ids::TxStorageId,
+        /// Which region is held; the other is not.
+        held: HeldRegion,
+    },
+}
+
+/// Which half of a half-held archival good is present (payload of
+/// [`StoreInvariant::ArchivalGoodHalfHeld`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeldRegion {
+    /// `txs_prunable[id]` is present and `txs_pqc_auths[id]` is not, under
+    /// a `txs_pqc_auth_hash` row that says the txid is 4-part.
+    Prunable,
+    /// `txs_pqc_auths[id]` is present and `txs_prunable[id]` is not.
+    PqcAuths,
 }
 
 /// What an SI-41 check observed (payload of
@@ -801,6 +826,7 @@ impl StoreInvariant {
             Self::VisibleDrawCountPastWidth { .. } => 39,
             Self::SupportBlockNotSingular { .. } => 40,
             Self::BundleBodyHolder(_) => 41,
+            Self::ArchivalGoodHalfHeld { .. } => 42,
         }
     }
 }
@@ -1127,6 +1153,17 @@ impl core::fmt::Display for StoreInvariant {
                 f,
                 "the bundle queue has no entry at height {h}; a rewrite names a row the table does not hold"
             ),
+            Self::ArchivalGoodHalfHeld { id, held } => {
+                let (held, missing) = match held {
+                    HeldRegion::Prunable => ("txs_prunable", "txs_pqc_auths"),
+                    HeldRegion::PqcAuths => ("txs_pqc_auths", "txs_prunable"),
+                };
+                write!(
+                    f,
+                    "transaction {id} holds its {held} region and not its {missing} region; the \
+                     archival good is one unit, held or discarded together"
+                )
+            }
             Self::DrawableMemoMiss { epoch } => write!(
                 f,
                 "the admission view has no drawable set for epoch {epoch} under the opening \
@@ -1196,6 +1233,7 @@ impl core::error::Error for StoreInvariant {
             | Self::VisibleDrawCountPastWidth { .. }
             | Self::SupportBlockNotSingular { .. }
             | Self::BundleBodyHolder(_)
+            | Self::ArchivalGoodHalfHeld { .. }
             | Self::UndoLogIncoherent { .. } => None,
         }
     }
