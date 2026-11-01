@@ -39,7 +39,7 @@ fn honest_block(wallet: &BenchWalletKeys) -> ScannableBlock {
 /// returns `None`), re-serializing through the production writer.
 fn rewrite_leaf_field(block: &mut ScannableBlock, f: impl FnOnce(Vec<u8>) -> Option<Vec<u8>>) {
     let tx = &mut block.transactions[0];
-    let extra = Extra::read(&mut tx.prefix.extra.as_slice()).expect("fixture extra parses");
+    let extra = Extra::read(&mut tx.tx().prefix.extra.as_slice()).expect("fixture extra parses");
     let mut fields = extra.0;
     let pos = fields
         .iter()
@@ -51,7 +51,7 @@ fn rewrite_leaf_field(block: &mut ScannableBlock, f: impl FnOnce(Vec<u8>) -> Opt
     if let Some(new_blob) = f(blob) {
         fields.insert(pos, ExtraField::PqcLeafEntries(new_blob));
     }
-    tx.prefix.extra = Extra(fields).serialize();
+    tx.modify(|tx| tx.prefix.extra = Extra(fields).serialize());
 }
 
 /// Consumes the wallet: `ViewPair` is wipe-on-drop and not `Clone`, and the

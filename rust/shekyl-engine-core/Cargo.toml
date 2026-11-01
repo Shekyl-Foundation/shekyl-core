@@ -267,6 +267,10 @@ shekyl-p2p-transport = { path = "../shekyl-p2p-transport" }
 # (no silently-skipped `required-features` lane).
 shekyl-engine-core = { path = ".", features = ["test-helpers"] }
 shekyl-scanner = { path = "../shekyl-scanner", features = ["test-utils"] }
+# `BoundTx::whole` / `BoundTx::modify` for the unit tests' fixture bodies
+# (TEST_ONLY, check_test_only_features.py). Dev edge only: the
+# `test-helpers` lib surface binds through the scanner's `bound` instead.
+shekyl-wire = { path = "../shekyl-wire", features = ["test-fixtures"] }
 # The serving-task lifecycle tests bind a host to `RefusingKey` (a key that
 # says no), which lives on `shekyl-p-host`'s dev-only `test-signer` edge with
 # `TestKeySigner`; `check_p_fetch_dep_cut.py` holds that edge off every

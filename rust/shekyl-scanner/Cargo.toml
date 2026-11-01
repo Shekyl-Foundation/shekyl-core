@@ -57,6 +57,12 @@ test-utils = ["dep:shekyl-archival-retention"]
 
 [dev-dependencies]
 shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+# `BoundTx::modify` for the PQC leaf-verdict tests' edited bodies. A
+# TEST_ONLY feature (check_test_only_features.py): this dev edge and the
+# engine's and the ingest's are its only enablers, never a forward from
+# `test-utils`, which `shekyl-engine-core/test-helpers` turns on in a
+# normal build.
+shekyl-wire = { path = "../shekyl-wire", features = ["test-fixtures"] }
 tokio = { version = "1", features = ["sync", "macros", "rt-multi-thread"] }
 proptest = "1"
 

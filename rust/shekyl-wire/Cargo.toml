@@ -32,6 +32,15 @@ shekyl-types = { path = "../shekyl-types" }
 # shekyl-crypto-hash and rand_chacha — no edge back to this crate.
 shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
 
+[features]
+# `BoundTx::whole` / `BoundTx::modify`: a fixture's whole body bound to the
+# identity it hashes to itself. Production binds through `SkeletonTx::bind`
+# alone (`SB-Q2`), so the whole-body constructor is gated out of every
+# production build. TEST_ONLY (check_test_only_features.py): enabled from
+# dev edges alone (the scanner's, the engine's, the ingest's), never
+# forwarded by another crate's feature.
+test-fixtures = []
+
 [dev-dependencies]
 # Test-only: load the captured oracle hash vectors so the JSON is the single source
 # of truth for the live-oracle hash KAT (no hand-copied hex). Not a runtime

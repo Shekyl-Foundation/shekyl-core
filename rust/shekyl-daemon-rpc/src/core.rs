@@ -51,12 +51,81 @@ pub struct CoreRpc {
 unsafe impl Send for CoreRpc {}
 unsafe impl Sync for CoreRpc {}
 
-/// One request slot's answer from `shekyl_rpc_transactions`, copied out of
-/// the C++ views before the owner is released.
+/// The body of one transaction as the store holds it: the **skeleton**
+/// every node keeps at every horizon, and the **archival good** it may or
+/// may not still hold (`PDM-Q6`; `SB-Q2`).
 ///
-/// Not a wire type: which of `pruned` / `prunable` the reply shows, and in
-/// what form, is the handler's `(split, prune, decode_as_json)` matrix. This
-/// is what the store held.
+/// Not a wire type: which form the reply shows is the request's `prune`
+/// switch (`methods::project_transactions`). The skeleton is enough for
+/// the pruned form in every state. The full form is the recomposed body
+/// when the good is held, the pruned segment alone when the record carries
+/// no good, and `archived` where the good was discarded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TxBody {
+    /// The pruned segment and the three txid operands.
+    pub skeleton: shekyl_wire::SkeletonTx,
+    /// The prunable region and the `pqc_auths` region, as one unit.
+    pub good: ArchivalGood,
+}
+
+impl TxBody {
+    /// The body in the full form (`PDM-Q10`). Held segments recompose in the
+    /// order `shekyl_wire::TxSegments::concat` writes. A record that carries
+    /// no good answers its pruned segment: that segment is the whole body.
+    /// A discarded good answers `archived` with its shard. Every full-form
+    /// projection goes through this one function.
+    #[must_use]
+    pub fn full_form(&self) -> FullForm {
+        match &self.good {
+            ArchivalGood::Retained {
+                pqc_auths,
+                prunable,
+            } => FullForm::Whole(
+                shekyl_wire::TxSegments {
+                    pruned: self.skeleton.unprunable.clone(),
+                    pqc_auths: pqc_auths.clone().unwrap_or_default(),
+                    prunable: prunable.clone(),
+                }
+                .concat(),
+            ),
+            ArchivalGood::CarriesNone => FullForm::Whole(self.skeleton.unprunable.clone()),
+            ArchivalGood::Discarded { shard } => FullForm::Archived { shard: *shard },
+        }
+    }
+}
+
+/// A body answered in the full form: its whole bytes, or the slot state
+/// `archived` with the shard the archive serves it from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FullForm {
+    Whole(Vec<u8>),
+    Archived { shard: shekyl_types::ShardId },
+}
+
+/// Whether this node holds a transaction's archival good, as the projection
+/// sees it. The store records physical presence in two states; this enum
+/// says what an absent segment means.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ArchivalGood {
+    /// Held: the `pqc_auths` segment (absent for a 3-part txid) and the
+    /// prunable segment, as `Transaction::write_segments` wrote them. An
+    /// empty prunable region that is still stored — a coinbase before the
+    /// range delete — is this arm, and concatenates to the pruned segment.
+    Retained {
+        pqc_auths: Option<Vec<u8>>,
+        prunable: Vec<u8>,
+    },
+    /// Discarded with its shard at the archival horizon (`PDM-Q9`). The
+    /// record carries good, and the shard is where an archiver serves it.
+    Discarded { shard: shekyl_types::ShardId },
+    /// The record carries no archival good. The pruned segment is the whole
+    /// body: a coinbase, including after the range delete removes its empty
+    /// `txs_prunable` row. Not an empty [`Self::Retained`], and not
+    /// [`Self::Discarded`].
+    CarriesNone,
+}
+
+/// One request slot's answer, read from the store.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TxSlot {
     /// Neither the chain nor the pool had it.
@@ -66,20 +135,16 @@ pub enum TxSlot {
     PoolUnavailable,
     /// Found in a block.
     Chain {
-        pruned: Vec<u8>,
-        prunable: Vec<u8>,
-        prunable_hash: [u8; 32],
+        body: TxBody,
         block_height: u64,
         block_timestamp: u64,
         output_indices: Vec<u64>,
-        /// The store holds no verification data for it.
-        pruned_flag: bool,
     },
-    /// Found in the mempool.
+    /// Found in the mempool. A pool entry's good is always held — nothing
+    /// below the horizon is in the pool — so its [`TxBody::good`] is
+    /// `Retained`.
     Pool {
-        pruned: Vec<u8>,
-        prunable: Vec<u8>,
-        prunable_hash: [u8; 32],
+        body: TxBody,
         double_spend_seen: bool,
         relayed: bool,
         /// `None` where the pool keeps no receive time (the Rust pool, S7).
@@ -224,48 +289,6 @@ unsafe fn borrowed_string(ptr: *const std::os::raw::c_char, len: usize) -> Strin
         return String::new();
     }
     String::from_utf8_lossy(std::slice::from_raw_parts(ptr.cast::<u8>(), len)).into_owned()
-}
-
-/// Project one FFI entry onto its [`TxSlot`], or `None` when `where_found`
-/// carries a discriminator the contract does not define.
-///
-/// Split out of the `unsafe` walk because that walk cannot be driven without a
-/// live facts handle, and this is the part with a decision in it. The
-/// pointer arithmetic stays at the call site; what crosses here is already
-/// owned data.
-///
-/// `None` rather than a silent `Missed`: the contract permits 0/1/2 and nothing
-/// more, so a fourth value is the export breaking it. Answering "not found"
-/// would report success about a transaction this daemon may well hold — an ABI
-/// violation rendered as a fact about the caller's request.
-#[cfg(test)]
-fn slot_of(
-    e: &ffi::TxEntryFfi,
-    pruned: Vec<u8>,
-    prunable: Vec<u8>,
-    output_indices: Vec<u64>,
-) -> Option<TxSlot> {
-    match e.where_found {
-        0 => Some(TxSlot::Missed),
-        1 => Some(TxSlot::Chain {
-            pruned,
-            prunable,
-            prunable_hash: e.prunable_hash,
-            block_height: e.block_height,
-            block_timestamp: e.block_timestamp,
-            output_indices,
-            pruned_flag: e.pruned_flag != 0,
-        }),
-        2 => Some(TxSlot::Pool {
-            pruned,
-            prunable,
-            prunable_hash: e.prunable_hash,
-            double_spend_seen: e.double_spend_seen != 0,
-            relayed: e.relayed != 0,
-            received_timestamp: Some(e.received_timestamp),
-        }),
-        _ => None,
-    }
 }
 
 impl CoreRpc {
@@ -505,63 +528,4 @@ unsafe fn consume_c_string(ptr: *mut std::os::raw::c_char) -> Option<String> {
         .into_owned();
     unsafe { ffi::core_rpc_ffi_free_string(ptr) };
     Some(s)
-}
-
-#[cfg(test)]
-mod slot_tests {
-    use super::*;
-
-    fn entry(where_found: u8) -> ffi::TxEntryFfi {
-        ffi::TxEntryFfi {
-            pruned: std::ptr::null(),
-            pruned_len: 0,
-            prunable: std::ptr::null(),
-            prunable_len: 0,
-            output_indices: std::ptr::null(),
-            output_indices_len: 0,
-            block_height: 3,
-            block_timestamp: 1_700_000_000,
-            received_timestamp: 1_700_000_001,
-            prunable_hash: [0x5A; 32],
-            where_found,
-            pruned_flag: 0,
-            double_spend_seen: 1,
-            relayed: 1,
-            reserved: [0; 4],
-        }
-    }
-
-    /// The three values the contract defines map to their slots.
-    #[test]
-    fn defined_where_found_values_map_to_their_slots() {
-        assert!(matches!(
-            slot_of(&entry(0), Vec::new(), Vec::new(), Vec::new()),
-            Some(TxSlot::Missed)
-        ));
-        assert!(matches!(
-            slot_of(&entry(1), Vec::new(), Vec::new(), vec![7]),
-            Some(TxSlot::Chain { .. })
-        ));
-        assert!(matches!(
-            slot_of(&entry(2), Vec::new(), Vec::new(), Vec::new()),
-            Some(TxSlot::Pool { .. })
-        ));
-    }
-
-    /// **A fourth value is the export breaking its contract, not a miss.**
-    ///
-    /// Mapping it to `Missed` would answer the caller successfully — "no such
-    /// transaction" — about one this daemon may well hold: an ABI violation
-    /// rendered as a fact about their request. `None` is what makes the caller
-    /// free the owner and raise an internal facts error instead.
-    #[test]
-    fn an_undefined_where_found_is_refused_not_read_as_missed() {
-        for undefined in [3u8, 4, 255] {
-            assert!(
-                slot_of(&entry(undefined), Vec::new(), Vec::new(), Vec::new()).is_none(),
-                "where_found={undefined} is outside the contract and must not \
-                 project to a slot"
-            );
-        }
-    }
 }

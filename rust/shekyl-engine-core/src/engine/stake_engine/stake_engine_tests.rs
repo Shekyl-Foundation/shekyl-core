@@ -992,10 +992,7 @@ fn with_bond_post(mut block: ScannableBlock, slot: u32) -> ScannableBlock {
         bond_credit: 1_000,
         bond_debit: 0,
     };
-    block.transactions[0]
-        .prefix
-        .inputs
-        .push(Input::BondPost(Box::new(post)));
+    block.transactions[0].modify(|tx| tx.prefix.inputs.push(Input::BondPost(Box::new(post))));
     block
 }
 

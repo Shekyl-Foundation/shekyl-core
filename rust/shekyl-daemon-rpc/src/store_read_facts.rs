@@ -40,21 +40,21 @@ use shekyl_chain_rules::{
     Claimable, ClosedUniverse, EpochFloor, Pricing, SettlementSchedule,
 };
 use shekyl_chain_store::store::{
-    AltCannot, AltChain, AtIndex, Prunable, ReadSnapshot, SnapshotView, StoreCannot, StoreError,
+    AltCannot, AltChain, ArchivalGood, AtIndex, ReadSnapshot, SnapshotView, StoreCannot, StoreError,
 };
 use shekyl_pow_randomx::{compute_hash, Seedhash};
 use shekyl_types::archival::Holdings;
 use shekyl_types::{
     BlockHash, BlockHeight, KeyImage, PCanonicalId, PowHash, SettlementEpoch, ShardId, TxHash,
 };
-use shekyl_wire::{Ct, Transaction};
+use shekyl_wire::{carries_archival_good, Ct, Transaction};
 
 use super::{connecting, count_at, derivation_fault, store_fault, tip_of, StoreFacts};
 use crate::chain_facts::FactsFault;
 use crate::info_facts::{PoolScope, PoolState};
 use crate::read_facts::{
-    AltChainFacts, BlockBlobs, BlocksAt, ChainReadFacts, ClaimSource, ClaimantBond, CoinbaseRange,
-    CoinbaseSum, CurveTreeFacts, PowAt, PowSeed, ShardCoverage, SpentAt, TransactionsAt,
+    AltChainFacts, BlockRead, BlocksAt, ChainReadFacts, ClaimSource, ClaimantBond, CoinbaseRange,
+    CoinbaseSum, CurveTreeFacts, ListedTx, PowAt, PowSeed, ShardCoverage, SpentAt, TransactionsAt,
 };
 
 /// The tree after the block at `after`: the store's state at `after + 1`.
@@ -113,7 +113,7 @@ fn fees_at(snap: &ReadSnapshot<'_>, height: BlockHeight) -> Result<u128, FactsFa
             tracing::error!(?hash, %height, "a listed transaction is not in the store");
             return Err(FactsFault::Inconsistent);
         };
-        let tx = Transaction::read(&mut record.pruned.as_bytes()).map_err(|error| {
+        let tx = Transaction::read(&mut record.pruned.wire_bytes()).map_err(|error| {
             tracing::error!(%error, ?hash, "a recorded transaction's base does not parse");
             FactsFault::Inconsistent
         })?;
@@ -222,53 +222,69 @@ impl SlashGather {
     }
 }
 
-/// The whole bytes of the transaction `hash` lists, or `None` when this
-/// node no longer holds a region of it (the retention prune).
-fn whole_tx(snap: &ReadSnapshot<'_>, hash: &TxHash) -> Result<Option<Vec<u8>>, FactsFault> {
-    let Some(record) = snap.tx_record(hash).map_err(store_fault)? else {
-        tracing::error!(?hash, "a listed transaction has no record");
-        return Err(FactsFault::Inconsistent);
+/// A recorded transaction's body as `get_transactions` carries it.
+///
+/// Held segments recompose. Segments absent on a record that
+/// [carries good](carries_archival_good) are discarded, and
+/// `shard_of_discarded` names the shard — called only then, so a block
+/// reply hands the one fold it already built. Segments absent on a record
+/// that carries none are [`crate::core::ArchivalGood::CarriesNone`]: the
+/// pruned segment is the whole body. The store's `Discarded` is physical
+/// absence, including a coinbase whose empty `txs_prunable` row the range
+/// delete removed, and is not copied through as an empty retained good.
+/// The carries bit is the record's own hash rows; nothing is read again.
+fn chain_body(
+    snap: &ReadSnapshot<'_>,
+    hash: &TxHash,
+    record: &shekyl_chain_store::store::TxRecord,
+    shard_of_discarded: impl FnOnce() -> Result<ShardId, FactsFault>,
+) -> Result<crate::core::TxBody, FactsFault> {
+    let past_count = || {
+        tracing::error!(?hash, "a recorded transaction's id is past the count");
+        FactsFault::Inconsistent
     };
-    match snap.tx_prunable(record.location.id).map_err(store_fault)? {
-        AtIndex::Recorded(Prunable::Retained(prunable)) => Ok(record.wire_bytes(prunable)),
-        AtIndex::Recorded(Prunable::Discarded) => Ok(None),
-        AtIndex::BeyondCount => {
-            tracing::error!(?hash, "a recorded transaction's id is past the count");
-            Err(FactsFault::Inconsistent)
+    let carries = carries_archival_good(record.pqc_auth_hash, record.prunable_hash);
+    let good = match snap
+        .tx_archival_good(record.location.id)
+        .map_err(store_fault)?
+    {
+        AtIndex::Recorded(ArchivalGood::Retained {
+            prunable,
+            pqc_auths,
+        }) => crate::core::ArchivalGood::Retained {
+            pqc_auths: pqc_auths.map(shekyl_chain_store::store::SegmentBytes::into_wire_bytes),
+            prunable: prunable.into_wire_bytes(),
+        },
+        AtIndex::Recorded(ArchivalGood::Discarded) if carries => {
+            crate::core::ArchivalGood::Discarded {
+                shard: shard_of_discarded()?,
+            }
         }
-    }
+        AtIndex::Recorded(ArchivalGood::Discarded) => crate::core::ArchivalGood::CarriesNone,
+        AtIndex::BeyondCount => return Err(past_count()),
+    };
+    Ok(crate::core::TxBody {
+        skeleton: record.skeleton_of(),
+        good,
+    })
 }
 
-/// A recorded transaction as `get_transactions` carries it: its pruned
-/// half (the pruned segment and its `pqc_auths`) and its prunable region,
-/// where it sits, and its global output indices. `None` when this node has
-/// pruned the body: the two regions go together, and the wire cannot be
-/// recomposed without them.
+/// A recorded transaction as `get_transactions` carries it: its body,
+/// where it sits, and its global output indices. `None` when the chain
+/// does not hold it.
 fn chain_slot(
     snap: &ReadSnapshot<'_>,
     hash: &TxHash,
-) -> Result<Option<Option<crate::core::TxSlot>>, FactsFault> {
+) -> Result<Option<crate::core::TxSlot>, FactsFault> {
     let Some(record) = snap.tx_record(hash).map_err(store_fault)? else {
         return Ok(None);
     };
-    let id = record.location.id;
-    let height = record.location.height;
-    let prunable = match snap.tx_prunable(id).map_err(store_fault)? {
-        AtIndex::Recorded(Prunable::Retained(prunable)) => prunable.into_wire_bytes(),
-        AtIndex::Recorded(Prunable::Discarded) => return Ok(Some(None)),
-        AtIndex::BeyondCount => {
-            tracing::error!(?hash, "a recorded transaction's id is past the count");
-            return Err(FactsFault::Inconsistent);
-        }
-    };
-    let mut pruned = record.pruned.into_wire_bytes();
-    match record.pqc_auths {
-        None => {}
-        Some(shekyl_chain_store::store::PqcAuths::Retained(pqc)) => {
-            pruned.extend(pqc.into_wire_bytes());
-        }
-        Some(shekyl_chain_store::store::PqcAuths::Discarded) => return Ok(Some(None)),
-    }
+    let location = record.location;
+    let id = location.id;
+    let height = location.height;
+    let body = chain_body(snap, hash, &record, || {
+        snap.tx_shard(location).map_err(store_fault)
+    })?;
     let output_indices = match snap.tx_output_indices(id).map_err(store_fault)? {
         AtIndex::Recorded(indices) => indices.0.iter().map(|index| index.to_raw()).collect(),
         AtIndex::BeyondCount => {
@@ -283,32 +299,39 @@ fn chain_slot(
         tracing::error!(?hash, %height, "a recorded transaction's block is above the tip");
         return Err(FactsFault::Inconsistent);
     };
-    Ok(Some(Some(crate::core::TxSlot::Chain {
-        pruned,
-        prunable,
-        prunable_hash: record.prunable_hash.to_bytes(),
+    Ok(Some(crate::core::TxSlot::Chain {
+        body,
         block_height: height.to_raw(),
         block_timestamp: block.header.header.timestamp,
         output_indices,
-        pruned_flag: false,
-    })))
+    }))
 }
 
-/// A pool entry's body as `get_transactions` carries it. The Rust pool
-/// keeps no receive time (S7) and holds no entry marked as a double spend
-/// (CEN-M7: the door refuses the conflict).
+/// A pool entry's body as `get_transactions` carries it: the skeleton from
+/// `txid_parts()` — the same three operands a connect would record — and
+/// its good, always held. The Rust pool keeps no receive time (S7) and
+/// holds no entry marked as a double spend (CEN-M7: the door refuses the
+/// conflict).
 fn pool_slot(body: &crate::store_facts::PoolBody) -> Result<crate::core::TxSlot, FactsFault> {
     let tx = Transaction::from_bytes(&body.tx).map_err(|_| {
         tracing::error!("a pool entry does not parse");
         FactsFault::Inconsistent
     })?;
     let segments = tx.write_segments().map_err(|_| FactsFault::Internal)?;
-    let mut pruned = segments.pruned;
-    pruned.extend(segments.pqc_auths);
+    let parts = tx.txid_parts();
     Ok(crate::core::TxSlot::Pool {
-        pruned,
-        prunable: segments.prunable,
-        prunable_hash: tx.txid_parts().prunable_hash.to_bytes(),
+        body: crate::core::TxBody {
+            skeleton: shekyl_wire::SkeletonTx {
+                unprunable: segments.pruned,
+                prunable_hash: parts.prunable_hash,
+                pqc_auth_hash: parts.pqc_auth_hash,
+                archival_len: parts.archival_len,
+            },
+            good: crate::core::ArchivalGood::Retained {
+                pqc_auths: parts.pqc_auth_hash.map(|_| segments.pqc_auths),
+                prunable: segments.prunable,
+            },
+        },
         double_spend_seen: false,
         relayed: body.shown,
         received_timestamp: None,
@@ -332,14 +355,7 @@ impl ChainReadFacts for StoreFacts {
         let mut slots = Vec::with_capacity(ids.len());
         for (at, id) in ids.iter().enumerate() {
             let slot = match chain_slot(&snap, id)? {
-                Some(Some(slot)) => slot,
-                Some(None) => {
-                    return Ok(TransactionsAt {
-                        slots,
-                        chain_height: count_at(tip).to_raw(),
-                        pruned_here: Some(*id),
-                    })
-                }
+                Some(slot) => slot,
                 None => match &pooled {
                     PoolState::Live(bodies) => {
                         match bodies.get(at).ok_or(FactsFault::Inconsistent)? {
@@ -355,14 +371,13 @@ impl ChainReadFacts for StoreFacts {
         Ok(TransactionsAt {
             slots,
             chain_height: count_at(tip).to_raw(),
-            pruned_here: None,
         })
     }
 
-    /// Each height's block and its listed transactions, until the first
-    /// height above the tip or whose listed bodies this node has pruned:
-    /// that height fails the request, as C++ answered a block it could not
-    /// read whole.
+    /// Each height's block and its listed transactions as the store holds
+    /// them, until the first height above the tip: that height, and only
+    /// that, fails the request. A body this node discarded is its slot's
+    /// state, read like any other (`SB-Q2`, `PDM-Q10`).
     fn blocks_by_height(&self, heights: &[BlockHeight]) -> Result<BlocksAt, FactsFault> {
         let snap = self.snapshot()?;
         let mut blocks = Vec::with_capacity(heights.len());
@@ -378,17 +393,23 @@ impl ChainReadFacts for StoreFacts {
                 tracing::error!(%height, "a recorded block does not parse");
                 FactsFault::Inconsistent
             })?;
+            // One checked fold for the block. A discarded spend reads its
+            // shard from it; a corrupt earlier length row halts here rather
+            // than naming a shard the cell does not support (SI-24).
+            let fold = snap.block_archival_fold(height).map_err(store_fault)?;
             let mut txs = Vec::with_capacity(parsed.transaction_hashes.len());
             for hash in &parsed.transaction_hashes {
-                let Some(tx) = whole_tx(&snap, hash)? else {
-                    return Ok(BlocksAt {
-                        blocks,
-                        failed: Some(height),
-                    });
+                let Some(record) = snap.tx_record(hash).map_err(store_fault)? else {
+                    tracing::error!(?hash, "a listed transaction has no record");
+                    return Err(FactsFault::Inconsistent);
                 };
-                txs.push(tx);
+                let id = record.location.id;
+                txs.push(ListedTx {
+                    hash: *hash,
+                    body: chain_body(&snap, hash, &record, || fold.shard(id).map_err(store_fault))?,
+                });
             }
-            blocks.push(BlockBlobs { block, txs });
+            blocks.push(BlockRead { block, txs });
         }
         Ok(BlocksAt {
             blocks,

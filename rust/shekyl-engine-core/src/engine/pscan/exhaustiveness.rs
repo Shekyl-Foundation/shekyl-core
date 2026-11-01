@@ -28,10 +28,15 @@
 //! - **Continuity (the hash list is complete-and-committed):** `block[N].previous`
 //!   chains to the recomputed hash of its predecessor, anchored at `anchor` (the
 //!   recomputed hash of the block before the batch, or the genesis `previous`).
-//! - **Per-body (each body matches its committed hash):**
-//!   `transactions[i].hash() == transaction_hashes[i]`. The miner tx is covered
-//!   automatically — its body is inline and its hash is the first Merkle leaf in
-//!   [`Block::hash`].
+//! - **Per-body (each body is bound to its committed hash):**
+//!   `transactions[i].txid() == transaction_hashes[i]`. A body arrives as a
+//!   skeleton bound to its txid (`shekyl_wire::BoundTx`, `SB-Q2`): the binding
+//!   recomputed the txid from the received pruned bytes and the three served
+//!   operands and refused anything else, and the type is constructible only by
+//!   that binding, so reading the bound identity here *is* the recompute —
+//!   what remains to check is that it is the identity this block committed to
+//!   at this index. The miner tx is covered automatically — its body is inline
+//!   and its hash is the first Merkle leaf in [`Block::hash`].
 //!
 //! A height gap, a continuity break, a body mismatch, or a missing/extra body is an
 //! [`ExhaustivenessError`] — never a silent skip (and the `BlockSource` already
@@ -206,8 +211,8 @@ pub(crate) enum ExhaustivenessError {
     /// gap, reorg, or a forged/substituted block within the batch.
     #[error("continuity break at block {height}: previous does not match the recomputed predecessor hash")]
     ContinuityBreak { height: u64 },
-    /// A fetched transaction body's hash did not match its committed
-    /// `transaction_hashes[i]` — a tampered or substituted body.
+    /// A fetched transaction body's bound txid did not match its committed
+    /// `transaction_hashes[i]` — a substituted body.
     #[error("body mismatch at block {height}, tx index {index}")]
     BodyMismatch { height: u64, index: usize },
     /// The fetched-body count did not equal the committed `transaction_hashes`
@@ -290,9 +295,11 @@ pub(crate) fn verify_exhaustive(
             });
         }
 
-        // Per-body integrity: each fetched body hashes to its committed hash. The
-        // miner tx is covered by `Block::hash` (its body is inline, its hash the
-        // first Merkle leaf), so only the non-miner bodies need an explicit check.
+        // Per-body integrity: each fetched body is bound to its committed hash
+        // (the bound txid was recomputed from received material by the binding
+        // that alone constructs the type). The miner tx is covered by
+        // `Block::hash` (its body is inline, its hash the first Merkle leaf), so
+        // only the non-miner bodies need an explicit check.
         let hashes = &sb.block.transaction_hashes;
         if sb.transactions.len() != hashes.len() {
             return Err(ExhaustivenessError::BodyCountMismatch {
@@ -302,7 +309,7 @@ pub(crate) fn verify_exhaustive(
             });
         }
         for (index, tx) in sb.transactions.iter().enumerate() {
-            if tx.hash() != hashes[index] {
+            if tx.txid() != hashes[index] {
                 return Err(ExhaustivenessError::BodyMismatch { height, index });
             }
         }
@@ -438,7 +445,7 @@ mod tests {
         // whose fetched body does not hash to its committed `transaction_hashes`.
         let mut sb = make_synthetic_block(100, ANCHOR);
         let body = sb.block.miner_transaction.clone();
-        sb.transactions = vec![body];
+        sb.transactions = vec![shekyl_wire::BoundTx::whole(body)];
         sb.block.transaction_hashes = vec![shekyl_types::TxHash::from_bytes([0x77; 32])]; // != body.hash()
         let err = verify_exhaustive(BlockHeight::from_raw(100), ANCHOR, &[sb])
             .expect_err("a tampered body must fail");
@@ -456,7 +463,7 @@ mod tests {
         let mut sb = make_synthetic_block(100, ANCHOR);
         let body = sb.block.miner_transaction.clone();
         sb.block.transaction_hashes = vec![body.hash()];
-        sb.transactions = vec![body];
+        sb.transactions = vec![shekyl_wire::BoundTx::whole(body)];
         let verified = verify_exhaustive(BlockHeight::from_raw(100), ANCHOR, &[sb])
             .expect("a body matching its committed hash verifies");
         assert_eq!(verified.range().high(), BlockHeight::from_raw(101));

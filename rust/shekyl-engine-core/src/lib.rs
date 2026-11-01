@@ -295,4 +295,42 @@ pub mod __test_helpers {
             .save_pscan_state(engine.state_wrap_key().as_bytes(), &bytes)
             .map_err(|e| e.to_string())
     }
+
+    /// The P-scan's exhaustiveness check over fetched blocks
+    /// (`engine/pscan/exhaustiveness.rs`): every listed id is a bound body
+    /// and nothing else is in the batch. Consumer: `SB-Q2`'s falsifier (ii)
+    /// in `shekyl-chain-ingest` (`DRS_SB_BELOW_HORIZON.md` §5), which runs
+    /// it over a real store connected past a discard boundary. The verified
+    /// batch and the error are `pub(crate)`; the verdict is flattened to a
+    /// `String` so neither leaks.
+    ///
+    /// Test-only (feature-gated); never compiled into a default production
+    /// build.
+    pub fn verify_exhaustive_for_test(
+        first_height: shekyl_types::BlockHeight,
+        anchor: shekyl_types::BlockHash,
+        blocks: &[crate::engine::ScannableBlock],
+    ) -> Result<(), String> {
+        crate::engine::pscan::exhaustiveness::verify_exhaustive(first_height, anchor, blocks)
+            .map(|_batch| ())
+            .map_err(|e| e.to_string())
+    }
+
+    /// The proof paths' transaction fetch (`engine/proofs_chain_facts.rs`):
+    /// the skeleton under `prune`, bound to `txid`. Consumer: `SB-Q2`'s
+    /// falsifier (iii) in `shekyl-chain-ingest`, a proof fetch for a spend
+    /// whose shard the store discarded. Returns the bound body; the chain
+    /// state and the error are `pub(crate)` and stay so.
+    ///
+    /// Test-only (feature-gated); never compiled into a default production
+    /// build.
+    pub async fn fetch_proof_tx_for_test<R: shekyl_rpc_client::Rpc>(
+        rpc: &R,
+        txid: [u8; 32],
+    ) -> Result<shekyl_wire::Transaction, String> {
+        crate::engine::proofs_chain_facts::fetch_proof_tx(rpc, txid)
+            .await
+            .map(|fetched| fetched.tx)
+            .map_err(|e| e.to_string())
+    }
 }

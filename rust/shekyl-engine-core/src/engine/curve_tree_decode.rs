@@ -122,7 +122,7 @@ pub(crate) fn decode_block_leaves(
         .iter()
         .zip(&scannable.block.transaction_hashes)
     {
-        txs.push(decode_tx(tx, *tx_hash, false)?);
+        txs.push(decode_tx(tx.tx(), *tx_hash, false)?);
     }
     Ok(txs)
 }
@@ -430,7 +430,7 @@ mod tests {
         };
         let scannable = ScannableBlock {
             block,
-            transactions: vec![non_miner],
+            transactions: vec![shekyl_wire::BoundTx::whole(non_miner)],
             first_output_index: None,
         };
 

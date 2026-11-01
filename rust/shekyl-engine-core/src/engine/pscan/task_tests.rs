@@ -81,7 +81,7 @@ fn chain(len: usize, recipient_blocks: &[(usize, ScannableBlock)]) -> Vec<Scanna
         sb.block.transaction_hashes = sb
             .transactions
             .iter()
-            .map(shekyl_wire::Transaction::hash)
+            .map(shekyl_wire::BoundTx::txid)
             .collect();
         sb.block.header.previous = prev;
         prev = sb.block.hash();

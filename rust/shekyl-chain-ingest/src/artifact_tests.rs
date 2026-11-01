@@ -391,9 +391,10 @@ mod fetch {
 
     use shekyl_rpc_client::{Rpc, RpcError};
     use shekyl_rpc_types::{
-        BlockEntry, GetBlocksByHeightRequest, GetBlocksByHeightResponse, RpcStatus,
+        BlockEntry, BlockTx, BlockTxSkeleton, GetBlocksByHeightRequest, GetBlocksByHeightResponse,
+        RpcStatus,
     };
-    use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
+    use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId, TxHash};
 
     use super::three_blocks;
     use crate::corpus::{CorpusFault, CorpusNet, CorpusReader, CorpusWriter};
@@ -440,14 +441,23 @@ mod fetch {
         }
     }
 
+    /// A full-form reply: every listed body whole.
     fn reply(entries: &[(Vec<u8>, Vec<Vec<u8>>)]) -> GetBlocksByHeightResponse {
+        reply_with(entries, |body| BlockTx::Full(body.clone()))
+    }
+
+    /// A full-form reply with each body shaped by `slot`.
+    fn reply_with(
+        entries: &[(Vec<u8>, Vec<Vec<u8>>)],
+        mut slot: impl FnMut(&Vec<u8>) -> BlockTx,
+    ) -> GetBlocksByHeightResponse {
         GetBlocksByHeightResponse {
             status: RpcStatus::ok(),
             blocks: entries
                 .iter()
                 .map(|(block, txs)| BlockEntry {
                     block: block.clone(),
-                    txs: txs.clone(),
+                    txs: txs.iter().map(&mut slot).collect(),
                 })
                 .collect(),
         }
@@ -485,10 +495,83 @@ mod fetch {
     }
 
     #[tokio::test]
-    async fn a_pruned_answer_is_caught_by_the_writer_at_its_height() {
-        // RD-F15 end to end: the daemon returns block 2 with one of its two
-        // bodies and says nothing; the fetcher hands it to the writer and
-        // the writer names height 2.
+    async fn an_archived_slot_is_refused_at_its_height() {
+        // PDM-Q10 / SB-Q2: the daemon names a body it discarded as that
+        // slot's `archived` state. A corpus needs the body whole, so the
+        // fetch refuses before the writer sees the block, naming the height,
+        // the transaction and the shard the archive serves it from.
+        let blocks = three_blocks();
+        let archived_hash = [0xa7; 32];
+        let mut slots = 0;
+        let rpc = Scripted::new(&[reply_with(&blocks, |body| {
+            slots += 1;
+            if slots == 2 {
+                BlockTx::Archived {
+                    tx_hash: archived_hash,
+                    shard: 7,
+                }
+            } else {
+                BlockTx::Full(body.clone())
+            }
+        })]);
+        let mut w = CorpusWriter::create(
+            std::io::Cursor::new(Vec::new()),
+            CorpusNet::Fakechain,
+            BlockHeight::from_raw(0),
+        )
+        .expect("header");
+        let err = fetch_corpus(&rpc, 0..3, batch(10), &[], &mut w)
+            .await
+            .expect_err("archived");
+        match err {
+            FetchFault::Archived {
+                height,
+                tx_hash,
+                shard: 7,
+            } => {
+                assert_eq!(tx_hash, TxHash::from_bytes(archived_hash));
+                // Block 0 lists no body and block 1 one, so the second slot
+                // is block 2's first.
+                assert_eq!(height, BlockHeight::from_raw(2));
+            }
+            other => panic!("{other}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_skeleton_in_a_full_form_reply_is_refused() {
+        // The request did not ask for `prune`; a skeleton in the answer is a
+        // daemon not keeping the form the request chose.
+        let blocks = three_blocks();
+        let rpc = Scripted::new(&[reply_with(&blocks, |body| {
+            BlockTx::Skeleton(BlockTxSkeleton {
+                unprunable: body.clone(),
+                prunable_hash: [0; 32],
+                pqc_auth_hash: None,
+                archival_len: 0,
+            })
+        })]);
+        let mut w = CorpusWriter::create(
+            std::io::Cursor::new(Vec::new()),
+            CorpusNet::Fakechain,
+            BlockHeight::from_raw(0),
+        )
+        .expect("header");
+        let err = fetch_corpus(&rpc, 0..3, batch(10), &[], &mut w)
+            .await
+            .expect_err("skeleton");
+        // Block 0 lists no body; the first skeleton is block 1's.
+        assert!(
+            matches!(err, FetchFault::NotWhole { height } if height == BlockHeight::from_raw(1)),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_short_body_list_is_caught_by_the_writer_at_its_height() {
+        // RD-F15 end to end: a reply lists fewer bodies than block 2's header
+        // does, with every slot it does carry whole; the fetcher hands it to
+        // the writer and the writer names height 2.
         let blocks = three_blocks();
         let mut pruned = blocks.clone();
         pruned[2].1.truncate(1);

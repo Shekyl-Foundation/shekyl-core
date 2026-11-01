@@ -20,7 +20,7 @@
 //!   index row whose `tx_id` is at or past the dense count is **SI-9**,
 //!   not a location: T4 would call that id [`AtIndex::BeyondCount`], and
 //!   a location T4 refuses is not a location.
-//! - **By dense id** ([`prunable_at`], [`output_indices_at`]) —
+//! - **By dense id** ([`archival_good_at`], [`output_indices_at`]) —
 //!   [`AtIndex`]. `tx_id` is dense (SI-9: `txs_pruned`' entry count at write
 //!   time), so the count is the authority and every by-id read classifies
 //!   **bound first, then the primary**: at or beyond the count is
@@ -30,19 +30,27 @@
 //!   transaction, it is the count lying (**SI-9**); and a missing side row
 //!   under a present primary is SI-9 or SI-7 by its leg. `TxStorageId` has a
 //!   public `from_raw`, so a forged or stale id is ordinary invalid input,
-//!   never corruption — which is why T4 is `AtIndex<Prunable>` and not a bare
-//!   two-state enum (STX-Q, round 4).
-//! - **The prunable region** ([`prunable_at`], inside the bound) —
-//!   [`Prunable`]`{ Retained, Discarded }`. Given an id below the count, the
-//!   region is held or it is not, and *not held* is a **defined store
-//!   state** (`DAEMON_REDB_STORE.md` §7.7 leg (iii): hash row present ∧
-//!   segment absent ⇔ discarded — below `W`, or never held; one state, one
+//!   never corruption — which is why T4 is `AtIndex<ArchivalGood>` and not a
+//!   bare two-state enum (STX-Q, round 4).
+//! - **The archival good** ([`archival_good_at`], inside the bound) —
+//!   [`ArchivalGood`]`{ Retained, Discarded }`. `PDM-Q6` item 1 defines the
+//!   good as **one unit**: a transaction's prunable region and, where the
+//!   txid is 4-part, its `pqc_auths` region, which S-PRUNE discards together
+//!   by shard (`prune.rs`). Given an id below the count, the unit is held or
+//!   it is not, and *not held* is a **defined store state**
+//!   (`DAEMON_REDB_STORE.md` §7.7 leg (iii): hash row present ∧ segment
+//!   absent ⇔ discarded — below the horizon, or never held; one state, one
 //!   meaning). It is not corruption and it is not "not here": the caller's
-//!   action — answer from the hash and let the client fetch from an
-//!   archiver, or refuse to serve — differs from both. What it may **not**
-//!   be: `Discarded` for an id with no `txs_prunable_hash` row, which is the
-//!   record-without-hash-row shape §7.7 leg (i) forbids — **SI-7**, never a
-//!   third arm.
+//!   action — answer the skeleton and let the client fetch from an archiver,
+//!   or refuse to serve — differs from both. Two shapes it may **not** be: a
+//!   `Discarded` for an id with no `txs_prunable_hash` row, which is the
+//!   record-without-hash-row shape §7.7 leg (i) forbids — **SI-7**; and a
+//!   **half** — one region held and the other not — which is neither state
+//!   and **SI-42** ([`StoreInvariant::ArchivalGoodHalfHeld`]), never a third
+//!   arm (`SB-Q2`). A coinbase whose empty `txs_prunable` row the range
+//!   delete removed is `Discarded` here too: whether that absence is "no
+//!   good" or "good an archiver holds" is the caller's, from the permanent
+//!   hash rows, not a third store state.
 //!
 //! # What no read hands out
 //!
@@ -58,13 +66,17 @@
 //! `get_prunable_tx_blob` / `get_prunable_tx_hash` are not stripe-engine
 //! residue (`PDM-Q7` deleted the *mechanism*): `PDM-Q6` item 1 rules a
 //! transaction's prunable region the archival good — unit of possession its
-//! `CtSigPrunable` bytes, unit of verification its `txs_prunable_hash`. T3
-//! and T4 are that good's read path (`DRS_E1_STX.md` §2.3).
+//! `CtSigPrunable` bytes (with the `pqc_auths` region of a 4-part txid),
+//! unit of verification its `txs_prunable_hash`. T3 and T4 are that good's
+//! read path (`DRS_E1_STX.md` §2.3). What every node keeps at every horizon
+//! is the **skeleton** — the pruned segment and the three txid operands —
+//! and [`TxRecord::skeleton_of`] is its one constructor (`SB-Q2`).
 
 use core::marker::PhantomData;
 
 use redb::{ReadableTable, ReadableTableMetadata, TableDefinition, TableHandle};
 use shekyl_types::{ArchivalLength, BlockHeight, PqcAuthHash, PrunableHash, TxHash};
+use shekyl_wire::SkeletonTx;
 
 use crate::codec::{
     BlobKind, Canonical, Coded, TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment,
@@ -79,7 +91,7 @@ use crate::schema::{
 
 use super::at_index::AtIndex;
 use super::chain_reads::{absent, undecodable, ReadFault, ReadTables};
-use super::error::StoreInvariant;
+use super::error::{HeldRegion, StoreInvariant};
 
 // ---------------------------------------------------------------- types
 
@@ -91,8 +103,8 @@ use super::error::StoreInvariant;
 /// pruned one is expected. Same discipline as
 /// [`RawBlockBytes`](super::RawBlockBytes) (S-CHAIN-R Q2): for the relay,
 /// RPC and FFI paths that forward bytes — no `Deref`, no `AsRef<[u8]>`, no
-/// parse. The one way out is [`into_wire_bytes`](Self::into_wire_bytes),
-/// named for its consumer.
+/// parse. The bytes leave as [`wire_bytes`](Self::wire_bytes), borrowed, or
+/// [`into_wire_bytes`](Self::into_wire_bytes), owned.
 ///
 /// ```compile_fail
 /// # use shekyl_chain_store::store::SegmentBytes;
@@ -143,16 +155,17 @@ impl<K: BlobKind> SegmentBytes<K> {
         }
     }
 
-    /// The bytes, for the writer that puts them on the wire. Consumes the
-    /// value: there is no borrowed view.
+    /// The bytes, owned, for a writer that puts them on the wire.
     #[must_use]
     pub fn into_wire_bytes(self) -> Vec<u8> {
         self.bytes
     }
 
-    /// The segment's wire bytes, borrowed.
+    /// The bytes, borrowed. The same exit as
+    /// [`into_wire_bytes`](Self::into_wire_bytes) for a caller that still
+    /// holds the segment: a skeleton copies them, a parse reads them.
     #[must_use]
-    pub fn as_bytes(&self) -> &[u8] {
+    pub fn wire_bytes(&self) -> &[u8] {
         &self.bytes
     }
 
@@ -166,8 +179,8 @@ impl<K: BlobKind> SegmentBytes<K> {
 
     /// Whether the segment is empty. `connect` writes an empty `prunable`
     /// row for a transaction with no prunable region (LMDB parity), so an
-    /// empty [`Prunable::Retained`] is a real state, distinct from
-    /// [`Prunable::Discarded`].
+    /// empty retained region ([`ArchivalGood::Retained`]) is a real state,
+    /// distinct from [`ArchivalGood::Discarded`].
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.bytes.is_empty()
@@ -199,12 +212,13 @@ pub struct TxLocation {
 
 /// The permanent half of a recorded transaction — **T3**'s answer: where it
 /// is, its pruned segment (eager, STX-Q4 A: every caller wants the bytes),
-/// its `pqc_auths` segment where the txid is 4-part, and the two permanent
-/// hash rows every node keeps at every horizon (§7.7 leg (i)).
+/// and the three permanent operand rows every node keeps at every horizon
+/// (§7.7 leg (i)). Together these are the **skeleton** ([`Self::skeleton_of`]).
 ///
-/// The prunable region is **not** here: it is the archival good, held or
-/// discarded per node, and [`prunable_at`] (**T4**) answers for it by the
-/// id this record carries. `get_tx_blob`'s callers compose the two
+/// The archival good — the prunable region and, for a 4-part txid, the
+/// `pqc_auths` region — is **not** here: it is held or discarded per node
+/// as one unit, and [`archival_good_at`] (**T4**) answers for it by the id
+/// this record carries. `get_tx_blob`'s callers compose the two
 /// (`wire_bytes`).
 ///
 /// No `unlock_time` (STX-9). A read projection, never stored.
@@ -215,12 +229,6 @@ pub struct TxRecord {
     /// The pruned segment: version, prefix, ct type, fee / reference block,
     /// committed base — `txs_pruned[id]`.
     pub pruned: SegmentBytes<TxPrunedSegment>,
-    /// The tx-level `pqc_auths` region — `Some` iff the txid is 4-part
-    /// (`PDM-Q-F26`), i.e. iff `pqc_auth_hash` is; inside, whether this node
-    /// holds its bytes ([`PqcAuths::Retained`]) or the retention prune has
-    /// discarded them ([`PqcAuths::Discarded`], §7.7 leg (iii) — DRS-E1
-    /// S-PRUNE discards the region by shard with the prunable one).
-    pub pqc_auths: Option<PqcAuths>,
     /// The prunable region's hash — the archival good's unit of
     /// verification (`PDM-Q6` item 1); permanent.
     pub prunable_hash: PrunableHash,
@@ -242,64 +250,80 @@ pub struct TxRecord {
 }
 
 impl TxRecord {
-    /// The whole transaction as the wire carries it, given its prunable
-    /// region: `pruned ‖ pqc_auths ‖ prunable`, the order `db_lmdb.cpp`'s
+    /// The whole transaction as the wire carries it, given its archival
+    /// good: `pruned ‖ pqc_auths ‖ prunable`, the order `db_lmdb.cpp`'s
     /// `get_tx_blob` assembled and `connect` split (STX-8). One line, so it
     /// is written once; a third read for it would be the identity hop.
     ///
-    /// `None` when the transaction is 4-part and its `pqc_auths` region is
-    /// [`Discarded`](PqcAuths::Discarded): the wire cannot be recomposed
-    /// from this node — fetch the region from an archiver, as for the
-    /// prunable one.
+    /// Borrows the good's **retained** regions. The caller has already
+    /// matched [`ArchivalGood`] and answered its `Discarded` arm — with the
+    /// [skeleton](Self::skeleton_of), or a refusal — before composing.
+    /// `pqc_auths` is `Some` iff the txid is 4-part. The record is borrowed
+    /// too: the pruned segment stays, and [`skeleton_of`](Self::skeleton_of)
+    /// is cut from the same bytes.
     #[must_use]
-    pub fn wire_bytes(self, prunable: SegmentBytes<TxPrunableSegment>) -> Option<Vec<u8>> {
-        let mut out = self.pruned.into_wire_bytes();
-        match self.pqc_auths {
-            None => {}
-            Some(PqcAuths::Retained(pqc)) => out.extend(pqc.into_wire_bytes()),
-            Some(PqcAuths::Discarded) => return None,
+    pub fn wire_bytes(
+        &self,
+        prunable: &SegmentBytes<TxPrunableSegment>,
+        pqc_auths: Option<&SegmentBytes<TxPqcAuthsSegment>>,
+    ) -> Vec<u8> {
+        let mut out = self.pruned.wire_bytes().to_vec();
+        if let Some(pqc) = pqc_auths {
+            out.extend_from_slice(pqc.wire_bytes());
         }
-        out.extend(prunable.into_wire_bytes());
-        Some(out)
+        out.extend_from_slice(prunable.wire_bytes());
+        out
+    }
+
+    /// The **skeleton** of this recorded transaction: its pruned segment
+    /// and the three operands its txid binds — `prunable_hash`,
+    /// `pqc_auth_hash` (where 4-part) and `archival_len`. This is what every
+    /// node holds at every horizon (`PDM-Q5`, `SB-Q2`), what a pruned-sync
+    /// peer serves below the checkpoint, and what a `prune` reply carries
+    /// per transaction. The one constructor in the tree, in the crate that
+    /// owns the rows; the recipient rebinds it with [`SkeletonTx::txid`].
+    #[must_use]
+    pub fn skeleton_of(&self) -> SkeletonTx {
+        SkeletonTx {
+            unprunable: self.pruned.wire_bytes().to_vec(),
+            prunable_hash: self.prunable_hash,
+            pqc_auth_hash: self.pqc_auth_hash,
+            archival_len: self.archival_len,
+        }
     }
 }
 
-/// Whether this node holds a 4-part transaction's `pqc_auths` region — the
-/// same two arms as [`Prunable`], for the second region the retention prune
-/// discards (`PDM-Q6`: the shard's prunable regions and `pqc_auths` go
-/// together). Matched exhaustively, not convertible to `Option`, for the
-/// same reason.
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[must_use = "`Discarded` is a state the caller must act on, not an absence to skip"]
-pub enum PqcAuths {
-    /// The region is held: `txs_pqc_auths[id]` is present.
-    Retained(SegmentBytes<TxPqcAuthsSegment>),
-    /// The region is not held: `txs_pqc_auth_hash[id]` present, segment
-    /// absent — §7.7 leg (iii)'s one state, discarded or never held.
-    Discarded,
-}
-
-/// Whether this node holds a recorded transaction's prunable region —
-/// **T4**'s answer inside the dense-id bound (module docs).
+/// Whether this node holds a recorded transaction's **archival good** —
+/// **T4**'s answer inside the dense-id bound (module docs). The good is one
+/// unit (`PDM-Q6` item 1): the prunable region and, for a 4-part txid, the
+/// `pqc_auths` region, held together or discarded together.
 ///
 /// Matched exhaustively; deliberately not convertible to `Option` — the
 /// two arms instruct differently, and a `None` would erase which.
 ///
 /// ```compile_fail
-/// # use shekyl_chain_store::store::Prunable;
-/// fn flatten(p: Prunable) -> Option<()> {
+/// # use shekyl_chain_store::store::ArchivalGood;
+/// fn flatten(p: ArchivalGood) -> Option<()> {
 ///     p.into() // no such conversion
 /// }
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[must_use = "`Discarded` is a state the caller must act on, not an absence to skip"]
-pub enum Prunable {
-    /// The region is held: `txs_prunable[id]` is present. May be empty — a
-    /// transaction with no prunable region has an empty row (LMDB parity).
-    Retained(SegmentBytes<TxPrunableSegment>),
-    /// The region is not held: hash row present, segment absent — §7.7 leg
-    /// (iii)'s one state, whether the prune discarded it or the node never
-    /// held it. Answer from the hash; fetch the bytes from an archiver.
+pub enum ArchivalGood {
+    /// The good is held: `txs_prunable[id]` is present, and so is
+    /// `txs_pqc_auths[id]` where the txid is 4-part.
+    Retained {
+        /// The prunable region. May be empty — a transaction with no
+        /// prunable region has an empty row (LMDB parity).
+        prunable: SegmentBytes<TxPrunableSegment>,
+        /// The tx-level `pqc_auths` region — `Some` iff the txid is 4-part
+        /// (`PDM-Q-F26`), i.e. iff the record's `pqc_auth_hash` is.
+        pqc_auths: Option<SegmentBytes<TxPqcAuthsSegment>>,
+    },
+    /// The good is not held: the hash rows are present, the segments
+    /// absent — §7.7 leg (iii)'s one state, whether the prune discarded it
+    /// or the node never held it. Answer the skeleton; the bytes come from
+    /// an archiver.
     Discarded,
 }
 
@@ -400,7 +424,7 @@ fn decode_index(value: crate::codec::Encoded<'_, TxIndex>) -> Result<TxIndex, Re
 /// recorded on the chain, the miner transactions included. The chain half
 /// of CEN-G1, `ChainView::has_transaction`'s body (E6 slice 7), shared with
 /// `ReadSnapshot::has_transaction` so the validator and the pool read one
-/// answer. Membership only, as [`chain_reads::has_key_image`] is: the row is
+/// answer. Membership only, as [`has_key_image`](super::chain_reads::has_key_image) is: the row is
 /// not decoded, so an undecodable index is the locating reads' SI-7 to
 /// report, not a false `false` here. The C++'s `tx_exists`.
 pub(super) fn has_transaction<T: ReadTables>(txn: &T, hash: &TxHash) -> Result<bool, ReadFault> {
@@ -472,10 +496,8 @@ pub(super) fn location_at<T: ReadTables>(
 /// with the index row): missing is **SI-7** with the table named, which is
 /// what `rpc_facts_ffi.cpp`'s `MERROR` on a missing prunable hash becomes
 /// under a typed read (STX-6). The `pqc_auths` hash row is present iff the
-/// txid is 4-part. A segment without that hash row is leg (ii)'s breach,
-/// SI-7. A hash row without its segment is [`PqcAuths::Discarded`] — leg
-/// (iii), the retention prune's state for the region, not a fault. No hash
-/// row and no segment is a 3-part transaction.
+/// txid is 4-part; no row is a 3-part transaction. The regions themselves
+/// are the archival good, [`archival_good_at`]'s to answer for.
 pub(super) fn record_at<T: ReadTables>(
     txn: &T,
     hash: &TxHash,
@@ -494,21 +516,8 @@ pub(super) fn record_at<T: ReadTables>(
     let Some(prunable_hash) = coded_row(txn, TXS_PRUNABLE_HASH, "txs_prunable_hash", id)? else {
         return Err(absent("txs_prunable_hash"));
     };
+    // Absent ⇔ the txid is 3-part. Not a fault: that is what no row means.
     let pqc_auth_hash = coded_row(txn, TXS_PQC_AUTH_HASH, "txs_pqc_auth_hash", id)?;
-    let pqc_auths = txn
-        .table(TXS_PQC_AUTHS)?
-        .get(id)?
-        .map(|guard| SegmentBytes::new(guard.value().bytes()));
-    // §7.7 legs (ii) and (iii) for the pqc region: a segment implies its
-    // hash row (a segment without one is SI-7); a hash row without its
-    // segment is the *discarded* state (DRS-E1 S-PRUNE), never a fault; no
-    // hash row and no segment is a 3-part transaction.
-    let pqc_auths = match (pqc_auths, &pqc_auth_hash) {
-        (Some(_), None) => return Err(absent("txs_pqc_auth_hash")),
-        (Some(bytes), Some(_)) => Some(PqcAuths::Retained(bytes)),
-        (None, Some(_)) => Some(PqcAuths::Discarded),
-        (None, None) => None,
-    };
 
     // Sparse by definition (`connect` writes it iff the length is non-zero),
     // so absence is zero, not a hole. A row lost from a transaction that
@@ -520,28 +529,32 @@ pub(super) fn record_at<T: ReadTables>(
     Ok(Some(TxRecord {
         location,
         pruned,
-        pqc_auths,
         prunable_hash,
         pqc_auth_hash,
         archival_len,
     }))
 }
 
-/// **T4.** Whether this node holds the prunable region of the transaction
+/// **T4.** Whether this node holds the **archival good** of the transaction
 /// at `id`, bound first (module docs).
 ///
 /// At or beyond the count: [`AtIndex::BeyondCount`], no row read — a forged
 /// or stale id is invalid input, not corruption. Below it the primary row
-/// must exist (a hole is **SI-9**, [`admit`]); then the hash row must exist
-/// and decode (leg (i); missing or malformed is **SI-7**, [`coded_row`] — the
-/// answer is about the region whose digest that row is, so a row that is
-/// not a digest is not a basis for it), and then the segment's presence is
-/// the answer — [`Prunable::Retained`] or [`Prunable::Discarded`], leg
-/// (iii)'s one state.
-pub(super) fn prunable_at<T: ReadTables>(
+/// must exist (a hole is **SI-9**, [`admit`]); then the prunable hash row
+/// must exist and decode (leg (i); missing or malformed is **SI-7**,
+/// [`coded_row`] — the answer is about the region whose digest that row is,
+/// so a row that is not a digest is not a basis for it); the `pqc_auth_hash`
+/// row says whether the txid is 4-part, and a `pqc_auths` segment without it
+/// is leg (ii)'s breach, **SI-7**. Then the segments' presence is the
+/// answer, as **one** unit: both present (or the prunable one, for a 3-part
+/// txid) is [`ArchivalGood::Retained`]; both absent is
+/// [`ArchivalGood::Discarded`], leg (iii)'s one state; one present and the
+/// other not is **SI-42** ([`StoreInvariant::ArchivalGoodHalfHeld`]) — no
+/// write path produces it, and it is not a third answer.
+pub(super) fn archival_good_at<T: ReadTables>(
     txn: &T,
     id: TxStorageId,
-) -> Result<AtIndex<Prunable>, ReadFault> {
+) -> Result<AtIndex<ArchivalGood>, ReadFault> {
     if let Admitted::Beyond = admit(txn, id)? {
         return Ok(AtIndex::BeyondCount);
     }
@@ -549,9 +562,30 @@ pub(super) fn prunable_at<T: ReadTables>(
     if coded_row(txn, TXS_PRUNABLE_HASH, "txs_prunable_hash", raw)?.is_none() {
         return Err(absent("txs_prunable_hash"));
     }
-    let answer = match txn.table(TXS_PRUNABLE)?.get(raw)? {
-        Some(guard) => Prunable::Retained(SegmentBytes::new(guard.value().bytes())),
-        None => Prunable::Discarded,
+    let four_part = coded_row(txn, TXS_PQC_AUTH_HASH, "txs_pqc_auth_hash", raw)?.is_some();
+    let prunable = txn
+        .table(TXS_PRUNABLE)?
+        .get(raw)?
+        .map(|guard| SegmentBytes::new(guard.value().bytes()));
+    let pqc_auths = txn
+        .table(TXS_PQC_AUTHS)?
+        .get(raw)?
+        .map(|guard| SegmentBytes::new(guard.value().bytes()));
+    let half = |held| ReadFault::Invariant(StoreInvariant::ArchivalGoodHalfHeld { id, held });
+    let answer = match (prunable, pqc_auths, four_part) {
+        // Leg (ii): a `pqc_auths` segment implies its hash row.
+        (_, Some(_), false) => return Err(absent("txs_pqc_auth_hash")),
+        (None, None, _) => ArchivalGood::Discarded,
+        (Some(prunable), None, false) => ArchivalGood::Retained {
+            prunable,
+            pqc_auths: None,
+        },
+        (Some(prunable), Some(pqc), true) => ArchivalGood::Retained {
+            prunable,
+            pqc_auths: Some(pqc),
+        },
+        (Some(_), None, true) => return Err(half(HeldRegion::Prunable)),
+        (None, Some(_), true) => return Err(half(HeldRegion::PqcAuths)),
     };
     Ok(AtIndex::Recorded(answer))
 }
@@ -567,15 +601,16 @@ pub(super) fn prunable_at<T: ReadTables>(
 /// **Why the rows and not the body.** A prune deletes the regions and never these
 /// rows (`schema.rs` on `TXS_PQC_AUTH_HASH`: a row without its segment is
 /// *discarded*, §7.7 leg (iii), not a fault). Recomputing the digests from a
-/// pruned body instead would yield `keccak256("")` and `None`, so a pruned node
-/// would read its own discarded spends as carrying **no** good and place them
-/// outside the domain while an archival node keeps them inside — the two would
-/// disagree on shard boundaries, which is a consensus split. That is why
+/// pruned body instead would yield `keccak256("")` and `None`, so a node past
+/// the boundary would read its own discarded spends as carrying **no** good and
+/// place them outside the domain while one still holding the body keeps them
+/// inside — the two would disagree on shard boundaries, which is a consensus
+/// split. That is why
 /// `shekyl-wire` exposes the predicate only over explicit row values, and why
 /// this answer is stable across a prune (pinned by
 /// `the_predicate_survives_a_prune_on_the_stored_rows`).
 ///
-/// Bound first, as [`prunable_at`]: at or beyond the count, no row is read.
+/// Bound first, as [`archival_good_at`]: at or beyond the count, no row is read.
 pub(super) fn carries_archival_good_at<T: ReadTables>(
     txn: &T,
     id: TxStorageId,
@@ -585,7 +620,7 @@ pub(super) fn carries_archival_good_at<T: ReadTables>(
     }
     let raw = id.to_raw();
     // Leg (i): the prunable hash row is permanent and mandatory — its absence
-    // below the count is SI-7, the same fault `prunable_at` reports, because the
+    // below the count is SI-7, the same fault `archival_good_at` reports, because the
     // answer is *about* the region whose digest that row is.
     let Some(prunable_hash) = coded_row(txn, TXS_PRUNABLE_HASH, "txs_prunable_hash", raw)? else {
         return Err(absent("txs_prunable_hash"));

@@ -165,18 +165,21 @@ async fn bond_watch_emits_sightings_for_watched_ids_only() {
     // chaining stays consistent.
     let b0 = make_synthetic_block(0, BlockHash::NULL);
     let mut b1 = make_synthetic_block(1, b0.block.hash());
-    b1.transactions.push(test_bond_tx(&mine));
+    b1.transactions
+        .push(shekyl_wire::BoundTx::whole(test_bond_tx(&mine)));
     b1.block
         .transaction_hashes
         .push(TxHash::from_bytes([0xA1; 32]));
-    b1.transactions.push(test_bond_tx(&stranger));
+    b1.transactions
+        .push(shekyl_wire::BoundTx::whole(test_bond_tx(&stranger)));
     b1.block
         .transaction_hashes
         .push(TxHash::from_bytes([0xA2; 32]));
-    b1.transactions.push(test_bond_tx_kind(
-        &mine,
-        shekyl_wire::transaction::BondPostKind::Other(0x7F),
-    ));
+    b1.transactions
+        .push(shekyl_wire::BoundTx::whole(test_bond_tx_kind(
+            &mine,
+            shekyl_wire::transaction::BondPostKind::Other(0x7F),
+        )));
     b1.block
         .transaction_hashes
         .push(TxHash::from_bytes([0xA3; 32]));
@@ -244,7 +247,8 @@ async fn reorg_discards_abandoned_fork_bond_sightings() {
     for h in 0..TIP {
         let mut b = make_synthetic_block(h, parent);
         if h == FORK {
-            b.transactions.push(test_bond_tx(&mine));
+            b.transactions
+                .push(shekyl_wire::BoundTx::whole(test_bond_tx(&mine)));
             b.block
                 .transaction_hashes
                 .push(TxHash::from_bytes([0xB0; 32]));

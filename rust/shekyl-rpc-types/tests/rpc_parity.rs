@@ -18,7 +18,7 @@
 
 use serde_json::Value;
 use shekyl_rpc_types::{
-    BlockHeader, ConnectionInfo, ConnectionState, DaemonNetwork, GetBlockCountResponse,
+    ArchivedTx, BlockHeader, ConnectionInfo, ConnectionState, DaemonNetwork, GetBlockCountResponse,
     GetBlockHeaderByHashResponse, GetBlockHeaderByHeightResponse, GetBlockHeadersRangeResponse,
     GetBlockResponse, GetConnectionsResponse, GetHeightResponse, GetLastBlockHeaderResponse,
     GetNetStatsResponse, GetPeerListRequest, GetPeerListResponse, GetTransactionsRequest,
@@ -488,12 +488,10 @@ fn tagged_hex(tag: u8) -> String {
 fn get_transactions_request_matches_the_oracle() {
     let built = GetTransactionsRequest {
         txs_hashes: vec![tagged_hex(1), tagged_hex(2)],
-        decode_as_json: true,
         prune: true,
-        split: true,
     };
     assert_parity(
-        include_str!("vectors/rpc/get_transactions_request_v1.json"),
+        include_str!("vectors/rpc/get_transactions_request_v2.json"),
         &built,
     );
 }
@@ -502,12 +500,10 @@ fn get_transactions_request_matches_the_oracle() {
 fn get_transactions_request_defaults_matches_the_oracle() {
     let built = GetTransactionsRequest {
         txs_hashes: vec![tagged_hex(3)],
-        decode_as_json: false,
         prune: false,
-        split: false,
     };
     assert_parity(
-        include_str!("vectors/rpc/get_transactions_request_defaults_v1.json"),
+        include_str!("vectors/rpc/get_transactions_request_defaults_v2.json"),
         &built,
     );
 }
@@ -517,16 +513,16 @@ fn get_transactions_chain_and_pool_matches_the_oracle() {
     // The vector that pins `entry`'s branch: one mined entry and one pooled
     // one, so both field sets are in the same document. The emitter set the
     // *other* arm's members on each entry to non-default values, so a mirror
-    // that emitted them would not be parsed-equal here.
+    // that emitted them would not be parsed-equal here. Both are the full
+    // form of a 4-part transaction: `as_hex` filled, `pruned_as_hex` empty,
+    // `pqc_auth_hash` a digest.
     let mined = TxEntry {
         tx_hash: tagged_hash(11),
         as_hex: "0011223344".to_owned(),
         pruned_as_hex: String::new(),
-        prunable_as_hex: String::new(),
         prunable_hash: tagged_hash(12),
+        pqc_auth_hash: Nullable::value(tagged_hash(13)),
         archival_len: 16874,
-        as_json: Some(String::new()),
-        pruned: false,
         double_spend_seen: false,
         location: TxLocation::Mined {
             block_height: 1_234_567,
@@ -539,11 +535,9 @@ fn get_transactions_chain_and_pool_matches_the_oracle() {
         tx_hash: tagged_hash(21),
         as_hex: "aabbcc".to_owned(),
         pruned_as_hex: String::new(),
-        prunable_as_hex: String::new(),
         prunable_hash: tagged_hash(22),
+        pqc_auth_hash: Nullable::value(tagged_hash(23)),
         archival_len: 5389,
-        as_json: Some(String::new()),
-        pruned: false,
         double_spend_seen: true,
         location: TxLocation::Pooled {
             relayed: true,
@@ -554,27 +548,30 @@ fn get_transactions_chain_and_pool_matches_the_oracle() {
         status: RpcStatus::ok(),
         txs: vec![mined, pooled],
         missed_tx: Vec::new(),
+        archived: Vec::new(),
         unavailable_tx: Vec::new(),
     };
     assert_parity(
-        include_str!("vectors/rpc/get_transactions_chain_and_pool_v3.json"),
+        include_str!("vectors/rpc/get_transactions_chain_and_pool_v4.json"),
         &built,
     );
 }
 
+/// The pruned form (`prune: true`): `pruned_as_hex` is the pruned segment,
+/// `as_hex` is empty, and the three operands are beside it. The vector is
+/// `split_form_v3` reshaped (`the_3_64_vectors_are_their_predecessors_reshaped_to_the_skeleton`);
+/// the case takes a new name because `split` is gone.
 #[test]
-fn get_transactions_split_form_matches_the_oracle() {
+fn get_transactions_pruned_form_matches_the_oracle() {
     let built = GetTransactionsResponse {
         status: RpcStatus::ok(),
         txs: vec![TxEntry {
             tx_hash: tagged_hash(31),
             as_hex: String::new(),
             pruned_as_hex: "0102030405".to_owned(),
-            prunable_as_hex: "0607".to_owned(),
             prunable_hash: tagged_hash(32),
+            pqc_auth_hash: Nullable::value(tagged_hash(33)),
             archival_len: 7,
-            as_json: Some(String::new()),
-            pruned: true,
             double_spend_seen: false,
             location: TxLocation::Mined {
                 block_height: 100,
@@ -586,28 +583,30 @@ fn get_transactions_split_form_matches_the_oracle() {
             },
         }],
         missed_tx: Vec::new(),
+        archived: Vec::new(),
         unavailable_tx: Vec::new(),
     };
     assert_parity(
-        include_str!("vectors/rpc/get_transactions_split_form_v3.json"),
+        include_str!("vectors/rpc/get_transactions_pruned_form_v1.json"),
         &built,
     );
 }
 
+/// A 3-part transaction — the coinbase — carries `pqc_auth_hash: null` and
+/// `archival_len: 0`. The vector is `decoded_v3` reshaped: the JSON
+/// rendering that case existed for is gone (IG-Q55), and what remains of
+/// it is the one 3-part entry among the fixtures.
 #[test]
-fn get_transactions_decoded_matches_the_oracle() {
-    let as_json = "{\"version\": 2, \"unlock_time\": 0}".to_owned();
+fn get_transactions_coinbase_matches_the_oracle() {
     let built = GetTransactionsResponse {
         status: RpcStatus::ok(),
         txs: vec![TxEntry {
             tx_hash: tagged_hash(41),
             as_hex: "00".to_owned(),
             pruned_as_hex: String::new(),
-            prunable_as_hex: String::new(),
             prunable_hash: tagged_hash(42),
+            pqc_auth_hash: Nullable::NULL,
             archival_len: 0,
-            as_json: Some(as_json),
-            pruned: false,
             double_spend_seen: false,
             location: TxLocation::Mined {
                 block_height: 7,
@@ -617,10 +616,48 @@ fn get_transactions_decoded_matches_the_oracle() {
             },
         }],
         missed_tx: Vec::new(),
+        archived: Vec::new(),
         unavailable_tx: Vec::new(),
     };
     assert_parity(
-        include_str!("vectors/rpc/get_transactions_decoded_v3.json"),
+        include_str!("vectors/rpc/get_transactions_coinbase_v1.json"),
+        &built,
+    );
+}
+
+/// A full body this node has discarded is answered under `archived` with
+/// its shard, beside an entry it could answer (`PDM-Q10`, `SB-Q2`). No
+/// predecessor can express this: the 3.63 daemon refused the whole reply
+/// (`tx.pruned_here`). Named as its own case, as
+/// `a_missing_slot_is_the_case_v1_could_not_express` names the by-hash one.
+#[test]
+fn get_transactions_archived_matches_the_oracle() {
+    let built = GetTransactionsResponse {
+        status: RpcStatus::ok(),
+        txs: vec![TxEntry {
+            tx_hash: tagged_hash(41),
+            as_hex: "00".to_owned(),
+            pruned_as_hex: String::new(),
+            prunable_hash: tagged_hash(42),
+            pqc_auth_hash: Nullable::NULL,
+            archival_len: 0,
+            double_spend_seen: false,
+            location: TxLocation::Mined {
+                block_height: 7,
+                confirmations: 3,
+                block_timestamp: 1_750_000_007,
+                output_indices: vec![0],
+            },
+        }],
+        missed_tx: Vec::new(),
+        archived: vec![ArchivedTx {
+            tx_hash: tagged_hash(71),
+            shard: 3,
+        }],
+        unavailable_tx: Vec::new(),
+    };
+    assert_parity(
+        include_str!("vectors/rpc/get_transactions_archived_v1.json"),
         &built,
     );
 }
@@ -631,6 +668,7 @@ fn get_transactions_missed_matches_the_oracle() {
         status: RpcStatus::ok(),
         txs: Vec::new(),
         missed_tx: vec![tagged_hash(51), tagged_hash(52)],
+        archived: Vec::new(),
         unavailable_tx: Vec::new(),
     };
     assert_parity(
@@ -645,6 +683,7 @@ fn get_transactions_refusal_matches_the_oracle() {
         status: RpcStatus("Too many transactions requested in restricted mode".to_owned()),
         txs: Vec::new(),
         missed_tx: Vec::new(),
+        archived: Vec::new(),
         unavailable_tx: Vec::new(),
     };
     assert_parity(
@@ -807,7 +846,7 @@ fn request_sequences_are_omitted_when_empty_and_present_when_not() {
 fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // One row per bump, oldest first. Each is (the vector before the bump,
     // the vector after it).
-    let links: [(&str, &str); 39] = [
+    let links: [(&str, &str); 40] = [
         (
             include_str!("vectors/rpc/get_version_synced_v1.json"),
             include_str!("vectors/rpc/get_version_synced_v2.json"),
@@ -964,6 +1003,10 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
             include_str!("vectors/rpc/get_version_synced_v39.json"),
             include_str!("vectors/rpc/get_version_synced_v40.json"),
         ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v40.json"),
+            include_str!("vectors/rpc/get_version_synced_v41.json"),
+        ),
     ];
 
     let version_of = |raw: &str| -> u64 {
@@ -982,7 +1025,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // The trailing comment names the minor the *newer* vector carries.
     // `v1` is 3.24, so link `i`'s newer minor is `25 + i`. The comment sits
     // on its element, so it cannot attach to the neighbor.
-    const ADDED_AT_LINK: [&[&str]; 39] = [
+    const ADDED_AT_LINK: [&[&str]; 40] = [
         &[],                                                        // 3.25
         &[],                                                        // 3.26
         &[],                                                        // 3.27
@@ -1022,6 +1065,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.61 (a retired pool: get_info's pool_retired and null counts, get_transactions' unavailable_tx; get_version gains nothing)
         &[], // 3.62 (a grant refusal is the error object, RT-W10 step 1; get_version gains nothing)
         &[], // 3.63 (the flip's client shapes, FLIP-Q4; get_version gains nothing)
+        &[], // 3.64 (a transaction entry is the skeleton: pqc_auth_hash, archived, prune on get_blocks_by_height.bin; split/as_json/pruned/prunable_as_hex retire, SB-Q2; get_version gains nothing)
     ];
     assert_eq!(
         ADDED_AT_LINK.len(),
@@ -1033,7 +1077,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // `ADDED_AT_LINK`, held to the same standard: a member leaves only where
     // its link names it. Indexed like `ADDED_AT_LINK`; every link but the
     // 3.44 one retires nothing.
-    const REMOVED_AT_LINK: [&[&str]; 39] = [
+    const REMOVED_AT_LINK: [&[&str]; 40] = [
         &[],             // 3.25
         &[],             // 3.26
         &[],             // 3.27
@@ -1073,6 +1117,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.61 (the retired pool's keys are not get_version's; it retires nothing)
         &[], // 3.62 (the refusal shape is not get_version's; it retires nothing)
         &[], // 3.63 (the flip's client shapes are not get_version's; it retires nothing)
+        &[], // 3.64 (the retired body members are get_transactions'; get_version retires nothing)
     ];
     assert_eq!(
         REMOVED_AT_LINK.len(),
@@ -1778,6 +1823,115 @@ fn v3_is_v2_plus_exactly_the_archival_length_on_every_entry() {
         entries_seen > 0,
         "no entry was checked, so the addition is not being verified"
     );
+}
+
+/// `SB-Q2` / `IG-Q55` (3.64): a `get_transactions` entry is the skeleton.
+/// Each successor is its predecessor with, on every entry, exactly the
+/// three retired members removed — `prunable_as_hex`, `as_json` and (where
+/// it was present) `pruned` — and exactly `pqc_auth_hash` added, `null` or
+/// a 32-byte digest; nothing else moves. `split_form_v3` and `decoded_v3`
+/// take new case names (`pruned_form_v1`, `coinbase_v1`) because the cases
+/// they were named for are gone. The two requests lose `decode_as_json` and
+/// `split`. `missed` and `refusal` carry no entry and stay at `_v2`;
+/// `archived_v1` has no predecessor and is pinned by its parity test.
+#[test]
+fn the_3_64_vectors_are_their_predecessors_reshaped_to_the_skeleton() {
+    const RETIRED: [&str; 3] = ["prunable_as_hex", "as_json", "pruned"];
+    const ADDED: &str = "pqc_auth_hash";
+    let mut entries_seen = 0usize;
+    let mut null_seen = false;
+    let mut digest_seen = false;
+    for (before_raw, after_raw) in [
+        (
+            include_str!("vectors/rpc/get_transactions_chain_and_pool_v3.json"),
+            include_str!("vectors/rpc/get_transactions_chain_and_pool_v4.json"),
+        ),
+        (
+            include_str!("vectors/rpc/get_transactions_split_form_v3.json"),
+            include_str!("vectors/rpc/get_transactions_pruned_form_v1.json"),
+        ),
+        (
+            include_str!("vectors/rpc/get_transactions_decoded_v3.json"),
+            include_str!("vectors/rpc/get_transactions_coinbase_v1.json"),
+        ),
+    ] {
+        let mut before = parsed(before_raw);
+        let mut after = parsed(after_raw);
+        for entry in before
+            .get_mut("txs")
+            .and_then(Value::as_array_mut)
+            .expect("a predecessor carries entries")
+        {
+            let entry = entry.as_object_mut().expect("an entry is an object");
+            // `prunable_as_hex` and `as_json` were plain members, always
+            // written; `pruned` was OPT and absent at its default.
+            for member in RETIRED {
+                let removed = entry.remove(member);
+                assert!(
+                    removed.is_some() || member == "pruned",
+                    "every predecessor entry carried `{member}`"
+                );
+            }
+        }
+        for entry in after
+            .get_mut("txs")
+            .and_then(Value::as_array_mut)
+            .expect("a successor carries entries")
+        {
+            let entry = entry.as_object_mut().expect("an entry is an object");
+            let added = entry
+                .remove(ADDED)
+                .expect("every successor entry carries pqc_auth_hash");
+            match added {
+                Value::Null => null_seen = true,
+                Value::String(hex) => {
+                    assert_eq!(hex.len(), 64, "a pqc_auth_hash is a 32-byte digest");
+                    digest_seen = true;
+                }
+                other => panic!("pqc_auth_hash is null or a digest, not {other}"),
+            }
+            entries_seen += 1;
+        }
+        assert_eq!(
+            before, after,
+            "the successor must differ from its predecessor by exactly the \
+             retired members and the added one"
+        );
+    }
+    assert!(
+        entries_seen > 0 && null_seen && digest_seen,
+        "both arities must be checked: entries={entries_seen} null={null_seen} digest={digest_seen}"
+    );
+
+    for (before_raw, after_raw, retired) in [
+        (
+            include_str!("vectors/rpc/get_transactions_request_v1.json"),
+            include_str!("vectors/rpc/get_transactions_request_v2.json"),
+            &["decode_as_json", "split"][..],
+        ),
+        (
+            include_str!("vectors/rpc/get_transactions_request_defaults_v1.json"),
+            include_str!("vectors/rpc/get_transactions_request_defaults_v2.json"),
+            &["decode_as_json"][..],
+        ),
+    ] {
+        let mut before = parsed(before_raw);
+        for member in retired {
+            assert!(
+                before
+                    .as_object_mut()
+                    .expect("a request is an object")
+                    .remove(*member)
+                    .is_some(),
+                "the predecessor request carried `{member}`"
+            );
+        }
+        assert_eq!(
+            before,
+            parsed(after_raw),
+            "the request must differ by exactly its retired switches"
+        );
+    }
 }
 
 // ── RK-5a: the p2p seam ─────────────────────────────────────────────────────

@@ -200,3 +200,37 @@ that held them: `_v2` to `_v1` minus exactly the identifier fields of
 (PDM-Q7). The `_v4` delta covers neither (it is `get_peer_list` only), so
 those two deltas are no longer asserted and the three `_v3` vectors rest
 on their parity tests alone.
+
+**3.64 — `get_transactions` answers the skeleton, and five fixtures have a
+successor.** The pruned form is the skeleton (`SB-Q2`): `pruned_as_hex` is
+the pruned segment alone and every entry carries `pqc_auth_hash` (null
+for a body with no `pqc_auths` region); `prunable_as_hex`, `as_json` and
+`pruned` retire with the `split` and `decode_as_json` request switches
+(`IG-Q55`). Each successor is its predecessor minus exactly those keys
+plus `pqc_auth_hash`
+(`the_3_64_vectors_are_their_predecessors_reshaped_to_the_skeleton`):
+`get_transactions_chain_and_pool_v4`, `_request_v2` and
+`_request_defaults_v2`; and two whose meaning changed with the form and so
+take new names — `get_transactions_split_form_v3` becomes
+`_pruned_form_v1` (there is no split form, only the pruned one) and
+`_decoded_v3` becomes `_coinbase_v1` (there is no decoding; what that
+fixture pinned was a coinbase's whole body). `get_transactions_archived_v1`
+is a case no predecessor could express: a full body this node discarded,
+answered as `{tx_hash, shard}` under `archived` where the 3.63 daemon
+refused the reply (`PDM-Q10`). `get_version_synced_v41` is the chain's
+3.64 link.
+
+The same release gives `/get_blocks_by_height.bin` the `prune` switch and
+a per-slot body. `get_blocks_by_height_request_v1.bin` is unchanged: the
+switch is omitted when off, so the epee capture is still a valid 3.64
+request, and `_request_prune_v1.bin` is the switch on. The response's
+`txs` is an array of slots, each a section tagged `form` (`1` full, `2`
+skeleton, `3` archived) in place of the string list, so
+`_response_v2.bin` is `_response_v1.bin` with each body reshaped into a
+full slot
+(`blocks_by_height_v2_is_v1_with_each_body_reshaped_into_a_full_slot`).
+`_response_skeleton_v1.bin` (two skeletons, one with the third component
+and one without, so `pqc_auth_hash` appears exactly once) and
+`_response_archived_v1.bin` (a whole body beside an `{tx_hash, shard}`
+slot) are cases no predecessor could express, pinned as the 3.64
+encoder's own; `_response_empty_v1.bin` is unchanged.

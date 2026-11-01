@@ -59,7 +59,7 @@ use shekyl_engine_state::transfer::eligible_height;
 use shekyl_scanner::{GuaranteedScanner, ScannableBlock};
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, TxHash};
 use shekyl_units::AtomicUnits;
-use shekyl_wire::transaction::{Input, Transaction};
+use shekyl_wire::{transaction::Input, BoundTx};
 
 use crate::engine::bond_watch::match_watch;
 
@@ -600,7 +600,7 @@ impl std::error::Error for DualExtractError {
 /// from backing eligibility, never admit an unsafe one (GF4b-4's acceptance
 /// criterion for this arm).
 struct OwnEmissionSlots<'a> {
-    transactions: &'a [Transaction],
+    transactions: &'a [BoundTx],
     known_personas: &'a BTreeMap<PCanonicalId, u32>,
     /// Positionally-paired hash → tx index (32-byte copies only; built
     /// without touching any vin blob).
@@ -611,7 +611,7 @@ struct OwnEmissionSlots<'a> {
 
 impl<'a> OwnEmissionSlots<'a> {
     fn new(
-        transactions: &'a [Transaction],
+        transactions: &'a [BoundTx],
         transaction_hashes: &'a [TxHash],
         known_personas: &'a BTreeMap<PCanonicalId, u32>,
     ) -> Self {
@@ -635,7 +635,7 @@ impl<'a> OwnEmissionSlots<'a> {
         }
         let mut slots = BTreeSet::new();
         if let Some(&j) = self.idx_by_hash.get(&tx_hash) {
-            for input in &self.transactions[j].prefix.inputs {
+            for input in &self.transactions[j].tx().prefix.inputs {
                 let Input::ArchivalRewardEmission { canonical_bytes } = input else {
                     continue;
                 };
@@ -759,7 +759,7 @@ pub(crate) fn run_dual_extractor(
         // walks (key images, then bond posts) stay separate so each
         // consumer of the shared lift stays a one-liner.
         for (j, tx) in block.transactions.iter().enumerate() {
-            for input in &tx.prefix.inputs {
+            for input in &tx.tx().prefix.inputs {
                 if let Input::ToKey { key_image, .. } = input {
                     if let Some(gindex) = watch.lookup(key_image) {
                         spent_funding.push(SpentFundingMatch { gindex });
@@ -769,7 +769,7 @@ pub(crate) fn run_dual_extractor(
                     }
                 }
             }
-            for (obs, slot) in match_watch(tx, known_personas) {
+            for (obs, slot) in match_watch(tx.tx(), known_personas) {
                 bond_post_matches.push(BondPostMatch {
                     height,
                     p_canonical_id: obs.p_canonical_id,

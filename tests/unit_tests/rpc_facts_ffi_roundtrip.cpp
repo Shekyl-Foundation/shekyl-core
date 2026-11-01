@@ -47,27 +47,6 @@ TEST(rpc_facts_ffi_roundtrip, pod_sizes_are_the_documented_ones)
   static_assert(offsetof(shekyl_rpc_block_entry, tx_lens) == 24, "tx_lens offset");
   static_assert(offsetof(shekyl_rpc_block_entry, tx_count) == 32, "tx_count offset");
 
-  // RK-4c: one requested transaction's answer. Pointers have no seed value to
-  // fill and compare, so the layout is what gets pinned — offsets, not just
-  // sizeof, because a field that moves without changing the total size is
-  // exactly the edit sizeof cannot see.
-  static_assert(sizeof(shekyl_rpc_tx_entry) == 112, "tx entry changed size");
-  static_assert(offsetof(shekyl_rpc_tx_entry, pruned) == 0, "pruned offset");
-  static_assert(offsetof(shekyl_rpc_tx_entry, pruned_len) == 8, "pruned_len offset");
-  static_assert(offsetof(shekyl_rpc_tx_entry, prunable) == 16, "prunable offset");
-  static_assert(offsetof(shekyl_rpc_tx_entry, prunable_len) == 24, "prunable_len offset");
-  static_assert(offsetof(shekyl_rpc_tx_entry, output_indices) == 32, "output_indices offset");
-  static_assert(offsetof(shekyl_rpc_tx_entry, output_indices_len) == 40, "output_indices_len offset");
-  static_assert(offsetof(shekyl_rpc_tx_entry, block_height) == 48, "block_height offset");
-  static_assert(offsetof(shekyl_rpc_tx_entry, block_timestamp) == 56, "block_timestamp offset");
-  static_assert(offsetof(shekyl_rpc_tx_entry, received_timestamp) == 64, "received_timestamp offset");
-  static_assert(offsetof(shekyl_rpc_tx_entry, prunable_hash) == 72, "prunable_hash offset");
-  static_assert(offsetof(shekyl_rpc_tx_entry, where) == 104, "where offset");
-  static_assert(offsetof(shekyl_rpc_tx_entry, pruned_flag) == 105, "pruned_flag offset");
-  static_assert(offsetof(shekyl_rpc_tx_entry, double_spend_seen) == 106, "double_spend_seen offset");
-  static_assert(offsetof(shekyl_rpc_tx_entry, relayed) == 107, "relayed offset");
-  static_assert(offsetof(shekyl_rpc_tx_entry, reserved) == 108, "reserved offset");
-
   static_assert(sizeof(shekyl_rpc_net_stats_facts) == 40, "net-stats facts POD changed size");
 
   // RK-5c. Mirrored by `const _: ()` asserts in `ffi.rs`.
@@ -85,9 +64,10 @@ TEST(rpc_facts_ffi_roundtrip, pod_sizes_are_the_documented_ones)
   static_assert(sizeof(shekyl_rpc_info_peers_facts) == 32, "info-peers facts POD changed size");
   static_assert(sizeof(shekyl_rpc_fee_estimate_facts) == 32, "fee-estimate facts POD changed size");
 
-  // RK-5a's three list PODs. Same reason as `shekyl_rpc_tx_entry` above: they
-  // carry pointers, so a fill/check twin has nothing to compare and the
-  // layout itself is what must agree with
+  // RK-5a's three list PODs. Pointers have no seed value to fill and
+  // compare, so the layout is what gets pinned — offsets, not just sizeof,
+  // because a field that moves without changing the total size is exactly
+  // the edit sizeof cannot see — and it must agree with
   // `rust/shekyl-daemon-rpc/src/ffi.rs`.
   static_assert(sizeof(shekyl_rpc_connection_facts) == 120, "connection facts changed size");
   static_assert(sizeof(shekyl_rpc_connection_facts) ==

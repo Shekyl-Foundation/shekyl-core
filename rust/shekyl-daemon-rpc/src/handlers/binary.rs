@@ -183,9 +183,11 @@ mod tests {
         // wire's, so a large request is well-formed and simply declined.
         let at = GetBlocksByHeightRequest {
             heights: vec![0; RESTRICTED_BLOCK_COUNT],
+            prune: false,
         };
         let over = GetBlocksByHeightRequest {
             heights: vec![0; RESTRICTED_BLOCK_COUNT + 1],
+            prune: false,
         };
         assert!(at.to_bin().is_ok() && over.to_bin().is_ok());
     }

@@ -224,7 +224,17 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// `send_raw_transaction` reject-cause set: the Rust daemon admits a
 /// JoinMarket bond post, and no daemon authors the cause. `get_version`
 /// gains nothing.
-pub const CORE_RPC_VERSION_MINOR: u32 = 63;
+/// 3.64: a transaction's body has two forms and both bind (`SB-Q2`,
+/// `PDM-Q10`). A `get_transactions` entry carries `pqc_auth_hash`
+/// (nullable) beside `prunable_hash` and `archival_len`; under `prune` its
+/// `pruned_as_hex` is the pruned segment only, never with `pqc_auths`
+/// appended. A full body this node has discarded is listed under
+/// `archived` as `{ tx_hash, shard }`, not failed. `split`,
+/// `decode_as_json`, `prunable_as_hex`, `as_json` and `pruned` retire
+/// (IG-Q55). `get_blocks_by_height.bin` takes `prune` and carries each
+/// archived body as a per-slot state rather than failing the height.
+/// `get_version` gains nothing.
+pub const CORE_RPC_VERSION_MINOR: u32 = 64;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -649,11 +659,15 @@ mod tests {
         // refusal the error object (RT-W10 step 1). 3.63 is the flip's
         // client shapes: `start_mining` takes threads and no address,
         // `generateblocks` takes a count (FLIP-Q4), and the reject cause
-        // `join_market_unsupported` leaves the set.
-        assert_eq!(CORE_RPC_VERSION, 196_671);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 63);
+        // `join_market_unsupported` leaves the set. 3.64 makes a
+        // `get_transactions` entry the skeleton (`pqc_auth_hash`; `split`,
+        // `as_json`, `pruned`, `prunable_as_hex` retire), lists a discarded
+        // full body under `archived`, and gives `get_blocks_by_height.bin`
+        // its `prune` switch (SB-Q2, PDM-Q10).
+        assert_eq!(CORE_RPC_VERSION, 196_672);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 64);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 63);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 64);
     }
 
     #[test]

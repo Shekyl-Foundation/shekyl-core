@@ -137,6 +137,8 @@ const SYNC_HASHER_BUDGET: &str = "the shared hasher budget sets it, derived from
 const NO_DAEMONIZE: &str = "shekyld never daemonizes or registers itself; installing is the installer's and shekyl-cli's, and on Windows shekyld answers the service manager through `service` (RPC_CHANNEL.md RT-16)";
 const NO_TLS: &str = "the RPC channel replaces TLS and HTTP authentication (RPC_CHANNEL.md RT-11)";
 const NO_BOOTSTRAP: &str = "no proxying to a third-party daemon";
+const NO_LOCAL_PRUNING: &str = "every daemon discards the same transaction bodies at the same boundary (ARCHIVAL_PRUNED_DAEMON_MODE.md PDM-Q2, PDM-Q9); there is no node-local retention to choose (PDM-Q7). Bodies below the horizon are held by no daemon; the archive serves them (DRS_SB_BELOW_HORIZON.md SB-Q6)";
+const NO_PRUNED_SYNC_FLAG: &str = "trust-the-txid with no anchor; the skeleton band below the checkpoint is the sync protocol's (ARCHIVAL_PRUNED_DAEMON_MODE.md PDM-Q5) and needs no flag (DRS_SB_BELOW_HORIZON.md SB-Q6)";
 const POOL_CAP_FROM_CHAIN: &str = "the pool's cap derives from the chain (CEN-M10): REFERENCE_BLOCK_MAX_AGE blocks at the block weight limit (DRS_E5_POOL_ALT_PRUNE.md, INPUT_GRAMMAR.md IG-Q11)";
 const NO_BG_MINING: &str =
     "background mining was Monero's; the daemon mines when told to (DAEMON_CONFIG_CUTOVER.md §4)";
@@ -280,6 +282,8 @@ const ROWS: &[Row] = &[
     rejected("bootstrap-daemon-login", NO_BOOTSTRAP),
     rejected("bootstrap-daemon-proxy", NO_BOOTSTRAP),
     rejected("public-node", "no public-node advertisement"),
+    rejected("prune-blockchain", NO_LOCAL_PRUNING),
+    rejected("sync-pruned-blocks", NO_PRUNED_SYNC_FLAG),
     rejected("max-connections-per-ip", "no per-host inbound cap: a host is not an operator, and the measured inbound adversary opens one edge per victim (SHEKYL_P2P_PROTOCOL.md PWD-I7)"),
     // Session
     public("console", Kind::Switch, Default::Unset, Surface::Cli, "Run the interactive console."),
@@ -367,6 +371,35 @@ mod tests {
             ("prep-blocks-threads", SYNC_HASHER_BUDGET),
         ] {
             name_is_refused(name, reason);
+        }
+    }
+
+    /// SB-Q6 (Rick, 2026-10-31): the body horizon is a rule of the epoch
+    /// calendar, so `prune-blockchain` and `sync-pruned-blocks` are refused
+    /// with the decision, from the command line and from the file (IG-10),
+    /// never as an unknown name pointing at the nearest live option. The
+    /// refusal is `config.name.rejected`, which exits 2 (IG-11).
+    #[test]
+    fn the_pruning_flags_are_refused_with_sb_q6() {
+        use shekyl_options::{Code, Source};
+        let file = Source::File {
+            path: std::path::PathBuf::from("shekyld.toml"),
+            line: 1,
+        };
+        let cases = [
+            ("prune-blockchain", NO_LOCAL_PRUNING, "PDM-Q7"),
+            ("sync-pruned-blocks", NO_PRUNED_SYNC_FLAG, "PDM-Q5"),
+        ];
+        for (name, reason, decision) in cases {
+            for source in [&Source::Cli, &file] {
+                let refusal = TABLE.live(name, source).unwrap_err();
+                assert_eq!(refusal.code, Code::NameRejected, "{name}");
+                assert_eq!(refusal.option.as_deref(), Some(name), "{name}");
+                assert_eq!(refusal.get("reason"), Some(reason), "{name}");
+                let rendered = refusal.render();
+                assert!(rendered.contains(decision), "{name}: {rendered}");
+                assert!(rendered.contains("SB-Q6"), "{name}: {rendered}");
+            }
         }
     }
 

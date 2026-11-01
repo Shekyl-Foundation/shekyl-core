@@ -787,6 +787,7 @@ stale_through = [
   { through = "20738bf714", note = "PL-D3 touched output.rs and kem.rs. Whether it moved decapsulation cost is not established." },
   { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
   { through = "5dcd0cfa97", note = "Added check_ml_kem_768_ek to kem.rs, a parse of an encapsulation key for the mining address and the address check. Decapsulation and the scan do not call it; the measured path is unchanged." },
+  { through = "f7d958bf2f", note = "SB-Q2 (#1239): ScannableBlock.transactions is Vec<BoundTx>, a body bound to its txid, in place of Vec<Transaction>; the scan takes each body out of its binding with into_tx(), a move. No decapsulation, prefilter or output check is added, removed or reordered, and the rest of the commit is in the wallet and the wire crate. Not re-measured." },
 ]
 
 [[constant]]

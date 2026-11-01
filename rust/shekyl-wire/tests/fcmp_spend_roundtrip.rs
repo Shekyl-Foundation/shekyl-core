@@ -137,15 +137,16 @@ fn fcmp_spend_round_trips_self_consistently() {
 #[test]
 fn pruned_fcmp_spend_round_trips_and_ingests() {
     use shekyl_wire::PrunedError;
-    // The daemon's pruned fetch (`get_transactions prune:true`) keeps the consensus
-    // pqc_auths but drops the prunable proof (cryptonote_basic.h:523 gates
-    // `rctsig_prunable` on `!pruned`, while pqc_auths at :491-517 are written
-    // regardless). `Ct::read`'s EOF-after-pqc_auths tail must parse this
-    // storage-pruned full-spend form so the wallet can scan spend blocks on refresh
-    // (`get_transactions prune:true` → `parse_pruned_tx`); the pruned-safe ingestion
-    // validator must accept it; and `into_full()` — the one boundary to consensus
-    // code that needs the proof — must still reject it, so a pruned spend can never
-    // reach a verifier. Regression for the refresh-over-spends gap Track 2 surfaced.
+    // The `serialize_base` framing keeps the consensus pqc_auths but drops the
+    // prunable proof (cryptonote_basic.h:523 gates `rctsig_prunable` on
+    // `!pruned`, while pqc_auths at :491-517 are written regardless).
+    // `Ct::read`'s EOF-after-pqc_auths tail must parse it; the pruned-safe
+    // ingestion validator must accept it; and `into_full()` — the one boundary
+    // to consensus code that needs the proof — must still reject it, so a body
+    // without its proof can never reach a verifier. The daemon's pruned fetch
+    // serves the skeleton, not this framing (`SB-Q2`; the wallet binds it in
+    // `parse_tx_batch`), but the `into_full()` refusal is the same for both.
+    // Regression for the refresh-over-spends gap Track 2 surfaced.
     let mut tx = synthetic_spend();
     match &mut tx.ct {
         Ct::Fcmp { prunable, .. } => *prunable = None,

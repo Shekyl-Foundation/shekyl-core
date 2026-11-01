@@ -530,12 +530,14 @@ namespace cryptonote
         return false;
       }
       block_complete_entry entry;
-      entry.pruned = arg.prune;
-      // The wire's `block_weight` is a pruned entry's: a full block carries
+      // A served span is never pruned (PDM-Q7; the pruned band below the
+      // checkpoint is PDM-Q5's, not this request's), whatever the request
+      // carried: the entry's form is this daemon's, not the asker's. The
+      // wire's `block_weight` is a pruned entry's: a full block carries
       // none, and the receiving handler drops a peer that sends one on a
-      // full block ("returned a block weight for a non pruned block"). Pruned
-      // spans are never requested (PDM-Q7), so this is always 0, as the
-      // deleted C++ left it.
+      // full block ("returned a block weight for a non pruned block"), so
+      // this is always 0, as the deleted C++ left it.
+      entry.pruned = false;
       (void)weight;
       entry.block_weight = 0;
       entry.block.assign(reinterpret_cast<const char*>(blob.ptr), blob.len);
