@@ -42,7 +42,6 @@ use shekyl_seam::{Channel, Endpoint, Hub, SocketId, SyncPayload};
 
 use super::address::endpoint_of;
 use super::{session_of, Dialer};
-use crate::bans::BanSnapshot;
 use crate::fill::DialAim;
 use crate::nonce::InFlightNonce;
 
@@ -121,8 +120,8 @@ impl Dialer {
     }
 
     /// Apply one task result, on the loop, through the layer that owns each
-    /// decision. The shared lock is taken only to admit the received list,
-    /// after the bans have been copied out; no hub call is made under it
+    /// decision. The shared lock is taken only to apply the queued ban
+    /// events and admit the received list; no hub call is made under it
     /// (#1092).
     pub(super) fn apply_result<R: RelayRng + ?Sized>(
         &self,
@@ -141,22 +140,24 @@ impl Dialer {
 
         let id = channel.held().open.id();
         let now = self.hub.now();
-        let mut bans = BanSnapshot::take(&self.hub);
         let addresses: Vec<NetworkAddress> = response
             .local_peerlist_new
             .iter()
             .map(|entry| entry.adr.clone())
             .collect();
-        let admitted = self.shared().lists.admit_received_list(
-            &addresses,
-            SessionRow {
-                id: session_of(id),
-                connector,
-            },
-            now,
-            &mut bans,
-            rng,
-        );
+        let admitted = {
+            let mut shared = self.shared();
+            self.apply_bans(&mut shared, rng);
+            shared.lists.admit_received_list(
+                &addresses,
+                SessionRow {
+                    id: session_of(id),
+                    connector,
+                },
+                now,
+                rng,
+            )
+        };
         if admitted.is_err() {
             // A list the lists refuse (D3, D-S1, the foreign-connector rule,
             // R4) is the peer's doing: the same stamp as a rejection.

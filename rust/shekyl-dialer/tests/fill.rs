@@ -15,8 +15,8 @@ use std::net::Ipv4Addr;
 use shekyl_dialer::{plan, Census, DialAim, DrawList, FillRule, Plan};
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{
-    white_diversity_floor, ConnectorId, DialOutcome, Ladder, NetworkAddress, NoBans, NoSessions,
-    Peerlist, RefusedSet, Source, Tick, WHITE_REFILL_LINE,
+    white_diversity_floor, ConnectorId, DialOutcome, Ladder, NetworkAddress, NoSessions, Peerlist,
+    RefusedSet, Source, Tick, WHITE_REFILL_LINE,
 };
 
 /// A small floor and refill line, so the grid crosses both.
@@ -248,7 +248,7 @@ impl Node {
         let mut rng = SplitMix64::new(seed);
         let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
         for n in 0..count {
-            list.admit_gray(&peer(n), Source::Operator, at(0), &mut NoBans, &mut rng)
+            list.admit_gray(&peer(n), Source::Operator, at(0), &mut rng)
                 .expect("admitted");
         }
         Self {
@@ -263,7 +263,6 @@ impl Node {
         let white = self.list.white_count(
             ConnectorId::Clearnet,
             at(self.now),
-            &mut NoBans,
             &mut NoSessions,
             &mut self.rng,
         );
@@ -296,7 +295,6 @@ impl Node {
                     .draw_white(
                         ConnectorId::Clearnet,
                         at(self.now),
-                        &mut NoBans,
                         &mut NoSessions,
                         &mut self.rng,
                     )

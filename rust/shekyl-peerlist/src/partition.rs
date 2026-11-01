@@ -18,7 +18,6 @@
 //! of this module sees another connector's entries.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::net::IpAddr;
 
 use shekyl_draw_rng::{bounded_uniform, RelayRng};
 use shekyl_net_address::{Host, NetworkAddress};
@@ -164,10 +163,10 @@ pub(crate) struct Partition {
 }
 
 impl Partition {
-    /// Gray seats, outstanding draws included. An outstanding draw still
-    /// occupies gray: drawing it does not free a cap slot.
-    /// Gray seats that are eligible: drawable, outstanding or cooling. A
-    /// barred seat is in no count.
+    /// Gray seats that are eligible: drawable, outstanding or cooling. An
+    /// outstanding draw is counted: drawing it does not free its seat. A
+    /// barred seat is in no count, though it holds a slot under the cap
+    /// ([`Self::occupied_gray`]).
     pub(crate) fn gray_len(&self) -> usize {
         self.drawable_gray + self.outstanding_draws + self.cooling
     }
@@ -592,26 +591,6 @@ impl Partition {
     /// (outstanding included) and white together, for the file (§7).
     pub(crate) fn persistable(&self) -> impl Iterator<Item = &NetworkAddress> {
         self.seats.iter().map(|(address, _)| address)
-    }
-
-    /// D4: move every white entry under an active ban to gray. The clock is
-    /// not copied. Only an address with an IP can be banned (D7), so a Tor
-    /// partition never demotes here. Returns how many moved.
-    pub(crate) fn demote_banned<R: RelayRng + ?Sized>(
-        &mut self,
-        is_banned: &mut dyn FnMut(IpAddr, Tick) -> bool,
-        now: Tick,
-        rng: &mut R,
-    ) -> usize {
-        let banned: Vec<NetworkAddress> = self
-            .white_clocks()
-            .filter(|(address, _)| address.ip().is_some_and(|ip| is_banned(ip, now)))
-            .map(|(address, _)| address.clone())
-            .collect();
-        for address in &banned {
-            self.demote(address, rng);
-        }
-        banned.len()
     }
 
     /// D-S1: record that `session` offered `address` at `now`, for an

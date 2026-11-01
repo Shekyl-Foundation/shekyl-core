@@ -13,8 +13,8 @@ use std::net::Ipv4Addr;
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{
     CloseCause, CloseKind, ConnectionId, DialOutcome, Ladder, ListName, Marks, NetworkAddress,
-    NoBans, NoSessions, Peerlist, Refusal, RefusedSet, SessionRow, Source, Tick,
-    EXPIRATION_PERIOD_NANOS, GRAY_CAP, WHITE_CAP,
+    NoSessions, Peerlist, Refusal, RefusedSet, SessionRow, Source, Tick, EXPIRATION_PERIOD_NANOS,
+    GRAY_CAP, WHITE_CAP,
 };
 
 fn v4(n: u8) -> NetworkAddress {
@@ -94,7 +94,7 @@ fn an_outstanding_gray_draw_promotes_on_session_accepted_and_on_confirmed() {
         let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
         let peer = v4(1);
         assert_eq!(
-            list.admit_gray(&peer, Source::Operator, at_hours(0), &mut NoBans, &mut rng),
+            list.admit_gray(&peer, Source::Operator, at_hours(0), &mut rng),
             Ok(true)
         );
         assert!(list.is_gray(&peer) && !list.is_white(&peer));
@@ -125,13 +125,7 @@ fn either_outcome_on_an_undrawn_ordinary_address_writes_nothing() {
     assert!(!list.is_white(&undrawn) && !list.is_gray(&undrawn));
     // In gray but not drawn: still nothing.
     assert_eq!(
-        list.admit_gray(
-            &undrawn,
-            Source::Operator,
-            at_hours(0),
-            &mut NoBans,
-            &mut rng
-        ),
+        list.admit_gray(&undrawn, Source::Operator, at_hours(0), &mut rng),
         Ok(true)
     );
     list.apply(
@@ -151,13 +145,7 @@ fn an_outstanding_draw_survives_eviction_and_gray_may_sit_over_the_cap() {
     for n in 0..GRAY_CAP {
         let n = u16::try_from(n).expect("fits");
         assert_eq!(
-            list.admit_gray(
-                &v4_wide(n),
-                Source::Reload,
-                at_hours(0),
-                &mut NoBans,
-                &mut rng
-            ),
+            list.admit_gray(&v4_wide(n), Source::Reload, at_hours(0), &mut rng),
             Ok(true)
         );
     }
@@ -189,13 +177,7 @@ fn an_outstanding_draw_survives_eviction_and_gray_may_sit_over_the_cap() {
     for n in 0..extra_admits {
         let n = u16::try_from(GRAY_CAP + n).expect("fits");
         assert_eq!(
-            list.admit_gray(
-                &v4_wide(n),
-                Source::Reload,
-                at_hours(0),
-                &mut NoBans,
-                &mut rng
-            ),
+            list.admit_gray(&v4_wide(n), Source::Reload, at_hours(0), &mut rng),
             Ok(true)
         );
     }
@@ -217,13 +199,7 @@ fn an_outstanding_draw_survives_eviction_and_gray_may_sit_over_the_cap() {
     for n in 0..GRAY_CAP {
         let n = u16::try_from(n).expect("fits");
         assert_eq!(
-            list.admit_gray(
-                &v4_wide(n),
-                Source::Reload,
-                at_hours(0),
-                &mut NoBans,
-                &mut rng
-            ),
+            list.admit_gray(&v4_wide(n), Source::Reload, at_hours(0), &mut rng),
             Ok(true)
         );
     }
@@ -234,7 +210,7 @@ fn an_outstanding_draw_survives_eviction_and_gray_may_sit_over_the_cap() {
     assert_eq!(list.gray_count(connector), GRAY_CAP);
     let extra = v4(9);
     assert_eq!(
-        list.admit_gray(&extra, Source::Operator, at_hours(0), &mut NoBans, &mut rng),
+        list.admit_gray(&extra, Source::Operator, at_hours(0), &mut rng),
         Ok(true)
     );
     assert_eq!(list.gray_count(connector), GRAY_CAP + 1);
@@ -261,25 +237,18 @@ fn incoming_and_add_peer_stay_gray() {
                 connector
             },
             at_hours(0),
-            &mut NoBans,
             &mut rng
         ),
         Ok(true)
     );
     assert_eq!(
-        list.admit_gray(&v4(5), Source::Operator, at_hours(0), &mut NoBans, &mut rng),
+        list.admit_gray(&v4(5), Source::Operator, at_hours(0), &mut rng),
         Ok(true)
     );
     assert!(list.is_gray(&v4(4)) && list.is_gray(&v4(5)));
     assert!(!list.is_white(&v4(4)) && !list.is_white(&v4(5)));
     assert_eq!(
-        list.white_count(
-            connector,
-            at_hours(0),
-            &mut NoBans,
-            &mut NoSessions,
-            &mut rng
-        ),
+        list.white_count(connector, at_hours(0), &mut NoSessions, &mut rng),
         0
     );
 }
@@ -291,7 +260,7 @@ fn expiry_returns_white_to_gray_and_contact_this_node_opened_moves_the_clock() {
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     let peer = v4(6);
     assert_eq!(
-        list.admit_gray(&peer, Source::Operator, at_hours(0), &mut NoBans, &mut rng),
+        list.admit_gray(&peer, Source::Operator, at_hours(0), &mut rng),
         Ok(true)
     );
     draw_until(&mut list, &peer, &mut rng);
@@ -302,13 +271,7 @@ fn expiry_returns_white_to_gray_and_contact_this_node_opened_moves_the_clock() {
         &mut rng,
     );
     assert_eq!(
-        list.white_count(
-            connector,
-            at_hours(23),
-            &mut NoBans,
-            &mut NoSessions,
-            &mut rng
-        ),
+        list.white_count(connector, at_hours(23), &mut NoSessions, &mut rng),
         1
     );
     assert_eq!(
@@ -324,20 +287,14 @@ fn expiry_returns_white_to_gray_and_contact_this_node_opened_moves_the_clock() {
         &mut rng,
     );
     assert_eq!(
-        list.white_count(
-            connector,
-            at_hours(43),
-            &mut NoBans,
-            &mut NoSessions,
-            &mut rng
-        ),
+        list.white_count(connector, at_hours(43), &mut NoSessions, &mut rng),
         1,
         "the clock moved"
     );
     // Inbound contact does not: an admit of a white address leaves it
     // white, does not seat it on gray, and does not move the clock.
     assert_eq!(
-        list.admit_gray(&peer, Source::Operator, at_hours(0), &mut NoBans, &mut rng),
+        list.admit_gray(&peer, Source::Operator, at_hours(0), &mut rng),
         Ok(false)
     );
     assert!(
@@ -345,10 +302,7 @@ fn expiry_returns_white_to_gray_and_contact_this_node_opened_moves_the_clock() {
         "a white entry is one seat, untouched by an admit"
     );
     assert_eq!(
-        list.persistable(&mut NoBans, Tick::new(0))
-            .iter()
-            .filter(|a| *a == &peer)
-            .count(),
+        list.persistable().iter().filter(|a| *a == &peer).count(),
         1,
         "the file names the address once"
     );
@@ -358,24 +312,12 @@ fn expiry_returns_white_to_gray_and_contact_this_node_opened_moves_the_clock() {
     );
     assert!(list.snapshot().contains(&(peer.clone(), ListName::White)));
     assert_eq!(
-        list.white_count(
-            connector,
-            at_hours(43),
-            &mut NoBans,
-            &mut NoSessions,
-            &mut rng
-        ),
+        list.white_count(connector, at_hours(43), &mut NoSessions, &mut rng),
         1,
         "the admit did not move the clock"
     );
     assert_eq!(
-        list.white_count(
-            connector,
-            at_hours(44),
-            &mut NoBans,
-            &mut NoSessions,
-            &mut rng
-        ),
+        list.white_count(connector, at_hours(44), &mut NoSessions, &mut rng),
         0,
         "24 h after the last contact this node opened"
     );
@@ -389,7 +331,7 @@ fn a_confirm_and_close_does_not_move_a_white_clock() {
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     let peer = v4(11);
     assert_eq!(
-        list.admit_gray(&peer, Source::Operator, at_hours(0), &mut NoBans, &mut rng),
+        list.admit_gray(&peer, Source::Operator, at_hours(0), &mut rng),
         Ok(true)
     );
     draw_until(&mut list, &peer, &mut rng);
@@ -414,13 +356,7 @@ fn a_confirm_and_close_does_not_move_a_white_clock() {
         "a confirm-and-close does not move the clock"
     );
     assert_eq!(
-        list.white_count(
-            connector,
-            at_hours(24),
-            &mut NoBans,
-            &mut NoSessions,
-            &mut rng
-        ),
+        list.white_count(connector, at_hours(24), &mut NoSessions, &mut rng),
         0,
         "24 h after the promotion, not after the later confirm"
     );
@@ -437,7 +373,7 @@ fn reload_is_gray_only_and_does_not_draw_former_white_first() {
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     for n in 1..=50u8 {
         assert_eq!(
-            list.admit_gray(&v4(n), Source::Operator, at_hours(0), &mut NoBans, &mut rng),
+            list.admit_gray(&v4(n), Source::Operator, at_hours(0), &mut rng),
             Ok(true)
         );
     }
@@ -451,16 +387,10 @@ fn reload_is_gray_only_and_does_not_draw_former_white_first() {
         );
     }
     assert_eq!(
-        list.white_count(
-            connector,
-            at_hours(0),
-            &mut NoBans,
-            &mut NoSessions,
-            &mut rng
-        ),
+        list.white_count(connector, at_hours(0), &mut NoSessions, &mut rng),
         10
     );
-    let saved = list.persistable(&mut NoBans, Tick::new(0));
+    let saved = list.persistable();
     assert_eq!(saved.len(), 50);
 
     let mut former_white_first = 0_u32;
@@ -470,13 +400,7 @@ fn reload_is_gray_only_and_does_not_draw_former_white_first() {
         let mut fresh = Peerlist::new(RefusedSet::NON_GLOBAL);
         assert_eq!(fresh.restore(saved.clone(), &mut rng), 50);
         assert_eq!(
-            fresh.white_count(
-                connector,
-                at_hours(0),
-                &mut NoBans,
-                &mut NoSessions,
-                &mut rng
-            ),
+            fresh.white_count(connector, at_hours(0), &mut NoSessions, &mut rng),
             0,
             "reload is gray only"
         );
@@ -579,7 +503,7 @@ fn a_failed_test_cools_the_draw_a_proving_one_drops_it_and_a_refused_payload_lea
         let mut rng = SplitMix64::new(7);
         let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
         assert_eq!(
-            list.admit_gray(&peer, Source::Operator, at_hours(0), &mut NoBans, &mut rng),
+            list.admit_gray(&peer, Source::Operator, at_hours(0), &mut rng),
             Ok(true)
         );
         draw_until(&mut list, &peer, &mut rng);
@@ -602,7 +526,7 @@ fn white_one(seed: u64, peer: &NetworkAddress) -> (Peerlist, SplitMix64) {
     let mut rng = SplitMix64::new(seed);
     let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
     assert_eq!(
-        list.admit_gray(peer, Source::Operator, at_hours(0), &mut NoBans, &mut rng),
+        list.admit_gray(peer, Source::Operator, at_hours(0), &mut rng),
         Ok(true)
     );
     draw_until(&mut list, peer, &mut rng);
@@ -684,7 +608,6 @@ fn no_entry_crosses_connectors() {
                 connector: clear
             },
             at_hours(0),
-            &mut NoBans,
             &mut rng
         ),
         Err(Refusal::ForeignConnector)
@@ -701,7 +624,6 @@ fn no_entry_crosses_connectors() {
                 connector: clear
             },
             at_hours(0),
-            &mut NoBans,
             &mut rng
         ),
         Ok(2)
@@ -714,7 +636,6 @@ fn no_entry_crosses_connectors() {
                 connector: hidden
             },
             at_hours(0),
-            &mut NoBans,
             &mut rng
         ),
         Ok(1)
@@ -735,14 +656,13 @@ fn no_entry_crosses_connectors() {
                 connector: clear
             },
             at_hours(0),
-            &mut NoBans,
             &mut rng
         ),
         Err(Refusal::ForeignConnector)
     );
 
     // Reload derives the connector again and keeps the partition.
-    let saved = list.persistable(&mut NoBans, Tick::new(0));
+    let saved = list.persistable();
     let mut fresh = Peerlist::new(RefusedSet::NON_GLOBAL);
     assert_eq!(fresh.restore(saved, &mut rng), 3);
     assert_eq!(fresh.gray_count(clear), 2);
@@ -757,20 +677,14 @@ fn gray_eviction_is_a_draw_that_keeps_the_address_just_named() {
     for n in 0..GRAY_CAP {
         let n = u16::try_from(n).expect("fits");
         assert_eq!(
-            list.admit_gray(
-                &v4_wide(n),
-                Source::Reload,
-                at_hours(0),
-                &mut NoBans,
-                &mut rng
-            ),
+            list.admit_gray(&v4_wide(n), Source::Reload, at_hours(0), &mut rng),
             Ok(true)
         );
     }
     assert_eq!(list.gray_count(connector), GRAY_CAP);
     let named = v4(42);
     assert_eq!(
-        list.admit_gray(&named, Source::Operator, at_hours(0), &mut NoBans, &mut rng),
+        list.admit_gray(&named, Source::Operator, at_hours(0), &mut rng),
         Ok(true)
     );
     assert_eq!(
@@ -790,7 +704,7 @@ fn white_eviction_demotes_a_random_other_entry() {
         let n = u16::try_from(n).expect("fits");
         let a = v4_wide(n);
         assert_eq!(
-            list.admit_gray(&a, Source::Reload, at_hours(0), &mut NoBans, &mut rng),
+            list.admit_gray(&a, Source::Reload, at_hours(0), &mut rng),
             Ok(true)
         );
         draw_until(&mut list, &a, &mut rng);
@@ -802,13 +716,7 @@ fn white_eviction_demotes_a_random_other_entry() {
         );
     }
     assert_eq!(
-        list.white_count(
-            connector,
-            at_hours(0),
-            &mut NoBans,
-            &mut NoSessions,
-            &mut rng
-        ),
+        list.white_count(connector, at_hours(0), &mut NoSessions, &mut rng),
         WHITE_CAP
     );
     let last = v4_wide(u16::try_from(WHITE_CAP).expect("fits"));
@@ -821,17 +729,11 @@ fn the_snapshot_names_each_address_and_its_list_without_a_clock() {
     let mut rng = SplitMix64::new(12);
     let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
     assert_eq!(
-        list.admit_gray(&v4(1), Source::Operator, at_hours(0), &mut NoBans, &mut rng),
+        list.admit_gray(&v4(1), Source::Operator, at_hours(0), &mut rng),
         Ok(true)
     );
     assert_eq!(
-        list.admit_gray(
-            &onion(1),
-            Source::Operator,
-            at_hours(0),
-            &mut NoBans,
-            &mut rng
-        ),
+        list.admit_gray(&onion(1), Source::Operator, at_hours(0), &mut rng),
         Ok(true)
     );
     draw_until(&mut list, &v4(1), &mut rng);

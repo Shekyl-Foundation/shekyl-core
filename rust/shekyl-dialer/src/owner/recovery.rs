@@ -32,7 +32,6 @@ use shekyl_draw_rng::RelayRng;
 use shekyl_peerlist::{ConnectorId, NetworkAddress, Peerlist, Source, Tick};
 
 use super::Shared;
-use crate::bans::BanSnapshot;
 
 /// Why a recovery episode ended. The leave line names this and no other
 /// reason: a risen kept count, a met target, and a foreign draw can all
@@ -148,7 +147,6 @@ pub(in crate::owner) fn report_wake(
 /// report already saw.
 pub(super) fn re_admit<R: RelayRng + ?Sized>(
     shared: &mut Shared,
-    bans: &mut BanSnapshot,
     connector: ConnectorId,
     now: Tick,
     rng: &mut R,
@@ -166,10 +164,7 @@ pub(super) fn re_admit<R: RelayRng + ?Sized>(
         .iter()
         .filter(|address| Peerlist::connector_of(address) == Some(connector))
     {
-        match shared
-            .lists
-            .admit_gray(address, Source::Operator, now, bans, rng)
-        {
+        match shared.lists.admit_gray(address, Source::Operator, now, rng) {
             Ok(true) => {
                 admitted += 1;
                 episode.note_re_admitted(address);

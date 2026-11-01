@@ -14,8 +14,10 @@
 //! and white. The seam drives the channel once the handshake has adopted it.
 //!
 //! Lock order: this crate never calls into the hub while it holds its own
-//! lock. A ban snapshot and a board read are taken first, and the lists
-//! lock is taken after they return. Each connector's inbound rows are the
+//! lock. A board read is taken first, and the lists lock is taken after it
+//! returns. The ban list's events wait in the dialer's queue, which the ban
+//! list fills without the dialer's lock; the dialer drains it under its
+//! own. Each connector's inbound rows are the
 //! one read that holds the table lock across the dialer's lock, the order
 //! the hub's posters already take, so a dial outcome cannot publish a count
 //! from before its row. [`Dialer::session_closed`] does not take the table lock:
@@ -29,7 +31,6 @@
 #![deny(unsafe_code)]
 
 pub mod attempts;
-mod bans;
 pub mod candidate;
 pub mod fill;
 pub mod link_tally;
@@ -41,7 +42,6 @@ pub mod seeds;
 pub mod store;
 
 pub use attempts::Attempts;
-pub use bans::BanSnapshot;
 pub use candidate::{CandidateFilter, Skip};
 pub use fill::{plan, Census, DialAim, DrawList, FillRule, Plan};
 pub use link_tally::{TallySink, TorLinkTally};

@@ -87,7 +87,9 @@ fn a_missing_file_is_a_first_start_and_the_first_store_creates_it() {
     dialer
         .admit_operator(&peer(1), Tick::new(1), &mut rng)
         .expect("admitted");
-    assert!(dialer.store_addresses().expect("stored"));
+    assert!(dialer
+        .store_addresses(&mut SplitMix64::new(0))
+        .expect("stored"));
     assert_eq!(
         AddressStore::new(path).load().expect("readable"),
         vec![peer(1)]
@@ -109,7 +111,9 @@ fn a_fresh_open_of_a_stored_file_puts_every_address_on_gray() {
                 .admit_operator(&peer(n), Tick::new(1), &mut rng)
                 .expect("admitted");
         }
-        assert!(dialer.store_addresses().expect("stored"));
+        assert!(dialer
+            .store_addresses(&mut SplitMix64::new(0))
+            .expect("stored"));
     }
     let (restarted, _clock) = dialer();
     assert_eq!(
@@ -126,8 +130,12 @@ fn a_fresh_open_of_a_stored_file_puts_every_address_on_gray() {
 #[test]
 fn no_store_was_named_so_nothing_is_written() {
     let (dialer, _clock) = dialer();
-    assert!(!dialer.store_addresses().expect("no store"));
-    assert!(!dialer.store_if_due(Tick::new(u64::MAX)).expect("no store"));
+    assert!(!dialer
+        .store_addresses(&mut SplitMix64::new(0))
+        .expect("no store"));
+    assert!(!dialer
+        .store_if_due(Tick::new(u64::MAX), &mut SplitMix64::new(0))
+        .expect("no store"));
 }
 
 #[test]
@@ -152,7 +160,9 @@ fn a_file_this_build_cannot_read_is_dropped_whole_and_replaced_at_the_next_store
     );
     assert_eq!(shared.lists.gray_count(ConnectorId::Clearnet), 1);
     drop(shared);
-    assert!(dialer.store_addresses().expect("stored"));
+    assert!(dialer
+        .store_addresses(&mut SplitMix64::new(0))
+        .expect("stored"));
     assert_eq!(
         AddressStore::new(path).load().expect("readable now"),
         vec![peer(9)],
@@ -177,19 +187,23 @@ fn the_store_is_due_one_interval_after_the_open_and_stop_writes_once_more() {
 
     // Not yet due: nothing written.
     let before = Tick::new(opened_at.get() + STORE_INTERVAL_NANOS - 1);
-    assert!(!dialer.store_if_due(before).expect("not due"));
+    assert!(!dialer
+        .store_if_due(before, &mut SplitMix64::new(0))
+        .expect("not due"));
     assert!(!path.exists());
 
     // Due: written, and the clock of the last store moves.
     let due = Tick::new(opened_at.get() + STORE_INTERVAL_NANOS);
     clock.set(due);
-    assert!(dialer.store_if_due(due).expect("due"));
+    assert!(dialer
+        .store_if_due(due, &mut SplitMix64::new(0))
+        .expect("due"));
     assert_eq!(load(), vec![peer(1)]);
     dialer
         .admit_operator(&peer(2), Tick::new(1), &mut rng)
         .expect("admitted");
     assert!(!dialer
-        .store_if_due(Tick::new(due.get() + 1))
+        .store_if_due(Tick::new(due.get() + 1), &mut SplitMix64::new(0))
         .expect("not due again"));
     assert_eq!(
         load(),
@@ -198,7 +212,7 @@ fn the_store_is_due_one_interval_after_the_open_and_stop_writes_once_more() {
     );
 
     // Stop writes once more, whatever the clock.
-    dialer.stop();
+    dialer.stop(&mut SplitMix64::new(0));
     assert_eq!(load(), vec![peer(1), peer(2)]);
 }
 
@@ -226,7 +240,9 @@ fn a_banned_host_is_left_out_of_the_file_and_written_again_once_its_ban_expires(
         .hub()
         .ban_host(peer(1).ip().expect("clearnet"), until);
 
-    assert!(dialer.store_addresses().expect("stored"));
+    assert!(dialer
+        .store_addresses(&mut SplitMix64::new(0))
+        .expect("stored"));
     assert_eq!(
         AddressStore::new(path.clone()).load().expect("readable"),
         vec![peer(2)],
@@ -243,7 +259,9 @@ fn a_banned_host_is_left_out_of_the_file_and_written_again_once_its_ban_expires(
         None,
         "the ban list's timer ends it"
     );
-    assert!(dialer.store_addresses().expect("stored"));
+    assert!(dialer
+        .store_addresses(&mut SplitMix64::new(0))
+        .expect("stored"));
     let mut written = AddressStore::new(path).load().expect("readable");
     written.sort();
     assert_eq!(

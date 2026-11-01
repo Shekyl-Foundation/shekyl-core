@@ -20,9 +20,8 @@
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Mutex;
 
-use shekyl_dialer::BanSnapshot;
 use shekyl_peerlist::{
-    BanQuery, ConnectionId, ConnectorId, NetworkAddress, Peerlist, RefusedSet, SessionRow, Tick,
+    ConnectionId, ConnectorId, NetworkAddress, Peerlist, RefusedSet, SessionRow, Tick,
 };
 use shekyl_seam::SocketId;
 
@@ -140,7 +139,6 @@ fn receive(
     session: ConnectionId,
     entries: &[ShekylSeamAddress],
     now: Tick,
-    bans: &mut dyn BanQuery,
 ) -> i32 {
     let Some(connector) = row else {
         return SHEKYL_PEERLIST_NO_SESSION;
@@ -156,7 +154,7 @@ fn receive(
         id: session,
         connector,
     };
-    match list.admit_received_list(&addresses, session, now, bans, &mut SecureRelayRng) {
+    match list.admit_received_list(&addresses, session, now, &mut SecureRelayRng) {
         Ok(_) => SHEKYL_PEERLIST_ADMITTED,
         Err(refusal) => {
             tracing::debug!(?refusal, "received peerlist refused");
@@ -194,25 +192,16 @@ pub unsafe extern "C" fn shekyl_peerlist_admit_received(
     };
     let row = hub.board().get(id).map(|row| row.connector());
     let now = hub.now();
-    let mut bans = BanSnapshot::take(&hub);
     let Some(dialer) = crate::dialer_ffi::shared() else {
         return SHEKYL_PEERLIST_NO_HUB;
     };
-    let mut shared = dialer.shared();
-    receive(
-        &mut shared.lists,
-        row,
-        session_of(id),
-        entries,
-        now,
-        &mut bans,
-    )
+    let mut shared = dialer.shared_current(&mut SecureRelayRng);
+    receive(&mut shared.lists, row, session_of(id), entries, now)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shekyl_peerlist::NoBans;
 
     fn v4(n: u8) -> ShekylSeamAddress {
         let mut entry = empty();
@@ -240,7 +229,7 @@ mod tests {
     }
 
     fn decide(list: &mut Peerlist, row: Option<ConnectorId>, entries: &[ShekylSeamAddress]) -> i32 {
-        receive(list, row, session(), entries, Tick::new(0), &mut NoBans)
+        receive(list, row, session(), entries, Tick::new(0))
     }
 
     const OUTBOUND: Option<ConnectorId> = Some(ConnectorId::Clearnet);

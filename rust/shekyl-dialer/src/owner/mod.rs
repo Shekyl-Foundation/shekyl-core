@@ -62,7 +62,6 @@ pub use self::ready::NotReady;
 use self::ready::{park, wait_wake_or_bell, Bell, Waited};
 use self::wake::{plan_wake, Wake};
 use crate::attempts::Attempts;
-use crate::bans::BanSnapshot;
 use crate::fill::DialAim;
 use crate::link_tally::{LinkFold, TallySink, TorLinkTally};
 use crate::nonce::{HandshakeNonce, HandshakeNonceSet, InFlightNonce, NonceTake};
@@ -399,6 +398,15 @@ impl Dialer {
         }
     }
 
+    /// The shared state with every queued ban event applied, for a caller
+    /// outside the owner loops that reads or writes the lists: what it
+    /// reads reflects every ban and lift the ban list has posted.
+    pub fn shared_current<R: RelayRng + ?Sized>(&self, rng: &mut R) -> MutexGuard<'_, Shared> {
+        let mut shared = self.shared();
+        self.apply_bans(&mut shared, rng);
+        shared
+    }
+
     /// The shared state, for the calls that read or write the lists.
     pub fn shared(&self) -> MutexGuard<'_, Shared> {
         self.shared.lock().expect("dialer state")
@@ -495,16 +503,12 @@ impl Dialer {
         now: Tick,
         rng: &mut R,
     ) {
-        let mut bans = BanSnapshot::take(&self.hub);
         let mut shared = self.shared();
+        self.apply_bans(&mut shared, rng);
         for address in &addresses {
             // Already seated: the population is the declaration either way.
             // A refusal is not "already seated" and is said.
-            if let Err(refusal) =
-                shared
-                    .lists
-                    .admit_gray(address, Source::Operator, now, &mut bans, rng)
-            {
+            if let Err(refusal) = shared.lists.admit_gray(address, Source::Operator, now, rng) {
                 tracing::warn!("closed-network address {address:?} was not admitted: {refusal:?}");
             }
         }
@@ -535,14 +539,12 @@ impl Dialer {
         now: Tick,
         rng: &mut R,
     ) -> Result<bool, Refusal> {
-        let mut bans = BanSnapshot::take(&self.hub);
         let mut shared = self.shared();
+        self.apply_bans(&mut shared, rng);
         if !shared.configured.contains(address) {
             shared.configured.push(address.clone());
         }
-        shared
-            .lists
-            .admit_gray(address, Source::Operator, now, &mut bans, rng)
+        shared.lists.admit_gray(address, Source::Operator, now, rng)
     }
 
     /// The inbound handshake's question: is `nonce` one of ours in flight
@@ -647,8 +649,8 @@ impl Dialer {
     ///
     /// A caller that started the owner loops on threads of its own uses
     /// [`Self::stop_joining`], which joins them before the file is written.
-    pub fn stop(&self) {
-        self.stop_joining(|| {});
+    pub fn stop<R: RelayRng + ?Sized>(&self, rng: &mut R) {
+        self.stop_joining(|| {}, rng);
     }
 
     /// [`Self::stop`], with `join_loops` run after every attempt is
@@ -657,7 +659,7 @@ impl Dialer {
     /// joins them there: each exits at the bell, and none applies a result
     /// once the flag is set, so the file is written with no loop running.
     /// It must not be called from an owner loop's own thread.
-    pub fn stop_joining(&self, join_loops: impl FnOnce()) {
+    pub fn stop_joining<R: RelayRng + ?Sized>(&self, join_loops: impl FnOnce(), rng: &mut R) {
         self.stop.store(true, Ordering::Release);
         self.bell.ring();
         let count = self.abandon_flight();
@@ -666,7 +668,7 @@ impl Dialer {
         }
         self.wait_for_applications();
         join_loops();
-        if let Err(err) = self.store_addresses() {
+        if let Err(err) = self.store_addresses(rng) {
             tracing::warn!("the address file was not written at stop: {err}");
         }
     }
@@ -702,22 +704,20 @@ impl Dialer {
     }
 
     /// Write the address file now: every list address, by range only,
-    /// less those under an active ban at this moment (the hub's bans, the
-    /// snapshot the draws read). `Ok(false)` when no file was named.
+    /// less those a ban covers, once the queued ban events are applied.
+    /// `Ok(false)` when no file was named.
     ///
-    /// The ban snapshot and the clock are read before the store lock, so no
-    /// hub call is made under it. Two stores that overlap may therefore
-    /// write in either order: the later write can carry the earlier
-    /// snapshot. Each is a whole file of the lists at its own moment, and
-    /// the next store, at most one interval later, replaces it.
-    pub fn store_addresses(&self) -> io::Result<bool> {
-        let mut bans = BanSnapshot::take(&self.hub);
+    /// The clock is read before the store lock, so no hub call is made
+    /// under it. Two stores that overlap may write in either order: each is
+    /// a whole file of the lists at its own moment, and the next store, at
+    /// most one interval later, replaces it.
+    pub fn store_addresses<R: RelayRng + ?Sized>(&self, rng: &mut R) -> io::Result<bool> {
         let now = self.hub.now();
         let store = self.store.lock().expect("address store");
         let Some(store) = store.as_ref() else {
             return Ok(false);
         };
-        let addresses = self.shared().lists.persistable(&mut bans, now);
+        let addresses = self.shared_current(rng).lists.persistable();
         store.write(&addresses)?;
         self.shared().last_store = Some(now);
         Ok(true)
@@ -726,7 +726,7 @@ impl Dialer {
     /// Write the address file when [`STORE_INTERVAL_NANOS`] has passed
     /// since it was last written or read. `Ok(false)` when it is not due
     /// or no file was named.
-    pub fn store_if_due(&self, now: Tick) -> io::Result<bool> {
+    pub fn store_if_due<R: RelayRng + ?Sized>(&self, now: Tick, rng: &mut R) -> io::Result<bool> {
         let due = self
             .shared()
             .last_store
@@ -734,7 +734,7 @@ impl Dialer {
         if !due {
             return Ok(false);
         }
-        self.store_addresses()
+        self.store_addresses(rng)
     }
 
     fn record<R: RelayRng + ?Sized>(
@@ -934,7 +934,7 @@ impl Dialer {
             if self.stop.load(Ordering::Acquire) {
                 break;
             }
-            if let Err(err) = self.store_if_due(self.hub.now()) {
+            if let Err(err) = self.store_if_due(self.hub.now(), rng) {
                 tracing::warn!("the address file was not written: {err}");
             }
             self.apply_completions(connector, rng);
@@ -967,15 +967,14 @@ impl Dialer {
             return None;
         }
         let live = live_sessions(&self.hub, connector);
-        let mut bans = BanSnapshot::take(&self.hub);
         let mut shared = self.shared();
         self.apply_bans(&mut shared, rng);
-        let wake = plan_wake(&mut shared, &mut bans, connector, &live, now, rng);
+        let wake = plan_wake(&mut shared, connector, &live, now, rng);
         let (address, aim) = match wake {
             Wake::Recover => {
                 // `plan_wake` already reported this wake. A report that
                 // closed the episode opens the next one here.
-                recovery::re_admit(&mut shared, &mut bans, connector, now, rng);
+                recovery::re_admit(&mut shared, connector, now, rng);
                 return None;
             }
             Wake::Idle => return None,

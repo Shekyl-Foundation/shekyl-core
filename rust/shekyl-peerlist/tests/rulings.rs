@@ -12,11 +12,11 @@ use std::net::{IpAddr, Ipv4Addr};
 
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{
-    white_diversity_floor, BanQuery, ConnectionId, DialOutcome, Ladder, NetworkAddress, NoBans,
-    NoSessions, Peerlist, Refusal, RefusedSet, SessionRow, Source, Tick, DISCLOSE_COUNT,
-    DISCLOSE_WINDOW_NANOS, GRAY_CAP, SESSION_INTAKE_CAP, WHITE_REFILL_LINE,
+    white_diversity_floor, BanEntry, ConnectionId, DialOutcome, Ladder, NetworkAddress, NoSessions,
+    Peerlist, Refusal, RefusedSet, SessionRow, Source, Tick, DISCLOSE_COUNT, DISCLOSE_WINDOW_NANOS,
+    GRAY_CAP, SESSION_INTAKE_CAP, WHITE_REFILL_LINE,
 };
-use shekyl_transport_layer::BanList;
+use shekyl_transport_layer::Ipv4Subnet;
 
 fn v4(n: u16) -> NetworkAddress {
     NetworkAddress::Ipv4 {
@@ -72,7 +72,7 @@ fn with_white(
     for n in from..from + count {
         let a = v4(n);
         assert_eq!(
-            list.admit_gray(&a, Source::Operator, at_hours(0), &mut NoBans, rng),
+            list.admit_gray(&a, Source::Operator, at_hours(0), rng),
             Ok(true)
         );
         draw_until(list, &a, rng);
@@ -97,24 +97,12 @@ fn below_the_floor_the_sample_is_empty() {
     let floor = u16::try_from(white_diversity_floor()).expect("fits");
     with_white(&mut list, 1, floor - 1, &mut rng);
     assert!(list
-        .disclose(
-            connector,
-            at_hours(1),
-            &mut NoBans,
-            &mut NoSessions,
-            &mut rng
-        )
+        .disclose(connector, at_hours(1), &mut NoSessions, &mut rng)
         .is_empty());
     with_white(&mut list, 1000, 1, &mut rng);
     assert_eq!(
-        list.disclose(
-            connector,
-            at_hours(1),
-            &mut NoBans,
-            &mut NoSessions,
-            &mut rng
-        )
-        .len(),
+        list.disclose(connector, at_hours(1), &mut NoSessions, &mut rng)
+            .len(),
         DISCLOSE_COUNT,
         "at the floor the sample is DISCLOSE_COUNT addresses"
     );
@@ -126,13 +114,7 @@ fn the_sample_is_cached_for_the_window_and_redrawn_after_it() {
     let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     with_white(&mut list, 1, 100, &mut rng);
-    let first = list.disclose(
-        connector,
-        at_hours(1),
-        &mut NoBans,
-        &mut NoSessions,
-        &mut rng,
-    );
+    let first = list.disclose(connector, at_hours(1), &mut NoSessions, &mut rng);
     assert_eq!(first.len(), DISCLOSE_COUNT);
     assert_eq!(
         first.iter().collect::<BTreeSet<_>>().len(),
@@ -141,13 +123,7 @@ fn the_sample_is_cached_for_the_window_and_redrawn_after_it() {
     );
     for h in [2, 10, 23] {
         assert_eq!(
-            list.disclose(
-                connector,
-                at_hours(h),
-                &mut NoBans,
-                &mut NoSessions,
-                &mut rng
-            ),
+            list.disclose(connector, at_hours(h), &mut NoSessions, &mut rng),
             first,
             "every requester in the window gets the same sample, unchanged"
         );
@@ -166,7 +142,6 @@ fn the_sample_is_cached_for_the_window_and_redrawn_after_it() {
     let later = list.disclose(
         connector,
         Tick::new(at_hours(1).get() + DISCLOSE_WINDOW_NANOS),
-        &mut NoBans,
         &mut NoSessions,
         &mut rng,
     );
@@ -200,7 +175,7 @@ fn the_sample_is_uniform_over_white_with_our_own_address_as_one_member() {
                 &mut rng,
             );
         }
-        let sample = list.disclose(connector, now, &mut NoBans, &mut NoSessions, &mut rng);
+        let sample = list.disclose(connector, now, &mut NoSessions, &mut rng);
         assert_eq!(sample.len(), DISCLOSE_COUNT);
         if sample.contains(&own) {
             own_seen += 1;
@@ -264,7 +239,6 @@ fn a_received_list_longer_than_disclose_count_is_refused_whole() {
                 connector
             },
             at_hours(0),
-            &mut NoBans,
             &mut rng
         ),
         Err(Refusal::PeerlistRefused)
@@ -279,7 +253,6 @@ fn a_received_list_longer_than_disclose_count_is_refused_whole() {
                 connector
             },
             at_hours(0),
-            &mut NoBans,
             &mut rng
         ),
         Ok(12)
@@ -294,17 +267,11 @@ fn the_sample_carries_no_gray_and_no_clock() {
     with_white(&mut list, 1, 60, &mut rng);
     for n in 500..600 {
         assert_eq!(
-            list.admit_gray(&v4(n), Source::Operator, at_hours(0), &mut NoBans, &mut rng),
+            list.admit_gray(&v4(n), Source::Operator, at_hours(0), &mut rng),
             Ok(true)
         );
     }
-    let sample = list.disclose(
-        connector,
-        at_hours(1),
-        &mut NoBans,
-        &mut NoSessions,
-        &mut rng,
-    );
+    let sample = list.disclose(connector, at_hours(1), &mut NoSessions, &mut rng);
     assert!(
         sample.iter().all(|a| list.is_white(a)),
         "gray is never in the message"
@@ -316,23 +283,20 @@ fn the_sample_carries_no_gray_and_no_clock() {
 // ---------------------------------------------------------------- D4
 
 #[test]
-fn a_banned_white_entry_is_demoted_on_the_next_white_read_and_the_floor_drops() {
+fn a_banned_white_entry_is_demoted_when_its_ban_arrives_and_the_floor_drops() {
     let mut rng = SplitMix64::new(6);
     let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     let white = with_white(&mut list, 1, 50, &mut rng);
-    let mut bans = BanList::new();
     assert_eq!(
-        list.white_count(connector, at_hours(1), &mut bans, &mut NoSessions, &mut rng),
+        list.white_count(connector, at_hours(1), &mut NoSessions, &mut rng),
         50
     );
     let banned = white[7].clone();
-    assert!(bans.ban_host(ip_of(&banned), at_hours(10), at_hours(1)));
-    // The transport layer wrote nothing in the peer list: still white until
-    // white is next read.
-    assert!(list.is_white(&banned));
+    // The ban event demotes it to gray at once (Rick, 2026-10-31).
+    assert_eq!(list.ban(BanEntry::Host(ip_of(&banned)), &mut rng), 1);
     assert_eq!(
-        list.white_count(connector, at_hours(2), &mut bans, &mut NoSessions, &mut rng),
+        list.white_count(connector, at_hours(2), &mut NoSessions, &mut rng),
         49,
         "the floor count drops with it"
     );
@@ -341,29 +305,34 @@ fn a_banned_white_entry_is_demoted_on_the_next_white_read_and_the_floor_drops() 
         "demoted to gray, not removed"
     );
     assert!(
-        list.below_refill_line(connector, at_hours(2), &mut bans, &mut NoSessions, &mut rng)
+        list.below_refill_line(connector, at_hours(2), &mut NoSessions, &mut rng)
             == (49 < WHITE_REFILL_LINE),
         "the refill line counts white as it stands"
     );
 }
 
 #[test]
-fn a_demoted_entry_is_ordinary_gray_evictable_skipped_at_dial_and_refused_at_admission() {
+fn a_demoted_entry_is_barred_evictable_never_drawn_and_refused_at_admission() {
     let mut rng = SplitMix64::new(7);
     let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     let white = with_white(&mut list, 1, 10, &mut rng);
     let banned = white[3].clone();
-    let mut bans = BanList::new();
-    assert!(bans.ban_host(ip_of(&banned), at_hours(10), at_hours(1)));
+    list.ban(BanEntry::Host(ip_of(&banned)), &mut rng);
     assert_eq!(
-        list.white_count(connector, at_hours(1), &mut bans, &mut NoSessions, &mut rng),
+        list.white_count(connector, at_hours(1), &mut NoSessions, &mut rng),
         9
     );
     assert!(list.is_gray(&banned));
-    // Skipped by the pre-dial check during the ban.
-    assert!(!Peerlist::pre_dial_check(&banned, at_hours(2), &mut bans));
-    assert!(Peerlist::pre_dial_check(&white[0], at_hours(2), &mut bans));
+    // Never drawn while the ban holds: its seat is barred.
+    assert!(list.is_banned(&banned));
+    for _ in 0..200 {
+        let drawn = list.draw_gray(connector, &mut rng);
+        assert_ne!(drawn.as_ref(), Some(&banned), "a barred seat was drawn");
+        if let Some(address) = drawn {
+            list.release_draw(&address);
+        }
+    }
     // Refused at gray admission if gossiped back in.
     assert_eq!(
         list.admit_gray(
@@ -373,13 +342,12 @@ fn a_demoted_entry_is_ordinary_gray_evictable_skipped_at_dial_and_refused_at_adm
                 connector
             },
             at_hours(2),
-            &mut bans,
             &mut rng
         ),
         Err(Refusal::Banned)
     );
     // Evictable from gray with no protection: fill gray past the cap and
-    // the demoted entry is dropped at its share.
+    // the barred entry is dropped at its share.
     let mut dropped = 0_u32;
     let trials = 5_u32;
     for seed in 0..trials {
@@ -387,27 +355,25 @@ fn a_demoted_entry_is_ordinary_gray_evictable_skipped_at_dial_and_refused_at_adm
         let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
         let white = with_white(&mut list, 1, 10, &mut rng);
         let banned = white[3].clone();
-        let mut bans = BanList::new();
-        assert!(bans.ban_host(ip_of(&banned), at_hours(10), at_hours(1)));
+        list.ban(BanEntry::Host(ip_of(&banned)), &mut rng);
         assert_eq!(
-            list.white_count(connector, at_hours(1), &mut bans, &mut NoSessions, &mut rng),
+            list.white_count(connector, at_hours(1), &mut NoSessions, &mut rng),
             9
         );
         // 20 000 evictions, each a uniform draw over about 5 000 entries:
         // the demoted one is hit with probability about 0.98 per trial.
         for n in 1000..1000 + 25_000u16 {
-            let _admitted =
-                list.admit_gray(&v4(n), Source::Reload, at_hours(1), &mut NoBans, &mut rng);
+            let _admitted = list.admit_gray(&v4(n), Source::Reload, at_hours(1), &mut rng);
         }
         if !list.is_gray(&banned) {
             dropped += 1;
         }
     }
     assert!(dropped > 0, "an ordinary gray entry is evicted sometimes");
-    // After the ban list's timer expires the ban, it is drawn, dialled,
-    // and re-earns white only through the normal door.
-    assert_eq!(bans.expire(at_hours(11)), None);
-    assert!(Peerlist::pre_dial_check(&banned, at_hours(11), &mut bans));
+    // When the ban list's timer ends the ban, its lift frees the seat: it
+    // is drawn, dialled, and re-earns white only through the normal door.
+    assert_eq!(list.lift(BanEntry::Host(ip_of(&banned))), 1);
+    assert!(!list.is_banned(&banned));
     assert!(list.is_gray(&banned));
     list.apply(
         &DialOutcome::Confirmed(banned.clone()),
@@ -435,37 +401,26 @@ fn a_ban_does_not_rebuild_the_cached_sample_and_tor_never_demotes() {
     let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     let white = with_white(&mut list, 1, 60, &mut rng);
-    let mut bans = BanList::new();
-    let sample = list.disclose(connector, at_hours(1), &mut bans, &mut NoSessions, &mut rng);
+    let sample = list.disclose(connector, at_hours(1), &mut NoSessions, &mut rng);
     let in_sample = sample[0].clone();
-    assert!(bans.ban_host(ip_of(&in_sample), at_hours(10), at_hours(1)));
+    list.ban(BanEntry::Host(ip_of(&in_sample)), &mut rng);
     assert_eq!(
-        list.disclose(connector, at_hours(2), &mut bans, &mut NoSessions, &mut rng),
+        list.disclose(connector, at_hours(2), &mut NoSessions, &mut rng),
         sample,
         "the cached sample is not rebuilt on a ban"
     );
     assert!(
         list.is_gray(&in_sample),
-        "though the entry itself was demoted at the read"
+        "though the entry itself was demoted when its ban arrived"
     );
     let _ = white;
-    // Tor: no bannable address, nothing demotes.
+    // Tor: no bannable address. A ban entry is a host or an IPv4 subnet,
+    // and the widest one covers no onion.
     let hidden = Peerlist::connector_of(&onion(1)).expect("served");
-    struct BanAll;
-    impl BanQuery for BanAll {
-        fn is_banned(&mut self, _host: IpAddr, _now: Tick) -> bool {
-            true
-        }
-    }
+    let everything = Ipv4Subnet::new(Ipv4Addr::UNSPECIFIED, 0).expect("prefix 0");
     for n in 1..=3 {
         assert_eq!(
-            list.admit_gray(
-                &onion(n),
-                Source::Operator,
-                at_hours(0),
-                &mut BanAll,
-                &mut rng
-            ),
+            list.admit_gray(&onion(n), Source::Operator, at_hours(0), &mut rng),
             Ok(true)
         );
         draw_until(&mut list, &onion(n), &mut rng);
@@ -476,8 +431,9 @@ fn a_ban_does_not_rebuild_the_cached_sample_and_tor_never_demotes() {
             &mut rng,
         );
     }
+    list.ban(BanEntry::Subnet(everything), &mut rng);
     assert_eq!(
-        list.white_count(hidden, at_hours(1), &mut BanAll, &mut NoSessions, &mut rng),
+        list.white_count(hidden, at_hours(1), &mut NoSessions, &mut rng),
         3,
         "D7: Tor has no bannable address"
     );
@@ -498,7 +454,6 @@ fn the_twenty_fifth_distinct_address_from_one_session_in_a_day_is_a_violation() 
             &first,
             SessionRow { id: s, connector },
             at_hours(0),
-            &mut NoBans,
             &mut rng
         ),
         Ok(12)
@@ -509,7 +464,6 @@ fn the_twenty_fifth_distinct_address_from_one_session_in_a_day_is_a_violation() 
             &first,
             SessionRow { id: s, connector },
             at_hours(1),
-            &mut NoBans,
             &mut rng
         ),
         Ok(0)
@@ -520,7 +474,6 @@ fn the_twenty_fifth_distinct_address_from_one_session_in_a_day_is_a_violation() 
             &second,
             SessionRow { id: s, connector },
             at_hours(12),
-            &mut NoBans,
             &mut rng
         ),
         Ok(12)
@@ -535,7 +488,6 @@ fn the_twenty_fifth_distinct_address_from_one_session_in_a_day_is_a_violation() 
             &v4(25),
             Source::Session { id: s, connector },
             at_hours(13),
-            &mut NoBans,
             &mut rng
         ),
         Err(Refusal::PeerlistRefused)
@@ -550,7 +502,6 @@ fn the_twenty_fifth_distinct_address_from_one_session_in_a_day_is_a_violation() 
                 connector
             },
             at_hours(13),
-            &mut NoBans,
             &mut rng
         ),
         Ok(true)
@@ -563,7 +514,6 @@ fn the_twenty_fifth_distinct_address_from_one_session_in_a_day_is_a_violation() 
             &first,
             SessionRow { id: s, connector },
             at_hours(25),
-            &mut NoBans,
             &mut rng
         ),
         Ok(0),
@@ -575,7 +525,6 @@ fn the_twenty_fifth_distinct_address_from_one_session_in_a_day_is_a_violation() 
             &v4(26),
             Source::Session { id: s, connector },
             at_hours(25),
-            &mut NoBans,
             &mut rng
         ),
         Ok(true)
@@ -583,13 +532,7 @@ fn the_twenty_fifth_distinct_address_from_one_session_in_a_day_is_a_violation() 
     // Operator and reload sources are not capped.
     for n in 100..200 {
         assert_eq!(
-            list.admit_gray(
-                &v4(n),
-                Source::Operator,
-                at_hours(13),
-                &mut NoBans,
-                &mut rng
-            ),
+            list.admit_gray(&v4(n), Source::Operator, at_hours(13), &mut rng),
             Ok(true)
         );
     }
@@ -613,7 +556,6 @@ fn a_seated_address_is_not_a_new_intake_charge() {
                 connector
             },
             at_hours(1),
-            &mut NoBans,
             &mut rng
         ),
         Ok(false),
@@ -636,7 +578,6 @@ fn a_seated_address_is_not_a_new_intake_charge() {
                 connector
             },
             at_hours(1),
-            &mut NoBans,
             &mut rng
         ),
         Ok(DISCLOSE_COUNT)
@@ -649,7 +590,6 @@ fn a_seated_address_is_not_a_new_intake_charge() {
                 connector
             },
             at_hours(1),
-            &mut NoBans,
             &mut rng
         ),
         Ok(DISCLOSE_COUNT)
@@ -662,7 +602,6 @@ fn a_seated_address_is_not_a_new_intake_charge() {
                 connector
             },
             at_hours(2),
-            &mut NoBans,
             &mut rng
         ),
         Ok(0),
@@ -690,7 +629,6 @@ fn the_intake_cap_is_the_same_on_every_connector() {
                     connector: hidden
                 },
                 at_hours(0),
-                &mut NoBans,
                 &mut rng
             ),
             Ok(true)
@@ -704,7 +642,6 @@ fn the_intake_cap_is_the_same_on_every_connector() {
                 connector: hidden
             },
             at_hours(0),
-            &mut NoBans,
             &mut rng
         ),
         Err(Refusal::PeerlistRefused)
@@ -722,33 +659,26 @@ fn a_drawn_sample_is_served_unchanged_when_white_drops_below_the_floor_mid_windo
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     let floor = u16::try_from(white_diversity_floor()).expect("fits");
     let white = with_white(&mut list, 1, floor, &mut rng);
-    let mut bans = BanList::new();
-    let sample = list.disclose(connector, at_hours(1), &mut bans, &mut NoSessions, &mut rng);
+    let sample = list.disclose(connector, at_hours(1), &mut NoSessions, &mut rng);
     assert_eq!(
         sample.len(),
         DISCLOSE_COUNT,
         "at the floor a sample is drawn"
     );
-    // Mid-window, white drops below the floor: a ban demotes one entry at
-    // the next white read.
-    assert!(bans.ban_host(ip_of(&white[0]), at_hours(20), at_hours(2)));
+    // Mid-window, white drops below the floor: a ban demotes one entry
+    // when it arrives.
+    list.ban(BanEntry::Host(ip_of(&white[0])), &mut rng);
     assert_eq!(
-        list.white_count(connector, at_hours(2), &mut bans, &mut NoSessions, &mut rng),
+        list.white_count(connector, at_hours(2), &mut NoSessions, &mut rng),
         white_diversity_floor() - 1
     );
     assert_eq!(
-        list.disclose(connector, at_hours(3), &mut bans, &mut NoSessions, &mut rng),
+        list.disclose(connector, at_hours(3), &mut NoSessions, &mut rng),
         sample,
         "the reply is unchanged for the rest of the window"
     );
     assert_eq!(
-        list.disclose(
-            connector,
-            at_hours(24),
-            &mut bans,
-            &mut NoSessions,
-            &mut rng
-        ),
+        list.disclose(connector, at_hours(24), &mut NoSessions, &mut rng),
         sample,
         "to the window's last tick"
     );
@@ -767,7 +697,6 @@ fn a_drawn_sample_is_served_unchanged_when_white_drops_below_the_floor_mid_windo
         list.disclose(
             connector,
             Tick::new(at_hours(1).get() + DISCLOSE_WINDOW_NANOS),
-            &mut bans,
             &mut NoSessions,
             &mut rng
         )
@@ -791,7 +720,6 @@ fn a_list_that_would_cross_the_session_cap_admits_nothing() {
             &first,
             SessionRow { id: s, connector },
             at_hours(0),
-            &mut NoBans,
             &mut rng
         ),
         Ok(12)
@@ -801,7 +729,6 @@ fn a_list_that_would_cross_the_session_cap_admits_nothing() {
             &second,
             SessionRow { id: s, connector },
             at_hours(1),
-            &mut NoBans,
             &mut rng
         ),
         Ok(8)
@@ -815,7 +742,6 @@ fn a_list_that_would_cross_the_session_cap_admits_nothing() {
             &crossing,
             SessionRow { id: s, connector },
             at_hours(2),
-            &mut NoBans,
             &mut rng
         ),
         Err(Refusal::PeerlistRefused)
@@ -835,7 +761,6 @@ fn a_list_that_would_cross_the_session_cap_admits_nothing() {
             &exact,
             SessionRow { id: s, connector },
             at_hours(2),
-            &mut NoBans,
             &mut rng
         ),
         Ok(4)
@@ -845,15 +770,13 @@ fn a_list_that_would_cross_the_session_cap_admits_nothing() {
         SESSION_INTAKE_CAP
     );
     // A banned entry in a list is not counted against the cap.
-    let mut bans = BanList::new();
     let banned = v4(300);
-    assert!(bans.ban_host(ip_of(&banned), at_hours(10), at_hours(2)));
+    list.ban(BanEntry::Host(ip_of(&banned)), &mut rng);
     assert_eq!(
         list.admit_received_list(
             &[banned],
             SessionRow { id: s, connector },
             at_hours(3),
-            &mut bans,
             &mut rng
         ),
         Ok(0),
@@ -872,28 +795,16 @@ fn mass_demotion_leaves_gray_at_or_below_its_cap() {
     let white = with_white(&mut list, 1, 200, &mut rng);
     // Gray filled to its cap with reloaded addresses.
     for n in 10_000..10_000 + u16::try_from(GRAY_CAP).expect("fits") {
-        let _admitted = list.admit_gray(&v4(n), Source::Reload, at_hours(0), &mut NoBans, &mut rng);
+        let _admitted = list.admit_gray(&v4(n), Source::Reload, at_hours(0), &mut rng);
     }
     assert_eq!(list.gray_count(connector), GRAY_CAP);
     assert_eq!(
-        list.white_count(
-            connector,
-            at_hours(1),
-            &mut NoBans,
-            &mut NoSessions,
-            &mut rng
-        ),
+        list.white_count(connector, at_hours(1), &mut NoSessions, &mut rng),
         200
     );
     // The expiry sweep demotes all 200 into a full gray list.
     assert_eq!(
-        list.white_count(
-            connector,
-            at_hours(25),
-            &mut NoBans,
-            &mut NoSessions,
-            &mut rng
-        ),
+        list.white_count(connector, at_hours(25), &mut NoSessions, &mut rng),
         0
     );
     assert!(
@@ -911,15 +822,18 @@ fn mass_demotion_leaves_gray_at_or_below_its_cap() {
     let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
     let white = with_white(&mut list, 1, 200, &mut rng);
     for n in 10_000..10_000 + u16::try_from(GRAY_CAP).expect("fits") {
-        let _admitted = list.admit_gray(&v4(n), Source::Reload, at_hours(0), &mut NoBans, &mut rng);
+        let _admitted = list.admit_gray(&v4(n), Source::Reload, at_hours(0), &mut rng);
     }
-    let mut bans = BanList::new();
     for a in &white {
-        assert!(bans.ban_host(ip_of(a), at_hours(10), at_hours(1)));
+        list.ban(BanEntry::Host(ip_of(a)), &mut rng);
     }
     assert_eq!(
-        list.white_count(connector, at_hours(1), &mut bans, &mut NoSessions, &mut rng),
+        list.white_count(connector, at_hours(1), &mut NoSessions, &mut rng),
         0
     );
-    assert_eq!(list.gray_count(connector), GRAY_CAP);
+    // Every demoted entry is barred: out of the gray count, still under
+    // the cap.
+    let barred = white.iter().filter(|a| list.is_gray(a)).count();
+    assert!(barred > 0 && white.iter().all(|a| !list.is_gray(a) || list.is_banned(a)));
+    assert_eq!(list.gray_count(connector) + barred, GRAY_CAP);
 }

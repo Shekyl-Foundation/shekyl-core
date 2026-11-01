@@ -14,7 +14,7 @@ use std::net::Ipv4Addr;
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{
     BanEntry, CloseCause, CloseKind, ConnectorId, DialOutcome, Ipv4Subnet, Ladder, NetworkAddress,
-    NoBans, NoSessions, Peerlist, Refusal, RefusedSet, Source, Tick,
+    NoSessions, Peerlist, Refusal, RefusedSet, Source, Tick,
 };
 
 const CLEARNET: ConnectorId = ConnectorId::Clearnet;
@@ -40,7 +40,7 @@ fn now() -> Tick {
 
 fn admitted(list: &mut Peerlist, address: &NetworkAddress, rng: &mut SplitMix64) {
     assert_eq!(
-        list.admit_gray(address, Source::Operator, now(), &mut NoBans, rng),
+        list.admit_gray(address, Source::Operator, now(), rng),
         Ok(true)
     );
 }
@@ -73,7 +73,7 @@ fn every_gray_draw(list: &mut Peerlist, rng: &mut SplitMix64) -> Vec<NetworkAddr
 
 /// The census as the fill reads it, every address eligible.
 fn census(list: &mut Peerlist, rng: &mut SplitMix64) -> shekyl_peerlist::SeatCensus {
-    list.settle(CLEARNET, now(), &mut NoBans, &mut NoSessions, rng)
+    list.settle(CLEARNET, now(), &mut NoSessions, rng)
         .census(&mut |_| true)
 }
 
@@ -168,11 +168,11 @@ fn a_subnet_ban_bars_every_seat_it_covers_and_the_door_refuses_inside_it() {
     assert_eq!(every_gray_draw(&mut list, &mut rng), vec![outside.clone()]);
     assert_eq!(list.gray_count(CLEARNET), 1);
     assert_eq!(
-        list.admit_gray(&v4(7, 9), Source::Operator, now(), &mut NoBans, &mut rng),
+        list.admit_gray(&v4(7, 9), Source::Operator, now(), &mut rng),
         Err(Refusal::Banned)
     );
     assert_eq!(
-        list.admit_gray(&v4(9, 9), Source::Operator, now(), &mut NoBans, &mut rng),
+        list.admit_gray(&v4(9, 9), Source::Operator, now(), &mut rng),
         Ok(true)
     );
 }

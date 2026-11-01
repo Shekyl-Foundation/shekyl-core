@@ -24,13 +24,13 @@
 //! bind in the remnant's `init` (`DAEMON_CONFIG_CUTOVER.md` §2.2 step 8).
 
 use std::path::Path;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 
 use shekyl_daemon_config::sections::P2p;
 /// The probe's handshake. The managed-Tor driver names it here, and does
 /// not depend on the dialer crate.
 pub use shekyl_dialer::ProbeHandshake;
-use shekyl_dialer::{seeds, BanSnapshot, Dialer, LoadError, NonceTake, SeedNetwork, Shared};
+use shekyl_dialer::{seeds, Dialer, LoadError, NonceTake, SeedNetwork};
 use shekyl_options::PeerEndpoint;
 use shekyl_peerlist::Peerlist;
 use std::net::SocketAddr;
@@ -262,15 +262,18 @@ pub(crate) fn stop() {
         &mut *LOOPS.lock().expect("dialer loops"),
         [const { None }; ConnectorId::COUNT],
     );
-    dialer.stop_joining(move || {
-        for (connector, running) in ConnectorId::ALL.iter().zip(loops) {
-            if let Some(mut running) = running {
-                if running.join().is_err() {
-                    tracing::warn!("{connector:?}: the dialer's owner loop panicked");
+    dialer.stop_joining(
+        move || {
+            for (connector, running) in ConnectorId::ALL.iter().zip(loops) {
+                if let Some(mut running) = running {
+                    if running.join().is_err() {
+                        tracing::warn!("{connector:?}: the dialer's owner loop panicked");
+                    }
                 }
             }
-        }
-    });
+        },
+        &mut SecureRelayRng,
+    );
 }
 
 /// A session closed. A kept session leaves the dialer's count. A
@@ -288,10 +291,6 @@ pub(crate) fn note_inbound_tor() {
     if let Some(dialer) = dialer() {
         dialer.note_inbound_tor();
     }
-}
-
-fn with_shared<T>(f: impl FnOnce(MutexGuard<'_, Shared>) -> T) -> Option<T> {
-    dialer().map(|dialer| f(dialer.shared()))
 }
 
 /// [`shekyl_dial_take_handshake_nonce`]: not a nonce of this node's.
@@ -540,14 +539,13 @@ pub unsafe extern "C" fn shekyl_peerlist_disclose(
         return 0;
     };
     let now = hub.now();
-    let mut bans = BanSnapshot::take(hub);
-    let sample = with_shared(|mut shared| {
+    let sample = {
+        let mut shared = dialer.shared_current(&mut SecureRelayRng);
         let mut kept = shared.kept_addresses(connector);
         shared
             .lists
-            .disclose(connector, now, &mut bans, &mut kept, &mut SecureRelayRng)
-    })
-    .unwrap_or_default();
+            .disclose(connector, now, &mut kept, &mut SecureRelayRng)
+    };
     let mut written = 0;
     for address in sample.iter().take(cap) {
         if let Some(entry) = entry_of(address) {

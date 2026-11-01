@@ -15,7 +15,7 @@ use std::sync::Arc;
 use shekyl_dialer::Dialer;
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peer_policy::InboundCeiling;
-use shekyl_peerlist::{ConnectorId, NetworkAddress, NoBans, RefusedSet, Source, Tick};
+use shekyl_peerlist::{ConnectorId, NetworkAddress, RefusedSet, Source, Tick};
 use shekyl_seam::{Hub, SyncPayload};
 use shekyl_timing_engine::ManualClock;
 use shekyl_transport_layer::Sockets;
@@ -81,13 +81,11 @@ fn the_dialer_bars_what_the_ban_list_posts_and_frees_what_it_lifts() {
     // Onto the lists as a reload puts them, before the dialer first drains:
     // the dialer's door would refuse the banned host.
     for n in 1..=3 {
-        let admitted = dialer.shared().lists.admit_gray(
-            &peer(n),
-            Source::Reload,
-            Tick::new(1),
-            &mut NoBans,
-            &mut rng,
-        );
+        let admitted =
+            dialer
+                .shared()
+                .lists
+                .admit_gray(&peer(n), Source::Reload, Tick::new(1), &mut rng);
         assert!(admitted.is_ok(), "{admitted:?}");
     }
     assert!(

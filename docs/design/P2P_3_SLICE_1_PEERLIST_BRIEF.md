@@ -618,23 +618,32 @@ uniform sample stands.** It lowers one observer's success and raises
 another's, and the one it raises is the cheaper to be: polling and
 remembering what was *not* said.
 
-### 5b. D4 — a ban demotes, it does not remove (RULED 2026-10-09)
+### 5b. D4 — a ban demotes, it does not remove (RULED 2026-10-09; bans arrive as events, RULED 2026-10-31)
 
-**Demotion.** A white entry covered by an active ban (host, or IPv4
-subnet, per the transport layer's ban list) is moved to gray. The
-demotion happens when white is next counted, drawn from, or sampled;
-the transport layer never writes the peer list. White therefore holds
-only unbanned, confirmed peers, so the floor and the refill line count
-white as it stands.
+**Bans arrive as events.** The transport layer's ban list owns every
+ban and its expiry; a timed ban ends only when the list's timer reaches
+its deadline, or when it is lifted. It posts each ban and each lift, in
+order, to the dialer's queue, starting with every entry in force when
+the dialer subscribed. The dialer applies them to the lists under its
+own lock (`Peerlist::ban`, `Peerlist::lift`); the lists hold the
+entries in force.
 
-**Gray handling.** A demoted entry is an ordinary gray entry, subject
-to normal random eviction, with no protection; it enters gray through
-the capped insert, so a mass demotion — a subnet ban, an expiry sweep —
-leaves gray at or below its cap (F3). While the ban lasts,
-the dialer's pre-dial ban check skips it, and gray admission refuses
-it if it is gossiped back in. After the ban expires, it can be drawn,
-dialled, and earn white again through `SessionAccepted` or
-`Confirmed` — the normal door, §2.
+**Demotion.** When a ban arrives, every white entry its entry covers
+(host, or IPv4 subnet) moves to gray, and every gray seat it covers is
+barred. White therefore holds only unbanned, confirmed peers, so the
+floor and the refill line count white as it stands.
+
+**Gray handling.** A barred seat is never drawn and is in no count or
+candidate census, but it is still subject to normal random eviction,
+with no protection, and holds a slot under the gray cap; a demoted
+entry enters gray through the capped insert, so a mass demotion — a
+subnet ban, an expiry sweep — leaves gray at or below its cap (F3).
+Gray admission refuses an address an entry covers if it is gossiped
+back in, and the address file leaves it out. When the ban is lifted or
+expires, its lift frees every barred seat no remaining entry covers,
+as drawable gray on its rung; it can then be drawn, dialled, and earn
+white again through `SessionAccepted` or `Confirmed` — the normal
+door, §2.
 
 **Disclosure is unchanged:** gray is never disclosed, and the cached
 sample is not rebuilt on a ban.
@@ -642,10 +651,10 @@ sample is not rebuilt on a ban.
 **Scope:** the clearnet partition only. Tor has no bannable address
 (`P2P_TRANSPORT_LAYER.md` D7).
 
-**Tests (PR-2):** a banned white entry is demoted on the next white
-read; the floor count drops with it; it is evictable from gray; it is
-skipped by the pre-dial check during the ban; after expiry it re-earns
-white only through the normal door.
+**Tests:** a banned white entry is demoted when its ban arrives; the
+floor count drops with it; it is evictable from gray; it is never drawn
+while the ban holds; after the lift it re-earns white only through the
+normal door.
 
 ### 5c. D-S1 — gray intake per session (RULED 2026-10-09)
 
