@@ -22,13 +22,17 @@
 #           so the kill lands in a connect's commit at some trial;
 #   idle    a synced subject is killed at its tip;
 #   switch  a subject on one fork meets a heavier one and is killed while
-#           it pops and replays.
-# PB-S1's fourth point, a pool commit, needs a submitted transaction the
-# bench cannot yet build; the artifact names the scenarios it ran, and the
-# row's gate reads them.
+#           it pops and replays;
+#   pool    a synced subject, offline, takes the transaction source's
+#           spends (drs_txsource.py) and is killed while it admits them.
+#           Every submit it answered ACCEPTED must be in the reopened pool.
+#           Run with --tx-source-bin; without it the seed mines to the
+#           emitter's address, no transaction exists, and the artifact's
+#           scenarios say the pool point was not reached.
 #
 # Commands:
 #   run    --daemon D --replay-bin R --work-dir W --height H --trials N --out F
+#          [--tx-source-bin S]   (S from `drs_txsource.py build`)
 #   --selftest
 
 from __future__ import annotations
@@ -41,13 +45,17 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.request
 
 import drs_artifact as A  # noqa: E402
 import drs_bench as B  # noqa: E402
 import armed_lever  # noqa: E402
+import drs_txsource as T  # noqa: E402
 
 SCHEMA = "shekyl_drs_crash_v1"
 SCENARIOS = ("sync", "idle", "switch")
+# The pool point runs only with a transaction source.
+POOL = "pool"
 # PB-S1's floor on the trial count.
 MIN_TRIALS = 200
 # The regtest seed runs the production schedule pair; the replay's levers
@@ -67,6 +75,11 @@ def judge(trial):
                 "chain nor the fork: a block no serving daemon held was recorded")
     if trial.get("expected_digest") is None:
         return f"no clean replay of the {trial['chain']} chain to {reopened} was available"
+    if "acked_txs" in trial:
+        lost = T.missing_from_pool(trial["acked_txs"], trial.get("reopened_pool"))
+        if lost:
+            return (f"{len(lost)} submit(s) answered ACCEPTED before the kill are not in the "
+                    f"reopened pool: {lost}")
     if acked is not None and reopened < acked:
         return (f"the daemon published tip {acked} before the kill and reopened at "
                 f"{reopened}: an acknowledged connect was lost")
@@ -105,10 +118,21 @@ def gate_refusals(a):
     trials = a.get("trials") or []
     if len(trials) < MIN_TRIALS:
         r.append(f"{len(trials)} trial(s), under PB-S1's {MIN_TRIALS}")
-    missing = [s for s in SCENARIOS + ("pool",) if s not in (a.get("scenarios") or [])]
+    missing = [s for s in SCENARIOS + (POOL,) if s not in (a.get("scenarios") or [])]
     if missing:
         r.append(f"PB-S1's points not reached: {missing}")
     return r
+
+
+def pool_hashes(port):
+    """The daemon's pool, as txids (`/get_transaction_pool_hashes`)."""
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/get_transaction_pool_hashes",
+                                 data=b"{}", headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        body = json.load(r)
+    if body.get("status") != "OK":
+        B._fail(f"the reopened pool did not read: {json.dumps(body)[:300]}")
+    return body.get("tx_hashes") or []
 
 
 class Harness:
@@ -118,11 +142,28 @@ class Harness:
         os.makedirs(self.work, exist_ok=True)
         self.daemon = B.daemon_executable(args.daemon)
         self.replay = os.path.abspath(args.replay_bin)
-        self.addr = B.mining_address(args.cargo_timeout)
         (self.sp2p, self.srpc, self.fp2p, self.frpc, self.bp2p, self.brpc), held = \
             B._reserve_ports(6)
         for sk in held:
             sk.close()
+        # With a transaction source the seed mines to its wallet, and every
+        # pool spend goes to the subject's RPC port.
+        self.tx = args.tx_source_bin and os.path.abspath(args.tx_source_bin)
+        if self.tx:
+            # Creating the wallet reads its daemon, and no chain exists yet:
+            # an empty daemon serves the subject's port for the creation.
+            empty = os.path.join(self.work, "wallet-init")
+            shutil.rmtree(empty, ignore_errors=True)
+            os.makedirs(empty)
+            proc = self.spawn("wallet-init", empty, [], self.bp2p, self.brpc, offline=True)
+            with self.running(proc, self.brpc) as r:
+                if not r.ready:
+                    B._fail(f"the wallet's creation daemon never came up; see "
+                            f"{self.work}/wallet-init.log")
+                self.addr = T.address(self.tx, self.brpc, args.startup_timeout)
+            shutil.rmtree(empty)
+        else:
+            self.addr = B.mining_address(args.cargo_timeout)
         self.expected = {}
         # Each chain's block hash per height, from the fork point up: a
         # reopened tip is judged against the chain its hash is on.
@@ -240,6 +281,47 @@ class Harness:
                 "reopened_tip": tip, "hash": got["hash"], "chain": on, "digest": got["digest"],
                 "expected_digest": expected}
 
+    def pool_trial(self, subj_dir, seed_rpc, kill_after):
+        """Start the synced subject offline, feed it the source's spends
+        until the first is ACCEPTED, then kill it `kill_after` seconds into
+        the spends that follow; reopen it offline and judge its pool and
+        its chain. Each spend run is a fresh wallet, so every trial starts
+        from the same spendable outputs."""
+        proc = self.spawn("subject", subj_dir, [], self.bp2p, self.brpc, offline=True)
+        if not B._wait_rpc(self.brpc, self.args.startup_timeout, proc):
+            B._fail(f"the pool subject never came up; see {self.work}/subject.log")
+        src = T.Spender(self.tx, self.brpc, self.args.spend_amount,
+                        os.path.join(self.work, "tx-source.log"))
+        src.first.wait(self.args.startup_timeout)
+        if not src.acked:
+            proc.kill()
+            proc.wait()
+            src.finish(60)
+            if src.stopped == "not_spendable":
+                B._fail("the source's outputs are not yet spendable at the main tip: the "
+                        "chain is too short for its coinbase to be spent; raise --height")
+            B._fail(f"no spend was ACCEPTED before the kill window opened: {src.stopped}; "
+                    f"see {self.work}/tx-source.log")
+        time.sleep(kill_after)
+        proc.kill()
+        proc.wait()
+        acked = src.finish(self.args.startup_timeout)
+        reopen = self.spawn("reopen", subj_dir, [], self.bp2p, self.brpc, offline=True)
+        with self.running(reopen, self.brpc) as r:
+            if not r.ready:
+                return {"scenario": POOL, "kill_after_s": kill_after, "acked_tip": None,
+                        "reopened_tip": None, "acked_txs": acked,
+                        "error": "the reopened daemon never came up"}
+            pool = pool_hashes(self.brpc)
+        got = self.store_digest(os.path.join(subj_dir, "chain.db"))
+        tip = got["tip"]
+        on = None if tip is None else self.chain_of(tip, got["hash"])
+        expected = self.expected_digest(seed_rpc, "main", tip) if on == "main" else None
+        return {"scenario": POOL, "kill_after_s": round(kill_after, 3), "acked_tip": None,
+                "reopened_tip": tip, "hash": got["hash"], "chain": on, "digest": got["digest"],
+                "expected_digest": expected, "acked_txs": acked, "reopened_pool": pool,
+                "source_stopped_by": src.stopped}
+
     def run(self):
         a = self.args
         rng = random.Random(a.seed)
@@ -263,7 +345,8 @@ class Harness:
         # Two thirds of the trials against the main chain's seed alone, the
         # rest against the fork's daemon alone: the two never serve at once,
         # so neither can reorganise the other.
-        plan = [SCENARIOS[i % len(SCENARIOS)] for i in range(a.trials)]
+        kinds = SCENARIOS + ((POOL,) if self.tx else ())
+        plan = [kinds[i % len(kinds)] for i in range(a.trials)]
 
         def record(t, i):
             t["index"] = i
@@ -305,6 +388,10 @@ class Harness:
                     fresh(subj, synced)
                     record(self.trial("idle", subj, self.srpc, self.sp2p, "main",
                                       rng.uniform(0.0, 3.0)), i)
+                elif scenario == POOL:
+                    fresh(subj, synced)
+                    record(self.pool_trial(subj, self.srpc,
+                                           rng.uniform(0.0, a.pool_estimate)), i)
         fork = self.spawn("fork", fork_dir, [], self.fp2p, self.frpc)
         with self.running(fork, self.frpc) as f:
             if not f.ready:
@@ -323,6 +410,7 @@ class Harness:
             "hardware": A.hardware_fingerprint(self.work, a.disk_class),
             "chain": {"main_tip": main_tip, "fork_tip": fork_tip, "fork_depth": a.fork_depth},
             "seed": a.seed,
+            "transaction_source": T.TEST if self.tx else None,
             "scenarios": sorted({t["scenario"] for t in trials}),
             "trials": trials,
         }
@@ -366,11 +454,19 @@ def _selftest():
     bad = json.loads(json.dumps(a))
     bad["trials"][1]["digest"] = "d" * 64
     check("a failed trial refuses the record", len(artifact_refusals(bad)), 1)
+    pooled = dict(ok, acked_txs=["t1", "t2"], reopened_pool=["t2", "t1", "t0"])
+    check("a pool holding every acknowledged submit passes", judge(pooled), None)
+    check("a lost acknowledged submit fails",
+          "not in the reopened pool" in (judge(dict(pooled, reopened_pool=["t1"])) or ""), True)
+    full = dict(a, scenarios=["idle", "pool", "switch", "sync"],
+                trials=[dict(ok, scenario=s) for s in ("idle", "pool", "switch", "sync")])
+    check("all four points reached leaves only the count",
+          [x for x in gate_refusals(full) if "points" in x], [])
     if fails:
         for f in fails:
             print("FAIL", f, file=sys.stderr)
         sys.exit(1)
-    print("crash harness selftest: 9 cases OK")
+    print("crash harness selftest: 12 cases OK")
 
 
 def main(argv=None):
@@ -390,6 +486,13 @@ def main(argv=None):
     r.add_argument("--sync-estimate", type=float, default=30.0,
                    help="seconds a full sync takes; sync kills land inside it")
     r.add_argument("--switch-estimate", type=float, default=10.0)
+    r.add_argument("--tx-source-bin", default=None,
+                   help="the transaction source's test binary (drs_txsource.py build); "
+                        "the pool point needs it")
+    r.add_argument("--pool-estimate", type=float, default=20.0,
+                   help="seconds of spends after the first acceptance that pool kills land in")
+    r.add_argument("--spend-amount", type=int, default=1_000_000_000,
+                   help="atomic units each pool spend pays the wallet itself")
     r.add_argument("--seed", type=int, default=1)
     r.add_argument("--out", required=True)
     r.add_argument("--disk-class", choices=A.ALLOWED_DISK_CLASSES, default=None)

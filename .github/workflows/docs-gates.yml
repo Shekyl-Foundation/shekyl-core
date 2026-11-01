@@ -361,6 +361,13 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/bench/drs_crash.py --selftest
 
+      - name: Run the transaction source selftest
+        # The bench reads the source's lines: an accept, the depth gate and a
+        # stop are each one event, the test runner's own lines are none, and
+        # a pool missing an accepted submit names it.
+        if: '!cancelled()'
+        run: python3 scripts/bench/drs_txsource.py --selftest
+
       - name: Run RPC column capture selftest
         # `rpc_capture.py` writes one file per chain read and reserves the
         # loopback port the kept-chain capture binds. The capture's own

@@ -6686,6 +6686,9 @@ async fn ported_p2p_console_commands_answer_on_the_in_process_arm() {
     );
 }
 
+#[path = "regtest_e2e_bench_source.rs"]
+mod bench_source;
+
 #[path = "regtest_e2e_origin.rs"]
 mod origin;
 
