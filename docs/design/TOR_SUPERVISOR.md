@@ -1240,6 +1240,30 @@ clearnet off; shekyl-dev `data/tsr-acceptance/2026-10-30-linux-vm-clock/`):
   that client after two uploads made on the clock a day behind, while every
   probe this node ran arrived: the cause is the clock investigation's (§4.5,
   "The directory check").
+- **Set back a day while Running, then set right, under the clock ruling,
+  2026-11-01** (#1249 at `dcad16f7c`; shekyl-dev
+  `data/tsr-acceptance/2026-11-01-linux-vm-clock-ruling/`).
+  - The node was Reachable on its first probe at 17:29:33. The directory
+    check counted copies of `desc_next` by presence (§4.5).
+  - The clock was set back at 17:31:12. In the same second the node said
+    "This computer's clock is at least 23 h 28 min behind the Tor
+    network's. Others may not be able to reach this node. Check this
+    computer's date and time.", with inbound `Unreachable(ClockBehind)`.
+  - For the next 4 h there was no republish, no probe and no overdue. A
+    stranger on a correct clock connected at every try until 21:00. It got
+    `0xF0` from 21:10, when the copy expired at the directories' cleanup,
+    not `0xF2`: no introduction point was torn down.
+  - The clock was set right at 21:32:50. The name cleared at once, the
+    next round's upload was accepted at 21:33:01, Reachable followed at
+    21:33:59, and the stranger connected again from 21:40.
+  - Earlier the same day, on a correct clock at 17:00Z, the check had
+    compared every copy with `desc_current`. It missed twice and the node
+    republished, with the next republish held 300 s by the backoff. That
+    is the finding behind §4.5's "The copy must be ours".
+  - A round of eight `UPLOAD_REJECTED` at 19:47 stayed open five minutes:
+    the coalescer read an upload's `FAILED`, which carries the descriptor
+    id, as a fetch's (§4.5, the two-miss rule's paragraph). This run's
+    facet stood on the clock throughout.
 - **Seen in the stop path, not this round's:** the C++ remnant's
   teardown throws `std::out_of_range` from `on_connection_close` on most
   stops, caught; two stops never exited, one 23 s after a Tor respawn
