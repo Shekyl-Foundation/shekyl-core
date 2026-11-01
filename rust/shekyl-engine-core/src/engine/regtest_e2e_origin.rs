@@ -43,12 +43,16 @@ use super::*;
 /// sink. A transaction the origin's own wallet submits is a local origin, and
 /// a local origin takes the stem slot whatever the epoch draw
 /// (`Relay::plan_relay`), so the origin sends it to the sink on the stem and
-/// records it `stem`, embargoed. The sink runs `--no-sync`, never reports
-/// itself synchronized, and drops the transaction on receipt — so nothing
-/// fluffs it back. It stays `stem` on the origin until the origin's own
-/// embargo expires. The flag is load-bearing: a second daemon that
-/// synchronizes normally stems the transaction straight back, the origin
-/// upgrades the second arrival to fluff, and the hold is over in seconds.
+/// records it `stem`, embargoed. The sink runs `--dev-sync off`: it
+/// requests nothing and follows the origin by announcements alone, so once
+/// the origin has mined ahead (every walk here mines a coinbase to
+/// maturity before it spends) the sink is `Behind` and ignores the
+/// transaction on receipt, and nothing fluffs it back. It stays `stem` on
+/// the origin until the origin's own embargo expires. The flag is
+/// load-bearing: a second daemon that requests the chain catches up,
+/// stems the transaction straight back (its outbound session to the
+/// origin is a stem successor), the origin upgrades the second arrival to
+/// fluff, and the hold is over in seconds.
 ///
 /// **What the rig does not fix.** The embargo is a draw (geometric, mean
 /// 190 s on clearnet) with no lever, so a short one can end mid-assertion.

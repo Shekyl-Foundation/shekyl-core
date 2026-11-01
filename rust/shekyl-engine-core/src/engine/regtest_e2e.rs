@@ -214,8 +214,13 @@ enum Peering {
     Linked {
         p2p_port: u16,
         peer_p2p_port: u16,
-        /// `--dev-sync off`: the daemon never reports itself synchronized,
-        /// so it drops every transaction a peer sends it and relays none.
+        /// `--dev-sync off`: the daemon requests nothing (`Requesting::Off`)
+        /// and follows its peer by announcements alone. It is synchronized
+        /// at the tip like any closed node (CS-Q2 step 8), but once its
+        /// peer mines ahead it cannot fetch the chain and stays `Behind`,
+        /// and a node that is behind ignores every transaction a peer sends
+        /// it. Observed 2026-11-01: synced at heights 1 and 2, then behind
+        /// while its peer mined to 70, ignoring the stem transaction.
         sink: bool,
     },
     /// Bound on loopback and dialling exactly `peers`, two simulated

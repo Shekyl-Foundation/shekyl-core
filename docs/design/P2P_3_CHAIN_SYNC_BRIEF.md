@@ -1811,7 +1811,12 @@ it decided beyond the rows above:
   nothing.
 - **`dev-sync = off` is `Requesting::Off`:** no header, body, complement
   or missing-transaction request; the owner still serves, relays and
-  publishes.
+  publishes. Its state is derived as any node's: synchronized at the tip,
+  and `Behind` once its peer mines ahead, since it follows by
+  announcements alone and cannot fetch the chain. The e2e harness's sink
+  relies on that second half (a sink behind its origin ignores the stem
+  transaction); its comment said the sink is never synchronized, and is
+  corrected to this.
 - **"Established" is the seam's flag.** `p2p_connection_context_t`
   answers `session_established()` from it, which timed sync, the
   double-handshake refusal and epee's post-handshake packet limit read.
