@@ -87,7 +87,7 @@ pub enum FetchFault {
     #[error("the body of {tx_hash} at height {height} is archived in shard {shard}; a corpus needs it whole")]
     Archived {
         /// The block's height.
-        height: u64,
+        height: BlockHeight,
         /// The transaction.
         tx_hash: TxHash,
         /// The shard the archive serves it from.
@@ -98,7 +98,7 @@ pub enum FetchFault {
     #[error("height {height}: a full-form request was answered with a skeleton")]
     NotWhole {
         /// The block's height.
-        height: u64,
+        height: BlockHeight,
     },
     /// The writer refused a record (RD-F15 and the rest of the corpus's
     /// verification).
@@ -166,25 +166,25 @@ pub async fn fetch_corpus<R: Rpc, W: Write + Seek>(
             });
         }
         for (height, entry) in asked.iter().zip(reply.blocks) {
+            let at = BlockHeight::from_raw(*height);
             let mut txs = Vec::with_capacity(entry.txs.len());
             for tx in entry.txs {
                 match tx {
                     BlockTx::Full(bytes) => txs.push(bytes),
                     BlockTx::Archived { tx_hash, shard } => {
                         return Err(FetchFault::Archived {
-                            height: *height,
+                            height: at,
                             tx_hash: TxHash::from_bytes(tx_hash),
                             shard,
                         });
                     }
                     BlockTx::Skeleton(_) => {
-                        return Err(FetchFault::NotWhole { height: *height });
+                        return Err(FetchFault::NotWhole { height: at });
                     }
                 }
             }
             writer.append(&entry.block, &txs)?;
             written += 1;
-            let at = BlockHeight::from_raw(*height);
             for injection in injections.iter().filter(|i| i.at == at) {
                 writer.inject(at, injection.credit)?;
             }

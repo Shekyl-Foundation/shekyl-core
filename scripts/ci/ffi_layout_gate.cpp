@@ -35,10 +35,10 @@
 // member-name compare; alignas on a member -> the script refuses a
 // declaration it cannot read. TOR_HOST_MAX changed to 63 in shekyl-seam ->
 // size and type of shekyl_seam_address, so the bound is Rust's own. In
-// shekyl_rpc_tx_entry: pruned_flag widened -> size and offset; `where`
-// renamed in C -> member-name compare; the manifest's rename naming a member
-// Rust lacks -> refused. shekyl_rpc_sync_span_facts::remote_address typed
-// uint8_t* -> type. A new struct in rpc_facts_ffi.h with no pair -> the
+// shekyl_rpc_tx_entry (since deleted with the C++ transaction entry):
+// pruned_flag widened -> size and offset; `where` renamed in C -> member-name
+// compare; the manifest's rename naming a member Rust lacks -> refused.
+// shekyl_rpc_sync_span_facts::remote_address typed uint8_t* -> type. A new struct in rpc_facts_ffi.h with no pair -> the
 // completeness scan. ShekylDaemonEntry::run typed as the stop callback ->
 // type. And the merge of the daemon-configuration cutover (#1088) was
 // refused by the completeness scan until its five new structs had a pair.

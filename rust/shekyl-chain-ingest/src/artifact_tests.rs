@@ -532,7 +532,7 @@ mod fetch {
                 assert_eq!(tx_hash, TxHash::from_bytes(archived_hash));
                 // Block 0 lists no body and block 1 one, so the second slot
                 // is block 2's first.
-                assert_eq!(height, 2);
+                assert_eq!(height, BlockHeight::from_raw(2));
             }
             other => panic!("{other}"),
         }
@@ -561,7 +561,10 @@ mod fetch {
             .await
             .expect_err("skeleton");
         // Block 0 lists no body; the first skeleton is block 1's.
-        assert!(matches!(err, FetchFault::NotWhole { height: 1 }), "{err}");
+        assert!(
+            matches!(err, FetchFault::NotWhole { height } if height == BlockHeight::from_raw(1)),
+            "{err}"
+        );
     }
 
     #[tokio::test]
