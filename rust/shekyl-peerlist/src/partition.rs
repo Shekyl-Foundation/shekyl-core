@@ -943,15 +943,38 @@ impl Partition {
         freed.len()
     }
 
-    /// Drop gray seats until the gray population is within [`GRAY_CAP`]: a
-    /// uniform pick over the drawable and the cooling seats alike, never
-    /// `keep` and never an outstanding draw. A cooldown is a delay, not
-    /// protection (Rick, 2026-10-24): dead addresses fed within D-S1 would
-    /// otherwise accumulate immune to eviction and push the honest ones
-    /// out. Stops when the only evictable seat left is `keep`: gray may
-    /// then sit over the cap by the outstanding draws.
+    /// Drop gray seats until the gray population is within [`GRAY_CAP`],
+    /// never `keep` and never an outstanding draw. Barred seats go first,
+    /// a uniform pick among them: none can be dialled while its ban holds,
+    /// and no peer can make a ban, so the order cannot be steered (Rick,
+    /// 2026-11-01). Then a uniform pick over the drawable and the cooling
+    /// seats alike: a cooldown is a delay, not protection (Rick,
+    /// 2026-10-24), or dead addresses fed within D-S1 would accumulate
+    /// immune to eviction and push the honest ones out. Stops when the only
+    /// evictable seat left is `keep`: gray may then sit over the cap by the
+    /// outstanding draws.
     fn evict_gray_over_cap<R: RelayRng + ?Sized>(&mut self, keep: &NetworkAddress, rng: &mut R) {
         while self.occupied_gray() > GRAY_CAP {
+            let keep_is_barred = matches!(
+                self.seat_of(keep),
+                Some(Seat::Gray {
+                    phase: GrayPhase::Barred,
+                    ..
+                })
+            );
+            if another(self.barred, keep_is_barred) {
+                let victim = self.pick_accepted(rng, |address, seat| {
+                    matches!(
+                        seat,
+                        Seat::Gray {
+                            phase: GrayPhase::Barred,
+                            ..
+                        }
+                    ) && address != keep
+                });
+                self.leave(&victim);
+                continue;
+            }
             let keep_is_evictable = matches!(
                 self.seat_of(keep),
                 Some(Seat::Gray {

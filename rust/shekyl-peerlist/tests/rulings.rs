@@ -840,10 +840,15 @@ fn an_expiry_sweep_keeps_gray_at_its_cap_and_a_ban_sweep_until_the_next_insert()
     assert_eq!(barred(&list), 200);
     assert!(white.iter().all(|a| list.is_banned(a)));
     assert_eq!(list.gray_count(connector), GRAY_CAP);
-    // The next gray insert evicts back to the cap, barred seats included.
+    // The next gray insert evicts back to the cap, barred seats first: they
+    // cannot be dialled while the ban holds, and no peer can make a ban, so
+    // the order cannot be steered. Red edit: evict uniformly over drawable,
+    // cooling and barred seats alike.
     assert_eq!(
         list.admit_gray(&v4(9_999), Source::Reload, at_hours(1), &mut rng),
         Ok(true)
     );
-    assert_eq!(list.gray_count(connector) + barred(&list), GRAY_CAP);
+    assert_eq!(barred(&list), 0, "every barred seat went first");
+    assert_eq!(list.gray_count(connector), GRAY_CAP);
+    assert!(list.is_gray(&v4(9_999)), "the address just admitted stays");
 }

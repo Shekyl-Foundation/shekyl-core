@@ -636,11 +636,12 @@ confirmed peers, so the floor and the refill line count white as it
 stands.
 
 **Gray handling.** A barred seat is never drawn and is in no count or
-candidate census, but it is still subject to normal random eviction,
-with no protection, and holds a slot under the gray cap. After a ban,
-gray may sit over its cap by the seats it moved from white, at most the
-white cap, until the next gray insert evicts it back, as it already
-does for outstanding draws. An expiry demotion enters gray through the
+candidate census, but it holds a slot under the gray cap, and it is the
+first evicted when gray is over its cap (Rick, 2026-11-01): it cannot be
+dialled while its ban holds, and no peer can make a ban, so the order
+cannot be steered. After a ban, gray may sit over its cap by the seats it
+moved from white, at most the white cap, until the next gray insert
+evicts it back, as it already does for outstanding draws. An expiry demotion enters gray through the
 capped insert, so a mass expiry leaves gray at or below its cap (F3).
 Gray admission refuses an address an entry covers if it is gossiped
 back in, and the address file leaves it out. When the ban is lifted or
