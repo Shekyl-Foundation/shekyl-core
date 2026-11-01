@@ -156,7 +156,18 @@ async fn a_sync_times_every_phase_of_each_block() {
     node.connect(Box::new(peer), Some(claim_of(&held)));
     wait_synced(&node, count).await;
     let fetched = count - 1;
+    // The entry answers an offer after the connector commits it, and the
+    // node reads `Synced` from that commit's tip: the last answers reach
+    // the owner just after the state does.
+    let answered = node
+        .wait(LIMIT, |node| node.metrics.snapshot().entries >= fetched)
+        .await;
     let profile = node.metrics.snapshot();
+    assert!(
+        answered,
+        "entry: {} answers for {fetched} offers",
+        profile.entries
+    );
     eprintln!("{}", profile.to_json().expect("json"));
     assert!(
         profile.transit_blocks >= fetched && profile.transit_ns_total > 0,
