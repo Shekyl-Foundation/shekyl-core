@@ -32,6 +32,9 @@ set(SHEKYL_VERSION_DEFAULT "3.1.0")
 
 function (write_version tag)
   set(VERSIONTAG "${tag}" CACHE STRING "The tag portion of the Shekyl software version" FORCE)
+  # One spelling. version.cpp.in and the wallet cargo invocation both
+  # read this; neither concatenates the version and the tag itself.
+  set(SHEKYL_VERSION_FULL "${SHEKYL_VERSION}-${tag}" CACHE STRING "Shekyl version and tag, hyphenated" FORCE)
   configure_file("${CMAKE_CURRENT_LIST_DIR}/../src/version.cpp.in" "${CMAKE_BINARY_DIR}/version.cpp")
 endfunction ()
 

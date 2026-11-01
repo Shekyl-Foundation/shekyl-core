@@ -81,6 +81,27 @@ fn handle_with(opts: RefreshOptions) -> RefreshHandleFixture {
     )
 }
 
+/// A handle over a stand-in producer that has already exited, for the
+/// tests that deliver a result: `join()` waits for the producer after the
+/// result, as the real one returns straight after sending.
+fn finished_handle_with(
+    opts: RefreshOptions,
+) -> (
+    RefreshHandle,
+    tokio::sync::oneshot::Sender<Result<RefreshSummary, RefreshError>>,
+) {
+    let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
+    let (_progress_tx, progress_rx) = tokio::sync::watch::channel(RefreshProgress::initial());
+    let handle = RefreshHandle::for_test(
+        completion_rx,
+        CancellationToken::new(),
+        progress_rx,
+        tokio::spawn(async {}),
+        opts,
+    );
+    (handle, completion_tx)
+}
+
 /// `progress()` returns a receiver that observes the seeded
 /// `RefreshProgress::initial()` baseline before any update is
 /// published. `borrow()` is non-blocking and always sees the
@@ -149,8 +170,7 @@ async fn cancel_fires_token_and_is_running_flips() {
 /// the completion oneshot.
 #[tokio::test]
 async fn join_delivers_summary_from_completion_oneshot() {
-    let (handle, completion, _progress, _cancel, _producer_assert) =
-        handle_with(RefreshOptions::default());
+    let (handle, completion) = finished_handle_with(RefreshOptions::default());
 
     let summary = RefreshSummary {
         processed_height_range: shekyl_types::BlockHeight::from_raw(100)
@@ -178,8 +198,7 @@ async fn join_delivers_summary_from_completion_oneshot() {
 /// completion oneshot unchanged.
 #[tokio::test]
 async fn join_propagates_terminal_error() {
-    let (handle, completion, _progress, _cancel, _producer_assert) =
-        handle_with(RefreshOptions::default());
+    let (handle, completion) = finished_handle_with(RefreshOptions::default());
 
     completion
         .send(Err(RefreshError::Cancelled))
@@ -189,22 +208,66 @@ async fn join_propagates_terminal_error() {
     assert!(matches!(result, Err(RefreshError::Cancelled)));
 }
 
-/// If the producer task drops its completion sender without
-/// sending (which would only happen on a panic — a contract
-/// violation), `join()` surfaces a typed
-/// `InternalInvariantViolation` rather than panicking. (Migrated
-/// from `MalformedScanResult` at C5 per
-/// `STAGE_1_PR_4_REFRESH_ENGINE.md` §7.X C5 — producer panic is
-/// an orchestrator control-flow invariant violation, not a
-/// merge-gate scan-result invariant violation.)
+/// `join()` returns only after the producer has exited, so the engine
+/// `Arc` the producer held is gone by then. The real producer sends its
+/// result and then drops the `Arc` and the slot guard as it returns; a
+/// caller that closes the wallet straight after (`Arc::try_unwrap`) must
+/// not see the producer's clone. Here the stand-in holds its clone past
+/// the send, which widens the window `join()` used to return in.
+#[tokio::test]
+async fn join_returns_after_the_producer_released_the_engine() {
+    let engine = std::sync::Arc::new(());
+    let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
+    let (_progress_tx, progress_rx) = tokio::sync::watch::channel(RefreshProgress::initial());
+    let held = std::sync::Arc::clone(&engine);
+    let producer = tokio::spawn(async move {
+        _ = completion_tx.send(Err(RefreshError::Cancelled));
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        drop(held);
+    });
+    let handle = RefreshHandle::for_test(
+        completion_rx,
+        CancellationToken::new(),
+        progress_rx,
+        producer,
+        RefreshOptions::default(),
+    );
+
+    assert!(matches!(handle.join().await, Err(RefreshError::Cancelled)));
+    assert_eq!(
+        std::sync::Arc::strong_count(&engine),
+        1,
+        "the producer's clone outlived join()"
+    );
+}
+
+/// A dropped completion sender is the panic path. `join` still waits
+/// for the producer to release the engine `Arc` it held past that drop.
+/// Skipping the `producer_join` await on the `Err` arm leaves the count
+/// at 2. The stand-in used to drop the sender from outside a task that
+/// stayed parked on cancel; awaiting that task would hang, and it was
+/// not the panic the contract describes.
 #[tokio::test]
 async fn join_maps_dropped_sender_to_internal_invariant_violation() {
-    let (handle, completion, _progress, _cancel, _producer_assert) =
-        handle_with(RefreshOptions::default());
-    drop(completion);
+    let engine = std::sync::Arc::new(());
+    let (completion_tx, completion_rx) =
+        tokio::sync::oneshot::channel::<Result<RefreshSummary, RefreshError>>();
+    let (_progress_tx, progress_rx) = tokio::sync::watch::channel(RefreshProgress::initial());
+    let held = std::sync::Arc::clone(&engine);
+    let producer = tokio::spawn(async move {
+        drop(completion_tx);
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        drop(held);
+    });
+    let handle = RefreshHandle::for_test(
+        completion_rx,
+        CancellationToken::new(),
+        progress_rx,
+        producer,
+        RefreshOptions::default(),
+    );
 
-    let result = handle.join().await;
-    match result {
+    match handle.join().await {
         Err(RefreshError::InternalInvariantViolation { context }) => {
             assert!(
                 context.contains("dropped completion sender"),
@@ -213,6 +276,11 @@ async fn join_maps_dropped_sender_to_internal_invariant_violation() {
         }
         other => panic!("expected InternalInvariantViolation, got {other:?}"),
     }
+    assert_eq!(
+        std::sync::Arc::strong_count(&engine),
+        1,
+        "the producer's clone outlived join()"
+    );
 }
 
 // ── Corner-case tests (commit 5) ────────────────────────────

@@ -1457,6 +1457,7 @@ if(SODIUM_LIBRARY)
 endif()
 
 include(external/supercop/functions.cmake) # place after setting flags and before src directory inclusion
+include(Version) # before BuildRust: the Rust wallet binaries carry the same version string
 include(BuildRust) # Build Shekyl Rust workspace (PQ crypto, modular consensus, FFI)
 add_subdirectory(contrib)
 add_subdirectory(src)
