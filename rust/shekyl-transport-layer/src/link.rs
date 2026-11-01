@@ -73,6 +73,10 @@ pub enum InboundCause {
     ProbeTimedOut,
     /// A whole round of descriptor uploads failed: no directory took it.
     DescriptorRejected,
+    /// The directories the descriptor was uploaded to no longer have it,
+    /// though this node's own Tor still reaches it from its copy
+    /// (`TOR_SUPERVISOR.md` §4.5, the directory check).
+    DescriptorNotFound,
 }
 
 /// Can peers reach this node's address through the link
