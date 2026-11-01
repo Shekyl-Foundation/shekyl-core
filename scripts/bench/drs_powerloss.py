@@ -130,14 +130,14 @@ def checkpoints(boundaries, total, between, max_points):
 
 
 def judge_point(point):
-    """Why a rebuilt point fails PB-S2, or None."""
+    """Why a rebuilt point fails PB-S2, or None. `store` is whether the
+    rebuilt device held a store before the daemon reopened it; the digest
+    is of the store after the reopen, whether it opened or created it, so
+    a point before the first acknowledgement is still held to the clean
+    replay at the tip it reopens at."""
     if point.get("error"):
         return point["error"]
-    if point.get("acked") is None:
-        if point.get("reopened_tip") is None or point.get("digest") is not None:
-            return None
-        return "the store opened with no digest"
-    if not point.get("store"):
+    if point.get("acked") is not None and not point.get("store"):
         return (f"no store at a point after the subject published tip "
                 f"{point['acked']}: an acknowledged connect was lost")
     return C.judge(dict(point, acked_tip=point["acked"]))
@@ -296,22 +296,22 @@ class Powerloss(C.Harness):
         return out
 
     def reopen(self, copy_img, point):
-        """Mount a copy of the rebuilt device, let the subject reopen its
-        store offline, digest it, and unmount."""
+        """Mount a copy of the rebuilt device, start the subject on it
+        offline (whatever it holds: a torn data directory is a first-start
+        power loss too), digest the store, and unmount. Each point's logs
+        are its own."""
         dev = loop_attach(copy_img)
         try:
             if sh("mount", dev, self.mnt, check=False) != 0:
-                point["store"] = False
-                point["mounted"] = False
+                point["error"] = "the filesystem did not mount after mkfs had completed"
                 return point
-            point["mounted"] = True
             sh("chown", "-R", f"{os.getuid()}:{os.getgid()}", self.mnt)
             subj = os.path.join(self.mnt, "subject")
             store = os.path.join(subj, "chain.db")
             point["store"] = os.path.exists(store)
-            if not point["store"]:
-                return point
-            proc = self.spawn("reopen", subj, [], self.bp2p, self.brpc, offline=True)
+            os.makedirs(subj, exist_ok=True)
+            proc = self.spawn(f"reopen-{point['entry']}", subj, [], self.bp2p, self.brpc,
+                              offline=True)
             with self.running(proc, self.brpc) as r:
                 if not r.ready:
                     point["error"] = "the subject did not reopen the rebuilt store"
@@ -415,19 +415,23 @@ def _selftest():
           checkpoints(set(range(1, 101)), 100, 0, 5)[::4], [1, 100])
     ok = {"acked": 5, "store": True, "reopened_tip": 5, "chain": "main",
           "digest": "a" * 64, "expected_digest": "a" * 64}
+    fresh = dict(ok, acked=None, store=False, reopened_tip=0)
+    check("a store created before any ack passes at the clean digest", judge_point(fresh), None)
+    check("a torn digest before any ack fails",
+          "torn" in (judge_point(dict(fresh, digest="b" * 64)) or ""), True)
+    check("a refused reopen fails", judge_point(dict(fresh, error="refused")), "refused")
     check("an intact point passes", judge_point(ok), None)
     check("a lost acknowledged connect fails",
           "lost" in (judge_point(dict(ok, reopened_tip=4)) or ""), True)
     check("a missing store after an ack fails",
           "no store" in (judge_point(dict(ok, store=False)) or ""), True)
-    check("no store before any ack passes", judge_point({"acked": None, "store": False}), None)
     check("a torn digest fails",
           "torn" in (judge_point(dict(ok, digest="b" * 64)) or ""), True)
     if fails:
         for f in fails:
             print("FAIL", f, file=sys.stderr)
         sys.exit(1)
-    print("power-loss harness selftest: 15 cases OK")
+    print("power-loss harness selftest: 17 cases OK")
 
 
 def main(argv=None):
