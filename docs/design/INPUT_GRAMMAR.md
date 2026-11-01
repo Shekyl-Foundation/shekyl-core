@@ -274,7 +274,7 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 | `db-sync-mode` | — | | | |  |  | – (the DRS lane decided: no knob; the Rust store's durability is the constant `shekyl_chain_store::store::DURABILITY`, `Immediate`, DRS-D9, Rick 2026-10-26) |
 | `db-salvage` | — | | | |  |  | L DRS |
 | `keep-alt-blocks` | — | | | |  |  | L DRS-E5 |
-| `max-txpool-weight`, `txpool-weight-max` | — | | | |  |  | X (the pool's cap derives from the chain, CEN-M10: `REFERENCE_BLOCK_MAX_AGE` blocks at the block weight limit; IG-Q11, amended 2026-10-17) |
+| `max-txpool-weight` | — | | | |  |  | X `txpool-weight-max` (the pool's cap derives from the chain, CEN-M10: `REFERENCE_BLOCK_MAX_AGE` blocks at the block weight limit; IG-Q11, amended 2026-10-17); the inherited spelling leaves no trace (IG-5) |
 | `block-notify` | `notify-block` | command | unset | file |  |  | R (IG-Q5); placeholders `{height}`, `{hash}` |
 | `reorg-notify` | `notify-reorg` | command | unset | file |  |  | R (IG-Q5); placeholders `{split-height}` (the last block both chains share), `{height}` (the new tip), `{added}` (blocks in the new chain), `{removed}` (blocks discarded) |
 | `block-rate-notify` | `notify-block-rate` | command | unset | file |  |  | R (IG-Q5); placeholders `{window}` (the window in seconds), `{observed}`, `{expected}` |
