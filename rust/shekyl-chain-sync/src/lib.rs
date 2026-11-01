@@ -52,6 +52,7 @@ mod protocol;
 mod runs;
 mod state;
 mod tree;
+mod view;
 
 pub use claim::{PayloadRefused, PeerClaim};
 pub use locator::locator;
@@ -61,3 +62,4 @@ pub use model::{
 };
 pub use shekyl_chain_rules::HeaderView;
 pub use state::SyncState;
+pub use view::{BodiesInFlight, HeaderInFlight, SessionMode, SessionView, SyncView};

@@ -12,12 +12,11 @@ use std::time::Instant;
 use shekyl_chain_rules::{seed_height, RuleSet};
 use shekyl_difficulty::{CumulativeDifficulty, MTP_WINDOW_USIZE, N_USIZE};
 use shekyl_draw_rng::RelayRng;
-use shekyl_levin::RequestHeaders;
 use shekyl_types::{BlockCount, BlockHeight};
 
 use super::fork_depth;
-use crate::model::{draw_one, header_deadline, Command, HashClass, Sync};
-use crate::peer::{HeaderRequest, Run};
+use crate::model::{draw_one, Command, HashClass, Sync};
+use crate::peer::Run;
 
 impl<K, R> Sync<K, R>
 where
@@ -181,28 +180,7 @@ where
             run.chain.checked.clear();
             run.chain.proven = 0;
         }
-        let id = self.next_id;
-        self.next_id = self.next_id.saturating_add(1);
-        if let Some(state) = self.peers.get_mut(&session) {
-            state.follow_up = Some(HeaderRequest {
-                session,
-                id,
-                points: vec![(parent_height, parent)],
-            });
-        }
-        let transit = self
-            .peers
-            .get(&session)
-            .map(|peer| peer.transit)
-            .unwrap_or_default();
-        out.push(Command::RequestHeaders {
-            session,
-            id,
-            deadline: header_deadline(now, transit),
-            request: RequestHeaders {
-                block_ids: vec![*parent.as_bytes()],
-            },
-        });
+        self.follow_up(session, (parent_height, parent), now, out);
     }
 
     pub(super) fn past_bound(&self, session: K, cap: BlockCount) -> bool {

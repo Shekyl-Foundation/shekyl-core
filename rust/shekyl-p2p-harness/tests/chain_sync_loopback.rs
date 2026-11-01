@@ -189,6 +189,56 @@ async fn the_withholder_keeps_its_session_and_serves_nothing() {
     held.stop().await;
 }
 
+/// The stall (CS-5 F5): the one session serving `H*` closes, and the one
+/// left claims only the node's own tip. The node is `Behind`, nothing is in
+/// flight, and the view says stalled. A session claiming the whole chain
+/// arrives, the stall clears, and the node syncs to the tip.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_last_supplier_closing_stalls_and_a_new_claim_recovers() {
+    logs();
+    let (corpus, steps) = spend();
+    let held = source("stall-src", &corpus, &steps).await;
+    let (count, _, _) = held.tip().expect("a chain");
+    let full = claim_of(&held);
+    let mut node = Node::start("stall", corpus.rules(), &steps[..1], 2, rng()).await;
+    let (own, work, top) = node.chain.tip().expect("a chain");
+    let (level, _) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
+    node.connect(Box::new(level), Some(claim(own, work, top)));
+    let frames = Arc::new(Mutex::new(Vec::new()));
+    let (supplier, seen) =
+        ServingPeer::new(Arc::clone(&held.store), Bodies::Hold(Arc::clone(&frames)));
+    let id = node.connect(Box::new(supplier), Some(full));
+    assert!(
+        node.wait(LIMIT, |node| seen.headers() >= 1
+            && seen.bodies() >= 1
+            && matches!(node.state(), SyncState::Behind { .. }))
+            .await,
+        "state {:?}, headers {}, bodies {}",
+        node.state(),
+        seen.headers(),
+        seen.bodies()
+    );
+    assert!(!node.view().stalled, "a span in flight is not a stall");
+    node.hub.close(id);
+    assert!(
+        node.wait(LIMIT, |node| node.view().stalled).await,
+        "view {:?}",
+        node.view()
+    );
+    let view = node.view();
+    assert!(matches!(view.state, SyncState::Behind { .. }), "{view:?}");
+    assert_eq!(view.sessions.len(), 1, "{view:?}");
+    assert!(view.sessions[0].header_request.is_none(), "{view:?}");
+    assert!(view.sessions[0].body_requests.is_empty(), "{view:?}");
+
+    let (recovery, _) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
+    node.connect(Box::new(recovery), Some(full));
+    wait_synced(&node, count).await;
+    assert!(!node.view().stalled, "view {:?}", node.view());
+    node.stop().await;
+    held.stop().await;
+}
+
 /// A peer slower than the body deadline is excluded as a body source and
 /// not closed; its late answer closes nothing; an honest peer that never
 /// served a header, and names our tip, finishes the sync (CS-F8).

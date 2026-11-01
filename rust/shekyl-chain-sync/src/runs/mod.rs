@@ -22,7 +22,7 @@ use shekyl_types::{BlockCount, BlockHash, BlockHeight, PowHash, Timestamp};
 use shekyl_wire::PowBlob;
 
 use crate::branch::{BranchView, Pending};
-use crate::model::{header_deadline, CloseCause, Command, HashClass, Job, ProveItem, Proved, Sync};
+use crate::model::{CloseCause, Command, HashClass, Job, ProveItem, Proved, Sync};
 use crate::peer::{cache_for, Checked, HeaderRequest, Run};
 
 mod bodies;
@@ -132,18 +132,21 @@ where
             .filter(|req| {
                 req.session == session && req.points.iter().any(|(_, hash)| *hash == parent)
             })
-            .map(|req| req.points.clone());
+            .map(|req| (req.points.clone(), req.sent));
         let continuation = self
             .peers
             .get(&session)
             .and_then(|state| state.follow_up.as_ref())
             .filter(|req| req.points.iter().any(|(_, hash)| *hash == parent))
-            .map(|req| req.points.clone());
+            .map(|req| (req.points.clone(), req.sent));
         let from_continuation = continuation.is_some();
-        let Some(points) = continuation.or(frontier) else {
+        let Some((points, sent)) = continuation.or(frontier) else {
             self.close(session, CloseCause::HeadersForm, out);
             return Ok(());
         };
+        if let Some(state) = self.peers.get_mut(&session) {
+            state.rate = Some(crate::peer::rate(bytes.len(), sent, now));
+        }
         if from_continuation {
             if let Some(state) = self.peers.get_mut(&session) {
                 state.follow_up = None;
@@ -640,26 +643,33 @@ where
         let Some((height, hash)) = tip else {
             return;
         };
+        self.follow_up(session, (height, hash), now, out);
+    }
+
+    /// This session's own header follow-up from one point: the run's next
+    /// locator, a relocate, or the ancestors of an announcement. It does
+    /// not take the extending slot.
+    pub(crate) fn follow_up(
+        &mut self,
+        session: K,
+        point: (BlockHeight, BlockHash),
+        now: Instant,
+        out: &mut Vec<Command<K>>,
+    ) {
+        let Some(state) = self.peers.get_mut(&session) else {
+            return;
+        };
         let id = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
-        if let Some(state) = self.peers.get_mut(&session) {
-            state.follow_up = Some(HeaderRequest {
-                session,
-                id,
-                points: vec![(height, hash)],
-            });
-        }
-        let transit = self
-            .peers
-            .get(&session)
-            .map(|s| s.transit)
-            .unwrap_or_default();
+        let request = HeaderRequest::new(session, id, vec![point], now, state.transit);
+        let deadline = request.deadline;
+        state.follow_up = Some(request);
         out.push(Command::RequestHeaders {
             session,
             id,
-            deadline: header_deadline(now, transit),
+            deadline,
             request: shekyl_levin::RequestHeaders {
-                block_ids: vec![*hash.as_bytes()],
+                block_ids: vec![*point.1.as_bytes()],
             },
         });
     }
@@ -787,28 +797,7 @@ where
                     .and_then(|local| local.height)
             })
             .unwrap_or(BlockHeight::ZERO);
-        let id = self.next_id;
-        self.next_id = self.next_id.saturating_add(1);
-        if let Some(state) = self.peers.get_mut(&session) {
-            state.follow_up = Some(HeaderRequest {
-                session,
-                id,
-                points: vec![(height, at)],
-            });
-        }
-        let transit = self
-            .peers
-            .get(&session)
-            .map(|s| s.transit)
-            .unwrap_or_default();
-        out.push(Command::RequestHeaders {
-            session,
-            id,
-            deadline: header_deadline(now, transit),
-            request: shekyl_levin::RequestHeaders {
-                block_ids: vec![*at.as_bytes()],
-            },
-        });
+        self.follow_up(session, (height, at), now, out);
     }
 }
 

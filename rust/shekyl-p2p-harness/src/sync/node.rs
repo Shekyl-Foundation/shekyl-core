@@ -263,6 +263,21 @@ impl Node {
         *self.running.as_ref().expect("running").alarm().borrow()
     }
 
+    /// The model's view (CS-5 §7), as the owner last published it.
+    ///
+    /// # Panics
+    ///
+    /// The node was stopped.
+    #[must_use]
+    pub fn view(&self) -> shekyl_chain_sync::SyncView<SocketId> {
+        self.running
+            .as_ref()
+            .expect("running")
+            .view()
+            .borrow()
+            .clone()
+    }
+
     /// Wait until `done` holds, at most `limit`. `true` when it held.
     pub async fn wait(&self, limit: Duration, mut done: impl FnMut(&Self) -> bool) -> bool {
         let started = Instant::now();

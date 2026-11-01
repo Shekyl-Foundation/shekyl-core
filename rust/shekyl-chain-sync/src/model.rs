@@ -27,6 +27,7 @@ use crate::claim::{self, PayloadRefused, PeerClaim};
 use crate::locator::{locator, locator_heights};
 use crate::state::SyncState;
 use crate::tree::{HeaderTree, Star};
+use crate::view::{BodiesInFlight, HeaderInFlight, SessionMode, SessionView, SyncView};
 
 /// Bytes per second assumed for a header or body request's deadline.
 ///
@@ -324,6 +325,61 @@ where
             })
     }
 
+    /// The view (CS-5 §7): the state, the stall, the target and one row
+    /// per open session.
+    #[must_use]
+    pub fn view(&self) -> SyncView<K> {
+        let sessions = self
+            .peers
+            .iter()
+            .map(|(session, peer)| {
+                let header_request = self
+                    .header_request
+                    .as_ref()
+                    .filter(|request| request.session == *session)
+                    .or(peer.follow_up.as_ref())
+                    .map(|request| HeaderInFlight {
+                        sent: request.sent,
+                        deadline: request.deadline,
+                    });
+                let body_requests = peer
+                    .span
+                    .iter()
+                    .filter_map(|span| {
+                        let first = self.tree.connecting(*span.hashes.first()?)?;
+                        Some(BodiesInFlight {
+                            first,
+                            count: BlockCount::from_raw(
+                                u64::try_from(span.hashes.len()).unwrap_or(u64::MAX),
+                            ),
+                            planned_bytes: BODIES_RESPONSE_BYTES,
+                            sent: span.sent,
+                            deadline: span.deadline,
+                        })
+                    })
+                    .collect();
+                SessionView {
+                    session: *session,
+                    claim: peer.claim,
+                    mode: peer
+                        .run
+                        .as_ref()
+                        .map_or(SessionMode::Idle, crate::peer::Run::view_mode),
+                    header_request,
+                    body_requests,
+                    transit: peer.transit,
+                    rate: peer.rate,
+                }
+            })
+            .collect();
+        SyncView {
+            state: self.state(),
+            stalled: self.stalled(),
+            target: self.star_count(),
+            sessions,
+        }
+    }
+
     /// `H*`: the hash and the work selection last chose.
     #[cfg(test)]
     #[must_use]
@@ -530,7 +586,7 @@ where
             Event::Headers { session, bytes } => {
                 self.on_headers(main, session, &bytes, now, out)?
             }
-            Event::Bodies { session, bytes } => self.on_bodies(session, &bytes, out),
+            Event::Bodies { session, bytes } => self.on_bodies(session, &bytes, now, out),
             Event::Proven { job, results } => self.on_proven(main, job, &results, out)?,
             Event::Entry { tag, outcome } => self.on_entry(main, tag, outcome, now, out)?,
             Event::Room { seats } => self.on_room(seats, out),
@@ -719,11 +775,8 @@ where
             .map(|peer| peer.transit)
             .unwrap_or_default();
         let id = self.next_id;
-        let request = HeaderRequest {
-            session,
-            id,
-            points,
-        };
+        let request = HeaderRequest::new(session, id, points, now, transit);
+        let deadline = request.deadline;
         let remembered = match slot {
             HeaderSlot::Extending => {
                 self.header_request = Some(request);
@@ -744,7 +797,7 @@ where
         out.push(Command::RequestHeaders {
             session,
             id,
-            deadline: header_deadline(now, transit),
+            deadline,
             request: RequestHeaders { block_ids },
         });
         Ok(())

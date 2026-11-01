@@ -14,17 +14,21 @@ use shekyl_levin::{BodiesFormFault, RequestBodies, ResponseBodies, MAX_OBJECT_RE
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 use shekyl_wire::Block;
 
-use crate::model::{
-    body_deadline, BoundArrival, CloseCause, Command, OfferedBody, Sync, BODY_REQUESTS_IN_FLIGHT,
-};
-use crate::peer::{BodySpan, Dispute};
+use crate::model::{BoundArrival, CloseCause, Command, OfferedBody, Sync, BODY_REQUESTS_IN_FLIGHT};
+use crate::peer::{rate, BodySpan, Dispute};
 
 impl<K, R> Sync<K, R>
 where
     K: Copy + Ord + std::hash::Hash + std::fmt::Debug,
     R: Fn(BlockHeight) -> RuleSet,
 {
-    pub(crate) fn on_bodies(&mut self, session: K, bytes: &[u8], out: &mut Vec<Command<K>>) {
+    pub(crate) fn on_bodies(
+        &mut self,
+        session: K,
+        bytes: &[u8],
+        now: Instant,
+        out: &mut Vec<Command<K>>,
+    ) {
         if !self.peers.contains_key(&session) {
             return;
         }
@@ -39,6 +43,9 @@ where
         else {
             return;
         };
+        if let Some(peer) = self.peers.get_mut(&session) {
+            peer.rate = Some(rate(bytes.len(), request.sent, now));
+        }
         let hashes: Vec<[u8; 32]> = request.hashes.iter().map(|hash| *hash.as_bytes()).collect();
         if let Err(fault) = response.check_form(&hashes) {
             if fault != BodiesFormFault::RequestRepeated {
@@ -155,10 +162,11 @@ where
             .get(&session)
             .map(|s| s.transit)
             .unwrap_or_default();
+        let span = BodySpan::new(id, hashes, now, transit);
+        let deadline = span.deadline;
         if let Some(peer) = self.peers.get_mut(&session) {
-            peer.span = Some(BodySpan { id, hashes });
+            peer.span = Some(span);
         }
-        let deadline = body_deadline(now, transit);
         out.push(Command::RequestBodies {
             session,
             id,

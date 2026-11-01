@@ -3,8 +3,9 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The stall surface (CS-5 F5): `Behind`, with nothing moving toward `H*`
-//! because no session's claim or frontier covers what is wanted.
+//! The stall surface (CS-5 F5) and the view it is published in (§7). A
+//! stall is `Behind`, with nothing moving toward `H*`, because no
+//! session's claim or frontier covers what is wanted.
 
 #![cfg(test)]
 
@@ -12,14 +13,14 @@ use std::time::Instant;
 
 use shekyl_chain_rules::HeaderView;
 use shekyl_difficulty::CumulativeDifficulty;
-use shekyl_types::{BlockHash, ChainCount};
+use shekyl_types::{BlockCount, BlockHash, ChainCount};
 
 use crate::claim::PeerClaim;
 use crate::model::{Event, Sync};
 use crate::proof::drive;
 use crate::relay_tests::with_two_headers;
 use crate::scenarios::{request_for, NoDraw};
-use crate::{Command, SyncState};
+use crate::{Command, SessionMode, SyncState};
 
 /// The one supplier of `H*`'s headers closes, and the session left claims
 /// less. The node is `Behind`, nothing is asked of anyone, and further
@@ -72,6 +73,44 @@ fn an_arrival_with_the_entry_is_not_a_stall() {
             sync.state()
         );
         assert!(!sync.stalled(), "an awaited arrival was read as a stall");
+    });
+}
+
+/// The view names what moves (§7): the target is `H*`'s count, the span
+/// in flight is the first wanted block, and a session's rate is measured
+/// once it has answered. When the last supplier closes, the view says
+/// stalled and lists no request.
+#[test]
+fn the_view_shows_the_target_the_span_in_flight_and_the_stall() {
+    with_two_headers(|sync, view, _, _| {
+        let star = view.tip().expect("main answers").expect("a tip").height;
+        let out = drive(sync, view, Event::Room { seats: 1 });
+        assert!(request_for(&out).is_some(), "{out:?}");
+        let seen = sync.view();
+        assert!(matches!(seen.state, SyncState::Behind { .. }), "{seen:?}");
+        assert!(!seen.stalled);
+        assert_eq!(
+            seen.target,
+            ChainCount::with_tip(star + BlockCount::from_raw(2)).expect("a count")
+        );
+        let row = &seen.sessions[0];
+        assert_eq!(row.session, 1);
+        assert!(row.rate.is_some(), "the headers response was not measured");
+        assert_eq!(row.body_requests.len(), 1, "{row:?}");
+        let span = row.body_requests[0];
+        assert_eq!(span.first, star + BlockCount::ONE);
+        assert_eq!(span.count, BlockCount::ONE);
+        assert!(span.deadline > span.sent);
+
+        claim(sync, view, 2, 1, 1, BlockHash::NULL);
+        drive(sync, view, Event::SessionClosed { session: 1 });
+        let seen = sync.view();
+        assert!(seen.stalled, "{seen:?}");
+        assert_eq!(seen.sessions.len(), 1);
+        assert_eq!(seen.sessions[0].mode, SessionMode::Idle);
+        assert!(seen.sessions[0].header_request.is_none());
+        assert!(seen.sessions[0].body_requests.is_empty());
+        assert!(seen.sessions[0].rate.is_none());
     });
 }
 

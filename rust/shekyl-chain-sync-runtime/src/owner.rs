@@ -69,7 +69,7 @@ use shekyl_levin::{
 };
 use shekyl_peer_policy::{Invalidate, SyncReply, SyncReplyAction};
 use shekyl_runtime::{Pool, RuntimeBudget, ThreadName};
-use shekyl_seam::{Hub, SyncPayload};
+use shekyl_seam::{Hub, SocketId, SyncPayload};
 use shekyl_timing_engine::{Clock, OwnerHandle, Tick};
 use shekyl_transport_layer::{declaration, Assessment};
 use shekyl_types::{BlockHash, BlockHeight, ChainCount};
@@ -84,7 +84,7 @@ use crate::serve::{serve_bodies, serve_headers};
 use crate::session::Session;
 use shekyl_chain_sync::{
     BoundArrival, ClaimError, Command, Event, Job, Outcome, PeerClaim, Proved, Sync as Model,
-    SyncState,
+    SyncState, SyncView,
 };
 
 /// The owner row's name in the thread ledger.
@@ -133,6 +133,7 @@ pub struct Running {
     stop_tx: watch::Sender<bool>,
     state: watch::Receiver<SyncState>,
     alarm: watch::Receiver<bool>,
+    view: watch::Receiver<SyncView<SocketId>>,
 }
 
 impl Running {
@@ -146,6 +147,13 @@ impl Running {
     #[must_use]
     pub fn alarm(&self) -> watch::Receiver<bool> {
         self.alarm.clone()
+    }
+
+    /// The model's view (CS-5 §7), published after every event: what
+    /// `sync_info` renders. A session is named by its seam socket.
+    #[must_use]
+    pub fn view(&self) -> watch::Receiver<SyncView<SocketId>> {
+        self.view.clone()
     }
 
     /// Stop the owner and wait at most `timeout` for its blocking work.
@@ -185,16 +193,19 @@ where
     )?;
     let state = parts.state.subscribe();
     let (alarm_tx, alarm) = watch::channel(false);
+    let (view_tx, view) = watch::channel(SyncView::empty());
     let (stop_tx, stop_rx) = watch::channel(false);
     let executor = Arc::clone(&parts.executor);
     // The owner's log lines carry the span it was started in.
-    pool.spawn(run(parts, alarm_tx, stop_rx).instrument(tracing::Span::current()));
+    let published = Published { alarm_tx, view_tx };
+    pool.spawn(run(parts, published, stop_rx).instrument(tracing::Span::current()));
     Ok(Running {
         pool,
         executor,
         stop_tx,
         state,
         alarm,
+        view,
     })
 }
 
@@ -212,6 +223,12 @@ impl Drop for EndsAsNoView {
     fn drop(&mut self) {
         self.state.send_replace(SyncState::NoView);
     }
+}
+
+/// The watches the owner publishes on beside the node's state.
+struct Published {
+    alarm_tx: watch::Sender<bool>,
+    view_tx: watch::Sender<SyncView<SocketId>>,
 }
 
 /// What the owner's own spawned work reports back.
@@ -304,14 +321,11 @@ struct Owner<C: Clock + Clone, R> {
     serving: HashMap<Session, Serving>,
     seats: Option<usize>,
     state_tx: watch::Sender<SyncState>,
-    alarm_tx: watch::Sender<bool>,
+    published: Published,
 }
 
-async fn run<C, R>(
-    parts: OwnerParts<C, R>,
-    alarm_tx: watch::Sender<bool>,
-    mut stop: watch::Receiver<bool>,
-) where
+async fn run<C, R>(parts: OwnerParts<C, R>, published: Published, mut stop: watch::Receiver<bool>)
+where
     C: Clock + Clone + Send + Sync + 'static,
     R: RelayRng + Send + 'static,
 {
@@ -354,7 +368,7 @@ async fn run<C, R>(
         serving: HashMap::new(),
         seats: None,
         state_tx,
-        alarm_tx,
+        published,
     };
     // Dropped with the task: stop, a closed watch, and a panic alike.
     let _exit = EndsAsNoView {
@@ -808,7 +822,7 @@ where
 
     fn latch(&mut self, set: bool) {
         self.event(Event::Latch { set });
-        self.alarm_tx.send_replace(self.sync.alarm());
+        self.published.alarm_tx.send_replace(self.sync.alarm());
     }
 
     /// Report the door's room when it moved.
@@ -867,6 +881,30 @@ where
     fn send(&mut self, session: Session, bytes: Vec<u8>) {
         // A refused send is the transport's close, not sync's.
         let _sent = self.hub.send(session.socket(), bytes);
+    }
+
+    /// Publish the model's view. The stall is logged once when it sets,
+    /// at `warn`, and once when it clears (CS-5 F5, rule 82). Nothing here
+    /// acts on it: new sessions clear it on their next event (CS-Q7).
+    fn publish_view(&mut self) {
+        let view = self.sync.view().map(Session::socket);
+        let was = self.published.view_tx.borrow().stalled;
+        if view.stalled && !was {
+            tracing::warn!(
+                target_height = ?view.target.tip(),
+                sessions = view.sessions.len(),
+                "sync is stalled: no session's chain serves what the node still needs"
+            );
+        } else if was && !view.stalled {
+            tracing::info!(sessions = view.sessions.len(), "sync is no longer stalled");
+        }
+        self.published.view_tx.send_if_modified(|current| {
+            if *current == view {
+                return false;
+            }
+            *current = view;
+            true
+        });
     }
 
     fn commands(&mut self, out: Vec<Command<Session>>) {
@@ -978,6 +1016,7 @@ where
                 }
             }
         }
+        self.publish_view();
     }
 
     /// Offer bound arrivals to the entry. A refused span answers every

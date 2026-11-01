@@ -22,7 +22,7 @@
 //! removed; a missed deadline is not that failure.
 
 use std::collections::BTreeSet;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use shekyl_chain_rules::{seed_height, FormAttempt, HeaderJudged, RuleSet, Target};
 use shekyl_difficulty::SEEDHASH_EPOCH_LAG;
@@ -30,7 +30,7 @@ use shekyl_types::{BlockHash, BlockHeight};
 use shekyl_wire::{BlockBody, PowBlob};
 
 use crate::claim::PeerClaim;
-use crate::model::CachePlan;
+use crate::model::{body_deadline, header_deadline, CachePlan};
 
 /// What this peer has said about bodies, apart from any one run.
 #[derive(Default)]
@@ -72,12 +72,62 @@ pub(crate) struct HeaderRequest<K> {
     pub session: K,
     pub id: u64,
     pub points: Vec<(BlockHeight, BlockHash)>,
+    /// When it was sent. The response's rate is measured from here.
+    pub sent: Instant,
+    /// When its response is late: the header budget at
+    /// [`crate::model::SYNC_RATE_FLOOR`] after the session's transit.
+    pub deadline: Instant,
+}
+
+impl<K> HeaderRequest<K> {
+    pub(crate) fn new(
+        session: K,
+        id: u64,
+        points: Vec<(BlockHeight, BlockHash)>,
+        now: Instant,
+        transit: Duration,
+    ) -> Self {
+        Self {
+            session,
+            id,
+            points,
+            sent: now,
+            deadline: header_deadline(now, transit),
+        }
+    }
 }
 
 /// The body span this peer is serving.
 pub(crate) struct BodySpan {
     pub id: u64,
     pub hashes: Vec<BlockHash>,
+    /// When it was sent. The response's rate is measured from here.
+    pub sent: Instant,
+    /// When its response is late: the body budget at
+    /// [`crate::model::SYNC_RATE_FLOOR`] after the session's transit.
+    pub deadline: Instant,
+}
+
+impl BodySpan {
+    pub(crate) fn new(id: u64, hashes: Vec<BlockHash>, now: Instant, transit: Duration) -> Self {
+        Self {
+            id,
+            hashes,
+            sent: now,
+            deadline: body_deadline(now, transit),
+        }
+    }
+}
+
+/// The rate a response of `bytes` arrived at, in bytes per second: from
+/// its request's send to `now`. A response that took under a millisecond
+/// is measured over one.
+pub(crate) fn rate(bytes: usize, sent: Instant, now: Instant) -> u64 {
+    let elapsed = now
+        .saturating_duration_since(sent)
+        .max(Duration::from_millis(1));
+    let per_second = u128::try_from(bytes).unwrap_or(u128::MAX) * 1_000_000 / elapsed.as_micros();
+    u64::try_from(per_second).unwrap_or(u64::MAX)
 }
 
 /// One CS-Q4(c) wait. `fork` is the shallowest parent height among the
@@ -257,6 +307,19 @@ impl Run {
         }
     }
 
+    /// The run's mode, as the view names it.
+    pub(crate) const fn view_mode(&self) -> crate::view::SessionMode {
+        use crate::view::SessionMode;
+        match self.mode {
+            Mode::Reachable { .. } => SessionMode::Reachable,
+            Mode::Slot { .. } => SessionMode::Slot,
+            Mode::Challenging { .. } => SessionMode::Challenging,
+            Mode::PastCap => SessionMode::PastCap,
+            Mode::EvidenceCandidate => SessionMode::EvidenceCandidate,
+            Mode::Evidence { .. } => SessionMode::Evidence,
+        }
+    }
+
     pub(crate) fn proof(&self) -> Option<u64> {
         match self.mode {
             Mode::Reachable { proof }
@@ -411,6 +474,9 @@ pub(crate) struct Peer<K> {
     pub span: Option<BodySpan>,
     /// Announces proving beside the run.
     pub announced: Vec<Announced>,
+    /// The rate this peer's last header or body response arrived at, in
+    /// bytes per second. `None` until one has.
+    pub rate: Option<u64>,
 }
 
 impl<K> Peer<K> {
@@ -425,6 +491,7 @@ impl<K> Peer<K> {
             follow_up: None,
             span: None,
             announced: Vec::new(),
+            rate: None,
         }
     }
 }
