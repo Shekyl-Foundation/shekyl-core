@@ -43,17 +43,15 @@ shekyl-types = { path = "../shekyl-types" }
 # DRS-P0d logical-state digest v0. The hasher is safe-only; this crate
 # is the pointer boundary. DRS-E1 will grow shekyl-chain-store further.
 shekyl-chain-store = { path = "../shekyl-chain-store" }
-# The ingest service's door (`ingest_ffi`, DRS-X PR 2, DX-Q2 item 2):
-# the protocol handler's one entry, which needs the `pipeline` feature —
-# the service, its connector actor, the pool and the miner it feeds.
-# `kameo` and `tokio` were already in this crate's graph. Not the RPC
-# fetcher or clap: the default features stay off.
+# The connector's chain tip, which the dialer's handshake carries
+# (`dialer_ffi::publish_chain_tip`); its types need the `pipeline`
+# feature. Not the RPC fetcher or clap: the default features stay off.
 shekyl-chain-ingest = { path = "../shekyl-chain-ingest", default-features = false, features = ["pipeline"] }
 # The pool door (`pool_ffi`, DX-Q5). The flip is when an FFI crate names the pool.
 shekyl-mempool = { path = "../shekyl-mempool" }
 shekyl-chain-rules = { path = "../shekyl-chain-rules" }
-# The chain-sync router is the seam's post sink (`seam_ffi.rs`):
-# pass-through until the cutover attaches the sync owner.
+# The chain-sync router is the seam's post sink (`seam_ffi.rs`), attached
+# to the node's owner; `chain_sync_ffi` holds the slot and the state.
 shekyl-chain-sync = { path = "../shekyl-chain-sync" }
 shekyl-chain-sync-runtime = { path = "../shekyl-chain-sync-runtime" }
 # RandomX v2 light-cache PoW verifier. Consumed by `pow_randomx_ffi.rs`

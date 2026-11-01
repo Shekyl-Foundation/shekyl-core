@@ -1723,14 +1723,6 @@ int32_t shekyl_daemon_console_run(
 /// see ARCHIVAL_CREDIT_WIRE.md §3.
 bool shekyl_attestation_root_empty(uint8_t* out_ptr);
 
-// Attestation-witness cross-language constant authorities (credit-wire CW-2, CW-1b-iv).
-// The Rust-side authoritative values; C++ config must agree (equality) or over-bound
-// (the coarse witness cap). The block-hash differential is blind to the witness, so
-// these are the real gate. Asserted in tests/unit_tests/archival_credit_wire.cpp.
-uint64_t shekyl_archival_max_attestation_records(void);
-uint64_t shekyl_archival_attestation_header_bytes(void);
-uint64_t shekyl_archival_attestation_witness_max_bytes(void);
-
 /// Extract `(P, shard, E)` from a serve-credit vin's opaque `canonical_bytes`
 /// (tag byte INCLUDED). The Rust codec is the only parser of those bytes
 /// (RF-D1 / rule 40): C++ indexes by these three fields and reads nothing
@@ -2629,55 +2621,6 @@ uint8_t shekyl_drop_verdict_combine(uint8_t current, uint8_t incoming);
 //! Fold `incoming` into `slot`. Null `slot` is a no-op (no peer to attribute).
 void shekyl_drop_verdict_classify(uint8_t* slot, uint8_t incoming);
 
-// -- Block-ingest outcome (PWD-B7 block twin) -------------------------------
-// Opaque ABI for rust/shekyl-peer-policy::BlockIngest. Replaces
-// block_verification_context's bag of independent bools. C++ writes
-// non-reject arms through shekyl_block_ingest_record and reject arms
-// through shekyl_block_ingest_reject_* (Rust pairs the drop slot).
-// Zero is Unclassified: not added, not rejected, not a drop. P2P asks
-// shekyl_block_announce_action / shekyl_block_sync_action, not these
-// bytes. Action bytes have no header constants.
-
-#define SHEKYL_BLOCK_INGEST_UNCLASSIFIED     0u
-#define SHEKYL_BLOCK_INGEST_ADDED            1u
-#define SHEKYL_BLOCK_INGEST_ALREADY_EXISTS   2u
-#define SHEKYL_BLOCK_INGEST_ORPHANED         3u
-#define SHEKYL_BLOCK_INGEST_MISSING_TXS      4u
-#define SHEKYL_BLOCK_INGEST_DEGRADED_KEEP    5u
-#define SHEKYL_BLOCK_INGEST_ALT_STORED       6u
-#define SHEKYL_BLOCK_INGEST_REJECTED         7u
-#define SHEKYL_BLOCK_INGEST_REJECTED_BAD_POW 8u
-
-bool shekyl_block_ingest_is_added(uint8_t outcome);
-bool shekyl_block_ingest_already_exists(uint8_t outcome);
-bool shekyl_block_ingest_is_orphaned(uint8_t outcome);
-bool shekyl_block_ingest_missing_txs(uint8_t outcome);
-bool shekyl_block_ingest_is_rejected(uint8_t outcome);
-bool shekyl_block_ingest_is_bad_pow(uint8_t outcome);
-//! Fold `incoming` into `slot`. First writer wins. Null `slot` is a no-op.
-void shekyl_block_ingest_record(uint8_t* slot, uint8_t incoming);
-//! Pair both slots. Either pointer null is a no-op (do not half-write).
-void shekyl_block_ingest_reject_form(uint8_t* outcome, uint8_t* drop);
-void shekyl_block_ingest_reject_state(uint8_t* outcome, uint8_t* drop);
-void shekyl_block_ingest_reject_internal(uint8_t* outcome, uint8_t* drop);
-void shekyl_block_ingest_reject_bad_pow(uint8_t* outcome, uint8_t* drop);
-void shekyl_block_ingest_reject_with_drop(uint8_t* outcome, uint8_t* drop, uint8_t incoming_drop);
-
-//! Announce/sync instruction bytes. No SHEKYL_BLOCK_ANNOUNCE_* constants:
-//! C++ never writes these. An unrecognised byte is idle (do not drop).
-uint8_t shekyl_block_announce_action(uint8_t outcome, uint8_t drop, bool handle_ok);
-bool shekyl_block_announce_re_request_txs(uint8_t action);
-bool shekyl_block_announce_drop(uint8_t action);
-bool shekyl_block_announce_heavier_score(uint8_t action);
-bool shekyl_block_announce_our_failure(uint8_t action);
-bool shekyl_block_announce_relay(uint8_t action);
-bool shekyl_block_announce_request_history(uint8_t action);
-
-uint8_t shekyl_block_sync_action(uint8_t outcome, uint8_t drop);
-bool shekyl_block_sync_drop(uint8_t action);
-bool shekyl_block_sync_heavier_score(uint8_t action);
-bool shekyl_block_sync_orphan_resync(uint8_t action);
-
 // ---------------------------------------------------------------------------
 // DRS-P0d logical-state digest v0
 // (`docs/design/DAEMON_REDB_STORE.md` §7.1). One coarse call: C++ has
@@ -3051,6 +2994,21 @@ int32_t shekyl_pool_fluffed(const uint8_t hash[32]);
 /// 1 when chain sync reads Synced, 0 otherwise (CS-5 §3). Following is not
 /// synchronized for relay's purposes. No node reads 0.
 uint8_t shekyl_node_is_synchronized(void);
+
+/// The node's tip as every handshake carries it: CORE_SYNC_DATA's fields
+/// (CS-5 F4, the one tip source).
+struct shekyl_sync_payload {
+  std::uint64_t current_height;
+  std::uint64_t cumulative_difficulty;
+  std::uint64_t cumulative_difficulty_top64;
+  std::uint8_t top_id[32];
+};
+/// SHEKYL_HANDSHAKE_TIP_OK: written. _NONE: no tip published yet (the node
+/// has not opened). _NULL: `out` is null.
+#define SHEKYL_HANDSHAKE_TIP_OK 0
+#define SHEKYL_HANDSHAKE_TIP_NONE 1
+#define SHEKYL_HANDSHAKE_TIP_NULL (-1)
+int32_t shekyl_p2p_handshake_tip(shekyl_sync_payload* out);
 
 /// The handler's sync reads, each over one snapshot of the node's chain.
 /// 0 is success. 1 is a refusal (empty chain, unknown height, a history

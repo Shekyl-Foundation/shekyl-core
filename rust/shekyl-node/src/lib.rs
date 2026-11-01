@@ -327,9 +327,6 @@ impl Node {
                 }
                 return Err(error);
             }
-            // The handler's arrivals enter this door (DX-Q2 item 2). The
-            // pump runs on this runtime; unbind must not.
-            shekyl_ffi::ingest_ffi::install(service.door(), tokio::runtime::Handle::current());
             Ok(service)
         });
         let service = match started {
@@ -825,7 +822,6 @@ fn schedule_of(dev: &Dev) -> Result<FakechainSchedule, OpenError> {
 /// with this; a stop or a failed open that already installed must call it,
 /// or the next open in this process meets `DatabaseAlreadyOpen`.
 fn uninstall_process_doors() {
-    shekyl_ffi::ingest_ffi::uninstall();
     shekyl_ffi::pool_ffi::uninstall();
     // A slot no bind took: its hub sender drops, and an owner still
     // waiting for the hub ends.

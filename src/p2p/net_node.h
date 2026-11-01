@@ -29,8 +29,7 @@
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
 // TODO(shekyl-v4): Migrate boost::posix_time and boost::thread types to
-// std::chrono and std::thread. This header defines the P2P node; time-type
-// changes cascade into connection_context and block_queue.
+// std::chrono and std::thread. This header defines the P2P node.
 #pragma once
 #include <array>
 #include <atomic>
@@ -165,7 +164,6 @@ namespace nodetool
     bool init(const ShekylDaemonSnapshot& snapshot);
     bool deinit();
     bool send_stop_signal();
-    t_payload_net_handler& get_payload_object();
 
     // debug functions
     bool log_connections();
@@ -222,7 +220,6 @@ namespace nodetool
     //----------------- levin_commands_handler -------------------------------------------------------------
     virtual void on_connection_new(p2p_connection_context& context);
     virtual void on_connection_close(p2p_connection_context& context);
-    virtual void callback(p2p_connection_context& context);
     void on_outbound_handshake(p2p_connection_context& context, const shekyl_seam_handshake_result& result) override;
     //----------------- i_p2p_endpoint -------------------------------------------------------------
     virtual bool relay_notify_to_list(int command, epee::levin::message_writer message, std::vector<std::pair<epee::net_utils::connector_id, boost::uuids::uuid>> connections) final;
@@ -230,7 +227,6 @@ namespace nodetool
     virtual void record_tx_arrivals(std::vector<cryptonote::blobdata> txs, const boost::uuids::uuid& from);
     virtual bool invoke_notify_to_peer(int command, epee::levin::message_writer message, const epee::net_utils::connection_context_base& context) final;
     virtual bool drop_connection(const epee::net_utils::connection_context_base& context);
-    virtual void request_callback(const epee::net_utils::connection_context_base& context);
     virtual size_t post_each(std::function<void(typename t_payload_net_handler::connection_context&)> note, std::function<void()> then);
     virtual bool for_connection(const boost::uuids::uuid&, std::function<void(typename t_payload_net_handler::connection_context&)> f);
     virtual bool add_host_fail(const epee::net_utils::network_address &address, unsigned int score = 1);

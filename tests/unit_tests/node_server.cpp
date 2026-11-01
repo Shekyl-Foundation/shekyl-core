@@ -28,6 +28,8 @@
 //
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
+// The handler's routes are private outside the unit tests.
+#define IN_UNIT_TESTS
 #include "gtest/gtest.h"
 #include "cryptonote_core/cryptonote_core.h"
 #include "p2p/net_node.h"
@@ -52,20 +54,9 @@
 class test_core : public cryptonote::i_core_events
 {
 public:
-  virtual bool is_synchronized() const final { return true; }
-  void on_synchronized(){}
-  virtual uint64_t get_current_blockchain_height() const final {return 1;}
-  void set_target_blockchain_height(uint64_t) {}
-  bool get_short_chain_history(std::list<crypto::hash>& ids, uint64_t& current_height) const { return true; }
-  // The blocks this core already has. Empty by default, so every test that
-  // does not populate it sees the previous unconditional `false`. A test
-  // driving `try_add_next_blocks` needs the span's parent to be known, which
-  // is what gates offering the span to the Rust ingest.
-  std::vector<crypto::hash> blocks_we_have;
-  bool have_block(const crypto::hash& id, int *where = NULL) const
-  {return std::find(blocks_we_have.begin(), blocks_we_have.end(), id) != blocks_we_have.end();}
-  bool have_block_unlocked(const crypto::hash& id, int *where = NULL) const {return false;}
-  void get_blockchain_top(uint64_t& height, crypto::hash& top_id)const{height=0;top_id=crypto::null_hash;}
+  //! Chain sync's published state, as the shell reads it (CS-5 §3).
+  bool synchronized = true;
+  virtual bool is_synchronized() const final { return synchronized; }
   unsigned handle_incoming_tx_calls = 0;
   bool handle_incoming_tx_result = true;
   uint8_t handle_incoming_tx_verdict = SHEKYL_DROP_VERDICT_UNCLASSIFIED;
@@ -78,71 +69,10 @@ public:
     shekyl_drop_verdict_classify(&tvc.m_drop_verdict, handle_incoming_tx_verdict);
     return false;
   }
-  bool handle_single_incoming_block(const cryptonote::blobdata& block_blob, const cryptonote::block *b, cryptonote::block_verification_context& bvc, cryptonote::block_connect_supplement& connect, bool update_miner_blocktemplate = true) { return true; }
-  bool handle_incoming_block(const cryptonote::blobdata& block_blob, const cryptonote::block *block, cryptonote::block_verification_context& bvc, bool update_miner_blocktemplate = true) { return true; }
-  bool handle_incoming_block(const cryptonote::blobdata& block_blob, const cryptonote::block *block, cryptonote::block_verification_context& bvc, cryptonote::block_connect_supplement& connect, bool update_miner_blocktemplate = true) { return true; }
-  bool on_idle(){return true;}
-  bool find_blockchain_supplement(const std::list<crypto::hash>& qblock_ids, cryptonote::NOTIFY_RESPONSE_CHAIN_ENTRY::request& resp){return true;}
-  bool handle_get_objects(cryptonote::NOTIFY_REQUEST_GET_OBJECTS::request& arg, cryptonote::NOTIFY_RESPONSE_GET_OBJECTS::request& rsp, cryptonote::cryptonote_connection_context& context){return true;}
-  bool check_incoming_block_size_result = true;
-  bool check_incoming_block_size(const cryptonote::blobdata& block_blob) const { return check_incoming_block_size_result; }
-  uint64_t get_target_blockchain_height() const { return 1; }
-  size_t get_block_sync_size(uint64_t height) const { return BLOCKS_SYNCHRONIZING_DEFAULT_COUNT; }
   virtual void on_transactions_relayed(epee::span<const cryptonote::blobdata> tx_blobs, cryptonote::relay_method tx_relay, std::optional<std::uint8_t>) {}
-  cryptonote::network_type get_nettype() const { return cryptonote::MAINNET; }
-  /*! Already here for the protocol-handler shim, and now also the
-      `i_core_events` override — these fixtures never drive a carrier verdict,
-      so the stub's existing answer stands rather than being second-guessed. */
   bool pool_has_tx(const crypto::hash &txid) const override { return false; }
-  bool get_transactions(const std::vector<crypto::hash>& txs_ids, std::vector<cryptonote::blobdata>& txs, std::vector<crypto::hash>& missed_txs, bool pruned = false) const { return false; }
-  bool get_transactions(const std::vector<crypto::hash>& txs_ids, std::vector<cryptonote::transaction>& txs, std::vector<crypto::hash>& missed_txs) const { return false; }
-  bool get_block_by_hash(const crypto::hash &h, cryptonote::block &blk, bool *orphan = NULL) const { return false; }
-  cryptonote::blobdata get_block_attestation_witness(const cryptonote::block &blk) const { return {}; }
-  cryptonote::difficulty_type get_block_cumulative_difficulty(uint64_t height) const { return 0; }
   bool get_txpool_complement(const std::vector<crypto::hash> &hashes, std::vector<cryptonote::blobdata> &txes) { return false; }
-  bool get_pool_transaction_hashes(std::vector<crypto::hash>& txs, bool include_unrelayed_txes = true) const { return false; }
-  crypto::hash get_block_id_by_height(uint64_t height) const { return crypto::null_hash; }
   void stop() {}
-};
-
-//! Grants this file access to the protocol handler's private members. See the
-//! `friend` declaration in `cryptonote_protocol_handler.h` for what it exists
-//! for and when it retires.
-struct cryptonote_protocol_handler_test_seam
-{
-  template<class T>
-  static cryptonote::block_queue &queue(cryptonote::t_cryptonote_protocol_handler<T> &h)
-  { return h.m_block_queue; }
-
-  template<class T>
-  static void drop_connections(cryptonote::t_cryptonote_protocol_handler<T> &h,
-                               const epee::net_utils::network_address &addr)
-  { h.drop_connections(addr); }
-
-  template<class T>
-  static int try_add_next_blocks(cryptonote::t_cryptonote_protocol_handler<T> &h,
-                                 cryptonote::cryptonote_connection_context &ctx)
-  { return h.try_add_next_blocks(ctx); }
-
-  // Both notify handlers are private, and both gate on `is_synchronized()`
-  // before reaching the arms PWD-B7 changed -- so the seam grants the flag
-  // alongside them rather than leaving each test to discover that the handler
-  // returned early and asserted nothing.
-  template<class T>
-  static void set_synchronized(cryptonote::t_cryptonote_protocol_handler<T> &h, bool v)
-  { h.m_synchronized = v; }
-
-  template<class T>
-  static int handle_notify_new_transactions(cryptonote::t_cryptonote_protocol_handler<T> &h,
-                                            cryptonote::NOTIFY_NEW_TRANSACTIONS::request &arg,
-                                            cryptonote::cryptonote_connection_context &ctx)
-  { return h.handle_notify_new_transactions(0, arg, ctx); }
-
-  template<class T>
-  static int handle_notify_new_compact_block(cryptonote::t_cryptonote_protocol_handler<T> &h,
-                                            cryptonote::NOTIFY_NEW_COMPACT_BLOCK::request &arg,
-                                            cryptonote::cryptonote_connection_context &ctx)
-  { return h.handle_notify_new_compact_block(0, arg, ctx); }
 };
 
 typedef nodetool::node_server<cryptonote::t_cryptonote_protocol_handler<test_core>> Server;
@@ -183,36 +113,32 @@ static bool is_blocked(Server &server, const epee::net_utils::network_address &a
   return false;
 }
 
-// PWD-B6: 2008 is the sole block-announce command; 2001 is refused as unknown.
-// `handled` starts false because the invoke map sets it on a match and never
-// clears it. Live-daemon regtest is --offline and does not cover p2p relay.
-TEST(cryptonote_protocol_handler, block_propagation_has_exactly_one_command)
+// The handler routes the transaction commands and nothing else (CS-5 §6):
+// 2002 and 2010 dispatch; the chain's commands are the Rust owner's or
+// retired, and reach no route here. `handled` starts false because the
+// invoke map sets it on a match and never clears it.
+TEST(cryptonote_protocol_handler, routes_only_the_transaction_commands)
 {
   test_core pr_core;
   cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
   cryptonote::cryptonote_connection_context context{};
   epee::byte_stream out;
+  const epee::span<const uint8_t> empty{};
 
-  cryptonote::NOTIFY_NEW_COMPACT_BLOCK::request compact{};
-  compact.current_blockchain_height = 1;
-  epee::byte_stream body;
-  ASSERT_TRUE(epee::serialization::store_t_to_binary(compact, body));
-  const epee::span<const uint8_t> in_buff{body.data(), body.size()};
-
+  for (const int command : {2001, 2003, 2004, 2006, 2007, 2008, 2009, 2011, 2012, 2013, 2014})
   {
+    SCOPED_TRACE(command);
     bool handled = false;
-    const int rc = cprotocol.handle_invoke_map(true, 2001, in_buff, out, context, handled);
-    EXPECT_FALSE(handled) << "command 2001 is still dispatched somewhere";
-    EXPECT_EQ(LEVIN_ERROR_CONNECTION_HANDLER_NOT_DEFINED, rc)
-        << "2001 must be refused as an unknown command, not silently ignored";
+    const int rc = cprotocol.handle_invoke_map(true, command, empty, out, context, handled);
+    EXPECT_FALSE(handled);
+    EXPECT_EQ(LEVIN_ERROR_CONNECTION_HANDLER_NOT_DEFINED, rc);
   }
-
+  for (const int command : {cryptonote::NOTIFY_NEW_TRANSACTIONS::ID, cryptonote::NOTIFY_GET_TXPOOL_COMPLEMENT::ID})
   {
+    SCOPED_TRACE(command);
     bool handled = false;
-    cprotocol.handle_invoke_map(true, cryptonote::NOTIFY_NEW_COMPACT_BLOCK::ID,
-                                in_buff, out, context, handled);
-    EXPECT_TRUE(handled)
-        << "NOTIFY_NEW_COMPACT_BLOCK must still dispatch — it is the only block path";
+    cprotocol.handle_invoke_map(true, command, empty, out, context, handled);
+    EXPECT_TRUE(handled);
   }
 }
 
@@ -456,15 +382,6 @@ TEST(ban, ignores_port)
 namespace nodetool { template class node_server<cryptonote::t_cryptonote_protocol_handler<test_core>>; }
 namespace cryptonote { template class t_cryptonote_protocol_handler<test_core>; }
 
-// ---------------------------------------------------------------------------
-// Anonymity-zone address keying (fix/anon-zone-address-keying)
-//
-// Every inbound connection in an anonymity zone is handed the zone's
-// `unknown()` sentinel as its remote address (`net_node.inl` `set_default_remote`,
-// one call per zone). `is_same_host` used to report two such addresses as the
-// same host, so `drop_connections(addr)` — which severs every connection
-// sharing a host — severed the entire inbound anon population on one bad span.
-// ---------------------------------------------------------------------------
 namespace
 {
   //! A connection id that never varies between runs. `random_generator` would
@@ -475,34 +392,6 @@ namespace
     boost::uuids::uuid u{};
     u.data[15] = n;
     return u;
-  }
-
-  //! One serialized block whose parent is `crypto::null_hash`, so a `test_core`
-  //! holding that hash reports the parent as known and `try_add_next_blocks`
-  //! reaches `prepare_handle_incoming_blocks`.
-  cryptonote::block_complete_entry one_block(const crypto::hash &parent = crypto::null_hash)
-  {
-    cryptonote::block b{};
-    b.major_version = 1;
-    b.minor_version = 1;
-    b.prev_id = parent;
-    b.miner_tx.version = 1;
-    b.miner_tx.unlock_time = 0;
-    cryptonote::block_complete_entry bce{};
-    bce.block = cryptonote::t_serializable_object_to_blob(b);
-    return bce;
-  }
-
-  //! The hash of a block that is never added to anything -- only used as a
-  //! parent identity the queue can be told about.
-  crypto::hash a_parent_hash()
-  {
-    cryptonote::block b{};
-    b.major_version = 1;
-    b.minor_version = 1;
-    b.nonce = 0xabcdef;
-    b.miner_tx.version = 1;
-    return cryptonote::get_block_hash(b);
   }
 
   //! Records what the protocol handler asks the p2p layer to do.
@@ -574,50 +463,6 @@ namespace
   };
 }
 
-TEST(anon_zone_address_keying, host_sweep_does_not_sever_a_zone)
-{
-  test_core pr_core;
-  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
-  recording_endpoint endpoint;
-  cprotocol.set_p2p_endpoint(&endpoint);
-
-  const auto unknown_tor = epee::net_utils::network_address{net::tor_address::unknown()};
-  const boost::uuids::uuid anon1 = fixed_uuid(1);
-  const boost::uuids::uuid anon2 = fixed_uuid(2);
-  endpoint.add(anon1, unknown_tor);
-  endpoint.add(anon2, unknown_tor);
-
-  // Negative limb: the sweep must sever NOTHING when handed an address that
-  // names no host. Before the fix both anon connections were severed, because
-  // `unknown()` compared equal to `unknown()`.
-  cryptonote_protocol_handler_test_seam::drop_connections(cprotocol, unknown_tor);
-  EXPECT_TRUE(endpoint.dropped.empty());
-  // Scoring: the mock models production's `is_blockable` bail, so this limb is
-  // guaranteed by the double rather than by the fix -- it documents the
-  // contract, it does not pin A1. A1's independent observables are the
-  // misleading `MWARNING` and the avoided scan; see the PR body.
-  EXPECT_TRUE(endpoint.host_fails.empty());
-
-  // Positive limb: the sweep still works where the address DOES name a host,
-  // so a guard that over-reached into "never sever" fails loudly here. This is
-  // the public-zone per-host cap's behaviour and it must be untouched.
-  const auto ip = epee::net_utils::network_address{epee::net_utils::ipv4_network_address{0x0100007f, 18080}};
-  const auto ip_other_port = epee::net_utils::network_address{epee::net_utils::ipv4_network_address{0x0100007f, 18081}};
-  const boost::uuids::uuid clear1 = fixed_uuid(3);
-  endpoint.add(clear1, ip_other_port);
-
-  cryptonote_protocol_handler_test_seam::drop_connections(cprotocol, ip);
-  ASSERT_EQ(1u, endpoint.dropped.size());
-  EXPECT_EQ(clear1, endpoint.dropped.front());   // the same host, different port
-  // The sweep scores the host, and `drop_connection(context, true, ...)` scores
-  // each severed peer again, so the count is not 1 -- assert the contract
-  // rather than a number: scoring happened, and it never names an address that
-  // names no host.
-  EXPECT_FALSE(endpoint.host_fails.empty());
-  for (const auto &f : endpoint.host_fails)
-    EXPECT_TRUE(f.first.is_blockable());
-}
-
 
 namespace
 {
@@ -656,7 +501,6 @@ namespace
     explicit NotifyHarness(bool established = true) : cprotocol(core, NULL)
     {
       cprotocol.set_p2p_endpoint(&endpoint);
-      cryptonote_protocol_handler_test_seam::set_synchronized(cprotocol, true);
       bind_harness_hub();
       shekyl_seam_address addr{};
       addr.connector = SHEKYL_CONNECTOR_CLEARNET;
@@ -674,7 +518,6 @@ namespace
       if (established && socket_id != 0)
       {
         shekyl_zone_session_established(socket_id);
-        endpoint.conns.front().m_state = cryptonote::cryptonote_connection_context::state_normal;
       }
     }
 
@@ -695,17 +538,7 @@ namespace
     int notify_txs()
     {
       auto arg = two_txs();
-      return cryptonote_protocol_handler_test_seam::handle_notify_new_transactions(
-          cprotocol, arg, ctx());
-    }
-
-    int notify_block(const cryptonote::blobdata &blob)
-    {
-      cryptonote::NOTIFY_NEW_COMPACT_BLOCK::request arg{};
-      arg.b.block = blob;
-      arg.current_blockchain_height = 1;
-      return cryptonote_protocol_handler_test_seam::handle_notify_new_compact_block(
-          cprotocol, arg, ctx());
+      return cprotocol.handle_notify_new_transactions(0, arg, ctx());
     }
   };
 }
@@ -879,35 +712,17 @@ TEST(attributable_drop, an_unclassified_rejection_does_not_sever)
   EXPECT_EQ(2u, h.core.handle_incoming_tx_calls);
 }
 
-TEST(attributable_drop, an_oversized_announce_declines_without_severing)
-{
-  NotifyHarness h;
-  h.core.check_incoming_block_size_result = false;
-  ASSERT_EQ(1, h.notify_block(cryptonote::blobdata(16, '\x01')));
-  EXPECT_TRUE(h.endpoint.dropped.empty());
-}
 
 
 // The ingress gate drops only a session that has not finished the
-// handshake. A peer that is still synchronising, or paused in standby,
-// has completed it, so the batch reaches the core. The node's own sync
-// is a separate refusal and does not depend on that peer state.
+// handshake, read from the seam's flag (CS-5 F3). A peer's own sync state
+// is not read: the node's own sync is a separate refusal.
 TEST(tx_ingress, a_handshake_complete_peer_is_admitted)
 {
-  const cryptonote::cryptonote_connection_context::state states[] = {
-    cryptonote::cryptonote_connection_context::state_synchronizing,
-    cryptonote::cryptonote_connection_context::state_standby,
-    cryptonote::cryptonote_connection_context::state_normal,
-  };
-  for (const auto state : states)
-  {
-    SCOPED_TRACE(static_cast<int>(state));
-    NotifyHarness h;
-    h.ctx().m_state = state;
-    EXPECT_EQ(1, h.notify_txs());
-    EXPECT_TRUE(h.endpoint.dropped.empty());
-    EXPECT_EQ(2u, h.core.handle_incoming_tx_calls);
-  }
+  NotifyHarness h;
+  EXPECT_EQ(1, h.notify_txs());
+  EXPECT_TRUE(h.endpoint.dropped.empty());
+  EXPECT_EQ(2u, h.core.handle_incoming_tx_calls);
 }
 
 TEST(tx_ingress, a_peer_before_handshake_does_not_reach_the_core)
@@ -915,7 +730,6 @@ TEST(tx_ingress, a_peer_before_handshake_does_not_reach_the_core)
   // The row is on the board and the handshake flag is clear. Covers the
   // gate's "row present, not established" arm. Does not cover a missing hub.
   NotifyHarness h(false);
-  h.ctx().m_state = cryptonote::cryptonote_connection_context::state_before_handshake;
   EXPECT_EQ(1, h.notify_txs());
   EXPECT_EQ(0u, h.core.handle_incoming_tx_calls);
   EXPECT_TRUE(h.endpoint.dropped.empty());
@@ -924,7 +738,7 @@ TEST(tx_ingress, a_peer_before_handshake_does_not_reach_the_core)
 TEST(tx_ingress, an_unsynchronised_node_ignores_the_batch)
 {
   NotifyHarness h;
-  cryptonote_protocol_handler_test_seam::set_synchronized(h.cprotocol, false);
+  h.core.synchronized = false;
   EXPECT_EQ(1, h.notify_txs());
   EXPECT_EQ(0u, h.core.handle_incoming_tx_calls);
   EXPECT_TRUE(h.endpoint.dropped.empty());

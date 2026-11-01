@@ -424,9 +424,9 @@ private:
     {
       // A notification for a kept dial. Rust already recorded
       // SessionAccepted; nothing waits for a reply. A confirm dial is
-      // finished in Rust and is not posted. process_payload_sync_data
-      // returns true on every path, and the size check is this struct,
-      // so a verdict carried nothing back.
+      // finished in Rust and is not posted. The peer's claim is chain
+      // sync's, from the hub's HandshakeResult; the session's
+      // establishment is all this posts onward.
       shekyl_seam_handshake_result result{};
       if (bytes.size() == sizeof(result) && m_config->commands_handler())
       {

@@ -48,23 +48,20 @@
 //! network along configuration lines.
 //!
 //! The same boundary owns the block twin: [`BlockIngest`] is the outcome,
-//! [`DropVerdict`] on a separate slot is still the drop, and
-//! [`BlockAnnounceAction`] / [`BlockSyncAction`] are what P2P does with
-//! those two slots. C++ writes through named constructors and asks
-//! predicates. It never switches on a classification byte, and it does not
-//! compose "record outcome then classify drop" — that pairing lives here.
+//! and [`DropVerdict`] on a separate slot is still the drop. Its C++
+//! writers and the announce and sync actions went with the C++ handler's
+//! sync half (CS-5); what chain sync does with the ingest entry's reply is
+//! [`SyncReplyAction`].
 //! The same crate owns the inbound safety bound ([`InboundCeiling`]): a
 //! tagged descriptor observation in, a bounded ceiling or a named reason
 //! out. The operating-system probe stays at the FFI boundary.
 
 mod block_ingest;
-mod block_peer;
 mod drop_verdict;
 mod inbound_ceiling;
 mod sync_reply;
 
 pub use block_ingest::BlockIngest;
-pub use block_peer::{BlockAnnounceAction, BlockSyncAction};
 pub use drop_verdict::DropVerdict;
 pub use inbound_ceiling::{DescriptorLimit, DescriptorSnapshot, InboundCeiling, UnboundedReason};
 pub use sync_reply::{Invalidate, SyncReply, SyncReplyAction};

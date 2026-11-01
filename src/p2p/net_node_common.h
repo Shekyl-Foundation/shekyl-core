@@ -61,7 +61,6 @@ namespace nodetool
     virtual void record_tx_arrivals(std::vector<cryptonote::blobdata> txs, const boost::uuids::uuid& from)=0;
     virtual bool invoke_notify_to_peer(int command, epee::levin::message_writer message, const epee::net_utils::connection_context_base& context)=0;
     virtual bool drop_connection(const epee::net_utils::connection_context_base& context)=0;
-    virtual void request_callback(const epee::net_utils::connection_context_base& context)=0;
     /// `note` runs on each connection's strand. `then` runs on the strand
     /// that finishes last, or on this thread when there is no connection.
     /// The countdown lives here. The caller does not pass an atomic, and
@@ -97,10 +96,6 @@ namespace nodetool
     virtual bool drop_connection(const epee::net_utils::connection_context_base& context)
     {
       return false;
-    }
-    virtual void request_callback(const epee::net_utils::connection_context_base& context)
-    {
-
     }
     virtual size_t post_each(std::function<void(t_connection_context&)> note, std::function<void()> then)
     {

@@ -27,7 +27,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use shekyl_chain_ingest::ChainRules;
 use shekyl_chain_rules::{AdmissionPolicy, HeaderView, Tip};
-use shekyl_chain_store::store::{ChainStore, ReadSnapshot, SnapshotView, StoreError};
+use shekyl_chain_store::store::{ChainStore, SnapshotView};
 use shekyl_mempool::{stateless, Admission, Duplicate, Judged, Pool, PoolFault};
 use shekyl_types::{TxHash, UnixSeconds};
 use shekyl_wire::Transaction;
@@ -135,30 +135,6 @@ fn now() -> UnixSeconds {
         .map(|duration| duration.as_secs())
         .unwrap_or(0);
     UnixSeconds::from_raw(secs)
-}
-
-/// The installed chain, for the sync reads (`chain_sync_ffi`).
-pub(crate) fn with_store<R>(f: impl FnOnce(&ChainStore) -> R) -> Option<R> {
-    let door = door()?;
-    Some(f(&door.store))
-}
-
-/// One snapshot and the pool, the snapshot taken first.
-///
-/// The ingest writer does not take the pool lock inside the store
-/// write, so this is the same order as the window's pool read and
-/// [`admit_one`]: the transaction answer is one chain and one pool,
-/// not two reads a block apart.
-pub(crate) fn with_snapshot_and_pool<R>(
-    f: impl FnOnce(&ReadSnapshot<'_>, &Pool) -> Result<R, StoreError>,
-) -> Option<Result<R, StoreError>> {
-    let door = door()?;
-    let snap = match door.store.begin_read() {
-        Ok(snap) => snap,
-        Err(error) => return Some(Err(error)),
-    };
-    let pool = lock(&door.pool);
-    Some(f(&snap, &pool))
 }
 
 pub(crate) fn with_pool_mut<R>(f: impl FnOnce(&mut Pool) -> R) -> Option<R> {

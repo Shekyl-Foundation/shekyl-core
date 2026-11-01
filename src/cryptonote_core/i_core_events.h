@@ -43,7 +43,6 @@ namespace cryptonote
     virtual ~i_core_events() noexcept
     {}
 
-    virtual uint64_t get_current_blockchain_height() const = 0;
     virtual bool is_synchronized() const = 0;
 
     /*! Is `txid` still held by the txpool?

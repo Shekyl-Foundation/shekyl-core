@@ -59,6 +59,7 @@
 #include "cryptonote_config.h"
 #include "shekyl/shekyl_ffi.h"
 #include "p2p/seam_board.h"
+#include "p2p/seam_endpoint.h"
 #include "cryptonote_core/cryptonote_core.h"
 #include "net/parse.h"
 #include "net/tor_address.h"
@@ -82,6 +83,24 @@ static inline boost::asio::ip::address_v4 make_address_v4_from_v6(const boost::a
 
 namespace nodetool
 {
+  /// The node's tip as every handshake carries it (CS-5 F4): the one
+  /// source the outbound dial reads too. The node publishes it before the
+  /// seam binds, so none is a defect, answered with an empty payload.
+  inline void handshake_tip(cryptonote::CORE_SYNC_DATA& out)
+  {
+    shekyl_sync_payload tip{};
+    if (shekyl_p2p_handshake_tip(&tip) != SHEKYL_HANDSHAKE_TIP_OK)
+    {
+      MERROR("the node has published no tip: the handshake carries none");
+      out = cryptonote::CORE_SYNC_DATA{};
+      return;
+    }
+    out.current_height = tip.current_height;
+    out.cumulative_difficulty = tip.cumulative_difficulty;
+    out.cumulative_difficulty_top64 = tip.cumulative_difficulty_top64;
+    std::memcpy(out.top_id.data, tip.top_id, sizeof(out.top_id.data));
+  }
+  //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
   node_server<t_payload_net_handler>::~node_server()
   {
@@ -423,8 +442,6 @@ namespace nodetool
     m_nettype = static_cast<cryptonote::network_type>(snapshot.network);
     (void)m_network_zones[epee::net_utils::connector_id::clearnet];
     m_offline = snapshot.offline;
-    if (!snapshot.sync)
-      m_payload_handler.set_no_sync(true);
     bool res = true;
 
     {
@@ -480,17 +497,10 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  typename node_server<t_payload_net_handler>::payload_net_handler& node_server<t_payload_net_handler>::get_payload_object()
-  {
-    return m_payload_handler;
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::run()
   {
     network_zone& public_zone = m_network_zones.at(epee::net_utils::connector_id::clearnet);
     public_zone.m_net_server.add_idle_handler(boost::bind(&node_server<t_payload_net_handler>::idle_worker, this), std::chrono::seconds{1});
-    public_zone.m_net_server.add_idle_handler(boost::bind(&t_payload_net_handler::on_idle, &m_payload_handler), std::chrono::seconds{1});
 
     // Structural floor: one worker besides the lane idle_worker blocks on.
     // Unmeasured. The run record replaces this count.
@@ -527,7 +537,6 @@ namespace nodetool
     if (!zone.m_net_server.is_stop_signal_sent()) {
       m_notifier.on_connection_close(context.m_connection_id);
     }
-    m_payload_handler.on_connection_close(context);
 
     MINFO("["<< epee::net_utils::print_connection_context(context) << "] CLOSE CONNECTION");
   }
@@ -559,7 +568,7 @@ namespace nodetool
   bool node_server<t_payload_net_handler>::do_peer_timed_sync(const epee::net_utils::connection_context_base& context_)
   {
     typename COMMAND_TIMED_SYNC::request arg = AUTO_VAL_INIT(arg);
-    m_payload_handler.get_payload_sync_data(arg.payload_data);
+    handshake_tip(arg.payload_data);
 
     network_zone& zone = m_network_zones.at(epee::net_utils::require_session_connector(context_.m_connector));
     bool r = epee::net_utils::async_invoke_remote_command2<typename COMMAND_TIMED_SYNC::response>(context_, COMMAND_TIMED_SYNC::ID, arg, zone.m_net_server.get_config_object(),
@@ -577,10 +586,6 @@ namespace nodetool
         LOG_WARNING_CC(context, "COMMAND_TIMED_SYNC: failed to handle_remote_peerlist(...), closing connection.");
         m_network_zones.at(epee::net_utils::require_session_connector(context.m_connector)).m_net_server.get_config_object().close(context.m_connection_id );
         add_host_fail(context.m_remote_address);
-      }
-      if (!m_payload_handler.process_payload_sync_data(rsp.payload_data, context, false))
-      {
-        m_network_zones.at(epee::net_utils::require_session_connector(context.m_connector)).m_net_server.get_config_object().close(context.m_connection_id );
       }
     });
 
@@ -693,7 +698,7 @@ namespace nodetool
     {
       zone.second.m_net_server.get_config_object().foreach_connection([this](p2p_connection_context& cntxt)
       {
-        if(cntxt.session_established() && !cntxt.m_in_timedsync)
+        if(shekyl::seam_handshake_established(cntxt.m_connection_id) && !cntxt.m_in_timedsync)
         {
           cntxt.m_in_timedsync = true;
           do_peer_timed_sync(cntxt);
@@ -717,12 +722,6 @@ namespace nodetool
   {
     node_data.network_id = m_network_id;
     return true;
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  void node_server<t_payload_net_handler>::request_callback(const epee::net_utils::connection_context_base& context)
-  {
-    m_network_zones.at(epee::net_utils::require_session_connector(context.m_connector)).m_net_server.get_config_object().request_callback(context.m_connection_id);
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
@@ -832,20 +831,10 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  void node_server<t_payload_net_handler>::callback(p2p_connection_context& context)
+  void node_server<t_payload_net_handler>::on_outbound_handshake(p2p_connection_context& context, const shekyl_seam_handshake_result& /*result*/)
   {
-    m_payload_handler.on_callback(context);
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  void node_server<t_payload_net_handler>::on_outbound_handshake(p2p_connection_context& context, const shekyl_seam_handshake_result& result)
-  {
-    cryptonote::CORE_SYNC_DATA payload{};
-    payload.current_height = result.current_height;
-    payload.cumulative_difficulty = result.cumulative_difficulty;
-    payload.cumulative_difficulty_top64 = result.cumulative_difficulty_top64;
-    std::memcpy(payload.top_id.data, result.top_id, sizeof(payload.top_id.data));
-    m_payload_handler.process_payload_sync_data(payload, context, true);
+    // The peer's sync payload reaches chain sync's owner as the hub's
+    // HandshakeResult (CS-5); nothing here reads it.
     m_notifier.on_session_established(context.m_connection_id, context.m_is_income, context.m_connector);
   }
   //-----------------------------------------------------------------------------------
@@ -868,19 +857,12 @@ namespace nodetool
   template<class t_payload_net_handler>
   int node_server<t_payload_net_handler>::handle_timed_sync(int command, typename COMMAND_TIMED_SYNC::request& arg, typename COMMAND_TIMED_SYNC::response& rsp, p2p_connection_context& context)
   {
-    if(!m_payload_handler.process_payload_sync_data(arg.payload_data, context, false))
-    {
-      LOG_WARNING_CC(context, "Failed to process_payload_sync_data(), dropping connection");
-      drop_connection(context);
-      return 1;
-    }
-
     //fill response
     const epee::net_utils::connector_id zone_type = epee::net_utils::require_session_connector(context.m_connector);
     network_zone& zone = m_network_zones.at(zone_type);
 
     rsp.local_peerlist_new = shekyl::disclose(context.m_connection_id);
-    m_payload_handler.get_payload_sync_data(rsp.payload_data);
+    handshake_tip(rsp.payload_data);
 
     LOG_DEBUG_CC(context, "COMMAND_TIMED_SYNC");
     return 1;
@@ -906,7 +888,7 @@ namespace nodetool
       return 1;
     }
 
-    if(context.session_established())
+    if(shekyl::seam_handshake_established(context.m_connection_id))
     {
       LOG_WARNING_CC(context, "COMMAND_HANDSHAKE came on a connection that already completed one (double COMMAND_HANDSHAKE?)");
       drop_connection(context);
@@ -931,13 +913,6 @@ namespace nodetool
       return 1;
     }
 
-    if(!m_payload_handler.process_payload_sync_data(arg.payload_data, context, true))
-    {
-      LOG_WARNING_CC(context, "COMMAND_HANDSHAKE came, but process_payload_sync_data returned false, dropping connection.");
-      drop_connection(context);
-      return 1;
-    }
-
     m_notifier.on_session_established(context.m_connection_id, context.m_is_income, context.m_connector);
     {
       std::uint64_t socket_id = 0;
@@ -950,7 +925,7 @@ namespace nodetool
     //fill response
     rsp.local_peerlist_new = shekyl::disclose(context.m_connection_id);
     get_local_node_data(azone, rsp.node_data, zone);
-    m_payload_handler.get_payload_sync_data(rsp.payload_data);
+    handshake_tip(rsp.payload_data);
     LOG_DEBUG_CC(context, "COMMAND_HANDSHAKE");
     return 1;
   }
