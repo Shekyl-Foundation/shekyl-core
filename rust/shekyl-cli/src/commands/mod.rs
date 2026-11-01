@@ -631,7 +631,7 @@ fn next_line(
             if presentation.human() {
                 let view = sync_view(rpc);
                 crate::status::print_above_prompt(&crate::status::format_line(
-                    env!("CARGO_PKG_VERSION"),
+                    shekyl_wallet_rpc::VERSION,
                     &crate::status::local_clock(),
                     &view,
                 ));
@@ -692,7 +692,7 @@ fn cmd_version(rpc: &RpcSession) -> VersionReport {
         Ok(val) => Ok(val),
         Err(error) => Err(format!("wallet RPC unreachable: {error}")),
     };
-    version_report(env!("CARGO_PKG_VERSION"), response)
+    version_report(shekyl_wallet_rpc::VERSION, response)
 }
 
 fn show_version(report: &VersionReport) {

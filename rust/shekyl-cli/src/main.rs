@@ -21,7 +21,7 @@ use shekyl_wallet_rpc::Network;
 #[command(
     name = "shekyl-cli",
     about = "Shekyl interactive CLI wallet",
-    version,
+    version = shekyl_wallet_rpc::VERSION,
     disable_help_subcommand = true
 )]
 pub struct Cli {
@@ -90,13 +90,11 @@ pub struct ReplArgs {
 
     /// Directory for wallet files. Default: ~/.shekyl/wallets/<network>/
     /// (created on demand), so wallets on different networks never share a
-    /// directory. Ignored with --rpc-url. (--engine-dir is a hidden alias,
-    /// CU-2.)
+    /// directory. Ignored with --rpc-url.
     #[arg(long, global = true, alias = "engine-dir")]
     wallet_dir: Option<String>,
 
-    /// Open this wallet immediately on startup. (--engine-file is a hidden
-    /// alias, CU-2.)
+    /// Open this wallet immediately on startup.
     #[arg(long, global = true, alias = "engine-file")]
     wallet: Option<String>,
 
@@ -118,7 +116,8 @@ pub struct ReplArgs {
     pub debug: bool,
 
     /// Read the wallet password from this file when `--wallet` is set.
-    /// Required when stdin is not a terminal. Wiped after the wallet opens.
+    /// Required when stdin is not a terminal. The file is left as it is;
+    /// the password read from it is wiped from memory once the wallet opens.
     #[arg(long, global = true, value_name = "PATH")]
     password_file: Option<std::path::PathBuf>,
 
