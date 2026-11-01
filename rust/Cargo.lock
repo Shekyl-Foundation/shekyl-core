@@ -4893,6 +4893,7 @@ dependencies = [
  "shekyl-relay",
  "shekyl-rpc-types",
  "shekyl-runtime",
+ "shekyl-seam",
  "shekyl-store-codec",
  "shekyl-timing-engine",
  "shekyl-transport-layer",

@@ -84,6 +84,13 @@ namespace nodetool
         m_in_timedsync(false)
     {}
 
+    /// The session has finished its handshake: the seam's flag (CS-5 F3),
+    /// set inbound after the C++ handshake and outbound on the dialer's
+    /// result. epee's Levin handler reads it to lift the packet limit
+    /// after a handshake reply; timed sync and the double-handshake
+    /// refusal read it too.
+    bool session_established() const noexcept { return shekyl::seam_handshake_established(this->m_connection_id); }
+
     bool m_in_timedsync;
     std::set<epee::net_utils::network_address> sent_addresses;
   };

@@ -41,6 +41,7 @@ shekyl-miner = { path = "../shekyl-miner" }
 shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
 shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 shekyl-runtime = { path = "../shekyl-runtime" }
+shekyl-seam = { path = "../shekyl-seam" }
 shekyl-timing-engine = { path = "../shekyl-timing-engine" }
 shekyl-relay = { path = "../shekyl-relay" }
 shekyl-transport-layer = { path = "../shekyl-transport-layer" }

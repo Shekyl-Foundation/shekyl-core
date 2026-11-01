@@ -78,7 +78,7 @@ use shekyl_types::{
     AttestationRoot, BlockCount, BlockHash, BlockHeight, ChainCount, CurveTreeRoot, TxHash,
 };
 
-use crate::core::{ConnectionsSnapshot, CoreRpc, P2pRead, PeerEntry, SyncSpansSnapshot};
+use crate::core::{ConnectionsSnapshot, CoreRpc, P2pRead, PeerEntry};
 use crate::ffi;
 
 /// What this daemon **is**: the two identity facts a client checks at
@@ -336,8 +336,6 @@ pub trait P2pFacts: Send + Sync {
     fn net_stats(&self) -> Result<NetStats, FactsFault>;
     /// The live connections and the single instant they were read at.
     fn connections(&self) -> Result<ConnectionsSnapshot, FactsFault>;
-    /// The block-download queue and the stripe this node wants next.
-    fn sync_spans(&self) -> Result<SyncSpansSnapshot, FactsFault>;
     /// The peerlist, white entries then gray. `public_only` selects a
     /// different p2p call, not a filter over one result.
     /// [`P2pRead::Offline`] for a daemon started offline.
@@ -390,10 +388,6 @@ impl P2pFacts for FfiP2pFacts {
 
     fn connections(&self) -> Result<ConnectionsSnapshot, FactsFault> {
         self.core.connections().map_err(FactsFault::from_code)
-    }
-
-    fn sync_spans(&self) -> Result<SyncSpansSnapshot, FactsFault> {
-        self.core.sync_spans().map_err(FactsFault::from_code)
     }
 
     fn peer_list(&self, public_only: bool) -> Result<P2pRead<Vec<PeerEntry>>, FactsFault> {

@@ -33,21 +33,25 @@ use crate::read_facts::{
     AltChainFacts, BlocksAt, ChainReadFacts, ClaimSource, CoinbaseRange, CurveTreeFacts, PowAt,
     PowSeed, ShardCoverage, SpentAt,
 };
+use crate::sync_facts::{SyncViewFacts, SyncViewRead};
 
-/// The chain reads. One object, the three traits the handlers call.
+/// The chain reads. One object, the four traits the handlers call.
 /// The production source is the store.
-pub trait ChainRead: ChainFacts + InfoFacts + ChainReadFacts {
+pub trait ChainRead: ChainFacts + InfoFacts + ChainReadFacts + SyncViewRead {
     /// This object as the chain-facts trait the method functions take.
     fn as_chain_facts(&self) -> &dyn ChainFacts;
     /// This object as the info-facts trait `get_info` takes.
     fn as_info_facts(&self) -> &dyn InfoFacts;
     /// This object as the read-facts trait the store methods take.
     fn as_read_facts(&self) -> &dyn ChainReadFacts;
+    /// This object as chain sync's view, which `sync_info` and
+    /// `get_connections` take.
+    fn as_sync_view(&self) -> &dyn SyncViewRead;
 }
 
 impl<T> ChainRead for T
 where
-    T: ChainFacts + InfoFacts + ChainReadFacts,
+    T: ChainFacts + InfoFacts + ChainReadFacts + SyncViewRead,
 {
     fn as_chain_facts(&self) -> &dyn ChainFacts {
         self
@@ -58,6 +62,10 @@ where
     }
 
     fn as_read_facts(&self) -> &dyn ChainReadFacts {
+        self
+    }
+
+    fn as_sync_view(&self) -> &dyn SyncViewRead {
         self
     }
 }
@@ -419,6 +427,12 @@ impl ChainFacts for ChainReadAbsent {
     }
 
     fn block_at(&self, _at: BlockLookup, _fill_pow_hash: bool) -> Result<BlockAt, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+}
+
+impl SyncViewRead for ChainReadAbsent {
+    fn sync_view(&self) -> Result<SyncViewFacts, FactsFault> {
         Err(FactsFault::NotReady)
     }
 }

@@ -144,9 +144,9 @@ pub(super) enum NativeFail {
 /// Dispatch `method` natively if Rust owns it; `None` hands it to the C++
 /// table. Each arm is one handler call framed as a JSON value.
 ///
-/// Chain rows read the node's store handle. `get_connections` and the sync
-/// spans inside `sync_info` still read the C++ handler: those facts live
-/// there until CS-5 deletes the handler's sync half.
+/// Chain rows read the node's store handle, and chain sync's view is the
+/// node's. The board's connection rows are still read through the C++
+/// node server (slice 4).
 pub(super) async fn native_method(
     state: &Arc<AppState>,
     authority: Authority,
@@ -205,23 +205,30 @@ pub(super) async fn native_method(
             ))
         }
         NativeMethod::SyncInfo => {
-            // Two fact sources, one worker: the chain is the store, the
-            // spans are still the C++ handler's (CS-5). They are not
-            // synchronised with each other — see `methods::sync_info`.
+            // The chain's tip and chain sync's view are the node's; each
+            // session's address is the board's. They are not one snapshot:
+            // see `methods::sync_info`.
             let chain = Arc::clone(&state.handles.chain);
             Some(frame_native(
                 run_blocking(state, move |core| {
-                    crate::methods::sync_info(chain.as_ref(), &FfiP2pFacts::new(core))
+                    crate::methods::sync_info(
+                        chain.as_chain_facts(),
+                        chain.as_sync_view(),
+                        &FfiP2pFacts::new(core),
+                    )
                 })
                 .await,
             ))
         }
-        NativeMethod::Connections => Some(frame_native(
-            run_blocking(state, |core| {
-                crate::methods::get_connections(&FfiP2pFacts::new(core))
-            })
-            .await,
-        )),
+        NativeMethod::Connections => {
+            let chain = Arc::clone(&state.handles.chain);
+            Some(frame_native(
+                run_blocking(state, move |core| {
+                    crate::methods::get_connections(&FfiP2pFacts::new(core), chain.as_sync_view())
+                })
+                .await,
+            ))
+        }
         NativeMethod::LastBlockHeader => {
             let request = match crate::methods::last_block_header_request(params) {
                 Ok(request) => request,

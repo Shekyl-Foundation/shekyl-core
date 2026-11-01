@@ -442,6 +442,7 @@ impl Node {
             offline: args.config.offline(),
             sync: sync_rx,
             latch,
+            view: sync_owner.view(),
             health: pool_health.clone(),
         });
         let mining = Arc::new(MiningControl::new(

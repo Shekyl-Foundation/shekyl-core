@@ -104,7 +104,6 @@ GROUPS = [
             "TxEntryFfi": ("shekyl_rpc_tx_entry", {"where_found": "where"}),
             "NetStatsFactsFfi": "shekyl_rpc_net_stats_facts",
             "ConnectionFactsFfi": "shekyl_rpc_connection_facts",
-            "SyncSpanFactsFfi": "shekyl_rpc_sync_span_facts",
             "FeeEstimateFactsFfi": "shekyl_rpc_fee_estimate_facts",
             "InfoChainFactsFfi": "shekyl_rpc_info_chain_facts",
             "InfoStatusFactsFfi": "shekyl_rpc_info_status_facts",

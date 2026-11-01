@@ -59,7 +59,6 @@
 #include "cryptonote_config.h"
 #include "shekyl/shekyl_ffi.h"
 #include "p2p/seam_board.h"
-#include "p2p/seam_endpoint.h"
 #include "cryptonote_core/cryptonote_core.h"
 #include "net/parse.h"
 #include "net/tor_address.h"
@@ -698,7 +697,7 @@ namespace nodetool
     {
       zone.second.m_net_server.get_config_object().foreach_connection([this](p2p_connection_context& cntxt)
       {
-        if(shekyl::seam_handshake_established(cntxt.m_connection_id) && !cntxt.m_in_timedsync)
+        if(cntxt.session_established() && !cntxt.m_in_timedsync)
         {
           cntxt.m_in_timedsync = true;
           do_peer_timed_sync(cntxt);
@@ -888,7 +887,7 @@ namespace nodetool
       return 1;
     }
 
-    if(shekyl::seam_handshake_established(context.m_connection_id))
+    if(context.session_established())
     {
       LOG_WARNING_CC(context, "COMMAND_HANDSHAKE came on a connection that already completed one (double COMMAND_HANDSHAKE?)");
       drop_connection(context);
