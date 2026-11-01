@@ -14,7 +14,20 @@ use super::super::{Action, Core, DirectoryAnswer, DirectoryFetch, Input, Step};
 use super::probe::{
     arrival, count, probes, published, publishes_inbound, refetches, republishes, secs, uploaded,
 };
-use crate::control::RelayFingerprint;
+use crate::control::{RelayFingerprint, ServiceDescriptor};
+
+/// This service's revision counter in these tests: a directory's copy carrying it
+/// is the current one.
+const OURS: u64 = 7;
+
+/// This service's `desc_current` in these tests: the descriptor `"cur"`,
+/// the one each check's fetches ask for, at [`OURS`].
+fn ours() -> ServiceDescriptor {
+    ServiceDescriptor {
+        descriptor_id: "cur".to_owned(),
+        revision_counter: OURS,
+    }
+}
 
 fn hsdir(n: u8) -> RelayFingerprint {
     RelayFingerprint::from_bytes([n; 20])
@@ -60,7 +73,13 @@ fn checking(fetches: Vec<DirectoryFetch>) -> (Core, Vec<RelayFingerprint>) {
         ended.actions.contains(&Action::CheckDirectories),
         "each probe's check asks for the directories"
     );
-    core.on(Input::DirectoriesDrawn { fetches }, 0);
+    core.on(
+        Input::DirectoriesDrawn {
+            fetches,
+            ours: Some(ours()),
+        },
+        0,
+    );
     let step = core.on_deadline(secs(15));
     assert_eq!(probes(&step), 1, "the probe at the delay's floor");
     let asked = fetched(&step);
@@ -95,10 +114,28 @@ fn found_at_every_directory_and_the_probe_arrives_is_reachable() {
         secs(19),
     );
     for n in 1..=7 {
-        core.on(answered(n, "cur", DirectoryAnswer::Received), secs(20));
+        core.on(
+            answered(
+                n,
+                "cur",
+                DirectoryAnswer::Received {
+                    revision_counter: Some(OURS),
+                },
+            ),
+            secs(20),
+        );
     }
     assert_eq!(core.status().inbound, Inbound::Publishing);
-    let last = core.on(answered(8, "cur", DirectoryAnswer::Received), secs(21));
+    let last = core.on(
+        answered(
+            8,
+            "cur",
+            DirectoryAnswer::Received {
+                revision_counter: Some(OURS),
+            },
+        ),
+        secs(21),
+    );
     let reachable = Inbound::Reachable {
         evidence_at: secs(18),
     };
@@ -132,6 +169,7 @@ fn the_probe_arriving_from_our_cache_with_the_directories_empty_is_a_miss() {
     core.on(
         Input::DirectoriesDrawn {
             fetches: sent(1..=8, "cur", 0),
+            ours: Some(ours()),
         },
         secs(20),
     );
@@ -167,7 +205,16 @@ fn the_probe_arriving_from_our_cache_with_the_directories_empty_is_a_miss() {
 fn one_directory_withholding_is_still_reachable() {
     let (mut core, _) = checking(sent(1..=8, "cur", 0));
     for n in 1..=7 {
-        core.on(answered(n, "cur", DirectoryAnswer::Received), secs(16));
+        core.on(
+            answered(
+                n,
+                "cur",
+                DirectoryAnswer::Received {
+                    revision_counter: Some(OURS),
+                },
+            ),
+            secs(16),
+        );
     }
     core.on(arrival(secs(15), secs(18)), secs(18));
     assert_eq!(
@@ -189,7 +236,16 @@ fn one_directory_withholding_is_still_reachable() {
 fn half_of_the_directories_is_not_enough() {
     let (mut core, _) = checking(sent(1..=8, "cur", 0));
     for n in 1..=4 {
-        core.on(answered(n, "cur", DirectoryAnswer::Received), secs(16));
+        core.on(
+            answered(
+                n,
+                "cur",
+                DirectoryAnswer::Received {
+                    revision_counter: Some(OURS),
+                },
+            ),
+            secs(16),
+        );
     }
     for n in 5..=8 {
         core.on(answered(n, "cur", DirectoryAnswer::NotFound), secs(16));
@@ -218,7 +274,16 @@ fn a_directory_sent_the_other_descriptor_is_not_counted() {
         secs(16),
     );
     for n in 1..=4 {
-        core.on(answered(n, "cur", DirectoryAnswer::Received), secs(17));
+        core.on(
+            answered(
+                n,
+                "cur",
+                DirectoryAnswer::Received {
+                    revision_counter: Some(OURS),
+                },
+            ),
+            secs(17),
+        );
     }
     core.on(arrival(secs(15), secs(18)), secs(18));
     assert!(matches!(core.status().inbound, Inbound::Reachable { .. }));
@@ -260,7 +325,16 @@ fn a_requested_this_check_did_not_send_chooses_nothing() {
         secs(16),
     );
     for n in 1..=4 {
-        core.on(answered(n, "cur", DirectoryAnswer::Received), secs(17));
+        core.on(
+            answered(
+                n,
+                "cur",
+                DirectoryAnswer::Received {
+                    revision_counter: Some(OURS),
+                },
+            ),
+            secs(17),
+        );
     }
     let step = core.on(arrival(secs(15), secs(18)), secs(18));
     assert_eq!(
@@ -307,7 +381,13 @@ fn each_directory_fetch_has_its_own_delay() {
     core.on(uploaded(0), 0);
     let mut fetches = sent(1..=1, "cur", 0);
     fetches.extend(sent(2..=2, "cur", u64::MAX));
-    core.on(Input::DirectoriesDrawn { fetches }, 0);
+    core.on(
+        Input::DirectoriesDrawn {
+            fetches,
+            ours: Some(ours()),
+        },
+        0,
+    );
     let at_floor = core.on_deadline(secs(15));
     assert_eq!(fetched(&at_floor), [hsdir(1)]);
     let at_top = core.on_deadline(secs(60));
@@ -326,6 +406,7 @@ fn an_answer_before_the_send_is_not_evidence() {
     core.on(
         Input::DirectoriesDrawn {
             fetches: sent(1..=1, "cur", u64::MAX),
+            ours: Some(ours()),
         },
         0,
     );
@@ -344,7 +425,16 @@ fn an_answer_before_the_send_is_not_evidence() {
         },
         secs(1),
     );
-    core.on(answered(9, "other", DirectoryAnswer::Received), secs(1));
+    core.on(
+        answered(
+            9,
+            "other",
+            DirectoryAnswer::Received {
+                revision_counter: Some(OURS),
+            },
+        ),
+        secs(1),
+    );
     let at_floor = core.on_deadline(secs(15));
     assert!(fetched(&at_floor).is_empty(), "its delay has not come due");
     let at_top = core.on_deadline(secs(60));
@@ -381,6 +471,7 @@ fn a_draw_that_arrives_while_judging_still_installs() {
     let drawn = core.on(
         Input::DirectoriesDrawn {
             fetches: Vec::new(),
+            ours: Some(ours()),
         },
         secs(19),
     );
@@ -429,4 +520,103 @@ fn a_fetch_waits_from_when_tor_accepts_it() {
     assert_eq!(core.status().inbound, Inbound::Publishing);
     let bound = core.on_deadline(secs(100));
     assert_eq!(refetches(&bound), 1, "both missing, and the probe arrived");
+}
+
+/// **A stale copy is a miss for that directory** (Rick, 2026-11-01). The
+/// directory check compares each directory's copy with this service's
+/// current counter: a copy numbered below ours is one a later upload never
+/// reached, and one numbered above ours is the clock run's, a copy uploaded
+/// before the clock went back that the directory keeps serving. Reachable
+/// needs our copy at more than half. Fails if `answered` counts any
+/// `Received` as found, whatever its counter.
+#[test]
+fn a_stale_directory_copy_is_a_miss() {
+    let stale = |counter| DirectoryAnswer::Received {
+        revision_counter: Some(counter),
+    };
+    // Every copy stale, below and above ours: a miss, with the probe in.
+    let (mut core, _) = checking(sent(1..=8, "cur", 0));
+    for n in 1..=4 {
+        core.on(answered(n, "cur", stale(OURS - 1)), secs(16));
+    }
+    for n in 5..=8 {
+        core.on(answered(n, "cur", stale(OURS + 1)), secs(16));
+    }
+    let first = core.on(arrival(secs(15), secs(18)), secs(18));
+    assert_eq!(refetches(&first), 1, "every copy stale: a miss");
+    assert_eq!(core.status().inbound, Inbound::Publishing);
+
+    // Ours at exactly half: still a miss.
+    let (mut core, _) = checking(sent(1..=8, "cur", 0));
+    for n in 1..=8 {
+        let answer = if n <= 4 { stale(OURS) } else { stale(OURS - 1) };
+        core.on(answered(n, "cur", answer), secs(16));
+    }
+    let half = core.on(arrival(secs(15), secs(18)), secs(18));
+    assert_eq!(refetches(&half), 1, "ours at half is not more than half");
+
+    // Ours at five of eight: Reachable.
+    let (mut core, _) = checking(sent(1..=8, "cur", 0));
+    for n in 1..=8 {
+        let answer = if n <= 5 { stale(OURS) } else { stale(OURS + 1) };
+        core.on(answered(n, "cur", answer), secs(16));
+    }
+    core.on(arrival(secs(15), secs(18)), secs(18));
+    assert_eq!(
+        core.status().inbound,
+        Inbound::Reachable {
+            evidence_at: secs(18)
+        }
+    );
+}
+
+/// **A copy of a descriptor ours does not name counts by being there**
+/// (found live, 2026-11-01 17:00Z). From 12:00 to 00:00 UTC the service's
+/// `desc_current`, the only one `GETINFO hs/service/desc/id` gives, is the
+/// previous time period's, and clients ask for `desc_next`
+/// (`hs_service.c:2127-2139`). Comparing those copies with
+/// `desc_current`'s counter made a healthy node miss twice and republish.
+/// Fails if `answered` compares every copy with ours whatever descriptor
+/// ours names.
+#[test]
+fn a_copy_of_a_descriptor_ours_does_not_name_counts_by_being_there() {
+    let mut core = published();
+    core.on(uploaded(0), 0);
+    core.on(
+        Input::DirectoriesDrawn {
+            fetches: sent(1..=8, "cur", 0),
+            ours: Some(ServiceDescriptor {
+                descriptor_id: "prev".to_owned(),
+                revision_counter: OURS,
+            }),
+        },
+        0,
+    );
+    let launched = core.on_deadline(secs(15));
+    assert_eq!(probes(&launched), 1);
+    core.on(
+        Input::ProbeDialed {
+            minted_at: secs(15),
+        },
+        secs(15),
+    );
+    for n in 1..=8 {
+        core.on(
+            answered(
+                n,
+                "cur",
+                DirectoryAnswer::Received {
+                    revision_counter: Some(2_008_251_960),
+                },
+            ),
+            secs(16),
+        );
+    }
+    core.on(arrival(secs(15), secs(18)), secs(18));
+    assert_eq!(
+        core.status().inbound,
+        Inbound::Reachable {
+            evidence_at: secs(18)
+        }
+    );
 }

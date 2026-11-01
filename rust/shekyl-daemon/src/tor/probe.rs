@@ -17,7 +17,9 @@
 
 use shekyl_ffi::dialer_ffi::ProbeHandshake;
 use shekyl_timing_engine::Tick;
-use shekyl_tor_control_client::control::{Command, RelayFingerprint, TorEvent, UploadRounds};
+use shekyl_tor_control_client::control::{
+    parse_service_descriptor, Command, RelayFingerprint, ServiceDescriptor, TorEvent, UploadRounds,
+};
 use shekyl_tor_control_client::supervisor::{
     round_inputs, DirectoryAnswer, DirectoryFetch, Inbound, InboundCause, Input,
 };
@@ -194,10 +196,14 @@ impl Drive {
 }
 
 /// A probe's check: the directories the latest upload round reached, each
-/// with the descriptor it was sent and its own CSPRNG draw (§4.5). An
-/// empty set is a check that counts nothing, and the probe alone decides.
+/// with the descriptor it was sent and its own CSPRNG draw, and this
+/// service's current revision counter, which each directory's copy is
+/// compared with (§4.5; Rick, 2026-11-01). An empty set is a check that
+/// counts nothing, and the probe alone decides; so is a counter Tor did
+/// not give.
 impl Drive {
-    pub(super) fn directories_drawn(&self) -> Input {
+    pub(super) async fn directories_drawn(&self) -> Input {
+        let ours = self.our_descriptor().await;
         let fetches = self
             .rounds
             .as_ref()
@@ -213,7 +219,41 @@ impl Drive {
                     .collect()
             })
             .unwrap_or_default();
-        Input::DirectoriesDrawn { fetches }
+        Input::DirectoriesDrawn { fetches, ours }
+    }
+
+    /// `GETINFO hs/service/desc/id/<onion>`: the service's `desc_current`
+    /// (tor 0.4.9.14 `control_getinfo.c:569`, `hs_service.c:4222-4242`), its
+    /// blinded key and counter. A copy of that descriptor must carry that
+    /// counter; from 12:00 to 00:00 UTC clients ask for `desc_next` instead,
+    /// whose counter Tor does not give.
+    async fn our_descriptor(&self) -> Option<ServiceDescriptor> {
+        let (control, service) = (self.control.as_ref()?, self.service.as_ref()?);
+        let key = format!("hs/service/desc/id/{}", service.as_str());
+        let reply = control.ask(Command::GetInfo(vec![key])).await;
+        match reply {
+            Ok(reply) => {
+                let ours = parse_service_descriptor(&reply);
+                match &ours {
+                    Some(ours) => tracing::debug!(
+                        target: "tor",
+                        descriptor_id = %ours.descriptor_id,
+                        revision_counter = ours.revision_counter,
+                        "this onion's current descriptor, for the directory check"
+                    ),
+                    None => tracing::debug!(
+                        target: "tor",
+                        status = reply.status(),
+                        "Tor gave no descriptor for this onion; each copy counts by being there"
+                    ),
+                }
+                ours
+            }
+            Err(error) => {
+                tracing::debug!(target: "tor", "this onion's descriptor was not asked ({error})");
+                None
+            }
+        }
     }
 
     /// `HSFETCH` this node's onion from one directory. Tor accepting the
@@ -256,10 +296,12 @@ impl Drive {
     }
 }
 
-/// Tor reported a clock jump while Running (§4.5, "Overdue"): say so, and
-/// draw the probe's delay from the CSPRNG, as a round's probe does.
+/// Tor reported a clock jump while Running (§4.5, "Overdue"): draw the
+/// probe's delay from the CSPRNG, as a round's probe does. Tor's own
+/// `ClockJumped` is already logged; the probe logs itself when it runs, and
+/// does not while the clock is named.
 pub(super) fn jump_probe() -> Input {
-    tracing::info!(target: "tor", "Tor reported a clock jump; probing this node's onion");
+    tracing::debug!(target: "tor", "a probe delay is drawn after Tor's clock jump");
     Input::JumpProbeDrawn {
         draw: shekyl_ffi::tor_link::probe_delay_draw(),
     }
@@ -287,7 +329,8 @@ fn link_inbound(inbound: Inbound) -> shekyl_ffi::zone_ffi::InboundFacet {
         Inbound::Unreachable { cause, since } => InboundFacet::Unreachable {
             cause: match cause {
                 InboundCause::ProbeTimedOut => LinkCause::ProbeTimedOut,
-                InboundCause::DescriptorRejected => LinkCause::DescriptorRejected,
+                InboundCause::UploadsRefused => LinkCause::UploadsRefused,
+                InboundCause::ClockBehind => LinkCause::ClockBehind,
                 InboundCause::DescriptorNotFound => LinkCause::DescriptorNotFound,
             },
             since: Tick::new(since),

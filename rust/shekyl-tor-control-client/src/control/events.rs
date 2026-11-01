@@ -39,10 +39,11 @@ use super::vanguards::RelayFingerprint;
 /// The event types the supervisor subscribes to, in the order its one `SETEVENTS`
 /// names them (§4.2). Nothing else sends `SETEVENTS` on that connection, because
 /// `SETEVENTS` replaces the whole subscription.
-pub const SUPERVISOR_EVENTS: [&str; 7] = [
+pub const SUPERVISOR_EVENTS: [&str; 8] = [
     "STATUS_GENERAL",
     "STATUS_CLIENT",
     "HS_DESC",
+    "HS_DESC_CONTENT",
     "NETWORK_LIVENESS",
     "NOTICE",
     "WARN",
@@ -82,6 +83,8 @@ pub enum TorEvent {
     NetworkLiveness(Liveness),
     /// `HS_DESC`.
     HsDesc(HsDescEvent),
+    /// `HS_DESC_CONTENT`: the copy one directory returned.
+    HsDescContent(super::descriptor::HsDescContent),
     /// A log event: `NOTICE`, `WARN` or `ERR`.
     Log(LogEvent),
     /// An event type outside [`SUPERVISOR_EVENTS`]. It carries nothing: the supervisor
@@ -323,6 +326,7 @@ fn parse_event_line(line: &str) -> TorEvent {
             _ => Liveness::Other,
         }),
         "HS_DESC" => TorEvent::HsDesc(hs_desc(&Fields::of(rest))),
+        "HS_DESC_CONTENT" => TorEvent::HsDescContent(super::descriptor::hs_desc_content(rest)),
         "NOTICE" => log(LogSeverity::Notice, rest),
         "WARN" => log(LogSeverity::Warn, rest),
         "ERR" => log(LogSeverity::Err, rest),
@@ -513,6 +517,7 @@ mod tests {
                 "STATUS_GENERAL",
                 "STATUS_CLIENT",
                 "HS_DESC",
+                "HS_DESC_CONTENT",
                 "NETWORK_LIVENESS",
                 "NOTICE",
                 "WARN",
@@ -524,7 +529,7 @@ mod tests {
                 .to_wire()
                 .expect("renders")
                 .as_str(),
-            "SETEVENTS STATUS_GENERAL STATUS_CLIENT HS_DESC NETWORK_LIVENESS NOTICE WARN ERR"
+            "SETEVENTS STATUS_GENERAL STATUS_CLIENT HS_DESC HS_DESC_CONTENT NETWORK_LIVENESS NOTICE WARN ERR"
         );
     }
 

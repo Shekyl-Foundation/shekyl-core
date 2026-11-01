@@ -40,6 +40,7 @@ pub mod actor;
 pub mod auth;
 pub mod bootstrap;
 pub mod consensus;
+pub mod descriptor;
 pub mod encoding;
 mod event_lex;
 pub mod events;
@@ -62,6 +63,10 @@ pub use actor::{
 };
 pub use auth::{parse_authchallenge, read_cookie_file, AuthError, ServerHash, ServerNonce};
 pub use bootstrap::{parse_bootstrap_progress, BootstrapState};
+pub use descriptor::{
+    parse_consensus_valid_after, parse_service_descriptor, revision_counter, HsDescContent,
+    ServiceDescriptor,
+};
 pub use events::{
     parse_event, Bootstrap, BootstrapProblem, ClientStatus, ClockSkew, GeneralStatus, HsDescAction,
     HsDescEvent, Liveness, LogEvent, LogSeverity, Recommendation, Severity, TorEvent,

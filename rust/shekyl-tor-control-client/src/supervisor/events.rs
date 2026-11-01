@@ -8,8 +8,8 @@
 //! Anything this module does not name is `None`. The core never sees it.
 
 use crate::control::{
-    Bootstrap, ClientStatus, GeneralStatus, HsDescAction, HsDescEvent, Liveness, Recommendation,
-    RoundMark, TorEvent,
+    Bootstrap, ClientStatus, GeneralStatus, HsDescAction, HsDescContent, HsDescEvent, Liveness,
+    Recommendation, RoundMark, TorEvent,
 };
 
 use super::core::{DirectoryAnswer, Input, RoundEnd};
@@ -17,10 +17,13 @@ use super::core::{DirectoryAnswer, Input, RoundEnd};
 /// A fetch of this node's onion, as the directory check reads it (§4.5).
 /// The caller keeps only events for its own address. `REQUESTED` names the
 /// directory and the descriptor Tor's client asks for; a line missing
-/// either is not a fetch this check sent. `RECEIVED` and `FAILED` with a
-/// descriptor id are a directory's answer (an upload's `FAILED` carries no
-/// id and is the round coalescer's). `REASON=NOT_FOUND` is the directory
-/// not having it; any other reason says nothing about the descriptor.
+/// either is not a fetch this check sent. `FAILED` with a descriptor id is
+/// a directory's answer, except an upload's refusal (`UPLOAD_REJECTED`),
+/// which carries the id too and is the round coalescer's. `REASON=NOT_FOUND` is the directory not having it;
+/// any other reason says nothing about the descriptor. `RECEIVED` is not
+/// the answer: the copy's counter is, and it comes in the
+/// `HS_DESC_CONTENT` Tor sends right after (tor 0.4.9.14
+/// `hs_client.c:1685-1689`), read by [`directory_content_input_of`].
 #[must_use]
 pub fn directory_input_of(event: &HsDescEvent) -> Option<Input> {
     let answer = match event.action {
@@ -30,7 +33,11 @@ pub fn directory_input_of(event: &HsDescEvent) -> Option<Input> {
                 descriptor_id: event.descriptor_id.clone()?,
             });
         }
-        HsDescAction::Received => DirectoryAnswer::Received,
+        // An upload's refusal carries the descriptor id too
+        // (`dirclient.c:2815`); it is the round coalescer's, never an answer.
+        HsDescAction::Failed if event.reason.as_deref() == Some("UPLOAD_REJECTED") => {
+            return None;
+        }
         HsDescAction::Failed if event.descriptor_id.is_some() => {
             if event.reason.as_deref() == Some("NOT_FOUND") {
                 DirectoryAnswer::NotFound
@@ -44,6 +51,24 @@ pub fn directory_input_of(event: &HsDescEvent) -> Option<Input> {
         hsdir: event.hsdir?,
         descriptor_id: event.descriptor_id.clone(),
         answer,
+    })
+}
+
+/// The copy a directory returned for a fetch Tor stored (`HS_DESC_CONTENT`),
+/// as the directory check reads it (§4.5): its revision counter against
+/// this service's. Tor sends it for every copy it decoded, also one its
+/// cache then discards for a lower counter (`hs_cache.c:837-842`), so each
+/// directory's copy is seen. The caller keeps only events for its own
+/// address. A decode failure sends `FAILED REASON=BAD_DESC` first, which
+/// already answered that directory.
+#[must_use]
+pub fn directory_content_input_of(content: &HsDescContent) -> Option<Input> {
+    Some(Input::DirectoryAnswered {
+        hsdir: content.hsdir?,
+        descriptor_id: content.descriptor_id.clone(),
+        answer: DirectoryAnswer::Received {
+            revision_counter: content.revision_counter,
+        },
     })
 }
 
@@ -108,6 +133,7 @@ pub fn input_of(event: &TorEvent) -> Option<Input> {
             _ => None,
         },
         TorEvent::HsDesc(_)
+        | TorEvent::HsDescContent(_)
         | TorEvent::Log(_)
         | TorEvent::Unsubscribed
         | TorEvent::NetworkLiveness(Liveness::Other) => None,
@@ -179,10 +205,14 @@ const HANDSHAKE_CLOSED_REASON: &str = "DONE";
 
 /// The inputs a round's marks carry (§4.5, §4.4). A round's end is
 /// [`Input::UploadRoundEnded`], with one `draw()` for the probe's delay: a
-/// round with an upload that succeeded schedules the probe, one in which
-/// every upload ended, none succeeded and at least one failed is
-/// Service-class evidence, and one that still has an upload unfinished, or
-/// whose ends were lost, is neither. A round's start and its first upload
+/// round with an upload that succeeded schedules the probe, and one with
+/// none is not uploaded. Either carries its uploads and how many of them a
+/// directory refused: more than half refused is the clock's signature,
+/// and no republish follows it (Rick, 2026-11-01). Uploads that never
+/// reported an end count among the uploads and not among the refused: a
+/// refusal is reported within seconds (the clock VM run of 2026-11-01), so
+/// an unfinished upload is unknown, and a round that is not a refused
+/// majority on what it reported is not called one. A round's start and its first upload
 /// are inputs too: the probe follows the round's end, or
 /// `Policy::round_wait` after its first upload, whichever comes first
 /// (Rick, 2026-10-29), and a round open too long is counted. Each of the
@@ -196,15 +226,16 @@ pub fn round_inputs(marks: &[RoundMark], mut draw: impl FnMut() -> u64) -> Vec<I
             RoundMark::Ended {
                 uploaded,
                 failed,
+                refused,
                 unfinished,
             } => Input::UploadRoundEnded {
                 end: if uploaded > 0 {
                     RoundEnd::Uploaded
-                } else if failed > 0 && unfinished == 0 {
-                    RoundEnd::FailedAll
                 } else {
-                    RoundEnd::Unknown
+                    RoundEnd::NotUploaded
                 },
+                uploads: uploaded.saturating_add(failed).saturating_add(unfinished),
+                refused,
                 draw: draw(),
             },
         })
@@ -232,7 +263,8 @@ fn outbound_blocked(problem: &crate::control::BootstrapProblem) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        clock_evidence_of, directory_input_of, input_of, round_inputs, CERTIFICATE_OUT_OF_DATE,
+        clock_evidence_of, directory_content_input_of, directory_input_of, input_of, round_inputs,
+        CERTIFICATE_OUT_OF_DATE,
     };
     use crate::control::RoundMark;
     use crate::control::{
@@ -242,11 +274,12 @@ mod tests {
 
     /// A round's marks become the core's inputs: its start, its first upload
     /// and its end, each upload and end with a draw of its own. A round with a
-    /// success ends as the probe's trigger, one in which every upload ended
-    /// and one failed as the Service evidence, and one that still has an
-    /// upload unfinished, or whose ends were lost, as neither. Mapping every
-    /// `HS_DESC FAILED` to a republish, or treating a stuck round's open
-    /// uploads as a failed round, fails this.
+    /// success ends as the probe's trigger, and one without as not uploaded.
+    /// Each end carries every upload the round began, and the refused ones
+    /// among the failed: the core weighs the refusals against all of them
+    /// (Rick, 2026-11-01). Fails if `round_inputs` counts only the ended
+    /// uploads (a resync's open ones then let a minority of refusals pass as
+    /// a majority), or drops `refused`.
     #[test]
     fn a_rounds_marks_are_its_start_first_upload_and_end() {
         let mut draws = 0_u64..;
@@ -258,6 +291,7 @@ mod tests {
                 RoundMark::Ended {
                     uploaded: 12,
                     failed: 1,
+                    refused: 0,
                     unfinished: 3,
                 },
             ],
@@ -270,60 +304,55 @@ mod tests {
                 Input::FirstUploaded { draw: 0 },
                 Input::UploadRoundEnded {
                     end: RoundEnd::Uploaded,
+                    uploads: 16,
+                    refused: 0,
                     draw: 1
                 }
             ]
         );
-        let failed = round_inputs(
+        // The clock VM run's rounds: 7 of 8 refused per descriptor, one
+        // accepted.
+        let refused = round_inputs(
             &[RoundMark::Ended {
-                uploaded: 0,
-                failed: 16,
+                uploaded: 2,
+                failed: 14,
+                refused: 14,
                 unfinished: 0,
             }],
             &mut draw,
         );
         assert_eq!(
-            failed,
+            refused,
             [Input::UploadRoundEnded {
-                end: RoundEnd::FailedAll,
+                end: RoundEnd::Uploaded,
+                uploads: 16,
+                refused: 14,
                 draw: 2
             }]
         );
-        let lost = round_inputs(
-            &[RoundMark::Ended {
-                uploaded: 0,
-                failed: 0,
-                unfinished: 16,
-            }],
-            &mut draw,
-        );
-        assert_eq!(
-            lost,
-            [Input::UploadRoundEnded {
-                end: RoundEnd::Unknown,
-                draw: 3
-            }]
-        );
         // A stuck round, or a resync, reports the uploads that never ended.
-        // One failure beside them is not a round in which every upload failed.
+        // They count among the round's uploads.
         let open = round_inputs(
             &[RoundMark::Ended {
                 uploaded: 0,
-                failed: 1,
-                unfinished: 15,
+                failed: 6,
+                refused: 6,
+                unfinished: 10,
             }],
             &mut draw,
         );
         assert_eq!(
             open,
             [Input::UploadRoundEnded {
-                end: RoundEnd::Unknown,
-                draw: 4
+                end: RoundEnd::NotUploaded,
+                uploads: 16,
+                refused: 6,
+                draw: 3
             }]
         );
         assert_eq!(
             round_inputs(&[RoundMark::FirstUploaded], &mut draw),
-            [Input::FirstUploaded { draw: 5 }]
+            [Input::FirstUploaded { draw: 4 }]
         );
     }
 
@@ -517,11 +546,13 @@ mod tests {
 
     /// Tor's own words for a fetch of this onion, as the directory check
     /// reads them, from the lines the VM run of 2026-11-01 recorded: a
-    /// `REQUESTED` names the descriptor asked for; `RECEIVED` and `FAILED`
-    /// with an id are an answer, `NOT_FOUND` the only reason that says the
-    /// directory lacks it; an upload's `FAILED` (no id) is not an answer.
-    /// Mapping every `FAILED` to `NotFound`, or reading an upload's end as
-    /// an answer, fails this.
+    /// `REQUESTED` names the descriptor asked for; `FAILED` with an id is an
+    /// answer, `NOT_FOUND` the only reason that says the directory lacks it;
+    /// an upload's `FAILED` (no id) is not an answer. `RECEIVED` is not an
+    /// answer either: the copy's `HS_DESC_CONTENT`, with its counter, is
+    /// (`a_directorys_copy_is_the_checks_answer`). Mapping every `FAILED` to
+    /// `NotFound`, reading an upload's end as an answer, or answering at
+    /// `RECEIVED` (a stale copy would count as found) fails this.
     #[test]
     fn a_fetchs_events_are_the_directory_checks_inputs() {
         use crate::control::{parse_event, RelayFingerprint, ReplyFramer};
@@ -554,11 +585,8 @@ mod tests {
         );
         assert_eq!(
             read(format!("650 HS_DESC RECEIVED {onion} NO_AUTH {dir} {key}")),
-            Some(Input::DirectoryAnswered {
-                hsdir,
-                descriptor_id: Some(key.to_owned()),
-                answer: DirectoryAnswer::Received,
-            })
+            None,
+            "the copy's counter answers, in the event that follows"
         );
         assert_eq!(
             read(format!(
@@ -582,14 +610,66 @@ mod tests {
         );
         assert_eq!(
             read(format!(
-                "650 HS_DESC FAILED {onion} UNKNOWN {dir} REASON=UPLOAD_REJECTED"
+                "650 HS_DESC FAILED {onion} NO_AUTH {dir} {key} REASON=UPLOAD_REJECTED"
             )),
             None,
-            "an upload's end is the round coalescer's"
+            "an upload's refusal, which carries the id, is the round coalescer's"
         );
         assert_eq!(
             read(format!("650 HS_DESC UPLOADED {onion} UNKNOWN {dir}")),
             None
+        );
+    }
+
+    /// **A directory's copy is the check's answer, with its counter** (Rick,
+    /// 2026-11-01): the `HS_DESC_CONTENT` Tor sends after it stored a fetch
+    /// names the directory and carries the copy, and its `revision-counter`
+    /// is what the core compares with ours. A decode failure's empty body
+    /// carries no counter. Fails if `directory_content_input_of` drops the
+    /// counter or the directory.
+    #[test]
+    fn a_directorys_copy_is_the_checks_answer() {
+        use crate::control::{parse_event, RelayFingerprint, ReplyFramer};
+        use crate::supervisor::DirectoryAnswer;
+        let onion = "dslbwwu6sfukamiltaij744ly3aqhtl3lbi7e6mdzv6m6hha425mmhqd";
+        let dir = "$95B556218614D4F2A3B0F24329AD31103D31FFF6~relay";
+        let key = "nFQ9sNMB8qvVnYKG0QxhL4hxuVM0a4gzzBIB+Eb04/E";
+        let read = |body: &str| {
+            let mut framer = ReplyFramer::default();
+            framer.push_bytes(
+                format!("650+HS_DESC_CONTENT {onion} {key} {dir}\r\n{body}.\r\n650 OK\r\n")
+                    .as_bytes(),
+            );
+            let reply = framer
+                .next_reply()
+                .expect("frames")
+                .expect("one complete reply");
+            match parse_event(&reply) {
+                Some(TorEvent::HsDescContent(content)) => directory_content_input_of(&content),
+                other => panic!("not HS_DESC_CONTENT: {other:?}"),
+            }
+        };
+        let hsdir =
+            RelayFingerprint::parse("95B556218614D4F2A3B0F24329AD31103D31FFF6").expect("hex");
+        assert_eq!(
+            read("hs-descriptor 3\r\nrevision-counter 3929208370\r\nsignature x\r\n"),
+            Some(Input::DirectoryAnswered {
+                hsdir,
+                descriptor_id: Some(key.to_owned()),
+                answer: DirectoryAnswer::Received {
+                    revision_counter: Some(3_929_208_370),
+                },
+            })
+        );
+        assert_eq!(
+            read(""),
+            Some(Input::DirectoryAnswered {
+                hsdir,
+                descriptor_id: Some(key.to_owned()),
+                answer: DirectoryAnswer::Received {
+                    revision_counter: None,
+                },
+            })
         );
     }
 }

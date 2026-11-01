@@ -43,10 +43,15 @@ const COUNTER_CEILING: u32 = u32::MAX;
 /// round open until then; a consumer that sees the sink drop events calls
 /// [`Self::resync`] to end it at once.
 ///
-/// Only an upload's own end closes it. A `FAILED` that carries a descriptor id is a
-/// fetch's (the self-probe fetches our own descriptor), and closes nothing. An
-/// `UPLOADED` or `FAILED` naming an HSDir with no open upload, as when the subscription
-/// began mid-round, is ignored.
+/// Only an upload's own end closes it. Tor 0.4.9.14 ends an upload in one place
+/// (`dirclient.c:2803-2827`, `handle_response_upload_hsdesc`): `UPLOADED` on 200,
+/// with no descriptor id, and `FAILED` with the descriptor id and `REASON=UPLOAD_REJECTED`
+/// on 400 or `REASON=UNEXPECTED` on any other status; a connection that fails sends
+/// nothing, and leaves the upload unfinished. A fetch's `FAILED` carries the descriptor
+/// id too, with its own reasons (`NOT_FOUND`, `BAD_DESC`, and `UNEXPECTED` as well), so a
+/// `FAILED` closes an upload only with an upload's reason and only an open upload to
+/// that HSDir with that descriptor. An `UPLOADED` or `FAILED` naming an HSDir with no
+/// open upload, as when the subscription began mid-round, is ignored.
 ///
 /// **Where each descriptor went** ([`Self::directories`]): the directories whose
 /// upload succeeded, each with the descriptor id (the blinded key) its `UPLOAD`
@@ -59,6 +64,8 @@ pub struct UploadRounds {
     open: Vec<(RelayFingerprint, Option<String>)>,
     uploaded: u32,
     failed: u32,
+    /// Of `failed`, the uploads a directory refused (`REASON=UPLOAD_REJECTED`).
+    refused: u32,
     triggered: bool,
     /// The open round's successful uploads.
     current: Vec<UploadedTo>,
@@ -75,6 +82,22 @@ pub struct UploadedTo {
     pub descriptor_id: String,
 }
 
+/// The `REASON` a directory gives an upload it refused.
+const UPLOAD_REJECTED: &str = "UPLOAD_REJECTED";
+
+/// The `REASON` of an upload that got an unexpected HTTP status
+/// (`dirclient.c:2824`). A fetch can carry it too, so it closes only an open upload
+/// of the same descriptor.
+const UNEXPECTED: &str = "UNEXPECTED";
+
+/// How one upload ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Closed {
+    Uploaded,
+    Failed,
+    Refused,
+}
+
 /// A boundary in a round of uploads, reported by [`UploadRounds::observe`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoundMark {
@@ -89,6 +112,10 @@ pub enum RoundMark {
         uploaded: u32,
         /// Uploads that failed.
         failed: u32,
+        /// Of those, the uploads a directory refused (`REASON=UPLOAD_REJECTED`):
+        /// it holds a copy whose revision counter is not below this one's
+        /// (tor 0.4.9.14 `hs_cache.c:185`).
+        refused: u32,
         /// Uploads that began and reported no end.
         unfinished: u32,
     },
@@ -103,6 +130,7 @@ impl UploadRounds {
             open: Vec::new(),
             uploaded: 0,
             failed: 0,
+            refused: 0,
             triggered: false,
             current: Vec::new(),
             last: Vec::new(),
@@ -151,21 +179,43 @@ impl UploadRounds {
                 self.open.push((hsdir, event.descriptor_id.clone()));
                 marks
             }
-            HsDescAction::Uploaded => self.close(hsdir, true),
-            HsDescAction::Failed if event.descriptor_id.is_none() => self.close(hsdir, false),
+            HsDescAction::Uploaded => self.close(hsdir, None, Closed::Uploaded),
+            HsDescAction::Failed => {
+                let reason = event.reason.as_deref();
+                let an_uploads_end = event.descriptor_id.is_none()
+                    || matches!(reason, Some(UPLOAD_REJECTED | UNEXPECTED));
+                if !an_uploads_end {
+                    return Vec::new();
+                }
+                let closed = if reason == Some(UPLOAD_REJECTED) {
+                    Closed::Refused
+                } else {
+                    Closed::Failed
+                };
+                self.close(hsdir, event.descriptor_id.as_deref(), closed)
+            }
             _ => Vec::new(),
         }
     }
 
-    fn close(&mut self, hsdir: RelayFingerprint, succeeded: bool) -> Vec<RoundMark> {
-        let Some(at) = self.open.iter().position(|(open, _)| *open == hsdir) else {
+    /// End the earliest open upload to `hsdir`, of `descriptor` when the end
+    /// names one.
+    fn close(
+        &mut self,
+        hsdir: RelayFingerprint,
+        descriptor: Option<&str>,
+        closed: Closed,
+    ) -> Vec<RoundMark> {
+        let Some(at) = self.open.iter().position(|(open, id)| {
+            *open == hsdir && descriptor.is_none_or(|descriptor| id.as_deref() == Some(descriptor))
+        }) else {
             return Vec::new();
         };
         // `remove`, not `swap_remove`: the earliest open upload to a directory
         // is the one an end pairs with.
         let (_, descriptor_id) = self.open.remove(at);
         let mut marks = Vec::new();
-        if succeeded {
+        if closed == Closed::Uploaded {
             if let Some(descriptor_id) = descriptor_id {
                 self.current.push(UploadedTo {
                     hsdir,
@@ -179,6 +229,9 @@ impl UploadRounds {
             }
         } else {
             self.failed += 1;
+            if closed == Closed::Refused {
+                self.refused += 1;
+            }
         }
         if self.open.is_empty() {
             marks.push(self.end());
@@ -200,11 +253,13 @@ impl UploadRounds {
         let mark = RoundMark::Ended {
             uploaded: self.uploaded,
             failed: self.failed,
+            refused: self.refused,
             unfinished: u32::try_from(self.open.len()).unwrap_or(COUNTER_CEILING),
         };
         self.open.clear();
         self.uploaded = 0;
         self.failed = 0;
+        self.refused = 0;
         self.triggered = false;
         if !self.current.is_empty() {
             self.last = std::mem::take(&mut self.current);
@@ -290,6 +345,7 @@ mod tests {
             [RoundMark::Ended {
                 uploaded: 2,
                 failed: 1,
+                refused: 0,
                 unfinished: 0
             }]
         );
@@ -306,6 +362,7 @@ mod tests {
                 RoundMark::Ended {
                     uploaded: 1,
                     failed: 0,
+                    refused: 0,
                     unfinished: 0
                 }
             ]
@@ -322,6 +379,7 @@ mod tests {
             [RoundMark::Ended {
                 uploaded: 0,
                 failed: 1,
+                refused: 0,
                 unfinished: 0
             }]
         );
@@ -371,6 +429,7 @@ mod tests {
                 RoundMark::Ended {
                     uploaded: 1,
                     failed: 0,
+                    refused: 0,
                     unfinished: 0
                 }
             ],
@@ -400,6 +459,7 @@ mod tests {
                 RoundMark::Ended {
                     uploaded: 1,
                     failed: 0,
+                    refused: 0,
                     unfinished: 1
                 },
                 RoundMark::Started
@@ -412,6 +472,7 @@ mod tests {
                 RoundMark::Ended {
                     uploaded: 1,
                     failed: 0,
+                    refused: 0,
                     unfinished: 0
                 }
             ]
@@ -441,6 +502,7 @@ mod tests {
                 RoundMark::Ended {
                     uploaded: 1,
                     failed: 0,
+                    refused: 0,
                     unfinished: 1
                 },
                 RoundMark::Started
@@ -461,6 +523,7 @@ mod tests {
             Some(RoundMark::Ended {
                 uploaded: 0,
                 failed: 0,
+                refused: 0,
                 unfinished: 3
             })
         );
@@ -476,6 +539,7 @@ mod tests {
                 RoundMark::Ended {
                     uploaded: 1,
                     failed: 0,
+                    refused: 0,
                     unfinished: 0
                 }
             ]
@@ -496,6 +560,7 @@ mod tests {
             Some(RoundMark::Ended {
                 uploaded: 0,
                 failed: 0,
+                refused: 0,
                 unfinished: 2
             })
         );
@@ -511,14 +576,15 @@ mod tests {
                 RoundMark::Ended {
                     uploaded: 1,
                     failed: 0,
+                    refused: 0,
                     unfinished: 0
                 }
             ]
         );
     }
 
-    /// A fetch's `FAILED` (it carries a descriptor id), another address's events, and
-    /// an end for an HSDir with no open upload close nothing.
+    /// A fetch's `FAILED` (a descriptor id and no upload's reason), another
+    /// address's events, and an end for an HSDir with no open upload close nothing.
     #[test]
     fn only_an_uploads_own_end_closes_it() {
         use HsDescAction::{Failed, Upload, Uploaded};
@@ -531,6 +597,49 @@ mod tests {
             ServiceId::parse("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         assert!(rounds.observe(&elsewhere).is_empty());
         assert!(rounds.in_round());
+    }
+
+    /// **An upload's refusal names its descriptor, and ends it** (the clock VM run of
+    /// 2026-11-01, 19:47Z: eight refusals in a second, and the round stayed open five
+    /// minutes because a `FAILED` with an id was read as a fetch's). Lines as tor
+    /// 0.4.9.14 writes them: an upload's `FAILED` goes through
+    /// `hs_control_desc_event_failed` with the blinded key (`dirclient.c:2815`). A
+    /// refusal for another descriptor on the same HSDir closes nothing; `UNEXPECTED` is
+    /// a failure, not a refusal; a fetch's `NOT_FOUND` closes nothing. Fails if `observe`
+    /// ignores a `FAILED` that carries an id again, or `close` ignores the id.
+    #[test]
+    fn an_uploads_refusal_names_its_descriptor_and_ends_it() {
+        let address = ServiceId::parse(CAPTURED_ONION).expect("address");
+        let one = "$C5F03E7A798CA237E7BDD44091BEFE35F2F59AE1~relay";
+        let two = "$1C7BB0BBD04DF9B89FD3A95017355DE946B51279~relay";
+        let desc = "6PZZop7jRpfFu0Wf1bew3nmlfJEewJOL4lg5nilPDNM";
+        let other = "GOkbpjFN0/2R6w08BkOWd3Zj62ZDCvu7bVmkseOLvcY";
+        let mut rounds = UploadRounds::new(address);
+        for hsdir in [one, two] {
+            rounds.observe(&hs_desc_event(&format!(
+                "HS_DESC UPLOAD {CAPTURED_ONION} UNKNOWN {hsdir} {desc}"
+            )));
+        }
+        // Neither closes `one`'s upload, so `two`'s end leaves the round open.
+        for line in [
+            format!("HS_DESC FAILED {CAPTURED_ONION} NO_AUTH {one} {other} REASON=UPLOAD_REJECTED"),
+            format!("HS_DESC FAILED {CAPTURED_ONION} NO_AUTH {one} {desc} REASON=NOT_FOUND"),
+            format!("HS_DESC FAILED {CAPTURED_ONION} NO_AUTH {two} {desc} REASON=UNEXPECTED"),
+        ] {
+            assert!(rounds.observe(&hs_desc_event(&line)).is_empty(), "{line}");
+        }
+        assert!(rounds.in_round(), "one upload is still open");
+        assert_eq!(
+            rounds.observe(&hs_desc_event(&format!(
+                "HS_DESC FAILED {CAPTURED_ONION} NO_AUTH {one} {desc} REASON=UPLOAD_REJECTED"
+            ))),
+            [RoundMark::Ended {
+                uploaded: 0,
+                failed: 2,
+                refused: 1,
+                unfinished: 0
+            }]
+        );
     }
 
     fn round_event_for(action: HsDescAction, hsdir: u8, descriptor: Option<&str>) -> HsDescEvent {

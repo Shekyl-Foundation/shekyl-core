@@ -41,7 +41,7 @@ use super::directories::{
     DirectoryAnswer, DirectoryCheck, DirectoryFetch, DirectoryHalf, DirectoryVerdict,
 };
 use super::{duration_ns, Action, Core, Duty, Phase, RoundEnd};
-use crate::control::RelayFingerprint;
+use crate::control::{RelayFingerprint, ServiceDescriptor};
 
 /// The probe's place in its round.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -143,16 +143,32 @@ impl Core {
         Vec::new()
     }
 
-    /// A round ended. One in which an upload succeeded confirms the onion is
-    /// published, as `ADD_ONION`'s reply does, and schedules the round's one
-    /// probe unless the round's wait already did; a probe already scheduled,
-    /// in flight or being refetched is not doubled. One in which every upload
-    /// ended, none succeeded and at least one failed is Service-class
-    /// evidence: the onion is unreachable, and is published again. A round
-    /// that still has an upload unfinished, or whose ends were lost, says
-    /// nothing.
-    pub(super) fn round_ended(&mut self, now: u64, end: RoundEnd, draw: u64) -> Vec<Action> {
+    /// A round ended. One in which more than half of the uploads were
+    /// refused names refused uploads and republishes nothing: a republish
+    /// cannot get past a directory holding a higher counter (§4.5, "Refused
+    /// rounds"; Rick, 2026-11-01). Otherwise refused uploads clear, and a
+    /// round in which an upload succeeded confirms the onion is published,
+    /// as `ADD_ONION`'s reply does, and schedules the round's one probe unless
+    /// the round's wait already did. A round with no upload says nothing
+    /// about the onion: Tor retries its own failed uploads. It does end a
+    /// republish's wait for a judgment, with nothing to judge.
+    pub(super) fn round_ended(
+        &mut self,
+        now: u64,
+        end: RoundEnd,
+        uploads: u32,
+        refused: u32,
+        draw: u64,
+    ) -> Vec<Action> {
         let track = self.round.take();
+        if uploads > 0 && u64::from(refused) * 2 > u64::from(uploads) {
+            return self.uploads_refused(now);
+        }
+        // A round with no upload is not the latest round of uploads: it
+        // leaves refused uploads standing.
+        if uploads > 0 {
+            self.uploads_accepted();
+        }
         match end {
             RoundEnd::Uploaded => {
                 let mut actions = self.onion_published();
@@ -161,17 +177,21 @@ impl Core {
                 }
                 actions
             }
-            RoundEnd::FailedAll if self.onion_done() => {
-                self.inbound_down(now, InboundCause::DescriptorRejected)
+            RoundEnd::NotUploaded => {
+                self.republish_failed(now);
+                Vec::new()
             }
-            RoundEnd::FailedAll | RoundEnd::Unknown => Vec::new(),
         }
     }
 
     /// The round's one probe, or the jump's: scheduled while Running with
-    /// none in hand.
+    /// none in hand, and not while a republish cannot help: its directory
+    /// fetches would go out before the probe's own gate drops the check.
     fn trigger(&mut self, now: u64, draw: u64) -> Vec<Action> {
-        if matches!(self.phase, Phase::Running { .. }) && self.probe == Probe::Idle {
+        if matches!(self.phase, Phase::Running { .. })
+            && self.probe == Probe::Idle
+            && !self.republish_cannot_help()
+        {
             self.schedule(now, draw, Attempt::First)
         } else {
             Vec::new()
@@ -207,39 +227,46 @@ impl Core {
     }
 
     /// The descriptor's lifetime ran out with no round begun (§4.5,
-    /// "Overdue"; Rick, 2026-10-31). Tor broke its own lifetime, and the
-    /// directories drop the descriptor at their next cleanup. Publish the
-    /// onion again from the held seed (`DEL_ONION`, then `ADD_ONION`), which
-    /// forces a fresh upload; that round's probe judges the facet. Inbound
-    /// is not marked down: nothing shows peers cannot reach the onion yet. A
-    /// refused republish is a process fault, as the Service remedy's is. The
-    /// next lifetime counts from now, so a republish that brings no round
-    /// does not ask again at every tick.
+    /// "Overdue"). Tor broke its own lifetime, and the directories drop the
+    /// descriptor at their next cleanup. Publish the onion again from the
+    /// held seed, which forces a fresh upload; that round's probe judges the
+    /// facet. Inbound is not marked down: nothing shows peers cannot reach
+    /// the onion yet. Not while the clock is named or the latest round was
+    /// refused, and the backoff may hold it ([`Core::republish`]). The next
+    /// lifetime counts from now, so a republish that brings no round does
+    /// not ask again at every tick. A republish still waiting for its round
+    /// a whole lifetime later never got one: that is its failed judgment,
+    /// and the backoff holds this one.
     pub(super) fn on_overdue_deadline(&mut self, now: u64) -> Vec<Action> {
         self.lifetime_from = Some(now);
-        let Phase::Running { onion, .. } = &mut self.phase else {
-            return Vec::new();
-        };
-        if *onion != Duty::Done {
+        if !self.onion_done() || self.republish_cannot_help() {
             return Vec::new();
         }
-        *onion = Duty::Owed;
-        self.service_republish = true;
+        self.republish_failed(now);
         let mut actions = vec![Action::DescriptorOverdue];
+        let republished = self.republish(now);
+        if republished.is_empty() {
+            return actions;
+        }
         if matches!(self.probe, Probe::InFlight { .. }) {
             actions.push(Action::CancelProbe);
         }
         self.probe = Probe::Idle;
         self.directories = None;
-        actions.push(Action::RepublishOnion);
+        actions.extend(republished);
         actions
     }
 
     /// Tor reported a clock jump while Running: ask for one probe, with
     /// none in hand. A probe already scheduled, in flight or being
-    /// refetched answers the same question.
+    /// refetched answers the same question. None while a republish cannot
+    /// help: the facet already says why (§4.5). A clock named only after
+    /// the ask still stops the probe when its draw folds ([`Self::trigger`]).
     pub(super) fn jump_probe(&self) -> Vec<Action> {
-        if matches!(self.phase, Phase::Running { .. }) && self.probe == Probe::Idle {
+        if matches!(self.phase, Phase::Running { .. })
+            && self.probe == Probe::Idle
+            && !self.republish_cannot_help()
+        {
             vec![Action::ProbeAfterJump]
         } else {
             Vec::new()
@@ -346,6 +373,7 @@ impl Core {
         &mut self,
         now: u64,
         fetches: Vec<DirectoryFetch>,
+        ours: Option<ServiceDescriptor>,
     ) -> Vec<Action> {
         if !matches!(self.directories, Some(DirectoryHalf::AwaitingDraw)) {
             return Vec::new();
@@ -357,7 +385,7 @@ impl Core {
                 (fetch.hsdir, fetch.descriptor_id, due)
             })
             .collect();
-        self.directories = Some(DirectoryHalf::Open(DirectoryCheck::new(fetches)));
+        self.directories = Some(DirectoryHalf::Open(DirectoryCheck::new(fetches, ours)));
         self.judge(now)
     }
 
@@ -459,6 +487,7 @@ impl Core {
             (Some(evidence_at), DirectoryVerdict::Held | DirectoryVerdict::Unmatched) => {
                 let recovered = matches!(self.inbound, Inbound::Unreachable { .. });
                 self.inbound = Inbound::Reachable { evidence_at };
+                self.republish_confirmed();
                 if recovered {
                     actions.extend(self.say(now, Cadence::Now));
                 }
@@ -571,9 +600,13 @@ impl Core {
         }
     }
 
-    /// Outbound is usable and the onion is published: a probe can be judged.
+    /// Outbound is usable, the onion is published, and a republish could
+    /// help: a probe can be judged. While the clock is named or the latest
+    /// round was refused, the facet already says what a probe could not
+    /// change, and a probe that reached the old copy would overwrite it
+    /// with Reachable (§4.2, §4.5). The next accepted round's probe judges.
     fn probe_may_run(&self) -> bool {
-        self.outbound_usable() && self.onion_done()
+        self.outbound_usable() && self.onion_done() && !self.republish_cannot_help()
     }
 
     fn onion_done(&self) -> bool {
@@ -586,9 +619,12 @@ impl Core {
         )
     }
 
-    /// Service-class evidence (§4.4): the inbound facet goes down and the
-    /// onion is published again on the running Tor. A probe still in
-    /// flight is cancelled; the republish's own round schedules the next.
+    /// Service-class evidence (§4.4), the two-miss rule: the inbound facet
+    /// goes down and the onion is published again on the running Tor, unless
+    /// that cannot help or the backoff holds it. When this judges a
+    /// republish, the next one waits ([`Core::republish_failed`]). A probe
+    /// still in flight is cancelled; the republish's own round schedules the
+    /// next.
     fn inbound_down(&mut self, now: u64, cause: InboundCause) -> Vec<Action> {
         let mut actions = Vec::new();
         if matches!(self.probe, Probe::InFlight { .. }) {
@@ -601,11 +637,8 @@ impl Core {
             _ => now,
         };
         self.inbound = Inbound::Unreachable { cause, since };
-        if let Phase::Running { onion, .. } = &mut self.phase {
-            *onion = Duty::Owed;
-        }
-        self.service_republish = true;
-        actions.push(Action::RepublishOnion);
+        self.republish_failed(now);
+        actions.extend(self.republish(now));
         actions.extend(self.say(now, Cadence::Due));
         actions
     }
