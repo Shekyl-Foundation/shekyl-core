@@ -537,6 +537,19 @@ fn successor(last: u64) -> Result<u64, TraceFault> {
 }
 
 impl Trace {
+    /// A trace that carries nothing to compare: no facts, no checkpoint.
+    /// A run over it connects and records, and every oracle reads
+    /// *not compared* — the run [`crate::rebaseline::trace_of`] writes a
+    /// baseline from.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            facts: BTreeMap::new(),
+            checkpoint: None,
+            snapshot: None,
+        }
+    }
+
     /// Read and check a whole trace.
     ///
     /// # Errors

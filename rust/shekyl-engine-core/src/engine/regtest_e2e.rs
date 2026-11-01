@@ -6047,17 +6047,10 @@ async fn maybe_capture_chain_vector(
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../shekyl-chain-ingest/tests/vectors")
         .join(shape);
-    // The LMDB harvest that wrote trace.e2 is gone. A capture replaces the
-    // corpus and leaves that file as it was.
-    let kept_trace = root.join("trace.e2");
-    let kept_trace_bytes = std::fs::read(&kept_trace).ok();
     if root.exists() {
         std::fs::remove_dir_all(&root).expect("clear a stale capture");
     }
     std::fs::create_dir_all(&root).expect("create capture dir");
-    if let Some(bytes) = &kept_trace_bytes {
-        std::fs::write(&kept_trace, bytes).expect("keep the pre-flip trace");
-    }
     let corpus = root.join("corpus.e2");
 
     let mut fetch = Command::new(&replay_bin);
@@ -6157,6 +6150,43 @@ async fn maybe_capture_chain_vector(
         ),
     };
 
+    // The trace is the Rust baseline (`DAEMON_REDB_STORE.md` §12.1): the
+    // corpus replayed against a fresh store under the production substrate
+    // and the rules this chain was mined under, then the store's chain
+    // written out. A chain the replay refuses is no baseline, and the
+    // capture fails here rather than pinning a half-chain.
+    let trace = root.join("trace.e2");
+    let baseline_store = std::env::temp_dir().join(format!(
+        "shekyl-capture-baseline-{shape}-{}",
+        std::process::id()
+    ));
+    if baseline_store.exists() {
+        std::fs::remove_dir_all(&baseline_store).expect("clear a stale baseline store");
+    }
+    let mut baseline = Command::new(&replay_bin);
+    baseline
+        .args(["baseline", "--chain", "regtest", "--fixed-difficulty", "1"])
+        .arg("--corpus")
+        .arg(&corpus)
+        .arg("--store")
+        .arg(&baseline_store)
+        .arg("--settlement-epoch-blocks")
+        .arg(settlement_epoch_blocks.to_string())
+        .arg("--reorg-cap")
+        .arg(reorg_cap_blocks.to_string())
+        .arg("--out")
+        .arg(&trace);
+    let baseline = shekyl_tor_control_client::spawn_lock::output(&mut baseline)
+        .expect("spawn shekyl-chain-replay baseline");
+    assert!(
+        baseline.status.success(),
+        "shekyl-chain-replay baseline failed (its store is kept at {}): {}\n{}",
+        baseline_store.display(),
+        String::from_utf8_lossy(&baseline.stdout),
+        String::from_utf8_lossy(&baseline.stderr)
+    );
+    std::fs::remove_dir_all(&baseline_store).expect("remove the baseline store");
+
     // Format 4 (DRS-E4 commit 7): `out_of_band_writes` rows are structured
     // — the kind and the injector's receipt in the corpus's one spelling —
     // where format 3 carried prose.
@@ -6166,12 +6196,15 @@ async fn maybe_capture_chain_vector(
         "genesis_hash": genesis_hash,
         "built_at_dev_sha": built_at_dev_sha,
         "description":
-            "A regtest chain captured as corpus.e2: every block 0..=tip_height \
-             with the FULL bytes of every listed transaction \
-             (shekyl-chain-replay fetch, RD-F15-verified). The LMDB harvest \
-             that wrote trace.e2 is gone with the daemon store; a trace.e2 \
-             beside this corpus is the pre-flip file and is not rewritten. \
-             Consumed by replay: shekyl-chain-ingest connects the chain \
+            "A regtest chain captured whole as the DRS-E2 replay pair. \
+             corpus.e2: every block 0..=tip_height with the FULL bytes of \
+             every listed transaction (shekyl-chain-replay fetch, \
+             RD-F15-verified). trace.e2: the Rust baseline \
+             (shekyl-chain-replay baseline): the corpus replayed against a \
+             fresh store, then each height's facts and the tip's digest and \
+             archival rows read off it, pinned at built_at_dev_sha. A \
+             regression gate, not a conformance oracle: the C++ side is \
+             gone. Consumed by replay: shekyl-chain-ingest connects the chain \
              against a real store, so the state the 4.I rules read is \
              derived, not asserted. Regenerate with \
              SHEKYL_CAPTURE_CHAIN_VECTORS=1, SHEKYLD_BIN and \
@@ -6214,7 +6247,7 @@ async fn maybe_capture_chain_vector(
         "captured chain vector `{shape}` -> {} ({count} blocks; corpus {} B, trace {} B)",
         root.display(),
         std::fs::metadata(&corpus).map(|m| m.len()).unwrap_or(0),
-        std::fs::metadata(&kept_trace).map(|m| m.len()).unwrap_or(0),
+        std::fs::metadata(&trace).map(|m| m.len()).unwrap_or(0),
     );
 }
 

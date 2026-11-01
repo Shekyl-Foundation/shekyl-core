@@ -68,9 +68,11 @@ use shekyl_pow_randomx::CacheStore;
 mod corpus_census;
 mod h19_cost;
 mod pool_door;
+mod rebaseline;
 mod relay_floor;
 pub(crate) mod replay;
 pub(crate) mod retired_keyless_join;
+mod too_many_inputs;
 pub(crate) use replay::replay_keeping_store;
 pub(crate) use retired_keyless_join::{retired_keyless_join, UntilRetiredJoin};
 

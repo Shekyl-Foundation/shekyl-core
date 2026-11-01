@@ -96,12 +96,10 @@
 //!   [`validate`] folds over the block; the pool verifies it as a batch of
 //!   one through the same body (`shekyl_bulletproofs::verify_batch`), as the
 //!   submit engine does.
-//! * **Replay** (DRS-E2): every C++-accepted block through [`validate`]. A
-//!   disagreement is routed through `shekyl_chain_store::conformance::grade`
-//!   keyed by [`Row::as_str`] — where a Rust refusal of a canonical block on
-//!   a DIVERGENT row is the *expected* outcome and agreement is the failure.
-//!   This crate never imports the grader; the harness that does lives with
-//!   the replay.
+//! * **Replay** (DRS-E2): every block of a captured chain through
+//!   [`validate`], held to the chain's Rust baseline (`shekyl-chain-ingest`'s
+//!   `rebaseline`): a refusal, or a derived value that differs from the
+//!   baseline, is a change in what this crate decides.
 //!
 //! # Faults are not verdicts
 //!
