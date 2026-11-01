@@ -43,12 +43,13 @@ use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES
 use shekyl_crypto_pq::archival_p::{derive_archival_p_keys, ArchivalPKeys};
 use shekyl_crypto_pq::kem::HybridKemPublicKey;
 use shekyl_scanner::bench_fixtures::{
-    build_typical_case_scannable_block, scannable_block_for_recipient,
+    bound, build_typical_case_scannable_block, fixture_prunable, scannable_block_for_recipient,
 };
 use shekyl_scanner::ScannableBlock;
 use shekyl_types::{BlockHash, BlockHeight, PSlot};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::Input;
+use shekyl_wire::Ct;
 
 use crate::engine::bond_assembly::{
     sweep_funding_outputs, SpentRecordsDurablyPruned, SweepOverflowPolicy,
@@ -118,13 +119,18 @@ fn chain(mut block: ScannableBlock, previous: BlockHash) -> ScannableBlock {
 /// input) — the on-chain spend of the watched output.
 fn spend_block(key_image: [u8; 32]) -> ScannableBlock {
     let mut block = build_typical_case_scannable_block(1);
-    block.transactions[0].modify(|tx| {
-        tx.prefix.inputs.push(Input::ToKey {
-            amount: 0,
-            key_offsets: Vec::new(),
-            key_image,
-        });
+    let mut tx = block.transactions.remove(0).into_tx();
+    tx.prefix.inputs.push(Input::ToKey {
+        amount: 0,
+        key_offsets: Vec::new(),
+        key_image,
     });
+    // The body came out of a binding without its prunable region; it takes
+    // one sized to its two spend inputs before it is bound again.
+    if let Ct::Fcmp { prunable, .. } = &mut tx.ct {
+        *prunable = Some(fixture_prunable(2));
+    }
+    block.transactions.insert(0, bound(&tx));
     block
 }
 

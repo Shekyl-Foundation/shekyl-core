@@ -59,8 +59,7 @@ use shekyl_engine_state::transfer::eligible_height;
 use shekyl_scanner::{GuaranteedScanner, ScannableBlock};
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, TxHash};
 use shekyl_units::AtomicUnits;
-use shekyl_wire::transaction::Input;
-use shekyl_wire::BoundTx;
+use shekyl_wire::{transaction::Input, BoundTx};
 
 use crate::engine::bond_watch::match_watch;
 

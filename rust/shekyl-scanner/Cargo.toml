@@ -53,12 +53,16 @@ shekyl-archival-retention = { path = "../shekyl-archival-retention", optional = 
 [features]
 default = ["std"]
 std = ["shekyl-curve-io/std", "shekyl-curve-generators/std", "shekyl-curve-primitives/std", "shekyl-rpc-client/std"]
-# `shekyl-wire/test-fixtures` rides along: the fixture blocks bind their
-# whole bodies through `BoundTx::whole`, which production builds do not have.
-test-utils = ["dep:shekyl-archival-retention", "shekyl-wire/test-fixtures"]
+test-utils = ["dep:shekyl-archival-retention"]
 
 [dev-dependencies]
 shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+# `BoundTx::modify` for the PQC leaf-verdict tests' edited bodies. A
+# TEST_ONLY feature (check_test_only_features.py): this dev edge and the
+# engine's and the ingest's are its only enablers, never a forward from
+# `test-utils`, which `shekyl-engine-core/test-helpers` turns on in a
+# normal build.
+shekyl-wire = { path = "../shekyl-wire", features = ["test-fixtures"] }
 tokio = { version = "1", features = ["sync", "macros", "rt-multi-thread"] }
 proptest = "1"
 

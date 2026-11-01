@@ -97,7 +97,7 @@ use shekyl_crypto_pq::{
     leaf_commitment::PQC_LEAF_ENTRY_LEN,
     output::construct_output,
 };
-use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
+use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Prunable, Transaction, TxPrefix};
 
 use crate::{extra::Extra, view_pair::ViewPair, ScannableBlock};
 use shekyl_types::{AttestationRoot, BlockHash, CurveTreeRoot, TxHash};
@@ -343,7 +343,7 @@ fn assemble_scannable_block(
                 commitments,
             },
             pqc_auths: vec![],
-            prunable: None,
+            prunable: Some(fixture_prunable(1)),
         },
     };
 
@@ -390,9 +390,59 @@ fn assemble_scannable_block(
 
     ScannableBlock {
         block,
-        transactions: vec![shekyl_wire::BoundTx::whole(tx)],
+        transactions: vec![bound(&tx)],
         first_output_index: Some(0),
     }
+}
+
+/// A prunable region, empty but present, for a fixture spend with
+/// `spend_inputs` `ToKey` inputs.
+///
+/// Every accepted spend has a region, and a body without one hashes with
+/// the null component (`txid.rs` `body_prunable_component`), an identity no
+/// skeleton can bind to, so a fixture body that [`bound`] will cut carries
+/// this. The scanner never reads the region; one pseudo-out per spend input
+/// is the region's own shape. A body that came out of a binding has lost
+/// its region ([`bound`]'s doc) and takes a fresh one before it is bound
+/// again.
+#[must_use]
+pub fn fixture_prunable(spend_inputs: usize) -> Prunable {
+    Prunable {
+        bulletproofs: vec![],
+        tree_depth: 0,
+        fcmp_proof: vec![],
+        pseudo_outs: vec![[0u8; 32]; spend_inputs],
+        serve_credit_pruned: vec![],
+    }
+}
+
+/// A fixture body bound the way production binds one: cut to its skeleton
+/// (the pruned segment and the three operands `txid_parts` records) and
+/// bound to the identity that skeleton mixes to (`SB-Q2`). What comes back
+/// is the body as a wallet holds it — parsed from the pruned segment — so a
+/// fixture built here has the shape every served transaction has. The
+/// fixture transactions carry no `pqc_auths`, and the prunable region does
+/// not ride in a skeleton, so the bound body is the one passed in without
+/// its region.
+///
+/// # Panics
+///
+/// On a body no skeleton can carry: a `Null` ct (a coinbase), a spend with
+/// no prunable region ([`fixture_prunable`]), or one whose bytes do not
+/// round-trip. Fixtures are spends.
+#[must_use]
+pub fn bound(tx: &Transaction) -> shekyl_wire::BoundTx {
+    let segments = tx.write_segments().expect("a fixture body serializes");
+    let parts = tx.txid_parts();
+    let skeleton = shekyl_wire::SkeletonTx {
+        unprunable: segments.pruned,
+        prunable_hash: parts.prunable_hash,
+        pqc_auth_hash: parts.pqc_auth_hash,
+        archival_len: parts.archival_len,
+    };
+    skeleton
+        .bind(parts.hash)
+        .expect("a fixture body's skeleton binds to the body's own txid")
 }
 
 /// Build a [`ScannableBlock`] whose single non-miner transaction
