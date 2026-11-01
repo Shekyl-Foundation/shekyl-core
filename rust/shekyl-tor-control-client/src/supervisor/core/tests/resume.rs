@@ -153,6 +153,14 @@ fn a_probe_in_flight_through_a_sleep_keeps_a_whole_bound() {
         },
         0,
     );
+    // The driver folds the directory list in that same turn. This round
+    // reached none, so the probe alone decides.
+    core.on(
+        Input::DirectoriesDrawn {
+            fetches: Vec::new(),
+        },
+        0,
+    );
     let mut at = 0;
     while let Some(due) = core.deadline().filter(|due| *due <= secs(15)) {
         at = due;
