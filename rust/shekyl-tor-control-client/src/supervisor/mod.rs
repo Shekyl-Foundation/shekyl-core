@@ -27,7 +27,8 @@ pub use core::{
     RoundEnd, Step, DESCRIPTOR_LIFETIME,
 };
 pub use events::{
-    clock_evidence_of, directory_input_of, input_of, round_inputs, CERTIFICATE_OUT_OF_DATE,
+    clock_evidence_of, directory_content_input_of, directory_input_of, input_of, round_inputs,
+    CERTIFICATE_OUT_OF_DATE,
 };
 pub use posture::{
     fixes, held_sentence, install_sentence, own_tx, render, BootstrapLine, BootstrapPace, Cause,

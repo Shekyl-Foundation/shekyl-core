@@ -27,14 +27,18 @@ impl Core {
         self.dials.restart(now);
         self.set_cause(Cause::None);
         // A new route drops the inbound evidence and keeps the offer: the
-        // republished onion is publishing until this Tor's probe arrives.
-        if self.inbound != Inbound::NotOffered {
+        // republished onion is publishing until this Tor's probe arrives. A
+        // named clock still stands: this Tor's uploads are numbered from the
+        // same clock. The old Tor's refused rounds are not this one's.
+        self.uploads_refused = false;
+        if self.clock_behind.is_none() && self.inbound != Inbound::NotOffered {
             self.inbound = Inbound::Publishing;
         }
         self.probe = Probe::Idle;
         self.directories = None;
         self.round = None;
         self.service_republish = false;
+        self.republish_new_tor();
         self.arm_sample(now);
         self.arm_alive(now);
         vec![

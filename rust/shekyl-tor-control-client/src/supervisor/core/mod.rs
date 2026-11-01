@@ -19,6 +19,7 @@ use super::posture::{
 
 mod announce;
 mod backoff;
+mod clock;
 mod clock_evidence;
 mod clock_jump;
 mod dials;
@@ -98,6 +99,17 @@ pub struct Policy {
     /// probe asks (§4.5, "Overdue"; Rick, 2026-10-31). Tor's
     /// `HS_DESC_DEFAULT_LIFETIME`, re-checked at every re-pin.
     pub descriptor_lifetime: Duration,
+    /// How far this computer's clock may sit behind the consensus's
+    /// `valid-after` before the clock is named (§4.2, §10 `TSR-M13`; Rick,
+    /// 2026-11-01). A correct clock can hold a consensus up to the
+    /// authorities' distribution delay before its `valid-after`, and Tor's
+    /// own early-consensus notice allows that plus 60 s.
+    pub clock_behind_after: Duration,
+    /// The first wait between republishes once one has been judged and
+    /// failed (§4.5, "Republish backoff", §10 `TSR-M14`): one probe check's
+    /// worst case. It doubles at each failed republish, up to
+    /// [`Self::descriptor_lifetime`], and resets on a confirmed Reachable.
+    pub republish_after: Duration,
 }
 
 impl Policy {
@@ -140,9 +152,30 @@ impl Policy {
             // `src/feature/hs/hs_descriptor.h:30`, set as the descriptor's
             // lifetime at `src/feature/hs/hs_service.c:1942`.
             descriptor_lifetime: DESCRIPTOR_LIFETIME,
+            clock_behind_after: CLOCK_BEHIND_AFTER,
+            // One check's worst case: the round's wait (60 s), the probe's
+            // longest delay (60 s) and bound (60 s), then the refetch's
+            // probe, its delay (60 s) and bound (60 s). A wait shorter than
+            // one judgment is the event gate again.
+            republish_after: Duration::from_secs(60 + 60 + 60 + 60 + 60),
         }
     }
 }
+
+/// The directory authorities' distribution delay, `V3AuthDistDelay`'s
+/// default in tor 0.4.9.14 (`src/app/config/config.c:713`, 5 minutes):
+/// how long before its `valid-after` a consensus can already be fetched.
+pub const CONSENSUS_DIST_DELAY: Duration = Duration::from_secs(5 * 60);
+
+/// Tor's own allowance on top of that before it says a consensus came
+/// early (`EARLY_CONSENSUS_NOTICE_SKEW`, `networkstatus.c:1891`).
+pub const EARLY_CONSENSUS_SKEW: Duration = Duration::from_secs(60);
+
+/// [`Policy::clock_behind_after`]: the line Tor draws for its own
+/// early-consensus notice (`networkstatus.c:1899`), 6 minutes. NTP's
+/// slop is far inside it.
+pub const CLOCK_BEHIND_AFTER: Duration =
+    Duration::from_secs(CONSENSUS_DIST_DELAY.as_secs() + EARLY_CONSENSUS_SKEW.as_secs());
 
 /// Tor's `HS_DESC_DEFAULT_LIFETIME` at the pinned tor 0.4.9.14
 /// (`src/feature/hs/hs_descriptor.h:30`): 3 hours.
@@ -376,8 +409,21 @@ pub enum Input {
     UploadRoundEnded {
         /// How the round ended.
         end: RoundEnd,
+        /// The round's uploads: two descriptors to their directories.
+        uploads: u32,
+        /// Of those, the uploads a directory refused (`UPLOAD_REJECTED`).
+        refused: u32,
         /// Uniform over `u64`.
         draw: u64,
+    },
+    /// The consensus's `valid-after` and this machine's wall time, both in
+    /// Unix seconds, read at a liveness sample (§4.2). The core compares
+    /// them; it never reads a clock itself.
+    ConsensusClock {
+        /// `GETINFO consensus/valid-after`.
+        valid_after: u64,
+        /// This machine's wall time when it was read.
+        wall: u64,
     },
     /// The descriptor refetch after a first miss (`HSFETCH`) was asked;
     /// `draw` sets the second probe's delay, as a round's does.
@@ -397,6 +443,11 @@ pub enum Input {
         /// reached none: the probe alone decides. A list that was never
         /// folded is not this: the verdict waits.
         fetches: Vec<DirectoryFetch>,
+        /// This service's current descriptor's revision counter (`GETINFO
+        /// hs/service/desc/id/<onion>`). A directory's copy counts only when
+        /// its counter is this one. `None` when it could not be read: then
+        /// nothing can be compared, and the probe alone decides.
+        ours: Option<u64>,
     },
     /// Tor accepted `HSFETCH` for `hsdir` (`250`). That fetch's answer
     /// window starts at this fold.
@@ -465,13 +516,11 @@ pub enum Input {
 pub enum RoundEnd {
     /// At least one upload reached a directory.
     Uploaded,
-    /// Every upload ended, none succeeded, and at least one failed:
-    /// Service-class evidence. An upload still in flight is [`Self::Unknown`].
-    FailedAll,
-    /// The round ended without a verdict: an upload is still unfinished, or
-    /// its ends were lost (the sink dropped events, or the next round began).
-    /// Not evidence either way.
-    Unknown,
+    /// None did: every upload failed, or one is unfinished, or the ends were
+    /// lost. Not a republish: Tor retries its own failed uploads, and a
+    /// refused round is [`Input::UploadRoundEnded`]'s `refused` (Rick,
+    /// 2026-11-01).
+    NotUploaded,
 }
 
 /// Actions and the next absolute deadline, in the caller's clock units.
@@ -595,6 +644,13 @@ pub struct Core {
     /// upload shows the descriptor's age. None before the first upload and
     /// after the probe is dropped.
     lifetime_from: Option<u64>,
+    /// How far behind the consensus this computer's clock is, in seconds,
+    /// while the clock is named (§4.2).
+    clock_behind: Option<u64>,
+    /// More than half of the latest round's directories refused its upload.
+    uploads_refused: bool,
+    /// The republish backoff (§4.5).
+    republish: clock::RepublishHold,
     /// A clock jump during this bootstrap, and `traffic/read`'s movement.
     jump: clock_jump::JumpWatch,
     /// This bootstrap's certificate lines and closed handshakes (§4.2).
@@ -634,6 +690,9 @@ impl Core {
             round: None,
             stuck_rounds: 0,
             lifetime_from: None,
+            clock_behind: None,
+            uploads_refused: false,
+            republish: clock::RepublishHold::new(duration_ns(policy.republish_after)),
             jump: clock_jump::JumpWatch::new(now),
             clock_evidence: clock_evidence::ClockEvidence::default(),
             service_republish: false,
@@ -678,10 +737,18 @@ impl Core {
             Input::OnionPublished => self.onion_published(),
             Input::UploadRoundStarted => self.round_started(now),
             Input::FirstUploaded { draw } => self.first_uploaded(now, draw),
-            Input::UploadRoundEnded { end, draw } => self.round_ended(now, end, draw),
+            Input::UploadRoundEnded {
+                end,
+                uploads,
+                refused,
+                draw,
+            } => self.round_ended(now, end, uploads, refused, draw),
+            Input::ConsensusClock { valid_after, wall } => {
+                self.consensus_clock(now, valid_after, wall)
+            }
             Input::DescriptorRefetched { draw } => self.refetched(now, draw),
             Input::JumpProbeDrawn { draw } => self.jump_probe_drawn(now, draw),
-            Input::DirectoriesDrawn { fetches } => self.directories_drawn(now, fetches),
+            Input::DirectoriesDrawn { fetches, ours } => self.directories_drawn(now, fetches, ours),
             Input::DirectoryFetchAccepted { hsdir } => self.directory_fetch_accepted(now, hsdir),
             Input::DirectoryAsked {
                 hsdir,
@@ -798,6 +865,9 @@ impl Core {
         if self.directories_due().is_some_and(|at| now >= at) {
             actions.extend(self.on_directories_deadline(now));
         }
+        if self.republish.due().is_some_and(|at| now >= at) {
+            actions.extend(self.on_republish_deadline(now));
+        }
         self.step(now, actions)
     }
 
@@ -834,6 +904,7 @@ impl Core {
             },
             inbound: self.inbound,
             stuck_upload_rounds: self.stuck_rounds,
+            clock_behind: self.clock_behind.map(Duration::from_secs),
         }
     }
 
@@ -849,6 +920,7 @@ impl Core {
             self.round_due(),
             self.overdue_due(),
             self.directories_due(),
+            self.republish.due(),
         ]
         .into_iter()
         .flatten()

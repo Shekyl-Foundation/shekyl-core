@@ -31,6 +31,8 @@ fn policy() -> Policy {
         jump_stall_after: Duration::from_secs(300),
         clock_evidence_within: Duration::from_secs(60),
         descriptor_lifetime: Duration::from_secs(3 * 60 * 60),
+        clock_behind_after: Duration::from_secs(360),
+        republish_after: Duration::from_secs(300),
     }
 }
 
@@ -986,6 +988,7 @@ fn an_exhausted_pin_holds_the_origin_while_health_stays_true() {
     assert_eq!(core.status().own_tx, OwnTx::Held);
 }
 
+mod clock;
 mod clock_evidence;
 mod clock_jump;
 mod directories;

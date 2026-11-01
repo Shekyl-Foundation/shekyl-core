@@ -30,10 +30,16 @@ fn jump_probes(step: &Step) -> usize {
 }
 
 /// Run every deadline up to `at`, answering each liveness sample, and keep
-/// the times at which the overdue republish was asked. A deadline that
-/// does not move after it is served fails here, rather than looping.
+/// the times at which the overdue check fired. A deadline that does not
+/// move after it is served fails here, rather than looping.
 fn overdue_to(core: &mut Core, at: u64) -> Vec<u64> {
+    served_to(core, at).0
+}
+
+/// [`overdue_to`], with the times a republish went out beside.
+fn served_to(core: &mut Core, at: u64) -> (Vec<u64>, Vec<u64>) {
     let mut asked = Vec::new();
+    let mut republished = Vec::new();
     let mut served = None;
     while let Some(due) = core.deadline().filter(|due| *due <= at) {
         assert_ne!(served, Some(due), "the deadline at {due} did not move");
@@ -50,11 +56,13 @@ fn overdue_to(core: &mut Core, at: u64) -> Vec<u64> {
             );
         }
         if overdue(&step) > 0 {
-            assert_eq!(republishes(&step), 1, "the overdue republish");
             asked.push(due);
         }
+        if republishes(&step) > 0 {
+            republished.push(due);
+        }
     }
-    asked
+    (asked, republished)
 }
 
 /// A published core whose round began at `round_at`, with its first upload
@@ -95,9 +103,13 @@ fn the_descriptor_lifetime_is_tors_three_hours() {
 /// No round begins within the descriptor's lifetime of the last round's
 /// first upload (the round's probe arriving does not move it): the onion is
 /// published again, once, with no probe and no claim that peers cannot
-/// reach it; the next lifetime counts from the republish. Fails if the
-/// check probes instead (`on_overdue_deadline` emitting no republish), or
-/// if it does not re-anchor (the deadline does not move).
+/// reach it; the next lifetime counts from the republish. A republish that
+/// brought no round in a whole lifetime failed its judgment: the next
+/// waits out the backoff's base (Rick, 2026-11-01). Fails if the check
+/// probes instead (`on_overdue_deadline` emitting no republish), if it does
+/// not re-anchor (the deadline does not move), or if a roundless republish
+/// is never judged (`republish_failed` dropped from the overdue check: the
+/// second is owed forever).
 #[test]
 fn an_overdue_upload_republishes_once() {
     let (mut core, uploaded_at) = reached(0);
@@ -123,7 +135,13 @@ fn an_overdue_upload_republishes_once() {
     );
     core.on(Input::OnionPublished, due + secs(1));
     assert_eq!(overdue_to(&mut core, due + lifetime() - secs(1)), []);
-    assert_eq!(overdue_to(&mut core, due + lifetime()), [due + lifetime()]);
+    let again = due + lifetime();
+    let base = secs(300);
+    assert_eq!(
+        served_to(&mut core, again + base),
+        (vec![again], vec![again + base]),
+        "the second overdue waits the base, then republishes"
+    );
 }
 
 /// The overdue republish is Service-class: refused, it is a process fault,
@@ -175,7 +193,9 @@ fn a_round_that_ends_with_no_upload_leaves_the_upload_overdue() {
     assert_eq!(overdue_to(&mut core, ended), []);
     core.on(
         Input::UploadRoundEnded {
-            end: RoundEnd::Unknown,
+            end: RoundEnd::NotUploaded,
+            uploads: 16,
+            refused: 0,
             draw: 0,
         },
         ended,

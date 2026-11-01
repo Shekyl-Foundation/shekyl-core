@@ -43,8 +43,15 @@ pub struct DirectoryFetch {
 /// What Tor said about one directory's copy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DirectoryAnswer {
-    /// `HS_DESC RECEIVED`: the descriptor decoded and was stored.
-    Received,
+    /// The copy the directory returned (`HS_DESC_CONTENT`, which Tor sends
+    /// only for a descriptor it decoded and stored, `hs_client.c:1686-1689`),
+    /// with its revision counter. It counts only when the counter is this
+    /// service's current one: a directory holding a stale copy is a miss
+    /// (Rick, 2026-11-01).
+    Received {
+        /// The copy's `revision-counter`; `None` when it could not be read.
+        revision_counter: Option<u64>,
+    },
     /// `HS_DESC FAILED REASON=NOT_FOUND`: the directory does not have it.
     NotFound,
     /// `HS_DESC FAILED` for another reason: nothing about the descriptor.
@@ -117,6 +124,9 @@ pub(super) enum DirectoryVerdict {
 /// The fetches of one probe's check.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct DirectoryCheck {
+    /// This service's current descriptor's revision counter: a copy counts
+    /// only at this counter.
+    ours: u64,
     asks: Vec<Ask>,
     /// The descriptor Tor's client asks for, learned from a `REQUESTED`
     /// of a fetch this check has sent.
@@ -127,9 +137,10 @@ pub(super) struct DirectoryCheck {
 impl DirectoryCheck {
     /// `fetches` are `(directory, uploaded descriptor, when to send)`.
     /// An empty list is complete: nothing to count, so the probe decides.
-    pub(super) fn new(fetches: Vec<(RelayFingerprint, String, u64)>) -> Self {
+    pub(super) fn new(fetches: Vec<(RelayFingerprint, String, u64)>, ours: u64) -> Self {
         let complete = fetches.is_empty();
         Self {
+            ours,
             asks: fetches
                 .into_iter()
                 .map(|(hsdir, descriptor_id, due)| Ask {
@@ -225,7 +236,11 @@ impl DirectoryCheck {
         ask.answer_by = None;
         ask.held = match (descriptor_id, answer) {
             (Some(id), _) if id != uploaded => Held::Excluded,
-            (_, DirectoryAnswer::Received) => Held::Found,
+            (_, DirectoryAnswer::Received { revision_counter }) => match revision_counter {
+                Some(theirs) if theirs == self.ours => Held::Found,
+                Some(_) => Held::Missing,
+                None => Held::Excluded,
+            },
             (_, DirectoryAnswer::NotFound) => Held::Missing,
             (_, DirectoryAnswer::Other | DirectoryAnswer::Unusable) => Held::Excluded,
         };

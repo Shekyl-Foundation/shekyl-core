@@ -118,8 +118,16 @@ pub enum Shown {
 pub enum InboundCause {
     /// The probe of this node's own onion did not arrive within its bound.
     ProbeTimedOut,
-    /// A whole round of descriptor uploads failed.
-    DescriptorRejected,
+    /// More than half of the latest round's directories refused its upload
+    /// (`HS_DESC FAILED REASON=UPLOAD_REJECTED`): they hold a copy whose
+    /// revision counter is not below this one's. A republish cannot help
+    /// (§4.5, "Refused rounds").
+    UploadsRefused,
+    /// This computer's clock is behind the consensus's `valid-after` by more
+    /// than the tolerance (§4.2; Rick, 2026-11-01). Tor numbers each
+    /// descriptor from its own clock, so the directories refuse what this
+    /// node uploads. How far behind is [`Status::clock_behind`].
+    ClockBehind,
     /// The probe arrived through this node's own copy of the descriptor,
     /// but the directories its uploads reached no longer had it (§4.5, the
     /// directory check).
@@ -478,6 +486,10 @@ pub struct Status {
     /// uploads with neither `UPLOADED` nor `FAILED`, none of the events lost
     /// on our side. Telemetry for the soak, never a cause (§10).
     pub stuck_upload_rounds: u32,
+    /// How far this computer's clock is behind the consensus's
+    /// `valid-after` while [`InboundCause::ClockBehind`] stands: a lower
+    /// bound. `None` otherwise.
+    pub clock_behind: Option<std::time::Duration>,
 }
 
 /// `OwnTx` from the relay's hop-0 verdict and the connector settings.
@@ -661,7 +673,7 @@ pub fn render(status: &Status) -> String {
         append(&mut text, &quiet);
     }
     if let Some(inbound) = inbound_sentence(status) {
-        append(&mut text, inbound);
+        append(&mut text, &inbound);
     }
     if speaks_bootstrap(status) {
         append(
@@ -739,6 +751,19 @@ fn spoken_duration(duration: std::time::Duration) -> String {
     }
 }
 
+/// A span that can run to days, at the precision the clock line needs:
+/// days and hours, hours and minutes, or [`spoken_duration`] below an hour.
+fn spoken_span(duration: std::time::Duration) -> String {
+    let seconds = duration.as_secs();
+    if seconds >= 86_400 {
+        format!("{} d {} h", seconds / 86_400, seconds % 86_400 / 3_600)
+    } else if seconds >= 3_600 {
+        format!("{} h {} min", seconds / 3_600, seconds % 3_600 / 60)
+    } else {
+        spoken_duration(duration)
+    }
+}
+
 fn spoken_bytes(bytes: u64) -> String {
     // CLIPPY: a display figure; a byte count below 2^52 is exact in f64.
     #[allow(clippy::cast_precision_loss)]
@@ -791,16 +816,28 @@ fn quiet_sentence(status: &Status) -> Option<String> {
 }
 
 /// The inbound facet's sentence, when it is down (§5, "Onion
-/// unreachable"). No fix: the supervisor publishes the onion again, and
-/// nothing the operator does speeds that. It follows the outbound cause and
-/// its fix, as the pace does.
-fn inbound_sentence(status: &Status) -> Option<&'static str> {
-    match status.inbound {
-        Inbound::Unreachable { .. } => Some(
-            "Peers cannot reach this node through Tor right now. Its address is being published again.",
+/// unreachable"). No fix, except the clock's: the supervisor publishes the
+/// onion again when that can help, and nothing the operator does speeds it;
+/// a clock behind is the operator's to set (Rick, 2026-11-01, verbatim). It
+/// follows the outbound cause and its fix, as the pace does.
+fn inbound_sentence(status: &Status) -> Option<String> {
+    let Inbound::Unreachable { cause, .. } = status.inbound else {
+        return None;
+    };
+    Some(match cause {
+        InboundCause::ProbeTimedOut | InboundCause::DescriptorNotFound => {
+            "Peers cannot reach this node through Tor right now. Its address is being published again."
+                .to_owned()
+        }
+        InboundCause::UploadsRefused => {
+            "The Tor network is not accepting this node's address right now. Others may not be able to reach this node."
+                .to_owned()
+        }
+        InboundCause::ClockBehind => format!(
+            "This computer's clock is at least {} behind the Tor network's. Others may not be able to reach this node. Check this computer's date and time.",
+            spoken_span(status.clock_behind.unwrap_or_default())
         ),
-        Inbound::NotOffered | Inbound::Publishing | Inbound::Reachable { .. } => None,
-    }
+    })
 }
 
 /// The named cause. [`Cause::None`] is the absence of one: the bootstrap

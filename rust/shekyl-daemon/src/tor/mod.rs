@@ -35,14 +35,14 @@ use shekyl_tor_control_client::binary::{
     discover_and_verify, discover_and_verify_at, TorBinaryError, VerifiedTorBinary,
 };
 use shekyl_tor_control_client::control::{
-    parse_bootstrap_progress, parse_event, parse_network_view, parse_socks_listeners,
-    parse_traffic_read, BootstrapState, Command, ControlError, ControlReply, EventReceiver,
-    EventSink, Resume, ServiceId, SocksTimeout, TorEvent, UploadRounds,
+    parse_bootstrap_progress, parse_consensus_valid_after, parse_event, parse_network_view,
+    parse_socks_listeners, parse_traffic_read, BootstrapState, Command, ControlError, ControlReply,
+    EventReceiver, EventSink, Resume, ServiceId, SocksTimeout, TorEvent, UploadRounds,
 };
 use shekyl_tor_control_client::supervisor::{
-    clock_evidence_of, directory_input_of, held_sentence, input_of, install_sentence, render,
-    Action, Cause, Connectors, Core, DialTally, Input, ManagedRunning, NetworkView,
-    OriginVerdict as FoldedOrigin, Policy, Space, Step, Syncing, TorSetting,
+    clock_evidence_of, directory_content_input_of, directory_input_of, held_sentence, input_of,
+    install_sentence, render, Action, Cause, Connectors, Core, DialTally, Input, ManagedRunning,
+    NetworkView, OriginVerdict as FoldedOrigin, Policy, Space, Step, Syncing, TorSetting,
 };
 use shekyl_tor_control_daemon::{
     space_needed, sweep_stale_data_dirs, CacheSave, DaemonTorConfig, DaemonTorControl,
@@ -88,6 +88,11 @@ const NETWORK_LIVENESS: &str = "network-liveness";
 const CIRCUIT_ESTABLISHED: &str = "status/circuit-established";
 /// `GETINFO` key for the SOCKS listeners.
 const SOCKS_LISTENERS: &str = "net/listeners/socks";
+/// `GETINFO` key for the consensus's `valid-after`: the clock this machine's
+/// is judged against (§4.2). Asked on its own: before Tor holds a consensus
+/// it is an error, and one failing key fails the whole `GETINFO` (tor
+/// 0.4.9.14 `control_getinfo.c:1760`).
+const CONSENSUS_VALID_AFTER: &str = "consensus/valid-after";
 
 /// Keys one sample asks. The network keys are Running only (§4.2).
 fn sample_keys(reads_network: bool) -> Vec<String> {
@@ -577,7 +582,13 @@ impl Drive {
                 }
             }
             Action::ProbeAfterJump => vec![probe::jump_probe()],
-            Action::CheckDirectories => vec![self.directories_drawn()],
+            Action::CheckDirectories => {
+                let mut stop = self.stop.clone();
+                match race_stop(&mut stop, self.directories_drawn()).await {
+                    Ok(input) => self.resume_before(vec![input]),
+                    Err(shutdown) => vec![shutdown],
+                }
+            }
             Action::FetchFromDirectory { hsdir } => {
                 let mut stop = self.stop.clone();
                 match race_stop(&mut stop, self.fetch_from(hsdir)).await {
@@ -595,7 +606,7 @@ impl Drive {
             Action::DescriptorOverdue => {
                 tracing::info!(
                     target: "tor",
-                    "no descriptor upload began within the descriptor's lifetime; publishing this node's onion again"
+                    "no descriptor upload began within the descriptor's lifetime"
                 );
                 Vec::new()
             }
@@ -604,6 +615,7 @@ impl Drive {
                 Vec::new()
             }
             Action::RepublishOnion => {
+                tracing::info!(target: "tor", "publishing this node's onion again");
                 let mut stop = self.stop.clone();
                 match race_stop(&mut stop, self.republish()).await {
                     Ok(input) => self.resume_before(vec![input]),
@@ -690,6 +702,21 @@ impl Drive {
                     );
                     // A fetch of this onion: the directory check's evidence.
                     inputs.extend(directory_input_of(desc));
+                }
+            }
+            // A directory's copy of this onion's descriptor, after a fetch:
+            // its counter is the directory check's answer. The descriptor
+            // itself is not logged.
+            if let TorEvent::HsDescContent(content) = &parsed {
+                if content.address.is_some() && content.address == self.service {
+                    tracing::debug!(
+                        target: "tor",
+                        hsdir = ?content.hsdir,
+                        descriptor_id = ?content.descriptor_id,
+                        revision_counter = ?content.revision_counter,
+                        "a directory's copy of this onion's descriptor"
+                    );
+                    inputs.extend(directory_content_input_of(content));
                 }
             }
             // Evidence first: a problem that is also the blocked link is
@@ -873,7 +900,26 @@ impl Drive {
             }
             inputs.push(Input::NetworkView(view));
         }
+        inputs.extend(self.consensus_clock().await);
         inputs
+    }
+
+    /// The consensus's `valid-after` against this machine's wall time
+    /// (§4.2). The core reads it only while Bootstrapping or Running. No
+    /// consensus yet, or no answer, is no input. The wall time is read here
+    /// and passed as a value: the core's own clock is monotonic.
+    async fn consensus_clock(&mut self) -> Option<Input> {
+        let control = self.control.as_mut()?;
+        let reply = control
+            .ask(Command::GetInfo(vec![CONSENSUS_VALID_AFTER.to_owned()]))
+            .await
+            .ok()?;
+        let valid_after = parse_consensus_valid_after(&reply)?;
+        let wall = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_secs();
+        Some(Input::ConsensusClock { valid_after, wall })
     }
 
     fn watch_state(&self) -> Option<Input> {

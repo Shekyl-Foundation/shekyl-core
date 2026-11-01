@@ -17,7 +17,9 @@
 
 use shekyl_ffi::dialer_ffi::ProbeHandshake;
 use shekyl_timing_engine::Tick;
-use shekyl_tor_control_client::control::{Command, RelayFingerprint, TorEvent, UploadRounds};
+use shekyl_tor_control_client::control::{
+    parse_service_revision_counter, Command, RelayFingerprint, TorEvent, UploadRounds,
+};
 use shekyl_tor_control_client::supervisor::{
     round_inputs, DirectoryAnswer, DirectoryFetch, Inbound, InboundCause, Input,
 };
@@ -194,10 +196,14 @@ impl Drive {
 }
 
 /// A probe's check: the directories the latest upload round reached, each
-/// with the descriptor it was sent and its own CSPRNG draw (§4.5). An
-/// empty set is a check that counts nothing, and the probe alone decides.
+/// with the descriptor it was sent and its own CSPRNG draw, and this
+/// service's current revision counter, which each directory's copy is
+/// compared with (§4.5; Rick, 2026-11-01). An empty set is a check that
+/// counts nothing, and the probe alone decides; so is a counter Tor did
+/// not give.
 impl Drive {
-    pub(super) fn directories_drawn(&self) -> Input {
+    pub(super) async fn directories_drawn(&self) -> Input {
+        let ours = self.our_revision_counter().await;
         let fetches = self
             .rounds
             .as_ref()
@@ -213,7 +219,33 @@ impl Drive {
                     .collect()
             })
             .unwrap_or_default();
-        Input::DirectoriesDrawn { fetches }
+        Input::DirectoriesDrawn { fetches, ours }
+    }
+
+    /// `GETINFO hs/service/desc/id/<onion>`: the descriptor this service
+    /// uploads now (tor 0.4.9.14 `control_getinfo.c:569`), whose counter is
+    /// the one a directory's copy must carry.
+    async fn our_revision_counter(&self) -> Option<u64> {
+        let (control, service) = (self.control.as_ref()?, self.service.as_ref()?);
+        let key = format!("hs/service/desc/id/{}", service.as_str());
+        let reply = control.ask(Command::GetInfo(vec![key])).await;
+        match reply {
+            Ok(reply) => {
+                let ours = parse_service_revision_counter(&reply);
+                if ours.is_none() {
+                    tracing::debug!(
+                        target: "tor",
+                        status = reply.status(),
+                        "Tor gave no descriptor for this onion; the probe alone decides"
+                    );
+                }
+                ours
+            }
+            Err(error) => {
+                tracing::debug!(target: "tor", "this onion's descriptor was not asked ({error})");
+                None
+            }
+        }
     }
 
     /// `HSFETCH` this node's onion from one directory. Tor accepting the
@@ -287,7 +319,8 @@ fn link_inbound(inbound: Inbound) -> shekyl_ffi::zone_ffi::InboundFacet {
         Inbound::Unreachable { cause, since } => InboundFacet::Unreachable {
             cause: match cause {
                 InboundCause::ProbeTimedOut => LinkCause::ProbeTimedOut,
-                InboundCause::DescriptorRejected => LinkCause::DescriptorRejected,
+                InboundCause::UploadsRefused => LinkCause::UploadsRefused,
+                InboundCause::ClockBehind => LinkCause::ClockBehind,
                 InboundCause::DescriptorNotFound => LinkCause::DescriptorNotFound,
             },
             since: Tick::new(since),

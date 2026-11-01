@@ -149,6 +149,8 @@ fn a_probe_in_flight_through_a_sleep_keeps_a_whole_bound() {
     core.on(
         Input::UploadRoundEnded {
             end: super::super::RoundEnd::Uploaded,
+            uploads: 16,
+            refused: 0,
             draw: 0,
         },
         0,
@@ -158,6 +160,7 @@ fn a_probe_in_flight_through_a_sleep_keeps_a_whole_bound() {
     core.on(
         Input::DirectoriesDrawn {
             fetches: Vec::new(),
+            ours: None,
         },
         0,
     );
