@@ -1304,7 +1304,14 @@ This lane's increments, each its own change:
    - flip the switch as one rule-07 cutover, calling the verifier from
      `validate`. The `passed` bit is set by
      an admitted record and by nothing else, and the Fakechain door is
-     deleted;
+     deleted. Its callers move to admitted bundles before that, each when
+     what it needs exists: the economy chains first (4b preparation), on a
+     levered schedule long enough for the count rule to issue a pair its
+     counted draws (`settled_epoch_blocks`, derived from the rule; the
+     shared 20-block epoch issues a pair about one draw); the complete-tree
+     chains once the support schedule is on the connect path; and the
+     round-tripped levered slash chain at the switch, where a popped block
+     returns its bundles to the queue;
    - the attestation-path deletions, with the Rust CEN-B4 rule and the
      census status for a row retired by ruling; and the serve-credit
      table with the two reads that stand on it (`SO-D10c`, `SO-D12j`).
