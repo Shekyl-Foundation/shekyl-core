@@ -96,7 +96,45 @@ pub unsafe extern "C" fn shekyl_thread_ledger_report(buf: *mut c_char, len: usiz
 
 #[cfg(test)]
 mod tests {
-    use super::shekyl_thread_ledger_report;
+    use super::{
+        shekyl_executor_record, shekyl_executor_release, shekyl_thread_ledger_report, EXECUTORS,
+    };
+
+    /// The C surface refuses a pool one worker below the floor and records
+    /// nothing; at the floor it records one row and writes the handle. The
+    /// floor itself is `ExecutorBudget::above_floor`'s, tested in
+    /// `shekyl-thread-ledger`; this is the 0 / 1 contract the C++ reads.
+    /// The edit that makes this red is returning 1 before the budget
+    /// check, or recording the row on the refused path. Ported from
+    /// `tests/unit_tests/seam_endpoint.cpp`'s
+    /// `the_executor_refuses_one_below_the_floor`, which reached no C++.
+    #[test]
+    fn one_below_the_floor_is_refused_and_records_nothing() {
+        let name = c"p2p-exec";
+        let before = EXECUTORS.lock().expect("executor table").len();
+
+        let mut handle = u64::MAX;
+        let refused = unsafe { shekyl_executor_record(name.as_ptr(), 1, 1, &raw mut handle) };
+        assert_eq!(refused, 0, "one worker for one lane is below the floor");
+        assert_eq!(handle, u64::MAX, "a refusal writes no handle");
+        assert_eq!(
+            EXECUTORS.lock().expect("executor table").len(),
+            before,
+            "a refusal records nothing"
+        );
+
+        let mut handle = 0;
+        let recorded = unsafe { shekyl_executor_record(name.as_ptr(), 1, 2, &raw mut handle) };
+        assert_eq!(recorded, 1, "two workers for one lane is the floor");
+        assert_ne!(handle, 0, "a recorded executor has a handle");
+        assert_eq!(
+            EXECUTORS.lock().expect("executor table").len(),
+            before + 1,
+            "the floor records one row"
+        );
+        shekyl_executor_release(handle);
+        assert_eq!(EXECUTORS.lock().expect("executor table").len(), before);
+    }
 
     /// A one-byte buffer writes only the NUL. Returning that written count
     /// (zero) is the contract this replaced. The edit that makes this red
