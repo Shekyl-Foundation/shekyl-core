@@ -422,16 +422,24 @@ fn another_version_recreates_and_everything_else_is_refused() {
             txn.commit().unwrap();
         }
         drop(store);
-        let before = std::fs::metadata(&path).unwrap().len();
         let err = PoolStore::create(&path).expect_err("tampered table set");
         assert!(
             matches!(err, StoreError::Cannot(StoreCannot::PoolFileForeign)),
             "{label}: {err:?}"
         );
-        assert_eq!(
-            std::fs::metadata(&path).unwrap().len(),
-            before,
-            "{label}: not deleted"
+        // Kept, not recreated: the same refusal on the next open. Not byte
+        // for byte: the engine writes its own allocator state when the
+        // refused open closes the database (under redb 4.4 the tamper's
+        // commit shrinks the file and that write grows it again; 4.1
+        // rewrote the same bytes inside its slack, which a length check
+        // could not see).
+        assert!(path.exists(), "{label}: not deleted");
+        assert!(
+            matches!(
+                PoolStore::create(&path).expect_err("still refused"),
+                StoreError::Cannot(StoreCannot::PoolFileForeign)
+            ),
+            "{label}: not recreated"
         );
         drop(std::fs::remove_file(&path));
     }
