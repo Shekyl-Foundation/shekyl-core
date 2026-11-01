@@ -16,11 +16,13 @@
 //! past while the driver was awaiting Tor is ordinary: a control ask may
 //! take the whole reply bound, and the drive loop does not poll its other
 //! deadlines until that ask returns. The driver says so, with
-//! [`Input::Resumed`], only when a timer it was waiting on fired more than
-//! [`crate::control::RESUMED_AFTER`] late ([`crate::control::resume_lateness`]):
-//! the select wake, or the reply bound ([`crate::control::ask_timed`]). It
-//! folds that input before the reply the slept ask produced, so the reply
-//! is judged on windows that start at the wake.
+//! [`Input::Resumed`], only when a wait it was in returned more than
+//! [`crate::control::RESUMED_AFTER`] past the deadline it was armed with
+//! ([`crate::control::resume_lateness`]): its loop's wait, whatever woke
+//! it (at a wake a dial result can be ready with the late timer), or the
+//! reply bound ([`crate::control::ask_timed`]). It folds that input before
+//! what the wait returned, so that is judged on windows that start at the
+//! wake.
 //!
 //! On a resume every window starts again from the wake: the bootstrap's
 //! stall window and the stranded check's byte mark, the probe's bound, the

@@ -891,8 +891,8 @@ components:
                                           from the seed (that is -29011, for
                                           the wallet's own files)
 
-          -29100 INVALID_RECIPIENT        build/proofs: address parse or
-                                          network check failed
+          -29100 INVALID_RECIPIENT        build/proofs: the address is not
+                                          one this wallet can pay
           -29101 INSUFFICIENT_FUNDS       build: spendable balance too low
           -29102 FEE_ESTIMATION_FAILED    build: daemon fee query failed
           -29103 RESERVATION_NOT_FOUND    submit: unknown/expired handle
@@ -2406,6 +2406,7 @@ components:
         synced_height:
           type: integer
           format: int64
+          description: The wallet's height after the scan, as get_height's wallet_height.
         reorg_fork_height:
           type: integer
           format: int64
@@ -2449,6 +2450,7 @@ components:
         synced_height:
           type: integer
           format: int64
+          description: The wallet's height after the scan, as get_height's wallet_height.
 
     # ── Node info ────────────────────────────────────────────────────
     GetHeightParams:
@@ -2462,13 +2464,20 @@ components:
         wallet_height:
           type: integer
           format: int64
-          description: Wallet synced height; always present (local state).
+          description: >-
+            Blocks the wallet has scanned through, counted like
+            daemon_height: 0 before the first scan, the newest scanned
+            block's height plus one after it, so a synced wallet equals
+            daemon_height. Always present (local state). refresh's and
+            rescan_blockchain's synced_height, and get_wallet_info's
+            wallet_height, are this number.
         daemon_height:
           type: integer
           format: int64
           nullable: true
           description: >-
-            Daemon chain height, or null when the daemon is unreachable. The
+            Daemon chain height (its block count, the daemon's own
+            get_height), or null when the daemon is unreachable. The
             wallet_height is still returned in that case so an offline or
             still-syncing node does not hide the wallet's own status.
 
@@ -2482,7 +2491,11 @@ components:
       properties:
         version:
           type: string
-          description: shekyl-wallet-rpc semver.
+          description: >-
+            The release this shekyl-wallet-rpc was built as, in the daemon's
+            spelling (3.1.0-alpha.11-release from a tagged build, the commit
+            in place of "release" otherwise). A bare cargo build is told no
+            release and reports 3.1.0-unknown.
         api_version:
           type: integer
           description: >

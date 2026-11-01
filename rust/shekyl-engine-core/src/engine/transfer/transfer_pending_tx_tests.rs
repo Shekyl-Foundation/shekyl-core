@@ -361,7 +361,7 @@ type TestPendingTx = LocalPendingTx<
     LocalLedger,
 >;
 
-fn test_pending_tx(ledger: Arc<LocalLedger>) -> TestPendingTx {
+fn test_pending_tx_on(ledger: Arc<LocalLedger>, network: Network) -> TestPendingTx {
     LocalPendingTx::new(
         Arc::new(LocalSigner::new(test_signer_handle())),
         WalletGreedyOutputSelector,
@@ -372,8 +372,12 @@ fn test_pending_tx(ledger: Arc<LocalLedger>) -> TestPendingTx {
         None,
         Arc::new(TracingDiagnosticSink),
         ReservationTTLConfig::default(),
-        Network::Mainnet,
+        network,
     )
+}
+
+fn test_pending_tx(ledger: Arc<LocalLedger>) -> TestPendingTx {
+    test_pending_tx_on(ledger, Network::Mainnet)
 }
 
 fn test_pending_tx_with_sink(
@@ -406,6 +410,90 @@ fn funded_ledger() -> Arc<LocalLedger> {
         20,
     );
     ledger
+}
+
+/// What one payment asks for in the recipient-refusal cases below. The
+/// ledger that answers them holds less than this, so a build that skipped
+/// the address check would report insufficient funds.
+const RECIPIENT_REFUSAL_ASK_ATOMIC: u64 = 1_000;
+
+/// The same ledger's one output. Small enough that `RECIPIENT_REFUSAL_ASK_ATOMIC`
+/// cannot be paid, large enough that selection has a balance to mis-report.
+const RECIPIENT_REFUSAL_HELD_ATOMIC: u64 = 10;
+
+async fn assert_recipient_refused(pending: &TestPendingTx, request: TxRequest, reason: &str) {
+    let err = pending.build(request).await.unwrap_err();
+    assert!(
+        matches!(err, SendError::InvalidRecipient { reason: got } if got == reason),
+        "expected {reason}, got {err:?}"
+    );
+    assert_eq!(pending.outstanding(), 0, "a refusal selects nothing");
+}
+
+/// `LocalPendingTx::build` refuses a recipient before it looks at the
+/// balance. The same small synced ledger pays a real address with
+/// `InsufficientFunds` and refuses the others as `InvalidRecipient`.
+///
+/// Deleting both `check_recipients` calls (`build` and `build_select_sync`)
+/// turns the bad-address cases into `InsufficientFunds` and lets the empty
+/// list reach selection. Accepting the display form in
+/// `PaymentAddress::decode` does the same to that case. The selection
+/// helper does not call `check_recipients`; this is the production door.
+#[tokio::test]
+async fn build_refuses_a_bad_recipient_before_the_balance() {
+    let ledger = Arc::new(test_ledger());
+    populate_ledger(
+        ledger.as_ref(),
+        1,
+        vec![make_recovered_output(1, 100, RECIPIENT_REFUSAL_HELD_ATOMIC)],
+        20,
+    );
+    let pending = test_pending_tx(Arc::clone(&ledger));
+
+    let mut garbage = standard_request(RECIPIENT_REFUSAL_ASK_ATOMIC);
+    garbage.recipients[0].destination = TxDestination::Address("notanaddress".into());
+    assert_recipient_refused(&pending, garbage, "recipient is not a Shekyl address").await;
+
+    let display = ShekylAddress::decode(&test_payment_address())
+        .expect("the test address decodes")
+        .encode_classical_display()
+        .expect("the display form encodes");
+    let mut display_req = standard_request(RECIPIENT_REFUSAL_ASK_ATOMIC);
+    display_req.recipients[0].destination = TxDestination::Address(display);
+    assert_recipient_refused(
+        &pending,
+        display_req,
+        "recipient address cannot receive a payment",
+    )
+    .await;
+
+    let testnet = test_pending_tx_on(Arc::clone(&ledger), Network::Testnet);
+    assert_recipient_refused(
+        &testnet,
+        standard_request(RECIPIENT_REFUSAL_ASK_ATOMIC),
+        "recipient address is for another network",
+    )
+    .await;
+
+    assert_recipient_refused(
+        &pending,
+        TxRequest {
+            recipients: Vec::new(),
+            priority: FeePriority::Standard,
+        },
+        "TxRequest must carry at least one recipient",
+    )
+    .await;
+
+    let err = pending
+        .build(standard_request(RECIPIENT_REFUSAL_ASK_ATOMIC))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, SendError::InsufficientFunds { .. }),
+        "a real address on this ledger is short of funds, not an invalid recipient: {err:?}"
+    );
+    assert_eq!(pending.outstanding(), 0);
 }
 
 // --- CT-5a commit 4b-1: curve-tree spend-gate KATs (D1/D3) --------------

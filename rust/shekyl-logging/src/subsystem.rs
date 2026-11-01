@@ -144,10 +144,14 @@ impl Subsystem {
                 "shekyl_rpc_channel",
                 "shekyl_rpc_transport",
             ],
+            // `tor` is the daemon's Tor driver's own target
+            // (`shekyl-daemon/src/tor/`): its lines, a stuck round and each
+            // descriptor event among them, are this subsystem's.
             Self::Tor => &[
                 "shekyl_tor",
                 "shekyl_tor_control_client",
                 "shekyl_tor_control_daemon",
+                "tor",
             ],
             Self::Miner => &["miner", "shekyl_block_template", "shekyl_pow_randomx"],
             Self::Notify => &["notify", "spawn"],
@@ -292,6 +296,19 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// `log-category tor=debug` reaches the daemon's Tor driver, whose lines
+    /// use the target `tor`. Without it the driver's debug lines (a stuck
+    /// upload round, each descriptor event) could not be turned on.
+    #[test]
+    fn the_tor_category_reaches_the_daemons_tor_driver() {
+        assert!(Subsystem::Tor.targets().contains(&"tor"));
+        let directive = directive_from_words("info", &[("tor", "debug")]).expect("known words");
+        assert!(
+            directive.split(',').any(|part| part == "tor=debug"),
+            "{directive}"
+        );
     }
 
     #[test]
