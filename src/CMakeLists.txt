@@ -78,7 +78,6 @@ function (shekyl_add_executable name)
   monero_set_target_strip    ("${name}")
 endfunction ()
 
-include(Version)
 monero_add_library(version SOURCES ${CMAKE_BINARY_DIR}/version.cpp DEPENDS genversion)
 
 add_subdirectory(common)

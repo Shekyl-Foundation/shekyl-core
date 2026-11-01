@@ -2491,7 +2491,11 @@ components:
       properties:
         version:
           type: string
-          description: shekyl-wallet-rpc semver.
+          description: >-
+            The release this shekyl-wallet-rpc was built as, in the daemon's
+            spelling (3.1.0-alpha.11-release from a tagged build, the commit
+            in place of "release" otherwise). A bare cargo build is told no
+            release and reports 3.1.0-unknown.
         api_version:
           type: integer
           description: >

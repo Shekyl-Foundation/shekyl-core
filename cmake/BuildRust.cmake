@@ -469,13 +469,20 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Windows" AND NOT IOS)
             "${_shekyl_rust_bin_dir}/${_bin}${CMAKE_EXECUTABLE_SUFFIX}")
     endforeach()
 
+    # The binaries print the daemon's version string (`SHEKYL_VERSION_FULL`,
+    # cmake/Version.cmake), not the crate's `3.1.0`: a user must be able to
+    # tell which release their wallet is. `version.cpp` is regenerated only
+    # when that string changes, so depending on it rebuilds the binaries
+    # for a new tag that touched no Rust source; rustc tracks the variable
+    # through `option_env!`.
     add_custom_command(
         OUTPUT ${_shekyl_rust_bin_outputs}
         COMMAND ${CMAKE_COMMAND} -E env ${_rust_env_clear}
+            "SHEKYL_VERSION_FULL=${SHEKYL_VERSION}-${VERSIONTAG}"
             ${CARGO_EXECUTABLE} build --locked ${RUST_BUILD_FLAG} ${RUST_TARGET_FLAG}
             ${_shekyl_rust_bin_pkg_args}
         WORKING_DIRECTORY ${RUST_SOURCE_DIR}
-        DEPENDS ${_shekyl_rust_deps}
+        DEPENDS ${_shekyl_rust_deps} "${CMAKE_BINARY_DIR}/version.cpp"
         COMMENT "${_rust_comment} (shekyl-cli + shekyl-wallet-rpc binaries)"
         VERBATIM
     )
