@@ -539,3 +539,29 @@ fn an_interrupted_recreate_leaves_a_pool_that_opens() {
     assert!(!discard(&path).exists());
     drop(std::fs::remove_file(&path));
 }
+
+/// What a power loss between the engine's first commit and the seal leaves
+/// behind: a valid redb file with no table at all, which PB-S2's first
+/// replay (2026-11-01) found refused as foreign. The next open seals it in
+/// place, and the one after opens it. Red edit: drop the
+/// `creation_interrupted` branch from `open_or_create`, and the open
+/// refuses with `PoolFileForeign`.
+#[test]
+fn a_creation_cut_off_before_its_seal_is_finished_by_the_next_open() {
+    let path = tmp("interrupted-create");
+    {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        drop(redb::Builder::new().create_file(file).unwrap());
+    }
+    let (store, how) = PoolStore::create(&path).expect("the creation is finished");
+    assert_eq!(how, PoolOpen::Finished);
+    drop(store);
+    let (_store, how) = PoolStore::create(&path).expect("reopens");
+    assert_eq!(how, PoolOpen::Opened);
+    drop(std::fs::remove_file(&path));
+}

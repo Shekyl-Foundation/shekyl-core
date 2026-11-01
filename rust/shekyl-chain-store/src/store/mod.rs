@@ -81,7 +81,9 @@
 //! # The header is checked before anything else (increment 2)
 //!
 //! A fresh file is **sealed** in its first transaction with the layout
-//! version and the creating session's provenance; an existing file has
+//! version and the creating session's provenance (the engine's own empty
+//! commit precedes it, so a file with no table at all is a creation that
+//! stopped before its seal, and a writable open finishes it); an existing file has
 //! both read back — in a read transaction, so a stale file is never
 //! stamped current in passing — before any table is opened. A file with no
 //! version cell is not one this binary wrote and is refused
@@ -288,13 +290,16 @@ impl ChainStore {
     /// checked before the path is touched; [`EngineError::Open`] if the file
     /// cannot be created or opened, including an existing file that is not
     /// a redb database (refused unread and unwritten, never initialized);
-    /// on an existing database, [`StoreCannot::SchemaVersionAbsent`],
+    /// on an existing database that holds any table,
+    /// [`StoreCannot::SchemaVersionAbsent`],
     /// [`StoreCannot::SchemaVersionMismatch`],
     /// [`StoreCannot::SettlementEpochMismatch`] or
     /// [`StoreInvariant::CellCorrupt`] if its header is not one this binary
     /// can vouch for. A fresh file the engine refuses to take, or that
     /// cannot be sealed, is removed again, so a failed create does not
-    /// leave a headerless file the next open refuses.
+    /// leave a headerless file the next open refuses; and an existing file
+    /// with no table at all, a creation a power loss cut off before its
+    /// seal, is sealed in place.
     pub fn with_horizons(
         path: impl AsRef<Path>,
         apply_policy: ApplyPolicy,
@@ -345,8 +350,19 @@ impl ChainStore {
             },
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 let db = builder.open(path).map_err(EngineError::Open)?;
-                let provenance =
-                    header::verify(&db.begin_read().map_err(EngineError::BeginRead)?, epoch)?;
+                // `create_file` commits an empty database before the seal's
+                // transaction commits, so a power loss between the two
+                // leaves a valid file with no table at all (PB-S2's first
+                // replay, `DAEMON_REDB_STORE.md` §3.6.3). Nothing in it can
+                // be lost, and this open holds the engine's exclusive lock,
+                // so the creation is finished here: sealed in place, as
+                // `create_sealed` would have. A file with any table and no
+                // seal is still refused by `verify`.
+                let provenance = if creation_interrupted(&db)? {
+                    seal_new(&db, apply_policy, epoch)?
+                } else {
+                    header::verify(&db.begin_read().map_err(EngineError::BeginRead)?, epoch)?
+                };
                 (db, provenance)
             }
             Err(e) => return Err(EngineError::Open(redb::DatabaseError::Storage(e.into())).into()),
@@ -707,10 +723,38 @@ fn create_sealed(
     epoch: SettlementEpochBlocks,
 ) -> Result<(Database, Provenance), StoreError> {
     let db = builder.create_file(file).map_err(EngineError::Open)?;
-    let txn = arm_write(&db)?;
+    let provenance = seal_new(&db, policy, epoch)?;
+    Ok((db, provenance))
+}
+
+/// Seal a database that has no table yet: the header, in one transaction,
+/// under the durability every batch commits with.
+fn seal_new(
+    db: &Database,
+    policy: ApplyPolicy,
+    epoch: SettlementEpochBlocks,
+) -> Result<Provenance, StoreError> {
+    let txn = arm_write(db)?;
     let provenance = header::seal(&txn, policy, epoch)?;
     txn.commit().map_err(EngineError::Commit)?;
-    Ok((db, provenance))
+    Ok(provenance)
+}
+
+/// The file holds no table at all: the engine's first commit and nothing
+/// after it, which is a creation stopped before its seal.
+fn creation_interrupted(db: &Database) -> Result<bool, StoreError> {
+    let txn = db.begin_read().map_err(EngineError::BeginRead)?;
+    let none = txn
+        .list_tables()
+        .map_err(EngineError::Storage)?
+        .next()
+        .is_none()
+        && txn
+            .list_multimap_tables()
+            .map_err(EngineError::Storage)?
+            .next()
+            .is_none();
+    Ok(none)
 }
 
 #[cfg(test)]

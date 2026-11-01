@@ -839,11 +839,16 @@ fn open_pool(
         &AdmissionPolicy::GENESIS,
     )
     .map_err(|error| OpenError::Pool(format!("{error:?}")))?;
-    if let PoolOpen::Recreated { from } = opened {
-        tracing::warn!(
+    match opened {
+        PoolOpen::Recreated { from } => tracing::warn!(
             %from,
             "the pool file is a layout this release does not speak; it was recreated empty"
-        );
+        ),
+        PoolOpen::Finished => tracing::info!(
+            "the pool file's creation was cut short (a power loss on an earlier start); \
+             it was finished empty"
+        ),
+        PoolOpen::Created | PoolOpen::Opened => {}
     }
     Ok(Arc::new(Mutex::new(pool)))
 }

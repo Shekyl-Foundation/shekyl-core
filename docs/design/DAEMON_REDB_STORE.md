@@ -2488,9 +2488,18 @@ not change with its address:
 - (a) is `store/header.rs`: `seal` writes `schema_version` (and the
   `apply_policy` provenance cell — §7.1.1's sufficiency control, specified in
   [`ARCHIVAL_FORCING_CORPUS.md`](ARCHIVAL_FORCING_CORPUS.md) §"ApplyPolicy")
-  in a fresh file's **first** transaction, before any batch; `verify` runs on every writable and read-only
-  open and returns `SchemaVersionAbsent` / `SchemaVersionMismatch { found,
-  expected }` / `CellCorrupt` — never a default. The key bytes are pinned by a
+  in a fresh file's **first** transaction, before any batch. The engine's own
+  `create_file` commits an empty database before that transaction, so a power
+  loss between the two leaves a file with **no table at all**; a writable open
+  of such a file holds the engine's exclusive lock and **finishes the
+  creation**, sealing it in place (nothing in it can be lost), while a
+  read-only open cannot seal and still refuses. Found by PB-S2's first
+  power-loss replay (2026-11-01: 9 of 58 rebuilt points, all before the
+  first acknowledgement, would not start again; the pool file the same
+  way). `verify` runs on every other writable and read-only open and returns
+  `SchemaVersionAbsent` / `SchemaVersionMismatch { found, expected }` /
+  `CellCorrupt` — never a default: a file with any table and no seal is not
+  one this binary wrote. The key bytes are pinned by a
   test on `codec::SchemaVersionCell::KEY`.
 - (b) is `codec::Canonical`: one fixed-width, strict encoding per stored value
   type, used both to store and to digest. Types are `u8`, `u64` (LE, matching
