@@ -38,8 +38,10 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
-/// The artifact's schema. `v2` added [`MetricsArtifact::concurrency`].
-pub const METRICS_SCHEMA: &str = "shekyl_e2_metrics_v2";
+/// The artifact's schema. `v2` added [`MetricsArtifact::concurrency`];
+/// `v3` added the live sync's phases (chain sync's transit and entry, the
+/// connector's apply).
+pub const METRICS_SCHEMA: &str = "shekyl_e2_metrics_v3";
 
 /// How many workers shared the host while the numbers were taken.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -66,6 +68,14 @@ pub struct Metrics {
     wait_ns: AtomicU64,
     blocks_formed: AtomicU64,
     form_ns: AtomicU64,
+    applies: AtomicU64,
+    applied_blocks: AtomicU64,
+    apply_ns: AtomicU64,
+    transit_spans: AtomicU64,
+    transit_blocks: AtomicU64,
+    transit_ns: AtomicU64,
+    entries: AtomicU64,
+    entry_ns: AtomicU64,
 }
 
 fn observe(count: &AtomicU64, total: &AtomicU64, d: Duration) {
@@ -101,6 +111,14 @@ impl Metrics {
             wait_ns: AtomicU64::new(0),
             blocks_formed: AtomicU64::new(0),
             form_ns: AtomicU64::new(0),
+            applies: AtomicU64::new(0),
+            applied_blocks: AtomicU64::new(0),
+            apply_ns: AtomicU64::new(0),
+            transit_spans: AtomicU64::new(0),
+            transit_blocks: AtomicU64::new(0),
+            transit_ns: AtomicU64::new(0),
+            entries: AtomicU64::new(0),
+            entry_ns: AtomicU64::new(0),
         }
     }
 
@@ -133,6 +151,28 @@ impl Metrics {
         observe(&self.blocks_formed, &self.form_ns, d);
     }
 
+    /// The connector applied a run of `blocks` blocks (its connect and
+    /// commit, and the wait for its mailbox) in `d`.
+    pub fn applied(&self, blocks: usize, d: Duration) {
+        observe(&self.applies, &self.apply_ns, d);
+        self.applied_blocks
+            .fetch_add(u64::try_from(blocks).unwrap_or(u64::MAX), Ordering::Relaxed);
+    }
+
+    /// Chain sync's body request for `blocks` blocks was answered `d` after
+    /// it was sent: the round trip and the peer's serving.
+    pub fn transited(&self, blocks: usize, d: Duration) {
+        observe(&self.transit_spans, &self.transit_ns, d);
+        self.transit_blocks
+            .fetch_add(u64::try_from(blocks).unwrap_or(u64::MAX), Ordering::Relaxed);
+    }
+
+    /// One arrival chain sync offered the entry was answered `d` after the
+    /// offer: the door's wait, `form`, and the connector's apply.
+    pub fn entered(&self, d: Duration) {
+        observe(&self.entries, &self.entry_ns, d);
+    }
+
     /// Time `f` as one hash.
     pub fn timed_hash<T>(&self, f: impl FnOnce() -> T) -> T {
         let t = Instant::now();
@@ -160,6 +200,14 @@ impl Metrics {
         let wait_ns = self.wait_ns.load(Ordering::Relaxed);
         let blocks = self.blocks_formed.load(Ordering::Relaxed);
         let form_ns = self.form_ns.load(Ordering::Relaxed);
+        let applies = self.applies.load(Ordering::Relaxed);
+        let applied_blocks = self.applied_blocks.load(Ordering::Relaxed);
+        let apply_ns = self.apply_ns.load(Ordering::Relaxed);
+        let transit_spans = self.transit_spans.load(Ordering::Relaxed);
+        let transit_blocks = self.transit_blocks.load(Ordering::Relaxed);
+        let transit_ns = self.transit_ns.load(Ordering::Relaxed);
+        let entries = self.entries.load(Ordering::Relaxed);
+        let entry_ns = self.entry_ns.load(Ordering::Relaxed);
         let mean = |total: u64, n: u64| if n == 0 { None } else { Some(total / n) };
         MetricsArtifact {
             schema_version: METRICS_SCHEMA,
@@ -179,6 +227,17 @@ impl Metrics {
             blocks_formed: blocks,
             form_ns_total: form_ns,
             form_ns_mean: mean(form_ns, blocks),
+            applies,
+            applied_blocks,
+            apply_ns_total: apply_ns,
+            apply_ns_per_block: mean(apply_ns, applied_blocks),
+            transit_spans,
+            transit_blocks,
+            transit_ns_total: transit_ns,
+            transit_ns_per_block: mean(transit_ns, transit_blocks),
+            entries,
+            entry_ns_total: entry_ns,
+            entry_ns_mean: mean(entry_ns, entries),
         }
     }
 }
@@ -240,10 +299,35 @@ pub struct MetricsArtifact {
     pub wait_ns_total: u64,
     /// Blocks through the stateless stage.
     pub blocks_formed: u64,
-    /// Wall-clock over all `form`s (hashing included).
+    /// Wall-clock over all `form`s: hashing included for a hashed form,
+    /// none for `form_judged`, whose proof chain sync's executor paid for.
     pub form_ns_total: u64,
     /// Per block.
     pub form_ns_mean: Option<u64>,
+    /// Runs the connector applied for the live service.
+    pub applies: u64,
+    /// Blocks in those runs.
+    pub applied_blocks: u64,
+    /// Wall-clock over all applies: the connector's connect and commit,
+    /// and the wait for its mailbox.
+    pub apply_ns_total: u64,
+    /// Per applied block.
+    pub apply_ns_per_block: Option<u64>,
+    /// Chain sync's body requests answered.
+    pub transit_spans: u64,
+    /// Blocks those requests named.
+    pub transit_blocks: u64,
+    /// Wall-clock from each request's send to its answer, summed.
+    pub transit_ns_total: u64,
+    /// Per block named: a request's round trip shared by its blocks.
+    pub transit_ns_per_block: Option<u64>,
+    /// Arrivals chain sync offered the entry and heard answered.
+    pub entries: u64,
+    /// Wall-clock from each offer to its answer, summed: the door's wait,
+    /// `form`, and the apply.
+    pub entry_ns_total: u64,
+    /// Per arrival.
+    pub entry_ns_mean: Option<u64>,
 }
 
 impl Default for MetricsArtifact {
@@ -261,6 +345,15 @@ impl MetricsArtifact {
     /// Serialization only.
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string_pretty(self)
+    }
+
+    /// The artifact as one line of JSON, for a log line.
+    ///
+    /// # Errors
+    ///
+    /// Serialization only.
+    pub fn to_json_line(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(self)
     }
 }
 
@@ -293,7 +386,7 @@ mod tests {
         );
         assert_eq!((s.blocks_formed, s.form_ns_mean), (1, Some(1_000)));
         assert_eq!(s.schema_version, METRICS_SCHEMA);
-        assert!(s.to_json().expect("json").contains("shekyl_e2_metrics_v2"));
+        assert!(s.to_json().expect("json").contains("shekyl_e2_metrics_v3"));
         assert_eq!(s.concurrency, None, "no pipeline configured the sink");
     }
 

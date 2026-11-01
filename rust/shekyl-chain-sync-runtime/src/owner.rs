@@ -262,6 +262,8 @@ struct Offered {
     /// The block the offer names. A switch is a connect when this is the
     /// chain's new tip, and [`Outcome::Noted`] otherwise.
     hash: BlockHash,
+    /// When it was offered: the entry's answer is timed from here.
+    at: Instant,
 }
 
 /// A request a session sent this node.
@@ -335,6 +337,9 @@ struct Owner<C: Clock + Clone, R> {
     /// Offered arrivals, by tag.
     offered: HashMap<u64, Offered>,
     serving: HashMap<Session, Serving>,
+    /// Each session's body request in flight: when it was sent and how
+    /// many blocks it named. Its answer is timed from here.
+    bodies_sent: HashMap<Session, (Instant, usize)>,
     /// Sessions whose Levin handshake has completed ([`Routed::Opened`]).
     /// The owner sends to no other: a peer still waiting on the
     /// handshake's reply refuses anything else.
@@ -399,6 +404,7 @@ where
         offered: HashMap::new(),
         serving: HashMap::new(),
         opened: HashSet::new(),
+        bodies_sent: HashMap::new(),
         seats: None,
         state_tx,
         published,
@@ -677,6 +683,7 @@ where
             Routed::Closed { id } => {
                 let session = Session::new(id);
                 self.opened.remove(&session);
+                self.bodies_sent.remove(&session);
                 self.serving.remove(&session);
                 self.door.session_closed(SessionId(session.socket().get()));
                 self.event(Event::SessionClosed { session });
@@ -693,10 +700,15 @@ where
                     bytes: payload,
                 });
             }
-            SyncCommand::ResponseBodies => self.event(Event::Bodies {
-                session,
-                bytes: payload,
-            }),
+            SyncCommand::ResponseBodies => {
+                if let Some((sent, blocks)) = self.bodies_sent.remove(&session) {
+                    self.executor.metrics().transited(blocks, sent.elapsed());
+                }
+                self.event(Event::Bodies {
+                    session,
+                    bytes: payload,
+                });
+            }
             SyncCommand::RequestHeaders => match RequestHeaders::decode(&payload) {
                 Ok(request) => self.queue_serve(session, ServeRequest::Headers(request)),
                 Err(err) => {
@@ -776,6 +788,9 @@ where
             }
             Input::Entry { tag, reply } => {
                 let offered = self.offered.remove(&tag);
+                if let Some(offered) = &offered {
+                    self.executor.metrics().entered(offered.at.elapsed());
+                }
                 tracing::trace!(
                     tag,
                     session = offered
@@ -957,6 +972,22 @@ where
     /// acts on it: new sessions clear it on their next event (CS-Q7).
     fn publish_view(&mut self) {
         let view = self.sync.view().map(Session::socket);
+        let behind = matches!(
+            self.published.view_tx.borrow().state,
+            SyncState::Behind { .. }
+        );
+        if behind && matches!(view.state, SyncState::Synced | SyncState::Following { .. }) {
+            // The per-block profile (CS-5 §8): every phase the node timed
+            // since it opened, once each time a sync reaches the best chain.
+            match self.executor.metrics().snapshot().to_json_line() {
+                Ok(profile) => tracing::info!(
+                    target_height = ?view.target.tip(),
+                    %profile,
+                    "sync reached the best chain; the phases so far"
+                ),
+                Err(err) => tracing::error!(%err, "the sync profile did not encode"),
+            }
+        }
         let was = self.published.view_tx.borrow().stalled;
         if view.stalled && !was {
             tracing::warn!(
@@ -1014,6 +1045,8 @@ where
                             session,
                             notify(SyncCommand::RequestBodies.wire_id(), &payload),
                         );
+                        self.bodies_sent
+                            .insert(session, (Instant::now(), request.hashes.len()));
                         self.arm(deadline, session, id);
                     }
                     Err(err) => tracing::error!(%err, "a body request did not encode"),
@@ -1137,6 +1170,7 @@ where
                             session: *session,
                             solicited: *solicited,
                             hash: *hash,
+                            at: Instant::now(),
                         },
                     );
                 }

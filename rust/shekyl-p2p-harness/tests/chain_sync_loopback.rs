@@ -38,7 +38,7 @@ use shekyl_wire::{Block, PowBlob};
 #[path = "chain_sync/support.rs"]
 mod support;
 
-use support::{claim, claim_of, logs, rng, source, spend, wait_synced, CLOSES, LIMIT};
+use support::{claim, claim_of, logs, rng, source, spend, wait_synced, CLOSES, LIMIT, PROFILES};
 
 /// The model's closes on node `tag`, by session.
 fn model_closes(tag: &str) -> HashMap<u64, String> {
@@ -133,6 +133,73 @@ async fn a_fresh_node_syncs_a_corpus_from_two_honest_peers_hashing_headers_only(
         "{bodies} body requests for {count} blocks"
     );
     assert!(model_closes("honest").is_empty());
+    node.stop().await;
+    held.stop().await;
+}
+
+/// **A sync times every phase of each block** (CS-5 §8, the per-block
+/// profile). A fresh node syncs the corpus from one honest peer; the one
+/// sink the substrate, the entry and the owner share then holds, for every
+/// block it fetched: the body request's transit, the header's hash, the
+/// entry's answer to the offer, `form_judged`, and the connector's apply.
+/// The owner logs this sink once the sync reaches the best chain, which is
+/// the line the per-block profile is read from. Red edit: the owner does
+/// not time a body response's transit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_sync_times_every_phase_of_each_block() {
+    logs();
+    let (corpus, steps) = spend();
+    let held = source("profile-src", &corpus, &steps).await;
+    let (count, _, _) = held.tip().expect("a chain");
+    let mut node = Node::start("profile", corpus.rules(), &steps[..1], 2, rng()).await;
+    let (peer, _asked) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
+    node.connect(Box::new(peer), Some(claim_of(&held)));
+    wait_synced(&node, count).await;
+    let fetched = count - 1;
+    let profile = node.metrics.snapshot();
+    eprintln!("{}", profile.to_json().expect("json"));
+    assert!(
+        profile.transit_blocks >= fetched && profile.transit_ns_total > 0,
+        "transit: {} blocks over {} spans for {fetched} fetched",
+        profile.transit_blocks,
+        profile.transit_spans
+    );
+    assert!(
+        profile.hashes >= fetched,
+        "hash: {} for {fetched} headers",
+        profile.hashes
+    );
+    assert!(
+        profile.entries >= fetched && profile.entry_ns_total > 0,
+        "entry: {} answers for {fetched} offers",
+        profile.entries
+    );
+    assert!(
+        profile.blocks_formed >= fetched,
+        "form_judged: {} for {fetched} blocks",
+        profile.blocks_formed
+    );
+    assert!(
+        profile.applied_blocks >= fetched && profile.apply_ns_total > 0,
+        "apply: {} blocks over {} runs for {fetched} blocks",
+        profile.applied_blocks,
+        profile.applies
+    );
+    // The line the profile is read from: logged as the sync reached the
+    // best chain, carrying the fetched blocks' transit.
+    let logged: Vec<serde_json::Value> = PROFILES
+        .lock()
+        .expect("profiles")
+        .iter()
+        .filter(|(tag, _)| tag == "profile")
+        .map(|(_, json)| serde_json::from_str(json).expect("the profile line is JSON"))
+        .collect();
+    assert!(
+        logged
+            .iter()
+            .any(|line| line["transit_blocks"].as_u64() >= Some(fetched)),
+        "no profile line covering the sync was logged: {logged:?}"
+    );
     node.stop().await;
     held.stop().await;
 }

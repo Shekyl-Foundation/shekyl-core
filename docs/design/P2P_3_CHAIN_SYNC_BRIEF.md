@@ -1778,6 +1778,15 @@ it decided beyond the rows above:
   closes a session that sends chain-sync traffic before it. A session
   opened at attach would send ahead of the reply, and the dialing peer
   refuses that frame (`LevinHandshakeRejected`).
+- **The per-block profile is one sink.** The node's measurement sink
+  (`shekyl-chain-ingest`'s `Metrics`, schema `shekyl_e2_metrics_v3`),
+  which the substrate already hashes into, also takes the entry's
+  `form_judged` and the connector's apply (through `Follow::metrics`)
+  and the owner's body transit and offer-to-answer time (through the
+  executor). The owner logs it as one line of JSON each time a sync
+  reaches the best chain; `drs_bench.py` records the subject's last such
+  line as `sync_profile`. The door's own wait is the answer time less
+  `form_judged` and the apply.
 
 ## §A. What chain sync needs from the DRS-X entry
 

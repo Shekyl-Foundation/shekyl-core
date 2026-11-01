@@ -107,6 +107,41 @@ def _resolved_sync_line(log_path, since=0):
     return None
 
 
+# The line chain sync's owner logs each time a sync reaches the best chain,
+# carrying every phase the node timed since it opened (CS-5 §8).
+PROFILE_MARK = "sync reached the best chain; the phases so far"
+
+
+def _sync_profile(log_path):
+    """The subject's per-block profile, as the last profile line logged, or None.
+
+    The owner logs the node's measurement sink (`MetricsArtifact`, one line of
+    JSON in its `profile` field, the line's last) each time a sync reaches the
+    best chain; the last such line covers the whole sync. A daemon that logs
+    none (one built before chain sync's cutover) yields None, and so does a
+    line whose JSON does not parse: the profile is recorded, never guessed.
+    """
+    last = None
+    try:
+        with open(log_path, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if PROFILE_MARK in line:
+                    last = line
+    except OSError:
+        return None
+    if last is None:
+        return None
+    text = re.sub(r"\x1b\[[0-9;]*m", "", last).strip()
+    _, found, raw = text.partition("profile=")
+    if not found:
+        return None
+    try:
+        profile = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return profile if isinstance(profile, dict) else None
+
+
 def _readback_line(daemon_log, console_log, daemon_since=0, console_since=0):
     """A spawn's readback and the file it was read from.
 
@@ -567,6 +602,15 @@ def measure(args):
             cpu_at_end = _cpu_seconds(subj.pid)
             load_at_end = _loadavg()
             synced = reached >= seed_h
+            # The per-block profile: logged as the owner publishes the state
+            # the sync ended in, which can trail the height by a moment.
+            profile = None
+            if synced:
+                profile_until = time.time() + 15
+                while profile is None and time.time() < profile_until:
+                    profile = _sync_profile(subject_daemon_log)
+                    if profile is None:
+                        time.sleep(0.5)
         # Store size AFTER close: a live LMDB env reported 40.7 MB for a
         # 200-block chain that measured 1.43 MB once closed.
         store_bytes = _dir_bytes(subj_dir, apparent=False)
@@ -662,6 +706,11 @@ def measure(args):
             "blocks_generated": int(gen_blocks),
             "generation_wall_s": None if gen_wall is None else round(gen_wall, 3),
         },
+        # The subject's own phases (CS-5 §8): transit, hash, the entry's
+        # answer, form_judged and the connector's apply, as the owner logged
+        # them when the sync reached the best chain. None for a daemon that
+        # logs no profile. Recorded beside the measures; not a §1.3 measure.
+        "sync_profile": profile,
         "measures": [
             A.measure_row(
                 "ibd_wall_time_s", round(elapsed, 3), scenario,

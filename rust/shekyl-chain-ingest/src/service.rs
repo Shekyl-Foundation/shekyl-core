@@ -557,6 +557,8 @@ pub(crate) struct Shared<S: Substrate> {
     seeds: tokio::sync::watch::Sender<Option<crate::cache_window::SeedPair>>,
     /// The last `TipChanged` publication the tip attendant acted on.
     followed: tokio::sync::watch::Sender<u64>,
+    /// The live phases' measurement sink ([`Follow::metrics`]).
+    metrics: Option<Arc<crate::metrics::Metrics>>,
     /// The pool, when one is wired.
     pool: Option<PoolWiring>,
     /// Cleared when the pool file faults. Block ingest does not stop.
@@ -1040,6 +1042,12 @@ pub struct Follow {
     /// [`Notify`] the pool door's fluff hook fires. `None` is a private
     /// notify: tests that admit through the pool lock wake it themselves.
     pub shown: Option<Arc<Notify>>,
+    /// The measurement sink the live phases are timed into: each
+    /// `form_judged`, and each run the connector applies
+    /// (`P2P_3_CHAIN_SYNC_BRIEF.md` CS-5, the per-block profile). The
+    /// composition root hands the substrate's own sink. `None` times
+    /// nothing.
+    pub metrics: Option<Arc<crate::metrics::Metrics>>,
 }
 
 /// Told the ids that left the pool on a reconcile.
@@ -1242,6 +1250,7 @@ where
             branch_gate: tokio::sync::Mutex::new(()),
             seeds: tokio::sync::watch::Sender::new(None),
             followed: tokio::sync::watch::Sender::new(0),
+            metrics: follow.metrics,
             pool: follow.pool,
             pool_live: Arc::new(AtomicBool::new(true)),
             pending: Mutex::new(Vec::new()),

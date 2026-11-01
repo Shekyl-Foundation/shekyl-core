@@ -184,7 +184,7 @@ impl Node {
         let budget = Budget::new(NonZeroUsize::new(permits).expect("non-zero"));
         // The published state, as the node's handle holds it.
         let state = tokio::sync::watch::Sender::new(SyncState::NoView);
-        let (follow, miner) = match keys {
+        let (mut follow, miner) = match keys {
             None => (Follow::default(), None),
             Some(keys) => {
                 let board = Arc::new(JobBoard::new());
@@ -215,6 +215,9 @@ impl Node {
                 )
             }
         };
+        // The substrate's sink, which the executor shares, as the daemon's
+        // node wires it: the per-block profile's phases in one place.
+        follow.metrics = Some(Arc::clone(&metrics));
         let chain = Chain::empty_following(
             tag,
             rules,

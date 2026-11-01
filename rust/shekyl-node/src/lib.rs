@@ -302,6 +302,9 @@ impl Node {
             }),
             producer,
             shown: Some(shown),
+            // The substrate's own sink, which the sync owner's executor
+            // shares: every phase of the per-block profile in one place.
+            metrics: Some(Arc::clone(substrate.metrics())),
         };
         let service_config = ServiceConfig::default();
         let runtime = shekyl_runtime::runtime(
