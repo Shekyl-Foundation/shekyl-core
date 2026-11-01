@@ -2405,7 +2405,7 @@ later, at block validation. The chain, re-read 2026-10-09:
   `COMMAND_TIMED_SYNC` response (`src/p2p/net_node.inl` line 1461 (at the pin)) — both inside
   the *response* handler, so both require a completed exchange;
 - `process_payload_sync_data`
-  (`src/cryptonote_protocol/cryptonote_protocol_handler.inl:391`) returns
+  (`src/cryptonote_protocol/cryptonote_protocol_handler.inl` line 391 at this round's pin; the sync half went at CS-5) returns
   true on every path. It records the peer's height and top id. It does not
   compare genesis. `CORE_SYNC_DATA` carries no block version and no pruning
   seed, so the handshake's "returned false, dropping connection" arms
@@ -3122,7 +3122,7 @@ response carries `basic_node_data`, the chain-sync payload, and
   the overlay's stream opening. Only the transport reads it.
 - **Session established** — the Levin handshake has completed. It is
   `session_established()` on the connection context
-  (`src/cryptonote_basic/connection_context.h:94`; the previous name was
+  (`src/p2p/net_node.h:92`, which reads the seam's handshake flag; the previous name was
   `handshake_complete()`). Every p2p and cryptonote consumer reads this one:
   sync-search, block relay, timed sync, and the relay lane's
   `on_session_established`.
@@ -3962,7 +3962,7 @@ on two surfaces and today gets two different answers:
 | Surface | Unrecognised input | Inherited behaviour |
 | --- | --- | --- |
 | Levin **flag bits** | bits outside the five defined | **preserved verbatim** through the codec (PWC-A6) |
-| Levin **command ids** | any id not in the 13-arm switch | **`std::numeric_limits<size_t>::max()`** — **no *per-command* cap** (`src/cryptonote_basic/connection_context.cpp:68-71`). The global packet limit still binds: the reader takes `min(packet limit, hook(command))` (`rust/shekyl-levin/src/reader.rs:182-185`), so an unknown command is bounded by `DEFAULT_MAX_PACKET_SIZE`, not unbounded. *An earlier version of this row said "no cap at all", which overstates the hazard — the same flattering-error direction §1 warns about, pointed at a defect instead of a defence.* |
+| Levin **command ids** | any id not in the 13-arm switch | **`std::numeric_limits<size_t>::max()`** — **no *per-command* cap** (`src/cryptonote_basic/connection_context.cpp:49-50`). The global packet limit still binds: the reader takes `min(packet limit, hook(command))` (`rust/shekyl-levin/src/reader.rs:182-185`), so an unknown command is bounded by `DEFAULT_MAX_PACKET_SIZE`, not unbounded. *An earlier version of this row said "no cap at all", which overstates the hazard — the same flattering-error direction §1 warns about, pointed at a defect instead of a defence.* |
 
 *Landed 2026-09-09:* a Q/S-flagged command that is not a `DefinedCommand` is
 `Error::UnknownCommand` at ingress; unknown flag bits are `Error::UnknownFlags`
@@ -4123,7 +4123,7 @@ stay up" and hang-up plus a reply body cannot.**
 **RULED as a derivation with a named dynamic input, because the honest answer
 is not a table of constants.**
 
-**The inherited table, read at source** (`src/cryptonote_basic/connection_context.cpp:41-71` at ruling; the live table is `rust/shekyl-levin/src/ingress.rs`) —
+**The inherited table, read at source** (`src/cryptonote_basic/connection_context.cpp` lines 41–71 at ruling; the live table is `rust/shekyl-levin/src/ingress.rs`) —
 13 arms, and after PWD-B10 and PWD-B6 it is **11**:
 
 | Command | Inherited cap | Disposition |
@@ -4205,7 +4205,7 @@ inventing a consensus constant from a p2p round.
 > **`NOTIFY_RESPONSE_GET_OBJECTS` (2004) takes a different bound from
 > `NOTIFY_NEW_COMPACT_BLOCK` (2008), because it is not a single block.** Its
 > payload is `std::vector<block_complete_entry> blocks` plus a `missed_ids`
-> list (`src/cryptonote_protocol/cryptonote_protocol_defs.h:173-190`) — a **sync batch**. A cap sized
+> list (`src/cryptonote_protocol/cryptonote_protocol_defs.h` lines 173–190 at ruling; the struct went with 2004 at CS-5) — a **sync batch**. A cap sized
 > for one block plus a tip-lag margin either rejects legitimate multi-block
 > sync responses or, if widened to fit a batch, hands the single-block announce
 > path a batch-sized bound. *An earlier version of this table gave both
@@ -4214,7 +4214,7 @@ inventing a consensus constant from a p2p round.
 > **Its resource bound is the byte budget; the requested cardinality survives
 > as correctness.** `NOTIFY_REQUEST_GET_OBJECTS` (2003) carries
 > `std::vector<crypto::hash> blocks`
-> (`src/cryptonote_protocol/cryptonote_protocol_defs.h:156-171`), so the
+> (`src/cryptonote_protocol/cryptonote_protocol_defs.h` lines 156–171 at ruling; the struct went with 2003 at CS-5), so the
 > receiver **already knows the count it requested** — *the original form of
 > this passage made that count times the per-block bound the cap; that form
 > is retired by the dated correction above.* What the count still buys, at
@@ -4848,7 +4848,7 @@ severing its neighbours.
 unparseable and structurally invalid transactions **never set the flag**, so
 they fall through
 `if (!m_core.handle_incoming_tx(...) && !tvc.m_no_drop_offense) { drop_connection(...) }`
-(`src/cryptonote_protocol/cryptonote_protocol_handler.inl:909-913`). Nothing
+(`src/cryptonote_protocol/cryptonote_protocol_handler.inl` lines 909–913 at ruling). Nothing
 special-cases them; they drop because the carve-out does not reach them.
 **PWD-B7 states that as a rule** — form failures are context-free, universal,
 and the sender chose to send those bytes — so a future condition is decidable
@@ -4864,7 +4864,7 @@ rather than inheriting whatever the default happens to be.
 > `add_tx`'s catch-alls (`:344`, `:506-509` — "internal error: error adding
 > transaction to txpool"). Both fall through the same
 > `!tvc.m_no_drop_offense` gate
-> (`src/cryptonote_protocol/cryptonote_protocol_handler.inl:909-913`) and
+> (`src/cryptonote_protocol/cryptonote_protocol_handler.inl` lines 909–913 at ruling) and
 > disconnect the sender — **our own storage throwing severs an innocent
 > peer**, the exact outcome the rule forbids. The ruling stands; the
 > mechanism does not satisfy it.
@@ -5039,7 +5039,7 @@ describes the common case, not the contract.*
 
 **RULED: `m_bad_peer_checker` is deleted.** `once_a_time_seconds<43>` has
 **exactly one occurrence tree-wide — its declaration**, at
-`src/cryptonote_protocol/cryptonote_protocol_handler.h:189` **at this round's pin** (PWC-E4a cites `:186` from its own; #612 moved it, and the census records stale pointers rather than correcting them silently) — and `on_idle`
+`src/cryptonote_protocol/cryptonote_protocol_handler.h` line 189 **at this round's pin** (PWC-E4a cites `:186` from its own; #612 moved it, and the census records stale pointers rather than correcting them silently) — and `on_idle`
 does not call it (PWC-E4a). A cadence constant no code reads is not a cadence; it reads
 as one to anyone auditing the file, which is the whole cost.
 

@@ -268,7 +268,7 @@ producers cited at source.
 | `ChainTipFactsFfi` (`rust/shekyl-daemon-rpc/src/ffi.rs:337-342`) | twins of the C POD | stay raw |
 
 **Levin:** `CORE_SYNC_DATA.current_height` (`rust/shekyl-levin/src/payload/types.rs:93-94`,
-`src/cryptonote_protocol/cryptonote_protocol_defs.h:174`) is COUNT
+`src/cryptonote_protocol/cryptonote_protocol_defs.h:127`) is COUNT
 ("Chain height"). Stays `u64` on the wire (C1). Dual-stack fixtures
 copy `get_info.height`, which is COUNT.
 

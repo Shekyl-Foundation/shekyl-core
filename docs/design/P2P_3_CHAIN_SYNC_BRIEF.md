@@ -1023,8 +1023,8 @@ nothing:
 - the dialer brief's "score owner" sentence;
 - **landed Rust (ruled with the rest):** the `heavier_score` arm of
   `BlockAnnounceAction` and `BlockSyncAction`
-  (`shekyl-peer-policy/src/block_peer.rs:103`, `:175`), and its two FFI
-  predicates (`peer_policy_ffi.rs:257`, `:292`).
+  (`rust/shekyl-peer-policy/src/block_peer.rs`), and its two FFI
+  predicates (`peer_policy_ffi.rs`); CS-5 deleted all of them.
   - This arm exists only to pick a score weight.
   - The rest of the crate stays and is extended (CS-Q1, CS-Q4).
 
@@ -1426,17 +1426,17 @@ handler.
 
 | # | Site | Location |
 | --- | --- | --- |
-| 1 | `BlockAnnounceAction::heavier_score` | `rust/shekyl-peer-policy/src/block_peer.rs:102-105` |
+| 1 | `BlockAnnounceAction::heavier_score` | `rust/shekyl-peer-policy/src/block_peer.rs` (deleted by CS-5) |
 | 2 | `BlockSyncAction::heavier_score` | `block_peer.rs:174-177` |
 | 3 | Its test | `block_peer.rs:229` |
-| 4 | `shekyl_block_announce_heavier_score` | `rust/shekyl-ffi/src/peer_policy_ffi.rs:256-259` |
+| 4 | `shekyl_block_announce_heavier_score` | `rust/shekyl-ffi/src/peer_policy_ffi.rs` (the block family, deleted by CS-5) |
 | 5 | `shekyl_block_sync_heavier_score` | `peer_policy_ffi.rs:291-294` |
 | 6 | FFI tests | `peer_policy_ffi.rs:305`, `312`, `486-487`, `507-508`, `533`, `544` |
 | 7 | C declarations | `src/shekyl/shekyl_ffi.h:2960`, `:2967` |
-| 8 | C++ wrappers | `src/cryptonote_basic/block_ingest.h:102-105`, `:133-136` |
+| 8 | C++ wrappers | `src/cryptonote_basic/block_ingest.h` (deleted by CS-5) |
 | 9 | Announce use | `.inl:648` |
 | 10 | Sync use | `.inl:1511` |
-| 11 | C++ test | `tests/unit_tests/peer_policy_block_ingest.cpp:119` |
+| 11 | C++ test | `tests/unit_tests/peer_policy_block_ingest.cpp` (deleted by CS-5) |
 
 **4. CS-Q12's hardcoded values.**
 
@@ -1444,7 +1444,7 @@ handler.
 | --- | --- | --- | --- |
 | 1 | `block-download-max-size` | `m_block_download_max_size = 0`, `.inl:251` (member `.h:197`) | `.inl:1918`, falling back to `BLOCK_QUEUE_SIZE_THRESHOLD` (`.inl:82`) |
 | 2 | `span-limit` | `m_span_time = 2`, `.inl:252` (constructor `:226`; member `.h:198`) | `.inl:263` → `m_span_limit` (`.h:199`), read `:261`, `:266-267`, `:1919`, `:1948`; floor `BLOCK_QUEUE_NSPANS_MINIMUM` `.inl:81` |
-| 3 | `prep-blocks-threads` | `blocks_threads = 4`, `src/cryptonote_core/cryptonote_core.cpp:313` | `:401` → `Blockchain::set_user_options` `src/cryptonote_core/blockchain.cpp` → `m_max_prepare_blocks_threads` (`blockchain.h:1076`; read `blockchain.cpp:6230-6231`) |
+| 3 | `prep-blocks-threads` | `blocks_threads = 4` in `src/cryptonote_core/cryptonote_core.cpp` (deleted by CS-5) | `:401` → `Blockchain::set_user_options` `src/cryptonote_core/blockchain.cpp` → `m_max_prepare_blocks_threads` (`blockchain.h:1076`; read `blockchain.cpp:6230-6231`) |
 | 4 | `block-sync-size` | `block_sync_size = 0`, `cryptonote_core.cpp:417` (member `cryptonote_core.h:900`) | `core::get_block_sync_size` `cryptonote_core.cpp:610-634`, defaulting to `BLOCKS_SYNCHRONIZING_DEFAULT_COUNT` (`cryptonote_config.h:103`); its one production caller `.inl:2029` |
 
 **5. The router's forwarding list, and what the cutover does to each row.**
