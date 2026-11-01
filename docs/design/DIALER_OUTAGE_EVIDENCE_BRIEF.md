@@ -119,14 +119,16 @@ These are invariants. Each is tested against every connector's declarations, not
 
 ## 6. Tests that can fail (each names the edit that makes it fail)
 
-1. **A Tor silent-drop block,** five dials in flight, no stream opened: every white test that fails stays white and cools at the first step. Today it fails, because K is never reached.
-2. **The same block, but one concurrent dial opens a stream mid-attempt:** the failing white is demoted.
-3. **After the block, the first corroborating event:** addresses cooled during the block are drawable at once.
+1. **A Tor silent-drop block,** five dials in flight, no stream opened and no session receiving: every white test that fails stays white and, having no counted failure, cools for `outage_retry`; a gray address with counted failures cools at its current rung. Today it fails, because K is never reached.
+2. **The same block, with the link shown working on both sides of a failure:** a sign of life within δ before the failure (another attempt's stream opening, or a byte received on a counted session) **and** one within δ after it. The failing white is demoted. With life on one side only, it is excused.
+3. **After the block, the first corroborating event:** addresses with no counted failure that were excused during the block are drawable at once; addresses with counted failures keep their rung.
+
+*Records-was (to 2026-10-31, amended on #1229's review to the ruled bracket, `OE-D5`, and hold the rung, `OE-D6`): test 1 "cools at the first step"; test 2 "one concurrent dial opens a stream mid-attempt: the failing white is demoted", which supplies neither the after-failure sign of life nor necessarily the before-failure one; test 3 "addresses cooled during the block are drawable at once".*
 4. **A Destination failure with no corroboration:** it still counts against the address (a refusal is never excused as an outage).
 5. **A Local failure:** never counts against the address, on either connector.
 6. **Boot with the network down:** no demotion, no climb.
 7. **The probe never corroborates.**
-8. **Every invariant in 4.3, run against each connector's declarations.** Plus a test that a cause with no declared evidence kind fails the build, so a connector cannot leave a failure unmapped.
+8. **Every invariant in 4.3, run against each connector's declarations.** A connector cannot leave a failure unmapped: each observation it can make is a variant its stamping matches totally into a `DialFailure` (the judge's own type, `DIALER_OUTAGE_EVIDENCE.md` §2.2), so an unmapped one does not compile; a test pins every row. *Records-was: "a test that a cause with no declared evidence kind fails the build", which the type now guarantees.*
 
 ## 7. Live (Pi; claim it in the ledger after the Tor soak's claim ends, about 2026-11-07 06:17Z)
 
@@ -136,10 +138,14 @@ Repeat the Tor lane's blackhole case (10 minutes of silent drops while running) 
 - both connectors, counting white demotions;
 - on Tor, the time from unblock to the first stream open.
 
-Leave in-flight Tor attempts to run (TSR-Q14: Tor retries inside its own window). Pass criteria:
-- no white demotion in any case;
-- recovery after a blackhole within the refuse case's order of magnitude;
+Leave in-flight Tor attempts to run (TSR-Q14: Tor retries inside its own window).
+
+**Pass criteria (the gate):**
+- no white demotion in the 10-minute blackhole, on either connector;
+- recovery after that blackhole within the refuse case's order of magnitude;
 - an unchanged eclipse-share result: the in-flight bound's 90 % gray test, under the new judge.
+
+**Measured, not gated:** the 10, 20 and 30 s blackholes and the pulsed-loss run measure the bracket's residual (`DIALER_OUTAGE_EVIDENCE.md` §3.3): a failure inside an outage shorter than about 2δ (≈ 30 s) is bracketed by signs of life on both sides and counts by design, so these can demote white with a correct judge. Their white demotions and Tor's unblock-to-first-open time are recorded; **their acceptance thresholds are Rick's to set** from the readings. *Records-was (2026-10-31, split on #1229's review): every case under "no white demotion in any case", which the ruled residual contradicts for the short and pulsed runs.*
 
 ## Out of scope
 
