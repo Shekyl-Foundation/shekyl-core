@@ -180,7 +180,7 @@ owner of block propagation.
 | Sync-time estimate pair, `cumulative_block_sync_weight` | CS | Redesign. Progress is read from the header chain (rule 80). The Monero mainnet size table is deleted (rules 60, 71) |
 | `log_connections` | console | Delete. The console reads the board |
 | `safesyncmode`, the `pause_mine`/`resume_mine` coupling | — | Delete. `safesyncmode` is an LMDB knob and leaves with DRS-X; the miner reacts to tip changes, not to sync |
-| `dev-sync` (was `--no-sync`; `INPUT_GRAMMAR.md:262`, "the chain-sync lane owns it"; regtest only) | CS (data) | Keep as the grammar has it: with `dev-sync = off` the sync owner is not started. Read from the snapshot (`net_node.inl:429-430`) |
+| `dev-sync` (was `--no-sync`; `INPUT_GRAMMAR.md:262`, "the chain-sync lane owns it"; regtest only) | CS (data) | Keep as the grammar has it: with `dev-sync = off` the sync owner requests nothing (`Requesting::Off`; CS-5). The node reads it from the configuration (`rust/shekyl-node/src/lib.rs:369`); the snapshot carries no field for it |
 | `prep-blocks-threads`, `block-sync-size`, `span-limit`, `block-download-max-size` (`INPUT_GRAMMAR.md:272`, **X**), and the hardcoded `m_block_download_max_size = 0`, `m_span_time = 2` (`.inl` `init`) | CS | Per CS-Q12: refused; the constants stand until the cutover |
 | Constructor and `deinit` (found by CS-4's read, as are the rows below) | CS | Shrink: the sync half's members and their initialisers go with it; what RD's routes use stays until the file goes (CS-Q9) |
 | `set_p2p_endpoint` | RD | Stays: the transaction routes send through the endpoint |
@@ -1400,7 +1400,7 @@ handler.
 | 5 | Its tests | `:53-74` |
 | 6 | C++ caller, in `update_sync_search` | `.inl:1747` |
 | 7 | C++ caller, in `needs_new_sync_connections` | `.inl:2553` |
-| 8 | Declarations | `src/shekyl/shekyl_ffi.h:3153-3159` |
+| 8 | Declarations | `src/shekyl/shekyl_ffi.h` (deleted by CS-5) |
 | 9 | Module | `rust/shekyl-ffi/src/lib.rs:184` |
 | 10 | FFI signature gate's registration | `scripts/ci/check_ffi_signatures.sh:87-88` |
 | 11 | `sync_connector_of` | 1c #9 |

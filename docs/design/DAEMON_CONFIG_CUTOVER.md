@@ -514,20 +514,20 @@ cutover replaces their callers.
 | --- | --- | --- |
 | the resolved data directory | core (the LMDB environment) | `data-dir` |
 | the network | core, the miner, the console client | `network` |
-| offline, derived from both connectors being off | core (line 1559 of `src/cryptonote_core/cryptonote_core.cpp` at `d26148535e`), the protocol handler | `clearnet`, `tor` (IG-Q3) |
+| offline, derived from both connectors being off | the p2p server (`src/p2p/net_node.inl`) | `clearnet`, `tor` (IG-Q3) |
 | the fixed difficulty | core | `dev-difficulty` |
 | the pool's weight bound | core | `txpool-weight-max` |
-| sync on or off | the protocol handler | `dev-sync` |
 | the mining address | the miner | `mine-address`, already decoded: the display text, the spend and view keys, and the ML-KEM encapsulation key. The miner assembles the account address from those keys and does not parse the text |
 | the mining threads | the miner | `mine-threads`; 0 is `auto`, and the miner chooses the count |
 | console on or off | the C++ console | `console` |
 | the console's command words | the C++ console client | the positional words; empty for a daemon start |
 | the console's RPC endpoint | the C++ console client | the first `rpc-admin-listen` endpoint when it is IPv4: four octets in network order and a port, present only in client mode. A client whose endpoint is not IPv4 is refused at parse (`config.value.range`). Absence of any admin endpoint is refused at parse (§2.2) |
 
-**Eleven fields.** A gate pins the count and fails when it rises; each later
-slice that moves a reader deletes its field. If the pre-flight finds a C++
-reader of the advertised address on `dev`, it is a twelfth field,
-recorded there.
+**Ten fields.** A gate pins the count and fails when it rises; each later
+slice that moves a reader deletes its field. `dev-sync` is not a field: its
+reader is chain sync's owner, which reads the row from the configuration
+(`P2P_3_CHAIN_SYNC_BRIEF.md` CS-5). If the pre-flight finds a C++ reader of
+the advertised address on `dev`, it is a field of its own, recorded there.
 
 **Where it is defined.** The snapshot's structures, its field count and
 the parse export the C++ test binaries and `shekyl-blockchain-import`

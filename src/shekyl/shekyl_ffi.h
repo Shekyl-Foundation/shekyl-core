@@ -3056,7 +3056,7 @@ int shekyl_network_id(std::uint8_t nettype, std::uint8_t* out);
 /// are the Rust `#[repr(C)]` definitions member for member;
 /// `SHEKYL_DAEMON_SNAPSHOT_FIELDS` is asserted against
 /// `shekyl_daemon_snapshot_field_count()` at run.
-#define SHEKYL_DAEMON_SNAPSHOT_FIELDS 11u
+#define SHEKYL_DAEMON_SNAPSHOT_FIELDS 10u
 
 /// A list of NUL-terminated strings.
 struct ShekylStringList {
@@ -3094,7 +3094,6 @@ struct ShekylDaemonSnapshot {
   bool offline;
   uint64_t fixed_difficulty;
   uint64_t txpool_weight_max;
-  bool sync;
   const ShekylMineAddress* mine_address;
   uint32_t mine_threads;
   bool console;
