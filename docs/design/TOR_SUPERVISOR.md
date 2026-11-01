@@ -1153,9 +1153,20 @@ clearnet off; shekyl-dev `data/tsr-acceptance/2026-10-30-linux-vm-clock/`):
   "The directory check").
 - **Seen in the stop path, not this round's:** the C++ remnant's
   teardown throws `std::out_of_range` from `on_connection_close` on most
-  stops, caught; two stops never exited, one 23 s after a Tor respawn
-  during sync and one after 4 h 40 min of steady running (FOLLOWUPS,
-  `DAEMON_CONFIG_CUTOVER.md` §2.2).
+  stops, caught (FOLLOWUPS, `DAEMON_CONFIG_CUTOVER.md` §2.2).
+- **The stop after a clock set back (2026-11-01, shekyl-dev
+  `data/tsr-acceptance/2026-11-01-linux-vm-stops/`).** Every stop that
+  never exited on the VM followed a backward change of the wall clock
+  while the daemon ran. The stop was polled through
+  `epee::misc_utils::sleep_no_w`, a 100 ms sleep to a deadline on the wall
+  clock, and `Daemon::run` joined that poller: with the clock a day back,
+  the poll slept a day. The hung threads waited in `futex` with
+  `FUTEX_CLOCK_REALTIME`. Now the stop signals the running daemon directly
+  and nothing in `src/` or `contrib/` waits on the wall clock
+  (`scripts/ci/check_wall_clock_waits.py`). On the VM, before: 3 untouched
+  stops exited in 3.1 to 12.0 s and 3 of 3 after the clock was set back a
+  day hung past 120 s. After: 3 untouched stops took 1.0 to 2.0 s and 5 of
+  5 set-back stops 1.0 to 4.0 s, inside the unit's 90 s stop timeout.
 
 **Slow link and silent drop, the floor device, 2026-10-31** (Pi 4, Ubuntu
 26.04.1 aarch64; `shekyld` built natively at `ffb7259051`, the build the
