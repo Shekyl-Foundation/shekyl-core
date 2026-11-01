@@ -354,6 +354,7 @@ shekyl-wallet-rpc [--wallet-dir <dir>] [--rpc-bind <addr>] [--rpc-login <user:pa
 | `--proxy <socks5h://host:port>` | SOCKS5h proxy for the daemon connection; the proxy resolves the hostname |
 | `--network <mainnet\|testnet\|stagenet>` | Network every create/open binds to (default `mainnet`) |
 | `--log-file <path>` | Optional file sink for `tracing` events |
+| `--version` | Print the release version (the daemon's string, e.g. `3.1.0-alpha.11-release`) and exit |
 
 ### Why the two bind refusals exist
 
