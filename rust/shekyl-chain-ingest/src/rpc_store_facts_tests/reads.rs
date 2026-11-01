@@ -249,11 +249,26 @@ async fn a_spend_connected_between_the_reads_is_spent_in_the_chain() {
     );
 }
 
+/// What a serving stand-in does to a `get_transactions` reply before it
+/// goes on the wire: nothing, or one edit a falsifier names.
+pub(super) type ReplyEdit =
+    Arc<dyn Fn(&mut shekyl_rpc_types::GetTransactionsResponse) + Send + Sync>;
+
 /// A local HTTP stand-in for the daemon that serves the wallet's block
 /// fetch from `facts`: `get_block` (JSON-RPC), `get_transactions` and
 /// `get_o_indexes.bin`, each by the store-backed handler, one request per
 /// connection.
-async fn serve_the_block_fetch(facts: Arc<StoreFacts>) -> String {
+pub(super) async fn serve_the_block_fetch(facts: Arc<StoreFacts>) -> String {
+    serve_the_block_fetch_editing(facts, Arc::new(|_| {})).await
+}
+
+/// [`serve_the_block_fetch`], with `edit` applied to every
+/// `get_transactions` reply: the lying daemon of `SB-Q2`'s falsifiers,
+/// which change one operand of one served skeleton.
+pub(super) async fn serve_the_block_fetch_editing(
+    facts: Arc<StoreFacts>,
+    edit: ReplyEdit,
+) -> String {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -262,6 +277,7 @@ async fn serve_the_block_fetch(facts: Arc<StoreFacts>) -> String {
     tokio::spawn(async move {
         while let Ok((mut socket, _)) = listener.accept().await {
             let facts = Arc::clone(&facts);
+            let edit = Arc::clone(&edit);
             tokio::spawn(async move {
                 let mut request = Vec::new();
                 let mut chunk = [0u8; 4096];
@@ -308,10 +324,11 @@ async fn serve_the_block_fetch(facts: Arc<StoreFacts>) -> String {
                     "/get_transactions" => {
                         let request: shekyl_rpc_types::GetTransactionsRequest =
                             serde_json::from_slice(&body).expect("a request");
-                        let reply = shekyl_daemon_rpc::read_methods::get_transactions(
+                        let mut reply = shekyl_daemon_rpc::read_methods::get_transactions(
                             &*facts, &request, false,
                         )
                         .expect("the bodies");
+                        edit(&mut reply);
                         serde_json::to_vec(&reply).expect("json")
                     }
                     "/get_o_indexes.bin" => {
