@@ -635,14 +635,14 @@ impl Mutation {
                     .transactions
                     .iter_mut()
                     .find(|tx| !key_images(tx).is_empty())
-                    .ok_or(Unmutable::NoSpendToRepeat)?;
+                    .ok_or(Unmutable::NoSpendToExtend)?;
                 let first = spend
                     .prefix
                     .inputs
                     .iter()
                     .find(|input| matches!(input, Input::ToKey { .. }))
                     .cloned()
-                    .ok_or(Unmutable::NoSpendToRepeat)?;
+                    .ok_or(Unmutable::NoSpendToExtend)?;
                 for image in EXTRA_KEY_IMAGES
                     .iter()
                     .take((MAX_FCMP_INPUTS + 1).saturating_sub(spend.prefix.inputs.len()))
@@ -995,6 +995,10 @@ pub enum Unmutable {
     /// The candidate lists no `ToKey` input to repurpose.
     #[error("the candidate has no ToKey input to repeat a spend through")]
     NoSpendToRepeat,
+    /// [`Mutation::TooManyInputs`] on a block that lists no `ToKey` input
+    /// to copy past the input cap.
+    #[error("the candidate lists no ToKey input to extend past the input cap")]
+    NoSpendToExtend,
     /// [`Mutation::UnknownReference`] / [`Mutation::ReferenceTooRecent`] on
     /// a block that lists no `Fcmp` body.
     #[error("the candidate lists no Fcmp body whose reference could move")]
