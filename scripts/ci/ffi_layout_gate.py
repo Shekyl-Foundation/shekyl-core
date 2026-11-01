@@ -51,7 +51,6 @@ GROUPS = [
             # importer's and core_tests' (daemon_snapshot_ffi.rs, §2.9).
             "ShekylStringList": "ShekylStringList",
             "ShekylClientEndpoint": "ShekylClientEndpoint",
-            "ShekylMineAddress": "ShekylMineAddress",
             "ShekylDaemonSnapshot": "ShekylDaemonSnapshot",
             "ShekylBuffer": "ShekylBuffer",
             "ShekylPqcKeypair": "ShekylPqcKeypair",

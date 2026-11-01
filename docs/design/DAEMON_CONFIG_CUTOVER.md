@@ -510,24 +510,30 @@ sync's four are rejected rows (`P2P_3_CHAIN_SYNC_BRIEF.md` CS-Q12), not an open 
 stay out of the snapshot, and the C++ keeps today's constants until the
 cutover replaces their callers.
 
-| Field | Reader | From |
+| Field | Reader (verified at the Rust-binary PR, DC-F25) | From |
 | --- | --- | --- |
-| the resolved data directory | core (the LMDB environment) | `data-dir` |
-| the network | core, the miner, the console client | `network` |
+| the resolved data directory | **none** — the chain is the Rust store and core opens no LMDB environment; the field stays until Rick rules on it (DC-F25) | `data-dir` |
+| the network | core (`cryptonote_core.cpp`), the p2p server (`net_node.inl`), the remnant's `run` (the console client) | `network` |
 | offline, derived from both connectors being off | the p2p server (`src/p2p/net_node.inl`) | `clearnet`, `tor` (IG-Q3) |
-| the fixed difficulty | core | `dev-difficulty` |
-| the pool's weight bound | core | `txpool-weight-max` |
-| the mining address | the miner | `mine-address`, already decoded: the display text, the spend and view keys, and the ML-KEM encapsulation key. The miner assembles the account address from those keys and does not parse the text |
-| the mining threads | the miner | `mine-threads`; 0 is `auto`, and the miner chooses the count |
-| console on or off | the C++ console | `console` |
-| the console's command words | the C++ console client | the positional words; empty for a daemon start |
-| the console's RPC endpoint | the C++ console client | the first `rpc-admin-listen` endpoint when it is IPv4: four octets in network order and a port, present only in client mode. A client whose endpoint is not IPv4 is refused at parse (`config.value.range`). Absence of any admin endpoint is refused at parse (§2.2) |
+| console on or off | the remnant's `run` | `console` |
+| the console's command words | the remnant's `run` (the console client) | the positional words; empty for a daemon start |
+| the console's RPC endpoint | the remnant's `run` (the console client) | the first `rpc-admin-listen` endpoint when it is IPv4: four octets in network order and a port, present only in client mode. A client whose endpoint is not IPv4 is refused at parse (`config.value.range`). Absence of any admin endpoint is refused at parse (§2.2) |
 
-**Ten fields.** A gate pins the count and fails when it rises; each later
-slice that moves a reader deletes its field. `dev-sync` is not a field: its
-reader is chain sync's owner, which reads the row from the configuration
-(`P2P_3_CHAIN_SYNC_BRIEF.md` CS-5). If the pre-flight finds a C++ reader of
-the advertised address on `dev`, it is a field of its own, recorded there.
+**Six fields** (DC-Q24, §3.7 of the Rust-binary PR). *Records-was:* the
+cutover landed ten; the fixed difficulty, the pool's weight bound, the
+decoded mining address and the mining threads were deleted with the Rust
+binary, because no C++ read them (DC-F25) — the miner is Rust and reads
+`mine-address` from the configuration itself. **The gate compares the
+structure against its readers, not against a number:**
+`scripts/ci/check_snapshot_readers.py` finds a read of every member under
+`src/` through a variable of the snapshot's type, holds the two pinned
+counts (`SNAPSHOT_FIELDS`, `SHEKYL_DAEMON_SNAPSHOT_FIELDS`) and the two
+member lists to the structure, and fails on a member with no reader unless
+its `EXEMPT` table names it with the reason (`data_dir` is the one entry).
+A reader that moves into Rust therefore fails the gate until its field is
+deleted. `dev-sync` is not a field: its reader is chain sync's owner, which
+reads the row from the configuration (`P2P_3_CHAIN_SYNC_BRIEF.md` CS-5).
+The advertised address has no C++ reader and is not a field.
 
 **Where it is defined.** The snapshot's structures, its field count and
 the parse export the C++ test binaries and `shekyl-blockchain-import`

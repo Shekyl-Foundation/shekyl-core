@@ -3054,8 +3054,10 @@ int shekyl_network_id(std::uint8_t nettype, std::uint8_t* out);
 /// importer, core_tests) carries nothing of the daemon (§2.9). The
 /// structures below are the Rust `#[repr(C)]` definitions member for
 /// member; `SHEKYL_DAEMON_SNAPSHOT_FIELDS` is asserted against
-/// `shekyl_daemon_snapshot_field_count()` at run.
-#define SHEKYL_DAEMON_SNAPSHOT_FIELDS 10u
+/// `shekyl_daemon_snapshot_field_count()` at run, and
+/// `scripts/ci/check_snapshot_readers.py` holds every member to a C++
+/// reader under `src/`.
+#define SHEKYL_DAEMON_SNAPSHOT_FIELDS 6u
 
 /// A list of NUL-terminated strings.
 struct ShekylStringList {
@@ -3074,27 +3076,11 @@ struct ShekylClientEndpoint {
 static_assert(sizeof(ShekylClientEndpoint) == 8,
     "the console endpoint is four octets, a port and a flag");
 
-/// A mining address the configuration already decoded. `text` is display
-/// only and is never parsed. `ml_kem` is the encapsulation key; the miner
-/// derives the X25519 prefix from `view`. The pointers live as long as the
-/// snapshot's owned data. One member of the snapshot.
-struct ShekylMineAddress {
-  const char* text;
-  uint8_t spend[32];
-  uint8_t view[32];
-  const uint8_t* ml_kem;
-  size_t ml_kem_len;
-};
-
 /// The values whose reader is still C++ (§2.9), filled once by Rust.
 struct ShekylDaemonSnapshot {
   const char* data_dir;
   uint8_t network;
   bool offline;
-  uint64_t fixed_difficulty;
-  uint64_t txpool_weight_max;
-  const ShekylMineAddress* mine_address;
-  uint32_t mine_threads;
   bool console;
   ShekylStringList command;
   ShekylClientEndpoint client_endpoint;
