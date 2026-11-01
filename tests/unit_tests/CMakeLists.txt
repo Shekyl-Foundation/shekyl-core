@@ -130,6 +130,12 @@ target_link_libraries(unit_tests
 if(UNIX AND NOT APPLE)
   target_link_libraries(unit_tests PRIVATE pthread dl)
 endif()
+# stack_trace.cpp tests the `__cxa_throw` hook, which is no longer a member
+# of `common` (src/common/CMakeLists.txt): this binary links it on purpose
+# so the test runs rather than skips.
+if(STACK_TRACE)
+  target_link_libraries(unit_tests PRIVATE stack_trace)
+endif()
 set_property(TARGET unit_tests
   PROPERTY
     FOLDER "tests")
