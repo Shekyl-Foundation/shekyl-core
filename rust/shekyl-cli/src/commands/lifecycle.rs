@@ -281,14 +281,20 @@ pub fn cmd_status(rpc: &RpcSession, daemon_down_hint: Option<&str>) -> CommandRe
     require_open(rpc)?;
     match rpc.call("get_height", json!({})) {
         Ok(mut val) => {
-            if let Some(hint) = daemon_down_hint {
-                if let Some(object) = val.as_object_mut() {
-                    object.insert("daemon_down_hint".to_owned(), json!(hint));
-                }
-            }
+            attach_daemon_down_hint(&mut val, daemon_down_hint);
             Ok(val)
         }
         Err(e) => Err(rpc.report("Failed to get status", &e)),
+    }
+}
+
+/// The hint rides the reply only when the daemon did not answer
+/// (`daemon_height: null`), as the text form prints it: a JSON consumer is
+/// never told to start a daemon that is running.
+fn attach_daemon_down_hint(val: &mut Value, daemon_down_hint: Option<&str>) {
+    let daemon_down = val.get("daemon_height").is_some_and(Value::is_null);
+    if let (true, Some(hint), Some(object)) = (daemon_down, daemon_down_hint, val.as_object_mut()) {
+        object.insert("daemon_down_hint".to_owned(), json!(hint));
     }
 }
 
@@ -354,4 +360,25 @@ pub fn cmd_password(rpc: &RpcSession, presentation: &Presentation) -> CommandRes
 
 pub(crate) fn show_password(_val: &Value) {
     println!("Password changed.");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_daemon_down_hint_rides_only_a_null_daemon_height() {
+        let hint = Some("Start the testnet daemon with: shekyld --network testnet");
+        let mut up = json!({ "wallet_height": 1557, "daemon_height": 1557 });
+        attach_daemon_down_hint(&mut up, hint);
+        assert!(up.get("daemon_down_hint").is_none(), "{up}");
+
+        let mut down = json!({ "wallet_height": 1557, "daemon_height": null });
+        attach_daemon_down_hint(&mut down, hint);
+        assert_eq!(down["daemon_down_hint"], json!(hint));
+
+        let mut remote = json!({ "wallet_height": 1557, "daemon_height": null });
+        attach_daemon_down_hint(&mut remote, None);
+        assert!(remote.get("daemon_down_hint").is_none(), "{remote}");
+    }
 }
