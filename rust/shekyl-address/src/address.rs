@@ -18,7 +18,8 @@
 //! becomes a build error rather than a Bech32m checksum that validates but is
 //! no longer proven to detect. The classical segment alone (without the tag,
 //! 113 B) is sufficient for human identification and view-only wallets; the
-//! PQC segments are machine-handled.
+//! PQC segments are machine-handled. Paying decodes through
+//! [`PaymentAddress`], which refuses that display form.
 //!
 //! ## `msg_sign_pk` — the post-quantum signing anchor (fork (ii))
 //!
@@ -246,6 +247,13 @@ pub enum AddressError {
          to the same address (spliced or corrupted)"
     )]
     EkBindMismatch,
+
+    /// The classical display form. It names a wallet and carries no
+    /// encapsulation key, so nothing can be paid to it.
+    /// [`PaymentAddress::decode`] returns this; [`ShekylAddress::decode`]
+    /// still accepts the form, because a label is not a payment.
+    #[error("display-only address cannot receive a payment")]
+    DisplayOnly,
 }
 
 /// A decoded Shekyl address.
@@ -596,9 +604,50 @@ impl ShekylAddress {
         Self::from_classical_bytes(net, &c_data, Vec::new())
     }
 
-    /// Whether this address has the full PQC segment (required for sending).
+    /// Whether this address carries a full encapsulation key.
+    ///
+    /// The display form does not. Callers that pay use [`PaymentAddress`]
+    /// rather than branching on this boolean.
     pub fn has_pqc_segment(&self) -> bool {
         self.ml_kem_encap_key.len() == PQC_PAYLOAD_LEN
+    }
+}
+
+/// An address a payment can be sent to: the full three-segment form on
+/// one network.
+///
+/// [`ShekylAddress::decode`] also accepts the classical display form,
+/// which is a label. This type is the door a payer uses, so that form
+/// is [`AddressError::DisplayOnly`] here and nowhere a caller has to
+/// remember a segment check.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PaymentAddress(ShekylAddress);
+
+impl PaymentAddress {
+    /// Decode `encoded` as a payable address on `expected`.
+    ///
+    /// # Errors
+    ///
+    /// Every error [`ShekylAddress::decode_for_network`] returns, plus
+    /// [`AddressError::DisplayOnly`] for the classical display form.
+    pub fn decode(encoded: &str, expected: Network) -> Result<Self, AddressError> {
+        let address = ShekylAddress::decode_for_network(encoded, expected)?;
+        if !address.has_pqc_segment() {
+            return Err(AddressError::DisplayOnly);
+        }
+        Ok(Self(address))
+    }
+
+    /// The decoded address.
+    #[must_use]
+    pub fn as_address(&self) -> &ShekylAddress {
+        &self.0
+    }
+
+    /// The decoded address, by value.
+    #[must_use]
+    pub fn into_inner(self) -> ShekylAddress {
+        self.0
     }
 }
 
@@ -677,6 +726,43 @@ mod tests {
         assert_eq!(decoded.view_key, addr.view_key);
         assert_eq!(decoded.network, Network::Mainnet);
         assert!(!decoded.has_pqc_segment());
+    }
+
+    /// A payment takes the full address. Dropping the segment check in
+    /// [`PaymentAddress::decode`] turns the display case into `Ok`.
+    #[test]
+    fn payment_address_is_the_full_form_on_its_network() {
+        let addr = make_test_address(Network::Mainnet);
+        let encoded = addr.encode().unwrap();
+        let payment = PaymentAddress::decode(&encoded, Network::Mainnet).unwrap();
+        assert_eq!(payment.as_address(), &addr);
+        assert_eq!(payment.into_inner(), addr);
+
+        let display = addr.encode_classical_display().unwrap();
+        assert!(matches!(
+            PaymentAddress::decode(&display, Network::Mainnet),
+            Err(AddressError::DisplayOnly)
+        ));
+        assert!(matches!(
+            PaymentAddress::decode(&encoded, Network::Testnet),
+            Err(AddressError::NetworkMismatch { .. })
+        ));
+
+        let bob = ShekylAddress::new(
+            Network::Mainnet,
+            [0x03; 32],
+            [0x04; 32],
+            [0x06; MSG_SIGN_PK_LEN],
+            vec![0xdd; PQC_PAYLOAD_LEN],
+        );
+        let bob_encoded = bob.encode().unwrap();
+        let alice_parts: Vec<&str> = encoded.split('/').collect();
+        let bob_parts: Vec<&str> = bob_encoded.split('/').collect();
+        let spliced = format!("{}/{}/{}", alice_parts[0], bob_parts[1], bob_parts[2]);
+        assert!(matches!(
+            PaymentAddress::decode(&spliced, Network::Mainnet),
+            Err(AddressError::EkBindMismatch)
+        ));
     }
 
     #[test]

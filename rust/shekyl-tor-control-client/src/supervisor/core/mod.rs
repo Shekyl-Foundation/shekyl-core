@@ -22,16 +22,18 @@ mod backoff;
 mod clock_evidence;
 mod clock_jump;
 mod dials;
+mod directories;
 mod network_view;
 mod probe;
 mod resume;
 mod running;
 
-use crate::control::NetworkView;
+use crate::control::{NetworkView, RelayFingerprint};
 use announce::{Announcements, Cadence};
 use backoff::Backoff;
 pub use dials::DialTally;
 use dials::Dials;
+pub use directories::{DirectoryAnswer, DirectoryFetch};
 use probe::Probe;
 
 /// How long a respawn waits, and how often a failure is said again.
@@ -90,6 +92,12 @@ pub struct Policy {
     /// both reach their count before the clock is named (§4.2; Rick,
     /// 2026-10-30).
     pub clock_evidence_within: Duration,
+    /// How long an onion-service descriptor lives at a directory. With no
+    /// upload round begun this long after the last round's first upload, or
+    /// the last probe arrival, the directories may have dropped it, and a
+    /// probe asks (§4.5, "Overdue"; Rick, 2026-10-31). Tor's
+    /// `HS_DESC_DEFAULT_LIFETIME`, re-checked at every re-pin.
+    pub descriptor_lifetime: Duration,
 }
 
 impl Policy {
@@ -128,9 +136,17 @@ impl Policy {
             // holds such a pass several times over, and keeps a line from
             // one stretch from pairing with relays from another.
             clock_evidence_within: Duration::from_secs(60),
+            // `HS_DESC_DEFAULT_LIFETIME` (3 h) in tor 0.4.9.14:
+            // `src/feature/hs/hs_descriptor.h:30`, set as the descriptor's
+            // lifetime at `src/feature/hs/hs_service.c:1942`.
+            descriptor_lifetime: DESCRIPTOR_LIFETIME,
         }
     }
 }
+
+/// Tor's `HS_DESC_DEFAULT_LIFETIME` at the pinned tor 0.4.9.14
+/// (`src/feature/hs/hs_descriptor.h:30`): 3 hours.
+pub const DESCRIPTOR_LIFETIME: Duration = Duration::from_secs(3 * 60 * 60);
 
 /// What the driver does next.
 #[derive(Debug, PartialEq, Eq)]
@@ -178,6 +194,33 @@ pub enum Action {
     /// (`TSR-Q14`: Tor does Tor; no other stream is touched). The driver
     /// answers [`Input::DescriptorRefetched`].
     RefetchDescriptor,
+    /// Tor reported a clock jump while Running: draw the delay of one probe
+    /// (§4.5, "Overdue"). The driver says so at info and answers
+    /// [`Input::JumpProbeDrawn`].
+    ProbeAfterJump,
+    /// No upload round began within the descriptor's lifetime of the last
+    /// round's first upload (§4.5, "Overdue"): Tor broke its own lifetime.
+    /// Said at info. The [`Self::RepublishOnion`] that follows forces a
+    /// fresh upload.
+    DescriptorOverdue,
+    /// A probe's check began: give the directories the latest round's
+    /// uploads reached, each with a CSPRNG draw for its own fetch delay
+    /// (§4.5, the directory check). The driver answers
+    /// [`Input::DirectoriesDrawn`].
+    CheckDirectories,
+    /// `HSFETCH` this node's onion from `hsdir` alone (`SERVER=`). Tor
+    /// accepting the command is [`Input::DirectoryFetchAccepted`], and the
+    /// answer arrives later as [`Input::DirectoryAnswered`]. A command Tor
+    /// refuses is answered at once as [`DirectoryAnswer::Unusable`].
+    FetchFromDirectory {
+        /// The directory to ask.
+        hsdir: RelayFingerprint,
+    },
+    /// The check counted no directory: none the round reached holds the
+    /// descriptor Tor's client asks for, or none answered about it. The
+    /// probe alone decided. Said once at info: a node whose uploads land
+    /// under a key no fetch asks for is the clock's signature (§4.5).
+    DirectoriesUnmatched,
     /// Publish the inbound facet on the managed route's link (§4.1).
     PublishInbound(Inbound),
     /// A descriptor round has been open for `Policy::round_stuck_after`:
@@ -342,6 +385,45 @@ pub enum Input {
         /// Uniform over `u64`.
         draw: u64,
     },
+    /// The delay of the probe [`Action::ProbeAfterJump`] asked for. `draw` is
+    /// from the daemon's CSPRNG, as a round's is.
+    JumpProbeDrawn {
+        /// Uniform over `u64`.
+        draw: u64,
+    },
+    /// The directories for the check [`Action::CheckDirectories`] asked for.
+    DirectoriesDrawn {
+        /// One per directory, each with its own draw. Empty when the round
+        /// reached none: the probe alone decides. A list that was never
+        /// folded is not this: the verdict waits.
+        fetches: Vec<DirectoryFetch>,
+    },
+    /// Tor accepted `HSFETCH` for `hsdir` (`250`). That fetch's answer
+    /// window starts at this fold.
+    DirectoryFetchAccepted {
+        /// The directory.
+        hsdir: RelayFingerprint,
+    },
+    /// A fetch this check sent named this descriptor (`HS_DESC REQUESTED`
+    /// for `hsdir`): the one Tor's client asks for. A `REQUESTED` for a
+    /// directory this check has not sent is ignored.
+    DirectoryAsked {
+        /// The directory the fetch named.
+        hsdir: RelayFingerprint,
+        /// The blinded key.
+        descriptor_id: String,
+    },
+    /// A directory answered a fetch of this node's onion (`HS_DESC RECEIVED`
+    /// or `FAILED`), or the driver could not ask it.
+    DirectoryAnswered {
+        /// The directory.
+        hsdir: RelayFingerprint,
+        /// The descriptor the answer is about; `None` when the driver could
+        /// not ask.
+        descriptor_id: Option<String>,
+        /// What it said.
+        answer: DirectoryAnswer,
+    },
     /// The probe's nonce is minted, at `minted_at`, and its dial launched.
     ProbeDialed {
         /// The mint tick, which names the probe.
@@ -500,10 +582,19 @@ pub struct Core {
     outbound_since: Option<u64>,
     /// The round's probe (§4.5).
     probe: Probe,
+    /// The directory half of the probe's check. `None` when no check is
+    /// open. [`directories::DirectoryHalf::AwaitingDraw`] until the driver
+    /// folds the list.
+    directories: Option<directories::DirectoryHalf>,
     /// The descriptor round open now, while one is.
     round: Option<probe::RoundTrack>,
     /// Rounds that stayed open past `Policy::round_stuck_after`, this boot.
     stuck_rounds: u32,
+    /// Where the descriptor's lifetime is counted from (§4.5, "Overdue"):
+    /// the last round's first upload, or the last overdue republish. Only an
+    /// upload shows the descriptor's age. None before the first upload and
+    /// after the probe is dropped.
+    lifetime_from: Option<u64>,
     /// A clock jump during this bootstrap, and `traffic/read`'s movement.
     jump: clock_jump::JumpWatch,
     /// This bootstrap's certificate lines and closed handshakes (§4.2).
@@ -539,8 +630,10 @@ impl Core {
             published_inbound: Inbound::NotOffered,
             outbound_since: None,
             probe: Probe::Idle,
+            directories: None,
             round: None,
             stuck_rounds: 0,
+            lifetime_from: None,
             jump: clock_jump::JumpWatch::new(now),
             clock_evidence: clock_evidence::ClockEvidence::default(),
             service_republish: false,
@@ -587,6 +680,18 @@ impl Core {
             Input::FirstUploaded { draw } => self.first_uploaded(now, draw),
             Input::UploadRoundEnded { end, draw } => self.round_ended(now, end, draw),
             Input::DescriptorRefetched { draw } => self.refetched(now, draw),
+            Input::JumpProbeDrawn { draw } => self.jump_probe_drawn(now, draw),
+            Input::DirectoriesDrawn { fetches } => self.directories_drawn(now, fetches),
+            Input::DirectoryFetchAccepted { hsdir } => self.directory_fetch_accepted(now, hsdir),
+            Input::DirectoryAsked {
+                hsdir,
+                descriptor_id,
+            } => self.directory_asked(now, hsdir, &descriptor_id),
+            Input::DirectoryAnswered {
+                hsdir,
+                descriptor_id,
+                answer,
+            } => self.directory_answered(now, hsdir, descriptor_id.as_deref(), answer),
             Input::ProbeDialed { minted_at } => self.probe_dialed(minted_at),
             Input::ProbeNotDialed => self.probe_not_dialed(),
             Input::ProbeArrived {
@@ -684,8 +789,14 @@ impl Core {
         if self.round_due().is_some_and(|at| now >= at) {
             actions.extend(self.on_round_deadline(now));
         }
+        if self.overdue_due().is_some_and(|at| now >= at) {
+            actions.extend(self.on_overdue_deadline(now));
+        }
         if self.probe.due().is_some_and(|at| now >= at) {
             actions.extend(self.on_probe_deadline(now));
+        }
+        if self.directories_due().is_some_and(|at| now >= at) {
+            actions.extend(self.on_directories_deadline(now));
         }
         self.step(now, actions)
     }
@@ -736,6 +847,8 @@ impl Core {
             self.alive_at,
             self.probe.due(),
             self.round_due(),
+            self.overdue_due(),
+            self.directories_due(),
         ]
         .into_iter()
         .flatten()
@@ -891,14 +1004,25 @@ impl Core {
         self.owed_actions()
     }
 
+    /// Tor reported a clock jump. Re-evaluate now with one sample. While
+    /// Running, also one probe (§4.5, "Overdue"): Tor's next upload may be
+    /// scheduled on the clock that jumped, and the probe shows whether the
+    /// onion is still reachable meanwhile.
     fn clock_jumped(&mut self, now: u64) -> Vec<Action> {
         self.jump.jumped(now);
-        match &mut self.phase {
-            Phase::Running { link, .. } => *link = Link::Resumed,
-            Phase::Bootstrapping { .. } => {}
+        let running = match &mut self.phase {
+            Phase::Running { link, .. } => {
+                *link = Link::Resumed;
+                true
+            }
+            Phase::Bootstrapping { .. } => false,
             _ => return Vec::new(),
+        };
+        let mut actions = vec![Action::Sample];
+        if running {
+            actions.extend(self.jump_probe());
         }
-        vec![Action::Sample]
+        actions
     }
 
     fn too_many_files(&mut self, now: u64, open: u64) -> Vec<Action> {
