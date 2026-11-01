@@ -363,6 +363,13 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/bench/fsync_probe.py --selftest
 
+      - name: Run the catch-up harness selftest
+        # PB-D2 / PB-D3's mode: a catch-up artifact needs its probe window
+        # with no stall, the subject at the seed's tip, and a proof-of-work
+        # block, so a miss at a release cut can name its cause.
+        if: '!cancelled()'
+        run: python3 scripts/bench/drs_catchup.py --selftest
+
       - name: Run RPC column capture selftest
         # `rpc_capture.py` writes one file per chain read and reserves the
         # loopback port the kept-chain capture binds. The capture's own
