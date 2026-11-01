@@ -41,7 +41,10 @@ mod publish;
 mod replies;
 
 pub use publish::{publish_forward, publish_with_control, InboundPosture, PublishFault};
-pub use replies::{proxy_reply_marks, refused, socks_reply_is_our_request};
+pub use replies::{
+    proxy_reply_marks, refused, reply_end, socks_reply_is_our_request, stamp_reply,
+    stamp_stream_end, Observed,
+};
 
 pub use drive::{accept_inbound, accept_one, dial_one, Accept, Admitted, Dial, Inbound};
 

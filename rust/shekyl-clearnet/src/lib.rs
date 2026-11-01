@@ -64,6 +64,7 @@ mod inode;
 mod linger;
 mod seam;
 mod sizes;
+mod stamping;
 
 #[cfg(unix)]
 pub use inode::socket_descriptors;
@@ -75,6 +76,7 @@ pub use drive::{
 };
 pub use linger::Linger;
 use seam::ChannelChoice as Choice;
+pub use stamping::{stamp_stream_end, Observed};
 
 /// How many responder handshakes the blocking pool computed, and how many
 /// it skipped because the deadline had already fired.
