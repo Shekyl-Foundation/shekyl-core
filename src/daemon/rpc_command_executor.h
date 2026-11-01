@@ -41,7 +41,7 @@
 #include "common/common_fwd.h"
 #include "cryptonote_basic/cryptonote_basic.h"
 #include "daemon/rpc_client.h"
-#include "rpc/core_rpc_server.h"
+#include "cryptonote_basic/cryptonote_basic.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
 #define SHEKYL_DEFAULT_LOG_CATEGORY "daemon"
@@ -51,7 +51,7 @@ namespace daemonize {
 class t_rpc_command_executor final {
 private:
   tools::t_rpc_client* m_rpc_client;
-  cryptonote::core_rpc_server* m_rpc_server;
+  void* m_live;
   bool m_is_rpc;
   // This process's network, for the VC-2 identity handshake. See
   // command_server.h for why the network axis is the load-bearing one here.
@@ -63,7 +63,7 @@ public:
     , uint16_t port
     , cryptonote::network_type nettype
     , bool is_rpc = true
-    , cryptonote::core_rpc_server* rpc_server = NULL
+    , void* live = NULL
     );
 
   ~t_rpc_command_executor();
@@ -81,12 +81,6 @@ public:
   bool print_peer_list(bool white = true, bool gray = true, size_t limit = 0);
 
   bool print_peer_list_stats();
-
-  bool save_blockchain();
-
-  bool show_hash_rate();
-
-  bool hide_hash_rate();
 
   bool show_difficulty();
 
@@ -106,45 +100,15 @@ public:
 
   bool is_key_image_spent(const crypto::key_image &ki);
 
-  bool print_transaction_pool_long();
-
-  bool print_transaction_pool_short();
-
   bool print_transaction_pool_stats();
-
-  // `address` is the user's original encoded string, passed through
-  // verbatim (the parsed struct cannot be re-encoded since the fork-(ii)
-  // address layout); the caller validates it before calling.
-  bool start_mining(const std::string& address, uint64_t num_threads, cryptonote::network_type nettype);
-
-  bool stop_mining();
-
-  bool mining_status();
 
   bool stop_daemon();
 
   bool print_status();
 
-
-
-
-  bool print_bans();
-
-  bool ban(const std::string &address, time_t seconds);
-
-  bool unban(const std::string &address);
-
-  bool banned(const std::string &address);
-
-  bool flush_txpool(const std::string &txid);
-
-  bool print_coinbase_tx_sum(uint64_t height, uint64_t count);
-
   bool alt_chain_info(const std::string &tip, size_t above, uint64_t last_blocks);
 
   bool print_blockchain_dynamic_stats(uint64_t nblocks);
-
-  bool relay_tx(const std::string &txid);
 
   bool sync_info();
 
@@ -155,8 +119,6 @@ public:
   bool print_net_stats();
 
   bool version();
-
-  bool flush_cache(bool invalid_blocks);
 };
 
 } // namespace daemonize

@@ -51,14 +51,14 @@ async fn test_rpc() {
 
     // Test generate_blocks, cross-checking the returned hashes against `get_block_hash`.
     for amount_of_blocks in [1, 5] {
-        let (blocks, number) = rpc
+        let (blocks, count) = rpc
             .generate_blocks(SAMPLE_MAINNET_ADDR.as_str(), amount_of_blocks)
             .await
             .unwrap();
         let chain = rpc.get_height().await.unwrap();
         let tip = usize::try_from(chain.tip().expect("non-empty chain").to_raw())
             .expect("block height fits usize");
-        assert_eq!(number, tip);
+        assert_eq!(count, chain);
 
         let mut actual_blocks = Vec::with_capacity(amount_of_blocks);
         for i in (tip + 1 - amount_of_blocks)..=tip {

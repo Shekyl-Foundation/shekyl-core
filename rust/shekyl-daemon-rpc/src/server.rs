@@ -36,7 +36,7 @@ use crate::handles::Handles;
 use crate::middleware::DEFAULT_BODY_LIMIT;
 use crate::options::{OptionsAbsent, OptionsFacts};
 use crate::shard_view::{ShardViewFacts, SkeletonAbsent};
-use crate::submit::{DaemonSubmitEngine, DaemonTxVerifier, FfiSubmitShim, SubmitEngine};
+use crate::submit::DaemonSubmitEngine;
 
 use crate::authority::Authority;
 use axum::http::{HeaderValue, Method};
@@ -187,9 +187,7 @@ pub(crate) enum Endpoint {
     StartMining,
     StopMining,
     MiningStatus,
-    SaveBc,
     GetPeerList,
-    SetLogHashRate,
     StopDaemon,
     GetNetStats,
     PopBlocks,
@@ -279,16 +277,8 @@ pub(crate) const ROUTES: &[Route] = &[
         paths: &["/mining_status"],
     },
     Route {
-        endpoint: Endpoint::SaveBc,
-        paths: &["/save_bc"],
-    },
-    Route {
         endpoint: Endpoint::GetPeerList,
         paths: &["/get_peer_list"],
-    },
-    Route {
-        endpoint: Endpoint::SetLogHashRate,
-        paths: &["/set_log_hash_rate"],
     },
     Route {
         endpoint: Endpoint::StopDaemon,
@@ -350,9 +340,7 @@ fn handler_for(endpoint: Endpoint) -> MethodRouter<Arc<AppState>> {
         Endpoint::StartMining => get(json::start_mining).post(json::start_mining),
         Endpoint::StopMining => get(json::stop_mining).post(json::stop_mining),
         Endpoint::MiningStatus => get(json::mining_status).post(json::mining_status),
-        Endpoint::SaveBc => get(json::save_bc).post(json::save_bc),
         Endpoint::GetPeerList => get(json::get_peer_list).post(json::get_peer_list),
-        Endpoint::SetLogHashRate => get(json::set_log_hash_rate).post(json::set_log_hash_rate),
         Endpoint::StopDaemon => get(json::stop_daemon).post(json::stop_daemon),
         Endpoint::GetNetStats => get(json::get_net_stats).post(json::get_net_stats),
         Endpoint::PopBlocks => get(json::pop_blocks).post(json::pop_blocks),
@@ -419,14 +407,11 @@ where
 pub async fn serve_listeners(
     core: Arc<CoreRpc>,
     config: ServerConfig,
+    submit_engine: Arc<DaemonSubmitEngine>,
     admin: Vec<BoundListener>,
     view: Vec<BoundListener>,
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let submit_engine = Arc::new(SubmitEngine::new(
-        FfiSubmitShim::new(core.clone()),
-        DaemonTxVerifier,
-    ));
     let conn_tracker = ConnTracker::new(config.conn_limits);
     let router_at = |authority: Authority| {
         let state = Arc::new(AppState {
@@ -459,9 +444,8 @@ pub async fn serve_listeners(
     // operator reads which it is.
     if config.armed {
         tracing::warn!(
-            "RPC armed test levers: ON (dev-rpc): generateblocks, \
-             inject_archival_serve_credit and /pop_blocks are served to the \
-             host's administrator"
+            "RPC armed test levers: ON (dev-rpc): generateblocks and \
+             /pop_blocks are served to the host's administrator"
         );
     } else {
         info!("RPC armed test levers: off (dev-rpc not set)");
@@ -645,9 +629,7 @@ mod tests {
         "/start_mining",
         "/stop_mining",
         "/mining_status",
-        "/save_bc",
         "/get_peer_list",
-        "/set_log_hash_rate",
         "/stop_daemon",
         "/get_net_stats",
         "/pop_blocks",

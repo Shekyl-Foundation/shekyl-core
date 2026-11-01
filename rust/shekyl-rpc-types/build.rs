@@ -56,9 +56,9 @@ use std::path::PathBuf;
 /// that a node holding `L = 3` rejects as `ANCHOR_OUT_OF_WINDOW`, and the
 /// genesis threshold `depth + L` below which any pass record is refused moves
 /// with it. A split, so the key belongs here; it is read by
-/// `rust/shekyl-archival-retention/build.rs` (the single Rust authority — C++
-/// sizes the window through `shekyl_archival_pass_anchor_window`, holding no
-/// copy). The same change also re-commented `archival_reorg_depth_blocks`
+/// `rust/shekyl-archival-retention/build.rs` (the single Rust authority; the
+/// C++ held no copy, and the export it sized the window through is deleted
+/// with the archival C++ path, DEL-008). The same change also re-commented `archival_reorg_depth_blocks`
 /// (value unchanged at 720): `_comment_*` keys are outside the canonical
 /// form, so that edit alone would not have moved this digest.
 ///

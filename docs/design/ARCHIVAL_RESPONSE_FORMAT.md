@@ -29,7 +29,7 @@ predecessor `h`, rebuilds the transcript with the connecting chain's hash
 at that height, and refuses every pass record while `h < 720 + L` (724).
 `verify_pass_countersignature` verifies that message: the
 verify context carries `predecessor_height` and the `L + 1` anchor hashes
-(`anchor_hashes_ptr/len`, sized through `shekyl_archival_pass_anchor_window`)
+(`anchor_hashes_ptr/len`, sized through `shekyl_archival_pass_anchor_window` (deleted, `DEL-008`))
 and no longer carries `cb_out_key`, `cb_out_key_readable`, or
 `prev_block_hash`; verdict codes 8 (`CBKEY_UNREADABLE`) and 12
 (`PREVHASH_UNPOPULATED`) are RETIRED, never reused; 13, 14, 15 are minted
@@ -795,7 +795,7 @@ checking explicitly on any future field change rather than discovering it after
 a bulk regeneration.
 
 **Landed 2026-08-20, and the FFI confirmed the premise before a line changed.**
-`shekyl_archival_verify_serve_credit_vin` already received the registry's
+`shekyl_archival_verify_serve_credit_vin` (deleted, `DEL-008`) already received the registry's
 `R_k` from C++ (`ctx.registry_segment_subroot_rk`, populated at
 `blockchain.cpp:5455`) and **compared the wire value against it**; it likewise
 checked the wire leaf index against `challenge_leaf_index`. Both checks could
@@ -862,7 +862,7 @@ migration would ever have.
 | `txin_archival_serve_credit_response` | nine typed fields, C++ codec | `std::vector<uint8_t> canonical_bytes` (tag included), transport guard only |
 | pruned half | — | `CtSigPrunable::serve_credit_pruned: vector<vector<uint8_t>>`, one opaque record per serve-credit vin, each length-prefixed |
 | `(P, shard, E)` for DB bits, pool keys, block-unique keys | field reads at four sites | one helper, `get_archival_serve_credit_key`, over `shekyl_archival_serve_credit_extract` — given the **tagged blob whole**, as the emission extract is; C++ never slices the tag off, and an empty blob is a wire error, not a null-pointer error (review, 2026-08-21) |
-| challenge leaf index | read off the vin | `shekyl_archival_challenge_leaf_index` (RF-D6) |
+| challenge leaf index | read off the vin | `shekyl_archival_challenge_leaf_index` (deleted, `DEL-008`) (RF-D6) |
 | admission | C++ path-bound checks + typed re-serialisation into the FFI | `shekyl_archival_verify_serve_credit_vin(kept, pruned, ctx)` — every structural bound is the Rust parser's |
 | JSON / boost archives | field-by-field | the blob, as for the emission vin |
 

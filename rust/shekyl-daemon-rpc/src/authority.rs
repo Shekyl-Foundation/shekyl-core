@@ -99,6 +99,12 @@ impl Authority {
         self.host
     }
 
+    /// The node's armed-lever switch, as stamped on this connection.
+    #[must_use]
+    pub const fn armed_switch(self) -> bool {
+        self.armed
+    }
+
     /// Whether this connection's requests are bounded (§6.3): every
     /// connection except the host's administrator, whatever its grant.
     #[must_use]
@@ -269,11 +275,7 @@ mod tests {
     fn an_armed_lever_needs_the_switch_even_for_the_host() {
         let unarmed = Authority::admin_listener(false);
         let armed = Authority::admin_listener(true);
-        for name in [
-            "generateblocks",
-            "inject_archival_serve_credit",
-            "/pop_blocks",
-        ] {
+        for name in ["generateblocks", "/pop_blocks"] {
             let refused = unarmed.admit(row(name)).expect_err(name);
             assert_eq!(refused.class, ErrorClass::OutsideTheGrant, "{name}");
             assert_eq!(

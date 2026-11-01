@@ -42,8 +42,7 @@ pub(super) fn clamped_median(median: u64, params: &EconomicParams) -> u64 {
 /// `F = R·C·w_ref/M²`, floored at 1. `None` only outside the `u128` domain.
 ///
 /// Raw `C`, no rounding. `max(1)` is kept: a zero floor admits everything,
-/// and `get_current_fee_per_byte`'s contract that `0` is the
-/// block-reward-failure arm is load-bearing at the C++ call site.
+/// and a failed block reward is not an admission.
 #[must_use]
 pub fn checked_relay_fee_floor(
     base_reward: u64,

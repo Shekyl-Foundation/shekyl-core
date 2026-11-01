@@ -49,7 +49,7 @@ defect at genesis. The tree-grow orchestration moved into Rust as
 `shekyl_curve_tree_grow_upper_layers` (a thin FFI over `build_layers`'
 `try_build_upper_layers`), and both daemon producers were rewired to it:
 
-- **`grow_curve_tree`** ([`db_lmdb.cpp`](../../src/blockchain_db/lmdb/db_lmdb.cpp)):
+- **`grow_curve_tree`** (`db_lmdb.cpp`):
   read the leaf-chunk layer, recompose every upper layer narrow, persist the
   recomposed chunks + root + depth.
 - **`trim_curve_tree`** (the reorg path): the leaf loop trims the boundary leaf

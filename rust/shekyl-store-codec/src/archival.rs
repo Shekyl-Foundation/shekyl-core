@@ -57,8 +57,8 @@
 //!
 //! A round trip of this codec against itself proves it self-consistent, not
 //! that it is the same record. `docs/test_vectors/ARCHIVAL_BOND_RECORD_V7.json`
-//! holds real `ArchivalBondValue` v7 blobs with the fields the **C++
-//! decoder** read from them; the daemon store's `codec::archival_tests`
+//! holds frozen `ArchivalBondValue` v7 blobs (no regenerator) with the fields
+//! recorded from the C++ decoder; the daemon store's `codec::archival_tests`
 //! builds a `BondRecord` from each field set and asserts nothing is lost.
 
 use shekyl_types::archival::{

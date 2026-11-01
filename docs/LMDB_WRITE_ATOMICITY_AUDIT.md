@@ -745,7 +745,7 @@ record and is not restated to cover it.
 **Fifteen** archival apply/revert hooks — fourteen plus
 `process_archival_segment_freezes_at_height` — are declared on `BlockchainDB`
 and defined out-of-line with empty `{}` bodies
-(`src/blockchain_db/blockchain_db.cpp:1708`–`:1810`), so a subclass that
+(`src/blockchain_db/blockchain_db.cpp`), so a subclass that
 forgets one inherits a silent no-op. The contrast is deliberate and one file
 away: `get_archival_last_slash_epoch` (`:1799`) returns `UINT64_MAX` with a
 comment saying the sentinel "fails the release verify closed rather than
@@ -754,13 +754,13 @@ silent-success for fifteen mutators.
 
 `BlockchainLMDB` overrides **15/15**, so no production hook is a no-op today.
 The exposure is the test doubles, and it is **latent** —
-measured at `14aa42074`: `BaseTestDB` (`src/blockchain_db/testdb.h:44`)
+measured at `14aa42074`: `BaseTestDB` (`src/blockchain_db/testdb.h`)
 overrides **0 of 15**, so every double built on it inherits fifteen silent
 no-ops. Of the two that exercise archival paths,
 `ArchivalBondPostIntegrationDB`
-(`tests/unit_tests/archival_bond_post_integration.cpp:100`) overrides
+(`tests/unit_tests/archival_bond_post_integration.cpp`) overrides
 **none**, and `EmissionConnectDB`
-(`tests/unit_tests/archival_emission_connect.cpp:84`) overrides **exactly
+(`tests/unit_tests/archival_emission_connect.cpp`) overrides **exactly
 one** — `apply_archival_emission_claim`, the hook it means to observe — and
 inherits the other fourteen.
 
@@ -791,11 +791,11 @@ rather than by the patch. Rust: no default methods on consensus hooks —
 
 The curve-tree pop reconstructs each drained leaf's `TreePosition`
 arithmetically — `TreePosition tree_pos{leaf_count - drained_count + j}`
-(`src/blockchain_db/blockchain_db.cpp:870`) — because the drain journal never
-recorded it: `drain_entry_t` (`src/blockchain_db/blockchain_db.h:2509`)
+(`src/blockchain_db/blockchain_db.cpp`) — because the drain journal never
+recorded it: `drain_entry_t` (`src/blockchain_db/blockchain_db.h`)
 carries `maturity`, `output` and the 128-byte `leaf`, and no position. The
 forward path *has* the value and drops it, assigning
-`tree_pos{tree_leaf_base + count}` at `src/blockchain_db/lmdb/db_lmdb.cpp:8678`
+`tree_pos{tree_leaf_base + count}` at `src/blockchain_db/lmdb/db_lmdb.cpp`
 and journalling without it.
 
 Latent, **correct today by invariant**: drain-to-tip plus contiguous leaves
@@ -812,7 +812,7 @@ reconstruction for pending keys.
 ### DRS-W14 — dense-seq probe loops
 
 Unbounded probe loops walk archival journal rows until first miss —
-`for (uint32_t seq = 0; ; ++seq)` at `src/blockchain_db/lmdb/db_lmdb.cpp:5443`
+`for (uint32_t seq = 0; ; ++seq)` at `src/blockchain_db/lmdb/db_lmdb.cpp`
 and `:6286`, and the same shape with the counter declared above the loop at
 `:5411` — so the **reader** encodes an invariant the **writer** holds: that
 `seq` is dense with no gaps. Nothing enforces it; the writer's `seq++`
@@ -844,7 +844,7 @@ one site read them: `db.get_hard_fork_version(height)` inside
 was about it and not about the table in general.
 
 **What the read-back is worth, per caller.** `pop_block_from_blockchain`
-(`src/cryptonote_core/blockchain.cpp:812`) is the only caller of
+(`src/cryptonote_core/blockchain.cpp`) is the only caller of
 `on_block_popped`, always with a literal `1` (`:846`), so the loop runs once
 and the multi-block arm is dead. It has four callers of its own:
 

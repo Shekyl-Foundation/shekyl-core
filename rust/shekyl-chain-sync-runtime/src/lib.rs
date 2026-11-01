@@ -12,6 +12,8 @@
 //!   runtime row.
 //! - [`executor`]: the model's prove jobs under the hasher budget.
 //! - [`serve`]: 2011 and 2013 answered from the store.
+//! - [`chain_entry`]: the 2007 chain entry and the handler's other sync
+//!   reads. CS-5 deletes that caller; the reads stay with the responder.
 //!
 //! The model crate takes none of this crate's dependencies (tokio, the
 //! store, ingest, the seam, RandomX), so ingest and the node depend on the
@@ -19,6 +21,7 @@
 
 #![deny(unsafe_code)]
 
+pub mod chain_entry;
 pub mod executor;
 pub mod owner;
 pub mod router;

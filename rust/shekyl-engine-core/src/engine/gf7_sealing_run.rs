@@ -532,18 +532,9 @@ async fn gf7_sealing_run_writes_receipts_artifact() {
         artifact.display()
     );
 
+    // Mined to a wallet no run opens: `start()` spawns with a dummy
+    // `--mine-address` (N2), so coinbase reaches no arm's wallet.
     let daemon = RegtestDaemon::start().await;
-    // Mined to a wallet no run opens: the principal address of an arm tag
-    // (0xff) no run draws.
-    let miner_address = shekyl_crypto_pq::account::rederive_account(
-        &wallet_seed(0xff, 0, 0),
-        shekyl_crypto_pq::account::DerivationNetwork::Mainnet,
-        shekyl_crypto_pq::account::SeedFormat::Bip39,
-    )
-    .expect("derive the miner's account")
-    .to_address(shekyl_address::Network::Mainnet)
-    .encode()
-    .expect("encode the miner's address");
 
     // Pre-mine once (≈ 30 min): past `tip − 720` every sweep does real fetch
     // work (§19.8.2 chain row).
@@ -551,7 +542,7 @@ async fn gf7_sealing_run_writes_receipts_artifact() {
     let mut mined = 0u64;
     while mined < PREMINE_BLOCKS {
         let batch = MINE_BATCH_BLOCKS.min(PREMINE_BLOCKS - mined);
-        daemon.generate_blocks(batch, &miner_address).await;
+        daemon.generate_blocks(batch).await;
         mined += batch;
     }
     eprintln!(
@@ -572,12 +563,11 @@ async fn gf7_sealing_run_writes_receipts_artifact() {
         shekyl_rpc_transport::HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port()))
             .await
             .expect("miner rpc");
-    let miner_addr_bg = miner_address.clone();
     let miner = tokio::spawn(async move {
         let mut consecutive_failures = 0u32;
         loop {
             tokio::time::sleep(BACKGROUND_MINE_INTERVAL).await;
-            match try_generate_blocks(&miner_rpc, 1, &miner_addr_bg).await {
+            match try_generate_blocks(&miner_rpc, 1).await {
                 Ok(_) => consecutive_failures = 0,
                 Err(e) => {
                     consecutive_failures += 1;

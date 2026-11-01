@@ -84,6 +84,12 @@ impl Endpoint {
 /// Reserve a socket for `endpoint` on `sockets`.
 ///
 /// Refusal is a D12 cause. Nothing is reserved in that case.
+///
+/// An inbound clearnet endpoint reserves through
+/// [`Sockets::reserve_clearnet_inbound`]: the ban, the ceilings and an
+/// id, and no accept-rate token. The callers here are harnesses. The
+/// network accept is [`Sockets::accept_clearnet`], in the clearnet
+/// listener, and that is the call the gate prices.
 pub fn admit(
     sockets: &Sockets,
     endpoint: &Endpoint,
@@ -100,7 +106,7 @@ pub fn admit(
             ip,
             direction: Direction::Inbound,
             ..
-        } => sockets.accept_clearnet(*ip, ceiling, now),
+        } => sockets.reserve_clearnet_inbound(*ip, ceiling, now),
         Endpoint::TorInbound => sockets.accept_tor(ceiling),
         Endpoint::Tor { key, port } => sockets.open_tor(&NetworkAddress::Tor {
             host: shekyl_onion_v3::v3_onion_hostname(key),

@@ -16,7 +16,7 @@
 //! The serve-credit rows are three over **one view read per vin**,
 //! [`ChainView::bond_record`], in the C++'s order — `check_tx_inputs`
 //! reads the record (`get_archival_bond_hybrid_pubkey`), then its join
-//! epoch against `shekyl_archival_serve_credit_epoch_ok`, then
+//! epoch against the serve-credit epoch check, then
 //! `archival_bond_good_through`, which is the retention crate's
 //! [`good_through`] over the record's intervals (`blockchain.cpp`, the
 //! serve-credit arm; `db_lmdb.cpp`, `archival_bond_good_through_ffi`).
@@ -83,7 +83,7 @@ impl Rule for J4 {
 
 /// CEN-J5: the credited settlement epoch is at or past `E_first = join + 1`
 /// — [`serve_credit_epoch_ok`] over the record's `join_settlement_epoch`,
-/// the function the C++ calls through `shekyl_archival_serve_credit_epoch_ok`.
+/// the function the C++ called through its FFI (deleted, `DEL-008`).
 /// Runs before J6 because [`good_through`] is also false below `E_first`,
 /// and the row that names the reason is this one.
 pub(crate) struct J5;
@@ -94,7 +94,7 @@ impl Rule for J5 {
 
 /// CEN-J6: the persona is `good_through` the credited epoch —
 /// [`good_through`] over the record's `bad_intervals`, the function the
-/// C++ calls through `shekyl_archival_good_through`. A record with an open
+/// C++ called through its FFI (deleted, `DEL-008`). A record with an open
 /// bad interval (a slash not yet reinstated from) fails here; so does a
 /// closed one that covers `E`.
 pub(crate) struct J6;
@@ -159,8 +159,8 @@ pub(crate) fn judge_serve_credit_bond<'id, V: ChainView<'id>>(
 /// CEN-J13: the bond slot's `pqc_auths[i].hybrid_public_key` is the key
 /// the post's kind selects. A **Release** (the debit arm) authorizes only
 /// against the record's committed `bond_spend_pk` — the retention crate's
-/// [`cold_authority_pin`], the function the C++ calls through
-/// `shekyl_archival_cold_authority_pin`, which also refuses a record that
+/// [`cold_authority_pin`], the function the C++ called through its FFI
+/// (deleted, `DEL-008`), which also refuses a record that
 /// commits no key (`RecordCommitsNoKey`: the identity key never authorizes
 /// a value-out). A **JoinMarket** or **Reinstate** (the credit arms)
 /// authorizes with the identity key, `P_pubkey` — the post's own
@@ -196,7 +196,7 @@ impl Rule for J13 {
 
 /// CEN-J14: a JoinMarket post's statics against the record's absence —
 /// the retention crate's [`verify_join_market_bond_post`], the function the
-/// C++ calls through `shekyl_archival_verify_join_market_bond_post`
+/// C++ called through its FFI, deleted by `DEL-008`
 /// (`blockchain.cpp:4617–4619`, `record_exists` from
 /// `get_archival_bond_hybrid_pubkey`). A persona that already has a record
 /// may not join again (`RecordExists`); the post's `bonded_total` and
@@ -295,8 +295,8 @@ impl Rule for J15 {
 }
 
 /// CEN-J16: a Release post against the record — the retention crate's
-/// [`verify_release_bond_post`], the function the C++ calls through
-/// `shekyl_archival_verify_release_bond_post` (`blockchain.cpp:4540–4557`).
+/// [`verify_release_bond_post`], the function the C++ called through
+/// its FFI, deleted by `DEL-008` (`blockchain.cpp:4540–4557` at the cut).
 /// The record exists (`RecordMissing`); the debit is the record's whole
 /// `bonded_total` and the post's total agrees (`DebitNotFullBalance`,
 /// `NotFullRelease`) — a Release is the whole exit, never a partial one;
@@ -328,8 +328,8 @@ impl Rule for J16 {
 }
 
 /// CEN-J18: a Reinstate post against the record — the retention crate's
-/// [`verify_reinstate_bond_post`], the function the C++ calls through
-/// `shekyl_archival_verify_reinstate_bond_post` (`blockchain.cpp:4576–4591`).
+/// [`verify_reinstate_bond_post`], the function the C++ called through
+/// its FFI, deleted by `DEL-008` (`blockchain.cpp:4576–4591` at the cut).
 /// The record exists (`RecordMissing`) and has an **open** bad interval to
 /// close — a slash not yet reinstated from (`ReinstateNotSlashed`); the
 /// post's holdings are the record's, kind and shard set alike

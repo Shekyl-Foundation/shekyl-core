@@ -304,5 +304,10 @@ namespace nodetool
 
 }
 
+// Peer-list serialization version. Lived beside the deleted RPC server
+// because that header was the one every TU included; the type is this one.
+#include "cryptonote_protocol/cryptonote_protocol_handler.h"
+BOOST_CLASS_VERSION(nodetool::node_server<cryptonote::t_cryptonote_protocol_handler<cryptonote::core> >, 1);
+
 POP_WARNINGS
 

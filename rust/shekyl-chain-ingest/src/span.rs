@@ -21,14 +21,16 @@ use shekyl_chain_rules::{
 };
 use shekyl_chain_store::store::{AltCannot, SnapshotView, StoreCannot, StoreError};
 use shekyl_hash_budget::{Class, Permit};
-use shekyl_mempool::{stateless, Pool, PoolFault};
+use shekyl_mempool::{stateless, Admission, Duplicate, Pool, PoolFault};
 use shekyl_types::{BlockHash, BlockHeight};
 use shekyl_wire::{Block, Transaction};
 use tokio::sync::oneshot;
 
 use super::{Accepted, ArrivalTag, CannotFollow, Proof, Reply, ReplySlot, ServiceFault, Shared};
 use crate::cache_window::AltSpend;
-use crate::connector::{Apply, ObserveTarget, OfferAlt, Offered, Reorganize, RunFault, Switched};
+use crate::connector::{
+    Apply, ObserveTarget, OfferAlt, Offered, Reorganize, RunFault, Settlement, Switched,
+};
 use crate::plan_form::{form_plan, PlanStop};
 use crate::router::{claim_alt, claim_run, ClaimStop, ClaimedAlt, Claims};
 use crate::substrate::Branch;
@@ -189,7 +191,8 @@ where
         let candidate = match assemble(&front, shared.shown_pool().as_deref()) {
             Ok(candidate) => candidate,
             Err(indices) => {
-                front.slot.send(Reply::MissingBodies { indices });
+                let hash = front.hash();
+                front.slot.send(Reply::MissingBodies { hash, indices });
                 continue;
             }
         };
@@ -502,7 +505,34 @@ fn rest(arrivals: &mut VecDeque<Parsed>) -> Vec<Parsed> {
     arrivals.drain(..).collect()
 }
 
-/// Connect a run's formed blocks in order as each `form` ends.
+/// One formed block of a run: the height it claims, the arrival the
+/// reply goes to, and the verdict the connector connects.
+struct FormedBlock {
+    height: BlockHeight,
+    arrival: Parsed,
+    valid: StructurallyValid,
+}
+
+/// What stopped the forms before every arrival of the run was in.
+/// The blocks formed before it still land, in the run's one write;
+/// this is answered after that write.
+enum FormStop {
+    /// `form` refused this arrival.
+    Refused {
+        arrival: Parsed,
+        refused: InvalidBlock,
+    },
+    /// The slots moved under this arrival's hash.
+    Again(Parsed),
+}
+
+/// Connect a run's formed blocks in one write once every form of the
+/// run has ended, or the first refusal or fault has: one transaction,
+/// one commit, one `TipChanged` when anything connected.
+///
+/// The prefix is answered `Connected` before the stop is answered. A
+/// crash rolls the open run back. Durability of that one commit is the
+/// store's.
 async fn connect_run<S>(
     shared: &Arc<Shared<S>>,
     arrivals: &mut VecDeque<Parsed>,
@@ -514,72 +544,71 @@ where
     S: Substrate + Send + Sync + 'static,
     S::Fault: core::fmt::Debug + Send + 'static,
 {
+    let mut formed: Vec<FormedBlock> = Vec::with_capacity(receivers.len());
+    let mut form_stop = None;
     for (height, receiver) in receivers {
         let arrival = arrivals.pop_front().expect("one arrival per claim");
-        let Ok(formed) = receiver.await else {
+        let Ok(form) = receiver.await else {
             return Next::Halt;
         };
         if shared.stopping() {
             abandon.store(true, Ordering::Release);
             return Next::Halt;
         }
-        let formed = match formed {
-            Ok(Ok(formed)) => formed,
+        match form {
+            Ok(Ok(valid)) => formed.push(FormedBlock {
+                height,
+                arrival,
+                valid,
+            }),
+            // No form starts after a refusal or a moved slot: the launcher
+            // reads `abandon` before each one, so it is set here, not after
+            // the write that lands the prefix.
             Ok(Err(refused)) => {
-                arrival.slot.send(Reply::Refused(refused));
-                return Next::Cancel {
-                    by: arrival.tag,
-                    rest: rest(arrivals),
-                };
+                abandon.store(true, Ordering::Release);
+                form_stop = Some(FormStop::Refused { arrival, refused });
+                break;
             }
             Err(fault) if shared.substrate().cache_absent(&fault) => {
-                // The slots moved under the hash. Place again: the run pins
-                // the window it needs, and a miss does not derive.
                 abandon.store(true, Ordering::Release);
-                let mut again = vec![arrival];
-                again.extend(rest(arrivals));
-                return Next::Again(again);
+                form_stop = Some(FormStop::Again(arrival));
+                break;
             }
+            // A substrate fault fails the service now, before any write:
+            // the prefix formed so far does not land on a service that is
+            // ending, and the fault is never behind a write's own outcome.
             Err(fault) => {
                 abandon.store(true, Ordering::Release);
                 shared.fail(ServiceFault::Substrate(fault));
                 return Next::Halt;
             }
-        };
-        match shared
-            .connector
-            .ask(Apply(vec![(height, Ok(formed))]))
-            .await
-        {
-            Ok(applied) => match applied.refused {
-                // This path only applies a block whose parent was the tip.
-                // CEN-A2 then says that parent is no longer the tip, at the
-                // same height: a replacement, not a block this peer proved
-                // invalid. A height change is `HeightClaim`, below.
-                Some((_, refused)) if refused.rule == CenRow::A2 => {
-                    abandon.store(true, Ordering::Release);
-                    let mut again = vec![arrival];
-                    again.extend(rest(arrivals));
-                    return Next::Again(again);
+        }
+    }
+    if !formed.is_empty() {
+        let mut block_arrivals = Vec::with_capacity(formed.len());
+        let mut run = Vec::with_capacity(formed.len());
+        for block in formed {
+            block_arrivals.push(block.arrival);
+            run.push((block.height, Ok(block.valid)));
+        }
+        let submitted = run.len();
+        match shared.connector.ask(Apply(run)).await {
+            Ok(mut applied) => {
+                let settlement = applied.take_settlement(submitted);
+                if let Some(next) = settle(
+                    &applied.connected,
+                    settlement,
+                    &mut block_arrivals,
+                    form_stop,
+                    arrivals,
+                    abandon,
+                ) {
+                    return next;
                 }
-                Some((_, refused)) => {
-                    abandon.store(true, Ordering::Release);
-                    arrival.slot.send(Reply::Refused(refused));
-                    return Next::Cancel {
-                        by: arrival.tag,
-                        rest: rest(arrivals),
-                    };
-                }
-                None => {
-                    let (height, hash) = applied.connected[0];
-                    arrival.slot.send(Reply::Connected { height, hash });
-                }
-            },
+            }
             Err(SendError::HandlerError(fault)) if is_stale(&fault) => {
                 abandon.store(true, Ordering::Release);
-                let mut again = vec![arrival];
-                again.extend(rest(arrivals));
-                return Next::Again(again);
+                return Next::Again(carry(block_arrivals, form_stop, arrivals));
             }
             Err(err) => {
                 abandon.store(true, Ordering::Release);
@@ -587,6 +616,9 @@ where
                 return Next::Halt;
             }
         }
+    } else if let Some(stop) = form_stop {
+        abandon.store(true, Ordering::Release);
+        return stop_next(stop, arrivals);
     }
     match stop {
         None => Next::Continue,
@@ -615,6 +647,118 @@ where
             Next::Halt
         }
         Some(ClaimStop::Moved) => Next::Again(rest(arrivals)),
+    }
+}
+
+/// Answer `Connected` for the prefix and leave the unlanded tail in `arrivals`.
+fn answer_connected(
+    arrivals: &mut Vec<Parsed>,
+    connected: &[(BlockHeight, BlockHash)],
+    landed: usize,
+) {
+    let tail = arrivals.split_off(landed);
+    for ((height, hash), arrival) in connected.iter().zip(arrivals.drain(..)) {
+        arrival.slot.send(Reply::Connected {
+            height: *height,
+            hash: *hash,
+        });
+    }
+    *arrivals = tail;
+}
+
+/// The arrivals a `Next` carries past the write: those formed but not
+/// landed, the one that ended the wait, then the rest of the run.
+fn carry(
+    mut pending: Vec<Parsed>,
+    stop: Option<FormStop>,
+    queued: &mut VecDeque<Parsed>,
+) -> Vec<Parsed> {
+    if let Some(stop) = stop {
+        let arrival = match stop {
+            FormStop::Refused { arrival, .. } | FormStop::Again(arrival) => arrival,
+        };
+        pending.push(arrival);
+    }
+    pending.extend(queued.drain(..));
+    pending
+}
+
+/// Answer a form stop. The caller has already set `abandon`.
+fn stop_next(stop: FormStop, queued: &mut VecDeque<Parsed>) -> Next {
+    match stop {
+        FormStop::Refused { arrival, refused } => {
+            arrival.slot.send(Reply::Refused(refused));
+            Next::Cancel {
+                by: arrival.tag,
+                rest: queued.drain(..).collect(),
+            }
+        }
+        FormStop::Again(arrival) => {
+            let mut again = vec![arrival];
+            again.extend(queued.drain(..));
+            Next::Again(again)
+        }
+    }
+}
+
+/// Turn one apply's settlement into the next step. `None` is a run that
+/// landed with no form stop: the claim stop, if any, is still to answer.
+fn settle(
+    connected: &[(BlockHeight, BlockHash)],
+    settlement: Settlement,
+    arrivals: &mut Vec<Parsed>,
+    form_stop: Option<FormStop>,
+    queued: &mut VecDeque<Parsed>,
+    abandon: &AtomicBool,
+) -> Option<Next> {
+    match settlement {
+        Settlement::Landed { landed } => {
+            answer_connected(arrivals, connected, landed);
+            match form_stop {
+                None => None,
+                Some(stop) => {
+                    abandon.store(true, Ordering::Release);
+                    Some(stop_next(stop, queued))
+                }
+            }
+        }
+        // CEN-A2 says the parent is no longer the tip, at the same height:
+        // a replacement, not a block this peer proved invalid.
+        Settlement::Refused { landed, refused } if refused.rule == CenRow::A2 => {
+            answer_connected(arrivals, connected, landed);
+            abandon.store(true, Ordering::Release);
+            Some(Next::Again(carry(
+                std::mem::take(arrivals),
+                form_stop,
+                queued,
+            )))
+        }
+        Settlement::Refused { landed, refused } => {
+            answer_connected(arrivals, connected, landed);
+            abandon.store(true, Ordering::Release);
+            if arrivals.is_empty() {
+                return Some(Next::Halt);
+            }
+            let arrival = arrivals.remove(0);
+            arrival.slot.send(Reply::Refused(refused));
+            Some(Next::Cancel {
+                by: arrival.tag,
+                rest: carry(std::mem::take(arrivals), form_stop, queued),
+            })
+        }
+        Settlement::Short { landed } => {
+            answer_connected(arrivals, connected, landed);
+            abandon.store(true, Ordering::Release);
+            Some(Next::Again(carry(
+                std::mem::take(arrivals),
+                form_stop,
+                queued,
+            )))
+        }
+        Settlement::Broken => {
+            abandon.store(true, Ordering::Release);
+            Some(Next::Halt)
+        }
     }
 }
 
@@ -735,7 +879,7 @@ where
     // (CEN-K9), not before.
     if matches!(
         offered,
-        Offered::Held { .. } | Offered::BeyondCap(_) | Offered::SwitchDue(_)
+        Offered::Held { .. } | Offered::BeyondCap { .. } | Offered::SwitchDue(_)
     ) {
         offer_carried(shared, Carried::Alt(arrival.hash())).await;
     }
@@ -770,7 +914,9 @@ fn settled(offered: Offered) -> Result<Reply, Carry> {
         Offered::Unlinked { at } => Ok(Reply::Unlinked { at }),
         Offered::AlreadyHeld => Ok(Reply::AlreadyHeld),
         Offered::Held { height } => Ok(Reply::Held { height }),
-        Offered::BeyondCap(beyond) => Ok(Reply::CannotFollow(CannotFollow::BeyondCap(beyond))),
+        Offered::BeyondCap { beyond, .. } => {
+            Ok(Reply::CannotFollow(CannotFollow::BeyondCap(beyond)))
+        }
         Offered::SwitchDue(plan) => Err(Carry::Switch(Box::new(plan))),
     }
 }
@@ -786,11 +932,15 @@ fn switch_reply(switched: Switched) -> Result<Reply, crate::connector::SwitchDon
         Switched::Refused {
             at, hash, refused, ..
         } => Ok(Reply::PromotionRefused { at, hash, refused }),
-        Switched::BeyondCap(beyond) => Ok(Reply::CannotFollow(CannotFollow::BeyondCap(beyond))),
-        Switched::BelowFloor { tip, floor } => Ok(Reply::CannotFollow(CannotFollow::BelowFloor {
-            tip: BlockHeight::from_raw(tip),
-            floor: BlockHeight::from_raw(floor),
-        })),
+        Switched::BeyondCap { beyond, .. } => {
+            Ok(Reply::CannotFollow(CannotFollow::BeyondCap(beyond)))
+        }
+        Switched::BelowFloor { tip, floor, .. } => {
+            Ok(Reply::CannotFollow(CannotFollow::BelowFloor {
+                tip: BlockHeight::from_raw(tip),
+                floor: BlockHeight::from_raw(floor),
+            }))
+        }
     }
 }
 
@@ -1069,6 +1219,19 @@ where
         Some(Err(e)) => return shared.fail(e.into()),
         Some(Ok(offers)) => offers,
     };
+    // A returned body the pool now shows is a shown-set change the relay's
+    // hook never sees (it came from a block, not a submit), and its
+    // admission judged at the tip the pop left, which the pool's work order
+    // keeps behind the heavier tip it last judged at: the attendant's
+    // reconcile re-judges at this tip and the next build lists it. Without
+    // the wake the posted job stayed the one built before the return, and a
+    // `generateblocks` after a pop waited on it for ever.
+    let shown_changed = offers.admissions.iter().any(|(_, admission)| {
+        matches!(
+            admission,
+            Admission::Admitted { .. } | Admission::Duplicate(Duplicate::InPool)
+        )
+    });
     let division = super::window::divide_pool_faults(offers.faults, &bodies);
     if let Some(fault) = division.chain {
         return shared.fail(ServiceFault::Pool(PoolFault::Chain(fault)));
@@ -1078,6 +1241,8 @@ where
     }
     if !division.parked.is_empty() {
         shared.hand_pending(division.parked);
+    } else if shown_changed {
+        shared.shown_changed();
     }
 }
 
@@ -1189,11 +1354,22 @@ mod tests {
         }
     }
 
+    fn evidence() -> shekyl_chain_store::codec::FollowingDegraded {
+        shekyl_chain_store::codec::FollowingDegraded {
+            fork_at: shekyl_types::BlockHeight::from_raw(1),
+            tip: shekyl_types::BlockHash::from_bytes([2u8; 32]),
+            work: shekyl_difficulty::CumulativeDifficulty::from_raw(3),
+        }
+    }
+
     /// A stored alternative past the cap is the proven outcome, not the
     /// door's hint (DX-Q2 item 8).
     #[test]
     fn a_stored_fork_past_the_cap_is_cannot_follow() {
-        let Ok(reply) = settled(Offered::BeyondCap(beyond())) else {
+        let Ok(reply) = settled(Offered::BeyondCap {
+            beyond: beyond(),
+            evidence: evidence(),
+        }) else {
             panic!("settled answers a stored fork past the cap");
         };
         assert_eq!(
@@ -1205,11 +1381,18 @@ mod tests {
     /// Both of a switch's refusals to follow are the proven outcome.
     #[test]
     fn a_switch_past_the_cap_or_below_the_floor_is_cannot_follow() {
-        let Ok(past) = switch_reply(Switched::BeyondCap(beyond())) else {
+        let Ok(past) = switch_reply(Switched::BeyondCap {
+            beyond: beyond(),
+            evidence: evidence(),
+        }) else {
             panic!("a switch past the cap is answered");
         };
         assert_eq!(past, Reply::CannotFollow(CannotFollow::BeyondCap(beyond())));
-        let Ok(floor) = switch_reply(Switched::BelowFloor { tip: 9, floor: 4 }) else {
+        let Ok(floor) = switch_reply(Switched::BelowFloor {
+            tip: 9,
+            floor: 4,
+            evidence: evidence(),
+        }) else {
             panic!("a switch below the floor is answered");
         };
         assert_eq!(

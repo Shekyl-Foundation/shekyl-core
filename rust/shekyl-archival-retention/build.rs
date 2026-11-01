@@ -129,7 +129,7 @@ fn main() {
     // re-pinned at the Round-2 stressnet — the bond_duration precedent.
     //
     // Read at the width they are EMITTED and crossed at (`u32`, the
-    // shekyl_archival_failure_window_params accessor), so an out-of-range re-pin
+    // former FFI accessor's width, `DEL-008`), so an out-of-range re-pin
     // names itself here instead of surfacing as an opaque "literal out of range"
     // in the generated file. Converting on read rather than bound-checking after
     // is what makes both values structurally in-range: a check on `n` alone would

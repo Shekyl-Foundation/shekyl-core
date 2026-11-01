@@ -457,7 +457,7 @@ impl PoolFacts for PoolBridge {
         let health = self.health.clone();
         Box::pin(async move {
             let pool = pool?;
-            tokio::task::spawn_blocking(move || {
+            let gone = tokio::task::spawn_blocking(move || {
                 let mut pool = lock(&pool);
                 let ids = if ids.is_empty() {
                     pool.relay_view().entries().map(|entry| entry.id).collect()
@@ -465,7 +465,10 @@ impl PoolFacts for PoolBridge {
                     ids
                 };
                 match pool.flush(&ids) {
-                    Ok(flushed) => Ok(flushed.into_iter().map(|(id, _)| id).collect()),
+                    Ok(flushed) => {
+                        let ids: Vec<TxHash> = flushed.into_iter().map(|(id, _)| id).collect();
+                        Ok(ids)
+                    }
                     Err(fault) => {
                         health.retire(&fault);
                         Err(FactsFault::StoreUnreadable)
@@ -473,7 +476,11 @@ impl PoolFacts for PoolBridge {
                 }
             })
             .await
-            .map_err(|_| FactsFault::Internal)?
+            .map_err(|_| FactsFault::Internal)?;
+            if let Ok(ids) = &gone {
+                shekyl_ffi::pool_ffi::note_left(ids);
+            }
+            gone
         })
     }
 }
@@ -526,7 +533,7 @@ fn local_outcome(reply: Reply) -> LocalOutcome {
         } => LocalOutcome::Refused {
             rule: verdict.rule.to_string(),
         },
-        Reply::MissingBodies { indices } => LocalOutcome::MissingBodies { indices },
+        Reply::MissingBodies { indices, .. } => LocalOutcome::MissingBodies { indices },
         Reply::Unlinked { .. } => LocalOutcome::Unlinked,
         Reply::AlreadyHeld => LocalOutcome::AlreadyHeld,
         Reply::Held { .. } => LocalOutcome::Held,

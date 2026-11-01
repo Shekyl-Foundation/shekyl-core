@@ -480,12 +480,14 @@ differential cron). Six checks, exact names, never a `randomx_*` glob:
 6. `cryptonote::set_pow_hash_override_for_tests` is absent (gc-sections
    dropped the CEN-D2 setter), and the deleted schema-level names
    (`IPowSchema`, `set_pow_schema_override_for_tests`,
-   `get_pow_for_height`) stay deleted. Anchored on
-   `cryptonote::hash_pow_randomx` and the slot
-   `s_pow_hash_override_for_tests` so a moved dispatch cannot pass
-   vacuously. Source counterpart: `check_pow_test_seam.sh`. A new
-   setter is a new name, added here and in the source gate together —
-   this check does not glob.
+   `get_pow_for_height`) stay deleted. The former presence anchors
+   (`cryptonote::hash_pow_randomx`, `s_pow_hash_override_for_tests`)
+   left with the C++ PoW at the DRS-X flip; checks 3 and 4 (the Rust
+   verifier's symbols) are the anchors that keep this absence from
+   passing vacuously. Source counterpart: `check_pow_test_seam.sh`,
+   anchored on `shekyl_pow_randomx::compute_hash` and the ingest's call
+   to it. A new setter is a new name, added here and in the source gate
+   together — this check does not glob.
 
 ## 8. Performance Targets
 

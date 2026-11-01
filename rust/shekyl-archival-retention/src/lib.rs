@@ -115,10 +115,9 @@ pub use attestation_wire::{
     WITNESS_ENTRY_LEN, WITNESS_PREFIX_LEN,
 };
 pub use bond_connect::{
-    clean_interval_close, is_clean_interval_close, reinstate_connect, reinstate_pop,
-    release_connect, release_pop, slash_open_interval_to_append, ReinstateConnect,
-    ReinstateConnectError, ReinstatePopError, ReleaseConnect, ReleaseConnectError, ReleasePopError,
-    MAX_BOND_BAD_INTERVALS,
+    clean_interval_close, is_clean_interval_close, reinstate_connect, release_connect,
+    slash_open_interval_to_append, ReinstateConnect, ReinstateConnectError, ReleaseConnect,
+    ReleaseConnectError, MAX_BOND_BAD_INTERVALS,
 };
 pub use bond_ct_balance::{
     verify_bond_post_ct_balance, BondCtBalanceError, BondTerm, BondTermError,
@@ -237,8 +236,8 @@ pub use secret_draw::{
     DRAW_CUSTOMIZATION, SERVE_CREDIT_BATCH_CUSTOMIZATION,
 };
 pub use segment_freeze::{
-    challenge_leaf_chunk_bounds, challenged_leaf_offset_in_chunk, frozen_segment_count,
-    LeafChunkBounds, SEGMENT_LEAF_COUNT,
+    challenge_leaf_chunk_bounds, challenged_leaf_offset_in_chunk, LeafChunkBounds,
+    SEGMENT_LEAF_COUNT,
 };
 pub use serve_eligibility::serve_credit_epoch_ok;
 pub use shard_coverage::{

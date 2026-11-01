@@ -12,9 +12,10 @@ three, would still compile and the C++ tests on a sparse fixture would
 not notice.
 
 Instance of `47-gate-subject-assertion.mdc`: the gate asserts its own
-subject exists (`pub fn digest_v0` in the crate, the FFI symbol, the
-LMDB walker) so an empty or mis-anchored parse fails loudly instead of
-passing vacuously over nothing.
+subject exists (`pub fn digest_v0` in the crate, the FFI symbol) so an
+empty or mis-anchored parse fails loudly instead of passing vacuously
+over nothing. The C++ walker left with the LMDB store; the digest side
+is the remaining subject.
 
 This gate does NOT recompute cSHAKE (that is `shekyl-crypto-hash` plus
 the crate's property tests). It asserts the three families are named
@@ -30,7 +31,6 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 DIGEST_RS = ROOT / "rust" / "shekyl-chain-store" / "src" / "digest_v0.rs"
-WALKER_CPP = ROOT / "src" / "blockchain_db" / "lmdb" / "logical_state_digest.cpp"
 FFI_RS = ROOT / "rust" / "shekyl-ffi" / "src" / "chain_digest_ffi.rs"
 FFI_H = ROOT / "src" / "shekyl" / "shekyl_ffi.h"
 AUDIT = ROOT / "docs" / "LMDB_WRITE_ATOMICITY_AUDIT.md"
@@ -39,7 +39,6 @@ AUDIT = ROOT / "docs" / "LMDB_WRITE_ATOMICITY_AUDIT.md"
 # the gate was written. A parse yielding a truncated stub is a broken
 # subject, not a pass.
 MIN_DIGEST_RS = 2000
-MIN_WALKER_CPP = 800
 
 
 def must_read(path: pathlib.Path) -> str:
@@ -58,7 +57,6 @@ def require(cond: bool, msg: str) -> None:
 
 def main() -> None:
     digest = must_read(DIGEST_RS)
-    walker = must_read(WALKER_CPP)
     ffi_rs = must_read(FFI_RS)
     ffi_h = must_read(FFI_H)
     audit = must_read(AUDIT)
@@ -66,9 +64,6 @@ def main() -> None:
     require(len(digest) >= MIN_DIGEST_RS,
             f"{DIGEST_RS.name} is {len(digest)} bytes "
             f"(floor {MIN_DIGEST_RS}) — broken parse or emptied subject")
-    require(len(walker) >= MIN_WALKER_CPP,
-            f"{WALKER_CPP.name} is {len(walker)} bytes "
-            f"(floor {MIN_WALKER_CPP}) — broken parse or emptied subject")
 
     require("pub fn digest_v0" in digest,
             "digest_v0.rs does not define pub fn digest_v0")
@@ -88,17 +83,6 @@ def main() -> None:
     require("§7.1.1" in digest and "archival" in digest.lower(),
             "digest_v0.rs does not record the §7.1.1 archival exclusion")
 
-    require("get_block_hash_from_height" in walker,
-            "LMDB walker does not read core-chain hashes")
-    require("for_all_key_images" in walker,
-            "LMDB walker does not read spent_keys")
-    require("get_curve_tree_root" in walker,
-            "LMDB walker does not read the live curve-tree root")
-    require("shekyl_logical_state_digest_v0" in walker,
-            "LMDB walker does not call the Rust hasher")
-    require("block_rtxn_start" in walker,
-            "LMDB walker does not hold one snapshot for the three families")
-
     require("shekyl_logical_state_digest_v0" in ffi_rs,
             "FFI rust export shekyl_logical_state_digest_v0 missing")
     require("shekyl_logical_state_digest_v0" in ffi_h,
@@ -114,7 +98,7 @@ def main() -> None:
                 f"audit digest-v0 read set does not name {token!r}")
 
     print("PASS: DRS-P0d digest v0 names core chain, spent_keys, curve root; "
-          "archival journals excluded; walker/FFI/audit agree")
+          "archival journals excluded; FFI and audit agree")
 
 
 if __name__ == "__main__":

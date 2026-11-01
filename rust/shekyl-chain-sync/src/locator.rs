@@ -16,7 +16,7 @@ const DENSE: u64 = 10;
 /// `count` is the block count of the chain the request extends (`H*`).
 /// `at` answers one height. An empty chain locates the null hash and
 /// does not call `at`, so a peer can answer with genesis.
-pub(crate) fn locator<E>(
+pub fn locator<E>(
     count: ChainCount,
     mut at: impl FnMut(BlockHeight) -> Result<Option<BlockHash>, E>,
 ) -> Result<Vec<[u8; 32]>, E> {

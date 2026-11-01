@@ -69,21 +69,14 @@ pub async fn get_blocks_by_height(
     if authority.bounded() && restricted_cap_refuses(request.heights.len()) {
         return bin_status("Too many blocks requested in restricted mode");
     }
-    let core = state.core.clone();
-    let out = tokio::task::spawn_blocking(move || core.blocks_by_height(&request.heights)).await;
-    let reply = match out {
-        Ok(Ok((blocks, failed))) => shekyl_rpc_types::GetBlocksByHeightResponse {
-            // A failure names its height and still carries the blocks read
-            // before it — the reply the C++ produced, where the prefix and
-            // the error travel together.
-            status: failed.map_or_else(shekyl_rpc_types::RpcStatus::ok, |height| {
-                shekyl_rpc_types::RpcStatus(format!("Error retrieving block at height {height}"))
-            }),
-            blocks,
-        },
-        Ok(Err(_)) | Err(_) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, "facts unavailable").into_response()
-        }
+    let chain = Arc::clone(&state.handles.chain);
+    let host = authority.host();
+    let out = tokio::task::spawn_blocking(move || {
+        crate::read_methods::get_blocks_by_height(chain.as_ref(), &request, host)
+    })
+    .await;
+    let Ok(Ok(reply)) = out else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "facts unavailable").into_response();
     };
     octet_stream(reply.to_bin())
 }
@@ -127,23 +120,13 @@ pub async fn get_o_indexes(State(state): State<Arc<AppState>>, body: Bytes) -> i
     let Ok(request) = shekyl_rpc_types::GetOIndexesRequest::from_bin(&body) else {
         return (StatusCode::BAD_REQUEST, "Bad request").into_response();
     };
-    let core = state.core.clone();
-    let out = tokio::task::spawn_blocking(move || core.tx_output_indices(&request.txid)).await;
-    let reply = match out {
-        Ok(Ok((o_indexes, true))) => shekyl_rpc_types::GetOIndexesResponse {
-            status: shekyl_rpc_types::RpcStatus::ok(),
-            o_indexes,
-        },
-        // No such transaction. The C++ answered 200 with `status: "Failed"`,
-        // and the wallet client branches on that; a transport-level error
-        // here would be a different reply, not a tidier one.
-        Ok(Ok((_, false))) => shekyl_rpc_types::GetOIndexesResponse {
-            status: shekyl_rpc_types::RpcStatus("Failed".to_owned()),
-            o_indexes: Vec::new(),
-        },
-        Ok(Err(_)) | Err(_) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, "facts unavailable").into_response()
-        }
+    let chain = Arc::clone(&state.handles.chain);
+    let out = tokio::task::spawn_blocking(move || {
+        crate::read_methods::get_o_indexes(chain.as_ref(), &request)
+    })
+    .await;
+    let Ok(Ok(reply)) = out else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "facts unavailable").into_response();
     };
     octet_stream(reply.to_bin())
 }
