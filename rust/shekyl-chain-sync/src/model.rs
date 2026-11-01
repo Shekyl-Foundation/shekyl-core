@@ -115,6 +115,9 @@ pub struct Sync<K, R> {
     pub(crate) outstanding: crate::arrivals::Offered<K>,
     /// Bodies the entry accepted. The walk treats them as present.
     pub(crate) accepted: BTreeSet<BlockHash>,
+    /// Tips an entry reply already judged for relay: a connect, relayed or
+    /// not. The tip event judges every other new tip (CS-Q2 step 7).
+    pub(crate) judged: BTreeSet<BlockHash>,
     /// Who served a body, from the offer until the header leaves `T` or
     /// is refused. A promotion refusal closes that session.
     pub(crate) served: BTreeMap<BlockHash, K>,
@@ -162,6 +165,7 @@ where
             held: crate::arrivals::Held::new(),
             outstanding: crate::arrivals::Offered::new(),
             accepted: BTreeSet::new(),
+            judged: BTreeSet::new(),
             served: BTreeMap::new(),
             dispute: None,
             wall: Timestamp::from_raw(1_700_000_100),
@@ -291,11 +295,12 @@ where
     }
 
     /// Whether a new tip relays from the tip event (CS-Q2 step 7). A tip
-    /// the model offered relays from the entry's reply, which names its
-    /// supplier: it is in `accepted` once that reply came, and in
-    /// `outstanding` while it is still awaited. Any other new tip, such as
-    /// a block this node mined, has no supplier and relays here. It is
-    /// judged against the tip before this one, as the entry's reply is.
+    /// the entry's reply connected relays from that reply, which names its
+    /// supplier: it is in `judged` once the reply came, and in
+    /// `outstanding` while it is awaited. Any other new tip relays here
+    /// with no supplier: a block this node mined, and a switch's promoted
+    /// tip that no reply connected. It is judged against the tip before
+    /// this one, as the entry's reply is.
     /// The first tip observed is the chain the node opened on, not a new
     /// block, and relays nothing.
     ///
@@ -307,7 +312,7 @@ where
             return Ok(false);
         };
         if prior.hash == tip.hash
-            || self.accepted.contains(&tip.hash)
+            || self.judged.contains(&tip.hash)
             || self.outstanding.contains(tip.hash)
         {
             return Ok(false);

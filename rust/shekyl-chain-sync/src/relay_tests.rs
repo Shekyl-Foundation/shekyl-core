@@ -275,6 +275,53 @@ fn with_requests_off_nothing_is_asked_and_a_mined_tip_still_relays() {
     }
 }
 
+/// A tip that no entry reply judged for relay relays from the tip event
+/// (CS-Q2 step 7; the ruling on #1169). Both offers come back `Noted`: the
+/// first held as an alternative, the second a switch whose promoted tip is
+/// not the arrival that caused it (`outcome_of`). Neither reply was a
+/// connect, so the tip event relays the new tip, with no supplier named.
+/// `accepted` holds both, so it cannot be what the tip event checks.
+#[test]
+fn a_tip_no_reply_judged_relays_from_the_tip_event() {
+    with_two_headers(|sync, view, (first_raw, first), (second_raw, second)| {
+        let out = drive(sync, view, Event::Room { seats: 1 });
+        let (who, asked) = request_for(&out).expect("the first body is wanted");
+        assert_eq!(asked, vec![*first.as_bytes()]);
+        let out = answer(sync, view, who, first_raw.clone());
+        let tag = offer_tag(&out);
+        let out = drive(
+            sync,
+            view,
+            Event::Entry {
+                tag,
+                outcome: Outcome::Noted,
+            },
+        );
+        assert!(relays(&out).is_empty(), "a noted reply relayed: {out:?}");
+        let out = drive(sync, view, Event::Room { seats: 1 });
+        let (who, asked) = request_for(&out).expect("the second body is wanted");
+        assert_eq!(asked, vec![*second.as_bytes()]);
+        let out = answer(sync, view, who, second_raw.clone());
+        let tag = offer_tag(&out);
+        let out = drive(
+            sync,
+            view,
+            Event::Entry {
+                tag,
+                outcome: Outcome::Noted,
+            },
+        );
+        assert!(relays(&out).is_empty(), "a noted reply relayed: {out:?}");
+        let records = with_block(view, &first_raw);
+        let records = with_block(&Prefix(&records), &second_raw);
+        let main = Prefix(&records);
+        let tip = main.tip().expect("main answers").expect("a tip");
+        assert_eq!(tip.hash, second);
+        let out = drive(sync, &main, Event::Tip { tip });
+        assert_eq!(relays(&out), vec![(second, None)], "{out:?}");
+    });
+}
+
 /// Each relay in `out`: the block and its supplier.
 fn relays(out: &[Command<u8>]) -> Vec<(BlockHash, Option<u8>)> {
     out.iter()
