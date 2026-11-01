@@ -16,7 +16,8 @@ use super::core::{DirectoryAnswer, Input, RoundEnd};
 
 /// A fetch of this node's onion, as the directory check reads it (§4.5).
 /// The caller keeps only events for its own address. `REQUESTED` names the
-/// descriptor Tor's client asks for; `RECEIVED` and `FAILED` with a
+/// directory and the descriptor Tor's client asks for; a line missing
+/// either is not a fetch this check sent. `RECEIVED` and `FAILED` with a
 /// descriptor id are a directory's answer (an upload's `FAILED` carries no
 /// id and is the round coalescer's). `REASON=NOT_FOUND` is the directory
 /// not having it; any other reason says nothing about the descriptor.
@@ -24,10 +25,10 @@ use super::core::{DirectoryAnswer, Input, RoundEnd};
 pub fn directory_input_of(event: &HsDescEvent) -> Option<Input> {
     let answer = match event.action {
         HsDescAction::Requested => {
-            return event
-                .descriptor_id
-                .clone()
-                .map(|descriptor_id| Input::DirectoryAsked { descriptor_id });
+            return Some(Input::DirectoryAsked {
+                hsdir: event.hsdir?,
+                descriptor_id: event.descriptor_id.clone()?,
+            });
         }
         HsDescAction::Received => DirectoryAnswer::Received,
         HsDescAction::Failed if event.descriptor_id.is_some() => {
@@ -547,7 +548,8 @@ mod tests {
                 "650 HS_DESC REQUESTED {onion} NO_AUTH {dir} {key} HSDIR_INDEX=00"
             )),
             Some(Input::DirectoryAsked {
-                descriptor_id: key.to_owned()
+                hsdir,
+                descriptor_id: key.to_owned(),
             })
         );
         assert_eq!(

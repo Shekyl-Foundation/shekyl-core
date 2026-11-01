@@ -37,7 +37,9 @@
 
 use super::super::posture::{Cause, Inbound, InboundCause};
 use super::announce::Cadence;
-use super::directories::{DirectoryAnswer, DirectoryCheck, DirectoryFetch, DirectoryVerdict};
+use super::directories::{
+    DirectoryAnswer, DirectoryCheck, DirectoryFetch, DirectoryHalf, DirectoryVerdict,
+};
 use super::{duration_ns, Action, Core, Duty, Phase, RoundEnd};
 use crate::control::RelayFingerprint;
 
@@ -266,7 +268,7 @@ impl Core {
             }
             Probe::Idle | Probe::Refetching | Probe::Judging { .. } => {}
         }
-        if let Some(check) = &mut self.directories {
+        if let Some(DirectoryHalf::Open(check)) = &mut self.directories {
             check.resumed(
                 now,
                 duration_ns(self.policy.probe_after_min),
@@ -323,25 +325,29 @@ impl Core {
     }
 
     /// A probe's check begins: the rendezvous probe, and the directories
-    /// the driver names next ([`Action::CheckDirectories`]).
+    /// the driver names next ([`Action::CheckDirectories`]). The list is
+    /// not in yet ([`DirectoryHalf::AwaitingDraw`]); the verdict waits for it.
     fn schedule(&mut self, now: u64, draw: u64, attempt: Attempt) -> Vec<Action> {
         self.probe = Probe::Scheduled {
             at: now.saturating_add(self.probe_delay(draw)),
             attempt,
         };
-        self.directories = None;
+        self.directories = Some(DirectoryHalf::AwaitingDraw);
         vec![Action::CheckDirectories]
     }
 
     /// The directories to ask for the check in hand, each after its own
     /// delay from the probe's range: a fetch at every directory straight
     /// after an upload is the signature the probe's jitter exists to hide.
+    /// Installed only while the draw is still outstanding, including once
+    /// the probe is already [`Probe::Judging`]. A draw that arrives after
+    /// the check was dropped is ignored.
     pub(super) fn directories_drawn(
         &mut self,
         now: u64,
         fetches: Vec<DirectoryFetch>,
     ) -> Vec<Action> {
-        if !matches!(self.probe, Probe::Scheduled { .. } | Probe::InFlight { .. }) {
+        if !matches!(self.directories, Some(DirectoryHalf::AwaitingDraw)) {
             return Vec::new();
         }
         let fetches = fetches
@@ -351,25 +357,25 @@ impl Core {
                 (fetch.hsdir, fetch.descriptor_id, due)
             })
             .collect();
-        self.directories = Some(DirectoryCheck::new(
-            fetches,
-            now,
-            duration_ns(self.policy.probe_within),
-        ));
-        Vec::new()
+        self.directories = Some(DirectoryHalf::Open(DirectoryCheck::new(fetches)));
+        self.judge(now)
     }
 
     pub(super) fn directories_due(&self) -> Option<u64> {
-        self.directories.as_ref().and_then(DirectoryCheck::due)
+        match &self.directories {
+            Some(DirectoryHalf::Open(check)) => check.due(),
+            Some(DirectoryHalf::AwaitingDraw) | None => None,
+        }
     }
 
-    /// A fetch came due, or the check's bound passed.
+    /// A fetch came due, or one fetch's answer window elapsed.
     pub(super) fn on_directories_deadline(&mut self, now: u64) -> Vec<Action> {
-        let Some(check) = &mut self.directories else {
+        let Some(DirectoryHalf::Open(check)) = &mut self.directories else {
             return Vec::new();
         };
+        let within = duration_ns(self.policy.probe_within);
         let mut actions: Vec<Action> = check
-            .on_deadline(now)
+            .on_deadline(now, within)
             .into_iter()
             .map(|hsdir| Action::FetchFromDirectory { hsdir })
             .collect();
@@ -377,9 +383,26 @@ impl Core {
         actions
     }
 
-    pub(super) fn directory_asked(&mut self, now: u64, descriptor_id: &str) -> Vec<Action> {
-        if let Some(check) = &mut self.directories {
-            check.asked(descriptor_id);
+    /// Tor accepted one fetch. That fetch's answer window starts now.
+    pub(super) fn directory_fetch_accepted(
+        &mut self,
+        now: u64,
+        hsdir: RelayFingerprint,
+    ) -> Vec<Action> {
+        if let Some(DirectoryHalf::Open(check)) = &mut self.directories {
+            check.accepted(hsdir, now, duration_ns(self.policy.probe_within));
+        }
+        Vec::new()
+    }
+
+    pub(super) fn directory_asked(
+        &mut self,
+        now: u64,
+        hsdir: RelayFingerprint,
+        descriptor_id: &str,
+    ) -> Vec<Action> {
+        if let Some(DirectoryHalf::Open(check)) = &mut self.directories {
+            check.requested(hsdir, descriptor_id);
         }
         self.judge(now)
     }
@@ -391,32 +414,42 @@ impl Core {
         descriptor_id: Option<&str>,
         answer: DirectoryAnswer,
     ) -> Vec<Action> {
-        if let Some(check) = &mut self.directories {
+        if let Some(DirectoryHalf::Open(check)) = &mut self.directories {
             check.answered(hsdir, descriptor_id, answer);
         }
         self.judge(now)
     }
 
-    /// Both halves are in: the probe arrived or missed, and the directories
-    /// answered or their bound passed. Reachable needs the probe's arrival
-    /// and the descriptor at more than half of the counted directories; any
-    /// other outcome is a miss, into the two-miss rule. A check with no
-    /// directory set (none drawn) is decided by the probe alone.
+    /// Both halves are in: the probe arrived or missed, and every directory
+    /// this check sent has been decided. The draw still outstanding waits.
+    /// Reachable needs the probe's arrival and the descriptor at more than
+    /// half of the counted directories. Any other counted outcome is a miss,
+    /// into the two-miss rule. An empty list is [`DirectoryVerdict::Unmatched`]:
+    /// the probe alone decides. No list at all, because the check was
+    /// dropped, decides nothing.
+    ///
+    /// Outbound must still be usable. A link that dropped while the
+    /// directories were out discards the check, the same way a probe in
+    /// flight is dropped at its bound: no refetch, and no inbound verdict.
     fn judge(&mut self, now: u64) -> Vec<Action> {
         let Probe::Judging { arrived, attempt } = self.probe else {
             return Vec::new();
         };
-        if self
-            .directories
-            .as_ref()
-            .is_some_and(|check| !check.is_complete())
-        {
+        let verdict = match &self.directories {
+            Some(DirectoryHalf::AwaitingDraw) => return Vec::new(),
+            Some(DirectoryHalf::Open(check)) if !check.is_complete() => return Vec::new(),
+            Some(DirectoryHalf::Open(check)) => check.verdict(),
+            None => {
+                self.probe = Probe::Idle;
+                return Vec::new();
+            }
+        };
+        if !self.probe_may_run() {
+            self.probe = Probe::Idle;
+            self.directories = None;
             return Vec::new();
         }
-        let verdict = self
-            .directories
-            .take()
-            .map_or(DirectoryVerdict::Unmatched, |check| check.verdict());
+        self.directories = None;
         self.probe = Probe::Idle;
         let mut actions = Vec::new();
         if verdict == DirectoryVerdict::Unmatched {

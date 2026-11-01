@@ -208,9 +208,10 @@ pub enum Action {
     /// (§4.5, the directory check). The driver answers
     /// [`Input::DirectoriesDrawn`].
     CheckDirectories,
-    /// `HSFETCH` this node's onion from `hsdir` alone (`SERVER=`). The answer
-    /// arrives as [`Input::DirectoryAnswered`]; a command Tor refuses is
-    /// answered at once as [`DirectoryAnswer::Unusable`].
+    /// `HSFETCH` this node's onion from `hsdir` alone (`SERVER=`). Tor
+    /// accepting the command is [`Input::DirectoryFetchAccepted`], and the
+    /// answer arrives later as [`Input::DirectoryAnswered`]. A command Tor
+    /// refuses is answered at once as [`DirectoryAnswer::Unusable`].
     FetchFromDirectory {
         /// The directory to ask.
         hsdir: RelayFingerprint,
@@ -392,12 +393,23 @@ pub enum Input {
     },
     /// The directories for the check [`Action::CheckDirectories`] asked for.
     DirectoriesDrawn {
-        /// One per directory, each with its own draw.
+        /// One per directory, each with its own draw. Empty when the round
+        /// reached none: the probe alone decides. A list that was never
+        /// folded is not this: the verdict waits.
         fetches: Vec<DirectoryFetch>,
     },
-    /// A fetch of this node's onion named this descriptor (`HS_DESC
-    /// REQUESTED`): the one Tor's client asks for.
+    /// Tor accepted `HSFETCH` for `hsdir` (`250`). That fetch's answer
+    /// window starts at this fold.
+    DirectoryFetchAccepted {
+        /// The directory.
+        hsdir: RelayFingerprint,
+    },
+    /// A fetch this check sent named this descriptor (`HS_DESC REQUESTED`
+    /// for `hsdir`): the one Tor's client asks for. A `REQUESTED` for a
+    /// directory this check has not sent is ignored.
     DirectoryAsked {
+        /// The directory the fetch named.
+        hsdir: RelayFingerprint,
         /// The blinded key.
         descriptor_id: String,
     },
@@ -570,8 +582,10 @@ pub struct Core {
     outbound_since: Option<u64>,
     /// The round's probe (§4.5).
     probe: Probe,
-    /// The directory half of the probe's check; `None` until drawn.
-    directories: Option<directories::DirectoryCheck>,
+    /// The directory half of the probe's check. `None` when no check is
+    /// open. [`directories::DirectoryHalf::AwaitingDraw`] until the driver
+    /// folds the list.
+    directories: Option<directories::DirectoryHalf>,
     /// The descriptor round open now, while one is.
     round: Option<probe::RoundTrack>,
     /// Rounds that stayed open past `Policy::round_stuck_after`, this boot.
@@ -668,7 +682,11 @@ impl Core {
             Input::DescriptorRefetched { draw } => self.refetched(now, draw),
             Input::JumpProbeDrawn { draw } => self.jump_probe_drawn(now, draw),
             Input::DirectoriesDrawn { fetches } => self.directories_drawn(now, fetches),
-            Input::DirectoryAsked { descriptor_id } => self.directory_asked(now, &descriptor_id),
+            Input::DirectoryFetchAccepted { hsdir } => self.directory_fetch_accepted(now, hsdir),
+            Input::DirectoryAsked {
+                hsdir,
+                descriptor_id,
+            } => self.directory_asked(now, hsdir, &descriptor_id),
             Input::DirectoryAnswered {
                 hsdir,
                 descriptor_id,

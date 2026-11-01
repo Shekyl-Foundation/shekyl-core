@@ -688,29 +688,42 @@ a first miss. Tor's answers are its own statements: `HS_DESC RECEIVED` only
 once the descriptor decoded and was stored (`hs_client.c:1667-1690`), `FAILED
 REASON=NOT_FOUND` when that directory does not have it.
 
-- **Which directories count.** A round uploads the current period's
-  descriptor and the next period's to different directories, and a fetch
-  asks for the current one. Each upload's directory is kept with the
-  descriptor its `UPLOAD` named (`UploadRounds::directories`); once a
-  fetch's `REQUESTED` names the descriptor asked for, a directory sent the
-  other one is excluded, not asked or not counted. Other `FAILED` reasons,
-  and a directory Tor would not ask, say nothing about the descriptor and
-  are excluded. A directory with no answer by the check's bound (the last
-  fetch's due plus `Policy::probe_within`) counts as missing: that is what
-  withholding looks like.
+- **Which directories count.** The check is the fetches it has sent. A
+  line for any other directory, and an answer that arrives before the
+  send, is not evidence: the rendezvous probe and the unscoped refetch are
+  answered from this node's own cache and from a directory this check did
+  not choose. A round uploads the current period's descriptor and the next
+  period's to different directories. Each upload's directory is kept with
+  the descriptor its `UPLOAD` named (`UploadRounds::directories`). Once a
+  sent fetch's `REQUESTED` names the descriptor Tor's client asks for, a
+  directory whose upload was a different descriptor is excluded, including
+  one not yet sent. Other `FAILED` reasons, and a command Tor refuses, say
+  nothing about the descriptor and are excluded. The draw is part of the
+  check: until the driver folds the list the verdict waits, including after
+  the probe is already in hand. No list, because the check was dropped, is
+  not an empty list and decides nothing.
 - **The verdict.** Reachable needs both: the descriptor at more than half of
   the counted directories (§10 `TSR-M12`), and the rendezvous probe
   arriving. Anything else is a miss, into the two-miss rule above; a second
   miss in which the probe arrived is `DescriptorNotFound`, one in which it
-  did not, `ProbeTimedOut`. A check that counts no directory (none the round
-  reached holds the descriptor a fetch asks for) is decided by the probe
-  alone and said once at info (`Action::DirectoriesUnmatched`), not a miss:
-  it is the signature of uploads under a key no client asks for, and a
-  republish would not change it.
+  did not, `ProbeTimedOut`. A check that counts no directory (the list is
+  empty, or every upload it reached was a descriptor no client asks for)
+  is decided by the probe alone and said once at info
+  (`Action::DirectoriesUnmatched`), not a miss: it is the signature of
+  uploads under a key no client asks for, and a republish would not change
+  it. Outbound dropping while the check is open discards it, as a probe in
+  flight is dropped at its bound: no refetch, and no inbound verdict.
 - **Timing.** Each fetch draws its own 15 to 60 s delay
-  (`Input::DirectoriesDrawn`, one CSPRNG draw per directory). A fetch at
-  every directory straight after each upload is the signature this
-  section's jitter exists to hide.
+  (`Input::DirectoriesDrawn`, one CSPRNG draw per directory). Its answer
+  window is `Policy::probe_within` from the moment Tor accepts that
+  `HSFETCH` (`250`, `Input::DirectoryFetchAccepted`). The send arms a
+  provisional window, so a command that is never accepted still ends. The
+  window is the supervisor's wait for the `HS_DESC` line on the control
+  connection. It is not the connector's dial deadline, not Tor's SOCKS
+  timeout, and not the dialer's outage backoff
+  ([`DIALER_OUTAGE_EVIDENCE_BRIEF.md`](DIALER_OUTAGE_EVIDENCE_BRIEF.md)).
+  A fetch at every directory straight after each upload is the signature
+  this section's jitter exists to hide.
 - **It runs through this node's own Tor, so it shares this node's clock.** A
   descriptor this node uploaded under a key a correct-clock client would not
   ask for is found by these fetches as well: neither the check nor the probe

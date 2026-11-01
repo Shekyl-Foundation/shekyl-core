@@ -14,35 +14,31 @@
 use std::time::Duration;
 
 use super::super::super::posture::{render, Cause, Inbound, InboundCause, Shown};
-use super::super::{
-    duration_ns, Action, Core, DirectoryAnswer, DirectoryFetch, Input, Policy, RoundEnd, Step,
-    DESCRIPTOR_LIFETIME,
-};
+use super::super::{duration_ns, Action, Core, Input, RoundEnd, Step};
 use super::{announces, bring_up, managed, policy, reach_usable, socks, takes_down};
-use crate::control::RelayFingerprint;
 
-fn secs(seconds: u64) -> u64 {
+pub(super) fn secs(seconds: u64) -> u64 {
     duration_ns(Duration::from_secs(seconds))
 }
 
-fn count(step: &Step, wanted: fn(&Action) -> bool) -> usize {
+pub(super) fn count(step: &Step, wanted: fn(&Action) -> bool) -> usize {
     step.actions.iter().filter(|action| wanted(action)).count()
 }
 
-fn probes(step: &Step) -> usize {
+pub(super) fn probes(step: &Step) -> usize {
     count(step, |action| matches!(action, Action::Probe))
 }
 
-fn cancels(step: &Step) -> usize {
+pub(super) fn cancels(step: &Step) -> usize {
     count(step, |action| matches!(action, Action::CancelProbe))
 }
 
-fn refetches(step: &Step) -> usize {
+pub(super) fn refetches(step: &Step) -> usize {
     count(step, |action| matches!(action, Action::RefetchDescriptor))
 }
 
 /// A round ended with an upload that succeeded: the probe's trigger.
-fn uploaded(draw: u64) -> Input {
+pub(super) fn uploaded(draw: u64) -> Input {
     Input::UploadRoundEnded {
         end: RoundEnd::Uploaded,
         draw,
@@ -52,7 +48,7 @@ fn uploaded(draw: u64) -> Input {
 /// The probe minted at `minted_at` was taken by the handshake at `arrived_at`.
 /// Successes here pass the fold's time as the take, so the evidence time
 /// stays that instant.
-fn arrival(minted_at: u64, arrived_at: u64) -> Input {
+pub(super) fn arrival(minted_at: u64, arrived_at: u64) -> Input {
     Input::ProbeArrived {
         minted_at,
         arrived_at,
@@ -90,11 +86,11 @@ fn misses_twice(core: &mut Core, minted: u64) -> (u64, Step) {
     run_timed(core, probe_at + secs(60))
 }
 
-fn republishes(step: &Step) -> usize {
+pub(super) fn republishes(step: &Step) -> usize {
     count(step, |action| matches!(action, Action::RepublishOnion))
 }
 
-fn publishes_inbound(step: &Step) -> Vec<Inbound> {
+pub(super) fn publishes_inbound(step: &Step) -> Vec<Inbound> {
     step.actions
         .iter()
         .filter_map(|action| match action {
@@ -107,7 +103,7 @@ fn publishes_inbound(step: &Step) -> Vec<Inbound> {
 /// A Running, usable core whose onion is published, at time 0. The state
 /// file has appeared, so the only deadlines are the liveness sample and
 /// what the probe arms.
-fn published() -> Core {
+pub(super) fn published() -> Core {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
     reach_usable(&mut core);
     core.on(Input::StateFileAppeared, 0);
@@ -118,12 +114,32 @@ fn published() -> Core {
 /// Run deadlines up to `at`, answering each liveness sample, and stop at
 /// the first step that starts or drops a probe. Returns that step, or the
 /// last one taken.
-fn run_to(core: &mut Core, at: u64) -> Step {
+pub(super) fn run_to(core: &mut Core, at: u64) -> Step {
     run_timed(core, at).1
 }
 
+/// The driver folds the directory list in the same turn the check is
+/// asked. A list still outstanding is one this test did not name: the
+/// round reached no directory, and the probe alone decides. Folding once
+/// the probe is already being judged would hide that verdict inside the
+/// wait, so it is refused.
+fn fold_unnamed_directories(core: &mut Core, at: u64) {
+    let drawn = core.on(
+        Input::DirectoriesDrawn {
+            fetches: Vec::new(),
+        },
+        at,
+    );
+    assert!(
+        drawn.actions.is_empty(),
+        "the list was folded after the probe was already being judged: {drawn:?}"
+    );
+}
+
 /// [`run_to`], with the time of the step it returns.
-fn run_timed(core: &mut Core, at: u64) -> (u64, Step) {
+pub(super) fn run_timed(core: &mut Core, at: u64) -> (u64, Step) {
+    // A check asked before this wait, by a round ending.
+    fold_unnamed_directories(core, at);
     let mut last = Step {
         actions: Vec::new(),
         deadline: None,
@@ -133,6 +149,11 @@ fn run_timed(core: &mut Core, at: u64) -> (u64, Step) {
         when = due;
         let step = core.on_deadline(due);
         let sampled = step.actions.contains(&Action::Sample);
+        // A check asked by this deadline, the round's wait among them.
+        // Fold it before the next deadline, as the driver does.
+        if step.actions.contains(&Action::CheckDirectories) {
+            fold_unnamed_directories(core, due);
+        }
         last = Step {
             actions: step.actions,
             deadline: step.deadline,
@@ -675,477 +696,4 @@ fn a_round_open_for_five_minutes_is_counted_once_and_never_a_cause() {
     );
     core.on(Input::UploadRoundStarted, secs(402));
     assert_eq!(core.status().stuck_upload_rounds, 1);
-}
-
-// The overdue upload and the clock jump (§4.5, "Overdue"; Rick, 2026-10-31).
-
-/// The policy's descriptor lifetime: three hours.
-fn lifetime() -> u64 {
-    secs(3 * 60 * 60)
-}
-
-fn overdue(step: &Step) -> usize {
-    count(step, |action| matches!(action, Action::DescriptorOverdue))
-}
-
-fn jump_probes(step: &Step) -> usize {
-    count(step, |action| matches!(action, Action::ProbeAfterJump))
-}
-
-/// Run every deadline up to `at`, answering each liveness sample, and keep
-/// the times at which the overdue republish was asked. A deadline that
-/// does not move after it is served fails here, rather than looping.
-fn overdue_to(core: &mut Core, at: u64) -> Vec<u64> {
-    let mut asked = Vec::new();
-    let mut served = None;
-    while let Some(due) = core.deadline().filter(|due| *due <= at) {
-        assert_ne!(served, Some(due), "the deadline at {due} did not move");
-        served = Some(due);
-        let step = core.on_deadline(due);
-        if step.actions.contains(&Action::Sample) {
-            core.on(
-                Input::DirectorySample {
-                    progress: Some(100),
-                    socks: None,
-                    read: None,
-                },
-                due,
-            );
-        }
-        if overdue(&step) > 0 {
-            assert_eq!(republishes(&step), 1, "the overdue republish");
-            asked.push(due);
-        }
-    }
-    asked
-}
-
-/// A published core whose round began at `round_at`, with its first upload
-/// then and its probe arrived. Returns the core and the first upload, from
-/// which the next lifetime counts.
-fn reached(round_at: u64) -> (Core, u64) {
-    let mut core = published();
-    core.on(Input::UploadRoundStarted, round_at);
-    core.on(Input::FirstUploaded { draw: 0 }, round_at);
-    core.on(uploaded(0), round_at + secs(5));
-    let (probe_at, step) = run_timed(&mut core, round_at + secs(20));
-    assert_eq!(probes(&step), 1, "the round's probe");
-    core.on(
-        Input::ProbeDialed {
-            minted_at: probe_at,
-        },
-        probe_at,
-    );
-    let arrived = probe_at + secs(5);
-    core.on(arrival(probe_at, arrived), arrived);
-    assert!(matches!(core.status().inbound, Inbound::Reachable { .. }));
-    (core, round_at)
-}
-
-/// Tor's `HS_DESC_DEFAULT_LIFETIME` at the pinned tor 0.4.9.14
-/// (`src/feature/hs/hs_descriptor.h:30`) is 3 hours, and the daemon's policy
-/// uses it. A re-pin that changes it fails here until the policy follows
-/// (`RELEASE_CHECKLIST.md`, "Bundled Tor pin current").
-#[test]
-fn the_descriptor_lifetime_is_tors_three_hours() {
-    assert_eq!(DESCRIPTOR_LIFETIME, Duration::from_secs(3 * 60 * 60));
-    assert_eq!(
-        Policy::provisional(Duration::from_secs(1)).descriptor_lifetime,
-        DESCRIPTOR_LIFETIME
-    );
-}
-
-/// No round begins within the descriptor's lifetime of the last round's
-/// first upload (the round's probe arriving does not move it): the onion is
-/// published again, once, with no probe and no claim that peers cannot
-/// reach it; the next lifetime counts from the republish. Fails if the
-/// check probes instead (`on_overdue_deadline` emitting no republish), or
-/// if it does not re-anchor (the deadline does not move).
-#[test]
-fn an_overdue_upload_republishes_once() {
-    let (mut core, uploaded_at) = reached(0);
-    let before = core.status().inbound;
-    let due = uploaded_at + lifetime();
-    let mut asked = core.on_deadline(due);
-    while overdue(&asked) == 0 {
-        let next = core.deadline().expect("the overdue check is armed");
-        assert!(next <= due, "nothing past the lifetime before the check");
-        asked = core.on_deadline(next);
-    }
-    assert_eq!(republishes(&asked), 1);
-    assert_eq!(probes(&asked), 0, "a republish, not a probe");
-    assert_eq!(
-        core.status().inbound,
-        before,
-        "nothing shows peers cannot reach it"
-    );
-    assert_eq!(
-        overdue_to(&mut core, due + secs(1)),
-        [],
-        "none again while the republish is owed"
-    );
-    core.on(Input::OnionPublished, due + secs(1));
-    assert_eq!(overdue_to(&mut core, due + lifetime() - secs(1)), []);
-    assert_eq!(overdue_to(&mut core, due + lifetime()), [due + lifetime()]);
-}
-
-/// The overdue republish is Service-class: refused, it is a process fault,
-/// as a republish after two misses is. Fails if `on_overdue_deadline` does
-/// not set `service_republish`.
-#[test]
-fn a_refused_overdue_republish_takes_tor_down() {
-    let (mut core, uploaded_at) = reached(0);
-    assert_eq!(
-        overdue_to(&mut core, uploaded_at + lifetime()),
-        [uploaded_at + lifetime()]
-    );
-    let refused = core.on(Input::OnionRejected, uploaded_at + lifetime() + secs(1));
-    assert!(
-        takes_down(&refused),
-        "a refused republish is a process fault"
-    );
-}
-
-/// A round that begins just inside the lifetime is not overdue, while it is
-/// open. Fails if `overdue_due` stays armed while a round is open.
-#[test]
-fn a_round_just_inside_the_lifetime_gives_no_republish() {
-    let (mut core, uploaded_at) = reached(0);
-    assert_eq!(
-        overdue_to(&mut core, uploaded_at + lifetime() - secs(1)),
-        []
-    );
-    core.on(
-        Input::UploadRoundStarted,
-        uploaded_at + lifetime() - secs(1),
-    );
-    assert_eq!(
-        overdue_to(&mut core, uploaded_at + lifetime() + secs(120)),
-        [],
-        "an open round is the upload"
-    );
-}
-
-/// A round that ends with no upload leaves the old anchor standing:
-/// nothing shows a fresh descriptor, so the republish is due at once.
-#[test]
-fn a_round_that_ends_with_no_upload_leaves_the_upload_overdue() {
-    let (mut core, uploaded_at) = reached(0);
-    let started = uploaded_at + lifetime() - secs(60);
-    assert_eq!(overdue_to(&mut core, started), []);
-    core.on(Input::UploadRoundStarted, started);
-    let ended = uploaded_at + lifetime() + secs(60);
-    assert_eq!(overdue_to(&mut core, ended), []);
-    core.on(
-        Input::UploadRoundEnded {
-            end: RoundEnd::Unknown,
-            draw: 0,
-        },
-        ended,
-    );
-    assert!(
-        core.deadline().is_some_and(|due| due <= ended),
-        "due at once"
-    );
-    let step = core.on_deadline(ended);
-    assert_eq!(overdue(&step), 1);
-    assert_eq!(republishes(&step), 1);
-}
-
-/// `CLOCK_JUMPED` while Running asks one probe, a jittered delay later; with
-/// a probe already in flight it asks none. During a bootstrap it asks none.
-/// The jump probe arriving does not move the descriptor's lifetime: only an
-/// upload shows the descriptor's age. Fails if `clock_jumped` asks no probe,
-/// if `jump_probe` ignores a probe in hand, or if an arrival re-anchors.
-#[test]
-fn a_clock_jump_gives_one_probe_or_none_with_one_in_flight() {
-    let (mut core, uploaded_at) = reached(0);
-    let jumped = uploaded_at + secs(3600);
-    let step = core.on(Input::ClockJumped, jumped);
-    assert!(step.actions.contains(&Action::Sample), "re-evaluate now");
-    assert_eq!(jump_probes(&step), 1);
-    core.on(Input::JumpProbeDrawn { draw: 0 }, jumped);
-    let (probe_at, step) = run_timed(&mut core, jumped + secs(15));
-    assert_eq!(
-        probes(&step),
-        1,
-        "one probe, a jittered delay after the jump"
-    );
-    assert_eq!(probe_at, jumped + secs(15), "at least the delay's floor");
-    core.on(
-        Input::ProbeDialed {
-            minted_at: probe_at,
-        },
-        probe_at,
-    );
-    let again = core.on(Input::ClockJumped, probe_at + secs(1));
-    assert_eq!(jump_probes(&again), 0, "the probe in flight answers it");
-    core.on(arrival(probe_at, probe_at + secs(5)), probe_at + secs(5));
-    assert_eq!(
-        overdue_to(&mut core, uploaded_at + lifetime()),
-        [uploaded_at + lifetime()],
-        "the jump probe's arrival does not move the lifetime"
-    );
-
-    let (mut booting, _) = Core::start(policy(), managed(true), 0);
-    booting.on(Input::PinAccepted, 0);
-    booting.on(Input::Spawned, 0);
-    let during = booting.on(Input::ClockJumped, secs(1));
-    assert_eq!(
-        jump_probes(&during),
-        0,
-        "no onion to probe while bootstrapping"
-    );
-}
-
-// The directory check (§4.5; Rick, 2026-10-31).
-
-fn hsdir(n: u8) -> RelayFingerprint {
-    RelayFingerprint::from_bytes([n; 20])
-}
-
-/// Directories `1..=n`, each sent `descriptor`, each drawing `draw`.
-fn sent(range: std::ops::RangeInclusive<u8>, descriptor: &str, draw: u64) -> Vec<DirectoryFetch> {
-    range
-        .map(|n| DirectoryFetch {
-            hsdir: hsdir(n),
-            descriptor_id: descriptor.to_owned(),
-            draw,
-        })
-        .collect()
-}
-
-fn fetched(step: &Step) -> Vec<RelayFingerprint> {
-    step.actions
-        .iter()
-        .filter_map(|action| match action {
-            Action::FetchFromDirectory { hsdir } => Some(*hsdir),
-            _ => None,
-        })
-        .collect()
-}
-
-fn answered(n: u8, descriptor: &str, answer: DirectoryAnswer) -> Input {
-    Input::DirectoryAnswered {
-        hsdir: hsdir(n),
-        descriptor_id: Some(descriptor.to_owned()),
-        answer,
-    }
-}
-
-/// A published core whose round just ended, its check's directories drawn
-/// (`fetches`), and the probe and the fetches due at the delay's floor run:
-/// the probe is in flight, minted at 15 s. Returns the core and the fetches
-/// asked at 15 s.
-fn checking(fetches: Vec<DirectoryFetch>) -> (Core, Vec<RelayFingerprint>) {
-    let mut core = published();
-    let ended = core.on(uploaded(0), 0);
-    assert!(
-        ended.actions.contains(&Action::CheckDirectories),
-        "each probe's check asks for the directories"
-    );
-    core.on(Input::DirectoriesDrawn { fetches }, 0);
-    let step = core.on_deadline(secs(15));
-    assert_eq!(probes(&step), 1, "the probe at the delay's floor");
-    let asked = fetched(&step);
-    core.on(
-        Input::ProbeDialed {
-            minted_at: secs(15),
-        },
-        secs(15),
-    );
-    (core, asked)
-}
-
-/// **Found at every directory, the probe arrives: Reachable.** The verdict
-/// waits for both halves: an arrival before the answers leaves the facet
-/// where it was. Fails if `probe_arrived` judges at once (Reachable before
-/// the answers), or if `judge` ignores a complete check.
-#[test]
-fn found_at_every_directory_and_the_probe_arrives_is_reachable() {
-    let (mut core, asked) = checking(sent(1..=8, "cur", 0));
-    assert_eq!(asked.len(), 8, "every directory the round reached is asked");
-    core.on(arrival(secs(15), secs(18)), secs(18));
-    assert_eq!(
-        core.status().inbound,
-        Inbound::Publishing,
-        "the directories are still out"
-    );
-    core.on(
-        Input::DirectoryAsked {
-            descriptor_id: "cur".to_owned(),
-        },
-        secs(19),
-    );
-    for n in 1..=7 {
-        core.on(answered(n, "cur", DirectoryAnswer::Received), secs(20));
-    }
-    assert_eq!(core.status().inbound, Inbound::Publishing);
-    let last = core.on(answered(8, "cur", DirectoryAnswer::Received), secs(21));
-    let reachable = Inbound::Reachable {
-        evidence_at: secs(18),
-    };
-    assert_eq!(core.status().inbound, reachable);
-    assert_eq!(publishes_inbound(&last), [reachable]);
-}
-
-/// **Our cache still holds the descriptor, the directories report
-/// `NOT_FOUND`: a miss.** The probe arrives, as it does from this node's own
-/// copy, and the check is still a miss: the first refetches, and a second
-/// check the same way republishes, with the directories' cause. Fails if
-/// the verdict takes the probe alone (`judge` treating `Lost` as held).
-#[test]
-fn the_probe_arriving_from_our_cache_with_the_directories_empty_is_a_miss() {
-    let (mut core, _) = checking(sent(1..=8, "cur", 0));
-    for n in 1..=8 {
-        core.on(answered(n, "cur", DirectoryAnswer::NotFound), secs(16));
-    }
-    let first = core.on(arrival(secs(15), secs(18)), secs(18));
-    assert_eq!(refetches(&first), 1, "a first miss refetches");
-    assert_eq!(
-        core.status().inbound,
-        Inbound::Publishing,
-        "one miss is not a verdict"
-    );
-    let again = core.on(Input::DescriptorRefetched { draw: 0 }, secs(20));
-    assert!(
-        again.actions.contains(&Action::CheckDirectories),
-        "a new check"
-    );
-    core.on(
-        Input::DirectoriesDrawn {
-            fetches: sent(1..=8, "cur", 0),
-        },
-        secs(20),
-    );
-    let launched = core.on_deadline(secs(35));
-    assert_eq!(probes(&launched), 1);
-    assert_eq!(fetched(&launched).len(), 8);
-    core.on(
-        Input::ProbeDialed {
-            minted_at: secs(35),
-        },
-        secs(35),
-    );
-    for n in 1..=8 {
-        core.on(answered(n, "cur", DirectoryAnswer::NotFound), secs(36));
-    }
-    let verdict = core.on(arrival(secs(35), secs(37)), secs(37));
-    assert_eq!(republishes(&verdict), 1);
-    assert_eq!(
-        core.status().inbound,
-        Inbound::Unreachable {
-            cause: InboundCause::DescriptorNotFound,
-            since: secs(37),
-        }
-    );
-}
-
-/// **One directory withholds: still Reachable above the threshold.** A
-/// directory that never answers counts as missing at the check's bound
-/// (the last fetch's due plus the probe's bound); seven of eight is more
-/// than half. Fails if a missing answer blocks the verdict (no bound), or
-/// if the threshold is "every directory".
-#[test]
-fn one_directory_withholding_is_still_reachable() {
-    let (mut core, _) = checking(sent(1..=8, "cur", 0));
-    for n in 1..=7 {
-        core.on(answered(n, "cur", DirectoryAnswer::Received), secs(16));
-    }
-    core.on(arrival(secs(15), secs(18)), secs(18));
-    assert_eq!(
-        core.status().inbound,
-        Inbound::Publishing,
-        "directory 8 is still out"
-    );
-    let bound = core.on_deadline(secs(75));
-    let reachable = Inbound::Reachable {
-        evidence_at: secs(18),
-    };
-    assert_eq!(core.status().inbound, reachable);
-    assert_eq!(publishes_inbound(&bound), [reachable]);
-}
-
-/// The threshold is more than half of the counted directories: four of
-/// eight is a miss. Fails if `found * 2 > counted` becomes `>=`.
-#[test]
-fn half_of_the_directories_is_not_enough() {
-    let (mut core, _) = checking(sent(1..=8, "cur", 0));
-    for n in 1..=4 {
-        core.on(answered(n, "cur", DirectoryAnswer::Received), secs(16));
-    }
-    for n in 5..=8 {
-        core.on(answered(n, "cur", DirectoryAnswer::NotFound), secs(16));
-    }
-    let step = core.on(arrival(secs(15), secs(18)), secs(18));
-    assert_eq!(refetches(&step), 1, "a miss");
-}
-
-/// A round sends the current descriptor to some directories and the next
-/// period's to others, and a fetch asks for the current one. Once a fetch
-/// names it, a directory sent the other descriptor is excluded: not asked
-/// if not yet asked, and not counted if it answers. Fails if `learn` keeps
-/// mismatched directories (they would count missing and make this a miss).
-#[test]
-fn a_directory_sent_the_other_descriptor_is_not_counted() {
-    let mut fetches = sent(1..=4, "cur", 0);
-    // Directories 5 to 8 got the next period's descriptor, and draw later.
-    fetches.extend(sent(5..=8, "next", u64::MAX));
-    let (mut core, asked) = checking(fetches);
-    assert_eq!(asked, [hsdir(1), hsdir(2), hsdir(3), hsdir(4)]);
-    core.on(
-        Input::DirectoryAsked {
-            descriptor_id: "cur".to_owned(),
-        },
-        secs(16),
-    );
-    for n in 1..=4 {
-        core.on(answered(n, "cur", DirectoryAnswer::Received), secs(17));
-    }
-    core.on(arrival(secs(15), secs(18)), secs(18));
-    assert!(matches!(core.status().inbound, Inbound::Reachable { .. }));
-    let later = core.on_deadline(secs(60));
-    assert!(
-        fetched(&later).is_empty(),
-        "the excluded directories are never asked"
-    );
-}
-
-/// A check that counts no directory (no directory the round reached holds
-/// the descriptor Tor asks for) is decided by the probe alone, and says so
-/// once. Fails if `Unmatched` is a miss (a node whose uploads land under the
-/// wrong key would republish in a loop), or if it is not said.
-#[test]
-fn a_check_that_counts_no_directory_is_decided_by_the_probe() {
-    let (mut core, _) = checking(sent(1..=4, "next", 0));
-    core.on(
-        Input::DirectoryAsked {
-            descriptor_id: "cur".to_owned(),
-        },
-        secs(16),
-    );
-    let step = core.on(arrival(secs(15), secs(18)), secs(18));
-    assert_eq!(
-        count(&step, |action| matches!(
-            action,
-            Action::DirectoriesUnmatched
-        )),
-        1
-    );
-    assert!(matches!(core.status().inbound, Inbound::Reachable { .. }));
-}
-
-/// Each fetch takes its own delay from the probe's range, so the fetches do
-/// not all land straight after an upload. Fails if one draw times them all.
-#[test]
-fn each_directory_fetch_has_its_own_delay() {
-    let mut core = published();
-    core.on(uploaded(0), 0);
-    let mut fetches = sent(1..=1, "cur", 0);
-    fetches.extend(sent(2..=2, "cur", u64::MAX));
-    core.on(Input::DirectoriesDrawn { fetches }, 0);
-    let at_floor = core.on_deadline(secs(15));
-    assert_eq!(fetched(&at_floor), [hsdir(1)]);
-    let at_top = core.on_deadline(secs(60));
-    assert_eq!(fetched(&at_top), [hsdir(2)]);
 }

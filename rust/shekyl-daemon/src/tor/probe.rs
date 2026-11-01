@@ -194,9 +194,8 @@ impl Drive {
 }
 
 /// A probe's check: the directories the latest upload round reached, each
-/// with the descriptor it was sent and its own CSPRNG draw (§4.5, the
-/// directory check). Before any round succeeded the set is empty, and the
-/// probe alone decides.
+/// with the descriptor it was sent and its own CSPRNG draw (§4.5). An
+/// empty set is a check that counts nothing, and the probe alone decides.
 impl Drive {
     pub(super) fn directories_drawn(&self) -> Input {
         let fetches = self
@@ -217,10 +216,12 @@ impl Drive {
         Input::DirectoriesDrawn { fetches }
     }
 
-    /// `HSFETCH` this node's onion from one directory. Tor answers through
-    /// `HS_DESC` events, which the event loop folds; a command Tor refuses
-    /// (the directory left its consensus, 552) or that cannot be asked is
-    /// answered here as unusable, so the check does not wait on it.
+    /// `HSFETCH` this node's onion from one directory. Tor accepting the
+    /// command (`250`) starts that fetch's answer window
+    /// ([`Input::DirectoryFetchAccepted`]). The `HS_DESC` lines that follow
+    /// are events, folded by the event loop. A command Tor refuses (the
+    /// directory left its consensus, 552) or that cannot be asked is
+    /// unusable here, so the check does not wait on it.
     pub(super) async fn fetch_from(&self, hsdir: RelayFingerprint) -> Option<Input> {
         let unusable = Some(Input::DirectoryAnswered {
             hsdir,
@@ -237,7 +238,7 @@ impl Drive {
             })
             .await
         {
-            Ok(reply) if reply.status() == 250 => None,
+            Ok(reply) if reply.status() == 250 => Some(Input::DirectoryFetchAccepted { hsdir }),
             Ok(reply) => {
                 tracing::debug!(
                     target: "tor",
