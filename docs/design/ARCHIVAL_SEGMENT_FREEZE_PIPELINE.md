@@ -10,21 +10,17 @@ and is not a plan for anything to be built; what remains in code is the
 with that round's deletion increment. The original round-1 status is retained
 at its own heading below. See the retirement notice that follows.
 
-> **⚠️ RETIRED BY RULING (2026-09-18, `PDM-Q12`) — LIVE IN CODE UNTIL
-> THE CUTOVER (`DEL-008`).** The pipeline this document specifies is retired by
-> `PDM-Q12` ([`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md));
-> read the ruling there for the argument — it is not restated here.
-> **"Retired by ruling" and "retired in code" are different states, and this
-> is the first:** both halves are one deletion at the cutover — the C++
-> freeze pipeline and the Rust it holds live (`segment_freeze.rs`, the freeze
-> half of `challenge.rs` / `path.rs`), `DEL-008` in `DAEMON_REDB_STORE.md`
-> §12, gated by `SCV-Q5` on the serve-credit verifier's re-key landing first
-> in SO-D8 Slice C (`PDM-Q6` item 4, row 1; `ARCHIVAL_SERVE_CREDIT_SPEC.md`).
-> *Was* "the C++ half at `DRS-E*`, the Rust half at E4 / S-ARCH with the
-> re-key" — re-tensed 2026-10-10: DRS-E4 landed the archival writer, not the
-> verifier, and closed 2026-10-02 with both halves live. Until the cutover
-> O-1…O-3 and the first-crossing rule below remain **live consensus** and
-> this document remains their specification.
+> **⚠️ RETIRED BY RULING (2026-09-18, `PDM-Q12`) AND DELETED IN CODE AT THE
+> FLIP (#1212, 2026-10-31, `DEL-008`).** The pipeline this document specifies
+> is retired by `PDM-Q12`
+> ([`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md)); read
+> the ruling there for the argument — it is not restated here. Both halves
+> went with the flip — the C++ freeze pipeline and the Rust it held live
+> (the freeze half of `segment_freeze.rs`, `challenge.rs` and `path.rs`),
+> `DEL-008` in `DAEMON_REDB_STORE.md` §12. O-1…O-3 and the first-crossing
+> rule below are **not consensus**: nothing in the tree computes a frozen
+> segment, and the serve-credit verifier that replaces the leaf preimage is
+> SO-D8 Slice C's (`PDM-Q6` item 4, row 1; `ARCHIVAL_SERVE_CREDIT_SPEC.md`).
 >
 > **One consumer the retirement does not name**, recorded so it is not lost
 > with the pipeline: the wallet-side store's `root_at_count` reads
