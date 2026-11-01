@@ -11,6 +11,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 use shekyl_rpc_types::errors::Diagnostic;
+use shekyl_rpc_types::mining::MineSpeed;
 use shekyl_types::{BlockHash, BlockHeight, TxHash};
 
 use crate::chain_facts::FactsFault;
@@ -82,8 +83,8 @@ pub struct PostedSummary {
 pub struct MinerState {
     /// Worker threads.
     pub threads: u32,
-    /// Hashes per second over the miner's window, whole hashes.
-    pub hashes_per_second: u64,
+    /// Hashes counted over the miner's window of complete seconds.
+    pub speed: MineSpeed,
 }
 
 /// What `mining_status` reports.

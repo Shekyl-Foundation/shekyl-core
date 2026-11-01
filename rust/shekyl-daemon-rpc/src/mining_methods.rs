@@ -21,8 +21,9 @@ use shekyl_rpc_types::errors::{Diagnostic, ErrorClass, RpcError};
 use shekyl_rpc_types::methods::Armed;
 use shekyl_rpc_types::mining::{
     GenerateBlocksRequest, GenerateBlocksResponse, GetBlockTemplateResponse, GetMinerDataResponse,
-    MinerThreads, MiningStatusResponse, PopBlocksRequest, PopBlocksResponse, StartMiningRequest,
-    StatusOnlyResponse, SubmitBlockRequest, SubmitBlockResponse, TxBacklogEntry,
+    MineSpeed, MinerThreads, MiningStatusResponse, PopBlocksRequest, PopBlocksResponse,
+    StartMiningRequest, StatusOnlyResponse, SubmitBlockRequest, SubmitBlockResponse,
+    TxBacklogEntry,
 };
 use shekyl_rpc_types::{HashHex, RpcStatus};
 use shekyl_types::{BlockCount, BlockHash, ChainCount};
@@ -242,7 +243,7 @@ pub fn mining_status(mining: &dyn MiningFacts) -> Result<MiningStatusResponse, R
     Ok(MiningStatusResponse {
         status: RpcStatus::ok(),
         active: state.miner.is_some(),
-        speed: state.miner.map_or(0, |miner| miner.hashes_per_second),
+        speed: state.miner.map_or(MineSpeed::NONE, |miner| miner.speed),
         threads_count: state.miner.map_or(0, |miner| miner.threads),
         address: state.address.unwrap_or_default(),
         pow_algorithm: POW_ALGORITHM.to_owned(),
@@ -682,5 +683,79 @@ mod tests {
         .await
         .expect("waited out, not refused");
         assert_eq!(generated.height, 1);
+    }
+
+    /// A miner's speed, or none when the miner is stopped.
+    struct Reported {
+        speed: Option<MineSpeed>,
+    }
+
+    impl MiningFacts for Reported {
+        fn running(&self) -> Result<bool, FactsFault> {
+            Ok(self.speed.is_some())
+        }
+        fn template(
+            &self,
+        ) -> Result<Result<crate::mining_facts::PostedTemplate, Diagnostic>, FactsFault> {
+            unreachable!("this status reads no template")
+        }
+        fn start(
+            &self,
+            _threads: Option<NonZeroUsize>,
+        ) -> Result<Result<(), Diagnostic>, FactsFault> {
+            unreachable!("this status starts nothing")
+        }
+        fn stop(&self) -> Result<bool, FactsFault> {
+            unreachable!("this status stops nothing")
+        }
+        fn status(&self) -> Result<crate::mining_facts::MiningState, FactsFault> {
+            Ok(crate::mining_facts::MiningState {
+                miner: self
+                    .speed
+                    .map(|speed| crate::mining_facts::MinerState { threads: 1, speed }),
+                address: None,
+                posted: None,
+                pool_retired: false,
+                absent: None,
+            })
+        }
+        fn refusal(&self) -> Result<Option<Diagnostic>, FactsFault> {
+            Ok(None)
+        }
+        fn withdrawn(&self) -> crate::mining_facts::Pending<'_, Diagnostic> {
+            Box::pin(std::future::pending())
+        }
+    }
+
+    /// Eight hashes in ten seconds is 0.8 H/s. The reply a client
+    /// deserializes carries that count and that window. A stopped miner
+    /// reports no hashes.
+    #[test]
+    fn a_miner_below_one_hash_a_second_reports_its_count_and_window() {
+        let response = mining_status(&Reported {
+            speed: Some(MineSpeed {
+                count: 8,
+                window: 10,
+            }),
+        })
+        .expect("status");
+        assert!(response.active);
+        assert_eq!(response.threads_count, 1);
+        assert_eq!(
+            response.speed,
+            MineSpeed {
+                count: 8,
+                window: 10
+            }
+        );
+        assert_eq!(response.speed.hashes_per_second_text(), "0.80 H/s");
+        let wire = serde_json::to_value(&response).expect("json");
+        assert_eq!(wire["speed"]["count"], 8);
+        assert_eq!(wire["speed"]["window"], 10);
+
+        let stopped = mining_status(&Reported { speed: None }).expect("status");
+        assert!(!stopped.active);
+        assert_eq!(stopped.speed, MineSpeed::NONE);
+        assert_eq!(stopped.threads_count, 0);
     }
 }

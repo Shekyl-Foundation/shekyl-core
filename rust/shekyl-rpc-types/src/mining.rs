@@ -135,6 +135,60 @@ pub struct StatusOnlyResponse {
     pub status: RpcStatus,
 }
 
+/// Hundredths of a hash. [`MineSpeed::hashes_per_second_text`] prints
+/// that many digits, which is finer than a ten-second window's tenth
+/// and matches the console's two-decimal prefixes.
+const HUNDREDTHS_PER_HASH: u128 = 100;
+
+/// The miner's hash rate: hashes counted over a window of complete seconds.
+///
+/// `window` is zero before the first second completes, and `count` is
+/// zero then too. A stopped miner is the same pair; `active` on the
+/// status is what distinguishes the two.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MineSpeed {
+    /// Hashes computed in the window.
+    pub count: u64,
+    /// Complete seconds the count covers.
+    pub window: u64,
+}
+
+impl MineSpeed {
+    /// No hashes, and no completed second.
+    pub const NONE: Self = Self {
+        count: 0,
+        window: 0,
+    };
+
+    /// Whole hashes per second. Zero when [`window`](Self::window) is
+    /// zero, and zero when the count is below one hash a second.
+    #[must_use]
+    pub const fn whole_hashes_per_second(self) -> u64 {
+        match self.window {
+            0 => 0,
+            window => self.count / window,
+        }
+    }
+
+    /// The rate in hashes per second, to the hundredth. A whole number
+    /// prints without a fraction. [`NONE`](Self::NONE) prints `0 H/s`.
+    #[must_use]
+    pub fn hashes_per_second_text(self) -> String {
+        if self.window == 0 {
+            return "0 H/s".to_owned();
+        }
+        let hundredths = u128::from(self.count) * HUNDREDTHS_PER_HASH / u128::from(self.window);
+        let whole = hundredths / HUNDREDTHS_PER_HASH;
+        let frac = hundredths % HUNDREDTHS_PER_HASH;
+        if frac == 0 {
+            format!("{whole} H/s")
+        } else {
+            format!("{whole}.{frac:02} H/s")
+        }
+    }
+}
+
 /// `mining_status`'s reply: the miner, the posted job, and why none is
 /// posted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -143,8 +197,10 @@ pub struct MiningStatusResponse {
     pub status: RpcStatus,
     /// Whether the built-in miner is running.
     pub active: bool,
-    /// Hashes per second over the miner's window.
-    pub speed: u64,
+    /// Hashes counted over the miner's window of complete seconds.
+    /// [`MineSpeed::NONE`] when the miner is stopped, and during its
+    /// first second.
+    pub speed: MineSpeed,
     pub threads_count: u32,
     /// The `mine-address` row, as written; empty when unset.
     pub address: String,
@@ -264,6 +320,45 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&StartMiningRequest::default()).expect("json"),
             r#"{"threads":"auto"}"#
+        );
+    }
+
+    /// Eight hashes in ten seconds is 0.8 H/s. The wire carries the count
+    /// and the window, so the reading is not the whole-hash quotient 0.
+    #[test]
+    fn a_rate_below_one_hash_a_second_is_the_count_over_its_window() {
+        let speed = MineSpeed {
+            count: 8,
+            window: 10,
+        };
+        assert_eq!(speed.whole_hashes_per_second(), 0);
+        assert_eq!(speed.hashes_per_second_text(), "0.80 H/s");
+        assert_eq!(
+            serde_json::to_string(&speed).expect("json"),
+            r#"{"count":8,"window":10}"#
+        );
+        let back: MineSpeed = serde_json::from_str(r#"{"count":8,"window":10}"#).expect("object");
+        assert_eq!(back, speed);
+        assert!(
+            serde_json::from_str::<MineSpeed>("8").is_err(),
+            "a whole-hash number is not a rate"
+        );
+        assert_eq!(MineSpeed::NONE.hashes_per_second_text(), "0 H/s");
+        assert_eq!(
+            MineSpeed {
+                count: 15,
+                window: 10
+            }
+            .hashes_per_second_text(),
+            "1.50 H/s"
+        );
+        assert_eq!(
+            MineSpeed {
+                count: 999,
+                window: 1
+            }
+            .hashes_per_second_text(),
+            "999 H/s"
         );
     }
 }

@@ -31,6 +31,7 @@ use shekyl_miner::{
 };
 use shekyl_pow_randomx::CacheStore;
 use shekyl_rpc_types::errors::Diagnostic;
+use shekyl_rpc_types::mining::MineSpeed;
 use shekyl_types::BlockHeight;
 use shekyl_units::AtomicUnits;
 use tokio::sync::watch;
@@ -354,14 +355,7 @@ impl MiningFacts for MiningControl {
     fn status(&self) -> Result<MiningState, FactsFault> {
         let status = Self::status(self);
         Ok(MiningState {
-            miner: status.miner.as_ref().map(|miner| MinerState {
-                threads: u32::try_from(miner.threads).unwrap_or(u32::MAX),
-                hashes_per_second: miner
-                    .rate
-                    .hashes
-                    .checked_div(miner.rate.window.as_secs())
-                    .unwrap_or(0),
-            }),
+            miner: status.miner.as_ref().map(miner_state),
             address: self.address.as_ref().map(|a| a.encoded().to_owned()),
             posted: status.job.map(|job| PostedSummary {
                 height: job.height,
@@ -371,6 +365,52 @@ impl MiningFacts for MiningControl {
             pool_retired: self.pool.retired(),
             absent: status.no_job.as_ref().map(no_job_diagnostic),
         })
+    }
+}
+
+/// The miner's [`shekyl_miner::HashRate`] as [`MineSpeed`]: `hashes` is
+/// `count`, and the window's complete seconds are `window`.
+fn miner_state(miner: &MinerStatus) -> MinerState {
+    MinerState {
+        threads: u32::try_from(miner.threads).unwrap_or(u32::MAX),
+        speed: MineSpeed {
+            count: miner.rate.hashes,
+            window: miner.rate.window.as_secs(),
+        },
+    }
+}
+
+#[cfg(test)]
+mod rate_tests {
+    use super::{miner_state, MinerStatus};
+    use shekyl_miner::HashRate;
+    use shekyl_rpc_types::mining::MineSpeed;
+    use std::time::Duration;
+
+    /// Eight hashes in ten seconds stays eight hashes over ten seconds.
+    /// The window is complete seconds, which is how the miner counts.
+    #[test]
+    fn the_facts_carry_the_miners_count_and_window() {
+        let status = MinerStatus {
+            active: true,
+            threads: 1,
+            address: String::new(),
+            rate: HashRate {
+                hashes: 8,
+                window: Duration::from_secs(10),
+            },
+            per_thread: Vec::new(),
+            not_lowered: 0,
+        };
+        let state = miner_state(&status);
+        assert_eq!(state.threads, 1);
+        assert_eq!(
+            state.speed,
+            MineSpeed {
+                count: 8,
+                window: 10
+            }
+        );
     }
 }
 
