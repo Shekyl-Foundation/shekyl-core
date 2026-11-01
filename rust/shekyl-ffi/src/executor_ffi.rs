@@ -96,9 +96,25 @@ pub unsafe extern "C" fn shekyl_thread_ledger_report(buf: *mut c_char, len: usiz
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Mutex, MutexGuard, PoisonError};
+
     use super::{
         shekyl_executor_record, shekyl_executor_release, shekyl_thread_ledger_report, EXECUTORS,
     };
+
+    /// The executor table and the ledger it reports into are process-global,
+    /// and libtest runs this module's tests on one process in parallel. A
+    /// test that writes the table, and a test that reads the report twice
+    /// and compares, cannot interleave: the writer could record and release
+    /// between the reader's two snapshots, leaving them equal while the
+    /// calls between them saw a longer report. This gate serializes the
+    /// tests that touch that state. It is not `EXECUTORS`'s lock, which the
+    /// FFI takes and releases inside each call.
+    static LEDGER_TESTS: Mutex<()> = Mutex::new(());
+
+    fn ledger_tests() -> MutexGuard<'static, ()> {
+        LEDGER_TESTS.lock().unwrap_or_else(PoisonError::into_inner)
+    }
 
     /// The C surface refuses a pool one worker below the floor and records
     /// nothing; at the floor it records one row and writes the handle. The
@@ -110,6 +126,7 @@ mod tests {
     /// `the_executor_refuses_one_below_the_floor`, which reached no C++.
     #[test]
     fn one_below_the_floor_is_refused_and_records_nothing() {
+        let _serial = ledger_tests();
         let name = c"p2p-exec";
         let before = EXECUTORS.lock().expect("executor table").len();
 
@@ -141,6 +158,7 @@ mod tests {
     /// is returning the truncated count instead of the full length.
     #[test]
     fn a_short_buffer_returns_the_full_length() {
+        let _serial = ledger_tests();
         for _ in 0..8 {
             let report = shekyl_thread_ledger::report();
             let full = report.len();
