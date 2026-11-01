@@ -335,8 +335,12 @@ const TOR_BRACKET_NANOS: u64 = 15 * SECOND_NANOS;
 /// Tor's outage retry, 10 s + U(0, 5 s). **Assumption** (§97, "Tor outage
 /// retry"). Basis: it stays under the slot turnover, `window / bound`, so
 /// an excused address is drawable again before a slot comes free and the
-/// outage cooldown never holds a slot idle. Checked at build time against
-/// the row's dial deadline.
+/// outage cooldown never holds a slot idle. At today's managed-Tor window
+/// (`SocksTimeout`, about 105 s) the turnover is 105 s / 5 = 21 s, a 6 s
+/// margin over the 15 s longest retry. The window is published at runtime,
+/// so the build-time check below uses the row's dial deadline, an upper
+/// bound on the turnover (120 s / 5 = 24 s): necessary, not sufficient. The
+/// Pi run (brief §7) measures it at the real window.
 const TOR_OUTAGE_RETRY: JitteredSpan = JitteredSpan {
     base_nanos: 10 * SECOND_NANOS,
     jitter_nanos: 5 * SECOND_NANOS,
@@ -348,10 +352,13 @@ const TOR_OUTAGE_RETRY: JitteredSpan = JitteredSpan {
 const CLEARNET_BRACKET_NANOS: u64 = 15 * SECOND_NANOS;
 
 /// Clearnet's outage retry, 10 s + U(0, 5 s). **Assumption** (§97,
-/// "Clearnet outage retry"). Basis: it caps redials of an unproven
-/// address: with one dial in flight and a deadline of about 1.4 s, at most
-/// one redial of such an address per 10–15 s, fewer than one per fill
-/// round. Checked at build time against the row's deadline and wake.
+/// "Clearnet outage retry"). Basis: it caps redials of an unproven address
+/// at one per `outage_retry`, 10–15 s, while the link shows no sign of
+/// life. The 10 s is the chosen cap, not a derived one; the Pi measures it.
+/// What the build-time check below holds is the structural half: the
+/// shortest retry is longer than one fill round (the dial deadline and the
+/// longest wake), so an excused address is never redialed in the round
+/// that excused it.
 const CLEARNET_OUTAGE_RETRY: JitteredSpan = JitteredSpan {
     base_nanos: 10 * SECOND_NANOS,
     jitter_nanos: 5 * SECOND_NANOS,
@@ -380,8 +387,9 @@ pub const fn dial_profile(connector: ConnectorId) -> DialProfile {
             wake: WAKE,
             quiet_attempts: CLEARNET_QUIET_ATTEMPTS,
             // A clearnet path is per destination: an on-path party can pass
-            // one session and drop the rest, so a stream to one address says
-            // nothing about another, and an inbound peer chose this node.
+            // one session and drop the rest, and an inbound peer chose this
+            // node. Whether a stream that opened counts on clearnet waits on
+            // Rick's ruling; until then it does not.
             judging: FailureJudging {
                 corroboration: Corroboration {
                     stream_opens: StreamOpens::Ignore,
@@ -440,13 +448,13 @@ const _: () = {
     }
 };
 
-/// The outage-retry bases Rick ruled (2026-10-31), held at build time.
-/// Tor's stays under the slot turnover, `deadline / bound` (the published
-/// window, shorter than the deadline, only widens the margin it is checked
-/// against here, so the managed Tor's 105 s gives 21 s against 15 s).
-/// Clearnet's longest redial gap, its base, exceeds one fill round (a
-/// deadline and the longest wake), so an excused address is redialed at
-/// most once per outage retry.
+/// What of the outage-retry bases (Rick, 2026-10-31) the build can check.
+/// Tor: the longest retry is under `deadline / bound`, an upper bound on
+/// the slot turnover; the published window narrows the margin (21 s at
+/// today's 105 s), which only the Pi run measures. Clearnet: the shortest
+/// retry is longer than one fill round, so an excused address is not
+/// redialed in the round that excused it; the 10 s cap itself is the
+/// row's chosen value, not something this checks.
 const _: () = {
     let tor = dial_profile(ConnectorId::Tor);
     let tor_retry = tor.judging.outage_retry;
