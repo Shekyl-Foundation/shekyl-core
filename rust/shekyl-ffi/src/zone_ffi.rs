@@ -19,7 +19,7 @@ use shekyl_capped_stream::{node_gate, process_write_stall, Session};
 use shekyl_clearnet::{
     accept_inbound as accept_clearnet_inbound, channel_choice, dial_one as dial_clearnet,
     zero_tally, Admitted as ClearnetAdmitted, ClearnetOption, Dial as ClearnetDial,
-    Inbound as ClearnetInbound,
+    Inbound as ClearnetInbound, Linger,
 };
 use shekyl_net_address::NetworkAddress;
 use shekyl_peer_policy::InboundCeiling;
@@ -424,13 +424,11 @@ fn ensure(network_id: [u8; 16]) -> Result<Arc<Host>, ZoneStart> {
     }
     let engine = crate::seam_ffi::process_engine();
     spawn_lateness_report(&handle, engine.clone());
+    spawn_refusal_report(&handle, process_sockets());
     let (clearnet_tx, clearnet_rx) = mpsc::unbounded_channel();
     let (tor_tx, tor_rx) = mpsc::unbounded_channel();
-    let on_cause: Arc<dyn Fn(CloseCause) + Send + Sync> = Arc::new(|cause| match cause.kind() {
-        kind @ (CloseKind::AdmissionRefused | CloseKind::InboundNotAccepted) => {
-            tracing::info!("seam accept refused cause {kind:?}");
-        }
-        kind => tracing::debug!(kind = ?kind, "zone socket"),
+    let on_cause: Arc<dyn Fn(CloseCause) + Send + Sync> = Arc::new(|cause| {
+        tracing::debug!(kind = ?cause.kind(), "zone socket");
     });
     let host = Arc::new(Host {
         pool: Mutex::new(Some(pool)),
@@ -546,6 +544,48 @@ fn spawn_lateness_report(runtime: &tokio::runtime::Handle, engine: Handle<Monoto
     }));
 }
 
+/// Name the connections refused before any handshake, once a minute and
+/// only when there were some: one line per refused connection is what a
+/// flood turns into a flood of the log (Rick, 2026-10-30).
+///
+/// The socket table counted them at the decision
+/// ([`shekyl_seam::Sockets::take_accept_refusals`]). A node at its ceiling
+/// refuses connections in ordinary service, so that minute is reported at
+/// info. A minute in which the accept rate (D10.3) refused anything is a
+/// warning: connections arrived faster than the protocol serves.
+fn spawn_refusal_report(runtime: &tokio::runtime::Handle, sockets: shekyl_seam::Sockets) {
+    const EVERY: Duration = Duration::from_secs(60);
+    drop(runtime.spawn(async move {
+        let mut every = tokio::time::interval_at(tokio::time::Instant::now() + EVERY, EVERY);
+        every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            every.tick().await;
+            let refusals = sockets.take_accept_refusals();
+            if !refusals.any() {
+                continue;
+            }
+            if refusals.over_rate() > 0 {
+                tracing::warn!(
+                    over_host_rate = refusals.over_host_rate,
+                    over_connector_rate = refusals.over_connector_rate,
+                    inbound_closed = refusals.inbound_closed,
+                    full_or_banned = refusals.full_or_banned,
+                    "connections arrived faster than the protocol's accept rate in the last \
+                     minute and were closed before any handshake; this node keeps serving its \
+                     other peers"
+                );
+            } else {
+                tracing::info!(
+                    inbound_closed = refusals.inbound_closed,
+                    full_or_banned = refusals.full_or_banned,
+                    "connections were refused before any handshake in the last minute: the \
+                     inbound limit was reached or closed, or the peer is banned"
+                );
+            }
+        }
+    }));
+}
+
 /// One lateness report. `false` when the engine has closed.
 fn report_lateness(engine: &Handle<MonotonicClock>) -> bool {
     for class in shekyl_timing_engine::OwnerClass::ALL {
@@ -645,8 +685,17 @@ pub fn start_clearnet(
         tracing::info!("the clearnet zone dials {route:?}");
     }
     crate::dialer_ffi::start_connector(ConnectorId::Clearnet, &host.engine);
+    // One linger task for every listener. The daemon reserved this cap
+    // once; a task per listener would hold that many sockets per listener.
+    let linger = {
+        let engine = host.engine.clone();
+        let span = host.clearnet_handshake_within;
+        let cap = host.sockets.clearnet_linger_cap(span);
+        host.handle
+            .block_on(async move { Linger::spawn(engine, cap, span) })
+    };
     for listener in listeners {
-        spawn_clearnet(&host, listener, kind, Arc::clone(&tally));
+        spawn_clearnet(&host, listener, kind, Arc::clone(&tally), linger.clone());
     }
     Ok(locals)
 }
@@ -656,6 +705,7 @@ fn spawn_clearnet(
     listener: TcpListener,
     kind: shekyl_clearnet::ChannelChoice,
     tally: Arc<shekyl_clearnet::HandshakeTally>,
+    linger: Linger,
 ) {
     let hub = host.hub.clone();
     let inbound = ClearnetInbound {
@@ -669,6 +719,7 @@ fn spawn_clearnet(
         on_cause: Arc::clone(&host.on_cause),
         send_queue_bytes: host.send_queue_bytes,
         admitted: host.clearnet_tx.clone(),
+        linger,
         backoff: ACCEPT_BACKOFF,
     };
     let engine = host.engine.clone();

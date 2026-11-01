@@ -207,6 +207,12 @@ pub mod executor_ffi;
 // where clearnet and Tor meet it.
 pub mod zone_ffi;
 
+/// Descriptors refused clearnet accepts may hold while they linger
+/// half-closed (`P2P_TRANSPORT_LAYER.md` D10.2). The daemon reserves this
+/// many beside the inbound ceiling. The figure is the transport layer's:
+/// the daemon does not take that crate as a dependency of its own.
+pub use shekyl_transport_layer::clearnet_linger_descriptors;
+
 // Production network ids. C++ asks for the 16 bytes; it does not state them.
 pub mod network_id_ffi;
 

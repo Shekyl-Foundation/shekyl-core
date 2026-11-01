@@ -4785,8 +4785,10 @@ dependencies = [
  "shekyl-peer-bounds",
  "shekyl-portable-storage",
  "shekyl-rpc-types",
+ "shekyl-transport-layer",
  "shekyl-types",
  "shekyl-wire",
+ "socket2",
  "thiserror",
 ]
 

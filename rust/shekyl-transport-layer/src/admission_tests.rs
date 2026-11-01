@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-use super::{CloseResult, LimitStance, ObservedEndpoint, OpenError};
+use super::{AcceptRefusal, CloseResult, LimitStance, ObservedEndpoint, OpenError};
 pub(super) use super::{Direction, Sockets};
 use crate::ban::Ipv4Subnet;
 pub(super) use crate::declaration::ConnectorId;
@@ -40,15 +40,11 @@ fn a_closed_limit_outranks_a_full_one() {
     let closed_over_full = LimitStance::prefer(LimitStance::Full, LimitStance::Closed);
     assert_eq!(
         closed_over_full.refusal(),
-        Err(OpenError::Refused(CloseCause::new(
-            CloseKind::InboundNotAccepted
-        )))
+        Err(AcceptRefusal::InboundClosed)
     );
     assert_eq!(
         LimitStance::prefer(LimitStance::Full, LimitStance::Open).refusal(),
-        Err(OpenError::Refused(CloseCause::new(
-            CloseKind::AdmissionRefused
-        )))
+        Err(AcceptRefusal::FullOrBanned)
     );
 }
 
@@ -557,4 +553,185 @@ pub(super) fn apply(sockets: &Sockets, open: &mut Vec<super::OpenSocket>, byte: 
             }
         }
     }
+}
+
+/// A test shape, not a ruled value: one clearnet accept a second for every
+/// host together, burst two, and one a minute for each host.
+fn rate_gated() -> Sockets {
+    use crate::accept_rate::{AcceptGate, AcceptRate};
+    let gate = AcceptGate::new(
+        AcceptRate {
+            token_every_nanos: 1_000_000_000,
+            burst: 2,
+        },
+        AcceptRate {
+            token_every_nanos: 60_000_000_000,
+            burst: 1,
+        },
+    );
+    Sockets::with_clearnet_gate(gate)
+}
+
+#[test]
+fn an_accept_over_the_rate_is_refused_and_reserves_nothing() {
+    let sockets = rate_gated();
+    let host = ip([10, 0, 0, 1]);
+    let _open = sockets
+        .accept_clearnet(host, InboundCeiling::Bounded(8), now())
+        .expect("the first accept pays");
+    let error = sockets
+        .accept_clearnet(host, InboundCeiling::Bounded(8), now())
+        .expect_err("the host's bucket is empty");
+    assert_eq!(refused(error), CloseKind::AcceptRateExceeded);
+    assert_eq!(sockets.live(), 1);
+    assert_eq!(
+        sockets.socket_count(ConnectorId::Clearnet, Direction::Inbound),
+        1
+    );
+    let _second = sockets
+        .accept_clearnet(ip([10, 0, 0, 2]), InboundCeiling::Bounded(8), now())
+        .expect("another host, inside the connector's burst");
+    let error = sockets
+        .accept_clearnet(ip([10, 0, 0, 3]), InboundCeiling::Bounded(8), now())
+        .expect_err("the connector's burst is spent");
+    assert_eq!(refused(error), CloseKind::AcceptRateExceeded);
+    let refusals = sockets.take_accept_refusals();
+    assert_eq!(
+        (refusals.over_host_rate, refusals.over_connector_rate),
+        (1, 1)
+    );
+    assert_eq!(refusals.over_rate(), 2);
+    assert!(!sockets.take_accept_refusals().any(), "taken once");
+}
+
+/// A harness row spends nothing. Several reservations of one host leave
+/// that host's token, and the listener's accept of it still pays. A zero
+/// ceiling and a ban still refuse the reservation and still count.
+#[test]
+fn a_reserved_inbound_spends_no_accept_token() {
+    let sockets = rate_gated();
+    let host = ip([10, 0, 0, 1]);
+    let ceiling = InboundCeiling::Bounded(8);
+    // More rows than either bucket holds. Dropping one would release it,
+    // so the live count is the rows still held.
+    let mut held = Vec::new();
+    for _ in 0..4 {
+        held.push(
+            sockets
+                .reserve_clearnet_inbound(host, ceiling, now())
+                .expect("a reservation spends no token"),
+        );
+    }
+    assert_eq!(
+        sockets.live(),
+        u64::try_from(held.len()).expect("held count")
+    );
+    assert!(
+        !sockets.take_accept_refusals().any(),
+        "a reservation is not a refusal"
+    );
+    held.push(
+        sockets
+            .accept_clearnet(host, ceiling, now())
+            .expect("the host's token is still there"),
+    );
+    let error = sockets
+        .accept_clearnet(host, ceiling, now())
+        .expect_err("the host's bucket is now empty");
+    assert_eq!(refused(error), CloseKind::AcceptRateExceeded);
+    assert_eq!(
+        sockets.live(),
+        u64::try_from(held.len()).expect("held count"),
+        "the refusal reserved nothing"
+    );
+    let refusals = sockets.take_accept_refusals();
+    assert_eq!(refusals.over_host_rate, 1);
+    assert_eq!(
+        refusals.over_connector_rate, 0,
+        "the host refusal spent no connector token"
+    );
+    let closed = sockets
+        .reserve_clearnet_inbound(host, InboundCeiling::Bounded(0), now())
+        .expect_err("a zero ceiling still closes the reservation");
+    assert_eq!(refused(closed), CloseKind::InboundNotAccepted);
+    let banned = ip([10, 0, 0, 9]);
+    assert_eq!(sockets.ban_host(banned, Tick::new(2_000), now()).len(), 0);
+    let error = sockets
+        .reserve_clearnet_inbound(banned, ceiling, now())
+        .expect_err("a ban still refuses the reservation");
+    assert_eq!(refused(error), CloseKind::AdmissionRefused);
+    let refusals = sockets.take_accept_refusals();
+    assert_eq!(refusals.inbound_closed, 1);
+    assert_eq!(refusals.full_or_banned, 1);
+    assert_eq!(refusals.over_rate(), 0, "neither consulted the gate");
+}
+
+#[test]
+fn a_banned_or_ceiling_refused_accept_spends_no_token() {
+    let sockets = rate_gated();
+    let host = ip([10, 0, 0, 1]);
+    assert_eq!(sockets.ban_host(host, Tick::new(2_000), now()).len(), 0);
+    for _ in 0..5 {
+        let error = sockets
+            .accept_clearnet(host, InboundCeiling::Bounded(8), now())
+            .expect_err("banned");
+        assert_eq!(refused(error), CloseKind::AdmissionRefused);
+        let error = sockets
+            .accept_clearnet(ip([10, 0, 0, 2]), InboundCeiling::Bounded(0), now())
+            .expect_err("closed");
+        assert_eq!(refused(error), CloseKind::InboundNotAccepted);
+    }
+    let refusals = sockets.take_accept_refusals();
+    assert_eq!(refusals.full_or_banned, 5, "the bans");
+    assert_eq!(refusals.inbound_closed, 5, "the closed ceiling");
+    assert_eq!(refusals.over_rate(), 0, "neither spent a token");
+    assert!(!sockets.take_accept_refusals().any(), "taken once");
+    let error = sockets
+        .open_clearnet(host, now())
+        .expect_err("an outbound dial to a banned host");
+    assert_eq!(refused(error), CloseKind::AdmissionRefused);
+    assert!(
+        !sockets.take_accept_refusals().any(),
+        "an outbound ban is not an accept refusal"
+    );
+    let error = sockets
+        .accept_tor(InboundCeiling::Bounded(0))
+        .expect_err("tor closed");
+    assert_eq!(refused(error), CloseKind::InboundNotAccepted);
+    let tor = sockets.take_accept_refusals();
+    assert_eq!(tor.inbound_closed, 1);
+    assert_eq!(tor.over_rate(), 0);
+    let _open = sockets
+        .accept_clearnet(ip([10, 0, 0, 2]), InboundCeiling::Bounded(8), now())
+        .expect("its tokens are all there");
+}
+
+#[test]
+fn tor_accepts_pass_no_rate_gate() {
+    let sockets = rate_gated();
+    for _ in 0..10 {
+        let _open = sockets
+            .accept_tor(InboundCeiling::Bounded(64))
+            .expect("Tor is defended by the onion's proof-of-work, not a limiter");
+    }
+    let refusals = sockets.take_accept_refusals();
+    assert_eq!(refusals.over_rate(), 0);
+    assert!(!refusals.any(), "a Tor accept is not a refusal");
+}
+
+/// A positive ceiling that occupancy has reached is a full table, not a
+/// rate refusal: the second accept spends no token.
+#[test]
+fn a_full_ceiling_is_counted_with_the_bans() {
+    let sockets = Sockets::new();
+    let _open = sockets
+        .accept_clearnet(ip([10, 0, 0, 9]), InboundCeiling::Bounded(1), now())
+        .expect("the one slot");
+    let error = sockets
+        .accept_clearnet(ip([10, 0, 0, 8]), InboundCeiling::Bounded(1), now())
+        .expect_err("full");
+    assert_eq!(refused(error), CloseKind::AdmissionRefused);
+    let refusals = sockets.take_accept_refusals();
+    assert_eq!(refusals.full_or_banned, 1);
+    assert_eq!(refusals.over_rate(), 0, "a full ceiling spends no token");
 }
