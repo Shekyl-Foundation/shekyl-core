@@ -81,6 +81,27 @@ fn handle_with(opts: RefreshOptions) -> RefreshHandleFixture {
     )
 }
 
+/// A handle over a stand-in producer that has already exited, for the
+/// tests that deliver a result: `join()` waits for the producer after the
+/// result, as the real one returns straight after sending.
+fn finished_handle_with(
+    opts: RefreshOptions,
+) -> (
+    RefreshHandle,
+    tokio::sync::oneshot::Sender<Result<RefreshSummary, RefreshError>>,
+) {
+    let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
+    let (_progress_tx, progress_rx) = tokio::sync::watch::channel(RefreshProgress::initial());
+    let handle = RefreshHandle::for_test(
+        completion_rx,
+        CancellationToken::new(),
+        progress_rx,
+        tokio::spawn(async {}),
+        opts,
+    );
+    (handle, completion_tx)
+}
+
 /// `progress()` returns a receiver that observes the seeded
 /// `RefreshProgress::initial()` baseline before any update is
 /// published. `borrow()` is non-blocking and always sees the
@@ -149,8 +170,7 @@ async fn cancel_fires_token_and_is_running_flips() {
 /// the completion oneshot.
 #[tokio::test]
 async fn join_delivers_summary_from_completion_oneshot() {
-    let (handle, completion, _progress, _cancel, _producer_assert) =
-        handle_with(RefreshOptions::default());
+    let (handle, completion) = finished_handle_with(RefreshOptions::default());
 
     let summary = RefreshSummary {
         processed_height_range: shekyl_types::BlockHeight::from_raw(100)
@@ -178,8 +198,7 @@ async fn join_delivers_summary_from_completion_oneshot() {
 /// completion oneshot unchanged.
 #[tokio::test]
 async fn join_propagates_terminal_error() {
-    let (handle, completion, _progress, _cancel, _producer_assert) =
-        handle_with(RefreshOptions::default());
+    let (handle, completion) = finished_handle_with(RefreshOptions::default());
 
     completion
         .send(Err(RefreshError::Cancelled))
@@ -187,6 +206,39 @@ async fn join_propagates_terminal_error() {
 
     let result = handle.join().await;
     assert!(matches!(result, Err(RefreshError::Cancelled)));
+}
+
+/// `join()` returns only after the producer has exited, so the engine
+/// `Arc` the producer held is gone by then. The real producer sends its
+/// result and then drops the `Arc` and the slot guard as it returns; a
+/// caller that closes the wallet straight after (`Arc::try_unwrap`) must
+/// not see the producer's clone. Here the stand-in holds its clone past
+/// the send, which widens the window `join()` used to return in.
+#[tokio::test]
+async fn join_returns_after_the_producer_released_the_engine() {
+    let engine = std::sync::Arc::new(());
+    let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
+    let (_progress_tx, progress_rx) = tokio::sync::watch::channel(RefreshProgress::initial());
+    let held = std::sync::Arc::clone(&engine);
+    let producer = tokio::spawn(async move {
+        _ = completion_tx.send(Err(RefreshError::Cancelled));
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        drop(held);
+    });
+    let handle = RefreshHandle::for_test(
+        completion_rx,
+        CancellationToken::new(),
+        progress_rx,
+        producer,
+        RefreshOptions::default(),
+    );
+
+    assert!(matches!(handle.join().await, Err(RefreshError::Cancelled)));
+    assert_eq!(
+        std::sync::Arc::strong_count(&engine),
+        1,
+        "the producer's clone outlived join()"
+    );
 }
 
 /// If the producer task drops its completion sender without
