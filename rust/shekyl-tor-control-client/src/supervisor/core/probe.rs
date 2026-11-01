@@ -41,7 +41,7 @@ use super::directories::{
     DirectoryAnswer, DirectoryCheck, DirectoryFetch, DirectoryHalf, DirectoryVerdict,
 };
 use super::{duration_ns, Action, Core, Duty, Phase, RoundEnd};
-use crate::control::RelayFingerprint;
+use crate::control::{RelayFingerprint, ServiceDescriptor};
 
 /// The probe's place in its round.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -259,9 +259,14 @@ impl Core {
 
     /// Tor reported a clock jump while Running: ask for one probe, with
     /// none in hand. A probe already scheduled, in flight or being
-    /// refetched answers the same question.
+    /// refetched answers the same question. None while a republish cannot
+    /// help: the facet already says why (§4.5). A clock named only after
+    /// the ask still stops the probe when its draw folds ([`Self::trigger`]).
     pub(super) fn jump_probe(&self) -> Vec<Action> {
-        if matches!(self.phase, Phase::Running { .. }) && self.probe == Probe::Idle {
+        if matches!(self.phase, Phase::Running { .. })
+            && self.probe == Probe::Idle
+            && !self.republish_cannot_help()
+        {
             vec![Action::ProbeAfterJump]
         } else {
             Vec::new()
@@ -368,26 +373,18 @@ impl Core {
         &mut self,
         now: u64,
         fetches: Vec<DirectoryFetch>,
-        ours: Option<u64>,
+        ours: Option<ServiceDescriptor>,
     ) -> Vec<Action> {
         if !matches!(self.directories, Some(DirectoryHalf::AwaitingDraw)) {
             return Vec::new();
         }
-        // Without our own counter no copy can be compared: the check counts
-        // nothing, and the probe alone decides, said once.
-        let (fetches, ours) = match ours {
-            Some(ours) => (
-                fetches
-                    .into_iter()
-                    .map(|fetch| {
-                        let due = now.saturating_add(self.probe_delay(fetch.draw));
-                        (fetch.hsdir, fetch.descriptor_id, due)
-                    })
-                    .collect(),
-                ours,
-            ),
-            None => (Vec::new(), 0),
-        };
+        let fetches = fetches
+            .into_iter()
+            .map(|fetch| {
+                let due = now.saturating_add(self.probe_delay(fetch.draw));
+                (fetch.hsdir, fetch.descriptor_id, due)
+            })
+            .collect();
         self.directories = Some(DirectoryHalf::Open(DirectoryCheck::new(fetches, ours)));
         self.judge(now)
     }

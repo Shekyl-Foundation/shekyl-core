@@ -18,7 +18,7 @@
 use shekyl_ffi::dialer_ffi::ProbeHandshake;
 use shekyl_timing_engine::Tick;
 use shekyl_tor_control_client::control::{
-    parse_service_revision_counter, Command, RelayFingerprint, TorEvent, UploadRounds,
+    parse_service_descriptor, Command, RelayFingerprint, ServiceDescriptor, TorEvent, UploadRounds,
 };
 use shekyl_tor_control_client::supervisor::{
     round_inputs, DirectoryAnswer, DirectoryFetch, Inbound, InboundCause, Input,
@@ -203,7 +203,7 @@ impl Drive {
 /// not give.
 impl Drive {
     pub(super) async fn directories_drawn(&self) -> Input {
-        let ours = self.our_revision_counter().await;
+        let ours = self.our_descriptor().await;
         let fetches = self
             .rounds
             .as_ref()
@@ -222,22 +222,30 @@ impl Drive {
         Input::DirectoriesDrawn { fetches, ours }
     }
 
-    /// `GETINFO hs/service/desc/id/<onion>`: the descriptor this service
-    /// uploads now (tor 0.4.9.14 `control_getinfo.c:569`), whose counter is
-    /// the one a directory's copy must carry.
-    async fn our_revision_counter(&self) -> Option<u64> {
+    /// `GETINFO hs/service/desc/id/<onion>`: the service's `desc_current`
+    /// (tor 0.4.9.14 `control_getinfo.c:569`, `hs_service.c:4222-4242`), its
+    /// blinded key and counter. A copy of that descriptor must carry that
+    /// counter; from 12:00 to 00:00 UTC clients ask for `desc_next` instead,
+    /// whose counter Tor does not give.
+    async fn our_descriptor(&self) -> Option<ServiceDescriptor> {
         let (control, service) = (self.control.as_ref()?, self.service.as_ref()?);
         let key = format!("hs/service/desc/id/{}", service.as_str());
         let reply = control.ask(Command::GetInfo(vec![key])).await;
         match reply {
             Ok(reply) => {
-                let ours = parse_service_revision_counter(&reply);
-                if ours.is_none() {
-                    tracing::debug!(
+                let ours = parse_service_descriptor(&reply);
+                match &ours {
+                    Some(ours) => tracing::debug!(
+                        target: "tor",
+                        descriptor_id = %ours.descriptor_id,
+                        revision_counter = ours.revision_counter,
+                        "this onion's current descriptor, for the directory check"
+                    ),
+                    None => tracing::debug!(
                         target: "tor",
                         status = reply.status(),
-                        "Tor gave no descriptor for this onion; the probe alone decides"
-                    );
+                        "Tor gave no descriptor for this onion; each copy counts by being there"
+                    ),
                 }
                 ours
             }
@@ -291,7 +299,7 @@ impl Drive {
 /// Tor reported a clock jump while Running (§4.5, "Overdue"): say so, and
 /// draw the probe's delay from the CSPRNG, as a round's probe does.
 pub(super) fn jump_probe() -> Input {
-    tracing::info!(target: "tor", "Tor reported a clock jump; probing this node's onion");
+    tracing::info!(target: "tor", "Tor reported a clock jump; a probe of this node's onion follows");
     Input::JumpProbeDrawn {
         draw: shekyl_ffi::tor_link::probe_delay_draw(),
     }

@@ -29,7 +29,7 @@ mod probe;
 mod resume;
 mod running;
 
-use crate::control::{NetworkView, RelayFingerprint};
+use crate::control::{NetworkView, RelayFingerprint, ServiceDescriptor};
 use announce::{Announcements, Cadence};
 use backoff::Backoff;
 pub use dials::DialTally;
@@ -443,11 +443,12 @@ pub enum Input {
         /// reached none: the probe alone decides. A list that was never
         /// folded is not this: the verdict waits.
         fetches: Vec<DirectoryFetch>,
-        /// This service's current descriptor's revision counter (`GETINFO
-        /// hs/service/desc/id/<onion>`). A directory's copy counts only when
-        /// its counter is this one. `None` when it could not be read: then
-        /// nothing can be compared, and the probe alone decides.
-        ours: Option<u64>,
+        /// This service's `desc_current` (`GETINFO
+        /// hs/service/desc/id/<onion>`): its blinded key and counter. A copy
+        /// of that descriptor counts only at that counter; a copy of another
+        /// counts by being there. `None` when Tor gave none: every copy
+        /// counts by being there.
+        ours: Option<ServiceDescriptor>,
     },
     /// Tor accepted `HSFETCH` for `hsdir` (`250`). That fetch's answer
     /// window starts at this fold.

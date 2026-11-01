@@ -14,11 +14,20 @@ use super::super::{Action, Core, DirectoryAnswer, DirectoryFetch, Input, Step};
 use super::probe::{
     arrival, count, probes, published, publishes_inbound, refetches, republishes, secs, uploaded,
 };
-use crate::control::RelayFingerprint;
+use crate::control::{RelayFingerprint, ServiceDescriptor};
 
 /// This service's revision counter in these tests: a directory's copy carrying it
 /// is the current one.
 const OURS: u64 = 7;
+
+/// This service's `desc_current` in these tests: the descriptor `"cur"`,
+/// the one each check's fetches ask for, at [`OURS`].
+fn ours() -> ServiceDescriptor {
+    ServiceDescriptor {
+        descriptor_id: "cur".to_owned(),
+        revision_counter: OURS,
+    }
+}
 
 fn hsdir(n: u8) -> RelayFingerprint {
     RelayFingerprint::from_bytes([n; 20])
@@ -67,7 +76,7 @@ fn checking(fetches: Vec<DirectoryFetch>) -> (Core, Vec<RelayFingerprint>) {
     core.on(
         Input::DirectoriesDrawn {
             fetches,
-            ours: Some(OURS),
+            ours: Some(ours()),
         },
         0,
     );
@@ -160,7 +169,7 @@ fn the_probe_arriving_from_our_cache_with_the_directories_empty_is_a_miss() {
     core.on(
         Input::DirectoriesDrawn {
             fetches: sent(1..=8, "cur", 0),
-            ours: Some(OURS),
+            ours: Some(ours()),
         },
         secs(20),
     );
@@ -375,7 +384,7 @@ fn each_directory_fetch_has_its_own_delay() {
     core.on(
         Input::DirectoriesDrawn {
             fetches,
-            ours: Some(OURS),
+            ours: Some(ours()),
         },
         0,
     );
@@ -397,7 +406,7 @@ fn an_answer_before_the_send_is_not_evidence() {
     core.on(
         Input::DirectoriesDrawn {
             fetches: sent(1..=1, "cur", u64::MAX),
-            ours: Some(OURS),
+            ours: Some(ours()),
         },
         0,
     );
@@ -462,7 +471,7 @@ fn a_draw_that_arrives_while_judging_still_installs() {
     let drawn = core.on(
         Input::DirectoriesDrawn {
             fetches: Vec::new(),
-            ours: Some(OURS),
+            ours: Some(ours()),
         },
         secs(19),
     );
@@ -551,6 +560,57 @@ fn a_stale_directory_copy_is_a_miss() {
     for n in 1..=8 {
         let answer = if n <= 5 { stale(OURS) } else { stale(OURS + 1) };
         core.on(answered(n, "cur", answer), secs(16));
+    }
+    core.on(arrival(secs(15), secs(18)), secs(18));
+    assert_eq!(
+        core.status().inbound,
+        Inbound::Reachable {
+            evidence_at: secs(18)
+        }
+    );
+}
+
+/// **A copy of a descriptor ours does not name counts by being there**
+/// (found live, 2026-11-01 17:00Z). From 12:00 to 00:00 UTC the service's
+/// `desc_current`, the only one `GETINFO hs/service/desc/id` gives, is the
+/// previous time period's, and clients ask for `desc_next`
+/// (`hs_service.c:2127-2139`). Comparing those copies with
+/// `desc_current`'s counter made a healthy node miss twice and republish.
+/// Fails if `answered` compares every copy with ours whatever descriptor
+/// ours names.
+#[test]
+fn a_copy_of_a_descriptor_ours_does_not_name_counts_by_being_there() {
+    let mut core = published();
+    core.on(uploaded(0), 0);
+    core.on(
+        Input::DirectoriesDrawn {
+            fetches: sent(1..=8, "cur", 0),
+            ours: Some(ServiceDescriptor {
+                descriptor_id: "prev".to_owned(),
+                revision_counter: OURS,
+            }),
+        },
+        0,
+    );
+    let launched = core.on_deadline(secs(15));
+    assert_eq!(probes(&launched), 1);
+    core.on(
+        Input::ProbeDialed {
+            minted_at: secs(15),
+        },
+        secs(15),
+    );
+    for n in 1..=8 {
+        core.on(
+            answered(
+                n,
+                "cur",
+                DirectoryAnswer::Received {
+                    revision_counter: Some(2_008_251_960),
+                },
+            ),
+            secs(16),
+        );
     }
     core.on(arrival(secs(15), secs(18)), secs(18));
     assert_eq!(

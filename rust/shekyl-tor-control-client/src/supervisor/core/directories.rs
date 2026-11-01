@@ -26,7 +26,7 @@
 //! that command. It is the supervisor's wait for the `HS_DESC` line, not the
 //! connector's dial deadline and not the dialer's outage backoff.
 
-use crate::control::RelayFingerprint;
+use crate::control::{RelayFingerprint, ServiceDescriptor};
 
 /// One directory to ask, from the driver: where an upload went, which
 /// descriptor it was, and a CSPRNG draw for this fetch's own delay.
@@ -45,9 +45,11 @@ pub struct DirectoryFetch {
 pub enum DirectoryAnswer {
     /// The copy the directory returned (`HS_DESC_CONTENT`, which Tor sends
     /// only for a descriptor it decoded and stored, `hs_client.c:1686-1689`),
-    /// with its revision counter. It counts only when the counter is this
-    /// service's current one: a directory holding a stale copy is a miss
-    /// (Rick, 2026-11-01).
+    /// with its revision counter. A copy of the descriptor ours names counts
+    /// only at our counter: a directory holding a stale copy is a miss
+    /// (Rick, 2026-11-01). A copy of another descriptor counts by being
+    /// there: Tor gives no counter for `desc_next`, the descriptor clients
+    /// ask for from 12:00 to 00:00 UTC (`hs_service.c:2127-2139`).
     Received {
         /// The copy's `revision-counter`; `None` when it could not be read.
         revision_counter: Option<u64>,
@@ -124,9 +126,9 @@ pub(super) enum DirectoryVerdict {
 /// The fetches of one probe's check.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct DirectoryCheck {
-    /// This service's current descriptor's revision counter: a copy counts
-    /// only at this counter.
-    ours: u64,
+    /// This service's `desc_current`: a copy of that descriptor counts only
+    /// at its counter. `None` when Tor gave none.
+    ours: Option<ServiceDescriptor>,
     asks: Vec<Ask>,
     /// The descriptor Tor's client asks for, learned from a `REQUESTED`
     /// of a fetch this check has sent.
@@ -137,7 +139,10 @@ pub(super) struct DirectoryCheck {
 impl DirectoryCheck {
     /// `fetches` are `(directory, uploaded descriptor, when to send)`.
     /// An empty list is complete: nothing to count, so the probe decides.
-    pub(super) fn new(fetches: Vec<(RelayFingerprint, String, u64)>, ours: u64) -> Self {
+    pub(super) fn new(
+        fetches: Vec<(RelayFingerprint, String, u64)>,
+        ours: Option<ServiceDescriptor>,
+    ) -> Self {
         let complete = fetches.is_empty();
         Self {
             ours,
@@ -236,11 +241,19 @@ impl DirectoryCheck {
         ask.answer_by = None;
         ask.held = match (descriptor_id, answer) {
             (Some(id), _) if id != uploaded => Held::Excluded,
-            (_, DirectoryAnswer::Received { revision_counter }) => match revision_counter {
-                Some(theirs) if theirs == self.ours => Held::Found,
-                Some(_) => Held::Missing,
-                None => Held::Excluded,
-            },
+            (_, DirectoryAnswer::Received { revision_counter }) => {
+                let compared = self
+                    .ours
+                    .as_ref()
+                    .filter(|ours| ours.descriptor_id == uploaded)
+                    .map(|ours| ours.revision_counter);
+                match (compared, revision_counter) {
+                    (Some(ours), Some(theirs)) if theirs == ours => Held::Found,
+                    (Some(_), Some(_)) => Held::Missing,
+                    (Some(_), None) => Held::Excluded,
+                    (None, _) => Held::Found,
+                }
+            }
             (_, DirectoryAnswer::NotFound) => Held::Missing,
             (_, DirectoryAnswer::Other | DirectoryAnswer::Unusable) => Held::Excluded,
         };

@@ -398,3 +398,19 @@ fn a_new_tor_keeps_a_named_clock() {
     ));
     assert!(render(&core.status()).contains("This computer's clock is at least"));
 }
+
+/// **A clock jump asks no probe while the clock is named**: the run of
+/// 2026-11-01 17:11Z logged "probing" right after the clock was named,
+/// though the probe's own gate then dropped it. Fails if `jump_probe` asks
+/// whatever the clock.
+#[test]
+fn a_clock_jump_asks_no_probe_while_the_clock_is_named() {
+    let mut core = reachable();
+    core.on(clock(VALID_AFTER, VALID_AFTER - DAY), secs(30));
+    let jumped = core.on(Input::ClockJumped, secs(31));
+    assert!(
+        !jumped.actions.contains(&Action::ProbeAfterJump),
+        "{:?}",
+        jumped.actions
+    );
+}

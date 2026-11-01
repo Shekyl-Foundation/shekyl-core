@@ -703,14 +703,23 @@ returned, as `HS_DESC_CONTENT` once it decoded (`hs_client.c:1685-1689`),
 and `FAILED REASON=NOT_FOUND` when that directory does not have it.
 
 - **The copy must be ours (Rick, 2026-11-01).** A directory counts as
-  holding the descriptor only when its copy's `revision-counter` is this
-  service's current one, read with the check from `GETINFO
-  hs/service/desc/id/<onion>` (`control_getinfo.c:569`, the current
-  descriptor; `Input::DirectoriesDrawn`'s `ours`). Any other counter is a
-  stale copy and a miss for that directory: below ours, a later upload never
-  reached it; above ours, it is a copy numbered on a clock that has since
-  gone back, which the directory keeps serving and refuses to replace. A
-  copy with no readable counter is excluded. `GETINFO hs/client/desc/id`
+  holding the descriptor only when its copy's `revision-counter` is ours,
+  read with the check from `GETINFO hs/service/desc/id/<onion>`
+  (`control_getinfo.c:569`; `Input::DirectoriesDrawn`'s `ours`). Any other
+  counter is a stale copy and a miss for that directory: below ours, a later
+  upload never reached it; above ours, it is a copy numbered on a clock that
+  has since gone back, which the directory keeps serving and refuses to
+  replace. A copy with no readable counter is excluded. That key gives the
+  service's `desc_current` only (`hs_service.c:4222-4242`). A client asks
+  for the current time period's descriptor (`hs_client.c:232`), and from the
+  period's start to the next shared-random run, 12:00 to 00:00 UTC on the
+  public network, that is the service's `desc_next`
+  (`hs_service.c:2127-2139`), whose counter no control command gives. So
+  ours carries its blinded key, read from the signing-key certificate's
+  signed-with-key extension (`hs_service.c:1794-1796`), and only a copy of
+  that descriptor is compared; a copy of the other counts by being there.
+  Comparing every copy with `desc_current` made a healthy node miss twice
+  and republish at 17:00Z on 2026-11-01 (§7). `GETINFO hs/client/desc/id`
   cannot answer this: the client cache holds one copy and discards a fetched
   one with a lower counter (`hs_cache.c:837-842`), so it cannot say which
   directory held what; `HS_DESC_CONTENT` carries each directory's copy.
