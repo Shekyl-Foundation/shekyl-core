@@ -359,7 +359,7 @@ fn a_parked_loop_ends_at(ending: Ending) {
         "the loop parks; it does not end"
     );
     match ending {
-        Ending::Stop => dialer.stop(&mut SplitMix64::new(0)),
+        Ending::Stop => dialer.stop(),
         Ending::EngineClosed => service.close(),
         Ending::OwnerDeregistered => owner.deregister().expect("deregister"),
     }

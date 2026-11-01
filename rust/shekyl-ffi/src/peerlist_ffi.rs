@@ -195,7 +195,7 @@ pub unsafe extern "C" fn shekyl_peerlist_admit_received(
     let Some(dialer) = crate::dialer_ffi::shared() else {
         return SHEKYL_PEERLIST_NO_HUB;
     };
-    let mut shared = dialer.shared_current(&mut SecureRelayRng);
+    let mut shared = dialer.shared();
     receive(&mut shared.lists, row, session_of(id), entries, now)
 }
 

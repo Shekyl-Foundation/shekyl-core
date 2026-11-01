@@ -159,7 +159,7 @@ fn the_owner_dials_only_after_the_engine_wakes_it_and_once_per_wake() {
         SocketId::from_ffi(1).expect("an id"),
         shekyl_levin::notify(2002, b"not a handshake response")
     ));
-    dialer.stop(&mut SplitMix64::new(0));
+    dialer.stop();
     service.close();
     loop_thread
         .join()

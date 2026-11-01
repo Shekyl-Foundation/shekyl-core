@@ -219,7 +219,7 @@ pub struct Dialer {
     _links_watch: Subscription,
     /// The ban list's events, starting with every entry in force when the
     /// dialer was built; each rings [`Self::bell`]. Drained in order under
-    /// the dialer's lock ([`Self::apply_bans`]). Dropped with the dialer.
+    /// the dialer's lock, by every [`Self::shared`]. Dropped with the dialer.
     bans: BanFeed,
     /// The results the attempt tasks posted; each also rings the bell.
     completions: Arc<Completions>,
@@ -381,35 +381,26 @@ impl Dialer {
         *self.network_id.lock().expect("network id")
     }
 
-    /// Apply the ban list's events in the order it made them: a ban bars
-    /// every seat its entry covers, a lift frees those no remaining entry
-    /// covers (Rick, 2026-10-31). The queue is taken under the dialer's
-    /// lock, so the owner loops apply one order between them.
-    fn apply_bans<R: RelayRng + ?Sized>(&self, shared: &mut Shared, rng: &mut R) {
+    /// The shared state, for the calls that read or write the lists, with
+    /// the ban list's queued events applied first, in the order it made
+    /// them: a ban bars every seat its entry covers, a lift frees those no
+    /// remaining entry covers (Rick, 2026-10-31). Every caller takes the
+    /// lists through here, so whatever it reads reflects every ban and
+    /// lift posted before it, and the queue is taken under the lock, so
+    /// the owner loops apply one order between them.
+    pub fn shared(&self) -> MutexGuard<'_, Shared> {
+        let mut shared = self.shared.lock().expect("dialer state");
         for event in self.bans.take() {
             match event {
                 BanEvent::Banned(entry) => {
-                    shared.lists.ban(entry, rng);
+                    shared.lists.ban(entry);
                 }
                 BanEvent::Lifted(entry) => {
                     shared.lists.lift(entry);
                 }
             }
         }
-    }
-
-    /// The shared state with every queued ban event applied, for a caller
-    /// outside the owner loops that reads or writes the lists: what it
-    /// reads reflects every ban and lift the ban list has posted.
-    pub fn shared_current<R: RelayRng + ?Sized>(&self, rng: &mut R) -> MutexGuard<'_, Shared> {
-        let mut shared = self.shared();
-        self.apply_bans(&mut shared, rng);
         shared
-    }
-
-    /// The shared state, for the calls that read or write the lists.
-    pub fn shared(&self) -> MutexGuard<'_, Shared> {
-        self.shared.lock().expect("dialer state")
     }
 
     /// The hub this dialer dials through.
@@ -504,7 +495,6 @@ impl Dialer {
         rng: &mut R,
     ) {
         let mut shared = self.shared();
-        self.apply_bans(&mut shared, rng);
         for address in &addresses {
             // Already seated: the population is the declaration either way.
             // A refusal is not "already seated" and is said.
@@ -540,7 +530,6 @@ impl Dialer {
         rng: &mut R,
     ) -> Result<bool, Refusal> {
         let mut shared = self.shared();
-        self.apply_bans(&mut shared, rng);
         if !shared.configured.contains(address) {
             shared.configured.push(address.clone());
         }
@@ -649,8 +638,8 @@ impl Dialer {
     ///
     /// A caller that started the owner loops on threads of its own uses
     /// [`Self::stop_joining`], which joins them before the file is written.
-    pub fn stop<R: RelayRng + ?Sized>(&self, rng: &mut R) {
-        self.stop_joining(|| {}, rng);
+    pub fn stop(&self) {
+        self.stop_joining(|| {});
     }
 
     /// [`Self::stop`], with `join_loops` run after every attempt is
@@ -659,7 +648,7 @@ impl Dialer {
     /// joins them there: each exits at the bell, and none applies a result
     /// once the flag is set, so the file is written with no loop running.
     /// It must not be called from an owner loop's own thread.
-    pub fn stop_joining<R: RelayRng + ?Sized>(&self, join_loops: impl FnOnce(), rng: &mut R) {
+    pub fn stop_joining(&self, join_loops: impl FnOnce()) {
         self.stop.store(true, Ordering::Release);
         self.bell.ring();
         let count = self.abandon_flight();
@@ -668,7 +657,7 @@ impl Dialer {
         }
         self.wait_for_applications();
         join_loops();
-        if let Err(err) = self.store_addresses(rng) {
+        if let Err(err) = self.store_addresses() {
             tracing::warn!("the address file was not written at stop: {err}");
         }
     }
@@ -704,20 +693,19 @@ impl Dialer {
     }
 
     /// Write the address file now: every list address, by range only,
-    /// less those a ban covers, once the queued ban events are applied.
-    /// `Ok(false)` when no file was named.
+    /// less those a ban covers. `Ok(false)` when no file was named.
     ///
     /// The clock is read before the store lock, so no hub call is made
     /// under it. Two stores that overlap may write in either order: each is
     /// a whole file of the lists at its own moment, and the next store, at
     /// most one interval later, replaces it.
-    pub fn store_addresses<R: RelayRng + ?Sized>(&self, rng: &mut R) -> io::Result<bool> {
+    pub fn store_addresses(&self) -> io::Result<bool> {
         let now = self.hub.now();
         let store = self.store.lock().expect("address store");
         let Some(store) = store.as_ref() else {
             return Ok(false);
         };
-        let addresses = self.shared_current(rng).lists.persistable();
+        let addresses = self.shared().lists.persistable();
         store.write(&addresses)?;
         self.shared().last_store = Some(now);
         Ok(true)
@@ -726,7 +714,7 @@ impl Dialer {
     /// Write the address file when [`STORE_INTERVAL_NANOS`] has passed
     /// since it was last written or read. `Ok(false)` when it is not due
     /// or no file was named.
-    pub fn store_if_due<R: RelayRng + ?Sized>(&self, now: Tick, rng: &mut R) -> io::Result<bool> {
+    pub fn store_if_due(&self, now: Tick) -> io::Result<bool> {
         let due = self
             .shared()
             .last_store
@@ -734,7 +722,7 @@ impl Dialer {
         if !due {
             return Ok(false);
         }
-        self.store_addresses(rng)
+        self.store_addresses()
     }
 
     fn record<R: RelayRng + ?Sized>(
@@ -934,7 +922,7 @@ impl Dialer {
             if self.stop.load(Ordering::Acquire) {
                 break;
             }
-            if let Err(err) = self.store_if_due(self.hub.now(), rng) {
+            if let Err(err) = self.store_if_due(self.hub.now()) {
                 tracing::warn!("the address file was not written: {err}");
             }
             self.apply_completions(connector, rng);
@@ -968,7 +956,6 @@ impl Dialer {
         }
         let live = live_sessions(&self.hub, connector);
         let mut shared = self.shared();
-        self.apply_bans(&mut shared, rng);
         let wake = plan_wake(&mut shared, connector, &live, now, rng);
         let (address, aim) = match wake {
             Wake::Recover => {

@@ -629,15 +629,19 @@ own lock (`Peerlist::ban`, `Peerlist::lift`); the lists hold the
 entries in force.
 
 **Demotion.** When a ban arrives, every white entry its entry covers
-(host, or IPv4 subnet) moves to gray, and every gray seat it covers is
-barred. White therefore holds only unbanned, confirmed peers, so the
-floor and the refill line count white as it stands.
+(host, or IPv4 subnet) moves straight to barred gray, and every gray
+seat it covers is barred. Applying a ban draws nothing and evicts
+nothing (Rick, 2026-11-01). White therefore holds only unbanned,
+confirmed peers, so the floor and the refill line count white as it
+stands.
 
 **Gray handling.** A barred seat is never drawn and is in no count or
 candidate census, but it is still subject to normal random eviction,
-with no protection, and holds a slot under the gray cap; a demoted
-entry enters gray through the capped insert, so a mass demotion — a
-subnet ban, an expiry sweep — leaves gray at or below its cap (F3).
+with no protection, and holds a slot under the gray cap. After a ban,
+gray may sit over its cap by the seats it moved from white, at most the
+white cap, until the next gray insert evicts it back, as it already
+does for outstanding draws. An expiry demotion enters gray through the
+capped insert, so a mass expiry leaves gray at or below its cap (F3).
 Gray admission refuses an address an entry covers if it is gossiped
 back in, and the address file leaves it out. When the ban is lifted or
 expires, its lift frees every barred seat no remaining entry covers,

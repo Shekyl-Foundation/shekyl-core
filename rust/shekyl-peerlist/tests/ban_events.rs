@@ -112,8 +112,8 @@ fn a_ban_event_bars_a_seat_on_both_lists() {
     );
     assert!(list.is_white(&white));
 
-    assert_eq!(list.ban(host(&gray), &mut rng), 1);
-    assert_eq!(list.ban(host(&white), &mut rng), 1);
+    assert_eq!(list.ban(host(&gray)), 1);
+    assert_eq!(list.ban(host(&white)), 1);
 
     assert!(!list.is_white(&white), "a ban demotes a white seat");
     assert_eq!(
@@ -142,7 +142,7 @@ fn the_lift_returns_a_barred_seat_as_drawable_gray_on_its_rung() {
     failed_once(&mut list, &address, &mut rng);
     assert!(list.is_cooling(&address));
 
-    list.ban(host(&address), &mut rng);
+    list.ban(host(&address));
     assert!(every_gray_draw(&mut list, &mut rng).is_empty());
     assert_eq!(list.lift(host(&address)), 1);
 
@@ -163,7 +163,7 @@ fn a_subnet_ban_bars_every_seat_it_covers_and_the_door_refuses_inside_it() {
         admitted(&mut list, address, &mut rng);
     }
 
-    assert_eq!(list.ban(subnet(7), &mut rng), inside.len());
+    assert_eq!(list.ban(subnet(7)), inside.len());
 
     assert_eq!(every_gray_draw(&mut list, &mut rng), vec![outside.clone()]);
     assert_eq!(list.gray_count(CLEARNET), 1);
@@ -191,16 +191,16 @@ fn a_refused_dial_moves_no_ladder_and_ends_barred_in_either_order() {
         admitted(&mut list, &address, &mut rng);
         admitted(&mut list, &other, &mut rng);
         failed_once(&mut list, &address, &mut rng);
-        list.ban(host(&address), &mut rng);
+        list.ban(host(&address));
         list.lift(host(&address));
         draw_until(&mut list, &address, &mut rng);
 
         if event_first {
-            list.ban(host(&address), &mut rng);
+            list.ban(host(&address));
             list.release_draw(&address);
         } else {
             list.release_draw(&address);
-            list.ban(host(&address), &mut rng);
+            list.ban(host(&address));
         }
 
         assert_eq!(list.failed_tests(&address), 1, "the ladder did not move");
@@ -221,8 +221,8 @@ fn a_host_lifted_inside_a_banned_subnet_stays_barred() {
     let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
     let address = v4(7, 1);
     admitted(&mut list, &address, &mut rng);
-    list.ban(host(&address), &mut rng);
-    list.ban(subnet(7), &mut rng);
+    list.ban(host(&address));
+    list.ban(subnet(7));
 
     assert_eq!(list.lift(host(&address)), 0, "the subnet still covers it");
     assert!(every_gray_draw(&mut list, &mut rng).is_empty());
@@ -244,10 +244,10 @@ fn a_subnet_covers_ipv4_seats_only_and_a_host_entry_covers_ipv6() {
     admitted(&mut list, &v6, &mut rng);
     admitted(&mut list, &inside, &mut rng);
 
-    let barred = list.ban(subnet(7), &mut rng);
+    let barred = list.ban(subnet(7));
     assert_eq!(barred, 1, "the subnet covers the IPv4 seat only");
     assert_eq!(every_gray_draw(&mut list, &mut rng), vec![v6.clone()]);
 
-    list.ban(host(&v6), &mut rng);
+    list.ban(host(&v6));
     assert!(every_gray_draw(&mut list, &mut rng).is_empty());
 }

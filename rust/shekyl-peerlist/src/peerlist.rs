@@ -670,15 +670,16 @@ impl Peerlist {
     }
 
     /// A ban event from the ban list: hold `entry`, and bar every seat it
-    /// covers on both lists (Rick, 2026-10-31). A white seat is demoted to
-    /// gray first, then barred. A barred seat is never drawn, is in no
+    /// covers on both lists (Rick, 2026-10-31). A white seat moves straight
+    /// to barred gray, with no eviction: gray may sit over its cap until
+    /// the next gray insert evicts. A barred seat is never drawn, is in no
     /// census or candidate count, and the door refuses a new address the
     /// entry covers. Returns how many seats it barred now; an outstanding
     /// draw bars when its outcome or its release moves it.
-    pub fn ban<R: RelayRng + ?Sized>(&mut self, entry: BanEntry, rng: &mut R) -> usize {
+    pub fn ban(&mut self, entry: BanEntry) -> usize {
         self.partitions
             .iter_mut()
-            .map(|partition| partition.ban(entry, rng))
+            .map(|partition| partition.ban(entry))
             .sum()
     }
 

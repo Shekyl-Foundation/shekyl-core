@@ -450,10 +450,7 @@ fn a_clearnet_address_under_an_active_ban_is_absent_from_the_file() {
             Ok(true)
         );
     }
-    list.ban(
-        BanEntry::Host(IpAddr::V4(Ipv4Addr::new(11, 0, 1, 7))),
-        &mut rng,
-    );
+    list.ban(BanEntry::Host(IpAddr::V4(Ipv4Addr::new(11, 0, 1, 7))));
     let written = decode(&list.to_file_bytes()).expect("the file reads");
     assert_eq!(written, vec![free], "the banned address is left out");
     assert!(list.is_gray(&banned), "the list still holds it");
@@ -469,7 +466,7 @@ fn a_clearnet_address_whose_ban_is_lifted_is_written() {
         Ok(true)
     );
     let entry = BanEntry::Host(IpAddr::V4(Ipv4Addr::new(11, 0, 1, 9)));
-    list.ban(entry, &mut rng);
+    list.ban(entry);
     assert_eq!(decode(&list.to_file_bytes()).expect("reads"), vec![]);
     list.lift(entry);
     assert_eq!(decode(&list.to_file_bytes()).expect("reads"), vec![peer]);
@@ -491,7 +488,7 @@ fn a_tor_address_is_unaffected_by_bans_in_the_file() {
         Ok(true)
     );
     let everything = Ipv4Subnet::new(Ipv4Addr::UNSPECIFIED, 0).expect("prefix 0");
-    list.ban(BanEntry::Subnet(everything), &mut rng);
+    list.ban(BanEntry::Subnet(everything));
     let written = decode(&list.to_file_bytes()).expect("reads");
     assert_eq!(written, vec![tor]);
 }

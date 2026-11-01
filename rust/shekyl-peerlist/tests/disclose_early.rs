@@ -222,7 +222,7 @@ fn when_white_reaches_the_floor_the_flag_ends_and_the_window_sample_rules_after(
     );
     // White drops below the floor: a ban demotes one entry when it
     // arrives. The flag stays ended; the window's sample still rules.
-    list.ban(BanEntry::Host(ip_of(&white[3])), &mut rng);
+    list.ban(BanEntry::Host(ip_of(&white[3])));
     assert_eq!(
         list.white_count(connector, at_hours(4), &mut NoSessions, &mut rng),
         usize::from(floor()) - 1
@@ -250,8 +250,8 @@ fn the_flag_ends_at_the_floor_without_any_disclosure() {
     list.set_disclose_early(at_hours(0));
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     let white = with_white(&mut list, 1, floor(), at_hours(0), &mut rng);
-    list.ban(BanEntry::Host(ip_of(&white[0])), &mut rng);
-    list.ban(BanEntry::Host(ip_of(&white[1])), &mut rng);
+    list.ban(BanEntry::Host(ip_of(&white[0])));
+    list.ban(BanEntry::Host(ip_of(&white[1])));
     // The first disclose call comes after white fell back below the floor.
     assert!(
         list.disclose(connector, at_hours(1), &mut NoSessions, &mut rng)

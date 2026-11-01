@@ -377,7 +377,7 @@ fn stop_cancels_every_attempt_in_flight_and_the_loop_exits_at_the_bell() {
     });
     thread::sleep(Duration::from_millis(50));
 
-    dialer.stop(&mut SplitMix64::new(0));
+    dialer.stop();
     assert!(
         ended_rx.recv_timeout(Duration::from_secs(2)).is_ok(),
         "the loop exits at the bell, not when a dial ends or the engine closes"
@@ -432,15 +432,12 @@ fn stop_joins_the_loops_after_the_cancel_and_before_the_file() {
     thread::sleep(Duration::from_millis(50));
 
     let mut joined = false;
-    dialer.stop_joining(
-        || {
-            assert_eq!(dialer.in_flight(TOR), 0, "the cancel came first");
-            assert!(!path.exists(), "the file is written after the join");
-            loop_thread.join().expect("the loop thread");
-            joined = true;
-        },
-        &mut SplitMix64::new(0),
-    );
+    dialer.stop_joining(|| {
+        assert_eq!(dialer.in_flight(TOR), 0, "the cancel came first");
+        assert!(!path.exists(), "the file is written after the join");
+        loop_thread.join().expect("the loop thread");
+        joined = true;
+    });
     assert!(joined);
     assert_eq!(
         shekyl_dialer::AddressStore::new(path)
@@ -469,7 +466,7 @@ fn stopped_after_one_gray(
         .admit_operator(&address, Tick::new(1), &mut rng)
         .expect("admitted");
     assert!(dialer.shared().lists.is_gray(&address));
-    dialer.stop(&mut SplitMix64::new(0));
+    dialer.stop();
     (sockets, dial, dialer, address)
 }
 
@@ -694,7 +691,7 @@ fn run_stalled(bound: usize, steps: u64) -> (usize, usize, usize) {
         thread::sleep(Duration::from_millis(60));
     }
     let in_flight = dialer.in_flight(TOR);
-    dialer.stop(&mut SplitMix64::new(0));
+    dialer.stop();
     let text = loop_thread.join().expect("the loop thread");
     service.close();
     let (wakes, launches) = wakes_and_launches(&text);

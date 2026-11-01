@@ -6,8 +6,9 @@
 //! The dialer applies the ban list's events (Rick, 2026-10-31): its
 //! subscription starts with every entry in force, taken with the
 //! registration under one hold of the table's lock, and then carries each
-//! ban and lift in order. The dialer drains it under its own lock: a ban
-//! bars the seats its entry covers, a lift frees them.
+//! ban and lift in order. Every read of the lists drains it under the
+//! dialer's lock (`Dialer::shared`): a ban bars the seats its entry covers,
+//! a lift frees them.
 
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
@@ -66,20 +67,24 @@ fn drawable(dialer: &Dialer, rng: &mut SplitMix64) -> Vec<NetworkAddress> {
     drawn
 }
 
-/// A ban in force when the dialer subscribed, lifted before the dialer
-/// first drains, frees its seat; a ban made after the subscription bars
+/// A ban in force when the dialer subscribed and lifted before its first
+/// read leaves the host admissible; a ban made after the subscription bars
 /// its seat; its lift frees it. Red edits: do not register the queue in
 /// `BanList::subscribe` (the seed is applied and the lift is lost, so the
-/// first host stays barred), or drop the drain from `apply_completions`
-/// (the later ban never bars).
+/// door refuses the first host), or apply no queued event in
+/// `Dialer::shared` (the later ban never bars).
 #[test]
 fn the_dialer_bars_what_the_ban_list_posts_and_frees_what_it_lifts() {
     let mut rng = SplitMix64::new(11);
     let sockets = Sockets::new();
     assert!(sockets.ban_host_permanent(host(1)).is_empty());
     let dialer = dialer_over(sockets.clone());
-    // Onto the lists as a reload puts them, before the dialer first drains:
-    // the dialer's door would refuse the banned host.
+    assert!(
+        sockets.lift_host(host(1)),
+        "lifted after the seed was taken"
+    );
+    // Onto the lists as a reload puts them, through the lists' own door,
+    // which refuses an address a held ban covers.
     for n in 1..=3 {
         let admitted =
             dialer
@@ -88,16 +93,33 @@ fn the_dialer_bars_what_the_ban_list_posts_and_frees_what_it_lifts() {
                 .admit_gray(&peer(n), Source::Reload, Tick::new(1), &mut rng);
         assert!(admitted.is_ok(), "{admitted:?}");
     }
-    assert!(
-        sockets.lift_host(host(1)),
-        "lifted after the seed was taken"
-    );
     assert!(sockets.ban_host_permanent(host(2)).is_empty());
-
-    let _applied = dialer.apply_completions(ConnectorId::Clearnet, &mut rng);
     assert_eq!(drawable(&dialer, &mut rng), vec![peer(1), peer(3)]);
 
     assert!(sockets.lift_host(host(2)));
-    let _applied = dialer.apply_completions(ConnectorId::Clearnet, &mut rng);
     assert_eq!(drawable(&dialer, &mut rng), vec![peer(1), peer(2), peer(3)]);
+}
+
+/// Every read of the lists goes through `Dialer::shared`, which applies
+/// the queued ban events first: a ban posted just before a read is in it,
+/// with no owner loop draining and no other call between. Red edit: lock
+/// the state in `shared` without applying the queue.
+#[test]
+fn a_ban_posted_just_before_a_read_is_in_it() {
+    let mut rng = SplitMix64::new(12);
+    let sockets = Sockets::new();
+    let dialer = dialer_over(sockets.clone());
+    let admitted =
+        dialer
+            .shared()
+            .lists
+            .admit_gray(&peer(4), Source::Reload, Tick::new(1), &mut rng);
+    assert!(admitted.is_ok(), "{admitted:?}");
+    assert!(sockets.ban_host_permanent(host(4)).is_empty());
+    assert!(dialer.shared().lists.is_banned(&peer(4)), "the ban is read");
+    assert!(sockets.lift_host(host(4)));
+    assert!(
+        !dialer.shared().lists.is_banned(&peer(4)),
+        "the lift is read"
+    );
 }

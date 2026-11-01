@@ -74,7 +74,7 @@ fn render(address: &NetworkAddress) -> (String, u32, u16) {
 fn entries(public_only: bool) -> Option<PeerListOwner> {
     let dialer = dialer()?;
     let mut rows: Vec<(NetworkAddress, ListName, bool)> = {
-        let shared = dialer.shared_current(&mut crate::secure_relay_rng::SecureRelayRng);
+        let shared = dialer.shared();
         shared
             .lists
             .snapshot()
@@ -182,7 +182,7 @@ pub unsafe extern "C" fn shekyl_rpc_peerlist_sizes(out_white: *mut u64, out_gray
     };
     let now = dialer.hub().now();
     let (white, gray) = {
-        let mut shared = dialer.shared_current(&mut crate::secure_relay_rng::SecureRelayRng);
+        let mut shared = dialer.shared();
         let mut kept = shared.kept_addresses(ConnectorId::Clearnet);
         let white = shared.lists.white_count(
             ConnectorId::Clearnet,
@@ -289,8 +289,8 @@ mod tests {
 
     /// `blocked` follows the ban list: an entry a ban covers is blocked as
     /// soon as the ban is made, and not once it is lifted, with no owner
-    /// loop running to drain the events. Red edit: read the lists with
-    /// `Dialer::shared` in `entries`, so the queued events are not applied.
+    /// loop running to drain the events. Red edit: apply no queued event in
+    /// `Dialer::shared`.
     #[test]
     fn an_entry_is_blocked_while_a_ban_covers_it() {
         let _bind = seam_bind_lock().lock();
@@ -441,7 +441,7 @@ pub fn peer_counts() -> Option<PeerCounts> {
     let sockets = |connector, direction| hub.socket_count(connector, direction);
     let now = dialer.hub().now();
     let (white, gray) = {
-        let mut shared = dialer.shared_current(&mut crate::secure_relay_rng::SecureRelayRng);
+        let mut shared = dialer.shared();
         let mut kept = shared.kept_addresses(ConnectorId::Clearnet);
         let white = shared.lists.white_count(
             ConnectorId::Clearnet,

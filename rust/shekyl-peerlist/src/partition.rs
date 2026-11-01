@@ -896,10 +896,12 @@ impl Partition {
     }
 
     /// A ban event: hold `entry`, and bar every seat it covers on both
-    /// lists. A white seat is demoted to gray first, as a demotion is
-    /// (`demote`), then barred. Returns how many seats were barred now; an
+    /// lists. A white seat moves straight to barred gray on rung zero, with
+    /// no eviction: gray may sit over its cap until the next gray insert
+    /// evicts, as it does for outstanding draws, and the overshoot is
+    /// bounded by [`WHITE_CAP`]. Returns how many seats were barred now; an
     /// outstanding draw is counted when its outcome bars it.
-    pub(crate) fn ban<R: RelayRng + ?Sized>(&mut self, entry: BanEntry, rng: &mut R) -> usize {
+    pub(crate) fn ban(&mut self, entry: BanEntry) -> usize {
         if !self.bans.insert(entry) {
             return 0;
         }
@@ -913,7 +915,7 @@ impl Partition {
         for (address, seat) in covered {
             match seat {
                 Seat::White(_) => {
-                    self.demote(&address, rng);
+                    self.move_seat(&address, drawable(0));
                     barred += 1;
                 }
                 Seat::Gray {

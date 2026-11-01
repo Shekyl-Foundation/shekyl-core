@@ -120,9 +120,8 @@ impl Dialer {
     }
 
     /// Apply one task result, on the loop, through the layer that owns each
-    /// decision. The shared lock is taken only to apply the queued ban
-    /// events and admit the received list; no hub call is made under it
-    /// (#1092).
+    /// decision. The shared lock is taken only to admit the received list;
+    /// no hub call is made under it (#1092).
     pub(super) fn apply_result<R: RelayRng + ?Sized>(
         &self,
         connector: ConnectorId,
@@ -145,19 +144,15 @@ impl Dialer {
             .iter()
             .map(|entry| entry.adr.clone())
             .collect();
-        let admitted = {
-            let mut shared = self.shared();
-            self.apply_bans(&mut shared, rng);
-            shared.lists.admit_received_list(
-                &addresses,
-                SessionRow {
-                    id: session_of(id),
-                    connector,
-                },
-                now,
-                rng,
-            )
-        };
+        let admitted = self.shared().lists.admit_received_list(
+            &addresses,
+            SessionRow {
+                id: session_of(id),
+                connector,
+            },
+            now,
+            rng,
+        );
         if admitted.is_err() {
             // A list the lists refuse (D3, D-S1, the foreign-connector rule,
             // R4) is the peer's doing: the same stamp as a rejection.

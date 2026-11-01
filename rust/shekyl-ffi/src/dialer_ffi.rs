@@ -262,18 +262,15 @@ pub(crate) fn stop() {
         &mut *LOOPS.lock().expect("dialer loops"),
         [const { None }; ConnectorId::COUNT],
     );
-    dialer.stop_joining(
-        move || {
-            for (connector, running) in ConnectorId::ALL.iter().zip(loops) {
-                if let Some(mut running) = running {
-                    if running.join().is_err() {
-                        tracing::warn!("{connector:?}: the dialer's owner loop panicked");
-                    }
+    dialer.stop_joining(move || {
+        for (connector, running) in ConnectorId::ALL.iter().zip(loops) {
+            if let Some(mut running) = running {
+                if running.join().is_err() {
+                    tracing::warn!("{connector:?}: the dialer's owner loop panicked");
                 }
             }
-        },
-        &mut SecureRelayRng,
-    );
+        }
+    });
 }
 
 /// A session closed. A kept session leaves the dialer's count. A
@@ -540,7 +537,7 @@ pub unsafe extern "C" fn shekyl_peerlist_disclose(
     };
     let now = hub.now();
     let sample = {
-        let mut shared = dialer.shared_current(&mut SecureRelayRng);
+        let mut shared = dialer.shared();
         let mut kept = shared.kept_addresses(connector);
         shared
             .lists

@@ -294,7 +294,7 @@ fn a_banned_white_entry_is_demoted_when_its_ban_arrives_and_the_floor_drops() {
     );
     let banned = white[7].clone();
     // The ban event demotes it to gray at once (Rick, 2026-10-31).
-    assert_eq!(list.ban(BanEntry::Host(ip_of(&banned)), &mut rng), 1);
+    assert_eq!(list.ban(BanEntry::Host(ip_of(&banned))), 1);
     assert_eq!(
         list.white_count(connector, at_hours(2), &mut NoSessions, &mut rng),
         49,
@@ -318,7 +318,7 @@ fn a_demoted_entry_is_barred_evictable_never_drawn_and_refused_at_admission() {
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     let white = with_white(&mut list, 1, 10, &mut rng);
     let banned = white[3].clone();
-    list.ban(BanEntry::Host(ip_of(&banned)), &mut rng);
+    list.ban(BanEntry::Host(ip_of(&banned)));
     assert_eq!(
         list.white_count(connector, at_hours(1), &mut NoSessions, &mut rng),
         9
@@ -355,7 +355,7 @@ fn a_demoted_entry_is_barred_evictable_never_drawn_and_refused_at_admission() {
         let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
         let white = with_white(&mut list, 1, 10, &mut rng);
         let banned = white[3].clone();
-        list.ban(BanEntry::Host(ip_of(&banned)), &mut rng);
+        list.ban(BanEntry::Host(ip_of(&banned)));
         assert_eq!(
             list.white_count(connector, at_hours(1), &mut NoSessions, &mut rng),
             9
@@ -403,7 +403,7 @@ fn a_ban_does_not_rebuild_the_cached_sample_and_tor_never_demotes() {
     let white = with_white(&mut list, 1, 60, &mut rng);
     let sample = list.disclose(connector, at_hours(1), &mut NoSessions, &mut rng);
     let in_sample = sample[0].clone();
-    list.ban(BanEntry::Host(ip_of(&in_sample)), &mut rng);
+    list.ban(BanEntry::Host(ip_of(&in_sample)));
     assert_eq!(
         list.disclose(connector, at_hours(2), &mut NoSessions, &mut rng),
         sample,
@@ -431,7 +431,7 @@ fn a_ban_does_not_rebuild_the_cached_sample_and_tor_never_demotes() {
             &mut rng,
         );
     }
-    list.ban(BanEntry::Subnet(everything), &mut rng);
+    list.ban(BanEntry::Subnet(everything));
     assert_eq!(
         list.white_count(hidden, at_hours(1), &mut NoSessions, &mut rng),
         3,
@@ -667,7 +667,7 @@ fn a_drawn_sample_is_served_unchanged_when_white_drops_below_the_floor_mid_windo
     );
     // Mid-window, white drops below the floor: a ban demotes one entry
     // when it arrives.
-    list.ban(BanEntry::Host(ip_of(&white[0])), &mut rng);
+    list.ban(BanEntry::Host(ip_of(&white[0])));
     assert_eq!(
         list.white_count(connector, at_hours(2), &mut NoSessions, &mut rng),
         white_diversity_floor() - 1
@@ -771,7 +771,7 @@ fn a_list_that_would_cross_the_session_cap_admits_nothing() {
     );
     // A banned entry in a list is not counted against the cap.
     let banned = v4(300);
-    list.ban(BanEntry::Host(ip_of(&banned)), &mut rng);
+    list.ban(BanEntry::Host(ip_of(&banned)));
     assert_eq!(
         list.admit_received_list(
             &[banned],
@@ -784,10 +784,13 @@ fn a_list_that_would_cross_the_session_cap_admits_nothing() {
     );
 }
 
-/// F3: demotion goes through the capped gray insert, so a mass demotion
-/// leaves gray at or below its cap.
+/// F3: an expiry demotion goes through the capped gray insert, so a mass
+/// expiry leaves gray at or below its cap. A ban moves white straight to
+/// barred gray with no eviction (Rick, 2026-11-01): gray sits over its cap
+/// by those seats, at most the white cap, until the next gray insert
+/// evicts it back.
 #[test]
-fn mass_demotion_leaves_gray_at_or_below_its_cap() {
+fn an_expiry_sweep_keeps_gray_at_its_cap_and_a_ban_sweep_until_the_next_insert() {
     let mut rng = SplitMix64::new(23);
     let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
@@ -818,22 +821,29 @@ fn mass_demotion_leaves_gray_at_or_below_its_cap() {
         demoted_in_gray >= 190,
         "the demoted entries are the ones kept, bar the few a later demotion evicted: {demoted_in_gray}"
     );
-    // The same through a subnet ban.
+    // A ban on every white host.
     let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
     let white = with_white(&mut list, 1, 200, &mut rng);
     for n in 10_000..10_000 + u16::try_from(GRAY_CAP).expect("fits") {
         let _admitted = list.admit_gray(&v4(n), Source::Reload, at_hours(0), &mut rng);
     }
     for a in &white {
-        list.ban(BanEntry::Host(ip_of(a)), &mut rng);
+        list.ban(BanEntry::Host(ip_of(a)));
     }
     assert_eq!(
         list.white_count(connector, at_hours(1), &mut NoSessions, &mut rng),
         0
     );
-    // Every demoted entry is barred: out of the gray count, still under
-    // the cap.
-    let barred = white.iter().filter(|a| list.is_gray(a)).count();
-    assert!(barred > 0 && white.iter().all(|a| !list.is_gray(a) || list.is_banned(a)));
-    assert_eq!(list.gray_count(connector) + barred, GRAY_CAP);
+    // Every former white seat is barred gray and nothing was evicted: gray
+    // is over its cap by the 200, which the white cap bounds.
+    let barred = |list: &Peerlist| white.iter().filter(|a| list.is_gray(a)).count();
+    assert_eq!(barred(&list), 200);
+    assert!(white.iter().all(|a| list.is_banned(a)));
+    assert_eq!(list.gray_count(connector), GRAY_CAP);
+    // The next gray insert evicts back to the cap, barred seats included.
+    assert_eq!(
+        list.admit_gray(&v4(9_999), Source::Reload, at_hours(1), &mut rng),
+        Ok(true)
+    );
+    assert_eq!(list.gray_count(connector) + barred(&list), GRAY_CAP);
 }

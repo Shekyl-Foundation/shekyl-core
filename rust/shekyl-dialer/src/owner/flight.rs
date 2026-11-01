@@ -327,7 +327,6 @@ impl Dialer {
         connector: ConnectorId,
         rng: &mut R,
     ) -> Vec<Applied> {
-        self.apply_bans(&mut self.shared(), rng);
         self.completions
             .take(connector)
             .into_iter()
