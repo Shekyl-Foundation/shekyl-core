@@ -11,9 +11,8 @@
 //! can be judged over: the scenario driver's (mined through the production
 //! stack, with alt blocks a second driver offers) and the six captured
 //! chains (replayed through the production pipeline, each with its E2
-//! trace — the C++ daemon's own per-height values, harvested from its
-//! LMDB). The second is the differential the brief asks for: what the
-//! store-backed facts report against what the C++ facts were made of.
+//! trace — the Rust baseline a replay of that chain recorded). The second
+//! holds the store-backed facts to that baseline.
 //!
 //! Every expectation here is computed from something other than the
 //! facts under test: the mined template, the producer's claims, a hash
@@ -640,10 +639,10 @@ fn an_empty_store_is_not_ready_and_never_a_zero_tip() {
 }
 
 // ---------------------------------------------------------------------------
-// The captured chains: the differential against the C++'s own values
+// The captured chains: the store-backed facts against the baseline.
 // ---------------------------------------------------------------------------
 
-/// One field the store-backed facts and the C++ disagree on, at a height.
+/// One field the store-backed facts and the baseline disagree on, at a height.
 #[derive(Debug)]
 struct Difference {
     shape: String,
@@ -654,13 +653,13 @@ struct Difference {
 }
 
 /// Replay every captured chain, then read it back through the store-backed
-/// facts and hold each value the C++ facts were made of — the trace's
-/// `block_info` columns and the corpus's block bytes — against what the
-/// store-backed facts report. Every difference is collected, printed, and
-/// then must be empty: a difference is a DX-Q8 row to place, and the PR
-/// body places each one before this is allowed to be non-empty.
+/// facts and hold each value the baseline recorded — the trace's facts and
+/// the corpus's block bytes — against what the store-backed facts report.
+/// Every difference is collected, printed, and then must be empty: a
+/// difference is a DX-Q8 row to place, and the PR body places each one
+/// before this is allowed to be non-empty.
 #[tokio::test]
-async fn the_store_facts_report_what_the_cxx_facts_were_made_of_on_every_captured_chain() {
+async fn the_store_facts_report_the_baseline_on_every_captured_chain() {
     let mut differences: Vec<Difference> = Vec::new();
     let mut heights_read = 0u64;
     let mut coinbase_figure_differs = 0u64;
@@ -882,7 +881,7 @@ async fn the_store_facts_report_what_the_cxx_facts_were_made_of_on_every_capture
     assert!(heights_read > 0, "the captured chains were read (rule 47)");
     for d in &differences {
         eprintln!(
-            "difference: {} h{} {}: C++ {} / Rust {}",
+            "difference: {} h{} {}: baseline {} / reported {}",
             d.shape,
             d.height.to_raw(),
             d.field,
@@ -895,7 +894,7 @@ async fn the_store_facts_report_what_the_cxx_facts_were_made_of_on_every_capture
         differences.len()
     );
     eprintln!(
-        "get_coinbase_tx_sum: the C++ emission figure (coinbase less fees) differs from the coins \
+        "get_coinbase_tx_sum: the coinbase-less-fees figure differs from the coins \
          minted at {coinbase_figure_differs} of {heights_read} heights; it would wrap below zero at \
          {coinbase_figure_wraps}"
     );

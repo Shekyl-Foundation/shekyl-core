@@ -375,7 +375,7 @@ async fn a_corpus_replays_end_to_end_and_the_redb_digest_matches_the_trace_check
     // expectation, and both equal the state computed from the chain.
     let Checkpoint { at, ours, theirs } = report.checkpoint.expect("covered-tip checkpoint");
     assert_eq!(at, h(4));
-    assert_eq!(ours, theirs, "redb and the LMDB-shaped checkpoint agree");
+    assert_eq!(ours, theirs, "redb and the baseline checkpoint agree");
     assert_eq!(ours, expected_state(&chain));
     // The measurement carries the concurrency it was taken under.
     assert_eq!(
@@ -576,11 +576,6 @@ async fn a_refusal_ends_the_run_and_is_a_disagreement_the_report_names() {
     assert_eq!(
         report.disagreements().collect::<Vec<_>>(),
         vec![crate::pipeline::Disagreement::Refused { height, verdict }]
-    );
-    assert_eq!(
-        report.observations().refused,
-        Some(("CEN-A2", h(2))),
-        "derived from the report, not written beside it"
     );
     cleanup(&path);
 }
@@ -1116,7 +1111,7 @@ async fn a_rewind_retracts_the_abandoned_branchs_root_comparisons() {
         report.emission
     );
     assert_eq!(report.disagreements().count(), 0);
-    assert!(report.observations().roots.diverged_at.is_empty());
+    assert_eq!(report.roots.diverged().count(), 0);
     let Checkpoint { ours, theirs, .. } = report.checkpoint.expect("covered-tip checkpoint");
     assert_eq!(ours, theirs);
     cleanup(&path);
@@ -1165,85 +1160,6 @@ async fn a_regtest_corpus_replays_under_a_fixed_difficulty_and_connects() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_replayed_run_grades_its_exercised_rows_correct_with_every_component_real() {
-    // RD-Q6 through the pipeline: the observations the run emits, graded
-    // against a register in the extractor's shape. Every row the landed
-    // rules exercised grades AcceptedAsCorrect on the verdict clause; the
-    // producers of passed-through facts are Borrowed on the component clause
-    // whatever their verdict; the digest matched, so the rest are real.
-    use crate::grader::{
-        grade_run, ComponentEvidence, GradedAcceptance, Register, VerdictEvidence,
-    };
-    let path = tmp("pipeline-grade");
-    let chain = chain(4);
-    let trace = Arc::new(trace_of(&chain, true));
-    let bytes = corpus_of(&chain);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
-    let report = run(
-        &mut source,
-        substrate(),
-        Arc::new(Metrics::new()),
-        GENESIS_RULES,
-        open_store(&path),
-        trace,
-        PipelineConfig::default(),
-    )
-    .await
-    .expect("replays");
-    let obs = report.observations();
-    assert!(!obs.exercised.is_empty(), "the landed rules ran");
-    assert_eq!(obs.digest_identical, Some(true));
-
-    // A register naming every exercised row CHECKED-CONFORMANT, plus the
-    // root producers as the register has them.
-    let mut rows: Vec<String> = obs
-        .exercised
-        .iter()
-        .map(|id| format!("{{\"id\": \"{id}\", \"state\": \"CHECKED-CONFORMANT\"}}"))
-        .collect();
-    for extra in ["CEN-G6", "CEN-I12"] {
-        if !obs.exercised.contains(extra) {
-            rows.push(format!(
-                "{{\"id\": \"{extra}\", \"state\": \"CHECKED-CONFORMANT\"}}"
-            ));
-        }
-    }
-    let json = format!(
-        "{{\"schema_version\": \"shekyl_e2_register_v1\", \"rows\": [{}], \"unrecorded_ratified\": []}}",
-        rows.join(",")
-    );
-    let register = Register::from_json(&json).expect("register");
-    let graded = grade_run(&register, &obs);
-    assert!(graded.passes(), "{:?}", graded.unadjudicated);
-    assert!(graded.refusal.is_none());
-    for row in &graded.rows {
-        if obs.exercised.contains(row.id.as_str()) {
-            assert_eq!(
-                row.verdict,
-                VerdictEvidence::Exercised { agreed: true },
-                "{}",
-                row.id
-            );
-            assert_eq!(
-                row.verdict_acceptance,
-                Some(GradedAcceptance::AcceptedAsCorrect),
-                "{}",
-                row.id
-            );
-        }
-        // No row borrows since wave B: every component is the replay's own.
-        assert_eq!(
-            row.component,
-            ComponentEvidence::Real { identical: true },
-            "{}",
-            row.id
-        );
-    }
-    assert_eq!(graded.derived_and_conformant, obs.exercised.len());
-    cleanup(&path);
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_reorg_family_replays_through_the_corpus_reader_with_a_digest_after_the_switch() {
     // §3.8 / RD-Q13 through the real Source, over blocks that spend. With
     // `f` the first spend height: main `0..=f + 3`, rewind to `f`, fork
@@ -1288,8 +1204,6 @@ async fn the_reorg_family_replays_through_the_corpus_reader_with_a_digest_after_
     assert_eq!(at, h(f + 4));
     assert_eq!(ours, theirs, "the fork's tip matches its own trace");
     assert_eq!(ours, expected_state(&r.after));
-    let obs = report.observations();
-    assert_eq!(obs.digest_identical, Some(true));
     // The checkpoint's other encoding (ARW-25): the redb archival rows
     // against the trace's `0x04` record, at the same height, row for row.
     let archival = report
@@ -1302,11 +1216,8 @@ async fn the_reorg_family_replays_through_the_corpus_reader_with_a_digest_after_
         "{:?}",
         archival.diff.diverged().collect::<Vec<_>>()
     );
-    assert!(obs.archival.compared);
-    assert_eq!(obs.archival.at, Some(f + 4));
-    assert!(obs.archival.diverged.is_empty());
     assert_eq!(
-        obs.archival.rows_equal,
+        archival.diff.rows_equal(),
         u64::try_from(
             GrownTree::over(&r.after)
                 .archival_snapshot_after(h(f + 4))
@@ -1319,13 +1230,11 @@ async fn the_reorg_family_replays_through_the_corpus_reader_with_a_digest_after_
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_wrong_checkpoint_goes_red_and_the_graded_run_does_not_pass() {
+async fn a_wrong_checkpoint_goes_red_and_the_run_names_it() {
     // The comparator's negative control on the expectation side (rule 47):
-    // a trace whose checkpoint is anything but the chain's state DIVERGEs,
-    // the report names the disagreement, and the grade fails every
-    // CHECKED-CONFORMANT row on the component clause. The store side's
-    // controls — one mutation per digested family — follow.
-    use crate::grader::{grade_run, Clause, GradedAcceptance, Register};
+    // a trace whose checkpoint is anything but the chain's state DIVERGEs
+    // and the report names the disagreement. The store side's controls —
+    // one mutation per digested family — follow.
     use crate::trace::{Trace, TraceWriter};
     let path = tmp("pipeline-negative-control");
     let chain = chain(3);
@@ -1362,30 +1271,12 @@ async fn a_wrong_checkpoint_goes_red_and_the_graded_run_does_not_pass() {
         PipelineConfig::default(),
     )
     .await
-    .expect("the run itself completes; the verdict is the grader's");
+    .expect("the run itself completes; the disagreement is in the report");
     let checkpoint = report.checkpoint.expect("covered-tip checkpoint");
     assert!(!checkpoint.identical(), "DIVERGE");
     assert_eq!(
         report.disagreements().collect::<Vec<_>>(),
         vec![crate::pipeline::Disagreement::Diverged { at: h(2) }]
-    );
-    let obs = report.observations();
-    assert_eq!(obs.digest_identical, Some(false));
-    let register = Register::from_json(
-        r#"{"schema_version":"shekyl_e2_register_v1","rows":[{"id":"CEN-A1","state":"CHECKED-CONFORMANT"}],"unrecorded_ratified":[]}"#,
-    )
-    .expect("register");
-    let graded = grade_run(&register, &obs);
-    assert!(!graded.passes());
-    assert_eq!(
-        (
-            graded.unadjudicated[0].clause,
-            graded.unadjudicated[0].acceptance
-        ),
-        (
-            Clause::Component,
-            GradedAcceptance::FailedConformantDiffered
-        )
     );
     cleanup(&path);
 }
@@ -1396,9 +1287,8 @@ async fn a_wrong_recorded_root_at_one_height_goes_red_and_names_the_height() {
     // whose recorded `root_after` at one interior height is not what the
     // validator derives DIVERGEs at that height — with the checkpoint
     // still matching, because the digest carries only the *live* root —
-    // and the observation folds it in so a graded run does not pass. This
-    // is exactly the disagreement the covered-tip checkpoint cannot see.
-    use crate::grader::{grade_run, Register};
+    // and the report names it. This is exactly the disagreement the
+    // covered-tip checkpoint cannot see.
     use crate::pipeline::Disagreement;
     use crate::trace::{Trace, TraceWriter};
     use shekyl_types::CurveTreeRoot;
@@ -1444,7 +1334,7 @@ async fn a_wrong_recorded_root_at_one_height_goes_red_and_names_the_height() {
         PipelineConfig::default(),
     )
     .await
-    .expect("the run itself completes; the verdict is the grader's");
+    .expect("the run itself completes; the disagreement is in the report");
     assert!(
         report.checkpoint.expect("covered tip").identical(),
         "the tip digest agrees: the interior root is invisible to it"
@@ -1465,25 +1355,6 @@ async fn a_wrong_recorded_root_at_one_height_goes_red_and_names_the_height() {
     assert_eq!(
         report.disagreements().collect::<Vec<_>>(),
         vec![Disagreement::RootDiverged { at: h(1) }]
-    );
-    let obs = report.observations();
-    assert_eq!(
-        obs.digest_identical,
-        Some(true),
-        "the checkpoint matched; the interior root is the oracle's fact"
-    );
-    assert_eq!(obs.roots.compared, 3);
-    assert_eq!(obs.roots.diverged_at, vec![h(1)]);
-    let register = Register::from_json(
-        r#"{"schema_version":"shekyl_e2_register_v1","rows":[{"id":"CEN-B5","state":"CHECKED-CONFORMANT"}],"unrecorded_ratified":[]}"#,
-    )
-    .expect("register");
-    let graded = grade_run(&register, &obs);
-    assert!(!graded.passes(), "the oracle fails the graded run");
-    assert_eq!(graded.root_oracle.diverged_at, vec![h(1)]);
-    assert!(
-        graded.unadjudicated.is_empty(),
-        "the digest clause stays agreed"
     );
     cleanup(&path);
 }

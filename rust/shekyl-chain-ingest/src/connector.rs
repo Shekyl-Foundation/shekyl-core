@@ -109,24 +109,19 @@ pub struct Applied {
     /// The curve-tree root **after** each connected block's drain — the
     /// verdict's derivation (`ValidatedBlock::root_after`, DRS-E3), one per
     /// entry of `connected`, in the same order. The replay compares each
-    /// against the trace's recorded root at that height (CTW-5): the
-    /// per-height oracle the LMDB trace makes possible while it exists.
+    /// against the baseline's `root_after` at that height (CTW-5).
     pub roots: Vec<(BlockHeight, CurveTreeRoot)>,
     /// Each connected block's weight, long-term weight and the long-term
     /// effective median it was judged under — the verdict's derivation
     /// (`ValidatedBlock::weights`, CEN-G6/G6b, slice 7), one per entry of
     /// `connected`, in the same order. The replay compares each against
-    /// the trace's three recorded values at that height: the C++'s
-    /// `block_info` columns and the exporter's re-derived median — the
-    /// parity oracle for the medians while the LMDB trace exists.
+    /// the baseline's three weight facts at that height.
     pub weights: Vec<(BlockHeight, Weights)>,
     /// Each connected block's paid emission — the reward F14b priced, its
     /// split, the accumulator G12 advanced (`ValidatedBlock::emission`,
     /// slice 7 commit 5) — one per entry of `connected`. The replay
-    /// compares the accumulator against the trace's `coins_generated` at
-    /// that height: the C++'s `block_info.bi_coins`, hence the paid reward
-    /// at every height by difference — the penalty's parity oracle on the
-    /// one captured block over the median.
+    /// compares the accumulator and the burn against the baseline's
+    /// `coins_generated` and `burned` at that height.
     pub emission: Vec<(BlockHeight, PaidEmission)>,
     /// Each connected block's archival transition — what the verdict says
     /// the block does to the bond records, the serve credits, the slash log
@@ -136,7 +131,7 @@ pub struct Applied {
     /// (E4 commit 5: `BondRecordOf`, `BudgetAccruingOf`).
     pub archival: Vec<(BlockHeight, ArchivalDelta)>,
     /// The census rows the connected blocks' verdicts exercised — the
-    /// union of each `ChainValid`'s coverage, for the grader's clause (1).
+    /// union of each `ChainValid`'s coverage.
     pub exercised: BTreeSet<&'static str>,
     /// A refusal — `form`'s or `validate`'s verdict — and where.
     pub refused: Option<(BlockHeight, InvalidBlock)>,
@@ -298,10 +293,10 @@ pub struct ArchivalState;
 
 /// The redb side's covered-tip checkpoint, read in **one** snapshot: the
 /// recorded tip, the logical-state digest and the archival rows. The
-/// trace's two checkpoint records came from one LMDB snapshot the walker
-/// took after the daemon's last write; this is the redb side's one read
-/// after the replay's, so the two encodings describe the same state and
-/// the tip says which. A tip other than the trace's covered tip is the
+/// baseline's two checkpoint records came from one read of the store that
+/// wrote them, after that run's last write; this is the redb side's one
+/// read after the replay's, so the two encodings describe the same state
+/// and the tip says which. A tip other than the trace's covered tip is the
 /// pipeline's signal not to compare.
 #[derive(Clone, Copy, Debug)]
 pub struct CheckpointState;

@@ -279,7 +279,7 @@ PERMANENT: dict[tuple[str, str], str] = {
     (
         "shekyl-chain-ingest",
         "pipeline",
-    ): "the sequencer, the validate+connect actor and the grader (kameo/tokio) "
+    ): "the sequencer and the validate+connect actor (kameo/tokio) "
     "— the one stateful stage is an actor (RD-Q11)",
     (
         "shekyl-chain-ingest",
