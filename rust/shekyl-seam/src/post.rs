@@ -47,6 +47,19 @@ pub enum Post {
         /// The peer's sync payload.
         sync: SyncPayload,
     },
+    /// The Levin handshake has completed, and the protocol may speak on
+    /// the session: an outbound session once the dialer has kept it, an
+    /// inbound one once the handler has finished the delivery that
+    /// carried the handshake, so its reply is already queued ahead of
+    /// anything sent after this. Chain sync's owner opens its session
+    /// here and sends nothing to a peer before it. The strand does not
+    /// read it. Posted once per session.
+    Opened {
+        /// The admission id.
+        id: SocketId,
+        /// The connector this id was established on, as on `Deliver`.
+        connector: ConnectorId,
+    },
     /// The socket is gone. Destroy the handler when its call count is zero.
     Closed {
         /// The admission id.
@@ -77,10 +90,11 @@ impl Post {
     #[must_use]
     pub const fn id(&self) -> SocketId {
         match self {
-            Self::HandshakeResult { id, .. } => *id,
-            Self::Established { id, .. } | Self::Deliver { id, .. } | Self::Closed { id, .. } => {
-                *id
-            }
+            Self::HandshakeResult { id, .. }
+            | Self::Established { id, .. }
+            | Self::Deliver { id, .. }
+            | Self::Opened { id, .. }
+            | Self::Closed { id, .. } => *id,
         }
     }
 }

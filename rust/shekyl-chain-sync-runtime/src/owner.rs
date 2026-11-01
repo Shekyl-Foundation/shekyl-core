@@ -50,7 +50,7 @@
 //!   supplied, such as one this node mined, goes to every established
 //!   session. That send moves behind RD's relay entry when it lands.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -335,6 +335,10 @@ struct Owner<C: Clock + Clone, R> {
     /// Offered arrivals, by tag.
     offered: HashMap<u64, Offered>,
     serving: HashMap<Session, Serving>,
+    /// Sessions whose Levin handshake has completed ([`Routed::Opened`]).
+    /// The owner sends to no other: a peer still waiting on the
+    /// handshake's reply refuses anything else.
+    opened: HashSet<Session>,
     seats: Option<usize>,
     state_tx: watch::Sender<SyncState>,
     published: Published,
@@ -394,6 +398,7 @@ where
         base,
         offered: HashMap::new(),
         serving: HashMap::new(),
+        opened: HashSet::new(),
         seats: None,
         state_tx,
         published,
@@ -621,15 +626,28 @@ where
 
     fn routed(&mut self, routed: Routed) {
         match routed {
-            Routed::Established { id, connector } => {
+            Routed::Opened { id, connector } => {
                 let session = Session::new(id);
                 let transit = match declaration(connector.column()).transit_ms() {
                     Assessment::Assessed(ms) => Duration::from_millis(u64::from(ms.ms())),
                     Assessment::NotAssessed => Duration::ZERO,
                 };
-                self.event(Event::SessionOpened { session, transit });
+                if self.opened.insert(session) {
+                    self.event(Event::SessionOpened { session, transit });
+                }
             }
             Routed::Claim { id, sync } => self.claim(Session::new(id), sync),
+            Routed::Announce { id, .. }
+            | Routed::MissingTxs { id, .. }
+            | Routed::Message { id, .. }
+                if !self.opened.contains(&Session::new(id)) =>
+            {
+                // Chain-sync traffic before the handshake has completed:
+                // no peer that follows the protocol sends it.
+                let session = Session::new(id);
+                tracing::debug!(%session, "chain-sync traffic before the handshake");
+                self.close(session);
+            }
             Routed::Announce { id, payload } => self.announce(Session::new(id), &payload),
             Routed::MissingTxs { id, payload } => {
                 let session = Session::new(id);
@@ -658,6 +676,7 @@ where
             }
             Routed::Closed { id } => {
                 let session = Session::new(id);
+                self.opened.remove(&session);
                 self.serving.remove(&session);
                 self.door.session_closed(SessionId(session.socket().get()));
                 self.event(Event::SessionClosed { session });
@@ -847,7 +866,12 @@ where
                 return;
             }
         };
-        relay::fan_out(&self.hub, from.map(Session::socket), &bytes);
+        relay::fan_out(
+            &self.hub,
+            self.opened.iter().map(|session| session.socket()),
+            from.map(Session::socket),
+            &bytes,
+        );
     }
 
     fn tip(&mut self, changed: &TipChanged) {

@@ -64,13 +64,20 @@ pub(crate) fn announcement(store: &ChainStore, hash: &BlockHash) -> Result<Optio
     Ok(Some(notify(NOTIFY_NEW_COMPACT_BLOCK, &payload)))
 }
 
-/// Send `bytes` to every established session but `from`. With no `from`
-/// it goes to every established session.
-pub(crate) fn fan_out(hub: &Hub, from: Option<SocketId>, bytes: &[u8]) {
-    for row in hub.board().rows() {
-        if row.established() && Some(row.id()) != from {
+/// Send `bytes` to every opened session but `from`. With no `from` it goes
+/// to every opened session. Opened, not the hub's `established`: an
+/// inbound row is established before its handshake reply is queued, and a
+/// frame ahead of that reply is refused by the peer.
+pub(crate) fn fan_out(
+    hub: &Hub,
+    opened: impl IntoIterator<Item = SocketId>,
+    from: Option<SocketId>,
+    bytes: &[u8],
+) {
+    for id in opened {
+        if Some(id) != from {
             // A refused send is the transport's close, not sync's.
-            let _sent = hub.send(row.id(), bytes.to_vec());
+            let _sent = hub.send(id, bytes.to_vec());
         }
     }
 }

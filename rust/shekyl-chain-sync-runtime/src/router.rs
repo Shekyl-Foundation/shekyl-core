@@ -51,9 +51,12 @@
 //!   chunk, and the split is dropped. Framing does not resume in the middle
 //!   of a bucket.
 //!
-//! [`Post::Established`] and [`Post::Closed`] go to the owner as well as
-//! onward, and [`Post::HandshakeResult`] goes to the owner as a claim and
-//! onward too, so the C++ handler keeps its own copy.
+//! [`Post::Closed`] goes to the owner as well as onward, and
+//! [`Post::HandshakeResult`] goes to the owner as a claim and onward too,
+//! so the C++ handler keeps its own copy. [`Post::Established`] is the
+//! handler's alone: a channel is attached before its Levin handshake.
+//! [`Post::Opened`] is the owner's alone: the handshake has completed,
+//! and only then may the owner speak to the peer.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -71,8 +74,8 @@ pub type Forward = Arc<dyn Fn(Post) + Send + Sync>;
 /// What the router hands the sync owner.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Routed {
-    /// A channel was adopted.
-    Established {
+    /// The session's Levin handshake completed ([`Post::Opened`]).
+    Opened {
         /// The session.
         id: SocketId,
         /// Its connector.
@@ -178,10 +181,9 @@ impl Router {
             Post::Established { id, endpoint } => {
                 self.splits().insert(id, Split::default());
                 (self.forward)(Post::Established { id, endpoint });
-                let _gone = owner.send(Routed::Established {
-                    id,
-                    connector: endpoint.connector(),
-                });
+            }
+            Post::Opened { id, connector } => {
+                let _gone = owner.send(Routed::Opened { id, connector });
             }
             Post::HandshakeResult {
                 id,
@@ -319,6 +321,8 @@ impl Router {
                     cause,
                 });
             }
+            // The owner is gone: nothing opens.
+            Post::Opened { .. } => {}
             other => (self.forward)(other),
         }
     }

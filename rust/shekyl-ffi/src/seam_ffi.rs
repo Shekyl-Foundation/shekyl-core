@@ -836,6 +836,9 @@ fn post_one(bound: &Bound, item: Post) {
                 );
             }
         }
+        // Chain sync's owner's: the router keeps it, and the strand does
+        // not read it.
+        Post::Opened { .. } => {}
         Post::HandshakeResult {
             id,
             connector,

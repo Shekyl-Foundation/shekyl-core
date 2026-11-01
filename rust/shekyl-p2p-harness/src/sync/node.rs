@@ -492,6 +492,8 @@ fn run_stub(hub: &Hub, posts: &mpsc::Receiver<Option<Post>>, log: &Mutex<StubLog
             Post::HandshakeResult { id, .. } => {
                 log.lock().expect("stub log").handshakes.push(id);
             }
+            // The owner's; the router keeps it.
+            Post::Opened { .. } => {}
             Post::Closed { id, cause, .. } => {
                 log.lock()
                     .expect("stub log")

@@ -1769,6 +1769,15 @@ it decided beyond the rows above:
 - **"Established" is the seam's flag.** `p2p_connection_context_t`
   answers `session_established()` from it, which timed sync, the
   double-handshake refusal and epee's post-handshake packet limit read.
+- **A session opens when its handshake has completed, not when it is
+  attached.** The hub posts `Opened` for an outbound row when the
+  dialer marks it established, having read the reply, and for an
+  inbound row when the handler finishes the delivery that carried the
+  handshake, so the handler's reply is already queued. The owner opens
+  the model's session on `Opened`, relays only to opened sessions, and
+  closes a session that sends chain-sync traffic before it. A session
+  opened at attach would send ahead of the reply, and the dialing peer
+  refuses that frame (`LevinHandshakeRejected`).
 
 ## §A. What chain sync needs from the DRS-X entry
 

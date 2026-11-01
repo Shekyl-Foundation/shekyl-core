@@ -67,6 +67,8 @@ struct Conn {
     /// The Levin handshake has finished. Distinct from [`Phase`]: a row can
     /// be open to frames before the handshake, and closed after it.
     established: bool,
+    /// [`Post::Opened`] has been posted for this row.
+    opened: bool,
     /// Unix seconds at admission. The operator view reads this. It is not
     /// the timing engine's tick. Last receive and last send are not on
     /// this row: they are monotonic millisecond instants on the byte path.
@@ -297,7 +299,7 @@ impl Hub {
     /// adopted the channel, recorded the kept session and marked it
     /// established. This notifies the strand. Nothing waits on it. Only a
     /// kept dial is posted: a confirm dial finishes in the dialer.
-    /// It is the first post after `established`, ahead of any frame the
+    /// It follows `established` and `opened`, ahead of any frame the
     /// pump will deliver.
     pub fn post_handshake_result(&self, id: SocketId, connector: ConnectorId, sync: SyncPayload) {
         (self.post)(Post::HandshakeResult {
@@ -451,6 +453,7 @@ impl Hub {
                 phase: Phase::Arming,
                 connection,
                 established: false,
+                opened: false,
                 started_unix: Self::unix_secs(),
                 started_mono: shekyl_transport_layer::monotonic_ms(),
                 notify: Arc::new(tokio::sync::Notify::new()),
@@ -711,14 +714,46 @@ impl Hub {
             }
             return;
         }
-        let mut inner = self.lock();
-        if let Some(conn) = inner.conns.get_mut(&id) {
-            if conn.cause.is_none() && matches!(conn.phase, Phase::Delivering) {
-                conn.phase = Phase::Open;
+        // An inbound row's first delivery finished after the handshake
+        // carried it: the handler's reply is queued, so the session is
+        // opened before the pump is woken for the next frame.
+        let (opened, notify) = {
+            let mut inner = self.lock();
+            match inner.conns.get_mut(&id) {
+                Some(conn) => {
+                    if conn.cause.is_none() && matches!(conn.phase, Phase::Delivering) {
+                        conn.phase = Phase::Open;
+                    }
+                    let inbound = conn.connection.endpoint().direction() == Direction::Inbound;
+                    let opened = if inbound && conn.established && conn.cause.is_none() {
+                        Self::open_once(conn, id)
+                    } else {
+                        None
+                    };
+                    (opened, Some(Arc::clone(&conn.notify)))
+                }
+                None => (None, None),
             }
-            Self::wake_row(conn);
+        };
+        if let Some(post) = opened {
+            (self.post)(post);
+        }
+        if let Some(notify) = notify {
+            notify.notify_one();
         }
         self.wake();
+    }
+
+    /// [`Post::Opened`] for `conn`, the first time only.
+    fn open_once(conn: &mut Conn, id: SocketId) -> Option<Post> {
+        if conn.opened {
+            return None;
+        }
+        conn.opened = true;
+        Some(Post::Opened {
+            id,
+            connector: conn.connection.endpoint().connector(),
+        })
     }
 
     /// One whole message. A buffer that does not fit is not stored.
@@ -792,28 +827,40 @@ impl Hub {
     }
 
     /// The Levin handshake finished. Fires this row's gap sender, if it
-    /// still has one.
+    /// still has one. An outbound row posts [`Post::Opened`] here: the
+    /// dialer read the peer's reply before it kept the session. An inbound
+    /// row posts it when the handler finishes the delivery that carried
+    /// the handshake ([`Self::delivery_finished`]), because the handler
+    /// marks the row established before it queues its reply.
     ///
     /// A missing row, and a row already closed, are left
     /// alone. A close is not a handshake, and the closed row stays until
     /// [`Self::reap`].
     pub fn session_established(&self, id: SocketId) {
-        let sender = {
+        let (sender, opened) = {
             let mut inner = self.lock();
             let mut sender = None;
+            let mut opened = None;
             let mut publish = false;
             if let Some(conn) = inner.conns.get_mut(&id) {
                 if !matches!(conn.phase, Phase::Closed) {
                     conn.established = true;
                     sender = conn.gap.take();
                     publish = true;
+                    let endpoint = conn.connection.endpoint();
+                    if endpoint.direction() == Direction::Outbound {
+                        opened = Self::open_once(conn, id);
+                    }
                 }
             }
             if publish {
                 Self::republish(&mut inner);
             }
-            sender
+            (sender, opened)
         };
+        if let Some(post) = opened {
+            (self.post)(post);
+        }
         if let Some(sender) = sender {
             match sender.send(()) {
                 Ok(()) | Err(()) => {}

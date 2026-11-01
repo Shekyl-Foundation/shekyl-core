@@ -180,9 +180,12 @@ fn attached_routes_sync_and_forwards_one_post_per_chunk() {
         id,
         endpoint: endpoint(),
     });
+    // Attached before the handshake: the handler's, not the owner's.
+    assert!(rx.try_recv().is_err(), "the owner heard of an attach");
+    router.post(Post::Opened { id, connector });
     assert_eq!(
-        rx.try_recv().expect("established"),
-        Routed::Established { id, connector }
+        rx.try_recv().expect("opened"),
+        Routed::Opened { id, connector }
     );
     let sync = SyncPayload {
         current_height: 5,
@@ -237,6 +240,12 @@ fn attached_routes_sync_and_forwards_one_post_per_chunk() {
         .collect();
     assert_eq!(delivers, vec![other_bucket(b"tx")]);
     assert!(matches!(forwarded[1], Post::HandshakeResult { .. }));
+    assert!(
+        !forwarded
+            .iter()
+            .any(|post| matches!(post, Post::Opened { .. })),
+        "the handler was posted the owner's open"
+    );
 }
 
 #[test]
@@ -433,7 +442,7 @@ fn an_attached_router_taps_the_messages_that_carry_a_claim() {
         id,
         endpoint: endpoint(),
     });
-    let _established = rx.try_recv().expect("established");
+    assert!(rx.try_recv().is_err(), "the owner heard of an attach");
     let handshake = invoke(COMMAND_HANDSHAKE, b"handshake-payload");
     let request = invoke(COMMAND_TIMED_SYNC, b"request-payload");
     let reply = response(COMMAND_TIMED_SYNC, b"response-payload");
@@ -518,7 +527,7 @@ fn an_attached_router_hands_an_announcement_to_the_owner() {
         id,
         endpoint: endpoint(),
     });
-    let _established = rx.try_recv().expect("established");
+    assert!(rx.try_recv().is_err(), "the owner heard of an attach");
     let mut chunk = notify(NOTIFY_NEW_COMPACT_BLOCK, b"a block");
     chunk.extend_from_slice(&other_bucket(b"tx"));
     router.post(Post::Deliver {
@@ -552,7 +561,7 @@ fn an_attached_router_hands_a_missing_tx_request_to_the_owner() {
         id,
         endpoint: endpoint(),
     });
-    let _established = rx.try_recv().expect("established");
+    assert!(rx.try_recv().is_err(), "the owner heard of an attach");
     let before = seen.lock().expect("unpoisoned").len();
     router.post(Post::Deliver {
         id,
@@ -589,7 +598,7 @@ fn a_claim_that_precedes_a_kept_message_reaches_the_owner_first() {
         id,
         endpoint: endpoint(),
     });
-    let _established = rx.try_recv().expect("established");
+    assert!(rx.try_recv().is_err(), "the owner heard of an attach");
     let handshake = invoke(COMMAND_HANDSHAKE, b"claim");
     let headers = sync_bucket(SyncCommand::ResponseHeaders, b"headers");
     let mut chunk = handshake.clone();
@@ -643,7 +652,7 @@ fn an_empty_claim_payload_is_still_handed_to_the_owner() {
         id,
         endpoint: endpoint(),
     });
-    let _established = rx.try_recv().expect("established");
+    assert!(rx.try_recv().is_err(), "the owner heard of an attach");
     router.post(Post::Deliver {
         id,
         connector: endpoint().connector(),
