@@ -934,7 +934,11 @@ include_directories(${LIBUNWIND_INCLUDE})
 link_directories(${LIBUNWIND_LIBRARY_DIRS})
 
 if(MSVC)
-  add_definitions("/bigobj /MP /FS /W3 /GS- /D_CRT_SECURE_NO_WARNINGS /wd4996 /wd4345 /D_WIN32_WINNT=0x0600 /DWIN32_LEAN_AND_MEAN /DNOMINMAX /DGTEST_HAS_TR1_TUPLE=0 /FIinline_c.h /D__SSE4_1__ /Zc:preprocessor")
+  # No `/GS-`: the compiler's stack-buffer security checks stay on in every
+  # C++ object the Rust `shekyld` links (DAEMON_CONFIG_CUTOVER.md DC-Q21,
+  # §3.8 of the Rust-binary PR). The flag was inherited; nothing measured
+  # a need for it.
+  add_definitions("/bigobj /MP /FS /W3 /D_CRT_SECURE_NO_WARNINGS /wd4996 /wd4345 /D_WIN32_WINNT=0x0600 /DWIN32_LEAN_AND_MEAN /DNOMINMAX /DGTEST_HAS_TR1_TUPLE=0 /FIinline_c.h /D__SSE4_1__ /Zc:preprocessor")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /FIiso646.h")
   # set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /Dinline=__inline")
   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /STACK:10485760")
