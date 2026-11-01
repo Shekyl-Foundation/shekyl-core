@@ -60,6 +60,10 @@ until slice 4".*
 
 **UNFREEZE (Rick, 2026-10-19):** src/p2p/net_node.h — with the above: the `post_each` and `for_connection` declarations take a callback of the connection alone; the connection's `support_flags`, the zone config's `m_support_flags`, the 1007 handler's map entry and the two support-flags declarations are deleted.
 
+**UNFREEZE (Rick, 2026-11-01):** src/cryptonote_protocol/cryptonote_protocol_handler.inl — the score arguments the deleted automatic ban read are deleted (#1250): every drop site calls `drop_connection(context, flush_all_spans)` in place of `drop_connection(context, add_fail, flush_all_spans)` or `drop_connection_with_score(context, score, flush_all_spans)`, the scored overload is deleted, and the drop's debug line no longer prints a score. No drop site is added or removed.
+
+**UNFREEZE (Rick, 2026-11-01):** src/cryptonote_protocol/cryptonote_protocol_handler.h — `drop_connection` is declared as `(context, flush_all_spans)` with its definition, and `drop_connection_with_score`'s declaration is deleted (#1250).
+
 **UPDATE 2026-10-09 (Rick):** `COMMAND_HANDSHAKE` carries no address
 field on any connector (the handshake-address ruling below, which
 replaces "The address we announce"); `disclose_count` is the protocol
