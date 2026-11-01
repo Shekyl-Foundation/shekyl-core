@@ -211,8 +211,10 @@ pub enum Command<K> {
     Relay {
         /// The block.
         hash: BlockHash,
-        /// The session that supplied it.
-        from: K,
+        /// The session that supplied it. `None` is a tip no session
+        /// supplied, such as a block this node mined: it goes to every
+        /// established session.
+        from: Option<K>,
     },
     /// An announce is missing transactions.
     RequestMissingTxs {

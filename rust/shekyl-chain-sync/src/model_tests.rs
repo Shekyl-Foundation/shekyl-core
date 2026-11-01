@@ -363,8 +363,15 @@ fn a_tip_is_read_from_the_chain() {
         &mut out,
     )
     .expect("the view answers");
-    // The local chain is the best chain, so the state stays synced.
-    assert!(out.is_empty());
+    // The local chain is the best chain, so the state stays synced. No
+    // session supplied the new tip, so it relays to every session.
+    assert!(
+        matches!(
+            out.as_slice(),
+            [Command::Relay { hash, from: None }] if *hash == BlockHash::from_bytes([1; 32])
+        ),
+        "{out:?}"
+    );
     assert_eq!(sync.state(), SyncState::Synced);
 }
 

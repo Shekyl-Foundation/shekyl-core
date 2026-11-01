@@ -45,8 +45,9 @@
 //!   connected as the new tip while this node, with it, is not `Behind`,
 //!   however it arrived. The owner builds that compact announcement (the
 //!   block and its witness, no transactions) and sends it as 2008 to every
-//!   established session but the one that supplied it. That send moves
-//!   behind RD's relay entry when it lands.
+//!   established session but the one that supplied it. A block no session
+//!   supplied, such as one this node mined, goes to every established
+//!   session. That send moves behind RD's relay entry when it lands.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
@@ -769,8 +770,9 @@ where
 
     /// Relay a block the model relays (module docs): the block with its
     /// witness and no transactions, as 2008, to every established session
-    /// but `from`, its supplier.
-    fn relay(&mut self, hash: BlockHash, from: Session) {
+    /// but `from`, its supplier. A block no session supplied, such as one
+    /// this node mined, goes to every established session.
+    fn relay(&mut self, hash: BlockHash, from: Option<Session>) {
         let bytes = match relay::announcement(&self.store, &hash) {
             Ok(Some(bytes)) => bytes,
             Ok(None) => {
@@ -786,7 +788,7 @@ where
                 return;
             }
         };
-        relay::fan_out(&self.hub, from.socket(), &bytes);
+        relay::fan_out(&self.hub, from.map(Session::socket), &bytes);
     }
 
     fn tip(&mut self, changed: &TipChanged) {
@@ -1091,8 +1093,9 @@ fn proved_kind(proved: &Proved) -> &'static str {
 /// `solicited` is a body this node requested. A bound body is; an
 /// announcement is not. `arrival` is the block the offer named, and it is
 /// absent when that offer is already gone. A switch is a connect when
-/// `arrival` is the promoted tip, and [`Outcome::Noted`] otherwise: the
-/// model has one relay path, and the reply carries no second one.
+/// `arrival` is the promoted tip, and [`Outcome::Noted`] otherwise. A
+/// promoted tip that is some other block has no supplier this offer can
+/// name; the model relays it from the tip event.
 fn outcome_of(reply: Reply, solicited: bool, arrival: Option<BlockHash>) -> Outcome {
     let action = sync_reply(&reply).action(solicited);
     match (action, reply) {

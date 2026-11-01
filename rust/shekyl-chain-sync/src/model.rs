@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
-use shekyl_chain_rules::{AtHeight, HeaderView, RuleSet, Trust};
+use shekyl_chain_rules::{AtHeight, HeaderView, RuleSet, Tip, Trust};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_draw_rng::{bounded_uniform, RelayRng};
 use shekyl_levin::{RequestHeaders, BODIES_RESPONSE_BYTES, HEADERS_RESPONSE_BYTES};
@@ -262,10 +262,66 @@ where
         !beneath && !matches!(self.state_at(with_it), SyncState::Behind { .. })
     }
 
+    /// Whether a new tip relays from the tip event (CS-Q2 step 7). A tip
+    /// the model offered relays from the entry's reply, which names its
+    /// supplier: it is in `accepted` once that reply came, and in
+    /// `outstanding` while it is still awaited. Any other new tip, such as
+    /// a block this node mined, has no supplier and relays here. It is
+    /// judged against the tip before this one, as the entry's reply is.
+    /// The first tip observed is the chain the node opened on, not a new
+    /// block, and relays nothing.
+    ///
+    /// # Errors
+    ///
+    /// The main view's own fault.
+    fn relays_tip<'id, H: HeaderView<'id>>(&self, main: &H, tip: Tip) -> Result<bool, H::Fault> {
+        let Some(prior) = self.local else {
+            return Ok(false);
+        };
+        if prior.hash == tip.hash
+            || self.accepted.contains(&tip.hash)
+            || self.outstanding.contains(tip.hash)
+        {
+            return Ok(false);
+        }
+        let AtHeight::Recorded(record) = main.header_at(tip.height)? else {
+            return Ok(false);
+        };
+        Ok(record.hash == tip.hash
+            && self.relays(tip.hash, tip.height, record.cumulative_difficulty))
+    }
+
     /// Whether the store's latch is set. It does not withhold [`SyncState::Synced`].
     #[must_use]
     pub const fn alarm(&self) -> bool {
         self.alarm
+    }
+
+    /// Whether sync is stalled (CS-5 F5): the node is `Behind`, and nothing
+    /// is moving toward `H*`. No header or body request is in flight, no
+    /// proof is running, and the entry holds and awaits nothing. Planning
+    /// ran at the end of the last event and issued nothing, so no
+    /// session's claim or frontier covers what is wanted.
+    ///
+    /// A stall is a scheduling fact beside the state, not a state: the
+    /// state stays `Behind`, which is what the miner and the relay read.
+    /// The entry's own refusals are not a stall: an unreadable store, and
+    /// seats not yet reported or spent, stop planning for the node's own
+    /// reason. A new claim or frontier clears it on its next event.
+    #[must_use]
+    pub fn stalled(&self) -> bool {
+        matches!(self.state(), SyncState::Behind { .. })
+            && !self.unreadable
+            && self.seats.is_some_and(|seats| seats > 0)
+            && self.header_request.is_none()
+            && self.held.is_empty()
+            && self.outstanding.is_empty()
+            && self.peers.values().all(|peer| {
+                peer.follow_up.is_none()
+                    && peer.span.is_none()
+                    && peer.announced.is_empty()
+                    && peer.run.as_ref().is_none_or(|run| run.proof().is_none())
+            })
     }
 
     /// `H*`: the hash and the work selection last chose.
@@ -457,9 +513,16 @@ where
             }
             Event::SessionClosed { session } => self.release_session(session),
             Event::Tip { tip } => {
+                let relay = self.relays_tip(main, tip)?;
                 self.observe(main, Some(tip.height))?;
                 self.tree.connected(main, tip.height)?;
                 self.prune_served();
+                if relay {
+                    out.push(Command::Relay {
+                        hash: tip.hash,
+                        from: None,
+                    });
+                }
             }
             Event::Latch { set } => self.alarm = set,
             Event::Fill { frontier } => self.fill_frontier = frontier,

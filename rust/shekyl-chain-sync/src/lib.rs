@@ -39,6 +39,8 @@ mod scaling_tests;
 mod scenarios;
 #[cfg(test)]
 mod select_tests;
+#[cfg(test)]
+mod stall_tests;
 
 mod arrivals;
 mod branch;

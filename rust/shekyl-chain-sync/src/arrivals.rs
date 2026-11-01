@@ -70,7 +70,6 @@ impl<K: Copy + Eq> Offered<K> {
     }
 
     /// Nothing is with the entry.
-    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.by_tag.is_empty()
     }

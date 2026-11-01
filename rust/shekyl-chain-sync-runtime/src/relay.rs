@@ -6,8 +6,9 @@
 //! A relayed tip as a compact announcement (2008).
 //!
 //! The block and its attestation witness, and no transactions. The owner
-//! sends that announcement to every established session but the supplier.
-//! The model has already decided that the block is relayed.
+//! sends that announcement to every established session but the supplier,
+//! and to every established session when no session supplied it. The model
+//! has already decided that the block is relayed.
 
 use shekyl_chain_rules::AtHeight;
 use shekyl_chain_store::store::{ChainStore, StoreError};
@@ -63,10 +64,11 @@ pub(crate) fn announcement(store: &ChainStore, hash: &BlockHash) -> Result<Optio
     Ok(Some(notify(NOTIFY_NEW_COMPACT_BLOCK, &payload)))
 }
 
-/// Send `bytes` to every established session but `from`.
-pub(crate) fn fan_out(hub: &Hub, from: SocketId, bytes: &[u8]) {
+/// Send `bytes` to every established session but `from`. With no `from`
+/// it goes to every established session.
+pub(crate) fn fan_out(hub: &Hub, from: Option<SocketId>, bytes: &[u8]) {
     for row in hub.board().rows() {
-        if row.established() && row.id() != from {
+        if row.established() && Some(row.id()) != from {
             // A refused send is the transport's close, not sync's.
             let _sent = hub.send(row.id(), bytes.to_vec());
         }

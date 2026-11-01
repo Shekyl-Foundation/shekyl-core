@@ -49,7 +49,7 @@ where
                 if self.relays(hash, height, arrival.header.cumulative_difficulty()) {
                     out.push(Command::Relay {
                         hash,
-                        from: session,
+                        from: Some(session),
                     });
                 }
             }
