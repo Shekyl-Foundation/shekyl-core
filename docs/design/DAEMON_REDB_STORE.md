@@ -1187,7 +1187,7 @@ connect (the hazard `blockchain.cpp:2735` warns about in prose).
   `tx_count()` (the dense authority, `txs_pruned.len()`); `tx_archival_good`'s
   inner `ArchivalGood { Retained { prunable, pqc_auths }, Discarded }` is
   §7.7 leg (iii) read back as `PDM-Q6`'s one unit (a half-held good is
-  SI-42, `DRS-SB` SB-Q2), and `skeleton_of(&TxRecord)` is the tree's one
+  SI-42, `DRS-SB` SB-Q2), and `TxRecord::skeleton_of` is the tree's one
   skeleton constructor;
   `tx_locations(RangeInclusive<LmdbHashKey>)` walks `tx_indices` in its own key order.
   The shared body is `store/tx_reads.rs`, the third sibling of
@@ -1374,7 +1374,7 @@ flowchart TD
   B[DRS-B Path B Rust consumers]
   MAT[DRS-MAT wallet e2e matrix LMDB x redb]
   X[DRS-X deletion register + unlink LMDB if D2 closed]
-  SB[DRS-SB the daemon below the body horizon — skeleton form, archived slot, refusals, re-tenses; SB-Q2]
+  SB[DRS-SB the daemon below the body horizon — skeleton form, archived slot, refusals, re-tenses; SB-Q2 landed, Round 0 closed]
   G{D2 closed?}
   G1[Genesis redb-only]
   G2[Genesis LMDB + surfaces]
@@ -1418,7 +1418,7 @@ flowchart TD
 | **DRS-MAT** | Wallet Phase 6a / Track-2 as **LMDB×redb CI matrix** from first redb read path | During shadow | Continuous discharge (E-8), not a late phase |
 | **DRS-B** | Path B consumers | Replaced by [`DRS_X_STORE_FLIP.md`](DRS_X_STORE_FLIP.md) (DRS-X Round 0, ruled 2026-10-16) | No façade under `Blockchain` (DX-Q1): the C++ consumers that survive the flip — the protocol handler and `levin_notify` — call a thin `core` shell (DEL-002) that forwards to Rust, and their owners (chain sync, RD) delete it. |
 | **DRS-X** | **The store flip** | Ruled: [`DRS_X_STORE_FLIP.md`](DRS_X_STORE_FLIP.md) (Round 0, Rick 2026-10-16, DX-Q1…DX-Q9) | Six PRs (DX-Q7): PR-b (the Rust pool), PR 2 (router, arrival entry, `TipChanged`, hasher budget), PR 3 (Rust RPC handlers, miner loop), PR 3n (`shekyl-node`, the daemon's one Node, built at start and unrouted, N1), PR 3b (the handlers over the pool, the router and the node), then the flip, which deletes LMDB, `Blockchain`, `tx_memory_pool`, the C++ RPC server whole (DX-Q3) and DEL-004/008/009/010's C++, gated by DX-Q8's divergence register. DEL-008's gate holds at genesis (Rick, 2026-10-18): Slice C's admission rows implemented, CEN-J8–J10 retired, the draw live; until then testnet archival runs on the Rust path as it stands, carriers included. |
-| **DRS-SB** | **The daemon below the body horizon** — the below-horizon read contract: the skeleton as the one pruned form on every surface, the `archived` slot for a full-form request past the horizon, the operator refusals, and the re-tenses of the statements that described the discard as pending. Ruled in [`DRS_SB_BELOW_HORIZON.md`](DRS_SB_BELOW_HORIZON.md) (`SB-Q1`…`SB-Q8`, RULED 2026-10-31; register §3). The discard itself is **built**: S-PRUNE (2026-09-25, `rust/shekyl-chain-store/src/store/prune.rs`) is `PDM-Q2`'s predicate, uniform under `PDM-Q9`, and is not rebuilt here (`SB-Q1`). Node added 2026-10-10 as *set-B discard*; re-scoped 2026-10-31. | **After X, before the next release cut** — the code increment (`SB-Q2`, Brief B) lands after #1212 merges and before the next release cut, because a long-lived testnet closes real shards and runs real discards; **genesis does not precede it** (`PDM-Q-S0`). | Replaces nothing in C++: the inherited `prune_worker` engine was deleted 2026-09-21 (§3.5's UPDATE), and the C++ serve-credit leaf read deletes at X (`DEL-008`), so the discard and that read are never live together (`PDM-Q3`). The store carries **no node-variable content, before or after the discard** (§11.2; `SB-F1`): every daemon's store is identical below the horizon at the same tip. The §7 graph places this node between `DRS-X` and the D2 diamond, so neither genesis is reachable without it. |
+| **DRS-SB** | **The daemon below the body horizon** — the below-horizon read contract: the skeleton as the one pruned form on every surface, the `archived` slot for a full-form request past the horizon, the operator refusals, and the re-tenses of the statements that described the discard as pending. Ruled in [`DRS_SB_BELOW_HORIZON.md`](DRS_SB_BELOW_HORIZON.md) (`SB-Q1`…`SB-Q8`, RULED 2026-10-31; register §3). **`SB-Q2`'s code increment landed on #1239 (Brief B):** `TxRecord::skeleton_of` is the store's one constructor and `ArchivalGood` its one read; every RPC chain entry under `prune` is the skeleton with `pqc_auth_hash`, a full-form request past the horizon answers `archived { shard }` per slot (`tx.pruned_here` deleted; `get_blocks_by_height.bin` takes `prune` and no longer fails a height for an archived body); the wallet's refresh, tx proofs and P-scan all fetch with `prune` and bind through `SkeletonTx::bind` into `BoundTx` (`TxBodyForm`, `parse_full_tx`, `is_storage_pruned_spend`, `fetch_scannable_block_full` and `Transaction::hash_with_supplied_prunable` deleted); IG Part C carries the rows and §5 the two REJECTED flags; the falsifier is one live-lane test over a real chain whose connect discarded shard 0 (`shekyl-chain-ingest` `rpc_store_facts_tests/below_horizon.rs`). What remains on the node: nothing owed to code; `SB-Q7`'s gate opens when that test and the IG rows are green on `dev`. The discard itself is **built**: S-PRUNE (2026-09-25, `rust/shekyl-chain-store/src/store/prune.rs`) is `PDM-Q2`'s predicate, uniform under `PDM-Q9`, and is not rebuilt here (`SB-Q1`). Node added 2026-10-10 as *set-B discard*; re-scoped 2026-10-31. | **Landed on #1239 (after X, 2026-11)** — the code increment (`SB-Q2`, Brief B) landed after #1212 merged and before the next release cut, because a long-lived testnet closes real shards and runs real discards; **genesis does not precede it** (`PDM-Q-S0`). | Replaces nothing in C++: the inherited `prune_worker` engine was deleted 2026-09-21 (§3.5's UPDATE), and the C++ serve-credit leaf read deletes at X (`DEL-008`), so the discard and that read are never live together (`PDM-Q3`). The store carries **no node-variable content, before or after the discard** (§11.2; `SB-F1`): every daemon's store is identical below the horizon at the same tip. The §7 graph places this node between `DRS-X` and the D2 diamond, so neither genesis is reachable without it. |
 
 ### 7.1 DRS-P0 — multi-PR envelope (honest “one audit pass”)
 
@@ -2078,8 +2078,8 @@ each piece lands.
 
 **Three pieces, four crates, one deadline.** The field alone was
 insufficient, twice over. `Transaction::hash_with_supplied_prunable`
-exists because a pruned body has no prunable region to hash, and it had no
-`pqc_auths` twin — a node discarding `pqc_auths` under Q6 item 2 could not
+(the one-supplied form, deleted with `SB-Q2`) existed because a pruned body
+has no prunable region to hash, and it had no `pqc_auths` twin — a node discarding `pqc_auths` under Q6 item 2 could not
 compute a txid even holding the persisted digest. And the pre-#768 form
 derived the txid's arity from `pqc_auths.is_empty()` on the body in hand
 (`transaction.rs`, then `hash_with_prunable`): a **band-1 skeleton (F28) holds
@@ -2103,9 +2103,10 @@ not there. What was owed, and where each piece stands:
 2. **The two-supplied txid form on `Transaction`** — one entry point that
    takes `pqc_auth: Option<PqcAuthHash>` and `prunable: PrunableHash` and
    yields the txid with the arity read off `pqc_auth.is_some()`, of which
-   `hash()` (both computed) and `hash_with_supplied_prunable` (one
-   supplied) are the special cases, all sharing one body so no two paths
-   can hash one transaction two ways; plus the `pqc_auth_hash()` accessor
+   `hash()` (both computed) is the special case — the one-supplied
+   `hash_with_supplied_prunable` was deleted with `SB-Q2`, the skeleton
+   being the only pruned form — all sharing one body so no two paths can
+   hash one transaction two ways; plus the `pqc_auth_hash()` accessor
    `validate` reads. KAT'd against `hash()` on a full body **and** on a
    skeleton (prefix + base only, both components supplied). Written for
    the S-CHAIN-R lane; **LANDED 2026-09-17 on PR #768 instead**, with
@@ -2139,9 +2140,9 @@ not there. What was owed, and where each piece stands:
    moves with it.
 
 **Precedent, stated exactly.** Reconstruct-from-stored-digest exists
-**once** in this tree — `hash_with_supplied_prunable`, a stored 32-byte
-digest standing in for a body the node does not hold — and item 2 is its
-second application. `get_pruned_transaction_weight`
+**once** in this tree — `hash_with_supplied_components`, stored 32-byte
+digests standing in for regions the node does not hold — and item 2 is its
+`pqc_auths` application. `get_pruned_transaction_weight`
 (`src/cryptonote_basic/cryptonote_format_utils.cpp:336`) is a *sibling*
 shape, not the same one: it reconstructs weight from **retained metadata**
 — it serialises the pruned body and adds deterministic sizes,
