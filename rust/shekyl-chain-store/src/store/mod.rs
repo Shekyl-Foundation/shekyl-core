@@ -349,7 +349,29 @@ impl ChainStore {
                 }
             },
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                let db = builder.open(path).map_err(EngineError::Open)?;
+                let db = match builder.open(path) {
+                    Ok(db) => db,
+                    Err(refused) => {
+                        // A cut before the engine finished initializing:
+                        // the file is empty or its magic is unwritten
+                        // (`crate::creation`). Claimed and emptied, it is
+                        // created and sealed as a fresh file would be.
+                        let Some(file) =
+                            crate::creation::take_unfinished_init(path).map_err(|e| {
+                                EngineError::Open(redb::DatabaseError::Storage(e.into()))
+                            })?
+                        else {
+                            return Err(EngineError::Open(refused).into());
+                        };
+                        let fresh = create_sealed(&builder, file, apply_policy, epoch)?;
+                        return Ok(Self {
+                            backend: Backend::Writable(fresh.0),
+                            apply_policy,
+                            horizons,
+                            shared: Shared::new(fresh.1),
+                        });
+                    }
+                };
                 // `create_file` commits an empty database before the seal's
                 // transaction commits, so a power loss between the two
                 // leaves a valid file with no table at all (PB-S2's first
@@ -358,7 +380,7 @@ impl ChainStore {
                 // so the creation is finished here: sealed in place, as
                 // `create_sealed` would have. A file with any table and no
                 // seal is still refused by `verify`.
-                let provenance = if creation_interrupted(&db)? {
+                let provenance = if crate::creation::no_table(&db)? {
                     seal_new(&db, apply_policy, epoch)?
                 } else {
                     header::verify(&db.begin_read().map_err(EngineError::BeginRead)?, epoch)?
@@ -738,23 +760,6 @@ fn seal_new(
     let provenance = header::seal(&txn, policy, epoch)?;
     txn.commit().map_err(EngineError::Commit)?;
     Ok(provenance)
-}
-
-/// The file holds no table at all: the engine's first commit and nothing
-/// after it, which is a creation stopped before its seal.
-fn creation_interrupted(db: &Database) -> Result<bool, StoreError> {
-    let txn = db.begin_read().map_err(EngineError::BeginRead)?;
-    let none = txn
-        .list_tables()
-        .map_err(EngineError::Storage)?
-        .next()
-        .is_none()
-        && txn
-            .list_multimap_tables()
-            .map_err(EngineError::Storage)?
-            .next()
-            .is_none();
-    Ok(none)
 }
 
 #[cfg(test)]

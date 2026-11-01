@@ -92,14 +92,24 @@ pub(super) fn open_or_create(path: &Path) -> Result<(Database, PoolOpen), StoreE
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
             let db = match builder.open(path) {
                 Ok(db) => db,
-                Err(e) if open_is_foreign(&e) => return Err(StoreCannot::PoolFileForeign.into()),
+                Err(e) if open_is_foreign(&e) => {
+                    // A cut before the engine finished initializing: empty,
+                    // or the magic unwritten (`crate::creation`). Claimed
+                    // and emptied, it is sealed as a fresh file would be.
+                    return match crate::creation::take_unfinished_init(path).map_err(io_open)? {
+                        Some(file) => {
+                            seal_fresh(&builder, file, path).map(|db| (db, PoolOpen::Finished))
+                        }
+                        None => Err(StoreCannot::PoolFileForeign.into()),
+                    };
+                }
                 Err(e) => return Err(EngineError::Open(e).into()),
             };
             // `create_file` commits an empty database before the seal does;
             // a power loss between them leaves a file with no table at all.
             // This open holds the engine's exclusive lock, so it finishes
             // the creation in place. Any table without a seal is refused.
-            if creation_interrupted(&db)? {
+            if crate::creation::no_table(&db)? {
                 seal(&db)?;
                 return Ok((db, PoolOpen::Finished));
             }
@@ -232,23 +242,6 @@ fn seal(db: &Database) -> Result<(), StoreError> {
     }
     txn.commit().map_err(EngineError::Commit)?;
     Ok(())
-}
-
-/// The file holds no table at all: the engine's first commit and nothing
-/// after it, which is a creation stopped before its seal.
-fn creation_interrupted(db: &Database) -> Result<bool, StoreError> {
-    let txn = db.begin_read().map_err(EngineError::BeginRead)?;
-    let none = txn
-        .list_tables()
-        .map_err(EngineError::Storage)?
-        .next()
-        .is_none()
-        && txn
-            .list_multimap_tables()
-            .map_err(EngineError::Storage)?
-            .next()
-            .is_none();
-    Ok(none)
 }
 
 /// Read the header of an existing file, and — at the current version —

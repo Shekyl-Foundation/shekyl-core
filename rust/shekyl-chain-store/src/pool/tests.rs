@@ -565,3 +565,27 @@ fn a_creation_cut_off_before_its_seal_is_finished_by_the_next_open() {
     assert_eq!(how, PoolOpen::Opened);
     drop(std::fs::remove_file(&path));
 }
+
+/// The two shapes a power loss leaves before the engine has finished
+/// initializing the pool file: empty, and a header with its magic
+/// unwritten. Each is finished by the next open (`crate::creation`). Red
+/// edit: drop the `take_unfinished_init` arm from `open_or_create`, and
+/// both are refused as `PoolFileForeign`.
+#[test]
+fn a_file_the_engine_never_finished_initializing_is_created_by_the_next_open() {
+    let empty = tmp("empty-at-path");
+    std::fs::write(&empty, b"").unwrap();
+    let unwritten = tmp("magic-unwritten");
+    let mut header = vec![0u8; 1 << 20];
+    header[9..16].copy_from_slice(&[4, 0, 0, 0, 0x10, 0, 0]);
+    std::fs::write(&unwritten, &header).unwrap();
+    for path in [&empty, &unwritten] {
+        let (store, how) = PoolStore::create(path)
+            .unwrap_or_else(|e| panic!("{}: finished: {e:?}", path.display()));
+        assert_eq!(how, PoolOpen::Finished, "{}", path.display());
+        drop(store);
+        let (_store, how) = PoolStore::create(path).unwrap();
+        assert_eq!(how, PoolOpen::Opened, "{}", path.display());
+        drop(std::fs::remove_file(path));
+    }
+}
