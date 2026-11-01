@@ -466,12 +466,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Daemon chain store (`DRS-*`) — gap-close pass landed in design.** SoT: [`docs/design/DAEMON_REDB_STORE.md`](./design/DAEMON_REDB_STORE.md)
   - Target: pre-genesis
 
-- **`txs` is a zero-write, zero-read LMDB table (P0b DRS-W4).** Handle's only occurrence is its `open()`; inherited-dead deletion candidate — C++ + schema-version change, census/DRS lane owns ([audit §9](LMDB_WRITE_ATOMICITY_AUDIT.md))
-  - Target: pre-genesis
-
-- **`hf_starting_heights` deleted at every writable `open()` (P0b DRS-W5).** `mdb_drop(…,1)` at `db_lmdb.cpp:1779`, never re-created — macro table structurally absent at runtime; feeds census R4 ([audit §9](LMDB_WRITE_ATOMICITY_AUDIT.md))
-  - Target: pre-genesis
-
 - **DRS-BENCH — resource/privacy/IBD/pop suite (not throughput).** File
   - Target: pre-genesis
 
@@ -993,10 +987,6 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
   - Owner: [`CXX_VERSION_GATES.md`](design/CXX_VERSION_GATES.md) §4
 
-- **LMDB still declares `hf_versions` and `hf_starting_heights`; nothing reads them, and the only write is the inherited drop of `hf_starting_heights` at every writable open (DRS-W5).** The hard-fork mechanism that used them is deleted (2026-10-08, [`CXX_VERSION_GATES.md`](design/CXX_VERSION_GATES.md) §5). The declarations stay because of a name collision. The redb store's schema and digest domain are defined against the LMDB table list (`check_redb_schema_bijection.py`, `check_redb_schema_key_types.py`, the accumulator class table), and the redb store has its own `hf_versions`: the rule set in force per height (CEN-B3's belt, value `RuleSetInForce`), which is Shekyl's design and stays (RULED 2026-10-08, Rick). Monero's fork table and that table share a name and a schema row, so dropping the LMDB declaration would eject the redb table from the digest domain. The fix is DRS's: rename the redb table to what its codec already calls it, `rule_set_in_force`, give it its own digest-domain row, and drop both LMDB declarations; the redb `hf_starting_heights` definition (dead, no rows) goes with them. Blocker: the redb cutover owns the digest domain. Falsify by: `git grep -n 'hf_versions\|hf_starting_heights' src/` empty, and no table named `hf_versions` in `rust/shekyl-chain-store/src/schema.rs`.
-  - Target: pre-genesis
-  - Owner: [`DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md) (DRS-W5, DRS-W15)
-
 - **Measure BP+ verification across padded output counts (2, 4, 8, 16) and set it against `bp_plus_weight_clawback`'s curve — the dimension the clawback prices is unmeasured.** The I4 round varied inputs at two outputs, where the clawback is zero, so it shows BP+ is input-independent and nothing about the output dimension (evidence: [`CHAIN_RULES_SLICE_7.md`](completed/CHAIN_RULES_SLICE_7.md) §3.10). Then one of three: keep with a recorded reason, replace with a term that prices what Shekyl's verifier pays, or delete. Falsify by: the measurement recorded and a sentence at `bp_plus_weight_clawback`'s doc stating the reason, or the clawback's removal, either with the census H-row that owns tx weight updated.
   - Target: pre-genesis
   - Owner: [`CONSENSUS_RULE_CENSUS.md`](design/CONSENSUS_RULE_CENSUS.md) — tx weight is a census operand (CEN-H1, CEN-F14); found by [`CHAIN_RULES_SLICE_7.md`](completed/CHAIN_RULES_SLICE_7.md) §3.10
@@ -1444,10 +1434,6 @@ Default. Lands before genesis if it should exist at launch.
 
 - **A body response is decoded up to the packet cap before the 8 MiB budget is charged.** `CAP_RESPONSE_BODIES` is the packet (`DEFAULT_MAX_PACKET_SIZE`). The form rule then charges `BODIES_RESPONSE_BYTES`. A peer can make a receiver decode a packet-sized payload before the session closes. A derived decode cap is the larger of the largest legal body and `BODIES_RESPONSE_BYTES`, plus the two hash lists, and it needs the consensus upper bound on a body's bytes. That bound is CS-2's or the cutover's. Falsify by `CAP_RESPONSE_BODIES` in `rust/shekyl-levin/src/payload/sync.rs` no longer equalling `DEFAULT_MAX_PACKET_SIZE`.
   - Owner: [`P2P_3_CHAIN_SYNC_BRIEF.md`](design/P2P_3_CHAIN_SYNC_BRIEF.md) CS-Q3
-  - Target: pre-genesis
-
-- **Catalogue rows for a REJECTED post kind and a renamed one — `archival_bond_holdings_update_log` (#30), `archival_bond_unbond_log` (#29)** (surfaced 2026-09-22 by the `PDM-Q9` amendment striking `HoldingsUpdate`; owner **DRS**). `HoldingsUpdate` was REJECTED 2026-09-20 (immutable bond; FFI deleted) and `Unbond` is `Release`'s old name, yet both tables stand in the redb catalogue (`schema.rs`) and the LMDB X-macro. Rule 23: REJECTED leaves zero code symbols. Deletion is a layout bump on both stores (the ordinals after #29 shift). The layout increments since 2026-09-22 (`SCHEMA_VERSION` is 25) did not take it, so it is re-triggered on the store flip: the LMDB half leaves with LMDB in the flip PR (DRS-X, R2 — `DAEMON_REDB_STORE.md` §15), and the redb half is deleted in that PR or the PR rejects this row with reasoning. Falsify by `rg 'holdings_update_log|unbond_log' rust/shekyl-chain-store/src/schema.rs` matching after that increment.
-  - Owner: [`DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md) §7
   - Target: pre-genesis
 
 - **Rename the curve tree's own segment so it cannot read as a shard: `SEGMENT_LAYER_J` → `TREE_SEGMENT_LAYER`, `leaves_per_segment()` → `leaves_per_tree_segment()`, `SegmentId` → `TreeSegmentId`, the freeze tier's names following the prefix, with `check_segment_freeze_sites.sh` and `check_consensus_invariants.sh` updated in the same commit (names approved 2026-10-04; behaviour-identical, tests unchanged; falsify by `rg 'SEGMENT_LAYER_J|leaves_per_segment\b' rust/ scripts/` returning a hit after it lands).**

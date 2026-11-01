@@ -104,7 +104,7 @@ DRS-D12 — no store handle by construction).
 | Phantom tables in schema/audit | **none** (P0a). At the pin: `staker_accrual`, `staker_claims` — **0** hits in `db_lmdb.{h,cpp}`; their sections died with the claim-era wire deletion, and the gate's ghost leg refuses their return |
 | `m_db->` sites / distinct methods | **253** in `blockchain.cpp`; **97** distinct methods (same 97 across all files — no extra methods outside that vocabulary) |
 | Atomicity audit | **rewritten by P0b (2026-09-05)** — covers all **declared** tables (matrix gate-pinned; declared, not runtime — DRS-W5 records that a writable `open()` deletes `hf_starting_heights`, leaving 46), all **three** prune shapes — one atomic, two checkpointed — and the store lifecycle (`open()`, `reset()`, `migrate()`); was: 183 lines, April 2026, **0** archival hits vs **702** in `db_lmdb.cpp` (22 of the live tables post-dated it) |
-| Hardfork pop | **UPDATE 2026-10-08:** `HardFork` and the `set`/`get` interface are deleted; LMDB's `hf_versions` has no writer and no reader, and stays declared only because this store's schema is defined against the LMDB table list ([`CXX_VERSION_GATES.md`](CXX_VERSION_GATES.md) §5). **UPDATE 2026-10-06:** `on_block_popped` and the reorg rescan are deleted with the vote window, so nothing reads `hf_versions` above the tip. `HardFork::add` still writes the scheduled version on connect. The interface still has **set/get only**, no delete (`blockchain_db.h:1938,1947`); the row goes with the class |
+| Hardfork pop | **Closed:** the C++ hard-fork mechanism and LMDB left with the flip, and this store's table of the rule set in force per height is `rule_set_in_force` (layout 34; it was `hf_versions`, a name it shared with Monero's fork table). **UPDATE 2026-10-08:** `HardFork` and the `set`/`get` interface are deleted ([`CXX_VERSION_GATES.md`](CXX_VERSION_GATES.md) §5). **UPDATE 2026-10-06:** `on_block_popped` and the reorg rescan are deleted with the vote window, so nothing reads `hf_versions` above the tip. `HardFork::add` still writes the scheduled version on connect. The interface still has **set/get only**, no delete (`blockchain_db.h:1938,1947`); the row goes with the class |
 
 ### Oracles of record — status
 
@@ -784,7 +784,7 @@ outcome likelier rather than less.
 **The three tables ruled not-to-port do not touch this vocabulary — derived,
 not assumed.** `txs_prunable_tip` (deleted from both stores 2026-09-22, v15/v10),
 `txs` and `hf_starting_heights` are ruled out
-of the Rust store (E1's target is 46 tables, not 49). **Zero** of the 102
+of the Rust store (both left its catalogue at layout 34). **Zero** of the 102
 methods names any of them: they are reached only through
 `BlockchainLMDB::add_transaction_data`, `remove_transaction_data`,
 `prune_worker`, `open` and `drop_hard_fork_info`, none of which is in
@@ -1173,8 +1173,9 @@ connect (the hazard `blockchain.cpp:2735` warns about in prose).
 - **The chain table set exists from the seal** (amendment A2), so `block_burn`
   on a chain that has never burned is `Recorded(0)` and an empty chain's
   `tip()` is a value, not `TableDoesNotExist`; the seal set is every
-  non-`Unshaped` table (§11.1(f)), and `header::verify` refuses a sealed file
-  missing one as SI-7 with the table named.
+  catalogued table (§11.1(f); every table has a writer since layout 34), and
+  `header::verify` refuses a sealed file missing one as SI-7 with the table
+  named.
 - **Raw handles are crate-private** (Q3): `open_table` is `pub(crate)`. (The
   `cfg(test)` multimap opener that stood here was deleted with the
   catalogue's only multimap at S-OUT-KI's layout v6; the typed output reads
@@ -1275,7 +1276,7 @@ pressure. **DRS-0 freezes accumulator design** (constrains codecs):
 | --- | --- |
 | **Set-shaped** (`spent_keys`, `output_txs`, `block_heights`, `tx_indices`, …) | Order-independent incremental accumulator (XOR or additive field hash of per-element canonical encodings); update on insert, reverse on delete; **pop-symmetric by construction** |
 | **Append-mostly** (`blocks`, `txs_*`, `curve_tree_leaves`, …) | Running chained hash. **Pop-symmetric by *checkpoint*, not by construction** — `H_n = h(H_{n-1} ‖ x_n)` cannot be reversed one step without retaining `H_{n-1}`; the fourth row's mechanism is what bounds the drift (DRS-0 slice A) |
-| **Small** (`properties`, `curve_tree_meta`, `hf_versions`, archival journals, …) | Full-domain digest every block (cheap) |
+| **Small** (`properties`, `curve_tree_meta`, `rule_set_in_force`, archival journals, …) | Full-domain digest every block (cheap) |
 | **Torn-commit / durability visibility** | **Reopen + full-domain reconciliation** of incremental accumulators at **declared checkpoint heights**, not every block |
 
 Total coverage = every table in inventory contributes to some accumulator or
@@ -2378,7 +2379,7 @@ increment that touches it). Stated once, in the `shape` module — in
 `shekyl-store-codec` since the move (last bullet); the statement did
 not change with its address:
 
-- A value is one of exactly four shapes. **`Coded<V>`** — rows are
+- A value is one of exactly three shapes. **`Coded<V>`** — rows are
   `V::encode` under a `Canonical` codec, `TypeName` = `shekyl::Coded<{V::NAME}>`
   — the wrapper's name carrying the codec's, which the codec contract already
   forbids reusing for a different layout; `tables.snap` pins the string.
@@ -2387,16 +2388,14 @@ not change with its address:
   `BlobKind` names the kind and says what well-formed is. **`Present`** — a
   set-table's value: the key is the member, the value is a zero-width
   witness (`spent_keys`; `TypeName` `shekyl::Present`, SCHEMA_VERSION 5).
-  **`Unshaped`** — a
-  censused table no Rust writer has reached; its row type is uninhabited, so
-  the table is catalogued (it has an ordinal) and refused by the journal
-  replay, but it is **not** created by the seal (`Restorable::SEALED` is
-  `false` for exactly this shape) and cannot be inserted into: "no writer
-  yet" is a fact of the type. The increment
-  that first writes such a table replaces `Unshaped` with the table's codec
-  and bumps `SCHEMA_VERSION`. At the ruling: 15 tables `Coded`/`Blob`, 33
-  `Unshaped`, `spent_keys` as `Present`, and `output_amounts`' order-bearing
-  multimap member (a key type, `lmdb_order`). Scalar-valued tables take the
+  A table enters the catalogue with its writer and its codec, and every
+  catalogued table is created by the seal. The fourth shape the ruling
+  first named, `Unshaped` (a censused table no Rust writer had reached, its
+  row type uninhabited and the table not sealed), left at layout 34 with
+  the last two tables that used it (`txs`, `hf_starting_heights`). At the
+  ruling: 15 tables `Coded`/`Blob`, 33 `Unshaped`, `spent_keys` as
+  `Present`, and `output_amounts`' order-bearing multimap member (a key
+  type, `lmdb_order`). Scalar-valued tables take the
   domain newtype where one exists (`BlockHeight`, `RuleSetId`,
   `PrunableHash`) and a named column codec where none does (`BlockBurn`); the
   `Fact<u64>` → `AtomicUnits` lift is
@@ -2434,9 +2433,8 @@ not change with its address:
   thing (b) exists to prevent; reporting it is *sound* because two boundaries
   keep the assertion unreachable — the write boundary above refuses a
   wrong-width value before the engine sees it, and the journal replay runs
-  `V::decode` as `Restorable::well_formed` before `from_bytes` (and refuses an
-  `Unshaped` target outright, since an `Inserted` entry has no `prior` for
-  `well_formed` to check). Two consequences: this is
+  `V::decode` as `Restorable::well_formed` before `from_bytes`. Two
+  consequences: this is
   a leaf-page layout change from `&[u8]` (variable-width), paid by the bump
   the commit already owed; and for a fixed-width codec whose only check is
   its width (`BlockInfo`, `CurveRoot`, the scalars) an *undecodable* row is
@@ -2453,8 +2451,8 @@ not change with its address:
   is refused at the header seal, per (a).
 - **One trait, two stores; the rule stays with the digest. MOVED
   2026-09-18 (steering), ahead of wallet adoption.** `Canonical`,
-  `CodecError`, `exact` and the value shapes (`Coded`, `Blob`, `Present`,
-  `Unshaped`) are store-engine-generic and now live in `shekyl-store-codec`
+  `CodecError`, `exact` and the value shapes (`Coded`, `Blob`, `Present`)
+  are store-engine-generic and now live in `shekyl-store-codec`
   (plan: [`CURVE_TREE_STORE_SHAPES.md`](CURVE_TREE_STORE_SHAPES.md), Round 0
   executed 2026-09-18 and **closed as record** the same day with
   [`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md) as successor; PR A is the
@@ -2554,7 +2552,7 @@ reasons row for row** — two instruments, one field, cross-checked:
 | --- | --- | --- |
 | **Not chain state** | ~~`txpool_meta`, `txpool_blob`~~ (**moved out of this file 2026-09-24, S-POOL, layout 12** — the boundary this row predicted, drawn: they are `pool_meta` / `pool_blob` in `shekyl-chain-store::pool`'s own file and cannot be in a digest over this one), `alt_blocks` (~~`archival_alt_attestation_witness`~~ — **folded into `alt_blocks` 2026-09-25, S-ALT, layout 13**: the witness is `AltBlock::attestation_witness`, one row, one lifetime) | Replaying **main-chain** blocks produces the main chain. The pool is unconfirmed by definition and the alt surface is by definition what the chain did not take; two honest nodes at one height legitimately differ. Slice A excludes these from **all future digests** on the same ground. Slice C's §5.1 pick moves the pool out of the consensus store file entirely, which makes this a boundary rather than an exception — **built by S-POOL**; the alt surface's file was S-ALT's question (`SPL-Q2`'s reopener) and was **answered the other way** 2026-09-25 — it stays in this file, `Excluded`, because a switch is one transaction with `connect`/`pop` or it is not a switch (`DRS_E1_SALT.md` SAL-1, SAL-10); the boundary is now **enforced** by a test, not only declared (SAL-15) |
 | **Node-local by prune policy** | `txs_prunable` (`txs_prunable_tip` and `output_metadata` were in this class until their deletion, 2026-09-22) | Rebuildable **only from bytes a pruning node has deliberately discarded**. Replay cannot recreate what the local corpus no longer holds, and D10's own premise is *local* blocks |
-| **Dead** | `txs` (never written, DRS-W4), `hf_starting_heights` (dropped at every writable `open()`, DRS-W5) | Empty domain. Trivially satisfied and trivially uninteresting |
+| **Dead** | none: `txs` (DRS-W4) and `hf_starting_heights` (DRS-W5) left the catalogue at layout 34 | — |
 
 > **AMENDED at `edb35dbb1` (2026-09-12, same day): the middle group's rationale
 > is on a TRIGGER, not retired here.** *(Line anchors in this block are
