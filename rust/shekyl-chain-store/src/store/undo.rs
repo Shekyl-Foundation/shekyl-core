@@ -61,7 +61,7 @@ use super::write::Poison;
 
 /// A stored type whose bytes can be checked before `Value::from_bytes`.
 ///
-/// Implemented for exactly the key types `schema.rs` uses and the four
+/// Implemented for exactly the key types `schema.rs` uses and the three
 /// map-value shapes (`codec::shape`); a table declared over a type without
 /// this impl does not compile into `UNDO_TARGETS`, so a table the journal
 /// could not safely replay is a build error. The default is the

@@ -388,7 +388,8 @@ fn two_blocks_in_one_batch_with_a_spend() {
     // image + the same 4 tx rows + the 4-part txid's txs_pqc_auths segment
     // and txs_pqc_auth_hash row + its txs_archival_len row (`SHT-Q2`; the
     // coinbase carries no length and writes none) + 2 outputs × (output_txs
-    // + member) + tx_outputs) + leaf count 1 + root 1 + block 3 + hf 1 +
+    // + member) + tx_outputs) + leaf count 1 + root 1 + block 3 +
+    // rule_set_in_force 1 +
     // the open epoch's `archival_budget_accruing` upsert 1 (DRS-E4 commit
     // 5) + the recorded PoW 1 (`block_pow`) + the draw row 1 (`SO-D12`
     // increment 3) + the support count 1 = 30, plus the drain: `s` is past the unlock window, so block

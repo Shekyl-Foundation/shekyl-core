@@ -18,7 +18,7 @@
 //!
 //! # The trait is shared; the obligation is not
 //!
-//! [`Canonical`], [`CodecError`], [`exact`] and the four value shapes live
+//! [`Canonical`], [`CodecError`], [`exact`] and the three value shapes live
 //! in `shekyl-store-codec`, which both stores reach, together with the
 //! codecs for types neither store owns — the scalars and the
 //! `shekyl-types` / `shekyl-units` vocabulary. The orphan rule decides

@@ -54,7 +54,7 @@
 //!
 //! # Value types
 //!
-//! Every **map** value is one of four named shapes (`codec::shape`;
+//! Every **map** value is one of three named shapes (`codec::shape`;
 //! `DAEMON_REDB_STORE.md` §11.1(f)) — `&[u8]` is not a value type:
 //!
 //! - [`Coded<V>`] — rows are `V::encode` under a [`Canonical`] codec; the
@@ -141,11 +141,12 @@
 //! entry that names a twin no other file defines is red as well. The class
 //! table stays the LMDB inventory: both keep their `Excluded` rows there.
 //!
-//! # The seal creates every table with a writer
+//! # The seal creates every catalogued table
 //!
-//! From S-CHAIN-R's layout commit (amendment A2, SCR-17) `header::seal` opens
-//! — and so creates — every catalogued table, in the create transaction, and `header::verify` refuses a sealed file that
-//! lacks one (SI-7, the table named as the cell). So a reader that meets
+//! From S-CHAIN-R's layout commit (amendment A2, SCR-17) `header::seal`
+//! opens — and so creates — every catalogued table, in the create
+//! transaction, and `header::verify` refuses a sealed file that lacks one
+//! (SI-7, the table named as the cell). So a reader that meets
 //! `TableDoesNotExist` on a chain table is looking at a file this store did
 //! not write, and *absent table* never has to be read as *empty table*. A
 //! table enters the catalogue with its writer and its codec, so there is no

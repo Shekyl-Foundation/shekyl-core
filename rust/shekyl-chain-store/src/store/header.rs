@@ -65,9 +65,9 @@ pub(super) fn seal(
     put::<ApplyPolicyCell>(txn, &provenance.stubbed())?;
     put::<SettlementEpochBlocksCell>(txn, &epoch)?;
     put::<CoverageGapsCell>(txn, &CoverageGaps::NONE)?;
-    // Amendment A2 (SCR-17): every table with a writer exists from the
+    // Amendment A2 (SCR-17): every catalogued table exists from the
     // first commit, so no reader ever has to read *absent table* as *empty
-    // table*. The set is the catalogue's, filtered by value shape.
+    // table*. The set is the catalogue.
     for table in schema::UNDO_TARGETS {
         table.create(txn)?;
     }

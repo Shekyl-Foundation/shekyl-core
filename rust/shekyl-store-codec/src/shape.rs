@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! How a value is stored: the four value shapes a table may declare
+//! How a value is stored: the three value shapes a table may declare
 //! (`DAEMON_REDB_STORE.md` §11.1(f)).
 //!
 //! The shapes are the contract; the write boundary that makes the
@@ -19,10 +19,10 @@
 //! two tables of identical `(u64, &[u8])` shape are indistinguishable to
 //! the engine however different their meanings, and a definition that
 //! drifted onto the wrong name would open cleanly. This module is the
-//! value side's statement, made once, so that the increments still ahead
-//! (S-ARCH, E3, E5) do not each answer it locally.
+//! value side's statement, made once, so a later table does not answer it
+//! locally.
 //!
-//! A **map** table's value is one of exactly four shapes:
+//! A **map** table's value is one of exactly three shapes:
 //!
 //! - [`Coded<V>`] — a value with a [`Canonical`] codec. The stored bytes
 //!   **are** `V::encode`, the digest's fold input (§11.1(b)); the
@@ -40,7 +40,9 @@
 //!   two set-tables cannot silently share redb's `()` `TypeName`.
 //!
 //! `&[u8]` is not a value type, and there is no multimap in the catalogue
-//! (S-OUT-KI SOK-1): every value is one of the four shapes above.
+//! (S-OUT-KI SOK-1): every value is one of the three shapes above. The
+//! fourth shape this contract first named, `Unshaped`, left at layout 34
+//! with the last two tables that used it.
 //!
 //! # Two guards, stated exactly
 //!

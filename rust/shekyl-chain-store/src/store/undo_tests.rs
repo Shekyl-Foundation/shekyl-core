@@ -73,20 +73,20 @@ fn connect_like(batch: &WriteBatch<'_, '_>, height: u64) -> Result<usize, StoreE
         hash(byte),
         BlockHeight::from_raw(height).encoded().as_encoded(),
     )?;
-    let mut hf = batch.open_upsert_table(RULE_SET_IN_FORCE)?;
-    hf.upsert(
+    let mut rule_set = batch.open_upsert_table(RULE_SET_IN_FORCE)?;
+    rule_set.upsert(
         0,
         RuleSetInForce(RuleSetId::from_raw(byte))
             .encoded()
             .as_encoded(),
     )?; // present after the first connect: prior restored
-    hf.upsert(
+    rule_set.upsert(
         height,
         RuleSetInForce(RuleSetId::from_raw(1))
             .encoded()
             .as_encoded(),
     )?; // absent: undo removes it
-    drop(hf);
+    drop(rule_set);
     batch
         .open_insert_table(OUTPUT_AMOUNTS, PROBE_ROW)?
         .insert(slot(height), out_key(byte).encoded().as_encoded())?;
@@ -222,15 +222,19 @@ fn replay_restores_every_table_and_deletes_the_row_then_the_floor_is_reached() {
         .get(hash(1))
         .expect("g")
         .is_none());
-    let hf = snap.open_table(RULE_SET_IN_FORCE).expect("t");
+    let rule_set = snap.open_table(RULE_SET_IN_FORCE).expect("t");
     assert_eq!(
-        hf.get(0)
+        rule_set
+            .get(0)
             .expect("g")
             .map(|g| g.value().decode().expect("decodes")),
         Some(RuleSetInForce(RuleSetId::from_raw(7))),
         "prior restored"
     );
-    assert!(hf.get(1).expect("g").is_none(), "absent-before key removed");
+    assert!(
+        rule_set.get(1).expect("g").is_none(),
+        "absent-before key removed"
+    );
     let amounts = snap.open_table(OUTPUT_AMOUNTS).expect("t");
     let keys: Vec<(u64, u64)> = amounts
         .range::<(u64, u64)>(..)
@@ -522,7 +526,7 @@ fn a_probe_table_writes_freely_while_no_recording_is_live() {
 
 /// A row under `rule_set_in_force[5]`, written outside any recording, for the
 /// delete-verb tests to take out.
-fn seed_hf5(store: &ChainStore) {
+fn seed_rule_set_at_5(store: &ChainStore) {
     let seeded: Result<(), TestErr> = store.write(|batch| {
         batch.open_upsert_table(RULE_SET_IN_FORCE)?.upsert(
             5,
@@ -535,7 +539,7 @@ fn seed_hf5(store: &ChainStore) {
     seeded.expect("seed");
 }
 
-fn hf5(store: &ChainStore) -> Option<RuleSetInForce> {
+fn rule_set_at_5(store: &ChainStore) -> Option<RuleSetInForce> {
     let snap = store.begin_read().expect("read");
     snap.open_table(RULE_SET_IN_FORCE)
         .expect("t")
@@ -551,7 +555,7 @@ fn hf5(store: &ChainStore) -> Option<RuleSetInForce> {
 fn a_remove_journals_its_prior_and_replay_restores_it() {
     let path = tmp("undo-remove");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    seed_hf5(&store);
+    seed_rule_set_at_5(&store);
     let out: Result<usize, TestErr> = store.write(|batch| {
         let recording = batch.record_undo(1);
         batch
@@ -560,7 +564,7 @@ fn a_remove_journals_its_prior_and_replay_restores_it() {
         Ok(recording.seal()?)
     });
     assert_eq!(out, Ok(1));
-    assert_eq!(hf5(&store), None, "the row is gone");
+    assert_eq!(rule_set_at_5(&store), None, "the row is gone");
     assert_eq!(
         undo_row(&store, 1).expect("row written").0,
         vec![UndoEntry::Removed {
@@ -573,7 +577,7 @@ fn a_remove_journals_its_prior_and_replay_restores_it() {
     let popped: Result<Replayed, TestErr> = store.write(|batch| Ok(batch.replay_undo(1)?));
     assert_eq!(popped, Ok(Replayed::Entries(1)));
     assert_eq!(
-        hf5(&store),
+        rule_set_at_5(&store),
         Some(RuleSetInForce(RuleSetId::from_raw(7))),
         "the prior is back"
     );
@@ -620,7 +624,7 @@ fn removing_an_absent_key_is_the_bound_row_and_arms_the_batch() {
 fn a_key_present_at_the_undo_of_a_remove_is_si6_not_an_overwrite() {
     let path = tmp("undo-remove-around");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    seed_hf5(&store);
+    seed_rule_set_at_5(&store);
     let removed: Result<usize, TestErr> = store.write(|batch| {
         let recording = batch.record_undo(1);
         batch
@@ -653,7 +657,7 @@ fn a_key_present_at_the_undo_of_a_remove_is_si6_not_an_overwrite() {
         ))
     );
     assert_eq!(
-        hf5(&store),
+        rule_set_at_5(&store),
         Some(RuleSetInForce(RuleSetId::from_raw(3))),
         "the around-write is intact; nothing was repaired"
     );
@@ -667,7 +671,7 @@ fn a_key_present_at_the_undo_of_a_remove_is_si6_not_an_overwrite() {
 fn a_replace_journals_the_present_prior_and_replay_restores_it() {
     let path = tmp("undo-replace");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    seed_hf5(&store);
+    seed_rule_set_at_5(&store);
     let out: Result<usize, TestErr> = store.write(|batch| {
         let recording = batch.record_undo(1);
         batch
@@ -681,7 +685,10 @@ fn a_replace_journals_the_present_prior_and_replay_restores_it() {
         Ok(recording.seal()?)
     });
     assert_eq!(out, Ok(1));
-    assert_eq!(hf5(&store), Some(RuleSetInForce(RuleSetId::from_raw(9))));
+    assert_eq!(
+        rule_set_at_5(&store),
+        Some(RuleSetInForce(RuleSetId::from_raw(9)))
+    );
     match undo_row(&store, 1).expect("row written").0.as_slice() {
         [UndoEntry::Replaced {
             table,
@@ -698,7 +705,10 @@ fn a_replace_journals_the_present_prior_and_replay_restores_it() {
 
     let popped: Result<Replayed, TestErr> = store.write(|batch| Ok(batch.replay_undo(1)?));
     assert_eq!(popped, Ok(Replayed::Entries(1)));
-    assert_eq!(hf5(&store), Some(RuleSetInForce(RuleSetId::from_raw(7))));
+    assert_eq!(
+        rule_set_at_5(&store),
+        Some(RuleSetInForce(RuleSetId::from_raw(7)))
+    );
     assert!(undo_row(&store, 1).is_none(), "the row is consumed");
     cleanup(&path);
 }
@@ -735,7 +745,7 @@ fn replacing_an_absent_key_is_the_bound_row_and_arms_the_batch() {
         "nothing landed"
     );
     drop(snap);
-    assert_eq!(hf5(&store), None);
+    assert_eq!(rule_set_at_5(&store), None);
     assert!(undo_row(&store, 1).is_none());
     cleanup(&path);
 }
