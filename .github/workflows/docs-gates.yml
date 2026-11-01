@@ -355,6 +355,14 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/bench/test_drs_readback.py
 
+      - name: Run the fsync probe selftest
+        # The budget's control channel (DAEMON_REDB_STORE.md §1.3a rule 2):
+        # a stall inside a row's window refuses the row, a probe that missed
+        # the window refuses it, and the 30-minute soak's verdict asks for the
+        # write-cache posture on a microsecond median rather than failing it.
+        if: '!cancelled()'
+        run: python3 scripts/bench/fsync_probe.py --selftest
+
       - name: Run RPC column capture selftest
         # `rpc_capture.py` writes one file per chain read and reserves the
         # loopback port the kept-chain capture binds. The capture's own

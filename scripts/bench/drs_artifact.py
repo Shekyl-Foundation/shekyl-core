@@ -21,7 +21,17 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 DESIGN_DOC = os.path.join(ROOT, "docs/design/DAEMON_REDB_STORE.md")
 ARTIFACT_GLOB = os.path.join(ROOT, "docs/benchmarks/drs_bench_ibd_*.json")
 
-SCHEMA = "shekyl_drs_bench_v1"
+# v2 (2026-11-01, DAEMON_REDB_STORE.md §1.3a rule 2): the fsync probe runs
+# beside every measured row and its window is recorded; a row with a probe
+# stall inside it does not count, so an artifact without the block, or with a
+# stall in it, is refused. A v1 artifact predates the control channel: the
+# committed LMDB-era measurements stay readable as records under it, and a
+# pair of the two versions is not comparable.
+SCHEMA_V1 = "shekyl_drs_bench_v1"
+SCHEMA = "shekyl_drs_bench_v2"
+ACCEPTED_SCHEMAS = (SCHEMA_V1, SCHEMA)
+# The share of a row's seconds the probe must have sampled (fsync_probe.MIN_COVERAGE).
+PROBE_MIN_COVERAGE = 0.95
 
 # A block hash and a sha256 of a binary are the same spelling: 32 bytes,
 # lowercase hex. One pattern, so neither site grows its own 64.
@@ -456,6 +466,30 @@ def measure_row(name, value, scenario, denominator):
             "value": value, "scenario": scenario, "denominator": denominator}
 
 
+def probe_refusals(probe):
+    """Why the probe block does not let the row count (§1.3a rule 2)."""
+    if not isinstance(probe, dict):
+        return ["probe block absent: the fsync probe runs beside every measured row, "
+                "and a row with no control channel cannot show the host did not stall"]
+    r = []
+    window = probe.get("window_s")
+    samples = probe.get("samples")
+    if not isinstance(window, (int, float)) or window <= 0:
+        r.append(f"probe.window_s is {window!r}: the row's window is not recorded")
+    if not isinstance(samples, int) or samples <= 0:
+        r.append(f"probe.samples is {samples!r}: the probe did not watch the row")
+    elif isinstance(window, (int, float)) and window >= 1 and samples < PROBE_MIN_COVERAGE * int(window):
+        r.append(f"probe took {samples} sample(s) in a {window} s window, under "
+                 f"{PROBE_MIN_COVERAGE:.0%}: it did not watch the row")
+    stalls = probe.get("stalls")
+    if not isinstance(stalls, int):
+        r.append(f"probe.stalls is {stalls!r}, not a count")
+    elif stalls:
+        r.append(f"{stalls} probe stall(s) inside the row: a row with a probe stall "
+                 "measured the host, not the daemon, and does not count (§1.3a rule 2)")
+    return r
+
+
 def artifact_refusals(a):
     """Reasons this artifact may not be used as a measurement. Empty == usable.
 
@@ -465,8 +499,11 @@ def artifact_refusals(a):
     r = []
     if not isinstance(a, dict):
         return ["artifact is not a JSON object"]
-    if a.get("schema_version") != SCHEMA:
-        r.append(f"schema_version is {a.get('schema_version')!r}, expected {SCHEMA!r}")
+    if a.get("schema_version") not in ACCEPTED_SCHEMAS:
+        r.append(f"schema_version is {a.get('schema_version')!r}, expected one of "
+                 f"{ACCEPTED_SCHEMAS!r}")
+    elif a.get("schema_version") == SCHEMA:
+        r.extend(probe_refusals(a.get("probe")))
     if a.get("engine") not in ("lmdb", "redb"):
         r.append(f"engine is {a.get('engine')!r}, expected 'lmdb' or 'redb'")
     sel = a.get("engine_selected_by")
@@ -803,6 +840,11 @@ def comparability_refusals(base, cand):
     # the pair must also share is the hardware, the durability policy and the
     # masked argv. The engine difference itself has one direction, and that
     # direction is the floor.
+    if base.get("schema_version") != cand.get("schema_version"):
+        r.append(f"schema versions differ ({base.get('schema_version')!r} against "
+                 f"{cand.get('schema_version')!r}): a v1 run had no probe beside it, "
+                 "so it cannot show its host did not stall, and a ratio against it "
+                 "is not one the budget reads")
     order = _floor_order_refusal(base, cand)
     if order:
         r.append(order)
