@@ -146,10 +146,6 @@ There is no V3.1 / V3.2 / V3.x release train.
   - Owner: `SO-D12` 4b, the cutover — [`ARCHIVAL_SETTLEMENT_WRITER.md`](design/ARCHIVAL_SETTLEMENT_WRITER.md) §16.3 item 4
   - Target: pre-genesis
 
-- **`chain_slot` refuses `/get_transactions` for a body past the horizon in every form, and the pruned form it serves carries the PQC authentication bytes rather than their hash.** `chain_slot` (`rust/shekyl-daemon-rpc/src/store_read_facts.rs`) answers `tx.pruned_here` before it reads which form the request asked for, so a wallet that first refreshes after the boundary cannot scan the shard from any node, and for a transaction whose data is still held it puts the PQC authentication bytes inside the pruned form with no field for their hash. Ruled (`SB-Q2`, 2026-10-31): one value, one shape, one binding path; every daemon discards alike (`PDM-Q9`). Under `prune` every chain entry is the skeleton — pruned segment plus `prunable_hash`, `pqc_auth_hash`, `archival_len` — above and below the horizon, and a full-form request past the horizon answers `archived { shard }` at the slot, never a request error. Lands after this PR merges, before the next release cut.
-  - Owner: `SB-Q2` — `DRS_SB_BELOW_HORIZON.md` §3, Brief B (#1233), which amends [`ARCHIVAL_PRUNED_DAEMON_MODE.md`](design/ARCHIVAL_PRUNED_DAEMON_MODE.md) `PDM-Q10` to the skeleton form
-  - Target: pre-genesis
-
 - **Re-measure reshape's recovery latency with the real re-stem wiring.** `DAEMON_RELAY_PRIVACY.md` §14.8 priced reshape's recovery on a simulated re-stem; the flip built it (`rust/shekyl-relay/src/graph/embargo.rs`: first fire re-stems to the alternate, the second fluffs; the origin at 1,148 s). The floor run measures a dropped successor's recovery, origin and relay positions, against §14.5's bound.
   - Owner: RD's floor run — [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md) §14.8
   - Target: pre-genesis
