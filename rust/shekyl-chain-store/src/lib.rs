@@ -81,7 +81,7 @@
 //! no creditor. What *is* held stable is the contract those modules
 //! describe on disk — `TypeName`s, codec `NAME`s and the row bytes —
 //! pinned by `schemas/*.snap` and the paired `SCHEMA_VERSION` bump
-//! (`DAEMON_REDB_STORE.md` §11.1(b)). `HF_VERSIONS: Coded<RuleSetInForce>`
+//! (`DAEMON_REDB_STORE.md` §11.1(b)). `RULE_SET_IN_FORCE: Coded<RuleSetInForce>`
 //! is the worked example: the Rust type changed with the codec's home,
 //! `shekyl::Coded<rule_set_id>` and the row bytes did not.
 

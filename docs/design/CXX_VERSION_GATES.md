@@ -127,12 +127,9 @@ left a fork mechanism with pieces missing:
   owner is `shekyl_block_template::Fill::admit`; it goes live by the pool's
   fill moving to Rust (RULED 2026-10-05), as before.
 
-What stayed, with its reason: LMDB still declares and opens `hf_versions`
-and `hf_starting_heights`. Nothing reads them, and the only write is the
-inherited drop of `hf_starting_heights` at every writable open (DRS-W5). The redb
-store's schema and digest domain are defined against the LMDB table list,
-and its own `hf_versions` (the rule set in force per height, a Shekyl
-design) shares the name. The row is in [`FOLLOWUPS.md`](../FOLLOWUPS.md).
+The LMDB fork tables left with LMDB at the DRS-X flip. The redb store's
+table of the rule set in force per height, a Shekyl design, is
+`rule_set_in_force` (layout 34), and its dead `hf_starting_heights` is gone.
 
 ## 6. What the output-count gate was guarding
 
