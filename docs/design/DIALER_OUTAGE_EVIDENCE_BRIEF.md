@@ -97,13 +97,13 @@ These are invariants. Each is tested against every connector's declarations, not
 3. **Recovery doesn't wait on outage cooldowns.** The first sign of a working link clears cooldowns taken on uncorroborated failures. The target: the blackhole recovery comes down toward the refuse block's 6 s.
 4. **Proven misbehaviour still drops,** on a destination-authenticated connector, as today.
 5. **The probe never counts as link evidence.** The probe of the node's own onion is not a session and not a peer dial (`TOR_SUPERVISOR.md` §4.5). Only the supervisor reads it.
-6. **Nothing is inferred about Tor's network.** The judge reads only the dialer's own observations (`TSR-Q14`), and the supervisor's posture line is unchanged.
+6. **Nothing is inferred about Tor's network.** The judge reads only the dialer's own observations (`TSR-Q14`), and the supervisor's posture line reads only the judge's (`DIALER_OUTAGE_EVIDENCE.md` §6).
 
 ### 4.4 Deletions (rule 15)
 
 - the quiet guard: `owner/quiet.rs`'s ladder choice and its unopened count;
 - the profile's quiet thresholds: `QuietThreshold`, `quiet_attempts` and the derived S;
-- the supervisor's `quiet_after`, which reads Tor's S today. It needs its own source, and the Tor lane rules that;
+- the supervisor's reading of Tor's S: `quiet_after` takes its source from the judge (`DIALER_OUTAGE_EVIDENCE.md` §6);
 - the §97 rows and the brief text that state K and S.
 
 ## 5. Wargame in the Round 0 return
@@ -148,14 +148,9 @@ Leave in-flight Tor attempts to run (TSR-Q14: Tor retries inside its own window)
 
 ## Out of scope
 
-- the Tor supervisor's thresholds and posture line, beyond giving `quiet_after` a source the Tor lane rules;
+- the Tor supervisor's thresholds and posture line, beyond `quiet_after` and its sentence (`DIALER_OUTAGE_EVIDENCE.md` §6);
 - the in-flight bound;
 - the fill rules and the draw;
 - the targets.
 
 No push without Rick's go-ahead.
-
-## Records-was
-
-- **Revision 1 (2026-10-31)** proposed one rule for every connector: a failure counts only if a session was held or a stream opened during the attempt. Rick ruled one judge, with each connector declaring how its failures are judged.
-- **The K/S guard (ruled 2026-10-26 and 2026-10-27)** was one mechanism fed per-connector numbers. The 2026-10-31 blackhole showed it engaging too late on Tor.

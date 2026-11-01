@@ -275,9 +275,9 @@ From the census at the pin, each in the #1235 commit that removes it (§8). Hist
   - tests: nine in `shekyl-dialer/tests/attempts/quiet.rs`, two in `white.rs`, and `a_local_close_counts_for_the_quiet_guard_and_not_the_tally` (`reach.rs`), rewritten as the judge's tests.
   - **Stays:** `Shared::inbound` and `attempt_stream`, which the Tor tally reads.
 - **The marks** (commit 6): `Marks` and the marks byte in the Rust `CloseCause`; `proxy_refused`'s marks argument; `proving_misbehaviour_on`, `retry_worthy`, `window_timeout`, `proves_misbehaviour`, `names_the_destination` and `opened_a_stream`; Tor's `proxy_reply_marks`, replaced by Tor's stamping. The generated `close_cause.h` is regenerated from `c_header()`, with no hand edit to any C or C++ file. The supervisor's Tor dial tally moves from `opened_a_stream` to `Reached::StreamOpened`, still excluding the probe, with a test.
-- **The thresholds** (commit 7, `shekyl-transport-layer/src/profile.rs`): clearnet's K (11) and everything that reads clearnet's S; `the_profile_table_moves_todays_values` loses its K pin.
+- **The held condition** (commit 5b): the held condition in `Dials::evaluate`; the posture line reads the judge's instant instead (§6).
+- **The thresholds, whole** (commit 7): in `shekyl-transport-layer/src/profile.rs`, clearnet's K (11) and Tor's K (13), `QuietThreshold`, `derive`, `quiet()`, the build-time span check and `the_quiet_span_is_derived_from_the_row`, and `the_profile_table_moves_todays_values` loses its K pin; the daemon's `policy()` reading of S (`shekyl-daemon/src/tor/mod.rs:60-71`) and `the_posture_lines_quiet_stretch_is_the_dialers` (`:1077`). After commit 5b nothing reads S, so this deletes it outright. **Nothing of the guard survives #1235.**
 - **Docs that state the guard, K or S** (commit 7): `DAEMON_RELAY_PRIVACY.md` §97 (the gray-cooldown row's quiet threshold, and the in-flight row's quiet stretch); `P2P_3_SLICE_3_DIALER_BRIEF.md` (the quiet-stretch paragraph and its wargame); `P2P_3_SLICE_1_PEERLIST_BRIEF.md` (four lines); `NOISE_FLIP_REHEARSAL_BRIEF.md`'s K and S follow-up (C4); `docs/benchmarks/p2p_tor_inflight_bound_20261025.md`; the Unreleased CHANGELOG lines.
-- **Tor's span S, with its last reader** (the Tor lane's follow-up PR, after #1235 lands, §6): Tor's K (13) and the arithmetic deriving S (`QuietThreshold`, `derive`, `quiet()`, the build-time span check, `the_quiet_span_is_derived_from_the_row`), which after commit 7 only the daemon's `policy()` reads (`shekyl-daemon/src/tor/mod.rs:60-71`); with it the held condition in `Dials::evaluate`, `the_posture_lines_quiet_stretch_is_the_dialers` (`shekyl-daemon/src/tor/mod.rs:1077`), and `TOR_SUPERVISOR.md`'s `quiet_after` source and quiet-stretch bound. S is not deleted before the posture line has its new source.
 - **The measurement ledger:** editing `profile.rs` needs new acknowledgements on the clearnet and Tor span path sets. No constant's needle points at `profile.rs`.
 - **No CI gate** names the guard, K, S or `quiet_after`.
 
@@ -291,7 +291,7 @@ The posture line reports the dialer judge's last sign that the Tor link worked, 
 - **When it stands:** the span since that clock started is at least `SocksTimeout + δ` (105 s + 15 s = 120 s), and at least one Tor dial has failed since the last sign of life. By then a dial started at the last sign of life has used Tor's own retries and its bracket has closed empty, so the judge has excused it as the link's: the operator is told the fact the dialer acted on, when it acted. The span has no value of its own; it moves with Tor's window and with δ.
 - **What follows:** a live session keeps the line off (the 60 s timed sync always shows life inside 120 s); a dead held session no longer suppresses it (on the floor-device blackhole it would have spoken about 2 minutes in).
 - **`Policy::quiet_after`** becomes `SocksTimeout + δ`, from the Tor connector's own two declarations; the `tor_quiet` status field keeps its type (GS-C2 unaffected).
-- **Who builds what:** the dialer lane, in #1235, publishes the judge's last sign of life on `TorLinkTally` (§8, commit 5). The Tor lane builds the supervisor side (`Dials`, `Policy`, the sentence, its six tests, `TOR_SUPERVISOR.md` §4.2) in a small PR after #1235 lands, and deletes Tor's span S there with its last reader (§5).
+- **Where it is built: all in #1235** (Rick, 2026-11-01). Commit 5 publishes the judge's last sign of life on `TorLinkTally`; commit 5b builds the supervisor side on it (`Dials::evaluate` without the held condition, `Policy::quiet_after`, the sentence, its six tests, `TOR_SUPERVISOR.md` §4.2), which the Tor lane reviews on #1235; commit 7 deletes Tor's span S with the rest of the guard (§5).
 
 ## 7. Wargame (§5 of the brief)
 
@@ -321,10 +321,11 @@ One PR off `dev`, by the dialer lane, [#1235](https://github.com/Shekyl-Foundati
 3. **The Levin layer and the dialer** build theirs: refusal, wrong network or refused peer list through `refused_by_peer`; a Levin timeout `Uncertain`; the dialer's own failures `Local`.
 4. **The peer list takes a verdict:** `Verdict { Counted, Excused, Drop }` replaces `Ladder`; excused seats on gray and white; hold the rung. Test: an excused failure on an address with counted failures cools at its current rung, not shorter.
 5. **The judge:** bracketed corroboration, the deferred verdict, clearing; the quiet guard deleted; the judge's last sign of life on Tor published on `TorLinkTally` (§6). Tests: the brief's §6 tests 1–8 and the onset test (invariant 7), each red first with the edit that breaks it named; with the bound's worth of verdicts pending (five on Tor) the dialer still starts new dials up to the bound and the fill's target count excludes them; the first sign of life clears only the excusals of addresses with no counted failure.
+   - **5b, the posture line** (the Tor supervisor's half of `OE-D10`; the Tor lane reviews it on #1235): `Dials::evaluate` drops the held condition and reads the judge's instant; `Policy::quiet_after` becomes `SocksTimeout + δ` from the Tor connector's own two declarations; the new sentence; its six tests; `TOR_SUPERVISOR.md` §4.2 (§6).
 6. **The marks deleted**, `close_cause.h` regenerated, and the supervisor's Tor dial tally moved to `Reached::StreamOpened` (§5).
-7. **The thresholds, the §97 rows, the docs:** clearnet's K and S and the docs that state the guard (§5).
+7. **The thresholds, the §97 rows, the docs:** the guard deleted whole: both connectors' K and S, their arithmetic and checks, the daemon's reading of S, and the docs that state them (§5). Nothing of the guard survives #1235.
 
-**After #1235 lands:** the Tor lane's PR builds the posture line on the published instant and deletes Tor's span S with its last reader (§5, §6). **The live runs** follow on the Pi after the Tor soak's claim ends (the brief's §7).
+**The live runs** follow on the Pi after the Tor soak's claim ends (the brief's §7).
 
 ## 9. Rejected alternatives
 
