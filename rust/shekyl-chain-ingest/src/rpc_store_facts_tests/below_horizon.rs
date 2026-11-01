@@ -192,7 +192,7 @@ async fn the_wallet_and_the_rpc_read_a_spend_whose_shard_the_store_discarded() {
         bound, listed,
         "every body is bound to the id the block lists"
     );
-    assert_eq!(fetched.transactions[0].prefix, spend.prefix);
+    assert_eq!(fetched.transactions[0].tx().prefix, spend.prefix);
 
     // (ii) P-scan: the exhaustiveness check over a range holding the
     // block, anchored on the block before it, passes; a changed body fails.

@@ -635,7 +635,7 @@ impl<'a> OwnEmissionSlots<'a> {
         }
         let mut slots = BTreeSet::new();
         if let Some(&j) = self.idx_by_hash.get(&tx_hash) {
-            for input in &self.transactions[j].prefix.inputs {
+            for input in &self.transactions[j].tx().prefix.inputs {
                 let Input::ArchivalRewardEmission { canonical_bytes } = input else {
                     continue;
                 };
@@ -759,7 +759,7 @@ pub(crate) fn run_dual_extractor(
         // walks (key images, then bond posts) stay separate so each
         // consumer of the shared lift stays a one-liner.
         for (j, tx) in block.transactions.iter().enumerate() {
-            for input in &tx.prefix.inputs {
+            for input in &tx.tx().prefix.inputs {
                 if let Input::ToKey { key_image, .. } = input {
                     if let Some(gindex) = watch.lookup(key_image) {
                         spent_funding.push(SpentFundingMatch { gindex });
@@ -769,7 +769,7 @@ pub(crate) fn run_dual_extractor(
                     }
                 }
             }
-            for (obs, slot) in match_watch(tx, known_personas) {
+            for (obs, slot) in match_watch(tx.tx(), known_personas) {
                 bond_post_matches.push(BondPostMatch {
                     height,
                     p_canonical_id: obs.p_canonical_id,

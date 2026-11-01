@@ -322,6 +322,7 @@ fn pruned_spend_identity_matches_the_pinned_oracle() {
         .bind(pinned)
         .expect("the skeleton binds to the pinned txid");
     bound
+        .tx()
         .validate_context_free_pruned()
         .expect("the served skeleton must pass the engine's shape gate");
     assert_eq!(bound.txid(), pinned);

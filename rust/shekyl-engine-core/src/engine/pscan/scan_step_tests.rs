@@ -257,7 +257,7 @@ fn unspendable_warn_is_loud_but_names_no_persona_or_tx() {
         .iter()
         .map(hex::encode)
         .collect();
-    forbidden_hashes.extend(block.transactions.iter().map(|tx| hex::encode(tx.hash())));
+    forbidden_hashes.extend(block.transactions.iter().map(|tx| hex::encode(tx.txid())));
     let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
 
     let sink = SharedBuf::default();
@@ -880,7 +880,7 @@ fn emission_classifier_missing_tx_hash_yields_no_lift() {
 
     // Premise: with its hash present, the tx classifies to our slot —
     // and the memoized second query agrees (the lazy path's cache arm).
-    let hash = tx.hash();
+    let hash = tx.txid();
     let txs = std::slice::from_ref(&tx);
     let hashes = [hash];
     let mut slots = OwnEmissionSlots::new(txs, &hashes, &known);

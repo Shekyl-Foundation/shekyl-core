@@ -134,9 +134,11 @@ impl SkeletonTx {
 /// has, which is why the txid rides here instead of being asked of the
 /// body (`SB-Q2`; `GENESIS_TX_WIRE_FORMAT.md` §11).
 ///
-/// The body is readable through [`Deref`](std::ops::Deref) and
-/// [`Self::tx`], and never writable: a mutation would unbind it.
-/// [`Self::into_tx`] gives the body up and the binding with it.
+/// The body is readable through [`Self::tx`] and never writable: a
+/// mutation would unbind it. [`Self::into_tx`] gives the body up and the
+/// binding with it. There is no [`Deref`](std::ops::Deref). A pruned
+/// body's [`Transaction::hash`] is not this binding's identity, and a
+/// deref would let a caller ask for it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct BoundTx {
     tx: Transaction,
@@ -183,14 +185,6 @@ impl BoundTx {
     pub fn modify(&mut self, edit: impl FnOnce(&mut Transaction)) {
         edit(&mut self.tx);
         self.txid = self.tx.hash();
-    }
-}
-
-impl std::ops::Deref for BoundTx {
-    type Target = Transaction;
-
-    fn deref(&self) -> &Transaction {
-        &self.tx
     }
 }
 

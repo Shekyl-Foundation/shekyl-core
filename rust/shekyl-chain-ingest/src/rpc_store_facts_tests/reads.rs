@@ -396,7 +396,7 @@ async fn the_wallets_block_fetch_reads_a_spend_from_the_store_backed_handlers() 
     // The pruned form the wallet asked for: the wallet bound it to the
     // listed hash through `prunable_hash` and the archival length.
     assert_eq!(fetched.block.transaction_hashes, vec![spend.hash()]);
-    assert_eq!(fetched.transactions[0].prefix, spend.prefix);
+    assert_eq!(fetched.transactions[0].tx().prefix, spend.prefix);
     assert!(fetched.first_output_index.is_some());
 }
 

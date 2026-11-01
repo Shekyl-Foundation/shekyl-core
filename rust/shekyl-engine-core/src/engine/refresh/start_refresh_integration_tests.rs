@@ -1819,7 +1819,7 @@ async fn refresh_registers_a_found_output_before_the_fold_reaches_it() {
     // Paid at height 2; the lock window is 10 blocks; 30 blocks is past
     // the drain by a margin and the whole span is one scan result.
     let (chain, paid_gindex) = chain_paying_the_hybrid_wallet(30, 2, 1_000_000);
-    let paid_key = chain[2].transactions[0].prefix.outputs[0].key;
+    let paid_key = chain[2].transactions[0].tx().prefix.outputs[0].key;
     let mock = TestDaemon::with_seed_and_chain(daemon_seed, chain);
     let (arc, _tmp) = make_hybrid_engine_arc(mock).await;
 

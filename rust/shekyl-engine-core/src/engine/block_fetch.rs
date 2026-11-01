@@ -196,9 +196,10 @@ fn bind_skeleton(
         ))
     })?;
     bound
+        .tx()
         .validate_context_free_pruned()
         .map_err(|_| invalid_tx_error(tx_hash_hex))?;
-    if bound.is_coinbase() {
+    if bound.tx().is_coinbase() {
         return Err(invalid_tx_error(tx_hash_hex));
     }
     Ok(bound)

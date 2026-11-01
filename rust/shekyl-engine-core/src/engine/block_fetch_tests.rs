@@ -238,7 +238,7 @@ fn bind_skeleton_round_trips_and_rejects_trailing() {
     let mut bytes = Vec::new();
     tx.write(&mut bytes).expect("Vec write is infallible");
     let bound = bind_own(&skeleton(&bytes)).expect("pruned tx round trips");
-    assert_eq!(bound.prefix.outputs.len(), 2);
+    assert_eq!(bound.tx().prefix.outputs.len(), 2);
     assert_eq!(bound.txid(), pruned_id(&tx));
 
     let mut trailing = bytes.clone();

@@ -122,7 +122,7 @@ pub(crate) fn decode_block_leaves(
         .iter()
         .zip(&scannable.block.transaction_hashes)
     {
-        txs.push(decode_tx(tx, *tx_hash, false)?);
+        txs.push(decode_tx(tx.tx(), *tx_hash, false)?);
     }
     Ok(txs)
 }

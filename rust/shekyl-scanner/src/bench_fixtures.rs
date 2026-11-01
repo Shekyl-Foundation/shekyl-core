@@ -706,7 +706,7 @@ mod tests {
                 "worst-case block must contain exactly one non-miner tx"
             );
             assert_eq!(
-                sb.transactions[0].prefix.outputs.len(),
+                sb.transactions[0].tx().prefix.outputs.len(),
                 n,
                 "worst-case block's non-miner tx output count must match requested N={n}"
             );
@@ -723,7 +723,7 @@ mod tests {
                 "typical-case block must contain exactly one non-miner tx"
             );
             assert_eq!(
-                sb.transactions[0].prefix.outputs.len(),
+                sb.transactions[0].tx().prefix.outputs.len(),
                 n,
                 "typical-case block's non-miner tx output count must match requested N={n}"
             );

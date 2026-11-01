@@ -809,7 +809,7 @@ impl RefreshEngine for LocalRefresh {
                     return Err(LocalRefreshError::Malformed);
                 }
                 for tx in &scannable.transactions {
-                    if tx.prefix.outputs.len() > MAX_OUTPUTS {
+                    if tx.tx().prefix.outputs.len() > MAX_OUTPUTS {
                         emit_state.try_emit(
                             diagnostics,
                             RefreshDiagnostic::DaemonMalformed {
@@ -856,7 +856,7 @@ impl RefreshEngine for LocalRefresh {
                     .iter()
                     .zip(&scannable.block.transaction_hashes)
                 {
-                    for input in &tx.prefix.inputs {
+                    for input in &tx.tx().prefix.inputs {
                         if let Input::ToKey { key_image, .. } = input {
                             spent_key_images.push(KeyImageObserved {
                                 block_height: h,
@@ -874,7 +874,7 @@ impl RefreshEngine for LocalRefresh {
                     // first occurrence is the earliest height — the one
                     // the merge's first-sighting semantics would keep —
                     // and duplicates stay off the channel.
-                    for sighting in sightings_in(tx, h, &self.bond_watch) {
+                    for sighting in sightings_in(tx.tx(), h, &self.bond_watch) {
                         if sighted_slots.insert(sighting.slot) {
                             bond_sightings.push(sighting);
                         }
