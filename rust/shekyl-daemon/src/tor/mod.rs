@@ -35,7 +35,7 @@ use shekyl_tor_control_client::binary::{
 use shekyl_tor_control_client::control::{
     parse_bootstrap_progress, parse_event, parse_network_view, parse_socks_listeners,
     parse_traffic_read, resume_lateness, BootstrapState, Command, ControlError, ControlReply,
-    EventReceiver, EventSink, Resume, ServiceId, SocksTimeout, UploadRounds,
+    EventReceiver, EventSink, Resume, ServiceId, SocksTimeout, TorEvent, UploadRounds,
 };
 use shekyl_tor_control_client::supervisor::{
     clock_evidence_of, held_sentence, input_of, install_sentence, render, Action, Cause,
@@ -644,6 +644,21 @@ impl Drive {
     fn event_inputs(&mut self, reply: &ControlReply) -> Vec<Input> {
         let mut inputs = self.round_resync();
         if let Some(parsed) = parse_event(reply) {
+            // This onion's descriptor events, as Tor states them: which
+            // directory, which descriptor (its blinded key), and how it
+            // ended. A run reads them to see where a descriptor went.
+            if let TorEvent::HsDesc(desc) = &parsed {
+                if desc.address.is_some() && desc.address == self.service {
+                    tracing::debug!(
+                        target: "tor",
+                        action = ?desc.action,
+                        hsdir = ?desc.hsdir,
+                        descriptor_id = ?desc.descriptor_id,
+                        reason = ?desc.reason,
+                        "Tor's descriptor event"
+                    );
+                }
+            }
             // Evidence first: a problem that is also the blocked link is
             // judged against the clock it may already name.
             if let Some(input) = clock_evidence_of(&parsed) {
