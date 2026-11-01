@@ -1,6 +1,6 @@
 # One judge of failed dials; each connector declares how its failures are judged
 
-**Status: RULED (Round 0 closed 2026-10-31, revision 3)** — Rick ruled the second return the same day (§0.2): `OE-D6` hold the rung; clearing is the judge's behaviour, not a declaration; the judge takes its own type, `DialFailure`, which supersedes `OE-D2`; the values are per connector, each an `Assumption` with its basis in §97. **Still open:** `OE-D4` and `OE-D10`, with the Tor lane (§3.2, §6); and two rows of clearnet's mapping that are Rick's (§3.1): this node's ban or address check as Destination, and SOCKS `0x02` / `0x08` as Uncertain. The code is #1235 (§8), which stamps each open row with its proposed bucket and says so. *Records-was (revision 2): OPEN, `OE-D6` open, no code until it was ruled.* The brief is [`DIALER_OUTAGE_EVIDENCE_BRIEF.md`](DIALER_OUTAGE_EVIDENCE_BRIEF.md), revision 2, ruled 2026-10-31, with §4.2 item 3 and §7 amended by this ruling.
+**Status: RULED (Round 0 closed 2026-10-31, revision 3)** — Rick ruled the second return the same day (§0.2): `OE-D6` hold the rung; clearing is the judge's behaviour, not a declaration; the judge takes its own type, `DialFailure`, which supersedes `OE-D2`; the values are per connector, each an `Assumption` with its basis in §97. **Still open:** `OE-D10`, with the Tor lane (§6; it recommends option (b)); `OE-D4`'s mapping is reviewed (§3.2), leaving one check (`0x02` under an operator's own port policy) and the design question of Tor's own per-dial statement; and two rows of clearnet's mapping that are Rick's (§3.1): this node's ban or address check as Destination, and SOCKS `0x02` / `0x08` as Uncertain. The code is #1235 (§8), which stamps each open row with its proposed bucket and says so. *Records-was (revision 2): OPEN, `OE-D6` open, no code until it was ruled.* The brief is [`DIALER_OUTAGE_EVIDENCE_BRIEF.md`](DIALER_OUTAGE_EVIDENCE_BRIEF.md), revision 2, ruled 2026-10-31, with §4.2 item 3 and §7 amended by this ruling.
 
 **Read at:** `dev` `f608d01604` (revision 3; every anchor in §1 re-read there and holds; since the brief's pin `e543f0d329`, `cause.rs` gained `CloseKind::AcceptRateExceeded`, an accept-only kind, and clearnet's `drive.rs` gained the accept linger, accept-side only). *Records-was: `dev` `e543f0d329`, the brief's own pin.*
 **Reviews:** the Tor lane reviews the Tor declarations (§3.2, `OE-D4`) and rules the supervisor's new quiet-span source (`OE-D10`). Rick's reviewer covered clearnet's mapping independently (2026-10-31).
@@ -134,17 +134,20 @@ A reset or a bad record can be forged by an on-path party. On clearnet that part
 
 **The principle, ruled:** Local is only for failures independent of the destination. A failure that depends on the destination's address family or route is Uncertain: corroboration counts it when another path works (IPv4, here) and excuses it in a total outage.
 
-### 3.2 Tor's mapping (`OE-D4`; the Tor lane reviews — now Tor's stamping into `DialFailure`, including `0x03` and the destination-dependent replies)
+### 3.2 Tor's mapping (`OE-D4` — REVIEWED by the Tor lane 2026-10-31 against tor 0.4.9.14; built in #1235 `0e3f7f869c`)
 
 | What happened (where) | Today | Proposed |
 | --- | --- | --- |
 | The SOCKS port refuses or errors; authentication; malformed reply (`shekyl-tor/src/drive.rs:255-294`) | `ProxyUnavailable` / `LocalClose` | Local |
-| Reply `0x01` (a live service's port refuses, after a working rendezvous), `0x05` (refused), `0xF1` (descriptor unusable) | final, `NAMES_DESTINATION` | Destination |
-| Reply `0x02`; `0x07`, `0x08`, `0xF4`, `0xF5`, `0xF6` (this node's own request, `socks_reply_is_our_request`) | final, no marks | Local |
-| Reply `0x04`, `0x06`, `0xF0`, `0xF2`, `0xF3`, `0xF7` | `RETRY \| WINDOW_TIMEOUT`, some `NAMES_DESTINATION` | Uncertain |
-| Reply `0x03` (network unreachable) | `RETRY \| WINDOW_TIMEOUT` | **Uncertain, for the Tor lane to ground:** which stream-end reason produces it on a rendezvous stream. Local would mean never counted; Uncertain is the safe bucket until that is read in Tor's source |
+| Reply `0x05` (the service's own answer: refused, reset, or DONE for a port it does not offer); `0xF1` (descriptor unusable); `0xF4`, `0xF5` (client authorization, demanded by the onion's own descriptor, `hs_client.c:1636-1650`); `0xF6` (Tor could not parse the onion name, `connection_edge.c:2192-2198`; validated before the dial, so in practice it never arrives) | final, `NAMES_DESTINATION` for `0x05`, `0xF1` | Destination |
+| Reply `0x01` (general failure: Tor sends it for many endings, `reasons.c:109-155`; a circuit destroyed after the stream joins it comes back as a plain `0x01`, `connection_edge.c:400-411`) | final, `NAMES_DESTINATION` | **Uncertain.** As Destination, a hostile guard destroying each rendezvous circuit, or this node's own guard link dropping at an outage's start, would be counted without corroboration: the eclipse lever, through another code. *Records-was: "a live service's port refuses, after a working rendezvous", which is `0x05`'s description, and Destination* |
+| Reply `0x03` (network unreachable: only when Tor decides every directory server is unreachable and fails the waiting streams, `DIR_ALL_UNREACHABLE`, `mainloop.c:1095-1107`); `0x02` (only this node's own Tor policy, `connection_edge.c:1685` onward; a service sends DONE for an unoffered port, `:4096-4103`); `0x07`, `0x08` (Tor rejected this node's own SOCKS request, `proto_socks.c:615`, `:653`) | `0x03` `RETRY \| WINDOW_TIMEOUT`; the rest final, no marks | **Local.** `0x02` is Local only while no destination-port policy is configured: the managed Tor sets none; an operator's own Tor with `RejectPlaintextPorts` would let a gossiped port produce it (open with the Tor lane, #1235) |
+| Reply `0x04` (with extended errors on, only the service's own connect failing), `0x06`, `0xF0`, `0xF2`, `0xF3`, `0xF7` | `RETRY \| WINDOW_TIMEOUT`, some `NAMES_DESTINATION` | Uncertain |
 | Any other reply | final, no marks | Uncertain |
-| **For the Tor lane, under `OE-D3`'s principle:** `0x08` (address type), `0xF6` (onion address rejected) and `0xF4`, `0xF5` (client authorization for that onion) depend on the destination, as does `0x02` | listed as Local above | Not Local under the principle; Uncertain or Destination is the Tor lane's call |
+
+**The rule for Tor (the Tor lane, 2026-10-31):** nothing a gossiped address can cause may be Local. Local is retried every 10–15 s and never climbs, so a planted onion that could produce a Local reply would be redialed forever. *Records-was (revisions 2 and 3): `0x02`, `0x07`, `0x08`, `0xF4`, `0xF5`, `0xF6` listed together as Local ("this node's own request"), with the four destination-dependent ones flagged for the Tor lane; `0x03` Uncertain pending its grounding in Tor's source.*
+
+**Open, a design question for the round (the Tor lane, 2026-10-31): Tor's own statement per dial.** The SOCKS byte throws away what Tor already said. Tor's STREAM event for a closed dial carries `REASON` (local) and `REMOTE_REASON` (the far end's own END reason): a remote reason is the destination's word, and DESTROY with no remote reason is the path. `DIR_ALL_UNREACHABLE` and `NETWORK_LIVENESS` are Tor's own statements about its link. The Tor manager owns the control connection, so it can hand the dialer Tor's statement about each dial instead of the connector inferring it from one byte: the intermediate layer "Tor does Tor" describes. The per-reply mapping above stands either way.
 | The dial deadline, 120 s | `TransportTimeout`, `RETRY \| WINDOW_TIMEOUT` | Uncertain |
 | A local engine, socket-table or check failure | `LocalClose` | Local |
 | After the stream opened: the Levin handshake times out; the peer closes; an I/O error | `RETRY` | Uncertain. A circuit that collapses with this node's link looks the same as an onion that hangs up |
@@ -166,7 +169,7 @@ What each side closes:
 **What shows the link worked (the closed list):**
 - **`StreamOpened`:** an attempt on this connector reached an open stream (`opened_a_stream`, or a session).
 - **`SessionReceived { outbound_only }`:** a held session on this connector received a byte (the activity stamp, §1).
-- **Never:** a session merely held (the Pi's idle sessions sat open 2 min 10 s into the blackhole), the probe of the node's own onion (it never reaches the dialer, `TOR_SUPERVISOR.md` §4.5), or anything from Tor's own network judgment (`TSR-Q14`).
+- **Never:** a session merely held (the Pi's idle sessions sat open 2 min 10 s into the blackhole), the probe of the node's own onion, or anything from Tor's own network judgment (`TSR-Q14`). **The probe, corrected (the Tor lane, 2026-10-31):** its outbound dial never reaches the dialer (`TOR_SUPERVISOR.md` §4.5), but its arrival is an inbound connection, and Tor's corroboration counts inbound sessions. An arriving probe does show the link works, so counting it may be harmless, but the claim is checked against the activity stamp in #1235 (the brief's test 7, "the probe never corroborates", is the test that decides it). *Records-was: "it never reaches the dialer", stated without the inbound arrival.*
 
 **The declarations:**
 - **Tor:** `StreamOpened` or `SessionReceived` on any session, inbound included. Every Tor byte crosses the one guard link, and an observer on it cannot tell streams apart, so it passes all of them or none.
@@ -335,6 +338,8 @@ From the census at the pin. Historical ledger rows stay; they are a record.
 The return proposed (a), as the smaller change, and left the choice to the Tor lane.
 
 **Ruled 2026-10-31 (Rick), to the Tor lane:** option (a)'s formula silently swaps K for the target; it lands on 364.5 s only because both round to three. Derive the span from what the posture sentence claims, or take (b), the judge's last sign of life, rewording the sentence to say what the judge observes.
+
+**The Tor lane's recommendation (2026-10-31): option (b).** The posture line reports the judge's last sign that the link worked, worded as what the judge observed; under this layering the Tor manager reports what the dialer saw rather than redoing the dialer's arithmetic. The Tor lane writes the derivation as its own ruling for Rick. Until it lands, #1235 does not delete Tor's span: `Policy::quiet_after` reads it.
 
 ## 7. Wargame (§5 of the brief)
 
