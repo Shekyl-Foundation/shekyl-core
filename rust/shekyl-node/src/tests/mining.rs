@@ -455,10 +455,11 @@ fn a_regtest_node_with_an_address_posts_its_template_with_no_sessions() {
         .is_ok_and(|tip| tip.synchronized));
     node.stop();
 }
-/// Off regtest, nothing says the node is synced before chain sync's
-/// cutover: it posts nothing and says why, and publishing `Synced` on
-/// the node's watch posts (DX-Q3, Q13). Red edit: post without reading
-/// the watch.
+/// Off regtest, the node opens `NoView` (`sync_at_open`), and no owner
+/// publishes here: no seam is bound, so the sync owner never receives
+/// its hub. The node posts nothing and says why, and publishing `Synced`
+/// on the node's watch posts (DX-Q3, Q13). Red edit: post without
+/// reading the watch.
 #[test]
 fn a_testnet_node_posts_nothing_until_chain_sync_says_synced() {
     let dir = tempfile::tempdir().expect("temp");
@@ -472,7 +473,7 @@ fn a_testnet_node_posts_nothing_until_chain_sync_says_synced() {
     let reason = node.mining().status().no_job.expect("a reason");
     assert_eq!(
         reason.to_string(),
-        "no template: not synced (no sync owner before chain sync's cutover)"
+        "no template: not synced (no peer has completed a handshake)"
     );
     assert!(node
         .handles()

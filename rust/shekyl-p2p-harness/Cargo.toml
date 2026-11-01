@@ -26,6 +26,8 @@ tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-t
 # peers over real Levin framing on a seam dialer, against the real store,
 # ingest service, hasher budget and RandomX.
 serde_json = { workspace = true }
+shekyl-block-template = { path = "../shekyl-block-template" }
+shekyl-bundle-producer = { path = "../shekyl-bundle-producer" }
 shekyl-capped-stream = { path = "../shekyl-capped-stream" }
 shekyl-chain-ingest = { path = "../shekyl-chain-ingest", default-features = false, features = ["pipeline"] }
 shekyl-chain-rules = { path = "../shekyl-chain-rules" }
@@ -35,6 +37,7 @@ shekyl-chain-sync-runtime = { path = "../shekyl-chain-sync-runtime" }
 shekyl-difficulty = { path = "../shekyl-difficulty" }
 shekyl-draw-rng = { path = "../shekyl-draw-rng" }
 shekyl-hash-budget = { path = "../shekyl-hash-budget" }
+shekyl-miner = { path = "../shekyl-miner" }
 shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
 shekyl-seam = { path = "../shekyl-seam" }
 shekyl-types = { path = "../shekyl-types" }
@@ -45,6 +48,8 @@ tracing = "0.1"
 # The tests' seeded draw source for the node under test; held to this edge,
 # as the generator is test-only (`check_test_only_features.py`).
 shekyl-draw-rng = { path = "../shekyl-draw-rng", features = ["splitmix"] }
+# The miner's keys for a node that posts templates (CS-5 §3).
+shekyl-harness-wallet = { path = "../shekyl-harness-wallet" }
 # The loopback tests' logs: the owner's closes and faults, under RUST_LOG.
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 

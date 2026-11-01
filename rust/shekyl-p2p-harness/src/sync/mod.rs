@@ -19,5 +19,5 @@ mod peer;
 
 pub use chain::{fork_headers, open_store, store_path, Chain, Corpus, Step};
 pub use dial::{Buckets, PeerDial, Silent, SyncPeer};
-pub use node::{caches, substrate, Node, StubLog};
+pub use node::{caches, substrate, MinerSeat, Node, StubLog};
 pub use peer::{announcement, frame, request_headers, Bodies, HeaderChainPeer, Seen, ServingPeer};

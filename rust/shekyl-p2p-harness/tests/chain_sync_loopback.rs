@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use shekyl_chain_ingest::follower::{NoJob, Posting};
 use shekyl_chain_ingest::ProductionSubstrate;
 use shekyl_chain_rules::{form_header, target_claim, AtHeight, FormAttempt, Substrate};
 use shekyl_chain_store::codec::FollowingDegradedCell;
@@ -132,6 +133,155 @@ async fn a_fresh_node_syncs_a_corpus_from_two_honest_peers_hashing_headers_only(
         "{bodies} body requests for {count} blocks"
     );
     assert!(model_closes("honest").is_empty());
+    node.stop().await;
+    held.stop().await;
+}
+
+/// What a mining node's two watches said, in the order the recorder read
+/// them.
+#[derive(Clone, Debug)]
+enum Heard {
+    State(SyncState),
+    /// A posted job and the height its block connects at; `None` when the
+    /// board had moved on before the recorder read it.
+    Posted(Option<u64>),
+    Withdrawn(NoJob),
+}
+
+/// **A node posts no template while it is behind** (CS-5 §3). The owner
+/// is the one writer of the state the node publishes, and the tip
+/// follower reads that state: while the node is `Behind` it posts no job,
+/// and once it is `Synced` at the corpus's tip it posts one there. The
+/// shell's `is_synchronized` reads the same watch
+/// (`shekyl_node_is_synchronized`, `Synced` only; its unit test pins each
+/// state).
+///
+/// The handle goes `NoView` at open and `Synced` at the corpus's tip,
+/// with `Behind` between. Before `Behind` it may read `Synced` on the
+/// tip it opened on: a session that has opened, with no header verified
+/// yet, leaves the local chain the best one the node knows, and a claim
+/// does not move the state (CS-Q2; `a_claim_never_changes_the_state`).
+/// A job on that opening tip is allowed here for that reason.
+///
+/// Each block the node connects while `Behind` wakes the follower, which
+/// must withdraw with `NotSynced(Behind)`. A job built on a tip the node
+/// reached mid-sync is the failure: it would hand the miner work on a
+/// chain the node knows is not the best.
+///
+/// Seen red with the follower fed a watch fixed at `Synced`: jobs at
+/// every height the sync passed through.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_node_posts_no_template_while_it_is_behind() {
+    logs();
+    let (corpus, steps) = spend();
+    let held = source("posting-src", &corpus, &steps).await;
+    let (count, _, _) = held.tip().expect("a chain");
+    let keys = {
+        let wallet = shekyl_harness_wallet::MinerWallet::from_seed(&[0x5e; 32]);
+        let recipient = wallet.recipient();
+        shekyl_block_template::MinerKeys {
+            spend_public: recipient.spend_public,
+            x25519_pk: recipient.x25519_pk,
+            ml_kem_ek: recipient.ml_kem_ek.clone(),
+        }
+    };
+    let mut node = Node::start_mining("posting", corpus.rules(), &steps[..1], 2, rng(), keys).await;
+    let opened = node.count();
+    let heard = Arc::new(Mutex::new(Vec::new()));
+    let state_watcher = {
+        let heard = Arc::clone(&heard);
+        let mut handle = node.state.subscribe();
+        heard
+            .lock()
+            .expect("heard")
+            .push(Heard::State(*handle.borrow_and_update()));
+        tokio::spawn(async move {
+            while handle.changed().await.is_ok() {
+                let state = *handle.borrow_and_update();
+                heard.lock().expect("heard").push(Heard::State(state));
+            }
+        })
+    };
+    let seat = node.miner.as_ref().expect("a mining node");
+    let posting_watcher = {
+        let heard = Arc::clone(&heard);
+        let board = Arc::clone(&seat.board);
+        let mut posting = seat.posting.clone();
+        tokio::spawn(async move {
+            loop {
+                let now = posting.borrow_and_update().clone();
+                let entry = match now {
+                    Posting::Posted(generation) => Heard::Posted(
+                        board
+                            .posted()
+                            .filter(|(at, _)| *at == generation)
+                            .map(|(_, job)| job.height.to_raw()),
+                    ),
+                    Posting::Withdrawn(why) => Heard::Withdrawn(why),
+                };
+                heard.lock().expect("heard").push(entry);
+                if posting.changed().await.is_err() {
+                    break;
+                }
+            }
+        })
+    };
+    let (peer, _asked) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
+    node.connect(Box::new(peer), Some(claim_of(&held)));
+    wait_synced(&node, count).await;
+    let seat = node.miner.as_ref().expect("a mining node");
+    let posted = node
+        .wait(
+            LIMIT,
+            |_| matches!(seat.board.posted(), Some((_, job)) if job.height.to_raw() == count),
+        )
+        .await;
+    assert!(posted, "the synced node posted no job on its tip");
+    state_watcher.abort();
+    posting_watcher.abort();
+    let heard = heard.lock().expect("heard").clone();
+    eprintln!("heard: {heard:?}");
+
+    let states: Vec<&SyncState> = heard
+        .iter()
+        .filter_map(|h| match h {
+            Heard::State(state) => Some(state),
+            _ => None,
+        })
+        .collect();
+    let behind = states
+        .iter()
+        .position(|state| matches!(state, SyncState::Behind { .. }));
+    assert!(
+        matches!(states.first(), Some(SyncState::NoView))
+            && behind.is_some()
+            && matches!(states.last(), Some(SyncState::Synced))
+            && states
+                .iter()
+                .rposition(|state| matches!(state, SyncState::Synced))
+                > behind,
+        "the handle published {states:?}"
+    );
+    // No job on a tip the sync passed through: only the tip the node
+    // opened on and the corpus's tip.
+    let mid_sync: Vec<u64> = heard
+        .iter()
+        .filter_map(|h| match h {
+            Heard::Posted(Some(height)) if *height != opened && *height != count => Some(*height),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        mid_sync.is_empty(),
+        "jobs posted at heights the sync passed through: {mid_sync:?}; heard {heard:?}"
+    );
+    assert!(
+        heard.iter().any(|h| matches!(
+            h,
+            Heard::Withdrawn(NoJob::NotSynced(SyncState::Behind { .. }))
+        )),
+        "the follower never withdrew for Behind; heard {heard:?}"
+    );
     node.stop().await;
     held.stop().await;
 }

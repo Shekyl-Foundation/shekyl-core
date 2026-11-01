@@ -5042,6 +5042,8 @@ name = "shekyl-p2p-harness"
 version = "3.1.0"
 dependencies = [
  "serde_json",
+ "shekyl-block-template",
+ "shekyl-bundle-producer",
  "shekyl-capped-stream",
  "shekyl-chain-ingest",
  "shekyl-chain-rules",
@@ -5051,8 +5053,10 @@ dependencies = [
  "shekyl-clearnet",
  "shekyl-difficulty",
  "shekyl-draw-rng",
+ "shekyl-harness-wallet",
  "shekyl-hash-budget",
  "shekyl-levin",
+ "shekyl-miner",
  "shekyl-peer-policy",
  "shekyl-pow-randomx",
  "shekyl-runtime",

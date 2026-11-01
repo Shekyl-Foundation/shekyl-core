@@ -416,7 +416,7 @@ Its number is read from the tree at the flip's pin, never carried from a plan (`
 - `relay_tx` answers not ready: **Unbuilt by design**, owner RD (the relay driver).
 - A stem's embargo on fire: the C++ fluffed it on expiry; Rust re-stems once to the alternate and fluffs only as the last resort, the second fire or no live alternate: **Design** (§14.7 of `DAEMON_RELAY_PRIVACY.md`, reshape adopted unconditionally; RX-1 for the origin, Rick 2026-10-29).
 - An origin whose plan was `NoOwnEdge`: the C++ left it to the pool's short-grid retry; Rust holds it in the zone, neither shown nor fluffed, until an own edge exists: **Design** (RX-2, Rick 2026-10-29; criterion 4).
-- A public-network node is not synced, and builds no template, before chain sync's cutover: **Unbuilt by design**, owner chain sync (Q13).
+- A public-network node opens not synced, and builds no template until chain sync's owner publishes `Synced`: **Design** (Q13; `P2P_3_CHAIN_SYNC_BRIEF.md` CS-5).
 
 **Rows found by the flip's own legs (2026-10-30, the fleet runs of §3.3 and the RPC column).** Six Rust-defect rows, each fixed in this PR; all six sit in the C++ handler's sync half and the template's serving, none in the store or the validator; and one Design row for the carrier's send.
 
