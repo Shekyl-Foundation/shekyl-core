@@ -162,12 +162,17 @@ discarded body with the skeleton by the server's holdings, with no peer-set
 flag (`CS-Q3`, F28 taken in); a receiver that cannot bind a skeleton
 refuses it. Nothing to build for the wire; `serve.rs` adopts the store's
 `skeleton_of` in `SB-Q2`'s increment. The C++ `handle_get_objects` arm that
-honoured a peer's `prune` flag (`FOLLOWUPS.md` :277, owner `PDM-Q-F28`)
-deletes with `blockchain.cpp` at the flip; the row is **resolved by the
-flip** and is removed in the first pruning-lane commit after #1212 merges.
+honoured a peer's `prune` flag is decided: **deleted**, not built on. The
+serving half went with `blockchain.cpp` at the flip — the shim that replaced
+it (`src/cryptonote_core/cryptonote_core.cpp`, `handle_get_objects`) always
+serves the full block from `shekyl_core_block` — and the one line that still
+copies the peer's flag onto the entry (`entry.pruned = arg.prune;`), marking
+a full body pruned for a peer that asked, is deleted in `SB-Q2`'s increment.
+The FOLLOWUPS row (owner `PDM-Q-F28`) is removed by this ruling, its question
+answered here.
 
-**Falsifier.** After the flip, `rg -n 'arg\.prune|e\.pruned' src/ rust/` →
-nothing; `FOLLOWUPS.md` has no `handle_get_objects` row.
+**Falsifier.** `rg -n 'arg\.prune' src/` → nothing after the increment;
+`FOLLOWUPS.md` has no `handle_get_objects` row.
 
 ### SB-Q4 — "No node-variable content until this lands" — RULED (SB-F1), edit rule changed
 
@@ -336,12 +341,14 @@ cut:**
 | IG Part C: `pqc_auth_hash` under `tx`; `archived` and `shard` on the tx entry; `prune` on `block_list`'s request (§18, §19) | `IG-` lane, posed here | `SB-Q2` (iv) |
 | IG §5 REJECTED rows `prune-blockchain`, `sync-pruned-blocks` | `IG-` lane, posed here (`SB-Q6`) | `SB-Q6` |
 | #1212's FOLLOWUPS row on `chain_slot` | closes with the increment | the row is gone |
+| `entry.pruned = arg.prune;` in `cryptonote_core.cpp`'s `handle_get_objects` shim: the entry is never marked pruned (`SB-Q3`) | the same increment | `rg -n 'arg\.prune' src/` → nothing |
 
-**After #1212 merges, docs:** the `SB-Q5` re-tense commit on
-`ARCHIVAL_PRUNED_DAEMON_MODE.md` (banner, `Q-S0`, `Q1` body and row, the
-`DEL-008` annotations removed, pin bumped) and
-`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` :20; `FOLLOWUPS.md` :277 removed
-(`SB-Q3`).
+**Docs after #1212 merged (landed in this PR, 2026-11-01):** the `SB-Q5`
+re-tense of `ARCHIVAL_PRUNED_DAEMON_MODE.md` (banner pinned at
+`dev@9c1fff1f02`; `Q-S0` DISCHARGED; `Q1` body and row name
+`journal_horizon` / `SlashLogFloor`; every `DEL-008` annotation gone — the
+`SB-Q5` falsifier returns nothing) and of `ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`'s
+retirement notice; the `handle_get_objects` FOLLOWUPS row removed (`SB-Q3`).
 
 Nothing in the register is consensus: no `CEN-` row changes, no store
 table changes, no P2P wire format change.
