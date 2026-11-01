@@ -310,9 +310,11 @@ mod tests {
         framer.next_reply().expect("frames").expect("one reply")
     }
 
-    /// The timer stands ahead of a control event, and the event stays
-    /// queued for the drain. Folding the deadline first, or letting the
-    /// event arm take a line that was already held, fails this.
+    /// The timer stands ahead of a control event only when its wake is
+    /// already delivered. The event is queued after that, so both are
+    /// ready and the timer wins. The event stays for the drain. An event
+    /// queued before the timing thread has delivered lets that arm win,
+    /// and folding the deadline first fails this.
     #[tokio::test]
     async fn a_queued_event_is_still_held_when_the_timer_wins() {
         let due = secs(30);
@@ -331,38 +333,80 @@ mod tests {
         let (_death_tx, mut death) = mpsc::channel(1);
         let mut bootstrap = None;
         arm(&owner, Some(due));
-        let mut wake = None;
-        for _ in 0..8 {
-            sink.route(framed_notice());
-            tokio::task::yield_now().await;
-            let sources = Sources {
-                stop: &mut stop,
-                forward: &mut forward,
-                origin: &mut origin,
-                tor_link: &mut tor_link,
-                probe_arrivals: &mut probe_arrivals,
-                incoming: &mut incoming,
-                death: &mut death,
-                bootstrap: &mut bootstrap,
-            };
-            let got = wait(sources, &owner, Some(due), due).await;
-            match got.what {
-                Woken::Timer { closed: false } => {
-                    let queued = take_queued(&mut incoming);
-                    assert_eq!(queued.len(), 1, "the event arm did not take it");
-                    assert_eq!(queued[0].status(), 650);
-                    wake = Some(got);
-                    break;
-                }
-                Woken::Event(Some(_)) => {}
-                other => panic!("the wait ended on {other:?}"),
-            }
-        }
-        let wake = wake.expect("the timer won a wait that also held an event");
+        hold_until_the_deadline_is_delivered(&owner, due);
+        sink.route(framed_notice());
+        let sources = Sources {
+            stop: &mut stop,
+            forward: &mut forward,
+            origin: &mut origin,
+            tor_link: &mut tor_link,
+            probe_arrivals: &mut probe_arrivals,
+            incoming: &mut incoming,
+            death: &mut death,
+            bootstrap: &mut bootstrap,
+        };
+        let wake = wait(sources, &owner, Some(due), due).await;
+        assert!(
+            matches!(wake.what, Woken::Timer { closed: false }),
+            "the timer did not win: {:?}",
+            wake.what
+        );
+        let queued = take_queued(&mut incoming);
+        assert_eq!(queued.len(), 1, "the event arm took the line");
+        assert_eq!(queued[0].status(), 650);
         assert_eq!(wake.woke, due);
         assert_eq!(
             wake.resumed, None,
             "the deadline was already due, and the return was not late"
         );
+    }
+
+    /// Leave one delivered wake in the slot. Polling the wait takes a wake
+    /// that is already there, so that one is re-armed. A pending poll
+    /// registers a waker and waits until the timing thread delivers; the
+    /// wake stays in the slot.
+    fn hold_until_the_deadline_is_delivered(
+        owner: &shekyl_timing_engine::OwnerHandle<ManualClock>,
+        due: u64,
+    ) {
+        use std::future::Future;
+        use std::pin::Pin;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        use std::task::{Context, Poll, Wake, Waker};
+        use std::time::Instant;
+
+        struct Told(AtomicBool);
+        impl Wake for Told {
+            fn wake(self: Arc<Self>) {
+                self.0.store(true, Ordering::Release);
+            }
+        }
+
+        for _ in 0..8 {
+            let told = Arc::new(Told(AtomicBool::new(false)));
+            let waker = Waker::from(Arc::clone(&told));
+            let mut wait = owner.wait_wake_async();
+            let mut context = Context::from_waker(&waker);
+            match Pin::new(&mut wait).poll(&mut context) {
+                Poll::Pending => {
+                    let started = Instant::now();
+                    while !told.0.load(Ordering::Acquire) {
+                        assert!(
+                            started.elapsed() < Duration::from_secs(2),
+                            "the timing thread did not deliver the armed deadline"
+                        );
+                        std::thread::yield_now();
+                    }
+                    return;
+                }
+                Poll::Ready(Ok(_)) => {
+                    owner.clear().expect("clear the consumed wake");
+                    owner.arm(Tick::new(due)).expect("arm the deadline again");
+                }
+                Poll::Ready(Err(error)) => panic!("the timing engine closed: {error:?}"),
+            }
+        }
+        panic!("the deadline was taken before an event could be held with it");
     }
 }
