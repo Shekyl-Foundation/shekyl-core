@@ -250,6 +250,11 @@ members = [
     # timestamps (docs/design/RAW_TYPE_NEWTYPE_MIGRATION.md PR 0)
     "shekyl-types",
 
+    # The build identity (version, release flag, release name) read from the
+    # environment cmake/Version.cmake sets, and the protocol version
+    # (DAEMON_CONFIG_CUTOVER.md DC-Q20). A leaf: no dependencies.
+    "shekyl-version",
+
     # First-party crates relocated out of the vendored shekyl-oxide tree in the
     # un-vendor slice-2 Track B (docs/design/SHEKYL_OXIDE_UNVENDOR.md §6 B2): the
     # FCMP++ application/support layer is ours, no longer upstream-tracked. Renamed

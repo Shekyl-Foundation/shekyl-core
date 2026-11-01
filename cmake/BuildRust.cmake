@@ -475,16 +475,20 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Windows" AND NOT IOS)
             "${_shekyl_rust_bin_dir}/${_bin}${CMAKE_EXECUTABLE_SUFFIX}")
     endforeach()
 
-    # The binaries print the daemon's version string (`SHEKYL_VERSION_FULL`,
-    # spelled once in cmake/Version.cmake), not the crate's `3.1.0`. This
-    # target runs on every build. Cargo fingerprints `option_env!` and
-    # compiles only when the string or a source changed. An OUTPUT rule
-    # would not: a later bare `cargo build` of these packages writes
-    # `-unknown` binaries over the same paths, newer than every DEPENDS
-    # file, and the next CMake build would skip cargo and stage those.
+    # The binaries print the build identity (`SHEKYL_VERSION_FULL`,
+    # `SHEKYL_RELEASE_NAME`, `SHEKYL_VERSION_IS_RELEASE`, spelled once in
+    # cmake/Version.cmake and read by `rust/shekyl-version`; DC-Q20), not
+    # the crate's `3.1.0`. This target runs on every build. Cargo
+    # fingerprints `option_env!` and compiles only when a value or a source
+    # changed. An OUTPUT rule would not: a later bare `cargo build` of these
+    # packages writes `-unknown` binaries over the same paths, newer than
+    # every DEPENDS file, and the next CMake build would skip cargo and
+    # stage those.
     add_custom_target(shekyl_rust_bins ALL
         COMMAND ${CMAKE_COMMAND} -E env ${_rust_env_clear}
             "SHEKYL_VERSION_FULL=${SHEKYL_VERSION_FULL}"
+            "SHEKYL_RELEASE_NAME=${SHEKYL_RELEASE_NAME}"
+            "SHEKYL_VERSION_IS_RELEASE=${SHEKYL_VERSION_IS_RELEASE}"
             ${CARGO_EXECUTABLE} build --locked ${RUST_BUILD_FLAG} ${RUST_TARGET_FLAG}
             ${_shekyl_rust_bin_pkg_args}
         WORKING_DIRECTORY ${RUST_SOURCE_DIR}

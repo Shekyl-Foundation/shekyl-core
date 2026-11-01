@@ -4134,6 +4134,7 @@ dependencies = [
  "shekyl-shard-visual",
  "shekyl-types",
  "shekyl-units",
+ "shekyl-version",
  "shekyl-wallet-rpc",
  "shekyl-win-sec",
  "tempfile",
@@ -5604,6 +5605,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-version"
+version = "3.1.0"
+
+[[package]]
 name = "shekyl-wallet-contract"
 version = "3.1.0"
 dependencies = [
@@ -5649,6 +5654,7 @@ dependencies = [
  "shekyl-scanner",
  "shekyl-types",
  "shekyl-units",
+ "shekyl-version",
  "shekyl-wallet-contract",
  "shekyl-win-sec",
  "subtle",
