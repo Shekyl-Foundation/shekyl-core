@@ -618,6 +618,108 @@ TEST(anon_zone_address_keying, host_sweep_does_not_sever_a_zone)
     EXPECT_TRUE(f.first.is_blockable());
 }
 
+namespace
+{
+  //! A `node_server` that records each drop instead of closing a socket the
+  //! test never opened. Every other path, the ban list included, is the
+  //! production one.
+  struct dropping_server : public Server
+  {
+    using Server::Server;
+    std::vector<boost::uuids::uuid> dropped;
+
+    bool drop_connection(const epee::net_utils::connection_context_base &context) override
+    {
+      dropped.push_back(context.m_connection_id);
+      return true;
+    }
+  };
+
+  //! Whether the process ban list covers `host`.
+  bool host_is_banned(const char *host)
+  {
+    std::uint64_t left = 0;
+    return shekyl_ban_remaining_ns(host, &left) > 0;
+  }
+
+  const char *const PEER_HOST = "203.0.113.7";
+  const auto CLEARNET = static_cast<std::uint8_t>(epee::net_utils::connector_id::clearnet);
+
+  epee::net_utils::network_address peer_address()
+  {
+    return epee::net_utils::network_address{
+        epee::net_utils::ipv4_network_address{MAKE_IP(203, 0, 113, 7), 18080}};
+  }
+}
+
+// No peer can make a ban (Rick, 2026-11-01): a clearnet peer whose
+// handshake names another network is dropped every time and is never
+// banned, however often it tries. The automatic ban banned it past ten
+// fail points, the eleventh try. Red: run on the code before the
+// deletion, where `add_host_fail` calls `block_host`.
+TEST(node_server, a_peer_naming_another_network_is_dropped_every_time_and_never_banned)
+{
+  ban_isolate isolated;
+  test_core pr_core;
+  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
+  dropping_server server(cprotocol);
+  cprotocol.set_p2p_endpoint(&server);
+
+  nodetool::COMMAND_HANDSHAKE_T<cryptonote::CORE_SYNC_DATA>::request request{};
+  request.node_data.network_id = boost::uuids::uuid{{1}};
+  epee::byte_slice body;
+  ASSERT_TRUE(epee::serialization::store_t_to_binary(request, body));
+
+  epee::levin::levin_commands_handler<nodetool::p2p_connection_context_t<cryptonote::cryptonote_connection_context>> &levin = server;
+  for (std::uint8_t attempt = 1; attempt <= 11; ++attempt)
+  {
+    nodetool::p2p_connection_context_t<cryptonote::cryptonote_connection_context> context{
+        fixed_uuid(attempt), peer_address(), /*is_income=*/true, CLEARNET};
+    epee::byte_stream reply;
+    levin.invoke(nodetool::COMMAND_HANDSHAKE_T<cryptonote::CORE_SYNC_DATA>::ID,
+        epee::to_span(body), reply, context);
+    ASSERT_EQ(attempt, server.dropped.size()) << "try " << unsigned{attempt} << " was dropped";
+    EXPECT_FALSE(host_is_banned(PEER_HOST)) << "banned after try " << unsigned{attempt};
+  }
+}
+
+// The same for the protocol handler's drops: a peer that claims a lower
+// height than it claimed before is dropped through `hit_score` at
+// `DROP_PEERS_ON_SCORE`, every session, and is never banned. Each such drop
+// scored five, so the automatic ban fired on the third. Red: as above.
+TEST(cryptonote_protocol_handler, a_peer_claiming_a_lower_height_is_dropped_every_time_and_never_banned)
+{
+  ban_isolate isolated;
+  test_core pr_core;
+  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
+  dropping_server server(cprotocol);
+  cprotocol.set_p2p_endpoint(&server);
+  // A claim above this node's height starts a sync, which asks the zone for
+  // a callback; the zone holds no connection and answers false.
+  server.add_zone(epee::net_utils::connector_id::clearnet);
+
+  for (std::uint8_t session = 1; session <= 4; ++session)
+  {
+    cryptonote::cryptonote_connection_context context{};
+    static_cast<epee::net_utils::connection_context_base&>(context) =
+        epee::net_utils::connection_context_base{fixed_uuid(session), peer_address(),
+            /*is_income=*/true, /*ssl=*/false, 0, 0, 0, 0, CLEARNET};
+    context.m_state = cryptonote::cryptonote_connection_context::state_normal;
+    context.m_remote_blockchain_height = 100;
+    cryptonote::CORE_SYNC_DATA lower{};
+    for (std::uint64_t claim : {std::uint64_t{50}, std::uint64_t{40}})
+    {
+      // A claim above this node's height moves the session to
+      // synchronizing, where a timed sync is not read; the next one is.
+      context.m_state = cryptonote::cryptonote_connection_context::state_normal;
+      lower.current_height = claim;
+      cprotocol.process_payload_sync_data(lower, context, false);
+    }
+    ASSERT_EQ(session, server.dropped.size()) << "session " << unsigned{session} << " was dropped";
+    EXPECT_FALSE(host_is_banned(PEER_HOST)) << "banned after session " << unsigned{session};
+  }
+}
+
 
 namespace
 {
