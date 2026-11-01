@@ -2488,15 +2488,17 @@ not change with its address:
 - (a) is `store/header.rs`: `seal` writes `schema_version` (and the
   `apply_policy` provenance cell — §7.1.1's sufficiency control, specified in
   [`ARCHIVAL_FORCING_CORPUS.md`](ARCHIVAL_FORCING_CORPUS.md) §"ApplyPolicy")
-  in a fresh file's **first** transaction, before any batch. The engine's own
-  `create_file` commits an empty database before that transaction, so a power
-  loss between the two leaves a file with **no table at all**; a writable open
-  of such a file holds the engine's exclusive lock and **finishes the
-  creation**, sealing it in place (nothing in it can be lost), while a
-  read-only open cannot seal and still refuses. Found by PB-S2's first
-  power-loss replay (2026-11-01: 9 of 58 rebuilt points, all before the
-  first acknowledgement, would not start again; the pool file the same
-  way). `verify` runs on every other writable and read-only open and returns
+  in a fresh file's **first** transaction, before any batch. Creation is three
+  durable steps (`create_new`, the engine's initialization, the seal), and a
+  power loss between any two leaves a file nothing was committed to: empty, a
+  header whose magic is unwritten (redb writes it last), or a valid database
+  with **no table at all**. A writable open **finishes the creation** in each
+  case (`crate::creation`): it seals the empty database in place under the
+  engine's exclusive lock, or claims and empties the uninitialized file and
+  creates it fresh. A read-only open cannot seal and still refuses. Found by
+  PB-S2's power-loss replay (2026-11-01, one capture of a first start, a sync
+  and a switch: 9 of 58 rebuilt points, then 2 of 166, would not start
+  again, all before the first acknowledgement; the pool file the same way). `verify` runs on every other writable and read-only open and returns
   `SchemaVersionAbsent` / `SchemaVersionMismatch { found, expected }` /
   `CellCorrupt` — never a default: a file with any table and no seal is not
   one this binary wrote. The key bytes are pinned by a
