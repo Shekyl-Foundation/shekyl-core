@@ -731,3 +731,150 @@ fn no_window_admits_no_reference() {
         Ok(SectionStanding::Admitted(SectionCharge::of(&[])))
     );
 }
+
+/// The template's section over `queued`, included at `h_incl`.
+fn filled(
+    queued: &[BundleRef],
+    h_incl: u64,
+    view: &FixtureBundleView,
+    rules: &RuleSet,
+) -> Vec<BundleRef> {
+    fill_section(queued, BlockHeight::from_raw(h_incl), view, rules).expect("the view answers")
+}
+
+/// The heights a section holds, in order.
+fn heights(refs: &[BundleRef]) -> Vec<u64> {
+    refs.iter().map(|r| r.h().to_raw()).collect()
+}
+
+/// What the template fills is a section the rule admits: ascending, inside
+/// the window and within the budget its own `D` sets, under the root over
+/// it. Checked over queues of every count mix this fixture's budget makes
+/// interesting, on both sides of the epoch boundary. Red edit: charge a
+/// reference its count rather than `max(count, 1)` — zero-draw bundles
+/// then ride free, and the section of them is over the budget
+/// `check_section` derives.
+#[test]
+fn a_filled_section_is_one_check_section_admits() {
+    let seb = SettlementEpochBlocks::new(10_000).expect("non-zero");
+    let rules = rules_of(seb.get());
+    let boundary = seb.get();
+    // Epoch 0 has `D` = 8 (budget 2), epoch 1 `D` = 10,000 (budget 20).
+    let view = view_holding(&[(0, 8), (1, 10_000)]);
+    let h_incl = boundary + 10;
+    for counts in [
+        vec![0u32, 0, 0],
+        vec![1, 1, 1, 1],
+        vec![2, 0, 9, 11, 3],
+        vec![10, 10, 10],
+        vec![20, 1],
+        vec![5, 5, 5, 5, 5],
+    ] {
+        // Half the queue below the boundary, half above it.
+        let queued: Vec<BundleRef> = counts
+            .iter()
+            .zip((boundary - 5)..)
+            .map(|(count, h)| reference_at(h, *count))
+            .collect();
+        let section = filled(&queued, h_incl, &view, &rules);
+        assert_eq!(
+            check_section(
+                &section,
+                &root_of(&section),
+                BlockHeight::from_raw(h_incl),
+                &view,
+                &rules
+            ),
+            Ok(SectionStanding::Admitted(SectionCharge::of(&section))),
+            "counts {counts:?} filled {:?}",
+            heights(&section)
+        );
+    }
+}
+
+/// Oldest first, and a reference that would pass the budget is passed
+/// over while a later smaller one still fits. Budget 20: 15 is taken, 10
+/// would make 25 and is passed over, 5 makes 20 and is taken. Red edit:
+/// stop at the first reference that does not fit — the 5 is then left out.
+#[test]
+fn a_filled_section_takes_the_oldest_first_and_fills_what_is_left() {
+    let seb = SettlementEpochBlocks::new(10_000).expect("non-zero");
+    let rules = rules_of(seb.get());
+    let view = view_holding(&[(0, 10_000)]);
+    let queued = section_of(&[15, 10, 5, 1]);
+    assert_eq!(heights(&filled(&queued, 104, &view, &rules)), [100, 102]);
+    // Budget 2 (`D` = 8): the two oldest one-draw bundles, and nothing after.
+    let small = view_holding(&[(0, 8)]);
+    let ones = section_of(&[1, 1, 1]);
+    assert_eq!(heights(&filled(&ones, 103, &small, &rules)), [100, 101]);
+}
+
+/// A reference outside the window of the including block is not taken:
+/// one at or above `h_incl`, and one more than `W₂` below it. `W₂` is 500
+/// on this epoch. Red edit: drop the window check — both are taken, and
+/// the section is refused at CEN-J31.
+#[test]
+fn a_filled_section_holds_only_references_inside_the_window() {
+    let seb = SettlementEpochBlocks::new(10_000).expect("non-zero");
+    let rules = rules_of(seb.get());
+    let view = view_holding(&[(0, 10_000)]);
+    let queued = [
+        reference_at(99, 1),
+        reference_at(100, 1),
+        reference_at(599, 1),
+        reference_at(600, 1),
+    ];
+    // At 600: 99 is 501 below, outside; 100 is 500 below, inside; 600 is
+    // the including block itself.
+    assert_eq!(heights(&filled(&queued, 600, &view, &rules)), [100, 599]);
+}
+
+/// A reference whose epoch's `D` the view does not hold is passed over,
+/// and so is one that repeats or precedes the last height taken: the
+/// section stays strictly ascending and judgeable. Red edits: take a
+/// reference of an unknown `D` — the section then awaits; drop the order
+/// check — the section repeats an `h` and is refused at CEN-J29.
+#[test]
+fn a_filled_section_passes_over_an_unknown_d_and_out_of_order_references() {
+    let seb = SettlementEpochBlocks::new(10_000).expect("non-zero");
+    let rules = rules_of(seb.get());
+    let boundary = seb.get();
+    // Epoch 1's `D` is not held.
+    let view = view_holding(&[(0, 10_000)]);
+    let queued = [
+        reference_at(boundary - 2, 1),
+        reference_at(boundary - 2, 2),
+        reference_at(boundary - 3, 1),
+        reference_at(boundary - 1, 1),
+        reference_at(boundary, 1),
+    ];
+    let section = filled(&queued, boundary + 1, &view, &rules);
+    assert_eq!(heights(&section), [boundary - 2, boundary - 1]);
+    assert_eq!(
+        section[0].count(),
+        1,
+        "the first reference for an h is the one kept"
+    );
+}
+
+/// A reference of a later epoch with a larger `D` raises the budget for
+/// the whole section, so it is taken after the earlier epoch's budget was
+/// already spent. Budget 2 below the boundary (`D` = 8), 20 above it.
+/// Red edit: keep the first reference's `D` — the later bundle of five is
+/// then left out of a block it fits.
+#[test]
+fn a_larger_d_epoch_in_the_section_raises_its_budget() {
+    let seb = SettlementEpochBlocks::new(10_000).expect("non-zero");
+    let rules = rules_of(seb.get());
+    let boundary = seb.get();
+    let view = view_holding(&[(0, 8), (1, 10_000)]);
+    let queued = [
+        reference_at(boundary - 2, 1),
+        reference_at(boundary - 1, 1),
+        reference_at(boundary, 5),
+    ];
+    assert_eq!(
+        heights(&filled(&queued, boundary + 1, &view, &rules)),
+        [boundary - 2, boundary - 1, boundary]
+    );
+}

@@ -36,6 +36,8 @@
 //! Rule `23-disposition-visibility`: staged work is code with a named consumer in a live plan.
 //!
 //! - **What is here:** the verifier, [`judge_bundles`], [`draw_targets`],
+//!   [`fill_section`] (the template's section, a section [`check_section`]
+//!   admits; the block template calls it at the switch),
 //!   the view trait, the fixture, and the unbound rule types
 //!   `rules::bundle_admission::J29` through `J37`. Increment 4a also
 //!   implements the view on the store (`shekyl-chain-store`'s
@@ -293,8 +295,8 @@ mod bundle_section;
 mod records;
 
 pub use bundle_section::{
-    check_section, check_section_until_switch, open_reference, SectionCharge, SectionCheckFailed,
-    SectionRefused, SectionStanding,
+    check_section, check_section_until_switch, fill_section, open_reference, SectionCharge,
+    SectionCheckFailed, SectionRefused, SectionStanding,
 };
 
 /// `epoch`'s drawable epoch, if the view holds the one filed for it. A

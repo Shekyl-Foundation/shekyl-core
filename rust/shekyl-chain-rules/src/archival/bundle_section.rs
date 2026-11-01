@@ -302,6 +302,63 @@ pub fn check_section_until_switch(
     }
 }
 
+/// The references a template puts in the next block's section: from
+/// `queued`, in ascending `h`, every one inside the window of `h_incl`
+/// whose epoch's `D` the view holds, while the section's charge stays
+/// within the budget its `D` sets. A reference that would take the charge
+/// past the budget is passed over and the next is tried, so the oldest
+/// bundles, nearest their window's end, go first and a later smaller one
+/// still fills what is left.
+///
+/// The result is a section [`check_section`] admits at `h_incl` under the
+/// root [`bundle_root`] computes over it: strictly ascending, inside the
+/// window, and within the budget of its largest `D`. Taking a reference
+/// can only raise that `D` and with it the budget, so every reference kept
+/// stays within the final budget. A reference whose `D` is unknown is
+/// passed over: its bundle could not be judged, so a section holding it
+/// would wait (`SCS-P23`).
+///
+/// **STAGED** (`SO-D12` 4b prep, `ARCHIVAL_SETTLEMENT_WRITER.md` §16.3
+/// item 4): the block template (`shekyl-chain-ingest`'s `template.rs`)
+/// calls it at the switch, over the bundle queue's references and the
+/// store's bundle view of the template's snapshot. Nothing calls it before
+/// then.
+///
+/// # Errors
+///
+/// The view's fault, when reading an epoch's `D` faults.
+pub fn fill_section<V: BundleView>(
+    queued: &[BundleRef],
+    h_incl: BlockHeight,
+    view: &V,
+    rule_set: &RuleSet,
+) -> Result<Vec<BundleRef>, V::Fault> {
+    let schedule = rule_set.settlement_schedule();
+    let params = shekyl_archival_retention::archival_params();
+    let mut chosen: Vec<BundleRef> = Vec::new();
+    let mut charge = SectionCharge::of(&[]);
+    let mut d_max: Option<u64> = None;
+    for reference in queued {
+        if chosen.last().is_some_and(|last| last.h() >= reference.h())
+            || !inside_window(reference.h(), h_incl, schedule)
+        {
+            continue;
+        }
+        let epoch = schedule.epoch_at(reference.h());
+        let Some(d) = super::drawable_for(view, epoch)?.map(DrawableEpoch::len) else {
+            continue;
+        };
+        let widened = d_max.map_or(d, |known| known.max(d));
+        let added = SectionCharge(charge.get().saturating_add(reference.charge()));
+        if added.within(section_budget(params, widened, schedule.blocks())) {
+            chosen.push(reference.clone());
+            charge = added;
+            d_max = Some(widened);
+        }
+    }
+    Ok(chosen)
+}
+
 /// §9.1 step 1 and the section's window: [`section_shape`], then every
 /// reference inside the window.
 ///

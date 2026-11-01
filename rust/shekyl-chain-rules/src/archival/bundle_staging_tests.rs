@@ -154,6 +154,7 @@ fn nothing_on_the_connect_path_calls_the_bundle_verifier() {
         "BundleView",
         "judge_bundles",
         "draw_targets",
+        "fill_section",
     ];
 
     // Rule 47: the connect path's files, by name, each with the identifier

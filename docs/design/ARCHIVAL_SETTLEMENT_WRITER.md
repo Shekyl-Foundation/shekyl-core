@@ -1301,6 +1301,12 @@ This lane's increments, each its own change:
      (the sim pins that opening shortfall at 1536 when `|D|` is 512).
      Increment 4a does not call the verifier: a connect writes the plan
      only when it is handed bundles;
+   - the template's section, **staged** (4b preparation): `fill_section`
+     beside `check_section` in the rules crate takes the bundle queue's
+     references in ascending `h`, inside the window and within the budget
+     their largest `D` sets, passing over one that would exceed it; what it
+     returns is a section `check_section` admits. The block template calls
+     it at the switch;
    - flip the switch as one rule-07 cutover, calling the verifier from
      `validate`. The `passed` bit is set by
      an admitted record and by nothing else, and the Fakechain door is
