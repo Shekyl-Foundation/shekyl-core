@@ -708,13 +708,6 @@ impl Peerlist {
         self.partition(connector).next_expiry()
     }
 
-    /// Every address, unordered, for the file (brief §7): gray and white
-    /// together, no clock, no list. An address in the refused set is not
-    /// written, and neither is one whose host is under an active ban at
-    /// `now` (Rick, 2026-10-24: the file carries addresses, never
-    /// judgements; a banned address is left out, and the ban is not
-    /// saved). The ban list is the caller's, asked through `bans` as the
-    /// draws ask it. No address is left out for who supplied it.
     /// A ban event from the ban list: hold `entry`, and bar every seat it
     /// covers on both lists (Rick, 2026-10-31). A white seat is demoted to
     /// gray first, then barred. A barred seat is never drawn, is in no
@@ -750,6 +743,13 @@ impl Peerlist {
         entries.into_iter().map(|entry| self.ban(entry, rng)).sum()
     }
 
+    /// Every address, unordered, for the file (brief §7): gray and white
+    /// together, no clock, no list. An address in the refused set is not
+    /// written, and neither is one whose host is under an active ban at
+    /// `now` (Rick, 2026-10-24: the file carries addresses, never
+    /// judgements; a banned address is left out, and the ban is not
+    /// saved). The ban list is the caller's, asked through `bans` as the
+    /// draws ask it. No address is left out for who supplied it.
     #[must_use]
     pub fn persistable(&self, bans: &mut dyn BanQuery, now: Tick) -> Vec<NetworkAddress> {
         self.partitions
