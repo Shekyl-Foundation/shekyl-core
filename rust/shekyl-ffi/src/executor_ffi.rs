@@ -96,13 +96,69 @@ pub unsafe extern "C" fn shekyl_thread_ledger_report(buf: *mut c_char, len: usiz
 
 #[cfg(test)]
 mod tests {
-    use super::shekyl_thread_ledger_report;
+    use std::sync::{Mutex, MutexGuard, PoisonError};
+
+    use super::{
+        shekyl_executor_record, shekyl_executor_release, shekyl_thread_ledger_report, EXECUTORS,
+    };
+
+    /// The executor table and the ledger it reports into are process-global,
+    /// and libtest runs this module's tests on one process in parallel. A
+    /// test that writes the table, and a test that reads the report twice
+    /// and compares, cannot interleave: the writer could record and release
+    /// between the reader's two snapshots, leaving them equal while the
+    /// calls between them saw a longer report. This gate serializes the
+    /// tests that touch that state. It is not `EXECUTORS`'s lock, which the
+    /// FFI takes and releases inside each call.
+    static LEDGER_TESTS: Mutex<()> = Mutex::new(());
+
+    fn ledger_tests() -> MutexGuard<'static, ()> {
+        LEDGER_TESTS.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The C surface refuses a pool one worker below the floor and records
+    /// nothing; at the floor it records one row and writes the handle. The
+    /// floor itself is `ExecutorBudget::above_floor`'s, tested in
+    /// `shekyl-thread-ledger`; this is the 0 / 1 contract the C++ reads.
+    /// The edit that makes this red is returning 1 before the budget
+    /// check, or recording the row on the refused path. Ported from
+    /// `tests/unit_tests/seam_endpoint.cpp`'s
+    /// `the_executor_refuses_one_below_the_floor`, which reached no C++.
+    #[test]
+    fn one_below_the_floor_is_refused_and_records_nothing() {
+        let _serial = ledger_tests();
+        let name = c"p2p-exec";
+        let before = EXECUTORS.lock().expect("executor table").len();
+
+        let mut handle = u64::MAX;
+        let refused = unsafe { shekyl_executor_record(name.as_ptr(), 1, 1, &raw mut handle) };
+        assert_eq!(refused, 0, "one worker for one lane is below the floor");
+        assert_eq!(handle, u64::MAX, "a refusal writes no handle");
+        assert_eq!(
+            EXECUTORS.lock().expect("executor table").len(),
+            before,
+            "a refusal records nothing"
+        );
+
+        let mut handle = 0;
+        let recorded = unsafe { shekyl_executor_record(name.as_ptr(), 1, 2, &raw mut handle) };
+        assert_eq!(recorded, 1, "two workers for one lane is the floor");
+        assert_ne!(handle, 0, "a recorded executor has a handle");
+        assert_eq!(
+            EXECUTORS.lock().expect("executor table").len(),
+            before + 1,
+            "the floor records one row"
+        );
+        shekyl_executor_release(handle);
+        assert_eq!(EXECUTORS.lock().expect("executor table").len(), before);
+    }
 
     /// A one-byte buffer writes only the NUL. Returning that written count
     /// (zero) is the contract this replaced. The edit that makes this red
     /// is returning the truncated count instead of the full length.
     #[test]
     fn a_short_buffer_returns_the_full_length() {
+        let _serial = ledger_tests();
         for _ in 0..8 {
             let report = shekyl_thread_ledger::report();
             let full = report.len();
