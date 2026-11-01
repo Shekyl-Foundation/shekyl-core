@@ -1,6 +1,6 @@
 # One judge of failed dials; each connector declares how its failures are judged
 
-**Status: RULED (Round 0 closed 2026-10-31, revision 3)** — Rick ruled the second return the same day (§0.2): `OE-D6` hold the rung; clearing is the judge's behaviour, not a declaration; the judge takes its own type, `DialFailure`, which supersedes `OE-D2`; the values are per connector, each an `Assumption` with its basis in §97. `OE-D4` and `OE-D10` are with the Tor lane (§3.2, §6). The code is the sub-PR of §8, open off `dev`. *Records-was (revision 2): OPEN, `OE-D6` open, no code until it was ruled.* The brief is [`DIALER_OUTAGE_EVIDENCE_BRIEF.md`](DIALER_OUTAGE_EVIDENCE_BRIEF.md), revision 2, ruled 2026-10-31, with §4.2 item 3 and §7 amended by this ruling.
+**Status: RULED (Round 0 closed 2026-10-31, revision 3)** — Rick ruled the second return the same day (§0.2): `OE-D6` hold the rung; clearing is the judge's behaviour, not a declaration; the judge takes its own type, `DialFailure`, which supersedes `OE-D2`; the values are per connector, each an `Assumption` with its basis in §97. **Still open:** `OE-D4` and `OE-D10`, with the Tor lane (§3.2, §6); and two rows of clearnet's mapping that are Rick's (§3.1): this node's ban or address check as Destination, and SOCKS `0x02` / `0x08` as Uncertain. The code is #1235 (§8), which stamps each open row with its proposed bucket and says so. *Records-was (revision 2): OPEN, `OE-D6` open, no code until it was ruled.* The brief is [`DIALER_OUTAGE_EVIDENCE_BRIEF.md`](DIALER_OUTAGE_EVIDENCE_BRIEF.md), revision 2, ruled 2026-10-31, with §4.2 item 3 and §7 amended by this ruling.
 
 **Read at:** `dev` `f608d01604` (revision 3; every anchor in §1 re-read there and holds; since the brief's pin `e543f0d329`, `cause.rs` gained `CloseKind::AcceptRateExceeded`, an accept-only kind, and clearnet's `drive.rs` gained the accept linger, accept-side only). *Records-was: `dev` `e543f0d329`, the brief's own pin.*
 **Reviews:** the Tor lane reviews the Tor declarations (§3.2, `OE-D4`) and rules the supervisor's new quiet-span source (`OE-D10`). Rick's reviewer covered clearnet's mapping independently (2026-10-31).
@@ -351,9 +351,9 @@ The return proposed (a), as the smaller change, and left the choice to the Tor l
 - **A slow link (the 40 kbit case).** Streams open late but do open, and sessions receive slowly but do receive. Both corroborate, so a slow link is never taken for an outage. The reverse is unchanged from today: a live onion that misses the 105 s window on a slow link, while another stream opens, is counted.
 - **A healthy clearnet link.** At target (12 outbound sessions) an Uncertain failure is excused in about 0.25 % of cases, and judged as today otherwise, 15 s later. During fill the excusal rate follows §3.5's table, and an excused dead address costs one redial. Destination failures, the refusals, count at once as today.
 
-## 8. The sub-PR's work (open off `dev`, 2026-10-31)
+## 8. The sub-PR's work (#1235, open off `dev`, 2026-10-31)
 
-One PR off `dev`, by the dialer lane, with these pieces:
+One PR off `dev`, by the dialer lane, [#1235](https://github.com/Shekyl-Foundation/shekyl-core/pull/1235), with these pieces:
 1. **The type:** `DialFailure` and its enums (§2.2), the `Proof::Misbehaviour` constructor on `destination_authenticated`, and the marks deleted (§5) with `close_cause.h` regenerated. *Records-was: the two bits, the evidence constructor, the widened mask and header.*
 2. **The stamping:** clearnet's split in `drive.rs` and `handshake.rs` (§3.1), and Tor's table (§3.2).
 3. **The declarations:** `FailureJudging` beside `DialProfile`.
