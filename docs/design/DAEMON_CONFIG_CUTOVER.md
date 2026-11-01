@@ -592,7 +592,6 @@ kinds and defaults are `INPUT_GRAMMAR.md` §5's and are not restated. The
 | Tor connector | `shekyl-tor` and the zone host | the posture: `Off`, `Managed` with the Tor binary's path, or `Operator` with a SOCKS proxy and its RFC 1929 pair (§2.5) and an optional onion with its local listen endpoint | `no-ephemeral-tor`, `tx-proxy`, `anonymous-inbound`, `SHEKYL_TOR_BINARY` (environment) |
 | p2p policy | the dialer and the peer lists | the operator's peers, the closed-network declaration (absent or non-empty, DC-F11), the local-range override, early disclosure, the ban file's entries, the two rate bounds | `add-peer`, `seed-node`, `add-exclusive-node`, `allow-local-ip`, `p2p-disclose-early` (PR-3), `ban-list`, `in-peers`, `limit-rate-up`, `limit-rate-down`, `limit-rate`, `out-peers`, `tos-flag`, `no-igd`, `igd` |
 | rpc | `shekyl-daemon-rpc` | the admin and view listener sets, the origin list, the connection cap | `rpc-bind-ip`, `rpc-bind-ipv6-address`, `rpc-use-ipv6`, `rpc-bind-port`, `rpc-restricted-bind-ip`, `rpc-restricted-bind-ipv6-address`, `rpc-restricted-bind-port`, `restricted-rpc`, `rpc-access-control-origins`, `rpc-max-connections`, `rpc-max-connections-per-public-ip`, `rpc-max-connections-per-private-ip`, `rpc-response-soft-limit`, `disable-rpc-ban` |
-| txpool | core, through the snapshot | the weight bound | `max-txpool-weight` |
 | notify | the Rust runner (DC-Q14) | three commands, each an argument array with its named placeholders | `block-notify`, `reorg-notify`, `block-rate-notify` |
 | mine | the miner, through the snapshot | the address and the thread count | `start-mining`, `mining-threads`, the five `bg-mining-*` |
 | dev | each lever's owner | the levers of `INPUT_GRAMMAR.md` §5, each accepted only on the networks its row names, never on mainnet (IG-8) | `fixed-difficulty`, `no-sync`, `clearnet-transport-encrypt`, `carrier-development`, the four environment levers |
@@ -607,7 +606,10 @@ durability is a constant, `shekyl_chain_store::store::DURABILITY`
 and the node logs it at open; no sync turns the fsync off. Chain sync's four (`prep-blocks-threads`,
 `block-sync-size`, `span-limit`, `block-download-max-size`) are rejected rows,
 refused with CS-Q12's reason (`P2P_3_CHAIN_SYNC_BRIEF.md` CS-Q12, Rick
-2026-10-18).
+2026-10-18). `txpool-weight-max` is a rejected row, refused because the
+pool's cap derives from the chain (CEN-M10: `REFERENCE_BLOCK_MAX_AGE` blocks
+at the block weight limit; `DRS_E5_POOL_ALT_PRUNE.md`, `INPUT_GRAMMAR.md`
+IG-Q11).
 
 ---
 
