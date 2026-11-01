@@ -6047,6 +6047,11 @@ async fn maybe_capture_chain_vector(
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../shekyl-chain-ingest/tests/vectors")
         .join(shape);
+    // The build identity first: a daemon that names no commit, or another
+    // commit than the checkout, is refused before the committed vector is
+    // touched, so a refused capture leaves the old one whole.
+    let daemon_version = daemon.version().await;
+    let built_at_dev_sha = capture_build_identity(&daemon_version);
     if root.exists() {
         std::fs::remove_dir_all(&root).expect("clear a stale capture");
     }
@@ -6134,8 +6139,6 @@ async fn maybe_capture_chain_vector(
         .as_str()
         .expect("block 0's hash")
         .to_owned();
-    let daemon_version = daemon.version().await;
-    let built_at_dev_sha = capture_build_identity(&daemon_version);
 
     // The schedule the chain was mined under — the daemon's levers when the
     // harness pulled them, the genesis pair otherwise. The replay opens
