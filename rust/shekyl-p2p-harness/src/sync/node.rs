@@ -274,6 +274,9 @@ impl Node {
             timer,
             rules,
             requesting: shekyl_chain_sync::Requesting::On,
+            // A harness node is on an open network: no peer list is closed,
+            // so it has no view until its opening resolves.
+            declaration: shekyl_chain_sync::Declaration::Open,
             rng,
             pool_hashes: Arc::new(Vec::new),
             routed: routed_rx,

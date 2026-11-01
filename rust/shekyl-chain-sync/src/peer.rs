@@ -477,6 +477,13 @@ pub(crate) struct Peer<K> {
     /// The rate this peer's last header or body response arrived at, in
     /// bytes per second. `None` until one has.
     pub rate: Option<u64>,
+    /// A header request to this peer has resolved: its headers were
+    /// proven (or refused), or it passed its deadline. The opening reads
+    /// it (CS-Q2 step 8).
+    pub answered: bool,
+    /// This peer has sent a header response. It has resolved once no
+    /// header of that response is waiting for its proof.
+    pub responded: bool,
 }
 
 impl<K> Peer<K> {
@@ -492,6 +499,8 @@ impl<K> Peer<K> {
             span: None,
             announced: Vec::new(),
             rate: None,
+            answered: false,
+            responded: false,
         }
     }
 }

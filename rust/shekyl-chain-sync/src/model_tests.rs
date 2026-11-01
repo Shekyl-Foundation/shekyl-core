@@ -66,6 +66,26 @@ fn issued(_: BlockHeight) -> RuleSet {
     RuleSet::GENESIS
 }
 
+/// Fire the opening's deadline (CS-Q2 step 8) as the owner's timer would.
+fn fire_opening<R: Fn(BlockHeight) -> RuleSet>(sync: &mut Sync<u8, R>) -> Vec<Command<u8>> {
+    let crate::model::Opening::Open { id } = sync.opening else {
+        panic!("no opening is unresolved: {:?}", sync.opening);
+    };
+    let mut out = Vec::new();
+    sync.handle(
+        Event::Deadline {
+            session: 1,
+            request: id,
+        },
+        &Empty,
+        std::time::Instant::now(),
+        &mut NoDraw,
+        &mut out,
+    )
+    .expect("the view answers");
+    out
+}
+
 fn open<R: Fn(BlockHeight) -> RuleSet>(sync: &mut Sync<u8, R>, session: u8) -> Vec<Command<u8>> {
     let mut out = Vec::new();
     sync.handle(
@@ -159,22 +179,92 @@ fn a_regtest_fixed_target_admits_an_honest_claim() {
     assert_eq!(hint(&mut sync, claim(count, work)), Ok(()));
 }
 
+/// **A claim holds the opening and never grants a state** (CS-Q2 step 8,
+/// Rick 2026-11-01). A session opening on an open network arms the
+/// opening's bound and publishes nothing: no view yet. A claim of more
+/// work than the node holds, never answered, keeps it `NoView`; the bound
+/// resolves it, and only then is the node synced and asks for the pool's
+/// complement. A claim after that moves nothing.
 #[test]
-fn a_claim_never_changes_the_state() {
+fn a_claim_holds_the_opening_and_never_grants_a_state() {
     let mut sync = Sync::new(Trust::UNANCHORED, issued);
-    let published = open(&mut sync, 1);
-    assert!(published.iter().any(|command| matches!(
-        command,
-        Command::Publish {
-            state: SyncState::Synced,
-        }
-    )));
-    assert!(published
-        .iter()
-        .any(|command| matches!(command, Command::RequestComplement { session: 1 })));
+    let opened = open(&mut sync, 1);
+    assert!(
+        !opened
+            .iter()
+            .any(|command| matches!(command, Command::Publish { .. })),
+        "{opened:?}"
+    );
+    assert!(
+        opened
+            .iter()
+            .any(|command| matches!(command, Command::ArmOpening { session: 1, .. })),
+        "{opened:?}"
+    );
+    assert!(
+        !opened
+            .iter()
+            .any(|command| matches!(command, Command::RequestComplement { .. })),
+        "{opened:?}"
+    );
     assert_eq!(sync.transit(1), Some(Duration::from_secs(30)));
     hint(&mut sync, claim(9_000, u128::MAX)).unwrap();
-    assert_eq!(sync.state(), SyncState::Synced);
+    assert_eq!(sync.state(), SyncState::NoView, "a claim granted a state");
+    let resolved = fire_opening(&mut sync);
+    assert!(
+        resolved.iter().any(|command| matches!(
+            command,
+            Command::Publish {
+                state: SyncState::Synced
+            }
+        )),
+        "{resolved:?}"
+    );
+    assert!(
+        resolved
+            .iter()
+            .any(|command| matches!(command, Command::RequestComplement { session: 1 })),
+        "{resolved:?}"
+    );
+    hint(&mut sync, claim(9_500, u128::MAX)).unwrap();
+    assert_eq!(
+        sync.state(),
+        SyncState::Synced,
+        "a later claim moved the state"
+    );
+}
+
+/// **A closed or offline node with no session is synced** (CS-Q2 step 8):
+/// the declaration is the operator naming the node's whole network, so the
+/// last session closing leaves it synced, where an open node returns to
+/// `NoView`.
+#[test]
+fn a_declared_node_with_no_session_is_synced() {
+    for declaration in [crate::Declaration::Offline, crate::Declaration::Closed] {
+        let mut sync = Sync::new(Trust::UNANCHORED, issued).with_declaration(declaration);
+        assert_eq!(sync.state(), SyncState::Synced, "{declaration:?}");
+        open(&mut sync, 1);
+        assert_eq!(
+            sync.state(),
+            SyncState::NoView,
+            "{declaration:?}: the opening"
+        );
+        fire_opening(&mut sync);
+        assert_eq!(sync.state(), SyncState::Synced, "{declaration:?}");
+        let mut out = Vec::new();
+        sync.handle(
+            Event::SessionClosed { session: 1 },
+            &Empty,
+            std::time::Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .expect("the view answers");
+        assert_eq!(sync.state(), SyncState::Synced, "{declaration:?}");
+        assert!(out.is_empty(), "{declaration:?}: {out:?}");
+    }
+    let open_network = Sync::<u8, _>::new(Trust::UNANCHORED, issued);
+    assert_eq!(open_network.state(), SyncState::NoView);
 }
 
 #[test]
@@ -182,6 +272,8 @@ fn the_last_session_closing_returns_to_no_view() {
     let mut sync = Sync::new(Trust::UNANCHORED, issued);
     open(&mut sync, 1);
     open(&mut sync, 2);
+    fire_opening(&mut sync);
+    assert_eq!(sync.state(), SyncState::Synced);
     let mut out = Vec::new();
     sync.handle(
         Event::SessionClosed { session: 1 },
@@ -212,6 +304,7 @@ fn the_last_session_closing_returns_to_no_view() {
 fn a_short_fill_is_following_and_the_latch_does_not_withhold_synced() {
     let mut sync = Sync::new(Trust::UNANCHORED, issued);
     open(&mut sync, 1);
+    fire_opening(&mut sync);
     let mut out = Vec::new();
     sync.handle(
         Event::Fill {
@@ -276,7 +369,13 @@ fn a_store_fault_reaches_the_caller() {
         )
         .expect_err("tip's fault");
     assert_eq!(fault, StoreDown);
-    assert!(out.is_empty(), "a failed read publishes nothing");
+    // The session is held, so its opening's bound is armed; nothing is
+    // published.
+    assert!(
+        matches!(out.as_slice(), [Command::ArmOpening { session: 1, .. }]),
+        "a failed read published: {out:?}"
+    );
+    let armed = out.len();
 
     struct HeaderFaults;
     impl HeaderView<'static> for HeaderFaults {
@@ -306,7 +405,7 @@ fn a_store_fault_reaches_the_caller() {
         )
         .expect_err("header_at's fault");
     assert_eq!(fault, StoreDown);
-    assert!(out.is_empty());
+    assert_eq!(out.len(), armed, "a failed read published: {out:?}");
 }
 
 #[test]
@@ -347,6 +446,7 @@ fn a_tip_is_read_from_the_chain() {
 
     let mut sync = Sync::new(Trust::UNANCHORED, issued);
     open(&mut sync, 1);
+    fire_opening(&mut sync);
     let mut out = Vec::new();
     sync.handle(
         Event::Tip {

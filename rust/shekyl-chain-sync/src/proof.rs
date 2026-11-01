@@ -96,6 +96,29 @@ where
     out
 }
 
+/// Fire the opening's deadline (CS-Q2 step 8), as the owner's timer
+/// would: the opening resolves with whatever its sessions have answered.
+/// Nothing when no opening is unresolved.
+pub(crate) fn resolve_opening<'id, H, R>(sync: &mut Sync<u8, R>, main: &H) -> Vec<Command<u8>>
+where
+    H: HeaderView<'id>,
+    H::Fault: std::fmt::Debug,
+    R: Fn(BlockHeight) -> RuleSet,
+{
+    let crate::model::Opening::Open { id } = sync.opening else {
+        return Vec::new();
+    };
+    let session = *sync.peers.keys().next().expect("an open session");
+    drive(
+        sync,
+        main,
+        Event::Deadline {
+            session,
+            request: id,
+        },
+    )
+}
+
 /// How many distinct `Prove` jobs one drive resolves. A job still waiting
 /// after this many resolutions is not being retired.
 const PROOF_RESOLVE_LIMIT: usize = 64;

@@ -61,5 +61,5 @@ pub use model::{
     Outcome, ProveItem, Proved, Requesting, Sync, BODY_REQUESTS_IN_FLIGHT, SYNC_RATE_FLOOR,
 };
 pub use shekyl_chain_rules::HeaderView;
-pub use state::SyncState;
+pub use state::{Declaration, SyncState};
 pub use view::{BodiesInFlight, HeaderInFlight, SessionMode, SessionView, SyncView};

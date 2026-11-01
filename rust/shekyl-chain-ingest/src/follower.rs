@@ -79,7 +79,7 @@ impl core::fmt::Display for NoJob {
             Self::Starting => f.write_str("no template: the node is starting"),
             Self::NoAddress => f.write_str("no template: no mine-address is set"),
             Self::NotSynced(SyncState::NoView) => {
-                f.write_str("no template: not synced (no peer has completed a handshake)")
+                f.write_str("no template: not synced (no view of the network yet)")
             }
             Self::NotSynced(state) => write!(f, "no template: not synced ({})", state.name()),
             Self::PoolRetired => {

@@ -802,10 +802,17 @@ async fn an_announce_flood_does_not_stall_a_solicited_sync() {
     quiet.stop().await;
 
     let mut loud = Node::start("flood", corpus.rules(), &steps[..1], 2, rng()).await;
+    let (genesis_count, genesis_work, genesis) = loud.chain.tip().expect("genesis");
     let started = Instant::now();
     let (peer, _) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
     loud.connect(Box::new(peer), Some(claim_of(&held)));
-    let flooder = loud.connect(Box::new(Silent), None);
+    // The flooder states genesis, as a handshake does: a session whose
+    // claim never arrives would hold the opening until its deadline
+    // (CS-Q2 step 8), which a hand clock does not reach.
+    let flooder = loud.connect(
+        Box::new(Silent),
+        Some(claim(genesis_count, genesis_work, genesis)),
+    );
     let hub = loud.hub.clone();
     let announce = announcement(&held.store, count - 1);
     const ANNOUNCES: usize = 2_000;

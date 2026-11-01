@@ -69,6 +69,41 @@ impl Seen {
     }
 }
 
+/// A peer that records what the node sends it and answers nothing: a
+/// liar whose claim is never backed, as the opening's bound needs.
+pub struct MutePeer {
+    seen: Arc<Seen>,
+}
+
+impl MutePeer {
+    /// A mute peer and what it records.
+    #[must_use]
+    pub fn new() -> (Self, Arc<Seen>) {
+        let seen = Arc::new(Seen::default());
+        (
+            Self {
+                seen: Arc::clone(&seen),
+            },
+            seen,
+        )
+    }
+}
+
+impl SyncPeer for MutePeer {
+    fn on_message(&mut self, command: u32, _payload: &[u8]) -> Vec<Vec<u8>> {
+        match SyncCommand::from_wire(command) {
+            Some(SyncCommand::RequestHeaders) => {
+                self.seen.header_requests.fetch_add(1, Ordering::AcqRel);
+            }
+            Some(SyncCommand::RequestBodies) => {
+                self.seen.body_requests.fetch_add(1, Ordering::AcqRel);
+            }
+            _ => self.seen.note_other(command),
+        }
+        Vec::new()
+    }
+}
+
 /// How a [`ServingPeer`] answers a body request.
 #[derive(Clone, Debug)]
 pub enum Bodies {

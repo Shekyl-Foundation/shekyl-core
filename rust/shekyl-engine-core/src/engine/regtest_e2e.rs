@@ -172,11 +172,11 @@ pub(super) struct RegtestDaemon {
     /// Whether this daemon was started offline (both connectors off). Its
     /// `get_info` must then report that state, not a count of zero.
     offline: bool,
-    /// Whether this daemon posts a template at open: a regtest daemon with
-    /// no peers reads `Synced` at open and posts once its follower has
-    /// looped (`shekyl-node` `sync_at_open`). Readiness then includes that
-    /// post: a `generateblocks` sent before it is honestly refused
-    /// `mine.not_synced` by a daemon whose RPC is already up.
+    /// Whether this daemon posts a template at open: an offline daemon is
+    /// synced from open on any network (`Declaration::Offline`, CS-Q2 step
+    /// 8) and posts once its follower has looped. Readiness then includes
+    /// that post: a `generateblocks` sent before it is honestly refused by
+    /// a daemon whose RPC is already up.
     posts_at_open: bool,
     /// When true, `Drop` leaves `data_dir` in place. Set only by
     /// `start_keeping_data`. Every other spawn deletes the directory.
@@ -194,15 +194,21 @@ pub(super) struct RegtestDaemon {
 /// How a spawned daemon takes part in peer-to-peer.
 #[derive(Clone, Copy, Debug)]
 enum Peering {
-    /// `--clearnet off --tor off`: no listener and no dial. The protocol
-    /// starts synchronized, so a submitted transaction finds no route and
-    /// is broadcast-recorded within milliseconds.
+    /// `--clearnet off --tor off`: no listener and no dial. Both
+    /// connectors off is the operator's declaration that the node has no
+    /// network to be behind (`Declaration::Offline`, CS-Q2 step 8), so
+    /// chain sync reads `Synced` from open on any network, and a submitted
+    /// transaction finds no route and is broadcast-recorded within
+    /// milliseconds.
     Offline,
     /// Bound on loopback and dialling exactly one peer.
     ///
     /// `--p2p-closed-peer` is what keeps the daemon off the public
     /// network: a closed list is the condition under which it dials no
-    /// seed. `--tor off` declines the managed Tor, so the node is
+    /// seed. It is also the operator naming the node's whole network
+    /// (`Declaration::Closed`, CS-Q2 step 8): with its peer down the node
+    /// reads `Synced` and mines alone, and when the peer is up its opening
+    /// runs. `--tor off` declines the managed Tor, so the node is
     /// clearnet-only and a local origin takes the stem slot, not a hidden
     /// own-edge.
     Linked {
@@ -755,7 +761,7 @@ impl RegtestDaemon {
             restricted_url: restricted_port.map(|p| format!("http://127.0.0.1:{p}")),
             schedule,
             offline,
-            posts_at_open: offline && matches!(network, SpawnNetwork::Regtest),
+            posts_at_open: offline,
             keep_data,
             _serial: serial,
             recipe,
@@ -764,11 +770,11 @@ impl RegtestDaemon {
         daemon
     }
 
-    /// Poll `get_info` until the daemon answers (or time out).
-    /// A regtest daemon with no peers posts a template once its follower
-    /// has read `Synced`; until then `generateblocks` is refused
-    /// `mine.not_synced` (`no_view`), which is the daemon's honest answer
-    /// and not a test's finding. Ready is the first posted job.
+    /// Poll `get_miner_data` until the daemon has posted a job (or time
+    /// out). An offline daemon posts a template once its follower has read
+    /// `Synced`; until then `generateblocks` is refused `mine.starting`,
+    /// which is the daemon's honest answer and not a test's finding. Ready
+    /// is the first posted job.
     async fn await_posted(&self, deadline: Instant, log_path: &std::path::Path) {
         let mut last = String::new();
         while Instant::now() < deadline {

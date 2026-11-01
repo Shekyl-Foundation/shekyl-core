@@ -156,6 +156,13 @@ ARMED=(
   # Observed red 2026-10-30 on the flip at e4280bfbf5 before the sync-head
   # fix: the joiner stood at height 21 of 101 (one span) until the deadline.
   engine::regtest_e2e::sync::a_node_syncs_a_chain_longer_than_the_doors_window_from_a_peer
+  # CS-Q2 step 8, the declaration (Rick, 2026-11-01). Observed red
+  # 2026-11-01 on the #1237 head before it (a95bc9afa5): the offline
+  # testnet node posted no template at open, refused mine.not_synced
+  # (no_view); the closed node whose last peer left refused
+  # mine.not_synced. Green 106 s and 49 s, local Release daemon.
+  engine::regtest_e2e::sync::an_offline_testnet_node_is_synced_and_mines
+  engine::regtest_e2e::sync::a_closed_node_whose_peer_is_down_mines_and_opens_when_it_arrives
 )
 
 # Consensus gates too heavy for the per-PR lane (depth-3 spend, 13 min

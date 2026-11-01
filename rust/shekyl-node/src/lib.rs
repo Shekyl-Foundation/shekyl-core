@@ -79,8 +79,8 @@ use shekyl_chain_rules::{AdmissionPolicy, FakechainSchedule, ReleaseAnchors, Rul
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::pool::PoolOpen;
 use shekyl_chain_store::store::{ChainStore, Horizons, SnapshotView};
-use shekyl_chain_sync::Requesting;
 use shekyl_chain_sync::SyncState;
+use shekyl_chain_sync::{Declaration, Requesting};
 use shekyl_chain_sync_runtime::executor::Executor;
 use shekyl_chain_sync_runtime::owner::OwnerParts;
 use shekyl_daemon_config::sections::{DaemonConfig, Dev};
@@ -109,17 +109,17 @@ fn blocking_threads(permits: NonZeroUsize, window: NonZeroUsize) -> NonZeroUsize
     permits.saturating_add(window.get()).saturating_add(1)
 }
 
-/// Chain sync's state once the node has opened, published after genesis
-/// has connected (`DRS_X_STORE_FLIP.md` DX-Q3, Q13): `Synced` on regtest,
-/// which has no network to be behind, and `NoView` on every other network
-/// until chain sync's cutover publishes. The network selects this value
-/// and nothing else (rule 71).
-const fn sync_at_open(network: shekyl_daemon_config::Network) -> SyncState {
-    match network {
-        shekyl_daemon_config::Network::Regtest => SyncState::Synced,
-        shekyl_daemon_config::Network::Mainnet
-        | shekyl_daemon_config::Network::Testnet
-        | shekyl_daemon_config::Network::Stagenet => SyncState::NoView,
+/// The operator's declaration of the node's network (CS-Q2 step 8), from
+/// the resolved configuration: `Offline` when both connectors are off,
+/// `Closed` when the peer list is closed, `Open` otherwise. Configuration,
+/// never the network type (rule 71).
+fn declaration(config: &DaemonConfig) -> Declaration {
+    if config.offline() {
+        Declaration::Offline
+    } else if !config.p2p.closed_peers.is_empty() {
+        Declaration::Closed
+    } else {
+        Declaration::Open
     }
 }
 
@@ -262,9 +262,10 @@ impl Node {
         let sockets = Sockets::new();
         let board = Arc::new(JobBoard::new());
         let network = args.config.network;
+        let declared = declaration(args.config);
         // No view until genesis has connected, so the follower never builds
-        // a genesis of its own; the network's state at open is published
-        // after (`sync_at_open`).
+        // a genesis of its own; the declaration's state at open is published
+        // after.
         let (sync, sync_rx) = tokio::sync::watch::channel(SyncState::NoView);
         let (found, found_inbox) = shekyl_miner::found_blocks();
         let (posting_tx, posting) =
@@ -371,6 +372,7 @@ impl Node {
             } else {
                 Requesting::Off
             },
+            declaration: declared,
             pool: complement_pool,
             state: sync.clone(),
         }) {
@@ -433,9 +435,9 @@ impl Node {
             .departing(Arc::clone(&departed)),
         );
         let rewinder = service.rewinder();
-        let at_open = sync_at_open(network);
+        let at_open = declared.state_at_open();
         tracing::info!(
-            "chain sync's state at open: {at_open:?}; the node posts a template only while it reads Synced"
+            "chain sync's state at open: {at_open:?} (declared {declared:?}); the node posts a template only while it reads Synced"
         );
         sync.send_replace(at_open);
         let door = service.door();
@@ -844,6 +846,7 @@ struct SyncOwnerParts {
     executor: Arc<Executor>,
     rules: ChainRules,
     requesting: Requesting,
+    declaration: Declaration,
     pool: Arc<Mutex<Pool>>,
     state: tokio::sync::watch::Sender<SyncState>,
 }
@@ -880,6 +883,7 @@ fn spawn_sync_owner(
         timer,
         rules: parts.rules,
         requesting: parts.requesting,
+        declaration: parts.declaration,
         rng: SecureRelayRng,
         pool_hashes,
         routed,

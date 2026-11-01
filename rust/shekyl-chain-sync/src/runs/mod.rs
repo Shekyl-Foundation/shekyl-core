@@ -52,6 +52,12 @@ where
     R: Fn(BlockHeight) -> RuleSet,
 {
     pub(crate) fn on_deadline(&mut self, session: K, request: u64) {
+        // The opening's bound: fixed from its first session, so it fires
+        // whether or not that session is still open.
+        if self.opening == (crate::model::Opening::Open { id: request }) {
+            self.opening = crate::model::Opening::Resolved;
+            return;
+        }
         let header = self
             .header_request
             .as_ref()
@@ -79,6 +85,11 @@ where
         // wait even when the run remains. A body span does not.
         if header || follow {
             self.release_dispute(session);
+            // A header request past its deadline has resolved, for the
+            // opening as an answer does.
+            if let Some(peer) = self.peers.get_mut(&session) {
+                peer.answered = true;
+            }
         }
         if let Some(peer) = self.peers.get_mut(&session) {
             if peer.span.as_ref().is_some_and(|span| span.id == request) {
@@ -96,9 +107,13 @@ where
         now: Instant,
         out: &mut Vec<Command<K>>,
     ) -> Result<(), H::Fault> {
-        if !self.peers.contains_key(&session) {
+        let Some(peer) = self.peers.get_mut(&session) else {
             return Ok(());
-        }
+        };
+        // Responded. For the opening the request has resolved once none of
+        // this response's headers waits for its proof: a refusal closes the
+        // session, and a verified heavier header makes the node `Behind`.
+        peer.responded = true;
         let Ok(response) = ResponseHeaders::decode(bytes) else {
             self.close(session, CloseCause::HeadersUndecodable, out);
             return Ok(());
@@ -458,6 +473,11 @@ where
         let Some(session) = self.session_for_job(job.raw()) else {
             return Ok(());
         };
+        // A proof answered for this session's headers: its request has
+        // resolved for the opening (CS-Q2 step 8), whatever the results.
+        if let Some(peer) = self.peers.get_mut(&session) {
+            peer.answered = true;
+        }
         for result in results {
             match result {
                 Proved::Refused(refused) => {
@@ -680,6 +700,9 @@ where
     pub(crate) fn release_session(&mut self, session: K) {
         self.release_dispute(session);
         self.peers.remove(&session);
+        if self.peers.is_empty() {
+            self.opening = crate::model::Opening::Idle;
+        }
         self.pending.remove(&session);
         if self
             .header_request

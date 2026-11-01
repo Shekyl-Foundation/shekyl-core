@@ -521,10 +521,45 @@ ingest deciding forks.**
      `following_degraded` (step 8). Sync only reads the latch. These
      arise only on the announce path, because bodies are requested only
      along reachable `H*`.
-8. **State, published as one source.** **A claim's value never changes
-   the sync state; only verified headers do.** A higher claim only starts
-   a header request (step 1).
-   - **`NoView`**: no session has completed a handshake.
+8. **State, published as one source.** **A claim never grants a state
+   and never demotes a node that has a view; only verified headers do.**
+   A higher claim starts a header request (step 1), and it may hold the
+   opening `NoView`, for a bounded time (below).
+   - **The inputs** (Rick, 2026-11-01): verified work, the sessions, and
+     **the operator's declaration of the node's network**, read from the
+     resolved configuration once at open and never from the network type
+     (rule 71):
+     - **`Offline`**: both connectors off (`DaemonConfig::offline`);
+     - **`Closed`**: the peer list is closed (`p2p-closed-peer` rows), so
+       the operator has named the node's whole network;
+     - **`Open`**: everything else.
+   - **The derivation**, in this order, which `state()` and the relay
+     decision both read:
+     1. **No session open:** `Offline` and `Closed` give `Synced`, subject
+        to the backward fill (`Following`), which is local; `Open` gives
+        `NoView`.
+     2. **Verified headers heavier than `L`** give `Behind`, whatever else
+        holds: a verified view exists.
+     3. **The opening is unresolved:** `NoView`.
+     4. **Otherwise** `Following` or `Synced`.
+   - **The opening** starts when a session opens while none was open. It
+     resolves at whichever comes first:
+     - **(a)** every open session whose claim exceeds `work(L)` has
+       resolved its header request: verified, refused, or past its
+       deadline. A session whose claim has not arrived has not resolved:
+       the outbound handshake's claim is posted just after the session
+       opens, so that wait is one post, and reading an absent claim as
+       not exceeding `work(L)` would bring the flash back;
+     - **(b)** the first session's header deadline has passed: its transit
+       plus `HEADERS_RESPONSE_BYTES / SYNC_RATE_FLOOR`, armed when that
+       session opens (whether or not a request is ever sent) and fired
+       through the owner's timer like the other deadlines. No new
+       constant.
+
+     Once resolved, the opening stays resolved until the last session
+     closes. A later claim never moves the state. Nothing is relayed while
+     the node is `NoView`.
+   - **`NoView`**: no verified view of the network.
    - **`Behind { have, best }`**: `work(L) < work(H*)`, over verified
      headers.
    - **`Following { verified_to }`**: `work(L) ≥ work(H*)` over verified
@@ -541,13 +576,23 @@ ingest deciding forks.**
      tip" would stop mining during an ordinary equal-work tip race.
      Reading it as "a higher claim means we are behind" would let anyone
      rotating sessions halt mining and transaction intake.
-   - **The first session's flash is accepted** (Rick, 2026-10-23). A node
-     holding only its own chain reads `Synced` the moment a session
-     opens, before that session's claim has started a header request,
-     and `Behind` once the headers it asked for are verified: the
-     published state goes `NoView → Synced → Behind → Synced`. That is
-     the consequence of "a claim never changes the state", and the
-     loopback harness's honest sync records it.
+   - **The opening's wargame** (Rick, 2026-11-01).
+     - **Honest node at the tip, peers claiming equal work:** no request
+       is sent, so (a) holds once the claims arrive: `NoView → Synced`.
+     - **Honest node behind:** `NoView → Behind → Synced`, with no
+       `Synced` before the first verified headers.
+     - **A liar claims more and stalls:** it delays a restarting node's
+       first `Synced` by at most one header deadline (b), about 4 minutes
+       at `SYNC_RATE_FLOOR`. Until then the node acts as `NoView`: no
+       template, no relay of its tips, no transaction intake. A node that
+       has not checked the network should do none of those.
+     - **Rotating liars** do not extend it: (b) is fixed from the first
+       session, and a resolved opening is not reopened by a claim.
+     - **`Closed` with its peers down** mines alone on its own tip, by the
+       operator's declaration. Its blocks may fork from the wider chain;
+       that is the declared network's business, and the audit accepts
+       local configuration.
+     - **`Offline`** has no sessions, so no claim can reach it.
    - **`Diverged { fork_at }`**: an **alarm** carried beside the state,
      not a state of its own.
      - **Primary source:** `T` holds a verified chain that is heavier
@@ -627,13 +672,14 @@ emits `Rewind`; it offers blocks, and the alt tier switches.
   - So the walk to `L = H*` terminates unless no session can serve,
     which is surfaced as stalled (rule 82), not looped on.
 - **Tiny network.**
-  - A lone genesis node has `NoView`, so it is not `Synced` and does not
-    mine.
+  - A lone genesis node on an open network has `NoView`, so it is not
+    `Synced` and does not mine.
   - Mining alone is the operator's declaration (`clearnet = off` and
     `tor = off`, or a closed network through `p2p-closed-peer`): local
-    configuration, which the exception audit accepts.
-  - This keeps today's behaviour without the latch: the C++ also needs a
-    peer to mark synced.
+    configuration, which the exception audit accepts. **Built** (CS-5,
+    Rick 2026-11-01): `shekyl_chain_sync::Declaration`, read by the node
+    from the configuration; `an_offline_testnet_node_is_synced_and_mines`
+    and `a_closed_node_whose_peer_is_down_mines_and_opens_when_it_arrives`.
 - **Large network.** `T` holds headers only, about 150-200 B each (CS-F6),
   so a full header chain is held in memory. Runs add one byte budget per
   session.
@@ -1778,6 +1824,19 @@ it decided beyond the rows above:
   closes a session that sends chain-sync traffic before it. A session
   opened at attach would send ahead of the reply, and the dialing peer
   refuses that frame (`LevinHandshakeRejected`).
+- **The per-block cost is the verifier** (§8, measured 2026-11-01 on the
+  qualified external host, the DRS re-take's chains, the data in
+  `shekyl-dev`). F-B 150.2 s and 152.2 s for 761 blocks, F-A 396.6 s and
+  392.6 s for 2,000: about 197 ms a block. Each block costs one
+  light-mode RandomX hash of its header, about 0.76 s, with the host's
+  four hasher permits busy (hash time over wall time about 3.9), which is
+  about 190 ms of each block's wall time; `form_judged` is under 1 ms,
+  the connector's apply 5–7 ms, the body transit under 0.2 ms. The sync
+  path has nothing left to tune at that cost: the hash is one per block
+  by ruling, and it already runs on every core. The cost per hash is
+  open, for Rick: dataset mode costs about 2 GiB against the performance
+  budget's memory ceiling (`DAEMON_REDB_STORE.md` §1.3a), and a faster
+  verifier per core is option (a) of `RANDOMX_V2_MINING_ASYMMETRY.md`.
 - **The per-block profile is one sink.** The node's measurement sink
   (`shekyl-chain-ingest`'s `Metrics`, schema `shekyl_e2_metrics_v3`),
   which the substrate already hashes into, also takes the entry's

@@ -20,7 +20,7 @@ use shekyl_wire::{Block, PowBlob};
 
 use crate::claim::PeerClaim;
 use crate::model::{Event, Outcome, Requesting, Sync};
-use crate::proof::{drive, open_claim, serialized};
+use crate::proof::{drive, open_claim, resolve_opening, serialized};
 use crate::scenarios::{
     answer, no_close, offer_tag, request_for, target_one, with_offer, NoDraw, Prefix,
 };
@@ -32,7 +32,10 @@ use crate::Command;
 #[test]
 fn a_shorter_heavier_replacement_is_not_beneath_the_tip_already_seen() {
     let rules = crate::proof::fixed(1, 64);
-    let mut sync: Sync<u8, _> = Sync::new(Trust::UNANCHORED, move |_| rules);
+    // Closed, with no session open: synced, so the relay judges `beneath`
+    // alone, which is this test's subject.
+    let mut sync: Sync<u8, _> =
+        Sync::new(Trust::UNANCHORED, move |_| rules).with_declaration(crate::Declaration::Closed);
     sync.local = Some(crate::model::Local {
         hash: BlockHash::from_bytes([1; 32]),
         height: Some(BlockHeight::from_raw(20)),
@@ -146,6 +149,8 @@ fn a_tip_no_session_supplied_relays_to_every_session() {
         let out = drive(&mut sync, &view, Event::Tip { tip });
         assert!(relays(&out).is_empty(), "the opening tip relayed: {out:?}");
         open_claim(&mut sync, &view, 1);
+        // The claim is never answered: the opening resolves at its deadline.
+        resolve_opening(&mut sync, &view);
     });
     above.with_view(|view| {
         let tip = view.tip().expect("main answers").expect("a tip");
@@ -263,6 +268,10 @@ fn with_requests_off_nothing_is_asked_and_a_mined_tip_still_relays() {
             requesting == Requesting::On,
             "{requesting:?}: {out:?}"
         );
+        // Nothing answers the claim: the opening resolves at its deadline.
+        below.with_view(|view| {
+            resolve_opening(&mut sync, &view);
+        });
         above.with_view(|view| {
             let tip = view.tip().expect("main answers").expect("a tip");
             let out = drive(&mut sync, &view, Event::Tip { tip });

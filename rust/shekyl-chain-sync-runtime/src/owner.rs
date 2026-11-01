@@ -87,8 +87,8 @@ use crate::serve::{
 };
 use crate::session::Session;
 use shekyl_chain_sync::{
-    BoundArrival, ClaimError, Command, Event, Job, Outcome, PeerClaim, Proved, Requesting,
-    Sync as Model, SyncState, SyncView,
+    BoundArrival, ClaimError, Command, Declaration, Event, Job, Outcome, PeerClaim, Proved,
+    Requesting, Sync as Model, SyncState, SyncView,
 };
 
 /// The owner row's name in the thread ledger.
@@ -123,6 +123,9 @@ pub struct OwnerParts<C: Clock + Clone, R> {
     /// Whether the model requests anything from peers: the regtest
     /// `dev-sync` row. It still serves, relays and publishes when `Off`.
     pub requesting: Requesting,
+    /// The operator's declaration of the node's network, read from the
+    /// configuration once at open (CS-Q2 step 8).
+    pub declaration: Declaration,
     /// The daemon's draw source.
     pub rng: R,
     /// The pool's transaction hashes, for the complement request.
@@ -365,6 +368,7 @@ where
         timer,
         rules,
         requesting,
+        declaration,
         rng,
         pool_hashes,
         mut routed,
@@ -388,7 +392,9 @@ where
     let timer = Arc::new(timer);
     let wakes = Arc::clone(&timer);
     let mut owner = Owner {
-        sync: Model::new(rules.trust(), schedule).with_requesting(requesting),
+        sync: Model::new(rules.trust(), schedule)
+            .with_requesting(requesting)
+            .with_declaration(declaration),
         store,
         door,
         alarm,
@@ -1034,6 +1040,11 @@ where
                     }
                     Err(err) => tracing::error!(%err, "a header request did not encode"),
                 },
+                Command::ArmOpening {
+                    session,
+                    id,
+                    deadline,
+                } => self.arm(deadline, session, id),
                 Command::RequestBodies {
                     session,
                     id,

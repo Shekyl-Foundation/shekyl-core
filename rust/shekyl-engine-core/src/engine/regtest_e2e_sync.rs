@@ -45,9 +45,9 @@ async fn a_node_syncs_fifteen_spans_from_a_peer() {
     sync_from_a_peer(300, [0x5bu8; 64]).await;
 }
 
-/// The two-daemon sync walk: a source linked to a non-syncing sink mines
-/// `blocks`; a joiner linked to the source must reach its tip, moving at
-/// least every 120 s.
+/// The two-daemon sync walk: a source linked to a sink that requests
+/// nothing (`dev-sync off`) mines `blocks`; a joiner linked to the source
+/// must reach its tip, moving at least every 120 s.
 async fn sync_from_a_peer(blocks: u64, seed: [u8; 64]) {
     let serial = serial_lock().lock_owned().await;
     let source_p2p = RegtestDaemon::free_port();
@@ -74,7 +74,8 @@ async fn sync_from_a_peer(blocks: u64, seed: [u8; 64]) {
     while try_generate_blocks(&source.rpc, 1).await.is_err() {
         assert!(
             Instant::now() < linked,
-            "the source never read synced against its sink within 60 s"
+            "the source did not mine within 60 s (it is closed, so synced from open; \
+             the wait covers its follower's first post and its sink's opening)"
         );
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
@@ -134,9 +135,10 @@ async fn sync_from_a_peer(blocks: u64, seed: [u8; 64]) {
 /// daemon never dialed at all: readiness stayed `NoTip`.
 ///
 /// Two daemons, each the other's one closed peer. `B` first, then `A`,
-/// which links to `B` at genesis — a node is synchronized from a
-/// handshake with a peer at its own height, and the miner posts no job
-/// before that, so `A` could not mine alone. `A` mines `MINED` blocks,
+/// which links to `B` at genesis. Each is closed (its peer list names the
+/// other), so it is synced from open; when the other's session opens, the
+/// opening resolves on its claim of the same chain (CS-Q2 step 8). `A`
+/// mines `MINED` blocks,
 /// then **restarts on its own data directory**: the new process has no
 /// session, reads its tip from the store, publishes it once at start,
 /// and dials `B`. `B`'s `get_connections` must then show an **incoming**
@@ -190,11 +192,12 @@ async fn a_dialing_node_hands_its_tip_to_the_peer_it_dials() {
     }))
     .await;
 
-    // Linked at genesis: `A` synchronized, so its miner posts a job. The
-    // job follows the sync state by one follower pass, so the miner is
-    // asked rather than the flag (`get_info` said synchronized while the
-    // posting still read `no_view`, observed 2026-10-29): the one refusal
-    // retried is the wire-pinned `mine.not_synced`.
+    // `A` is closed, so it is synced; its miner posts a job one follower
+    // pass after the state, so the miner is asked rather than the flag
+    // (`get_info` said synchronized while the posting still read
+    // `no_view`, observed 2026-10-29). The refusal retried is the
+    // wire-pinned `mine.not_synced`, for the moment `B`'s session opens
+    // and its claim has not yet arrived (the opening, CS-Q2 step 8).
     let deadline = Instant::now() + LINK_WAIT;
     loop {
         match try_generate_blocks(&a.rpc, 1).await {
@@ -264,9 +267,9 @@ async fn a_dialing_node_hands_its_tip_to_the_peer_it_dials() {
 }
 
 /// **A CS-5 node and an alpha.11 node refuse each other cleanly** (CS-5
-/// §6). The CS-5 node mines a short chain against a CS-5 sink (a regtest
-/// node with no peer reads `no_view` and builds no template); the
-/// alpha.11 node then links to it. Alpha.11's sync asks with the retired
+/// §6). The CS-5 node mines a short chain beside a CS-5 sink that requests
+/// nothing; it is closed (its peer list names the sink), so it is synced
+/// from open. The alpha.11 node then links to it. Alpha.11's sync asks with the retired
 /// chain request (2006), which this node's ingress refuses as an
 /// undefined command, and this node's owner asks nothing of a peer that
 /// claims less. So alpha.11 never takes the chain, and neither daemon
@@ -305,7 +308,8 @@ async fn a_node_and_an_alpha_11_node_refuse_each_other_cleanly() {
     while try_generate_blocks(&node.rpc, 1).await.is_err() {
         assert!(
             Instant::now() < linked,
-            "the node never read synced against its sink within 60 s"
+            "the node did not mine within 60 s (it is closed, so synced from open; \
+             the wait covers its follower's first post and its sink's opening)"
         );
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
@@ -326,4 +330,180 @@ async fn a_node_and_an_alpha_11_node_refuse_each_other_cleanly() {
         alpha.height().await < want,
         "alpha.11 took this node's chain: a retired request was served"
     );
+}
+
+/// **An offline testnet node is synced at open, and mines** (CS-Q2 step 8,
+/// Rick 2026-11-01). Both connectors off is the operator's declaration
+/// that the node has no network to be behind: it reads `Synced` from open
+/// on every network, and `generateblocks` drives the built-in miner at the
+/// network's own difficulty (testnet has no fixed one; one block takes
+/// real proof of work).
+///
+/// Red before the declaration was built: the node read `NoView` forever
+/// and `generateblocks` was refused `mine.not_synced`.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; one testnet daemon, real proof of work"]
+async fn an_offline_testnet_node_is_synced_and_mines() {
+    let daemon = RegtestDaemon::start_on_testnet().await;
+    let info = daemon
+        .rpc
+        .json_rpc_call::<GetInfoResponse>("get_info", None)
+        .await
+        .expect("get_info");
+    assert!(
+        info.health.synchronized,
+        "an offline node is not synchronized at open"
+    );
+    let before = daemon.height().await;
+    // The follower posts its first job one pass after the state at open is
+    // published, so the first answers can be `starting` or `not_synced`; a
+    // node that is not synced stays refused past the window.
+    let posted = Instant::now() + Duration::from_secs(60);
+    let mined = loop {
+        match try_generate_blocks(&daemon.rpc, 1).await {
+            Ok(mined) => break mined,
+            Err(e)
+                if ["mine.starting", "mine.not_synced"]
+                    .iter()
+                    .any(|code| format!("{e:?}").contains(code))
+                    && Instant::now() < posted =>
+            {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+            Err(e) => daemon.panic_with_log(
+                "generateblocks on an offline testnet node",
+                format!("{e:?}"),
+            ),
+        }
+    };
+    assert_eq!(mined.blocks.len(), 1, "{:?}", mined.blocks);
+    assert_eq!(
+        daemon.height().await,
+        before + 1,
+        "the mined block connected"
+    );
+}
+
+/// **A closed node whose peer is down mines; when the peer arrives, its
+/// opening runs; when it leaves, the node still mines** (CS-Q2 step 8,
+/// Rick 2026-11-01). A closed peer list is the operator naming the node's
+/// whole network, so with none of it up the node is `Synced` and mines
+/// alone on its own tip. When its peer comes up the opening runs: the
+/// peer claims less work, so it resolves at once, the node stays synced,
+/// and the peer syncs the node's chain. When the peer leaves, none of the
+/// node's network is up again, and it is synced.
+///
+/// Red before the declaration was built: when its last peer left, the
+/// node published `NoView` and `generateblocks` was refused
+/// `mine.not_synced`. A regtest node opened `Synced` then, by network, so
+/// the first leg alone does not tell the two apart.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; two daemons"]
+async fn a_closed_node_whose_peer_is_down_mines_and_opens_when_it_arrives() {
+    const MINED: u64 = 5;
+    let serial = serial_lock().lock_owned().await;
+    let node_p2p = RegtestDaemon::free_port();
+    let peer_p2p = RegtestDaemon::free_port_excluding(&[node_p2p]);
+    let address = mine_address_from_seed(&[0x5f; 64], shekyl_address::Network::Mainnet);
+    let node = RegtestDaemon::spawn(
+        RegtestSpawn::new(Some(serial))
+            .with_mine_address(address)
+            .with_peering(Peering::Linked {
+                p2p_port: node_p2p,
+                peer_p2p_port: peer_p2p,
+                sink: false,
+            }),
+    )
+    .await;
+    // Nothing listens on the peer's port. The follower posts its first job
+    // one pass after the state at open is published, so the first answers
+    // can be `starting` or `not_synced`; a node that is not synced stays
+    // refused past the window.
+    let posted = Instant::now() + Duration::from_secs(60);
+    loop {
+        match try_generate_blocks(&node.rpc, MINED).await {
+            Ok(_) => break,
+            Err(e)
+                if ["mine.starting", "mine.not_synced"]
+                    .iter()
+                    .any(|code| format!("{e:?}").contains(code))
+                    && Instant::now() < posted =>
+            {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+            Err(e) => node.panic_with_log(
+                "a closed node with its peer down did not mine",
+                format!("{e:?}"),
+            ),
+        }
+    }
+    let want = node.height().await;
+    assert_eq!(want, MINED + 1, "the node mined alone");
+    let tip = node.last_block_hash().await;
+
+    let peer = RegtestDaemon::spawn(RegtestSpawn::new(None).with_peering(Peering::Linked {
+        p2p_port: peer_p2p,
+        peer_p2p_port: node_p2p,
+        sink: false,
+    }))
+    .await;
+    let synced = Instant::now() + Duration::from_secs(300);
+    while peer.height().await < want {
+        assert!(
+            Instant::now() < synced,
+            "the arriving peer reached height {} of {want}",
+            peer.height().await
+        );
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    assert_eq!(
+        peer.last_block_hash().await,
+        tip,
+        "the peer took the node's chain"
+    );
+    // The opening resolved on the lighter claim: the node is still synced
+    // and still mines.
+    let more = try_generate_blocks(&node.rpc, 1).await.unwrap_or_else(|e| {
+        node.panic_with_log(
+            "the node stopped mining when its peer arrived",
+            format!("{e:?}"),
+        )
+    });
+    assert_eq!(more.blocks.len(), 1);
+
+    // The peer leaves. A closed node with none of its network up is synced
+    // again, not `NoView`: it keeps mining.
+    drop(peer);
+    let left = Instant::now() + Duration::from_secs(60);
+    loop {
+        let reply: shekyl_rpc_types::P2pReply<shekyl_rpc_types::SyncInfoResponse> = node
+            .rpc
+            .json_rpc_call("sync_info", None)
+            .await
+            .expect("sync_info");
+        let info = reply.into_running().expect("a linked daemon's P2P runs");
+        if info.peers.is_empty() {
+            break;
+        }
+        assert!(Instant::now() < left, "the peer's session never closed");
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    let mined = Instant::now() + Duration::from_secs(60);
+    loop {
+        match try_generate_blocks(&node.rpc, 1).await {
+            Ok(_) => break,
+            Err(e)
+                if ["mine.starting", "mine.not_synced"]
+                    .iter()
+                    .any(|code| format!("{e:?}").contains(code))
+                    && Instant::now() < mined =>
+            {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+            Err(e) => node.panic_with_log(
+                "a closed node whose peer left did not mine",
+                format!("{e:?}"),
+            ),
+        }
+    }
 }
