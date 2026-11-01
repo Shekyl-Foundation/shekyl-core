@@ -366,11 +366,13 @@ fn a_partial_sync_bucket_is_handed_to_cpp_whole_when_the_owner_leaves() {
     assert_eq!(delivers, vec![bucket]);
 }
 
-/// The daemon's router before the cutover is pass-through: every post
-/// reaches the C++ handler unchanged, including chain sync's own commands
-/// and the messages the claim tap copies, and nothing reaches an owner.
+/// A router with no owner is pass-through: every post reaches the C++
+/// handler unchanged, including chain sync's own commands and the messages
+/// the claim tap copies. That is a bind the node left no owner for, such
+/// as a test's rebind; the daemon's router is attached
+/// (`shekyl-ffi`'s `a_bind_attaches_the_router_to_the_nodes_owner_and_sends_it_the_hub`).
 #[test]
-fn the_daemons_pass_through_router_changes_nothing_live() {
+fn a_router_with_no_owner_changes_nothing() {
     let (forward, seen) = recorder();
     let sink = Router::pass_through(forward).into_sink();
     let id = socket(11);

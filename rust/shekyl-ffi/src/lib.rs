@@ -120,7 +120,7 @@ pub mod archival_ffi;
 pub mod ct_balance_ffi;
 
 // Production OsRng → RelayRng adapter shared by the relay FFI seams.
-mod secure_relay_rng;
+pub mod secure_relay_rng;
 
 // Dandelion++ embargo / propagation-timeout FFI — RP-4
 // (`DAEMON_RELAY_PRIVACY.md` §17). Stem-map exports retired at RP-3a; the zone

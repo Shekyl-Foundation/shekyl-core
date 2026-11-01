@@ -3048,6 +3048,10 @@ int32_t shekyl_pool_complement(const uint8_t* known, size_t known_count, ShekylB
 /// fault, SHEKYL_POOL_UNBOUND with no door.
 int32_t shekyl_pool_fluffed(const uint8_t hash[32]);
 
+/// 1 when chain sync reads Synced, 0 otherwise (CS-5 §3). Following is not
+/// synchronized for relay's purposes. No node reads 0.
+uint8_t shekyl_node_is_synchronized(void);
+
 /// The handler's sync reads, each over one snapshot of the node's chain.
 /// 0 is success. 1 is a refusal (empty chain, unknown height, a history
 /// that does not share genesis). -1 is a store fault. -2 is no door.

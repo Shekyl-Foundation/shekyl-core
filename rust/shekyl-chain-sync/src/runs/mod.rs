@@ -656,6 +656,9 @@ where
         now: Instant,
         out: &mut Vec<Command<K>>,
     ) {
+        if !self.requests() {
+            return;
+        }
         let Some(state) = self.peers.get_mut(&session) else {
             return;
         };

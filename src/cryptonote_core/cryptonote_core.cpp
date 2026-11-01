@@ -345,7 +345,8 @@ namespace cryptonote
   //-----------------------------------------------------------------------------------------------
   bool core::is_synchronized() const
   {
-    return m_pprotocol != nullptr && m_pprotocol->is_synchronized();
+    // Chain sync's published state (CS-5 §3): Synced only.
+    return shekyl_node_is_synchronized() != 0;
   }
   //-----------------------------------------------------------------------------------------------
   void core::on_synchronized()

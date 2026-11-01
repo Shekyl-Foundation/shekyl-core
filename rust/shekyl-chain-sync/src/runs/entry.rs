@@ -92,11 +92,13 @@ where
                 }
             }
             Outcome::MissingBodies { indices } => {
-                out.push(Command::RequestMissingTxs {
-                    session,
-                    block: hash,
-                    indices,
-                });
+                if self.requests() {
+                    out.push(Command::RequestMissingTxs {
+                        session,
+                        block: hash,
+                        indices,
+                    });
+                }
             }
             Outcome::NoRoom => {
                 // The allowance that authorized the offer was already spent.

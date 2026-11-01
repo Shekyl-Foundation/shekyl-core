@@ -15,12 +15,15 @@ use shekyl_chain_rules::harness::fixture::{candidate_on, chain_of};
 use shekyl_chain_rules::{AtHeight, HeaderRecord, HeaderView, RuleSet, Trust};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_levin::PortableMap;
-use shekyl_types::{BlockHash, BlockHeight};
+use shekyl_types::{BlockHash, BlockHeight, ChainCount};
 use shekyl_wire::{Block, PowBlob};
 
-use crate::model::{Event, Outcome, Sync};
+use crate::claim::PeerClaim;
+use crate::model::{Event, Outcome, Requesting, Sync};
 use crate::proof::{drive, open_claim, serialized};
-use crate::scenarios::{answer, no_close, offer_tag, request_for, target_one, with_offer, Prefix};
+use crate::scenarios::{
+    answer, no_close, offer_tag, request_for, target_one, with_offer, NoDraw, Prefix,
+};
 use crate::Command;
 
 /// A shorter chain whose work meets or exceeds the tip already seen is a
@@ -207,6 +210,69 @@ fn an_offered_tip_seen_after_its_reply_relays_once_from_the_reply() {
         let out = drive(sync, &main, Event::Tip { tip });
         assert!(relays(&out).is_empty(), "a block relayed twice: {out:?}");
     });
+}
+
+/// The regtest `dev-sync` row off (CS-5 §2): the model builds no request
+/// of any kind, where the same flow with requests on asks the claimant for
+/// headers, and a tip this node mined still relays.
+#[test]
+fn with_requests_off_nothing_is_asked_and_a_mined_tip_still_relays() {
+    for requesting in [Requesting::On, Requesting::Off] {
+        let below = chain_of(8);
+        let above = chain_of(9);
+        let mut sync = Sync::new(Trust::UNANCHORED, target_one as fn(BlockHeight) -> RuleSet)
+            .with_requesting(requesting);
+        let mut out = Vec::new();
+        below.with_view(|view| {
+            let tip = view.tip().expect("main answers").expect("a tip");
+            out.extend(drive(&mut sync, &view, Event::Tip { tip }));
+            out.extend(drive(
+                &mut sync,
+                &view,
+                Event::SessionOpened {
+                    session: 1,
+                    transit: std::time::Duration::from_secs(1),
+                },
+            ));
+            sync.claim(
+                1,
+                PeerClaim {
+                    count: ChainCount::from_raw(20),
+                    work: CumulativeDifficulty::from_raw(u128::MAX),
+                    top: BlockHash::NULL,
+                },
+                &view,
+                std::time::Instant::now(),
+                &mut NoDraw,
+                &mut out,
+            )
+            .expect("the claim is a chain");
+            out.extend(drive(&mut sync, &view, Event::Room { seats: 4 }));
+        });
+        let asked = out.iter().any(|command| {
+            matches!(
+                command,
+                Command::RequestHeaders { .. }
+                    | Command::RequestBodies { .. }
+                    | Command::RequestComplement { .. }
+                    | Command::RequestMissingTxs { .. }
+            )
+        });
+        assert_eq!(
+            asked,
+            requesting == Requesting::On,
+            "{requesting:?}: {out:?}"
+        );
+        above.with_view(|view| {
+            let tip = view.tip().expect("main answers").expect("a tip");
+            let out = drive(&mut sync, &view, Event::Tip { tip });
+            assert_eq!(
+                relays(&out),
+                vec![(tip.hash, None)],
+                "{requesting:?}: {out:?}"
+            );
+        });
+    }
 }
 
 /// Each relay in `out`: the block and its supplier.

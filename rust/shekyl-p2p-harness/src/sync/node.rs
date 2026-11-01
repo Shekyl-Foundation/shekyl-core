@@ -161,16 +161,23 @@ impl Node {
             .register(OwnerClass::Sync)
             .expect("registered");
         let executor = Arc::new(Executor::new(budget, substrate));
+        // The harness's seam is bound already: the hub goes at once.
+        let (hub_tx, hub_rx) = tokio::sync::oneshot::channel();
+        assert!(
+            hub_tx.send(Arc::new(hub.clone())).is_ok(),
+            "the receiver is held here"
+        );
         let parts = OwnerParts {
             store: Arc::clone(&chain.store),
             door: chain.service.door(),
             alarm: chain.service.alarm(),
             tips: chain.service.watch_tip().await.expect("the tip watch"),
             latch: chain.service.watch_latch().await.expect("the latch watch"),
-            hub: Arc::new(hub.clone()),
+            hub: hub_rx,
             executor,
             timer,
             rules,
+            requesting: shekyl_chain_sync::Requesting::On,
             rng,
             pool_hashes: Arc::new(Vec::new),
             routed: routed_rx,

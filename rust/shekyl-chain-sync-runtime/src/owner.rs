@@ -76,7 +76,7 @@ use shekyl_timing_engine::{Clock, OwnerHandle, Tick};
 use shekyl_transport_layer::{declaration, Assessment};
 use shekyl_types::{BlockHash, BlockHeight, ChainCount};
 use shekyl_wire::{BlockBody, TxBody};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tracing::Instrument;
 
 use crate::executor::Executor;
@@ -87,8 +87,8 @@ use crate::serve::{
 };
 use crate::session::Session;
 use shekyl_chain_sync::{
-    BoundArrival, ClaimError, Command, Event, Job, Outcome, PeerClaim, Proved, Sync as Model,
-    SyncState, SyncView,
+    BoundArrival, ClaimError, Command, Event, Job, Outcome, PeerClaim, Proved, Requesting,
+    Sync as Model, SyncState, SyncView,
 };
 
 /// The owner row's name in the thread ledger.
@@ -106,14 +106,23 @@ pub struct OwnerParts<C: Clock + Clone, R> {
     pub tips: watch::Receiver<TipChanged>,
     /// The `following_degraded` latch.
     pub latch: watch::Receiver<Option<FollowingDegraded>>,
-    /// The seam, for sends, closes and finished deliveries.
-    pub hub: Arc<Hub>,
+    /// The seam, for sends, closes and finished deliveries. It arrives
+    /// once the seam is bound, which is after the node opens: the bind
+    /// attaches the router to this owner, mints the hub on it, and sends
+    /// the hub here (`shekyl_ffi::chain_sync_ffi`). The owner handles
+    /// nothing until it arrives. The router precedes every session, so no
+    /// session's messages are lost while it waits. A sender dropped
+    /// unsent is a node whose seam was never bound: the owner ends.
+    pub hub: oneshot::Receiver<Arc<Hub>>,
     /// The prove jobs' runner.
     pub executor: Arc<Executor>,
     /// The owner's registration on the timing engine, class `Sync`.
     pub timer: OwnerHandle<C>,
     /// The rule schedule.
     pub rules: ChainRules,
+    /// Whether the model requests anything from peers: the regtest
+    /// `dev-sync` row. It still serves, relays and publishes when `Off`.
+    pub requesting: Requesting,
     /// The daemon's draw source.
     pub rng: R,
     /// The pool's transaction hashes, for the complement request.
@@ -346,11 +355,23 @@ where
         executor,
         timer,
         rules,
+        requesting,
         rng,
         pool_hashes,
         mut routed,
         state: state_tx,
     } = parts;
+    let hub = tokio::select! {
+        biased;
+        _ = stop.wait_for(|stop| *stop) => return,
+        hub = hub => match hub {
+            Ok(hub) => hub,
+            Err(_) => {
+                tracing::info!("the seam was never bound: chain sync does not start");
+                return;
+            }
+        },
+    };
     let (inputs, mut input_rx) = mpsc::unbounded_channel();
     let schedule: Box<dyn Fn(BlockHeight) -> shekyl_chain_rules::RuleSet + Send> =
         Box::new(move |height| rules.in_force(height));
@@ -358,7 +379,7 @@ where
     let timer = Arc::new(timer);
     let wakes = Arc::clone(&timer);
     let mut owner = Owner {
-        sync: Model::new(rules.trust(), schedule),
+        sync: Model::new(rules.trust(), schedule).with_requesting(requesting),
         store,
         door,
         alarm,
@@ -447,7 +468,7 @@ where
             wake = wakes.wait_wake_async() => match wake {
                 Ok(_) => owner.deadlines_due(),
                 Err(err) => {
-                    tracing::error!(?err, "the timing engine is gone: chain sync stops");
+                    tracing::info!(?err, "the timing engine closed: chain sync stops");
                     break;
                 }
             },
@@ -462,7 +483,7 @@ fn clock_ready<C: Clock>(timer: &OwnerHandle<C>) -> Option<bool> {
     match timer.poll_wake() {
         Ok(ready) => Some(ready.is_some()),
         Err(err) => {
-            tracing::error!(?err, "the timing engine is gone: chain sync stops");
+            tracing::info!(?err, "the timing engine closed: chain sync stops");
             None
         }
     }

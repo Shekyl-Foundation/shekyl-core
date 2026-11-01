@@ -79,15 +79,20 @@ use shekyl_chain_rules::{AdmissionPolicy, FakechainSchedule, ReleaseAnchors, Rul
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::pool::PoolOpen;
 use shekyl_chain_store::store::{ChainStore, Horizons, SnapshotView};
+use shekyl_chain_sync::Requesting;
 use shekyl_chain_sync::SyncState;
+use shekyl_chain_sync_runtime::executor::Executor;
+use shekyl_chain_sync_runtime::owner::OwnerParts;
 use shekyl_daemon_config::sections::{DaemonConfig, Dev};
 use shekyl_daemon_rpc::handles::Handles;
 use shekyl_daemon_rpc::store_facts::{NodeIdentity, RulesAt, StoreFacts};
+use shekyl_ffi::secure_relay_rng::SecureRelayRng;
 use shekyl_hash_budget::Budget;
 use shekyl_mempool::Pool;
 use shekyl_miner::{JobBoard, MiningAddress};
 use shekyl_pow_randomx::CacheStore;
 use shekyl_runtime::{RuntimeBudget, ThreadName};
+use shekyl_timing_engine::OwnerClass;
 use shekyl_transport_layer::Sockets;
 use shekyl_types::{BlockHeight, UnixSeconds};
 use tokio::sync::Notify;
@@ -123,6 +128,10 @@ const fn sync_at_open(network: shekyl_daemon_config::Network) -> SyncState {
 /// bound is only the runtime's, and it is not a protocol constant.
 const RUNTIME_SHUTDOWN: Duration = Duration::from_secs(5);
 
+/// How long chain sync's blocking work (a proof or a store read) may run
+/// after its owner is told to stop. Not a protocol constant.
+const SYNC_OWNER_SHUTDOWN: Duration = Duration::from_secs(5);
+
 /// Why [`Node::open`] refused.
 #[derive(Debug, thiserror::Error)]
 pub enum OpenError {
@@ -150,6 +159,9 @@ pub enum OpenError {
     /// The ingest service did not answer at open.
     #[error("the ingest service did not answer: {0}")]
     Service(String),
+    /// Chain sync's owner did not start.
+    #[error("chain sync did not start: {0}")]
+    Sync(String),
 }
 
 /// What [`Node::open`] needs from the composition root, which holds `main`.
@@ -193,6 +205,9 @@ pub struct Node {
     sockets: Sockets,
     handles: Handles,
     service: Mutex<Option<Service<ProductionSubstrate>>>,
+    /// Chain sync's owner (CS-5 §2), the node's for its lifetime. It
+    /// publishes into [`Self::sync`], and the seam's bind hands it the hub.
+    sync_owner: Mutex<Option<shekyl_chain_sync_runtime::owner::Running>>,
     runtime: Mutex<Option<shekyl_runtime::Pool>>,
     /// The hasher budget `pow_hash` acquires under. The facts-lock test
     /// holds its permits; production does not keep a second copy.
@@ -225,6 +240,8 @@ impl Node {
         ));
         let pool = open_pool(&store, &pool_path, rules)?;
         let submit_pool = Arc::clone(&pool);
+        let complement_pool = Arc::clone(&pool);
+        let sync_substrate = ProductionSubstrate::clone(&substrate);
         let departed = pool_departed();
         // Q9: fluff at this tip rebuilds the posted job. Same Notify the
         // follower waits on for parked bodies.
@@ -341,17 +358,46 @@ impl Node {
                 return Err(OpenError::Service(error.to_string()));
             }
         };
+        let sync_owner = match spawn_sync_owner(SyncOwnerParts {
+            store: Arc::clone(&store),
+            door: service.door(),
+            alarm: service.alarm(),
+            tips: tips.clone(),
+            latch: latch.clone(),
+            executor: Arc::new(Executor::new(budget.clone(), sync_substrate)),
+            rules,
+            requesting: if args.config.dev.sync {
+                Requesting::On
+            } else {
+                Requesting::Off
+            },
+            pool: complement_pool,
+            state: sync.clone(),
+        }) {
+            Ok(owner) => owner,
+            Err(error) => {
+                uninstall_process_doors();
+                if let Err(stop) = runtime.block_on(service.stop()) {
+                    tracing::error!("chain sync did not start, and the service stopped on {stop}");
+                }
+                runtime.shutdown(RUNTIME_SHUTDOWN);
+                return Err(error);
+            }
+        };
         // DX-Q2 item 5: the dialer's outbound handshake is a consumer of the
         // one tip source. Publish the tip the watch holds now, then every
         // change; the task ends when the connector drops its sender.
+        // The first tip is published here, before open returns: the seam
+        // binds after, so no handshake, inbound or outbound, finds none
+        // (CS-5 F4, `shekyl_p2p_handshake_tip`).
         let mut handshake_tips = tips.clone();
+        if let Some(tip) = handshake_tips.borrow_and_update().tip {
+            shekyl_ffi::dialer_ffi::publish_chain_tip(&tip);
+        }
         runtime.spawn(async move {
-            loop {
+            while handshake_tips.changed().await.is_ok() {
                 if let Some(tip) = handshake_tips.borrow_and_update().tip {
                     shekyl_ffi::dialer_ffi::publish_chain_tip(&tip);
-                }
-                if handshake_tips.changed().await.is_err() {
-                    break;
                 }
             }
         });
@@ -455,6 +501,7 @@ impl Node {
             sockets,
             handles,
             service: Mutex::new(Some(service)),
+            sync_owner: Mutex::new(Some(sync_owner)),
             runtime: Mutex::new(Some(runtime)),
             #[cfg(test)]
             budget: test_budget,
@@ -539,6 +586,16 @@ impl Node {
         // The process doors hold the store (`Door::admission`); leave them
         // up and `chain.db` stays exclusive after this node has stopped.
         uninstall_process_doors();
+        // Chain sync after the RPC's last read (the composition root stops
+        // the RPC first) and before the service it offers into.
+        if let Some(owner) = self
+            .sync_owner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+        {
+            owner.stop(SYNC_OWNER_SHUTDOWN);
+        }
         let Some(runtime) = self
             .runtime
             .lock()
@@ -770,7 +827,67 @@ fn schedule_of(dev: &Dev) -> Result<FakechainSchedule, OpenError> {
 fn uninstall_process_doors() {
     shekyl_ffi::ingest_ffi::uninstall();
     shekyl_ffi::pool_ffi::uninstall();
+    // A slot no bind took: its hub sender drops, and an owner still
+    // waiting for the hub ends.
+    shekyl_ffi::chain_sync_ffi::uninstall();
     shekyl_daemon_rpc::submit::clear_production();
+}
+
+/// What [`spawn_sync_owner`] builds chain sync's owner from, beside the
+/// router and the hub it makes and leaves for the seam's bind.
+struct SyncOwnerParts {
+    store: Arc<ChainStore>,
+    door: shekyl_chain_ingest::service::Door,
+    alarm: shekyl_chain_ingest::service::Alarm,
+    tips: tokio::sync::watch::Receiver<shekyl_chain_ingest::TipChanged>,
+    latch: tokio::sync::watch::Receiver<Option<shekyl_chain_store::codec::FollowingDegraded>>,
+    executor: Arc<Executor>,
+    rules: ChainRules,
+    requesting: Requesting,
+    pool: Arc<Mutex<Pool>>,
+    state: tokio::sync::watch::Sender<SyncState>,
+}
+
+/// Start chain sync's owner (CS-5 §2) and leave its router sender and hub
+/// one-shot for the seam's bind (`shekyl_ffi::chain_sync_ffi::install`).
+/// The owner registers on the process's timing engine, class `Sync`, and
+/// draws from the production CSPRNG.
+fn spawn_sync_owner(
+    parts: SyncOwnerParts,
+) -> Result<shekyl_chain_sync_runtime::owner::Running, OpenError> {
+    let timer = shekyl_ffi::zone_ffi::process_engine()
+        .register(OwnerClass::Sync)
+        .map_err(|error| OpenError::Sync(format!("the timing engine: {error:?}")))?;
+    let (router_tx, routed) = tokio::sync::mpsc::unbounded_channel();
+    let (hub_tx, hub) = tokio::sync::oneshot::channel();
+    let state = parts.state.subscribe();
+    let pool = parts.pool;
+    let pool_hashes: Arc<dyn Fn() -> Vec<[u8; 32]> + Send + Sync> = Arc::new(move || {
+        pool.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .peer_sync()
+            .map(|(txid, _)| *txid.as_bytes())
+            .collect()
+    });
+    let running = shekyl_chain_sync_runtime::owner::spawn(OwnerParts {
+        store: parts.store,
+        door: parts.door,
+        alarm: parts.alarm,
+        tips: parts.tips,
+        latch: parts.latch,
+        hub,
+        executor: parts.executor,
+        timer,
+        rules: parts.rules,
+        requesting: parts.requesting,
+        rng: SecureRelayRng,
+        pool_hashes,
+        routed,
+        state: parts.state,
+    })
+    .map_err(OpenError::Runtime)?;
+    shekyl_ffi::chain_sync_ffi::install(router_tx, hub_tx, state);
+    Ok(running)
 }
 
 fn open_chain(

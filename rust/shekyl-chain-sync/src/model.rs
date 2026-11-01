@@ -75,6 +75,18 @@ enum HeaderSlot {
     FollowUp,
 }
 
+/// Whether the model asks peers for anything: the regtest `dev-sync` row.
+/// `Off` builds no header, body, complement or missing-transaction
+/// request. The model still serves, relays, publishes and takes what
+/// peers announce.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Requesting {
+    /// Requests are built (every network but a regtest lever).
+    On,
+    /// Nothing is requested.
+    Off,
+}
+
 /// The coordinator. It holds one peer machine per open session and the
 /// chain those peers are building. The long-run slot and the evidence
 /// check are modes of a peer, not fields beside the map.
@@ -121,6 +133,8 @@ pub struct Sync<K, R> {
     /// The posture `judge_header` is given. The fill's checkpoint does
     /// not read it: until slice 6 every posture is full.
     pub(crate) trust: Trust,
+    /// Whether requests are built.
+    pub(crate) requesting: Requesting,
 }
 
 impl<K, R> Sync<K, R>
@@ -156,7 +170,20 @@ where
             alarm: false,
             alarm_sent: false,
             trust,
+            requesting: Requesting::On,
         }
+    }
+
+    /// The same model with requests `requesting` ([`Requesting`]).
+    #[must_use]
+    pub const fn with_requesting(mut self, requesting: Requesting) -> Self {
+        self.requesting = requesting;
+        self
+    }
+
+    /// Whether requests are built.
+    pub(crate) fn requests(&self) -> bool {
+        self.requesting == Requesting::On
     }
 
     /// CEN-C1's operand. Deadlines use the monotonic instant instead.
@@ -672,6 +699,9 @@ where
     }
 
     fn complement(&self, rng: &mut impl RelayRng, out: &mut Vec<Command<K>>) {
+        if !self.requests() {
+            return;
+        }
         let peers: Vec<K> = self.peers.keys().copied().collect();
         let Some(session) = draw_one(rng, &peers) else {
             return;
@@ -760,6 +790,9 @@ where
         slot: HeaderSlot,
         out: &mut Vec<Command<K>>,
     ) -> Result<(), H::Fault> {
+        if !self.requests() {
+            return Ok(());
+        }
         let points = self.locator_points(main)?;
         let block_ids = locator(self.star_count(), |height| {
             Ok::<_, H::Fault>(

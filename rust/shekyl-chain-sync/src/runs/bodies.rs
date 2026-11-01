@@ -110,7 +110,7 @@ where
     }
 
     pub(crate) fn plan_bodies(&mut self, now: Instant, out: &mut Vec<Command<K>>) {
-        if self.unreadable {
+        if self.unreadable || !self.requests() {
             return;
         }
         let Some(seats) = self.seats else {

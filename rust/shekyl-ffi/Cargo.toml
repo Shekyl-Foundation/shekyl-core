@@ -54,6 +54,7 @@ shekyl-mempool = { path = "../shekyl-mempool" }
 shekyl-chain-rules = { path = "../shekyl-chain-rules" }
 # The chain-sync router is the seam's post sink (`seam_ffi.rs`):
 # pass-through until the cutover attaches the sync owner.
+shekyl-chain-sync = { path = "../shekyl-chain-sync" }
 shekyl-chain-sync-runtime = { path = "../shekyl-chain-sync-runtime" }
 # RandomX v2 light-cache PoW verifier. Consumed by `pow_randomx_ffi.rs`
 # (the `shekyl_pow_randomx_v2_*` exports) which is the consensus PoW
