@@ -415,3 +415,32 @@ where
         f(&mut sync, &view, (first_raw, first), (second_raw, second));
     });
 }
+
+/// **An orphan re-syncs; it does not sever** (C2-R1c-Q3b, carried from
+/// the C++ span loop into the model). The entry answers a body it could
+/// not link (`Unlinked`, its parent reaches nothing this node holds): the
+/// supplier keeps its session, and the model asks it for headers from the
+/// missing parent. Only a refused block closes a session. Red edit: close
+/// the session on `Unlinked`. `check_consensus_invariants.sh` [5/5] reads
+/// this test and the arm it pins.
+#[test]
+fn an_unlinked_body_relocates_its_supplier_and_closes_nothing() {
+    with_offer(|sync, view, tag, _hash, _raw| {
+        let parent = BlockHash::from_bytes([0x77; 32]);
+        let out = drive(
+            sync,
+            view,
+            Event::Entry {
+                tag,
+                outcome: Outcome::Unlinked { at: parent },
+            },
+        );
+        no_close(&out);
+        assert!(sync.peers.contains_key(&1), "the supplier's session left");
+        assert!(
+            out.iter()
+                .any(|command| matches!(command, Command::RequestHeaders { session: 1, .. })),
+            "the supplier was not asked for headers from the missing parent: {out:?}"
+        );
+    });
+}
