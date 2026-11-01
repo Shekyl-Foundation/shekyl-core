@@ -47,7 +47,6 @@ rust/shekyl-archival-retention/tests/gate2_serve_credit_kat.rs	1	height: u64,
 rust/shekyl-chain-ingest/src/corpus.rs	1	height: u64,
 rust/shekyl-chain-ingest/src/corpus_tests.rs	1	fn blobs(height: u64, n: usize) -> (Candidate, Vec<u8>, Vec<Vec<u8>>) {
 rust/shekyl-chain-ingest/src/fetch.rs	1	heights: Range<u64>,
-rust/shekyl-chain-ingest/src/grader.rs	1	pub height: u64,
 rust/shekyl-chain-ingest/src/mutation_tests.rs	1	fn seed_for(height: u64, hash_at: impl Fn(u64) -> BlockHash) -> BlockHash {
 rust/shekyl-chain-ingest/src/mutation_tests.rs	1	height: u64,
 rust/shekyl-chain-ingest/src/pipeline_tests.rs	1	height: u64,
