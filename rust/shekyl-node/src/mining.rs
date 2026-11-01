@@ -354,14 +354,7 @@ impl MiningFacts for MiningControl {
     fn status(&self) -> Result<MiningState, FactsFault> {
         let status = Self::status(self);
         Ok(MiningState {
-            miner: status.miner.as_ref().map(|miner| MinerState {
-                threads: u32::try_from(miner.threads).unwrap_or(u32::MAX),
-                hashes_per_second: miner
-                    .rate
-                    .hashes
-                    .checked_div(miner.rate.window.as_secs())
-                    .unwrap_or(0),
-            }),
+            miner: status.miner.as_ref().map(miner_state),
             address: self.address.as_ref().map(|a| a.encoded().to_owned()),
             posted: status.job.map(|job| PostedSummary {
                 height: job.height,
@@ -371,6 +364,47 @@ impl MiningFacts for MiningControl {
             pool_retired: self.pool.retired(),
             absent: status.no_job.as_ref().map(no_job_diagnostic),
         })
+    }
+}
+
+/// The miner's reading as the facts carry it: the hash count and the
+/// window it was counted over, so a rate below one hash a second survives
+/// to the wire's edge instead of truncating here.
+fn miner_state(miner: &MinerStatus) -> MinerState {
+    MinerState {
+        threads: u32::try_from(miner.threads).unwrap_or(u32::MAX),
+        hashes: miner.rate.hashes,
+        window_secs: miner.rate.window.as_secs(),
+    }
+}
+
+#[cfg(test)]
+mod rate_tests {
+    use super::{miner_state, MinerStatus};
+    use shekyl_miner::HashRate;
+    use std::time::Duration;
+
+    /// Observed on testnet: one thread near 1 H/s read 0 for half an hour,
+    /// so a slow miner and a stopped one were the same reading. Eight
+    /// hashes in ten seconds is 0.8 H/s; the facts carry the count and the
+    /// window, not their truncated quotient.
+    #[test]
+    fn a_miner_below_one_hash_a_second_keeps_its_count_and_window() {
+        let status = MinerStatus {
+            active: true,
+            threads: 1,
+            address: String::new(),
+            rate: HashRate {
+                hashes: 8,
+                window: Duration::from_secs(10),
+            },
+            per_thread: Vec::new(),
+            not_lowered: 0,
+        };
+        let state = miner_state(&status);
+        assert_eq!(state.threads, 1);
+        assert_eq!(state.hashes, 8);
+        assert_eq!(state.window_secs, 10);
     }
 }
 

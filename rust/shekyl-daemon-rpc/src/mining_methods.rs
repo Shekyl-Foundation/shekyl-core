@@ -242,7 +242,12 @@ pub fn mining_status(mining: &dyn MiningFacts) -> Result<MiningStatusResponse, R
     Ok(MiningStatusResponse {
         status: RpcStatus::ok(),
         active: state.miner.is_some(),
-        speed: state.miner.map_or(0, |miner| miner.hashes_per_second),
+        // The wire's field is whole hashes a second, so a miner below 1 H/s
+        // reads 0 here and only here; a field that carries the fraction is
+        // the RPC wire lane's (FOLLOWUPS, `mining_status.speed`).
+        speed: state.miner.map_or(0, |miner| {
+            miner.hashes.checked_div(miner.window_secs).unwrap_or(0)
+        }),
         threads_count: state.miner.map_or(0, |miner| miner.threads),
         address: state.address.unwrap_or_default(),
         pow_algorithm: POW_ALGORITHM.to_owned(),

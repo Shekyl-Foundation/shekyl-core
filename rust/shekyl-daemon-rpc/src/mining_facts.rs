@@ -82,8 +82,13 @@ pub struct PostedSummary {
 pub struct MinerState {
     /// Worker threads.
     pub threads: u32,
-    /// Hashes per second over the miner's window, whole hashes.
-    pub hashes_per_second: u64,
+    /// Hashes the workers computed over the miner's window.
+    pub hashes: u64,
+    /// The window's complete seconds (`shekyl_miner::RATE_WINDOW` once the
+    /// miner has run that long). With [`hashes`](Self::hashes) it carries a
+    /// rate below one hash a second; the one division to a wire unit is the
+    /// wire's.
+    pub window_secs: u64,
 }
 
 /// What `mining_status` reports.
