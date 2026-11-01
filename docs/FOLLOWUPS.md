@@ -282,10 +282,6 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`P2P_3_CHAIN_SYNC_BRIEF.md`](design/P2P_3_CHAIN_SYNC_BRIEF.md) CS-Q10 (CS, with RD's relay entry)
   - Target: pre-genesis
 
-- **`Blockchain::handle_get_objects` still honours a peer's `prune` flag (`e.pruned = arg.prune`): decide with the skeleton sync wire whether that arm is built on or deleted.** No Shekyl peer sets the flag and every receiver refuses a pruned entry, so the arm is dead inheritance from the stripe engine; but `PDM-Q-F28` grows the same `tx_blob_entry`, so it is the P2P lane's call, made with F28, not a free deletion. *Falsifier:* `git grep -n "arg.prune" src/cryptonote_core/blockchain.cpp` returning nothing, or F28's wire landing on top of it.
-  - Owner: [`ARCHIVAL_PRUNED_DAEMON_MODE.md`](design/ARCHIVAL_PRUNED_DAEMON_MODE.md) `PDM-Q-F28`
-  - Target: pre-genesis
-
 - **Three things the txid still takes from C++, each to end at the engine swap:** a `get_transactions` slot fed from `shekyl-chain-store` must carry the `txs_archival_len` row and be checked against the hash it was asked by; `get_transaction_prefix_hash` still hashes the txid's first word in C++ for the signature-verification input; and `shekyl_txid_from_segments` is told `first_input_is_spend` and `pqc_auth_count` by its caller. *Falsifier:* a Rust-store-backed `get_transactions` test serving a transaction whose shard was pruned, accepted by the wallet's `parse_tx_batch`; and `git grep -n "get_transaction_prefix_hash\|first_input_is_spend" src` returning nothing.
   - Owner: [`ARCHIVAL_SHARD_COUNT_CUTOVER.md`](design/ARCHIVAL_SHARD_COUNT_CUTOVER.md) §F
   - Target: pre-genesis
