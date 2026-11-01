@@ -1,6 +1,6 @@
 # DRS-E2 — the ingest spine and its first source, the replay driver (pre-flight)
 
-**Status:** OPEN — **the CSR-3a grading is retired (2026-11-01):** with the C++ side gone the corpus is re-baselined from Rust (`shekyl-chain-replay baseline`, `DAEMON_REDB_STORE.md` §12.1), a replay agrees with its baseline or fails, and the grader, the register fixture and its extractor left with the register (RD-Q6 and RD-Q9 below are the record of what they were). **Implementation: increment 1 (§7 commits 0, 1, 2, 3,
+**Status:** OPEN — **the CSR-3a grading is retired (2026-11-01):** with the C++ side gone the corpus is re-baselined from Rust (`shekyl-chain-replay baseline`, `DAEMON_REDB_STORE.md` §12.1; five chains of six, `emission-claim` at SO-D12 4b), a replay agrees with its baseline or fails, and the grader, the register fixture and its extractor left with the register (RD-Q6 and RD-Q9 below are the record of what they were). **Implementation: increment 1 (§7 commits 0, 1, 2, 3,
 4a, 6) LANDED via #804 (2026-09-20); increment 2 (4b, 5, 6b, 7, 7b, 8b, 8c,
 and commit 8's regtest leg) LANDED on the branch 2026-09-20 — ported from
 the parallel #806 onto #804's APIs (rule 95: code on `dev` wins) after the

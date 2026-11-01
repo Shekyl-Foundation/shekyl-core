@@ -1,6 +1,6 @@
 # Consensus rewrite ↔ daemon chain store — reconciliation
 
-**Status: records-was (2026-11-01, at `dev` `43fadfb65e`).** The C++ side this document reconciled the Rust store against left at the DRS-X flip. Its register (§5.4.1) is the C++-era conformance record at that sha, and nothing grades against it: the oracle it named is the E2 corpus re-baselined from Rust (`DAEMON_REDB_STORE.md` §12.1), a regression gate with one side. The two DIVERGENT rows close on the intended behaviour, which is the Rust's (CEN-I4 and CEN-M3 below). Reconciled two design programs that target the same six
+**Status: records-was, 2026-11-01** (all at `43fadfb65e`). The C++ side this document reconciled the Rust store against left at the DRS-X flip. Its register (§5.4.1) is the C++-era conformance record at that sha, and nothing grades against it: the oracle it named is the E2 corpus re-baselined from Rust (`DAEMON_REDB_STORE.md` §12.1), a regression gate with one side. The two DIVERGENT rows close on the intended behaviour, which is the Rust's (CEN-I4 and CEN-M3 below). Reconciled two design programs that target the same six
 C++ files on orthogonal cuts and, until this document, did not reference each
 other in either direction. Records the **2026-09-01 countermand** (§0) and its
 blast radius across both programs' binding decisions.
