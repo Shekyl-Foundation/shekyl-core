@@ -264,36 +264,52 @@ async fn a_dialing_node_hands_its_tip_to_the_peer_it_dials() {
 }
 
 /// **A CS-5 node and an alpha.11 node refuse each other cleanly** (CS-5
-/// §6). The CS-5 node opens synced on regtest and mines a short chain; the
-/// alpha.11 node links to it. Alpha.11's sync asks with the retired chain
-/// request (2006), which this node's ingress refuses as an undefined
-/// command, and this node's owner asks nothing of a peer that claims less.
-/// So alpha.11 never takes the chain, and neither daemon faults: both stay
-/// up and answer RPC.
+/// §6). The CS-5 node mines a short chain against a CS-5 sink (a regtest
+/// node with no peer reads `no_view` and builds no template); the
+/// alpha.11 node then links to it. Alpha.11's sync asks with the retired
+/// chain request (2006), which this node's ingress refuses as an
+/// undefined command, and this node's owner asks nothing of a peer that
+/// claims less. So alpha.11 never takes the chain, and neither daemon
+/// faults: both stay up and answer RPC.
 ///
 /// Dark in CI: it needs a released alpha.11 `shekyld` as well
 /// (`SHEKYLD_ALPHA11_BIN`).
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "CS-5 mixed version: requires SHEKYLD_BIN and SHEKYLD_ALPHA11_BIN; two daemons, ~2 min"]
+#[ignore = "CS-5 mixed version: requires SHEKYLD_BIN and SHEKYLD_ALPHA11_BIN; three daemons, ~2 min"]
 async fn a_node_and_an_alpha_11_node_refuse_each_other_cleanly() {
     let alpha11 = std::env::var_os("SHEKYLD_ALPHA11_BIN")
         .map(std::path::PathBuf::from)
         .expect("SHEKYLD_ALPHA11_BIN names a released alpha.11 shekyld");
     let serial = serial_lock().lock_owned().await;
     let node_p2p = RegtestDaemon::free_port();
-    let alpha_p2p = RegtestDaemon::free_port_excluding(&[node_p2p]);
+    let sink_p2p = RegtestDaemon::free_port_excluding(&[node_p2p]);
+    let alpha_p2p = RegtestDaemon::free_port_excluding(&[node_p2p, sink_p2p]);
     let address = mine_address_from_seed(&[7u8; 64], shekyl_address::Network::Mainnet);
+    let _sink = RegtestDaemon::spawn(RegtestSpawn::new(None).with_peering(Peering::Linked {
+        p2p_port: sink_p2p,
+        peer_p2p_port: node_p2p,
+        sink: true,
+    }))
+    .await;
     let node = RegtestDaemon::spawn(
         RegtestSpawn::new(Some(serial))
             .with_mine_address(address)
             .with_peering(Peering::Linked {
                 p2p_port: node_p2p,
-                peer_p2p_port: alpha_p2p,
+                peer_p2p_port: sink_p2p,
                 sink: false,
             }),
     )
     .await;
-    node.generate_blocks(5).await;
+    let linked = Instant::now() + Duration::from_secs(60);
+    while try_generate_blocks(&node.rpc, 1).await.is_err() {
+        assert!(
+            Instant::now() < linked,
+            "the node never read synced against its sink within 60 s"
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    node.generate_blocks(4).await;
     let want = node.height().await;
     let alpha = RegtestDaemon::spawn(RegtestSpawn::new(None).with_binary(alpha11).with_peering(
         Peering::Linked {
