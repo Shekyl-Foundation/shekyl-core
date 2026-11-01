@@ -37,16 +37,17 @@ use shekyl_wire::Transaction;
 use crate::archival_driver::{first_spending_height, record_of, ENDPOINT, FEE};
 use crate::archival_slash_tests::{run_levered_slash_chain, ConnectMode};
 use crate::chain_drive::{
-    catch_up, issue_draws, priced_emission_claim, spender_owning_before, Driven,
-    EmissionClaimParts, IssuedPair,
+    assert_counted_draws_issued, catch_up, mine_serving, priced_emission_claim,
+    spender_owning_before, Driven, DriverWitness, EmissionClaimParts,
 };
 use crate::emission_assembly::ClaimTerms;
 use crate::frozen_membership::{drive_frozen_membership, price_frozen_claim};
 use crate::scenario::{FreeHash, Mined, Scenario, StepOutcome};
 use crate::scenario_archival::{shard_set, Persona};
 use crate::scenario_shard::{
-    close_shards, first_admissible_compact_join, inside_one_epoch, levered_rules, levered_schedule,
-    mine_to, EPOCH_BLOCKS, FILL_FROM_COINBASE,
+    close_shards, first_admissible_compact_join, inside_one_epoch, inside_one_epoch_of,
+    levered_rules, mine_to, settled_epoch_blocks, settled_rules, settled_schedule,
+    FILL_FROM_COINBASE,
 };
 use shekyl_harness_spender::{Owner, Recipient, Spender};
 
@@ -204,7 +205,7 @@ async fn claim_of(
     mined: &[Mined],
     claim: &StraddleClaim<'_>,
 ) -> Transaction {
-    let count_at_close = (claim.epoch.to_raw() + 1) * EPOCH_BLOCKS;
+    let count_at_close = (claim.epoch.to_raw() + 1) * settled_epoch_blocks();
     let budget = mined[usize::try_from(count_at_close - 1).expect("small")]
         .archival
         .close()
@@ -224,7 +225,7 @@ async fn claim_of(
         shard_idx: 0,
     }];
     let inputs = EpochCloseInputs::under_schedule(
-        levered_schedule(),
+        settled_schedule(),
         claim.epoch.to_raw(),
         count_at_close,
         &bonds,
@@ -307,8 +308,8 @@ async fn claim_of(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "fills a shard with real proofs; minutes; run by nightly.yml's chain-ingest-ignored job"]
 async fn a_popped_claim_restores_the_epoch_its_prune_dropped_and_a_second_claim_is_refused() {
-    let rules = levered_rules();
-    let schedule = levered_schedule();
+    let rules = settled_rules();
+    let schedule = settled_schedule();
     let window = MAX_CLAIM_AGE_W;
     let mut scenario = Scenario::open_under("archival-pop-straddle", FreeHash, rules);
     let mut mined = scenario.mine(first_spending_height().to_raw()).await;
@@ -316,7 +317,11 @@ async fn a_popped_claim_restores_the_epoch_its_prune_dropped_and_a_second_claim_
     let [closed] = filled.closed.as_slice() else {
         panic!("one shard closed");
     };
-    let join_height = inside_one_epoch(first_admissible_compact_join(&rules, *closed), 2);
+    let join_height = inside_one_epoch_of(
+        settled_schedule(),
+        first_admissible_compact_join(&rules, *closed),
+        2,
+    );
     mine_to(&mut scenario, &mut mined, join_height).await;
     let mut spender = Spender::over(&mined);
     let mut seen = mined.len();
@@ -369,18 +374,26 @@ async fn a_popped_claim_restores_the_epoch_its_prune_dropped_and_a_second_claim_
     let e_new = SettlementEpoch::from_raw(e_old.to_raw() + window - 1);
     let at_epoch = e_old.to_raw() + window + 1;
     let shard = ShardId::from_raw(0);
-    for epoch in [e_old, e_new] {
-        issue_draws(
-            &scenario,
-            epoch,
-            &[IssuedPair {
-                persona: persona.id(),
-                shard,
-                passed: true,
-            }],
-        )
-        .await;
-    }
+    // `E_old` and, below, `E_new` are mined with the chain's own draws
+    // admitted, every one of the persona's passing: the pair is each
+    // epoch's only drawable pair, so each settles Served for it. The epochs
+    // between are mined plainly; their draws are never revealed, so they
+    // settle NonObservation and feed no claim.
+    let witness = DriverWitness::new(0x62);
+    let after = |epoch: SettlementEpoch| {
+        BlockHeight::from_raw((epoch.to_raw() + 1) * settled_epoch_blocks())
+    };
+    mine_serving(
+        &mut scenario,
+        &mut mined,
+        &witness,
+        &[&persona],
+        after(e_old),
+        |_, _| true,
+    )
+    .await
+    .assert_only_and_every_draw_passed((persona.id(), shard));
+    assert_counted_draws_issued(&scenario, e_old, (persona.id(), shard));
 
     let claim = |fee_index: usize,
                  epoch: SettlementEpoch,
@@ -419,6 +432,25 @@ async fn a_popped_claim_restores_the_epoch_its_prune_dropped_and_a_second_claim_
         paid.first_paying_emission_height,
         FirstPayingHeight::new(first_connecting)
     );
+
+    // `E_new`, served.
+    mine_to(
+        &mut scenario,
+        &mut mined,
+        BlockHeight::from_raw(schedule.open_height(e_new.to_raw())),
+    )
+    .await;
+    mine_serving(
+        &mut scenario,
+        &mut mined,
+        &witness,
+        &[&persona],
+        after(e_new),
+        |_, _| true,
+    )
+    .await
+    .assert_only_and_every_draw_passed((persona.id(), shard));
+    assert_counted_draws_issued(&scenario, e_new, (persona.id(), shard));
 
     // 2. `E_new` at the first block of `at_epoch`: the insert prunes `E_old`.
     let second_connecting = BlockHeight::from_raw(schedule.open_height(at_epoch));

@@ -33,7 +33,9 @@
 //! ahead first — empty blocks are cheap, proofs are not — sized from the
 //! first spend's own archival length rather than a number written down.
 
+use shekyl_archival_retention::{draw_count, draw_horizon};
 use shekyl_chain_rules::{FakechainSchedule, SettlementEpochBlocks, SettlementSchedule};
+use shekyl_types::archival::COUNTED_DRAWS;
 use shekyl_types::archival::SHARD_LENGTH;
 use shekyl_types::{BlockCount, BlockHeight, ChainCount, ShardId};
 use shekyl_wire::Transaction;
@@ -69,6 +71,91 @@ pub fn levered_rules() -> ChainRules {
 /// The settlement schedule [`levered_rules`] runs.
 pub fn levered_schedule() -> SettlementSchedule {
     SettlementSchedule::new(SettlementEpochBlocks::new(EPOCH_BLOCKS).expect("non-zero"))
+}
+
+/// The most drawable pairs a chain on the settled schedule draws in one
+/// epoch: the levered slash chain's two shards.
+pub const SETTLED_PAIRS: u64 = 2;
+
+/// The settled epoch, in blocks: the shortest levered epoch in which the
+/// count rule issues every pair of a set of up to [`SETTLED_PAIRS`] its
+/// [`COUNTED_DRAWS`] when every drawing block's bundle is admitted by the
+/// next block.
+///
+/// [`EPOCH_BLOCKS`] is too short for that. The count rule's horizon has a
+/// floor (`draw_horizon_floor_blocks`, 200 blocks) far above a 20-block
+/// epoch, so one pair is drawn about once an epoch there and never settles
+/// Served or Missed. A chain whose settlement is fed by admitted draws runs
+/// under this schedule instead. The rule itself is not touched: the epoch
+/// is found by running it.
+///
+/// Derived, not written down: the epoch is searched from the shortest one
+/// with a response window, one window step at a time, running the count
+/// phase's own arithmetic ([`draw_horizon`], [`draw_count`]) block by block
+/// as the transition does. The shortfall opens at `COUNTED_DRAWS · D`; a
+/// block's visible shortfall is its predecessor's less the draws its
+/// predecessor admitted; the block before is still in flight when a block
+/// counts; and the last block's draws are admitted by the first block of
+/// the next epoch. The first epoch that leaves no shortfall for every set
+/// size from one to [`SETTLED_PAIRS`] is the answer. A chain that moves
+/// onto it still asserts that its pairs reached [`COUNTED_DRAWS`] before
+/// it reads a settlement (rule 47): the derivation is the reason to expect
+/// it, the chain's own index is the evidence.
+pub fn settled_epoch_blocks() -> u64 {
+    static SETTLED: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *SETTLED.get_or_init(|| {
+        (1u64..)
+            .map(|step| step * shekyl_archival_retention::constants::W2_EPOCH_DIVISOR)
+            .find(|&blocks| (1..=SETTLED_PAIRS).all(|pairs| issues_every_pair(blocks, pairs)))
+            .expect("some epoch issues every pair its counted draws")
+    })
+}
+
+/// Whether an epoch of `blocks` leaves no shortfall for a set of `pairs`
+/// (see [`settled_epoch_blocks`]).
+fn issues_every_pair(blocks: u64, pairs: u64) -> bool {
+    let schedule = SettlementSchedule::new(SettlementEpochBlocks::new(blocks).expect("non-zero"));
+    let Some(window) = schedule.challenge_response_blocks() else {
+        return false;
+    };
+    let params = shekyl_archival_retention::archival_params();
+    let counted = u64::try_from(COUNTED_DRAWS).expect("a small constant");
+    let mut visible = counted * pairs;
+    let mut carry = 0u32;
+    let mut previous = 0u64;
+    for relative in 0..blocks {
+        // The predecessor admitted the draws of the block before it.
+        let admitted = previous.min(visible);
+        let unsettled = visible.saturating_sub(previous);
+        let horizon = draw_horizon(relative, blocks, window.get(), params);
+        let (count, next_carry) = draw_count(pairs, unsettled, horizon, blocks, carry, params)
+            .expect("the levered schedule has a target");
+        carry = next_carry;
+        if relative > 0 {
+            visible -= admitted;
+        }
+        previous = count;
+    }
+    // The epoch's last block is admitted by the next epoch's first.
+    visible.saturating_sub(previous) == 0
+}
+
+/// Regtest rules under the settled schedule ([`settled_epoch_blocks`]),
+/// with the levered reorg cap.
+pub fn settled_rules() -> ChainRules {
+    ChainRules::Regtest {
+        fixed_difficulty: Some(std::num::NonZeroU128::MIN),
+        schedule: FakechainSchedule::new(
+            SettlementEpochBlocks::new(settled_epoch_blocks()).expect("non-zero"),
+            BlockCount::from_raw(REORG_CAP_BLOCKS),
+        )
+        .expect("the cap sits inside the settled epoch"),
+    }
+}
+
+/// The settlement schedule [`settled_rules`] runs.
+pub fn settled_schedule() -> SettlementSchedule {
+    SettlementSchedule::new(SettlementEpochBlocks::new(settled_epoch_blocks()).expect("non-zero"))
 }
 
 /// Coinbases a shard fill spends from. Those below it stay for the posts
@@ -257,8 +344,18 @@ pub async fn close_shards(
 /// close (the block at `last_block(E)`). A scenario whose join block and
 /// the blocks after it must read posts, not a close, starts there.
 pub fn inside_one_epoch(from: BlockHeight, following: u64) -> BlockHeight {
+    inside_one_epoch_of(levered_schedule(), from, following)
+}
+
+/// [`inside_one_epoch`] under `schedule`.
+pub fn inside_one_epoch_of(
+    schedule: SettlementSchedule,
+    from: BlockHeight,
+    following: u64,
+) -> BlockHeight {
+    let blocks = schedule.blocks().get();
     let mut height = from.to_raw();
-    while (0..=following).any(|k| (height + k + 1).is_multiple_of(EPOCH_BLOCKS)) {
+    while (0..=following).any(|k| (height + k + 1).is_multiple_of(blocks)) {
         height += 1;
     }
     BlockHeight::from_raw(height)
@@ -296,4 +393,35 @@ pub fn first_admissible_compact_join(rules: &ChainRules, close: ClosedShard) -> 
     let schedule = rules.in_force(close.close_height).settlement_schedule();
     let pass = schedule.slash_deadline_height(first_pricing_epoch(rules, close));
     BlockHeight::from_raw(pass + 1)
+}
+
+#[cfg(test)]
+mod settled_tests {
+    use super::*;
+
+    /// The settled epoch is the shortest that issues every pair its counted
+    /// draws, and the levered one does not. The derivation and this check
+    /// share the arithmetic, so the moved chains' own index assertions
+    /// (rule 47) are the evidence the arithmetic is right. Red edits: search
+    /// past the first epoch that works (a longer epoch is returned); accept
+    /// an epoch that leaves shortfall (the levered epoch then passes).
+    #[test]
+    fn the_settled_epoch_is_the_shortest_that_issues_every_pair() {
+        let blocks = settled_epoch_blocks();
+        let step = shekyl_archival_retention::constants::W2_EPOCH_DIVISOR;
+        assert!(
+            (1..=SETTLED_PAIRS).all(|pairs| issues_every_pair(blocks, pairs)),
+            "{blocks} blocks issue every pair"
+        );
+        assert!(
+            !(1..=SETTLED_PAIRS).all(|pairs| issues_every_pair(blocks - step, pairs)),
+            "{} blocks do not",
+            blocks - step
+        );
+        assert!(
+            !issues_every_pair(EPOCH_BLOCKS, 1),
+            "the levered epoch is too short"
+        );
+        let _ = settled_rules();
+    }
 }
