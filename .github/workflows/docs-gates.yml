@@ -368,6 +368,13 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/bench/drs_txsource.py --selftest
 
+      - name: Run the power-loss harness selftest
+        # The replay reads replay-log's find answers, rebuilds the device at
+        # every flush and FUA boundary and between them, attributes each
+        # point the acknowledgement marks before it, and judges it as PB-S1.
+        if: '!cancelled()'
+        run: python3 scripts/bench/drs_powerloss.py --selftest
+
       - name: Run RPC column capture selftest
         # `rpc_capture.py` writes one file per chain read and reserves the
         # loopback port the kept-chain capture binds. The capture's own
