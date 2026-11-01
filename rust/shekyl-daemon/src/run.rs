@@ -6,16 +6,15 @@
 //! The start sequence (`DAEMON_CONFIG_CUTOVER.md` §2.2) and the one stop
 //! path (step 9).
 //!
-//! Rust owns the process from the entry: it takes the arguments `main`
-//! passed, chooses
-//! the network, reads and checks the file, resolves and builds the sections,
+//! Rust owns the process from its own `main`: it takes the argument
+//! vector, chooses the network, reads and checks the file, resolves and builds the sections,
 //! answers `--help` and `--version`, asks the configuration check
 //! ([`crate::verify`]; `--config-verify` stops there, `INPUT_GRAMMAR.md`
 //! IG-Q58…IG-Q62) and on a real start performs the effects that check
 //! withheld, takes the lock, checks the marker, starts logging, makes the
 //! announcements, installs the one signal
 //! owner, fills the snapshot and calls the remnant's `run` on a thread of
-//! its own.
+//! its own, with a stack of its own size (DC-F21).
 //! Stop is one path: the dialer and the zone host, then the RPC, then the
 //! node (the connector finishes its message and the store closes), then the
 //! remnant's `stop` (only when `run` has not finished) together with the
@@ -23,7 +22,7 @@
 //! 2, a runtime failure with 1, and `run`'s status becomes the exit status
 //! otherwise.
 
-use std::ffi::{c_char, CStr, OsString};
+use std::ffi::OsString;
 use std::io::Write;
 use std::num::NonZeroUsize;
 use std::path::Path;
@@ -40,8 +39,8 @@ use shekyl_daemon_config::exit::refuse;
 use shekyl_daemon_config::{load, Loaded};
 use shekyl_ffi::daemon_snapshot_ffi::SnapshotData;
 
-use crate::entry::ShekylDaemonEntry;
 use crate::options::DaemonOptions;
+use crate::remnant::{Remnant, StopFn};
 use crate::{help, network, signals, tor, verify};
 use shekyl_daemon_rpc::options::OptionsHandle;
 
@@ -54,8 +53,8 @@ pub(crate) fn tell(out: &mut impl Write, line: &str) {
     drop(writeln!(out, "{line}"));
 }
 
-/// The platform facts and the one derivation the entry needs, so a test
-/// can run the sequence without an account or a build.
+/// The platform facts and the one derivation the sequence needs, so a test
+/// can run it without an account or a build.
 pub struct Host {
     /// The account's and the machine's roots.
     pub platform: Platform,
@@ -63,9 +62,9 @@ pub struct Host {
     pub network_id_of: fn(u8) -> Option<[u8; 16]>,
 }
 
-/// The entry: the whole sequence, returning the exit status.
+/// The whole sequence, returning the exit status.
 #[must_use]
-pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
+pub fn main(remnant: Remnant, args: &[OsString], host: &Host) -> i32 {
     let (program, rest) = match args.split_first() {
         Some((p, rest)) => (p.clone(), rest.to_vec()),
         None => (OsString::from("shekyld"), Vec::new()),
@@ -75,12 +74,13 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
         Ok(cli) => cli,
         Err(ds) => return refuse(&ds),
     };
-    let release_name = c_string(entry.release_name);
-    let version_full = c_string(entry.version_full);
+    // The build identity, from the one home every binary reads (DC-Q20).
+    let release_name = shekyl_version::RELEASE_NAME;
+    let version_full = shekyl_version::VERSION_FULL;
     if cli.given.iter().any(|g| g.row.name == "help") {
         print!(
             "{}",
-            help::render(&TABLE, &program, &release_name, &version_full)
+            help::render(&TABLE, &program, release_name, version_full)
         );
         return 0;
     }
@@ -89,7 +89,7 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
             &mut std::io::stdout(),
             &format!(
                 "Shekyl '{release_name}' (v{version_full}, protocol {})\nOS: {} {}",
-                entry.protocol_version,
+                shekyl_version::PROTOCOL_VERSION,
                 std::env::consts::OS,
                 std::env::consts::ARCH
             ),
@@ -115,7 +115,7 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
         if config.session.verify {
             return verify::accept(&resolved, read_path, &config_path, &config, &[]);
         }
-        return call_run(entry, &config);
+        return SnapshotData::new(&config).call(remnant.run);
     }
 
     // The walk (IG-Q59): every refusal a start makes before it creates
@@ -185,11 +185,11 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
     // writes the ban file onto it and before the zone server binds.
     let node = match shekyl_node::Node::open(shekyl_node::OpenArgs {
         config: &config,
-        version: version_full.clone(),
-        protocol_version: u64::from(entry.protocol_version),
+        version: version_full.to_owned(),
+        protocol_version: u64::from(shekyl_version::PROTOCOL_VERSION),
         // `SHEKYL_VERSION_IS_RELEASE`, the constant the version string is
         // built from. `debug_assertions` is not that flag (FLIP-Q3).
-        release_build: entry.is_release,
+        release_build: shekyl_version::IS_RELEASE,
         request_stop: Arc::new(signals::request_stop),
     }) {
         Ok(node) => node,
@@ -267,7 +267,7 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
     // The options handle: the resolved values, the runtime rows' owners
     // behind the RPC's two methods (§2.7).
     let options: OptionsHandle = Arc::new(DaemonOptions::new(resolved.clone(), network));
-    let status = supervise(entry, &config, &pool, network_id, options, node);
+    let status = supervise(remnant, &config, &pool, network_id, options, node);
     pool.shutdown_background();
     drop(lock);
     // Last: every sink is a queue, and the lines logged up to here (the
@@ -278,6 +278,9 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
     drop(logger);
     status
 }
+
+/// The `shekyld-run` thread's stack (DC-F21).
+const REMNANT_STACK_BYTES: usize = 2 * 1024 * 1024;
 
 /// `run` returned, or a stop was requested while it was still running.
 /// A small status: copied, never borrowed.
@@ -304,7 +307,7 @@ enum Built {
 /// async context, because the RPC's stop blocks on its own runtime's drain
 /// and a runtime cannot be entered from inside another's `block_on`.
 fn supervise(
-    entry: &ShekylDaemonEntry,
+    remnant: Remnant,
     config: &DaemonConfig,
     pool: &shekyl_runtime::Pool,
     network_id: [u8; 16],
@@ -312,14 +315,7 @@ fn supervise(
     node: shekyl_node::Node,
 ) -> i32 {
     let handles = node.handles();
-    let Some(run) = entry.run else {
-        tell(&mut std::io::stderr(), "shekyld: the entry has no run");
-        return EXIT_FAILED;
-    };
-    let Some(stop) = entry.stop else {
-        tell(&mut std::io::stderr(), "shekyld: the entry has no stop");
-        return EXIT_FAILED;
-    };
+    let Remnant { run, stop } = remnant;
     let mut constructed = shekyl_daemon_rpc::ffi_exports::configure(
         config.rpc.clone(),
         options,
@@ -343,9 +339,16 @@ fn supervise(
     let (done_tx, mut done_rx) = oneshot::channel::<i32>();
     let thread = std::thread::Builder::new()
         .name("shekyld-run".to_owned())
+        // The remnant's stack, stated here so `RUST_MIN_STACK` cannot
+        // change it (DC-F21). The C++ it runs is the daemon's construction,
+        // the console and the stop wait; the deep readers (the connection
+        // handlers, the RPC, the core) run on their own threads with their
+        // own stacks. Two MiB is what every platform's main thread has
+        // given it, and more than the std default on some.
+        .stack_size(REMNANT_STACK_BYTES)
         .spawn(move || {
             let status = data.call(run);
-            // The receiver is gone only if the entry already gave up.
+            // The receiver is gone only if the sequence already gave up.
             let _sent = done_tx.send(status);
         });
     let thread = match thread {
@@ -411,7 +414,7 @@ fn supervise(
 /// The remnant half of step 9: its stop, the thread `run` is on, and the
 /// status that thread has already produced when it has finished.
 struct RemnantJoin {
-    stop: crate::entry::StopFn,
+    stop: StopFn,
     thread: std::thread::JoinHandle<()>,
     done_rx: Receiver<i32>,
     run_status: Option<i32>,
@@ -502,7 +505,7 @@ fn note_run(run_status: &mut Option<i32>, wait: RunWait) {
 /// The remnant's half of step 9. `stop` is asked only when `run` has not
 /// already returned. The status is `run`'s.
 fn finish_remnant(
-    stop: crate::entry::StopFn,
+    stop: StopFn,
     thread: std::thread::JoinHandle<()>,
     mut done_rx: Receiver<i32>,
     status: Option<i32>,
@@ -528,23 +531,6 @@ fn note_stop(by: &'static str) {
     tracing::warn!(target: "daemon", "stop requested by {by}");
 }
 
-fn c_string(ptr: *const c_char) -> String {
-    if ptr.is_null() {
-        return String::new();
-    }
-    // The entry's strings are static C++ literals, NUL-terminated.
-    unsafe_c_str(ptr)
-}
-
-#[allow(unsafe_code)]
-fn unsafe_c_str(ptr: *const c_char) -> String {
-    // SAFETY: the caller checked `ptr` is not null, and the entry contract
-    // says it is a NUL-terminated static string.
-    unsafe { CStr::from_ptr(ptr) }
-        .to_string_lossy()
-        .into_owned()
-}
-
 /// The announcements, to standard error and appended to the log file.
 fn announce_all(log_file: &Path, lines: &[String]) {
     for line in lines {
@@ -567,14 +553,6 @@ pub(crate) fn hold_process_table() -> std::sync::MutexGuard<'static, ()> {
     tests::SERIAL
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
-fn call_run(entry: &ShekylDaemonEntry, config: &DaemonConfig) -> i32 {
-    let Some(run) = entry.run else {
-        tell(&mut std::io::stderr(), "shekyld: the entry has no run");
-        return EXIT_FAILED;
-    };
-    SnapshotData::new(config).call(run)
 }
 
 #[cfg(test)]
@@ -620,17 +598,10 @@ mod tests {
         STOP_ARMED.store(true, Ordering::SeqCst);
     }
 
-    const RELEASE: &CStr = c"Test";
-    const VERSION: &CStr = c"3.1.0-test";
-
-    fn entry() -> ShekylDaemonEntry {
-        ShekylDaemonEntry {
-            release_name: RELEASE.as_ptr(),
-            version_full: VERSION.as_ptr(),
-            is_release: false,
-            protocol_version: 3,
-            run: Some(fake_run),
-            stop: Some(fake_stop),
+    fn remnant() -> Remnant {
+        Remnant {
+            run: fake_run,
+            stop: fake_stop,
         }
     }
 
@@ -655,14 +626,14 @@ mod tests {
     fn a_refusal_exits_with_two_and_help_and_version_with_zero() {
         let d = tempfile::tempdir().unwrap();
         assert_eq!(
-            main(&entry(), &args(&["--bogus"]), &host(d.path())),
+            main(remnant(), &args(&["--bogus"]), &host(d.path())),
             EXIT_REFUSED
         );
-        assert_eq!(main(&entry(), &args(&["--help"]), &host(d.path())), 0);
-        assert_eq!(main(&entry(), &args(&["--version"]), &host(d.path())), 0);
+        assert_eq!(main(remnant(), &args(&["--help"]), &host(d.path())), 0);
+        assert_eq!(main(remnant(), &args(&["--version"]), &host(d.path())), 0);
         assert_eq!(
             main(
-                &entry(),
+                remnant(),
                 &args(&["--network", "regtest", "--dev-difficulty", "0"]),
                 &host(d.path())
             ),
@@ -676,7 +647,7 @@ mod tests {
         *RUN_RETURNS.lock().unwrap() = 7;
         let runs_before = RUNS.load(Ordering::SeqCst);
         let status = main(
-            &entry(),
+            remnant(),
             &args(&["--rpc-admin-listen", "127.0.0.1:4444", "status"]),
             &host(d.path()),
         );
@@ -719,15 +690,14 @@ mod tests {
         let node = shekyl_node::Node::open(shekyl_node::OpenArgs {
             config: &config,
             version: "test".to_owned(),
-            protocol_version: u64::from(entry().protocol_version),
+            protocol_version: u64::from(shekyl_version::PROTOCOL_VERSION),
             release_build: false,
             request_stop: Arc::new(crate::signals::request_stop),
         })
         .expect("the node opens");
-        let entry = ShekylDaemonEntry {
-            run: Some(blocking_run),
-            stop: Some(arming_stop),
-            ..entry()
+        let remnant = Remnant {
+            run: blocking_run,
+            stop: arming_stop,
         };
         let budget = RuntimeBudget {
             workers: NonZeroUsize::MIN,
@@ -738,10 +708,10 @@ mod tests {
         let before = STOPS.load(Ordering::SeqCst);
         let requester = std::thread::spawn(|| {
             std::thread::sleep(std::time::Duration::from_millis(100));
-            crate::entry::shekyl_daemon_request_stop();
+            crate::stop::shekyl_daemon_request_stop();
         });
         let status = supervise(
-            &entry,
+            remnant,
             &config,
             &pool,
             [3u8; 16],
@@ -786,7 +756,7 @@ mod tests {
         ]);
         // The stop counter is process-global: the delta is this test's.
         let stops_before = STOPS.load(Ordering::SeqCst);
-        let status = main(&entry(), &a, &host(d.path()));
+        let status = main(remnant(), &a, &host(d.path()));
         assert_eq!(status, 0);
         assert!(data.join("shekyld.lock").is_file());
         let m = std::fs::read_to_string(data.join("shekyld.network")).unwrap();

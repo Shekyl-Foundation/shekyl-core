@@ -110,21 +110,6 @@ GROUPS = [
             "SeamSessionCountsFfi": "shekyl_seam_session_counts_t",
         },
     },
-    {
-        # The daemon's Rust main() hands the C++ remnant its entry. The
-        # configuration snapshot the remnant reads is shekyl-ffi's
-        # (daemon_snapshot_ffi.rs), paired in the entry above.
-        "crate": "rust/shekyl-daemon/src/lib.rs",
-        "namespace": "rust_daemon",
-        # `run` and `stop` are `Option<RunFn>` and `Option<StopFn>`.
-        "item_types": ["structs", "enums", "typedefs"],
-        "headers": ["src/shekyl/shekyl_ffi.h"],
-        "bounds": [],
-        "exclude": [],
-        "pairs": {
-            "ShekylDaemonEntry": "ShekylDaemonEntry",
-        },
-    },
 ]
 
 # Structs a header defines that no pair compares, each with its reason.

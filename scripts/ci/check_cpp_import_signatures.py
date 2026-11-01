@@ -42,6 +42,9 @@ from pathlib import Path
 # The Rust files whose `extern "C"` blocks import C++ functions.
 GATED_RUST = [
     "rust/shekyl-daemon-rpc/src/ffi.rs",
+    # The remnant's `run` and `stop`, the daemon binary's two imports
+    # (DAEMON_CONFIG_CUTOVER.md DC-Q19; declared in src/daemon/daemon.h).
+    "rust/shekyld/src/main.rs",
 ]
 
 # Where the C declarations live. The hand-written Rust-export header is not
@@ -175,7 +178,7 @@ def c_declarations(root: Path, exclude: set[str]) -> dict[str, list[tuple[str, l
         text = strip_comments(path.read_text(encoding="utf-8", errors="replace"))
         text = re.sub(r"^\s*#.*$", " ", text, flags=re.M)
         for dm in re.finditer(
-            r"(?<![\w.>])([A-Za-z_][\w:]*(?:\s*\*+|\s+[A-Za-z_][\w:]*\s*\*+|\s+[A-Za-z_][\w:]*)*)\s+\*?\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(([^()]*)\)\s*;",
+            r"(?<![\w.>])([A-Za-z_][\w:]*(?:\s*\*+|\s+[A-Za-z_][\w:]*\s*\*+|\s+[A-Za-z_][\w:]*)*)\s+\*?\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(([^()]*)\)\s*(?:noexcept\s*)?;",
             text,
             flags=re.S,
         ):

@@ -40,7 +40,7 @@
 // Rust lacks -> refused. shekyl_rpc_sync_span_facts::remote_address typed
 // uint8_t* -> type. A new struct in rpc_facts_ffi.h with no pair -> the
 // completeness scan. ShekylDaemonEntry::run typed as the stop callback ->
-// type. And the merge of the daemon-configuration cutover (#1088) was
+// type (that struct went with the C++ `main`, DC-Q19). And the merge of the daemon-configuration cutover (#1088) was
 // refused by the completeness scan until its five new structs had a pair.
 //
 // At introduction the gate also found divergences in the tree, fixed in the

@@ -35,7 +35,6 @@ set(unit_tests_sources
   gap7_bp_bench.cpp
   command_line.cpp
   crypto.cpp
-  daemon_entry_layout.cpp
   daemon_rpc_client.cpp
   decompose_amount_into_digits.cpp
   device.cpp
@@ -111,16 +110,16 @@ target_link_libraries(unit_tests
     # path writes through scoped_message_writer -> rdln::suspend_readline
     # (same link the daemon carries; empty when built without readline).
     ${EPEE_READLINE}
-    # Resolves to libshekyl_daemon_image.a (not libshekyl_ffi.a) because of
-    # the SHEKYL_RUST_IMAGE_DAEMON property set below. The daemon image is
-    # the superset (shekyl-ffi + shekyl-daemon-rpc). Never name shekyl_ffi
-    # literally here — two Rust archives on one link line is the
-    # split-dispatcher regression.
+    # The one Rust archive a C++ binary links (libshekyl_ffi.a; the
+    # single-image contract, V3_WALLET_DECISION_LOG.md 2026-06-11). The
+    # daemon's RPC server and its `shekyl_rpc_*` exports are not in it:
+    # they reach shekyld as rlibs of the Rust binary (DC-Q19) and no C++
+    # test calls them. daemon_rpc_client.cpp's transport,
+    # `shekyl_daemon_ctl_*`, is shekyl-ffi's (`ctl_client`).
     ${SHEKYL_FFI_LINK_LIBS}
-    # rpc repeats after the Rust image (same shape as src/daemon): the
-    # daemon image's members import core_rpc_ffi_* / shekyl_submit_*, which
-    # live in rpc — left-to-right static-archive resolution needs a
-    # post-image occurrence.
+    # rpc repeats after the Rust archive: its members import
+    # core_rpc_ffi_* / shekyl_submit_*, which live in rpc — left-to-right
+    # static-archive resolution needs a post-archive occurrence.
     rpc
     version
     ${Boost_CHRONO_LIBRARY}
@@ -130,16 +129,6 @@ target_link_libraries(unit_tests
     ${EXTRA_LIBRARIES})
 if(UNIX AND NOT APPLE)
   target_link_libraries(unit_tests PRIVATE pthread dl)
-endif()
-# Select the daemon Rust image for this binary (see the per-binary
-# image-selection comment in cmake/BuildRust.cmake): every occurrence of the
-# Rust archive in the link closure — including copies inherited transitively
-# from cryptonote_core / cryptonote_basic — resolves to the daemon image.
-set_property(TARGET unit_tests PROPERTY SHEKYL_RUST_IMAGE_DAEMON ON)
-if(TARGET shekyl_daemon_image_rust)
-  # Generator-expression-resolved link items do not carry the imported
-  # target's build-order dependency; add the edge explicitly.
-  add_dependencies(unit_tests shekyl_daemon_image_rust)
 endif()
 set_property(TARGET unit_tests
   PROPERTY

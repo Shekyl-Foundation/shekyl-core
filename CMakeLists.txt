@@ -38,7 +38,12 @@ if (IOS)
     INCLUDE(CmakeLists_IOS.txt)
 endif()
 
-cmake_minimum_required(VERSION 3.5)
+# 3.22: what Corrosion (external/corrosion, the bridge that links the C++
+# remnant into the Rust daemon binary; DAEMON_CONFIG_CUTOVER.md DC-Q23)
+# requires. Raising the floor from 3.5 also moves every policy up to
+# 3.22's NEW behaviour; cmake/MsvcStaticRuntime.cmake already handles
+# CMP0091 either way.
+cmake_minimum_required(VERSION 3.22)
 message(STATUS "CMake version ${CMAKE_VERSION}")
 
 # CMake 4.x compatibility
@@ -357,7 +362,7 @@ function(forbid_undefined_symbols)
     file(MAKE_DIRECTORY "${TEST_PROJECT}")
     file(WRITE "${TEST_PROJECT}/CMakeLists.txt"
       [=[
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.22)
 project(test)
 option(EXPECT_SUCCESS "" ON)
 file(WRITE "${CMAKE_SOURCE_DIR}/incorrect_source.cpp" "void undefined_symbol(); void symbol() { undefined_symbol(); }")
