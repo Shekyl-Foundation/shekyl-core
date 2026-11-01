@@ -76,7 +76,7 @@ The relay is deliberately absent from that table; see `TSR-F9`.
 | `TSR-Q2`: guards are per boot | Guards do not persist across boots, as today; the public directory cache does (`TSR-Q8`). Persisting them gains no reduction in expected exposure: a hostile guard exposes *f*·*B* boots in expectation either way, and persistence changes only the spread; the harm is per boot. It costs a guard file on disk and lets one hostile guard link every boot's onion. The one real re-roll attack, forcing respawns, is closed by `TSR-Q1` |
 | `TSR-Q3`: remedy by cause | §4.4, with the SOCKS reply classification of §4.2: only a process fault respawns |
 | `TSR-Q4`: Tor status in RPC | The `health` grant (`RPC_CHANNEL.md` §6.1, in the `view` preset) carries one boolean, as `has_peers` does: an outbound session hides this node's address now, the class part of the relay's hop-0 verdict. The pin part, whether this node's own transaction leaves now, is `OwnTx`'s under the `status` grant: it moves when the node's own-edge peers disconnect, which a `health` caller must not be able to watch (`GS-Q3`, review 2026-10-23). State, cause, since and the respawn count are `status` fields; `TSR-Q12` (2026-10-20) lists every one, and the RW round names them. Tor's state and timing stay off `health` (§8, "Link the RPC endpoint to the onion") |
-| `TSR-Q5`: one probe per descriptor upload round (2026-10-15) | The `HS_DESC UPLOADED` events of one upload round are coalesced into one trigger, and after a jittered delay the probe runs once (§4.5). Outside a round, a republish when no round has begun within the descriptor's lifetime, and one probe after a clock jump while Running (Rick, 2026-10-31, §4.5 "Overdue") |
+| `TSR-Q5`: one probe per descriptor upload round (2026-10-15) | The `HS_DESC UPLOADED` events of one upload round are coalesced into one trigger, and after a jittered delay the probe runs once (§4.5). Outside a round, a republish when no round has begun within the descriptor's lifetime, and one probe after a clock jump while Running; each probe also asks the round's directories (Rick, 2026-10-31, §4.5 "Overdue", "The directory check") |
 | `TSR-Q7`: `__OwningControllerFD` on every platform (2026-10-15) | The launch hands Tor one end of a connected socket pair as its owning control connection; no control port, port file, cookie, `TAKEOWNERSHIP` or `RESETCONF` (§4.7) |
 | `TSR-Q8`: the public directory cache persists across boots (Rick, 2026-10-19) | The daemon keeps Tor's public directory cache across boots; guards, keys and the onion stay per boot. A daemon-owned cache directory (mode 0700) holds `cached-microdesc-consensus`, `cached-microdescs`, `cached-microdescs.new` and `cached-certs`. At launch, only those exact names are copied into the fresh per-boot `DataDirectory`, each a regular file, never reached through a symlink, and under a size limit. At a clean stop the same names are copied back; after a crash the previous cache stays as it was. `state`, keys, `lock` and every other file are never kept, and Tor is never pointed at the cache directory itself. The per-boot rule becomes: nothing identity-bearing (guards, keys, the onion) joins one boot to the next. Why: a node that bootstraps cold at every boot looks to its directory guard like a new install each time, and with a cache it looks like every other Tor client; each restart stops loading the fallback mirrors and directory authorities; and the cold-bootstrap tail, which is directory fetching (§10, `TSR-M1`), goes. What a consensus-diff request reveals, roughly how long the node was offline, adds little to a directory guard that already sees the node's address. Tor verifies the whole cache itself, so a bad cache costs one cold boot and cannot steer path selection. `tor-pin-verify`'s live tests start from a seeded cache, and one cold-start test remains. The step-8 removal (§12, increment 3) stands: a first install, and a boot after a long time offline, are still cold |
 | `TSR-Q9`: the managed Tor looks like every other Tor client (Rick, 2026-10-19) | Every choice the supervisor makes about Tor's behaviour is tested against this, increment 3's included. It bears on `TSR-M6`'s open question, how to keep a crash before Tor's first `state` write from re-picking guards. Of the two answers, `AvoidDiskWrites 0` until that first write is the more ordinary behaviour, because a stock client writes its `state` promptly, and Rick expects it to be chosen. The other, counting respawns before that write, changes nothing Tor does. Increment 3 settles it with evidence, including whether switching `AvoidDiskWrites` on the owning connection after the first write is reliable |
@@ -672,6 +672,51 @@ has broken its own lifetime, and repairing that is not second-guessing Tor.
   unchanged, and the probe stays outside the dial tally and the in-flight
   bound (`TSR-Q14`).
 
+**The directory check (Rick, 2026-10-31).** The rendezvous probe never
+fetches from the directories: this node's Tor answers it from its own copy
+of the descriptor, which a client keeps until the next time period (tor
+0.4.9.14 `hs_cache.c:618`). So the probe alone cannot see a directory lose
+the descriptor, even on a correct clock. With each probe, the check also
+asks each directory the latest round's `HS_DESC UPLOADED` events named, one
+`HSFETCH <onion> SERVER=<directory>` each (`Action::FetchFromDirectory`;
+one per command because Tor refuses the whole command, 552, at the first
+`SERVER` missing from its consensus). `HSFETCH` ignores the client cache and
+fetches from each named directory (`control_cmd.c:1464-1494`,
+`hs_client.c:504-507`); with no `SERVER` it asks one directory at random
+from the responsible set (`hs_client.c:480-493`), which is the refetch after
+a first miss. Tor's answers are its own statements: `HS_DESC RECEIVED` only
+once the descriptor decoded and was stored (`hs_client.c:1667-1690`), `FAILED
+REASON=NOT_FOUND` when that directory does not have it.
+
+- **Which directories count.** A round uploads the current period's
+  descriptor and the next period's to different directories, and a fetch
+  asks for the current one. Each upload's directory is kept with the
+  descriptor its `UPLOAD` named (`UploadRounds::directories`); once a
+  fetch's `REQUESTED` names the descriptor asked for, a directory sent the
+  other one is excluded, not asked or not counted. Other `FAILED` reasons,
+  and a directory Tor would not ask, say nothing about the descriptor and
+  are excluded. A directory with no answer by the check's bound (the last
+  fetch's due plus `Policy::probe_within`) counts as missing: that is what
+  withholding looks like.
+- **The verdict.** Reachable needs both: the descriptor at more than half of
+  the counted directories (§10 `TSR-M12`), and the rendezvous probe
+  arriving. Anything else is a miss, into the two-miss rule above; a second
+  miss in which the probe arrived is `DescriptorNotFound`, one in which it
+  did not, `ProbeTimedOut`. A check that counts no directory (none the round
+  reached holds the descriptor a fetch asks for) is decided by the probe
+  alone and said once at info (`Action::DirectoriesUnmatched`), not a miss:
+  it is the signature of uploads under a key no client asks for, and a
+  republish would not change it.
+- **Timing.** Each fetch draws its own 15 to 60 s delay
+  (`Input::DirectoriesDrawn`, one CSPRNG draw per directory). A fetch at
+  every directory straight after each upload is the signature this
+  section's jitter exists to hide.
+- **It runs through this node's own Tor, so it shares this node's clock.** A
+  descriptor this node uploaded under a key a correct-clock client would not
+  ask for is found by these fetches as well: neither the check nor the probe
+  can see a fault the node's own clock causes. That is the clock's own
+  question (Rick, 2026-10-31).
+
 **Stated costs.** A failure Tor does not notice, and that causes no re-upload,
 is caught at the next scheduled upload, at most two hours later; when no
 upload comes, the overdue republish forces one at the descriptor's lifetime.
@@ -1188,6 +1233,7 @@ run's conditions are in `shekyl-dev`, `data/tsr-preflight/2026-10-19*/`.
 | `TSR-M8` | the monotonic clock across suspend on Windows and macOS (both measured). **Windows, measured 2026-10-30** (Rick's laptop, bare metal, Windows 11 23H2 build 22631.7652; Modern Standby, the only sleep its firmware offers; one run, on mains; shekyl-dev `data/tsr-m8/2026-10-30-windows/`): `std::time::Instant` (`QueryPerformanceCounter`) kept counting through a 206.5 s standby, and wall and monotonic time agreed to 30.5 µs across it, with no step over the run. So on Windows every deadline armed before a sleep comes due at once on wake, and a window that included the sleep would misfire: a reply outstanding at the sleep would be late, a stall window held across it past its bound, a probe in flight past its own. The supervisor therefore counts awake time on every platform (§5, "Resumed from suspend"; Rick, 2026-10-30): a timer it was waiting on that fires more than 10 s late is a resume, and every window starts again from the wake. A deadline left late because the driver was inside another ask is overdue work, not a resume. On Linux `Instant` is `CLOCK_MONOTONIC`, which stops during suspend: a timer the driver was waiting on is not late, and the windows stay where they stood (the VM suspend of 2026-10-30, §7). Not covered on Windows: S3 (absent there), hibernate, a standby long enough to fall into hibernate, battery. **macOS, measured 2026-10-31** (the Foundation's macOS build host, a Mac mini M2 Pro, macOS 27.0.1; on mains; the same program; shekyl-dev `data/tsr-m8/2026-10-31-macos/`): `Instant` stopped during a 302 s sleep (`pmset sleepnow`, woken by a scheduled RTC alarm): wall time advanced 301.747 s and `Instant` 1.007 s. macOS behaves as Linux does: a waited timer is not late, and the windows stay where they stood. Not covered on macOS: battery, standby (off on that host), Intel Macs | suspend handling |
 | `TSR-M9` | no onion address in the daemon Tor's log events at `notice`. **Measured 2026-10-19**: 0 of 36 `NOTICE`/`WARN`/`ERR` events carried one, across a publish, 40 probes and a republish. x86: 0 of 33 | the log category |
 | `TSR-M10` | the delete time of a used `DataDirectory` on the floor device's storage. **Measured 2026-10-19**: 100 used cold directories, p50 11 ms, max 13 ms each. x86: max 7 ms | the tombstone delete bound |
+| `TSR-M12` | the directory check's threshold. **Derived 2026-10-31** from tor 0.4.9.14's defaults: each descriptor is stored at `HS_DEFAULT_HSDIR_N_REPLICAS` (2) times `HS_DEFAULT_HSDIR_SPREAD_STORE` (4) directories, 8 (lines 112 and 114 of Tor's `hs_common.h` in its `feature/hs` directory); both are consensus parameters (`hsdir_n_replicas`, `hsdir_spread_store`), not constants, and a client asks up to `HS_DEFAULT_HSDIR_SPREAD_FETCH` (3) per replica (line 116) and stops at the first that has it. The VM run of 2026-11-01 uploaded each of its two descriptors to 8 directories, 16 uploads in all, so a check counts about 8. A strict majority must hold the descriptor: one hostile directory that withholds it, or any number up to half, cannot make the check a miss on its own, so cannot drive a republish loop; a descriptor gone from more than half is gone from most of the directories a client would ask | the directory check's verdict (§4.5): found more than half of counted |
 | `TSR-M11` | on Windows, whether a killed and reaped `tor.exe` has released its `DataDirectory` files (`lock`, `state`, `tor.log`) when the reap returns. **Measured 2026-10-16** (Windows 11 23H2, Defender real-time protection on; the pinned 15.0.24 `tor.exe`, launched as #1083 does): 0 failures in 400, by kill and by owner-close, each followed at once by the tombstone rename and by a recursive delete. Every file is released by the time `WaitForSingleObject` returns | a respawn into the kept directory (`TSR-Q1`) and the tombstone rename (§4.7) do not wait for the directory's files once the reap has returned |
 
 **`TSR-M6`, what is established (2026-10-16; mechanisms from an x86 diagnostic

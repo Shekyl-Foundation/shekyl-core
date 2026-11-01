@@ -86,7 +86,7 @@ use super::framing::{
 use super::launch;
 use super::onion::{AddOnion, ServiceId};
 use super::safecookie::verify_server_hash;
-use super::vanguards::HsLayerPins;
+use super::vanguards::{HsLayerPins, RelayFingerprint};
 use crate::binary::VerifiedTorBinary;
 
 /// Per-read bound on a hung control port — a handshake read that does not complete
@@ -402,10 +402,25 @@ pub enum Command {
     /// coalescer never counts. The id is a validated [`ServiceId`], so the
     /// line cannot carry a second command.
     HsFetch(ServiceId),
+    /// `HSFETCH <service-id> SERVER=<$fingerprint>`: fetch this onion's
+    /// descriptor from that one directory (`TOR_SUPERVISOR.md` §4.5, the
+    /// probe's directory check). Tor fetches from each `SERVER` named and
+    /// ignores its client cache (tor 0.4.9.14 `control_cmd.c:1464-1494`,
+    /// `hs_client.c:504-507`); the answer arrives as `HS_DESC` `RECEIVED` or
+    /// `FAILED` from that directory. One directory per command: Tor refuses
+    /// the whole command (552) at the first `SERVER` missing from its
+    /// consensus, before fetching any. Both values are typed, so the line
+    /// cannot carry a second command.
+    HsFetchFrom {
+        /// The onion.
+        service: ServiceId,
+        /// The directory to ask.
+        server: RelayFingerprint,
+    },
     /// `SETCONF HSLayer2Nodes=… HSLayer3Nodes=…` — pin layer-2/layer-3
     /// vanguard guards (VG-1). The **wallet** supervisor drives this; the
     /// daemon's ephemeral onion has no vanguard state. Built from typed
-    /// [`RelayFingerprint`](super::vanguards::RelayFingerprint)s, so — like
+    /// [`RelayFingerprint`]s, so — like
     /// `ADD_ONION` — it cannot render a line that injects a second command,
     /// which is what makes it safe to add `SETCONF` (the dangerous verb) to
     /// this surface without a validated-string path.
@@ -498,6 +513,13 @@ impl Command {
             Self::AddOnion(add) => return Ok(add.to_wire_line()),
             Self::DelOnion(id) => return Ok(Zeroizing::new(format!("DEL_ONION {}", id.as_str()))),
             Self::HsFetch(id) => return Ok(Zeroizing::new(format!("HSFETCH {}", id.as_str()))),
+            Self::HsFetchFrom { service, server } => {
+                return Ok(Zeroizing::new(format!(
+                    "HSFETCH {} SERVER={}",
+                    service.as_str(),
+                    server.to_specifier()
+                )));
+            }
             // Also infallible: every value is a `$hex` specifier that cannot
             // carry a space or control byte (see `vanguards`).
             Self::SetConf(pins) => return Ok(Zeroizing::new(pins.to_wire_line())),
@@ -1773,6 +1795,24 @@ mod tests {
         assert_eq!(
             Command::HsFetch(id).to_wire().unwrap().as_str(),
             "HSFETCH url5xrvawpg5uv275sjyo6w57vvzopdufb7ffykiqnnqxjwecsxm3lid"
+        );
+    }
+
+    /// `HSFETCH … SERVER=` names the one onion and the one directory, both
+    /// from typed values.
+    #[test]
+    fn hsfetch_from_renders_the_address_and_one_server() {
+        let service = super::super::onion::ServiceId::parse(
+            "url5xrvawpg5uv275sjyo6w57vvzopdufb7ffykiqnnqxjwecsxm3lid",
+        )
+        .expect("a v3 id");
+        let server = super::super::vanguards::RelayFingerprint::from_bytes([0xAB; 20]);
+        assert_eq!(
+            Command::HsFetchFrom { service, server }
+                .to_wire()
+                .unwrap()
+                .as_str(),
+            "HSFETCH url5xrvawpg5uv275sjyo6w57vvzopdufb7ffykiqnnqxjwecsxm3lid SERVER=$ABABABABABABABABABABABABABABABABABABABAB"
         );
     }
 

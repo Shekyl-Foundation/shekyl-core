@@ -14,8 +14,12 @@
 use std::time::Duration;
 
 use super::super::super::posture::{render, Cause, Inbound, InboundCause, Shown};
-use super::super::{duration_ns, Action, Core, Input, Policy, RoundEnd, Step, DESCRIPTOR_LIFETIME};
+use super::super::{
+    duration_ns, Action, Core, DirectoryAnswer, DirectoryFetch, Input, Policy, RoundEnd, Step,
+    DESCRIPTOR_LIFETIME,
+};
 use super::{announces, bring_up, managed, policy, reach_usable, socks, takes_down};
+use crate::control::RelayFingerprint;
 
 fn secs(seconds: u64) -> u64 {
     duration_ns(Duration::from_secs(seconds))
@@ -892,4 +896,256 @@ fn a_clock_jump_gives_one_probe_or_none_with_one_in_flight() {
         0,
         "no onion to probe while bootstrapping"
     );
+}
+
+// The directory check (§4.5; Rick, 2026-10-31).
+
+fn hsdir(n: u8) -> RelayFingerprint {
+    RelayFingerprint::from_bytes([n; 20])
+}
+
+/// Directories `1..=n`, each sent `descriptor`, each drawing `draw`.
+fn sent(range: std::ops::RangeInclusive<u8>, descriptor: &str, draw: u64) -> Vec<DirectoryFetch> {
+    range
+        .map(|n| DirectoryFetch {
+            hsdir: hsdir(n),
+            descriptor_id: descriptor.to_owned(),
+            draw,
+        })
+        .collect()
+}
+
+fn fetched(step: &Step) -> Vec<RelayFingerprint> {
+    step.actions
+        .iter()
+        .filter_map(|action| match action {
+            Action::FetchFromDirectory { hsdir } => Some(*hsdir),
+            _ => None,
+        })
+        .collect()
+}
+
+fn answered(n: u8, descriptor: &str, answer: DirectoryAnswer) -> Input {
+    Input::DirectoryAnswered {
+        hsdir: hsdir(n),
+        descriptor_id: Some(descriptor.to_owned()),
+        answer,
+    }
+}
+
+/// A published core whose round just ended, its check's directories drawn
+/// (`fetches`), and the probe and the fetches due at the delay's floor run:
+/// the probe is in flight, minted at 15 s. Returns the core and the fetches
+/// asked at 15 s.
+fn checking(fetches: Vec<DirectoryFetch>) -> (Core, Vec<RelayFingerprint>) {
+    let mut core = published();
+    let ended = core.on(uploaded(0), 0);
+    assert!(
+        ended.actions.contains(&Action::CheckDirectories),
+        "each probe's check asks for the directories"
+    );
+    core.on(Input::DirectoriesDrawn { fetches }, 0);
+    let step = core.on_deadline(secs(15));
+    assert_eq!(probes(&step), 1, "the probe at the delay's floor");
+    let asked = fetched(&step);
+    core.on(
+        Input::ProbeDialed {
+            minted_at: secs(15),
+        },
+        secs(15),
+    );
+    (core, asked)
+}
+
+/// **Found at every directory, the probe arrives: Reachable.** The verdict
+/// waits for both halves: an arrival before the answers leaves the facet
+/// where it was. Fails if `probe_arrived` judges at once (Reachable before
+/// the answers), or if `judge` ignores a complete check.
+#[test]
+fn found_at_every_directory_and_the_probe_arrives_is_reachable() {
+    let (mut core, asked) = checking(sent(1..=8, "cur", 0));
+    assert_eq!(asked.len(), 8, "every directory the round reached is asked");
+    core.on(arrival(secs(15), secs(18)), secs(18));
+    assert_eq!(
+        core.status().inbound,
+        Inbound::Publishing,
+        "the directories are still out"
+    );
+    core.on(
+        Input::DirectoryAsked {
+            descriptor_id: "cur".to_owned(),
+        },
+        secs(19),
+    );
+    for n in 1..=7 {
+        core.on(answered(n, "cur", DirectoryAnswer::Received), secs(20));
+    }
+    assert_eq!(core.status().inbound, Inbound::Publishing);
+    let last = core.on(answered(8, "cur", DirectoryAnswer::Received), secs(21));
+    let reachable = Inbound::Reachable {
+        evidence_at: secs(18),
+    };
+    assert_eq!(core.status().inbound, reachable);
+    assert_eq!(publishes_inbound(&last), [reachable]);
+}
+
+/// **Our cache still holds the descriptor, the directories report
+/// `NOT_FOUND`: a miss.** The probe arrives, as it does from this node's own
+/// copy, and the check is still a miss: the first refetches, and a second
+/// check the same way republishes, with the directories' cause. Fails if
+/// the verdict takes the probe alone (`judge` treating `Lost` as held).
+#[test]
+fn the_probe_arriving_from_our_cache_with_the_directories_empty_is_a_miss() {
+    let (mut core, _) = checking(sent(1..=8, "cur", 0));
+    for n in 1..=8 {
+        core.on(answered(n, "cur", DirectoryAnswer::NotFound), secs(16));
+    }
+    let first = core.on(arrival(secs(15), secs(18)), secs(18));
+    assert_eq!(refetches(&first), 1, "a first miss refetches");
+    assert_eq!(
+        core.status().inbound,
+        Inbound::Publishing,
+        "one miss is not a verdict"
+    );
+    let again = core.on(Input::DescriptorRefetched { draw: 0 }, secs(20));
+    assert!(
+        again.actions.contains(&Action::CheckDirectories),
+        "a new check"
+    );
+    core.on(
+        Input::DirectoriesDrawn {
+            fetches: sent(1..=8, "cur", 0),
+        },
+        secs(20),
+    );
+    let launched = core.on_deadline(secs(35));
+    assert_eq!(probes(&launched), 1);
+    assert_eq!(fetched(&launched).len(), 8);
+    core.on(
+        Input::ProbeDialed {
+            minted_at: secs(35),
+        },
+        secs(35),
+    );
+    for n in 1..=8 {
+        core.on(answered(n, "cur", DirectoryAnswer::NotFound), secs(36));
+    }
+    let verdict = core.on(arrival(secs(35), secs(37)), secs(37));
+    assert_eq!(republishes(&verdict), 1);
+    assert_eq!(
+        core.status().inbound,
+        Inbound::Unreachable {
+            cause: InboundCause::DescriptorNotFound,
+            since: secs(37),
+        }
+    );
+}
+
+/// **One directory withholds: still Reachable above the threshold.** A
+/// directory that never answers counts as missing at the check's bound
+/// (the last fetch's due plus the probe's bound); seven of eight is more
+/// than half. Fails if a missing answer blocks the verdict (no bound), or
+/// if the threshold is "every directory".
+#[test]
+fn one_directory_withholding_is_still_reachable() {
+    let (mut core, _) = checking(sent(1..=8, "cur", 0));
+    for n in 1..=7 {
+        core.on(answered(n, "cur", DirectoryAnswer::Received), secs(16));
+    }
+    core.on(arrival(secs(15), secs(18)), secs(18));
+    assert_eq!(
+        core.status().inbound,
+        Inbound::Publishing,
+        "directory 8 is still out"
+    );
+    let bound = core.on_deadline(secs(75));
+    let reachable = Inbound::Reachable {
+        evidence_at: secs(18),
+    };
+    assert_eq!(core.status().inbound, reachable);
+    assert_eq!(publishes_inbound(&bound), [reachable]);
+}
+
+/// The threshold is more than half of the counted directories: four of
+/// eight is a miss. Fails if `found * 2 > counted` becomes `>=`.
+#[test]
+fn half_of_the_directories_is_not_enough() {
+    let (mut core, _) = checking(sent(1..=8, "cur", 0));
+    for n in 1..=4 {
+        core.on(answered(n, "cur", DirectoryAnswer::Received), secs(16));
+    }
+    for n in 5..=8 {
+        core.on(answered(n, "cur", DirectoryAnswer::NotFound), secs(16));
+    }
+    let step = core.on(arrival(secs(15), secs(18)), secs(18));
+    assert_eq!(refetches(&step), 1, "a miss");
+}
+
+/// A round sends the current descriptor to some directories and the next
+/// period's to others, and a fetch asks for the current one. Once a fetch
+/// names it, a directory sent the other descriptor is excluded: not asked
+/// if not yet asked, and not counted if it answers. Fails if `learn` keeps
+/// mismatched directories (they would count missing and make this a miss).
+#[test]
+fn a_directory_sent_the_other_descriptor_is_not_counted() {
+    let mut fetches = sent(1..=4, "cur", 0);
+    // Directories 5 to 8 got the next period's descriptor, and draw later.
+    fetches.extend(sent(5..=8, "next", u64::MAX));
+    let (mut core, asked) = checking(fetches);
+    assert_eq!(asked, [hsdir(1), hsdir(2), hsdir(3), hsdir(4)]);
+    core.on(
+        Input::DirectoryAsked {
+            descriptor_id: "cur".to_owned(),
+        },
+        secs(16),
+    );
+    for n in 1..=4 {
+        core.on(answered(n, "cur", DirectoryAnswer::Received), secs(17));
+    }
+    core.on(arrival(secs(15), secs(18)), secs(18));
+    assert!(matches!(core.status().inbound, Inbound::Reachable { .. }));
+    let later = core.on_deadline(secs(60));
+    assert!(
+        fetched(&later).is_empty(),
+        "the excluded directories are never asked"
+    );
+}
+
+/// A check that counts no directory (no directory the round reached holds
+/// the descriptor Tor asks for) is decided by the probe alone, and says so
+/// once. Fails if `Unmatched` is a miss (a node whose uploads land under the
+/// wrong key would republish in a loop), or if it is not said.
+#[test]
+fn a_check_that_counts_no_directory_is_decided_by_the_probe() {
+    let (mut core, _) = checking(sent(1..=4, "next", 0));
+    core.on(
+        Input::DirectoryAsked {
+            descriptor_id: "cur".to_owned(),
+        },
+        secs(16),
+    );
+    let step = core.on(arrival(secs(15), secs(18)), secs(18));
+    assert_eq!(
+        count(&step, |action| matches!(
+            action,
+            Action::DirectoriesUnmatched
+        )),
+        1
+    );
+    assert!(matches!(core.status().inbound, Inbound::Reachable { .. }));
+}
+
+/// Each fetch takes its own delay from the probe's range, so the fetches do
+/// not all land straight after an upload. Fails if one draw times them all.
+#[test]
+fn each_directory_fetch_has_its_own_delay() {
+    let mut core = published();
+    core.on(uploaded(0), 0);
+    let mut fetches = sent(1..=1, "cur", 0);
+    fetches.extend(sent(2..=2, "cur", u64::MAX));
+    core.on(Input::DirectoriesDrawn { fetches }, 0);
+    let at_floor = core.on_deadline(secs(15));
+    assert_eq!(fetched(&at_floor), [hsdir(1)]);
+    let at_top = core.on_deadline(secs(60));
+    assert_eq!(fetched(&at_top), [hsdir(2)]);
 }

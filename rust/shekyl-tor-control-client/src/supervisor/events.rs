@@ -8,10 +8,43 @@
 //! Anything this module does not name is `None`. The core never sees it.
 
 use crate::control::{
-    Bootstrap, ClientStatus, GeneralStatus, Liveness, Recommendation, RoundMark, TorEvent,
+    Bootstrap, ClientStatus, GeneralStatus, HsDescAction, HsDescEvent, Liveness, Recommendation,
+    RoundMark, TorEvent,
 };
 
-use super::core::{Input, RoundEnd};
+use super::core::{DirectoryAnswer, Input, RoundEnd};
+
+/// A fetch of this node's onion, as the directory check reads it (§4.5).
+/// The caller keeps only events for its own address. `REQUESTED` names the
+/// descriptor Tor's client asks for; `RECEIVED` and `FAILED` with a
+/// descriptor id are a directory's answer (an upload's `FAILED` carries no
+/// id and is the round coalescer's). `REASON=NOT_FOUND` is the directory
+/// not having it; any other reason says nothing about the descriptor.
+#[must_use]
+pub fn directory_input_of(event: &HsDescEvent) -> Option<Input> {
+    let answer = match event.action {
+        HsDescAction::Requested => {
+            return event
+                .descriptor_id
+                .clone()
+                .map(|descriptor_id| Input::DirectoryAsked { descriptor_id });
+        }
+        HsDescAction::Received => DirectoryAnswer::Received,
+        HsDescAction::Failed if event.descriptor_id.is_some() => {
+            if event.reason.as_deref() == Some("NOT_FOUND") {
+                DirectoryAnswer::NotFound
+            } else {
+                DirectoryAnswer::Other
+            }
+        }
+        _ => return None,
+    };
+    Some(Input::DirectoryAnswered {
+        hsdir: event.hsdir?,
+        descriptor_id: event.descriptor_id.clone(),
+        answer,
+    })
+}
 
 /// Events the core acts on (`TOR_SUPERVISOR.md` §4.2). Anything else is `None`.
 ///
@@ -197,7 +230,9 @@ fn outbound_blocked(problem: &crate::control::BootstrapProblem) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{clock_evidence_of, input_of, round_inputs, CERTIFICATE_OUT_OF_DATE};
+    use super::{
+        clock_evidence_of, directory_input_of, input_of, round_inputs, CERTIFICATE_OUT_OF_DATE,
+    };
     use crate::control::RoundMark;
     use crate::control::{
         Bootstrap, BootstrapProblem, ClientStatus, Liveness, Recommendation, Severity, TorEvent,
@@ -477,5 +512,82 @@ mod tests {
             }),
         };
         assert!(input_of(&early).is_none());
+    }
+
+    /// Tor's own words for a fetch of this onion, as the directory check
+    /// reads them, from the lines the VM run of 2026-11-01 recorded: a
+    /// `REQUESTED` names the descriptor asked for; `RECEIVED` and `FAILED`
+    /// with an id are an answer, `NOT_FOUND` the only reason that says the
+    /// directory lacks it; an upload's `FAILED` (no id) is not an answer.
+    /// Mapping every `FAILED` to `NotFound`, or reading an upload's end as
+    /// an answer, fails this.
+    #[test]
+    fn a_fetchs_events_are_the_directory_checks_inputs() {
+        use crate::control::{parse_event, RelayFingerprint, ReplyFramer};
+        use crate::supervisor::DirectoryAnswer;
+        let onion = "dslbwwu6sfukamiltaij744ly3aqhtl3lbi7e6mdzv6m6hha425mmhqd";
+        let dir = "$95B556218614D4F2A3B0F24329AD31103D31FFF6~relay";
+        let key = "nFQ9sNMB8qvVnYKG0QxhL4hxuVM0a4gzzBIB+Eb04/E";
+        let read = |line: String| {
+            let mut framer = ReplyFramer::default();
+            framer.push_bytes(format!("{line}\r\n").as_bytes());
+            let reply = framer
+                .next_reply()
+                .expect("frames")
+                .expect("one complete reply");
+            match parse_event(&reply) {
+                Some(TorEvent::HsDesc(desc)) => directory_input_of(&desc),
+                other => panic!("not HS_DESC: {other:?}"),
+            }
+        };
+        let hsdir =
+            RelayFingerprint::parse("95B556218614D4F2A3B0F24329AD31103D31FFF6").expect("hex");
+        assert_eq!(
+            read(format!(
+                "650 HS_DESC REQUESTED {onion} NO_AUTH {dir} {key} HSDIR_INDEX=00"
+            )),
+            Some(Input::DirectoryAsked {
+                descriptor_id: key.to_owned()
+            })
+        );
+        assert_eq!(
+            read(format!("650 HS_DESC RECEIVED {onion} NO_AUTH {dir} {key}")),
+            Some(Input::DirectoryAnswered {
+                hsdir,
+                descriptor_id: Some(key.to_owned()),
+                answer: DirectoryAnswer::Received,
+            })
+        );
+        assert_eq!(
+            read(format!(
+                "650 HS_DESC FAILED {onion} NO_AUTH {dir} {key} REASON=NOT_FOUND"
+            )),
+            Some(Input::DirectoryAnswered {
+                hsdir,
+                descriptor_id: Some(key.to_owned()),
+                answer: DirectoryAnswer::NotFound,
+            })
+        );
+        assert_eq!(
+            read(format!(
+                "650 HS_DESC FAILED {onion} NO_AUTH {dir} {key} REASON=QUERY_RATE_LIMITED"
+            )),
+            Some(Input::DirectoryAnswered {
+                hsdir,
+                descriptor_id: Some(key.to_owned()),
+                answer: DirectoryAnswer::Other,
+            })
+        );
+        assert_eq!(
+            read(format!(
+                "650 HS_DESC FAILED {onion} UNKNOWN {dir} REASON=UPLOAD_REJECTED"
+            )),
+            None,
+            "an upload's end is the round coalescer's"
+        );
+        assert_eq!(
+            read(format!("650 HS_DESC UPLOADED {onion} UNKNOWN {dir}")),
+            None
+        );
     }
 }

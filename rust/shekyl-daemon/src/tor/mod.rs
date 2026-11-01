@@ -38,9 +38,9 @@ use shekyl_tor_control_client::control::{
     EventReceiver, EventSink, Resume, ServiceId, SocksTimeout, TorEvent, UploadRounds,
 };
 use shekyl_tor_control_client::supervisor::{
-    clock_evidence_of, held_sentence, input_of, install_sentence, render, Action, Cause,
-    Connectors, Core, DialTally, Input, ManagedRunning, NetworkView, OriginVerdict as FoldedOrigin,
-    Policy, Space, Step, Syncing, TorSetting,
+    clock_evidence_of, directory_input_of, held_sentence, input_of, install_sentence, render,
+    Action, Cause, Connectors, Core, DialTally, Input, ManagedRunning, NetworkView,
+    OriginVerdict as FoldedOrigin, Policy, Space, Step, Syncing, TorSetting,
 };
 use shekyl_tor_control_daemon::{
     space_needed, sweep_stale_data_dirs, CacheSave, DaemonTorConfig, DaemonTorControl,
@@ -567,6 +567,21 @@ impl Drive {
                 }
             }
             Action::ProbeAfterJump => vec![probe::jump_probe()],
+            Action::CheckDirectories => vec![self.directories_drawn()],
+            Action::FetchFromDirectory { hsdir } => {
+                let mut stop = self.stop.clone();
+                match race_stop(&mut stop, self.fetch_from(hsdir)).await {
+                    Ok(input) => self.resume_before(input.into_iter().collect()),
+                    Err(shutdown) => vec![shutdown],
+                }
+            }
+            Action::DirectoriesUnmatched => {
+                tracing::info!(
+                    target: "tor",
+                    "no directory the last upload round reached holds the descriptor Tor's client asks for; the probe alone decided"
+                );
+                Vec::new()
+            }
             Action::DescriptorOverdue => {
                 tracing::info!(
                     target: "tor",
@@ -664,6 +679,8 @@ impl Drive {
                         reason = ?desc.reason,
                         "Tor's descriptor event"
                     );
+                    // A fetch of this onion: the directory check's evidence.
+                    inputs.extend(directory_input_of(desc));
                 }
             }
             // Evidence first: a problem that is also the blocked link is

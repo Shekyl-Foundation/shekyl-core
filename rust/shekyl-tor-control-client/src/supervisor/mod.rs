@@ -23,9 +23,12 @@ mod posture;
 
 pub use crate::control::{NetworkView, Reported};
 pub use core::{
-    Action, Core, DialTally, Input, ManagedRunning, Policy, RoundEnd, Step, DESCRIPTOR_LIFETIME,
+    Action, Core, DialTally, DirectoryAnswer, DirectoryFetch, Input, ManagedRunning, Policy,
+    RoundEnd, Step, DESCRIPTOR_LIFETIME,
 };
-pub use events::{clock_evidence_of, input_of, round_inputs, CERTIFICATE_OUT_OF_DATE};
+pub use events::{
+    clock_evidence_of, directory_input_of, input_of, round_inputs, CERTIFICATE_OUT_OF_DATE,
+};
 pub use posture::{
     fixes, held_sentence, install_sentence, own_tx, render, BootstrapLine, BootstrapPace, Cause,
     Connectors, Inbound, InboundCause, ManagedTorFix, OriginVerdict, OwnTx, Shown, Space, Status,

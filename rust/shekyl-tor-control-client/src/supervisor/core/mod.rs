@@ -22,16 +22,18 @@ mod backoff;
 mod clock_evidence;
 mod clock_jump;
 mod dials;
+mod directories;
 mod network_view;
 mod probe;
 mod resume;
 mod running;
 
-use crate::control::NetworkView;
+use crate::control::{NetworkView, RelayFingerprint};
 use announce::{Announcements, Cadence};
 use backoff::Backoff;
 pub use dials::DialTally;
 use dials::Dials;
+pub use directories::{DirectoryAnswer, DirectoryFetch};
 use probe::Probe;
 
 /// How long a respawn waits, and how often a failure is said again.
@@ -201,6 +203,23 @@ pub enum Action {
     /// Said at info. The [`Self::RepublishOnion`] that follows forces a
     /// fresh upload.
     DescriptorOverdue,
+    /// A probe's check began: give the directories the latest round's
+    /// uploads reached, each with a CSPRNG draw for its own fetch delay
+    /// (§4.5, the directory check). The driver answers
+    /// [`Input::DirectoriesDrawn`].
+    CheckDirectories,
+    /// `HSFETCH` this node's onion from `hsdir` alone (`SERVER=`). The answer
+    /// arrives as [`Input::DirectoryAnswered`]; a command Tor refuses is
+    /// answered at once as [`DirectoryAnswer::Unusable`].
+    FetchFromDirectory {
+        /// The directory to ask.
+        hsdir: RelayFingerprint,
+    },
+    /// The check counted no directory: none the round reached holds the
+    /// descriptor Tor's client asks for, or none answered about it. The
+    /// probe alone decided. Said once at info: a node whose uploads land
+    /// under a key no fetch asks for is the clock's signature (§4.5).
+    DirectoriesUnmatched,
     /// Publish the inbound facet on the managed route's link (§4.1).
     PublishInbound(Inbound),
     /// A descriptor round has been open for `Policy::round_stuck_after`:
@@ -371,6 +390,28 @@ pub enum Input {
         /// Uniform over `u64`.
         draw: u64,
     },
+    /// The directories for the check [`Action::CheckDirectories`] asked for.
+    DirectoriesDrawn {
+        /// One per directory, each with its own draw.
+        fetches: Vec<DirectoryFetch>,
+    },
+    /// A fetch of this node's onion named this descriptor (`HS_DESC
+    /// REQUESTED`): the one Tor's client asks for.
+    DirectoryAsked {
+        /// The blinded key.
+        descriptor_id: String,
+    },
+    /// A directory answered a fetch of this node's onion (`HS_DESC RECEIVED`
+    /// or `FAILED`), or the driver could not ask it.
+    DirectoryAnswered {
+        /// The directory.
+        hsdir: RelayFingerprint,
+        /// The descriptor the answer is about; `None` when the driver could
+        /// not ask.
+        descriptor_id: Option<String>,
+        /// What it said.
+        answer: DirectoryAnswer,
+    },
     /// The probe's nonce is minted, at `minted_at`, and its dial launched.
     ProbeDialed {
         /// The mint tick, which names the probe.
@@ -529,6 +570,8 @@ pub struct Core {
     outbound_since: Option<u64>,
     /// The round's probe (§4.5).
     probe: Probe,
+    /// The directory half of the probe's check; `None` until drawn.
+    directories: Option<directories::DirectoryCheck>,
     /// The descriptor round open now, while one is.
     round: Option<probe::RoundTrack>,
     /// Rounds that stayed open past `Policy::round_stuck_after`, this boot.
@@ -573,6 +616,7 @@ impl Core {
             published_inbound: Inbound::NotOffered,
             outbound_since: None,
             probe: Probe::Idle,
+            directories: None,
             round: None,
             stuck_rounds: 0,
             lifetime_from: None,
@@ -623,6 +667,13 @@ impl Core {
             Input::UploadRoundEnded { end, draw } => self.round_ended(now, end, draw),
             Input::DescriptorRefetched { draw } => self.refetched(now, draw),
             Input::JumpProbeDrawn { draw } => self.jump_probe_drawn(now, draw),
+            Input::DirectoriesDrawn { fetches } => self.directories_drawn(now, fetches),
+            Input::DirectoryAsked { descriptor_id } => self.directory_asked(now, &descriptor_id),
+            Input::DirectoryAnswered {
+                hsdir,
+                descriptor_id,
+                answer,
+            } => self.directory_answered(now, hsdir, descriptor_id.as_deref(), answer),
             Input::ProbeDialed { minted_at } => self.probe_dialed(minted_at),
             Input::ProbeNotDialed => self.probe_not_dialed(),
             Input::ProbeArrived {
@@ -726,6 +777,9 @@ impl Core {
         if self.probe.due().is_some_and(|at| now >= at) {
             actions.extend(self.on_probe_deadline(now));
         }
+        if self.directories_due().is_some_and(|at| now >= at) {
+            actions.extend(self.on_directories_deadline(now));
+        }
         self.step(now, actions)
     }
 
@@ -776,6 +830,7 @@ impl Core {
             self.probe.due(),
             self.round_due(),
             self.overdue_due(),
+            self.directories_due(),
         ]
         .into_iter()
         .flatten()

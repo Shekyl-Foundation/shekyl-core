@@ -37,7 +37,9 @@
 
 use super::super::posture::{Cause, Inbound, InboundCause};
 use super::announce::Cadence;
+use super::directories::{DirectoryAnswer, DirectoryCheck, DirectoryFetch, DirectoryVerdict};
 use super::{duration_ns, Action, Core, Duty, Phase, RoundEnd};
+use crate::control::RelayFingerprint;
 
 /// The probe's place in its round.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,6 +57,12 @@ pub(super) enum Probe {
     },
     /// The first probe missed; the refetch is asked and its answer awaited.
     Refetching,
+    /// The probe arrived (`arrived`, the take) or missed (`None`), and the
+    /// directory half of the check is still out.
+    Judging {
+        arrived: Option<u64>,
+        attempt: Attempt,
+    },
 }
 
 /// The descriptor round open now (§4.5).
@@ -93,7 +101,7 @@ impl Probe {
     /// The deadline the probe holds, if any.
     pub(super) const fn due(self) -> Option<u64> {
         match self {
-            Self::Idle | Self::Refetching => None,
+            Self::Idle | Self::Refetching | Self::Judging { .. } => None,
             Self::Scheduled { at, .. } => Some(at),
             Self::InFlight { bound_at, .. } => Some(bound_at),
         }
@@ -145,9 +153,9 @@ impl Core {
         let track = self.round.take();
         match end {
             RoundEnd::Uploaded => {
-                let actions = self.onion_published();
+                let mut actions = self.onion_published();
                 if !track.is_some_and(|track| track.triggered) {
-                    self.trigger(now, draw);
+                    actions.extend(self.trigger(now, draw));
                 }
                 actions
             }
@@ -160,9 +168,11 @@ impl Core {
 
     /// The round's one probe, or the jump's: scheduled while Running with
     /// none in hand.
-    fn trigger(&mut self, now: u64, draw: u64) {
+    fn trigger(&mut self, now: u64, draw: u64) -> Vec<Action> {
         if matches!(self.phase, Phase::Running { .. }) && self.probe == Probe::Idle {
-            self.schedule(now, draw, Attempt::First);
+            self.schedule(now, draw, Attempt::First)
+        } else {
+            Vec::new()
         }
     }
 
@@ -218,6 +228,7 @@ impl Core {
             actions.push(Action::CancelProbe);
         }
         self.probe = Probe::Idle;
+        self.directories = None;
         actions.push(Action::RepublishOnion);
         actions
     }
@@ -237,8 +248,7 @@ impl Core {
     /// it waits at least the delay's floor and takes the same miss path
     /// (`HSFETCH`, a second probe, then a republish).
     pub(super) fn jump_probe_drawn(&mut self, now: u64, draw: u64) -> Vec<Action> {
-        self.trigger(now, draw);
-        Vec::new()
+        self.trigger(now, draw)
     }
 
     /// The machine slept (§5, "Resumed from suspend"). A probe in flight
@@ -254,7 +264,14 @@ impl Core {
             Probe::Scheduled { at, .. } => {
                 *at = (*at).max(now.saturating_add(duration_ns(self.policy.probe_after_min)));
             }
-            Probe::Idle | Probe::Refetching => {}
+            Probe::Idle | Probe::Refetching | Probe::Judging { .. } => {}
+        }
+        if let Some(check) = &mut self.directories {
+            check.resumed(
+                now,
+                duration_ns(self.policy.probe_after_min),
+                duration_ns(self.policy.probe_within),
+            );
         }
         if let Some(at) = &mut self.lifetime_from {
             *at = now;
@@ -278,7 +295,7 @@ impl Core {
         if let Some((at, draw)) = track.first {
             if !track.triggered && now >= at.saturating_add(duration_ns(self.policy.round_wait)) {
                 track.triggered = true;
-                self.trigger(now, draw);
+                actions.extend(self.trigger(now, draw));
             }
         }
         if !track.stuck
@@ -299,16 +316,138 @@ impl Core {
     /// scheduled after a fresh delay.
     pub(super) fn refetched(&mut self, now: u64, draw: u64) -> Vec<Action> {
         if self.probe == Probe::Refetching && matches!(self.phase, Phase::Running { .. }) {
-            self.schedule(now, draw, Attempt::AfterRefetch);
+            self.schedule(now, draw, Attempt::AfterRefetch)
+        } else {
+            Vec::new()
         }
-        Vec::new()
     }
 
-    fn schedule(&mut self, now: u64, draw: u64, attempt: Attempt) {
+    /// A probe's check begins: the rendezvous probe, and the directories
+    /// the driver names next ([`Action::CheckDirectories`]).
+    fn schedule(&mut self, now: u64, draw: u64, attempt: Attempt) -> Vec<Action> {
         self.probe = Probe::Scheduled {
             at: now.saturating_add(self.probe_delay(draw)),
             attempt,
         };
+        self.directories = None;
+        vec![Action::CheckDirectories]
+    }
+
+    /// The directories to ask for the check in hand, each after its own
+    /// delay from the probe's range: a fetch at every directory straight
+    /// after an upload is the signature the probe's jitter exists to hide.
+    pub(super) fn directories_drawn(
+        &mut self,
+        now: u64,
+        fetches: Vec<DirectoryFetch>,
+    ) -> Vec<Action> {
+        if !matches!(self.probe, Probe::Scheduled { .. } | Probe::InFlight { .. }) {
+            return Vec::new();
+        }
+        let fetches = fetches
+            .into_iter()
+            .map(|fetch| {
+                let due = now.saturating_add(self.probe_delay(fetch.draw));
+                (fetch.hsdir, fetch.descriptor_id, due)
+            })
+            .collect();
+        self.directories = Some(DirectoryCheck::new(
+            fetches,
+            now,
+            duration_ns(self.policy.probe_within),
+        ));
+        Vec::new()
+    }
+
+    pub(super) fn directories_due(&self) -> Option<u64> {
+        self.directories.as_ref().and_then(DirectoryCheck::due)
+    }
+
+    /// A fetch came due, or the check's bound passed.
+    pub(super) fn on_directories_deadline(&mut self, now: u64) -> Vec<Action> {
+        let Some(check) = &mut self.directories else {
+            return Vec::new();
+        };
+        let mut actions: Vec<Action> = check
+            .on_deadline(now)
+            .into_iter()
+            .map(|hsdir| Action::FetchFromDirectory { hsdir })
+            .collect();
+        actions.extend(self.judge(now));
+        actions
+    }
+
+    pub(super) fn directory_asked(&mut self, now: u64, descriptor_id: &str) -> Vec<Action> {
+        if let Some(check) = &mut self.directories {
+            check.asked(descriptor_id);
+        }
+        self.judge(now)
+    }
+
+    pub(super) fn directory_answered(
+        &mut self,
+        now: u64,
+        hsdir: RelayFingerprint,
+        descriptor_id: Option<&str>,
+        answer: DirectoryAnswer,
+    ) -> Vec<Action> {
+        if let Some(check) = &mut self.directories {
+            check.answered(hsdir, descriptor_id, answer);
+        }
+        self.judge(now)
+    }
+
+    /// Both halves are in: the probe arrived or missed, and the directories
+    /// answered or their bound passed. Reachable needs the probe's arrival
+    /// and the descriptor at more than half of the counted directories; any
+    /// other outcome is a miss, into the two-miss rule. A check with no
+    /// directory set (none drawn) is decided by the probe alone.
+    fn judge(&mut self, now: u64) -> Vec<Action> {
+        let Probe::Judging { arrived, attempt } = self.probe else {
+            return Vec::new();
+        };
+        if self
+            .directories
+            .as_ref()
+            .is_some_and(|check| !check.is_complete())
+        {
+            return Vec::new();
+        }
+        let verdict = self
+            .directories
+            .take()
+            .map_or(DirectoryVerdict::Unmatched, |check| check.verdict());
+        self.probe = Probe::Idle;
+        let mut actions = Vec::new();
+        if verdict == DirectoryVerdict::Unmatched {
+            actions.push(Action::DirectoriesUnmatched);
+        }
+        match (arrived, verdict) {
+            (Some(evidence_at), DirectoryVerdict::Held | DirectoryVerdict::Unmatched) => {
+                let recovered = matches!(self.inbound, Inbound::Unreachable { .. });
+                self.inbound = Inbound::Reachable { evidence_at };
+                if recovered {
+                    actions.extend(self.say(now, Cadence::Now));
+                }
+            }
+            _ => match attempt {
+                // One miss is not a verdict: refresh Tor's client view of
+                // this address, then check once more.
+                Attempt::First => {
+                    self.probe = Probe::Refetching;
+                    actions.push(Action::RefetchDescriptor);
+                }
+                Attempt::AfterRefetch => {
+                    let cause = if arrived.is_some() {
+                        InboundCause::DescriptorNotFound
+                    } else {
+                        InboundCause::ProbeTimedOut
+                    };
+                    actions.extend(self.inbound_down(now, cause));
+                }
+            },
+        }
+        actions
     }
 
     /// The driver minted the probe's nonce and launched the dial.
@@ -326,6 +465,7 @@ impl Core {
     pub(super) fn probe_not_dialed(&mut self) -> Vec<Action> {
         if matches!(self.probe, Probe::InFlight { .. }) {
             self.probe = Probe::Idle;
+            self.directories = None;
         }
         Vec::new()
     }
@@ -341,7 +481,7 @@ impl Core {
         let Probe::InFlight {
             bound_at,
             minted_at: Some(current),
-            ..
+            attempt,
         } = self.probe
         else {
             return Vec::new();
@@ -352,16 +492,11 @@ impl Core {
         {
             return Vec::new();
         }
-        self.probe = Probe::Idle;
-        let recovered = matches!(self.inbound, Inbound::Unreachable { .. });
-        self.inbound = Inbound::Reachable {
-            evidence_at: arrived_at,
+        self.probe = Probe::Judging {
+            arrived: Some(arrived_at),
+            attempt,
         };
-        if recovered {
-            self.say(now, Cadence::Now)
-        } else {
-            Vec::new()
-        }
+        self.judge(now)
     }
 
     /// The probe's deadline fired: a scheduled probe is due, or one in
@@ -373,6 +508,7 @@ impl Core {
                     // Suppressed: outbound is not usable, or the onion is
                     // owed. The next round schedules the next one.
                     self.probe = Probe::Idle;
+                    self.directories = None;
                     return Vec::new();
                 }
                 self.probe = Probe::InFlight {
@@ -388,19 +524,14 @@ impl Core {
                 self.probe = Probe::Idle;
                 let mut actions = vec![Action::CancelProbe];
                 if !self.probe_may_run() {
+                    self.directories = None;
                     return actions;
                 }
-                match attempt {
-                    // One miss is not a verdict: refresh Tor's client view
-                    // of this address, then probe once more.
-                    Attempt::First => {
-                        self.probe = Probe::Refetching;
-                        actions.push(Action::RefetchDescriptor);
-                    }
-                    Attempt::AfterRefetch => {
-                        actions.extend(self.inbound_down(now, InboundCause::ProbeTimedOut));
-                    }
-                }
+                self.probe = Probe::Judging {
+                    arrived: None,
+                    attempt,
+                };
+                actions.extend(self.judge(now));
                 actions
             }
             _ => Vec::new(),
@@ -431,6 +562,7 @@ impl Core {
             actions.push(Action::CancelProbe);
         }
         self.probe = Probe::Idle;
+        self.directories = None;
         let since = match self.inbound {
             Inbound::Unreachable { since, .. } => since,
             _ => now,
@@ -462,6 +594,7 @@ impl Core {
     pub(super) fn drop_probe(&mut self) -> Option<Action> {
         let in_flight = matches!(self.probe, Probe::InFlight { .. });
         self.probe = Probe::Idle;
+        self.directories = None;
         self.round = None;
         self.lifetime_from = None;
         self.service_republish = false;
