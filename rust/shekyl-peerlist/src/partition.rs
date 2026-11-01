@@ -24,7 +24,7 @@ use shekyl_net_address::{Host, NetworkAddress};
 use shekyl_relay_privacy::ConnectionId;
 use shekyl_timing_engine::Tick;
 
-use shekyl_transport_layer::BanEntry;
+use shekyl_transport_layer::{BanEntry, BanSet};
 
 use crate::index::Index;
 use crate::outcome::WhiteClock;
@@ -127,6 +127,13 @@ fn cooling(until: Tick, failures: u32) -> Seat {
     }
 }
 
+fn barred(failures: u32) -> Seat {
+    Seat::Gray {
+        phase: GrayPhase::Barred,
+        failures,
+    }
+}
+
 /// One connector's seats, its cached sample, and its intake ledger.
 #[derive(Debug, Default)]
 pub(crate) struct Partition {
@@ -144,11 +151,6 @@ pub(crate) struct Partition {
     cooling: usize,
     /// Seats whose phase is [`GrayPhase::Barred`]. Same three writers.
     barred: usize,
-    /// The active ban entries this partition was given, with no expiries:
-    /// an entry is in force until its lift arrives. A seat any of them
-    /// covers is [`GrayPhase::Barred`] (the one invariant, held where seats
-    /// are written: [`Self::seat_new`] and [`Self::move_seat`]).
-    bans: BTreeSet<BanEntry>,
     /// The cached disclosure sample and when it was drawn (D3).
     sample: Option<Sample>,
     /// This node's own dialable address on this connector, when known: one
@@ -375,6 +377,7 @@ impl Partition {
         &mut self,
         address: &NetworkAddress,
         now: Tick,
+        bans: &BanSet,
         rng: &mut R,
         clock: WhiteClock,
     ) {
@@ -387,7 +390,7 @@ impl Partition {
                 _,
             ) => {
                 // White carries no rung. The ladder ends with the gray seat.
-                self.move_seat(address, Seat::White(now));
+                self.resolve_draw(address, Seat::White(now), bans);
                 self.evict_white_over_cap(address, rng);
             }
             (Some(Seat::White(_)), WhiteClock::Move) => self.write_clock(address, now),
@@ -473,6 +476,7 @@ impl Partition {
         now: Tick,
         ladder: Ladder,
         cooldown: Cooldown,
+        bans: &BanSet,
         rng: &mut R,
     ) -> bool {
         let (failures, rung, from_white) = match (self.seat_of(address), ladder) {
@@ -502,7 +506,7 @@ impl Partition {
             now.get()
                 .saturating_add(cooldown_nanos(cooldown, rung, rng)),
         );
-        self.move_seat(address, cooling(until, failures));
+        self.resolve_draw(address, cooling(until, failures), bans);
         if from_white {
             self.evict_gray_over_cap(address, rng);
         }
@@ -546,13 +550,13 @@ impl Partition {
     /// The gray count is unchanged, so this does not evict. Going through
     /// [`Self::insert_gray`] would: an outstanding draw can be what holds
     /// gray over the cap, and settling it must not drop someone else.
-    pub(crate) fn settle_outstanding(&mut self, address: &NetworkAddress) {
+    pub(crate) fn settle_outstanding(&mut self, address: &NetworkAddress, bans: &BanSet) {
         if let Some(Seat::Gray {
             phase: GrayPhase::Outstanding,
             failures,
         }) = self.seat_of(address)
         {
-            self.move_seat(address, drawable(failures));
+            self.resolve_draw(address, drawable(failures), bans);
         }
     }
 
@@ -808,7 +812,6 @@ impl Partition {
 
     /// First seat for `address`. The caller has already seen it sit nowhere.
     fn seat_new(&mut self, address: NetworkAddress, seat: Seat) {
-        let seat = self.barred_if_covered(&address, seat);
         let inserted = self.seats.insert(address, seat);
         debug_assert!(inserted, "seat_new is the first seat");
         if inserted {
@@ -818,7 +821,6 @@ impl Partition {
 
     /// Move an address that already sits. The counts follow the value.
     fn move_seat(&mut self, address: &NetworkAddress, seat: Seat) {
-        let seat = self.barred_if_covered(address, seat);
         let previous = self.seat_of(address).expect("the address sits");
         self.note_removed(&previous);
         self.note_added(&seat);
@@ -863,67 +865,49 @@ impl Partition {
         }
     }
 
-    /// Whether an active ban entry covers `address`. Only an address with
-    /// an IP can be banned (D7).
-    pub(crate) fn covered(&self, address: &NetworkAddress) -> bool {
-        address
-            .ip()
-            .is_some_and(|ip| self.bans.iter().any(|entry| entry.covers(ip)))
-    }
-
-    /// The invariant: a seat an active entry covers is barred, keeping its
-    /// rung (a white seat's is zero, as a demotion's is). An outstanding
-    /// draw is the dialer's and stays outstanding: it bars when its outcome
-    /// or its release moves it, so the order of the ban and the refusal
-    /// does not matter.
-    fn barred_if_covered(&self, address: &NetworkAddress, seat: Seat) -> Seat {
-        let failures = match seat {
-            Seat::Gray {
-                phase: GrayPhase::Outstanding | GrayPhase::Barred,
-                ..
-            } => return seat,
-            Seat::Gray { failures, .. } => failures,
-            Seat::White(_) => 0,
+    /// Where an outstanding draw resolves: to `seat`, or barred when a ban
+    /// the peer list holds covers it, keeping its rung (a white seat's is
+    /// zero). A seat the lists hold is barred exactly when a ban covers it:
+    /// the door refuses a covered address, a ban bars what it covers, and
+    /// an outstanding draw, the dialer's while the ban arrives, bars here,
+    /// so the order of the ban and the outcome does not matter.
+    fn resolve_draw(&mut self, address: &NetworkAddress, seat: Seat, bans: &BanSet) {
+        let covered = address.ip().is_some_and(|ip| bans.covers(ip));
+        let seat = match seat {
+            Seat::Gray { failures, .. } if covered => barred(failures),
+            Seat::White(_) if covered => barred(0),
+            seat => seat,
         };
-        if self.covered(address) {
-            Seat::Gray {
-                phase: GrayPhase::Barred,
-                failures,
-            }
-        } else {
-            seat
-        }
+        self.move_seat(address, seat);
     }
 
-    /// A ban event: hold `entry`, and bar every seat it covers on both
-    /// lists. A white seat moves straight to barred gray on rung zero, with
-    /// no eviction: gray may sit over its cap until the next gray insert
-    /// evicts, as it does for outstanding draws, and the overshoot is
-    /// bounded by [`WHITE_CAP`]. Returns how many seats were barred now; an
-    /// outstanding draw is counted when its outcome bars it.
+    /// A ban event the peer list newly holds: bar every seat `entry`
+    /// covers. A white seat moves straight to barred gray on rung zero,
+    /// with no eviction: gray may sit over its cap until the next gray
+    /// insert evicts, as it does for outstanding draws, and the overshoot
+    /// is bounded by [`WHITE_CAP`]. Returns how many seats were barred now;
+    /// an outstanding draw is counted when its outcome bars it
+    /// ([`Self::resolve_draw`]).
     pub(crate) fn ban(&mut self, entry: BanEntry) -> usize {
-        if !self.bans.insert(entry) {
-            return 0;
-        }
         let covered: Vec<(NetworkAddress, Seat)> = self
             .seats
             .iter()
             .filter(|(address, _)| address.ip().is_some_and(|ip| entry.covers(ip)))
             .map(|(address, seat)| (address.clone(), *seat))
             .collect();
-        let mut barred = 0;
+        let mut barred_now = 0;
         for (address, seat) in covered {
             match seat {
                 Seat::White(_) => {
-                    self.move_seat(&address, drawable(0));
-                    barred += 1;
+                    self.move_seat(&address, barred(0));
+                    barred_now += 1;
                 }
                 Seat::Gray {
                     phase: GrayPhase::Drawable | GrayPhase::Cooling(_),
                     failures,
                 } => {
-                    self.move_seat(&address, drawable(failures));
-                    barred += 1;
+                    self.move_seat(&address, barred(failures));
+                    barred_now += 1;
                 }
                 Seat::Gray {
                     phase: GrayPhase::Outstanding | GrayPhase::Barred,
@@ -931,17 +915,14 @@ impl Partition {
                 } => {}
             }
         }
-        barred
+        barred_now
     }
 
-    /// A lift event: drop `entry`, and return as drawable gray, on its
-    /// rung, every barred seat no remaining entry covers. A host lifted
-    /// inside a banned subnet stays barred until the subnet's lift. Returns
-    /// how many seats became drawable.
-    pub(crate) fn lift(&mut self, entry: BanEntry) -> usize {
-        if !self.bans.remove(&entry) {
-            return 0;
-        }
+    /// A lift event the peer list has dropped: return as drawable gray, on
+    /// its rung, every barred seat `entry` covered that no entry in
+    /// `remaining` covers. A host lifted inside a banned subnet stays barred
+    /// until the subnet's lift. Returns how many seats became drawable.
+    pub(crate) fn lift(&mut self, entry: BanEntry, remaining: &BanSet) -> usize {
         let freed: Vec<(NetworkAddress, u32)> = self
             .seats
             .iter()
@@ -954,7 +935,7 @@ impl Partition {
                 }
                 _ => None,
             })
-            .filter(|(address, _)| !self.covered(address))
+            .filter(|(address, _)| !address.ip().is_some_and(|ip| remaining.covers(ip)))
             .collect();
         for (address, failures) in &freed {
             self.move_seat(address, drawable(*failures));

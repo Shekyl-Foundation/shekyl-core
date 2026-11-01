@@ -9,7 +9,7 @@ use shekyl_draw_rng::RelayRng;
 use shekyl_net_address::NetworkAddress;
 use shekyl_relay_privacy::ConnectionId;
 use shekyl_timing_engine::Tick;
-use shekyl_transport_layer::{connector_for, BanEntry, ConnectorId};
+use shekyl_transport_layer::{connector_for, BanEntry, BanSet, ConnectorId};
 
 use crate::address_file::{self, AddressFileError};
 use crate::outcome::{DialOutcome, ListName, Refusal, SessionRow, Source, WhiteClock};
@@ -114,6 +114,10 @@ pub struct Peerlist {
     partitions: Vec<Partition>,
     /// The addresses the network may not hand this node (brief §2).
     refused: RefusedSet,
+    /// The ban entries in force, as the ban list posted them, with no
+    /// expiries: an entry holds until its lift arrives. Held once for
+    /// every partition; a seat any of them covers is barred.
+    bans: BanSet,
 }
 
 impl Peerlist {
@@ -129,6 +133,7 @@ impl Peerlist {
                 .map(|_| Partition::default())
                 .collect(),
             refused,
+            bans: BanSet::new(),
         }
     }
 
@@ -138,6 +143,12 @@ impl Peerlist {
 
     fn partition_mut(&mut self, connector: ConnectorId) -> &mut Partition {
         &mut self.partitions[connector.index()]
+    }
+
+    /// Whether a ban the lists hold covers `address`. Only an address with
+    /// an IP can be banned (D7).
+    fn covered(&self, address: &NetworkAddress) -> bool {
+        address.ip().is_some_and(|ip| self.bans.covers(ip))
     }
 
     /// The connector an address belongs to, from its type (ruled
@@ -179,7 +190,7 @@ impl Peerlist {
         if !matches!(source, Source::Operator) && self.refused.refuses(address).is_some() {
             return Err(Refusal::NotGlobal);
         }
-        if self.partition(connector).covered(address) {
+        if self.covered(address) {
             return Err(Refusal::Banned);
         }
         let partition = self.partition_mut(connector);
@@ -251,10 +262,7 @@ impl Peerlist {
         // D-S1 for the whole list (F2): a banned entry never enters gray, so
         // it is not counted; everything else is, before any entry is
         // admitted. A list that would cross the cap admits nothing.
-        let counted: Vec<&NetworkAddress> = addresses
-            .iter()
-            .filter(|a| !self.partition(connector).covered(a))
-            .collect();
+        let counted: Vec<&NetworkAddress> = addresses.iter().filter(|a| !self.covered(a)).collect();
         if self
             .partition_mut(connector)
             .would_exceed_intake(session, &counted, now)
@@ -522,18 +530,19 @@ impl Peerlist {
         let Some(connector) = Self::connector_of(outcome.address()) else {
             return;
         };
-        let partition = self.partition_mut(connector);
+        let bans = &self.bans;
+        let partition = &mut self.partitions[connector.index()];
         match outcome {
             // Outstanding draw: white, clock stamped `now`. Already white:
             // the clock moves only because the session stayed (brief §5).
             // A white write is where `--p2p-disclose-early` ends at the floor
             // (§2.6): whenever white crosses, not only at a disclosure.
             DialOutcome::SessionAccepted(address) => {
-                partition.confirm(address, now, rng, WhiteClock::Move);
+                partition.confirm(address, now, bans, rng, WhiteClock::Move);
                 Self::end_disclose_early_if_due(connector, partition, now);
             }
             DialOutcome::Confirmed(address) => {
-                partition.confirm(address, now, rng, WhiteClock::Hold);
+                partition.confirm(address, now, bans, rng, WhiteClock::Hold);
                 Self::end_disclose_early_if_due(connector, partition, now);
             }
             // The gray lifecycle (Rick, 2026-10-24): an address leaves the
@@ -556,6 +565,7 @@ impl Peerlist {
                         now,
                         ladder,
                         dial_profile(connector).cooldown,
+                        bans,
                         rng,
                     );
                 }
@@ -563,7 +573,7 @@ impl Peerlist {
             // The strand refused the payload. White is unchanged. An
             // outstanding draw returns to drawable gray.
             DialOutcome::PayloadRefused(address) => {
-                partition.settle_outstanding(address);
+                partition.settle_outstanding(address, bans);
             }
         }
     }
@@ -576,7 +586,7 @@ impl Peerlist {
         let Some(connector) = Self::connector_of(address) else {
             return;
         };
-        self.partition_mut(connector).settle_outstanding(address);
+        self.partitions[connector.index()].settle_outstanding(address, &self.bans);
     }
 
     /// A kept session to `address` ended at `now` (the gray lifecycle,
@@ -646,7 +656,7 @@ impl Peerlist {
     /// and never drawn, and the door refuses it ([`Self::ban`]).
     #[must_use]
     pub fn is_banned(&self, address: &NetworkAddress) -> bool {
-        Self::connector_of(address).is_some_and(|c| self.partition(c).covered(address))
+        self.covered(address)
     }
 
     /// Whether `connector`'s white list is below [`WHITE_REFILL_LINE`] at
@@ -677,6 +687,9 @@ impl Peerlist {
     /// entry covers. Returns how many seats it barred now; an outstanding
     /// draw bars when its outcome or its release moves it.
     pub fn ban(&mut self, entry: BanEntry) -> usize {
+        if self.bans.insert(entry, ()).is_some() {
+            return 0;
+        }
         self.partitions
             .iter_mut()
             .map(|partition| partition.ban(entry))
@@ -687,9 +700,13 @@ impl Peerlist {
     /// gray, on its rung, every barred seat no remaining entry covers.
     /// Returns how many seats became drawable.
     pub fn lift(&mut self, entry: BanEntry) -> usize {
+        if self.bans.remove(&entry).is_none() {
+            return 0;
+        }
+        let remaining = &self.bans;
         self.partitions
             .iter_mut()
-            .map(|partition| partition.lift(entry))
+            .map(|partition| partition.lift(entry, remaining))
             .sum()
     }
 
@@ -705,9 +722,7 @@ impl Peerlist {
             .iter()
             .flat_map(Partition::persistable)
             .filter(|address| self.refused.refuses(address).is_none())
-            .filter(|address| {
-                Self::connector_of(address).is_none_or(|c| !self.partition(c).covered(address))
-            })
+            .filter(|address| !self.covered(address))
             .cloned()
             .collect()
     }

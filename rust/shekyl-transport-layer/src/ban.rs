@@ -181,6 +181,70 @@ fn mask(addr: Ipv4Addr, prefix_len: u8) -> Ipv4Addr {
     Ipv4Addr::from(u32::from(addr) & (u32::MAX << shift))
 }
 
+/// Ban entries keyed for lookup, each with a value: the ban list keeps an
+/// entry's term, the peer list nothing. A host is an exact match on its
+/// key; its subnets are a range over the subnet keys, which sort after
+/// every host. The one shape both sides look a host up in.
+#[derive(Clone, Debug)]
+pub struct BanSet<T = ()> {
+    entries: BTreeMap<BanEntry, T>,
+}
+
+impl<T> Default for BanSet<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T> BanSet<T> {
+    /// An empty set.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            entries: BTreeMap::new(),
+        }
+    }
+
+    /// Hold `entry` with `value`. Returns the value it held, if any.
+    pub fn insert(&mut self, entry: BanEntry, value: T) -> Option<T> {
+        self.entries.insert(entry, value)
+    }
+
+    /// The value `entry` is held with.
+    #[must_use]
+    pub fn get(&self, entry: &BanEntry) -> Option<&T> {
+        self.entries.get(entry)
+    }
+
+    /// Drop `entry`. Returns the value it was held with.
+    pub fn remove(&mut self, entry: &BanEntry) -> Option<T> {
+        self.entries.remove(entry)
+    }
+
+    /// Every entry, hosts then subnets, each in order, with its value.
+    pub fn iter(&self) -> impl Iterator<Item = (BanEntry, &T)> {
+        self.entries.iter().map(|(entry, value)| (*entry, value))
+    }
+
+    /// The values of the entries that cover `host`: its host entry, then
+    /// every subnet that contains it.
+    pub fn covering(&self, host: IpAddr) -> impl Iterator<Item = &T> {
+        let own = self.entries.get(&BanEntry::Host(host));
+        let subnets = self
+            .entries
+            .range(BanEntry::Subnet(Ipv4Subnet::EVERYTHING)..)
+            .filter(move |(entry, _)| entry.covers(host))
+            .map(|(_, value)| value);
+        own.into_iter().chain(subnets)
+    }
+
+    /// Whether an entry covers `host`.
+    #[must_use]
+    pub fn covers(&self, host: IpAddr) -> bool {
+        self.covering(host).next().is_some()
+    }
+}
+
 /// One change to the list, as a subscriber receives it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BanEvent {
@@ -231,7 +295,7 @@ impl std::fmt::Debug for BanFeed {
 /// subscribers' queues.
 #[derive(Default)]
 pub struct BanList {
-    entries: BTreeMap<BanEntry, Term>,
+    entries: BanSet<Term>,
     /// Every timed entry, ordered by `(deadline, entry)`: the first is
     /// the deadline the list's timing owner holds. A permanent entry is
     /// not here; an extension moves its entry.
@@ -327,7 +391,7 @@ impl BanList {
     pub fn clear(&mut self) {
         let entries = std::mem::take(&mut self.entries);
         self.deadlines.clear();
-        for entry in entries.into_keys() {
+        for (entry, _) in entries.iter() {
             self.post(BanEvent::Lifted(entry));
         }
     }
@@ -357,19 +421,7 @@ impl BanList {
     /// Whether an entry in force covers `host`.
     #[must_use]
     pub fn is_banned(&self, host: IpAddr) -> bool {
-        self.covering(host).next().is_some()
-    }
-
-    /// The entries in force that cover `host`, with their terms: its host
-    /// entry, then every subnet that contains it.
-    fn covering(&self, host: IpAddr) -> impl Iterator<Item = Term> + '_ {
-        let own = self.entries.get(&BanEntry::Host(host)).copied();
-        let subnets = self
-            .entries
-            .range(BanEntry::Subnet(Ipv4Subnet::EVERYTHING)..)
-            .filter(move |(entry, _)| entry.covers(host))
-            .map(|(_, term)| *term);
-        own.into_iter().chain(subnets)
+        self.entries.covers(host)
     }
 
     /// Time left on the longest ban that covers `host`, from `now`.
@@ -377,8 +429,9 @@ impl BanList {
     /// [`BanLeft::Permanent`], not a number of seconds.
     #[must_use]
     pub fn remaining(&self, host: IpAddr, now: Tick) -> Option<BanLeft> {
-        self.covering(host)
-            .map(|term| term_left(term, now))
+        self.entries
+            .covering(host)
+            .map(|term| term_left(*term, now))
             .reduce(longer)
     }
 
@@ -389,7 +442,7 @@ impl BanList {
             .iter()
             .map(|(entry, term)| {
                 let left = term_left(*term, now);
-                match *entry {
+                match entry {
                     BanEntry::Host(host) => ListedBan::Host { host, left },
                     BanEntry::Subnet(subnet) => ListedBan::Subnet { subnet, left },
                 }
@@ -402,7 +455,10 @@ impl BanList {
     /// The seed and the registration are one call under the caller's
     /// lock, so nothing between them is lost.
     pub fn subscribe(&mut self, ring: Arc<dyn Fn() + Send + Sync>) -> BanFeed {
-        let seed = self.entries.keys().map(|entry| BanEvent::Banned(*entry));
+        let seed = self
+            .entries
+            .iter()
+            .map(|(entry, _)| BanEvent::Banned(entry));
         let queue = Arc::new(FeedQueue {
             events: Mutex::new(seed.collect()),
             ring,
