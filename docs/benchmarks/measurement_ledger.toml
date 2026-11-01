@@ -128,6 +128,7 @@ stale_through = [
   { through = "08af7470a1", note = "One doc comment in signature.rs: a serve receipt is described as a signature over 113 bytes where it said 112. No function, domain string or sign/verify path changed. The Ed25519 + ML-DSA-65 work that block verification prices does not read that comment. Not re-measured; the rows stay stale from PL-D3." },
   { through = "72168f6f2e", note = "DEL-008's Rust half (#1212): one doc comment in shekyl-fcmp's tree.rs, the segment-partition note, re-tensed because the frozen-segment count it described is deleted. No function, constant or code path changed; nothing the capture prices moved." },
   { through = "26ea801d18", note = "DEL-008's Rust half finished (#1212): in this path set, one doc comment in shekyl-ffi's legacy_fcmp.rs (the membership-only verify's note on step 8) re-tensed because the coarse emission verify export it named is deleted. No function, constant or code path changed; nothing the capture prices moved." },
+  { through = "3e75b28d9a", note = "Doc comments only in shekyl-pow-randomx's lib.rs and CacheStore::pin_canonical: the deleted FFI pin is no longer named as a second caller. No function body, cache derivation, or hash path changed. Not re-measured; the rows stay stale from PL-D3." },
 ]
 
 [[constant]]
@@ -605,6 +606,7 @@ stale_through = [
   { through = "16698c94aa", note = "One linger task for the connector is cloned into every accept loop, in place of a task per loop. A refused accept still shuts its write side and reads until one flight arrives or the handshake span passes. An admitted connection's dial, handshake and gap do the same I/O. Not re-measured." },
   { through = "ab1fb2bc1a", note = "The in-memory loopback harness reserves its clearnet row (the ban, the ceilings, an id) and spends no accept-rate token. The listener's accept still passes the gate before a socket is reserved. An admitted connection's dial, handshake and gap do the same I/O. Not re-measured." },
   { through = "82b33f4eda", note = "CS-5 retires 2003, 2004, 2006 and 2007: shekyl-clearnet's message-size class loses their four arms (sizes.rs), which a message of those ids no longer reaches because the ingress refuses it first. The dial, handshake and gap do the same I/O. Not re-measured." },
+  { through = "30cdb22bf9", note = "The Tor supervisor's directory check (#1232): a new inbound cause, DescriptorNotFound, in link.rs beside the two the link already carries, set after a probe's check. No clearnet code path changes; dial, handshake, and gap I/O are unchanged. Not re-measured." },
 ]
 
 [[constant]]
@@ -712,6 +714,7 @@ cleared = [
   { through = "346e890ffe", reason = "Tor accepts pass no accept-rate gate (the onion's proof-of-work is Tor's row); the change is clearnet's accept, a new close cause, and a once-a-minute report task. The Tor dial and the gap wait are unchanged. Not re-measured." },  { through = "264f716a67", reason = "The linger for refused clearnet accepts, its cap in the accept-rate gate and Sockets, and the clearnet tests. Tor's accept loop builds no linger and its dial, gap and shutdown wait do the same I/O, so the 2026-10-14 capture still prices this tree." },  { through = "940baf2bd0", reason = "The descriptor reservation gains the clearnet linger cap (zero until the rates are ruled) and the row-level linger_cap formula. Nothing on the Tor dial, the gap or the shutdown wait reads them, so the 2026-10-14 capture still prices this tree." },  { through = "49e4185efe", reason = "Clearnet's accept rates and the build-time check of every connector's bound against its declaration; Tor's row stays the onion's proof-of-work. Nothing on the Tor dial, the gap or the shutdown wait reads them, so the 2026-10-14 capture still prices this tree." },
   { through = "b80d43d2fd", reason = "The accept gate returns which bucket could not pay, and the socket table counts accept refusals; the clearnet linger figure moves beside linger_cap. Tor's accept builds no linger. The Tor dial, the gap and the shutdown wait do the same I/O, so the 2026-10-14 capture still prices this tree." },
   { through = "ab1fb2bc1a", reason = "The loopback harness reserves a clearnet row and spends no accept-rate token. Tor's accept passes no gate. The Tor dial, the gap and the shutdown wait do the same I/O, so the 2026-10-14 capture still prices this tree." },
+  { through = "30cdb22bf9", reason = "The Tor supervisor's directory check (#1232): a new inbound cause, DescriptorNotFound, in link.rs beside the two the link already carries, set after a probe's check. The dial, the gap, the shutdown wait and their I/O are unchanged, so the capture still prices this tree." },
 ]
 
 [[constant]]
@@ -947,6 +950,7 @@ stale_through = [
   { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. Covers the Phase 2d dispatch core and everything after it; the 341 ms record predates them all." },
   { through = "a6b029e82", note = "DRS-X PR 3 (#1106): the crate-level doc comment in lib.rs names its consumers (shekyl-ffi, the ingest substrate, shekyl-miner). Doc text only; no code changed. An incidental reading, not BA-T14's protocol: the miner's rate test derived one cache in 2.19 s on the floor device in release at bf45b6d30, against the 200 ms target." },
   { through = "fe6f6bfa1", note = "DRS-X PR 3 (#1106): the crate doc in lib.rs names that calc_pow and the Rust miner call CacheStore::lookup and never derive, and that pin_canonical is the validator's epoch fill. Doc text only; cache derivation is unchanged. The 341 ms record and the 200 ms target are untouched, and the row stays stale." },
+  { through = "3e75b28d9a", note = "Doc comments only in lib.rs and CacheStore::pin_canonical: the deleted FFI pin is no longer named as a second caller. Cache derivation is unchanged. The 341 ms record and the 200 ms target are untouched, and the row stays stale." },
 ]
 
 [[constant]]

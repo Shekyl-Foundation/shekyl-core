@@ -1965,9 +1965,8 @@ int32_t shekyl_difficulty_check_timestamp_rule(
 ///
 /// On success writes exactly 32 bytes to `*out_hash` and returns
 /// `SHEKYL_POW_RANDOMX_V2_OK` (0). The per-seedhash 256 MiB cache is
-/// derived lazily on first use and memoized internally; the daemon
-/// removes first-use latency on the canonical seedhash by calling
-/// `shekyl_pow_randomx_v2_set_canonical` at tip advance.
+/// derived lazily on first use and memoized internally. The C++ parity
+/// gates are its callers; the daemon's PoW is the Rust ingest's.
 ///
 /// `seedhash` and `out_hash` must be non-null. The `data`/`data_len`
 /// pairing follows `RANDOMX_V2_RUST.md` §17: `data == NULL` is valid iff
@@ -1979,21 +1978,6 @@ int32_t shekyl_pow_randomx_v2_hash(
     const uint8_t* data,
     size_t data_len,
     uint8_t (*out_hash)[32]);
-
-/// Pin `*seedhash` as the canonical verification cache and eagerly
-/// derive it.
-///
-/// Called at tip advance (replacing `crypto::rx_set_main_seedhash`).
-/// Performs the synchronous ~150-200 ms / 256 MiB cache derivation
-/// off the per-block validation hot path, then pins the result so a
-/// flood of transient-seedhash lookups cannot evict it (the DoS
-/// protection of `RANDOMX_V2_PHASE2C_PLAN.md` §5.11.7). Idempotent:
-/// re-pinning the already-canonical seedhash is a no-op.
-///
-/// `seedhash` must be non-null. Returns `SHEKYL_POW_RANDOMX_V2_OK` (0)
-/// on success, `SHEKYL_POW_RANDOMX_V2_ERR_NULL_PTR` (-1) if null.
-int32_t shekyl_pow_randomx_v2_set_canonical(
-    const uint8_t (*seedhash)[32]);
 
 /// RandomX seed-epoch schedule: the height whose block hash seeds the
 /// cache used to verify `height` (2048-block epochs, 64-block lag;
@@ -2679,8 +2663,7 @@ struct ShekylOwnedBuffer {
 /// A window precondition the difficulty crate refuses.
 #define SHEKYL_DIFFICULTY_ERR_WINDOW         -5
 
-/// `shekyl_pow_randomx_v2_hash` wrote `*out_hash`, or
-/// `shekyl_pow_randomx_v2_set_canonical` pinned the seedhash.
+/// `shekyl_pow_randomx_v2_hash` wrote `*out_hash`.
 #define SHEKYL_POW_RANDOMX_V2_OK                       0
 /// A required pointer (`seedhash`/`out_hash`, or `data` when
 /// `data_len > 0`) was null. `*out_hash` is not written.

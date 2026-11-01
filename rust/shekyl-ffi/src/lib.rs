@@ -75,12 +75,9 @@ pub mod difficulty_ffi;
 pub mod chain_digest_ffi;
 
 // RandomX v2 light-cache PoW verification FFI. Wraps `shekyl_pow_randomx`
-// (`compute_hash` + `CacheStore`) in a C-ABI surface — the consensus
-// PoW hash (`shekyl_pow_randomx_v2_hash`) plus the canonical-seedhash
-// pin/eager-derive entry point (`shekyl_pow_randomx_v2_set_canonical`).
-// Replaces the inherited C RandomX v1 path (`crypto::rx_slow_hash` /
-// `rx_set_main_seedhash`) on the daemon block-verification boundary per
-// `docs/design/RANDOMX_V2_PHASE3_PLAN.md`.
+// (`compute_hash` + `CacheStore`) in a C-ABI surface: the consensus PoW
+// hash (`shekyl_pow_randomx_v2_hash`) for the C++ parity gates, and the
+// seed-epoch schedule. The daemon's PoW is the Rust ingest's.
 pub mod pow_randomx_ffi;
 
 // Curve-tree replica FFI: an ephemeral `shekyl_curve_tree::CurveTreeClient`

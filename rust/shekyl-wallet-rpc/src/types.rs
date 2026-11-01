@@ -332,9 +332,11 @@ pub struct VerifyMessageResult {
 /// `get_height` result.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GetHeightResult {
-    /// Wallet synced height (always available — read from local state).
+    /// Blocks the wallet has scanned through, counted like `daemon_height`:
+    /// `0` before the first scan, and equal to `daemon_height` once synced
+    /// (always available — read from local state).
     pub wallet_height: i64,
-    /// Daemon chain height, or `null` when the daemon is unreachable. The
+    /// Daemon chain height (its block count), or `null` when the daemon is unreachable. The
     /// wallet height is still returned in that case so an offline/​syncing
     /// node does not hide the wallet's own status.
     pub daemon_height: Option<i64>,
@@ -483,9 +485,9 @@ pub struct GetWalletInfoResult {
     pub network: String,
     /// Primary address.
     pub address: String,
-    /// Wallet synced height.
+    /// Wallet synced height, counted like `daemon_height` (as `get_height`).
     pub wallet_height: i64,
-    /// Daemon height, or `null` when unreachable.
+    /// Daemon height (its block count), or `null` when unreachable.
     pub daemon_height: Option<i64>,
     /// Scan floor (`restore_from_height`) for this wallet.
     pub restore_height: i64,
@@ -521,7 +523,8 @@ pub struct RefreshResult {
     pub blocks_processed: i64,
     /// Detected transfers ingested this call.
     pub transfers_detected: i64,
-    /// Wallet synced height after the refresh.
+    /// Wallet synced height after the refresh, counted as `get_height`'s
+    /// `wallet_height`.
     pub synced_height: i64,
     /// Present iff a reorg was detected and rewound this refresh.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -545,7 +548,8 @@ pub struct RescanBlockchainResult {
     pub blocks_processed: i64,
     /// Detected transfers ingested this call.
     pub transfers_detected: i64,
-    /// Wallet synced height after the rescan.
+    /// Wallet synced height after the rescan, counted as `get_height`'s
+    /// `wallet_height`.
     pub synced_height: i64,
 }
 
