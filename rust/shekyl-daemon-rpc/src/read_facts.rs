@@ -169,8 +169,9 @@ pub struct ShardCoverage {
 }
 
 /// One listed transaction of a block: its hash as the block lists it, and
-/// its body as the store holds it — the skeleton always, the archival good
-/// held or discarded with its shard.
+/// its body as the store holds it. The skeleton is always present. Good the
+/// record carries is held or discarded with its shard; a record that
+/// carries none has neither.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ListedTx {
     pub hash: TxHash,
@@ -204,9 +205,10 @@ pub struct BlocksAt {
 /// What [`ChainReadFacts::transactions`] gathered for `get_transactions`:
 /// one slot per id asked, and the chain height confirmations count from,
 /// both read off one snapshot. A body this node has discarded is a slot
-/// like any other — its skeleton with [`crate::core::ArchivalGood::Discarded`]
-/// — and the projection decides, per the request's form, whether that is
-/// an entry or an `archived` state (`PDM-Q10`).
+/// like any other — [`crate::core::ArchivalGood::Discarded`] when it carries
+/// good, [`crate::core::ArchivalGood::CarriesNone`] when it does not — and
+/// the projection decides, per the request's form, whether a discarded good
+/// is an entry or an `archived` state (`PDM-Q10`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TransactionsAt {
     /// One slot per id, in request order.

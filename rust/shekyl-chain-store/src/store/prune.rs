@@ -139,37 +139,23 @@ use core::ops::Range;
 
 use redb::{ReadableTable, WriteTransaction};
 use shekyl_chain_rules::{BlockDrawsFloor, ReleaseJournalFloor, RuleSet, SlashLogFloor};
-use shekyl_types::{
-    shard_floor, shard_of, storage_ids_through, ArchivalLength, BlockCount, BlockHeight,
-};
+use shekyl_types::{shard_floor, shard_of, ArchivalLength, BlockCount, BlockHeight};
 
 use crate::apply_policy::ArchivalFamily;
 use crate::codec::{BlockInfo, SettlementEpochBlocks, UndoLogFloorCell};
 use crate::ids::{ReleaseJournalKey, ReleaseJournalTuple, SlashLogKey, SlashLogTuple};
 use crate::schema::{
     ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_RELEASE_JOURNAL, ARCHIVAL_SLASH_LOG, ARCHIVAL_SUPPORT_BLOCK,
-    BLOCK_INFO, PROPERTIES, TXS_ARCHIVAL_LEN, TXS_PQC_AUTHS, TXS_PRUNABLE, UNDO_LOG,
+    PROPERTIES, TXS_PQC_AUTHS, TXS_PRUNABLE, UNDO_LOG,
 };
 
 pub use super::epoch_retire::EpochFloors;
 
+use super::archival_fold::{self, ARCHIVAL_LEN_CELL};
 use super::chain_reads::{self, ReadFault, ReadTables};
 use super::error::{EngineError, StoreCannot, StoreError, StoreInvariant, UndoFault};
 use super::header;
 use super::write::WriteBatch;
-
-/// The `block_info` cell as faults name it.
-const BLOCK_INFO_CELL: &str = "block_info";
-
-/// The listed-transaction fold inside that cell. SI-8 and SI-13 name it.
-const TX_COUNT_CELL: &str = "block_info.cumulative_tx_count";
-
-/// The archival-length fold inside that cell (`SHT-Q2`). SI-8, SI-13 and
-/// SI-24 name it.
-const ARCHIVAL_LEN_CELL: &str = "block_info.cumulative_archival_len";
-
-/// The per-transaction length rows, as a decode fault names them.
-const ARCHIVAL_LEN_ROW: &str = "txs_archival_len";
 
 /// The pop floor before anything has been retired: genesis is never
 /// poppable, so the lowest poppable height is `1`.
@@ -652,7 +638,7 @@ fn archival_before<T: ReadTables>(txn: &T, height: u64) -> Result<ArchivalLength
 }
 
 /// SI-13 on the archival fold: the row at `height` is below the one before
-/// it — the same reading the listed fold's [`fold_not_monotone`] names.
+/// it. The listed fold is the same invariant, named by its own cell.
 fn archival_not_monotone(height: u64) -> ReadFault {
     ReadFault::Invariant(StoreInvariant::FoldNotMonotone {
         cell: ARCHIVAL_LEN_CELL,
@@ -741,14 +727,10 @@ impl<'t, T: ReadTables> Descent<'t, T> {
 }
 
 /// Check block `height` against its parent's row (`None` at genesis) and
-/// place `offset` in it. SI-13 on both folds — on the raw listed samples,
-/// before the coinbase term is added, because a decrease of one derives to
-/// an empty id range rather than an inverted one (Copilot, PR #861). Then
-/// its ids are walked in issue order from the parent's archival cell,
-/// adding each `txs_archival_len` row (absent ⇔ `0`), and the sum must land
-/// on the block's own cell: a disagreement is SI-24, a length row and the
-/// fold built from it no longer agreeing. Returns the first id at or past
-/// `offset`, or the block's end id when every transaction starts below it.
+/// place `offset` in it. The check and the sum are
+/// [`block_span`](super::archival_fold::block_span): SI-13 on both folds,
+/// then the rows, then SI-24. Returns the first id at or past `offset`, or
+/// the block's end id when every transaction starts below it.
 fn walk_block<T: ReadTables>(
     txn: &T,
     height: u64,
@@ -756,82 +738,14 @@ fn walk_block<T: ReadTables>(
     parent: Option<&BlockInfo>,
     offset: ArchivalLength,
 ) -> Result<u64, ReadFault> {
-    let (before, listed_before) = parent.map_or((ArchivalLength::ZERO, 0), |p| {
-        (p.cumulative_archival_len, p.cumulative_tx_count)
-    });
-    if info.cumulative_archival_len < before {
-        return Err(archival_not_monotone(height));
-    }
-    if info.cumulative_tx_count < listed_before {
-        return Err(fold_not_monotone(height));
-    }
-    let first = first_tx_id(height, listed_before)?;
-    let end = ids_from(info.cumulative_tx_count, height)?;
-    let lens = txn.table(TXS_ARCHIVAL_LEN)?;
-    let mut at = before;
-    let mut found = None;
-    for id in first..end {
-        if found.is_none() && at >= offset {
-            found = Some(id);
-        }
-        let len = match lens.get(id)? {
-            Some(guard) => guard
-                .value()
-                .decode()
-                .map_err(|cause| chain_reads::undecodable(ARCHIVAL_LEN_ROW, cause))?,
-            None => ArchivalLength::ZERO,
-        };
-        at = at
-            .checked_add(len)
-            .ok_or(ReadFault::Invariant(StoreInvariant::FoldOverflow {
-                cell: ARCHIVAL_LEN_CELL,
-            }))?;
-    }
-    if at != info.cumulative_archival_len {
-        return Err(ReadFault::Invariant(
-            StoreInvariant::ArchivalLengthsDisagree {
-                height,
-                rows: at.to_raw(),
-                cell: info.cumulative_archival_len.to_raw(),
-            },
-        ));
-    }
-    Ok(found.unwrap_or(end))
-}
-
-/// `first_tx_id(h)`: the storage id of the first transaction at height `h`,
-/// from the listed total before it — `0` at genesis; otherwise
-/// [`storage_ids_through`] at `h − 1` (every id issued before `h`).
-fn first_tx_id(height: u64, listed_before: u64) -> Result<u64, ReadFault> {
-    let Some(parent) = height.checked_sub(1) else {
-        return Ok(0);
-    };
-    ids_from(listed_before, parent)
-}
-
-/// Storage ids issued through height `h` inclusive, given the listed total
-/// at `h`: the coinbase term is [`storage_ids_through`].
-fn ids_from(listed: u64, height: u64) -> Result<u64, ReadFault> {
-    storage_ids_through(listed, height).ok_or_else(|| {
-        ReadFault::Invariant(StoreInvariant::FoldOverflow {
-            cell: TX_COUNT_CELL,
-        })
-    })
-}
-
-/// SI-13: the listed-transaction fold decreased. `height` is the later sample.
-fn fold_not_monotone(height: u64) -> ReadFault {
-    ReadFault::Invariant(StoreInvariant::FoldNotMonotone {
-        cell: TX_COUNT_CELL,
-        height,
-    })
+    let span = archival_fold::block_span(txn, BlockHeight::from_raw(height), info, parent)?;
+    Ok(span.id_reaching(offset))
 }
 
 /// A `block_info` row the calendar says exists: absent is SI-7 (the table
 /// is dense below the tip), as is a row that does not decode.
 fn block_info_at<T: ReadTables>(txn: &T, height: u64) -> Result<BlockInfo, ReadFault> {
-    chain_reads::cell(txn, BLOCK_INFO, height, BLOCK_INFO_CELL)?
-        .ok_or_else(|| chain_reads::absent(BLOCK_INFO_CELL))
+    archival_fold::block_info(txn, BlockHeight::from_raw(height))
 }
 
 /// `h_scarce` at `tip` (§4, §7): the `close_height` of the last shard with

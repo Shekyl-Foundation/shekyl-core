@@ -47,7 +47,10 @@
 //!   record-without-hash-row shape §7.7 leg (i) forbids — **SI-7**; and a
 //!   **half** — one region held and the other not — which is neither state
 //!   and **SI-42** ([`StoreInvariant::ArchivalGoodHalfHeld`]), never a third
-//!   arm (`SB-Q2`).
+//!   arm (`SB-Q2`). A coinbase whose empty `txs_prunable` row the range
+//!   delete removed is `Discarded` here too: whether that absence is "no
+//!   good" or "good an archiver holds" is the caller's, from the permanent
+//!   hash rows, not a third store state.
 //!
 //! # What no read hands out
 //!
@@ -72,10 +75,7 @@
 use core::marker::PhantomData;
 
 use redb::{ReadableTable, ReadableTableMetadata, TableDefinition, TableHandle};
-use shekyl_types::{
-    shard_of, storage_ids_through, ArchivalLength, BlockHeight, PqcAuthHash, PrunableHash, ShardId,
-    TxHash,
-};
+use shekyl_types::{ArchivalLength, BlockHeight, PqcAuthHash, PrunableHash, TxHash};
 use shekyl_wire::SkeletonTx;
 
 use crate::codec::{
@@ -85,12 +85,12 @@ use crate::codec::{
 use crate::ids::TxStorageId;
 use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{
-    BLOCK_INFO, TXS_ARCHIVAL_LEN, TXS_PQC_AUTHS, TXS_PQC_AUTH_HASH, TXS_PRUNABLE,
-    TXS_PRUNABLE_HASH, TXS_PRUNED, TX_INDICES, TX_OUTPUTS,
+    TXS_ARCHIVAL_LEN, TXS_PQC_AUTHS, TXS_PQC_AUTH_HASH, TXS_PRUNABLE, TXS_PRUNABLE_HASH,
+    TXS_PRUNED, TX_INDICES, TX_OUTPUTS,
 };
 
 use super::at_index::AtIndex;
-use super::chain_reads::{self, absent, undecodable, ReadFault, ReadTables};
+use super::chain_reads::{absent, undecodable, ReadFault, ReadTables};
 use super::error::{HeldRegion, StoreInvariant};
 
 // ---------------------------------------------------------------- types
@@ -103,8 +103,8 @@ use super::error::{HeldRegion, StoreInvariant};
 /// pruned one is expected. Same discipline as
 /// [`RawBlockBytes`](super::RawBlockBytes) (S-CHAIN-R Q2): for the relay,
 /// RPC and FFI paths that forward bytes — no `Deref`, no `AsRef<[u8]>`, no
-/// parse. The one way out is [`into_wire_bytes`](Self::into_wire_bytes),
-/// named for its consumer.
+/// parse. The bytes leave as [`wire_bytes`](Self::wire_bytes), borrowed, or
+/// [`into_wire_bytes`](Self::into_wire_bytes), owned.
 ///
 /// ```compile_fail
 /// # use shekyl_chain_store::store::SegmentBytes;
@@ -155,16 +155,17 @@ impl<K: BlobKind> SegmentBytes<K> {
         }
     }
 
-    /// The bytes, for the writer that puts them on the wire. Consumes the
-    /// value: there is no borrowed view.
+    /// The bytes, owned, for a writer that puts them on the wire.
     #[must_use]
     pub fn into_wire_bytes(self) -> Vec<u8> {
         self.bytes
     }
 
-    /// The segment's wire bytes, borrowed.
+    /// The bytes, borrowed. The same exit as
+    /// [`into_wire_bytes`](Self::into_wire_bytes) for a caller that still
+    /// holds the segment: a skeleton copies them, a parse reads them.
     #[must_use]
-    pub fn as_bytes(&self) -> &[u8] {
+    pub fn wire_bytes(&self) -> &[u8] {
         &self.bytes
     }
 
@@ -254,21 +255,23 @@ impl TxRecord {
     /// `get_tx_blob` assembled and `connect` split (STX-8). One line, so it
     /// is written once; a third read for it would be the identity hop.
     ///
-    /// Takes the good's **retained** regions, so the caller has already
+    /// Borrows the good's **retained** regions. The caller has already
     /// matched [`ArchivalGood`] and answered its `Discarded` arm — with the
     /// [skeleton](Self::skeleton_of), or a refusal — before composing.
-    /// `pqc_auths` is `Some` iff the txid is 4-part.
+    /// `pqc_auths` is `Some` iff the txid is 4-part. The record is borrowed
+    /// too: the pruned segment stays, and [`skeleton_of`](Self::skeleton_of)
+    /// is cut from the same bytes.
     #[must_use]
     pub fn wire_bytes(
-        self,
-        prunable: SegmentBytes<TxPrunableSegment>,
-        pqc_auths: Option<SegmentBytes<TxPqcAuthsSegment>>,
+        &self,
+        prunable: &SegmentBytes<TxPrunableSegment>,
+        pqc_auths: Option<&SegmentBytes<TxPqcAuthsSegment>>,
     ) -> Vec<u8> {
-        let mut out = self.pruned.into_wire_bytes();
+        let mut out = self.pruned.wire_bytes().to_vec();
         if let Some(pqc) = pqc_auths {
-            out.extend(pqc.into_wire_bytes());
+            out.extend_from_slice(pqc.wire_bytes());
         }
-        out.extend(prunable.into_wire_bytes());
+        out.extend_from_slice(prunable.wire_bytes());
         out
     }
 
@@ -282,7 +285,7 @@ impl TxRecord {
     #[must_use]
     pub fn skeleton_of(&self) -> SkeletonTx {
         SkeletonTx {
-            unprunable: self.pruned.as_bytes().to_vec(),
+            unprunable: self.pruned.wire_bytes().to_vec(),
             prunable_hash: self.prunable_hash,
             pqc_auth_hash: self.pqc_auth_hash,
             archival_len: self.archival_len,
@@ -421,7 +424,7 @@ fn decode_index(value: crate::codec::Encoded<'_, TxIndex>) -> Result<TxIndex, Re
 /// recorded on the chain, the miner transactions included. The chain half
 /// of CEN-G1, `ChainView::has_transaction`'s body (E6 slice 7), shared with
 /// `ReadSnapshot::has_transaction` so the validator and the pool read one
-/// answer. Membership only, as [`chain_reads::has_key_image`] is: the row is
+/// answer. Membership only, as [`has_key_image`](super::chain_reads::has_key_image) is: the row is
 /// not decoded, so an undecodable index is the locating reads' SI-7 to
 /// report, not a false `false` here. The C++'s `tx_exists`.
 pub(super) fn has_transaction<T: ReadTables>(txn: &T, hash: &TxHash) -> Result<bool, ReadFault> {
@@ -585,54 +588,6 @@ pub(super) fn archival_good_at<T: ReadTables>(
         (None, Some(_), true) => return Err(half(HeldRegion::PqcAuths)),
     };
     Ok(AtIndex::Recorded(answer))
-}
-
-/// **T5.** The archival shard the transaction at `location` belongs to
-/// (`SB-Q2`; `PDM-Q10`): [`shard_of`] over the cumulative archival length
-/// **before** it — the parent block's `cumulative_archival_len` cell, plus
-/// the `txs_archival_len` rows of the transactions its block recorded
-/// before it (the coinbase first, CEN-F; a sparse row is zero). `shard_of`
-/// is the partition's one boundary function; this read only assembles its
-/// operand, the way the prune's descent and the shard walk do.
-///
-/// The caller holds a [`TxLocation`] T1 or T3 answered, so the block exists
-/// and the id is below the count. An id below its block's first id is the
-/// index disagreeing with the dense issue order, **SI-9**.
-pub(super) fn shard_at<T: ReadTables>(txn: &T, location: TxLocation) -> Result<ShardId, ReadFault> {
-    let (before, first) = match location.height.to_raw().checked_sub(1) {
-        None => (ArchivalLength::ZERO, 0),
-        Some(parent) => {
-            let info = chain_reads::cell(txn, BLOCK_INFO, parent, "block_info")?
-                .ok_or_else(|| absent("block_info"))?;
-            let first = storage_ids_through(info.cumulative_tx_count, parent).ok_or(
-                ReadFault::Invariant(StoreInvariant::FoldOverflow {
-                    cell: "block_info.cumulative_tx_count",
-                }),
-            )?;
-            (info.cumulative_archival_len, first)
-        }
-    };
-    let id = location.id.to_raw();
-    if id < first {
-        return Err(not_dense());
-    }
-    let lens = txn.table(TXS_ARCHIVAL_LEN)?;
-    let mut cum = before;
-    for earlier in first..id {
-        let len = match lens.get(earlier)? {
-            Some(guard) => guard
-                .value()
-                .decode()
-                .map_err(|cause| undecodable("txs_archival_len", cause))?,
-            None => ArchivalLength::ZERO,
-        };
-        cum = cum
-            .checked_add(len)
-            .ok_or(ReadFault::Invariant(StoreInvariant::FoldOverflow {
-                cell: "block_info.cumulative_archival_len",
-            }))?;
-    }
-    Ok(shard_of(cum))
 }
 
 /// **T4b.** Whether the transaction at `id` is in the **archival shard

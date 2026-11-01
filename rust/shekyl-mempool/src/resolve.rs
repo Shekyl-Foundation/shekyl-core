@@ -45,7 +45,7 @@ fn chain_wire(snap: &ReadSnapshot<'_>, id: &TxHash) -> Result<Option<Vec<u8>>, S
         AtIndex::Recorded(ArchivalGood::Retained {
             prunable,
             pqc_auths,
-        }) => Ok(Some(record.wire_bytes(prunable, pqc_auths))),
+        }) => Ok(Some(record.wire_bytes(&prunable, pqc_auths.as_ref()))),
         AtIndex::Recorded(ArchivalGood::Discarded) | AtIndex::BeyondCount => Ok(None),
     }
 }

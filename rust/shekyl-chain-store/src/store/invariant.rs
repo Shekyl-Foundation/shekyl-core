@@ -304,10 +304,10 @@ pub enum StoreInvariant {
     /// plus the `txs_archival_len` rows (absent ⇔ `0`) of the storage ids
     /// `h` issued (`SHT-Q2`). `connect` writes both from one measurement of
     /// the segments, so they cannot disagree at the write; a disagreement
-    /// is a row or a cell changed under the store. Armed by the prune's
-    /// descent (`prune.rs` `walk_block`), which checks every block it
-    /// passes and would otherwise place a shard boundary by a cell the rows
-    /// do not support.
+    /// is a row or a cell changed under the store. Armed by
+    /// `archival_fold::block_span`, which the prune descent and the shard
+    /// read both call. Either would otherwise place a shard boundary by a
+    /// cell the rows do not support.
     ArchivalLengthsDisagree {
         /// The height whose rows were summed.
         height: u64,

@@ -93,10 +93,7 @@ rust/shekyl-chain-store/src/store/prune.rs	1	const fn is_pruning_boundary(&self,
 rust/shekyl-chain-store/src/store/prune.rs	1	fn archival_before<T: ReadTables>(txn: &T, height: u64) -> Result<ArchivalLength, ReadFault> {
 rust/shekyl-chain-store/src/store/prune.rs	1	fn archival_not_monotone(height: u64) -> ReadFault {
 rust/shekyl-chain-store/src/store/prune.rs	1	fn block_info_at<T: ReadTables>(txn: &T, height: u64) -> Result<BlockInfo, ReadFault> {
-rust/shekyl-chain-store/src/store/prune.rs	1	fn first_tx_id(height: u64, listed_before: u64) -> Result<u64, ReadFault> {
-rust/shekyl-chain-store/src/store/prune.rs	1	fn fold_not_monotone(height: u64) -> ReadFault {
 rust/shekyl-chain-store/src/store/prune.rs	1	fn from_block(txn: &'t T, height: u64) -> Result<Self, ReadFault> {
-rust/shekyl-chain-store/src/store/prune.rs	1	fn ids_from(listed: u64, height: u64) -> Result<u64, ReadFault> {
 rust/shekyl-chain-store/src/store/prune.rs	1	fn retire_undo_rows(&self, height: u64) -> Result<BlockHeight, StoreError> {
 rust/shekyl-chain-store/src/store/prune.rs	4	height: u64,
 rust/shekyl-chain-store/src/store/prune_tests.rs	1	fn close_height(&self, k: u64) -> Option<u64> {

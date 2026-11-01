@@ -129,8 +129,8 @@ transaction that carries archival good (`ReadSnapshot::tx_carries_archival_good`
 `read.rs` :800); a transaction with none (a coinbase) answers its full
 body, which is its skeleton. `block_list` without `prune` answers per
 transaction the same way, and **a height never fails because a body is
-archived** (today `blocks_by_height`, `store_read_facts.rs` :366, fails the
-height through `whole_tx` :227). `block_list` gains the `prune` request
+archived**: a discarded spend is that slot's `archived` state, and a
+coinbase answers its pruned segment. `block_list` gains the `prune` request
 field it lacks (`SB-F7`).
 
 **Timing — RULED: after #1212 merges, before the next release cut.** The

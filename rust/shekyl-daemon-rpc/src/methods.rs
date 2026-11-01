@@ -1836,6 +1836,27 @@ pub(crate) mod tests {
         assert!(full.archived.is_empty());
     }
 
+    /// **No good is the pruned segment, not an empty retained region and
+    /// not `archived`.** This is the coinbase after the range delete has
+    /// removed its empty `txs_prunable` row: the store's physical state is
+    /// absence, and the projection must not invent segments to stand in
+    /// for a good the record does not carry (`SB-Q2`).
+    #[test]
+    fn a_body_that_carries_no_good_answers_its_pruned_segment() {
+        let held = stored_coinbase();
+        let body = TxBody {
+            skeleton: held.skeleton,
+            good: ArchivalGood::CarriesNone,
+        };
+        let pruned_hex = hex::encode(&body.skeleton.unprunable);
+        let full = project_transactions(&req(false), &[[0x02; 32]], &[chain_slot(body.clone())], 9);
+        let pruned = project_transactions(&req(true), &[[0x02; 32]], &[chain_slot(body)], 9);
+        assert_eq!(full.txs[0].as_hex, pruned_hex);
+        assert!(full.txs[0].pruned_as_hex.is_empty());
+        assert_eq!(pruned.txs[0].pruned_as_hex, pruned_hex);
+        assert!(full.archived.is_empty() && pruned.archived.is_empty());
+    }
+
     /// Chain, pool, miss and an unavailable pool lookup land in their own
     /// places: the first two become entries carrying their location, the
     /// third only a `missed_tx` id, the fourth only an `unavailable_tx` id.

@@ -189,7 +189,7 @@ fn body_of(snap: &ReadSnapshot<'_>, hash: BlockHash) -> Result<Option<BlockBody>
             AtIndex::Recorded(ArchivalGood::Retained {
                 prunable,
                 pqc_auths,
-            }) => TxBody::Full(record.wire_bytes(prunable, pqc_auths)),
+            }) => TxBody::Full(record.wire_bytes(&prunable, pqc_auths.as_ref())),
             AtIndex::Recorded(ArchivalGood::Discarded) => TxBody::Skeleton(record.skeleton_of()),
             AtIndex::BeyondCount => return Ok(None),
         };

@@ -47,7 +47,7 @@ use shekyl_types::archival::Holdings;
 use shekyl_types::{
     BlockHash, BlockHeight, KeyImage, PCanonicalId, PowHash, SettlementEpoch, ShardId, TxHash,
 };
-use shekyl_wire::{Ct, Transaction};
+use shekyl_wire::{carries_archival_good, Ct, Transaction};
 
 use super::{connecting, count_at, derivation_fault, store_fault, tip_of, StoreFacts};
 use crate::chain_facts::FactsFault;
@@ -113,7 +113,7 @@ fn fees_at(snap: &ReadSnapshot<'_>, height: BlockHeight) -> Result<u128, FactsFa
             tracing::error!(?hash, %height, "a listed transaction is not in the store");
             return Err(FactsFault::Inconsistent);
         };
-        let tx = Transaction::read(&mut record.pruned.as_bytes()).map_err(|error| {
+        let tx = Transaction::read(&mut record.pruned.wire_bytes()).map_err(|error| {
             tracing::error!(%error, ?hash, "a recorded transaction's base does not parse");
             FactsFault::Inconsistent
         })?;
@@ -222,23 +222,32 @@ impl SlashGather {
     }
 }
 
-/// A recorded transaction's body as `get_transactions` carries it: its
-/// skeleton (the store's one constructor), and its archival good — held,
-/// or discarded with the shard it went in (`PDM-Q10`). A transaction that
-/// carries no archival good (a coinbase) is never `Discarded`: the range
-/// discard deletes its empty `txs_prunable` row too, so that row's absence
-/// says nothing, and its whole body is its skeleton.
+/// A recorded transaction's body as `get_transactions` carries it.
+///
+/// Held segments recompose. Segments absent on a record that
+/// [carries good](carries_archival_good) are discarded, and
+/// `shard_of_discarded` names the shard — called only then, so a block
+/// reply hands the one fold it already built. Segments absent on a record
+/// that carries none are [`crate::core::ArchivalGood::CarriesNone`]: the
+/// pruned segment is the whole body. The store's `Discarded` is physical
+/// absence, including a coinbase whose empty `txs_prunable` row the range
+/// delete removed, and is not copied through as an empty retained good.
+/// The carries bit is the record's own hash rows; nothing is read again.
 fn chain_body(
     snap: &ReadSnapshot<'_>,
     hash: &TxHash,
     record: &shekyl_chain_store::store::TxRecord,
+    shard_of_discarded: impl FnOnce() -> Result<ShardId, FactsFault>,
 ) -> Result<crate::core::TxBody, FactsFault> {
-    let id = record.location.id;
     let past_count = || {
         tracing::error!(?hash, "a recorded transaction's id is past the count");
         FactsFault::Inconsistent
     };
-    let good = match snap.tx_archival_good(id).map_err(store_fault)? {
+    let carries = carries_archival_good(record.pqc_auth_hash, record.prunable_hash);
+    let good = match snap
+        .tx_archival_good(record.location.id)
+        .map_err(store_fault)?
+    {
         AtIndex::Recorded(ArchivalGood::Retained {
             prunable,
             pqc_auths,
@@ -246,18 +255,12 @@ fn chain_body(
             pqc_auths: pqc_auths.map(shekyl_chain_store::store::SegmentBytes::into_wire_bytes),
             prunable: prunable.into_wire_bytes(),
         },
-        AtIndex::Recorded(ArchivalGood::Discarded) => {
-            match snap.tx_carries_archival_good(id).map_err(store_fault)? {
-                AtIndex::Recorded(true) => crate::core::ArchivalGood::Discarded {
-                    shard: snap.tx_shard(record.location).map_err(store_fault)?,
-                },
-                AtIndex::Recorded(false) => crate::core::ArchivalGood::Retained {
-                    pqc_auths: None,
-                    prunable: Vec::new(),
-                },
-                AtIndex::BeyondCount => return Err(past_count()),
+        AtIndex::Recorded(ArchivalGood::Discarded) if carries => {
+            crate::core::ArchivalGood::Discarded {
+                shard: shard_of_discarded()?,
             }
         }
+        AtIndex::Recorded(ArchivalGood::Discarded) => crate::core::ArchivalGood::CarriesNone,
         AtIndex::BeyondCount => return Err(past_count()),
     };
     Ok(crate::core::TxBody {
@@ -276,9 +279,12 @@ fn chain_slot(
     let Some(record) = snap.tx_record(hash).map_err(store_fault)? else {
         return Ok(None);
     };
-    let id = record.location.id;
-    let height = record.location.height;
-    let body = chain_body(snap, hash, &record)?;
+    let location = record.location;
+    let id = location.id;
+    let height = location.height;
+    let body = chain_body(snap, hash, &record, || {
+        snap.tx_shard(location).map_err(store_fault)
+    })?;
     let output_indices = match snap.tx_output_indices(id).map_err(store_fault)? {
         AtIndex::Recorded(indices) => indices.0.iter().map(|index| index.to_raw()).collect(),
         AtIndex::BeyondCount => {
@@ -387,15 +393,20 @@ impl ChainReadFacts for StoreFacts {
                 tracing::error!(%height, "a recorded block does not parse");
                 FactsFault::Inconsistent
             })?;
+            // One checked fold for the block. A discarded spend reads its
+            // shard from it; a corrupt earlier length row halts here rather
+            // than naming a shard the cell does not support (SI-24).
+            let fold = snap.block_archival_fold(height).map_err(store_fault)?;
             let mut txs = Vec::with_capacity(parsed.transaction_hashes.len());
             for hash in &parsed.transaction_hashes {
                 let Some(record) = snap.tx_record(hash).map_err(store_fault)? else {
                     tracing::error!(?hash, "a listed transaction has no record");
                     return Err(FactsFault::Inconsistent);
                 };
+                let id = record.location.id;
                 txs.push(ListedTx {
                     hash: *hash,
-                    body: chain_body(&snap, hash, &record)?,
+                    body: chain_body(&snap, hash, &record, || fold.shard(id).map_err(store_fault))?,
                 });
             }
             blocks.push(BlockRead { block, txs });

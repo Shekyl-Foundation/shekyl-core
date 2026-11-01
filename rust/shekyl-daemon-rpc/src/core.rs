@@ -57,8 +57,9 @@ unsafe impl Sync for CoreRpc {}
 ///
 /// Not a wire type: which form the reply shows is the request's `prune`
 /// switch (`methods::project_transactions`). The skeleton is enough for
-/// the pruned form in every state; the full form needs the good, and where
-/// it is [`ArchivalGood::Discarded`] the entry is answered `archived`.
+/// the pruned form in every state. The full form is the recomposed body
+/// when the good is held, the pruned segment alone when the record carries
+/// no good, and `archived` where the good was discarded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TxBody {
     /// The pruned segment and the three txid operands.
@@ -68,10 +69,11 @@ pub struct TxBody {
 }
 
 impl TxBody {
-    /// The body in the full form (`PDM-Q10`): whole, in the order
-    /// `shekyl_wire::TxSegments::concat` writes it, or archived with its
-    /// shard where this node discarded the good. Every full-form
-    /// projection reassembles through this one function.
+    /// The body in the full form (`PDM-Q10`). Held segments recompose in the
+    /// order `shekyl_wire::TxSegments::concat` writes. A record that carries
+    /// no good answers its pruned segment: that segment is the whole body.
+    /// A discarded good answers `archived` with its shard. Every full-form
+    /// projection goes through this one function.
     #[must_use]
     pub fn full_form(&self) -> FullForm {
         match &self.good {
@@ -86,6 +88,7 @@ impl TxBody {
                 }
                 .concat(),
             ),
+            ArchivalGood::CarriesNone => FullForm::Whole(self.skeleton.unprunable.clone()),
             ArchivalGood::Discarded { shard } => FullForm::Archived { shard: *shard },
         }
     }
@@ -99,18 +102,27 @@ pub enum FullForm {
     Archived { shard: shekyl_types::ShardId },
 }
 
-/// Whether this node holds a transaction's archival good.
+/// Whether this node holds a transaction's archival good, as the projection
+/// sees it. The store records physical presence in two states; this enum
+/// says what an absent segment means.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArchivalGood {
     /// Held: the `pqc_auths` segment (absent for a 3-part txid) and the
-    /// prunable segment, as `Transaction::write_segments` wrote them.
+    /// prunable segment, as `Transaction::write_segments` wrote them. An
+    /// empty prunable region that is still stored — a coinbase before the
+    /// range delete — is this arm, and concatenates to the pruned segment.
     Retained {
         pqc_auths: Option<Vec<u8>>,
         prunable: Vec<u8>,
     },
     /// Discarded with its shard at the archival horizon (`PDM-Q9`). The
-    /// shard is where an archiver serves it from.
+    /// record carries good, and the shard is where an archiver serves it.
     Discarded { shard: shekyl_types::ShardId },
+    /// The record carries no archival good. The pruned segment is the whole
+    /// body: a coinbase, including after the range delete removes its empty
+    /// `txs_prunable` row. Not an empty [`Self::Retained`], and not
+    /// [`Self::Discarded`].
+    CarriesNone,
 }
 
 /// One request slot's answer, read from the store.

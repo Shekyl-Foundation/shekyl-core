@@ -172,7 +172,7 @@ fn tx_record_carries_the_permanent_half_and_recomposes_the_wire_bytes() {
         assert_eq!(prunable.clone().into_wire_bytes(), segments.prunable);
         let mut wire = Vec::new();
         tx.write(&mut wire).expect("write");
-        assert_eq!(record.wire_bytes(prunable, pqc_auths), wire);
+        assert_eq!(record.wire_bytes(&prunable, pqc_auths.as_ref()), wire);
     }
     assert_eq!(
         snap.tx_record(&TxHash::from_bytes([0xee; 32]))

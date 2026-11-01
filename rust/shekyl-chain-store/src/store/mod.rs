@@ -94,6 +94,7 @@ mod admission_write;
 mod alt;
 mod alt_reads;
 mod alt_view;
+mod archival_fold;
 mod archival_reads;
 mod archival_write;
 mod at_index;
@@ -125,6 +126,7 @@ mod write;
 
 pub use alt_reads::AltEntry;
 pub use alt_view::{AltChain, AltView};
+pub use archival_fold::BlockArchivalFold;
 pub use archival_reads::{PassCount, ServedShard};
 pub use at_index::AtIndex;
 pub use bundle_queue::{QueueEntry, QueueReconciled};

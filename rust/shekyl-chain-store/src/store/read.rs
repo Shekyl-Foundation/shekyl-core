@@ -60,6 +60,7 @@ use crate::ids::TxStorageId;
 use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{BLOCK_BURN, PROPERTIES, SPENT_KEYS, TX_INDICES};
 
+use super::archival_fold::{self, BlockArchivalFold};
 use super::archival_reads::{
     self, BlockDraws, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest, PassCount,
     ServedShard, SettlementRow, SupportCount,
@@ -782,19 +783,36 @@ impl ReadSnapshot<'_> {
         tx_reads::archival_good_at(&self.txn, id).map_err(chain_reads::ReadFault::into_plain)
     }
 
-    /// **T5.** The archival shard the transaction at `location` belongs
-    /// to: `shekyl_types::shard_of` over the cumulative archival length
-    /// before it, assembled from the parent block's cell and the block's
-    /// earlier `txs_archival_len` rows (`SB-Q2`). The RPC's `archived`
-    /// slot state names this shard (`PDM-Q10`).
+    /// The checked archival fold of one block: each issued id's cumulative
+    /// length before it, held to the block's cell (SI-13, SI-24).
+    /// [`tx_shard`](Self::tx_shard) is one id of this fold, and a block
+    /// reply builds it once (`SB-Q2`).
     ///
     /// # Errors
     ///
-    /// A missing parent cell is **SI-7**; an id below its block's first id
-    /// is **SI-9**; an overflowing fold is **SI-8**; engine errors pass
+    /// A missing block cell is **SI-7**. The cell below its parent is
+    /// **SI-13**. The block's length rows disagreeing with its cell is
+    /// **SI-24**. An overflowing fold is **SI-8**. Engine errors pass
     /// through.
+    pub fn block_archival_fold(
+        &self,
+        height: BlockHeight,
+    ) -> Result<BlockArchivalFold, StoreError> {
+        archival_fold::fold_of(&self.txn, height).map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **T5.** The archival shard of the transaction at `location`:
+    /// `shekyl_types::shard_of` over the length recorded before it, from
+    /// [`block_archival_fold`](Self::block_archival_fold). The RPC's
+    /// `archived` slot names this shard (`PDM-Q10`, `SB-Q2`).
+    ///
+    /// # Errors
+    ///
+    /// Those of [`block_archival_fold`](Self::block_archival_fold), and
+    /// **SI-9** when `id` is outside the ids its block issued.
     pub fn tx_shard(&self, location: TxLocation) -> Result<ShardId, StoreError> {
-        tx_reads::shard_at(&self.txn, location).map_err(chain_reads::ReadFault::into_plain)
+        self.block_archival_fold(location.height)?
+            .shard(location.id)
     }
 
     /// **T4b.** Whether the transaction at `id` is in the **archival shard
@@ -1143,7 +1161,7 @@ impl ReadSnapshot<'_> {
                     return Err(corrupt("txs_pruned", "a recorded id is beyond the count"))
                 }
             };
-            let bytes = record.wire_bytes(prunable, pqc_auths);
+            let bytes = record.wire_bytes(&prunable, pqc_auths.as_ref());
             let tx = shekyl_wire::Transaction::read(&mut bytes.as_slice())
                 .map_err(|_| corrupt("txs_pruned", "the reassembled transaction does not parse"))?;
             transactions.push(tx);
