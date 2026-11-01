@@ -1126,6 +1126,18 @@ clearnet off; shekyl-dev `data/tsr-acceptance/2026-10-30-linux-vm-clock/`):
   cadence: it was scheduled on the clock that ran ahead. The probe
   follows rounds, so the inbound facet rested on the evidence from before
   the jump until then; the next probe arrived.
+- **Set back a day while Running, with the probe at the lifetime,
+  2026-10-31** (#1232 at `d1501ac1a`; shekyl-dev
+  `data/tsr-acceptance/2026-10-31-linux-vm-overdue/`): the jump's probe ran
+  18 s after Tor reported the jump and arrived. The lifetime check fired 3 h
+  after the last upload, and its probe arrived too: a fresh client on a
+  correct clock still connected at 3 h 15 min and got `0xF0` (not found)
+  from 3 h 27 min to the end of the watch, the directories' 30-minute
+  cleanup (§4.5, "Overdue"). That is why the check publishes the onion
+  again instead of probing. From 3 h 27 min the onion stayed unreachable to
+  that client after two uploads made on the clock a day behind, while every
+  probe this node ran arrived: the cause is the clock investigation's (§4.5,
+  "The directory check").
 - **Seen in the stop path, not this round's:** the C++ remnant's
   teardown throws `std::out_of_range` from `on_connection_close` on most
   stops, caught; two stops never exited, one 23 s after a Tor respawn
