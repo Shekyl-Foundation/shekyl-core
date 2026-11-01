@@ -84,5 +84,5 @@ pub use ready::{
 pub use safecookie::{verify_server_hash, ControlCookie, ServerVerified};
 pub use stream::{parse_stream_event, CircId, StreamEvent, StreamStatus};
 pub use traffic::parse_traffic_read;
-pub use upload_rounds::{RoundMark, UploadRounds};
+pub use upload_rounds::{RoundMark, UploadRounds, UploadedTo};
 pub use vanguards::{HsLayerPins, RelayFingerprint, NUM_LAYER2_GUARDS, NUM_LAYER3_GUARDS};
