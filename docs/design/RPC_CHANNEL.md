@@ -318,10 +318,12 @@ type and the minimal required-privilege list (RT-P8 confirms both).
   manager runs a foreground process; the SCM kills a registered process
   that never connects to its dispatcher (error 1053). Record:
   [`WINDOWS_SERVICE_RULING_2026-10-13.md`](../completed/WINDOWS_SERVICE_RULING_2026-10-13.md).
-- **The process entry moves to Rust** in the daemon-configuration
-  cutover (`DAEMON_CONFIG_CUTOVER.md`, PR #1066): the SCM dispatcher must
-  run at process entry, and `main()` is C++ until then. RT-W14 depends on
-  it.
+- **The process entry is Rust's** (`DAEMON_CONFIG_CUTOVER.md` DC-Q19,
+  PR #1254, 2026-11-01): `shekyld` is a rustc-linked binary whose `main`
+  runs through `std::rt::lang_start`, so the SCM dispatcher RT-W14 needs
+  has its process entry. *Records-was:* the daemon-configuration cutover
+  (PR #1066, #1088) kept a C++ `main()` making one call into Rust
+  (DC-Q13 (b)), and RT-W14 waited on this.
 - **Service mode is new Rust work, not a revival.** The inherited daemonizer
   was deleted in V3.1 and its five flags retired
   (lines 74 to 78 of `src/common/removed_flags.cpp` at `d26148535e`); none of

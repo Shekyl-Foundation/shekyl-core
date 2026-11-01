@@ -156,7 +156,13 @@ of its own, for the same reason as the negative one.
 
 ## 7. Decisions the implementation takes inside the brief
 
-- **Where the entry lives.** The start and stop logic is a new safe crate,
+- **Where the entry lives.** *SUPERSEDED 2026-11-01 (the Rust-binary PR,
+  #1254, `DAEMON_CONFIG_CUTOVER.md` DC-Q19): `shekyld` is a rustc-linked
+  binary (`rust/shekyld`); `shekyl_daemon_main`, `ShekylDaemonEntry`,
+  `entry.rs`, `from_process_entry` and `shekyl-daemon-image` are deleted,
+  and the C++ remnant is reached through `shekyl_remnant_run` /
+  `shekyl_remnant_stop`. The bullet below records the cutover as it
+  shipped in #1088.* The start and stop logic is a new safe crate,
   `shekyl-daemon`, over `shekyl-daemon-config`, `shekyl-logging`,
   `shekyl-ffi`'s Rust surface and `shekyl-runtime`. Its one C symbol,
   `shekyl_daemon_main`, is defined there and carried into the archive by

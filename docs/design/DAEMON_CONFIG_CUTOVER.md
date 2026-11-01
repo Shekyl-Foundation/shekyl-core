@@ -1,6 +1,6 @@
 # Daemon configuration cutover — the option surface moves to Rust
 
-**Status: OPEN — implemented and merged (#1088, merge `09402ea19`, 2026-10-17); open residue only: the FOLLOWUPS rows this brief owns (§2.2 step 8's parked Tor connector, §3's SOCKS credentials, §5.1's GUI stop and mainnet listener, §9's utilities) and the §10 carries.** Every DC-Q ruled, the grammar's Part B folded in, PR-3 merged. Rule 26 is cited.
+**Status: OPEN — implemented and merged (#1088, merge `09402ea19`, 2026-10-17); `shekyld` a Rust binary in the Rust-binary PR (#1254, 2026-11-01: DC-Q13 amended, DC-Q19…DC-Q24 ruled, DC-F15…DC-F27 established); open residue only: the FOLLOWUPS rows this brief owns (§2.2 step 8's parked Tor connector, §3's SOCKS credentials, §5.1's GUI stop and mainnet listener, §9's utilities), the §10 carries, and the Rust-binary PR's items for Rick (§10.1).** Every DC-Q ruled, the grammar's Part B folded in, PR-3 merged. Rule 26 is cited.
 The input grammar is ruled and merged: Part A (#1067, merge `7cf70b7052`)
 and Part B (#1068, merge `cd1d0cc8ed`). Its rules are the cursor rule
 [`83-input-grammar`](../../.cursor/rules/83-input-grammar.mdc) and the
@@ -57,6 +57,13 @@ grammar's shared crate) and `shekyl-daemon-config` (IG-Q13).
 | Inbound cap deleted (Rick, 2026-10-14; `INPUT_GRAMMAR.md` IG-Q40) | `p2p-inbound-max` is deleted and `in-peers` is a REJECTED row (IG-10) whose reopener is a byte quota for metered links (§8). The Rust descriptor safety bound (`InboundCeiling`) is the only inbound bound and is unchanged; the daemon does not raise its own descriptor limit. The unbounded cases (Windows, an unlimited or unreadable limit, an unreadable count, headroom past the counter) behave as today and stay PWD-B1's (the FOLLOWUPS row on a Windows node's inbound bound); their warnings name nothing the operator can set. Adversarial per-session cost stays with PWD-B12 and PWD-B1. The runtime set is four rows, and a set builds then applies, with no check step (§2.7). A refused inbound connection is tested against the real bound, on Unix only (§5.2). The benchmark scripts take `clearnet-listen none` and the Foundation configurations in `shekyl-dev` drop `in-peers` in the cutover (§5.1). PWD-I7 closes with this ruling | §2.7, §4.2, §5, §6, §8 |
 | The Tor binary (Rick, 2026-10-15; TSR-F8, [`TOR_SUPERVISOR.md`](TOR_SUPERVISOR.md), merged #1077; `INPUT_GRAMMAR.md` IG-Q41) | `SHEKYL_TOR_BINARY` becomes the config key `tor-file`, a path accepted only with `tor = managed`. Its default is today's location: `tor/tor` beside the running executable, else the version-exact bundle directory under `/opt/shekyl/` on Unix. A set value is verified against the pin exactly as a discovered binary is, with no fall-through to discovery (`discover_and_verify_at`). The environment tier leaves the shared discovery function, so the wallet loses it too and keeps its settings-file path (IG-13) | §3, §4.2, §5.3 |
 | The cutover's residue (Rick, 2026-10-17, after #1088) | (1) Implement DC-Q7: SOCKS credentials are carried on the dial through `shekyl-socks`'s RFC 1929 sub-negotiation (#1112). The daemon sets no isolation key and dials onions only (personas live in the wallet's own Tor, PWD-E9), so a credential authenticates to the operator's own proxy and displaces nothing. Given as a pair or refused, file only, shown as `set`, never in the snapshot, with a live test through an authenticating SOCKS5 proxy. (2) Regtest keeps `tor = managed` (R3); every harness passes `--tor off`. (3) The inbound-cost bench runs with `--tor off`. (4) No `db-sync-mode` row (IG-Q4); the DRS lane decides whether its bench measures the one mode or retires with LMDB. (5) The four `shekyl_daemon_tor_*` exports, their `shekyl_ffi.h` declarations, `daemon_tor_ffi.rs` and `blocking.rs` are deleted ([`TOR_SUPERVISOR.md`](TOR_SUPERVISOR.md) §9; Rick, 2026-10-17). (6) Step 8's bounded Tor wait is acceptable on testnet until `TSR-F1`, provided a bootstrap that does not finish never refuses the start and the node proceeds on the connectors it has. (7) A bounded flush in `shekyl-logging` (#1112), draining until the queue is empty or a deadline passes, called last on the stop path after the lock release and by the logging tests before they read output. (8) `wallet.py`'s `start_mining` is deleted by the RPC lane. (9) The utilities' reach to the service-mode store waits on RT-W14 and the redb-cutover utilities rewrite (FOLLOWUPS). Items 1 and 7 are this lane's next PR | §2.2, §2.5, §3, §5.1 |
+| DC-Q13, amended (Rick, 2026-11-01; the Rust-binary PR, #1254) | (b) is superseded by DC-Q19: rustc links `shekyld` and Rust owns `main` through `std::rt::lang_start`; the C++ remnant is the callee, reached through a plain-Rust `Remnant { run, stop }` pair (`rust/shekyl-daemon/src/remnant.rs`) bound to the C++ exports `shekyl_remnant_run(const ShekylDaemonSnapshot*) noexcept` and `shekyl_remnant_stop() noexcept` (`src/daemon/daemon.cpp`, declared in `daemon.h`). The rest of DC-Q13 stands: the panic hook, one signal owner, `noexcept` and exception-catching at the boundary, `run`'s status as the exit status | §2.2 |
+| DC-Q19 (Rick, 2026-11-01) | `shekyld` is a Rust binary. `rust/shekyld` is a `[[bin]]` crate whose `main` collects `std::env::args_os` and calls `shekyl_daemon::main` with the remnant pair. The C++ `main` (`src/daemon/main.cpp`), the `ShekylDaemonEntry` `repr(C)` struct, `shekyl_daemon_main`, the entry layout assertion and its unit test, and `ArgumentVector::from_process_entry` are deleted (DC-F15, DC-F16). `std::env::args_os` is the daemon's argument vector on every target, the stack-overflow guard and the `SIGPIPE` disposition are `lang_start`'s, and RT-16's SCM dispatcher (RT-W14) has the process entry it needs. The daemon image (`rust/shekyl-daemon-image`) is retired with the C++ executable it existed for: `shard_view.rs` moves into `rust/shekyld` intact, `SHEKYL_FFI_LINK_LIBS` is plain `shekyl_ffi` (DC-F26) | §2.1, §2.2, §2.9, §4.2 |
+| DC-Q20 (Rick, 2026-11-01) | One home for the build identity. `cmake/Version.cmake` owns the version, its tag, `SHEKYL_VERSION_IS_RELEASE` and `SHEKYL_RELEASE_NAME` (a literal in `src/version.cpp.in` until now), and passes them to every cargo invocation; the leaf crate `rust/shekyl-version` reads them with `option_env!` (`VERSION_FULL`, `RELEASE_NAME`, `IS_RELEASE`; absent reads `-unknown` and not a release, never a tagged build by default) and holds `PROTOCOL_VERSION` as a Rust constant. `shekyld`, `shekyl-cli` and `shekyl-wallet-rpc` read the crate. `SHEKYL_PROTOCOL_VERSION` is deleted from `src/cryptonote_config.h` (DC-F24) | §2.2 step 2, §4.2 |
+| DC-Q21 (Rick, 2026-11-01) | The hardening is the binary's, and it is read off the binary. (1) `shekyl_ffi::platform::harden_process` is the first statement of `shekyl_daemon::main`, before an argument is read: `RLIMIT_CORE` zero on both bounds on every Unix, `PR_SET_DUMPABLE` zero on Linux, `SetErrorMode(SEM_NOGPFAULTERRORBOX \| SEM_FAILCRITICALERRORS \| SEM_NOOPENFILEERRORBOX)` on Windows; a process that cannot apply it says so on standard error and exits 1 without starting (DC-F21). Windows Error Reporting's dump collection is a per-machine setting, so the installer writes `ExcludedApplications\shekyld.exe` and the uninstaller removes it (`contrib/packaging/windows/shekyl.nsi`). (2) The link hardening of record — the root `CMakeLists.txt`'s `LD_SECURITY_FLAGS` and `STATIC_FLAGS` — reaches `shekyld` through `corrosion_add_target_local_rustflags` (DC-F23). (3) `/GS-` leaves the MSVC definitions: the compiler's stack-buffer checks stay on in every C++ object the Rust binary links (DC-F22). (4) `scripts/ci/check_binary_hardening.sh` reads the staged binaries per object format — ELF: PIE, `GNU_STACK` without `E`, `GNU_RELRO`, `BIND_NOW`, no `RPATH`/`RUNPATH`; PE: PE32+ with `DYNAMIC_BASE`, `HIGH_ENTROPY_VA` and `NX_COMPAT`; Mach-O: `MH_PIE`, no `MH_ALLOW_STACK_EXECUTION`, no `LC_RPATH` — on `shekyld`, `shekyl-cli` and `shekyl-wallet-rpc`, in `build.yml` (Ubuntu, macOS, MSVC) and on every `depends.yml` leg with that leg's own tools (rule 47: a format no tool can parse fails) | §2.2 step 1, §4.2 |
+| DC-Q22 (Rick, 2026-11-01) | The remnant prepares nothing. `shekyl_remnant_run` loses every start chore inherited from the C++ `main` (DC-F18): `tools::on_startup` (its crash handler, locale probe, glibc 2.25 warning and OpenSSL init), the FAT32 warning, `create_directories_if_necessary` on a directory Rust has already created and locked, the banner the IG-14 announcements replaced, and the tracing-forwarder install, which is Rust's: `shekyl_logging::install_tracing_forwarder`, called by `run` right after `init` succeeds (DC-F19). What remains of `run` checks the snapshot's field count, runs the client command or constructs `Daemon`. The `STACK_TRACE` `__cxa_throw` hook is not in `shekyld` in any build: `common/stack_trace.cpp` is its own library, `stack_trace`, linked only by `enable_stack_trace`'s C++ executables and by `unit_tests` (DC-F27). Rust is the one owner of the process's signals, its panic and its crash output | §2.2, §4.2 |
+| DC-Q23 (Rick, 2026-11-01) | Corrosion is the CMake-to-cargo bridge: vendored as a submodule at `external/corrosion`, pinned to v0.6.1 (`1499b14`, MIT), `add_subdirectory` only and never `FetchContent` (gitian and depends build offline). `corrosion_import_crate` makes `shekyld` an imported CMake target built by `cargo-build_shekyld` and staged into `RUNTIME_OUTPUT_DIRECTORY`; `src/daemon` builds the static library `shekyld_remnant`, and `shekyl_rust_link_cxx_closure` (`cmake/BuildRust.cmake`) walks its link libraries into local link arguments, excluding `shekyl_ffi` so the single Rust image holds, in one `--start-group … --end-group` with `--undefined-glob=shekyl_*` on GNU-ld targets (DC-F20). Flags reach rustc only through `corrosion_add_target_local_rustflags`, never `corrosion_add_target_rustflags`, which sets `RUSTFLAGS` and replaces `rust/.cargo/config.toml`'s `+crt-static` on the MSVC targets. `cmake_minimum_required` is 3.22. Temporary: Corrosion is retired with the last C++ archive | §2.2, §4.2 |
+| DC-Q24 (Rick, 2026-11-01) | A snapshot field with no C++ reader is deleted, and the gate compares the structure against its readers rather than pinning a number. `fixed_difficulty`, `txpool_weight_max`, `mine_address` (with `ShekylMineAddress`, `MineOwned` and the boxed header in `Leased`) and `mine_threads` are deleted from `shekyl_ffi.h` and `daemon_snapshot_ffi.rs`; six fields remain, pinned on both sides. `scripts/ci/check_snapshot_readers.py` finds a read of every member under `src/` through a variable of the snapshot's type and fails on a member without one unless its `EXEMPT` table names it with the reason; wired into `ffi-signatures.yml`. `data_dir` has no C++ reader either (DC-F25) and is not in this ruling's list: it stays, named in `EXEMPT`, until Rick rules on it | §2.9 |
 
 ### 1.2 Open before implementation
 
@@ -74,8 +81,9 @@ supervisor, not of this cutover.
 (IG-15) and owns precedence, the per-network file, the permission checks,
 the lock, the marker, the effective-configuration line, and the typed
 configuration: one section per Rust owner (§3). The composition root is the
-daemon's Rust image, which already names itself so
-([`rust/shekyl-daemon-image/src/lib.rs:30-36`](../../rust/shekyl-daemon-image/src/lib.rs)).
+binary crate `rust/shekyld` (DC-Q19; until the Rust-binary PR it was the
+daemon image, `rust/shekyl-daemon-image`, the staticlib the C++ executable
+linked, retired with that executable).
 The parse result is held in Rust for the life of the process. Each Rust
 owner takes its section when it is constructed and holds it; nothing
 re-reads configuration later.
@@ -88,17 +96,27 @@ exist, and an offline node is the product of the two being off (IG-Q3).
 
 What crosses the FFI after the cutover, and nothing else:
 
-- Rust to C++: the remnant's entry pair, `run(snapshot)` and `stop()`
-  (DC-Q13), and the one runtime request that still reaches the miner
-  (§2.7).
+- Rust to C++: the remnant's entry pair, `shekyl_remnant_run(snapshot)`
+  and `shekyl_remnant_stop()` (DC-Q13 as amended, DC-Q19), and the one
+  runtime request that still reaches the miner (§2.7).
 - C++ to Rust: the core handle, once, to the RPC start (§2.3); the core's
   tip, published as it changes (`shekyl_core_publish_tip`, `rust/shekyl-ffi/src/dialer_ffi.rs:398`,
   called from `src/cryptonote_core/blockchain.cpp`); chain facts for the
   notify runner (§2.10).
 
-### 2.2 The start sequence (DC-Q13)
+### 2.2 The start sequence (DC-Q13, amended by DC-Q19)
 
-1. `main()` calls `shekyl_daemon_main(entry, argc, argv)`; Rust owns the process from here.
+1. `shekyld`'s `main` is Rust's (`rust/shekyld/src/main.rs`, DC-Q19):
+   rustc's entry runs `std::rt::lang_start`, which collects the argument
+   vector, installs the stack-overflow guard and the `SIGPIPE` disposition,
+   and `main` calls `shekyl_daemon::main` with the remnant pair. Rust owns
+   the process from its first instruction. *Records-was (to 2026-11-01):*
+   CMake built a C++ executable whose `main()` called
+   `shekyl_daemon_main(entry, argc, argv)` (DC-Q13 (b)).
+   **The hardening comes first** (DC-Q21): before an argument is read,
+   `shekyl_ffi::platform::harden_process` zeroes `RLIMIT_CORE`, clears
+   `PR_SET_DUMPABLE` on Linux and sets Windows' error mode; a process that
+   cannot apply it says so on standard error and exits 1.
    **A panic is never silent.** The workspace builds with `panic = "abort"`
    in both profiles (`rust/Cargo.toml`, lines 671 to 676), so a panic cannot
    be caught and turned into an exit status, and an unwind across the C++
@@ -133,31 +151,29 @@ What crosses the FFI after the cutover, and nothing else:
    resolves every path (§2.5), reads the ban file, and constructs the typed
    sections. `--help` and `--version` are answered here. A refusal renders
    through IG-11 and exits with status 2; nothing below runs.
-   **The argument vector (2026-10-26).** The value is `ArgumentVector`
-   (`rust/shekyl-ffi/src/argument_vector.rs`). On Unix the pointers are
-   that vector. The daemon image is a staticlib, and `std::env::args_os`
-   is filled only when Rust's `lang_start` ran: glibc does that through an
-   `.init_array` constructor, and FreeBSD, musl and the other non-glibc
-   Unix targets do not. Reading `args_os` there ignored `--network`,
-   `--data-dir`, `--help` and an unknown name, and the daemon started on
-   the mainnet defaults. The count is the length. A null `argv`,
-   `argc < 1`, or a null slot exits 1 and does not start: a hole is not a
-   shorter command line. Windows reads `GetCommandLineW` and does not read
-   the pointers; a C `main` argv there is the active code page. The
-   snapshot export decodes the caller's narrow argv instead (Unix bytes,
-   Windows active code page): that list is the importer's and the test
-   binary's, not the process command line. `from_os_strings` is the
-   constructor the Rust process entry will call.
-   **Rust process entry — OPEN.** Grammar §0 (2026-10-13) moves `shekyld`'s
-   `main` to Rust. DC-Q13 (b) kept CMake's executable and one call in, so
-   `lang_start` still does not run: the stack-overflow guard is not
-   installed, and `args_os` does not agree with the process argv on every
-   target. RT-16's SCM dispatcher also needs that process entry. The
-   carrier is the FOLLOWUPS row. Falsify by a rustc-emitted `shekyld` whose
-   entry calls `lang_start`, with DC-Q13 amended.
+   **The argument vector.** The value is `ArgumentVector`
+   (`rust/shekyl-ffi/src/argument_vector.rs`), built by `from_os_strings`
+   from `std::env::args_os`, which `lang_start` filled on every target
+   (DC-Q19). The snapshot export decodes the caller's narrow argv instead
+   (`from_narrow_argv`: Unix bytes, Windows active code page): that list is
+   the importer's and the test binary's, not the process command line.
+   *Records-was (2026-10-26 to 2026-11-01, DC-F16):* with a C++ `main`,
+   `lang_start` did not run, and `args_os` was filled only where glibc's
+   `.init_array` constructor did it; on FreeBSD, musl and the other
+   non-glibc Unix targets reading it ignored `--network`, `--data-dir`,
+   `--help` and an unknown name, and the daemon started on the mainnet
+   defaults. `from_process_entry` took the C `argc`/`argv` on Unix and
+   `GetCommandLineW` on Windows instead; it is deleted with that `main`.
+   **Rust process entry — RULED AND BUILT (DC-Q19, 2026-11-01).** Grammar
+   §0 (2026-10-13) moved `shekyld`'s `main` to Rust; DC-Q13 (b) had kept
+   CMake's executable and one call in, so `lang_start` did not run (the
+   stack-overflow guard was not installed, `args_os` did not agree with the
+   process argv on every target), and the FOLLOWUPS row carried it. The
+   Rust-binary PR (#1254) built it: the binary's entry calls `lang_start`,
+   and RT-16's SCM dispatcher has its process entry.
    **Client mode.** When positional command words are given, `shekyld` is a
    client of a daemon that is already running, as the remnant's client branch
-   in `src/daemon/main.cpp` is
+   in `shekyl_remnant_run` (`src/daemon/daemon.cpp`) is
    today: it takes no lock, checks no marker, creates no data directory,
    writes no log file and makes no announcement. Rust logs to standard
    error only, fills a snapshot holding the words, the network and the
@@ -219,7 +235,10 @@ What crosses the FFI after the cutover, and nothing else:
    [`TOR_SUPERVISOR.md`](TOR_SUPERVISOR.md) (merged #1077): §4.3 the state
    machine, §4.7 the launch. Nothing that serves peers or clients starts yet.
 7. Rust fills the snapshot (§2.9) and calls the remnant's `run(snapshot)`
-   on a thread of its own. C++ constructs core, which publishes its tip
+   on a thread of its own, `shekyld-run`, whose 2 MiB stack Rust states
+   so `RUST_MIN_STACK` cannot change it (DC-F21). The remnant prepares
+   nothing of its own (DC-Q22): it checks the snapshot's field count and
+   constructs. C++ constructs core, which publishes its tip
    (`shekyl_core_publish_tip`), then the protocol handler and what remains
    of `net_node`, and calls the RPC start once with the core handle (§2.3).
 8. Only then does Rust start the zone host, its listeners and the dialer,
@@ -251,7 +270,7 @@ What crosses the FFI after the cutover, and nothing else:
 ([`src/daemon/daemon.cpp:272`](../../src/daemon/daemon.cpp)) is deleted:
 one process has one signal owner. The orchestration in
 `src/daemon/main.cpp` and `src/daemon/daemon.cpp` is replaced by the entry
-pair.
+pair, and `main.cpp` itself is deleted with the Rust binary (DC-Q19).
 
 ### 2.3 RPC: one start call
 
@@ -541,12 +560,15 @@ construct core from (`shekyl_daemon_snapshot_parse` / `_free`, through
 `shekyl_daemon_config::load`, the one parse the start also runs; rule 26
 B2) are `rust/shekyl-ffi/src/daemon_snapshot_ffi.rs`, in the ordinary
 library. A binary that only constructs core from a snapshot links
-`libshekyl_ffi.a` and no daemon image, so none of the daemon RPC's
-imports of the C++ `rpc` library reach its link; MinGW, whose linker
-keeps unreferenced sections, refused that link otherwise (Rick,
-2026-10-19). `shekyl-daemon` keeps the entry ABI (`shekyl_daemon_main`,
-`shekyl_daemon_request_stop`) and builds the start's snapshot from the
-same `SnapshotData`.
+`libshekyl_ffi.a`, the one Rust archive a C++ binary links since the
+daemon image's retirement (DC-F26). *Records-was (2026-10-19):* with the
+export in the daemon image, the daemon RPC's imports of the C++ `rpc`
+library reached those binaries' links, and MinGW, whose linker keeps
+unreferenced sections, refused them (Rick, 2026-10-19). `shekyl-daemon`
+builds the start's snapshot from the same `SnapshotData`; its one C
+export is `shekyl_daemon_request_stop`, the remnant's way to ask for a
+stop. The entry ABI (`shekyl_daemon_main`, `ShekylDaemonEntry`) went with
+the C++ `main` (DC-Q19).
 
 The relay's identity and the descriptors reserved for the inbound ceiling
 are read inside Rust (the zone the remnant opens, and the seam bind). They
@@ -676,6 +698,19 @@ the base and zero after (rule 47). A literal pipe in a pattern is `\|`.
 | C++ tests of the deleted mechanism | lines 54 to 120 of `tests/unit_tests/command_line.cpp` at `d26148535e`, `tests/unit_tests/rpc_args_daemon_surface.cpp` | deleted; `IsYes` stays |
 | C++ tests that build a `variables_map` | `rg -n -e 'variables_map' tests/unit_tests/node_server.cpp tests/core_tests/chaingen.h tests/core_tests/chaingen_main.cpp tests/unit_tests/sync_orphan_arm.cpp tests/unit_tests/main.cpp tests/performance_tests/main.cpp` → more than 10 | 0; they construct the remnant from a snapshot built by the real Rust parse of a test argument list (rule 26 B2) |
 | the disclose-early rename's acceptance (IG-Q20) | `rg -n -e 'small_network' -e 'SmallNetwork' -e 'SMALL_NETWORK' -e 'small-network' src rust` → 0 at `d26148535e` | no match in `src` or `rust`, the grammar's acceptance (`INPUT_GRAMMAR.md` IG-Q20) |
+
+The Rust-binary PR (#1254, DC-Q19…DC-Q24) adds these rows. "Before" is
+observed at that PR's base, `814899581c`.
+
+| Deleted | Before | After |
+| --- | --- | --- |
+| the C++ `main` and the entry ABI (DC-Q19, DC-F15, DC-F16) | `src/daemon/main.cpp` exists; `rg -n -e 'ShekylDaemonEntry' -e 'shekyl_daemon_main' -e 'from_process_entry' src rust scripts` → 50 | the file gone; 0, save `scripts/ci/ffi_layout_gate.cpp`'s record of the gate's own history, dated |
+| the daemon image (DC-F26) | `rust/shekyl-daemon-image` exists; `rg -n -e 'SHEKYL_RUST_IMAGE_DAEMON' cmake src` → 4 | the crate gone, `shard_view.rs` in `rust/shekyld`; 0 |
+| the remnant's start chores (DC-Q22, DC-F18, DC-F19) | `rg -n -e 'on_startup' -e 'create_directories_if_necessary' -e 'install_tracing_forwarder' -e 'PR_SET_DUMPABLE' src/daemon` → 4 | 0; the forwarder is installed by `shekyl_daemon::run` and the hardening by `shekyl_ffi::platform::harden_process` |
+| the snapshot fields with no C++ reader (DC-Q24, DC-F25) | `rg -n -e 'fixed_difficulty' -e 'txpool_weight_max' -e 'mine_threads' -e 'ShekylMineAddress' src/shekyl/shekyl_ffi.h rust/shekyl-ffi/src/daemon_snapshot_ffi.rs` → 24 | 0; six fields, and `check_snapshot_readers.py` holds the structure to its readers |
+| `/GS-` (DC-Q21, DC-F22) | `rg -n -F -e '/GS-' CMakeLists.txt` → 1, in the MSVC definitions | 1, the comment that records why it is absent |
+| `SHEKYL_PROTOCOL_VERSION` (DC-Q20, DC-F24) | `rg -n -e 'SHEKYL_PROTOCOL_VERSION' src` → 3 | 0; `shekyl_version::PROTOCOL_VERSION` |
+| the `__cxa_throw` hook in `shekyld` (DC-Q22, DC-F27) | `stack_trace.cpp` is in `common_sources` (`src/common/CMakeLists.txt:45`), so every non-STATIC build of every binary that links `common` carries the hook | `stack_trace` is its own library, linked by `enable_stack_trace`'s C++ executables and `unit_tests`; `rg -n -e 'stack_trace.cpp' src/common/CMakeLists.txt` → 1, the library's own definition |
 
 ---
 
@@ -933,9 +968,25 @@ chain-sync lanes do not touch the option surface.
 | the inherited default of `rpc-connections-max` (IG-Q12) | RT-O9.4, [`RPC_CHANNEL.md`](RPC_CHANNEL.md) |
 | the `removed_flags` shim sunset | this brief §4; the row leaves with the files |
 
+### 10.1 Items for Rick from the Rust-binary PR (#1254, 2026-11-01) — OPEN
+
+Deletions the brief did not enumerate are not made; each is raised in
+the PR for a ruling (rule 15's "while we're here", the brief's §5). None
+is a deferral: nothing was scoped and shed. Each closes by a ruling
+recorded in §1.1 and an edit to this list in the same change.
+
+| Item | What was found | Options |
+| --- | --- | --- |
+| `data_dir` in the snapshot (DC-F25) | no C++ reader; the chain is the Rust store | delete and drop the `EXEMPT` row, or name the reader it is kept for |
+| `dev-difficulty`, `txpool-weight-max`, `mine-threads` (DC-F25) | grammar rows with no reader in either language since their snapshot fields went | delete the rows (REJECTED or gone, IG-10), or name their Rust readers |
+| `shekyl_log_install_tracing_forwarder` (DC-F19) | the C export has no C++ caller; its Rust function is the one in use | delete the export and its C declaration, or keep it as the test binaries' pin |
+| `tools::setup_crash_dump` (`src/common/util.cpp`, DC-F27) | dead in every binary now that `on_startup` is gone | delete |
+| `src/common/stack_trace.cpp` | lives on as the `stack_trace` library for `enable_stack_trace`'s C++ executables and `unit_tests`; no shipped binary links it | keep for the C++ utilities' lifetime, or delete with `enable_stack_trace` |
+| DC-F26's fold | `shekyl-ffi` re-exports `shekyl-daemon-rpc` so `unit_tests` keeps `shekyl_daemon_ctl_*` | accept, or rule a narrower home for those exports (two lines to revert) |
+
 ---
 
-## 11. Findings established at source (DC-F1…DC-F14)
+## 11. Findings established at source (DC-F1…DC-F27)
 
 | Id | Finding | Route |
 | --- | --- | --- |
@@ -953,6 +1004,25 @@ chain-sync lanes do not touch the option surface.
 | DC-F14 | `/pop_blocks` is not limited to regtest today. Neither its handler ([`src/rpc/core_rpc_server.cpp`](../../src/rpc/core_rpc_server.cpp)) nor the chain code checks the network, and the route is only `AdminOnly` ([`rust/shekyl-daemon-rpc/src/server.rs:349-351`](../../rust/shekyl-daemon-rpc/src/server.rs)), so a caller on the loopback admin listener can rewind a mainnet chain; the harness comment calling it "FAKECHAIN-gated" ([`rust/shekyl-engine-core/src/engine/regtest_e2e.rs:771`](../../rust/shekyl-engine-core/src/engine/regtest_e2e.rs)) is false | closed by RT-W10 step 1 (`RPC_CHANNEL.md` §6.4): the route is an armed test lever, served only with `--dev-rpc`, and the harness comment names it so |
 | DC-F13 | On Windows a run-as-user daemon is terminated, not stopped, by every console event but Ctrl-C and Ctrl-Break: the handler logs "Exiting without saving" and returns `FALSE` for window close, logoff and shutdown ([`src/common/util.h:193-201`](../../src/common/util.h)), so RT-16's "stops at logout" does not hold today. Low severity: the stores are transactional and Tor exits through `TAKEOWNERSHIP` | absorbed: one stop path for every signal, console event and SCM control (§2.2 step 9) |
 | DC-F12 | The first notify command switches child reaping off for the whole process. `tools::spawn` sets `signal(SIGCHLD, SIG_IGN)` after a spawn it does not wait for (line 124 of `src/common/spawn.cpp` at `d26148535e`); from then on the kernel reaps every child, the managed Tor included, which the Rust side waits on ([`rust/shekyl-tor-control-client/src/control/actor.rs:616`](../../rust/shekyl-tor-control-client/src/control/actor.rs), [`:1011`](../../rust/shekyl-tor-control-client/src/control/actor.rs)). Under tokio 1.51.0 on Linux the pidfd reaper's wait then fails with `ECHILD` instead of an exit status; on macOS and FreeBSD the `SIGCHLD` handler tokio relies on is overwritten and the wait never completes | absorbed: the Rust runner reaps its own children and never changes a signal disposition (§2.10); pre-flight demonstrates it (§9) |
+
+DC-F15…DC-F25 are the Rust-binary brief's (Rick, 2026-11-01); DC-F26 and
+DC-F27 were made in that PR's work and fixed in it.
+
+| Id | Finding | Route |
+| --- | --- | --- |
+| DC-F15 | The entry ABI grew a field per lane. `ShekylDaemonEntry` was a `repr(C)` struct the C++ `main` filled and `shekyl_daemon_main` read, with a layout assertion and a unit test pinning it; each lane that needed the entry to carry something added a member, so the C++ `main` was still a parser of a kind, and the layout gate's own history records a field typed wrong (`scripts/ci/ffi_layout_gate.cpp`) | absorbed by DC-Q19: the struct, its gate and its test are deleted with the C++ `main`; the remnant is reached by a plain-Rust pair |
+| DC-F16 | `std::rt::lang_start` never ran. With a C++ `main` the stack-overflow guard was not installed, the `SIGPIPE` disposition was the C runtime's, and `std::env::args_os` was filled only where glibc's `.init_array` constructor did it; `from_process_entry` carried the C argv around the gap, and the §2.2 paragraph of 2026-10-26 records the targets where reading `args_os` started the daemon on the mainnet defaults | absorbed by DC-Q19 |
+| DC-F17 | A second owner of crash output. The C++ `main` called `tools::on_startup`, whose crash handler is `STACK_TRACE`-only (`src/common/util.cpp`), and the C++ executable was built by `shekyl_add_executable`, which attaches `--wrap=__cxa_throw` under `STACK_TRACE`: a C++ throw could write a `[stacktrace]` dump to standard error past the Rust log sink, against DC-Q13's one owner. *As posed:* the remnant, built with `monero_add_library` and not `shekyl_add_executable`, carries neither, so the Rust binary has one owner by construction. *Premise refuted by DC-F27 (2026-11-01):* the link flag was one path; `stack_trace.cpp`'s membership in `libcommon` was another, and the Rust `shekyld` had the hook through it | the owner is one after DC-F27's fix; `on_startup` is gone (DC-Q22) |
+| DC-F18 | The remnant's start chores were the C++ `main`'s, kept past their reason: `tools::on_startup` (crash handler, locale probe, glibc 2.25 warning, an OpenSSL init OpenSSL has done itself since 1.1.0), the FAT32 warning, `create_directories_if_necessary` on a directory Rust had already created and locked (DC-Q15), and a banner IG-14's effective-configuration line replaced | absorbed by DC-Q22: deleted |
+| DC-F19 | The tracing forwarder was installed by C++ inside `run`, through the C export `shekyl_log_install_tracing_forwarder`, so the subscriber behind the remnant's first `MCLOG` depended on a C++ call order. The export's own tests still pass; it has no C++ caller now | absorbed by DC-Q22: `shekyl_logging::install_tracing_forwarder` is called by `shekyl_daemon::run` right after `init`; the orphaned C export goes to Rick (§10.1) |
+| DC-F20 | The link is a cycle. Rust calls C++ (`shekyl_remnant_run`) and C++ calls Rust back (`shekyl_*`, the one Rust image's exports); a one-pass linker given the C++ archives after the Rust objects leaves the back-references unresolved, and `CMAKE_EXE_LINKER_FLAGS` does not reach a Corrosion-imported target | absorbed by DC-Q23: `shekyl_rust_link_cxx_closure` wraps the C++ closure in `--start-group … --end-group` with `--undefined-glob=shekyl_*` on GNU ld; an nm gate holds one tracing `GLOBAL_DISPATCH` in the staged binary |
+| DC-F21 | The process hardening ran late and the remnant's stack was unstated. `prctl(PR_SET_DUMPABLE, 0)` sat in `shekyl_remnant_run`, after the configuration was parsed, the data directory opened and keys read, so a fault before it was dumpable; `RLIMIT_CORE` was not touched and Windows' error mode was not set. The thread that ran the remnant took the default stack, which `RUST_MIN_STACK` changes | absorbed by DC-Q21 (`harden_process` first) and §2.2 step 7 (`REMNANT_STACK_BYTES`, 2 MiB, stated in `rust/shekyl-daemon/src/run.rs`) |
+| DC-F22 | `/GS-` in the MSVC definitions (root `CMakeLists.txt`) disabled the compiler's stack-buffer security checks for every C++ object, which the Rust binary links. Nothing in the tree or its history recorded why | absorbed by DC-Q21: deleted; the comment in its place records the absence |
+| DC-F23 | The hardening flag list was a claim, not a reading. `LD_SECURITY_FLAGS` and `STATIC_FLAGS` are set in the root `CMakeLists.txt` and reached the C++ executables through `CMAKE_EXE_LINKER_FLAGS`, which a Corrosion-imported target does not read; no gate read PIE, RELRO, `BIND_NOW`, the stack flag or the PE characteristics off a built binary | absorbed by DC-Q21: the flags reach rustc through `corrosion_add_target_local_rustflags`, and `check_binary_hardening.sh` reads them off every staged binary in `build.yml` and `depends.yml` |
+| DC-F24 | `SHEKYL_PROTOCOL_VERSION` in `src/cryptonote_config.h` had one C++ reader, `main.cpp`'s banner; `SHEKYL_RELEASE_NAME` was a literal in `src/version.cpp.in`, outside `cmake/Version.cmake` | absorbed by DC-Q20 |
+| DC-F25 | Four snapshot fields had no C++ reader: `fixed_difficulty`, `txpool_weight_max`, `mine_address` and `mine_threads` (the Rust miner reads `mine-address` from the configuration itself; core opens no LMDB). The count gate pinned a number and could not see a reader leave. `data_dir` has no C++ reader either (the chain is the Rust store), and the grammar rows `dev-difficulty`, `txpool-weight-max` and `mine-threads` have no reader in either language | absorbed by DC-Q24 for the four; `data_dir` is `EXEMPT` and goes to Rick with the three rows (§10.1) |
+| DC-F26 | Retiring the daemon image took `shekyl_daemon_ctl_*` out of `unit_tests`' link: the C++ test reached those exports through the image, and the exports lived in `shekyl-daemon-rpc`, which `shekyl-ffi` did not link | fixed in the Rust-binary PR: `shekyl-ffi` re-exports `shekyl-daemon-rpc` (`rust/shekyl-ffi/Cargo.toml`), no new cycle; two lines to revert if Rick rules otherwise |
+| DC-F27 | The `__cxa_throw` hook had a second path. `common/stack_trace.cpp` was a member of `libcommon`; in a non-STATIC build (the default developer and CI Linux build) its object defines `__cxa_throw` itself, resolving `__real` through `dlsym` per throw, so every binary that linked `common` resolved its throws to the hook before libstdc++ was searched, the Rust `shekyld` included. Observed: a refused RPC bind printed nine `[stacktrace]` frames to standard error past the Rust log sink. DC-F17's premise, that the remnant carried no hook because it was not built by `shekyl_add_executable`, was the link-flag path only | fixed in the Rust-binary PR: `stack_trace` is its own library, linked by `enable_stack_trace` and `unit_tests`; `nm shekyld` shows `U __cxa_throw` and no `log_stack_trace`. `util.cpp`'s `setup_crash_dump` is now dead in every binary and goes to Rick (§10.1) |
 
 ---
 
