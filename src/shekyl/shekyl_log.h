@@ -168,9 +168,9 @@ int32_t shekyl_log_flush(uint32_t within_ms);
 /// `tracing` events from Rust crates linked into this binary reach
 /// the subscriber installed by `shekyl_log_init_*` because every
 /// binary links exactly one Rust image with one tracing dispatcher
-/// (wallet side: libshekyl_ffi.a; daemon: libshekyl_daemon_image.a).
-/// That property is enforced at link time (per-binary image selection
-/// in cmake/BuildRust.cmake plus the post-link nm gate in
+/// (C++ binaries: libshekyl_ffi.a; shekyld: the Rust binary's own
+/// cargo graph, DC-Q19). That property is enforced at link time (the
+/// single-image contract in cmake/BuildRust.cmake plus the post-link nm gate in
 /// src/daemon/CMakeLists.txt), not by this call. See
 /// V3_WALLET_DECISION_LOG.md 2026-04-25 and the 2026-06-10/2026-06-11
 /// single-image amendments.

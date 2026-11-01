@@ -18,11 +18,11 @@
 //! aggregate a viewer renders, cached per closed shard and keyed on the
 //! block that closed it (`SV-D4`, `SV-D5`).
 //!
-//! Linked only from `shekyl-daemon-image` (`SF-D4`; the dep-cut gate holds
-//! it). What the scheduler reads — the skeleton and the holder set — comes
-//! through two traits ([`ShardFacts`], [`HolderSource`]) whose production
-//! implementation is the daemon image's store adapter
-//! (`shekyl-daemon-image::shard_view`, `SHARD_VIEW_FETCH.md` `SV-D9`).
+//! Linked only from the `shekyld` binary crate (`SF-D4`; the dep-cut gate
+//! holds it). What the scheduler reads — the skeleton and the holder set —
+//! comes through two traits ([`ShardFacts`], [`HolderSource`]) whose
+//! production implementation is the daemon's store adapter
+//! (`shekyld::shard_view`, `SHARD_VIEW_FETCH.md` `SV-D9`).
 //! The scheduler decides nothing it could not decide against in-memory
 //! facts. The running daemon still opens LMDB, so `ServerConfig` keeps
 //! `SkeletonAbsent` until the store flip (`DRS-X`) selects the adapter.

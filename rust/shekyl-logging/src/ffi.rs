@@ -403,8 +403,8 @@ pub unsafe extern "C" fn shekyl_log_flush(within_ms: u32) -> i32 {
 /// The 2026-06-10/2026-06-11 amendments (single-image contract)
 /// supersede the mechanism: there is nothing to forward *between*,
 /// because every binary links exactly one Rust image — this crate is
-/// compiled into `libshekyl_ffi.a` (wallet side) or
-/// `libshekyl_daemon_image.a` (daemon), so the one shared
+/// compiled into `libshekyl_ffi.a` for the C++ binaries and into the
+/// `shekyld` binary's own dependency graph (DC-Q19), so the one shared
 /// `tracing-core` dispatcher is common to the `shekyl_log_init_*`
 /// subscriber and every `tracing::*` macro in the image's crate graph.
 ///

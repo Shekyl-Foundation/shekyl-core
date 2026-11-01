@@ -66,9 +66,10 @@ endif()
 # the Boost libs here; it was retired with the vendored
 # `external/easylogging++/` tree. Every `misc_log_ex.h` /
 # `mlog.cpp` call now resolves through `${SHEKYL_FFI_LINK_LIBS}`:
-# the `shekyl_log_*` C ABI is compiled into the per-binary Rust image
-# (`libshekyl_ffi.a`, or `libshekyl_daemon_image.a` for the daemon) —
-# see the single-image contract in `cmake/BuildRust.cmake`.
+# the `shekyl_log_*` C ABI is compiled into the one Rust image a binary
+# links (`libshekyl_ffi.a`; `shekyld` is itself a Rust binary that links
+# the C++ remnant, DC-Q19) — see the single-image contract in
+# `cmake/BuildRust.cmake`.
 target_link_libraries(epee
   PUBLIC
     ${Boost_CHRONO_LIBRARY}

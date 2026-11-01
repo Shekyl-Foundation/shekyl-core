@@ -369,8 +369,8 @@ members = [
     "shekyl-p-loopback",
 
     # Daemon-only operator scheduler of `shekyl-p-fetch` (SF-D1). Linked
-    # from `shekyl-daemon-image` only — never from `shekyl-ffi` or an RPC
-    # crate (`check_p_fetch_dep_cut.py`).
+    # from the `shekyld` binary crate only — never from `shekyl-ffi` or an
+    # RPC crate (`check_p_fetch_dep_cut.py`).
     "shekyl-archival-fetch-sched",
 
     # The serve-credit bundle producer (SO-D12 increment 4c): the witness
@@ -442,8 +442,8 @@ members = [
     "shekyl-daemon-config",
 
     # The daemon's Rust main() and its one signal owner (DAEMON_CONFIG_CUTOVER.md
-    # §2.2); the C++ remnant is a run/stop pair it drives. Exported through
-    # shekyl-daemon-image.
+    # §2.2); the C++ remnant is a run/stop pair it drives. Called by the
+    # `shekyld` binary crate (DC-Q19).
     "shekyl-daemon",
 
     # The daemon's one Node (DRS_X_STORE_FLIP.md DX-Q6, N1): the store, the

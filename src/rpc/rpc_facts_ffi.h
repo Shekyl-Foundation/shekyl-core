@@ -8,8 +8,9 @@
 //
 // A shim reads; it decides nothing. Every POD here has a #[repr(C)] twin in
 // rust/shekyl-daemon-rpc/src/ffi.rs whose layout is pinned both directions by
-// tests/unit_tests/rpc_facts_ffi_roundtrip.cpp. Daemon-only: linked through
-// the daemon image (shekyl-ffi + shekyl-daemon-rpc), never libshekyl_ffi.a.
+// tests/unit_tests/rpc_facts_ffi_roundtrip.cpp. Daemon-only: the exports are
+// rust/shekyl-daemon-rpc's, which shekyl-ffi re-exports (DC-F26), so the
+// Rust shekyld and the C++ unit_tests both reach them.
 
 #pragma once
 

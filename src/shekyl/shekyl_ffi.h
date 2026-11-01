@@ -8,15 +8,14 @@
 /// This header is the C ABI between C++ and Rust. Most functions are
 /// exported from `rust/shekyl-ffi` (`libshekyl_ffi.a`). Daemon-only
 /// symbols (`shekyl_daemon_rpc_*`, `shekyl_daemon_ctl_*`) are exported
-/// from `rust/shekyl-daemon-rpc` and reach C++ through the daemon image
-/// (`libshekyl_daemon_image.a`; see `cmake/BuildRust.cmake`).
+/// from `rust/shekyl-daemon-rpc`, which `shekyl-ffi` re-exports (DC-F26).
 ///
 /// ## Linking
 ///
-/// Wallet/tool binaries link `libshekyl_ffi.a`. `shekyld` and daemon
-/// unit tests link `libshekyl_daemon_image.a` (shekyl-ffi +
-/// shekyl-daemon-rpc, one `tracing-core` dispatcher). Never link both
-/// archives on one line.
+/// Every C++ binary links `libshekyl_ffi.a`, the one Rust archive.
+/// `shekyld` is a Rust binary (DC-Q19): its cargo graph links
+/// `shekyl-ffi` and its C++ remnant links back into it, one image with
+/// one `tracing-core` dispatcher (see `cmake/BuildRust.cmake`).
 ///
 /// ## Memory model
 ///

@@ -74,7 +74,7 @@ pub struct ServerConfig {
     /// Concurrent-connection caps enforced by the [`LimitedListener`].
     pub conn_limits: ConnLimits,
     /// The shard view's facts source. The composition root that can compose
-    /// a `ViewDesk` (the daemon image, `SV-D9`) supplies it; the default is
+    /// a `ViewDesk` (the `shekyld` binary crate, `SV-D9`) supplies it; the default is
     /// [`SkeletonAbsent`], a daemon that serves no shard view.
     pub shard_view: Arc<dyn ShardViewFacts>,
     /// The options handle (RT-O26); the default serves no options.
@@ -156,7 +156,7 @@ fn cors_layer(origins: &[String]) -> CorsLayer {
 //
 // Handlers stay out of the table (and out of anything a unit test calls)
 // because naming a handler pulls `core_rpc_ffi_*` into the link set; lib tests
-// build no daemon image. `assemble`'s generic handler parameter is what keeps
+// link no C++ remnant. `assemble`'s generic handler parameter is what keeps
 // that true while still letting a test route the real table.
 //
 // The tests assert against a specification written out separately (§70): an

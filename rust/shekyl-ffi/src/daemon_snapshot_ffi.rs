@@ -21,14 +21,16 @@
 //! reads them. The snapshot is the whole of what the remnant reads: it
 //! parses nothing.
 //!
-//! **Here, not in the daemon image.** [`shekyl_daemon_snapshot_parse`] sits
-//! in the ordinary FFI library on top of `shekyl-daemon-config`, so the
-//! importer and `core_tests` link `libshekyl_ffi.a` and nothing of the
-//! daemon's RPC, whose objects import C++ symbols only `shekyld` links. With
-//! the export in the daemon image, those binaries linked on Linux and macOS
-//! only because `--gc-sections` / `-dead_strip` dropped the unreferenced RPC
-//! code; MinGW keeps it and failed the link (Rick, 2026-10-19). The daemon
-//! image carries this module too: `shekyl-daemon` starts the remnant with
+//! **Here, in `shekyl-ffi`.** [`shekyl_daemon_snapshot_parse`] sits in the
+//! ordinary FFI library on top of `shekyl-daemon-config`, so the importer
+//! and `core_tests` link `libshekyl_ffi.a`. *Records-was (to 2026-11-01):*
+//! the export once lived in the daemon image, the staticlib the C++
+//! `shekyld` linked, whose daemon-RPC objects import C++ symbols only
+//! `shekyld` links; those binaries linked on Linux and macOS only because
+//! `--gc-sections` / `-dead_strip` dropped the unreferenced RPC code, and
+//! MinGW, which keeps it, failed the link (Rick, 2026-10-19). The image is
+//! retired with the C++ executable (DC-Q19). The `shekyld` binary carries
+//! this module too: `shekyl-daemon` starts the remnant with
 //! [`SnapshotData::call`].
 //!
 //! **A test's snapshot.** [`shekyl_daemon_snapshot_parse`] builds a snapshot

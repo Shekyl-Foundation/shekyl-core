@@ -8,12 +8,15 @@
 //! The forwarder export is the runtime half of the single-Rust-image
 //! logging contract (decision log 2026-04-25, amended 2026-06-10 and
 //! 2026-06-11): every binary links exactly one Rust static archive —
-//! `libshekyl_ffi.a` for wallet-side binaries (this crate is a
-//! `shekyl-ffi` dependency), `libshekyl_daemon_image.a` for the daemon
-//! (`shekyl-daemon-image` = `shekyl-ffi` + the rlib-only
-//! `shekyl-daemon-rpc`) — so each binary carries exactly one
-//! `tracing-core` dispatcher, and this export pins the C++ call
-//! ordering (`shekyl_log_init_*` first) plus install idempotency.
+//! `libshekyl_ffi.a` for the C++ binaries (this crate is a `shekyl-ffi`
+//! dependency), and `shekyld` is itself a Rust binary whose one cargo
+//! graph links `shekyl-ffi` and the rlib-only `shekyl-daemon-rpc`
+//! (DC-Q19) — so each binary carries exactly one `tracing-core`
+//! dispatcher, and this export pins the C++ call ordering
+//! (`shekyl_log_init_*` first) plus install idempotency. The daemon
+//! installs the forwarder through the Rust function
+//! `install_tracing_forwarder` (DC-Q22); this C export is the C++
+//! binaries' and these tests' pin.
 //!
 //! This is an integration test (own process) rather than a unit test
 //! because the install pin and `INITIALIZED` flag are process-global

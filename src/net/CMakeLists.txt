@@ -35,7 +35,7 @@ monero_add_library(net ${net_sources} ${net_headers})
 # No Rust image here. `dandelionpp.cpp` was this library's only FFI consumer and
 # was retired with the RP-2a stem-map seam (RP-3a): `shekyl-relay::Zone` owns the
 # map directly in Rust, so nothing under net/ reaches across the boundary. If a
-# source here ever does again, add ${SHEKYL_FFI_LINK_LIBS} back — it resolves
-# per-binary to the right image (daemon -> shekyl_daemon_image, else shekyl_ffi).
+# source here ever does again, add ${SHEKYL_FFI_LINK_LIBS} back — it is the
+# one Rust archive a C++ binary links (shekyl_ffi; shekyld is a Rust binary).
 target_link_libraries(net common epee ${Boost_ASIO_LIBRARY})
 

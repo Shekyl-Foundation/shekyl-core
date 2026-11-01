@@ -76,7 +76,7 @@ shekyl-tx-builder = { path = "../shekyl-tx-builder" }
 # Curve-tree client, exposed as a *replica* (`curve_tree_replica_ffi.rs`) so
 # the C++ test generator can fill block headers with real curve-tree roots
 # instead of a placeholder -- the retirement of CEN-B5's FAKECHAIN skip
-# (census R9). Brings `redb` into the daemon image ahead of the daemon redb
+# (census R9). Brings `redb` into the daemon's image ahead of the daemon redb
 # store (DRS), which needs it anyway; ruled by Rick 2026-09-05 over a
 # C++-LMDB generator oracle that the store rewrite would have deleted.
 shekyl-curve-tree = { path = "../shekyl-curve-tree" }
@@ -103,7 +103,7 @@ shekyl-logging = { path = "../shekyl-logging" }
 # 2026-06-11 ruling's rule — a crate a C++ binary needs joins that
 # binary's image — puts it here; `rust/shekyl-daemon-image`, the archive
 # that used to carry it beside this crate for the C++ shekyld, is retired
-# (DC-F25, DC-F26).
+# with that C++ executable (DC-Q19, DC-F26).
 shekyl-daemon-rpc = { path = "../shekyl-daemon-rpc" }
 # Dandelion++ embargo / propagation-timeout (`dandelionpp_ffi.rs`, RP-4).
 # Stem-map exports retired at RP-3a. The FFI owns the CSPRNG (`OsRng`); the
