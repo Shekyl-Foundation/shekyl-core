@@ -713,19 +713,20 @@ records the new count.
 
 **Configuration the six calls leave to the side.**
 
-- `block_host`, `unblock_host`, and `get_blocked_hosts` call the Rust
-  ban list. A ban closes the sockets the list returns. It does not
-  walk the Levin registry. RPC speaks in durations: `setbans` takes
+- The ban list is Rust's, written through `shekyl_ban_*` (the RPC's
+  `set_bans`, the ban file); the C++ ban calls (`block_host`,
+  `unblock_host`, `get_blocked_hosts` and the rest) were deleted with the
+  automatic ban (2026-11-01). A ban closes the sockets the list returns.
+  It does not walk the Levin registry. RPC speaks in durations: `setbans` takes
   seconds, and `getbans` returns seconds remaining. At cutover the
   conversion is `now + duration` onto the monotonic clock, and the
   remaining time is computed back from it. No `time_t` crosses the
   boundary. A duration that does not fit a `Tick` is refused by
   `setbans`. `--ban-list` is a different kind: those entries are
   permanent, with no deadline, and `getbans` reports them as
-  permanent rather than as a number of seconds. The
-  session layer is the second writer, through the same duration: ban
-  this host for this long. A transport close does not write the list
-  and does not call `add_host_fail`.
+  permanent rather than as a number of seconds. No other layer writes
+  the list: the session layer's automatic ban was deleted (2026-11-01),
+  so no peer can make a ban. A transport close does not write the list.
 - Socket admission reserves inside `accept_clearnet`
   (`admission.rs:273-283`) and `accept_tor` (`:310-312`): the ceiling
   check and the mint hold one table lock. `socket_count` is the

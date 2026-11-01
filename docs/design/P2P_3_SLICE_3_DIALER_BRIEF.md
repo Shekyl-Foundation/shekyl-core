@@ -538,9 +538,8 @@ lists read only the cause's marks; the dialer holds no failed-address
 memory (*records-was:* it was the memory's only writer; deleted
 2026-10-24, "Failed-address memory" below). The score owner subscribes to `PeerlistRefused` and
 writes neither store. The handshake task does not call
-`add_host_fail`. That function stays: inbound and the open
-`cryptonote_protocol_handler` row still use it. It is in flight, not
-dead.
+`add_host_fail`, which was deleted with the automatic ban (2026-11-01):
+no peer can make a ban.
 
 ```rust
 enum DialOutcome {
@@ -1200,8 +1199,9 @@ two dial sites (`:1677`, `:1735`). Inbound is `handle_handshake`
 (`:2752`), which does not call it. Once those calls are gone the
 function has no caller, so the definition and the declaration go with
 them. That is dead, not in flight. `handle_handshake`,
-`detect_self_handshake`, `try_get_support_flags`, and `add_host_fail`
-keep the callers named below.
+`detect_self_handshake` and `try_get_support_flags` keep the callers
+named below; `add_host_fail` was deleted with the automatic ban
+(2026-11-01).
 
 | What | Where, at `f317d979c4` | `rg` when it has landed |
 | --- | --- | --- |
