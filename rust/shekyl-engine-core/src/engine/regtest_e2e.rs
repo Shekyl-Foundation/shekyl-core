@@ -6163,8 +6163,9 @@ async fn maybe_capture_chain_vector(
         "shekyl-capture-baseline-{shape}-{}",
         std::process::id()
     ));
+    // A redb store is one file.
     if baseline_store.exists() {
-        std::fs::remove_dir_all(&baseline_store).expect("clear a stale baseline store");
+        std::fs::remove_file(&baseline_store).expect("clear a stale baseline store");
     }
     let mut baseline = Command::new(&replay_bin);
     baseline
@@ -6188,7 +6189,7 @@ async fn maybe_capture_chain_vector(
         String::from_utf8_lossy(&baseline.stdout),
         String::from_utf8_lossy(&baseline.stderr)
     );
-    std::fs::remove_dir_all(&baseline_store).expect("remove the baseline store");
+    std::fs::remove_file(&baseline_store).expect("remove the baseline store");
 
     // Format 4 (DRS-E4 commit 7): `out_of_band_writes` rows are structured
     // — the kind and the injector's receipt in the corpus's one spelling —

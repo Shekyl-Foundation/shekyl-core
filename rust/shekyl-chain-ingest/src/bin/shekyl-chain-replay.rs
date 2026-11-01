@@ -188,6 +188,11 @@ enum Command {
         /// Where to write the trace.
         #[arg(long)]
         out: PathBuf,
+        /// Where to write the RandomX measurement (JSON; RD-F11), as
+        /// `replay`'s: the per-hash mean the budget's proof-of-work share
+        /// reads (`DAEMON_REDB_STORE.md` §1.3a.6 item 8).
+        #[arg(long)]
+        metrics_out: Option<PathBuf>,
     },
 }
 
@@ -249,6 +254,7 @@ async fn real_main(cli: Cli) -> Result<(), Failure> {
             window,
             hashers,
             out,
+            metrics_out,
         } => {
             let schedule = schedule_flags(settlement_epoch_blocks, reorg_cap)?;
             baseline(Baseline {
@@ -258,6 +264,7 @@ async fn real_main(cli: Cli) -> Result<(), Failure> {
                 rules: ChainRules::new(chain.into(), fixed_difficulty, schedule)?,
                 cfg: PipelineConfig { window, hashers },
                 out,
+                metrics_out,
             })
             .await
         }
@@ -272,6 +279,7 @@ struct Baseline {
     rules: ChainRules,
     cfg: PipelineConfig,
     out: PathBuf,
+    metrics_out: Option<PathBuf>,
 }
 
 /// Connect the whole corpus against a fresh store under the production
@@ -302,16 +310,20 @@ async fn baseline(baseline: Baseline) -> Result<(), Failure> {
         Arc::new(CacheStore::new()),
         Arc::clone(&metrics),
     ));
-    let report = run(
+    let outcome = run(
         &mut source,
         substrate,
-        metrics,
+        Arc::clone(&metrics),
         baseline.rules,
         store,
         Arc::new(Trace::empty()),
         baseline.cfg,
     )
-    .await?;
+    .await;
+    if let Some(out) = &baseline.metrics_out {
+        std::fs::write(out, metrics.snapshot().to_json()?)?;
+    }
+    let report = outcome?;
     if let Some((height, verdict)) = report.refused {
         return Err(format!("the corpus does not replay: refused at {height}: {verdict:?}").into());
     }
