@@ -12,8 +12,8 @@
 //!   and a re-connect; `long_term_effective_median` is the verdict's median
 //!   in force **for** the height (SCR-19; derived since E6 slice 7), written
 //!   at that height and reversed by the journal.
-//! - **A2** — every table with a writer exists from the seal, none of the
-//!   `Unshaped` ones do, and a sealed file missing one is refused (SI-7).
+//! - **A2** — every catalogued table exists from the seal, and a sealed
+//!   file missing one is refused (SI-7).
 //! - **A3** — `txs_pqc_auth_hash` has a row for a 4-part txid and none for
 //!   the coinbase or a 3-part serve credit, the row is the identity's value, and a
 //!   pop removes it with the rest of the block.
@@ -32,7 +32,7 @@ use super::*;
 use crate::codec::{BlockInfo, Canonical, CurveTreeState};
 use crate::schema::{
     self, ARCHIVAL_ISSUED_DIGEST, ARCHIVAL_ISSUED_DRAW, ARCHIVAL_SETTLEMENT, BLOCKS, BLOCK_BURN,
-    BLOCK_INFO, CURVE_TREE_LEAVES, CURVE_TREE_META, TXS, TXS_PQC_AUTH_HASH, UNDO_LOG,
+    BLOCK_INFO, CURVE_TREE_LEAVES, CURVE_TREE_META, TXS_PQC_AUTH_HASH, UNDO_LOG,
 };
 
 fn block_info(store: &ChainStore, height: u64) -> Option<BlockInfo> {
@@ -161,7 +161,7 @@ fn long_term_effective_median_is_stored_at_the_height_it_is_in_force_for() {
 // ------------------------------------------------------------------ A2
 
 #[test]
-fn the_seal_creates_every_table_with_a_writer_and_no_unshaped_one() {
+fn the_seal_creates_every_catalogued_table() {
     let path = tmp("a2-seal-set");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let snap = store.begin_read().expect("read");
@@ -183,13 +183,6 @@ fn the_seal_creates_every_table_with_a_writer_and_no_unshaped_one() {
         .expect("t")
         .is_empty()
         .expect("len"));
-    // `Unshaped` tables are not: they have no writer to have a file
-    // presence for, and creating them would make "no writer yet" a fact the
-    // file could not tell from "empty".
-    assert!(
-        snap.open_table(TXS).is_err(),
-        "txs is Unshaped and not sealed"
-    );
     // Settlement's three tables are sealed and empty: a chain on which no
     // epoch has settled and no draw was issued is told from a file that
     // lacks them (`SO-D10`).
@@ -225,35 +218,25 @@ fn the_seal_creates_every_table_with_a_writer_and_no_unshaped_one() {
             .decode(),
         Ok(CurveTreeState::EMPTY)
     );
-    // The set is the catalogue's own: exactly the non-`Unshaped` targets.
-    let sealed = schema::UNDO_TARGETS.iter().filter(|t| t.sealed()).count();
-    let unshaped = schema::catalogue()
-        .iter()
-        .filter(|spec| spec.value == <crate::codec::Unshaped as redb::Value>::type_name())
-        .count();
-    assert_eq!(sealed + unshaped, schema::catalogue().len());
-    // 28 → 22 at layout 11: S-ARCH shaped six archival tables
-    // (`DRS_E1_SARCH.md` §4 — the plan's "seven" counted the `properties`
-    // cell, which is not a table). 22 → 20 at layout 12: S-POOL **evicted**
-    // `txpool_meta` and `txpool_blob` to the pool file (`DRS_E1_SPOOL.md`
-    // §4; not shaped here — gone from here). 20 → 18 at layout 13: S-ALT
-    // shaped `alt_blocks` and **folded** `archival_alt_attestation_witness`
-    // into it (`DRS_E1_SALT.md` §4; `FOLDED_INTO`). The journals,
-    // settlement, slash-applied, accrual and segment rows stay `Unshaped`
-    // for their increments. 18 → 12 at layout 15: DRS-E3 commit 1 **did not
-    // port** four (`NOT_PORTED`: the pending set is a view of the block
-    // index, two were the C++'s pop journals, the checkpoint is a view of
-    // the meta row — `DRS_E3_CURVE_WRITER.md` §3.7) and **shaped** the two
-    // position maps (`Coded<TreePosition>` / `Coded<GlobalOutputIndex>`).
-    // 12 → 3 at layout 18: DRS-E4 commit 1 **did not port** seven archival
-    // tables (`NOT_PORTED`: five pop journals and the close log are views of
-    // the undo log, the per-height accrual rows a view of the emission
-    // split, the freeze registry retired — `DRS_E4_ARCHIVAL_WRITER.md`
-    // §3.3, §3.4) and **shaped** `archival_slash_log` and
-    // `archival_slash_applied`. 3 → 2 at layout 22: `SO-D10` **shaped**
-    // `archival_settlement`. What remains `Unshaped` is the two dead tables
-    // (`txs`, `hf_starting_heights`).
-    assert_eq!(unshaped, 2, "the §11.1(f) count at this layout");
+    // The set is the catalogue's own: every catalogued table exists in the
+    // file, empty or not, from the first transaction. Read through the
+    // engine with the store closed, so the check is the file's, not the
+    // store's open path.
+    assert_eq!(schema::UNDO_TARGETS.len(), schema::catalogue().len());
+    drop(meta);
+    drop(snap);
+    drop(store);
+    let db = redb::Database::open(&path).expect("the file opens");
+    let txn = db.begin_read().expect("read");
+    for table in schema::UNDO_TARGETS {
+        assert!(
+            table.exists(&txn).expect("exists"),
+            "{} is catalogued and not sealed",
+            table.name()
+        );
+    }
+    drop(txn);
+    drop(db);
     cleanup(&path);
 }
 
@@ -480,12 +463,14 @@ fn the_rust_only_tables_are_catalogued_last_and_named() {
         catalogue_len,
         "archival_bundle_body is the final catalogue slot"
     );
-    // 33 LMDB mirrors plus the nineteen Rust-only tables named below.
+    // 31 tables the LMDB store also held (`rule_set_in_force` under its
+    // old name, `hf_versions`) plus the nineteen Rust-only tables named
+    // below.
     // The pool file holds `txpool_meta` / `txpool_blob`
     // (`schema::MIRRORED_ELSEWHERE`), `alt_blocks` holds the alternative
     // block's attestation witness (`schema::FOLDED_INTO`), and the tables
     // `schema::NOT_PORTED` names are not here.
-    assert_eq!(catalogue_len, 52);
+    assert_eq!(catalogue_len, 50);
     let names: Vec<&str> = schema::RUST_ONLY_TABLES.iter().map(|(n, _)| *n).collect();
     assert_eq!(
         names,
