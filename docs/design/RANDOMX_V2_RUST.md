@@ -311,6 +311,18 @@ module-level mutable state.
 
 ## 5. FFI Surface
 
+> **DRS-X amendment (2026-11-01; `DRS_X_STORE_FLIP.md`).** The committed
+> surface is **one** function again: `shekyl_pow_randomx_v2_hash`.
+> `…_set_canonical` is deleted. Its premise was that "only C++
+> block-handling code knows" the canonical seedhash; since the flip the
+> Rust ingest owns the chain and pins the seeds its window names itself
+> (`shekyl-chain-ingest`, `Substrate::pin_seed` → `CacheStore::pin_canonical`),
+> so the sticky-eviction mitigation (Decision #6) is delivered in Rust with
+> no C++ signal, and the export had no caller left. The daemon no longer
+> calls `…_hash` either; its callers are the C++ parity gates
+> (`tests/unit_tests/mining_parity.cpp`, `tests/randomx_v2_parity`). The
+> Phase 3 amendment below is the record of why the export was added.
+
 > **Phase 3 amendment (2026-06; `RANDOMX_V2_PHASE3_PLAN.md` §4.1/§4.5).**
 > The committed surface grew from one function to **two**. The ratified
 > sticky-eviction DoS mitigation (`RANDOMX_V2_PLAN.md` Decision #6;
@@ -325,7 +337,8 @@ module-level mutable state.
 > re-admits the wrong-sized-buffer bug class the typed-array pointer was
 > added to prevent.
 
-The committed FFI surface is two functions:
+The committed FFI surface is one function (two from Phase 3 until the
+DRS-X flip):
 
 ```c
 int32_t shekyl_pow_randomx_v2_hash(
@@ -333,9 +346,6 @@ int32_t shekyl_pow_randomx_v2_hash(
     const uint8_t* data,
     size_t data_len,
     uint8_t (*out_hash)[32]);
-
-int32_t shekyl_pow_randomx_v2_set_canonical(
-    const uint8_t (*seedhash)[32]);
 ```
 
 Semantics:
@@ -346,11 +356,10 @@ Semantics:
   `data_len == 0`; `data == NULL && data_len > 0` returns `ERR_NULL_PTR`;
   `data_len` above the 2 MiB hashing-blob bound returns
   `ERR_DATA_TOO_LARGE`. On any non-zero return `*out_hash` is untouched.
-- `…_set_canonical` eagerly derives (or hits) the seedhash's 256 MiB
-  `PreparedCache` **synchronously** and sticky-pins it against LRU
-  eviction. The daemon calls it at tip advance (~once per 2048-block
-  epoch ≈ 2.84 days), off the validation hot path. See §6 for why this
-  synchronous canonical-pin is *not* the rejected prewarm.
+- *Records-was (Phase 3 to the DRS-X flip):* `…_set_canonical` eagerly
+  derived the seedhash's 256 MiB `PreparedCache` synchronously and
+  sticky-pinned it against LRU eviction, called by the C++ chain at tip
+  advance. The ingest's pin does both now (§6).
 - Return codes follow `40-ffi-discipline.mdc`: `SHEKYL_POW_RANDOMX_V2_OK`
   (`0`) on success; negatives for distinct failure modes
   (`ERR_NULL_PTR -1`, `ERR_DATA_TOO_LARGE -2`,
@@ -372,10 +381,14 @@ discretionary export does not introduce a second ABI shape.
 Explicitly not exported:
 
 - `prewarm`
+- `set_canonical` — **deleted at the DRS-X flip** (amendment above): the
+  Rust ingest pins the canonical seed itself, so no C++ signal exists to
+  carry.
 - `set_main_seedhash` (the inherited *asynchronous* dataset-init state
   machine — background threads, reorg scheduling, lifecycle calls. Its
   *purpose* — pinning the canonical cache — is served instead by the
-  synchronous `…_set_canonical` above; the async machinery is deleted,
+  Rust ingest's synchronous pin (§6; through `…_set_canonical` from
+  Phase 3 until the DRS-X flip); the async machinery is deleted,
   not ported. See §4 of `RANDOMX_V2_PHASE3_PLAN.md`.)
 - `set_miner_thread`
 - `get_miner_thread`
@@ -420,6 +433,18 @@ prewarm, it must propose a new design doc that revisits this decision.
 > management out of C++); prewarm remains forbidden as an *FFI surface*.
 > This is the sanctioned revisit this clause anticipated — scoped to the
 > synchronous pin, explicitly not re-admitting the rejected async design.
+
+> **DRS-X amendment (2026-11-01).** The synchronous pin moved from the
+> deleted `…_set_canonical` export to the Rust ingest, which owns the
+> chain: the window install and the tip follower pin each seed the window
+> names (the next epoch's before its first block is needed), a pin is the
+> derive, and a hash under a seed no slot holds is a fault rather than a
+> derive. Gated in `shekyl-chain-ingest`:
+> `a_longhash_of_an_unpinned_seed_does_not_derive`,
+> `pinning_a_seed_derives_once_and_counts_it_at_the_source`,
+> `the_follower_pins_the_new_epochs_seed_and_the_miner_mines_its_first_block`.
+> They replace the FFI's `set_canonical_eagerly_derives_off_the_verify_path`,
+> which was deleted with the export.
 
 ## 7. Isolation Invariants
 
@@ -681,9 +706,10 @@ Everything else is transform-shaped and derived on demand.
 - No runtime env-var overrides of consensus constants.
 - No Rust JIT.
 - No `prewarm` FFI, and no inherited *async* cache-rebuild / dataset-init
-  state machine. (The synchronous, off-hot-path `…_set_canonical` pin
-  added in Phase 3 is the ratified DoS mitigation, not a prewarm in this
-  rejected sense — §5, §6, and `RANDOMX_V2_PHASE3_PLAN.md` §4.)
+  state machine. (The synchronous, off-hot-path canonical pin, added in
+  Phase 3 as `…_set_canonical` and the Rust ingest's own since the DRS-X
+  flip, is the ratified DoS mitigation, not a prewarm in this rejected
+  sense — §5, §6, and `RANDOMX_V2_PHASE3_PLAN.md` §4.)
 - No C ABI exports from `shekyl-pow-randomx`.
 - No module-level runtime-mutable state in `shekyl-pow-randomx`.
 
