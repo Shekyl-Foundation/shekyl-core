@@ -105,12 +105,16 @@ struct PackedSupplement {
 }
 
 fn pack_supplement(answer: &ChainSupplement) -> PackedSupplement {
-    let mut hashes = Vec::with_capacity(answer.blocks.len().saturating_mul(32));
-    let mut weights = Vec::with_capacity(answer.blocks.len().saturating_mul(8));
-    for block in &answer.blocks {
-        hashes.extend_from_slice(block.hash.as_bytes());
-        weights.extend_from_slice(&block.weight.to_raw().to_le_bytes());
-    }
+    let hashes = answer
+        .blocks
+        .iter()
+        .flat_map(|block| block.hash.as_bytes().iter().copied())
+        .collect();
+    let weights = answer
+        .blocks
+        .iter()
+        .flat_map(|block| block.weight.to_raw().to_le_bytes())
+        .collect();
     let (diff_lo, diff_hi) = halves(answer.tip_cumulative_difficulty.to_raw());
     PackedSupplement {
         hashes,
@@ -398,11 +402,11 @@ pub unsafe extern "C" fn shekyl_core_txs(
     let Some(raw) = slice_from_ptr(hashes, nbytes) else {
         return FAULT;
     };
-    if bounded_capacity::<u8>(count, 32, raw.len()).is_none() {
+    let Some(found) = bounded_capacity::<Option<Vec<u8>>>(count, 32, raw.len()) else {
         return FAULT;
-    }
+    };
     let found = match opened_store(with_snapshot_and_pool(|snap, pool| {
-        let mut found = Vec::with_capacity(count);
+        let mut found = found;
         for chunk in raw.chunks_exact(32) {
             let mut bytes = [0u8; 32];
             bytes.copy_from_slice(chunk);
