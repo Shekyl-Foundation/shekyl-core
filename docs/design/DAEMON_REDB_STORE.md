@@ -2327,9 +2327,10 @@ discovered as a digest mismatch.
 
 **(c) redb's own on-disk format version is handled by rebuild, never by an
 in-place upgrade.** redb pins its file format independently of our schema —
-4.1.0 carries `FILE_FORMAT_VERSION3` and fails a mismatched file with
-*"Manual upgrade required"*
-(`/redb-4.1.0/src/error.rs`, read at the pinned source, not recalled). Policy: a
+4.4.0 carries `FILE_FORMAT_VERSION3` (as 4.1.0 did) and fails a mismatched
+file with `UpgradeRequired`
+(`/redb-4.4.0/src/tree_store/page_store/header.rs:502`, `:515`, read at the
+pinned source, not recalled). Policy: a
 redb upgrade that moves that constant is a **deliberate, artifact-recorded
 operation — build a fresh store and replay** (§11's "trivial migrator"), never
 redb's own upgrade path. The loud failure is the good case, and it is the reason

@@ -177,7 +177,7 @@ pub const TWO_PHASE_COMMIT: bool = true;
 
 /// Cache the engine is opened with.
 ///
-/// The value is redb 4.1.0's own default (1 GiB) made explicit so a
+/// The value is redb's own default (1 GiB; `redb-4.4.0/src/db.rs:2045`) made explicit so a
 /// future redb bump cannot change RSS by omission (A4's shape, on the
 /// axis A5 measures). Reopen the number against DRS-BENCH peak-RSS,
 /// never to "go faster".
@@ -314,8 +314,8 @@ impl ChainStore {
         // `create_file`, so a 0-byte file is the path it knows.
         //
         // The reopen arm is therefore `open`, which never creates and never
-        // initializes (`redb-4.1.0/src/db.rs:1196`; an empty file is
-        // `InvalidData`, `page_manager.rs:171`). With `create` there, a
+        // initializes (`redb-4.4.0/src/db.rs:2130`; an empty file is
+        // `InvalidData`, `page_manager.rs:1080`). With `create` there, a
         // path removed between AlreadyExists and the open -- or an empty
         // file some other process left -- would be initialized as a fresh,
         // unsealed database and then refused by `verify`, leaving behind
@@ -389,9 +389,11 @@ impl ChainStore {
     /// The cell only ever widens, and only a committed stubbed batch widens
     /// it. Two locks make the in-memory copy the file's value:
     ///
-    /// - **Across handles.** redb holds an exclusive `flock` on the file for
+    /// - **Across handles.** redb holds an exclusive lock on the file for
     ///   the life of a writable `Database` and a shared one for a read-only
-    ///   handle (`redb-4.1.0/src/tree_store/page_store/file_backend/optimized.rs:27`,
+    ///   handle: a byte-range lock on its lock range, and on Linux also the
+    ///   whole-file `flock` older redb took
+    ///   (`redb-4.4.0/src/tree_store/page_store/file_backend/optimized.rs:90`,
     ///   read at the pinned source). A second writable open — this process
     ///   or another — is [`redb::DatabaseError::DatabaseAlreadyOpen`]; a
     ///   read-only handle excludes every writer for as long as it exists.
@@ -581,8 +583,8 @@ impl ChainStore {
     /// closure wrote lands. There is no separate abort verb; an abort that
     /// the engine fails to complete is not lost either — redb latches the
     /// storage failure and refuses the next `begin_write` with
-    /// `StorageError::PreviousIo` (`redb-4.1.0/src/transactions.rs:2084`,
-    /// `db.rs:1410`, read at the pinned source), which the next `write`
+    /// `StorageError::PreviousIo` (`redb-4.4.0/src/tree_store/page_store/cached_file.rs:200`,
+    /// held by its own test at `db.rs:2392`, read at the pinned source), which the next `write`
     /// surfaces as [`EngineError::BeginWrite`].
     ///
     /// `E` is any error the caller's closure may return, provided the
