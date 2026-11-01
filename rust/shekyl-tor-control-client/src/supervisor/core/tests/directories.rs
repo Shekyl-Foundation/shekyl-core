@@ -229,6 +229,51 @@ fn a_directory_sent_the_other_descriptor_is_not_counted() {
     );
 }
 
+/// A `REQUESTED` this check did not cause does not choose the descriptor:
+/// not one from a directory outside the check (the unscoped refetch, or
+/// the probe's own fetch, can name another), and not one from a directory
+/// in the check whose fetch has not been sent. Only a sent fetch's
+/// `REQUESTED` excludes the directories sent the other descriptor. Fails if
+/// `requested` drops its sent-fetch guard: the stray `next` would exclude
+/// the four directories holding `cur`, and the check would count none.
+#[test]
+fn a_requested_this_check_did_not_send_chooses_nothing() {
+    let mut fetches = sent(1..=4, "cur", 0);
+    // Directories 5 to 8 got the next period's descriptor, and draw later.
+    fetches.extend(sent(5..=8, "next", u64::MAX));
+    let (mut core, asked) = checking(fetches);
+    assert_eq!(asked, [hsdir(1), hsdir(2), hsdir(3), hsdir(4)]);
+    for stray in [hsdir(9), hsdir(5)] {
+        core.on(
+            Input::DirectoryAsked {
+                hsdir: stray,
+                descriptor_id: "next".to_owned(),
+            },
+            secs(16),
+        );
+    }
+    core.on(
+        Input::DirectoryAsked {
+            hsdir: hsdir(1),
+            descriptor_id: "cur".to_owned(),
+        },
+        secs(16),
+    );
+    for n in 1..=4 {
+        core.on(answered(n, "cur", DirectoryAnswer::Received), secs(17));
+    }
+    let step = core.on(arrival(secs(15), secs(18)), secs(18));
+    assert_eq!(
+        count(&step, |action| matches!(
+            action,
+            Action::DirectoriesUnmatched
+        )),
+        0,
+        "the four directories holding the asked-for descriptor are counted"
+    );
+    assert!(matches!(core.status().inbound, Inbound::Reachable { .. }));
+}
+
 /// A check that counts no directory (no directory the round reached holds
 /// the descriptor Tor asks for) is decided by the probe alone, and says so
 /// once. Fails if `Unmatched` is a miss (a node whose uploads land under the
