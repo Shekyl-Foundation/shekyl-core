@@ -63,6 +63,7 @@ use shekyl_difficulty::{check_hash, is_timestamp_below_ftl, Difficulty, FTL_SECO
 use shekyl_types::{
     AttestationRoot, BlockCount, BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp,
 };
+use shekyl_wire::transaction::MAX_FCMP_INPUTS;
 use shekyl_wire::{Ct, Input, Transaction};
 
 use crate::source::{IngestEvent, Sequenced, ServeCredit, Source};
@@ -104,6 +105,55 @@ pub(crate) const UNHELD_ATTESTATION_ROOT: [u8; 32] = [0x5b; 32];
 /// and cannot reach the rules harness's `UNRECORDED_REFERENCE` (a
 /// test-only feature); the two need not agree, only both be unheld.
 pub const UNHELD_REFERENCE: BlockHash = BlockHash::from_bytes([0x99; 32]);
+
+/// The key images [`Mutation::TooManyInputs`] gives its copies: the
+/// compressed encodings of `k·G` for `k` in `2..=9`. Each is a canonical,
+/// torsion-free, non-identity point, so CEN-H11 (an image is in the
+/// prime-order subgroup) and CEN-H10 (no image repeats) hold and the
+/// input count is the transaction's one violation; pinned against the
+/// curve by `the_extra_images_are_k_times_g`.
+pub(crate) const EXTRA_KEY_IMAGES: [[u8; 32]; MAX_FCMP_INPUTS] = [
+    [
+        0xc9, 0xa3, 0xf8, 0x6a, 0xae, 0x46, 0x5f, 0x0e, 0x56, 0x51, 0x38, 0x64, 0x51, 0x0f, 0x39,
+        0x97, 0x56, 0x1f, 0xa2, 0xc9, 0xe8, 0x5e, 0xa2, 0x1d, 0xc2, 0x29, 0x23, 0x09, 0xf3, 0xcd,
+        0x60, 0x22,
+    ],
+    [
+        0xd4, 0xb4, 0xf5, 0x78, 0x48, 0x68, 0xc3, 0x02, 0x04, 0x03, 0x24, 0x67, 0x17, 0xec, 0x16,
+        0x9f, 0xf7, 0x9e, 0x26, 0x60, 0x8e, 0xa1, 0x26, 0xa1, 0xab, 0x69, 0xee, 0x77, 0xd1, 0xb1,
+        0x67, 0x12,
+    ],
+    [
+        0x2f, 0x11, 0x32, 0xca, 0x61, 0xab, 0x38, 0xdf, 0xf0, 0x0f, 0x2f, 0xea, 0x32, 0x28, 0xf2,
+        0x4c, 0x6c, 0x71, 0xd5, 0x80, 0x85, 0xb8, 0x0e, 0x47, 0xe1, 0x95, 0x15, 0xcb, 0x27, 0xe8,
+        0xd0, 0x47,
+    ],
+    [
+        0xed, 0xc8, 0x76, 0xd6, 0x83, 0x1f, 0xd2, 0x10, 0x5d, 0x0b, 0x43, 0x89, 0xca, 0x2e, 0x28,
+        0x31, 0x66, 0x46, 0x92, 0x89, 0x14, 0x6e, 0x2c, 0xe0, 0x6f, 0xae, 0xfe, 0x98, 0xb2, 0x25,
+        0x48, 0xdf,
+    ],
+    [
+        0xf4, 0x7e, 0x49, 0xf9, 0xd0, 0x7a, 0xd2, 0xc1, 0x60, 0x6b, 0x4d, 0x94, 0x06, 0x7c, 0x41,
+        0xf9, 0x77, 0x7d, 0x4f, 0xfd, 0xa7, 0x09, 0xb7, 0x1d, 0xa1, 0xd8, 0x86, 0x28, 0xfc, 0xe3,
+        0x4d, 0x85,
+    ],
+    [
+        0xb8, 0x62, 0x40, 0x9f, 0xb5, 0xc4, 0xc4, 0x12, 0x3d, 0xf2, 0xab, 0xf7, 0x46, 0x2b, 0x88,
+        0xf0, 0x41, 0xad, 0x36, 0xdd, 0x68, 0x64, 0xce, 0x87, 0x2f, 0xd5, 0x47, 0x2b, 0xe3, 0x63,
+        0xc5, 0xb1,
+    ],
+    [
+        0xb4, 0xb9, 0x37, 0xfc, 0xa9, 0x5b, 0x2f, 0x1e, 0x93, 0xe4, 0x1e, 0x62, 0xfc, 0x3c, 0x78,
+        0x81, 0x8f, 0xf3, 0x8a, 0x66, 0x09, 0x6f, 0xad, 0x6e, 0x79, 0x73, 0xe5, 0xc9, 0x00, 0x06,
+        0xd3, 0x21,
+    ],
+    [
+        0xc0, 0xf1, 0x22, 0x55, 0x84, 0x44, 0x4e, 0xc7, 0x30, 0x44, 0x6e, 0x23, 0x13, 0x90, 0x78,
+        0x1f, 0xfd, 0xd2, 0xf2, 0x56, 0xe9, 0xfc, 0xbe, 0xb2, 0xf4, 0x0d, 0xdd, 0xc2, 0xc2, 0x23,
+        0x3d, 0x7f,
+    ],
+];
 
 /// One systematic invalidation. Exhaustive: [`Mutation::ALL`] is every
 /// variant, and a match over it is a compile-time census of the family.
@@ -208,6 +258,13 @@ pub enum Mutation {
     /// Bodies from the environment's supply listed until the block's weight
     /// exceeds the bound the caller states (`2 × M`). CEN-F14, at the block.
     OverweightBlock,
+    /// The first listed spend's first input repeated until the spend has
+    /// one input more than [`MAX_FCMP_INPUTS`], each copy under its own key
+    /// image so CEN-H10 (no repeated image) holds and the count is the one
+    /// violation; the header re-lists. CEN-I4, at the transaction, on every
+    /// network: the cap the C++ exempted on Fakechain binds the test
+    /// networks too (rule 71; `CHAIN_RULES_SLICE_6.md` §5.4).
+    TooManyInputs,
 }
 
 /// What the chain below the mutated height established, as the wrapper
@@ -264,7 +321,7 @@ pub enum ExpectedPlace {
 
 impl Mutation {
     /// Every mutation, in the table's order (§3.10).
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 21] = [
         Self::HeaderVersion,
         Self::Orphan,
         Self::WrongRoot,
@@ -285,6 +342,7 @@ impl Mutation {
         Self::UnknownReference,
         Self::ReferenceTooRecent,
         Self::ForgedSignature,
+        Self::TooManyInputs,
     ];
 
     /// The census row that refuses this mutation — the spec's answer,
@@ -309,6 +367,7 @@ impl Mutation {
             Self::UnknownReference => CenRow::I10,
             Self::ReferenceTooRecent => CenRow::I11,
             Self::ForgedSignature => CenRow::I18,
+            Self::TooManyInputs => CenRow::I4,
         }
     }
 
@@ -340,6 +399,7 @@ impl Mutation {
             // (the slot whose hash the rule looked up).
             Self::UnknownReference
             | Self::ReferenceTooRecent
+            | Self::TooManyInputs
             | Self::ReorderedBodies
             | Self::SubstitutedBody
             | Self::RelistedTransaction
@@ -568,6 +628,31 @@ impl Mutation {
                 *last ^= 0x01;
                 // The auths are the txid's third component: one violation
                 // only if the header follows the body.
+                relist(&mut candidate);
+            }
+            Self::TooManyInputs => {
+                let spend = candidate
+                    .transactions
+                    .iter_mut()
+                    .find(|tx| !key_images(tx).is_empty())
+                    .ok_or(Unmutable::NoSpendToRepeat)?;
+                let first = spend
+                    .prefix
+                    .inputs
+                    .iter()
+                    .find(|input| matches!(input, Input::ToKey { .. }))
+                    .cloned()
+                    .ok_or(Unmutable::NoSpendToRepeat)?;
+                for image in EXTRA_KEY_IMAGES
+                    .iter()
+                    .take((MAX_FCMP_INPUTS + 1).saturating_sub(spend.prefix.inputs.len()))
+                {
+                    let mut input = first.clone();
+                    if let Input::ToKey { key_image, .. } = &mut input {
+                        *key_image = *image;
+                    }
+                    spend.prefix.inputs.push(input);
+                }
                 relist(&mut candidate);
             }
         }

@@ -72,7 +72,6 @@ use crate::connector::{
     Apply, CheckpointState, Connector, ConnectorArgs, Digest, HashAt, HeaderAt, Inject,
     ObserveTarget, Rewind, Rewound, RunFault,
 };
-use crate::grader::Observations;
 use crate::metrics::{Concurrency, Metrics, MetricsArtifact};
 use crate::schedule::ChainRules;
 use crate::seed::{SeedClaim, SeedLedger};
@@ -507,35 +506,6 @@ impl RunReport {
     #[must_use]
     pub fn popped(&self) -> u64 {
         self.switches.iter().map(|s| s.popped).sum()
-    }
-
-    /// What the grader reads (RD-Q9), derived from the report so the two
-    /// cannot disagree: exercised rows, the refusal, the covered-tip digest,
-    /// the per-height root oracle (CTW-5), and the archival oracle at the
-    /// checkpoint (DRS-E4 §3.8.1). The digest and the oracles stay
-    /// separate. The digest carries only the live root, so an interior
-    /// miss is invisible to it, and it carries no archival state;
-    /// `digest_identical` is `None` and `archival.compared` is `false`
-    /// when no checkpoint was compared.
-    #[must_use]
-    pub fn observations(&self) -> Observations {
-        Observations {
-            exercised: self.exercised.clone(),
-            refused: self
-                .refused
-                .as_ref()
-                .map(|(height, verdict)| (verdict.rule.as_str(), *height)),
-            digest_identical: self.checkpoint.as_ref().map(Checkpoint::identical),
-            roots: crate::grader::RootOracle {
-                compared: self.roots.compared(),
-                diverged_at: self.roots.diverged().map(|d| d.at).collect(),
-            },
-            archival: self
-                .archival
-                .as_ref()
-                .map(|a| crate::grader::ArchivalOracle::from_diff(a.at, &a.diff))
-                .unwrap_or_default(),
-        }
     }
 
     /// Every way the run disagreed with the chain, in the order they can

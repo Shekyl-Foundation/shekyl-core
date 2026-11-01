@@ -6,7 +6,7 @@
 //! The DRS-E2 replay driver — the ingest pipeline's first source, as a
 //! binary (`DRS_E2_REPLAY_DRIVER.md` §1.1, RD-Q1, RD-Q7).
 //!
-//! Two commands, matching the two artifacts:
+//! Three commands, the two artifacts and the baseline between them:
 //!
 //! - `fetch` — build a corpus from an **unpruned** daemon over
 //!   `/get_blocks_by_height.bin` (zero C++; the writer verifies every
@@ -19,26 +19,30 @@
 //!   levers (RD-Q7, DRS-E4 `ARW-15`; refused elsewhere by construction,
 //!   `ChainRules::new`).
 //!
-//! The trace comes from `shekyl-e2-trace-export` (the C++ harvest shim).
+//! - `baseline` — replay a corpus against a fresh store with nothing to
+//!   compare, then write the store's chain as the trace later replays must
+//!   reproduce (`shekyl_chain_ingest::rebaseline`): the E2 corpus
+//!   re-baselined from Rust (`DAEMON_REDB_STORE.md` §12.1).
+//!
+//! The trace comes from `baseline`; the C++ harvest shim that wrote the
+//! pre-flip traces left with the C++ store.
 //! Everything this binary composes is library code in
 //! `shekyl-chain-ingest`; nothing lives only here (RD-Q1).
 //!
 //! # Exit status
 //!
 //! Non-zero on any fault, and on any **disagreement** the run itself
-//! reports — a refusal, a DIVERGE at the checkpoint, a derived root that
-//! differs from the trace — unless a register was given, in which case the
-//! grade decides (§1.3: the success condition is *no unadjudicated
-//! disagreement*, and the root oracle failing the grade on its own). With
-//! no register nothing is adjudicated. The metrics artifact is written on
-//! every path that ran
+//! reports — a refusal, a DIVERGE at the checkpoint, a derived value that
+//! differs from the trace: the trace is the Rust baseline, so any
+//! disagreement is a change in what the Rust derives. The metrics artifact
+//! is written on every path that ran
 //! the pipeline, a late fault included: hours of hashing are the
 //! measurement RD-F11 asked for whether or not the run finished.
 
 #![deny(unsafe_code)]
 
 use std::fs::File;
-use std::io::{BufReader, BufWriter};
+use std::io::{BufReader, BufWriter, Write};
 use std::num::{NonZeroU128, NonZeroU64, NonZeroUsize};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -47,9 +51,9 @@ use std::sync::Arc;
 use clap::{Parser, Subcommand};
 use shekyl_chain_ingest::corpus::{CorpusNet, CorpusReader, CorpusWriter};
 use shekyl_chain_ingest::fetch::fetch_corpus;
-use shekyl_chain_ingest::grader::{grade_run, Register};
 use shekyl_chain_ingest::metrics::Metrics;
 use shekyl_chain_ingest::pipeline::{run, Disagreement, PipelineConfig, RunReport};
+use shekyl_chain_ingest::rebaseline::trace_of;
 use shekyl_chain_ingest::schedule::ChainRules;
 use shekyl_chain_ingest::source::Injection;
 use shekyl_chain_ingest::substrate::ProductionSubstrate;
@@ -148,17 +152,45 @@ enum Command {
         /// inflates the per-hash figure the metrics artifact records.
         #[arg(long, default_value_t = PipelineConfig::default_hashers())]
         hashers: NonZeroUsize,
-        /// The CSR-3a register as `scripts/ci/export_conformance_register.py`
-        /// emits it. With it, the run is graded (RD-Q6) and the grade decides
-        /// the exit status; without it, any disagreement the run reports
-        /// does.
-        #[arg(long)]
-        register: Option<PathBuf>,
-        /// Where to write the graded-run artifact (JSON). Requires `--register`.
-        #[arg(long, requires = "register")]
-        grade_out: Option<PathBuf>,
         /// Where to write the RandomX measurement (JSON; RD-F11). Written
         /// even when the run faults.
+        #[arg(long)]
+        metrics_out: Option<PathBuf>,
+    },
+    /// Replay a corpus against a fresh store with nothing to compare, then
+    /// write the store's chain as the trace a replay must reproduce.
+    Baseline {
+        /// The corpus (`fetch`'s output).
+        #[arg(long)]
+        corpus: PathBuf,
+        /// A redb store directory that does not exist yet.
+        #[arg(long)]
+        store: PathBuf,
+        /// Which chain's rules the corpus is judged under; must be the
+        /// chain the corpus is tagged with.
+        #[arg(long, value_enum)]
+        chain: CorpusNet,
+        /// As `replay`'s.
+        #[arg(long)]
+        fixed_difficulty: Option<NonZeroU128>,
+        /// As `replay`'s.
+        #[arg(long, requires = "reorg_cap")]
+        settlement_epoch_blocks: Option<NonZeroU64>,
+        /// As `replay`'s.
+        #[arg(long, requires = "settlement_epoch_blocks")]
+        reorg_cap: Option<NonZeroU64>,
+        /// Blocks formed ahead of the writer at once (non-zero).
+        #[arg(long, default_value_t = PipelineConfig::DEFAULT_WINDOW)]
+        window: NonZeroUsize,
+        /// `form` workers hashing at once (non-zero).
+        #[arg(long, default_value_t = PipelineConfig::default_hashers())]
+        hashers: NonZeroUsize,
+        /// Where to write the trace.
+        #[arg(long)]
+        out: PathBuf,
+        /// Where to write the RandomX measurement (JSON; RD-F11), as
+        /// `replay`'s: the per-hash mean the budget's proof-of-work share
+        /// reads (`DAEMON_REDB_STORE.md` §1.3a.6 item 8).
         #[arg(long)]
         metrics_out: Option<PathBuf>,
     },
@@ -198,8 +230,6 @@ async fn real_main(cli: Cli) -> Result<(), Failure> {
             reorg_cap,
             window,
             hashers,
-            register,
-            grade_out,
             metrics_out,
         } => {
             let schedule = schedule_flags(settlement_epoch_blocks, reorg_cap)?;
@@ -210,13 +240,102 @@ async fn real_main(cli: Cli) -> Result<(), Failure> {
                 chain,
                 rules: ChainRules::new(chain.into(), fixed_difficulty, schedule)?,
                 cfg: PipelineConfig { window, hashers },
-                register,
-                grade_out,
+                metrics_out,
+            })
+            .await
+        }
+        Command::Baseline {
+            corpus,
+            store,
+            chain,
+            fixed_difficulty,
+            settlement_epoch_blocks,
+            reorg_cap,
+            window,
+            hashers,
+            out,
+            metrics_out,
+        } => {
+            let schedule = schedule_flags(settlement_epoch_blocks, reorg_cap)?;
+            baseline(Baseline {
+                corpus,
+                store,
+                chain,
+                rules: ChainRules::new(chain.into(), fixed_difficulty, schedule)?,
+                cfg: PipelineConfig { window, hashers },
+                out,
                 metrics_out,
             })
             .await
         }
     }
+}
+
+/// A baseline's inputs, resolved from the command line.
+struct Baseline {
+    corpus: PathBuf,
+    store: PathBuf,
+    chain: CorpusNet,
+    rules: ChainRules,
+    cfg: PipelineConfig,
+    out: PathBuf,
+    metrics_out: Option<PathBuf>,
+}
+
+/// Connect the whole corpus against a fresh store under the production
+/// substrate, with nothing to compare, and write the store's chain as the
+/// trace. A chain the rules refuse anywhere is no baseline: the tool fails
+/// and writes nothing.
+async fn baseline(baseline: Baseline) -> Result<(), Failure> {
+    if baseline.store.exists() {
+        return Err(format!(
+            "{} exists; a baseline is written from a fresh store",
+            baseline.store.display()
+        )
+        .into());
+    }
+    let horizons = Horizons::under(&baseline.rules.in_force(BlockHeight::from_raw(0)))?;
+    let mut source = CorpusReader::open(BufReader::new(File::open(&baseline.corpus)?))?;
+    if source.net() != baseline.chain {
+        return Err(format!(
+            "the corpus is tagged {:?} but --chain says {:?}",
+            source.net(),
+            baseline.chain
+        )
+        .into());
+    }
+    let store = ChainStore::with_horizons(&baseline.store, ApplyPolicy::default(), horizons)?;
+    let metrics = Arc::new(Metrics::new());
+    let substrate = Arc::new(ProductionSubstrate::new(
+        Arc::new(CacheStore::new()),
+        Arc::clone(&metrics),
+    ));
+    let outcome = run(
+        &mut source,
+        substrate,
+        Arc::clone(&metrics),
+        baseline.rules,
+        store,
+        Arc::new(Trace::empty()),
+        baseline.cfg,
+    )
+    .await;
+    if let Some(out) = &baseline.metrics_out {
+        std::fs::write(out, metrics.snapshot().to_json()?)?;
+    }
+    let report = outcome?;
+    if let Some((height, verdict)) = report.refused {
+        return Err(format!("the corpus does not replay: refused at {height}: {verdict:?}").into());
+    }
+    let store = ChainStore::open_read_only(&baseline.store, horizons)?;
+    let snap = store.begin_read()?;
+    trace_of(&snap, BufWriter::new(File::create(&baseline.out)?))?.flush()?;
+    eprintln!(
+        "connected {} block(s); trace → {}",
+        report.connected.len(),
+        baseline.out.display()
+    );
+    Ok(())
 }
 
 /// The schedule pair from its two flags: both or neither (clap holds that),
@@ -277,21 +396,10 @@ struct Replay {
     chain: CorpusNet,
     rules: ChainRules,
     cfg: PipelineConfig,
-    register: Option<PathBuf>,
-    grade_out: Option<PathBuf>,
     metrics_out: Option<PathBuf>,
 }
 
-/// The register is read and checked **before** the run: a register that
-/// does not parse is discovered in milliseconds, not after every block has
-/// connected.
-fn register_first(path: Option<&std::path::Path>) -> Result<Option<Register>, Failure> {
-    path.map(|p| Ok(Register::from_json(&std::fs::read_to_string(p)?)?))
-        .transpose()
-}
-
 async fn replay(replay: Replay) -> Result<(), Failure> {
-    let register = register_first(replay.register.as_deref())?;
     // The store runs the `(SEB, cap)` pair of the rule set that judges the
     // chain — the production pair, or the regtest daemon's levers — read
     // off that set, not off a second copy (`Horizons::under`). A store
@@ -391,69 +499,15 @@ async fn replay(replay: Replay) -> Result<(), Failure> {
         }
     }
 
-    match register {
-        Some(register) => grade(&register, &report, replay.grade_out.as_deref()),
-        None => ungraded(&report),
-    }
+    agreed(&report)
 }
 
-/// Graded: the register adjudicates, and the grade decides.
-fn grade(
-    register: &Register,
-    report: &RunReport,
-    grade_out: Option<&std::path::Path>,
-) -> Result<(), Failure> {
-    let graded = grade_run(register, &report.observations());
-    eprintln!(
-        "graded: {} row(s); {} derived-and-conformant, {} not exercised, \
-         {} owed reviewed-divergence, {} unadjudicated",
-        graded.rows.len(),
-        graded.derived_and_conformant,
-        graded.not_exercised,
-        graded.owed_reviewed_divergence.len(),
-        graded.unadjudicated.len(),
-    );
-    if let Some(out) = grade_out {
-        std::fs::write(out, graded.to_json()?)?;
-        eprintln!("graded artifact → {}", out.display());
-    }
-    for u in &graded.unadjudicated {
-        eprintln!(
-            "UNADJUDICATED {} ({:?}): {:?}",
-            u.id, u.clause, u.acceptance
-        );
-    }
-    for family in &graded.archival_oracle.diverged {
-        eprintln!(
-            "ARCHIVAL DIVERGED {}: {} unequal, {} only redb, {} only trace",
-            family.family,
-            family.unequal.len(),
-            family.only_ours.len(),
-            family.only_theirs.len()
-        );
-    }
-    if !graded.passes() {
-        if graded.unadjudicated.is_empty() {
-            let roots = graded.root_oracle.diverged_at.len();
-            let families = graded.archival_oracle.diverged.len();
-            return Err(format!(
-                "root oracle diverged at {roots} height(s); archival oracle diverged in \
-                 {families} family(ies) (§1.3)"
-            )
-            .into());
-        }
-        return Err("the run has unadjudicated disagreements (§1.3)".into());
-    }
-    Ok(())
-}
-
-/// Ungraded: nothing adjudicates, so any disagreement is open.
-fn ungraded(report: &RunReport) -> Result<(), Failure> {
+/// The run against the baseline: any disagreement is a change in what the
+/// Rust derives, and fails the run.
+fn agreed(report: &RunReport) -> Result<(), Failure> {
     let open = report.disagreements().count();
     if open > 0 {
-        return Err(
-            format!("{open} disagreement(s) and no --register to adjudicate them (§1.3)").into(),
-        );
+        return Err(format!("{open} disagreement(s) with the baseline trace").into());
     }
     Ok(())
 }
@@ -690,17 +744,5 @@ mod tests {
         )
         .is_err());
         assert!(schedule_flags(NonZeroU64::new(512), NonZeroU64::new(512)).is_err());
-    }
-
-    #[test]
-    fn an_unparseable_register_is_refused_before_anything_runs() {
-        let dir =
-            std::env::temp_dir().join(format!("shekyl-replay-preflight-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("dir");
-        let register = dir.join("register.json");
-        std::fs::write(&register, "{\"schema_version\": \"nope\"}").expect("write");
-        assert!(register_first(Some(&register)).is_err());
-        assert!(register_first(None).expect("absent is fine").is_none());
-        let _gone = std::fs::remove_dir_all(&dir);
     }
 }
