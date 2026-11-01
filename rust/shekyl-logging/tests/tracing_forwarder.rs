@@ -15,8 +15,9 @@
 //! dispatcher, and this export pins the C++ call ordering
 //! (`shekyl_log_init_*` first) plus install idempotency. The daemon
 //! installs the forwarder through the Rust function
-//! `install_tracing_forwarder` (DC-Q22); this C export is the C++
-//! binaries' and these tests' pin.
+//! `install_tracing_forwarder` (DC-Q22); no C++ binary calls this C
+//! export today, and whether it stays as these tests' pin or goes is
+//! Rick's (`DAEMON_CONFIG_CUTOVER.md` §10.1, DC-F19).
 //!
 //! This is an integration test (own process) rather than a unit test
 //! because the install pin and `INITIALIZED` flag are process-global
