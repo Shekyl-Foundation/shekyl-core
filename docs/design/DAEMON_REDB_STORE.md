@@ -1172,8 +1172,9 @@ connect (the hazard `blockchain.cpp:2735` warns about in prose).
 - **The chain table set exists from the seal** (amendment A2), so `block_burn`
   on a chain that has never burned is `Recorded(0)` and an empty chain's
   `tip()` is a value, not `TableDoesNotExist`; the seal set is every
-  non-`Unshaped` table (§11.1(f)), and `header::verify` refuses a sealed file
-  missing one as SI-7 with the table named.
+  catalogued table (§11.1(f); every table has a writer since layout 34), and
+  `header::verify` refuses a sealed file missing one as SI-7 with the table
+  named.
 - **Raw handles are crate-private** (Q3): `open_table` is `pub(crate)`. (The
   `cfg(test)` multimap opener that stood here was deleted with the
   catalogue's only multimap at S-OUT-KI's layout v6; the typed output reads
@@ -2377,7 +2378,7 @@ increment that touches it). Stated once, in the `shape` module — in
 `shekyl-store-codec` since the move (last bullet); the statement did
 not change with its address:
 
-- A value is one of exactly four shapes. **`Coded<V>`** — rows are
+- A value is one of exactly three shapes. **`Coded<V>`** — rows are
   `V::encode` under a `Canonical` codec, `TypeName` = `shekyl::Coded<{V::NAME}>`
   — the wrapper's name carrying the codec's, which the codec contract already
   forbids reusing for a different layout; `tables.snap` pins the string.
@@ -2386,16 +2387,14 @@ not change with its address:
   `BlobKind` names the kind and says what well-formed is. **`Present`** — a
   set-table's value: the key is the member, the value is a zero-width
   witness (`spent_keys`; `TypeName` `shekyl::Present`, SCHEMA_VERSION 5).
-  **`Unshaped`** — a
-  censused table no Rust writer has reached; its row type is uninhabited, so
-  the table is catalogued (it has an ordinal) and refused by the journal
-  replay, but it is **not** created by the seal (`Restorable::SEALED` is
-  `false` for exactly this shape) and cannot be inserted into: "no writer
-  yet" is a fact of the type. The increment
-  that first writes such a table replaces `Unshaped` with the table's codec
-  and bumps `SCHEMA_VERSION`. At the ruling: 15 tables `Coded`/`Blob`, 33
-  `Unshaped`, `spent_keys` as `Present`, and `output_amounts`' order-bearing
-  multimap member (a key type, `lmdb_order`). Scalar-valued tables take the
+  A table enters the catalogue with its writer and its codec, and every
+  catalogued table is created by the seal. The fourth shape the ruling
+  first named, `Unshaped` (a censused table no Rust writer had reached, its
+  row type uninhabited and the table not sealed), left at layout 34 with
+  the last two tables that used it (`txs`, `hf_starting_heights`). At the
+  ruling: 15 tables `Coded`/`Blob`, 33 `Unshaped`, `spent_keys` as
+  `Present`, and `output_amounts`' order-bearing multimap member (a key
+  type, `lmdb_order`). Scalar-valued tables take the
   domain newtype where one exists (`BlockHeight`, `RuleSetId`,
   `PrunableHash`) and a named column codec where none does (`BlockBurn`); the
   `Fact<u64>` → `AtomicUnits` lift is
@@ -2433,9 +2432,8 @@ not change with its address:
   thing (b) exists to prevent; reporting it is *sound* because two boundaries
   keep the assertion unreachable — the write boundary above refuses a
   wrong-width value before the engine sees it, and the journal replay runs
-  `V::decode` as `Restorable::well_formed` before `from_bytes` (and refuses an
-  `Unshaped` target outright, since an `Inserted` entry has no `prior` for
-  `well_formed` to check). Two consequences: this is
+  `V::decode` as `Restorable::well_formed` before `from_bytes`. Two
+  consequences: this is
   a leaf-page layout change from `&[u8]` (variable-width), paid by the bump
   the commit already owed; and for a fixed-width codec whose only check is
   its width (`BlockInfo`, `CurveRoot`, the scalars) an *undecodable* row is
@@ -2452,8 +2450,8 @@ not change with its address:
   is refused at the header seal, per (a).
 - **One trait, two stores; the rule stays with the digest. MOVED
   2026-09-18 (steering), ahead of wallet adoption.** `Canonical`,
-  `CodecError`, `exact` and the value shapes (`Coded`, `Blob`, `Present`,
-  `Unshaped`) are store-engine-generic and now live in `shekyl-store-codec`
+  `CodecError`, `exact` and the value shapes (`Coded`, `Blob`, `Present`)
+  are store-engine-generic and now live in `shekyl-store-codec`
   (plan: [`CURVE_TREE_STORE_SHAPES.md`](CURVE_TREE_STORE_SHAPES.md), Round 0
   executed 2026-09-18 and **closed as record** the same day with
   [`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md) as successor; PR A is the
