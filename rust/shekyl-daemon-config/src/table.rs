@@ -137,6 +137,7 @@ const SYNC_HASHER_BUDGET: &str = "the shared hasher budget sets it, derived from
 const NO_DAEMONIZE: &str = "shekyld never daemonizes or registers itself; installing is the installer's and shekyl-cli's, and on Windows shekyld answers the service manager through `service` (RPC_CHANNEL.md RT-16)";
 const NO_TLS: &str = "the RPC channel replaces TLS and HTTP authentication (RPC_CHANNEL.md RT-11)";
 const NO_BOOTSTRAP: &str = "no proxying to a third-party daemon";
+const POOL_CAP_FROM_CHAIN: &str = "the pool's cap derives from the chain (CEN-M10): REFERENCE_BLOCK_MAX_AGE blocks at the block weight limit (DRS_E5_POOL_ALT_PRUNE.md, INPUT_GRAMMAR.md IG-Q11)";
 const NO_BG_MINING: &str =
     "background mining was Monero's; the daemon mines when told to (DAEMON_CONFIG_CUTOVER.md §4)";
 
@@ -239,7 +240,7 @@ const ROWS: &[Row] = &[
     rejected("block-sync-size", SYNC_PROTOCOL_BUDGETS),
     rejected("block-download-max-size", SYNC_PROTOCOL_BUDGETS),
     rejected("prep-blocks-threads", SYNC_HASHER_BUDGET),
-    public("txpool-weight-max", BYTES, Default::Value("648000000B"), Surface::Both, "The transaction pool's weight bound."),
+    rejected("txpool-weight-max", POOL_CAP_FROM_CHAIN),
     public("notify-block", Kind::Command { placeholders: &["height", "hash"] }, Default::Unset, Surface::File, "A command to run on a new block, with {height} and {hash}."),
     public("notify-reorg", Kind::Command { placeholders: &["split-height", "height", "added", "removed"] }, Default::Unset, Surface::File, "A command to run on a reorganization, with {split-height}, {height}, {added} and {removed}."),
     public("notify-block-rate", Kind::Command { placeholders: &["window", "observed", "expected"] }, Default::Unset, Surface::File, "A command to run on a block-rate warning, with {window}, {observed} and {expected}."),
@@ -332,6 +333,23 @@ mod tests {
     /// has its own. Each is refused from the command line and from the file
     /// (IG-10), with that reason, not as an unknown name.
     #[test]
+    fn the_pool_weight_option_is_refused_naming_cen_m10() {
+        use shekyl_options::{Code, Source};
+        let file = Source::File {
+            path: std::path::PathBuf::from("shekyld.toml"),
+            line: 1,
+        };
+        for source in [&Source::Cli, &file] {
+            let refusal = TABLE.live("txpool-weight-max", source).unwrap_err();
+            assert_eq!(refusal.code, Code::NameRejected);
+            assert_eq!(refusal.option.as_deref(), Some("txpool-weight-max"));
+            assert_eq!(refusal.get("reason"), Some(POOL_CAP_FROM_CHAIN));
+            let rendered = refusal.render();
+            assert!(rendered.contains("CEN-M10"), "{rendered}");
+        }
+    }
+
+    #[test]
     fn the_four_chain_sync_options_are_refused_with_cs_q12() {
         use shekyl_options::{Code, Source};
         let file = Source::File {
@@ -362,13 +380,13 @@ mod tests {
         assert_eq!(TABLE.defects(), Vec::<String>::new());
     }
 
-    /// `INPUT_GRAMMAR.md` §5 counts 50 live names, the four environment
+    /// `INPUT_GRAMMAR.md` §5 counts 49 live names, the four environment
     /// levers among them. A row added or removed without the grammar fails
     /// here first.
     #[test]
     fn the_live_count_is_the_grammars() {
         let live = TABLE.rows.iter().filter(|r| r.is_live()).count();
-        assert_eq!(live, 50);
+        assert_eq!(live, 49);
         let levers = TABLE
             .rows
             .iter()

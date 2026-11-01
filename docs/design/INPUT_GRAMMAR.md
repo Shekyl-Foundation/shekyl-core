@@ -274,7 +274,7 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 | `db-sync-mode` | — | | | |  |  | – (the DRS lane decided: no knob; the Rust store's durability is the constant `shekyl_chain_store::store::DURABILITY`, `Immediate`, DRS-D9, Rick 2026-10-26) |
 | `db-salvage` | — | | | |  |  | L DRS |
 | `keep-alt-blocks` | — | | | |  |  | L DRS-E5 |
-| `max-txpool-weight` | `txpool-weight-max` | quantity (bytes) | `648000000B` | both |  |  | R; a Monero-derived operand; deleted at the DRS-X flip, the pool's cap deriving from the chain (IG-Q11, amended 2026-10-17) |
+| `max-txpool-weight`, `txpool-weight-max` | — | | | |  |  | X (the pool's cap derives from the chain, CEN-M10: `REFERENCE_BLOCK_MAX_AGE` blocks at the block weight limit; IG-Q11, amended 2026-10-17) |
 | `block-notify` | `notify-block` | command | unset | file |  |  | R (IG-Q5); placeholders `{height}`, `{hash}` |
 | `reorg-notify` | `notify-reorg` | command | unset | file |  |  | R (IG-Q5); placeholders `{split-height}` (the last block both chains share), `{height}` (the new tip), `{added}` (blocks in the new chain), `{removed}` (blocks discarded) |
 | `block-rate-notify` | `notify-block-rate` | command | unset | file |  |  | R (IG-Q5); placeholders `{window}` (the window in seconds), `{observed}`, `{expected}` |
@@ -328,7 +328,7 @@ Criterion: a REJECTED row exists for a capability a user could reasonably ask fo
 
 The `removed_flags` shim, its FOLLOWUPS sunset row, and its C++ tests go with the cutover; the X rows live in the Rust table.
 
-**Count:** 83 registered options and 4 environment levers today, plus PR-3's `p2p-disclose-early`, DRS-X's `dev-rpc` and Part D's `config-verify`; 50 live names after, the four environment levers among them (`rpc-listen` arrives at RT-W10 and `rpc-admin-listen` becomes an X row at RT-W12, RT-O33; 51 between the two).
+**Count:** 83 registered options and 4 environment levers today, plus PR-3's `p2p-disclose-early`, DRS-X's `dev-rpc` and Part D's `config-verify`; 49 live names after, the four environment levers among them (`rpc-listen` arrives at RT-W10 and `rpc-admin-listen` becomes an X row at RT-W12, RT-O33; 50 between the two; `txpool-weight-max` became an X row with IG-Q11).
 
 ---
 
@@ -379,12 +379,12 @@ The `removed_flags` shim, its FOLLOWUPS sunset row, and its C++ tests go with th
 
 **IG-Q10 — integers only, IEC units only — RULED 2026-10-13.**
 
-**IG-Q11 — `txpool-weight-max` — RULED 2026-10-13; AMENDED 2026-10-17 (Rick, on #1102).** The default is "3 days at 300000 bytes" (`cryptonote_config.h:328`), a Monero operand. The name landed with the inherited default and a FOLLOWUPS row for the pool's owner to re-derive it. The re-derivation is done: the Rust pool derives its cap from the chain, `REFERENCE_BLOCK_MAX_AGE` blocks at the block weight limit (`DRS_E5_POOL_ALT_PRUNE.md` CEN-M10), and reads no option. **`txpool-weight-max` is deleted at the DRS-X flip** and joins the retired options, refused with "the pool's cap derives from the chain (CEN-M10)". The C++ pool reads it until then. The reasons:
+**IG-Q11 — `txpool-weight-max` — RULED 2026-10-13; AMENDED 2026-10-17 (Rick, on #1102).** The default is "3 days at 300000 bytes" (`cryptonote_config.h:328`), a Monero operand. The name landed with the inherited default and a FOLLOWUPS row for the pool's owner to re-derive it. The re-derivation is done: the Rust pool derives its cap from the chain, `REFERENCE_BLOCK_MAX_AGE` blocks at the block weight limit (`DRS_E5_POOL_ALT_PRUNE.md` CEN-M10), and reads no option. **`txpool-weight-max` is a rejected option**, refused with "the pool's cap derives from the chain (CEN-M10)" (`shekyl-daemon-config`'s table). The reasons:
 - the cap is derived, not chosen: any lower number only discards transactions that could still be mined;
 - a per-node cap changes what a node holds under pressure, which peers see through pool sync;
 - on a floor device the chain binds before the pool does.
 
-*Reopening criterion:* a floor-device measurement at the flip in which pool RSS, not the chain, binds first at a realistic weight limit. The remedy then is a compact in-memory representation, not an option.
+*Reopening criterion:* a floor-device measurement in which pool RSS, not the chain, binds first at a realistic weight limit; `DAEMON_REDB_STORE.md` §1.3a's PB-R1 reads the node's RSS at design load on the floor device. The remedy then is a compact in-memory representation, not an option.
 
 **IG-Q12 — `rpc-connections-max`'s default — RULED 2026-10-13.** The only number on hand is the C++'s effective 25, which nobody derived. The cap is a resource limit, and RT-O9.4 ruled cost a resource policy separate from grants. The cutover ships the inherited value 25 with a FOLLOWUPS row for the RPC lane to derive the default under that policy, the same shape as `txpool-weight-max`.
 

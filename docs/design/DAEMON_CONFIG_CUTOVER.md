@@ -516,7 +516,6 @@ cutover replaces their callers.
 | the network | core, the miner, the console client | `network` |
 | offline, derived from both connectors being off | core (line 1559 of `src/cryptonote_core/cryptonote_core.cpp` at `d26148535e`), the protocol handler | `clearnet`, `tor` (IG-Q3) |
 | the fixed difficulty | core | `dev-difficulty` |
-| the pool's weight bound | core | `txpool-weight-max` |
 | sync on or off | the protocol handler | `dev-sync` |
 | the mining address | the miner | `mine-address`, already decoded: the display text, the spend and view keys, and the ML-KEM encapsulation key. The miner assembles the account address from those keys and does not parse the text |
 | the mining threads | the miner | `mine-threads`; 0 is `auto`, and the miner chooses the count |
@@ -524,10 +523,11 @@ cutover replaces their callers.
 | the console's command words | the C++ console client | the positional words; empty for a daemon start |
 | the console's RPC endpoint | the C++ console client | the first `rpc-admin-listen` endpoint when it is IPv4: four octets in network order and a port, present only in client mode. A client whose endpoint is not IPv4 is refused at parse (`config.value.range`). Absence of any admin endpoint is refused at parse (§2.2) |
 
-**Eleven fields.** A gate pins the count and fails when it rises; each later
+**Ten fields.** A gate pins the count and fails when it rises; each later
 slice that moves a reader deletes its field. If the pre-flight finds a C++
-reader of the advertised address on `dev`, it is a twelfth field,
-recorded there.
+reader of the advertised address on `dev`, it is an eleventh field,
+recorded there. The pool's weight bound left when `txpool-weight-max`
+became a rejected option (IG-Q11).
 
 **Where it is defined.** The snapshot's structures, its field count and
 the parse export the C++ test binaries and `shekyl-blockchain-import`
@@ -923,7 +923,6 @@ chain-sync lanes do not touch the option surface.
 | DC-F1, the genesis-at-open check on a store's contents (no longer a blocker) | [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) |
 | DC-N2, the console moves to `shekyl-cli` | RT-15, [`RPC_CHANNEL.md`](RPC_CHANNEL.md) |
 | the blockchain utilities' option sets | IG Part B; this brief §9 |
-| the inherited default of `txpool-weight-max` (IG-Q11) | [`DRS_E5_POOL_ALT_PRUNE.md`](DRS_E5_POOL_ALT_PRUNE.md), the pool's live document |
 | the inherited default of `rpc-connections-max` (IG-Q12) | RT-O9.4, [`RPC_CHANNEL.md`](RPC_CHANNEL.md) |
 | the `removed_flags` shim sunset | this brief §4; the row leaves with the files |
 
