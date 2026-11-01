@@ -174,8 +174,8 @@ impl<'a> Fill<'a> {
     }
 
     /// Offer a body of `weight` paying `fee`. Admitted — and counted — when
-    /// the block stays within [`Self::block_limit`] and the body does not
-    /// lower the gross coinbase; otherwise refused and nothing changes, so
+    /// the block stays within the block limit, twice the median weight, and
+    /// the body does not lower the gross coinbase; otherwise refused and nothing changes, so
     /// a producer goes on to the next body.
     pub fn admit(&mut self, weight: u64, fee: u64) -> bool {
         let Some(block_weight) = self.block_weight.checked_add(weight) else {
