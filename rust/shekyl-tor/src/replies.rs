@@ -14,7 +14,9 @@
 //! `stream_end_reason_to_socks5_response` reports an introduction timeout
 //! as reply `0x04`.
 
-use shekyl_transport_layer::{CloseCause, Marks};
+use shekyl_transport_layer::{
+    CloseCause, CloseKind, DialEnd, DialFailure, Marks, Reached, Retry, StreamEnd,
+};
 
 /// RFC 1928 §6. The destination host was not reached.
 const SOCKS_HOST_UNREACHABLE: u16 = 0x04;
@@ -133,9 +135,179 @@ pub const fn refused(reply: u16) -> CloseCause {
     CloseCause::proxy_refused(reply, proxy_reply_marks(reply))
 }
 
+/// What a reply from this node's Tor is evidence of (`DIALER_OUTAGE_EVIDENCE.md`
+/// §3.2, `OE-D4`, reviewed by the Tor lane 2026-10-31 against tor 0.4.9.14).
+/// A reply is before the channel, so no stream opened.
+///
+/// **The rule for Tor (the Tor lane):** nothing a gossiped address can cause
+/// may be Local. Local is excused, retried every 10–15 s and never climbs,
+/// so a planted onion that could produce a Local reply would be redialed
+/// forever.
+///
+/// - **Destination:** connection refused (`0x05`: the service's own answer,
+///   refused, reset, or DONE for a port it does not offer); the unusable
+///   descriptor (`0xF1`); client authorization missing or rejected (`0xF4`,
+///   `0xF5`: demanded by the onion's own descriptor, `hs_client.c:1636-1650`);
+///   the onion address rejected (`0xF6`: Tor could not parse the name,
+///   `connection_edge.c:2192-2198`; addresses are validated before the dial,
+///   so in practice it never arrives).
+/// - **Local:** network unreachable (`0x03`: produced in one place only, when
+///   Tor decides every directory server is unreachable and fails the streams
+///   still waiting, `DIR_ALL_UNREACHABLE`, `mainloop.c:1095-1107`: Tor saying
+///   its own network is down); command and address type not supported
+///   (`0x07`, `0x08`: Tor rejected the shape of this node's own SOCKS
+///   request, `proto_socks.c:615`, `:653`; the connector only ever sends a
+///   v3 onion hostname, whatever address it dials).
+/// - **Uncertain:** the ruleset refusal (`0x02`, ruled Rick 2026-10-31):
+///   this node's own Tor policy, which can depend on the gossiped port under
+///   an operator's own Tor (`RejectPlaintextPorts`), so it counts once the
+///   link is shown working and an address it refuses climbs; the managed
+///   Tor sets no such policy, so there it never arrives; general failure
+///   (`0x01`: Tor sends it for many endings,
+///   `reasons.c:109-155`; a circuit destroyed after the stream joins it
+///   comes back as a plain `0x01`, `connection_edge.c:400-411`, so a hostile
+///   guard that destroys each rendezvous circuit, or this node's own guard
+///   link dropping, must not be counted without corroboration); host
+///   unreachable (`0x04`: with extended errors on, only the service's own
+///   connect failing); TTL expired (`0x06`, Tor's own window); the missing
+///   descriptor, the failed introduction and the two timeouts (`0xF0`,
+///   `0xF2`, `0xF3`, `0xF7`); and any reply not listed.
+///
+/// Each retry is the reply table's above, unchanged. Tor does Tor
+/// (`TSR-Q14`, ruled 2026-10-25), and the finality is the full-window rule
+/// (Rick, 2026-10-26): Tor has already retried inside its own window before
+/// it answers (another introduction point, another directory), so a reply
+/// it gives as final is its definitive answer, and the dialer does not add
+/// a redial over it.
+#[must_use]
+pub const fn stamp_reply(reply: u16) -> DialFailure {
+    let retry = if proxy_reply_marks(reply) & Marks::RETRY != 0 {
+        Retry::AgainInsideWindow
+    } else {
+        Retry::Final
+    };
+    match reply {
+        SOCKS_CONNECTION_REFUSED
+        | TOR_DESCRIPTOR_UNUSABLE
+        | TOR_CLIENT_AUTH_MISSING
+        | TOR_CLIENT_AUTH_REJECTED
+        | TOR_ONION_ADDRESS_REJECTED => DialFailure::destination(retry, Reached::NoStream),
+        SOCKS_NETWORK_UNREACHABLE
+        | SOCKS_COMMAND_NOT_SUPPORTED
+        | SOCKS_ADDRESS_TYPE_NOT_SUPPORTED => DialFailure::local(retry, Reached::NoStream),
+        _ => DialFailure::uncertain(retry, Reached::NoStream),
+    }
+}
+
+/// How a reply from this node's Tor ends a dial: the evidence, and the D12
+/// cause beside it for the log.
+#[must_use]
+pub const fn reply_end(reply: u16) -> DialEnd {
+    DialEnd::new(stamp_reply(reply), refused(reply))
+}
+
+/// What this connector's dial path saw before the channel, other than a
+/// SOCKS reply ([`reply_end`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Observed {
+    /// This node's SOCKS port refused, errored, rejected authentication or
+    /// answered malformed: this node's proxy, independent of the onion.
+    ProxyUnavailable,
+    /// The dial deadline ran out: the link or the onion.
+    Deadline,
+    /// This node's own failure: the engine, the socket table, an address
+    /// this connector cannot dial.
+    OwnFailure,
+}
+
+impl Observed {
+    /// The end this connector reports for what it saw.
+    #[must_use]
+    pub const fn end(self) -> DialEnd {
+        match self {
+            Self::ProxyUnavailable => DialEnd::new(
+                DialFailure::local(Retry::Again, Reached::NoStream),
+                CloseCause::new(CloseKind::ProxyUnavailable),
+            ),
+            Self::Deadline => DialEnd::new(
+                DialFailure::uncertain(Retry::AgainInsideWindow, Reached::NoStream),
+                CloseCause::new(CloseKind::TransportTimeout),
+            ),
+            Self::OwnFailure => DialEnd::local_close(),
+        }
+    }
+}
+
+/// How an onion stream ended after it opened (§3.2), from what shared
+/// code observed. Every Tor stream crosses the one guard link, so a
+/// circuit that collapses with this node's link looks the same as an onion
+/// that hangs up: each end is Uncertain and keeps its redial.
+#[must_use]
+pub const fn stamp_stream_end(end: StreamEnd) -> DialFailure {
+    match end {
+        StreamEnd::PeerClosed | StreamEnd::IoError | StreamEnd::SendQueueFull => {
+            DialFailure::uncertain(Retry::Again, Reached::StreamOpened)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use shekyl_transport_layer::{Evidence, Proof};
+
+    /// Tor's stamping of every reply (§3.2, the Tor lane's review): the
+    /// destination set, the local set, and Uncertain for the rest, each
+    /// keeping the reply table's retry. No reply proves misbehaviour: it is
+    /// the proxy's word. The edit that makes this red is moving any reply
+    /// between buckets; `0x01` as Destination is the eclipse lever (a
+    /// destroyed rendezvous circuit counted without corroboration).
+    #[test]
+    fn each_onion_reply_is_stamped_with_its_evidence() {
+        let destination = [0x05, 0xF1, 0xF4, 0xF5, 0xF6];
+        let local = [0x03, 0x07, 0x08];
+        for reply in 0u16..=0x0100 {
+            let failure = stamp_reply(reply);
+            let expected = if destination.contains(&reply) {
+                Evidence::Destination(Proof::ABSENT)
+            } else if local.contains(&reply) {
+                Evidence::Local
+            } else {
+                Evidence::Uncertain
+            };
+            assert_eq!(failure.evidence(), expected, "reply {reply:#x}");
+            assert!(!failure.proves_misbehaviour(), "reply {reply:#x}");
+            assert_eq!(failure.reached(), Reached::NoStream, "reply {reply:#x}");
+            let retries = proxy_reply_marks(reply) & Marks::RETRY != 0;
+            assert_eq!(
+                failure.retry(),
+                if retries {
+                    Retry::AgainInsideWindow
+                } else {
+                    Retry::Final
+                },
+                "reply {reply:#x}"
+            );
+            assert_eq!(reply_end(reply).cause(), refused(reply));
+        }
+    }
+
+    /// After the stream opened, every end shared code observes is
+    /// Uncertain on Tor (the one guard link) and keeps its redial.
+    #[test]
+    fn an_onion_streams_end_is_uncertain() {
+        for end in [
+            StreamEnd::PeerClosed,
+            StreamEnd::IoError,
+            StreamEnd::SendQueueFull,
+        ] {
+            let failure = stamp_stream_end(end);
+            assert_eq!(failure.evidence(), Evidence::Uncertain, "{end:?}");
+            assert_eq!(failure.retry(), Retry::Again, "{end:?}");
+            assert_eq!(failure.reached(), Reached::StreamOpened, "{end:?}");
+        }
+    }
 
     /// This connector's reply table (Rick, 2026-10-24; `0x01` final on
     /// 2026-10-25; the retry set read against Tor's window on 2026-10-26):

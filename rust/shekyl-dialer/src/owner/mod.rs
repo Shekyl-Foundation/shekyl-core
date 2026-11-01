@@ -51,7 +51,7 @@ use shekyl_peerlist::{
     dial_profile, white_diversity_floor, CloseCause, CloseKind, ConnectionId, ConnectorId,
     DialOutcome, Ladder, ListName, NetworkAddress, Peerlist, Refusal, RefusedSet, Source, Tick,
 };
-use shekyl_seam::{Hub, SocketId, Subscription, SyncPayload};
+use shekyl_seam::{BanEvent, BanFeed, Hub, SocketId, Subscription, SyncPayload};
 use shekyl_timing_engine::{Clock, OwnerHandle};
 
 use self::address::live_sessions;
@@ -62,7 +62,6 @@ pub use self::ready::NotReady;
 use self::ready::{park, wait_wake_or_bell, Bell, Waited};
 use self::wake::{plan_wake, Wake};
 use crate::attempts::Attempts;
-use crate::bans::BanSnapshot;
 use crate::fill::DialAim;
 use crate::link_tally::{LinkFold, TallySink, TorLinkTally};
 use crate::nonce::{HandshakeNonce, HandshakeNonceSet, InFlightNonce, NonceTake};
@@ -218,6 +217,10 @@ pub struct Dialer {
     /// The hub's links ring [`Self::bell`] while this is held. Dropped with
     /// the dialer, so a dialer rebuilt on the same hub leaves no watcher.
     _links_watch: Subscription,
+    /// The ban list's events, starting with every entry in force when the
+    /// dialer was built; each rings [`Self::bell`]. Drained in order under
+    /// the dialer's lock, by every [`Self::shared`]. Dropped with the dialer.
+    bans: BanFeed,
     /// The results the attempt tasks posted; each also rings the bell.
     completions: Arc<Completions>,
     /// Wakes [`Self::stop`] when the last application that started before
@@ -251,6 +254,8 @@ impl Dialer {
         let bell = Arc::new(Bell::new());
         let ringing = Arc::clone(&bell);
         let links_watch = hub.links().subscribe(Arc::new(move |_| ringing.ring()));
+        let ringing = Arc::clone(&bell);
+        let bans = hub.subscribe_bans(Arc::new(move || ringing.ring()));
         let started = hub.now();
         Self {
             hub,
@@ -286,6 +291,7 @@ impl Dialer {
             owners: Mutex::new([false; ConnectorId::COUNT]),
             bell,
             _links_watch: links_watch,
+            bans,
             completions: Arc::new(Completions::default()),
             apply_idle: Condvar::new(),
         }
@@ -375,9 +381,26 @@ impl Dialer {
         *self.network_id.lock().expect("network id")
     }
 
-    /// The shared state, for the calls that read or write the lists.
+    /// The shared state, for the calls that read or write the lists, with
+    /// the ban list's queued events applied first, in the order it made
+    /// them: a ban bars every seat its entry covers, a lift frees those no
+    /// remaining entry covers (Rick, 2026-10-31). Every caller takes the
+    /// lists through here, so whatever it reads reflects every ban and
+    /// lift posted before it, and the queue is taken under the lock, so
+    /// the owner loops apply one order between them.
     pub fn shared(&self) -> MutexGuard<'_, Shared> {
-        self.shared.lock().expect("dialer state")
+        let mut shared = self.shared.lock().expect("dialer state");
+        for event in self.bans.take() {
+            match event {
+                BanEvent::Banned(entry) => {
+                    shared.lists.ban(entry);
+                }
+                BanEvent::Lifted(entry) => {
+                    shared.lists.lift(entry);
+                }
+            }
+        }
+        shared
     }
 
     /// The hub this dialer dials through.
@@ -471,16 +494,11 @@ impl Dialer {
         now: Tick,
         rng: &mut R,
     ) {
-        let mut bans = BanSnapshot::take(&self.hub);
         let mut shared = self.shared();
         for address in &addresses {
             // Already seated: the population is the declaration either way.
             // A refusal is not "already seated" and is said.
-            if let Err(refusal) =
-                shared
-                    .lists
-                    .admit_gray(address, Source::Operator, now, &mut bans, rng)
-            {
+            if let Err(refusal) = shared.lists.admit_gray(address, Source::Operator, now, rng) {
                 tracing::warn!("closed-network address {address:?} was not admitted: {refusal:?}");
             }
         }
@@ -511,14 +529,11 @@ impl Dialer {
         now: Tick,
         rng: &mut R,
     ) -> Result<bool, Refusal> {
-        let mut bans = BanSnapshot::take(&self.hub);
         let mut shared = self.shared();
         if !shared.configured.contains(address) {
             shared.configured.push(address.clone());
         }
-        shared
-            .lists
-            .admit_gray(address, Source::Operator, now, &mut bans, rng)
+        shared.lists.admit_gray(address, Source::Operator, now, rng)
     }
 
     /// The inbound handshake's question: is `nonce` one of ours in flight
@@ -678,22 +693,19 @@ impl Dialer {
     }
 
     /// Write the address file now: every list address, by range only,
-    /// less those under an active ban at this moment (the hub's bans, the
-    /// snapshot the draws read). `Ok(false)` when no file was named.
+    /// less those a ban covers. `Ok(false)` when no file was named.
     ///
-    /// The ban snapshot and the clock are read before the store lock, so no
-    /// hub call is made under it. Two stores that overlap may therefore
-    /// write in either order: the later write can carry the earlier
-    /// snapshot. Each is a whole file of the lists at its own moment, and
-    /// the next store, at most one interval later, replaces it.
+    /// The clock is read before the store lock, so no hub call is made
+    /// under it. Two stores that overlap may write in either order: each is
+    /// a whole file of the lists at its own moment, and the next store, at
+    /// most one interval later, replaces it.
     pub fn store_addresses(&self) -> io::Result<bool> {
-        let mut bans = BanSnapshot::take(&self.hub);
         let now = self.hub.now();
         let store = self.store.lock().expect("address store");
         let Some(store) = store.as_ref() else {
             return Ok(false);
         };
-        let addresses = self.shared().lists.persistable(&mut bans, now);
+        let addresses = self.shared().lists.persistable();
         store.write(&addresses)?;
         self.shared().last_store = Some(now);
         Ok(true)
@@ -943,14 +955,13 @@ impl Dialer {
             return None;
         }
         let live = live_sessions(&self.hub, connector);
-        let mut bans = BanSnapshot::take(&self.hub);
         let mut shared = self.shared();
-        let wake = plan_wake(&mut shared, &mut bans, connector, &live, now, rng);
+        let wake = plan_wake(&mut shared, connector, &live, now, rng);
         let (address, aim) = match wake {
             Wake::Recover => {
                 // `plan_wake` already reported this wake. A report that
                 // closed the episode opens the next one here.
-                recovery::re_admit(&mut shared, &mut bans, connector, now, rng);
+                recovery::re_admit(&mut shared, connector, now, rng);
                 return None;
             }
             Wake::Idle => return None,

@@ -16,7 +16,7 @@ use std::net::Ipv4Addr;
 
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{
-    white_diversity_floor, ConnectionId, ConnectorId, DialOutcome, Ladder, NetworkAddress, NoBans,
+    white_diversity_floor, ConnectionId, ConnectorId, DialOutcome, Ladder, NetworkAddress,
     NoSessions, Peerlist, Refusal, RefusedSet, SessionRow, Source, Tick, DISCLOSE_COUNT,
     SESSION_INTAKE_CAP,
 };
@@ -54,7 +54,6 @@ fn receive(
             connector: ConnectorId::Clearnet,
         },
         now(),
-        &mut NoBans,
         rng,
     )
 }
@@ -117,7 +116,6 @@ fn a_list_received_on_an_inbound_session_is_admitted_under_the_same_limits() {
                 connector: ConnectorId::Clearnet,
             },
             now(),
-            &mut NoBans,
             &mut rng,
         ),
         Ok(true)
@@ -179,7 +177,7 @@ fn a_nodes_own_address_in_its_sample_enters_a_peer_that_never_dialled_it() {
     let mut sender = Peerlist::new(RefusedSet::NON_GLOBAL);
     for n in 0..u16::try_from(white_diversity_floor()).expect("small") {
         sender
-            .admit_gray(&onion(n), Source::Operator, now(), &mut NoBans, &mut rng)
+            .admit_gray(&onion(n), Source::Operator, now(), &mut rng)
             .expect("admitted");
     }
     while let Some(drawn) = sender.draw_gray(C, &mut rng) {
@@ -201,13 +199,7 @@ fn a_nodes_own_address_in_its_sample_enters_a_peer_that_never_dialled_it() {
         let mut fresh = Peerlist::new(RefusedSet::NON_GLOBAL);
         for n in 0..u16::try_from(white_diversity_floor()).expect("small") {
             fresh
-                .admit_gray(
-                    &onion(n),
-                    Source::Operator,
-                    now(),
-                    &mut NoBans,
-                    &mut rng_sample,
-                )
+                .admit_gray(&onion(n), Source::Operator, now(), &mut rng_sample)
                 .expect("admitted");
         }
         while let Some(drawn) = fresh.draw_gray(C, &mut rng_sample) {
@@ -219,7 +211,7 @@ fn a_nodes_own_address_in_its_sample_enters_a_peer_that_never_dialled_it() {
             );
         }
         fresh.set_own_address(C, Some(own.clone())).expect("set");
-        sample = fresh.disclose(C, now(), &mut NoBans, &mut NoSessions, &mut rng_sample);
+        sample = fresh.disclose(C, now(), &mut NoSessions, &mut rng_sample);
         if sample.contains(&own) {
             break;
         }
@@ -236,7 +228,6 @@ fn a_nodes_own_address_in_its_sample_enters_a_peer_that_never_dialled_it() {
                 connector: C,
             },
             now(),
-            &mut NoBans,
             &mut rng,
         )
         .expect("admitted");

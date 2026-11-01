@@ -42,7 +42,6 @@ use shekyl_seam::{Channel, Endpoint, Hub, SocketId, SyncPayload};
 
 use super::address::endpoint_of;
 use super::{session_of, Dialer};
-use crate::bans::BanSnapshot;
 use crate::fill::DialAim;
 use crate::nonce::InFlightNonce;
 
@@ -121,9 +120,8 @@ impl Dialer {
     }
 
     /// Apply one task result, on the loop, through the layer that owns each
-    /// decision. The shared lock is taken only to admit the received list,
-    /// after the bans have been copied out; no hub call is made under it
-    /// (#1092).
+    /// decision. The shared lock is taken only to admit the received list;
+    /// no hub call is made under it (#1092).
     pub(super) fn apply_result<R: RelayRng + ?Sized>(
         &self,
         connector: ConnectorId,
@@ -141,7 +139,6 @@ impl Dialer {
 
         let id = channel.held().open.id();
         let now = self.hub.now();
-        let mut bans = BanSnapshot::take(&self.hub);
         let addresses: Vec<NetworkAddress> = response
             .local_peerlist_new
             .iter()
@@ -154,7 +151,6 @@ impl Dialer {
                 connector,
             },
             now,
-            &mut bans,
             rng,
         );
         if admitted.is_err() {

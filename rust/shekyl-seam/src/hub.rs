@@ -22,8 +22,8 @@ use shekyl_capped_stream::{SendHalf, Session};
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_timing_engine::{Clock, MonotonicClock, Tick};
 use shekyl_transport_layer::{
-    BanLeft, CloseCause, CloseKind, CloseResult, ConnectorId, Direction, Ipv4Subnet, Links,
-    ListedBan, OpenSocket, SocketId, Sockets,
+    BanFeed, BanLeft, CloseCause, CloseKind, CloseResult, ConnectorId, Direction, Ipv4Subnet,
+    Links, ListedBan, OpenSocket, SocketId, Sockets,
 };
 
 use crate::connection::{
@@ -935,18 +935,21 @@ impl Hub {
         self.lock().sockets.inbound_held()
     }
 
-    /// Whether `host` is banned at the hub's current tick.
+    /// Whether a ban in force covers `host`.
     #[must_use]
     pub fn is_banned(&self, host: IpAddr) -> bool {
-        let now = self.now();
-        self.lock().sockets.is_banned(host, now)
+        self.lock().sockets.is_banned(host)
     }
 
-    /// Bans still in force, copied out of the table.
-    ///
-    /// One wake's view: expiry is applied at this read, and the copy does
-    /// not expire again. Callers that also hold another lock take this
-    /// before that lock.
+    /// Subscribe to the bans ([`Sockets::subscribe_bans`]): every entry in
+    /// force as a ban event, then each ban and lift in order, ringing
+    /// `ring` after each. Taken under one hold of the hub's lock.
+    pub fn subscribe_bans(&self, ring: Arc<dyn Fn() + Send + Sync>) -> BanFeed {
+        self.lock().sockets.subscribe_bans(ring)
+    }
+
+    /// Bans in force, copied out of the table. Callers that also hold
+    /// another lock take this before that lock.
     #[must_use]
     pub fn listed_bans(&self) -> Vec<ListedBan> {
         let now = self.now();

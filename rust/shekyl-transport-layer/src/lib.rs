@@ -31,6 +31,7 @@ mod cause;
 mod clock;
 mod declaration;
 mod dial;
+mod failure;
 mod link;
 mod profile;
 pub mod spans;
@@ -43,7 +44,10 @@ pub use admission::{
     AcceptRefusals, CloseResult, Direction, ObservedEndpoint, OpenError, OpenSocket, SocketId,
     Sockets,
 };
-pub use ban::{deadline_after, BanLeft, BanList, Ipv4Subnet, ListedBan};
+pub use ban::{
+    deadline_after, BanEntry, BanEvent, BanFeed, BanLeft, BanList, BanRings, BanSet, Ipv4Subnet,
+    ListedBan,
+};
 pub use budget::{LinkBudget, LinkDirection, MessageClass, Observed, Turn};
 pub use cause::{c_header, CloseCause, CloseKind, Marks, Phase};
 pub use clock::{monotonic_ms, recv_mark_ms, unix_ms_of};
@@ -54,11 +58,13 @@ pub use declaration::{
     StackPlan, StreamKind, YesNo,
 };
 pub use dial::check_dial;
+pub use failure::{DialEnd, DialFailure, Evidence, Proof, ProofKind, Reached, Retry, StreamEnd};
 pub use link::{
     DownCause, InboundCause, InboundFacet, Link, Links, Outbound, Route, RoutePublish,
     Subscription, Watcher,
 };
 pub use profile::{
-    dial_profile, AttemptsPerTest, Cooldown, DialProfile, JitteredSpan, RetryWaits, WindowSource,
+    dial_profile, AttemptsPerTest, Cooldown, Corroboration, DialProfile, FailureJudging,
+    JitteredSpan, RetryWaits, SessionTraffic, StreamOpens, WindowSource,
 };
 pub use shekyl_net_address::NetworkAddress;

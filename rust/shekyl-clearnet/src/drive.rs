@@ -361,8 +361,7 @@ where
             return;
         }
     };
-    let now = engine.clock().now();
-    let reserved = match sockets.open_clearnet(ip, now) {
+    let reserved = match sockets.open_clearnet(ip) {
         Ok(open) => open,
         Err(OpenError::Refused(cause)) => {
             drop(stream.shutdown().await);

@@ -101,7 +101,7 @@ pub fn admit(
             ip,
             direction: Direction::Outbound,
             ..
-        } => sockets.open_clearnet(*ip, now),
+        } => sockets.open_clearnet(*ip),
         Endpoint::Clearnet {
             ip,
             direction: Direction::Inbound,

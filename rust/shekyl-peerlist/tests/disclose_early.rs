@@ -18,11 +18,10 @@ use std::net::{IpAddr, Ipv4Addr};
 
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{
-    white_diversity_floor, ConnectorId, DialOutcome, DiscloseEarly, Ladder, NetworkAddress, NoBans,
-    NoSessions, Peerlist, RefusedSet, Source, Tick, DISCLOSE_COUNT, DISCLOSE_WINDOW_NANOS,
-    P2P_DISCLOSE_EARLY_SPAN_NANOS,
+    white_diversity_floor, BanEntry, ConnectorId, DialOutcome, DiscloseEarly, Ladder,
+    NetworkAddress, NoSessions, Peerlist, RefusedSet, Source, Tick, DISCLOSE_COUNT,
+    DISCLOSE_WINDOW_NANOS, P2P_DISCLOSE_EARLY_SPAN_NANOS,
 };
-use shekyl_transport_layer::BanList;
 
 fn v4(n: u16) -> NetworkAddress {
     NetworkAddress::Ipv4 {
@@ -60,7 +59,7 @@ fn floor() -> u16 {
 /// Admit `address` as operator-named, draw it, and confirm it white.
 fn confirm(list: &mut Peerlist, address: &NetworkAddress, now: Tick, rng: &mut SplitMix64) {
     let connector = Peerlist::connector_of(address).expect("served");
-    list.admit_gray(address, Source::Operator, now, &mut NoBans, rng)
+    list.admit_gray(address, Source::Operator, now, rng)
         .expect("admitted");
     for _ in 0..100_000 {
         match list.draw_gray(connector, rng) {
@@ -110,13 +109,7 @@ fn with_the_flag_a_white_of_one_discloses_that_address_and_our_own() {
     list.set_own_address(ConnectorId::Tor, Some(onion(900)))
         .expect("own");
     let sample: BTreeSet<_> = list
-        .disclose(
-            ConnectorId::Tor,
-            at_hours(1),
-            &mut NoBans,
-            &mut NoSessions,
-            &mut rng,
-        )
+        .disclose(ConnectorId::Tor, at_hours(1), &mut NoSessions, &mut rng)
         .into_iter()
         .collect();
     assert_eq!(sample, [onion(1), onion(900)].into_iter().collect());
@@ -136,13 +129,7 @@ fn without_the_flag_the_same_white_of_one_discloses_nothing() {
     list.set_own_address(ConnectorId::Tor, Some(onion(900)))
         .expect("own");
     assert!(list
-        .disclose(
-            ConnectorId::Tor,
-            at_hours(1),
-            &mut NoBans,
-            &mut NoSessions,
-            &mut rng
-        )
+        .disclose(ConnectorId::Tor, at_hours(1), &mut NoSessions, &mut rng)
         .is_empty());
     assert_eq!(list.disclose_early(ConnectorId::Tor), None);
 }
@@ -156,23 +143,11 @@ fn under_the_flag_nothing_is_cached_and_the_second_reply_shows_the_growth() {
     list.set_disclose_early(at_hours(0));
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     with_white(&mut list, 1, 1, at_hours(0), &mut rng);
-    let first = list.disclose(
-        connector,
-        at_hours(1),
-        &mut NoBans,
-        &mut NoSessions,
-        &mut rng,
-    );
+    let first = list.disclose(connector, at_hours(1), &mut NoSessions, &mut rng);
     assert_eq!(first, vec![v4(1)]);
     with_white(&mut list, 2, 3, at_hours(1), &mut rng);
     let second: BTreeSet<_> = list
-        .disclose(
-            connector,
-            at_hours(1),
-            &mut NoBans,
-            &mut NoSessions,
-            &mut rng,
-        )
+        .disclose(connector, at_hours(1), &mut NoSessions, &mut rng)
         .into_iter()
         .collect();
     assert_eq!(
@@ -184,15 +159,7 @@ fn under_the_flag_nothing_is_cached_and_the_second_reply_shows_the_growth() {
     // still fresh per request.
     with_white(&mut list, 5, 20, at_hours(1), &mut rng);
     let samples: BTreeSet<Vec<NetworkAddress>> = (0..8)
-        .map(|_| {
-            list.disclose(
-                connector,
-                at_hours(1),
-                &mut NoBans,
-                &mut NoSessions,
-                &mut rng,
-            )
-        })
+        .map(|_| list.disclose(connector, at_hours(1), &mut NoSessions, &mut rng))
         .collect();
     assert!(samples.iter().all(|s| s.len() == DISCLOSE_COUNT));
     assert!(samples.len() > 1, "fresh draws differ: {samples:?}");
@@ -209,19 +176,13 @@ fn at_the_span_with_white_below_the_floor_the_reply_is_empty() {
     with_white(&mut list, 1, 5, at_hours(1), &mut rng);
     let just_before = Tick::new(at_hours(1).get() + P2P_DISCLOSE_EARLY_SPAN_NANOS - 1);
     assert_eq!(
-        list.disclose(
-            connector,
-            just_before,
-            &mut NoBans,
-            &mut NoSessions,
-            &mut rng
-        )
-        .len(),
+        list.disclose(connector, just_before, &mut NoSessions, &mut rng)
+            .len(),
         5
     );
     let at_span = Tick::new(at_hours(1).get() + P2P_DISCLOSE_EARLY_SPAN_NANOS);
     assert!(list
-        .disclose(connector, at_span, &mut NoBans, &mut NoSessions, &mut rng)
+        .disclose(connector, at_span, &mut NoSessions, &mut rng)
         .is_empty());
     assert_eq!(list.disclose_early(connector), Some(DiscloseEarly::Ended));
     // Ended stays ended: more white, still below the floor, still nothing.
@@ -230,7 +191,6 @@ fn at_the_span_with_white_below_the_floor_the_reply_is_empty() {
         .disclose(
             connector,
             Tick::new(at_span.get() + 1),
-            &mut NoBans,
             &mut NoSessions,
             &mut rng
         )
@@ -253,43 +213,30 @@ fn when_white_reaches_the_floor_the_flag_ends_and_the_window_sample_rules_after(
         "the flag ended at the white write that reached the floor"
     );
     let drawn_at = at_hours(2);
-    let sample = list.disclose(connector, drawn_at, &mut NoBans, &mut NoSessions, &mut rng);
+    let sample = list.disclose(connector, drawn_at, &mut NoSessions, &mut rng);
     assert_eq!(sample.len(), DISCLOSE_COUNT);
     assert_eq!(
-        list.disclose(
-            connector,
-            at_hours(3),
-            &mut NoBans,
-            &mut NoSessions,
-            &mut rng
-        ),
+        list.disclose(connector, at_hours(3), &mut NoSessions, &mut rng),
         sample,
         "a cached window's sample, served unchanged"
     );
-    // White drops below the floor: a ban demotes one entry at the next
-    // white read. The flag stays ended; the window's sample still rules.
-    let mut bans = BanList::new();
-    assert!(bans.ban_host(ip_of(&white[3]), at_hours(100), at_hours(3)));
+    // White drops below the floor: a ban demotes one entry when it
+    // arrives. The flag stays ended; the window's sample still rules.
+    list.ban(BanEntry::Host(ip_of(&white[3])));
     assert_eq!(
-        list.white_count(connector, at_hours(4), &mut bans, &mut NoSessions, &mut rng),
+        list.white_count(connector, at_hours(4), &mut NoSessions, &mut rng),
         usize::from(floor()) - 1
     );
     assert_eq!(list.disclose_early(connector), Some(DiscloseEarly::Ended));
     assert_eq!(
-        list.disclose(connector, at_hours(5), &mut bans, &mut NoSessions, &mut rng),
+        list.disclose(connector, at_hours(5), &mut NoSessions, &mut rng),
         sample,
         "below the floor again, but inside the window: the cached sample"
     );
     let after_window = Tick::new(drawn_at.get() + DISCLOSE_WINDOW_NANOS);
     assert!(
-        list.disclose(
-            connector,
-            after_window,
-            &mut bans,
-            &mut NoSessions,
-            &mut rng
-        )
-        .is_empty(),
+        list.disclose(connector, after_window, &mut NoSessions, &mut rng)
+            .is_empty(),
         "after the window, below the floor, ended flag: nothing"
     );
 }
@@ -303,12 +250,11 @@ fn the_flag_ends_at_the_floor_without_any_disclosure() {
     list.set_disclose_early(at_hours(0));
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     let white = with_white(&mut list, 1, floor(), at_hours(0), &mut rng);
-    let mut bans = BanList::new();
-    assert!(bans.ban_host(ip_of(&white[0]), at_hours(100), at_hours(0)));
-    assert!(bans.ban_host(ip_of(&white[1]), at_hours(100), at_hours(0)));
+    list.ban(BanEntry::Host(ip_of(&white[0])));
+    list.ban(BanEntry::Host(ip_of(&white[1])));
     // The first disclose call comes after white fell back below the floor.
     assert!(
-        list.disclose(connector, at_hours(1), &mut bans, &mut NoSessions, &mut rng)
+        list.disclose(connector, at_hours(1), &mut NoSessions, &mut rng)
             .is_empty(),
         "the flag ended at the crossing, so no sample was ever drawn under it"
     );
@@ -335,13 +281,7 @@ fn one_connector_at_the_floor_leaves_the_others_flag_running() {
         Some(DiscloseEarly::Running { since: at_hours(0) })
     );
     let tor: BTreeSet<_> = list
-        .disclose(
-            ConnectorId::Tor,
-            at_hours(1),
-            &mut NoBans,
-            &mut NoSessions,
-            &mut rng,
-        )
+        .disclose(ConnectorId::Tor, at_hours(1), &mut NoSessions, &mut rng)
         .into_iter()
         .collect();
     assert_eq!(tor, [onion(1), onion(900)].into_iter().collect());
@@ -361,13 +301,7 @@ fn the_refused_set_still_filters_the_sample_under_the_flag() {
     confirm(&mut list, &v4(1), at_hours(0), &mut rng);
     list.set_own_address(connector, Some(private(2)))
         .expect("own");
-    let sample = list.disclose(
-        connector,
-        at_hours(1),
-        &mut NoBans,
-        &mut NoSessions,
-        &mut rng,
-    );
+    let sample = list.disclose(connector, at_hours(1), &mut NoSessions, &mut rng);
     assert_eq!(
         set(&sample.iter().cloned().collect()),
         [v4(1)].into_iter().collect()

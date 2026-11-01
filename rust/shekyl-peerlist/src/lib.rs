@@ -63,9 +63,7 @@ pub mod conformance;
 pub use outcome::{DialOutcome, ListName, Refusal, SessionRow, Source};
 
 pub use partition::{DiscloseEarly, DiscloseEarlyEnd};
-pub use peerlist::{
-    BanQuery, KeptSessions, NoBans, NoSessions, Peerlist, SeatCensus, Settled, Snapshot,
-};
+pub use peerlist::{KeptSessions, NoSessions, Peerlist, SeatCensus, Settled, Snapshot};
 pub use shekyl_net_address::{Host, NetworkAddress};
 /// A daemon connection. The type is `shekyl_relay_privacy::ConnectionId`;
 /// re-exported so a peerlist session and a stem source are one id. F4 moves
@@ -73,7 +71,8 @@ pub use shekyl_net_address::{Host, NetworkAddress};
 pub use shekyl_relay_privacy::ConnectionId;
 pub use shekyl_timing_engine::Tick;
 pub use shekyl_transport_layer::{
-    connector_for, dial_profile, CloseCause, CloseKind, ConnectorId, Cooldown, Direction, Marks,
+    connector_for, dial_profile, BanEntry, CloseCause, CloseKind, ConnectorId, Cooldown, Direction,
+    Ipv4Subnet, Marks,
 };
 pub use validity::{RangeV4, RangeV6, RefusedSet, REFUSED_V4, REFUSED_V6};
 

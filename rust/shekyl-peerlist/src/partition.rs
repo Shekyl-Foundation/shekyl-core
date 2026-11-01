@@ -18,12 +18,13 @@
 //! of this module sees another connector's entries.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::net::IpAddr;
 
 use shekyl_draw_rng::{bounded_uniform, RelayRng};
 use shekyl_net_address::{Host, NetworkAddress};
 use shekyl_relay_privacy::ConnectionId;
 use shekyl_timing_engine::Tick;
+
+use shekyl_transport_layer::{BanEntry, BanSet};
 
 use crate::index::Index;
 use crate::outcome::WhiteClock;
@@ -80,6 +81,11 @@ enum GrayPhase {
     /// A failed test that proved no misbehaviour. Not drawable until the
     /// tick, which [`Partition::thaw`] reads.
     Cooling(Tick),
+    /// Covered by an active ban entry. Ineligible on both lists: never
+    /// drawn, in no census or candidate count, refused at the door.
+    /// Evictable, so a ban never holds gray over its cap. The lift of the
+    /// last entry that covers it returns it as drawable gray on its rung.
+    Barred,
 }
 
 /// Where one address sits. One seat, so gray and white cannot both hold it.
@@ -121,6 +127,13 @@ fn cooling(until: Tick, failures: u32) -> Seat {
     }
 }
 
+fn barred(failures: u32) -> Seat {
+    Seat::Gray {
+        phase: GrayPhase::Barred,
+        failures,
+    }
+}
+
 /// One connector's seats, its cached sample, and its intake ledger.
 #[derive(Debug, Default)]
 pub(crate) struct Partition {
@@ -136,6 +149,8 @@ pub(crate) struct Partition {
     white_seats: usize,
     /// Seats whose phase is [`GrayPhase::Cooling`]. Same three writers.
     cooling: usize,
+    /// Seats whose phase is [`GrayPhase::Barred`]. Same three writers.
+    barred: usize,
     /// The cached disclosure sample and when it was drawn (D3).
     sample: Option<Sample>,
     /// This node's own dialable address on this connector, when known: one
@@ -150,10 +165,12 @@ pub(crate) struct Partition {
 }
 
 impl Partition {
-    /// Gray seats, outstanding draws included. An outstanding draw still
-    /// occupies gray: drawing it does not free a cap slot.
+    /// Gray seats that are eligible: drawable, outstanding or cooling. An
+    /// outstanding draw is counted: drawing it does not free its seat. A
+    /// barred seat is in no count, though it holds a slot under the cap
+    /// ([`Self::occupied_gray`]).
     pub(crate) fn gray_len(&self) -> usize {
-        self.occupied_gray()
+        self.drawable_gray + self.outstanding_draws + self.cooling
     }
 
     pub(crate) fn white_len(&self) -> usize {
@@ -276,7 +293,7 @@ impl Partition {
                 } => !white,
                 Seat::White(_) => white,
                 Seat::Gray {
-                    phase: GrayPhase::Outstanding | GrayPhase::Cooling(_),
+                    phase: GrayPhase::Outstanding | GrayPhase::Cooling(_) | GrayPhase::Barred,
                     ..
                 } => false,
             };
@@ -360,6 +377,7 @@ impl Partition {
         &mut self,
         address: &NetworkAddress,
         now: Tick,
+        bans: &BanSet,
         rng: &mut R,
         clock: WhiteClock,
     ) {
@@ -372,15 +390,16 @@ impl Partition {
                 _,
             ) => {
                 // White carries no rung. The ladder ends with the gray seat.
-                self.move_seat(address, Seat::White(now));
+                self.resolve_draw(address, Seat::White(now), bans);
                 self.evict_white_over_cap(address, rng);
             }
             (Some(Seat::White(_)), WhiteClock::Move) => self.write_clock(address, now),
-            // A cooling address was not the draw either: it is not drawable.
+            // A cooling or barred address was not the draw either: it is not
+            // drawable.
             (Some(Seat::White(_)), WhiteClock::Hold)
             | (
                 Some(Seat::Gray {
-                    phase: GrayPhase::Drawable | GrayPhase::Cooling(_),
+                    phase: GrayPhase::Drawable | GrayPhase::Cooling(_) | GrayPhase::Barred,
                     ..
                 })
                 | None,
@@ -457,6 +476,7 @@ impl Partition {
         now: Tick,
         ladder: Ladder,
         cooldown: Cooldown,
+        bans: &BanSet,
         rng: &mut R,
     ) -> bool {
         let (failures, rung, from_white) = match (self.seat_of(address), ladder) {
@@ -486,7 +506,7 @@ impl Partition {
             now.get()
                 .saturating_add(cooldown_nanos(cooldown, rung, rng)),
         );
-        self.move_seat(address, cooling(until, failures));
+        self.resolve_draw(address, cooling(until, failures), bans);
         if from_white {
             self.evict_gray_over_cap(address, rng);
         }
@@ -530,13 +550,13 @@ impl Partition {
     /// The gray count is unchanged, so this does not evict. Going through
     /// [`Self::insert_gray`] would: an outstanding draw can be what holds
     /// gray over the cap, and settling it must not drop someone else.
-    pub(crate) fn settle_outstanding(&mut self, address: &NetworkAddress) {
+    pub(crate) fn settle_outstanding(&mut self, address: &NetworkAddress, bans: &BanSet) {
         if let Some(Seat::Gray {
             phase: GrayPhase::Outstanding,
             failures,
         }) = self.seat_of(address)
         {
-            self.move_seat(address, drawable(failures));
+            self.resolve_draw(address, drawable(failures), bans);
         }
     }
 
@@ -575,26 +595,6 @@ impl Partition {
     /// (outstanding included) and white together, for the file (§7).
     pub(crate) fn persistable(&self) -> impl Iterator<Item = &NetworkAddress> {
         self.seats.iter().map(|(address, _)| address)
-    }
-
-    /// D4: move every white entry under an active ban to gray. The clock is
-    /// not copied. Only an address with an IP can be banned (D7), so a Tor
-    /// partition never demotes here. Returns how many moved.
-    pub(crate) fn demote_banned<R: RelayRng + ?Sized>(
-        &mut self,
-        is_banned: &mut dyn FnMut(IpAddr, Tick) -> bool,
-        now: Tick,
-        rng: &mut R,
-    ) -> usize {
-        let banned: Vec<NetworkAddress> = self
-            .white_clocks()
-            .filter(|(address, _)| address.ip().is_some_and(|ip| is_banned(ip, now)))
-            .map(|(address, _)| address.clone())
-            .collect();
-        for address in &banned {
-            self.demote(address, rng);
-        }
-        banned.len()
     }
 
     /// D-S1: record that `session` offered `address` at `now`, for an
@@ -793,8 +793,10 @@ impl Partition {
         self.move_seat(address, outstanding(failures));
     }
 
+    /// Every gray seat, barred ones included: the cap bounds memory, not
+    /// eligibility.
     fn occupied_gray(&self) -> usize {
-        self.drawable_gray + self.outstanding_draws + self.cooling
+        self.drawable_gray + self.outstanding_draws + self.cooling + self.barred
     }
 
     fn seat_of(&self, address: &NetworkAddress) -> Option<Seat> {
@@ -856,33 +858,141 @@ impl Partition {
                 phase: GrayPhase::Cooling(_),
                 ..
             } => &mut self.cooling,
+            Seat::Gray {
+                phase: GrayPhase::Barred,
+                ..
+            } => &mut self.barred,
         }
     }
 
-    /// Drop gray seats until the gray population is within [`GRAY_CAP`]: a
-    /// uniform pick over the drawable and the cooling seats alike, never
-    /// `keep` and never an outstanding draw. A cooldown is a delay, not
-    /// protection (Rick, 2026-10-24): dead addresses fed within D-S1 would
-    /// otherwise accumulate immune to eviction and push the honest ones
-    /// out. Stops when the only evictable seat left is `keep`: gray may
-    /// then sit over the cap by the outstanding draws.
+    /// Where an outstanding draw resolves: to `seat`, or barred when a ban
+    /// the peer list holds covers it, keeping its rung (a white seat's is
+    /// zero). A seat the lists hold is barred exactly when a ban covers it:
+    /// the door refuses a covered address, a ban bars what it covers, and
+    /// an outstanding draw, the dialer's while the ban arrives, bars here,
+    /// so the order of the ban and the outcome does not matter.
+    fn resolve_draw(&mut self, address: &NetworkAddress, seat: Seat, bans: &BanSet) {
+        let covered = address.ip().is_some_and(|ip| bans.covers(ip));
+        let seat = match seat {
+            Seat::Gray { failures, .. } if covered => barred(failures),
+            Seat::White(_) if covered => barred(0),
+            seat => seat,
+        };
+        self.move_seat(address, seat);
+    }
+
+    /// A ban event the peer list newly holds: bar every seat `entry`
+    /// covers. A white seat moves straight to barred gray on rung zero,
+    /// with no eviction: gray may sit over its cap until the next gray
+    /// insert evicts, as it does for outstanding draws, and the overshoot
+    /// is bounded by [`WHITE_CAP`]. Returns how many seats were barred now;
+    /// an outstanding draw is counted when its outcome bars it
+    /// ([`Self::resolve_draw`]).
+    pub(crate) fn ban(&mut self, entry: BanEntry) -> usize {
+        let covered: Vec<(NetworkAddress, Seat)> = self
+            .seats
+            .iter()
+            .filter(|(address, _)| address.ip().is_some_and(|ip| entry.covers(ip)))
+            .map(|(address, seat)| (address.clone(), *seat))
+            .collect();
+        let mut barred_now = 0;
+        for (address, seat) in covered {
+            match seat {
+                Seat::White(_) => {
+                    self.move_seat(&address, barred(0));
+                    barred_now += 1;
+                }
+                Seat::Gray {
+                    phase: GrayPhase::Drawable | GrayPhase::Cooling(_),
+                    failures,
+                } => {
+                    self.move_seat(&address, barred(failures));
+                    barred_now += 1;
+                }
+                Seat::Gray {
+                    phase: GrayPhase::Outstanding | GrayPhase::Barred,
+                    ..
+                } => {}
+            }
+        }
+        barred_now
+    }
+
+    /// A lift event the peer list has dropped: return as drawable gray, on
+    /// its rung, every barred seat `entry` covered that no entry in
+    /// `remaining` covers. A host lifted inside a banned subnet stays barred
+    /// until the subnet's lift. Returns how many seats became drawable.
+    pub(crate) fn lift(&mut self, entry: BanEntry, remaining: &BanSet) -> usize {
+        let freed: Vec<(NetworkAddress, u32)> = self
+            .seats
+            .iter()
+            .filter_map(|(address, seat)| match seat {
+                Seat::Gray {
+                    phase: GrayPhase::Barred,
+                    failures,
+                } if address.ip().is_some_and(|ip| entry.covers(ip)) => {
+                    Some((address.clone(), *failures))
+                }
+                _ => None,
+            })
+            .filter(|(address, _)| !address.ip().is_some_and(|ip| remaining.covers(ip)))
+            .collect();
+        for (address, failures) in &freed {
+            self.move_seat(address, drawable(*failures));
+        }
+        freed.len()
+    }
+
+    /// Drop gray seats until the gray population is within [`GRAY_CAP`],
+    /// never `keep` and never an outstanding draw. Barred seats go first,
+    /// a uniform pick among them: none can be dialled while its ban holds,
+    /// and no peer can make a ban, so the order cannot be steered (Rick,
+    /// 2026-11-01). Then a uniform pick over the drawable and the cooling
+    /// seats alike: a cooldown is a delay, not protection (Rick,
+    /// 2026-10-24), or dead addresses fed within D-S1 would accumulate
+    /// immune to eviction and push the honest ones out. Stops when the only
+    /// evictable seat left is `keep`: gray may then sit over the cap by the
+    /// outstanding draws.
     fn evict_gray_over_cap<R: RelayRng + ?Sized>(&mut self, keep: &NetworkAddress, rng: &mut R) {
         while self.occupied_gray() > GRAY_CAP {
-            let keep_is_evictable = matches!(
+            let keep_is_barred = matches!(
                 self.seat_of(keep),
                 Some(Seat::Gray {
-                    phase: GrayPhase::Drawable | GrayPhase::Cooling(_),
+                    phase: GrayPhase::Barred,
                     ..
                 })
             );
-            if !another(self.drawable_gray + self.cooling, keep_is_evictable) {
+            if another(self.barred, keep_is_barred) {
+                let victim = self.pick_accepted(rng, |address, seat| {
+                    matches!(
+                        seat,
+                        Seat::Gray {
+                            phase: GrayPhase::Barred,
+                            ..
+                        }
+                    ) && address != keep
+                });
+                self.leave(&victim);
+                continue;
+            }
+            let keep_is_evictable = matches!(
+                self.seat_of(keep),
+                Some(Seat::Gray {
+                    phase: GrayPhase::Drawable | GrayPhase::Cooling(_) | GrayPhase::Barred,
+                    ..
+                })
+            );
+            if !another(
+                self.drawable_gray + self.cooling + self.barred,
+                keep_is_evictable,
+            ) {
                 break;
             }
             let victim = self.pick_accepted(rng, |address, seat| {
                 matches!(
                     seat,
                     Seat::Gray {
-                        phase: GrayPhase::Drawable | GrayPhase::Cooling(_),
+                        phase: GrayPhase::Drawable | GrayPhase::Cooling(_) | GrayPhase::Barred,
                         ..
                     }
                 ) && address != keep

@@ -425,6 +425,7 @@ fn ensure(network_id: [u8; 16]) -> Result<Arc<Host>, ZoneStart> {
     let engine = crate::seam_ffi::process_engine();
     spawn_lateness_report(&handle, engine.clone());
     spawn_refusal_report(&handle, process_sockets());
+    crate::seam_ffi::bans::spawn_expiry(&handle, &engine, process_sockets());
     let (clearnet_tx, clearnet_rx) = mpsc::unbounded_channel();
     let (tor_tx, tor_rx) = mpsc::unbounded_channel();
     let on_cause: Arc<dyn Fn(CloseCause) + Send + Sync> = Arc::new(|cause| {
