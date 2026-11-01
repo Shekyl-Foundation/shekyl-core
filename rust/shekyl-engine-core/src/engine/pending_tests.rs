@@ -77,10 +77,24 @@ fn populate(
     }
 }
 
+/// A mainnet address the build helpers accept: it decodes, and no test
+/// here reads its keys.
+fn test_address() -> String {
+    shekyl_address::ShekylAddress::new(
+        Network::Mainnet,
+        [0xAA; 32],
+        [0xBB; 32],
+        [0xEE; 48],
+        vec![0xCC; 1184],
+    )
+    .encode()
+    .expect("encode the test address")
+}
+
 fn standard_request(amount: u64) -> TxRequest {
     TxRequest {
         recipients: vec![TxRecipient {
-            destination: TxDestination::Address("test_address".to_string()),
+            destination: TxDestination::Address(test_address()),
             amount_atomic_units: AtomicUnits::from_raw(amount),
             rid: None,
         }],
@@ -487,7 +501,7 @@ fn priority_custom_is_accepted_and_preserved() {
     let mut next_id = 0u64;
     let req = TxRequest {
         recipients: vec![TxRecipient {
-            destination: TxDestination::Address("addr".into()),
+            destination: TxDestination::Address(test_address()),
             amount_atomic_units: AtomicUnits::from_raw(1_000),
             rid: None,
         }],
@@ -508,14 +522,17 @@ fn a_rid_the_label_cannot_echo_is_refused_at_the_request() {
     use shekyl_engine_state::payment_request::PAYMENT_REQUEST_RID_U48_MAX;
     use shekyl_engine_state::PaymentRequestId;
     let mut req = standard_request(1_000);
-    assert!(req.check_recipients().is_ok());
+    assert!(req.check_recipients(Network::Mainnet).is_ok());
     req.recipients[0].rid = Some(PaymentRequestId(PAYMENT_REQUEST_RID_U48_MAX));
-    assert!(req.check_recipients().is_ok(), "the largest echoable rid");
+    assert!(
+        req.check_recipients(Network::Mainnet).is_ok(),
+        "the largest echoable rid"
+    );
     for raw in [0, PAYMENT_REQUEST_RID_U48_MAX + 1, u64::MAX] {
         req.recipients[0].rid = Some(PaymentRequestId(raw));
         assert!(
             matches!(
-                req.check_recipients(),
+                req.check_recipients(Network::Mainnet),
                 Err(SendError::InvalidRecipient { .. })
             ),
             "rid {raw} must be refused"
@@ -523,7 +540,51 @@ fn a_rid_the_label_cannot_echo_is_refused_at_the_request() {
     }
     req.recipients.clear();
     assert!(matches!(
-        req.check_recipients(),
+        req.check_recipients(Network::Mainnet),
         Err(SendError::InvalidRecipient { .. })
+    ));
+}
+
+/// An address is checked at the request, before any selection: a bad one
+/// behind too small a balance is an invalid recipient, never insufficient
+/// funds, and one for another network is refused as such.
+#[test]
+fn a_recipient_address_is_checked_before_the_balance() {
+    let mut req = standard_request(1_000);
+    req.recipients[0].destination = TxDestination::Address("notanaddress".into());
+    assert!(matches!(
+        req.check_recipients(Network::Mainnet),
+        Err(SendError::InvalidRecipient {
+            reason: "recipient is not a Shekyl address"
+        })
+    ));
+
+    let mainnet = standard_request(1_000);
+    assert!(mainnet.check_recipients(Network::Mainnet).is_ok());
+    assert!(matches!(
+        mainnet.check_recipients(Network::Testnet),
+        Err(SendError::InvalidRecipient {
+            reason: "recipient address is for another network"
+        })
+    ));
+
+    let mut ledger = LedgerBlock::empty();
+    let mut indexes = LedgerIndexes::empty();
+    populate(
+        &mut ledger,
+        &mut indexes,
+        1,
+        vec![make_recovered_output(1, 100, 10)],
+        20,
+    );
+    let mut reservations = std::collections::BTreeMap::new();
+    let mut next_id = 0u64;
+    assert!(matches!(
+        build_pending_tx_in_state(&ledger, &mut reservations, &mut next_id, &req),
+        Err(SendError::InvalidRecipient { .. })
+    ));
+    assert!(matches!(
+        build_pending_tx_in_state(&ledger, &mut reservations, &mut next_id, &mainnet),
+        Err(SendError::InsufficientFunds { .. })
     ));
 }

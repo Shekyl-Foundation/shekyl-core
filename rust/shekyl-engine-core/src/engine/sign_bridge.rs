@@ -225,9 +225,11 @@ struct RecipientKeys<'a> {
 }
 
 /// Resolve a payment's destination to the keys its output is built to. An
-/// address is decoded and network-checked here, the one parse on the send
-/// path; a persona's keys are used exactly as the stake engine handed them
-/// over, with nothing encoded or decoded.
+/// address is decoded and network-checked here for its keys; the request
+/// was already refused before selection if it does not decode
+/// ([`super::pending::TxRequest::check_recipients`]), so a failure here is
+/// a signer fault, not a user's typo. A persona's keys are used exactly as
+/// the stake engine handed them over, with nothing encoded or decoded.
 fn recipient_keys(
     destination: &TxDestination,
     network: Network,

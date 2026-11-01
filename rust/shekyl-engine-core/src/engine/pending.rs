@@ -100,8 +100,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
-#[cfg(test)]
-use shekyl_address::Network;
+use shekyl_address::{AddressError, Network, ShekylAddress};
 use shekyl_crypto_pq::archival_p::PersonaDestination;
 #[cfg(test)]
 use shekyl_engine_state::{LedgerBlock, NetworkSafetyConstants, SendJournalBlock};
@@ -294,9 +293,10 @@ impl SubmitOutcome {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TxDestination {
     /// An address in canonical Shekyl encoding — the user-send case. The
-    /// only arm ever parsed: the sign pass decodes and network-checks it
-    /// before building the output, and refuses one that does not decode
-    /// for the wallet's network.
+    /// only arm ever parsed: [`TxRequest::check_recipients`] refuses one
+    /// that does not decode for the wallet's network before any selection,
+    /// and the sign pass decodes it again for the keys it builds the
+    /// output to.
     Address(String),
     /// This wallet's own active staking persona (`stake_in`): the payment
     /// keys the stake engine hands over. A persona has no address, so
@@ -344,17 +344,36 @@ pub struct TxRequest {
 }
 
 impl TxRequest {
-    /// The refusals that need no ledger, no network and no permit, run
-    /// first on every build path: an empty recipient list, and a `rid` the
-    /// label cannot echo. The latter is refused here, at the request, not
-    /// downgraded to the sentinel at sign time — the payer asked for
-    /// attribution and would silently not get it — and not discovered
-    /// after selection and proving as a signer failure.
-    pub fn check_recipients(&self) -> Result<(), SendError> {
+    /// The refusals that need no ledger, no daemon and no permit, run
+    /// first on every build path: an empty recipient list, an address that
+    /// does not decode for the wallet's `network`, and a `rid` the label
+    /// cannot echo. Each is refused here, at the request, not discovered
+    /// after selection and proving as a signer failure: a bad address
+    /// behind an empty wallet would otherwise read as insufficient funds.
+    /// A `rid` is also not downgraded to the sentinel at sign time — the
+    /// payer asked for attribution and would silently not get it.
+    pub fn check_recipients(&self, network: Network) -> Result<(), SendError> {
         if self.recipients.is_empty() {
             return Err(SendError::InvalidRecipient {
                 reason: "TxRequest must carry at least one recipient",
             });
+        }
+        for recipient in &self.recipients {
+            if let TxDestination::Address(address) = &recipient.destination {
+                match ShekylAddress::decode_for_network(address, network) {
+                    Ok(_) => {}
+                    Err(AddressError::NetworkMismatch { .. }) => {
+                        return Err(SendError::InvalidRecipient {
+                            reason: "recipient address is for another network",
+                        })
+                    }
+                    Err(_) => {
+                        return Err(SendError::InvalidRecipient {
+                            reason: "recipient is not a Shekyl address",
+                        })
+                    }
+                }
+            }
         }
         if self.recipients.iter().any(|r| {
             r.rid
@@ -724,7 +743,7 @@ pub(crate) fn build_pending_tx_in_state(
     next_id: &mut u64,
     request: &TxRequest,
 ) -> Result<PendingTx, SendError> {
-    request.check_recipients()?;
+    request.check_recipients(Network::Mainnet)?;
 
     let synced = ledger.height();
     let Some(tip_hash) = ledger.block_hash_at(synced).copied() else {
