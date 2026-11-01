@@ -30,14 +30,24 @@ impl SyncView {
             Self::NoWallet => "no wallet".to_owned(),
             Self::WalletRpcUnreachable => "wallet RPC unreachable".to_owned(),
             Self::DaemonUnreachable => "daemon unreachable".to_owned(),
-            Self::Behind(n) => format!("{n} blocks behind"),
+            Self::Behind(n) => format!("{} behind", blocks(*n)),
             Self::Synced => "synced".to_owned(),
         }
     }
 }
 
+/// `1 block`, `2 blocks`.
+pub fn blocks(n: u64) -> String {
+    if n == 1 {
+        "1 block".to_owned()
+    } else {
+        format!("{n} blocks")
+    }
+}
+
 /// Classify `get_height`. `daemon_height` null means the daemon is unreachable.
-/// A missing height is not zero.
+/// A missing height is not zero. Both heights are block counts, so a synced
+/// wallet's `wallet_height` equals `daemon_height`.
 pub fn classify(wallet_open: bool, daemon_height: Option<i64>, wallet_height: i64) -> SyncView {
     if !wallet_open {
         return SyncView::NoWallet;
@@ -96,6 +106,8 @@ mod tests {
         assert_eq!(classify(false, Some(10), 10), SyncView::NoWallet);
         assert_eq!(classify(true, Some(12), 10), SyncView::Behind(2));
         assert_eq!(classify(true, Some(10), 10), SyncView::Synced);
+        assert_eq!(SyncView::Behind(1).label(), "1 block behind");
+        assert_eq!(SyncView::Behind(2).label(), "2 blocks behind");
         let line = format_line("3.1.0", "2026-09-26 00:00:00", &SyncView::Synced);
         assert!(line.contains("shekyl-cli 3.1.0"));
         assert!(line.contains("synced"));

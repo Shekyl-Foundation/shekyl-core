@@ -13,7 +13,7 @@ use curve25519_dalek::edwards::CompressedEdwardsY;
 use curve25519_dalek::scalar::Scalar;
 use curve25519_dalek::EdwardsPoint;
 use rand_core::{OsRng, RngCore};
-use shekyl_address::{Network, ShekylAddress};
+use shekyl_address::{Network, PaymentAddress, ShekylAddress};
 use shekyl_bulletproofs::Bulletproof;
 use shekyl_crypto_pq::account::AllKeysBlob;
 use shekyl_crypto_pq::derivation::derive_pqc_public_key;
@@ -211,9 +211,11 @@ pub(super) fn assemble_transfer_wire(
 }
 
 fn decode_recipient(address: &str, network: Network) -> Result<ShekylAddress, KeyEngineError> {
-    ShekylAddress::decode_for_network(address, network).map_err(|_| KeyEngineError::Primitive {
-        detail: "invalid recipient address",
-    })
+    PaymentAddress::decode(address, network)
+        .map(PaymentAddress::into_inner)
+        .map_err(|_| KeyEngineError::Primitive {
+            detail: "invalid recipient address",
+        })
 }
 
 /// The keys a payment output is built to.
@@ -225,9 +227,11 @@ struct RecipientKeys<'a> {
 }
 
 /// Resolve a payment's destination to the keys its output is built to. An
-/// address is decoded and network-checked here, the one parse on the send
-/// path; a persona's keys are used exactly as the stake engine handed them
-/// over, with nothing encoded or decoded.
+/// address goes through [`shekyl_address::PaymentAddress`]; the request
+/// was already refused before selection if it cannot be paid
+/// ([`super::pending::TxRequest::check_recipients`]), so a failure here is
+/// a signer fault, not a user's typo. A persona's keys are used exactly as
+/// the stake engine handed them over, with nothing encoded or decoded.
 fn recipient_keys(
     destination: &TxDestination,
     network: Network,
