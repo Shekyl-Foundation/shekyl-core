@@ -171,10 +171,6 @@ namespace nodetool
     bool log_connections();
 
 
-    //! True when `address` is banned with no deadline.
-    bool host_ban_is_permanent(const epee::net_utils::network_address &address) const;
-    //! Bans still in force. `permanent` is 1 when the row has no deadline.
-    std::vector<shekyl_ban_view> ban_list();
     //! \return True exactly once per recorded nonce, and only on the zone it
     //! was recorded for: an arriving handshake carrying such a nonce IS this
     //! node. Erases on match, so a replayed nonce cannot fire twice; a
@@ -182,17 +178,6 @@ namespace nodetool
     //! cross-zone correlation oracle.
     bool detect_self_handshake(epee::net_utils::connector_id zone, const std::array<uint8_t, 32>& nonce);
 
-    virtual bool block_host(epee::net_utils::network_address address, time_t seconds = P2P_IP_BLOCKTIME, bool add_only = false);
-    virtual bool unblock_host(const epee::net_utils::network_address &address);
-    virtual bool block_subnet(const epee::net_utils::ipv4_network_subnet &subnet, time_t seconds = P2P_IP_BLOCKTIME);
-    virtual bool unblock_subnet(const epee::net_utils::ipv4_network_subnet &subnet);
-    bool block_host_permanent(epee::net_utils::network_address address);
-    bool block_subnet_permanent(const epee::net_utils::ipv4_network_subnet &subnet);
-    virtual bool is_host_blocked(const epee::net_utils::network_address &address, time_t *seconds);
-    //! Host to seconds remaining on the monotonic deadline.
-    virtual std::map<std::string, time_t> get_blocked_hosts();
-    //! Subnet to seconds remaining on the monotonic deadline.
-    virtual std::map<epee::net_utils::ipv4_network_subnet, time_t> get_blocked_subnets();
 
   private:
 
@@ -233,8 +218,6 @@ namespace nodetool
     virtual void request_callback(const epee::net_utils::connection_context_base& context);
     virtual size_t post_each(std::function<void(typename t_payload_net_handler::connection_context&)> note, std::function<void()> then);
     virtual bool for_connection(const boost::uuids::uuid&, std::function<void(typename t_payload_net_handler::connection_context&)> f);
-    virtual bool add_host_fail(const epee::net_utils::network_address &address, unsigned int score = 1);
-    bool is_remote_host_allowed(const epee::net_utils::network_address &address, time_t *t = NULL);
 
     bool parse_peer_from_string(epee::net_utils::network_address& pe, const std::string& node_addr, uint16_t default_port = 0);
     bool idle_worker();
@@ -287,8 +270,6 @@ namespace nodetool
     std::map<epee::net_utils::connector_id, network_zone> m_network_zones;
 
 
-    epee::critical_section m_host_fails_score_lock;
-    std::map<std::string, uint64_t> m_host_fails_score;
 
 
     boost::uuids::uuid m_network_id;

@@ -156,33 +156,6 @@ struct ban_isolate
   ~ban_isolate() { shekyl_bans_clear(); }
 };
 
-static bool is_blocked(Server &server, const epee::net_utils::network_address &address, time_t *t = NULL)
-{
-  std::map<std::string, time_t> hosts = server.get_blocked_hosts();
-  for (auto rec: hosts)
-  {
-    if (rec.first == address.host_str())
-    {
-      if (t)
-        *t = rec.second;
-      return true;
-    }
-  }
-
-  if (address.get_type_id() != epee::net_utils::address_type::ipv4)
-    return false;
-  
-  const epee::net_utils::ipv4_network_address ipv4_address = address.as<epee::net_utils::ipv4_network_address>();
-
-  // check if in a blocked ipv4 subnet
-  const std::map<epee::net_utils::ipv4_network_subnet, time_t> subnets = server.get_blocked_subnets();
-  for (const auto &subnet : subnets)
-    if (subnet.first.matches(ipv4_address))
-      return true;
-
-  return false;
-}
-
 // PWD-B6: 2008 is the sole block-announce command; 2001 is refused as unknown.
 // `handled` starts false because the invoke map sets it on a match and never
 // clears it. Live-daemon regtest is --offline and does not cover p2p relay.
@@ -214,109 +187,6 @@ TEST(cryptonote_protocol_handler, block_propagation_has_exactly_one_command)
     EXPECT_TRUE(handled)
         << "NOTIFY_NEW_COMPACT_BLOCK must still dispatch — it is the only block path";
   }
-}
-
-TEST(ban, add)
-{
-  [[maybe_unused]] ban_isolate isolate;
-  test_core pr_core;
-  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
-  Server server(cprotocol);
-  cprotocol.set_p2p_endpoint(&server);
-
-  // starts empty
-  ASSERT_TRUE(server.get_blocked_hosts().empty());
-  ASSERT_FALSE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,4)));
-  ASSERT_FALSE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,5)));
-
-  // add an IP
-  ASSERT_TRUE(server.block_host(MAKE_IPV4_ADDRESS(1,2,3,4)));
-  ASSERT_TRUE(server.get_blocked_hosts().size() == 1);
-  ASSERT_TRUE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,4)));
-  ASSERT_FALSE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,5)));
-
-  // add the same, should not change
-  ASSERT_TRUE(server.block_host(MAKE_IPV4_ADDRESS(1,2,3,4)));
-  ASSERT_TRUE(server.get_blocked_hosts().size() == 1);
-  ASSERT_TRUE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,4)));
-  ASSERT_FALSE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,5)));
-
-  // remove an unblocked IP, should not change
-  ASSERT_FALSE(server.unblock_host(MAKE_IPV4_ADDRESS(1,2,3,5)));
-  ASSERT_TRUE(server.get_blocked_hosts().size() == 1);
-  ASSERT_TRUE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,4)));
-  ASSERT_FALSE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,5)));
-
-  // remove the IP, ends up empty
-  ASSERT_TRUE(server.unblock_host(MAKE_IPV4_ADDRESS(1,2,3,4)));
-  ASSERT_TRUE(server.get_blocked_hosts().size() == 0);
-  ASSERT_FALSE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,4)));
-  ASSERT_FALSE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,5)));
-
-  // remove the IP from an empty list, still empty
-  ASSERT_FALSE(server.unblock_host(MAKE_IPV4_ADDRESS(1,2,3,4)));
-  ASSERT_TRUE(server.get_blocked_hosts().size() == 0);
-  ASSERT_FALSE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,4)));
-  ASSERT_FALSE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,5)));
-
-  // add two for known amounts of time, they're both blocked
-  ASSERT_TRUE(server.block_host(MAKE_IPV4_ADDRESS(1,2,3,4), 1));
-  ASSERT_TRUE(server.block_host(MAKE_IPV4_ADDRESS(1,2,3,5), 3));
-  ASSERT_TRUE(server.get_blocked_hosts().size() == 2);
-  ASSERT_TRUE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,4)));
-  ASSERT_TRUE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,5)));
-  ASSERT_TRUE(server.unblock_host(MAKE_IPV4_ADDRESS(1,2,3,4)));
-  ASSERT_TRUE(server.unblock_host(MAKE_IPV4_ADDRESS(1,2,3,5)));
-
-  // these tests would need to call is_remote_ip_allowed, which is private
-#if 0
-  // after two seconds, the first IP is unblocked, but not the second yet
-  sleep(2);
-  ASSERT_TRUE(server.get_blocked_hosts().size() == 1);
-  ASSERT_FALSE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,4)));
-  ASSERT_TRUE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,5)));
-
-  // after two more seconds, the second IP is also unblocked
-  sleep(2);
-  ASSERT_TRUE(server.get_blocked_hosts().size() == 0);
-  ASSERT_FALSE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,4)));
-  ASSERT_FALSE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,5)));
-#endif
-
-  // add an IP again, then re-ban for longer, then shorter
-  time_t t;
-  ASSERT_TRUE(server.block_host(MAKE_IPV4_ADDRESS(1,2,3,4), 2));
-  ASSERT_TRUE(server.get_blocked_hosts().size() == 1);
-  ASSERT_TRUE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,4), &t));
-  ASSERT_FALSE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,5)));
-  ASSERT_TRUE(t >= 1);
-  ASSERT_TRUE(server.block_host(MAKE_IPV4_ADDRESS(1,2,3,4), 9));
-  ASSERT_TRUE(server.get_blocked_hosts().size() == 1);
-  ASSERT_TRUE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,4), &t));
-  ASSERT_FALSE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,5)));
-  ASSERT_TRUE(t >= 8);
-  ASSERT_TRUE(server.block_host(MAKE_IPV4_ADDRESS(1,2,3,4), 5));
-  ASSERT_TRUE(server.get_blocked_hosts().size() == 1);
-  ASSERT_TRUE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,4), &t));
-  ASSERT_FALSE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,5)));
-  ASSERT_TRUE(t >= 4);
-}
-
-TEST(ban, limit)
-{
-  [[maybe_unused]] ban_isolate isolate;
-  test_core pr_core;
-  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
-  Server server(cprotocol);
-  cprotocol.set_p2p_endpoint(&server);
-
-  // starts empty
-  ASSERT_TRUE(server.get_blocked_hosts().empty());
-  ASSERT_FALSE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,4)));
-  ASSERT_FALSE(server.block_host(MAKE_IPV4_ADDRESS(1,2,3,4), std::numeric_limits<time_t>::max() - 1));
-  ASSERT_FALSE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,4)));
-  ASSERT_TRUE(server.block_host(MAKE_IPV4_ADDRESS(1,2,3,4), 1));
-  ASSERT_TRUE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,4)));
 }
 
 namespace
@@ -380,79 +250,6 @@ namespace
   }
 }
 
-TEST(ban, subnet)
-{
-  [[maybe_unused]] ban_isolate isolate;
-  // Formerly GTEST_SKIP'd as "intermittent allocator failure in constrained
-  // environments; tracked for dedicated fix" — nothing in the tree tracked
-  // it, and the stated cause was wrong on all three counts. The body called
-  // boost::program_options::parse_command_line(0, nullptr, opts); boost's
-  // parser builds std::vector<std::string>(argv+1, argv+argc), a reversed
-  // range when argc == 0, and libstdc++ throws std::length_error
-  // deterministically (older libstdc++ attempted the negative length and
-  // raised bad_alloc — the "allocator failure"). So the test threw before
-  // init ran. Had it parsed, it would have read the operator's real
-  // p2pstate.bin (no --data-dir), bound P2P_DEFAULT_PORT (no --offline), and
-  // never asserted init's result. All of that is gone; the assertion is
-  // present.
-  time_t seconds;
-  test_core pr_core;
-  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
-  Server server(cprotocol);
-
-  const auto node_dir = create_node_dir();
-  ASSERT_TRUE(!node_dir.empty());
-  auto auto_remove_node_dir = epee::misc_utils::create_scope_leave_handler([&node_dir](){
-      boost::filesystem::remove_all(node_dir);
-    });
-
-  const test_snapshot offline(offline_node_args(node_dir, {}));
-  ASSERT_TRUE(server.init(offline.get()));
-  cprotocol.set_p2p_endpoint(&server);
-
-  ASSERT_TRUE(server.block_subnet(MAKE_IPV4_SUBNET(1,2,3,4,24), 10));
-  ASSERT_TRUE(server.get_blocked_subnets().size() == 1);
-  ASSERT_TRUE(server.is_host_blocked(MAKE_IPV4_ADDRESS(1,2,3,4), &seconds));
-  ASSERT_TRUE(seconds >= 9);
-  ASSERT_TRUE(server.is_host_blocked(MAKE_IPV4_ADDRESS(1,2,3,255), &seconds));
-  ASSERT_TRUE(server.is_host_blocked(MAKE_IPV4_ADDRESS(1,2,3,0), &seconds));
-  ASSERT_FALSE(server.is_host_blocked(MAKE_IPV4_ADDRESS(1,2,4,0), &seconds));
-  ASSERT_FALSE(server.is_host_blocked(MAKE_IPV4_ADDRESS(1,2,2,0), &seconds));
-  ASSERT_TRUE(server.unblock_subnet(MAKE_IPV4_SUBNET(1,2,3,8,24)));
-  ASSERT_TRUE(server.get_blocked_subnets().size() == 0);
-  ASSERT_FALSE(server.is_host_blocked(MAKE_IPV4_ADDRESS(1,2,3,255), &seconds));
-  ASSERT_FALSE(server.is_host_blocked(MAKE_IPV4_ADDRESS(1,2,3,0), &seconds));
-  ASSERT_TRUE(server.block_subnet(MAKE_IPV4_SUBNET(1,2,3,4,8), 10));
-  ASSERT_TRUE(server.get_blocked_subnets().size() == 1);
-  ASSERT_TRUE(server.is_host_blocked(MAKE_IPV4_ADDRESS(1,255,3,255), &seconds));
-  ASSERT_TRUE(server.is_host_blocked(MAKE_IPV4_ADDRESS(1,0,3,255), &seconds));
-  ASSERT_FALSE(server.unblock_subnet(MAKE_IPV4_SUBNET(1,2,3,8,24)));
-  ASSERT_TRUE(server.get_blocked_subnets().size() == 1);
-  ASSERT_TRUE(server.block_subnet(MAKE_IPV4_SUBNET(1,2,3,4,8), 10));
-  ASSERT_TRUE(server.get_blocked_subnets().size() == 1);
-  ASSERT_TRUE(server.unblock_subnet(MAKE_IPV4_SUBNET(1,255,0,0,8)));
-  ASSERT_TRUE(server.get_blocked_subnets().size() == 0);
-}
-
-TEST(ban, ignores_port)
-{
-  [[maybe_unused]] ban_isolate isolate;
-  test_core pr_core;
-  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
-  Server server(cprotocol);
-  cprotocol.set_p2p_endpoint(&server);
-
-  // The span is the ordinary block time. A duration that does not fit in
-  // nanoseconds is refused, and that refusal is ban.limit's subject.
-  ASSERT_FALSE(is_blocked(server,MAKE_IPV4_ADDRESS_PORT(1,2,3,4,5)));
-  ASSERT_TRUE(server.block_host(MAKE_IPV4_ADDRESS_PORT(1,2,3,4,5)));
-  ASSERT_TRUE(is_blocked(server,MAKE_IPV4_ADDRESS_PORT(1,2,3,4,5)));
-  ASSERT_TRUE(is_blocked(server,MAKE_IPV4_ADDRESS_PORT(1,2,3,4,6)));
-  ASSERT_TRUE(server.unblock_host(MAKE_IPV4_ADDRESS_PORT(1,2,3,4,5)));
-  ASSERT_FALSE(is_blocked(server,MAKE_IPV4_ADDRESS_PORT(1,2,3,4,5)));
-  ASSERT_FALSE(is_blocked(server,MAKE_IPV4_ADDRESS_PORT(1,2,3,4,6)));
-}
-
 namespace nodetool { template class node_server<cryptonote::t_cryptonote_protocol_handler<test_core>>; }
 namespace cryptonote { template class t_cryptonote_protocol_handler<test_core>; }
 
@@ -511,10 +308,6 @@ namespace
   {
     std::vector<cryptonote::cryptonote_connection_context> conns;
     std::vector<boost::uuids::uuid> dropped;
-    //! Address AND score: the score is what distinguishes a caller that
-    //! charges the peer from one that merely disconnects it, and several
-    //! call sites differ only in that argument.
-    std::vector<std::pair<epee::net_utils::network_address, unsigned>> host_fails;
 
     void add(const boost::uuids::uuid &id, const epee::net_utils::network_address &addr)
     {
@@ -558,19 +351,6 @@ namespace
       dropped.push_back(context.m_connection_id);
       return true;
     }
-    virtual bool add_host_fail(const epee::net_utils::network_address &address, unsigned int score) override
-    {
-      // Fidelity: production's `node_server::add_host_fail` opens with
-      // `if(!address.is_blockable()) return false;` (`net_node.inl:412`), so an
-      // address that names no host is never scored regardless of the caller. A
-      // double that recorded unconditionally would be MORE PERMISSIVE than the
-      // real endpoint, and a limb asserting the difference would pin the mock
-      // rather than the code.
-      if (!address.is_blockable())
-        return false;
-      host_fails.emplace_back(address, score);
-      return true;
-    }
   };
 }
 
@@ -592,11 +372,6 @@ TEST(anon_zone_address_keying, host_sweep_does_not_sever_a_zone)
   // `unknown()` compared equal to `unknown()`.
   cryptonote_protocol_handler_test_seam::drop_connections(cprotocol, unknown_tor);
   EXPECT_TRUE(endpoint.dropped.empty());
-  // Scoring: the mock models production's `is_blockable` bail, so this limb is
-  // guaranteed by the double rather than by the fix -- it documents the
-  // contract, it does not pin A1. A1's independent observables are the
-  // misleading `MWARNING` and the avoided scan; see the PR body.
-  EXPECT_TRUE(endpoint.host_fails.empty());
 
   // Positive limb: the sweep still works where the address DOES name a host,
   // so a guard that over-reached into "never sever" fails loudly here. This is
@@ -609,13 +384,6 @@ TEST(anon_zone_address_keying, host_sweep_does_not_sever_a_zone)
   cryptonote_protocol_handler_test_seam::drop_connections(cprotocol, ip);
   ASSERT_EQ(1u, endpoint.dropped.size());
   EXPECT_EQ(clear1, endpoint.dropped.front());   // the same host, different port
-  // The sweep scores the host, and `drop_connection(context, true, ...)` scores
-  // each severed peer again, so the count is not 1 -- assert the contract
-  // rather than a number: scoring happened, and it never names an address that
-  // names no host.
-  EXPECT_FALSE(endpoint.host_fails.empty());
-  for (const auto &f : endpoint.host_fails)
-    EXPECT_TRUE(f.first.is_blockable());
 }
 
 namespace

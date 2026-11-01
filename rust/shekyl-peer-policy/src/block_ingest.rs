@@ -80,8 +80,9 @@ pub enum BlockIngest {
     Rejected = 7,
 
     /// Refused because the PoW does not meet the target. Same drop
-    /// question as [`Self::Rejected`]; the extra score weight is the
-    /// only operational difference (`P2P_IP_FAILS_BEFORE_BLOCK`).
+    /// question as [`Self::Rejected`]. The extra score weight it once
+    /// selected has had no effect since the automatic ban was deleted
+    /// (Rick, 2026-11-01); the weight's arm goes with CS-Q5.
     /// Unrepresentable together with [`Self::MissingTxs`]: PoW runs
     /// first.
     RejectedBadPow = 8,

@@ -2190,9 +2190,6 @@ skip:
   {
     LOG_DEBUG_CC(context, "dropping connection id " << context.m_connection_id << ", score " << score << ", flush_all_spans " << flush_all_spans);
 
-    if (score > 0)
-      m_p2p->add_host_fail(context.m_remote_address, score);
-
     m_block_queue.flush_spans(context.m_connection_id, flush_all_spans);
 
     m_p2p->drop_connection(context);
@@ -2235,8 +2232,6 @@ skip:
     }
 
     MWARNING("dropping connections to " << address.str());
-
-    m_p2p->add_host_fail(address, 5);
 
     m_p2p->post_each([this, address](cryptonote_connection_context& context) {
       if (!address.is_same_host(context.m_remote_address))

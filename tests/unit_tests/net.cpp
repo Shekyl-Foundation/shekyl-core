@@ -248,11 +248,6 @@ TEST(tor_address, unknown_is_not_a_host)
     // two peers whose host is unknown. Reading absence-of-information as
     // equality collapses an entire zone into one host, which is what made
     // `drop_connections` sever every inbound anon peer at once.
-    //
-    // This is the same invariant `block_host` (net_node.inl:254),
-    // `add_host_fail` (:412) and the RPC ban path (core_rpc_server.cpp:186)
-    // already enforce via `is_blockable()`; `is_same_host` was the one
-    // unguarded consumer.
     const epee::net_utils::network_address unknown1{net::tor_address::unknown()};
     const epee::net_utils::network_address unknown2{net::tor_address::unknown()};
     const epee::net_utils::network_address known{MONERO_UNWRAP(net::tor_address::make(v3_onion, 8080))};
