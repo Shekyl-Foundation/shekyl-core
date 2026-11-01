@@ -142,6 +142,59 @@ pub struct Applied {
     pub refused: Option<(BlockHeight, InvalidBlock)>,
 }
 
+/// How an [`Apply`] settled against the blocks that were submitted.
+///
+/// A verdict, not a buffer: every field is [`Copy`], and a caller matches
+/// it by value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Settlement {
+    /// Every submitted block connected.
+    Landed {
+        /// How many connected.
+        landed: usize,
+    },
+    /// A strict prefix connected, and the next block was refused.
+    Refused {
+        /// How many connected before the refusal.
+        landed: usize,
+        /// The refusal of the next block.
+        refused: InvalidBlock,
+    },
+    /// A strict prefix connected and nothing was refused. Those blocks
+    /// are placed again.
+    Short {
+        /// How many connected.
+        landed: usize,
+    },
+    /// The reply does not describe the submission: more blocks connected
+    /// than were submitted, or a refusal at or past the submission. The
+    /// caller halts rather than inventing an arrival.
+    Broken,
+}
+
+impl Applied {
+    /// How this apply settled against a submission of `submitted` blocks.
+    ///
+    /// The connector connects a strict prefix and, when it refuses, the
+    /// refusal is the next block (`connected.len() < submitted`). A
+    /// refusal at or past the submission, or more connected blocks than
+    /// were submitted, is [`Settlement::Broken`]. A short prefix with no
+    /// refusal is [`Settlement::Short`].
+    #[must_use]
+    pub fn take_settlement(&mut self, submitted: usize) -> Settlement {
+        let landed = self.connected.len();
+        if landed > submitted {
+            return Settlement::Broken;
+        }
+        match self.refused.take() {
+            Some((_, refused)) if landed < submitted => Settlement::Refused { landed, refused },
+            Some(_) => Settlement::Broken,
+            None if landed < submitted => Settlement::Short { landed },
+            None => Settlement::Landed { landed },
+        }
+    }
+}
+
 /// What a [`Rewind`] or a [`PopBlocks`] did.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Rewound {
@@ -563,6 +616,21 @@ impl Actor for Connector {
 }
 
 impl Connector {
+    /// Write the `following_degraded` latch if it is clear, and publish
+    /// the evidence on the watch. `true` when this call set it. One
+    /// writer: the connector's own transaction (DX-Q2 item 8).
+    pub(crate) fn note_degraded(&mut self, evidence: FollowingDegraded) -> Result<bool, RunFault> {
+        let set = self.writer.write(|batch| {
+            batch
+                .raise_following_degraded(&evidence)
+                .map_err(RunFault::Store)
+        })?;
+        if set {
+            self.degraded.send_replace(Some(evidence));
+        }
+        Ok(set)
+    }
+
     /// Publish the tip after a committed write (module docs: `TipChanged`).
     /// A read that fails here leaves the last publication standing: the
     /// next write meets the same store.
@@ -597,15 +665,7 @@ impl Message<RaiseAlarm> for Connector {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         let evidence = msg.0;
-        let set = self.writer.write(|batch| {
-            batch
-                .raise_following_degraded(&evidence)
-                .map_err(RunFault::Store)
-        })?;
-        if set {
-            self.degraded.send_replace(Some(evidence));
-        }
-        Ok(set)
+        self.note_degraded(evidence)
     }
 }
 
@@ -951,5 +1011,71 @@ fn connecting(tip: Option<shekyl_chain_rules::Tip>) -> Result<(BlockHeight, Bloc
                 .ok_or(RunFault::NoNextHeight { tip: t.height })?,
             t.hash,
         )),
+    }
+}
+
+#[cfg(test)]
+mod settlement_tests {
+    use shekyl_chain_rules::{CenRow, InvalidBlock, Locus};
+    use shekyl_types::{BlockHash, BlockHeight};
+
+    use super::{Applied, Settlement};
+
+    fn refusal() -> InvalidBlock {
+        InvalidBlock::new(CenRow::A2, Locus::Block)
+    }
+
+    fn connected(n: u64) -> Vec<(BlockHeight, BlockHash)> {
+        (0..n)
+            .map(|height| (BlockHeight::from_raw(height), BlockHash::NULL))
+            .collect()
+    }
+
+    #[test]
+    fn a_complete_run_landed() {
+        let mut applied = Applied {
+            connected: connected(2),
+            ..Applied::default()
+        };
+        assert_eq!(applied.take_settlement(2), Settlement::Landed { landed: 2 });
+    }
+
+    #[test]
+    fn a_short_prefix_is_placed_again() {
+        let mut applied = Applied {
+            connected: connected(1),
+            ..Applied::default()
+        };
+        assert_eq!(applied.take_settlement(3), Settlement::Short { landed: 1 });
+    }
+
+    #[test]
+    fn a_refusal_of_the_next_block_names_that_block() {
+        let refused = refusal();
+        let mut applied = Applied {
+            connected: connected(1),
+            refused: Some((BlockHeight::from_raw(1), refused)),
+            ..Applied::default()
+        };
+        assert_eq!(
+            applied.take_settlement(2),
+            Settlement::Refused { landed: 1, refused }
+        );
+        assert!(applied.refused.is_none());
+    }
+
+    #[test]
+    fn a_refusal_past_the_submission_or_an_overlong_prefix_is_broken() {
+        let mut over = Applied {
+            connected: connected(3),
+            ..Applied::default()
+        };
+        assert_eq!(over.take_settlement(2), Settlement::Broken);
+        let mut past = Applied {
+            connected: connected(2),
+            refused: Some((BlockHeight::from_raw(2), refusal())),
+            ..Applied::default()
+        };
+        assert_eq!(past.take_settlement(2), Settlement::Broken);
     }
 }

@@ -212,26 +212,29 @@ pub const METHODS: &[Method] = &[
     json("option_show", &[], g(Health)),
     // Fields are each present under their grant (§6.1).
     json("get_info", &[], g(Health)),
-    // JSON-RPC, served by the C++ table until the flip.
+    // JSON-RPC. Every row is served natively. `save_bc`, `flush_cache`,
+    // `set_log_hash_rate` and `inject_archival_serve_credit` are deleted
+    // (DRS_X_STORE_FLIP.md DX-Q3): durability is immediate, the hash rate
+    // is part of mining status, and the serve-credit lever went with the
+    // C++ chain.
     json("submit_block", &["submitblock"], g(MiningWork)),
     // A computation service (RT-O9.4); its bound is RT-W10 step 2's.
+    // Dispatched from the store (`read_methods::calc_pow`).
     unbounded(json("calc_pow", &[], g(MiningWork))),
     json("get_block_template", &["getblocktemplate"], g(MiningWork)),
     json("get_miner_data", &[], g(MiningWork)),
     json("generateblocks", &[], Policy::Armed),
-    // RT-O9.2 (`RPC_CHANNEL.md`, ruled 2026-10-09): a regtest lever. It
-    // deletes at the flip (DX-Q3).
-    json("inject_archival_serve_credit", &[], Policy::Armed),
     json("set_bans", &[], g(Bans)),
     json("get_bans", &[], g(Bans)),
     json("banned", &[], g(Bans)),
     json("flush_txpool", &[], g(Node)),
     // A public chain fact (RT-O9.4); its span bound is RT-W10 step 2's.
+    // Dispatched from the store, with `get_alternate_chains` and the
+    // curve-tree and archival rows below.
     unbounded(json("get_coinbase_tx_sum", &[], g(Chain))),
     json("get_alternate_chains", &[], g(Status)),
     json("relay_tx", &[], g(Node)),
     json("get_txpool_backlog", &[], g(Pool)),
-    json("flush_cache", &[], g(Node)),
     json("get_curve_tree_info", &[], g(Chain)),
     json("get_curve_tree_checkpoint", &[], g(Chain)),
     json("get_archival_emission_claim_source", &[], g(Chain)),
@@ -257,9 +260,7 @@ pub const METHODS: &[Method] = &[
     rest("/start_mining", &[], g(MiningControl)),
     rest("/stop_mining", &[], g(MiningControl)),
     rest("/mining_status", &[], g(MiningControl)),
-    rest("/save_bc", &[], g(Node)),
     rest("/get_peer_list", &[], g(Peers)),
-    rest("/set_log_hash_rate", &[], g(MiningControl)),
     rest("/stop_daemon", &[], g(Node)),
     rest("/get_net_stats", &[], g(Status)),
     rest("/pop_blocks", &[], Policy::Armed),
@@ -300,23 +301,16 @@ mod tests {
         }
     }
 
-    /// The armed levers are `generateblocks`, `pop_blocks` and
-    /// `inject_archival_serve_credit` (§6.1, RT-O9.2), and nothing else is.
+    /// The armed levers are `generateblocks` and `/pop_blocks`.
+    /// `inject_archival_serve_credit` deleted with the C++ chain (DX-Q3).
     #[test]
-    fn the_armed_levers_are_the_three() {
+    fn the_armed_levers_are_generateblocks_and_pop_blocks() {
         let armed: Vec<&str> = METHODS
             .iter()
             .filter(|row| row.armed())
             .map(|row| row.name)
             .collect();
-        assert_eq!(
-            armed,
-            [
-                "generateblocks",
-                "inject_archival_serve_credit",
-                "/pop_blocks"
-            ]
-        );
+        assert_eq!(armed, ["generateblocks", "/pop_blocks"]);
     }
 
     /// Every row's policy, written from `RPC_CHANNEL.md` §6.1's table, not
@@ -384,12 +378,7 @@ mod tests {
                 Policy::Grant(Grant::MiningWork),
             ),
             (
-                &[
-                    "/start_mining",
-                    "/stop_mining",
-                    "/mining_status",
-                    "/set_log_hash_rate",
-                ],
+                &["/start_mining", "/stop_mining", "/mining_status"],
                 Policy::Grant(Grant::MiningControl),
             ),
             (
@@ -399,9 +388,7 @@ mod tests {
             (
                 &[
                     "/stop_daemon",
-                    "/save_bc",
                     "flush_txpool",
-                    "flush_cache",
                     "relay_tx",
                     "request_archival_shard",
                     "option_set",
@@ -409,14 +396,7 @@ mod tests {
                 Policy::Grant(Grant::Node),
             ),
             (&["/get_stem_tallies"], Policy::HostOnly),
-            (
-                &[
-                    "generateblocks",
-                    "inject_archival_serve_credit",
-                    "/pop_blocks",
-                ],
-                Policy::Armed,
-            ),
+            (&["generateblocks", "/pop_blocks"], Policy::Armed),
             (&["/json_rpc"], Policy::Endpoint),
         ];
         let mut placed = std::collections::BTreeMap::new();

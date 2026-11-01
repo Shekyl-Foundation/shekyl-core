@@ -98,7 +98,7 @@ pub struct BlockInfo {
     /// The long-term weight median **in force for** this block — the
     /// median over the recorded blocks *below* it, the operand it was
     /// validated and fee-floored against, before its own weight enters the
-    /// window (SCR-19; `relay_floor_ring.cpp:196`–`:200`). Passed through
+    /// window (SCR-19). Passed through
     /// (`ConnectFacts::long_term_effective_median`), never derived here. A
     /// median of long-term weights is a long-term weight, so the same
     /// newtype; `cumulative_tx_count` is a count, like `rct_outputs`.

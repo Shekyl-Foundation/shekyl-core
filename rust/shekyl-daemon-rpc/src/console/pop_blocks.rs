@@ -7,9 +7,8 @@
 //! the armed gate before anyone rewinds the chain.
 //!
 //! The live arm is the host's own console. It admits `/pop_blocks` under
-//! the daemon's armed-lever switch, then calls the C++ handler through the
-//! core. The remote arm posts `/pop_blocks` and lets that daemon's stamp
-//! admit it. The handler itself stays in C++ until the store flip.
+//! the daemon's armed-lever switch, then asks the node's door. The remote
+//! arm posts `/pop_blocks` and lets that daemon's stamp admit it.
 
 use super::Source;
 use crate::authority::{grant_refusal_message, Authority};
@@ -41,10 +40,25 @@ pub(super) fn pop_blocks(src: &Source, count: Option<&String>) -> Result<String,
     let nblocks = pop_count(count)?;
     let body = serde_json::to_string(&PopBlocksRequest { nblocks }).map_err(|e| e.to_string())?;
     let raw = match src {
-        Source::Live(core) => {
+        Source::Live(_) => {
             console_pop_admission(crate::ffi_exports::armed())?;
-            core.json_endpoint("/pop_blocks", &body, true)
-                .ok_or_else(|| "no reply from /pop_blocks".to_owned())?
+            let handles =
+                crate::handles::live_handles().ok_or_else(|| "the node is not open".to_owned())?;
+            let row =
+                rest_path("/pop_blocks").ok_or_else(|| "/pop_blocks has no row".to_owned())?;
+            let armed = shekyl_rpc_types::methods::admit_armed(row, crate::ffi_exports::armed())
+                .map_err(|error| error.diagnostic.message)?;
+            let reply = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| format!("pop_blocks: {e}"))?
+                .block_on(crate::mining_methods::pop_blocks(
+                    handles.door.as_ref(),
+                    armed,
+                    PopBlocksRequest { nblocks },
+                ))
+                .map_err(|fault| format!("{fault:?}"))?;
+            serde_json::to_string(&reply).map_err(|e| e.to_string())?
         }
         Source::Remote { .. } => {
             src.ensure_identity()?;

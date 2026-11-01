@@ -430,7 +430,9 @@ fn registries_are_the_expected_size_at_this_increment() {
     // validity, re-homed as the ingest router's admission.
     // 161 → 162 on 2026-10-21: CEN-L17 (the per-block draw count) minted
     // with its implementation, `SO-D12` increment 3.
-    assert_eq!(CenRow::ALL.len(), 162);
+    // 162 → 161 on 2026-10-28: CEN-L10 (the C++ freeze/reader) went to
+    // bucket 3 with the store flip (PDM-Q12; SAR-5) and left this registry.
+    assert_eq!(CenRow::ALL.len(), 161);
     assert_eq!(PolicyRow::ALL.len(), 8);
 }
 

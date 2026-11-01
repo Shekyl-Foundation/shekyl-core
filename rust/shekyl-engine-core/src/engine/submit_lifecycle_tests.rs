@@ -460,6 +460,7 @@ async fn terminal_probe_releases_confirmed_absent() {
     let daemon = StubDaemon::new();
     daemon.push_submit(Ok(TxSubmitOutcome::Rejected {
         cause: RejectCause::DoubleSpendConflict,
+        row: None,
     }));
     let mut d = driver();
 
@@ -512,6 +513,7 @@ async fn retryable_rejection_alarms_needs_rebuild() {
     let daemon = StubDaemon::new();
     daemon.push_submit(Ok(TxSubmitOutcome::Rejected {
         cause: RejectCause::StaleRoot,
+        row: None,
     }));
     let mut d = driver();
 

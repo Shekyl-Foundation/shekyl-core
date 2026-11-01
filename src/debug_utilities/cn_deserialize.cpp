@@ -30,7 +30,9 @@
 #include <boost/algorithm/string/join.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include "cryptonote_basic/cryptonote_basic.h"
-#include "cryptonote_core/blockchain.h"
+#include "cryptonote_basic/cryptonote_format_utils.h"
+#include "common/util.h"
+#include "string_tools.h"
 #include "common/command_line.h"
 #include "version.h"
 

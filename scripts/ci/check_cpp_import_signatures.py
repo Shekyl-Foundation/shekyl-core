@@ -11,8 +11,9 @@ Rust declares in an `extern "C"` block. Such a declaration is checked by no
 compiler on either side — Rust trusts its own `extern` block, C++ never sees
 it — so a parameter added to one side alone links and runs, and the call
 reads garbage for the argument the other side never sent. The posture
-parameter of `core_rpc_ffi_json_endpoint` (DAEMON_CONFIG_CUTOVER.md §2.3's
-one RPC start) is a `bool` of exactly that shape.
+parameter `core_rpc_ffi_json_endpoint` used to carry (deleted with the C++
+method table, DX-Q3) was a `bool` of exactly that shape. The gate compares
+every import that remains.
 
 For every function a gated Rust file imports, this finds the one C
 declaration of it under `src/` and compares arity, each parameter's type

@@ -1278,7 +1278,7 @@ reorg-sensitive and re-introduces honest fork misses; higher lengthens
 the collusive pre-signing lead — plus the `PDM-Q11` `D_max` gate as a
 consumer. `L` is the new `archival_attestation_anchor_lag_blocks`
 **= 4, PROVISIONAL**, `build.rs`-enforced `≥ 2`, read by Rust; C++
-sizes the window through `shekyl_archival_pass_anchor_window` and holds
+sizes the window through `shekyl_archival_pass_anchor_window` (deleted, `DEL-008`) and holds
 no copy. The verifier reads the generated constants, never a third
 literal.
 
@@ -1392,7 +1392,7 @@ chain above the fork point; `cb_out_key`, `cb_out_key_readable`,
 `prev_block_hash` removed; verdicts 8 and 12 RETIRED; new verdicts 13
 `MALFORMED_ANCHOR_TABLE`, 14 `ANCHOR_OUT_OF_WINDOW`, 15
 `BELOW_ANCHOR_THRESHOLD`; C++ sizes the table via
-`shekyl_archival_pass_anchor_window`). Witness cap
+`shekyl_archival_pass_anchor_window` (deleted, `DEL-008`)). Witness cap
 `ATTESTATION_WITNESS_MAX_BYTES = 885 000` (`8 + 256 × 3 457`),
 Rust-authoritative, C++ asserted equal. Pinned vector (rule-50 tier 3, a
 drift tripwire — the hand-computed header/transcript concatenations are the

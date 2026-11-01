@@ -16,12 +16,12 @@ GATE="$ROOT/scripts/ci/check_randomx_symbol_isolation.sh"
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
 
-# Minimal plain/`--demangle` tables that satisfy checks 1–5 and check 6's
-# presence anchors. Cases below add the one symbol that should turn red.
+# Minimal plain/`--demangle` tables that satisfy checks 1–5. Cases below
+# add the one symbol that should turn red. Demangled must be non-empty
+# (the gate refuses a vacant --demangle table).
 PLAIN_OK='0000000000695950 T shekyl_pow_randomx_v2_hash
 0000000000aaaaaa t _ZN3aes4some'
-DEMANGLED_OK='0000000000610d0e T cryptonote::hash_pow_randomx(void const*, unsigned long, crypto::hash const&, crypto::hash&)
-0000000002e5bbb0 b cryptonote::(anonymous namespace)::s_pow_hash_override_for_tests'
+DEMANGLED_OK='0000000000695950 T shekyl_pow_randomx_v2_hash'
 
 install_nm() {
   local plain="$1"
@@ -78,18 +78,15 @@ expect "setter present" 1
 
 # Tab-separated nm (the dialect check 1 documents). The setter absence
 # must not go green because the pattern used a literal space.
-install_nm "$PLAIN_OK" "$(printf '0000000000610d0e\tT\tcryptonote::hash_pow_randomx(void const*)\n0000000002e5bbb0\tb\tcryptonote::(anonymous namespace)::s_pow_hash_override_for_tests\n0000000000610e00\tT\tcryptonote::set_pow_hash_override_for_tests()')"
+install_nm "$PLAIN_OK" "$(printf '0000000000695950\tT\tshekyl_pow_randomx_v2_hash\n0000000000610e00\tT\tcryptonote::set_pow_hash_override_for_tests()')"
 expect "tab-separated nm still catches setter" 1
 
 install_nm "$PLAIN_OK" "$DEMANGLED_OK
 0000000000610e00 T cryptonote::set_pow_schema_override_for_tests()"
 expect "schema-seam re-minted" 1
 
-install_nm "$PLAIN_OK" '0000000000610d0e T cryptonote::hash_pow_randomx(void const*, unsigned long, crypto::hash const&, crypto::hash&)'
-expect "slot absent" 1
-
-install_nm "$PLAIN_OK" '0000000002e5bbb0 b cryptonote::(anonymous namespace)::s_pow_hash_override_for_tests'
-expect "dispatch absent" 1
+install_nm '0000000000aaaaaa t _ZN3aes4some' "$DEMANGLED_OK"
+expect "verifier substring absent" 1
 
 if [ "$failed" -ne 0 ]; then
   exit 1

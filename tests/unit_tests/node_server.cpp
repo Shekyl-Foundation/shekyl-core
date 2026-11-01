@@ -49,25 +49,18 @@
 #define MAKE_IPV4_ADDRESS_PORT(a,b,c,d,e) epee::net_utils::ipv4_network_address{MAKE_IP(a,b,c,d),e}
 #define MAKE_IPV4_SUBNET(a,b,c,d,e) epee::net_utils::ipv4_network_subnet{MAKE_IP(a,b,c,d),e}
 
-namespace cryptonote {
-  class blockchain_storage;
-}
-
 class test_core : public cryptonote::i_core_events
 {
 public:
   virtual bool is_synchronized() const final { return true; }
   void on_synchronized(){}
-  void safesyncmode(const bool){}
   virtual uint64_t get_current_blockchain_height() const final {return 1;}
   void set_target_blockchain_height(uint64_t) {}
-  bool init() {return true ;}
-  bool deinit(){return true;}
   bool get_short_chain_history(std::list<crypto::hash>& ids, uint64_t& current_height) const { return true; }
   // The blocks this core already has. Empty by default, so every test that
   // does not populate it sees the previous unconditional `false`. A test
   // driving `try_add_next_blocks` needs the span's parent to be known, which
-  // is what gates reaching `prepare_handle_incoming_blocks`.
+  // is what gates offering the span to the Rust ingest.
   std::vector<crypto::hash> blocks_we_have;
   bool have_block(const crypto::hash& id, int *where = NULL) const
   {return std::find(blocks_we_have.begin(), blocks_we_have.end(), id) != blocks_we_have.end();}
@@ -88,47 +81,24 @@ public:
   bool handle_single_incoming_block(const cryptonote::blobdata& block_blob, const cryptonote::block *b, cryptonote::block_verification_context& bvc, cryptonote::block_connect_supplement& connect, bool update_miner_blocktemplate = true) { return true; }
   bool handle_incoming_block(const cryptonote::blobdata& block_blob, const cryptonote::block *block, cryptonote::block_verification_context& bvc, bool update_miner_blocktemplate = true) { return true; }
   bool handle_incoming_block(const cryptonote::blobdata& block_blob, const cryptonote::block *block, cryptonote::block_verification_context& bvc, cryptonote::block_connect_supplement& connect, bool update_miner_blocktemplate = true) { return true; }
-  void pause_mine(){}
-  void resume_mine(){}
   bool on_idle(){return true;}
   bool find_blockchain_supplement(const std::list<crypto::hash>& qblock_ids, cryptonote::NOTIFY_RESPONSE_CHAIN_ENTRY::request& resp){return true;}
   bool handle_get_objects(cryptonote::NOTIFY_REQUEST_GET_OBJECTS::request& arg, cryptonote::NOTIFY_RESPONSE_GET_OBJECTS::request& rsp, cryptonote::cryptonote_connection_context& context){return true;}
-  cryptonote::blockchain_storage &get_blockchain_storage() { throw std::runtime_error("Called invalid member function: please never call get_blockchain_storage on the TESTING class test_core."); }
-  bool get_test_drop_download() const {return true;}
-  bool get_test_drop_download_height() const {return true;}
-  bool prepare_handle_incoming_blocks_result = true;
-  uint8_t prepare_handle_incoming_blocks_verdict = SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM;
-  bool prepare_handle_incoming_blocks(const std::vector<cryptonote::block_complete_entry>  &blocks_entry, std::vector<cryptonote::block> &blocks, uint8_t *drop_verdict = nullptr)
-  {
-    if (drop_verdict)
-    {
-      *drop_verdict = prepare_handle_incoming_blocks_result
-                          ? uint8_t(SHEKYL_DROP_VERDICT_UNCLASSIFIED)
-                          : prepare_handle_incoming_blocks_verdict;
-    }
-    return prepare_handle_incoming_blocks_result;
-  }
-  bool cleanup_handle_incoming_blocks(bool force_sync = false) { return true; }
   bool check_incoming_block_size_result = true;
   bool check_incoming_block_size(const cryptonote::blobdata& block_blob) const { return check_incoming_block_size_result; }
   uint64_t get_target_blockchain_height() const { return 1; }
   size_t get_block_sync_size(uint64_t height) const { return BLOCKS_SYNCHRONIZING_DEFAULT_COUNT; }
   virtual void on_transactions_relayed(epee::span<const cryptonote::blobdata> tx_blobs, cryptonote::relay_method tx_relay, std::optional<std::uint8_t>) {}
-  virtual void on_stem_propagated(epee::span<const crypto::hash>) {}
   cryptonote::network_type get_nettype() const { return cryptonote::MAINNET; }
-  bool get_pool_transaction(const crypto::hash& id, cryptonote::blobdata& tx_blob, cryptonote::relay_category tx_category) const { return false; }
   /*! Already here for the protocol-handler shim, and now also the
       `i_core_events` override — these fixtures never drive a carrier verdict,
       so the stub's existing answer stands rather than being second-guessed. */
   bool pool_has_tx(const crypto::hash &txid) const override { return false; }
-  bool get_blocks(uint64_t start_offset, size_t count, std::vector<std::pair<cryptonote::blobdata, cryptonote::block>>& blocks, std::vector<cryptonote::blobdata>& txs) const { return false; }
   bool get_transactions(const std::vector<crypto::hash>& txs_ids, std::vector<cryptonote::blobdata>& txs, std::vector<crypto::hash>& missed_txs, bool pruned = false) const { return false; }
   bool get_transactions(const std::vector<crypto::hash>& txs_ids, std::vector<cryptonote::transaction>& txs, std::vector<crypto::hash>& missed_txs) const { return false; }
   bool get_block_by_hash(const crypto::hash &h, cryptonote::block &blk, bool *orphan = NULL) const { return false; }
   cryptonote::blobdata get_block_attestation_witness(const cryptonote::block &blk) const { return {}; }
-  uint64_t get_earliest_ideal_height_for_version(uint8_t version) const { return 0; }
   cryptonote::difficulty_type get_block_cumulative_difficulty(uint64_t height) const { return 0; }
-  bool pad_transactions() { return false; }
   bool get_txpool_complement(const std::vector<crypto::hash> &hashes, std::vector<cryptonote::blobdata> &txes) { return false; }
   bool get_pool_transaction_hashes(std::vector<crypto::hash>& txs, bool include_unrelayed_txes = true) const { return false; }
   crypto::hash get_block_id_by_height(uint64_t height) const { return crypto::null_hash; }
@@ -648,275 +618,6 @@ TEST(anon_zone_address_keying, host_sweep_does_not_sever_a_zone)
     EXPECT_TRUE(f.first.is_blockable());
 }
 
-// The `prepare_handle_incoming_blocks` failure arm. The host sweep above is
-// now a no-op on an anonymity zone, so this site must drop the origin and
-// clear its spans by itself -- which is what its two siblings in the same
-// function already do. Without that, the failed span stays at the head of the
-// queue, `get_next_span` hands it out again, and sync stalls.
-TEST(anon_zone_address_keying, prepare_failure_drops_only_the_origin_and_clears_its_spans)
-{
-  test_core pr_core;
-  pr_core.prepare_handle_incoming_blocks_result = false;
-  pr_core.blocks_we_have.push_back(crypto::null_hash);   // the span's parent
-  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
-  recording_endpoint endpoint;
-  cprotocol.set_p2p_endpoint(&endpoint);
-
-  const auto unknown_tor = epee::net_utils::network_address{net::tor_address::unknown()};
-  const boost::uuids::uuid anon1 = fixed_uuid(1);
-  const boost::uuids::uuid anon2 = fixed_uuid(2);
-  endpoint.add(anon1, unknown_tor);
-  endpoint.add(anon2, unknown_tor);
-
-  auto &queue = cryptonote_protocol_handler_test_seam::queue(cprotocol);
-  // The span that fails, and a LATER one from the same peer. The later span is
-  // what distinguishes dropping with `flush_all_spans = true` from the
-  // `drop_connection(uuid)` overload's `false`: `remove_spans(id, start_height)`
-  // only erases spans at or before `start_height`, so a peer dropped with
-  // `false` would leave its higher spans behind.
-  queue.add_blocks(1, {one_block()}, anon1, unknown_tor, 1.0f, 1);
-  queue.add_blocks(100, {one_block()}, anon1, unknown_tor, 1.0f, 1);
-  ASSERT_EQ(2u, queue.get_num_filled_spans());
-
-  ASSERT_EQ(1, cryptonote_protocol_handler_test_seam::try_add_next_blocks(cprotocol, endpoint.conns.front()));
-
-  // The offending peer is dropped -- by id, since the host sweep selected
-  // nothing -- and the peer that shares its `unknown()` address is not.
-  ASSERT_EQ(1u, endpoint.dropped.size());
-  EXPECT_EQ(anon1, endpoint.dropped.front());
-  EXPECT_EQ(0u, queue.get_num_filled_spans())
-    << "the failed span, and every later span from the same peer, must leave "
-       "the queue -- otherwise get_next_span hands the failure back forever";
-}
-
-// The same site when the peer is already gone: `for_connection` finds nothing,
-// so the span must still be removed or it is stuck in the queue with no owner
-// left to drop. This is the case the siblings' `remove_spans` call exists for.
-TEST(anon_zone_address_keying, prepare_failure_clears_the_span_of_a_departed_peer)
-{
-  test_core pr_core;
-  pr_core.prepare_handle_incoming_blocks_result = false;
-  pr_core.blocks_we_have.push_back(crypto::null_hash);
-  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
-  recording_endpoint endpoint;
-  cprotocol.set_p2p_endpoint(&endpoint);
-
-  const auto unknown_tor = epee::net_utils::network_address{net::tor_address::unknown()};
-  const boost::uuids::uuid survivor = fixed_uuid(2);
-  const boost::uuids::uuid departed = fixed_uuid(9);   // owns the span, has no connection
-  endpoint.add(survivor, unknown_tor);
-
-  auto &queue = cryptonote_protocol_handler_test_seam::queue(cprotocol);
-  queue.add_blocks(1, {one_block()}, departed, unknown_tor, 1.0f, 1);
-  ASSERT_EQ(1u, queue.get_num_filled_spans());
-
-  ASSERT_EQ(1, cryptonote_protocol_handler_test_seam::try_add_next_blocks(cprotocol, endpoint.conns.front()));
-
-  EXPECT_TRUE(endpoint.dropped.empty()) << "there is no such connection to drop";
-  EXPECT_EQ(0u, queue.get_num_filled_spans())
-    << "removed anyway, so other threads can wake up and get past it";
-}
-
-// A span whose start height contradicts the height the queue holds for its
-// parent is rejected and its peer dropped -- but dropping by id flushes only
-// EMPTY spans, and neither `on_connection_close` nor `flush_stale_spans`
-// erases a filled one. Nothing removed this span, so if it sat lowest in the
-// queue `get_next_span` re-served it on every call and sync could not pass it.
-// Inherited; every sibling failure arm in the same loop already removes its
-// span. Same validation surface as the anonymity-zone arm above.
-TEST(block_sync_span_lifecycle, an_incorrect_height_span_leaves_the_queue_with_its_peer)
-{
-  test_core pr_core;
-  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
-  recording_endpoint endpoint;
-  cprotocol.set_p2p_endpoint(&endpoint);
-
-  const auto unknown_tor = epee::net_utils::network_address{net::tor_address::unknown()};
-  const boost::uuids::uuid liar = fixed_uuid(4);
-  endpoint.add(liar, unknown_tor);
-
-  // Reserve a span at height 50 whose one requested hash is the parent, then
-  // fill it. The queue now believes that parent sits AT 50, while the span
-  // delivered for it also starts at 50 -- so the block's parent would have to
-  // be its own sibling. That is the contradiction the check rejects.
-  const crypto::hash parent = a_parent_hash();
-  auto &queue = cryptonote_protocol_handler_test_seam::queue(cprotocol);
-  const auto reserved = queue.reserve_span(50, 50, 1, liar, unknown_tor,
-    /*blockchain_height=*/51, {{parent, 0}}, boost::date_time::min_date_time);
-  ASSERT_EQ(50u, reserved.first);
-  queue.add_blocks(50, {one_block(parent)}, liar, unknown_tor, 1.0f, 1);
-  ASSERT_EQ(1u, queue.get_num_filled_spans());
-  ASSERT_EQ(50u, queue.have_height(parent));
-
-  ASSERT_EQ(1, cryptonote_protocol_handler_test_seam::try_add_next_blocks(cprotocol, endpoint.conns.front()));
-
-  ASSERT_EQ(1u, endpoint.dropped.size());
-  EXPECT_EQ(liar, endpoint.dropped.front());
-  EXPECT_EQ(0u, queue.get_num_filled_spans())
-    << "the rejected span must leave the queue, or get_next_span serves it "
-       "again forever against a peer that is already gone";
-}
-
-// A prepare failure IS charged, and this test exists to keep it that way.
-//
-// `prepare_handle_incoming_blocks` returns false for six of OUR-state reasons
-// (`m_cancel`, thread-pool `!waiter.wait()`) and for about as many
-// SENDER-attributable ones -- unparseable block blob, unparseable transaction,
-// duplicate transaction, duplicate key image, empty span. The boolean cannot
-// say which fired, so declining to charge would let a peer feed malformed
-// spans forever and reconnect with no score accumulating. An earlier revision
-// of this test asserted the opposite, on the premise that the failure was
-// always ours; that premise was wrong (review of #628).
-//
-// Run on a CLEARNET origin, because the endpoint refuses to score a non-host
-// address at all and could not observe the difference on an anonymity zone.
-TEST(block_sync_span_lifecycle, prepare_failure_charges_the_origin_it_disconnects)
-{
-  test_core pr_core;
-  pr_core.prepare_handle_incoming_blocks_result = false;
-  pr_core.blocks_we_have.push_back(crypto::null_hash);
-  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
-  recording_endpoint endpoint;
-  cprotocol.set_p2p_endpoint(&endpoint);
-
-  const auto ip = epee::net_utils::network_address{epee::net_utils::ipv4_network_address{0x0100007f, 18080}};
-  const boost::uuids::uuid origin = fixed_uuid(5);
-  endpoint.add(origin, ip);
-
-  auto &queue = cryptonote_protocol_handler_test_seam::queue(cprotocol);
-  queue.add_blocks(1, {one_block()}, origin, ip, 1.0f, 1);
-
-  ASSERT_EQ(1, cryptonote_protocol_handler_test_seam::try_add_next_blocks(cprotocol, endpoint.conns.front()));
-
-  // Two properties, and the exact number pins both at once.
-  //
-  //   6 = the sweep's 5 for the host + 1 for the connection it severs.
-  //
-  // Lower than 6 means the path stopped charging -- the bypass: a peer that
-  // reaches this failure with malformed input could then repeat it forever,
-  // reconnecting each time with nothing accumulating.
-  //
-  // Higher than 6 means the origin was billed twice for one failure, because
-  // the id-drop below the sweep also passed `add_fail`. The parse-failure
-  // sibling passes false for exactly that reason, and an earlier revision of
-  // this PR asserted 7 while claiming it was testing "not zero" -- the extra
-  // point was redundant and the rationale did not match the assertion.
-  unsigned total = 0;
-  for (const auto &f : endpoint.host_fails)
-    total += f.second;
-  EXPECT_EQ(6u, total)
-    << "the sweep must charge (an unchargeable failure is one a peer can "
-       "repeat forever) and nothing may charge a second time for it";
-  EXPECT_FALSE(endpoint.dropped.empty()) << "but the origin is still disconnected";
-}
-
-// The other half of the same site, and the reason PWD-B7 made the verdict a
-// TYPE. A prepare failure that describes OUR OWN broken invariant --
-// `tx_index is out of sync`, a tx missing from our own scan table, a worker
-// that threw -- must neither disconnect the span's origin nor charge it. Under
-// the boolean this was indistinguishable from a malformed span, so our own bug
-// severed and billed an honest peer.
-//
-// Three assertions, because removing a punishment is not the whole change:
-// the drop is gone, the charge is gone, AND the span still leaves the queue.
-// That last one is the limb that matters most. `drop_connection` flushed the
-// span as a SIDE EFFECT; now that we do not drop, nothing else would clear it,
-// `get_next_span` would hand the same failed span back forever, and sync would
-// stall on our own bug instead of recovering from it. The severing being
-// removed WAS the recovery -- so the recovery is now explicit and asserted.
-//
-// Clearnet origin, because the endpoint refuses to score a non-host address
-// and could not observe an absent charge on an anonymity zone.
-TEST(block_sync_span_lifecycle, prepare_failure_on_our_own_invariant_neither_drops_nor_charges)
-{
-  test_core pr_core;
-  pr_core.prepare_handle_incoming_blocks_result = false;
-  pr_core.prepare_handle_incoming_blocks_verdict = SHEKYL_DROP_VERDICT_INTERNAL_FAILURE;
-  pr_core.blocks_we_have.push_back(crypto::null_hash);
-  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
-  recording_endpoint endpoint;
-  cprotocol.set_p2p_endpoint(&endpoint);
-
-  const auto ip = epee::net_utils::network_address{epee::net_utils::ipv4_network_address{0x0100007f, 18080}};
-  const boost::uuids::uuid origin = fixed_uuid(5);
-  endpoint.add(origin, ip);
-
-  auto &queue = cryptonote_protocol_handler_test_seam::queue(cprotocol);
-  queue.add_blocks(1, {one_block()}, origin, ip, 1.0f, 1);
-  ASSERT_EQ(1u, queue.get_num_filled_spans());
-
-  ASSERT_EQ(1, cryptonote_protocol_handler_test_seam::try_add_next_blocks(cprotocol, endpoint.conns.front()));
-
-  EXPECT_TRUE(endpoint.dropped.empty())
-    << "our own broken invariant must not disconnect the peer that happened "
-       "to be feeding us when it broke";
-  unsigned total = 0;
-  for (const auto &f : endpoint.host_fails)
-    total += f.second;
-  EXPECT_EQ(0u, total) << "and it must not be charged for our bug either";
-  EXPECT_EQ(0u, queue.get_num_filled_spans())
-    << "but the span must STILL leave the queue -- the drop used to flush it "
-       "as a side effect, and removing the drop must not remove the recovery";
-}
-
-// Our own cancellation, which is the routine member of the same class: a
-// shutdown or a cancelled sync is not a defect and not the sender's, so it is
-// neither loud nor chargeable. Separated from the test above because the two
-// take different arms of the verdict and only agree on the outcome.
-TEST(block_sync_span_lifecycle, prepare_failure_on_our_own_cancellation_neither_drops_nor_charges)
-{
-  test_core pr_core;
-  pr_core.prepare_handle_incoming_blocks_result = false;
-  pr_core.prepare_handle_incoming_blocks_verdict = SHEKYL_DROP_VERDICT_POLICY_OR_STATE;
-  pr_core.blocks_we_have.push_back(crypto::null_hash);
-  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
-  recording_endpoint endpoint;
-  cprotocol.set_p2p_endpoint(&endpoint);
-
-  const auto ip = epee::net_utils::network_address{epee::net_utils::ipv4_network_address{0x0100007f, 18080}};
-  const boost::uuids::uuid origin = fixed_uuid(5);
-  endpoint.add(origin, ip);
-
-  auto &queue = cryptonote_protocol_handler_test_seam::queue(cprotocol);
-  queue.add_blocks(1, {one_block()}, origin, ip, 1.0f, 1);
-
-  ASSERT_EQ(1, cryptonote_protocol_handler_test_seam::try_add_next_blocks(cprotocol, endpoint.conns.front()));
-
-  EXPECT_TRUE(endpoint.dropped.empty());
-  unsigned total = 0;
-  for (const auto &f : endpoint.host_fails)
-    total += f.second;
-  EXPECT_EQ(0u, total);
-  EXPECT_EQ(0u, queue.get_num_filled_spans());
-}
-
-// And the guard on the whole design: an UNCLASSIFIED failure -- the value a
-// `return false` added later carries until someone classifies it -- takes the
-// safe arm. This is what "the type is the gate" buys; without it a new
-// condition inherits whatever the default happens to be, which is exactly how
-// our own storage errors ended up severing peers.
-TEST(block_sync_span_lifecycle, an_unclassified_prepare_failure_does_not_drop)
-{
-  test_core pr_core;
-  pr_core.prepare_handle_incoming_blocks_result = false;
-  pr_core.prepare_handle_incoming_blocks_verdict = SHEKYL_DROP_VERDICT_UNCLASSIFIED;
-  pr_core.blocks_we_have.push_back(crypto::null_hash);
-  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
-  recording_endpoint endpoint;
-  cprotocol.set_p2p_endpoint(&endpoint);
-
-  const auto ip = epee::net_utils::network_address{epee::net_utils::ipv4_network_address{0x0100007f, 18080}};
-  const boost::uuids::uuid origin = fixed_uuid(5);
-  endpoint.add(origin, ip);
-
-  auto &queue = cryptonote_protocol_handler_test_seam::queue(cprotocol);
-  queue.add_blocks(1, {one_block()}, origin, ip, 1.0f, 1);
-
-  ASSERT_EQ(1, cryptonote_protocol_handler_test_seam::try_add_next_blocks(cprotocol, endpoint.conns.front()));
-
-  EXPECT_TRUE(endpoint.dropped.empty());
-  EXPECT_EQ(0u, queue.get_num_filled_spans());
-}
 
 namespace
 {
@@ -1186,12 +887,6 @@ TEST(attributable_drop, an_oversized_announce_declines_without_severing)
   EXPECT_TRUE(h.endpoint.dropped.empty());
 }
 
-TEST(attributable_drop, an_unparseable_announce_still_severs)
-{
-  NotifyHarness h;
-  ASSERT_EQ(1, h.notify_block(cryptonote::blobdata(16, '\xff')));
-  EXPECT_EQ(1u, h.endpoint.dropped.size());
-}
 
 // The ingress gate drops only a session that has not finished the
 // handshake. A peer that is still synchronising, or paused in standby,

@@ -314,7 +314,7 @@ function Stop-OverRpc {
 # paths assert this, so one of them cannot accept an empty marker.
 function Assert-StoreKept {
     param([string] $Data, [string] $Network, [string] $Label)
-    $storePath = Join-Path (Join-Path $Data 'lmdb') 'data.mdb'
+    $storePath = Join-Path $Data 'chain.db'
     $markerPath = Join-Path $Data 'shekyld.network'
     if (-not (Test-Path -LiteralPath $storePath -PathType Leaf)) {
         throw "$Label left no chain store at '$storePath'"

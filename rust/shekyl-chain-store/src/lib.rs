@@ -60,10 +60,9 @@
 //!   mismatch at every open.
 //!
 //! Slice B's table names are bijection-pinned against
-//! [`accumulator::TABLE_CLASSES`] **and** against the X-macro
-//! `SHEKYL_LMDB_TABLES` by `scripts/ci/check_redb_schema_bijection.py` —
-//! three surfaces, all 49 mirrored tables, checked in every direction, plus
-//! the Rust-only map for the tables LMDB never had. Codecs for the
+//! [`accumulator::TABLE_CLASSES`] by `scripts/ci/check_redb_schema_bijection.py`:
+//! the Rust definitions in `schema.rs` and `pool/schema.rs` are the
+//! denominator, and the class table names each of them. Codecs for the
 //! remaining tables' values land per surface (S-CHAIN-W onward) and
 //! inherit both that pin and the snapshot gate.
 

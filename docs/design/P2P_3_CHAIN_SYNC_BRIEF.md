@@ -1366,7 +1366,7 @@ checked by its name.
 | 9 | `sync_connector_of` (only the two `sync_ffi` calls use it) | `.inl:211-215` |
 | 10 | `get_avg_block_size`, `m_avg_buffer` | `.inl:964-975`; `.h:211-212` |
 | 11 | `cryptonote_protocol_handler_base` (all of `-base.cpp`) | class `.h:68-81`; `handler_request_blocks_history` called `.inl:1276`, `:2201` |
-| 12 | `get_block_queue` | `.h:116`; used `src/rpc/rpc_facts_ffi.cpp:1610` |
+| 12 | `get_block_queue` | `.h:116`; used `src/rpc/rpc_facts_ffi.cpp` |
 | 13 | `get_core` | `.h:113`; used `net_node.inl:476` |
 | 14 | Sync macros | `.inl:81-90`; `.h:57-59` |
 | 15 | Test-seam friend | `.h:61-63`, `:136` |
@@ -1400,7 +1400,7 @@ handler.
 | 5 | Its tests | `:53-74` |
 | 6 | C++ caller, in `update_sync_search` | `.inl:1747` |
 | 7 | C++ caller, in `needs_new_sync_connections` | `.inl:2553` |
-| 8 | Declarations | `src/shekyl/shekyl_ffi.h:4251-4257` |
+| 8 | Declarations | `src/shekyl/shekyl_ffi.h:3153-3159` |
 | 9 | Module | `rust/shekyl-ffi/src/lib.rs:184` |
 | 10 | FFI signature gate's registration | `scripts/ci/check_ffi_signatures.sh:87-88` |
 | 11 | `sync_connector_of` | 1c #9 |
@@ -1432,7 +1432,7 @@ handler.
 | 4 | `shekyl_block_announce_heavier_score` | `rust/shekyl-ffi/src/peer_policy_ffi.rs:256-259` |
 | 5 | `shekyl_block_sync_heavier_score` | `peer_policy_ffi.rs:291-294` |
 | 6 | FFI tests | `peer_policy_ffi.rs:305`, `312`, `486-487`, `507-508`, `533`, `544` |
-| 7 | C declarations | `src/shekyl/shekyl_ffi.h:3766`, `:3773` |
+| 7 | C declarations | `src/shekyl/shekyl_ffi.h:2960`, `:2967` |
 | 8 | C++ wrappers | `src/cryptonote_basic/block_ingest.h:102-105`, `:133-136` |
 | 9 | Announce use | `.inl:648` |
 | 10 | Sync use | `.inl:1511` |
@@ -1444,7 +1444,7 @@ handler.
 | --- | --- | --- | --- |
 | 1 | `block-download-max-size` | `m_block_download_max_size = 0`, `.inl:251` (member `.h:197`) | `.inl:1918`, falling back to `BLOCK_QUEUE_SIZE_THRESHOLD` (`.inl:82`) |
 | 2 | `span-limit` | `m_span_time = 2`, `.inl:252` (constructor `:226`; member `.h:198`) | `.inl:263` → `m_span_limit` (`.h:199`), read `:261`, `:266-267`, `:1919`, `:1948`; floor `BLOCK_QUEUE_NSPANS_MINIMUM` `.inl:81` |
-| 3 | `prep-blocks-threads` | `blocks_threads = 4`, `src/cryptonote_core/cryptonote_core.cpp:313` | `:401` → `Blockchain::set_user_options` `src/cryptonote_core/blockchain.cpp:6456-6467` → `m_max_prepare_blocks_threads` (`blockchain.h:1076`; read `blockchain.cpp:6230-6231`) |
+| 3 | `prep-blocks-threads` | `blocks_threads = 4`, `src/cryptonote_core/cryptonote_core.cpp:313` | `:401` → `Blockchain::set_user_options` `src/cryptonote_core/blockchain.cpp` → `m_max_prepare_blocks_threads` (`blockchain.h:1076`; read `blockchain.cpp:6230-6231`) |
 | 4 | `block-sync-size` | `block_sync_size = 0`, `cryptonote_core.cpp:417` (member `cryptonote_core.h:900`) | `core::get_block_sync_size` `cryptonote_core.cpp:610-634`, defaulting to `BLOCKS_SYNCHRONIZING_DEFAULT_COUNT` (`cryptonote_config.h:103`); its one production caller `.inl:2029` |
 
 **5. The router's forwarding list, and what the cutover does to each row.**
