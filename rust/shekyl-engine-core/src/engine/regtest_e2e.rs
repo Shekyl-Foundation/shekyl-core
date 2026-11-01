@@ -1448,11 +1448,22 @@ async fn assert_tx_confirmed(daemon: &RegtestDaemon, txid: TxHash) -> u64 {
          connected at height {after}; that block carries {carried:?}"
     );
 
-    assert_eq!(
-        daemon.tx_pool_size().await,
-        0,
-        "the mined spend must leave the pool"
-    );
+    // `generateblocks` answers when the connector's tip reaches the
+    // target; the tip follower reconciles the pool after that commit, so
+    // the pool is read until it drains, within a bound.
+    let reconciled = Instant::now() + Duration::from_secs(30);
+    loop {
+        let size = daemon.tx_pool_size().await;
+        if size == 0 {
+            break;
+        }
+        assert!(
+            Instant::now() < reconciled,
+            "the mined spend must leave the pool: {size} transaction(s) still there 30 s \
+             after its block connected"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 
     eprintln!("spend confirmed in the block that connected at height {after}");
     after
