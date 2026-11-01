@@ -28,7 +28,6 @@
 
 #pragma once
 
-#include <atomic>
 #include <memory>
 #include "shekyl/shekyl_ffi.h"
 
@@ -52,16 +51,16 @@ public:
   bool run(bool interactive = false);
 
 private:
+  friend void request_stop();
   void stop_p2p();
 
   std::unique_ptr<t_internals> mp_internals;
 };
 
-/// The flag the run loop polls; set by `request_stop`.
-extern std::atomic<bool> g_stop_requested;
-
-/// Requests the stop `Daemon::run` is waiting for and returns at once.
-/// Called by the Rust signal owner through the entry's `stop`.
+/// Requests the stop `Daemon::run` is waiting for and returns at once: it
+/// signals the running daemon directly, or, before `run` has registered,
+/// leaves the request for `run` to see. Called by the Rust signal owner
+/// through the entry's `stop`.
 void request_stop();
 
 } // namespace daemonize

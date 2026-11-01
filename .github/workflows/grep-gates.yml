@@ -352,6 +352,13 @@ jobs:
             scripts/ci/check_transit_marker.sh
           run_one "No unbounded blob dump in a log line" \
             python3 scripts/ci/check_log_blob_dumps.py
+          # A wait timed on the wall clock lasts as long as the clock is set
+          # back: the daemon's stop hung a day after a backward clock change
+          # (TOR_SUPERVISOR.md §7). The selftest proves the detector can fail.
+          run_one "No wall-clock wait in the C++ (selftest)" \
+            python3 scripts/ci/check_wall_clock_waits.py --selftest
+          run_one "No wall-clock wait in the C++" \
+            python3 scripts/ci/check_wall_clock_waits.py
           # Every version comparison and hard-fork table call in the C++ has
           # a classified row, in both directions: Shekyl's block version is 1,
           # so a gate on another number selects one arm forever, and the

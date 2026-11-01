@@ -34,11 +34,11 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <vector>
 
 #include <boost/algorithm/string/split.hpp>
-#include <boost/thread/thread.hpp>
 
 #include "common/password.h"
 #include "common/util.h"
@@ -157,6 +157,16 @@ struct t_internals {
   }
 };
 
+namespace {
+/// A stop was requested. Set once, before or while run() serves.
+std::atomic<bool> g_stop_requested{false};
+/// The daemon whose run() is serving, while it serves. The mutex, not an
+/// atomic pointer alone, keeps request_stop() from signalling a daemon
+/// that run() has already returned from and the caller is destroying.
+std::mutex g_running_mutex;
+Daemon* g_running = nullptr;
+} // namespace
+
 Daemon::Daemon(const ShekylDaemonSnapshot& snapshot)
   : mp_internals(new t_internals{snapshot})
 {
@@ -175,17 +185,22 @@ bool Daemon::run(bool interactive)
 
   // The stop is requested by the Rust signal owner through
   // `daemonize::request_stop` (DAEMON_CONFIG_CUTOVER.md §2.2 step 9): one
-  // process has one signal owner, and this loop only polls the flag.
-  std::atomic<bool> stop(false);
-  boost::thread stop_thread = boost::thread([&stop, this] {
-    while (!stop && !g_stop_requested.load())
-      epee::misc_utils::sleep_no_w(100);
+  // process has one signal owner. It signals this daemon directly once
+  // run() has registered it; a stop that arrived before the registration
+  // is seen here. No thread polls, so no wait here is timed on the wall
+  // clock: the poll this replaces slept until wall time plus 100 ms, and a
+  // clock set back a day made that sleep, and the join at exit, a day long.
+  {
+    std::lock_guard<std::mutex> lock(g_running_mutex);
+    g_running = this;
     if (g_stop_requested.load())
-      this->stop_p2p();
-  });
-  epee::misc_utils::auto_scope_leave_caller scope_exit_handler = epee::misc_utils::create_scope_leave_handler([&](){
-    stop = true;
-    stop_thread.join();
+      stop_p2p();
+  }
+  // Cleared before run() returns, so before ~t_internals: a stop that
+  // arrives after this point signals nothing.
+  epee::misc_utils::auto_scope_leave_caller unregister = epee::misc_utils::create_scope_leave_handler([](){
+    std::lock_guard<std::mutex> lock(g_running_mutex);
+    g_running = nullptr;
   });
   // Every exit from run() — the normal return, a caught exception, a throw
   // that escapes — stops the Rust RPC tasks before ~t_internals destroys the
@@ -277,11 +292,12 @@ bool Daemon::run(bool interactive)
   }
 }
 
-std::atomic<bool> g_stop_requested{false};
-
 void request_stop()
 {
+  std::lock_guard<std::mutex> lock(g_running_mutex);
   g_stop_requested.store(true);
+  if (g_running != nullptr)
+    g_running->stop_p2p();
 }
 
 void Daemon::stop_p2p()
