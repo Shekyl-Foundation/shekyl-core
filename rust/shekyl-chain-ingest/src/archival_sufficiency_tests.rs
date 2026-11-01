@@ -144,8 +144,6 @@ const fn witness(family: ArchivalFamily) -> Witness {
         | ArchivalFamily::AltAttestationWitness
         | ArchivalFamily::ShardSegment
         | ArchivalFamily::EmissionClaimLog
-        | ArchivalFamily::BondUnbondLog
-        | ArchivalFamily::BondHoldingsUpdateLog
         | ArchivalFamily::BondReinstateLog
         | ArchivalFamily::EpochCloseLog => match disposition(family) {
             Disposition::Excluded(why) => Witness::Excluded(why),
