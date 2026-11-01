@@ -11,15 +11,7 @@ All binaries are placed in `build/release/bin/` (or `build/debug/bin/`).
 | `shekyl-cli` | Interactive command-line wallet (Rust) |
 | `shekyl-wallet-rpc` | Headless wallet exposed via JSON-RPC |
 | `shekyl-gen-ssl-cert` | TLS certificate / key generator for RPC |
-| `shekyl-blockchain-import` | Import a bootstrap file into the chain DB |
-| `shekyl-blockchain-export` | Export chain DB to a bootstrap file |
-| `shekyl-blockchain-usage` | Output-reuse histogram |
-| `shekyl-blockchain-ancestry` | Trace output ancestry graphs |
-| `shekyl-blockchain-depth` | Measure transaction depth to coinbase (historical/analytical) |
-| `shekyl-blockchain-stats` | Time-series chain statistics |
-| `shekyl-mdb-copy` | Compact a stopped daemon's LMDB database |
 | `shekyl-utils-deserialize` | Decode hex blobs to human-readable JSON |
-| `shekyl-utils-object-sizes` | Print sizeof for core data structures |
 
 The `shekyl-utils-*` executables are only built when `BUILD_DEBUG_UTILITIES=ON`.
 
@@ -424,157 +416,7 @@ shekyl-gen-ssl-cert \
 
 ---
 
-## 5. Blockchain Utilities
-
-These tools operate directly on the LMDB blockchain database. The node must be
-stopped before running any tool that opens the database in read-write mode.
-
-### `shekyl-blockchain-import`
-
-Imports a raw blockchain bootstrap file into the LMDB database.
-
-```bash
-# Import with full verification
-shekyl-blockchain-import --input-file blockchain.raw
-
-# Fast import (skip verification — dangerous)
-shekyl-blockchain-import --input-file blockchain.raw --dangerous-unverified-import 1
-
-# Count blocks in a bootstrap file without importing
-shekyl-blockchain-import --input-file blockchain.raw --count-blocks
-
-# Import to testnet database
-shekyl-blockchain-import --testnet --input-file blockchain.raw
-
-# Pop the last 100 blocks (recovery)
-shekyl-blockchain-import --pop-blocks 100
-```
-
-Key options: `--input-file`, `--data-dir`, `--batch-size`, `--resume` /
-`--no-resume`, `--block-stop`, `--count-blocks`, `--pop-blocks`,
-`--dangerous-unverified-import`.
-
-### `shekyl-blockchain-export`
-
-Exports the chain database to a portable bootstrap file.
-
-```bash
-# Export the full chain
-shekyl-blockchain-export --output-file blockchain.raw
-
-# Export a specific block range
-shekyl-blockchain-export --block-start 0 --block-stop 500000
-
-```
-
-Key options: `--output-file`, `--data-dir`, `--block-start`, `--block-stop`.
-
-### `shekyl-blockchain-usage`
-
-Prints a histogram of output reuse — how many times each output appears as a
-ring member in transaction inputs. FCMP++ inputs carry no ring-member
-references, so this tool has no substrate on post-genesis data; it is a
-deletion-audit candidate (`docs/FOLLOWUPS.md`, V3.2 legacy spend-graph
-utilities entry).
-
-```bash
-shekyl-blockchain-usage ~/.shekyl/lmdb
-shekyl-blockchain-usage ~/.shekyl/lmdb --rct-only
-```
-
-Key options: positional `<input path>`, `--rct-only`.
-
-### `shekyl-blockchain-ancestry`
-
-Traces the ancestry graph of transaction outputs to understand output
-provenance. FCMP++ spends do not reveal which output they consume, so
-ancestry tracing has no substrate on post-genesis transactions; this tool is
-a deletion-audit candidate (`docs/FOLLOWUPS.md`, V3.2 legacy spend-graph
-utilities entry).
-
-```bash
-# Refresh the ancestry cache, then query by txid
-shekyl-blockchain-ancestry --refresh --txid <hash>
-
-# Query ancestry at a specific block height
-shekyl-blockchain-ancestry --height 150000
-```
-
-Key options: `--data-dir`, `--txid`, `--output <amount/offset>`, `--height`,
-`--refresh`, `--include-coinbase`, `--cache-outputs`, `--cache-txes`.
-
-### `shekyl-blockchain-depth`
-
-For a given transaction or block, walks inputs back to coinbase and reports
-the minimum depth. FCMP++ spends do not reveal which output they consume, so
-input-walking has no substrate on post-genesis transactions; this tool is a
-deletion-audit candidate (`docs/FOLLOWUPS.md`, V3.2 legacy spend-graph
-utilities entry).
-
-```bash
-# Depth of a specific transaction
-shekyl-blockchain-depth --txid <hash>
-
-# Average depth for all transactions in a block
-shekyl-blockchain-depth --height 200000
-```
-
-Key options: `--data-dir`, `--txid`, `--height`, `--include-coinbase`.
-
-### `shekyl-blockchain-stats`
-
-Outputs tab-separated chain statistics suitable for plotting and analysis.
-
-```bash
-# Full stats with emission and difficulty data
-shekyl-blockchain-stats --with-emission --with-diff --with-fees
-
-# Stats for a specific block range
-shekyl-blockchain-stats --block-start 100000 --block-stop 200000
-
-# Include hourly transaction distribution
-shekyl-blockchain-stats --with-hours --with-inputs --with-outputs
-```
-
-Key options: `--data-dir`, `--block-start`, `--block-stop`, `--with-inputs`,
-`--with-outputs`, `--with-hours`, `--with-emission`, `--with-fees`,
-`--with-diff`. Note: `--with-ringsize` has been removed (not applicable to
-FCMP++ transactions).
-
-### `shekyl-mdb-copy`
-
-Compacts a stopped daemon's LMDB database by copying it without its free
-pages (upstream LMDB's `mdb_copy`, built from the vendored source). The
-stripe engine that used to free those pages (`--prune-blockchain`) was
-deleted 2026-09-21 (`PDM-Q7`). No daemon path discards tx bodies today:
-the C++ depth-based discard was deleted 2026-09-22 as well, and the uniform
-discard is S-PRUNE, still a skeleton (`docs/design/DRS_E1_SPRUNE.md`). The tool
-reclaims whatever free pages the store already holds. You temporarily need
-disk space for both copies.
-
-```bash
-# Stop shekyld first; the destination directory must exist and be empty
-mkdir /path/to/compacted
-shekyl-mdb-copy -c ~/.shekyl/lmdb /path/to/compacted/
-
-# Then replace the old lmdb directory with the compacted copy
-```
-
-Run it as the user that owns the data directory (the copy opens the
-database read-only but still needs write access to the source's
-reader-lock file, `lock.mdb`; a `sudo` run leaves the compacted copy
-root-owned, so the daemon cannot use it after the swap), and always pass
-both paths — with the destination omitted the tool streams the entire
-database to standard output.
-
-The former `shekyl-blockchain-prune` (schema-aware pruned copy) and
-`shekyl-blockchain-prune-known-spent-data` (spend-graph pruning, no substrate
-under FCMP++) were retired; the daemon's in-place prune plus this
-schema-agnostic compaction replace them.
-
----
-
-## 6. Debug Utilities
+## 5. Debug Utilities
 
 Built only when `BUILD_DEBUG_UTILITIES=ON` is set at CMake configure time.
 
@@ -586,18 +428,6 @@ human-readable JSON.
 ```bash
 shekyl-utils-deserialize --input <hex-string>
 ```
-
-### `shekyl-utils-object-sizes`
-
-Prints `sizeof` for the major data structures used throughout the codebase
-(P2P messages, transaction types, wallet structures, etc.). Useful for
-profiling memory layout and detecting struct bloat.
-
-```bash
-shekyl-utils-object-sizes
-```
-
-No options — simply run and inspect the output.
 
 ---
 

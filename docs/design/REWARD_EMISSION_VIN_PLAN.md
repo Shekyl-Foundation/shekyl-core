@@ -69,7 +69,7 @@ would otherwise have to migrate it later (the asymmetry in
 
 **Precedent to follow, not invent:** archival consensus logic already lives in
 Rust behind FFI — `shekyl_fcmp_verify`, the `shekyl_archival_*` family
-(`shekyl_archival_epoch_close_compute`, `shekyl_archival_good_through`, …),
+(`shekyl_archival_epoch_close_compute` (deleted, `DEL-008`), `shekyl_archival_good_through` (deleted, `DEL-008`), …),
 and the `claimed_epochs_check_and_set` dedup core. The emission verify joins
 that family as `shekyl_emission_vin_verify`; it does not add a parallel C++
 verification path in `blockchain.cpp`.

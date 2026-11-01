@@ -174,60 +174,13 @@ fn percentile(sorted: &[u64], numer: usize, denom: usize) -> u64 {
 // Chain bootstrap
 // ---------------------------------------------------------------------------
 
-/// Create a throwaway wallet against the daemon and return its encoded primary
-/// address (the coinbase target `generateblocks` requires). The wallet file is
-/// ephemeral — only the address string outlives this call.
-async fn new_wallet_address(port: u16) -> String {
-    use super::lifecycle::{CapabilityInput, Credentials, EngineCreateParams};
-    use super::{DaemonClient, Engine, SoloSigner};
-    use shekyl_address::Network;
-    use shekyl_crypto_pq::account::{SeedFormat, MASTER_SEED_BYTES};
-    use shekyl_crypto_pq::wallet_envelope::KdfParams;
-    use shekyl_engine_file::SafetyOverrides;
-    use shekyl_engine_prefs::WalletPrefs;
-
-    let rpc = HttpRpc::new(format!("http://127.0.0.1:{port}"))
-        .await
-        .expect("wallet rpc");
-    let daemon_client = DaemonClient::new(rpc);
-
-    let tmp = tempfile::tempdir().expect("wallet tempdir");
-    let wallet_path = tmp.path().join("wallet");
-    let seed = [0x11u8; MASTER_SEED_BYTES];
-    let creds = Credentials::password_only(b"spt2-observability");
-    let params = EngineCreateParams {
-        base_path: &wallet_path,
-        credentials: &creds,
-        network: Network::Mainnet,
-        capability: CapabilityInput::Full {
-            master_seed_64: &seed,
-            seed_format: SeedFormat::Bip39,
-        },
-        creation_timestamp: 0,
-        restore_height_hint: 0,
-        kdf: KdfParams {
-            m_log2: 0x08,
-            t: 1,
-            p: 1,
-        },
-        overrides: SafetyOverrides::none(),
-        prefs: WalletPrefs::default(),
-    };
-    let wallet = Engine::<SoloSigner>::create(params, daemon_client).expect("create wallet");
-    wallet
-        .primary_address()
-        .encode()
-        .expect("encode wallet address")
-}
-
-/// Spawn a regtest daemon and mine `blocks` blocks; returns the daemon, the
-/// coinbase address (reused by the M-consistency writer), and the resulting tip.
-async fn boot_and_mine(blocks: u64) -> (RegtestDaemon, String, u64) {
+/// Spawn a regtest daemon and mine `blocks` blocks; returns the daemon and
+/// the resulting tip. Coinbase pays the daemon's `--mine-address` (N2).
+async fn boot_and_mine(blocks: u64) -> (RegtestDaemon, u64) {
     let daemon = RegtestDaemon::start().await;
-    let address = new_wallet_address(daemon.rpc_port()).await;
-    daemon.generate_blocks(blocks, &address).await;
+    daemon.generate_blocks(blocks).await;
     let tip = daemon.height().await;
-    (daemon, address, tip)
+    (daemon, tip)
 }
 
 // ---------------------------------------------------------------------------
@@ -528,7 +481,7 @@ async fn measure_timing(port: u16, tip: u64) {
 ///   incoherence the lock closes and rung-1 sidesteps by reading one height per
 ///   call. Characterized, never asserted: its presence *confirms* why rung-1
 ///   avoids batches; its absence under a proven-open window is also informative.
-async fn measure_consistency(daemon: Arc<RegtestDaemon>, address: String, tip: u64) {
+async fn measure_consistency(daemon: Arc<RegtestDaemon>, tip: u64) {
     use std::sync::atomic::{AtomicU64, AtomicUsize};
 
     const CHURN_DEPTH: u64 = 2; // pop+regen the top blocks
@@ -557,7 +510,7 @@ async fn measure_consistency(daemon: Arc<RegtestDaemon>, address: String, tip: u
             while !stop.load(Ordering::Relaxed) {
                 daemon.pop_blocks(CHURN_DEPTH).await;
                 commits.fetch_add(1, Ordering::Relaxed);
-                daemon.generate_blocks(CHURN_DEPTH, &address).await;
+                daemon.generate_blocks(CHURN_DEPTH).await;
                 commits.fetch_add(1, Ordering::Relaxed);
                 cycles += 1;
             }
@@ -786,7 +739,7 @@ async fn daemon_observability_round0() {
     // RPC client's 180s timeout while leaving a stable zone below the churn tip.
     const MINE: u64 = 40;
 
-    let (daemon, address, tip) = boot_and_mine(MINE).await;
+    let (daemon, tip) = boot_and_mine(MINE).await;
     let port = daemon.rpc_port();
     eprintln!("\n######## SP-T2 daemon observability (Round-0) — tip {tip} ########");
 
@@ -794,5 +747,5 @@ async fn daemon_observability_round0() {
     measure_timing(port, tip).await;
 
     let daemon = Arc::new(daemon);
-    measure_consistency(daemon, address, tip).await;
+    measure_consistency(daemon, tip).await;
 }

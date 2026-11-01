@@ -313,7 +313,7 @@ fn verify_bond_post(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<()
     }
 
     // ── BP2: canonical-id recomputation from the vin's pubkey ───────────
-    // Native twin of `shekyl_archival_p_canonical_id_from_pubkey`
+    // Native twin of `shekyl_archival_retention::p_canonical_id_from_hybrid_pubkey`
     // (blockchain.cpp:4739-4751): the claimed id must derive from the
     // claimed identity key, so the BP3 record probe (keyed on the claim)
     // and the BP5 auth pin (keyed on the pubkey) bind the same P. The
@@ -373,7 +373,7 @@ fn verify_bond_post(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<()
 /// The §8.7.2 emission battery: EV4's mint-balance + Bp+ legs, the E2/E5
 /// structural bindings, the E6–E10 archival legs (native
 /// `shekyl-archival-retention::emission_verify` minters — the same
-/// functions the C++ oracle reaches through `shekyl_emission_vin_verify`),
+/// functions the deleted C++ oracle reached through its coarse verify FFI, `DEL-008`),
 /// then the shared funding-subset K12 and whole-tx K13.
 ///
 /// EV1/EV2 are structural in `shekyl-wire`; EV3, E1 (parse+validate) and
@@ -623,7 +623,7 @@ fn verify_emission(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(),
     let auth = emission_vin_verify_auth(vin, &reward_commits, signable_tx_hash.as_bytes())
         .map_err(|e| emission_reject(&e))?;
     // The witness assembly is infallible once the three minters passed —
-    // mirroring the C++ oracle's single `shekyl_emission_vin_verify`
+    // mirroring the deleted C++ oracle's single verify FFI (`DEL-008`)
     // crossing; the outputs (total reward, epochs to commit) are the
     // connect arm's operands and unused at submit.
     drop(shekyl_archival_retention::emission_vin_verify(

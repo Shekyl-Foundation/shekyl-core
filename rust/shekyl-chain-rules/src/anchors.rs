@@ -76,9 +76,8 @@
 //!
 //! No release has shipped a checkpoint: `PDM-Q5`'s launch-window item puts
 //! the first before day ~195, then one per `≤ W`. That is an observation
-//! about the release calendar, not about this type — the C++
-//! `init_default_checkpoints` is the same empty table
-//! (`checkpoints.cpp:136`).
+//! about the release calendar, not about this type. This table is the
+//! empty one; the C++ `checkpoints` class is gone.
 //! `band_one_is_empty_until_the_first_checkpoint_release` pins the fact so
 //! the first checkpoint entry is a deliberate edit that fails a test, never
 //! a quiet one.

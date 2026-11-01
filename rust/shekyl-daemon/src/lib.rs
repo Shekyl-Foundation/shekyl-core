@@ -26,6 +26,15 @@ pub mod verify;
 pub use entry::{RunFn, ShekylDaemonEntry, StopFn};
 pub use run::{Host, EXIT_FAILED, EXIT_REFUSED};
 
+/// The daemon binary supplies this from C++. This crate's tests link the
+/// node, which calls it, and link no C++.
+#[cfg(test)]
+#[allow(unsafe_code)]
+#[no_mangle]
+extern "C" fn shekyl_shell_relay_local(_blob: *const u8, _len: usize) -> i32 {
+    0
+}
+
 /// The entry with the real platform: the account's roots from the
 /// operating system, the network id's one derivation, and `args`, the
 /// argument vector the process entry resolved (IG-Q2).

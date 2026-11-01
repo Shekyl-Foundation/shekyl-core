@@ -519,7 +519,7 @@ pub unsafe extern "C" fn shekyl_fcmp_verify(
 /// pass: the arm could not fire — K is computed directly); never reassign. Never
 /// `4` (`KeyImageCountMismatch`) — this path has no key images. Anti-replay is the
 /// emission per-epoch dedup, not a key image; the hybrid leaf-gated auth check is
-/// step 8 of the coarse `shekyl_emission_vin_verify` call
+/// step 8 of the emission verify body
 /// (`shekyl_archival_retention::emission_verify::emission_vin_verify_auth`).
 ///
 /// # Safety

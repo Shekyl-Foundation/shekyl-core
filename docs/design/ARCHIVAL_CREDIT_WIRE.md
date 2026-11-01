@@ -324,7 +324,7 @@ commitment. **4** dominates all three: the block-level merkle root self-enforces
 totality, the coinbase stays a normal coinbase, and attestations are not a
 transaction at all.
 
-**3.3 The verify entrypoint that replaces `shekyl_archival_verify_serve_credit_vin`
+**3.3 The verify entrypoint that replaces `shekyl_archival_verify_serve_credit_vin` (deleted, `DEL-008`)
 (shape 4).** Its contract inverts: instead of a path opening, for each of the `k`
 records it (a) takes the witness-carried requester nonce and anchor height and
 reads the anchor **hash** from the connecting chain at that height, requiring

@@ -11,10 +11,10 @@ use crate::ctl_client;
 
 /// The `/mining_status` reply, as much of it as `show_status` reads.
 ///
-/// **A bridged leg, on purpose** (§2.1.1): `/mining_status` is RK-7's and is
-/// still served from the C++ table (`core_rpc_ffi.cpp:180`). Required fields
-/// (no `#[serde(default)]`): a renamed field is an error naming it, where a
-/// defaulted `active` would report a mining daemon as idle.
+/// In-process the status is the node's miner. Remotely it is
+/// `/mining_status`. Required fields (no `#[serde(default)]`): a renamed
+/// field is an error naming it, where a defaulted `active` would report a
+/// mining daemon as idle.
 #[derive(serde::Deserialize)]
 struct MiningStatusProvisional {
     status: shekyl_rpc_types::RpcStatus,
@@ -50,9 +50,13 @@ enum MiningReadout {
 /// fault.
 fn fetch_mining_status(src: &Source) -> Result<MiningReadout, String> {
     let raw = match src {
-        Source::Live(core) => core
-            .json_endpoint("/mining_status", "{}", true)
-            .ok_or_else(|| "no reply from /mining_status".to_owned())?,
+        Source::Live(_) => {
+            let handles =
+                crate::handles::live_handles().ok_or_else(|| "the node is not open".to_owned())?;
+            let reply = crate::mining_methods::mining_status(handles.mining.as_ref())
+                .map_err(|fault| format!("{fault:?}"))?;
+            serde_json::to_string(&reply).map_err(|e| e.to_string())?
+        }
         Source::Remote {
             address, timeout, ..
         } => {

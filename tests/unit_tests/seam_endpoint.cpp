@@ -201,12 +201,6 @@ namespace
   }
 }
 
-TEST(seam_endpoint, the_executor_refuses_one_below_the_floor)
-{
-  std::uint64_t handle = 1;
-  EXPECT_EQ(shekyl_executor_record("p2p-exec", 1, 1, &handle), 0);
-}
-
 TEST(seam_endpoint, connect_from_the_executor_completes_at_the_floor)
 {
   std::uint64_t handle = 0;

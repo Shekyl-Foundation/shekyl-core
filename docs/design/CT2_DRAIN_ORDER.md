@@ -266,7 +266,7 @@ an output created at 0-indexed block `h` has stored maturity `M`, and drains the
 first time a block is connected with `current_height == M` — which is the
 connect of 0-indexed block **`h + N`**. The unit tests assert exactly this
 boundary: a maturity-50 leaf drains at `drain_pending_tree_leaves(50)` and not at
-49 (`tests/unit_tests/deferred_insertion.cpp:95-130`). The wallet must drain
+49 (`tests/unit_tests/deferred_insertion.cpp`). The wallet must drain
 inclusively (`maturity <= height`), never one block early or late.
 
 ---
@@ -434,7 +434,7 @@ what is drivable **today**:
   `+60` leaves with no spend. A reorg whose churned span contains `+10`/staked
   leaves inherits the spend dependency.
 - **In-process chaingen is not the generator.** `chaingen`'s FCMP++ tx
-  construction was removed (`tests/core_tests/chaingen_main.cpp:106-110`) and its
+  construction was removed (`tests/core_tests/chaingen_main.cpp`) and its
   `TestDB` stubs the curve tree to no-ops (`chaingen.cpp:160-171`); the fork
   tests are disabled. So the recommended generator is a **real regtest daemon**
   (§8.3), which sidesteps chaingen entirely and is the only path that can build

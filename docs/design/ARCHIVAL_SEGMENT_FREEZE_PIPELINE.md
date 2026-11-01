@@ -1,10 +1,11 @@
 # Segment-freeze pipeline — the production writer for `m_archival_shard_segment`
 
-**Status: RETIRED BY RULING (2026-09-18, `PDM-Q12`) — live in code until
-the cutover (`DEL-008`, `DAEMON_REDB_STORE.md` §12; *was* "until E4 / S-ARCH",
-re-tensed 2026-10-10 — DRS-E4 landed the archival writer and closed with this
-code live).** The specification below remains live consensus until the code
-is deleted; it is no longer a plan for anything to be built. Archive-or-contract
+**Status: RETIRED BY RULING (2026-09-18, `PDM-Q12`) — its code deleted at the
+flip (`DEL-008`'s Rust half, shekyl-core #1212, 2026-10-31; the C++ half with the
+flip's `DX-Q3` deletions).** The specification below is no longer live consensus
+and is not a plan for anything to be built; what remains in code is the
+`SEGMENT_LEAF_COUNT` pin and the two challenge-path helpers held for SO-D12 4b
+(`shekyl-archival-retention/src/segment_freeze.rs`). Archive-or-contract
 (rule 95) is owned by [`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md) and lands
 with that round's deletion increment. The original round-1 status is retained
 at its own heading below. See the retirement notice that follows.
@@ -371,7 +372,7 @@ same predicate independently fork at the boundary. Per
   `frozen_segment_count(leaf_count: u64) -> u64` next to the gate
   predicate it feeds, with `SEGMENT_LEAF_COUNT` as a crate constant
   (§5.2).
-- `shekyl-ffi` exports `shekyl_archival_frozen_segment_count`.
+- `shekyl-ffi` exports `shekyl_archival_frozen_segment_count` (deleted, `DEL-008`).
 - C++ **never performs the division inline** — both hooks call the
   FFI. The tripwire (§8) refuses `/ SEGMENT_LEAF_COUNT` and
   `% SEGMENT_LEAF_COUNT` spellings in `src/`.
@@ -518,7 +519,7 @@ not needed — no provisional constants):
    `frozen_segment_count` + leaf-chunk-bounds helpers with unit
    tests (boundary: `(k+1)·E − 1`, `(k+1)·E`, multi-segment jumps,
    0).
-2. **FFI:** `shekyl_archival_frozen_segment_count` (+ chunk-bounds
+2. **FFI:** `shekyl_archival_frozen_segment_count` (deleted, `DEL-008`) (+ chunk-bounds
    export), `cbindgen`/header regen.
 3. **Writer:** `process_archival_segment_freezes_at_height` +
    `revert_archival_segment_freezes` in `db_lmdb`, wired into

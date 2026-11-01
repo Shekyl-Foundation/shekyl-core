@@ -67,9 +67,10 @@ shekyl-chain-rules = { path = "../shekyl-chain-rules" }
 # `SubmitStateShim` over the Rust pool, reading the committed chain through
 # the store's `SnapshotView`. Not routed until the DRS-X flip, but linked:
 # `shekyl-daemon-image`, the shekyld binary's one Rust image, depends on
-# this crate, so both crates link into shekyld. No C++ reaches them — no
-# FFI export names the pool, and `shekyl-ffi` does not depend on this
-# crate. Also the store-backed facts' one snapshot per call (DRS-X PR 3).
+# this crate, so both crates link into shekyld. The protocol handler's
+# pool door is `shekyl-ffi`'s `pool_ffi`, which depends on `shekyl-mempool`
+# and not on this crate. Also the store-backed facts' one snapshot per call
+# (DRS-X PR 3).
 shekyl-chain-store = { path = "../shekyl-chain-store" }
 shekyl-mempool = { path = "../shekyl-mempool" }
 shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }

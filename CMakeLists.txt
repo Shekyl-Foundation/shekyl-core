@@ -549,13 +549,6 @@ option(BUILD_TESTS "Build tests." OFF)
 # pinned external/randomx-v2 submodule and exposes the
 # shekyl_randomx_v2 IMPORTED static-library target.
 # See docs/design/RANDOMX_V2_PHASE1_PLAN.md §§2.3, 3.3, 3.4.
-# DRS-E2 trace exporter (docs/design/DRS_E2_REPLAY_DRIVER.md §3.9): a
-# harvest shim that walks LMDB and hands bytes to the Rust trace writer.
-# OFF by default — the daemon build does not need it, and it is deleted in
-# the same commit that deletes the daemon (§1.3).
-option(BUILD_E2_TRACE_EXPORT
-  "Build shekyl-e2-trace-export, the DRS-E2 LMDB→trace harvest shim (default OFF)."
-  OFF)
 
 option(BUILD_RANDOMX_V2_MINER_LIB
   "Build RandomX v2 C reference library out-of-tree (differential harness / Hole-1 only; default OFF). Production PoW is the Rust verifier."
@@ -699,15 +692,6 @@ if(SANITIZE)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address")
   endif()
 endif()
-
-# Set default blockchain storage location:
-# memory was the default in Cryptonote before Monero implemented LMDB, it still works but is unnecessary.
-# set(DATABASE memory)
-set(DATABASE lmdb)
-message(STATUS "Using LMDB as default DB type")
-set(BLOCKCHAIN_DB DB_LMDB)
-add_definitions("-DDEFAULT_DB_TYPE=\"lmdb\"")
-add_definitions("-DBLOCKCHAIN_DB=${BLOCKCHAIN_DB}")
 
 # Can't install hook in static build on OSX, because OSX linker does not support --wrap
 # On ARM, having libunwind package (with .so's only) installed breaks static link.
@@ -940,9 +924,6 @@ if(MSVC)
 endif()
 add_subdirectory(external)
 
-# Final setup for liblmdb
-include_directories(${LMDB_INCLUDE})
-
 # Final setup for libunwind
 include_directories(${LIBUNWIND_INCLUDE})
 link_directories(${LIBUNWIND_LIBRARY_DIRS})
@@ -1031,23 +1012,13 @@ else()
     set(USE_LTO_DEFAULT false)
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--stack,10485760")
     # Pin the Windows API tier to Vista (0x0600) on 64-bit MinGW so
-    # MinGW-w64's `<winioctl.h>` exposes the Vista+ declarations its
-    # own headers gate on `_WIN32_WINNT` (chiefly
-    # `FSCTL_SET_COMPRESSION`, used by `disable_ntfs_compression` in
-    # `src/blockchain_db/lmdb/db_lmdb.cpp`). 32-bit MinGW was retired
-    # in Chore #3 (v3.1.0-alpha.5) — the root `CMakeLists.txt`
+    # MinGW-w64's headers expose the Vista+ declarations they gate on
+    # `_WIN32_WINNT`. 32-bit MinGW was retired in Chore #3
+    # (v3.1.0-alpha.5) — the root `CMakeLists.txt`
     # `CMAKE_SIZEOF_VOID_P` gate above refuses any i686 configure.
-    #
-    # The tier pin is *one* of two independent mechanisms that keep
-    # that symbol visible on MinGW — the other, living in
-    # `src/blockchain_db/lmdb/db_lmdb.cpp`, is a `#ifndef
-    # FSCTL_SET_COMPRESSION` / manual-define fallback that covers the
-    # *separate* case where MinGW's `<winioctl.h>` closes the
-    # `_FILESYSTEMFSCTL_` guard early under certain include orders
-    # (so the symbol isn't declared regardless of the API tier). The
-    # API-tier pin and the source-side fallback cover different root
-    # causes and are both necessary on the toolchain mixes we ship;
-    # keep them in sync and do not collapse one into the other.
+    # The chain-store file that needed the compression-control
+    # declaration was deleted with the C++ store. The tier pin stays
+    # for the headers this build still includes.
     add_definitions(-DWINVER=0x0600 -D_WIN32_WINNT=0x0600)
   endif()
   set(C_WARNINGS "-Waggregate-return -Wnested-externs -Wold-style-definition -Wstrict-prototypes")

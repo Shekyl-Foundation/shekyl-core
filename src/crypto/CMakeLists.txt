@@ -34,8 +34,7 @@ set(crypto_sources
   crypto-ops.c
   random.c
   crypto.cpp
-  generators.cpp
-  pow_randomx.cpp)
+  generators.cpp)
 
 set(crypto_headers)
 

@@ -272,7 +272,6 @@ jobs:
             cp "$BIN_X86"/shekyld "$STAGE/usr/local/bin/"
             cp "$BIN_X86"/shekyl-cli "$STAGE/usr/local/bin/"
             cp "$BIN_X86"/shekyl-wallet-rpc "$STAGE/usr/local/bin/"
-            cp "$BIN_X86"/shekyl-mdb-copy "$STAGE/usr/local/bin/"
             stage_tor x86_64-linux-gnu "$BIN_X86" "$STAGE"
             stage_slice "$STAGE"
             fpm -s dir -t deb \
@@ -295,7 +294,6 @@ jobs:
             cp "$BIN_X86"/shekyld "$STAGE_RPM/usr/local/bin/"
             cp "$BIN_X86"/shekyl-cli "$STAGE_RPM/usr/local/bin/"
             cp "$BIN_X86"/shekyl-wallet-rpc "$STAGE_RPM/usr/local/bin/"
-            cp "$BIN_X86"/shekyl-mdb-copy "$STAGE_RPM/usr/local/bin/"
             stage_tor x86_64-linux-gnu "$BIN_X86" "$STAGE_RPM"
             fpm -s dir -t rpm \
               -p "$RELEASE/shekyl-${VERSION}-1.x86_64.rpm" \
@@ -324,7 +322,6 @@ jobs:
             cp "$BIN_ARM"/shekyld "$STAGE/usr/local/bin/"
             cp "$BIN_ARM"/shekyl-cli "$STAGE/usr/local/bin/"
             cp "$BIN_ARM"/shekyl-wallet-rpc "$STAGE/usr/local/bin/"
-            cp "$BIN_ARM"/shekyl-mdb-copy "$STAGE/usr/local/bin/"
             stage_tor aarch64-linux-gnu "$BIN_ARM" "$STAGE"
             stage_slice "$STAGE"
             fpm -s dir -t deb \
@@ -347,7 +344,6 @@ jobs:
             cp "$BIN_ARM"/shekyld "$STAGE_RPM/usr/local/bin/"
             cp "$BIN_ARM"/shekyl-cli "$STAGE_RPM/usr/local/bin/"
             cp "$BIN_ARM"/shekyl-wallet-rpc "$STAGE_RPM/usr/local/bin/"
-            cp "$BIN_ARM"/shekyl-mdb-copy "$STAGE_RPM/usr/local/bin/"
             stage_tor aarch64-linux-gnu "$BIN_ARM" "$STAGE_RPM"
             fpm -s dir -t rpm \
               -p "$RELEASE/shekyl-${VERSION}-1.aarch64.rpm" \

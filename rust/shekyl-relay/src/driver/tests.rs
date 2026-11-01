@@ -281,6 +281,9 @@ fn a_due_channel_with_an_unbound_slot_clears_at_every_tick() {
                     sends += 1;
                 }
                 Effect::Fluff { .. } => unreachable!("nothing was queued"),
+                Effect::Stem { .. } | Effect::Published { .. } => {
+                    unreachable!("nothing was stemmed or held")
+                }
             }
         }
     }
@@ -357,6 +360,9 @@ fn a_rebind_and_a_noise_disabled_zone_emit_no_unbind() {
                      delivered to the successor"
                 ),
                 Effect::Fluff { .. } => unreachable!("nothing was queued"),
+                Effect::Stem { .. } | Effect::Published { .. } => {
+                    unreachable!("nothing was stemmed or held")
+                }
             }
         }
     }
@@ -776,7 +782,7 @@ fn a_late_poll_emits_at_most_one_noise_channel() {
         .into_iter()
         .filter_map(|e| match e {
             Effect::NoiseSend { channel, .. } | Effect::NoiseUnbind { channel } => Some(channel),
-            Effect::Fluff { .. } => None,
+            Effect::Fluff { .. } | Effect::Stem { .. } | Effect::Published { .. } => None,
         })
         .collect();
     assert_eq!(
@@ -801,7 +807,7 @@ fn a_late_poll_emits_at_most_one_noise_channel() {
         .into_iter()
         .filter_map(|e| match e {
             Effect::NoiseSend { channel, .. } | Effect::NoiseUnbind { channel } => Some(channel),
-            Effect::Fluff { .. } => None,
+            Effect::Fluff { .. } | Effect::Stem { .. } | Effect::Published { .. } => None,
         })
         .collect();
     assert_eq!(second.len(), 1, "the remaining overdue channel fires next");
@@ -821,7 +827,7 @@ fn a_late_poll_emits_at_most_one_noise_channel() {
 /// that `on_connection_close` reaches `forget`.
 ///
 /// Negative-controlled, both run and observed to fail:
-/// - remove the `expire_stem_observations` call from `poll` → the silence is
+/// - remove the `fire_embargoes` call from `poll` → the silence is
 ///   never resolved and the tally assertion fails;
 /// - remove `forget` from `on_connection_close` → the departed peer keeps a
 ///   tally and the drop assertion fails.

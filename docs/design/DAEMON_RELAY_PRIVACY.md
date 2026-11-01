@@ -117,7 +117,7 @@ this lane.
    by the pool. `relay_method` on the pool entry
    (`tx_pool.cpp`, `blockchain_db.h`) is the relay state machine stored
    beside the coins. **UPDATE 2026-10-02:** the two `origin_zone` bits
-   are unused (`src/blockchain_db/blockchain_db.h:271`). They stay so
+   are unused (`src/blockchain_db/blockchain_db.h`). They stay so
    the record stays 192 bytes, and they are not a connector id.
    `NetZone` stays the zone-parameterized embargo class, not a pool
    field; discriminant 2 is unused so `tor` stays 3. `address_type`
@@ -309,7 +309,7 @@ resolve against git history, `git log --follow -- src/net/dandelionpp.cpp`),
 the epoch/stem/fluff orchestration in
 [`src/cryptonote_protocol/levin_notify.cpp`](../../src/cryptonote_protocol/levin_notify.cpp),
 and the stem embargo in
-[`src/cryptonote_core/tx_pool.cpp`](../../src/cryptonote_core/tx_pool.cpp).
+`src/cryptonote_core/tx_pool.cpp`.
 The routing is sound. The *timing* — which is the entire privacy mechanism —
 is not, and was never tested.
 
@@ -324,9 +324,9 @@ Four defects, each verified against source and measured:
 
 | # | Defect | Site | Severity |
 | --- | --- | --- | --- |
-| **F-1** | The embargo constant does not follow from its own stated derivation | [`tx_pool.cpp:66-87`](../../src/cryptonote_core/tx_pool.cpp#L66-L87) | Medium — wrong value |
-| **F-2** | The embargo is drawn from a Poisson; its derivation assumes an exponential. At these means the timer is near-deterministic and effectively never fires | [`tx_pool.cpp:1031`](../../src/cryptonote_core/tx_pool.cpp#L1031), `duration.h` *(header deleted whole by the memoryless rewrite, PR #431, commit [`071a7cc5e`](https://github.com/Shekyl-Foundation/shekyl-core/commit/071a7cc5e))* | **High — mechanism absent** |
-| **F-3** | The closed form substitutes `E[K]` into an expression in `K(K-1)`; stem length is geometric, so it under-provisions at every fluff probability | [`tx_pool.cpp:66-87`](../../src/cryptonote_core/tx_pool.cpp#L66-L87) | Medium — no constant correction fixes it |
+| **F-1** | The embargo constant does not follow from its own stated derivation | `tx_pool.cpp:66-87` | Medium — wrong value |
+| **F-2** | The embargo is drawn from a Poisson; its derivation assumes an exponential. At these means the timer is near-deterministic and effectively never fires | `tx_pool.cpp:1031`, `duration.h` *(header deleted whole by the memoryless rewrite, PR #431, commit [`071a7cc5e`](https://github.com/Shekyl-Foundation/shekyl-core/commit/071a7cc5e))* | **High — mechanism absent** |
+| **F-3** | The closed form substitutes `E[K]` into an expression in `K(K-1)`; stem length is geometric, so it under-provisions at every fluff probability | `tx_pool.cpp:66-87` | Medium — no constant correction fixes it |
 | **F-4** | The **fluff delay** has the same distribution defect as F-2, on the timer every node applies to every transaction | [`levin_notify.cpp:75-90`](../../src/cryptonote_protocol/levin_notify.cpp#L75-L90), [`:439-440`](../../src/cryptonote_protocol/levin_notify.cpp#L439-L440) | **High — mechanism degraded** |
 | **F-5** | Because of F-4, the fluff flood itself is ~7× slower than it needs to be — first passage to an arbitrary node takes ~13.75 s (p90) instead of ~2.25 s. A throughput consequence of the same defect, and it feeds back into the embargo derivation | same as F-4 | **High — network-wide latency** |
 
@@ -1023,7 +1023,7 @@ leak = P(preempt)  ×  neighbour(supernode reach)  ×  origin-attribution
 
 - **Embargo mean** sets `P(preempt)` — mean-dependent, the lever moved by RD-1/RD-4.
 - **Fluff-return `F`** sets the disarm window `h·hop + F`
-  ([`tx_pool.cpp` `now + embargo_duration()`](../../src/cryptonote_core/tx_pool.cpp#L1053)):
+  (`tx_pool.cpp` `now + embargo_duration()`):
   a larger `F` gives every prefix embargo longer to fire, so it pushes the leak
   **opposite** to the embargo mean. And `F` is downstream of F-4 — the memoryless
   fix made the return flood ~7× faster (F-5) — so **F-4 was a second, independent
@@ -3238,13 +3238,13 @@ reshape stops being a lever we weigh and becomes the mechanism.
 
 On embargo expiry the stem transaction is **promoted to fluff**.
 `get_relayable_transactions` returns the expired tx tagged with its own relay
-method — `stem` ([tx_pool.cpp:998](../../src/cryptonote_core/tx_pool.cpp#L998)) —
+method — `stem` (tx_pool.cpp:998) —
 and `cryptonote_core` then buckets `stem` into `public_req`
 ([:1075-1076](../../src/cryptonote_core/cryptonote_core.cpp#L1075)) and relays
 `public_req` with **`relay_method::fluff`**
 ([:1087](../../src/cryptonote_core/cryptonote_core.cpp#L1087)). The loop-detection
 twin does the same on receiving a stemmed tx back
-([tx_pool.cpp:296](../../src/cryptonote_core/tx_pool.cpp#L296)). So the mechanism's
+(tx_pool.cpp:296). So the mechanism's
 answer to "I didn't see my tx return" is **fluff it** — and that fluff *is* C3.
 (This also confirms the crate's instruments modelled the right event: preemption
 = a fluff, not a silent re-stem.)
@@ -3383,7 +3383,7 @@ timescales are stacked in a narrow band.
 ### 15.2 The block-inclusion path is clean (verified)
 
 A mined tx is dropped from the pool via `remove_txpool_tx`
-([blockchain.cpp:7053](../../src/cryptonote_core/blockchain.cpp#L7053), the
+(blockchain.cpp:7053, the
 block-connect path), and the embargo lives in that pool entry's
 `meta.last_relayed_time`, which `get_relayable_transactions` only reads for
 pool-resident txes — so a mined tx **cannot** fire a stale embargo. And the margin
@@ -3734,14 +3734,14 @@ mirror image — and sets the precedent this round follows (below). The rest hol
 | Anchor | At source |
 | --- | --- |
 | The 39 s constant | `CRYPTONOTE_DANDELIONPP_EMBARGO_AVERAGE` (`cryptonote_config.h`) |
-| The F-1 ghost, in prose | the derivation comment, [tx_pool.cpp:66–86](../../src/cryptonote_core/tx_pool.cpp#L66) — its own formula over `k=5, ep=0.10, hop=175 ms` gives **16.61 s**; 39 s reproduces only under `log10` for `ln` |
-| The F-2 draw | `crypto::random_poisson_seconds embargo_duration{…}` ([tx_pool.cpp:1031](../../src/cryptonote_core/tx_pool.cpp#L1031)), applied at [:1053](../../src/cryptonote_core/tx_pool.cpp#L1053) |
+| The F-1 ghost, in prose | the derivation comment, tx_pool.cpp:66–86 — its own formula over `k=5, ep=0.10, hop=175 ms` gives **16.61 s**; 39 s reproduces only under `log10` for `ln` |
+| The F-2 draw | `crypto::random_poisson_seconds embargo_duration{…}` (tx_pool.cpp:1031), applied at :1053 |
 | The wallet consumer | `tx_propagation_timeout = EMBARGO_AVERAGE * 3/2` (the deleted `wallet2.cpp`) — second consumer of the constant; on expiry marks the transfer failed and un-spends key images |
-| The other timer | `MIN_RELAY_TIME = 300` ([tx_pool.cpp:94](../../src/cryptonote_core/tx_pool.cpp#L94)) |
+| The other timer | `MIN_RELAY_TIME = 300` (tx_pool.cpp:94) |
 | The Rust primitive | `EmbargoTimer::{adopted, inherited, geometric_with_tick, …}` (`schedule.rs`) — already landed, unmoved |
 
 `crypto::random_poisson_seconds` has exactly **two** users, both in `tx_pool.cpp`:
-the embargo (removed here) and the `forward` delay ([:307](../../src/cryptonote_core/tx_pool.cpp#L307)).
+the embargo (removed here) and the `forward` delay (:307).
 The forward delay is out of RP-4's scope; it is the last consumer of that header
 and a candidate for a later round, named here so it is not forgotten.
 
@@ -3754,7 +3754,7 @@ answers them — which is the point of re-censusing before building.
   drops a duplicate stem receipt silently, a loop is a self-inflicted black hole
   recovered only at embargo latency… needs a `tx_pool.cpp` duplicate-stem-receipt
   check **before RP-4**." It does not drop it:
-  [tx_pool.cpp:295–296](../../src/cryptonote_core/tx_pool.cpp#L295) converts a
+  tx_pool.cpp:295–296 converts a
   stem receipt for a tx already in `dandelionpp_stem` state to **fluff** — the
   Dandelion++ prototype behaviour the item asks for. The loop-black-hole failure
   mode does not exist, and RP-4 is therefore unblocked. (This mattered more after
@@ -3765,7 +3765,7 @@ answers them — which is the point of re-censusing before building.
   (300 s), where at 39 s it did not, so "a black-holed origin's first
   `MIN_RELAY_TIME` re-relay and its embargo recovery can now cross." At the seam
   they cannot: the relay loop dispatches on relay *method*
-  ([tx_pool.cpp:969–987](../../src/cryptonote_core/tx_pool.cpp#L969)) —
+  (tx_pool.cpp:969–987) —
   `stem`/`forward` are gated **solely** by `last_relayed_time > now` (which for an
   embargoed tx *is* the embargo deadline, a future timestamp), while
   `get_relay_delay`/`MIN_RELAY_TIME` gates only `local`/`fluff`/`block`. The two
@@ -3804,7 +3804,7 @@ process-wide `OnceLock` (the tables are immutable once built) and the same
 
 | C++ call site | FFI |
 | --- | --- |
-| `embargo_duration()` per stem tx ([tx_pool.cpp](../../src/cryptonote_core/tx_pool.cpp)) | `shekyl_dandelionpp_embargo_draw_seconds_for_connector(connector: u8) -> u64` |
+| `embargo_duration()` per stem tx (tx_pool.cpp) | `shekyl_dandelionpp_embargo_draw_seconds_for_connector(connector: u8) -> u64` |
 | `tx_propagation_timeout` in `wallet2` (the deleted `wallet2.cpp`) | `shekyl_dandelionpp_propagation_timeout_seconds() -> u64` |
 
 `crypto::random_poisson_seconds embargo_duration{…}` and the
@@ -5947,7 +5947,7 @@ capability, per §20.9) starts from the literature, untouched by any of this.
 
 ### 22.2 Q-12 — the forward-delay draw: registered, and live by its own criterion (a)
 
-[`tx_pool.cpp:311`](../../src/cryptonote_core/tx_pool.cpp#L311) draws the
+`tx_pool.cpp:311` draws the
 i2p/tor→clearnet forwarding delay as
 `crypto::random_poisson_seconds{22 s}` — Poisson, σ ≈ 4.7 s, **not
 memoryless**: the F-2/F-4 family signature, under a mean whose stated design
@@ -6181,10 +6181,10 @@ Traced by call graph, and the trace is decisive rather than suggestive:
    — on a noise zone, `relay_method::stem` is demoted to `relay_method::local`
    *before* `on_transactions_relayed`, under the comment *"do not put into
    stempool embargo"*.
-2. [`blockchain_db.cpp`](../../src/blockchain_db/blockchain_db.cpp) — `local`
+2. `blockchain_db.cpp` — `local`
    sets `is_local = 1`; `dandelionpp_stem` is a **different case arm** and
    stays `0`.
-3. [`tx_pool.cpp:1054`](../../src/cryptonote_core/tx_pool.cpp#L1054) — the
+3. `tx_pool.cpp:1054` — the
    derived embargo arms **only** under `if (meta.dandelionpp_stem)`.
 
 **So a transaction sent over the covert channel never arms the backstop this
@@ -6482,7 +6482,7 @@ as an open question for the §6 round, not decided here.
 The inherited claim ([`levin_notify.cpp:1060-1062`](../../src/cryptonote_protocol/levin_notify.cpp#L1060-L1062))
 is that Dandelion++ over I2P/Tor needs *"the mempool/stempool to know the zone
 a tx originated from."* Checked: `txpool_tx_meta_t`
-([`blockchain_db.h:177-206`](../../src/blockchain_db/blockchain_db.h#L177-L206))
+(`blockchain_db.h:177-206`)
 has **no zone field**, so the claim is accurate *as a description*. It is
 **false as a statement of feasibility**: the struct carried `bf_padding : 2`
 at the time —
@@ -9627,9 +9627,9 @@ first successful probe fluffs it and closes the window for everyone.
 
 **The discriminator's fix cost went up, and a cheaper fix appeared.** Both
 structural facts — `relay_category::broadcasted` excluding stem
-([`blockchain_db.h:116`](../../src/blockchain_db/blockchain_db.h#L116)) and
+(`blockchain_db.h:116`) and
 `add_tx` taking no peer
-([`tx_pool.cpp:376`](../../src/cryptonote_core/tx_pool.cpp#L376)) — say the
+(`tx_pool.cpp:376`) — say the
 **incoming path drops identity, exactly as it dropped the hash (§48)**. Third
 instance of one shape. So the peer discriminator needs a signature change
 *through the incoming path*, not a comparison at the decision site.
@@ -13199,7 +13199,7 @@ permissive one.
 all:**
 
 > *"A mined tx is dropped from the pool via `remove_txpool_tx`
-> ([blockchain.cpp:7053](../../src/cryptonote_core/blockchain.cpp#L7053), the
+> (blockchain.cpp:7053, the
 > block-connect path), and the embargo lives in that pool entry's
 > `meta.last_relayed_time`, which `get_relayable_transactions` only reads for
 > pool-resident txes — so a mined tx **cannot** fire a stale embargo."*

@@ -5,13 +5,12 @@
 
 //! Accumulator-class vocabulary and the per-table freeze.
 //!
-//! The five tokens and the 49 assignments are the DRS-0 slice A freeze.
-//! Prose lives in `docs/LMDB_WRITE_ATOMICITY_AUDIT.md` §10/§12; this module
-//! is what DRS-E1 reads. Tests pin the two copies to each other.
-//!
-//! The 49 names are the `SHEKYL_LMDB_TABLES` spelling. A sibling module
-//! that maps those tables (redb schema, codecs) must stay a bijection
-//! with [`TABLE_CLASSES`].
+//! The five tokens are the DRS-0 slice A freeze. The assignments are the
+//! Rust tables: `schema.rs` and `pool/schema.rs` are the denominator, and
+//! [`TABLE_CLASSES`] names each of them. A table the C++ store held and
+//! this store does not is absent here. Prose for the old inventory lives
+//! in `docs/LMDB_WRITE_ATOMICITY_AUDIT.md` §10/§12 as the record of that
+//! inventory. A surviving table keeps the class that matrix gave it.
 
 use core::fmt;
 use core::str::FromStr;
@@ -102,46 +101,40 @@ impl fmt::Display for UnknownAccumulatorClass {
 
 impl core::error::Error for UnknownAccumulatorClass {}
 
-/// Per-table freeze: one class per declared LMDB table, alphabetical,
-/// matching the audit §10 matrix. DRS-E1 looks up by name.
+/// Per-table freeze: one class per Rust table, alphabetical.
+/// DRS-E1 looks up by name. A surviving table keeps its audit class.
 pub const TABLE_CLASSES: &[(&str, AccumulatorClass)] = &[
+    ("alt_block_bodies", AccumulatorClass::Excluded),
     ("alt_blocks", AccumulatorClass::Excluded),
-    (
-        "archival_alt_attestation_witness",
-        AccumulatorClass::Excluded,
-    ),
     ("archival_attestation_witness", AccumulatorClass::Small),
+    ("archival_block_draws", AccumulatorClass::Excluded),
     ("archival_bond", AccumulatorClass::SetShaped),
-    (
-        "archival_bond_holdings_update_log",
-        AccumulatorClass::AppendMostly,
-    ),
-    (
-        "archival_bond_reinstate_log",
-        AccumulatorClass::AppendMostly,
-    ),
-    ("archival_bond_unbond_log", AccumulatorClass::AppendMostly),
     ("archival_budget", AccumulatorClass::Small),
-    ("archival_budget_accrual", AccumulatorClass::Small),
-    (
-        "archival_emission_claim_log",
-        AccumulatorClass::AppendMostly,
-    ),
-    ("archival_epoch_close_log", AccumulatorClass::AppendMostly),
+    ("archival_budget_accruing", AccumulatorClass::Excluded),
+    ("archival_bundle_body", AccumulatorClass::Excluded),
+    ("archival_bundle_queue", AccumulatorClass::Excluded),
+    ("archival_complete_trees", AccumulatorClass::Excluded),
+    ("archival_drawable_digest", AccumulatorClass::Excluded),
+    ("archival_issued_digest", AccumulatorClass::Excluded),
+    ("archival_issued_draw", AccumulatorClass::Excluded),
     ("archival_r_market", AccumulatorClass::Small),
+    ("archival_release_journal", AccumulatorClass::Excluded),
     ("archival_serve_credit", AccumulatorClass::Small),
     ("archival_settlement", AccumulatorClass::Small),
-    ("archival_shard_segment", AccumulatorClass::SetShaped),
     ("archival_sigma_work", AccumulatorClass::Small),
     ("archival_slash_applied", AccumulatorClass::SetShaped),
     ("archival_slash_log", AccumulatorClass::AppendMostly),
+    ("archival_support_block", AccumulatorClass::Excluded),
+    ("archival_support_issued", AccumulatorClass::Excluded),
+    ("archival_support_settlement", AccumulatorClass::Excluded),
+    ("archival_support_unissued", AccumulatorClass::Excluded),
     ("block_burn", AccumulatorClass::SetShaped),
     ("block_heights", AccumulatorClass::SetShaped),
     ("block_info", AccumulatorClass::AppendMostly),
-    ("block_pending_additions", AccumulatorClass::SetShaped),
+    ("block_pow", AccumulatorClass::Excluded),
     ("blocks", AccumulatorClass::AppendMostly),
-    ("curve_tree_checkpoints", AccumulatorClass::Derived),
     ("curve_tree_layers", AccumulatorClass::Derived),
+    ("curve_tree_leaf_counts", AccumulatorClass::Excluded),
     ("curve_tree_leaves", AccumulatorClass::AppendMostly),
     ("curve_tree_meta", AccumulatorClass::Small),
     ("curve_tree_roots", AccumulatorClass::SetShaped),
@@ -151,19 +144,21 @@ pub const TABLE_CLASSES: &[(&str, AccumulatorClass)] = &[
     ("output_amounts", AccumulatorClass::SetShaped),
     ("output_to_leaf", AccumulatorClass::SetShaped),
     ("output_txs", AccumulatorClass::SetShaped),
-    ("pending_tree_drain", AccumulatorClass::SetShaped),
-    ("pending_tree_leaves", AccumulatorClass::SetShaped),
+    ("pool_blob", AccumulatorClass::Excluded),
+    ("pool_header", AccumulatorClass::Excluded),
+    ("pool_meta", AccumulatorClass::Excluded),
     ("properties", AccumulatorClass::Small),
     ("spent_keys", AccumulatorClass::SetShaped),
     ("tx_indices", AccumulatorClass::SetShaped),
     ("tx_outputs", AccumulatorClass::AppendMostly),
-    ("txpool_blob", AccumulatorClass::Excluded),
-    ("txpool_meta", AccumulatorClass::Excluded),
     ("txs", AccumulatorClass::Excluded),
+    ("txs_archival_len", AccumulatorClass::Excluded),
+    ("txs_pqc_auth_hash", AccumulatorClass::Excluded),
     ("txs_pqc_auths", AccumulatorClass::Excluded),
     ("txs_prunable", AccumulatorClass::Excluded),
     ("txs_prunable_hash", AccumulatorClass::AppendMostly),
     ("txs_pruned", AccumulatorClass::AppendMostly),
+    ("undo_log", AccumulatorClass::Excluded),
 ];
 
 /// Class assigned to `name`, or `None` if `name` is not a declared table.
@@ -258,18 +253,13 @@ impl SetShapedContract {
     }
 }
 
-/// All fifteen set-shaped tables, alphabetical. Keep in bijection with
+/// The set-shaped Rust tables, alphabetical. Keep in bijection with
 /// the `SetShaped` rows of [`TABLE_CLASSES`].
 pub const SET_SHAPED_CONTRACTS: &[SetShapedContract] = &[
     SetShapedContract {
         name: "archival_bond",
         delete: SetShapedDelete::KeyAlone,
         insert: SetShapedInsert::BlindUpsert,
-    },
-    SetShapedContract {
-        name: "archival_shard_segment",
-        delete: SetShapedDelete::ValueInHand,
-        insert: SetShapedInsert::MixedOverwrite,
     },
     SetShapedContract {
         name: "archival_slash_applied",
@@ -285,11 +275,6 @@ pub const SET_SHAPED_CONTRACTS: &[SetShapedContract] = &[
         name: "block_heights",
         delete: SetShapedDelete::ValueInHand,
         insert: SetShapedInsert::CursorManaged,
-    },
-    SetShapedContract {
-        name: "block_pending_additions",
-        delete: SetShapedDelete::ValueInHand,
-        insert: SetShapedInsert::BlindUpsert,
     },
     SetShapedContract {
         name: "curve_tree_roots",
@@ -315,16 +300,6 @@ pub const SET_SHAPED_CONTRACTS: &[SetShapedContract] = &[
         name: "output_txs",
         delete: SetShapedDelete::ValueInHand,
         insert: SetShapedInsert::CursorManaged,
-    },
-    SetShapedContract {
-        name: "pending_tree_drain",
-        delete: SetShapedDelete::ValueInHand,
-        insert: SetShapedInsert::BlindUpsert,
-    },
-    SetShapedContract {
-        name: "pending_tree_leaves",
-        delete: SetShapedDelete::KeyAlone,
-        insert: SetShapedInsert::BlindUpsert,
     },
     SetShapedContract {
         name: "spent_keys",
@@ -487,22 +462,33 @@ mod tests {
     }
 
     #[test]
-    fn table_classes_match_the_audit_matrix() {
+    fn surviving_tables_keep_the_audit_class() {
         let audit_rows = matrix_class_rows(AUDIT);
-        let rust_rows: Vec<(&str, AccumulatorClass)> = TABLE_CLASSES.to_vec();
-        assert_eq!(
-            audit_rows, rust_rows,
-            "TABLE_CLASSES drifted from audit §10 Accumulator class column"
+        let classed: std::collections::BTreeMap<&str, AccumulatorClass> =
+            TABLE_CLASSES.iter().copied().collect();
+        let mut kept = 0usize;
+        for (name, class) in audit_rows {
+            if let Some(ours) = classed.get(name) {
+                assert_eq!(*ours, class, "{name}: class moved off the audit matrix");
+                kept += 1;
+            }
+        }
+        assert!(
+            kept > 0,
+            "the audit matrix and the class table share no table"
         );
     }
 
     #[test]
-    fn set_shaped_contracts_match_the_audit_falsifier_sets() {
+    fn set_shaped_contracts_match_the_audit_for_tables_that_remain() {
+        let live: std::collections::BTreeSet<&str> =
+            TABLE_CLASSES.iter().map(|(n, _)| *n).collect();
         let (listed, delete_alone, blind) = falsifier_sets(AUDIT);
-        let contracted: Vec<&str> = SET_SHAPED_CONTRACTS.iter().map(|c| c.name).collect();
-        let mut listed_sorted = listed.clone();
+        let mut listed_sorted: Vec<&str> =
+            listed.into_iter().filter(|n| live.contains(n)).collect();
         listed_sorted.sort_unstable();
         listed_sorted.dedup();
+        let contracted: Vec<&str> = SET_SHAPED_CONTRACTS.iter().map(|c| c.name).collect();
         assert_eq!(
             listed_sorted, contracted,
             "falsifier table names drifted from SET_SHAPED_CONTRACTS"
@@ -513,7 +499,10 @@ mod tests {
             .filter(|c| c.needs_read_before_delete())
             .map(|c| c.name)
             .collect();
-        let mut audit_alone = delete_alone;
+        let mut audit_alone: Vec<&str> = delete_alone
+            .into_iter()
+            .filter(|n| live.contains(n))
+            .collect();
         audit_alone.sort_unstable();
         assert_eq!(audit_alone, rust_alone);
 
@@ -522,19 +511,22 @@ mod tests {
             .filter(|c| c.needs_read_modify_write())
             .map(|c| c.name)
             .collect();
-        let mut audit_blind = blind;
+        let mut audit_blind: Vec<&str> = blind.into_iter().filter(|n| live.contains(n)).collect();
         audit_blind.sort_unstable();
         assert_eq!(audit_blind, rust_blind);
     }
 
     #[test]
-    fn only_archival_shard_segment_is_mixed_overwrite() {
+    fn no_set_shaped_table_is_mixed_overwrite() {
         let mixed: Vec<&str> = SET_SHAPED_CONTRACTS
             .iter()
             .filter(|c| c.hook_is_per_call_site())
             .map(|c| c.name)
             .collect();
-        assert_eq!(mixed, ["archival_shard_segment"]);
+        assert!(
+            mixed.is_empty(),
+            "a mixed-overwrite contract remains: {mixed:?}"
+        );
     }
 
     #[test]

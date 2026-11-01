@@ -29,7 +29,8 @@ fn reject_reason(tx_hex: &str) -> String {
     assert_eq!(
         reject.verdict(),
         SubmitVerdict::Rejected {
-            cause: RejectCause::Malformed
+            cause: RejectCause::Malformed,
+            row: None,
         },
         "every Phase-A failure maps to Rejected{{Malformed}}"
     );

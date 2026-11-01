@@ -271,7 +271,7 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 | `keep-fakechain` | — | | | |  |  | – (nothing is wiped, R3) |
 | `fixed-difficulty` | `dev-difficulty` | integer ≥ 1 | unset | both |  |  | R; regtest |
 | `prep-blocks-threads`, `block-sync-size`, `span-limit`, `block-download-max-size` | — | | | |  |  | X (chain sync's protocol constants replace `span-limit`, `block-sync-size` and `block-download-max-size`: the per-response, objects and global byte budgets and the deadlines, provisioned at the floor device, rule 76; a metered link is `p2p-download-max`, and a byte quota reopens under IG-Q40; `prep-blocks-threads` is the shared hasher budget's, derived from the floor device's scratchpads, DRS-X DX-Q2 item 6; [`P2P_3_CHAIN_SYNC_BRIEF.md`](P2P_3_CHAIN_SYNC_BRIEF.md) CS-Q12, ruled 2026-10-18) |
-| `db-sync-mode` | — | | | |  |  | – (the DRS lane decided: no knob; the constant is DRS-D9's `safe`, Rick 2026-10-26) |
+| `db-sync-mode` | — | | | |  |  | – (the DRS lane decided: no knob; the Rust store's durability is the constant `shekyl_chain_store::store::DURABILITY`, `Immediate`, DRS-D9, Rick 2026-10-26) |
 | `db-salvage` | — | | | |  |  | L DRS |
 | `keep-alt-blocks` | — | | | |  |  | L DRS-E5 |
 | `max-txpool-weight` | `txpool-weight-max` | quantity (bytes) | `648000000B` | both |  |  | R; a Monero-derived operand; deleted at the DRS-X flip, the pool's cap deriving from the chain (IG-Q11, amended 2026-10-17) |
@@ -652,16 +652,16 @@ The catalog the Rust console and `shekyl-cli` serve (IG-Q25). The interim C++ co
 
 | Binary | Ruling | Reason |
 |---|---|---|
-| `shekyl-blockchain-usage`, `-ancestry`, `-depth` | deleted, each in its own PR (FOLLOWUPS) | ring-signature-era analytics (`rct-only`, `ringsize`) with no referent under FCMP++ (rule 60) |
+| `shekyl-blockchain-usage`, `-ancestry`, `-depth` | deleted | ring-signature-era analytics (`rct-only`, `ringsize`) with no referent under FCMP++ (rule 60) |
 | `shekyl-gen-ssl-cert` | deleted (FOLLOWUPS) | RT-11: the RPC channel replaces TLS |
-| `shekyl-utils-object-sizes` | deleted (FOLLOWUPS) | a C++ debug tool with no remaining job |
-| `shekyl-blockchain-import`, `-export`, `-stats`, `shekyl-mdb-copy` | go with LMDB at the redb cutover; not renamed meanwhile (FOLLOWUPS) | LMDB tools; offline bootstrap afterwards, if wanted, is the chain-ingest file source feeding the daemon's store, the DRS lane's to design |
+| `shekyl-utils-object-sizes` | deleted | a C++ debug tool with no remaining job |
+| `shekyl-blockchain-import`, `-export`, `-stats`, `shekyl-mdb-copy` | deleted | the chain store is the Rust store; these read LMDB |
 | `shekyl-utils-deserialize` | stays until `tx decode` (§12.3) lands, then goes | the decode need is real; the Rust codecs serve it |
-| `shekyl-e2-trace-export` | DRS-E2's | the replay driver's own tool |
+| `shekyl-e2-trace-export` | deleted | the C++ LMDB harvest; the replay reads a frozen `trace.e2` |
 | `geblock` | its table is §14.2 | the genesis ceremony tool |
 | `shekyl-chain-replay`, `shekyl-wss-q1b-bench`, and every other binary target the gate enumerates | in the gate (IG-Q27); their tables come with the gate (FOLLOWUPS) | development tools follow the grammar |
 
-Each deletion fixes its consumers: the weekly workflow's comment, the logging and blob-dump gate comments that name the tools, the Windows installer and the build workflows for `shekyl-mdb-copy`, and `EXECUTABLES.md`.
+Each remaining deletion fixes its consumers in the same change.
 
 ### 14.2 `geblock`
 
@@ -695,7 +695,7 @@ The four acts of the genesis ceremony tool under IG-3 (IG-Q35). `geblock` has no
 
 **IG-Q26 — the utilities — RULED 2026-10-14.** As §14.1. The deletions are separate implementation PRs, each fixing its consumers. `tx decode <body>` (§12.3) replaces `shekyl-utils-deserialize`.
 
-**IG-Q27 — the gate's scope — RULED 2026-10-14.** The gate's subject is every binary target we author, enumerated mechanically from the Cargo workspace and CMake, never from a hand-kept list; the gate asserts the set is non-empty (rule 47). Development tools are in it. The exceptions are the tools bound to LMDB or the C++ while they last, and `shekyl-mdb-copy`, which is LMDB's upstream tool.
+**IG-Q27 — the gate's scope — RULED 2026-10-14.** The gate's subject is every binary target we author, enumerated mechanically from the Cargo workspace and CMake, never from a hand-kept list; the gate asserts the set is non-empty (rule 47). Development tools are in it. The exceptions were the tools bound to LMDB or the C++ while they lasted, and `shekyl-mdb-copy`, which was LMDB's upstream tool. Those exceptions are discharged: the tools are deleted.
 
 **IG-Q28 — the CompleteTree flags — RULED 2026-10-14.** `archival-complete-tree` and `archival-acknowledge` are public rows.
 

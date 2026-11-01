@@ -61,7 +61,12 @@ fn unbind() {
 /// the network id, and a usable clearnet link.
 fn ready(dialer: &Dialer) {
     let top = [1u8; 32];
-    unsafe { shekyl_core_publish_tip(1, 1, 0, top.as_ptr()) };
+    publish_tip(SyncPayload {
+        current_height: 1,
+        cumulative_difficulty: 1,
+        cumulative_difficulty_top64: 0,
+        top_id: top,
+    });
     dialer.set_network_id([7; 16]);
     assert!(
         matches!(

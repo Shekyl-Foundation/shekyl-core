@@ -73,7 +73,7 @@ grep -rn "CORE_RPC_VERSION" rust/ src/ tests/ utils/ \
 | 4 | The constant's pins: `chain.rs:383–386` (packed value, packing expression, major, minor — the 2026-09-04 merge-safety fix). |
 | 11 | The oracle-vector parity and chain-delta tests in `rust/shekyl-rpc-types/tests/rpc_parity.rs`. |
 | 2 | The re-export, `rust/shekyl-rpc-types/src/lib.rs:87–88`. |
-| 7 | Comments and doc comments (`chain.rs:41`, `:45`, `:338`, `:367`; `headers.rs:16`; `src/rpc/core_rpc_server_commands_defs.h:84`, `:89`). |
+| 7 | Comments and doc comments (`chain.rs:41`, `:45`, `:338`, `:367`; `headers.rs:16`; `src/rpc/core_rpc_server_commands_defs.h`, `:89`). |
 
 **Zero hits compare the constant to a value that came off the wire.** Not
 `shekyl-daemon-rpc/src/console/` (the `shekyld <command>` arm), not
@@ -88,7 +88,7 @@ whose `get_version.version` is not this build's packed `CORE_RPC_VERSION`.
 ### 0.2 `get_info.nettype` is read by nobody either — and a plan lock says it is
 
 The C++ `on_get_info` fills `nettype` as one of `"mainnet"`, `"testnet"`,
-`"stagenet"`, `"fakechain"` (`src/rpc/core_rpc_server.cpp:237`). No Rust
+`"stagenet"`, `"fakechain"` (`src/rpc/core_rpc_server.cpp`). No Rust
 client reads it: `grep -rn nettype rust/shekyl-engine-core/src
 rust/shekyl-wallet-rpc/src rust/shekyl-cli/src rust/shekyl-daemon-rpc/src/console`
 returns nothing outside tests. `rust/shekyl-rpc-types` has no `nettype`
