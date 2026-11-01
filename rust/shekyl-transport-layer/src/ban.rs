@@ -462,6 +462,55 @@ mod tests {
         assert!(!bans.is_banned(v4([10, 1, 1, 1]), Tick::new(2)));
     }
 
+    /// What the C++ `ban.add` and `ban.subnet` tests held, ported before
+    /// the C++ ban interface was deleted (Rick, 2026-11-01): a host ban
+    /// covers that host only and a second ban of it is one entry; a lift of
+    /// nothing, or a second lift, removes nothing; a /24 covers `.0` and
+    /// `.255` and neither neighbouring /24; a /8 covers its edges; a /24
+    /// lift does not remove the /8 that holds it, and a second /8 ban is
+    /// one entry. Red edit: compare the whole address, not the prefix, in
+    /// `Ipv4Subnet::contains`.
+    #[test]
+    fn a_ban_covers_exactly_its_host_or_prefix() {
+        let mut bans = BanList::new();
+        let now = Tick::new(1);
+        let until = Tick::new(1_000);
+        let host = v4([1, 2, 3, 4]);
+        assert!(bans.ban_host(host, until, now));
+        assert!(bans.is_banned(host, now));
+        assert!(!bans.is_banned(v4([1, 2, 3, 5]), now), "a neighbour");
+        assert!(!bans.ban_host(host, until, now), "the same ban again");
+        assert_eq!(bans.listed(now).len(), 1);
+        assert!(!bans.lift_host(v4([1, 2, 3, 5])), "nothing to lift");
+        assert!(bans.lift_host(host));
+        assert!(!bans.lift_host(host), "lifted once");
+        assert!(bans.listed(now).is_empty());
+
+        let slash24 = Ipv4Subnet::new(Ipv4Addr::new(1, 2, 3, 4), 24).expect("prefix");
+        assert!(bans.ban_subnet(slash24, until, now));
+        for inside in [[1, 2, 3, 0], [1, 2, 3, 4], [1, 2, 3, 255]] {
+            assert!(bans.is_banned(v4(inside), now), "{inside:?}");
+        }
+        for outside in [[1, 2, 4, 0], [1, 2, 2, 255]] {
+            assert!(!bans.is_banned(v4(outside), now), "{outside:?}");
+        }
+        let named_by_another_host = Ipv4Subnet::new(Ipv4Addr::new(1, 2, 3, 8), 24).expect("prefix");
+        assert!(bans.lift_subnet(named_by_another_host));
+        assert!(!bans.is_banned(v4([1, 2, 3, 0]), now));
+
+        let slash8 = Ipv4Subnet::new(Ipv4Addr::new(1, 2, 3, 4), 8).expect("prefix");
+        assert!(bans.ban_subnet(slash8, until, now));
+        assert!(bans.is_banned(v4([1, 255, 3, 255]), now));
+        assert!(bans.is_banned(v4([1, 0, 3, 255]), now));
+        assert!(!bans.lift_subnet(slash24), "a /24 inside it is not the /8");
+        assert!(bans.is_banned(v4([1, 2, 3, 4]), now));
+        assert!(!bans.ban_subnet(slash8, until, now), "the same /8 again");
+        assert_eq!(bans.listed(now).len(), 1);
+        let slash8_elsewhere = Ipv4Subnet::new(Ipv4Addr::new(1, 255, 0, 0), 8).expect("prefix");
+        assert!(bans.lift_subnet(slash8_elsewhere));
+        assert!(bans.listed(now).is_empty());
+    }
+
     #[test]
     fn an_ipv6_host_is_not_inside_an_ipv4_subnet() {
         let mut bans = BanList::new();
