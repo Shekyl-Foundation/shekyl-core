@@ -244,8 +244,14 @@ ARMED_SLOW=(
 #     scripts/bench/capture_kept_chain.py. Not a pass/fail proposition for
 #     this lane: the subject is the keep, and the lane would spend a
 #     daemon start proving a bool. Sibling of generate_ct2_tier_b_fixture.
+#   sync::a_node_and_an_alpha_11_node_refuse_each_other_cleanly — CS-5 §6's
+#     mixed-version refusal: a CS-5 node and a released alpha.11 node,
+#     linked; alpha.11 never takes the chain and both stay up. Needs the
+#     released binary as SHEKYLD_ALPHA11_BIN, which CI does not have; run
+#     by hand before a release that changes the wire.
 DECIDED_DARK=(
   engine::regtest_e2e::capture_chain_keeps_its_datadir
+  engine::regtest_e2e::sync::a_node_and_an_alpha_11_node_refuse_each_other_cleanly
   engine::regtest_e2e::generate_ct2_tier_b_fixture
   engine::regtest_e2e::rt_p5::rt_p5_dry_run
   engine::regtest_e2e::rt_p5::rt_p5_registered_run

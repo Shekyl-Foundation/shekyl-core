@@ -274,6 +274,9 @@ struct RegtestSpawn {
     /// The DX-Q8 capture is the caller. The default deletes, except under
     /// a failing test (`Drop` keeps the directory while its thread panics).
     keep_data: bool,
+    /// Another daemon binary than `SHEKYLD_BIN`: a released version, for a
+    /// mixed-version walk.
+    binary: Option<PathBuf>,
 }
 
 impl RegtestSpawn {
@@ -288,7 +291,14 @@ impl RegtestSpawn {
             peering: Peering::Offline,
             mine_address: None,
             keep_data: false,
+            binary: None,
         }
+    }
+
+    /// Spawn `binary` instead of `SHEKYLD_BIN`.
+    fn with_binary(mut self, binary: PathBuf) -> Self {
+        self.binary = Some(binary);
+        self
     }
 
     fn with_mine_address(mut self, address: String) -> Self {
@@ -585,10 +595,11 @@ impl RegtestDaemon {
             peering,
             mine_address,
             keep_data,
+            binary,
         } = spec;
         install_wallet_tracing();
 
-        let bin = Self::binary();
+        let bin = binary.unwrap_or_else(Self::binary);
         let offline = matches!(peering, Peering::Offline);
         let p2p_ports: Vec<u16> = match &peering {
             Peering::Offline => Vec::new(),

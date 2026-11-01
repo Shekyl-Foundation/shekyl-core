@@ -246,8 +246,8 @@ TEST(tor_address, unknown_is_not_a_host)
     // (net_node.inl:677, one call per zone). It must never report *sameness*:
     // two connections whose remote is unknown are not the same host, they are
     // two peers whose host is unknown. Reading absence-of-information as
-    // equality collapses an entire zone into one host, which is what made
-    // `drop_connections` sever every inbound anon peer at once.
+    // equality collapses an entire zone into one host, and a host-wide
+    // sweep would then sever every inbound anon peer at once.
     //
     // This is the same invariant `block_host` (net_node.inl:254),
     // `add_host_fail` (:412) and the RPC ban path (core_rpc_server.cpp:186)
