@@ -41,8 +41,17 @@ extern "C" fn shekyl_shell_relay_local(_blob: *const u8, _len: usize) -> i32 {
 /// operating system, the network id's one derivation, and `args`, the
 /// argument vector Rust's process entry resolved (IG-Q2). Returns the exit
 /// status; the binary exits with it.
+///
+/// The first statement is the process hardening (DC-Q21): no core, no
+/// same-account tracer, before an argument is read. A process that cannot
+/// apply it does not go on to hold anything worth protecting; it says so
+/// on standard error and exits [`EXIT_FAILED`].
 #[must_use]
 pub fn main(remnant: Remnant, args: &[std::ffi::OsString]) -> i32 {
+    if let Err(e) = shekyl_ffi::platform::harden_process() {
+        eprintln!("shekyld: process hardening {e}; not starting");
+        return EXIT_FAILED;
+    }
     shekyl_ffi::panic_hook::install();
     run::main(remnant, args, &host())
 }

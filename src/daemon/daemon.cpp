@@ -54,9 +54,6 @@
 #include "shekyl/shekyl_ffi.h"
 #include "version.h"
 #include "cryptonote_config.h"
-#ifdef __linux__
-#include <sys/prctl.h>
-#endif
 #include <boost/filesystem/operations.hpp>
 
 #include <cstdint>
@@ -350,9 +347,6 @@ extern "C" int shekyl_remnant_run(const ShekylDaemonSnapshot* snapshot) noexcept
     }
 
     tools::on_startup();
-#ifdef __linux__
-    prctl(PR_SET_DUMPABLE, 0);
-#endif
 
     const bool testnet = snapshot->network == 1;
     const bool stagenet = snapshot->network == 2;
