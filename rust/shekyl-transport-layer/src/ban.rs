@@ -14,7 +14,9 @@
 //! type is that list.
 //!
 //! Each ban and each lift is posted, in order, to every subscriber's
-//! queue ([`BanFeed`]), and the queue rings its subscriber. A subscription
+//! queue ([`BanFeed`]). The list only collects which subscribers to ring
+//! ([`BanList::take_rings`]); its owner rings them once its lock has
+//! dropped, so a ring never runs under the table's lock. A subscription
 //! starts with a ban event for every entry in force, taken in the same
 //! lock section, so no lift between the seed and the subscription is lost.
 
@@ -266,7 +268,20 @@ impl FeedQueue {
             .lock()
             .expect("ban feed lock poisoned")
             .push_back(event);
-        (self.ring)();
+    }
+}
+
+/// The subscribers a change posted to, to ring once the lock that guards
+/// the list has dropped.
+#[must_use = "a subscriber is woken only when its ring runs"]
+pub struct BanRings(Vec<Weak<FeedQueue>>);
+
+impl BanRings {
+    /// Ring each subscriber once; one dropped since is not rung.
+    pub fn ring(self) {
+        for queue in self.0.iter().filter_map(Weak::upgrade) {
+            (queue.ring)();
+        }
     }
 }
 
@@ -301,6 +316,9 @@ pub struct BanList {
     /// not here; an extension moves its entry.
     deadlines: BTreeSet<(Tick, BanEntry)>,
     feeds: Vec<Weak<FeedQueue>>,
+    /// The subscribers posted to since the last [`Self::take_rings`],
+    /// held weakly so a pending ring keeps no subscription alive.
+    rings: Vec<Weak<FeedQueue>>,
 }
 
 impl std::fmt::Debug for BanList {
@@ -308,6 +326,7 @@ impl std::fmt::Debug for BanList {
         f.debug_struct("BanList")
             .field("entries", &self.entries)
             .field("feeds", &self.feeds.len())
+            .field("rings", &self.rings.len())
             .finish_non_exhaustive()
     }
 }
@@ -451,27 +470,42 @@ impl BanList {
     }
 
     /// Subscribe: a queue that starts with a ban event for every entry in
-    /// force and then receives every change, ringing `ring` after each.
-    /// The seed and the registration are one call under the caller's
-    /// lock, so nothing between them is lost.
+    /// force and then receives every change; `ring` is rung after each
+    /// change, by whoever takes the rings. The seed and the registration
+    /// are one call under the caller's lock, so nothing between them is
+    /// lost; a non-empty seed is rung like a change.
     pub fn subscribe(&mut self, ring: Arc<dyn Fn() + Send + Sync>) -> BanFeed {
-        let seed = self
+        let seed: VecDeque<BanEvent> = self
             .entries
             .iter()
-            .map(|(entry, _)| BanEvent::Banned(entry));
+            .map(|(entry, _)| BanEvent::Banned(entry))
+            .collect();
+        let seeded = !seed.is_empty();
         let queue = Arc::new(FeedQueue {
-            events: Mutex::new(seed.collect()),
+            events: Mutex::new(seed),
             ring,
         });
         self.feeds.push(Arc::downgrade(&queue));
-        (queue.ring)();
+        if seeded {
+            self.rings.push(Arc::downgrade(&queue));
+        }
         BanFeed { queue }
     }
 
+    /// The subscribers posted to since the last call, to ring after the
+    /// caller's lock drops.
+    pub fn take_rings(&mut self) -> BanRings {
+        BanRings(std::mem::take(&mut self.rings))
+    }
+
     fn post(&mut self, event: BanEvent) {
+        let rings = &mut self.rings;
         self.feeds.retain(|feed| match feed.upgrade() {
             Some(queue) => {
                 queue.post(event);
+                if !rings.iter().any(|rung| Weak::ptr_eq(rung, feed)) {
+                    rings.push(Weak::clone(feed));
+                }
                 true
             }
             None => false,
@@ -642,8 +676,14 @@ mod tests {
         );
         assert_eq!(
             rings.load(Ordering::Relaxed),
-            3,
-            "the seed, then each change"
+            0,
+            "nothing rings under the list"
+        );
+        bans.take_rings().ring();
+        assert_eq!(
+            rings.load(Ordering::Relaxed),
+            1,
+            "one ring for what was posted"
         );
         assert!(feed.take().is_empty(), "taken once");
     }

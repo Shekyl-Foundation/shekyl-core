@@ -86,6 +86,44 @@ fn a_banned_accept_does_not_take_a_slot() {
     assert_eq!(sockets.live(), 1);
 }
 
+/// A subscriber's ring runs after the table's lock drops, so a ring that
+/// reads the table does not deadlock: a subscription, a ban, an expiry, a
+/// lift and a clear each ring once. Red edit: ring inside
+/// `FeedQueue::post`, under the lock.
+#[test]
+fn a_ban_ring_runs_after_the_table_lock_drops() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let sockets = Sockets::new();
+    let host = ip([10, 0, 0, 5]);
+    assert!(sockets.ban_host_permanent(ip([10, 0, 0, 9])).is_empty());
+    let rings = Arc::new(AtomicUsize::new(0));
+    let probe = sockets.clone();
+    let counted = Arc::clone(&rings);
+    let ring: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+        let _ = probe.is_banned(host);
+        counted.fetch_add(1, Ordering::Relaxed);
+    });
+    let (done, finished) = mpsc::channel();
+    let table = sockets.clone();
+    let _driver = thread::spawn(move || {
+        let feed = table.subscribe_bans(ring);
+        drop(table.ban_host(host, Tick::new(2_000), now()));
+        let _next = table.expire_bans(Tick::new(2_000));
+        drop(table.ban_host_permanent(host));
+        assert!(table.lift_host(host));
+        table.clear_bans();
+        done.send(feed.take().len()).expect("the test waits");
+    });
+    let events = finished
+        .recv_timeout(Duration::from_secs(10))
+        .expect("a ring under the table's lock deadlocked on its read");
+    assert_eq!(events, 6, "seed, ban, expiry, ban, lift, clear");
+    assert_eq!(rings.load(Ordering::Relaxed), 6);
+}
+
 /// The ban list's timing owner is told the earliest deadline when it is
 /// installed and each time a new ban becomes the earliest, never a later
 /// one; when its deadline fires, expiry returns the next to arm. Red edit:

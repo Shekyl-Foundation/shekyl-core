@@ -45,7 +45,8 @@ pub use admission::{
     Sockets,
 };
 pub use ban::{
-    deadline_after, BanEntry, BanEvent, BanFeed, BanLeft, BanList, BanSet, Ipv4Subnet, ListedBan,
+    deadline_after, BanEntry, BanEvent, BanFeed, BanLeft, BanList, BanRings, BanSet, Ipv4Subnet,
+    ListedBan,
 };
 pub use budget::{LinkBudget, LinkDirection, MessageClass, Observed, Turn};
 pub use cause::{c_header, CloseCause, CloseKind, Marks, Phase};

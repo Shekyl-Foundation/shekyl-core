@@ -676,10 +676,12 @@ impl Sockets {
         }
         let closed = close_matching(&mut inner, BanSubject::Host(host));
         let expiry = inner.expiry_for(until);
+        let rings = inner.bans.take_rings();
         drop(inner);
         if let Some(BanExpiry(arm)) = expiry {
             arm(until);
         }
+        rings.ring();
         closed
     }
 
@@ -692,10 +694,12 @@ impl Sockets {
         }
         let closed = close_matching(&mut inner, BanSubject::Subnet(subnet));
         let expiry = inner.expiry_for(until);
+        let rings = inner.bans.take_rings();
         drop(inner);
         if let Some(BanExpiry(arm)) = expiry {
             arm(until);
         }
+        rings.ring();
         closed
     }
 
@@ -706,7 +710,11 @@ impl Sockets {
         if !inner.bans.ban_host_permanent(host) {
             return Vec::new();
         }
-        close_matching(&mut inner, BanSubject::Host(host))
+        let closed = close_matching(&mut inner, BanSubject::Host(host));
+        let rings = inner.bans.take_rings();
+        drop(inner);
+        rings.ring();
+        closed
     }
 
     /// Ban `subnet` until it is lifted, and close live sockets inside it.
@@ -715,24 +723,28 @@ impl Sockets {
         if !inner.bans.ban_subnet_permanent(subnet) {
             return Vec::new();
         }
-        close_matching(&mut inner, BanSubject::Subnet(subnet))
+        let closed = close_matching(&mut inner, BanSubject::Subnet(subnet));
+        let rings = inner.bans.take_rings();
+        drop(inner);
+        rings.ring();
+        closed
     }
 
     /// Remove a host ban. Sockets that are already open stay open.
     pub fn lift_host(&self, host: IpAddr) -> bool {
-        self.lock().bans.lift_host(host)
+        self.with_bans(|bans| bans.lift_host(host))
     }
 
     /// Remove a subnet ban. Sockets that are already open stay open.
     pub fn lift_subnet(&self, subnet: Ipv4Subnet) -> bool {
-        self.lock().bans.lift_subnet(subnet)
+        self.with_bans(|bans| bans.lift_subnet(subnet))
     }
 
     /// Drop every ban. Open sockets stay open. The daemon lifts one entry
     /// at a time; a test process uses this because the list outlives the
     /// `node_server` that used to own it.
     pub fn clear_bans(&self) {
-        self.lock().bans.clear();
+        self.with_bans(BanList::clear);
     }
 
     /// Install the ban list's timing owner. `arm` is told the earliest
@@ -755,15 +767,27 @@ impl Sockets {
     /// each lift to the subscribers. The ban list's timing owner calls
     /// this when its deadline fires; returns the next deadline to arm.
     pub fn expire_bans(&self, now: Tick) -> Option<Tick> {
-        self.lock().bans.expire(now)
+        self.with_bans(|bans| bans.expire(now))
     }
 
     /// Subscribe to the bans: a queue that starts with a ban event for
     /// every entry in force and then receives each ban and lift in order,
-    /// ringing `ring` after each. The seed and the subscription are taken
-    /// under one hold of the table's lock.
+    /// ringing `ring` after each, once the table's lock has dropped. The
+    /// seed and the subscription are taken under one hold of the lock.
     pub fn subscribe_bans(&self, ring: Arc<dyn Fn() + Send + Sync>) -> BanFeed {
-        self.lock().bans.subscribe(ring)
+        self.with_bans(|bans| bans.subscribe(ring))
+    }
+
+    /// Change the ban list under the table's lock, then ring the
+    /// subscribers it posted to once the lock has dropped: a ring never
+    /// runs under the table's lock.
+    fn with_bans<T>(&self, change: impl FnOnce(&mut BanList) -> T) -> T {
+        let mut inner = self.lock();
+        let out = change(&mut inner.bans);
+        let rings = inner.bans.take_rings();
+        drop(inner);
+        rings.ring();
+        out
     }
 
     /// Time left on the longest ban that covers `host`.
