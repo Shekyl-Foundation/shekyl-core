@@ -22,7 +22,7 @@ fn a_ban_through_the_node_is_on_the_process_socket_table() {
     let target = shekyl_daemon_rpc::handles::BanTargetFacts::Host(host);
     assert!(node.handles().bans.ban(target, None).expect("ban"));
     assert!(
-        shekyl_ffi::seam_ffi::process_sockets().is_banned(host, Tick::new(0)),
+        shekyl_ffi::seam_ffi::process_sockets().is_banned(host),
         "the FFI reader sees the node's table"
     );
     assert_eq!(

@@ -404,8 +404,9 @@ fn a_demoted_entry_is_ordinary_gray_evictable_skipped_at_dial_and_refused_at_adm
         }
     }
     assert!(dropped > 0, "an ordinary gray entry is evicted sometimes");
-    // After the ban expires it is drawn, dialled, and re-earns white only
-    // through the normal door.
+    // After the ban list's timer expires the ban, it is drawn, dialled,
+    // and re-earns white only through the normal door.
+    assert_eq!(bans.expire(at_hours(11)), None);
     assert!(Peerlist::pre_dial_check(&banned, at_hours(11), &mut bans));
     assert!(list.is_gray(&banned));
     list.apply(

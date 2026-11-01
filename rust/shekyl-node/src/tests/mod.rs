@@ -16,7 +16,6 @@ use shekyl_difficulty::Difficulty;
 use shekyl_miner::Job;
 use shekyl_options::read_cli;
 use shekyl_rpc_types::DaemonNetwork;
-use shekyl_timing_engine::Tick;
 use shekyl_types::BlockHash;
 
 use super::*;

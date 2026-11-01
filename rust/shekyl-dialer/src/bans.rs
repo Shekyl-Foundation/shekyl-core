@@ -7,8 +7,7 @@
 //!
 //! The peer lists take a [`BanQuery`]. The bans live in the seam hub.
 //! The dialer holds the hub and never asks it while its own lock is
-//! held, so it copies the bans out first. The copy is the wake's view:
-//! expiry has already been applied, and the copy does not expire again.
+//! held, so it copies the bans out first. The copy is the wake's view.
 //!
 //! A kept session is not a ban. Expiry skips the dialer's kept set
 //! ([`crate::attempts::Attempts`]), the same set whose close moves the

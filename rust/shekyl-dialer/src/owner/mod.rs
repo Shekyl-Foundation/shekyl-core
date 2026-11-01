@@ -51,7 +51,7 @@ use shekyl_peerlist::{
     dial_profile, white_diversity_floor, CloseCause, CloseKind, ConnectionId, ConnectorId,
     DialOutcome, Ladder, ListName, NetworkAddress, Peerlist, Refusal, RefusedSet, Source, Tick,
 };
-use shekyl_seam::{Hub, SocketId, Subscription, SyncPayload};
+use shekyl_seam::{BanEvent, BanFeed, Hub, SocketId, Subscription, SyncPayload};
 use shekyl_timing_engine::{Clock, OwnerHandle};
 
 use self::address::live_sessions;
@@ -218,6 +218,10 @@ pub struct Dialer {
     /// The hub's links ring [`Self::bell`] while this is held. Dropped with
     /// the dialer, so a dialer rebuilt on the same hub leaves no watcher.
     _links_watch: Subscription,
+    /// The ban list's events, starting with every entry in force when the
+    /// dialer was built; each rings [`Self::bell`]. Drained in order under
+    /// the dialer's lock ([`Self::apply_bans`]). Dropped with the dialer.
+    bans: BanFeed,
     /// The results the attempt tasks posted; each also rings the bell.
     completions: Arc<Completions>,
     /// Wakes [`Self::stop`] when the last application that started before
@@ -251,6 +255,8 @@ impl Dialer {
         let bell = Arc::new(Bell::new());
         let ringing = Arc::clone(&bell);
         let links_watch = hub.links().subscribe(Arc::new(move |_| ringing.ring()));
+        let ringing = Arc::clone(&bell);
+        let bans = hub.subscribe_bans(Arc::new(move || ringing.ring()));
         let started = hub.now();
         Self {
             hub,
@@ -286,6 +292,7 @@ impl Dialer {
             owners: Mutex::new([false; ConnectorId::COUNT]),
             bell,
             _links_watch: links_watch,
+            bans,
             completions: Arc::new(Completions::default()),
             apply_idle: Condvar::new(),
         }
@@ -373,6 +380,23 @@ impl Dialer {
 
     fn network_id(&self) -> Option<[u8; 16]> {
         *self.network_id.lock().expect("network id")
+    }
+
+    /// Apply the ban list's events in the order it made them: a ban bars
+    /// every seat its entry covers, a lift frees those no remaining entry
+    /// covers (Rick, 2026-10-31). The queue is taken under the dialer's
+    /// lock, so the owner loops apply one order between them.
+    fn apply_bans<R: RelayRng + ?Sized>(&self, shared: &mut Shared, rng: &mut R) {
+        for event in self.bans.take() {
+            match event {
+                BanEvent::Banned(entry) => {
+                    shared.lists.ban(entry, rng);
+                }
+                BanEvent::Lifted(entry) => {
+                    shared.lists.lift(entry);
+                }
+            }
+        }
     }
 
     /// The shared state, for the calls that read or write the lists.
@@ -945,6 +969,7 @@ impl Dialer {
         let live = live_sessions(&self.hub, connector);
         let mut bans = BanSnapshot::take(&self.hub);
         let mut shared = self.shared();
+        self.apply_bans(&mut shared, rng);
         let wake = plan_wake(&mut shared, &mut bans, connector, &live, now, rng);
         let (address, aim) = match wake {
             Wake::Recover => {

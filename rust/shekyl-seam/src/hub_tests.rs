@@ -31,6 +31,8 @@ fn endpoint(ip: Ipv4Addr, direction: Direction) -> Endpoint {
 
 struct Rig {
     hub: Hub,
+    /// The hub's table: the ban list's timing owner expires through it.
+    sockets: Sockets,
     posts: Arc<Mutex<VecDeque<Post>>>,
     clock: ManualClock,
 }
@@ -38,13 +40,19 @@ struct Rig {
 fn rig() -> Rig {
     let posts = Arc::new(Mutex::new(VecDeque::new()));
     let clock = ManualClock::new(Tick::new(1));
+    let sockets = Sockets::new();
     let hub = Hub::new(
-        Sockets::new(),
+        sockets.clone(),
         InboundCeiling::Bounded(8),
         queue_poster(&posts),
         Arc::new(clock.clone()),
     );
-    Rig { hub, posts, clock }
+    Rig {
+        hub,
+        sockets,
+        posts,
+        clock,
+    }
 }
 
 fn queue_poster(queue: &Arc<Mutex<VecDeque<Post>>>) -> Arc<dyn Fn(Post) + Send + Sync> {
@@ -388,7 +396,7 @@ fn replacing_the_dialer_joins_the_pump_and_the_next_hub_keeps_the_id() {
 }
 
 #[test]
-fn a_banned_clearnet_host_is_admission_refused_until_the_deadline() {
+fn a_banned_clearnet_host_is_admission_refused_until_its_ban_expires() {
     let rig = rig();
     rig.hub.install_loopback(32);
     let endpoint = endpoint(doc_ip(), Direction::Outbound);
@@ -401,6 +409,11 @@ fn a_banned_clearnet_host_is_admission_refused_until_the_deadline() {
     };
     assert_eq!(banned.kind(), CloseKind::AdmissionRefused);
     rig.clock.set(Tick::new(50));
+    assert!(
+        rig.hub.connect(&endpoint).is_err(),
+        "past the deadline, the ban holds until the timer ends it"
+    );
+    assert_eq!(rig.sockets.expire_bans(Tick::new(50)), None);
     let again = rig.hub.connect(&endpoint).expect("expired");
     drop(again);
 }

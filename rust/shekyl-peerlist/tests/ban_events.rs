@@ -230,10 +230,10 @@ fn a_host_lifted_inside_a_banned_subnet_stays_barred() {
     assert_eq!(every_gray_draw(&mut list, &mut rng), vec![address]);
 }
 
-/// The seed at build applies each entry as a ban event, and a host entry
-/// covers an IPv6 seat while a subnet never does, as the ban list matches.
+/// A host entry covers an IPv6 seat while a subnet never does, as the ban
+/// list matches.
 #[test]
-fn the_seed_bars_as_events_do_and_a_subnet_covers_ipv4_only() {
+fn a_subnet_covers_ipv4_seats_only_and_a_host_entry_covers_ipv6() {
     let mut rng = SplitMix64::new(6);
     let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
     let v6 = NetworkAddress::Ipv6 {
@@ -244,10 +244,10 @@ fn the_seed_bars_as_events_do_and_a_subnet_covers_ipv4_only() {
     admitted(&mut list, &v6, &mut rng);
     admitted(&mut list, &inside, &mut rng);
 
-    let barred = list.seed_bans([subnet(7)], &mut rng);
+    let barred = list.ban(subnet(7), &mut rng);
     assert_eq!(barred, 1, "the subnet covers the IPv4 seat only");
     assert_eq!(every_gray_draw(&mut list, &mut rng), vec![v6.clone()]);
 
-    list.seed_bans([host(&v6)], &mut rng);
+    list.ban(host(&v6), &mut rng);
     assert!(every_gray_draw(&mut list, &mut rng).is_empty());
 }

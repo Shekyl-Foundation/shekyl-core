@@ -77,11 +77,46 @@ fn a_banned_accept_does_not_take_a_slot() {
         .expect_err("banned");
     assert_eq!(refused(error), CloseKind::AdmissionRefused);
     assert_eq!(sockets.live(), 0);
-    assert!(!sockets.is_banned(host, Tick::new(2_000)));
+    assert!(sockets.is_banned(host), "in force until the timer ends it");
+    assert_eq!(sockets.expire_bans(Tick::new(2_000)), None);
+    assert!(!sockets.is_banned(host));
     let _open = sockets
         .accept_clearnet(host, InboundCeiling::Bounded(4), Tick::new(2_000))
         .expect("expired");
     assert_eq!(sockets.live(), 1);
+}
+
+/// The ban list's timing owner is told the earliest deadline when it is
+/// installed and each time a new ban becomes the earliest, never a later
+/// one; when its deadline fires, expiry returns the next to arm. Red edit:
+/// tell the owner every timed ban's deadline in `ban_host`.
+#[test]
+fn the_timer_is_told_each_new_earliest_deadline() {
+    let sockets = Sockets::new();
+    let armed: Arc<Mutex<Vec<u64>>> = Arc::default();
+    let recorded = Arc::clone(&armed);
+    assert!(sockets
+        .ban_host(ip([10, 0, 0, 1]), Tick::new(1_500), now())
+        .is_empty());
+    sockets.set_ban_expiry(Arc::new(move |deadline: Tick| {
+        recorded.lock().expect("armed").push(deadline.get());
+    }));
+    sockets.ban_host(ip([10, 0, 0, 2]), Tick::new(1_900), now());
+    sockets.ban_host(ip([10, 0, 0, 3]), Tick::new(1_300), now());
+    let subnet = Ipv4Subnet::new(Ipv4Addr::new(10, 9, 0, 0), 16).expect("prefix");
+    sockets.ban_subnet(subnet, Tick::new(1_100), now());
+    sockets.ban_host_permanent(ip([10, 0, 0, 4]));
+    assert_eq!(*armed.lock().expect("armed"), vec![1_500, 1_300, 1_100]);
+    assert_eq!(
+        sockets.expire_bans(Tick::new(1_100)),
+        Some(Tick::new(1_300))
+    );
+    assert_eq!(
+        sockets.expire_bans(Tick::new(1_500)),
+        Some(Tick::new(1_900))
+    );
+    assert!(sockets.is_banned(ip([10, 0, 0, 2])));
+    assert!(!sockets.is_banned(ip([10, 0, 0, 1])));
 }
 
 #[test]
@@ -93,7 +128,7 @@ fn inbound_held_sums_inbound_rows_and_leaves_outbound_out() {
         .expect("clearnet inbound");
     let _tor = sockets.accept_tor(ceiling).expect("tor inbound");
     let _outbound = sockets
-        .open_clearnet(ip([10, 0, 0, 2]), now())
+        .open_clearnet(ip([10, 0, 0, 2]))
         .expect("clearnet outbound");
     assert_eq!(sockets.inbound_held(), 2);
     assert_eq!(sockets.live(), 3);
@@ -234,9 +269,7 @@ fn outbound_does_not_consume_the_inbound_ceiling() {
         .accept_clearnet(ip([10, 0, 0, 2]), ceiling, now())
         .expect_err("full");
     assert_eq!(refused(error), CloseKind::AdmissionRefused);
-    let _outbound = sockets
-        .open_clearnet(ip([10, 0, 0, 3]), now())
-        .expect("outbound");
+    let _outbound = sockets.open_clearnet(ip([10, 0, 0, 3])).expect("outbound");
     assert_eq!(
         sockets.socket_count(ConnectorId::Clearnet, Direction::Outbound),
         1
@@ -303,7 +336,7 @@ fn a_new_ban_closes_matching_sockets_once() {
     let inside = sockets
         .accept_clearnet(banned, InboundCeiling::Bounded(8), now())
         .expect("in");
-    let outbound = sockets.open_clearnet(banned, now()).expect("out");
+    let outbound = sockets.open_clearnet(banned).expect("out");
     let kept = sockets
         .accept_clearnet(other, InboundCeiling::Bounded(8), now())
         .expect("other");
@@ -444,9 +477,7 @@ fn churn_of_accepts_and_closes_returns_to_zero() {
 #[test]
 fn dropping_a_clone_keeps_the_reservation_until_the_last_clone_drops() {
     let sockets = Sockets::new();
-    let open = sockets
-        .open_clearnet(ip([10, 0, 0, 8]), now())
-        .expect("open");
+    let open = sockets.open_clearnet(ip([10, 0, 0, 8])).expect("open");
     let id = open.id();
     let kept = open.clone();
     drop(open);
@@ -460,9 +491,7 @@ fn dropping_a_clone_keeps_the_reservation_until_the_last_clone_drops() {
 #[test]
 fn close_on_one_clone_makes_the_other_drop_a_no_op() {
     let sockets = Sockets::new();
-    let open = sockets
-        .open_clearnet(ip([10, 0, 0, 9]), now())
-        .expect("open");
+    let open = sockets.open_clearnet(ip([10, 0, 0, 9])).expect("open");
     let id = open.id();
     let other = open.clone();
     assert_eq!(
@@ -518,7 +547,7 @@ pub(super) fn apply(sockets: &Sockets, open: &mut Vec<super::OpenSocket>, byte: 
             }
         }
         2 => {
-            if let Ok(sock) = sockets.open_clearnet(hosts[usize::from(byte) % hosts.len()], now()) {
+            if let Ok(sock) = sockets.open_clearnet(hosts[usize::from(byte) % hosts.len()]) {
                 open.push(sock);
             }
         }
@@ -687,7 +716,7 @@ fn a_banned_or_ceiling_refused_accept_spends_no_token() {
     assert_eq!(refusals.over_rate(), 0, "neither spent a token");
     assert!(!sockets.take_accept_refusals().any(), "taken once");
     let error = sockets
-        .open_clearnet(host, now())
+        .open_clearnet(host)
         .expect_err("an outbound dial to a banned host");
     assert_eq!(refused(error), CloseKind::AdmissionRefused);
     assert!(

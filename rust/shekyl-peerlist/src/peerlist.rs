@@ -44,8 +44,8 @@ impl KeptSessions for std::collections::BTreeSet<NetworkAddress> {
 }
 
 impl BanQuery for BanList {
-    fn is_banned(&mut self, host: IpAddr, now: Tick) -> bool {
-        BanList::is_banned(self, host, now)
+    fn is_banned(&mut self, host: IpAddr, _now: Tick) -> bool {
+        BanList::is_banned(self, host)
     }
 }
 
@@ -729,18 +729,6 @@ impl Peerlist {
             .iter_mut()
             .map(|partition| partition.lift(entry))
             .sum()
-    }
-
-    /// The ban list's active entries at the moment the dialer subscribed:
-    /// each applied as a ban event. The ban list returns these and
-    /// registers the subscription in one lock section, so no lift between
-    /// the two is lost.
-    pub fn seed_bans<R: RelayRng + ?Sized>(
-        &mut self,
-        entries: impl IntoIterator<Item = BanEntry>,
-        rng: &mut R,
-    ) -> usize {
-        entries.into_iter().map(|entry| self.ban(entry, rng)).sum()
     }
 
     /// Every address, unordered, for the file (brief §7): gray and white

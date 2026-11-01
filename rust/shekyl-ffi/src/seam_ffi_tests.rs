@@ -43,8 +43,8 @@ fn bind() {
 /// The ban path (DX-Q3, Q11) under a bound hub: a ban closes a live
 /// session and refuses the next dial; `remaining`, the listing and
 /// `lift` read and change the hub's table; a subnet ban covers a host
-/// inside it; a timed ban expires at the process clock. Red edit: lift
-/// through the path's own table while a hub is bound.
+/// inside it; a timed ban ends when the expiry runs at the process clock.
+/// Red edit: lift through the path's own table while a hub is bound.
 #[test]
 fn the_ban_path_goes_through_a_bound_hub() {
     use std::time::Duration;
@@ -89,8 +89,9 @@ fn the_ban_path_goes_through_a_bound_hub() {
     ));
     assert!(path.is_banned(host), "a host inside the subnet");
     std::thread::sleep(Duration::from_millis(20));
+    assert!(path.is_banned(host), "in force until the expiry runs");
+    let _next = process_sockets().expire_bans(super::ban_now());
     assert!(!path.is_banned(host), "expired at the process clock");
-    let _lifted = path.lift(BanTarget::Subnet(subnet));
     unbind();
 }
 
@@ -185,11 +186,12 @@ fn a_bind_then_an_install_keeps_the_hubs_table() {
 const ONE_MILLISECOND: Duration = Duration::from_millis(1);
 const PAST_THE_DEADLINE: Duration = Duration::from_millis(20);
 
-/// A deadline that has passed is not a ban on the process clock. Reading
-/// it at tick zero still says it is: that tick is before the deadline.
-/// Red edit: answer `banned` from tick zero.
+/// The ban list's timer is the only expiry (Rick, 2026-10-31): a timed ban
+/// stays in force past its deadline while no timer runs, and the timer
+/// the zone host starts, on the process engine, ends it at the process
+/// clock. Red edit: drop the `expire_bans` call from `spawn_expiry`'s loop.
 #[test]
-fn a_passed_deadline_is_not_a_ban_and_tick_zero_still_says_it_is() {
+fn the_ban_timer_ends_a_timed_ban_and_nothing_else_does() {
     let _gate = seam_bind_lock().lock();
     unbind();
     let host = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 11));
@@ -201,11 +203,26 @@ fn a_passed_deadline_is_not_a_ban_and_tick_zero_still_says_it_is() {
     let _closed = process_sockets().ban_host(host, until, now);
     std::thread::sleep(PAST_THE_DEADLINE);
     assert!(
-        process_sockets().is_banned(host, Tick::new(0)),
-        "tick zero is before the deadline, so the ban still reads as live"
+        host_is_banned(host),
+        "past its deadline, and no timer has run"
     );
-    assert!(
-        !host_is_banned(host),
-        "the process clock is past the deadline"
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_time()
+        .build()
+        .expect("runtime");
+    super::bans::spawn_expiry(
+        runtime.handle(),
+        &super::process_engine(),
+        process_sockets(),
     );
+    let give_up = std::time::Instant::now() + Duration::from_secs(10);
+    while host_is_banned(host) {
+        assert!(
+            std::time::Instant::now() < give_up,
+            "the timer never ended the ban"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    drop(runtime);
 }
