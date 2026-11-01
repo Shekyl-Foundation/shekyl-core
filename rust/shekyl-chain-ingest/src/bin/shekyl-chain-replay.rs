@@ -24,6 +24,10 @@
 //!   reproduce (`shekyl_chain_ingest::rebaseline`): the E2 corpus
 //!   re-baselined from Rust (`DAEMON_REDB_STORE.md` §12.1).
 //!
+//! - `digest` — print a store's recorded tip and its logical-state digest,
+//!   read-only: the reopened side of the budget's crash trials (PB-S1), held
+//!   to the digest a `baseline` of the same chain to the same tip records.
+//!
 //! The trace comes from `baseline`; the C++ harvest shim that wrote the
 //! pre-flip traces left with the C++ store.
 //! Everything this binary composes is library code in
@@ -194,6 +198,25 @@ enum Command {
         #[arg(long)]
         metrics_out: Option<PathBuf>,
     },
+    /// Print a store's recorded tip and logical-state digest as one JSON
+    /// line, opened read-only.
+    Digest {
+        /// The redb store file (a daemon's `chain.db`).
+        #[arg(long)]
+        store: PathBuf,
+        /// The chain whose rules the store was written under.
+        #[arg(long, value_enum)]
+        chain: CorpusNet,
+        /// As `replay`'s.
+        #[arg(long)]
+        fixed_difficulty: Option<NonZeroU128>,
+        /// As `replay`'s.
+        #[arg(long, requires = "reorg_cap")]
+        settlement_epoch_blocks: Option<NonZeroU64>,
+        /// As `replay`'s.
+        #[arg(long, requires = "settlement_epoch_blocks")]
+        reorg_cap: Option<NonZeroU64>,
+    },
 }
 
 #[tokio::main(flavor = "multi_thread")]
@@ -244,6 +267,17 @@ async fn real_main(cli: Cli) -> Result<(), Failure> {
             })
             .await
         }
+        Command::Digest {
+            store,
+            chain,
+            fixed_difficulty,
+            settlement_epoch_blocks,
+            reorg_cap,
+        } => {
+            let schedule = schedule_flags(settlement_epoch_blocks, reorg_cap)?;
+            let rules = ChainRules::new(chain.into(), fixed_difficulty, schedule)?;
+            digest(&store, &rules)
+        }
         Command::Baseline {
             corpus,
             store,
@@ -269,6 +303,34 @@ async fn real_main(cli: Cli) -> Result<(), Failure> {
             .await
         }
     }
+}
+
+/// Print `store`'s recorded tip, its hash and the logical-state digest,
+/// read-only, as `{"tip": <height or null>, "hash": "<hex or empty>",
+/// "digest": "<hex>"}`.
+fn digest(store: &std::path::Path, rules: &ChainRules) -> Result<(), Failure> {
+    let horizons = Horizons::under(&rules.in_force(BlockHeight::from_raw(0)))?;
+    let store = ChainStore::open_read_only(store, horizons)?;
+    let snap = store.begin_read()?;
+    let recorded = snap.tip()?.recorded;
+    let tip = recorded.as_ref().map(|t| t.height.to_raw());
+    let hash: String = recorded
+        .as_ref()
+        .map(|t| {
+            t.hash
+                .as_bytes()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect()
+        })
+        .unwrap_or_default();
+    let digest = snap.logical_state_digest_v0()?;
+    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+    println!(
+        "{{\"tip\": {}, \"hash\": \"{hash}\", \"digest\": \"{hex}\"}}",
+        tip.map_or_else(|| "null".to_owned(), |t| t.to_string())
+    );
+    Ok(())
 }
 
 /// A baseline's inputs, resolved from the command line.

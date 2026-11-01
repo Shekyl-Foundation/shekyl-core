@@ -353,6 +353,14 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/bench/drs_catchup.py --selftest
 
+      - name: Run the crash harness selftest
+        # PB-S1's judge: a reopened tip below the last acknowledged one, a
+        # digest off a clean replay to that tip, or a tip on no known chain
+        # fails the trial; a run under 200 trials or missing one of PB-S1's
+        # points is a record, not the row's verdict.
+        if: '!cancelled()'
+        run: python3 scripts/bench/drs_crash.py --selftest
+
       - name: Run RPC column capture selftest
         # `rpc_capture.py` writes one file per chain read and reserves the
         # loopback port the kept-chain capture binds. The capture's own
