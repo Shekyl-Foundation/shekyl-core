@@ -891,8 +891,8 @@ components:
                                           from the seed (that is -29011, for
                                           the wallet's own files)
 
-          -29100 INVALID_RECIPIENT        build/proofs: address parse or
-                                          network check failed
+          -29100 INVALID_RECIPIENT        build/proofs: the address is not
+                                          one this wallet can pay
           -29101 INSUFFICIENT_FUNDS       build: spendable balance too low
           -29102 FEE_ESTIMATION_FAILED    build: daemon fee query failed
           -29103 RESERVATION_NOT_FOUND    submit: unknown/expired handle
