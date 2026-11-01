@@ -169,6 +169,16 @@ pub fn main(remnant: Remnant, args: &[OsString], host: &Host) -> i32 {
             return EXIT_FAILED;
         }
     };
+    // The forwarder pin: the remnant's C++ log calls have the subscriber
+    // just installed behind them from the first one (DC-Q22). Installed
+    // here, not by the remnant, so the remnant prepares nothing.
+    if let Err(e) = shekyl_logging::install_tracing_forwarder() {
+        tell(
+            &mut std::io::stderr(),
+            &format!("shekyld: the log forwarder could not be installed: {e}"),
+        );
+        return EXIT_FAILED;
+    }
     let lines = announce::announcements(
         &TABLE,
         &resolved,

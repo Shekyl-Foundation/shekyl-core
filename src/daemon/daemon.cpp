@@ -42,7 +42,6 @@
 
 #include "common/password.h"
 #include "common/scoped_message_writer.h"
-#include "common/util.h"
 #include "cryptonote_basic/events.h"
 #include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_protocol/cryptonote_protocol_handler.h"
@@ -52,9 +51,7 @@
 #include "rpc/core_rpc_ffi.h"
 #include "rpc/rpc_subject.h"
 #include "shekyl/shekyl_ffi.h"
-#include "version.h"
 #include "cryptonote_config.h"
-#include <boost/filesystem/operations.hpp>
 
 #include <cstdint>
 #include <cstring>
@@ -305,29 +302,12 @@ void Daemon::stop_p2p()
 } // namespace daemonize
 
 // The remnant's entry pair (DAEMON_CONFIG_CUTOVER.md §2.2, DC-Q19). Rust
-// owns the process: `shekyld`'s Rust `main` reads the configuration, takes
-// the lock, checks the marker, starts logging, makes the announcements and
-// owns every signal; `shekyl_remnant_run` receives the snapshot of the
-// values whose reader is still C++ and parses nothing.
-
-namespace bf = boost::filesystem;
-
-namespace {
-
-#ifdef WIN32
-bool isFat32(const wchar_t* root_path)
-{
-  std::vector<wchar_t> fs(MAX_PATH + 1);
-  if (!::GetVolumeInformationW(root_path, nullptr, 0, nullptr, 0, nullptr, &fs[0], fs.size()))
-  {
-    MERROR("Failed to get '" << root_path << "' filesystem name. Error code: " << ::GetLastError());
-    return false;
-  }
-  return wcscmp(L"FAT32", &fs[0]) == 0;
-}
-#endif
-
-} // namespace
+// owns the process: `shekyld`'s Rust `main` hardens the process, reads the
+// configuration, takes the lock, checks the marker, creates the data
+// directory, starts logging and the forwarder that carries C++ log calls
+// to it, makes the announcements and owns every signal;
+// `shekyl_remnant_run` receives the snapshot of the values whose reader is
+// still C++, parses nothing and prepares nothing (DC-Q22).
 
 // The remnant's `run`: `noexcept`, every C++ exception caught and turned
 // into a status. Takes what C++ still reads from the snapshot, runs the
@@ -345,8 +325,6 @@ extern "C" int shekyl_remnant_run(const ShekylDaemonSnapshot* snapshot) noexcept
                 << "; the two sides were built from different definitions" << std::endl;
       return 1;
     }
-
-    tools::on_startup();
 
     const bool testnet = snapshot->network == 1;
     const bool stagenet = snapshot->network == 2;
@@ -380,24 +358,6 @@ extern "C" int shekyl_remnant_run(const ShekylDaemonSnapshot* snapshot) noexcept
       std::cerr << "Unknown command: " << command.front() << std::endl;
       return 1;
     }
-
-    const bf::path data_dir(snapshot->data_dir);
-#ifdef WIN32
-    if (isFat32(data_dir.root_path().c_str()))
-      MERROR("Data directory resides on FAT32 volume that has 4GiB file size limit, blockchain might get corrupted.");
-#endif
-    tools::create_directories_if_necessary(data_dir.string());
-
-    // The tracing forwarder: C++ log calls reach the subscriber Rust
-    // installed. Logging itself is Rust's (§2.2 step 5).
-    {
-      const int32_t fwd_rc = shekyl_log_install_tracing_forwarder();
-      if (fwd_rc != SHEKYL_LOG_OK && fwd_rc != SHEKYL_LOG_ERR_ALREADY_INSTALLED)
-        std::cerr << "Warning: tracing forwarder install failed (code " << fwd_rc
-                  << "); C++ log events will be dropped" << std::endl;
-    }
-
-    MGINFO("Shekyl '" << SHEKYL_RELEASE_NAME << "' (v" << SHEKYL_VERSION_FULL << ")");
 
     MINFO("Constructing daemon.");
     daemonize::Daemon daemon{*snapshot};
