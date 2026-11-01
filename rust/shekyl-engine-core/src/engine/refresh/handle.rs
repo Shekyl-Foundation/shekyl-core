@@ -76,32 +76,13 @@ pub struct RefreshHandle {
     /// closing prematurely on the producer's side.
     progress_rx: tokio::sync::watch::Receiver<RefreshProgress>,
 
-    /// `JoinHandle` of the spawned producer task. Retained for three
-    /// reasons:
+    /// `JoinHandle` of the spawned producer task.
     ///
-    /// 1. Test wind-down assertions: corner-case unit tests
-    ///    (commit 5) need to await the producer's exit to assert
-    ///    that the slot was released, the progress channel closed,
-    ///    etc. The `JoinHandle` is the only way to do that
-    ///    deterministically.
-    /// 2. Stage-4 transition reference: the actor cutover replaces
-    ///    `tokio::spawn` with `kameo::actor::spawn`, which returns
-    ///    an `ActorRef` that is observable similarly. Keeping the
-    ///    field on the handle marks the migration site explicitly.
-    ///
-    /// 3. `join()`'s second wait. The producer's lifecycle extends
-    ///    past `completion_tx.send(...)`: it still holds the engine
-    ///    `Arc` and the [`SlotGuard`](crate::engine::refresh_slot::SlotGuard)
-    ///    until it returns. A caller whose next step needs either —
-    ///    `close_wallet` reclaiming sole ownership with
-    ///    `Arc::try_unwrap`, or a second `start_refresh` — must not
-    ///    run in that window, so `join()` returns only after the task
-    ///    has. *Premise refuted (alpha.11):* this field once said the
-    ///    send was the user-visible "the refresh is done" point and
-    ///    that awaiting the task would observe a different one; the
-    ///    wallet RPC then refused one close in about thirteen right
-    ///    after a refresh ("wallet engine still in use by another
-    ///    task").
+    /// `join` returns only after this task has exited. The task still
+    /// holds the engine `Arc` and the
+    /// [`SlotGuard`](crate::engine::refresh_slot::SlotGuard) after it
+    /// sends, and a panic drops the completion sender while those are
+    /// still held. `is_running` reads the same handle.
     producer_join: tokio::task::JoinHandle<()>,
 
     /// Snapshot of the [`RefreshOptions`] the handle was started
@@ -175,20 +156,20 @@ impl RefreshHandle {
             .completion_rx
             .take()
             .expect("RefreshHandle::join is called at most once: the type consumes self");
-        match rx.await {
-            Ok(result) => {
-                // The producer returns straight after sending; this waits
-                // for it to drop the engine `Arc` and the slot guard.
-                // `result` is already its outcome, so a destructor panic
-                // in that tail does not replace it.
-                let _exited = (&mut self.producer_join).await;
-                result
-            }
+        // Both arms wait. The task still holds the engine `Arc` and the
+        // slot guard after a successful send, and a panic drops the
+        // sender while that same task is unwinding through those holds.
+        // The wait cannot deadlock on the dropped-sender arm: the task
+        // is already exiting, which is why the sender dropped.
+        let outcome = match rx.await {
+            Ok(result) => result,
             Err(_) => Err(RefreshError::InternalInvariantViolation {
                 context:
                     "RefreshHandle::join: producer task dropped completion sender without delivery",
             }),
-        }
+        };
+        let _exited = (&mut self.producer_join).await;
+        outcome
     }
 
     /// Assemble a handle from already-built channel ends and a producer
