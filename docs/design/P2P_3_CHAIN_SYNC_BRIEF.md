@@ -556,6 +556,11 @@ ingest deciding forks.**
        through the owner's timer like the other deadlines. No new
        constant.
 
+     Two readings of (a) are accepted as built (Rick, 2026-11-01): a
+     session whose claim has not arrived is unanswered, and a header
+     response counts only once its headers are verified (headers still
+     waiting for their proofs have not resolved the request).
+
      Once resolved, the opening stays resolved until the last session
      closes. A later claim never moves the state. Nothing is relayed while
      the node is `NoView`.
@@ -1830,7 +1835,7 @@ it decided beyond the rows above:
   opened at attach would send ahead of the reply, and the dialing peer
   refuses that frame (`LevinHandshakeRejected`).
 - **The per-block cost is the verifier** (§8, measured 2026-11-01 on the
-  qualified external host, the DRS re-take's chains, the data in
+  qualified external host and accepted as measured by Rick the same day, the DRS re-take's chains, the data in
   `shekyl-dev`). F-B 150.2 s and 152.2 s for 761 blocks, F-A 396.6 s and
   392.6 s for 2,000: about 197 ms a block. Each block costs one
   light-mode RandomX hash of its header, about 0.76 s, with the host's
@@ -1838,8 +1843,9 @@ it decided beyond the rows above:
   about 190 ms of each block's wall time; `form_judged` is under 1 ms,
   the connector's apply 5–7 ms, the body transit under 0.2 ms. The sync
   path has nothing left to tune at that cost: the hash is one per block
-  by ruling, and it already runs on every core. The cost per hash is
-  open, for Rick: dataset mode costs about 2 GiB against the performance
+  by ruling, and it already runs on every core. The cost per hash is the
+  verifier's, not chain sync's, and it is the RandomX lane's question
+  (Rick, 2026-11-01): dataset mode costs about 2 GiB against the performance
   budget's memory ceiling (`DAEMON_REDB_STORE.md` §1.3a), and a faster
   verifier per core is option (a) of `RANDOMX_V2_MINING_ASYMMETRY.md`.
 - **The per-block profile is one sink.** The node's measurement sink
