@@ -197,7 +197,6 @@ async fn build(
     wallet: &Arc<RwLock<Engine<SoloSigner>>>,
     who: &'static str,
     request: &TxRequest,
-    mine_to: &str,
 ) -> Built {
     for _ in 0..48 {
         let attempt = wallet.read().await.build_pending_tx_async(request).await;
@@ -217,7 +216,7 @@ async fn build(
                 };
             }
             Err(super::super::error::SendError::OutputNotYetSpendable { .. }) => {
-                daemon.generate_blocks(1, mine_to).await;
+                daemon.generate_blocks(1).await;
                 refresh(wallet).await;
             }
             Err(e) => panic!(
@@ -242,15 +241,14 @@ async fn submit(wallet: &Arc<RwLock<Engine<SoloSigner>>>, built: &mut Built) {
 /// The traffic, in the order the registration states it.
 async fn run_cell(cell: &Cell) {
     let out = output_dir(cell);
-    let daemon = RegtestDaemon::start().await;
+    let funder_seed = [cell.funder_seed; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let wallet_seed = [cell.wallet_seed; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let daemon = RegtestDaemon::start_for_seed(&funder_seed).await;
     let upstream = daemon.rpc_port();
 
     let funder_proxy = CountingProxy::start(upstream);
     let wallet_proxy = CountingProxy::start(upstream);
     let restore_proxy = CountingProxy::start(upstream);
-
-    let funder_seed = [cell.funder_seed; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
-    let wallet_seed = [cell.wallet_seed; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
 
     let (funder, _funder_dir) = create_wallet(funder_proxy.port, &funder_seed, b"rt-p5-f").await;
     let funder = Arc::new(RwLock::new(funder));
@@ -262,7 +260,7 @@ async fn run_cell(cell: &Cell) {
     // 1. Mature the funder: mine to it in batches of ten until it can
     //    spend.
     for _ in 0..30 {
-        daemon.generate_blocks(10, &funder_address).await;
+        daemon.generate_blocks(10).await;
         refresh(&funder).await;
         if unlocked(&funder).await > AtomicUnits::ZERO {
             break;
@@ -272,9 +270,7 @@ async fn run_cell(cell: &Cell) {
         unlocked(&funder).await > AtomicUnits::ZERO,
         "the funder never matured"
     );
-    daemon
-        .generate_blocks(FANOUT_MARGIN_BLOCKS, &funder_address)
-        .await;
+    daemon.generate_blocks(FANOUT_MARGIN_BLOCKS).await;
     refresh(&funder).await;
     let funded = unlocked(&funder).await;
     eprintln!(
@@ -304,7 +300,7 @@ async fn run_cell(cell: &Cell) {
                 .collect(),
             priority: FeePriority::Standard,
         };
-        let mut tx = build(&daemon, &funder, "funder", &request, &funder_address).await;
+        let mut tx = build(&daemon, &funder, "funder", &request).await;
         eprintln!(
             "rt-p5: fan-out {}: {} in, {} out, {} bytes, at height {}",
             built.len(),
@@ -316,7 +312,7 @@ async fn run_cell(cell: &Cell) {
         submit(&funder, &mut tx).await;
         built.push(tx);
     }
-    let block = daemon.generate_blocks(1, &funder_address).await;
+    let block = daemon.generate_blocks(1).await;
     let fanout_block = block.blocks.first().expect("one block mined");
     let carried = daemon.block_tx_hashes(fanout_block).await.len();
     assert_eq!(
@@ -338,7 +334,7 @@ async fn run_cell(cell: &Cell) {
         if unlocked(&wallet).await.to_raw() >= received {
             break;
         }
-        daemon.generate_blocks(1, &funder_address).await;
+        daemon.generate_blocks(1).await;
         refresh(&wallet).await;
     }
     assert!(
@@ -360,14 +356,14 @@ async fn run_cell(cell: &Cell) {
                 .collect(),
             priority: FeePriority::Standard,
         };
-        let mut tx = build(&daemon, &wallet, "wallet", &request, &funder_address).await;
+        let mut tx = build(&daemon, &wallet, "wallet", &request).await;
         assert_eq!(
             (tx.inputs, tx.outputs),
             (inputs, outputs),
             "the spend must have the registered shape"
         );
         submit(&wallet, &mut tx).await;
-        assert_tx_confirmed(&daemon, &funder_address, tx.hash.expect("submitted")).await;
+        assert_tx_confirmed(&daemon, tx.hash.expect("submitted")).await;
         built.push(tx);
         refresh(&wallet).await;
     }

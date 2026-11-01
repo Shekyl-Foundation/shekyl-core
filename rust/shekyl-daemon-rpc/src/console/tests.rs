@@ -2704,9 +2704,8 @@ fn print_pool_stats_reads_the_stats_and_the_weight_limit() {
         "status": "OK",
         "pool_stats": {
             "bytes_total": 700_001u64, "bytes_min": 2_000, "bytes_max": 400_000,
-            "bytes_med": 3_000, "fee_total": 3_000_000_000u64, "oldest": 0,
-            "txs_total": 3, "num_failing": 0, "num_10m": 0, "num_not_relayed": 2,
-            "histo_98pc": 0, "num_double_spends": 0
+            "bytes_med": 3_000, "fee_total": 3_000_000_000u64,
+            "txs_total": 3, "num_not_relayed": 2
         }
     })
     .to_string();

@@ -51,7 +51,8 @@ fi
 # minus rust/ -- the Rust spine is born parameterized and a nettype enum
 # equality there is caught in review; extend the fence when the first Rust
 # consensus crate grows a network-type parameter).
-FENCE=(src/cryptonote_core src/checkpoints src/blockchain_db)
+# src/checkpoints left with the C++ checkpoint table (the store flip).
+FENCE=(src/cryptonote_core)
 
 # Allowlist: one entry per line, TAB-separated: file, then the EXACT
 # normalized (comment-stripped, statement-joined, whitespace-collapsed)

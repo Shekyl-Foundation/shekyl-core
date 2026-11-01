@@ -28,18 +28,19 @@
 
 //! Handler for the `/json_rpc` endpoint (JSON-RPC 2.0 dispatch).
 
+#[cfg(test)]
+use super::native::{frame_native, join_fault, native_method_for, pow_hash_entitled, NativeMethod};
+use super::native::{native_fault, native_method, NativeFail};
 use crate::authority::{refusal, Authority};
-use crate::chain_facts::{FfiChainFacts, FfiP2pFacts};
-use crate::core::CoreRpc;
+#[cfg(test)]
 use crate::methods::{InternalFault, RpcFault};
 use crate::server::AppState;
-use crate::types::{FfiJsonRpcResult, JsonRpcRequest, JsonRpcResponse};
+use crate::types::{JsonRpcRequest, JsonRpcResponse};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::Extension;
 use axum::Json;
 use std::sync::Arc;
-use tracing::warn;
 
 /// Whether `method` has no row in the method table. [`handle`] matches
 /// [`shekyl_rpc_types::methods::json_rpc`] once and answers that absence
@@ -83,405 +84,23 @@ pub async fn handle(
     if let Some(native) = native_method(&state, authority, &method, &request.params).await {
         return match native {
             Ok(value) => (StatusCode::OK, Json(JsonRpcResponse::success(id, value))),
-            Err(fault) => (StatusCode::OK, Json(native_fault(id, &method, fault))),
+            Err(NativeFail::Fault(fault)) => {
+                (StatusCode::OK, Json(native_fault(id, &method, fault)))
+            }
+            Err(NativeFail::Error(error)) => (StatusCode::OK, Json(refusal(id, &error))),
         };
     }
 
-    let params_str = if request.params.is_null()
-        || request.params.is_object()
-            && request
-                .params
-                .as_object()
-                .is_none_or(serde_json::Map::is_empty)
-    {
-        String::new()
-    } else {
-        serde_json::to_string(&request.params).unwrap_or_default()
-    };
-
-    let core = state.core.clone();
-    let method_clone = method.clone();
-    let host = authority.host();
-    let result =
-        tokio::task::spawn_blocking(move || core.json_rpc(&method_clone, &params_str, host)).await;
-
-    match result {
-        Ok(Some(raw)) => match serde_json::from_str::<FfiJsonRpcResult>(&raw) {
-            Ok(ffi_result) if ffi_result.ok => {
-                let value = ffi_result.result.unwrap_or(serde_json::Value::Null);
-                (StatusCode::OK, Json(JsonRpcResponse::success(id, value)))
-            }
-            Ok(ffi_result) => (
-                StatusCode::OK,
-                Json(JsonRpcResponse::error(
-                    id,
-                    ffi_result.error_code.unwrap_or(-32603),
-                    ffi_result
-                        .error_message
-                        .unwrap_or_else(|| "Internal error".into()),
-                )),
-            ),
-            Err(e) => {
-                warn!(method = %method, "Failed to parse FFI JSON-RPC response: {e}");
-                (
-                    StatusCode::OK,
-                    Json(JsonRpcResponse::error(
-                        id,
-                        -32603,
-                        "Internal parse error".into(),
-                    )),
-                )
-            }
-        },
-        Ok(None) => (
-            StatusCode::OK,
-            Json(JsonRpcResponse::error(
-                id,
-                -32601,
-                format!("Method not found: {method}"),
-            )),
-        ),
-        Err(e) => {
-            warn!(method = %method, "spawn_blocking failed: {e}");
-            (
-                StatusCode::OK,
-                Json(JsonRpcResponse::error(id, -32603, "Internal error".into())),
-            )
-        }
-    }
-}
-
-/// Whether to compute a block's proof-of-work hash: only if the caller asked
-/// **and** the caller is not bounded (§6.3) — the C++ handler's
-/// `req.fill_pow_hash && !restricted`.
-///
-/// Its own function because it is a policy, not an expression: computing the
-/// long hash is the expensive part of a header read, and a bounded caller is
-/// exactly the one that must not be made to do it on request. Dropping the
-/// `!bounded` here fails [`pow_hash_is_never_computed_for_a_bounded_caller`].
-///
-/// RK-5b's methods do **not** use this. They refuse a bounded caller that
-/// asked for the field (`methods::pow_hash_or_refuse`) rather than blanking
-/// it. RT-W10 step 2 brings RK-2's methods under the same refusal (§6.3:
-/// never silently truncated).
-fn pow_hash_entitled(requested: bool, bounded: bool) -> bool {
-    requested && !bounded
-}
-
-/// A JSON-RPC method this crate serves itself.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NativeMethod {
-    Version,
-    BlockCount,
-    BlockHash,
-    BlockHeaderByHeight,
-    Block,
-    SyncInfo,
-    Connections,
-    LastBlockHeader,
-    BlockHeaderByHash,
-    BlockHeadersRange,
-    FeeEstimate,
-    RequestArchivalShard,
-    Info,
-    OptionSet,
-    OptionShow,
-}
-
-/// The names each native method answers to — every alias the C++ dispatch
-/// table carried, since dropping one 404s a name the daemon has always
-/// answered.
-///
-/// The single source: [`native_method`] dispatches on what this returns, so a
-/// name missing here is not served, and the test that checks the alias set
-/// exercises the same function the request path does.
-fn native_method_for(method: &str) -> Option<NativeMethod> {
-    Some(match method {
-        "get_version" => NativeMethod::Version,
-        "get_block_count" | "getblockcount" => NativeMethod::BlockCount,
-        "on_get_block_hash" | "on_getblockhash" => NativeMethod::BlockHash,
-        "get_block_header_by_height" | "getblockheaderbyheight" => {
-            NativeMethod::BlockHeaderByHeight
-        }
-        "get_block" | "getblock" => NativeMethod::Block,
-        "sync_info" => NativeMethod::SyncInfo,
-        "get_connections" => NativeMethod::Connections,
-        // RK-5b. Both spellings of each, as the C++ table carried them
-        // (`core_rpc_ffi.cpp:269-283`); `get_fee_estimate` had only one
-        // there and gains none here.
-        "get_last_block_header" | "getlastblockheader" => NativeMethod::LastBlockHeader,
-        "get_block_header_by_hash" | "getblockheaderbyhash" => NativeMethod::BlockHeaderByHash,
-        "get_block_headers_range" | "getblockheadersrange" => NativeMethod::BlockHeadersRange,
-        "get_fee_estimate" => NativeMethod::FeeEstimate,
-        // One spelling: the method was born in the Rust registry (3.31)
-        // and never had a C++ alias.
-        "request_archival_shard" => NativeMethod::RequestArchivalShard,
-        // RT-O23: the grammar's own words, one spelling each, no REST path.
-        "option_set" => NativeMethod::OptionSet,
-        "option_show" => NativeMethod::OptionShow,
-        // RK-5c. One spelling on JSON-RPC, as the C++ table carried it; the
-        // `/getinfo` alias is a REST path.
-        "get_info" => NativeMethod::Info,
-        _ => return None,
-    })
-}
-
-/// Dispatch `method` natively if Rust owns it; `None` hands it to the C++
-/// table. Each arm is one `methods::*` call framed as a JSON value.
-async fn native_method(
-    state: &Arc<AppState>,
-    authority: Authority,
-    method: &str,
-    params: &serde_json::Value,
-) -> Option<Result<serde_json::Value, RpcFault>> {
-    match native_method_for(method)? {
-        NativeMethod::Version => Some(frame_native(
-            run_blocking(state, |core| {
-                crate::methods::get_version(&FfiChainFacts::new(core))
-            })
-            .await,
-        )),
-        NativeMethod::BlockCount => Some(frame_native(
-            run_blocking(state, |core| {
-                crate::methods::get_block_count(&FfiChainFacts::new(core))
-            })
-            .await,
-        )),
-        NativeMethod::BlockHash => {
-            // The params parse is pure and its refusal needs no core, so it
-            // happens before a worker is taken.
-            let height = match crate::methods::get_block_hash_height(params) {
-                Ok(height) => height,
-                Err(fault) => return Some(Err(fault)),
-            };
-            Some(frame_native(
-                run_blocking(state, move |core| {
-                    crate::methods::get_block_hash(&FfiChainFacts::new(core), height)
-                })
-                .await,
-            ))
-        }
-        NativeMethod::Block => {
-            let request = match crate::methods::block_request(params) {
-                Ok(request) => request,
-                Err(fault) => return Some(Err(fault)),
-            };
-            let fill_pow_hash = pow_hash_entitled(request.fill_pow_hash, authority.bounded());
-            Some(frame_native(
-                run_blocking(state, move |core| {
-                    crate::methods::get_block(&FfiChainFacts::new(core), &request, fill_pow_hash)
-                })
-                .await,
-            ))
-        }
-        NativeMethod::Info => {
-            // The listener's posture and this server's own connection count
-            // are the transport's facts; they are taken here, before the
-            // worker, and the method reads only the parts the disclosure
-            // shows (RK-D24).
-            let disclosure = authority.disclosure();
-            let rpc_connections = state.conn_tracker.active_total();
-            Some(frame_native(
-                run_blocking(state, move |core| {
-                    let facts = crate::info_facts::FfiInfoFacts::new(core);
-                    crate::info::get_info(&facts, disclosure, rpc_connections)
-                })
-                .await,
-            ))
-        }
-        NativeMethod::SyncInfo => Some(frame_native(
-            run_blocking(state, |core| {
-                // Two fact sources, one worker: `sync_info` is the only
-                // native method that reads the chain and the p2p layer,
-                // and they are not synchronised with each other — see
-                // `methods::sync_info`.
-                let chain = FfiChainFacts::new(Arc::clone(&core));
-                let p2p = FfiP2pFacts::new(core);
-                crate::methods::sync_info(&chain, &p2p)
-            })
-            .await,
-        )),
-        NativeMethod::Connections => Some(frame_native(
-            run_blocking(state, |core| {
-                crate::methods::get_connections(&FfiP2pFacts::new(core))
-            })
-            .await,
-        )),
-        NativeMethod::LastBlockHeader => {
-            let request = match crate::methods::last_block_header_request(params) {
-                Ok(request) => request,
-                Err(fault) => return Some(Err(fault)),
-            };
-            let bounded = authority.bounded();
-            Some(frame_native(
-                run_blocking(state, move |core| {
-                    crate::methods::get_last_block_header(
-                        &FfiChainFacts::new(core),
-                        request.fill_pow_hash,
-                        bounded,
-                    )
-                })
-                .await,
-            ))
-        }
-        NativeMethod::BlockHeaderByHash => {
-            let request = match crate::methods::block_header_by_hash_request(params) {
-                Ok(request) => request,
-                Err(fault) => return Some(Err(fault)),
-            };
-            let bounded = authority.bounded();
-            Some(frame_native(
-                run_blocking(state, move |core| {
-                    crate::methods::get_block_header_by_hash(
-                        &FfiChainFacts::new(core),
-                        &request,
-                        bounded,
-                    )
-                })
-                .await,
-            ))
-        }
-        NativeMethod::BlockHeadersRange => {
-            let request = match crate::methods::block_headers_range_request(params) {
-                Ok(request) => request,
-                Err(fault) => return Some(Err(fault)),
-            };
-            let bounded = authority.bounded();
-            Some(frame_native(
-                run_blocking(state, move |core| {
-                    crate::methods::get_block_headers_range(
-                        &FfiChainFacts::new(core),
-                        &request,
-                        bounded,
-                    )
-                })
-                .await,
-            ))
-        }
-        NativeMethod::FeeEstimate => {
-            let request = match crate::methods::fee_estimate_request(params) {
-                Ok(request) => request,
-                Err(fault) => return Some(Err(fault)),
-            };
-            Some(frame_native(
-                run_blocking(state, move |core| {
-                    crate::methods::get_fee_estimate(&FfiChainFacts::new(core), &request)
-                })
-                .await,
-            ))
-        }
-        NativeMethod::OptionSet => {
-            let pairs = match crate::options::option_set_request(params) {
-                Ok(pairs) => pairs,
-                Err(fault) => return Some(Err(fault)),
-            };
-            // The handle's set runs under its own lock and applies to the
-            // owners; neither touches the core, so no worker is taken.
-            Some(frame_native(crate::options::option_set(
-                state.options.as_ref(),
-                &pairs,
-            )))
-        }
-        NativeMethod::OptionShow => {
-            let names = match crate::options::option_show_request(params) {
-                Ok(names) => names,
-                Err(fault) => return Some(Err(fault)),
-            };
-            let disclosure = authority.disclosure();
-            Some(frame_native(crate::options::option_show(
-                state.options.as_ref(),
-                names.as_deref(),
-                disclosure,
-            )))
-        }
-        NativeMethod::RequestArchivalShard => {
-            let request = match crate::shard_view::request_archival_shard_request(params) {
-                Ok(request) => request,
-                Err(fault) => return Some(Err(fault)),
-            };
-            // Not `run_blocking`: the facts source is async by contract — a
-            // fetch over the network when a composition root supplies one —
-            // and holds no C++ core, so no worker is taken.
-            Some(frame_native(
-                crate::shard_view::request_archival_shard(state.shard_view.as_ref(), request).await,
-            ))
-        }
-        NativeMethod::BlockHeaderByHeight => {
-            // The params parse is pure and its refusal needs no core, so it
-            // happens before a worker is taken — as `on_get_block_hash`'s does.
-            let request = match crate::methods::block_header_request(params) {
-                Ok(request) => request,
-                Err(fault) => return Some(Err(fault)),
-            };
-            let fill_pow_hash = pow_hash_entitled(request.fill_pow_hash, authority.bounded());
-            Some(frame_native(
-                run_blocking(state, move |core| {
-                    crate::methods::get_block_header_by_height(
-                        &FfiChainFacts::new(core),
-                        request.height,
-                        fill_pow_hash,
-                    )
-                })
-                .await,
-            ))
-        }
-    }
-}
-
-/// Run a native method on a worker thread holding the live core.
-///
-/// Facts reads block on C++; the HTTP task must not. A join failure is an
-/// [`InternalFault`], never a fact about the chain.
-async fn run_blocking<T, F>(state: &Arc<AppState>, f: F) -> Result<T, RpcFault>
-where
-    T: Send + 'static,
-    F: FnOnce(Arc<CoreRpc>) -> Result<T, RpcFault> + Send + 'static,
-{
-    let core = state.core.clone();
-    join_fault(tokio::task::spawn_blocking(move || f(core)).await)?
-}
-
-/// What a JSON-RPC caller is told when a native method does not answer.
-fn native_fault(id: serde_json::Value, method: &str, fault: RpcFault) -> JsonRpcResponse {
-    match fault {
-        // A refusal is the method answering — a bad request, or a height
-        // the chain does not hold. Normal traffic: it carries its own code
-        // and message and is not logged as a daemon problem.
-        RpcFault::Refused(refusal) => {
-            JsonRpcResponse::error_with_data(id, refusal.code, refusal.message, refusal.data)
-        }
-        // The store contradicted itself. The caller is told what
-        // contradicted what: every operand is a public chain fact, and a
-        // bare "Internal error" would send an operator to the wrong place.
-        // The handler has already logged the same text.
-        RpcFault::Store(store) => JsonRpcResponse::error(
+    // A name in the table that has no native handler is not served.
+    // The C++ method table is gone (DRS_X_STORE_FLIP.md DX-Q3).
+    (
+        StatusCode::OK,
+        Json(JsonRpcResponse::error(
             id,
-            shekyl_rpc_types::CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
-            store.to_string(),
-        ),
-        fault => {
-            warn!(method = %method, ?fault, "native JSON-RPC method failed");
-            JsonRpcResponse::error(id, -32603, "Internal error".into())
-        }
-    }
-}
-
-fn join_fault<T>(out: Result<T, tokio::task::JoinError>) -> Result<T, RpcFault> {
-    out.map_err(|_| RpcFault::Internal(InternalFault::Join))
-}
-
-/// Frame a native method's outcome as a JSON value. A facts fault stays a
-/// facts fault; a reply the transport could not encode is an
-/// [`InternalFault`] — never attributed to the core.
-fn frame_native<T: serde::Serialize>(
-    reply: Result<T, RpcFault>,
-) -> Result<serde_json::Value, RpcFault> {
-    match reply {
-        Ok(value) => {
-            serde_json::to_value(value).map_err(|_| RpcFault::Internal(InternalFault::Serialize))
-        }
-        Err(fault) => Err(fault),
-    }
+            -32601,
+            format!("Method not found: {method}"),
+        )),
+    )
 }
 
 #[cfg(test)]
@@ -503,7 +122,7 @@ mod tests {
         assert_eq!(frame_native(Ok(7)).unwrap(), serde_json::json!(7));
         assert_eq!(
             frame_native::<u64>(Err(RpcFault::Facts(FactsFault::NotReady))).unwrap_err(),
-            RpcFault::Facts(FactsFault::NotReady)
+            NativeFail::Fault(RpcFault::Facts(FactsFault::NotReady))
         );
     }
 
@@ -582,10 +201,8 @@ mod tests {
         "get_alternate_chains",
         "relay_tx",
         "sync_info",
-        "flush_cache",
         "request_archival_shard",
         "option_set",
-        "inject_archival_serve_credit",
     ];
 
     /// Every name the daemon serves natively, the method each belongs to,
@@ -652,6 +269,37 @@ mod tests {
             NativeMethod::RequestArchivalShard,
             true,
         ),
+        ("calc_pow", NativeMethod::CalcPow, true),
+        ("get_coinbase_tx_sum", NativeMethod::CoinbaseTxSum, true),
+        ("get_alternate_chains", NativeMethod::AlternateChains, true),
+        ("get_curve_tree_info", NativeMethod::CurveTreeInfo, false),
+        (
+            "get_curve_tree_checkpoint",
+            NativeMethod::CurveTreeCheckpoint,
+            false,
+        ),
+        (
+            "get_archival_emission_claim_source",
+            NativeMethod::EmissionClaimSource,
+            false,
+        ),
+        (
+            "get_archival_shard_coverage",
+            NativeMethod::ShardCoverage,
+            false,
+        ),
+        ("submit_block", NativeMethod::SubmitBlock, false),
+        ("submitblock", NativeMethod::SubmitBlock, false),
+        ("get_block_template", NativeMethod::BlockTemplate, false),
+        ("getblocktemplate", NativeMethod::BlockTemplate, false),
+        ("get_miner_data", NativeMethod::MinerData, false),
+        ("generateblocks", NativeMethod::GenerateBlocks, true),
+        ("set_bans", NativeMethod::SetBans, true),
+        ("get_bans", NativeMethod::GetBans, true),
+        ("banned", NativeMethod::Banned, true),
+        ("flush_txpool", NativeMethod::FlushTxpool, true),
+        ("relay_tx", NativeMethod::RelayTx, true),
+        ("get_txpool_backlog", NativeMethod::TxpoolBacklog, false),
     ];
 
     /// The dispatcher's own recognizer answers every specified name and
@@ -668,18 +316,18 @@ mod tests {
                 "{name} must dispatch natively"
             );
         }
-        // Still the C++ table's: recognizing one here would serve it from a
-        // handler that does not exist yet.
+        // Not native handlers. A name with no row is not found before
+        // dispatch; these stay unrecognized here.
         for name in [
-            "get_alternate_chains",
             "mining_status",
-            "get_block_by_hash",
+            "flush_cache",
+            "inject_archival_serve_credit",
             "getblockcount2",
             "",
         ] {
             assert!(
                 native_method_for(name).is_none(),
-                "{name} must fall through to the C++ dispatch table"
+                "{name} is not a native handler"
             );
         }
         // Not dispatched natively. Nothing on this side serves the name, so
@@ -798,52 +446,19 @@ mod tests {
         }
     }
 
-    /// The JSON-RPC names the C++ table serves until the flip, read from its
-    /// source (`src/rpc/core_rpc_ffi.cpp`, `get_jsonrpc_table`).
-    fn cpp_json_rpc_names() -> Vec<String> {
-        let path =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src/rpc/core_rpc_ffi.cpp");
-        let source = std::fs::read_to_string(&path).expect("the C++ JSON-RPC table");
-        let start = source
-            .find("get_jsonrpc_table()")
-            .expect("the table's function");
-        let body = &source[start..];
-        let body = &body[..body.find("return t;").expect("the table's end")];
-        let mut names = Vec::new();
-        for line in body.lines() {
-            let line = line.trim();
-            let quoted = if let Some(rest) = line.strip_prefix("{\"") {
-                rest
-            } else if let Some(rest) = line.strip_prefix("DJRPC_WE(\"") {
-                rest
-            } else {
-                continue;
-            };
-            if let Some(end) = quoted.find('"') {
-                names.push(quoted[..end].to_owned());
-            }
-        }
-        assert!(names.len() >= 20, "the parse found the table: {names:?}");
-        names
-    }
-
-    /// RW-Q7's gate for JSON-RPC: every name the daemon serves, natively or
-    /// through the C++ table, is a row, and every JSON-RPC row is served.
+    /// RW-Q7's gate for JSON-RPC: every name the daemon serves is a row,
+    /// and every JSON-RPC row is served natively. The C++ table is gone
+    /// (DRS_X_STORE_FLIP.md DX-Q3).
     #[test]
     fn every_served_json_rpc_name_is_a_row_and_every_row_is_served() {
         use shekyl_rpc_types::methods::{json_rpc, Surface, METHODS};
-        let cpp = cpp_json_rpc_names();
-        let native: Vec<&str> = SPECIFIED_NATIVE_METHODS
-            .iter()
-            .map(|(name, _, _)| *name)
-            .collect();
-        for name in cpp.iter().map(String::as_str).chain(native.iter().copied()) {
+        for (name, _, _) in SPECIFIED_NATIVE_METHODS {
             assert!(json_rpc(name).is_some(), "{name} is served but has no row");
         }
         for row in METHODS.iter().filter(|row| row.surface == Surface::JsonRpc) {
             for name in row.names() {
                 assert!(
-                    native_method_for(name).is_some() || cpp.iter().any(|c| c == name),
+                    native_method_for(name).is_some(),
                     "{name} is a row that nothing serves"
                 );
             }

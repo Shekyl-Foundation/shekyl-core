@@ -330,7 +330,7 @@ namespace cryptonote
     // layer of 38 scalars; the ML-DSA leg is fixed) -- so a pruned node
     // reconstructs the weight exactly, the same way it does pseudoOuts for a
     // spend. This RELIES ON ADMISSION: the record was verified against the
-    // registry's frozen-segment R_k (shekyl_archival_verify_serve_credit_vin),
+    // registry's frozen-segment R_k (the serve-credit verify, CEN-J10),
     // and a record of any other shape cannot hash to that root, so every
     // admitted tx carries records of exactly this size. No bulletproof
     // clawback: a non-spending tx has no outputs to range-prove.

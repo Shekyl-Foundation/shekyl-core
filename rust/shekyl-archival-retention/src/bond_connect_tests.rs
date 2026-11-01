@@ -11,7 +11,6 @@ use crate::consensus_state::good_through;
 
 const E_RELEASE: u64 = 42;
 const RECORD_BONDED: u64 = 2 * ARCHIVAL_BOND_FLOOR_ATOMIC;
-const TOTAL_BONDED: u64 = 5 * ARCHIVAL_BOND_FLOOR_ATOMIC;
 
 fn record_holdings() -> HoldingsDescriptor {
     HoldingsDescriptor {
@@ -170,108 +169,6 @@ fn connect_appends_below_the_cap() {
         E_RELEASE,
     )
     .is_ok());
-}
-
-#[test]
-fn pop_restores_total_bonded_exactly() {
-    // Connect ∘ pop is the identity on the C++ store's global counter (§5
-    // pop twin): the store debits the fold's refund at connect and the pop
-    // re-credits the journaled pre-image.
-    let effect = ok_connect();
-    let restored = release_pop(
-        effect.post_bonded_total,
-        effect.post_holdings.shard_ids.len(),
-        Some(effect.interval_close),
-        E_RELEASE,
-        RECORD_BONDED,
-        TOTAL_BONDED - effect.refund_atomic,
-    )
-    .expect("valid pop");
-    assert_eq!(restored, TOTAL_BONDED);
-}
-
-#[test]
-fn pop_rejects_record_not_exited() {
-    assert_eq!(
-        release_pop(
-            1,
-            0,
-            Some(clean_interval_close(E_RELEASE)),
-            E_RELEASE,
-            RECORD_BONDED,
-            0,
-        ),
-        Err(ReleasePopError::RecordNotExited)
-    );
-    assert_eq!(
-        release_pop(
-            0,
-            1,
-            Some(clean_interval_close(E_RELEASE)),
-            E_RELEASE,
-            RECORD_BONDED,
-            0,
-        ),
-        Err(ReleasePopError::RecordNotExited)
-    );
-}
-
-#[test]
-fn pop_rejects_missing_or_mismatched_clean_close() {
-    assert_eq!(
-        release_pop(0, 0, None, E_RELEASE, RECORD_BONDED, 0),
-        Err(ReleasePopError::MissingCleanClose)
-    );
-    // Wrong epoch.
-    assert_eq!(
-        release_pop(
-            0,
-            0,
-            Some(clean_interval_close(E_RELEASE + 1)),
-            E_RELEASE,
-            RECORD_BONDED,
-            0,
-        ),
-        Err(ReleasePopError::MissingCleanClose)
-    );
-    // An open interval is not a clean close.
-    assert_eq!(
-        release_pop(
-            0,
-            0,
-            Some(BadInterval {
-                start_epoch: E_RELEASE,
-                end_exclusive: u64::MAX,
-            }),
-            E_RELEASE,
-            RECORD_BONDED,
-            0,
-        ),
-        Err(ReleasePopError::MissingCleanClose)
-    );
-}
-
-#[test]
-fn pop_rejects_empty_pre_image() {
-    assert_eq!(
-        release_pop(0, 0, Some(clean_interval_close(E_RELEASE)), E_RELEASE, 0, 0),
-        Err(ReleasePopError::PreImageEmpty)
-    );
-}
-
-#[test]
-fn pop_rejects_total_bonded_overflow() {
-    assert_eq!(
-        release_pop(
-            0,
-            0,
-            Some(clean_interval_close(E_RELEASE)),
-            E_RELEASE,
-            RECORD_BONDED,
-            u64::MAX,
-        ),
-        Err(ReleasePopError::TotalBondedOverflow)
-    );
 }
 
 // ── Reinstate connect/pop (P2B-9) ────────────────────────────────────────────
@@ -446,28 +343,5 @@ fn reinstate_connect_rejects_oversize_post() {
             crate::archival_params()
         ),
         Err(ReinstateConnectError::PostOversize)
-    );
-}
-
-#[test]
-fn reinstate_pop_accepts_unchanged_balance() {
-    assert_eq!(
-        reinstate_pop(
-            2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
-            2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
-        ),
-        Ok(())
-    );
-}
-
-#[test]
-fn reinstate_pop_rejects_any_balance_move() {
-    assert_eq!(
-        reinstate_pop(ARCHIVAL_BOND_FLOOR_ATOMIC, 2 * ARCHIVAL_BOND_FLOOR_ATOMIC,),
-        Err(ReinstatePopError::NotReinstateDelta)
-    );
-    assert_eq!(
-        reinstate_pop(3 * ARCHIVAL_BOND_FLOOR_ATOMIC, ARCHIVAL_BOND_FLOOR_ATOMIC,),
-        Err(ReinstatePopError::NotReinstateDelta)
     );
 }

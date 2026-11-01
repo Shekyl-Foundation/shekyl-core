@@ -4,8 +4,8 @@
 // BSD-3-Clause
 
 //! The pool methods (`DRS_X_STORE_FLIP.md` DX-Q3, Q10), over the node's one
-//! pool through [`PoolFacts`]. **Built and not routed**, like
-//! [`crate::mining_methods`].
+//! pool through [`PoolFacts`]. JSON-RPC and the REST pool routes dispatch
+//! here, like [`crate::mining_methods`].
 //!
 //! Who asks decides what is listed: any caller sees the entries the node
 //! shows; the host's administrator also sees those in their stem phase

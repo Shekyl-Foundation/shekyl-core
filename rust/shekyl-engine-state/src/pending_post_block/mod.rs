@@ -108,7 +108,9 @@ pub use outcomes::{
 /// a different version **refuse rather than migrate** — pre-genesis, a v4
 /// seal under a v5 binary fails closed and the operator re-assembles
 /// (rule 15).
-pub const PENDING_POST_VERSION: u32 = 13;
+/// **v14** appends [`TerminalCause::ConsensusRule`] with its row (the flip,
+/// 2026-10-29).
+pub const PENDING_POST_VERSION: u32 = 14;
 
 /// Dispatch state of a pending bond post. The WI-2 assemble path writes only
 /// [`Self::Pending`]; WI-3's block-timed dispatch driver owns the
@@ -143,6 +145,54 @@ pub enum PendingPostState {
     },
 }
 
+/// The name of a consensus row the daemon refused under, as the wire
+/// carries it (`"CEN-J15"`), small enough to travel inside a `Copy` kind
+/// and to persist in a [`TerminalCause`] (v14).
+/// A name longer than the buffer is not a row this wallet can name, and
+/// the mapping treats the cause as unrecognised rather than truncate.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, postcard_schema::Schema)]
+pub struct CenRowName {
+    bytes: [u8; CenRowName::CAPACITY],
+    len: u8,
+}
+
+impl CenRowName {
+    /// The longest row name carried whole (`CEN-J15` is seven bytes).
+    pub const CAPACITY: usize = 16;
+
+    /// `name` if it fits whole and is ASCII; `None` otherwise.
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
+        if name.is_empty() || name.len() > Self::CAPACITY || !name.is_ascii() {
+            return None;
+        }
+        let mut bytes = [0u8; Self::CAPACITY];
+        bytes[..name.len()].copy_from_slice(name.as_bytes());
+        Some(Self {
+            bytes,
+            len: u8::try_from(name.len()).expect("CAPACITY fits a u8"),
+        })
+    }
+
+    /// The row name.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        core::str::from_utf8(&self.bytes[..usize::from(self.len)]).expect("ASCII at parse")
+    }
+}
+
+impl core::fmt::Debug for CenRowName {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl core::fmt::Display for CenRowName {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// The cause of a terminal daemon verdict, as the pending record keeps it.
 ///
 /// The persisted twin of engine-core's `TerminalErrorKind`, which this crate
@@ -164,8 +214,19 @@ pub enum TerminalCause {
     Malformed,
     /// The daemon gave a cause this wallet build does not know.
     Unrecognized,
-    /// The daemon cannot admit a JoinMarket bond post (until `DEL-008`).
+    /// A refusal pre-flip daemons gave: the C++ commit step could not
+    /// hold a JoinMarket bond post. Nothing produces it; a record sealed
+    /// before the flip may still carry it, so the variant and its index
+    /// stay.
     JoinMarketUnsupported,
+    /// A consensus row refused the post against the chain when the pool
+    /// committed it (`RejectCause::ConsensusRule`, RPC 3.63): the bytes are
+    /// sound and the chain decided. `row` is the row as the daemon named it
+    /// (`"CEN-J15"`), kept so the record can say why to its end date. v14.
+    ConsensusRule {
+        /// The row, as the daemon named it.
+        row: CenRowName,
+    },
 }
 
 /// One durable pending bond post: the assembled, signed, wire-encoded
@@ -1619,25 +1680,26 @@ mod tests {
         ));
     }
 
-    /// A **v12** seal under this v13 binary fails closed on the version gate:
-    /// v12 records have no `reference_height`, so they have no end date and
-    /// could never be released (WR-Q3). Refuse-not-migrate; re-assemble.
+    /// The previous version's seal under this binary fails closed on the
+    /// version gate (v12 had no `reference_height`, WR-Q3; v13 had no
+    /// `ConsensusRule` cause). Refuse-not-migrate; re-assemble.
     #[test]
-    fn v12_seal_fails_closed_under_v13_binary() {
-        assert_eq!(PENDING_POST_VERSION, 13);
+    fn the_previous_versions_seal_fails_closed_under_this_binary() {
+        const PREVIOUS: u32 = PENDING_POST_VERSION - 1;
         let mut bytes = PendingPostBlock::empty()
             .to_postcard_bytes()
             .expect("encode");
-        // The leading varint is the version; 12 and 13 both fit one byte.
-        assert_eq!(bytes[0], 13);
-        bytes[0] = 12;
-        let err = PendingPostBlock::from_postcard_bytes(&bytes).expect_err("v12 must refuse");
+        // The leading varint is the version; both fit one byte.
+        assert_eq!(u32::from(bytes[0]), PENDING_POST_VERSION);
+        bytes[0] = u8::try_from(PREVIOUS).expect("one byte");
+        let err = PendingPostBlock::from_postcard_bytes(&bytes)
+            .expect_err("the previous version must refuse");
         assert!(matches!(
             err,
             WalletLedgerError::UnsupportedBlockVersion {
                 block: "pending_post_block",
-                file: 12,
-                binary: 13,
+                file: PREVIOUS,
+                binary: PENDING_POST_VERSION,
             }
         ));
     }

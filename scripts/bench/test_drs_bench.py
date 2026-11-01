@@ -913,5 +913,46 @@ class RunnerImport(unittest.TestCase):
         self.assertIs(R.A.artifact_refusals, D.artifact_refusals)
 
 
+class GeneratingSeedShape(unittest.TestCase):
+    """The generating seed's argv and body follow the binary and the readback.
+
+    The defect is a named archived seed started with `--mine-address`, or
+    posted `{count}`: the archived daemon rejects the flag and does not
+    read that body. The other way, this binary posted the archived trio,
+    puts the address back on a wire that no longer carries it.
+    """
+
+    def test_a_named_archived_seed_is_not_this_binary(self):
+        self.assertFalse(R.seed_uses_this_binary("/usr/bin/shekyld", "/opt/archive/shekyld"))
+        self.assertTrue(R.seed_uses_this_binary("/usr/bin/shekyld", None))
+        self.assertTrue(R.seed_uses_this_binary("/usr/bin/shekyld", ""))
+        self.assertTrue(R.seed_uses_this_binary("/usr/bin/shekyld", "/usr/bin/shekyld"))
+
+    def test_an_archived_seed_is_not_passed_mine_address_and_posts_the_old_body(self):
+        argv = R.seed_generation_argv(False, "--dev-rpc", "addr")
+        self.assertEqual(argv, ["--dev-rpc"])
+        self.assertNotIn("--mine-address", argv)
+        body = R.generateblocks_body("lmdb", 3, "addr")
+        self.assertEqual(body["amount_of_blocks"], 3)
+        self.assertEqual(body["wallet_address"], "addr")
+        self.assertEqual(body["starting_nonce"], 0)
+        self.assertNotIn("count", body)
+
+    def test_this_binary_posts_count_only_and_takes_mine_address(self):
+        argv = R.seed_generation_argv(True, "--dev-rpc", "addr")
+        self.assertEqual(argv, ["--dev-rpc", "--mine-address", "addr"])
+        self.assertEqual(R.generateblocks_body("redb", 3, "addr"), {"count": 3})
+
+    def test_a_readback_from_the_wrong_binary_is_refused(self):
+        named_redb = R.generation_shape_refusal(False, "redb")
+        self.assertIsNotNone(named_redb)
+        self.assertIn("redb", named_redb)
+        self.assertIsNone(R.generation_shape_refusal(False, "lmdb"))
+        this_lmdb = R.generation_shape_refusal(True, "lmdb")
+        self.assertIsNotNone(this_lmdb)
+        self.assertIn("lmdb", this_lmdb)
+        self.assertIsNone(R.generation_shape_refusal(True, "redb"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -50,6 +50,28 @@ TEST(block_queue, empty)
   ASSERT_EQ(bq.get_max_block_height(), 0);
 }
 
+TEST(block_queue, reset_time_tolerates_a_head_filled_meanwhile)
+{
+  // The handler reads the next scheduled span and resets its request time
+  // in two calls. A receipt on another connection's strand can fill that
+  // span between them (seen on a testnet sync from four peers, 2026-10-30:
+  // "Next span is not empty" thrown out of the net loop). A filled span
+  // has no request time to reset, so the reset is a no-op, not a throw.
+  epee::net_utils::network_address na;
+  cryptonote::block_queue bq;
+  bq.add_blocks(0, 20, uuid1(), na);
+  std::vector<crypto::hash> hashes;
+  boost::uuids::uuid connection_id;
+  boost::posix_time::ptime time;
+  ASSERT_EQ(bq.get_next_span_if_scheduled(hashes, connection_id, time).second, 20);
+  std::vector<cryptonote::block_complete_entry> bodies(20);
+  bq.add_blocks(0, bodies, uuid1(), na, 1.0f, 20);
+  ASSERT_NO_THROW(bq.reset_next_span_time());
+  bool filled = false;
+  ASSERT_TRUE(bq.has_next_span(0, filled, time, connection_id));
+  ASSERT_TRUE(filled);
+}
+
 TEST(block_queue, add_stepwise)
 {
   epee::net_utils::network_address na;

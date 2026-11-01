@@ -68,8 +68,6 @@
 
 #include "cryptonote_config.h"           // SHEKYL_DAA_TARGET_SECONDS via
                                          //   shekyl/consensus_constants_generated.h
-#include "rpc/core_rpc_server_commands_defs.h"
-#include "storages/portable_storage_template_helper.h"
 
 namespace
 {
@@ -83,44 +81,7 @@ static_assert(SHEKYL_DAA_TARGET_SECONDS == 120,
 
 } // namespace
 
-TEST(rpc_target_wire_contract, mining_status_block_target)
-{
-  cryptonote::COMMAND_RPC_MINING_STATUS::response res{};
-  res.block_target = SHEKYL_DAA_TARGET_SECONDS;
-
-  std::string json;
-  ASSERT_TRUE(epee::serialization::store_t_to_json(res, json));
-  EXPECT_NE(json.find("\"block_target\": 120"), std::string::npos)
-      << "mining_status wire response must carry `\"block_target\": 120`; "
-         "got:\n"
-      << json;
-}
-
-// RPC 3.32: calc_pow dropped leftover Cryptonight `major_version`. The
-// get_version v9 fixture only pins the packed constant; this is the gate
-// that turns red if the field is reintroduced. Extra keys stay ignored
-// by epee, so a client that still sends the field must still parse.
-TEST(rpc_target_wire_contract, calc_pow_request_has_no_major_version)
-{
-  cryptonote::COMMAND_RPC_CALCPOW::request req{};
-  req.height = 1;
-  req.block_blob = "00";
-  req.seed_hash = std::string(64, '0');
-
-  std::string json;
-  ASSERT_TRUE(epee::serialization::store_t_to_json(req, json));
-  EXPECT_EQ(json.find("major_version"), std::string::npos)
-      << "calc_pow must not emit leftover major_version; got:\n"
-      << json;
-  EXPECT_NE(json.find("\"height\""), std::string::npos) << json;
-  EXPECT_NE(json.find("\"block_blob\""), std::string::npos) << json;
-  EXPECT_NE(json.find("\"seed_hash\""), std::string::npos) << json;
-
-  cryptonote::COMMAND_RPC_CALCPOW::request loaded{};
-  ASSERT_TRUE(epee::serialization::load_t_from_json(
-      loaded,
-      "{\"height\":7,\"block_blob\":\"ab\",\"seed_hash\":\"cd\",\"major_version\":99}"));
-  EXPECT_EQ(loaded.height, 7u);
-  EXPECT_EQ(loaded.block_blob, "ab");
-  EXPECT_EQ(loaded.seed_hash, "cd");
-}
+// The epee request structs that used to pin `block_target` and the
+// absence of `major_version` are gone with the C++ server. The constant
+// above is what those structs copied onto the wire; the Rust mining
+// status and calc_pow types are the wire now.

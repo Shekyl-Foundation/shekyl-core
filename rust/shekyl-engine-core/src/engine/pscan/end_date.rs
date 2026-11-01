@@ -88,12 +88,9 @@ mod tests {
     fn only_a_terminal_verdict_maps_to_a_cause() {
         use crate::engine::error::{AmbiguousErrorKind, RetryableRejectCause, TerminalErrorKind};
         let terminal = BroadcastSubmitError::Submit(SubmitterError::RejectedTerminal {
-            kind: TerminalErrorKind::JoinMarketUnsupported,
+            kind: TerminalErrorKind::DoubleSpend,
         });
-        assert_eq!(
-            terminal_cause(&terminal),
-            Some(TerminalCause::JoinMarketUnsupported)
-        );
+        assert_eq!(terminal_cause(&terminal), Some(TerminalCause::DoubleSpend));
         let retryable = BroadcastSubmitError::Submit(SubmitterError::RejectedRetryable {
             cause: RetryableRejectCause::StaleRoot,
         });

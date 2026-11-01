@@ -37,7 +37,6 @@ shekyl_add_executable(cn_deserialize
 target_link_libraries(cn_deserialize
   LINK_PRIVATE
     cryptonote_core
-    blockchain_db
     device
     fcmp
     p2p
@@ -47,25 +46,4 @@ target_link_libraries(cn_deserialize
 set_property(TARGET cn_deserialize
 	PROPERTY
 	OUTPUT_NAME "shekyl-utils-deserialize")
-
-
-set(object_sizes_sources
-  object_sizes.cpp
-  )
-
-shekyl_add_executable(object_sizes
-  ${object_sizes_sources}
-  ${object_sizes_private_headers})
-
-target_link_libraries(object_sizes
-  LINK_PRIVATE
-    cryptonote_core
-    blockchain_db
-    p2p
-    epee
-    ${CMAKE_THREAD_LIBS_INIT})
-
-set_property(TARGET object_sizes
-	PROPERTY
-	OUTPUT_NAME "shekyl-utils-object-sizes")
 

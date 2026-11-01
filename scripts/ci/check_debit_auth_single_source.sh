@@ -11,7 +11,7 @@
 # host holds, and which would therefore turn a host compromise into a
 # collateral drain. The pin is `shekyl-archival-retention::debit_auth_pin`;
 # the SELECTOR is `requires_cold_authority`; consensus reaches both through
-# `cold_authority_pin` / `shekyl_archival_cold_authority_pin`.
+# `cold_authority_pin` (the C++ FFI entry went with `DEL-008`).
 #
 #   Release          always            (UB3 before UB9, §8.7.1.1)
 #   JoinMarket       never             (the credit that COMMITS the cold key)
@@ -111,32 +111,9 @@ if ! python3 "$here/strip_c_comments.py" --self-test; then
   exit 1
 fi
 
-require_call() {
-  local file="$1" needle="$2" label="$3" body hits
-  body=$(statements_of "$file")
-  hits=$(printf '%s\n' "$body" | rg -c "$needle" || true)
-  if [ "${hits:-0}" -lt 1 ]; then
-    echo "FAIL: ${label} no longer reaches the shared cold-authority gate."
-    echo "      An arm that stops authorizing its value-out is invisible to the"
-    echo "      comparison check below -- there is nothing to compare when the"
-    echo "      check is simply gone."
-    fail=1
-  fi
-}
-
-# The C++ helper takes (record, post_kind, bond_debit, auth_pubkey, arm) and
-# clang-format wraps the call, so the needle anchors on the helper name and the
-# arm label rather than the whole argument list. Both must be on the joined
-# statement `statements_of` produces.
-require_call src/cryptonote_core/blockchain.cpp \
-  'archival_cold_authority_pin\(record,[^;]*"Release"\)' \
-  "per-tx Release verify"
-require_call src/rpc/daemon_submit_ffi.cpp \
-  'shekyl_archival_cold_authority_pin\(' \
-  "submit gather work gate"
-
-# And the Rust submit battery, which the previous version never checked at
-# all: it could have inlined its own comparison and passed.
+# The C++ Release verifier and the submit gather arm left with the chain.
+# The Rust submit battery is the production caller. It could inline its
+# own comparison and pass a gate that only scanned C++.
 # Comment-stripped like the C++ arms: reading the raw file let a commented-out
 # call satisfy the gate. Rust line comments are `//` too, so `code_only` works
 # unchanged.
@@ -190,7 +167,7 @@ if [ -n "$hits" ]; then
   echo "FAIL: a C++ statement compares an auth key against a stored bond_spend_pk."
   echo "      The debit-auth predicate has one implementation"
   echo "      (shekyl-archival-retention::cold_authority_pin); call"
-  echo "      shekyl_archival_cold_authority_pin instead of re-deriving it."
+  echo "      it instead of re-deriving it."
   printf '%s\n' "$hits"
   fail=1
 fi

@@ -31,7 +31,7 @@
 
 namespace test
 {
-  cryptonote::transaction make_miner_transaction(cryptonote::account_public_address const& to);
+  cryptonote::transaction make_miner_transaction();
 
   cryptonote::transaction make_fcmp_transaction();
 }

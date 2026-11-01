@@ -40,7 +40,6 @@ typedef struct shekyl_rpc_chain_tip_facts {
     uint8_t  reserved[6];
 } shekyl_rpc_chain_tip_facts;
 
-int shekyl_rpc_chain_tip(core_rpc_handle* h, shekyl_rpc_chain_tip_facts* out);
 
 // Daemon identity: what this process IS, as opposed to what its chain tip
 // looks like right now (VC-2). Deliberately its own POD rather than two more
@@ -58,7 +57,6 @@ typedef struct shekyl_rpc_identity_facts {
     uint8_t  genesis_hash[32];  // block 0's id
 } shekyl_rpc_identity_facts;
 
-int shekyl_rpc_identity(core_rpc_handle* h, shekyl_rpc_identity_facts* out);
 
 // Block hash at a height, with the tip as of the same read (RK-2), so a
 // refusal can name the top height without a second call.
@@ -71,8 +69,6 @@ typedef struct shekyl_rpc_block_hash_facts {
     uint8_t  reserved[7];
 } shekyl_rpc_block_hash_facts;
 
-int shekyl_rpc_block_hash_at(core_rpc_handle* h, uint64_t height,
-    shekyl_rpc_block_hash_facts* out);
 
 // The block-header projection (RK-3): every field of the wire's header in
 // raw form — hashes as bytes, the 128-bit difficulties as (lo, hi) pairs —
@@ -134,8 +130,6 @@ typedef struct shekyl_rpc_block_header_facts {
 // `fill_pow_hash` is the caller's request AND its right to ask (the
 // restricted listener never sets it): computing the long hash is the
 // expensive part of this call and is skipped unless asked.
-int shekyl_rpc_block_header_at(core_rpc_handle* h, const uint8_t* block_hash,
-    uint64_t height, uint8_t fill_pow_hash, shekyl_rpc_block_header_facts* out);
 
 // The variable-length half of a block's facts (RK-3b): the three payloads
 // whose size the caller cannot know in advance. Allocated by C++, owned by
@@ -173,11 +167,6 @@ typedef struct shekyl_rpc_block_payload {
 // On OK with `found == 1` the payload is set and `*out_owner` must be passed
 // to `shekyl_rpc_block_free`; on every other outcome the owner is NULL and
 // there is nothing to release.
-int shekyl_rpc_block_at(core_rpc_handle* h, const uint8_t* block_hash,
-    uint64_t height, uint8_t fill_pow_hash,
-    shekyl_rpc_block_header_facts* out_header,
-    shekyl_rpc_block_payload* out_payload, void** out_owner);
-void shekyl_rpc_block_free(void* owner);
 
 // The global output indices of one transaction (RK-4a). Variable-length, so
 // it follows §3.2's rule: C++ allocates, the caller gets (pointer, length,
@@ -187,9 +176,6 @@ void shekyl_rpc_block_free(void* owner);
 // outcome, not a fault, and the one the wire reports as a non-OK status. A
 // transaction that exists with no outputs recorded yet is `found = 1` with
 // `len == 0`, which is a different answer and must stay distinguishable.
-int shekyl_rpc_tx_output_indices(core_rpc_handle* h, const uint8_t* txid,
-    const uint64_t** out, size_t* out_len, uint8_t* out_found, void** out_owner);
-void shekyl_rpc_tx_output_indices_free(void* owner);
 
 // One block of a `/get_blocks_by_height.bin` answer (RK-4b). Every pointer
 // borrows memory owned by the opaque owner the export returns.
@@ -221,10 +207,6 @@ typedef struct shekyl_rpc_block_entry {
 // The restricted-listener block cap is NOT applied here: it is handler
 // policy, single-sourced in Rust (RK-D6), and this export answers what it
 // is asked.
-int shekyl_rpc_blocks_by_height(core_rpc_handle* h, const uint64_t* heights,
-    size_t heights_len, const shekyl_rpc_block_entry** out, size_t* out_len,
-    uint64_t* out_failed_height, uint8_t* out_ok, void** out_owner);
-void shekyl_rpc_blocks_by_height_free(void* owner);
 
 // One requested transaction's answer (RK-4c). Every pointer borrows memory
 // owned by the opaque owner the export returns.
@@ -276,10 +258,6 @@ typedef struct shekyl_rpc_tx_entry {
 // before `m_blockchain`, so a chain lock held across a pool read would be the
 // AB half of an AB-BA deadlock; this matches the C++ handler's granularity and
 // the resulting race is the one it already had (§3.2).
-int shekyl_rpc_transactions(core_rpc_handle* h, const uint8_t* txids, size_t txids_len,
-    uint8_t include_sensitive, const shekyl_rpc_tx_entry** out, size_t* out_len,
-    uint64_t* out_chain_height, void** out_owner);
-void shekyl_rpc_transactions_free(void* owner);
 
 // epee's JSON rendering of one transaction (RK-D11), which stays in C++ for
 // the reason `get_block`'s `json` does: it duplicates the consensus encoding
@@ -287,9 +265,6 @@ void shekyl_rpc_transactions_free(void* owner);
 // one. Takes no handle and no lock — it parses a blob the caller already
 // holds — so the *decision* to render stays in the Rust handler and only the
 // rendering is here.
-int shekyl_rpc_tx_to_json(const uint8_t* blob, size_t blob_len, uint8_t pruned,
-    const char** out, size_t* out_len, void** out_owner);
-void shekyl_rpc_tx_json_free(void* owner);
 
 // Key images, answered per request slot (RK-4c). `key_images` is `count * 32`
 // bytes and `out_status` is a caller-provided array of `count` bytes: 0
@@ -298,8 +273,6 @@ void shekyl_rpc_tx_json_free(void* owner);
 // The pool half filters on `relay_category::broadcasted` unconditionally, so a
 // transaction that has not been broadcast never answers 2 — that path never
 // had the disclosure the pool reads did (§7, 2026-08-26).
-int shekyl_rpc_key_images_spent(core_rpc_handle* h, const uint8_t* key_images,
-    size_t count, uint8_t* out_status);
 
 // ── RK-5a: the p2p seam ─────────────────────────────────────────────────────
 //
@@ -426,7 +399,6 @@ typedef struct shekyl_rpc_fee_estimate_facts {
     uint8_t  reserved[7];
 } shekyl_rpc_fee_estimate_facts;
 
-int shekyl_rpc_fee_estimate(core_rpc_handle* h, shekyl_rpc_fee_estimate_facts* out);
 
 // ── A constant the console renders with ─────────────────────────────────────
 //
@@ -475,7 +447,6 @@ typedef struct shekyl_rpc_info_chain_facts {
     uint8_t  reserved[3];
 } shekyl_rpc_info_chain_facts;
 
-int shekyl_rpc_info_chain(core_rpc_handle* h, shekyl_rpc_info_chain_facts* out);
 
 // The pool's population, as two counts of one pool state.
 //
@@ -487,8 +458,6 @@ int shekyl_rpc_info_chain(core_rpc_handle* h, shekyl_rpc_info_chain_facts* out);
 // they describe one pool; a pool whose broadcast set is larger than the whole
 // is ERR_INCONSISTENT. With `with_unbroadcast` zero the second count is not
 // made and `out_unbroadcast` is not written (it may be null).
-int shekyl_rpc_info_pool_counts(core_rpc_handle* h, uint8_t with_unbroadcast,
-    uint64_t* out_broadcast, uint64_t* out_unbroadcast);
 
 // Status facts, read only for a caller who is shown Status. The store's
 // on-disk size is NOT here: a restricted reply still carries it, rounded, so
@@ -503,8 +472,6 @@ typedef struct shekyl_rpc_info_status_facts {
 // `version_buf`, not NUL-terminated, with its length in `*version_len`. It
 // exists only in C++, and it is a Status field, so it rides this export. A
 // buffer too small for it is ERR_INTERNAL, never a truncated version.
-int shekyl_rpc_info_status(core_rpc_handle* h, shekyl_rpc_info_status_facts* out,
-    char* version_buf, size_t version_cap, size_t* version_len);
 
 // Peers facts, read only for a caller who is shown Peers.
 typedef struct shekyl_rpc_info_peers_facts {
@@ -514,7 +481,6 @@ typedef struct shekyl_rpc_info_peers_facts {
     uint64_t tor_outgoing_sockets;
 } shekyl_rpc_info_peers_facts;
 
-int shekyl_rpc_info_peers(core_rpc_handle* h, shekyl_rpc_info_peers_facts* out);
 
 // The path of the chain store's data file, written to `path_buf`, not
 // NUL-terminated, with its length in `*path_len`.
@@ -525,148 +491,7 @@ int shekyl_rpc_info_peers(core_rpc_handle* h, shekyl_rpc_info_peers_facts* out);
 // half that survives the store cutover: the Rust store names its file the
 // same way and the stat does not change. A store that names no file, or a
 // path longer than the buffer, is ERR_INTERNAL.
-int shekyl_rpc_info_store_file(core_rpc_handle* h, char* path_buf, size_t path_cap,
-    size_t* path_len);
-
-// Layout-twin test hooks (no production callers; see the roundtrip test).
-//
-// **Their value rests on these definitions and their Rust counterparts being
-// independently hand-written.** The pair fills every field from a seed and
-// compares by `memcmp`, so it pins offsets, widths and the seed convention
-// across the ABI — and it can only do that while the two sides are two
-// definitions. Nothing generates them today (bindgen is used once in this
-// tree, for `valgrind-requests` in `shekyl-engine-state`, nowhere near this
-// header), so the risk is not live; but the day a generator is pointed at
-// this file, the roundtrip goes green comparing one definition against
-// itself and stops asserting anything. One comment is proportionate to that;
-// a test would not be, since it cannot observe its own provenance.
-//
-// Note also what they do NOT pin: `found` is field 23 to a seeded filler, so
-// the pair fixes where the byte lives, never *when* it should be zero. A
-// conditional has no input here to be conditional on. Layout, not behaviour.
-void shekyl_rpc_identity_facts_test_fill(shekyl_rpc_identity_facts* out, uint64_t seed);
-int shekyl_rpc_identity_facts_test_check(const shekyl_rpc_identity_facts* facts, uint64_t seed);
-void shekyl_rpc_chain_tip_facts_test_fill(shekyl_rpc_chain_tip_facts* out, uint64_t seed);
-int shekyl_rpc_chain_tip_facts_test_check(const shekyl_rpc_chain_tip_facts* facts, uint64_t seed);
-void shekyl_rpc_block_hash_facts_test_fill(shekyl_rpc_block_hash_facts* out, uint64_t seed);
-int shekyl_rpc_block_hash_facts_test_check(const shekyl_rpc_block_hash_facts* facts, uint64_t seed);
-void shekyl_rpc_fee_estimate_facts_test_fill(shekyl_rpc_fee_estimate_facts* out, uint64_t seed);
-int shekyl_rpc_fee_estimate_facts_test_check(const shekyl_rpc_fee_estimate_facts* facts, uint64_t seed);
-void shekyl_rpc_net_stats_facts_test_fill(shekyl_rpc_net_stats_facts* out, uint64_t seed);
-int shekyl_rpc_net_stats_facts_test_check(const shekyl_rpc_net_stats_facts* facts, uint64_t seed);
-// The three RK-5a list PODs carry pointers, which have no seed value to fill
-// and compare, so they are pinned by layout instead — see
-// `rpc_facts_ffi_roundtrip.cpp`, as `shekyl_rpc_tx_entry` is.
-void shekyl_rpc_block_header_facts_test_fill(shekyl_rpc_block_header_facts* out, uint64_t seed);
-int shekyl_rpc_block_header_facts_test_check(const shekyl_rpc_block_header_facts* facts, uint64_t seed);
-void shekyl_rpc_info_chain_facts_test_fill(shekyl_rpc_info_chain_facts* out, uint64_t seed);
-int shekyl_rpc_info_chain_facts_test_check(const shekyl_rpc_info_chain_facts* facts, uint64_t seed);
-void shekyl_rpc_info_status_facts_test_fill(shekyl_rpc_info_status_facts* out, uint64_t seed);
-int shekyl_rpc_info_status_facts_test_check(const shekyl_rpc_info_status_facts* facts, uint64_t seed);
-void shekyl_rpc_info_peers_facts_test_fill(shekyl_rpc_info_peers_facts* out, uint64_t seed);
-int shekyl_rpc_info_peers_facts_test_check(const shekyl_rpc_info_peers_facts* facts, uint64_t seed);
 
 #ifdef __cplusplus
 } // extern "C"
-
-// The exports' bodies, over the core objects they read. Same shape as
-// `daemon_submit::snapshot_facts` (daemon_submit_ffi.h): the extern "C" entry
-// point unwraps the handle and delegates here, so the logic — the lock, the
-// reads, and the classification — is reachable from a unit test with a
-// controlled chain (tests/unit_tests/rpc_facts_shims.cpp) instead of needing
-// a core_rpc_server. A facts export shaped as one opaque block would be
-// testable only through a live daemon; new exports take this shape.
-//
-// **The seam's rule, settled in RK-5a.** A body takes what a fixture can
-// build as objects (`Blockchain&`, the pool) and everything else — the p2p
-// reads, the build-time constants — **as scalars the adapter snapshots**.
-// This is not a convenience: `m_p2p` is a concrete
-// `node_server<t_cryptonote_protocol_handler<cryptonote::core>>`, not an
-// interface, so nothing can subclass it, and the one `node_server` harness in
-// the tree (tests/unit_tests/node_server.cpp) instantiates the template on
-// `test_core` — a different type, not a double for this one. A p2p double
-// cannot be built, so the p2p facts arrive as plain integers a test supplies
-// and the thin `extern "C"` adapter is the only thing that touches `m_p2p`.
-//
-// `shekyl_rpc_chain_tip` was the one export with no fixture, written before
-// this shape existed; RK-5a retrofitted it, and it is now the smallest
-// example of the rule.
-
-#include "crypto/hash.h"
-
-namespace cryptonote { class Blockchain; class core; class tx_memory_pool; }
-
-namespace daemon_rpc_facts {
-
-int fee_estimate(cryptonote::Blockchain& bc, shekyl_rpc_fee_estimate_facts* out) noexcept;
-
-// `get_info`'s chain snapshot. The four scalars are what the adapter reads
-// from `core` and the p2p payload object; everything else is read here, under
-// one chain lock.
-struct info_chain_scalars
-{
-  uint64_t core_target_height;
-  uint8_t synchronized;
-  uint8_t busy_syncing;
-  uint8_t offline;
-};
-
-int info_chain(cryptonote::Blockchain& bc, const info_chain_scalars& scalars,
-    shekyl_rpc_info_chain_facts* out) noexcept;
-
-int info_pool_counts(const cryptonote::tx_memory_pool& pool, uint8_t with_unbroadcast,
-    uint64_t* out_broadcast, uint64_t* out_unbroadcast) noexcept;
-
-// `get_info`'s Status facts. The alt-block count is the one chain-store read;
-// the rest are `core` scalars the adapter snapshots. The connection counts
-// are not here: Rust reads them from the seam board, with `has_peers`.
-struct info_status_scalars
-{
-  uint64_t start_time;
-  uint64_t free_space;
-};
-
-int info_status(cryptonote::Blockchain& bc, const info_status_scalars& scalars,
-    shekyl_rpc_info_status_facts* out) noexcept;
-
-int info_store_file(cryptonote::Blockchain& bc, char* path_buf, size_t path_cap,
-    size_t* path_len) noexcept;
-
-int chain_tip(cryptonote::Blockchain& bc, uint8_t synchronized,
-    uint64_t target_height, shekyl_rpc_chain_tip_facts* out) noexcept;
-
-int block_hash_at(cryptonote::Blockchain& bc, uint64_t height,
-    shekyl_rpc_block_hash_facts* out) noexcept;
-
-int block_header_at(cryptonote::Blockchain& bc, const crypto::hash* block_hash,
-    uint64_t height, bool fill_pow_hash, shekyl_rpc_block_header_facts* out) noexcept;
-
-int tx_output_indices(cryptonote::Blockchain& bc, const crypto::hash& txid,
-    const uint64_t** out, size_t* out_len, uint8_t* out_found, void** out_owner) noexcept;
-
-int blocks_by_height(cryptonote::Blockchain& bc, const uint64_t* heights, size_t heights_len,
-    const shekyl_rpc_block_entry** out, size_t* out_len, uint64_t* out_failed_height,
-    uint8_t* out_ok, void** out_owner) noexcept;
-
-int block_at(cryptonote::Blockchain& bc, const crypto::hash* block_hash,
-    uint64_t height, bool fill_pow_hash,
-    shekyl_rpc_block_header_facts* out_header,
-    shekyl_rpc_block_payload* out_payload, void** out_owner) noexcept;
-
-// Declared for the same reason as its five siblings above: the extern "C"
-// entry point needs a live `core_rpc_handle`, so the store-fault paths are
-// only reachable from a test through the `Blockchain&` form. Free the owner
-// with `shekyl_rpc_transactions_free`.
-int transactions(cryptonote::Blockchain& bc, cryptonote::tx_memory_pool& pool,
-    const uint8_t* txids, size_t txids_len, uint8_t include_sensitive,
-    const shekyl_rpc_tx_entry** out, size_t* out_len, uint64_t* out_chain_height,
-    void** out_owner) noexcept;
-
-// Same reason: the chain-then-pool status mapping and its slot re-association
-// are only reachable from a test through the `Blockchain&` / pool form.
-int key_images_spent(cryptonote::Blockchain& bc, cryptonote::tx_memory_pool& pool,
-    const uint8_t* key_images, size_t count, uint8_t* out_status) noexcept;
-
-} // namespace daemon_rpc_facts
-
 #endif // __cplusplus
