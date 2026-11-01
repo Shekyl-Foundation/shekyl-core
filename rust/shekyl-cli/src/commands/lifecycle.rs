@@ -303,10 +303,11 @@ pub(crate) fn show_status(val: &Value) {
     match val.get("daemon_height").and_then(Value::as_i64) {
         Some(daemon) => {
             println!("Daemon height: {daemon}");
-            if daemon > wallet {
-                println!("Behind by {} blocks — run \"refresh\".", daemon - wallet);
-            } else {
-                println!("Synced.");
+            match crate::status::classify(true, Some(daemon), wallet) {
+                crate::status::SyncView::Behind(n) => {
+                    println!("Behind by {} — run \"refresh\".", crate::status::blocks(n))
+                }
+                _ => println!("Synced."),
             }
         }
         None => {

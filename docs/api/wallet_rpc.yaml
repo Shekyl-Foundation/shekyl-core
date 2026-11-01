@@ -2406,6 +2406,7 @@ components:
         synced_height:
           type: integer
           format: int64
+          description: The wallet's height after the scan, as get_height's wallet_height.
         reorg_fork_height:
           type: integer
           format: int64
@@ -2449,6 +2450,7 @@ components:
         synced_height:
           type: integer
           format: int64
+          description: The wallet's height after the scan, as get_height's wallet_height.
 
     # ── Node info ────────────────────────────────────────────────────
     GetHeightParams:
@@ -2462,13 +2464,20 @@ components:
         wallet_height:
           type: integer
           format: int64
-          description: Wallet synced height; always present (local state).
+          description: >-
+            Blocks the wallet has scanned through, counted like
+            daemon_height: 0 before the first scan, the newest scanned
+            block's height plus one after it, so a synced wallet equals
+            daemon_height. Always present (local state). refresh's and
+            rescan_blockchain's synced_height, and get_wallet_info's
+            wallet_height, are this number.
         daemon_height:
           type: integer
           format: int64
           nullable: true
           description: >-
-            Daemon chain height, or null when the daemon is unreachable. The
+            Daemon chain height (its block count, the daemon's own
+            get_height), or null when the daemon is unreachable. The
             wallet_height is still returned in that case so an offline or
             still-syncing node does not hide the wallet's own status.
 
