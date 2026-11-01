@@ -152,10 +152,18 @@ def run(args):
         return B._RunningDaemon(proc, port, args.startup_timeout, args.shutdown_timeout)
 
     def generate(count):
+        # generateblocks is an armed test lever, served only with the dev-rpc
+        # switch set; the daemon announces it at start. The log is appended,
+        # so only the bytes this spawn wrote count.
+        seed_log = os.path.join(work, "seed.log")
+        seed_from = armed_lever.log_size(seed_log)
         proc = spawn("seed", seed_dir, [armed_lever.FLAG, "--mine-address", addr], offline=True)
         with running(proc, srpc) as seed:
             if not seed.ready:
                 B._fail(f"generating seed never came up; see {work}/seed.log")
+            if not armed_lever.announced_since(seed_log, seed_from):
+                B._fail(f"the generating seed did not announce {armed_lever.ANNOUNCEMENT!r} "
+                        f"at start; see {seed_log}")
             B._await_posted(srpc, args.startup_timeout)
             resp = B._rpc(srpc, "generateblocks", {"count": count}, timeout=args.gen_timeout)
             if resp.get("result", {}).get("status") != "OK":

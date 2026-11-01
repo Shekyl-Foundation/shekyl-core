@@ -187,11 +187,19 @@ class Harness:
         return B._RunningDaemon(proc, rpc, self.args.startup_timeout, self.args.shutdown_timeout)
 
     def generate(self, d, count, address):
+        # generateblocks is an armed test lever, served only with the dev-rpc
+        # switch set; the daemon announces it at start. The log is appended
+        # across generations, so only the bytes this spawn wrote count.
+        gen_log = os.path.join(self.work, "gen.log")
+        gen_from = armed_lever.log_size(gen_log)
         proc = self.spawn("gen", d, [armed_lever.FLAG, "--mine-address", address],
                           self.sp2p, self.srpc, offline=True)
         with self.running(proc, self.srpc) as g:
             if not g.ready:
                 B._fail(f"a generating daemon never came up; see {self.work}/gen.log")
+            if not armed_lever.announced_since(gen_log, gen_from):
+                B._fail(f"the generating daemon did not announce {armed_lever.ANNOUNCEMENT!r} "
+                        f"at start; see {gen_log}")
             B._await_posted(self.srpc, self.args.startup_timeout)
             resp = B._rpc(self.srpc, "generateblocks", {"count": count}, timeout=86400)
             if resp.get("result", {}).get("status") != "OK":
