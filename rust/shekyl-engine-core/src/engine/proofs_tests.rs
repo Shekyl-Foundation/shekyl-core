@@ -568,7 +568,11 @@ mod check_workflows {
         // exactly where it lands. The mock serves `prunable_hash: ZERO`, so
         // that is the digest the identity mixes.
         let txid = tx
-            .hash_with_supplied_prunable(PrunableHash::from_bytes([0u8; 32]), ArchivalLength::ZERO)
+            .hash_with_supplied_components(
+                None,
+                PrunableHash::from_bytes([0u8; 32]),
+                ArchivalLength::ZERO,
+            )
             .to_bytes();
         let mut txs = BTreeMap::new();
         txs.insert(hex::encode(txid), hex::encode(tx.serialize()));
@@ -890,7 +894,11 @@ mod check_workflows {
         let mut second = base.clone();
         second.prefix.unlock_time = 1;
         let txid2 = second
-            .hash_with_supplied_prunable(PrunableHash::from_bytes([0u8; 32]), ArchivalLength::ZERO)
+            .hash_with_supplied_components(
+                None,
+                PrunableHash::from_bytes([0u8; 32]),
+                ArchivalLength::ZERO,
+            )
             .to_bytes();
         assert_ne!(txid2, fx.txid, "the second body must be a different tx");
         let mut txs = (*fx.rpc.txs).clone();
@@ -937,7 +945,8 @@ mod check_workflows {
             let mut tx = base.clone();
             tx.prefix.unlock_time = i;
             let id = tx
-                .hash_with_supplied_prunable(
+                .hash_with_supplied_components(
+                    None,
                     PrunableHash::from_bytes([0u8; 32]),
                     ArchivalLength::ZERO,
                 )

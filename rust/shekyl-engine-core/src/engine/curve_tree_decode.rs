@@ -430,7 +430,7 @@ mod tests {
         };
         let scannable = ScannableBlock {
             block,
-            transactions: vec![non_miner],
+            transactions: vec![shekyl_wire::BoundTx::whole(non_miner)],
             first_output_index: None,
         };
 

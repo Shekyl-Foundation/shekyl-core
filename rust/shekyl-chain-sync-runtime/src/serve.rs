@@ -21,13 +21,11 @@
 //! budget defers is never read. A transaction whose archival good this
 //! node holds is served [`TxBody::Full`]; one whose good the retention
 //! prune has discarded is served as its skeleton
-//! ([`shekyl_chain_store::store::skeleton_of`], the store's one
+//! ([`shekyl_chain_store::store::TxRecord::skeleton_of`], the store's one
 //! constructor), which the requester rebinds by `SkeletonTx::txid`.
 
 use shekyl_chain_rules::AtHeight;
-use shekyl_chain_store::store::{
-    skeleton_of, ArchivalGood, AtIndex, ChainStore, ReadSnapshot, StoreError,
-};
+use shekyl_chain_store::store::{ArchivalGood, AtIndex, ChainStore, ReadSnapshot, StoreError};
 use shekyl_levin::{
     body_budget_bytes, BodyPlanner, RequestBodies, RequestHeaders, ResponseBodies, ResponseHeaders,
     HASH_SIZE, HEADERS_RESPONSE_BYTES,
@@ -192,7 +190,7 @@ fn body_of(snap: &ReadSnapshot<'_>, hash: BlockHash) -> Result<Option<BlockBody>
                 prunable,
                 pqc_auths,
             }) => TxBody::Full(record.wire_bytes(prunable, pqc_auths)),
-            AtIndex::Recorded(ArchivalGood::Discarded) => TxBody::Skeleton(skeleton_of(&record)),
+            AtIndex::Recorded(ArchivalGood::Discarded) => TxBody::Skeleton(record.skeleton_of()),
             AtIndex::BeyondCount => return Ok(None),
         };
         txs.push(tx);

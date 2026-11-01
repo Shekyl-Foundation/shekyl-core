@@ -51,7 +51,7 @@ fn rewrite_leaf_field(block: &mut ScannableBlock, f: impl FnOnce(Vec<u8>) -> Opt
     if let Some(new_blob) = f(blob) {
         fields.insert(pos, ExtraField::PqcLeafEntries(new_blob));
     }
-    tx.prefix.extra = Extra(fields).serialize();
+    tx.modify(|tx| tx.prefix.extra = Extra(fields).serialize());
 }
 
 /// Consumes the wallet: `ViewPair` is wipe-on-drop and not `Clone`, and the

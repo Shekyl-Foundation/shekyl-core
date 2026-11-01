@@ -67,7 +67,7 @@
 //! unit of verification its `txs_prunable_hash`. T3 and T4 are that good's
 //! read path (`DRS_E1_STX.md` §2.3). What every node keeps at every horizon
 //! is the **skeleton** — the pruned segment and the three txid operands —
-//! and [`skeleton_of`] is its one constructor (`SB-Q2`).
+//! and [`TxRecord::skeleton_of`] is its one constructor (`SB-Q2`).
 
 use core::marker::PhantomData;
 
@@ -212,7 +212,7 @@ pub struct TxLocation {
 /// The permanent half of a recorded transaction — **T3**'s answer: where it
 /// is, its pruned segment (eager, STX-Q4 A: every caller wants the bytes),
 /// and the three permanent operand rows every node keeps at every horizon
-/// (§7.7 leg (i)). Together these are the **skeleton** ([`skeleton_of`]).
+/// (§7.7 leg (i)). Together these are the **skeleton** ([`Self::skeleton_of`]).
 ///
 /// The archival good — the prunable region and, for a 4-part txid, the
 /// `pqc_auths` region — is **not** here: it is held or discarded per node
@@ -272,28 +272,21 @@ impl TxRecord {
         out
     }
 
-    /// The skeleton — see the free function [`skeleton_of`], the one
-    /// definition.
+    /// The **skeleton** of this recorded transaction: its pruned segment
+    /// and the three operands its txid binds — `prunable_hash`,
+    /// `pqc_auth_hash` (where 4-part) and `archival_len`. This is what every
+    /// node holds at every horizon (`PDM-Q5`, `SB-Q2`), what a pruned-sync
+    /// peer serves below the checkpoint, and what a `prune` reply carries
+    /// per transaction. The one constructor in the tree, in the crate that
+    /// owns the rows; the recipient rebinds it with [`SkeletonTx::txid`].
     #[must_use]
     pub fn skeleton_of(&self) -> SkeletonTx {
-        skeleton_of(self)
-    }
-}
-
-/// The **skeleton** of a recorded transaction: its pruned segment and the
-/// three operands its txid binds — `prunable_hash`, `pqc_auth_hash` (where
-/// 4-part) and `archival_len`. This is what every node holds at every
-/// horizon (`PDM-Q5`, `SB-Q2`), what a pruned-sync peer serves below the
-/// checkpoint, and what a `prune` reply carries per transaction. One
-/// constructor in the tree, in the crate that owns the rows; the recipient
-/// rebinds it with [`SkeletonTx::txid`].
-#[must_use]
-pub fn skeleton_of(record: &TxRecord) -> SkeletonTx {
-    SkeletonTx {
-        unprunable: record.pruned.as_bytes().to_vec(),
-        prunable_hash: record.prunable_hash,
-        pqc_auth_hash: record.pqc_auth_hash,
-        archival_len: record.archival_len,
+        SkeletonTx {
+            unprunable: self.pruned.as_bytes().to_vec(),
+            prunable_hash: self.prunable_hash,
+            pqc_auth_hash: self.pqc_auth_hash,
+            archival_len: self.archival_len,
+        }
     }
 }
 
@@ -653,10 +646,11 @@ pub(super) fn shard_at<T: ReadTables>(txn: &T, location: TxLocation) -> Result<S
 /// **Why the rows and not the body.** A prune deletes the regions and never these
 /// rows (`schema.rs` on `TXS_PQC_AUTH_HASH`: a row without its segment is
 /// *discarded*, §7.7 leg (iii), not a fault). Recomputing the digests from a
-/// pruned body instead would yield `keccak256("")` and `None`, so a pruned node
-/// would read its own discarded spends as carrying **no** good and place them
-/// outside the domain while an archival node keeps them inside — the two would
-/// disagree on shard boundaries, which is a consensus split. That is why
+/// pruned body instead would yield `keccak256("")` and `None`, so a node past
+/// the boundary would read its own discarded spends as carrying **no** good and
+/// place them outside the domain while one still holding the body keeps them
+/// inside — the two would disagree on shard boundaries, which is a consensus
+/// split. That is why
 /// `shekyl-wire` exposes the predicate only over explicit row values, and why
 /// this answer is stable across a prune (pinned by
 /// `the_predicate_survives_a_prune_on_the_stored_rows`).

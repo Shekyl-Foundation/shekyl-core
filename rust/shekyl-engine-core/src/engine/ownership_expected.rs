@@ -106,7 +106,9 @@ fn block_one_carrying(tx: &shekyl_wire::Transaction) -> Vec<crate::scan::OwnedTx
         shekyl_types::BlockHash::from_bytes([0x01; 32]),
     );
     scannable.block.transaction_hashes.push(tx.hash());
-    scannable.transactions.push(tx.clone());
+    scannable
+        .transactions
+        .push(shekyl_wire::BoundTx::whole(tx.clone()));
     crate::engine::curve_tree_decode::decode_block_leaves(&scannable).expect("the block decodes")
 }
 

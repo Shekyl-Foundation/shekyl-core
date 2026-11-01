@@ -2018,8 +2018,8 @@ fn horizons_under_a_set_are_the_ones_its_connect_accepts() {
 /// the digests it reads are the ones **recorded at ingest**. The store keeps both
 /// permanently — `txs_prunable_hash` and `txs_pqc_auth_hash` — and a prune
 /// deletes the *regions*, never the rows. So a node that has discarded a shard
-/// must still place its transactions **inside** the domain, exactly as an
-/// archival node does.
+/// must still place its transactions **inside** the domain, exactly as it did
+/// while it held them.
 ///
 /// The hazard this pins is the opposite: recomputing the digests from a pruned
 /// body yields `keccak256("")` and no component, which would place a node's own
@@ -2087,8 +2087,8 @@ fn the_predicate_survives_a_prune_on_the_stored_rows() {
     let after: Vec<Option<bool>> = (0..count).map(|id| good_state(&store, id)).collect();
     assert_eq!(
         before, after,
-        "the domain answer moved across a prune — pruned and archival nodes would \
-         disagree on shard boundaries"
+        "the domain answer moved across a prune — nodes either side of the boundary \
+         would disagree on shard boundaries"
     );
     assert_eq!(
         good_state(&store, BASE + 6),

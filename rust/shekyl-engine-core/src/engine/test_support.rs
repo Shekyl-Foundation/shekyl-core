@@ -772,13 +772,11 @@ impl DaemonEngine for TestDaemon {
     /// Serve the in-memory chain directly, overriding the single fetch
     /// override point (the [`block_fetch`](super::block_fetch) default
     /// would drive the real RPC transport `TestDaemon::post` panics on).
-    /// The synthetic chain stores full bodies (nothing is ever pruned), so
-    /// the body `form` is irrelevant here — the same lookup serves both,
-    /// and the scripted error/reorg queues fire identically on either.
-    fn fetch_scannable_block_in_form(
+    /// The synthetic chain's bodies are whole and already bound
+    /// (`BoundTx::whole`); the scripted error/reorg queues fire here.
+    fn fetch_scannable_block(
         &self,
         number: usize,
-        _form: super::block_fetch::TxBodyForm,
     ) -> impl Send + std::future::Future<Output = Result<ScannableBlock, RpcError>> {
         let state = self.state.clone();
         async move {

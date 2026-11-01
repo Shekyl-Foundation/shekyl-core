@@ -109,7 +109,7 @@ fn chain(mut block: ScannableBlock, previous: BlockHash) -> ScannableBlock {
     block.block.transaction_hashes = block
         .transactions
         .iter()
-        .map(shekyl_wire::transaction::Transaction::hash)
+        .map(shekyl_wire::BoundTx::txid)
         .collect();
     block
 }
@@ -118,10 +118,12 @@ fn chain(mut block: ScannableBlock, previous: BlockHash) -> ScannableBlock {
 /// input) — the on-chain spend of the watched output.
 fn spend_block(key_image: [u8; 32]) -> ScannableBlock {
     let mut block = build_typical_case_scannable_block(1);
-    block.transactions[0].prefix.inputs.push(Input::ToKey {
-        amount: 0,
-        key_offsets: Vec::new(),
-        key_image,
+    block.transactions[0].modify(|tx| {
+        tx.prefix.inputs.push(Input::ToKey {
+            amount: 0,
+            key_offsets: Vec::new(),
+            key_image,
+        });
     });
     block
 }

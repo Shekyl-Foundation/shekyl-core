@@ -147,7 +147,7 @@ pub use prune::{EpochFloors, Horizons, Pruned};
 pub use read::{RangeItem, RawBlockBytes, ReadSnapshot, RecordedBlockBody, TipState, TxWalkItem};
 pub use shard_reads::{ClosedShardRows, ShardFold};
 pub use snapshot_view::SnapshotView;
-pub use tx_reads::{skeleton_of, ArchivalGood, SegmentBytes, TxLocation, TxRecord};
+pub use tx_reads::{ArchivalGood, SegmentBytes, TxLocation, TxRecord};
 pub use undo::{RawRows, Restorable};
 pub use view::BatchView;
 pub use write::{invariant_of, WriteBatch};

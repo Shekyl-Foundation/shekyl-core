@@ -19,7 +19,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 use shekyl_curve_io::CompressedPoint;
 use shekyl_curve_primitives::Commitment;
 use shekyl_types::{BlockHeight, Timelock, TxHash};
-use shekyl_wire::{transaction::UNLOCK_TIME_BLOCK_SENTINEL, Block, Ct, Transaction};
+use shekyl_wire::{transaction::UNLOCK_TIME_BLOCK_SENTINEL, Block, BoundTx, Ct, Transaction};
 
 use shekyl_crypto_pq::{
     kem::{HybridCiphertext, HYBRID_KEM_CT_LEN, ML_KEM_768_CT_LEN, X25519_KEM_CT_LEN},
@@ -125,9 +125,12 @@ pub struct ScannableBlock {
     /// The block: header, inline miner (coinbase) transaction, and the
     /// non-miner transaction hashes.
     pub block: Block,
-    /// The block's non-miner transactions, in block order. Paired positionally
-    /// with `block.transaction_hashes`; the scanner enforces the length match.
-    pub transactions: Vec<Transaction>,
+    /// The block's non-miner transactions, in block order, each bound to
+    /// its txid ([`BoundTx`]: the body was fetched as a skeleton and its
+    /// identity recomputed from the bytes and the served operands, `SB-Q2`).
+    /// Paired positionally with `block.transaction_hashes`; the scanner
+    /// enforces the length match.
+    pub transactions: Vec<BoundTx>,
     /// Global index of the block's first output, or `None` if unindexed.
     pub first_output_index: Option<u64>,
 }
@@ -868,7 +871,7 @@ impl InternalScanner {
             block.miner_transaction.clone(),
         )];
         for (hash, tx) in block.transaction_hashes.iter().zip(transactions) {
-            txs_with_hashes.push((*hash, tx));
+            txs_with_hashes.push((*hash, tx.into_tx()));
         }
 
         // §5.4.9 F11-S per-tx safe-point check at the

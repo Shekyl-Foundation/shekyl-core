@@ -53,7 +53,9 @@ shekyl-archival-retention = { path = "../shekyl-archival-retention", optional = 
 [features]
 default = ["std"]
 std = ["shekyl-curve-io/std", "shekyl-curve-generators/std", "shekyl-curve-primitives/std", "shekyl-rpc-client/std"]
-test-utils = ["dep:shekyl-archival-retention"]
+# `shekyl-wire/test-fixtures` rides along: the fixture blocks bind their
+# whole bodies through `BoundTx::whole`, which production builds do not have.
+test-utils = ["dep:shekyl-archival-retention", "shekyl-wire/test-fixtures"]
 
 [dev-dependencies]
 shekyl-archival-retention = { path = "../shekyl-archival-retention" }

@@ -1759,7 +1759,7 @@ fn chain_paying_the_hybrid_wallet(
         if h == paying_at {
             let tx = transaction_paying_the_hybrid_wallet(amount);
             block.block.transaction_hashes.push(tx.hash());
-            block.transactions.push(tx);
+            block.transactions.push(shekyl_wire::BoundTx::whole(tx));
             // The coinbase has no outputs, so the payment is the block's
             // first output.
             paid_gindex = Some(next_output);

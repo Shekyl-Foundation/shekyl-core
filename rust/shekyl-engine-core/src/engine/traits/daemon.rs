@@ -301,48 +301,22 @@ pub(crate) trait DaemonEngine: Rpc + Clone + Send + Sync + 'static {
     ///
     /// # Default implementation
     ///
-    /// The **single override point** for scannable-block fetching: the two
-    /// body-form wrappers below are provided methods that delegate here, so
-    /// an implementor (the Stage-4 `ActorRef<DaemonActor>` mailbox route,
-    /// the test `TestDaemon`'s synthetic chains) overrides ONE method and
-    /// both forms follow — the override-both-in-lockstep hazard of two
-    /// independent defaults is unrepresentable. The default delegates to
-    /// the in-crate native fetch (`engine::block_fetch`). Trait method
-    /// signatures do not change across the swap-in (§7).
-    fn fetch_scannable_block_in_form(
-        &self,
-        number: usize,
-        form: crate::engine::block_fetch::TxBodyForm,
-    ) -> impl std::future::Future<Output = Result<ScannableBlock, RpcError>> + Send {
-        crate::engine::block_fetch::fetch_scannable_block_with_form(self, number, form)
-    }
-
-    /// [`Self::fetch_scannable_block_in_form`] in the **pruned** body form —
-    /// the refresh path (no per-body hash gate; the pruned form is the
-    /// bandwidth-cheap one). Provided; override
-    /// [`Self::fetch_scannable_block_in_form`] instead.
+    /// The **single override point** for scannable-block fetching, and the
+    /// one body form (`SB-Q2`): every non-miner transaction arrives as a
+    /// skeleton bound to its txid (`shekyl_wire::BoundTx`), which refresh,
+    /// the proofs workflow and the P-scan all consume — the P-scan's SP-6
+    /// exhaustiveness gate (`pscan::exhaustiveness`) reads each body's
+    /// bound identity, so no whole-body form exists for it to need. An
+    /// implementor (the Stage-4 `ActorRef<DaemonActor>` mailbox route, the
+    /// test `TestDaemon`'s synthetic chains) overrides this one method. The
+    /// default delegates to the in-crate native fetch
+    /// (`engine::block_fetch`). Trait method signatures do not change across
+    /// the swap-in (§7).
     fn fetch_scannable_block(
         &self,
         number: usize,
     ) -> impl std::future::Future<Output = Result<ScannableBlock, RpcError>> + Send {
-        self.fetch_scannable_block_in_form(number, crate::engine::block_fetch::TxBodyForm::Pruned)
-    }
-
-    /// [`Self::fetch_scannable_block_in_form`] in the **full** (unpruned)
-    /// body form, so each transaction re-hashes to its committed hash.
-    ///
-    /// This is the form the P-scan's SP-6 exhaustiveness gate consumes
-    /// (`pscan::exhaustiveness`): the gate recomputes every body's hash from
-    /// received material, and a storage-pruned FCMP++ spend hashes with the
-    /// null prunable component — so a pruned fetch can never satisfy the gate
-    /// on a spend-bearing block, and the scan would halt there as a
-    /// forged-absence refusal. Provided; override
-    /// [`Self::fetch_scannable_block_in_form`] instead.
-    fn fetch_scannable_block_full(
-        &self,
-        number: usize,
-    ) -> impl std::future::Future<Output = Result<ScannableBlock, RpcError>> + Send {
-        self.fetch_scannable_block_in_form(number, crate::engine::block_fetch::TxBodyForm::Full)
+        crate::engine::block_fetch::default_fetch_scannable_block(self, number)
     }
 
     /// Atomically snapshot the daemon's fee-rate estimate at each

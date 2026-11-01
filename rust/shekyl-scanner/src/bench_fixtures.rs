@@ -390,7 +390,7 @@ fn assemble_scannable_block(
 
     ScannableBlock {
         block,
-        transactions: vec![tx],
+        transactions: vec![shekyl_wire::BoundTx::whole(tx)],
         first_output_index: Some(0),
     }
 }

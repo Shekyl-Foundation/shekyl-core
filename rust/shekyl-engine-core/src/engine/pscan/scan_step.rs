@@ -59,7 +59,8 @@ use shekyl_engine_state::transfer::eligible_height;
 use shekyl_scanner::{GuaranteedScanner, ScannableBlock};
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, TxHash};
 use shekyl_units::AtomicUnits;
-use shekyl_wire::transaction::{Input, Transaction};
+use shekyl_wire::transaction::Input;
+use shekyl_wire::BoundTx;
 
 use crate::engine::bond_watch::match_watch;
 
@@ -600,7 +601,7 @@ impl std::error::Error for DualExtractError {
 /// from backing eligibility, never admit an unsafe one (GF4b-4's acceptance
 /// criterion for this arm).
 struct OwnEmissionSlots<'a> {
-    transactions: &'a [Transaction],
+    transactions: &'a [BoundTx],
     known_personas: &'a BTreeMap<PCanonicalId, u32>,
     /// Positionally-paired hash → tx index (32-byte copies only; built
     /// without touching any vin blob).
@@ -611,7 +612,7 @@ struct OwnEmissionSlots<'a> {
 
 impl<'a> OwnEmissionSlots<'a> {
     fn new(
-        transactions: &'a [Transaction],
+        transactions: &'a [BoundTx],
         transaction_hashes: &'a [TxHash],
         known_personas: &'a BTreeMap<PCanonicalId, u32>,
     ) -> Self {

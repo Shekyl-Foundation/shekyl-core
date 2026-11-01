@@ -745,7 +745,7 @@ impl ReadSnapshot<'_> {
 
     /// **T3.** The permanent half of the transaction with `hash` — where it
     /// is, its pruned segment, and the three permanent operand rows (the
-    /// skeleton, [`skeleton_of`](super::skeleton_of)) — or `None`. Replaces
+    /// skeleton, [`TxRecord::skeleton_of`](super::TxRecord::skeleton_of)) — or `None`. Replaces
     /// `get_pruned_tx_blob`, `get_prunable_tx_hash`, `get_tx_block_height`,
     /// and with [`tx_archival_good`](Self::tx_archival_good) the whole of
     /// `get_tx_blob` ([`TxRecord::wire_bytes`], STX-8).
@@ -805,7 +805,8 @@ impl ReadSnapshot<'_> {
     /// never deletes — so this is the one safe way to evaluate the ruling's
     /// predicate on a node that has discarded bodies. Recomputing the digests
     /// from a pruned body would place its own discarded spends outside the
-    /// domain and split shard boundaries against an archival node.
+    /// domain and split shard boundaries against a node that still holds the
+    /// body.
     ///
     /// Bound first, as [`tx_archival_good`](Self::tx_archival_good).
     ///

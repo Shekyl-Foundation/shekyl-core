@@ -70,8 +70,8 @@
 //! presence read that *selected* what to discard would be a second,
 //! node-local source (§8), and the whole point is that every node computes
 //! the same `D(E)` whether it discarded last epoch, skeleton-synced or just
-//! booted: the cell and the length rows are what a pruned node and an
-//! archival node both hold. Every epoch comparison is a branch or an
+//! booted: the cell and the length rows are what every node holds, before
+//! and after the boundary. Every epoch comparison is a branch or an
 //! addition, never `E − 2` on a `u64` (§4, Bugbot 2026-09-23).
 //!
 //! # Every block the discard rests on is checked (SI-13, SI-24)

@@ -100,7 +100,8 @@ fn prunable_hash_is_keccak_of_the_prunable_segment_on_both_shapes() {
     assert_eq!(miner.archival_len(), ArchivalLength::ZERO);
     assert_eq!(
         miner.hash(),
-        miner.hash_with_supplied_prunable(
+        miner.hash_with_supplied_components(
+            None,
             PrunableHash::from_bytes([0x77; 32]),
             ArchivalLength::from_raw(0x7777)
         ),
