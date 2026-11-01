@@ -39,7 +39,7 @@ pub enum StoreInvariant {
     ///
     /// Armed by the parent-is-tip pre-check in `connect` and by the
     /// insert-once handles on `blocks` / `block_heights` / `block_info` /
-    /// `hf_versions` / `block_burn`.
+    /// `rule_set_in_force` / `block_burn`.
     TipMismatch,
     /// **SI-3** — `tx_indices` is keyed by tx hash: inserting a hash already
     /// present is fatal (CEN-G1's belt; CEN-F5's corollary for the miner
