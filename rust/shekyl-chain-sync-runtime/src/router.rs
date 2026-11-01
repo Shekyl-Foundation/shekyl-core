@@ -21,8 +21,9 @@
 //!   ingress.
 //! - **2008, an announced block** (`NOTIFY_NEW_COMPACT_BLOCK`), is admitted
 //!   here too, within its cap, and goes to the owner whole: announcements
-//!   are chain sync's (CS-Q1). 2009, a peer asking for an announced block's
-//!   missing transactions, stays the C++ handler's until the cutover.
+//!   are chain sync's (CS-Q1). So does **2009**, a peer asking for an
+//!   announced block's missing transactions: the owner serves it (CS-Q9 §5
+//!   row 9).
 //! - **The claim tap** (CS-Q10, Rick 2026-10-24): an inbound session's
 //!   handshake request (1001) and either direction's timed sync (1002)
 //!   carry the peer's sync payload, which the C++ handler also reads. Those
@@ -59,7 +60,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use shekyl_levin::{
     BucketHead, DefinedCommand, Flags, SyncCommand, COMMAND_HANDSHAKE, COMMAND_TIMED_SYNC,
-    FLAGS_DEFINED, HEADER_SIZE, NOTIFY_NEW_COMPACT_BLOCK,
+    FLAGS_DEFINED, HEADER_SIZE, NOTIFY_NEW_COMPACT_BLOCK, NOTIFY_REQUEST_COMPACT_MISSING_TX,
 };
 use shekyl_seam::{ConnectorId, Post, SocketId, SyncPayload};
 use tokio::sync::mpsc;
@@ -95,6 +96,14 @@ pub enum Routed {
     },
     /// An announced block (2008), still encoded.
     Announce {
+        /// The session.
+        id: SocketId,
+        /// The payload.
+        payload: Vec<u8>,
+    },
+    /// A request for an announced block's missing transactions (2009),
+    /// still encoded.
+    MissingTxs {
         /// The session.
         id: SocketId,
         /// The payload.
@@ -231,6 +240,9 @@ impl Router {
                         Taken::Message(Admitted::Announce, payload) => {
                             Routed::Announce { id, payload }
                         }
+                        Taken::Message(Admitted::MissingTxs, payload) => {
+                            Routed::MissingTxs { id, payload }
+                        }
                         Taken::Tap(kind, payload) => Routed::Tap { id, kind, payload },
                     })
                     .collect::<Vec<_>>();
@@ -323,20 +335,24 @@ pub enum Admitted {
     Sync(SyncCommand),
     /// An announced block (2008).
     Announce,
+    /// A request for an announced block's missing transactions (2009).
+    MissingTxs,
 }
 
 impl Admitted {
     fn of(command: u32) -> Option<Self> {
-        if command == NOTIFY_NEW_COMPACT_BLOCK {
-            return Some(Self::Announce);
+        match command {
+            NOTIFY_NEW_COMPACT_BLOCK => Some(Self::Announce),
+            NOTIFY_REQUEST_COMPACT_MISSING_TX => Some(Self::MissingTxs),
+            _ => SyncCommand::from_wire(command).map(Self::Sync),
         }
-        SyncCommand::from_wire(command).map(Self::Sync)
     }
 
     const fn payload_cap(self) -> u64 {
         match self {
             Self::Sync(command) => command.payload_cap(),
             Self::Announce => DefinedCommand::NewCompactBlock.payload_cap(),
+            Self::MissingTxs => DefinedCommand::RequestCompactMissingTx.payload_cap(),
         }
     }
 }

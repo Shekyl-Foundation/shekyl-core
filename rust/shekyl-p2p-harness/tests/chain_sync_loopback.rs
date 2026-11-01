@@ -18,13 +18,14 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use shekyl_chain_ingest::ProductionSubstrate;
-use shekyl_chain_rules::{form_header, target_claim, FormAttempt, Substrate};
+use shekyl_chain_rules::{form_header, target_claim, AtHeight, FormAttempt, Substrate};
 use shekyl_chain_store::codec::FollowingDegradedCell;
 use shekyl_chain_store::store::SnapshotView;
 use shekyl_chain_sync::SyncState;
 use shekyl_levin::{
-    notify, RequestBodies, ResponseBodies, ResponseHeaders, SyncCommand, COMMAND_HANDSHAKE,
-    NOTIFY_NEW_COMPACT_BLOCK, NOTIFY_NEW_TRANSACTIONS,
+    notify, NewCompactBlock, PortableMap, RequestBodies, RequestCompactMissingTx, ResponseBodies,
+    ResponseHeaders, SyncCommand, COMMAND_HANDSHAKE, NOTIFY_NEW_COMPACT_BLOCK,
+    NOTIFY_NEW_TRANSACTIONS, NOTIFY_REQUEST_COMPACT_MISSING_TX,
 };
 use shekyl_p2p_harness::sync::{
     announcement, fork_headers, frame, request_headers, substrate, Bodies, Corpus, HeaderChainPeer,
@@ -686,6 +687,7 @@ async fn the_router_forwards_non_sync_commands_untouched() {
 struct Answers {
     headers: Vec<ResponseHeaders>,
     bodies: Vec<ResponseBodies>,
+    compact: Vec<NewCompactBlock>,
 }
 
 struct Asker(Arc<Mutex<Answers>>);
@@ -700,6 +702,9 @@ impl SyncPeer for Asker {
             Some(SyncCommand::ResponseBodies) => answers
                 .bodies
                 .push(ResponseBodies::decode(payload).expect("the node's response decodes")),
+            _ if command == NOTIFY_NEW_COMPACT_BLOCK => answers
+                .compact
+                .push(NewCompactBlock::load(payload).expect("the node's 2008 decodes")),
             _ => {}
         }
         Vec::new()
@@ -896,4 +901,89 @@ async fn a_request_flood_beside_cpp_bytes_is_bounded_by_the_serving_queue() {
     );
     assert_eq!(node.closed(id), None);
     node.stop().await;
+}
+
+/// A peer asking for an announced block's missing transactions (2009) is
+/// answered by the owner from the store (CS-5 §6): one 2008 carrying the
+/// block, its witness and the transactions asked for. A duplicate index,
+/// an index past the block's list and a block the node does not hold each
+/// close the asking session.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_owner_serves_a_missing_tx_request_and_closes_on_its_faults() {
+    logs();
+    let (corpus, steps) = spend();
+    let mut node = Node::start("missing-tx", corpus.rules(), &steps, 1, rng()).await;
+    let (hash, listed) = {
+        let snap = node.chain.store.begin_read().expect("a snapshot");
+        let tip = snap.tip().expect("a tip").recorded.expect("a chain");
+        (0..=tip.height.to_raw())
+            .find_map(
+                |height| match snap.block(BlockHeight::from_raw(height)).expect("a block") {
+                    AtHeight::Recorded(body) if !body.block.transaction_hashes.is_empty() => {
+                        Some((body.block.hash(), body.block.transaction_hashes.len()))
+                    }
+                    _ => None,
+                },
+            )
+            .expect("the corpus lists a transaction")
+    };
+    let ask = |indices: Vec<u64>, block: BlockHash| {
+        frame_notify(
+            NOTIFY_REQUEST_COMPACT_MISSING_TX,
+            &RequestCompactMissingTx {
+                block_hash: *block.as_bytes(),
+                current_blockchain_height: 1,
+                missing_tx_indices: indices,
+            },
+        )
+    };
+
+    let answers = Arc::new(Mutex::new(Answers::default()));
+    let id = node.connect(Box::new(Asker(Arc::clone(&answers))), None);
+    assert!(node.inject(id, ask(vec![0], hash)).await);
+    assert!(
+        node.wait(LIMIT, |_| !answers
+            .lock()
+            .expect("answers")
+            .compact
+            .is_empty())
+            .await,
+        "no 2008 answered the 2009"
+    );
+    let compact = answers.lock().expect("answers").compact[0].clone();
+    let block = Block::from_bytes(&compact.b.block).expect("the block parses");
+    assert_eq!(block.hash(), hash);
+    assert_eq!(compact.b.txs.len(), 1);
+    assert!(!compact.b.txs[0].blob.is_empty());
+    assert_eq!(
+        compact.current_blockchain_height, 1,
+        "the request's height is echoed"
+    );
+    assert_eq!(node.closed(id), None);
+
+    let unknown = BlockHash::from_bytes([0xab; 32]);
+    let out_of_range = u64::try_from(listed).expect("small");
+    for (indices, block, case) in [
+        (vec![0, 0], hash, "a duplicate index"),
+        (vec![out_of_range], hash, "an index past the list"),
+        (vec![0], unknown, "an unknown block"),
+    ] {
+        let answers = Arc::new(Mutex::new(Answers::default()));
+        let id = node.connect(Box::new(Asker(Arc::clone(&answers))), None);
+        assert!(node.inject(id, ask(indices, block)).await);
+        assert!(
+            node.wait(LIMIT, |node| node.closed(id).is_some()).await,
+            "{case} did not close its session"
+        );
+        assert!(
+            answers.lock().expect("answers").compact.is_empty(),
+            "{case} was answered"
+        );
+    }
+    node.stop().await;
+}
+
+/// `message` as one Levin notify of `command`.
+fn frame_notify(command: u32, message: &impl PortableMap) -> Vec<u8> {
+    notify(command, &message.store().expect("the message encodes"))
 }

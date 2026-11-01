@@ -195,7 +195,9 @@ fn a_session_holds_one_waiting_request_of_each_kind() {
     assert_eq!(serving.queue.len(), 2);
     match &serving.queue[0] {
         ServeRequest::Headers(request) => assert_eq!(request.block_ids, vec![[64; 32]]),
-        ServeRequest::Bodies(_) => panic!("the header request keeps its place"),
+        ServeRequest::Bodies(_) | ServeRequest::MissingTxs(_) => {
+            panic!("the header request keeps its place")
+        }
     }
     assert!(
         matches!(&serving.queue[1], ServeRequest::Bodies(request) if request.hashes == vec![[9; 32]])

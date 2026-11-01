@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use shekyl_levin::{
     invoke, notify, response, BucketHead, DefinedCommand, Flags, SyncCommand, COMMAND_HANDSHAKE,
-    COMMAND_TIMED_SYNC, HEADER_SIZE, NOTIFY_NEW_COMPACT_BLOCK,
+    COMMAND_TIMED_SYNC, HEADER_SIZE, NOTIFY_NEW_COMPACT_BLOCK, NOTIFY_REQUEST_COMPACT_MISSING_TX,
 };
 use shekyl_seam::{Endpoint, Post, SocketId, SyncPayload};
 use tokio::sync::mpsc;
@@ -534,6 +534,43 @@ fn an_attached_router_hands_an_announcement_to_the_owner() {
     let forwarded = seen.lock().expect("unpoisoned");
     assert!(
         matches!(forwarded.last(), Some(Post::Deliver { bytes, .. }) if *bytes == other_bucket(b"tx"))
+    );
+}
+
+/// An attached router keeps a request for an announced block's missing
+/// transactions (2009) for the owner, which serves it (CS-5 §6). Nothing
+/// of it reaches the C++ handler.
+#[test]
+fn an_attached_router_hands_a_missing_tx_request_to_the_owner() {
+    let (forward, seen) = recorder();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let router = Router::attached(forward, tx);
+    let id = socket(22);
+    router.post(Post::Established {
+        id,
+        endpoint: endpoint(),
+    });
+    let _established = rx.try_recv().expect("established");
+    let before = seen.lock().expect("unpoisoned").len();
+    router.post(Post::Deliver {
+        id,
+        connector: endpoint().connector(),
+        bytes: notify(NOTIFY_REQUEST_COMPACT_MISSING_TX, b"indices"),
+    });
+    assert_eq!(
+        rx.try_recv().expect("the request"),
+        Routed::MissingTxs {
+            id,
+            payload: b"indices".to_vec()
+        }
+    );
+    assert_eq!(rx.try_recv().expect("finished"), Routed::Finished { id });
+    let forwarded = seen.lock().expect("unpoisoned");
+    assert!(
+        !forwarded[before..]
+            .iter()
+            .any(|post| matches!(post, Post::Deliver { .. })),
+        "the C++ handler received the 2009"
     );
 }
 

@@ -39,8 +39,9 @@
 //!   fires, those messages are taken and then the deadline runs.
 //! - **Announcements** (2008, `NOTIFY_NEW_COMPACT_BLOCK`) come from the
 //!   attached router and are the model's [`Event::Announce`].
-//!   `RequestMissingTxs` is encoded and sent; a peer's own 2009 stays the
-//!   C++ handler's until the cutover.
+//!   `RequestMissingTxs` is encoded and sent as our own 2009, and a peer's
+//!   2009 is served from the store like a header or body request
+//!   ([`crate::serve::serve_missing_txs`]): its faults close the session.
 //! - **Relay** is the model's decision ([`Command::Relay`]): a block that
 //!   connected as the new tip while this node, with it, is not `Behind`,
 //!   however it arrived. The owner builds that compact announcement (the
@@ -65,7 +66,8 @@ use shekyl_draw_rng::RelayRng;
 use shekyl_levin::{
     notify, CoreSyncData, GetTxpoolComplement, HandshakeRequest, NewCompactBlock, PortableMap,
     RequestBodies, RequestCompactMissingTx, RequestHeaders, SyncCommand, TimedSyncRequest,
-    TimedSyncResponse, HASH_SIZE, NOTIFY_GET_TXPOOL_COMPLEMENT, NOTIFY_REQUEST_COMPACT_MISSING_TX,
+    TimedSyncResponse, HASH_SIZE, NOTIFY_GET_TXPOOL_COMPLEMENT, NOTIFY_NEW_COMPACT_BLOCK,
+    NOTIFY_REQUEST_COMPACT_MISSING_TX,
 };
 use shekyl_peer_policy::{Invalidate, SyncReply, SyncReplyAction};
 use shekyl_runtime::{Pool, RuntimeBudget, ThreadName};
@@ -80,7 +82,9 @@ use tracing::Instrument;
 use crate::executor::Executor;
 use crate::relay;
 use crate::router::{Routed, Tapped};
-use crate::serve::{serve_bodies, serve_headers};
+use crate::serve::{
+    serve_bodies, serve_headers, serve_missing_txs, MissingTxsRefused, MissingTxsServed,
+};
 use crate::session::Session;
 use shekyl_chain_sync::{
     BoundArrival, ClaimError, Command, Event, Job, Outcome, PeerClaim, Proved, Sync as Model,
@@ -233,18 +237,9 @@ struct Published {
 
 /// What the owner's own spawned work reports back.
 enum Input {
-    Proven {
-        job: Job,
-        results: Vec<Proved>,
-    },
-    Entry {
-        tag: u64,
-        reply: Reply,
-    },
-    Served {
-        session: Session,
-        bytes: Option<Vec<u8>>,
-    },
+    Proven { job: Job, results: Vec<Proved> },
+    Entry { tag: u64, reply: Reply },
+    Served { session: Session, served: Served },
 }
 
 /// An offer waiting on the entry.
@@ -264,6 +259,18 @@ struct Offered {
 enum ServeRequest {
     Headers(RequestHeaders),
     Bodies(RequestBodies),
+    MissingTxs(RequestCompactMissingTx),
+}
+
+/// What serving one request came to.
+enum Served {
+    /// The answer, framed.
+    Send(Vec<u8>),
+    /// Nothing is sent: the store could not answer, or the block left the
+    /// main chain after it was announced.
+    Nothing,
+    /// The request was the peer's fault: the session closes.
+    Close(MissingTxsRefused),
 }
 
 /// One session's serving queue: the request being served, and at most
@@ -603,6 +610,16 @@ where
             }
             Routed::Claim { id, sync } => self.claim(Session::new(id), sync),
             Routed::Announce { id, payload } => self.announce(Session::new(id), &payload),
+            Routed::MissingTxs { id, payload } => {
+                let session = Session::new(id);
+                match RequestCompactMissingTx::load(&payload) {
+                    Ok(request) => self.queue_serve(session, ServeRequest::MissingTxs(request)),
+                    Err(err) => {
+                        tracing::debug!(%session, %err, "a missing-tx request that does not decode");
+                        self.close(session);
+                    }
+                }
+            }
             Routed::Tap { id, kind, payload } => self.tap(Session::new(id), kind, &payload),
             Routed::Message {
                 id,
@@ -684,32 +701,30 @@ where
         let store = Arc::clone(&self.store);
         let inputs = self.inputs.clone();
         tokio::task::spawn_blocking(move || {
-            let bytes = match request {
+            let served = match request {
                 ServeRequest::Headers(request) => serve_headers(&store, &request)
                     .map_err(|err| err.to_string())
-                    .and_then(|response| {
-                        response
-                            .store()
-                            .map(|payload| notify(SyncCommand::ResponseHeaders.wire_id(), &payload))
-                            .map_err(|err| err.to_string())
-                    }),
+                    .and_then(|response| framed(SyncCommand::ResponseHeaders.wire_id(), &response))
+                    .map(Served::Send),
                 ServeRequest::Bodies(request) => serve_bodies(&store, &request)
                     .map_err(|err| err.to_string())
-                    .and_then(|response| {
-                        response
-                            .store()
-                            .map(|payload| notify(SyncCommand::ResponseBodies.wire_id(), &payload))
-                            .map_err(|err| err.to_string())
+                    .and_then(|response| framed(SyncCommand::ResponseBodies.wire_id(), &response))
+                    .map(Served::Send),
+                ServeRequest::MissingTxs(request) => serve_missing_txs(&store, &request)
+                    .map_err(|err| err.to_string())
+                    .and_then(|served| match served {
+                        MissingTxsServed::Answer(block) => {
+                            framed(NOTIFY_NEW_COMPACT_BLOCK, &block).map(Served::Send)
+                        }
+                        MissingTxsServed::LeftMain => Ok(Served::Nothing),
+                        MissingTxsServed::Refused(refused) => Ok(Served::Close(refused)),
                     }),
             };
-            let bytes = match bytes {
-                Ok(bytes) => Some(bytes),
-                Err(err) => {
-                    tracing::error!(%err, "a request could not be served");
-                    None
-                }
-            };
-            let _gone = inputs.send(Input::Served { session, bytes });
+            let served = served.unwrap_or_else(|err| {
+                tracing::error!(%err, "a request could not be served");
+                Served::Nothing
+            });
+            let _gone = inputs.send(Input::Served { session, served });
         });
     }
 
@@ -739,13 +754,22 @@ where
                 });
                 self.room();
             }
-            Input::Served { session, bytes } => {
+            Input::Served { session, served } => {
                 if let Some(serving) = self.serving.get_mut(&session) {
                     serving.busy = false;
                 }
-                if let Some(bytes) = bytes {
+                match served {
                     // A refused send is the transport's close, not sync's.
-                    let _sent = self.hub.send(session.socket(), bytes);
+                    Served::Send(bytes) => {
+                        let _sent = self.hub.send(session.socket(), bytes);
+                    }
+                    Served::Nothing => {}
+                    Served::Close(refused) => {
+                        tracing::debug!(%session, ?refused, "a missing-tx request closes its session");
+                        self.serving.remove(&session);
+                        self.close(session);
+                        return;
+                    }
                 }
                 self.serve_next(session);
             }
@@ -1124,6 +1148,14 @@ fn proved_kind(proved: &Proved) -> &'static str {
         Proved::Refused(_) => "refused",
         Proved::NotHeld => "not held",
     }
+}
+
+/// `message` encoded and framed as the notify `command`.
+fn framed(command: u32, message: &impl PortableMap) -> Result<Vec<u8>, String> {
+    message
+        .store()
+        .map(|payload| notify(command, &payload))
+        .map_err(|err| err.to_string())
 }
 
 /// The entry's reply as the model's outcome.
