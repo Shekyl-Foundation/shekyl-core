@@ -159,7 +159,7 @@ A term listed under two parents is one term. Part B's terms are §11; a parent a
 | split | reorg | the point where the two chains part (`{split-height}`) | |
 | added | reorg | blocks in the new chain | |
 | removed | reorg | blocks discarded from the old chain | |
-| window | rate | the observation window, in seconds | |
+| window | rate, speed | the observation window, in seconds | |
 | observed | rate | blocks seen in the window | |
 | expected | rate | blocks expected in the window | |
 | mine | — | the daemon's miner and its control | |
@@ -889,7 +889,7 @@ Each shape's fields today, and their names under this Part. The census from sour
 
 **Proof of work** (`pow`): `height` → `height`; `block_blob` → `hashing`; `seed_hash` (`""` allowed) → `seed` (optional). The bare-string reply → `{"pow": h}`.
 
-**Miner** (`mine_start`, `mine_status`): `miner_address` → `address`; `threads_count` (0 for auto) → `threads` (an integer, or the keyword `auto`). Status: `active` → `active`; `speed` (hashes per second) → `speed`; `threads_count` → `threads`; `address` (`""` when idle) → `address` (`null` when idle); `pow_algorithm` (always `RandomX`) goes; `block_target` → `block_spacing`; `block_reward` → `reward`; the difficulty triple → `difficulty`.
+**Miner** (`mine_start`, `mine_status`): `miner_address` → `address`; `threads_count` (0 for auto) → `threads` (an integer, or the keyword `auto`). Status: `active` → `active`; `speed` (hashes counted over its window) → `speed`; `threads_count` → `threads`; `address` (`""` when idle) → `address` (`null` when idle); `pow_algorithm` (always `RandomX`) goes; `block_target` → `block_spacing`; `block_reward` → `reward`; the difficulty triple → `difficulty`.
 
 **Bans** (`ban_add`, `ban_remove`, `ban_list`, `ban_show`): `set_bans`' list of `{host, ip, ban, seconds}` → one `host` and `duration` per `ban_add` and one `host` per `ban_remove`; `ip` goes (the host carries it); `banned`'s `address` → `host`. An entry: `host`, `seconds` → `duration` (remaining), `permanent` → `permanent`; `banned`'s `banned` goes (`ban_show` replies `null` for a host not banned).
 
@@ -965,6 +965,7 @@ Every method, parameter and field name above, with the holder its walk starts fr
 | tx submit fields | `tx` | `verdict`, `mined_height`, `cause` |
 | pow reply | `block` | `pow` |
 | mine status fields | `mine` | `active`, `speed`, `threads`, `address`, `block_spacing`, `reward`, `difficulty` |
+| mine speed | `mine speed` | `count`, `window` |
 | ban element | `ban` | `host`, `duration`, `permanent` |
 | relay stats fields | `relay` | `floor`, `tally` |
 | floor element | `relay floor` | `connector`, `outbound_count`, `outbound_min`, `below` |
@@ -1062,7 +1063,7 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | state | connection, tor | the connection's state; under `tor`, the §4.3 projection (IG-Q69) | |
 | age | connection | how long it has lived | |
 | idle | download, upload | time since the last bytes | |
-| speed | download, upload, mine | per second: bytes, or under `mine` hashes | |
+| speed | download, upload, mine | per second: bytes under download and upload; under `mine`, hashes counted over `window` | |
 | average | speed | the average | |
 | current | speed | the current value | |
 | packets | download, upload | a packet count | |
@@ -1123,7 +1124,7 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | blocks | span | a length in blocks | |
 | body | block, template, tx | a block's or transaction's serialized bytes, kind `bytes` | |
 | complete | bond | the whole corpus | |
-| count | alt, block, bonded, chain, failure, frozen, gray, inbound, leaf, outbound, private, sender, served, tx, txpool, white, respawn | how many | |
+| count | alt, block, bonded, chain, failure, frozen, gray, inbound, leaf, outbound, private, sender, served, speed, tx, txpool, white, respawn | how many | |
 | depth | header | a depth in blocks | |
 | difficulty | alt, daemon, header, mine, template | a mining difficulty (`HexU128`) | |
 | download | connection, span | bytes we receive | |

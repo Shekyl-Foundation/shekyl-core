@@ -31,6 +31,7 @@ use shekyl_miner::{
 };
 use shekyl_pow_randomx::CacheStore;
 use shekyl_rpc_types::errors::Diagnostic;
+use shekyl_rpc_types::mining::MineSpeed;
 use shekyl_types::BlockHeight;
 use shekyl_units::AtomicUnits;
 use tokio::sync::watch;
@@ -367,14 +368,15 @@ impl MiningFacts for MiningControl {
     }
 }
 
-/// The miner's reading as the facts carry it: the hash count and the
-/// window it was counted over, so a rate below one hash a second survives
-/// to the wire's edge instead of truncating here.
+/// The miner's [`shekyl_miner::HashRate`] as [`MineSpeed`]: `hashes` is
+/// `count`, and the window's complete seconds are `window`.
 fn miner_state(miner: &MinerStatus) -> MinerState {
     MinerState {
         threads: u32::try_from(miner.threads).unwrap_or(u32::MAX),
-        hashes: miner.rate.hashes,
-        window_secs: miner.rate.window.as_secs(),
+        speed: MineSpeed {
+            count: miner.rate.hashes,
+            window: miner.rate.window.as_secs(),
+        },
     }
 }
 
@@ -382,14 +384,13 @@ fn miner_state(miner: &MinerStatus) -> MinerState {
 mod rate_tests {
     use super::{miner_state, MinerStatus};
     use shekyl_miner::HashRate;
+    use shekyl_rpc_types::mining::MineSpeed;
     use std::time::Duration;
 
-    /// Observed on testnet: one thread near 1 H/s read 0 for half an hour,
-    /// so a slow miner and a stopped one were the same reading. Eight
-    /// hashes in ten seconds is 0.8 H/s; the facts carry the count and the
-    /// window, not their truncated quotient.
+    /// Eight hashes in ten seconds stays eight hashes over ten seconds.
+    /// The window is complete seconds, which is how the miner counts.
     #[test]
-    fn a_miner_below_one_hash_a_second_keeps_its_count_and_window() {
+    fn the_facts_carry_the_miners_count_and_window() {
         let status = MinerStatus {
             active: true,
             threads: 1,
@@ -403,8 +404,13 @@ mod rate_tests {
         };
         let state = miner_state(&status);
         assert_eq!(state.threads, 1);
-        assert_eq!(state.hashes, 8);
-        assert_eq!(state.window_secs, 10);
+        assert_eq!(
+            state.speed,
+            MineSpeed {
+                count: 8,
+                window: 10
+            }
+        );
     }
 }
 

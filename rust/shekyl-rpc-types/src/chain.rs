@@ -224,7 +224,10 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// `send_raw_transaction` reject-cause set: the Rust daemon admits a
 /// JoinMarket bond post, and no daemon authors the cause. `get_version`
 /// gains nothing.
-pub const CORE_RPC_VERSION_MINOR: u32 = 63;
+/// 3.64: `mining_status.speed` is the hash count over its window of
+/// complete seconds. A whole-hash quotient read `0` for a miner below
+/// one hash a second. `get_version` gains nothing.
+pub const CORE_RPC_VERSION_MINOR: u32 = 64;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -649,11 +652,12 @@ mod tests {
         // refusal the error object (RT-W10 step 1). 3.63 is the flip's
         // client shapes: `start_mining` takes threads and no address,
         // `generateblocks` takes a count (FLIP-Q4), and the reject cause
-        // `join_market_unsupported` leaves the set.
-        assert_eq!(CORE_RPC_VERSION, 196_671);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 63);
+        // `join_market_unsupported` leaves the set. 3.64 makes
+        // `mining_status.speed` the hash count over its window.
+        assert_eq!(CORE_RPC_VERSION, 196_672);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 64);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 63);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 64);
     }
 
     #[test]
