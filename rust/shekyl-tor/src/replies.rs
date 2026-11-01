@@ -41,6 +41,9 @@ const TOR_ONION_ADDRESS_REJECTED: u16 = 0xF6;
 
 /// RFC 1928 §6. General SOCKS server failure.
 const SOCKS_GENERAL_FAILURE: u16 = 0x01;
+/// RFC 1928 §6. The connection is not allowed by the ruleset: this node's
+/// own Tor policy.
+const SOCKS_RULESET_REFUSED: u16 = 0x02;
 /// RFC 1928 §6. Network unreachable.
 const SOCKS_NETWORK_UNREACHABLE: u16 = 0x03;
 /// RFC 1928 §6. TTL expired.
@@ -136,34 +139,47 @@ pub const fn refused(reply: u16) -> CloseCause {
 }
 
 /// What a reply from this node's Tor is evidence of (`DIALER_OUTAGE_EVIDENCE.md`
-/// §3.2, `OE-D4`, the Tor lane reviews). A reply is before the channel, so
-/// no stream opened.
+/// §3.2, `OE-D4`, reviewed by the Tor lane 2026-10-31 against tor 0.4.9.14).
+/// A reply is before the channel, so no stream opened.
+///
+/// **The rule for Tor (the Tor lane):** nothing a gossiped address can cause
+/// may be Local. Local is excused, retried every 10–15 s and never climbs,
+/// so a planted onion that could produce a Local reply would be redialed
+/// forever.
+///
+/// - **Destination:** connection refused (`0x05`: the service's own answer,
+///   refused, reset, or DONE for a port it does not offer); the unusable
+///   descriptor (`0xF1`); client authorization missing or rejected (`0xF4`,
+///   `0xF5`: demanded by the onion's own descriptor, `hs_client.c:1636-1650`);
+///   the onion address rejected (`0xF6`: Tor could not parse the name,
+///   `connection_edge.c:2192-2198`; addresses are validated before the dial,
+///   so in practice it never arrives).
+/// - **Local:** network unreachable (`0x03`: produced in one place only, when
+///   Tor decides every directory server is unreachable and fails the streams
+///   still waiting, `DIR_ALL_UNREACHABLE`, `mainloop.c:1095-1107`: Tor saying
+///   its own network is down); the ruleset refusal (`0x02`: only this node's
+///   own Tor policy, `connection_edge.c:1685` onward; a service sends DONE
+///   for an unoffered port, `:4096-4103`); command and address type not
+///   supported (`0x07`, `0x08`: Tor rejected this node's own SOCKS request,
+///   `proto_socks.c:615`, `:653`). `0x02` is Local only while no
+///   destination-port policy is configured: the managed Tor sets none, and
+///   an operator's own Tor that sets `RejectPlaintextPorts` would let a
+///   gossiped port produce it (put to the Tor lane, #1235).
+/// - **Uncertain:** general failure (`0x01`: Tor sends it for many endings,
+///   `reasons.c:109-155`; a circuit destroyed after the stream joins it
+///   comes back as a plain `0x01`, `connection_edge.c:400-411`, so a hostile
+///   guard that destroys each rendezvous circuit, or this node's own guard
+///   link dropping, must not be counted without corroboration); host
+///   unreachable (`0x04`: with extended errors on, only the service's own
+///   connect failing); TTL expired (`0x06`, Tor's own window); the missing
+///   descriptor, the failed introduction and the two timeouts (`0xF0`,
+///   `0xF2`, `0xF3`, `0xF7`); and any reply not listed.
 ///
 /// Each retry is the reply table's above, unchanged: **Tor does Tor** (Rick,
 /// 2026-10-31). Tor has already retried inside its own window before it
 /// answers (another introduction point, another directory), so a reply it
 /// gives as final is its definitive answer, and the dialer does not add a
-/// redial over it. This is why `0x01`, `0x05` and `0xF1` stay final where
-/// clearnet's refusal keeps its redial.
-///
-/// - **Destination:** general failure (`0x01`: a live service's port
-///   refuses, after a working rendezvous), connection refused (`0x05`),
-///   the unusable descriptor (`0xF1`). Final.
-/// - **Local:** a command this node sent that Tor does not support
-///   (`0x07`): independent of the destination.
-/// - **Uncertain, inside the window:** host unreachable (`0x04`), TTL
-///   expired (`0x06`, Tor's own window), the missing descriptor (`0xF0`),
-///   the failed introduction (`0xF2`), the two timeouts (`0xF3`, `0xF7`),
-///   and network unreachable (`0x03`; which stream-end reason produces it
-///   on a rendezvous stream is for the Tor lane to ground, and Uncertain is
-///   the safe bucket until then). Each can be the link or the onion.
-/// - **Uncertain, final:** the address type (`0x08`), the rejected onion
-///   address (`0xF6`), client authorization (`0xF4`, `0xF5`) and a ruleset
-///   refusal (`0x02`). Each depends on the destination, so none is Local
-///   under the ruled principle (`OE-D3`: Local is only for failures
-///   independent of the destination); Uncertain or Destination is the Tor
-///   lane's call, and Uncertain is the bucket that never counts an outage.
-/// - **Any other reply:** Uncertain, final.
+/// redial over it.
 #[must_use]
 pub const fn stamp_reply(reply: u16) -> DialFailure {
     let retry = if proxy_reply_marks(reply) & Marks::RETRY != 0 {
@@ -172,10 +188,15 @@ pub const fn stamp_reply(reply: u16) -> DialFailure {
         Retry::Final
     };
     match reply {
-        SOCKS_GENERAL_FAILURE | SOCKS_CONNECTION_REFUSED | TOR_DESCRIPTOR_UNUSABLE => {
-            DialFailure::destination(retry, Reached::NoStream)
-        }
-        SOCKS_COMMAND_NOT_SUPPORTED => DialFailure::local(retry, Reached::NoStream),
+        SOCKS_CONNECTION_REFUSED
+        | TOR_DESCRIPTOR_UNUSABLE
+        | TOR_CLIENT_AUTH_MISSING
+        | TOR_CLIENT_AUTH_REJECTED
+        | TOR_ONION_ADDRESS_REJECTED => DialFailure::destination(retry, Reached::NoStream),
+        SOCKS_NETWORK_UNREACHABLE
+        | SOCKS_RULESET_REFUSED
+        | SOCKS_COMMAND_NOT_SUPPORTED
+        | SOCKS_ADDRESS_TYPE_NOT_SUPPORTED => DialFailure::local(retry, Reached::NoStream),
         _ => DialFailure::uncertain(retry, Reached::NoStream),
     }
 }
@@ -238,14 +259,16 @@ mod tests {
 
     use shekyl_transport_layer::{Evidence, Proof};
 
-    /// Tor's stamping of every reply (§3.2): the destination set, the one
-    /// local reply, and Uncertain for the rest, each keeping the reply
-    /// table's retry. No reply proves misbehaviour: it is the proxy's word.
-    /// The edit that makes this red is moving any reply between buckets.
+    /// Tor's stamping of every reply (§3.2, the Tor lane's review): the
+    /// destination set, the local set, and Uncertain for the rest, each
+    /// keeping the reply table's retry. No reply proves misbehaviour: it is
+    /// the proxy's word. The edit that makes this red is moving any reply
+    /// between buckets; `0x01` as Destination is the eclipse lever (a
+    /// destroyed rendezvous circuit counted without corroboration).
     #[test]
     fn each_onion_reply_is_stamped_with_its_evidence() {
-        let destination = [0x01, 0x05, 0xF1];
-        let local = [0x07];
+        let destination = [0x05, 0xF1, 0xF4, 0xF5, 0xF6];
+        let local = [0x02, 0x03, 0x07, 0x08];
         for reply in 0u16..=0x0100 {
             let failure = stamp_reply(reply);
             let expected = if destination.contains(&reply) {
