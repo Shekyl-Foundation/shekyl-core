@@ -318,7 +318,10 @@ impl EventSink {
     /// Route an async event to the consumer, never waiting. A full queue drops the event
     /// and counts it. A closed receiver means the consumer is gone, so the event is
     /// discarded and not counted: nobody is left to read the count.
-    fn route(&self, reply: ControlReply) {
+    ///
+    /// The control read loop is the production caller. A caller that already
+    /// holds a framed reply uses this same write.
+    pub fn route(&self, reply: ControlReply) {
         match self.sender.try_send(reply) {
             Ok(()) | Err(mpsc::error::TrySendError::Closed(_)) => {}
             Err(mpsc::error::TrySendError::Full(_)) => {

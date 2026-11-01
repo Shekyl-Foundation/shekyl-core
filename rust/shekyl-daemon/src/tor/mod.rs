@@ -16,7 +16,9 @@
 //! A sleep is a wait this driver was in that returned more than
 //! `control::RESUMED_AFTER` past the deadline it was armed with: the loop's
 //! wait, whatever woke it, or a control ask. The core does not infer one
-//! from a deadline that merely looks late.
+//! from a deadline that merely looks late. The wait itself lives in
+//! [`wake`]: the timer stands ahead of control events, and events already
+//! queued when it wins are folded before that deadline.
 
 use std::collections::VecDeque;
 use std::net::SocketAddr;
@@ -34,8 +36,8 @@ use shekyl_tor_control_client::binary::{
 };
 use shekyl_tor_control_client::control::{
     parse_bootstrap_progress, parse_event, parse_network_view, parse_socks_listeners,
-    parse_traffic_read, resume_lateness, BootstrapState, Command, ControlError, ControlReply,
-    EventReceiver, EventSink, Resume, ServiceId, SocksTimeout, TorEvent, UploadRounds,
+    parse_traffic_read, BootstrapState, Command, ControlError, ControlReply, EventReceiver,
+    EventSink, Resume, ServiceId, SocksTimeout, TorEvent, UploadRounds,
 };
 use shekyl_tor_control_client::supervisor::{
     clock_evidence_of, directory_input_of, held_sentence, input_of, install_sentence, render,
@@ -50,6 +52,9 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
 mod probe;
+mod wake;
+
+use self::wake::{led, plain_inputs, take_queued, wait, Sources, Wake, Woken};
 
 /// A control reply this far past due is a process fault. Not a bootstrap limit.
 const REPLY_BOUND: Duration = Duration::from_secs(30);
@@ -459,8 +464,13 @@ impl Drive {
         self.fold_many(vec![input]).await;
     }
 
-    /// Fold `inputs` as one step. Each transition's actions are kept, in
-    /// order, and the deadline is the last transition's. An empty list
+    /// Fold `inputs` at the driver's clock. See [`Self::fold_at`].
+    async fn fold_many(&mut self, inputs: Vec<Input>) {
+        self.fold_at(inputs, self.now()).await;
+    }
+
+    /// Fold `inputs` as one step at `at`. Each transition's actions are kept,
+    /// in order, and the deadline is the last transition's. An empty list
     /// leaves the step alone, so a batch that carried nothing does not
     /// disarm a wait that is already armed.
     ///
@@ -469,7 +479,7 @@ impl Drive {
     /// is still kept. A [`Action::TakeDown`] reaps after it withdraws, so
     /// the route is gone before the child is. A [`Action::StopRoute`] only
     /// withdraws: the shutdown wipe still owns the child.
-    async fn fold_many(&mut self, inputs: Vec<Input>) {
+    async fn fold_at(&mut self, inputs: Vec<Input>, at: u64) {
         if inputs.is_empty() {
             return;
         }
@@ -477,7 +487,7 @@ impl Drive {
         let mut deadline = None;
         for input in inputs {
             let ended = ends_incarnation(&input);
-            let step = self.core.on(input, self.now());
+            let step = self.core.on(input, at);
             let take_down = step
                 .actions
                 .iter()
@@ -625,7 +635,7 @@ impl Drive {
         let inputs = match wake.what {
             Woken::Timer { closed: true } => return false,
             Woken::Timer { closed: false } => {
-                self.step = self.step_after_wake(lead, wake.woke);
+                self.after_timer(lead, wake.woke).await;
                 return true;
             }
             Woken::Event(reply) => reply
@@ -643,20 +653,19 @@ impl Drive {
         true
     }
 
-    /// The timer ended the wait at `woke`. `lead` is the sleep the wait
-    /// observed: it resets the windows first, and the work still due then
-    /// runs on the new ones.
-    fn step_after_wake(&mut self, lead: Option<Input>, woke: u64) -> Step {
-        let mut actions = Vec::new();
-        if let Some(input) = lead {
-            actions.extend(self.core.on(input, woke).actions);
+    /// The timer ended the wait at `woke`. Events already queued are folded
+    /// first, at the wake, and then the deadline. The timer won this wait,
+    /// so an event that arrives later cannot hold the deadline off.
+    async fn after_timer(&mut self, lead: Option<Input>, woke: u64) {
+        let queued = take_queued(&mut self.incoming);
+        let mut inputs = lead.into_iter().collect::<Vec<_>>();
+        for reply in &queued {
+            inputs.extend(self.event_inputs(reply));
         }
-        let step = self.core.on_deadline(woke);
-        actions.extend(step.actions);
-        Step {
-            actions,
-            deadline: step.deadline,
-        }
+        self.fold_at(inputs, woke).await;
+        let due = self.core.on_deadline(woke);
+        self.step.actions.extend(due.actions);
+        self.step.deadline = due.deadline;
     }
 
     /// One event batch from Tor: the round resync, the clock evidence, the
@@ -999,159 +1008,6 @@ fn arm<C: Clock>(owner: &OwnerHandle<C>, deadline: Option<u64>) {
     }
 }
 
-/// What the loop waits on, borrowed from the driver for one wait.
-struct Sources<'a> {
-    stop: &'a mut watch::Receiver<bool>,
-    forward: &'a mut watch::Receiver<Option<SocketAddr>>,
-    origin: &'a mut watch::Receiver<OriginVerdict>,
-    tor_link: &'a mut watch::Receiver<TorLinkTally>,
-    probe_arrivals: &'a mut watch::Receiver<Option<ProbeArrival>>,
-    incoming: &'a mut EventReceiver,
-    death: &'a mut mpsc::Receiver<(u64, TorDeath)>,
-    bootstrap: &'a mut Option<watch::Receiver<BootstrapState>>,
-}
-
-/// What ended a wait. Each branch reads its value and nothing more; the
-/// driver folds it after the sleep check ([`Drive::handle`]).
-#[derive(Debug)]
-enum Woken {
-    /// The stop flag moved. `stopping` when the daemon is stopping or the
-    /// sender is gone.
-    Stop { stopping: bool },
-    /// The forward listener moved. `bound` when it is bound. The first wait
-    /// also sees a forward bound before the loop: the receiver has not
-    /// marked the current value seen.
-    Forward { bound: bool },
-    /// The relay's hop-0 verdict. The sender is process-static, so a closed
-    /// channel does not happen; it reads as nothing, so it cannot spin here.
-    Origin(Option<OriginVerdict>),
-    /// The Tor dial tally. Process-static like the verdict.
-    TorLink(Option<TorLinkTally>),
-    /// A probe's nonce came back. Biased ahead of the timer, so a take
-    /// already in the cell is folded before a bound that has also elapsed;
-    /// the core still compares the take's own time with the bound.
-    ProbeArrived(Option<ProbeArrival>),
-    /// The armed deadline fired, or the scheduler closed.
-    Timer { closed: bool },
-    /// An event from Tor, or nothing when the sink closed.
-    Event(Option<ControlReply>),
-    /// A Tor process ended.
-    Death(Option<(u64, TorDeath)>),
-    /// The bootstrap watch moved.
-    Bootstrap,
-}
-
-/// A wait that returned: what woke it, when, and the sleep it observed.
-#[derive(Debug)]
-struct Wake {
-    what: Woken,
-    woke: u64,
-    resumed: Option<Duration>,
-}
-
-impl Wake {
-    /// The sleep the wait observed, as the input folded ahead of what woke it.
-    fn lead(&self) -> Option<Input> {
-        self.resumed.map(|late_by| Input::Resumed { late_by })
-    }
-}
-
-/// Wait for the next thing to do. The wait itself says whether the machine
-/// slept (§5, "Resumed from suspend"): it returned at `woke`, and a return
-/// more than `control::RESUMED_AFTER` past the deadline it was armed with
-/// means the process did not run, whatever woke it. At a wake the dialer's
-/// timers fire too, so a dial result can be ready with the late timer and
-/// win the biased order; it is judged after the sleep is folded, on windows
-/// that start at the wake. With no deadline armed nothing can be late.
-async fn wait<C: Clock>(
-    sources: Sources<'_>,
-    owner: &OwnerHandle<C>,
-    armed: Option<u64>,
-    entered: u64,
-) -> Wake {
-    let what = tokio::select! {
-        biased;
-        changed = sources.stop.changed() => Woken::Stop {
-            stopping: changed.is_err() || *sources.stop.borrow(),
-        },
-        changed = sources.forward.changed() => Woken::Forward {
-            bound: changed.is_ok() && sources.forward.borrow().is_some(),
-        },
-        changed = sources.origin.changed() => {
-            Woken::Origin(changed.is_ok().then(|| *sources.origin.borrow_and_update()))
-        }
-        changed = sources.tor_link.changed() => {
-            Woken::TorLink(changed.is_ok().then(|| *sources.tor_link.borrow_and_update()))
-        }
-        changed = sources.probe_arrivals.changed() => Woken::ProbeArrived(
-            changed
-                .is_ok()
-                .then(|| *sources.probe_arrivals.borrow_and_update())
-                .flatten(),
-        ),
-        wake = owner.wait_wake_async() => Woken::Timer { closed: wake.is_err() },
-        event = sources.incoming.recv() => Woken::Event(event),
-        death = sources.death.recv() => Woken::Death(death),
-        () = wait_bootstrap(sources.bootstrap) => Woken::Bootstrap,
-    };
-    let woke = now(owner);
-    Wake {
-        what,
-        woke,
-        resumed: slept(armed, entered, woke),
-    }
-}
-
-/// How late a wait armed with `armed` at `entered` returned at `woke`, when
-/// that is a sleep ([`resume_lateness`]). A deadline already past when the
-/// wait began has no time left: a return more than `RESUMED_AFTER` later
-/// is still a sleep.
-fn slept(armed: Option<u64>, entered: u64, woke: u64) -> Option<Duration> {
-    let due = armed?;
-    let until_due = Duration::from_nanos(due.saturating_sub(entered));
-    let waited = Duration::from_nanos(woke.saturating_sub(entered));
-    match resume_lateness(until_due, waited) {
-        Resume::Slept { late_by } => Some(late_by),
-        Resume::Awake => None,
-    }
-}
-
-/// The batch a wait folds: the sleep it observed first, then what woke it.
-fn led(lead: Option<Input>, inputs: Vec<Input>) -> Vec<Input> {
-    lead.into_iter().chain(inputs).collect()
-}
-
-/// The inputs of a wake that needs none of the driver's state. The timer,
-/// an event, a death and the bootstrap watch are the driver's to read
-/// ([`Drive::handle`]) and give nothing here.
-fn plain_inputs(what: &Woken) -> Vec<Input> {
-    match what {
-        Woken::Stop { stopping } => stopping.then_some(Input::Shutdown).into_iter().collect(),
-        Woken::Forward { bound } => bound.then_some(Input::EndpointReady).into_iter().collect(),
-        Woken::Origin(verdict) => verdict.map(verdict_input).into_iter().collect(),
-        Woken::TorLink(tally) => tally.map(tally_input).into_iter().collect(),
-        Woken::ProbeArrived(arrival) => arrival
-            .map(|arrival| {
-                tracing::info!(target: "tor", "this node's onion probe arrived");
-                Input::ProbeArrived {
-                    minted_at: arrival.minted_at.get(),
-                    arrived_at: arrival.arrived_at.get(),
-                }
-            })
-            .into_iter()
-            .collect(),
-        Woken::Timer { .. } | Woken::Event(_) | Woken::Death(_) | Woken::Bootstrap => Vec::new(),
-    }
-}
-
-async fn wait_bootstrap(bootstrap: &mut Option<watch::Receiver<BootstrapState>>) {
-    if let Some(bootstrap) = bootstrap {
-        let _changed = bootstrap.changed().await;
-    } else {
-        std::future::pending::<()>().await;
-    }
-}
-
 /// A death the phase treats as the process ending. A stop is not one:
 /// the driver asked for it.
 fn observed_death(death: TorDeath) -> Option<Input> {
@@ -1206,112 +1062,6 @@ fn input_of_ask(error: &DaemonTorStartError) -> Input {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shekyl_timing_engine::{EngineService, ManualClock};
-    use shekyl_tor_control_client::control::RESUMED_AFTER;
-
-    fn secs(seconds: u64) -> u64 {
-        seconds * 1_000_000_000
-    }
-
-    /// One wait on fresh channels, armed at `due`, with the clock already
-    /// at `woke` and a dial tally waiting.
-    async fn wake_with_a_tally_waiting(due: u64, woke: u64) -> (Wake, TorLinkTally) {
-        let clock = ManualClock::new(Tick::new(0));
-        let service = EngineService::start(clock.clone());
-        let owner = service
-            .handle()
-            .register(OwnerClass::Housekeeping)
-            .expect("register");
-        let (_stop_tx, mut stop) = watch::channel(false);
-        let (_forward_tx, mut forward) = watch::channel(None);
-        let (_origin_tx, mut origin) = watch::channel(OriginVerdict::Absent);
-        let (tally_tx, mut tor_link) = watch::channel(TorLinkTally::default());
-        let (_arrivals_tx, mut probe_arrivals) = watch::channel(None);
-        let (_sink, mut incoming) = EventSink::bounded();
-        let (_death_tx, mut death) = mpsc::channel(1);
-        let mut bootstrap = None;
-        clock.set(Tick::new(woke));
-        arm(&owner, Some(due));
-        let tally = TorLinkTally {
-            opened: 0,
-            unopened: 1,
-            held: 0,
-        };
-        tally_tx.send(tally).expect("the tally's receiver is held");
-        let sources = Sources {
-            stop: &mut stop,
-            forward: &mut forward,
-            origin: &mut origin,
-            tor_link: &mut tor_link,
-            probe_arrivals: &mut probe_arrivals,
-            incoming: &mut incoming,
-            death: &mut death,
-            bootstrap: &mut bootstrap,
-        };
-        (wait(sources, &owner, Some(due), 0).await, tally)
-    }
-
-    /// At a wake the dialer's timers fire too, so a dial result is ready
-    /// with the late timer and wins the biased order. The wait still sees
-    /// the sleep, and the batch folds it before the dial result is judged
-    /// (§5, "Resumed from suspend"). Biasing the timer first and dropping
-    /// the wait's classification fails this; so does classifying only in
-    /// the timer branch.
-    #[tokio::test]
-    async fn a_wake_with_a_dial_result_waiting_folds_the_resume_first() {
-        let due = secs(30);
-        let woke = due + duration_ns_of(RESUMED_AFTER) + secs(1);
-        let (wake, tally) = wake_with_a_tally_waiting(due, woke).await;
-        assert!(
-            matches!(wake.what, Woken::TorLink(Some(seen)) if seen == tally),
-            "the dial result wins the order: {:?}",
-            wake.what
-        );
-        assert_eq!(wake.woke, woke);
-        assert_eq!(wake.resumed, Some(Duration::from_nanos(woke - due)));
-        let batch = led(wake.lead(), plain_inputs(&wake.what));
-        assert!(
-            matches!(
-                batch.as_slice(),
-                [Input::Resumed { .. }, Input::DialEvidence(_)]
-            ),
-            "the resume is folded first: {batch:?}"
-        );
-    }
-
-    /// The same wake inside `RESUMED_AFTER` of its deadline is an awake
-    /// one: the dial result is folded alone.
-    #[tokio::test]
-    async fn a_wake_on_time_folds_the_dial_result_alone() {
-        let due = secs(30);
-        let woke = due + duration_ns_of(RESUMED_AFTER);
-        let (wake, _) = wake_with_a_tally_waiting(due, woke).await;
-        assert_eq!(wake.resumed, None);
-        let batch = led(wake.lead(), plain_inputs(&wake.what));
-        assert!(
-            matches!(batch.as_slice(), [Input::DialEvidence(_)]),
-            "{batch:?}"
-        );
-    }
-
-    /// A deadline already past when the wait began has no time left; a
-    /// return more than `RESUMED_AFTER` later is still a sleep. With no
-    /// deadline armed nothing is late.
-    #[test]
-    fn a_wait_is_late_against_the_deadline_it_was_armed_with() {
-        let after = duration_ns_of(RESUMED_AFTER);
-        assert_eq!(slept(Some(secs(5)), secs(10), secs(10) + after), None);
-        assert_eq!(
-            slept(Some(secs(5)), secs(10), secs(11) + after),
-            Some(Duration::from_nanos(secs(1) + after))
-        );
-        assert_eq!(slept(None, 0, secs(3600)), None);
-    }
-
-    fn duration_ns_of(duration: Duration) -> u64 {
-        u64::try_from(duration.as_nanos()).expect("fits")
-    }
-
     /// A bootstrap sample does not ask Tor about its network. A Running
     /// sample does (§4.2): "no circuit" during bootstrap is not a statement.
     #[test]
