@@ -236,13 +236,19 @@ endif()
 
 # ── Source-change tracking for the cargo custom commands ─────────────────────
 #
-# Each cargo invocation below is wrapped in an `add_custom_command(OUTPUT …)`.
-# Without an explicit `DEPENDS` list, the generator (Ninja/Make) treats the
-# output `.a` as up-to-date for as long as the file exists on disk — it never
-# re-invokes cargo when a source under `rust/` changes. The result is a silently
-# stale archive: the C++ side relinks against a `libshekyl_*.a` that predates
-# the current Rust sources, which is exactly the failure that linked a month-old
-# FFI into the daemon.
+# Each static-library cargo invocation below is wrapped in an
+# `add_custom_command(OUTPUT …)`. The wallet binaries are a custom
+# target that runs on every build: their release string is an
+# environment variable, and an OUTPUT rule skips cargo when the binary
+# is newer than its sources.
+#
+# Without an explicit `DEPENDS` list on a static library, the generator
+# (Ninja/Make) treats the output `.a` as up-to-date for as long as the
+# file exists on disk — it never re-invokes cargo when a source under
+# `rust/` changes. The result is a silently stale archive: the C++ side
+# relinks against a `libshekyl_*.a` that predates the current Rust
+# sources, which is exactly the failure that linked a month-old FFI into
+# the daemon.
 #
 # The dependency set below tracks the inputs that live under `rust/`: every
 # `.rs`, every `Cargo.toml`, the lockfile, `.md` files (which feed the build
@@ -470,34 +476,27 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Windows" AND NOT IOS)
     endforeach()
 
     # The binaries print the daemon's version string (`SHEKYL_VERSION_FULL`,
-    # cmake/Version.cmake), not the crate's `3.1.0`: a user must be able to
-    # tell which release their wallet is. `version.cpp` is regenerated only
-    # when that string changes, so depending on it rebuilds the binaries
-    # for a new tag that touched no Rust source; rustc tracks the variable
-    # through `option_env!`.
-    add_custom_command(
-        OUTPUT ${_shekyl_rust_bin_outputs}
+    # spelled once in cmake/Version.cmake), not the crate's `3.1.0`. This
+    # target runs on every build. Cargo fingerprints `option_env!` and
+    # compiles only when the string or a source changed. An OUTPUT rule
+    # would not: a later bare `cargo build` of these packages writes
+    # `-unknown` binaries over the same paths, newer than every DEPENDS
+    # file, and the next CMake build would skip cargo and stage those.
+    add_custom_target(shekyl_rust_bins ALL
         COMMAND ${CMAKE_COMMAND} -E env ${_rust_env_clear}
-            "SHEKYL_VERSION_FULL=${SHEKYL_VERSION}-${VERSIONTAG}"
+            "SHEKYL_VERSION_FULL=${SHEKYL_VERSION_FULL}"
             ${CARGO_EXECUTABLE} build --locked ${RUST_BUILD_FLAG} ${RUST_TARGET_FLAG}
             ${_shekyl_rust_bin_pkg_args}
         WORKING_DIRECTORY ${RUST_SOURCE_DIR}
-        DEPENDS ${_shekyl_rust_deps} "${CMAKE_BINARY_DIR}/version.cpp"
         COMMENT "${_rust_comment} (shekyl-cli + shekyl-wallet-rpc binaries)"
         VERBATIM
     )
 
-    add_custom_target(shekyl_rust_bins ALL DEPENDS ${_shekyl_rust_bin_outputs})
-
-    # The staging copy hangs off the TARGET, not the cargo custom command.
-    # A custom command is skipped whenever its OUTPUTs are newer than its
-    # DEPENDS — and its OUTPUTs are the cargo artifacts, which say nothing
-    # about whether `bin/` still holds them. Deleting `bin/` (or a
-    # generator `clean`) would then leave the staged copies permanently
-    # missing while cargo reported everything up to date, and the things
-    # that read `bin/` are release packaging and the CI smoke tests. A
-    # custom target always runs, so POST_BUILD always re-checks; the copy
-    # itself is `copy_if_different`, so the common case is a stat.
+    # POST_BUILD re-copies into `bin/` on every build. `copy_if_different`
+    # is a stat in the common case. Deleting `bin/` (or a generator
+    # `clean`) would otherwise leave the staged copies missing while
+    # cargo's own artifacts were still present, and release packaging
+    # and the CI smoke tests read `bin/`.
     add_custom_command(TARGET shekyl_rust_bins POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "${_shekyl_rust_bin_dir}"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
