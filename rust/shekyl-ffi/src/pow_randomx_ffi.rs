@@ -7,15 +7,16 @@
 //!
 //! The exports wrap [`shekyl_pow_randomx`] in a C-compatible ABI:
 //!
-//! - [`shekyl_pow_randomx_v2_hash`] — the consensus PoW hash. Computes
-//!   `compute_hash(seedhash, data)` through a process-global, internally
-//!   memoized [`CacheStore`]. This replaces the inherited C RandomX v1
-//!   path (`crypto::rx_slow_hash`) on the daemon's block-verification
-//!   boundary per `docs/design/RANDOMX_V2_PHASE3_PLAN.md` §4.
-//! - [`shekyl_pow_randomx_v2_set_canonical`] — pins the canonical epoch
-//!   seedhash (sticky against LRU eviction) and *eagerly* derives its
-//!   256 MiB cache off the validation hot path. Called by the daemon at
-//!   tip advance, replacing `crypto::rx_set_main_seedhash`.
+//! - [`shekyl_pow_randomx_v2_hash`] — the consensus PoW hash, for the C++
+//!   parity gates (`tests/unit_tests/mining_parity.cpp`,
+//!   `tests/randomx_v2_parity`). Computes `compute_hash(seedhash, data)`
+//!   through a process-global, internally memoized [`CacheStore`]. The
+//!   daemon does not call it: since the DRS-X flip its PoW is the Rust
+//!   ingest's, over the node's own `CacheStore`, which pins the canonical
+//!   seed itself (`shekyl-chain-ingest`, `Substrate::pin_seed`).
+//!   *Records-was:* the C++ chain called it on every block and pinned the
+//!   canonical seed through `shekyl_pow_randomx_v2_set_canonical`, which
+//!   was deleted when nothing in C++ knew the seed any more.
 //! - [`shekyl_pow_randomx_v2_seedheight`] /
 //!   [`shekyl_pow_randomx_v2_next_seedheight`] /
 //!   [`shekyl_pow_randomx_v2_seed_epoch_blocks`] /
@@ -36,8 +37,7 @@
 //! this module is the `unsafe` boundary that translates raw pointers
 //! into the crate's typed [`Seedhash`] / `&[u8]` API. Per
 //! `36-secret-locality.mdc` and `20-rust-vs-cpp-policy.mdc`, the cache
-//! memo and the canonical-seedhash lifecycle live here in Rust rather
-//! than in the C++ caller; the C++ side holds only opaque 32-byte
+//! memo lives here in Rust rather than in the C++ caller; the C++ side holds only opaque 32-byte
 //! buffers and an `i32` status.
 //!
 //! # Pointer-to-array ABI
@@ -102,9 +102,6 @@
 //! - `data != NULL && data_len == 0` is valid (the pointer is ignored).
 //! - `data != NULL && data_len > 0` is the normal case; the bytes
 //!   `[data, data + data_len)` must be readable.
-//!
-//! For [`shekyl_pow_randomx_v2_set_canonical`]: `seedhash` must be
-//! non-null.
 //!
 //! On any non-zero return `out_hash` is untouched; callers must not read
 //! it (in particular, must not treat zeroed memory as a hash).
@@ -176,9 +173,7 @@ fn cache_store() -> &'static CacheStore {
 /// On success writes exactly 32 bytes to `*out_hash` and returns
 /// [`SHEKYL_POW_RANDOMX_V2_OK`]. The cache for `seedhash` is derived
 /// lazily on first use and memoized in the process-global
-/// [`CacheStore`]; the daemon eliminates the first-use latency on the
-/// canonical seedhash by calling
-/// [`shekyl_pow_randomx_v2_set_canonical`] at tip advance.
+/// [`CacheStore`].
 ///
 /// # Return
 ///
@@ -230,54 +225,6 @@ pub unsafe extern "C" fn shekyl_pow_randomx_v2_hash(
     // SAFETY: out_hash is non-null per the check above; the caller's
     // contract guarantees alignment and writability for [u8; 32].
     core::ptr::write(out_hash, hash);
-    SHEKYL_POW_RANDOMX_V2_OK
-}
-
-/// Pin `*seedhash` as the canonical cache and eagerly derive it.
-///
-/// Called by the daemon at tip advance (replacing
-/// `crypto::rx_set_main_seedhash`). Two effects, in order:
-///
-/// 1. Eager derivation — [`CacheStore::lookup_or_derive`] performs the
-///    synchronous ~150–200 ms / 256 MiB Argon2d derivation *now*, off
-///    the per-block validation hot path, so the first verifying call of
-///    the new epoch is a cache hit. This is the internal-prewarm
-///    disposition of `RANDOMX_V2_PHASE3_PLAN.md` §4.3 (Hole 2): no
-///    `prewarm` FFI surface is added; the eager derivation is a Rust
-///    internal detail of this export.
-/// 2. Sticky pin — [`CacheStore::set_canonical`] protects the derived
-///    cache from LRU eviction by transient lookups, the DoS protection
-///    of `RANDOMX_V2_PHASE2C_PLAN.md` §5.11.7 / `RANDOMX_V2_PLAN.md`
-///    Decision #6.
-///
-/// Idempotent: re-pinning the already-canonical seedhash is a no-op
-/// (`CacheStore` compares seedhashes before swapping).
-///
-/// # Return
-///
-/// [`SHEKYL_POW_RANDOMX_V2_OK`] on success, or
-/// [`SHEKYL_POW_RANDOMX_V2_ERR_NULL_PTR`] if `seedhash` is null.
-///
-/// # Safety
-///
-/// The caller must uphold:
-/// - `seedhash` points to a valid, aligned, initialized `[u8; 32]`.
-/// - No other thread mutates that buffer for the duration of the call.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_pow_randomx_v2_set_canonical(seedhash: *const [u8; 32]) -> i32 {
-    if seedhash.is_null() {
-        return SHEKYL_POW_RANDOMX_V2_ERR_NULL_PTR;
-    }
-
-    // SAFETY: seedhash is non-null per the check above; the caller's
-    // contract guarantees an aligned, initialized [u8; 32].
-    let seed = Seedhash::from_bytes(*seedhash);
-
-    // Eager derivation off the hot path, then sticky-pin — one call, so
-    // the 256 MiB fill is paid exactly once here rather than lazily on the
-    // first verifying call of the epoch. The daemon does not measure
-    // derivations; the outcome is the ingest pipeline's to read.
-    let _served = cache_store().pin_canonical(&seed);
     SHEKYL_POW_RANDOMX_V2_OK
 }
 
@@ -637,108 +584,6 @@ mod tests {
             assert_eq!(rb, SHEKYL_POW_RANDOMX_V2_OK);
         }
         assert_eq!(a, b);
-    }
-
-    /// `set_canonical(NULL)` is rejected before any dereference.
-    #[test]
-    fn set_canonical_null_rejected() {
-        // SAFETY: seedhash is null, which the FFI rejects with
-        // ERR_NULL_PTR before dereferencing.
-        let rc = unsafe { shekyl_pow_randomx_v2_set_canonical(core::ptr::null()) };
-        assert_eq!(rc, SHEKYL_POW_RANDOMX_V2_ERR_NULL_PTR);
-    }
-
-    /// Serializes the canonical-mutating tests: the process-global
-    /// store has ONE canonical slot, and the sticky-eviction guarantee
-    /// protects only whichever seed currently holds it — two parallel
-    /// `set_canonical` tests would demote each other's seed to the
-    /// transient tier, where a concurrent novel derive can evict it
-    /// (a microsecond-window flake, but a flake on a consensus-adjacent
-    /// gate reads as a false "lazy derive" red). Poison-tolerant so one
-    /// failing test doesn't cascade.
-    static CANONICAL_SLOT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    /// `set_canonical` derives + pins, then a hash under the pinned
-    /// seed succeeds and matches the direct path. Idempotent re-pin is
-    /// also a no-op success.
-    #[test]
-    fn set_canonical_pins_and_hashes() {
-        let _canonical_slot = CANONICAL_SLOT_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let seed_bytes = [0x22u8; 32];
-
-        // SAFETY: seed_bytes is a valid stack [u8; 32].
-        let rc = unsafe { shekyl_pow_randomx_v2_set_canonical(&raw const seed_bytes) };
-        assert_eq!(rc, SHEKYL_POW_RANDOMX_V2_OK);
-
-        // Re-pin the same seed: idempotent no-op success.
-        // SAFETY: same valid buffer.
-        let rc2 = unsafe { shekyl_pow_randomx_v2_set_canonical(&raw const seed_bytes) };
-        assert_eq!(rc2, SHEKYL_POW_RANDOMX_V2_OK);
-
-        let blob = b"canonical";
-        let mut out = [0u8; 32];
-        // SAFETY: all buffers are valid stack slots sized for the call.
-        let rc3 = unsafe {
-            shekyl_pow_randomx_v2_hash(
-                &raw const seed_bytes,
-                blob.as_ptr(),
-                blob.len(),
-                &raw mut out,
-            )
-        };
-        assert_eq!(rc3, SHEKYL_POW_RANDOMX_V2_OK);
-
-        let prepared = PreparedCache::derive(Seedhash::from_bytes(seed_bytes));
-        let expected = compute_hash(&prepared, blob);
-        assert_eq!(out, expected);
-    }
-
-    /// The eager-derive claim as a behavior gate (RandomX v2 test-regime
-    /// hardening: epoch-rollover stall check). `set_canonical`'s contract
-    /// is that the canonical cache is derived AT tip advance, off the
-    /// validation hot path — so the first verify after a seed-epoch
-    /// rollover never pays the multi-second cache build, which would
-    /// delay propagation of the first post-boundary block network-wide
-    /// (orphan-risk-shaped). Until this test, that claim lived only in
-    /// doc comments.
-    ///
-    /// Probed as STATE, not latency: [`CacheStore::lookup`] never
-    /// derives, so cache-present-immediately-after-`set_canonical` is
-    /// exactly "the derive already happened". A lazy implementation
-    /// fails this test deterministically; a wall-clock variant was
-    /// rejected as flake-theater on shared runners (the house rule
-    /// against absolute-time CI gates).
-    #[test]
-    fn set_canonical_eagerly_derives_off_the_verify_path() {
-        // CANONICAL_SLOT_LOCK: while 0x77 holds the canonical slot the
-        // sticky guarantee shields it from novel-derive eviction, and
-        // the lock keeps the sibling canonical test from demoting it
-        // mid-test. The unique seed (no other test uses 0x77) keeps the
-        // is_none() precondition sound.
-        let _canonical_slot = CANONICAL_SLOT_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let seed_bytes = [0x77u8; 32];
-        let seed = Seedhash::from_bytes(seed_bytes);
-
-        assert!(
-            cache_store().lookup(&seed).is_none(),
-            "precondition: seed 0x77.. must be underived before set_canonical \
-             (another test started using this seed?)"
-        );
-
-        // SAFETY: seed_bytes is a valid stack [u8; 32].
-        let rc = unsafe { shekyl_pow_randomx_v2_set_canonical(&raw const seed_bytes) };
-        assert_eq!(rc, SHEKYL_POW_RANDOMX_V2_OK);
-
-        assert!(
-            cache_store().lookup(&seed).is_some(),
-            "set_canonical must derive the canonical cache EAGERLY: a lazy \
-             derive stalls the first post-rollover verify by the full cache \
-             build (the doc-comment claim this test converts into a gate)"
-        );
     }
 
     /// The seed-epoch exports round the schedule through the C ABI

@@ -173,7 +173,8 @@ RPC changes, schema migrations) will diverge from the protocol version.
 |------|-------|---------|
 | `cmake/Version.cmake` | `SHEKYL_VERSION_DEFAULT` | `"3.1.0"` |
 | `cmake/GitVersion.cmake` | Tag-derived at build time | `"3.1.0-alpha.1"` |
-| `src/version.cpp.in` | Configured by CMake | `SHEKYL_VERSION`, `SHEKYL_VERSION_TAG` |
+| `cmake/Version.cmake` | `SHEKYL_VERSION_FULL` | `"3.1.0-release"` |
+| `src/version.cpp.in` | Configured by CMake | `SHEKYL_VERSION`, `SHEKYL_VERSION_TAG`, `SHEKYL_VERSION_FULL` |
 | `src/cryptonote_config.h` | `SHEKYL_PROTOCOL_VERSION` | `3` |
 | `rust/Cargo.toml` | `[workspace.package] version` | `"3.1.0"` |
 
