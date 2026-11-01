@@ -44,7 +44,7 @@ pub use admission::{
     AcceptRefusals, CloseResult, Direction, ObservedEndpoint, OpenError, OpenSocket, SocketId,
     Sockets,
 };
-pub use ban::{deadline_after, BanLeft, BanList, Ipv4Subnet, ListedBan};
+pub use ban::{deadline_after, BanEntry, BanLeft, BanList, Ipv4Subnet, ListedBan};
 pub use budget::{LinkBudget, LinkDirection, MessageClass, Observed, Turn};
 pub use cause::{c_header, CloseCause, CloseKind, Marks, Phase};
 pub use clock::{monotonic_ms, recv_mark_ms, unix_ms_of};

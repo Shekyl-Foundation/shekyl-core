@@ -11,7 +11,7 @@ use shekyl_draw_rng::RelayRng;
 use shekyl_net_address::NetworkAddress;
 use shekyl_relay_privacy::ConnectionId;
 use shekyl_timing_engine::Tick;
-use shekyl_transport_layer::{connector_for, BanList, ConnectorId};
+use shekyl_transport_layer::{connector_for, BanEntry, BanList, ConnectorId};
 
 use crate::address_file::{self, AddressFileError};
 use crate::outcome::{DialOutcome, ListName, Refusal, SessionRow, Source, WhiteClock};
@@ -206,7 +206,9 @@ impl Peerlist {
         if !matches!(source, Source::Operator) && self.refused.refuses(address).is_some() {
             return Err(Refusal::NotGlobal);
         }
-        if address.ip().is_some_and(|ip| bans.is_banned(ip, now)) {
+        if address.ip().is_some_and(|ip| bans.is_banned(ip, now))
+            || self.partition(connector).covered(address)
+        {
             return Err(Refusal::Banned);
         }
         let partition = self.partition_mut(connector);
@@ -282,6 +284,7 @@ impl Peerlist {
         let counted: Vec<&NetworkAddress> = addresses
             .iter()
             .filter(|a| !a.ip().is_some_and(|ip| bans.is_banned(ip, now)))
+            .filter(|a| !self.partition(connector).covered(a))
             .collect();
         if self
             .partition_mut(connector)
@@ -712,6 +715,41 @@ impl Peerlist {
     /// judgements; a banned address is left out, and the ban is not
     /// saved). The ban list is the caller's, asked through `bans` as the
     /// draws ask it. No address is left out for who supplied it.
+    /// A ban event from the ban list: hold `entry`, and bar every seat it
+    /// covers on both lists (Rick, 2026-10-31). A white seat is demoted to
+    /// gray first, then barred. A barred seat is never drawn, is in no
+    /// census or candidate count, and the door refuses a new address the
+    /// entry covers. Returns how many seats it barred now; an outstanding
+    /// draw bars when its outcome or its release moves it.
+    pub fn ban<R: RelayRng + ?Sized>(&mut self, entry: BanEntry, rng: &mut R) -> usize {
+        self.partitions
+            .iter_mut()
+            .map(|partition| partition.ban(entry, rng))
+            .sum()
+    }
+
+    /// A lift event from the ban list: drop `entry`, and return as drawable
+    /// gray, on its rung, every barred seat no remaining entry covers.
+    /// Returns how many seats became drawable.
+    pub fn lift(&mut self, entry: BanEntry) -> usize {
+        self.partitions
+            .iter_mut()
+            .map(|partition| partition.lift(entry))
+            .sum()
+    }
+
+    /// The ban list's active entries at the moment the dialer subscribed:
+    /// each applied as a ban event. The ban list returns these and
+    /// registers the subscription in one lock section, so no lift between
+    /// the two is lost.
+    pub fn seed_bans<R: RelayRng + ?Sized>(
+        &mut self,
+        entries: impl IntoIterator<Item = BanEntry>,
+        rng: &mut R,
+    ) -> usize {
+        entries.into_iter().map(|entry| self.ban(entry, rng)).sum()
+    }
+
     #[must_use]
     pub fn persistable(&self, bans: &mut dyn BanQuery, now: Tick) -> Vec<NetworkAddress> {
         self.partitions
@@ -719,6 +757,9 @@ impl Peerlist {
             .flat_map(Partition::persistable)
             .filter(|address| self.refused.refuses(address).is_none())
             .filter(|address| !address.ip().is_some_and(|ip| bans.is_banned(ip, now)))
+            .filter(|address| {
+                Self::connector_of(address).is_none_or(|c| !self.partition(c).covered(address))
+            })
             .cloned()
             .collect()
     }

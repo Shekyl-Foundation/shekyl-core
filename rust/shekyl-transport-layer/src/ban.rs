@@ -103,6 +103,31 @@ impl Ipv4Subnet {
     }
 }
 
+/// One active ban, as the ban list posts it to the peer list: a host, or
+/// an IPv4 subnet. The expiry stays with the ban list; an entry the peer
+/// list holds is in force until the ban list posts its lift.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum BanEntry {
+    /// One host.
+    Host(IpAddr),
+    /// Every IPv4 host inside the prefix.
+    Subnet(Ipv4Subnet),
+}
+
+impl BanEntry {
+    /// Whether this entry covers `host`, as [`BanList::is_banned`] matches
+    /// it: a subnet covers IPv4 hosts only, so an IPv6 host is covered by a
+    /// host entry alone.
+    #[must_use]
+    pub fn covers(self, host: IpAddr) -> bool {
+        match (self, host) {
+            (Self::Host(banned), _) => banned == host,
+            (Self::Subnet(subnet), IpAddr::V4(ip)) => subnet.contains(ip),
+            (Self::Subnet(_), IpAddr::V6(_)) => false,
+        }
+    }
+}
+
 fn term_live(term: Term, now: Tick) -> bool {
     match term {
         Term::Permanent => true,
