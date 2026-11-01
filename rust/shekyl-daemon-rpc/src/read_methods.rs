@@ -25,16 +25,20 @@ use shekyl_rpc_types::{
 };
 use shekyl_types::{BlockHash, BlockHeight, KeyImage, PCanonicalId, TxHash};
 
+use crate::core::FullForm;
 use crate::methods::{
     parse_request_hashes, split_128, RpcFault, RpcRefusal, KI_PARSE_FAILED, RESTRICTED_BLOCK_COUNT,
     RESTRICTED_SPENT_KEY_IMAGES_COUNT, RESTRICTED_TRANSACTIONS_COUNT, TX_PARSE_FAILED,
 };
-use crate::read_facts::{ChainReadFacts, CoinbaseRange, CurveTreeFacts, PowAt, PowSeed, SpentAt};
+use crate::read_facts::{
+    ChainReadFacts, CoinbaseRange, CurveTreeFacts, ListedTx, PowAt, PowSeed, SpentAt,
+};
 use shekyl_chain_rules::{EmissionEpochFacts, EmissionEpochStanding};
 use shekyl_rpc_types::methods::caller_bounded;
 use shekyl_rpc_types::{
-    BlockEntry, GetBlocksByHeightRequest, GetBlocksByHeightResponse, GetOIndexesRequest,
-    GetOIndexesResponse, IsKeyImageSpentRequest, IsKeyImageSpentResponse, KeyImageStatus,
+    BlockEntry, BlockTx, BlockTxSkeleton, GetBlocksByHeightRequest, GetBlocksByHeightResponse,
+    GetOIndexesRequest, GetOIndexesResponse, IsKeyImageSpentRequest, IsKeyImageSpentResponse,
+    KeyImageStatus,
 };
 
 /// The status `get_coinbase_tx_sum` answers a range outside the chain with
@@ -442,10 +446,13 @@ pub fn get_archival_shard_coverage(
     })
 }
 
-/// `/get_blocks_by_height.bin` over the store (Q1): each height's block
-/// and its listed transactions whole. A height above the tip, or whose
-/// listed bodies this node has pruned, ends the reply with C++'s error
-/// status and the blocks read before it.
+/// `/get_blocks_by_height.bin` over the store (Q1; `SB-Q2`): each height's
+/// block and its listed transactions in the request's form. Under `prune`
+/// every body is its skeleton. Without it a body is whole, or — where this
+/// node discarded its archival good — the slot state `archived` with its
+/// shard (`PDM-Q10`), never a failure of the height. Only a height above
+/// the tip ends the reply, with C++'s error status and the blocks read
+/// before it.
 ///
 /// # Errors
 ///
@@ -477,12 +484,38 @@ pub fn get_blocks_by_height(
         blocks: read
             .blocks
             .into_iter()
-            .map(|blobs| BlockEntry {
-                block: blobs.block,
-                txs: blobs.txs,
+            .map(|block| BlockEntry {
+                block: block.block,
+                txs: block
+                    .txs
+                    .iter()
+                    .map(|tx| block_tx(tx, request.prune))
+                    .collect(),
             })
             .collect(),
     })
+}
+
+/// One listed transaction in the request's form.
+fn block_tx(tx: &ListedTx, prune: bool) -> BlockTx {
+    if prune {
+        let skeleton = &tx.body.skeleton;
+        return BlockTx::Skeleton(BlockTxSkeleton {
+            unprunable: skeleton.unprunable.clone(),
+            prunable_hash: skeleton.prunable_hash.to_bytes(),
+            pqc_auth_hash: skeleton
+                .pqc_auth_hash
+                .map(shekyl_types::PqcAuthHash::to_bytes),
+            archival_len: skeleton.archival_len.to_raw(),
+        });
+    }
+    match tx.body.full_form() {
+        FullForm::Whole(bytes) => BlockTx::Full(bytes),
+        FullForm::Archived { shard } => BlockTx::Archived {
+            tx_hash: tx.hash.to_bytes(),
+            shard: shard.to_raw(),
+        },
+    }
 }
 
 /// `/get_transactions` over the store and the pool (`DRS_X_STORE_FLIP.md`

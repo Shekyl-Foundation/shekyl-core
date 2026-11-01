@@ -168,24 +168,36 @@ pub struct ShardCoverage {
     pub shards: Vec<ShardCoverageIn>,
 }
 
-/// One block of `get_blocks_by_height.bin`: its bytes and its listed
-/// transactions' whole bytes, in list order.
+/// One listed transaction of a block: its hash as the block lists it, and
+/// its body as the store holds it — the skeleton always, the archival good
+/// held or discarded with its shard.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BlockBlobs {
+pub struct ListedTx {
+    pub hash: TxHash,
+    pub body: crate::core::TxBody,
+}
+
+/// One block of `get_blocks_by_height.bin`: its bytes and its listed
+/// transactions, in list order. The projection chooses each body's form
+/// from the request (`SB-Q2`); a discarded good is a slot state there,
+/// never a reason this read fails.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BlockRead {
     /// The block, serialized.
     pub block: Vec<u8>,
-    /// Each listed transaction, serialized whole.
-    pub txs: Vec<Vec<u8>>,
+    /// Each listed transaction.
+    pub txs: Vec<ListedTx>,
 }
 
 /// What [`ChainReadFacts::blocks_by_height`] read: the blocks up to the
-/// first height it could not answer, and that height.
+/// first height above the tip, and that height.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BlocksAt {
     /// The blocks read, in request order.
-    pub blocks: Vec<BlockBlobs>,
-    /// The first height above the tip, or whose listed bodies this node
-    /// no longer holds whole; `None` when every height was read.
+    pub blocks: Vec<BlockRead>,
+    /// The first height above the tip; `None` when every height was read.
+    /// Nothing else fails a height: a body this node discarded is carried
+    /// as its slot's state (`PDM-Q10`).
     pub failed: Option<BlockHeight>,
 }
 
@@ -217,8 +229,8 @@ pub enum SpentAt {
 /// The chain reads behind the store flip's eight native read methods
 /// (module docs). Every method reads one committed snapshot.
 pub trait ChainReadFacts: Send + Sync {
-    /// The blocks at `heights`, each with its listed transactions whole
-    /// (`get_blocks_by_height.bin`).
+    /// The blocks at `heights`, each with its listed transactions as the
+    /// store holds them (`get_blocks_by_height.bin`).
     ///
     /// # Errors
     ///

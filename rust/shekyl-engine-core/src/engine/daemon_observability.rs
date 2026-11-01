@@ -80,6 +80,7 @@ use super::regtest_e2e::RegtestDaemon;
 fn build_get_blocks_by_height_req(heights: &[u64]) -> Vec<u8> {
     shekyl_rpc_types::GetBlocksByHeightRequest {
         heights: heights.to_vec(),
+        prune: false,
     }
     .to_bin()
     .expect("encode get_blocks_by_height request")

@@ -219,3 +219,18 @@ is a case no predecessor could express: a full body this node discarded,
 answered as `{tx_hash, shard}` under `archived` where the 3.63 daemon
 refused the reply (`PDM-Q10`). `get_version_synced_v41` is the chain's
 3.64 link.
+
+The same release gives `/get_blocks_by_height.bin` the `prune` switch and
+a per-slot body. `get_blocks_by_height_request_v1.bin` is unchanged: the
+switch is omitted when off, so the epee capture is still a valid 3.64
+request, and `_request_prune_v1.bin` is the switch on. The response's
+`txs` is an array of slots, each a section tagged `form` (`1` full, `2`
+skeleton, `3` archived) in place of the string list, so
+`_response_v2.bin` is `_response_v1.bin` with each body reshaped into a
+full slot
+(`blocks_by_height_v2_is_v1_with_each_body_reshaped_into_a_full_slot`).
+`_response_skeleton_v1.bin` (two skeletons, one with the third component
+and one without, so `pqc_auth_hash` appears exactly once) and
+`_response_archived_v1.bin` (a whole body beside an `{tx_hash, shard}`
+slot) are cases no predecessor could express, pinned as the 3.64
+encoder's own; `_response_empty_v1.bin` is unchanged.

@@ -3,18 +3,24 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Building a corpus from a daemon: `/get_blocks_by_height.bin` against an
-//! **unpruned** node, zero C++ (RD-Q2, §3.4).
+//! Building a corpus from a daemon: `/get_blocks_by_height.bin` in the
+//! full form, zero C++ (RD-Q2, §3.4).
 //!
 //! The fetcher asks for heights in batches through the workspace's
 //! [`Rpc`] trait — the same shared request/response types the daemon
 //! serves (`shekyl_rpc_types::bin_commands`), so this is not a second
 //! definition of the wire — and hands each `(block, txs)` to the
-//! [`CorpusWriter`], whose verification is the whole of RD-F15: a pruned
-//! node returns fewer bodies than the header lists with no signal, and it
-//! is the writer, not this module, that catches that and names the height.
-//! This module's own refusals are about the conversation, not the content:
-//! a non-OK status, a reply with the wrong number of entries.
+//! [`CorpusWriter`]. A corpus replays whole bodies, so a slot the daemon
+//! answers as `archived` — a body discarded at the archival horizon
+//! (`PDM-Q10`, `SB-Q2`) — is refused here, naming the height, the
+//! transaction and its shard ([`FetchFault::Archived`]); a skeleton in a
+//! reply to a full-form request is a daemon not keeping the contract
+//! ([`FetchFault::NotWhole`]). The writer's verification (RD-F15) still
+//! holds every record to its block's list in count, order and hash, so
+//! completeness is a property the artifact demonstrates, not one this
+//! module trusts the reply to assert. The module's other refusals are
+//! about the conversation: a non-OK status, a reply with the wrong number
+//! of entries.
 //!
 //! Generic over `Rpc` so the loop is tested against a scripted transport;
 //! the binary supplies `shekyl_rpc_transport::HttpRpc`.
@@ -35,8 +41,10 @@ use std::num::NonZeroUsize;
 use std::ops::Range;
 
 use shekyl_rpc_client::{Rpc, RpcError};
-use shekyl_rpc_types::{BinError, GetBlocksByHeightRequest, GetBlocksByHeightResponse, RpcStatus};
-use shekyl_types::BlockHeight;
+use shekyl_rpc_types::{
+    BinError, BlockTx, GetBlocksByHeightRequest, GetBlocksByHeightResponse, RpcStatus,
+};
+use shekyl_types::{BlockHeight, TxHash};
 
 use crate::corpus::{CorpusFault, CorpusWriter};
 use crate::source::Injection;
@@ -72,6 +80,25 @@ pub enum FetchFault {
         asked: usize,
         /// Entries returned.
         got: usize,
+    },
+    /// A listed body this daemon discarded at the archival horizon
+    /// (`PDM-Q10`): the corpus needs it whole, and the archive is where it
+    /// is served from.
+    #[error("the body of {tx_hash} at height {height} is archived in shard {shard}; a corpus needs it whole")]
+    Archived {
+        /// The block's height.
+        height: u64,
+        /// The transaction.
+        tx_hash: TxHash,
+        /// The shard the archive serves it from.
+        shard: u64,
+    },
+    /// A full-form request answered with a skeleton: the daemon did not
+    /// keep the form the request chose.
+    #[error("height {height}: a full-form request was answered with a skeleton")]
+    NotWhole {
+        /// The block's height.
+        height: u64,
     },
     /// The writer refused a record (RD-F15 and the rest of the corpus's
     /// verification).
@@ -119,6 +146,7 @@ pub async fn fetch_corpus<R: Rpc, W: Write + Seek>(
         let asked: Vec<u64> = (first..end).collect();
         let body = GetBlocksByHeightRequest {
             heights: asked.clone(),
+            prune: false,
         }
         .to_bin()?;
         let reply = rpc.bin_call(ROUTE, body).await?;
@@ -138,7 +166,23 @@ pub async fn fetch_corpus<R: Rpc, W: Write + Seek>(
             });
         }
         for (height, entry) in asked.iter().zip(reply.blocks) {
-            writer.append(&entry.block, &entry.txs)?;
+            let mut txs = Vec::with_capacity(entry.txs.len());
+            for tx in entry.txs {
+                match tx {
+                    BlockTx::Full(bytes) => txs.push(bytes),
+                    BlockTx::Archived { tx_hash, shard } => {
+                        return Err(FetchFault::Archived {
+                            height: *height,
+                            tx_hash: TxHash::from_bytes(tx_hash),
+                            shard,
+                        });
+                    }
+                    BlockTx::Skeleton(_) => {
+                        return Err(FetchFault::NotWhole { height: *height });
+                    }
+                }
+            }
+            writer.append(&entry.block, &txs)?;
             written += 1;
             let at = BlockHeight::from_raw(*height);
             for injection in injections.iter().filter(|i| i.at == at) {

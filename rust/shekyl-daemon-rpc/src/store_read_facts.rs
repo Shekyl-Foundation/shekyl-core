@@ -53,8 +53,8 @@ use super::{connecting, count_at, derivation_fault, store_fault, tip_of, StoreFa
 use crate::chain_facts::FactsFault;
 use crate::info_facts::{PoolScope, PoolState};
 use crate::read_facts::{
-    AltChainFacts, BlockBlobs, BlocksAt, ChainReadFacts, ClaimSource, ClaimantBond, CoinbaseRange,
-    CoinbaseSum, CurveTreeFacts, PowAt, PowSeed, ShardCoverage, SpentAt, TransactionsAt,
+    AltChainFacts, BlockRead, BlocksAt, ChainReadFacts, ClaimSource, ClaimantBond, CoinbaseRange,
+    CoinbaseSum, CurveTreeFacts, ListedTx, PowAt, PowSeed, ShardCoverage, SpentAt, TransactionsAt,
 };
 
 /// The tree after the block at `after`: the store's state at `after + 1`.
@@ -222,29 +222,6 @@ impl SlashGather {
     }
 }
 
-/// The whole bytes of the transaction `hash` lists, or `None` when this
-/// node has discarded its archival good (the range discard, `PDM-Q9`).
-fn whole_tx(snap: &ReadSnapshot<'_>, hash: &TxHash) -> Result<Option<Vec<u8>>, FactsFault> {
-    let Some(record) = snap.tx_record(hash).map_err(store_fault)? else {
-        tracing::error!(?hash, "a listed transaction has no record");
-        return Err(FactsFault::Inconsistent);
-    };
-    match snap
-        .tx_archival_good(record.location.id)
-        .map_err(store_fault)?
-    {
-        AtIndex::Recorded(ArchivalGood::Retained {
-            prunable,
-            pqc_auths,
-        }) => Ok(Some(record.wire_bytes(prunable, pqc_auths))),
-        AtIndex::Recorded(ArchivalGood::Discarded) => Ok(None),
-        AtIndex::BeyondCount => {
-            tracing::error!(?hash, "a recorded transaction's id is past the count");
-            Err(FactsFault::Inconsistent)
-        }
-    }
-}
-
 /// A recorded transaction's body as `get_transactions` carries it: its
 /// skeleton (the store's one constructor), and its archival good — held,
 /// or discarded with the shard it went in (`PDM-Q10`). A transaction that
@@ -391,10 +368,10 @@ impl ChainReadFacts for StoreFacts {
         })
     }
 
-    /// Each height's block and its listed transactions, until the first
-    /// height above the tip or whose listed bodies this node has pruned:
-    /// that height fails the request, as C++ answered a block it could not
-    /// read whole.
+    /// Each height's block and its listed transactions as the store holds
+    /// them, until the first height above the tip: that height, and only
+    /// that, fails the request. A body this node discarded is its slot's
+    /// state, read like any other (`SB-Q2`, `PDM-Q10`).
     fn blocks_by_height(&self, heights: &[BlockHeight]) -> Result<BlocksAt, FactsFault> {
         let snap = self.snapshot()?;
         let mut blocks = Vec::with_capacity(heights.len());
@@ -412,15 +389,16 @@ impl ChainReadFacts for StoreFacts {
             })?;
             let mut txs = Vec::with_capacity(parsed.transaction_hashes.len());
             for hash in &parsed.transaction_hashes {
-                let Some(tx) = whole_tx(&snap, hash)? else {
-                    return Ok(BlocksAt {
-                        blocks,
-                        failed: Some(height),
-                    });
+                let Some(record) = snap.tx_record(hash).map_err(store_fault)? else {
+                    tracing::error!(?hash, "a listed transaction has no record");
+                    return Err(FactsFault::Inconsistent);
                 };
-                txs.push(tx);
+                txs.push(ListedTx {
+                    hash: *hash,
+                    body: chain_body(&snap, hash, &record)?,
+                });
             }
-            blocks.push(BlockBlobs { block, txs });
+            blocks.push(BlockRead { block, txs });
         }
         Ok(BlocksAt {
             blocks,

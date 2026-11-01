@@ -12,7 +12,7 @@
 //! That is what lets one unit test with an in-memory [`ChainFacts`] pin a
 //! method's behaviour for every transport at once.
 
-use crate::core::{ArchivalGood, P2pRead, TxSlot};
+use crate::core::{FullForm, P2pRead, TxSlot};
 use serde::Deserialize;
 use shekyl_rpc_types::{
     ArchivedTx, GetTransactionsRequest, GetTransactionsResponse, TxEntry, TxLocation,
@@ -692,19 +692,9 @@ pub fn project_transactions(
         let (as_hex, pruned_as_hex) = if request.prune {
             (String::new(), hex::encode(&skeleton.unprunable))
         } else {
-            match &body.good {
-                ArchivalGood::Retained {
-                    pqc_auths,
-                    prunable,
-                } => {
-                    let mut full = skeleton.unprunable.clone();
-                    if let Some(pqc) = pqc_auths {
-                        full.extend_from_slice(pqc);
-                    }
-                    full.extend_from_slice(prunable);
-                    (hex::encode(&full), String::new())
-                }
-                ArchivalGood::Discarded { shard } => {
+            match body.full_form() {
+                FullForm::Whole(full) => (hex::encode(&full), String::new()),
+                FullForm::Archived { shard } => {
                     archived.push(ArchivedTx {
                         tx_hash,
                         shard: shard.to_raw(),
@@ -1369,7 +1359,7 @@ pub(crate) mod tests {
         decode_target_count, BlockAt, BlockFacts, BlockHashAt, BlockHeaderAt, BlockHeaderFacts,
         ChainTip, DaemonIdentity, FeeEstimate, NetStats,
     };
-    use crate::core::{ConnectionsSnapshot, SyncSpansSnapshot, TxBody};
+    use crate::core::{ArchivalGood, ConnectionsSnapshot, SyncSpansSnapshot, TxBody};
     use serde_json::json;
     use shekyl_rpc_types::Nullable;
     use shekyl_types::{

@@ -67,6 +67,38 @@ pub struct TxBody {
     pub good: ArchivalGood,
 }
 
+impl TxBody {
+    /// The body in the full form (`PDM-Q10`): whole, in the order
+    /// `shekyl_wire::TxSegments::concat` writes it, or archived with its
+    /// shard where this node discarded the good. Every full-form
+    /// projection reassembles through this one function.
+    #[must_use]
+    pub fn full_form(&self) -> FullForm {
+        match &self.good {
+            ArchivalGood::Retained {
+                pqc_auths,
+                prunable,
+            } => FullForm::Whole(
+                shekyl_wire::TxSegments {
+                    pruned: self.skeleton.unprunable.clone(),
+                    pqc_auths: pqc_auths.clone().unwrap_or_default(),
+                    prunable: prunable.clone(),
+                }
+                .concat(),
+            ),
+            ArchivalGood::Discarded { shard } => FullForm::Archived { shard: *shard },
+        }
+    }
+}
+
+/// A body answered in the full form: its whole bytes, or the slot state
+/// `archived` with the shard the archive serves it from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FullForm {
+    Whole(Vec<u8>),
+    Archived { shard: shekyl_types::ShardId },
+}
+
 /// Whether this node holds a transaction's archival good.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArchivalGood {

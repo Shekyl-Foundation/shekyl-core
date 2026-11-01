@@ -488,7 +488,8 @@ async fn the_q1_reads_answer_from_the_store_and_the_pool() {
         get_blocks_by_height, get_o_indexes, is_key_image_spent,
     };
     use shekyl_rpc_types::{
-        GetBlocksByHeightRequest, GetOIndexesRequest, IsKeyImageSpentRequest, KeyImageStatus,
+        BlockTx, GetBlocksByHeightRequest, GetOIndexesRequest, IsKeyImageSpentRequest,
+        KeyImageStatus,
     };
     let (mut scenario, mined) = crate::pool_door_tests::matured("rpc-q1-reads").await;
     let spend = crate::pool_door_tests::paying_the_floor(&mut scenario, &mined, 0).await;
@@ -517,21 +518,58 @@ async fn the_q1_reads_answer_from_the_store_and_the_pool() {
                 &facts,
                 &GetBlocksByHeightRequest {
                     heights: vec![0, landed.height.to_raw(), past],
+                    prune: false,
                 },
                 true,
             )
             .expect("blocks");
             assert_eq!(
                 blocks.status.0,
-                format!("Error retrieving block at height {past}")
+                format!("Error retrieving block at height {past}"),
+                "only a height above the tip fails the request"
             );
             assert_eq!(blocks.blocks.len(), 2, "the two below the tip");
             assert_eq!(blocks.blocks[0].block, mined[0].template.block.serialize());
             assert_eq!(blocks.blocks[1].block, landed.template.block.serialize());
             assert_eq!(
                 blocks.blocks[1].txs,
-                vec![spend.serialize()],
-                "the body, whole"
+                vec![BlockTx::Full(spend.serialize())],
+                "the full form: the body, whole"
+            );
+
+            // The pruned form (SB-Q2): the slot is the skeleton, and it binds
+            // to the id the block lists through `SkeletonTx::txid`.
+            let pruned = get_blocks_by_height(
+                &facts,
+                &GetBlocksByHeightRequest {
+                    heights: vec![landed.height.to_raw()],
+                    prune: true,
+                },
+                true,
+            )
+            .expect("blocks");
+            assert!(pruned.status.is_ok());
+            let [BlockTx::Skeleton(slot)] = pruned.blocks[0].txs.as_slice() else {
+                panic!("under prune the one listed body is a skeleton");
+            };
+            let parts = spend.txid_parts();
+            assert_eq!(slot.prunable_hash, parts.prunable_hash.to_bytes());
+            assert_eq!(
+                slot.pqc_auth_hash,
+                parts.pqc_auth_hash.map(shekyl_types::PqcAuthHash::to_bytes)
+            );
+            let skeleton = shekyl_wire::SkeletonTx {
+                unprunable: slot.unprunable.clone(),
+                prunable_hash: shekyl_types::PrunableHash::from_bytes(slot.prunable_hash),
+                pqc_auth_hash: slot
+                    .pqc_auth_hash
+                    .map(shekyl_types::PqcAuthHash::from_bytes),
+                archival_len: shekyl_types::ArchivalLength::from_raw(slot.archival_len),
+            };
+            assert_eq!(
+                skeleton.txid().expect("the skeleton binds"),
+                spend_id,
+                "the skeleton rebinds the listed id"
             );
 
             let indices = get_o_indexes(

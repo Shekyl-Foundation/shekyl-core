@@ -94,8 +94,8 @@ pub use archival_reads::{
     GetArchivalShardCoverageResponse, ShardCoverageRow,
 };
 pub use bin_commands::{
-    BinError, BlockEntry, GetBlocksByHeightRequest, GetBlocksByHeightResponse, GetOIndexesRequest,
-    GetOIndexesResponse,
+    BinError, BlockEntry, BlockTx, BlockTxSkeleton, GetBlocksByHeightRequest,
+    GetBlocksByHeightResponse, GetOIndexesRequest, GetOIndexesResponse,
 };
 pub use chain::{
     core_rpc_version_string, BlockHeader, ConnectState, GetBlockCountResponse, GetBlockHashParams,
