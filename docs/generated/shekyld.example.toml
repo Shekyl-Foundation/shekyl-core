@@ -87,9 +87,6 @@
 # The download rate limit, or `unlimited`.
 # p2p-download-max = "unlimited"
 
-# The transaction pool's weight bound.
-# txpool-weight-max = "648000000B"
-
 # A command to run on a new block, with {height} and {hash}.
 # notify-block = ["/path/to/command", "{height}"]
 

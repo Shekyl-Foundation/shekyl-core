@@ -323,8 +323,6 @@ pub struct DaemonConfig {
     pub p2p: P2p,
     /// The RPC service.
     pub rpc: Rpc,
-    /// The transaction pool's weight bound.
-    pub txpool_weight_max: u64,
     /// The notify runner.
     pub notify: Notify,
     /// The miner.
@@ -405,7 +403,6 @@ pub fn build(
     let dev = dev_section(&mut r);
     let session = session_section(&mut r, &rpc.admin_listen);
     let notify = notify_section(&mut r);
-    let txpool_weight_max = r.required_bytes("txpool-weight-max");
 
     faults.append(&mut r.faults);
     if !faults.is_empty() {
@@ -428,8 +425,6 @@ pub fn build(
                 .connections_max
                 .expect("rpc-connections-max was read or a fault was recorded"),
         },
-        txpool_weight_max: txpool_weight_max
-            .expect("txpool-weight-max was read or a fault was recorded"),
         notify,
         mine,
         dev,
