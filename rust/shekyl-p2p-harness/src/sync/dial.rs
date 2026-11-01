@@ -18,7 +18,7 @@ use std::sync::{Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 
 use shekyl_capped_stream::{InboundEnd, QueueHold, Session, StreamEnds};
-use shekyl_levin::{BucketHead, HEADER_SIZE};
+use shekyl_levin::{ingress_payload_cap, BucketHead, HEADER_SIZE};
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_seam::{admit, drive_inbound, Channel, Dial, Endpoint, Hub};
 use shekyl_timing_engine::Tick;
@@ -181,9 +181,23 @@ impl Drop for PeerDial {
 pub struct Buckets {
     buffer: Vec<u8>,
     broken: bool,
+    /// Judge each header as the C++ ingress does (`get_max_bytes`, which
+    /// is `shekyl_levin::ingress_payload_cap`): a command this protocol
+    /// does not define, or a payload past its cap, ends the stream too.
+    ingress: bool,
 }
 
 impl Buckets {
+    /// The C++ handler's view of a session: the ingress's admission as
+    /// well as the header's form.
+    #[must_use]
+    pub fn cpp_ingress() -> Self {
+        Self {
+            ingress: true,
+            ..Self::default()
+        }
+    }
+
     /// The whole buckets `bytes` completes, as (command, payload).
     pub fn feed(&mut self, bytes: &[u8]) -> Vec<(u32, Vec<u8>)> {
         let mut out = Vec::new();
@@ -203,6 +217,14 @@ impl Buckets {
                 self.buffer.clear();
                 return out;
             };
+            let refused = self.ingress
+                && !ingress_payload_cap(head.command, head.flags)
+                    .is_ok_and(|cap| head.payload_len <= cap);
+            if refused {
+                self.broken = true;
+                self.buffer.clear();
+                return out;
+            }
             let Ok(len) = usize::try_from(head.payload_len) else {
                 self.broken = true;
                 return out;

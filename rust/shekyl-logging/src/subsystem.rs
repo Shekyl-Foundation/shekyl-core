@@ -122,7 +122,12 @@ impl Subsystem {
                 "shekyl_noise",
                 "shekyl_socks",
             ],
-            Self::Sync => &["net::cn", "cn::block_queue", "shekyl_chain_ingest"],
+            Self::Sync => &[
+                "net::cn",
+                "shekyl_chain_sync",
+                "shekyl_chain_sync_runtime",
+                "shekyl_chain_ingest",
+            ],
             Self::Chain => &[
                 "blockchain",
                 "cn",

@@ -378,11 +378,11 @@ fn run_stub(hub: &Hub, posts: &mpsc::Receiver<Option<Post>>, log: &Mutex<StubLog
     while let Ok(Some(post)) = posts.recv() {
         match post {
             Post::Established { id, .. } => {
-                sessions.insert(id, Buckets::default());
+                sessions.insert(id, Buckets::cpp_ingress());
                 hub.handler_armed(id, true);
             }
             Post::Deliver { id, bytes, .. } => {
-                let buckets = sessions.entry(id).or_default();
+                let buckets = sessions.entry(id).or_insert_with(Buckets::cpp_ingress);
                 let commands = buckets.feed(&bytes);
                 let broken = buckets.broken();
                 let mut log = log.lock().expect("stub log");

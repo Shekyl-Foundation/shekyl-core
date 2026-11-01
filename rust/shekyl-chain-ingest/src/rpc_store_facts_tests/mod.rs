@@ -96,6 +96,10 @@ impl NodeFacts for TestNode {
     fn sync(&self) -> Result<SyncFacts, FactsFault> {
         Ok(self.sync)
     }
+    /// These reads never render `sync_info`: the view is not ready.
+    fn sync_view(&self) -> Result<shekyl_daemon_rpc::sync_facts::SyncViewFacts, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
     fn pool_counts(&self, scope: PoolScope) -> Result<PoolState<PoolCounts>, FactsFault> {
         Ok(PoolState::Live(match scope {
             PoolScope::Broadcast => PoolCounts {

@@ -18,8 +18,8 @@
 //!
 //! Every export here answers the C++ protocol handler's transaction routes
 //! and `levin_notify`, and RD deletes those callers and these exports with
-//! them: `shekyl_pool_admit`, `shekyl_pool_has`, `shekyl_pool_hashes`,
-//! `shekyl_pool_complement`, `shekyl_pool_fluffed`.
+//! them: `shekyl_pool_admit`, `shekyl_pool_has`, `shekyl_pool_complement`,
+//! `shekyl_pool_fluffed`.
 //! The one Rust-to-C++ entry beside them, `shekyl_shell_relay_local` (the
 //! shell hands a committed transaction to `levin_notify`), is RD's too.
 
@@ -245,43 +245,6 @@ pub unsafe extern "C" fn shekyl_pool_has(hash: *const u8) -> i32 {
     let id = TxHash::from_bytes(bytes);
     let pool = lock(&door.pool);
     i32::from(pool.relay_view().record(&id).is_some())
-}
-
-fn hash_bytes(sensitive: bool, pool: &Pool) -> Vec<u8> {
-    let view = pool.relay_view();
-    if sensitive {
-        view.entries()
-            .flat_map(|entry| entry.id.to_bytes())
-            .collect()
-    } else {
-        pool.peer_sync().flat_map(|(id, _)| id.to_bytes()).collect()
-    }
-}
-
-/// Shown hashes, or every held hash when `sensitive` is nonzero. `out` is
-/// `32 * n` bytes, freed with `shekyl_buffer_free`. `0` on success.
-///
-/// # Safety
-///
-/// `out` is a writable [`ShekylBuffer`].
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_pool_hashes(sensitive: u8, out: *mut ShekylBuffer) -> i32 {
-    let Some(door) = door() else {
-        return SHEKYL_POOL_UNBOUND;
-    };
-    if out.is_null() {
-        return SHEKYL_POOL_FAULT;
-    }
-    let pool = lock(&door.pool);
-    let bytes = hash_bytes(sensitive != 0, &pool);
-    drop(pool);
-    let buffer = if bytes.is_empty() {
-        ShekylBuffer::null()
-    } else {
-        ShekylBuffer::from_vec(bytes)
-    };
-    out.write(buffer);
-    0
 }
 
 /// Shown bodies whose hash is not in `known` (`known_count` hashes of 32

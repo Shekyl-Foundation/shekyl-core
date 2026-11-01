@@ -2873,98 +2873,6 @@ struct shekyl_seam_handshake_result {
 /// own onion (Rust has told the supervisor), 3 a probe nonce on another
 /// connector (a defect, logged in Rust, never evidence).
 int shekyl_dial_take_handshake_nonce(std::uint32_t connector, const std::uint8_t* nonce);
-/// The chain-sync heuristics that read the outbound target, decided in Rust
-/// (DAEMON_CONFIG_CUTOVER.md §4.2): the handler hands its counts over.
-/// Whether to drop a synced peer on `connector` to make room for a syncing
-/// one: the outbound slots are full and fewer than the search count sync.
-bool shekyl_sync_room_for_syncing_peer(std::uint32_t connector, std::uint32_t syncing, std::uint32_t synced);
-/// Whether to look for more outbound peers to sync from on `connector`.
-bool shekyl_sync_wants_more_outbound(std::uint32_t connector, std::uint32_t outbound);
-/// The protocol handler's one entry into the Rust ingest service
-/// (DRS_X_STORE_FLIP.md DX-Q2 item 2). Built and tested; the store flip
-/// routes the handler's block arrivals here, and nothing calls it before.
-/// `shekyl_ingest_bind` installs the post, which enqueues each reply onto
-/// the connection's strand and returns. A null `post` or `ctx` unbinds and
-/// drains replies already accepted before the post is cleared. Ask
-/// `shekyl_ingest_room` before sending; `shekyl_ingest_offer_span` judges
-/// lengths, room and the session bucket, then copies what it is given and
-/// returns at once. Each accepted arrival gets exactly one reply, tagged
-/// with the arrival and the connection.
-constexpr std::uint32_t SHEKYL_INGEST_CONNECTED = 1;
-constexpr std::uint32_t SHEKYL_INGEST_REFUSED = 2;
-constexpr std::uint32_t SHEKYL_INGEST_UNLINKED = 3;
-constexpr std::uint32_t SHEKYL_INGEST_ALREADY_HELD = 4;
-constexpr std::uint32_t SHEKYL_INGEST_HELD = 5;
-/// The door's past-cap hint: judged before the block was stored or hashed,
-/// never proof of a heavier chain. `height` is the depth, `by` the cap.
-constexpr std::uint32_t SHEKYL_INGEST_BEYOND_CAP = 6;
-constexpr std::uint32_t SHEKYL_INGEST_SWITCHED = 7;
-constexpr std::uint32_t SHEKYL_INGEST_PROMOTION_REFUSED = 8;
-/// A stored heavier chain this node cannot follow: a pop met the undo
-/// floor. `height` is the tip, `by` the floor.
-constexpr std::uint32_t SHEKYL_INGEST_CANNOT_FOLLOW_BELOW_FLOOR = 9;
-constexpr std::uint32_t SHEKYL_INGEST_MISSING_BODIES = 10;
-constexpr std::uint32_t SHEKYL_INGEST_CANCELLED = 11;
-constexpr std::uint32_t SHEKYL_INGEST_STOPPED = 12;
-/// A stored heavier chain this node cannot follow: its fork is deeper than
-/// the cap. `height` is the depth, `by` the cap.
-constexpr std::uint32_t SHEKYL_INGEST_CANNOT_FOLLOW_BEYOND_CAP = 13;
-/// `shekyl_ingest_offer_span`'s results. Every refusal is before
-/// acceptance and never a peer fault; THROTTLED lets the handler close the
-/// session, never score it.
-constexpr int SHEKYL_INGEST_ACCEPTED = 0;
-constexpr int SHEKYL_INGEST_NO_ROOM = 1;
-constexpr int SHEKYL_INGEST_THROTTLED = 2;
-constexpr int SHEKYL_INGEST_OVERSIZE = 3;
-constexpr int SHEKYL_INGEST_UNBOUND = -1;
-constexpr int SHEKYL_INGEST_INVALID = -2;
-/// `shekyl_ingest_bind`: an unbind on a thread of the runtime that posts
-/// the replies. It cannot wait for them, so nothing changed. Unbind from
-/// another thread.
-constexpr int SHEKYL_INGEST_REENTRANT = -3;
-
-struct shekyl_ingest_blob {
-  const std::uint8_t* ptr;
-  std::size_t len;
-};
-
-struct shekyl_ingest_arrival {
-  std::uint64_t tag;
-  shekyl_ingest_blob block;
-  const shekyl_ingest_blob* bodies;
-  std::size_t bodies_len;
-  shekyl_ingest_blob witness;
-};
-
-/// Which fields carry meaning is the kind's (`ingest_ffi.rs`); the rest are
-/// zero. MISSING_BODIES carries its indices beside the struct.
-struct shekyl_ingest_reply {
-  std::uint64_t connection;
-  std::uint64_t tag;
-  std::uint32_t kind;
-  std::uint16_t rule;
-  std::uint8_t _pad[2];
-  std::uint64_t height;
-  std::uint64_t by;
-  std::uint8_t hash[32];
-};
-static_assert(sizeof(shekyl_ingest_reply) == 72, "ingest reply");
-
-using shekyl_ingest_post_fn = void (*)(void* ctx, const shekyl_ingest_reply* reply,
-    const std::uint64_t* indices, std::size_t indices_len);
-
-/// Install `post`. A null `post` or `ctx` unbinds: replies already accepted
-/// are posted before it returns, and `ctx` may be released after. Returns 0,
-/// or SHEKYL_INGEST_REENTRANT for an unbind on the replies' own runtime.
-int shekyl_ingest_bind(void* ctx, shekyl_ingest_post_fn post);
-/// The arrivals the service accepts now; 0 when it is not installed.
-std::uint64_t shekyl_ingest_room(void);
-/// Offer `len` arrivals from `connection`; `solicited` nonzero for blocks
-/// this node asked for.
-int shekyl_ingest_offer_span(std::uint64_t connection, std::uint8_t solicited,
-    const shekyl_ingest_arrival* arrivals, std::size_t len);
-/// `connection` closed.
-void shekyl_ingest_session_closed(std::uint64_t connection);
 
 /// The protocol handler's door into the node's pool (DX-Q5).
 /// SHEKYL_POOL_ADMITTED: relay the blob. SHEKYL_POOL_HELD: already held, do
@@ -2980,9 +2888,6 @@ void shekyl_ingest_session_closed(std::uint64_t connection);
 int32_t shekyl_pool_admit(const uint8_t* blob, size_t len);
 /// 1 when the pool holds `hash`, stem included. 0 when it does not.
 int32_t shekyl_pool_has(const uint8_t hash[32]);
-/// Shown hashes, or every held hash when `sensitive` is nonzero. `out` is
-/// 32*n bytes, freed with shekyl_buffer_free. 0 on success.
-int32_t shekyl_pool_hashes(uint8_t sensitive, ShekylBuffer* out);
 /// Shown bodies whose hash is not among `known_count` hashes. `out` is a
 /// sequence of little-endian u32 lengths and the bytes, freed with
 /// shekyl_buffer_free. 0 on success.
@@ -3009,36 +2914,6 @@ struct shekyl_sync_payload {
 #define SHEKYL_HANDSHAKE_TIP_NONE 1
 #define SHEKYL_HANDSHAKE_TIP_NULL (-1)
 int32_t shekyl_p2p_handshake_tip(shekyl_sync_payload* out);
-
-/// The handler's sync reads, each over one snapshot of the node's chain.
-/// 0 is success. 1 is a refusal (empty chain, unknown height, a history
-/// that does not share genesis). -1 is a store fault. -2 is no door.
-#define SHEKYL_CORE_MAIN 0
-#define SHEKYL_CORE_ALT 1
-#define SHEKYL_CORE_ABSENT 2
-int32_t shekyl_core_height(uint64_t* out_count);
-int32_t shekyl_core_top(uint64_t* out_height, uint8_t* out_hash);
-int32_t shekyl_core_hash_at(uint64_t height, uint8_t* out_hash);
-int32_t shekyl_core_have_block(const uint8_t* hash, int32_t* out_where);
-int32_t shekyl_core_cumulative_difficulty(uint64_t height, uint64_t* out_lo, uint64_t* out_hi);
-int32_t shekyl_core_short_history(ShekylBuffer* hashes, uint64_t* out_count);
-int32_t shekyl_core_supplement(const uint8_t* ids, size_t id_count,
-    ShekylBuffer* hashes, ShekylBuffer* weights,
-    uint64_t* out_start, uint64_t* out_total,
-    uint64_t* out_diff_lo, uint64_t* out_diff_hi);
-/// The block `hash` names. 0 when held: `blob` is the wire bytes, `witness`
-/// is empty when the block carries none (freed with shekyl_buffer_free),
-/// `out_alt` is nonzero for an alternative, `out_weight` is the block's
-/// weight. SHEKYL_CORE_ABSENT when the chain does not hold it. The witness
-/// is that block's own, including an alternative's.
-int32_t shekyl_core_block(const uint8_t hash[32], ShekylBuffer* blob,
-    ShekylBuffer* witness, int32_t* out_alt, uint64_t* out_weight);
-/// The transactions `hashes` names, `count` of them, in order. `out` is a
-/// record per hash: u8 0 when missing, or u8 1, a little-endian u32 length
-/// and the wire bytes when held. A discarded prunable region is missing
-/// unless the pool still shows the transaction. A stem entry stays missing.
-/// Freed with shekyl_buffer_free. 0 on success.
-int32_t shekyl_core_txs(const uint8_t* hashes, size_t count, ShekylBuffer* out);
 
 /// A transaction this node committed, handed to `levin_notify` as
 /// `relay_method::local`. Returns 1 when the relay took it, 0 when there

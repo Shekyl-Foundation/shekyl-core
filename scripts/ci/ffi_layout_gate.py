@@ -76,9 +76,7 @@ GROUPS = [
             "ShekylSeamHandshakeResult": "shekyl_seam_handshake_result",
             "ShekylRpcPeerFacts": "shekyl_rpc_peer_facts",
             "ShekylBanView": "shekyl_ban_view",
-            "ShekylIngestBlob": "shekyl_ingest_blob",
-            "ShekylIngestArrival": "shekyl_ingest_arrival",
-            "ShekylIngestReply": "shekyl_ingest_reply",
+            "ShekylSyncPayload": "shekyl_sync_payload",
         },
     },
     {

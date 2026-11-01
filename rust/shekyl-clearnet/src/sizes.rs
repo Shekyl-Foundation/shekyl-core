@@ -118,10 +118,6 @@ mod present {
                     DefinedCommand::NewCompactBlock | DefinedCommand::RequestCompactMissingTx => {
                         Self::BlockRelay
                     }
-                    DefinedCommand::RequestGetObjects
-                    | DefinedCommand::ResponseGetObjects
-                    | DefinedCommand::RequestChain
-                    | DefinedCommand::ResponseChainEntry => Self::Sync,
                 };
             }
             if SyncCommand::from_wire(command).is_some() {

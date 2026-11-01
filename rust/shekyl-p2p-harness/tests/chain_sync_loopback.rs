@@ -711,6 +711,27 @@ impl SyncPeer for Asker {
     }
 }
 
+/// The inherited chain request (2006) is retired (CS-5 §6): the attached
+/// router does not keep it, so it reaches the C++ handler's ingress, which
+/// refuses it as it refuses any command this protocol does not define and
+/// closes the session cleanly, with no fault.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_retired_chain_request_is_refused_by_the_cpp_ingress() {
+    logs();
+    let (corpus, steps) = spend();
+    let mut node = Node::start("retired", corpus.rules(), &steps[..1], 1, rng()).await;
+    let (peer, _) = HeaderChainPeer::new(Vec::new(), 0);
+    let id = node.connect(Box::new(peer), None);
+    assert!(node.inject(id, notify(2006, b"chain")).await);
+    assert!(
+        node.wait(LIMIT, |node| node.closed(id).is_some()).await,
+        "the session stayed open"
+    );
+    assert_eq!(node.closed(id), Some(CloseKind::SessionRefused));
+    assert_eq!(node.stub.lock().expect("stub").refused, vec![id]);
+    node.stop().await;
+}
+
 /// The node answers both requests from its store, with responses the
 /// requester's own form checks accept.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
