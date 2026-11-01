@@ -19,6 +19,7 @@ use shekyl_net_address::NetworkAddress;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_timing_engine::Tick;
 
+use crate::accept_rate::{accept_bound, AcceptGate, RateRefusal};
 use crate::ban::{BanLeft, BanList, Ipv4Subnet, ListedBan};
 use crate::declaration::{declaration, Assessment, BannableInbound, ConnectorId, InboundIdentity};
 use crate::dial::check_dial;
@@ -157,8 +158,90 @@ const fn admission_refused() -> OpenError {
     OpenError::Refused(CloseCause::new(CloseKind::AdmissionRefused))
 }
 
+const fn accept_rate_exceeded() -> OpenError {
+    OpenError::Refused(CloseCause::new(CloseKind::AcceptRateExceeded))
+}
+
 const fn inbound_not_accepted() -> OpenError {
     OpenError::Refused(CloseCause::new(CloseKind::InboundNotAccepted))
+}
+
+/// Accepts the socket table refused since the counts were last taken.
+///
+/// The rate buckets are the flood signal: a warning names them. A ban, a
+/// ceiling of zero, and a full ceiling are ordinary refusals and are
+/// reported without that warning.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AcceptRefusals {
+    /// The host's bucket could not pay.
+    pub over_host_rate: u64,
+    /// The connector's bucket could not pay.
+    pub over_connector_rate: u64,
+    /// A ceiling or a connector cap of zero.
+    pub inbound_closed: u64,
+    /// A ban, a full ceiling or cap, or an id or occupancy that cannot move.
+    pub full_or_banned: u64,
+}
+
+impl AcceptRefusals {
+    /// The rate refusals together: the count a warning names.
+    #[must_use]
+    pub const fn over_rate(self) -> u64 {
+        self.over_host_rate.saturating_add(self.over_connector_rate)
+    }
+
+    /// Whether any accept was refused.
+    #[must_use]
+    pub const fn any(self) -> bool {
+        self.over_rate() > 0 || self.inbound_closed > 0 || self.full_or_banned > 0
+    }
+}
+
+/// One accept the table refused, named by the decision that refused it.
+///
+/// Recorded on the accept path only. An outbound ban is the same close
+/// cause and is not an accept, so it is not one of these.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AcceptRefusal {
+    /// A ceiling or a connector cap of zero.
+    InboundClosed,
+    /// A ban, a full ceiling or cap, or an id or occupancy that cannot move.
+    FullOrBanned,
+    /// The host's bucket could not pay.
+    OverHostRate,
+    /// The connector's bucket could not pay.
+    OverConnectorRate,
+}
+
+impl AcceptRefusal {
+    const fn open_error(self) -> OpenError {
+        match self {
+            Self::InboundClosed => inbound_not_accepted(),
+            Self::FullOrBanned => admission_refused(),
+            Self::OverHostRate | Self::OverConnectorRate => accept_rate_exceeded(),
+        }
+    }
+
+    /// Count this refusal and return the close the accept already returned.
+    fn record(self, inner: &mut Inner) -> OpenError {
+        let cell = match self {
+            Self::InboundClosed => &mut inner.refusals.inbound_closed,
+            Self::FullOrBanned => &mut inner.refusals.full_or_banned,
+            Self::OverHostRate => &mut inner.refusals.over_host_rate,
+            Self::OverConnectorRate => &mut inner.refusals.over_connector_rate,
+        };
+        *cell = cell.saturating_add(1);
+        self.open_error()
+    }
+}
+
+impl From<RateRefusal> for AcceptRefusal {
+    fn from(bucket: RateRefusal) -> Self {
+        match bucket {
+            RateRefusal::Host => Self::OverHostRate,
+            RateRefusal::Connector => Self::OverConnectorRate,
+        }
+    }
 }
 
 /// How an inbound limit stands against the sockets already held under it.
@@ -196,10 +279,10 @@ impl LimitStance {
         }
     }
 
-    const fn refusal(self) -> Result<(), OpenError> {
+    const fn refusal(self) -> Result<(), AcceptRefusal> {
         match self {
-            Self::Closed => Err(inbound_not_accepted()),
-            Self::Full => Err(admission_refused()),
+            Self::Closed => Err(AcceptRefusal::InboundClosed),
+            Self::Full => Err(AcceptRefusal::FullOrBanned),
             Self::Open => Ok(()),
         }
     }
@@ -271,16 +354,24 @@ struct Inner {
     /// An operator cap for one connector. `None` means that connector has
     /// no cap of its own. The process ceiling applies either way.
     zone_caps: [Option<u32>; ConnectorId::COUNT],
+    /// Clearnet's accept-rate bound (D10.3), or `None` when its row has no
+    /// limiter.
+    clearnet_rate: Option<AcceptGate>,
+    /// Accepts refused since the counts were last taken. Outbound opens
+    /// do not write it.
+    refusals: AcceptRefusals,
 }
 
 impl Inner {
-    fn new() -> Self {
+    fn new(clearnet_rate: Option<AcceptGate>) -> Self {
         Self {
             next_id: 1,
             occupancy: Occupancy::new(),
             live: HashMap::new(),
             bans: BanList::new(),
             zone_caps: [None; ConnectorId::COUNT],
+            clearnet_rate,
+            refusals: AcceptRefusals::default(),
         }
     }
 
@@ -309,12 +400,13 @@ impl Inner {
 /// this function.
 ///
 /// A closed bound returns before the process sum. A zero ceiling is then
-/// not reported as an overflow of the occupancy counter.
+/// not reported as an overflow of the occupancy counter. The caller
+/// records the refusal: this function only decides.
 fn refuse_inbound(
     inner: &Inner,
     connector: ConnectorId,
     ceiling: InboundCeiling,
-) -> Result<(), OpenError> {
+) -> Result<(), AcceptRefusal> {
     let cap = inner.zone_caps[connector.index()];
     let held = inner.occupancy.get(connector, Direction::Inbound);
     let zone = LimitStance::classify(cap, held);
@@ -325,11 +417,23 @@ fn refuse_inbound(
     if decided != LimitStance::Open {
         return decided.refusal();
     }
-    let total = inner
-        .occupancy
-        .process_inbound()
-        .ok_or(OpenError::Exhausted)?;
+    let Some(total) = inner.occupancy.process_inbound() else {
+        return Err(AcceptRefusal::FullOrBanned);
+    };
     LimitStance::classify(limit, total).refusal()
+}
+
+/// Which inbound clearnet row this call is reserving.
+///
+/// A network accept spends the accept-rate gate. A reservation does not:
+/// the harnesses that call it have no handshake for the gate to price,
+/// and the listener's accept is the only call that does.
+#[derive(Clone, Copy)]
+enum ClearnetInbound {
+    /// [`Sockets::accept_clearnet`]: ban, ceiling, rate, then the row.
+    Network,
+    /// [`Sockets::reserve_clearnet_inbound`]: ban, ceiling, then the row.
+    Reserved,
 }
 
 /// The socket table. Clones share it. A poisoned lock aborts the process:
@@ -340,12 +444,42 @@ pub struct Sockets {
 }
 
 impl Sockets {
-    /// An empty table.
+    /// An empty table. Clearnet accepts pass the gate its row in
+    /// [`accept_bound`] describes.
     #[must_use]
     pub fn new() -> Self {
+        Self::with_clearnet_gate(AcceptGate::for_bound(accept_bound(ConnectorId::Clearnet)))
+    }
+
+    /// An empty table whose clearnet accepts pass `gate`, or no gate, in
+    /// place of the connector's row: for harnesses and tests that exercise
+    /// the mechanism with rates the table does not hold. The daemon's table
+    /// is [`Self::new`].
+    #[must_use]
+    pub fn with_clearnet_gate(gate: Option<AcceptGate>) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(Inner::new())),
+            inner: Arc::new(Mutex::new(Inner::new(gate))),
         }
+    }
+
+    /// Accepts refused since the last call, and start counting again.
+    ///
+    /// The rate buckets, a ban, a ceiling and a cap that cannot move are
+    /// one ledger: the minute report reads it, and nothing else counts an
+    /// accept by matching a close cause after the fact.
+    pub fn take_accept_refusals(&self) -> AcceptRefusals {
+        std::mem::take(&mut self.lock().refusals)
+    }
+
+    /// How many refused clearnet accepts may linger half-closed at once
+    /// for `span` (D10.2): what the accept-rate gate's connector bucket
+    /// admits in that time ([`AcceptGate::linger_cap`]). Zero with no gate.
+    #[must_use]
+    pub fn clearnet_linger_cap(&self, span: Tick) -> usize {
+        self.lock()
+            .clearnet_rate
+            .as_ref()
+            .map_or(0, |gate| gate.linger_cap(span))
     }
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
@@ -373,12 +507,52 @@ impl Sockets {
     /// other connector's inbound row are one sum. A banned address, and a
     /// positive ceiling or connector cap that is full, are
     /// [`CloseKind::AdmissionRefused`]. A ceiling or connector cap of zero
-    /// is [`CloseKind::InboundNotAccepted`]. Either refusal reserves nothing.
+    /// is [`CloseKind::InboundNotAccepted`]. An accept the connector's or
+    /// the host's rate bucket cannot pay for is
+    /// [`CloseKind::AcceptRateExceeded`] (D10.3); it is decided after the
+    /// ban and the ceilings, so a connection those refuse spends no token.
+    /// Every refusal reserves nothing. This is the listener's accept.
+    /// A harness reserves through [`Self::reserve_clearnet_inbound`] and
+    /// spends no token.
     pub fn accept_clearnet(
         &self,
         ip: IpAddr,
         ceiling: InboundCeiling,
         now: Tick,
+    ) -> Result<OpenSocket, OpenError> {
+        self.clearnet_inbound(ip, ceiling, now, ClearnetInbound::Network)
+    }
+
+    /// Reserve an inbound clearnet row that is not a network accept.
+    ///
+    /// The listener's accept is [`Self::accept_clearnet`], and that is
+    /// the call that spends an accept-rate token. This one is the row a
+    /// harness reserves: the in-memory loopback dialer, and the tests
+    /// that admit through it. A harness has no handshake, so the gate
+    /// has nothing to price, and the socket table is process-global, so
+    /// charging the harness would spend the tokens the listener's
+    /// accepts are counted against.
+    ///
+    /// A ban, a full ceiling and a ceiling of zero still refuse, and
+    /// still count on the refusal ledger. The rate is not consulted, so
+    /// the refusal is never [`CloseKind::AcceptRateExceeded`].
+    pub fn reserve_clearnet_inbound(
+        &self,
+        ip: IpAddr,
+        ceiling: InboundCeiling,
+        now: Tick,
+    ) -> Result<OpenSocket, OpenError> {
+        self.clearnet_inbound(ip, ceiling, now, ClearnetInbound::Reserved)
+    }
+
+    /// Ban, then the ceilings, then the rate when `inbound` is a network
+    /// accept, then the row. One order, so the two callers cannot drift.
+    fn clearnet_inbound(
+        &self,
+        ip: IpAddr,
+        ceiling: InboundCeiling,
+        now: Tick,
+        inbound: ClearnetInbound,
     ) -> Result<OpenSocket, OpenError> {
         let endpoint = ObservedEndpoint::Host(ip);
         assert!(
@@ -387,15 +561,26 @@ impl Sockets {
         );
         let mut inner = self.lock();
         if inner.bans.is_banned(ip, now) {
-            return Err(admission_refused());
+            return Err(AcceptRefusal::FullOrBanned.record(&mut inner));
         }
-        refuse_inbound(&inner, ConnectorId::Clearnet, ceiling)?;
-        self.mint(
-            &mut inner,
-            ConnectorId::Clearnet,
-            Direction::Inbound,
-            endpoint,
-        )
+        if let Err(refusal) = refuse_inbound(&inner, ConnectorId::Clearnet, ceiling) {
+            return Err(refusal.record(&mut inner));
+        }
+        match inbound {
+            ClearnetInbound::Network => {
+                // The gate borrow ends before the refusal is recorded.
+                let rate_refusal = inner
+                    .clearnet_rate
+                    .as_mut()
+                    .and_then(|gate| gate.admit(ip, now).err());
+                if let Some(bucket) = rate_refusal {
+                    return Err(AcceptRefusal::from(bucket).record(&mut inner));
+                }
+            }
+            // A harness has no handshake. The gate prices the listener's accept.
+            ClearnetInbound::Reserved => {}
+        }
+        admitted(self, &mut inner, ConnectorId::Clearnet, endpoint)
     }
 
     /// Outbound clearnet. The inbound ceiling does not apply. A banned
@@ -425,8 +610,10 @@ impl Sockets {
             "tor inbound observation does not match its declaration"
         );
         let mut inner = self.lock();
-        refuse_inbound(&inner, ConnectorId::Tor, ceiling)?;
-        self.mint(&mut inner, ConnectorId::Tor, Direction::Inbound, endpoint)
+        if let Err(refusal) = refuse_inbound(&inner, ConnectorId::Tor, ceiling) {
+            return Err(refusal.record(&mut inner));
+        }
+        admitted(self, &mut inner, ConnectorId::Tor, endpoint)
     }
 
     /// Outbound Tor. The addressing cell says what may be dialed. Anything
@@ -594,6 +781,21 @@ impl Sockets {
                 open: AtomicBool::new(true),
             }),
         })
+    }
+}
+
+/// Mint an inbound socket, and count an id or occupancy that cannot move
+/// as a full table. An outbound mint does not: it is not an accept.
+fn admitted(
+    sockets: &Sockets,
+    inner: &mut Inner,
+    connector: ConnectorId,
+    endpoint: ObservedEndpoint,
+) -> Result<OpenSocket, OpenError> {
+    match sockets.mint(inner, connector, Direction::Inbound, endpoint) {
+        Ok(open) => Ok(open),
+        Err(OpenError::Exhausted) => Err(AcceptRefusal::FullOrBanned.record(inner)),
+        Err(error @ OpenError::Refused(_)) => Err(error),
     }
 }
 

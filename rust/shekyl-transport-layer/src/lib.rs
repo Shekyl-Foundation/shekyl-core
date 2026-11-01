@@ -23,6 +23,7 @@
 const _: () = assert!(shekyl_p2p_transport::INITIATOR_FLIGHT_LEN == 1_224);
 const _: () = assert!(shekyl_p2p_transport::RESPONDER_FLIGHT_LEN == 1_160);
 
+mod accept_rate;
 mod admission;
 mod ban;
 mod budget;
@@ -34,8 +35,13 @@ mod link;
 mod profile;
 pub mod spans;
 
+pub use accept_rate::{
+    accept_bound, clearnet_linger_descriptors, linger_cap, AcceptBound, AcceptGate, AcceptRate,
+    HostKey, RateRefusal,
+};
 pub use admission::{
-    CloseResult, Direction, ObservedEndpoint, OpenError, OpenSocket, SocketId, Sockets,
+    AcceptRefusals, CloseResult, Direction, ObservedEndpoint, OpenError, OpenSocket, SocketId,
+    Sockets,
 };
 pub use ban::{deadline_after, BanLeft, BanList, Ipv4Subnet, ListedBan};
 pub use budget::{LinkBudget, LinkDirection, MessageClass, Observed, Turn};

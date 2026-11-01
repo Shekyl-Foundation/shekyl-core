@@ -647,3 +647,15 @@ fn a_pair_is_presented_only_at_its_own_proxy() {
     assert!(!elsewhere.authenticates(), "another proxy gets no pair");
     assert!(!presented(at, None).authenticates());
 }
+
+/// The descriptors the daemon reserves for lingering refusals are the cap
+/// the process socket table's gate lingers at, over the span the clearnet
+/// accept loop lingers for.
+#[test]
+fn the_linger_reservation_is_the_process_gate_s_cap() {
+    let span = Tick::new(spans::CLEARNET_HANDSHAKE_WITHIN_NANOS);
+    assert_eq!(
+        crate::clearnet_linger_descriptors(),
+        u64::try_from(process_sockets().clearnet_linger_cap(span)).expect("small")
+    );
+}
