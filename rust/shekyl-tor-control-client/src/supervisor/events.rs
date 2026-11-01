@@ -18,8 +18,8 @@ use super::core::{DirectoryAnswer, Input, RoundEnd};
 /// The caller keeps only events for its own address. `REQUESTED` names the
 /// directory and the descriptor Tor's client asks for; a line missing
 /// either is not a fetch this check sent. `FAILED` with a descriptor id is
-/// a directory's answer (an upload's `FAILED` carries no id and is the
-/// round coalescer's). `REASON=NOT_FOUND` is the directory not having it;
+/// a directory's answer, except an upload's refusal (`UPLOAD_REJECTED`),
+/// which carries the id too and is the round coalescer's. `REASON=NOT_FOUND` is the directory not having it;
 /// any other reason says nothing about the descriptor. `RECEIVED` is not
 /// the answer: the copy's counter is, and it comes in the
 /// `HS_DESC_CONTENT` Tor sends right after (tor 0.4.9.14
@@ -32,6 +32,11 @@ pub fn directory_input_of(event: &HsDescEvent) -> Option<Input> {
                 hsdir: event.hsdir?,
                 descriptor_id: event.descriptor_id.clone()?,
             });
+        }
+        // An upload's refusal carries the descriptor id too
+        // (`dirclient.c:2815`); it is the round coalescer's, never an answer.
+        HsDescAction::Failed if event.reason.as_deref() == Some("UPLOAD_REJECTED") => {
+            return None;
         }
         HsDescAction::Failed if event.descriptor_id.is_some() => {
             if event.reason.as_deref() == Some("NOT_FOUND") {
@@ -605,10 +610,10 @@ mod tests {
         );
         assert_eq!(
             read(format!(
-                "650 HS_DESC FAILED {onion} UNKNOWN {dir} REASON=UPLOAD_REJECTED"
+                "650 HS_DESC FAILED {onion} NO_AUTH {dir} {key} REASON=UPLOAD_REJECTED"
             )),
             None,
-            "an upload's end is the round coalescer's"
+            "an upload's refusal, which carries the id, is the round coalescer's"
         );
         assert_eq!(
             read(format!("650 HS_DESC UPLOADED {onion} UNKNOWN {dir}")),

@@ -639,9 +639,13 @@ miss is the Service-class verdict, and the republish it asks for waits on
 the backoff (below); its arrival is `Reachable`, and the facet was never
 down. A round that ends meanwhile adds no probe. The fetch
 reports itself as `HS_DESC` `REQUESTED`, `RECEIVED` and `FAILED` for our
-address; the round coalescer counts only the upload actions (a fetch's
-`FAILED` carries the descriptor id, an upload's does not), so a failed
-fetch never ends a round as failed. `SIGNAL NEWNYM` would also clear the
+address; the round coalescer counts only the upload actions. Both an
+upload's `FAILED` and a fetch's carry the descriptor id (tor 0.4.9.14
+`dirclient.c:2815`, `hs_client.c:1719`); an upload ends only as `UPLOADED`,
+`FAILED REASON=UPLOAD_REJECTED` or `FAILED REASON=UNEXPECTED`
+(`dirclient.c:2803-2827`), so a `FAILED` closes an upload only with one of
+those reasons and only an open upload to that directory of that
+descriptor, and a failed fetch never ends a round. `SIGNAL NEWNYM` would also clear the
 client state, but it purges Tor's client state for every onion and moves
 every new peer stream onto new circuits, and is not used. The bound is not
 a respawn. The floor-device soak measures both miss rates; if the

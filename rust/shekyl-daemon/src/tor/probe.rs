@@ -296,10 +296,12 @@ impl Drive {
     }
 }
 
-/// Tor reported a clock jump while Running (§4.5, "Overdue"): say so, and
-/// draw the probe's delay from the CSPRNG, as a round's probe does.
+/// Tor reported a clock jump while Running (§4.5, "Overdue"): draw the
+/// probe's delay from the CSPRNG, as a round's probe does. Tor's own
+/// `ClockJumped` is already logged; the probe logs itself when it runs, and
+/// does not while the clock is named.
 pub(super) fn jump_probe() -> Input {
-    tracing::info!(target: "tor", "Tor reported a clock jump; a probe of this node's onion follows");
+    tracing::debug!(target: "tor", "a probe delay is drawn after Tor's clock jump");
     Input::JumpProbeDrawn {
         draw: shekyl_ffi::tor_link::probe_delay_draw(),
     }
