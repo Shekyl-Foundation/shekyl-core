@@ -468,7 +468,7 @@ Marshal-tax remains qualitative; Path B stands on rule 40.
 | **PB-D1s** | Store share of PB-D1 (connect plus commit, verification excluded) | ≤ **250 ms** / ≤ **1 s** | a store regression shows separately from a verifier regression | the same run, the writer's span timings |
 | **PB-D2** | Catch-up after a week offline (5,040 blocks at design load) to a usable tip | ≤ **15 min** / ≤ **2 h** | what a returning user feels; within the body horizon, so daemon and store work alone | the subject stops at a height, the seed advances a week, the subject resumes; the artifact reports the proof-of-work share of the time (the verifier's per-hash timings against the wall), so a miss at a release cut names its cause |
 | **PB-D2r** | Reads stay responsive during catch-up | wallet-path RPC p99 ≤ **250 ms** / ≤ **1 s** | a syncing node still answers its wallet; a writer must not starve readers | a fixed wallet-shaped RPC mix (`get_info`, header and block reads, curve-tree reads) during PB-D2 |
-| **PB-D3** | Stress catch-up: PB-D2 at stress load | finishes, at a rate ≥ **1.5×** chain growth on the floor device | the floor device must never fall permanently behind | as PB-D2, the proof-of-work share reported the same way |
+| **PB-D3** | Stress catch-up: PB-D2 at stress load | finishes, at a rate ≥ **1.5×** chain growth on the floor device | the floor device must never fall permanently behind | as PB-D2, with the proof-of-work share reported the same way |
 | **PB-D4** | A switch of depth 10 at design load | ≤ **5 s** / ≤ **30 s** | a reorg must not take a node out of service | the regtest switch through the production fork choice, a validating user spend demoted and returned to the pool (`DRS_X_STORE_FLIP.md` §3.2) |
 
 **§1.3a.4 Resource rows**
