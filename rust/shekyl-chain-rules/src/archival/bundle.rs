@@ -7,7 +7,7 @@
 //!
 //! Design: `docs/design/ARCHIVAL_SERVE_CREDIT_SPEC.md`
 //! §9.1 (admission, the ordered checks) and §9.6 (the verifier and its two
-//! contracts). Three functions:
+//! contracts). Four functions:
 //!
 //! - [`check_section`] — form, the window, then the budget. The references
 //!   are in strictly ascending `h`, the header root recomputes from them,
@@ -22,6 +22,16 @@
 //!   arrival, when this chain does not yet hold those epochs (`SCS-P23`).
 //!   An empty section is admitted. Any other section that passes them
 //!   waits: the budget comparison is [`check_section`]'s, at the switch.
+//! - [`fill_section`] — the references a block template puts in the next
+//!   block's section. The queue is walked in ascending `h`. A reference
+//!   inside the window whose epoch's `D` is known is a candidate; one that
+//!   repeats or precedes a height already walked is passed over. The
+//!   candidates span at most two epochs (`W₂ < SEB`) and are packed
+//!   oldest-first under the budget the epochs they keep earn:
+//!   `section_budget` of the largest `D` among those epochs, the cap
+//!   [`check_section`] applies. A reference that would exceed that budget
+//!   is passed over, and so is one that would crowd out the epoch earning
+//!   it. The block template calls it at the switch.
 //! - [`verify_bundle`] — everything else, for one bundle, against a
 //!   [`BundleView`]: the window, one bundle per `h`, the bitmap and the
 //!   record count, the `0x0C` opening, the witness signature, every draw's
@@ -29,13 +39,15 @@
 //!   projection and every derived draw, which is all
 //!   [`admission_plan`](crate::admission_plan) needs (`SCS-P37`).
 //!
-//! All three are pure. None names a store type, and none writes.
+//! All four are pure. None names a store type, and none writes.
 //!
 //! # Disposition: STAGED on the connect path; live in the bundle queue
 //!
 //! Rule `23-disposition-visibility`: staged work is code with a named consumer in a live plan.
 //!
 //! - **What is here:** the verifier, [`judge_bundles`], [`draw_targets`],
+//!   [`fill_section`] (the template's section, a section [`check_section`]
+//!   admits; the block template calls it at the switch),
 //!   the view trait, the fixture, and the unbound rule types
 //!   `rules::bundle_admission::J29` through `J37`. Increment 4a also
 //!   implements the view on the store (`shekyl-chain-store`'s
@@ -293,8 +305,8 @@ mod bundle_section;
 mod records;
 
 pub use bundle_section::{
-    check_section, check_section_until_switch, open_reference, SectionCharge, SectionCheckFailed,
-    SectionRefused, SectionStanding,
+    check_section, check_section_until_switch, fill_section, open_reference, SectionCharge,
+    SectionCheckFailed, SectionRefused, SectionStanding,
 };
 
 /// `epoch`'s drawable epoch, if the view holds the one filed for it. A
@@ -863,6 +875,10 @@ mod bundle_tests;
 #[cfg(test)]
 #[path = "bundle_section_tests.rs"]
 mod bundle_section_tests;
+
+#[cfg(test)]
+#[path = "bundle_fill_tests.rs"]
+mod bundle_fill_tests;
 
 #[cfg(test)]
 #[path = "bundle_staging_tests.rs"]

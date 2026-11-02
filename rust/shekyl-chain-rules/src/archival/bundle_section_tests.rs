@@ -9,8 +9,9 @@
 //!
 //! Admission in this file is [`check_section`] or
 //! [`check_section_until_switch`]. [`SectionCharge`] is the arithmetic
-//! and is not a section result. Sibling of `bundle_tests`, which judges
-//! one bundle. Every test names the edit that turns it red.
+//! and is not a section result. The template's pack is `bundle_fill_tests`.
+//! Sibling of `bundle_tests`, which judges one bundle. Every test names
+//! the edit that turns it red.
 
 use std::sync::OnceLock;
 
@@ -27,7 +28,7 @@ use crate::rule_set::{FakechainSchedule, SettlementEpochBlocks};
 use shekyl_types::BlockCount;
 
 /// A reference at `h` to a bundle of `count` draws, none passed.
-fn reference_at(h: u64, count: u32) -> BundleRef {
+pub(in crate::archival::bundle) fn reference_at(h: u64, count: u32) -> BundleRef {
     BundleRef::new(
         shekyl_archival_retention::BundleKept {
             h: BlockHeight::from_raw(h),
@@ -40,7 +41,7 @@ fn reference_at(h: u64, count: u32) -> BundleRef {
 }
 
 /// A section of bundles with these counts, at ascending heights.
-fn section_of(counts: &[u32]) -> Vec<BundleRef> {
+pub(in crate::archival::bundle) fn section_of(counts: &[u32]) -> Vec<BundleRef> {
     counts
         .iter()
         .zip(100u64..)
@@ -50,7 +51,7 @@ fn section_of(counts: &[u32]) -> Vec<BundleRef> {
 
 /// [`bundle_root`] over a section a test holds: far fewer than 2³²
 /// references, so its one refusal is not this helper's.
-fn root_of(refs: &[BundleRef]) -> [u8; 32] {
+pub(in crate::archival::bundle) fn root_of(refs: &[BundleRef]) -> [u8; 32] {
     bundle_root(refs).expect("a test section's count fits 32 bits")
 }
 
