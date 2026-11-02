@@ -7,11 +7,13 @@
 //! dial's outcome"). Display only: never a cause, never a respawn
 //! (`TSR-Q14`, Tor does Tor).
 //!
-//! When Tor says nothing about its network and yet no Tor connection is
-//! open and none opens, the posture line says exactly that, a neutral fact
-//! with no fix: not "this machine cannot reach the Tor network", which Tor
-//! alone may say, and which a planted onion could otherwise make the node
-//! say.
+//! The posture line reports the dialer judge's last sign that the Tor link
+//! worked (`DIALER_OUTAGE_EVIDENCE.md` §6): a stream that opened, or a byte
+//! a Tor session received. When none has come for Tor's window plus the
+//! judge's bracket, and a Tor dial has failed since, the line says what the
+//! judge observed, a neutral fact with no fix: not "this machine cannot
+//! reach the Tor network", which Tor alone may say, and which a planted
+//! onion could otherwise make the node say.
 
 use std::time::Duration;
 
@@ -29,15 +31,20 @@ pub struct DialTally {
     /// Tor sessions this node holds now: outbound sessions the dialer kept,
     /// plus inbound sessions on the board.
     pub held: u32,
+    /// When the dialer's judge last saw the Tor link work, in nanoseconds on
+    /// the process clock the supervisor runs on. `None` until the first.
+    pub last_sign_of_life: Option<u64>,
 }
 
 /// The supervisor's reading of the tally.
 #[derive(Debug)]
 pub(super) struct Dials {
     last: DialTally,
-    /// When a Tor stream last opened, or when this Tor reached Running.
-    opened_at: u64,
-    /// The quiet stretch at the last evaluation, when the line stands.
+    /// When this Tor reached Running, or the node woke from a sleep.
+    running_at: u64,
+    /// When a Tor dial last failed, as folded here.
+    failed_at: Option<u64>,
+    /// The quiet span at the last evaluation, when the line stands.
     line: Option<Duration>,
 }
 
@@ -45,43 +52,54 @@ impl Dials {
     pub(super) fn new(now: u64) -> Self {
         Self {
             last: DialTally::default(),
-            opened_at: now,
+            running_at: now,
+            failed_at: None,
             line: None,
         }
     }
 
     /// Mark the tally already in the cell when this supervisor started
-    /// watching. Those dials are not an open on this Tor: the stretch clock
-    /// stays where it is.
+    /// watching. Its failures are not this Tor's: none is folded.
     pub(super) fn seed(&mut self, tally: DialTally) {
         self.last = tally;
     }
 
-    /// Fold a tally. An opened stream starts the stretch again.
+    /// Fold a tally. A dial that ended without a stream, since the last
+    /// tally, is a failure now.
     pub(super) fn fold(&mut self, tally: DialTally, now: u64) {
-        if tally.opened > self.last.opened {
-            self.opened_at = now;
+        let failed = tally.unopened > self.last.unopened
+            || (tally.opened > self.last.opened && tally.unopened > 0);
+        if failed {
+            self.failed_at = Some(now);
         }
         self.last = tally;
     }
 
-    /// A Tor reached Running: its stretch starts now.
+    /// A Tor reached Running, or the node woke: the clock starts now.
     pub(super) fn restart(&mut self, now: u64) {
-        self.opened_at = now;
+        self.running_at = now;
         self.line = None;
     }
 
-    /// Re-read the stretch at `now`. `true` when the line has just begun to
-    /// stand, which is the one time it is said.
+    /// Re-read the span at `now`. It runs from the judge's last sign of
+    /// life or from [`Self::restart`], whichever is later, and the line
+    /// stands once it reaches `quiet_after` with a Tor dial failed since
+    /// that sign of life. `true` when the line has just begun to stand,
+    /// which is the one time it is said.
     pub(super) fn evaluate(&mut self, now: u64, policy: &Policy) -> bool {
-        let quiet = Duration::from_nanos(now.saturating_sub(self.opened_at));
-        let stands = self.last.held == 0 && self.last.unopened > 0 && quiet >= policy.quiet_after;
+        let life = self.last.last_sign_of_life;
+        let since = life.map_or(self.running_at, |life| life.max(self.running_at));
+        let quiet = Duration::from_nanos(now.saturating_sub(since));
+        let failed = self
+            .failed_at
+            .is_some_and(|failed| life.is_none_or(|life| failed >= life));
+        let stands = failed && quiet >= policy.quiet_after;
         let began = stands && self.line.is_none();
         self.line = stands.then_some(quiet);
         began
     }
 
-    /// How long no Tor connection has been open or opened, while that holds.
+    /// How long nothing has come through Tor, while the line stands.
     pub(super) fn line(&self) -> Option<Duration> {
         self.line
     }
@@ -89,7 +107,7 @@ impl Dials {
 
 impl Core {
     /// The tally already watched when this supervisor started. It sets what
-    /// has been seen and does not move the stretch.
+    /// has been seen and folds no failure.
     pub(super) fn dial_baseline(&mut self, tally: DialTally) -> Vec<Action> {
         self.dials.seed(tally);
         Vec::new()
@@ -97,14 +115,14 @@ impl Core {
 
     /// The dialer's tally moved. Display only (`TSR-Q14`): which reply a
     /// failed onion dial gets is the destination's to choose as much as the
-    /// link's, so this never sets a cause. While a running Tor has no
-    /// session and none opens, the posture line says so once.
+    /// link's, so this never sets a cause. While nothing comes through a
+    /// running Tor, the posture line says so once.
     pub(super) fn dial_evidence(&mut self, tally: DialTally, now: u64) -> Vec<Action> {
         self.dials.fold(tally, now);
         self.quiet_line(now)
     }
 
-    /// Re-read the quiet stretch. The line is said once, when it begins to
+    /// Re-read the quiet span. The line is said once, when it begins to
     /// stand, and only while no cause is named.
     pub(super) fn quiet_line(&mut self, now: u64) -> Vec<Action> {
         if !matches!(self.phase, Phase::Running { .. }) {

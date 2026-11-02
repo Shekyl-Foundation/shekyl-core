@@ -467,9 +467,10 @@ pub struct Status {
     /// How the bootstrap is going, beside [`Self::cause`], never instead of
     /// it. Only while bootstrapping, once the first window has passed.
     pub pace: Option<BootstrapPace>,
-    /// How long no Tor connection has been open and none has opened, while
-    /// Tor runs, names no cause, and this node's Tor dials keep failing
-    /// (§4.2). A neutral fact for the posture line, never a cause.
+    /// How long nothing has come through Tor, by the dialer judge's last
+    /// sign of life, while Tor runs, names no cause, and a Tor dial has
+    /// failed since (§4.2). A neutral fact for the posture line, never a
+    /// cause.
     pub tor_quiet: Option<std::time::Duration>,
     /// Whether peers can reach this node's onion (§4.1). Its cause stands
     /// beside [`Self::cause`], never instead of it.
@@ -784,7 +785,7 @@ fn quiet_sentence(status: &Status) -> Option<String> {
     }
     status.tor_quiet.map(|quiet| {
         format!(
-            "No connection through Tor is open, and none has opened in {}.",
+            "Nothing has come through Tor for {}: no connection has opened, and no peer has sent anything.",
             spoken_duration(quiet)
         )
     })

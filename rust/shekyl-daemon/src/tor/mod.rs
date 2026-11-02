@@ -63,17 +63,21 @@ const REPLY_BOUND: Duration = Duration::from_secs(30);
 /// Tor dial deadline, so the dial's class is Tor's reply, never a race with
 /// that deadline (`TOR_SUPERVISOR.md` §4.2).
 const SOCKS_TIMEOUT: SocksTimeout = shekyl_ffi::tor_link::TOR_SOCKS_TIMEOUT;
-/// The supervisor's waits. Its quiet stretch is the Tor connector's span S
-/// from its dial profile (the dial profile brief, item 6): the posture line
-/// and the dialer's quiet guard read one number, though the guard also
-/// counts attempts and the line restarts its clock when a Tor reaches
-/// Running.
-const fn policy() -> Policy {
-    Policy::provisional(Duration::from_nanos(
+/// The supervisor's waits. Its quiet span is the managed Tor's
+/// `SocksTimeout` plus the Tor connector's judging bracket δ
+/// (`DIALER_OUTAGE_EVIDENCE.md` §6), both the Tor connector's own
+/// declarations: a dial started at the judge's last sign of life has then
+/// used Tor's retries, and its bracket has closed empty.
+fn policy() -> Policy {
+    let window = SOCKS_TIMEOUT
+        .window()
+        .expect("the daemon sets the managed Tor's SocksTimeout");
+    let bracket = Duration::from_nanos(
         shekyl_ffi::dialer_ffi::dial_profile(ConnectorId::Tor)
-            .quiet()
-            .span_nanos,
-    ))
+            .judging
+            .bracket_nanos,
+    );
+    Policy::provisional(window + bracket)
 }
 /// The onion's stream cap.
 const MAX_STREAMS: u16 = 8;
@@ -236,6 +240,7 @@ fn dial_tally(tally: TorLinkTally) -> DialTally {
         opened: tally.opened,
         unopened: tally.unopened,
         held: tally.held,
+        last_sign_of_life: tally.last_sign_of_life.map(Tick::get),
     }
 }
 
@@ -1075,20 +1080,20 @@ mod tests {
         assert!(running.starts_with(&bootstrap));
     }
 
-    /// The posture line's `quiet_after` is the Tor connector's span S, read
-    /// from its dial profile (the dial profile brief, test 5): one number
-    /// for the line and the dialer's quiet guard. The value is the profile's
-    /// derivation in §97, so this pins the equality and not the value. The
-    /// two clocks differ: the line's stretch also restarts when a Tor
-    /// reaches Running, and the guard also counts attempts.
+    /// The posture line's `quiet_after` is Tor's window plus the Tor
+    /// connector's bracket (`DIALER_OUTAGE_EVIDENCE.md` §6), read from
+    /// their declarations, so it moves when either does: 105 s + 15 s. A
+    /// span of its own, or one read from elsewhere, fails this.
     #[test]
-    fn the_posture_lines_quiet_stretch_is_the_dialers() {
+    fn the_posture_lines_quiet_span_is_tors_window_and_the_bracket() {
+        let bracket = shekyl_ffi::dialer_ffi::dial_profile(ConnectorId::Tor)
+            .judging
+            .bracket_nanos;
         assert_eq!(
-            u64::try_from(policy().quiet_after.as_nanos()).expect("small"),
-            shekyl_ffi::dialer_ffi::dial_profile(ConnectorId::Tor)
-                .quiet()
-                .span_nanos
+            policy().quiet_after,
+            SOCKS_TIMEOUT.window().expect("set") + Duration::from_nanos(bracket)
         );
+        assert_eq!(policy().quiet_after, Duration::from_secs(120));
     }
 
     /// The managed Tor answers inside the Tor dial deadline: a blocked link

@@ -15,13 +15,23 @@ use super::{announces, managed, policy, reach_usable, socks, spawns, takes_down}
 use crate::control::{NetworkView, Reported};
 
 /// A tally of `unopened` failed Tor dials since the `opened`-th opened one,
-/// with `held` sessions.
+/// with `held` sessions, and no sign of life from the judge.
 fn dials(opened: u64, unopened: u32, held: u32) -> Input {
+    lived(opened, unopened, held, None)
+}
+
+/// [`dials`], with the judge's last sign of life at `life`.
+fn lived(opened: u64, unopened: u32, held: u32, life: Option<u64>) -> Input {
     Input::DialEvidence(DialTally {
         opened,
         unopened,
         held,
+        last_sign_of_life: life,
     })
+}
+
+fn secs(seconds: u64) -> u64 {
+    duration_ns(Duration::from_secs(seconds))
 }
 
 /// A sampled view. Unknown is not a negative.
@@ -104,36 +114,98 @@ fn ten_minutes_of_failed_dials_are_a_neutral_line_never_a_cause() {
     assert_eq!(status.respawn_count, 0);
     assert!(status.tor_quiet.is_some());
     let text = render(&status);
-    assert!(text.contains("No connection through Tor is open"), "{text}");
+    assert!(text.contains("Nothing has come through Tor for"), "{text}");
     assert!(!text.contains("cannot reach"), "{text}");
 }
 
-/// A held Tor session means Tor carries this node's traffic: no line, however
-/// many dials to dead or refusing onions fail (the testnet case: two live
-/// seeds held, four dead ones redialed). An opened dial starts the stretch
-/// again.
+/// **The line runs from the judge's last sign of life**
+/// (`DIALER_OUTAGE_EVIDENCE.md` §6): a byte a session received, or a stream
+/// that opened, starts the span again; with a Tor dial failed after it, the
+/// line stands `quiet_after` later and not before. The testnet case, two
+/// live seeds talking while four dead ones are redialed, is a byte every
+/// timed sync, so no line. Reading the opened count instead of the judge's
+/// instant fails the byte half.
 #[test]
-fn a_held_session_or_an_opened_dial_keeps_the_line_away() {
-    let (mut core, _) = Core::start(policy(), managed(true), 0);
-    reach_usable(&mut core);
-    let late = duration_ns(Duration::from_secs(60));
-    core.on(dials(0, 40, 1), late);
-    run_until(&mut core, late);
-    assert_eq!(core.status().tor_quiet, None, "a session is held");
-    core.on(dials(0, 41, 0), late + 1);
-    assert!(core.status().tor_quiet.is_some(), "none held, none opened");
-    core.on(dials(1, 0, 0), late + 2);
-    let step = core.on(dials(1, 1, 0), late + 3);
-    assert_eq!(says_progress(&[step]), 0);
-    assert_eq!(core.status().tor_quiet, None, "the stretch began again");
+fn the_line_runs_from_the_judges_last_sign_of_life() {
+    let after = duration_ns(policy().quiet_after);
+    for (opened, life) in [(0, secs(30)), (1, secs(40))] {
+        let (mut core, _) = Core::start(policy(), managed(true), 0);
+        reach_usable(&mut core);
+        core.on(dials(0, 1, 0), secs(1));
+        core.on(lived(opened, 0, 0, Some(life)), life);
+        core.on(lived(opened, 1, 0, Some(life)), life + secs(1));
+        core.on(lived(opened, 1, 0, Some(life)), life + after - 1);
+        assert_eq!(core.status().tor_quiet, None, "{opened}: inside the span");
+        let step = core.on(lived(opened, 1, 0, Some(life)), life + after);
+        assert_eq!(says_progress(&[step]), 1, "{opened}: said once");
+        assert_eq!(core.status().tor_quiet, Some(policy().quiet_after));
+    }
 }
 
-/// The stretch starts when a Tor reaches Running: failures from before do
-/// not make the line stand for the new Tor at once.
+/// **A held session that sends nothing does not keep the line away**: a
+/// session merely held is not a sign of life (§3.3). On the floor device's
+/// blackhole the idle sessions sat open for minutes, and the line said
+/// nothing. Keeping the held condition fails this.
+#[test]
+fn a_held_session_that_sends_nothing_does_not_keep_the_line_away() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    reach_usable(&mut core);
+    core.on(dials(3, 1, 2), secs(5));
+    let step = core.on(dials(3, 2, 2), duration_ns(policy().quiet_after));
+    assert_eq!(says_progress(&[step]), 1, "two sessions held, silent");
+    assert!(core.status().tor_quiet.is_some());
+}
+
+/// **No failed dial since the last sign of life, no line**: the line states
+/// the fact the dialer acted on, an excused failure, so a span with no Tor
+/// dial failed in it says nothing however long it is. A failure before the
+/// sign of life is not one. Reading "some dial failed, ever" fails this.
+#[test]
+fn the_line_needs_a_failed_dial_since_the_last_sign_of_life() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    reach_usable(&mut core);
+    let after = duration_ns(policy().quiet_after);
+    core.on(dials(0, 1, 0), secs(10));
+    core.on(lived(0, 1, 0, Some(secs(20))), secs(20));
+    core.on(lived(0, 1, 0, Some(secs(20))), secs(20) + 2 * after);
+    assert_eq!(core.status().tor_quiet, None, "no failure since the byte");
+    let late = secs(20) + 2 * after + 1;
+    let step = core.on(lived(0, 2, 0, Some(secs(20))), late);
+    assert_eq!(says_progress(&[step]), 1, "a dial failed since");
+    assert!(core.status().tor_quiet.is_some());
+}
+
+/// **The sentence says what the judge observed**, neutral and with no fix
+/// (`TSR-Q14`): nothing has come through Tor for the span, no connection
+/// has opened and no peer has sent anything. A sentence that names a cause
+/// or offers a fix fails this.
+#[test]
+fn the_quiet_sentence_says_what_the_judge_observed() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    reach_usable(&mut core);
+    core.on(dials(0, 1, 0), secs(1));
+    core.on(dials(0, 2, 0), secs(80));
+    let text = render(&core.status());
+    assert!(
+        text.contains(
+            "Nothing has come through Tor for 1 min 20 s: no connection has opened, and no peer has sent anything."
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("cannot reach"), "{text}");
+}
+
+/// **The span starts at the later of the judge's last sign of life and
+/// Running**: failures and life from before a Tor reached Running do not
+/// make the line stand for the new Tor at once. Starting the span at the
+/// sign of life alone fails this.
 #[test]
 fn the_quiet_stretch_starts_when_a_tor_reaches_running() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
-    core.on(dials(0, 9, 0), duration_ns(Duration::from_secs(100)));
+    core.on(
+        lived(0, 9, 0, Some(secs(50))),
+        duration_ns(Duration::from_secs(100)),
+    );
     let at = duration_ns(Duration::from_secs(100));
     core.on(Input::PinAccepted, at);
     core.on(Input::Spawned, at);
@@ -147,9 +219,12 @@ fn the_quiet_stretch_starts_when_a_tor_reaches_running() {
     );
     core.on(Input::BootstrapComplete, at);
     core.on(Input::RouteInstalled, at);
-    core.on(dials(0, 10, 0), at + 1);
+    core.on(lived(0, 10, 0, Some(secs(50))), at + 1);
     assert_eq!(core.status().tor_quiet, None);
-    core.on(dials(0, 11, 0), at + duration_ns(policy().quiet_after));
+    core.on(
+        lived(0, 11, 0, Some(secs(50))),
+        at + duration_ns(policy().quiet_after),
+    );
     assert!(core.status().tor_quiet.is_some());
 }
 
@@ -167,6 +242,7 @@ fn a_tally_from_before_this_tor_does_not_count_as_an_open() {
             opened: 4,
             unopened: 2,
             held: 0,
+            last_sign_of_life: None,
         }),
         1,
     );
@@ -177,11 +253,11 @@ fn a_tally_from_before_this_tor_does_not_count_as_an_open() {
         "no new open, so the stretch stands"
     );
     assert!(core.status().tor_quiet.is_some());
-    core.on(dials(5, 1, 0), quiet + 1);
+    core.on(lived(5, 1, 0, Some(quiet + 1)), quiet + 1);
     assert_eq!(
         core.status().tor_quiet,
         None,
-        "an open on this Tor starts the stretch again"
+        "an open on this Tor is a sign of life"
     );
 }
 
