@@ -21,6 +21,15 @@ use crate::store::{
     ErrorClass, PoolCannot, StoreCannot, StoreInvariant, DURABILITY, TWO_PHASE_COMMIT,
 };
 
+/// A refused file's bytes and modification time, to hold a refusal to
+/// having written nothing.
+fn untouched(path: &std::path::Path) -> (Vec<u8>, std::time::SystemTime) {
+    (
+        std::fs::read(path).unwrap(),
+        std::fs::metadata(path).unwrap().modified().unwrap(),
+    )
+}
+
 fn tmp(name: &str) -> std::path::PathBuf {
     let mut p = std::env::temp_dir();
     p.push(format!(
@@ -365,17 +374,13 @@ fn another_version_recreates_and_everything_else_is_refused() {
         txn.commit().unwrap();
     }
     drop(store);
-    let before = std::fs::metadata(&path).unwrap().len();
+    let before = untouched(&path);
     let err = PoolStore::create(&path).expect_err("undecodable header");
     assert!(matches!(
         err,
         StoreError::Cannot(StoreCannot::PoolFileForeign)
     ));
-    assert_eq!(
-        std::fs::metadata(&path).unwrap().len(),
-        before,
-        "not deleted"
-    );
+    assert_eq!(untouched(&path), before, "refused unwritten");
     drop(std::fs::remove_file(&path));
 
     // (3) A redb file with no pool header at all: refused, kept.
@@ -390,12 +395,13 @@ fn another_version_recreates_and_everything_else_is_refused() {
         }
         txn.commit().unwrap();
     }
+    let before = untouched(&path);
     let err = PoolStore::create(&path).expect_err("no header");
     assert!(matches!(
         err,
         StoreError::Cannot(StoreCannot::PoolFileForeign)
     ));
-    assert!(path.exists(), "not deleted");
+    assert_eq!(untouched(&path), before, "refused unwritten");
     drop(std::fs::remove_file(&path));
 
     // (3b) A sealed file at the current version whose table set is not the
@@ -422,32 +428,28 @@ fn another_version_recreates_and_everything_else_is_refused() {
             txn.commit().unwrap();
         }
         drop(store);
-        let before = std::fs::metadata(&path).unwrap().len();
+        let before = untouched(&path);
         let err = PoolStore::create(&path).expect_err("tampered table set");
         assert!(
             matches!(err, StoreError::Cannot(StoreCannot::PoolFileForeign)),
             "{label}: {err:?}"
         );
-        assert_eq!(
-            std::fs::metadata(&path).unwrap().len(),
-            before,
-            "{label}: not deleted"
-        );
+        // Judged on a read-only open: a writable one would have written
+        // the engine's allocator state into the file as it closed.
+        assert_eq!(untouched(&path), before, "{label}: refused unwritten");
         drop(std::fs::remove_file(&path));
     }
 
     // (4) Not a redb database at all: refused, kept, byte for byte.
     let path = tmp("notredb");
     std::fs::write(&path, b"this is not a redb file, and it is somebody's").unwrap();
+    let before = untouched(&path);
     let err = PoolStore::create(&path).expect_err("not redb");
     assert!(
         matches!(err, StoreError::Cannot(StoreCannot::PoolFileForeign)),
         "{err:?}"
     );
-    assert_eq!(
-        std::fs::read(&path).unwrap(),
-        b"this is not a redb file, and it is somebody's"
-    );
+    assert_eq!(untouched(&path), before, "refused unwritten");
     drop(std::fs::remove_file(&path));
 }
 

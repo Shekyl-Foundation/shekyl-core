@@ -508,7 +508,7 @@ version = "3.1.0"
 edition = "2021"
 # MSRV binding constraints (workspace floor = max of consumers):
 #   - `kameo = "=0.20.0"`: 1.88.0 (crates.io index, 2026-05-29)
-#   - `redb = "4.1.0"` (CT-1 LeafStore): 1.89.0
+#   - `redb = "4.4.0"` (CT-1 LeafStore, the daemon store): 1.90
 #   - `shekyl-pow-randomx`: `Box::new_zeroed_slice` (stable 1.92.0)
 # Workspace pins 1.94.0 intentionally (RandomX PoW + CT-1 redb) and
 # aligns with `shekyl-gui-wallet/src-tauri/
@@ -621,7 +621,18 @@ serde_json = "1"
 # `TableDefinition`, `ReadableTable` range scan; public chain data only — no
 # `Zeroize` requirement (`17-dependency-discipline.mdc`). Pre-genesis greenfield:
 # v3 file format only (no v2 migration path).
-redb = "4.1.0"
+# 4.4.0 (2026-11-01, PB-S2): 4.1.0 asserts at open that the file is at least
+# as long as the header's layout (`page_manager.rs:231`), and a power loss
+# inside a grow's `fdatasync` leaves the grown layout's header write on disk
+# before the journal commit that grows the file: every later open aborts the
+# daemon. From 4.2.0 a recovery rebuilds the layout from the file length and
+# the immutable region geometry instead (`header.rs` `finalize`). Verified at
+# source: the file format is unchanged across 4.1-4.4 (the 4.3 key
+# separators and the 4.4 niches change no existing table's encoding: the
+# built-in types existing tables use declare a niche only under
+# `experimental-niches`, and the `NonZero` integer types, which 4.4 adds and
+# which do declare one unconditionally, key or store no table here).
+redb = "4.4.0"
 
 # `kameo` actor framework — Stage 2 gate (per `docs/FOLLOWUPS.md`
 # "kameo dependency pin and MSRV alignment before Stage 2 cuts" and
