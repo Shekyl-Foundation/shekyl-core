@@ -621,8 +621,9 @@ serde_json = "1"
 # `TableDefinition`, `ReadableTable` range scan; public chain data only — no
 # `Zeroize` requirement (`17-dependency-discipline.mdc`). Pre-genesis greenfield:
 # v3 file format only (no v2 migration path).
-# 4.4.0 (2026-11-01, PB-S2): 4.1.0 asserts at open that the file is at least
-# as long as the header's layout (`page_manager.rs:231`), and a power loss
+# 4.4.0 (released 2026-10-13; the PB-S2 pin, verified 2026-11-01). 4.1.0
+# asserts at open that the file is at least as long as the header's layout
+# (`page_manager.rs:231`), and a power loss
 # inside a grow's `fdatasync` leaves the grown layout's header write on disk
 # before the journal commit that grows the file: every later open aborts the
 # daemon. From 4.2.0 a recovery rebuilds the layout from the file length and

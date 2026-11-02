@@ -17,18 +17,12 @@ use super::*;
 use shekyl_store_codec::Canonical;
 
 use crate::codec::{PropertyCellBytes, SCHEMA_VERSION};
+use crate::redb_recovery::{
+    bytes_and_mtime, mark_recovery_required, read_only_open_is_repair_aborted,
+};
 use crate::store::{
     EngineError, ErrorClass, PoolCannot, StoreCannot, StoreInvariant, DURABILITY, TWO_PHASE_COMMIT,
 };
-
-/// A refused file's bytes and modification time, to hold a refusal to
-/// having written nothing.
-fn untouched(path: &std::path::Path) -> (Vec<u8>, std::time::SystemTime) {
-    (
-        std::fs::read(path).unwrap(),
-        std::fs::metadata(path).unwrap().modified().unwrap(),
-    )
-}
 
 fn tmp(name: &str) -> std::path::PathBuf {
     let mut p = std::env::temp_dir();
@@ -374,13 +368,13 @@ fn another_version_recreates_and_everything_else_is_refused() {
         txn.commit().unwrap();
     }
     drop(store);
-    let before = untouched(&path);
+    let before = bytes_and_mtime(&path);
     let err = PoolStore::create(&path).expect_err("undecodable header");
     assert!(matches!(
         err,
         StoreError::Cannot(StoreCannot::PoolFileForeign)
     ));
-    assert_eq!(untouched(&path), before, "refused unwritten");
+    assert_eq!(bytes_and_mtime(&path), before, "refused unwritten");
     drop(std::fs::remove_file(&path));
 
     // (3) A redb file with no pool header at all: refused, kept.
@@ -395,13 +389,13 @@ fn another_version_recreates_and_everything_else_is_refused() {
         }
         txn.commit().unwrap();
     }
-    let before = untouched(&path);
+    let before = bytes_and_mtime(&path);
     let err = PoolStore::create(&path).expect_err("no header");
     assert!(matches!(
         err,
         StoreError::Cannot(StoreCannot::PoolFileForeign)
     ));
-    assert_eq!(untouched(&path), before, "refused unwritten");
+    assert_eq!(bytes_and_mtime(&path), before, "refused unwritten");
     drop(std::fs::remove_file(&path));
 
     // (3b) A sealed file at the current version whose table set is not the
@@ -428,7 +422,7 @@ fn another_version_recreates_and_everything_else_is_refused() {
             txn.commit().unwrap();
         }
         drop(store);
-        let before = untouched(&path);
+        let before = bytes_and_mtime(&path);
         let err = PoolStore::create(&path).expect_err("tampered table set");
         assert!(
             matches!(err, StoreError::Cannot(StoreCannot::PoolFileForeign)),
@@ -436,20 +430,20 @@ fn another_version_recreates_and_everything_else_is_refused() {
         );
         // Judged on a read-only open: a writable one would have written
         // the engine's allocator state into the file as it closed.
-        assert_eq!(untouched(&path), before, "{label}: refused unwritten");
+        assert_eq!(bytes_and_mtime(&path), before, "{label}: refused unwritten");
         drop(std::fs::remove_file(&path));
     }
 
     // (4) Not a redb database at all: refused, kept, byte for byte.
     let path = tmp("notredb");
     std::fs::write(&path, b"this is not a redb file, and it is somebody's").unwrap();
-    let before = untouched(&path);
+    let before = bytes_and_mtime(&path);
     let err = PoolStore::create(&path).expect_err("not redb");
     assert!(
         matches!(err, StoreError::Cannot(StoreCannot::PoolFileForeign)),
         "{err:?}"
     );
-    assert_eq!(untouched(&path), before, "refused unwritten");
+    assert_eq!(bytes_and_mtime(&path), before, "refused unwritten");
     drop(std::fs::remove_file(&path));
 }
 
@@ -486,7 +480,7 @@ fn a_live_reader_stops_a_recreate_and_the_file_stays() {
     }
     drop(store);
 
-    let before = untouched(&path);
+    let before = bytes_and_mtime(&path);
     let reader = redb::Builder::new().open_read_only(&path).unwrap();
     let err = PoolStore::create(&path).expect_err("a reader holds the file");
     assert!(
@@ -497,7 +491,7 @@ fn a_live_reader_stops_a_recreate_and_the_file_stays() {
         "{err:?}"
     );
     assert_eq!(
-        untouched(&path),
+        bytes_and_mtime(&path),
         before,
         "the refused recreate wrote nothing"
     );
@@ -530,9 +524,9 @@ fn a_recovery_bit_reopens_the_committed_row() {
         .unwrap();
     drop(store);
 
-    crate::redb_recovery::mark_recovery_required(&path);
+    mark_recovery_required(&path);
     assert!(
-        crate::redb_recovery::read_only_open_is_repair_aborted(&path),
+        read_only_open_is_repair_aborted(&path),
         "the bit is the repair arm, not a foreign file"
     );
     let (store, how) = PoolStore::create(&path).unwrap();

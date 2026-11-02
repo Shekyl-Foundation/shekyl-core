@@ -2518,8 +2518,10 @@ not change with its address:
   existing file on a **read-only** open first, and opens writable only a file
   it accepted: a writable open writes into the file even with nothing
   committed (redb records its allocator state when it closes), so a refused
-  file is left byte for byte. Accepted are a sealed file `verify` passes and a
-  database with no table, which the writable open then **seals in place**
+  file is left byte for byte. The two opens are by path: redb opens read-only
+  only by path, and a directory entry replaced between them is a different
+  file, which a later refusal has already marked for recovery. Accepted are a
+  sealed file `verify` passes and a database with no table, which the writable open then **seals in place**
   under the engine's exclusive lock. A file the engine never finished
   initializing is moved aside as `<name>.unfinished-<unix seconds>` (never
   deleted; the node logs where) and a fresh store created. A file longer than

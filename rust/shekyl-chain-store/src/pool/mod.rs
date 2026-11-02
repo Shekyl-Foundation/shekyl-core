@@ -72,7 +72,8 @@
 //! The recreate holds the writable open across the rename: that open is
 //! the engine's exclusive lock, and a reader that still holds the file
 //! makes it fail, leaving the file as it was. The read-only open filters
-//! refusals; it is not the lock.
+//! refusals; it is not the lock. It judges the inode it opened. The
+//! writable open is a second open of the path.
 //!
 //! # Durability
 //!

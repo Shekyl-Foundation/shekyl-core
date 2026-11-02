@@ -34,6 +34,16 @@
 //! open) takes the same writable open, which repairs it, and is then
 //! admitted like any other file.
 //!
+//! The filter and the claim are two opens of the path. redb's read-only
+//! open takes a path (`Builder::open_read_only`); a read-only database
+//! cannot be built from a `std::fs::File` the caller already holds, so
+//! the filter cannot hand its inode to the claim. A refusal writes
+//! nothing to the inode the filter opened. A directory entry replaced
+//! between the two opens is a different file. The claim admits that
+//! file, and a refusal of it drops the claim, whose shutdown write marks
+//! the inode the claim opened. An identity check after that open would
+//! report a write it did not prevent.
+//!
 //! # A creation cut short is finished
 //!
 //! A fresh file is made in three durable steps (`crate::creation`): the
@@ -143,8 +153,9 @@ pub(super) fn open_or_create(path: &Path) -> Result<(Database, PoolOpen), StoreE
 /// readable seal (current or another version), a file with no table at
 /// all, and a file the engine must repair (`RepairAborted`) all continue.
 /// What a readable file is gets read again under [`claim`]: the filter
-/// holds only a shared lock, which does not stop a rename. A file the
-/// engine will not open as a database goes to [`set_aside`].
+/// holds only a shared lock, which does not stop a rename. The inode
+/// judged here is the one a refusal leaves unwritten. A file the engine
+/// will not open as a database goes to [`set_aside`].
 fn open_existing(builder: &redb::Builder, path: &Path) -> Result<(Database, PoolOpen), StoreError> {
     match builder.open_read_only(path) {
         Ok(read_only) => {
@@ -181,7 +192,8 @@ fn claim(builder: &redb::Builder, path: &Path) -> Result<Database, StoreError> {
 
 /// Admit the file `claimed` holds. A file with no table is sealed in
 /// place; a seal at another version is replaced before `claimed` is
-/// dropped, so the lock covers the rename.
+/// dropped, so the lock covers the rename. A refusal drops `claimed` too,
+/// and that drop writes the inode the claim opened.
 fn admit(
     builder: &redb::Builder,
     claimed: Database,
