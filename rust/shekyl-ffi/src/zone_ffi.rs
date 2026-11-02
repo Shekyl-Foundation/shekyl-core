@@ -1040,3 +1040,7 @@ pub fn shutdown() {
 #[cfg(test)]
 #[path = "zone_ffi_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "zone_dial_path_tests.rs"]
+mod dial_path_tests;
