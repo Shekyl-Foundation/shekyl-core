@@ -877,6 +877,23 @@ nothing: the daemon holds the address for `start_mining` (or
 refused before the daemon starts. The start-up configuration line shows
 the address shortened to its first and last eight characters.
 
+The miner mines only on a chain the node knows to be synced. A node that
+is alone on its network with `clearnet` or `tor` on has no view of that
+network and never counts itself synced: `mining_status` reports
+`no_template` with `mine.not_synced` (`no_view`) and the height does not
+move. That is the rule, not a fault. To mine alone — a fresh regtest, a
+single-machine test — declare it: turn both connectors off,
+
+```bash
+./shekyld --network regtest --clearnet off --tor off \
+  --mine on --mine-address <address>
+```
+
+or name the whole network with `p2p-closed-peer`, which counts the node
+synced while none of its named peers is up. `dev-sync` is not this lever:
+it only stops the node asking peers for blocks, and a node with a
+connector on still has a network it could be behind.
+
 ### The 60-block lock
 
 Mined coins are **locked for 60 blocks** (~2 hours) before they become
