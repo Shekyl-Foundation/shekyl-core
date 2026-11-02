@@ -18,7 +18,7 @@ use std::path::PathBuf;
 #[derive(Debug)]
 pub struct HardenError {
     /// The step that failed, as a reader would name it (`RLIMIT_CORE`,
-    /// `PR_SET_DUMPABLE`, `PROC_TRACE_CTL`).
+    /// `SIGSEGV`, `SIGBUS`, `PR_SET_DUMPABLE`, `PROC_TRACE_CTL`).
     pub step: &'static str,
     /// The operating system's error.
     pub source: std::io::Error,
@@ -47,6 +47,15 @@ impl std::error::Error for HardenError {
 /// - Every Unix: `RLIMIT_CORE` soft and hard limits to zero. A raised hard
 ///   limit cannot be restored by this process afterwards, which is the
 ///   point.
+/// - Every Unix: `SIGSEGV` and `SIGBUS` back to their default disposition.
+///   Rust's runtime installs a handler for both before `main` to print
+///   "has overflowed its stack" on a guard-page fault; for any other
+///   delivery it resets the disposition and *returns*, counting on the
+///   faulting instruction to re-execute. A `SIGSEGV` sent with `kill(2)`
+///   has no such instruction, so a daemon under that handler survives the
+///   first one. With the default disposition every `SIGSEGV`, sent or
+///   faulted, ends the process by the signal; a stack overflow ends it the
+///   same way, without the runtime's message.
 /// - Linux, in addition: `PR_SET_DUMPABLE` to zero, which also makes
 ///   `/proc/self` root-owned and refuses `ptrace` from a process that is
 ///   not root. The daemon reads nothing under `/proc/self` it would lose.
@@ -83,6 +92,16 @@ pub fn harden_process() -> Result<(), HardenError> {
                 step: "RLIMIT_CORE",
                 source: std::io::Error::last_os_error(),
             });
+        }
+        for (signal, step) in [(libc::SIGSEGV, "SIGSEGV"), (libc::SIGBUS, "SIGBUS")] {
+            // SAFETY: `signal(2)` with a constant signal and the `SIG_DFL`
+            // constant; it reads and writes no memory of ours.
+            if unsafe { libc::signal(signal, libc::SIG_DFL) } == libc::SIG_ERR {
+                return Err(HardenError {
+                    step,
+                    source: std::io::Error::last_os_error(),
+                });
+            }
         }
     }
     #[cfg(target_os = "linux")]
@@ -241,6 +260,28 @@ mod tests {
         let rc = unsafe { libc::getrlimit(libc::RLIMIT_CORE, &raw mut read) };
         assert_eq!(rc, 0);
         assert_eq!((read.rlim_cur, read.rlim_max), (0, 0));
+    }
+
+    /// After hardening, `SIGSEGV` and `SIGBUS` read back at the default
+    /// disposition: the runtime's stack-overflow handler, which a sent
+    /// `SIGSEGV` would merely unregister, is gone. Before hardening the
+    /// test process carries that handler, which is what makes this test
+    /// able to fail.
+    #[test]
+    fn hardening_restores_the_default_fault_dispositions() {
+        harden_process().expect("hardening applies to an ordinary process");
+        for signal in [libc::SIGSEGV, libc::SIGBUS] {
+            // SAFETY: `sigaction(2)` with a null new action only reads the
+            // current one into the struct behind a valid pointer to a live
+            // local; `sigaction` is plain data, so zeroed is a valid value.
+            let current = unsafe {
+                let mut current: libc::sigaction = std::mem::zeroed();
+                let rc = libc::sigaction(signal, std::ptr::null(), &raw mut current);
+                assert_eq!(rc, 0);
+                current
+            };
+            assert_eq!(current.sa_sigaction, libc::SIG_DFL, "signal {signal}");
+        }
     }
 
     /// On Linux the dumpable flag reads back clear as well.
