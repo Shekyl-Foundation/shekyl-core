@@ -8,20 +8,23 @@
 //! Anything this module does not name is `None`. The core never sees it.
 
 use crate::control::{
-    Bootstrap, ClientStatus, GeneralStatus, HsDescAction, HsDescContent, HsDescEvent, Liveness,
-    Recommendation, RoundMark, TorEvent,
+    Bootstrap, ClientStatus, GeneralStatus, HsDescAction, HsDescContent, HsDescEvent,
+    HsDescFailure, Liveness, Recommendation, RoundMark, TorEvent,
 };
 
-use super::core::{DirectoryAnswer, Input, RoundEnd};
+use super::core::{DirectoryAnswer, Input, RoundTally};
 
 /// A fetch of this node's onion, as the directory check reads it (§4.5).
 /// The caller keeps only events for its own address. `REQUESTED` names the
 /// directory and the descriptor Tor's client asks for; a line missing
-/// either is not a fetch this check sent. `FAILED` with a descriptor id is
-/// a directory's answer, except an upload's refusal (`UPLOAD_REJECTED`),
-/// which carries the id too and is the round coalescer's. `REASON=NOT_FOUND` is the directory not having it;
-/// any other reason says nothing about the descriptor. `RECEIVED` is not
-/// the answer: the copy's counter is, and it comes in the
+/// either is not a fetch this check sent. A `FAILED` is a directory's
+/// answer when it is a fetch's: `NOT_FOUND` says the directory does not
+/// have it, and any other reason that names a descriptor says nothing
+/// about it. An upload's refusal is never an answer. `UNEXPECTED` is an
+/// answer only when the round coalescer does not own an open upload of
+/// that descriptor; the driver asks the coalescer first and does not call
+/// this when it does. `RECEIVED` is not the answer: the copy's counter is,
+/// and it comes in the
 /// `HS_DESC_CONTENT` Tor sends right after (tor 0.4.9.14
 /// `hs_client.c:1685-1689`), read by [`directory_content_input_of`].
 #[must_use]
@@ -33,18 +36,25 @@ pub fn directory_input_of(event: &HsDescEvent) -> Option<Input> {
                 descriptor_id: event.descriptor_id.clone()?,
             });
         }
-        // An upload's refusal carries the descriptor id too
-        // (`dirclient.c:2815`); it is the round coalescer's, never an answer.
-        HsDescAction::Failed if event.reason.as_deref() == Some("UPLOAD_REJECTED") => {
-            return None;
-        }
-        HsDescAction::Failed if event.descriptor_id.is_some() => {
-            if event.reason.as_deref() == Some("NOT_FOUND") {
+        HsDescAction::Failed => match event.failure() {
+            // An upload's refusal carries the descriptor id too
+            // (`dirclient.c:2815`). It is the round coalescer's, never an answer.
+            Some(HsDescFailure::UploadRejected) | None => return None,
+            Some(HsDescFailure::NotFound) if event.descriptor_id.is_some() => {
                 DirectoryAnswer::NotFound
-            } else {
+            }
+            // A fetch's `UNEXPECTED` or `BAD_DESC`: nothing about whether
+            // the directory holds the descriptor. An upload's `UNEXPECTED`
+            // is the coalescer's, and the driver does not call this then.
+            Some(HsDescFailure::Unexpected | HsDescFailure::Other)
+                if event.descriptor_id.is_some() =>
+            {
                 DirectoryAnswer::Other
             }
-        }
+            Some(HsDescFailure::NotFound | HsDescFailure::Unexpected | HsDescFailure::Other) => {
+                return None;
+            }
+        },
         _ => return None,
     };
     Some(Input::DirectoryAnswered {
@@ -206,10 +216,11 @@ const HANDSHAKE_CLOSED_REASON: &str = "DONE";
 /// The inputs a round's marks carry (§4.5, §4.4). A round's end is
 /// [`Input::UploadRoundEnded`], with one `draw()` for the probe's delay: a
 /// round with an upload that succeeded schedules the probe, and one with
-/// none is not uploaded. Either carries its uploads and how many of them a
-/// directory refused: more than half refused is the clock's signature,
+/// none is not uploaded. The tally carries how many reached a directory,
+/// how many of the uploads that began were refused, and how many began.
+/// More than half of those that began refused is the clock's signature,
 /// and no republish follows it (Rick, 2026-11-01). Uploads that never
-/// reported an end count among the uploads and not among the refused: a
+/// reported an end count among those that began and not among the refused: a
 /// refusal is reported within seconds (the clock VM run of 2026-11-01), so
 /// an unfinished upload is unknown, and a round that is not a refused
 /// majority on what it reported is not called one. A round's start and its first upload
@@ -229,13 +240,11 @@ pub fn round_inputs(marks: &[RoundMark], mut draw: impl FnMut() -> u64) -> Vec<I
                 refused,
                 unfinished,
             } => Input::UploadRoundEnded {
-                end: if uploaded > 0 {
-                    RoundEnd::Uploaded
-                } else {
-                    RoundEnd::NotUploaded
+                tally: RoundTally {
+                    uploaded,
+                    refused,
+                    begun: uploaded.saturating_add(failed).saturating_add(unfinished),
                 },
-                uploads: uploaded.saturating_add(failed).saturating_add(unfinished),
-                refused,
                 draw: draw(),
             },
         })
@@ -270,7 +279,7 @@ mod tests {
     use crate::control::{
         Bootstrap, BootstrapProblem, ClientStatus, Liveness, Recommendation, Severity, TorEvent,
     };
-    use crate::supervisor::{Input, RoundEnd};
+    use crate::supervisor::{Input, RoundTally};
 
     /// A round's marks become the core's inputs: its start, its first upload
     /// and its end, each upload and end with a draw of its own. A round with a
@@ -303,9 +312,11 @@ mod tests {
                 Input::UploadRoundStarted,
                 Input::FirstUploaded { draw: 0 },
                 Input::UploadRoundEnded {
-                    end: RoundEnd::Uploaded,
-                    uploads: 16,
-                    refused: 0,
+                    tally: RoundTally {
+                        uploaded: 12,
+                        refused: 0,
+                        begun: 16,
+                    },
                     draw: 1
                 }
             ]
@@ -324,9 +335,11 @@ mod tests {
         assert_eq!(
             refused,
             [Input::UploadRoundEnded {
-                end: RoundEnd::Uploaded,
-                uploads: 16,
-                refused: 14,
+                tally: RoundTally {
+                    uploaded: 2,
+                    refused: 14,
+                    begun: 16,
+                },
                 draw: 2
             }]
         );
@@ -344,9 +357,11 @@ mod tests {
         assert_eq!(
             open,
             [Input::UploadRoundEnded {
-                end: RoundEnd::NotUploaded,
-                uploads: 16,
-                refused: 6,
+                tally: RoundTally {
+                    uploaded: 0,
+                    refused: 6,
+                    begun: 16,
+                },
                 draw: 3
             }]
         );
@@ -548,7 +563,8 @@ mod tests {
     /// reads them, from the lines the VM run of 2026-11-01 recorded: a
     /// `REQUESTED` names the descriptor asked for; `FAILED` with an id is an
     /// answer, `NOT_FOUND` the only reason that says the directory lacks it;
-    /// an upload's `FAILED` (no id) is not an answer. `RECEIVED` is not an
+    /// an upload's refusal is not an answer, and a fetch's `UNEXPECTED` says
+    /// nothing about the descriptor. `RECEIVED` is not an
     /// answer either: the copy's `HS_DESC_CONTENT`, with its counter, is
     /// (`a_directorys_copy_is_the_checks_answer`). Mapping every `FAILED` to
     /// `NotFound`, reading an upload's end as an answer, or answering at
@@ -614,6 +630,17 @@ mod tests {
             )),
             None,
             "an upload's refusal, which carries the id, is the round coalescer's"
+        );
+        assert_eq!(
+            read(format!(
+                "650 HS_DESC FAILED {onion} NO_AUTH {dir} {key} REASON=UNEXPECTED"
+            )),
+            Some(Input::DirectoryAnswered {
+                hsdir,
+                descriptor_id: Some(key.to_owned()),
+                answer: DirectoryAnswer::Other,
+            }),
+            "a fetch's UNEXPECTED says nothing about the descriptor; an open upload of it is the coalescer's, and the driver does not call this then"
         );
         assert_eq!(
             read(format!("650 HS_DESC UPLOADED {onion} UNKNOWN {dir}")),

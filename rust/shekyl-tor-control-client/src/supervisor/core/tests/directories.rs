@@ -620,3 +620,44 @@ fn a_copy_of_a_descriptor_ours_does_not_name_counts_by_being_there() {
         }
     );
 }
+
+/// **Without our counter the check counts nothing** (§4.5). Tor gave no
+/// descriptor, so no fetch is sent and the probe alone decides. Counting
+/// the copies as found would call the node Reachable on directories it
+/// cannot compare, and waiting out their answer windows would hold the
+/// probe for a check that counts nothing.
+#[test]
+fn without_our_counter_the_check_counts_nothing_and_the_probe_decides() {
+    let mut core = published();
+    core.on(uploaded(0), 0);
+    let drawn = core.on(
+        Input::DirectoriesDrawn {
+            fetches: sent(1..=8, "cur", 0),
+            ours: None,
+        },
+        0,
+    );
+    assert!(fetched(&drawn).is_empty(), "no fetch goes out");
+    let launched = core.on_deadline(secs(15));
+    assert_eq!(probes(&launched), 1);
+    assert!(
+        fetched(&launched).is_empty(),
+        "the answer windows are not waited"
+    );
+    core.on(
+        Input::ProbeDialed {
+            minted_at: secs(15),
+        },
+        secs(15),
+    );
+    let step = core.on(arrival(secs(15), secs(18)), secs(18));
+    assert_eq!(
+        count(&step, |action| matches!(
+            action,
+            Action::DirectoriesUnmatched
+        )),
+        1,
+        "the probe alone decides"
+    );
+    assert!(matches!(core.status().inbound, Inbound::Reachable { .. }));
+}

@@ -11,7 +11,7 @@
 //! the driver does; the core's own time is the test's, in nanoseconds.
 
 use super::super::super::posture::{render, Cause, Inbound, InboundCause};
-use super::super::{Action, Core, Input, RoundEnd, Step};
+use super::super::{Action, Core, Input, RoundTally, Step};
 use super::probe::{arrival, count, probes, published, republishes, run_timed, secs, uploaded};
 use super::{managed, policy};
 
@@ -26,11 +26,21 @@ fn clock(valid_after: u64, wall: u64) -> Input {
     Input::ConsensusClock { valid_after, wall }
 }
 
-fn round_end(end: RoundEnd, uploads: u32, refused: u32) -> Input {
+fn behind(seconds: u64) -> InboundCause {
+    InboundCause::ClockBehind {
+        behind: std::time::Duration::from_secs(seconds),
+    }
+}
+
+/// `uploaded` reached a directory, `refused` of the `begun` uploads were
+/// refused. The VM run's rounds are 2 of 16 accepted and 14 refused.
+fn round_tally(uploaded: u32, refused: u32, begun: u32) -> Input {
     Input::UploadRoundEnded {
-        end,
-        uploads,
-        refused,
+        tally: RoundTally {
+            uploaded,
+            refused,
+            begun,
+        },
         draw: 0,
     }
 }
@@ -116,7 +126,7 @@ fn the_clock_is_named_while_running_and_clears() {
     assert_eq!(
         named.inbound,
         Inbound::Unreachable {
-            cause: InboundCause::ClockBehind,
+            cause: behind(DAY),
             since: secs(5),
         }
     );
@@ -210,7 +220,7 @@ fn no_republish_while_the_clock_is_named() {
     assert!(matches!(
         core.status().inbound,
         Inbound::Unreachable {
-            cause: InboundCause::ClockBehind,
+            cause: InboundCause::ClockBehind { .. },
             ..
         }
     ));
@@ -226,7 +236,7 @@ fn no_republish_while_the_clock_is_named() {
 #[test]
 fn no_republish_under_a_majority_of_refusals() {
     let mut core = reachable();
-    let refused = core.on(round_end(RoundEnd::Uploaded, 16, 14), secs(30));
+    let refused = core.on(round_tally(2, 14, 16), secs(30));
     assert_eq!(republishes(&refused), 0);
     assert_eq!(checks(&refused), 0, "no probe for a refused round");
     let status = core.status();
@@ -247,7 +257,7 @@ fn no_republish_under_a_majority_of_refusals() {
     let served = serve(&mut core, secs(4 * 3_600), |_| None);
     assert_eq!(republishes(&served), 0, "no republish");
     assert_eq!(overdues(&served), 0, "the overdue rule stands down");
-    let half = core.on(round_end(RoundEnd::Uploaded, 16, 8), secs(4 * 3_600 + 1));
+    let half = core.on(round_tally(8, 8, 16), secs(4 * 3_600 + 1));
     assert_eq!(core.status().inbound, Inbound::Publishing);
     assert_eq!(checks(&half), 1, "an accepted round's probe judges");
 }
@@ -365,7 +375,7 @@ fn the_clock_runs_sequence_gives_the_clock_line_and_no_republish() {
 /// **A new Tor keeps a named clock.** A respawned Tor numbers its uploads
 /// from the same clock, so the facet stays on the clock's line instead of
 /// going back to "publishing". Fails if `enter_running` resets the facet
-/// whatever the clock (`clock_behind.is_none()` dropped from its test).
+/// whatever the clock (`clock_is_behind` dropped from its test).
 #[test]
 fn a_new_tor_keeps_a_named_clock() {
     let mut core = published();
@@ -392,7 +402,7 @@ fn a_new_tor_keeps_a_named_clock() {
     assert!(matches!(
         core.status().inbound,
         Inbound::Unreachable {
-            cause: InboundCause::ClockBehind,
+            cause: InboundCause::ClockBehind { .. },
             ..
         }
     ));
@@ -413,4 +423,29 @@ fn a_clock_jump_asks_no_probe_while_the_clock_is_named() {
         "{:?}",
         jumped.actions
     );
+}
+
+/// **Standing down does not postpone the overdue check.** A clock named for
+/// longer than a lifetime leaves the anchor where the last upload put it.
+/// The first sample inside the tolerance makes the check due at once, and
+/// it republishes then. Fails if `on_overdue_deadline` moves
+/// `lifetime_from` while a republish cannot help: the next check would wait
+/// another lifetime.
+#[test]
+fn a_named_clock_does_not_postpone_the_overdue_check() {
+    let mut core = reachable();
+    core.on(clock(VALID_AFTER, VALID_AFTER - DAY), secs(30));
+    let behind_wall = |_| Some((VALID_AFTER, VALID_AFTER - DAY));
+    let served = serve(&mut core, secs(4 * 3_600), behind_wall);
+    assert_eq!(overdues(&served), 0, "the check stands down");
+    let clear_at = secs(4 * 3_600 + 10);
+    core.on(clock(VALID_AFTER, VALID_AFTER), clear_at);
+    let due = core.deadline().expect("due once a republish can help");
+    assert!(
+        due <= clear_at,
+        "the anchor was not moved: due at {due}, cleared at {clear_at}"
+    );
+    let step = core.on_deadline(clear_at);
+    assert_eq!(overdues(&step), 1, "the check that came due while named");
+    assert_eq!(republishes(&step), 1);
 }

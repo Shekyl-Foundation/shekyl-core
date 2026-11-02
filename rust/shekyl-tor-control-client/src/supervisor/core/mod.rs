@@ -131,12 +131,12 @@ impl Policy {
             // Upload p50 4.6 s (`TSR-M7`); the descriptor then has to reach
             // the directories the probe's own fetch asks (§10).
             probe_after_min: Duration::from_secs(15),
-            probe_after_max: Duration::from_secs(60),
+            probe_after_max: PROBE_AFTER_MAX,
             // Nine of ten probes arrived within 26.44 s and the x86 cluster
             // reached 46 s (`TSR-M2`, `TSR-M3`).
-            probe_within: Duration::from_secs(60),
+            probe_within: PROBE_WITHIN,
             // Five times the longest round that ended (7 to 12 s, §10).
-            round_wait: Duration::from_secs(60),
+            round_wait: ROUND_WAIT,
             // The live tests' wait for a round, where the stuck rounds were
             // found (§10).
             round_stuck_after: Duration::from_secs(300),
@@ -153,14 +153,32 @@ impl Policy {
             // lifetime at `src/feature/hs/hs_service.c:1942`.
             descriptor_lifetime: DESCRIPTOR_LIFETIME,
             clock_behind_after: CLOCK_BEHIND_AFTER,
-            // One check's worst case: the round's wait (60 s), the probe's
-            // longest delay (60 s) and bound (60 s), then the refetch's
-            // probe, its delay (60 s) and bound (60 s). A wait shorter than
-            // one judgment is the event gate again.
-            republish_after: Duration::from_secs(60 + 60 + 60 + 60 + 60),
+            // One judgment's worst case (`TSR-M14`). Named with the waits it
+            // is made of, so a later probe bound moves this with them.
+            republish_after: REPUBLISH_AFTER,
         }
     }
 }
+
+/// How long the probe waits for a round to end after its first upload
+/// (`TSR-M3`): five times the longest round measured to end.
+pub const ROUND_WAIT: Duration = Duration::from_secs(60);
+
+/// The probe's longest delay (`TSR-M2`).
+pub const PROBE_AFTER_MAX: Duration = Duration::from_secs(60);
+
+/// The probe's bound, and one directory fetch's answer window (`TSR-M2`).
+pub const PROBE_WITHIN: Duration = Duration::from_secs(60);
+
+/// [`Policy::republish_after`] (`TSR-M14`): the round's wait, then a probe
+/// and the refetch's probe, each at its longest delay and its bound. A wait
+/// shorter than one judgment republishes inside the previous check.
+pub const REPUBLISH_AFTER: Duration = {
+    let one_probe = PROBE_AFTER_MAX.saturating_add(PROBE_WITHIN);
+    ROUND_WAIT
+        .saturating_add(one_probe)
+        .saturating_add(one_probe)
+};
 
 /// The directory authorities' distribution delay, `V3AuthDistDelay`'s
 /// default in tor 0.4.9.14 (`src/app/config/config.c:713`, 5 minutes):
@@ -407,12 +425,9 @@ pub enum Input {
     /// uniform random number from the daemon's CSPRNG; the core maps it onto
     /// the probe's delay range.
     UploadRoundEnded {
-        /// How the round ended.
-        end: RoundEnd,
-        /// The round's uploads: two descriptors to their directories.
-        uploads: u32,
-        /// Of those, the uploads a directory refused (`UPLOAD_REJECTED`).
-        refused: u32,
+        /// How many reached a directory, how many of those that began were
+        /// refused, and how many began.
+        tally: RoundTally,
         /// Uniform over `u64`.
         draw: u64,
     },
@@ -446,8 +461,8 @@ pub enum Input {
         /// This service's `desc_current` (`GETINFO
         /// hs/service/desc/id/<onion>`): its blinded key and counter. A copy
         /// of that descriptor counts only at that counter; a copy of another
-        /// counts by being there. `None` when Tor gave none: every copy
-        /// counts by being there.
+        /// counts by being there. `None` when Tor gave none: the check
+        /// counts nothing and the probe alone decides.
         ours: Option<ServiceDescriptor>,
     },
     /// Tor accepted `HSFETCH` for `hsdir` (`250`). That fetch's answer
@@ -512,16 +527,27 @@ pub enum Input {
     ExternalCleared,
 }
 
-/// How a descriptor round ended.
+/// How one upload round ended (§4.5). The three counts are one fact: how
+/// many reached a directory, how many of the uploads that began were
+/// refused, and how many began. A refused majority is read from `begun`,
+/// not from the successes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RoundEnd {
-    /// At least one upload reached a directory.
-    Uploaded,
-    /// None did: every upload failed, or one is unfinished, or the ends were
-    /// lost. Not a republish: Tor retries its own failed uploads, and a
-    /// refused round is [`Input::UploadRoundEnded`]'s `refused` (Rick,
-    /// 2026-11-01).
-    NotUploaded,
+pub struct RoundTally {
+    /// Uploads that reached a directory (`UPLOADED`).
+    pub uploaded: u32,
+    /// Of [`Self::begun`], the uploads a directory refused.
+    pub refused: u32,
+    /// Uploads that began, including those that never reported an end.
+    pub begun: u32,
+}
+
+impl RoundTally {
+    /// More than half of the uploads that began were refused. Exactly half
+    /// is not a majority. A round that began nothing is not one.
+    #[must_use]
+    pub fn majority_refused(self) -> bool {
+        self.begun > 0 && u64::from(self.refused) * 2 > u64::from(self.begun)
+    }
 }
 
 /// Actions and the next absolute deadline, in the caller's clock units.
@@ -643,11 +669,9 @@ pub struct Core {
     /// Where the descriptor's lifetime is counted from (§4.5, "Overdue"):
     /// the last round's first upload, or the last overdue republish. Only an
     /// upload shows the descriptor's age. None before the first upload and
-    /// after the probe is dropped.
+    /// after the probe is dropped. Standing down because a republish cannot
+    /// help does not move it.
     lifetime_from: Option<u64>,
-    /// How far behind the consensus this computer's clock is, in seconds,
-    /// while the clock is named (§4.2).
-    clock_behind: Option<u64>,
     /// More than half of the latest round's directories refused its upload.
     uploads_refused: bool,
     /// The republish backoff (§4.5).
@@ -691,7 +715,6 @@ impl Core {
             round: None,
             stuck_rounds: 0,
             lifetime_from: None,
-            clock_behind: None,
             uploads_refused: false,
             republish: clock::RepublishHold::new(duration_ns(policy.republish_after)),
             jump: clock_jump::JumpWatch::new(now),
@@ -738,12 +761,7 @@ impl Core {
             Input::OnionPublished => self.onion_published(),
             Input::UploadRoundStarted => self.round_started(now),
             Input::FirstUploaded { draw } => self.first_uploaded(now, draw),
-            Input::UploadRoundEnded {
-                end,
-                uploads,
-                refused,
-                draw,
-            } => self.round_ended(now, end, uploads, refused, draw),
+            Input::UploadRoundEnded { tally, draw } => self.round_ended(now, tally, draw),
             Input::ConsensusClock { valid_after, wall } => {
                 self.consensus_clock(now, valid_after, wall)
             }
@@ -905,7 +923,7 @@ impl Core {
             },
             inbound: self.inbound,
             stuck_upload_rounds: self.stuck_rounds,
-            clock_behind: self.clock_behind.map(Duration::from_secs),
+            clock_behind: self.clock_lag(),
         }
     }
 

@@ -12,8 +12,10 @@
 use std::time::Duration;
 
 use super::super::super::posture::Inbound;
-use super::super::{Action, Core, Input, Policy, RoundEnd, Step, DESCRIPTOR_LIFETIME};
-use super::probe::{arrival, count, probes, published, republishes, run_timed, secs, uploaded};
+use super::super::{Action, Core, Input, Policy, Step, DESCRIPTOR_LIFETIME};
+use super::probe::{
+    arrival, count, not_uploaded, probes, published, republishes, run_timed, secs, uploaded,
+};
 use super::{managed, policy, takes_down};
 
 /// The policy's descriptor lifetime: three hours.
@@ -191,15 +193,7 @@ fn a_round_that_ends_with_no_upload_leaves_the_upload_overdue() {
     core.on(Input::UploadRoundStarted, started);
     let ended = uploaded_at + lifetime() + secs(60);
     assert_eq!(overdue_to(&mut core, ended), []);
-    core.on(
-        Input::UploadRoundEnded {
-            end: RoundEnd::NotUploaded,
-            uploads: 16,
-            refused: 0,
-            draw: 0,
-        },
-        ended,
-    );
+    core.on(not_uploaded(), ended);
     assert!(
         core.deadline().is_some_and(|due| due <= ended),
         "due at once"

@@ -40,9 +40,9 @@ use shekyl_tor_control_client::control::{
     EventReceiver, EventSink, Resume, ServiceId, SocksTimeout, TorEvent, UploadRounds,
 };
 use shekyl_tor_control_client::supervisor::{
-    clock_evidence_of, directory_content_input_of, directory_input_of, held_sentence, input_of,
-    install_sentence, render, Action, Cause, Connectors, Core, DialTally, Input, ManagedRunning,
-    NetworkView, OriginVerdict as FoldedOrigin, Policy, Space, Step, Syncing, TorSetting,
+    clock_evidence_of, directory_content_input_of, held_sentence, input_of, install_sentence,
+    render, Action, Cause, Connectors, Core, DialTally, Input, ManagedRunning, NetworkView,
+    OriginVerdict as FoldedOrigin, Policy, Space, Step, Syncing, TorSetting,
 };
 use shekyl_tor_control_daemon::{
     space_needed, sweep_stale_data_dirs, CacheSave, DaemonTorConfig, DaemonTorControl,
@@ -680,8 +680,9 @@ impl Drive {
         self.step.deadline = due.deadline;
     }
 
-    /// One event batch from Tor: the round resync, the clock evidence, the
-    /// statement, and the round marks, in that order, folded as one step.
+    /// One event batch from Tor: the round resync, this onion's descriptor
+    /// line (one consumer), the clock evidence, and the statement, in that
+    /// order, folded as one step.
     /// Folding each input on its own replaces the step, and the earlier
     /// actions, a recovery among them, would never be performed.
     fn event_inputs(&mut self, reply: &ControlReply) -> Vec<Input> {
@@ -700,8 +701,9 @@ impl Drive {
                         reason = ?desc.reason,
                         "Tor's descriptor event"
                     );
-                    // A fetch of this onion: the directory check's evidence.
-                    inputs.extend(directory_input_of(desc));
+                    // One consumer: an upload's line is the round's, a fetch's
+                    // is the directory check's.
+                    inputs.extend(self.read_hs_desc(desc));
                 }
             }
             // A directory's copy of this onion's descriptor, after a fetch:
@@ -729,10 +731,6 @@ impl Drive {
                 // A Tor statement the supervisor acts on, said as it
                 // arrives: what a run records.
                 tracing::info!(target: "tor", "Tor says {input:?}");
-                inputs.push(input);
-            }
-            for input in self.round_marks(&parsed) {
-                probe::say_round(&input);
                 inputs.push(input);
             }
         }

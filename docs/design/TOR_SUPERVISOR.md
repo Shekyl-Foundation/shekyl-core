@@ -643,9 +643,14 @@ address; the round coalescer counts only the upload actions. Both an
 upload's `FAILED` and a fetch's carry the descriptor id (tor 0.4.9.14
 `dirclient.c:2815`, `hs_client.c:1719`); an upload ends only as `UPLOADED`,
 `FAILED REASON=UPLOAD_REJECTED` or `FAILED REASON=UNEXPECTED`
-(`dirclient.c:2803-2827`), so a `FAILED` closes an upload only with one of
-those reasons and only an open upload to that directory of that
-descriptor, and a failed fetch never ends a round. `SIGNAL NEWNYM` would also clear the
+(`dirclient.c:2803-2827`). One line has one consumer. `UPLOAD_REJECTED` is
+the round's even when no upload is open, and then it closes nothing.
+`UNEXPECTED` is the round's only while an upload of that descriptor is open
+to that directory; otherwise it is a fetch's and says nothing about whether
+the directory holds the descriptor. A `FAILED` that names no descriptor is
+the round's as well: a fetch's failure names the descriptor it asked for.
+`NOT_FOUND` and any other `FAILED` that names a descriptor are the directory
+check's, and a failed fetch never ends a round. `SIGNAL NEWNYM` would also clear the
 client state, but it purges Tor's client state for every onion and moves
 every new peer stream onto new circuits, and is not used. The bound is not
 a respawn. The floor-device soak measures both miss rates; if the
@@ -805,6 +810,8 @@ introduction points, and the directories go on advertising the old ones
 named, so every stranger's dial failed at introduction). The overdue check
 stands down, and no probe is scheduled or judged: the facet already says
 what a probe could not change, and a probe's verdict would overwrite it.
+Standing down does not move the descriptor's lifetime anchor, so a check
+that came due while a republish could not help runs when one can.
 A republish has two triggers only: the overdue upload and the two-miss
 rule.
 

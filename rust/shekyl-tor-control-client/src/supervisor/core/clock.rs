@@ -32,6 +32,8 @@
 //! `Policy::republish_after` up to the descriptor's lifetime; a confirmed
 //! Reachable resets it. This gap stood with a correct clock as well.
 
+use std::time::Duration;
+
 use super::super::posture::{Inbound, InboundCause};
 use super::announce::Cadence;
 use super::{duration_ns, Action, Core, Duty, Phase};
@@ -77,15 +79,13 @@ impl Core {
         }
         let behind = valid_after.saturating_sub(wall);
         if behind > self.policy.clock_behind_after.as_secs() {
-            let named = self.clock_behind.is_none();
-            self.clock_behind = Some(behind);
-            if !named {
+            let behind = Duration::from_secs(behind);
+            if !self.note_clock_behind(now, behind) {
                 return Vec::new();
             }
-            self.inbound_unreachable(now, InboundCause::ClockBehind);
             return self.say(now, Cadence::Due);
         }
-        if self.clock_behind.take().is_none() {
+        if !self.clock_is_behind() {
             return Vec::new();
         }
         // Cleared. Refused uploads still stand if they did; otherwise the
@@ -111,7 +111,7 @@ impl Core {
         if self.republish.judging {
             self.republish_failed(now);
         }
-        if self.clock_behind.is_some() || !newly {
+        if self.clock_is_behind() || !newly {
             return Vec::new();
         }
         self.inbound_unreachable(now, InboundCause::UploadsRefused);
@@ -138,7 +138,40 @@ impl Core {
     /// While the clock is named, or the latest round was refused, a
     /// republish cannot help.
     pub(super) fn republish_cannot_help(&self) -> bool {
-        self.clock_behind.is_some() || self.uploads_refused
+        self.clock_is_behind() || self.uploads_refused
+    }
+
+    /// How far behind the consensus this computer's clock is, while the
+    /// clock is named. The status projects this.
+    pub(super) fn clock_lag(&self) -> Option<Duration> {
+        match self.inbound {
+            Inbound::Unreachable {
+                cause: InboundCause::ClockBehind { behind },
+                ..
+            } => Some(behind),
+            _ => None,
+        }
+    }
+
+    /// The clock is named: inbound's cause carries the lag.
+    pub(super) fn clock_is_behind(&self) -> bool {
+        self.clock_lag().is_some()
+    }
+
+    /// Record `behind` on the standing clock cause. Returns whether this
+    /// sample newly names the clock. A later sample that is still behind
+    /// updates the lag and does not say the sentence again.
+    fn note_clock_behind(&mut self, now: u64, behind: Duration) -> bool {
+        if let Inbound::Unreachable {
+            cause: InboundCause::ClockBehind { behind: named },
+            ..
+        } = &mut self.inbound
+        {
+            *named = behind;
+            return false;
+        }
+        self.inbound_unreachable(now, InboundCause::ClockBehind { behind });
+        true
     }
 
     /// Publish the onion again (`DEL_ONION`, then `ADD_ONION`), unless it

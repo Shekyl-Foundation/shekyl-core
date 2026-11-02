@@ -126,8 +126,13 @@ pub enum InboundCause {
     /// This computer's clock is behind the consensus's `valid-after` by more
     /// than the tolerance (§4.2; Rick, 2026-11-01). Tor numbers each
     /// descriptor from its own clock, so the directories refuse what this
-    /// node uploads. How far behind is [`Status::clock_behind`].
-    ClockBehind,
+    /// node uploads. `behind` is that lag, a lower bound, and
+    /// [`Status::clock_behind`] is this field.
+    ClockBehind {
+        /// How far behind `valid-after` the wall clock was, at the latest
+        /// sample that still named it.
+        behind: std::time::Duration,
+    },
     /// The probe arrived through this node's own copy of the descriptor,
     /// but the directories its uploads reached no longer had it (§4.5, the
     /// directory check).
@@ -833,9 +838,9 @@ fn inbound_sentence(status: &Status) -> Option<String> {
             "The Tor network is not accepting this node's address right now. Others may not be able to reach this node."
                 .to_owned()
         }
-        InboundCause::ClockBehind => format!(
+        InboundCause::ClockBehind { behind } => format!(
             "This computer's clock is at least {} behind the Tor network's. Others may not be able to reach this node. Check this computer's date and time.",
-            spoken_span(status.clock_behind.unwrap_or_default())
+            spoken_span(behind)
         ),
     })
 }

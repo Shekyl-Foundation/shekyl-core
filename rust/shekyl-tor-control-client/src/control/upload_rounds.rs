@@ -7,11 +7,11 @@
 //!
 //! [`super::events::parse_event`] reads one `HS_DESC` line. This module is the
 //! supervisor's policy on those lines: when a round ends early, which `FAILED`
-//! is a fetch, and how a consumer resynchronises after the event sink drops
-//! events. Nothing in production calls it yet. The later supervisor increments
-//! are the caller; the policy is specified and pinned, so it stays.
+//! is an upload's, and how a consumer resynchronises after the event sink drops
+//! events. The driver asks [`UploadRounds::owns_line`] before it reads a line as
+//! a directory answer, then folds [`UploadRounds::observe`].
 
-use super::events::{HsDescAction, HsDescEvent};
+use super::events::{HsDescAction, HsDescEvent, HsDescFailure};
 use super::onion::ServiceId;
 use super::vanguards::RelayFingerprint;
 
@@ -48,10 +48,13 @@ const COUNTER_CEILING: u32 = u32::MAX;
 /// with no descriptor id, and `FAILED` with the descriptor id and `REASON=UPLOAD_REJECTED`
 /// on 400 or `REASON=UNEXPECTED` on any other status; a connection that fails sends
 /// nothing, and leaves the upload unfinished. A fetch's `FAILED` carries the descriptor
-/// id too, with its own reasons (`NOT_FOUND`, `BAD_DESC`, and `UNEXPECTED` as well), so a
-/// `FAILED` closes an upload only with an upload's reason and only an open upload to
-/// that HSDir with that descriptor. An `UPLOADED` or `FAILED` naming an HSDir with no
-/// open upload, as when the subscription began mid-round, is ignored.
+/// id too (`NOT_FOUND`, `BAD_DESC`, and `UNEXPECTED`). One line has one consumer.
+/// `UPLOAD_REJECTED` is an upload's even when none is open, and then it closes
+/// nothing. `UNEXPECTED` closes an upload only while one of that descriptor is open
+/// to that directory. A `FAILED` that names no descriptor is an upload's end.
+/// `NOT_FOUND`, and any other `FAILED` that names a descriptor, are a fetch's and
+/// never end a round. An end that names a directory with no open upload, as when
+/// the subscription began mid-round, closes nothing.
 ///
 /// **Where each descriptor went** ([`Self::directories`]): the directories whose
 /// upload succeeded, each with the descriptor id (the blinded key) its `UPLOAD`
@@ -81,14 +84,6 @@ pub struct UploadedTo {
     /// The descriptor id its `UPLOAD` named: the blinded key.
     pub descriptor_id: String,
 }
-
-/// The `REASON` a directory gives an upload it refused.
-const UPLOAD_REJECTED: &str = "UPLOAD_REJECTED";
-
-/// The `REASON` of an upload that got an unexpected HTTP status
-/// (`dirclient.c:2824`). A fetch can carry it too, so it closes only an open upload
-/// of the same descriptor.
-const UNEXPECTED: &str = "UNEXPECTED";
 
 /// How one upload ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -155,6 +150,49 @@ impl UploadRounds {
         !self.open.is_empty()
     }
 
+    /// Whether this line is an upload's, so a directory check does not also
+    /// read it. An upload and an `UPLOADED` are. A refusal always is, even
+    /// when no open upload matches: it is not a directory's answer. An
+    /// `UNEXPECTED` is only while an upload of that descriptor is open to
+    /// that directory. A `FAILED` that names no descriptor is an upload's
+    /// end. `NOT_FOUND`, and any other `FAILED` that names a descriptor, are
+    /// a fetch's.
+    #[must_use]
+    pub fn owns_line(&self, event: &HsDescEvent) -> bool {
+        if event.address.as_ref() != Some(&self.address) || event.hsdir.is_none() {
+            return false;
+        }
+        match event.action {
+            HsDescAction::Upload | HsDescAction::Uploaded => true,
+            HsDescAction::Failed => self.upload_close(event).is_some(),
+            _ => false,
+        }
+    }
+
+    /// How this `FAILED` closes an upload, when it is an upload's end.
+    /// [`Self::owns_line`] and [`Self::observe`] share this, so one line has
+    /// one reading.
+    fn upload_close(&self, event: &HsDescEvent) -> Option<Closed> {
+        let hsdir = event.hsdir?;
+        match event.failure() {
+            Some(HsDescFailure::UploadRejected) => Some(Closed::Refused),
+            Some(HsDescFailure::Unexpected)
+                if self.matches_open(hsdir, event.descriptor_id.as_deref()) =>
+            {
+                Some(Closed::Failed)
+            }
+            Some(HsDescFailure::Other) if event.descriptor_id.is_none() => Some(Closed::Failed),
+            _ => None,
+        }
+    }
+
+    /// An open upload to `hsdir`, of `descriptor` when the end names one.
+    fn matches_open(&self, hsdir: RelayFingerprint, descriptor: Option<&str>) -> bool {
+        self.open.iter().any(|(open, id)| {
+            *open == hsdir && descriptor.is_none_or(|wanted| id.as_deref() == Some(wanted))
+        })
+    }
+
     /// Fold one event in. Returns the boundaries it crossed, in order: an `UPLOADED`
     /// that is both the round's first success and its last end returns
     /// [`RoundMark::FirstUploaded`] then [`RoundMark::Ended`].
@@ -180,20 +218,10 @@ impl UploadRounds {
                 marks
             }
             HsDescAction::Uploaded => self.close(hsdir, None, Closed::Uploaded),
-            HsDescAction::Failed => {
-                let reason = event.reason.as_deref();
-                let an_uploads_end = event.descriptor_id.is_none()
-                    || matches!(reason, Some(UPLOAD_REJECTED | UNEXPECTED));
-                if !an_uploads_end {
-                    return Vec::new();
-                }
-                let closed = if reason == Some(UPLOAD_REJECTED) {
-                    Closed::Refused
-                } else {
-                    Closed::Failed
-                };
-                self.close(hsdir, event.descriptor_id.as_deref(), closed)
-            }
+            HsDescAction::Failed => match self.upload_close(event) {
+                Some(closed) => self.close(hsdir, event.descriptor_id.as_deref(), closed),
+                None => Vec::new(),
+            },
             _ => Vec::new(),
         }
     }
@@ -620,13 +648,29 @@ mod tests {
                 "HS_DESC UPLOAD {CAPTURED_ONION} UNKNOWN {hsdir} {desc}"
             )));
         }
-        // Neither closes `one`'s upload, so `two`'s end leaves the round open.
-        for line in [
-            format!("HS_DESC FAILED {CAPTURED_ONION} NO_AUTH {one} {other} REASON=UPLOAD_REJECTED"),
-            format!("HS_DESC FAILED {CAPTURED_ONION} NO_AUTH {one} {desc} REASON=NOT_FOUND"),
-            format!("HS_DESC FAILED {CAPTURED_ONION} NO_AUTH {two} {desc} REASON=UNEXPECTED"),
-        ] {
-            assert!(rounds.observe(&hs_desc_event(&line)).is_empty(), "{line}");
+        // A refusal is this coalescer's even when no open upload matches.
+        // A fetch's NOT_FOUND is not. UNEXPECTED of the open upload is, and
+        // UNEXPECTED of another descriptor is not: one line, one owner.
+        let rejected_other = hs_desc_event(&format!(
+            "HS_DESC FAILED {CAPTURED_ONION} NO_AUTH {one} {other} REASON=UPLOAD_REJECTED"
+        ));
+        let not_found = hs_desc_event(&format!(
+            "HS_DESC FAILED {CAPTURED_ONION} NO_AUTH {one} {desc} REASON=NOT_FOUND"
+        ));
+        let unexpected_open = hs_desc_event(&format!(
+            "HS_DESC FAILED {CAPTURED_ONION} NO_AUTH {two} {desc} REASON=UNEXPECTED"
+        ));
+        let unexpected_other = hs_desc_event(&format!(
+            "HS_DESC FAILED {CAPTURED_ONION} NO_AUTH {one} {other} REASON=UNEXPECTED"
+        ));
+        assert!(rounds.owns_line(&rejected_other));
+        assert!(!rounds.owns_line(&not_found));
+        assert!(rounds.owns_line(&unexpected_open));
+        assert!(!rounds.owns_line(&unexpected_other));
+        // None of these closes `one`'s upload. `two`'s unexpected end leaves
+        // the round open.
+        for event in [&rejected_other, &not_found, &unexpected_open] {
+            assert!(rounds.observe(event).is_empty(), "{event:?}");
         }
         assert!(rounds.in_round(), "one upload is still open");
         assert_eq!(

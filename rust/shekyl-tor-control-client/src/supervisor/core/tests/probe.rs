@@ -14,7 +14,7 @@
 use std::time::Duration;
 
 use super::super::super::posture::{render, Cause, Inbound, InboundCause, Shown};
-use super::super::{duration_ns, Action, Core, Input, RoundEnd, Step};
+use super::super::{duration_ns, Action, Core, Input, RoundTally, Step};
 use super::{announces, bring_up, managed, policy, reach_usable, socks, takes_down};
 
 pub(super) fn secs(seconds: u64) -> u64 {
@@ -37,14 +37,27 @@ pub(super) fn refetches(step: &Step) -> usize {
     count(step, |action| matches!(action, Action::RefetchDescriptor))
 }
 
-/// A round ended with an upload that succeeded: the probe's trigger.
-pub(super) fn uploaded(draw: u64) -> Input {
+/// A round's tally: how many reached a directory, how many of those that
+/// began were refused, and how many began.
+pub(super) fn round_tally(uploaded: u32, refused: u32, begun: u32, draw: u64) -> Input {
     Input::UploadRoundEnded {
-        end: RoundEnd::Uploaded,
-        uploads: 16,
-        refused: 0,
+        tally: RoundTally {
+            uploaded,
+            refused,
+            begun,
+        },
         draw,
     }
+}
+
+/// A round ended with every upload that began reaching a directory.
+pub(super) fn uploaded(draw: u64) -> Input {
+    round_tally(16, 0, 16, draw)
+}
+
+/// A round ended with nothing reaching a directory.
+pub(super) fn not_uploaded() -> Input {
+    round_tally(0, 0, 16, 0)
 }
 
 /// The probe minted at `minted_at` was taken by the handshake at `arrived_at`.
@@ -343,15 +356,7 @@ fn a_round_with_every_upload_failed_republishes_nothing() {
         },
         secs(15),
     );
-    let failed = core.on(
-        Input::UploadRoundEnded {
-            end: RoundEnd::NotUploaded,
-            uploads: 16,
-            refused: 0,
-            draw: 0,
-        },
-        secs(16),
-    );
+    let failed = core.on(not_uploaded(), secs(16));
     assert_eq!(cancels(&failed), 0, "the probe in flight stays");
     assert_eq!(republishes(&failed), 0, "no republish");
     assert_eq!(core.status().inbound, Inbound::Publishing);
@@ -589,15 +594,7 @@ fn the_probe_follows_the_rounds_end_or_its_wait_whichever_is_first() {
     );
     core.on(Input::ProbeDialed { minted_at: at }, at);
     core.on(arrival(at, at + 1), at + 1);
-    let late = core.on(
-        Input::UploadRoundEnded {
-            end: RoundEnd::Uploaded,
-            uploads: 16,
-            refused: 0,
-            draw: 0,
-        },
-        at + 2,
-    );
+    let late = core.on(uploaded(0), at + 2);
     assert_eq!(probes(&late), 0);
     let (_, rest) = run_timed(&mut core, at + secs(120));
     assert_eq!(probes(&rest), 0, "the late end schedules no second probe");
@@ -606,15 +603,7 @@ fn the_probe_follows_the_rounds_end_or_its_wait_whichever_is_first() {
     let mut core = published();
     core.on(Input::UploadRoundStarted, 0);
     core.on(Input::FirstUploaded { draw: 0 }, secs(5));
-    core.on(
-        Input::UploadRoundEnded {
-            end: RoundEnd::Uploaded,
-            uploads: 16,
-            refused: 0,
-            draw: 0,
-        },
-        secs(9),
-    );
+    core.on(uploaded(0), secs(9));
     let (at, step) = run_timed(&mut core, secs(5 + 60 + 15));
     assert_eq!(probes(&step), 1);
     assert_eq!(at, secs(9 + 15), "the end's probe, not the wait's");
@@ -667,15 +656,7 @@ fn a_round_open_for_five_minutes_is_counted_once_and_never_a_cause() {
     assert_eq!(status.cause, Cause::None);
     assert_eq!(status.shown, Shown::Usable);
     // The coalescer's resync ends it; the next round counts from nothing.
-    core.on(
-        Input::UploadRoundEnded {
-            end: RoundEnd::Uploaded,
-            uploads: 16,
-            refused: 0,
-            draw: 0,
-        },
-        secs(401),
-    );
+    core.on(uploaded(0), secs(401));
     core.on(Input::UploadRoundStarted, secs(402));
     assert_eq!(core.status().stuck_upload_rounds, 1);
 }

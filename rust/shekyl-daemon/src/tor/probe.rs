@@ -18,10 +18,11 @@
 use shekyl_ffi::dialer_ffi::ProbeHandshake;
 use shekyl_timing_engine::Tick;
 use shekyl_tor_control_client::control::{
-    parse_service_descriptor, Command, RelayFingerprint, ServiceDescriptor, TorEvent, UploadRounds,
+    parse_service_descriptor, Command, HsDescEvent, RelayFingerprint, ServiceDescriptor,
+    UploadRounds,
 };
 use shekyl_tor_control_client::supervisor::{
-    round_inputs, DirectoryAnswer, DirectoryFetch, Inbound, InboundCause, Input,
+    directory_input_of, round_inputs, DirectoryAnswer, DirectoryFetch, Inbound, InboundCause, Input,
 };
 use shekyl_tor_control_daemon::{probe_own_onion, ProbeDial};
 use tokio::task::JoinHandle;
@@ -135,15 +136,26 @@ impl Drive {
         Input::DescriptorRefetched { draw }
     }
 
-    /// This node's own onion's `HS_DESC` events, coalesced into rounds
-    /// (`TSR-Q5`). Each round's first upload carries a CSPRNG draw for the
-    /// probe's delay.
-    pub(super) fn round_marks(&mut self, event: &TorEvent) -> Vec<Input> {
-        let (TorEvent::HsDesc(desc), Some(rounds)) = (event, self.rounds.as_mut()) else {
-            return Vec::new();
-        };
-        let marks = rounds.observe(desc);
-        round_inputs(&marks, shekyl_ffi::tor_link::probe_delay_draw)
+    /// This onion's `HS_DESC`. The coalescer owns an upload's line, so that
+    /// line is not also a directory answer. A line it does not own is the
+    /// directory check's. One line has one consumer (`TOR_SUPERVISOR.md` §4.5).
+    pub(super) fn read_hs_desc(&mut self, event: &HsDescEvent) -> Vec<Input> {
+        let mut inputs = Vec::new();
+        let owned = self
+            .rounds
+            .as_ref()
+            .is_some_and(|rounds| rounds.owns_line(event));
+        if !owned {
+            inputs.extend(directory_input_of(event));
+        }
+        if let Some(rounds) = self.rounds.as_mut() {
+            let marks = rounds.observe(event);
+            for input in round_inputs(&marks, shekyl_ffi::tor_link::probe_delay_draw) {
+                say_round(&input);
+                inputs.push(input);
+            }
+        }
+        inputs
     }
 
     /// A descriptor round has been open five minutes: uploads with neither
@@ -244,7 +256,7 @@ impl Drive {
                     None => tracing::debug!(
                         target: "tor",
                         status = reply.status(),
-                        "Tor gave no descriptor for this onion; each copy counts by being there"
+                        "Tor gave no descriptor for this onion; the check counts nothing and the probe alone decides"
                     ),
                 }
                 ours
@@ -311,8 +323,14 @@ pub(super) fn jump_probe() -> Input {
 /// not said: its point is that no directory can predict the probe, and a
 /// log line is one more copy of it.
 pub(super) fn say_round(input: &Input) {
-    if let Input::UploadRoundEnded { end, .. } = input {
-        tracing::info!(target: "tor", ?end, "descriptor round: ended");
+    if let Input::UploadRoundEnded { tally, .. } = input {
+        tracing::info!(
+            target: "tor",
+            uploaded = tally.uploaded,
+            refused = tally.refused,
+            begun = tally.begun,
+            "descriptor round: ended"
+        );
     }
 }
 
@@ -330,7 +348,7 @@ fn link_inbound(inbound: Inbound) -> shekyl_ffi::zone_ffi::InboundFacet {
             cause: match cause {
                 InboundCause::ProbeTimedOut => LinkCause::ProbeTimedOut,
                 InboundCause::UploadsRefused => LinkCause::UploadsRefused,
-                InboundCause::ClockBehind => LinkCause::ClockBehind,
+                InboundCause::ClockBehind { .. } => LinkCause::ClockBehind,
                 InboundCause::DescriptorNotFound => LinkCause::DescriptorNotFound,
             },
             since: Tick::new(since),

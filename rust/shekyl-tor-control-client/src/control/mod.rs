@@ -69,8 +69,8 @@ pub use descriptor::{
 };
 pub use events::{
     parse_event, Bootstrap, BootstrapProblem, ClientStatus, ClockSkew, GeneralStatus, HsDescAction,
-    HsDescEvent, Liveness, LogEvent, LogSeverity, Recommendation, Severity, TorEvent,
-    VersionReason, SUPERVISOR_EVENTS,
+    HsDescEvent, HsDescFailure, Liveness, LogEvent, LogSeverity, Recommendation, Severity,
+    TorEvent, VersionReason, SUPERVISOR_EVENTS,
 };
 pub use framing::{
     ControlReply, Framed, FramingError, ReplyBudget, ReplyFramer, ASYNC_EVENT_STATUS,

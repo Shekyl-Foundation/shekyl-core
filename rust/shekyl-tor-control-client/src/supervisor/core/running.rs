@@ -31,7 +31,7 @@ impl Core {
         // named clock still stands: this Tor's uploads are numbered from the
         // same clock. The old Tor's refused rounds are not this one's.
         self.uploads_refused = false;
-        if self.clock_behind.is_none() && self.inbound != Inbound::NotOffered {
+        if !self.clock_is_behind() && self.inbound != Inbound::NotOffered {
             self.inbound = Inbound::Publishing;
         }
         self.probe = Probe::Idle;

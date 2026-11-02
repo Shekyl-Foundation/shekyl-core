@@ -146,15 +146,7 @@ fn a_probe_in_flight_through_a_sleep_keeps_a_whole_bound() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
     reach_usable(&mut core);
     core.on(Input::StateFileAppeared, 0);
-    core.on(
-        Input::UploadRoundEnded {
-            end: super::super::RoundEnd::Uploaded,
-            uploads: 16,
-            refused: 0,
-            draw: 0,
-        },
-        0,
-    );
+    core.on(super::probe::uploaded(0), 0);
     // The driver folds the directory list in that same turn. This round
     // reached none, so the probe alone decides.
     core.on(

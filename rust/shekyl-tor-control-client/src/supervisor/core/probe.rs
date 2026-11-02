@@ -40,7 +40,7 @@ use super::announce::Cadence;
 use super::directories::{
     DirectoryAnswer, DirectoryCheck, DirectoryFetch, DirectoryHalf, DirectoryVerdict,
 };
-use super::{duration_ns, Action, Core, Duty, Phase, RoundEnd};
+use super::{duration_ns, Action, Core, Duty, Phase, RoundTally};
 use crate::control::{RelayFingerprint, ServiceDescriptor};
 
 /// The probe's place in its round.
@@ -143,45 +143,32 @@ impl Core {
         Vec::new()
     }
 
-    /// A round ended. One in which more than half of the uploads were
-    /// refused names refused uploads and republishes nothing: a republish
-    /// cannot get past a directory holding a higher counter (§4.5, "Refused
-    /// rounds"; Rick, 2026-11-01). Otherwise refused uploads clear, and a
-    /// round in which an upload succeeded confirms the onion is published,
-    /// as `ADD_ONION`'s reply does, and schedules the round's one probe unless
-    /// the round's wait already did. A round with no upload says nothing
-    /// about the onion: Tor retries its own failed uploads. It does end a
-    /// republish's wait for a judgment, with nothing to judge.
-    pub(super) fn round_ended(
-        &mut self,
-        now: u64,
-        end: RoundEnd,
-        uploads: u32,
-        refused: u32,
-        draw: u64,
-    ) -> Vec<Action> {
+    /// A round ended. Read in order. More than half of the uploads that
+    /// began were refused: that names refused uploads and republishes
+    /// nothing, because a republish cannot get past a directory holding a
+    /// higher counter (§4.5, "Refused rounds"; Rick, 2026-11-01). Any upload
+    /// reached a directory: refused uploads clear, the onion is published,
+    /// as `ADD_ONION`'s reply does, and the round's one probe is scheduled
+    /// unless the round's wait already did. Nothing reached a directory:
+    /// the round says nothing about the onion, Tor retries its own failed
+    /// uploads, and a republish waiting for a judgment ends with nothing
+    /// to judge. That round is not the latest round of uploads, so refused
+    /// uploads keep standing.
+    pub(super) fn round_ended(&mut self, now: u64, tally: RoundTally, draw: u64) -> Vec<Action> {
         let track = self.round.take();
-        if uploads > 0 && u64::from(refused) * 2 > u64::from(uploads) {
+        if tally.majority_refused() {
             return self.uploads_refused(now);
         }
-        // A round with no upload is not the latest round of uploads: it
-        // leaves refused uploads standing.
-        if uploads > 0 {
-            self.uploads_accepted();
+        if tally.uploaded == 0 {
+            self.republish_failed(now);
+            return Vec::new();
         }
-        match end {
-            RoundEnd::Uploaded => {
-                let mut actions = self.onion_published();
-                if !track.is_some_and(|track| track.triggered) {
-                    actions.extend(self.trigger(now, draw));
-                }
-                actions
-            }
-            RoundEnd::NotUploaded => {
-                self.republish_failed(now);
-                Vec::new()
-            }
+        self.uploads_accepted();
+        let mut actions = self.onion_published();
+        if !track.is_some_and(|track| track.triggered) {
+            actions.extend(self.trigger(now, draw));
         }
+        actions
     }
 
     /// The round's one probe, or the jump's: scheduled while Running with
@@ -215,11 +202,13 @@ impl Core {
     }
 
     /// When the descriptor's lifetime runs out with no round begun: the
-    /// lifetime from its anchor, while no round is open. A round that ends
-    /// with no upload leaves the old anchor, so the check can be due at
-    /// once: nothing shows a fresh descriptor.
+    /// lifetime from its anchor, while no round is open and a republish
+    /// could help. Standing down does not move the anchor, so a check that
+    /// came due while a republish could not help is due when one can. A
+    /// round that ends with no upload leaves the old anchor, so the check
+    /// can be due at once: nothing shows a fresh descriptor.
     pub(super) fn overdue_due(&self) -> Option<u64> {
-        if self.round.is_some() {
+        if self.round.is_some() || self.republish_cannot_help() {
             return None;
         }
         self.lifetime_from
@@ -236,12 +225,19 @@ impl Core {
     /// lifetime counts from now, so a republish that brings no round does
     /// not ask again at every tick. A republish still waiting for its round
     /// a whole lifetime later never got one: that is its failed judgment,
-    /// and the backoff holds this one.
+    /// and the backoff holds this one. Standing down because a republish
+    /// cannot help leaves the anchor where it is. The onion not being
+    /// published yet does move it: a past deadline would otherwise fire on
+    /// every tick.
     pub(super) fn on_overdue_deadline(&mut self, now: u64) -> Vec<Action> {
-        self.lifetime_from = Some(now);
-        if !self.onion_done() || self.republish_cannot_help() {
+        if !self.onion_done() {
+            self.lifetime_from = Some(now);
             return Vec::new();
         }
+        if self.republish_cannot_help() {
+            return Vec::new();
+        }
+        self.lifetime_from = Some(now);
         self.republish_failed(now);
         let mut actions = vec![Action::DescriptorOverdue];
         let republished = self.republish(now);
