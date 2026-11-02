@@ -707,3 +707,32 @@ fn derived_defaults_are_in_the_map_and_clearnet_off_names_no_listen() {
         Some("127.0.0.1:11029")
     );
 }
+
+/// A `shekyld.toml` saved by a Windows editor ends its lines with CRLF.
+/// `file::open` reads the bytes as they are (`read_to_string`, no
+/// conversion) and `read_file` parses them as TOML, which treats CRLF as
+/// a newline, so the CRLF text builds the same configuration as its LF
+/// twin, and a refusal in it names the same line (review 3 §3 of the
+/// Rust-binary PR; DC-F42). Red edit: make the parser refuse `\r`.
+#[test]
+fn a_crlf_file_builds_what_its_lf_twin_builds() {
+    let lf = format!(
+        "log-level = 'debug'\nmine-threads = 2\nnotify-block = ['{}', '{{height}}']\n",
+        abs("/usr/bin/logger")
+    );
+    let crlf = lf.replace('\n', "\r\n");
+    assert!(crlf.contains("\r\n") && !lf.contains('\r'));
+    let from_lf = build_from(&[], &lf).unwrap();
+    let from_crlf = build_from(&[], &crlf).unwrap();
+    assert_eq!(from_crlf, from_lf);
+    assert_eq!(from_crlf.mine.threads.map(std::num::NonZero::get), Some(2));
+
+    let bad = "log-level = 'debug'\r\nmine-threads = 'two'\r\n";
+    let refused = build_from(&[], bad).unwrap_err();
+    assert_eq!(refused[0].option.as_deref(), Some("mine-threads"), "{refused:?}");
+    assert!(
+        matches!(&refused[0].source, Source::File { line: 2, .. }),
+        "{:?}",
+        refused[0].source
+    );
+}

@@ -256,7 +256,12 @@ mod tests {
     /// The example's `/path` values as the host spells an absolute path:
     /// as written on Unix, `C:\path` on Windows, where `/path` is not
     /// absolute and the path kinds refuse it (DC-F40). The example itself
-    /// stays the Unix spelling; it is one file for every platform.
+    /// stays the Unix spelling; it is one file for every platform. It is
+    /// not shipped as a file: no installer or `install` target carries
+    /// `docs/generated/shekyld.example.toml`, and a Windows operator meets
+    /// it as the copy in `docs/USER_GUIDE.md`, where every line is a
+    /// comment and a path value is an illustration to be respelled, not a
+    /// default (review 3 §3 of the Rust-binary PR).
     fn host_absolute(value: &toml::Value) -> toml::Value {
         match value {
             toml::Value::String(s) if cfg!(windows) && s.starts_with('/') => {
