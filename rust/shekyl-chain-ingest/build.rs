@@ -10,6 +10,12 @@
 //! trusted the daemon's sha alone could write a trace from a stale replay
 //! binary and stamp it with the daemon's commit. The sha printed by
 //! `--version` is what the capture holds to `HEAD`.
+//!
+//! The stamp is rebuilt when the commit moves. On an attached branch `HEAD`
+//! stays `ref: refs/heads/<name>` and the branch ref is the file that
+//! changes; a packed branch has no loose ref, so `packed-refs` is watched
+//! too. `git rev-parse --git-path` resolves a worktree, whose `.git` is a
+//! file.
 
 use std::process::Command;
 
@@ -19,12 +25,19 @@ fn main() {
         .unwrap_or_else(|| "unknown".to_owned());
     println!("cargo:rustc-env=SHEKYL_REPLAY_GIT_SHA={sha}");
 
-    // Rebuild when HEAD moves. `--git-path` resolves a worktree, whose
-    // `.git` is a file, to the real HEAD. Declaring the script itself keeps
-    // cargo from re-running this on every other file in the package.
+    // Naming any path opts out of "rebuild when any file in the package
+    // changes." The script itself stays on the list so editing it still
+    // rebuilds.
     println!("cargo:rerun-if-changed=build.rs");
-    if let Some(head) = git(&["rev-parse", "--git-path", "HEAD"]) {
-        println!("cargo:rerun-if-changed={head}");
+    for path in ["HEAD", "packed-refs"] {
+        if let Some(resolved) = git(&["rev-parse", "--git-path", path]) {
+            println!("cargo:rerun-if-changed={resolved}");
+        }
+    }
+    if let Some(branch) = git(&["symbolic-ref", "--quiet", "HEAD"]) {
+        if let Some(resolved) = git(&["rev-parse", "--git-path", &branch]) {
+            println!("cargo:rerun-if-changed={resolved}");
+        }
     }
 }
 
