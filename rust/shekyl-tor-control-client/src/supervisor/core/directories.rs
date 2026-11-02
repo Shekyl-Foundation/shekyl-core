@@ -26,7 +26,7 @@
 //! that command. It is the supervisor's wait for the `HS_DESC` line, not the
 //! connector's dial deadline and not the dialer's outage backoff.
 
-use crate::control::RelayFingerprint;
+use crate::control::{RelayFingerprint, ServiceDescriptor};
 
 /// One directory to ask, from the driver: where an upload went, which
 /// descriptor it was, and a CSPRNG draw for this fetch's own delay.
@@ -43,8 +43,18 @@ pub struct DirectoryFetch {
 /// What Tor said about one directory's copy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DirectoryAnswer {
-    /// `HS_DESC RECEIVED`: the descriptor decoded and was stored.
-    Received,
+    /// The copy the directory returned (`HS_DESC_CONTENT`, which Tor sends
+    /// only for a descriptor it decoded and stored, `hs_client.c:1686-1689`),
+    /// with its revision counter. A copy of the descriptor ours names counts
+    /// only at our counter: a directory holding a stale copy is a miss
+    /// (Rick, 2026-11-01). A copy of another descriptor counts by being
+    /// there: Tor gives no counter for `desc_next`, the descriptor clients
+    /// ask for from 12:00 to 00:00 UTC (`hs_service.c:2127-2139`). When Tor
+    /// gave no descriptor of ours, the check counts nothing.
+    Received {
+        /// The copy's `revision-counter`; `None` when it could not be read.
+        revision_counter: Option<u64>,
+    },
     /// `HS_DESC FAILED REASON=NOT_FOUND`: the directory does not have it.
     NotFound,
     /// `HS_DESC FAILED` for another reason: nothing about the descriptor.
@@ -117,6 +127,9 @@ pub(super) enum DirectoryVerdict {
 /// The fetches of one probe's check.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct DirectoryCheck {
+    /// This service's `desc_current`: a copy of that descriptor counts only
+    /// at its counter. `None` when Tor gave none.
+    ours: Option<ServiceDescriptor>,
     asks: Vec<Ask>,
     /// The descriptor Tor's client asks for, learned from a `REQUESTED`
     /// of a fetch this check has sent.
@@ -127,9 +140,23 @@ pub(super) struct DirectoryCheck {
 impl DirectoryCheck {
     /// `fetches` are `(directory, uploaded descriptor, when to send)`.
     /// An empty list is complete: nothing to count, so the probe decides.
-    pub(super) fn new(fetches: Vec<(RelayFingerprint, String, u64)>) -> Self {
+    /// So is a missing counter of ours: no fetch is sent, and the probe is
+    /// not held for answer windows it cannot compare (§4.5).
+    pub(super) fn new(
+        fetches: Vec<(RelayFingerprint, String, u64)>,
+        ours: Option<ServiceDescriptor>,
+    ) -> Self {
+        if ours.is_none() {
+            return Self {
+                ours,
+                asks: Vec::new(),
+                asked_for: None,
+                complete: true,
+            };
+        }
         let complete = fetches.is_empty();
         Self {
+            ours,
             asks: fetches
                 .into_iter()
                 .map(|(hsdir, descriptor_id, due)| Ask {
@@ -214,22 +241,51 @@ impl DirectoryCheck {
         descriptor_id: Option<&str>,
         answer: DirectoryAnswer,
     ) {
-        let Some(ask) = self
+        let Some(at) = self
             .asks
-            .iter_mut()
-            .find(|ask| ask.hsdir == hsdir && ask.is_open())
+            .iter()
+            .position(|ask| ask.hsdir == hsdir && ask.is_open())
         else {
             return;
         };
-        let uploaded = ask.descriptor_id.clone();
+        let uploaded = self.asks[at].descriptor_id.clone();
+        let held = self.hold(&uploaded, descriptor_id, answer);
+        let ask = &mut self.asks[at];
         ask.answer_by = None;
-        ask.held = match (descriptor_id, answer) {
+        ask.held = held;
+        self.settle();
+    }
+
+    /// What this answer does to the directory that was sent `uploaded`.
+    fn hold(&self, uploaded: &str, descriptor_id: Option<&str>, answer: DirectoryAnswer) -> Held {
+        match (descriptor_id, answer) {
             (Some(id), _) if id != uploaded => Held::Excluded,
-            (_, DirectoryAnswer::Received) => Held::Found,
+            (_, DirectoryAnswer::Received { revision_counter }) => {
+                self.copy_held(uploaded, revision_counter)
+            }
             (_, DirectoryAnswer::NotFound) => Held::Missing,
             (_, DirectoryAnswer::Other | DirectoryAnswer::Unusable) => Held::Excluded,
+        }
+    }
+
+    /// How a stored copy counts (§4.5), asked in order. When Tor gave no
+    /// descriptor, this directory does not count and the probe alone
+    /// decides. When ours names a different descriptor, a stored copy counts
+    /// by being there (`desc_next`). When this is the descriptor ours names,
+    /// the counters decide: equal is found, any other counter is missing,
+    /// and an unreadable counter is excluded.
+    fn copy_held(&self, uploaded: &str, revision_counter: Option<u64>) -> Held {
+        let Some(ours) = &self.ours else {
+            return Held::Excluded;
         };
-        self.settle();
+        if ours.descriptor_id != uploaded {
+            return Held::Found;
+        }
+        match revision_counter {
+            Some(theirs) if theirs == ours.revision_counter => Held::Found,
+            Some(_) => Held::Missing,
+            None => Held::Excluded,
+        }
     }
 
     /// The machine slept (§5). A fetch not yet sent waits at least `floor`

@@ -94,6 +94,7 @@ mod admission_write;
 mod alt;
 mod alt_reads;
 mod alt_view;
+mod archival_fold;
 mod archival_reads;
 mod archival_write;
 mod at_index;
@@ -125,6 +126,7 @@ mod write;
 
 pub use alt_reads::AltEntry;
 pub use alt_view::{AltChain, AltView};
+pub use archival_fold::BlockArchivalFold;
 pub use archival_reads::{PassCount, ServedShard};
 pub use at_index::AtIndex;
 pub use bundle_queue::{QueueEntry, QueueReconciled};
@@ -132,8 +134,9 @@ pub use bundle_view::{BundleRows, StoreBundleView};
 pub use connect::Connected;
 pub use error::{
     AccrualFault, AltCannot, BodyHolderFault, CellFault, DigestFault, DrawRowFault, DrawableFault,
-    EdgeFault, EngineError, ErrorClass, FrozenFault, LeafCountFault, LeafDensity, PoolCannot,
-    QueueCannot, SettlementFault, SlashFault, StoreCannot, StoreError, StoreInvariant, UndoFault,
+    EdgeFault, EngineError, ErrorClass, FrozenFault, HeldRegion, LeafCountFault, LeafDensity,
+    PoolCannot, QueueCannot, SettlementFault, SlashFault, StoreCannot, StoreError, StoreInvariant,
+    UndoFault,
 };
 pub use halt::ConnectState;
 pub use keyed::{
@@ -146,7 +149,7 @@ pub use prune::{EpochFloors, Horizons, Pruned};
 pub use read::{RangeItem, RawBlockBytes, ReadSnapshot, RecordedBlockBody, TipState, TxWalkItem};
 pub use shard_reads::{ClosedShardRows, ShardFold};
 pub use snapshot_view::SnapshotView;
-pub use tx_reads::{PqcAuths, Prunable, SegmentBytes, TxLocation, TxRecord};
+pub use tx_reads::{ArchivalGood, SegmentBytes, TxLocation, TxRecord};
 pub use undo::{RawRows, Restorable};
 pub use view::BatchView;
 pub use write::{invariant_of, WriteBatch};
@@ -177,7 +180,7 @@ pub const TWO_PHASE_COMMIT: bool = true;
 
 /// Cache the engine is opened with.
 ///
-/// The value is redb 4.1.0's own default (1 GiB) made explicit so a
+/// The value is redb's own default (1 GiB; `redb-4.4.0/src/db.rs:2045`) made explicit so a
 /// future redb bump cannot change RSS by omission (A4's shape, on the
 /// axis A5 measures). Reopen the number against DRS-BENCH peak-RSS,
 /// never to "go faster".
@@ -314,8 +317,8 @@ impl ChainStore {
         // `create_file`, so a 0-byte file is the path it knows.
         //
         // The reopen arm is therefore `open`, which never creates and never
-        // initializes (`redb-4.1.0/src/db.rs:1196`; an empty file is
-        // `InvalidData`, `page_manager.rs:171`). With `create` there, a
+        // initializes (`redb-4.4.0/src/db.rs:2130`; an empty file is
+        // `InvalidData`, `page_manager.rs:1080`). With `create` there, a
         // path removed between AlreadyExists and the open -- or an empty
         // file some other process left -- would be initialized as a fresh,
         // unsealed database and then refused by `verify`, leaving behind
@@ -344,10 +347,7 @@ impl ChainStore {
                 }
             },
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                let db = builder.open(path).map_err(EngineError::Open)?;
-                let provenance =
-                    header::verify(&db.begin_read().map_err(EngineError::BeginRead)?, epoch)?;
-                (db, provenance)
+                open_existing(&builder, path, epoch)?
             }
             Err(e) => return Err(EngineError::Open(redb::DatabaseError::Storage(e.into())).into()),
         };
@@ -389,9 +389,11 @@ impl ChainStore {
     /// The cell only ever widens, and only a committed stubbed batch widens
     /// it. Two locks make the in-memory copy the file's value:
     ///
-    /// - **Across handles.** redb holds an exclusive `flock` on the file for
+    /// - **Across handles.** redb holds an exclusive lock on the file for
     ///   the life of a writable `Database` and a shared one for a read-only
-    ///   handle (`redb-4.1.0/src/tree_store/page_store/file_backend/optimized.rs:27`,
+    ///   handle: a byte-range lock on its lock range, and on Linux also the
+    ///   whole-file `flock` older redb took
+    ///   (`redb-4.4.0/src/tree_store/page_store/file_backend/optimized.rs:90`,
     ///   read at the pinned source). A second writable open — this process
     ///   or another — is [`redb::DatabaseError::DatabaseAlreadyOpen`]; a
     ///   read-only handle excludes every writer for as long as it exists.
@@ -581,8 +583,8 @@ impl ChainStore {
     /// closure wrote lands. There is no separate abort verb; an abort that
     /// the engine fails to complete is not lost either — redb latches the
     /// storage failure and refuses the next `begin_write` with
-    /// `StorageError::PreviousIo` (`redb-4.1.0/src/transactions.rs:2084`,
-    /// `db.rs:1410`, read at the pinned source), which the next `write`
+    /// `StorageError::PreviousIo` (`redb-4.4.0/src/tree_store/page_store/cached_file.rs:200`,
+    /// held by its own test at `db.rs:2392`, read at the pinned source), which the next `write`
     /// surfaces as [`EngineError::BeginWrite`].
     ///
     /// `E` is any error the caller's closure may return, provided the
@@ -690,6 +692,40 @@ fn arm_write(db: &Database) -> Result<WriteTransaction, StoreError> {
         .map_err(EngineError::Durability)?;
     txn.set_two_phase_commit(TWO_PHASE_COMMIT);
     Ok(txn)
+}
+
+/// Reopen an existing file.
+///
+/// The read-only open is the refusal filter: a file [`header::verify`]
+/// rejects is rejected with nothing written, because a writable open
+/// records the engine's allocator state when it closes. `RepairAborted`
+/// is not a refusal. A read-only open returns it before any table read
+/// when the file needs recovery, and only the writable open repairs it.
+/// The writable open's `verify` is the admission, and the provenance of
+/// the handle it returns. The filter's result is not that provenance.
+/// redb opens read-only only by path, so the two opens cannot share a
+/// descriptor. A refusal of the filter writes nothing to the inode it
+/// opened. A directory entry replaced before the writable open is a
+/// different file: refusing it drops that open, which writes the inode
+/// the writable open took.
+fn open_existing(
+    builder: &redb::Builder,
+    path: &Path,
+    epoch: crate::codec::SettlementEpochBlocks,
+) -> Result<(Database, Provenance), StoreError> {
+    match builder.open_read_only(path) {
+        Ok(read_only) => {
+            header::verify(
+                &read_only.begin_read().map_err(EngineError::BeginRead)?,
+                epoch,
+            )?;
+        }
+        Err(redb::DatabaseError::RepairAborted) => {}
+        Err(e) => return Err(EngineError::Open(e).into()),
+    }
+    let db = builder.open(path).map_err(EngineError::Open)?;
+    let provenance = header::verify(&db.begin_read().map_err(EngineError::BeginRead)?, epoch)?;
+    Ok((db, provenance))
 }
 
 /// Hand a just-created, still-empty file to the engine and seal its header

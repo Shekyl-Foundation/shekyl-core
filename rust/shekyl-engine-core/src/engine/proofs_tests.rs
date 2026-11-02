@@ -358,11 +358,9 @@ mod check_workflows {
                                     .expect("txid is 32 bytes of hex"),
                                 as_hex: String::new(),
                                 pruned_as_hex: (*body_hex).clone(),
-                                prunable_as_hex: String::new(),
                                 prunable_hash: shekyl_rpc_types::HashHex::ZERO,
+                                pqc_auth_hash: shekyl_rpc_types::Nullable::NULL,
                                 archival_len: 0,
-                                as_json: None,
-                                pruned: false,
                                 double_spend_seen: false,
                                 location: if self.pooled.contains(h.as_str()) {
                                     shekyl_rpc_types::TxLocation::Pooled {
@@ -396,6 +394,7 @@ mod check_workflows {
                         txs,
                         missed_tx: missed,
                         unavailable_tx: Vec::new(),
+                        archived: Vec::new(),
                     })
                     .expect("wire type serializes")
                 }
@@ -569,7 +568,11 @@ mod check_workflows {
         // exactly where it lands. The mock serves `prunable_hash: ZERO`, so
         // that is the digest the identity mixes.
         let txid = tx
-            .hash_with_supplied_prunable(PrunableHash::from_bytes([0u8; 32]), ArchivalLength::ZERO)
+            .hash_with_supplied_components(
+                None,
+                PrunableHash::from_bytes([0u8; 32]),
+                ArchivalLength::ZERO,
+            )
             .to_bytes();
         let mut txs = BTreeMap::new();
         txs.insert(hex::encode(txid), hex::encode(tx.serialize()));
@@ -891,7 +894,11 @@ mod check_workflows {
         let mut second = base.clone();
         second.prefix.unlock_time = 1;
         let txid2 = second
-            .hash_with_supplied_prunable(PrunableHash::from_bytes([0u8; 32]), ArchivalLength::ZERO)
+            .hash_with_supplied_components(
+                None,
+                PrunableHash::from_bytes([0u8; 32]),
+                ArchivalLength::ZERO,
+            )
             .to_bytes();
         assert_ne!(txid2, fx.txid, "the second body must be a different tx");
         let mut txs = (*fx.rpc.txs).clone();
@@ -938,7 +945,8 @@ mod check_workflows {
             let mut tx = base.clone();
             tx.prefix.unlock_time = i;
             let id = tx
-                .hash_with_supplied_prunable(
+                .hash_with_supplied_components(
+                    None,
                     PrunableHash::from_bytes([0u8; 32]),
                     ArchivalLength::ZERO,
                 )

@@ -1,6 +1,6 @@
 # Input grammar Part C — the field census (appendix)
 
-**Status:** RULED 2026-10-19 with [`INPUT_GRAMMAR.md`](INPUT_GRAMMAR.md) Part C — the evidence for its §17–§18. A read-only census from source of every served method's parameters and reply fields, taken at `945e80dad`; every cited file is unchanged at `42c133186`. Nothing here was captured from a running daemon. It goes with the rename PR (`RPC_WIRE.md` RW-Q8), whose generated field table replaces it.
+**Status:** RULED 2026-10-19 with [`INPUT_GRAMMAR.md`](INPUT_GRAMMAR.md) Part C — the evidence for its §17–§18. A read-only census from source of every served method's parameters and reply fields, taken at `945e80dad`; every cited file was unchanged at `42c133186`, and a row re-taken since names the RPC minor it was taken at (3.61, 3.63, 3.64) with its citations at that source. Nothing here was captured from a running daemon. It goes with the rename PR (`RPC_WIRE.md` RW-Q8), whose generated field table replaces it.
 
 **Path abbreviations used in citations**
 
@@ -178,26 +178,31 @@ Used as `get_connections.connections[]` and as `sync_info.peers[].info`.
 
 ### 1.7 `TxEntry` (`/get_transactions` `txs[]`)
 
-The wire form is the flat `RawTxEntry` (`T/transactions.rs:139-167`). `in_pool` selects which arm's keys are present.
+The wire form is the flat `RawTxEntry` (`T/transactions.rs:175-198`, at 3.64). `in_pool` selects which arm's keys are present. An entry is one of two forms, chosen by the request's `prune`: the full form fills `as_hex`; the pruned form fills `pruned_as_hex` with the pruned segment alone — never with the `pqc_auths` bytes appended — and is the skeleton, one shape at every horizon (`DRS_SB_BELOW_HORIZON.md` SB-Q2). The three txid operands ride in both forms. `prunable_as_hex`, `as_json` and `pruned` left the entry at 3.64 with the request's `split` and `decode_as_json`.
 
 | key | wire type | notes | source |
 |---|---|---|---|
-| `tx_hash` | hash64 | | `T/transactions.rs:142` |
-| `as_hex` | hexstr | always emitted, even `""` | `T/transactions.rs:143` |
-| `pruned_as_hex` | hexstr | always emitted | `T/transactions.rs:144` |
-| `prunable_as_hex` | hexstr | always emitted | `T/transactions.rs:145` |
-| `prunable_hash` | hash64 | | `T/transactions.rs:146` |
-| `archival_len` | u64 | bytes | `T/transactions.rs:115-122,147` |
-| `as_json` | string (embedded JSON text) | epee rendering; always emitted | `T/transactions.rs:148` |
-| `pruned` | bool? | omitted when false | `T/transactions.rs:149-150` |
-| `in_pool` | bool | arm selector | `T/transactions.rs:151` |
-| `double_spend_seen` | bool | | `T/transactions.rs:152` |
-| `block_height` | u64 | mined arm only | `T/transactions.rs:154-155` |
-| `confirmations` | u64 | mined arm only | `T/transactions.rs:156-157` |
-| `block_timestamp` | u64 | mined arm only | `T/transactions.rs:158-159` |
-| `output_indices` | [u64]? | mined arm; omitted when empty | `T/transactions.rs:160-161` |
-| `relayed` | bool | pool arm only | `T/transactions.rs:163-164` |
-| `received_timestamp` | u64 | pool arm only | `T/transactions.rs:165-166` |
+| `tx_hash` | hash64 | | `T/transactions.rs:176` |
+| `as_hex` | hexstr | always emitted; the whole serialization in the full form, `""` under `prune` | `T/transactions.rs:137-139,177` |
+| `pruned_as_hex` | hexstr | always emitted; the pruned segment only under `prune`, `""` in the full form | `T/transactions.rs:140-143,178` |
+| `prunable_hash` | hash64 | the prunable region's digest, the txid's second operand | `T/transactions.rs:144-146,179` |
+| `pqc_auth_hash` | nullable\<hash64\> | the `pqc_auths` region's digest, the txid's third operand; `null` for a 3-part txid (the coinbase); required, so an absent member is refused (RK-D23) | `T/transactions.rs:147-152,180` |
+| `archival_len` | u64 | bytes: the prunable region plus the `pqc_auths` segment | `T/transactions.rs:153-160,181` |
+| `in_pool` | bool | arm selector | `T/transactions.rs:182` |
+| `double_spend_seen` | bool | | `T/transactions.rs:183` |
+| `block_height` | u64 | mined arm only | `T/transactions.rs:185-186` |
+| `confirmations` | u64 | mined arm only | `T/transactions.rs:187-188` |
+| `block_timestamp` | u64 | mined arm only | `T/transactions.rs:189-190` |
+| `output_indices` | [u64]? | mined arm; omitted when empty | `T/transactions.rs:191-192` |
+| `relayed` | bool | pool arm only | `T/transactions.rs:194-195` |
+| `received_timestamp` | u64? | pool arm only; absent where the pool keeps no receive time | `T/transactions.rs:196-197` |
+
+**`ArchivedTx`** (`/get_transactions` `archived[]`, 3.64; `T/transactions.rs:321-334`): a mined transaction asked in the full form whose archival good this node discarded with its shard at the archival horizon (`PDM-Q9`, `PDM-Q10`). Never populated under `prune`.
+
+| key | wire type | notes | source |
+|---|---|---|---|
+| `tx_hash` | hash64 | | `T/transactions.rs:331` |
+| `shard` | u64 | the archival shard, `shekyl_types::shard_of` over the cumulative archival length before the transaction | `T/transactions.rs:332-333` |
 
 ### 1.8 C++ pool shapes (`/get_transaction_pool`, `/get_transaction_pool_stats`)
 
@@ -374,12 +379,25 @@ Rust mirrors live in `T/archival_reads.rs`; the C++ structs are canonical for th
 
 ### 1.12 `.bin` shapes (portable_storage, not JSON)
 
-**`BlockEntry`** (`T/bin_commands.rs:216-221,245-249`):
+**`BlockEntry`** (`T/bin_commands.rs:345-353,376-383`, at 3.64):
 
 | key | wire type | notes | source |
 |---|---|---|---|
-| `block` | blob (raw bytes) | | `T/bin_commands.rs:246` |
-| `txs` | [blob]? | an array of raw byte strings; omitted when empty | `T/bin_commands.rs:247-249` |
+| `block` | blob (raw bytes) | | `T/bin_commands.rs:378` |
+| `txs` | [section]? | one `BlockTx` section per listed transaction, in the block's order; omitted when empty | `T/bin_commands.rs:379-382` |
+
+**`BlockTx`** (`T/bin_commands.rs:216-312`): a tagged section; `form` selects which other keys are present (SB-Q2). The full form (`prune` clear) carries `Full` and, for a body this node discarded at the archival horizon, `Archived`; the pruned form (`prune` set) carries `Skeleton` for every transaction, so no slot is ever archived under it.
+
+| key | wire type | notes | source |
+|---|---|---|---|
+| `form` | u8 | `1` full, `2` skeleton, `3` archived | `T/bin_commands.rs:216-220,291-295` |
+| `blob` | blob (raw bytes) | form 1: the whole serialization | `T/bin_commands.rs:265-267,297` |
+| `unprunable` | blob (raw bytes) | form 2: the pruned segment only | `T/bin_commands.rs:269-271,299` |
+| `prunable_hash` | blob (32 raw bytes) | form 2 | `T/bin_commands.rs:272-275,300` |
+| `pqc_auth_hash` | blob (32 raw bytes)? | form 2; absent for a 3-part txid (the coinbase) | `T/bin_commands.rs:276-278,301-304` |
+| `archival_len` | u64 | form 2; bytes | `T/bin_commands.rs:279,305` |
+| `tx_hash` | blob (32 raw bytes) | form 3 | `T/bin_commands.rs:281-283,308` |
+| `shard` | u64 | form 3: the archival shard | `T/bin_commands.rs:284,309` |
 
 ---
 
@@ -1169,17 +1187,18 @@ The DJSON rows (C++ REST) are in `F:170-181`. **For the DJSON rows, a bodyless r
 
 | key | wire type | notes | source |
 |---|---|---|---|
-| `txs_hashes` | [string] | hash64 text, not typed | `T/transactions.rs:41-50` |
-| `decode_as_json` | bool | default false; **selects a representation** (`as_json`) | `T/transactions.rs:51-52` |
-| `prune` | bool? | `OPT false`; **selects a representation** | `T/transactions.rs:53-55` |
-| `split` | bool? | `OPT false`; **selects a representation** (`pruned_as_hex` / `prunable_as_hex` against `as_hex`) | `T/transactions.rs:56-58` |
+| `txs_hashes` | [string] | hash64 text, not typed | `T/transactions.rs:70-77` |
+| `prune` | bool? | `OPT false`; **selects the form**: set, every entry is the skeleton (§1.7); clear, the whole body, and a body this node discarded is `archived` (3.64, SB-Q2). `decode_as_json` and `split` left at 3.64 | `T/transactions.rs:78-82` |
 
 | key | wire type | notes | source |
 |---|---|---|---|
-| `status` | string | | `T/transactions.rs:311` |
-| `txs` | [TxEntry] (§1.7)? | | `T/transactions.rs:312-313` |
-| `missed_tx` | [hash64]? | | `T/transactions.rs:314-316` |
-| `unavailable_tx` | [hash64]? | not in the chain, asked while the pool is retired | `T/transactions.rs:322-328` |
+| `status` | string | | `T/transactions.rs:354` |
+| `txs` | [TxEntry] (§1.7)? | | `T/transactions.rs:355-356` |
+| `missed_tx` | [hash64]? | | `T/transactions.rs:357-359` |
+| `archived` | [ArchivedTx] (§1.7)? | full form only: mined, the archival good discarded with its shard; never under `prune` (3.64) | `T/transactions.rs:360-364` |
+| `unavailable_tx` | [hash64]? | not in the chain, asked while the pool is retired | `T/transactions.rs:365-375` |
+
+Each requested id lands in exactly one of the four lists.
 
 #### 2.37 `/get_alt_blocks_hashes`
 
@@ -1300,12 +1319,13 @@ Same reply as §2.15.
 
 | key | wire type | notes | source |
 |---|---|---|---|
-| `heights` | uint64 array? | omitted when empty | `T/bin_commands.rs:164-198` |
+| `heights` | uint64 array? | omitted when empty | `T/bin_commands.rs:165,183-185,201-205` |
+| `prune` | bool? | omitted when false; **selects the form** of every listed body (§1.12 `BlockTx`): set, skeletons; clear, whole bodies with a discarded one `archived` in its slot, and the height does not fail for it (3.64, SB-Q2) | `T/bin_commands.rs:166-171,186-188,206-210` |
 
 | key | wire type | notes | source |
 |---|---|---|---|
-| `status` | string (bytes) | | `T/bin_commands.rs:241` |
-| `blocks` | [section `{block, txs?}`]? | BlockEntry (§1.12) | `T/bin_commands.rs:242-253` |
+| `status` | string (bytes) | | `T/bin_commands.rs:373` |
+| `blocks` | [section `{block, txs?}`]? | BlockEntry (§1.12) | `T/bin_commands.rs:374-385` |
 
 #### 2.45 `/get_o_indexes.bin`
 
@@ -1517,10 +1537,10 @@ The reply has **no `status`**.
 
 | family | instances |
 |---|---|
-| `_as_hex` | `TxEntry.as_hex`, `pruned_as_hex`, `prunable_as_hex` |
-| `as_json` / `json` / `_json` (embedded JSON text in a string) | `TxEntry.as_json`, `get_block.json`, `tx_info.tx_json` |
+| `_as_hex` | `TxEntry.as_hex`, `pruned_as_hex` (`prunable_as_hex` left at 3.64) |
+| `as_json` / `json` / `_json` (embedded JSON text in a string) | `get_block.json`, `tx_info.tx_json` (`TxEntry.as_json` left at 3.64) |
 | `blob` / `_blob` (hex on JSON, raw bytes on `.bin`) | `get_block.blob`; `tx_blob` (in `/submit_transaction` and `tx_info`); `block_blob` (`calc_pow`); `blocktemplate_blob`; `blockhashing_blob`. On `.bin`: `block`, `txs`, and `txid` (raw 32 bytes), with no suffix at all |
-| `_hash` / `_id` / `_id_hash` (hash64) | `prev_hash`, `miner_tx_hash`, `pow_hash`, `prunable_hash`, `genesis_hash`, `top_block_hash`, `shard_hash`, `seed_hash`, `next_seed_hash`, `id_hash`, `max_used_block_id_hash`, `last_failed_id_hash`, `block_id`, `prev_id`, `p_id`, `p_canonical_id`, `main_chain_parent_block` (no suffix), `block_hash` |
+| `_hash` / `_id` / `_id_hash` (hash64) | `prev_hash`, `miner_tx_hash`, `pow_hash`, `prunable_hash`, `pqc_auth_hash` (nullable), `genesis_hash`, `top_block_hash`, `shard_hash`, `seed_hash`, `next_seed_hash`, `id_hash`, `max_used_block_id_hash`, `last_failed_id_hash`, `block_id`, `prev_id`, `p_id`, `p_canonical_id`, `main_chain_parent_block` (no suffix), `block_hash` |
 | `wide_` + `_top64` (the 128-bit triple) | `wide_difficulty` / `difficulty_top64`, `wide_cumulative_difficulty` / `cumulative_difficulty_top64`, `wide_emission_amount` / `emission_amount_top64`, `wide_fee_amount` / `fee_amount_top64`. `get_info` carries `wide_*` **alone**, typed `HexU128`, with no low-64 or top-64 siblings |
 | `_atomic` | `budget_atomic`, `bonded_total_atomic`, `expected_profit_atomic`. Other atomic amounts have **no suffix**: `reward`, `expected_reward`, `block_reward`, `fee`, `fee_total`, `emission_amount`, `fee_amount`, `already_generated_coins`, `total_burned` |
 | `_milli` / `_micro` / `_pct` | `sigma_work_milli`, `join_scarcity_micro`, `burn_pct`, `histo_98pc` |
@@ -1532,12 +1552,12 @@ The reply has **no `status`**.
 
 ### 3.2 Booleans that select a representation or a policy
 
-- **`decode_as_json`, `prune`, `split`** (`/get_transactions`) choose which of `as_hex` / `pruned_as_hex` / `prunable_as_hex` / `as_json` are filled. All four keys are always emitted, possibly `""`.
+- **`prune`** (`/get_transactions`, `/get_blocks_by_height.bin`) chooses the form of every body: the skeleton, or the whole body with a discarded one `archived` (3.64, SB-Q2). On `/get_transactions` both `as_hex` and `pruned_as_hex` are always emitted and exactly one is filled; `decode_as_json` and `split` left at 3.64.
 - **`fill_pow_hash`** has two incompatible restricted-listener policies for one key:
   - `get_block` and `get_block_header_by_height` **blank it silently**. The reply is `pow_hash: ""` with status OK (`D/handlers/json_rpc.rs:183`).
   - `get_last_block_header`, `get_block_header_by_hash` and `get_block_headers_range` **refuse with -19** (`D/methods.rs:823`).
 - **`public_only`** defaults to `true`, which is the one inverted default. **`include_blocked`** and **`bad_blocks`** are filters. **`visible`** toggles a log setting.
-- **`pruned`** (in the reply) is omitted when false, but `in_pool` is always present. **`in_pool`** selects which of the six arm keys exist.
+- **`in_pool`** is always present and selects which of the six arm keys exist (`pruned` left the reply at 3.64: the request's `prune` says).
 - **`offline`** in `get_info` decides whether `has_peers` and the connection counts are present. **`p2p`** is a two-value string that says the same thing as `offline` again (`T/info.rs:691-695`).
 
 ### 3.3 Positional (array) forms
