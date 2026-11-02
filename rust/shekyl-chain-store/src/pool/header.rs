@@ -77,6 +77,9 @@ pub enum PoolOpen {
 
 /// What an existing file's header decides.
 enum Header {
+    /// No table at all: a creation stopped before its seal
+    /// (`crate::creation`). Sealed in place.
+    Unsealed,
     /// Sealed at the current version, over its sealed tables.
     Current,
     /// Sealed at another version: recreate.
@@ -98,8 +101,17 @@ pub(super) fn open_or_create(path: &Path) -> Result<(Database, PoolOpen), StoreE
     match create_new(path) {
         Ok(file) => seal_fresh(&builder, file, path).map(|db| (db, PoolOpen::Created)),
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            let db = match builder.open(path) {
-                Ok(db) => db,
+            // Judge the file on a read-only open first. A writable open
+            // writes into the file even when nothing is committed (the
+            // engine records its allocator state when it closes), so a
+            // file this store does not own is refused without one, and
+            // only a file judged ours is opened writable. The exception is
+            // a file the engine must repair first: a read-only open answers
+            // `RepairAborted`, and only the writable open below can repair
+            // it, after which it is judged.
+            let judged = match builder.open_read_only(path) {
+                Ok(read_only) => Some(judge(&read_only)?),
+                Err(redb::DatabaseError::RepairAborted) => None,
                 Err(e) if open_is_foreign(&e) => {
                     // A cut before the engine finished initializing: empty,
                     // or no longer than an initialization writes with its
@@ -116,29 +128,47 @@ pub(super) fn open_or_create(path: &Path) -> Result<(Database, PoolOpen), StoreE
                 }
                 Err(e) => return Err(EngineError::Open(e).into()),
             };
-            // `create_file` commits an empty database before the seal does;
-            // a power loss between them leaves a file with no table at all.
-            // This open holds the engine's exclusive lock, so it finishes
-            // the creation in place. Any table without a seal is refused.
-            if crate::creation::no_table(&db)? {
-                seal(&db)?;
-                return Ok((db, PoolOpen::Finished));
+            if let Some(Header::Other(from)) = judged {
+                return recreate(&builder, path, from);
             }
-            match read_header(&db)? {
+            let db = match builder.open(path) {
+                Ok(db) => db,
+                Err(e) if open_is_foreign(&e) => return Err(StoreCannot::PoolFileForeign.into()),
+                Err(e) => return Err(EngineError::Open(e).into()),
+            };
+            match judge(&db)? {
                 Header::Current => Ok((db, PoolOpen::Opened)),
+                // `create_file` commits an empty database before the seal
+                // does; a power loss between them leaves a file with no
+                // table at all. This open holds the engine's exclusive
+                // lock, so it finishes the creation in place.
+                Header::Unsealed => {
+                    seal(&db)?;
+                    Ok((db, PoolOpen::Finished))
+                }
                 Header::Other(from) => {
                     // Release the engine's file lock before moving it.
                     drop(db);
-                    retire(path).map_err(io_open)?;
-                    let file = create_new(path).map_err(io_open)?;
-                    let sealed = seal_fresh(&builder, file, path)?;
-                    finish_discard(path).map_err(io_open)?;
-                    Ok((sealed, PoolOpen::Recreated { from }))
+                    recreate(&builder, path, from)
                 }
             }
         }
         Err(e) => Err(io_open(e).into()),
     }
+}
+
+/// Recreate the pool at `path`: the old file, sealed at `from`, moved
+/// aside and wiped, and a fresh one sealed in its place (`SPL-Q8`).
+fn recreate(
+    builder: &redb::Builder,
+    path: &Path,
+    from: PoolSchemaVersion,
+) -> Result<(Database, PoolOpen), StoreError> {
+    retire(path).map_err(io_open)?;
+    let file = create_new(path).map_err(io_open)?;
+    let sealed = seal_fresh(builder, file, path)?;
+    finish_discard(path).map_err(io_open)?;
+    Ok((sealed, PoolOpen::Recreated { from }))
 }
 
 /// Where a recreate moves the old file before wiping it (module docs).
@@ -255,11 +285,22 @@ fn seal(db: &Database) -> Result<(), StoreError> {
     Ok(())
 }
 
+/// What an existing file is to the pool: a creation stopped before its
+/// seal ([`Header::Unsealed`]), or what its header decides
+/// ([`read_header`]). Any table and no seal is
+/// [`StoreCannot::PoolFileForeign`].
+fn judge(db: &impl ReadableDatabase) -> Result<Header, StoreError> {
+    if crate::creation::no_table(db)? {
+        return Ok(Header::Unsealed);
+    }
+    read_header(db)
+}
+
 /// Read the header of an existing file, and — at the current version —
 /// verify the sealed table set. Absence or an undecodable cell, or a
 /// current-version seal over a missing or re-typed table, is
 /// [`StoreCannot::PoolFileForeign`].
-fn read_header(db: &Database) -> Result<Header, StoreError> {
+fn read_header(db: &impl ReadableDatabase) -> Result<Header, StoreError> {
     let txn = db.begin_read().map_err(EngineError::BeginRead)?;
     let table = match txn.open_table(POOL_HEADER) {
         Ok(t) => t,

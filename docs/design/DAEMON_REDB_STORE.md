@@ -2333,9 +2333,10 @@ discovered as a digest mismatch.
 
 **(c) redb's own on-disk format version is handled by rebuild, never by an
 in-place upgrade.** redb pins its file format independently of our schema —
-4.1.0 carries `FILE_FORMAT_VERSION3` and fails a mismatched file with
-*"Manual upgrade required"*
-(`/redb-4.1.0/src/error.rs`, read at the pinned source, not recalled). Policy: a
+4.4.0 carries `FILE_FORMAT_VERSION3` (as 4.1.0 did) and fails a mismatched
+file with `UpgradeRequired`
+(`/redb-4.4.0/src/tree_store/page_store/header.rs:502`, `:515`, read at the
+pinned source, not recalled). Policy: a
 redb upgrade that moves that constant is a **deliberate, artifact-recorded
 operation — build a fresh store and replay** (§11's "trivial migrator"), never
 redb's own upgrade path. The loud failure is the good case, and it is the reason
@@ -2496,17 +2497,23 @@ not change with its address:
   power loss between any two leaves a file nothing was committed to: empty, a
   header whose magic is unwritten (redb writes it last; pinned flush by flush
   against the engine in `Cargo.lock`) within the length an initialization
-  writes, or a valid database with **no table at all**. A writable open
-  **finishes the creation** in each case (`crate::creation`): it seals the
-  empty database in place under the engine's exclusive lock, or moves the
-  uninitialized file aside as `<name>.unfinished-<unix seconds>` (never
-  deleting it; the node logs where) and creates a fresh store. A file longer
-  than an initialization, whatever its first bytes, is not one the node can
-  prove it made and stays refused, byte for byte. A read-only open cannot seal
-  and still refuses. Found by
-  PB-S2's power-loss replay (2026-11-01, one capture of a first start, a sync
-  and a switch: 9 of 58 rebuilt points, then 2 of 166, would not start
-  again, all before the first acknowledgement; the pool file the same way). `verify` runs on every other writable and read-only open and returns
+  writes, or a valid database with **no table at all**. A reopen judges an
+  existing file on a **read-only** open first, and opens writable only a file
+  it accepted: a writable open writes into the file even with nothing
+  committed (redb records its allocator state when it closes), so a refused
+  file is left byte for byte. Accepted are a sealed file `verify` passes and a
+  database with no table, which the writable open then **seals in place**
+  under the engine's exclusive lock. A file the engine never finished
+  initializing is moved aside as `<name>.unfinished-<unix seconds>` (never
+  deleted; the node logs where) and a fresh store created. A file longer than
+  an initialization, whatever its first bytes, is not one the node can prove
+  it made and stays refused. The one exception to judging read-only is a file
+  redb must repair, which a read-only open refuses (`RepairAborted`): it is
+  opened writable, repaired by redb, and judged after. A read-only open of the
+  store never seals and refuses an unsealed file. Found by PB-S2's power-loss
+  replay (2026-11-01, one capture of a first start, a sync and a switch: 9 of
+  58 rebuilt points, then 2 of 166, would not start again, all before the
+  first acknowledgement; the pool file the same way). `verify` returns
   `SchemaVersionAbsent` / `SchemaVersionMismatch { found, expected }` /
   `CellCorrupt` — never a default: a file with any table and no seal is not
   one this binary wrote. The key bytes are pinned by a

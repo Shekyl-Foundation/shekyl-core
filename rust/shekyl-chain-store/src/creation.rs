@@ -34,7 +34,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use redb::{Database, ReadableDatabase};
+use redb::ReadableDatabase;
 
 use crate::store::{EngineError, StoreError};
 
@@ -142,7 +142,7 @@ fn sync_parent(path: &Path) -> std::io::Result<()> {
 /// # Errors
 ///
 /// A read transaction could not begin or the table list could not be read.
-pub(crate) fn no_table(db: &Database) -> Result<bool, StoreError> {
+pub(crate) fn no_table(db: &impl ReadableDatabase) -> Result<bool, StoreError> {
     let txn = db.begin_read().map_err(EngineError::BeginRead)?;
     let none = txn
         .list_tables()

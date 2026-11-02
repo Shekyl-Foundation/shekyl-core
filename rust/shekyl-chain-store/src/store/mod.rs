@@ -182,7 +182,7 @@ pub const TWO_PHASE_COMMIT: bool = true;
 
 /// Cache the engine is opened with.
 ///
-/// The value is redb 4.1.0's own default (1 GiB) made explicit so a
+/// The value is redb's own default (1 GiB; `redb-4.4.0/src/db.rs:2045`) made explicit so a
 /// future redb bump cannot change RSS by omission (A4's shape, on the
 /// axis A5 measures). Reopen the number against DRS-BENCH peak-RSS,
 /// never to "go faster".
@@ -324,8 +324,8 @@ impl ChainStore {
         // `create_file`, so a 0-byte file is the path it knows.
         //
         // The reopen arm is therefore `open`, which never creates and never
-        // initializes (`redb-4.1.0/src/db.rs:1196`; an empty file is
-        // `InvalidData`, `page_manager.rs:171`). With `create` there, a
+        // initializes (`redb-4.4.0/src/db.rs:2130`; an empty file is
+        // `InvalidData`, `page_manager.rs:1080`). With `create` there, a
         // path removed between AlreadyExists and the open -- or an empty
         // file some other process left -- would be initialized as a fresh,
         // unsealed database and then refused by `verify`, leaving behind
@@ -337,8 +337,19 @@ impl ChainStore {
         let (db, provenance) = match create_fresh(&builder, path, apply_policy, epoch) {
             Ok(Some(fresh)) => fresh,
             Ok(None) => {
-                let db = match builder.open(path) {
-                    Ok(db) => db,
+                // The file is judged on a read-only open first. A writable
+                // open writes into the file even when nothing is committed
+                // (the engine records its allocator state when it closes),
+                // so a file this store refuses is refused unwritten, and
+                // only a file judged ours is opened writable. The exception
+                // is a file the engine must repair first: a read-only open
+                // answers `RepairAborted`, and only the writable open below
+                // can repair it, after which it is judged.
+                match builder.open_read_only(path) {
+                    Ok(read_only) => {
+                        judge(&read_only, epoch)?;
+                    }
+                    Err(redb::DatabaseError::RepairAborted) => {}
                     Err(refused) => {
                         // A cut before the engine finished initializing:
                         // the file is empty, or no longer than an
@@ -366,19 +377,17 @@ impl ChainStore {
                             set_aside: Some(aside),
                         });
                     }
-                };
+                }
+                let db = builder.open(path).map_err(EngineError::Open)?;
                 // `create_file` commits an empty database before the seal's
                 // transaction commits, so a power loss between the two
                 // leaves a valid file with no table at all (PB-S2's first
-                // replay, `DAEMON_REDB_STORE.md` §3.6.3). Nothing in it can
-                // be lost, and this open holds the engine's exclusive lock,
-                // so the creation is finished here: sealed in place, as
-                // `create_sealed` would have. A file with any table and no
-                // seal is still refused by `verify`.
-                let provenance = if crate::creation::no_table(&db)? {
-                    seal_new(&db, apply_policy, epoch)?
-                } else {
-                    header::verify(&db.begin_read().map_err(EngineError::BeginRead)?, epoch)?
+                // replay). Nothing in it can be lost, and this open holds
+                // the engine's exclusive lock, so the creation is finished
+                // here: sealed in place, as `create_sealed` would have.
+                let provenance = match judge(&db, epoch)? {
+                    Some(provenance) => provenance,
+                    None => seal_new(&db, apply_policy, epoch)?,
                 };
                 (db, provenance)
             }
@@ -431,9 +440,11 @@ impl ChainStore {
     /// The cell only ever widens, and only a committed stubbed batch widens
     /// it. Two locks make the in-memory copy the file's value:
     ///
-    /// - **Across handles.** redb holds an exclusive `flock` on the file for
+    /// - **Across handles.** redb holds an exclusive lock on the file for
     ///   the life of a writable `Database` and a shared one for a read-only
-    ///   handle (`redb-4.1.0/src/tree_store/page_store/file_backend/optimized.rs:27`,
+    ///   handle: a byte-range lock on its lock range, and on Linux also the
+    ///   whole-file `flock` older redb took
+    ///   (`redb-4.4.0/src/tree_store/page_store/file_backend/optimized.rs:90`,
     ///   read at the pinned source). A second writable open — this process
     ///   or another — is [`redb::DatabaseError::DatabaseAlreadyOpen`]; a
     ///   read-only handle excludes every writer for as long as it exists.
@@ -624,8 +635,8 @@ impl ChainStore {
     /// closure wrote lands. There is no separate abort verb; an abort that
     /// the engine fails to complete is not lost either — redb latches the
     /// storage failure and refuses the next `begin_write` with
-    /// `StorageError::PreviousIo` (`redb-4.1.0/src/transactions.rs:2084`,
-    /// `db.rs:1410`, read at the pinned source), which the next `write`
+    /// `StorageError::PreviousIo` (`redb-4.4.0/src/tree_store/page_store/cached_file.rs:200`,
+    /// held by its own test at `db.rs:2392`, read at the pinned source), which the next `write`
     /// surfaces as [`EngineError::BeginWrite`].
     ///
     /// `E` is any error the caller's closure may return, provided the
@@ -733,6 +744,20 @@ fn arm_write(db: &Database) -> Result<WriteTransaction, StoreError> {
         .map_err(EngineError::Durability)?;
     txn.set_two_phase_commit(TWO_PHASE_COMMIT);
     Ok(txn)
+}
+
+/// What an existing file is to this store: its verified provenance, or
+/// `None` for a file with no table at all, a creation stopped before its
+/// seal (`crate::creation`). A file with any table and no seal, or another
+/// layout or schedule, is `verify`'s refusal.
+fn judge(
+    db: &impl redb::ReadableDatabase,
+    epoch: SettlementEpochBlocks,
+) -> Result<Option<Provenance>, StoreError> {
+    if crate::creation::no_table(db)? {
+        return Ok(None);
+    }
+    header::verify(&db.begin_read().map_err(EngineError::BeginRead)?, epoch).map(Some)
 }
 
 /// Claim `path` with `create_new` and create a sealed store in it. `None`
