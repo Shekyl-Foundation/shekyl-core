@@ -895,11 +895,12 @@ over-cap block, must be rejected by both impls).
   auth_{N-1}` — **unlike** the tx *body*, where the count is implicit (`vin.size()`,
   no prefix). The mixer prepends `V(N)` for the hash component only; `L` counts the
   body's bytes, without it.
-- **Pruning stable (pruned == full).** A pruned form supplies what it no longer
-  holds: `prunable_hash` for a storage-pruned spend (which keeps its `pqc_auths`),
-  `H(pqc_auths)` too for a skeleton, and `L` in both — from the store's
-  `txs_archival_len` row, or from the daemon RPC reply's `archival_len`
-  (`Transaction::hash_with_supplied_prunable` / `hash_with_supplied_components`).
+- **Pruning stable (pruned == full).** The pruned form is the skeleton (`SB-Q2`),
+  and it supplies what it no longer holds: `prunable_hash`, `H(pqc_auths)` when
+  the prefix carries one, and `L` — from the store's `txs_prunable_hash` /
+  `txs_pqc_auth_hash` / `txs_archival_len` rows, or from the daemon RPC reply's
+  `prunable_hash` / `pqc_auth_hash` / `archival_len`
+  (`Transaction::hash_with_supplied_components`, reached through `SkeletonTx::bind`).
   Every supplied value is an operand of the id it is checked against, so a wrong
   one yields another id, not another transaction under the same id. C++ has no
   pruned txid function: a pruned body has no length there to measure.

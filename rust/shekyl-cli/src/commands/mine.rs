@@ -21,6 +21,7 @@
 //! a remote daemon the operator named is a valid advanced configuration.
 
 use serde_json::{json, Value};
+use shekyl_rpc_types::mining::MineSpeed;
 
 use crate::daemon::DaemonClient;
 use crate::display::short_address;
@@ -321,10 +322,12 @@ pub(crate) fn show_mine_status(val: &Value) {
         "  Threads:    {}",
         val.get("threads").and_then(Value::as_u64).unwrap_or(0)
     );
-    println!(
-        "  Hash rate:  {} H/s",
-        val.get("speed").and_then(Value::as_u64).unwrap_or(0)
-    );
+    let rate = val
+        .get("speed")
+        .cloned()
+        .and_then(|speed| serde_json::from_value::<MineSpeed>(speed).ok())
+        .map_or_else(|| "0 H/s".to_owned(), MineSpeed::hashes_per_second_text);
+    println!("  Hash rate:  {rate}");
     if let Some(address) = val.get("address").and_then(|v| v.as_str()) {
         if !address.is_empty() {
             println!("  Paying to:  {}", short_address(address));

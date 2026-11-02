@@ -28,8 +28,9 @@
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <atomic>
+#include <chrono>
+#include <thread>
 #include "gtest/gtest.h"
-#include "misc_language.h"
 #include "common/threadpool.h"
 
 TEST(threadpool, wait_nothing)
@@ -44,7 +45,7 @@ TEST(threadpool, wait_waits)
   std::shared_ptr<tools::threadpool> tpool(tools::threadpool::getNewForUnitTests());
   tools::threadpool::waiter waiter(*tpool);
   std::atomic<bool> b(false);
-  tpool->submit(&waiter, [&b](){ epee::misc_utils::sleep_no_w(1000); b = true; });
+  tpool->submit(&waiter, [&b](){ std::this_thread::sleep_for(std::chrono::seconds(1)); b = true; });
   ASSERT_FALSE(b);
   waiter.wait();
   ASSERT_TRUE(b);

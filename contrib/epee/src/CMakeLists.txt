@@ -34,7 +34,6 @@ monero_find_all_headers(EPEE_HEADERS_PUBLIC "${EPEE_INCLUDE_DIR_BASE}")
 monero_add_library(epee byte_slice.cpp byte_stream.cpp hex.cpp mlog.cpp net_utils_base.cpp string_tools.cpp parserse_base_utils.cpp
     wipeable_string.cpp levin_base.cpp memwipe.c mlocker.cpp buffer.cpp net_ssl.cpp
     int-util.cpp portable_storage.cpp
-    misc_language.cpp
     file_io_utils.cpp
     net_parse_helpers.cpp
     http_base.cpp
