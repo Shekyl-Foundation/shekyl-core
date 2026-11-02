@@ -53,6 +53,7 @@ use std::sync::Arc;
 use clap::{Args, Parser, Subcommand};
 use shekyl_chain_ingest::corpus::{CorpusNet, CorpusReader, CorpusWriter};
 use shekyl_chain_ingest::fetch::fetch_corpus;
+use shekyl_chain_ingest::height_digests;
 use shekyl_chain_ingest::metrics::Metrics;
 use shekyl_chain_ingest::pipeline::{run, Disagreement, PipelineConfig, RunReport};
 use shekyl_chain_ingest::rebaseline::write_trace_file;
@@ -134,6 +135,13 @@ enum Command {
         /// connects; a refusal leaves any previous file untouched.
         #[arg(long)]
         out: PathBuf,
+        /// Where to write `logical_state_digest_v0` at every connected
+        /// height (`shekyl_height_digests_v1`). Forces a window of one
+        /// commit, so each height is its own commit and the store's digest
+        /// at that height is the row. Absent, a baseline pays no per-height
+        /// scan.
+        #[arg(long)]
+        digests_out: Option<PathBuf>,
     },
     /// Print a store's recorded tip and logical-state digest as one JSON
     /// line, opened read-only.
@@ -225,7 +233,11 @@ async fn real_main(cli: Cli) -> Result<(), Failure> {
             injections,
         } => fetch(daemon, chain, from..to, batch, &injections, &out).await,
         Command::Replay { flags, trace } => replay(flags, trace).await,
-        Command::Baseline { flags, out } => baseline(flags, out).await,
+        Command::Baseline {
+            flags,
+            out,
+            digests_out,
+        } => baseline(flags, out, digests_out).await,
         Command::Digest {
             store,
             chain,
@@ -248,23 +260,13 @@ fn digest(store: &std::path::Path, rules: &ChainRules) -> Result<(), Failure> {
     let store = ChainStore::open_read_only(store, horizons)?;
     let snap = store.begin_read()?;
     let recorded = snap.tip()?.recorded;
-    let tip = recorded.as_ref().map(|t| t.height.to_raw());
-    let hash: String = recorded
-        .as_ref()
-        .map(|t| {
-            t.hash
-                .as_bytes()
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect()
-        })
-        .unwrap_or_default();
     let digest = snap.logical_state_digest_v0()?;
-    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
-    println!(
-        "{{\"tip\": {}, \"hash\": \"{hash}\", \"digest\": \"{hex}\"}}",
-        tip.map_or_else(|| "null".to_owned(), |t| t.to_string())
-    );
+    let line = height_digests::store_digest_line(
+        recorded.as_ref().map(|t| t.height.to_raw()),
+        recorded.as_ref().map(|t| t.hash.as_bytes().as_slice()),
+        &digest,
+    )?;
+    println!("{line}");
     Ok(())
 }
 
@@ -285,6 +287,7 @@ fn prepare(flags: &RunFlags) -> Result<Prepared, Failure> {
         cfg: PipelineConfig {
             window: flags.window,
             hashers: flags.hashers,
+            digest_each_commit: false,
         },
         horizons,
     })
@@ -360,7 +363,11 @@ async fn drive(
 /// and write the store's chain as the trace. A chain the rules refuse
 /// anywhere is no baseline: the tool fails and the destination is not
 /// opened.
-async fn baseline(flags: RunFlags, out: PathBuf) -> Result<(), Failure> {
+async fn baseline(
+    mut flags: RunFlags,
+    out: PathBuf,
+    digests_out: Option<PathBuf>,
+) -> Result<(), Failure> {
     if flags.store.exists() {
         return Err(format!(
             "{} exists; a baseline is written from a fresh store",
@@ -368,7 +375,13 @@ async fn baseline(flags: RunFlags, out: PathBuf) -> Result<(), Failure> {
         )
         .into());
     }
-    let prepared = prepare(&flags)?;
+    // A digest per height is the digest after that height's own commit.
+    // The default window commits a batch, and a batch has one digest.
+    if digests_out.is_some() {
+        flags.window = NonZeroUsize::MIN;
+    }
+    let mut prepared = prepare(&flags)?;
+    prepared.cfg.digest_each_commit = digests_out.is_some();
     let report = drive(&flags, &prepared, Arc::new(Trace::empty())).await?;
     if let Some((height, verdict)) = report.refused {
         return Err(format!("the corpus does not replay: refused at {height}: {verdict:?}").into());
@@ -377,6 +390,19 @@ async fn baseline(flags: RunFlags, out: PathBuf) -> Result<(), Failure> {
     let snap = store.begin_read()?;
     write_trace_file(&snap, &out)?;
     eprintln!("trace → {}", out.display());
+    if let Some(path) = digests_out {
+        // A linear baseline (no pop) connected each height once. The table
+        // names those heights or it is not the oracle a later point looks up.
+        if report.popped() == 0 {
+            let recorded: Vec<_> = report.digests.keys().copied().collect();
+            let connected: Vec<_> = report.connected.iter().map(|(height, _)| *height).collect();
+            if recorded != connected {
+                return Err("the digest table does not name every connected height".into());
+            }
+        }
+        height_digests::publish(&path, &report.digests)?;
+        eprintln!("digests → {}", path.display());
+    }
     Ok(())
 }
 
@@ -750,7 +776,12 @@ mod tests {
             "m.json",
         ])
         .expect("parses");
-        let Command::Baseline { flags, out } = cli.command else {
+        let Command::Baseline {
+            flags,
+            out,
+            digests_out,
+        } = cli.command
+        else {
             panic!("baseline");
         };
         assert_eq!(flags.chain, CorpusNet::Fakechain);
@@ -763,6 +794,7 @@ mod tests {
             Some(std::path::Path::new("m.json"))
         );
         assert_eq!(out, PathBuf::from("trace.e2"));
+        assert!(digests_out.is_none());
         assert!(
             parse(&["baseline", "--corpus", "c", "--store", "s", "--chain", "regtest"]).is_err(),
             "a baseline names the trace it writes"

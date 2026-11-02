@@ -148,6 +148,10 @@ pub mod follower;
 mod frozen_membership;
 #[cfg(all(test, feature = "pipeline"))]
 mod header_path_tests;
+/// The logical-state digest at a tip, and at every height of a
+/// one-commit-per-block baseline.
+#[cfg(feature = "pipeline")]
+pub mod height_digests;
 pub mod metrics;
 /// The Rust miner loop over scenario chains (DRS-X PR 3, DX-Q4).
 #[cfg(all(test, feature = "pipeline"))]
