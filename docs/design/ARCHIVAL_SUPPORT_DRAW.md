@@ -462,16 +462,14 @@ Rick ruled the three points `SO-D12` 4b §5.1 item 3 raised, each as
 option 1.
 
 1. **One epoch snapshot** (`SO-D12q`). The value filed at `h_open(E)` holds `D` with
-   its receipt keys, the support members in persona order with theirs,
-   and the archive width, under one digest that both derivations
-   produce (`shekyl/archival-drawable-epoch-v2`). Support reuses the
-   economy's paths: the same filing, digest, memo and no-rebuild
-   contract (admission's miss is SI-35). A member is a complete tree of
-   pin 1 at `h_open(E)`, and only while the width is above zero: a tree
-   of an empty archive holds nothing a draw could select, as a compact
-   holding of a shard not yet closed is no pair. Each block's support
-   row holds its seats (SI-40), and the store's view checks a roster it
-   reads against the schedule over the snapshot (SI-43).
+   its receipt keys and the support roster (the archive width and the
+   members in persona order with their receipt keys), under one digest
+   that both derivations produce (`shekyl/archival-drawable-epoch-v2`).
+   Support reuses the economy's paths: the same filing, digest, memo and
+   no-rebuild contract (admission's miss is SI-35). A member is a
+   complete tree of pin 1 at `h_open(E)`. Each block's support row holds
+   its seats (SI-40), and the store's view checks a roster it reads
+   against the schedule over the snapshot (SI-43).
 2. **The carry stays inside its epoch** (`SO-D12r`; §2, as amended). The sentence
    "an epoch that opens while `c` are already unissued adds nothing" is
    struck by this ruling: no carry crosses an epoch. The carry is built
@@ -484,4 +482,13 @@ option 1.
    two checks are unchanged. It lands at the switch with 4b §5.3's J16
    change, because the issued journal is written only once admission is
    live.
+4. **No shards, no support stream** (`SO-D12t`, Rick, 2026-11-02). No
+   support draw is made while the archive has no closed shard ("you
+   can't draw from an empty pool"). It is a fact of the type: the
+   snapshot holds `Option<SupportRoster>`, and a roster's width is a
+   `NonZeroU64`, present only when the archive at `h_open(E)` has a
+   shard. The seats, the view's width answer and `select_support_shard`
+   take that width, so "members at width zero" cannot be expressed and
+   no check guards it. The economy has the same shape without a guard:
+   with no shards `D` is empty and the count rule draws zero.
 

@@ -44,14 +44,18 @@ use shekyl_archival_retention::{support_span, DrawableEpoch, SupportUnissued};
 use shekyl_types::archival::SupportSeats;
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch};
 
+use crate::fault::Corrupt;
 use crate::{scheduled_seats, SettlementSchedule};
 
-/// One epoch's carry: each tree's count of unfiled seats not yet
-/// re-seated. The value the switch's transition keeps in
-/// `archival_support_unissued[(persona, epoch)]`.
+/// One epoch's carry over that epoch's snapshot: each tree's count of
+/// unfiled seats not yet re-seated. The value the switch's transition keeps
+/// in `archival_support_unissued[(persona, epoch)]`.
+///
+/// The carry holds the snapshot it is for, so a carry and a snapshot of
+/// two epochs cannot meet in one step: the carry's epoch is its snapshot's.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SupportCarry {
-    epoch: SettlementEpoch,
+pub struct SupportCarry<'s> {
+    snapshot: &'s DrawableEpoch,
     owed: BTreeMap<PCanonicalId, SupportUnissued>,
 }
 
@@ -66,20 +70,20 @@ pub struct WindowClosed<'a> {
     pub filed: bool,
 }
 
-impl SupportCarry {
-    /// The carry of `epoch` at its open: nothing owed.
+impl<'s> SupportCarry<'s> {
+    /// The carry of `snapshot`'s epoch at its open: nothing owed.
     #[must_use]
-    pub const fn new(epoch: SettlementEpoch) -> Self {
+    pub const fn open(snapshot: &'s DrawableEpoch) -> Self {
         Self {
-            epoch,
+            snapshot,
             owed: BTreeMap::new(),
         }
     }
 
-    /// The epoch this carry is for.
+    /// The epoch this carry is for: its snapshot's.
     #[must_use]
     pub const fn epoch(&self) -> SettlementEpoch {
-        self.epoch
+        self.snapshot.epoch()
     }
 
     /// What `persona` is owed now.
@@ -108,30 +112,29 @@ impl SupportCarry {
 /// counted first, so a draw unfiled at `h − W₂ − 1` can be re-seated at
 /// `h`.
 ///
-/// `drawable` is the snapshot of `h`'s epoch and `carry` that epoch's
-/// carry.
+/// `carry` is the carry of `h`'s epoch, over that epoch's snapshot.
 ///
-/// # Panics
+/// # Errors
 ///
-/// If `drawable` or `carry` is not for `h`'s epoch: the caller holds them
-/// per epoch, so a mismatch is a defect, not a chain state.
+/// [`Corrupt::DrawableEpoch`] when `carry` is over another epoch's
+/// snapshot ([`scheduled_seats`]'s check): this node's state, never the
+/// block's, so the writer halts rather than seat another epoch's members.
 pub fn seats_with_carry(
-    carry: &mut SupportCarry,
-    drawable: &DrawableEpoch,
+    carry: &mut SupportCarry<'_>,
     h: BlockHeight,
     schedule: SettlementSchedule,
     closed: Option<WindowClosed<'_>>,
-) -> SupportSeats {
-    let epoch = schedule.epoch_at(h);
-    assert_eq!(carry.epoch, epoch, "the carry of {h}'s own epoch");
-    let scheduled = scheduled_seats(drawable, h, schedule);
+) -> Result<SupportSeats, Corrupt> {
+    let snapshot = carry.snapshot;
+    let scheduled = scheduled_seats(snapshot, h, schedule)?;
     let Some(window) = schedule.challenge_response_blocks() else {
-        return scheduled;
+        return Ok(scheduled);
     };
     let window = window.get();
     let seb = schedule.blocks().get();
-    let open = schedule.open_height(epoch.to_raw());
-    let relative = h.to_raw() - open;
+    // `scheduled_seats` checked that `h` is in the carry's epoch, whose
+    // open is at or below it.
+    let relative = h.to_raw() - schedule.open_height(carry.epoch().to_raw());
 
     // The block whose window closes here, if it is in this epoch. One in
     // the epoch before belongs to that epoch's row, where it lapsed.
@@ -147,10 +150,13 @@ pub fn seats_with_carry(
 
     let usable = support_span(seb, window).is_some_and(|span| relative < span);
     if !usable {
-        return scheduled;
+        return Ok(scheduled);
     }
     let mut seats = scheduled.as_slice().to_vec();
-    for (persona, _) in drawable.support_members() {
+    let members = snapshot
+        .support_roster()
+        .map_or(&[][..], shekyl_archival_retention::SupportRoster::members);
+    for (persona, _) in members {
         let owed = carry.owed(persona);
         if owed.get() == 0 || scheduled.as_slice().binary_search(persona).is_ok() {
             continue;
@@ -159,7 +165,7 @@ pub fn seats_with_carry(
         seats.push(*persona);
     }
     seats.sort_unstable();
-    SupportSeats::new(seats).expect("members and the schedule are one persona each")
+    Ok(SupportSeats::new(seats).expect("members and the schedule are one persona each"))
 }
 
 #[cfg(test)]

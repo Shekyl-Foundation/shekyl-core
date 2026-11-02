@@ -19,6 +19,7 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::num::NonZeroU64;
 
 use shekyl_chain_rules::{
     AtHeight, BlockDrawsFloor, BundleView, ChainView, DrawableEpoch, DrawableMemo, EpochFloor,
@@ -405,10 +406,13 @@ impl<V: BundleRows> BundleView for StoreBundleView<'_, V> {
         let Some(drawable) = self.drawable_epoch(epoch)? else {
             return Err(self.miss(epoch));
         };
-        // SI-43: the row is the schedule over the snapshot.
+        // SI-43: the row is the schedule over the snapshot. With no roster
+        // (no closed shard at the open) there is no member, so any seat is
+        // not one.
+        let members = drawable.support_roster();
         let mut roster = Vec::with_capacity(seats.len());
         for persona in seats.as_slice() {
-            let Some(receipt_key) = drawable.support_key(persona) else {
+            let Some(receipt_key) = members.and_then(|members| members.key(persona)) else {
                 return Err(self.view.arm_row(StoreInvariant::SupportSeatsNotScheduled {
                     height: h,
                     persona: *persona,
@@ -420,7 +424,8 @@ impl<V: BundleRows> BundleView for StoreBundleView<'_, V> {
                 receipt_key: receipt_key.clone(),
             });
         }
-        let scheduled = shekyl_chain_rules::scheduled_seats(drawable, h, self.schedule);
+        let scheduled = shekyl_chain_rules::scheduled_seats(drawable, h, self.schedule)
+            .map_err(|corrupt| self.view.arm_row(super::write::invariant_of(corrupt)))?;
         if let Some(missing) = scheduled
             .as_slice()
             .iter()
@@ -435,14 +440,19 @@ impl<V: BundleRows> BundleView for StoreBundleView<'_, V> {
         Ok(Some(roster))
     }
 
-    fn archive_width(&self, h: BlockHeight) -> Result<Option<u64>, StoreError> {
-        // The width at `h_open` of `h`'s epoch, from the same snapshot the
-        // roster's keys come from.
+    fn archive_width(&self, h: BlockHeight) -> Result<Option<NonZeroU64>, StoreError> {
+        // The roster's width at `h_open` of `h`'s epoch, from the same
+        // snapshot the roster's keys come from. An epoch with no roster has
+        // no support stream and so no width. The verifier asks only after
+        // `support_roster` answered seats, and a seated row under no roster
+        // is SI-43 there, so that `None` is never read as a hole.
         let epoch = self.schedule.epoch_at(h);
         let Some(drawable) = self.drawable_epoch(epoch)? else {
             return Err(self.miss(epoch));
         };
-        Ok(Some(drawable.archive_width()))
+        Ok(drawable
+            .support_roster()
+            .map(shekyl_archival_retention::SupportRoster::width))
     }
 }
 

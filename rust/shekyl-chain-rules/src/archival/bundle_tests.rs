@@ -1153,7 +1153,7 @@ fn a_receipt_under_a_key_the_drawable_epoch_does_not_hold_refuses() {
         .collect();
     world.view.drawable_epochs.insert(
         epoch,
-        DrawableEpoch::new(epoch, u64::MAX, keys, pairs).expect("every pair has a key"),
+        DrawableEpoch::new(epoch, Some(wide_archive()), keys, pairs).expect("every pair has a key"),
     );
     assert!(judge(&world, &reference, &body).is_ok());
     // And the honest bundle, signed by key A, is now the one refused.
@@ -1292,7 +1292,7 @@ fn a_later_support_attempt_refuses_before_an_earlier_receipt() {
     use shekyl_archival_retention::{select_support_shard, support_challenge_nonce, PassStream};
 
     let mut world = BundleWorld::new(4);
-    let width = 64u64;
+    let width = std::num::NonZeroU64::new(64).expect("non-zero");
     world.view.archive_width.insert(world.h, width);
     let hash = fixture_block_hash(world.h);
     let seat = |world: &BundleWorld, n: usize| SupportSeat {
@@ -1477,7 +1477,7 @@ fn a_view_with_a_hole_is_unanswered_and_never_a_verdict() {
     let other_epoch = shekyl_types::SettlementEpoch::from_raw(epoch.to_raw() + 1);
     world.view.drawable_epochs.insert(
         epoch,
-        DrawableEpoch::new(other_epoch, u64::MAX, keys, pairs).expect("keyed"),
+        DrawableEpoch::new(other_epoch, Some(wide_archive()), keys, pairs).expect("keyed"),
     );
     assert_eq!(
         unanswered(&world, &bundle),
@@ -1494,7 +1494,7 @@ fn a_view_with_a_hole_is_unanswered_and_never_a_verdict() {
     let (mut world, bundle) = fresh();
     world.view.drawable_epochs.insert(
         epoch,
-        DrawableEpoch::new(epoch, 0, Vec::<(PCanonicalId, ReceiptSignPk)>::new(), [])
+        DrawableEpoch::new(epoch, None, Vec::<(PCanonicalId, ReceiptSignPk)>::new(), [])
             .expect("empty"),
     );
     assert_eq!(
@@ -1573,7 +1573,7 @@ fn a_support_pass_is_not_serve_credit() {
     let mut world = BundleWorld::new(4);
     let persona = world.personas[0].persona;
     let receipt_key = world.personas[0].receipt_key();
-    let width = 64;
+    let width = std::num::NonZeroU64::new(64).expect("non-zero");
     world.view.archive_width.insert(world.h, width);
     world.view.support_roster.insert(
         world.h,
@@ -1610,4 +1610,10 @@ fn a_support_pass_is_not_serve_credit() {
         judge(&world, &reference, &body),
         invalid(BundleInvalid::Receipt { draw: 0 })
     );
+}
+
+/// A roster over every shard a test names and no complete tree: the
+/// archive is as wide as it can be.
+fn wide_archive() -> shekyl_archival_retention::SupportRoster {
+    shekyl_archival_retention::SupportRoster::empty(std::num::NonZeroU64::MAX)
 }

@@ -89,14 +89,16 @@ fn tree_with_slot(pick: impl Fn(u64) -> bool) -> (PCanonicalId, u64) {
 }
 
 fn snapshot(epoch: u64, tree: PCanonicalId) -> DrawableEpoch {
+    let width = std::num::NonZeroU64::new(8).expect("non-zero");
+    let roster =
+        shekyl_archival_retention::SupportRoster::new(width, [(tree, key())]).expect("one member");
     DrawableEpoch::new(
         SettlementEpoch::from_raw(epoch),
-        8,
+        Some(roster),
         Vec::<(PCanonicalId, &ReceiptSignPk)>::new(),
         [],
     )
-    .and_then(|d| d.with_support([(tree, key())]))
-    .expect("one member")
+    .expect("one member, no pair")
 }
 
 struct Driven {
@@ -114,8 +116,10 @@ fn drive(tree: PCanonicalId, epochs: u64, unadmitted: &BTreeSet<u64>) -> Driven 
     let mut rows = BTreeMap::new();
     let mut lapsed = BTreeMap::new();
     let mut owed_trace = Vec::new();
-    let mut carry = SupportCarry::new(SettlementEpoch::from_raw(0));
-    let mut drawable = snapshot(0, tree);
+    // Each epoch's carry is over that epoch's snapshot, so the snapshots
+    // outlive the loop.
+    let snapshots: Vec<DrawableEpoch> = (0..epochs).map(|e| snapshot(e, tree)).collect();
+    let mut carry = SupportCarry::open(&snapshots[0]);
     for h in 0..epochs * SEB {
         let epoch = schedule.epoch_at(BlockHeight::from_raw(h));
         if epoch != carry.epoch() {
@@ -123,8 +127,9 @@ fn drive(tree: PCanonicalId, epochs: u64, unadmitted: &BTreeSet<u64>) -> Driven 
                 carry.epoch().to_raw(),
                 carry.owing().map(|(p, o)| (*p, o.get())).collect(),
             );
-            carry = SupportCarry::new(epoch);
-            drawable = snapshot(epoch.to_raw(), tree);
+            carry = SupportCarry::open(
+                &snapshots[usize::try_from(epoch.to_raw()).expect("a few epochs")],
+            );
         }
         let closing = h.checked_sub(window() + 1);
         let closed = closing.and_then(|c| {
@@ -133,13 +138,8 @@ fn drive(tree: PCanonicalId, epochs: u64, unadmitted: &BTreeSet<u64>) -> Driven 
                 filed: !unadmitted.contains(&c),
             })
         });
-        let seats = seats_with_carry(
-            &mut carry,
-            &drawable,
-            BlockHeight::from_raw(h),
-            schedule,
-            closed,
-        );
+        let seats = seats_with_carry(&mut carry, BlockHeight::from_raw(h), schedule, closed)
+            .expect("each epoch's carry is over its own snapshot");
         owed_trace.push(carry.owed(&tree).get());
         rows.insert(h, seats);
     }
@@ -279,4 +279,26 @@ fn a_late_unfiled_draw_lapses_rather_than_crossing_the_epoch() {
             "{case}: epoch 1 seats the tree at its own schedule"
         );
     }
+}
+
+/// A carry over one epoch's snapshot, stepped at a height of another, is
+/// this node's state gone wrong: a typed fault that halts the writer, never
+/// a panic and never another epoch's seats. Red edit: drop the epoch check
+/// in `scheduled_seats` (the step seats epoch 0's member at a height of
+/// epoch 1).
+#[test]
+fn a_carry_stepped_outside_its_epoch_is_corrupt() {
+    let tree = early_tree();
+    let epoch_0 = snapshot(0, tree);
+    let mut carry = SupportCarry::open(&epoch_0);
+    let in_epoch_1 = BlockHeight::from_raw(SEB + slots(&tree)[0]);
+    assert_eq!(
+        seats_with_carry(&mut carry, in_epoch_1, schedule(), None),
+        Err(crate::fault::Corrupt::DrawableEpoch {
+            epoch: SettlementEpoch::from_raw(1),
+            why: crate::fault::DrawableEpochFault::OtherEpoch {
+                held: SettlementEpoch::from_raw(0),
+            },
+        })
+    );
 }

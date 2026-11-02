@@ -606,7 +606,7 @@ fn the_recorded_digest_is_missing_unopened_or_drift() {
     let h_open = BlockHeight::from_raw(200);
     let empty = DrawableEpoch::new(
         epoch,
-        0,
+        None,
         Vec::<(PCanonicalId, ReceiptSignPk)>::new(),
         Vec::<DrawablePair>::new(),
     )

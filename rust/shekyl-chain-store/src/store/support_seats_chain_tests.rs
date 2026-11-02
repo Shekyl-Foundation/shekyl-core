@@ -115,8 +115,8 @@ fn seated(label: &str, through: u64) -> Seated {
 /// a complete tree is not in `D`, so every count row is the production
 /// composition for an empty `D`. Red edits: spread the slots over
 /// `0..SEB` in `support_slot` (the rows leave the specified slots);
-/// collect members at width zero in `emit` (the snapshot refuses a member
-/// of an empty archive, and the connect with it); put a tree's pair into
+/// build a roster at width zero in `emit` (it does not compile:
+/// `SupportRoster`'s width is a `NonZeroU64`); put a tree's pair into
 /// `D` (`D` is not empty, and the count moves).
 #[test]
 fn a_trees_seats_over_an_epoch_are_its_c_slots_at_each_width() {
@@ -128,10 +128,14 @@ fn a_trees_seats_over_an_epoch_are_its_c_slots_at_each_width() {
     let mut widths = BTreeSet::new();
     let mut with_members = 0;
     for (&epoch, snapshot) in &seated.snapshots {
-        let width = snapshot.archive_width();
+        // No roster is the archive with no closed shard at the open; the
+        // test reads it as width 0.
+        let roster = snapshot.support_roster();
+        let width = roster.map_or(0, |roster| roster.width().get());
         widths.insert(width);
-        let members: BTreeSet<PCanonicalId> =
-            snapshot.support_members().iter().map(|(p, _)| *p).collect();
+        let members: BTreeSet<PCanonicalId> = roster
+            .map(|roster| roster.members().iter().map(|(p, _)| *p).collect())
+            .unwrap_or_default();
         let open = h_open(epoch);
         let mut seated_at: BTreeMap<PCanonicalId, BTreeSet<u64>> = BTreeMap::new();
         for relative in 0..seb() {
@@ -152,9 +156,8 @@ fn a_trees_seats_over_an_epoch_are_its_c_slots_at_each_width() {
             compose(0, open, last),
             "epoch {epoch}: the count is an empty D's"
         );
-        if width == 0 {
-            assert!(members.is_empty(), "epoch {epoch}: no member at width 0");
-            assert!(seated_at.is_empty(), "epoch {epoch}: no seat at width 0");
+        if roster.is_none() {
+            assert!(seated_at.is_empty(), "epoch {epoch}: no roster, no seat");
             continue;
         }
         with_members += 1;
@@ -223,11 +226,18 @@ fn a_past_blocks_roster_reads_as_written_at_connect() {
         let personas: Vec<PCanonicalId> = roster.iter().map(|seat| seat.persona).collect();
         assert_eq!(personas, row.as_slice());
         for seat in &roster {
-            assert_eq!(Some(&seat.receipt_key), snapshot.support_key(&seat.persona));
+            assert_eq!(
+                Some(&seat.receipt_key),
+                snapshot
+                    .support_roster()
+                    .and_then(|roster| roster.key(&seat.persona))
+            );
         }
         assert_eq!(
             bundle_view.archive_width(at).expect("read"),
-            Some(snapshot.archive_width())
+            snapshot
+                .support_roster()
+                .map(shekyl_archival_retention::SupportRoster::width)
         );
         Err(TestErr::Abort)
     });
@@ -245,6 +255,7 @@ fn first_scheduled_after_open(snapshot: &DrawableEpoch, epoch: u64) -> u64 {
                 BlockHeight::from_raw(h),
                 RULES.settlement_schedule(),
             )
+            .expect("the snapshot of the epoch's own height")
             .is_empty()
         })
         .expect("the epoch seats a tree after its open")

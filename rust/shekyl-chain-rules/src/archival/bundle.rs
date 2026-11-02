@@ -202,6 +202,7 @@
 use core::fmt;
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
+use std::num::NonZeroU64;
 
 use shekyl_archival_retention::{
     draw_commit, select_draw, BundleBody, BundleKept, BundleRef, BundleWireError, DrawableEpoch,
@@ -279,9 +280,11 @@ pub trait BundleView {
     /// verifier asks only when [`Self::support_count`] is not zero.
     fn support_roster(&self, h: BlockHeight) -> Result<Option<Vec<SupportSeat>>, Self::Fault>;
 
-    /// The archive width the support draw selects a shard from. `None` is
-    /// the view's hole. Asked only when the block issued support draws.
-    fn archive_width(&self, h: BlockHeight) -> Result<Option<u64>, Self::Fault>;
+    /// The archive width the support draw selects a shard from: the roster's
+    /// width at `h_open` of `h`'s epoch, never zero (an epoch whose archive
+    /// had no closed shard has no support stream). `None` is the view's
+    /// hole. Asked only when the block issued support draws.
+    fn archive_width(&self, h: BlockHeight) -> Result<Option<NonZeroU64>, Self::Fault>;
 }
 
 /// One complete tree scheduled at a block: the persona and the receipt

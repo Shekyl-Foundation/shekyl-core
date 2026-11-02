@@ -1099,10 +1099,11 @@ verdict on a block, never a clamp and never a skipped row.
    against `D` as of `h_open(E)`, so a `D` that drifted between admission
    and settlement would change which pair a draw names. The digest covers
    the pairs and each persona's receipt key, the two things a draw's
-   index resolves to, and the support stream's two `h_open(E)` facts
-   filed with them (`SO-D12q`, 2026-11-01): the archive width a support
-   draw selects from, and the complete trees seated on that stream, each
-   with its receipt key (`ARCHIVAL_SUPPORT_DRAW.md` §13):
+   index resolves to, and the support stream's roster filed with them
+   (`SO-D12q`, 2026-11-01): present only when the archive at `h_open(E)`
+   has a closed shard (`SO-D12t`, 2026-11-02), and then the archive width a
+   support draw selects from and the complete trees seated on that stream,
+   each with its receipt key (`ARCHIVAL_SUPPORT_DRAW.md` §13):
 
    ```text
    cSHAKE256_32("shekyl/archival-drawable-epoch-v2",
@@ -1111,14 +1112,17 @@ verdict on a block, never a clamp and never a skipped row.
        ‖ for each pair, canonical order:     p_canonical_id[32] ‖ shard_id_le8
        ‖ n_personas_le8
        ‖ for each persona, ascending by id:  p_canonical_id[32] ‖ receipt_sign_pk[1837]
-       ‖ archive_width_le8
+       ‖ roster_tag[1]                       0x00: no roster; 0x01: a roster, then
+       ‖ archive_width_le8                   (never zero)
        ‖ n_members_le8
        ‖ for each member, ascending by id:   p_canonical_id[32] ‖ receipt_sign_pk[1837]
    )
    ```
 
    The personas are those that hold a pair, and a key is hashed once per
-   persona. A member holds no pair, so it is in the member list only. Every field is fixed-width and each list is preceded by its
+   persona. A member holds no pair, so it is in the member list only. The
+   tag tells "no roster" (no closed shard) from "a roster with no members"
+   (a closed shard and no complete tree). Every field is fixed-width and each list is preceded by its
    count. An empty `D` has a digest, the empty set's, which genesis
    writes for epoch 0; no value stands for an absent one.
 3. **`passes ≤ issued`**, a typed halt, beneath both. The row type holds

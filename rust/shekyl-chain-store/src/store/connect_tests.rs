@@ -294,7 +294,7 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
     // set's, since no bond joins before epoch 0. A row, not an absence.
     let empty = shekyl_chain_rules::DrawableEpoch::new(
         shekyl_types::SettlementEpoch::from_raw(0),
-        0,
+        None,
         Vec::<(
             shekyl_types::PCanonicalId,
             shekyl_types::archival::ReceiptSignPk,

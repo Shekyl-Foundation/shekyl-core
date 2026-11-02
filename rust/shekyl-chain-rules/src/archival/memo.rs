@@ -121,7 +121,7 @@ mod tests {
             .to_receipt_sign_pk();
         DrawableEpoch::new(
             epoch,
-            2,
+            std::num::NonZeroU64::new(2).map(shekyl_archival_retention::SupportRoster::empty),
             [(persona, key)],
             [DrawablePair {
                 persona,

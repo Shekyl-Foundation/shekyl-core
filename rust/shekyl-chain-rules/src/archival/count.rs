@@ -128,6 +128,7 @@ impl super::Transition {
                 scheduled_seats(drawable, connecting, schedule),
             )
         })?;
+        let seats = seats.map_err(ViewRead::Corrupt)?;
         self.file_prior_epoch(view, count_memo)?;
         let (visible, carry_in) = if at_open {
             // The block before a later open wrote a row. Its numbers belong
@@ -445,7 +446,7 @@ mod tests {
             .to_receipt_sign_pk();
         DrawableEpoch::new(
             epoch,
-            2,
+            std::num::NonZeroU64::new(2).map(shekyl_archival_retention::SupportRoster::empty),
             [(persona, key)],
             [DrawablePair {
                 persona,

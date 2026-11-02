@@ -6,7 +6,7 @@
 //!
 //! A block's seats are the complete trees its epoch's schedule puts on
 //! that height: the support members of the epoch snapshot
-//! ([`DrawableEpoch::support_members`], filed at `h_open(E)` with `D`,
+//! ([`DrawableEpoch::support_roster`], filed at `h_open(E)` with `D`,
 //! `SO-D12` S1 ruled 2026-11-01), each at the `c` offsets
 //! [`support_seated_at`] names. The transition writes them as the block's
 //! row, and the store's bundle view checks a roster it reads against them
@@ -23,47 +23,55 @@ use shekyl_archival_retention::{support_seated_at, DrawableEpoch};
 use shekyl_types::archival::SupportSeats;
 use shekyl_types::BlockHeight;
 
+use crate::fault::{Corrupt, DrawableEpochFault};
 use crate::SettlementSchedule;
 
 /// The support members of `drawable` that `schedule` seats at `h`, in
 /// persona order. `drawable` is the snapshot of `h`'s epoch.
 ///
 /// Empty when the schedule has no response window (the seats are spread
-/// over `SEB − W₂`), when the epoch has no member, and at every height a
-/// member's offsets miss.
+/// over `SEB − W₂`), when the epoch has no roster (no closed shard at
+/// `h_open(E)`) or no member, and at every height a member's offsets miss.
 ///
-/// # Panics
+/// # Errors
 ///
-/// If `drawable` is not the snapshot of `h`'s epoch. The caller resolves it
-/// for that epoch, so a mismatch is a defect, not a chain state.
-#[must_use]
+/// [`Corrupt::DrawableEpoch`] with [`DrawableEpochFault::OtherEpoch`] when
+/// `drawable` is not the snapshot of `h`'s epoch. The caller resolves the
+/// snapshot for that epoch, so a mismatch is this node's state, never the
+/// block's: the writer halts (SI-30) rather than seat another epoch's
+/// members.
 pub fn scheduled_seats(
     drawable: &DrawableEpoch,
     h: BlockHeight,
     schedule: SettlementSchedule,
-) -> SupportSeats {
+) -> Result<SupportSeats, Corrupt> {
     let epoch = schedule.epoch_at(h);
-    assert_eq!(
-        drawable.epoch(),
-        epoch,
-        "the seats of {h} read the snapshot of its own epoch"
-    );
-    let Some(window) = schedule.challenge_response_blocks() else {
-        return SupportSeats::EMPTY;
+    if drawable.epoch() != epoch {
+        return Err(Corrupt::DrawableEpoch {
+            epoch,
+            why: DrawableEpochFault::OtherEpoch {
+                held: drawable.epoch(),
+            },
+        });
+    }
+    // No roster: the archive had no closed shard at `h_open(E)`, so this
+    // epoch has no support stream.
+    let (Some(roster), Some(window)) = (
+        drawable.support_roster(),
+        schedule.challenge_response_blocks(),
+    ) else {
+        return Ok(SupportSeats::EMPTY);
     };
-    let open = schedule.open_height(epoch.to_raw());
-    let relative = h
-        .to_raw()
-        .checked_sub(open)
-        .expect("a block is at or after its epoch's open");
+    // `epoch_at(h)` is the epoch whose open is at or below `h`.
+    let relative = h.to_raw() - schedule.open_height(epoch.to_raw());
     let seb = schedule.blocks().get();
-    let seated = drawable
-        .support_members()
+    let seated = roster
+        .members()
         .iter()
         .map(|(persona, _)| *persona)
         .filter(|persona| support_seated_at(persona, relative, seb, window.get()))
         .collect();
-    SupportSeats::new(seated).expect("the snapshot keeps its members in persona order")
+    Ok(SupportSeats::new(seated).expect("the snapshot keeps its members in persona order"))
 }
 
 #[cfg(test)]

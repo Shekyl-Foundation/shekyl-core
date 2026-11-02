@@ -105,7 +105,7 @@ pub struct FixtureBundleView {
     /// Complete trees scheduled at a block, in bitmap order.
     pub support_roster: BTreeMap<BlockHeight, Vec<crate::archival::SupportSeat>>,
     /// The archive width a support draw selects from.
-    pub archive_width: BTreeMap<BlockHeight, u64>,
+    pub archive_width: BTreeMap<BlockHeight, std::num::NonZeroU64>,
     /// The one read that faults, if any.
     pub fault: Option<BundleRead>,
     /// Every read made, in order.
@@ -220,9 +220,12 @@ impl BundleView for FixtureBundleView {
         ))
     }
 
-    fn archive_width(&self, h: BlockHeight) -> Result<Option<u64>, BundleReadFaulted> {
+    fn archive_width(
+        &self,
+        h: BlockHeight,
+    ) -> Result<Option<std::num::NonZeroU64>, BundleReadFaulted> {
         self.read(BundleRead::ArchiveWidth)?;
-        Ok(Some(self.archive_width.get(&h).copied().unwrap_or(0)))
+        Ok(self.archive_width.get(&h).copied())
     }
 }
 
@@ -382,15 +385,17 @@ impl BundleWorld {
             .expect("the canonical key length");
 
         let epoch = rule_set.settlement_schedule().epoch_at(h);
-        // The archive spans every fixture shard.
-        let width = personas
+        // The archive spans every fixture shard; no complete tree is a
+        // member (a test seats one through `support_roster`).
+        let roster = personas
             .iter()
             .flat_map(|p| p.shards.iter().copied())
             .max()
-            .map_or(0, |top| top + 1);
+            .and_then(|top| std::num::NonZeroU64::new(top + 1))
+            .map(shekyl_archival_retention::SupportRoster::empty);
         let drawable = DrawableEpoch::new(
             epoch,
-            width,
+            roster,
             personas.iter().map(|p| (p.persona, &p.receipt_public_key)),
             personas.iter().flat_map(|p| {
                 p.shards.iter().map(|shard| DrawablePair {

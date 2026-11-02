@@ -4,13 +4,14 @@
 //! The seats over a snapshot.
 
 use std::collections::BTreeMap;
+use std::num::NonZeroU64;
 use std::sync::OnceLock;
 
 use shekyl_archival_retention::{
-    support_slot, support_span, DrawableEpoch, DrawablePair, SUPPORT_DRAWS_PER_EPOCH,
+    support_slot, support_span, DrawableEpoch, DrawablePair, SupportRoster, SUPPORT_DRAWS_PER_EPOCH,
 };
 use shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa;
-use shekyl_types::archival::ReceiptSignPk;
+use shekyl_types::archival::{ReceiptSignPk, SupportSeats};
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 
 use super::*;
@@ -36,21 +37,32 @@ fn schedule(blocks: u64) -> SettlementSchedule {
     SettlementSchedule::new(SettlementEpochBlocks::new(blocks).expect("non-zero"))
 }
 
+/// The seats of `h` over `drawable`, the snapshot of `h`'s epoch.
+fn seats_of(
+    drawable: &DrawableEpoch,
+    h: BlockHeight,
+    schedule: SettlementSchedule,
+) -> SupportSeats {
+    scheduled_seats(drawable, h, schedule).expect("the snapshot of h's epoch")
+}
+
 /// Epoch `epoch`'s snapshot: one compact pair, and the two trees as
 /// members at `width`.
 fn snapshot(epoch: SettlementEpoch, width: u64) -> DrawableEpoch {
     let k = keys();
+    let width = NonZeroU64::new(width).expect("a test archive has a shard");
+    let roster =
+        SupportRoster::new(width, [(TREE_B, &k[1]), (TREE_A, &k[0])]).expect("two members");
     DrawableEpoch::new(
         epoch,
-        width,
+        Some(roster),
         [(COMPACT, &k[2])],
         [DrawablePair {
             persona: COMPACT,
             shard: ShardId::from_raw(0),
         }],
     )
-    .and_then(|d| d.with_support([(TREE_B, &k[1]), (TREE_A, &k[0])]))
-    .expect("two members over a non-empty archive")
+    .expect("two members and one pair holder")
 }
 
 /// Over a whole epoch, each member is seated exactly at its `c` slots, all
@@ -74,8 +86,7 @@ fn each_member_is_seated_at_its_c_slots_and_nowhere_else() {
         let drawable = snapshot(epoch, width);
         let mut seated: BTreeMap<PCanonicalId, Vec<u64>> = BTreeMap::new();
         for relative in 0..seb {
-            let seats =
-                scheduled_seats(&drawable, BlockHeight::from_raw(open + relative), schedule);
+            let seats = seats_of(&drawable, BlockHeight::from_raw(open + relative), schedule);
             assert!(
                 seats.as_slice().windows(2).all(|w| w[0] < w[1]),
                 "persona order"
@@ -87,19 +98,21 @@ fn each_member_is_seated_at_its_c_slots_and_nowhere_else() {
         assert!(!seated.contains_key(&COMPACT), "a pair holder is no member");
         // Many members, so the span bound is met by hundreds of slots and
         // not only the two trees'.
+        let roster = SupportRoster::new(
+            NonZeroU64::new(width).expect("a test archive has a shard"),
+            (0x80u8..0xA0).map(|b| (PCanonicalId::from_bytes([b; 32]), &keys()[0])),
+        )
+        .expect("thirty-two members");
         let many = DrawableEpoch::new(
             epoch,
-            width,
+            Some(roster),
             Vec::<(PCanonicalId, &ReceiptSignPk)>::new(),
             [],
         )
-        .and_then(|d| {
-            d.with_support((0x80u8..0xA0).map(|b| (PCanonicalId::from_bytes([b; 32]), &keys()[0])))
-        })
-        .expect("thirty-two members");
+        .expect("members, no pair");
         let mut seats_of_many = 0usize;
         for relative in 0..seb {
-            let seats = scheduled_seats(&many, BlockHeight::from_raw(open + relative), schedule);
+            let seats = seats_of(&many, BlockHeight::from_raw(open + relative), schedule);
             assert!(
                 seats.is_empty() || relative < span,
                 "a seat at {relative} would close its window after the epoch"
@@ -136,11 +149,31 @@ fn no_window_or_no_member_seats_nobody() {
     let epoch = SettlementEpoch::from_raw(0);
     let drawable = snapshot(epoch, 4);
     for h in 0..10 {
-        assert!(scheduled_seats(&drawable, BlockHeight::from_raw(h), windowless).is_empty());
+        assert!(seats_of(&drawable, BlockHeight::from_raw(h), windowless).is_empty());
     }
     let windowed = schedule(400);
     let empty = DrawableEpoch::empty(epoch);
     for h in 0..400 {
-        assert!(scheduled_seats(&empty, BlockHeight::from_raw(h), windowed).is_empty());
+        assert!(seats_of(&empty, BlockHeight::from_raw(h), windowed).is_empty());
     }
+}
+
+/// The seats of a height read over another epoch's snapshot are a typed
+/// fault that halts the writer (SI-30), never a panic on the connect path
+/// and never the other epoch's members. Red edit: drop the epoch check (the
+/// height is seated from epoch 2's members).
+#[test]
+fn another_epochs_snapshot_is_corrupt() {
+    let schedule = schedule(400);
+    let held = snapshot(SettlementEpoch::from_raw(2), 8);
+    let in_epoch_3 = BlockHeight::from_raw(schedule.open_height(3));
+    assert_eq!(
+        scheduled_seats(&held, in_epoch_3, schedule),
+        Err(crate::fault::Corrupt::DrawableEpoch {
+            epoch: SettlementEpoch::from_raw(3),
+            why: crate::fault::DrawableEpochFault::OtherEpoch {
+                held: SettlementEpoch::from_raw(2),
+            },
+        })
+    );
 }
