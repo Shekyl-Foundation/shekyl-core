@@ -234,7 +234,10 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// (IG-Q55). `get_blocks_by_height.bin` takes `prune` and carries each
 /// archived body as a per-slot state rather than failing the height.
 /// `get_version` gains nothing.
-pub const CORE_RPC_VERSION_MINOR: u32 = 64;
+/// 3.65: `mining_status.speed` is the hash count over its window of
+/// complete seconds. A whole-hash quotient read `0` for a miner below
+/// one hash a second. `get_version` gains nothing.
+pub const CORE_RPC_VERSION_MINOR: u32 = 65;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -663,11 +666,13 @@ mod tests {
         // `get_transactions` entry the skeleton (`pqc_auth_hash`; `split`,
         // `as_json`, `pruned`, `prunable_as_hex` retire), lists a discarded
         // full body under `archived`, and gives `get_blocks_by_height.bin`
-        // its `prune` switch (SB-Q2, PDM-Q10).
-        assert_eq!(CORE_RPC_VERSION, 196_672);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 64);
+        // its `prune` switch (SB-Q2, PDM-Q10). Both branches had written
+        // 64, so `mining_status.speed` carrying the hash count over its
+        // window took the next minor, as 3.44 did.
+        assert_eq!(CORE_RPC_VERSION, 196_673);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 65);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 64);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 65);
     }
 
     #[test]
