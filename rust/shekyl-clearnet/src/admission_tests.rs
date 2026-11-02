@@ -50,7 +50,7 @@ fn dial_a_listener(sockets: Sockets) -> (Option<DialEnd>, bool) {
         gap_within: None,
         tally: Arc::new(super::super::zero_tally()),
         on_end: Arc::new(move |end: DialEnd| {
-            drop(end_tx.send(end));
+            let _sent = end_tx.send(end);
         }),
         send_queue_bytes: 65_536,
         admitted: admitted_tx,
