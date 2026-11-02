@@ -576,3 +576,38 @@ fn a_late_resolution_counts_only_life_inside_the_bracket() {
         }
     }
 }
+
+/// **The verdict's wake reads the byte clock** (#1235 review, F2). The
+/// deadline is on the byte-stamp clock, so the owner's wake is derived from
+/// it: the engine's now plus what the byte clock still has to run, and now
+/// once that clock has reached the deadline. A wake set on the engine clock
+/// when the verdict was deferred fails this: here the byte clock runs ahead
+/// of the engine's, and such a wake would come late, or, the other way,
+/// before the deadline and re-arm for a due already past.
+#[test]
+fn the_verdicts_wake_reads_the_byte_clock() {
+    let mut rig = JudgeRig::new(TOR, 280);
+    let held = rig.hold(20);
+    rig.whites(0, 1);
+    rig.life.received_now(held);
+    rig.later(1_000);
+    rig.fail_uncertain();
+    assert_eq!(rig.pending(), 1);
+    let bracket = dial_profile(TOR).judging.bracket_nanos / 1_000_000;
+    let engine = rig.clock.now().get();
+    rig.later(bracket - 1_000);
+    assert_eq!(
+        rig.dialer.next_verdict_due(TOR),
+        Some(Tick::new(engine + 1_000_000_000)),
+        "the byte clock has one second to run"
+    );
+    rig.later(1_000);
+    assert_eq!(
+        rig.dialer.next_verdict_due(TOR),
+        Some(Tick::new(engine)),
+        "the deadline is reached: due now, not in the past"
+    );
+    rig.dialer.apply_verdicts(&mut rig.rng);
+    assert_eq!(rig.pending(), 0, "and the wake finds it due");
+    assert_eq!(rig.dialer.next_verdict_due(TOR), None);
+}

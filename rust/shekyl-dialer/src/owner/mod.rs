@@ -906,7 +906,7 @@ impl Dialer {
             });
             // A deferred verdict due first wakes the loop for it alone.
             let deadline = self
-                .earliest_verdict(connector)
+                .next_verdict_due(connector)
                 .map_or(wake, |due| due.min(wake));
             if owner.arm(deadline).is_err() {
                 break;

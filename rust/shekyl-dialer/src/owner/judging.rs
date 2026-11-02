@@ -66,8 +66,6 @@ pub(super) struct PendingVerdict {
     pub(super) deadline_ms: u64,
     /// A sign of life inside the bracket was seen: the failure counts.
     pub(super) counted: bool,
-    /// The same deadline on the engine's clock, for the owner's wake.
-    pub(super) due: Tick,
 }
 
 /// What the judge keeps per connector.
@@ -181,14 +179,12 @@ impl Dialer {
         match judge(failure, judging, observed, failed_ms) {
             Judgement::Now(verdict) => Self::perform(shared, connector, outcome, now, verdict, rng),
             Judgement::AtBracketEnd { deadline_ms } => {
-                let due = Tick::new(now.get().saturating_add(judging.bracket_nanos));
                 shared.pending.push(PendingVerdict {
                     connector,
                     outcome: outcome.clone(),
                     failed_ms,
                     deadline_ms,
                     counted: false,
-                    due,
                 });
             }
         }
@@ -247,15 +243,30 @@ impl Dialer {
         shared.lists.apply(outcome, now, verdict, rng);
     }
 
-    /// When `connector`'s earliest deferred verdict is due, on the engine's
-    /// clock.
-    pub(super) fn earliest_verdict(&self, connector: ConnectorId) -> Option<Tick> {
-        self.shared()
+    /// When the owner loop next wakes for `connector`'s deferred verdicts,
+    /// on the engine's clock: now for one a sign of life has counted,
+    /// otherwise now plus what the byte-stamp clock still has to run to the
+    /// earliest deadline. One clock decides the deadline, so the wake never
+    /// comes before it and never re-arms for a due already past.
+    #[must_use]
+    pub fn next_verdict_due(&self, connector: ConnectorId) -> Option<Tick> {
+        let shared = self.shared();
+        let now_ms = (shared.life_clock.now_ms)();
+        let wait_ms = shared
             .pending
             .iter()
             .filter(|pending| pending.connector == connector)
-            .map(|pending| pending.due)
-            .min()
+            .map(|pending| {
+                if pending.counted {
+                    0
+                } else {
+                    pending.deadline_ms.saturating_sub(now_ms)
+                }
+            })
+            .min()?;
+        drop(shared);
+        let wait_nanos = wait_ms.saturating_mul(1_000_000);
+        Some(Tick::new(self.hub.now().get().saturating_add(wait_nanos)))
     }
 
     /// The deferred verdicts waiting on `connector`, for tests and the
