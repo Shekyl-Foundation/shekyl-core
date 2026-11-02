@@ -7,7 +7,6 @@
 
 use super::info::{fetch_get_info, network_label};
 use super::Source;
-use crate::ctl_client;
 
 /// The `/mining_status` reply, as much of it as `show_status` reads.
 ///
@@ -61,7 +60,12 @@ fn fetch_mining_status(src: &Source) -> Result<MiningReadout, String> {
             address, timeout, ..
         } => {
             src.ensure_identity()?;
-            match ctl_client::post_blocking(address, "/mining_status", b"{}".to_vec(), *timeout) {
+            match shekyl_daemon_ctl::post_blocking(
+                address,
+                "/mining_status",
+                b"{}".to_vec(),
+                *timeout,
+            ) {
                 // Two ordinary refusals, before any parse. An empty body is
                 // a route the daemon does not serve: the control transport
                 // does not surface the HTTP status, and axum's fallback is

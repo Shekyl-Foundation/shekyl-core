@@ -13,8 +13,6 @@ use shekyl_rpc_types::{
     core_rpc_version_string, DaemonNetwork, IdentityExpectation, IdentityMismatch,
 };
 
-use crate::ctl_client;
-
 use super::{json_rpc_result, Source};
 
 impl Source {
@@ -67,7 +65,7 @@ impl Source {
             } => (address.as_str(), *timeout),
         };
         self.ensure_identity()?;
-        ctl_client::post_blocking(address, path, body, timeout).map_err(|(_, reason)| reason)
+        shekyl_daemon_ctl::post_blocking(address, path, body, timeout).map_err(|(_, reason)| reason)
     }
 }
 
@@ -113,7 +111,7 @@ pub(super) fn get_version_result(
         "jsonrpc": "2.0", "id": "0", "method": "get_version", "params": {},
     }))
     .map_err(|e| format!("cannot encode the handshake request: {e}"))?;
-    let raw = ctl_client::post_blocking(address, "/json_rpc", body, timeout)
+    let raw = shekyl_daemon_ctl::post_blocking(address, "/json_rpc", body, timeout)
         .map_err(|(_, reason)| reason)?;
     json_rpc_result(&raw, "get_version").map_err(|reason| {
         if reason.starts_with("get_version failed:") {

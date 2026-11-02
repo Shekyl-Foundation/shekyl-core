@@ -31,7 +31,7 @@
 // The `shekyld <command>` control client: `shekyld status`, `shekyld exit`, …
 // run as a second process and reach the running daemon over its plaintext
 // loopback RPC. The transport is the Rust `shekyl_daemon_ctl_post` export
-// (shekyl-daemon-rpc/src/ctl_client.rs, over shekyl-rpc-transport); this
+// (rust/shekyl-daemon-ctl, over shekyl-rpc-transport); this
 // header owns only the request/response structs and their epee JSON framing,
 // which Phase 2 of docs/DAEMON_RPC_RUST.md retires in turn.
 

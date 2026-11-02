@@ -170,6 +170,9 @@ members = [
 
     "shekyl-tx-builder",
     "shekyl-daemon-rpc",
+    # The `shekyld <command>` control client, apart from the server so
+    # libshekyl_ffi.a carries one without the other (DC-F30).
+    "shekyl-daemon-ctl",
 
     # Single-sourced CT cleartext balance equation + typed-side terms, imported
     # by both construct (shekyl-tx-builder) and verify (shekyl-archival-retention)

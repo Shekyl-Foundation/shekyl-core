@@ -24,7 +24,6 @@ use shekyl_rpc_types::{GetHeightResponse, RestErrorEnvelope};
 use shekyl_units::AtomicUnits;
 
 use crate::core::CoreRpc;
-use crate::ctl_client;
 
 mod alt_chain;
 mod blockchain;
@@ -626,7 +625,7 @@ pub unsafe extern "C" fn shekyl_daemon_console_run(
     let mut args = Vec::with_capacity(argc);
     for i in 0..argc {
         let p = *argv.add(i);
-        let Some(s) = ctl_client::c_string(p) else {
+        let Some(s) = shekyl_daemon_ctl::c_string(p) else {
             return SHEKYL_DAEMON_CONSOLE_ERR_NULL_PTR;
         };
         args.push(s);
@@ -643,7 +642,7 @@ pub unsafe extern "C" fn shekyl_daemon_console_run(
             None => return SHEKYL_DAEMON_CONSOLE_ERR_NULL_PTR,
         }
     } else {
-        match ctl_client::c_string(address) {
+        match shekyl_daemon_ctl::c_string(address) {
             Some(address) => Source::Remote {
                 address,
                 timeout: Duration::from_secs(timeout_secs),
@@ -727,11 +726,11 @@ pub unsafe extern "C" fn shekyl_daemon_console_run(
     };
     match result {
         Ok(text) => {
-            ctl_client::emit(text.into_bytes(), out_ptr, out_len);
+            shekyl_daemon_ctl::emit(text.into_bytes(), out_ptr, out_len);
             SHEKYL_DAEMON_CONSOLE_OK
         }
         Err(reason) => {
-            ctl_client::emit(reason.into_bytes(), out_ptr, out_len);
+            shekyl_daemon_ctl::emit(reason.into_bytes(), out_ptr, out_len);
             SHEKYL_DAEMON_CONSOLE_ERR_REQUEST
         }
     }

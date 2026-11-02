@@ -86,7 +86,6 @@ pub mod consensus {
 pub mod conn_limit;
 pub mod console;
 pub mod core;
-pub mod ctl_client;
 pub mod ffi;
 pub mod ffi_exports;
 pub mod handlers;

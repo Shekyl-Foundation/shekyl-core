@@ -115,11 +115,14 @@ target_link_libraries(unit_tests
     # daemon's RPC server and its `shekyl_rpc_*` exports are not in it:
     # they reach shekyld as rlibs of the Rust binary (DC-Q19) and no C++
     # test calls them. daemon_rpc_client.cpp's transport,
-    # `shekyl_daemon_ctl_*`, is shekyl-ffi's (`ctl_client`).
+    # `shekyl_daemon_ctl_*`, is `shekyl-daemon-ctl`'s, re-exported by
+    # shekyl-ffi; the server is kept out of the archive on purpose
+    # (DAEMON_CONFIG_CUTOVER.md DC-F30).
     ${SHEKYL_FFI_LINK_LIBS}
-    # rpc repeats after the Rust archive: its members import
-    # core_rpc_ffi_* / shekyl_submit_*, which live in rpc — left-to-right
-    # static-archive resolution needs a post-archive occurrence.
+    # rpc after the Rust archive. Since DC-F30 the archive imports nothing
+    # from rpc (the daemon-image era's core_rpc_ffi_* importers are no
+    # longer members), so this occurrence resolves nothing the earlier one
+    # did not; it is left as found pending a separate ruling (rule 15).
     rpc
     version
     ${Boost_CHRONO_LIBRARY}

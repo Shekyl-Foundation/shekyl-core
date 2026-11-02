@@ -1630,7 +1630,7 @@ size_t shekyl_thread_ledger_report(char* buf, size_t len);
 // shekyld control client (`shekyld <command>` → running daemon), the outbound
 // half of the daemon's HTTP surface. Plaintext loopback only — the daemon
 // registers neither --rpc-login nor --rpc-ssl* (docs/DAEMON_RPC_RUST.md).
-// Rust: shekyl-daemon-rpc/src/ctl_client.rs.
+// Rust: rust/shekyl-daemon-ctl/src/lib.rs.
 // ---------------------------------------------------------------------------
 
 /// Request completed; the out pair holds the response body.
