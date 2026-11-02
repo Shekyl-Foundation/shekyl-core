@@ -181,14 +181,11 @@ pub(super) async fn native_method(
                 Ok(request) => request,
                 Err(fault) => return Some(Err(NativeFail::Fault(fault))),
             };
-            let fill_pow_hash = match admit_pow_hash(
-                "get_block",
-                request.fill_pow_hash,
-                authority.bounded(),
-            ) {
-                Ok(fill) => fill,
-                Err(fault) => return Some(Err(NativeFail::Fault(fault))),
-            };
+            let fill_pow_hash =
+                match admit_pow_hash("get_block", request.fill_pow_hash, authority.bounded()) {
+                    Ok(fill) => fill,
+                    Err(fault) => return Some(Err(NativeFail::Fault(fault))),
+                };
             Some(frame_native(
                 on_chain(state, move |chain| {
                     crate::methods::get_block(chain.as_ref(), &request, fill_pow_hash)

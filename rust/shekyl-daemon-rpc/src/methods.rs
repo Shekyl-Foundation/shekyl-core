@@ -20,8 +20,8 @@ use shekyl_rpc_types::{
 use shekyl_rpc_types::{
     BlockHeader, GetBlockCountResponse, GetBlockHashParams, GetBlockHeaderByHeightRequest,
     GetBlockHeaderByHeightResponse, GetBlockRequest, GetBlockResponse, GetHeightResponse,
-    GetVersionResponse, HashHex, RpcStatus,     CORE_RPC_ERROR_CODE_INTERNAL_ERROR, CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT,
-    CORE_RPC_ERROR_CODE_WRONG_PARAM,
+    GetVersionResponse, HashHex, RpcStatus, CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
+    CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT, CORE_RPC_ERROR_CODE_WRONG_PARAM,
 };
 use shekyl_rpc_types::{
     ConnectionInfo, ConnectionState, GetConnectionsResponse, GetNetStatsResponse,
@@ -150,7 +150,12 @@ impl RpcRefusal {
 ///
 /// [`ErrorClass::OverResourceBound`]: shekyl_rpc_types::errors::ErrorClass::OverResourceBound
 #[must_use]
-pub fn bound_exceeded(method: &str, unit: &str, bound: u64, asked: u64) -> shekyl_rpc_types::errors::RpcError {
+pub fn bound_exceeded(
+    method: &str,
+    unit: &str,
+    bound: u64,
+    asked: u64,
+) -> shekyl_rpc_types::errors::RpcError {
     use shekyl_rpc_types::errors::{Diagnostic, ErrorClass, RpcError};
     let message = format!(
         "{method} accepts at most {bound} {unit} from a bounded connection; \
@@ -1050,11 +1055,7 @@ pub fn get_block_headers_range(
             span,
         ));
     }
-    let pow = pow_hash_or_refuse(
-        "get_block_headers_range",
-        request.fill_pow_hash,
-        bounded,
-    )?;
+    let pow = pow_hash_or_refuse("get_block_headers_range", request.fill_pow_hash, bounded)?;
     let mut headers = Vec::new();
     for raw in request.start_height..=request.end_height {
         let height = BlockHeight::from_raw(raw);
