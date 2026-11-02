@@ -241,6 +241,7 @@ fn dial_tally(tally: TorLinkTally) -> DialTally {
         unopened: tally.unopened,
         held: tally.held,
         last_sign_of_life: tally.last_sign_of_life.map(Tick::get),
+        last_unopened_at: tally.last_unopened_at.map(Tick::get),
     }
 }
 

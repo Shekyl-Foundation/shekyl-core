@@ -27,6 +27,7 @@ fn lived(opened: u64, unopened: u32, held: u32, life: Option<u64>) -> Input {
         unopened,
         held,
         last_sign_of_life: life,
+        last_unopened_at: None,
     })
 }
 
@@ -175,6 +176,35 @@ fn the_line_needs_a_failed_dial_since_the_last_sign_of_life() {
     assert!(core.status().tor_quiet.is_some());
 }
 
+/// **A coalesced failure-then-life is still a failure before the byte.**
+/// The watch keeps only the latest tally, so a dial that failed at 10 s
+/// and a byte at 20 s can arrive as one tally at 21 s. The failure is
+/// dated when the dialer counted it. Dating it at arrival puts it after
+/// the byte, and the line stands once the span has elapsed.
+#[test]
+fn a_coalesced_failure_then_life_is_not_a_failure_since_the_byte() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    reach_usable(&mut core);
+    let after = duration_ns(policy().quiet_after);
+    let failed_at = secs(10);
+    let life = secs(20);
+    let tally = DialTally {
+        opened: 0,
+        unopened: 1,
+        held: 0,
+        last_sign_of_life: Some(life),
+        last_unopened_at: Some(failed_at),
+    };
+    core.on(Input::DialEvidence(tally), secs(21));
+    assert_eq!(core.status().tor_quiet, None);
+    core.on(Input::DialEvidence(tally), life + after);
+    assert_eq!(
+        core.status().tor_quiet,
+        None,
+        "the failure ended before the byte"
+    );
+}
+
 /// **The sentence says what the judge observed**, neutral and with no fix
 /// (`TSR-Q14`): nothing has come through Tor for the span, no connection
 /// has opened and no peer has sent anything. A sentence that names a cause
@@ -243,6 +273,7 @@ fn a_tally_from_before_this_tor_does_not_count_as_an_open() {
             unopened: 2,
             held: 0,
             last_sign_of_life: None,
+            last_unopened_at: None,
         }),
         1,
     );

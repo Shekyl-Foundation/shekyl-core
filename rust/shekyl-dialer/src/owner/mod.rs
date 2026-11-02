@@ -741,7 +741,7 @@ impl Dialer {
         let opened = opened_ms.map_or(ended_ms, |opened| opened.min(ended_ms));
         Self::note_stream(shared, connector, outcome, opened, now);
         let held = Self::tor_held(shared);
-        shared.tor_link.observe(connector, outcome, held);
+        shared.tor_link.observe(connector, outcome, held, now);
     }
 
     /// A finished attempt's outcome, or its deferral. A `DialFailed` whose
@@ -804,7 +804,7 @@ impl Dialer {
                         let opened = opened_ms.map_or(ended_ms, |opened| opened.min(ended_ms));
                         Self::note_stream(shared, connector, outcome, opened, now);
                         let held = Self::tor_held(shared);
-                        shared.tor_link.observe(connector, outcome, held);
+                        shared.tor_link.observe(connector, outcome, held, now);
                         return;
                     }
                 }

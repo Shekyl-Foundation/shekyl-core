@@ -973,6 +973,7 @@ fn a_refused_payload_on_a_kept_tor_session_is_not_another_open() {
             unopened: 0,
             held: 1,
             last_sign_of_life: opened.last_sign_of_life,
+            last_unopened_at: None,
         }
     );
 
@@ -985,6 +986,7 @@ fn a_refused_payload_on_a_kept_tor_session_is_not_another_open() {
             unopened: 0,
             held: 0,
             last_sign_of_life: opened.last_sign_of_life,
+            last_unopened_at: None,
         },
         "the close is not a new stream"
     );
@@ -1038,6 +1040,7 @@ fn an_inbound_tor_session_is_held_once_its_handshake_finishes() {
             unopened: 0,
             held: 1,
             last_sign_of_life: None,
+            last_unopened_at: None,
         }
     );
 

@@ -34,6 +34,10 @@ pub struct DialTally {
     /// When the dialer's judge last saw the Tor link work, in nanoseconds on
     /// the process clock the supervisor runs on. `None` until the first.
     pub last_sign_of_life: Option<u64>,
+    /// When a Tor dial last ended without a stream, on that same clock.
+    /// `None` when the tally does not say: the fold then dates the failure
+    /// when the tally arrives.
+    pub last_unopened_at: Option<u64>,
 }
 
 /// The supervisor's reading of the tally.
@@ -65,12 +69,16 @@ impl Dials {
     }
 
     /// Fold a tally. A dial that ended without a stream, since the last
-    /// tally, is a failure now.
+    /// tally, is a failure dated when the dialer counted it. The watch
+    /// keeps only the latest tally, so that tally can also carry a sign of
+    /// life from after the failure; dating the failure at arrival would
+    /// put it after the byte. A tally that carries no instant is dated
+    /// when it arrives.
     pub(super) fn fold(&mut self, tally: DialTally, now: u64) {
         let failed = tally.unopened > self.last.unopened
             || (tally.opened > self.last.opened && tally.unopened > 0);
         if failed {
-            self.failed_at = Some(now);
+            self.failed_at = Some(tally.last_unopened_at.unwrap_or(now));
         }
         self.last = tally;
     }

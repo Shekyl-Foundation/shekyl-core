@@ -125,6 +125,7 @@ mod tests {
             unopened: 3,
             held: 0,
             last_sign_of_life: None,
+            last_unopened_at: None,
         };
         let sink = sink();
         sink(tally);
