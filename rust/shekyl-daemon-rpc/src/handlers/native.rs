@@ -16,28 +16,27 @@ use crate::authority::Authority;
 use crate::chain_facts::FfiP2pFacts;
 use crate::core::CoreRpc;
 use crate::handles::ChainReadHandle;
-use crate::methods::{InternalFault, RpcFault};
+use crate::methods::{pow_hash_refused, InternalFault, RpcFault, RpcRefusal};
 use crate::server::AppState;
 use crate::types::JsonRpcResponse;
 use shekyl_rpc_types::errors::RpcError;
 use std::sync::Arc;
 use tracing::warn;
 
-/// Whether to compute a block's proof-of-work hash: only if the caller asked
-/// **and** the caller is not bounded (§6.3) — the C++ handler's
-/// `req.fill_pow_hash && !restricted`.
-///
-/// Its own function because it is a policy, not an expression: computing the
-/// long hash is the expensive part of a header read, and a bounded caller is
-/// exactly the one that must not be made to do it on request. Dropping the
-/// `!bounded` here fails [`pow_hash_is_never_computed_for_a_bounded_caller`].
-///
-/// RK-5b's methods do **not** use this. They refuse a bounded caller that
-/// asked for the field (`methods::pow_hash_or_refuse`) rather than blanking
-/// it. RT-W10 step 2 brings RK-2's methods under the same refusal (§6.3:
-/// never silently truncated).
-pub(super) fn pow_hash_entitled(requested: bool, bounded: bool) -> bool {
-    requested && !bounded
+/// Whether `method` computes `fill_pow_hash`. A bounded caller who asked is
+/// refused (`methods::pow_hash_refused`), never handed a blank hash.
+/// Dropping the refusal fails [`pow_hash_is_never_computed_for_a_bounded_caller`].
+pub(super) fn admit_pow_hash(
+    method: &'static str,
+    requested: bool,
+    bounded: bool,
+) -> Result<bool, RpcFault> {
+    if requested && bounded {
+        return Err(RpcFault::Refused(RpcRefusal::of_error(&pow_hash_refused(
+            method,
+        ))));
+    }
+    Ok(requested)
 }
 
 /// A JSON-RPC method this crate serves itself.
@@ -182,7 +181,14 @@ pub(super) async fn native_method(
                 Ok(request) => request,
                 Err(fault) => return Some(Err(NativeFail::Fault(fault))),
             };
-            let fill_pow_hash = pow_hash_entitled(request.fill_pow_hash, authority.bounded());
+            let fill_pow_hash = match admit_pow_hash(
+                "get_block",
+                request.fill_pow_hash,
+                authority.bounded(),
+            ) {
+                Ok(fill) => fill,
+                Err(fault) => return Some(Err(NativeFail::Fault(fault))),
+            };
             Some(frame_native(
                 on_chain(state, move |chain| {
                     crate::methods::get_block(chain.as_ref(), &request, fill_pow_hash)
@@ -320,7 +326,14 @@ pub(super) async fn native_method(
                 Ok(request) => request,
                 Err(fault) => return Some(Err(NativeFail::Fault(fault))),
             };
-            let fill_pow_hash = pow_hash_entitled(request.fill_pow_hash, authority.bounded());
+            let fill_pow_hash = match admit_pow_hash(
+                "get_block_header_by_height",
+                request.fill_pow_hash,
+                authority.bounded(),
+            ) {
+                Ok(fill) => fill,
+                Err(fault) => return Some(Err(NativeFail::Fault(fault))),
+            };
             Some(frame_native(
                 on_chain(state, move |chain| {
                     crate::methods::get_block_header_by_height(

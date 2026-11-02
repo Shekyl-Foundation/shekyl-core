@@ -29,7 +29,9 @@
 //! Handlers for binary endpoints (MAP_URI_AUTO_BIN2 family).
 
 use crate::authority::Authority;
+use crate::methods::{bound_exceeded, RpcFault};
 use crate::server::AppState;
+use crate::types::JsonRpcResponse;
 use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -67,7 +69,12 @@ pub async fn get_blocks_by_height(
         return (StatusCode::BAD_REQUEST, "Bad request").into_response();
     };
     if authority.bounded() && restricted_cap_refuses(request.heights.len()) {
-        return bin_status("Too many blocks requested in restricted mode");
+        return bound_json(&bound_exceeded(
+            "get_blocks_by_height.bin",
+            "heights",
+            RESTRICTED_BLOCK_COUNT as u64,
+            request.heights.len() as u64,
+        ));
     }
     let chain = Arc::clone(&state.handles.chain);
     let host = authority.host();
@@ -75,26 +82,45 @@ pub async fn get_blocks_by_height(
         crate::read_methods::get_blocks_by_height(chain.as_ref(), &request, host)
     })
     .await;
-    let Ok(Ok(reply)) = out else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, "facts unavailable").into_response();
-    };
-    octet_stream(reply.to_bin())
+    match out {
+        Ok(Ok(reply)) => octet_stream(reply.to_bin()),
+        Ok(Err(RpcFault::Refused(refusal))) => (
+            StatusCode::OK,
+            [("content-type", "application/json")],
+            serde_json::to_string(&JsonRpcResponse::error_with_data(
+                serde_json::Value::Null,
+                refusal.code,
+                refusal.message,
+                refusal.data,
+            ))
+            .expect("a refusal serializes"),
+        )
+            .into_response(),
+        _ => (StatusCode::INTERNAL_SERVER_ERROR, "facts unavailable").into_response(),
+    }
+}
+
+/// The JSON-RPC error object for a bound, on HTTP 200. A `.bin` success
+/// stays octet-stream; this refusal is the same object every other
+/// surface uses (RW-Q3).
+fn bound_json(error: &shekyl_rpc_types::errors::RpcError) -> axum::response::Response {
+    (
+        StatusCode::OK,
+        [("content-type", "application/json")],
+        serde_json::to_string(&JsonRpcResponse::error_with_data(
+            serde_json::Value::Null,
+            error.class.code(),
+            error.diagnostic.message.clone(),
+            serde_json::to_value(&error.diagnostic).ok(),
+        ))
+        .expect("a refusal serializes"),
+    )
+        .into_response()
 }
 
 /// Inclusive-at-the-cap: 1000 heights are served, 1001 are not.
 fn restricted_cap_refuses(count: usize) -> bool {
     count > RESTRICTED_BLOCK_COUNT
-}
-
-/// A 200 carrying only a non-OK `status`, which is how this endpoint reports
-/// a refusal — the wallet and the engine branch on the status, so a
-/// transport error here would be a different reply, not a tidier one.
-fn bin_status(status: &str) -> axum::response::Response {
-    let reply = shekyl_rpc_types::GetBlocksByHeightResponse {
-        status: shekyl_rpc_types::RpcStatus(status.to_owned()),
-        blocks: Vec::new(),
-    };
-    octet_stream(reply.to_bin())
 }
 
 fn octet_stream(encoded: Result<Vec<u8>, shekyl_rpc_types::BinError>) -> axum::response::Response {
@@ -133,35 +159,44 @@ pub async fn get_o_indexes(State(state): State<Arc<AppState>>, body: Bytes) -> i
 
 #[cfg(test)]
 mod tests {
-    use super::{bin_status, restricted_cap_refuses, RESTRICTED_BLOCK_COUNT};
+    use super::{bound_json, restricted_cap_refuses, RESTRICTED_BLOCK_COUNT};
+    use crate::methods::bound_exceeded;
     use axum::http::StatusCode;
-    use shekyl_rpc_types::{GetBlocksByHeightRequest, GetBlocksByHeightResponse};
+    use shekyl_rpc_types::errors::ErrorClass;
+    use shekyl_rpc_types::GetBlocksByHeightRequest;
 
-    /// This bites against changing `bin_status` to a transport error (4xx)
-    /// or dropping the octet-stream type. It does NOT cover the handler
-    /// wiring `state.restricted && restricted_cap_refuses` — naming that
-    /// handler pulls the C++ FFI archive into the unit-test link set
-    /// (`server::handler_for`).
+    /// The over-cap reply is the JSON-RPC error object on HTTP 200, not an
+    /// epee body and not a 4xx. Naming the handler would pull the C++ FFI
+    /// archive into the unit-test link set (`server::handler_for`).
     #[tokio::test]
-    async fn the_restricted_cap_refuses_in_the_reply_status_not_the_transport() {
-        let response = bin_status("Too many blocks requested in restricted mode");
+    async fn the_block_cap_refuses_as_over_resource_bound() {
+        let response = bound_json(&bound_exceeded(
+            "get_blocks_by_height.bin",
+            "heights",
+            RESTRICTED_BLOCK_COUNT as u64,
+            RESTRICTED_BLOCK_COUNT as u64 + 1,
+        ));
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
             response.headers().get(axum::http::header::CONTENT_TYPE),
-            Some(&axum::http::HeaderValue::from_static(
-                "application/octet-stream"
-            ))
+            Some(&axum::http::HeaderValue::from_static("application/json"))
         );
         let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("body");
-        let back = GetBlocksByHeightResponse::from_bin(&bytes).expect("decode");
-        assert!(!back.status.is_ok(), "the refusal travels in `status`");
+        let value: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
         assert_eq!(
-            back.status.0,
-            "Too many blocks requested in restricted mode"
+            value
+                .pointer("/error/code")
+                .and_then(serde_json::Value::as_i64),
+            Some(ErrorClass::OverResourceBound.code())
         );
-        assert!(back.blocks.is_empty());
+        let message = value
+            .pointer("/error/message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("");
+        assert!(message.contains("1000"), "{message}");
+        assert!(message.contains("1001"), "{message}");
     }
 
     /// The boundary itself: at the cap a request is served, one past it is

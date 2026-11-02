@@ -32,7 +32,9 @@
 //! with no row is not a route.
 
 use crate::authority::Authority;
+use crate::methods::RpcFault;
 use crate::server::AppState;
+use crate::types::JsonRpcResponse;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -396,7 +398,20 @@ fn render<T: serde::Serialize>(
         },
         // A store that contradicts itself is reported in its own words:
         // which invariant, and with what numbers. The handler logged it.
-        Ok(Err(crate::methods::RpcFault::Store(store))) => json_error(&store.to_string()),
+        Ok(Err(RpcFault::Store(store))) => json_error(&store.to_string()),
+        // A bound or a field the connection may not ask for. The class is
+        // the code; HTTP 200 carries the error object (RW-Q3).
+        Ok(Err(RpcFault::Refused(refusal))) => (
+            StatusCode::OK,
+            [("content-type", "application/json")],
+            serde_json::to_string(&JsonRpcResponse::error_with_data(
+                serde_json::Value::Null,
+                refusal.code,
+                refusal.message,
+                refusal.data,
+            ))
+            .expect("a refusal serializes"),
+        ),
         Ok(Err(fault)) => {
             tracing::warn!(?fault, method, "facts unavailable");
             json_error(unavailable)

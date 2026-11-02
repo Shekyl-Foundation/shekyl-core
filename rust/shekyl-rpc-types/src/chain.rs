@@ -237,7 +237,12 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// 3.65: `mining_status.speed` is the hash count over its window of
 /// complete seconds. A whole-hash quotient read `0` for a miner below
 /// one hash a second. `get_version` gains nothing.
-pub const CORE_RPC_VERSION_MINOR: u32 = 65;
+/// 3.66: a bounded connection over an inherited list cap, or asking for
+/// `fill_pow_hash`, is `OverResourceBound` (-32003) with the bound named.
+/// The four caps stay 1000, 1000, 100 and 5000. `calc_pow` and
+/// `get_coinbase_tx_sum` stay refused to a bounded caller until their
+/// costs are set. `get_version` gains nothing.
+pub const CORE_RPC_VERSION_MINOR: u32 = 66;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -304,11 +309,9 @@ pub const CORE_RPC_ERROR_CODE_WRONG_PARAM: i64 = -1;
 /// (`CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT`).
 pub const CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT: i64 = -2;
 
-/// JSON-RPC error code for a request the restricted listener declines
-/// (`CORE_RPC_ERROR_CODE_RESTRICTED`) — a cap exceeded, or a privileged field
-/// asked for. **A refusal, never a silently emptied field**: the C++ answered
-/// `fill_pow_hash` under restriction with an empty string and status OK,
-/// reporting success about a question it had declined.
+/// JSON-RPC error code the C++ restricted listener used (`-19`). As of
+/// 3.66 a cap and `fill_pow_hash` refuse as `OverResourceBound` (-32003).
+/// This constant remains so a client can still name the old code.
 pub const CORE_RPC_ERROR_CODE_RESTRICTED: i64 = -19;
 /// JSON-RPC error code for a daemon-side failure the method has a contract
 /// for (`CORE_RPC_ERROR_CODE_INTERNAL_ERROR`) — e.g. a store that reports a
@@ -668,11 +671,12 @@ mod tests {
         // full body under `archived`, and gives `get_blocks_by_height.bin`
         // its `prune` switch (SB-Q2, PDM-Q10). Both branches had written
         // 64, so `mining_status.speed` carrying the hash count over its
-        // window took the next minor, as 3.44 did.
-        assert_eq!(CORE_RPC_VERSION, 196_673);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 65);
+        // window took the next minor, as 3.44 did. 3.66 makes a bounded
+        // connection's list cap and `fill_pow_hash` `OverResourceBound`.
+        assert_eq!(CORE_RPC_VERSION, 196_674);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 66);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 65);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 66);
     }
 
     #[test]

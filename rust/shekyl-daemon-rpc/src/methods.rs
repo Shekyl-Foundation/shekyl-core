@@ -20,8 +20,7 @@ use shekyl_rpc_types::{
 use shekyl_rpc_types::{
     BlockHeader, GetBlockCountResponse, GetBlockHashParams, GetBlockHeaderByHeightRequest,
     GetBlockHeaderByHeightResponse, GetBlockRequest, GetBlockResponse, GetHeightResponse,
-    GetVersionResponse, HashHex, RpcStatus, CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
-    CORE_RPC_ERROR_CODE_RESTRICTED, CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT,
+    GetVersionResponse, HashHex, RpcStatus,     CORE_RPC_ERROR_CODE_INTERNAL_ERROR, CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT,
     CORE_RPC_ERROR_CODE_WRONG_PARAM,
 };
 use shekyl_rpc_types::{
@@ -132,6 +131,66 @@ impl RpcRefusal {
             data: None,
         }
     }
+
+    /// The JSON-RPC refusal for [`shekyl_rpc_types::errors::RpcError`]: the
+    /// class is the code, and `data` is the typed diagnostic.
+    #[must_use]
+    pub fn of_error(error: &shekyl_rpc_types::errors::RpcError) -> Self {
+        Self {
+            code: error.class.code(),
+            message: error.diagnostic.message.clone(),
+            data: serde_json::to_value(&error.diagnostic).ok(),
+        }
+    }
+}
+
+/// A bounded connection asked for more than one request may
+/// (`RPC_CHANNEL.md` §6.3, RT-W10 step 2). The class is
+/// [`ErrorClass::OverResourceBound`]. The message names the bound.
+///
+/// [`ErrorClass::OverResourceBound`]: shekyl_rpc_types::errors::ErrorClass::OverResourceBound
+#[must_use]
+pub fn bound_exceeded(method: &str, unit: &str, bound: u64, asked: u64) -> shekyl_rpc_types::errors::RpcError {
+    use shekyl_rpc_types::errors::{Diagnostic, ErrorClass, RpcError};
+    let message = format!(
+        "{method} accepts at most {bound} {unit} from a bounded connection; \
+         this request asked for {asked}"
+    );
+    RpcError::new(
+        ErrorClass::OverResourceBound,
+        Diagnostic::new("rpc.bound.exceeded", message)
+            .param("method", method)
+            .param("bound", bound.to_string())
+            .param("asked", asked.to_string()),
+    )
+}
+
+/// A bounded connection asked for `fill_pow_hash`. Its cost is not set
+/// yet, so the field is refused rather than blanked or served unbounded
+/// (RT-W10 step 2). The host's administrator is not bounded and still
+/// receives it.
+#[must_use]
+pub fn pow_hash_refused(method: &str) -> shekyl_rpc_types::errors::RpcError {
+    use shekyl_rpc_types::errors::{Diagnostic, ErrorClass, RpcError};
+    RpcError::new(
+        ErrorClass::OverResourceBound,
+        Diagnostic::new(
+            "rpc.bound.pow_hash",
+            format!(
+                "{method} does not serve fill_pow_hash to a bounded connection; \
+                 its cost is not set yet"
+            ),
+        )
+        .param("method", method),
+    )
+}
+
+/// [`RpcFault::Refused`] for [`bound_exceeded`].
+#[must_use]
+pub fn bound_fault(method: &str, unit: &str, bound: u64, asked: u64) -> RpcFault {
+    RpcFault::Refused(RpcRefusal::of_error(&bound_exceeded(
+        method, unit, bound, asked,
+    )))
 }
 
 /// A failure on the transport's side of a native method — never a fact
@@ -482,9 +541,9 @@ fn too_big_height(height: BlockHeight, chain: ChainCount) -> RpcFault {
 /// `INTERNAL_ERROR` and its wording (the shim has already logged the
 /// inconsistency, so the fault is not silent).
 ///
-/// `fill_pow_hash` arrives already ANDed with the listener's entitlement:
-/// the restricted listener never sets it, as the C++ handler enforced with
-/// `req.fill_pow_hash && !restricted`.
+/// `fill_pow_hash` is the caller's request. The handler refuses it for a
+/// bounded connection before this runs (`pow_hash_refused`); this function
+/// computes the hash whenever it is passed `true`.
 pub fn get_block_header_by_height(
     facts: &dyn ChainFacts,
     height: u64,
@@ -563,21 +622,23 @@ fn block_header(facts: &crate::chain_facts::BlockHeaderFacts) -> BlockHeader {
 
 // ─── RK-4c: the transaction read set ─────────────────────────────────────────
 
-/// `RESTRICTED_BLOCK_COUNT` — the cap a restricted listener applies to
-/// `get_block_header_by_hash`'s hash list (`core_rpc_server.cpp`).
+/// `RESTRICTED_BLOCK_COUNT` — how many hashes `get_block_header_by_hash`
+/// accepts from a bounded connection, and how many heights
+/// `/get_blocks_by_height.bin` accepts. The number is the inherited cap
+/// (`RPC_CHANNEL.md` §6.3). A bounded connection over it is
+/// `OverResourceBound`.
 pub const RESTRICTED_BLOCK_COUNT: usize = 1000;
 
 /// `RESTRICTED_BLOCK_HEADER_RANGE` — the span cap on
-/// `get_block_headers_range`.
+/// `get_block_headers_range` for a bounded connection. Inherited (§6.3).
 pub const RESTRICTED_BLOCK_HEADER_RANGE: u64 = 1000;
 
-/// `RESTRICTED_TRANSACTIONS_COUNT` — the cap a restricted listener applies to
-/// `/get_transactions`. It fires for the first time in this tree: the C++
-/// gated it on `m_restricted && ctx` while the bridge passed a null `ctx`
-/// (#570 fixed the bridge; this carries the constant to the native handler).
+/// `RESTRICTED_TRANSACTIONS_COUNT` — how many transactions `/get_transactions`
+/// accepts from a bounded connection. Inherited (§6.3).
 pub const RESTRICTED_TRANSACTIONS_COUNT: usize = 100;
 
-/// `RESTRICTED_SPENT_KEY_IMAGES_COUNT` — the same, for `/is_key_image_spent`.
+/// `RESTRICTED_SPENT_KEY_IMAGES_COUNT` — how many key images
+/// `/is_key_image_spent` accepts from a bounded connection. Inherited (§6.3).
 pub const RESTRICTED_SPENT_KEY_IMAGES_COUNT: usize = 5000;
 
 /// The two parse refusals the C++ handler distinguished, kept distinct because
@@ -730,21 +791,16 @@ pub fn project_transactions(
 
 // ── RK-5b: the header remainder ─────────────────────────────────────────────
 
-/// Whether a caller may have the long hash computed for it.
+/// Whether `method` computes `fill_pow_hash` for this caller.
 ///
-/// **Refusal, not a blank field.** The C++ wrote `fill_pow_hash && !restricted`
-/// throughout: a restricted caller that asked for a privileged field got an
-/// empty one back with status OK, which reports success about a question it
-/// declined to answer. `5b0c32f51` ruled the other way on the staking-read
-/// path — loud, never the degrade arm — and the one production caller of these
-/// methods passes `false`, so refusing costs nothing.
-fn pow_hash_or_refuse(requested: bool, bounded: bool) -> Result<bool, RpcFault> {
+/// A bounded connection is refused the field (`OverResourceBound`): its
+/// cost is not set yet, and a blank hash would report success about a
+/// question the method declined. The host's administrator is not bounded.
+fn pow_hash_or_refuse(method: &str, requested: bool, bounded: bool) -> Result<bool, RpcFault> {
     if requested && bounded {
-        return Err(RpcFault::Refused(RpcRefusal {
-            code: CORE_RPC_ERROR_CODE_RESTRICTED,
-            message: "fill_pow_hash is not available on the restricted listener".to_owned(),
-            data: None,
-        }));
+        return Err(RpcFault::Refused(RpcRefusal::of_error(&pow_hash_refused(
+            method,
+        ))));
     }
     Ok(requested)
 }
@@ -852,7 +908,7 @@ pub fn get_last_block_header(
     fill_pow_hash: bool,
     bounded: bool,
 ) -> Result<GetLastBlockHeaderResponse, RpcFault> {
-    let pow = pow_hash_or_refuse(fill_pow_hash, bounded)?;
+    let pow = pow_hash_or_refuse("get_last_block_header", fill_pow_hash, bounded)?;
     let tip = facts.chain_tip()?;
     // **The readiness check the C++ had, and only here.** `CHECK_CORE_READY()`
     // guarded `on_get_last_block_header` alone among this slice's methods —
@@ -923,14 +979,15 @@ pub fn get_block_header_by_hash(
     request: &GetBlockHeaderByHashRequest,
     bounded: bool,
 ) -> Result<GetBlockHeaderByHashResponse, RpcFault> {
-    let pow = pow_hash_or_refuse(request.fill_pow_hash, bounded)?;
     if bounded && request.hashes.len() > RESTRICTED_BLOCK_COUNT {
-        return Err(RpcFault::Refused(RpcRefusal {
-            code: CORE_RPC_ERROR_CODE_RESTRICTED,
-            message: "Too many block headers requested in restricted mode".to_owned(),
-            data: None,
-        }));
+        return Err(bound_fault(
+            "get_block_header_by_hash",
+            "hashes",
+            RESTRICTED_BLOCK_COUNT as u64,
+            request.hashes.len() as u64,
+        ));
     }
+    let pow = pow_hash_or_refuse("get_block_header_by_hash", request.fill_pow_hash, bounded)?;
     let mut block_headers = Vec::with_capacity(request.hashes.len());
     for hash in &request.hashes {
         let at = facts.block_header_at(BlockLookup::Hash(hash.to_bytes()), pow)?;
@@ -951,7 +1008,6 @@ pub fn get_block_headers_range(
     request: &GetBlockHeadersRangeRequest,
     bounded: bool,
 ) -> Result<GetBlockHeadersRangeResponse, RpcFault> {
-    let pow = pow_hash_or_refuse(request.fill_pow_hash, bounded)?;
     // **Both endpoints are bounded against the tip before any per-height
     // work.** The C++ refused `start > end` *and* either endpoint at or past
     // the chain height in one O(1) test; the first port kept only the
@@ -987,12 +1043,18 @@ pub fn get_block_headers_range(
     // deleted singular `hash` produced on `get_block_header_by_hash`, in the
     // second of the two methods that carry this cap. Found by porting both.
     if bounded && span > RESTRICTED_BLOCK_HEADER_RANGE {
-        return Err(RpcFault::Refused(RpcRefusal {
-            code: CORE_RPC_ERROR_CODE_RESTRICTED,
-            message: "Too many block headers requested.".to_owned(),
-            data: None,
-        }));
+        return Err(bound_fault(
+            "get_block_headers_range",
+            "headers",
+            RESTRICTED_BLOCK_HEADER_RANGE,
+            span,
+        ));
     }
+    let pow = pow_hash_or_refuse(
+        "get_block_headers_range",
+        request.fill_pow_hash,
+        bounded,
+    )?;
     let mut headers = Vec::new();
     for raw in request.start_height..=request.end_height {
         let height = BlockHeight::from_raw(raw);
@@ -1938,10 +2000,10 @@ pub(crate) mod tests {
         );
 
         let mut ours: serde_json::Value = serde_json::to_value(&out).unwrap();
-        // Head of the `get_version` chain (`_v42` = 3.65). A bump that
+        // Head of the `get_version` chain (`_v43` = 3.66). A bump that
         // forgets this include fails on `version` below.
         let mut oracle: serde_json::Value = serde_json::from_str(include_str!(
-            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v42.json"
+            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v43.json"
         ))
         .unwrap();
         for moving in ["consensus_constants_digest", "genesis_hash"] {
@@ -2481,9 +2543,12 @@ pub(crate) mod tests {
         for restricted in [true, false] {
             let out = get_last_block_header(&f, true, restricted);
             if restricted {
-                assert!(
-                    matches!(out, Err(RpcFault::Refused(_))),
-                    "a privileged field must be refused, not emptied"
+                let Err(RpcFault::Refused(refusal)) = out else {
+                    panic!("a bounded caller asking for the hash must be refused, not emptied");
+                };
+                assert_eq!(
+                    refusal.code,
+                    shekyl_rpc_types::errors::ErrorClass::OverResourceBound.code()
                 );
             } else {
                 assert!(out.is_ok());

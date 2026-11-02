@@ -27,8 +27,9 @@ use shekyl_types::{BlockHash, BlockHeight, KeyImage, PCanonicalId, TxHash};
 
 use crate::core::FullForm;
 use crate::methods::{
-    parse_request_hashes, split_128, RpcFault, RpcRefusal, KI_PARSE_FAILED, RESTRICTED_BLOCK_COUNT,
-    RESTRICTED_SPENT_KEY_IMAGES_COUNT, RESTRICTED_TRANSACTIONS_COUNT, TX_PARSE_FAILED,
+    bound_exceeded, bound_fault, parse_request_hashes, split_128, RpcFault, RpcRefusal,
+    KI_PARSE_FAILED, RESTRICTED_BLOCK_COUNT, RESTRICTED_SPENT_KEY_IMAGES_COUNT,
+    RESTRICTED_TRANSACTIONS_COUNT, TX_PARSE_FAILED,
 };
 use crate::read_facts::{
     ChainReadFacts, CoinbaseRange, CurveTreeFacts, ListedTx, PowAt, PowSeed, SpentAt,
@@ -463,10 +464,12 @@ pub fn get_blocks_by_height(
     host: bool,
 ) -> Result<GetBlocksByHeightResponse, RpcFault> {
     if caller_bounded(host) && request.heights.len() > RESTRICTED_BLOCK_COUNT {
-        return Ok(GetBlocksByHeightResponse {
-            status: RpcStatus("Too many blocks requested in restricted mode".to_owned()),
-            blocks: Vec::new(),
-        });
+        return Err(bound_fault(
+            "get_blocks_by_height.bin",
+            "heights",
+            RESTRICTED_BLOCK_COUNT as u64,
+            request.heights.len() as u64,
+        ));
     }
     let heights: Vec<BlockHeight> = request
         .heights
@@ -544,8 +547,11 @@ pub fn get_transactions(
     // The per-request cap applies to a bounded caller (§6.3); RT-W10 step 2
     // replaces it with the bound per row.
     if caller_bounded(host) && request.txs_hashes.len() > RESTRICTED_TRANSACTIONS_COUNT {
-        return Ok(status_only(
-            "Too many transactions requested in restricted mode",
+        return Err(bound_exceeded(
+            "get_transactions",
+            "transactions",
+            RESTRICTED_TRANSACTIONS_COUNT as u64,
+            request.txs_hashes.len() as u64,
         ));
     }
     let ids = match parse_request_hashes(&request.txs_hashes, TX_PARSE_FAILED) {
@@ -604,7 +610,12 @@ pub fn is_key_image_spent(
         spent_status: Vec::new(),
     };
     if caller_bounded(host) && request.key_images.len() > RESTRICTED_SPENT_KEY_IMAGES_COUNT {
-        return Ok(refused("Too many key images queried in restricted mode"));
+        return Err(bound_fault(
+            "is_key_image_spent",
+            "key images",
+            RESTRICTED_SPENT_KEY_IMAGES_COUNT as u64,
+            request.key_images.len() as u64,
+        ));
     }
     let images = match parse_request_hashes(&request.key_images, KI_PARSE_FAILED) {
         Ok(images) => images,

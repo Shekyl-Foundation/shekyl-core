@@ -29,7 +29,7 @@
 //! Handler for the `/json_rpc` endpoint (JSON-RPC 2.0 dispatch).
 
 #[cfg(test)]
-use super::native::{frame_native, join_fault, native_method_for, pow_hash_entitled, NativeMethod};
+use super::native::{admit_pow_hash, frame_native, join_fault, native_method_for, NativeMethod};
 use super::native::{native_fault, native_method, NativeFail};
 use crate::authority::{refusal, Authority};
 #[cfg(test)]
@@ -341,10 +341,10 @@ mod tests {
     /// cells may be true.
     #[test]
     fn pow_hash_is_never_computed_for_a_bounded_caller() {
-        assert!(pow_hash_entitled(true, false), "asked for, the host");
-        assert!(!pow_hash_entitled(true, true), "asked for, but bounded");
-        assert!(!pow_hash_entitled(false, false), "not asked for");
-        assert!(!pow_hash_entitled(false, true), "not asked for, bounded");
+        assert!(admit_pow_hash("get_block", true, false).unwrap());
+        assert!(admit_pow_hash("get_block", true, true).is_err());
+        assert!(!admit_pow_hash("get_block", false, false).unwrap());
+        assert!(!admit_pow_hash("get_block", false, true).unwrap());
     }
 
     /// Each native name is gated exactly as specified, and none is gated on
