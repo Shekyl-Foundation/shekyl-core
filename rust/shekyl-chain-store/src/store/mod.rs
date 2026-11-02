@@ -344,28 +344,7 @@ impl ChainStore {
                 }
             },
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                // The header is judged on a read-only open first. A writable
-                // open writes into the file even when nothing is committed
-                // (the engine records its allocator state when it closes),
-                // so a file `verify` refuses is refused unwritten. The
-                // exception is a file the engine must repair first: a
-                // read-only open answers `RepairAborted`, and only the
-                // writable open below can repair it, after which it is
-                // judged.
-                match builder.open_read_only(path) {
-                    Ok(read_only) => {
-                        header::verify(
-                            &read_only.begin_read().map_err(EngineError::BeginRead)?,
-                            epoch,
-                        )?;
-                    }
-                    Err(redb::DatabaseError::RepairAborted) => {}
-                    Err(e) => return Err(EngineError::Open(e).into()),
-                }
-                let db = builder.open(path).map_err(EngineError::Open)?;
-                let provenance =
-                    header::verify(&db.begin_read().map_err(EngineError::BeginRead)?, epoch)?;
-                (db, provenance)
+                open_existing(&builder, path, epoch)?
             }
             Err(e) => return Err(EngineError::Open(redb::DatabaseError::Storage(e.into())).into()),
         };
@@ -710,6 +689,37 @@ fn arm_write(db: &Database) -> Result<WriteTransaction, StoreError> {
         .map_err(EngineError::Durability)?;
     txn.set_two_phase_commit(TWO_PHASE_COMMIT);
     Ok(txn)
+}
+
+/// Reopen an existing file.
+///
+/// The read-only open is the refusal filter: a file [`header::verify`]
+/// rejects is rejected with nothing written, because a writable open
+/// records the engine's allocator state when it closes. `RepairAborted`
+/// is not a refusal. A read-only open returns it before any table read
+/// when the file needs recovery, and only the writable open repairs it.
+/// The writable open's `verify` is the admission, and the provenance of
+/// the handle it returns. The filter's result is not that provenance:
+/// the file can change between the two opens, and the writable open is
+/// the one that holds it.
+fn open_existing(
+    builder: &redb::Builder,
+    path: &Path,
+    epoch: crate::codec::SettlementEpochBlocks,
+) -> Result<(Database, Provenance), StoreError> {
+    match builder.open_read_only(path) {
+        Ok(read_only) => {
+            header::verify(
+                &read_only.begin_read().map_err(EngineError::BeginRead)?,
+                epoch,
+            )?;
+        }
+        Err(redb::DatabaseError::RepairAborted) => {}
+        Err(e) => return Err(EngineError::Open(e).into()),
+    }
+    let db = builder.open(path).map_err(EngineError::Open)?;
+    let provenance = header::verify(&db.begin_read().map_err(EngineError::BeginRead)?, epoch)?;
+    Ok((db, provenance))
 }
 
 /// Hand a just-created, still-empty file to the engine and seal its header

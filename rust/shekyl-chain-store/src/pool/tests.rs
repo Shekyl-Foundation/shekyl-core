@@ -18,7 +18,7 @@ use shekyl_store_codec::Canonical;
 
 use crate::codec::{PropertyCellBytes, SCHEMA_VERSION};
 use crate::store::{
-    ErrorClass, PoolCannot, StoreCannot, StoreInvariant, DURABILITY, TWO_PHASE_COMMIT,
+    EngineError, ErrorClass, PoolCannot, StoreCannot, StoreInvariant, DURABILITY, TWO_PHASE_COMMIT,
 };
 
 /// A refused file's bytes and modification time, to hold a refusal to
@@ -450,6 +450,103 @@ fn another_version_recreates_and_everything_else_is_refused() {
         "{err:?}"
     );
     assert_eq!(untouched(&path), before, "refused unwritten");
+    drop(std::fs::remove_file(&path));
+}
+
+/// A reader holding the file stops a recreate, and the file stays byte for
+/// byte.
+///
+/// The writable open is the exclusive claim, and the engine takes that
+/// lock before it writes, so the refusal is unwritten. Skipping the open
+/// and renaming under the reader fails this test: the recreate succeeds,
+/// or the bytes change. Dropping the claim before `retire` does not. The
+/// reader never lets the open succeed, so the rename is not reached. The
+/// claim is held across `retire` because a shared lock does not stop a
+/// rename once the open has the file.
+#[test]
+fn a_live_reader_stops_a_recreate_and_the_file_stays() {
+    let path = tmp("reader");
+    let (store, _) = PoolStore::create(&path).unwrap();
+    store
+        .write(|b| b.insert(txid(1), &admitted(), b"one"))
+        .unwrap();
+    {
+        let txn = store.db.begin_write().unwrap();
+        {
+            let mut header = txn.open_table(POOL_HEADER).unwrap();
+            let other = PoolSchemaVersion::new(POOL_SCHEMA_VERSION.get() + 1);
+            header
+                .insert(
+                    POOL_VERSION_KEY,
+                    Raw::<PropertyCellBytes>::new(&other.encode()),
+                )
+                .unwrap();
+        }
+        txn.commit().unwrap();
+    }
+    drop(store);
+
+    let before = untouched(&path);
+    let reader = redb::Builder::new().open_read_only(&path).unwrap();
+    let err = PoolStore::create(&path).expect_err("a reader holds the file");
+    assert!(
+        matches!(
+            err,
+            StoreError::Engine(EngineError::Open(redb::DatabaseError::DatabaseAlreadyOpen))
+        ),
+        "{err:?}"
+    );
+    assert_eq!(
+        untouched(&path),
+        before,
+        "the refused recreate wrote nothing"
+    );
+    drop(reader);
+
+    let (store, how) = PoolStore::create(&path).unwrap();
+    assert_eq!(
+        how,
+        PoolOpen::Recreated {
+            from: PoolSchemaVersion::new(POOL_SCHEMA_VERSION.get() + 1)
+        }
+    );
+    assert_eq!(store.begin_read().unwrap().len().unwrap(), 0);
+    drop(store);
+    drop(std::fs::remove_file(&path));
+}
+
+/// A cleanly shut-down file with redb's recovery bit set is `RepairAborted`
+/// to a read-only open, and the writable open returns the committed row.
+///
+/// Mapping that error to a hard refusal fails this test. Shortening the
+/// file does not construct the condition: with the bit clear, a short file
+/// is corruption, not recovery.
+#[test]
+fn a_recovery_bit_reopens_the_committed_row() {
+    let path = tmp("repair");
+    let (store, _) = PoolStore::create(&path).unwrap();
+    store
+        .write(|b| b.insert(txid(9), &admitted(), b"kept"))
+        .unwrap();
+    drop(store);
+
+    crate::redb_recovery::mark_recovery_required(&path);
+    assert!(
+        crate::redb_recovery::read_only_open_is_repair_aborted(&path),
+        "the bit is the repair arm, not a foreign file"
+    );
+    let (store, how) = PoolStore::create(&path).unwrap();
+    assert_eq!(how, PoolOpen::Opened);
+    assert_eq!(
+        store
+            .begin_read()
+            .unwrap()
+            .blob(&txid(9))
+            .unwrap()
+            .as_deref(),
+        Some(b"kept".as_slice())
+    );
+    drop(store);
     drop(std::fs::remove_file(&path));
 }
 
