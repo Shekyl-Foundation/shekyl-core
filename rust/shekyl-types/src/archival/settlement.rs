@@ -481,7 +481,8 @@ impl SupportCount {
 /// one per tree, so the shard is not part of the key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SupportIssued {
-    /// The shard this draw selected, inside the archive at its block.
+    /// The shard this draw selected, below the archive width its epoch's
+    /// snapshot took at `h_open(E)` (pin 2; `SO-D12` S1).
     pub shard: ShardId,
     /// Whether a pass record for this draw has been admitted.
     pub passed: bool,

@@ -1099,20 +1099,26 @@ verdict on a block, never a clamp and never a skipped row.
    against `D` as of `h_open(E)`, so a `D` that drifted between admission
    and settlement would change which pair a draw names. The digest covers
    the pairs and each persona's receipt key, the two things a draw's
-   index resolves to:
+   index resolves to, and the support stream's two `h_open(E)` facts
+   filed with them (`SO-D12q`, 2026-11-01): the archive width a support
+   draw selects from, and the complete trees seated on that stream, each
+   with its receipt key (`ARCHIVAL_SUPPORT_DRAW.md` §13):
 
    ```text
-   cSHAKE256_32("shekyl/archival-drawable-epoch-v1",
+   cSHAKE256_32("shekyl/archival-drawable-epoch-v2",
          E_le8
        ‖ n_pairs_le8
        ‖ for each pair, canonical order:     p_canonical_id[32] ‖ shard_id_le8
        ‖ n_personas_le8
        ‖ for each persona, ascending by id:  p_canonical_id[32] ‖ receipt_sign_pk[1837]
+       ‖ archive_width_le8
+       ‖ n_members_le8
+       ‖ for each member, ascending by id:   p_canonical_id[32] ‖ receipt_sign_pk[1837]
    )
    ```
 
    The personas are those that hold a pair, and a key is hashed once per
-   persona. Every field is fixed-width and each list is preceded by its
+   persona. A member holds no pair, so it is in the member list only. Every field is fixed-width and each list is preceded by its
    count. An empty `D` has a digest, the empty set's, which genesis
    writes for epoch 0; no value stands for an absent one.
 3. **`passes ≤ issued`**, a typed halt, beneath both. The row type holds
