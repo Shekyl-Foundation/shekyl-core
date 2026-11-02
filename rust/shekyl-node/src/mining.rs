@@ -27,7 +27,7 @@ use shekyl_daemon_rpc::mining_facts::{
 use shekyl_daemon_rpc::mining_methods::codes;
 use shekyl_hash_budget::Budget;
 use shekyl_miner::{
-    Draining, FoundBlocks, Job, JobBoard, Miner, MinerConfig, MinerStartRefused, MinerStatus,
+    DrainSlot, FoundBlocks, Job, JobBoard, Miner, MinerConfig, MinerStartRefused, MinerStatus,
     MiningAddress,
 };
 use shekyl_pow_randomx::{CacheStore, Seedhash};
@@ -121,11 +121,12 @@ pub struct MiningControl {
     tips: watch::Receiver<TipChanged>,
     pool: PoolHealth,
     miner: Mutex<Option<Miner>>,
-    /// Stopped miners' workers still finishing the hash they were in. A
-    /// stop does not wait for them; [`Self::start`] waits for those holding
-    /// another seed's cache, and [`Node::stop`](crate::Node::stop) joins
-    /// the rest after the store has closed.
-    draining: Mutex<Vec<Draining>>,
+    /// The stopped miner's workers still finishing the hash they were in,
+    /// one set at most ([`DrainSlot`]). A stop does not wait for them;
+    /// [`Self::start`] waits for a set holding another seed's cache, and
+    /// [`Node::stop`](crate::Node::stop) joins what is left after the store
+    /// has closed.
+    draining: Mutex<DrainSlot>,
     /// Set by [`Node::stop`](crate::Node::stop): no miner starts after it.
     closed: AtomicBool,
 }
@@ -150,7 +151,7 @@ impl MiningControl {
             tips: watches.tips,
             pool,
             miner: Mutex::new(None),
-            draining: Mutex::new(Vec::new()),
+            draining: Mutex::new(DrainSlot::default()),
             closed: AtomicBool::new(false),
         }
     }
@@ -171,26 +172,22 @@ impl MiningControl {
     /// still in: [`Node::stop`](crate::Node::stop) calls it last, after the
     /// store has closed.
     pub(crate) fn join_drained(&self) {
-        let draining = std::mem::take(&mut *self.drain_lock());
-        for workers in draining {
-            workers.join();
-        }
+        self.drain_lock().join();
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Option<Miner>> {
         self.miner.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn drain_lock(&self) -> std::sync::MutexGuard<'_, Vec<Draining>> {
+    fn drain_lock(&self) -> std::sync::MutexGuard<'_, DrainSlot> {
         self.draining.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Keep a stopped miner's workers, and join any earlier ones that have
-    /// already returned (their join does not wait).
-    fn park(&self, workers: Draining) {
-        let mut draining = self.drain_lock();
-        reap_finished(&mut draining);
-        draining.push(workers);
+    /// Keep a stopped miner's workers. An earlier set still draining is
+    /// joined first ([`DrainSlot::park`]); with none, this waits for
+    /// nothing.
+    fn park(&self, workers: shekyl_miner::Draining) {
+        self.drain_lock().park(workers);
     }
 
     /// Before a start: join the stopped workers that still hold a cache for
@@ -203,16 +200,7 @@ impl MiningControl {
             .board
             .posted()
             .map(|(_, job)| Seedhash::from_bytes(*job.seed.as_bytes()));
-        let mut draining = self.drain_lock();
-        reap_finished(&mut draining);
-        let (other, same): (Vec<_>, Vec<_>) = std::mem::take(&mut *draining)
-            .into_iter()
-            .partition(|workers| workers.holds_other_than(seed.as_ref()));
-        *draining = same;
-        drop(draining);
-        for workers in other {
-            workers.join();
-        }
+        self.drain_lock().settle_for(seed.as_ref());
     }
 
     /// Start the miner with `threads` workers; `None` is the host's
@@ -429,18 +417,6 @@ impl MiningFacts for MiningControl {
             pool_retired: self.pool.retired(),
             absent: status.no_job.as_ref().map(no_job_diagnostic),
         })
-    }
-}
-
-/// Join the stopped workers that have all returned. Their join does not
-/// wait.
-fn reap_finished(draining: &mut Vec<Draining>) {
-    let (done, live): (Vec<_>, Vec<_>) = std::mem::take(draining)
-        .into_iter()
-        .partition(Draining::finished);
-    *draining = live;
-    for workers in done {
-        workers.join();
     }
 }
 

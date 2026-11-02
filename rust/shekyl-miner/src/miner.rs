@@ -91,6 +91,18 @@ struct Shared {
     started: Instant,
     rates: Vec<RateRing>,
     not_lowered: AtomicUsize,
+    marks: Arc<Marks>,
+}
+
+impl Shared {
+    fn second(&self) -> u64 {
+        self.started.elapsed().as_secs()
+    }
+}
+
+/// What a stopped worker leaves for whoever joins it: the cache it still
+/// holds, and whether it has returned.
+struct Marks {
     /// Each worker's seed while it holds that seed's cache: set before the
     /// lookup and cleared after the cache is dropped, so a reader never
     /// sees a worker without a cache it holds.
@@ -99,9 +111,12 @@ struct Shared {
     exited: Vec<AtomicBool>,
 }
 
-impl Shared {
-    fn second(&self) -> u64 {
-        self.started.elapsed().as_secs()
+impl Marks {
+    fn new(workers: usize) -> Self {
+        Self {
+            held: (0..workers).map(|_| Mutex::new(None)).collect(),
+            exited: (0..workers).map(|_| AtomicBool::new(false)).collect(),
+        }
     }
 
     fn hold(&self, index: usize, seed: Option<Seedhash>) {
@@ -148,7 +163,7 @@ fn nonce_range(index: usize, threads: NonZeroUsize) -> RangeInclusive<u32> {
 /// One worker: lower its priority, then mine each newer job until it is
 /// superseded, solved, or the range runs out; stop when told.
 fn work(shared: &Shared, index: usize, range: RangeInclusive<u32>) {
-    let _exiting = Exiting(&shared.exited[index]);
+    let _exiting = Exiting(&shared.marks.exited[index]);
     if let Err(refused) = shekyl_thread_priority::lower_current_thread() {
         let before = shared.not_lowered.fetch_add(1, Ordering::Relaxed);
         if before == 0 {
@@ -167,9 +182,9 @@ fn work(shared: &Shared, index: usize, range: RangeInclusive<u32>) {
         // validator's spare, and the seed is the job's, not one this loop
         // pinned. `pin_canonical` is the fill. A template whose seed is not
         // held is the composition root's bug; this worker leaves the job.
-        shared.hold(index, Some(seed));
+        shared.marks.hold(index, Some(seed));
         let Some(cache) = shared.caches.lookup(&seed) else {
-            shared.hold(index, None);
+            shared.marks.hold(index, None);
             tracing::error!(
                 seed = %posted.job.seed,
                 height = %posted.job.height,
@@ -230,7 +245,7 @@ fn work(shared: &Shared, index: usize, range: RangeInclusive<u32>) {
             break;
         }
         drop(cache);
-        shared.hold(index, None);
+        shared.marks.hold(index, None);
     }
 }
 
@@ -263,8 +278,7 @@ impl Miner {
             started: Instant::now(),
             rates: (0..threads.get()).map(|_| RateRing::new()).collect(),
             not_lowered: AtomicUsize::new(0),
-            held: (0..threads.get()).map(|_| Mutex::new(None)).collect(),
-            exited: (0..threads.get()).map(|_| AtomicBool::new(false)).collect(),
+            marks: Arc::new(Marks::new(threads.get())),
         });
         let name = ThreadName::new(WORKER_NAME).expect("a fixed, valid thread name");
         let mut miner = Self {
@@ -315,7 +329,7 @@ impl Miner {
     pub fn stop(mut self) -> Draining {
         self.signal();
         Draining {
-            shared: Arc::clone(&self.shared),
+            marks: Arc::clone(&self.shared.marks),
             workers: std::mem::take(&mut self.workers),
         }
     }
@@ -349,7 +363,7 @@ impl Drop for Miner {
 /// Each holds the cache of the seed it was mining until its hash ends.
 /// Dropping it joins them.
 pub struct Draining {
-    shared: Arc<Shared>,
+    marks: Arc<Marks>,
     workers: Vec<DedicatedThread>,
 }
 
@@ -357,7 +371,7 @@ impl Draining {
     /// Every worker has returned: joining does not wait.
     #[must_use]
     pub fn finished(&self) -> bool {
-        self.shared
+        self.marks
             .exited
             .iter()
             .all(|exited| exited.load(Ordering::Acquire))
@@ -367,7 +381,7 @@ impl Draining {
     /// `None`, for any seed.
     #[must_use]
     pub fn holds_other_than(&self, seed: Option<&Seedhash>) -> bool {
-        holds_other_than(&self.shared.held, seed)
+        holds_other_than(&self.marks.held, seed)
     }
 
     /// Join every worker. Waits for the hashes they are still in.
@@ -391,6 +405,51 @@ impl Drop for Draining {
     }
 }
 
+/// Where stopped miners' workers wait to be joined: **at most one** set at
+/// a time. A stop does not wait for its workers' hashes, so without a bound
+/// a caller stopping and restarting the miner faster than a hash finishes
+/// would leave a new set of threads behind on every cycle. Parking a set
+/// while an earlier one still drains joins the earlier one first, at most
+/// one hash; with nothing still draining, a park waits for nothing. Live
+/// workers are therefore never more than a running miner's and one
+/// draining set's.
+#[derive(Default)]
+pub struct DrainSlot {
+    held: Option<Draining>,
+}
+
+impl DrainSlot {
+    /// Keep `stopped`, joining the set held before it.
+    pub fn park(&mut self, stopped: Draining) {
+        if let Some(earlier) = self.held.replace(stopped) {
+            earlier.join();
+        }
+    }
+
+    /// Before a start: join the held set if it still holds a cache for a
+    /// seed other than `seed` (any seed when `seed` is `None`), or has
+    /// finished. A set on the same seed shares that cache with the new
+    /// workers and is kept.
+    pub fn settle_for(&mut self, seed: Option<&Seedhash>) {
+        if self
+            .held
+            .as_ref()
+            .is_some_and(|set| set.finished() || set.holds_other_than(seed))
+        {
+            if let Some(set) = self.held.take() {
+                set.join();
+            }
+        }
+    }
+
+    /// Join whatever is held. Waits for the hashes still running.
+    pub fn join(&mut self) {
+        if let Some(set) = self.held.take() {
+            set.join();
+        }
+    }
+}
+
 fn holds_other_than(held: &[Mutex<Option<Seedhash>>], seed: Option<&Seedhash>) -> bool {
     held.iter().any(|slot| {
         slot.lock()
@@ -403,6 +462,123 @@ fn holds_other_than(held: &[Mutex<Option<Seedhash>>], seed: Option<&Seedhash>) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    /// A stopped set whose `workers` threads hold `seed` and block until
+    /// their release is sent (or dropped), counting themselves in `live`.
+    fn blocked_set(
+        workers: usize,
+        seed: Option<Seedhash>,
+        live: &Arc<AtomicUsize>,
+    ) -> (Draining, Vec<mpsc::Sender<()>>) {
+        let marks = Arc::new(Marks::new(workers));
+        let name = ThreadName::new(WORKER_NAME).expect("a fixed, valid thread name");
+        let mut threads = Vec::new();
+        let mut releases = Vec::new();
+        for index in 0..workers {
+            marks.hold(index, seed);
+            let (release, wait) = mpsc::channel::<()>();
+            let (marks, live) = (Arc::clone(&marks), Arc::clone(live));
+            live.fetch_add(1, Ordering::SeqCst);
+            threads.push(
+                spawn_dedicated(&name, move || {
+                    let _exiting = Exiting(&marks.exited[index]);
+                    // A send and a dropped sender both release the worker.
+                    match wait.recv() {
+                        Ok(()) | Err(mpsc::RecvError) => {}
+                    }
+                    marks.hold(index, None);
+                    live.fetch_sub(1, Ordering::SeqCst);
+                })
+                .expect("a thread"),
+            );
+            releases.push(release);
+        }
+        (
+            Draining {
+                marks,
+                workers: threads,
+            },
+            releases,
+        )
+    }
+
+    /// The design review's bound (2026-11-01): stop/start faster than a
+    /// hash finishes must not grow the live workers. A park while an
+    /// earlier set still drains does not return until that set is joined,
+    /// so over any number of cycles at most one set drains beside the
+    /// running miner. Red edit: keep every parked set (an unbounded list),
+    /// and the second park returns at once with both sets alive.
+    #[test]
+    fn a_stop_while_a_set_still_drains_joins_it_first() {
+        const THREADS: usize = 3;
+        let live = Arc::new(AtomicUsize::new(0));
+        let slot = Arc::new(Mutex::new(DrainSlot::default()));
+        let (first, mut releases) = blocked_set(THREADS, None, &live);
+        slot.lock().unwrap().park(first);
+        for _cycle in 0..4 {
+            let (next, next_releases) = blocked_set(THREADS, None, &live);
+            let (parked, done) = mpsc::channel();
+            let parker = {
+                let slot = Arc::clone(&slot);
+                std::thread::spawn(move || {
+                    slot.lock().unwrap().park(next);
+                    parked.send(()).expect("the test waits");
+                })
+            };
+            assert!(
+                done.recv_timeout(Duration::from_millis(200)).is_err(),
+                "a park returned while an earlier set still drained"
+            );
+            assert_eq!(live.load(Ordering::SeqCst), 2 * THREADS);
+            drop(releases);
+            done.recv_timeout(Duration::from_secs(10))
+                .expect("the park returns once the earlier set has drained");
+            parker.join().expect("the parker");
+            assert_eq!(
+                live.load(Ordering::SeqCst),
+                THREADS,
+                "one set drains at most"
+            );
+            releases = next_releases;
+        }
+        drop(releases);
+        slot.lock().unwrap().join();
+        assert_eq!(live.load(Ordering::SeqCst), 0);
+    }
+
+    /// Before a start, a held set on the posted seed is kept (it shares
+    /// that cache with the new workers); one on another seed, or one that
+    /// has finished, is joined.
+    #[test]
+    fn a_start_keeps_a_same_seed_set_and_joins_any_other() {
+        let a = Seedhash::from_bytes([1; 32]);
+        let b = Seedhash::from_bytes([2; 32]);
+        let live = Arc::new(AtomicUsize::new(0));
+        let mut slot = DrainSlot::default();
+        let (set, releases) = blocked_set(2, Some(a), &live);
+        slot.park(set);
+        slot.settle_for(Some(&a));
+        assert!(slot.held.is_some(), "the same seed's set is kept");
+        drop(releases);
+        slot.settle_for(Some(&b));
+        assert!(slot.held.is_none(), "another seed's set is joined");
+        assert_eq!(live.load(Ordering::SeqCst), 0);
+
+        let (set, releases) = blocked_set(2, Some(a), &live);
+        slot.park(set);
+        drop(releases);
+        while live.load(Ordering::SeqCst) != 0 {
+            std::thread::yield_now();
+        }
+        while !slot.held.as_ref().is_some_and(Draining::finished) {
+            std::thread::yield_now();
+        }
+        slot.settle_for(Some(&a));
+        assert!(slot.held.is_none(), "a finished set is joined");
+    }
 
     /// A start waits only for stopped workers holding another seed's cache:
     /// one on the same seed shares it, and none at all holds nothing.
