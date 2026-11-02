@@ -89,8 +89,11 @@ DESIGN_DIR = os.path.join(ROOT, "docs", "design")
 # claim-source, serde-default and dual-list rows took RPC_WIRE.md as owner
 # (the KV doc's retirement, #1116) and merged with dev's, the list's length;
 # 295 on 2026-10-19 when the PWD-T7 compression-gate row went with
-# compression itself (#1134), the list's length.
-GRANDFATHER_CEILING = 295
+# compression itself (#1134), the list's length; 294 on 2026-11-01 when the
+# store's dead-table rows closed with the tables (layout 34); 288 the same
+# day when the docs sweep's closed rows (the C++ template fill, the
+# C++-anchored gates, `bi_cum_rct`) merged with it, the list's length.
+GRANDFATHER_CEILING = 288
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few rows.
 GRANDFATHER_SLACK = 5

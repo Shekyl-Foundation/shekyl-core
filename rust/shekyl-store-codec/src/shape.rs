@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! How a value is stored: the four value shapes a table may declare
+//! How a value is stored: the three value shapes a table may declare
 //! (`DAEMON_REDB_STORE.md` §11.1(f)).
 //!
 //! The shapes are the contract; the write boundary that makes the
@@ -19,10 +19,10 @@
 //! two tables of identical `(u64, &[u8])` shape are indistinguishable to
 //! the engine however different their meanings, and a definition that
 //! drifted onto the wrong name would open cleanly. This module is the
-//! value side's statement, made once, so that the increments still ahead
-//! (S-ARCH, E3, E5) do not each answer it locally.
+//! value side's statement, made once, so a later table does not answer it
+//! locally.
 //!
-//! A **map** table's value is one of exactly four shapes:
+//! A **map** table's value is one of exactly three shapes:
 //!
 //! - [`Coded<V>`] — a value with a [`Canonical`] codec. The stored bytes
 //!   **are** `V::encode`, the digest's fold input (§11.1(b)); the
@@ -38,17 +38,11 @@
 //!   a zero-width witness that the key is a member. The daemon store's
 //!   `spent_keys` is the one catalogued instance at this pin. Named, so
 //!   two set-tables cannot silently share redb's `()` `TypeName`.
-//! - [`Unshaped`] — a table the LMDB census declares and no Rust writer
-//!   has reached. Its value type is uninhabited: the table is catalogued
-//!   (it has an ordinal) and dispatched to by the journal replay, which
-//!   refuses it; it is **not** created by the seal (`shekyl-chain-store`'s
-//!   `Restorable::SEALED` is `false` for exactly this shape) and cannot be
-//!   inserted into. "No writer yet" is a fact of the type, not of the
-//!   code; the increment that first writes the table replaces this shape
-//!   with the table's codec and bumps `SCHEMA_VERSION`.
 //!
 //! `&[u8]` is not a value type, and there is no multimap in the catalogue
-//! (S-OUT-KI SOK-1): every value is one of the four shapes above.
+//! (S-OUT-KI SOK-1): every value is one of the three shapes above. The
+//! fourth shape this contract first named, `Unshaped`, left at layout 34
+//! with the last two tables that used it.
 //!
 //! # Two guards, stated exactly
 //!
@@ -390,58 +384,6 @@ impl Value for Present {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Unshaped
-// ---------------------------------------------------------------------------
-
-/// The value shape of a censused table no Rust writer has reached
-/// (module docs).
-///
-/// Its `SelfType` is [`NoRow`], which has no values: `insert` on an
-/// `Unshaped` table does not type-check, and `from_bytes` — reachable only
-/// if a file somehow held a row — is unreachable by construction and says
-/// so. The journal replay refuses first (`Restorable::well_formed`), so
-/// a damaged journal naming an unshaped table is SI-7, not a panic.
-///
-/// One `TypeName` for every unshaped table is deliberate: the guard has
-/// nothing to distinguish while there are no rows, and it resumes — with
-/// the table's own codec name — in the commit that gives the table a
-/// writer.
-///
-#[derive(Debug)]
-pub struct Unshaped;
-
-/// A row of an [`Unshaped`] table. There are none.
-#[derive(Debug, Clone, Copy)]
-pub enum NoRow {}
-
-impl Value for Unshaped {
-    type SelfType<'a> = NoRow;
-    type AsBytes<'a> = &'a [u8];
-
-    fn fixed_width() -> Option<usize> {
-        None
-    }
-
-    fn from_bytes<'a>(_data: &'a [u8]) -> NoRow
-    where
-        Self: 'a,
-    {
-        unreachable!("an Unshaped table has no rows; the journal replay refuses before this")
-    }
-
-    fn as_bytes<'a, 'b: 'a>(value: &'a NoRow) -> &'a [u8]
-    where
-        Self: 'b,
-    {
-        match *value {}
-    }
-
-    fn type_name() -> TypeName {
-        TypeName::new("shekyl::Unshaped")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use shekyl_types::BlockHeight;
@@ -501,15 +443,6 @@ mod tests {
         let row = <Blob<Opaque> as Value>::from_bytes(b"xyz");
         assert_eq!(<Blob<Opaque> as Value>::as_bytes(&row), b"xyz");
         assert_eq!(row.bytes(), b"xyz");
-    }
-
-    #[test]
-    fn unshaped_has_one_name_and_no_width() {
-        assert_eq!(<Unshaped as Value>::fixed_width(), None);
-        assert_eq!(
-            <Unshaped as Value>::type_name(),
-            TypeName::new("shekyl::Unshaped")
-        );
     }
 
     #[test]
