@@ -98,8 +98,6 @@ GROUPS = [
             "BlockHeaderFactsFfi": "shekyl_rpc_block_header_facts",
             "BlockPayloadFfi": "shekyl_rpc_block_payload",
             "BlockEntryFfi": "shekyl_rpc_block_entry",
-            # `where` is a Rust keyword.
-            "TxEntryFfi": ("shekyl_rpc_tx_entry", {"where_found": "where"}),
             "NetStatsFactsFfi": "shekyl_rpc_net_stats_facts",
             "ConnectionFactsFfi": "shekyl_rpc_connection_facts",
             "FeeEstimateFactsFfi": "shekyl_rpc_fee_estimate_facts",

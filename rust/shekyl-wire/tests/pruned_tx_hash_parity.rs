@@ -4,10 +4,13 @@
 // BSD-3-Clause
 
 //! Cross-language KAT for the **transaction identity** of the FCMP++/PQC
-//! spend arm — the full body, the pruned form
-//! (`Transaction::hash_with_supplied_prunable`) and the skeleton — against the
-//! C++ daemon's one txid entry (RK-4c; `SHT-Q2`; `GENESIS_TX_WIRE_FORMAT.md`
-//! §11).
+//! spend arm — the full body and the skeleton
+//! (`SkeletonTx::bind` over `Transaction::hash_with_supplied_components`) —
+//! against the C++ daemon's one txid entry (RK-4c; `SHT-Q2`;
+//! `GENESIS_TX_WIRE_FORMAT.md` §11). The fixture's `pruned_hex` is the
+//! `serialize_base` framing (prunable region dropped, `pqc_auths` kept): a
+//! serializer boundary the C++ leg still pins, not a form the daemon serves
+//! — the one pruned form on the wire is the skeleton (`SB-Q2`).
 //!
 //! Until this file, every in-tree test that touched the pruned identity
 //! derived its expected txid by calling the function under test, so a
@@ -52,9 +55,11 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 use shekyl_crypto_hash::keccak256;
-use shekyl_types::{ArchivalLength, BlockHash, PrunableHash};
+use shekyl_types::{ArchivalLength, BlockHash, PrunableHash, TxHash};
 use shekyl_wire::transaction::{PQC_HYBRID_SINGLE_KEY_LEN, PQC_HYBRID_SINGLE_SIG_LEN};
-use shekyl_wire::{BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, Transaction, TxPrefix};
+use shekyl_wire::{
+    BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, SkeletonTx, Transaction, TxPrefix,
+};
 
 const PARITY_FIXTURE: &str = "tests/fixtures/pruned_tx_hash_parity_v1.json";
 
@@ -181,11 +186,14 @@ fn regenerate_pruned_tx_hash_parity_fixture() {
     tx.validate().expect("the parity tx must validate");
     let digest = prunable_digest();
     // The two derivations must already agree in Rust before either is pinned:
-    // the pruned identity with the true digest and length supplied IS the
-    // txid.
+    // the skeleton's identity with the true operands supplied IS the txid.
     assert_eq!(
         tx.hash(),
-        tx.hash_with_supplied_prunable(PrunableHash::from_bytes(digest), tx.archival_len())
+        tx.hash_with_supplied_components(
+            tx.pqc_auth_hash(),
+            PrunableHash::from_bytes(digest),
+            tx.archival_len()
+        )
     );
     let doc = serde_json::json!({
         "format_version": 2,
@@ -275,44 +283,80 @@ fn pruned_spend_identity_matches_the_pinned_oracle() {
         "the txid is not the five-word mix"
     );
 
-    // The pruned form is the full form's prefix — the split identity the
-    // daemon's storage (`txs_pruned` + `txs_pqc_auths`) reassembles and
-    // serves as `pruned_as_hex`.
+    // The `serialize_base` framing is the full form's prefix — the C++
+    // serializer boundary the sibling `.cpp` leg pins. It is not a form the
+    // daemon serves: the skeleton below is (`SB-Q2`).
     assert!(
         tx_hex.starts_with(pruned_hex),
-        "the pruned form must be a prefix of the full form"
+        "the serialize_base framing must be a prefix of the full form"
+    );
+    assert!(
+        pruned_hex.starts_with(&hex_str(&segments.pruned)),
+        "the skeleton's pruned segment must be a prefix of the serialize_base framing"
     );
 
-    // The bound surface: parse the pinned pruned bytes through the same
-    // entry the engine's `parse_pruned_tx` uses, then mix the supplied
-    // digest — the recomputed identity must be the pinned txid. This is the
-    // exact recomputation `parse_tx_batch` performs against an untrusted
-    // daemon's reply.
-    let pruned = Transaction::from_bytes(&hex_bytes(pruned_hex)).expect("pruned parse");
-    pruned
-        .validate_context_free_pruned()
-        .expect("the served pruned form must pass the engine's shape gate");
+    // The bound surface. This block pinned that the served pruned body plus
+    // the supplied digest and length recomputes to the accepted txid — the
+    // recomputation `parse_tx_batch` performs against an untrusted daemon.
+    // The body it pinned it on (prunable dropped, `pqc_auths` kept) is no
+    // longer served; the rule is now held on the skeleton, through the entry
+    // the engine binds with: `SkeletonTx::bind`.
     let mut digest = [0u8; 32];
     digest.copy_from_slice(&hex_bytes(prunable_hash_hex));
+    let pqc_auth_hash = tx
+        .pqc_auth_hash()
+        .expect("a spend's txid is 4-part, so the skeleton carries its third operand");
+    let served = SkeletonTx {
+        unprunable: segments.pruned.clone(),
+        prunable_hash: PrunableHash::from_bytes(digest),
+        pqc_auth_hash: Some(pqc_auth_hash),
+        archival_len,
+    };
+    let pinned = TxHash::from_bytes(hex_bytes(tx_hash_hex).try_into().expect("32 bytes"));
     assert_eq!(
-        hex_str(pruned.hash_with_supplied_prunable(PrunableHash::from_bytes(digest), archival_len)),
+        hex_str(served.txid().expect("the skeleton parses")),
         tx_hash_hex,
-        "pruned identity (supplied digest and length) diverged from the pinned txid"
+        "skeleton identity (supplied operands) diverged from the pinned txid"
     );
+    let bound = served
+        .bind(pinned)
+        .expect("the skeleton binds to the pinned txid");
+    bound
+        .tx()
+        .validate_context_free_pruned()
+        .expect("the served skeleton must pass the engine's shape gate");
+    assert_eq!(bound.txid(), pinned);
 
     // The length is bound: the same body and digest under any other length
-    // are another identity, so a daemon cannot serve a pruned body with a
+    // are another identity, so a daemon cannot serve a skeleton with a
     // length of its choosing (`SHT-Q2`). One byte either way, and zero.
     for lied in [archival_len.to_raw() - 1, archival_len.to_raw() + 1, 0] {
+        let lying = SkeletonTx {
+            archival_len: ArchivalLength::from_raw(lied),
+            ..served.clone()
+        };
         assert_ne!(
-            hex_str(pruned.hash_with_supplied_prunable(
-                PrunableHash::from_bytes(digest),
-                ArchivalLength::from_raw(lied)
-            )),
+            hex_str(lying.txid().expect("the skeleton parses")),
             tx_hash_hex,
             "a supplied length of {lied} must not reproduce the txid"
         );
+        assert!(
+            lying.bind(pinned).is_err(),
+            "a supplied length of {lied} must not bind to the pinned txid"
+        );
     }
+    // The third operand is bound the same way: withheld, the skeleton hashes
+    // 3-part — another identity — and does not bind.
+    let downgraded = SkeletonTx {
+        pqc_auth_hash: None,
+        ..served.clone()
+    };
+    assert_ne!(
+        hex_str(downgraded.txid().expect("the skeleton parses")),
+        tx_hash_hex,
+        "a withheld third operand must not reproduce the txid"
+    );
+    assert!(downgraded.bind(pinned).is_err());
 }
 
 /// `PDM-Q-F26`: the txid's **third component** and the **skeleton**
@@ -402,14 +446,12 @@ fn skeleton_identity_reconstructs_the_pinned_txid_from_both_stored_digests() {
         tx_hash_hex,
         "a skeleton's recomputed length is not the accepted transaction's"
     );
-    // One construction: the full-body and supplied paths are its special
-    // cases and agree on the same body.
+    // One construction: the full-body path is the supplied path's special
+    // case and agrees on the same body. (The two-supplied variant this also
+    // held — the `pqc_auths`-keeping pruned form — is gone with that form,
+    // `SB-Q2`; the skeleton assertion above is the one that remains.)
     assert_eq!(
         tx.hash_with_supplied_components(Some(pqc_auth), prunable, archival_len),
-        tx.hash()
-    );
-    assert_eq!(
-        tx.hash_with_supplied_prunable(prunable, archival_len),
         tx.hash()
     );
 }
@@ -479,27 +521,30 @@ fn live_oracle_spend_identity_matches_the_accepted_bytes() {
          daemon accepted"
     );
 
-    // The bound surface this file exists for: pruned identity with the digest
-    // and the length supplied is the txid, now over bytes consensus admitted.
-    // Same recomputation as the synthetic sibling above.
-    let pruned_form = {
-        let mut t = tx.clone();
-        let Ct::Fcmp { prunable, .. } = &mut t.ct else {
-            panic!("the captured spend must be an FCMP++ spend");
-        };
-        *prunable = None;
-        t.serialize()
-    };
+    // The bound surface this file exists for: the skeleton's identity with
+    // its operands supplied is the txid, now over bytes consensus admitted.
+    // Same recomputation as the synthetic sibling above. (This block pinned
+    // the rule on the `pqc_auths`-keeping pruned form; that form is no longer
+    // served, `SB-Q2`, and the rule is held on the skeleton the daemon does
+    // serve, through the entry the engine binds with.)
+    let segments = tx.write_segments().expect("segments");
     assert!(
-        bytes.starts_with(&pruned_form),
-        "the pruned form must be a prefix of the full form"
+        bytes.starts_with(&segments.pruned),
+        "the skeleton's pruned segment must be a prefix of the full form"
     );
-    let digest = keccak256(&bytes[pruned_form.len()..]);
+    let digest = keccak256(&segments.prunable);
+    let served = SkeletonTx {
+        unprunable: segments.pruned,
+        prunable_hash: PrunableHash::from_bytes(digest),
+        pqc_auth_hash: tx.pqc_auth_hash(),
+        archival_len: tx.archival_len(),
+    };
     assert_eq!(
-        hex_str(
-            tx.hash_with_supplied_prunable(PrunableHash::from_bytes(digest), tx.archival_len())
-        ),
+        hex_str(served.txid().expect("the skeleton parses")),
         tx_hash_hex,
-        "pruned identity (supplied digest and length) diverged from the accepted txid"
+        "skeleton identity (supplied operands) diverged from the accepted txid"
     );
+    served
+        .bind(tx.hash())
+        .expect("the skeleton binds to the accepted txid");
 }

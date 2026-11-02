@@ -1363,8 +1363,11 @@ distinguishable from a plain one by disk or by wire.
 
 ### `PDM-Q10` RULED 2026-09-18, AMENDED 2026-10-31 (`SB-Q2`) — "Not retained" is the ordinary transaction read in its pruned form, the skeleton; no new RPC
 
-**Grounded at** `dev@20ebdf1e5`; `shekyl-daemon-rpc/src/methods.rs:552-605`
-read at source.
+**Grounded at** `dev@20ebdf1e5` (`shekyl-daemon-rpc/src/methods.rs`
+:552–605 read at source); the amended form is built in
+`shekyl-daemon-rpc/src/read_methods.rs` (`get_transactions`,
+`get_blocks_by_height`) over the store's one constructor,
+`TxRecord::skeleton_of`.
 
 **Ruling.** Decided by rulings that already exist: Q2 makes retention
 per-shard and uniform; Q9 / #775 remove every daemon-side archival
@@ -1970,7 +1973,7 @@ is read at admission.
 | `CtSigPrunable`: `fcmp_pp_proof` + `curve_trees_tree_depth` | prunable (`:367`) | `txs_prunable` | ~2.5 KB/input (~4.5 KB) | none; hash in `txs_prunable_hash` | — (witness gone) | **GOOD** (F13) |
 | `CtSigPrunable`: `pseudoOuts` | prunable (`:384`) | `txs_prunable` | 32 B/input | none | — | **GOOD** (F13) |
 | `CtSigPrunable`: `serve_credit_pruned` (RF-D1 pruned half: ML-DSA leg + `path` incl. the leaf chunk) | prunable (`:402`) | `txs_prunable` | ~9,965 B per serve-credit vin (`ARCHIVAL_RESPONSE_FORMAT.md:78-81`) | none (`blockchain.cpp:3807` is admission; F15) | — | **GOOD** (F13, F15) |
-| `txs_prunable_hash` | — | `txs_prunable_hash` | 32 B/tx | txid recompute (`hash_with_supplied_prunable`, `shekyl-wire`); **the GOOD's verifier** | H(prunable) — but only if you hold the prunable | KEEP-C |
+| `txs_prunable_hash` | — | `txs_prunable_hash` | 32 B/tx | txid recompute (`hash_with_supplied_components`, `shekyl-wire`); **the GOOD's verifier** | H(prunable) — but only if you hold the prunable | KEEP-C |
 | `pqc_auth_hash` | — | **no table** (V11: *"neither has a hash table"*) | 32 B/tx if minted | would be `txs_pqc_auths`'s verifier | H(pqc_auths) | Q6 item 2 |
 | `tx_indices` (hash → id, height, unlock) | — | `tx_indices` | ~56 B/tx | consensus (tx lookup, reorg), RPC | rebuild from `blocks` | CACHE (kept; index) |
 | `tx_outputs` (tx → global output indices) | — | `tx_outputs` | 8 B/output | reorg pop (`remove_output`), RPC | rebuild | CACHE |

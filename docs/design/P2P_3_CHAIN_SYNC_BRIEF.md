@@ -2,7 +2,7 @@
 
 **Families (registered in `IMPLEMENTATION_INDEX.md` §2, rule 94):** **`CS-Q`** (questions, ruled here) and **`CS-F`** (findings). Grep surface: `rg -n -e '\bCS-[QF]'`, because the serve-credit findings family `SCS-F` contains `CS-F` as a substring. `CSR-` is a separate family.
 **Ground:** `dev` at `24961a9a8` (2026-10-19), after #1101 (DRS-X Round 0), #1088 (the daemon-config cutover) and #1102 (the Rust pool); DRS-X PR 2 (#1123, open) read at `e3180b665` for the door's `BeyondCap`. The handler is 2,669 + 228 lines; `block_queue` is 651 (`.h` 115 + `.cpp` 536); `cryptonote_protocol_defs.h` is 300.
-**Status:** **CS-5, the cutover, is implemented (2026-11-01, #1237):** live sessions sync through the Rust owner, which the node owns and the seam's bind attaches; the C++ handler keeps RD's transaction routes only; `sync_info` is the owner's view (3.64); 2003, 2004, 2006 and 2007 are retired (§ CS-5 below). CS-1 implemented (2026-10-21); CS-2 model and its §5 harness are in `shekyl-chain-sync` (2026-10-22); CS-3 implemented (2026-10-23): the runtime half and CS-Q11's loopback harness. CS-4 (pre-cutover, pure Rust): the inbound claim tap, the relay, the state handle's publisher and the cutover's deletion table. The cutover follows the DRS-X flip. Round 0 RULED, Rick 2026-10-18: CS-Q1…CS-Q12 as recommended, with four amendments: the complement request is chain sync's (CS-Q1, CS-Q10); `Synced` reads verified headers only (CS-Q2 step 8); the long-run slot is paid for in PoW and goes to the most verified work (CS-Q2 step 3); `following_degraded` gets a Rust producer (§A, coupling 4). Three corrections to CS-Q2 and CS-Q3, confirmed 2026-10-19 (Rick): a body, with its attestation witness, is bound to its header before the offer, so a substituted body or witness never invalidates an honest header (CEN-G2, CEN-B4); `Synced` waits for PDM-Q5's backward fill, with `Following` until then; and the body form is per transaction. The objects response follows PWD-B3's continuation (Rick, 2026-10-20): every requested block is sent, deferred by the budget, or marked unavailable, and only an unmarked shortfall closes the session (CS-Q3.2). Ruled 2026-10-19 (Rick), from DRS-X PR 2's design review: `following_degraded` is set by ingest's three refusals and by the sync owner, all through the connector, its one writer (§A items 7 and coupling 4); header PoW follows the earned-seed rule; and a past-cap branch is checked as evidence under `Class::Evidence` (CS-Q2 step 3). **Amended 2026-10-22 (Rick):** CS-Q2 step 1 refuses a block count of 0, or cumulative work below that count. **CS-1 is implemented (2026-10-21):** `form_header`, `judge_header`, `judge_header_cheap` and `bind_body` in `shekyl-chain-rules`; `PowBlob` and `BlockBody` in `shekyl-wire`; commands 2011–2014 in `shekyl-levin`, not admitted at ingress; the handler files are shrink-frozen (CS-Q9). CS-2, the sync model, is in `shekyl-chain-sync` (2026-10-22): the branch view, runs, the long-run slot, bodies, entry outcomes and close causes. **CS-3 is implemented (2026-10-23),** in `shekyl-chain-sync-runtime`, layered over the pure model in `shekyl-chain-sync` (Rick, 2026-10-23: ingest and the node depend on the model, the runtime on them): the router (the seam's post sink, attached to the node's owner since CS-5), the sync owner on its `chain-sync` row, the executor with `Class::Evidence`, serving 2011–2014 from the store, `Door::offer_bound` (formed with `form_judged`), the latch through the connector (`RaiseAlarm`, `WatchLatch`), and CS-Q11's loopback harness in `shekyl-p2p-harness` (`sync`).
+**Status:** **CS-5, the cutover, is implemented (2026-11-01, #1237):** live sessions sync through the Rust owner, which the node owns and the seam's bind attaches; the C++ handler keeps RD's transaction routes only; `sync_info` is the owner's view (3.66); 2003, 2004, 2006 and 2007 are retired (§ CS-5 below). CS-1 implemented (2026-10-21); CS-2 model and its §5 harness are in `shekyl-chain-sync` (2026-10-22); CS-3 implemented (2026-10-23): the runtime half and CS-Q11's loopback harness. CS-4 (pre-cutover, pure Rust): the inbound claim tap, the relay, the state handle's publisher and the cutover's deletion table. The cutover follows the DRS-X flip. Round 0 RULED, Rick 2026-10-18: CS-Q1…CS-Q12 as recommended, with four amendments: the complement request is chain sync's (CS-Q1, CS-Q10); `Synced` reads verified headers only (CS-Q2 step 8); the long-run slot is paid for in PoW and goes to the most verified work (CS-Q2 step 3); `following_degraded` gets a Rust producer (§A, coupling 4). Three corrections to CS-Q2 and CS-Q3, confirmed 2026-10-19 (Rick): a body, with its attestation witness, is bound to its header before the offer, so a substituted body or witness never invalidates an honest header (CEN-G2, CEN-B4); `Synced` waits for PDM-Q5's backward fill, with `Following` until then; and the body form is per transaction. The objects response follows PWD-B3's continuation (Rick, 2026-10-20): every requested block is sent, deferred by the budget, or marked unavailable, and only an unmarked shortfall closes the session (CS-Q3.2). Ruled 2026-10-19 (Rick), from DRS-X PR 2's design review: `following_degraded` is set by ingest's three refusals and by the sync owner, all through the connector, its one writer (§A items 7 and coupling 4); header PoW follows the earned-seed rule; and a past-cap branch is checked as evidence under `Class::Evidence` (CS-Q2 step 3). **Amended 2026-10-22 (Rick):** CS-Q2 step 1 refuses a block count of 0, or cumulative work below that count. **CS-1 is implemented (2026-10-21):** `form_header`, `judge_header`, `judge_header_cheap` and `bind_body` in `shekyl-chain-rules`; `PowBlob` and `BlockBody` in `shekyl-wire`; commands 2011–2014 in `shekyl-levin`, not admitted at ingress; the handler files are shrink-frozen (CS-Q9). CS-2, the sync model, is in `shekyl-chain-sync` (2026-10-22): the branch view, runs, the long-run slot, bodies, entry outcomes and close causes. **CS-3 is implemented (2026-10-23),** in `shekyl-chain-sync-runtime`, layered over the pure model in `shekyl-chain-sync` (Rick, 2026-10-23: ingest and the node depend on the model, the runtime on them): the router (the seam's post sink, attached to the node's owner since CS-5), the sync owner on its `chain-sync` row, the executor with `Class::Evidence`, serving 2011–2014 from the store, `Door::offer_bound` (formed with `form_judged`), the latch through the connector (`RaiseAlarm`, `WatchLatch`), and CS-Q11's loopback harness in `shekyl-p2p-harness` (`sync`).
 **Parent:** [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4.2, row **CS**. [`DRS_X_STORE_FLIP.md`](DRS_X_STORE_FLIP.md) carries §A below as chain sync's Round 0 requirement.
 
 ## Constants (CS-1)
@@ -175,8 +175,8 @@ owner of block propagation.
 | `handle_notify_new_transactions`, `relay_transactions` | RD | Untouched by CS |
 | `request_txpool_complement` | CS | Redesign: the sync owner sends the request from Rust at its transition to `Synced`; the reply, `NOTIFY_NEW_TRANSACTIONS`, goes through RD's route (CS-Q10) |
 | `handle_notify_get_txpool_complement` | RD | Serving the complement stays RD's |
-| `hit_score`, `drop_connection_with_score`, `drop_connections`, the `add_host_fail` calls | — | Per CS-Q5 |
-| `shekyl-peer-policy`'s `BlockIngest`, `BlockAnnounceAction`, `BlockSyncAction` and their FFI predicates (`peer_policy_ffi.rs`, `block_ingest.h`; landed Rust, PWD-B7) | CS | **Keep and extend additively.** CS-Q2's mapping from the entry's reply to an action is built in this crate, under PWD-B7's tri-state verdict (CS-Q4). Only the `heavier_score` arm (`block_peer.rs:103`, `:175`; used at `.inl:649`, `:1512`) retires, per CS-Q5. The C++ predicates go with the sync half |
+| `hit_score`, `drop_connections` | — | `hit_score` still drops the session at `DROP_PEERS_ON_SCORE`. That counter goes with the handler (CS-Q5). `drop_connection_with_score` was deleted with the automatic ban (#1250): a drop carries no weight |
+| `shekyl-peer-policy`'s `BlockIngest`, `BlockAnnounceAction`, `BlockSyncAction` and their FFI predicates (`peer_policy_ffi.rs`, `block_ingest.h`; landed Rust, PWD-B7) | CS | **Keep and extend additively.** CS-Q2's mapping from the entry's reply to an action is built in this crate, under PWD-B7's tri-state verdict (CS-Q4). `Drop` and `DropBadPow` stay, so that mapping can name a PoW refusal. `heavier_score` had no production caller and existed only to pick a ban weight; it was deleted with the automatic ban (#1250). The C++ predicates go with the sync half |
 | Sync-time estimate pair, `cumulative_block_sync_weight` | CS | Redesign. Progress is read from the header chain (rule 80). The Monero mainnet size table is deleted (rules 60, 71) |
 | `log_connections` | console | Delete. The console reads the board |
 | `safesyncmode`, the `pause_mine`/`resume_mine` coupling | — | Delete. `safesyncmode` is an LMDB knob and leaves with DRS-X; the miner reacts to tip changes, not to sync |
@@ -184,7 +184,7 @@ owner of block propagation.
 | `prep-blocks-threads`, `block-sync-size`, `span-limit`, `block-download-max-size` (`INPUT_GRAMMAR.md:272`, **X**), and the hardcoded `m_block_download_max_size = 0`, `m_span_time = 2` (`.inl` `init`) | CS | Per CS-Q12: refused; the constants stand until the cutover |
 | Constructor and `deinit` (found by CS-4's read, as are the rows below) | CS | Shrink: the sync half's members and their initialisers go with it; what RD's routes use stays until the file goes (CS-Q9) |
 | `set_p2p_endpoint` | RD | Stays: the transaction routes send through the endpoint |
-| `drop_connection(context, add_fail, flush)` | RD | Stays as the plain drop RD's routes call; its `add_fail` argument goes with scoring (CS-Q5) |
+| `drop_connection(context, flush)` | RD | Stays as the plain drop RD's routes call. `add_fail` was deleted with the automatic ban (#1250): a drop carries no weight |
 | `drop_connection(uuid)` | CS | Delete: its one caller is `try_add_next_blocks` |
 | `stop` | RD | Stays while the handler does (`net_node.inl` calls it at shutdown) |
 | `post_notify` | RD | Stays for 2002; its sync uses (2004, 2006, 2007, 2008, 2009, 2010's request) go with their callers |
@@ -966,12 +966,12 @@ the existing types are extended, not replaced.
 
 ## CS-Q5. Scoring: rebuild `add_host_fail` in Rust, or delete it?
 
-**Problem.**
-- Today `add_host_fail` (`net_node.inl:349`) adds weights (1, 5, 10)
+**Problem** (as posed at this brief's ground; the automatic ban is deleted, #1250).
+- `add_host_fail` (`net_node.inl:349`) added weights (1, 5, 10)
   into an un-decaying per-host map. At more than
-  `P2P_IP_FAILS_BEFORE_BLOCK` (10, `cryptonote_config.h:200`) it bans the
+  `P2P_IP_FAILS_BEFORE_BLOCK` (10, `cryptonote_config.h:200`) it banned the
   host for 24 h through the transport ban list.
-- It is fed from:
+- It was fed from:
   - this handler (`:2570`, `:2615`), with the weight picked by
     `shekyl-peer-policy`'s `heavier_score` predicate:
     `P2P_IP_FAILS_BEFORE_BLOCK` or 1 (`.inl:649`, `:1512`);
@@ -1068,37 +1068,33 @@ nothing:
     direction.
 
 **What goes:**
-- `add_host_fail` and `m_host_fails_score`;
-- `P2P_IP_FAILS_BEFORE_BLOCK`;
-- `hit_score` and `m_score`;
-- the dialer brief's "score owner" sentence;
-- **landed Rust (ruled with the rest):** the `heavier_score` arm of
-  `BlockAnnounceAction` and `BlockSyncAction`
-  (`rust/shekyl-peer-policy/src/block_peer.rs`), and its two FFI
-  predicates (`peer_policy_ffi.rs`); CS-5 deleted all of them.
-  - This arm exists only to pick a score weight.
-  - The rest of the crate stays and is extended (CS-Q1, CS-Q4).
+- `hit_score` and `m_score` (still live: the counter drops the session
+  at `DROP_PEERS_ON_SCORE`, and it goes with the handler);
+- the dialer brief's "score owner" sentence (deleted in #1250);
 
-**Every caller goes at the CS cutover, whenever slice 4 lands.** CS
-deletes the method, so it deletes all five calls with it:
-- the handler's two (`.inl:2570`, `:2615`);
-- the inbound handshake's two (`net_node.inl:941`, `:949`);
-- the timed-sync peerlist refusal (`net_node.inl:582`).
-
-Each of the three `net_node.inl` sites already closes or drops the
-connection before the call, so the deletion removes only the score. With
-them go:
-- the interface's declarations (`net_node_common.h:76`, `:133`);
-- `node_server`'s (`net_node.h:244`, `net_node.inl:349`);
-- `m_host_fails_score` and its lock (`net_node.h:300-301`);
-- the test overrides (`tests/unit_tests/node_server.cpp:591`,
-  `sync_orphan_arm.cpp:145`).
+**Deleted with the automatic ban** (Rick, 2026-11-01; #1250), ahead of
+the cutover:
+- `add_host_fail`, its five calls, its declarations,
+  `m_host_fails_score` and its lock, `P2P_IP_FAILS_BEFORE_BLOCK`, and
+  the test override. Every site already dropped the connection before
+  the call, so only the score went.
+- The handler's score arguments: `drop_connection`'s `add_fail` and
+  `drop_connection_with_score`. The drop that remains is
+  `drop_connection(context, flush_all_spans)`.
+- `heavier_score` on `BlockAnnounceAction` and `BlockSyncAction`, its
+  two FFI predicates, and the C++ wrappers. It had no production
+  caller. It existed only to pick a ban weight. `Drop` and
+  `DropBadPow` stayed then: CS-Q2 maps an ingest outcome onto an
+  action, and the bad-PoW arm is that action, not a score. CS-5 then
+  deleted `BlockAnnounceAction` and `BlockSyncAction` whole with the
+  handler's sync half, their only consumer (§9); `BlockIngest` and the
+  rest of the crate stay and are extended (CS-Q1, CS-Q4).
 
 **What stays:** operator bans and their expiry, and the registered
 reconnect throttle, which is not a ban.
 
-It is cut at the CS cutover, with the sync half; slice 4's calls go with
-slice 4.
+What CS cut at its cutover, with the sync half: `hit_score` and
+`m_score`.
 
 **Wargame.**
 - **Invalid-PoW spam from rotating IPv6 addresses.**
@@ -1385,7 +1381,7 @@ checked by its name.
 | 30 | `handle_request_compact_missing_tx` (2009) | `.inl:668-770` | `.h:154` | CS | :161 |
 | 31 | `request_txpool_complement` | `.inl:2516-2529`; its trigger in #17, `:2286-2310` | `.h:175` | CS | :163 |
 | 32 | `hit_score` | `.inl:2531-2542` | `.h:176` | — | :165 |
-| 33 | `drop_connection_with_score` | `.inl:2563-2574` | `.h:166` | — | :165 |
+| 33 | `drop_connection_with_score` | deleted in #1250. The drop is `drop_connection(context, flush_all_spans)` | deleted in #1250 | — | :165 |
 | 34 | `drop_connections` | `.inl:2591-2622` | `.h:168` | — | :165 |
 | 35 | `get_estimated_remaining_sync_seconds` | `.inl:1213-1241` | `.h:207` | CS | :167 |
 | 36 | `get_periodic_sync_estimate` | `.inl:1243-1260` | `.h:208` | CS | :167 |
@@ -1409,7 +1405,7 @@ checked by its name.
 | 1 | Constructor | `.inl:217-232` |
 | 2 | `deinit` | `.inl:270-274` |
 | 3 | `set_p2p_endpoint` | `.inl:276-283` |
-| 4 | `drop_connection(ctx, add_fail, flush)` | `.inl:2576-2580` (reaches `add_host_fail` through 1a #33) |
+| 4 | `drop_connection(ctx, flush)` | `.inl` (definition). `add_fail` was deleted with the automatic ban (#1250) |
 | 5 | `drop_connection(uuid)` | `.inl:2582-2589` |
 | 6 | `stop` | `.inl:2661-2666`; called `net_node.inl:554` |
 | 7 | `post_notify` | `.h:214-223` |
@@ -1457,37 +1453,18 @@ handler.
 | 11 | `sync_connector_of` | 1c #9 |
 | 12 | `P2P_DEFAULT_SYNC_SEARCH_CONNECTIONS_COUNT` (no C++ user) | `src/cryptonote_config.h:200` |
 
-**3a. `add_host_fail` (CS-Q5): five callers, as ruled.**
+**3a. Score arguments (CS-Q5).** Deleted with the automatic ban (#1250),
+in the same change as `add_host_fail`: `drop_connection_with_score` and
+`drop_connection`'s `add_fail`. The drop that remains is
+`drop_connection(context, flush_all_spans)`. `hit_score` still drops
+the session at `DROP_PEERS_ON_SCORE`; that counter goes with the handler.
+Falsifier: `rg -n 'drop_connection_with_score|add_fail' src tests` returns nothing.
 
-| # | Site | Location | Sync half? |
-| --- | --- | --- | --- |
-| 1 | Definition | `net_node.inl:345-362` | — |
-| 2 | `drop_connection_with_score` | `.inl:2569` | yes (1a #33) |
-| 3 | `drop_connections` | `.inl:2614` | yes (1a #34) |
-| 4 | Timed-sync peerlist refusal | `net_node.inl:579` | no (slice 4) |
-| 5 | `handle_handshake`, wrong network | `net_node.inl:901` | no (slice 4) |
-| 6 | `handle_handshake`, not inbound | `net_node.inl:909` | no (slice 4) |
-| 7 | Declarations | `net_node.h:236`; `net_node_common.h:76`, stub `:133-136` | — |
-| 8 | `m_host_fails_score_lock`, `m_host_fails_score` | `net_node.h:290-291` | — |
-| 9 | `P2P_IP_FAILS_BEFORE_BLOCK` | `cryptonote_config.h:203`; used `net_node.inl:354`, `:358`, `.inl:648`, `:1511` | — |
-| 10 | Test overrides | `tests/unit_tests/node_server.cpp:591`; `sync_orphan_arm.cpp:145` | — |
-| 11 | Transitive caller | `drop_connection(ctx, add_fail, …)` `.inl:2579`, through #2 | yes |
-
-**3b. `heavier_score`, every site.**
-
-| # | Site | Location |
-| --- | --- | --- |
-| 1 | `BlockAnnounceAction::heavier_score` | `rust/shekyl-peer-policy/src/block_peer.rs` (deleted by CS-5) |
-| 2 | `BlockSyncAction::heavier_score` | `block_peer.rs:174-177` |
-| 3 | Its test | `block_peer.rs:229` |
-| 4 | `shekyl_block_announce_heavier_score` | `rust/shekyl-ffi/src/peer_policy_ffi.rs` (the block family, deleted by CS-5) |
-| 5 | `shekyl_block_sync_heavier_score` | `peer_policy_ffi.rs:291-294` |
-| 6 | FFI tests | `peer_policy_ffi.rs:305`, `312`, `486-487`, `507-508`, `533`, `544` |
-| 7 | C declarations | `src/shekyl/shekyl_ffi.h:2960`, `:2967` |
-| 8 | C++ wrappers | `src/cryptonote_basic/block_ingest.h` (deleted by CS-5) |
-| 9 | Announce use | `.inl:648` |
-| 10 | Sync use | `.inl:1511` |
-| 11 | C++ test | `tests/unit_tests/peer_policy_block_ingest.cpp` (deleted by CS-5) |
+**3b. `heavier_score` (CS-Q5).** Deleted in the same change. It had no
+production caller on `dev` either (the old cites `.inl:649` and `:1512`
+did not call it). It existed only to pick a ban weight. `Drop` and
+`DropBadPow` stay for CS-Q2's action mapping.
+Falsifier: `rg -n heavier_score rust src tests` returns nothing.
 
 **4. CS-Q12's hardcoded values.**
 
@@ -1521,7 +1498,7 @@ lines needs none; a file with an edited line needs one naming its path.
 
 | # | Freeze row | The cutover | UNFREEZE line |
 | --- | --- | --- | --- |
-| 1 | `src/p2p/net_node.inl` | shrinks: the `process_payload_sync_data` and payload-handler calls, `add_host_fail`'s two sync-half uses are elsewhere | one, if a call is edited rather than deleted |
+| 1 | `src/p2p/net_node.inl` | shrinks: the `process_payload_sync_data` and payload-handler calls | one, if a call is edited rather than deleted |
 | 2 | `src/p2p/net_node.h` | shrinks | none expected |
 | 3 | `…/cryptonote_protocol_handler.inl` | shrinks; RD's routes stay | one: the constructor's initialiser list is edited |
 | 4 | `…/cryptonote_protocol_handler.h` | shrinks | one: the base-class list (`.h:84`) is edited |
@@ -1809,7 +1786,7 @@ it decided beyond the rows above:
   session with no header run is `idle`. The rate is the last response's
   bytes over the time since its request was sent. The owner publishes
   the view on a watch after every event; `sync_info` renders it and
-  `get_connections` joins it to the board (3.64).
+  `get_connections` joins it to the board (3.66).
 - **Our own blocks.** The model relays a new tip it neither accepted nor
   still awaits from the entry, from the tip event, to every session
   (`Command::Relay::from` is `None`). The first tip observed relays

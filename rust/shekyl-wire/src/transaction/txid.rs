@@ -5,15 +5,13 @@
 
 //! Consensus txid construction (`GENESIS_TX_WIRE_FORMAT.md` §11).
 //!
-//! One mixer, one prefix predicate, four public entries:
+//! One mixer, one prefix predicate, three public entries:
 //! [`Transaction::txid_parts`] (body in hand),
-//! [`Transaction::hash_with_supplied_prunable`] (prunable digest and
-//! archival length supplied),
 //! [`Transaction::hash_with_supplied_components`] (both discardable
-//! components and the length supplied), and [`TxidSegments::txid`] (a full
-//! body's bytes, unparsed — the C++ daemon's entry). [`Transaction::hash`] is
-//! the `hash` field of `txid_parts`. Every txid leaves this module as a
-//! [`TxHash`] (RTN-7).
+//! components and the length supplied — the skeleton, the one pruned form,
+//! `SB-Q2`), and [`TxidSegments::txid`] (a full body's bytes, unparsed — the
+//! C++ daemon's entry). [`Transaction::hash`] is the `hash` field of
+//! `txid_parts`. Every txid leaves this module as a [`TxHash`] (RTN-7).
 //!
 //! # The archival length is a mixer operand (`SHT-Q2`)
 //!
@@ -83,7 +81,8 @@ pub struct TxidParts {
 }
 
 /// `keccak256("")` — the `prunable_hash` row of a body with **no prunable byte
-/// region**: a coinbase, or a storage-pruned spend whose region is absent.
+/// region**: a coinbase, or a spend parsed from a skeleton's bytes, whose
+/// region is absent.
 ///
 /// This is the value [`Transaction::prunable_hash`] returns for such a body, and
 /// it is **not** the null hash. The txid's prunable *component* substitutes the
@@ -137,10 +136,11 @@ pub fn prunable_hash_of(region: &[u8]) -> PrunableHash {
 /// body.** There is deliberately **no** `TxidParts` convenience method, because
 /// [`Transaction::txid_parts`] *recomputes* both digests from the object in hand:
 /// on a body whose prunable region and `pqc_auths` have been discarded (`PDM-Q6`
-/// retires them atomically) that yields `keccak256("")` and `None`, so a pruned
-/// node would read its own discarded spends as carrying **no** good and drop them
-/// from the domain — while an archival node keeps them. The two would then
-/// disagree on shard boundaries, which is a consensus split.
+/// retires them atomically) that yields `keccak256("")` and `None`, so a node
+/// that recomputed would read its own discarded spends as carrying **no** good
+/// and drop them from the domain — against the public calendar every node
+/// follows (`PDM-Q9`). It would then disagree on shard boundaries, which is a
+/// consensus split.
 /// [`Transaction::prunable_hash`] states the recomputation's behaviour for
 /// exactly these cases. The store reads
 /// the permanent rows instead (`txs_prunable_hash`, `txs_pqc_auth_hash`), which a
@@ -226,7 +226,7 @@ impl Transaction {
     /// records the result in `txs_prunable_hash`.
     ///
     /// This is **not** the txid's prunable component in every case: when the
-    /// region is absent (a coinbase, or a storage-pruned spend) the txid
+    /// region is absent (a coinbase, or a skeleton's bytes) the txid
     /// substitutes the null hash, while this is `keccak256("")` — the C++
     /// store's row for a coinbase is the latter. When the region is present
     /// the two coincide, and [`Self::hash`] is built from this value.
@@ -283,41 +283,6 @@ impl Transaction {
             .then(|| pqc_auth_hash_of(auths.len(), pqc_auths))
     }
 
-    /// The consensus transaction hash of a **pruned** body, with the prunable
-    /// digest and the archival length supplied instead of computed.
-    ///
-    /// It exists because a pruned body has no prunable section to hash or
-    /// measure: [`Self::hash`] would substitute the null hash and a short
-    /// length, and return an identity no transaction has.
-    ///
-    /// This is what lets a caller **bind** a pruned body served by an untrusted
-    /// daemon to the hash it asked for. The reply's `tx_hash` label proves
-    /// nothing — the daemon chooses it — and so do `prunable_hash` and
-    /// `archival_len` on their own; what the daemon cannot choose is a body, a
-    /// digest and a length that mix to a txid someone else named first, which
-    /// is a keccak preimage.
-    ///
-    /// The `pqc_auths` component is still computed from the body: this is the
-    /// storage-pruned *spend* form, which keeps them. The length is supplied
-    /// **whole** — the store's row and the reply's field are the transaction's
-    /// archival length, not the absent region's share of it — so the three
-    /// supplied-form callers pass one value with one definition. A body holding
-    /// neither region is [`Self::hash_with_supplied_components`]'s case. The
-    /// operands are typed: a txid or a `PqcAuthHash` passed as the digest, or
-    /// a count passed as the length, is a compile error rather than a wrong
-    /// identity.
-    pub fn hash_with_supplied_prunable(
-        &self,
-        prunable_hash: PrunableHash,
-        archival_len: ArchivalLength,
-    ) -> TxHash {
-        self.hash_from_components(
-            self.pqc_auth_hash(),
-            self.supplied_prunable_component(prunable_hash),
-            archival_len,
-        )
-    }
-
     /// The consensus transaction hash of a **skeleton** — prefix and base
     /// only — with **every** discardable operand supplied (`PDM-Q-F26`,
     /// `DAEMON_REDB_STORE.md` §7.7 item 2; `SHT-Q2`): the txid's third
@@ -331,10 +296,24 @@ impl Transaction {
     /// with neither region, cannot derive the txid's arity from
     /// `pqc_auths.is_empty()` on a body that is not there — so the arity is
     /// the supplied `Option` after [`Self::prefix_carries_pqc_component`]
-    /// drops a `Some` the prefix cannot carry. [`Self::hash`] (all computed)
-    /// and [`Self::hash_with_supplied_prunable`] (two supplied) are the special
-    /// cases of this one mixer, so no two paths can hash one transaction two
-    /// ways.
+    /// drops a `Some` the prefix cannot carry (`SkeletonTx::txid` refuses
+    /// that `Some` before reaching here; this mixer stays total). The
+    /// skeleton is the one pruned form (`SB-Q2`): a body that keeps its
+    /// `pqc_auths` and loses its prunable region is not a form the daemon
+    /// serves, so there is no two-supplied variant. [`Self::hash`] (all
+    /// computed) is the special case of this one mixer, so no two paths can
+    /// hash one transaction two ways.
+    ///
+    /// This is what lets a caller **bind** a pruned body served by an
+    /// untrusted daemon to the hash it asked for. The reply's `tx_hash`
+    /// label proves nothing — the daemon chooses it — and so do the three
+    /// operands on their own; what the daemon cannot choose is a body and
+    /// operands that mix to a txid someone else named first, which is a
+    /// keccak preimage. The length is supplied **whole** — the store's row
+    /// and the reply's field are the transaction's archival length, not the
+    /// absent region's share of it. The operands are typed: a txid or a
+    /// `PqcAuthHash` passed as the digest, or a count passed as the length,
+    /// is a compile error rather than a wrong identity.
     ///
     /// For a coinbase (`Null` ct) the third component is the null hash and no
     /// length is mixed, whatever is supplied — pruning cannot give a coinbase
@@ -366,7 +345,7 @@ impl Transaction {
     /// `validate` refuses it, so the predicate matches the oracle on every
     /// input, not only valid ones. The prefix is part of every form, skeleton
     /// included, so this half is always computable.
-    fn prefix_carries_pqc_component(&self) -> bool {
+    pub(crate) fn prefix_carries_pqc_component(&self) -> bool {
         let first_is_spend = matches!(
             self.prefix.inputs.first(),
             Some(first) if !matches!(first, Input::Gen(_))
@@ -620,7 +599,7 @@ mod tests {
     }
 
     /// The unparsed entry and the parsed one are the same function of a body:
-    /// every class, the storage-pruned and skeleton forms, and the two
+    /// every class, the `serialize_base` framing and the skeleton, and the two
     /// malformed shapes whose identity is consensus-visible before `validate`
     /// refuses them. C++ computes every txid through the first, so a
     /// disagreement here is a daemon and a wallet naming one transaction two
@@ -642,11 +621,11 @@ mod tests {
         .expect("block")
         .miner_transaction;
 
-        let mut storage_pruned = spend.clone();
+        let mut base_framing = spend.clone();
         let mut skeleton = spend.clone();
         let mut no_inputs = spend.clone();
         let mut gen_first = spend.clone();
-        if let Ct::Fcmp { prunable, .. } = &mut storage_pruned.ct {
+        if let Ct::Fcmp { prunable, .. } = &mut base_framing.ct {
             *prunable = None;
         }
         if let Ct::Fcmp {
@@ -666,7 +645,7 @@ mod tests {
             ("daemon-accepted spend", &live_spend),
             ("serve-credit", &serve_credit),
             ("coinbase", &coinbase),
-            ("storage-pruned spend", &storage_pruned),
+            ("serialize_base framing", &base_framing),
             ("skeleton", &skeleton),
             ("no inputs, with an auth", &no_inputs),
             ("gen first, with an auth", &gen_first),

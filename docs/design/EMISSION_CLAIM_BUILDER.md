@@ -1207,7 +1207,9 @@ outcomes, recorded here because each changed a §8 surface:
 6. **Single-override/single-source consolidations.**
    `DaemonEngine::fetch_scannable_block_in_form` is the one fetch
    override point (the pruned/full pair are provided wrappers — the
-   override-both-in-lockstep hazard is unrepresentable);
+   override-both-in-lockstep hazard is unrepresentable; since `SB-Q2`
+   there is one body form and the override point is
+   `fetch_scannable_block`);
    `BroadcastSubmitter::local` is the one pre-bound ①-posture
    construction (three drifting copies deleted);
    `EpochCloseInputs::close_view` single-sources the pinned params the
