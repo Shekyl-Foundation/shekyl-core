@@ -125,9 +125,9 @@ fn an_empty_stub_is_refused_at_open() {
 fn declared_commit_policy_constants_are_pinned() {
     // A4: explicit, not by omission. THIS BITES AGAINST: lowering DURABILITY,
     // turning TWO_PHASE_COMMIT off, or shrinking CACHE_SIZE in the consts.
-    // IT DOES NOT COVER: the consts being APPLIED. redb 4.1.0 has no getter
-    // for durability or two-phase commit (only setters, transactions.rs:1269
-    // and :1326), so nothing can read the applied value back; an earlier
+    // IT DOES NOT COVER: the consts being APPLIED. redb 4.4.0 has no getter
+    // for durability or two-phase commit (only setters, transactions.rs:1504
+    // and :1573), so nothing can read the applied value back; an earlier
     // draft copied the consts into the batch and asserted the copy, which
     // compared each const with itself. Deleting the set_* calls in arm_write
     // leaves this green. Application is proven only by `write` arming its
