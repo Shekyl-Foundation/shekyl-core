@@ -552,6 +552,12 @@ mod tests {
         let bytes = blob.write();
         assert_eq!(bytes.len(), MIN_POW_BLOB_SIZE);
         assert_eq!(PowBlob::read(&bytes).expect("the minimum parses"), blob);
+        // The RT-W10 harness (`examples/rt_w10_request_cost.rs` in
+        // `shekyl-pow-randomx`) repeats these two lengths as literals so
+        // that crate does not depend on this one. A change here updates
+        // the harness in the same commit.
+        assert_eq!(MIN_POW_BLOB_SIZE, 136);
+        assert_eq!(MAX_BLOCK_BLOB_SIZE, 33_000_128);
     }
 
     #[test]
