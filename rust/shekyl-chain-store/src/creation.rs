@@ -39,8 +39,8 @@ use redb::ReadableDatabase;
 use crate::store::{EngineError, StoreError};
 
 /// The length of redb's magic number, the first bytes of every file it
-/// initialized (`redb-4.1.0/src/tree_store/page_store/header.rs`,
-/// `MAGICNUMBER`).
+/// initialized (`redb-4.4.0/src/tree_store/page_store/header.rs:46`,
+/// `MAGICNUMBER`, unchanged from 4.1.0).
 const ENGINE_MAGIC_LEN: usize = 9;
 
 /// The most bytes redb's initialization writes, at the default page and
