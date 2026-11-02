@@ -251,36 +251,6 @@ fn with_one_session_held_failures_climb_as_today() {
     );
 }
 
-/// **After the block, a cooled address is drawable within one first-step
-/// cooldown** (test 3): the first step is 2 min with up to half again of
-/// jitter, so three minutes after the last failure of a long block every
-/// address has thawed: a wake draws one, and only that one cools again.
-#[test]
-fn after_the_block_a_cooled_address_is_drawable_within_one_first_step_cooldown() {
-    for (connector, seed) in [(TOR, 56), (CLEARNET, 57)] {
-        let first_step = shekyl_peerlist::dial_profile(connector)
-            .cooldown
-            .first_nanos;
-        let first_step_and_jitter = Duration::from_nanos(first_step + first_step / 2);
-        let mut rig = QuietRig::new(connector, seed, false);
-        rig.go_quiet();
-        rig.fail_each_once();
-        rig.advance(first_step_and_jitter + Duration::from_secs(1));
-        // The wake thaws what is due and draws one address, which fails
-        // and cools again: every other one is drawable.
-        rig.dial.refuse_after(&rig.clock, rig.cause, rig.took);
-        assert!(
-            rig.dialer.wake(rig.connector, &mut rig.rng),
-            "{connector:?}: an address is drawable"
-        );
-        assert_eq!(
-            rig.cooling(),
-            1,
-            "{connector:?}: only the one just drawn cools"
-        );
-    }
-}
-
 /// The accept `connector` admits. Connecting it occupies a row. The
 /// handshake finishes only when the test calls [`Hub::session_established`].
 fn inbound_accept(connector: ConnectorId) -> Endpoint {

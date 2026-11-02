@@ -12,9 +12,9 @@ use std::net::{IpAddr, Ipv4Addr};
 
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{
-    white_diversity_floor, BanEntry, ConnectionId, DialOutcome, Ladder, NetworkAddress, NoSessions,
-    Peerlist, Refusal, RefusedSet, SessionRow, Source, Tick, DISCLOSE_COUNT, DISCLOSE_WINDOW_NANOS,
-    GRAY_CAP, SESSION_INTAKE_CAP, WHITE_REFILL_LINE,
+    white_diversity_floor, BanEntry, ConnectionId, DialOutcome, NetworkAddress, NoSessions,
+    Peerlist, Refusal, RefusedSet, SessionRow, Source, Tick, Verdict, DISCLOSE_COUNT,
+    DISCLOSE_WINDOW_NANOS, GRAY_CAP, SESSION_INTAKE_CAP, WHITE_REFILL_LINE,
 };
 use shekyl_transport_layer::Ipv4Subnet;
 
@@ -52,7 +52,7 @@ fn draw_until(list: &mut Peerlist, address: &NetworkAddress, rng: &mut SplitMix6
             Some(other) => list.apply(
                 &DialOutcome::PayloadRefused(other),
                 at_hours(0),
-                Ladder::Climb,
+                Verdict::Counted,
                 rng,
             ),
             None => panic!("gray ran out"),
@@ -79,7 +79,7 @@ fn with_white(
         list.apply(
             &DialOutcome::Confirmed(a.clone()),
             at_hours(0),
-            Ladder::Climb,
+            Verdict::Counted,
             rng,
         );
         made.push(a);
@@ -135,7 +135,7 @@ fn the_sample_is_cached_for_the_window_and_redrawn_after_it() {
         list.apply(
             &DialOutcome::SessionAccepted(v4(n)),
             at_hours(23),
-            Ladder::Climb,
+            Verdict::Counted,
             &mut rng,
         );
     }
@@ -171,7 +171,7 @@ fn the_sample_is_uniform_over_white_with_our_own_address_as_one_member() {
             list.apply(
                 &DialOutcome::SessionAccepted(a.clone()),
                 now,
-                Ladder::Climb,
+                Verdict::Counted,
                 &mut rng,
             );
         }
@@ -378,7 +378,7 @@ fn a_demoted_entry_is_barred_evictable_never_drawn_and_refused_at_admission() {
     list.apply(
         &DialOutcome::Confirmed(banned.clone()),
         at_hours(11),
-        Ladder::Climb,
+        Verdict::Counted,
         &mut rng,
     );
     assert!(!list.is_white(&banned), "not drawn: no promotion");
@@ -386,7 +386,7 @@ fn a_demoted_entry_is_barred_evictable_never_drawn_and_refused_at_admission() {
     list.apply(
         &DialOutcome::Confirmed(banned.clone()),
         at_hours(11),
-        Ladder::Climb,
+        Verdict::Counted,
         &mut rng,
     );
     assert!(
@@ -427,7 +427,7 @@ fn a_ban_does_not_rebuild_the_cached_sample_and_tor_never_demotes() {
         list.apply(
             &DialOutcome::Confirmed(onion(n)),
             at_hours(0),
-            Ladder::Climb,
+            Verdict::Counted,
             &mut rng,
         );
     }
@@ -689,7 +689,7 @@ fn a_drawn_sample_is_served_unchanged_when_white_drops_below_the_floor_mid_windo
         list.apply(
             &DialOutcome::SessionAccepted(a.clone()),
             at_hours(24),
-            Ladder::Climb,
+            Verdict::Counted,
             &mut rng,
         );
     }

@@ -27,7 +27,7 @@
 //! failed white test does not demote in the stretch (white is
 //! known-working, Rick 2026-10-26: outside the stretch it moves to gray).
 
-use shekyl_peerlist::{dial_profile, ConnectorId, DialOutcome, Ladder, Tick};
+use shekyl_peerlist::{dial_profile, ConnectorId, DialOutcome, Tick, Verdict};
 
 use super::{Dialer, Shared};
 use crate::reach::{quiet_evidence, QuietEvidence};
@@ -56,15 +56,16 @@ impl Dialer {
         }
     }
 
-    /// The ladder a failed test on `connector` takes at `now`: the first
-    /// step while the connector holds no session — an outbound one, or an
+    /// The verdict a failed test on `connector` takes at `now`, until the
+    /// judge replaces this guard (`DIALER_OUTAGE_EVIDENCE.md` §8, step 5):
+    /// excused while the connector holds no session — an outbound one, or an
     /// inbound one whose handshake has finished — its last K attempts all
     /// ended without opening a stream, and at least S has passed since a
     /// stream last opened there (K and S are its dial profile's quiet
     /// threshold); the climb otherwise. A handshake still open is not a
     /// session, so the probe of this node's own onion does not climb the
     /// ladder (§4.5).
-    pub(super) fn ladder(shared: &Shared, connector: ConnectorId, now: Tick) -> Ladder {
+    pub(super) fn ladder(shared: &Shared, connector: ConnectorId, now: Tick) -> Verdict {
         let index = connector.index();
         let threshold = dial_profile(connector).quiet();
         let held = shared
@@ -74,9 +75,9 @@ impl Dialer {
         let span = now.get().saturating_sub(shared.last_opened[index].get());
         if held == 0 && shared.unopened[index] >= threshold.attempts && span >= threshold.span_nanos
         {
-            Ladder::FirstStep
+            Verdict::Excused
         } else {
-            Ladder::Climb
+            Verdict::Counted
         }
     }
 }

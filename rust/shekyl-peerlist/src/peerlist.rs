@@ -15,7 +15,7 @@ use crate::address_file::{self, AddressFileError};
 use crate::outcome::{DialOutcome, ListName, Refusal, SessionRow, Source, WhiteClock};
 use crate::partition::{DiscloseEarly, DiscloseEarlyEnd, Partition};
 use crate::validity::RefusedSet;
-use crate::{dial_profile, white_diversity_floor, Ladder, DISCLOSE_COUNT, WHITE_REFILL_LINE};
+use crate::{dial_profile, white_diversity_floor, Verdict, DISCLOSE_COUNT, WHITE_REFILL_LINE};
 
 /// The kept sessions white expiry skips (the gray lifecycle, Rick
 /// 2026-10-24). The dialer answers with the set whose close moves the
@@ -515,16 +515,16 @@ impl Peerlist {
     /// draw (brief §5). The match is total: the seat, and, for a
     /// confirmation, whether the session stayed.
     ///
-    /// `ladder` is the cooldown a failed test takes. The dialer chooses it
-    /// from its own evidence, once, when it records the test. A report that
-    /// leaves the address uncooled leaves `ladder` unread. Every caller
-    /// passes the ladder; one that is not the dialer passes
-    /// [`Ladder::Climb`].
+    /// `verdict` is what a failed test does to its address. The dialer's
+    /// judge decides it, once, when it records the test; this performs it
+    /// and decides nothing. A report that is not a failed test leaves
+    /// `verdict` unread. A caller that is not the dialer passes
+    /// [`Verdict::Counted`].
     pub fn apply<R: RelayRng + ?Sized>(
         &mut self,
         outcome: &DialOutcome,
         now: Tick,
-        ladder: Ladder,
+        verdict: Verdict,
         rng: &mut R,
     ) {
         let Some(connector) = Self::connector_of(outcome.address()) else {
@@ -547,27 +547,26 @@ impl Peerlist {
             }
             // The gray lifecycle (Rick, 2026-10-24): an address leaves the
             // lists only on authenticated proof of misbehaviour, never for
-            // a connection problem. The lists read the cause's marks and
-            // nothing else. A test that proves misbehaviour drops the
-            // address, gray or white; any other failed test cools it in
-            // gray, and white is known-working, so a white address whose
-            // test fails moves to gray (Rick, 2026-10-26), unless the
-            // dialer's quiet stretch holds it ([`Ladder::FirstStep`]).
-            // *Records-was (2026-10-16, #1092): dropped whatever the cause;
-            // to 2026-10-26, a failed white test left it white.*
-            DialOutcome::DialFailed(address, cause)
-            | DialOutcome::PeerlistRefused(address, cause) => {
-                if cause.proves_misbehaviour() {
-                    partition.drop_tested(address);
-                } else {
-                    partition.fail_test(
-                        address,
-                        now,
-                        ladder,
-                        dial_profile(connector).cooldown,
-                        bans,
-                        rng,
-                    );
+            // a connection problem; the judge says which (`Verdict`).
+            DialOutcome::DialFailed(address, _) | DialOutcome::PeerlistRefused(address, _) => {
+                let profile = dial_profile(connector);
+                match verdict {
+                    Verdict::Drop => {
+                        partition.drop_tested(address);
+                    }
+                    Verdict::Counted => {
+                        partition.fail_test(address, now, profile.cooldown, bans, rng);
+                    }
+                    Verdict::Excused => {
+                        partition.excuse(
+                            address,
+                            now,
+                            profile.cooldown,
+                            profile.judging.outage_retry,
+                            bans,
+                            rng,
+                        );
+                    }
                 }
             }
             // The strand refused the payload. White is unchanged. An
@@ -608,11 +607,9 @@ impl Peerlist {
         Self::connector_of(address).is_some_and(|c| self.partition(c).is_cooling(address))
     }
 
-    /// How many failed tests in a row `address` has had. Zero after a
-    /// confirmation, or for an address that never failed. On
-    /// [`Ladder::Climb`] this is also the rung the cooldown uses. On
-    /// [`Ladder::FirstStep`] the count stays and the cooldown is the first
-    /// rung, so the two are not the same number.
+    /// How many counted failed tests in a row `address` has had: the rung
+    /// its cooldown uses. Zero after a confirmation, or for an address that
+    /// never failed. An excused failure leaves it where it is.
     #[must_use]
     pub fn failed_tests(&self, address: &NetworkAddress) -> u32 {
         Self::connector_of(address).map_or(0, |c| self.partition(c).failed_tests(address))

@@ -13,8 +13,8 @@ use std::net::Ipv4Addr;
 
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{
-    BanEntry, CloseCause, CloseKind, ConnectorId, DialOutcome, Ipv4Subnet, Ladder, NetworkAddress,
-    NoSessions, Peerlist, Refusal, RefusedSet, Source, Tick,
+    BanEntry, CloseCause, CloseKind, ConnectorId, DialOutcome, Ipv4Subnet, NetworkAddress,
+    NoSessions, Peerlist, Refusal, RefusedSet, Source, Tick, Verdict,
 };
 
 const CLEARNET: ConnectorId = ConnectorId::Clearnet;
@@ -83,7 +83,7 @@ fn failed_once(list: &mut Peerlist, address: &NetworkAddress, rng: &mut SplitMix
     list.apply(
         &DialOutcome::DialFailed(address.clone(), CloseCause::new(CloseKind::DialFailed)),
         now(),
-        Ladder::Climb,
+        Verdict::Counted,
         rng,
     );
     assert_eq!(list.failed_tests(address), 1);
@@ -107,7 +107,7 @@ fn a_ban_event_bars_a_seat_on_both_lists() {
     list.apply(
         &DialOutcome::Confirmed(white.clone()),
         now(),
-        Ladder::Climb,
+        Verdict::Counted,
         &mut rng,
     );
     assert!(list.is_white(&white));

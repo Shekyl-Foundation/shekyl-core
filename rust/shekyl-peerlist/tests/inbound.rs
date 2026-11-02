@@ -16,8 +16,8 @@ use std::net::Ipv4Addr;
 
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{
-    white_diversity_floor, ConnectionId, ConnectorId, DialOutcome, Ladder, NetworkAddress,
-    NoSessions, Peerlist, Refusal, RefusedSet, SessionRow, Source, Tick, DISCLOSE_COUNT,
+    white_diversity_floor, ConnectionId, ConnectorId, DialOutcome, NetworkAddress, NoSessions,
+    Peerlist, Refusal, RefusedSet, SessionRow, Source, Tick, Verdict, DISCLOSE_COUNT,
     SESSION_INTAKE_CAP,
 };
 
@@ -184,7 +184,7 @@ fn a_nodes_own_address_in_its_sample_enters_a_peer_that_never_dialled_it() {
         sender.apply(
             &DialOutcome::Confirmed(drawn),
             now(),
-            Ladder::Climb,
+            Verdict::Counted,
             &mut rng,
         );
     }
@@ -206,7 +206,7 @@ fn a_nodes_own_address_in_its_sample_enters_a_peer_that_never_dialled_it() {
             fresh.apply(
                 &DialOutcome::Confirmed(drawn),
                 now(),
-                Ladder::Climb,
+                Verdict::Counted,
                 &mut rng_sample,
             );
         }

@@ -49,7 +49,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use shekyl_draw_rng::RelayRng;
 use shekyl_peerlist::{
     dial_profile, white_diversity_floor, CloseCause, CloseKind, ConnectionId, ConnectorId,
-    DialOutcome, Ladder, ListName, NetworkAddress, Peerlist, Refusal, RefusedSet, Source, Tick,
+    DialOutcome, ListName, NetworkAddress, Peerlist, Refusal, RefusedSet, Source, Tick, Verdict,
 };
 use shekyl_seam::{BanEvent, BanFeed, Hub, SocketId, Subscription, SyncPayload};
 use shekyl_timing_engine::{Clock, OwnerHandle};
@@ -605,7 +605,7 @@ impl Dialer {
                     // unread. Climb is what a caller passes when the quiet
                     // stretch is not the decision.
                     let outcome = DialOutcome::PayloadRefused(address.clone());
-                    shared.lists.apply(&outcome, now, Ladder::Climb, rng);
+                    shared.lists.apply(&outcome, now, Verdict::Counted, rng);
                 }
                 // White expiry follows the connection (the gray lifecycle,
                 // item 1): the clock moves to the close.
@@ -733,9 +733,18 @@ impl Dialer {
         rng: &mut R,
     ) {
         Self::note_attempt(shared, connector, outcome, now);
-        let ladder = Self::ladder(shared, connector, now);
+        // Proof of misbehaviour drops the address whatever the guard says;
+        // the peer list performs the verdict and decides nothing.
+        let verdict = match outcome {
+            DialOutcome::DialFailed(_, cause) | DialOutcome::PeerlistRefused(_, cause)
+                if cause.proves_misbehaviour() =>
+            {
+                Verdict::Drop
+            }
+            _ => Self::ladder(shared, connector, now),
+        };
         shared.attempts(connector).finish(outcome);
-        shared.lists.apply(outcome, now, ladder, rng);
+        shared.lists.apply(outcome, now, verdict, rng);
         let held = Self::tor_held(shared);
         shared.tor_link.observe(connector, outcome, held);
     }

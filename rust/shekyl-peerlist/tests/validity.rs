@@ -18,8 +18,8 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{
-    white_diversity_floor, ConnectionId, ConnectorId, DialOutcome, Ladder, NetworkAddress,
-    NoSessions, Peerlist, RangeV4, RangeV6, Refusal, RefusedSet, SessionRow, Source, Tick,
+    white_diversity_floor, ConnectionId, ConnectorId, DialOutcome, NetworkAddress, NoSessions,
+    Peerlist, RangeV4, RangeV6, Refusal, RefusedSet, SessionRow, Source, Tick, Verdict,
     DISCLOSE_COUNT, REFUSED_V4, REFUSED_V6,
 };
 
@@ -164,14 +164,14 @@ fn promote(list: &mut Peerlist, address: &NetworkAddress, rng: &mut SplitMix64) 
         list.apply(
             &DialOutcome::PayloadRefused(drawn),
             now(),
-            Ladder::Climb,
+            Verdict::Counted,
             rng,
         );
     }
     list.apply(
         &DialOutcome::SessionAccepted(address.clone()),
         now(),
-        Ladder::Climb,
+        Verdict::Counted,
         rng,
     );
     assert!(list.is_white(address), "{address:?} is white");

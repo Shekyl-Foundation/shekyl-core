@@ -24,16 +24,15 @@ use shekyl_net_address::{Host, NetworkAddress};
 use shekyl_relay_privacy::ConnectionId;
 use shekyl_timing_engine::Tick;
 
-use shekyl_transport_layer::{BanEntry, BanSet};
+use shekyl_transport_layer::{BanEntry, BanSet, JitteredSpan};
 
 use crate::index::Index;
 use crate::outcome::WhiteClock;
 use crate::sample::sample_prefix;
 use crate::validity::RefusedSet;
 use crate::{
-    cooldown_nanos, Cooldown, Ladder, DISCLOSE_COUNT, DISCLOSE_WINDOW_NANOS,
-    EXPIRATION_PERIOD_NANOS, GRAY_CAP, INTAKE_SPAN_NANOS, P2P_DISCLOSE_EARLY_SPAN_NANOS,
-    SESSION_INTAKE_CAP, WHITE_CAP,
+    cooldown_nanos, Cooldown, DISCLOSE_COUNT, DISCLOSE_WINDOW_NANOS, EXPIRATION_PERIOD_NANOS,
+    GRAY_CAP, INTAKE_SPAN_NANOS, P2P_DISCLOSE_EARLY_SPAN_NANOS, SESSION_INTAKE_CAP, WHITE_CAP,
 };
 
 /// The connector's cached disclosure sample (D3): drawn once, kept for the
@@ -78,9 +77,11 @@ enum GrayPhase {
     Drawable,
     /// Drawn, not yet reported.
     Outstanding,
-    /// A failed test that proved no misbehaviour. Not drawable until the
-    /// tick, which [`Partition::thaw`] reads.
-    Cooling(Tick),
+    /// A failed test that proved no misbehaviour. Not drawable until
+    /// `until`, which [`Partition::thaw`] reads. `excused` when the judge
+    /// excused it (`OE-D6`); the judge's next sign of life clears those
+    /// with no counted failure.
+    Cooling { until: Tick, excused: bool },
     /// Covered by an active ban entry. Ineligible on both lists: never
     /// drawn, in no census or candidate count, refused at the door.
     /// Evictable, so a ban never holds gray over its cap. The lift of the
@@ -102,8 +103,21 @@ enum GrayPhase {
 enum Seat {
     /// Unconfirmed. `failures` is the cooldown ladder's rung.
     Gray { phase: GrayPhase, failures: u32 },
-    /// Confirmed by this node's own dial. The value is `last_observed`.
-    White(Tick),
+    /// Confirmed by this node's own dial. `observed` is `last_observed`.
+    /// `excused_until` holds an excused white address back from the draw:
+    /// white has no cooling state, so without it an excused white address
+    /// would be redrawn at once (`DIALER_OUTAGE_EVIDENCE.md` §4.1).
+    White {
+        observed: Tick,
+        excused_until: Option<Tick>,
+    },
+}
+
+fn white(observed: Tick) -> Seat {
+    Seat::White {
+        observed,
+        excused_until: None,
+    }
 }
 
 fn drawable(failures: u32) -> Seat {
@@ -120,9 +134,9 @@ fn outstanding(failures: u32) -> Seat {
     }
 }
 
-fn cooling(until: Tick, failures: u32) -> Seat {
+fn cooling(until: Tick, failures: u32, excused: bool) -> Seat {
     Seat::Gray {
-        phase: GrayPhase::Cooling(until),
+        phase: GrayPhase::Cooling { until, excused },
         failures,
     }
 }
@@ -147,6 +161,9 @@ pub(crate) struct Partition {
     outstanding_draws: usize,
     /// Seats that are white. Same three writers.
     white_seats: usize,
+    /// White seats held back by an excusal: counted in `white_seats` and
+    /// never drawn. Same three writers.
+    excused_white: usize,
     /// Seats whose phase is [`GrayPhase::Cooling`]. Same three writers.
     cooling: usize,
     /// Seats whose phase is [`GrayPhase::Barred`]. Same three writers.
@@ -187,25 +204,24 @@ impl Partition {
         matches!(
             self.seat_of(address),
             Some(Seat::Gray {
-                phase: GrayPhase::Cooling(_),
+                phase: GrayPhase::Cooling { .. },
                 ..
             })
         )
     }
 
-    /// Consecutive failed tests stored on the seat. Zero for an address that
-    /// is white, unseated, or has not failed since it last became white.
-    /// [`Ladder::FirstStep`] leaves this count where it is and cools for
-    /// the first rung, so the stored count is not that cooldown's rung.
+    /// Consecutive counted failed tests stored on the seat: the cooldown's
+    /// rung. Zero for an address that is white, unseated, or has not failed
+    /// since it last became white. An excused failure leaves it as it is.
     pub(crate) fn failed_tests(&self, address: &NetworkAddress) -> u32 {
         match self.seat_of(address) {
             Some(Seat::Gray { failures, .. }) => failures,
-            Some(Seat::White(_)) | None => 0,
+            Some(Seat::White { .. }) | None => 0,
         }
     }
 
     pub(crate) fn is_white(&self, address: &NetworkAddress) -> bool {
-        matches!(self.seat_of(address), Some(Seat::White(_)))
+        matches!(self.seat_of(address), Some(Seat::White { .. }))
     }
 
     /// Whether the address already has a seat. A seated address is not a
@@ -217,13 +233,13 @@ impl Partition {
     pub(crate) fn gray_iter(&self) -> impl Iterator<Item = &NetworkAddress> {
         self.seats.iter().filter_map(|(address, seat)| match seat {
             Seat::Gray { .. } => Some(address),
-            Seat::White(_) => None,
+            Seat::White { .. } => None,
         })
     }
 
     pub(crate) fn white_iter(&self) -> impl Iterator<Item = &NetworkAddress> {
         self.seats.iter().filter_map(|(address, seat)| match seat {
-            Seat::White(_) => Some(address),
+            Seat::White { .. } => Some(address),
             Seat::Gray { .. } => None,
         })
     }
@@ -291,9 +307,16 @@ impl Partition {
                     phase: GrayPhase::Drawable,
                     ..
                 } => !white,
-                Seat::White(_) => white,
+                Seat::White {
+                    excused_until: None,
+                    ..
+                } => white,
+                Seat::White {
+                    excused_until: Some(_),
+                    ..
+                } => false,
                 Seat::Gray {
-                    phase: GrayPhase::Outstanding | GrayPhase::Cooling(_) | GrayPhase::Barred,
+                    phase: GrayPhase::Outstanding | GrayPhase::Cooling { .. } | GrayPhase::Barred,
                     ..
                 } => false,
             };
@@ -353,10 +376,18 @@ impl Partition {
 
     /// One uniform white address. A re-contact draw, not a promotion.
     pub(crate) fn draw_white<R: RelayRng + ?Sized>(&self, rng: &mut R) -> Option<NetworkAddress> {
-        if self.white_seats == 0 {
+        if self.white_seats == self.excused_white {
             return None;
         }
-        Some(self.pick_accepted(rng, |_, seat| matches!(seat, Seat::White(_))))
+        Some(self.pick_accepted(rng, |_, seat| {
+            matches!(
+                seat,
+                Seat::White {
+                    excused_until: None,
+                    ..
+                }
+            )
+        }))
     }
 
     /// A dial this node opened was confirmed.
@@ -390,16 +421,16 @@ impl Partition {
                 _,
             ) => {
                 // White carries no rung. The ladder ends with the gray seat.
-                self.resolve_draw(address, Seat::White(now), bans);
+                self.resolve_draw(address, white(now), bans);
                 self.evict_white_over_cap(address, rng);
             }
-            (Some(Seat::White(_)), WhiteClock::Move) => self.write_clock(address, now),
+            (Some(Seat::White { .. }), WhiteClock::Move) => self.write_clock(address, now),
             // A cooling or barred address was not the draw either: it is not
             // drawable.
-            (Some(Seat::White(_)), WhiteClock::Hold)
+            (Some(Seat::White { .. }), WhiteClock::Hold)
             | (
                 Some(Seat::Gray {
-                    phase: GrayPhase::Drawable | GrayPhase::Cooling(_) | GrayPhase::Barred,
+                    phase: GrayPhase::Drawable | GrayPhase::Cooling { .. } | GrayPhase::Barred,
                     ..
                 })
                 | None,
@@ -408,13 +439,14 @@ impl Partition {
         }
     }
 
-    /// Stamp `last_observed`. The address is white; this is not a seat
-    /// change, so the tallies stay.
+    /// Stamp `last_observed`. The address is white and answered, so an
+    /// excusal it held ends with it.
     fn write_clock(&mut self, address: &NetworkAddress, now: Tick) {
-        match self.seats.get_mut(address) {
-            Some(Seat::White(observed)) => *observed = now,
-            _ => debug_assert!(false, "write_clock follows a white seat"),
-        }
+        debug_assert!(
+            matches!(self.seat_of(address), Some(Seat::White { .. })),
+            "write_clock follows a white seat"
+        );
+        self.move_seat(address, white(now));
     }
 
     /// White to gray, on rung zero. The clock is not copied. The entry
@@ -427,7 +459,7 @@ impl Partition {
         address: &NetworkAddress,
         rng: &mut R,
     ) -> bool {
-        if !matches!(self.seat_of(address), Some(Seat::White(_))) {
+        if !matches!(self.seat_of(address), Some(Seat::White { .. })) {
             return false;
         }
         self.move_seat(address, drawable(0));
@@ -442,7 +474,7 @@ impl Partition {
         if !matches!(
             self.seat_of(address),
             Some(
-                Seat::White(_)
+                Seat::White { .. }
                     | Seat::Gray {
                         phase: GrayPhase::Outstanding,
                         ..
@@ -455,18 +487,15 @@ impl Partition {
         true
     }
 
-    /// A failed test that proved no misbehaviour, on the connector's
-    /// cooldown ladder `cooldown`. Returns whether the seat moved.
+    /// A counted failed test ([`crate::Verdict::Counted`]), on the
+    /// connector's cooldown ladder `cooldown`. Returns whether the seat moved.
     ///
-    /// - **An outstanding gray draw** returns to gray and cools until `now`
-    ///   plus [`cooldown_nanos`]. On [`Ladder::Climb`] the consecutive count
-    ///   steps and the cooldown is its rung; on [`Ladder::FirstStep`] the
-    ///   cooldown is the first rung and the count does not climb (it is at
-    ///   least one).
-    /// - **A white address** is known-working, so a failed test moves it to
-    ///   gray, cooling at the first rung with a count of one, under the gray
-    ///   cap (Rick, 2026-10-26). On [`Ladder::FirstStep`] it stays white:
-    ///   failures while the connector holds nothing say nothing about it.
+    /// - **An outstanding gray draw** returns to gray, its consecutive count
+    ///   steps, and it cools until `now` plus [`cooldown_nanos`] for that
+    ///   rung.
+    /// - **A white address** is known-working, so a counted failure moves it
+    ///   to gray, cooling at the first rung with a count of one, under the
+    ///   gray cap (Rick, 2026-10-26).
     ///
     /// A cooling seat is not drawable until [`Self::thaw`] passes its tick.
     /// Anything else is left as it is.
@@ -474,61 +503,104 @@ impl Partition {
         &mut self,
         address: &NetworkAddress,
         now: Tick,
-        ladder: Ladder,
         cooldown: Cooldown,
         bans: &BanSet,
         rng: &mut R,
     ) -> bool {
-        let (failures, rung, from_white) = match (self.seat_of(address), ladder) {
-            (
-                Some(Seat::Gray {
-                    phase: GrayPhase::Outstanding,
-                    failures,
-                }),
-                Ladder::Climb,
-            ) => {
-                let failures = failures.saturating_add(1);
-                (failures, failures, false)
-            }
-            (
-                Some(Seat::Gray {
-                    phase: GrayPhase::Outstanding,
-                    failures,
-                }),
-                Ladder::FirstStep,
-            ) => (failures.max(1), 1, false),
-            (Some(Seat::White(_)), Ladder::Climb) => (1, 1, true),
-            (Some(Seat::White(_)), Ladder::FirstStep) | (Some(Seat::Gray { .. }) | None, _) => {
-                return false;
-            }
+        let (failures, from_white) = match self.seat_of(address) {
+            Some(Seat::Gray {
+                phase: GrayPhase::Outstanding,
+                failures,
+            }) => (failures.saturating_add(1), false),
+            Some(Seat::White { .. }) => (1, true),
+            Some(Seat::Gray { .. }) | None => return false,
         };
         let until = Tick::new(
             now.get()
-                .saturating_add(cooldown_nanos(cooldown, rung, rng)),
+                .saturating_add(cooldown_nanos(cooldown, failures, rng)),
         );
-        self.resolve_draw(address, cooling(until, failures), bans);
+        self.resolve_draw(address, cooling(until, failures, false), bans);
         if from_white {
             self.evict_gray_over_cap(address, rng);
         }
         true
     }
 
+    /// An excused failed test ([`crate::Verdict::Excused`]; `OE-D6`, hold
+    /// the rung). Returns whether the seat moved. The count neither climbs
+    /// nor descends.
+    ///
+    /// - **An outstanding gray draw with counted failures** cools at its
+    ///   current rung on `cooldown`.
+    /// - **An outstanding gray draw with none** cools for `outage_retry`.
+    /// - **A white address** has no counted failure: it stays white and is
+    ///   held back from the draw for `outage_retry`.
+    ///
+    /// Both cooling seats are marked excused, so the judge's next sign of
+    /// life clears the one with no counted failure. Anything else is left
+    /// as it is.
+    pub(crate) fn excuse<R: RelayRng + ?Sized>(
+        &mut self,
+        address: &NetworkAddress,
+        now: Tick,
+        cooldown: Cooldown,
+        outage_retry: JitteredSpan,
+        bans: &BanSet,
+        rng: &mut R,
+    ) -> bool {
+        match self.seat_of(address) {
+            Some(Seat::Gray {
+                phase: GrayPhase::Outstanding,
+                failures,
+            }) => {
+                let wait = if failures == 0 {
+                    outage_retry_nanos(outage_retry, rng)
+                } else {
+                    cooldown_nanos(cooldown, failures, rng)
+                };
+                let until = Tick::new(now.get().saturating_add(wait));
+                self.resolve_draw(address, cooling(until, failures, true), bans);
+                true
+            }
+            Some(Seat::White { observed, .. }) => {
+                let until = Tick::new(
+                    now.get()
+                        .saturating_add(outage_retry_nanos(outage_retry, rng)),
+                );
+                self.move_seat(
+                    address,
+                    Seat::White {
+                        observed,
+                        excused_until: Some(until),
+                    },
+                );
+                true
+            }
+            Some(Seat::Gray { .. }) | None => false,
+        }
+    }
+
     /// Every cooling seat whose tick has passed returns to drawable gray,
-    /// on the same ladder rung. Returns how many.
+    /// on the same ladder rung, and every white excusal that has passed
+    /// ends. Returns how many seats moved.
     pub(crate) fn thaw(&mut self, now: Tick) -> usize {
-        let due: Vec<(NetworkAddress, u32)> = self
+        let due: Vec<(NetworkAddress, Seat)> = self
             .seats
             .iter()
             .filter_map(|(address, seat)| match seat {
                 Seat::Gray {
-                    phase: GrayPhase::Cooling(until),
+                    phase: GrayPhase::Cooling { until, .. },
                     failures,
-                } if until.get() <= now.get() => Some((address.clone(), *failures)),
-                Seat::Gray { .. } | Seat::White(_) => None,
+                } if until.get() <= now.get() => Some((address.clone(), drawable(*failures))),
+                Seat::White {
+                    observed,
+                    excused_until: Some(until),
+                } if until.get() <= now.get() => Some((address.clone(), white(*observed))),
+                Seat::Gray { .. } | Seat::White { .. } => None,
             })
             .collect();
-        for (address, failures) in &due {
-            self.move_seat(address, drawable(*failures));
+        for (address, seat) in &due {
+            self.move_seat(address, *seat);
         }
         due.len()
     }
@@ -538,7 +610,7 @@ impl Partition {
     /// from its start (the gray lifecycle, item 1). Nothing else is
     /// touched; an address that is not white is left as it is.
     pub(crate) fn session_ended(&mut self, address: &NetworkAddress, now: Tick) -> bool {
-        if !matches!(self.seat_of(address), Some(Seat::White(_))) {
+        if !matches!(self.seat_of(address), Some(Seat::White { .. })) {
             return false;
         }
         self.write_clock(address, now);
@@ -805,7 +877,7 @@ impl Partition {
 
     fn white_clocks(&self) -> impl Iterator<Item = (&NetworkAddress, Tick)> {
         self.seats.iter().filter_map(|(address, seat)| match seat {
-            Seat::White(observed) => Some((address, *observed)),
+            Seat::White { observed, .. } => Some((address, *observed)),
             Seat::Gray { .. } => None,
         })
     }
@@ -835,12 +907,19 @@ impl Partition {
 
     fn note_added(&mut self, seat: &Seat) {
         *self.tally(seat) += 1;
+        if is_excused_white(seat) {
+            self.excused_white += 1;
+        }
     }
 
     fn note_removed(&mut self, seat: &Seat) {
         let tally = self.tally(seat);
         debug_assert!(*tally > 0, "a seat count tracks the table");
         *tally -= 1;
+        if is_excused_white(seat) {
+            debug_assert!(self.excused_white > 0, "a seat count tracks the table");
+            self.excused_white -= 1;
+        }
     }
 
     fn tally(&mut self, seat: &Seat) -> &mut usize {
@@ -853,9 +932,9 @@ impl Partition {
                 phase: GrayPhase::Outstanding,
                 ..
             } => &mut self.outstanding_draws,
-            Seat::White(_) => &mut self.white_seats,
+            Seat::White { .. } => &mut self.white_seats,
             Seat::Gray {
-                phase: GrayPhase::Cooling(_),
+                phase: GrayPhase::Cooling { .. },
                 ..
             } => &mut self.cooling,
             Seat::Gray {
@@ -875,7 +954,7 @@ impl Partition {
         let covered = address.ip().is_some_and(|ip| bans.covers(ip));
         let seat = match seat {
             Seat::Gray { failures, .. } if covered => barred(failures),
-            Seat::White(_) if covered => barred(0),
+            Seat::White { .. } if covered => barred(0),
             seat => seat,
         };
         self.move_seat(address, seat);
@@ -898,12 +977,12 @@ impl Partition {
         let mut barred_now = 0;
         for (address, seat) in covered {
             match seat {
-                Seat::White(_) => {
+                Seat::White { .. } => {
                     self.move_seat(&address, barred(0));
                     barred_now += 1;
                 }
                 Seat::Gray {
-                    phase: GrayPhase::Drawable | GrayPhase::Cooling(_),
+                    phase: GrayPhase::Drawable | GrayPhase::Cooling { .. },
                     failures,
                 } => {
                     self.move_seat(&address, barred(failures));
@@ -979,7 +1058,7 @@ impl Partition {
             let keep_is_evictable = matches!(
                 self.seat_of(keep),
                 Some(Seat::Gray {
-                    phase: GrayPhase::Drawable | GrayPhase::Cooling(_) | GrayPhase::Barred,
+                    phase: GrayPhase::Drawable | GrayPhase::Cooling { .. } | GrayPhase::Barred,
                     ..
                 })
             );
@@ -993,7 +1072,7 @@ impl Partition {
                 matches!(
                     seat,
                     Seat::Gray {
-                        phase: GrayPhase::Drawable | GrayPhase::Cooling(_) | GrayPhase::Barred,
+                        phase: GrayPhase::Drawable | GrayPhase::Cooling { .. } | GrayPhase::Barred,
                         ..
                     }
                 ) && address != keep
@@ -1005,12 +1084,12 @@ impl Partition {
     /// Demote white until it is within [`WHITE_CAP`], never `keep`.
     fn evict_white_over_cap<R: RelayRng + ?Sized>(&mut self, keep: &NetworkAddress, rng: &mut R) {
         while self.white_seats > WHITE_CAP {
-            let keep_is_white = matches!(self.seat_of(keep), Some(Seat::White(_)));
+            let keep_is_white = matches!(self.seat_of(keep), Some(Seat::White { .. }));
             if !another(self.white_seats, keep_is_white) {
                 break;
             }
             let victim = self.pick_accepted(rng, |address, seat| {
-                matches!(seat, Seat::White(_)) && address != keep
+                matches!(seat, Seat::White { .. }) && address != keep
             });
             self.demote(&victim, rng);
         }
@@ -1036,6 +1115,24 @@ impl Partition {
             }
         }
     }
+}
+
+/// One draw of the connector's `outage_retry`: its base plus a uniform
+/// jitter.
+fn outage_retry_nanos<R: RelayRng + ?Sized>(outage_retry: JitteredSpan, rng: &mut R) -> u64 {
+    outage_retry
+        .base_nanos
+        .saturating_add(bounded_uniform(rng, outage_retry.jitter_nanos))
+}
+
+const fn is_excused_white(seat: &Seat) -> bool {
+    matches!(
+        seat,
+        Seat::White {
+            excused_until: Some(_),
+            ..
+        }
+    )
 }
 
 /// Whether a kind with `kind_count` members has one that is not `keep`.

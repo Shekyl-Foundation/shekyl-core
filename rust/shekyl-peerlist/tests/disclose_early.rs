@@ -18,9 +18,9 @@ use std::net::{IpAddr, Ipv4Addr};
 
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{
-    white_diversity_floor, BanEntry, ConnectorId, DialOutcome, DiscloseEarly, Ladder,
-    NetworkAddress, NoSessions, Peerlist, RefusedSet, Source, Tick, DISCLOSE_COUNT,
-    DISCLOSE_WINDOW_NANOS, P2P_DISCLOSE_EARLY_SPAN_NANOS,
+    white_diversity_floor, BanEntry, ConnectorId, DialOutcome, DiscloseEarly, NetworkAddress,
+    NoSessions, Peerlist, RefusedSet, Source, Tick, Verdict, DISCLOSE_COUNT, DISCLOSE_WINDOW_NANOS,
+    P2P_DISCLOSE_EARLY_SPAN_NANOS,
 };
 
 fn v4(n: u16) -> NetworkAddress {
@@ -67,12 +67,17 @@ fn confirm(list: &mut Peerlist, address: &NetworkAddress, now: Tick, rng: &mut S
                 list.apply(
                     &DialOutcome::Confirmed(address.clone()),
                     now,
-                    Ladder::Climb,
+                    Verdict::Counted,
                     rng,
                 );
                 return;
             }
-            Some(other) => list.apply(&DialOutcome::PayloadRefused(other), now, Ladder::Climb, rng),
+            Some(other) => list.apply(
+                &DialOutcome::PayloadRefused(other),
+                now,
+                Verdict::Counted,
+                rng,
+            ),
             None => panic!("gray ran out"),
         }
     }

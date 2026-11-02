@@ -12,8 +12,8 @@ use std::net::Ipv4Addr;
 
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{
-    ConnectorId, DialOutcome, Ladder, NetworkAddress, NoSessions, Peerlist, RefusedSet, Source,
-    Tick, GRAY_CAP,
+    ConnectorId, DialOutcome, NetworkAddress, NoSessions, Peerlist, RefusedSet, Source, Tick,
+    Verdict, GRAY_CAP,
 };
 
 const C: ConnectorId = ConnectorId::Clearnet;
@@ -48,7 +48,7 @@ fn draw_and_return(
     list.apply(
         &DialOutcome::PayloadRefused(drawn.clone()),
         now(),
-        Ladder::Climb,
+        Verdict::Counted,
         rng,
     );
     Some(drawn)
@@ -203,7 +203,7 @@ fn the_white_draw_takes_white_only_and_counts_hosts() {
         list.apply(
             &DialOutcome::Confirmed(address.clone()),
             now(),
-            Ladder::Climb,
+            Verdict::Counted,
             &mut rng,
         );
         white.push(address);
