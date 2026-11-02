@@ -651,6 +651,17 @@ mod tests {
         );
     }
 
+    /// Set by [`flagging_run`]: the remnant this test hands in, and no
+    /// other, so a parallel test's `fake_run` cannot stand in for a start.
+    static MINE_REFUSAL_REACHED_RUN: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
+    extern "C" fn flagging_run(snapshot: *const ShekylDaemonSnapshot) -> c_int {
+        assert!(!snapshot.is_null());
+        MINE_REFUSAL_REACHED_RUN.store(true, Ordering::SeqCst);
+        0
+    }
+
     /// `mine = on` without `mine-address` is the parser's refusal, naming
     /// that row; a `mine-threads` count above the host's parallelism is
     /// the configuration check's. Both exit 2 before anything starts
@@ -658,10 +669,13 @@ mod tests {
     #[test]
     fn mine_on_without_an_address_and_too_many_threads_both_exit_two() {
         let d = tempfile::tempdir().unwrap();
-        let runs_before = RUNS.load(Ordering::SeqCst);
+        let flagging = || Remnant {
+            run: flagging_run,
+            stop: fake_stop,
+        };
         assert_eq!(
             main(
-                remnant(),
+                flagging(),
                 &args(&["--network", "regtest", "--mine", "on"]),
                 &host(d.path())
             ),
@@ -671,7 +685,7 @@ mod tests {
         let past = (host_threads + 1).to_string();
         assert_eq!(
             main(
-                remnant(),
+                flagging(),
                 &args(&[
                     "--network",
                     "regtest",
@@ -686,7 +700,10 @@ mod tests {
             ),
             EXIT_REFUSED
         );
-        assert_eq!(RUNS.load(Ordering::SeqCst), runs_before, "nothing started");
+        assert!(
+            !MINE_REFUSAL_REACHED_RUN.load(Ordering::SeqCst),
+            "nothing started"
+        );
     }
 
     #[test]
