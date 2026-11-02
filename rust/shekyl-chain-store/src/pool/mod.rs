@@ -69,6 +69,10 @@
 //! is not a redb database, a database without the header table or cell, a
 //! cell that does not decode. A wrong `--data-dir`, a foreign file or a
 //! tampered one is an operator's to look at, not the store's to erase.
+//! The recreate holds the writable open across the rename: that open is
+//! the engine's exclusive lock, and a reader that still holds the file
+//! makes it fail, leaving the file as it was. The read-only open filters
+//! refusals; it is not the lock.
 //!
 //! # Durability
 //!

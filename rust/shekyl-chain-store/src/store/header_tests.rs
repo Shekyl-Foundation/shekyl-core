@@ -419,6 +419,35 @@ fn a_file_with_no_version_cell_is_refused_not_read_as_v1() {
     cleanup(&foreign);
 }
 
+/// A cleanly shut-down file with redb's recovery bit set is `RepairAborted`
+/// from the read-only door, and the writable open returns the probe row.
+///
+/// Mapping that error to a hard refusal fails this test. The read-only
+/// door is the precondition: a writable open that never saw `RepairAborted`
+/// is not this path. Shortening the file does not construct it.
+#[test]
+fn a_recovery_bit_reopens_the_probe_row() {
+    let path = tmp("repair");
+    seeded(&path, ApplyPolicy::Full);
+    crate::redb_recovery::mark_recovery_required(&path);
+    assert!(
+        crate::redb_recovery::read_only_open_is_repair_aborted(&path),
+        "the bit is the repair arm"
+    );
+    assert!(
+        matches!(
+            ChainStore::open_read_only(&path, production_horizons()),
+            Err(StoreError::Engine(EngineError::Open(
+                redb::DatabaseError::RepairAborted
+            )))
+        ),
+        "the read-only door returns the engine's repair arm"
+    );
+    let store = ChainStore::create(&path, EPOCH).expect("repair");
+    assert_eq!(super::store_tests::probe_val(&store, "k"), Some(1));
+    cleanup(&path);
+}
+
 #[test]
 fn a_malformed_header_cell_is_corruption_not_a_version() {
     let path = tmp("corrupt");

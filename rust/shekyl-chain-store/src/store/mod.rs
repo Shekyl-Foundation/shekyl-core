@@ -334,71 +334,16 @@ impl ChainStore {
         let mut builder = redb::Builder::new();
         builder.set_cache_size(CACHE_SIZE);
         let path = path.as_ref();
-        let (db, provenance) = match create_fresh(&builder, path, apply_policy, epoch) {
-            Ok(Some(fresh)) => fresh,
-            Ok(None) => {
-                // The file is judged on a read-only open first. A writable
-                // open writes into the file even when nothing is committed
-                // (the engine records its allocator state when it closes),
-                // so a file this store refuses is refused unwritten, and
-                // only a file judged ours is opened writable. The exception
-                // is a file the engine must repair first: a read-only open
-                // answers `RepairAborted`, and only the writable open below
-                // can repair it, after which it is judged.
-                match builder.open_read_only(path) {
-                    Ok(read_only) => {
-                        judge(&read_only, epoch)?;
-                    }
-                    Err(redb::DatabaseError::RepairAborted) => {}
-                    Err(refused) => {
-                        // A cut before the engine finished initializing:
-                        // the file is empty, or no longer than an
-                        // initialization writes with its magic unwritten
-                        // (`crate::creation`). It is moved aside, never
-                        // deleted, and a fresh store is created at the path.
-                        let Some(aside) = crate::creation::set_aside_unfinished_init(path)
-                            .map_err(|e| {
-                                EngineError::Open(redb::DatabaseError::Storage(e.into()))
-                            })?
-                        else {
-                            return Err(EngineError::Open(refused).into());
-                        };
-                        let (db, provenance) = create_fresh(&builder, path, apply_policy, epoch)?
-                            .ok_or_else(|| {
-                            EngineError::Open(redb::DatabaseError::Storage(
-                                std::io::Error::from(std::io::ErrorKind::AlreadyExists).into(),
-                            ))
-                        })?;
-                        return Ok(Self {
-                            backend: Backend::Writable(db),
-                            apply_policy,
-                            horizons,
-                            shared: Shared::new(provenance),
-                            set_aside: Some(aside),
-                        });
-                    }
-                }
-                let db = builder.open(path).map_err(EngineError::Open)?;
-                // `create_file` commits an empty database before the seal's
-                // transaction commits, so a power loss between the two
-                // leaves a valid file with no table at all (PB-S2's first
-                // replay). Nothing in it can be lost, and this open holds
-                // the engine's exclusive lock, so the creation is finished
-                // here: sealed in place, as `create_sealed` would have.
-                let provenance = match judge(&db, epoch)? {
-                    Some(provenance) => provenance,
-                    None => seal_new(&db, apply_policy, epoch)?,
-                };
-                (db, provenance)
-            }
-            Err(e) => return Err(e),
+        let (db, provenance, set_aside) = match create_fresh(&builder, path, apply_policy, epoch)? {
+            Some((db, provenance)) => (db, provenance, None),
+            None => open_existing(&builder, path, apply_policy, epoch)?,
         };
         Ok(Self {
             backend: Backend::Writable(db),
             apply_policy,
             horizons,
             shared: Shared::new(provenance),
-            set_aside: None,
+            set_aside,
         })
     }
 
@@ -790,6 +735,63 @@ fn create_fresh(
             Err(e)
         }
     }
+}
+
+/// Reopen an existing file.
+///
+/// The read-only open is the refusal filter: a file [`judge`] rejects is
+/// rejected with nothing written, because a writable open records the
+/// engine's allocator state when it closes. `RepairAborted` is not a
+/// refusal. A read-only open returns it before any table read when the
+/// file needs recovery, and only the writable open repairs it. The
+/// writable open's `judge` is the admission, and the provenance of the
+/// handle it returns. The filter's result is not that provenance: the file
+/// can change between the two opens, and the writable open is the one
+/// that holds it.
+///
+/// A creation a power loss cut short is finished (`crate::creation`). A
+/// file with no table at all is sealed in place under the writable open,
+/// which holds the engine's exclusive lock. A file the engine would not
+/// open, if it is an initialization the engine never finished (empty, or
+/// no longer than one writes with its magic unwritten), is moved aside,
+/// never deleted, and a fresh store created at the path; the third value
+/// is where it went. Any other file the engine would not open is refused.
+fn open_existing(
+    builder: &redb::Builder,
+    path: &Path,
+    policy: ApplyPolicy,
+    epoch: SettlementEpochBlocks,
+) -> Result<(Database, Provenance, Option<std::path::PathBuf>), StoreError> {
+    match builder.open_read_only(path) {
+        Ok(read_only) => {
+            judge(&read_only, epoch)?;
+        }
+        Err(redb::DatabaseError::RepairAborted) => {}
+        Err(refused) => {
+            let Some(aside) = crate::creation::set_aside_unfinished_init(path)
+                .map_err(|e| EngineError::Open(redb::DatabaseError::Storage(e.into())))?
+            else {
+                return Err(EngineError::Open(refused).into());
+            };
+            let (db, provenance) =
+                create_fresh(builder, path, policy, epoch)?.ok_or_else(|| {
+                    EngineError::Open(redb::DatabaseError::Storage(
+                        std::io::Error::from(std::io::ErrorKind::AlreadyExists).into(),
+                    ))
+                })?;
+            return Ok((db, provenance, Some(aside)));
+        }
+    }
+    let db = builder.open(path).map_err(EngineError::Open)?;
+    // `create_file` commits an empty database before the seal's
+    // transaction commits, so a power loss between the two leaves a valid
+    // file with no table at all (PB-S2's first replay). Nothing in it can
+    // be lost: it is sealed here, as `create_sealed` would have.
+    let provenance = match judge(&db, epoch)? {
+        Some(provenance) => provenance,
+        None => seal_new(&db, policy, epoch)?,
+    };
+    Ok((db, provenance, None))
 }
 
 /// Hand a just-created, still-empty file to the engine and seal its header
