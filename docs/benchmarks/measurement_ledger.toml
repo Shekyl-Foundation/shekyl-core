@@ -618,6 +618,7 @@ stale_through = [
   { through = "63bfdbc714", note = "Ban subscribers are rung after the socket table's lock drops, on a ban, a lift or an expiry, never on a dial. The clearnet dial, handshake and gap do the same I/O. Not re-measured." },
   { through = "92a5de3824", note = "The merge of dev: one ban.rs test calls is_banned(host) under this branch's signature. Tests only. The clearnet dial, handshake and gap do the same I/O. Not re-measured." },
   { through = "f8162491ba", note = "Step 2b's contract: each connector stamps every end it observed from its own table and hands it on as a DialEnd beside the same D12 cause; read_capped no longer stores its cause, and the connector seals with the stamped end in the same select arm. Classification only, after each step: no deadline moved, and the ban check still runs after the TCP connect (step 3 moves it). The clearnet dial, handshake and gap do the same I/O. Not re-measured." },
+  { through = "18493ce394", note = "The I/O changes: a clearnet dial is admitted before its TCP connect, so a host banned between the draw and the connect gets no SYN; an admitted dial holds its socket's slot through the connect. An admitted dial's connect, handshake and gap do the same I/O as before. Not re-measured." },
 ]
 
 [[constant]]
