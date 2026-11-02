@@ -537,9 +537,11 @@ impl Node {
         // and a handle may keep mining control alive past the node. The
         // close parks them without the join gate, so it returns before the
         // hash; they hold no store handle, and what they finish now is
-        // dropped before it becomes a block. The join takes that gate and
-        // is the last thing this stop does, so a stop already inside the
-        // gate finishes before it.
+        // dropped before it becomes a block. A start that has published
+        // its stop flag and not yet its threads is signaled here too, so
+        // those threads deliver nothing after this returns. The join takes
+        // that gate and is the last thing this stop does, so a stop already
+        // inside the gate finishes before it.
         self.mining.close();
         // The process doors hold the store (`Door::admission`); leave them
         // up and `chain.db` stays exclusive after this node has stopped.

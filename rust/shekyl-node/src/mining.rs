@@ -28,7 +28,7 @@ use shekyl_daemon_rpc::mining_methods::codes;
 use shekyl_hash_budget::Budget;
 use shekyl_miner::{
     DrainGate, FoundBlocks, Job, JobBoard, Miner, MinerConfig, MinerStartRefused, MinerStatus,
-    MiningAddress,
+    MinerStop, MiningAddress, PreparedMiner,
 };
 use shekyl_pow_randomx::CacheStore;
 use shekyl_rpc_types::errors::Diagnostic;
@@ -98,6 +98,11 @@ pub struct MiningStatus {
     pub no_job: Option<NoJob>,
 }
 
+/// One look at the stop flag, after it is in the slot and before any
+/// worker exists.
+#[cfg(test)]
+type ArmHook = Box<dyn FnOnce(&MinerStop) + Send>;
+
 /// What the follower publishes that the miner's reads follow: the board's
 /// posting state and the chain's tip.
 pub(crate) struct Watched {
@@ -105,10 +110,39 @@ pub(crate) struct Watched {
     pub(crate) tips: watch::Receiver<TipChanged>,
 }
 
+/// What the miner slot holds. `Arming` is the stop flag, published before
+/// any worker runs, so [`MiningControl::close`] can signal it without
+/// waiting for the spawn. `Mining` is the running workers.
+enum Resident {
+    Arming(MinerStop),
+    Mining(Miner),
+}
+
 /// The running miner. A poisoned lock still holds it: a panicked holder
 /// must not hide the workers that have to be stopped.
-fn lock_miner(miner: &Mutex<Option<Miner>>) -> std::sync::MutexGuard<'_, Option<Miner>> {
+fn lock_miner(miner: &Mutex<Option<Resident>>) -> std::sync::MutexGuard<'_, Option<Resident>> {
     miner.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Drops an `Arming` this start still owns. A panic while the threads are
+/// being spawned must not leave a flag in the slot with nobody to park
+/// the workers. A committed miner, and a flag [`MiningControl::close`]
+/// already took, are left as they are.
+///
+/// Declare it before any later guard of the same mutex, and drop those
+/// guards before it returns: the mutex is not reentrant, and this drop
+/// locks it.
+struct ClearArming<'a> {
+    slot: &'a Mutex<Option<Resident>>,
+}
+
+impl Drop for ClearArming<'_> {
+    fn drop(&mut self) {
+        let mut slot = lock_miner(self.slot);
+        if matches!(slot.as_ref(), Some(Resident::Arming(_))) {
+            *slot = None;
+        }
+    }
 }
 
 /// The node's miner (module docs).
@@ -127,13 +161,18 @@ pub struct MiningControl {
     /// keeps hashing it, harmlessly, and the RPC answers not ready.
     tips: watch::Receiver<TipChanged>,
     pool: PoolHealth,
-    miner: Mutex<Option<Miner>>,
+    miner: Mutex<Option<Resident>>,
     /// Stopped workers, and the one gate every join takes ([`DrainGate`]).
     /// [`Self::close`] parks without the gate, so shutdown returns before a
     /// hash. A start and a stop hold the gate across their join.
     drain: DrainGate,
     /// Set by [`Self::close`]: no miner starts after the node has stopped.
     closed: AtomicBool,
+    /// Runs after the stop flag is in the slot and before any worker
+    /// exists. One start consumes it. The flag it receives is the one
+    /// the workers will read.
+    #[cfg(test)]
+    arm_hook: Mutex<Option<ArmHook>>,
 }
 
 impl MiningControl {
@@ -158,7 +197,17 @@ impl MiningControl {
             miner: Mutex::new(None),
             drain: DrainGate::default(),
             closed: AtomicBool::new(false),
+            #[cfg(test)]
+            arm_hook: Mutex::new(None),
         }
+    }
+
+    /// Run `hook` once, after the next start has published its stop flag
+    /// and before it spawns. The hook runs on the starting thread and is
+    /// handed that flag.
+    #[cfg(test)]
+    pub(crate) fn on_arming(&self, hook: impl FnOnce(&MinerStop) + Send + 'static) {
+        *self.arm_hook.lock().unwrap_or_else(PoisonError::into_inner) = Some(Box::new(hook));
     }
 
     /// Stop the miner and refuse every later start. Does not take the join
@@ -167,11 +216,22 @@ impl MiningControl {
     pub(crate) fn close(&self) {
         let mut running = lock_miner(&self.miner);
         self.closed.store(true, Ordering::Release);
-        if let Some(miner) = running.take() {
-            // The miner lock is held across the park, so a start cannot
-            // publish between the take and it. `defer` does not take the
-            // gate and does not join.
-            self.drain.defer(miner.stop());
+        match running.take() {
+            Some(Resident::Mining(miner)) => {
+                // The miner lock is held across the park, so a start cannot
+                // publish between the take and it. `defer` does not take the
+                // gate and does not join.
+                self.drain.defer(miner.stop());
+            }
+            Some(Resident::Arming(flag)) => {
+                // The threads are not spawned yet, or are still being
+                // spawned by the start that holds the join gate. Signaling
+                // here is what makes a block unable to leave after this
+                // returns. That start parks the threads; deferring an
+                // empty set here would be a second park.
+                flag.signal();
+            }
+            None => {}
         }
     }
 
@@ -188,7 +248,9 @@ impl MiningControl {
     ///
     /// Joins the one stopped set still hashing, then spawns, holding the
     /// join gate across both. A restart waits out that one hash, and a
-    /// second start cannot spawn beside it.
+    /// second start cannot spawn beside it. The stop flag is in the slot
+    /// before any worker runs, so a shutdown during the spawn signals it
+    /// and nothing those workers finish is delivered.
     ///
     /// # Errors
     ///
@@ -215,8 +277,10 @@ impl MiningControl {
         let miner = &self.miner;
         let closed = &self.closed;
         let drain = &self.drain;
+        #[cfg(test)]
+        let arm_hook = &self.arm_hook;
         drain.before_spawn(|| {
-            {
+            let prepared = {
                 let running = lock_miner(miner);
                 if closed.load(Ordering::Acquire) {
                     return Err(MiningRefused::NodeStopped);
@@ -224,29 +288,66 @@ impl MiningControl {
                 if running.is_some() {
                     return Err(MiningRefused::Running);
                 }
-            }
-            // The guard is dropped before this: a refused start joins the
-            // workers it already spawned, and that join waits out a hash.
-            let started = Miner::start(
-                &MinerConfig { address, threads },
-                board,
-                caches,
-                budget,
-                found,
-            )
-            .map_err(MiningRefused::Start)?;
-            let mut running = lock_miner(miner);
-            if closed.load(Ordering::Acquire) {
-                // The node closed while the threads were starting, and saw
-                // no miner. Park this one; the final join takes the gate
-                // this call still holds, so it runs after the park.
-                let stopped = started.stop();
                 drop(running);
-                drain.defer(stopped);
+                PreparedMiner::arm(
+                    &MinerConfig { address, threads },
+                    board,
+                    caches,
+                    budget,
+                    found,
+                )
+                .map_err(MiningRefused::Start)?
+            };
+            let flag = prepared.stop_flag();
+            {
+                let mut running = lock_miner(miner);
+                if closed.load(Ordering::Acquire) {
+                    return Err(MiningRefused::NodeStopped);
+                }
+                if running.is_some() {
+                    return Err(MiningRefused::Running);
+                }
+                *running = Some(Resident::Arming(flag.clone()));
+            }
+            // Past this, a panic drops the flag if this start still owns
+            // it. Close may already have taken it.
+            let _clear = ClearArming { slot: miner };
+            #[cfg(test)]
+            {
+                let hook = arm_hook
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .take();
+                if let Some(hook) = hook {
+                    hook(&flag);
+                }
+            }
+            // The slot holds the clone shutdown signals. The hook, on test
+            // builds, has already read this one.
+            drop(flag);
+            // The slot lock is not held across the spawn. A refused spawn
+            // joins the workers it already made, and that join waits out a
+            // hash, so it must not hold the miner lock either. Close can
+            // signal the flag while this runs; it does not take the gate.
+            let spawned = prepared.spawn();
+            let mut running = lock_miner(miner);
+            if !matches!(running.as_ref(), Some(Resident::Arming(_))) {
+                drop(running);
+                if let Ok(started) = spawned {
+                    drain.defer(started.stop());
+                }
                 return Err(MiningRefused::NodeStopped);
             }
-            *running = Some(started);
-            Ok(())
+            match spawned {
+                Ok(started) => {
+                    *running = Some(Resident::Mining(started));
+                    Ok(())
+                }
+                Err(refused) => {
+                    *running = None;
+                    Err(MiningRefused::Start(refused))
+                }
+            }
         })
     }
 
@@ -261,7 +362,18 @@ impl MiningControl {
         let miner = &self.miner;
         self.drain.retire(|| {
             let mut running = lock_miner(miner);
-            let stopped = running.take().map(Miner::stop);
+            let stopped = match running.take() {
+                Some(Resident::Mining(miner)) => Some(miner.stop()),
+                // The start that published this holds the gate `retire`
+                // is waiting on, so this arm is the start's own panic
+                // having left the flag. Signal it; there are no threads
+                // in the slot to park.
+                Some(Resident::Arming(flag)) => {
+                    flag.signal();
+                    None
+                }
+                None => None,
+            };
             drop(running);
             stopped
         })
@@ -269,12 +381,15 @@ impl MiningControl {
 
     /// Whether the miner is running.
     pub fn running(&self) -> bool {
-        lock_miner(&self.miner).is_some()
+        matches!(lock_miner(&self.miner).as_ref(), Some(Resident::Mining(_)))
     }
 
     /// The miner's state, the posted job, and why none is posted.
     pub fn status(&self) -> MiningStatus {
-        let miner = lock_miner(&self.miner).as_ref().map(Miner::status);
+        let miner = match lock_miner(&self.miner).as_ref() {
+            Some(Resident::Mining(miner)) => Some(miner.status()),
+            Some(Resident::Arming(_)) | None => None,
+        };
         let job = self.board.posted().map(|(_, job)| PostedJob {
             height: job.height,
             difficulty: job.difficulty.to_raw(),

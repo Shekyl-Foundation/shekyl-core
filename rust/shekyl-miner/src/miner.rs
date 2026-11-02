@@ -98,6 +98,110 @@ impl Shared {
     fn second(&self) -> u64 {
         self.started.elapsed().as_secs()
     }
+
+    fn signal(&self) {
+        // The board flag first, then the budget: a worker blocked in
+        // `acquire_unless` reads the flag only after `wake`, and a worker
+        // between hashes sees the flag in `next_after`.
+        self.board.stop(&self.stop);
+        self.budget.wake();
+    }
+}
+
+/// The stop flag a miner's workers read. It exists before any worker
+/// does: shutdown signals it when the threads are still being spawned,
+/// and the claim then drops what they finish.
+#[derive(Clone)]
+pub struct MinerStop(Arc<Shared>);
+
+impl MinerStop {
+    /// Stop every worker that will run, or is running, on this flag.
+    /// Does not join.
+    pub fn signal(&self) {
+        self.0.signal();
+    }
+
+    /// Whether [`Self::signal`] has run. Workers still to be spawned read
+    /// the same flag.
+    #[must_use]
+    pub fn is_signaled(&self) -> bool {
+        self.0.stop.load(Ordering::Acquire)
+    }
+}
+
+/// A miner with its stop flag and no threads yet. [`Self::spawn`] starts
+/// them. Dropping it starts nothing.
+#[must_use = "dropping it spawns no workers"]
+pub struct PreparedMiner {
+    shared: Arc<Shared>,
+    threads: NonZeroUsize,
+    address: String,
+}
+
+impl PreparedMiner {
+    /// The stop flag and no threads. [`Self::spawn`] starts them.
+    ///
+    /// # Errors
+    ///
+    /// [`MinerStartRefused::OnePermit`], before anything exists to stop.
+    pub fn arm(
+        config: &MinerConfig,
+        board: Arc<JobBoard>,
+        caches: Arc<CacheStore>,
+        budget: Budget,
+        found: FoundBlocks,
+    ) -> Result<Self, MinerStartRefused> {
+        if budget.permits() < 2 {
+            return Err(MinerStartRefused::OnePermit);
+        }
+        let threads = config.threads;
+        Ok(Self {
+            shared: Arc::new(Shared {
+                board,
+                caches,
+                budget,
+                found,
+                stop: AtomicBool::new(false),
+                started: Instant::now(),
+                rates: (0..threads.get()).map(|_| RateRing::new()).collect(),
+                not_lowered: AtomicUsize::new(0),
+            }),
+            threads,
+            address: config.address.encoded().to_owned(),
+        })
+    }
+
+    /// The flag [`Self::spawn`]'s workers will read. Clone it into the
+    /// slot shutdown looks at, then spawn.
+    #[must_use]
+    pub fn stop_flag(&self) -> MinerStop {
+        MinerStop(Arc::clone(&self.shared))
+    }
+
+    /// Spawn the workers. On a refused thread, the ones already running
+    /// are stopped and joined before this returns.
+    ///
+    /// # Errors
+    ///
+    /// [`MinerStartRefused::Thread`].
+    pub fn spawn(self) -> Result<Miner, MinerStartRefused> {
+        let name = ThreadName::new(WORKER_NAME).expect("a fixed, valid thread name");
+        let mut miner = Miner {
+            shared: Arc::clone(&self.shared),
+            workers: Vec::with_capacity(self.threads.get()),
+            address: self.address,
+        };
+        for index in 0..self.threads.get() {
+            let shared = Arc::clone(&miner.shared);
+            let range = nonce_range(index, self.threads);
+            // On an error `miner` drops here, which stops and joins the
+            // workers already running.
+            let worker = spawn_dedicated(&name, move || work(&shared, index, range))
+                .map_err(MinerStartRefused::Thread)?;
+            miner.workers.push(worker);
+        }
+        Ok(miner)
+    }
 }
 
 /// The running miner. Dropping it stops and joins every worker;
@@ -231,36 +335,7 @@ impl Miner {
         budget: Budget,
         found: FoundBlocks,
     ) -> Result<Self, MinerStartRefused> {
-        if budget.permits() < 2 {
-            return Err(MinerStartRefused::OnePermit);
-        }
-        let threads = config.threads;
-        let shared = Arc::new(Shared {
-            board,
-            caches,
-            budget,
-            found,
-            stop: AtomicBool::new(false),
-            started: Instant::now(),
-            rates: (0..threads.get()).map(|_| RateRing::new()).collect(),
-            not_lowered: AtomicUsize::new(0),
-        });
-        let name = ThreadName::new(WORKER_NAME).expect("a fixed, valid thread name");
-        let mut miner = Self {
-            shared,
-            workers: Vec::with_capacity(threads.get()),
-            address: config.address.encoded().to_owned(),
-        };
-        for index in 0..threads.get() {
-            let shared = Arc::clone(&miner.shared);
-            let range = nonce_range(index, threads);
-            // On an error `miner` drops here, which stops and joins the
-            // workers already running.
-            let worker = spawn_dedicated(&name, move || work(&shared, index, range))
-                .map_err(MinerStartRefused::Thread)?;
-            miner.workers.push(worker);
-        }
-        Ok(miner)
+        PreparedMiner::arm(config, board, caches, budget, found)?.spawn()
     }
 
     /// What the miner is doing.
@@ -297,11 +372,7 @@ impl Miner {
     }
 
     fn signal(&self) {
-        // The board flag first, then the budget: a worker blocked in
-        // `acquire_unless` reads the flag only after `wake`, and a worker
-        // between hashes sees the flag in `next_after`.
-        self.shared.board.stop(&self.shared.stop);
-        self.shared.budget.wake();
+        self.shared.signal();
     }
 
     fn halt(&mut self) {

@@ -368,6 +368,50 @@ fn dropping_generateblocks_stops_the_miner_it_started() {
     }
     assert!(!running, "dropping the call stopped the miner it started");
 }
+
+/// Shutdown while a start has published its stop flag and not yet spawned
+/// signals that flag before any worker exists. Red edit: have `close`
+/// ignore an arming miner, or publish the flag after `PreparedMiner::spawn`.
+#[test]
+fn close_during_arming_signals_before_a_worker_runs() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    let dir = tempfile::tempdir().expect("temp");
+    let node = open_mining(dir.path(), "regtest", shekyl_address::Network::Mainnet);
+    let mining = node.mining();
+    let ran = Arc::new(AtomicBool::new(false));
+    let signaled = Arc::new(AtomicBool::new(false));
+    let ran_hook = Arc::clone(&ran);
+    let signaled_hook = Arc::clone(&signaled);
+    let close = Arc::clone(&mining);
+    mining.on_arming(move |flag| {
+        close.close();
+        signaled_hook.store(flag.is_signaled(), Ordering::SeqCst);
+        ran_hook.store(true, Ordering::SeqCst);
+    });
+    let outcome = mining.start(NonZeroUsize::new(1));
+    node.stop();
+    if !ran.load(Ordering::SeqCst) {
+        assert!(
+            matches!(
+                outcome,
+                Err(MiningRefused::Start(
+                    shekyl_miner::MinerStartRefused::OnePermit
+                ))
+            ),
+            "the arming hook did not run: {outcome:?}"
+        );
+        return;
+    }
+    assert!(
+        signaled.load(Ordering::SeqCst),
+        "close returned without signaling the flag the workers will read"
+    );
+    assert!(
+        matches!(outcome, Err(MiningRefused::NodeStopped)),
+        "close during arming did not refuse the start: {outcome:?}"
+    );
+}
 /// `pop_blocks`, armed (DX-Q3, Q7): a count that would pop genesis is
 /// refused by the method before any pop, the node stays up and takes a
 /// block, and a count of one pops one. Without `dev-rpc` it is outside
