@@ -106,6 +106,15 @@ pub const SETTLED_PAIRS: u64 = 2;
 /// reads its issued-draw index before it reads a settlement (rule 47):
 /// the derivation is the reason to expect the pair to be full, and the
 /// index is the evidence.
+///
+/// **No producer test belongs on this schedule.** Its `W₂` is `SEB / 20`,
+/// 15 blocks at the derived 300, below the producer's `FILING_MARGIN`
+/// (`M`, 30 blocks, `shekyl-bundle-producer`): no read may start after
+/// `h + W₂ − M`, so the producer's read plan collapses to one read. A
+/// chain on it drives admission with its own witness
+/// (`chain_drive::mine_serving`); the producer's gate runs on its own
+/// longer epoch (`bundle_producer_gate_tests`). The settled test holds the
+/// relation, so a longer derived epoch reopens this paragraph.
 pub fn settled_epoch_blocks() -> u64 {
     static SETTLED: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
     *SETTLED.get_or_init(|| {
@@ -507,6 +516,15 @@ mod settled_tests {
     #[test]
     fn the_settled_epoch_is_the_shortest_that_issues_every_pair() {
         let blocks = settled_epoch_blocks();
+        // The doc's claim: W₂ is below the producer's filing margin, so no
+        // producer test belongs on this schedule.
+        #[cfg(feature = "producer")]
+        assert!(
+            settled_schedule()
+                .challenge_response_blocks()
+                .is_some_and(|window| window.get() < shekyl_bundle_producer::FILING_MARGIN.to_raw()),
+            "{blocks} blocks: W₂ reaches the filing margin; revisit settled_epoch_blocks' doc"
+        );
         let step = shekyl_archival_retention::constants::W2_EPOCH_DIVISOR;
         assert!(
             (1..=SETTLED_PAIRS).all(|pairs| issues_every_pair(blocks, pairs)),

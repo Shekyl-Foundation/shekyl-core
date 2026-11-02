@@ -404,3 +404,208 @@ fn a_faulting_drawable_read_is_not_a_section() {
     );
     assert_eq!(view.take_reads(), [BundleRead::DrawableEpoch]);
 }
+
+/// A small deterministic generator (SplitMix64), so every run sweeps the
+/// same queues and a red run names its case.
+struct Cases(u64);
+
+impl Cases {
+    fn next(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    fn below(&mut self, n: u64) -> u64 {
+        self.next() % n
+    }
+
+    fn pick<T: Copy>(&mut self, from: &[T]) -> T {
+        from[usize::try_from(self.below(from.len() as u64)).expect("a small index")]
+    }
+}
+
+/// One generated case: the two epochs' `D` (or none the view holds), the
+/// including block and a queue in ascending order of generation.
+struct Case {
+    view: FixtureBundleView,
+    held: [Option<u64>; 2],
+    h_incl: u64,
+    queued: Vec<BundleRef>,
+}
+
+/// `count` cases on [`epoch`]'s schedule. Each queue holds up to eight
+/// references around the epoch boundary: inside the window on both sides,
+/// some outside it, some repeating a height; counts cluster around the two
+/// budgets (2 and 20) so the three packing shapes all arise. Epoch 0's and
+/// epoch 1's `D` are each 8 (budget 2), 10,000 (budget 20) or not held.
+fn cases(count: usize) -> Vec<Case> {
+    let (boundary, _) = epoch();
+    let mut gen = Cases(0x5EC7_10F1);
+    let charges = [0u32, 1, 1, 2, 3, 5, 9, 10, 11, 18, 19, 20, 21];
+    let ds = [Some(8u64), Some(10_000), None];
+    (0..count)
+        .map(|_| {
+            let held = [gen.pick(&ds), gen.pick(&ds)];
+            let epochs: Vec<(u64, u64)> = held
+                .iter()
+                .enumerate()
+                .filter_map(|(e, d)| d.map(|d| (e as u64, d)))
+                .collect();
+            let h_incl = boundary + gen.below(40);
+            let n = 1 + gen.below(8);
+            let mut heights: Vec<BlockHeight> = (0..n)
+                .map(|_| {
+                    // Mostly inside `(h_incl - 500, h_incl)`, now and then
+                    // just outside it at either end.
+                    BlockHeight::from_raw(match gen.below(10) {
+                        0 => h_incl - 500 - gen.below(3),
+                        1 => h_incl + gen.below(2),
+                        _ => h_incl - 1 - gen.below(60),
+                    })
+                })
+                .collect();
+            heights.sort_unstable();
+            let queued = heights
+                .into_iter()
+                .map(|h| reference_at(h.to_raw(), gen.pick(&charges)))
+                .collect();
+            Case {
+                view: view_holding(&epochs),
+                held,
+                h_incl,
+                queued,
+            }
+        })
+        .collect()
+}
+
+/// Whether `section` is one [`check_section`] admits at `h_incl`.
+fn admitted(section: &[BundleRef], h_incl: u64, view: &FixtureBundleView, rules: &RuleSet) -> bool {
+    check_section(
+        section,
+        &root_of(section),
+        BlockHeight::from_raw(h_incl),
+        view,
+        rules,
+    ) == Ok(SectionStanding::Admitted(SectionCharge::of(section)))
+}
+
+/// Every fill over a sweep of queues is a section [`check_section`]
+/// admits: across the boundary, with each `D` known or not, with
+/// references outside the window and repeated heights. Red edit: drop the
+/// crowding reservation in the two-epoch pack (an earlier bundle then
+/// spends the raised budget before the epoch that earns it is kept, and
+/// the section is over the budget it actually earns).
+#[test]
+fn every_filled_section_is_one_check_section_admits() {
+    let (_, rules) = epoch();
+    let cases = cases(2_000);
+    let mut nonempty = 0;
+    for (n, case) in cases.iter().enumerate() {
+        let section = filled(&case.queued, case.h_incl, &case.view, &rules);
+        nonempty += usize::from(!section.is_empty());
+        assert!(
+            admitted(&section, case.h_incl, &case.view, &rules),
+            "case {n}: D {:?}, h_incl {}, queued {:?} filled {:?}",
+            case.held,
+            case.h_incl,
+            case.queued
+                .iter()
+                .map(|r| (r.h().to_raw(), r.count()))
+                .collect::<Vec<_>>(),
+            heights(&section)
+        );
+    }
+    assert!(
+        nonempty > 1_000,
+        "the subject exists: most cases fill something ({nonempty})"
+    );
+}
+
+/// The fill is exactly the oldest admissible section: of every subset of
+/// the queue [`check_section`] admits, the one that keeps the earliest
+/// reference it can, then the next, and so on (the lexicographically
+/// greatest inclusion vector in walk order), over the first reference at
+/// each height, which is what the fill walks. Brute force over every subset
+/// of queues of up to eight. The sweep must reach the packing's hard
+/// cases, so it counts them: sections that keep both epochs under
+/// different `D`, and queues where a reference that fits on its own is
+/// left out of the oldest section (rule 47). Red edit: drop the crowding
+/// reservation in the two-epoch pack (an earlier bundle then spends the
+/// raised budget, the earning epoch is crowded out, and the fill falls back
+/// to a younger shape than the oracle's).
+#[test]
+fn the_fill_is_the_oldest_admissible_section() {
+    let (boundary, rules) = epoch();
+    let cases = cases(600);
+    let mut spans_both = 0;
+    let mut crowded = 0;
+    for (n, case) in cases.iter().enumerate() {
+        // The fill walks the queue in ascending order and passes over a
+        // height it has already seen; the candidates are the first
+        // reference at each height.
+        let mut q: Vec<BundleRef> = Vec::new();
+        for reference in &case.queued {
+            if q.last().is_none_or(|last| last.h() < reference.h()) {
+                q.push(reference.clone());
+            }
+        }
+        let size = q.len();
+        let mut best: Option<Vec<bool>> = None;
+        for mask in 0u32..(1 << size) {
+            let keep: Vec<bool> = (0..size)
+                .map(|i| mask & (1 << (size - 1 - i)) != 0)
+                .collect();
+            let subset: Vec<BundleRef> = q
+                .iter()
+                .zip(&keep)
+                .filter(|(_, k)| **k)
+                .map(|(r, _)| r.clone())
+                .collect();
+            if !admitted(&subset, case.h_incl, &case.view, &rules) {
+                continue;
+            }
+            if best.as_ref().is_none_or(|b| keep > *b) {
+                best = Some(keep);
+            }
+        }
+        let oracle: Vec<BundleRef> = q
+            .iter()
+            .zip(best.as_ref().expect("the empty section is admitted"))
+            .filter(|(_, k)| **k)
+            .map(|(r, _)| r.clone())
+            .collect();
+        if case.held[0].is_some()
+            && case.held[1].is_some()
+            && case.held[0] != case.held[1]
+            && oracle.iter().any(|r| r.h().to_raw() < boundary)
+            && oracle.iter().any(|r| r.h().to_raw() >= boundary)
+        {
+            spans_both += 1;
+        }
+        if q.iter().any(|r| {
+            admitted(std::slice::from_ref(r), case.h_incl, &case.view, &rules)
+                && oracle.iter().all(|kept| kept.h() != r.h())
+        }) {
+            crowded += 1;
+        }
+        let section = filled(&case.queued, case.h_incl, &case.view, &rules);
+        assert_eq!(
+            heights(&section),
+            heights(&oracle),
+            "case {n}: D {:?}, h_incl {}, queued {:?}",
+            case.held,
+            case.h_incl,
+            q.iter()
+                .map(|r| (r.h().to_raw(), r.count()))
+                .collect::<Vec<_>>()
+        );
+    }
+    assert!(
+        spans_both > 20 && crowded > 20,
+        "the sweep reaches the two-epoch shapes ({spans_both}) and crowding ({crowded})"
+    );
+}
