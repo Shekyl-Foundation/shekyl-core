@@ -372,7 +372,7 @@ fn connect_span(
     rows
 }
 
-fn pop_back(chain: &mut SlashedChain, n: u64) {
+pub(super) fn pop_back(chain: &mut SlashedChain, n: u64) {
     for _ in 0..n {
         let popped: Result<Popped, TestErr> = chain.store.write(|batch| Ok(batch.pop()?));
         popped.expect("pop");
@@ -384,7 +384,7 @@ fn pop_back(chain: &mut SlashedChain, n: u64) {
 /// `set_size` pairs and admits nothing. The unsettled shortfall is
 /// `max(0, visible − in flight)`, the same saturation [`draw_count`] is
 /// specified to take.
-fn compose(set_size: u64, h_open: u64, through: u64) -> Vec<BlockDraws> {
+pub(super) fn compose(set_size: u64, h_open: u64, through: u64) -> Vec<BlockDraws> {
     let schedule = RULES.settlement_schedule();
     let seb = schedule.blocks().get();
     let window = schedule

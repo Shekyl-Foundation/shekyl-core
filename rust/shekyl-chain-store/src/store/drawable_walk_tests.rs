@@ -203,6 +203,15 @@ fn the_two_derivations_agree_at_every_height_across_releases() {
             if h == schedule.slash_deadline_height(epoch) {
                 let personas = personas_of(&walked);
                 if epoch == 2 {
+                    // Rule 47: the agreement above compared members, not an
+                    // empty list. Epoch 2's joins are its support members
+                    // (`SO-D12` S1).
+                    assert_eq!(
+                        walked.support_members().len(),
+                        usize::try_from(WITNESS_PERSONAS).expect("small"),
+                        "epoch 2's complete trees are members of the digest compared"
+                    );
+                    assert!(walked.archive_width() > 0);
                     epoch_2_at_pass = Some(personas);
                 } else {
                     epoch_3_at_pass = Some(personas);
@@ -773,3 +782,6 @@ mod block_draws_chain_tests;
 
 #[path = "admission_chain_tests.rs"]
 mod admission_chain_tests;
+
+#[path = "support_seats_chain_tests.rs"]
+mod support_seats_chain_tests;
