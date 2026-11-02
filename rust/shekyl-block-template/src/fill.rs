@@ -6,15 +6,14 @@
 //! Which bodies a template lists under the ruled fill
 //! (`docs/design/ECONOMICS_SIM_PRODUCTION_REBASE.md`, ESR-6).
 //!
-//! [`Fill`] is the reward-aware policy. It is not the scan
-//! `tx_memory_pool::fill_block_template` runs. That scan lists bodies in
-//! fee order, lets one body cross the median, refuses a body that would
-//! pass 13/10 of the median less the coinbase reserve, and then stops.
-//! This rule admits a body only when listing it does not lower the gross
+//! [`Fill`] is the reward-aware policy, and the only fill the node runs.
+//! It admits a body only when listing it does not lower the gross
 //! coinbase, and keeps the block — bodies plus the coinbase weight it was
-//! given — within twice the effective median. The C++ scan deletes with
-//! `tx_pool.cpp` at the DRS-X flip. The economics sim and the node's
-//! template both pass `shekyl_wire::transaction::COINBASE_RESERVE` as the
+//! given — within twice the effective median. It is not the inherited
+//! scan, which listed bodies in fee order, let one body cross the median,
+//! refused a body that would pass 13/10 of the median less the coinbase
+//! reserve, and then stopped; that scan left with the C++ pool at the
+//! DRS-X flip. The economics sim and the node's template both pass `shekyl_wire::transaction::COINBASE_RESERVE` as the
 //! coinbase weight.
 //!
 //! A producer offers pool bodies to a [`Fill`] in its own order — the
@@ -175,8 +174,8 @@ impl<'a> Fill<'a> {
     }
 
     /// Offer a body of `weight` paying `fee`. Admitted — and counted — when
-    /// the block stays within [`Self::block_limit`] and the body does not
-    /// lower the gross coinbase; otherwise refused and nothing changes, so
+    /// the block stays within the block limit, twice the median weight, and
+    /// the body does not lower the gross coinbase; otherwise refused and nothing changes, so
     /// a producer goes on to the next body.
     pub fn admit(&mut self, weight: u64, fee: u64) -> bool {
         let Some(block_weight) = self.block_weight.checked_add(weight) else {

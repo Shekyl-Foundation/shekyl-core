@@ -516,7 +516,6 @@ cutover replaces their callers.
 | the network | core, the miner, the console client | `network` |
 | offline, derived from both connectors being off | core (line 1559 of `src/cryptonote_core/cryptonote_core.cpp` at `d26148535e`), the protocol handler | `clearnet`, `tor` (IG-Q3) |
 | the fixed difficulty | core | `dev-difficulty` |
-| the pool's weight bound | core | `txpool-weight-max` |
 | sync on or off | the protocol handler | `dev-sync` |
 | the mining address | the miner | `mine-address`, already decoded: the display text, the spend and view keys, and the ML-KEM encapsulation key. The miner assembles the account address from those keys and does not parse the text |
 | the mining threads | the miner | `mine-threads`; 0 is `auto`, and the miner chooses the count |
@@ -524,10 +523,11 @@ cutover replaces their callers.
 | the console's command words | the C++ console client | the positional words; empty for a daemon start |
 | the console's RPC endpoint | the C++ console client | the first `rpc-admin-listen` endpoint when it is IPv4: four octets in network order and a port, present only in client mode. A client whose endpoint is not IPv4 is refused at parse (`config.value.range`). Absence of any admin endpoint is refused at parse (§2.2) |
 
-**Eleven fields.** A gate pins the count and fails when it rises; each later
+**Ten fields.** A gate pins the count and fails when it rises; each later
 slice that moves a reader deletes its field. If the pre-flight finds a C++
-reader of the advertised address on `dev`, it is a twelfth field,
-recorded there.
+reader of the advertised address on `dev`, it is an eleventh field,
+recorded there. The pool's weight bound left when `txpool-weight-max`
+became a rejected option (IG-Q11).
 
 **Where it is defined.** The snapshot's structures, its field count and
 the parse export the C++ test binaries and `shekyl-blockchain-import`
@@ -592,7 +592,6 @@ kinds and defaults are `INPUT_GRAMMAR.md` §5's and are not restated. The
 | Tor connector | `shekyl-tor` and the zone host | the posture: `Off`, `Managed` with the Tor binary's path, or `Operator` with a SOCKS proxy and its RFC 1929 pair (§2.5) and an optional onion with its local listen endpoint | `no-ephemeral-tor`, `tx-proxy`, `anonymous-inbound`, `SHEKYL_TOR_BINARY` (environment) |
 | p2p policy | the dialer and the peer lists | the operator's peers, the closed-network declaration (absent or non-empty, DC-F11), the local-range override, early disclosure, the ban file's entries, the two rate bounds | `add-peer`, `seed-node`, `add-exclusive-node`, `allow-local-ip`, `p2p-disclose-early` (PR-3), `ban-list`, `in-peers`, `limit-rate-up`, `limit-rate-down`, `limit-rate`, `out-peers`, `tos-flag`, `no-igd`, `igd` |
 | rpc | `shekyl-daemon-rpc` | the admin and view listener sets, the origin list, the connection cap | `rpc-bind-ip`, `rpc-bind-ipv6-address`, `rpc-use-ipv6`, `rpc-bind-port`, `rpc-restricted-bind-ip`, `rpc-restricted-bind-ipv6-address`, `rpc-restricted-bind-port`, `restricted-rpc`, `rpc-access-control-origins`, `rpc-max-connections`, `rpc-max-connections-per-public-ip`, `rpc-max-connections-per-private-ip`, `rpc-response-soft-limit`, `disable-rpc-ban` |
-| txpool | core, through the snapshot | the weight bound | `max-txpool-weight` |
 | notify | the Rust runner (DC-Q14) | three commands, each an argument array with its named placeholders | `block-notify`, `reorg-notify`, `block-rate-notify` |
 | mine | the miner, through the snapshot | the address and the thread count | `start-mining`, `mining-threads`, the five `bg-mining-*` |
 | dev | each lever's owner | the levers of `INPUT_GRAMMAR.md` §5, each accepted only on the networks its row names, never on mainnet (IG-8) | `fixed-difficulty`, `no-sync`, `clearnet-transport-encrypt`, `carrier-development`, the four environment levers |
@@ -607,7 +606,10 @@ durability is a constant, `shekyl_chain_store::store::DURABILITY`
 and the node logs it at open; no sync turns the fsync off. Chain sync's four (`prep-blocks-threads`,
 `block-sync-size`, `span-limit`, `block-download-max-size`) are rejected rows,
 refused with CS-Q12's reason (`P2P_3_CHAIN_SYNC_BRIEF.md` CS-Q12, Rick
-2026-10-18).
+2026-10-18). `txpool-weight-max` is a rejected row, refused because the
+pool's cap derives from the chain (CEN-M10: `REFERENCE_BLOCK_MAX_AGE` blocks
+at the block weight limit; `DRS_E5_POOL_ALT_PRUNE.md`, `INPUT_GRAMMAR.md`
+IG-Q11).
 
 ---
 
@@ -923,7 +925,6 @@ chain-sync lanes do not touch the option surface.
 | DC-F1, the genesis-at-open check on a store's contents (no longer a blocker) | [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) |
 | DC-N2, the console moves to `shekyl-cli` | RT-15, [`RPC_CHANNEL.md`](RPC_CHANNEL.md) |
 | the blockchain utilities' option sets | IG Part B; this brief §9 |
-| the inherited default of `txpool-weight-max` (IG-Q11) | [`DRS_E5_POOL_ALT_PRUNE.md`](DRS_E5_POOL_ALT_PRUNE.md), the pool's live document |
 | the inherited default of `rpc-connections-max` (IG-Q12) | RT-O9.4, [`RPC_CHANNEL.md`](RPC_CHANNEL.md) |
 | the `removed_flags` shim sunset | this brief §4; the row leaves with the files |
 

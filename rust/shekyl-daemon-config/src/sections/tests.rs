@@ -58,7 +58,6 @@ fn the_defaults_build_a_managed_tor_clearnet_node_on_mainnet() {
     assert_eq!(c.rpc.admin_listen, vec!["127.0.0.1:11029".parse().unwrap()]);
     assert!(c.rpc.view_listen.is_empty());
     assert_eq!(c.rpc.connections_max.get(), 25);
-    assert_eq!(c.txpool_weight_max, 648_000_000);
     assert_eq!(c.p2p.upload_max, None);
     assert!(c.dev.sync);
     assert!(!c.offline());

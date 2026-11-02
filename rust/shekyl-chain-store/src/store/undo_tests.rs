@@ -21,7 +21,7 @@ use crate::codec::{
 use crate::ids::{OutputSlot, OutputStorageId};
 use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{
-    ordinal_of, BLOCKS, BLOCK_HEIGHTS, HF_VERSIONS, OUTPUT_AMOUNTS, PROPERTIES, UNDO_LOG,
+    ordinal_of, BLOCKS, BLOCK_HEIGHTS, OUTPUT_AMOUNTS, PROPERTIES, RULE_SET_IN_FORCE, UNDO_LOG,
 };
 use shekyl_chain_rules::RuleSetId;
 use shekyl_types::{BlockHash, BlockHeight, CommitmentBytes, OneTimePubkey};
@@ -73,20 +73,20 @@ fn connect_like(batch: &WriteBatch<'_, '_>, height: u64) -> Result<usize, StoreE
         hash(byte),
         BlockHeight::from_raw(height).encoded().as_encoded(),
     )?;
-    let mut hf = batch.open_upsert_table(HF_VERSIONS)?;
-    hf.upsert(
+    let mut rule_set = batch.open_upsert_table(RULE_SET_IN_FORCE)?;
+    rule_set.upsert(
         0,
         RuleSetInForce(RuleSetId::from_raw(byte))
             .encoded()
             .as_encoded(),
     )?; // present after the first connect: prior restored
-    hf.upsert(
+    rule_set.upsert(
         height,
         RuleSetInForce(RuleSetId::from_raw(1))
             .encoded()
             .as_encoded(),
     )?; // absent: undo removes it
-    drop(hf);
+    drop(rule_set);
     batch
         .open_insert_table(OUTPUT_AMOUNTS, PROBE_ROW)?
         .insert(slot(height), out_key(byte).encoded().as_encoded())?;
@@ -106,8 +106,8 @@ fn every_verb_journals_its_pre_image_in_write_order() {
     let path = tmp("undo-record");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let seeded: Result<(), TestErr> = store.write(|batch| {
-        // Unjournaled seed, so the `hf_versions[0]` upsert below has a prior.
-        batch.open_upsert_table(HF_VERSIONS)?.upsert(
+        // Unjournaled seed, so the `rule_set_in_force[0]` upsert below has a prior.
+        batch.open_upsert_table(RULE_SET_IN_FORCE)?.upsert(
             0,
             RuleSetInForce(RuleSetId::from_raw(7))
                 .encoded()
@@ -135,13 +135,13 @@ fn every_verb_journals_its_pre_image_in_write_order() {
                 post: post_image(&1u64.to_le_bytes()),
             },
             UndoEntry::Replaced {
-                table: ord("hf_versions"),
+                table: ord("rule_set_in_force"),
                 key: Box::new(0u64.to_le_bytes()),
                 prior: Some(Box::new([7])),
                 post: post_image(&[1]),
             },
             UndoEntry::Replaced {
-                table: ord("hf_versions"),
+                table: ord("rule_set_in_force"),
                 key: Box::new(1u64.to_le_bytes()),
                 prior: None,
                 post: post_image(&[1]),
@@ -170,7 +170,7 @@ fn replay_restores_every_table_and_deletes_the_row_then_the_floor_is_reached() {
     let path = tmp("undo-replay");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let seeded: Result<(), TestErr> = store.write(|batch| {
-        batch.open_upsert_table(HF_VERSIONS)?.upsert(
+        batch.open_upsert_table(RULE_SET_IN_FORCE)?.upsert(
             0,
             RuleSetInForce(RuleSetId::from_raw(7))
                 .encoded()
@@ -196,7 +196,7 @@ fn replay_restores_every_table_and_deletes_the_row_then_the_floor_is_reached() {
             .expect("g")
             .is_some());
         assert_eq!(
-            snap.open_table(HF_VERSIONS)
+            snap.open_table(RULE_SET_IN_FORCE)
                 .expect("t")
                 .get(0)
                 .expect("g")
@@ -222,15 +222,19 @@ fn replay_restores_every_table_and_deletes_the_row_then_the_floor_is_reached() {
         .get(hash(1))
         .expect("g")
         .is_none());
-    let hf = snap.open_table(HF_VERSIONS).expect("t");
+    let rule_set = snap.open_table(RULE_SET_IN_FORCE).expect("t");
     assert_eq!(
-        hf.get(0)
+        rule_set
+            .get(0)
             .expect("g")
             .map(|g| g.value().decode().expect("decodes")),
         Some(RuleSetInForce(RuleSetId::from_raw(7))),
         "prior restored"
     );
-    assert!(hf.get(1).expect("g").is_none(), "absent-before key removed");
+    assert!(
+        rule_set.get(1).expect("g").is_none(),
+        "absent-before key removed"
+    );
     let amounts = snap.open_table(OUTPUT_AMOUNTS).expect("t");
     let keys: Vec<(u64, u64)> = amounts
         .range::<(u64, u64)>(..)
@@ -276,10 +280,10 @@ fn two_heights_in_one_batch_pop_in_lifo_order() {
     assert_eq!(popped, Ok((Replayed::Entries(6), Replayed::Entries(6))));
     let snap = store.begin_read().expect("read");
     assert!(snap.open_table(BLOCKS).expect("t").is_empty().expect("len"));
-    // `hf_versions[0]` was absent before block 1 wrote it (block 1's
+    // `rule_set_in_force[0]` was absent before block 1 wrote it (block 1's
     // upsert found nothing), so two pops remove it entirely.
     assert!(snap
-        .open_table(HF_VERSIONS)
+        .open_table(RULE_SET_IN_FORCE)
         .expect("t")
         .is_empty()
         .expect("len"));
@@ -409,7 +413,7 @@ fn an_entry_whose_target_is_gone_is_si6() {
             post: post_image(&[0]),
         },
         UndoEntry::Replaced {
-            table: ordinal_of("hf_versions").expect("catalogued"),
+            table: ordinal_of("rule_set_in_force").expect("catalogued"),
             key: Box::new(3u64.to_le_bytes()), // never written either
             prior: Some(Box::new([1])),
             post: post_image(&[2]),
@@ -487,19 +491,6 @@ fn a_row_that_does_not_decode_or_names_no_table_or_wrong_shape_is_si7() {
     plant_row(&store, 5, &not_utf8.encode());
     let msg = replay_err(&store, 5);
     assert!(msg.contains("not UTF-8"), "{msg}");
-
-    // An `Inserted` entry has no `prior` for `well_formed` to refuse, so an
-    // entry naming an `Unshaped` table must be refused on the shape alone —
-    // before `remove` could reach the uninhabited `from_bytes`.
-    // `txs` is one of the two dead tables no Rust writer will reach.
-    let unshaped = UndoLog(vec![UndoEntry::Inserted {
-        table: ordinal_of("txs").expect("catalogued"),
-        key: Box::new([0; 8]),
-        post: post_image(&[0]),
-    }]);
-    plant_row(&store, 6, &unshaped.encode());
-    let msg = replay_err(&store, 6);
-    assert!(msg.contains("names an unshaped table"), "{msg}");
     cleanup(&path);
 }
 
@@ -533,11 +524,11 @@ fn a_probe_table_writes_freely_while_no_recording_is_live() {
     cleanup(&path);
 }
 
-/// A row under `hf_versions[5]`, written outside any recording, for the
+/// A row under `rule_set_in_force[5]`, written outside any recording, for the
 /// delete-verb tests to take out.
-fn seed_hf5(store: &ChainStore) {
+fn seed_rule_set_at_5(store: &ChainStore) {
     let seeded: Result<(), TestErr> = store.write(|batch| {
-        batch.open_upsert_table(HF_VERSIONS)?.upsert(
+        batch.open_upsert_table(RULE_SET_IN_FORCE)?.upsert(
             5,
             RuleSetInForce(RuleSetId::from_raw(7))
                 .encoded()
@@ -548,9 +539,9 @@ fn seed_hf5(store: &ChainStore) {
     seeded.expect("seed");
 }
 
-fn hf5(store: &ChainStore) -> Option<RuleSetInForce> {
+fn rule_set_at_5(store: &ChainStore) -> Option<RuleSetInForce> {
     let snap = store.begin_read().expect("read");
-    snap.open_table(HF_VERSIONS)
+    snap.open_table(RULE_SET_IN_FORCE)
         .expect("t")
         .get(5)
         .expect("g")
@@ -564,18 +555,20 @@ fn hf5(store: &ChainStore) -> Option<RuleSetInForce> {
 fn a_remove_journals_its_prior_and_replay_restores_it() {
     let path = tmp("undo-remove");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    seed_hf5(&store);
+    seed_rule_set_at_5(&store);
     let out: Result<usize, TestErr> = store.write(|batch| {
         let recording = batch.record_undo(1);
-        batch.open_remove_table(HF_VERSIONS, PROBE_ROW)?.remove(5)?;
+        batch
+            .open_remove_table(RULE_SET_IN_FORCE, PROBE_ROW)?
+            .remove(5)?;
         Ok(recording.seal()?)
     });
     assert_eq!(out, Ok(1));
-    assert_eq!(hf5(&store), None, "the row is gone");
+    assert_eq!(rule_set_at_5(&store), None, "the row is gone");
     assert_eq!(
         undo_row(&store, 1).expect("row written").0,
         vec![UndoEntry::Removed {
-            table: ordinal_of("hf_versions").expect("catalogued"),
+            table: ordinal_of("rule_set_in_force").expect("catalogued"),
             key: Box::new(5u64.to_le_bytes()),
             prior: Box::new([7]),
         }]
@@ -584,7 +577,7 @@ fn a_remove_journals_its_prior_and_replay_restores_it() {
     let popped: Result<Replayed, TestErr> = store.write(|batch| Ok(batch.replay_undo(1)?));
     assert_eq!(popped, Ok(Replayed::Entries(1)));
     assert_eq!(
-        hf5(&store),
+        rule_set_at_5(&store),
         Some(RuleSetInForce(RuleSetId::from_raw(7))),
         "the prior is back"
     );
@@ -601,7 +594,9 @@ fn removing_an_absent_key_is_the_bound_row_and_arms_the_batch() {
     let out: Result<(), TestErr> = store.write(|batch| {
         let recording = batch.record_undo(1);
         batch.upsert_property::<ProbeCell>(&9)?;
-        let refused = batch.open_remove_table(HF_VERSIONS, PROBE_ROW)?.remove(5);
+        let refused = batch
+            .open_remove_table(RULE_SET_IN_FORCE, PROBE_ROW)?
+            .remove(5);
         assert!(
             matches!(refused, Err(StoreError::InvariantViolated(ref row)) if *row == PROBE_ROW),
             "{refused:?}"
@@ -629,16 +624,18 @@ fn removing_an_absent_key_is_the_bound_row_and_arms_the_batch() {
 fn a_key_present_at_the_undo_of_a_remove_is_si6_not_an_overwrite() {
     let path = tmp("undo-remove-around");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    seed_hf5(&store);
+    seed_rule_set_at_5(&store);
     let removed: Result<usize, TestErr> = store.write(|batch| {
         let recording = batch.record_undo(1);
-        batch.open_remove_table(HF_VERSIONS, PROBE_ROW)?.remove(5)?;
+        batch
+            .open_remove_table(RULE_SET_IN_FORCE, PROBE_ROW)?
+            .remove(5)?;
         Ok(recording.seal()?)
     });
     assert_eq!(removed, Ok(1));
     // Write around the journal.
     let around: Result<(), TestErr> = store.write(|batch| {
-        batch.open_upsert_table(HF_VERSIONS)?.upsert(
+        batch.open_upsert_table(RULE_SET_IN_FORCE)?.upsert(
             5,
             RuleSetInForce(RuleSetId::from_raw(3))
                 .encoded()
@@ -660,7 +657,7 @@ fn a_key_present_at_the_undo_of_a_remove_is_si6_not_an_overwrite() {
         ))
     );
     assert_eq!(
-        hf5(&store),
+        rule_set_at_5(&store),
         Some(RuleSetInForce(RuleSetId::from_raw(3))),
         "the around-write is intact; nothing was repaired"
     );
@@ -674,19 +671,24 @@ fn a_key_present_at_the_undo_of_a_remove_is_si6_not_an_overwrite() {
 fn a_replace_journals_the_present_prior_and_replay_restores_it() {
     let path = tmp("undo-replace");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    seed_hf5(&store);
+    seed_rule_set_at_5(&store);
     let out: Result<usize, TestErr> = store.write(|batch| {
         let recording = batch.record_undo(1);
-        batch.open_replace_table(HF_VERSIONS, PROBE_ROW)?.replace(
-            5,
-            RuleSetInForce(RuleSetId::from_raw(9))
-                .encoded()
-                .as_encoded(),
-        )?;
+        batch
+            .open_replace_table(RULE_SET_IN_FORCE, PROBE_ROW)?
+            .replace(
+                5,
+                RuleSetInForce(RuleSetId::from_raw(9))
+                    .encoded()
+                    .as_encoded(),
+            )?;
         Ok(recording.seal()?)
     });
     assert_eq!(out, Ok(1));
-    assert_eq!(hf5(&store), Some(RuleSetInForce(RuleSetId::from_raw(9))));
+    assert_eq!(
+        rule_set_at_5(&store),
+        Some(RuleSetInForce(RuleSetId::from_raw(9)))
+    );
     match undo_row(&store, 1).expect("row written").0.as_slice() {
         [UndoEntry::Replaced {
             table,
@@ -694,7 +696,7 @@ fn a_replace_journals_the_present_prior_and_replay_restores_it() {
             prior: Some(prior),
             ..
         }] => {
-            assert_eq!(*table, ordinal_of("hf_versions").expect("catalogued"));
+            assert_eq!(*table, ordinal_of("rule_set_in_force").expect("catalogued"));
             assert_eq!(&**key, &5u64.to_le_bytes());
             assert_eq!(&**prior, &[7]);
         }
@@ -703,7 +705,10 @@ fn a_replace_journals_the_present_prior_and_replay_restores_it() {
 
     let popped: Result<Replayed, TestErr> = store.write(|batch| Ok(batch.replay_undo(1)?));
     assert_eq!(popped, Ok(Replayed::Entries(1)));
-    assert_eq!(hf5(&store), Some(RuleSetInForce(RuleSetId::from_raw(7))));
+    assert_eq!(
+        rule_set_at_5(&store),
+        Some(RuleSetInForce(RuleSetId::from_raw(7)))
+    );
     assert!(undo_row(&store, 1).is_none(), "the row is consumed");
     cleanup(&path);
 }
@@ -717,12 +722,14 @@ fn replacing_an_absent_key_is_the_bound_row_and_arms_the_batch() {
     let out: Result<(), TestErr> = store.write(|batch| {
         let recording = batch.record_undo(1);
         batch.upsert_property::<ProbeCell>(&9)?;
-        let refused = batch.open_replace_table(HF_VERSIONS, PROBE_ROW)?.replace(
-            5,
-            RuleSetInForce(RuleSetId::from_raw(9))
-                .encoded()
-                .as_encoded(),
-        );
+        let refused = batch
+            .open_replace_table(RULE_SET_IN_FORCE, PROBE_ROW)?
+            .replace(
+                5,
+                RuleSetInForce(RuleSetId::from_raw(9))
+                    .encoded()
+                    .as_encoded(),
+            );
         assert!(
             matches!(refused, Err(StoreError::InvariantViolated(ref row)) if *row == PROBE_ROW),
             "{refused:?}"
@@ -738,7 +745,7 @@ fn replacing_an_absent_key_is_the_bound_row_and_arms_the_batch() {
         "nothing landed"
     );
     drop(snap);
-    assert_eq!(hf5(&store), None);
+    assert_eq!(rule_set_at_5(&store), None);
     assert!(undo_row(&store, 1).is_none());
     cleanup(&path);
 }
