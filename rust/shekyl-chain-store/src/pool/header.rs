@@ -138,43 +138,24 @@ pub(super) fn open_or_create(path: &Path) -> Result<(Database, PoolOpen), StoreE
 
 /// Reopen `path`. The read-only open is the refusal filter; the writable
 /// open is the exclusive claim and the admission.
-fn open_existing(builder: &redb::Builder, path: &Path) -> Result<(Database, PoolOpen), StoreError> {
-    match filter_foreign(builder, path)? {
-        Filtered::Claimable => {
-            let claimed = claim(builder, path)?;
-            admit(builder, claimed, path)
-        }
-        Filtered::Unopenable => set_aside(builder, path),
-    }
-}
-
-/// What the read-only filter leaves for the next step.
-enum Filtered {
-    /// A file the writable open may claim: one whose header the filter
-    /// read (sealed at any version, or a creation stopped before its seal)
-    /// or one the engine must repair first.
-    Claimable,
-    /// Bytes the engine will not open as a database. Only an
-    /// initialization a power loss cut short is moved aside
-    /// ([`set_aside`]); anything else is refused.
-    Unopenable,
-}
-
-/// Refuse, writing nothing, a file this store does not own.
 ///
-/// A readable seal — current or another version — a file with no table at
+/// The filter refuses, writing nothing, a file this store does not own. A
+/// readable seal (current or another version), a file with no table at
 /// all, and a file the engine must repair (`RepairAborted`) all continue.
-/// What a readable file is gets read again under [`claim`]: this pass
-/// holds only a shared lock, which does not stop a rename.
-fn filter_foreign(builder: &redb::Builder, path: &Path) -> Result<Filtered, StoreError> {
+/// What a readable file is gets read again under [`claim`]: the filter
+/// holds only a shared lock, which does not stop a rename. A file the
+/// engine will not open as a database goes to [`set_aside`].
+fn open_existing(builder: &redb::Builder, path: &Path) -> Result<(Database, PoolOpen), StoreError> {
     match builder.open_read_only(path) {
-        Ok(read_only) => match judge(&read_only)? {
-            Header::Unsealed | Header::Current | Header::Other(_) => Ok(Filtered::Claimable),
-        },
-        Err(redb::DatabaseError::RepairAborted) => Ok(Filtered::Claimable),
-        Err(e) if open_is_foreign(&e) => Ok(Filtered::Unopenable),
-        Err(e) => Err(EngineError::Open(e).into()),
+        Ok(read_only) => {
+            judge(&read_only)?;
+        }
+        Err(redb::DatabaseError::RepairAborted) => {}
+        Err(e) if open_is_foreign(&e) => return set_aside(builder, path),
+        Err(e) => return Err(EngineError::Open(e).into()),
     }
+    let claimed = claim(builder, path)?;
+    admit(builder, claimed, path)
 }
 
 /// A file the engine would not open. A cut before the engine finished
