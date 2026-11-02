@@ -51,6 +51,7 @@ fn open_at(dir: &Path, stop: Arc<dyn Fn() + Send + Sync>) -> Node {
         protocol_version: 1,
         release_build: false,
         request_stop: stop,
+        relay_local: crate::no_relay(),
     })
     .expect("node")
 }
@@ -68,6 +69,7 @@ fn open_posted(dir: &Path, extra: &[&str]) -> Node {
         protocol_version: 1,
         release_build: false,
         request_stop: Arc::new(|| {}),
+        relay_local: crate::no_relay(),
     })
     .expect("node");
     let mut posting = node.posting();
@@ -157,6 +159,7 @@ fn open_mining_with(
         protocol_version: 1,
         release_build: false,
         request_stop: Arc::new(|| {}),
+        relay_local: crate::no_relay(),
     })
     .expect("node")
 }

@@ -21,7 +21,9 @@
 //! them: `shekyl_pool_admit`, `shekyl_pool_has`, `shekyl_pool_complement`,
 //! `shekyl_pool_fluffed`.
 //! The one Rust-to-C++ entry beside them, `shekyl_shell_relay_local` (the
-//! shell hands a committed transaction to `levin_notify`), is RD's too.
+//! shell hands a committed transaction to `levin_notify`; the daemon
+//! binary imports it and hands it to the node as a pointer, DC-F43), is
+//! RD's too.
 
 use std::sync::{Arc, Mutex, MutexGuard};
 

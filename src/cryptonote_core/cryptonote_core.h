@@ -52,6 +52,15 @@
 PUSH_WARNINGS
 DISABLE_VS_WARNINGS(4355)
 
+/// A transaction this node committed, handed to `levin_notify` as
+/// `relay_method::local`. Returns 1 when the relay took it, 0 when there
+/// was no route: before `core::init` returns, after `deinit`, or with no
+/// notifier bound. Defined in cryptonote_core.cpp; its one caller is the
+/// Rust node, through the pointer the daemon binary hands it (DC-F43), so
+/// it is declared here, beside its definition, and not in the Rust-export
+/// header. RD deletes this with `levin_notify`.
+extern "C" int shekyl_shell_relay_local(const std::uint8_t* blob, std::size_t len);
+
 namespace cryptonote
 {
   /************************************************************************/

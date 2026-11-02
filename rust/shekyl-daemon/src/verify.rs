@@ -216,10 +216,7 @@ mod tests {
 
     /// A remnant whose `run` must never be reached.
     fn checking_remnant() -> Remnant {
-        Remnant {
-            run: forbidden_run,
-            stop: no_stop,
-        }
+        Remnant::absent_core(forbidden_run, no_stop)
     }
 
     fn host(home: &Path) -> Host {

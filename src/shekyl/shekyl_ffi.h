@@ -2897,12 +2897,6 @@ struct shekyl_sync_payload {
 #define SHEKYL_HANDSHAKE_TIP_NULL (-1)
 int32_t shekyl_p2p_handshake_tip(shekyl_sync_payload* out);
 
-/// A transaction this node committed, handed to `levin_notify` as
-/// `relay_method::local`. Returns 1 when the relay took it, 0 when there
-/// was no route: before `core::init` returns, after `deinit`, or with no
-/// notifier bound. RD deletes this with `levin_notify`.
-int shekyl_shell_relay_local(const uint8_t* blob, size_t len);
-
 /// The disclosure sample for a response on `session` (the socket id): up to
 /// `cap` entries written to `out`, returning how many. Zero below the white
 /// diversity floor, for an unknown session, or with no dialer.

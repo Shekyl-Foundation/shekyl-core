@@ -102,10 +102,10 @@ shekyl-logging = { path = "../shekyl-logging" }
 # `unit_tests` (daemon_rpc_client.cpp) is a C++ binary that calls the
 # client through it. The 2026-06-11 ruling's rule — a crate a C++ binary
 # needs joins that binary's image — puts the client here and keeps the
-# server (`shekyl-daemon-rpc`) out: the server imports C++ symbols from
-# `rpc` that no other C++ binary links, and a crate of the archive is a
-# crate every C++ binary may pull a member of (DC-F26, corrected by
-# DC-F30). `rust/shekyl-daemon-image`, the archive that used to carry the
+# server (`shekyl-daemon-rpc`) out: the server calls C++ functions of
+# `rpc` that no other C++ binary links (as pointers the daemon binary hands
+# it, DC-F43), and a crate of the archive is a crate every C++ binary may
+# pull a member of (DC-F26, corrected by DC-F30). `rust/shekyl-daemon-image`, the archive that used to carry the
 # server beside this crate for the C++ shekyld, is retired with that
 # executable (DC-Q19).
 shekyl-daemon-ctl = { path = "../shekyl-daemon-ctl" }

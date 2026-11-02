@@ -259,6 +259,7 @@ fn mine_on_mines_a_real_block_with_no_rpc_call() {
         protocol_version: 1,
         release_build: false,
         request_stop: Arc::new(|| {}),
+        relay_local: crate::no_relay(),
     }) {
         Ok(node) => node,
         Err(OpenError::Mining(MiningRefused::Start(

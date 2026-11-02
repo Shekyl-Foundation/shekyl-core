@@ -27,8 +27,17 @@ skipped here: those are the forward gate's operands, and a Rust import of a
 Rust export is one crate reading another's ABI, which the forward gate's
 header already pins.
 
-Exit 0 when every import agrees; 1 naming each disagreement; 2 on a
-pattern that found nothing (rule 47: a gate asserts its own subject).
+The second leg is where the imports may live (DC-F43, review 3 §2 of the
+Rust-binary PR): the daemon binary's `main.rs` holds the one `extern "C"`
+block for every C++ function Rust calls, and the library crates take them
+as function pointers, so their tests link no C++ and stub nothing. Every
+other `extern "C" {` block under `rust/` is read, and an import in it whose
+name a header under `src/` declares fails. Imports of symbols no such
+header declares (libc, a vendored C library's own) are not this gate's.
+
+Exit 0 when every import agrees and sits where it may; 1 naming each
+disagreement or stray import; 2 on a pattern that found nothing (rule 47:
+a gate asserts its own subject).
 """
 
 from __future__ import annotations
@@ -39,11 +48,12 @@ import sys
 import tempfile
 from pathlib import Path
 
-# The Rust files whose `extern "C"` blocks import C++ functions.
+# The Rust files whose `extern "C"` blocks may import C++ functions: the
+# daemon binary's `main` and nothing else (DAEMON_CONFIG_CUTOVER.md DC-Q19,
+# DC-F43). The remnant's `run` and `stop`, the shell's relay entry and the
+# RPC's core reads are all declared there and handed to the libraries as
+# function pointers.
 GATED_RUST = [
-    "rust/shekyl-daemon-rpc/src/ffi.rs",
-    # The remnant's `run` and `stop`, the daemon binary's two imports
-    # (DAEMON_CONFIG_CUTOVER.md DC-Q19; declared in src/daemon/daemon.h).
     "rust/shekyld/src/main.rs",
 ]
 
@@ -216,11 +226,11 @@ def rust_exports(root: Path) -> set[str]:
         if "/target/" in path.as_posix():
             continue
         text = path.read_text(encoding="utf-8", errors="replace")
-        # A test module's link stubs define the C++ exports under
-        # `#[cfg(test)]` so unit tests link without C++; they are not
-        # exports of the shipped crate. Test modules are the last items of
-        # a file (clippy's items-after-test-module), so the cut is the
-        # first attribute.
+        # A `#[cfg(test)]` definition of a C++ export's name (the link stubs
+        # DC-F39 once carried, gone with DC-F43) would be no export of the
+        # shipped crate and must not hide the import it shadows. Test
+        # modules are the last items of a file (clippy's
+        # items-after-test-module), so the cut is the first attribute.
         text = text.split("#[cfg(test)]", 1)[0]
         for m in re.finditer(r'extern\s+"C"\s+fn\s+([A-Za-z_][A-Za-z0-9_]*)', text):
             names.add(m.group(1))
@@ -228,6 +238,36 @@ def rust_exports(root: Path) -> set[str]:
 
 
 CHECKED: list[str] = []
+# How many `extern "C" {` blocks the placement leg read outside the gated
+# files: the leg's own subject (rule 47).
+PLACED_BLOCKS = [0]
+
+
+def stray_imports(
+    repo: Path, gated: list[str], decls: dict[str, list[tuple[str, list[str], str]]], exports: set[str]
+) -> list[str]:
+    """Every C++ import in an `extern "C"` block outside the gated files (DC-F43)."""
+    errors: list[str] = []
+    gated_set = set(gated)
+    PLACED_BLOCKS[0] = 0
+    for path in sorted((repo / "rust").rglob("*.rs")):
+        rel = path.relative_to(repo).as_posix()
+        if "/target/" in rel or rel in gated_set:
+            continue
+        text = strip_comments(path.read_text(encoding="utf-8", errors="replace"))
+        blocks = len(re.findall(r'extern\s+"C"\s*\{', text))
+        if not blocks:
+            continue
+        PLACED_BLOCKS[0] += blocks
+        for name in sorted(rust_imports(text)):
+            if name in exports or name not in decls:
+                continue
+            errors.append(
+                f"{rel}: imports the C++ function {name} (declared in {decls[name][0][0]}); "
+                f"every C++ import lives in {gated[0] if gated else 'the gated file'} and reaches a "
+                f"library as a function pointer (DC-F43)"
+            )
+    return errors
 
 
 def check(repo: Path, gated: list[str], header_root: str, exclude: set[str]) -> list[str]:
@@ -235,6 +275,7 @@ def check(repo: Path, gated: list[str], header_root: str, exclude: set[str]) -> 
     CHECKED.clear()
     exports = rust_exports(repo / "rust")
     decls = c_declarations(repo / header_root, exclude)
+    errors.extend(stray_imports(repo, gated, decls, exports))
     checked = 0
     for rel in gated:
         imports = rust_imports((repo / rel).read_text(encoding="utf-8"))
@@ -333,6 +374,23 @@ void probe_free(probe_handle* h);
         print(f"{'ok' if ok else 'FAIL'}: a cfg(test) link stub does not hide an import" + ("" if ok else f" — got {errors}"))
         failures += 0 if ok else 1
         (repo / "rust" / "x" / "src" / "ffi.rs").write_text(rust)
+        (repo / "src" / "p" / "probe.h").write_text(header_ok)
+        # Placement (DC-F43): a library crate importing a declared C++
+        # function is named; one importing a symbol no header declares
+        # (libc's, a vendored C library's) is not this gate's.
+        lib = repo / "rust" / "lib" / "src"
+        lib.mkdir(parents=True)
+        (lib / "acl.rs").write_text('extern "C" {\n    fn acl_get_file(p: *const c_char, t: i32) -> *mut c_void;\n}\n')
+        errors = check(repo, ["rust/x/src/ffi.rs"], "src", set())
+        ok = not errors
+        print(f"{'ok' if ok else 'FAIL'}: a library's import of an undeclared symbol passes" + ("" if ok else f" — got {errors}"))
+        failures += 0 if ok else 1
+        (lib / "stray.rs").write_text('extern "C" {\n    fn probe_free(h: *mut Handle);\n}\n')
+        errors = check(repo, ["rust/x/src/ffi.rs"], "src", set())
+        ok = len(errors) == 1 and "rust/lib/src/stray.rs: imports the C++ function probe_free" in errors[0]
+        print(f"{'ok' if ok else 'FAIL'}: a library's import of a declared C++ function is named" + ("" if ok else f" — got {errors}"))
+        failures += 0 if ok else 1
+        (lib / "stray.rs").unlink()
         # The subject assertion: an empty gated list is a failure, not a pass.
         errors = check(repo, [], "src", set())
         ok = bool(errors)
@@ -347,6 +405,11 @@ def main(argv: list[str]) -> int:
     repo = Path(__file__).resolve().parents[2]
     os.chdir(repo)
     errors = check(repo, GATED_RUST, C_HEADER_ROOT, C_HEADER_EXCLUDE)
+    if PLACED_BLOCKS[0] == 0:
+        # The tree has `extern "C"` blocks outside the binary (a vendored C
+        # library's bindings, libc's ACL calls); reading none means the
+        # placement leg's pattern or walk is wrong (rule 47).
+        errors.append("no extern \"C\" block was read outside the gated files — the pattern is wrong or the walk is")
     if errors:
         for e in errors:
             print(f"error: {e}", file=sys.stderr)
@@ -356,7 +419,8 @@ def main(argv: list[str]) -> int:
         print("\n".join(CHECKED))
     print(
         f"C++ import signatures: every imported C++ function agrees with its header "
-        f"({len(CHECKED)} checked, {imports - len(CHECKED)} skipped as Rust exports, over {len(GATED_RUST)} file(s))"
+        f"({len(CHECKED)} checked, {imports - len(CHECKED)} skipped as Rust exports, over {len(GATED_RUST)} file(s)); "
+        f"no library crate imports one ({PLACED_BLOCKS[0]} extern block(s) read outside them)"
     )
     return 0
 

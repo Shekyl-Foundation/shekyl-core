@@ -255,6 +255,7 @@ fn a_foreign_chain_file_is_replaced_and_a_corrupt_one_is_kept() {
         protocol_version: 1,
         release_build: false,
         request_stop: Arc::new(|| {}),
+        relay_local: crate::no_relay(),
     });
     assert!(
         opened.is_err(),
@@ -285,6 +286,7 @@ fn a_foreign_pool_file_is_recreated_and_a_corrupt_one_is_kept() {
         protocol_version: 1,
         release_build: false,
         request_stop: Arc::new(|| {}),
+        relay_local: crate::no_relay(),
     });
     assert!(opened.is_err(), "a corrupt pool file is refused");
     assert_eq!(std::fs::read(&pool).expect("still there"), garbage);
@@ -303,6 +305,7 @@ fn one_archival_lever_opens_and_a_cap_outside_the_epoch_does_not() {
         protocol_version: 1,
         release_build: false,
         request_stop: Arc::new(|| {}),
+        relay_local: crate::no_relay(),
     })
     .expect("one lever, the other side production");
     node.stop();
@@ -321,6 +324,7 @@ fn one_archival_lever_opens_and_a_cap_outside_the_epoch_does_not() {
         protocol_version: 1,
         release_build: false,
         request_stop: Arc::new(|| {}),
+        relay_local: crate::no_relay(),
     });
     assert!(
         opened.is_err(),
@@ -353,6 +357,7 @@ fn the_state_at_open_reads_the_declaration_not_the_network() {
                 protocol_version: 1,
                 release_build: false,
                 request_stop: Arc::new(|| {}),
+                relay_local: crate::no_relay(),
             })
             .expect("node");
             let state = *node.sync().borrow();

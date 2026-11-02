@@ -101,6 +101,7 @@ pub mod options;
 pub mod pool_methods;
 pub mod read_facts;
 pub mod read_methods;
+pub mod seam;
 pub mod server;
 pub mod shard_view;
 pub mod store_facts;

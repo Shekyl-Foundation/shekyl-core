@@ -202,6 +202,7 @@ pub fn main(remnant: Remnant, args: &[OsString], host: &Host) -> i32 {
         // built from. `debug_assertions` is not that flag (FLIP-Q3).
         release_build: shekyl_version::IS_RELEASE,
         request_stop: Arc::new(signals::request_stop),
+        relay_local: remnant.relay_local(),
     }) {
         Ok(node) => node,
         Err(error) => {
@@ -326,7 +327,7 @@ fn supervise(
     node: shekyl_node::Node,
 ) -> i32 {
     let handles = node.handles();
-    let Remnant { run, stop } = remnant;
+    let Remnant { run, stop, .. } = remnant;
     let mut constructed = shekyl_daemon_rpc::ffi_exports::configure(
         config.rpc.clone(),
         options,
@@ -630,10 +631,7 @@ mod tests {
     }
 
     fn remnant() -> Remnant {
-        Remnant {
-            run: fake_run,
-            stop: fake_stop,
-        }
+        Remnant::absent_core(fake_run, fake_stop)
     }
 
     fn host(home: &Path) -> Host {
@@ -690,10 +688,7 @@ mod tests {
     #[test]
     fn mine_on_without_an_address_and_too_many_threads_both_exit_two() {
         let d = tempfile::tempdir().unwrap();
-        let flagging = || Remnant {
-            run: flagging_run,
-            stop: fake_stop,
-        };
+        let flagging = || Remnant::absent_core(flagging_run, fake_stop);
         assert_eq!(
             main(
                 flagging(),
@@ -779,12 +774,10 @@ mod tests {
             protocol_version: u64::from(shekyl_version::PROTOCOL_VERSION),
             release_build: false,
             request_stop: Arc::new(crate::signals::request_stop),
+            relay_local: shekyl_node::no_relay(),
         })
         .expect("the node opens");
-        let remnant = Remnant {
-            run: blocking_run,
-            stop: arming_stop,
-        };
+        let remnant = Remnant::absent_core(blocking_run, arming_stop);
         let budget = RuntimeBudget {
             workers: NonZeroUsize::MIN,
             blocking: NonZeroUsize::MIN,

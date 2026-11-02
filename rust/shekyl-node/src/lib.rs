@@ -84,8 +84,8 @@ use shekyl_chain_rules::{AdmissionPolicy, FakechainSchedule, ReleaseAnchors, Rul
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::pool::PoolOpen;
 use shekyl_chain_store::store::{ChainStore, Horizons, SnapshotView};
-use shekyl_chain_sync::SyncState;
 use shekyl_chain_sync::Requesting;
+use shekyl_chain_sync::SyncState;
 use shekyl_chain_sync_runtime::executor::Executor;
 use shekyl_chain_sync_runtime::owner::OwnerParts;
 use shekyl_daemon_config::sections::{DaemonConfig, Dev};
@@ -189,6 +189,23 @@ pub struct OpenArgs<'a> {
     /// The stop latch. `shekyl-daemon` passes `signals::request_stop`,
     /// because this crate cannot depend on the binary.
     pub request_stop: Arc<dyn Fn() + Send + Sync>,
+    /// The shell's relay entry, handed in the same way (DC-F43): `true`
+    /// when the relay took the committed transaction's blob; `false` is no
+    /// route (no notifier bound, whatever the reason), and the node shows
+    /// the transaction at the origin. The binary passes the C++
+    /// `shekyl_shell_relay_local`; a test passes [`no_relay`]. RD deletes
+    /// it with `levin_notify`.
+    pub relay_local: RelayLocal,
+}
+
+/// The shell's relay entry, as [`OpenArgs::relay_local`] takes it.
+pub type RelayLocal = Arc<dyn Fn(&[u8]) -> bool + Send + Sync>;
+
+/// A [`RelayLocal`] with no route: an offline node's, and a test's. Every
+/// transaction it is handed is shown at the origin.
+#[must_use]
+pub fn no_relay() -> RelayLocal {
+    Arc::new(|_| false)
 }
 
 struct Slots {
@@ -430,15 +447,17 @@ impl Node {
                 move |fault| health.retire(fault)
             }))
             .nudging(Arc::new({
-                // The shell answers 0 only when no relay exists: an offline
-                // node never constructs one, so there is no network to hide
-                // from and the transaction is shown at once (RX-2, Rick
-                // 2026-10-29). With a relay, the answer is 1 before the zone
-                // plans on its strand, so `NoOwnEdge` and `AwaitSync` never
-                // reach this branch: the zone holds those (`hold_origin`),
-                // neither fluffed nor shown.
+                // The shell answers `false` only when no relay exists: an
+                // offline node never constructs one, so there is no network
+                // to hide from and the transaction is shown at once (RX-2,
+                // Rick 2026-10-29). With a relay, the answer is `true`
+                // before the zone plans on its strand, so `NoOwnEdge` and
+                // `AwaitSync` never reach this branch: the zone holds those
+                // (`hold_origin`), neither fluffed nor shown. An empty blob
+                // is nothing to relay.
+                let relay_local = args.relay_local;
                 move |txid, blob| {
-                    if !relay_local(blob) {
+                    if blob.is_empty() || !relay_local(blob) {
                         shekyl_ffi::pool_ffi::note_shown(*txid);
                     }
                 }
@@ -792,37 +811,6 @@ fn pool_departed() -> shekyl_chain_ingest::service::Departed {
     Arc::new(shekyl_ffi::relay_zone_ffi::note_departed)
 }
 
-/// The shell's relay entry. RD deletes it with `levin_notify`. `true`
-/// when the relay took the blob; `false` is no route (no notifier bound,
-/// whatever the reason), and the caller applies the fluff at the origin.
-fn relay_local(blob: &[u8]) -> bool {
-    if blob.is_empty() {
-        return false;
-    }
-    relay_local_ffi(blob) != 0
-}
-
-#[cfg(not(test))]
-#[allow(unsafe_code)]
-fn relay_local_ffi(blob: &[u8]) -> i32 {
-    // SAFETY: `blob` is a live slice. The shell answers 0 to a call before
-    // `core::init` returns.
-    unsafe { shekyl_shell_relay_local(blob.as_ptr(), blob.len()) }
-}
-
-#[cfg(test)]
-fn relay_local_ffi(blob: &[u8]) -> i32 {
-    shekyl_shell_relay_local(blob.as_ptr(), blob.len())
-}
-
-// The C++ shell's one relay entry. The node is the caller; the shell is
-// the definition. Unit tests supply the symbol themselves.
-#[cfg(not(test))]
-#[allow(unsafe_code)]
-unsafe extern "C" {
-    fn shekyl_shell_relay_local(blob: *const u8, len: usize) -> i32;
-}
-
 fn rules_of(config: &DaemonConfig) -> Result<ChainRules, OpenError> {
     let chain = match config.network {
         shekyl_daemon_config::Network::Mainnet => Chain::Public(shekyl_address::Network::Mainnet),
@@ -1023,12 +1011,3 @@ async fn connect_genesis(
 
 #[cfg(test)]
 mod tests;
-
-/// The daemon binary supplies this from C++. Unit tests link no C++, so
-/// a test node has no route: its own transactions fluff at the origin.
-#[cfg(test)]
-#[allow(unsafe_code)]
-#[no_mangle]
-extern "C" fn shekyl_shell_relay_local(_blob: *const u8, _len: usize) -> i32 {
-    0
-}

@@ -38,6 +38,8 @@
 use crate::ffi;
 use std::ffi::CStr;
 
+use crate::seam::seam;
+
 /// Wrapper around the opaque `core_rpc_handle` pointer.
 /// The handle borrows the daemon's `rpc_subject` (core and the p2p server).
 ///
@@ -242,7 +244,7 @@ impl CoreRpc {
     /// `subject_ptr` must point to a live `rpc_subject` that outlives this
     /// value, or be null. A subject missing either pointer yields `None`.
     pub unsafe fn from_raw(rpc_server_ptr: *mut std::ffi::c_void) -> Option<Self> {
-        let handle = unsafe { ffi::core_rpc_ffi_create(rpc_server_ptr) };
+        let handle = unsafe { (seam().create)(rpc_server_ptr) };
         if handle.is_null() {
             None
         } else {
@@ -258,7 +260,7 @@ impl CoreRpc {
         if self.handle.is_null() {
             return None;
         }
-        unsafe { consume_c_string(ffi::core_rpc_ffi_stem_tallies(self.handle)) }
+        unsafe { consume_c_string((seam().stem_tallies)(self.handle)) }
     }
 
     /// Network throttle counters and the core's start time
@@ -275,7 +277,7 @@ impl CoreRpc {
             total_bytes_out: 0,
         };
         // SAFETY: live handle; `pod` is a valid out pointer for the call.
-        let rc = unsafe { ffi::shekyl_rpc_net_stats(self.handle, &raw mut pod) };
+        let rc = unsafe { (seam().net_stats)(self.handle, &raw mut pod) };
         if rc == ffi::SHEKYL_RPC_FACTS_OK {
             Ok(pod)
         } else {
@@ -297,7 +299,7 @@ impl CoreRpc {
         // view is valid until `shekyl_rpc_connections_free(owner)`, and every
         // copy below is taken before that call.
         unsafe {
-            let rc = ffi::shekyl_rpc_connections(
+            let rc = (seam().connections)(
                 self.handle,
                 &raw mut now,
                 &raw mut rows,
@@ -329,7 +331,7 @@ impl CoreRpc {
                     });
                 }
             }
-            ffi::shekyl_rpc_connections_free(owner);
+            (seam().connections_free)(owner);
             Ok(ConnectionsSnapshot { now, connections })
         }
     }
@@ -346,7 +348,7 @@ impl CoreRpc {
         let mut owner: *mut std::ffi::c_void = std::ptr::null_mut();
         // SAFETY: as `connections` above.
         unsafe {
-            let rc = ffi::shekyl_rpc_peer_list(
+            let rc = (seam().peer_list)(
                 u8::from(public_only),
                 &raw mut rows,
                 &raw mut len,
@@ -367,7 +369,7 @@ impl CoreRpc {
                     });
                 }
             }
-            ffi::shekyl_rpc_peer_list_free(owner);
+            (seam().peer_list_free)(owner);
             Ok(P2pRead::Running(peers))
         }
     }
@@ -384,7 +386,7 @@ impl CoreRpc {
         let mut white: u64 = 0;
         let mut gray: u64 = 0;
         // SAFETY: two valid out pointers.
-        let rc = unsafe { ffi::shekyl_rpc_peerlist_sizes(&raw mut white, &raw mut gray) };
+        let rc = unsafe { (seam().peerlist_sizes)(&raw mut white, &raw mut gray) };
         match rc {
             ffi::SHEKYL_RPC_FACTS_OK => Ok(P2pRead::Running((white, gray))),
             fault => Err(fault),
@@ -403,7 +405,7 @@ impl CoreRpc {
 impl Drop for CoreRpc {
     fn drop(&mut self) {
         if !self.handle.is_null() {
-            unsafe { ffi::core_rpc_ffi_destroy(self.handle) };
+            unsafe { (seam().destroy)(self.handle) };
         }
     }
 }
@@ -427,7 +429,7 @@ unsafe fn consume_c_string(ptr: *mut std::os::raw::c_char) -> Option<String> {
     let s = unsafe { CStr::from_ptr(ptr) }
         .to_string_lossy()
         .into_owned();
-    unsafe { ffi::core_rpc_ffi_free_string(ptr) };
+    unsafe { (seam().free_string)(ptr) };
     Some(s)
 }
 

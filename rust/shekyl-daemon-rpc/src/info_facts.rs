@@ -261,7 +261,7 @@ pub fn sessions() -> Result<SessionCounts, FactsFault> {
         inbound: u64::MAX,
     };
     // SAFETY: `counts` is a valid, writable struct of the export's layout.
-    let code = unsafe { crate::ffi::shekyl_seam_session_counts(&raw mut counts) };
+    let code = unsafe { (crate::seam::seam().session_counts)(&raw mut counts) };
     sessions_from(code, counts)
 }
 

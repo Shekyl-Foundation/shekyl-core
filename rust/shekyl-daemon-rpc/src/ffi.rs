@@ -26,8 +26,11 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-//! Raw C FFI declarations matching `src/rpc/core_rpc_ffi.h` and
-//! `src/rpc/rpc_facts_ffi.h`.
+//! The C layouts of `src/rpc/core_rpc_ffi.h` and `src/rpc/rpc_facts_ffi.h`:
+//! the opaque handle, the fact PODs, the return codes, each pinned by a
+//! layout assert. The functions that fill them are not declared here: this
+//! crate imports no symbol (DC-F43); it calls them through the
+//! [`crate::seam::CoreSeam`] the binary installs.
 
 use std::os::raw::c_char;
 
@@ -448,35 +451,7 @@ const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, port) == 20);
 const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, white) == 22);
 const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, blocked) == 23);
 
-extern "C" {
-    pub fn shekyl_rpc_net_stats(h: *mut CoreRpcHandle, out: *mut NetStatsFactsFfi) -> i32;
-    /// Fills a C++-owned view of the live p2p connections plus the single
-    /// instant they were read at; release the owner with
-    /// `shekyl_rpc_connections_free`.
-    pub fn shekyl_rpc_connections(
-        h: *mut CoreRpcHandle,
-        out_now: *mut u64,
-        out: *mut *const ConnectionFactsFfi,
-        out_len: *mut usize,
-        out_owner: *mut *mut std::ffi::c_void,
-    ) -> i32;
-    pub fn shekyl_rpc_connections_free(owner: *mut std::ffi::c_void);
-    /// White then gray peerlist entries in one array, discriminated by
-    /// `white`, from the Rust peer lists (`shekyl-ffi`); release the owner
-    /// with `shekyl_rpc_peer_list_free`. No core handle.
-    pub fn shekyl_rpc_peer_list(
-        public_only: u8,
-        out: *mut *const PeerFactsFfi,
-        out_len: *mut usize,
-        out_owner: *mut *mut std::ffi::c_void,
-    ) -> i32;
-    pub fn shekyl_rpc_peer_list_free(owner: *mut std::ffi::c_void);
-    /// How many addresses the clearnet white and gray lists hold, from the
-    /// Rust peer lists (`shekyl-ffi`). No core handle.
-    pub fn shekyl_rpc_peerlist_sizes(out_white: *mut u64, out_gray: *mut u64) -> i32;
-}
-
-/// [`shekyl_seam_session_counts`] wrote the counts.
+/// `shekyl_seam_session_counts` ([`crate::seam::CoreSeam::session_counts`]) wrote the counts.
 pub const SHEKYL_SEAM_COUNT_OK: i32 = 0;
 /// No hub is bound in this process: there are no counts, which is not zeros.
 pub const SHEKYL_SEAM_COUNT_ERR_NO_HUB: i32 = -2;
@@ -498,101 +473,3 @@ const _: () = {
     assert!(std::mem::offset_of!(SeamSessionCountsFfi, inbound) == 8);
     assert!(std::mem::size_of::<SeamSessionCountsFfi>() == 16);
 };
-
-extern "C" {
-    /// The seam board's session counts, from one snapshot, written through
-    /// `out`.
-    ///
-    /// **Rust on both sides.** The board is `shekyl-ffi`'s (it owns the
-    /// process hub), this crate does not depend on that one, and the two
-    /// share the daemon's link image, so the read crosses as a C symbol
-    /// without visiting C++. The codes and the struct are restated above
-    /// because the definitions cannot be imported; each side asserts the
-    /// layout and `shekyl-ffi`'s own test pins the codes.
-    pub fn shekyl_seam_session_counts(out: *mut SeamSessionCountsFfi) -> i32;
-}
-
-extern "C" {
-    pub fn core_rpc_ffi_create(rpc_server_ptr: *mut std::ffi::c_void) -> *mut CoreRpcHandle;
-    pub fn core_rpc_ffi_destroy(h: *mut CoreRpcHandle);
-
-    /// §55: relay stem-outcome tallies as a JSON array. Caller frees.
-    ///
-    /// **Transit, not structure** — the tallies are Rust's (the relay zone
-    /// owns them) and this consumer is Rust; the hop out to C++ and back
-    /// exists only because C++ `net_node` owns the zone handles' lifetime.
-    /// It disappears with the p2p migration, at which point this crate reads
-    /// the zone directly. Do not build on the round trip. Deleter: RD, with
-    /// `levin_notify` (`DRS_X_STORE_FLIP.md` FLIP-Q5).
-    pub fn core_rpc_ffi_stem_tallies(h: *mut CoreRpcHandle) -> *mut std::os::raw::c_char;
-
-    pub fn core_rpc_ffi_free_string(s: *mut c_char);
-
-}
-
-/// Link-time stubs for the crate's **unit** tests only.
-///
-/// The lib test binary links no C++ archive, and GNU ld resolves every
-/// symbol a retained function references — the console's remote-arm tests
-/// reach `FfiP2pFacts` through the same function as the live arm, so the
-/// five symbols that path names must exist. Each stub is the "no core here"
-/// answer: a null handle or the NULL error code. Only symbols a unit test
-/// actually retains are stubbed; a new one shows up as a link error, never
-/// as a silently-stubbed production path. Integration tests (`tests/*.rs`)
-/// link the lib without `cfg(test)` and see none of this.
-#[cfg(test)]
-mod unit_test_link_stubs {
-    use super::*;
-
-    #[no_mangle]
-    pub extern "C" fn core_rpc_ffi_free_string(_s: *mut std::os::raw::c_char) {}
-    #[no_mangle]
-    pub extern "C" fn shekyl_rpc_net_stats(
-        _h: *mut CoreRpcHandle,
-        _out: *mut NetStatsFactsFfi,
-    ) -> i32 {
-        SHEKYL_RPC_FACTS_ERR_NULL
-    }
-    #[no_mangle]
-    pub extern "C" fn shekyl_rpc_connections(
-        _h: *mut CoreRpcHandle,
-        _out_now: *mut u64,
-        _out: *mut *const ConnectionFactsFfi,
-        _out_len: *mut usize,
-        _out_owner: *mut *mut std::ffi::c_void,
-    ) -> i32 {
-        SHEKYL_RPC_FACTS_ERR_NULL
-    }
-    #[no_mangle]
-    pub extern "C" fn shekyl_rpc_connections_free(_owner: *mut std::ffi::c_void) {}
-    #[no_mangle]
-    pub extern "C" fn shekyl_rpc_peer_list(
-        _public_only: u8,
-        _out: *mut *const PeerFactsFfi,
-        _out_len: *mut usize,
-        _out_owner: *mut *mut std::ffi::c_void,
-    ) -> i32 {
-        SHEKYL_RPC_FACTS_ERR_NULL
-    }
-    #[no_mangle]
-    pub extern "C" fn shekyl_rpc_peer_list_free(_owner: *mut std::ffi::c_void) {}
-    /// "No hub here", never counts: a stub that wrote zeros would let a
-    /// handler's test read a process with no p2p layer as a node with no
-    /// peers, which is the answer the real export exists to refuse.
-    #[no_mangle]
-    pub extern "C" fn shekyl_seam_session_counts(_out: *mut SeamSessionCountsFfi) -> i32 {
-        SHEKYL_SEAM_COUNT_ERR_NO_HUB
-    }
-    /// "No lists here": a stub that wrote zeros would let a handler's test
-    /// read a process with no dialer as a node with empty lists.
-    #[no_mangle]
-    pub extern "C" fn shekyl_rpc_peerlist_sizes(_out_white: *mut u64, _out_gray: *mut u64) -> i32 {
-        SHEKYL_RPC_FACTS_ERR_NULL
-    }
-    #[no_mangle]
-    pub extern "C" fn core_rpc_ffi_create(_p: *mut std::ffi::c_void) -> *mut CoreRpcHandle {
-        std::ptr::null_mut()
-    }
-    #[no_mangle]
-    pub extern "C" fn core_rpc_ffi_destroy(_h: *mut CoreRpcHandle) {}
-}
