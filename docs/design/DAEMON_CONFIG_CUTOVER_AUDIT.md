@@ -580,11 +580,13 @@ of its own, for the same reason as the negative one.
   the live miner until the DRS-X flip routes the Rust loop.
 - **The C++ exports Rust imports are gated.** `check_ffi_signatures.sh`
   covers Rust exports; `scripts/ci/check_cpp_import_signatures.py` covers
-  the other direction (the `extern "C"` block of
-  `shekyl-daemon-rpc/src/ffi.rs` against the headers under `src/`),
-  comparing arity and type classes, with test-module link stubs not
-  counted as exports. It was bitten on the posture parameter the one RPC
-  start needed.
+  the other direction (the one `extern "C"` block of
+  `rust/shekyld/src/main.rs` against the headers under `src/`; before
+  DC-F43 it read `shekyl-daemon-rpc/src/ffi.rs`'s), comparing arity and
+  type classes, with a `cfg(test)` definition of an imported name not
+  counted as an export, and since DC-F43 holding every other crate to
+  importing no C++ at all. It was bitten on the posture parameter the one
+  RPC start needed.
 - **A test for every §6 row.** Commit (a) carries a table from each §6 row
   to its test. A row that only Windows can exercise names where it runs:
   the Windows CI job, or the Windows seat by hand. A `cfg(windows)` test
