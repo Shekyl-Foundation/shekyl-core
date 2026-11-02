@@ -77,6 +77,11 @@
 /// What an arrival costs, and who pays: the door's checks before parse.
 #[cfg(feature = "pipeline")]
 pub mod admission;
+/// Admitted draws on a scenario chain (`SO-D12` 4b preparation). The
+/// economy chains mine through here: a driver-held witness, every draw
+/// filed as a pass, the next block admitting the bundle.
+#[cfg(all(test, feature = "pipeline"))]
+pub(crate) mod admitted_draws;
 /// E6 slice 8 PR-a (`CHAIN_RULES_SLICE_8.md` §5 row 2 (a)): the corpus's
 /// archival inputs, enumerated both ways.
 #[cfg(all(test, feature = "pipeline"))]

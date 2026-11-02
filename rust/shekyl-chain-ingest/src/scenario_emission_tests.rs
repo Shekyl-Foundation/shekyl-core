@@ -78,8 +78,9 @@ use shekyl_types::{BlockCount, BlockHeight, SettlementEpoch, ShardId};
 use shekyl_wire::Transaction;
 use zeroize::Zeroizing;
 
+use crate::admitted_draws::{assert_issued_pair, mine_serving, DriverWitness};
 use crate::archival_driver::{first_spending_height, refused_at, ENDPOINT, FEE};
-use crate::chain_drive::{catch_up, issue_draws, spender_owning_before, Driven, IssuedPair};
+use crate::chain_drive::{catch_up, spender_owning_before, Driven};
 use crate::emission_assembly::{
     assemble_emission_claim, assemble_emission_claim_breaking_fee_proof, ClaimTerms,
 };
@@ -87,8 +88,9 @@ use crate::frozen_membership::{drive_frozen_membership, price_frozen_claim};
 use crate::scenario::{FreeHash, Scenario};
 use crate::scenario_archival::{shard_set, Persona};
 use crate::scenario_shard::{
-    close_shards, first_admissible_compact_join, inside_one_epoch, levered_rules, levered_schedule,
-    mine_to, EPOCH_BLOCKS, FILL_FROM_COINBASE,
+    close_shards, first_admissible_compact_join, inside_one_epoch, inside_one_epoch_of,
+    levered_rules, mine_to, settled_epoch_blocks, settled_rules, settled_schedule,
+    FILL_FROM_COINBASE,
 };
 use shekyl_harness_spender::{Owner, Recipient, Spender};
 use std::sync::Arc;
@@ -121,7 +123,7 @@ const OLDER_TX_KEY: [u8; 32] = [0x5e; 32];
 #[tokio::test]
 #[ignore = "minutes of proofs; run by nightly.yml's chain-ingest-ignored job"]
 async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
-    let rules = levered_rules();
+    let rules = settled_rules();
     let mut scenario = Scenario::open_under("scenario-emission-claim", FreeHash, rules);
     let mut mined = scenario.mine(first_spending_height().to_raw()).await;
     let filled = close_shards(&mut scenario, &mut mined, FILL_FROM_COINBASE, 1).await;
@@ -131,7 +133,11 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
     assert_eq!(closed.shard.to_raw(), 0);
 
     // The join and the credit after it sit in one epoch, neither a close.
-    let join_height = inside_one_epoch(first_admissible_compact_join(&rules, *closed), 1);
+    let join_height = inside_one_epoch_of(
+        settled_schedule(),
+        first_admissible_compact_join(&rules, *closed),
+        1,
+    );
     mine_to(&mut scenario, &mut mined, join_height).await;
     let mut spender = Spender::over(&mined);
     let mut seen = mined.len();
@@ -164,7 +170,7 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
         "J15 judged the join"
     );
     mined.push(block);
-    let join_epoch = levered_schedule().epoch_at(join_height);
+    let join_epoch = settled_schedule().epoch_at(join_height);
     // The first epoch a persona joining in `join_epoch` may serve (CEN-J5).
     let served = SettlementEpoch::from_raw(join_epoch.to_raw() + 1);
     // Beside the credit, a second funding spend — coinbase 1 to the same
@@ -191,32 +197,34 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
     assert_eq!(block.height, twin_height);
     mined.push(block);
 
-    // The persona's three draws of `served` on the shard, each passed: the
-    // epoch settles Served for the pair, which is what the gather credits
-    // (`SO-D11a`). Nothing admits a draw yet, so they go in through the
-    // regtest door, with the digest they fold to.
+    // `served`, mined with the chain's own draws admitted: the persona's
+    // pair is the epoch's only drawable pair, and every one of its draws
+    // passes, so the epoch settles Served for the pair, which is what the
+    // gather credits (`SO-D11a`). Each drawing block's bundle is filed and
+    // admitted by the next block (`mine_serving`).
     let shard = ShardId::from_raw(0);
-    issue_draws(
-        &scenario,
-        served,
-        &[IssuedPair {
-            persona: persona.id(),
-            shard,
-            passed: true,
-        }],
+    let witness = DriverWitness::new(0x61);
+    let after_served = BlockHeight::from_raw((served.to_raw() + 1) * settled_epoch_blocks());
+    mine_serving(
+        &mut scenario,
+        &mut mined,
+        &witness,
+        &[&persona],
+        after_served,
     )
     .await;
+    assert_issued_pair(&scenario, served, (persona.id(), shard));
 
     // Up to the slash pass of `served`, not through it. The epoch closed
     // when the count reached `(served + 1) · SEB`, at the block before
     // that height, and that block froze its budget and nothing else. Its
     // `Σwork` is the pass's, at the block where the count reaches
     // `(served + 2) · SEB`.
-    let count_at_close = (served.to_raw() + 1) * EPOCH_BLOCKS;
-    let at_pass = BlockHeight::from_raw(levered_schedule().slash_deadline_height(served.to_raw()));
+    let count_at_close = (served.to_raw() + 1) * settled_epoch_blocks();
+    let at_pass = BlockHeight::from_raw(settled_schedule().slash_deadline_height(served.to_raw()));
     assert_eq!(
         at_pass.to_raw() + 1,
-        (served.to_raw() + 2) * EPOCH_BLOCKS,
+        (served.to_raw() + 2) * settled_epoch_blocks(),
         "the pass is the last block of the epoch after"
     );
     mine_to(&mut scenario, &mut mined, at_pass).await;
@@ -250,7 +258,7 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
         shard_idx: 0,
     }];
     let inputs = EpochCloseInputs::under_schedule(
-        levered_schedule(),
+        settled_schedule(),
         served.to_raw(),
         count_at_close,
         &bonds,
