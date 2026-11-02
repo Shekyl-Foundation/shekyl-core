@@ -63,7 +63,9 @@ fn run_child(mode: &str, test: &str, cwd: &Path) -> Output {
             Ok(())
         });
     }
-    command.output().expect("spawn the child")
+    // Under the spawn lock: this binary links the managed-Tor launch, so
+    // every process it starts takes the lock (TOR_SUPERVISOR.md §4.7).
+    shekyl_tor_control_client::spawn_lock::output(&mut command).expect("spawn the child")
 }
 
 fn names_in(dir: &Path) -> Vec<String> {

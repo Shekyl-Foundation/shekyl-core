@@ -89,16 +89,19 @@ struct Ended {
 /// Re-executes this test binary on `test` alone, in `mode`, with `cwd` as
 /// its working directory.
 fn run_child(mode: &str, test: &str, cwd: &Path) -> Ended {
-    let child = Command::new(std::env::current_exe().expect("this test binary"))
+    let mut command = Command::new(std::env::current_exe().expect("this test binary"));
+    command
         .arg("--exact")
         .arg(test)
         .arg("--nocapture")
         .env(CHILD_MARKER, mode)
         .current_dir(cwd)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn the child");
+        .stderr(Stdio::piped());
+    // Under the spawn lock: this binary links the managed-Tor launch, so
+    // every process it starts takes the lock (TOR_SUPERVISOR.md §4.7).
+    let child =
+        shekyl_tor_control_client::spawn_lock::spawn(&mut command).expect("spawn the child");
     let pid = child.id();
     let out = child.wait_with_output().expect("wait for the child");
     Ended { pid, out }
