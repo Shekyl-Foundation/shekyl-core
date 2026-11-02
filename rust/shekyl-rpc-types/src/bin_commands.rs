@@ -159,10 +159,16 @@ impl GetOIndexesResponse {
 
 /// Request of `/get_blocks_by_height.bin` (alias
 /// `/getblocks_by_height.bin`): the heights wanted, in the order the reply
-/// will carry them.
+/// will carry them, and the form each listed body takes (`SB-Q2`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GetBlocksByHeightRequest {
     pub heights: Vec<u64>,
+    /// The pruned form: every listed transaction is its skeleton
+    /// ([`BlockTx::Skeleton`]), which every node holds at every horizon.
+    /// Off, the full form: whole bodies, with one this node has discarded
+    /// carried as [`BlockTx::Archived`]. A switch (IG-4): off by default,
+    /// and absent from the document when off.
+    pub prune: bool,
 }
 
 impl GetBlocksByHeightRequest {
@@ -177,6 +183,9 @@ impl GetBlocksByHeightRequest {
         if !self.heights.is_empty() {
             root.insert("heights", Value::Array(Array::UInt64(self.heights.clone())));
         }
+        if self.prune {
+            root.insert("prune", Value::Bool(true));
+        }
         store_to_binary(&root).map_err(|e| BinError::Codec(e.to_string()))
     }
 
@@ -184,8 +193,8 @@ impl GetBlocksByHeightRequest {
     ///
     /// # Errors
     ///
-    /// [`BinError`] if the bytes are not a document, or `heights` is present
-    /// but is not a `uint64` array.
+    /// [`BinError`] if the bytes are not a document, `heights` is present
+    /// but is not a `uint64` array, or `prune` is present but not a bool.
     pub fn from_bin(bytes: &[u8]) -> Result<Self, BinError> {
         let root = load_from_binary(bytes, Limits::HTTP_BIN)
             .map_err(|e| BinError::Codec(e.to_string()))?;
@@ -194,30 +203,153 @@ impl GetBlocksByHeightRequest {
             Some(Value::Array(Array::UInt64(v))) => v.clone(),
             Some(_) => return Err(BinError::WrongType("heights")),
         };
-        Ok(Self { heights })
+        let prune = match root.get("prune") {
+            None => false,
+            Some(Value::Bool(v)) => *v,
+            Some(_) => return Err(BinError::WrongType("prune")),
+        };
+        Ok(Self { heights, prune })
+    }
+}
+
+/// The `form` tag of one [`BlockTx`] section: a whole body.
+pub const BLOCK_TX_FORM_FULL: u8 = 1;
+/// The `form` tag of a skeleton.
+pub const BLOCK_TX_FORM_SKELETON: u8 = 2;
+/// The `form` tag of an archived slot.
+pub const BLOCK_TX_FORM_ARCHIVED: u8 = 3;
+
+/// A transaction's skeleton as the `.bin` wire carries it: the pruned
+/// segment and the three txid operands. The same value `get_transactions`
+/// carries in hex and the sync wire carries as `shekyl_wire::SkeletonTx`;
+/// the store builds all three with one function (`SB-Q2`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockTxSkeleton {
+    /// The pruned segment, exactly: the prefix and the pruned part of the
+    /// CT body, never with `pqc_auths` appended.
+    pub unprunable: Vec<u8>,
+    /// Digest of the prunable region.
+    pub prunable_hash: [u8; 32],
+    /// Digest of the `pqc_auths` region; `None` when the txid has no
+    /// third operand. Absent from the document when `None`.
+    pub pqc_auth_hash: Option<[u8; 32]>,
+    /// The archival good's length in bytes.
+    pub archival_len: u64,
+}
+
+/// One listed transaction of a [`BlockEntry`]: the slot's state, in the
+/// block's list order (`SB-Q2`, `PDM-Q10`).
+///
+/// Each is a section tagged by `form`. A full-form reply carries
+/// [`BlockTx::Full`] for a body this node holds whole and
+/// [`BlockTx::Archived`] for one it discarded at the archival horizon —
+/// a state of that slot, never a failure of the height. A pruned-form
+/// reply carries [`BlockTx::Skeleton`] for every slot. A transaction with
+/// no archival good (a coinbase) is never archived: its whole body is its
+/// skeleton.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BlockTx {
+    /// The whole body, in its consensus encoding.
+    Full(Vec<u8>),
+    /// The skeleton.
+    Skeleton(BlockTxSkeleton),
+    /// Discarded here with the shard it went in; the archive serves the
+    /// body, and every daemon answers the skeleton under `prune`.
+    Archived { tx_hash: [u8; 32], shard: u64 },
+}
+
+impl BlockTx {
+    fn to_section(&self) -> Section {
+        let mut section = Section::new();
+        match self {
+            Self::Full(blob) => {
+                section.insert("form", Value::UInt8(BLOCK_TX_FORM_FULL));
+                section.insert("blob", Value::Bytes(blob.clone()));
+            }
+            Self::Skeleton(skeleton) => {
+                section.insert("form", Value::UInt8(BLOCK_TX_FORM_SKELETON));
+                section.insert("unprunable", Value::Bytes(skeleton.unprunable.clone()));
+                section.insert(
+                    "prunable_hash",
+                    Value::Bytes(skeleton.prunable_hash.to_vec()),
+                );
+                if let Some(hash) = skeleton.pqc_auth_hash {
+                    section.insert("pqc_auth_hash", Value::Bytes(hash.to_vec()));
+                }
+                section.insert("archival_len", Value::UInt64(skeleton.archival_len));
+            }
+            Self::Archived { tx_hash, shard } => {
+                section.insert("form", Value::UInt8(BLOCK_TX_FORM_ARCHIVED));
+                section.insert("tx_hash", Value::Bytes(tx_hash.to_vec()));
+                section.insert("shard", Value::UInt64(*shard));
+            }
+        }
+        section
+    }
+
+    fn from_section(section: &Section) -> Result<Self, BinError> {
+        let form = match section.get("form") {
+            Some(Value::UInt8(v)) => *v,
+            Some(_) => return Err(BinError::WrongType("form")),
+            None => return Err(BinError::Missing("form")),
+        };
+        match form {
+            BLOCK_TX_FORM_FULL => Ok(Self::Full(bytes_field(section, "blob")?)),
+            BLOCK_TX_FORM_SKELETON => Ok(Self::Skeleton(BlockTxSkeleton {
+                unprunable: bytes_field(section, "unprunable")?,
+                prunable_hash: hash_field(section, "prunable_hash")?,
+                pqc_auth_hash: match section.get("pqc_auth_hash") {
+                    None => None,
+                    Some(_) => Some(hash_field(section, "pqc_auth_hash")?),
+                },
+                archival_len: u64_field(section, "archival_len")?,
+            })),
+            BLOCK_TX_FORM_ARCHIVED => Ok(Self::Archived {
+                tx_hash: hash_field(section, "tx_hash")?,
+                shard: u64_field(section, "shard")?,
+            }),
+            _ => Err(BinError::WrongType("form")),
+        }
+    }
+}
+
+fn bytes_field(section: &Section, key: &'static str) -> Result<Vec<u8>, BinError> {
+    match section.get(key) {
+        Some(Value::Bytes(raw)) => Ok(raw.clone()),
+        Some(_) => Err(BinError::WrongType(key)),
+        None => Err(BinError::Missing(key)),
+    }
+}
+
+fn hash_field(section: &Section, key: &'static str) -> Result<[u8; 32], BinError> {
+    <[u8; 32]>::try_from(bytes_field(section, key)?.as_slice())
+        .map_err(|_| BinError::WrongType(key))
+}
+
+fn u64_field(section: &Section, key: &'static str) -> Result<u64, BinError> {
+    match section.get(key) {
+        Some(Value::UInt64(v)) => Ok(*v),
+        Some(_) => Err(BinError::WrongType(key)),
+        None => Err(BinError::Missing(key)),
     }
 }
 
 /// One block of a `/get_blocks_by_height.bin` reply.
 ///
-/// Deliberately **not** a model of C++'s `block_complete_entry`, which has
-/// five KV members. This endpoint's handler sets two, so `pruned` and
-/// `block_weight` go out at their OPT defaults and `attestation_witness`
-/// empty — none of the three reaches the wire, which the oracle capture
-/// shows rather than the declaration.
-///
-/// The consequence is in `txs`. With `pruned` false the C++ map serializes
-/// a `std::vector<blobdata>`, so transactions cross as an **array of
-/// strings** and each entry's `prunable_hash` is dropped. The
-/// array-of-objects form is reachable only from the p2p path, whose schema
-/// lives in `shekyl-levin` — modelling it here would carry a variant this
-/// daemon can never emit.
+/// Deliberately **not** a model of C++'s `block_complete_entry`, which had
+/// five KV members of which this handler set two; `pruned`, `block_weight`
+/// and `attestation_witness` never reached this wire and are not modelled.
+/// Its `txs` crossed as an array of strings. Since 3.64 each listed
+/// transaction is a tagged section — the slot's state ([`BlockTx`]) — so a
+/// pruned-form reply and an archived body have a place in the list that
+/// keeps the block's order.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BlockEntry {
     /// The block in its consensus encoding.
     pub block: Vec<u8>,
-    /// Its transactions, likewise. Absent from the document when empty.
-    pub txs: Vec<Vec<u8>>,
+    /// Its listed transactions, in the block's order. Absent from the
+    /// document when empty.
+    pub txs: Vec<BlockTx>,
 }
 
 /// Response of `/get_blocks_by_height.bin`.
@@ -245,7 +377,8 @@ impl GetBlocksByHeightResponse {
                 let mut section = Section::new();
                 section.insert("block", Value::Bytes(entry.block.clone()));
                 if !entry.txs.is_empty() {
-                    section.insert("txs", Value::Array(Array::Bytes(entry.txs.clone())));
+                    let txs = entry.txs.iter().map(BlockTx::to_section).collect();
+                    section.insert("txs", Value::Array(Array::Object(txs)));
                 }
                 entries.push(section);
             }
@@ -260,7 +393,7 @@ impl GetBlocksByHeightResponse {
     ///
     /// [`BinError`] if the bytes are not a document, `status` is absent or
     /// not text, or `blocks` holds anything but sections carrying a `block`
-    /// blob and an optional array of transaction blobs.
+    /// blob and an optional array of [`BlockTx`] sections.
     pub fn from_bin(bytes: &[u8]) -> Result<Self, BinError> {
         let root = load_from_binary(bytes, Limits::HTTP_BIN)
             .map_err(|e| BinError::Codec(e.to_string()))?;
@@ -281,7 +414,10 @@ impl GetBlocksByHeightResponse {
                     };
                     let txs = match section.get("txs") {
                         None => Vec::new(),
-                        Some(Value::Array(Array::Bytes(v))) => v.clone(),
+                        Some(Value::Array(Array::Object(v))) => v
+                            .iter()
+                            .map(BlockTx::from_section)
+                            .collect::<Result<Vec<_>, _>>()?,
                         Some(_) => return Err(BinError::WrongType("txs")),
                     };
                     out.push(BlockEntry { block, txs });

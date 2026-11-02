@@ -14,7 +14,7 @@ use std::net::TcpListener;
 use std::os::raw::c_char;
 
 use shekyl_rpc_types::{HashHex, RpcStatus};
-use shekyl_types::{ArchivalLength, BlockHash, PrunableHash, TxHash};
+use shekyl_types::{BlockHash, TxHash};
 
 fn run(args: &[&str], address: Option<&str>) -> (i32, String) {
     // Mainnet: these harnesses drive the dispatch, not the handshake, and
@@ -244,10 +244,9 @@ fn read_request(s: &mut std::net::TcpStream) -> Option<(String, String)> {
 /// actually sent.
 ///
 /// A canned reply would be blind to the defect this exists to catch: the
-/// "(pruned)" label reads `prunable_as_hex`, which only the split form
-/// fills, so a fixture that always returns split-form data would pass
-/// whatever the console asked for. Serving the projection makes the
-/// request an input rather than a formality.
+/// console must ask for the full form, and a fixture that always returned
+/// the whole body would pass whatever form the console asked for. Serving
+/// the projection makes the request an input rather than a formality.
 fn one_shot_projected(slot: crate::core::TxSlot, txid: TxHash) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap().to_string();
@@ -275,19 +274,7 @@ fn one_shot_projected(slot: crate::core::TxSlot, txid: TxHash) -> String {
         let body = raw.split("\r\n\r\n").nth(1).unwrap_or("").to_owned();
         let request: shekyl_rpc_types::GetTransactionsRequest =
             serde_json::from_str(&body).expect("the console sends a typed request");
-        let reply = crate::methods::project_transactions(
-            &request,
-            &[txid.to_bytes()],
-            &[slot],
-            9,
-            |blob, pruned| {
-                Ok(format!(
-                    "{{\"json\":\"{}\",\"pruned\":{pruned}}}",
-                    hex::encode(blob)
-                ))
-            },
-        )
-        .expect("projection succeeds");
+        let reply = crate::methods::project_transactions(&request, &[txid.to_bytes()], &[slot], 9);
         let out = serde_json::to_string(&reply).unwrap();
         let head = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -364,91 +351,78 @@ fn console_spend() -> shekyl_wire::Transaction {
     }
 }
 
-/// [`console_spend`] split at the production boundary: (pruned form,
-/// prunable tail) — the two halves a split `get_transactions` reply
-/// carries, whose concatenation is the full serialization.
-fn console_spend_halves() -> (Vec<u8>, Vec<u8>) {
+/// [`console_spend`] as the store holds it: its skeleton and its archival
+/// good, cut by the wire crate's segmenter and bound by its `txid_parts`.
+fn console_spend_body() -> crate::core::TxBody {
     let tx = console_spend();
-    let full = tx.serialize();
-    let mut pruned_tx = console_spend();
-    let shekyl_wire::Ct::Fcmp { prunable, .. } = &mut pruned_tx.ct else {
-        unreachable!("console_spend is Fcmp by construction");
-    };
-    *prunable = None;
-    let pruned = pruned_tx.serialize();
-    let tail = full[pruned.len()..].to_vec();
-    (pruned, tail)
-}
-
-fn mined_slot(prunable: Vec<u8>) -> crate::core::TxSlot {
-    crate::core::TxSlot::Chain {
-        pruned: console_spend_halves().0,
-        prunable,
-        // Nonempty: this transaction HAS a prunable half, so an empty
-        // `prunable_as_hex` would mean the daemon dropped it.
-        prunable_hash: [0x5A; 32],
-        block_height: 3,
-        block_timestamp: 1_700_000_000,
-        output_indices: vec![1],
-        pruned_flag: false,
+    let segments = tx.write_segments().expect("segments");
+    let parts = tx.txid_parts();
+    crate::core::TxBody {
+        skeleton: shekyl_wire::SkeletonTx {
+            unprunable: segments.pruned,
+            prunable_hash: parts.prunable_hash,
+            pqc_auth_hash: parts.pqc_auth_hash,
+            archival_len: parts.archival_len,
+        },
+        good: crate::core::ArchivalGood::Retained {
+            pqc_auths: parts.pqc_auth_hash.map(|_| segments.pqc_auths),
+            prunable: segments.prunable,
+        },
     }
 }
 
-/// **An ordinary confirmed transaction is not labelled `(pruned)`.**
-///
-/// It was, until this test: the console asked for the whole transaction,
-/// so the halves came back concatenated in `as_hex` with `prunable_as_hex`
-/// empty — which the label cannot tell apart from a daemon that pruned the
-/// half away. Every mined transaction printed as `(pruned)`.
+fn mined_slot(body: crate::core::TxBody) -> crate::core::TxSlot {
+    crate::core::TxSlot::Chain {
+        body,
+        block_height: 3,
+        block_timestamp: 1_700_000_000,
+        output_indices: vec![1],
+    }
+}
+
+/// **A retained transaction prints its whole body.** The console asks for
+/// the full form; the projection answers with the body reassembled, and
+/// the binding rehashes it whole.
 #[test]
-fn a_retained_transaction_is_not_reported_pruned() {
-    // The halves reassemble to the full body, so the identity is the
-    // whole-transaction hash.
+fn a_retained_transaction_prints_from_its_whole_body() {
     let txid = console_spend().hash();
-    let addr = one_shot_projected(mined_slot(console_spend_halves().1), txid);
-    let (_, out) = run(&["print_transaction", &hex::encode(txid)], Some(&addr));
+    let addr = one_shot_projected(mined_slot(console_spend_body()), txid);
+    let (_, out) = run(
+        &["print_transaction", &hex::encode(txid), "+hex"],
+        Some(&addr),
+    );
     assert!(
         out.contains("Found in blockchain at height 3"),
         "expected the confirmed line, got: {out}"
     );
     assert!(
-        !out.contains("(pruned)"),
-        "a transaction whose prunable half the daemon still holds must not \
-         be labelled pruned: {out}"
+        out.contains(&hex::encode(console_spend().serialize())),
+        "the whole body, pqc_auths included, is what +hex prints: {out}"
     );
 }
 
-/// And the label still fires when the half really is gone — so the test
-/// above is not passing by disabling the label.
+/// **A discarded body is reported `archived` with its shard, not printed
+/// and not "not found"** (`PDM-Q10`). The projection answers the full form
+/// with the `archived` state; the console names the shard and the way out.
 #[test]
-fn a_pruned_transaction_is_reported_pruned() {
-    // The prunable half is gone, so the identity mixes the reply's
-    // supplied digest and archival length — the same recomputation the
-    // binding performs. The reply is built by hand: this daemon's projection
-    // measures the length from the half it holds and refuses a body without
-    // one, so only another store's daemon sends this form.
-    let (pruned, tail) = console_spend_halves();
-    let archival_len = console_spend().archival_len_with_prunable(&tail);
-    let txid = console_spend()
-        .hash_with_supplied_prunable(PrunableHash::from_bytes([0x5A; 32]), archival_len);
-    let entry = shekyl_rpc_types::TxEntry {
-        pruned_as_hex: hex::encode(pruned),
-        prunable_as_hex: String::new(),
-        archival_len: archival_len.to_raw(),
-        pruned: true,
-        ..mined_entry(txid.to_bytes())
+fn an_archived_transaction_names_its_shard() {
+    let txid = console_spend().hash();
+    let body = crate::core::TxBody {
+        skeleton: console_spend_body().skeleton,
+        good: crate::core::ArchivalGood::Discarded {
+            shard: shekyl_types::ShardId::from_raw(3),
+        },
     };
-    let addr = one_shot_raw(shekyl_rpc_types::GetTransactionsResponse {
-        status: RpcStatus::ok(),
-        txs: vec![entry],
-        missed_tx: vec![],
-        unavailable_tx: Vec::new(),
-    });
-    let (_, out) = run(&["print_transaction", &hex::encode(txid)], Some(&addr));
+    let addr = one_shot_projected(mined_slot(body), txid);
+    let (code, out) = run(&["print_transaction", &hex::encode(txid)], Some(&addr));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST);
     assert!(
-        out.contains("(pruned)"),
-        "a transaction whose prunable half is absent must be labelled \
-         pruned: {out}"
+        out.contains("archived") && out.contains("shard 3"),
+        "an archived body names its shard: {out}"
+    );
+    assert!(
+        !out.contains("wasn't found"),
+        "archived is a state of a transaction the chain holds, not a miss: {out}"
     );
 }
 
@@ -465,32 +439,17 @@ fn an_echoed_label_over_a_substituted_body_is_refused() {
     let mut other = console_spend();
     other.prefix.unlock_time = 5;
     let requested = other.hash();
-    let (pruned, tail) = console_spend_halves();
-    let archival_len = console_spend().archival_len_with_prunable(&tail);
     let entry = shekyl_rpc_types::TxEntry {
-        tx_hash: HashHex::from_bytes(requested.to_bytes()),
-        as_hex: String::new(),
-        pruned_as_hex: hex::encode(pruned),
-        prunable_as_hex: hex::encode(tail),
-        prunable_hash: HashHex::from_bytes([0x5A; 32]),
-        archival_len: archival_len.to_raw(),
-        as_json: None,
-        pruned: false,
-        double_spend_seen: false,
-        location: shekyl_rpc_types::TxLocation::Mined {
-            block_height: 3,
-            confirmations: 6,
-            block_timestamp: 1_700_000_000,
-            output_indices: vec![1],
-        },
+        as_hex: hex::encode(console_spend().serialize()),
+        ..mined_entry(requested.to_bytes())
     };
-    let reply = shekyl_rpc_types::GetTransactionsResponse {
+    let addr = one_shot_raw(shekyl_rpc_types::GetTransactionsResponse {
         status: RpcStatus::ok(),
         txs: vec![entry],
         missed_tx: vec![],
+        archived: Vec::new(),
         unavailable_tx: Vec::new(),
-    };
-    let addr = one_shot_raw(reply);
+    });
     let (code, out) = run(&["print_transaction", &hex::encode(requested)], Some(&addr));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST);
     assert!(
@@ -500,65 +459,33 @@ fn an_echoed_label_over_a_substituted_body_is_refused() {
     );
 }
 
-/// **And on the pruned arm, where the daemon also chooses the digest and
-/// the length.** The test above substitutes a body whose prunable half is
-/// present, so the identity is a whole-body hash the daemon cannot steer.
-/// The pruned arm is the interesting one: `prunable_hash` and
-/// `archival_len` are the daemon's to pick, and the comment on the binding
-/// claims picking them freely buys nothing because it leaves
-/// `H(prefix ‖ base ‖ pqc ‖ X ‖ L) = txid` to solve for `X` and `L`. That
-/// claim is argued at the call site and pinned here — the daemon serves
-/// another transaction's pruned body under this label and supplies the
-/// very digest and length that make the *requested* identity come out
-/// right for its own body, which is the best choice available to it.
+/// **A pruned segment answering a request for the whole body is refused,
+/// not reassembled.** The console asked for the full form; a daemon that
+/// answers it with `pruned_as_hex` and chosen operands is offering a body
+/// the console cannot rehash whole, and the operands are the daemon's to
+/// pick. The console refuses the form rather than binding through the
+/// daemon's operands (R83 is the wallet's rule for the same reply).
 #[test]
-fn a_substituted_pruned_body_is_refused_even_with_a_chosen_digest() {
-    const CHOSEN: [u8; 32] = [0x11; 32];
-    const CHOSEN_LEN: ArchivalLength = ArchivalLength::from_raw(4_242);
-    // The pruned identity of a DIFFERENT transaction, under the digest and
-    // length the daemon will also supply — so only the body differs.
-    let mut other = console_spend();
-    other.prefix.unlock_time = 5;
-    let requested = other.hash_with_supplied_prunable(PrunableHash::from_bytes(CHOSEN), CHOSEN_LEN);
-    // Sanity: the two bodies really do have different pruned identities,
-    // or the refusal below would prove nothing.
-    assert_ne!(
-        requested,
-        console_spend().hash_with_supplied_prunable(PrunableHash::from_bytes(CHOSEN), CHOSEN_LEN),
-        "the fixture must substitute a genuinely different body"
-    );
-    let (pruned, _tail) = console_spend_halves();
+fn a_pruned_form_answer_to_a_full_form_request_is_refused() {
+    let body = console_spend_body();
+    let txid = console_spend().hash();
     let entry = shekyl_rpc_types::TxEntry {
-        tx_hash: HashHex::from_bytes(requested.to_bytes()),
         as_hex: String::new(),
-        pruned_as_hex: hex::encode(pruned),
-        // The half is gone, so the binding takes the pruned arm.
-        prunable_as_hex: String::new(),
-        prunable_hash: HashHex::from_bytes(CHOSEN),
-        archival_len: CHOSEN_LEN.to_raw(),
-        as_json: None,
-        pruned: true,
-        double_spend_seen: false,
-        location: shekyl_rpc_types::TxLocation::Mined {
-            block_height: 3,
-            confirmations: 6,
-            block_timestamp: 1_700_000_000,
-            output_indices: vec![1],
-        },
+        pruned_as_hex: hex::encode(&body.skeleton.unprunable),
+        ..mined_entry(txid.to_bytes())
     };
-    let reply = shekyl_rpc_types::GetTransactionsResponse {
+    let addr = one_shot_raw(shekyl_rpc_types::GetTransactionsResponse {
         status: RpcStatus::ok(),
         txs: vec![entry],
         missed_tx: vec![],
+        archived: Vec::new(),
         unavailable_tx: Vec::new(),
-    };
-    let addr = one_shot_raw(reply);
-    let (code, out) = run(&["print_transaction", &hex::encode(requested)], Some(&addr));
+    });
+    let (code, out) = run(&["print_transaction", &hex::encode(txid)], Some(&addr));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST);
     assert!(
-        out.contains("a label is not an identity"),
-        "a substituted pruned body must be refused however the digest is \
-         chosen, not rendered: {out}"
+        out.contains("in the pruned form"),
+        "a pruned-form answer to a full-form request is refused: {out}"
     );
 }
 
@@ -568,27 +495,11 @@ fn a_substituted_pruned_body_is_refused_even_with_a_chosen_digest() {
 #[test]
 fn extra_transaction_entries_are_a_malformed_reply() {
     let txid = [0x33; 32];
-    let entry = |n: u8| shekyl_rpc_types::TxEntry {
-        tx_hash: HashHex::from_bytes([n; 32]),
-        as_hex: String::new(),
-        pruned_as_hex: "aabb".to_owned(),
-        prunable_as_hex: "ccdd".to_owned(),
-        prunable_hash: HashHex::from_bytes([0x5A; 32]),
-        archival_len: 2,
-        as_json: None,
-        pruned: false,
-        double_spend_seen: false,
-        location: shekyl_rpc_types::TxLocation::Mined {
-            block_height: 3,
-            confirmations: 6,
-            block_timestamp: 1_700_000_000,
-            output_indices: vec![1],
-        },
-    };
     let reply = shekyl_rpc_types::GetTransactionsResponse {
         status: RpcStatus::ok(),
-        txs: vec![entry(0x33), entry(0x34)],
+        txs: vec![mined_entry([0x33; 32]), mined_entry([0x34; 32])],
         missed_tx: vec![],
+        archived: Vec::new(),
         unavailable_tx: Vec::new(),
     };
     let addr = one_shot(typed_reply(&reply));
@@ -638,16 +549,21 @@ fn one_shot_raw(reply: shekyl_rpc_types::GetTransactionsResponse) -> String {
     address
 }
 
+/// A full-form entry whose body is [`console_spend`]'s whole serialization
+/// and whose operands are its own; the label is the caller's.
 fn mined_entry(txid: [u8; 32]) -> shekyl_rpc_types::TxEntry {
+    let body = console_spend_body();
     shekyl_rpc_types::TxEntry {
         tx_hash: HashHex::from_bytes(txid),
-        as_hex: String::new(),
-        pruned_as_hex: hex::encode([0xAAu8, 0xBB]),
-        prunable_as_hex: hex::encode([0xCCu8]),
-        prunable_hash: HashHex::from_bytes([0x5A; 32]),
-        archival_len: 1,
-        as_json: None,
-        pruned: false,
+        as_hex: hex::encode(console_spend().serialize()),
+        pruned_as_hex: String::new(),
+        prunable_hash: HashHex::from_bytes(body.skeleton.prunable_hash.to_bytes()),
+        pqc_auth_hash: body
+            .skeleton
+            .pqc_auth_hash
+            .map(|hash| HashHex::from_bytes(hash.to_bytes()))
+            .into(),
+        archival_len: body.skeleton.archival_len.to_raw(),
         double_spend_seen: false,
         location: shekyl_rpc_types::TxLocation::Mined {
             block_height: 3,
@@ -720,6 +636,7 @@ fn an_entry_for_a_different_hash_is_refused() {
         status: shekyl_rpc_types::RpcStatus::ok(),
         txs: vec![mined_entry(served)],
         missed_tx: Vec::new(),
+        archived: Vec::new(),
         unavailable_tx: Vec::new(),
     });
     let (_, out) = run(&["print_transaction", &hex::encode(asked)], Some(&addr));
@@ -738,6 +655,7 @@ fn an_entry_alongside_a_missed_hash_is_not_found() {
         status: shekyl_rpc_types::RpcStatus::ok(),
         txs: vec![mined_entry(asked)],
         missed_tx: vec![HashHex::from_bytes(asked)],
+        archived: Vec::new(),
         unavailable_tx: Vec::new(),
     });
     let (_, out) = run(&["print_transaction", &hex::encode(asked)], Some(&addr));

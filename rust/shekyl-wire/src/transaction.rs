@@ -1284,8 +1284,9 @@ pub enum Ct {
         /// pass record instead — Ed25519 leg on the vin, ML-DSA leg in the
         /// pruned record; CEN-J10).
         pqc_auths: Vec<PqcAuth>,
-        /// Prunable region. `None` only for the storage-pruned *spend* form
-        /// (daemon `get_transactions prune:true`). Serve-credit carries
+        /// Prunable region. `None` only for a *spend* body parsed from a
+        /// skeleton's bytes (daemon `get_transactions prune:true`, `SB-Q2`)
+        /// or from the `serialize_base` framing. Serve-credit carries
         /// [`Some`] with only `serve_credit_pruned` populated.
         prunable: Option<Prunable>,
     },
@@ -1421,13 +1422,14 @@ impl Ct {
         else {
             return Ok(base);
         };
-        // EOF-tolerant tail (§9.8 / §4). A genuine spend that ends
-        // after the base is the storage-pruned form with empty
-        // `pqc_auths` *and* no prunable — only reachable on a
-        // malformed blob; the live storage-pruned spend still
-        // carries `pqc_auths` and hits the second EOF check below.
-        // Serve-credit is **not** this case: after RF-D1 it has a
-        // prunable region, so bytes remain after the base.
+        // EOF-tolerant tail (§9.8 / §4). A spend that ends after the
+        // base is the **skeleton** — the one pruned form the daemon
+        // serves (`SB-Q2`): the store's `txs_pruned` row, with both
+        // discardable regions gone and their digests carried beside
+        // the bytes (`SkeletonTx`). Its identity is not `hash()` but
+        // `hash_with_supplied_components`, which `SkeletonTx::bind`
+        // computes. Serve-credit is **not** this case: after RF-D1 it
+        // has a prunable region, so bytes remain after the base.
         if r.fill_buf()?.is_empty() {
             return Ok(Ct::Fcmp {
                 fee,
@@ -1448,10 +1450,10 @@ impl Ct {
                 pqc_auths.push(PqcAuth::read(r)?);
             }
         }
-        // EOF after pqc_auths ⇒ the **storage-pruned full-spend form**:
-        // the daemon's pruned fetch (`get_transactions prune:true`)
-        // keeps consensus pqc_auths but drops the prunable proof
-        // (cryptonote_basic.h gates `rctsig_prunable` on `!pruned`).
+        // EOF after pqc_auths ⇒ the `serialize_base` framing (prunable
+        // dropped, `pqc_auths` kept): the C++ serializer's boundary,
+        // which `pruned_tx_hash_parity` pins. No daemon serves it
+        // (`SB-Q2`: the pruned form on the wire is the skeleton above).
         // Serve-credit never takes this arm: it skipped pqc_auths
         // and still has pruned-record bytes to read.
         let prunable = if r.fill_buf()?.is_empty() {
@@ -1730,25 +1732,6 @@ impl Transaction {
         self.write_segments()
             .expect("write_segments writes into Vecs; Vec writes are infallible")
             .archival_len()
-    }
-
-    /// The archival length of the transaction this **storage-pruned** body
-    /// belongs to, given the prunable region held beside it: this body's
-    /// `pqc_auths` segment plus `prunable`'s bytes, by the one measurement
-    /// ([`TxSegments::archival_len`]).
-    ///
-    /// For a holder of both halves that has them apart — a daemon serving a
-    /// pruned reply out of a store that kept the region — so the length it
-    /// serves is measured from the bytes, not carried (`SHT-Q2`). `prunable`
-    /// must be the transaction's whole region: a caller without it has no
-    /// length to measure, and supplies the stored one instead.
-    #[must_use]
-    pub fn archival_len_with_prunable(&self, prunable: &[u8]) -> ArchivalLength {
-        let mut pqc_auths = Vec::new();
-        self.ct
-            .write_pqc_auths(&mut pqc_auths)
-            .expect("Vec write is infallible");
-        archival_len_of(&pqc_auths, prunable)
     }
 
     /// Version, prefix and the committed base. [`Self::read`] continues

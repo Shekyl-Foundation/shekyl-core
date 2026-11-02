@@ -41,8 +41,8 @@ use crate::codec::{SchemaVersion, SettlementEpochBlocks};
 
 pub use super::invariant::{
     AccrualFault, AdmissionWriteFault, BodyHolderFault, CellFault, DigestFault, DrawRowFault,
-    DrawableFault, EdgeFault, FrozenFault, LeafCountFault, LeafDensity, SettlementFault,
-    SlashFault, StoreInvariant, UndoFault,
+    DrawableFault, EdgeFault, FrozenFault, HeldRegion, LeafCountFault, LeafDensity,
+    SettlementFault, SlashFault, StoreInvariant, UndoFault,
 };
 
 /// Why a store operation failed, by class.
